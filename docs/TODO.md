@@ -18,7 +18,7 @@
 | D-8 | **스파이크: 발견 도달 실측** — [06 §7](06-network-stack.md) E-1~E-9(동일 서브넷 / 무선 혼재 / **클라이언트 격리 AP** / 다중 VLAN / 다중 NIC / 링크로컬 직결 / 방화벽 3종 / 100대 / **24h 누수**). ADR-0002의 근거 데이터 | P0 | 대 | D-6 | ☐ |
 | D-9 | **ADR-0003 전송 계층 추상화** — 로컬 직접/릴레이 2모드 경계·신원/주소/세션 모델(DR-8) → [09](09-adr-0003-transport-abstraction.md) | P0 | 중 | D-7 | 🚧 **Proposed** (08-08) |
 | D-10 | [01 아키텍처](01-architecture.md) · [02 로드맵](02-roadmap.md) | P0 | 중 | D-9 | ✅ (08-08 — 9크레이트·단방향 의존·스레딩·데이터흐름 4종·M0~M5 로드맵) |
-| D-11 | **Nexa Controls 재사용 타당성** — `nexa-dir2` `docs/ctl` 컨트롤 14종의 계약 계승 + 렌더 백엔드 크로스플랫폼화 판단([10 §4](10-decision-record.md)) | P1 | 중 | D-6 | ☐ |
+| D-11 | **차용 자산 실측 평가** → [12](12-asset-reuse.md) | P0 | 중 | D-6 | ✅ (08-08 — **`ctl` 재사용 불가 판정**, 실제 자산은 `nexa-gui` 인프라 1,187 LOC. R-3·M3 규모 정정) |
 | D-12 | **ADR-0004 수신 파일 무해화** — `.beepq` 컨테이너 포맷 확정·위험 등급표·승인 UX·플랫폼별 격리 표식 API(DR-13). 설계 초안 [04](04-safe-transfer.md) | P0 | 대 | D-6 | ☐ |
 | D-13 | **L1 링크 상태 구독 추상화** — Win `NotifyIpInterfaceChange` / mac `PF_ROUTE` / Linux netlink 3구현 + 디바운스([06 §2](06-network-stack.md)) | P0 | 중 | D-6 | ☐ |
 | D-14 | **소켓 옵션 크로스플랫폼 검증** — `SO_REUSEADDR`/`SO_REUSEPORT`·`IPV6_V6ONLY`·`IP_PKTINFO` 의미 차이 실측표([06 §5-2](06-network-stack.md)) | P0 | 중 | D-6 | ☐ |

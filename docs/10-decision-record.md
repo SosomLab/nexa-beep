@@ -56,5 +56,8 @@
 | 자산 | 출처 | 용도 | 상태 |
 | --- | --- | --- | --- |
 | 문서·git 규약 | `nexa-dir2` `docs/16-doc-git-conventions.md` | DR-2 | ✅ 차용 완료(08-08) |
-| **Nexa Controls**(커스텀 컨트롤 14종) | `nexa-dir2` `docs/ctl/` · `crates/nexa-app` | DR-6 자체 렌더링 UI의 **설계·계약 원본** | 🔎 검토 중 — 현 구현은 **Win32/GDI+ 전용**이라 크로스플랫폼(DR-3)에는 렌더 백엔드 교체 필요. 컨트롤 계약·시각 규약은 그대로 계승 가능 |
-| 크로스플랫폼 타당성 검토 | `nexa-dir2` `docs/23-cross-platform-feasibility.md` | DR-3 판단 근거 | 🔎 검토 예정 |
+| ~~**Nexa Controls**(커스텀 컨트롤 14종)~~ | `nexa-dir2` `docs/ctl/` · `crates/nexa-app` | ~~DR-6 자체 렌더링 UI의 설계·계약 원본~~ | ❌ **폐기(정정 08-08)** — 아래 정정 행 참조 |
+| 크로스플랫폼 타당성 검토 | `nexa-dir2` `docs/23-cross-platform-feasibility.md` | DR-3 판단 근거 | ✅ 검토 완료(08-08) → [12](12-asset-reuse.md) |
+| **정정(08-08) — `ctl` 코드 이식 불가** | `nexa-dir2` `crates/nexa-app/src/ctl` (7,139 LOC) | — | ❌ **재사용 불가.** `ctl`은 **컨트롤마다 Win32 창(HWND)** 인 모델이라 [ADR-0001](07-adr-0001-stack.md) B안("창 1개 + 픽셀 버퍼")과 근본적으로 다르다. 히트테스트·포커스·Z순서·팝업을 OS에 위임하는 구조라 그대로는 성립하지 않는다. **가져올 코드 사실상 0** |
+| **정정(08-08) — 실제 자산은 `nexa-gui`** | `nexa-dir2` `crates/nexa-gui/src` (8,488 LOC · `windows::` 참조 0 · 맥 147 테스트 green) | DR-6 자체 렌더링의 **경계 설계 원본** | ✅ **인프라 1,187 LOC 이식 확정** — `DrawCtx`(백엔드 교체 전제 추상화)·`Widget`·`event`·`geom`·`theme`·`edit`(IME 연결 지점)·`typeahead`. ⚠️ `DrawCtx`의 `draw_image(hint:&str)`는 **FR-S-12와 충돌하므로 재설계 필수**. 상세 [12](12-asset-reuse.md) |
+| **`ctl` 계약·시각 규약**(코드 아님) | `nexa-dir2` `docs/ctl/overview.md` | 시각 일관성 | ✅ 계승 — `Style` 팔레트 모델(색 하드코딩 금지)·공통 자동 높이·`behind` 배후색 블렌드·라벨 실측 정렬·자원 소유 규율 |
