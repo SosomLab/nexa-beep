@@ -1,0 +1,19 @@
+# 빌드 산출물 (스택 확정 시 ADR-0001에 맞춰 보강)
+/target/
+/build/
+/dist/
+/out/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 에디터
+.vscode/
+.idea/
+*.swp
+
+# 로컬 실행 데이터 (포터블 모드 영속물 — DR-4)
+/data/
+*.log
