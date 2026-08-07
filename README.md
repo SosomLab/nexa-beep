@@ -26,7 +26,8 @@
 
 ## 현재 상태
 
-- 단계: **M-1 설계** — [경쟁 프로그램 37종 조사 완료](docs/03-competitive-landscape.md). 기술 스택·프로토콜 ADR 진행 예정.
+- 단계: **M-1 설계** — [비전](docs/00-vision.md) · [경쟁 조사 37종](docs/03-competitive-landscape.md) · [안전 송수신](docs/04-safe-transfer.md) · [요구사항](docs/05-requirements.md) · [네트워크 스택](docs/06-network-stack.md) 완료. 기술 스택 ADR 진행 예정.
+- 예산 목표: 유휴 RSS **≤30MB** · 산출물 **≤10MB**/타깃 · **런타임 의존 0** · 24시간 상주 누수 0 ([05 NFR-B](docs/05-requirements.md)).
 - 상세 → [docs/STATUS.md](docs/STATUS.md)
 
 ## 문서 — 📖 [문서 홈](docs/README.md)에서 시작

@@ -12,9 +12,9 @@
 
 - 조직: **SosomLab** · 개발자: Sangyong Bae · kiros33@gmail.com
 - 저장소: `git@github.com:SosomLab/nexa-beep.git` · 릴레이 서버는 별도 **`nexa-beepd`**(v1 이후)
-- 현 단계: **M-1 설계** — 경쟁 조사 완료([03](docs/03-competitive-landscape.md)), 스택·프로토콜 ADR 미정.
+- 현 단계: **M-1 설계** — 문서 5종 완료([00](docs/00-vision.md)·[03](docs/03-competitive-landscape.md)·[04](docs/04-safe-transfer.md)·[05](docs/05-requirements.md)·[06](docs/06-network-stack.md)). **ADR 4종 미정** — 스택이 다음 관문.
 
-## 2. 확정 결정 ([docs/10](docs/10-decision-record.md) DR-1~12, 변경 시 새 ADR/journal)
+## 2. 확정 결정 ([docs/10](docs/10-decision-record.md) DR-1~14, 변경 시 새 ADR/journal)
 
 | # | 결정 |
 | --- | --- |
@@ -22,7 +22,7 @@
 | DR-2 | 문서·git 규약은 `nexa-dir2` [docs/16](docs/16-doc-git-conventions.md) **전면 차용** |
 | DR-3 | **크로스플랫폼 4타깃** — Windows(x64·**ARM64**)·macOS·Linux. 기능 차등 없음 |
 | DR-4 | **설치본 + 포터블 2채널** — 포터블은 압축 해제 즉시 실행, 영속물은 실행 파일 옆(폴백 있음) |
-| DR-5 | **예산 게이트** — 최소 크기·최소 메모리·**장기 실행 누수 0**. 초과 시 main 병합 금지(수치는 05에서 확정) |
+| DR-5 | **예산 게이트** — 유휴 RSS **≤30MB** · 산출물 **≤10MB/타깃** · **런타임 의존 0** · 24h 누수 RSS ≤2MB·핸들 증가 0. 초과 시 main 병합 금지 ([05 NFR-B](docs/05-requirements.md)) |
 | DR-6 | **모든 렌더링 자체 구현 커스텀 컨트롤** — 플랫폼 간 동일 UI. OS 위젯·UI 프레임워크(Qt/Avalonia/Flutter/WebView) **금지** |
 | DR-7 | **단말 간 E2E 암호화 필수** — 전송 경로 무관. 릴레이 서버도 평문 접근 불가. 키 인증(TOFU/지문)은 ADR-0002 |
 | DR-8 | **전송 2모드 추상화** — ① 로컬 직접(기본·서버리스) ② 릴레이 경유(선택). **v1은 ①만 출시**하되 인터페이스·신원·주소·세션은 1일차부터 2모드 전제 |
@@ -61,10 +61,10 @@
 
 ## 5. 다음 단계 (2026-08-08)
 
-1. **[00 비전](docs/00-vision.md) → [05 요구사항](docs/05-requirements.md)** — 예산 수치 확정 포함 (D-4/D-5).
-2. **ADR-0001 스택**(D-6) — 언어·크로스 컴파일·자체 렌더링 백엔드. **이후 D-7·D-12·D-13·D-14가 전부 여기에 걸려 있다.**
-3. **ADR-0002 디스커버리·전송 + 키 인증**(D-7) — 근거는 **D-8 발견 도달 스파이크 실측**([06 §7](docs/06-network-stack.md) E-1~E-9) 먼저.
-4. **ADR-0003 전송 2모드 경계**(D-9) · **ADR-0004 수신 무해화**(D-12) → [01 아키텍처](docs/01-architecture.md)(D-10).
+1. **ADR-0001 스택**(D-6) — 언어·크로스 컴파일·자체 렌더링 백엔드. **D-7·D-11~D-14가 전부 여기에 걸려 있다.** 선정 기준에 **후보별 크기·메모리 실측**을 반드시 포함(R-8).
+2. **ADR-0002 디스커버리·전송 + 키 인증**(D-7) — 근거는 **D-8 발견 도달 스파이크 실측**([06 §7](docs/06-network-stack.md) E-1~E-9) 먼저.
+3. **ADR-0003 전송 2모드 경계**(D-9) · **ADR-0004 수신 무해화**(D-12) → [01 아키텍처](docs/01-architecture.md)(D-10).
 
-> 이미 설계 초안이 있는 것: [03 경쟁 조사](docs/03-competitive-landscape.md) · [04 안전 송수신](docs/04-safe-transfer.md) · [06 네트워크 스택](docs/06-network-stack.md).
+> 완료된 설계 문서: [00 비전](docs/00-vision.md) · [03 경쟁 조사](docs/03-competitive-landscape.md) · [04 안전 송수신](docs/04-safe-transfer.md) · [05 요구사항](docs/05-requirements.md) · [06 네트워크 스택](docs/06-network-stack.md).
+> **예산 게이트 수치 = [05 §2-1](docs/05-requirements.md) NFR-B-1~12** — 유휴 RSS ≤30MB · 산출물 ≤10MB/타깃 · 런타임 의존 0 · 24h 누수 RSS ≤2MB·핸들 증가 0.
 > 문서 번호 배정 계획은 [docs/README](docs/README.md) — **번호는 불변**이므로 새 문서는 반드시 그 표를 보고 붙인다.
