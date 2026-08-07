@@ -39,7 +39,7 @@
 | **[ADR-0001](07-adr-0001-stack.md)** | 기술 스택(언어·렌더링 백엔드·플랫폼 계층) | ✅ **Accepted**(08-08) — Rust · 자체 CPU 래스터라이저 · 플랫폼 계층 P2 · Wayland+X11 · 시스템 폰트 |
 | **[ADR-0002](08-adr-0002-discovery-transport.md)** | 디스커버리·전송 프로토콜 + 키 교환/인증 | ✅ **Accepted**(08-08) — 자체 컴팩트 UDP · TCP 세션 · **Noise_XX** + TOFU. 타이밍은 D-8 실측 후 |
 | **[ADR-0003](09-adr-0003-transport-abstraction.md)** | 전송 계층 추상화 — 로컬 직접/릴레이 2모드 경계 | 📐 **Proposed**(08-08) |
-| ADR-0004 | 수신 파일 무해화 — `.beepq` 격리 컨테이너 포맷·위험 등급·승인 UX | 📐 예정 — 설계 초안 [04](04-safe-transfer.md), 확정은 [TODO](TODO.md) D-12 |
+| **[ADR-0004](11-adr-0004-quarantine.md)** | 수신 파일 무해화 — `.beepq` 컨테이너·위험 등급·승인 UX | 📐 **Proposed**(08-08) — 컨테이너 레이아웃 · 등급 4단계 확장자표 · 상태 기계(fail-closed) · 플랫폼 표식 API |
 
 > ADR 파일명은 `NN-adr-000N-주제.md`. 번호(NN)는 부여 후 **불변**.
 

@@ -40,6 +40,7 @@
 | [07 ADR-0001 스택](07-adr-0001-stack.md) | ✅ **Accepted** — Rust · 자체 CPU 래스터라이저 · 플랫폼 계층 P2 · Wayland+X11 · 시스템 폰트 · **SP-1 스파이크** |
 | [08 ADR-0002 디스커버리·전송·암호](08-adr-0002-discovery-transport.md) | ✅ **Accepted** — 자체 컴팩트 UDP · TCP 세션 · **Noise_XX + TOFU** · 발견은 "미검증 힌트" |
 | [09 ADR-0003 전송 추상화](09-adr-0003-transport-abstraction.md) | 📐 **Proposed** — 4계층 경계 · `PeerId`/`Locator`/`Link`/`Session` · 인메모리 전송으로 네트워크 없는 테스트 |
+| [11 ADR-0004 수신 무해화](11-adr-0004-quarantine.md) | 📐 **Proposed** — `.beepq` 레이아웃 · 위험 등급 4단계 확장자표 · 상태 기계(fail-closed) · MotW/quarantine API |
 | [12 차용 자산 실측 평가](12-asset-reuse.md) | ★ **`ctl` 재사용 불가 판정**(HWND 모델) · 실제 자산은 `nexa-gui` 인프라 1,187 LOC · R-3 재평가 |
 | [MILESTONES](MILESTONES.md) | ★ 기능·마일스톤 현황(✅/🚧/📐/☐) |
 
@@ -55,7 +56,7 @@
 | **08** | **ADR-0002 디스커버리/전송/암호** | ✅ Accepted |
 | **09** | **ADR-0003 전송 추상화** | 📐 Proposed |
 | **10** | 결정 기록(DR·ADR 색인) | ✅ |
-| 11 | **ADR-0004 수신 무해화** | 예약 |
+| **11** | **ADR-0004 수신 무해화** | 📐 Proposed |
 | **12** | 차용 자산 실측 평가 | ✅ |
 | **15 · 16 · 18** | 개발 방법론 · 문서/git 규약 · 빌드&테스트 | ✅ |
 
