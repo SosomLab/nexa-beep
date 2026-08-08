@@ -474,7 +474,7 @@ mod app_window {
     use std::time::Instant;
     use winit::application::ApplicationHandler;
     use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
-    use winit::event_loop::{ActiveEventLoop, EventLoop};
+    use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
     use winit::keyboard::{Key as WKey, NamedKey};
     use winit::window::{Window, WindowId};
 
@@ -708,6 +708,8 @@ mod app_window {
         proxy: winit::event_loop::EventLoopProxy<AppEvent>,
         /// 수동 엔드포인트 입력 중 버퍼(DR-19 · `⌘/Ctrl+K`). None = 입력 아님.
         adding: Option<String>,
+        /// 종료 신호(R-16 · FR-P-7) — SIGINT/SIGTERM 시 el.exit() → Drop 체인이 GOODBYE·정리.
+        shutdown: nbeep_plat::shutdown::Shutdown,
     }
 
     impl App {
@@ -1325,10 +1327,18 @@ mod app_window {
             }
         }
 
-        fn about_to_wait(&mut self, _el: &ActiveEventLoop) {
-            // 발견 이벤트 폴링 — 봇은 시작 시 join하므로 첫 배치에서 다 접힌다.
-            // 실물 네트워크의 상시 깨우기(EventLoopProxy)는 M2-7에서.
+        fn about_to_wait(&mut self, el: &ActiveEventLoop) {
+            // 종료 신호(SIGINT/SIGTERM) → 이벤트 루프 종료. run_app 반환 → App Drop →
+            // transport(LocalDirect) Drop → GOODBYE 발신·소켓/스레드 정리(R-16 · FR-P-7).
+            if self.shutdown.requested() {
+                el.exit();
+                return;
+            }
             self.poll_discovery();
+            // 유휴에도 ~5Hz로 깨어나 발견 갱신·종료 신호를 폴한다(입력 없을 때도 목록이 산다).
+            el.set_control_flow(ControlFlow::wait_duration(
+                std::time::Duration::from_millis(200),
+            ));
         }
 
         fn window_event(&mut self, el: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
@@ -1520,6 +1530,7 @@ mod app_window {
         // 이벤트 루프·프록시 먼저 — 인바운드 수락 펌프가 프록시를 필요로 한다(M2-7).
         let event_loop = EventLoop::<AppEvent>::with_user_event().build().unwrap();
         let proxy = event_loop.create_proxy();
+        let shutdown = nbeep_plat::shutdown::install(); // R-16 — SIGINT/SIGTERM 포트
 
         let (transport, discovery): (Box<dyn nbeep_net::Transport>, _) = if live {
             // 실물 — LocalDirect(UDP 발견 + TCP 세션). 실기·컨테이너 상대가 목록에 뜬다.
@@ -1591,6 +1602,7 @@ mod app_window {
             primary_down: false,
             proxy,
             adding: None,
+            shutdown,
         };
         event_loop.run_app(&mut app).unwrap();
     }
