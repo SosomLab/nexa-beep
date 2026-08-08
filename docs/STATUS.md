@@ -10,7 +10,9 @@
 > ④ **알려진 제약 4건 명시** — `accept` 1회라 **1:1 전용** · **`Ctrl+C`로 안 끝난다**(채팅 모드는 아직 `plat::shutdown` 미사용 → **`Ctrl+D`** · 컨테이너는 `--init`) · **파이프 입력은 부적합**(EOF 즉시 종료로 수신 못 봄 — 실측) · 발견을 거치지 않아 **이름으로 고르는 건 GUI 몫**.
 > ⑤ R-16 관련 진척 — **`nbeep-plat::shutdown` 종료 포트는 구현됨**(`--discover-probe`·`--serve`·`--live-echo`에 배선). **채팅 모드는 아직 미배선**이라 M3-13에 남는다. [journal/2026-08-08.md](journal/2026-08-08.md).
 >
-> **갱신: 2026-08-08 35차 (KST)** — **대화 스레드 스크롤**(`feat/m3-scroll` → main 병합): `ChatViewWidget` 스크롤 오프셋 + 휠·PgUp/Dn · **새 메시지 = 최신 스냅** · 히스토리 범위 클램프. 이전엔 넘친 과거 메시지를 못 봤다. 179테스트 green. [journal/2026-08-08.md](journal/2026-08-08.md).
+> **갱신: 2026-08-08 36차 (KST)** — **가독성: 글꼴 상향 + 영역별 글꼴 설정**(`feat/m3-fontprefs` → main 병합 · 사용자 요청): 기본 크기 13/15/11→**16/18/13**(+행 높이 비례) · **설정에 영역별 글꼴**(기본/메시지/상태 × 크기·굵기·기울임 — gfx `draw_styled` faux 볼드/이탤릭). 글꼴 패밀리 선택은 폰트 열거(M3-3 확장) 대기. 179테스트 green. [journal/2026-08-08.md](journal/2026-08-08.md).
+>
+> **직전(08-08 35차)** — **대화 스레드 스크롤**(`feat/m3-scroll` → main 병합): `ChatViewWidget` 스크롤 오프셋 + 휠·PgUp/Dn · **새 메시지 = 최신 스냅** · 히스토리 범위 클램프. 이전엔 넘친 과거 메시지를 못 봤다. 179테스트 green. [journal/2026-08-08.md](journal/2026-08-08.md).
 >
 > **직전(08-08 34차)** — **M3-3 IME 조합 표시 + 그룹 모델(FR-G)**(`feat/m3-ime`(+`feat/m5-groups`) → main 병합):
 > ① **IME 프리에딧** — 조합 중 텍스트를 캐럿에 accent+밑줄로(확정 전). `set_preedit`(위젯 메서드 — InputEvent가 Copy라 String 변형 회피)·bin `Ime::Preedit` 라우팅·`Char` 도착 시 클리어+삽입. 한글 조합이 눈에 보이며 입력.

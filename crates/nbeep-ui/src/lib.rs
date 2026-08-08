@@ -26,6 +26,6 @@ pub use geom::{Point, Rect, Size};
 pub use peer_list::{badge, PeerListWidget, PeerRow, ROW_H};
 pub use raster::RasterCtx;
 pub use settings::{registry, Entry, SettingKind, SettingsState, SettingsWidget};
-pub use theme::{Color, Theme};
+pub use theme::{Color, FontPrefs, SlotFont, Theme};
 pub use typeahead::{Query, TypeAhead, TYPEAHEAD_TIMEOUT_MS};
 pub use widget::{Invalidations, Widget};

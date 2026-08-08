@@ -26,7 +26,7 @@ pub struct PeerRow {
 }
 
 /// 행 높이(px) — 임시. M3-1c 수치표에서 확정.
-pub const ROW_H: i32 = 36;
+pub const ROW_H: i32 = 42;
 
 /// 신뢰 배지 라벨 + 테마 토큰 선택.
 #[must_use]
@@ -301,7 +301,7 @@ impl Widget for PeerListWidget {
             } else {
                 theme.panel_bg
             };
-            let text_y = r.y + (rh - self.s(17)) / 2;
+            let text_y = r.y + (rh - self.s(20)) / 2;
             ctx.text_opaque(
                 r.x + self.s(12),
                 text_y,

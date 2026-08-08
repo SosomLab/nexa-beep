@@ -28,6 +28,23 @@ impl core::fmt::Debug for Font {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FontError;
 
+/// 텍스트 스타일(faux 볼드·이탤릭).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct TextStyle {
+    /// 굵게(faux — 이중 그리기).
+    pub bold: bool,
+    /// 기울임(faux — 전단).
+    pub italic: bool,
+}
+
+impl TextStyle {
+    /// 스타일 없음.
+    pub const PLAIN: Self = Self {
+        bold: false,
+        italic: false,
+    };
+}
+
 impl Font {
     /// `'static` 폰트 바이트에서 로드한다(mmap 정상 경로). `index`는 TTC 컬렉션 인덱스.
     ///
@@ -88,7 +105,27 @@ impl Font {
         text: &str,
         clip: (i32, i32, i32, i32),
     ) -> f32 {
+        self.draw_styled(surface, x, y, size, color, text, clip, TextStyle::PLAIN)
+    }
+
+    /// [`Font::draw_text_clipped`]의 **스타일 변형** — 실제 볼드/이탤릭 폰트 파일 없이
+    /// **faux 볼드**(x축 2회 그리기)·**faux 이탤릭**(베이스라인 위 거리 비례 전단)로 근사한다.
+    /// 진짜 글꼴 패밀리·굵기 face는 폰트 열거(M3-3 확장)에서. 지금은 시스템 폰트 1벌 위 근사.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_styled(
+        &self,
+        surface: &mut Surface<'_>,
+        x: f32,
+        y: f32,
+        size: f32,
+        color: Color,
+        text: &str,
+        clip: (i32, i32, i32, i32),
+        style: TextStyle,
+    ) -> f32 {
         let scaled = self.inner.as_scaled(size);
+        let slant = if style.italic { 0.22 } else { 0.0 };
+        let bold_pass = if style.bold { 2 } else { 1 };
         let mut pen = x;
         for ch in text.chars() {
             let gid = self.inner.glyph_id(ch);
@@ -96,14 +133,19 @@ impl Font {
             if let Some(outlined) = scaled.outline_glyph(glyph) {
                 let bounds = outlined.px_bounds();
                 if bounds.min.x as i32 >= clip.2 {
-                    break; // 클립 오른쪽을 완전히 벗어나면 이후 글자도 밖이다
+                    break;
                 }
                 let (ox, oy) = (bounds.min.x as i32, bounds.min.y as i32);
                 outlined.draw(|gx, gy, cov| {
-                    let px = ox + i32::try_from(gx).unwrap_or(i32::MAX);
                     let py = oy + i32::try_from(gy).unwrap_or(i32::MAX);
-                    if px >= clip.0 && px < clip.2 && py >= clip.1 && py < clip.3 {
-                        surface.blend_px(px, py, color, cov);
+                    // faux 이탤릭: 베이스라인 위로 갈수록 오른쪽으로 전단.
+                    let shear = ((y - py as f32) * slant) as i32;
+                    let base_px = ox + i32::try_from(gx).unwrap_or(i32::MAX) + shear;
+                    for dx in 0..bold_pass {
+                        let px = base_px + dx;
+                        if px >= clip.0 && px < clip.2 && py >= clip.1 && py < clip.3 {
+                            surface.blend_px(px, py, color, cov);
+                        }
                     }
                 });
             }
