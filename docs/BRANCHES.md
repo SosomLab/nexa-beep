@@ -8,6 +8,7 @@
 
 | 브랜치 | 생성 | 병합(커밋) | 삭제 | 커밋수 | 작업 요약 | 상세 |
 | --- | --- | --- | --- | --- | --- | --- |
+| `feat/m3-manual-ui` | 2026-08-08 | _진행 중_ | — | 3 | **GUI 수동 추가 UI(⌘/Ctrl+K)** + **인터랙티브 채팅**(`--chat-serve`/`--chat-connect`) — 맥↔docker-linux 사람 대 사람 양방향 대화 실증(arm64↔amd64) · 병행 R-16/FR-P-7 문서 | [journal/2026-08-08](journal/2026-08-08.md) |
 | `feat/m1-manual` | 2026-08-08 | 2026-08-08 (fabaf74 --no-ff) | 2026-08-08 | 2 | **DR-19 수동 엔드포인트** — `Transport::add_endpoint`(발견 우회 IP 연결·신원은 핸드셰이크 확정) · bin `--serve`/`--connect` · **맥↔docker-linux IP 대화 실증**(발견 경계 우회) · ADR-0006 Accepted | [journal/2026-08-08](journal/2026-08-08.md) |
 | `feat/m2-recvpump` | 2026-08-08 | 2026-08-08 (be85be5 --no-ff) | 2026-08-08 | 3 | **M2-7 비동기 수신 펌프 + 인바운드→GUI 대화** — 세션 액터·`set_recv_timeout` 전 계층·`EventLoopProxy` 실시간 수신·인바운드 TOFU 판정 후 대화/창 자동 생성. **양방향 실시간 대화 완성**(M2 게이트) | [journal/2026-08-08](journal/2026-08-08.md) |
 | `feat/m1-localdirect` | 2026-08-08 | 2026-08-08 (2c7c30e --no-ff) | 2026-08-08 | 3 | **M1-4 슬라이스 2·3** — `TcpLink`·`LocalDirect`(발견+TCP를 Transport로) · **실물 종단 왕복**(맥 2프로세스·Docker 2노드) · GUI `--live` 배선(`Box<dyn Transport>` 한 지점 교체) | [journal/2026-08-08](journal/2026-08-08.md) |

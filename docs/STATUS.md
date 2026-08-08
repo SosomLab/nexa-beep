@@ -3,7 +3,13 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
-> **갱신: 2026-08-08 (종료 경로 발견 차) (KST)** — 🔴 **R-16 신설 — 정상 종료 경로가 없어 FR-D-8의 절반이 비어 있다**(사용자 제보에서 출발):
+> **갱신: 2026-08-08 31차 (KST)** — **GUI 수동 추가 UI(⌘/Ctrl+K) + 인터랙티브 채팅 — 맥↔docker 사람 대 사람 실증**(`feat/m3-manual-ui` → main 병합):
+> ① **GUI 수동 추가 UI**(DR-19) — `⌘/Ctrl+K` → 상태바가 주소 입력창(host:port·Enter 연결·Esc 취소, 새 위젯 없이 재사용) → `add_endpoint`→Noise→TOFU→대화 자동 오픈(`open_session_addr`). 아웃/인/수동이 같은 대화 등록·뷰 헬퍼로 수렴.
+> ② **인터랙티브 헤드리스 채팅**(사용자 요청 — 리눅스에서도 타이핑) — `--chat-serve`/`--chat-connect`(stdin 타이핑·수신 실시간 · GUI와 동일 세션 스택). docker는 헤드리스라 창 불가(X11 무거움) → stdin/stdout로 충분.
+> ③ ★ **맥↔docker-linux 사람 대 사람 양방향 대화 실증**(arm64↔amd64 · Noise 암호화 · `-it -p` 포트 매핑으로 발견 경계 우회). 맥 2프로세스도 통과.
+> ④ 병행 반영: **R-16(정상 종료 경로 부재) — FR-P-7 신설 · 컨테이너 `--init` 규약**. **157테스트 green**. [journal/2026-08-08.md](journal/2026-08-08.md).
+>
+> **직전(종료 경로 발견 차)** — 🔴 **R-16 신설 — 정상 종료 경로가 없어 FR-D-8의 절반이 비어 있다**(사용자 제보에서 출발):
 > ① **증상** — `docker run --rm -p 47200:47200 … /nexa-beep --serve 47200` 후 **Ctrl+C를 눌러도 컨테이너가 살아 있었다**.
 > ② **원인 = PID 1 시그널 규칙** — 리눅스 커널은 **PID 1에게 시그널 기본 동작을 적용하지 않는다.** 핸들러가 없는 프로세스가 PID 1이면 `SIGINT`·`SIGTERM`이 **그대로 무시**된다. `docker run`은 SIGINT를 정확히 전달했고, [`serve_manual`](../crates/nexa-beep/src/main.rs)에 핸들러가 없어 무시된 것. `--rm`은 컨테이너가 종료돼야 발동하므로 컨테이너도 남았다.
 > ③ **실측으로 확정** — `docker stop` **10.26초**(SIGTERM 무시 → 10초 타임아웃 → SIGKILL) vs **`--init` 사용 시 0초**(tini가 중계 → 자식은 PID 1이 아니라 정상 종료). 47201·47202로 재현 검증.
