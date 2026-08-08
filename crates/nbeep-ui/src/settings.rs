@@ -4,9 +4,10 @@
 //! 렌더와 검색이 같은 원천을 읽는다 — "화면에 있는데 검색 안 되는 설정"이 구조적으로 불가능하다.
 //! 제품에 실존하는 설정만 등록한다(없는 옵션 미등록 — 원본 규약).
 //!
-//! 이 슬라이스: 상단 검색(공백 토큰 AND) + 카테고리 헤더 + 항목(제목·회색 설명·값 칩) ·
-//! **즉시 적용**(클릭/Enter = 값 순환, 저장 버튼 없음 — 변경은 [`SettingsWidget::take_changes`]
-//! 폴링). 좌측 계층 트리·매치 수 표기는 후속, **값 영속은 M2-5**(Repository 포트).
+//! 레이아웃(VS Code식 — 사용자 확정 08-08): **좌측 사이드바**(상단 검색 + 카테고리 트리 ·
+//! 선택 하이라이트 · 검색 중엔 **매치 있는 카테고리만 + 매치 수 "(N)"** — X-10 ①) + **우측
+//! 편집기**(선택 카테고리의 항목 · 검색 중엔 전 카테고리 매치). **즉시 적용**(클릭/Enter = 값
+//! 순환 — [`SettingsWidget::take_changes`] 폴링). **값 영속은 M2-5**(Repository 포트).
 
 use crate::draw::{DrawCtx, FontSlot};
 use crate::event::{InputEvent, Key};
@@ -110,6 +111,10 @@ fn entry_matches(e: &Entry, toks: &[String]) -> bool {
 const ENTRY_H: i32 = 44;
 const HEADER_H: i32 = 26;
 const SEARCH_H: i32 = 30;
+/// 좌측 사이드바 폭(논리 px) — 검색 + 카테고리 트리.
+const SIDEBAR_W: i32 = 140;
+/// 사이드바 트리 행 높이.
+const TREE_ROW_H: i32 = 26;
 
 /// 표시 행(레이아웃 결과).
 enum RowKind {
@@ -126,6 +131,8 @@ pub struct SettingsWidget {
     caret: usize,
     changes: Vec<(&'static str, String)>,
     back: bool,
+    /// 사이드바 선택 카테고리(빈 검색일 때 우측 필터).
+    selected_cat: usize,
     /// 현재 값 스냅숏(표시용 — 적용 주체는 호스트).
     values: HashMap<&'static str, String>,
 }
@@ -141,6 +148,7 @@ impl SettingsWidget {
             caret: 0,
             changes: Vec::new(),
             back: false,
+            selected_cat: 0,
             values: registry()
                 .iter()
                 .map(|e| (e.key, state.get(e.key).to_string()))
@@ -171,16 +179,51 @@ impl SettingsWidget {
         (logical as f32 * self.scale).round() as i32
     }
 
-    /// 필터된 표시 행(헤더 + 항목) — 렌더·히트테스트·캐럿이 같은 목록을 쓴다.
+    /// 카테고리 목록(레지스트리 순서·중복 제거) — 사이드바 트리의 원천.
+    fn cats() -> Vec<&'static str> {
+        let mut out: Vec<&'static str> = Vec::new();
+        for e in registry() {
+            if !out.contains(&e.cat) {
+                out.push(e.cat);
+            }
+        }
+        out
+    }
+
+    /// 검색 중 카테고리별 매치 수(X-10 ① — 트리 행 "(N)" 표기·필터 공용).
+    fn cat_match_count(cat: &str, toks: &[String]) -> usize {
+        registry()
+            .iter()
+            .filter(|e| e.cat == cat && entry_matches(e, toks))
+            .count()
+    }
+
+    /// 사이드바 표시 행 — 검색 중엔 **매치 있는 카테고리만**(X-10 ①), (카테고리, 매치 수).
+    fn sidebar_rows(&self) -> Vec<(&'static str, usize)> {
+        let toks = tokens(&self.query);
+        Self::cats()
+            .into_iter()
+            .map(|c| (c, Self::cat_match_count(c, &toks)))
+            .filter(|&(_, n)| n > 0)
+            .collect()
+    }
+
+    /// 우측 표시 행 — 빈 검색 = **선택 카테고리만**, 검색 중 = 전 카테고리 매치(헤더 포함).
     fn rows(&self) -> Vec<RowKind> {
         let toks = tokens(&self.query);
+        let searching = !toks.is_empty();
+        let selected = Self::cats().get(self.selected_cat).copied();
         let mut out = Vec::new();
         let mut last_cat: Option<&str> = None;
         for (i, e) in registry().iter().enumerate() {
-            if !entry_matches(e, &toks) {
+            if searching {
+                if !entry_matches(e, &toks) {
+                    continue;
+                }
+            } else if Some(e.cat) != selected {
                 continue;
             }
-            if last_cat != Some(e.cat) {
+            if searching && last_cat != Some(e.cat) {
                 out.push(RowKind::Header(e.cat));
                 last_cat = Some(e.cat);
             }
@@ -212,9 +255,29 @@ impl SettingsWidget {
         inv.push(self.bounds);
     }
 
-    /// y(물리 px) → 표시 행 인덱스의 항목.
-    fn item_at(&self, y: i32) -> Option<usize> {
-        let mut top = self.bounds.y + self.s(SEARCH_H);
+    fn sidebar_w(&self) -> i32 {
+        self.s(SIDEBAR_W)
+    }
+
+    /// (x, y) 물리 px → 사이드바 카테고리 행 인덱스.
+    fn sidebar_at(&self, x: i32, y: i32) -> Option<usize> {
+        if x >= self.bounds.x + self.sidebar_w() {
+            return None;
+        }
+        let top = self.bounds.y + self.s(SEARCH_H);
+        if y < top {
+            return None;
+        }
+        let idx = ((y - top) / self.s(TREE_ROW_H).max(1)) as usize;
+        (idx < self.sidebar_rows().len()).then_some(idx)
+    }
+
+    /// (x, y) 물리 px → 우측 항목의 registry 인덱스.
+    fn item_at(&self, x: i32, y: i32) -> Option<usize> {
+        if x < self.bounds.x + self.sidebar_w() {
+            return None;
+        }
+        let mut top = self.bounds.y;
         for row in self.rows() {
             let h = match row {
                 RowKind::Header(_) => self.s(HEADER_H),
@@ -273,8 +336,19 @@ impl Widget for SettingsWidget {
                 self.caret = 0;
                 inv.push(self.bounds);
             }
-            InputEvent::MouseDown { y, .. } => {
-                if let Some(reg_idx) = self.item_at(y) {
+            InputEvent::MouseDown { x, y, .. } => {
+                if let Some(cat_idx) = self.sidebar_at(x, y) {
+                    // 검색 중 사이드바 클릭 = 그 카테고리로 이동 + 검색 해제(문맥 확정).
+                    let rows = self.sidebar_rows();
+                    if let Some(&(cat, _)) = rows.get(cat_idx) {
+                        if let Some(pos) = Self::cats().iter().position(|&c| c == cat) {
+                            self.selected_cat = pos;
+                        }
+                        self.query.clear();
+                        self.caret = 0;
+                        inv.push(self.bounds);
+                    }
+                } else if let Some(reg_idx) = self.item_at(x, y) {
                     let items = self.items();
                     if let Some(pos) = items.iter().position(|&i| i == reg_idx) {
                         self.caret = pos;
@@ -288,29 +362,64 @@ impl Widget for SettingsWidget {
 
     fn paint(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
         ctx.fill_rect(self.bounds, theme.panel_bg);
-        // 검색창.
-        let search = Rect::new(
-            self.bounds.x,
-            self.bounds.y,
-            self.bounds.w,
-            self.s(SEARCH_H),
-        );
+        let sw = self.sidebar_w();
+
+        // ── 좌측 사이드바: 검색창 + 카테고리 트리(선택 하이라이트·매치 수) ──
+        let sidebar = Rect::new(self.bounds.x, self.bounds.y, sw, self.bounds.h);
+        ctx.fill_rect(sidebar, theme.chrome_bg);
+        let search = Rect::new(self.bounds.x, self.bounds.y, sw, self.s(SEARCH_H));
         ctx.fill_rect(search, theme.field_bg);
-        ctx.select_font(FontSlot::Base, false);
+        ctx.select_font(FontSlot::Status, false);
         let (q, qc) = if self.query.is_empty() {
-            ("설정 검색 (공백 = AND)".to_string(), theme.text_dim)
+            ("검색 (공백=AND)".to_string(), theme.text_dim)
         } else {
             (self.query.clone(), theme.text)
         };
-        ctx.text(search.x + self.s(10), search.y + self.s(7), search, &q, qc);
+        ctx.text(search.x + self.s(8), search.y + self.s(8), search, &q, qc);
 
+        let searching = !self.query.is_empty();
+        let selected = Self::cats().get(self.selected_cat).copied();
+        let mut ty = self.bounds.y + self.s(SEARCH_H);
+        for (cat, n) in self.sidebar_rows() {
+            let r = Rect::new(self.bounds.x, ty, sw, self.s(TREE_ROW_H));
+            let is_sel = !searching && Some(cat) == selected;
+            if is_sel {
+                ctx.fill_rect(r, theme.sel_bg);
+            }
+            ctx.select_font(FontSlot::Base, false);
+            let label = if searching {
+                format!("{cat} ({n})") // 매치 수(X-10 ①)
+            } else {
+                cat.to_string()
+            };
+            ctx.text(
+                r.x + self.s(12),
+                r.y + self.s(5),
+                r,
+                &label,
+                if is_sel { theme.text } else { theme.text_dim },
+            );
+            ty += self.s(TREE_ROW_H);
+        }
+        // 사이드바 경계선.
+        ctx.fill_rect(
+            Rect::new(self.bounds.x + sw - 1, self.bounds.y, 1, self.bounds.h),
+            theme.border,
+        );
+
+        // ── 우측 편집기 ──
         let items = self.items();
-        let mut top = self.bounds.y + self.s(SEARCH_H);
+        let mut top = self.bounds.y;
         let mut item_pos = 0usize;
         for row in self.rows() {
             match row {
                 RowKind::Header(cat) => {
-                    let r = Rect::new(self.bounds.x, top, self.bounds.w, self.s(HEADER_H));
+                    let r = Rect::new(
+                        self.bounds.x + sw,
+                        top,
+                        self.bounds.w - sw,
+                        self.s(HEADER_H),
+                    );
                     ctx.select_font(FontSlot::Status, false);
                     ctx.text_opaque(
                         r.x + self.s(10),
@@ -324,7 +433,7 @@ impl Widget for SettingsWidget {
                 }
                 RowKind::Item(i) => {
                     let e = &registry()[i];
-                    let r = Rect::new(self.bounds.x, top, self.bounds.w, self.s(ENTRY_H));
+                    let r = Rect::new(self.bounds.x + sw, top, self.bounds.w - sw, self.s(ENTRY_H));
                     let bg = if items.get(self.caret) == Some(&i) {
                         theme.sel_bg
                     } else {
@@ -389,9 +498,52 @@ mod tests {
 
     #[test]
     fn registry_is_single_source_render_equals_search() {
-        // 레지스트리의 모든 항목이 빈 검색에서 표시 행으로 나온다 — 렌더=검색 같은 원천.
+        // 단일 원천 불변식(사이드바 형태): 사이드바 카테고리 매치 수의 합 == 레지스트리 전체
+        // — 어떤 항목도 트리 밖에 있을 수 없다("검색/트리에 안 보이는 설정" 구조적 불가).
         let (w, _) = widget();
-        assert_eq!(w.items().len(), registry().len());
+        let total: usize = w.sidebar_rows().iter().map(|&(_, n)| n).sum();
+        assert_eq!(total, registry().len());
+        // 그리고 각 카테고리를 선택하면 그 카테고리 항목이 전부 우측에 나온다.
+        let mut shown = 0;
+        let mut w2 = w;
+        for i in 0..SettingsWidget::cats().len() {
+            w2.selected_cat = i;
+            shown += w2.items().len();
+        }
+        assert_eq!(shown, registry().len());
+    }
+
+    #[test]
+    fn sidebar_shows_match_counts_and_filters_categories() {
+        let (mut w, mut inv) = widget();
+        for c in "테마".chars() {
+            w.on_event(&InputEvent::Char { c, now_ms: 0 }, &mut inv);
+        }
+        let rows = w.sidebar_rows();
+        assert_eq!(rows.len(), 1, "매치 있는 카테고리만(X-10 ①)");
+        assert_eq!(rows[0], ("모양", 1), "매치 수 표기 근거");
+    }
+
+    #[test]
+    fn sidebar_click_selects_category() {
+        let (mut w, mut inv) = widget();
+        // 사이드바 두 번째 행("모양") 클릭 — 검색창(30) 아래 두 번째 트리 행.
+        w.on_event(
+            &InputEvent::MouseDown {
+                x: 10,
+                y: 30 + 26 + 5,
+                shift: false,
+                primary: false,
+            },
+            &mut inv,
+        );
+        let items = w.items();
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            registry()[items[0]].key,
+            "ui.theme",
+            "선택 카테고리의 항목만"
+        );
     }
 
     #[test]

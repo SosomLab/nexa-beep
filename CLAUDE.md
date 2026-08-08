@@ -12,9 +12,11 @@
 
 - 조직: **SosomLab** · 개발자: Sangyong Bae · kiros33@gmail.com
 - 저장소: `git@github.com:SosomLab/nexa-beep.git` · 릴레이 서버는 별도 **`nexa-beepd`**(v1 이후)
-- 현 단계: **M-1 설계 사실상 완료 + M0~M2 구현 진행** — **ADR 9종**(0001·0002·0007·0008·0009 Accepted / 0003~0006 Proposed) · DR-1~26. 다음 관문은 **M0 스캐폴딩 + SP-1 예산 스파이크**.
+- 현 단계: **설계 문서 26종(00~25) · ADR 10종 · DR-1~26 · FR 119건 · 리스크 R-1~15.** 코드는 **M0 기반 ✅ → M1 발견 🚧 → M2 대화 🚧 → M3 셸·UI 🚧**(08-08 · **141테스트 green · 릴리스 0.76MB**).
+  **ADR**: 0001·0002·**0003**·0007·0008·0009 ✅ Accepted / **0004·0005·0006·0010 📐 Proposed — 확정 대기**.
+  **다음 관문 3개(전부 🔴 사용자 확정)** — **D-22**(키 파일 복제 대응 · *와이어 포맷 확정 전에 답해야 필드 추가가 공짜*) · **D-23**(ADR-0010) · **D-24**(기능 범위 v1.0 커트라인).
 
-## 2. 확정 결정 ([docs/10](docs/10-decision-record.md) DR-1~20, 변경 시 새 ADR/journal)
+## 2. 확정 결정 ([docs/10](docs/10-decision-record.md) **DR-1~26**, 변경 시 새 ADR/journal)
 
 | # | 결정 |
 | --- | --- |
@@ -38,6 +40,7 @@
 | DR-21 | **외부 기술은 이음새(포트) 뒤에** — 독자 기술이 아닌 모든 외부 기법은 trait 뒤에 숨겨 교체 가능하게. 외부 크레이트 타입이 포트 시그니처에 나오면 위반 → [docs/13 §2-4 규칙 7](docs/13-code-design-standards.md) |
 | DR-22 | **프로필 옵트인 노출** — 본인이 설정·노출 확인한 식별 정보를 발견 상대에게 표시. 단 **브로드캐스트에는 미포함**(평문 수확·사칭) — 세션 경유 + 자동 프리페치. 기본 전부 비노출 → [docs/22](docs/22-adr-0008-profile-disclosure.md) |
 | DR-23 | **공유 폴더(pull)** — 공유 허용 목록을 **가상경로**로 묶어 직접 다운로드. 실경로 비노출 · 읽기 전용 · fail-closed 경로 해석 · **pull도 무해화 게이트 동일 통과** → [docs/23](docs/23-adr-0009-shared-folders.md) |
+| DR-25 | **메시지 등급·알림·수신확인·수신자 릴레이** — 등급 3종(`Normal`/`Notice`/`Urgent`)은 **발신자의 요청**, 알림 강도는 **수신자 판정**(신뢰 게이트 — **미검증은 소리 없음**) · 수신확인은 **수동 버튼만**("읽음" 없음) · **수신자 릴레이**(내 규칙으로 내 채널에 · 외부에도 **봉투만** · **다중 어댑터 동시 팬아웃**) · Webhook 우선 → [docs/24](docs/24-adr-0010-message-priority-notification.md) 📐 |
 | DR-26 | **대화 창 모델** — 대화 상태(세션·스레드)는 뷰와 분리·상대별 유지(뷰 닫아도 대화 유지). 창 모드 옵션 `chat.window_mode`: v1 기본 단일 창 / 별도 창(M3-12) — 설정에서 변경 → [docs/14 §11](docs/14-control-ux-architecture.md) |
 | DR-24 | **설정 화면 = VS Code 방식** — `nexa-dir2` `prefs.rs` 설계 차용(코드 미이식): Entry 레지스트리 단일 원천 · 트리+AND 토큰 검색 · 즉시 적용 · Kind 동적 패널 → [docs/14 §10](docs/14-control-ux-architecture.md) |
 
@@ -68,7 +71,7 @@
 - **문서·커밋/푸시 규약 SSOT = [docs/16](docs/16-doc-git-conventions.md)** — 4층 문서 체계·작성 규칙 8·커밋/브랜치/푸시 필수 규칙.
 - 개발 규율([docs/15](docs/15-dev-methodology.md)): **수직 슬라이스 · 단위=커밋 1개 · 초안→확장 · main 항상 green · Conventional Commits**.
 - **큰 단위=브랜치, 세부 기능=커밋. push는 사용자 명시 요청 시에만.** 파괴적 작업(삭제·reset·force push·덮어쓰기)은 실행 전 확인. 그 외 일상 작업·상태 md 갱신은 묻지 않고 자동 진행.
-- 기록: **한 작업 = 한 트랜잭션 갱신** — 커밋 → [journal/YYYY-MM-DD](docs/journal/) 상세 → [DEVLOG](docs/DEVLOG.md) 한 줄 → [MILESTONES](docs/MILESTONES.md)/[TODO](docs/TODO.md) 상태 → (브랜치면) [BRANCHES](docs/BRANCHES.md).
+- 기록: **한 작업 = 한 트랜잭션 갱신** — 커밋 → [journal/YYYY-MM-DD](docs/journal/) 상세 → [DEVLOG](docs/DEVLOG.md) 한 줄 → **[STATUS](docs/STATUS.md) 한 장(N차)** → [MILESTONES](docs/MILESTONES.md)/[TODO](docs/TODO.md) 상태 → (브랜치면) [BRANCHES](docs/BRANCHES.md).
 - 기록에는 **"왜 + 실측값"**. 네트워크 기능은 **추정 금지 · 실측 필수**(도달률·지연·패킷 크기).
 - **설계 전 기존 문서·선행 사례부터 확인**(재발명 금지) — [docs/03](docs/03-competitive-landscape.md) · `nexa-dir2` `docs/ctl`(Nexa Controls 14종)·`docs/23`(크로스플랫폼 검토서). 차용 시 출처 경로를 커밋 본문에 명기.
 - 문서 번호(`NN-`)는 **불변**. 재번호 금지, 신규는 뒤에 append.
@@ -80,14 +83,18 @@
 
 1. 이 CLAUDE.md + [docs/STATUS.md](docs/STATUS.md) → 2. [DEVLOG](docs/DEVLOG.md) 최상단 + 최신 journal → 3. 할 일 = [docs/TODO.md](docs/TODO.md) 순차.
 
-## 5. 다음 단계 (2026-08-08 5차 기준)
+## 5. 다음 단계 (2026-08-08 · STATUS 23차 기준)
 
-1. 🔴 **사용자 확정 대기** — ADR-0003·0004·0006(Proposed). **ADR-0007은 08-08 Accepted**(Q-1 = 주 기기 + 복구 시드 / 기록 키 분리).
-2. **M0-1 스캐폴딩** — Cargo 워크스페이스·MSRV·최소 지원 OS·4타깃. 이어 **M0-1b 횡단 골격**([13](docs/13-code-design-standards.md))과 **D-21 v1 제약 4건**(DR-20)을 **같이** 세운다 — 나중에 넣으면 마이그레이션이다.
-3. **SP-1 예산 검증 스파이크**(D-15) — M0-1 직후 최우선(R-8 해소).
-4. **D-8 발견 도달 스파이크**(E-1~E-9) — 🔴 **실기 2대 이상 필요, 대행 불가.** ADR-0002 타이밍 6종이 여기 묶여 있다.
+1. 🔴 **사용자 확정 3건이 다음 작업을 잠그고 있다**
+   - **D-22 키 파일 복제 대응**([21 §5](docs/21-identity-spec.md) · R-12) — `instance` 필드는 **M1-3 와이어 포맷 확정 전에** 넣어야 공짜다.
+   - **D-23 ADR-0010**([24](docs/24-adr-0010-message-priority-notification.md)) — 확정되면 **N-1~N-4 프로토콜 자리를 M2-4b(= M2-4와 같은 슬라이스)** 에 넣는다.
+   - **D-24 기능 범위**([25](docs/25-feature-scope.md)) — v1.0 커트라인(v1 FR 94 → 약 65건) 승인 여부.
+2. **코드 크리티컬 패스** — `D-22 → M1-3 와이어 포맷 → M1-2/M1-4 실물 발견 → M2-7 비동기 수신 펌프`.
+   지금은 **InMemory fake 위에서 종단 데모까지 동작**한다(발견 → Noise 핸드셰이크 → TOFU 핀 → 대화). **실물 소켓만 비어 있다.**
+3. **M3 잔여** — `edit` 이식 · `WidgetBase` · 설정 화면(M3-11) 연동 · 트레이 · SAS 대조 UX(M3-6).
+4. ⏸ **실기 필요(대행 불가)** — D-8 발견 스파이크(**2대 이상**) · SP-1b/d/e · **유휴 RSS 재실측**(mac 85.7MB vs NFR-B-1 30MB — R-8의 잔여 축).
 
-> ADR 상태: **0001·0002·0007·0008·0009 ✅ Accepted** / **0003·0004·0005·0006 📐 Proposed**.
-> 완료된 설계 문서: [00 비전](docs/00-vision.md) · [01 아키텍처](docs/01-architecture.md) · [02 로드맵](docs/02-roadmap.md) · [03 경쟁 조사](docs/03-competitive-landscape.md) · [04 안전 송수신](docs/04-safe-transfer.md) · [05 요구사항](docs/05-requirements.md) · [06 네트워크 스택](docs/06-network-stack.md) · [12](docs/12-asset-reuse.md)·[13](docs/13-code-design-standards.md)·[14](docs/14-control-ux-architecture.md).
+> ADR 상태: **0001·0002·0003·0007·0008·0009 ✅ Accepted** / **0004·0005·0006·0010 📐 Proposed**.
+> **완료된 설계 문서 = 00~25 전체(26종)** — 색인은 [docs/README](docs/README.md). 🔴 열린 것은 **[25](docs/25-feature-scope.md) 기능 범위**와 **[21 §5](docs/21-identity-spec.md) 복제 대응** 둘뿐이다.
 > **예산 게이트 수치 = [05 §2-1](docs/05-requirements.md) NFR-B-1~12** — 유휴 RSS ≤30MB · 산출물 ≤10MB/타깃 · 런타임 의존 0 · 24h 누수 RSS ≤2MB·핸들 증가 0.
 > 문서 번호 배정 계획은 [docs/README](docs/README.md) — **번호는 불변**이므로 새 문서는 반드시 그 표를 보고 붙인다.
