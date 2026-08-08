@@ -841,6 +841,9 @@ dependencies = [
 [[package]]
 name = "nbeep-gfx"
 version = "0.1.0"
+dependencies = [
+ "ab_glyph",
+]
 
 [[package]]
 name = "nbeep-imgdec"
