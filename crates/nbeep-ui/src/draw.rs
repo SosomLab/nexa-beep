@@ -44,6 +44,11 @@ pub trait DrawCtx {
     /// 텍스트 렌더 폭(px) — 우측 정렬·라벨 실측 정렬용.
     fn text_width(&mut self, text: &str) -> i32;
 
+    /// RGBA 이미지 아이콘을 `(x, y)`(좌상단)에 알파 블렌드 — `clip` 밖은 잘린다. 기본 = no-op.
+    fn image(&mut self, x: i32, y: i32, img: &crate::theme::IconImage, clip: Rect) {
+        let _ = (x, y, img, clip);
+    }
+
     /// 원/타원 AA 채움. 기본 = no-op.
     fn fill_ellipse(&mut self, rect: Rect, color: Color) {
         let _ = (rect, color);

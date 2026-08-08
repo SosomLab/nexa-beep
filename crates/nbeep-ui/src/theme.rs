@@ -4,7 +4,7 @@
 //! (FR-U-5). 토큰 키는 안정 계약 — rename 시 마이그레이션 표를 남긴다.
 //! ⚠️ 값은 임시 팔레트다 — macOS 시각 언어 수치표(M3-1c) 확정 시 값만 교체한다.
 
-pub use nbeep_gfx::Color;
+pub use nbeep_gfx::{Color, IconImage};
 
 /// 시맨틱 색 토큰. 파일 탐색기 전용 토큰(탭 바·헤더 등)은 이식에서 제외하고
 /// 메신저에 필요한 공통 토큰 + `danger`(파일 승인 등 위험 행위 — [docs/12 §B])를 얹었다.

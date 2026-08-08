@@ -732,12 +732,16 @@ mod app_window {
             format!("파일 선택 — {}", self.dir.display())
         }
         fn items(&self) -> Vec<nbeep_ui::ComboItem> {
+            // 투명 배경 이미지 아이콘(파일 · 공유 Rc).
+            let icon = std::rc::Rc::new(nbeep_ui::IconImage::swatch(16, (0x8A, 0x91, 0x9C)));
             let mut v = Vec::new();
             if let Ok(rd) = std::fs::read_dir(&self.dir) {
                 for e in rd.flatten() {
                     if e.file_type().map(|t| t.is_file()).unwrap_or(false) {
                         let name = e.file_name().to_string_lossy().into_owned();
-                        v.push(nbeep_ui::ComboItem::new(name.clone(), name).with_icon("▤"));
+                        v.push(
+                            nbeep_ui::ComboItem::new(name.clone(), name).with_image(icon.clone()),
+                        );
                     }
                 }
             }

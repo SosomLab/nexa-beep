@@ -10,8 +10,9 @@ use crate::controls::{
 use crate::draw::{DrawCtx, FontSlot};
 use crate::event::InputEvent;
 use crate::geom::{Point, Rect};
-use crate::theme::Theme;
+use crate::theme::{IconImage, Theme};
 use crate::widget::{Invalidations, Widget};
+use std::rc::Rc;
 
 const PAD: i32 = 16;
 const LABEL_H: i32 = 22;
@@ -77,15 +78,17 @@ impl GalleryWidget {
         cb_right.set_help("A confirmation dialog appears before the Trash is emptied.");
         cb_right.set_show_help(true);
 
+        // 투명 배경 이미지 아이콘(글리프가 아니라 실제 RGBA 이미지 · 색상별 스와치).
+        let img = |rgb| Rc::new(IconImage::swatch(16, rgb));
         let combo_items = vec![
-            ComboItem::new("home", "Home").with_icon("⌂"),
-            ComboItem::new("recents", "Recents").with_icon("◷"),
-            ComboItem::new("desktop", "Desktop").with_icon("▦"),
+            ComboItem::new("home", "Home").with_image(img((0x3D, 0x8B, 0xFF))),
+            ComboItem::new("recents", "Recents").with_image(img((0x2E, 0xA0, 0x43))),
+            ComboItem::new("desktop", "Desktop").with_image(img((0xB5, 0x7C, 0x1E))),
         ];
         let ext_items = vec![
-            ComboItem::new("pathfinder", "Path Finder.app").with_icon("◎"),
-            ComboItem::new("textedit", "TextEdit.app").with_icon("▤"),
-            ComboItem::new("xcode", "Xcode.app").with_icon("◆"),
+            ComboItem::new("pathfinder", "Path Finder.app").with_image(img((0x3D, 0x8B, 0xFF))),
+            ComboItem::new("textedit", "TextEdit.app").with_image(img((0x8A, 0x91, 0x9C))),
+            ComboItem::new("xcode", "Xcode.app").with_image(img((0x5B, 0x6C, 0xFF))),
         ];
 
         let tree_model = TreeModel::new(vec![

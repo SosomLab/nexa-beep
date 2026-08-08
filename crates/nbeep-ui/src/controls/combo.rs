@@ -20,8 +20,9 @@ use crate::draw::{DrawCtx, FontSlot};
 use crate::edit::EditState;
 use crate::event::{InputEvent, Key};
 use crate::geom::{Point, Rect};
-use crate::theme::Theme;
+use crate::theme::{IconImage, Theme};
 use crate::widget::{Invalidations, Widget};
+use std::rc::Rc;
 
 /// **찾기 창 어댑터**(인터페이스 · Adapter 패턴) — [`Choose`]의 "Choose…"가 열 화면을 갈아끼운다.
 ///
@@ -35,16 +36,18 @@ pub trait ChoosePicker: std::fmt::Debug {
     fn items(&self) -> Vec<ComboItem>;
 }
 
-/// 콤보 항목 — 값·라벨 + **선택적 선행 아이콘**(글리프/이모지 — 텍스트 스택이 그릴 수 있는 범위.
-/// 비트맵 아이콘은 이미지 파이프라인 M4에서 확장).
+/// 콤보 항목 — 값·라벨 + **선택적 선행 아이콘**. 아이콘은 **이미지**([`ComboItem::image`] · 투명
+/// 배경 RGBA)가 우선이고, 없으면 글리프 문자([`ComboItem::icon`])로 폴백한다.
 #[derive(Clone, Debug, Default)]
 pub struct ComboItem {
     /// 값(안정 계약).
     pub value: String,
     /// 표시 라벨.
     pub label: String,
-    /// 선행 아이콘(없으면 텍스트만 — 기본).
+    /// 선행 글리프(이미지가 없을 때 폴백 · 기본 없음).
     pub icon: Option<String>,
+    /// 선행 이미지 아이콘(투명 배경 RGBA · 우선). 공유를 위해 `Rc`.
+    pub image: Option<Rc<IconImage>>,
 }
 
 impl ComboItem {
@@ -54,13 +57,44 @@ impl ComboItem {
             value: value.into(),
             label: label.into(),
             icon: None,
+            image: None,
         }
     }
-    /// 선행 아이콘 지정.
+    /// 선행 글리프 지정(이미지 없을 때 표시).
     #[must_use]
     pub fn with_icon(mut self, icon: impl Into<String>) -> Self {
         self.icon = Some(icon.into());
         self
+    }
+    /// 선행 이미지 아이콘 지정(투명 배경 RGBA · 글리프보다 우선).
+    #[must_use]
+    pub fn with_image(mut self, image: Rc<IconImage>) -> Self {
+        self.image = Some(image);
+        self
+    }
+}
+
+/// 선행 아이콘(이미지 우선 · 없으면 글리프)을 그리고 다음 x를 돌려준다. `cy` = 세로 중심.
+#[allow(clippy::too_many_arguments)]
+fn draw_leading(
+    ctx: &mut dyn DrawCtx,
+    it: &ComboItem,
+    x: i32,
+    cy: i32,
+    s16: i32,
+    gap: i32,
+    clip: Rect,
+    glyph_color: crate::theme::Color,
+) -> i32 {
+    if let Some(img) = it.image.as_deref() {
+        ctx.image(x, cy - img.h as i32 / 2, img, clip);
+        x + img.w as i32 + gap
+    } else if let Some(g) = it.icon.as_deref() {
+        ctx.select_font(FontSlot::Base, false);
+        ctx.text(x, cy - s16 / 2, clip, g, glyph_color);
+        x + ctx.text_width(g) + gap
+    } else {
+        x
     }
 }
 
@@ -245,20 +279,14 @@ pub trait ComboControl: Control {
         ctx.stroke_round_rect(b, self.s(6), theme.border, 1.0);
         self.draw_focus_ring(ctx, theme, b);
 
-        // 선택 항목 아이콘(있으면) + 텍스트.
+        // 선택 항목 아이콘(이미지 우선 · 없으면 글리프) + 텍스트.
+        let cy = b.y + b.h / 2;
         let mut tx = b.x + self.s(10);
-        if let Some(icon) = self
-            .core()
-            .items
-            .get(self.core().selected)
-            .and_then(|it| it.icon.as_deref())
-        {
-            ctx.select_font(FontSlot::Base, false);
-            ctx.text(tx, b.y + (b.h - self.s(16)) / 2, b, icon, theme.text);
-            tx += ctx.text_width(icon) + self.s(3); // 아이콘↔글자 간격(절반)
+        if let Some(it) = self.core().items.get(self.core().selected) {
+            tx = draw_leading(ctx, it, tx, cy, self.s(16), self.s(3), b, theme.text);
         }
         ctx.select_font(FontSlot::Base, false);
-        ctx.text(tx, b.y + (b.h - self.s(16)) / 2, b, box_text, theme.text);
+        ctx.text(tx, cy - self.s(16) / 2, b, box_text, theme.text);
 
         // 셰브론(⇕ 확장 / ∨ 일반) — 트리와 동일한 회색 계열(text_dim).
         let chev = self.chevron_rect();
@@ -297,19 +325,19 @@ pub trait ComboControl: Control {
             if i == self.core().selected {
                 draw_check_mark(ctx, check, self.accent_now(theme));
             }
-            let mut tx = check.right() + self.s(6);
-            ctx.select_font(FontSlot::Base, false);
-            if let Some(icon) = it.icon.as_deref() {
-                ctx.text(tx, row.y + (rh - self.s(16)) / 2, row, icon, theme.text);
-                tx += ctx.text_width(icon) + self.s(3); // 아이콘↔글자 간격(절반)
-            }
-            ctx.text(
-                tx,
-                row.y + (rh - self.s(16)) / 2,
+            let cy = row.y + rh / 2;
+            let tx = draw_leading(
+                ctx,
+                it,
+                check.right() + self.s(6),
+                cy,
+                self.s(16),
+                self.s(3),
                 row,
-                &it.label,
                 theme.text,
             );
+            ctx.select_font(FontSlot::Base, false);
+            ctx.text(tx, cy - self.s(16) / 2, row, &it.label, theme.text);
             y += rh;
         }
         // 구분자(Horizon) + 확장 항목("Choose…" 등 · 아이콘 옵션).
@@ -323,19 +351,19 @@ pub trait ComboControl: Control {
             y += self.s(SEP_H);
             for it in &extras {
                 let row = Rect::new(pop.x + self.s(3), y, pop.w - self.s(6), rh);
-                let mut tx = row.x + self.s(10);
-                ctx.select_font(FontSlot::Base, false);
-                if let Some(icon) = it.icon.as_deref() {
-                    ctx.text(tx, row.y + (rh - self.s(16)) / 2, row, icon, theme.accent);
-                    tx += ctx.text_width(icon) + self.s(3);
-                }
-                ctx.text(
-                    tx,
-                    row.y + (rh - self.s(16)) / 2,
+                let cy = row.y + rh / 2;
+                let tx = draw_leading(
+                    ctx,
+                    it,
+                    row.x + self.s(10),
+                    cy,
+                    self.s(16),
+                    self.s(3),
                     row,
-                    &it.label,
                     theme.accent,
                 );
+                ctx.select_font(FontSlot::Base, false);
+                ctx.text(tx, cy - self.s(16) / 2, row, &it.label, theme.accent);
                 y += rh;
             }
         }
@@ -687,13 +715,19 @@ impl Choose {
                 continue;
             }
             let row = Rect::new(vp.x + self.s(3), y, vp.w - self.s(6), rh);
-            let mut tx = row.x + self.s(8);
+            let cy = y + rh / 2;
+            let tx = draw_leading(
+                ctx,
+                it,
+                row.x + self.s(8),
+                cy,
+                self.s(16),
+                self.s(3),
+                row,
+                theme.text,
+            );
             ctx.select_font(FontSlot::Base, false);
-            if let Some(icon) = it.icon.as_deref() {
-                ctx.text(tx, y + (rh - self.s(16)) / 2, row, icon, theme.text);
-                tx += ctx.text_width(icon) + self.s(3);
-            }
-            ctx.text(tx, y + (rh - self.s(16)) / 2, row, &it.label, theme.text);
+            ctx.text(tx, cy - self.s(16) / 2, row, &it.label, theme.text);
         }
         let ch = items.len() as i32 * rh;
         self.pick_bars.paint(
