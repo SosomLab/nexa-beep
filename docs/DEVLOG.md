@@ -7,6 +7,8 @@
 
 ## 2026-08-08
 
+- **폰트 메모리 매핑 — R-15 해소**(feat/m3-fontmap · 사용자 확정 *"메모리 매핑 방식으로 적용"*): `fs::read` 힙 로드(mac 한글 TTC **55MB** · win 맑은 고딕 12.8MB)를 **memmap2 mmap**으로 교체 — 파일 백드 페이지라 실제 사용한 글리프 페이지만 상주하고 OS가 회수한다. **실측(mac): RSS 138 → 85.7MB(−51MB)**. 매핑은 프로세스 수명 자원이라 의도적 누수(`Box::leak` — 해제 시점이 없다). gfx `Font`는 `FontRef<'static>` 기반으로 전환(`from_static` 정상 경로·`from_bytes`는 누수 수렴). **부수 정리**: plat→gfx 미사용 의존 제거(계층 — plat은 gfx를 모른다) · STATUS 9차 테스트 수 44→40 정정(Windows 세션 검증 건) · 원장 memmap2 등재. 132테스트 green. 상세 [journal/2026-08-08.md](journal/2026-08-08.md).
+
 - **고DPI 배율·한글 타입어헤드·Enter 피드백**(feat/m3-dpi — 실기 피드백 3건, 맥 Retina+Windows 원격 실사): ① **배율 적용**(FR-U-6 선행) — `RasterCtx::with_scale`(슬롯 폰트 크기 × scale)·`PeerListWidget::set_scale`(행 높이·여백·히트테스트 물리 px화)·bin `ScaleFactorChanged` 구독(모니터 이동 대응). 맥 2x에서 글자가 정상 크기가 된다 ② **한글 타입어헤드** — `set_ime_allowed` + IME `Commit` 문자열을 `Char`로 라우팅(조합 표시 UI는 M3-3 — 확정된 글자는 지금부터 동작: "김" 입력 → 김철수 점프) ③ **Enter가 보인다** — 하단 상태바 신설(안내 문구 + 활성화 시 "선택: … 대화 열기는 M2-7") ④ 배율 히트테스트 회귀 테스트(2배율에서 클릭 좌표→행 매핑). 132테스트 green · 릴리스 0.55MB. 상세 [journal/2026-08-08.md](journal/2026-08-08.md).
 
 - **M3-1 슬라이스 2 — PeerListWidget(첫 실물 위젯)**(feat/m3-widgets): `typeahead` 이식(반복 단일키 cycle·`now_ms` 주입) + **peer_list를 즉시 렌더 함수에서 `Widget`으로 전환** — 캐럿 탐색(↑↓/Home/End/PgUp/PgDn·스크롤 따라가기) · 클릭 선택 · 휠(분수 노치 누적) · 타입어헤드(접두사 매칭은 위젯 몫 — 표시 이름 대소문자 무시·순환) · **Enter 활성화는 폴링**(`take_activated` — 위젯은 부모를 모른다, [12 §B] 통지 모델 번역) · **부분 무효화**(캐럿 이동 = 행 2개만 — FR-U-13 검증 테스트). 색은 전부 Theme 토큰(+`ok`/`warn` 신설 — 배지 시맨틱). bin은 winit→`InputEvent` 번역으로 **인터랙티브 데모**(키보드·마우스·휠·타입어헤드 동작. IME 조합은 M3-3). **131테스트 green** · 릴리스 0.53→0.55MB · 실창 스모크 통과. 상세 [journal/2026-08-08.md](journal/2026-08-08.md).

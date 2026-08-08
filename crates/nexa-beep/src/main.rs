@@ -274,7 +274,7 @@ mod app_window {
     /// 창을 띄우고 이벤트 루프를 돈다(닫으면 종료).
     pub(crate) fn run() {
         let (data, index) = nbeep_plat::font::system_ui_font().expect("시스템 UI 폰트 없음");
-        let font = nbeep_gfx::Font::from_bytes(data, index).expect("폰트 파싱");
+        let font = nbeep_gfx::Font::from_static(data, index).expect("폰트 파싱");
         let mut list = PeerListWidget::new();
         let mut inv = Invalidations::default();
         list.set_rows(demo_rows(), &mut inv);

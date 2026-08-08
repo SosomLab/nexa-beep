@@ -5,7 +5,7 @@ use nbeep_ui::{Color, DrawCtx, RasterCtx, Rect};
 
 fn font() -> Font {
     let (data, index) = nbeep_plat::font::system_ui_font().expect("시스템 UI 폰트");
-    Font::from_bytes(data, index).expect("폰트 파싱")
+    Font::from_static(data, index).expect("폰트 파싱")
 }
 
 fn px(buf: &[u32], w: usize, x: usize, y: usize) -> u32 {
