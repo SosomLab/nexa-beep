@@ -1,8 +1,10 @@
-# 빌드 산출물 (스택 확정 시 ADR-0001에 맞춰 보강)
+# 빌드 산출물 (Rust — ADR-0001)
 /target/
 /build/
 /dist/
 /out/
+# Cargo.lock은 바이너리 워크스페이스이므로 커밋한다(재현 빌드).
+**/*.rs.bk
 
 # OS
 .DS_Store

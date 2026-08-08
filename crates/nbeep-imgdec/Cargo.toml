@@ -1,0 +1,20 @@
+[package]
+name = "nbeep-imgdec"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "이미지 격리 디코드 전용 프로세스 (권한 강등 · 본체와 분리 — R-5)"
+
+[[bin]]
+name = "nbeep-imgdec"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+# ⚠️ 의도적으로 nbeep 크레이트 의존 0 — 신뢰 못 할 입력을 다루는 격리 프로세스라
+# 본체 코드와 링크되지 않는다(파서 취약점이 본체를 못 건드림 — docs/01 §2 · FR-S-12).
+[dependencies]

@@ -1,0 +1,11 @@
+# 스택 = ADR-0001(docs/07). stable 고정 — 4타깃 CI 재현성.
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]
+targets = [
+  "x86_64-pc-windows-msvc",
+  "aarch64-pc-windows-msvc",
+  "x86_64-apple-darwin",
+  "aarch64-apple-darwin",
+  "x86_64-unknown-linux-gnu",
+]
