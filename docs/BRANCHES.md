@@ -8,6 +8,7 @@
 
 | 브랜치 | 생성 | 병합(커밋) | 삭제 | 커밋수 | 작업 요약 | 상세 |
 | --- | --- | --- | --- | --- | --- | --- |
+| `feat/m3-font-sections` | 2026-08-08 | 2026-08-08 (811d94e --no-ff) | 2026-08-08 | 6 | **글꼴 설정 섹션화 + i18n + 커스텀 컨트롤 툴킷 + 갤러리** — FontSection(글꼴명 텍스트박스+크기 콤보) · i18n(영어 기본+한/중/일·`ui.language`) · `Control`/`ControlBase` 상속(포커스 링·활성·도움말 "?") · Checkbox·RadioGroup·TextBox·Combo(∨)/ExtendedCombo(⇕·Choose…)·TreeView/TreeGrid · 임시 갤러리(⌘/Ctrl+G·`🎛 컨트롤` 버튼) · 215 green | [journal/2026-08-08](journal/2026-08-08.md) |
 | `feat/chat-live` | 2026-08-08 | 2026-08-08 (8ae516c --no-ff) | 2026-08-08 | 3 | **`--chat-live` 터미널 클라이언트**(GUI 목록에 뜨는 인터랙티브) + **[문서 26 실행·수동 테스트 가이드](26-run-and-manual-test.md)**(실행 모드 9종·시나리오 A~D·Docker) | [journal/2026-08-08](journal/2026-08-08.md) |
 | `feat/m3-fontprefs` | 2026-08-08 | 2026-08-08 (ec66209 --no-ff) | 2026-08-08 | 2 | **가독성** — 기본 글꼴 상향(16/18/13)+행 높이 · 영역별 글꼴 설정(크기·faux 볼드/이탤릭) · gfx `draw_styled` | [journal/2026-08-08](journal/2026-08-08.md) |
 | `feat/m3-scroll` | 2026-08-08 | 2026-08-08 (e6b8698 --no-ff) | 2026-08-08 | 2 | **대화 스레드 스크롤**(휠·PgUp/Dn·새 메시지 스냅·히스토리 클램프) | [journal/2026-08-08](journal/2026-08-08.md) |
