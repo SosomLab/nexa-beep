@@ -32,7 +32,8 @@ mod app_window {
     use winit::window::{Window, WindowId};
 
     use nbeep_ui::{
-        InputEvent, Invalidations, Key, PeerListWidget, PeerRow, RasterCtx, Rect, Theme, Widget,
+        DrawCtx, InputEvent, Invalidations, Key, PeerListWidget, PeerRow, RasterCtx, Rect, Theme,
+        Widget,
     };
 
     type SbSurface = softbuffer::Surface<Rc<Window>, Rc<Window>>;
@@ -45,6 +46,10 @@ mod app_window {
         list: PeerListWidget,
         cursor: (i32, i32),
         started: Instant,
+        /// 창 배율(고DPI — FR-U-6). 모니터 이동·설정 변경 시 갱신.
+        scale: f32,
+        /// 하단 상태바 문구(Enter 활성화 피드백 — 대화 열기는 M2-7).
+        status: String,
     }
 
     /// 데모 목록 — **실물 도메인 경로**(PeerTable 관측→병합→TrustStore 판정)로 만든다.
@@ -89,14 +94,30 @@ mod app_window {
             let mut inv = Invalidations::default();
             self.list.on_event(&ev, &mut inv);
             if let Some(peer) = self.list.take_activated() {
-                // 대화 열기는 M2-7/M3 — 데모는 로그만.
-                println!("activated: {peer:?}");
+                // 대화 열기는 M2-7 — 지금은 상태바로 동작을 보여준다.
+                self.status = format!("선택: {peer:?} — Enter = 대화 열기(M2-7에서 연결)");
+                if let Some(w) = &self.window {
+                    w.request_redraw();
+                }
             }
             if !inv.is_empty() {
                 if let Some(w) = &self.window {
                     w.request_redraw();
                 }
             }
+        }
+
+        fn bar_h(&self) -> i32 {
+            (26.0 * self.scale).round() as i32
+        }
+
+        fn relayout(&mut self, w: u32, h: u32) {
+            let mut inv = Invalidations::default();
+            let width = i32::try_from(w).unwrap_or(i32::MAX);
+            let height = i32::try_from(h).unwrap_or(i32::MAX) - self.bar_h();
+            self.list.set_scale(self.scale, &mut inv);
+            self.list
+                .set_bounds(Rect::new(0, 0, width, height.max(0)), &mut inv);
         }
 
         fn now_ms(&self) -> u64 {
@@ -108,22 +129,39 @@ mod app_window {
         fn resumed(&mut self, el: &ActiveEventLoop) {
             let attrs = Window::default_attributes().with_title("Nexa Beep");
             let window = Rc::new(el.create_window(attrs).unwrap());
+            window.set_ime_allowed(true); // 한글 타입어헤드 — IME 커밋 문자를 받는다(조합 UI는 M3-3)
+            self.scale = window.scale_factor() as f32;
+            let size = window.inner_size();
             let context = softbuffer::Context::new(window.clone()).unwrap();
             let surface = SbSurface::new(&context, window.clone()).unwrap();
             self.window = Some(window);
             self.surface = Some(surface);
+            self.relayout(size.width, size.height);
         }
 
         fn window_event(&mut self, el: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
             match event {
                 WindowEvent::CloseRequested => el.exit(),
                 WindowEvent::Resized(size) => {
-                    let mut inv = Invalidations::default();
-                    let w = i32::try_from(size.width).unwrap_or(i32::MAX);
-                    let h = i32::try_from(size.height).unwrap_or(i32::MAX);
-                    self.list.set_bounds(Rect::new(0, 0, w, h), &mut inv);
+                    self.relayout(size.width, size.height);
                     if let Some(win) = &self.window {
                         win.request_redraw();
+                    }
+                }
+                WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                    // 모니터 이동·배율 변경(FR-U-6) — 레이아웃 전체 재계산.
+                    self.scale = scale_factor as f32;
+                    if let Some(win) = self.window.clone() {
+                        let size = win.inner_size();
+                        self.relayout(size.width, size.height);
+                        win.request_redraw();
+                    }
+                }
+                WindowEvent::Ime(winit::event::Ime::Commit(text)) => {
+                    // IME가 확정한 문자열(한글 등) — 타입어헤드로 라우팅.
+                    let now_ms = self.now_ms();
+                    for c in text.chars().filter(|c| !c.is_control()) {
+                        self.route(InputEvent::Char { c, now_ms });
                     }
                 }
                 WindowEvent::CursorMoved { position, .. } => {
@@ -192,6 +230,9 @@ mod app_window {
                     }
                 }
                 WindowEvent::RedrawRequested => {
+                    let bar_h = self.bar_h();
+                    let pad = (8.0 * self.scale).round() as i32;
+                    let text_dy = (bar_h - (14.0 * self.scale) as i32) / 2;
                     let (Some(window), Some(surface)) = (&self.window, &mut self.surface) else {
                         return;
                     };
@@ -207,8 +248,21 @@ mod app_window {
                             size.height as usize,
                         );
                         px.fill(self.theme.window_bg);
-                        let mut ctx = RasterCtx::new(&mut px, &self.font);
+                        let mut ctx = RasterCtx::new(&mut px, &self.font).with_scale(self.scale);
                         self.list.paint(&mut ctx, &self.theme);
+                        // 하단 상태바 — Enter/타입어헤드 동작이 눈에 보이게.
+                        let h = i32::try_from(size.height).unwrap_or(i32::MAX);
+                        let w = i32::try_from(size.width).unwrap_or(i32::MAX);
+                        let bar = Rect::new(0, h - bar_h, w, bar_h);
+                        ctx.select_font(nbeep_ui::FontSlot::Status, false);
+                        ctx.text_opaque(
+                            bar.x + pad,
+                            bar.y + text_dy,
+                            bar,
+                            &self.status,
+                            self.theme.text_dim,
+                            self.theme.chrome_bg,
+                        );
                         buffer.present().unwrap();
                     }
                 }
@@ -234,6 +288,8 @@ mod app_window {
             list,
             cursor: (0, 0),
             started: Instant::now(),
+            scale: 1.0,
+            status: "↑↓ 이동 · 타이핑 = 이름 점프(한글 가능) · Enter = 선택".into(),
         };
         event_loop.run_app(&mut app).unwrap();
     }
