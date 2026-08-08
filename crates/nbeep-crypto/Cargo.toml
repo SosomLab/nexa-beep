@@ -10,5 +10,14 @@ repository.workspace = true
 [lints]
 workspace = true
 
+[features]
+# PlainSession 스텁 + core testkit(duplex 링크) 노출(테스트 전용 · 릴리스 미포함).
+testkit = ["nbeep-core/testkit"]
+
 [dependencies]
 nbeep-core.workspace = true
+snow = "0.9.6"
+
+[dev-dependencies]
+# 세션 테스트가 core testkit의 duplex 링크 fake를 쓴다.
+nbeep-core = { workspace = true, features = ["testkit"] }

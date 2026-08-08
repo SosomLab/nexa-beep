@@ -12,7 +12,7 @@
 
 - 조직: **SosomLab** · 개발자: Sangyong Bae · kiros33@gmail.com
 - 저장소: `git@github.com:SosomLab/nexa-beep.git` · 릴레이 서버는 별도 **`nexa-beepd`**(v1 이후)
-- 현 단계: **M-1 설계 사실상 완료** — 문서 15종 · **ADR 7종**(0001·0002 Accepted / 0003~0007 Proposed) · DR-1~20. 다음 관문은 **M0 스캐폴딩 + SP-1 예산 스파이크**.
+- 현 단계: **M-1 설계 사실상 완료 + M0~M2 구현 진행** — **ADR 9종**(0001·0002·0007·0008·0009 Accepted / 0003~0006 Proposed) · DR-1~24. 다음 관문은 **M0 스캐폴딩 + SP-1 예산 스파이크**.
 
 ## 2. 확정 결정 ([docs/10](docs/10-decision-record.md) DR-1~20, 변경 시 새 ADR/journal)
 
@@ -35,6 +35,10 @@
 | DR-19 | **수동 엔드포인트 등록** — 직접 IP/DDNS로 노드 추가(S6 + 공인 IP). **LAN 밖은 위협 모델이 다르다** → 원격 신뢰 등급·SAS 전 파일 차단·인바운드 요청 대기 → [docs/19](docs/19-adr-0006-manual-endpoint.md) |
 | DR-20 | **다중 기기 신원(선택 계층)** — `UserId` 1:M `PeerId`. `UserId` 키가 **기기 목록을 서명**하고 상대가 검증(양방향 소유 증명) · 발신은 **그룹 팬아웃 재사용** · TOFU/SAS 대상이 `UserId`로 상승 · **`UserId` 개인키는 주 기기 1대 + 오프라인 복구 시드**(전 기기 복제는 폐기 경쟁에서 회복 불가라 탈락) · **`UserId` 키는 서명 전용**(저장 래핑 키로 쓰지 않는다) · **구현은 v2, v1 제약 4건은 M0에 반영** → [docs/20](docs/20-adr-0007-multi-device-identity.md) |
 | DR-14 | **L1~L4 직접 제어** — L1 링크 상태 구독 · L2 이웃 테이블 · L3 인터페이스별 멀티캐스트/브로드캐스트/링크로컬 · L4 UDP+TCP. 발견 폴백 **S1~S6**. **T0(무권한)이 완전한 제품** — L2 원시 소켓은 선택 → [docs/06](docs/06-network-stack.md) |
+| DR-21 | **외부 기술은 이음새(포트) 뒤에** — 독자 기술이 아닌 모든 외부 기법은 trait 뒤에 숨겨 교체 가능하게. 외부 크레이트 타입이 포트 시그니처에 나오면 위반 → [docs/13 §2-4 규칙 7](docs/13-code-design-standards.md) |
+| DR-22 | **프로필 옵트인 노출** — 본인이 설정·노출 확인한 식별 정보를 발견 상대에게 표시. 단 **브로드캐스트에는 미포함**(평문 수확·사칭) — 세션 경유 + 자동 프리페치. 기본 전부 비노출 → [docs/22](docs/22-adr-0008-profile-disclosure.md) |
+| DR-23 | **공유 폴더(pull)** — 공유 허용 목록을 **가상경로**로 묶어 직접 다운로드. 실경로 비노출 · 읽기 전용 · fail-closed 경로 해석 · **pull도 무해화 게이트 동일 통과** → [docs/23](docs/23-adr-0009-shared-folders.md) |
+| DR-24 | **설정 화면 = VS Code 방식** — `nexa-dir2` `prefs.rs` 설계 차용(코드 미이식): Entry 레지스트리 단일 원천 · 트리+AND 토큰 검색 · 즉시 적용 · Kind 동적 패널 → [docs/14 §10](docs/14-control-ux-architecture.md) |
 
 ### ★ 관통 원리 — "봉투만 본다"
 
@@ -82,7 +86,7 @@
 3. **SP-1 예산 검증 스파이크**(D-15) — M0-1 직후 최우선(R-8 해소).
 4. **D-8 발견 도달 스파이크**(E-1~E-9) — 🔴 **실기 2대 이상 필요, 대행 불가.** ADR-0002 타이밍 6종이 여기 묶여 있다.
 
-> ADR 상태: **0001·0002·0007 ✅ Accepted** / **0003·0004·0005·0006 📐 Proposed**.
+> ADR 상태: **0001·0002·0007·0008·0009 ✅ Accepted** / **0003·0004·0005·0006 📐 Proposed**.
 > 완료된 설계 문서: [00 비전](docs/00-vision.md) · [01 아키텍처](docs/01-architecture.md) · [02 로드맵](docs/02-roadmap.md) · [03 경쟁 조사](docs/03-competitive-landscape.md) · [04 안전 송수신](docs/04-safe-transfer.md) · [05 요구사항](docs/05-requirements.md) · [06 네트워크 스택](docs/06-network-stack.md) · [12](docs/12-asset-reuse.md)·[13](docs/13-code-design-standards.md)·[14](docs/14-control-ux-architecture.md).
 > **예산 게이트 수치 = [05 §2-1](docs/05-requirements.md) NFR-B-1~12** — 유휴 RSS ≤30MB · 산출물 ≤10MB/타깃 · 런타임 의존 0 · 24h 누수 RSS ≤2MB·핸들 증가 0.
 > 문서 번호 배정 계획은 [docs/README](docs/README.md) — **번호는 불변**이므로 새 문서는 반드시 그 표를 보고 붙인다.

@@ -19,4 +19,6 @@ pub mod transport;
 #[cfg(any(test, feature = "testkit"))]
 pub mod inmem;
 
-pub use transport::{Caps, ConnectError, DiscoveryEvent, Link, LinkError, PeerHint, Transport};
+// `Link`/`LinkError`는 core 소유(Session이 net을 몰라도 되게 — [docs/09]). 편의 재수출.
+pub use nbeep_core::link::{Link, LinkError};
+pub use transport::{Caps, ConnectError, DiscoveryEvent, PeerHint, Transport};

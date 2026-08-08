@@ -8,6 +8,7 @@
 
 | 브랜치 | 생성 | 병합(커밋) | 삭제 | 커밋수 | 작업 요약 | 상세 |
 | --- | --- | --- | --- | --- | --- | --- |
+| `feat/m2-session` | 2026-08-08 | _진행 중_ | — | (진행) | **M2-1 세션** — a) `Link` core 이관·`Session` 트레이트·`PlainSession` 스텁·`duplex` fake  b) **실물 `NoiseSession`(snow · Noise_XX)**·`Identity`(X25519=PeerId)·평문 미노출 검증. snow 라이선스 퍼미시브  c) **M2-2 TOFU** — `TrustStore`·`TrustedSession` 데코레이터·SAS `safety_number` | [journal/2026-08-08](journal/2026-08-08.md) |
 | `feat/m1-transport` | 2026-08-08 | 2026-08-08 (0c6e20c --no-ff) | 2026-08-08 | 2 | **M1-1 net 골격** — ADR-0003 Transport 경계(`Transport`/`Link`/`PeerHint`/`DiscoveryEvent`)·`InMemoryTransport` fake(소켓 없이 발견·연결·이탈)·core `DisplayName`(RLO 무해화 FR-S-13). ADR-0003 Accepted | [journal/2026-08-08](journal/2026-08-08.md) |
 | `spike/sp1-budget` | 2026-08-08 | 2026-08-08 (da98c96 --no-ff) | 2026-08-08 | 2 | **M0-2 SP-1 예산 검증 + P2 채택** — winit+softbuffer: 빈 창 0.40MB·퍼미시브 100%·의존성 Win15/mac32/Linux75. R-8 크기 해소. CI 4타깃 크기 게이트. 잔여 SP-1b/d/e=실기 | [journal/2026-08-08](journal/2026-08-08.md) |
 | `feat/m0-scaffold` | 2026-08-08 | 2026-08-08 (`95ea048` --no-ff) | 2026-08-08 | 6 | **M0 기반** — 스캐폴딩(9크레이트·의존성 역전)·횡단 골격(ActionKind 파이프라인·포트)·안정 코드·마스킹·**CI 4잡+빌드/테스트 SSOT+의존성 원장**. 29테스트 green·280KB. 남은 것 = M0-2 SP-1(실물 창 필요) | [journal/2026-08-08](journal/2026-08-08.md) |

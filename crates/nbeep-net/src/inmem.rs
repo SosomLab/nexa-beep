@@ -8,7 +8,8 @@
 //! 테스트 지원 코드이므로 `Mutex`/채널 `unwrap`을 허용한다(포이즌 = 프로그래머 오류).
 #![allow(clippy::unwrap_used)]
 
-use crate::transport::{Caps, ConnectError, DiscoveryEvent, Link, LinkError, PeerHint, Transport};
+use crate::transport::{Caps, ConnectError, DiscoveryEvent, PeerHint, Transport};
+use nbeep_core::link::{Link, LinkError};
 use nbeep_core::{DisplayName, PeerId};
 use std::collections::HashMap;
 use std::sync::mpsc::{channel, Receiver, Sender};
