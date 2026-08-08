@@ -86,6 +86,12 @@
 | ID | 요구 | 우선 | 범위 | 근거 |
 |---|---|:--:|:--:|---|
 | **FR-U-1** | **모든 렌더링을 직접 구현**한 커스텀 컨트롤로 UI를 구성한다. OS 위젯·UI 프레임워크·WebView 금지 | P0 | v1 | DR-6 |
+| **FR-U-9** | 컨트롤 구현은 **플랫폼 중립 1벌**, 시각 언어는 **macOS 기준 4타깃 통일** | P0 | v1 | DR-16 · [14 §1](14-control-ux-architecture.md) |
+| **FR-U-10** | **동작 관례는 각 OS 네이티브** — 수정 키·표준 단축키·스크롤 방향/관성·컨텍스트 메뉴 트리거·더블클릭 간격·창 닫기 동작. 단축키 **하드코딩 금지**(`StdAccel`로 요청) | P0 | v1 | DR-16 · [14 §6](14-control-ux-architecture.md) |
+| **FR-U-11** | 이벤트는 **3단계 전파**(캡처→타겟→버블) · `stop_propagation`/`prevent_default` · 포인터 캡처 · hover 합성 · **IME 조합 중 단축키 가로채기 금지** | P0 | v1 | DR-16 · [14 §3](14-control-ux-architecture.md) |
+| **FR-U-12** | 상태 6종(hover/active/focus/selected/disabled/invalid) 시각 규약 준수. **색만으로 구분 금지** · `Selected`와 `Focus`는 동시에 구별 가능 · 창 비활성 시 선택색 회색화 | P0 | v1 | [14 §4](14-control-ux-architecture.md) |
+| **FR-U-13** | hover·press는 **지연 0**(다음 프레임 안) · 상태 변화는 **해당 컨트롤만 무효화** · 애니메이션 없으면 프레임 요청 안 함 | P0 | v1 | [14 §7](14-control-ux-architecture.md) · NFR-B-7/12 |
+| **FR-U-14** | 팝업 규약 — `PopUpButton`은 **현재 선택을 버튼 면에 표시 + ✓** · 화면 경계에서 뒤집기 · 취소 시 **원래 값 복귀** · 타입어헤드 | P1 | v1 | [14 §5](14-control-ux-architecture.md) |
 | **FR-U-2** | 트레이 상주 · 알림 팝업 · 사운드 | P0 | v1 | 7/7 |
 | **FR-U-3** | **다국어**(최소 한국어·영어) | P0 | v1 | 7/7 |
 | **FR-U-4** | 키보드 우선 조작 — 목록 탐색·타입어헤드·단축키 | P1 | v1 | `nexa-dir2` 디자인 규약 계승 |
