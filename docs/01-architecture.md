@@ -95,7 +95,7 @@ flowchart TD
 | **store** | 기록·설정·핀·그룹 영속 · **포터블/폴백 경로 결정** · **at-rest 암호화·블라인드 인덱스·크립토 셰레딩**([ADR-0005](17-adr-0005-history-at-rest.md)) | 도메인 판단 | — | 📐 **M2-5** |
 | **gfx** | 픽셀 버퍼 래스터화 · 폰트 셰이핑/글리프 · 무효화 사각형 | 창 · 입력 | `surface` `text`(ab_glyph) | ✅ |
 | **ui** | 컨트롤·레이아웃·화면 · 입력 라우팅 | 플랫폼 API | `widget` `draw` `raster` `event` `geom` `theme` `typeahead` `peer_list` `chat_view` `settings` | 🚧 M3 진행 |
-| **plat** | 창/입력/IME/폰트열거/DPI/트레이/알림/링크상태/격리표식/AMSI | 도메인 판단 | `font`(mmap — R-15) · 창·입력은 bin의 winit 경유 | 🚧 폰트만 |
+| **plat** | 창/입력/IME/폰트열거/DPI/트레이/알림/**소리**/**종료 신호**/링크상태/격리표식/AMSI | 도메인 판단 | `font`(mmap — R-15) · 창·입력은 bin의 winit 경유 | 🚧 폰트만 |
 
 ---
 
@@ -112,6 +112,8 @@ flowchart TD
 
 **통신은 채널(메시지 패싱)** — 공유 잠금을 최소화한다. UI로 올라가는 것은 **이벤트 + 무효화 사각형**뿐이고, UI는 `core` 상태의 스냅샷을 읽는다.
 
+> ⚠️ **종료 경로는 아직 없다**(FR-P-7 · [§6-1](#6-1-종료-경로-shutdown--🔴-현재-비어-있다fr-p-7--r-16)) — 아래 "종료 경로를 테스트한다"는 규칙은 **아직 지켜지지 않는 상태**다.
+>
 > **누수 방지(NFR-B-6)는 여기서 결판난다.** 모든 워커·타이머·소켓·세션은 **소유자가 명확한 핸들**로 관리하고, 종료 경로를 테스트한다. 상한 없는 큐는 금지.
 
 ---
@@ -376,6 +378,49 @@ flowchart LR
 - **`nexa-dir2`의 `nexa-gui` 인프라(`DrawCtx`·`Widget`·`event`·`geom`·`theme`·`edit`·`typeahead` — 1,187 LOC)를 이식**하고, `ctl` 14종의 **시각 규약**(`Style` 팔레트·공통 자동 높이·`behind` 배후색)을 계승한다. **`ctl` 코드 자체는 HWND 모델이라 재사용하지 않는다** — 실측 근거 [12 차용 자산 평가](12-asset-reuse.md).
 - 가시 영역만 그린다 — `nexa-dir2`가 100k 행에서 검증한 방식(NFR-B-12).
 - 텍스트는 **표시 전에 무해화**(RLO·제어문자 — FR-S-13). `ui`가 아니라 `core`/`safe` 경계에서 처리해 한 곳에서만 한다.
+
+---
+
+## 6-1. 종료 경로 (shutdown) — 🔴 **현재 비어 있다**(FR-P-7 · R-16)
+
+**시작 경로만 있고 끝나는 경로가 없다.** 이건 편의 문제가 아니라 요구 두 개가 걸려 있다.
+
+```mermaid
+flowchart TD
+    SIG["OS 종료 요청<br/>Unix SIGINT/SIGTERM · Win 콘솔·세션 종료"] --> PORT["plat: 종료 포트<br/>(DR-21 — 플랫폼별 구현을 숨긴다)"]
+    PORT --> FLAG["core: 종료 플래그 set"]
+    FLAG --> WAKE{"블로킹 루프를 깨운다<br/>accept 타임아웃 · 셧다운 소켓"}
+    WAKE --> BYE["① GOODBYE 발신<br/>(FR-D-8의 절반)"]
+    WAKE --> CLEAN["② 세션·소켓·워커·타이머 회수<br/>(NFR-B-6)"]
+    WAKE --> ZERO["③ 평문 버퍼 zeroize<br/>(FR-S-22)"]
+    BYE --> EXIT(("정상 종료"))
+    CLEAN --> EXIT
+    ZERO --> EXIT
+
+    style SIG fill:#7f1d1d,color:#ffffff
+    style EXIT fill:#2d6a4f,color:#ffffff
+```
+
+| 왜 필요한가 | 지금은 |
+|---|---|
+| **FR-D-8** 이탈 = *"명시적 GOODBYE + 무응답 타임아웃"* **이중** 판정 | GOODBYE를 보낼 지점이 없어 **상대는 항상 타임아웃까지 기다린다** — 이중의 절반이 구조적으로 빈다 |
+| **NFR-B-6** 종료 경로 테스트가 병합 조건 | 종료 경로 자체가 없어 **검증 대상이 없다** |
+| **FR-S-22** 복호 평문 zeroize | 실행할 훅이 없다 |
+
+### ⚠️ 핸들러만으로는 부족하다
+
+`serve_manual`처럼 **`listener.incoming()`에 블로킹**돼 있으면 플래그를 세워도 다음 연결이 올 때까지 깨어나지 않는다. **깨우기 수단**(accept 타임아웃 · 셧다운 전용 소켓 · self-pipe)이 함께 있어야 한다.
+
+### ⚠️ 컨테이너에서는 증상이 더 나쁘다 (실측 2026-08-08)
+
+리눅스 커널은 **PID 1에게 시그널 기본 동작을 적용하지 않는다** — 핸들러 없는 프로세스가 PID 1이면 `SIGINT`·`SIGTERM`이 **무시**된다.
+
+| 조건 | `docker stop` | 해석 |
+|---|---:|---|
+| `--init` 없음 | **10.26초** | SIGTERM 무시 → 타임아웃 → SIGKILL |
+| `--init` | **0초** | tini 중계 → 자식은 PID 1이 아니라 정상 종료 |
+
+> 개발 실행 규약은 [18 §2-1](18-build-and-test.md). **`--init`은 우회이지 해결이 아니다** — 위 종료 포트가 들어와야 닫힌다.
 
 ---
 
