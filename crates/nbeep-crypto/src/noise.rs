@@ -486,3 +486,66 @@ mod clone_guard {
         assert_eq!(b.err(), Some(SessionError::SelfPeer), "수신자 거부");
     }
 }
+
+#[cfg(test)]
+mod group_fanout {
+    //! FR-G-2/G-6 — 그룹이 fanout으로 전 구성원에게 암호화 전송됨을 실물 세션으로 검증.
+
+    use super::*;
+    use nbeep_core::chat::{fanout, ChatMessage, MessageBody, Sequencer};
+    use nbeep_core::group::GroupStore;
+    use nbeep_core::mux::{MuxSession, StreamId};
+    use nbeep_core::testkit::duplex;
+    use nbeep_core::DisplayName;
+    use std::thread;
+
+    #[test]
+    fn group_send_reaches_all_members_via_fanout() {
+        let me = Identity::generate();
+        let bob = Identity::generate();
+        let carol = Identity::generate();
+        let (bob_id, carol_id) = (bob.peer_id(), carol.peer_id());
+
+        // 그룹 구성(로컬 개념) — bob·carol.
+        let mut groups = GroupStore::new();
+        let g = groups.create(DisplayName::parse("팀").unwrap());
+        groups.add_member(g, bob_id);
+        groups.add_member(g, carol_id);
+
+        // 각 구성원과 실물 Noise 세션 + 수신 스레드(에코 아님 — 도달만 확인).
+        let (lb_a, lb_b) = duplex(me.peer_id(), bob_id);
+        let (lc_a, lc_b) = duplex(me.peer_id(), carol_id);
+        let hb = thread::spawn(move || {
+            let s = NoiseSession::accept(lb_b, &bob).unwrap();
+            let mut m = MuxSession::new(s);
+            m.recv(StreamId::Chat).unwrap()
+        });
+        let hc = thread::spawn(move || {
+            let s = NoiseSession::accept(lc_b, &carol).unwrap();
+            let mut m = MuxSession::new(s);
+            m.recv(StreamId::Chat).unwrap()
+        });
+        let sb = MuxSession::new(NoiseSession::initiate(lb_a, &me).unwrap());
+        let sc = MuxSession::new(NoiseSession::initiate(lc_a, &me).unwrap());
+        let mut sessions = vec![sb, sc];
+
+        // 그룹 발신 — recipients()가 fanout으로(FR-G-6).
+        let mut seq = Sequencer::new();
+        let msg = ChatMessage {
+            sender_device: me.peer_id(),
+            seq: seq.issue(),
+            body: MessageBody::Text("팀 전체 공지".into()),
+        };
+        let report = fanout(&mut sessions, &groups.get(g).unwrap().recipients(), &msg);
+        assert!(
+            report.iter().all(|(_, r)| r.is_ok()),
+            "전원 전달: {report:?}"
+        );
+
+        // 두 구성원 모두 복호·수신했는가.
+        let got_b = ChatMessage::decode(&hb.join().unwrap(), me.peer_id()).unwrap();
+        let got_c = ChatMessage::decode(&hc.join().unwrap(), me.peer_id()).unwrap();
+        assert_eq!(got_b.body, MessageBody::Text("팀 전체 공지".into()));
+        assert_eq!(got_c, got_b, "전 구성원 동일 메시지");
+    }
+}
