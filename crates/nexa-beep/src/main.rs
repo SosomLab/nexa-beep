@@ -1001,7 +1001,10 @@ mod app_window {
                 }
                 return;
             }
-            let attrs = Window::default_attributes().with_title("Nexa Beep — 설정");
+            let attrs = Window::default_attributes().with_title(format!(
+                "Nexa Beep — {}",
+                nbeep_core::t(nbeep_core::Msg::SettingsTitle)
+            ));
             let window = Rc::new(el.create_window(attrs).unwrap());
             window.set_ime_allowed(true);
             let scale = window.scale_factor() as f32;
@@ -1069,6 +1072,15 @@ mod app_window {
                             Theme::dark()
                         };
                         // 전 창 다시 그리기.
+                        for e in self.windows.values() {
+                            e.window.request_redraw();
+                        }
+                    }
+                    "ui.language" => {
+                        // 현재 언어 전환 — 전 위젯이 다음 렌더에서 새 언어로 그린다.
+                        nbeep_core::set_lang(
+                            nbeep_core::Lang::from_code(&value).unwrap_or_default(),
+                        );
                         for e in self.windows.values() {
                             e.window.request_redraw();
                         }
@@ -1669,6 +1681,10 @@ mod app_window {
         if mode == WindowMode::Separate {
             settings.set("chat.window_mode", "separate".into());
         }
+        // 현재 언어를 설정값으로 초기화(기본 en — i18n).
+        nbeep_core::set_lang(
+            nbeep_core::Lang::from_code(settings.get("ui.language")).unwrap_or_default(),
+        );
         let net_hint = if live {
             "실물 발견(LAN)"
         } else {

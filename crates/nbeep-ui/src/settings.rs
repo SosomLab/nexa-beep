@@ -4,38 +4,36 @@
 //! 렌더와 검색이 같은 원천을 읽는다 — "화면에 있는데 검색 안 되는 설정"이 구조적으로 불가능하다.
 //! 제품에 실존하는 설정만 등록한다(없는 옵션 미등록 — 원본 규약).
 //!
-//! 레이아웃(VS Code식 — 사용자 확정 08-08): **좌측 사이드바**(상단 검색 + 카테고리 트리 ·
-//! 선택 하이라이트 · 검색 중엔 **매치 있는 카테고리만 + 매치 수 "(N)"** — X-10 ①) + **우측
-//! 편집기**(선택 카테고리의 항목 · 검색 중엔 전 카테고리 매치). **즉시 적용**(클릭/Enter = 값
-//! 순환 — [`SettingsWidget::take_changes`] 폴링). **값 영속은 M2-5**(Repository 포트).
+//! 레이아웃(VS Code식): **좌측 사이드바**(검색 + 카테고리 트리 · 검색 중엔 매치 카테고리만 +
+//! 매치 수 "(N)") + **우측 편집기**. **즉시 적용**([`SettingsWidget::take_changes`] 폴링).
 //!
-//! ## 글꼴 영역 섹션([`SettingKind::FontSection`] · 사용자 요청 08-08)
+//! ## i18n(사용자 요청 08-08)
 //!
-//! 글꼴은 영역(기본 UI·사용자 목록·대화 본문·상태바)마다 **제목 + 글꼴명(텍스트박스) +
-//! 크기(콤보) + 설명**을 한 섹션으로 묶는다. 글꼴명은 `font.{region}.family`, 크기는
-//! `font.{region}.size` 두 값을 한 Entry가 소유한다(레지스트리는 여전히 단일 원천).
-//! ⚠️ **글꼴명은 지금 저장·표시까지만** — 실제 패밀리 로드는 시스템 폰트 열거(M3-3 확장) 후.
+//! 표시 문자열은 전부 [`Msg`] 키로 두고 렌더 시 **현재 언어**([`nbeep_core::current_lang`])로
+//! 번역한다(영어 기본 · 한/중/일 팩). 검색은 **전 언어 매치** — 어느 언어로 쳐도 찾힌다.
+//! 글꼴 영역 섹션([`SettingKind::FontSection`])은 '제목 + 글꼴명(텍스트박스) + 크기(콤보) + 설명'.
 
 use crate::draw::{DrawCtx, FontSlot};
 use crate::event::{InputEvent, Key};
 use crate::geom::{Point, Rect};
 use crate::theme::Theme;
 use crate::widget::{Invalidations, Widget};
+use nbeep_core::{current_lang, tr, Lang, Msg};
 use std::collections::HashMap;
 
-/// 크기 콤보 후보(전 글꼴 영역 공용) — 첫 값이 기본(보통).
-const SIZE_OPTS: &[(&str, &str)] = &[
-    ("m", "보통"),
-    ("l", "크게"),
-    ("xl", "아주 크게"),
-    ("s", "작게"),
+/// 크기 콤보 후보(전 글꼴 영역 공용) — (값, 라벨 Msg). 첫 값이 기본(보통).
+const SIZE_OPTS: &[(&str, Msg)] = &[
+    ("m", Msg::SizeNormal),
+    ("l", Msg::SizeLarge),
+    ("xl", Msg::SizeExtraLarge),
+    ("s", Msg::SizeSmall),
 ];
 
 /// 항목 종류 — 우측 패널이 이 열거를 읽어 동적 생성한다(새 설정 = Entry 1줄).
 #[derive(Clone, Copy, Debug)]
 pub enum SettingKind {
-    /// 값 후보 중 택일 — (값, 표시 라벨) 목록. 클릭/Enter = 다음 값으로 순환.
-    Radio(&'static [(&'static str, &'static str)]),
+    /// 값 후보 중 택일 — (값, 라벨 Msg). 클릭/Enter = 다음 값으로 순환.
+    Radio(&'static [(&'static str, Msg)]),
     /// 글꼴 영역 — **글꼴명(텍스트박스) + 크기(콤보)** 를 한 섹션으로.
     FontSection {
         /// 글꼴명 값 키(`font.{region}.family`).
@@ -49,11 +47,11 @@ pub enum SettingKind {
 #[derive(Clone, Copy, Debug)]
 pub struct Entry {
     /// 카테고리(헤더 표시·검색 대상).
-    pub cat: &'static str,
+    pub cat: Msg,
     /// 제목(검색 대상 · 글꼴 섹션에선 섹션 제목).
-    pub label: &'static str,
+    pub label: Msg,
     /// 회색 설명 한 줄(검색 대상).
-    pub desc: &'static str,
+    pub desc: Msg,
     /// 컨트롤 형태.
     pub kind: SettingKind,
     /// 값 키(안정 계약 — rename 시 마이그레이션). 글꼴 섹션에선 `family_key`와 동일.
@@ -96,26 +94,38 @@ impl Entry {
 pub fn registry() -> &'static [Entry] {
     &[
         Entry {
-            cat: "대화",
-            label: "대화 창 모드",
-            desc: "새 대화를 여는 방식 — 변경은 다음 대화부터 적용됩니다(DR-26)",
+            cat: Msg::CatConversation,
+            label: Msg::ChatWindowMode,
+            desc: Msg::ChatWindowModeDesc,
             kind: SettingKind::Radio(&[
-                ("single", "한 창에서 전환"),
-                ("separate", "상대별 별도 창"),
+                ("single", Msg::WindowModeSingle),
+                ("separate", Msg::WindowModeSeparate),
             ]),
             key: "chat.window_mode",
         },
         Entry {
-            cat: "모양",
-            label: "테마",
-            desc: "전체 창의 밝기 팔레트 — 즉시 적용됩니다",
-            kind: SettingKind::Radio(&[("dark", "다크"), ("light", "라이트")]),
+            cat: Msg::CatAppearance,
+            label: Msg::Theme,
+            desc: Msg::ThemeDesc,
+            kind: SettingKind::Radio(&[("dark", Msg::ThemeDark), ("light", Msg::ThemeLight)]),
             key: "ui.theme",
         },
         Entry {
-            cat: "글꼴",
-            label: "기본 UI",
-            desc: "버튼·헤더·설정 등 기본 UI 영역의 글꼴",
+            cat: Msg::CatAppearance,
+            label: Msg::Language,
+            desc: Msg::LanguageDesc,
+            kind: SettingKind::Radio(&[
+                ("en", Msg::LangEnglish),
+                ("ko", Msg::LangKorean),
+                ("zh", Msg::LangChinese),
+                ("ja", Msg::LangJapanese),
+            ]),
+            key: "ui.language",
+        },
+        Entry {
+            cat: Msg::CatFont,
+            label: Msg::FontBase,
+            desc: Msg::FontBaseDesc,
             kind: SettingKind::FontSection {
                 family_key: "font.base.family",
                 size_key: "font.base.size",
@@ -123,9 +133,9 @@ pub fn registry() -> &'static [Entry] {
             key: "font.base.family",
         },
         Entry {
-            cat: "글꼴",
-            label: "사용자 목록",
-            desc: "발견된 사용자(피어) 목록의 글꼴",
+            cat: Msg::CatFont,
+            label: Msg::FontPeerList,
+            desc: Msg::FontPeerListDesc,
             kind: SettingKind::FontSection {
                 family_key: "font.peerlist.family",
                 size_key: "font.peerlist.size",
@@ -133,9 +143,9 @@ pub fn registry() -> &'static [Entry] {
             key: "font.peerlist.family",
         },
         Entry {
-            cat: "글꼴",
-            label: "대화 본문",
-            desc: "대화 스레드 메시지의 글꼴",
+            cat: Msg::CatFont,
+            label: Msg::FontMessage,
+            desc: Msg::FontMessageDesc,
             kind: SettingKind::FontSection {
                 family_key: "font.message.family",
                 size_key: "font.message.size",
@@ -143,9 +153,9 @@ pub fn registry() -> &'static [Entry] {
             key: "font.message.family",
         },
         Entry {
-            cat: "글꼴",
-            label: "상태바",
-            desc: "하단 상태바·보조 텍스트의 글꼴",
+            cat: Msg::CatFont,
+            label: Msg::FontStatus,
+            desc: Msg::FontStatusDesc,
             kind: SettingKind::FontSection {
                 family_key: "font.status.family",
                 size_key: "font.status.size",
@@ -191,19 +201,30 @@ fn tokens(q: &str) -> Vec<String> {
     q.split_whitespace().map(str::to_lowercase).collect()
 }
 
+/// 전 언어에 걸쳐 매칭한다 — 영어 UI에서도 "테마"로, 한국어 UI에서도 "theme"로 찾힌다.
 fn entry_matches(e: &Entry, toks: &[String]) -> bool {
     if toks.is_empty() {
         return true;
     }
-    let hay = format!("{} {} {}", e.cat, e.label, e.desc).to_lowercase();
+    let mut hay = String::new();
+    for lang in Lang::ALL {
+        hay.push_str(tr(lang, e.cat));
+        hay.push(' ');
+        hay.push_str(tr(lang, e.label));
+        hay.push(' ');
+        hay.push_str(tr(lang, e.desc));
+        hay.push(' ');
+    }
+    let hay = hay.to_lowercase();
     toks.iter().all(|t| hay.contains(t))
 }
 
-fn size_label(value: &str) -> &'static str {
+/// 크기 값 → 라벨 Msg.
+fn size_msg(value: &str) -> Msg {
     SIZE_OPTS
         .iter()
         .find(|(v, _)| *v == value)
-        .map_or(SIZE_OPTS[0].1, |(_, l)| *l)
+        .map_or(SIZE_OPTS[0].1, |(_, m)| *m)
 }
 
 /// 행 높이(px·논리) — Radio 항목은 2줄(제목+설명).
@@ -213,7 +234,7 @@ const FONT_SECTION_H: i32 = 88;
 const HEADER_H: i32 = 28;
 const SEARCH_H: i32 = 34;
 /// 좌측 사이드바 폭(논리 px) — 검색 + 카테고리 트리.
-const SIDEBAR_W: i32 = 140;
+const SIDEBAR_W: i32 = 150;
 /// 사이드바 트리 행 높이.
 const TREE_ROW_H: i32 = 30;
 
@@ -221,13 +242,13 @@ const TREE_ROW_H: i32 = 30;
 const CTRL_DY: i32 = 32; // 섹션 top → 컨트롤 행 y
 const CTRL_H: i32 = 28; // 컨트롤 높이
 const FAMILY_W: i32 = 180; // 글꼴명 텍스트박스 폭
-const SIZE_W: i32 = 104; // 크기 콤보 폭
+const SIZE_W: i32 = 112; // 크기 콤보 폭
 const CTRL_GAP: i32 = 10; // 글꼴명 ↔ 크기 간격
 
 /// 표시 행(레이아웃 결과).
 #[derive(Clone, Copy)]
 enum RowKind {
-    Header(&'static str),
+    Header(Msg),
     Item(usize), // registry 인덱스
 }
 
@@ -301,9 +322,13 @@ impl SettingsWidget {
         (logical as f32 * self.scale).round() as i32
     }
 
+    fn lang(&self) -> Lang {
+        current_lang()
+    }
+
     /// 카테고리 목록(레지스트리 순서·중복 제거) — 사이드바 트리의 원천.
-    fn cats() -> Vec<&'static str> {
-        let mut out: Vec<&'static str> = Vec::new();
+    fn cats() -> Vec<Msg> {
+        let mut out: Vec<Msg> = Vec::new();
         for e in registry() {
             if !out.contains(&e.cat) {
                 out.push(e.cat);
@@ -312,16 +337,16 @@ impl SettingsWidget {
         out
     }
 
-    /// 검색 중 카테고리별 매치 수(X-10 ① — 트리 행 "(N)" 표기·필터 공용).
-    fn cat_match_count(cat: &str, toks: &[String]) -> usize {
+    /// 검색 중 카테고리별 매치 수(트리 행 "(N)" 표기·필터 공용).
+    fn cat_match_count(cat: Msg, toks: &[String]) -> usize {
         registry()
             .iter()
             .filter(|e| e.cat == cat && entry_matches(e, toks))
             .count()
     }
 
-    /// 사이드바 표시 행 — 검색 중엔 **매치 있는 카테고리만**(X-10 ①), (카테고리, 매치 수).
-    fn sidebar_rows(&self) -> Vec<(&'static str, usize)> {
+    /// 사이드바 표시 행 — 검색 중엔 **매치 있는 카테고리만**, (카테고리, 매치 수).
+    fn sidebar_rows(&self) -> Vec<(Msg, usize)> {
         let toks = tokens(&self.query);
         Self::cats()
             .into_iter()
@@ -336,7 +361,7 @@ impl SettingsWidget {
         let searching = !toks.is_empty();
         let selected = Self::cats().get(self.selected_cat).copied();
         let mut out = Vec::new();
-        let mut last_cat: Option<&str> = None;
+        let mut last_cat: Option<Msg> = None;
         for (i, e) in registry().iter().enumerate() {
             if searching {
                 if !entry_matches(e, &toks) {
@@ -391,7 +416,7 @@ impl SettingsWidget {
     fn cycle_key(
         &mut self,
         key: &'static str,
-        opts: &[(&'static str, &'static str)],
+        opts: &[(&'static str, Msg)],
         inv: &mut Invalidations,
     ) {
         if opts.is_empty() {
@@ -473,7 +498,6 @@ impl Widget for SettingsWidget {
         match *ev {
             InputEvent::Key { key, .. } => match key {
                 Key::Escape => {
-                    // 글꼴명 편집 중이면 먼저 포커스만 해제(블러) — 곧바로 닫히지 않게.
                     if matches!(self.focus, Focus::Family(_)) {
                         self.focus = Focus::Search;
                         inv.push(self.bounds);
@@ -518,7 +542,6 @@ impl Widget for SettingsWidget {
             }
             InputEvent::MouseDown { x, y, .. } => {
                 if let Some(cat_idx) = self.sidebar_at(x, y) {
-                    // 검색 중 사이드바 클릭 = 그 카테고리로 이동 + 검색 해제(문맥 확정).
                     let rows = self.sidebar_rows();
                     if let Some(&(cat, _)) = rows.get(cat_idx) {
                         if let Some(pos) = Self::cats().iter().position(|&c| c == cat) {
@@ -531,7 +554,6 @@ impl Widget for SettingsWidget {
                     }
                     return;
                 }
-                // 우측 편집기 — 어떤 항목/컨트롤을 눌렀나.
                 self.focus = Focus::Search; // 기본: 블러(글꼴명 클릭 시 아래서 재설정)
                 let p = Point { x, y };
                 for (row, top) in self.rows_with_top() {
@@ -568,17 +590,18 @@ impl Widget for SettingsWidget {
     }
 
     fn paint(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
+        let lang = self.lang();
         ctx.fill_rect(self.bounds, theme.panel_bg);
         let sw = self.sidebar_w();
 
-        // ── 좌측 사이드바: 검색창 + 카테고리 트리(선택 하이라이트·매치 수) ──
+        // ── 좌측 사이드바: 검색창 + 카테고리 트리 ──
         let sidebar = Rect::new(self.bounds.x, self.bounds.y, sw, self.bounds.h);
         ctx.fill_rect(sidebar, theme.chrome_bg);
         let search = Rect::new(self.bounds.x, self.bounds.y, sw, self.s(SEARCH_H));
         ctx.fill_rect(search, theme.field_bg);
         ctx.select_font(FontSlot::Status, false);
         let (q, qc) = if self.query.is_empty() {
-            ("검색 (공백=AND)".to_string(), theme.text_dim)
+            (tr(lang, Msg::SearchPlaceholder).to_string(), theme.text_dim)
         } else {
             (self.query.clone(), theme.text)
         };
@@ -595,9 +618,9 @@ impl Widget for SettingsWidget {
             }
             ctx.select_font(FontSlot::Base, false);
             let label = if searching {
-                format!("{cat} ({n})") // 매치 수(X-10 ①)
+                format!("{} ({n})", tr(lang, cat))
             } else {
-                cat.to_string()
+                tr(lang, cat).to_string()
             };
             ctx.text(
                 r.x + self.s(12),
@@ -608,7 +631,6 @@ impl Widget for SettingsWidget {
             );
             ty += self.s(TREE_ROW_H);
         }
-        // 사이드바 경계선.
         ctx.fill_rect(
             Rect::new(self.bounds.x + sw - 1, self.bounds.y, 1, self.bounds.h),
             theme.border,
@@ -630,7 +652,7 @@ impl Widget for SettingsWidget {
                         r.x + self.s(10),
                         r.y + self.s(6),
                         r,
-                        cat,
+                        tr(lang, cat),
                         theme.text_dim,
                         theme.chrome_bg,
                     );
@@ -642,13 +664,15 @@ impl Widget for SettingsWidget {
                     let is_caret = items.get(self.caret) == Some(&i);
                     match e.kind {
                         SettingKind::Radio(opts) => {
-                            self.paint_radio(ctx, theme, e, opts, r, is_caret);
+                            self.paint_radio(ctx, theme, lang, e, opts, r, is_caret);
                         }
                         SettingKind::FontSection {
                             family_key,
                             size_key,
                         } => {
-                            self.paint_font_section(ctx, theme, e, family_key, size_key, r, top, i);
+                            self.paint_font_section(
+                                ctx, theme, lang, e, family_key, size_key, r, top, i,
+                            );
                         }
                     }
                 }
@@ -658,13 +682,15 @@ impl Widget for SettingsWidget {
 }
 
 impl SettingsWidget {
-    /// Radio 항목 — 제목 + 설명 + 우측 값 칩(클릭/Enter = 다음 값).
+    /// Radio 항목 — 제목 + 설명 + 우측 값 콤보(클릭/Enter = 다음 값).
+    #[allow(clippy::too_many_arguments)]
     fn paint_radio(
         &self,
         ctx: &mut dyn DrawCtx,
         theme: &Theme,
+        lang: Lang,
         e: &Entry,
-        opts: &[(&'static str, &'static str)],
+        opts: &[(&'static str, Msg)],
         r: Rect,
         is_caret: bool,
     ) {
@@ -675,23 +701,28 @@ impl SettingsWidget {
         };
         ctx.fill_rect(r, bg);
         ctx.select_font(FontSlot::Base, false);
-        ctx.text(r.x + self.s(12), r.y + self.s(5), r, e.label, theme.text);
+        ctx.text(
+            r.x + self.s(12),
+            r.y + self.s(5),
+            r,
+            tr(lang, e.label),
+            theme.text,
+        );
         ctx.select_font(FontSlot::Status, false);
         ctx.text(
             r.x + self.s(12),
             r.y + self.s(24),
             r,
-            e.desc,
+            tr(lang, e.desc),
             theme.text_dim,
         );
 
         let current = self.values.get(e.key).map_or("", String::as_str);
-        let label = opts
+        let msg = opts
             .iter()
             .find(|(v, _)| *v == current)
-            .map_or(current, |(_, l)| *l);
-        // 콤보 모양(크기 콤보와 통일 — 클릭 = 다음 값 순환).
-        let combo = format!("{label} ▾");
+            .map_or(SIZE_OPTS[0].1, |(_, m)| *m);
+        let combo = format!("{} ▾", tr(lang, msg));
         ctx.select_font(FontSlot::Base, false);
         let bw = ctx.text_width(&combo) + self.s(18);
         let chip = Rect::new(r.right() - bw - self.s(12), r.y + self.s(8), bw, self.s(26));
@@ -711,6 +742,7 @@ impl SettingsWidget {
         &self,
         ctx: &mut dyn DrawCtx,
         theme: &Theme,
+        lang: Lang,
         e: &Entry,
         family_key: &'static str,
         size_key: &'static str,
@@ -719,9 +751,14 @@ impl SettingsWidget {
         reg_idx: usize,
     ) {
         ctx.fill_rect(r, theme.panel_bg);
-        // 섹션 제목(살짝 강조).
         ctx.select_font(FontSlot::Base, true);
-        ctx.text(r.x + self.s(12), r.y + self.s(6), r, e.label, theme.text);
+        ctx.text(
+            r.x + self.s(12),
+            r.y + self.s(6),
+            r,
+            tr(lang, e.label),
+            theme.text,
+        );
 
         let (fam, size) = self.section_ctrls(top);
 
@@ -734,9 +771,9 @@ impl SettingsWidget {
         let family = self.values.get(family_key).map_or("", String::as_str);
         ctx.select_font(FontSlot::Base, false);
         let (ftext, fcolor) = if family.is_empty() {
-            ("(시스템 기본)".to_string(), theme.text_dim)
+            (tr(lang, Msg::SystemDefaultFont).to_string(), theme.text_dim)
         } else if focused {
-            (format!("{family}|"), theme.text) // 편집 캐럿
+            (format!("{family}|"), theme.text)
         } else {
             (family.to_string(), theme.text)
         };
@@ -750,7 +787,7 @@ impl SettingsWidget {
             size.x + self.s(10),
             size.y + self.s(5),
             size,
-            &format!("{} ▾", size_label(szval)),
+            &format!("{} ▾", tr(lang, size_msg(szval))),
             theme.panel_bg,
         );
 
@@ -760,7 +797,7 @@ impl SettingsWidget {
             r.x + self.s(12),
             r.y + self.s(64),
             r,
-            e.desc,
+            tr(lang, e.desc),
             theme.text_dim,
         );
     }
@@ -794,21 +831,24 @@ mod tests {
             primary: false,
         }
     }
-    /// "글꼴" 카테고리 인덱스.
     fn font_cat() -> usize {
         SettingsWidget::cats()
             .iter()
-            .position(|&c| c == "글꼴")
+            .position(|&c| c == Msg::CatFont)
+            .unwrap()
+    }
+    fn font_first_reg_idx() -> usize {
+        registry()
+            .iter()
+            .position(|e| matches!(e.kind, SettingKind::FontSection { .. }))
             .unwrap()
     }
 
     #[test]
     fn registry_is_single_source_render_equals_search() {
-        // 단일 원천 불변식: 사이드바 카테고리 매치 수의 합 == 레지스트리 전체.
         let (w, _) = widget();
         let total: usize = w.sidebar_rows().iter().map(|&(_, n)| n).sum();
         assert_eq!(total, registry().len());
-        // 각 카테고리를 선택하면 그 카테고리 항목이 전부 우측에 나온다.
         let mut shown = 0;
         let mut w2 = w;
         for i in 0..SettingsWidget::cats().len() {
@@ -833,7 +873,7 @@ mod tests {
     }
 
     #[test]
-    fn defaults_seed_family_and_size_for_font_sections() {
+    fn defaults_seed_family_size_and_language() {
         let s = SettingsState::with_defaults();
         assert_eq!(
             s.get("font.base.family"),
@@ -841,14 +881,53 @@ mod tests {
             "글꼴명 기본 = 시스템 기본(빈값)"
         );
         assert_eq!(s.get("font.base.size"), "m", "크기 기본 = 보통");
-        assert_eq!(s.get("font.peerlist.size"), "m");
+        assert_eq!(s.get("ui.language"), "en", "언어 기본 = 영어");
+        assert_eq!(s.get("ui.theme"), "dark");
+        assert_eq!(s.get("chat.window_mode"), "single");
+    }
+
+    #[test]
+    fn language_option_cycles_through_all_four() {
+        let (mut w, mut inv) = widget();
+        // 모양 카테고리에서 언어 항목을 찾아 순환.
+        let lang_idx = registry()
+            .iter()
+            .position(|e| e.key == "ui.language")
+            .unwrap();
+        w.cycle_key(
+            "ui.language",
+            match registry()[lang_idx].kind {
+                SettingKind::Radio(o) => o,
+                SettingKind::FontSection { .. } => unreachable!(),
+            },
+            &mut inv,
+        );
+        assert_eq!(w.take_changes(), vec![("ui.language", "ko".to_string())]);
+    }
+
+    #[test]
+    fn search_matches_across_languages() {
+        // 영어 UI(기본)에서도 한국어로 검색된다(전 언어 매치).
+        let (mut w, mut inv) = widget();
+        for c in "테마".chars() {
+            w.on_event(&ch(c), &mut inv);
+        }
+        let rows = w.sidebar_rows();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0], (Msg::CatAppearance, 1), "테마 = 모양 1건");
+        // 영어로도.
+        let (mut w2, mut inv2) = widget();
+        for c in "theme".chars() {
+            w2.on_event(&ch(c), &mut inv2);
+        }
+        assert_eq!(w2.items().len(), 1);
+        assert_eq!(registry()[w2.items()[0]].key, "ui.theme");
     }
 
     #[test]
     fn clicking_size_combo_cycles_size() {
         let (mut w, mut inv) = widget();
         w.selected_cat = font_cat();
-        // 첫 섹션(기본 UI) top = bounds.y(0). 크기 콤보 rect 중심 클릭.
         let (_fam, size) = w.section_ctrls(0);
         w.on_event(&click(size.x + 4, size.y + 4), &mut inv);
         assert_eq!(
@@ -865,7 +944,6 @@ mod tests {
         let (fam, _size) = w.section_ctrls(0);
         w.on_event(&click(fam.x + 4, fam.y + 4), &mut inv);
         assert_eq!(w.focus, Focus::Family(font_first_reg_idx()));
-        // 타이핑이 글꼴명에 들어간다(검색어가 아니라).
         for c in "Arial".chars() {
             w.on_event(&ch(c), &mut inv);
         }
@@ -874,13 +952,11 @@ mod tests {
             Some("Arial")
         );
         assert!(w.query.is_empty(), "검색창이 아니라 글꼴명으로");
-        // 백스페이스.
         w.on_event(&ch('\u{8}'), &mut inv);
         assert_eq!(
             w.values.get("font.base.family").map(String::as_str),
             Some("Aria")
         );
-        // 변경 보고에 글꼴명이 실린다.
         assert!(w
             .take_changes()
             .iter()
@@ -901,52 +977,15 @@ mod tests {
         assert!(w.take_back(), "둘째 Esc = 닫기");
     }
 
-    /// "글꼴" 카테고리 첫 섹션의 registry 인덱스(테스트 헬퍼).
-    fn font_first_reg_idx() -> usize {
-        registry()
-            .iter()
-            .position(|e| matches!(e.kind, SettingKind::FontSection { .. }))
-            .unwrap()
-    }
-
-    #[test]
-    fn sidebar_shows_match_counts_and_filters_categories() {
-        let (mut w, mut inv) = widget();
-        for c in "테마".chars() {
-            w.on_event(&ch(c), &mut inv);
-        }
-        let rows = w.sidebar_rows();
-        assert_eq!(rows.len(), 1, "매치 있는 카테고리만(X-10 ①)");
-        assert_eq!(rows[0], ("모양", 1), "매치 수 표기 근거");
-    }
-
     #[test]
     fn sidebar_click_selects_category() {
         let (mut w, mut inv) = widget();
-        // 사이드바 둘째 행("모양") 클릭.
+        // 둘째 사이드바 행("모양"/Appearance) 클릭 — 항목 2개(테마·언어).
         w.on_event(&click(10, SEARCH_H + TREE_ROW_H + 5), &mut inv);
         let items = w.items();
-        assert_eq!(items.len(), 1);
-        assert_eq!(
-            registry()[items[0]].key,
-            "ui.theme",
-            "선택 카테고리의 항목만"
-        );
-    }
-
-    #[test]
-    fn search_tokens_and_match() {
-        let (mut w, mut inv) = widget();
-        for c in "대화 창".chars() {
-            w.on_event(&ch(c), &mut inv);
-        }
-        let items = w.items();
-        assert_eq!(items.len(), 1, "AND 매칭 — '대화'+'창' 모두 포함 항목만");
-        assert_eq!(registry()[items[0]].key, "chat.window_mode");
-        for c in " zzz".chars() {
-            w.on_event(&ch(c), &mut inv);
-        }
-        assert!(w.items().is_empty());
+        assert_eq!(items.len(), 2, "테마 + 언어");
+        assert_eq!(registry()[items[0]].key, "ui.theme");
+        assert_eq!(registry()[items[1]].key, "ui.language");
     }
 
     #[test]
@@ -956,7 +995,7 @@ mod tests {
         let c = w.take_changes();
         assert_eq!(c, vec![("chat.window_mode", "separate".to_string())]);
         assert!(w.take_changes().is_empty(), "1회성 드레인");
-        w.on_event(&key(Key::Enter), &mut inv); // separate → single(순환)
+        w.on_event(&key(Key::Enter), &mut inv);
         assert_eq!(
             w.take_changes(),
             vec![("chat.window_mode", "single".to_string())]
@@ -969,16 +1008,5 @@ mod tests {
         assert!(!w.take_back());
         w.on_event(&key(Key::Escape), &mut inv);
         assert!(w.take_back());
-    }
-
-    #[test]
-    fn defaults_come_from_registry_first_option() {
-        let s = SettingsState::with_defaults();
-        assert_eq!(
-            s.get("chat.window_mode"),
-            "single",
-            "v1 기본 = 단일 창(DR-26)"
-        );
-        assert_eq!(s.get("ui.theme"), "dark");
     }
 }

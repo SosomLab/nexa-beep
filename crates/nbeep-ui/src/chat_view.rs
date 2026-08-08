@@ -254,7 +254,11 @@ impl Widget for ChatViewWidget {
                 break; // 화면 위쪽 밖
             }
             let fg = if line.mine { theme.text } else { theme.accent };
-            let prefix = if line.mine { "나: " } else { "상대: " };
+            let prefix = if line.mine {
+                nbeep_core::t(nbeep_core::Msg::ChatPrefixMe)
+            } else {
+                nbeep_core::t(nbeep_core::Msg::ChatPrefixPeer)
+            };
             let text = format!("{prefix}{}", line.text.as_str());
             let clip = Rect::new(self.bounds.x, y, self.bounds.w, line_h);
             ctx.text(self.bounds.x + self.s(12), y, clip, &text, fg);

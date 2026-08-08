@@ -28,13 +28,15 @@ pub struct PeerRow {
 /// 행 높이(px) — 임시. M3-1c 수치표에서 확정.
 pub const ROW_H: i32 = 42;
 
-/// 신뢰 배지 라벨 + 테마 토큰 선택.
+/// 신뢰 배지 라벨(현재 언어) + 테마 토큰 선택.
 #[must_use]
 pub fn badge(trust: TrustLevel, theme: &Theme) -> (&'static str, Color) {
     match trust {
-        TrustLevel::Unverified => ("미검증", theme.warn),
-        TrustLevel::Pinned => ("핀 고정", theme.sel_bg),
-        TrustLevel::FingerprintVerified => ("대조 완료", theme.ok),
+        TrustLevel::Unverified => (nbeep_core::t(nbeep_core::Msg::TrustUnverified), theme.warn),
+        TrustLevel::Pinned => (nbeep_core::t(nbeep_core::Msg::TrustPinned), theme.sel_bg),
+        TrustLevel::FingerprintVerified => {
+            (nbeep_core::t(nbeep_core::Msg::TrustVerified), theme.ok)
+        }
     }
 }
 
