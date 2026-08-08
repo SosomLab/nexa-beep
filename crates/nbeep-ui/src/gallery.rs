@@ -4,14 +4,14 @@
 //! 실물로 확인한다. **제품 화면이 아니라 검수용** — 정식 UI 통합은 별도.
 
 use crate::controls::{
-    Button, Checkbox, Choose, ChoosePicker, Combo, ComboControl, ComboItem, Control, GridColumn,
-    ImageFit, LabelSide, RadioGroup, RadioOption, ScrollBars, TextBox, TreeGrid, TreeModel,
-    TreeNode, TreeView,
+    BorderSpec, Button, Checkbox, Choose, ChoosePicker, Combo, ComboControl, ComboItem, Control,
+    GridColumn, ImageFit, LabelSide, RadioGroup, RadioOption, ScrollBars, TextBox, TreeGrid,
+    TreeModel, TreeNode, TreeView,
 };
 use crate::draw::{DrawCtx, FontSlot};
 use crate::event::InputEvent;
 use crate::geom::{Point, Rect};
-use crate::theme::{IconImage, Theme};
+use crate::theme::{Color, IconImage, Theme};
 use crate::widget::{Invalidations, Widget};
 use std::rc::Rc;
 
@@ -118,6 +118,16 @@ impl GalleryWidget {
         combo.set_help("New tab opens in this location by default.");
         combo.set_show_help(true);
 
+        // 트리/그리드 외곽 테두리 두께 1(반투명 · 사용자 확정).
+        let border = BorderSpec::new(1, Color::from_rgb(0x8A, 0x91, 0x9C), 0.6);
+        let mut tree = TreeView::new(tree_model);
+        tree.set_border(border);
+        let mut grid = TreeGrid::new(
+            grid_model,
+            vec![GridColumn::new("Menu", 220), GridColumn::new("Command", 90)],
+        );
+        grid.set_border(border);
+
         Self {
             bounds: Rect::default(),
             scale: 1.0,
@@ -140,11 +150,8 @@ impl GalleryWidget {
             textbox: TextBox::new("Run command"),
             combo,
             ext: Choose::new(ext_items, 0, "Choose…").with_choose_icon("⌕"),
-            tree: TreeView::new(tree_model),
-            grid: TreeGrid::new(
-                grid_model,
-                vec![GridColumn::new("Menu", 220), GridColumn::new("Command", 90)],
-            ),
+            tree,
+            grid,
             btn_text: Button::new("Save").with_image(img((0x3D, 0x8B, 0xFF))),
             btn_icon: Button::icon(img((0x2E, 0xA0, 0x43))),
             btn_img: Button::icon(img((0x5B, 0x6C, 0xFF))).image_fill(ImageFit::Cover),

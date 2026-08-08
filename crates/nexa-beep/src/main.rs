@@ -1601,12 +1601,18 @@ mod app_window {
                     self.request_redraw(id);
                 }
                 WindowEvent::Ime(winit::event::Ime::Preedit(text, _)) => {
-                    // 조합 중 — 활성 대화 뷰에 프리에딧 반영(M3-3).
+                    // 조합 중 — 대화 뷰면 프리에딧 밑줄(M3-3), 목록 모드면 실시간 타입어헤드.
                     if let Some(peer) = self.chat_peer_for(id) {
                         let mut inv = Invalidations::default();
                         if let Some(chat) = self.chats.get_mut(&peer) {
                             chat.set_preedit(text, &mut inv);
                         }
+                        self.request_redraw(id);
+                    } else if Some(id) == self.main_id && self.single_open.is_none() {
+                        // 목록에서 한글 조합 즉시 매칭(확정/Space 불필요).
+                        let now_ms = self.now_ms();
+                        let mut inv = Invalidations::default();
+                        self.list.set_preedit(&text, now_ms, &mut inv);
                         self.request_redraw(id);
                     }
                 }

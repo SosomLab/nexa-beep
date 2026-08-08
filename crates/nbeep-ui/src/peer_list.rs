@@ -120,6 +120,19 @@ impl PeerListWidget {
         self.activated.take()
     }
 
+    /// **IME 조합 중 텍스트로 실시간 타입어헤드**(한글 "김" 조합 즉시 이동 — 확정/Space 불필요).
+    /// 호스트가 `Ime::Preedit`를 목록 모드일 때 이리로 넘긴다.
+    pub fn set_preedit(&mut self, text: &str, now_ms: u64, inv: &mut Invalidations) {
+        let q = self.typeahead.set_preedit(text, now_ms);
+        if !q.prefix.is_empty() {
+            let from = self.caret % self.rows.len().max(1);
+            if let Some(hit) = self.find_prefix(&q.prefix, from) {
+                self.move_caret(hit, inv);
+            }
+        }
+        inv.push(self.bounds); // HUD 갱신
+    }
+
     fn visible_rows(&self) -> usize {
         (self.bounds.h.max(0) as usize) / (self.row_h().max(1) as usize)
     }
@@ -347,11 +360,11 @@ impl Widget for PeerListWidget {
             // 행 구분선.
             ctx.fill_rect(Rect::new(r.x, r.bottom() - 1, r.w, 1), theme.border);
         }
-        // 타입어헤드 HUD(입력 중일 때만) — 하단 좌측.
-        let buf = self.typeahead.text();
+        // 타입어헤드 HUD(입력·조합 중일 때만) — 하단 좌측. 조합 중 텍스트도 표시.
+        let buf = self.typeahead.composing();
         if !buf.is_empty() {
             ctx.select_font(FontSlot::Status, false);
-            let w = ctx.text_width(buf) + self.s(16);
+            let w = ctx.text_width(&buf) + self.s(16);
             let hud = Rect::new(
                 self.bounds.x + self.s(8),
                 self.bounds.bottom() - self.s(26),
@@ -359,7 +372,13 @@ impl Widget for PeerListWidget {
                 self.s(20),
             );
             ctx.fill_round_rect(hud, self.s(6), theme.field_bg);
-            ctx.text(hud.x + self.s(8), hud.y + self.s(3), hud, buf, theme.accent);
+            ctx.text(
+                hud.x + self.s(8),
+                hud.y + self.s(3),
+                hud,
+                &buf,
+                theme.accent,
+            );
         }
     }
 }
