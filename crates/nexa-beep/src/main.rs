@@ -94,7 +94,8 @@ fn discover_probe(secs: u64) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
     let mut clones = nbeep_net::CloneWatch::new(10_000);
     let started = std::time::Instant::now();
-    while std::time::Instant::now() < deadline {
+    let shutdown = nbeep_plat::shutdown::install();
+    while std::time::Instant::now() < deadline && !shutdown.requested() {
         if let Ok(o) = events.recv_timeout(std::time::Duration::from_millis(300)) {
             let now = nbeep_core::MonoInstant(
                 u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX),
@@ -120,9 +121,22 @@ fn serve_manual(port: u16) {
     use nbeep_core::{ChatMessage, MessageBody, Sequencer, Session as _};
     let identity = std::sync::Arc::new(nbeep_crypto::Identity::generate());
     let listener = std::net::TcpListener::bind(("0.0.0.0", port)).expect("포트 바인딩");
+    listener.set_nonblocking(true).expect("논블로킹");
+    let shutdown = nbeep_plat::shutdown::install();
     println!("SERVE me={} port={}", identity.peer_id().short(), port);
-    for stream in listener.incoming() {
-        let Ok(stream) = stream else { continue };
+    loop {
+        if shutdown.requested() {
+            println!("SERVE 종료(정상)");
+            return;
+        }
+        let stream = match listener.accept() {
+            Ok((s, _)) => s,
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(std::time::Duration::from_millis(150));
+                continue;
+            }
+            Err(_) => continue,
+        };
         let identity = std::sync::Arc::clone(&identity);
         std::thread::spawn(move || {
             let Ok(link) = nbeep_net::TcpLink::new(stream) else {
@@ -408,7 +422,8 @@ fn live_echo(secs: u64) {
     let mut seq = Sequencer::new();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
     let mut connected: Option<PeerIdShort> = None;
-    while std::time::Instant::now() < deadline {
+    let shutdown = nbeep_plat::shutdown::install();
+    while std::time::Instant::now() < deadline && !shutdown.requested() {
         let Ok(ev) = discovery.recv_timeout(std::time::Duration::from_millis(300)) else {
             continue;
         };
