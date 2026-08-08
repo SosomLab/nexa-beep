@@ -216,13 +216,81 @@ mod app_window {
         nbeep_core::TrustedSession<nbeep_crypto::NoiseSession<Box<dyn nbeep_core::Link>>>,
     >;
 
-    /// 대화 상태 — **뷰(창)와 분리**된 상대별 세션+스레드(DR-26).
-    ///
-    /// 뷰를 닫아도 대화는 살아 있다 — 세션 유지·스레드 보존·재진입 시 복원(재핸드셰이크 없음).
-    /// 창 모드는 뷰 계층만의 문제다: 어느 모드든 이 구조는 그대로고 뷰가 몇 개 붙느냐만 다르다.
+    /// GUI 이벤트 루프를 깨우는 커스텀 이벤트(M2-7 비동기 수신 펌프) — 세션 액터 스레드가
+    /// `EventLoopProxy`로 보낸다. winit 단일 스레드 규약을 지키면서 백그라운드 수신을 GUI에 반영.
+    #[derive(Debug)]
+    enum AppEvent {
+        /// 상대가 보낸 대화 한 줄(복호·검증·무해화 완료).
+        Recv {
+            peer: PeerId,
+            text: nbeep_core::SafeText,
+            seq: u64,
+            sender: PeerId,
+        },
+        /// 세션 종료(상대 이탈·오류).
+        Closed { peer: PeerId },
+    }
+
+    /// 대화 상태 — **뷰(창)와 분리**(DR-26). 세션은 **액터 스레드**가 소유하고, 여기엔 그
+    /// 액터로 보내는 송신 채널과 스레드 이력만 둔다(M2-7 — 비동기 수신 펌프).
     struct Conversation {
-        session: LiveSession,
+        /// 액터에 보낼 발신 바이트(인코딩된 `ChatMessage`). 드롭 = 액터 종료 신호.
+        out_tx: std::sync::mpsc::Sender<Vec<u8>>,
         lines: Vec<ChatLine>,
+    }
+
+    /// 세션 액터 — 세션을 전용 스레드로 옮겨 **수신(GUI로 프록시)과 송신(채널)을 교대**한다.
+    /// snow `TransportState`가 read/write에 `&mut`를 요구해 한 세션은 한 스레드가 소유해야
+    /// 하므로, 송신은 채널로 요청받는 액터 모델이 정석이다.
+    fn spawn_session_actor(
+        mut session: LiveSession,
+        out_rx: std::sync::mpsc::Receiver<Vec<u8>>,
+        proxy: winit::event_loop::EventLoopProxy<AppEvent>,
+    ) {
+        use nbeep_core::mux::StreamId;
+        let peer = session.peer();
+        // 수신 폴 타임아웃 — recv가 200ms마다 TimedOut으로 돌아와 송신과 교대한다.
+        session.set_recv_timeout(Some(std::time::Duration::from_millis(200)));
+        std::thread::spawn(move || {
+            loop {
+                // 송신 먼저(즉시성) — 대기 중 발신 요청을 모두 흘려보낸다.
+                loop {
+                    match out_rx.try_recv() {
+                        Ok(bytes) => {
+                            if session.send(StreamId::Chat, &bytes).is_err() {
+                                let _ = proxy.send_event(AppEvent::Closed { peer });
+                                return;
+                            }
+                        }
+                        Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => return, // 대화 닫힘
+                    }
+                }
+                // 수신 폴.
+                match session.recv(StreamId::Chat) {
+                    Ok(bytes) => {
+                        if let Ok(m) = nbeep_core::ChatMessage::decode(&bytes, peer) {
+                            if let nbeep_core::MessageBody::Text(t) = m.body {
+                                let ev = AppEvent::Recv {
+                                    peer,
+                                    text: nbeep_core::sanitize_message(&t),
+                                    seq: m.seq,
+                                    sender: m.sender_device,
+                                };
+                                if proxy.send_event(ev).is_err() {
+                                    return; // 이벤트 루프 종료
+                                }
+                            }
+                        }
+                    }
+                    Err(nbeep_core::SessionError::TimedOut) => {} // 정상 — 송신 교대로
+                    Err(_) => {
+                        let _ = proxy.send_event(AppEvent::Closed { peer });
+                        return;
+                    }
+                }
+            }
+        });
     }
 
     /// OS 창 하나 — 역할(목록/특정 대화) + 표면 + 창별 상태.
@@ -351,6 +419,8 @@ mod app_window {
         settings_view: Option<SettingsWidget>,
         /// OS 주 수식키(⌘/Ctrl) 눌림 상태 — `Cmd/Ctrl+,` 판정.
         primary_down: bool,
+        /// 세션 액터가 GUI를 깨우는 통로(M2-7).
+        proxy: winit::event_loop::EventLoopProxy<AppEvent>,
     }
 
     impl App {
@@ -365,6 +435,28 @@ mod app_window {
         fn request_redraw(&self, id: WindowId) {
             if let Some(e) = self.windows.get(&id) {
                 e.window.request_redraw();
+            }
+        }
+
+        /// `peer` 대화가 보이는 창을 다시 그린다(Separate = 그 창, Single = 주 창이 이 대화일 때).
+        fn redraw_conversation(&self, peer: PeerId) {
+            match self.mode {
+                WindowMode::Separate => {
+                    if let Some((id, _)) = self
+                        .windows
+                        .iter()
+                        .find(|(_, e)| e.role == Role::Chat(peer))
+                    {
+                        self.request_redraw(*id);
+                    }
+                }
+                WindowMode::Single => {
+                    if self.single_open == Some(peer) {
+                        if let Some(id) = self.main_id {
+                            self.request_redraw(id);
+                        }
+                    }
+                }
             }
         }
 
@@ -435,10 +527,12 @@ mod app_window {
         fn ensure_conversation(&mut self, peer: PeerId) -> Result<ChatViewWidget, String> {
             if !self.conversations.contains_key(&peer) {
                 let (session, decision) = self.open_session(peer)?;
+                let (out_tx, out_rx) = std::sync::mpsc::channel();
+                spawn_session_actor(session, out_rx, self.proxy.clone());
                 self.conversations.insert(
                     peer,
                     Conversation {
-                        session,
+                        out_tx,
                         lines: Vec::new(),
                     },
                 );
@@ -653,33 +747,11 @@ mod app_window {
                 }
                 if let Some(conv) = self.conversations.get_mut(&peer) {
                     conv.lines.push(ChatLine { mine: true, text });
-                    use nbeep_core::mux::StreamId;
-                    let session = &mut conv.session;
-                    let authenticated = session.peer();
-                    let sent = session.send(StreamId::Chat, &msg.encode());
-                    // 데모: 에코 봇이 즉시 응답(인프로세스) — 블로킹 수신.
-                    // 실물 네트워크의 비동기 수신 펌프는 M2-7에서.
-                    let reply = sent.and_then(|()| session.recv(StreamId::Chat));
-                    match reply {
-                        Ok(bytes) => {
-                            if let Ok(rmsg) = nbeep_core::ChatMessage::decode(&bytes, authenticated)
-                            {
-                                if self.dedup.accept(rmsg.sender_device, rmsg.seq) {
-                                    if let nbeep_core::MessageBody::Text(t) = rmsg.body {
-                                        let line = ChatLine {
-                                            mine: false,
-                                            text: nbeep_core::sanitize_message(&t),
-                                        };
-                                        conv.lines.push(line.clone());
-                                        if let Some(chat) = self.chats.get_mut(&peer) {
-                                            chat.push_line(line, &mut inv);
-                                        }
-                                    }
-                                }
-                            }
-                            self.status = format!("암호화 왕복 OK — seq={}", msg.seq);
-                        }
-                        Err(e) => self.status = format!("세션 오류: {e}"),
+                    // 액터에 발신 요청 — 수신은 비동기로 AppEvent::Recv로 돌아온다(M2-7).
+                    if conv.out_tx.send(msg.encode()).is_err() {
+                        self.status = "세션 종료됨".into();
+                    } else {
+                        self.status = format!("전송 seq={} (응답 대기)", msg.seq);
                     }
                 }
                 self.request_redraw(id);
@@ -810,7 +882,7 @@ mod app_window {
         }
     }
 
-    impl ApplicationHandler for App {
+    impl ApplicationHandler<AppEvent> for App {
         fn resumed(&mut self, el: &ActiveEventLoop) {
             if self.main_id.is_some() {
                 return;
@@ -834,6 +906,39 @@ mod app_window {
             );
             self.main_id = Some(id);
             self.layout_window(id);
+        }
+
+        fn user_event(&mut self, _el: &ActiveEventLoop, event: AppEvent) {
+            // 세션 액터 → GUI(M2-7). 수신 메시지를 해당 대화 스레드에 실시간 반영한다.
+            match event {
+                AppEvent::Recv {
+                    peer,
+                    text,
+                    seq,
+                    sender,
+                } => {
+                    if !self.dedup.accept(sender, seq) {
+                        return; // 중복(다중 경로 — FR-M-9)
+                    }
+                    let line = ChatLine { mine: false, text };
+                    if let Some(conv) = self.conversations.get_mut(&peer) {
+                        conv.lines.push(line.clone());
+                    }
+                    let mut inv = Invalidations::default();
+                    if let Some(chat) = self.chats.get_mut(&peer) {
+                        chat.push_line(line, &mut inv);
+                    }
+                    // 이 대화가 보이는 창을 다시 그린다.
+                    self.redraw_conversation(peer);
+                }
+                AppEvent::Closed { peer } => {
+                    self.conversations.remove(&peer);
+                    self.status = "상대와의 세션이 종료됨".into();
+                    if let Some(id) = self.main_id {
+                        self.request_redraw(id);
+                    }
+                }
+            }
         }
 
         fn about_to_wait(&mut self, _el: &ActiveEventLoop) {
@@ -1015,7 +1120,8 @@ mod app_window {
         if mode == WindowMode::Separate {
             settings.set("chat.window_mode", "separate".into());
         }
-        let event_loop = EventLoop::new().unwrap();
+        let event_loop = EventLoop::<AppEvent>::with_user_event().build().unwrap();
+        let proxy = event_loop.create_proxy();
         let net_hint = if live {
             "실물 발견(LAN)"
         } else {
@@ -1047,6 +1153,7 @@ mod app_window {
             settings,
             settings_view: None,
             primary_down: false,
+            proxy,
         };
         event_loop.run_app(&mut app).unwrap();
     }

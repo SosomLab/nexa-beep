@@ -94,6 +94,11 @@ impl<S: Session> MuxSession<S> {
         self.inner.trust()
     }
 
+    /// 수신 폴 타임아웃 위임(비동기 수신 펌프 — M2-7).
+    pub fn set_recv_timeout(&mut self, dur: Option<core::time::Duration>) {
+        self.inner.set_recv_timeout(dur);
+    }
+
     /// `stream`으로 논리 메시지 하나 송신.
     ///
     /// # Errors

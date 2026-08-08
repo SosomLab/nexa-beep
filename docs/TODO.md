@@ -131,7 +131,7 @@ M-1 설계 ──► M0 기반 ──► M1 발견 ──► M2 대화 ──►
 | M2-4b | **등급·확인 프로토콜 자리**(N-1~N-4 · [24 §7](24-adr-0010-message-priority-notification.md)) — 메시지 봉투 `importance` 1B(미지 값=`Normal`) · **`ack` 제어 메시지**(`Delivered`/`Acknowledged`) · 기록 레코드 상태·시각 필드 · `ActionKind` 5종 + `stable_code` 대역. **M2-4와 같은 슬라이스** — 나중이면 포맷 변경 | P0 | 소 | M2-4 · D-23확정 | ☐ |
 | M2-5 | `store` — 데이터 경로 결정(포터블/폴백 FR-P-3) · **암호화 대화 기록 저장**([17](17-adr-0005-history-at-rest.md)) · 키 계층(마스터 래핑) · **동기화 폴더 감지 경고** · 크립토 셰레딩 | P0 | 대 | M2-4 · D-18확정 | ☐ |
 | M2-6 | 텍스트 **무해화**(RLO·제어문자 FR-S-13 — `core`/`safe` 경계) · 링크 자동 열기 금지(FR-S-14) | P0 | 소 | M2-4 | ✅ (08-08 — `safetext`: `sanitize_message`(이름과 달리 **개행·탭 보존**·CRLF 정규화·상한 16,384자 잘림 보고) · `find_links`(http/https 화이트리스트·범위만 보고 — **열기 API 부재가 구조 보증**) |
-| M2-7 | UI 신뢰 배지 — **미검증 / 검증됨 / 대조 완료** · 재연결·경로 변경 시 스레드 연속 표시 | P0 | 중 | M2-2 · M1-6 | ☐ (근거는 준비됨 — `TrustDecision`·`TrustLevel`·`name_conflict`) |
+| M2-7 | UI 신뢰 배지 · **비동기 수신 펌프**(실시간 수신 GUI 반영) | P0 | 중 | M2-2 · M1-6 | 🚧 (08-08 — **비동기 수신 펌프 완료**: 세션을 액터 스레드로 이전(snow TransportState가 read/write에 &mut 요구 — 한 세션=한 스레드) · `set_recv_timeout` 전 계층 위임(Link→Session→Noise/Plain/Trusted/Mux) · winit `EventLoopProxy`+`AppEvent`로 수신 실시간 반영 · 수신도 `DedupIndex` 통과. 신뢰 배지는 M1-6에서 완료. 잔여 = 인바운드→GUI 대화 자동 생성(현재 인바운드는 백그라운드 에코)) |
 
 ---
 

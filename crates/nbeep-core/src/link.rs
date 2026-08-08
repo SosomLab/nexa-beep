@@ -34,6 +34,15 @@ pub trait Link: Send {
     /// # Errors
     /// 상대가 닫았으면 [`LinkError::Closed`].
     fn recv(&mut self) -> Result<Vec<u8>, LinkError>;
+
+    /// 수신 폴 타임아웃 설정 — `Some(d)`면 `d`마다 [`LinkError::TimedOut`]("지금은 없음")으로
+    /// 돌아온다(수신 펌프가 송신과 교대할 수 있게). 기본 no-op(블로킹 유지 — fake·InMemory).
+    ///
+    /// # Errors
+    /// 소켓 옵션 실패 시 [`LinkError::Closed`].
+    fn set_recv_timeout(&mut self, _dur: Option<core::time::Duration>) -> Result<(), LinkError> {
+        Ok(())
+    }
 }
 
 impl Link for Box<dyn Link> {
@@ -45,5 +54,8 @@ impl Link for Box<dyn Link> {
     }
     fn recv(&mut self) -> Result<Vec<u8>, LinkError> {
         (**self).recv()
+    }
+    fn set_recv_timeout(&mut self, dur: Option<core::time::Duration>) -> Result<(), LinkError> {
+        (**self).set_recv_timeout(dur)
     }
 }

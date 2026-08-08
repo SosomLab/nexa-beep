@@ -58,6 +58,12 @@ impl Link for TcpLink {
         self.stream.write_all(&buf).map_err(|_| LinkError::Closed)
     }
 
+    fn set_recv_timeout(&mut self, dur: Option<Duration>) -> Result<(), LinkError> {
+        self.stream
+            .set_read_timeout(dur)
+            .map_err(|_| LinkError::Closed)
+    }
+
     fn recv(&mut self) -> Result<Vec<u8>, LinkError> {
         let mut len4 = [0u8; 4];
         if let Err(e) = self.stream.read_exact(&mut len4) {

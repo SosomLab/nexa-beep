@@ -74,4 +74,8 @@ pub trait Session: Send {
     /// # Errors
     /// 링크가 닫혔으면 [`SessionError::Closed`].
     fn recv(&mut self) -> Result<Vec<u8>, SessionError>;
+
+    /// 수신 폴 타임아웃 — `Some(d)`면 `recv`가 `d`마다 [`SessionError::TimedOut`]으로 돌아온다
+    /// (비동기 수신 펌프가 송신과 교대 — M2-7). 기본 no-op(블로킹 유지).
+    fn set_recv_timeout(&mut self, _dur: Option<core::time::Duration>) {}
 }
