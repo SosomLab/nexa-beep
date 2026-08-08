@@ -11,6 +11,7 @@ pub mod controls;
 pub mod draw;
 pub mod edit;
 pub mod event;
+pub mod gallery;
 pub mod geom;
 pub mod peer_list;
 pub mod raster;
@@ -28,6 +29,7 @@ pub use controls::{
 pub use draw::{DrawCtx, FontSlot};
 pub use edit::{EditKey, EditState};
 pub use event::{InputEvent, Key, WheelAccum, WHEEL_DELTA};
+pub use gallery::GalleryWidget;
 pub use geom::{Point, Rect, Size};
 pub use peer_list::{badge, PeerListWidget, PeerRow, ROW_H};
 pub use raster::RasterCtx;
