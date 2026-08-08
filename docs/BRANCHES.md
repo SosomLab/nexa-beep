@@ -8,7 +8,7 @@
 
 | 브랜치 | 생성 | 병합(커밋) | 삭제 | 커밋수 | 작업 요약 | 상세 |
 | --- | --- | --- | --- | --- | --- | --- |
-| `feat/m3-dpi` | 2026-08-08 | _진행 중_ | — | 1 | **실기 피드백 3건** — 고DPI 배율(RasterCtx/위젯 scale·히트테스트 일관·`ScaleFactorChanged`) · 한글 타입어헤드(IME Commit 라우팅) · Enter 피드백(하단 상태바) | [journal/2026-08-08](journal/2026-08-08.md) |
+| `feat/m3-dpi` | 2026-08-08 | 2026-08-08 (99d1304 --no-ff) | 2026-08-08 | 2 | **실기 피드백 3건** — 고DPI 배율(RasterCtx/위젯 scale·히트테스트 일관·`ScaleFactorChanged`) · 한글 타입어헤드(IME Commit 라우팅) · Enter 피드백(하단 상태바) | [journal/2026-08-08](journal/2026-08-08.md) |
 | `feat/m3-widgets` | 2026-08-08 | 2026-08-08 (a2a0425 --no-ff) | 2026-08-08 | 3 | **M3-1 슬라이스 1·2** — `nexa-gui` 인프라 이식(geom/event/widget/theme/draw/typeahead) · **`RasterCtx`**(CPU 래스터 백엔드 — SDF AA) · **`PeerListWidget`**(첫 실물 위젯 — 부분 무효화 단언·타입어헤드) · bin 인터랙티브 배선 | [journal/2026-08-08](journal/2026-08-08.md) |
 | `feat/m2-mux` | 2026-08-08 | 2026-08-08 (840d778 --no-ff) | 2026-08-08 | 12 | **M2 잔여 + M1 선행 + 텍스트 스택** — M2-2b(안전번호 60자리) · CI 회귀 게이트(테스트 의무) · M2-3(`MuxSession` 다중화·백프레셔) · M2-4(`ChatMessage` 봉투·시퀀스·중복 제거·팬아웃) · M2-6(`safetext` 무해화·링크) · M1-5(`PeerTable` 지문 병합·경로 단위 이탈) · SP-1c 실측→**ab_glyph 채택** · M1-6(gfx `Surface`/`Font`·plat 폰트·ui 피어 목록+배지 3종·실창 데모) · ADR-0010 개정·25 기능 범위(병행 세션) | [journal/2026-08-08](journal/2026-08-08.md) |
 | `feat/m2-session` | 2026-08-08 | 2026-08-08 | a52eac1 | ✅ 병합 | **M2-1 세션** — a) `Link` core 이관·`Session` 트레이트·`PlainSession` 스텁·`duplex` fake  b) **실물 `NoiseSession`(snow · Noise_XX)**·`Identity`(X25519=PeerId)·평문 미노출 검증. snow 라이선스 퍼미시브  c) **M2-2 TOFU** — `TrustStore`·`TrustedSession` 데코레이터·SAS `safety_number` | [journal/2026-08-08](journal/2026-08-08.md) |
