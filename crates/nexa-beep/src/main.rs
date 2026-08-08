@@ -1,20 +1,31 @@
 //! Nexa Beep 본체 — 진입·조립·생명주기.
 //!
-//! `--window` = **피어 목록 위젯 데모**(M3-1 — PeerTable+TrustStore 실물 도메인 경로 위에
-//! `PeerListWidget` + `RasterCtx`). 캐럿 탐색·클릭·휠·타입어헤드·Enter 활성화가 동작한다.
-//! 실물 발견 배선은 M1-4, 창 코드의 `nbeep-plat` 이관은 M3-2.
+//! `--window` = **InMemory 종단 데모**: 실물 발견(에코 봇) → 목록 → Enter →
+//! Noise 핸드셰이크 → TOFU 핀 → 다중화 세션 위 대화 왕복. 전 계층이 실물이다.
+//!
+//! **창 모드(DR-26 · FR-U-18)**: 기본 = 단일 창(목록↔대화 전환). `--separate-windows` =
+//! **상대별 별도 OS 창**(동시 대화). 대화 상태(`Conversation`)는 어느 모드든 뷰와 분리되어
+//! 유지된다. ⚠️ 모드 선택의 설정 화면 연동(`chat.window_mode`)은 M3-11 — 그 전까지 실행 인자.
+//!
+//! 실물 네트워크 배선은 M1-4, 창 코드의 `nbeep-plat` 이관은 M3-2.
 //! 기본 실행은 스캐폴드 출력(헤드리스 CI 안전).
 
 // 조립 지점 바이너리 — 창 초기화 경로의 unwrap 허용(docs/13 §9 — 복구 불가 구성 오류).
 #![allow(clippy::unwrap_used)]
 
 fn main() {
-    let open_window = std::env::args().any(|a| a == "--window");
-    if open_window {
-        app_window::run();
+    let args: Vec<String> = std::env::args().collect();
+    let open_window = args.iter().any(|a| a == "--window");
+    let separate = args.iter().any(|a| a == "--separate-windows");
+    if open_window || separate {
+        app_window::run(if separate {
+            app_window::WindowMode::Separate
+        } else {
+            app_window::WindowMode::Single
+        });
     } else {
         println!(
-            "nexa-beep {} — scaffold (창은 `--window`)",
+            "nexa-beep {} — scaffold (창은 `--window` · 상대별 별도 창은 `--separate-windows`)",
             env!("CARGO_PKG_VERSION")
         );
     }
@@ -22,6 +33,7 @@ fn main() {
 
 /// 창 + 위젯 조립 — winit 이벤트를 `InputEvent`로 번역해 위젯에 라우팅.
 mod app_window {
+    use std::collections::HashMap;
     use std::num::NonZeroU32;
     use std::rc::Rc;
     use std::time::Instant;
@@ -31,6 +43,7 @@ mod app_window {
     use winit::keyboard::{Key as WKey, NamedKey};
     use winit::window::{Window, WindowId};
 
+    use nbeep_core::PeerId;
     use nbeep_ui::{
         ChatLine, ChatViewWidget, DrawCtx, InputEvent, Invalidations, Key, PeerListWidget, PeerRow,
         RasterCtx, Rect, Theme, Widget,
@@ -38,33 +51,13 @@ mod app_window {
 
     type SbSurface = softbuffer::Surface<Rc<Window>, Rc<Window>>;
 
-    struct App {
-        window: Option<Rc<Window>>,
-        surface: Option<SbSurface>,
-        font: nbeep_gfx::Font,
-        theme: Theme,
-        list: PeerListWidget,
-        /// 현재 화면에 열린 대화의 뷰(None = 목록 화면). 상태는 `conversations`에.
-        chat: Option<ChatViewWidget>,
-        /// 화면에 열린 대화 상대(뷰 ↔ 상태 연결 키).
-        open: Option<nbeep_core::PeerId>,
-        /// 내 신원 — 발견·세션·발신 봉투가 전부 이 키 하나에서 나온다.
-        identity: std::sync::Arc<nbeep_crypto::Identity>,
-        seq: nbeep_core::Sequencer,
-        /// InMemory 전송(실물 발견 이벤트 공급원 — M1-4에서 실물 네트워크로 교체).
-        transport: nbeep_net::inmem::InMemoryTransport,
-        discovery: std::sync::mpsc::Receiver<nbeep_net::DiscoveryEvent>,
-        table: nbeep_core::PeerTable,
-        trust: nbeep_core::MemoryTrustStore,
-        /// 상대별 대화 상태 — 뷰와 무관하게 유지(동시 대화의 실체).
-        conversations: std::collections::HashMap<nbeep_core::PeerId, Conversation>,
-        dedup: nbeep_core::DedupIndex,
-        cursor: (i32, i32),
-        started: Instant,
-        /// 창 배율(고DPI — FR-U-6). 모니터 이동·설정 변경 시 갱신.
-        scale: f32,
-        /// 하단 상태바 문구(Enter 활성화 피드백 — 대화 열기는 M2-7).
-        status: String,
+    /// 창 모드(DR-26). 설정 연동(`chat.window_mode`)은 M3-11.
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    pub(crate) enum WindowMode {
+        /// 한 창에서 목록 ↔ 대화 전환(v1 기본).
+        Single,
+        /// 대화마다 상대별 OS 창(동시 대화).
+        Separate,
     }
 
     /// 열린 대화의 실물 세션 스택 — Noise(암호화) 위 TOFU(신뢰) 위 다중화.
@@ -74,12 +67,28 @@ mod app_window {
 
     /// 대화 상태 — **뷰(창)와 분리**된 상대별 세션+스레드(DR-26).
     ///
-    /// 뷰를 닫아도(Esc) 대화는 살아 있다 — 세션 유지·스레드 보존·재진입 시 복원(재핸드셰이크
-    /// 없음). 이 분리가 창 모드 옵션(단일 창 ↔ 상대별 별도 창, M3-12)을 뷰 계층만의 문제로
-    /// 만든다: 어느 모드든 Conversation은 그대로고 뷰가 몇 개 붙느냐만 달라진다.
+    /// 뷰를 닫아도 대화는 살아 있다 — 세션 유지·스레드 보존·재진입 시 복원(재핸드셰이크 없음).
+    /// 창 모드는 뷰 계층만의 문제다: 어느 모드든 이 구조는 그대로고 뷰가 몇 개 붙느냐만 다르다.
     struct Conversation {
         session: LiveSession,
         lines: Vec<ChatLine>,
+    }
+
+    /// OS 창 하나 — 역할(목록/특정 대화) + 표면 + 창별 상태.
+    struct WinEntry {
+        role: Role,
+        window: Rc<Window>,
+        surface: SbSurface,
+        cursor: (i32, i32),
+        scale: f32,
+    }
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Role {
+        /// 주 창 — 목록(단일 모드에서는 대화 전환도 이 창에서).
+        Main,
+        /// 상대별 대화 창(Separate 모드).
+        Chat(PeerId),
     }
 
     /// 에코 봇 — 버스에 실물 신원으로 참여해 수신 세션을 받고, Chat 메시지를 에코한다.
@@ -120,114 +129,45 @@ mod app_window {
         });
     }
 
+    struct App {
+        mode: WindowMode,
+        windows: HashMap<WindowId, WinEntry>,
+        main_id: Option<WindowId>,
+        font: nbeep_gfx::Font,
+        theme: Theme,
+        list: PeerListWidget,
+        /// 대화 뷰 — Separate 모드는 창당 1개, Single 모드는 주 창에 최대 1개.
+        chats: HashMap<PeerId, ChatViewWidget>,
+        /// Single 모드에서 주 창에 표시 중인 대화(None = 목록).
+        single_open: Option<PeerId>,
+        /// 내 신원 — 발견·세션·발신 봉투가 전부 이 키 하나에서 나온다.
+        identity: std::sync::Arc<nbeep_crypto::Identity>,
+        seq: nbeep_core::Sequencer,
+        /// InMemory 전송(실물 발견 이벤트 공급원 — M1-4에서 실물 네트워크로 교체).
+        transport: nbeep_net::inmem::InMemoryTransport,
+        discovery: std::sync::mpsc::Receiver<nbeep_net::DiscoveryEvent>,
+        table: nbeep_core::PeerTable,
+        trust: nbeep_core::MemoryTrustStore,
+        /// 상대별 대화 상태 — 뷰와 무관하게 유지(동시 대화의 실체).
+        conversations: HashMap<PeerId, Conversation>,
+        dedup: nbeep_core::DedupIndex,
+        started: Instant,
+        /// 주 창 하단 상태바 문구.
+        status: String,
+    }
+
     impl App {
-        fn route(&mut self, ev: InputEvent) {
-            let mut inv = Invalidations::default();
-            if let Some(chat) = &mut self.chat {
-                chat.on_event(&ev, &mut inv);
-                if let Some(text) = chat.take_outgoing() {
-                    // 실물 발신 — 봉투 구성 → 암호화 세션으로 전송 → 에코 수신(즉시).
-                    let msg = nbeep_core::ChatMessage {
-                        sender_device: self.identity.peer_id(),
-                        seq: self.seq.issue(),
-                        body: nbeep_core::MessageBody::Text(text.as_str().to_string()),
-                    };
-                    chat.push_line(
-                        ChatLine {
-                            mine: true,
-                            text: text.clone(),
-                        },
-                        &mut inv,
-                    );
-                    let conv = self.open.and_then(|p| self.conversations.get_mut(&p));
-                    if let Some(conv) = conv {
-                        conv.lines.push(ChatLine { mine: true, text });
-                        use nbeep_core::mux::StreamId;
-                        let session = &mut conv.session;
-                        let peer = session.peer();
-                        let sent = session.send(StreamId::Chat, &msg.encode());
-                        // 데모: 에코 봇이 즉시 응답(인프로세스) — 블로킹 수신.
-                        // 실물 네트워크의 비동기 수신 펌프는 M2-7에서.
-                        let reply = sent.and_then(|()| session.recv(StreamId::Chat));
-                        match reply {
-                            Ok(bytes) => {
-                                if let Ok(rmsg) = nbeep_core::ChatMessage::decode(&bytes, peer) {
-                                    if self.dedup.accept(rmsg.sender_device, rmsg.seq) {
-                                        if let nbeep_core::MessageBody::Text(t) = rmsg.body {
-                                            let line = ChatLine {
-                                                mine: false,
-                                                text: nbeep_core::sanitize_message(&t),
-                                            };
-                                            conv.lines.push(line.clone());
-                                            chat.push_line(line, &mut inv);
-                                        }
-                                    }
-                                }
-                                self.status = format!("암호화 왕복 OK — seq={}", msg.seq);
-                            }
-                            Err(e) => self.status = format!("세션 오류: {e}"),
-                        }
-                    }
-                }
-                if chat.take_back() {
-                    // 뷰만 닫는다 — 대화(세션·스레드)는 유지(DR-26 상태-뷰 분리).
-                    self.chat = None;
-                    self.open = None;
-                    self.status =
-                        "↑↓ 이동 · 타이핑 = 이름 점프(한글 가능) · Enter = 대화 열기".into();
-                    inv.push(self.list.bounds());
-                }
-            } else {
-                self.list.on_event(&ev, &mut inv);
-                if let Some(peer) = self.list.take_activated() {
-                    // 기존 대화가 있으면 재사용(재핸드셰이크 없음 — 스레드 복원), 없으면 수립.
-                    let status = if self.conversations.contains_key(&peer) {
-                        Ok("대화 복원 — 세션 유지 중 · Esc = 목록".to_string())
-                    } else {
-                        self.open_session(peer).map(|(session, decision)| {
-                            self.conversations.insert(
-                                peer,
-                                Conversation {
-                                    session,
-                                    lines: Vec::new(),
-                                },
-                            );
-                            match decision {
-                                nbeep_core::TrustDecision::FirstContact => {
-                                    "Noise 세션 수립 — 첫 접촉(TOFU 핀 고정) · Esc = 목록".into()
-                                }
-                                d => format!("Noise 세션 수립 — {d:?} · Esc = 목록"),
-                            }
-                        })
-                    };
-                    match status {
-                        Ok(msg) => {
-                            let title = self.table.get(peer).map_or_else(
-                                || format!("{peer:?}"),
-                                |e| e.name.as_str().to_string(),
-                            );
-                            let mut chat = ChatViewWidget::new(title);
-                            chat.set_scale(self.scale, &mut inv);
-                            chat.set_bounds(self.list.bounds(), &mut inv);
-                            // 스레드 복원 — 상태가 뷰와 분리돼 있어 가능하다.
-                            if let Some(conv) = self.conversations.get(&peer) {
-                                for line in &conv.lines {
-                                    chat.push_line(line.clone(), &mut inv);
-                                }
-                            }
-                            self.chat = Some(chat);
-                            self.open = Some(peer);
-                            self.status = msg;
-                            self.refresh_rows(&mut inv); // 배지 갱신(핀 반영)
-                        }
-                        Err(e) => self.status = format!("연결 실패: {e}"),
-                    }
-                }
-            }
-            if !inv.is_empty() {
-                if let Some(w) = &self.window {
-                    w.request_redraw();
-                }
+        fn now_ms(&self) -> u64 {
+            u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX)
+        }
+
+        fn bar_h(scale: f32) -> i32 {
+            (26.0 * scale).round() as i32
+        }
+
+        fn request_redraw(&self, id: WindowId) {
+            if let Some(e) = self.windows.get(&id) {
+                e.window.request_redraw();
             }
         }
 
@@ -253,8 +193,8 @@ mod app_window {
             if changed {
                 let mut inv = Invalidations::default();
                 self.refresh_rows(&mut inv);
-                if let Some(w) = &self.window {
-                    w.request_redraw();
+                if let Some(id) = self.main_id {
+                    self.request_redraw(id);
                 }
             }
         }
@@ -277,7 +217,7 @@ mod app_window {
         /// 연결 → Noise 핸드셰이크 → TOFU 판정 → 다중화(실물 스택 전체).
         fn open_session(
             &mut self,
-            peer: nbeep_core::PeerId,
+            peer: PeerId,
         ) -> Result<(LiveSession, nbeep_core::TrustDecision), String> {
             use nbeep_net::Transport as _;
             let link = self.transport.connect(peer).map_err(|e| format!("{e:?}"))?;
@@ -288,36 +228,327 @@ mod app_window {
             Ok((nbeep_core::MuxSession::new(est.session), est.decision))
         }
 
-        fn bar_h(&self) -> i32 {
-            (26.0 * self.scale).round() as i32
+        fn peer_title(&self, peer: PeerId) -> String {
+            self.table
+                .get(peer)
+                .map_or_else(|| format!("{peer:?}"), |e| e.name.as_str().to_string())
         }
 
-        fn relayout(&mut self, w: u32, h: u32) {
+        /// 대화 상태 확보(없으면 세션 수립) + 뷰 생성(스레드 복원).
+        fn ensure_conversation(&mut self, peer: PeerId) -> Result<ChatViewWidget, String> {
+            if !self.conversations.contains_key(&peer) {
+                let (session, decision) = self.open_session(peer)?;
+                self.conversations.insert(
+                    peer,
+                    Conversation {
+                        session,
+                        lines: Vec::new(),
+                    },
+                );
+                self.status = match decision {
+                    nbeep_core::TrustDecision::FirstContact => {
+                        "Noise 세션 수립 — 첫 접촉(TOFU 핀 고정)".into()
+                    }
+                    d => format!("Noise 세션 수립 — {d:?}"),
+                };
+            } else {
+                self.status = "대화 복원 — 세션 유지 중".into();
+            }
+            let mut chat = ChatViewWidget::new(self.peer_title(peer));
             let mut inv = Invalidations::default();
-            let width = i32::try_from(w).unwrap_or(i32::MAX);
-            let height = i32::try_from(h).unwrap_or(i32::MAX) - self.bar_h();
-            self.list.set_scale(self.scale, &mut inv);
-            self.list
-                .set_bounds(Rect::new(0, 0, width, height.max(0)), &mut inv);
+            if let Some(conv) = self.conversations.get(&peer) {
+                for line in &conv.lines {
+                    chat.push_line(line.clone(), &mut inv);
+                }
+            }
+            Ok(chat)
         }
 
-        fn now_ms(&self) -> u64 {
-            u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX)
+        /// 대화 활성화 — 모드에 따라 주 창 전환 또는 별도 창 생성/포커스(14 §11).
+        fn activate(&mut self, peer: PeerId, el: &ActiveEventLoop) {
+            match self.mode {
+                WindowMode::Single => match self.ensure_conversation(peer) {
+                    Ok(chat) => {
+                        self.chats.insert(peer, chat);
+                        self.single_open = Some(peer);
+                        if let Some(id) = self.main_id {
+                            self.layout_window(id);
+                            let mut inv = Invalidations::default();
+                            self.refresh_rows(&mut inv);
+                            self.request_redraw(id);
+                        }
+                    }
+                    Err(e) => self.status = format!("연결 실패: {e}"),
+                },
+                WindowMode::Separate => {
+                    // 같은 상대 재활성화 = 기존 창 포커스(14 §11).
+                    let existing = self
+                        .windows
+                        .iter()
+                        .find(|(_, e)| e.role == Role::Chat(peer))
+                        .map(|(id, _)| *id);
+                    if let Some(id) = existing {
+                        if let Some(e) = self.windows.get(&id) {
+                            e.window.focus_window();
+                        }
+                        return;
+                    }
+                    match self.ensure_conversation(peer) {
+                        Ok(chat) => {
+                            let title = format!("Nexa Beep — {}", self.peer_title(peer));
+                            let attrs = Window::default_attributes().with_title(title);
+                            let window = Rc::new(el.create_window(attrs).unwrap());
+                            window.set_ime_allowed(true);
+                            let scale = window.scale_factor() as f32;
+                            let context = softbuffer::Context::new(window.clone()).unwrap();
+                            let surface = SbSurface::new(&context, window.clone()).unwrap();
+                            let id = window.id();
+                            self.windows.insert(
+                                id,
+                                WinEntry {
+                                    role: Role::Chat(peer),
+                                    window,
+                                    surface,
+                                    cursor: (0, 0),
+                                    scale,
+                                },
+                            );
+                            self.chats.insert(peer, chat);
+                            self.layout_window(id);
+                            let mut inv = Invalidations::default();
+                            self.refresh_rows(&mut inv);
+                            if let Some(mid) = self.main_id {
+                                self.request_redraw(mid);
+                            }
+                            self.request_redraw(id);
+                        }
+                        Err(e) => {
+                            self.status = format!("연결 실패: {e}");
+                            if let Some(mid) = self.main_id {
+                                self.request_redraw(mid);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        /// 창 크기·배율에 맞춰 그 창의 위젯 경계를 다시 계산한다.
+        fn layout_window(&mut self, id: WindowId) {
+            let Some(entry) = self.windows.get(&id) else {
+                return;
+            };
+            let size = entry.window.inner_size();
+            let scale = entry.scale;
+            let role = entry.role;
+            let w = i32::try_from(size.width).unwrap_or(i32::MAX);
+            let h = i32::try_from(size.height).unwrap_or(i32::MAX);
+            let mut inv = Invalidations::default();
+            match role {
+                Role::Main => {
+                    let body = (h - Self::bar_h(scale)).max(0);
+                    self.list.set_scale(scale, &mut inv);
+                    self.list.set_bounds(Rect::new(0, 0, w, body), &mut inv);
+                    if let Some(chat) = self.single_open.and_then(|p| self.chats.get_mut(&p)) {
+                        chat.set_scale(scale, &mut inv);
+                        chat.set_bounds(Rect::new(0, 0, w, body), &mut inv);
+                    }
+                }
+                Role::Chat(peer) => {
+                    if let Some(chat) = self.chats.get_mut(&peer) {
+                        chat.set_scale(scale, &mut inv);
+                        chat.set_bounds(Rect::new(0, 0, w, h), &mut inv);
+                    }
+                }
+            }
+        }
+
+        /// 대화 뷰에서 나온 발신·복귀를 처리한다. `peer` = 그 뷰의 상대.
+        fn drain_chat_effects(&mut self, peer: PeerId, id: WindowId) {
+            let mut inv = Invalidations::default();
+            let outgoing = self
+                .chats
+                .get_mut(&peer)
+                .and_then(ChatViewWidget::take_outgoing);
+            if let Some(text) = outgoing {
+                let msg = nbeep_core::ChatMessage {
+                    sender_device: self.identity.peer_id(),
+                    seq: self.seq.issue(),
+                    body: nbeep_core::MessageBody::Text(text.as_str().to_string()),
+                };
+                if let Some(chat) = self.chats.get_mut(&peer) {
+                    chat.push_line(
+                        ChatLine {
+                            mine: true,
+                            text: text.clone(),
+                        },
+                        &mut inv,
+                    );
+                }
+                if let Some(conv) = self.conversations.get_mut(&peer) {
+                    conv.lines.push(ChatLine { mine: true, text });
+                    use nbeep_core::mux::StreamId;
+                    let session = &mut conv.session;
+                    let authenticated = session.peer();
+                    let sent = session.send(StreamId::Chat, &msg.encode());
+                    // 데모: 에코 봇이 즉시 응답(인프로세스) — 블로킹 수신.
+                    // 실물 네트워크의 비동기 수신 펌프는 M2-7에서.
+                    let reply = sent.and_then(|()| session.recv(StreamId::Chat));
+                    match reply {
+                        Ok(bytes) => {
+                            if let Ok(rmsg) = nbeep_core::ChatMessage::decode(&bytes, authenticated)
+                            {
+                                if self.dedup.accept(rmsg.sender_device, rmsg.seq) {
+                                    if let nbeep_core::MessageBody::Text(t) = rmsg.body {
+                                        let line = ChatLine {
+                                            mine: false,
+                                            text: nbeep_core::sanitize_message(&t),
+                                        };
+                                        conv.lines.push(line.clone());
+                                        if let Some(chat) = self.chats.get_mut(&peer) {
+                                            chat.push_line(line, &mut inv);
+                                        }
+                                    }
+                                }
+                            }
+                            self.status = format!("암호화 왕복 OK — seq={}", msg.seq);
+                        }
+                        Err(e) => self.status = format!("세션 오류: {e}"),
+                    }
+                }
+                self.request_redraw(id);
+                if let Some(mid) = self.main_id {
+                    self.request_redraw(mid); // 상태바 갱신
+                }
+            }
+            if self
+                .chats
+                .get_mut(&peer)
+                .is_some_and(ChatViewWidget::take_back)
+            {
+                // 뷰만 닫는다 — 대화(세션·스레드)는 유지(DR-26).
+                self.chats.remove(&peer);
+                match self.mode {
+                    WindowMode::Single => {
+                        self.single_open = None;
+                        self.status =
+                            "↑↓ 이동 · 타이핑 = 이름 점프(한글 가능) · Enter = 대화 열기".into();
+                        self.request_redraw(id);
+                    }
+                    WindowMode::Separate => {
+                        self.windows.remove(&id); // 창 닫힘(드롭) — 대화는 유지
+                    }
+                }
+            }
+        }
+
+        /// 이 창의 입력 이벤트를 담당 위젯으로 라우팅한다.
+        fn route(&mut self, id: WindowId, ev: InputEvent, el: &ActiveEventLoop) {
+            let Some(entry) = self.windows.get(&id) else {
+                return;
+            };
+            let role = entry.role;
+            let mut inv = Invalidations::default();
+            match role {
+                Role::Main => {
+                    if let Some(peer) = self.single_open {
+                        if let Some(chat) = self.chats.get_mut(&peer) {
+                            chat.on_event(&ev, &mut inv);
+                        }
+                        self.drain_chat_effects(peer, id);
+                    } else {
+                        self.list.on_event(&ev, &mut inv);
+                        if let Some(peer) = self.list.take_activated() {
+                            self.activate(peer, el);
+                        }
+                    }
+                }
+                Role::Chat(peer) => {
+                    if let Some(chat) = self.chats.get_mut(&peer) {
+                        chat.on_event(&ev, &mut inv);
+                    }
+                    self.drain_chat_effects(peer, id);
+                }
+            }
+            if !inv.is_empty() {
+                self.request_redraw(id);
+            }
+        }
+
+        fn redraw(&mut self, id: WindowId) {
+            let theme = self.theme;
+            let Some(entry) = self.windows.get_mut(&id) else {
+                return;
+            };
+            let size = entry.window.inner_size();
+            let (Some(w), Some(h)) = (NonZeroU32::new(size.width), NonZeroU32::new(size.height))
+            else {
+                return;
+            };
+            entry.surface.resize(w, h).unwrap();
+            let mut buffer = entry.surface.buffer_mut().unwrap();
+            let mut px =
+                nbeep_gfx::Surface::new(&mut buffer, size.width as usize, size.height as usize);
+            px.fill(theme.window_bg);
+            let mut ctx = RasterCtx::new(&mut px, &self.font).with_scale(entry.scale);
+            match entry.role {
+                Role::Main => {
+                    if let Some(chat) = self.single_open.and_then(|p| self.chats.get(&p)) {
+                        chat.paint(&mut ctx, &theme);
+                    } else {
+                        self.list.paint(&mut ctx, &theme);
+                    }
+                    // 주 창 하단 상태바.
+                    let hh = i32::try_from(size.height).unwrap_or(i32::MAX);
+                    let ww = i32::try_from(size.width).unwrap_or(i32::MAX);
+                    let bar_h = Self::bar_h(entry.scale);
+                    let bar = Rect::new(0, hh - bar_h, ww, bar_h);
+                    ctx.select_font(nbeep_ui::FontSlot::Status, false);
+                    let pad = (8.0 * entry.scale).round() as i32;
+                    let dy = (bar_h - (14.0 * entry.scale) as i32) / 2;
+                    ctx.text_opaque(
+                        bar.x + pad,
+                        bar.y + dy,
+                        bar,
+                        &self.status,
+                        theme.text_dim,
+                        theme.chrome_bg,
+                    );
+                }
+                Role::Chat(peer) => {
+                    if let Some(chat) = self.chats.get(&peer) {
+                        chat.paint(&mut ctx, &theme);
+                    }
+                }
+            }
+            buffer.present().unwrap();
         }
     }
 
     impl ApplicationHandler for App {
         fn resumed(&mut self, el: &ActiveEventLoop) {
+            if self.main_id.is_some() {
+                return;
+            }
             let attrs = Window::default_attributes().with_title("Nexa Beep");
             let window = Rc::new(el.create_window(attrs).unwrap());
-            window.set_ime_allowed(true); // 한글 타입어헤드 — IME 커밋 문자를 받는다(조합 UI는 M3-3)
-            self.scale = window.scale_factor() as f32;
-            let size = window.inner_size();
+            window.set_ime_allowed(true); // 한글 타입어헤드 — IME 커밋 문자
+            let scale = window.scale_factor() as f32;
             let context = softbuffer::Context::new(window.clone()).unwrap();
             let surface = SbSurface::new(&context, window.clone()).unwrap();
-            self.window = Some(window);
-            self.surface = Some(surface);
-            self.relayout(size.width, size.height);
+            let id = window.id();
+            self.windows.insert(
+                id,
+                WinEntry {
+                    role: Role::Main,
+                    window,
+                    surface,
+                    cursor: (0, 0),
+                    scale,
+                },
+            );
+            self.main_id = Some(id);
+            self.layout_window(id);
         }
 
         fn about_to_wait(&mut self, _el: &ActiveEventLoop) {
@@ -326,48 +557,60 @@ mod app_window {
             self.poll_discovery();
         }
 
-        fn window_event(&mut self, el: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        fn window_event(&mut self, el: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
             match event {
-                WindowEvent::CloseRequested => el.exit(),
-                WindowEvent::Resized(size) => {
-                    self.relayout(size.width, size.height);
-                    if let Some(win) = &self.window {
-                        win.request_redraw();
+                WindowEvent::CloseRequested => {
+                    if Some(id) == self.main_id {
+                        el.exit(); // 주 창 닫기 = 종료(트레이 상주는 M3-2)
+                    } else if let Some(entry) = self.windows.remove(&id) {
+                        // 대화 창 닫기 = 뷰만 닫힘(대화 유지 — DR-26).
+                        if let Role::Chat(peer) = entry.role {
+                            self.chats.remove(&peer);
+                        }
                     }
+                }
+                WindowEvent::Resized(_) => {
+                    self.layout_window(id);
+                    self.request_redraw(id);
                 }
                 WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
-                    // 모니터 이동·배율 변경(FR-U-6) — 레이아웃 전체 재계산.
-                    self.scale = scale_factor as f32;
-                    if let Some(win) = self.window.clone() {
-                        let size = win.inner_size();
-                        self.relayout(size.width, size.height);
-                        win.request_redraw();
+                    if let Some(e) = self.windows.get_mut(&id) {
+                        e.scale = scale_factor as f32;
                     }
+                    self.layout_window(id);
+                    self.request_redraw(id);
                 }
                 WindowEvent::Ime(winit::event::Ime::Commit(text)) => {
-                    // IME가 확정한 문자열(한글 등) — 타입어헤드로 라우팅.
                     let now_ms = self.now_ms();
                     for c in text.chars().filter(|c| !c.is_control()) {
-                        self.route(InputEvent::Char { c, now_ms });
+                        self.route(id, InputEvent::Char { c, now_ms }, el);
                     }
                 }
                 WindowEvent::CursorMoved { position, .. } => {
-                    self.cursor = (position.x as i32, position.y as i32);
-                    let (x, y) = self.cursor;
-                    self.route(InputEvent::MouseMove { x, y });
+                    if let Some(e) = self.windows.get_mut(&id) {
+                        e.cursor = (position.x as i32, position.y as i32);
+                        let (x, y) = e.cursor;
+                        self.route(id, InputEvent::MouseMove { x, y }, el);
+                    }
                 }
                 WindowEvent::MouseInput {
                     state: ElementState::Pressed,
                     button: MouseButton::Left,
                     ..
                 } => {
-                    let (x, y) = self.cursor;
-                    self.route(InputEvent::MouseDown {
-                        x,
-                        y,
-                        shift: false,
-                        primary: false,
-                    });
+                    if let Some(e) = self.windows.get(&id) {
+                        let (x, y) = e.cursor;
+                        self.route(
+                            id,
+                            InputEvent::MouseDown {
+                                x,
+                                y,
+                                shift: false,
+                                primary: false,
+                            },
+                            el,
+                        );
+                    }
                 }
                 WindowEvent::MouseWheel { delta, .. } => {
                     let d = match delta {
@@ -375,7 +618,7 @@ mod app_window {
                         MouseScrollDelta::PixelDelta(p) => (p.y * 120.0 / 38.0) as i32,
                     };
                     if d != 0 {
-                        self.route(InputEvent::Wheel { delta: d });
+                        self.route(id, InputEvent::Wheel { delta: d }, el);
                     }
                 }
                 WindowEvent::KeyboardInput { event, .. } => {
@@ -394,76 +637,39 @@ mod app_window {
                         _ => None,
                     };
                     if let Some(key) = key {
-                        self.route(InputEvent::Key {
-                            key,
-                            shift: false,
-                            primary: false,
-                        });
+                        self.route(
+                            id,
+                            InputEvent::Key {
+                                key,
+                                shift: false,
+                                primary: false,
+                            },
+                            el,
+                        );
                         return;
                     }
-                    // 타입어헤드 — 인쇄 가능 문자·Backspace(IME 조합은 M3-3).
                     if let WKey::Named(NamedKey::Backspace) = &event.logical_key {
                         let now_ms = self.now_ms();
-                        self.route(InputEvent::Char { c: '\u{8}', now_ms });
+                        self.route(id, InputEvent::Char { c: '\u{8}', now_ms }, el);
                         return;
                     }
                     if let WKey::Character(text) = &event.logical_key {
                         let now_ms = self.now_ms();
                         if let Some(c) = text.chars().next() {
                             if !c.is_control() {
-                                self.route(InputEvent::Char { c, now_ms });
+                                self.route(id, InputEvent::Char { c, now_ms }, el);
                             }
                         }
                     }
                 }
-                WindowEvent::RedrawRequested => {
-                    let bar_h = self.bar_h();
-                    let pad = (8.0 * self.scale).round() as i32;
-                    let text_dy = (bar_h - (14.0 * self.scale) as i32) / 2;
-                    let (Some(window), Some(surface)) = (&self.window, &mut self.surface) else {
-                        return;
-                    };
-                    let size = window.inner_size();
-                    if let (Some(w), Some(h)) =
-                        (NonZeroU32::new(size.width), NonZeroU32::new(size.height))
-                    {
-                        surface.resize(w, h).unwrap();
-                        let mut buffer = surface.buffer_mut().unwrap();
-                        let mut px = nbeep_gfx::Surface::new(
-                            &mut buffer,
-                            size.width as usize,
-                            size.height as usize,
-                        );
-                        px.fill(self.theme.window_bg);
-                        let mut ctx = RasterCtx::new(&mut px, &self.font).with_scale(self.scale);
-                        if let Some(chat) = &self.chat {
-                            chat.paint(&mut ctx, &self.theme);
-                        } else {
-                            self.list.paint(&mut ctx, &self.theme);
-                        }
-                        // 하단 상태바 — Enter/타입어헤드 동작이 눈에 보이게.
-                        let h = i32::try_from(size.height).unwrap_or(i32::MAX);
-                        let w = i32::try_from(size.width).unwrap_or(i32::MAX);
-                        let bar = Rect::new(0, h - bar_h, w, bar_h);
-                        ctx.select_font(nbeep_ui::FontSlot::Status, false);
-                        ctx.text_opaque(
-                            bar.x + pad,
-                            bar.y + text_dy,
-                            bar,
-                            &self.status,
-                            self.theme.text_dim,
-                            self.theme.chrome_bg,
-                        );
-                        buffer.present().unwrap();
-                    }
-                }
+                WindowEvent::RedrawRequested => self.redraw(id),
                 _ => {}
             }
         }
     }
 
-    /// 창을 띄우고 이벤트 루프를 돈다(닫으면 종료).
-    pub(crate) fn run() {
+    /// 창을 띄우고 이벤트 루프를 돈다(주 창을 닫으면 종료).
+    pub(crate) fn run(mode: WindowMode) {
         let (data, index) = nbeep_plat::font::system_ui_font().expect("시스템 UI 폰트 없음");
         let font = nbeep_gfx::Font::from_static(data, index).expect("폰트 파싱");
         let identity = std::sync::Arc::new(nbeep_crypto::Identity::generate());
@@ -479,29 +685,31 @@ mod app_window {
             nbeep_net::Caps::default(),
         );
         let discovery = transport.discovery();
-        let list = PeerListWidget::new();
 
         let event_loop = EventLoop::new().unwrap();
+        let mode_hint = match mode {
+            WindowMode::Single => "Enter = 대화 열기",
+            WindowMode::Separate => "Enter = 상대별 새 창(동시 대화)",
+        };
         let mut app = App {
-            window: None,
-            surface: None,
+            mode,
+            windows: HashMap::new(),
+            main_id: None,
             font,
             theme: Theme::dark(),
-            list,
-            chat: None,
-            open: None,
+            list: PeerListWidget::new(),
+            chats: HashMap::new(),
+            single_open: None,
             identity,
             seq: nbeep_core::Sequencer::new(),
             transport,
             discovery,
             table: nbeep_core::PeerTable::new(60_000),
             trust: nbeep_core::MemoryTrustStore::new(),
-            conversations: std::collections::HashMap::new(),
+            conversations: HashMap::new(),
             dedup: nbeep_core::DedupIndex::new(),
-            cursor: (0, 0),
             started: Instant::now(),
-            scale: 1.0,
-            status: "↑↓ 이동 · 타이핑 = 이름 점프(한글 가능) · Enter = 대화 열기".into(),
+            status: format!("↑↓ 이동 · 타이핑 = 이름 점프(한글 가능) · {mode_hint}"),
         };
         event_loop.run_app(&mut app).unwrap();
     }
