@@ -63,7 +63,7 @@ pub struct MeterEvent {
     pub duration_ms: u32,
     /// 행위 주체.
     pub actor: Actor,
-    /// 무엇을(안정 코드 매핑은 M0-1c).
+    /// 무엇을(레저 직렬화 식별자는 [`ActionKind::stable_code`]).
     pub kind: ActionKind,
     /// 얼마나.
     pub quantity: Quantity,

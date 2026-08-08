@@ -16,6 +16,7 @@ pub mod action;
 pub mod identity;
 pub mod pipeline;
 pub mod ports;
+pub mod redact;
 
 #[cfg(any(test, feature = "testkit"))]
 pub mod testkit;
