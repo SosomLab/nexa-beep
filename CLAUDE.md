@@ -12,7 +12,7 @@
 
 - 조직: **SosomLab** · 개발자: Sangyong Bae · kiros33@gmail.com
 - 저장소: `git@github.com:SosomLab/nexa-beep.git` · 릴레이 서버는 별도 **`nexa-beepd`**(v1 이후)
-- 현 단계: **M-1 설계 사실상 완료 + M0~M2 구현 진행** — **ADR 9종**(0001·0002·0007 Accepted / 나머지 Proposed) · DR-1~23. 다음 관문은 **M0 스캐폴딩 + SP-1 예산 스파이크**.
+- 현 단계: **M-1 설계 사실상 완료 + M0~M2 구현 진행** — **ADR 9종**(0001·0002·0007·0008·0009 Accepted / 0003~0006 Proposed) · DR-1~23. 다음 관문은 **M0 스캐폴딩 + SP-1 예산 스파이크**.
 
 ## 2. 확정 결정 ([docs/10](docs/10-decision-record.md) DR-1~20, 변경 시 새 ADR/journal)
 
@@ -85,7 +85,7 @@
 3. **SP-1 예산 검증 스파이크**(D-15) — M0-1 직후 최우선(R-8 해소).
 4. **D-8 발견 도달 스파이크**(E-1~E-9) — 🔴 **실기 2대 이상 필요, 대행 불가.** ADR-0002 타이밍 6종이 여기 묶여 있다.
 
-> ADR 상태: **0001·0002·0007 ✅ Accepted** / **0003·0004·0005·0006·0008·0009 📐 Proposed**.
+> ADR 상태: **0001·0002·0007·0008·0009 ✅ Accepted** / **0003·0004·0005·0006 📐 Proposed**.
 > 완료된 설계 문서: [00 비전](docs/00-vision.md) · [01 아키텍처](docs/01-architecture.md) · [02 로드맵](docs/02-roadmap.md) · [03 경쟁 조사](docs/03-competitive-landscape.md) · [04 안전 송수신](docs/04-safe-transfer.md) · [05 요구사항](docs/05-requirements.md) · [06 네트워크 스택](docs/06-network-stack.md) · [12](docs/12-asset-reuse.md)·[13](docs/13-code-design-standards.md)·[14](docs/14-control-ux-architecture.md).
 > **예산 게이트 수치 = [05 §2-1](docs/05-requirements.md) NFR-B-1~12** — 유휴 RSS ≤30MB · 산출물 ≤10MB/타깃 · 런타임 의존 0 · 24h 누수 RSS ≤2MB·핸들 증가 0.
 > 문서 번호 배정 계획은 [docs/README](docs/README.md) — **번호는 불변**이므로 새 문서는 반드시 그 표를 보고 붙인다.

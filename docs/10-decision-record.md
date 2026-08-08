@@ -96,9 +96,9 @@
 
 | **[ADR-0007](20-adr-0007-multi-device-identity.md)** | 다중 기기 신원(UserId 1:M PeerId) | ✅ **Accepted**(08-08) — 서명된 기기 목록 · 그룹 팬아웃 재사용 · **주 기기 + 복구 시드** · 기기 관리 화면 · **v1 제약 4건** |
 
-| **[ADR-0008](22-adr-0008-profile-disclosure.md)** | 프로필 옵트인 노출(발견 시 식별 정보 공개) | 📐 **Proposed**(08-08) — 브로드캐스트 미포함 · 세션 경유 + 자동 프리페치 · 필드 단위 옵트인 |
+| **[ADR-0008](22-adr-0008-profile-disclosure.md)** | 프로필 옵트인 노출(발견 시 식별 정보 공개) | ✅ **Accepted**(08-08) — 브로드캐스트 미포함 · 세션 경유 + 자동 프리페치 · 필드 단위 옵트인 |
 
-| **[ADR-0009](23-adr-0009-shared-folders.md)** | 공유 폴더 — 가상경로·풀 다운로드 | 📐 **Proposed**(08-08) — 가상 루트 · fail-closed 경로 해석 · scope 3종 · pull도 동일 무해화 게이트 |
+| **[ADR-0009](23-adr-0009-shared-folders.md)** | 공유 폴더 — 가상경로·풀 다운로드 | ✅ **Accepted**(08-08 — 기본 scope `Connected`·설정에서 변경 가능) — 가상 루트 · fail-closed 경로 해석 · scope 3종 · pull도 동일 무해화 게이트 |
 
 > ADR 파일명은 `NN-adr-000N-주제.md`. 번호(NN)는 부여 후 **불변**.
 
