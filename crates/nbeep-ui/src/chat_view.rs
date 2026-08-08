@@ -1,8 +1,8 @@
 //! 대화 화면 위젯 — 스레드 + 한 줄 입력(M3 첫 슬라이스 · M2 게이트 "고르면 대화가 된다"의 UI 절반).
 //!
 //! 메시지는 [`nbeep_core::safetext`]를 **통과한 것만** 담긴다(타입이 `SafeText` — 무해화 우회
-//! 불가). 입력은 임시 한 줄 모델이다 — 캐럿·선택·조합 표시는 `edit` 이식(M3-3)에서 교체하고,
-//! 지금은 IME **커밋** 문자가 들어온다(한글 입력 가능·조합 중 표시는 없음).
+//! 불가). 입력은 [`crate::edit::EditState`](캐럿·선택·char 단위) + **IME 프리에딧**(조합 중 밑줄
+//! 표시 — M3-3). 확정 문자는 `Char`로, 조합 중 텍스트는 [`ChatViewWidget::set_preedit`]로 온다.
 //!
 //! 발신·복귀는 폴링(`take_outgoing`/`take_back`) — 위젯은 부모를 모른다.
 
@@ -30,6 +30,8 @@ pub struct ChatViewWidget {
     title: String,
     lines: Vec<ChatLine>,
     input: crate::edit::EditState,
+    /// IME 조합 중 텍스트(확정 전 — 밑줄 표시. 확정은 input에 삽입).
+    preedit: String,
     scale: f32,
     outgoing: Option<SafeText>,
     back: bool,
@@ -44,6 +46,7 @@ impl ChatViewWidget {
             title,
             lines: Vec::new(),
             input: crate::edit::EditState::new(),
+            preedit: String::new(),
             scale: 1.0,
             outgoing: None,
             back: false,
@@ -85,6 +88,18 @@ impl ChatViewWidget {
     #[must_use]
     pub fn input_caret(&self) -> usize {
         self.input.caret()
+    }
+
+    /// IME 조합 중 텍스트 설정(빈 문자열 = 조합 종료·취소). 확정은 `on_event`의 Char로.
+    pub fn set_preedit(&mut self, text: String, inv: &mut Invalidations) {
+        self.preedit = text;
+        inv.push(self.input_bar());
+    }
+
+    /// 조합 중 텍스트(테스트·렌더).
+    #[must_use]
+    pub fn preedit(&self) -> &str {
+        &self.preedit
     }
 
     fn s(&self, logical: i32) -> i32 {
@@ -146,6 +161,7 @@ impl Widget for ChatViewWidget {
                 inv.push(self.input_bar());
             }
             InputEvent::Char { c, .. } => {
+                self.preedit.clear(); // 확정 문자 도착 = 조합 종료
                 if c == '\u{8}' {
                     self.input.backspace();
                 } else if !c.is_control() {
@@ -199,7 +215,7 @@ impl Widget for ChatViewWidget {
         let text = self.input.text();
         let tx = input.x + self.s(10);
         let ty = input.y + self.s(7);
-        if text.is_empty() {
+        if text.is_empty() && self.preedit.is_empty() {
             ctx.text(
                 tx,
                 ty,
@@ -228,17 +244,27 @@ impl Widget for ChatViewWidget {
                 );
             }
             ctx.text(tx, ty, input, &text, theme.text);
-            // 폰트 실측 픽셀 커서 — 캐럿까지 폭만큼 오른쪽에 세로선.
             let cx = tx + upto(ctx, self.input.caret());
-            ctx.fill_rect(
-                Rect::new(
-                    cx,
-                    input.y + self.s(6),
-                    self.s(2).max(1),
-                    input.h - self.s(12),
-                ),
-                theme.accent,
-            );
+            if self.preedit.is_empty() {
+                // 폰트 실측 픽셀 커서 — 캐럿까지 폭만큼 오른쪽에 세로선.
+                ctx.fill_rect(
+                    Rect::new(
+                        cx,
+                        input.y + self.s(6),
+                        self.s(2).max(1),
+                        input.h - self.s(12),
+                    ),
+                    theme.accent,
+                );
+            } else {
+                // IME 조합 중 — 캐럿 위치에 프리에딧을 accent 색 + 밑줄로(확정 전).
+                ctx.text(cx, ty, input, &self.preedit, theme.accent);
+                let pw = ctx.text_width(&self.preedit);
+                ctx.fill_rect(
+                    Rect::new(cx, ty + self.s(16), pw.max(1), self.s(2).max(1)),
+                    theme.accent,
+                );
+            }
         }
     }
 }
@@ -276,6 +302,27 @@ mod tests {
             },
             inv,
         );
+    }
+
+    #[test]
+    fn preedit_shown_then_commit_inserts() {
+        let (mut w, mut inv) = widget();
+        // 조합 중 "한" 프리에딧 표시(확정 아님 — input엔 없음).
+        w.set_preedit("한".into(), &mut inv);
+        assert_eq!(w.preedit(), "한");
+        assert_eq!(w.input(), "", "조합 중엔 확정 텍스트 없음");
+        // 확정(Commit) = Char 도착 → 프리에딧 클리어 + input 삽입.
+        ch(&mut w, '한', &mut inv);
+        assert_eq!(w.preedit(), "", "확정 시 조합 종료");
+        assert_eq!(w.input(), "한");
+    }
+
+    #[test]
+    fn empty_preedit_ends_composition() {
+        let (mut w, mut inv) = widget();
+        w.set_preedit("ㅎ".into(), &mut inv);
+        w.set_preedit(String::new(), &mut inv); // 조합 취소
+        assert_eq!(w.preedit(), "");
     }
 
     #[test]

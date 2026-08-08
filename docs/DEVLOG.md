@@ -7,6 +7,8 @@
 
 ## 2026-08-08
 
+- **M3-3 IME 조합 표시(프리에딧) — 한글 조합 밑줄**(feat/m3-ime): edit 모델 위에 조합 중 텍스트 표시를 얹음. `ChatViewWidget::set_preedit`(조합 중 문자열·빈 = 종료) + bin `Ime::Preedit` 라우팅(`chat_peer_for`로 활성 대화 뷰 찾기). 렌더: 캐럿 위치에 프리에딧을 accent 색 + 밑줄로(확정 전), 확정(`Char` 도착) 시 프리에딧 클리어 + input 삽입. 이제 한글 조합이 **눈에 보이면서** 입력된다(이전엔 확정만 보였음). preedit 표시/종료/확정 테스트. 170테스트 green. 상세 [journal/2026-08-08.md](journal/2026-08-08.md).
+
 - **입력창 폰트 실측 커서 + 선택 하이라이트**(feat/m3-edit): 임시 `▏` 문자 삽입(레이아웃 왜곡)을 폐기하고 **`DrawCtx::text_width`로 캐럿까지 폭을 실측**해 픽셀 세로선(accent)으로 커서를 긋는다. 선택 범위는 [a..b] 폭을 재 배경 사각형(sel_bg)으로 텍스트 뒤에 칠한다. 이제 대화 입력이 진짜 텍스트 필드처럼 보인다(캐럿·선택 시각 정확). GUI 스모크 통과. 168테스트 green.
 
 - **텍스트 편집 모델(`edit`) 이식 + 대화 입력창 배선**(feat/m3-edit): `nexa-gui/edit.rs`의 **순수 편집 로직**을 `nbeep-ui::edit`로 이식 — `EditState`(char 단위 버퍼·캐럿 `0..=len`·선택 anchor↔caret) · `insert`/`insert_str`(IME 확정·붙여넣기)/`backspace`/`cut`/`set_text` · `key`(Left/Right/Home/End/SelectAll/DeleteForward, 비Shift 이동 시 선택 가장자리 접기). **char 단위라 한글·이모지 경계 자동 보존**(UTF-8 바이트 인덱싱 함정 회피). 레이아웃·클릭 히트테스트는 뺌(위젯이 폰트 실측 — M3-3). `ChatViewWidget` 입력을 임시 append(캐럿 이동 불가)에서 `EditState`로 교체 — **캐럿 이동·선택·중간 삽입·SelectAll**이 동작, 캐럿 위치에 임시 커서(▏) 표시. 9(edit)+1(위젯 캐럿) 테스트. 168테스트 green. 상세 [journal/2026-08-08.md](journal/2026-08-08.md).
