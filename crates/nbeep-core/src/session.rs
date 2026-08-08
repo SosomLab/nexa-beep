@@ -20,6 +20,8 @@ pub enum SessionError {
     Handshake,
     /// 프레임이 상한을 초과.
     TooLarge,
+    /// 차단된 상대 — 수립 금지([`crate::trust`] · fail-closed).
+    Blocked,
 }
 
 impl From<LinkError> for SessionError {
@@ -35,6 +37,7 @@ impl core::fmt::Display for SessionError {
             SessionError::Closed => f.write_str("세션 링크가 닫힘"),
             SessionError::Handshake => f.write_str("핸드셰이크 실패"),
             SessionError::TooLarge => f.write_str("프레임 상한 초과"),
+            SessionError::Blocked => f.write_str("차단된 상대"),
         }
     }
 }

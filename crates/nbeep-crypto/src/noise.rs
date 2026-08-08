@@ -307,3 +307,57 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod trust_integration {
+    //! 실물 Noise 세션 + TOFU 저장소가 함께 도는 경로([docs/08] §4).
+    //! **소켓 없이**(duplex fake) 암호·신뢰 배선을 끝까지 검증한다.
+
+    use super::*;
+    use nbeep_core::testkit::duplex;
+    use nbeep_core::trust::{MemoryTrustStore, TrustDecision, TrustStore};
+    use nbeep_core::trusted::TrustedSession;
+    use std::thread;
+
+    /// 두 신원 사이에 실물 Noise 세션을 수립한다(개시자 측을 돌려줌).
+    fn establish(alice: &Identity, bob: Identity) -> NoiseSession<impl Link> {
+        let (la, lb) = duplex(alice.peer_id(), bob.peer_id());
+        let hb = thread::spawn(move || NoiseSession::accept(lb, &bob));
+        let a = NoiseSession::initiate(la, alice).expect("a 수립");
+        hb.join().unwrap().expect("b 수립");
+        a
+    }
+
+    #[test]
+    fn first_contact_pins_the_authenticated_key() {
+        let (alice, bob) = (Identity::generate(), Identity::generate());
+        let bob_id = bob.peer_id();
+        let mut ts = MemoryTrustStore::new();
+
+        let session = establish(&alice, bob);
+        // 핸드셰이크가 인증한 키가 그대로 TOFU에 핀된다.
+        let est = TrustedSession::wrap(session, &mut ts).expect("신뢰 수립");
+        assert_eq!(est.decision, TrustDecision::FirstContact);
+        assert_eq!(est.session.peer(), bob_id);
+        assert_eq!(
+            est.session.trust(),
+            TrustLevel::Pinned,
+            "세션 단독은 Unverified였다"
+        );
+        assert_eq!(ts.level(bob_id), TrustLevel::Pinned, "저장소에 남는다");
+    }
+
+    #[test]
+    fn blocked_key_is_rejected_after_handshake() {
+        // 핸드셰이크는 성립해도(상대는 막을 수 없다) 수립은 거부된다 — fail-closed.
+        let (alice, bob) = (Identity::generate(), Identity::generate());
+        let mut ts = MemoryTrustStore::new();
+        ts.block(bob.peer_id());
+
+        let session = establish(&alice, bob);
+        let err = TrustedSession::wrap(session, &mut ts)
+            .map(|_| ())
+            .unwrap_err();
+        assert_eq!(err, SessionError::Blocked);
+    }
+}

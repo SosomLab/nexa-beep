@@ -10,9 +10,11 @@
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
 pub mod noise;
+pub mod sas;
 
 /// 세션 스텁(암호화 없음) — 릴레이 미포함(feature `testkit` 또는 테스트 빌드).
 #[cfg(any(test, feature = "testkit"))]
 pub mod plain;
 
 pub use noise::{Identity, NoiseSession};
+pub use sas::safety_number;

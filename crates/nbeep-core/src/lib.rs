@@ -20,6 +20,8 @@ pub mod pipeline;
 pub mod ports;
 pub mod redact;
 pub mod session;
+pub mod trust;
+pub mod trusted;
 
 #[cfg(any(test, feature = "testkit"))]
 pub mod testkit;
@@ -32,6 +34,8 @@ pub use name::{DisplayName, NameError};
 pub use pipeline::{ActionCtx, ActionId, Interceptor, Pipeline, Reject};
 pub use ports::{Actor, Clock, Meter, MeterEvent, MonoInstant, Quantity, Rng, Tracer, WallTime};
 pub use session::{Session, SessionError};
+pub use trust::{MemoryTrustStore, TrustDecision, TrustStore};
+pub use trusted::{Established, TrustedSession};
 
 #[cfg(test)]
 mod integration_tests {
