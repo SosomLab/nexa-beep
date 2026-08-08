@@ -3,7 +3,16 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
-> **갱신: 2026-08-08 7차 (KST)** — **코드 착수 — M0 기반 골격 완성**(`feat/m0-scaffold`, 6커밋·미푸시):
+> **갱신: 2026-08-08 8차 (KST)** — **M0 기반 완료 + SP-1 예산 검증 + P2 채택 — main 병합·push 완료**(`origin/main` 동기화):
+> ① **M0 기반 골격 완성**(`feat/m0-scaffold` 병합) — 9크레이트 워크스페이스·의존성 역전·`ActionKind` 단일 통로·인터셉터 파이프라인·포트 4종·안정 코드·`redact` 마스킹·CI 4잡·빌드/테스트 SSOT.
+> ② **M0-2 SP-1 예산 검증**(`spike/sp1-budget` 병합) — **R-8 크기 차원 결정적 해소**: 빈 창 **0.40MB**(NFR-B-3 10MB의 4%)·**라이선스 퍼미시브 100%**.
+> ③ **ADR-0001 P2 채택 확정**(사용자) — **winit 0.30 + softbuffer 0.4**([10 §3 원장](10-decision-record.md)). 의존성 Win15/mac32/Linux75(DR-8 첫 예외 — 4타깃 창·IME·Wayland/X11 직접 구현 R-3 회피).
+> ④ **모델 방침**(settings.json `model:fable`)·**테스트 더블 전략**([13 §11-1](13-code-design-standards.md)) 확정.
+> **테스트 29 green·clippy/fmt/rustdoc clean·Linux·Windows 코드 경로 크로스 검증.**
+> **남은 것** = ⓐ 실기 **SP-1b/d/e**(표시후 메모리·한글 IME·60fps — 디스플레이 필요) ⓑ **M1(발견) 착수는 ADR-0003·0004·0005·0006 확정 대기**([ADR-0003 전송 경계](09-adr-0003-transport-abstraction.md)가 M1-1 직접 전제).
+> [journal/2026-08-08.md](journal/2026-08-08.md).
+>
+> **직전(08-08 7차)** — **코드 착수 — M0 기반 골격 완성**(`feat/m0-scaffold`, 당시 미푸시 — 8차에서 병합·push 완료):
 > ① **M0-1 스캐폴딩** — Cargo 워크스페이스 **9크레이트**(core/net/crypto/safe/store/gfx/ui/plat + bin 2)·
 > `rust-toolchain`(stable·4타깃)·CRT 정적·크기 프로파일(opt-level=z). **의존성 역전** 확립(core=허브·무의존).
 > ② **M0-1b 횡단 골격** — `nbeep-core`에 **`ActionKind` 단일 통로**(24종)·인터셉터 파이프라인
