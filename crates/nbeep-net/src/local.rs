@@ -10,7 +10,7 @@
 //!   핸드셰이크(호출자 몫)가 검증한다.
 
 use crate::tcp::TcpLink;
-use crate::transport::{Caps, ConnectError, DiscoveryEvent, PeerHint, Transport};
+use crate::transport::{AddError, Caps, ConnectError, DiscoveryEvent, PeerHint, Transport};
 use crate::udp::UdpDiscovery;
 use crate::wire::PacketKind;
 use nbeep_core::link::Link;
@@ -134,6 +134,18 @@ impl Transport for LocalDirect {
         let stream = TcpStream::connect_timeout(&addr, Duration::from_secs(3))
             .map_err(|_| ConnectError::Unreachable)?;
         let link = TcpLink::new(stream).map_err(|_| ConnectError::Unreachable)?;
+        Ok(Box::new(link))
+    }
+
+    fn add_endpoint(&self, addr: &str) -> Result<Box<dyn Link>, AddError> {
+        // 주소로 직접 TCP 연결(발견 우회 — DR-19). 신원은 호출자의 Noise 핸드셰이크가 확정한다.
+        // 호스트명·DDNS는 to_socket_addrs가 해석한다(ADR-0006 ③).
+        use std::net::ToSocketAddrs as _;
+        let mut addrs = addr.to_socket_addrs().map_err(|_| AddError::BadAddress)?;
+        let sock = addrs.next().ok_or(AddError::BadAddress)?;
+        let stream = TcpStream::connect_timeout(&sock, Duration::from_secs(5))
+            .map_err(|_| AddError::Unreachable)?;
+        let link = TcpLink::new(stream).map_err(|_| AddError::Unreachable)?;
         Ok(Box::new(link))
     }
 

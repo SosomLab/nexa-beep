@@ -56,6 +56,17 @@ pub enum ConnectError {
     Unreachable,
 }
 
+/// 수동 엔드포인트 등록 실패(DR-19 · ADR-0006 §3).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AddError {
+    /// 주소 형식 오류(host:port 아님·해석 불가).
+    BadAddress,
+    /// 지금 도달 불가(오프라인일 수 있음 — 등록은 남겨도 된다).
+    Unreachable,
+    /// 이 전송은 수동 등록을 지원하지 않는다(InMemory 등).
+    Unsupported,
+}
+
 /// 발견하고 [`Link`]를 만들어 주는 것(ADR-0003 §3). 구현: LocalDirect(v1) · InMemory(테스트) · Relay(v2).
 pub trait Transport: Send + Sync {
     /// 발견 이벤트 스트림(등장·이탈). 호출자는 이 수신단을 소유해 폴링한다.
@@ -69,6 +80,16 @@ pub trait Transport: Send + Sync {
     /// # Errors
     /// 도달 경로가 없으면 [`ConnectError::Unreachable`].
     fn connect(&self, peer: PeerId) -> Result<Box<dyn Link>, ConnectError>;
+
+    /// **수동 엔드포인트 등록**(DR-19 · ADR-0006) — 발견 없이 주소로 직접 연결한다.
+    /// 연결·핸드셰이크로 **`PeerId`를 확정**해 돌려준다(주소는 힌트, 신원은 지문 — DR-8).
+    /// 이미 아는 노드면 경로만 병합된다. 기본 = 미지원([`AddError::Unsupported`]).
+    ///
+    /// # Errors
+    /// 주소 오류·도달 불가·미지원 시 [`AddError`].
+    fn add_endpoint(&self, _addr: &str) -> Result<Box<dyn Link>, AddError> {
+        Err(AddError::Unsupported)
+    }
 
     /// 이 전송이 광고하는 능력.
     fn caps(&self) -> Caps;
