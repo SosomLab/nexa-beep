@@ -7,6 +7,8 @@
 
 ## 2026-08-08
 
+- **텍스트 편집 모델(`edit`) 이식 + 대화 입력창 배선**(feat/m3-edit): `nexa-gui/edit.rs`의 **순수 편집 로직**을 `nbeep-ui::edit`로 이식 — `EditState`(char 단위 버퍼·캐럿 `0..=len`·선택 anchor↔caret) · `insert`/`insert_str`(IME 확정·붙여넣기)/`backspace`/`cut`/`set_text` · `key`(Left/Right/Home/End/SelectAll/DeleteForward, 비Shift 이동 시 선택 가장자리 접기). **char 단위라 한글·이모지 경계 자동 보존**(UTF-8 바이트 인덱싱 함정 회피). 레이아웃·클릭 히트테스트는 뺌(위젯이 폰트 실측 — M3-3). `ChatViewWidget` 입력을 임시 append(캐럿 이동 불가)에서 `EditState`로 교체 — **캐럿 이동·선택·중간 삽입·SelectAll**이 동작, 캐럿 위치에 임시 커서(▏) 표시. 9(edit)+1(위젯 캐럿) 테스트. 168테스트 green. 상세 [journal/2026-08-08.md](journal/2026-08-08.md).
+
 - **S1 IPv6 멀티캐스트 발견 — best-effort 병행**(feat/m1-ipv6): `UdpDiscovery`가 IPv6 소켓 쌍(전용 recv/send·`IPV6_V6ONLY`·`ff02::beb` 링크로컬 그룹 기본 인터페이스 가입)을 추가해 S1+S2+S3를 **동시 발신**(`send_all`). IPv6 셋업 실패(미지원 환경)는 `.ok()`로 **조용히 IPv4만** — 회귀 없음. 이로써 M1-4의 "S1~S3 동시 시도"가 코드로 완성. 로컬 프로브 2개 발견 정상(IPv4 경로 우선 도달 — 둘 다 발신). ⚠️ IPv6 단독 전달·링크로컬 인터페이스 정밀 선택 검증은 D-8b(S3와 같은 한계). 159테스트 green. 상세 [journal/2026-08-08.md](journal/2026-08-08.md).
 
 - **S3 IPv4 브로드캐스트 발견 폴백**(feat/m1-broadcast): `UdpDiscovery`가 HELLO/ANNOUNCE/GOODBYE를 **S2 멀티캐스트 + S3 브로드캐스트(255.255.255.255) 동시 발신**(`SO_BROADCAST`). 멀티캐스트를 막는 기업 Wi-Fi에서도 브로드캐스트로 발견되게 하는 폴백([06 §4]). 수신 소켓은 `0.0.0.0:PORT` 바인딩이라 **둘 다 같은 소켓으로 수신**, 같은 peer 이중 관측은 PeerTable이 병합(FR-D-6). 발견 정상(맥 프로브 2개)·clippy clean. ⚠️ "멀티캐스트 차단 시 브로드캐스트 대체" 자체 검증은 통제된 망 필요(D-8b). 159테스트 green. 상세 [journal/2026-08-08.md](journal/2026-08-08.md).

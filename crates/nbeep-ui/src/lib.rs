@@ -8,6 +8,7 @@
 
 pub mod chat_view;
 pub mod draw;
+pub mod edit;
 pub mod event;
 pub mod geom;
 pub mod peer_list;
@@ -19,6 +20,7 @@ pub mod widget;
 
 pub use chat_view::{ChatLine, ChatViewWidget};
 pub use draw::{DrawCtx, FontSlot};
+pub use edit::{EditKey, EditState};
 pub use event::{InputEvent, Key, WheelAccum, WHEEL_DELTA};
 pub use geom::{Point, Rect, Size};
 pub use peer_list::{badge, PeerListWidget, PeerRow, ROW_H};
