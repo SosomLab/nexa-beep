@@ -123,6 +123,49 @@ pub fn registry() -> &'static [Entry] {
             key: "ui.language",
         },
         Entry {
+            cat: Msg::CatAppearance,
+            label: Msg::TypeaheadTimeout,
+            desc: Msg::TypeaheadTimeoutDesc,
+            kind: SettingKind::Radio(&[
+                ("2000", Msg::TaSec2),
+                ("1000", Msg::TaSec1),
+                ("3000", Msg::TaSec3),
+                ("5000", Msg::TaSec5),
+            ]),
+            key: "ui.typeahead_timeout",
+        },
+        Entry {
+            cat: Msg::CatAppearance,
+            label: Msg::TypeaheadPos,
+            desc: Msg::TypeaheadPosDesc,
+            kind: SettingKind::Radio(&[
+                ("bl", Msg::PosBottomLeft),
+                ("bc", Msg::PosBottomCenter),
+                ("br", Msg::PosBottomRight),
+                ("ml", Msg::PosMidLeft),
+                ("c", Msg::PosCenter),
+                ("mr", Msg::PosMidRight),
+                ("tl", Msg::PosTopLeft),
+                ("tc", Msg::PosTopCenter),
+                ("tr", Msg::PosTopRight),
+            ]),
+            key: "ui.typeahead_pos",
+        },
+        Entry {
+            cat: Msg::CatAppearance,
+            label: Msg::TypeaheadSpace,
+            desc: Msg::TypeaheadSpaceDesc,
+            kind: SettingKind::Radio(&[("on", Msg::ToggleApply), ("off", Msg::ToggleIgnore)]),
+            key: "ui.typeahead_space",
+        },
+        Entry {
+            cat: Msg::CatAppearance,
+            label: Msg::TypeaheadSpecial,
+            desc: Msg::TypeaheadSpecialDesc,
+            kind: SettingKind::Radio(&[("on", Msg::ToggleApply), ("off", Msg::ToggleIgnore)]),
+            key: "ui.typeahead_special",
+        },
+        Entry {
             cat: Msg::CatFont,
             label: Msg::FontBase,
             desc: Msg::FontBaseDesc,
@@ -980,12 +1023,17 @@ mod tests {
     #[test]
     fn sidebar_click_selects_category() {
         let (mut w, mut inv) = widget();
-        // 둘째 사이드바 행("모양"/Appearance) 클릭 — 항목 2개(테마·언어).
+        // 둘째 사이드바 행("모양"/Appearance) 클릭 — 테마·언어·타입어헤드 4종.
         w.on_event(&click(10, SEARCH_H + TREE_ROW_H + 5), &mut inv);
         let items = w.items();
-        assert_eq!(items.len(), 2, "테마 + 언어");
+        assert_eq!(
+            items.len(),
+            6,
+            "테마·언어·타입어헤드(초기화/위치/공백/특수문자)"
+        );
         assert_eq!(registry()[items[0]].key, "ui.theme");
         assert_eq!(registry()[items[1]].key, "ui.language");
+        assert_eq!(registry()[items[2]].key, "ui.typeahead_timeout");
     }
 
     #[test]

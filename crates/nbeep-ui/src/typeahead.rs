@@ -4,8 +4,8 @@
 //! 로직·전 플랫폼 테스트. 누적/타임아웃 리셋/반복 단일키 cycle/Backspace. **매칭 자체는
 //! 소비 위젯이 한다**(목록마다 매칭 대상이 다르다 — 피어 목록은 표시 이름).
 
-/// 기본 타임아웃(ms). 설정화는 M3-11(설정 화면).
-pub const TYPEAHEAD_TIMEOUT_MS: u64 = 1000;
+/// 기본 타임아웃(ms) — 사용자 확정 2000. 설정에서 변경 가능(`ui.typeahead_timeout`).
+pub const TYPEAHEAD_TIMEOUT_MS: u64 = 2000;
 
 /// 입력 결과 — 검색 접두사와 시작점 규칙.
 #[derive(Clone, PartialEq, Eq, Debug)]

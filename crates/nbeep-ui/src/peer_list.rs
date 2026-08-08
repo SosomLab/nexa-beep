@@ -28,6 +28,48 @@ pub struct PeerRow {
 /// 행 높이(px) — 임시. M3-1c 수치표에서 확정.
 pub const ROW_H: i32 = 42;
 
+/// 타입어헤드 HUD 표시 위치 — 3×3 중 택1(기본 좌측하단 · 사용자 확정).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum HudPos {
+    /// 좌상.
+    TopLeft,
+    /// 상중앙.
+    TopCenter,
+    /// 우상.
+    TopRight,
+    /// 좌중앙.
+    MidLeft,
+    /// 정중앙.
+    Center,
+    /// 우중앙.
+    MidRight,
+    /// 좌하(기본).
+    #[default]
+    BottomLeft,
+    /// 하중앙.
+    BottomCenter,
+    /// 우하.
+    BottomRight,
+}
+
+impl HudPos {
+    /// 설정 값 코드 → 위치(미지 = 기본 좌하).
+    #[must_use]
+    pub fn from_code(s: &str) -> Self {
+        match s {
+            "tl" => Self::TopLeft,
+            "tc" => Self::TopCenter,
+            "tr" => Self::TopRight,
+            "ml" => Self::MidLeft,
+            "c" => Self::Center,
+            "mr" => Self::MidRight,
+            "bc" => Self::BottomCenter,
+            "br" => Self::BottomRight,
+            _ => Self::BottomLeft,
+        }
+    }
+}
+
 /// 신뢰 배지 라벨(현재 언어) + 테마 토큰 선택.
 #[must_use]
 pub fn badge(trust: TrustLevel, theme: &Theme) -> (&'static str, Color) {
@@ -53,6 +95,12 @@ pub struct PeerListWidget {
     wheel: WheelAccum,
     typeahead: TypeAhead,
     activated: Option<PeerId>,
+    /// 타입어헤드 HUD 위치(설정).
+    hud_pos: HudPos,
+    /// 타입어헤드에 공백 포함(설정 · 기본 true).
+    ta_space: bool,
+    /// 타입어헤드에 특수문자 포함(설정 · 기본 true).
+    ta_special: bool,
     /// 배율(고DPI — FR-U-6). 행 높이·여백에 곱한다. 좌표·bounds는 물리 px.
     scale: f32,
 }
@@ -76,7 +124,52 @@ impl PeerListWidget {
             wheel: WheelAccum::default(),
             typeahead: TypeAhead::new(TYPEAHEAD_TIMEOUT_MS),
             activated: None,
+            hud_pos: HudPos::default(),
+            ta_space: true,
+            ta_special: true,
             scale: 1.0,
+        }
+    }
+
+    /// 타입어헤드 유효시간(ms) 설정 — 마지막 입력 후 이 시간 지나면 초기화.
+    pub fn set_typeahead_timeout(&mut self, ms: u64) {
+        self.typeahead.set_timeout(ms);
+    }
+
+    /// 타입어헤드 HUD 위치 설정.
+    pub fn set_hud_pos(&mut self, pos: HudPos, inv: &mut Invalidations) {
+        self.hud_pos = pos;
+        inv.push(self.bounds);
+    }
+
+    /// 타입어헤드에 공백 포함 여부.
+    pub fn set_typeahead_space(&mut self, on: bool) {
+        self.ta_space = on;
+    }
+
+    /// 타입어헤드에 특수문자 포함 여부.
+    pub fn set_typeahead_special(&mut self, on: bool) {
+        self.ta_special = on;
+    }
+
+    /// 이 문자가 타입어헤드에 반영되는가(설정 필터). 한/영/숫자는 항상 포함.
+    fn ta_accepts(&self, c: char) -> bool {
+        if c == ' ' {
+            return self.ta_space;
+        }
+        if c.is_alphanumeric() {
+            return true; // 한글 음절·영문·숫자
+        }
+        self.ta_special // 그 외 = 특수문자
+    }
+
+    /// 타임아웃 틱 — 유효시간 경과 시 버퍼 초기화(HUD 자동 숨김). 소거 시 `true`(재그리기).
+    pub fn typeahead_tick(&mut self, now_ms: u64, inv: &mut Invalidations) -> bool {
+        if self.typeahead.tick(now_ms) {
+            inv.push(self.bounds);
+            true
+        } else {
+            false
         }
     }
 
@@ -263,6 +356,9 @@ impl Widget for PeerListWidget {
                     }
                     return;
                 }
+                if !self.ta_accepts(c) {
+                    return; // 설정상 미포함(공백·특수문자)
+                }
                 let q = self.typeahead.push(c, now_ms);
                 let from = if q.include_caret {
                     self.caret
@@ -360,17 +456,35 @@ impl Widget for PeerListWidget {
             // 행 구분선.
             ctx.fill_rect(Rect::new(r.x, r.bottom() - 1, r.w, 1), theme.border);
         }
-        // 타입어헤드 HUD(입력·조합 중일 때만) — 하단 좌측. 조합 중 텍스트도 표시.
+        // 타입어헤드 HUD(입력·조합 중일 때만) — 위치는 설정(3×3). 조합 중 텍스트도 표시.
         let buf = self.typeahead.composing();
         if !buf.is_empty() {
             ctx.select_font(FontSlot::Status, false);
+            ctx.select_font(FontSlot::Base, false); // 타입어헤드 = 기본 글꼴(사용자 확정)
             let w = ctx.text_width(&buf) + self.s(16);
-            let hud = Rect::new(
-                self.bounds.x + self.s(8),
-                self.bounds.bottom() - self.s(26),
-                w,
-                self.s(20),
-            );
+            let hh = self.s(20);
+            let m = self.s(8);
+            let (hx, hy) = {
+                use HudPos::*;
+                let left = self.bounds.x + m;
+                let cx = self.bounds.x + (self.bounds.w - w) / 2;
+                let right = self.bounds.right() - w - m;
+                let topy = self.bounds.y + m;
+                let midy = self.bounds.y + (self.bounds.h - hh) / 2;
+                let boty = self.bounds.bottom() - hh - m;
+                match self.hud_pos {
+                    TopLeft => (left, topy),
+                    TopCenter => (cx, topy),
+                    TopRight => (right, topy),
+                    MidLeft => (left, midy),
+                    Center => (cx, midy),
+                    MidRight => (right, midy),
+                    BottomLeft => (left, boty),
+                    BottomCenter => (cx, boty),
+                    BottomRight => (right, boty),
+                }
+            };
+            let hud = Rect::new(hx, hy, w, hh);
             ctx.fill_round_rect(hud, self.s(6), theme.field_bg);
             ctx.text(
                 hud.x + self.s(8),

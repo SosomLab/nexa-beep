@@ -31,7 +31,7 @@ pub use edit::{EditKey, EditState};
 pub use event::{InputEvent, Key, WheelAccum, WHEEL_DELTA};
 pub use gallery::GalleryWidget;
 pub use geom::{Point, Rect, Size};
-pub use peer_list::{badge, PeerListWidget, PeerRow, ROW_H};
+pub use peer_list::{badge, HudPos, PeerListWidget, PeerRow, ROW_H};
 pub use raster::RasterCtx;
 pub use settings::{registry, Entry, SettingKind, SettingsState, SettingsWidget};
 pub use theme::{Color, FontPrefs, IconImage, SlotFont, Theme};

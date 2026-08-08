@@ -633,6 +633,19 @@ impl ComboControl for Choose {
         // 확장 콤보의 값 = 편집 텍스트(커스텀 우선).
         self.edit.text()
     }
+    fn choose_index(&mut self, i: usize, inv: &mut Invalidations) {
+        // 확장 콤보는 목록 선택 시 **편집 텍스트도 갱신**해야 박스 표시가 바뀐다
+        // (박스 텍스트 = edit.text() · 기본 구현은 selected만 바꿔 표시가 안 바뀌던 버그).
+        if let Some(it) = self.core.items.get(i) {
+            self.edit.set_text(&it.label);
+        }
+        if i < self.core.items.len() {
+            self.core.selected = i;
+            self.core.open = false;
+            self.core.changed = true;
+            inv.push(self.base.bounds);
+        }
+    }
     fn on_extra(&mut self, _j: usize, inv: &mut Invalidations) {
         self.core.open = false;
         if self.picker.is_some() {

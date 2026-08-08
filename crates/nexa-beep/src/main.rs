@@ -1164,6 +1164,18 @@ mod app_window {
                             e.window.request_redraw();
                         }
                     }
+                    "ui.typeahead_timeout" => {
+                        if let Ok(ms) = value.parse::<u64>() {
+                            self.list.set_typeahead_timeout(ms);
+                        }
+                    }
+                    "ui.typeahead_pos" => {
+                        let mut inv = Invalidations::default();
+                        self.list
+                            .set_hud_pos(nbeep_ui::HudPos::from_code(&value), &mut inv);
+                    }
+                    "ui.typeahead_space" => self.list.set_typeahead_space(value == "on"),
+                    "ui.typeahead_special" => self.list.set_typeahead_special(value == "on"),
                     k if k.starts_with("font.") => {
                         self.fonts = Self::fonts_from_settings(&self.settings);
                         self.status = "글꼴 설정 적용됨".into();
@@ -1555,6 +1567,16 @@ mod app_window {
                 return;
             }
             self.poll_discovery();
+            // 타입어헤드 유효시간 경과 → 버퍼 초기화·HUD 자동 숨김(마지막 입력 후 N초).
+            {
+                let now_ms = self.now_ms();
+                let mut inv = Invalidations::default();
+                if self.list.typeahead_tick(now_ms, &mut inv) {
+                    if let Some(id) = self.main_id {
+                        self.request_redraw(id);
+                    }
+                }
+            }
             // 오버레이 스크롤바 페이드 틱(~5Hz) — 상태 변화 시 갤러리 재그리기.
             if let Some(gv) = &mut self.gallery_view {
                 if gv.tick() {

@@ -290,9 +290,9 @@ pub trait TreeControl: Control {
             }
         }
         let mut tx = chev.right() + self.s(4);
-        // 선행 이미지(옵션 · 셰브론과 별개) — 글자 높이에 맞춰 비율 유지.
+        // 선행 이미지(옵션 · 셰브론과 별개) — 콤보 아이콘과 동일 크기(13 · 사용자 확정).
         if let Some(img) = row.image.as_deref() {
-            let isz = self.s(18);
+            let isz = self.s(13);
             let boxr = Rect::new(tx, cell.y + (cell.h - isz) / 2, isz, isz);
             let fit = image_fit_contain(boxr, img.w as i32, img.h as i32);
             ctx.image_scaled(fit, img, cell);
