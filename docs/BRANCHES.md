@@ -8,6 +8,7 @@
 
 | 브랜치 | 생성 | 병합(커밋) | 삭제 | 커밋수 | 작업 요약 | 상세 |
 | --- | --- | --- | --- | --- | --- | --- |
+| `feat/m1-linkwatch`(+`feat/m3-settings` 스택) | 2026-08-08 | _진행 중_ | — | 6 | **M3-11 설정 화면 1·2**(Entry 레지스트리·`⌘/Ctrl+,`·좌측 카테고리 트리·`chat.window_mode`/`ui.theme` 즉시 적용) · **M1-2 슬라이스 1**(LinkEvent·trailing Debouncer) · **Docker 테스트베드 실증**(Linux 146 green·멀티캐스트 도달) · **Windows VM 불요 확정**(D-8a 재정의) · 문서 현행화(병렬) | [journal/2026-08-08](journal/2026-08-08.md) |
 | `feat/m3-multiwin` | 2026-08-08 | 2026-08-08 (96218ab --no-ff) | 2026-08-08 | 2 | **M3-12 다중 대화 창** — `WinEntry` 창 단위 라우팅·Separate/Single 모드·재활성화=포커스·창 닫기=뷰만(DR-26 분리 회수 — 도메인 변경 0) | [journal/2026-08-08](journal/2026-08-08.md) |
 | `feat/m3-inmem-e2e` | 2026-08-08 | 2026-08-08 (b694c26 --no-ff) | 2026-08-08 | 3 | **InMemory 종단 데모**(실물 발견→Noise→TOFU→다중화→대화 왕복 — M2 게이트 GUI 실증) · **DR-26**(대화 상태-뷰 분리 즉시 반영·창 모드 설정 옵션·[14 §11]) | [journal/2026-08-08](journal/2026-08-08.md) |
 | `feat/m3-chatview` | 2026-08-08 | 2026-08-08 (e346e5f --no-ff) | 2026-08-08 | 2 | **대화 화면 첫 슬라이스** — `ChatViewWidget`(스레드=`SafeText` 타입 강제·임시 한 줄 입력)·목록↔대화 전환·발신 실물 도메인 경로(Identity·Sequencer·봉투)·snow 첫 bin 링크(+131KB) | [journal/2026-08-08](journal/2026-08-08.md) |
