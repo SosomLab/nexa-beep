@@ -17,11 +17,13 @@ pub mod checkbox;
 pub mod combo;
 pub mod radio;
 pub mod textbox;
+pub mod tree;
 
 pub use checkbox::Checkbox;
 pub use combo::{Combo, ComboControl, ComboItem, ExtendedCombo, PopupHit};
 pub use radio::{RadioGroup, RadioOption};
 pub use textbox::TextBox;
+pub use tree::{FlatRow, GridColumn, TreeControl, TreeGrid, TreeModel, TreeNode, TreeView};
 
 use crate::draw::{DrawCtx, FontSlot};
 use crate::geom::{Point, Rect};
@@ -363,6 +365,23 @@ pub fn draw_chevron_down(ctx: &mut dyn DrawCtx, area: Rect, color: Color) {
             (cx - half, cy - half / 2),
             (cx, cy + half / 2),
             (cx + half, cy - half / 2),
+        ],
+        color,
+        w,
+    );
+}
+
+/// 오른쪽 셰브론(›) — 트리 접힘 표식.
+pub fn draw_chevron_right(ctx: &mut dyn DrawCtx, area: Rect, color: Color) {
+    let cx = area.x + area.w / 2;
+    let cy = area.y + area.h / 2;
+    let half = (area.h / 4).max(3);
+    let w = (area.w as f32 / 10.0).max(1.5);
+    ctx.polyline(
+        &[
+            (cx - half / 2, cy - half),
+            (cx + half / 2, cy),
+            (cx - half / 2, cy + half),
         ],
         color,
         w,
