@@ -1,6 +1,8 @@
 //! Nexa Beep 본체 — 진입·조립·생명주기.
 //!
-//! `--window` = **InMemory 종단 데모**: 실물 발견(에코 봇) → 목록 → Enter →
+//! `--window` = InMemory 데모(에코 봇). **`--window --live` = 실물 발견(LocalDirect)** —
+//! 같은 LAN·컨테이너의 실제 상대가 목록에 뜨고 진짜 Noise 세션으로 대화한다.
+//! (구 문구) InMemory 종단 데모: 실물 발견(에코 봇) → 목록 → Enter →
 //! Noise 핸드셰이크 → TOFU 핀 → 다중화 세션 위 대화 왕복. 전 계층이 실물이다.
 //!
 //! **창 모드(DR-26 · FR-U-18)**: 기본 = 단일 창(목록↔대화 전환). `--separate-windows` =
@@ -27,12 +29,14 @@ fn main() {
     }
     let open_window = args.iter().any(|a| a == "--window");
     let separate = args.iter().any(|a| a == "--separate-windows");
+    let live = args.iter().any(|a| a == "--live");
     if open_window || separate {
-        app_window::run(if separate {
+        let mode = if separate {
             app_window::WindowMode::Separate
         } else {
             app_window::WindowMode::Single
-        });
+        };
+        app_window::run(mode, live);
     } else {
         println!(
             "nexa-beep {} — scaffold (창 `--window`/`--separate-windows` · 발견 `--discover-probe [초]` · 실물 종단 `--live-echo [초]`)",
@@ -278,6 +282,44 @@ mod app_window {
         });
     }
 
+    /// 인바운드 세션 수락 펌프 — 남이 나에게 연결하면 accept 후 에코 응답(대칭 대화 데모).
+    /// GUI 스레드로의 실시간 수신 반영(양쪽 창에 표시)은 M2-7(비동기 수신 펌프·EventLoopProxy).
+    fn spawn_inbound_echo(
+        incoming: std::sync::mpsc::Receiver<Box<dyn nbeep_core::Link>>,
+        identity: std::sync::Arc<nbeep_crypto::Identity>,
+    ) {
+        use nbeep_core::mux::{MuxSession, StreamId};
+        use nbeep_core::{ChatMessage, MessageBody, Sequencer, Session as _};
+        std::thread::spawn(move || {
+            while let Ok(link) = incoming.recv() {
+                let identity = std::sync::Arc::clone(&identity);
+                std::thread::spawn(move || {
+                    let Ok(session) = nbeep_crypto::NoiseSession::accept(link, &identity) else {
+                        return;
+                    };
+                    let user = session.peer();
+                    let mut mux = MuxSession::new(session);
+                    let mut seq = Sequencer::new();
+                    while let Ok(bytes) = mux.recv(StreamId::Chat) {
+                        let Ok(m) = ChatMessage::decode(&bytes, user) else {
+                            break;
+                        };
+                        if let MessageBody::Text(t) = m.body {
+                            let reply = ChatMessage {
+                                sender_device: identity.peer_id(),
+                                seq: seq.issue(),
+                                body: MessageBody::Text(format!("에코: {t}")),
+                            };
+                            if mux.send(StreamId::Chat, &reply.encode()).is_err() {
+                                break;
+                            }
+                        }
+                    }
+                });
+            }
+        });
+    }
+
     struct App {
         mode: WindowMode,
         windows: HashMap<WindowId, WinEntry>,
@@ -292,8 +334,8 @@ mod app_window {
         /// 내 신원 — 발견·세션·발신 봉투가 전부 이 키 하나에서 나온다.
         identity: std::sync::Arc<nbeep_crypto::Identity>,
         seq: nbeep_core::Sequencer,
-        /// InMemory 전송(실물 발견 이벤트 공급원 — M1-4에서 실물 네트워크로 교체).
-        transport: nbeep_net::inmem::InMemoryTransport,
+        /// 전송 — 데모(InMemory) 또는 실물(`LocalDirect`). 같은 `Transport` 트레이트라 App은 구별 안 함.
+        transport: Box<dyn nbeep_net::Transport>,
         discovery: std::sync::mpsc::Receiver<nbeep_net::DiscoveryEvent>,
         table: nbeep_core::PeerTable,
         trust: nbeep_core::MemoryTrustStore,
@@ -374,7 +416,7 @@ mod app_window {
             &mut self,
             peer: PeerId,
         ) -> Result<(LiveSession, nbeep_core::TrustDecision), String> {
-            use nbeep_net::Transport as _;
+            // dyn Transport — 메서드는 트레이트 객체에 직접 있어 use 불요.
             let link = self.transport.connect(peer).map_err(|e| format!("{e:?}"))?;
             let noise = nbeep_crypto::NoiseSession::initiate(link, &self.identity)
                 .map_err(|e| e.to_string())?;
@@ -933,28 +975,52 @@ mod app_window {
     }
 
     /// 창을 띄우고 이벤트 루프를 돈다(주 창을 닫으면 종료).
-    pub(crate) fn run(mode: WindowMode) {
+    /// 창을 띄운다. `live=true`면 실물 발견(`LocalDirect`), 아니면 InMemory 데모(에코 봇).
+    pub(crate) fn run(mode: WindowMode, live: bool) {
         let (data, index) = nbeep_plat::font::system_ui_font().expect("시스템 UI 폰트 없음");
         let font = nbeep_gfx::Font::from_static(data, index).expect("폰트 파싱");
         let identity = std::sync::Arc::new(nbeep_crypto::Identity::generate());
-        let bus = nbeep_net::inmem::InMemoryBus::new();
-        // 에코 봇들 — 발견·세션·에코까지 실물 스택으로 참여한다.
-        for name in ["김철수의 MacBook", "이영희 (개발2팀)", "bob-linux"] {
-            spawn_echo_bot(&bus, name);
-        }
         use nbeep_net::Transport as _;
-        let transport = bus.join(
-            identity.peer_id(),
-            nbeep_core::DisplayName::parse("나").unwrap(),
-            nbeep_net::Caps::default(),
-        );
-        let discovery = transport.discovery();
+
+        let (transport, discovery): (Box<dyn nbeep_net::Transport>, _) = if live {
+            // 실물 — LocalDirect(UDP 발견 + TCP 세션). 실기·컨테이너 상대가 목록에 뜬다.
+            let mut instance = [0u8; 16];
+            instance
+                .copy_from_slice(&nbeep_crypto::Identity::generate().peer_id().as_bytes()[..16]);
+            let name =
+                nbeep_core::DisplayName::parse(&format!("나-{}", identity.peer_id().short()))
+                    .expect("라벨");
+            let local = nbeep_net::LocalDirect::spawn(identity.peer_id(), instance, name, 800, 1)
+                .expect("LocalDirect 시작(방화벽·인터페이스)");
+            let discovery = local.discovery();
+            // 인바운드 수락 펌프 — 남이 나에게 연결하면 accept+에코(대칭 대화·비동기 GUI 펌프는 M2-7).
+            spawn_inbound_echo(local.incoming(), std::sync::Arc::clone(&identity));
+            (Box::new(local), discovery)
+        } else {
+            // 데모 — InMemory 버스 + 에코 봇 3명.
+            let bus = nbeep_net::inmem::InMemoryBus::new();
+            for name in ["김철수의 MacBook", "이영희 (개발2팀)", "bob-linux"] {
+                spawn_echo_bot(&bus, name);
+            }
+            let transport = bus.join(
+                identity.peer_id(),
+                nbeep_core::DisplayName::parse("나").unwrap(),
+                nbeep_net::Caps::default(),
+            );
+            let discovery = transport.discovery();
+            (Box::new(transport), discovery)
+        };
 
         let mut settings = SettingsState::with_defaults();
         if mode == WindowMode::Separate {
             settings.set("chat.window_mode", "separate".into());
         }
         let event_loop = EventLoop::new().unwrap();
+        let net_hint = if live {
+            "실물 발견(LAN)"
+        } else {
+            "데모(에코 봇)"
+        };
         let mode_hint = match mode {
             WindowMode::Single => "Enter = 대화 열기",
             WindowMode::Separate => "Enter = 상대별 새 창(동시 대화)",
@@ -977,7 +1043,7 @@ mod app_window {
             conversations: HashMap::new(),
             dedup: nbeep_core::DedupIndex::new(),
             started: Instant::now(),
-            status: format!("↑↓ 이동 · 타이핑 = 이름 점프 · {mode_hint} · ⌘/Ctrl+, = 설정"),
+            status: format!("[{net_hint}] {mode_hint} · ⌘/Ctrl+, = 설정"),
             settings,
             settings_view: None,
             primary_down: false,
