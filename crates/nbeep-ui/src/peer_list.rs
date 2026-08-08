@@ -281,7 +281,7 @@ impl Widget for PeerListWidget {
 
     fn paint(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
         ctx.fill_rect(self.bounds, theme.panel_bg);
-        ctx.select_font(FontSlot::Base, false);
+        ctx.select_font(FontSlot::PeerList, false);
         let vis = self.visible_rows();
 
         let rh = self.row_h();

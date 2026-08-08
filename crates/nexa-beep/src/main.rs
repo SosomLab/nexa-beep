@@ -1026,6 +1026,8 @@ mod app_window {
         /// 설정 변경 즉시 적용(DR-24 — 저장 버튼 없음).
         /// 설정 값에서 영역별 글꼴 설정을 만든다(크기 키 s/m/l/xl → px).
         fn fonts_from_settings(settings: &SettingsState) -> nbeep_ui::FontPrefs {
+            // 글꼴명(font.{region}.family)은 SettingsState에 저장되지만, 실제 패밀리 로드는
+            // 시스템 폰트 열거(M3-3 확장) 후 연결한다 — 지금은 크기만 렌더에 반영.
             let slot = |region: &str, base: f32| -> nbeep_ui::SlotFont {
                 let size = match settings.get(&format!("font.{region}.size")) {
                     "s" => base - 2.0,
@@ -1035,12 +1037,13 @@ mod app_window {
                 };
                 nbeep_ui::SlotFont {
                     size,
-                    bold: settings.get(&format!("font.{region}.bold")) == "on",
-                    italic: settings.get(&format!("font.{region}.italic")) == "on",
+                    bold: false,
+                    italic: false,
                 }
             };
             nbeep_ui::FontPrefs {
                 base: slot("base", 16.0),
+                peerlist: slot("peerlist", 16.0),
                 message: slot("message", 18.0),
                 status: slot("status", 13.0),
             }

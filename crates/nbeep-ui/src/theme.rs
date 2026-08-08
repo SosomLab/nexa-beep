@@ -128,11 +128,13 @@ pub struct SlotFont {
     pub italic: bool,
 }
 
-/// 세 영역(기본·메시지·상태)의 글꼴 설정.
+/// 영역별 글꼴 설정(기본 UI·사용자 목록·대화 본문·상태바).
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct FontPrefs {
-    /// 기본 UI(목록·버튼·헤더).
+    /// 기본 UI(버튼·헤더·설정 등).
     pub base: SlotFont,
+    /// 사용자(피어) 목록.
+    pub peerlist: SlotFont,
     /// 대화 본문.
     pub message: SlotFont,
     /// 상태바·보조.
@@ -140,24 +142,18 @@ pub struct FontPrefs {
 }
 
 impl Default for FontPrefs {
-    /// 기본값 — **가독성 위해 상향**(구 13/15/11 → 16/18/13).
+    /// 기본값 — **가독성 위해 상향**(구 13/15/11 → 16/18/13). 사용자 목록은 기본 UI와 같은 16.
     fn default() -> Self {
+        let plain = |size| SlotFont {
+            size,
+            bold: false,
+            italic: false,
+        };
         Self {
-            base: SlotFont {
-                size: 16.0,
-                bold: false,
-                italic: false,
-            },
-            message: SlotFont {
-                size: 18.0,
-                bold: false,
-                italic: false,
-            },
-            status: SlotFont {
-                size: 13.0,
-                bold: false,
-                italic: false,
-            },
+            base: plain(16.0),
+            peerlist: plain(16.0),
+            message: plain(18.0),
+            status: plain(13.0),
         }
     }
 }
