@@ -12,9 +12,9 @@
 
 - 조직: **SosomLab** · 개발자: Sangyong Bae · kiros33@gmail.com
 - 저장소: `git@github.com:SosomLab/nexa-beep.git` · 릴레이 서버는 별도 **`nexa-beepd`**(v1 이후)
-- 현 단계: **M-1 설계** — 문서 5종 완료([00](docs/00-vision.md)·[03](docs/03-competitive-landscape.md)·[04](docs/04-safe-transfer.md)·[05](docs/05-requirements.md)·[06](docs/06-network-stack.md)). **ADR 4종 미정** — 스택이 다음 관문.
+- 현 단계: **M-1 설계 사실상 완료** — 문서 15종 · **ADR 7종**(0001·0002 Accepted / 0003~0007 Proposed) · DR-1~20. 다음 관문은 **M0 스캐폴딩 + SP-1 예산 스파이크**.
 
-## 2. 확정 결정 ([docs/10](docs/10-decision-record.md) DR-1~14, 변경 시 새 ADR/journal)
+## 2. 확정 결정 ([docs/10](docs/10-decision-record.md) DR-1~20, 변경 시 새 ADR/journal)
 
 | # | 결정 |
 | --- | --- |
@@ -31,7 +31,9 @@
 | DR-12 | **PolyForm Noncommercial 1.0.0**(nexa-dir2 동일) + **의존성 퍼미시브 온리 — GPL/LGPL 금지** |
 | DR-13 | 페이로드 **Text·Image·File**. 수신 파일은 **4단계 게이트**(협상→`.beepq` 격리→검사→승인 실체화). **앱은 수신 파일을 실행하지 않는다**. 복원 후에도 MotW/quarantine 유지 → [docs/04](docs/04-safe-transfer.md) |
 | DR-15~17 | **코드 설계 표준**([docs/13](docs/13-code-design-standards.md) — `ActionKind` 단일 통로·인터셉터·계측) · **컨트롤/UX**([docs/14](docs/14-control-ux-architecture.md) — 시각=macOS/동작=OS 네이티브·3단계 이벤트) · **기록 저장 암호화**([docs/17](docs/17-adr-0005-history-at-rest.md) — 블라인드 인덱스·크립토 셰레딩) |
-| DR-18 | **PC 1대 = 노드 1개** — 사용자 개념 없음. 기기 이전 시 기록이 따라가지 않는다(v1 한계·UI에 명시) |
+| DR-18 | **PC 1대 = 노드 1개**(기본). 기기 이전 시 기록이 따라가지 않는다(v1 한계·UI에 명시). ⚠️ **개정(DR-20)** — "사용자 개념 없음"은 **기본값**이지 금지가 아니다 |
+| DR-19 | **수동 엔드포인트 등록** — 직접 IP/DDNS로 노드 추가(S6 + 공인 IP). **LAN 밖은 위협 모델이 다르다** → 원격 신뢰 등급·SAS 전 파일 차단·인바운드 요청 대기 → [docs/19](docs/19-adr-0006-manual-endpoint.md) |
+| DR-20 | **다중 기기 신원(선택 계층)** — `UserId` 1:M `PeerId`. `UserId` 키가 **기기 목록을 서명**하고 상대가 검증(양방향 소유 증명) · 발신은 **그룹 팬아웃 재사용** · TOFU/SAS 대상이 `UserId`로 상승 · **구현은 v2, v1 제약 4건은 M0에 반영** → [docs/20](docs/20-adr-0007-multi-device-identity.md) |
 | DR-14 | **L1~L4 직접 제어** — L1 링크 상태 구독 · L2 이웃 테이블 · L3 인터페이스별 멀티캐스트/브로드캐스트/링크로컬 · L4 UDP+TCP. 발견 폴백 **S1~S6**. **T0(무권한)이 완전한 제품** — L2 원시 소켓은 선택 → [docs/06](docs/06-network-stack.md) |
 
 ### ★ 관통 원리 — "봉투만 본다"
@@ -42,8 +44,10 @@
 
 ### 설계 시 절대 놓치면 안 되는 것
 
-- **신원 = 기기 키 지문. PC 1대 = 노드 1개**(DR-18). "사용자" 개념 없음 — 핀·기록·그룹·계측이 전부 노드 단위.
-- **병합과 별개 노드를 혼동하지 말 것** — 같은 노드의 여러 경로는 병합(FR-D-6), **다른 PC는 지문이 다르므로 별개 노드**다.
+- **신원 = 기기 키 지문. PC 1대 = 노드 1개**(DR-18 기본). **연결은 `PeerId`에, 대화·기록·차단은 `UserId`에** 붙인다(DR-20 V1-1 — v1은 둘이 1:1).
+- **병합의 근거는 언제나 암호학적 증거** — 같은 노드의 여러 경로는 병합(FR-D-6), 다른 PC는 별개. **서명된 같은 `UserId`면 접어 표시**(v2). 이름·IP·사용자 주장은 근거가 아니다.
+- **`UserId`는 그룹과 다르다** — 그룹은 **로컬 개념**(FR-G-3)이지만 `UserId`는 **상대가 믿어야 하는 주장**이라 서명·검증·폐기(롤백 방지)가 필수([docs/20 §2](docs/20-adr-0007-multi-device-identity.md)).
+- **다중 기기는 릴레이로 풀리지 않는다** — 릴레이는 "닿는가"만 푼다. 기여는 오프라인 큐 하나.
 - **암호화는 전송 계층 "위"** 에 둔다 — 릴레이는 봉투만 본다.
 - **발견은 다단 폴백 필수** — 기업 무선망 클라이언트 격리·VLAN이 멀티캐스트를 차단한다([06 §4](docs/06-network-stack.md)).
 - **T0(무권한)에서 전 기능이 돌아야 한다** — 관리자 권한·드라이버를 요구하는 순간 DR-1·DR-4가 깨진다.
@@ -68,12 +72,14 @@
 
 1. 이 CLAUDE.md + [docs/STATUS.md](docs/STATUS.md) → 2. [DEVLOG](docs/DEVLOG.md) 최상단 + 최신 journal → 3. 할 일 = [docs/TODO.md](docs/TODO.md) 순차.
 
-## 5. 다음 단계 (2026-08-08)
+## 5. 다음 단계 (2026-08-08 5차 기준)
 
-1. **ADR-0001 스택**(D-6) — 언어·크로스 컴파일·자체 렌더링 백엔드. **D-7·D-11~D-14가 전부 여기에 걸려 있다.** 선정 기준에 **후보별 크기·메모리 실측**을 반드시 포함(R-8).
-2. **ADR-0002 디스커버리·전송 + 키 인증**(D-7) — 근거는 **D-8 발견 도달 스파이크 실측**([06 §7](docs/06-network-stack.md) E-1~E-9) 먼저.
-3. **ADR-0003 전송 2모드 경계**(D-9) · **ADR-0004 수신 무해화**(D-12) → [01 아키텍처](docs/01-architecture.md)(D-10).
+1. 🔴 **사용자 확정 대기** — ADR-0003·0004·0006·**0007**(Proposed) · 그중 **[ADR-0007 Q-1 `UserId` 개인키 보관 방식](docs/20-adr-0007-multi-device-identity.md)** 은 v2 착수 전 필수(R-10).
+2. **M0-1 스캐폴딩** — Cargo 워크스페이스·MSRV·최소 지원 OS·4타깃. 이어 **M0-1b 횡단 골격**([13](docs/13-code-design-standards.md))과 **D-21 v1 제약 4건**(DR-20)을 **같이** 세운다 — 나중에 넣으면 마이그레이션이다.
+3. **SP-1 예산 검증 스파이크**(D-15) — M0-1 직후 최우선(R-8 해소).
+4. **D-8 발견 도달 스파이크**(E-1~E-9) — 🔴 **실기 2대 이상 필요, 대행 불가.** ADR-0002 타이밍 6종이 여기 묶여 있다.
 
-> 완료된 설계 문서: [00 비전](docs/00-vision.md) · [03 경쟁 조사](docs/03-competitive-landscape.md) · [04 안전 송수신](docs/04-safe-transfer.md) · [05 요구사항](docs/05-requirements.md) · [06 네트워크 스택](docs/06-network-stack.md).
+> ADR 상태: **0001·0002 ✅ Accepted** / **0003·0004·0005·0006·0007 📐 Proposed**.
+> 완료된 설계 문서: [00 비전](docs/00-vision.md) · [01 아키텍처](docs/01-architecture.md) · [02 로드맵](docs/02-roadmap.md) · [03 경쟁 조사](docs/03-competitive-landscape.md) · [04 안전 송수신](docs/04-safe-transfer.md) · [05 요구사항](docs/05-requirements.md) · [06 네트워크 스택](docs/06-network-stack.md) · [12](docs/12-asset-reuse.md)·[13](docs/13-code-design-standards.md)·[14](docs/14-control-ux-architecture.md).
 > **예산 게이트 수치 = [05 §2-1](docs/05-requirements.md) NFR-B-1~12** — 유휴 RSS ≤30MB · 산출물 ≤10MB/타깃 · 런타임 의존 0 · 24h 누수 RSS ≤2MB·핸들 증가 0.
 > 문서 번호 배정 계획은 [docs/README](docs/README.md) — **번호는 불변**이므로 새 문서는 반드시 그 표를 보고 붙인다.

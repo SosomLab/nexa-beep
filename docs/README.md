@@ -13,7 +13,7 @@
 2. **경쟁 지형** — [03 경쟁 프로그램 조사](03-competitive-landscape.md) : 국내·국외 유사 프로그램 기능표·장단점
 3. **안전 설계** — [04 안전 송수신](04-safe-transfer.md) : 페이로드 3종 + 수신 파일 무해화
 4. **무엇을 만드나** — [05 요구사항](05-requirements.md) : FR/NFR(예산 수치)/제약/리스크
-5. **핵심 결정** — [10 결정 기록](10-decision-record.md) : DR-1~14 + ADR 색인
+5. **핵심 결정** — [10 결정 기록](10-decision-record.md) : DR-1~20 + ADR 색인
 6. **어떻게 짓나** — [01 아키텍처](01-architecture.md) → [02 로드맵](02-roadmap.md)
 7. **지금 상태** — [STATUS](STATUS.md) → [MILESTONES](MILESTONES.md)
 8. **진행 경과** — [DEVLOG](DEVLOG.md)(시간 역순) → 관심 날짜 [journal/](journal/)
@@ -26,7 +26,7 @@
 | [03 경쟁 프로그램 조사](03-competitive-landscape.md) | ★ 국내·국외 유사 프로그램 37종 · 기능 매트릭스 · 장단점 |
 | [04 안전 송수신 설계](04-safe-transfer.md) | ★ Text/Image/File 페이로드 · **수신 파일 무해화 4단계 게이트**(MotW·Gatekeeper·AMSI·CDR) |
 | [05 요구사항](05-requirements.md) | ★ FR 57건 · **NFR-B 예산 게이트(수치 확정)** · 제약 C-1~6 · 리스크 R-1~9 |
-| [10 결정 기록](10-decision-record.md) | ★ DR-1~14 · ADR 색인 · 의존성/차용자산 원장 |
+| [10 결정 기록](10-decision-record.md) | ★ **DR-1~20** · ADR 색인 · 의존성/차용자산 원장 |
 | [CLAUDE.md](../CLAUDE.md) | 이식용 프로젝트 메모리 |
 | [LICENSE](../LICENSE.md) · [한글](../LICENSE.ko.md) | PolyForm Noncommercial 1.0.0 — 의존성 퍼미시브 온리(DR-12) |
 
@@ -43,6 +43,7 @@
 | [11 ADR-0004 수신 무해화](11-adr-0004-quarantine.md) | 📐 **Proposed** — `.beepq` 레이아웃 · 위험 등급 4단계 확장자표 · 상태 기계(fail-closed) · MotW/quarantine API |
 | [19 ADR-0006 수동 엔드포인트 등록](19-adr-0006-manual-endpoint.md) | 📐 **Proposed** — 직접 IP/DDNS로 노드 추가 · **원격 신뢰 등급** · 인바운드 요청 대기 · 릴레이와의 경계 |
 | [17 ADR-0005 기록 저장 암호화](17-adr-0005-history-at-rest.md) | 📐 **Proposed** — 기기 키 파생 + 승격 옵션 · **블라인드 인덱스 검색** · **크립토 셰레딩** · 위협 모델 H-1~H-8 |
+| [20 ADR-0007 다중 기기 신원](20-adr-0007-multi-device-identity.md) | 📐 **Proposed** — **UserId 1:M PeerId** · 서명된 기기 목록 · 그룹 팬아웃 재사용 · 폐기·롤백 방지 · **v1 제약 4건** |
 | [12 차용 자산 실측 평가](12-asset-reuse.md) | ★ **`ctl` 재사용 불가 판정**(HWND 모델) · 실제 자산은 `nexa-gui` 인프라 1,187 LOC · R-3 재평가 |
 | [13 코드 설계 표준](13-code-design-standards.md) | ★★ 모듈화 · 포트&어댑터 · **`ActionKind` 단일 통로** · **인터셉터** · **사용 계측 레저** · 코드 리뷰 체크리스트 |
 | [14 컨트롤·UX 아키텍처](14-control-ux-architecture.md) | ★★ **시각=macOS 통일 / 동작=OS 네이티브** · `Widget` 트레이트 기본 메서드 전파 · **3단계 이벤트 전파** · 상태 6종 · 팝업 규약 |
@@ -66,6 +67,7 @@
 | **14** | 컨트롤·UX 아키텍처 | ✅ |
 | **17** | **ADR-0005 기록 저장 암호화** | 📐 Proposed |
 | **19** | **ADR-0006 수동 엔드포인트 등록** | 📐 Proposed |
+| **20** | **ADR-0007 다중 기기 신원(UserId 1:M PeerId)** | 📐 Proposed |
 | **15 · 16 · 18** | 개발 방법론 · 문서/git 규약 · 빌드&테스트 | ✅ |
 
 ## ③ 진행 경과 · 할 일
