@@ -394,3 +394,51 @@ mod mux_integration {
         assert_eq!(mb.trust(), TrustLevel::Unverified);
     }
 }
+
+#[cfg(test)]
+mod chat_integration {
+    //! M2-4 종단 검증 — 실물 Noise 세션 위에서 시퀀서→팬아웃→수신→중복 제거가 한 줄로 돈다.
+
+    use super::*;
+    use nbeep_core::chat::{fanout, ChatMessage, DedupIndex, MessageBody, Sequencer};
+    use nbeep_core::mux::{MuxSession, StreamId};
+    use nbeep_core::testkit::duplex;
+    use nbeep_core::Recipients;
+    use std::thread;
+
+    #[test]
+    fn encrypted_one_to_one_text_with_dedup() {
+        let (alice, bob) = (Identity::generate(), Identity::generate());
+        let (a_id, b_id) = (alice.peer_id(), bob.peer_id());
+        let (la, lb) = duplex(a_id, b_id);
+        let hb = thread::spawn(move || NoiseSession::accept(lb, &bob));
+        let a = NoiseSession::initiate(la, &alice).expect("a 수립");
+        let b = hb.join().unwrap().expect("b 수립");
+        let mut sessions = vec![MuxSession::new(a)];
+        let mut mb = MuxSession::new(b);
+
+        // 발신: 시퀀서가 seq를 발급하고, 1:1도 그룹과 같은 fanout 경로를 탄다.
+        let mut seq = Sequencer::new();
+        let m = ChatMessage {
+            sender_device: a_id,
+            seq: seq.issue(),
+            body: MessageBody::Text("첫 암호화 메시지".into()),
+        };
+        let report = fanout(&mut sessions, &Recipients::one(b_id), &m);
+        assert!(report[0].1.is_ok());
+        // 같은 메시지가 다른 경로로 한 번 더 도착한 상황(재전송) 시뮬레이션.
+        sessions[0].send(StreamId::Chat, &m.encode()).unwrap();
+
+        // 수신: 복호 → 봉투 해석(발신자 = 세션 인증 상대 검증) → 중복 제거.
+        let mut dedup = DedupIndex::new();
+        let first = ChatMessage::decode(&mb.recv(StreamId::Chat).unwrap(), a_id).unwrap();
+        assert_eq!(first.body, MessageBody::Text("첫 암호화 메시지".into()));
+        assert!(dedup.accept(first.sender_device, first.seq), "처음 = 표시");
+        let second = ChatMessage::decode(&mb.recv(StreamId::Chat).unwrap(), a_id).unwrap();
+        assert_eq!(second, first);
+        assert!(
+            !dedup.accept(second.sender_device, second.seq),
+            "재전송 = 한 번만 표시"
+        );
+    }
+}
