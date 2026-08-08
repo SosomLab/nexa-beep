@@ -94,7 +94,8 @@ fn discover_probe(secs: u64) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
     let mut clones = nbeep_net::CloneWatch::new(10_000);
     let started = std::time::Instant::now();
-    while std::time::Instant::now() < deadline {
+    let shutdown = nbeep_plat::shutdown::install();
+    while std::time::Instant::now() < deadline && !shutdown.requested() {
         if let Ok(o) = events.recv_timeout(std::time::Duration::from_millis(300)) {
             let now = nbeep_core::MonoInstant(
                 u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX),
@@ -120,9 +121,22 @@ fn serve_manual(port: u16) {
     use nbeep_core::{ChatMessage, MessageBody, Sequencer, Session as _};
     let identity = std::sync::Arc::new(nbeep_crypto::Identity::generate());
     let listener = std::net::TcpListener::bind(("0.0.0.0", port)).expect("포트 바인딩");
+    listener.set_nonblocking(true).expect("논블로킹");
+    let shutdown = nbeep_plat::shutdown::install();
     println!("SERVE me={} port={}", identity.peer_id().short(), port);
-    for stream in listener.incoming() {
-        let Ok(stream) = stream else { continue };
+    loop {
+        if shutdown.requested() {
+            println!("SERVE 종료(정상)");
+            return;
+        }
+        let stream = match listener.accept() {
+            Ok((s, _)) => s,
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(std::time::Duration::from_millis(150));
+                continue;
+            }
+            Err(_) => continue,
+        };
         let identity = std::sync::Arc::clone(&identity);
         std::thread::spawn(move || {
             let Ok(link) = nbeep_net::TcpLink::new(stream) else {
@@ -408,7 +422,8 @@ fn live_echo(secs: u64) {
     let mut seq = Sequencer::new();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
     let mut connected: Option<PeerIdShort> = None;
-    while std::time::Instant::now() < deadline {
+    let shutdown = nbeep_plat::shutdown::install();
+    while std::time::Instant::now() < deadline && !shutdown.requested() {
         let Ok(ev) = discovery.recv_timeout(std::time::Duration::from_millis(300)) else {
             continue;
         };
@@ -459,7 +474,7 @@ mod app_window {
     use std::time::Instant;
     use winit::application::ApplicationHandler;
     use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
-    use winit::event_loop::{ActiveEventLoop, EventLoop};
+    use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
     use winit::keyboard::{Key as WKey, NamedKey};
     use winit::window::{Window, WindowId};
 
@@ -693,6 +708,8 @@ mod app_window {
         proxy: winit::event_loop::EventLoopProxy<AppEvent>,
         /// 수동 엔드포인트 입력 중 버퍼(DR-19 · `⌘/Ctrl+K`). None = 입력 아님.
         adding: Option<String>,
+        /// 종료 신호(R-16 · FR-P-7) — SIGINT/SIGTERM 시 el.exit() → Drop 체인이 GOODBYE·정리.
+        shutdown: nbeep_plat::shutdown::Shutdown,
     }
 
     impl App {
@@ -1310,10 +1327,18 @@ mod app_window {
             }
         }
 
-        fn about_to_wait(&mut self, _el: &ActiveEventLoop) {
-            // 발견 이벤트 폴링 — 봇은 시작 시 join하므로 첫 배치에서 다 접힌다.
-            // 실물 네트워크의 상시 깨우기(EventLoopProxy)는 M2-7에서.
+        fn about_to_wait(&mut self, el: &ActiveEventLoop) {
+            // 종료 신호(SIGINT/SIGTERM) → 이벤트 루프 종료. run_app 반환 → App Drop →
+            // transport(LocalDirect) Drop → GOODBYE 발신·소켓/스레드 정리(R-16 · FR-P-7).
+            if self.shutdown.requested() {
+                el.exit();
+                return;
+            }
             self.poll_discovery();
+            // 유휴에도 ~5Hz로 깨어나 발견 갱신·종료 신호를 폴한다(입력 없을 때도 목록이 산다).
+            el.set_control_flow(ControlFlow::wait_duration(
+                std::time::Duration::from_millis(200),
+            ));
         }
 
         fn window_event(&mut self, el: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
@@ -1505,6 +1530,7 @@ mod app_window {
         // 이벤트 루프·프록시 먼저 — 인바운드 수락 펌프가 프록시를 필요로 한다(M2-7).
         let event_loop = EventLoop::<AppEvent>::with_user_event().build().unwrap();
         let proxy = event_loop.create_proxy();
+        let shutdown = nbeep_plat::shutdown::install(); // R-16 — SIGINT/SIGTERM 포트
 
         let (transport, discovery): (Box<dyn nbeep_net::Transport>, _) = if live {
             // 실물 — LocalDirect(UDP 발견 + TCP 세션). 실기·컨테이너 상대가 목록에 뜬다.
@@ -1576,6 +1602,7 @@ mod app_window {
             primary_down: false,
             proxy,
             adding: None,
+            shutdown,
         };
         event_loop.run_app(&mut app).unwrap();
     }

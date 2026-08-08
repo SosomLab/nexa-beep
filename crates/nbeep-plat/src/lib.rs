@@ -4,3 +4,4 @@
 //! `unsafe`는 이 크레이트와 `nbeep-net`의 지정 모듈에만(docs/13 §10).
 
 pub mod font;
+pub mod shutdown;
