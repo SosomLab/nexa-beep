@@ -35,6 +35,9 @@ pub struct ChatViewWidget {
     scale: f32,
     outgoing: Option<SafeText>,
     back: bool,
+    /// 스크롤 오프셋 — **하단(최신)에서 위로 밀어올린 줄 수**(0 = 최신 붙어 봄).
+    scroll: usize,
+    wheel: crate::event::WheelAccum,
 }
 
 impl ChatViewWidget {
@@ -50,6 +53,8 @@ impl ChatViewWidget {
             scale: 1.0,
             outgoing: None,
             back: false,
+            scroll: 0,
+            wheel: crate::event::WheelAccum::default(),
         }
     }
 
@@ -65,7 +70,27 @@ impl ChatViewWidget {
     /// 스레드에 줄 추가(수신·발신 확정분 — 이미 무해화된 타입만 받는다).
     pub fn push_line(&mut self, line: ChatLine, inv: &mut Invalidations) {
         self.lines.push(line);
+        self.scroll = 0; // 새 메시지 = 최신으로 스냅(표준 채팅 동작)
         inv.push(self.bounds);
+    }
+
+    /// 화면에 들어가는 스레드 줄 수(헤더·입력창 제외).
+    fn visible_lines(&self) -> usize {
+        let head_h = self.s(30);
+        let input_h = self.s(34);
+        let area = (self.bounds.h - head_h - input_h - self.s(6)).max(0);
+        (area / self.s(24).max(1)) as usize
+    }
+
+    /// 스크롤 상한(위로 최대 얼마나) — 안 넘는 범위로 조인다.
+    fn max_scroll(&self) -> usize {
+        self.lines.len().saturating_sub(self.visible_lines())
+    }
+
+    /// 현재 스크롤 오프셋(테스트·표시).
+    #[must_use]
+    pub fn scroll(&self) -> usize {
+        self.scroll
     }
 
     /// Enter로 확정된 발신 본문(1회성) — 조립 지점이 시퀀서·팬아웃에 넘긴다.
@@ -142,6 +167,20 @@ impl Widget for ChatViewWidget {
             } => {
                 self.back = true;
             }
+            InputEvent::Key {
+                key: Key::PageUp, ..
+            } => {
+                let page = self.visible_lines().max(1);
+                self.scroll = (self.scroll + page).min(self.max_scroll());
+                inv.push(self.bounds);
+            }
+            InputEvent::Key {
+                key: Key::PageDown, ..
+            } => {
+                let page = self.visible_lines().max(1);
+                self.scroll = self.scroll.saturating_sub(page);
+                inv.push(self.bounds);
+            }
             InputEvent::Key { key, shift, .. } => {
                 // 캐럿 이동·선택(edit 모델). Enter/Esc는 위에서 처리됨.
                 let ek = match key {
@@ -154,6 +193,22 @@ impl Widget for ChatViewWidget {
                 if let Some(ek) = ek {
                     self.input.key(ek, shift);
                     inv.push(self.input_bar());
+                }
+            }
+            InputEvent::Wheel { delta } => {
+                let lines = self.wheel.add(delta, 3);
+                if lines != 0 {
+                    // 위로(양수) = 과거로(scroll 증가).
+                    let ns = if lines > 0 {
+                        self.scroll + lines.unsigned_abs() as usize
+                    } else {
+                        self.scroll.saturating_sub(lines.unsigned_abs() as usize)
+                    };
+                    let clamped = ns.min(self.max_scroll());
+                    if clamped != self.scroll {
+                        self.scroll = clamped;
+                        inv.push(self.bounds);
+                    }
                 }
             }
             InputEvent::SelectAll => {
@@ -193,9 +248,10 @@ impl Widget for ChatViewWidget {
         let line_h = self.s(24);
         let input = self.input_bar();
         let mut y = input.y - self.s(6) - line_h;
-        for line in self.lines.iter().rev() {
+        // 하단에서 scroll개를 건너뛴다(위로 올려본 만큼 과거로).
+        for line in self.lines.iter().rev().skip(self.scroll) {
             if y < head.bottom() {
-                break; // 화면 밖 — 스크롤은 후속 슬라이스
+                break; // 화면 위쪽 밖
             }
             let fg = if line.mine { theme.text } else { theme.accent };
             let prefix = if line.mine { "나: " } else { "상대: " };
@@ -302,6 +358,70 @@ mod tests {
             },
             inv,
         );
+    }
+
+    fn wheel_up(w: &mut ChatViewWidget, inv: &mut Invalidations) {
+        w.on_event(&InputEvent::Wheel { delta: 120 }, inv); // 1노치 위(과거)
+    }
+
+    #[test]
+    fn scroll_reveals_history_and_new_msg_snaps_to_latest() {
+        let (mut w, mut inv) = widget();
+        // bounds 400x300 · 헤더30·입력34 → 스레드 영역 ~236 / 24 ≈ 9줄 가시.
+        for i in 0..30 {
+            w.push_line(
+                ChatLine {
+                    mine: true,
+                    text: nbeep_core::sanitize_message(&format!("m{i}")),
+                },
+                &mut inv,
+            );
+        }
+        assert_eq!(w.scroll(), 0, "push 시 최신 스냅");
+        // 휠 위로 여러 번 → 과거로 스크롤.
+        for _ in 0..5 {
+            wheel_up(&mut w, &mut inv);
+        }
+        assert!(w.scroll() > 0, "위로 스크롤됨: {}", w.scroll());
+        // PgUp은 한 페이지씩.
+        let before = w.scroll();
+        w.on_event(
+            &InputEvent::Key {
+                key: Key::PageUp,
+                shift: false,
+                primary: false,
+            },
+            &mut inv,
+        );
+        assert!(w.scroll() > before);
+        // 새 메시지 도착 = 최신으로 스냅.
+        w.push_line(
+            ChatLine {
+                mine: false,
+                text: nbeep_core::sanitize_message("새 메시지"),
+            },
+            &mut inv,
+        );
+        assert_eq!(w.scroll(), 0, "새 메시지 = 하단 스냅");
+    }
+
+    #[test]
+    fn scroll_clamped_to_history() {
+        let (mut w, mut inv) = widget();
+        for i in 0..3 {
+            w.push_line(
+                ChatLine {
+                    mine: true,
+                    text: nbeep_core::sanitize_message(&format!("m{i}")),
+                },
+                &mut inv,
+            );
+        }
+        // 3줄뿐이고 화면이 더 크면 스크롤 불가(상한 0).
+        for _ in 0..10 {
+            wheel_up(&mut w, &mut inv);
+        }
+        assert_eq!(w.scroll(), 0, "짧은 대화는 스크롤 상한 0");
     }
 
     #[test]
