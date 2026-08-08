@@ -3,7 +3,13 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
-> **갱신: 2026-08-08 26차 (KST)** — **M1-4 슬라이스 1 — 첫 실물 소켓 + 실증 3건**(`feat/m1-udp` → main 병합 · socket2 사용자 승인):
+> **갱신: 2026-08-08 27차 (KST)** — **M1-4 슬라이스 2·3 — LocalDirect 실물 종단 + GUI 실물 발견**(`feat/m1-localdirect` → main 병합):
+> ① **`LocalDirect` 실물 전송** — `TcpLink`(길이 접두 프레이밍·폴 타임아웃 · `TimedOut` = "끊김"과 "지금 없음" 분리) + `UdpDiscovery`(발견)를 `Transport` 트레이트로 묶음. **InMemory fake가 서 있던 자리에 그대로**([09] 회수 · 상위 코드 불변).
+> ② ★ **실물 종단 왕복 실증** — `--live-echo` 헤드리스로 **발견→TCP→Noise 핸드셰이크→암호화 대화 왕복**이 맥 2프로세스 + **Docker 컨테이너 2노드**(c3674cc4↔9db62201 양방향) 동작. InMemory 데모가 아니라 **진짜 소켓·진짜 암호화**.
+> ③ **GUI 실물 발견 배선** — 창 `transport`를 `Box<dyn Transport>`로(조립 지점 한 줄 교체). **`--window --live`** = 같은 LAN·컨테이너 실제 상대가 목록에 뜨고 클릭 시 진짜 세션. 인바운드 수락 펌프·상태바 모드 표시. ⚠️ **수신 실시간 GUI 반영은 M2-7**(비동기 수신 펌프 — 지금은 개시자 동기 왕복만 표시).
+> 원장 socket2 등재. **157테스트 green** · 릴리스 0.82MB. [journal/2026-08-08.md](journal/2026-08-08.md).
+>
+> **직전(08-08 26차)** — **M1-4 슬라이스 1 — 첫 실물 소켓 + 실증 3건**(`feat/m1-udp` → main 병합 · socket2 사용자 승인):
 > ① **`UdpDiscovery`(S2 IPv4 멀티캐스트)** — InMemory fake만 있던 프로젝트의 **첫 실물 네트워크 코드**. 자기 패킷은 **주소가 아니라 키로 필터**(REUSEPORT 다중 인스턴스가 정상 시나리오) · 기동 HELLO + 주기 ANNOUNCE(주기 주입) · 드롭 시 GOODBYE 2회(FR-D-8) · 그룹 239.255.77.77·포트 47100·TTL 1은 **잠정 상수 명시**(D-8b 실측 확정).
 > ② **실증 3건**(추정 금지·실측 필수) — 맥 2인스턴스 상호 발견(`--ignored` 테스트) · 맥 프로브 2프로세스(실 LAN 주소 Hello·Announce 왕복) · ★ **Docker Linux 컨테이너 2노드 교차 발견**(172.18.0.2↔0.3 상호 SAW — **실물 NXBP 와이어의 테스트베드 동작 = D-8a-Linux 실증**).
 > ③ `--discover-probe [초]` 헤드리스 프로브(D-8a/D-8b 공용) + `CloneWatch` 배선(복제 키 관측 = ⚠️CLONE). 원장 socket2 등재(서브트리 libc뿐).
