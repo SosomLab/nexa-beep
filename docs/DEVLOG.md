@@ -7,6 +7,8 @@
 
 ## 2026-08-08
 
+- **S1 IPv6 멀티캐스트 발견 — best-effort 병행**(feat/m1-ipv6): `UdpDiscovery`가 IPv6 소켓 쌍(전용 recv/send·`IPV6_V6ONLY`·`ff02::beb` 링크로컬 그룹 기본 인터페이스 가입)을 추가해 S1+S2+S3를 **동시 발신**(`send_all`). IPv6 셋업 실패(미지원 환경)는 `.ok()`로 **조용히 IPv4만** — 회귀 없음. 이로써 M1-4의 "S1~S3 동시 시도"가 코드로 완성. 로컬 프로브 2개 발견 정상(IPv4 경로 우선 도달 — 둘 다 발신). ⚠️ IPv6 단독 전달·링크로컬 인터페이스 정밀 선택 검증은 D-8b(S3와 같은 한계). 159테스트 green. 상세 [journal/2026-08-08.md](journal/2026-08-08.md).
+
 - **S3 IPv4 브로드캐스트 발견 폴백**(feat/m1-broadcast): `UdpDiscovery`가 HELLO/ANNOUNCE/GOODBYE를 **S2 멀티캐스트 + S3 브로드캐스트(255.255.255.255) 동시 발신**(`SO_BROADCAST`). 멀티캐스트를 막는 기업 Wi-Fi에서도 브로드캐스트로 발견되게 하는 폴백([06 §4]). 수신 소켓은 `0.0.0.0:PORT` 바인딩이라 **둘 다 같은 소켓으로 수신**, 같은 peer 이중 관측은 PeerTable이 병합(FR-D-6). 발견 정상(맥 프로브 2개)·clippy clean. ⚠️ "멀티캐스트 차단 시 브로드캐스트 대체" 자체 검증은 통제된 망 필요(D-8b). 159테스트 green. 상세 [journal/2026-08-08.md](journal/2026-08-08.md).
 
 - **R-16 GUI 종료 훅 — SIGTERM 0.28초 정상 종료**(feat/r16-shutdown): `plat::shutdown`을 winit 앱에 배선 — `about_to_wait`가 종료 요청 시 `el.exit()` → `run_app` 반환 → App/transport(LocalDirect) **Drop 체인이 GOODBYE 발신·소켓/스레드 정리**. ControlFlow에 **~5Hz 폴 간격**을 둬 유휴에도 깨어나 종료 신호·발견 갱신을 처리한다(입력 없을 때도 목록이 산다 — 잠재 버그 겸수정). 스모크: `--window --live`에 SIGTERM → **0.28초** 정상 종료. 이로써 R-16이 헤드리스+GUI 양쪽에서 닫힘. 159테스트 green. 상세 [journal/2026-08-08.md](journal/2026-08-08.md).
