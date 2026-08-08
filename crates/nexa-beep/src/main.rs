@@ -727,6 +727,15 @@ mod app_window {
             }
         }
 
+        /// 이 창에 현재 열린 대화 상대(있으면) — IME 프리에딧 라우팅용.
+        fn chat_peer_for(&self, id: WindowId) -> Option<PeerId> {
+            match self.windows.get(&id).map(|e| e.role) {
+                Some(Role::Chat(peer)) => Some(peer),
+                Some(Role::Main) => self.single_open,
+                _ => None,
+            }
+        }
+
         /// `peer` 대화가 보이는 창을 다시 그린다(Separate = 그 창, Single = 주 창이 이 대화일 때).
         fn redraw_conversation(&self, peer: PeerId) {
             match self.mode {
@@ -1367,6 +1376,16 @@ mod app_window {
                     }
                     self.layout_window(id);
                     self.request_redraw(id);
+                }
+                WindowEvent::Ime(winit::event::Ime::Preedit(text, _)) => {
+                    // 조합 중 — 활성 대화 뷰에 프리에딧 반영(M3-3).
+                    if let Some(peer) = self.chat_peer_for(id) {
+                        let mut inv = Invalidations::default();
+                        if let Some(chat) = self.chats.get_mut(&peer) {
+                            chat.set_preedit(text, &mut inv);
+                        }
+                        self.request_redraw(id);
+                    }
                 }
                 WindowEvent::Ime(winit::event::Ime::Commit(text)) => {
                     let now_ms = self.now_ms();
