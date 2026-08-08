@@ -54,6 +54,13 @@ pub trait DrawCtx {
         let _ = (rect, radius, color);
     }
 
+    /// 라운드 사각형 AA 채움 + **불투명도**(`alpha` 0..=1 — 반투명 스크롤바 등).
+    /// 기본 = 알파 무시하고 [`Self::fill_round_rect`] 위임(테스트 백엔드).
+    fn fill_round_rect_alpha(&mut self, rect: Rect, radius: i32, color: Color, alpha: f32) {
+        let _ = alpha;
+        self.fill_round_rect(rect, radius, color);
+    }
+
     /// 라운드 사각형 AA 외곽선(폭 `width`px). 기본 = no-op.
     fn stroke_round_rect(&mut self, rect: Rect, radius: i32, color: Color, width: f32) {
         let _ = (rect, radius, color, width);

@@ -197,6 +197,21 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
         });
     }
 
+    fn fill_round_rect_alpha(&mut self, rect: Rect, radius: i32, color: Color, alpha: f32) {
+        if rect.is_empty() {
+            return;
+        }
+        let (cx, cy) = (
+            rect.x as f32 + rect.w as f32 / 2.0,
+            rect.y as f32 + rect.h as f32 / 2.0,
+        );
+        let (hw, hh) = (rect.w as f32 / 2.0, rect.h as f32 / 2.0);
+        let r = (radius as f32).min(hw).min(hh).max(0.0);
+        self.coverage_fill_alpha(rect, color, alpha, move |x, y| {
+            round_rect_sdf(x, y, cx, cy, hw, hh, r)
+        });
+    }
+
     fn stroke_round_rect(&mut self, rect: Rect, radius: i32, color: Color, width: f32) {
         if rect.is_empty() {
             return;

@@ -16,12 +16,14 @@
 pub mod checkbox;
 pub mod combo;
 pub mod radio;
+pub mod scroll;
 pub mod textbox;
 pub mod tree;
 
 pub use checkbox::Checkbox;
 pub use combo::{Combo, ComboControl, ComboItem, ExtendedCombo, PopupHit};
 pub use radio::{RadioGroup, RadioOption};
+pub use scroll::ScrollBars;
 pub use textbox::TextBox;
 pub use tree::{FlatRow, GridColumn, TreeControl, TreeGrid, TreeModel, TreeNode, TreeView};
 

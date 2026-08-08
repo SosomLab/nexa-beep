@@ -5,7 +5,7 @@
 
 use crate::controls::{
     Checkbox, Combo, ComboItem, Control, ExtendedCombo, GridColumn, LabelSide, RadioGroup,
-    RadioOption, TextBox, TreeGrid, TreeModel, TreeNode, TreeView,
+    RadioOption, ScrollBars, TextBox, TreeGrid, TreeModel, TreeNode, TreeView,
 };
 use crate::draw::{DrawCtx, FontSlot};
 use crate::event::InputEvent;
@@ -50,6 +50,8 @@ pub struct GalleryWidget {
     /// 콘텐츠 총 높이·폭(물리 px · 스크롤 클램프 근거).
     content_h: i32,
     content_w: i32,
+    /// 오버레이 스크롤바(세로+가로).
+    bars: ScrollBars,
     cb_right: Checkbox,
     cb_left: Checkbox,
     cb_only: Checkbox,
@@ -112,6 +114,7 @@ impl GalleryWidget {
             scroll_x: 0,
             content_h: 0,
             content_w: 0,
+            bars: ScrollBars::new(),
             cb_right,
             cb_left: Checkbox::new("Enable bug reporter", false).with_label_side(LabelSide::Left),
             cb_only: Checkbox::new("", true).with_label_side(LabelSide::None),
@@ -216,21 +219,27 @@ impl Widget for GalleryWidget {
     }
 
     fn on_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
-        // 세로/가로 스크롤(휠 · 트랙패드). delta는 WHEEL_DELTA(120) 단위.
-        match *ev {
-            InputEvent::Wheel { delta } => {
-                self.scroll -= delta / 3;
-                self.clamp_scroll();
-                self.relayout(inv);
-                return;
-            }
-            InputEvent::HWheel { delta } => {
-                self.scroll_x += delta / 3;
-                self.clamp_scroll();
-                self.relayout(inv);
-                return;
-            }
-            _ => {}
+        // 오버레이 스크롤바가 먼저 본다(휠·드래그·호버). 소비되면 콘텐츠로 넘기지 않는다.
+        let (nx, ny, consumed) = self.bars.on_event(
+            ev,
+            self.bounds,
+            self.content_w,
+            self.content_h,
+            self.scroll_x,
+            self.scroll,
+            self.scale,
+        );
+        if nx != self.scroll_x || ny != self.scroll {
+            self.scroll_x = nx;
+            self.scroll = ny;
+            self.relayout(inv);
+        }
+        // 마우스 이동/스크롤은 오버레이 표시가 바뀔 수 있으니 다시 그린다.
+        if consumed || matches!(ev, InputEvent::MouseMove { .. }) {
+            inv.push(self.bounds);
+        }
+        if consumed {
+            return;
         }
         // 클릭 시 포커스를 해당 컨트롤로 옮긴다(포커스 링 데모).
         if let InputEvent::MouseDown { x, y, .. } = *ev {
@@ -288,6 +297,17 @@ impl Widget for GalleryWidget {
         for w in widgets {
             w.paint(ctx, theme);
         }
+        // 오버레이 스크롤바(맨 위에 겹침).
+        self.bars.paint(
+            ctx,
+            theme,
+            self.bounds,
+            self.content_w,
+            self.content_h,
+            self.scroll_x,
+            self.scroll,
+            self.scale,
+        );
     }
 }
 

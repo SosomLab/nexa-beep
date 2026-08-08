@@ -1603,6 +1603,16 @@ mod app_window {
                         );
                     }
                 }
+                WindowEvent::MouseInput {
+                    state: ElementState::Released,
+                    button: MouseButton::Left,
+                    ..
+                } => {
+                    if let Some(e) = self.windows.get(&id) {
+                        let (x, y) = e.cursor;
+                        self.route(id, InputEvent::MouseUp { x, y }, el);
+                    }
+                }
                 WindowEvent::MouseWheel { delta, .. } => {
                     let (dx, dy) = match delta {
                         MouseScrollDelta::LineDelta(x, y) => {
