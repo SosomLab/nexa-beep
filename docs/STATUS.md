@@ -3,7 +3,13 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
-> **갱신: 2026-08-08 17차 (KST)** — **M3-1 슬라이스 1·2 — 위젯 체계 개시**(`feat/m3-widgets` → main 병합):
+> **갱신: 2026-08-08 18차 (KST)** — **실기 피드백 3건 반영 — 배율·한글 타입어헤드·Enter 피드백**(`feat/m3-dpi` → main 병합 · 맥 Retina + Windows 원격 실사):
+> ① **고DPI 배율**(FR-U-6 선행) — softbuffer 버퍼는 물리 px인데 폰트·행 높이가 논리 값이라 Retina에서 절반 크기였다. `RasterCtx::with_scale` + `PeerListWidget::set_scale`(행 높이·여백·**클릭 히트테스트**까지 물리 px 일관) + `ScaleFactorChanged` 구독(모니터 이동). 2배율 히트테스트 회귀 테스트 고정.
+> ② **한글 타입어헤드** — `set_ime_allowed` + IME `Commit` → `Char` 라우팅. **확정된 한글 동작**("김" → 김철수 점프). 조합 프리에딧 표시는 M3-3 `edit` 이식과 함께.
+> ③ **Enter 피드백** — 하단 상태바 신설(기본 안내 + "선택: … — 대화 열기(M2-7에서 연결)").
+> ⚠️ **미결(확정 대기)** — Windows 세션 실측: **유휴 RSS 28.5MB(예산 30MB의 95%)**, 원인 = 폰트 파일 12.84MB 힙 통째 로드(`fs::read`). 해결 = **`memmap2` 메모리 매핑**(MIT/Apache · 파일 백드 페이지로 힙 소거) — **새 의존성이라 사용자 확정 필요**(R-15 후보). **132테스트 green** · 릴리스 0.55MB. [journal/2026-08-08.md](journal/2026-08-08.md).
+>
+> **직전(08-08 17차)** — **M3-1 슬라이스 1·2 — 위젯 체계 개시**(`feat/m3-widgets` → main 병합):
 > ① **`nexa-gui` 인프라 이식**([12 §A](12-asset-reuse.md) 지정 자산 · 출처 커밋 명기) — `geom`(반열린 Rect) · `event`(**분수 노치 휠 누적기**·`now_ms` 주입 — 결정적 테스트) · `widget`(`Widget` 트레이트·`Invalidations` 교차 병합) · `theme`(토큰 체계+`danger`/`ok`/`warn` — 색 하드코딩 금지) · `draw`(`DrawCtx` 어휘 — dir2 전용 제외) · `typeahead`(반복 단일키 cycle).
 > ② **`RasterCtx` 신규** — 원본 백엔드(GDI/DirectWrite)와 **같은 어휘를 우리 CPU 래스터라이저로 재구현**(위젯은 백엔드를 모른다 — DR-21의 UI판 실증). AA 도형은 픽셀별 **SDF 커버리지**(라운드 사각형·타원·폴리라인) — 1비트 리전 클립 함정([12 §B] behind) 구조적 부재. gfx에 `draw_text_clipped`/`ascent`(행 배경+텍스트 1회 호출 모델).
 > ③ **`PeerListWidget`(첫 실물 위젯)** — 캐럿 탐색·클릭·휠·타입어헤드(표시 이름 순환)·Enter 활성화 폴링(`take_activated` — 컨트롤은 부모를 모른다). ★ **부분 무효화가 단언이 됐다** — 캐럿 이동 = 행 2개 rect만(FR-U-13 테스트 고정). bin은 winit→`InputEvent` 번역으로 **인터랙티브 데모**("김" 타이핑 점프·Enter 활성화). IME 조합은 M3-3.
