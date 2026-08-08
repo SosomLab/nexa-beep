@@ -7,6 +7,8 @@
 
 ## 2026-08-08
 
+- **M2-7 마무리 — 인바운드→GUI 대화 자동 생성**(feat/m2-recvpump): 인바운드가 백그라운드 에코이던 것을 **진짜 대화로 승격**. `spawn_inbound_accept`(수락 스레드는 **핸드셰이크만** 블로킹 수행 → 완성 세션을 `AppEvent::Inbound`로 GUI에 전달) + `user_event`가 메인 스레드에서 **TOFU 판정**(TrustStore가 여기 있다)→다중화→대화·뷰 생성. Separate=상대별 새 창, Single=목록 화면이면 열고 대화 중이면 알림(포커스 안 뺏음). 뷰 생성/창 생성 헬퍼(`install_conversation`/`build_chat_view`/`open_separate_window`)로 아웃바운드·인바운드 공용화. **두 live GUI가 서로를 발견·연결해 양방향 실시간 대화**가 성립(두 인스턴스 동시 기동 스모크 통과). 157테스트 green. 상세 [journal/2026-08-08.md](journal/2026-08-08.md).
+
 - **M2-7 비동기 수신 펌프 — 실시간 수신 GUI 반영**(feat/m2-recvpump): 개시자 동기 왕복이던 대화를 **세션 액터 모델**로 전환. snow `TransportState`가 read/write에 `&mut`를 요구해 한 세션은 한 스레드가 소유해야 하므로, **세션을 전용 스레드로 옮기고 송신은 채널·수신은 `EventLoopProxy`로 GUI를 깨우는** 정석 액터. ① `set_recv_timeout`을 전 계층 위임 신설(Link→Session→Noise/Plain/TrustedSession/MuxSession · TcpLink는 `set_read_timeout` 실구현) — 액터가 recv를 200ms 폴로 돌려 송신과 교대 ② winit `ApplicationHandler<AppEvent>`+`user_event`로 수신 메시지를 해당 대화 스레드에 실시간 push(중복은 `DedupIndex` 통과 — FR-M-9) ③ `Conversation`이 세션 대신 액터 송신 채널 보유(DR-26 상태-뷰 분리 유지). 헤드리스 종단 회귀·GUI live 기동 스모크 통과. 157테스트 green. 잔여 = 인바운드→GUI 대화 자동 생성(현재 인바운드는 백그라운드 에코). 상세 [journal/2026-08-08.md](journal/2026-08-08.md).
 
 - **M1-4 슬라이스 3 — GUI 실물 발견 배선(`--window --live`)**(feat/m1-localdirect): 창의 `transport`를 **`Box<dyn Transport>`** 로 바꿔 InMemory(데모·기본)↔LocalDirect(실물)를 **한 지점에서 교체**. `--window --live`면 같은 LAN·컨테이너의 **실제 상대가 목록에 뜨고** 클릭 시 진짜 Noise 세션으로 대화한다(발견=UDP 멀티캐스트·세션=TCP+Noise). 인바운드 수락 펌프(`spawn_inbound_echo`) 추가 — 남이 나에게 연결하면 accept+에코(대칭 대화 · GUI 실시간 수신 반영은 M2-7 비동기 펌프). 상태바에 `[실물 발견(LAN)]`/`[데모(에코 봇)]` 표시. 창 live 기동 스모크 통과 · LocalDirect 대칭 재확인. 157테스트 green · 릴리스 0.82MB. 상세 [journal/2026-08-08.md](journal/2026-08-08.md).
