@@ -84,7 +84,7 @@
 | **[ADR-0001](07-adr-0001-stack.md)** | 기술 스택(언어·렌더링 백엔드·플랫폼 계층) | ✅ **Accepted**(08-08) — Rust · 자체 CPU 래스터라이저 · 플랫폼 계층 P2 · Wayland+X11 · 시스템 폰트 |
 | **[ADR-0002](08-adr-0002-discovery-transport.md)** | 디스커버리·전송 프로토콜 + 키 교환/인증 | ✅ **Accepted**(08-08) — 자체 컴팩트 UDP · TCP 세션 · **Noise_XX** + TOFU. 타이밍은 D-8 실측 후 |
 | **[ADR-0003](09-adr-0003-transport-abstraction.md)** | 전송 추상화(4계층 경계) | ✅ **Accepted**(08-08 — **구현으로 비준**: M1-1 `Transport`/`Link`/`PeerHint`, M2-1a `Session`. 구현이 문서 모호함 1건을 정정 — `PeerHint`는 `Locator`를 담지 않는다) |
-| **[ADR-0004](11-adr-0004-quarantine.md)** | 수신 파일 무해화 — `.beepq` 컨테이너·위험 등급·승인 UX | 📐 **Proposed**(08-08) — 컨테이너 레이아웃 · 등급 4단계 확장자표 · 상태 기계(fail-closed) · 플랫폼 표식 API |
+| **[ADR-0004](11-adr-0004-quarantine.md)** | 수신 파일 무해화 — `.beepq` 컨테이너·위험 등급·승인 UX | ✅ **Accepted**(08-08 — 사용자 확정 · M4-1 컨테이너·위험 등급·상태 기계 구현 착수) — 컨테이너 레이아웃 · 등급 4단계 확장자표 · 상태 기계(fail-closed) · 플랫폼 표식 API |
 | **[ADR-0005](17-adr-0005-history-at-rest.md)** | 대화 기록 저장 암호화(at-rest) | 📐 **Proposed**(08-08) — 기기 키 파생 기본 + 승격 옵션 · 블라인드 인덱스 검색 · 크립토 셰레딩 |
 | **[ADR-0006](19-adr-0006-manual-endpoint.md)** | 수동 엔드포인트 등록(직접 IP로 노드 추가) | ✅ **Accepted**(08-08 — `Transport::add_endpoint` 구현·발견 우회 IP 연결·**맥↔docker-linux IP 대화 실증**. 원격 신뢰 등급·인바운드 요청 대기 세부는 M4/후속) |
 | **[ADR-0007](20-adr-0007-multi-device-identity.md)** | 다중 기기 신원(UserId 1:M PeerId) | ✅ **Accepted**(08-08) — 서명된 기기 목록 · 그룹 팬아웃 재사용 · **주 기기 + 복구 시드** · 기기 관리 화면 · **v1 제약 4건** |

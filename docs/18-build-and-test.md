@@ -58,6 +58,54 @@ docker run --rm --init -p 47200:47200 \
 
 > 실측 2026-08-08([journal](journal/2026-08-08.md)). ⚠️ **`--init`은 우회이지 해결이 아니다** — 앱 자체의 종료 경로 부재는 **FR-P-7 · R-16**으로 등록돼 있다. 정리가 안 될 때는 `docker stop <id>`(10초) 또는 `docker kill <id>`(즉시).
 
+### 2-2. 터미널로 사람 대 사람 대화 — `--chat-serve` / `--chat-connect`
+
+> GUI 없이 **stdin/stdout으로 실제 대화**한다. 세션 스택은 GUI와 **완전히 동일**(Noise_XX → 신원 확정 → 다중화 `StreamId::Chat`)하고 **프레젠테이션만 터미널**이다.
+
+| 역할 | 명령 | 하는 일 |
+|---|---|---|
+| **기다리는 쪽** | `nexa-beep --chat-serve [port]`(기본 47200) | `0.0.0.0:port` 바인딩 → **한 명** accept → Noise **responder** |
+| **거는 쪽** | `nexa-beep --chat-connect <host:port>` | DR-19 **수동 엔드포인트**(`add_endpoint`)로 직접 연결 → Noise **initiator** |
+
+연결 후 경로는 양쪽이 같다. **한 줄 입력 = 전송**(Enter) · 수신은 `<상대지문>> 메시지`로 실시간 출력 · **`Ctrl+D` = 종료**.
+본문은 출력 전 `sanitize_message`를 통과한다(RLO·제어문자 — FR-S-13).
+
+#### 상대가 "그 사람"인지 확인하는 법
+
+주소로 거는 것이지 **신원을 지정하는 게 아니다** — 신원은 **핸드셰이크가 확정**한다([21 P-5](21-identity-spec.md)). 양쪽 화면의 값을 **교차 대조**한다:
+
+```
+A쪽:  [대기] 47210 …  (me=5e578c85)      ← A의 지문
+      [대화 시작] 상대=8fd1123f           ← A가 본 B
+B쪽:  [연결] … (me=8fd1123f)             ← B의 지문
+      [대화 시작] 상대=5e578c85           ← B가 본 A
+```
+**A의 `me` == B의 `상대`** 이고 **B의 `me` == A의 `상대`** 면 서로가 의도한 상대와 붙은 것이다.
+
+> ⚠️ **이건 MITM 방어가 아니다.** `short()`는 앞 4바이트라 **표시용**이고([21 §3-1](21-identity-spec.md)) 육안 대조 수단은 **SAS 60자리**인데 **CLI 채팅에는 아직 배선되지 않았다**(M3-6).
+
+#### 컨테이너와 대화 (실측 2026-08-08)
+
+```bash
+# ① 컨테이너를 "기다리는 쪽"으로            -it = stdin · --init = R-16
+docker run --rm -it --init -p 47200:47200 \
+  -v "$PWD/.docker-target/release/nexa-beep:/nexa-beep:ro" \
+  debian:stable-slim /nexa-beep --chat-serve 47200
+
+# ② 맥에서 건다 (게시된 포트는 로컬호스트로 보인다)
+./target/release/nexa-beep --chat-connect 127.0.0.1:47200
+```
+반대 방향(맥이 기다리고 컨테이너가 걸기)이면 컨테이너에서 `--chat-connect host.docker.internal:<port>`.
+
+#### 알려진 제약
+
+| 제약 | 내용 |
+|---|---|
+| **1:1 전용** | `--chat-serve`는 `accept`를 **한 번만** 한다. 두 번째 상대는 붙지 못한다 |
+| **`Ctrl+C`로 끝나지 않는다** | 채팅 모드는 아직 **종료 포트(`plat::shutdown`)를 쓰지 않는다**(현재 `--discover-probe`·`--serve`·`--live-echo`만). **`Ctrl+D`로 종료**하고, 컨테이너는 `--init` 필수 → **R-16 · FR-P-7 · M3-13** |
+| **파이프 입력은 부적합** | stdin EOF가 즉시 오면 수신 스레드가 먼저 끝나 **받은 메시지를 못 본다**(실측). 사람이 직접 타이핑하는 전제 |
+| **발견을 거치지 않는다** | 주소 직접 연결(DR-19)이라 발견 목록에서 **이름으로 고르는 건 GUI**(`--window --live`)의 몫이다. 원격 신뢰 등급·SAS 전 파일 차단(FR-S-24)도 CLI에는 아직 없다 |
+
 ## 3. 규칙
 
 - **main은 항상 green** — 테스트·린트 통과 전 병합 금지.

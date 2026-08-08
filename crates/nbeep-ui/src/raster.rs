@@ -7,41 +7,60 @@
 
 use crate::draw::{DrawCtx, FontSlot};
 use crate::geom::Rect;
-use crate::theme::Color;
-use nbeep_gfx::{Font, Surface};
-
-/// 슬롯별 크기(px) — 임시 수치(M3-1c 확정 시 theme으로).
-const SIZE_BASE: f32 = 13.0;
-const SIZE_MESSAGE: f32 = 15.0;
-const SIZE_STATUS: f32 = 11.0;
+use crate::theme::{Color, FontPrefs, SlotFont};
+use nbeep_gfx::{Font, Surface, TextStyle};
 
 /// [`Surface`] + [`Font`] 위의 [`DrawCtx`] 구현체.
 #[allow(missing_debug_implementations)]
 pub struct RasterCtx<'s, 'b, 'f> {
     surface: &'s mut Surface<'b>,
     font: &'f Font,
-    size: f32,
-    /// 배율(고DPI — FR-U-6). 슬롯 크기에 곱한다. 좌표는 이미 물리 px(호출자 몫).
+    /// 영역별 글꼴 설정(사용자 설정).
+    prefs: FontPrefs,
+    /// 현재 선택된 슬롯 글꼴(select_font로 전환).
+    cur: SlotFont,
+    /// 배율(고DPI — FR-U-6). 크기에 곱한다. 좌표는 이미 물리 px(호출자 몫).
     scale: f32,
 }
 
 impl<'s, 'b, 'f> RasterCtx<'s, 'b, 'f> {
     /// 표면과 폰트로 컨텍스트를 만든다(기본 슬롯 = Base).
     pub fn new(surface: &'s mut Surface<'b>, font: &'f Font) -> Self {
+        let prefs = FontPrefs::default();
         Self {
             surface,
             font,
-            size: SIZE_BASE,
+            prefs,
+            cur: prefs.base,
             scale: 1.0,
         }
+    }
+
+    /// 사용자 글꼴 설정 지정.
+    #[must_use]
+    pub fn with_fonts(mut self, prefs: FontPrefs) -> Self {
+        self.prefs = prefs;
+        self.cur = prefs.base;
+        self
     }
 
     /// 배율 지정(창의 scale factor — 텍스트 크기에 반영).
     #[must_use]
     pub fn with_scale(mut self, scale: f32) -> Self {
         self.scale = scale.max(0.5);
-        self.size = SIZE_BASE * self.scale;
         self
+    }
+
+    /// 현재 슬롯의 물리 픽셀 크기.
+    fn px_size(&self) -> f32 {
+        self.cur.size * self.scale
+    }
+
+    fn cur_style(&self) -> TextStyle {
+        TextStyle {
+            bold: self.cur.bold,
+            italic: self.cur.italic,
+        }
     }
 
     fn clip_of(rect: Rect) -> (i32, i32, i32, i32) {
@@ -86,14 +105,14 @@ fn seg_dist(px: f32, py: f32, ax: f32, ay: f32, bx: f32, by: f32) -> f32 {
 }
 
 impl DrawCtx for RasterCtx<'_, '_, '_> {
-    fn select_font(&mut self, slot: FontSlot, _bold: bool) {
-        // bold 파생은 폰트 패밀리 확장(M3-3)에서 — 지금은 크기만 슬롯별.
-        self.size = self.scale
-            * match slot {
-                FontSlot::Base => SIZE_BASE,
-                FontSlot::Message => SIZE_MESSAGE,
-                FontSlot::Status => SIZE_STATUS,
-            };
+    fn select_font(&mut self, slot: FontSlot, bold: bool) {
+        self.cur = match slot {
+            FontSlot::Base => self.prefs.base,
+            FontSlot::Message => self.prefs.message,
+            FontSlot::Status => self.prefs.status,
+        };
+        // 인자 bold는 슬롯 설정 위 강제 볼드(예: 강조 라벨).
+        self.cur.bold |= bold;
     }
 
     fn fill_rect(&mut self, rect: Rect, color: Color) {
@@ -115,20 +134,22 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
     }
 
     fn text(&mut self, x: i32, y: i32, clip: Rect, text: &str, fg: Color) {
-        let baseline = y as f32 + self.font.ascent(self.size);
-        self.font.draw_text_clipped(
+        let size = self.px_size();
+        let baseline = y as f32 + self.font.ascent(size);
+        self.font.draw_styled(
             self.surface,
             x as f32,
             baseline,
-            self.size,
+            size,
             fg,
             text,
             Self::clip_of(clip),
+            self.cur_style(),
         );
     }
 
     fn text_width(&mut self, text: &str) -> i32 {
-        self.font.measure(text, self.size).ceil() as i32
+        self.font.measure(text, self.px_size()).ceil() as i32
     }
 
     fn fill_ellipse(&mut self, rect: Rect, color: Color) {

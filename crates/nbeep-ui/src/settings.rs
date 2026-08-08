@@ -59,6 +59,84 @@ pub fn registry() -> &'static [Entry] {
             kind: SettingKind::Radio(&[("dark", "다크"), ("light", "라이트")]),
             key: "ui.theme",
         },
+        Entry {
+            cat: "글꼴",
+            label: "기본 UI 크기",
+            desc: "기본 UI 영역의 글자 크기",
+            kind: SettingKind::Radio(&[
+                ("m", "보통"),
+                ("l", "크게"),
+                ("xl", "아주 크게"),
+                ("s", "작게"),
+            ]),
+            key: "font.base.size",
+        },
+        Entry {
+            cat: "글꼴",
+            label: "기본 UI 굵게",
+            desc: "기본 UI 영역을 굵게",
+            kind: SettingKind::Radio(&[("off", "보통"), ("on", "굵게")]),
+            key: "font.base.bold",
+        },
+        Entry {
+            cat: "글꼴",
+            label: "기본 UI 기울임",
+            desc: "기본 UI 영역을 기울임꼴로",
+            kind: SettingKind::Radio(&[("off", "곧게"), ("on", "기울임")]),
+            key: "font.base.italic",
+        },
+        Entry {
+            cat: "글꼴",
+            label: "대화 본문 크기",
+            desc: "대화 본문 영역의 글자 크기",
+            kind: SettingKind::Radio(&[
+                ("m", "보통"),
+                ("l", "크게"),
+                ("xl", "아주 크게"),
+                ("s", "작게"),
+            ]),
+            key: "font.message.size",
+        },
+        Entry {
+            cat: "글꼴",
+            label: "대화 본문 굵게",
+            desc: "대화 본문 영역을 굵게",
+            kind: SettingKind::Radio(&[("off", "보통"), ("on", "굵게")]),
+            key: "font.message.bold",
+        },
+        Entry {
+            cat: "글꼴",
+            label: "대화 본문 기울임",
+            desc: "대화 본문 영역을 기울임꼴로",
+            kind: SettingKind::Radio(&[("off", "곧게"), ("on", "기울임")]),
+            key: "font.message.italic",
+        },
+        Entry {
+            cat: "글꼴",
+            label: "상태바 크기",
+            desc: "상태바 영역의 글자 크기",
+            kind: SettingKind::Radio(&[
+                ("m", "보통"),
+                ("l", "크게"),
+                ("xl", "아주 크게"),
+                ("s", "작게"),
+            ]),
+            key: "font.status.size",
+        },
+        Entry {
+            cat: "글꼴",
+            label: "상태바 굵게",
+            desc: "상태바 영역을 굵게",
+            kind: SettingKind::Radio(&[("off", "보통"), ("on", "굵게")]),
+            key: "font.status.bold",
+        },
+        Entry {
+            cat: "글꼴",
+            label: "상태바 기울임",
+            desc: "상태바 영역을 기울임꼴로",
+            kind: SettingKind::Radio(&[("off", "곧게"), ("on", "기울임")]),
+            key: "font.status.italic",
+        },
     ]
 }
 
@@ -108,13 +186,13 @@ fn entry_matches(e: &Entry, toks: &[String]) -> bool {
 }
 
 /// 행 높이(px·논리) — 항목은 2줄(제목+설명).
-const ENTRY_H: i32 = 44;
-const HEADER_H: i32 = 26;
-const SEARCH_H: i32 = 30;
+const ENTRY_H: i32 = 50;
+const HEADER_H: i32 = 28;
+const SEARCH_H: i32 = 34;
 /// 좌측 사이드바 폭(논리 px) — 검색 + 카테고리 트리.
 const SIDEBAR_W: i32 = 140;
 /// 사이드바 트리 행 높이.
-const TREE_ROW_H: i32 = 26;
+const TREE_ROW_H: i32 = 30;
 
 /// 표시 행(레이아웃 결과).
 enum RowKind {
@@ -531,7 +609,7 @@ mod tests {
         w.on_event(
             &InputEvent::MouseDown {
                 x: 10,
-                y: 30 + 26 + 5,
+                y: SEARCH_H + TREE_ROW_H + 5, // 둘째 트리 행("모양")
                 shift: false,
                 primary: false,
             },

@@ -698,8 +698,10 @@ mod app_window {
         started: Instant,
         /// 주 창 하단 상태바 문구.
         status: String,
-        /// 설정 값(런타임 — 영속은 M2-5). `chat.window_mode`·`ui.theme`.
+        /// 설정 값(런타임 — 영속은 M2-5). `chat.window_mode`·`ui.theme`·`font.*`.
         settings: SettingsState,
+        /// 영역별 글꼴 설정(설정에서 파생 — 크기·굵기·기울임).
+        fonts: nbeep_ui::FontPrefs,
         /// 열린 설정 창의 뷰(설정 창은 항상 별도 OS 창 1개).
         settings_view: Option<SettingsWidget>,
         /// OS 주 수식키(⌘/Ctrl) 눌림 상태 — `Cmd/Ctrl+,` 판정.
@@ -977,6 +979,28 @@ mod app_window {
         }
 
         /// 설정 변경 즉시 적용(DR-24 — 저장 버튼 없음).
+        /// 설정 값에서 영역별 글꼴 설정을 만든다(크기 키 s/m/l/xl → px).
+        fn fonts_from_settings(settings: &SettingsState) -> nbeep_ui::FontPrefs {
+            let slot = |region: &str, base: f32| -> nbeep_ui::SlotFont {
+                let size = match settings.get(&format!("font.{region}.size")) {
+                    "s" => base - 2.0,
+                    "l" => base + 3.0,
+                    "xl" => base + 7.0,
+                    _ => base, // "m"·미설정 = 기본
+                };
+                nbeep_ui::SlotFont {
+                    size,
+                    bold: settings.get(&format!("font.{region}.bold")) == "on",
+                    italic: settings.get(&format!("font.{region}.italic")) == "on",
+                }
+            };
+            nbeep_ui::FontPrefs {
+                base: slot("base", 16.0),
+                message: slot("message", 18.0),
+                status: slot("status", 13.0),
+            }
+        }
+
         fn apply_settings(&mut self, changes: Vec<(&'static str, String)>) {
             for (key, value) in changes {
                 self.settings.set(key, value.clone());
@@ -997,6 +1021,13 @@ mod app_window {
                             Theme::dark()
                         };
                         // 전 창 다시 그리기.
+                        for e in self.windows.values() {
+                            e.window.request_redraw();
+                        }
+                    }
+                    k if k.starts_with("font.") => {
+                        self.fonts = Self::fonts_from_settings(&self.settings);
+                        self.status = "글꼴 설정 적용됨".into();
                         for e in self.windows.values() {
                             e.window.request_redraw();
                         }
@@ -1192,7 +1223,9 @@ mod app_window {
             let mut px =
                 nbeep_gfx::Surface::new(&mut buffer, size.width as usize, size.height as usize);
             px.fill(theme.window_bg);
-            let mut ctx = RasterCtx::new(&mut px, &self.font).with_scale(entry.scale);
+            let mut ctx = RasterCtx::new(&mut px, &self.font)
+                .with_fonts(self.fonts)
+                .with_scale(entry.scale);
             match entry.role {
                 Role::Main => {
                     if let Some(chat) = self.single_open.and_then(|p| self.chats.get(&p)) {
@@ -1616,6 +1649,7 @@ mod app_window {
             dedup: nbeep_core::DedupIndex::new(),
             started: Instant::now(),
             status: format!("[{net_hint}] {mode_hint} · ⌘/Ctrl+K = 주소 추가 · ⌘/Ctrl+, = 설정"),
+            fonts: App::fonts_from_settings(&settings),
             settings,
             settings_view: None,
             primary_down: false,

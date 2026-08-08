@@ -76,10 +76,10 @@ impl ChatViewWidget {
 
     /// 화면에 들어가는 스레드 줄 수(헤더·입력창 제외).
     fn visible_lines(&self) -> usize {
-        let head_h = self.s(30);
-        let input_h = self.s(34);
+        let head_h = self.s(34);
+        let input_h = self.s(40);
         let area = (self.bounds.h - head_h - input_h - self.s(6)).max(0);
-        (area / self.s(24).max(1)) as usize
+        (area / self.s(28).max(1)) as usize
     }
 
     /// 스크롤 상한(위로 최대 얼마나) — 안 넘는 범위로 조인다.
@@ -132,7 +132,7 @@ impl ChatViewWidget {
     }
 
     fn input_bar(&self) -> Rect {
-        let h = self.s(34);
+        let h = self.s(40);
         Rect::new(self.bounds.x, self.bounds.bottom() - h, self.bounds.w, h)
     }
 }
@@ -231,7 +231,7 @@ impl Widget for ChatViewWidget {
     fn paint(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
         ctx.fill_rect(self.bounds, theme.panel_bg);
         // 헤더.
-        let head_h = self.s(30);
+        let head_h = self.s(34);
         let head = Rect::new(self.bounds.x, self.bounds.y, self.bounds.w, head_h);
         ctx.select_font(FontSlot::Base, false);
         ctx.text_opaque(
@@ -245,7 +245,7 @@ impl Widget for ChatViewWidget {
 
         // 스레드 — 아래부터 최신(마지막 줄이 입력창 위).
         ctx.select_font(FontSlot::Message, false);
-        let line_h = self.s(24);
+        let line_h = self.s(28);
         let input = self.input_bar();
         let mut y = input.y - self.s(6) - line_h;
         // 하단에서 scroll개를 건너뛴다(위로 올려본 만큼 과거로).

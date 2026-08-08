@@ -113,3 +113,51 @@ mod tests {
         );
     }
 }
+
+/// 영역별 글꼴 설정 — 크기·굵기·기울임(사용자 설정 · FR-U 가독성).
+///
+/// 글꼴 **패밀리** 선택은 시스템 폰트 열거(M3-3 확장)가 필요해 v1은 시스템 1벌 위에서
+/// 크기·faux 굵기/기울임만 조정한다([docs/14 §5] 시각 언어 수치는 M3-1c에서 확정).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct SlotFont {
+    /// 글자 크기(논리 px).
+    pub size: f32,
+    /// 굵게(faux).
+    pub bold: bool,
+    /// 기울임(faux).
+    pub italic: bool,
+}
+
+/// 세 영역(기본·메시지·상태)의 글꼴 설정.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct FontPrefs {
+    /// 기본 UI(목록·버튼·헤더).
+    pub base: SlotFont,
+    /// 대화 본문.
+    pub message: SlotFont,
+    /// 상태바·보조.
+    pub status: SlotFont,
+}
+
+impl Default for FontPrefs {
+    /// 기본값 — **가독성 위해 상향**(구 13/15/11 → 16/18/13).
+    fn default() -> Self {
+        Self {
+            base: SlotFont {
+                size: 16.0,
+                bold: false,
+                italic: false,
+            },
+            message: SlotFont {
+                size: 18.0,
+                bold: false,
+                italic: false,
+            },
+            status: SlotFont {
+                size: 13.0,
+                bold: false,
+                italic: false,
+            },
+        }
+    }
+}
