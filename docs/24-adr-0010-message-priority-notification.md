@@ -27,11 +27,29 @@
 
 하나의 값으로 합치면 안 된다. 합치는 순간 *"소리를 낼지 말지"* 를 **상대가 결정**하게 된다.
 
+```mermaid
+flowchart LR
+    subgraph SND["발신자 측 — 요청(claim)"]
+        I["Importance<br/>Normal / Notice / Urgent"]
+    end
+    subgraph WIRE["와이어"]
+        B["봉투 1바이트"]
+    end
+    subgraph RCV["수신자 측 — 판정(policy)"]
+        T["신뢰 등급<br/>Verified / Pinned / Unverified"]
+        D["방해금지 · 대화별 설정"]
+        L["속도 제한 · 24h Urgent 횟수"]
+        P{"정책 결정"}
+        A["Alerting<br/>Silent / Badge / Toast / Alarm"]
+    end
+    I --> B --> P
+    T --> P
+    D --> P
+    L --> P
+    P --> A
 ```
-발신자:  Importance (중요도 표시)  ─── 요청(claim) ───►
-                                                        수신자 정책 ──► Alerting (실제 강도)
-수신자:  신뢰 등급 · 방해금지 · 대화별 설정 · 속도 제한 ─┘
-```
+
+> **와이어를 건너오는 것은 `Importance` 하나뿐**이고 `Alerting`은 **전송되지 않는 로컬 값**이다. 그래서 발신자는 내 스피커를 켤 수 없다.
 
 | | **Importance — 발신자가 붙인다** | **Alerting — 수신자에서 결정된다** |
 |---|---|---|
@@ -149,10 +167,27 @@
 
 ### 상태 기계
 
-```
-작성 ──► 보냄(Sent) ──► 전달됨(Delivered) ──► [수신자가 버튼] ──► 확인됨(Acknowledged)
-            │                  │
-            └─► 실패(Failed)   └─► 미전달(Undelivered · 상대 오프라인 → 오프라인 큐 FR-M-3)
+```mermaid
+stateDiagram-v2
+    [*] --> Sent: 작성·발신
+    Sent --> Delivered: 상대 기기가 봉투 수신<br/>(세션 ACK · 자동)
+    Sent --> Failed: 링크 실패
+    Sent --> Undelivered: 상대 오프라인<br/>→ 오프라인 큐(FR-M-3)
+    Undelivered --> Delivered: 재접속 후 전달
+    Delivered --> Acknowledged: ★ 수신자가 버튼을 누름<br/>(사람의 행위 · 자동 금지)
+    Failed --> [*]
+    Acknowledged --> [*]
+
+    note right of Delivered
+        여기까지가 "기기"의 사실.
+        Urgent인데 Delivered에 못 가면
+        발신자에게 강하게 알린다.
+    end note
+    note right of Acknowledged
+        여기부터가 "사람"의 의사.
+        Read(읽음)라는 중간 상태는
+        만들지 않는다.
+    end note
 ```
 
 > ⚠️ **`Urgent`인데 `Undelivered`면 발신자에게 강하게 알린다.** 요구 ①의 *"즉시 전달됨을 확인"* 은 **닿지 않았을 때 그것을 아는 것**까지 포함한다. v1은 릴레이가 없으므로 **상대 PC가 꺼져 있으면 방법이 없고**, 그 사실을 숨기지 않는 것이 유일하게 정직한 처리다.
@@ -205,14 +240,23 @@
 
 요구 ④의 *"본인이 직접 본인의 메시지 처리에 대한 의사 결정"* 을 **규칙 표 하나**로 표현한다. 룰 엔진을 만들지 않는다 — 조건 3개, 동작 2개로 고정한다.
 
-```
-조건                                          동작
-┌────────────────────────────┐               ┌─────────────────────────┐
-│ 등급   (Notice / Urgent)    │               │ 채널 집합 (다수 동시)     │
-│ 발신자 범위 (검증됨 / 특정   │  ──────────►  │ 채널별 노출 수준 (L0~L2) │
-│         상대 / 그룹 / 전체) │               └─────────────────────────┘
-│ 내 상태 (부재 N분 · 미확인) │
-└────────────────────────────┘
+```mermaid
+flowchart LR
+    subgraph COND["조건 — 3종 고정"]
+        C1["등급<br/>Notice / Urgent"]
+        C2["발신자 범위<br/>검증됨 / 특정 상대 / 그룹 / 전체"]
+        C3["내 상태<br/>부재 N분 · 미확인"]
+    end
+    R{"릴레이 규칙"}
+    subgraph ACT["동작 — 2종 고정"]
+        A1["채널 집합<br/>(다수 동시)"]
+        A2["채널별 노출 수준<br/>L0 / L1 / L2"]
+    end
+    C1 --> R
+    C2 --> R
+    C3 --> R
+    R --> A1
+    R --> A2
 ```
 
 | 예시 규칙 | 조건 | 채널 |
@@ -241,6 +285,23 @@
 | **F-8** | 어댑터는 **전부 같은 포트 뒤**(DR-21). 새 채널 추가 = **어댑터 1개**, 도메인 코드 변경 0 | [13 §2-4 규칙 7](13-code-design-standards.md) |
 | **F-9** | **채널별 성공·실패·억제를 계측**한다(횟수·결과만 · 목적지는 솔티드 해시) | [13 §6](13-code-design-standards.md) |
 
+```mermaid
+flowchart TB
+    E["AlertEnvelope<br/>(등급·시각·건수)"] --> F{{"relay_fanout<br/>병렬 · 채널별 타임아웃"}}
+    F --> W["Webhook 어댑터<br/>노출 L0"]
+    F --> M["SMTP 어댑터<br/>노출 L1"]
+    F --> X["…추가 어댑터<br/>(어댑터 1개 = 채널 1개)"]
+    W --> RW["✓ 성공"]
+    M --> RM["✗ 타임아웃"]
+    X --> RX["✓ 성공"]
+    RW --> O["RelayOutcome<br/>채널별 결과 — 부분 실패 정상"]
+    RM --> O
+    RX --> O
+    O --> U["앱 UI에 채널별 표시<br/>메일 ✓ / 웹훅 ✗"]
+```
+
+> ★ **`Recipients`(PeerId 집합) 팬아웃과 같은 모양**이다 — 원소가 `PeerId`에서 `RelayChannel`로 바뀌었을 뿐이라 개념이 늘지 않는다(FR-G-6 재사용).
+
 ```rust
 // nbeep-core (도메인) — 외부 크레이트 타입이 시그니처에 없다(DR-21 판정 질문)
 pub struct AlertEnvelope { level: Importance, at: Timestamp, count: u32,
@@ -266,6 +327,33 @@ pub fn relay_fanout(chs: &[&dyn RelayChannel], env: &AlertEnvelope) -> RelayOutc
 | 데스크톱 로컬 명령 실행 | ✗ | 임의 명령 실행은 공격면이 과하다. 필요하면 사용자가 webhook 수신처에서 한다 |
 | 모바일 푸시 | v2 | 푸시 서비스는 서버를 요구한다(`nexa-beepd`) |
 | 외부 메신저 **네이티브 연동** | ✗ | Webhook으로 충분하고, 각 사의 API 정책 변화가 우리 릴리스를 흔든다 |
+
+### 6-5b. 전체 흐름 — 도착부터 릴레이까지
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant S as 발신자
+    participant R as 내 PC (수신자)
+    participant U as 내 화면
+    participant CH as 외부 채널들
+
+    S->>R: 메시지 (Importance=Urgent)
+    R->>S: Delivered ACK (자동)
+    R->>R: 신뢰 등급 조회 → Alerting 판정
+    R->>U: Alarm — 소리 + 최상위 창(포커스 비강탈)
+
+    alt 사람이 자리에 있어 확인 버튼을 누름
+        U->>R: Acknowledged
+        R->>S: 확인됨 (사람의 의사)
+        Note over R,CH: 릴레이 없음 — 자리에 있으면 보내지 않는다
+    else N분간 부재 + 미확인
+        R->>R: 릴레이 규칙 평가<br/>(검증 상대? 부재? 미확인? 상한 내?)
+        R->>CH: 병렬 팬아웃 — 봉투만(L0 기본)
+        CH-->>R: 채널별 결과(부분 실패 허용)
+        R->>U: "메일 ✓ / 웹훅 ✗" 표시
+    end
+```
 
 ### 6-6. 남용 방지 — **목적이 아니어도 결과는 막아야 한다**(R-13)
 

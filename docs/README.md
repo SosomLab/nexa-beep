@@ -13,7 +13,9 @@
 2. **경쟁 지형** — [03 경쟁 프로그램 조사](03-competitive-landscape.md) : 국내·국외 유사 프로그램 기능표·장단점
 3. **안전 설계** — [04 안전 송수신](04-safe-transfer.md) : 페이로드 3종 + 수신 파일 무해화
 4. **무엇을 만드나** — [05 요구사항](05-requirements.md) : FR/NFR(예산 수치)/제약/리스크
-5. **핵심 결정** — [10 결정 기록](10-decision-record.md) : DR-1~20 + ADR 색인
+5. **핵심 결정** — [10 결정 기록](10-decision-record.md) : **DR-1~26** + **ADR 10종** 색인
+6. **무엇을 v1에 넣나** — [25 기능 범위](25-feature-scope.md) : 🅐입장권~🅔제외 5등급 · **v1.0 커트라인**
+7. **신원이 무엇인가** — [21 신원 규격](21-identity-spec.md) : `PeerId`/`UserId` 생성과 유일성
 6. **어떻게 짓나** — [01 아키텍처](01-architecture.md) → [02 로드맵](02-roadmap.md)
 7. **지금 상태** — [STATUS](STATUS.md) → [MILESTONES](MILESTONES.md)
 8. **진행 경과** — [DEVLOG](DEVLOG.md)(시간 역순) → 관심 날짜 [journal/](journal/)
@@ -25,8 +27,8 @@
 | [00 비전](00-vision.md) | ★ 문제 정의 · 경쟁 좌표 · 성공 기준 S-1~8 · 정직하게 어려운 것 V-1~6 |
 | [03 경쟁 프로그램 조사](03-competitive-landscape.md) | ★ 국내·국외 유사 프로그램 37종 · 기능 매트릭스 · 장단점 |
 | [04 안전 송수신 설계](04-safe-transfer.md) | ★ Text/Image/File 페이로드 · **수신 파일 무해화 4단계 게이트**(MotW·Gatekeeper·AMSI·CDR) |
-| [05 요구사항](05-requirements.md) | ★ FR 57건 · **NFR-B 예산 게이트(수치 확정)** · 제약 C-1~6 · 리스크 R-1~9 |
-| [10 결정 기록](10-decision-record.md) | ★ **DR-1~20** · ADR 색인 · 의존성/차용자산 원장 |
+| [05 요구사항](05-requirements.md) | ★ **FR 119건** · NFR 29건(**B 예산 게이트**) · 제약 C-1~6 · **리스크 R-1~15** |
+| [10 결정 기록](10-decision-record.md) | ★ **DR-1~26** · **ADR 10종 색인** · 의존성/차용자산 원장 |
 | [CLAUDE.md](../CLAUDE.md) | 이식용 프로젝트 메모리 |
 | [LICENSE](../LICENSE.md) · [한글](../LICENSE.ko.md) | PolyForm Noncommercial 1.0.0 — 의존성 퍼미시브 온리(DR-12) |
 
@@ -39,13 +41,15 @@
 | [06 네트워크 스택 L1~L4](06-network-stack.md) | ★ 계층별 저수준 설계 · 다단 발견 사다리(S1~S6) · **능력 등급 T0~T2** · 실측 항목 E-1~E-9 |
 | [07 ADR-0001 스택](07-adr-0001-stack.md) | ✅ **Accepted** — Rust · 자체 CPU 래스터라이저 · 플랫폼 계층 P2 · Wayland+X11 · 시스템 폰트 · **SP-1 스파이크** |
 | [08 ADR-0002 디스커버리·전송·암호](08-adr-0002-discovery-transport.md) | ✅ **Accepted** — 자체 컴팩트 UDP · TCP 세션 · **Noise_XX + TOFU** · 발견은 "미검증 힌트" |
-| [09 ADR-0003 전송 추상화](09-adr-0003-transport-abstraction.md) | 📐 **Proposed** — 4계층 경계 · `PeerId`/`Locator`/`Link`/`Session` · 인메모리 전송으로 네트워크 없는 테스트 |
+| [09 ADR-0003 전송 추상화](09-adr-0003-transport-abstraction.md) | ✅ **Accepted**(구현으로 비준) — 4계층 경계 · `PeerId`/`Locator`/`Link`/`Session` · 인메모리 전송으로 네트워크 없는 테스트 |
 | [11 ADR-0004 수신 무해화](11-adr-0004-quarantine.md) | 📐 **Proposed** — `.beepq` 레이아웃 · 위험 등급 4단계 확장자표 · 상태 기계(fail-closed) · MotW/quarantine API |
 | [19 ADR-0006 수동 엔드포인트 등록](19-adr-0006-manual-endpoint.md) | 📐 **Proposed** — 직접 IP/DDNS로 노드 추가 · **원격 신뢰 등급** · 인바운드 요청 대기 · 릴레이와의 경계 |
 | [17 ADR-0005 기록 저장 암호화](17-adr-0005-history-at-rest.md) | 📐 **Proposed** — 기기 키 파생 + 승격 옵션 · **블라인드 인덱스 검색** · **크립토 셰레딩** · 위협 모델 H-1~H-8 |
 | [20 ADR-0007 다중 기기 신원](20-adr-0007-multi-device-identity.md) | ✅ **Accepted** — **UserId 1:M PeerId** · 서명된 기기 목록 · **주 기기 + 오프라인 복구 시드** · **기기 관리 화면** · 폐기·롤백 방지 · v1 제약 4건 |
+| [22 ADR-0008 프로필 옵트인 노출](22-adr-0008-profile-disclosure.md) | ✅ **Accepted** — 본인이 노출 확인한 필드만 · **브로드캐스트에는 안 싣는다**(평문 수확·사칭) · 세션 경유 + 발견 직후 자동 프리페치 · 기본 전부 비노출 |
+| [23 ADR-0009 공유 폴더(가상경로·pull)](23-adr-0009-shared-folders.md) | ✅ **Accepted** — 가상 루트(**실경로 비노출**) · 읽기 전용 · **fail-closed 경로 해석**(정규화·조상 검사·심링크 거부) · scope 3종 · **pull도 동일 무해화 게이트** |
 | [24 ADR-0010 메시지 등급·알림·수신확인·수신자 릴레이](24-adr-0010-message-priority-notification.md) | 📐 **Proposed** — 등급 3종은 **발신자의 요청**·강도는 **수신자 판정**(신뢰 게이트) · 미리보기 규칙 · **수동 수신확인**("읽음" 없음) · ★ **수신자 릴레이**(내 규칙으로 내 채널에 · 외부에도 봉투만 · **다중 어댑터 동시 팬아웃**) · Webhook 우선 |
-| [25 기능 범위 — 추천 feature list](25-feature-scope.md) | ★ **경쟁 매트릭스 × FR 118건 대조** — 입장권🅐/정체성🅑/경쟁채택🅒/사용자확장🅓/제외🅔 · 🔴 **v1.0 커트라인 94→65건 제안** · ★ **표에 칸조차 없는 것이 우리 차별화** |
+| [25 기능 범위 — 추천 feature list](25-feature-scope.md) | ★ **경쟁 매트릭스 × FR 119건 대조** — 입장권🅐/정체성🅑/경쟁채택🅒/사용자확장🅓/제외🅔 · 🔴 **v1.0 커트라인 94→65건 제안** · ★ **표에 칸조차 없는 것이 우리 차별화** |
 | [21 신원 규격 — PeerId·UserId](21-identity-spec.md) | ★ **생성 절차 · 설계 원칙 P-1~8 · `PeerId` 유일성 3층(U-1~3)** · 하드웨어 파생을 쓰지 않는 5가지 이유 · 🔴 **키 파일 복제 미해결** |
 | [12 차용 자산 실측 평가](12-asset-reuse.md) | ★ **`ctl` 재사용 불가 판정**(HWND 모델) · 실제 자산은 `nexa-gui` 인프라 1,187 LOC · R-3 재평가 |
 | [13 코드 설계 표준](13-code-design-standards.md) | ★★ 모듈화 · 포트&어댑터 · **`ActionKind` 단일 통로** · **인터셉터** · **사용 계측 레저** · 코드 리뷰 체크리스트 |
@@ -62,7 +66,7 @@
 | **06** | 네트워크 스택 L1~L4 | ✅ |
 | **07** | **ADR-0001 스택** | ✅ Accepted |
 | **08** | **ADR-0002 디스커버리/전송/암호** | ✅ Accepted |
-| **09** | **ADR-0003 전송 추상화** | 📐 Proposed |
+| **09** | **ADR-0003 전송 추상화** | ✅ Accepted(구현으로 비준) |
 | **10** | 결정 기록(DR·ADR 색인) | ✅ |
 | **11** | **ADR-0004 수신 무해화** | 📐 Proposed |
 | **12** | 차용 자산 실측 평가 | ✅ |
@@ -76,6 +80,7 @@
 | **23** | **ADR-0009 공유 폴더(가상경로·pull)** | ✅ Accepted |
 | **24** | **ADR-0010 메시지 등급·알림·수신확인·수신자 릴레이** | 📐 Proposed |
 | **25** | **기능 범위 — 추천 feature list · v1.0 커트라인** | 🔴 확정 대기 |
+| **26~** | *(미배정)* | 신규 문서는 여기부터 |
 | **15 · 16 · 18** | 개발 방법론 · 문서/git 규약 · 빌드&테스트 | ✅ |
 
 ## ③ 진행 경과 · 할 일

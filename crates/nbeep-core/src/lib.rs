@@ -16,6 +16,7 @@ pub mod action;
 pub mod chat;
 pub mod identity;
 pub mod link;
+pub mod linkwatch;
 pub mod mux;
 pub mod name;
 pub mod peers;
@@ -35,6 +36,7 @@ pub use action::{ActionKind, FailCode, Outcome, RejectCode, RiskLevel, ScanOutco
 pub use chat::{fanout, ChatMessage, DedupIndex, FanoutReport, MessageBody, Sequencer, WireError};
 pub use identity::{DeviceId, PeerId, Recipients, TrustLevel, UserId};
 pub use link::{Link, LinkError};
+pub use linkwatch::{Debouncer, LinkEvent};
 pub use mux::{MuxSession, StreamId};
 pub use name::{DisplayName, NameError};
 pub use peers::{DepartReason, PeerEntry, PeerEvent, PeerTable, SourceId};
