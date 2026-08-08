@@ -59,6 +59,14 @@ fn main() {
         chat_interactive(ChatRole::Connect(addr));
         return;
     }
+    if let Some(pos) = args.iter().position(|a| a == "--chat-live") {
+        let name = args
+            .get(pos + 1)
+            .cloned()
+            .unwrap_or_else(|| "터미널".into());
+        chat_live(&name);
+        return;
+    }
     let open_window = args.iter().any(|a| a == "--window");
     let separate = args.iter().any(|a| a == "--separate-windows");
     let live = args.iter().any(|a| a == "--live");
@@ -71,7 +79,7 @@ fn main() {
         app_window::run(mode, live);
     } else {
         println!(
-            "nexa-beep {} — scaffold (창 `--window [--live]` · 발견 `--discover-probe [초]` · 수동 `--serve`/`--connect` · 인터랙티브 채팅 `--chat-serve [port]`/`--chat-connect <host:port>`)",
+            "nexa-beep {} — scaffold (창 `--window [--live]` · 발견 `--discover-probe [초]` · 수동 `--serve`/`--connect` · 인터랙티브 `--chat-serve [port]`/`--chat-connect <host:port>`/`--chat-live [이름]`(GUI 목록에 뜸))",
             env!("CARGO_PKG_VERSION")
         );
     }
@@ -242,10 +250,6 @@ enum ChatRole {
 /// (`-it`)과 맥 GUI/터미널이 사람 대 사람으로 양방향 대화한다. 세션 스택은 GUI와 동일
 /// (Noise→TOFU→다중화) — 프레젠테이션만 stdin/stdout.
 fn chat_interactive(role: ChatRole) {
-    use nbeep_core::mux::{MuxSession, StreamId};
-    use nbeep_core::{ChatMessage, MessageBody, Sequencer, Session as _};
-    use std::io::BufRead as _;
-
     let identity = nbeep_crypto::Identity::generate();
 
     // 역할별로 Link 하나를 얻는다(서버=accept, 클라=connect). 이후 경로는 100% 같다.
@@ -291,24 +295,34 @@ fn chat_interactive(role: ChatRole) {
         ChatRole::Serve(_) => nbeep_crypto::NoiseSession::accept(link, &identity),
         ChatRole::Connect(_) => nbeep_crypto::NoiseSession::initiate(link, &identity),
     };
-    let mut session = match session {
+    let session = match session {
         Ok(s) => s,
         Err(e) => {
             eprintln!("[실패] 핸드셰이크: {e}");
             return;
         }
     };
+    run_interactive(session, identity.peer_id());
+}
+
+/// 수립된 세션 위 **인터랙티브 대화 루프** — stdin 라인 = 전송, 수신은 실시간 출력, Ctrl+D 종료.
+/// serve/connect/live가 공용(세션 출처만 다르고 대화는 같다).
+fn run_interactive<L: nbeep_core::Link + 'static>(
+    mut session: nbeep_crypto::NoiseSession<L>,
+    me: PeerId,
+) {
+    use nbeep_core::mux::{MuxSession, StreamId};
+    use nbeep_core::{ChatMessage, MessageBody, Sequencer, Session as _};
+    use std::io::BufRead as _;
+
     let peer = session.peer();
     println!(
         "[대화 시작] 상대={} · 한 줄 입력 = 전송, Ctrl+D = 종료",
         peer.short()
     );
-
-    // 수신 스레드: 세션을 소유하고 recv를 폴하며 도착분을 출력한다(액터와 같은 이유 — 한 세션 1스레드).
-    // 송신은 채널로 요청받아 교대한다.
+    // 수신 스레드: 세션 소유·recv 폴·도착 출력(액터 — 한 세션 1스레드). 송신은 채널 교대.
     session.set_recv_timeout(Some(std::time::Duration::from_millis(150)));
     let (out_tx, out_rx) = std::sync::mpsc::channel::<Vec<u8>>();
-    let me = identity.peer_id();
     let net = std::thread::spawn(move || {
         let mut mux = MuxSession::new(session);
         loop {
@@ -321,7 +335,7 @@ fn chat_interactive(role: ChatRole) {
                         }
                     }
                     Err(std::sync::mpsc::TryRecvError::Empty) => break,
-                    Err(std::sync::mpsc::TryRecvError::Disconnected) => return, // stdin 종료
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
                 }
             }
             match mux.recv(StreamId::Chat) {
@@ -341,8 +355,6 @@ fn chat_interactive(role: ChatRole) {
             }
         }
     });
-
-    // 메인: stdin 라인 → 발신 봉투 → 채널.
     let mut seq = Sequencer::new();
     let stdin = std::io::stdin();
     for line in stdin.lock().lines() {
@@ -359,9 +371,42 @@ fn chat_interactive(role: ChatRole) {
             break;
         }
     }
-    drop(out_tx); // Ctrl+D — 수신 스레드도 종료
+    drop(out_tx);
     let _ = net.join();
     println!("[끝]");
+}
+
+/// **발견 가능한 인터랙티브 클라이언트**(`--chat-live [이름]`) — LocalDirect로 **발견 광고**(GUI
+/// 목록에 뜬다) + 첫 인바운드(GUI가 클릭해 연결) 수락 → 인터랙티브 대화. 실행 중인 `--window --live`
+/// GUI를 터미널에서 붙어 테스트하는 용도.
+fn chat_live(name: &str) {
+    use nbeep_net::Transport as _;
+    let identity = nbeep_crypto::Identity::generate();
+    let mut instance = [0u8; 16];
+    instance.copy_from_slice(&nbeep_crypto::Identity::generate().peer_id().as_bytes()[..16]);
+    let display = nbeep_core::DisplayName::parse(name)
+        .unwrap_or_else(|_| nbeep_core::DisplayName::parse("chat-live").expect("라벨"));
+    let transport =
+        match nbeep_net::LocalDirect::spawn(identity.peer_id(), instance, display, 800, 1) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("[실패] 전송 시작: {e}");
+                return;
+            }
+        };
+    println!(
+        "[대기] '{name}'(me={}) 로 발견 광고 중 — 실행 중인 GUI(--window --live) 목록에서 클릭하세요…",
+        identity.peer_id().short()
+    );
+    let incoming = transport.incoming();
+    let Ok(link) = incoming.recv() else {
+        eprintln!("[실패] 인바운드 없음");
+        return;
+    };
+    match nbeep_crypto::NoiseSession::accept(link, &identity) {
+        Ok(session) => run_interactive(session, identity.peer_id()),
+        Err(e) => eprintln!("[실패] 핸드셰이크: {e}"),
+    }
 }
 
 /// 실물 종단(M1-4 · D-8a) — LocalDirect로 발견→연결→Noise→대화 왕복을 헤드리스로 검증한다.
