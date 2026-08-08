@@ -7,6 +7,8 @@
 
 ## 2026-08-08
 
+- **S3 IPv4 브로드캐스트 발견 폴백**(feat/m1-broadcast): `UdpDiscovery`가 HELLO/ANNOUNCE/GOODBYE를 **S2 멀티캐스트 + S3 브로드캐스트(255.255.255.255) 동시 발신**(`SO_BROADCAST`). 멀티캐스트를 막는 기업 Wi-Fi에서도 브로드캐스트로 발견되게 하는 폴백([06 §4]). 수신 소켓은 `0.0.0.0:PORT` 바인딩이라 **둘 다 같은 소켓으로 수신**, 같은 peer 이중 관측은 PeerTable이 병합(FR-D-6). 발견 정상(맥 프로브 2개)·clippy clean. ⚠️ "멀티캐스트 차단 시 브로드캐스트 대체" 자체 검증은 통제된 망 필요(D-8b). 159테스트 green. 상세 [journal/2026-08-08.md](journal/2026-08-08.md).
+
 - **R-16 GUI 종료 훅 — SIGTERM 0.28초 정상 종료**(feat/r16-shutdown): `plat::shutdown`을 winit 앱에 배선 — `about_to_wait`가 종료 요청 시 `el.exit()` → `run_app` 반환 → App/transport(LocalDirect) **Drop 체인이 GOODBYE 발신·소켓/스레드 정리**. ControlFlow에 **~5Hz 폴 간격**을 둬 유휴에도 깨어나 종료 신호·발견 갱신을 처리한다(입력 없을 때도 목록이 산다 — 잠재 버그 겸수정). 스모크: `--window --live`에 SIGTERM → **0.28초** 정상 종료. 이로써 R-16이 헤드리스+GUI 양쪽에서 닫힘. 159테스트 green. 상세 [journal/2026-08-08.md](journal/2026-08-08.md).
 
 - **R-16 정상 종료 경로 — docker stop 10.26→0.38초**(feat/r16-shutdown): `plat::shutdown`(DR-21 종료 포트 — Unix SIGINT/SIGTERM을 시그널 핸들러(async-signal-safe 원자 store)로 잡아 플래그화, 시그널 static→공유 플래그 브릿지 스레드) + 헤드리스 루프에 **깨우기 수단**(serve = 논블로킹 accept 폴, discover/live = 플래그 체크) — 블로킹에 갇혀 시그널을 놓치는 R-16 핵심을 닫음. **실측**: 컨테이너 `--serve`에 `docker stop` = 10.26초(SIGKILL 대기) → **0.38초**(SIGTERM 수신·"SERVE 종료(정상)"). 이제 종료 시 소켓/스레드가 정리되고(FR-D-8 GOODBYE 경로도 같은 훅으로), NFR-B-6 누수 종료 테스트의 훅이 생겼다. 잔여 = GUI 종료 훅 배선·zeroize(FR-S-22·M2-5)·Windows 콘솔 핸들러. 159테스트 green. 상세 [journal/2026-08-08.md](journal/2026-08-08.md).

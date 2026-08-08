@@ -1,7 +1,9 @@
 //! S2 — IPv4 멀티캐스트 발견(**첫 실물 소켓** · M1-4 슬라이스 1 · [docs/06 §4]).
 //!
-//! [`wire`](crate::wire) 패킷을 실제 UDP 멀티캐스트로 쏘고 받는다. S1(IPv6)·S3(브로드캐스트)·
-//! S4(유니캐스트 프로브)는 후속 슬라이스 — 폴백 사다리의 뼈대는 같고 소켓만 다르다.
+//! [`wire`](crate::wire) 패킷을 **S2(IPv4 멀티캐스트) + S3(IPv4 브로드캐스트) 동시**로 쏘고 받는다.
+//! 멀티캐스트를 막는 기업 Wi-Fi에서도 브로드캐스트로 발견되게 하는 폴백([docs/06 §4]). 수신
+//! 소켓은 `0.0.0.0:PORT` 바인딩이라 **둘 다 같은 소켓으로 받는다**(같은 peer 이중 관측은 PeerTable이
+//! 병합 — FR-D-6). S1(IPv6)·S4(유니캐스트)는 후속.
 //!
 //! - **자기 패킷 필터** — 멀티캐스트는 루프백된다. **키(`PeerId`)로 거른다**([docs/08 §5] —
 //!   주소·포트가 아니라 신원 기준. 같은 호스트의 다른 인스턴스는 걸러지지 않아야 한다).
@@ -24,6 +26,8 @@ use std::time::Duration;
 pub const MULTICAST_GROUP: Ipv4Addr = Ipv4Addr::new(239, 255, 77, 77);
 /// 발견 포트(잠정 — D-8b).
 pub const DISCOVERY_PORT: u16 = 47_100;
+/// S3 브로드캐스트 목적지(제한 브로드캐스트 — 서브넷 무관 · 라우터는 넘지 않음).
+const BROADCAST: Ipv4Addr = Ipv4Addr::new(255, 255, 255, 255);
 /// 멀티캐스트 TTL(잠정 — 링크 로컬 1홉. 라우팅 확장은 S6/릴레이 몫).
 const TTL: u32 = 1;
 /// 수신 폴링 간격(정지 플래그 확인용).
@@ -77,6 +81,7 @@ impl UdpDiscovery {
         let send_sock = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))?;
         send_sock.set_multicast_ttl_v4(TTL)?;
         send_sock.set_multicast_loop_v4(true)?;
+        send_sock.set_broadcast(true)?; // S3 — 멀티캐스트 차단 폴백
 
         let template = Packet {
             kind: PacketKind::Announce,
@@ -127,6 +132,16 @@ impl UdpDiscovery {
         SocketAddrV4::new(MULTICAST_GROUP, DISCOVERY_PORT)
     }
 
+    fn broadcast_dest() -> SocketAddrV4 {
+        SocketAddrV4::new(BROADCAST, DISCOVERY_PORT)
+    }
+
+    /// S2 멀티캐스트 + S3 브로드캐스트 동시 발신(둘 중 하나만 통과해도 발견 성립).
+    fn send_both(sock: &UdpSocket, bytes: &[u8]) {
+        let _ = sock.send_to(bytes, Self::dest());
+        let _ = sock.send_to(bytes, Self::broadcast_dest());
+    }
+
     fn spawn_announcer(
         sock: UdpSocket,
         mut template: Packet,
@@ -138,7 +153,7 @@ impl UdpDiscovery {
             // 기동 직후 HELLO(응답 유도) 1회, 이후 주기 ANNOUNCE.
             template.kind = PacketKind::Hello;
             template.seq = seq.fetch_add(1, Ordering::Relaxed);
-            let _ = sock.send_to(&template.encode(), Self::dest());
+            Self::send_both(&sock, &template.encode());
             template.kind = PacketKind::Announce;
             let step = Duration::from_millis(100);
             let mut waited = Duration::ZERO;
@@ -151,7 +166,7 @@ impl UdpDiscovery {
                 if waited >= Duration::from_millis(u64::from(announce_ms)) {
                     waited = Duration::ZERO;
                     template.seq = seq.fetch_add(1, Ordering::Relaxed);
-                    let _ = sock.send_to(&template.encode(), Self::dest());
+                    Self::send_both(&sock, &template.encode());
                 }
             }
         });
@@ -191,7 +206,7 @@ impl Drop for UdpDiscovery {
         bye.kind = PacketKind::Goodbye;
         for _ in 0..2 {
             bye.seq = self.seq.fetch_add(1, Ordering::Relaxed);
-            let _ = self.send_sock.send_to(&bye.encode(), Self::dest());
+            Self::send_both(&self.send_sock, &bye.encode());
         }
     }
 }
