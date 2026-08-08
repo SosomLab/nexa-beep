@@ -3,7 +3,13 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
-> **갱신: 2026-08-08 18차 (KST)** — **실기 피드백 3건 반영 — 배율·한글 타입어헤드·Enter 피드백**(`feat/m3-dpi` → main 병합 · 맥 Retina + Windows 원격 실사):
+> **갱신: 2026-08-08 19차 (KST)** — **폰트 메모리 매핑 — R-15 해소**(`feat/m3-fontmap` → main 병합 · 사용자 확정 *"메모리 매핑 방식으로 적용"*):
+> ① `fs::read` 힙 로드(mac 한글 TTC **55MB** · win 맑은 고딕 12.8MB)를 **memmap2 mmap**으로 교체 — 파일 백드 클린 페이지(사용 글리프만 상주 · 압박 시 스왑 아닌 **폐기** 회수). **실측(mac): 유휴 RSS 138.1 → 85.7MB(−51MB)**. ps RSS는 공유 포함 과대 — NFR-B-1 최종 판정은 phys_footprint 재실측(Windows 포함) 예정.
+> ② 매핑은 **의도적 누수**(`Box::leak`) — 폰트는 프로세스 수명 자원(로드 1회·종료까지)이라 해제 시점이 없고 `&'static [u8]`로 gfx에 넘어간다(자기참조 없음). mmap UB 조건(파일 변경)은 시스템 폰트 = 읽기 전용 OS 자산이라 비성립(SAFETY 명기). gfx `Font` = `FontRef<'static>` 기반 전환.
+> ③ 부수 — **plat→gfx 미사용 의존 제거**(계층 정리) · STATUS 9차 테스트 수 44→40 정정(Windows 세션 검증 건) · 원장 memmap2 등재(MIT/Apache).
+> ④ **"이전 바이너리" 소동 해명** — 맥·윈도우 화면의 상태바 부재는 **구 버전 프로세스/체크아웃**이 원인(맥 16:46 프로세스 종료 후 최신 빌드 재실행 · Windows는 pull 후 재빌드 필요). **132테스트 green**. [journal/2026-08-08.md](journal/2026-08-08.md).
+>
+> **직전(08-08 18차)** — **실기 피드백 3건 반영 — 배율·한글 타입어헤드·Enter 피드백**(`feat/m3-dpi` → main 병합 · 맥 Retina + Windows 원격 실사):
 > ① **고DPI 배율**(FR-U-6 선행) — softbuffer 버퍼는 물리 px인데 폰트·행 높이가 논리 값이라 Retina에서 절반 크기였다. `RasterCtx::with_scale` + `PeerListWidget::set_scale`(행 높이·여백·**클릭 히트테스트**까지 물리 px 일관) + `ScaleFactorChanged` 구독(모니터 이동). 2배율 히트테스트 회귀 테스트 고정.
 > ② **한글 타입어헤드** — `set_ime_allowed` + IME `Commit` → `Char` 라우팅. **확정된 한글 동작**("김" → 김철수 점프). 조합 프리에딧 표시는 M3-3 `edit` 이식과 함께.
 > ③ **Enter 피드백** — 하단 상태바 신설(기본 안내 + "선택: … — 대화 열기(M2-7에서 연결)").
