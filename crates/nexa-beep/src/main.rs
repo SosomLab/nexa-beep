@@ -1,49 +1,55 @@
 //! Nexa Beep 본체 — 진입·조립·생명주기.
 //!
-//! ⚠️ **M0-2 SP-1 스파이크 상태**([docs/07] §6 · [docs/15] "버릴 수 있는 실험").
-//! 지금은 **빈 창 + 픽셀 버퍼 표시**만으로 예산(R-8)을 실측한다 — winit(창·입력·IME) +
-//! softbuffer(픽셀 버퍼 present)는 ADR-0001 **P2**(얇은 창 라이브러리)의 후보다.
-//! 실제 발견/대화 배선은 M1+, 창 코드의 `nbeep-plat` 이관은 M3.
-//!
-//! `--window` 인자로 창을 띄운다(기본은 스캐폴드 출력 — 헤드리스 CI 안전).
-//! M1-6: 창 = **데모 피어 목록**(PeerTable+TrustStore 실물 도메인 경로 · 미검증 배지).
+//! `--window` = **피어 목록 위젯 데모**(M3-1 — PeerTable+TrustStore 실물 도메인 경로 위에
+//! `PeerListWidget` + `RasterCtx`). 캐럿 탐색·클릭·휠·타입어헤드·Enter 활성화가 동작한다.
+//! 실물 발견 배선은 M1-4, 창 코드의 `nbeep-plat` 이관은 M3-2.
+//! 기본 실행은 스캐폴드 출력(헤드리스 CI 안전).
 
-// SP-1 스파이크 바이너리 — 창 초기화 경로의 unwrap 허용(버릴 수 있는 실험).
+// 조립 지점 바이너리 — 창 초기화 경로의 unwrap 허용(docs/13 §9 — 복구 불가 구성 오류).
 #![allow(clippy::unwrap_used)]
 
 fn main() {
     let open_window = std::env::args().any(|a| a == "--window");
     if open_window {
-        spike_window::run();
+        app_window::run();
     } else {
         println!(
-            "nexa-beep {} — scaffold (창은 `--window`, SP-1 예산 실측용)",
+            "nexa-beep {} — scaffold (창은 `--window`)",
             env!("CARGO_PKG_VERSION")
         );
     }
 }
 
-/// SP-1 빈 창 — winit + softbuffer로 창 1개 + 어두운 배경 픽셀 버퍼 present.
-mod spike_window {
+/// 창 + 위젯 조립 — winit 이벤트를 `InputEvent`로 번역해 위젯에 라우팅.
+mod app_window {
     use std::num::NonZeroU32;
     use std::rc::Rc;
+    use std::time::Instant;
     use winit::application::ApplicationHandler;
-    use winit::event::WindowEvent;
+    use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
     use winit::event_loop::{ActiveEventLoop, EventLoop};
+    use winit::keyboard::{Key as WKey, NamedKey};
     use winit::window::{Window, WindowId};
 
-    type Surface = softbuffer::Surface<Rc<Window>, Rc<Window>>;
+    use nbeep_ui::{
+        InputEvent, Invalidations, Key, PeerListWidget, PeerRow, RasterCtx, Rect, Theme, Widget,
+    };
+
+    type SbSurface = softbuffer::Surface<Rc<Window>, Rc<Window>>;
 
     struct App {
         window: Option<Rc<Window>>,
-        surface: Option<Surface>,
+        surface: Option<SbSurface>,
         font: nbeep_gfx::Font,
-        rows: Vec<nbeep_ui::PeerRow>,
+        theme: Theme,
+        list: PeerListWidget,
+        cursor: (i32, i32),
+        started: Instant,
     }
 
-    /// 데모 목록 — PeerTable·TrustStore **실물 도메인 경로**로 만든다(그리기만 데모가 아니라
-    /// "발견 관측 → 목록 → 신뢰 배지"의 전체 조립을 검증). 실물 발견 배선은 M1-4.
-    fn demo_rows() -> Vec<nbeep_ui::PeerRow> {
+    /// 데모 목록 — **실물 도메인 경로**(PeerTable 관측→병합→TrustStore 판정)로 만든다.
+    /// 실물 발견(M1-4)은 이 관측 공급원만 교체한다.
+    fn demo_rows() -> Vec<PeerRow> {
         use nbeep_core::{
             DisplayName, MemoryTrustStore, MonoInstant, PeerId, PeerTable, SourceId, TrustStore,
         };
@@ -61,18 +67,41 @@ mod spike_window {
         table.observe(pid(1), name("김철수의 MacBook"), SourceId(1), now); // 다중 경로 병합
         table.observe(pid(2), name("DESKTOP-A7X3"), SourceId(0), now);
         table.observe(pid(3), name("이영희 (개발2팀)"), SourceId(0), now);
+        table.observe(pid(4), name("박민준"), SourceId(0), now);
+        table.observe(pid(5), name("bob-linux"), SourceId(0), now);
         trust.on_session(pid(1)); // 핀
         trust.on_session(pid(3));
         trust.verify(pid(3)); // SAS 대조 완료
+        trust.on_session(pid(4));
 
         table
             .list()
             .into_iter()
             .map(|entry| {
                 let t = trust.level(entry.peer);
-                nbeep_ui::PeerRow { entry, trust: t }
+                PeerRow { entry, trust: t }
             })
             .collect()
+    }
+
+    impl App {
+        fn route(&mut self, ev: InputEvent) {
+            let mut inv = Invalidations::default();
+            self.list.on_event(&ev, &mut inv);
+            if let Some(peer) = self.list.take_activated() {
+                // 대화 열기는 M2-7/M3 — 데모는 로그만.
+                println!("activated: {peer:?}");
+            }
+            if !inv.is_empty() {
+                if let Some(w) = &self.window {
+                    w.request_redraw();
+                }
+            }
+        }
+
+        fn now_ms(&self) -> u64 {
+            u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX)
+        }
     }
 
     impl ApplicationHandler for App {
@@ -80,7 +109,7 @@ mod spike_window {
             let attrs = Window::default_attributes().with_title("Nexa Beep");
             let window = Rc::new(el.create_window(attrs).unwrap());
             let context = softbuffer::Context::new(window.clone()).unwrap();
-            let surface = Surface::new(&context, window.clone()).unwrap();
+            let surface = SbSurface::new(&context, window.clone()).unwrap();
             self.window = Some(window);
             self.surface = Some(surface);
         }
@@ -88,6 +117,80 @@ mod spike_window {
         fn window_event(&mut self, el: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
             match event {
                 WindowEvent::CloseRequested => el.exit(),
+                WindowEvent::Resized(size) => {
+                    let mut inv = Invalidations::default();
+                    let w = i32::try_from(size.width).unwrap_or(i32::MAX);
+                    let h = i32::try_from(size.height).unwrap_or(i32::MAX);
+                    self.list.set_bounds(Rect::new(0, 0, w, h), &mut inv);
+                    if let Some(win) = &self.window {
+                        win.request_redraw();
+                    }
+                }
+                WindowEvent::CursorMoved { position, .. } => {
+                    self.cursor = (position.x as i32, position.y as i32);
+                    let (x, y) = self.cursor;
+                    self.route(InputEvent::MouseMove { x, y });
+                }
+                WindowEvent::MouseInput {
+                    state: ElementState::Pressed,
+                    button: MouseButton::Left,
+                    ..
+                } => {
+                    let (x, y) = self.cursor;
+                    self.route(InputEvent::MouseDown {
+                        x,
+                        y,
+                        shift: false,
+                        primary: false,
+                    });
+                }
+                WindowEvent::MouseWheel { delta, .. } => {
+                    let d = match delta {
+                        MouseScrollDelta::LineDelta(_, y) => (y * 120.0) as i32,
+                        MouseScrollDelta::PixelDelta(p) => (p.y * 120.0 / 38.0) as i32,
+                    };
+                    if d != 0 {
+                        self.route(InputEvent::Wheel { delta: d });
+                    }
+                }
+                WindowEvent::KeyboardInput { event, .. } => {
+                    if event.state != ElementState::Pressed {
+                        return;
+                    }
+                    let key = match &event.logical_key {
+                        WKey::Named(NamedKey::ArrowUp) => Some(Key::Up),
+                        WKey::Named(NamedKey::ArrowDown) => Some(Key::Down),
+                        WKey::Named(NamedKey::PageUp) => Some(Key::PageUp),
+                        WKey::Named(NamedKey::PageDown) => Some(Key::PageDown),
+                        WKey::Named(NamedKey::Home) => Some(Key::Home),
+                        WKey::Named(NamedKey::End) => Some(Key::End),
+                        WKey::Named(NamedKey::Enter) => Some(Key::Enter),
+                        WKey::Named(NamedKey::Escape) => Some(Key::Escape),
+                        _ => None,
+                    };
+                    if let Some(key) = key {
+                        self.route(InputEvent::Key {
+                            key,
+                            shift: false,
+                            primary: false,
+                        });
+                        return;
+                    }
+                    // 타입어헤드 — 인쇄 가능 문자·Backspace(IME 조합은 M3-3).
+                    if let WKey::Named(NamedKey::Backspace) = &event.logical_key {
+                        let now_ms = self.now_ms();
+                        self.route(InputEvent::Char { c: '\u{8}', now_ms });
+                        return;
+                    }
+                    if let WKey::Character(text) = &event.logical_key {
+                        let now_ms = self.now_ms();
+                        if let Some(c) = text.chars().next() {
+                            if !c.is_control() {
+                                self.route(InputEvent::Char { c, now_ms });
+                            }
+                        }
+                    }
+                }
                 WindowEvent::RedrawRequested => {
                     let (Some(window), Some(surface)) = (&self.window, &mut self.surface) else {
                         return;
@@ -98,13 +201,14 @@ mod spike_window {
                     {
                         surface.resize(w, h).unwrap();
                         let mut buffer = surface.buffer_mut().unwrap();
-                        // M1-6 최소 경로 — 데모 피어 목록(발견 배선은 M1-4에서 실물로 교체).
                         let mut px = nbeep_gfx::Surface::new(
                             &mut buffer,
                             size.width as usize,
                             size.height as usize,
                         );
-                        nbeep_ui::render(&mut px, &self.font, &self.rows);
+                        px.fill(self.theme.window_bg);
+                        let mut ctx = RasterCtx::new(&mut px, &self.font);
+                        self.list.paint(&mut ctx, &self.theme);
                         buffer.present().unwrap();
                     }
                 }
@@ -113,16 +217,23 @@ mod spike_window {
         }
     }
 
-    /// 이벤트 루프를 열고 창을 띄운다(닫으면 종료).
+    /// 창을 띄우고 이벤트 루프를 돈다(닫으면 종료).
     pub(crate) fn run() {
         let (data, index) = nbeep_plat::font::system_ui_font().expect("시스템 UI 폰트 없음");
         let font = nbeep_gfx::Font::from_bytes(data, index).expect("폰트 파싱");
+        let mut list = PeerListWidget::new();
+        let mut inv = Invalidations::default();
+        list.set_rows(demo_rows(), &mut inv);
+
         let event_loop = EventLoop::new().unwrap();
         let mut app = App {
             window: None,
             surface: None,
             font,
-            rows: demo_rows(),
+            theme: Theme::dark(),
+            list,
+            cursor: (0, 0),
+            started: Instant::now(),
         };
         event_loop.run_app(&mut app).unwrap();
     }

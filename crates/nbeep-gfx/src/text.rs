@@ -58,6 +58,49 @@ impl Font {
             .sum()
     }
 
+    /// `size`에서의 어센트(베이스라인 위 높이, px) — 상단 기준 배치를 베이스라인으로 변환.
+    #[must_use]
+    pub fn ascent(&self, size: f32) -> f32 {
+        self.inner.as_scaled(size).ascent()
+    }
+
+    /// [`Font::draw_text`]의 클립 변형 — `clip = (x0, y0, x1, y1)` 밖 픽셀은 찍지 않는다
+    /// (행 배경 안에서만 그리는 `text_opaque` 모델의 기초).
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_text_clipped(
+        &self,
+        surface: &mut Surface<'_>,
+        x: f32,
+        y: f32,
+        size: f32,
+        color: Color,
+        text: &str,
+        clip: (i32, i32, i32, i32),
+    ) -> f32 {
+        let scaled = self.inner.as_scaled(size);
+        let mut pen = x;
+        for ch in text.chars() {
+            let gid = self.inner.glyph_id(ch);
+            let glyph = gid.with_scale_and_position(size, ab_glyph::point(pen, y));
+            if let Some(outlined) = scaled.outline_glyph(glyph) {
+                let bounds = outlined.px_bounds();
+                if bounds.min.x as i32 >= clip.2 {
+                    break; // 클립 오른쪽을 완전히 벗어나면 이후 글자도 밖이다
+                }
+                let (ox, oy) = (bounds.min.x as i32, bounds.min.y as i32);
+                outlined.draw(|gx, gy, cov| {
+                    let px = ox + i32::try_from(gx).unwrap_or(i32::MAX);
+                    let py = oy + i32::try_from(gy).unwrap_or(i32::MAX);
+                    if px >= clip.0 && px < clip.2 && py >= clip.1 && py < clip.3 {
+                        surface.blend_px(px, py, color, cov);
+                    }
+                });
+            }
+            pen += scaled.h_advance(gid);
+        }
+        pen - x
+    }
+
     /// `(x, y)`를 **베이스라인 왼쪽 끝**으로 텍스트를 그린다. 그린 폭(px)을 돌려준다.
     ///
     /// 커버리지를 배경과 블렌드(안티에일리어싱). 표면 밖은 [`Surface`]가 클립한다.
