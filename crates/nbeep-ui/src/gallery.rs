@@ -4,8 +4,8 @@
 //! 실물로 확인한다. **제품 화면이 아니라 검수용** — 정식 UI 통합은 별도.
 
 use crate::controls::{
-    Checkbox, Choose, ChoosePicker, Combo, ComboItem, Control, GridColumn, LabelSide, RadioGroup,
-    RadioOption, ScrollBars, TextBox, TreeGrid, TreeModel, TreeNode, TreeView,
+    Checkbox, Choose, ChoosePicker, Combo, ComboControl, ComboItem, Control, GridColumn, LabelSide,
+    RadioGroup, RadioOption, ScrollBars, TextBox, TreeGrid, TreeModel, TreeNode, TreeView,
 };
 use crate::draw::{DrawCtx, FontSlot};
 use crate::event::InputEvent;
@@ -107,6 +107,10 @@ impl GalleryWidget {
             ],
         )]);
 
+        let mut combo = Combo::new(combo_items, 0);
+        combo.set_help("New tab opens in this location by default.");
+        combo.set_show_help(true);
+
         Self {
             bounds: Rect::default(),
             scale: 1.0,
@@ -127,7 +131,7 @@ impl GalleryWidget {
                 1,
             ),
             textbox: TextBox::new("Run command"),
-            combo: Combo::new(combo_items, 0),
+            combo,
             ext: Choose::new(ext_items, 0, "Choose…").with_choose_icon("⌕"),
             tree: TreeView::new(tree_model),
             grid: TreeGrid::new(
@@ -307,9 +311,16 @@ impl Widget for GalleryWidget {
             );
             ctx.text(lr.x, lr.y + self.s(2), lr, label, theme.text_dim);
         }
-        // 컨트롤(콤보 드롭다운이 아래를 덮도록 순서대로 — 마지막에 그려도 무방).
         for w in widgets {
             w.paint(ctx, theme);
+        }
+        // 콤보/Choose 드롭다운·찾기 오버레이는 아래 위젯(트리·그리드)에 가리면 안 되므로
+        // 열려 있으면 **맨 끝에 다시 그린다**(위에 겹침).
+        if self.combo.is_open() {
+            self.combo.paint(ctx, theme);
+        }
+        if self.ext.is_open() || self.ext.is_picking() {
+            self.ext.paint(ctx, theme);
         }
         // 오버레이 스크롤바(맨 위에 겹침).
         self.bars.paint(

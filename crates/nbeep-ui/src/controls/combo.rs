@@ -291,13 +291,9 @@ pub trait ComboControl: Control {
             if i == self.core().hover {
                 ctx.fill_round_rect(row, self.s(5), theme.sel_bg);
             }
-            // 선택 ✓.
-            let check = Rect::new(
-                row.x + self.s(4),
-                row.y + (rh - self.s(16)) / 2,
-                self.s(16),
-                self.s(16),
-            );
+            // 선택 ✓(크기 70% — 사용자 확정 · 16→11).
+            let cs = self.s(11);
+            let check = Rect::new(row.x + self.s(6), row.y + (rh - cs) / 2, cs, cs);
             if i == self.core().selected {
                 draw_check_mark(ctx, check, self.accent_now(theme));
             }
