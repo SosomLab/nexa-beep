@@ -654,6 +654,8 @@ mod app_window {
         Settings,
         /// 컨트롤 갤러리(임시 검수 — `Cmd/Ctrl+G` 또는 하단 버튼).
         Gallery,
+        /// 파일 선택 모달 창(Choose… — ChoosePicker 어댑터 내용을 별도 창으로).
+        Picker,
     }
 
     /// 에코 봇 — 버스에 실물 신원으로 참여해 수신 세션을 받고, Chat 메시지를 에코한다.
@@ -785,6 +787,8 @@ mod app_window {
         gallery_view: Option<GalleryWidget>,
         /// 앱 창 아이콘(브랜딩 · 전 창 공통). 지원 안 되면 None.
         icon: Option<winit::window::Icon>,
+        /// 파일 선택 모달 뷰(Choose… — 열려 있을 때만 Some).
+        picker_view: Option<nbeep_ui::TreeView>,
         /// OS 주 수식키(⌘/Ctrl) 눌림 상태 — `Cmd/Ctrl+,` 판정.
         primary_down: bool,
         /// 세션 액터가 GUI를 깨우는 통로(M2-7).
@@ -1101,14 +1105,65 @@ mod app_window {
                     scale,
                 },
             );
-            let mut gallery = GalleryWidget::new();
-            // Choose 컨트롤에 샘플 어댑터(단일 파일 선택기) 주입 — Adapter 패턴 실증.
+            // 어댑터 미주입 → Choose…가 take_choose_request로 올라와 **별도 모달 창**을 연다.
+            self.gallery_view = Some(GalleryWidget::new());
+            self.layout_window(id);
+            self.request_redraw(id);
+        }
+
+        /// 파일 선택 **모달 창**(Choose… · ChoosePicker 어댑터 내용을 별도 창으로 · 사용자 확정).
+        /// 항목 클릭 = 선택 확정(값 반영) 후 닫힘 · Esc/닫기 = 취소.
+        fn open_picker(&mut self, el: &ActiveEventLoop) {
+            if let Some((pid, _)) = self.windows.iter().find(|(_, e)| e.role == Role::Picker) {
+                if let Some(e) = self.windows.get(pid) {
+                    e.window.focus_window();
+                }
+                return;
+            }
+            // 어댑터: HOME 단일 파일 선택기(ChoosePicker 인터페이스 — 어떤 구현도 가능).
             let dir = std::env::var_os("HOME")
                 .map(std::path::PathBuf::from)
                 .or_else(|| std::env::current_dir().ok())
                 .unwrap_or_default();
-            gallery.set_choose_picker(Box::new(FilePicker { dir }));
-            self.gallery_view = Some(gallery);
+            let picker = FilePicker { dir };
+            use nbeep_ui::ChoosePicker as _;
+            let title = picker.title();
+            let roots: Vec<nbeep_ui::TreeNode> = picker
+                .items()
+                .into_iter()
+                .map(|it| {
+                    let mut n = nbeep_ui::TreeNode::leaf(it.label);
+                    if let Some(img) = it.image {
+                        n = n.with_image(img);
+                    }
+                    n
+                })
+                .collect();
+            let mut tree = nbeep_ui::TreeView::new(nbeep_ui::TreeModel::new(roots));
+            {
+                use nbeep_ui::Control as _;
+                tree.set_focused(true);
+            }
+
+            let attrs = Window::default_attributes()
+                .with_title(title)
+                .with_window_icon(self.icon.clone());
+            let window = Rc::new(el.create_window(attrs).unwrap());
+            let scale = window.scale_factor() as f32;
+            let context = softbuffer::Context::new(window.clone()).unwrap();
+            let surface = SbSurface::new(&context, window.clone()).unwrap();
+            let id = window.id();
+            self.windows.insert(
+                id,
+                WinEntry {
+                    role: Role::Picker,
+                    window,
+                    surface,
+                    cursor: (0, 0),
+                    scale,
+                },
+            );
+            self.picker_view = Some(tree);
             self.layout_window(id);
             self.request_redraw(id);
         }
@@ -1266,6 +1321,13 @@ mod app_window {
                         gv.set_bounds(Rect::new(0, 0, w, h), &mut inv);
                     }
                 }
+                Role::Picker => {
+                    if let Some(pv) = &mut self.picker_view {
+                        use nbeep_ui::Control as _;
+                        pv.set_scale(scale);
+                        pv.set_bounds(Rect::new(0, 0, w, h), &mut inv);
+                    }
+                }
             }
         }
 
@@ -1380,6 +1442,42 @@ mod app_window {
                         self.windows.remove(&id);
                     } else if let Some(gv) = &mut self.gallery_view {
                         gv.on_event(&ev, &mut inv);
+                        // Choose… → 별도 모달 파일 선택 창.
+                        if gv.take_choose_request() {
+                            self.open_picker(el);
+                        }
+                    }
+                }
+                Role::Picker => {
+                    if matches!(
+                        ev,
+                        InputEvent::Key {
+                            key: Key::Escape,
+                            ..
+                        }
+                    ) {
+                        self.picker_view = None;
+                        self.windows.remove(&id); // 취소
+                    } else if let Some(pv) = &mut self.picker_view {
+                        pv.on_event(&ev, &mut inv);
+                        // 항목 클릭 = 선택 확정 → 갤러리 Choose 값 반영 + 창 닫기.
+                        if matches!(ev, InputEvent::MouseDown { .. }) {
+                            if let Some(label) = pv.selected_label() {
+                                if let Some(gv) = &mut self.gallery_view {
+                                    let mut ginv = Invalidations::default();
+                                    gv.set_choose_value(&label, &mut ginv);
+                                }
+                                self.picker_view = None;
+                                self.windows.remove(&id);
+                                if let Some((gid, _)) =
+                                    self.windows.iter().find(|(_, e)| e.role == Role::Gallery)
+                                {
+                                    let gid = *gid;
+                                    self.request_redraw(gid);
+                                }
+                                return;
+                            }
+                        }
                     }
                 }
             }
@@ -1460,6 +1558,11 @@ mod app_window {
                 Role::Gallery => {
                     if let Some(gv) = &self.gallery_view {
                         gv.paint(&mut ctx, &theme);
+                    }
+                }
+                Role::Picker => {
+                    if let Some(pv) = &self.picker_view {
+                        pv.paint(&mut ctx, &theme);
                     }
                 }
             }
@@ -1617,6 +1720,7 @@ mod app_window {
                             }
                             Role::Settings => self.settings_view = None,
                             Role::Gallery => self.gallery_view = None,
+                            Role::Picker => self.picker_view = None,
                             Role::Main => {}
                         }
                     }
@@ -1814,6 +1918,13 @@ mod app_window {
                         self.route(id, InputEvent::Char { c: '\u{8}', now_ms }, el);
                         return;
                     }
+                    // 스페이스는 Named(Space)로 와서 Character 경로에 안 잡힌다 — 문자로 라우팅
+                    // (목록 타입어헤드·대화 입력 공통. 이전엔 직타 스페이스가 유실됐다).
+                    if let WKey::Named(NamedKey::Space) = &event.logical_key {
+                        let now_ms = self.now_ms();
+                        self.route(id, InputEvent::Char { c: ' ', now_ms }, el);
+                        return;
+                    }
                     if let WKey::Character(text) = &event.logical_key {
                         let now_ms = self.now_ms();
                         if let Some(c) = text.chars().next() {
@@ -1932,6 +2043,7 @@ mod app_window {
                 nbeep_ui::brand::ICON_SIZE,
             )
             .ok(),
+            picker_view: None,
             primary_down: false,
             proxy,
             adding: None,

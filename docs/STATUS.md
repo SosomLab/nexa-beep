@@ -3,6 +3,14 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
+> **갱신: 2026-08-09 (설정 컨트롤화·모달 차) (KST)** — **설정 화면 커스텀 컨트롤 전면 교체 + 모달 파일 선택 + 타입어헤드 확정판**(`feat/m3-settings-controls`):
+> ① **설정 화면 재작성** — 검색=TextBox · 사이드바=TreeView(매치 "(N)") · 택일=Combo 드롭다운 · **on/off=Checkbox**(`SettingKind::Toggle` 신설) · 글꼴=TextBox+Combo · 열린 콤보 모달 캡처. `take_changes` 계약 유지(bin 무변경).
+> ② **Choose… 별도 모달 창**(`Role::Picker`) — ChoosePicker 어댑터(FilePicker)를 TreeView로 렌더 · 클릭=값 반영·닫힘 · Esc=취소 · 인라인 오버레이 모드와 공존.
+> ③ **타입어헤드 확정판** — Space 유실 수정(`Named(Space)`→Char · 대화 입력도 해결) · **반복 키 자동 순환 제거(↑↓ 전용)** · ↑↓ 중 touch 리셋 · HUD 즉시 갱신 · tick이 preedit도 초기화.
+> ④ 버튼 이미지 진짜 원인 = 갤러리 배율 미전파 수정 + `LEADING_ICON=13` 단일 원천(콤보·트리·버튼).
+> ⑤ **전수 설계 점검** — 층 준수·프로덕션 unwrap 0 확인 · 개선 후보 6건([journal](journal/2026-08-09.md) §점검) — bin 분리·FocusManager·설정 스크롤 등.
+> **233 green** · clippy·fmt clean. [journal/2026-08-09.md](journal/2026-08-09.md).
+>
 > **갱신: 2026-08-09 (컨트롤 툴킷 다듬기 차) (KST)** — **커스텀 컨트롤 툴킷 실사용 다듬기**(`feat/m3-controls-polish` · 사용자 대화형 반복 다수 · 17커밋):
 > ① **오버레이 스크롤바**(`ScrollBars` 재사용 · macOS식: 스크롤 전 숨김→표시→호버 두껍게→무활동 페이드 · 갤러리·TreeView·TreeGrid 내부 스크롤).
 > ② **Button 컨트롤**(이미지+텍스트/이미지만/이미지 버튼 Cover·Contain) · **이미지 아이콘**(gfx `IconImage` RGBA·투명배경·`blend_image_scaled`·fit contain/cover · 콤보/Choose/트리/버튼/텍스트박스 선행 이미지 · 큰 이미지 자동 축소).

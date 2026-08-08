@@ -7,6 +7,8 @@
 
 ## 2026-08-09
 
+- **설정 화면 커스텀 컨트롤 전면 교체 + 모달 파일 선택 + 타입어헤드 확정판**(feat/m3-settings-controls): 설정=TextBox/TreeView/Combo/**Checkbox(Toggle 신설)**/글꼴 TextBox+Combo(모달 캡처·계약 유지) · Choose…=**별도 모달 창**(Role::Picker · ChoosePicker 어댑터를 TreeView로) · 타입어헤드(Space 유실 수정·반복 자동순환 제거(↑↓ 전용)·touch·HUD 즉시 갱신) · 버튼 이미지 진짜 원인=배율 미전파 수정+LEADING_ICON 단일 원천 · **전수 설계 점검**(층 준수·unwrap 0 확인, 개선 후보 6건 기록). 233 green. 상세 [journal/2026-08-09.md](journal/2026-08-09.md).
+
 - **커스텀 컨트롤 툴킷 다듬기 + 오버레이 스크롤바 + Choose 어댑터 + 브랜딩 아이콘**(feat/m3-controls-polish · 사용자 대화형 반복 다수): 치수·시각 정리(글리프·아이콘 13·포커스 링 2px 반투명·셰브론) · **오버레이 스크롤바**(macOS식 페이드 · 갤러리·트리·그리드) · **Choose 찾기 어댑터**(ChoosePicker · 목록 선택 동기화 버그 수정) · **이미지 아이콘**(gfx IconImage RGBA·스케일·클립 · Button 컨트롤 · 트리 행 이미지 · 갤러리 브랜딩 이미지) · **타입어헤드**(IME 실시간 매칭·유효시간/위치/공백/특수문자 설정·↑↓ 순환·tick 초기화) · 도움말 "?"·툴팁 정리 · 트리 Border(f32 0.5px) · **브랜딩 아이콘**(icon.svg→PNG/ICO) + **앱 창 아이콘 적용**. 워크스페이스 218 green. ⏳후속: Choose 별도 모달·설정 정식 통합. 상세 [journal/2026-08-09.md](journal/2026-08-09.md).
 
 ## 2026-08-08

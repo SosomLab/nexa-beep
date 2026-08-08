@@ -1,18 +1,25 @@
-//! 설정 화면 — **VS Code 방식** 최소 슬라이스(DR-24 · [docs/14 §10]).
+//! 설정 화면 — **VS Code 방식** · **커스텀 컨트롤 툴킷으로 구성**(DR-24 · [docs/14 §10]).
 //!
 //! 핵심 발명은 **Entry 레지스트리 단일 원천**이다: 영속 설정 전부가 [`registry`]에 등록되고,
 //! 렌더와 검색이 같은 원천을 읽는다 — "화면에 있는데 검색 안 되는 설정"이 구조적으로 불가능하다.
-//! 제품에 실존하는 설정만 등록한다(없는 옵션 미등록 — 원본 규약).
 //!
-//! 레이아웃(VS Code식): **좌측 사이드바**(검색 + 카테고리 트리 · 검색 중엔 매치 카테고리만 +
-//! 매치 수 "(N)") + **우측 편집기**. **즉시 적용**([`SettingsWidget::take_changes`] 폴링).
+//! ## 컨트롤 구성(사용자 확정 08-09 — 자체 렌더 전면 교체)
 //!
-//! ## i18n(사용자 요청 08-08)
+//! | 요소 | 컨트롤 |
+//! |---|---|
+//! | 검색 | [`TextBox`](placeholder·Beam 캐럿) |
+//! | 카테고리 사이드바 | [`TreeView`](검색 중 매치 카테고리 + "(N)") |
+//! | 택일 설정 | [`Combo`](드롭다운 · 선택 ✓) |
+//! | on/off 설정 | [`Checkbox`] |
+//! | 글꼴 영역 | [`TextBox`](글꼴명) + [`Combo`](크기) |
 //!
-//! 표시 문자열은 전부 [`Msg`] 키로 두고 렌더 시 **현재 언어**([`nbeep_core::current_lang`])로
-//! 번역한다(영어 기본 · 한/중/일 팩). 검색은 **전 언어 매치** — 어느 언어로 쳐도 찾힌다.
-//! 글꼴 영역 섹션([`SettingKind::FontSection`])은 '제목 + 글꼴명(텍스트박스) + 크기(콤보) + 설명'.
+//! 값 반영은 기존 계약 그대로 — **즉시 적용**([`SettingsWidget::take_changes`] 폴링), 영속은
+//! M2-5(Repository 포트). i18n: 라벨은 [`Msg`] 키, 검색은 **전 언어 매치**.
 
+use crate::controls::{
+    Checkbox, Combo, ComboControl, ComboItem, Control, LabelSide, TextBox, TreeControl, TreeModel,
+    TreeNode, TreeView,
+};
 use crate::draw::{DrawCtx, FontSlot};
 use crate::event::{InputEvent, Key};
 use crate::geom::{Point, Rect};
@@ -29,12 +36,14 @@ const SIZE_OPTS: &[(&str, Msg)] = &[
     ("s", Msg::SizeSmall),
 ];
 
-/// 항목 종류 — 우측 패널이 이 열거를 읽어 동적 생성한다(새 설정 = Entry 1줄).
+/// 항목 종류 — 우측 패널이 이 열거를 읽어 컨트롤을 동적 생성한다(새 설정 = Entry 1줄).
 #[derive(Clone, Copy, Debug)]
 pub enum SettingKind {
-    /// 값 후보 중 택일 — (값, 라벨 Msg). 클릭/Enter = 다음 값으로 순환.
+    /// 값 후보 중 택일 — [`Combo`] 드롭다운.
     Radio(&'static [(&'static str, Msg)]),
-    /// 글꼴 영역 — **글꼴명(텍스트박스) + 크기(콤보)** 를 한 섹션으로.
+    /// on/off — [`Checkbox`]. 값은 `"on"`/`"off"`(기본 on).
+    Toggle,
+    /// 글꼴 영역 — 글꼴명 [`TextBox`] + 크기 [`Combo`].
     FontSection {
         /// 글꼴명 값 키(`font.{region}.family`).
         family_key: &'static str,
@@ -46,7 +55,7 @@ pub enum SettingKind {
 /// 설정 항목(레지스트리 최소 단위).
 #[derive(Clone, Copy, Debug)]
 pub struct Entry {
-    /// 카테고리(헤더 표시·검색 대상).
+    /// 카테고리(사이드바·검색 대상).
     pub cat: Msg,
     /// 제목(검색 대상 · 글꼴 섹션에선 섹션 제목).
     pub label: Msg,
@@ -59,17 +68,6 @@ pub struct Entry {
 }
 
 impl Entry {
-    /// 이 항목이 소유한 값 키 전부(FontSection은 글꼴명 + 크기 2개).
-    fn value_keys(&self) -> Vec<&'static str> {
-        match self.kind {
-            SettingKind::Radio(_) => vec![self.key],
-            SettingKind::FontSection {
-                family_key,
-                size_key,
-            } => vec![family_key, size_key],
-        }
-    }
-
     /// 레지스트리 기본값(각 값 키 → 기본 문자열).
     fn default_values(&self) -> Vec<(&'static str, String)> {
         match self.kind {
@@ -78,6 +76,7 @@ impl Entry {
                 .map(|(v, _)| (self.key, (*v).to_string()))
                 .into_iter()
                 .collect(),
+            SettingKind::Toggle => vec![(self.key, "on".to_string())],
             SettingKind::FontSection {
                 family_key,
                 size_key,
@@ -155,14 +154,14 @@ pub fn registry() -> &'static [Entry] {
             cat: Msg::CatAppearance,
             label: Msg::TypeaheadSpace,
             desc: Msg::TypeaheadSpaceDesc,
-            kind: SettingKind::Radio(&[("on", Msg::ToggleApply), ("off", Msg::ToggleIgnore)]),
+            kind: SettingKind::Toggle,
             key: "ui.typeahead_space",
         },
         Entry {
             cat: Msg::CatAppearance,
             label: Msg::TypeaheadSpecial,
             desc: Msg::TypeaheadSpecialDesc,
-            kind: SettingKind::Radio(&[("on", Msg::ToggleApply), ("off", Msg::ToggleIgnore)]),
+            kind: SettingKind::Toggle,
             key: "ui.typeahead_special",
         },
         Entry {
@@ -262,61 +261,55 @@ fn entry_matches(e: &Entry, toks: &[String]) -> bool {
     toks.iter().all(|t| hay.contains(t))
 }
 
-/// 크기 값 → 라벨 Msg.
-fn size_msg(value: &str) -> Msg {
-    SIZE_OPTS
-        .iter()
-        .find(|(v, _)| *v == value)
-        .map_or(SIZE_OPTS[0].1, |(_, m)| *m)
-}
-
-/// 행 높이(px·논리) — Radio 항목은 2줄(제목+설명).
-const ENTRY_H: i32 = 50;
-/// 글꼴 섹션 높이 — 제목 + (글꼴명·크기) 컨트롤 행 + 설명.
-const FONT_SECTION_H: i32 = 88;
-const HEADER_H: i32 = 28;
-const SEARCH_H: i32 = 34;
-/// 좌측 사이드바 폭(논리 px) — 검색 + 카테고리 트리.
+// 레이아웃(논리 px).
 const SIDEBAR_W: i32 = 150;
-/// 사이드바 트리 행 높이.
-const TREE_ROW_H: i32 = 30;
+const SEARCH_H: i32 = 30;
+const ENTRY_H: i32 = 52;
+const FONT_SECTION_H: i32 = 88;
+const CTL_H: i32 = 26;
+const COMBO_W: i32 = 170;
+const SIZE_W: i32 = 112;
+const FAMILY_W: i32 = 180;
+const PAD: i32 = 12;
 
-// 글꼴 섹션 내부 컨트롤 레이아웃(논리 px).
-const CTRL_DY: i32 = 32; // 섹션 top → 컨트롤 행 y
-const CTRL_H: i32 = 28; // 컨트롤 높이
-const FAMILY_W: i32 = 180; // 글꼴명 텍스트박스 폭
-const SIZE_W: i32 = 112; // 크기 콤보 폭
-const CTRL_GAP: i32 = 10; // 글꼴명 ↔ 크기 간격
-
-/// 표시 행(레이아웃 결과).
-#[derive(Clone, Copy)]
-enum RowKind {
-    Header(Msg),
-    Item(usize), // registry 인덱스
+/// 우측 한 행 = 레지스트리 항목 + 실물 컨트롤.
+#[derive(Debug)]
+enum RowCtl {
+    Combo(Combo),
+    Check(Checkbox),
+    Font { family: TextBox, size: Combo },
 }
 
-/// 입력 포커스 — 검색창(기본) 또는 특정 글꼴 섹션의 글꼴명 박스.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Focus {
-    Search,
-    Family(usize), // registry 인덱스
+#[derive(Debug)]
+struct RowUi {
+    /// registry 인덱스.
+    idx: usize,
+    /// 행 영역(우측 패널 안 · 물리 px).
+    rect: Rect,
+    ctl: RowCtl,
 }
 
-/// 설정 위젯.
+/// 설정 위젯 — 커스텀 컨트롤 컴포지션.
 #[derive(Debug)]
 pub struct SettingsWidget {
     bounds: Rect,
     scale: f32,
+    /// 검색 입력(TextBox).
+    search: TextBox,
+    /// 검색어 미러(rebuild 트리거 비교용).
     query: String,
-    caret: usize,
+    /// 카테고리 사이드바(TreeView).
+    tree: TreeView,
+    /// 사이드바 가시 행 → cats() 인덱스.
+    cat_map: Vec<usize>,
+    /// 선택 카테고리(cats() 인덱스).
+    selected_cat: usize,
+    /// 우측 행들(가시 항목 + 컨트롤).
+    rows: Vec<RowUi>,
+    /// 현재 값 스냅숏(컨트롤 초기화·보고 근거).
+    values: HashMap<&'static str, String>,
     changes: Vec<(&'static str, String)>,
     back: bool,
-    /// 사이드바 선택 카테고리(빈 검색일 때 우측 필터).
-    selected_cat: usize,
-    /// 입력 포커스(검색창 vs 글꼴명 박스).
-    focus: Focus,
-    /// 현재 값 스냅숏(표시용 — 적용 주체는 호스트).
-    values: HashMap<&'static str, String>,
 }
 
 impl SettingsWidget {
@@ -325,29 +318,34 @@ impl SettingsWidget {
     pub fn new(state: &SettingsState) -> Self {
         let mut values = HashMap::new();
         for e in registry() {
-            for k in e.value_keys() {
+            for (k, _) in e.default_values() {
                 values.insert(k, state.get(k).to_string());
             }
         }
-        Self {
+        let mut w = Self {
             bounds: Rect::default(),
             scale: 1.0,
+            search: TextBox::new("Search"),
             query: String::new(),
-            caret: 0,
+            tree: TreeView::new(TreeModel::default()),
+            cat_map: Vec::new(),
+            selected_cat: 0,
+            rows: Vec::new(),
+            values,
             changes: Vec::new(),
             back: false,
-            selected_cat: 0,
-            focus: Focus::Search,
-            values,
-        }
+        };
+        let mut inv = Invalidations::default();
+        w.rebuild(&mut inv);
+        w
     }
 
-    /// 배율 지정(고DPI).
+    /// 배율 지정(고DPI) — 전 컨트롤 전파 + 재구성.
     pub fn set_scale(&mut self, scale: f32, inv: &mut Invalidations) {
-        let scale = scale.max(0.5);
-        if (scale - self.scale).abs() > f32::EPSILON {
-            self.scale = scale;
-            inv.push(self.bounds);
+        let s = scale.max(0.5);
+        if (s - self.scale).abs() > f32::EPSILON {
+            self.scale = s;
+            self.rebuild(inv);
         }
     }
 
@@ -361,15 +359,11 @@ impl SettingsWidget {
         std::mem::take(&mut self.back)
     }
 
-    fn s(&self, logical: i32) -> i32 {
-        (logical as f32 * self.scale).round() as i32
+    fn s(&self, v: i32) -> i32 {
+        (v as f32 * self.scale).round() as i32
     }
 
-    fn lang(&self) -> Lang {
-        current_lang()
-    }
-
-    /// 카테고리 목록(레지스트리 순서·중복 제거) — 사이드바 트리의 원천.
+    /// 카테고리 목록(레지스트리 순서·중복 제거).
     fn cats() -> Vec<Msg> {
         let mut out: Vec<Msg> = Vec::new();
         for e in registry() {
@@ -380,7 +374,6 @@ impl SettingsWidget {
         out
     }
 
-    /// 검색 중 카테고리별 매치 수(트리 행 "(N)" 표기·필터 공용).
     fn cat_match_count(cat: Msg, toks: &[String]) -> usize {
         registry()
             .iter()
@@ -388,142 +381,234 @@ impl SettingsWidget {
             .count()
     }
 
-    /// 사이드바 표시 행 — 검색 중엔 **매치 있는 카테고리만**, (카테고리, 매치 수).
-    fn sidebar_rows(&self) -> Vec<(Msg, usize)> {
-        let toks = tokens(&self.query);
-        Self::cats()
-            .into_iter()
-            .map(|c| (c, Self::cat_match_count(c, &toks)))
-            .filter(|&(_, n)| n > 0)
-            .collect()
-    }
-
-    /// 우측 표시 행 — 빈 검색 = **선택 카테고리만**, 검색 중 = 전 카테고리 매치(헤더 포함).
-    fn rows(&self) -> Vec<RowKind> {
+    /// 가시 항목(registry 인덱스) — 검색 중=전 카테고리 매치, 아니면 선택 카테고리.
+    fn visible_indices(&self) -> Vec<usize> {
         let toks = tokens(&self.query);
         let searching = !toks.is_empty();
         let selected = Self::cats().get(self.selected_cat).copied();
-        let mut out = Vec::new();
-        let mut last_cat: Option<Msg> = None;
-        for (i, e) in registry().iter().enumerate() {
-            if searching {
-                if !entry_matches(e, &toks) {
-                    continue;
+        registry()
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| {
+                if searching {
+                    entry_matches(e, &toks)
+                } else {
+                    Some(e.cat) == selected
                 }
-            } else if Some(e.cat) != selected {
-                continue;
-            }
-            if searching && last_cat != Some(e.cat) {
-                out.push(RowKind::Header(e.cat));
-                last_cat = Some(e.cat);
-            }
-            out.push(RowKind::Item(i));
-        }
-        out
-    }
-
-    fn row_h(&self, row: &RowKind) -> i32 {
-        match row {
-            RowKind::Header(_) => self.s(HEADER_H),
-            RowKind::Item(i) => match registry()[*i].kind {
-                SettingKind::Radio(_) => self.s(ENTRY_H),
-                SettingKind::FontSection { .. } => self.s(FONT_SECTION_H),
-            },
-        }
-    }
-
-    /// 표시 행 + 각 행의 top(물리 px) — 렌더·히트테스트 공용(기하 단일 원천).
-    fn rows_with_top(&self) -> Vec<(RowKind, i32)> {
-        let mut top = self.bounds.y;
-        let mut out = Vec::new();
-        for row in self.rows() {
-            let h = self.row_h(&row);
-            out.push((row, top));
-            top += h;
-        }
-        out
-    }
-
-    /// 필터된 항목(registry 인덱스)만.
-    fn items(&self) -> Vec<usize> {
-        self.rows()
-            .into_iter()
-            .filter_map(|r| match r {
-                RowKind::Item(i) => Some(i),
-                RowKind::Header(_) => None,
             })
+            .map(|(i, _)| i)
             .collect()
     }
 
-    /// 값을 후보 목록 안에서 다음으로 순환한다(즉시 적용).
-    fn cycle_key(
-        &mut self,
-        key: &'static str,
-        opts: &[(&'static str, Msg)],
-        inv: &mut Invalidations,
-    ) {
-        if opts.is_empty() {
-            return;
+    /// 사이드바·우측 행(컨트롤 포함)을 현재 상태(검색·선택·값)로 다시 만든다.
+    fn rebuild(&mut self, inv: &mut Invalidations) {
+        let lang = current_lang();
+        let toks = tokens(&self.query);
+        let searching = !toks.is_empty();
+
+        // ── 사이드바 트리(카테고리 · 검색 중엔 매치만 + "(N)") ──
+        let cats = Self::cats();
+        self.cat_map.clear();
+        let mut roots = Vec::new();
+        for (ci, &cat) in cats.iter().enumerate() {
+            let n = Self::cat_match_count(cat, &toks);
+            if searching && n == 0 {
+                continue;
+            }
+            let label = if searching {
+                format!("{} ({n})", tr(lang, cat))
+            } else {
+                tr(lang, cat).to_string()
+            };
+            roots.push(TreeNode::leaf(label));
+            self.cat_map.push(ci);
         }
-        let current = self.values.get(key).map_or("", String::as_str);
-        let pos = opts.iter().position(|(v, _)| *v == current).unwrap_or(0);
-        let (next, _) = opts[(pos + 1) % opts.len()];
-        self.values.insert(key, (*next).to_string());
-        self.changes.push((key, (*next).to_string()));
+        let mut tree = TreeView::new(TreeModel::new(roots));
+        tree.set_scale(self.scale);
+        tree.set_focused(true); // 사이드바는 ↑↓ 상시 탐색(트리 자체 포커스 링 없음)
+        let sel_row = self
+            .cat_map
+            .iter()
+            .position(|&c| c == self.selected_cat)
+            .unwrap_or(0);
+        tree.set_selected_row(sel_row);
+        self.tree = tree;
+
+        // ── 우측 행 + 컨트롤 ──
+        self.rows.clear();
+        for idx in self.visible_indices() {
+            let e = &registry()[idx];
+            let ctl = match e.kind {
+                SettingKind::Radio(opts) => {
+                    let items: Vec<ComboItem> = opts
+                        .iter()
+                        .map(|(v, m)| ComboItem::new(*v, tr(lang, *m)))
+                        .collect();
+                    let mut c = Combo::new(items, 0);
+                    c.select_value(self.values.get(e.key).map_or("", String::as_str));
+                    c.set_scale(self.scale);
+                    RowCtl::Combo(c)
+                }
+                SettingKind::Toggle => {
+                    let mut c =
+                        Checkbox::new("", self.values.get(e.key).map(String::as_str) == Some("on"))
+                            .with_label_side(LabelSide::None);
+                    c.set_scale(self.scale);
+                    RowCtl::Check(c)
+                }
+                SettingKind::FontSection {
+                    family_key,
+                    size_key,
+                } => {
+                    let mut family = TextBox::new(tr(lang, Msg::SystemDefaultFont))
+                        .with_text(self.values.get(family_key).map_or("", String::as_str));
+                    family.set_scale(self.scale);
+                    let items: Vec<ComboItem> = SIZE_OPTS
+                        .iter()
+                        .map(|(v, m)| ComboItem::new(*v, tr(lang, *m)))
+                        .collect();
+                    let mut size = Combo::new(items, 0);
+                    size.select_value(self.values.get(size_key).map_or("m", String::as_str));
+                    size.set_scale(self.scale);
+                    RowCtl::Font { family, size }
+                }
+            };
+            self.rows.push(RowUi {
+                idx,
+                rect: Rect::default(),
+                ctl,
+            });
+        }
+        self.layout(inv);
+    }
+
+    /// 현 bounds에 맞춰 자식 컨트롤 배치.
+    fn layout(&mut self, inv: &mut Invalidations) {
+        let sw = self.s(SIDEBAR_W);
+        let b = self.bounds;
+        self.search.set_bounds(
+            Rect::new(
+                b.x + self.s(4),
+                b.y + self.s(4),
+                sw - self.s(8),
+                self.s(SEARCH_H),
+            ),
+            inv,
+        );
+        let tree_top = b.y + self.s(SEARCH_H) + self.s(8);
+        self.tree.set_bounds(
+            Rect::new(b.x, tree_top, sw, (b.bottom() - tree_top).max(0)),
+            inv,
+        );
+
+        let rx = b.x + sw; // 우측 패널 시작
+        let rw = (b.w - sw).max(0);
+        let mut top = b.y;
+        // 차용 분리를 위해 치수 사전 계산.
+        let (ctl_h, pad) = (self.s(CTL_H), self.s(PAD));
+        let (h_font, h_entry) = (self.s(FONT_SECTION_H), self.s(ENTRY_H));
+        let (combo_w, check_w) = (self.s(COMBO_W), self.s(22));
+        let (family_w, size_w, gap10, dy32) =
+            (self.s(FAMILY_W), self.s(SIZE_W), self.s(10), self.s(32));
+        for row in &mut self.rows {
+            let e = &registry()[row.idx];
+            let h = match e.kind {
+                SettingKind::FontSection { .. } => h_font,
+                _ => h_entry,
+            };
+            row.rect = Rect::new(rx, top, rw, h);
+            match &mut row.ctl {
+                RowCtl::Combo(c) => {
+                    c.set_bounds(
+                        Rect::new(
+                            rx + rw - combo_w - pad,
+                            top + (h - ctl_h) / 2,
+                            combo_w,
+                            ctl_h,
+                        ),
+                        inv,
+                    );
+                }
+                RowCtl::Check(c) => {
+                    c.set_bounds(
+                        Rect::new(
+                            rx + rw - check_w - pad,
+                            top + (h - ctl_h) / 2,
+                            check_w,
+                            ctl_h,
+                        ),
+                        inv,
+                    );
+                }
+                RowCtl::Font { family, size } => {
+                    let fy = top + dy32;
+                    family.set_bounds(Rect::new(rx + pad, fy, family_w, ctl_h), inv);
+                    size.set_bounds(
+                        Rect::new(rx + pad + family_w + gap10, fy, size_w, ctl_h),
+                        inv,
+                    );
+                }
+            }
+            top += h;
+        }
         inv.push(self.bounds);
     }
 
-    /// 캐럿 위치 항목을 활성화(Radio = 값 순환 · FontSection = 크기 순환).
-    fn activate(&mut self, reg_idx: usize, inv: &mut Invalidations) {
-        match registry()[reg_idx].kind {
-            SettingKind::Radio(opts) => {
-                let key = registry()[reg_idx].key;
-                self.cycle_key(key, opts, inv);
+    /// 자식 컨트롤 변경분을 회수해 values/changes에 반영.
+    fn drain_changes(&mut self, inv: &mut Invalidations) {
+        let mut got = Vec::new();
+        for row in &mut self.rows {
+            let e = &registry()[row.idx];
+            match &mut row.ctl {
+                RowCtl::Combo(c) => {
+                    if let Some(v) = c.take_changed() {
+                        got.push((e.key, v));
+                    }
+                }
+                RowCtl::Check(c) => {
+                    if let Some(on) = c.take_toggled() {
+                        got.push((e.key, if on { "on" } else { "off" }.to_string()));
+                    }
+                }
+                RowCtl::Font { family, size } => {
+                    if let SettingKind::FontSection {
+                        family_key,
+                        size_key,
+                    } = e.kind
+                    {
+                        if let Some(v) = family.take_changed() {
+                            got.push((family_key, v));
+                        }
+                        if let Some(v) = size.take_changed() {
+                            got.push((size_key, v));
+                        }
+                    }
+                }
             }
-            SettingKind::FontSection { size_key, .. } => {
-                self.cycle_key(size_key, SIZE_OPTS, inv);
+        }
+        if !got.is_empty() {
+            for (k, v) in &got {
+                self.values.insert(k, v.clone());
             }
+            self.changes.extend(got);
+            inv.push(self.bounds);
         }
     }
 
-    /// 글꼴명 박스에 문자 편집(끝에 삽입 / 백스페이스). 즉시 적용.
-    fn edit_family(&mut self, key: &'static str, c: char, inv: &mut Invalidations) {
-        let cur = self.values.entry(key).or_default();
-        if c == '\u{8}' {
-            cur.pop();
-        } else if !c.is_control() {
-            cur.push(c);
-        }
-        let v = cur.clone();
-        self.changes.push((key, v));
-        inv.push(self.bounds);
+    /// 열린 콤보(모달 캡처 대상)를 찾는다.
+    fn open_combo_mut(&mut self) -> Option<&mut Combo> {
+        self.rows.iter_mut().find_map(|r| match &mut r.ctl {
+            RowCtl::Combo(c) if c.is_open() => Some(c),
+            RowCtl::Font { size, .. } if size.is_open() => Some(size),
+            _ => None,
+        })
     }
 
-    fn sidebar_w(&self) -> i32 {
-        self.s(SIDEBAR_W)
-    }
-
-    /// 글꼴 섹션의 (글꼴명 박스, 크기 콤보) 물리 rect — `top`은 섹션의 top(물리 px).
-    fn section_ctrls(&self, top: i32) -> (Rect, Rect) {
-        let x0 = self.bounds.x + self.sidebar_w() + self.s(12);
-        let y = top + self.s(CTRL_DY);
-        let h = self.s(CTRL_H);
-        let fam = Rect::new(x0, y, self.s(FAMILY_W), h);
-        let size = Rect::new(fam.right() + self.s(CTRL_GAP), y, self.s(SIZE_W), h);
-        (fam, size)
-    }
-
-    /// (x, y) 물리 px → 사이드바 카테고리 행 인덱스.
-    fn sidebar_at(&self, x: i32, y: i32) -> Option<usize> {
-        if x >= self.bounds.x + self.sidebar_w() {
-            return None;
-        }
-        let top = self.bounds.y + self.s(SEARCH_H);
-        if y < top {
-            return None;
-        }
-        let idx = ((y - top) / self.s(TREE_ROW_H).max(1)) as usize;
-        (idx < self.sidebar_rows().len()).then_some(idx)
+    fn any_family_focused(&self) -> bool {
+        self.rows.iter().any(|r| match &r.ctl {
+            RowCtl::Font { family, .. } => family.is_focused(),
+            _ => false,
+        })
     }
 }
 
@@ -534,315 +619,189 @@ impl Widget for SettingsWidget {
 
     fn set_bounds(&mut self, bounds: Rect, inv: &mut Invalidations) {
         self.bounds = bounds;
-        inv.push(bounds);
+        self.layout(inv);
     }
 
     fn on_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
+        // ── 모달 캡처: 열린 콤보가 있으면 그 콤보만 이벤트를 받는다(전파 차단) ──
+        if let Some(c) = self.open_combo_mut() {
+            c.on_event(ev, inv);
+            self.drain_changes(inv);
+            inv.push(self.bounds); // 드롭다운 영역 재그리기
+            return;
+        }
+
         match *ev {
+            InputEvent::MouseDown { x, y, .. } => {
+                let p = Point { x, y };
+                // 검색/글꼴명 포커스는 클릭 위치 기준(각 컨트롤이 스스로 잡음 + 여기서 블러).
+                self.search.set_focused(self.search.bounds().contains(p));
+                for row in &mut self.rows {
+                    if let RowCtl::Font { family, .. } = &mut row.ctl {
+                        family.set_focused(family.bounds().contains(p));
+                    }
+                }
+                // 사이드바 트리 — 선택 변경 감지 → 카테고리 전환(검색 해제).
+                let before = self.tree.selected_row();
+                self.tree.on_event(ev, inv);
+                let after = self.tree.selected_row();
+                if self.tree.bounds().contains(p) && after != before
+                    || (self.tree.bounds().contains(p) && !self.query.is_empty())
+                {
+                    if let Some(&ci) = self.cat_map.get(after) {
+                        self.selected_cat = ci;
+                    }
+                    self.query.clear();
+                    self.search.set_text("");
+                    self.rebuild(inv);
+                    return;
+                }
+                // 우측 컨트롤들.
+                for row in &mut self.rows {
+                    match &mut row.ctl {
+                        RowCtl::Combo(c) => c.on_event(ev, inv),
+                        RowCtl::Check(c) => c.on_event(ev, inv),
+                        RowCtl::Font { family, size } => {
+                            family.on_event(ev, inv);
+                            size.on_event(ev, inv);
+                        }
+                    }
+                }
+                self.drain_changes(inv);
+                inv.push(self.bounds);
+            }
+            InputEvent::Char { .. } => {
+                if self.any_family_focused() {
+                    for row in &mut self.rows {
+                        if let RowCtl::Font { family, .. } = &mut row.ctl {
+                            if family.is_focused() {
+                                family.on_event(ev, inv);
+                            }
+                        }
+                    }
+                    self.drain_changes(inv);
+                } else {
+                    // 기본 타이핑 = 검색(포커스 없어도 검색으로 흐른다 — 기존 UX 유지).
+                    self.search.set_focused(true);
+                    self.search.on_event(ev, inv);
+                    let q = self.search.text();
+                    if q != self.query {
+                        self.query = q;
+                        self.rebuild(inv);
+                    }
+                }
+                inv.push(self.bounds);
+            }
             InputEvent::Key { key, .. } => match key {
                 Key::Escape => {
-                    if matches!(self.focus, Focus::Family(_)) {
-                        self.focus = Focus::Search;
+                    if self.any_family_focused() {
+                        for row in &mut self.rows {
+                            if let RowCtl::Font { family, .. } = &mut row.ctl {
+                                family.set_focused(false);
+                            }
+                        }
                         inv.push(self.bounds);
                     } else {
                         self.back = true;
                     }
                 }
-                Key::Up => {
-                    self.focus = Focus::Search;
-                    self.caret = self.caret.saturating_sub(1);
-                    inv.push(self.bounds);
-                }
-                Key::Down => {
-                    self.focus = Focus::Search;
-                    let n = self.items().len();
-                    if n > 0 {
-                        self.caret = (self.caret + 1).min(n - 1);
-                    }
-                    inv.push(self.bounds);
-                }
-                Key::Enter | Key::Space => {
-                    if let Some(&reg_idx) = self.items().get(self.caret) {
-                        self.activate(reg_idx, inv);
+                Key::Up | Key::Down if self.query.is_empty() => {
+                    // 사이드바 카테고리 탐색(검색 중엔 유지).
+                    let before = self.tree.selected_row();
+                    self.tree.on_event(ev, inv);
+                    let after = self.tree.selected_row();
+                    if after != before {
+                        if let Some(&ci) = self.cat_map.get(after) {
+                            self.selected_cat = ci;
+                        }
+                        self.rebuild(inv);
                     }
                 }
                 _ => {}
             },
-            InputEvent::Char { c, .. } => {
-                if let Focus::Family(reg_idx) = self.focus {
-                    if let SettingKind::FontSection { family_key, .. } = registry()[reg_idx].kind {
-                        self.edit_family(family_key, c, inv);
-                    }
-                } else {
-                    if c == '\u{8}' {
-                        self.query.pop();
-                    } else if !c.is_control() {
-                        self.query.push(c);
-                    }
-                    self.caret = 0;
-                    inv.push(self.bounds);
-                }
+            _ => {
+                // 휠 등 — 트리(스크롤바)로.
+                self.tree.on_event(ev, inv);
             }
-            InputEvent::MouseDown { x, y, .. } => {
-                if let Some(cat_idx) = self.sidebar_at(x, y) {
-                    let rows = self.sidebar_rows();
-                    if let Some(&(cat, _)) = rows.get(cat_idx) {
-                        if let Some(pos) = Self::cats().iter().position(|&c| c == cat) {
-                            self.selected_cat = pos;
-                        }
-                        self.query.clear();
-                        self.caret = 0;
-                        self.focus = Focus::Search;
-                        inv.push(self.bounds);
-                    }
-                    return;
-                }
-                self.focus = Focus::Search; // 기본: 블러(글꼴명 클릭 시 아래서 재설정)
-                let p = Point { x, y };
-                for (row, top) in self.rows_with_top() {
-                    let RowKind::Item(i) = row else { continue };
-                    let h = self.row_h(&row);
-                    if y < top || y >= top + h {
-                        continue;
-                    }
-                    if let Some(pos) = self.items().iter().position(|&it| it == i) {
-                        self.caret = pos;
-                    }
-                    match registry()[i].kind {
-                        SettingKind::Radio(opts) => {
-                            let key = registry()[i].key;
-                            self.cycle_key(key, opts, inv);
-                        }
-                        SettingKind::FontSection { size_key, .. } => {
-                            let (fam, size) = self.section_ctrls(top);
-                            if fam.contains(p) {
-                                self.focus = Focus::Family(i);
-                                inv.push(self.bounds);
-                            } else if size.contains(p) {
-                                self.cycle_key(size_key, SIZE_OPTS, inv);
-                            } else {
-                                inv.push(self.bounds);
-                            }
-                        }
-                    }
-                    break;
-                }
-            }
-            _ => {}
         }
     }
 
     fn paint(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
-        let lang = self.lang();
+        let lang = current_lang();
         ctx.fill_rect(self.bounds, theme.panel_bg);
-        let sw = self.sidebar_w();
+        let sw = self.s(SIDEBAR_W);
 
-        // ── 좌측 사이드바: 검색창 + 카테고리 트리 ──
-        let sidebar = Rect::new(self.bounds.x, self.bounds.y, sw, self.bounds.h);
-        ctx.fill_rect(sidebar, theme.chrome_bg);
-        let search = Rect::new(self.bounds.x, self.bounds.y, sw, self.s(SEARCH_H));
-        ctx.fill_rect(search, theme.field_bg);
-        ctx.select_font(FontSlot::Status, false);
-        let (q, qc) = if self.query.is_empty() {
-            (tr(lang, Msg::SearchPlaceholder).to_string(), theme.text_dim)
-        } else {
-            (self.query.clone(), theme.text)
-        };
-        ctx.text(search.x + self.s(8), search.y + self.s(8), search, &q, qc);
-
-        let searching = !self.query.is_empty();
-        let selected = Self::cats().get(self.selected_cat).copied();
-        let mut ty = self.bounds.y + self.s(SEARCH_H);
-        for (cat, n) in self.sidebar_rows() {
-            let r = Rect::new(self.bounds.x, ty, sw, self.s(TREE_ROW_H));
-            let is_sel = !searching && Some(cat) == selected;
-            if is_sel {
-                ctx.fill_rect(r, theme.sel_bg);
-            }
-            ctx.select_font(FontSlot::Base, false);
-            let label = if searching {
-                format!("{} ({n})", tr(lang, cat))
-            } else {
-                tr(lang, cat).to_string()
-            };
-            ctx.text(
-                r.x + self.s(12),
-                r.y + self.s(5),
-                r,
-                &label,
-                if is_sel { theme.text } else { theme.text_dim },
-            );
-            ty += self.s(TREE_ROW_H);
-        }
+        // 사이드바 배경 + 검색 + 트리 + 경계선.
+        ctx.fill_rect(
+            Rect::new(self.bounds.x, self.bounds.y, sw, self.bounds.h),
+            theme.chrome_bg,
+        );
+        self.search.paint(ctx, theme);
+        self.tree.paint(ctx, theme);
         ctx.fill_rect(
             Rect::new(self.bounds.x + sw - 1, self.bounds.y, 1, self.bounds.h),
             theme.border,
         );
 
-        // ── 우측 편집기 ──
-        let items = self.items();
-        for (row, top) in self.rows_with_top() {
-            match row {
-                RowKind::Header(cat) => {
-                    let r = Rect::new(
-                        self.bounds.x + sw,
-                        top,
-                        self.bounds.w - sw,
-                        self.s(HEADER_H),
-                    );
-                    ctx.select_font(FontSlot::Status, false);
-                    ctx.text_opaque(
-                        r.x + self.s(10),
+        // 우측 행: 라벨/설명 + 컨트롤.
+        for row in &self.rows {
+            let e = &registry()[row.idx];
+            let r = row.rect;
+            match &row.ctl {
+                RowCtl::Combo(_) | RowCtl::Check(_) => {
+                    ctx.select_font(FontSlot::Base, false);
+                    ctx.text(
+                        r.x + self.s(PAD),
                         r.y + self.s(6),
                         r,
-                        tr(lang, cat),
+                        tr(lang, e.label),
+                        theme.text,
+                    );
+                    ctx.select_font(FontSlot::Status, false);
+                    ctx.text(
+                        r.x + self.s(PAD),
+                        r.y + self.s(30),
+                        r,
+                        tr(lang, e.desc),
                         theme.text_dim,
-                        theme.chrome_bg,
                     );
                 }
-                RowKind::Item(i) => {
-                    let e = &registry()[i];
-                    let h = self.row_h(&row);
-                    let r = Rect::new(self.bounds.x + sw, top, self.bounds.w - sw, h);
-                    let is_caret = items.get(self.caret) == Some(&i);
-                    match e.kind {
-                        SettingKind::Radio(opts) => {
-                            self.paint_radio(ctx, theme, lang, e, opts, r, is_caret);
-                        }
-                        SettingKind::FontSection {
-                            family_key,
-                            size_key,
-                        } => {
-                            self.paint_font_section(
-                                ctx, theme, lang, e, family_key, size_key, r, top, i,
-                            );
-                        }
-                    }
+                RowCtl::Font { .. } => {
+                    ctx.select_font(FontSlot::Base, true);
+                    ctx.text(
+                        r.x + self.s(PAD),
+                        r.y + self.s(6),
+                        r,
+                        tr(lang, e.label),
+                        theme.text,
+                    );
+                    ctx.select_font(FontSlot::Status, false);
+                    ctx.text(
+                        r.x + self.s(PAD),
+                        r.y + self.s(64),
+                        r,
+                        tr(lang, e.desc),
+                        theme.text_dim,
+                    );
+                }
+            }
+            match &row.ctl {
+                RowCtl::Combo(c) => c.paint(ctx, theme),
+                RowCtl::Check(c) => c.paint(ctx, theme),
+                RowCtl::Font { family, size } => {
+                    family.paint(ctx, theme);
+                    size.paint(ctx, theme);
                 }
             }
         }
-    }
-}
-
-impl SettingsWidget {
-    /// Radio 항목 — 제목 + 설명 + 우측 값 콤보(클릭/Enter = 다음 값).
-    #[allow(clippy::too_many_arguments)]
-    fn paint_radio(
-        &self,
-        ctx: &mut dyn DrawCtx,
-        theme: &Theme,
-        lang: Lang,
-        e: &Entry,
-        opts: &[(&'static str, Msg)],
-        r: Rect,
-        is_caret: bool,
-    ) {
-        let bg = if is_caret {
-            theme.sel_bg
-        } else {
-            theme.panel_bg
-        };
-        ctx.fill_rect(r, bg);
-        ctx.select_font(FontSlot::Base, false);
-        ctx.text(
-            r.x + self.s(12),
-            r.y + self.s(5),
-            r,
-            tr(lang, e.label),
-            theme.text,
-        );
-        ctx.select_font(FontSlot::Status, false);
-        ctx.text(
-            r.x + self.s(12),
-            r.y + self.s(24),
-            r,
-            tr(lang, e.desc),
-            theme.text_dim,
-        );
-
-        let current = self.values.get(e.key).map_or("", String::as_str);
-        let msg = opts
-            .iter()
-            .find(|(v, _)| *v == current)
-            .map_or(SIZE_OPTS[0].1, |(_, m)| *m);
-        let combo = format!("{} ▾", tr(lang, msg));
-        ctx.select_font(FontSlot::Base, false);
-        let bw = ctx.text_width(&combo) + self.s(18);
-        let chip = Rect::new(r.right() - bw - self.s(12), r.y + self.s(8), bw, self.s(26));
-        ctx.fill_round_rect(chip, self.s(6), theme.accent);
-        ctx.text(
-            chip.x + self.s(9),
-            chip.y + self.s(5),
-            chip,
-            &combo,
-            theme.panel_bg,
-        );
-    }
-
-    /// 글꼴 섹션 — 제목 + (글꼴명 텍스트박스 · 크기 콤보) + 설명.
-    #[allow(clippy::too_many_arguments)]
-    fn paint_font_section(
-        &self,
-        ctx: &mut dyn DrawCtx,
-        theme: &Theme,
-        lang: Lang,
-        e: &Entry,
-        family_key: &'static str,
-        size_key: &'static str,
-        r: Rect,
-        top: i32,
-        reg_idx: usize,
-    ) {
-        ctx.fill_rect(r, theme.panel_bg);
-        ctx.select_font(FontSlot::Base, true);
-        ctx.text(
-            r.x + self.s(12),
-            r.y + self.s(6),
-            r,
-            tr(lang, e.label),
-            theme.text,
-        );
-
-        let (fam, size) = self.section_ctrls(top);
-
-        // 글꼴명 텍스트박스.
-        let focused = self.focus == Focus::Family(reg_idx);
-        ctx.fill_rect(fam, theme.field_bg);
-        if focused {
-            ctx.stroke_round_rect(fam, self.s(3), theme.accent, 1.5);
+        // 열린 콤보 드롭다운은 맨 위에 다시 그린다(아래 행에 가리지 않게).
+        for row in &self.rows {
+            match &row.ctl {
+                RowCtl::Combo(c) if c.is_open() => c.paint(ctx, theme),
+                RowCtl::Font { size, .. } if size.is_open() => size.paint(ctx, theme),
+                _ => {}
+            }
         }
-        let family = self.values.get(family_key).map_or("", String::as_str);
-        ctx.select_font(FontSlot::Base, false);
-        let (ftext, fcolor) = if family.is_empty() {
-            (tr(lang, Msg::SystemDefaultFont).to_string(), theme.text_dim)
-        } else if focused {
-            (format!("{family}|"), theme.text)
-        } else {
-            (family.to_string(), theme.text)
-        };
-        ctx.text(fam.x + self.s(8), fam.y + self.s(5), fam, &ftext, fcolor);
-
-        // 크기 콤보(클릭/Enter = 다음 크기).
-        ctx.fill_round_rect(size, self.s(6), theme.accent);
-        let szval = self.values.get(size_key).map_or("m", String::as_str);
-        ctx.select_font(FontSlot::Base, false);
-        ctx.text(
-            size.x + self.s(10),
-            size.y + self.s(5),
-            size,
-            &format!("{} ▾", tr(lang, size_msg(szval))),
-            theme.panel_bg,
-        );
-
-        // 설명.
-        ctx.select_font(FontSlot::Status, false);
-        ctx.text(
-            r.x + self.s(12),
-            r.y + self.s(64),
-            r,
-            tr(lang, e.desc),
-            theme.text_dim,
-        );
     }
 }
 
@@ -853,7 +812,7 @@ mod tests {
     fn widget() -> (SettingsWidget, Invalidations) {
         let mut w = SettingsWidget::new(&SettingsState::with_defaults());
         let mut inv = Invalidations::default();
-        w.set_bounds(Rect::new(0, 0, 500, 500), &mut inv);
+        w.set_bounds(Rect::new(0, 0, 560, 560), &mut inv);
         (w, inv)
     }
     fn key(k: Key) -> InputEvent {
@@ -874,180 +833,138 @@ mod tests {
             primary: false,
         }
     }
-    fn font_cat() -> usize {
-        SettingsWidget::cats()
+    /// 카테고리 강제 선택(테스트 헬퍼).
+    fn select_cat(w: &mut SettingsWidget, cat: Msg) {
+        let ci = SettingsWidget::cats()
             .iter()
-            .position(|&c| c == Msg::CatFont)
-            .unwrap()
-    }
-    fn font_first_reg_idx() -> usize {
-        registry()
-            .iter()
-            .position(|e| matches!(e.kind, SettingKind::FontSection { .. }))
-            .unwrap()
+            .position(|&c| c == cat)
+            .unwrap();
+        w.selected_cat = ci;
+        let mut inv = Invalidations::default();
+        w.rebuild(&mut inv);
+        w.set_bounds(Rect::new(0, 0, 560, 560), &mut inv);
     }
 
     #[test]
-    fn registry_is_single_source_render_equals_search() {
-        let (w, _) = widget();
-        let total: usize = w.sidebar_rows().iter().map(|&(_, n)| n).sum();
-        assert_eq!(total, registry().len());
+    fn registry_is_single_source() {
+        // 전 카테고리 가시 항목 합 == 레지스트리 전체(트리 밖 설정 구조적 불가).
+        let (mut w, _) = widget();
         let mut shown = 0;
-        let mut w2 = w;
         for i in 0..SettingsWidget::cats().len() {
-            w2.selected_cat = i;
-            shown += w2.items().len();
+            w.selected_cat = i;
+            shown += w.visible_indices().len();
         }
         assert_eq!(shown, registry().len());
     }
 
     #[test]
-    fn font_category_has_four_sections() {
-        let (mut w, _) = widget();
-        w.selected_cat = font_cat();
-        let items = w.items();
-        assert_eq!(items.len(), 4, "기본/사용자목록/대화본문/상태바");
-        for &i in &items {
-            assert!(matches!(
-                registry()[i].kind,
-                SettingKind::FontSection { .. }
-            ));
-        }
-    }
-
-    #[test]
-    fn defaults_seed_family_size_and_language() {
+    fn defaults_include_toggles_on() {
         let s = SettingsState::with_defaults();
-        assert_eq!(
-            s.get("font.base.family"),
-            "",
-            "글꼴명 기본 = 시스템 기본(빈값)"
-        );
-        assert_eq!(s.get("font.base.size"), "m", "크기 기본 = 보통");
-        assert_eq!(s.get("ui.language"), "en", "언어 기본 = 영어");
-        assert_eq!(s.get("ui.theme"), "dark");
+        assert_eq!(s.get("ui.typeahead_space"), "on");
+        assert_eq!(s.get("ui.typeahead_special"), "on");
         assert_eq!(s.get("chat.window_mode"), "single");
+        assert_eq!(s.get("ui.language"), "en");
+        assert_eq!(s.get("font.base.size"), "m");
     }
 
     #[test]
-    fn language_option_cycles_through_all_four() {
+    fn combo_row_selection_reports_change() {
         let (mut w, mut inv) = widget();
-        // 모양 카테고리에서 언어 항목을 찾아 순환.
-        let lang_idx = registry()
-            .iter()
-            .position(|e| e.key == "ui.language")
-            .unwrap();
-        w.cycle_key(
-            "ui.language",
-            match registry()[lang_idx].kind {
-                SettingKind::Radio(o) => o,
-                SettingKind::FontSection { .. } => unreachable!(),
-            },
-            &mut inv,
-        );
-        assert_eq!(w.take_changes(), vec![("ui.language", "ko".to_string())]);
+        select_cat(&mut w, Msg::CatAppearance);
+        // 첫 행 = 테마 콤보. 콤보 클릭 → 열림 → 두 번째 항목(light) 클릭.
+        let cb = match &w.rows[0].ctl {
+            RowCtl::Combo(c) => c.bounds(),
+            _ => panic!("첫 행은 콤보"),
+        };
+        w.on_event(&click(cb.x + 5, cb.y + 5), &mut inv);
+        let pop = match &w.rows[0].ctl {
+            RowCtl::Combo(c) => {
+                assert!(c.is_open(), "클릭 = 드롭다운 열림");
+                c.popup_rect()
+            }
+            _ => unreachable!(),
+        };
+        let item_h = 26; // combo ROW_H(scale 1)
+        w.on_event(&click(pop.x + 30, pop.y + 4 + item_h + 5), &mut inv);
+        assert_eq!(w.take_changes(), vec![("ui.theme", "light".to_string())]);
     }
 
     #[test]
-    fn search_matches_across_languages() {
-        // 영어 UI(기본)에서도 한국어로 검색된다(전 언어 매치).
+    fn checkbox_row_toggles_off() {
+        let (mut w, mut inv) = widget();
+        select_cat(&mut w, Msg::CatAppearance);
+        // Toggle 행(공백 포함) 찾기.
+        let (i, cb) = w
+            .rows
+            .iter()
+            .enumerate()
+            .find_map(|(i, r)| match &r.ctl {
+                RowCtl::Check(c) => Some((i, c.bounds())),
+                _ => None,
+            })
+            .expect("토글 행 존재");
+        assert_eq!(registry()[w.rows[i].idx].key, "ui.typeahead_space");
+        w.on_event(&click(cb.x + 3, cb.y + cb.h / 2), &mut inv);
+        assert_eq!(
+            w.take_changes(),
+            vec![("ui.typeahead_space", "off".to_string())]
+        );
+    }
+
+    #[test]
+    fn font_family_textbox_types_and_reports() {
+        let (mut w, mut inv) = widget();
+        select_cat(&mut w, Msg::CatFont);
+        let fb = match &w.rows[0].ctl {
+            RowCtl::Font { family, .. } => family.bounds(),
+            _ => panic!("글꼴 행"),
+        };
+        w.on_event(&click(fb.x + 5, fb.y + 5), &mut inv);
+        for c in "Arial".chars() {
+            w.on_event(&ch(c), &mut inv);
+        }
+        let changes = w.take_changes();
+        assert!(
+            changes
+                .iter()
+                .any(|(k, v)| *k == "font.base.family" && v == "Arial"),
+            "{changes:?}"
+        );
+        // Esc 1회 = 글꼴명 블러(닫힘 아님), 2회 = 닫기.
+        w.on_event(&key(Key::Escape), &mut inv);
+        assert!(!w.take_back());
+        w.on_event(&key(Key::Escape), &mut inv);
+        assert!(w.take_back());
+    }
+
+    #[test]
+    fn search_filters_across_languages_and_sidebar_counts() {
         let (mut w, mut inv) = widget();
         for c in "테마".chars() {
             w.on_event(&ch(c), &mut inv);
         }
-        let rows = w.sidebar_rows();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0], (Msg::CatAppearance, 1), "테마 = 모양 1건");
-        // 영어로도.
+        assert_eq!(w.visible_indices().len(), 1, "테마 1건");
+        assert_eq!(registry()[w.visible_indices()[0]].key, "ui.theme");
+        assert_eq!(w.cat_map.len(), 1, "매치 있는 카테고리만 사이드바에");
+        // 영어로도 매치.
         let (mut w2, mut inv2) = widget();
-        for c in "theme".chars() {
+        for c in "language".chars() {
             w2.on_event(&ch(c), &mut inv2);
         }
-        assert_eq!(w2.items().len(), 1);
-        assert_eq!(registry()[w2.items()[0]].key, "ui.theme");
-    }
-
-    #[test]
-    fn clicking_size_combo_cycles_size() {
-        let (mut w, mut inv) = widget();
-        w.selected_cat = font_cat();
-        let (_fam, size) = w.section_ctrls(0);
-        w.on_event(&click(size.x + 4, size.y + 4), &mut inv);
-        assert_eq!(
-            w.take_changes(),
-            vec![("font.base.size", "l".to_string())],
-            "m → l 순환"
-        );
-    }
-
-    #[test]
-    fn clicking_family_box_focuses_and_typing_edits_family() {
-        let (mut w, mut inv) = widget();
-        w.selected_cat = font_cat();
-        let (fam, _size) = w.section_ctrls(0);
-        w.on_event(&click(fam.x + 4, fam.y + 4), &mut inv);
-        assert_eq!(w.focus, Focus::Family(font_first_reg_idx()));
-        for c in "Arial".chars() {
-            w.on_event(&ch(c), &mut inv);
-        }
-        assert_eq!(
-            w.values.get("font.base.family").map(String::as_str),
-            Some("Arial")
-        );
-        assert!(w.query.is_empty(), "검색창이 아니라 글꼴명으로");
-        w.on_event(&ch('\u{8}'), &mut inv);
-        assert_eq!(
-            w.values.get("font.base.family").map(String::as_str),
-            Some("Aria")
-        );
-        assert!(w
-            .take_changes()
+        assert!(w2
+            .visible_indices()
             .iter()
-            .any(|(k, _)| *k == "font.base.family"));
+            .any(|&i| registry()[i].key == "ui.language"));
     }
 
     #[test]
-    fn escape_blurs_family_before_closing() {
+    fn sidebar_click_switches_category_and_clears_search() {
         let (mut w, mut inv) = widget();
-        w.selected_cat = font_cat();
-        let (fam, _s) = w.section_ctrls(0);
-        w.on_event(&click(fam.x + 4, fam.y + 4), &mut inv);
-        assert!(matches!(w.focus, Focus::Family(_)));
-        w.on_event(&key(Key::Escape), &mut inv);
-        assert_eq!(w.focus, Focus::Search, "첫 Esc = 블러");
-        assert!(!w.take_back());
-        w.on_event(&key(Key::Escape), &mut inv);
-        assert!(w.take_back(), "둘째 Esc = 닫기");
-    }
-
-    #[test]
-    fn sidebar_click_selects_category() {
-        let (mut w, mut inv) = widget();
-        // 둘째 사이드바 행("모양"/Appearance) 클릭 — 테마·언어·타입어헤드 4종.
-        w.on_event(&click(10, SEARCH_H + TREE_ROW_H + 5), &mut inv);
-        let items = w.items();
-        assert_eq!(
-            items.len(),
-            6,
-            "테마·언어·타입어헤드(초기화/위치/공백/특수문자)"
-        );
-        assert_eq!(registry()[items[0]].key, "ui.theme");
-        assert_eq!(registry()[items[1]].key, "ui.language");
-        assert_eq!(registry()[items[2]].key, "ui.typeahead_timeout");
-    }
-
-    #[test]
-    fn enter_cycles_radio_value_and_reports_change() {
-        let (mut w, mut inv) = widget();
-        w.on_event(&key(Key::Enter), &mut inv); // 첫 항목 = chat.window_mode: single → separate
-        let c = w.take_changes();
-        assert_eq!(c, vec![("chat.window_mode", "separate".to_string())]);
-        assert!(w.take_changes().is_empty(), "1회성 드레인");
-        w.on_event(&key(Key::Enter), &mut inv);
-        assert_eq!(
-            w.take_changes(),
-            vec![("chat.window_mode", "single".to_string())]
-        );
+        // 트리 두 번째 행(모양) 클릭.
+        let tb = w.tree.bounds();
+        w.on_event(&click(tb.x + 10, tb.y + 24 + 5), &mut inv);
+        assert_eq!(w.selected_cat, 1, "모양 선택");
+        assert!(w.rows.iter().any(|r| registry()[r.idx].key == "ui.theme"));
     }
 
     #[test]

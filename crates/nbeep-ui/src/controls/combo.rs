@@ -104,8 +104,8 @@ fn draw_leading(
     }
 }
 
-/// 콤보 아이콘 변 크기(논리 px) — 정사각 · 텍스트와 세로 중앙(18에서 위2·아래3 = 5 축소 · 사용자 확정).
-const ICON_SZ: i32 = 13;
+/// 콤보 아이콘 변 크기 — 공용 단일 원천([`super::LEADING_ICON`] · 크기 드리프트 방지).
+const ICON_SZ: i32 = super::LEADING_ICON;
 
 /// 콤보 공유 상태(추상 콤보의 상태 계층). `Combo`·`Choose`가 함께 쓴다.
 #[derive(Debug)]
