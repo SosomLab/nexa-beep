@@ -49,7 +49,7 @@ jobs:
       - name: test
         run: cargo test --workspace --features nbeep-core/testkit
 
-  # ── 크로스 빌드: 실행할 수 없는 타깃은 컴파일 검증만 ──────────
+  # ── 크로스 빌드: 실행할 수 없는 타깃은 컴파일 검증 + 릴리스 크기 리포트 ──
   cross-build:
     strategy:
       fail-fast: false
@@ -57,14 +57,25 @@ jobs:
         include:
           - os: windows-latest
             target: aarch64-pc-windows-msvc   # Win ARM(실행 불가 → build만)
+            bin: nexa-beep.exe
           - os: macos-latest
             target: x86_64-apple-darwin       # Intel mac(러너가 arm64 → build만)
+            bin: nexa-beep
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
       - name: build (${{ matrix.target }})
         run: cargo build --workspace --target ${{ matrix.target }}
+      - name: release size (${{ matrix.target }}, ≤10MB)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --release -p nexa-beep --target ${{ matrix.target }}
+          path="target/${{ matrix.target }}/release/${{ matrix.bin }}"
+          size=$(wc -c < "$path")
+          printf '%s: %d bytes (%.2f MB)\n' "${{ matrix.target }}" "$size" "$(awk "BEGIN{print $size/1048576}")"
+          [ "$size" -le $((10*1024*1024)) ] || { echo "::error::${{ matrix.target }} > 10MB(NFR-B-3)"; exit 1; }
 
   # ── 예산 게이트: 산출물 크기 (NFR-B-3 ≤ 10MB) ────────────────
   budget:
@@ -74,7 +85,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: release build
         run: cargo build --release -p nexa-beep -p nbeep-imgdec
-      - name: size gate (≤10MB/바이너리)
+      - name: size gate (linux, ≤10MB/바이너리)
         shell: bash
         run: |
           set -euo pipefail
@@ -82,13 +93,14 @@ jobs:
           fail=0
           for bin in nexa-beep nbeep-imgdec; do
             path="target/release/$bin"
-            size=$(stat -c%s "$path")
-            printf '%-16s %8d bytes (%.2f MB)\n' "$bin" "$size" "$(echo "scale=2; $size/1048576" | bc)"
+            size=$(wc -c < "$path")
+            printf '%-16s %8d bytes (%.2f MB)\n' "$bin" "$size" "$(awk "BEGIN{print $size/1048576}")"
             if [ "$size" -gt "$limit" ]; then
               echo "::error::$bin 크기 $size > 10MB(NFR-B-3) — 병합 금지"
               fail=1
             fi
           done
           exit $fail
-      # TODO(SP-1/M0-2): 임포트 화이트리스트 게이트(NFR-B-5 · OS 인박스만) 추가.
-      # 실물 창·렌더가 들어온 뒤 otool/dumpbin/ldd로 동적 링크를 검사한다.
+      # 4타깃 크기: linux=이 잡, mac/win(ARM·Intel)=cross-build 잡. Win x64=test 잡 빌드.
+      # TODO(SP-1 실기·M1+): 임포트 화이트리스트(NFR-B-5) · 유휴 RSS(macOS=phys_footprint) ·
+      #   24h 누수(NFR-B-6) 게이트 — 실물 창·상주 루프 도착 후 추가.
