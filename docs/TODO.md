@@ -65,7 +65,7 @@ M-1 설계 ──► M0 기반 ──► M1 발견 ──► M2 대화 ──►
 | D-18 | **ADR-0005 기록 저장 암호화** → [17](17-adr-0005-history-at-rest.md) | P0 | 대 | D-16 | 🚧 **Proposed** |
 | D-19 | **ADR-0006 수동 엔드포인트 등록** → [19](19-adr-0006-manual-endpoint.md) | P1 | 중 | D-9 | 🚧 **Proposed** |
 | D-20 | **ADR-0007 다중 기기 신원** → [20](20-adr-0007-multi-device-identity.md) | P1 | 대 | D-9 · D-18 | ✅ **Accepted** (Q-1: 주 기기 + 복구 시드 / 기록 키 분리) |
-| D-21 | **v1 제약 4건 반영**([20 §7](20-adr-0007-multi-device-identity.md)) — `UserId` 타입 자리 · 발신 경로 `PeerId` 집합 일반화 · `sender_device` 필드 · **저장 마스터 키 한 겹 래핑**. **M0-1b와 같이 세운다** | P0 | 소 | D-20 | ☐ → M0-1b |
+| D-21 | **v1 제약 4건 반영**([20 §7](20-adr-0007-multi-device-identity.md)) — `UserId` 타입 자리 · 발신 경로 `PeerId` 집합 일반화 · `sender_device` 필드 · **저장 마스터 키 한 겹 래핑**. **M0-1b와 같이 세운다** | P0 | 소 | D-20 | 🚧 (08-08 M0-1b — UserId·Recipients 타입 세움 / 저장 키 제약 store doc 명시 / sender_device·발신 일반화는 M2-4에 배선) |
 
 > **설계에 남은 것**: ADR-0003·0004·0005·0006 **사용자 확정** → `Accepted`. 확정되면 코드 착수.
 > **실기·코드 필요 항목**(D-8 발견 스파이크 · D-13 L1 구독 · D-14 소켓 검증표 · D-15 SP-1)은 아래 M0/M1에서 실행한다.
@@ -78,12 +78,12 @@ M-1 설계 ──► M0 기반 ──► M1 발견 ──► M2 대화 ──►
 
 | ID | 항목 | 우선 | 규모 | 의존 | 상태 |
 |---|---|---|---|---|---|
-| M0-1 | 프로젝트 스캐폴딩 — Cargo 워크스페이스·`rust-toolchain.toml`(stable 고정)·release 프로파일·9크레이트 골격·4타깃·린트/테스트 러너. **최소 지원 OS·MSRV 확정**([07 §8](07-adr-0001-stack.md)) | P0 | 중 | D-6 | ☐ |
-| M0-1b | **★ 횡단 골격 선구축**([13](13-code-design-standards.md)) — `ActionKind`·`ActionCtx`·`Interceptor` 파이프라인 · 포트 스켈레톤(`Clock`/`Rng`/`Meter`/`Tracer`) · **D-21 v1 제약 4건 동시 반영**. **기능보다 먼저** | P0 | 중 | M0-1 | ☐ |
-| M0-1c | `ActionKind` ↔ `u16` **안정 코드 매핑표** 초판 · 민감 타입 `Debug` 마스킹 규약 적용 | P0 | 소 | M0-1b | ☐ |
+| M0-1 | 프로젝트 스캐폴딩 — Cargo 워크스페이스·`rust-toolchain.toml`(stable 고정)·release 프로파일·9크레이트 골격·4타깃·린트/테스트 러너. **최소 지원 OS·MSRV 확정**([07 §8](07-adr-0001-stack.md)) | P0 | 중 | D-6 | ✅ (08-08 — 9크레이트·의존성 역전·CRT정적·크기 프로파일. build/clippy/fmt green. MSRV 1.82 잠정) |
+| M0-1b | **★ 횡단 골격 선구축**([13](13-code-design-standards.md)) — `ActionKind`·`ActionCtx`·`Interceptor` 파이프라인 · 포트 스켈레톤(`Clock`/`Rng`/`Meter`/`Tracer`) · **D-21 v1 제약 4건 동시 반영**. **기능보다 먼저** | P0 | 중 | M0-1 | ✅ (08-08 — ActionKind 24종·인터셉터 파이프라인·포트 4종·신원(PeerId/UserId/Recipients)·testkit. 20테스트 green) |
+| M0-1c | `ActionKind` ↔ `u16` **안정 코드 매핑표** 초판 · 민감 타입 `Debug` 마스킹 규약 적용 | P0 | 소 | M0-1b | ✅ (08-08 — stable_code 24종·골든/유일성 테스트 · `redact::Redacted/RedactedText` 헬퍼. 29테스트 green) |
 | M0-2 | **★ SP-1 예산 검증 스파이크**(D-15) — 빈 창 4타깃 크기(≤3MB)·RSS(≤15MB) · 텍스트 스택 증가분 · **한글 IME** · 500행 60fps · **의존성 라이선스 전수**([07 §6](07-adr-0001-stack.md)). **R-8 해소 지점** | P0 | 대 | M0-1 | ☐ |
-| M0-3 | CI — 4타깃 build/test/lint + **예산 게이트**(크기·RSS·임포트 화이트리스트 · **중립 크레이트 4타깃 테스트** [12 §6](12-asset-reuse.md)) | P0 | 중 | M0-1 | ☐ |
-| M0-4 | [18 빌드&테스트](18-build-and-test.md) SSOT 실내용 · [10 §3 의존성 원장](10-decision-record.md) 개시(건별 라이선스·크기) | P0 | 소 | M0-1 | ☐ |
+| M0-3 | CI — 4타깃 build/test/lint + **예산 게이트**(크기·RSS·임포트 화이트리스트 · **중립 크레이트 4타깃 테스트** [12 §6](12-asset-reuse.md)) | P0 | 중 | M0-1 | ✅ (08-08 — ci.yml 4잡: lint/test(3-OS)/cross-build(ARM·Intel)/budget(≤10MB). RSS·임포트 게이트는 SP-1 후 발효) |
+| M0-4 | [18 빌드&테스트](18-build-and-test.md) SSOT 실내용 · [10 §3 의존성 원장](10-decision-record.md) 개시(건별 라이선스·크기) | P0 | 소 | M0-1 | ✅ (08-08 — 명령 SSOT·CI 표·원장 개시(외부 crate 0)) |
 
 ---
 

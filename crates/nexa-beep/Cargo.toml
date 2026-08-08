@@ -1,0 +1,28 @@
+[package]
+name = "nexa-beep"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "제로 컨피그 로컬 네트워크 메신저 (본체)"
+
+[[bin]]
+name = "nexa-beep"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+# 본체 = 조립 지점. 전 크레이트를 와이어링(어댑터 주입).
+[dependencies]
+nbeep-core.workspace = true
+nbeep-net.workspace = true
+nbeep-crypto.workspace = true
+nbeep-safe.workspace = true
+nbeep-store.workspace = true
+nbeep-gfx.workspace = true
+nbeep-ui.workspace = true
+nbeep-plat.workspace = true

@@ -1,0 +1,16 @@
+[package]
+name = "nbeep-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[features]
+# 테스트용 포트 구현체(FixedClock/SeededRng/CollectingMeter …) 노출.
+# 다른 크레이트는 dev-dependency에서 이 feature를 켜 재사용한다(릴리스엔 미포함).
+testkit = []
+
+[lints]
+workspace = true

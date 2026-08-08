@@ -68,6 +68,7 @@
 - **설계 전 기존 문서·선행 사례부터 확인**(재발명 금지) — [docs/03](docs/03-competitive-landscape.md) · `nexa-dir2` `docs/ctl`(Nexa Controls 14종)·`docs/23`(크로스플랫폼 검토서). 차용 시 출처 경로를 커밋 본문에 명기.
 - 문서 번호(`NN-`)는 **불변**. 재번호 금지, 신규는 뒤에 append.
 - `.claude/settings.json`(권한)은 **덮어쓰기 금지, 병합만**.
+- **모델 방침(사용자 확정 08-08)**: **코드 구현·저수준 개발은 Fable로 진행**한다. `.claude/settings.json`의 `"model": "fable"` 로 세션 기본을 Fable에 고정했다(하네스는 세션 중 자동 전환하지 않는다). 분석·설계·문서 작업은 Opus로 충분하며, 그럴 때만 사용자가 `/model opus` 로 그 세션을 전환한다. **코드 관련 작업 중에는 모델을 바꾸지 않는다.**
 - 빌드/테스트 SSOT = [docs/18](docs/18-build-and-test.md) — 절차 변경 시 같은 커밋에서 갱신.
 
 ## 4. 새 세션 오리엔테이션
