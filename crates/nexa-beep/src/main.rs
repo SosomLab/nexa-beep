@@ -32,8 +32,8 @@ mod app_window {
     use winit::window::{Window, WindowId};
 
     use nbeep_ui::{
-        DrawCtx, InputEvent, Invalidations, Key, PeerListWidget, PeerRow, RasterCtx, Rect, Theme,
-        Widget,
+        ChatLine, ChatViewWidget, DrawCtx, InputEvent, Invalidations, Key, PeerListWidget, PeerRow,
+        RasterCtx, Rect, Theme, Widget,
     };
 
     type SbSurface = softbuffer::Surface<Rc<Window>, Rc<Window>>;
@@ -44,6 +44,11 @@ mod app_window {
         font: nbeep_gfx::Font,
         theme: Theme,
         list: PeerListWidget,
+        /// 열린 대화(None = 목록 화면). 스레드·세션 배선은 M2-7 — 지금은 발신 도메인 경로만.
+        chat: Option<ChatViewWidget>,
+        /// 내 기기 신원(발신 봉투 sender_device) — 실물 키(Noise와 동일 경로).
+        me: nbeep_core::PeerId,
+        seq: nbeep_core::Sequencer,
         cursor: (i32, i32),
         started: Instant,
         /// 창 배율(고DPI — FR-U-6). 모니터 이동·설정 변경 시 갱신.
@@ -92,12 +97,41 @@ mod app_window {
     impl App {
         fn route(&mut self, ev: InputEvent) {
             let mut inv = Invalidations::default();
-            self.list.on_event(&ev, &mut inv);
-            if let Some(peer) = self.list.take_activated() {
-                // 대화 열기는 M2-7 — 지금은 상태바로 동작을 보여준다.
-                self.status = format!("선택: {peer:?} — Enter = 대화 열기(M2-7에서 연결)");
-                if let Some(w) = &self.window {
-                    w.request_redraw();
+            if let Some(chat) = &mut self.chat {
+                chat.on_event(&ev, &mut inv);
+                if let Some(text) = chat.take_outgoing() {
+                    // 발신 도메인 경로 — 시퀀서가 seq를 발급하고 봉투를 만든다.
+                    // 전송(fanout)은 실물 세션 배선(M1-4·M2-7)에서 — 지금은 스레드 확정만.
+                    let msg = nbeep_core::ChatMessage {
+                        sender_device: self.me,
+                        seq: self.seq.issue(),
+                        body: nbeep_core::MessageBody::Text(text.as_str().to_string()),
+                    };
+                    self.status = format!("발신 봉투 seq={} — 전송 배선은 M2-7", msg.seq);
+                    chat.push_line(ChatLine { mine: true, text }, &mut inv);
+                }
+                if chat.take_back() {
+                    self.chat = None;
+                    self.status =
+                        "↑↓ 이동 · 타이핑 = 이름 점프(한글 가능) · Enter = 대화 열기".into();
+                    inv.push(self.list.bounds());
+                }
+            } else {
+                self.list.on_event(&ev, &mut inv);
+                if let Some(peer) = self.list.take_activated() {
+                    // 목록 → 대화 전환. 상대 이름은 데모 행에서 찾는다.
+                    let title = demo_rows()
+                        .into_iter()
+                        .find(|r| r.entry.peer == peer)
+                        .map_or_else(
+                            || format!("{peer:?}"),
+                            |r| r.entry.name.as_str().to_string(),
+                        );
+                    let mut chat = ChatViewWidget::new(title);
+                    chat.set_scale(self.scale, &mut inv);
+                    chat.set_bounds(self.list.bounds(), &mut inv);
+                    self.chat = Some(chat);
+                    self.status = "메시지 입력 · Enter 전송 · Esc = 목록".into();
                 }
             }
             if !inv.is_empty() {
@@ -249,7 +283,11 @@ mod app_window {
                         );
                         px.fill(self.theme.window_bg);
                         let mut ctx = RasterCtx::new(&mut px, &self.font).with_scale(self.scale);
-                        self.list.paint(&mut ctx, &self.theme);
+                        if let Some(chat) = &self.chat {
+                            chat.paint(&mut ctx, &self.theme);
+                        } else {
+                            self.list.paint(&mut ctx, &self.theme);
+                        }
                         // 하단 상태바 — Enter/타입어헤드 동작이 눈에 보이게.
                         let h = i32::try_from(size.height).unwrap_or(i32::MAX);
                         let w = i32::try_from(size.width).unwrap_or(i32::MAX);
@@ -280,16 +318,20 @@ mod app_window {
         list.set_rows(demo_rows(), &mut inv);
 
         let event_loop = EventLoop::new().unwrap();
+        let me = nbeep_crypto::Identity::generate().peer_id(); // 실물 키 경로(발신 봉투용)
         let mut app = App {
             window: None,
             surface: None,
             font,
             theme: Theme::dark(),
             list,
+            chat: None,
+            me,
+            seq: nbeep_core::Sequencer::new(),
             cursor: (0, 0),
             started: Instant::now(),
             scale: 1.0,
-            status: "↑↓ 이동 · 타이핑 = 이름 점프(한글 가능) · Enter = 선택".into(),
+            status: "↑↓ 이동 · 타이핑 = 이름 점프(한글 가능) · Enter = 대화 열기".into(),
         };
         event_loop.run_app(&mut app).unwrap();
     }
