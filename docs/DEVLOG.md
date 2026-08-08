@@ -7,6 +7,8 @@
 
 ## 2026-08-08
 
+- **i18n + 커스텀 컨트롤 툴킷 + 갤러리**(feat/m3-font-sections · 사용자 요청 다수): ① **글꼴 설정 섹션화**(제목+글꼴명 텍스트박스+크기 콤보, 굵게/기울임 제거, PeerList 슬롯 신설) + 대화창모드·테마 콤보화 ② **i18n**(nbeep-core::i18n · 영어 기본 + 한/중/일 · 외부 크레이트 0 · settings 전면+`ui.language` 콤보 · 전 언어 검색) ③ **커스텀 컨트롤 툴킷(DR-6)** — `ControlBase`+`Control` 트레이트로 **포커스 링(밝은 반투명 테두리)·창 활성 색·도움말 "?"+툴팁을 전 컨트롤이 상속**. Checkbox(체크만/좌·우)·RadioGroup(옵션박스)·TextBox(placeholder)·`Combo`(∨)/`ExtendedCombo`(⇕·Choose…·아이콘) 상속 계층·`TreeView`/`TreeGrid`(공통 `TreeModel`/`TreeControl`) ④ **컨트롤 갤러리**(임시 검수 — `Role::Gallery`·하단바 `🎛 컨트롤` 버튼/⌘·Ctrl+G). 워크스페이스 179→**215 green** · 릴리스 0.92MB · clippy·fmt clean. ⚠️ 글꼴명은 저장·표시까지만(패밀리 로드 M3-3) · 컨트롤 설정 정식 통합은 별도. 상세 [journal/2026-08-08.md](journal/2026-08-08.md).
+
 - **실행·수동 테스트 가이드 [문서 26](26-run-and-manual-test.md) 신설**(feat/chat-live · 사용자 요청): 이번 세션 테스트 과정·명령어를 한 장으로 — 실행 모드 표 9종 · 시나리오 A~D(GUI↔chat-live 발견 · IP 직접 · 맥↔Docker linux · Docker 2노드) · 헤드리스 검증 · 정상 종료 · 알려진 한계. ★ 함정 강조(실물은 `--window --live` · 맥↔Docker 발견 불가→IP 우회) + 실측값 임베드. 세부 절차는 [18](18-build-and-test.md) SSOT 유지, 18 §2에 26 포인터. 문서 전용(179테스트 green). 상세 [journal/2026-08-08.md](journal/2026-08-08.md).
 
 - **터미널 테스트 클라이언트 `--chat-live` — GUI 목록에 뜨는 인터랙티브 클라이언트**(feat/chat-live): 실행 중인 `--window --live` GUI에 터미널에서 붙어 사람 대 사람 대화를 테스트하는 용도. LocalDirect로 **발견 광고**(GUI 목록에 자동 등장) + 첫 인바운드(GUI 클릭 → 연결) 수락 → 인터랙티브(stdin 전송·수신 실시간). 인터랙티브 루프를 `run_interactive`로 추출해 chat-serve/connect/live 공용. 검증: chat-live 발견 광고 → 상대가 발견·연결·인사 수신 확인. 179테스트 green. 상세 [journal/2026-08-08.md](journal/2026-08-08.md).
