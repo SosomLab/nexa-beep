@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-label="Nexa Beep">
+  <!--
+    Nexa Beep 앱 아이콘 (SSOT · 벡터 소스)
+    - SosomLab "Nexa" 계열: 풀블리드 라운드 스퀘어 배경(nexa-dir 스타일 계승).
+    - 모티프: 말풍선(대화) + 비콘/브로드캐스트 파동(제로 컨피그 LAN 발견 = "beep").
+    - 색: 앱 accent(#3D8BFF) 계열 그라디언트. 전경 흰색 + accent 파동.
+    수정 시 이 파일을 고치고 PNG/ICO를 재추출한다(packaging/branding/README.md).
+  -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4A97FF"/>
+      <stop offset="1" stop-color="#2C6BE6"/>
+    </linearGradient>
+    <linearGradient id="bubble" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#EAF2FF"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 배경 -->
+  <rect x="0" y="0" width="1024" height="1024" rx="232" ry="232" fill="url(#bg)"/>
+
+  <!-- 말풍선(대화) -->
+  <path fill="url(#bubble)"
+        d="M300 236
+           h424 a108 108 0 0 1 108 108
+           v300 a108 108 0 0 1 -108 108
+           h-238
+           l-150 132 v-132
+           h-36 a108 108 0 0 1 -108 -108
+           v-300 a108 108 0 0 1 108 -108 z"/>
+
+  <!-- 비콘/브로드캐스트 파동(비프) — 말풍선 안, accent 색 -->
+  <g fill="none" stroke="#2C6BE6" stroke-linecap="round">
+    <!-- 중심 점 -->
+    <circle cx="512" cy="560" r="34" fill="#2C6BE6" stroke="none"/>
+    <!-- 상승 파동 2겹 -->
+    <path d="M410 560 a102 102 0 0 1 204 0" stroke-width="40"/>
+    <path d="M336 560 a176 176 0 0 1 352 0" stroke-width="40"/>
+  </g>
+</svg>

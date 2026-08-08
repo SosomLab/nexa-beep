@@ -7,5 +7,5 @@
 pub mod surface;
 pub mod text;
 
-pub use surface::{Color, Surface};
+pub use surface::{Color, IconImage, Surface};
 pub use text::{Font, FontError, TextStyle};

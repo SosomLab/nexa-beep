@@ -36,6 +36,73 @@ impl Color {
     }
 }
 
+/// RGBA 이미지 아이콘 — **투명 배경 지원**(straight alpha, `[R,G,B,A]` 행 우선).
+///
+/// 글꼴 글리프가 아니라 진짜 래스터 이미지다. PNG 등 파일은 상위 계층에서 디코드해
+/// [`IconImage::from_rgba`]로 넘긴다(UI/gfx는 파일 포맷을 모른다). 데모용 생성자
+/// [`IconImage::swatch`]는 투명 배경의 라운드 사각형 아이콘을 코드로 만든다.
+#[derive(Clone)]
+pub struct IconImage {
+    /// 폭(px).
+    pub w: u32,
+    /// 높이(px).
+    pub h: u32,
+    /// `w*h*4` 길이의 RGBA(straight alpha).
+    pub rgba: Vec<u8>,
+}
+
+impl core::fmt::Debug for IconImage {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("IconImage")
+            .field("w", &self.w)
+            .field("h", &self.h)
+            .finish_non_exhaustive()
+    }
+}
+
+impl IconImage {
+    /// RGBA 바이트로 만든다(예: PNG 디코더 출력).
+    ///
+    /// # Panics
+    /// `rgba.len() != w*h*4`면 패닉(구성 오류).
+    #[must_use]
+    pub fn from_rgba(w: u32, h: u32, rgba: Vec<u8>) -> Self {
+        assert_eq!(rgba.len(), (w * h * 4) as usize, "RGBA 길이 불일치");
+        Self { w, h, rgba }
+    }
+
+    /// 데모용 — **투명 배경의 라운드 사각형** 아이콘(앱 아이콘 느낌). 모서리는 알파 0.
+    #[must_use]
+    pub fn swatch(size: u32, (r, g, b): (u8, u8, u8)) -> Self {
+        let s = size as f32;
+        let radius = s / 4.0;
+        let (cx, cy) = (s / 2.0, s / 2.0);
+        let hw = s / 2.0;
+        let mut rgba = vec![0u8; (size * size * 4) as usize];
+        for py in 0..size {
+            for px in 0..size {
+                let (x, y) = (px as f32 + 0.5, py as f32 + 0.5);
+                // 라운드 사각형 SDF → 0.5px AA 커버리지.
+                let qx = (x - cx).abs() - (hw - radius);
+                let qy = (y - cy).abs() - (hw - radius);
+                let (ax, ay) = (qx.max(0.0), qy.max(0.0));
+                let d = (ax * ax + ay * ay).sqrt() + qx.max(qy).min(0.0) - radius;
+                let cov = (0.5 - d).clamp(0.0, 1.0);
+                let i = ((py * size + px) * 4) as usize;
+                rgba[i] = r;
+                rgba[i + 1] = g;
+                rgba[i + 2] = b;
+                rgba[i + 3] = (cov * 255.0).round() as u8;
+            }
+        }
+        Self {
+            w: size,
+            h: size,
+            rgba,
+        }
+    }
+}
+
 /// 빌린 픽셀 버퍼 위의 그리기 표면.
 // Debug 미파생 — 픽셀 버퍼 덤프는 로그 오염(폭·높이만 의미 있음).
 #[allow(missing_debug_implementations)]
@@ -108,11 +175,91 @@ impl<'a> Surface<'a> {
         };
         self.buf[idx] = (mix(bg.0, fg.0) << 16) | (mix(bg.1, fg.1) << 8) | mix(bg.2, fg.2);
     }
+
+    /// RGBA 이미지를 `dst`(x,y,w,h)로 **스케일**해 알파 블렌드한다(nearest 샘플링 · 큰 이미지 축소용).
+    /// `clip`(반열림) 밖은 건너뛴다.
+    #[allow(clippy::too_many_arguments)]
+    pub fn blend_image_scaled(
+        &mut self,
+        dx: i32,
+        dy: i32,
+        dw: i32,
+        dh: i32,
+        img: &IconImage,
+        clip: (i32, i32, i32, i32),
+    ) {
+        if dw <= 0 || dh <= 0 || img.w == 0 || img.h == 0 {
+            return;
+        }
+        for row in 0..dh {
+            for col in 0..dw {
+                let (px, py) = (dx + col, dy + row);
+                if px < clip.0 || px >= clip.2 || py < clip.1 || py >= clip.3 {
+                    continue;
+                }
+                // 목적 픽셀 → 원본 픽셀(nearest).
+                let sx = (col * img.w as i32 / dw).clamp(0, img.w as i32 - 1);
+                let sy = (row * img.h as i32 / dh).clamp(0, img.h as i32 - 1);
+                let i = ((sy * img.w as i32 + sx) * 4) as usize;
+                let a = img.rgba[i + 3];
+                if a == 0 {
+                    continue;
+                }
+                let color = Color::from_rgb(img.rgba[i], img.rgba[i + 1], img.rgba[i + 2]);
+                self.blend_px(px, py, color, f32::from(a) / 255.0);
+            }
+        }
+    }
+
+    /// RGBA 이미지를 `(x, y)`(좌상단)에 알파 블렌드한다. `clip = (x0,y0,x1,y1)`(반열림) 밖은 건너뛴다.
+    pub fn blend_image(&mut self, x: i32, y: i32, img: &IconImage, clip: (i32, i32, i32, i32)) {
+        for row in 0..img.h as i32 {
+            for col in 0..img.w as i32 {
+                let (px, py) = (x + col, y + row);
+                if px < clip.0 || px >= clip.2 || py < clip.1 || py >= clip.3 {
+                    continue;
+                }
+                let i = ((row * img.w as i32 + col) * 4) as usize;
+                let a = img.rgba[i + 3];
+                if a == 0 {
+                    continue;
+                }
+                let color = Color::from_rgb(img.rgba[i], img.rgba[i + 1], img.rgba[i + 2]);
+                self.blend_px(px, py, color, f32::from(a) / 255.0);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn swatch_has_transparent_corners_and_opaque_center() {
+        let img = IconImage::swatch(16, (255, 0, 0));
+        assert_eq!(img.rgba.len(), 16 * 16 * 4);
+        // 모서리(0,0)는 투명(라운드 밖), 중앙은 불투명.
+        assert_eq!(img.rgba[3], 0, "모서리 알파 0(투명 배경)");
+        let c = ((8 * 16 + 8) * 4) as usize;
+        assert!(img.rgba[c + 3] > 250, "중앙 불투명");
+        assert_eq!(img.rgba[c], 255, "색 반영");
+    }
+
+    #[test]
+    fn blend_image_respects_clip_and_alpha() {
+        let mut buf = vec![0u32; 4 * 4];
+        // 2x1 이미지: 불투명 흰색 + 완전 투명.
+        let img = IconImage::from_rgba(2, 1, vec![255, 255, 255, 255, 0, 0, 0, 0]);
+        {
+            let mut s = Surface::new(&mut buf, 4, 4);
+            s.blend_image(0, 0, &img, (0, 0, 4, 4));
+            s.blend_image(0, 2, &img, (0, 0, 4, 1)); // clip 높이 1 → row2는 밖
+        }
+        assert_eq!(buf[0], 0x00FF_FFFF, "불투명 픽셀 반영");
+        assert_eq!(buf[1], 0, "투명 픽셀 무변");
+        assert_eq!(buf[2 * 4], 0, "clip 밖 무변");
+    }
 
     #[test]
     fn fill_rect_clips_to_bounds() {

@@ -69,11 +69,23 @@ impl<'s, 'b, 'f> RasterCtx<'s, 'b, 'f> {
 
     /// rect 영역을 픽셀별 SDF 커버리지로 채운다.
     fn coverage_fill(&mut self, rect: Rect, color: Color, dist: impl Fn(f32, f32) -> f32) {
+        self.coverage_fill_alpha(rect, color, 1.0, dist);
+    }
+
+    /// [`Self::coverage_fill`]의 불투명도 변형 — 커버리지에 `alpha`를 곱한다(반투명 테두리).
+    fn coverage_fill_alpha(
+        &mut self,
+        rect: Rect,
+        color: Color,
+        alpha: f32,
+        dist: impl Fn(f32, f32) -> f32,
+    ) {
+        let a = alpha.clamp(0.0, 1.0);
         for py in rect.y..rect.bottom() {
             for px in rect.x..rect.right() {
                 // 픽셀 중심 기준 거리 → 커버리지(0.5px 폭 안티에일리어싱).
                 let d = dist(px as f32 + 0.5, py as f32 + 0.5);
-                let cov = (0.5 - d).clamp(0.0, 1.0);
+                let cov = (0.5 - d).clamp(0.0, 1.0) * a;
                 if cov > 0.0 {
                     self.surface.blend_px(px, py, color, cov);
                 }
@@ -153,6 +165,15 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
         self.font.measure(text, self.px_size()).ceil() as i32
     }
 
+    fn image(&mut self, x: i32, y: i32, img: &crate::theme::IconImage, clip: Rect) {
+        self.surface.blend_image(x, y, img, Self::clip_of(clip));
+    }
+
+    fn image_scaled(&mut self, dst: Rect, img: &crate::theme::IconImage, clip: Rect) {
+        self.surface
+            .blend_image_scaled(dst.x, dst.y, dst.w, dst.h, img, Self::clip_of(clip));
+    }
+
     fn fill_ellipse(&mut self, rect: Rect, color: Color) {
         if rect.is_empty() {
             return;
@@ -185,6 +206,21 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
         });
     }
 
+    fn fill_round_rect_alpha(&mut self, rect: Rect, radius: i32, color: Color, alpha: f32) {
+        if rect.is_empty() {
+            return;
+        }
+        let (cx, cy) = (
+            rect.x as f32 + rect.w as f32 / 2.0,
+            rect.y as f32 + rect.h as f32 / 2.0,
+        );
+        let (hw, hh) = (rect.w as f32 / 2.0, rect.h as f32 / 2.0);
+        let r = (radius as f32).min(hw).min(hh).max(0.0);
+        self.coverage_fill_alpha(rect, color, alpha, move |x, y| {
+            round_rect_sdf(x, y, cx, cy, hw, hh, r)
+        });
+    }
+
     fn stroke_round_rect(&mut self, rect: Rect, radius: i32, color: Color, width: f32) {
         if rect.is_empty() {
             return;
@@ -205,6 +241,36 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
             rect.h + pad * 2,
         );
         self.coverage_fill(area, color, move |x, y| {
+            round_rect_sdf(x, y, cx, cy, hw, hh, r).abs() - half_w
+        });
+    }
+
+    fn stroke_round_rect_alpha(
+        &mut self,
+        rect: Rect,
+        radius: i32,
+        color: Color,
+        width: f32,
+        alpha: f32,
+    ) {
+        if rect.is_empty() {
+            return;
+        }
+        let (cx, cy) = (
+            rect.x as f32 + rect.w as f32 / 2.0,
+            rect.y as f32 + rect.h as f32 / 2.0,
+        );
+        let (hw, hh) = (rect.w as f32 / 2.0, rect.h as f32 / 2.0);
+        let r = (radius as f32).min(hw).min(hh).max(0.0);
+        let half_w = width / 2.0;
+        let pad = half_w.ceil() as i32 + 1;
+        let area = Rect::new(
+            rect.x - pad,
+            rect.y - pad,
+            rect.w + pad * 2,
+            rect.h + pad * 2,
+        );
+        self.coverage_fill_alpha(area, color, alpha, move |x, y| {
             round_rect_sdf(x, y, cx, cy, hw, hh, r).abs() - half_w
         });
     }

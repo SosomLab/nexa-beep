@@ -9,8 +9,8 @@ use crate::geom::{Point, Rect};
 use crate::theme::Theme;
 use crate::widget::{Invalidations, Widget};
 
-/// 체크박스 글리프 한 변(논리 px).
-const BOX: i32 = 18;
+/// 체크박스 글리프 한 변(논리 px) — 라디오와 동일 크기(사용자 확정: 옵션박스보다 4px 작게).
+const BOX: i32 = 12;
 /// 글리프 ↔ 라벨 간격(논리 px).
 const GAP: i32 = 8;
 

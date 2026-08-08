@@ -720,6 +720,36 @@ mod app_window {
         });
     }
 
+    /// 샘플 찾기 어댑터 — 한 폴더의 **단일 파일 선택기**(Adapter 패턴 실증).
+    /// `nbeep_ui::ChoosePicker`를 구현한 어떤 화면도 Choose에 꽂을 수 있다(UI 계층은 I/O를 모른다).
+    #[derive(Debug)]
+    struct FilePicker {
+        dir: std::path::PathBuf,
+    }
+
+    impl nbeep_ui::ChoosePicker for FilePicker {
+        fn title(&self) -> String {
+            format!("파일 선택 — {}", self.dir.display())
+        }
+        fn items(&self) -> Vec<nbeep_ui::ComboItem> {
+            // 투명 배경 이미지 아이콘(파일 · 공유 Rc).
+            let icon = std::rc::Rc::new(nbeep_ui::IconImage::swatch(16, (0x8A, 0x91, 0x9C)));
+            let mut v = Vec::new();
+            if let Ok(rd) = std::fs::read_dir(&self.dir) {
+                for e in rd.flatten() {
+                    if e.file_type().map(|t| t.is_file()).unwrap_or(false) {
+                        let name = e.file_name().to_string_lossy().into_owned();
+                        v.push(
+                            nbeep_ui::ComboItem::new(name.clone(), name).with_image(icon.clone()),
+                        );
+                    }
+                }
+            }
+            v.sort_by(|a, b| a.label.cmp(&b.label));
+            v
+        }
+    }
+
     struct App {
         mode: WindowMode,
         windows: HashMap<WindowId, WinEntry>,
@@ -753,6 +783,8 @@ mod app_window {
         settings_view: Option<SettingsWidget>,
         /// 컨트롤 갤러리 뷰(임시 검수) — 열려 있을 때만 Some.
         gallery_view: Option<GalleryWidget>,
+        /// 앱 창 아이콘(브랜딩 · 전 창 공통). 지원 안 되면 None.
+        icon: Option<winit::window::Icon>,
         /// OS 주 수식키(⌘/Ctrl) 눌림 상태 — `Cmd/Ctrl+,` 판정.
         primary_down: bool,
         /// 세션 액터가 GUI를 깨우는 통로(M2-7).
@@ -961,7 +993,9 @@ mod app_window {
                 return;
             }
             let title = format!("Nexa Beep — {}", self.peer_title(peer));
-            let attrs = Window::default_attributes().with_title(title);
+            let attrs = Window::default_attributes()
+                .with_title(title)
+                .with_window_icon(self.icon.clone());
             let window = Rc::new(el.create_window(attrs).unwrap());
             window.set_ime_allowed(true);
             let scale = window.scale_factor() as f32;
@@ -1013,10 +1047,12 @@ mod app_window {
                 }
                 return;
             }
-            let attrs = Window::default_attributes().with_title(format!(
-                "Nexa Beep — {}",
-                nbeep_core::t(nbeep_core::Msg::SettingsTitle)
-            ));
+            let attrs = Window::default_attributes()
+                .with_title(format!(
+                    "Nexa Beep — {}",
+                    nbeep_core::t(nbeep_core::Msg::SettingsTitle)
+                ))
+                .with_window_icon(self.icon.clone());
             let window = Rc::new(el.create_window(attrs).unwrap());
             window.set_ime_allowed(true);
             let scale = window.scale_factor() as f32;
@@ -1046,7 +1082,9 @@ mod app_window {
                 }
                 return;
             }
-            let attrs = Window::default_attributes().with_title("Nexa Beep — 컨트롤 갤러리 (임시)");
+            let attrs = Window::default_attributes()
+                .with_title("Nexa Beep — 컨트롤 갤러리 (임시)")
+                .with_window_icon(self.icon.clone());
             let window = Rc::new(el.create_window(attrs).unwrap());
             window.set_ime_allowed(true);
             let scale = window.scale_factor() as f32;
@@ -1063,7 +1101,14 @@ mod app_window {
                     scale,
                 },
             );
-            self.gallery_view = Some(GalleryWidget::new());
+            let mut gallery = GalleryWidget::new();
+            // Choose 컨트롤에 샘플 어댑터(단일 파일 선택기) 주입 — Adapter 패턴 실증.
+            let dir = std::env::var_os("HOME")
+                .map(std::path::PathBuf::from)
+                .or_else(|| std::env::current_dir().ok())
+                .unwrap_or_default();
+            gallery.set_choose_picker(Box::new(FilePicker { dir }));
+            self.gallery_view = Some(gallery);
             self.layout_window(id);
             self.request_redraw(id);
         }
@@ -1127,6 +1172,18 @@ mod app_window {
                             e.window.request_redraw();
                         }
                     }
+                    "ui.typeahead_timeout" => {
+                        if let Ok(ms) = value.parse::<u64>() {
+                            self.list.set_typeahead_timeout(ms);
+                        }
+                    }
+                    "ui.typeahead_pos" => {
+                        let mut inv = Invalidations::default();
+                        self.list
+                            .set_hud_pos(nbeep_ui::HudPos::from_code(&value), &mut inv);
+                    }
+                    "ui.typeahead_space" => self.list.set_typeahead_space(value == "on"),
+                    "ui.typeahead_special" => self.list.set_typeahead_special(value == "on"),
                     k if k.starts_with("font.") => {
                         self.fonts = Self::fonts_from_settings(&self.settings);
                         self.status = "글꼴 설정 적용됨".into();
@@ -1415,7 +1472,9 @@ mod app_window {
             if self.main_id.is_some() {
                 return;
             }
-            let attrs = Window::default_attributes().with_title("Nexa Beep");
+            let attrs = Window::default_attributes()
+                .with_title("Nexa Beep")
+                .with_window_icon(self.icon.clone());
             let window = Rc::new(el.create_window(attrs).unwrap());
             window.set_ime_allowed(true); // 한글 타입어헤드 — IME 커밋 문자
             let scale = window.scale_factor() as f32;
@@ -1518,6 +1577,27 @@ mod app_window {
                 return;
             }
             self.poll_discovery();
+            // 타입어헤드 유효시간 경과 → 버퍼 초기화·HUD 자동 숨김(마지막 입력 후 N초).
+            {
+                let now_ms = self.now_ms();
+                let mut inv = Invalidations::default();
+                if self.list.typeahead_tick(now_ms, &mut inv) {
+                    if let Some(id) = self.main_id {
+                        self.request_redraw(id);
+                    }
+                }
+            }
+            // 오버레이 스크롤바 페이드 틱(~5Hz) — 상태 변화 시 갤러리 재그리기.
+            if let Some(gv) = &mut self.gallery_view {
+                if gv.tick() {
+                    if let Some((gid, _)) =
+                        self.windows.iter().find(|(_, e)| e.role == Role::Gallery)
+                    {
+                        let gid = *gid;
+                        self.request_redraw(gid);
+                    }
+                }
+            }
             // 유휴에도 ~5Hz로 깨어나 발견 갱신·종료 신호를 폴한다(입력 없을 때도 목록이 산다).
             el.set_control_flow(ControlFlow::wait_duration(
                 std::time::Duration::from_millis(200),
@@ -1553,12 +1633,18 @@ mod app_window {
                     self.request_redraw(id);
                 }
                 WindowEvent::Ime(winit::event::Ime::Preedit(text, _)) => {
-                    // 조합 중 — 활성 대화 뷰에 프리에딧 반영(M3-3).
+                    // 조합 중 — 대화 뷰면 프리에딧 밑줄(M3-3), 목록 모드면 실시간 타입어헤드.
                     if let Some(peer) = self.chat_peer_for(id) {
                         let mut inv = Invalidations::default();
                         if let Some(chat) = self.chats.get_mut(&peer) {
                             chat.set_preedit(text, &mut inv);
                         }
+                        self.request_redraw(id);
+                    } else if Some(id) == self.main_id && self.single_open.is_none() {
+                        // 목록에서 한글 조합 즉시 매칭(확정/Space 불필요).
+                        let now_ms = self.now_ms();
+                        let mut inv = Invalidations::default();
+                        self.list.set_preedit(&text, now_ms, &mut inv);
                         self.request_redraw(id);
                     }
                 }
@@ -1603,13 +1689,30 @@ mod app_window {
                         );
                     }
                 }
+                WindowEvent::MouseInput {
+                    state: ElementState::Released,
+                    button: MouseButton::Left,
+                    ..
+                } => {
+                    if let Some(e) = self.windows.get(&id) {
+                        let (x, y) = e.cursor;
+                        self.route(id, InputEvent::MouseUp { x, y }, el);
+                    }
+                }
                 WindowEvent::MouseWheel { delta, .. } => {
-                    let d = match delta {
-                        MouseScrollDelta::LineDelta(_, y) => (y * 120.0) as i32,
-                        MouseScrollDelta::PixelDelta(p) => (p.y * 120.0 / 38.0) as i32,
+                    let (dx, dy) = match delta {
+                        MouseScrollDelta::LineDelta(x, y) => {
+                            ((x * 120.0) as i32, (y * 120.0) as i32)
+                        }
+                        MouseScrollDelta::PixelDelta(p) => {
+                            ((p.x * 120.0 / 38.0) as i32, (p.y * 120.0 / 38.0) as i32)
+                        }
                     };
-                    if d != 0 {
-                        self.route(id, InputEvent::Wheel { delta: d }, el);
+                    if dy != 0 {
+                        self.route(id, InputEvent::Wheel { delta: dy }, el);
+                    }
+                    if dx != 0 {
+                        self.route(id, InputEvent::HWheel { delta: dx }, el);
                     }
                 }
                 WindowEvent::ModifiersChanged(mods) => {
@@ -1758,9 +1861,18 @@ mod app_window {
             );
             (Box::new(local), discovery)
         } else {
-            // 데모 — InMemory 버스 + 에코 봇 3명.
+            // 데모 — InMemory 버스 + 에코 봇. 순환 탐색 테스트용으로 같은 접두사(김*/bob* 등)를
+            // 여러 개 둔다(타입어헤드 ↑↓ 순환 확인).
             let bus = nbeep_net::inmem::InMemoryBus::new();
-            for name in ["김철수의 MacBook", "이영희 (개발2팀)", "bob-linux"] {
+            for name in [
+                "김철수의 MacBook",
+                "김영희 데스크탑",
+                "김민수 노트북",
+                "이영희 (개발2팀)",
+                "bob-linux",
+                "bora-win",
+                "bill-mac",
+            ] {
                 spawn_echo_bot(&bus, name);
             }
             let transport = bus.join(
@@ -1814,6 +1926,12 @@ mod app_window {
             settings,
             settings_view: None,
             gallery_view: None,
+            icon: winit::window::Icon::from_rgba(
+                nbeep_ui::brand::ICON_RGBA.to_vec(),
+                nbeep_ui::brand::ICON_SIZE,
+                nbeep_ui::brand::ICON_SIZE,
+            )
+            .ok(),
             primary_down: false,
             proxy,
             adding: None,

@@ -28,9 +28,9 @@ impl RadioOption {
     }
 }
 
-/// 글리프 지름·행 높이(논리 px).
-const DOT: i32 = 16;
-const OPT_H: i32 = 26;
+/// 글리프 지름·행 높이(논리 px). 지름은 체크박스와 동일(구 16 → 12, 4px 축소 — 사용자 확정).
+const DOT: i32 = 12;
+const OPT_H: i32 = 24;
 const GAP: i32 = 8;
 
 /// 라디오 그룹 컨트롤(옵션 박스).

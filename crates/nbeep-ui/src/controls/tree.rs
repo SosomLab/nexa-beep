@@ -13,14 +13,18 @@
 //!
 //! 확장: 열을 늘리거나(그리드) 셀 렌더를 바꿔도 트리 로직은 그대로 재사용된다(추상 레벨 연결).
 
-use super::{draw_chevron_down, draw_chevron_right, Control, ControlBase};
+use super::{
+    draw_chevron_down, draw_chevron_right, image_fit_contain, BorderSpec, Control, ControlBase,
+    ScrollBars,
+};
 use crate::draw::{DrawCtx, FontSlot};
 use crate::event::{InputEvent, Key};
-use crate::geom::{Point, Rect};
-use crate::theme::Theme;
+use crate::geom::Rect;
+use crate::theme::{IconImage, Theme};
 use crate::widget::{Invalidations, Widget};
+use std::rc::Rc;
 
-/// 트리 노드 — 라벨 + (그리드용) 추가 셀 값 + 자식 + 펼침 상태.
+/// 트리 노드 — 라벨 + (그리드용) 추가 셀 값 + 자식 + 펼침 상태 + 선행 이미지(옵션).
 #[derive(Clone, Debug)]
 pub struct TreeNode {
     /// 트리 열 라벨.
@@ -31,6 +35,8 @@ pub struct TreeNode {
     pub children: Vec<TreeNode>,
     /// 펼침 여부.
     pub expanded: bool,
+    /// 라벨 앞 이미지 아이콘(옵션 · 펼침 셰브론과 별개).
+    pub image: Option<Rc<IconImage>>,
 }
 
 impl TreeNode {
@@ -42,6 +48,7 @@ impl TreeNode {
             cells: Vec::new(),
             children: Vec::new(),
             expanded: false,
+            image: None,
         }
     }
     /// 자식 있는 노드(기본 펼침).
@@ -52,6 +59,7 @@ impl TreeNode {
             cells: Vec::new(),
             children,
             expanded: true,
+            image: None,
         }
     }
     /// 그리드 셀 값 지정(체이닝).
@@ -60,10 +68,16 @@ impl TreeNode {
         self.cells = cells;
         self
     }
+    /// 선행 이미지 아이콘 지정(체이닝 · 셰브론과 별개).
+    #[must_use]
+    pub fn with_image(mut self, image: Rc<IconImage>) -> Self {
+        self.image = Some(image);
+        self
+    }
 }
 
 /// 평탄화된 표시 행(현재 펼침 상태 기준).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct FlatRow {
     /// 루트부터의 자식 인덱스 경로(토글 대상).
     pub path: Vec<usize>,
@@ -77,6 +91,8 @@ pub struct FlatRow {
     pub has_children: bool,
     /// 펼침 여부.
     pub expanded: bool,
+    /// 라벨 앞 이미지 아이콘(옵션).
+    pub image: Option<Rc<IconImage>>,
 }
 
 /// 트리 계층 모델 — 노드 트리 + 펼침 상태(뷰와 무관 · TreeView/TreeGrid 공유).
@@ -111,6 +127,7 @@ impl TreeModel {
                 cells: n.cells.clone(),
                 has_children: !n.children.is_empty(),
                 expanded: n.expanded,
+                image: n.image.clone(),
             });
             if n.expanded && !n.children.is_empty() {
                 Self::walk(&n.children, path, depth + 1, out);
@@ -163,10 +180,29 @@ pub trait TreeControl: Control {
     fn selected_row(&self) -> usize;
     /// 선택 행 지정(구현 필수).
     fn set_selected_row(&mut self, i: usize);
+    /// 스크롤 오프셋 `(x, y)` 물리 px(구현 필수).
+    fn scroll(&self) -> (i32, i32);
+    /// 스크롤 오프셋 지정(구현 필수).
+    fn set_scroll(&mut self, x: i32, y: i32);
+    /// 오버레이 스크롤바 상태(구현 필수).
+    fn bars_mut(&mut self) -> &mut ScrollBars;
 
     /// 트리 영역의 top(헤더 아래 등 — 그리드가 재정의). 기본 = bounds.y.
     fn tree_top(&self) -> i32 {
         self.bounds().y
+    }
+
+    /// 행이 그려지는 뷰포트(헤더 아래 · 스크롤 대상).
+    fn rows_viewport(&self) -> Rect {
+        let b = self.bounds();
+        let top = self.tree_top();
+        Rect::new(b.x, top, b.w, (b.bottom() - top).max(0))
+    }
+
+    /// 콘텐츠 총 크기 `(w, h)` — 세로=행수×행높이, 가로 기본=뷰포트 폭(그리드가 열 합으로 재정의).
+    fn content_size(&self) -> (i32, i32) {
+        let h = self.rows().len() as i32 * self.s(ROW_H);
+        (self.rows_viewport().w, h)
     }
 
     /// 보이는 행.
@@ -206,22 +242,20 @@ pub trait TreeControl: Control {
         }
     }
 
-    /// (x,y) → (가시 행 인덱스, 셰브론을 눌렀는가).
+    /// (x,y) → (가시 행 인덱스, 셰브론을 눌렀는가). 스크롤 오프셋 반영.
     fn row_hit(&self, x: i32, y: i32) -> Option<(usize, bool)> {
         let rh = self.s(ROW_H).max(1);
         let top = self.tree_top();
-        if y < top {
+        let (sx, sy) = self.scroll();
+        if y < top || y >= self.bounds().bottom() {
             return None;
         }
-        let i = ((y - top) / rh) as usize;
+        let i = ((y - top + sy) / rh) as usize;
         let rows = self.rows();
         let row = rows.get(i)?;
-        // 셰브론 영역: 깊이 들여쓰기 지점.
-        let chev_x = self.bounds().x + self.s(4) + self.s(INDENT) * row.depth as i32;
-        let on_chev = row.has_children
-            && x >= chev_x
-            && x < chev_x + self.s(CHEV_W)
-            && Point { x, y }.x >= self.bounds().x;
+        // 셰브론 영역: 깊이 들여쓰기 지점(가로 스크롤 반영).
+        let chev_x = self.bounds().x + self.s(4) + self.s(INDENT) * row.depth as i32 - sx;
+        let on_chev = row.has_children && x >= chev_x && x < chev_x + self.s(CHEV_W);
         Some((i, on_chev))
     }
 
@@ -255,8 +289,16 @@ pub trait TreeControl: Control {
                 draw_chevron_right(ctx, chev, color);
             }
         }
+        let mut tx = chev.right() + self.s(4);
+        // 선행 이미지(옵션 · 셰브론과 별개) — 콤보 아이콘과 동일 크기(13 · 사용자 확정).
+        if let Some(img) = row.image.as_deref() {
+            let isz = self.s(13);
+            let boxr = Rect::new(tx, cell.y + (cell.h - isz) / 2, isz, isz);
+            let fit = image_fit_contain(boxr, img.w as i32, img.h as i32);
+            ctx.image_scaled(fit, img, cell);
+            tx += isz + self.s(4);
+        }
         ctx.select_font(FontSlot::Base, false);
-        let tx = chev.right() + self.s(4);
         let ty = cell.y + (cell.h - self.s(16)) / 2;
         ctx.text(tx, ty, cell, &row.label, theme.text);
     }
@@ -264,6 +306,22 @@ pub trait TreeControl: Control {
 
 /// 공통 이벤트 처리(TreeView/TreeGrid 공용).
 fn tree_event<T: TreeControl + ?Sized>(t: &mut T, ev: &InputEvent, inv: &mut Invalidations) {
+    // 오버레이 스크롤바 먼저(휠·드래그·호버). 소비되면 콘텐츠로 넘기지 않는다.
+    let vp = t.rows_viewport();
+    let (cw, ch) = t.content_size();
+    let (sx, sy) = t.scroll();
+    let scale = t.base().scale;
+    let (nx, ny, consumed) = t.bars_mut().on_event(ev, vp, cw, ch, sx, sy, scale);
+    if nx != sx || ny != sy {
+        t.set_scroll(nx, ny);
+        inv.push(t.bounds());
+    }
+    if consumed || matches!(ev, InputEvent::MouseMove { .. }) {
+        inv.push(t.bounds());
+    }
+    if consumed {
+        return;
+    }
     match *ev {
         InputEvent::MouseDown { x, y, .. } => {
             if let Some((i, on_chev)) = t.row_hit(x, y) {
@@ -298,6 +356,10 @@ pub struct TreeView {
     base: ControlBase,
     model: TreeModel,
     selected: usize,
+    scroll_x: i32,
+    scroll_y: i32,
+    bars: ScrollBars,
+    border: BorderSpec,
 }
 
 impl TreeView {
@@ -308,12 +370,26 @@ impl TreeView {
             base: ControlBase::default(),
             model,
             selected: 0,
+            scroll_x: 0,
+            scroll_y: 0,
+            bars: ScrollBars::new(),
+            border: BorderSpec::default(),
         }
+    }
+
+    /// 외곽 테두리 설정(두께·색·투명도 · 두께 0 = 없음).
+    pub fn set_border(&mut self, border: BorderSpec) {
+        self.border = border;
     }
     /// 선택 행의 라벨.
     #[must_use]
     pub fn selected_label(&self) -> Option<String> {
         self.rows().get(self.selected).map(|r| r.label.clone())
+    }
+
+    /// 스크롤바 페이드 틱(호스트가 ~5Hz 호출) — 표시 상태 변화 시 `true`.
+    pub fn tick(&mut self) -> bool {
+        self.bars.tick()
     }
 }
 
@@ -338,6 +414,16 @@ impl TreeControl for TreeView {
     fn set_selected_row(&mut self, i: usize) {
         self.selected = i;
     }
+    fn scroll(&self) -> (i32, i32) {
+        (self.scroll_x, self.scroll_y)
+    }
+    fn set_scroll(&mut self, x: i32, y: i32) {
+        self.scroll_x = x;
+        self.scroll_y = y;
+    }
+    fn bars_mut(&mut self) -> &mut ScrollBars {
+        &mut self.bars
+    }
 }
 
 impl Widget for TreeView {
@@ -355,13 +441,39 @@ impl Widget for TreeView {
         let b = self.base.bounds;
         ctx.fill_rect(b, theme.panel_bg);
         let rh = self.s(ROW_H);
-        let mut y = self.tree_top();
+        let top = self.tree_top();
+        let bottom = b.bottom();
+        // 스크롤 오프셋 반영 · 뷰포트 안의 온전한 행만(수직 넘침 방지).
         for (i, row) in self.rows().iter().enumerate() {
-            let cell = Rect::new(b.x, y, b.w, rh);
+            let ry = top - self.scroll_y + rh * i as i32;
+            if ry < top || ry + rh > bottom {
+                continue;
+            }
+            let cell = Rect::new(b.x - self.scroll_x, ry, b.w + self.scroll_x, rh);
             self.paint_tree_cell(ctx, theme, row, cell, i == self.selected);
-            y += rh;
         }
+        let (cw, ch) = self.content_size();
+        self.bars.paint(
+            ctx,
+            theme,
+            self.rows_viewport(),
+            cw,
+            ch,
+            self.scroll_x,
+            self.scroll_y,
+            self.base.scale,
+        );
+        draw_border(ctx, b, self.border, self.base.scale);
     }
+}
+
+/// 외곽 테두리 그리기(두께 0이면 생략) — 트리/그리드 공용.
+fn draw_border(ctx: &mut dyn DrawCtx, b: Rect, border: BorderSpec, scale: f32) {
+    if border.width <= 0.0 {
+        return;
+    }
+    let w = (border.width * scale).max(0.5); // 소수 두께 허용(0.5px 얇은 선)
+    ctx.stroke_round_rect_alpha(b, 0, border.color, w, border.alpha);
 }
 
 // ───────────────────────────── TreeGrid(그리드+트리) ─────────────────────────────
@@ -393,6 +505,10 @@ pub struct TreeGrid {
     selected: usize,
     /// 열 정의(첫 열 = 트리 열).
     columns: Vec<GridColumn>,
+    scroll_x: i32,
+    scroll_y: i32,
+    bars: ScrollBars,
+    border: BorderSpec,
 }
 
 impl TreeGrid {
@@ -404,7 +520,26 @@ impl TreeGrid {
             model,
             selected: 0,
             columns,
+            scroll_x: 0,
+            scroll_y: 0,
+            bars: ScrollBars::new(),
+            border: BorderSpec::default(),
         }
+    }
+
+    /// 외곽 테두리 설정(두께·색·투명도 · 두께 0 = 없음).
+    pub fn set_border(&mut self, border: BorderSpec) {
+        self.border = border;
+    }
+
+    /// 전체 열 폭 합(물리 px).
+    fn columns_width(&self) -> i32 {
+        self.columns.iter().map(|c| self.s(c.width)).sum()
+    }
+
+    /// 스크롤바 페이드 틱(호스트가 ~5Hz 호출) — 표시 상태 변화 시 `true`.
+    pub fn tick(&mut self) -> bool {
+        self.bars.tick()
     }
 }
 
@@ -429,9 +564,24 @@ impl TreeControl for TreeGrid {
     fn set_selected_row(&mut self, i: usize) {
         self.selected = i;
     }
+    fn scroll(&self) -> (i32, i32) {
+        (self.scroll_x, self.scroll_y)
+    }
+    fn set_scroll(&mut self, x: i32, y: i32) {
+        self.scroll_x = x;
+        self.scroll_y = y;
+    }
+    fn bars_mut(&mut self) -> &mut ScrollBars {
+        &mut self.bars
+    }
     /// 그리드는 헤더 아래부터 트리 행.
     fn tree_top(&self) -> i32 {
         self.base.bounds.y + self.s(HEADER_H)
+    }
+    /// 가로 콘텐츠 = 전체 열 폭 합(길면 좌우 스크롤).
+    fn content_size(&self) -> (i32, i32) {
+        let h = self.rows().len() as i32 * self.s(ROW_H);
+        (self.columns_width(), h)
     }
 }
 
@@ -449,36 +599,35 @@ impl Widget for TreeGrid {
     fn paint(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
         let b = self.base.bounds;
         ctx.fill_rect(b, theme.panel_bg);
+        let ox = self.scroll_x; // 가로 스크롤(헤더·셀 공통 이동)
 
-        // 헤더.
+        // 헤더(가로 스크롤 반영 · b.w로 텍스트 클립). 텍스트는 헤더 높이의 세로 중앙.
         let header = Rect::new(b.x, b.y, b.w, self.s(HEADER_H));
         ctx.fill_rect(header, theme.chrome_bg);
-        let mut cx = b.x;
+        let hty = header.y + (header.h - self.s(13)) / 2; // 상·하 여백 동일
+        let mut cx = b.x - ox;
         ctx.select_font(FontSlot::Status, false);
         for col in &self.columns {
             let w = self.s(col.width);
-            ctx.text(
-                cx + self.s(8),
-                header.y + self.s(6),
-                header,
-                &col.title,
-                theme.text_dim,
-            );
+            ctx.text(cx + self.s(8), hty, header, &col.title, theme.text_dim);
             cx += w;
-            // 열 구분선.
             ctx.fill_rect(Rect::new(cx - 1, header.y, 1, b.h), theme.border);
         }
         ctx.fill_rect(Rect::new(b.x, header.bottom() - 1, b.w, 1), theme.border);
 
-        // 행.
+        // 행(세로 스크롤 반영 · 온전한 행만 · 가로 스크롤 반영).
         let rh = self.s(ROW_H);
-        let mut y = self.tree_top();
+        let top = self.tree_top();
+        let bottom = b.bottom();
+        let tree_w = self.columns.first().map_or(b.w, |c| self.s(c.width));
         for (i, row) in self.rows().iter().enumerate() {
-            let selected = i == self.selected;
-            if selected {
-                let sel = Rect::new(b.x, y, b.w, rh);
+            let y = top - self.scroll_y + rh * i as i32;
+            if y < top || y + rh > bottom {
+                continue;
+            }
+            if i == self.selected {
                 ctx.fill_rect(
-                    sel,
+                    Rect::new(b.x, y, b.w, rh),
                     if self.is_active() {
                         theme.sel_bg
                     } else {
@@ -486,12 +635,11 @@ impl Widget for TreeGrid {
                     },
                 );
             }
-            // 첫 열 = 트리 셀(배경은 위에서 이미 칠함 → selected=false로 재도색 방지).
-            let tree_w = self.columns.first().map_or(b.w, |c| self.s(c.width));
-            let tree_cell = Rect::new(b.x, y, tree_w, rh);
+            // 첫 열 = 트리 셀(배경 재도색 방지 selected=false · 가로 스크롤).
+            let tree_cell = Rect::new(b.x - ox, y, tree_w, rh);
             self.paint_tree_cell(ctx, theme, row, tree_cell, false);
             // 나머지 열 = 셀 값.
-            let mut colx = b.x + tree_w;
+            let mut colx = b.x + tree_w - ox;
             for (ci, col) in self.columns.iter().enumerate().skip(1) {
                 let w = self.s(col.width);
                 if let Some(val) = row.cells.get(ci - 1) {
@@ -506,8 +654,21 @@ impl Widget for TreeGrid {
                 }
                 colx += w;
             }
-            y += rh;
         }
+
+        // 오버레이 스크롤바.
+        let (cw, ch) = self.content_size();
+        self.bars.paint(
+            ctx,
+            theme,
+            self.rows_viewport(),
+            cw,
+            ch,
+            self.scroll_x,
+            self.scroll_y,
+            self.base.scale,
+        );
+        draw_border(ctx, b, self.border, self.base.scale);
     }
 }
 
@@ -609,6 +770,41 @@ mod tests {
         assert_eq!(g.rows()[1].cells, vec!["⌘,".to_string()]);
         // 헤더 아래부터 트리 행.
         assert!(g.tree_top() > g.bounds().y);
+    }
+
+    #[test]
+    fn many_rows_scroll_vertically() {
+        // 행이 많고 뷰포트가 작으면 세로 스크롤.
+        let nodes: Vec<TreeNode> = (0..40)
+            .map(|i| TreeNode::leaf(format!("row {i}")))
+            .collect();
+        let mut v = TreeView::new(TreeModel::new(nodes));
+        let mut inv = Invalidations::default();
+        v.set_bounds(Rect::new(0, 0, 200, 100), &mut inv);
+        let (_cw, ch) = v.content_size();
+        assert!(ch > 100, "콘텐츠가 뷰포트보다 큼(40행×24=960)");
+        v.set_focused(true);
+        v.on_event(&InputEvent::Wheel { delta: -300 }, &mut inv);
+        assert_eq!(v.scroll(), (0, 100), "휠 세로 스크롤");
+    }
+
+    #[test]
+    fn wide_columns_scroll_horizontally() {
+        let m = TreeModel::new(vec![
+            TreeNode::leaf("A").with_cells(vec!["a".into()]),
+            TreeNode::leaf("B").with_cells(vec!["b".into()]),
+        ]);
+        let cols = vec![
+            GridColumn::new("Menu", 300),
+            GridColumn::new("Command", 200),
+        ];
+        let mut g = TreeGrid::new(m, cols);
+        let mut inv = Invalidations::default();
+        g.set_bounds(Rect::new(0, 0, 300, 300), &mut inv); // 창(300) < 열 합(500)
+        let (cw, _ch) = g.content_size();
+        assert_eq!(cw, 500, "열 폭 합");
+        g.on_event(&InputEvent::HWheel { delta: 300 }, &mut inv);
+        assert_eq!(g.scroll().0, 100, "가로 스크롤(delta/3)");
     }
 
     #[test]

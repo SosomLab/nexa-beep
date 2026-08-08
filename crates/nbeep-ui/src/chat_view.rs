@@ -283,6 +283,16 @@ impl Widget for ChatViewWidget {
                 "메시지 입력… (Enter 전송 · Esc 목록)",
                 theme.text_dim,
             );
+            // 빈 입력창에도 **Beam 커서**를 선두에 표시(입력 가능 상태 표시).
+            ctx.fill_rect(
+                Rect::new(
+                    tx,
+                    input.y + self.s(6),
+                    self.s(2).max(1),
+                    input.h - self.s(12),
+                ),
+                theme.accent,
+            );
         } else {
             let chars: Vec<char> = text.chars().collect();
             let upto = |ctx: &mut dyn DrawCtx, n: usize| -> i32 {

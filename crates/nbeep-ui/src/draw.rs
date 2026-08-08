@@ -44,6 +44,17 @@ pub trait DrawCtx {
     /// 텍스트 렌더 폭(px) — 우측 정렬·라벨 실측 정렬용.
     fn text_width(&mut self, text: &str) -> i32;
 
+    /// RGBA 이미지 아이콘을 `(x, y)`(좌상단)에 알파 블렌드 — `clip` 밖은 잘린다. 기본 = no-op.
+    fn image(&mut self, x: i32, y: i32, img: &crate::theme::IconImage, clip: Rect) {
+        let _ = (x, y, img, clip);
+    }
+
+    /// RGBA 이미지를 `dst`로 **스케일**해 블렌드(큰 이미지 축소·이미지 버튼) — `clip` 밖은 잘린다.
+    /// 기본 = no-op.
+    fn image_scaled(&mut self, dst: Rect, img: &crate::theme::IconImage, clip: Rect) {
+        let _ = (dst, img, clip);
+    }
+
     /// 원/타원 AA 채움. 기본 = no-op.
     fn fill_ellipse(&mut self, rect: Rect, color: Color) {
         let _ = (rect, color);
@@ -54,9 +65,30 @@ pub trait DrawCtx {
         let _ = (rect, radius, color);
     }
 
+    /// 라운드 사각형 AA 채움 + **불투명도**(`alpha` 0..=1 — 반투명 스크롤바 등).
+    /// 기본 = 알파 무시하고 [`Self::fill_round_rect`] 위임(테스트 백엔드).
+    fn fill_round_rect_alpha(&mut self, rect: Rect, radius: i32, color: Color, alpha: f32) {
+        let _ = alpha;
+        self.fill_round_rect(rect, radius, color);
+    }
+
     /// 라운드 사각형 AA 외곽선(폭 `width`px). 기본 = no-op.
     fn stroke_round_rect(&mut self, rect: Rect, radius: i32, color: Color, width: f32) {
         let _ = (rect, radius, color, width);
+    }
+
+    /// 라운드 사각형 AA 외곽선 + **불투명도**(`alpha` 0..=1 — 포커스 링 반투명 테두리).
+    /// 기본 = 알파 무시하고 [`Self::stroke_round_rect`] 위임(테스트 백엔드).
+    fn stroke_round_rect_alpha(
+        &mut self,
+        rect: Rect,
+        radius: i32,
+        color: Color,
+        width: f32,
+        alpha: f32,
+    ) {
+        let _ = alpha;
+        self.stroke_round_rect(rect, radius, color, width);
     }
 
     /// 꺾은선(✓·셰브론 등) — 둥근 캡, 폭 `width`px AA. 기본 = no-op.
