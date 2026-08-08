@@ -7,6 +7,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
 pub mod chat_view;
+pub mod controls;
 pub mod draw;
 pub mod edit;
 pub mod event;
@@ -19,6 +20,7 @@ pub mod typeahead;
 pub mod widget;
 
 pub use chat_view::{ChatLine, ChatViewWidget};
+pub use controls::{Checkbox, Control, ControlBase, LabelSide, RadioGroup, RadioOption, TextBox};
 pub use draw::{DrawCtx, FontSlot};
 pub use edit::{EditKey, EditState};
 pub use event::{InputEvent, Key, WheelAccum, WHEEL_DELTA};

@@ -24,6 +24,8 @@ pub struct Theme {
     pub border: Color,
     /// 강조(선택 줄·링크·활성 표시).
     pub accent: Color,
+    /// 포커스 링(모든 커스텀 컨트롤 공통 — 선택 시 밝은 반투명 테두리).
+    pub focus_ring: Color,
     /// 본문 텍스트.
     pub text: Color,
     /// 보조 텍스트.
@@ -54,6 +56,7 @@ impl Theme {
             field_bg: Color(0x0026_2B33),
             border: Color(0x0036_3C46),
             accent: Color(0x003D_8BFF),
+            focus_ring: Color(0x007F_B4FF),
             text: Color(0x00D6_DAE0),
             text_dim: Color(0x008A_919C),
             sel_bg: Color(0x0024_405F),
@@ -76,6 +79,7 @@ impl Theme {
             field_bg: Color(0x00FF_FFFF),
             border: Color(0x00D5_DAE1),
             accent: Color(0x003D_8BFF),
+            focus_ring: Color(0x00A9_CCFF),
             text: Color(0x001B_1F26),
             text_dim: Color(0x006B_7280),
             sel_bg: Color(0x00D8_E8FF),
