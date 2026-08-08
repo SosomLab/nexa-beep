@@ -44,11 +44,19 @@ mod app_window {
         font: nbeep_gfx::Font,
         theme: Theme,
         list: PeerListWidget,
-        /// 열린 대화(None = 목록 화면). 스레드·세션 배선은 M2-7 — 지금은 발신 도메인 경로만.
+        /// 열린 대화(None = 목록 화면).
         chat: Option<ChatViewWidget>,
-        /// 내 기기 신원(발신 봉투 sender_device) — 실물 키(Noise와 동일 경로).
-        me: nbeep_core::PeerId,
+        /// 내 신원 — 발견·세션·발신 봉투가 전부 이 키 하나에서 나온다.
+        identity: std::sync::Arc<nbeep_crypto::Identity>,
         seq: nbeep_core::Sequencer,
+        /// InMemory 전송(실물 발견 이벤트 공급원 — M1-4에서 실물 네트워크로 교체).
+        transport: nbeep_net::inmem::InMemoryTransport,
+        discovery: std::sync::mpsc::Receiver<nbeep_net::DiscoveryEvent>,
+        table: nbeep_core::PeerTable,
+        trust: nbeep_core::MemoryTrustStore,
+        /// 열린 대화의 실물 세션(Noise+TOFU+다중화).
+        session: Option<LiveSession>,
+        dedup: nbeep_core::DedupIndex,
         cursor: (i32, i32),
         started: Instant,
         /// 창 배율(고DPI — FR-U-6). 모니터 이동·설정 변경 시 갱신.
@@ -57,41 +65,47 @@ mod app_window {
         status: String,
     }
 
-    /// 데모 목록 — **실물 도메인 경로**(PeerTable 관측→병합→TrustStore 판정)로 만든다.
-    /// 실물 발견(M1-4)은 이 관측 공급원만 교체한다.
-    fn demo_rows() -> Vec<PeerRow> {
-        use nbeep_core::{
-            DisplayName, MemoryTrustStore, MonoInstant, PeerId, PeerTable, SourceId, TrustStore,
-        };
-        let pid = |b: u8| {
-            let mut a = [0u8; 32];
-            a[0] = b;
-            PeerId::from_bytes(a)
-        };
-        let name = |s: &str| DisplayName::parse(s).unwrap();
-        let mut table = PeerTable::new(10_000);
-        let mut trust = MemoryTrustStore::new();
-        let now = MonoInstant(0);
+    /// 열린 대화의 실물 세션 스택 — Noise(암호화) 위 TOFU(신뢰) 위 다중화.
+    type LiveSession = nbeep_core::MuxSession<
+        nbeep_core::TrustedSession<nbeep_crypto::NoiseSession<Box<dyn nbeep_core::Link>>>,
+    >;
 
-        table.observe(pid(1), name("김철수의 MacBook"), SourceId(0), now);
-        table.observe(pid(1), name("김철수의 MacBook"), SourceId(1), now); // 다중 경로 병합
-        table.observe(pid(2), name("DESKTOP-A7X3"), SourceId(0), now);
-        table.observe(pid(3), name("이영희 (개발2팀)"), SourceId(0), now);
-        table.observe(pid(4), name("박민준"), SourceId(0), now);
-        table.observe(pid(5), name("bob-linux"), SourceId(0), now);
-        trust.on_session(pid(1)); // 핀
-        trust.on_session(pid(3));
-        trust.verify(pid(3)); // SAS 대조 완료
-        trust.on_session(pid(4));
-
-        table
-            .list()
-            .into_iter()
-            .map(|entry| {
-                let t = trust.level(entry.peer);
-                PeerRow { entry, trust: t }
-            })
-            .collect()
+    /// 에코 봇 — 버스에 실물 신원으로 참여해 수신 세션을 받고, Chat 메시지를 에코한다.
+    /// 발견 힌트의 `PeerId` == Noise 정적 키(실제 아키텍처 그대로 — 인증이 발견을 검증한다).
+    fn spawn_echo_bot(bus: &std::sync::Arc<nbeep_net::inmem::InMemoryBus>, name: &str) {
+        use nbeep_core::mux::{MuxSession, StreamId};
+        use nbeep_core::{ChatMessage, DisplayName, MessageBody, Sequencer, Session as _};
+        let identity = nbeep_crypto::Identity::generate();
+        let display = DisplayName::parse(name).unwrap();
+        let transport = bus.join(identity.peer_id(), display, nbeep_net::Caps::default());
+        std::thread::spawn(move || {
+            use nbeep_net::Transport as _;
+            let incoming = transport.incoming();
+            while let Ok(link) = incoming.recv() {
+                let Ok(session) = nbeep_crypto::NoiseSession::accept(link, &identity) else {
+                    continue;
+                };
+                let user = session.peer();
+                let mut mux = MuxSession::new(session);
+                let mut seq = Sequencer::new();
+                while let Ok(bytes) = mux.recv(StreamId::Chat) {
+                    let Ok(msg) = ChatMessage::decode(&bytes, user) else {
+                        break; // 위조·손상 = 세션 종료(fail-closed)
+                    };
+                    let MessageBody::Text(text) = msg.body else {
+                        continue;
+                    };
+                    let reply = ChatMessage {
+                        sender_device: identity.peer_id(),
+                        seq: seq.issue(),
+                        body: MessageBody::Text(format!("에코: {text}")),
+                    };
+                    if mux.send(StreamId::Chat, &reply.encode()).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
     }
 
     impl App {
@@ -100,18 +114,44 @@ mod app_window {
             if let Some(chat) = &mut self.chat {
                 chat.on_event(&ev, &mut inv);
                 if let Some(text) = chat.take_outgoing() {
-                    // 발신 도메인 경로 — 시퀀서가 seq를 발급하고 봉투를 만든다.
-                    // 전송(fanout)은 실물 세션 배선(M1-4·M2-7)에서 — 지금은 스레드 확정만.
+                    // 실물 발신 — 봉투 구성 → 암호화 세션으로 전송 → 에코 수신(즉시).
                     let msg = nbeep_core::ChatMessage {
-                        sender_device: self.me,
+                        sender_device: self.identity.peer_id(),
                         seq: self.seq.issue(),
                         body: nbeep_core::MessageBody::Text(text.as_str().to_string()),
                     };
-                    self.status = format!("발신 봉투 seq={} — 전송 배선은 M2-7", msg.seq);
                     chat.push_line(ChatLine { mine: true, text }, &mut inv);
+                    if let Some(session) = &mut self.session {
+                        use nbeep_core::mux::StreamId;
+                        let peer = session.peer();
+                        let sent = session.send(StreamId::Chat, &msg.encode());
+                        // 데모: 에코 봇이 즉시 응답(인프로세스) — 블로킹 수신.
+                        // 실물 네트워크의 비동기 수신 펌프는 M2-7에서.
+                        let reply = sent.and_then(|()| session.recv(StreamId::Chat));
+                        match reply {
+                            Ok(bytes) => {
+                                if let Ok(rmsg) = nbeep_core::ChatMessage::decode(&bytes, peer) {
+                                    if self.dedup.accept(rmsg.sender_device, rmsg.seq) {
+                                        if let nbeep_core::MessageBody::Text(t) = rmsg.body {
+                                            chat.push_line(
+                                                ChatLine {
+                                                    mine: false,
+                                                    text: nbeep_core::sanitize_message(&t),
+                                                },
+                                                &mut inv,
+                                            );
+                                        }
+                                    }
+                                }
+                                self.status = format!("암호화 왕복 OK — seq={}", msg.seq);
+                            }
+                            Err(e) => self.status = format!("세션 오류: {e}"),
+                        }
+                    }
                 }
                 if chat.take_back() {
                     self.chat = None;
+                    self.session = None; // 세션 드롭 = 링크 종료(봇은 다음 수신 대기로)
                     self.status =
                         "↑↓ 이동 · 타이핑 = 이름 점프(한글 가능) · Enter = 대화 열기".into();
                     inv.push(self.list.bounds());
@@ -119,19 +159,27 @@ mod app_window {
             } else {
                 self.list.on_event(&ev, &mut inv);
                 if let Some(peer) = self.list.take_activated() {
-                    // 목록 → 대화 전환. 상대 이름은 데모 행에서 찾는다.
-                    let title = demo_rows()
-                        .into_iter()
-                        .find(|r| r.entry.peer == peer)
-                        .map_or_else(
-                            || format!("{peer:?}"),
-                            |r| r.entry.name.as_str().to_string(),
-                        );
-                    let mut chat = ChatViewWidget::new(title);
-                    chat.set_scale(self.scale, &mut inv);
-                    chat.set_bounds(self.list.bounds(), &mut inv);
-                    self.chat = Some(chat);
-                    self.status = "메시지 입력 · Enter 전송 · Esc = 목록".into();
+                    match self.open_session(peer) {
+                        Ok((session, decision)) => {
+                            let title = self.table.get(peer).map_or_else(
+                                || format!("{peer:?}"),
+                                |e| e.name.as_str().to_string(),
+                            );
+                            let mut chat = ChatViewWidget::new(title);
+                            chat.set_scale(self.scale, &mut inv);
+                            chat.set_bounds(self.list.bounds(), &mut inv);
+                            self.chat = Some(chat);
+                            self.session = Some(session);
+                            self.status = match decision {
+                                nbeep_core::TrustDecision::FirstContact => {
+                                    "Noise 세션 수립 — 첫 접촉(TOFU 핀 고정) · Esc = 목록".into()
+                                }
+                                d => format!("Noise 세션 수립 — {d:?} · Esc = 목록"),
+                            };
+                            self.refresh_rows(&mut inv); // 배지 갱신(핀 반영)
+                        }
+                        Err(e) => self.status = format!("연결 실패: {e}"),
+                    }
                 }
             }
             if !inv.is_empty() {
@@ -139,6 +187,63 @@ mod app_window {
                     w.request_redraw();
                 }
             }
+        }
+
+        /// 발견 이벤트를 PeerTable에 접고 목록을 다시 만든다.
+        fn poll_discovery(&mut self) {
+            use nbeep_net::DiscoveryEvent;
+            let mut changed = false;
+            let now = nbeep_core::MonoInstant(
+                u64::try_from(self.started.elapsed().as_nanos()).unwrap_or(u64::MAX),
+            );
+            while let Ok(ev) = self.discovery.try_recv() {
+                match ev {
+                    DiscoveryEvent::Appeared(hint) => {
+                        self.table
+                            .observe(hint.peer, hint.name, nbeep_core::SourceId(0), now);
+                    }
+                    DiscoveryEvent::Vanished(peer) => {
+                        self.table.goodbye(peer, nbeep_core::SourceId(0));
+                    }
+                }
+                changed = true;
+            }
+            if changed {
+                let mut inv = Invalidations::default();
+                self.refresh_rows(&mut inv);
+                if let Some(w) = &self.window {
+                    w.request_redraw();
+                }
+            }
+        }
+
+        /// 목록 행 재구성 — 발견(PeerTable) + 신뢰(TrustStore)의 조립.
+        fn refresh_rows(&mut self, inv: &mut Invalidations) {
+            use nbeep_core::TrustStore as _;
+            let rows = self
+                .table
+                .list()
+                .into_iter()
+                .map(|entry| {
+                    let trust = self.trust.level(entry.peer);
+                    PeerRow { entry, trust }
+                })
+                .collect();
+            self.list.set_rows(rows, inv);
+        }
+
+        /// 연결 → Noise 핸드셰이크 → TOFU 판정 → 다중화(실물 스택 전체).
+        fn open_session(
+            &mut self,
+            peer: nbeep_core::PeerId,
+        ) -> Result<(LiveSession, nbeep_core::TrustDecision), String> {
+            use nbeep_net::Transport as _;
+            let link = self.transport.connect(peer).map_err(|e| format!("{e:?}"))?;
+            let noise = nbeep_crypto::NoiseSession::initiate(link, &self.identity)
+                .map_err(|e| e.to_string())?;
+            let est = nbeep_core::TrustedSession::wrap(noise, &mut self.trust)
+                .map_err(|e| e.to_string())?;
+            Ok((nbeep_core::MuxSession::new(est.session), est.decision))
         }
 
         fn bar_h(&self) -> i32 {
@@ -171,6 +276,12 @@ mod app_window {
             self.window = Some(window);
             self.surface = Some(surface);
             self.relayout(size.width, size.height);
+        }
+
+        fn about_to_wait(&mut self, _el: &ActiveEventLoop) {
+            // 발견 이벤트 폴링 — 봇은 시작 시 join하므로 첫 배치에서 다 접힌다.
+            // 실물 네트워크의 상시 깨우기(EventLoopProxy)는 M2-7에서.
+            self.poll_discovery();
         }
 
         fn window_event(&mut self, el: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
@@ -313,12 +424,22 @@ mod app_window {
     pub(crate) fn run() {
         let (data, index) = nbeep_plat::font::system_ui_font().expect("시스템 UI 폰트 없음");
         let font = nbeep_gfx::Font::from_static(data, index).expect("폰트 파싱");
-        let mut list = PeerListWidget::new();
-        let mut inv = Invalidations::default();
-        list.set_rows(demo_rows(), &mut inv);
+        let identity = std::sync::Arc::new(nbeep_crypto::Identity::generate());
+        let bus = nbeep_net::inmem::InMemoryBus::new();
+        // 에코 봇들 — 발견·세션·에코까지 실물 스택으로 참여한다.
+        for name in ["김철수의 MacBook", "이영희 (개발2팀)", "bob-linux"] {
+            spawn_echo_bot(&bus, name);
+        }
+        use nbeep_net::Transport as _;
+        let transport = bus.join(
+            identity.peer_id(),
+            nbeep_core::DisplayName::parse("나").unwrap(),
+            nbeep_net::Caps::default(),
+        );
+        let discovery = transport.discovery();
+        let list = PeerListWidget::new();
 
         let event_loop = EventLoop::new().unwrap();
-        let me = nbeep_crypto::Identity::generate().peer_id(); // 실물 키 경로(발신 봉투용)
         let mut app = App {
             window: None,
             surface: None,
@@ -326,8 +447,14 @@ mod app_window {
             theme: Theme::dark(),
             list,
             chat: None,
-            me,
+            identity,
             seq: nbeep_core::Sequencer::new(),
+            transport,
+            discovery,
+            table: nbeep_core::PeerTable::new(60_000),
+            trust: nbeep_core::MemoryTrustStore::new(),
+            session: None,
+            dedup: nbeep_core::DedupIndex::new(),
             cursor: (0, 0),
             started: Instant::now(),
             scale: 1.0,
