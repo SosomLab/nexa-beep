@@ -59,6 +59,20 @@ pub trait DrawCtx {
         let _ = (rect, radius, color, width);
     }
 
+    /// 라운드 사각형 AA 외곽선 + **불투명도**(`alpha` 0..=1 — 포커스 링 반투명 테두리).
+    /// 기본 = 알파 무시하고 [`Self::stroke_round_rect`] 위임(테스트 백엔드).
+    fn stroke_round_rect_alpha(
+        &mut self,
+        rect: Rect,
+        radius: i32,
+        color: Color,
+        width: f32,
+        alpha: f32,
+    ) {
+        let _ = alpha;
+        self.stroke_round_rect(rect, radius, color, width);
+    }
+
     /// 꺾은선(✓·셰브론 등) — 둥근 캡, 폭 `width`px AA. 기본 = no-op.
     fn polyline(&mut self, pts: &[(i32, i32)], color: Color, width: f32) {
         let _ = (pts, color, width);

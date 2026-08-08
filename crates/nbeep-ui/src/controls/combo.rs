@@ -84,8 +84,9 @@ pub enum PopupHit {
 }
 
 // 레이아웃 상수(논리 px).
-const ROW_H: i32 = 28;
-const CHEV_W: i32 = 22;
+const ROW_H: i32 = 26;
+// 셰브론 영역 폭 — 트리 셰브론과 같은 글리프 크기(구 22 → 16 · 사용자 확정).
+const CHEV_W: i32 = 16;
 const SEP_H: i32 = 9;
 const POPUP_PAD: i32 = 4;
 

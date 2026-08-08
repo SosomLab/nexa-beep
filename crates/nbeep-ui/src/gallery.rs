@@ -16,7 +16,10 @@ use crate::widget::{Invalidations, Widget};
 const PAD: i32 = 16;
 const LABEL_H: i32 = 22;
 const GAP: i32 = 16;
-const CTRL_H: i32 = 30;
+/// 입력·콤보 기본 높이(논리 px) — 트리 행 수준으로 축소(구 30 → 26 · 사용자 확정).
+const CTRL_H: i32 = 26;
+/// 콘텐츠 자연 폭(논리 px) — 창이 좁으면 이 폭까지 좌우 스크롤로 드러난다.
+const NAT_W: i32 = 360;
 
 /// 컨트롤 하나를 배치하고(라벨 공간 + 본체) 다음 y를 돌려준다.
 #[allow(clippy::too_many_arguments)]
@@ -40,7 +43,13 @@ fn place(
 pub struct GalleryWidget {
     bounds: Rect,
     scale: f32,
+    /// 세로 스크롤 오프셋(물리 px).
     scroll: i32,
+    /// 가로 스크롤 오프셋(물리 px).
+    scroll_x: i32,
+    /// 콘텐츠 총 높이·폭(물리 px · 스크롤 클램프 근거).
+    content_h: i32,
+    content_w: i32,
     cb_right: Checkbox,
     cb_left: Checkbox,
     cb_only: Checkbox,
@@ -100,6 +109,9 @@ impl GalleryWidget {
             bounds: Rect::default(),
             scale: 1.0,
             scroll: 0,
+            scroll_x: 0,
+            content_h: 0,
+            content_w: 0,
             cb_right,
             cb_left: Checkbox::new("Enable bug reporter", false).with_label_side(LabelSide::Left),
             cb_only: Checkbox::new("", true).with_label_side(LabelSide::None),
@@ -142,15 +154,17 @@ impl GalleryWidget {
         self.relayout(inv);
     }
 
-    /// 레이아웃 — 세로 스택. 각 항목: 라벨 + 컨트롤.
+    /// 레이아웃 — 세로 스택. 각 항목: 라벨 + 컨트롤. **자연 폭 고정**(창이 좁으면 좌우 스크롤).
     fn relayout(&mut self, inv: &mut Invalidations) {
-        let x = self.bounds.x + self.s(PAD);
-        let w = (self.bounds.w - self.s(PAD) * 2).clamp(self.s(120), self.s(360));
+        let pad = self.s(PAD);
+        let w = self.s(NAT_W);
+        let x = self.bounds.x + pad - self.scroll_x;
         let label_h = self.s(LABEL_H);
         let gap = self.s(GAP);
         let ctrl_h = self.s(CTRL_H);
-        let (radio_h, tree_h, grid_h) = (self.s(26 * 3), self.s(24 * 5), self.s(26 + 24 * 4));
-        let mut y = self.bounds.y + self.s(PAD) - self.scroll;
+        let (radio_h, tree_h, grid_h) = (self.s(24 * 3), self.s(24 * 5), self.s(26 + 24 * 4));
+        let top = self.bounds.y + pad - self.scroll;
+        let mut y = top;
         y = place(&mut self.cb_right, x, y, w, ctrl_h, label_h, gap, inv);
         y = place(&mut self.cb_left, x, y, w, ctrl_h, label_h, gap, inv);
         y = place(&mut self.cb_only, x, y, w, ctrl_h, label_h, gap, inv);
@@ -159,8 +173,19 @@ impl GalleryWidget {
         y = place(&mut self.combo, x, y, w, ctrl_h, label_h, gap, inv);
         y = place(&mut self.ext, x, y, w, ctrl_h, label_h, gap, inv);
         y = place(&mut self.tree, x, y, w, tree_h, label_h, gap, inv);
-        let _ = place(&mut self.grid, x, y, w, grid_h, label_h, gap, inv);
+        y = place(&mut self.grid, x, y, w, grid_h, label_h, gap, inv);
+        // 콘텐츠 총 크기(스크롤 클램프 근거) — 오프셋을 되돌려 계산.
+        self.content_h = (y - top) + pad;
+        self.content_w = w + pad * 2;
         inv.push(self.bounds);
+    }
+
+    /// 스크롤 오프셋을 콘텐츠·뷰포트 범위로 클램프한다.
+    fn clamp_scroll(&mut self) {
+        let max_y = (self.content_h - self.bounds.h).max(0);
+        let max_x = (self.content_w - self.bounds.w).max(0);
+        self.scroll = self.scroll.clamp(0, max_y);
+        self.scroll_x = self.scroll_x.clamp(0, max_x);
     }
 
     fn labels() -> [&'static str; 9] {
@@ -185,10 +210,28 @@ impl Widget for GalleryWidget {
 
     fn set_bounds(&mut self, bounds: Rect, inv: &mut Invalidations) {
         self.bounds = bounds;
-        self.relayout(inv);
+        self.relayout(inv); // content_h/w 산출
+        self.clamp_scroll(); // 리사이즈로 범위 초과분 회수
+        self.relayout(inv); // 클램프된 오프셋으로 재배치
     }
 
     fn on_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
+        // 세로/가로 스크롤(휠 · 트랙패드). delta는 WHEEL_DELTA(120) 단위.
+        match *ev {
+            InputEvent::Wheel { delta } => {
+                self.scroll -= delta / 3;
+                self.clamp_scroll();
+                self.relayout(inv);
+                return;
+            }
+            InputEvent::HWheel { delta } => {
+                self.scroll_x += delta / 3;
+                self.clamp_scroll();
+                self.relayout(inv);
+                return;
+            }
+            _ => {}
+        }
         // 클릭 시 포커스를 해당 컨트롤로 옮긴다(포커스 링 데모).
         if let InputEvent::MouseDown { x, y, .. } = *ev {
             let p = Point { x, y };
@@ -282,6 +325,37 @@ mod tests {
         g.on_event(&click(tb.x + 4, tb.y + 4), &mut inv);
         assert!(g.textbox.is_focused(), "텍스트박스로 포커스 이동");
         assert!(!g.combo.is_focused());
+    }
+
+    #[test]
+    fn wheel_scrolls_vertically_and_clamps() {
+        // 작은 뷰포트 → 세로 스크롤 발생.
+        let mut g = GalleryWidget::new();
+        let mut inv = Invalidations::default();
+        g.set_bounds(Rect::new(0, 0, 420, 200), &mut inv);
+        let y0 = g.cb_right.bounds().y;
+        // 위로 스크롤(delta 음수 = 아래로) — 콘텐츠가 위로 밀린다.
+        g.on_event(&InputEvent::Wheel { delta: -600 }, &mut inv);
+        assert!(g.scroll > 0, "스크롤 증가");
+        assert!(g.cb_right.bounds().y < y0, "콘텐츠 위로 이동");
+        // 과도 스크롤은 콘텐츠 끝으로 클램프.
+        g.on_event(&InputEvent::Wheel { delta: -100_000 }, &mut inv);
+        assert_eq!(g.scroll, (g.content_h - g.bounds.h).max(0));
+        // 반대로 끝까지 되돌리면 0으로 클램프.
+        g.on_event(&InputEvent::Wheel { delta: 100_000 }, &mut inv);
+        assert_eq!(g.scroll, 0);
+    }
+
+    #[test]
+    fn hwheel_scrolls_horizontally_when_narrow() {
+        let mut g = GalleryWidget::new();
+        let mut inv = Invalidations::default();
+        // 콘텐츠 자연폭(392)보다 좁은 창 → 가로 스크롤 여지.
+        g.set_bounds(Rect::new(0, 0, 200, 900), &mut inv);
+        let x0 = g.cb_right.bounds().x;
+        g.on_event(&InputEvent::HWheel { delta: 600 }, &mut inv);
+        assert!(g.scroll_x > 0, "가로 스크롤 증가");
+        assert!(g.cb_right.bounds().x < x0, "콘텐츠 왼쪽으로 이동");
     }
 
     #[test]

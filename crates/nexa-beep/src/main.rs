@@ -1604,12 +1604,19 @@ mod app_window {
                     }
                 }
                 WindowEvent::MouseWheel { delta, .. } => {
-                    let d = match delta {
-                        MouseScrollDelta::LineDelta(_, y) => (y * 120.0) as i32,
-                        MouseScrollDelta::PixelDelta(p) => (p.y * 120.0 / 38.0) as i32,
+                    let (dx, dy) = match delta {
+                        MouseScrollDelta::LineDelta(x, y) => {
+                            ((x * 120.0) as i32, (y * 120.0) as i32)
+                        }
+                        MouseScrollDelta::PixelDelta(p) => {
+                            ((p.x * 120.0 / 38.0) as i32, (p.y * 120.0 / 38.0) as i32)
+                        }
                     };
-                    if d != 0 {
-                        self.route(id, InputEvent::Wheel { delta: d }, el);
+                    if dy != 0 {
+                        self.route(id, InputEvent::Wheel { delta: dy }, el);
+                    }
+                    if dx != 0 {
+                        self.route(id, InputEvent::HWheel { delta: dx }, el);
                     }
                 }
                 WindowEvent::ModifiersChanged(mods) => {

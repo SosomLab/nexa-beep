@@ -152,8 +152,8 @@ pub trait Control: crate::widget::Widget {
             around.h + pad * 2,
         );
         let radius = self.s(6);
-        // 바깥 넓은 링(옅게) + 안쪽 또렷한 링 — macOS 포커스 헤일로 근사.
-        ctx.stroke_round_rect(ring, radius, theme.focus_ring, self.s(3).max(2) as f32);
+        // 2px 테두리 · 50% 반투명(사용자 확정) — 선택 식별용 밝은 헤일로.
+        ctx.stroke_round_rect_alpha(ring, radius, theme.focus_ring, self.s(2).max(2) as f32, 0.5);
     }
 
     /// "?" 배지 rect — `after`(컨트롤/라벨) 오른쪽에 붙인다.
