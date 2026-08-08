@@ -375,11 +375,11 @@ pub fn draw_chevron_down(ctx: &mut dyn DrawCtx, area: Rect, color: Color) {
     );
 }
 
-/// 오른쪽 셰브론(›) — 트리 접힘 표식.
+/// 오른쪽 셰브론(›) — 트리 접힘 표식. 아래 셰브론(∨)과 같은 세트 크기(h/5 · 사용자 확정).
 pub fn draw_chevron_right(ctx: &mut dyn DrawCtx, area: Rect, color: Color) {
     let cx = area.x + area.w / 2;
     let cy = area.y + area.h / 2;
-    let half = (area.h / 4).max(3);
+    let half = (area.h / 5).max(2);
     let w = (area.w as f32 / 10.0).max(1.5);
     ctx.polyline(
         &[
