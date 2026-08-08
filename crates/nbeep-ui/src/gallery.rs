@@ -221,6 +221,9 @@ impl GalleryWidget {
         self.tree_img.set_scale(s);
         self.grid.set_scale(s);
         self.grid_img.set_scale(s);
+        self.btn_text.set_scale(s);
+        self.btn_icon.set_scale(s);
+        self.btn_img.set_scale(s);
         self.relayout(inv);
     }
 

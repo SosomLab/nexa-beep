@@ -192,8 +192,8 @@ impl Widget for Button {
                 ctx.stroke_round_rect(b, radius, theme.border, 1.0);
 
                 let cy = b.y + b.h / 2;
-                // 아이콘 변 = 콤보/Choose와 동일한 13 정사각(사용자 확정 — 기본 통일).
-                let icon = self.s(13);
+                // 아이콘 변 = 공용 단일 원천(콤보/Choose/트리와 동일 — 드리프트 방지).
+                let icon = self.s(super::LEADING_ICON);
                 let s16 = self.s(16);
                 // 콘텐츠(아이콘 + 라벨) 폭을 재서 가운데 정렬.
                 let mut icon_w = 0;

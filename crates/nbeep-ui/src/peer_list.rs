@@ -101,6 +101,8 @@ pub struct PeerListWidget {
     ta_space: bool,
     /// 타입어헤드에 특수문자 포함(설정 · 기본 true).
     ta_special: bool,
+    /// 마지막으로 관측한 단조 시각(ms) — Key 이벤트엔 시각이 없어 힌트로 보관(↑↓ touch용).
+    now_hint: u64,
     /// 배율(고DPI — FR-U-6). 행 높이·여백에 곱한다. 좌표·bounds는 물리 px.
     scale: f32,
 }
@@ -127,6 +129,7 @@ impl PeerListWidget {
             hud_pos: HudPos::default(),
             ta_space: true,
             ta_special: true,
+            now_hint: 0,
             scale: 1.0,
         }
     }
@@ -165,6 +168,7 @@ impl PeerListWidget {
 
     /// 타임아웃 틱 — 유효시간 경과 시 버퍼 초기화(HUD 자동 숨김). 소거 시 `true`(재그리기).
     pub fn typeahead_tick(&mut self, now_ms: u64, inv: &mut Invalidations) -> bool {
+        self.now_hint = now_ms;
         if self.typeahead.tick(now_ms) {
             inv.push(self.bounds);
             true
@@ -331,11 +335,13 @@ impl Widget for PeerListWidget {
                 let vis = self.visible_rows().max(1);
                 match key {
                     // 타입어헤드 활성이면 ↑/↓ = 현재 접두사 매치 순환(역방향 포함 · 언어 중립).
+                    // 순환 중엔 타임아웃 기준 시각을 리셋한다(이동 중 초기화 방지 — 사용자 확정).
                     Key::Down => {
                         let p = self.typeahead.composing();
                         if p.is_empty() {
                             self.move_caret(self.caret + 1, inv);
                         } else {
+                            self.typeahead.touch(self.now_hint);
                             let n = self.rows.len().max(1);
                             if let Some(hit) = self.find_prefix(&p, (self.caret + 1) % n) {
                                 self.move_caret(hit, inv);
@@ -346,10 +352,13 @@ impl Widget for PeerListWidget {
                         let p = self.typeahead.composing();
                         if p.is_empty() {
                             self.move_caret(self.caret.saturating_sub(1), inv);
-                        } else if let Some(hit) =
-                            self.find_prefix_rev(&p, self.caret.saturating_sub(1))
-                        {
-                            self.move_caret(hit, inv);
+                        } else {
+                            self.typeahead.touch(self.now_hint);
+                            if let Some(hit) =
+                                self.find_prefix_rev(&p, self.caret.saturating_sub(1))
+                            {
+                                self.move_caret(hit, inv);
+                            }
                         }
                     }
                     Key::Home => self.move_caret(0, inv),
@@ -384,12 +393,14 @@ impl Widget for PeerListWidget {
                 }
             }
             InputEvent::Char { c, now_ms } => {
+                self.now_hint = now_ms;
                 if c == '\u{8}' {
                     if let Some(q) = self.typeahead.backspace(now_ms) {
                         if let Some(hit) = self.find_prefix(&q.prefix, self.caret) {
                             self.move_caret(hit, inv);
                         }
                     }
+                    inv.push(self.bounds); // HUD 갱신(축소·소거 표시)
                     return;
                 }
                 if !self.ta_accepts(c) {
@@ -404,6 +415,8 @@ impl Widget for PeerListWidget {
                 if let Some(hit) = self.find_prefix(&q.prefix, from % self.rows.len().max(1)) {
                     self.move_caret(hit, inv);
                 }
+                // 캐럿이 안 움직여도(확장 매치 유지) HUD 텍스트는 바뀐다 — 항상 다시 그린다.
+                inv.push(self.bounds);
             }
             InputEvent::MouseDown { y, .. } => {
                 if let Some(i) = self.row_at(y) {

@@ -33,6 +33,9 @@ use crate::draw::{DrawCtx, FontSlot};
 use crate::geom::{Point, Rect};
 use crate::theme::{Color, Theme};
 
+/// 선행 아이콘 변 크기(논리 px) — **콤보/Choose/트리/버튼 공용 단일 원천**(크기 드리프트 방지).
+pub const LEADING_ICON: i32 = 13;
+
 /// 외곽 테두리 설정 — 두께(논리 px · 소수 가능 예: 0.5)·색·투명도(0..=1). 두께 ≤0 = 없음(기본).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BorderSpec {

@@ -69,6 +69,13 @@ impl TypeAhead {
         self.timeout_ms = ms.max(1);
     }
 
+    /// 활동 갱신 — 버퍼가 살아 있으면 타임아웃 기준 시각을 지금으로 리셋(↑↓ 순환 중 유지).
+    pub fn touch(&mut self, now_ms: u64) {
+        if !self.buf.is_empty() || !self.preedit.is_empty() {
+            self.last_ms = now_ms;
+        }
+    }
+
     /// 버퍼 소거(조합 포함).
     pub fn clear(&mut self) {
         self.buf.clear();
