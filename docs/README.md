@@ -42,7 +42,7 @@
 | [07 ADR-0001 스택](07-adr-0001-stack.md) | ✅ **Accepted** — Rust · 자체 CPU 래스터라이저 · 플랫폼 계층 P2 · Wayland+X11 · 시스템 폰트 · **SP-1 스파이크** |
 | [08 ADR-0002 디스커버리·전송·암호](08-adr-0002-discovery-transport.md) | ✅ **Accepted** — 자체 컴팩트 UDP · TCP 세션 · **Noise_XX + TOFU** · 발견은 "미검증 힌트" |
 | [09 ADR-0003 전송 추상화](09-adr-0003-transport-abstraction.md) | ✅ **Accepted**(구현으로 비준) — 4계층 경계 · `PeerId`/`Locator`/`Link`/`Session` · 인메모리 전송으로 네트워크 없는 테스트 |
-| [11 ADR-0004 수신 무해화](11-adr-0004-quarantine.md) | 📐 **Proposed** — `.beepq` 레이아웃 · 위험 등급 4단계 확장자표 · 상태 기계(fail-closed) · MotW/quarantine API |
+| [11 ADR-0004 수신 무해화](11-adr-0004-quarantine.md) | ✅ **Accepted**(08-08) — `.beepq` 레이아웃 · 위험 등급 4단계 확장자표 · 상태 기계(fail-closed) · MotW/quarantine API |
 | [19 ADR-0006 수동 엔드포인트 등록](19-adr-0006-manual-endpoint.md) | ✅ **Accepted**(08-08 — `add_endpoint` 구현·맥↔docker IP 실증) · 📐 원격 신뢰 등급 세부는 — 직접 IP/DDNS로 노드 추가 · **원격 신뢰 등급** · 인바운드 요청 대기 · 릴레이와의 경계 |
 | [17 ADR-0005 기록 저장 암호화](17-adr-0005-history-at-rest.md) | 📐 **Proposed** — 기기 키 파생 + 승격 옵션 · **블라인드 인덱스 검색** · **크립토 셰레딩** · 위협 모델 H-1~H-8 |
 | [20 ADR-0007 다중 기기 신원](20-adr-0007-multi-device-identity.md) | ✅ **Accepted** — **UserId 1:M PeerId** · 서명된 기기 목록 · **주 기기 + 오프라인 복구 시드** · **기기 관리 화면** · 폐기·롤백 방지 · v1 제약 4건 |
