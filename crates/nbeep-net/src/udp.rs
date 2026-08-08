@@ -3,7 +3,8 @@
 //! [`wire`](crate::wire) 패킷을 **S2(IPv4 멀티캐스트) + S3(IPv4 브로드캐스트) 동시**로 쏘고 받는다.
 //! 멀티캐스트를 막는 기업 Wi-Fi에서도 브로드캐스트로 발견되게 하는 폴백([docs/06 §4]). 수신
 //! 소켓은 `0.0.0.0:PORT` 바인딩이라 **둘 다 같은 소켓으로 받는다**(같은 peer 이중 관측은 PeerTable이
-//! 병합 — FR-D-6). S1(IPv6)·S4(유니캐스트)는 후속.
+//! 병합 — FR-D-6). **S1(IPv6 멀티캐스트)** 도 best-effort 병행(IPv6 미지원 환경은 조용히 IPv4만).
+//! S4(유니캐스트)는 후속.
 //!
 //! - **자기 패킷 필터** — 멀티캐스트는 루프백된다. **키(`PeerId`)로 거른다**([docs/08 §5] —
 //!   주소·포트가 아니라 신원 기준. 같은 호스트의 다른 인스턴스는 걸러지지 않아야 한다).
@@ -16,7 +17,7 @@
 use crate::wire::{Decoded, Packet, PacketKind};
 use nbeep_core::{DisplayName, PeerId};
 use socket2::{Domain, Protocol, Socket, Type};
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, UdpSocket};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
@@ -28,6 +29,8 @@ pub const MULTICAST_GROUP: Ipv4Addr = Ipv4Addr::new(239, 255, 77, 77);
 pub const DISCOVERY_PORT: u16 = 47_100;
 /// S3 브로드캐스트 목적지(제한 브로드캐스트 — 서브넷 무관 · 라우터는 넘지 않음).
 const BROADCAST: Ipv4Addr = Ipv4Addr::new(255, 255, 255, 255);
+/// S1 IPv6 멀티캐스트 그룹(링크로컬 ff02::/16 — 관리자 지정 잠정, D-8b 확정).
+const MULTICAST_GROUP_V6: Ipv6Addr = Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 0, 0x0beb);
 /// 멀티캐스트 TTL(잠정 — 링크 로컬 1홉. 라우팅 확장은 S6/릴레이 몫).
 const TTL: u32 = 1;
 /// 수신 폴링 간격(정지 플래그 확인용).
@@ -83,6 +86,9 @@ impl UdpDiscovery {
         send_sock.set_multicast_loop_v4(true)?;
         send_sock.set_broadcast(true)?; // S3 — 멀티캐스트 차단 폴백
 
+        // ── S1: IPv6 멀티캐스트(best-effort — 실패해도 IPv4로 계속) ──
+        let v6 = Self::setup_ipv6().ok();
+
         let template = Packet {
             kind: PacketKind::Announce,
             flags: 0,
@@ -97,9 +103,18 @@ impl UdpDiscovery {
         let seq = Arc::new(AtomicU32::new(0));
         let (tx, events) = channel::<Observation>();
 
-        Self::spawn_receiver(recv, me, tx, Arc::clone(&stop));
+        Self::spawn_receiver(recv, me, tx.clone(), Arc::clone(&stop));
+        let v6_send = if let Some((v6_recv, v6_send)) = v6 {
+            if let Ok(rx) = v6_recv.try_clone() {
+                Self::spawn_receiver(rx, me, tx, Arc::clone(&stop));
+            }
+            v6_send.try_clone().ok()
+        } else {
+            None
+        };
         Self::spawn_announcer(
             send_sock.try_clone()?,
+            v6_send,
             template.clone(),
             announce_ms,
             Arc::clone(&stop),
@@ -136,14 +151,44 @@ impl UdpDiscovery {
         SocketAddrV4::new(BROADCAST, DISCOVERY_PORT)
     }
 
-    /// S2 멀티캐스트 + S3 브로드캐스트 동시 발신(둘 중 하나만 통과해도 발견 성립).
-    fn send_both(sock: &UdpSocket, bytes: &[u8]) {
-        let _ = sock.send_to(bytes, Self::dest());
-        let _ = sock.send_to(bytes, Self::broadcast_dest());
+    fn dest_v6() -> SocketAddrV6 {
+        SocketAddrV6::new(MULTICAST_GROUP_V6, DISCOVERY_PORT, 0, 0)
+    }
+
+    /// S1 IPv6 멀티캐스트 소켓 쌍(recv, send) — best-effort. 링크로컬 그룹 가입은
+    /// 기본 인터페이스(0)로 시도한다(정밀 인터페이스 선택은 M1-3 인터페이스 바인딩·D-8b).
+    fn setup_ipv6() -> std::io::Result<(UdpSocket, UdpSocket)> {
+        let recv = Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP))?;
+        recv.set_only_v6(true)?; // IPv4는 별도 소켓 — 이중 바인딩 회피
+        recv.set_reuse_address(true)?;
+        #[cfg(unix)]
+        recv.set_reuse_port(true)?;
+        recv.bind(&SocketAddr::from((Ipv6Addr::UNSPECIFIED, DISCOVERY_PORT)).into())?;
+        recv.join_multicast_v6(&MULTICAST_GROUP_V6, 0)?;
+        recv.set_multicast_loop_v6(true)?;
+        let recv: UdpSocket = recv.into();
+        recv.set_read_timeout(Some(RECV_POLL))?;
+
+        let send = Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP))?;
+        send.set_only_v6(true)?;
+        send.bind(&SocketAddr::from((Ipv6Addr::UNSPECIFIED, 0)).into())?;
+        send.set_multicast_loop_v6(true)?;
+        let send: UdpSocket = send.into();
+        Ok((recv, send))
+    }
+
+    /// S2 멀티캐스트 + S3 브로드캐스트 (+ 있으면 S1 IPv6) 동시 발신 — 하나만 통과해도 발견 성립.
+    fn send_all(v4: &UdpSocket, v6: Option<&UdpSocket>, bytes: &[u8]) {
+        let _ = v4.send_to(bytes, Self::dest());
+        let _ = v4.send_to(bytes, Self::broadcast_dest());
+        if let Some(v6) = v6 {
+            let _ = v6.send_to(bytes, Self::dest_v6());
+        }
     }
 
     fn spawn_announcer(
         sock: UdpSocket,
+        v6: Option<UdpSocket>,
         mut template: Packet,
         announce_ms: u32,
         stop: Arc<AtomicBool>,
@@ -153,7 +198,7 @@ impl UdpDiscovery {
             // 기동 직후 HELLO(응답 유도) 1회, 이후 주기 ANNOUNCE.
             template.kind = PacketKind::Hello;
             template.seq = seq.fetch_add(1, Ordering::Relaxed);
-            Self::send_both(&sock, &template.encode());
+            Self::send_all(&sock, v6.as_ref(), &template.encode());
             template.kind = PacketKind::Announce;
             let step = Duration::from_millis(100);
             let mut waited = Duration::ZERO;
@@ -166,7 +211,7 @@ impl UdpDiscovery {
                 if waited >= Duration::from_millis(u64::from(announce_ms)) {
                     waited = Duration::ZERO;
                     template.seq = seq.fetch_add(1, Ordering::Relaxed);
-                    Self::send_both(&sock, &template.encode());
+                    Self::send_all(&sock, v6.as_ref(), &template.encode());
                 }
             }
         });
@@ -206,7 +251,8 @@ impl Drop for UdpDiscovery {
         bye.kind = PacketKind::Goodbye;
         for _ in 0..2 {
             bye.seq = self.seq.fetch_add(1, Ordering::Relaxed);
-            Self::send_both(&self.send_sock, &bye.encode());
+            // Drop 시엔 v4로만(v6 send 핸들은 애넌서 스레드 소유 — GOODBYE는 v4로 충분).
+            Self::send_all(&self.send_sock, None, &bye.encode());
         }
     }
 }

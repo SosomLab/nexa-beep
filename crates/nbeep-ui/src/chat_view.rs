@@ -29,7 +29,7 @@ pub struct ChatViewWidget {
     /// 상대 표시 이름(헤더).
     title: String,
     lines: Vec<ChatLine>,
-    input: String,
+    input: crate::edit::EditState,
     scale: f32,
     outgoing: Option<SafeText>,
     back: bool,
@@ -43,7 +43,7 @@ impl ChatViewWidget {
             bounds: Rect::default(),
             title,
             lines: Vec::new(),
-            input: String::new(),
+            input: crate::edit::EditState::new(),
             scale: 1.0,
             outgoing: None,
             back: false,
@@ -77,8 +77,14 @@ impl ChatViewWidget {
 
     /// 현재 입력 중 텍스트(테스트·HUD용).
     #[must_use]
-    pub fn input(&self) -> &str {
-        &self.input
+    pub fn input(&self) -> String {
+        self.input.text()
+    }
+
+    /// 입력 캐럿 위치(문자 인덱스) — 커서 렌더용.
+    #[must_use]
+    pub fn input_caret(&self) -> usize {
+        self.input.caret()
     }
 
     fn s(&self, logical: i32) -> i32 {
@@ -102,15 +108,17 @@ impl Widget for ChatViewWidget {
     }
 
     fn on_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
+        use crate::edit::EditKey;
         match *ev {
             InputEvent::Key {
                 key: Key::Enter, ..
             } => {
-                let trimmed = self.input.trim();
+                let text = self.input.text();
+                let trimmed = text.trim();
                 if !trimmed.is_empty() {
                     // 발신 확정 — 무해화를 여기서 통과시킨다(스레드 타입이 SafeText).
                     self.outgoing = Some(sanitize_message(trimmed));
-                    self.input.clear();
+                    self.input.set_text("");
                     inv.push(self.bounds);
                 }
             }
@@ -119,11 +127,29 @@ impl Widget for ChatViewWidget {
             } => {
                 self.back = true;
             }
+            InputEvent::Key { key, shift, .. } => {
+                // 캐럿 이동·선택(edit 모델). Enter/Esc는 위에서 처리됨.
+                let ek = match key {
+                    Key::Left => Some(EditKey::Left),
+                    Key::Right => Some(EditKey::Right),
+                    Key::Home => Some(EditKey::Home),
+                    Key::End => Some(EditKey::End),
+                    _ => None,
+                };
+                if let Some(ek) = ek {
+                    self.input.key(ek, shift);
+                    inv.push(self.input_bar());
+                }
+            }
+            InputEvent::SelectAll => {
+                self.input.key(EditKey::SelectAll, false);
+                inv.push(self.input_bar());
+            }
             InputEvent::Char { c, .. } => {
                 if c == '\u{8}' {
-                    self.input.pop();
+                    self.input.backspace();
                 } else if !c.is_control() {
-                    self.input.push(c);
+                    self.input.insert(c);
                 }
                 inv.push(self.input_bar());
             }
@@ -170,17 +196,50 @@ impl Widget for ChatViewWidget {
             theme.border,
         );
         ctx.select_font(FontSlot::Message, false);
-        let shown = if self.input.is_empty() {
-            "메시지 입력… (Enter 전송 · Esc 목록)"
+        let text = self.input.text();
+        let tx = input.x + self.s(10);
+        let ty = input.y + self.s(7);
+        if text.is_empty() {
+            ctx.text(
+                tx,
+                ty,
+                input,
+                "메시지 입력… (Enter 전송 · Esc 목록)",
+                theme.text_dim,
+            );
         } else {
-            &self.input
-        };
-        let fg = if self.input.is_empty() {
-            theme.text_dim
-        } else {
-            theme.text
-        };
-        ctx.text(input.x + self.s(10), input.y + self.s(7), input, shown, fg);
+            let chars: Vec<char> = text.chars().collect();
+            let upto = |ctx: &mut dyn DrawCtx, n: usize| -> i32 {
+                let prefix: String = chars[..n].iter().collect();
+                ctx.text_width(&prefix)
+            };
+            // 선택 하이라이트(텍스트 뒤에 먼저).
+            if let Some((a, b)) = self.input.selection() {
+                let x0 = tx + upto(ctx, a);
+                let x1 = tx + upto(ctx, b);
+                ctx.fill_rect(
+                    Rect::new(
+                        x0,
+                        input.y + self.s(4),
+                        (x1 - x0).max(1),
+                        input.h - self.s(8),
+                    ),
+                    theme.sel_bg,
+                );
+            }
+            ctx.text(tx, ty, input, &text, theme.text);
+            // 폰트 실측 픽셀 커서 — 캐럿까지 폭만큼 오른쪽에 세로선.
+            let cx = tx + upto(ctx, self.input.caret());
+            ctx.fill_rect(
+                Rect::new(
+                    cx,
+                    input.y + self.s(6),
+                    self.s(2).max(1),
+                    input.h - self.s(12),
+                ),
+                theme.accent,
+            );
+        }
     }
 }
 
@@ -206,6 +265,30 @@ mod tests {
             },
             inv,
         );
+    }
+
+    fn key(w: &mut ChatViewWidget, k: Key, inv: &mut Invalidations) {
+        w.on_event(
+            &InputEvent::Key {
+                key: k,
+                shift: false,
+                primary: false,
+            },
+            inv,
+        );
+    }
+
+    #[test]
+    fn caret_moves_and_inserts_mid_string() {
+        let (mut w, mut inv) = widget();
+        for c in "helo".chars() {
+            ch(&mut w, c, &mut inv);
+        }
+        // 캐럿을 'l'과 'o' 사이로: End에서 Left 1회 → "hel|o"에 'l' 삽입 → "hello"
+        key(&mut w, Key::Left, &mut inv);
+        ch(&mut w, 'l', &mut inv);
+        assert_eq!(w.input(), "hello");
+        assert_eq!(w.input_caret(), 4);
     }
 
     #[test]

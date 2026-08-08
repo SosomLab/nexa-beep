@@ -3,7 +3,13 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
-> **갱신: 2026-08-08 32차 (KST)** — **R-16 정상 종료 경로 + S3 브로드캐스트 폴백**(`feat/m1-broadcast`(+`feat/r16-shutdown` 스택) → main 병합):
+> **갱신: 2026-08-08 33차 (KST)** — **S1 IPv6 발견 + 텍스트 편집 모델 + 입력창 정식 렌더**(`feat/m3-edit`(+`feat/m1-ipv6` 스택) → main 병합):
+> ① **S1 IPv6 멀티캐스트** best-effort 병행(ff02::beb·전용 소켓·미지원 시 IPv4만) — M1-4 "S1~S3 동시 시도" 코드 완성. IPv6 단독 전달은 D-8b.
+> ② **`edit` 모델 이식** — `EditState`(char 버퍼·캐럿·선택·insert/insert_str/backspace/cut/key). **char 단위라 한글·이모지 경계 자동 보존.** IME(M3-3) 확정 문자열 진입점.
+> ③ **대화 입력창 정식화** — 임시 append(캐럿 이동 불가) → `EditState` 배선(←→·Home/End·Shift 선택·중간 삽입·⌘A) + **폰트 실측 픽셀 커서·선택 하이라이트**(`text_width` 기반). 진짜 텍스트 필드.
+> **168테스트 green**. [journal/2026-08-08.md](journal/2026-08-08.md).
+>
+> **직전(08-08 32차)** — **R-16 정상 종료 경로 + S3 브로드캐스트 폴백**(`feat/m1-broadcast`(+`feat/r16-shutdown` 스택) → main 병합):
 > ① **R-16 해소(핵심)** — `plat::shutdown`(SIGINT/SIGTERM 포트·DR-21 · async-signal-safe 핸들러→브릿지 플래그) + 헤드리스 루프 깨우기(논블로킹 accept·타임아웃) + GUI 훅(`about_to_wait`→`el.exit()`→Drop 체인 GOODBYE·~5Hz 폴로 유휴 발견 갱신 겸수정). **실측: docker stop 10.26→0.38초 · GUI SIGTERM 0.28초**. 잔여 = zeroize(M2-5)·Windows 콘솔 핸들러.
 > ② **S3 IPv4 브로드캐스트 폴백** — HELLO/ANNOUNCE/GOODBYE를 **S2 멀티캐스트 + S3 브로드캐스트 동시 발신**(`SO_BROADCAST`·수신 소켓 공용). 멀티캐스트 차단 Wi-Fi 대비([06 §4]). "차단 시 대체" 자체 검증은 D-8b 통제 망 몫.
 > **159테스트 green**. [journal/2026-08-08.md](journal/2026-08-08.md).

@@ -8,6 +8,7 @@
 
 | 브랜치 | 생성 | 병합(커밋) | 삭제 | 커밋수 | 작업 요약 | 상세 |
 | --- | --- | --- | --- | --- | --- | --- |
+| `feat/m3-edit`(+`feat/m1-ipv6` 스택) | 2026-08-08 | _진행 중_ | — | 3 | **S1 IPv6 발견**(best-effort) + **`edit` 편집 모델**(캐럿·선택·char 단위) + **대화 입력창 정식화**(픽셀 커서·선택 하이라이트) | [journal/2026-08-08](journal/2026-08-08.md) |
 | `feat/m1-broadcast`(+`feat/r16-shutdown` 스택) | 2026-08-08 | 2026-08-08 (5fd18f8 --no-ff) | 2026-08-08 | 4 | **R-16 정상 종료 경로**(plat::shutdown·헤드리스+GUI 훅·docker stop 0.38s·GUI 0.28s) + **S3 브로드캐스트 발견 폴백**(S2와 병행 발신) | [journal/2026-08-08](journal/2026-08-08.md) |
 | `feat/m3-manual-ui` | 2026-08-08 | 2026-08-08 (75a5673 --no-ff) | 2026-08-08 | 4 | **GUI 수동 추가 UI(⌘/Ctrl+K)** + **인터랙티브 채팅**(`--chat-serve`/`--chat-connect`) — 맥↔docker-linux 사람 대 사람 양방향 대화 실증(arm64↔amd64) · 병행 R-16/FR-P-7 문서 | [journal/2026-08-08](journal/2026-08-08.md) |
 | `feat/m1-manual` | 2026-08-08 | 2026-08-08 (fabaf74 --no-ff) | 2026-08-08 | 2 | **DR-19 수동 엔드포인트** — `Transport::add_endpoint`(발견 우회 IP 연결·신원은 핸드셰이크 확정) · bin `--serve`/`--connect` · **맥↔docker-linux IP 대화 실증**(발견 경계 우회) · ADR-0006 Accepted | [journal/2026-08-08](journal/2026-08-08.md) |
