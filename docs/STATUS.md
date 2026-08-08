@@ -3,7 +3,13 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
-> **갱신: 2026-08-08 16차 (KST)** — **M2 잔여 소진 + M1 선행 + 텍스트 스택 확정**(`feat/m2-mux` → main 병합 840d778 · push 완료):
+> **갱신: 2026-08-08 17차 (KST)** — **M3-1 슬라이스 1·2 — 위젯 체계 개시**(`feat/m3-widgets` → main 병합):
+> ① **`nexa-gui` 인프라 이식**([12 §A](12-asset-reuse.md) 지정 자산 · 출처 커밋 명기) — `geom`(반열린 Rect) · `event`(**분수 노치 휠 누적기**·`now_ms` 주입 — 결정적 테스트) · `widget`(`Widget` 트레이트·`Invalidations` 교차 병합) · `theme`(토큰 체계+`danger`/`ok`/`warn` — 색 하드코딩 금지) · `draw`(`DrawCtx` 어휘 — dir2 전용 제외) · `typeahead`(반복 단일키 cycle).
+> ② **`RasterCtx` 신규** — 원본 백엔드(GDI/DirectWrite)와 **같은 어휘를 우리 CPU 래스터라이저로 재구현**(위젯은 백엔드를 모른다 — DR-21의 UI판 실증). AA 도형은 픽셀별 **SDF 커버리지**(라운드 사각형·타원·폴리라인) — 1비트 리전 클립 함정([12 §B] behind) 구조적 부재. gfx에 `draw_text_clipped`/`ascent`(행 배경+텍스트 1회 호출 모델).
+> ③ **`PeerListWidget`(첫 실물 위젯)** — 캐럿 탐색·클릭·휠·타입어헤드(표시 이름 순환)·Enter 활성화 폴링(`take_activated` — 컨트롤은 부모를 모른다). ★ **부분 무효화가 단언이 됐다** — 캐럿 이동 = 행 2개 rect만(FR-U-13 테스트 고정). bin은 winit→`InputEvent` 번역으로 **인터랙티브 데모**("김" 타이핑 점프·Enter 활성화). IME 조합은 M3-3.
+> **131테스트 green** · 릴리스 **0.55MB** · 실창 스모크 통과. 잔여 = edit 이식(M3-3와 함께)·WidgetBase·개별 위젯. [journal/2026-08-08.md](journal/2026-08-08.md).
+>
+> **직전(08-08 16차)** — **M2 잔여 소진 + M1 선행 + 텍스트 스택 확정**(`feat/m2-mux` → main 병합 840d778 · push 완료):
 > ① **M2-2b** 안전번호 60자리(Signal 규격 — 생일 공격 2²⁰ 해소) ② **CI 회귀 게이트**(사용자 지시 — 기능=테스트 동반 필수 · testkit 전체 features · [18](18-build-and-test.md) 명문화) ③ **M2-3** `MuxSession`(Control/Chat·미지 스트림 무시(전방 호환)·백프레셔 fail-closed) ④ **M2-4** `ChatMessage` 봉투(`sender_device` v1 검증·**골든 와이어 테스트**)·`Sequencer`·`DedupIndex`(키=(기기,seq))·`fanout` 단일 발신 경로(FR-G-6) ⑤ **M2-6** `safetext`(개행 보존 무해화 · 링크는 탐지만 — **열기 API 부재가 구조 보증**) ⑥ **M1-5** `PeerTable`(병합 키=오직 PeerId · **goodbye는 경로 단위** · 타임아웃 수치 주입 — D-8 실측 대기) ⑦ **SP-1c 실측 → ab_glyph 채택**(사용자 확정 — +99KB/외부 4 전부 Apache/MIT · swash +774KB는 게이트 초과 탈락 · **한글=완성형이라 셰이핑 v1 불요**) ⑧ **M1-6 최소 피어 목록 UI** — gfx `Surface`(경계 클립 보장)/`Font`(TTC·AA 블렌드) · plat 시스템 폰트 후보(3-OS) · ui **신뢰 배지 3종 상시** · bin 실창 데모(**PeerTable→TrustStore→렌더 실물 조립** — M1-4는 관측 공급원 교체만 남음).
 > 릴리스 0.40→**0.53MB**(+115KB — SP-1c 게이트 통과) · **106테스트 green**(3-OS 통합 — 한글 단언은 mac/win cfg 명시).
 > 남은 관문 = **ADR-0004·0005·0006·0010 + D-23·D-24(25 기능 범위) 확정** · **D-22 확정**(와이어 포맷 전) · **실기 2대**(D-8). [journal/2026-08-08.md](journal/2026-08-08.md).
