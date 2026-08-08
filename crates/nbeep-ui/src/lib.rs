@@ -6,6 +6,7 @@
 // 테스트 코드는 unwrap 허용(docs/13 §9 — 금지는 프로덕션 경로 한정).
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
+pub mod chat_view;
 pub mod draw;
 pub mod event;
 pub mod geom;
@@ -15,6 +16,7 @@ pub mod theme;
 pub mod typeahead;
 pub mod widget;
 
+pub use chat_view::{ChatLine, ChatViewWidget};
 pub use draw::{DrawCtx, FontSlot};
 pub use event::{InputEvent, Key, WheelAccum, WHEEL_DELTA};
 pub use geom::{Point, Rect, Size};

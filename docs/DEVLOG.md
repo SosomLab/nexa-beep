@@ -7,6 +7,8 @@
 
 ## 2026-08-08
 
+- **대화 화면 첫 슬라이스 — ChatViewWidget + 화면 전환**(feat/m3-chatview): 상태바가 약속한 "Enter = 대화 열기"가 실제가 됐다 — 목록 Enter → **대화 화면**(헤더·스레드·한 줄 입력) → Esc 복귀. ① 스레드 타입이 `SafeText`라 **무해화 우회가 타입으로 불가**(발신 입력도 `sanitize_message` 통과 — RLO 타이핑 테스트) ② 발신은 **실물 도메인 경로**: `Identity`(실물 키)로 sender_device, `Sequencer` seq 발급, `ChatMessage` 봉투 구성(전송 fanout 배선은 M1-4·M2-7 — 상태바에 "전송 배선은 M2-7" 명시) ③ 입력은 임시 한 줄 모델(IME 커밋 한글 가능·캐럿/조합 표시는 M3-3 `edit` 이식에서 교체) ④ 발신·복귀는 폴링(`take_outgoing`/`take_back`). 릴리스 0.55→**0.67MB** — Identity 배선으로 **snow가 처음 bin에 링크**된 실측(+131KB · 게이트 여유). **136테스트 green**. 상세 [journal/2026-08-08.md](journal/2026-08-08.md).
+
 - **폰트 메모리 매핑 — R-15 해소**(feat/m3-fontmap · 사용자 확정 *"메모리 매핑 방식으로 적용"*): `fs::read` 힙 로드(mac 한글 TTC **55MB** · win 맑은 고딕 12.8MB)를 **memmap2 mmap**으로 교체 — 파일 백드 페이지라 실제 사용한 글리프 페이지만 상주하고 OS가 회수한다. **실측(mac): RSS 138 → 85.7MB(−51MB)**. 매핑은 프로세스 수명 자원이라 의도적 누수(`Box::leak` — 해제 시점이 없다). gfx `Font`는 `FontRef<'static>` 기반으로 전환(`from_static` 정상 경로·`from_bytes`는 누수 수렴). **부수 정리**: plat→gfx 미사용 의존 제거(계층 — plat은 gfx를 모른다) · STATUS 9차 테스트 수 44→40 정정(Windows 세션 검증 건) · 원장 memmap2 등재. 132테스트 green. 상세 [journal/2026-08-08.md](journal/2026-08-08.md).
 
 - **고DPI 배율·한글 타입어헤드·Enter 피드백**(feat/m3-dpi — 실기 피드백 3건, 맥 Retina+Windows 원격 실사): ① **배율 적용**(FR-U-6 선행) — `RasterCtx::with_scale`(슬롯 폰트 크기 × scale)·`PeerListWidget::set_scale`(행 높이·여백·히트테스트 물리 px화)·bin `ScaleFactorChanged` 구독(모니터 이동 대응). 맥 2x에서 글자가 정상 크기가 된다 ② **한글 타입어헤드** — `set_ime_allowed` + IME `Commit` 문자열을 `Char`로 라우팅(조합 표시 UI는 M3-3 — 확정된 글자는 지금부터 동작: "김" 입력 → 김철수 점프) ③ **Enter가 보인다** — 하단 상태바 신설(안내 문구 + 활성화 시 "선택: … 대화 열기는 M2-7") ④ 배율 히트테스트 회귀 테스트(2배율에서 클릭 좌표→행 매핑). 132테스트 green · 릴리스 0.55MB. 상세 [journal/2026-08-08.md](journal/2026-08-08.md).
