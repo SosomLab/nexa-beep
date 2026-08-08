@@ -8,6 +8,7 @@
 
 | 브랜치 | 생성 | 병합(커밋) | 삭제 | 커밋수 | 작업 요약 | 상세 |
 | --- | --- | --- | --- | --- | --- | --- |
+| `feat/m3-settings-controls` | 2026-08-09 | 2026-08-09 (dbbb5a8 --no-ff) | 2026-08-09 | 4 | **설정 화면 커스텀 컨트롤 전면 교체**(TextBox·TreeView·Combo·Checkbox/Toggle·모달 캡처) + **Choose… 별도 모달 창**(Role::Picker·ChoosePicker 어댑터) + **타입어헤드 확정판**(Space 유실·자동순환 제거(↑↓ 전용)·touch·HUD 즉시) + 버튼 배율 미전파 수정·LEADING_ICON 단일 원천 + 전수 설계 점검 · 233 green | [journal/2026-08-09](journal/2026-08-09.md) |
 | `feat/m3-controls-polish` | 2026-08-08 | 2026-08-09 (2663155 --no-ff) | 2026-08-09 | 18 | **커스텀 컨트롤 툴킷 실사용 다듬기** — 오버레이 스크롤바(ScrollBars·페이드)·Button 컨트롤·이미지 아이콘(IconImage RGBA·스케일)·Choose 찾기 어댑터(ChoosePicker)·타입어헤드(IME 실시간·유효시간/위치/공백/특수문자 설정·↑↓ 순환)·도움말/셰브론/Border(f32) 정리·브랜딩 아이콘(svg→png/ico)+앱 창 아이콘 · 218 green | [journal/2026-08-09](journal/2026-08-09.md) |
 | `feat/m3-font-sections` | 2026-08-08 | 2026-08-08 (811d94e --no-ff) | 2026-08-08 | 6 | **글꼴 설정 섹션화 + i18n + 커스텀 컨트롤 툴킷 + 갤러리** — FontSection(글꼴명 텍스트박스+크기 콤보) · i18n(영어 기본+한/중/일·`ui.language`) · `Control`/`ControlBase` 상속(포커스 링·활성·도움말 "?") · Checkbox·RadioGroup·TextBox·Combo(∨)/ExtendedCombo(⇕·Choose…)·TreeView/TreeGrid · 임시 갤러리(⌘/Ctrl+G·`🎛 컨트롤` 버튼) · 215 green | [journal/2026-08-08](journal/2026-08-08.md) |
 | `feat/chat-live` | 2026-08-08 | 2026-08-08 (8ae516c --no-ff) | 2026-08-08 | 3 | **`--chat-live` 터미널 클라이언트**(GUI 목록에 뜨는 인터랙티브) + **[문서 26 실행·수동 테스트 가이드](26-run-and-manual-test.md)**(실행 모드 9종·시나리오 A~D·Docker) | [journal/2026-08-08](journal/2026-08-08.md) |
