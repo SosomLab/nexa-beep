@@ -720,6 +720,32 @@ mod app_window {
         });
     }
 
+    /// 샘플 찾기 어댑터 — 한 폴더의 **단일 파일 선택기**(Adapter 패턴 실증).
+    /// `nbeep_ui::ChoosePicker`를 구현한 어떤 화면도 Choose에 꽂을 수 있다(UI 계층은 I/O를 모른다).
+    #[derive(Debug)]
+    struct FilePicker {
+        dir: std::path::PathBuf,
+    }
+
+    impl nbeep_ui::ChoosePicker for FilePicker {
+        fn title(&self) -> String {
+            format!("파일 선택 — {}", self.dir.display())
+        }
+        fn items(&self) -> Vec<nbeep_ui::ComboItem> {
+            let mut v = Vec::new();
+            if let Ok(rd) = std::fs::read_dir(&self.dir) {
+                for e in rd.flatten() {
+                    if e.file_type().map(|t| t.is_file()).unwrap_or(false) {
+                        let name = e.file_name().to_string_lossy().into_owned();
+                        v.push(nbeep_ui::ComboItem::new(name.clone(), name).with_icon("▤"));
+                    }
+                }
+            }
+            v.sort_by(|a, b| a.label.cmp(&b.label));
+            v
+        }
+    }
+
     struct App {
         mode: WindowMode,
         windows: HashMap<WindowId, WinEntry>,
@@ -1063,7 +1089,14 @@ mod app_window {
                     scale,
                 },
             );
-            self.gallery_view = Some(GalleryWidget::new());
+            let mut gallery = GalleryWidget::new();
+            // Choose 컨트롤에 샘플 어댑터(단일 파일 선택기) 주입 — Adapter 패턴 실증.
+            let dir = std::env::var_os("HOME")
+                .map(std::path::PathBuf::from)
+                .or_else(|| std::env::current_dir().ok())
+                .unwrap_or_default();
+            gallery.set_choose_picker(Box::new(FilePicker { dir }));
+            self.gallery_view = Some(gallery);
             self.layout_window(id);
             self.request_redraw(id);
         }

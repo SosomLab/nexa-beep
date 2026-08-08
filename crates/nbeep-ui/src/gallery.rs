@@ -4,8 +4,8 @@
 //! 실물로 확인한다. **제품 화면이 아니라 검수용** — 정식 UI 통합은 별도.
 
 use crate::controls::{
-    Checkbox, Choose, Combo, ComboItem, Control, GridColumn, LabelSide, RadioGroup, RadioOption,
-    ScrollBars, TextBox, TreeGrid, TreeModel, TreeNode, TreeView,
+    Checkbox, Choose, ChoosePicker, Combo, ComboItem, Control, GridColumn, LabelSide, RadioGroup,
+    RadioOption, ScrollBars, TextBox, TreeGrid, TreeModel, TreeNode, TreeView,
 };
 use crate::draw::{DrawCtx, FontSlot};
 use crate::event::InputEvent;
@@ -181,6 +181,11 @@ impl GalleryWidget {
         self.content_h = (y - top) + pad;
         self.content_w = w + pad * 2;
         inv.push(self.bounds);
+    }
+
+    /// Choose 컨트롤에 찾기 창 어댑터를 꽂는다(bin이 단일 파일 선택기 주입 · Adapter 패턴).
+    pub fn set_choose_picker(&mut self, picker: Box<dyn ChoosePicker>) {
+        self.ext.set_picker(picker);
     }
 
     /// 스크롤바 페이드 틱(호스트가 ~5Hz 호출) — 갤러리 자체 + 내부 트리/그리드 바 모두.

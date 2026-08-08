@@ -21,7 +21,7 @@ pub mod textbox;
 pub mod tree;
 
 pub use checkbox::Checkbox;
-pub use combo::{Choose, Combo, ComboControl, ComboItem, PopupHit};
+pub use combo::{Choose, ChoosePicker, Combo, ComboControl, ComboItem, PopupHit};
 pub use radio::{RadioGroup, RadioOption};
 pub use scroll::ScrollBars;
 pub use textbox::TextBox;
@@ -314,7 +314,8 @@ pub fn draw_radio_glyph(
 /// 위/아래 이중 셰브론(⇕) — 콤보박스 오른쪽 표식.
 pub fn draw_updown_chevrons(ctx: &mut dyn DrawCtx, theme: &Theme, area: Rect, color: Color) {
     let cx = area.x + area.w / 2;
-    let half = (area.w / 4).max(3);
+    // 좌우로 조금 짧은 형태(사용자 확정 · w/5).
+    let half = (area.w / 5).max(2);
     // 두 셰브론을 2px 더 가깝게(각 방향 1px씩 · 사용자 확정).
     let gap = (area.h / 8 - 1).max(1);
     let midy = area.y + area.h / 2;
@@ -357,11 +358,11 @@ pub fn draw_check_mark(ctx: &mut dyn DrawCtx, area: Rect, color: Color) {
     ctx.polyline(&pts, color, (area.w as f32 / 9.0).max(1.5));
 }
 
-/// 아래 셰브론(∨) — 드롭다운/트리 접힘 표식.
+/// 아래 셰브론(∨) — 드롭다운/트리 접힘 표식. 좌우로 조금 짧은 형태(사용자 확정 · w/5).
 pub fn draw_chevron_down(ctx: &mut dyn DrawCtx, area: Rect, color: Color) {
     let cx = area.x + area.w / 2;
     let cy = area.y + area.h / 2;
-    let half = (area.w / 4).max(3);
+    let half = (area.w / 5).max(2);
     let w = (area.w as f32 / 10.0).max(1.5);
     ctx.polyline(
         &[

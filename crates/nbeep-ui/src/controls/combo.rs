@@ -13,13 +13,27 @@
 //!
 //! 시각: ⇕ = "값을 사용자 정의할 수 있다"(확장) · ∨ = "목록에서 고른다"(일반) — 사용자 정의.
 
-use super::{draw_check_mark, draw_chevron_down, draw_updown_chevrons, Control, ControlBase};
+use super::{
+    draw_check_mark, draw_chevron_down, draw_updown_chevrons, Control, ControlBase, ScrollBars,
+};
 use crate::draw::{DrawCtx, FontSlot};
 use crate::edit::EditState;
 use crate::event::{InputEvent, Key};
 use crate::geom::{Point, Rect};
 use crate::theme::Theme;
 use crate::widget::{Invalidations, Widget};
+
+/// **찾기 창 어댑터**(인터페이스 · Adapter 패턴) — [`Choose`]의 "Choose…"가 열 화면을 갈아끼운다.
+///
+/// 어떤 화면이든 이 트레이트만 구현하면 Choose에 꽂을 수 있다([`Choose::set_picker`]). Choose는
+/// 후보를 [`ChoosePicker::items`]로 받아 오버레이 목록으로 띄우고, 고른 항목의 라벨을 값으로 반영한다.
+/// 샘플 구현(단일 파일 선택기)은 파일 접근이 가능한 상위 계층(bin)에 둔다 — UI 계층은 I/O를 모른다.
+pub trait ChoosePicker: std::fmt::Debug {
+    /// 찾기 창 제목.
+    fn title(&self) -> String;
+    /// 선택 후보(오버레이에 표시) — 아이콘 포함 가능.
+    fn items(&self) -> Vec<ComboItem>;
+}
 
 /// 콤보 항목 — 값·라벨 + **선택적 선행 아이콘**(글리프/이모지 — 텍스트 스택이 그릴 수 있는 범위.
 /// 비트맵 아이콘은 이미지 파이프라인 M4에서 확장).
@@ -89,6 +103,9 @@ const ROW_H: i32 = 26;
 const CHEV_W: i32 = 16;
 const SEP_H: i32 = 9;
 const POPUP_PAD: i32 = 4;
+// 찾기 오버레이(Choose 어댑터).
+const PICK_ROW_H: i32 = 24;
+const PICK_TITLE_H: i32 = 26;
 
 /// 콤보 계층 인터페이스 — [`Control`] 위에 콤보 공통 동작을 **기본 메서드로 상속**시킨다.
 ///
@@ -167,11 +184,11 @@ pub trait ComboControl: Control {
     }
 
     // ── 기하 ──
-    /// 셰브론 영역(오른쪽).
+    /// 셰브론 영역(오른쪽) — 우측 여백 2px(사용자 확정).
     fn chevron_rect(&self) -> Rect {
         let b = self.bounds();
         let w = self.s(CHEV_W);
-        Rect::new(b.right() - w, b.y, w, b.h)
+        Rect::new(b.right() - w - self.s(2), b.y, w, b.h)
     }
     /// 드롭다운 팝업 rect(닫혀 있으면 빈 rect).
     fn popup_rect(&self) -> Rect {
@@ -424,8 +441,16 @@ pub struct Choose {
     choose_label: String,
     /// "Choose…" 항목 선행 아이콘(옵션).
     choose_icon: Option<String>,
-    /// Choose… 활성화 1회성(호스트가 사용자 지정 찾기 창을 연다).
+    /// Choose… 활성화 1회성(어댑터가 없을 때만 — 호스트가 직접 처리).
     chose: bool,
+    /// 찾기 창 어댑터(Adapter 패턴 · 있으면 인라인 오버레이로 후보 표시).
+    picker: Option<Box<dyn ChoosePicker>>,
+    /// 찾기 오버레이가 열려 있는가.
+    picking: bool,
+    /// 찾기 오버레이 세로 스크롤(물리 px).
+    pick_scroll: i32,
+    /// 찾기 오버레이 스크롤바.
+    pick_bars: ScrollBars,
 }
 
 impl Choose {
@@ -444,6 +469,10 @@ impl Choose {
             choose_label: choose_label.into(),
             choose_icon: None,
             chose: false,
+            picker: None,
+            picking: false,
+            pick_scroll: 0,
+            pick_bars: ScrollBars::new(),
         }
     }
 
@@ -452,6 +481,62 @@ impl Choose {
     pub fn with_choose_icon(mut self, icon: impl Into<String>) -> Self {
         self.choose_icon = Some(icon.into());
         self
+    }
+
+    /// 찾기 창 어댑터를 꽂는다(Adapter 패턴). 이후 "Choose…"가 인라인 오버레이를 연다.
+    pub fn set_picker(&mut self, picker: Box<dyn ChoosePicker>) {
+        self.picker = Some(picker);
+    }
+
+    /// 찾기 오버레이가 열려 있는가.
+    #[must_use]
+    pub fn is_picking(&self) -> bool {
+        self.picking
+    }
+
+    /// 찾기 오버레이 rect(닫혀 있으면 빈 rect). 제목행 + 목록(최대 8행) + 여백.
+    fn picker_rect(&self) -> Rect {
+        if !self.picking {
+            return Rect::new(0, 0, 0, 0);
+        }
+        let b = self.base.bounds;
+        let n = self.picker_items().len().min(8) as i32;
+        let rh = self.s(PICK_ROW_H);
+        let w = b.w.max(self.s(280));
+        let h = self.s(PICK_TITLE_H) + n * rh + self.s(POPUP_PAD) * 2;
+        Rect::new(b.x, b.bottom() + self.s(2), w, h)
+    }
+
+    /// 찾기 오버레이 목록 뷰포트(제목 아래).
+    fn picker_viewport(&self) -> Rect {
+        let p = self.picker_rect();
+        let top = p.y + self.s(PICK_TITLE_H);
+        Rect::new(p.x, top, p.w, (p.bottom() - top - self.s(POPUP_PAD)).max(0))
+    }
+
+    fn picker_items(&self) -> Vec<ComboItem> {
+        self.picker.as_ref().map_or_else(Vec::new, |p| p.items())
+    }
+
+    /// 찾기 오버레이의 (x,y) → 항목 인덱스.
+    fn picker_hit(&self, x: i32, y: i32) -> Option<usize> {
+        let vp = self.picker_viewport();
+        if !vp.contains(Point { x, y }) {
+            return None;
+        }
+        let rh = self.s(PICK_ROW_H).max(1);
+        let i = ((y - vp.y + self.pick_scroll) / rh) as usize;
+        (i < self.picker_items().len()).then_some(i)
+    }
+
+    /// 찾기 오버레이에서 항목 선택 — 라벨을 값으로 반영하고 닫는다.
+    fn pick(&mut self, i: usize, inv: &mut Invalidations) {
+        if let Some(it) = self.picker_items().get(i) {
+            self.edit.set_text(&it.label);
+            self.core.changed = true;
+            self.picking = false;
+            inv.push(self.base.bounds);
+        }
     }
 
     /// 현재 텍스트(커스텀 편집 값).
@@ -504,8 +589,15 @@ impl ComboControl for Choose {
         self.edit.text()
     }
     fn on_extra(&mut self, _j: usize, inv: &mut Invalidations) {
-        self.chose = true;
         self.core.open = false;
+        if self.picker.is_some() {
+            // 어댑터가 있으면 인라인 찾기 오버레이를 연다.
+            self.picking = true;
+            self.pick_scroll = 0;
+        } else {
+            // 없으면 호스트가 직접 처리하도록 신호만 남긴다.
+            self.chose = true;
+        }
         inv.push(self.base.bounds);
     }
 }
@@ -519,6 +611,33 @@ impl Widget for Choose {
         inv.push(bounds);
     }
     fn on_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
+        // 찾기 오버레이가 열려 있으면 그쪽이 먼저 처리한다.
+        if self.picking {
+            let vp = self.picker_viewport();
+            let ch = self.picker_items().len() as i32 * self.s(PICK_ROW_H);
+            let (_nx, ny, consumed) =
+                self.pick_bars
+                    .on_event(ev, vp, vp.w, ch, 0, self.pick_scroll, self.base.scale);
+            self.pick_scroll = ny;
+            match *ev {
+                InputEvent::MouseDown { x, y, .. } if !consumed => {
+                    if let Some(i) = self.picker_hit(x, y) {
+                        self.pick(i, inv);
+                    } else if !self.picker_rect().contains(Point { x, y }) {
+                        self.picking = false; // 바깥 클릭 = 취소
+                        inv.push(self.base.bounds);
+                    }
+                }
+                InputEvent::Key {
+                    key: Key::Escape, ..
+                } => {
+                    self.picking = false;
+                    inv.push(self.base.bounds);
+                }
+                _ => inv.push(self.base.bounds),
+            }
+            return;
+        }
         // 편집 입력(포커스 상태의 타이핑)은 확장 콤보 고유.
         if let InputEvent::Char { c, .. } = *ev {
             if self.base.focused {
@@ -537,6 +656,60 @@ impl Widget for Choose {
     fn paint(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
         let text = self.edit.text();
         self.paint_combo(ctx, theme, &text);
+        if self.picking {
+            self.paint_picker(ctx, theme);
+        }
+    }
+}
+
+impl Choose {
+    /// 찾기 오버레이 렌더 — 제목 + 후보 목록(스크롤) + 오버레이 스크롤바.
+    fn paint_picker(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
+        let p = self.picker_rect();
+        ctx.fill_round_rect(p, self.s(8), theme.chrome_bg);
+        ctx.stroke_round_rect(p, self.s(8), theme.border, 1.0);
+        // 제목.
+        ctx.select_font(FontSlot::Status, false);
+        let title = self.picker.as_ref().map_or_else(String::new, |p| p.title());
+        ctx.text(p.x + self.s(10), p.y + self.s(6), p, &title, theme.text_dim);
+        ctx.fill_rect(
+            Rect::new(
+                p.x + self.s(6),
+                p.y + self.s(PICK_TITLE_H) - 1,
+                p.w - self.s(12),
+                1,
+            ),
+            theme.border,
+        );
+        // 목록(뷰포트 안 온전한 행만 · 세로 스크롤).
+        let vp = self.picker_viewport();
+        let rh = self.s(PICK_ROW_H);
+        let items = self.picker_items();
+        for (i, it) in items.iter().enumerate() {
+            let y = vp.y - self.pick_scroll + rh * i as i32;
+            if y < vp.y || y + rh > vp.bottom() {
+                continue;
+            }
+            let row = Rect::new(vp.x + self.s(3), y, vp.w - self.s(6), rh);
+            let mut tx = row.x + self.s(8);
+            ctx.select_font(FontSlot::Base, false);
+            if let Some(icon) = it.icon.as_deref() {
+                ctx.text(tx, y + (rh - self.s(16)) / 2, row, icon, theme.text);
+                tx += ctx.text_width(icon) + self.s(3);
+            }
+            ctx.text(tx, y + (rh - self.s(16)) / 2, row, &it.label, theme.text);
+        }
+        let ch = items.len() as i32 * rh;
+        self.pick_bars.paint(
+            ctx,
+            theme,
+            vp,
+            vp.w,
+            ch,
+            0,
+            self.pick_scroll,
+            self.base.scale,
+        );
     }
 }
 
