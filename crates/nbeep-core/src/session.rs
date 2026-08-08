@@ -24,6 +24,8 @@ pub enum SessionError {
     Blocked,
     /// 수신 큐 초과 — 무한 버퍼 대신 세션 종료([`crate::mux`] · fail-closed).
     Backpressure,
+    /// 상대가 **내 신원과 같다** — 자기 연결 또는 **키 파일 복제**(D-22 U-P2 · [docs/21 §5]).
+    SelfPeer,
 }
 
 impl From<LinkError> for SessionError {
@@ -41,6 +43,7 @@ impl core::fmt::Display for SessionError {
             SessionError::TooLarge => f.write_str("프레임 상한 초과"),
             SessionError::Blocked => f.write_str("차단된 상대"),
             SessionError::Backpressure => f.write_str("수신 큐 초과"),
+            SessionError::SelfPeer => f.write_str("자기 신원과의 세션(키 복제 의심)"),
         }
     }
 }

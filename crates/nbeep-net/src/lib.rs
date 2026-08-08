@@ -12,8 +12,11 @@
 //! **M1 범위**: `Transport` 경계 + `InMemoryTransport`(fake — 소켓 없이 상위 계층 테스트).
 //! 실제 `LocalDirectTransport`(멀티캐스트 발견)는 M1-2~4, `Session`(Noise)은 M2.
 #![forbid(unsafe_op_in_unsafe_fn)]
+// 테스트 코드는 unwrap 허용(docs/13 §9 — 금지는 프로덕션 경로 한정).
+#![cfg_attr(test, allow(clippy::unwrap_used))]
 
 pub mod transport;
+pub mod wire;
 
 /// 소켓 없는 전송 fake — 릴리스 미포함(feature `testkit` 또는 테스트 빌드).
 #[cfg(any(test, feature = "testkit"))]
@@ -22,3 +25,4 @@ pub mod inmem;
 // `Link`/`LinkError`는 core 소유(Session이 net을 몰라도 되게 — [docs/09]). 편의 재수출.
 pub use nbeep_core::link::{Link, LinkError};
 pub use transport::{Caps, ConnectError, DiscoveryEvent, PeerHint, Transport};
+pub use wire::{CloneWatch, Decoded, Packet, PacketKind, MAX_PACKET};

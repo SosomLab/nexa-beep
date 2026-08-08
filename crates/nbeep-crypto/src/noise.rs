@@ -60,6 +60,15 @@ impl Identity {
     pub fn peer_id(&self) -> PeerId {
         PeerId::from_bytes(self.public)
     }
+
+    /// 키 복제 시나리오 재현용(테스트 한정) — 같은 키 자료의 별개 `Identity`.
+    #[cfg(test)]
+    pub(crate) fn from_parts_for_test(other: &Identity) -> Self {
+        Self {
+            private: other.private.clone(),
+            public: other.public,
+        }
+    }
 }
 
 fn builder(id: &Identity) -> Result<Builder<'_>, SessionError> {
@@ -113,7 +122,7 @@ impl<L: Link> NoiseSession<L> {
             .map_err(|_| SessionError::Handshake)?;
         link.send(&buf[..n])?;
 
-        Self::finish(link, hs)
+        Self::finish(link, hs, id)
     }
 
     /// 수신자 측 핸드셰이크(`<- e` / `-> e,ee,s,es` / `<- s,se`).
@@ -139,11 +148,16 @@ impl<L: Link> NoiseSession<L> {
         hs.read_message(&msg, &mut buf)
             .map_err(|_| SessionError::Handshake)?;
 
-        Self::finish(link, hs)
+        Self::finish(link, hs, id)
     }
 
-    fn finish(link: L, hs: HandshakeState) -> Result<Self, SessionError> {
+    fn finish(link: L, hs: HandshakeState, id: &Identity) -> Result<Self, SessionError> {
         let peer = remote_peer(&hs)?;
+        if peer == id.peer_id() {
+            // D-22 U-P2(사용자 확정 08-08): 상대가 내 신원과 같다 — 자기 연결이거나
+            // 키 파일 복제다. 즉시 거부 + 경고 대상([docs/21 §5] I-7).
+            return Err(SessionError::SelfPeer);
+        }
         let transport = hs
             .into_transport_mode()
             .map_err(|_| SessionError::Handshake)?;
@@ -440,5 +454,31 @@ mod chat_integration {
             !dedup.accept(second.sender_device, second.seq),
             "재전송 = 한 번만 표시"
         );
+    }
+}
+
+#[cfg(test)]
+mod clone_guard {
+    //! D-22 U-P2 — 자기 신원(복제 키)과의 세션은 수립 자체가 거부된다.
+
+    use super::*;
+    use nbeep_core::testkit::duplex;
+    use std::thread;
+
+    #[test]
+    fn session_with_own_identity_is_rejected() {
+        // 키 파일 복제 시나리오: 양쪽이 같은 Identity(같은 개인키)로 핸드셰이크.
+        let cloned = Identity::generate();
+        let clone2 = Identity {
+            // 같은 키 재구성 — 복제 파일을 양쪽이 로드한 상황.
+            ..Identity::from_parts_for_test(&cloned)
+        };
+        let me = cloned.peer_id();
+        let (la, lb) = duplex(me, me);
+        let hb = thread::spawn(move || NoiseSession::accept(lb, &clone2));
+        let a = NoiseSession::initiate(la, &cloned);
+        let b = hb.join().unwrap();
+        assert_eq!(a.err(), Some(SessionError::SelfPeer), "개시자 거부");
+        assert_eq!(b.err(), Some(SessionError::SelfPeer), "수신자 거부");
     }
 }
