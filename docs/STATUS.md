@@ -3,6 +3,8 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
+> **갱신: 2026-08-08 (실행·테스트 가이드 차) (KST)** — **[문서 26 실행·수동 테스트 가이드](26-run-and-manual-test.md) 신설**(feat/chat-live · 사용자 요청 "테스트 과정·명령어 정리"): 실행 모드 표 **9종**(`--window`/`--window --live`/`--separate-windows`/`--chat-live`/`--chat-serve`/`--chat-connect`/`--serve`/`--live-echo`/`--discover-probe`) + **시나리오 A~D**(A: GUI↔`--chat-live` 발견 자동 · B: IP 직접 ⌘K · C: 맥↔Docker linux 포트매핑 · D: Docker 2노드 발견) + 헤드리스 검증·정상 종료(R-16)·알려진 한계. ★ **함정 명시** — 실물은 `--window`가 아니라 **`--window --live`**(기본 InMemory) · **맥↔Docker Desktop 발견 불가**(내부 VM → IP 우회). **세부 절차 SSOT는 [18](18-build-and-test.md)** 유지(18 §2에 26 포인터·README 번호표 26 등재). 문서 전용(179테스트 green). [journal/2026-08-08.md](journal/2026-08-08.md).
+>
 > **갱신: 2026-08-08 (터미널 대화 정리 차) (KST)** — **인터랙티브 채팅 사용법 문서화**([18 §2-2](18-build-and-test.md)) + 실측 검증:
 > ① **역할 2종** — `--chat-serve [port]`(기다림 · Noise responder) / `--chat-connect <host:port>`(DR-19 수동 엔드포인트 · initiator). **연결 후 경로는 GUI와 100% 동일**(Noise_XX → 신원 확정 → mux `StreamId::Chat`) — 프레젠테이션만 stdin/stdout.
 > ② ★ **"지정한 사용자"는 주소가 아니라 지문으로 확인한다** — 주소로 걸지만 **신원은 핸드셰이크가 확정**(P-5)하므로, 양쪽 화면의 **`me` ↔ `상대` 교차 대조**가 확인 절차다. ⚠️ 단 `short()`는 4바이트 **표시용**이라 **MITM 방어가 아니다**(SAS 60자리는 CLI 미배선 — M3-6).
