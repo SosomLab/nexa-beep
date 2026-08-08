@@ -10,5 +10,9 @@ repository.workspace = true
 [lints]
 workspace = true
 
+[features]
+# PlainSession 스텁 + core testkit(duplex 링크) 노출(테스트 전용 · 릴리스 미포함).
+testkit = ["nbeep-core/testkit"]
+
 [dependencies]
 nbeep-core.workspace = true

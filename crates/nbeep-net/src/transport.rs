@@ -3,6 +3,7 @@
 //! `Transport`는 **발견하고 [`Link`]를 만들어 주는 것**이다. 상위 계층은 이 경계 위에서만 동작하므로,
 //! LocalDirect(v1)·InMemory(테스트)·Relay(v2)를 갈아 끼워도 App·Session 코드는 바뀌지 않는다.
 
+use nbeep_core::link::Link;
 use nbeep_core::{DisplayName, PeerId};
 use std::sync::mpsc::Receiver;
 
@@ -48,13 +49,6 @@ pub enum DiscoveryEvent {
     Vanished(PeerId),
 }
 
-/// [`Link`] 송수신 오류.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LinkError {
-    /// 상대가 링크를 닫음(정상 종료).
-    Closed,
-}
-
 /// `connect` 실패.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConnectError {
@@ -62,25 +56,7 @@ pub enum ConnectError {
     Unreachable,
 }
 
-/// 신뢰·순서 있는 양방향 바이트 스트림 — **암호화를 모른다**(그냥 바이트 관).
-///
-/// `Session`(M2)이 이 위에 Noise 핸드셰이크·다중화를 얹는다. M1에서는 프레임을 그대로 주고받는다.
-pub trait Link: Send {
-    /// 이 링크가 향하는(미검증) 상대.
-    fn peer(&self) -> PeerId;
-    /// 프레임 하나 송신.
-    ///
-    /// # Errors
-    /// 상대가 닫았으면 [`LinkError::Closed`].
-    fn send(&mut self, frame: &[u8]) -> Result<(), LinkError>;
-    /// 프레임 하나 수신(블로킹).
-    ///
-    /// # Errors
-    /// 상대가 닫았으면 [`LinkError::Closed`].
-    fn recv(&mut self) -> Result<Vec<u8>, LinkError>;
-}
-
-/// 발견하고 `Link`를 만들어 주는 것(ADR-0003 §3). 구현: LocalDirect(v1) · InMemory(테스트) · Relay(v2).
+/// 발견하고 [`Link`]를 만들어 주는 것(ADR-0003 §3). 구현: LocalDirect(v1) · InMemory(테스트) · Relay(v2).
 pub trait Transport: Send + Sync {
     /// 발견 이벤트 스트림(등장·이탈). 호출자는 이 수신단을 소유해 폴링한다.
     fn discovery(&self) -> Receiver<DiscoveryEvent>;

@@ -111,7 +111,8 @@ M-1 설계 ──► M0 기반 ──► M1 발견 ──► M2 대화 ──►
 
 | ID | 항목 | 우선 | 규모 | 의존 | 상태 |
 |---|---|---|---|---|---|
-| M2-1 | `crypto` — **Noise_XX** 핸드셰이크 · AEAD 트랜스포트([08 §4](08-adr-0002-discovery-transport.md)) | P0 | 대 | M1-1 | ☐ |
+| M2-1a | **세션 추상화** — `Link` core 이관 · `Session` 트레이트 · **`PlainSession` 스텁**(crypto testkit) · core `duplex` 링크 fake | P0 | 중 | M1-1 | ✅ (08-08 — Session 경계+스텁으로 상위 계층을 암호 없이 검증. crypto→net 없음) |
+| M2-1b | `crypto` — **실물 Noise_XX** 핸드셰이크 · AEAD([08 §4](08-adr-0002-discovery-transport.md)) — **암호 라이브러리 의존성 결정 필요** | P0 | 대 | M2-1a | ☐ |
 | M2-2 | **TOFU** — 핀 저장 · 지문 불일치 시 **기본 차단**·경고·이력([08 §4](08-adr-0002-discovery-transport.md)) | P0 | 중 | M2-1 | ☐ |
 | M2-3 | `Session` 다중화(제어/대화 논리 스트림) · 프레임 상한 · **백프레셔**([08 §3](08-adr-0002-discovery-transport.md)) | P0 | 중 | M2-1 | ☐ |
 | M2-4 | 1:1 텍스트 송수신 · **논리 시퀀스 · 중복 제거**(발신 경로 = PeerId 집합 일반화, D-21) | P0 | 중 | M2-3 | ☐ |
