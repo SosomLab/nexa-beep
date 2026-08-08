@@ -11,5 +11,5 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+memmap2 = "0.9"
 nbeep-core.workspace = true
-nbeep-gfx.workspace = true

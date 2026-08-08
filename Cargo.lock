@@ -860,8 +860,8 @@ dependencies = [
 name = "nbeep-plat"
 version = "0.1.0"
 dependencies = [
+ "memmap2",
  "nbeep-core",
- "nbeep-gfx",
 ]
 
 [[package]]

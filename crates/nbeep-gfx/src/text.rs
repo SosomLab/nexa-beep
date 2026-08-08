@@ -8,11 +8,14 @@
 //! 시스템 폰트 경로 발견은 `nbeep-plat` 소관(ADR-0001 — 폰트 열거는 플랫폼 계층).
 
 use crate::surface::{Color, Surface};
-use ab_glyph::{Font as _, FontVec, ScaleFont as _};
+use ab_glyph::{Font as _, FontRef, ScaleFont as _};
 
-/// 로드된 폰트(소유 바이트). [`Font::from_bytes`]로만 생성.
+/// 로드된 폰트 — **프로세스 수명 자원**(로드 1회 · 앱 종료까지 사용).
+///
+/// 바이트는 `&'static`이다 — `nbeep-plat`의 mmap(파일 백드 페이지 · 힙 0)이 정상 경로이고,
+/// [`Font::from_bytes`]는 소유 바이트를 의도적으로 누수해 같은 표현으로 수렴한다(테스트·특수 경로용).
 pub struct Font {
-    inner: FontVec,
+    inner: FontRef<'static>,
 }
 
 impl core::fmt::Debug for Font {
@@ -26,14 +29,22 @@ impl core::fmt::Debug for Font {
 pub struct FontError;
 
 impl Font {
-    /// 폰트 바이트에서 로드한다. `index`는 TTC 컬렉션 인덱스(단일 폰트 파일은 0).
+    /// `'static` 폰트 바이트에서 로드한다(mmap 정상 경로). `index`는 TTC 컬렉션 인덱스.
+    ///
+    /// # Errors
+    /// 파싱 불가·인덱스 범위 밖이면 [`FontError`].
+    pub fn from_static(data: &'static [u8], index: u32) -> Result<Self, FontError> {
+        FontRef::try_from_slice_and_index(data, index)
+            .map(|inner| Self { inner })
+            .map_err(|_| FontError)
+    }
+
+    /// 소유 바이트에서 로드 — **의도적 누수**로 `'static`화(폰트는 프로세스 수명 자원).
     ///
     /// # Errors
     /// 파싱 불가·인덱스 범위 밖이면 [`FontError`].
     pub fn from_bytes(data: Vec<u8>, index: u32) -> Result<Self, FontError> {
-        FontVec::try_from_vec_and_index(data, index)
-            .map(|inner| Self { inner })
-            .map_err(|_| FontError)
+        Self::from_static(Box::leak(data.into_boxed_slice()), index)
     }
 
     /// 이 폰트가 문자의 글리프를 갖고 있는가(폴백 체인 판단 근거).
