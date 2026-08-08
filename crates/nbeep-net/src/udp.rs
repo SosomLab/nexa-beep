@@ -41,7 +41,7 @@ pub struct Observation {
 /// S2 발견 노드 — 주기 광고 + 수신. 드롭 시 GOODBYE.
 #[derive(Debug)]
 pub struct UdpDiscovery {
-    events: Receiver<Observation>,
+    events: std::sync::Mutex<Option<Receiver<Observation>>>,
     stop: Arc<AtomicBool>,
     send_sock: UdpSocket,
     /// GOODBYE에 넣을 내 광고 원본(seq는 전송 시 갱신).
@@ -102,7 +102,7 @@ impl UdpDiscovery {
         );
 
         Ok(Self {
-            events,
+            events: std::sync::Mutex::new(Some(events)),
             stop,
             send_sock,
             template,
@@ -110,10 +110,17 @@ impl UdpDiscovery {
         })
     }
 
-    /// 관측 수신단 — 루프 소유자가 폴링한다(InMemory `discovery()`와 같은 모양).
+    /// 관측 수신단의 **소유권**을 가져간다(1회 — InMemory `discovery()`와 같은 계약).
+    ///
+    /// # Panics
+    /// 두 번 호출하면 패닉(구성 오류).
     #[must_use]
-    pub fn events(&self) -> &Receiver<Observation> {
-        &self.events
+    pub fn take_events(&self) -> Receiver<Observation> {
+        self.events
+            .lock()
+            .expect("잠금")
+            .take()
+            .expect("take_events는 1회만")
     }
 
     fn dest() -> SocketAddrV4 {
@@ -211,11 +218,12 @@ mod tests {
     fn two_instances_discover_each_other_via_real_multicast() {
         let a = UdpDiscovery::spawn(pid(1), [1; 16], name("alpha"), 1000, 1, 300).unwrap();
         let b = UdpDiscovery::spawn(pid(2), [2; 16], name("beta"), 2000, 1, 300).unwrap();
+        let (a_ev, b_ev) = (a.take_events(), b.take_events());
 
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         let (mut a_saw, mut b_saw) = (false, false);
         while std::time::Instant::now() < deadline && !(a_saw && b_saw) {
-            if let Ok(o) = a.events().recv_timeout(Duration::from_millis(200)) {
+            if let Ok(o) = a_ev.recv_timeout(Duration::from_millis(200)) {
                 assert_ne!(o.packet.peer, pid(1), "자기 패킷은 키로 걸러진다");
                 if o.packet.peer == pid(2) {
                     assert_eq!(o.packet.name.as_str(), "beta");
@@ -223,7 +231,7 @@ mod tests {
                     a_saw = true;
                 }
             }
-            if let Ok(o) = b.events().recv_timeout(Duration::from_millis(200)) {
+            if let Ok(o) = b_ev.recv_timeout(Duration::from_millis(200)) {
                 if o.packet.peer == pid(1) {
                     b_saw = true;
                 }

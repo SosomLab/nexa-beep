@@ -15,6 +15,8 @@
 // 테스트 코드는 unwrap 허용(docs/13 §9 — 금지는 프로덕션 경로 한정).
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
+pub mod local;
+pub mod tcp;
 pub mod transport;
 pub mod udp;
 pub mod wire;
@@ -24,6 +26,9 @@ pub mod wire;
 pub mod inmem;
 
 // `Link`/`LinkError`는 core 소유(Session이 net을 몰라도 되게 — [docs/09]). 편의 재수출.
+pub use local::LocalDirect;
 pub use nbeep_core::link::{Link, LinkError};
+pub use tcp::TcpLink;
 pub use transport::{Caps, ConnectError, DiscoveryEvent, PeerHint, Transport};
+pub use udp::{Observation, UdpDiscovery};
 pub use wire::{CloneWatch, Decoded, Packet, PacketKind, MAX_PACKET};

@@ -26,12 +26,16 @@ pub enum SessionError {
     Backpressure,
     /// 상대가 **내 신원과 같다** — 자기 연결 또는 **키 파일 복제**(D-22 U-P2 · [docs/21 §5]).
     SelfPeer,
+    /// 수신 대기 시간 초과 — 오류가 아니라 "지금은 없음"(수신 펌프의 정상 경로).
+    TimedOut,
 }
 
 impl From<LinkError> for SessionError {
-    fn from(_: LinkError) -> Self {
-        // 링크 오류는 전부 세션 종료로 수렴(M2-1a). 세분화는 실물 세션에서.
-        SessionError::Closed
+    fn from(e: LinkError) -> Self {
+        match e {
+            LinkError::Closed => SessionError::Closed,
+            LinkError::TimedOut => SessionError::TimedOut, // 재시도 대상(수신 펌프)
+        }
     }
 }
 
@@ -44,6 +48,7 @@ impl core::fmt::Display for SessionError {
             SessionError::Blocked => f.write_str("차단된 상대"),
             SessionError::Backpressure => f.write_str("수신 큐 초과"),
             SessionError::SelfPeer => f.write_str("자기 신원과의 세션(키 복제 의심)"),
+            SessionError::TimedOut => f.write_str("수신 타임아웃(재시도 대상)"),
         }
     }
 }

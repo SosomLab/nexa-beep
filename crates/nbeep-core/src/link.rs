@@ -14,6 +14,8 @@ use crate::identity::PeerId;
 pub enum LinkError {
     /// 상대가 링크를 닫음(정상 종료 포함).
     Closed,
+    /// 수신 대기 시간 초과 — 오류가 아니라 "지금은 없음"(수신 펌프의 폴링 경로).
+    TimedOut,
 }
 
 /// 신뢰·순서 있는 양방향 바이트 스트림. 프레임 단위로 주고받는다.
