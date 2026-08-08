@@ -3,6 +3,15 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
+> **갱신: 2026-08-09 (컨트롤 툴킷 다듬기 차) (KST)** — **커스텀 컨트롤 툴킷 실사용 다듬기**(`feat/m3-controls-polish` · 사용자 대화형 반복 다수 · 17커밋):
+> ① **오버레이 스크롤바**(`ScrollBars` 재사용 · macOS식: 스크롤 전 숨김→표시→호버 두껍게→무활동 페이드 · 갤러리·TreeView·TreeGrid 내부 스크롤).
+> ② **Button 컨트롤**(이미지+텍스트/이미지만/이미지 버튼 Cover·Contain) · **이미지 아이콘**(gfx `IconImage` RGBA·투명배경·`blend_image_scaled`·fit contain/cover · 콤보/Choose/트리/버튼/텍스트박스 선행 이미지 · 큰 이미지 자동 축소).
+> ③ **Choose 찾기 어댑터**(`ChoosePicker` · Adapter 패턴 · bin `FilePicker` 샘플 · 목록 선택 박스 동기화 버그 수정).
+> ④ **타입어헤드**: IME 실시간 매칭(한글 조합 즉시) · 유효시간 2000ms·HUD 위치 3×3·공백/특수문자 포함(설정) · 유효시간 tick 초기화 · **↑↓ 순환(역방향·언어 중립)**.
+> ⑤ 치수·시각: 글리프·아이콘 13 정사각·포커스 링 2px 50% 반투명·셰브론 회색/좌우 짧게 · 도움말 "?" 정렬·자동 숨김·툴팁 여백 · 트리 Border(`BorderSpec` f32 0.5px·색·투명도)·헤더 정렬 · TextBox placeholder 고정+Beam.
+> ⑥ **브랜딩 아이콘**([packaging/branding](packaging/branding/) `icon.svg`→PNG/ICO · Nexa 계열 말풍선+비콘 파동) + **앱 창 아이콘 적용**.
+> **워크스페이스 218 green**(ui 97·core 91·gfx 5) · clippy·fmt clean. ⏳후속: Choose 별도 모달 창 · 설정 on/off 체크박스화 · 컨트롤 설정 정식 통합 · 런타임 독 아이콘. [journal/2026-08-09.md](journal/2026-08-09.md).
+>
 > **갱신: 2026-08-08 (i18n·커스텀 컨트롤 차) (KST)** — **i18n + 커스텀 컨트롤 툴킷 + 갤러리**(`feat/m3-font-sections` · 사용자 요청 다수):
 > ① **글꼴 설정 섹션화** — `SettingKind::FontSection`(제목+글꼴명 텍스트박스+크기 콤보+설명) · 굵게/기울임 제거 · **PeerList 슬롯 신설**(사용자 목록 크기 실동작) · 대화창모드·테마도 콤보(▾).
 > ② **i18n** — `nbeep-core::i18n`(Lang En/Ko/Zh/Ja·**영어 기본**·Msg 키·tr/t·전역 현재 언어). 외부 크레이트 0(DR-5/12). settings 전면 + `ui.language` 콤보 · **검색은 전 언어 매치** · chat_view/peer_list/bin 배선.
