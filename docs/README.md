@@ -42,6 +42,7 @@
 | [09 ADR-0003 전송 추상화](09-adr-0003-transport-abstraction.md) | 📐 **Proposed** — 4계층 경계 · `PeerId`/`Locator`/`Link`/`Session` · 인메모리 전송으로 네트워크 없는 테스트 |
 | [11 ADR-0004 수신 무해화](11-adr-0004-quarantine.md) | 📐 **Proposed** — `.beepq` 레이아웃 · 위험 등급 4단계 확장자표 · 상태 기계(fail-closed) · MotW/quarantine API |
 | [12 차용 자산 실측 평가](12-asset-reuse.md) | ★ **`ctl` 재사용 불가 판정**(HWND 모델) · 실제 자산은 `nexa-gui` 인프라 1,187 LOC · R-3 재평가 |
+| [13 코드 설계 표준](13-code-design-standards.md) | ★★ 모듈화 · 포트&어댑터 · **`ActionKind` 단일 통로** · **인터셉터** · **사용 계측 레저** · 코드 리뷰 체크리스트 |
 | [MILESTONES](MILESTONES.md) | ★ 기능·마일스톤 현황(✅/🚧/📐/☐) |
 
 ### 📌 문서 번호 배정 계획 (번호는 부여 후 **불변** — [16 §2-8](16-doc-git-conventions.md))
@@ -58,6 +59,7 @@
 | **10** | 결정 기록(DR·ADR 색인) | ✅ |
 | **11** | **ADR-0004 수신 무해화** | 📐 Proposed |
 | **12** | 차용 자산 실측 평가 | ✅ |
+| **13** | 코드 설계 표준 | ✅ |
 | **15 · 16 · 18** | 개발 방법론 · 문서/git 규약 · 빌드&테스트 | ✅ |
 
 ## ③ 진행 경과 · 할 일

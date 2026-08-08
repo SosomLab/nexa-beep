@@ -1,7 +1,8 @@
 # 15 · 개발 방법론 — 작은 단위 · 점진 프로토타이핑 · 단위별 커밋
 
 > **출처**: `SosomLab/nexa-dir2` `docs/15-dev-methodology.md` 계승(2026-08-08 차용).
-> 이 문서는 **개발 규율**, 기록·git 규약은 [16](16-doc-git-conventions.md)이 SSOT다.
+> 이 문서는 **개발 규율**, 기록·git 규약은 [16](16-doc-git-conventions.md)이, **코드 설계 규약은 [13](13-code-design-standards.md)** 이 SSOT다.
+> ⚠️ [13 §12 코드 리뷰 체크리스트](13-code-design-standards.md)는 **필수 항목**이며 위반은 병합 거부 사유다.
 
 ## 1. 핵심 원칙
 
