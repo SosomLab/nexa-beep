@@ -14,7 +14,8 @@
 //! 시각: ⇕ = "값을 사용자 정의할 수 있다"(확장) · ∨ = "목록에서 고른다"(일반) — 사용자 정의.
 
 use super::{
-    draw_check_mark, draw_chevron_down, draw_updown_chevrons, Control, ControlBase, ScrollBars,
+    draw_check_mark, draw_chevron_down, draw_updown_chevrons, image_fit_contain, Control,
+    ControlBase, ScrollBars,
 };
 use crate::draw::{DrawCtx, FontSlot};
 use crate::edit::EditState;
@@ -75,20 +76,25 @@ impl ComboItem {
 }
 
 /// 선행 아이콘(이미지 우선 · 없으면 글리프)을 그리고 다음 x를 돌려준다. `cy` = 세로 중심.
+/// `icon_sz` = 이미지 아이콘 정사각 변(글자 높이에 맞춤) · `s16` = 글리프 폴백 세로 기준.
 #[allow(clippy::too_many_arguments)]
 fn draw_leading(
     ctx: &mut dyn DrawCtx,
     it: &ComboItem,
     x: i32,
     cy: i32,
+    icon_sz: i32,
     s16: i32,
     gap: i32,
     clip: Rect,
     glyph_color: crate::theme::Color,
 ) -> i32 {
     if let Some(img) = it.image.as_deref() {
-        ctx.image(x, cy - img.h as i32 / 2, img, clip);
-        x + img.w as i32 + gap
+        // icon_sz 정사각 박스에 비율 유지로 맞춘다(큰 이미지는 자동 축소).
+        let boxr = Rect::new(x, cy - icon_sz / 2, icon_sz, icon_sz);
+        let fit = image_fit_contain(boxr, img.w as i32, img.h as i32);
+        ctx.image_scaled(fit, img, clip);
+        x + icon_sz + gap
     } else if let Some(g) = it.icon.as_deref() {
         ctx.select_font(FontSlot::Base, false);
         ctx.text(x, cy - s16 / 2, clip, g, glyph_color);
@@ -97,6 +103,9 @@ fn draw_leading(
         x
     }
 }
+
+/// 콤보 아이콘 변 크기(논리 px) — 글자 높이와 맞춤(사용자 확정 · 16→18).
+const ICON_SZ: i32 = 18;
 
 /// 콤보 공유 상태(추상 콤보의 상태 계층). `Combo`·`Choose`가 함께 쓴다.
 #[derive(Debug)]
@@ -283,7 +292,17 @@ pub trait ComboControl: Control {
         let cy = b.y + b.h / 2;
         let mut tx = b.x + self.s(10);
         if let Some(it) = self.core().items.get(self.core().selected) {
-            tx = draw_leading(ctx, it, tx, cy, self.s(16), self.s(3), b, theme.text);
+            tx = draw_leading(
+                ctx,
+                it,
+                tx,
+                cy,
+                self.s(ICON_SZ),
+                self.s(16),
+                self.s(3),
+                b,
+                theme.text,
+            );
         }
         ctx.select_font(FontSlot::Base, false);
         ctx.text(tx, cy - self.s(16) / 2, b, box_text, theme.text);
@@ -331,6 +350,7 @@ pub trait ComboControl: Control {
                 it,
                 check.right() + self.s(6),
                 cy,
+                self.s(ICON_SZ),
                 self.s(16),
                 self.s(3),
                 row,
@@ -357,6 +377,7 @@ pub trait ComboControl: Control {
                     it,
                     row.x + self.s(10),
                     cy,
+                    self.s(ICON_SZ),
                     self.s(16),
                     self.s(3),
                     row,
@@ -721,6 +742,7 @@ impl Choose {
                 it,
                 row.x + self.s(8),
                 cy,
+                self.s(ICON_SZ),
                 self.s(16),
                 self.s(3),
                 row,

@@ -49,6 +49,12 @@ pub trait DrawCtx {
         let _ = (x, y, img, clip);
     }
 
+    /// RGBA 이미지를 `dst`로 **스케일**해 블렌드(큰 이미지 축소·이미지 버튼) — `clip` 밖은 잘린다.
+    /// 기본 = no-op.
+    fn image_scaled(&mut self, dst: Rect, img: &crate::theme::IconImage, clip: Rect) {
+        let _ = (dst, img, clip);
+    }
+
     /// 원/타원 AA 채움. 기본 = no-op.
     fn fill_ellipse(&mut self, rect: Rect, color: Color) {
         let _ = (rect, color);

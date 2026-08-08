@@ -169,6 +169,11 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
         self.surface.blend_image(x, y, img, Self::clip_of(clip));
     }
 
+    fn image_scaled(&mut self, dst: Rect, img: &crate::theme::IconImage, clip: Rect) {
+        self.surface
+            .blend_image_scaled(dst.x, dst.y, dst.w, dst.h, img, Self::clip_of(clip));
+    }
+
     fn fill_ellipse(&mut self, rect: Rect, color: Color) {
         if rect.is_empty() {
             return;

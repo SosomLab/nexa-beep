@@ -176,6 +176,41 @@ impl<'a> Surface<'a> {
         self.buf[idx] = (mix(bg.0, fg.0) << 16) | (mix(bg.1, fg.1) << 8) | mix(bg.2, fg.2);
     }
 
+    /// RGBA 이미지를 `dst`(x,y,w,h)로 **스케일**해 알파 블렌드한다(nearest 샘플링 · 큰 이미지 축소용).
+    /// `clip`(반열림) 밖은 건너뛴다.
+    #[allow(clippy::too_many_arguments)]
+    pub fn blend_image_scaled(
+        &mut self,
+        dx: i32,
+        dy: i32,
+        dw: i32,
+        dh: i32,
+        img: &IconImage,
+        clip: (i32, i32, i32, i32),
+    ) {
+        if dw <= 0 || dh <= 0 || img.w == 0 || img.h == 0 {
+            return;
+        }
+        for row in 0..dh {
+            for col in 0..dw {
+                let (px, py) = (dx + col, dy + row);
+                if px < clip.0 || px >= clip.2 || py < clip.1 || py >= clip.3 {
+                    continue;
+                }
+                // 목적 픽셀 → 원본 픽셀(nearest).
+                let sx = (col * img.w as i32 / dw).clamp(0, img.w as i32 - 1);
+                let sy = (row * img.h as i32 / dh).clamp(0, img.h as i32 - 1);
+                let i = ((sy * img.w as i32 + sx) * 4) as usize;
+                let a = img.rgba[i + 3];
+                if a == 0 {
+                    continue;
+                }
+                let color = Color::from_rgb(img.rgba[i], img.rgba[i + 1], img.rgba[i + 2]);
+                self.blend_px(px, py, color, f32::from(a) / 255.0);
+            }
+        }
+    }
+
     /// RGBA 이미지를 `(x, y)`(좌상단)에 알파 블렌드한다. `clip = (x0,y0,x1,y1)`(반열림) 밖은 건너뛴다.
     pub fn blend_image(&mut self, x: i32, y: i32, img: &IconImage, clip: (i32, i32, i32, i32)) {
         for row in 0..img.h as i32 {

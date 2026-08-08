@@ -4,8 +4,9 @@
 //! 실물로 확인한다. **제품 화면이 아니라 검수용** — 정식 UI 통합은 별도.
 
 use crate::controls::{
-    Checkbox, Choose, ChoosePicker, Combo, ComboControl, ComboItem, Control, GridColumn, LabelSide,
-    RadioGroup, RadioOption, ScrollBars, TextBox, TreeGrid, TreeModel, TreeNode, TreeView,
+    Button, Checkbox, Choose, ChoosePicker, Combo, ComboControl, ComboItem, Control, GridColumn,
+    ImageFit, LabelSide, RadioGroup, RadioOption, ScrollBars, TextBox, TreeGrid, TreeModel,
+    TreeNode, TreeView,
 };
 use crate::draw::{DrawCtx, FontSlot};
 use crate::event::InputEvent;
@@ -62,6 +63,9 @@ pub struct GalleryWidget {
     ext: Choose,
     tree: TreeView,
     grid: TreeGrid,
+    btn_text: Button,
+    btn_icon: Button,
+    btn_img: Button,
 }
 
 impl Default for GalleryWidget {
@@ -141,6 +145,9 @@ impl GalleryWidget {
                 grid_model,
                 vec![GridColumn::new("Menu", 220), GridColumn::new("Command", 90)],
             ),
+            btn_text: Button::new("Save").with_image(img((0x3D, 0x8B, 0xFF))),
+            btn_icon: Button::icon(img((0x2E, 0xA0, 0x43))),
+            btn_img: Button::icon(img((0x5B, 0x6C, 0xFF))).image_fill(ImageFit::Cover),
         }
     }
 
@@ -173,6 +180,7 @@ impl GalleryWidget {
         let gap = self.s(GAP);
         let ctrl_h = self.s(CTRL_H);
         let (radio_h, tree_h, grid_h) = (self.s(24 * 3), self.s(24 * 5), self.s(26 + 24 * 4));
+        let (btn_tw, btn_iw, btn_imw, btn_imh) = (self.s(120), self.s(44), self.s(64), self.s(48));
         let top = self.bounds.y + pad - self.scroll;
         let mut y = top;
         y = place(&mut self.cb_right, x, y, w, ctrl_h, label_h, gap, inv);
@@ -184,6 +192,9 @@ impl GalleryWidget {
         y = place(&mut self.ext, x, y, w, ctrl_h, label_h, gap, inv);
         y = place(&mut self.tree, x, y, w, tree_h, label_h, gap, inv);
         y = place(&mut self.grid, x, y, w, grid_h, label_h, gap, inv);
+        y = place(&mut self.btn_text, x, y, btn_tw, ctrl_h, label_h, gap, inv);
+        y = place(&mut self.btn_icon, x, y, btn_iw, ctrl_h, label_h, gap, inv);
+        y = place(&mut self.btn_img, x, y, btn_imw, btn_imh, label_h, gap, inv);
         // 콘텐츠 총 크기(스크롤 클램프 근거) — 오프셋을 되돌려 계산.
         self.content_h = (y - top) + pad;
         self.content_w = w + pad * 2;
@@ -212,7 +223,7 @@ impl GalleryWidget {
         self.scroll_x = self.scroll_x.clamp(0, max_x);
     }
 
-    fn labels() -> [&'static str; 9] {
+    fn labels() -> [&'static str; 12] {
         [
             "Checkbox — 라벨 오른쪽 (+ 도움말 ?)",
             "Checkbox — 라벨 왼쪽",
@@ -223,6 +234,9 @@ impl GalleryWidget {
             "Choose — 확장 (⇕ · Choose…)",
             "TreeView — 계층",
             "TreeGrid — 그리드 + 트리",
+            "Button — 이미지 + 텍스트",
+            "Button — 이미지만",
+            "Button — 이미지 버튼(Cover)",
         ]
     }
 }
@@ -262,6 +276,18 @@ impl Widget for GalleryWidget {
         if consumed {
             return;
         }
+        // ★ 모달 캡처 — 콤보/Choose 오버레이가 열려 있으면 그 컨트롤만 이벤트를 받는다.
+        // (드롭다운 항목 클릭이 뒤에 있는 다른 컨트롤로 전파되던 버그 차단.)
+        if self.combo.is_open() {
+            self.combo.on_event(ev, inv);
+            inv.push(self.bounds);
+            return;
+        }
+        if self.ext.is_open() || self.ext.is_picking() {
+            self.ext.on_event(ev, inv);
+            inv.push(self.bounds);
+            return;
+        }
         // 클릭 시 포커스를 해당 컨트롤로 옮긴다(포커스 링 데모).
         if let InputEvent::MouseDown { x, y, .. } = *ev {
             let p = Point { x, y };
@@ -275,6 +301,11 @@ impl Widget for GalleryWidget {
             self.ext.set_focused(self.ext.bounds().contains(p));
             self.tree.set_focused(self.tree.bounds().contains(p));
             self.grid.set_focused(self.grid.bounds().contains(p));
+            self.btn_text
+                .set_focused(self.btn_text.bounds().contains(p));
+            self.btn_icon
+                .set_focused(self.btn_icon.bounds().contains(p));
+            self.btn_img.set_focused(self.btn_img.bounds().contains(p));
         }
         // 이벤트를 전 컨트롤에 전달(각자 bounds/포커스로 자기 것만 처리).
         self.cb_right.on_event(ev, inv);
@@ -286,12 +317,15 @@ impl Widget for GalleryWidget {
         self.ext.on_event(ev, inv);
         self.tree.on_event(ev, inv);
         self.grid.on_event(ev, inv);
+        self.btn_text.on_event(ev, inv);
+        self.btn_icon.on_event(ev, inv);
+        self.btn_img.on_event(ev, inv);
     }
 
     fn paint(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
         ctx.fill_rect(self.bounds, theme.panel_bg);
         let labels = Self::labels();
-        let widgets: [&dyn Widget; 9] = [
+        let widgets: [&dyn Widget; 12] = [
             &self.cb_right,
             &self.cb_left,
             &self.cb_only,
@@ -301,6 +335,9 @@ impl Widget for GalleryWidget {
             &self.ext,
             &self.tree,
             &self.grid,
+            &self.btn_text,
+            &self.btn_icon,
+            &self.btn_img,
         ];
         // 섹션 라벨(각 컨트롤 위).
         ctx.select_font(FontSlot::Status, false);

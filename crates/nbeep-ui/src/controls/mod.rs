@@ -13,6 +13,7 @@
 //! 새 컨트롤 = [`ControlBase`] 필드 1개 + [`Control`] 구현 2줄(`base`/`base_mut`)이면 이 전부를
 //! 물려받는다(확장 용이 — 사용자 요청).
 
+pub mod button;
 pub mod checkbox;
 pub mod combo;
 pub mod radio;
@@ -20,6 +21,7 @@ pub mod scroll;
 pub mod textbox;
 pub mod tree;
 
+pub use button::{Button, ButtonMode, ImageFit};
 pub use checkbox::Checkbox;
 pub use combo::{Choose, ChoosePicker, Combo, ComboControl, ComboItem, PopupHit};
 pub use radio::{RadioGroup, RadioOption};
@@ -30,6 +32,39 @@ pub use tree::{FlatRow, GridColumn, TreeControl, TreeGrid, TreeModel, TreeNode, 
 use crate::draw::{DrawCtx, FontSlot};
 use crate::geom::{Point, Rect};
 use crate::theme::{Color, Theme};
+
+/// 외곽 테두리 설정 — 두께(논리 px)·색·투명도(0..=1). 두께 0 = 테두리 없음(기본).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BorderSpec {
+    /// 두께(논리 px). 0이면 그리지 않는다.
+    pub width: i32,
+    /// 색.
+    pub color: Color,
+    /// 불투명도(0.0~1.0).
+    pub alpha: f32,
+}
+
+impl Default for BorderSpec {
+    fn default() -> Self {
+        Self {
+            width: 0,
+            color: Color::from_rgb(0x36, 0x3C, 0x46),
+            alpha: 1.0,
+        }
+    }
+}
+
+impl BorderSpec {
+    /// (두께, 색, 투명도)로 만든다.
+    #[must_use]
+    pub fn new(width: i32, color: Color, alpha: f32) -> Self {
+        Self {
+            width,
+            color,
+            alpha: alpha.clamp(0.0, 1.0),
+        }
+    }
+}
 
 /// 라벨 위치 옵션 — 컨트롤 본체 기준(사용자 요청: 체크만/좌/우).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -90,9 +125,12 @@ pub trait Control: crate::widget::Widget {
         (logical as f32 * self.base().scale).round() as i32
     }
 
-    /// 키보드 포커스 지정.
+    /// 키보드 포커스 지정. 포커스를 잃으면 열린 도움말 툴팁도 닫는다.
     fn set_focused(&mut self, on: bool) {
         self.base_mut().focused = on;
+        if !on {
+            self.base_mut().help_open = false;
+        }
     }
     /// 키보드 포커스 여부.
     fn is_focused(&self) -> bool {
@@ -175,21 +213,26 @@ pub trait Control: crate::widget::Widget {
         ctx.stroke_round_rect(badge, badge.w / 2, theme.border, 1.0);
         ctx.select_font(FontSlot::Status, false);
         let qw = ctx.text_width("?");
+        // "?"를 배지 정중앙에(가로·세로) — 상태 글꼴 높이 기준으로 세로 중앙 정렬.
         ctx.text(
             badge.x + (badge.w - qw) / 2,
-            badge.y + self.s(2),
+            badge.y + (badge.h - self.s(13)) / 2,
             badge,
             "?",
             theme.text_dim,
         );
     }
 
-    /// "?" 클릭 처리 — 배지를 눌렀으면 툴팁 토글 후 `true`(이벤트 소비).
+    /// "?" 클릭 처리 — 배지를 눌렀으면 툴팁 토글 후 `true`(소비). 배지 밖을 누르면 **열린 툴팁을
+    /// 닫는다**(다른 영역·다른 컨트롤 클릭 시 자동 숨김) — 이벤트는 계속 흐르도록 `false`.
     fn handle_help_click(&mut self, x: i32, y: i32, badge: Rect) -> bool {
         if self.has_help_badge() && badge.contains(Point { x, y }) {
             self.toggle_help();
             true
         } else {
+            if self.base().help_open {
+                self.base_mut().help_open = false;
+            }
             false
         }
     }
@@ -206,8 +249,11 @@ pub trait Control: crate::widget::Widget {
         let max_w = self.s(280);
         ctx.select_font(FontSlot::Status, false);
         let lines = wrap_text(ctx, text, max_w);
-        let line_h = self.s(18);
-        let tip_h = line_h * lines.len() as i32 + pad * 2;
+        let line_gap = self.s(18); // 줄 간격(줄 top 사이)
+        let glyph_h = self.s(14); // 글자 시각 높이(상·하 여백 균등화 기준)
+                                  // 텍스트 블록 높이 = (줄-1)*간격 + 마지막 줄 글자 높이 → 상·하 pad가 동일해진다.
+        let block_h = (lines.len() as i32 - 1).max(0) * line_gap + glyph_h;
+        let tip_h = block_h + pad * 2;
         let tip_w = max_w + pad * 2;
         let tip = Rect::new(anchor.x, anchor.bottom() + self.s(4), tip_w, tip_h);
         ctx.fill_round_rect(tip, self.s(8), theme.chrome_bg);
@@ -216,7 +262,7 @@ pub trait Control: crate::widget::Widget {
         let mut ty = tip.y + pad;
         for line in &lines {
             ctx.text(tip.x + pad, ty, tip, line, theme.text);
-            ty += line_h;
+            ty += line_gap;
         }
     }
 }
@@ -343,6 +389,40 @@ pub fn draw_updown_chevrons(ctx: &mut dyn DrawCtx, theme: &Theme, area: Rect, co
         color,
         w,
     );
+}
+
+/// 이미지를 `area` 안에 **비율 유지로 맞춘**(contain) 목적 rect — 여백은 남기고 잘리지 않는다.
+/// 큰 이미지는 축소, 작은 이미지는 확대되어 중앙 정렬된다.
+#[must_use]
+pub fn image_fit_contain(area: Rect, iw: i32, ih: i32) -> Rect {
+    if iw <= 0 || ih <= 0 {
+        return area;
+    }
+    let s = (area.w as f32 / iw as f32).min(area.h as f32 / ih as f32);
+    let (w, h) = ((iw as f32 * s) as i32, (ih as f32 * s) as i32);
+    Rect::new(
+        area.x + (area.w - w) / 2,
+        area.y + (area.h - h) / 2,
+        w.max(1),
+        h.max(1),
+    )
+}
+
+/// 이미지를 `area`를 **가득 채우도록**(cover) 비율 유지 확대한 목적 rect — 넘치는 부분은
+/// 호출자가 `area`로 클립한다(이미지 버튼: 버튼 크기 유지 + 이미지 비율 + 잘림).
+#[must_use]
+pub fn image_fit_cover(area: Rect, iw: i32, ih: i32) -> Rect {
+    if iw <= 0 || ih <= 0 {
+        return area;
+    }
+    let s = (area.w as f32 / iw as f32).max(area.h as f32 / ih as f32);
+    let (w, h) = ((iw as f32 * s) as i32, (ih as f32 * s) as i32);
+    Rect::new(
+        area.x + (area.w - w) / 2,
+        area.y + (area.h - h) / 2,
+        w.max(1),
+        h.max(1),
+    )
 }
 
 /// 체크 표식(✓) — `area` 안에 그린다(드롭다운 선택 행 등).

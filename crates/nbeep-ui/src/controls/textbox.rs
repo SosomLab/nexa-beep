@@ -2,13 +2,14 @@
 //!
 //! 공통 기능은 [`Control`] 기본 메서드로 상속([`super`]).
 
-use super::{Control, ControlBase};
+use super::{image_fit_contain, Control, ControlBase};
 use crate::draw::{DrawCtx, FontSlot};
 use crate::edit::{EditKey, EditState};
 use crate::event::{InputEvent, Key};
 use crate::geom::{Point, Rect};
-use crate::theme::Theme;
+use crate::theme::{IconImage, Theme};
 use crate::widget::{Invalidations, Widget};
+use std::rc::Rc;
 
 /// 텍스트 박스 컨트롤.
 #[derive(Debug)]
@@ -16,6 +17,8 @@ pub struct TextBox {
     base: ControlBase,
     edit: EditState,
     placeholder: String,
+    /// 선행 이미지 아이콘(옵션 · 투명 배경 RGBA). 있으면 placeholder·캐럿이 그 뒤로 밀린다.
+    image: Option<Rc<IconImage>>,
     /// Enter 확정 1회성 보고.
     committed: bool,
     /// 내용 변경 1회성 보고.
@@ -30,9 +33,17 @@ impl TextBox {
             base: ControlBase::default(),
             edit: EditState::new(),
             placeholder: placeholder.into(),
+            image: None,
             committed: false,
             changed: false,
         }
+    }
+
+    /// 선행 이미지 아이콘 지정(체이닝) — placeholder·캐럿이 아이콘 뒤로 배치된다.
+    #[must_use]
+    pub fn with_image(mut self, image: Rc<IconImage>) -> Self {
+        self.image = Some(image);
+        self
     }
 
     /// 초기 텍스트 지정.
@@ -129,25 +140,33 @@ impl Widget for TextBox {
         ctx.stroke_round_rect(b, self.s(6), theme.border, 1.0);
         self.draw_focus_ring(ctx, theme, b);
 
+        let cy = b.y + b.h / 2;
+        let s16 = self.s(16);
+        let ty = cy - s16 / 2;
+        // 선행 이미지(있으면) — placeholder·텍스트·캐럿의 시작 x를 그 뒤로 민다.
+        let mut tx = b.x + self.s(10);
+        if let Some(img) = self.image.as_deref() {
+            let boxr = Rect::new(tx, cy - s16 / 2, s16, s16);
+            let fit = image_fit_contain(boxr, img.w as i32, img.h as i32);
+            ctx.image_scaled(fit, img, b);
+            tx += s16 + self.s(6);
+        }
+
+        // 텍스트/placeholder는 **항상 고정 위치**(tx)에 그린다(캐럿으로 밀리지 않게).
         ctx.select_font(FontSlot::Base, false);
-        let tx = b.x + self.s(10);
-        let ty = b.y + (b.h - self.s(16)) / 2;
         let text = self.edit.text();
         if text.is_empty() {
-            // placeholder + (포커스 시) 선두 캐럿.
-            let shown = if self.base.focused {
-                format!("|{}", self.placeholder)
-            } else {
-                self.placeholder.clone()
-            };
-            ctx.text(tx, ty, b, &shown, theme.text_dim);
+            ctx.text(tx, ty, b, &self.placeholder, theme.text_dim);
         } else {
-            let shown = if self.base.focused {
-                format!("{text}|")
-            } else {
-                text
-            };
-            ctx.text(tx, ty, b, &shown, theme.text);
+            ctx.text(tx, ty, b, &text, theme.text);
+        }
+
+        // 캐럿은 **별도 세로 막대**로 그린다(문자열에 '|'를 끼워 넣지 않음 → 위치 고정).
+        if self.base.focused {
+            let chars: Vec<char> = text.chars().collect();
+            let upto: String = chars[..self.edit.caret().min(chars.len())].iter().collect();
+            let cx = tx + ctx.text_width(&upto);
+            ctx.fill_rect(Rect::new(cx, ty, self.s(2).max(1), s16), theme.text);
         }
 
         let badge = self.help_badge_rect(b);

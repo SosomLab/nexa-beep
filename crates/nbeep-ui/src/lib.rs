@@ -22,9 +22,9 @@ pub mod widget;
 
 pub use chat_view::{ChatLine, ChatViewWidget};
 pub use controls::{
-    Checkbox, Choose, ChoosePicker, Combo, ComboControl, ComboItem, Control, ControlBase, FlatRow,
-    GridColumn, LabelSide, PopupHit, RadioGroup, RadioOption, ScrollBars, TextBox, TreeControl,
-    TreeGrid, TreeModel, TreeNode, TreeView,
+    BorderSpec, Button, ButtonMode, Checkbox, Choose, ChoosePicker, Combo, ComboControl, ComboItem,
+    Control, ControlBase, FlatRow, GridColumn, ImageFit, LabelSide, PopupHit, RadioGroup,
+    RadioOption, ScrollBars, TextBox, TreeControl, TreeGrid, TreeModel, TreeNode, TreeView,
 };
 pub use draw::{DrawCtx, FontSlot};
 pub use edit::{EditKey, EditState};
