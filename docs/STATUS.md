@@ -3,7 +3,12 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
-> **갱신: 2026-08-08 31차 (KST)** — **GUI 수동 추가 UI(⌘/Ctrl+K) + 인터랙티브 채팅 — 맥↔docker 사람 대 사람 실증**(`feat/m3-manual-ui` → main 병합):
+> **갱신: 2026-08-08 32차 (KST)** — **R-16 정상 종료 경로 + S3 브로드캐스트 폴백**(`feat/m1-broadcast`(+`feat/r16-shutdown` 스택) → main 병합):
+> ① **R-16 해소(핵심)** — `plat::shutdown`(SIGINT/SIGTERM 포트·DR-21 · async-signal-safe 핸들러→브릿지 플래그) + 헤드리스 루프 깨우기(논블로킹 accept·타임아웃) + GUI 훅(`about_to_wait`→`el.exit()`→Drop 체인 GOODBYE·~5Hz 폴로 유휴 발견 갱신 겸수정). **실측: docker stop 10.26→0.38초 · GUI SIGTERM 0.28초**. 잔여 = zeroize(M2-5)·Windows 콘솔 핸들러.
+> ② **S3 IPv4 브로드캐스트 폴백** — HELLO/ANNOUNCE/GOODBYE를 **S2 멀티캐스트 + S3 브로드캐스트 동시 발신**(`SO_BROADCAST`·수신 소켓 공용). 멀티캐스트 차단 Wi-Fi 대비([06 §4]). "차단 시 대체" 자체 검증은 D-8b 통제 망 몫.
+> **159테스트 green**. [journal/2026-08-08.md](journal/2026-08-08.md).
+>
+> **직전(08-08 31차)** — **GUI 수동 추가 UI(⌘/Ctrl+K) + 인터랙티브 채팅 — 맥↔docker 사람 대 사람 실증**(`feat/m3-manual-ui` → main 병합):
 > ① **GUI 수동 추가 UI**(DR-19) — `⌘/Ctrl+K` → 상태바가 주소 입력창(host:port·Enter 연결·Esc 취소, 새 위젯 없이 재사용) → `add_endpoint`→Noise→TOFU→대화 자동 오픈(`open_session_addr`). 아웃/인/수동이 같은 대화 등록·뷰 헬퍼로 수렴.
 > ② **인터랙티브 헤드리스 채팅**(사용자 요청 — 리눅스에서도 타이핑) — `--chat-serve`/`--chat-connect`(stdin 타이핑·수신 실시간 · GUI와 동일 세션 스택). docker는 헤드리스라 창 불가(X11 무거움) → stdin/stdout로 충분.
 > ③ ★ **맥↔docker-linux 사람 대 사람 양방향 대화 실증**(arm64↔amd64 · Noise 암호화 · `-it -p` 포트 매핑으로 발견 경계 우회). 맥 2프로세스도 통과.
