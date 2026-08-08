@@ -82,8 +82,8 @@ M-1 설계 ──► M0 기반 ──► M1 발견 ──► M2 대화 ──►
 | M0-1b | **★ 횡단 골격 선구축**([13](13-code-design-standards.md)) — `ActionKind`·`ActionCtx`·`Interceptor` 파이프라인 · 포트 스켈레톤(`Clock`/`Rng`/`Meter`/`Tracer`) · **D-21 v1 제약 4건 동시 반영**. **기능보다 먼저** | P0 | 중 | M0-1 | ✅ (08-08 — ActionKind 24종·인터셉터 파이프라인·포트 4종·신원(PeerId/UserId/Recipients)·testkit. 20테스트 green) |
 | M0-1c | `ActionKind` ↔ `u16` **안정 코드 매핑표** 초판 · 민감 타입 `Debug` 마스킹 규약 적용 | P0 | 소 | M0-1b | ✅ (08-08 — stable_code 24종·골든/유일성 테스트 · `redact::Redacted/RedactedText` 헬퍼. 29테스트 green) |
 | M0-2 | **★ SP-1 예산 검증 스파이크**(D-15) — 빈 창 4타깃 크기(≤3MB)·RSS(≤15MB) · 텍스트 스택 증가분 · **한글 IME** · 500행 60fps · **의존성 라이선스 전수**([07 §6](07-adr-0001-stack.md)). **R-8 해소 지점** | P0 | 대 | M0-1 | ☐ |
-| M0-3 | CI — 4타깃 build/test/lint + **예산 게이트**(크기·RSS·임포트 화이트리스트 · **중립 크레이트 4타깃 테스트** [12 §6](12-asset-reuse.md)) | P0 | 중 | M0-1 | ☐ |
-| M0-4 | [18 빌드&테스트](18-build-and-test.md) SSOT 실내용 · [10 §3 의존성 원장](10-decision-record.md) 개시(건별 라이선스·크기) | P0 | 소 | M0-1 | ☐ |
+| M0-3 | CI — 4타깃 build/test/lint + **예산 게이트**(크기·RSS·임포트 화이트리스트 · **중립 크레이트 4타깃 테스트** [12 §6](12-asset-reuse.md)) | P0 | 중 | M0-1 | ✅ (08-08 — ci.yml 4잡: lint/test(3-OS)/cross-build(ARM·Intel)/budget(≤10MB). RSS·임포트 게이트는 SP-1 후 발효) |
+| M0-4 | [18 빌드&테스트](18-build-and-test.md) SSOT 실내용 · [10 §3 의존성 원장](10-decision-record.md) 개시(건별 라이선스·크기) | P0 | 소 | M0-1 | ✅ (08-08 — 명령 SSOT·CI 표·원장 개시(외부 crate 0)) |
 
 ---
 

@@ -3,12 +3,27 @@
 > **이 문서가 빌드·테스트·검증 절차의 SSOT다.** 절차를 바꾼 **그 커밋에서 이 문서를 같이 고친다**(사후 정리 금지).
 > 규약 출처 [16 §2-4](16-doc-git-conventions.md#2-문서-작성--필수-규칙-8).
 
-## 1. 현황
+## 1. 명령 (SSOT) — Rust 워크스페이스([07](07-adr-0001-stack.md))
 
-> ⚠️ **미확정** — 기술 스택([ADR-0001](10-decision-record.md))이 정해지지 않아 실제 명령이 없다.
-> [TODO](TODO.md) M0-1/M0-2에서 스캐폴딩과 함께 이 문서를 채운다.
+> 로컬·CI 동일. `rust-toolchain.toml`이 stable·컴포넌트(rustfmt/clippy)·4타깃을 자동 고정한다.
 
-## 2. 채울 항목 (스택 확정 시)
+| 목적 | 명령 |
+|---|---|
+| 개발 빌드 | `cargo build --workspace` |
+| 릴리스 빌드 | `cargo build --release -p nexa-beep -p nbeep-imgdec` → `target/release/{nexa-beep,nbeep-imgdec}` |
+| **테스트**(green 기준) | `cargo test --workspace --features nbeep-core/testkit` — **전부 통과 + 0 ignored 예상 밖 없음** |
+| 포맷 | `cargo fmt --all --check` (수정은 `--check` 없이) |
+| 린트 | `cargo clippy --workspace --all-targets --features nbeep-core/testkit -- -D warnings` |
+| rustdoc 링크 | `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --features nbeep-core/testkit` |
+| 크로스 빌드 | `cargo build --workspace --target <TARGET>` (예: `aarch64-pc-windows-msvc`) |
+| 산출물 크기 | 릴리스 빌드 후 `wc -c target/release/<bin>` — **≤10MB/바이너리**(NFR-B-3) |
+
+**4타깃**: `x86_64-pc-windows-msvc` · `aarch64-pc-windows-msvc` · `x86_64-apple-darwin` · `aarch64-apple-darwin` · `x86_64-unknown-linux-gnu`.
+(테스트 실행은 네이티브 3-OS, ARM/타OS는 **빌드 검증만** — [CI](#4-ci--githubworkflowsciyml).)
+
+> **테스트 더블**([13 §11-1](13-code-design-standards.md)): 미완 협력자는 `testkit`(feature 게이트)의 fake/spy로 대체해 단위별로 검증한다. 릴리스엔 미포함.
+
+## 2. 검증 항목 (기능 도착 시 절차화)
 
 | 구분 | 내용 |
 | --- | --- |
@@ -21,10 +36,22 @@
 | **원격 연결 검증** | [19](19-adr-0006-manual-endpoint.md) — 서브넷 밖 인바운드가 **자동 등록되지 않는가** · 대조 전 파일 수신 차단 · 잘못된 핸드셰이크에 **침묵**하는가(포트 스캔 무응답) · 백오프가 유휴 CPU 예산을 깨지 않는가 |
 | **저장 암호화 검증** | [17](17-adr-0005-history-at-rest.md) 회귀 — **데이터 폴더 전체를 문자열 스캔해 평문이 한 조각도 없는가**(H-3) · 임시 폴더·썸네일에 평문 없는가 · 키 폐기 후 복호 불가 · 논스 재사용 없음 · 동기화 폴더 감지 동작 |
 | **다중 기기 신원 검증** | [20](20-adr-0007-multi-device-identity.md) — **v1**: 대화 스레드·기록·차단 키가 `UserId`인가(`PeerId` 사용 시 컴파일 실패) · 저장 마스터 키가 **래핑 구조**인가(래핑 키 교체 후 재암호화 없이 열리는가) · `sender_device` + 시퀀스로 **중복 제거**되는가. **v2**: 서명 없는 "같은 사용자" 주장 **거부** · 폐기된 기기 키 핸드셰이크 거부 · **옛 목록 재생(version 롤백) 거부** · 목록에 없는 기기의 편입 거부 · **보조 기기에서 서명 시도 실패**(주 기기 전용) · **현재 기기 자기 폐기 불가** · **주 기기 양도 전 폐기 불가** · 복구 시드로 승격 후 **이전 주 기기 폐기 가능** · **상대 기기 구성 변경 시 시스템 라인이 남는가**(끌 수 없음) · `UserId` 키로 **저장 기록이 열리지 않는가**(서명/복호 분리) |
-| CI | 워크플로 잡 구성과 게이트(무엇이 실패하면 병합 금지인가) |
-
 ## 3. 규칙
 
 - **main은 항상 green** — 테스트·린트 통과 전 병합 금지.
 - **[13 §12 코드 리뷰 체크리스트](13-code-design-standards.md) 통과**가 병합 조건이다(파이프라인 우회 없음·포트 주입·민감 타입 마스킹·상한 있는 큐 등).
 - 네트워크 기능은 단위 테스트만으로 신뢰하지 않는다. **2대 이상 실기 확인**을 병합 조건에 포함하고, 결과 수치를 journal에 남긴다.
+
+## 4. CI — `.github/workflows/ci.yml`
+
+> main push·모든 PR에서 실행. 하나라도 실패하면 **병합 금지**(§3).
+
+| 잡 | 실행 | 게이트 |
+|---|---|---|
+| **lint** | ubuntu | `fmt --check` · `clippy -D warnings` · `rustdoc -D warnings` |
+| **test** | ubuntu·macOS·windows(네이티브) | `build` + `test`(testkit). 3-OS = 중립 크레이트 4타깃 검증의 실행부 |
+| **cross-build** | Win ARM64 · Intel mac | 실행 불가 타깃은 **컴파일 검증만** |
+| **budget** | ubuntu | 릴리스 빌드 후 **바이너리 ≤10MB**(NFR-B-3) 초과 시 실패 |
+
+- 전역 `RUSTFLAGS=-D warnings` · `RUSTDOCFLAGS=-D warnings` — 경고 = 실패.
+- ⏳ **미발효(실물 도착 후 추가)**: 임포트 화이트리스트(NFR-B-5 · OS 인박스만 — SP-1/M0-2) · 유휴 RSS·24h 누수(NFR-B-1/6 — M1+) · 안전 회귀([§2](#2-검증-항목-기능-도착-시-절차화)) · 발견 실측 E-1~E-9(실기).
