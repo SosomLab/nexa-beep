@@ -525,8 +525,8 @@ mod app_window {
 
     use nbeep_core::PeerId;
     use nbeep_ui::{
-        ChatLine, ChatViewWidget, DrawCtx, InputEvent, Invalidations, Key, PeerListWidget, PeerRow,
-        RasterCtx, Rect, SettingsState, SettingsWidget, Theme, Widget,
+        ChatLine, ChatViewWidget, DrawCtx, GalleryWidget, InputEvent, Invalidations, Key,
+        PeerListWidget, PeerRow, RasterCtx, Rect, SettingsState, SettingsWidget, Theme, Widget,
     };
 
     type SbSurface = softbuffer::Surface<Rc<Window>, Rc<Window>>;
@@ -652,6 +652,8 @@ mod app_window {
         Chat(PeerId),
         /// 설정 창(`Cmd/Ctrl+,` — DR-24).
         Settings,
+        /// 컨트롤 갤러리(임시 검수 — `Cmd/Ctrl+G` 또는 하단 버튼).
+        Gallery,
     }
 
     /// 에코 봇 — 버스에 실물 신원으로 참여해 수신 세션을 받고, Chat 메시지를 에코한다.
@@ -749,6 +751,8 @@ mod app_window {
         fonts: nbeep_ui::FontPrefs,
         /// 열린 설정 창의 뷰(설정 창은 항상 별도 OS 창 1개).
         settings_view: Option<SettingsWidget>,
+        /// 컨트롤 갤러리 뷰(임시 검수) — 열려 있을 때만 Some.
+        gallery_view: Option<GalleryWidget>,
         /// OS 주 수식키(⌘/Ctrl) 눌림 상태 — `Cmd/Ctrl+,` 판정.
         primary_down: bool,
         /// 세션 액터가 GUI를 깨우는 통로(M2-7).
@@ -766,6 +770,14 @@ mod app_window {
 
         fn bar_h(scale: f32) -> i32 {
             (26.0 * scale).round() as i32
+        }
+
+        /// 주 창 하단바 오른쪽의 "컨트롤 갤러리" 버튼 rect(임시 검수 진입점).
+        fn gallery_btn(win_w: i32, win_h: i32, scale: f32) -> Rect {
+            let bar_h = Self::bar_h(scale);
+            let m = (4.0 * scale).round() as i32;
+            let bw = (108.0 * scale).round() as i32;
+            Rect::new(win_w - bw - m, win_h - bar_h + m, bw, bar_h - m * 2)
         }
 
         fn request_redraw(&self, id: WindowId) {
@@ -1001,7 +1013,10 @@ mod app_window {
                 }
                 return;
             }
-            let attrs = Window::default_attributes().with_title("Nexa Beep — 설정");
+            let attrs = Window::default_attributes().with_title(format!(
+                "Nexa Beep — {}",
+                nbeep_core::t(nbeep_core::Msg::SettingsTitle)
+            ));
             let window = Rc::new(el.create_window(attrs).unwrap());
             window.set_ime_allowed(true);
             let scale = window.scale_factor() as f32;
@@ -1023,9 +1038,41 @@ mod app_window {
             self.request_redraw(id);
         }
 
+        /// 컨트롤 갤러리 창을 연다(임시 검수 — 이미 열려 있으면 포커스).
+        fn open_gallery(&mut self, el: &ActiveEventLoop) {
+            if let Some((gid, _)) = self.windows.iter().find(|(_, e)| e.role == Role::Gallery) {
+                if let Some(e) = self.windows.get(gid) {
+                    e.window.focus_window();
+                }
+                return;
+            }
+            let attrs = Window::default_attributes().with_title("Nexa Beep — 컨트롤 갤러리 (임시)");
+            let window = Rc::new(el.create_window(attrs).unwrap());
+            window.set_ime_allowed(true);
+            let scale = window.scale_factor() as f32;
+            let context = softbuffer::Context::new(window.clone()).unwrap();
+            let surface = SbSurface::new(&context, window.clone()).unwrap();
+            let id = window.id();
+            self.windows.insert(
+                id,
+                WinEntry {
+                    role: Role::Gallery,
+                    window,
+                    surface,
+                    cursor: (0, 0),
+                    scale,
+                },
+            );
+            self.gallery_view = Some(GalleryWidget::new());
+            self.layout_window(id);
+            self.request_redraw(id);
+        }
+
         /// 설정 변경 즉시 적용(DR-24 — 저장 버튼 없음).
         /// 설정 값에서 영역별 글꼴 설정을 만든다(크기 키 s/m/l/xl → px).
         fn fonts_from_settings(settings: &SettingsState) -> nbeep_ui::FontPrefs {
+            // 글꼴명(font.{region}.family)은 SettingsState에 저장되지만, 실제 패밀리 로드는
+            // 시스템 폰트 열거(M3-3 확장) 후 연결한다 — 지금은 크기만 렌더에 반영.
             let slot = |region: &str, base: f32| -> nbeep_ui::SlotFont {
                 let size = match settings.get(&format!("font.{region}.size")) {
                     "s" => base - 2.0,
@@ -1035,12 +1082,13 @@ mod app_window {
                 };
                 nbeep_ui::SlotFont {
                     size,
-                    bold: settings.get(&format!("font.{region}.bold")) == "on",
-                    italic: settings.get(&format!("font.{region}.italic")) == "on",
+                    bold: false,
+                    italic: false,
                 }
             };
             nbeep_ui::FontPrefs {
                 base: slot("base", 16.0),
+                peerlist: slot("peerlist", 16.0),
                 message: slot("message", 18.0),
                 status: slot("status", 13.0),
             }
@@ -1066,6 +1114,15 @@ mod app_window {
                             Theme::dark()
                         };
                         // 전 창 다시 그리기.
+                        for e in self.windows.values() {
+                            e.window.request_redraw();
+                        }
+                    }
+                    "ui.language" => {
+                        // 현재 언어 전환 — 전 위젯이 다음 렌더에서 새 언어로 그린다.
+                        nbeep_core::set_lang(
+                            nbeep_core::Lang::from_code(&value).unwrap_or_default(),
+                        );
                         for e in self.windows.values() {
                             e.window.request_redraw();
                         }
@@ -1144,6 +1201,12 @@ mod app_window {
                     if let Some(sv) = &mut self.settings_view {
                         sv.set_scale(scale, &mut inv);
                         sv.set_bounds(Rect::new(0, 0, w, h), &mut inv);
+                    }
+                }
+                Role::Gallery => {
+                    if let Some(gv) = &mut self.gallery_view {
+                        gv.set_scale(scale, &mut inv);
+                        gv.set_bounds(Rect::new(0, 0, w, h), &mut inv);
                     }
                 }
             }
@@ -1247,6 +1310,21 @@ mod app_window {
                         }
                     }
                 }
+                Role::Gallery => {
+                    // Esc = 닫기. 그 외는 갤러리 위젯으로 전달.
+                    if matches!(
+                        ev,
+                        InputEvent::Key {
+                            key: Key::Escape,
+                            ..
+                        }
+                    ) {
+                        self.gallery_view = None;
+                        self.windows.remove(&id);
+                    } else if let Some(gv) = &mut self.gallery_view {
+                        gv.on_event(&ev, &mut inv);
+                    }
+                }
             }
             if !inv.is_empty() {
                 self.request_redraw(id);
@@ -1298,6 +1376,19 @@ mod app_window {
                         theme.text_dim,
                         theme.chrome_bg,
                     );
+                    // 임시: "컨트롤 갤러리" 버튼(⌘/Ctrl+G).
+                    let btn = Self::gallery_btn(ww, hh, entry.scale);
+                    ctx.fill_round_rect(btn, (6.0 * entry.scale) as i32, theme.accent);
+                    ctx.select_font(nbeep_ui::FontSlot::Status, false);
+                    let label = "🎛 컨트롤";
+                    let lw = ctx.text_width(label);
+                    ctx.text(
+                        btn.x + (btn.w - lw) / 2,
+                        btn.y + (btn.h - (13.0 * entry.scale) as i32) / 2,
+                        btn,
+                        label,
+                        theme.panel_bg,
+                    );
                 }
                 Role::Chat(peer) => {
                     if let Some(chat) = self.chats.get(&peer) {
@@ -1307,6 +1398,11 @@ mod app_window {
                 Role::Settings => {
                     if let Some(sv) = &self.settings_view {
                         sv.paint(&mut ctx, &theme);
+                    }
+                }
+                Role::Gallery => {
+                    if let Some(gv) = &self.gallery_view {
+                        gv.paint(&mut ctx, &theme);
                     }
                 }
             }
@@ -1440,6 +1536,7 @@ mod app_window {
                                 self.chats.remove(&peer);
                             }
                             Role::Settings => self.settings_view = None,
+                            Role::Gallery => self.gallery_view = None,
                             Role::Main => {}
                         }
                     }
@@ -1485,6 +1582,15 @@ mod app_window {
                 } => {
                     if let Some(e) = self.windows.get(&id) {
                         let (x, y) = e.cursor;
+                        // 주 창 하단 "컨트롤 갤러리" 버튼 먼저 판정(임시 검수 진입점).
+                        if e.role == Role::Main {
+                            let sz = e.window.inner_size();
+                            let btn = Self::gallery_btn(sz.width as i32, sz.height as i32, e.scale);
+                            if btn.contains(nbeep_ui::Point { x, y }) {
+                                self.open_gallery(el);
+                                return;
+                            }
+                        }
                         self.route(
                             id,
                             InputEvent::MouseDown {
@@ -1524,6 +1630,10 @@ mod app_window {
                             match t.as_str() {
                                 "," => {
                                     self.open_settings(el);
+                                    return;
+                                }
+                                "g" | "G" => {
+                                    self.open_gallery(el);
                                     return;
                                 }
                                 "k" | "K" => {
@@ -1666,6 +1776,10 @@ mod app_window {
         if mode == WindowMode::Separate {
             settings.set("chat.window_mode", "separate".into());
         }
+        // 현재 언어를 설정값으로 초기화(기본 en — i18n).
+        nbeep_core::set_lang(
+            nbeep_core::Lang::from_code(settings.get("ui.language")).unwrap_or_default(),
+        );
         let net_hint = if live {
             "실물 발견(LAN)"
         } else {
@@ -1693,10 +1807,13 @@ mod app_window {
             conversations: HashMap::new(),
             dedup: nbeep_core::DedupIndex::new(),
             started: Instant::now(),
-            status: format!("[{net_hint}] {mode_hint} · ⌘/Ctrl+K = 주소 추가 · ⌘/Ctrl+, = 설정"),
+            status: format!(
+                "[{net_hint}] {mode_hint} · ⌘/Ctrl+K = 주소 추가 · ⌘/Ctrl+, = 설정 · ⌘/Ctrl+G = 컨트롤 갤러리"
+            ),
             fonts: App::fonts_from_settings(&settings),
             settings,
             settings_view: None,
+            gallery_view: None,
             primary_down: false,
             proxy,
             adding: None,

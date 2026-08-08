@@ -3,6 +3,13 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
+> **갱신: 2026-08-08 (i18n·커스텀 컨트롤 차) (KST)** — **i18n + 커스텀 컨트롤 툴킷 + 갤러리**(`feat/m3-font-sections` · 사용자 요청 다수):
+> ① **글꼴 설정 섹션화** — `SettingKind::FontSection`(제목+글꼴명 텍스트박스+크기 콤보+설명) · 굵게/기울임 제거 · **PeerList 슬롯 신설**(사용자 목록 크기 실동작) · 대화창모드·테마도 콤보(▾).
+> ② **i18n** — `nbeep-core::i18n`(Lang En/Ko/Zh/Ja·**영어 기본**·Msg 키·tr/t·전역 현재 언어). 외부 크레이트 0(DR-5/12). settings 전면 + `ui.language` 콤보 · **검색은 전 언어 매치** · chat_view/peer_list/bin 배선.
+> ③ **커스텀 컨트롤 툴킷(DR-6)** — `Control`(루트 트레이트)+`ControlBase`(공유 상태)로 **포커스 링(밝은 반투명 테두리)·창 활성 색·도움말 "?"+툴팁을 전 컨트롤이 상속**(사용자 "상속받아 확장" 요구를 구조로). **Checkbox**(체크만/좌·우 라벨)·**RadioGroup**(옵션박스)·**TextBox**(placeholder)·**Combo(∨)/ExtendedCombo(⇕·Choose…·아이콘)** 상속 계층·**TreeView/TreeGrid**(공통 `TreeModel`/`TreeControl`).
+> ④ **컨트롤 갤러리(임시 검수)** — `Role::Gallery`·하단바 **`🎛 컨트롤` 버튼**/⌘·Ctrl+G/Esc. 전 컨트롤 배치·클릭=포커스 이동·도움말 예시.
+> **워크스페이스 179→215 green** · 릴리스 0.92MB · clippy·fmt clean. ⚠️ 글꼴명은 저장·표시까지만(패밀리 로드 M3-3) · 컨트롤 설정 정식 통합은 별도. [journal/2026-08-08.md](journal/2026-08-08.md).
+>
 > **갱신: 2026-08-08 (실행·테스트 가이드 차) (KST)** — **[문서 26 실행·수동 테스트 가이드](26-run-and-manual-test.md) 신설**(feat/chat-live · 사용자 요청 "테스트 과정·명령어 정리"): 실행 모드 표 **9종**(`--window`/`--window --live`/`--separate-windows`/`--chat-live`/`--chat-serve`/`--chat-connect`/`--serve`/`--live-echo`/`--discover-probe`) + **시나리오 A~D**(A: GUI↔`--chat-live` 발견 자동 · B: IP 직접 ⌘K · C: 맥↔Docker linux 포트매핑 · D: Docker 2노드 발견) + 헤드리스 검증·정상 종료(R-16)·알려진 한계. ★ **함정 명시** — 실물은 `--window`가 아니라 **`--window --live`**(기본 InMemory) · **맥↔Docker Desktop 발견 불가**(내부 VM → IP 우회). **세부 절차 SSOT는 [18](18-build-and-test.md)** 유지(18 §2에 26 포인터·README 번호표 26 등재). 문서 전용(179테스트 green). [journal/2026-08-08.md](journal/2026-08-08.md).
 >
 > **갱신: 2026-08-08 (터미널 대화 정리 차) (KST)** — **인터랙티브 채팅 사용법 문서화**([18 §2-2](18-build-and-test.md)) + 실측 검증:

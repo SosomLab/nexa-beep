@@ -24,6 +24,8 @@ pub struct Theme {
     pub border: Color,
     /// 강조(선택 줄·링크·활성 표시).
     pub accent: Color,
+    /// 포커스 링(모든 커스텀 컨트롤 공통 — 선택 시 밝은 반투명 테두리).
+    pub focus_ring: Color,
     /// 본문 텍스트.
     pub text: Color,
     /// 보조 텍스트.
@@ -54,6 +56,7 @@ impl Theme {
             field_bg: Color(0x0026_2B33),
             border: Color(0x0036_3C46),
             accent: Color(0x003D_8BFF),
+            focus_ring: Color(0x007F_B4FF),
             text: Color(0x00D6_DAE0),
             text_dim: Color(0x008A_919C),
             sel_bg: Color(0x0024_405F),
@@ -76,6 +79,7 @@ impl Theme {
             field_bg: Color(0x00FF_FFFF),
             border: Color(0x00D5_DAE1),
             accent: Color(0x003D_8BFF),
+            focus_ring: Color(0x00A9_CCFF),
             text: Color(0x001B_1F26),
             text_dim: Color(0x006B_7280),
             sel_bg: Color(0x00D8_E8FF),
@@ -128,11 +132,13 @@ pub struct SlotFont {
     pub italic: bool,
 }
 
-/// 세 영역(기본·메시지·상태)의 글꼴 설정.
+/// 영역별 글꼴 설정(기본 UI·사용자 목록·대화 본문·상태바).
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct FontPrefs {
-    /// 기본 UI(목록·버튼·헤더).
+    /// 기본 UI(버튼·헤더·설정 등).
     pub base: SlotFont,
+    /// 사용자(피어) 목록.
+    pub peerlist: SlotFont,
     /// 대화 본문.
     pub message: SlotFont,
     /// 상태바·보조.
@@ -140,24 +146,18 @@ pub struct FontPrefs {
 }
 
 impl Default for FontPrefs {
-    /// 기본값 — **가독성 위해 상향**(구 13/15/11 → 16/18/13).
+    /// 기본값 — **가독성 위해 상향**(구 13/15/11 → 16/18/13). 사용자 목록은 기본 UI와 같은 16.
     fn default() -> Self {
+        let plain = |size| SlotFont {
+            size,
+            bold: false,
+            italic: false,
+        };
         Self {
-            base: SlotFont {
-                size: 16.0,
-                bold: false,
-                italic: false,
-            },
-            message: SlotFont {
-                size: 18.0,
-                bold: false,
-                italic: false,
-            },
-            status: SlotFont {
-                size: 13.0,
-                bold: false,
-                italic: false,
-            },
+            base: plain(16.0),
+            peerlist: plain(16.0),
+            message: plain(18.0),
+            status: plain(13.0),
         }
     }
 }

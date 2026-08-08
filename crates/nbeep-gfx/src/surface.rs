@@ -18,6 +18,22 @@ impl Color {
             (self.0 & 0xFF) as u8,
         )
     }
+
+    /// 채널 합성.
+    #[must_use]
+    pub fn from_rgb(r: u8, g: u8, b: u8) -> Self {
+        Color((u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b))
+    }
+
+    /// 두 색을 `t`(0..=1)로 선형 보간한다(포커스 링 밝게 섞기 등).
+    #[must_use]
+    pub fn lerp(self, other: Color, t: f32) -> Self {
+        let t = t.clamp(0.0, 1.0);
+        let (r0, g0, b0) = self.rgb();
+        let (r1, g1, b1) = other.rgb();
+        let mix = |a: u8, b: u8| (f32::from(a) + (f32::from(b) - f32::from(a)) * t).round() as u8;
+        Color::from_rgb(mix(r0, r1), mix(g0, g1), mix(b0, b1))
+    }
 }
 
 /// 빌린 픽셀 버퍼 위의 그리기 표면.

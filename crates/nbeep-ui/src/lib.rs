@@ -7,9 +7,11 @@
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
 pub mod chat_view;
+pub mod controls;
 pub mod draw;
 pub mod edit;
 pub mod event;
+pub mod gallery;
 pub mod geom;
 pub mod peer_list;
 pub mod raster;
@@ -19,9 +21,15 @@ pub mod typeahead;
 pub mod widget;
 
 pub use chat_view::{ChatLine, ChatViewWidget};
+pub use controls::{
+    Checkbox, Combo, ComboControl, ComboItem, Control, ControlBase, ExtendedCombo, FlatRow,
+    GridColumn, LabelSide, PopupHit, RadioGroup, RadioOption, TextBox, TreeControl, TreeGrid,
+    TreeModel, TreeNode, TreeView,
+};
 pub use draw::{DrawCtx, FontSlot};
 pub use edit::{EditKey, EditState};
 pub use event::{InputEvent, Key, WheelAccum, WHEEL_DELTA};
+pub use gallery::GalleryWidget;
 pub use geom::{Point, Rect, Size};
 pub use peer_list::{badge, PeerListWidget, PeerRow, ROW_H};
 pub use raster::RasterCtx;

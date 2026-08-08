@@ -108,6 +108,7 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
     fn select_font(&mut self, slot: FontSlot, bold: bool) {
         self.cur = match slot {
             FontSlot::Base => self.prefs.base,
+            FontSlot::PeerList => self.prefs.peerlist,
             FontSlot::Message => self.prefs.message,
             FontSlot::Status => self.prefs.status,
         };

@@ -13,9 +13,11 @@ use crate::theme::Color;
 /// 폰트 슬롯 — 위젯이 페인트 시작에 자신의 슬롯을 선택한다(상태 공유 · 순서 무관 보장).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum FontSlot {
-    /// 기본 UI(메뉴·버튼·목록).
+    /// 기본 UI(메뉴·버튼·설정).
     #[default]
     Base,
+    /// 사용자(피어) 목록.
+    PeerList,
     /// 대화 본문.
     Message,
     /// 상태바·보조.
