@@ -3,7 +3,19 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
-> **갱신: 2026-08-08 6차 (KST)** — **ADR-0007 ✅ Accepted — Q-1 확정 + 기기 관리 설계**:
+> **갱신: 2026-08-08 7차 (KST)** — **코드 착수 — M0 기반 골격 완성**(`feat/m0-scaffold`, 6커밋·미푸시):
+> ① **M0-1 스캐폴딩** — Cargo 워크스페이스 **9크레이트**(core/net/crypto/safe/store/gfx/ui/plat + bin 2)·
+> `rust-toolchain`(stable·4타깃)·CRT 정적·크기 프로파일(opt-level=z). **의존성 역전** 확립(core=허브·무의존).
+> ② **M0-1b 횡단 골격** — `nbeep-core`에 **`ActionKind` 단일 통로**(24종)·인터셉터 파이프라인
+> (`Trace→Policy→Validate→Meter→Handler`)·포트 4종(`Clock`/`Rng`/`Meter`/`Tracer`)·신원(`PeerId`/`UserId`/`Recipients`)·`testkit`.
+> ③ **M0-1c** — `ActionKind::stable_code()` 안정 코드(골든 테스트로 잠금)·`redact` 마스킹 헬퍼.
+> ④ **M0-3 CI** — `ci.yml` 4잡(lint·test 3-OS·cross-build·**budget ≤10MB**). ⑤ **M0-4** — [18](18-build-and-test.md) 명령 SSOT·의존성 원장(외부 crate **0**).
+> **29테스트 green · clippy -D warnings·rustdoc·fmt clean.** 스텁 바이너리 **280KB**(예산 여유 큼).
+> **모델 방침** — 코드는 Fable 고정(settings.json), 설계/문서만 Opus. **테스트 더블 전략** 명문화([13 §11-1](13-code-design-standards.md)).
+> **남은 것** = **M0-2 SP-1**(실물 창·텍스트 스택·IME — 첫 외부 의존성 + 4타깃 실측, R-8 게이트) · **M1+는 ADR-0003~0006 확정 대기**.
+> [journal/2026-08-08.md](journal/2026-08-08.md).
+>
+> **직전(08-08 6차)** — **ADR-0007 ✅ Accepted — Q-1 확정 + 기기 관리 설계**:
 > ① **Q-1 = 주 기기 전용 + 오프라인 복구 시드.** 판단 기준은 **"잘못됐을 때 되돌릴 수 있는가"** —
 > 전 기기 복제안은 **폐기 경쟁에서 공격자가 이겨**(version 높은 목록이 이긴다) **회복 불가**라 탈락
 > ② **서명 능력 ≠ 복호 능력** — `UserId` 키를 [17 §3](17-adr-0005-history-at-rest.md) 래핑 후보로 **쓰지 않는다.** 키가 털려도 과거 기록은 안 열린다
