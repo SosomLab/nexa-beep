@@ -14,10 +14,12 @@
 //! 물려받는다(확장 용이 — 사용자 요청).
 
 pub mod checkbox;
+pub mod combo;
 pub mod radio;
 pub mod textbox;
 
 pub use checkbox::Checkbox;
+pub use combo::{Combo, ComboControl, ComboItem, ExtendedCombo, PopupHit};
 pub use radio::{RadioGroup, RadioOption};
 pub use textbox::TextBox;
 
@@ -335,6 +337,19 @@ pub fn draw_updown_chevrons(ctx: &mut dyn DrawCtx, theme: &Theme, area: Rect, co
         color,
         w,
     );
+}
+
+/// 체크 표식(✓) — `area` 안에 그린다(드롭다운 선택 행 등).
+pub fn draw_check_mark(ctx: &mut dyn DrawCtx, area: Rect, color: Color) {
+    let x = area.x;
+    let y = area.y;
+    let (w, h) = (area.w, area.h);
+    let pts = [
+        (x + w * 20 / 100, y + h * 52 / 100),
+        (x + w * 42 / 100, y + h * 72 / 100),
+        (x + w * 80 / 100, y + h * 28 / 100),
+    ];
+    ctx.polyline(&pts, color, (area.w as f32 / 9.0).max(1.5));
 }
 
 /// 아래 셰브론(∨) — 드롭다운/트리 접힘 표식.

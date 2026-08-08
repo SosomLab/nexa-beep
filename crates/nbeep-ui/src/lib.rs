@@ -20,7 +20,10 @@ pub mod typeahead;
 pub mod widget;
 
 pub use chat_view::{ChatLine, ChatViewWidget};
-pub use controls::{Checkbox, Control, ControlBase, LabelSide, RadioGroup, RadioOption, TextBox};
+pub use controls::{
+    Checkbox, Combo, ComboControl, ComboItem, Control, ControlBase, ExtendedCombo, LabelSide,
+    PopupHit, RadioGroup, RadioOption, TextBox,
+};
 pub use draw::{DrawCtx, FontSlot};
 pub use edit::{EditKey, EditState};
 pub use event::{InputEvent, Key, WheelAccum, WHEEL_DELTA};
