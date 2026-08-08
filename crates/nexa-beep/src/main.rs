@@ -46,7 +46,7 @@ mod app_window {
     use nbeep_core::PeerId;
     use nbeep_ui::{
         ChatLine, ChatViewWidget, DrawCtx, InputEvent, Invalidations, Key, PeerListWidget, PeerRow,
-        RasterCtx, Rect, Theme, Widget,
+        RasterCtx, Rect, SettingsState, SettingsWidget, Theme, Widget,
     };
 
     type SbSurface = softbuffer::Surface<Rc<Window>, Rc<Window>>;
@@ -89,6 +89,8 @@ mod app_window {
         Main,
         /// 상대별 대화 창(Separate 모드).
         Chat(PeerId),
+        /// 설정 창(`Cmd/Ctrl+,` — DR-24).
+        Settings,
     }
 
     /// 에코 봇 — 버스에 실물 신원으로 참여해 수신 세션을 받고, Chat 메시지를 에코한다.
@@ -154,6 +156,12 @@ mod app_window {
         started: Instant,
         /// 주 창 하단 상태바 문구.
         status: String,
+        /// 설정 값(런타임 — 영속은 M2-5). `chat.window_mode`·`ui.theme`.
+        settings: SettingsState,
+        /// 열린 설정 창의 뷰(설정 창은 항상 별도 OS 창 1개).
+        settings_view: Option<SettingsWidget>,
+        /// OS 주 수식키(⌘/Ctrl) 눌림 상태 — `Cmd/Ctrl+,` 판정.
+        primary_down: bool,
     }
 
     impl App {
@@ -264,6 +272,69 @@ mod app_window {
             Ok(chat)
         }
 
+        /// 설정 창을 연다(있으면 포커스) — `Cmd/Ctrl+,`.
+        fn open_settings(&mut self, el: &ActiveEventLoop) {
+            if let Some((id, _)) = self.windows.iter().find(|(_, e)| e.role == Role::Settings) {
+                if let Some(e) = self.windows.get(id) {
+                    e.window.focus_window();
+                }
+                return;
+            }
+            let attrs = Window::default_attributes().with_title("Nexa Beep — 설정");
+            let window = Rc::new(el.create_window(attrs).unwrap());
+            window.set_ime_allowed(true);
+            let scale = window.scale_factor() as f32;
+            let context = softbuffer::Context::new(window.clone()).unwrap();
+            let surface = SbSurface::new(&context, window.clone()).unwrap();
+            let id = window.id();
+            self.windows.insert(
+                id,
+                WinEntry {
+                    role: Role::Settings,
+                    window,
+                    surface,
+                    cursor: (0, 0),
+                    scale,
+                },
+            );
+            self.settings_view = Some(SettingsWidget::new(&self.settings));
+            self.layout_window(id);
+            self.request_redraw(id);
+        }
+
+        /// 설정 변경 즉시 적용(DR-24 — 저장 버튼 없음).
+        fn apply_settings(&mut self, changes: Vec<(&'static str, String)>) {
+            for (key, value) in changes {
+                self.settings.set(key, value.clone());
+                match key {
+                    "chat.window_mode" => {
+                        // 새 대화부터 적용(DR-26 — 열린 창은 유지·소급 강제 없음).
+                        self.mode = if value == "separate" {
+                            WindowMode::Separate
+                        } else {
+                            WindowMode::Single
+                        };
+                        self.status = format!("창 모드 = {value} (새 대화부터 적용)");
+                    }
+                    "ui.theme" => {
+                        self.theme = if value == "light" {
+                            Theme::light()
+                        } else {
+                            Theme::dark()
+                        };
+                        // 전 창 다시 그리기.
+                        for e in self.windows.values() {
+                            e.window.request_redraw();
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(id) = self.main_id {
+                self.request_redraw(id);
+            }
+        }
+
         /// 대화 활성화 — 모드에 따라 주 창 전환 또는 별도 창 생성/포커스(14 §11).
         fn activate(&mut self, peer: PeerId, el: &ActiveEventLoop) {
             match self.mode {
@@ -358,6 +429,12 @@ mod app_window {
                     if let Some(chat) = self.chats.get_mut(&peer) {
                         chat.set_scale(scale, &mut inv);
                         chat.set_bounds(Rect::new(0, 0, w, h), &mut inv);
+                    }
+                }
+                Role::Settings => {
+                    if let Some(sv) = &mut self.settings_view {
+                        sv.set_scale(scale, &mut inv);
+                        sv.set_bounds(Rect::new(0, 0, w, h), &mut inv);
                     }
                 }
             }
@@ -469,6 +546,20 @@ mod app_window {
                     }
                     self.drain_chat_effects(peer, id);
                 }
+                Role::Settings => {
+                    if let Some(sv) = &mut self.settings_view {
+                        sv.on_event(&ev, &mut inv);
+                        let changes = sv.take_changes();
+                        let close = sv.take_back();
+                        if !changes.is_empty() {
+                            self.apply_settings(changes);
+                        }
+                        if close {
+                            self.settings_view = None;
+                            self.windows.remove(&id);
+                        }
+                    }
+                }
             }
             if !inv.is_empty() {
                 self.request_redraw(id);
@@ -520,6 +611,11 @@ mod app_window {
                         chat.paint(&mut ctx, &theme);
                     }
                 }
+                Role::Settings => {
+                    if let Some(sv) = &self.settings_view {
+                        sv.paint(&mut ctx, &theme);
+                    }
+                }
             }
             buffer.present().unwrap();
         }
@@ -563,9 +659,13 @@ mod app_window {
                     if Some(id) == self.main_id {
                         el.exit(); // 주 창 닫기 = 종료(트레이 상주는 M3-2)
                     } else if let Some(entry) = self.windows.remove(&id) {
-                        // 대화 창 닫기 = 뷰만 닫힘(대화 유지 — DR-26).
-                        if let Role::Chat(peer) = entry.role {
-                            self.chats.remove(&peer);
+                        match entry.role {
+                            // 대화 창 닫기 = 뷰만 닫힘(대화 유지 — DR-26).
+                            Role::Chat(peer) => {
+                                self.chats.remove(&peer);
+                            }
+                            Role::Settings => self.settings_view = None,
+                            Role::Main => {}
                         }
                     }
                 }
@@ -621,9 +721,26 @@ mod app_window {
                         self.route(id, InputEvent::Wheel { delta: d }, el);
                     }
                 }
+                WindowEvent::ModifiersChanged(mods) => {
+                    let st = mods.state();
+                    self.primary_down = if cfg!(target_os = "macos") {
+                        st.super_key()
+                    } else {
+                        st.control_key()
+                    };
+                }
                 WindowEvent::KeyboardInput { event, .. } => {
                     if event.state != ElementState::Pressed {
                         return;
+                    }
+                    // Cmd/Ctrl+, = 설정(DR-24 · VS Code/macOS 표준).
+                    if self.primary_down {
+                        if let WKey::Character(t) = &event.logical_key {
+                            if t.as_str() == "," {
+                                self.open_settings(el);
+                                return;
+                            }
+                        }
                     }
                     let key = match &event.logical_key {
                         WKey::Named(NamedKey::ArrowUp) => Some(Key::Up),
@@ -686,6 +803,10 @@ mod app_window {
         );
         let discovery = transport.discovery();
 
+        let mut settings = SettingsState::with_defaults();
+        if mode == WindowMode::Separate {
+            settings.set("chat.window_mode", "separate".into());
+        }
         let event_loop = EventLoop::new().unwrap();
         let mode_hint = match mode {
             WindowMode::Single => "Enter = 대화 열기",
@@ -709,7 +830,10 @@ mod app_window {
             conversations: HashMap::new(),
             dedup: nbeep_core::DedupIndex::new(),
             started: Instant::now(),
-            status: format!("↑↓ 이동 · 타이핑 = 이름 점프(한글 가능) · {mode_hint}"),
+            status: format!("↑↓ 이동 · 타이핑 = 이름 점프 · {mode_hint} · ⌘/Ctrl+, = 설정"),
+            settings,
+            settings_view: None,
+            primary_down: false,
         };
         event_loop.run_app(&mut app).unwrap();
     }
