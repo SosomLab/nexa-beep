@@ -354,6 +354,11 @@ impl TreeView {
     pub fn selected_label(&self) -> Option<String> {
         self.rows().get(self.selected).map(|r| r.label.clone())
     }
+
+    /// 스크롤바 페이드 틱(호스트가 ~5Hz 호출) — 표시 상태 변화 시 `true`.
+    pub fn tick(&mut self) -> bool {
+        self.bars.tick()
+    }
 }
 
 impl Control for TreeView {
@@ -481,6 +486,11 @@ impl TreeGrid {
     /// 전체 열 폭 합(물리 px).
     fn columns_width(&self) -> i32 {
         self.columns.iter().map(|c| self.s(c.width)).sum()
+    }
+
+    /// 스크롤바 페이드 틱(호스트가 ~5Hz 호출) — 표시 상태 변화 시 `true`.
+    pub fn tick(&mut self) -> bool {
+        self.bars.tick()
     }
 }
 

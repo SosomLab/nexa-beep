@@ -22,8 +22,8 @@ pub mod widget;
 
 pub use chat_view::{ChatLine, ChatViewWidget};
 pub use controls::{
-    Checkbox, Combo, ComboControl, ComboItem, Control, ControlBase, ExtendedCombo, FlatRow,
-    GridColumn, LabelSide, PopupHit, RadioGroup, RadioOption, TextBox, TreeControl, TreeGrid,
+    Checkbox, Choose, Combo, ComboControl, ComboItem, Control, ControlBase, FlatRow, GridColumn,
+    LabelSide, PopupHit, RadioGroup, RadioOption, ScrollBars, TextBox, TreeControl, TreeGrid,
     TreeModel, TreeNode, TreeView,
 };
 pub use draw::{DrawCtx, FontSlot};

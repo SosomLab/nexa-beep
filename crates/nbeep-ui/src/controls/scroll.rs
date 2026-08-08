@@ -21,6 +21,8 @@ const MIN_THUMB: i32 = 28;
 /// 반투명도 — 항상 은은하게.
 const ALPHA_IDLE: f32 = 0.35;
 const ALPHA_HOT: f32 = 0.6;
+/// 활동 없음 시 숨김까지의 틱 수(호스트가 ~5Hz로 [`ScrollBars::tick`] 호출 → 약 1.2초).
+const HIDE_TICKS: u32 = 6;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Axis {
@@ -34,8 +36,10 @@ pub struct ScrollBars {
     hover: Option<Axis>,
     /// 드래그 중: (축, 잡은 지점 오프셋 = 커서 - 썸 시작).
     drag: Option<(Axis, i32)>,
-    /// 스크롤/접근/드래그로 활성화되어 보이는가.
+    /// 스크롤/접근/드래그로 활성화되어 보이는가(1·2단계).
     active: bool,
+    /// 활동 없음 카운트다운 — 0이 되면 숨긴다(1→0단계). 활동마다 리셋.
+    hide_ticks: u32,
 }
 
 /// px 헬퍼.
@@ -114,13 +118,13 @@ impl ScrollBars {
         match *ev {
             InputEvent::Wheel { delta } => {
                 oy -= delta / 3;
-                self.active = true;
+                self.wake(); // 0/1→1단계 + 카운트다운 리셋
                 let (ox, oy) = Self::clamp(ox, oy, vp, content_w, content_h);
                 (ox, oy, Self::v_needed(vp, content_h))
             }
             InputEvent::HWheel { delta } => {
                 ox += delta / 3;
-                self.active = true;
+                self.wake();
                 let (ox, oy) = Self::clamp(ox, oy, vp, content_w, content_h);
                 (ox, oy, Self::h_needed(vp, content_w))
             }
@@ -129,14 +133,14 @@ impl ScrollBars {
                 if let Some(t) = Self::v_thumb(vp, content_h, oy, scale, thick) {
                     if t.contains(p) {
                         self.drag = Some((Axis::V, y - t.y));
-                        self.active = true;
+                        self.wake();
                         return (ox, oy, true);
                     }
                 }
                 if let Some(t) = Self::h_thumb(vp, content_w, ox, scale, thick) {
                     if t.contains(p) {
                         self.drag = Some((Axis::H, x - t.x));
-                        self.active = true;
+                        self.wake();
                         return (ox, oy, true);
                     }
                 }
@@ -162,37 +166,63 @@ impl ScrollBars {
                             }
                         }
                     }
+                    self.wake();
                     let (ox, oy) = Self::clamp(ox, oy, vp, content_w, content_h);
                     return (ox, oy, true);
                 }
-                // 호버 판정(썸 위 = 두껍게).
+                // 호버 판정(썸 위 = 2단계 두껍게). 바가 보일 때만 판정한다
+                // (0단계에선 접근으로 다시 뜨지 않는다 — 스크롤로만 깨어난다).
                 self.hover = None;
-                if let Some(t) = Self::v_thumb(vp, content_h, oy, scale, thick) {
-                    if t.contains(p) {
-                        self.hover = Some(Axis::V);
-                    }
-                }
-                if self.hover.is_none() {
-                    if let Some(t) = Self::h_thumb(vp, content_w, ox, scale, thick) {
+                if self.active {
+                    if let Some(t) = Self::v_thumb(vp, content_h, oy, scale, thick) {
                         if t.contains(p) {
-                            self.hover = Some(Axis::H);
+                            self.hover = Some(Axis::V);
                         }
                     }
-                }
-                if self.hover.is_some() {
-                    self.active = true;
-                } else if !vp.contains(p) {
-                    // 뷰포트를 벗어나면 숨긴다(스크롤 후 잔류 표시 회수).
-                    self.active = false;
+                    if self.hover.is_none() {
+                        if let Some(t) = Self::h_thumb(vp, content_w, ox, scale, thick) {
+                            if t.contains(p) {
+                                self.hover = Some(Axis::H);
+                            }
+                        }
+                    }
+                    // 호버(2단계)면 살려둔다. 아니면 카운트다운은 tick이 진행.
+                    if self.hover.is_some() {
+                        self.hide_ticks = HIDE_TICKS;
+                    }
                 }
                 (ox, oy, false)
             }
             InputEvent::MouseUp { .. } => {
                 let was = self.drag.is_some();
                 self.drag = None;
+                if was {
+                    self.hide_ticks = HIDE_TICKS;
+                }
                 (ox, oy, was)
             }
             _ => (ox, oy, false),
+        }
+    }
+
+    /// 스크롤/드래그 활동 → 표시(1단계) + 숨김 카운트다운 리셋.
+    fn wake(&mut self) {
+        self.active = true;
+        self.hide_ticks = HIDE_TICKS;
+    }
+
+    /// 호스트가 주기적으로(~5Hz) 호출 — 활동 없으면 카운트다운, 0이면 숨긴다(1→0단계).
+    /// 호버/드래그 중(2단계)엔 유지. 표시 상태가 바뀌면 `true`(재그리기 필요).
+    pub fn tick(&mut self) -> bool {
+        if !self.active || self.hover.is_some() || self.drag.is_some() {
+            return false;
+        }
+        if self.hide_ticks > 0 {
+            self.hide_ticks -= 1;
+            false
+        } else {
+            self.active = false;
+            true
         }
     }
 
@@ -304,11 +334,34 @@ mod tests {
     }
 
     #[test]
-    fn leaving_viewport_hides() {
+    fn fades_after_inactivity_ticks() {
+        // 스크롤(1단계) 후 활동 없으면 tick이 카운트다운해 0단계로.
         let mut sb = ScrollBars::new();
         sb.on_event(&wheel(-100), vp(), 200, 400, 0, 0, 1.0);
-        assert!(sb.active);
-        sb.on_event(&mv(999, 999), vp(), 200, 400, 0, 0, 1.0);
-        assert!(!sb.active, "뷰포트 밖으로 나가면 숨김");
+        assert!(sb.active, "스크롤 = 1단계 표시");
+        let mut changed = false;
+        for _ in 0..20 {
+            changed |= sb.tick();
+        }
+        assert!(changed && !sb.active, "활동 없음 → 0단계(숨김)");
+    }
+
+    #[test]
+    fn hover_keeps_visible_until_unhover() {
+        let mut sb = ScrollBars::new();
+        sb.on_event(&wheel(-100), vp(), 200, 400, 0, 0, 1.0);
+        // 세로 썸 위로 호버(2단계) — 아무리 tick해도 유지.
+        let t = ScrollBars::v_thumb(vp(), 400, 0, 1.0, 11).unwrap();
+        sb.on_event(&mv(t.x + 2, t.y + 2), vp(), 200, 400, 0, 0, 1.0);
+        for _ in 0..20 {
+            sb.tick();
+        }
+        assert!(sb.active, "호버 중(2단계)엔 유지");
+        // 썸 밖으로 이동(1단계) → 이후 tick으로 숨김.
+        sb.on_event(&mv(0, 0), vp(), 200, 400, 0, 0, 1.0);
+        for _ in 0..20 {
+            sb.tick();
+        }
+        assert!(!sb.active, "언호버 후 무활동 → 숨김");
     }
 }

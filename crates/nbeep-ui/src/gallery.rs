@@ -4,8 +4,8 @@
 //! 실물로 확인한다. **제품 화면이 아니라 검수용** — 정식 UI 통합은 별도.
 
 use crate::controls::{
-    Checkbox, Combo, ComboItem, Control, ExtendedCombo, GridColumn, LabelSide, RadioGroup,
-    RadioOption, ScrollBars, TextBox, TreeGrid, TreeModel, TreeNode, TreeView,
+    Checkbox, Choose, Combo, ComboItem, Control, GridColumn, LabelSide, RadioGroup, RadioOption,
+    ScrollBars, TextBox, TreeGrid, TreeModel, TreeNode, TreeView,
 };
 use crate::draw::{DrawCtx, FontSlot};
 use crate::event::InputEvent;
@@ -58,7 +58,7 @@ pub struct GalleryWidget {
     radio: RadioGroup,
     textbox: TextBox,
     combo: Combo,
-    ext: ExtendedCombo,
+    ext: Choose,
     tree: TreeView,
     grid: TreeGrid,
 }
@@ -78,9 +78,9 @@ impl GalleryWidget {
         cb_right.set_show_help(true);
 
         let combo_items = vec![
-            ComboItem::new("home", "Home"),
-            ComboItem::new("recents", "Recents"),
-            ComboItem::new("desktop", "Desktop"),
+            ComboItem::new("home", "Home").with_icon("⌂"),
+            ComboItem::new("recents", "Recents").with_icon("◷"),
+            ComboItem::new("desktop", "Desktop").with_icon("▦"),
         ];
         let ext_items = vec![
             ComboItem::new("pathfinder", "Path Finder.app").with_icon("◎"),
@@ -128,7 +128,7 @@ impl GalleryWidget {
             ),
             textbox: TextBox::new("Run command"),
             combo: Combo::new(combo_items, 0),
-            ext: ExtendedCombo::new(ext_items, 0, "Choose…"),
+            ext: Choose::new(ext_items, 0, "Choose…").with_choose_icon("⌕"),
             tree: TreeView::new(tree_model),
             grid: TreeGrid::new(
                 grid_model,
@@ -183,6 +183,15 @@ impl GalleryWidget {
         inv.push(self.bounds);
     }
 
+    /// 스크롤바 페이드 틱(호스트가 ~5Hz 호출) — 갤러리 자체 + 내부 트리/그리드 바 모두.
+    /// 표시 상태가 바뀌면 `true`(재그리기 필요).
+    pub fn tick(&mut self) -> bool {
+        let mut changed = self.bars.tick();
+        changed |= self.tree.tick();
+        changed |= self.grid.tick();
+        changed
+    }
+
     /// 스크롤 오프셋을 콘텐츠·뷰포트 범위로 클램프한다.
     fn clamp_scroll(&mut self) {
         let max_y = (self.content_h - self.bounds.h).max(0);
@@ -199,7 +208,7 @@ impl GalleryWidget {
             "RadioGroup (옵션 박스)",
             "TextBox — placeholder",
             "Combo — 일반 (∨)",
-            "ExtendedCombo — 확장 (⇕ · Choose…)",
+            "Choose — 확장 (⇕ · Choose…)",
             "TreeView — 계층",
             "TreeGrid — 그리드 + 트리",
         ]

@@ -1518,6 +1518,17 @@ mod app_window {
                 return;
             }
             self.poll_discovery();
+            // 오버레이 스크롤바 페이드 틱(~5Hz) — 상태 변화 시 갤러리 재그리기.
+            if let Some(gv) = &mut self.gallery_view {
+                if gv.tick() {
+                    if let Some((gid, _)) =
+                        self.windows.iter().find(|(_, e)| e.role == Role::Gallery)
+                    {
+                        let gid = *gid;
+                        self.request_redraw(gid);
+                    }
+                }
+            }
             // 유휴에도 ~5Hz로 깨어나 발견 갱신·종료 신호를 폴한다(입력 없을 때도 목록이 산다).
             el.set_control_flow(ControlFlow::wait_duration(
                 std::time::Duration::from_millis(200),

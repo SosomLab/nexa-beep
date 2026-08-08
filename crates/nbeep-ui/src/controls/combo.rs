@@ -1,6 +1,6 @@
 //! 콤보박스 — **일반 콤보(∨)** 와 **확장 콤보(⇕)** 의 상속 계층(사용자 요청 08-08).
 //!
-//! ## 상속 설계 (ControlBase → Combo → ExtendedCombo)
+//! ## 상속 설계 (ControlBase → Combo → Choose)
 //!
 //! Rust엔 클래스 상속이 없어 **트레이트 계층 + 공유 상태 컴포지션**으로 같은 개념을 만든다:
 //!
@@ -8,7 +8,7 @@
 //! - [`ComboControl`] — 그 위에 얹는 **콤보 계층 인터페이스**. [`ComboCore`](공유 상태)를 여는
 //!   접근자 둘만 구현하면 열기/닫기·후버 이동·선택·드롭다운 렌더·히트테스트를 **기본 메서드로 상속**.
 //! - [`Combo`] — 일반 콤보(**∨** · 목록 택일). `ComboControl`의 기본 동작 그대로.
-//! - [`ExtendedCombo`] — 확장 콤보(**⇕** · 값 직접 편집 + 구분자 아래 **"Choose…"** 로 커스텀 값).
+//! - [`Choose`] — 확장 콤보(**⇕** · 값 직접 편집 + 구분자 아래 **"Choose…"** 로 커스텀 값).
 //!   `Combo`의 모델을 물려받아(같은 `ComboCore`) 편집 필드와 Choose 항목만 **덧붙인다/재정의**.
 //!
 //! 시각: ⇕ = "값을 사용자 정의할 수 있다"(확장) · ∨ = "목록에서 고른다"(일반) — 사용자 정의.
@@ -50,7 +50,7 @@ impl ComboItem {
     }
 }
 
-/// 콤보 공유 상태(추상 콤보의 상태 계층). `Combo`·`ExtendedCombo`가 함께 쓴다.
+/// 콤보 공유 상태(추상 콤보의 상태 계층). `Combo`·`Choose`가 함께 쓴다.
 #[derive(Debug)]
 pub struct ComboCore {
     items: Vec<ComboItem>,
@@ -100,12 +100,12 @@ pub trait ComboControl: Control {
     /// 공유 콤보 상태 가변(구현 필수).
     fn core_mut(&mut self) -> &mut ComboCore;
 
-    /// ⇕(편집 가능=확장) vs ∨(일반) — `ExtendedCombo`가 `true`로 재정의.
+    /// ⇕(편집 가능=확장) vs ∨(일반) — `Choose`가 `true`로 재정의.
     fn is_editable(&self) -> bool {
         false
     }
-    /// 구분자 아래 확장 항목 라벨(예: ["Choose…"]) — 기본 없음.
-    fn extra_rows(&self) -> Vec<String> {
+    /// 구분자 아래 확장 항목(예: "Choose…") — 아이콘 옵션 포함. 기본 없음.
+    fn extra_rows(&self) -> Vec<ComboItem> {
         Vec::new()
     }
 
@@ -238,14 +238,14 @@ pub trait ComboControl: Control {
         {
             ctx.select_font(FontSlot::Base, false);
             ctx.text(tx, b.y + (b.h - self.s(16)) / 2, b, icon, theme.text);
-            tx += ctx.text_width(icon) + self.s(6);
+            tx += ctx.text_width(icon) + self.s(3); // 아이콘↔글자 간격(절반)
         }
         ctx.select_font(FontSlot::Base, false);
         ctx.text(tx, b.y + (b.h - self.s(16)) / 2, b, box_text, theme.text);
 
-        // 셰브론(⇕ 확장 / ∨ 일반).
+        // 셰브론(⇕ 확장 / ∨ 일반) — 트리와 동일한 회색 계열(text_dim).
         let chev = self.chevron_rect();
-        let color = self.accent_now(theme);
+        let color = theme.text_dim;
         if self.is_editable() {
             draw_updown_chevrons(ctx, theme, chev, color);
         } else {
@@ -288,7 +288,7 @@ pub trait ComboControl: Control {
             ctx.select_font(FontSlot::Base, false);
             if let Some(icon) = it.icon.as_deref() {
                 ctx.text(tx, row.y + (rh - self.s(16)) / 2, row, icon, theme.text);
-                tx += ctx.text_width(icon) + self.s(6);
+                tx += ctx.text_width(icon) + self.s(3); // 아이콘↔글자 간격(절반)
             }
             ctx.text(
                 tx,
@@ -299,7 +299,7 @@ pub trait ComboControl: Control {
             );
             y += rh;
         }
-        // 구분자 + 확장 항목.
+        // 구분자(Horizon) + 확장 항목("Choose…" 등 · 아이콘 옵션).
         let extras = self.extra_rows();
         if !extras.is_empty() {
             let sep_y = y + self.s(SEP_H) / 2;
@@ -308,14 +308,19 @@ pub trait ComboControl: Control {
                 theme.border,
             );
             y += self.s(SEP_H);
-            for label in &extras {
+            for it in &extras {
                 let row = Rect::new(pop.x + self.s(3), y, pop.w - self.s(6), rh);
+                let mut tx = row.x + self.s(10);
                 ctx.select_font(FontSlot::Base, false);
+                if let Some(icon) = it.icon.as_deref() {
+                    ctx.text(tx, row.y + (rh - self.s(16)) / 2, row, icon, theme.accent);
+                    tx += ctx.text_width(icon) + self.s(3);
+                }
                 ctx.text(
-                    row.x + self.s(10),
+                    tx,
                     row.y + (rh - self.s(16)) / 2,
                     row,
-                    label,
+                    &it.label,
                     theme.accent,
                 );
                 y += rh;
@@ -410,18 +415,20 @@ impl Widget for Combo {
 /// 확장 콤보박스 — 값 직접 편집(⇕) + 구분자 아래 **"Choose…"** 로 커스텀 값 선택.
 /// [`Combo`]의 모델([`ComboCore`])을 물려받아 편집 필드와 Choose 항목을 덧붙인다.
 #[derive(Debug)]
-pub struct ExtendedCombo {
+pub struct Choose {
     base: ControlBase,
     core: ComboCore,
     /// 직접 편집 텍스트(커스텀 값).
     edit: EditState,
     /// "Choose…" 항목 라벨.
     choose_label: String,
-    /// Choose… 활성화 1회성(호스트가 파일/프로그램 선택기를 연다).
+    /// "Choose…" 항목 선행 아이콘(옵션).
+    choose_icon: Option<String>,
+    /// Choose… 활성화 1회성(호스트가 사용자 지정 찾기 창을 연다).
     chose: bool,
 }
 
-impl ExtendedCombo {
+impl Choose {
     /// 항목·초기 선택·Choose 라벨로 만든다. 편집 텍스트는 선택 항목 라벨로 시작.
     #[must_use]
     pub fn new(items: Vec<ComboItem>, selected: usize, choose_label: impl Into<String>) -> Self {
@@ -435,8 +442,16 @@ impl ExtendedCombo {
             core,
             edit: EditState::with_text(&init, false),
             choose_label: choose_label.into(),
+            choose_icon: None,
             chose: false,
         }
+    }
+
+    /// "Choose…" 항목에 선행 아이콘 지정(체이닝).
+    #[must_use]
+    pub fn with_choose_icon(mut self, icon: impl Into<String>) -> Self {
+        self.choose_icon = Some(icon.into());
+        self
     }
 
     /// 현재 텍스트(커스텀 편집 값).
@@ -459,7 +474,7 @@ impl ExtendedCombo {
     }
 }
 
-impl Control for ExtendedCombo {
+impl Control for Choose {
     fn base(&self) -> &ControlBase {
         &self.base
     }
@@ -467,7 +482,7 @@ impl Control for ExtendedCombo {
         &mut self.base
     }
 }
-impl ComboControl for ExtendedCombo {
+impl ComboControl for Choose {
     fn core(&self) -> &ComboCore {
         &self.core
     }
@@ -477,8 +492,12 @@ impl ComboControl for ExtendedCombo {
     fn is_editable(&self) -> bool {
         true
     }
-    fn extra_rows(&self) -> Vec<String> {
-        vec![self.choose_label.clone()]
+    fn extra_rows(&self) -> Vec<ComboItem> {
+        let mut it = ComboItem::new("__choose__", &self.choose_label);
+        if let Some(icon) = &self.choose_icon {
+            it = it.with_icon(icon.clone());
+        }
+        vec![it]
     }
     fn value(&self) -> String {
         // 확장 콤보의 값 = 편집 텍스트(커스텀 우선).
@@ -491,7 +510,7 @@ impl ComboControl for ExtendedCombo {
     }
 }
 
-impl Widget for ExtendedCombo {
+impl Widget for Choose {
     fn bounds(&self) -> Rect {
         self.base.bounds
     }
@@ -651,8 +670,8 @@ mod tests {
         assert!(!c.is_editable(), "일반 = ∨");
     }
 
-    fn ext() -> (ExtendedCombo, Invalidations) {
-        let mut c = ExtendedCombo::new(items(), 0, "Choose…");
+    fn ext() -> (Choose, Invalidations) {
+        let mut c = Choose::new(items(), 0, "Choose…");
         let mut inv = Invalidations::default();
         c.set_bounds(Rect::new(0, 0, 200, 28), &mut inv);
         (c, inv)
@@ -662,7 +681,9 @@ mod tests {
     fn extended_is_editable_with_choose_row() {
         let (c, _) = ext();
         assert!(c.is_editable(), "확장 = ⇕");
-        assert_eq!(c.extra_rows(), vec!["Choose…".to_string()]);
+        let extras = c.extra_rows();
+        assert_eq!(extras.len(), 1);
+        assert_eq!(extras[0].label, "Choose…");
         assert_eq!(c.text(), "Home", "편집 텍스트 = 선택 라벨로 시작");
     }
 

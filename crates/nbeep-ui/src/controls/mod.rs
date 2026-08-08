@@ -21,7 +21,7 @@ pub mod textbox;
 pub mod tree;
 
 pub use checkbox::Checkbox;
-pub use combo::{Combo, ComboControl, ComboItem, ExtendedCombo, PopupHit};
+pub use combo::{Choose, Combo, ComboControl, ComboItem, PopupHit};
 pub use radio::{RadioGroup, RadioOption};
 pub use scroll::ScrollBars;
 pub use textbox::TextBox;
@@ -315,7 +315,8 @@ pub fn draw_radio_glyph(
 pub fn draw_updown_chevrons(ctx: &mut dyn DrawCtx, theme: &Theme, area: Rect, color: Color) {
     let cx = area.x + area.w / 2;
     let half = (area.w / 4).max(3);
-    let gap = (area.h / 8).max(2);
+    // 두 셰브론을 2px 더 가깝게(각 방향 1px씩 · 사용자 확정).
+    let gap = (area.h / 8 - 1).max(1);
     let midy = area.y + area.h / 2;
     let up_tip = midy - gap - half;
     let dn_tip = midy + gap + half;
