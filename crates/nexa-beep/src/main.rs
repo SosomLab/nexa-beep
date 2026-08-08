@@ -44,8 +44,10 @@ mod app_window {
         font: nbeep_gfx::Font,
         theme: Theme,
         list: PeerListWidget,
-        /// 열린 대화(None = 목록 화면).
+        /// 현재 화면에 열린 대화의 뷰(None = 목록 화면). 상태는 `conversations`에.
         chat: Option<ChatViewWidget>,
+        /// 화면에 열린 대화 상대(뷰 ↔ 상태 연결 키).
+        open: Option<nbeep_core::PeerId>,
         /// 내 신원 — 발견·세션·발신 봉투가 전부 이 키 하나에서 나온다.
         identity: std::sync::Arc<nbeep_crypto::Identity>,
         seq: nbeep_core::Sequencer,
@@ -54,8 +56,8 @@ mod app_window {
         discovery: std::sync::mpsc::Receiver<nbeep_net::DiscoveryEvent>,
         table: nbeep_core::PeerTable,
         trust: nbeep_core::MemoryTrustStore,
-        /// 열린 대화의 실물 세션(Noise+TOFU+다중화).
-        session: Option<LiveSession>,
+        /// 상대별 대화 상태 — 뷰와 무관하게 유지(동시 대화의 실체).
+        conversations: std::collections::HashMap<nbeep_core::PeerId, Conversation>,
         dedup: nbeep_core::DedupIndex,
         cursor: (i32, i32),
         started: Instant,
@@ -69,6 +71,16 @@ mod app_window {
     type LiveSession = nbeep_core::MuxSession<
         nbeep_core::TrustedSession<nbeep_crypto::NoiseSession<Box<dyn nbeep_core::Link>>>,
     >;
+
+    /// 대화 상태 — **뷰(창)와 분리**된 상대별 세션+스레드(DR-26).
+    ///
+    /// 뷰를 닫아도(Esc) 대화는 살아 있다 — 세션 유지·스레드 보존·재진입 시 복원(재핸드셰이크
+    /// 없음). 이 분리가 창 모드 옵션(단일 창 ↔ 상대별 별도 창, M3-12)을 뷰 계층만의 문제로
+    /// 만든다: 어느 모드든 Conversation은 그대로고 뷰가 몇 개 붙느냐만 달라진다.
+    struct Conversation {
+        session: LiveSession,
+        lines: Vec<ChatLine>,
+    }
 
     /// 에코 봇 — 버스에 실물 신원으로 참여해 수신 세션을 받고, Chat 메시지를 에코한다.
     /// 발견 힌트의 `PeerId` == Noise 정적 키(실제 아키텍처 그대로 — 인증이 발견을 검증한다).
@@ -120,9 +132,18 @@ mod app_window {
                         seq: self.seq.issue(),
                         body: nbeep_core::MessageBody::Text(text.as_str().to_string()),
                     };
-                    chat.push_line(ChatLine { mine: true, text }, &mut inv);
-                    if let Some(session) = &mut self.session {
+                    chat.push_line(
+                        ChatLine {
+                            mine: true,
+                            text: text.clone(),
+                        },
+                        &mut inv,
+                    );
+                    let conv = self.open.and_then(|p| self.conversations.get_mut(&p));
+                    if let Some(conv) = conv {
+                        conv.lines.push(ChatLine { mine: true, text });
                         use nbeep_core::mux::StreamId;
+                        let session = &mut conv.session;
                         let peer = session.peer();
                         let sent = session.send(StreamId::Chat, &msg.encode());
                         // 데모: 에코 봇이 즉시 응답(인프로세스) — 블로킹 수신.
@@ -133,13 +154,12 @@ mod app_window {
                                 if let Ok(rmsg) = nbeep_core::ChatMessage::decode(&bytes, peer) {
                                     if self.dedup.accept(rmsg.sender_device, rmsg.seq) {
                                         if let nbeep_core::MessageBody::Text(t) = rmsg.body {
-                                            chat.push_line(
-                                                ChatLine {
-                                                    mine: false,
-                                                    text: nbeep_core::sanitize_message(&t),
-                                                },
-                                                &mut inv,
-                                            );
+                                            let line = ChatLine {
+                                                mine: false,
+                                                text: nbeep_core::sanitize_message(&t),
+                                            };
+                                            conv.lines.push(line.clone());
+                                            chat.push_line(line, &mut inv);
                                         }
                                     }
                                 }
@@ -150,8 +170,9 @@ mod app_window {
                     }
                 }
                 if chat.take_back() {
+                    // 뷰만 닫는다 — 대화(세션·스레드)는 유지(DR-26 상태-뷰 분리).
                     self.chat = None;
-                    self.session = None; // 세션 드롭 = 링크 종료(봇은 다음 수신 대기로)
+                    self.open = None;
                     self.status =
                         "↑↓ 이동 · 타이핑 = 이름 점프(한글 가능) · Enter = 대화 열기".into();
                     inv.push(self.list.bounds());
@@ -159,8 +180,28 @@ mod app_window {
             } else {
                 self.list.on_event(&ev, &mut inv);
                 if let Some(peer) = self.list.take_activated() {
-                    match self.open_session(peer) {
-                        Ok((session, decision)) => {
+                    // 기존 대화가 있으면 재사용(재핸드셰이크 없음 — 스레드 복원), 없으면 수립.
+                    let status = if self.conversations.contains_key(&peer) {
+                        Ok("대화 복원 — 세션 유지 중 · Esc = 목록".to_string())
+                    } else {
+                        self.open_session(peer).map(|(session, decision)| {
+                            self.conversations.insert(
+                                peer,
+                                Conversation {
+                                    session,
+                                    lines: Vec::new(),
+                                },
+                            );
+                            match decision {
+                                nbeep_core::TrustDecision::FirstContact => {
+                                    "Noise 세션 수립 — 첫 접촉(TOFU 핀 고정) · Esc = 목록".into()
+                                }
+                                d => format!("Noise 세션 수립 — {d:?} · Esc = 목록"),
+                            }
+                        })
+                    };
+                    match status {
+                        Ok(msg) => {
                             let title = self.table.get(peer).map_or_else(
                                 || format!("{peer:?}"),
                                 |e| e.name.as_str().to_string(),
@@ -168,14 +209,15 @@ mod app_window {
                             let mut chat = ChatViewWidget::new(title);
                             chat.set_scale(self.scale, &mut inv);
                             chat.set_bounds(self.list.bounds(), &mut inv);
-                            self.chat = Some(chat);
-                            self.session = Some(session);
-                            self.status = match decision {
-                                nbeep_core::TrustDecision::FirstContact => {
-                                    "Noise 세션 수립 — 첫 접촉(TOFU 핀 고정) · Esc = 목록".into()
+                            // 스레드 복원 — 상태가 뷰와 분리돼 있어 가능하다.
+                            if let Some(conv) = self.conversations.get(&peer) {
+                                for line in &conv.lines {
+                                    chat.push_line(line.clone(), &mut inv);
                                 }
-                                d => format!("Noise 세션 수립 — {d:?} · Esc = 목록"),
-                            };
+                            }
+                            self.chat = Some(chat);
+                            self.open = Some(peer);
+                            self.status = msg;
                             self.refresh_rows(&mut inv); // 배지 갱신(핀 반영)
                         }
                         Err(e) => self.status = format!("연결 실패: {e}"),
@@ -447,13 +489,14 @@ mod app_window {
             theme: Theme::dark(),
             list,
             chat: None,
+            open: None,
             identity,
             seq: nbeep_core::Sequencer::new(),
             transport,
             discovery,
             table: nbeep_core::PeerTable::new(60_000),
             trust: nbeep_core::MemoryTrustStore::new(),
-            session: None,
+            conversations: std::collections::HashMap::new(),
             dedup: nbeep_core::DedupIndex::new(),
             cursor: (0, 0),
             started: Instant::now(),
