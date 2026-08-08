@@ -9,6 +9,10 @@
 // 테스트 코드는 unwrap 허용(docs/13 §9 — 금지는 프로덕션 경로 한정).
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
+pub mod noise;
+
 /// 세션 스텁(암호화 없음) — 릴레이 미포함(feature `testkit` 또는 테스트 빌드).
 #[cfg(any(test, feature = "testkit"))]
 pub mod plain;
+
+pub use noise::{Identity, NoiseSession};

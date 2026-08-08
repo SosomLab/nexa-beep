@@ -16,3 +16,8 @@ testkit = ["nbeep-core/testkit"]
 
 [dependencies]
 nbeep-core.workspace = true
+snow = "0.9.6"
+
+[dev-dependencies]
+# 세션 테스트가 core testkit의 duplex 링크 fake를 쓴다.
+nbeep-core = { workspace = true, features = ["testkit"] }

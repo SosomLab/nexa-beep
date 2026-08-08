@@ -105,6 +105,10 @@
 | **winit** 0.30 | 창·입력·**IME**·DPI (ADR-0001 **P2** 창 라이브러리) | Apache-2.0 (OR MIT) | 4타깃(Win/mac/Linux Wayland+X11) 창·IME를 직접 구현(R-3) 대신 위임. 사실상 표준 | ✅ **채택**(08-08 사용자 확정 · SP-1) |
 | **softbuffer** 0.4 | CPU 픽셀 버퍼 present(ADR-0001 B안) | MIT OR Apache-2.0 | winit 창에 우리 래스터라이저 출력을 표시. GPU 미사용(NFR-B-1) | ✅ **채택**(08-08 사용자 확정 · SP-1) |
 
+| **snow** 0.9 | Noise 프로토콜 프레임워크 — `Noise_XX_25519_ChaChaPoly_BLAKE2s`([08](08-adr-0002-discovery-transport.md) · DR-11) | MIT OR Apache-2.0 | 암호를 직접 구현하지 않고(NFR-S-3) 검증된 표준 프레임워크에 위임. WireGuard 계열 실전 검증 | ✅ **채택**(08-08 사용자 확정 · M2-1b) |
+
+> **snow(M2-1b)**: 트랜지티브 포함 crypto 서브트리 **34개**, **전부 퍼미시브**(전수 스캔 — 순수 카피레프트 0). NoiseSession이 bin에서 배선(M2-4)되기 전까지 DCE로 릴리스 미포함(현재 0.40MB 불변).
+
 > **위 2건 = ADR-0001 P2 확정**(2026-08-08 사용자). 트랜지티브 포함 Win 15/mac 32/Linux 75개, **전부 퍼미시브**(SP-1f 전수 — [07 §6](07-adr-0001-stack.md)). **DR-8(외부 crate 0 지향)의 의도적 첫 예외** — 4타깃 창·IME·Wayland/X11을 직접 구현(R-3)하지 않기 위한 값. Linux 실물·SP-1b/d/e 실기 측정은 후속. 창 코드의 `nbeep-plat` 이관은 M3.
 
 > **추가 절차**: ⓐ 라이선스가 **퍼미시브(MIT/Apache-2.0/BSD 등)** 인지 확인(GPL/LGPL 금지 — C-2) ⓑ 크기 영향 실측 ⓒ 이 표에 한 줄 ⓓ 커밋 본문에 근거. 암호는 **직접 구현하지 않되**(NFR-S-3) 검증된 표준 구현만.
