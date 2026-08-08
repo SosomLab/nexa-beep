@@ -3,7 +3,13 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
-> **갱신: 2026-08-08 25차 (KST)** — **D-22 확정 + M1-3 와이어 포맷**(`feat/m1-wire` → main 병합 · 사용자 승인 — 추천안 수용):
+> **갱신: 2026-08-08 26차 (KST)** — **M1-4 슬라이스 1 — 첫 실물 소켓 + 실증 3건**(`feat/m1-udp` → main 병합 · socket2 사용자 승인):
+> ① **`UdpDiscovery`(S2 IPv4 멀티캐스트)** — InMemory fake만 있던 프로젝트의 **첫 실물 네트워크 코드**. 자기 패킷은 **주소가 아니라 키로 필터**(REUSEPORT 다중 인스턴스가 정상 시나리오) · 기동 HELLO + 주기 ANNOUNCE(주기 주입) · 드롭 시 GOODBYE 2회(FR-D-8) · 그룹 239.255.77.77·포트 47100·TTL 1은 **잠정 상수 명시**(D-8b 실측 확정).
+> ② **실증 3건**(추정 금지·실측 필수) — 맥 2인스턴스 상호 발견(`--ignored` 테스트) · 맥 프로브 2프로세스(실 LAN 주소 Hello·Announce 왕복) · ★ **Docker Linux 컨테이너 2노드 교차 발견**(172.18.0.2↔0.3 상호 SAW — **실물 NXBP 와이어의 테스트베드 동작 = D-8a-Linux 실증**).
+> ③ `--discover-probe [초]` 헤드리스 프로브(D-8a/D-8b 공용) + `CloneWatch` 배선(복제 키 관측 = ⚠️CLONE). 원장 socket2 등재(서브트리 libc뿐).
+> 잔여 = S1(IPv6)·S3(브로드캐스트) 동시 시도 · **Transport 통합**(`LocalDirect` — 데모의 InMemory·에코 봇을 진짜 상대로 교체). **155테스트 green**. [journal/2026-08-08.md](journal/2026-08-08.md).
+>
+> **직전(08-08 25차)** — **D-22 확정 + M1-3 와이어 포맷**(`feat/m1-wire` → main 병합 · 사용자 승인 — 추천안 수용):
 > ① **D-22 = U-P1+U-P2 둘 다 채택 · 확정과 같은 커밋에서 구현** — R-12(키 파일 복제)의 관문이 닫혔고 **와이어 포맷 잠금이 풀렸다**. U-P1: 발견 패킷 `instance` 16B + `CloneWatch`(같은 키·다른 instance 창 내 공존 = 복제 경고 · 재시작 무오탐 · 창 수치는 D-8b 주입). U-P2: `NoiseSession` **`SelfPeer` 거부**(같은 개인키 두 실체의 핸드셰이크가 **양쪽 다** 거부 — 테스트 고정). **탐지이지 방지 아님** 명시(NFR-S-5).
 > ② **M1-3 와이어 포맷 확정** — `net/wire.rs`: `[NXBP][ver][type][flags][pubkey 32][port][epoch][seq][instance 16][name]` 고정부 71B · **512B 인코딩 강제** · 미지 버전/종류 **무시**(전방 호환 3번째 적용) · 깨진 이름 = **지문 라벨 폴백**(존재를 숨기지 않음) · **골든 레이아웃 테스트**(오프셋 리터럴 — 호환 파괴를 CI가 차단).
 > ③ 잔여 = M1-4 실물 소켓 — 🔴 **socket2 의존 확정 대기**(std 미노출 옵션 `SO_REUSEPORT`/`IP_MULTICAST_IF` — rust 공식 팀 관리·MIT/Apache·추천). **155테스트 green**. [journal/2026-08-08.md](journal/2026-08-08.md).

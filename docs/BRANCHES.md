@@ -8,6 +8,7 @@
 
 | 브랜치 | 생성 | 병합(커밋) | 삭제 | 커밋수 | 작업 요약 | 상세 |
 | --- | --- | --- | --- | --- | --- | --- |
+| `feat/m1-udp` | 2026-08-08 | _진행 중_ | — | 1 | **M1-4 슬라이스 1** — 첫 실물 소켓 `UdpDiscovery`(S2·socket2·키 필터·GOODBYE 2회) · `--discover-probe` · **실증 3건**(맥 2인스턴스·프로브 2프로세스·**Docker 컨테이너 2노드 교차 발견**) | [journal/2026-08-08](journal/2026-08-08.md) |
 | `feat/m1-wire` | 2026-08-08 | 2026-08-08 (1ab72a5 --no-ff) | 2026-08-08 | 2 | **D-22 확정 구현 + M1-3 와이어 포맷** — `instance` 16B·`CloneWatch`(U-P1) · `SelfPeer` 거부(U-P2) · 512B 강제·전방 호환·골든 레이아웃 | [journal/2026-08-08](journal/2026-08-08.md) |
 | `feat/m1-linkwatch`(+`feat/m3-settings` 스택) | 2026-08-08 | 2026-08-08 (625c725 --no-ff) | 2026-08-08 | 7 | **M3-11 설정 화면 1·2**(Entry 레지스트리·`⌘/Ctrl+,`·좌측 카테고리 트리·`chat.window_mode`/`ui.theme` 즉시 적용) · **M1-2 슬라이스 1**(LinkEvent·trailing Debouncer) · **Docker 테스트베드 실증**(Linux 146 green·멀티캐스트 도달) · **Windows VM 불요 확정**(D-8a 재정의) · 문서 현행화(병렬) | [journal/2026-08-08](journal/2026-08-08.md) |
 | `feat/m3-multiwin` | 2026-08-08 | 2026-08-08 (96218ab --no-ff) | 2026-08-08 | 2 | **M3-12 다중 대화 창** — `WinEntry` 창 단위 라우팅·Separate/Single 모드·재활성화=포커스·창 닫기=뷰만(DR-26 분리 회수 — 도메인 변경 0) | [journal/2026-08-08](journal/2026-08-08.md) |
