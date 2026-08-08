@@ -34,6 +34,10 @@ pub struct Theme {
     pub sel_bg_inactive: Color,
     /// 위험 행위(파일 실체화 승인·차단 등).
     pub danger: Color,
+    /// 긍정 상태(대조 완료 등).
+    pub ok: Color,
+    /// 주의 상태(미검증 등).
+    pub warn: Color,
     /// 다크 팔레트 여부.
     pub is_dark: bool,
 }
@@ -55,6 +59,8 @@ impl Theme {
             sel_bg: Color(0x0024_405F),
             sel_bg_inactive: Color(0x002C_313A),
             danger: Color(0x00E5_534B),
+            ok: Color(0x002E_A043),
+            warn: Color(0x00B5_7C1E),
             is_dark: true,
         }
     }
@@ -75,6 +81,8 @@ impl Theme {
             sel_bg: Color(0x00D8_E8FF),
             sel_bg_inactive: Color(0x00E6_E9EE),
             danger: Color(0x00D3_2F2F),
+            ok: Color(0x001A_7F37),
+            warn: Color(0x009A_6700),
             is_dark: false,
         }
     }

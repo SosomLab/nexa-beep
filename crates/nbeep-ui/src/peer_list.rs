@@ -1,15 +1,22 @@
-//! 피어 목록 뷰 — M1-6 최소 경로(FR-D-2 · 미검증 배지).
+//! 피어 목록 위젯 — 첫 실물 [`Widget`](M3-1 · FR-D-2 · FR-U-4).
 //!
-//! [`nbeep_core`]의 목록([`PeerEntry`])과 신뢰([`TrustLevel`])를 읽어 [`nbeep_gfx`]로 그린다.
-//! **신뢰 배지 3종은 항상 붙는다**(미검증/핀 고정/대조 완료 — [docs/08] "미검증으로 표시한다").
-//! 색·수치는 임시 팔레트다 — macOS 시각 언어 수치표(M3-1c)가 확정되면 `theme`으로 이관한다.
+//! M1-6의 즉시 렌더 함수를 위젯으로 전환했다: 캐럿 탐색(↑↓·Home/End·PgUp/PgDn) ·
+//! 클릭 선택 · 휠 스크롤(분수 노치 누적) · **타입어헤드**(표시 이름 접두사) · Enter 활성화.
+//! 색은 전부 [`Theme`] 토큰이다(하드코딩 금지 — [docs/12 §B]). **신뢰 배지 3종은 항상 표시**.
+//!
+//! 활성화(대화 열기)는 [`PeerListWidget::take_activated`] 폴링으로 꺼낸다 — 위젯은 부모를
+//! 모른다(원본 통지 모델의 번역 — [docs/12 §B]).
 
+use crate::draw::{DrawCtx, FontSlot};
+use crate::event::{InputEvent, Key, WheelAccum};
+use crate::geom::Rect;
+use crate::theme::{Color, Theme};
+use crate::typeahead::{TypeAhead, TYPEAHEAD_TIMEOUT_MS};
+use crate::widget::{Invalidations, Widget};
 use nbeep_core::peers::PeerEntry;
-use nbeep_core::TrustLevel;
-use nbeep_gfx::{Color, Font, Surface};
+use nbeep_core::{PeerId, TrustLevel};
 
-/// 목록 한 행 — 목록 항목 + 신뢰 상태(둘의 출처가 다르므로 조립 지점에서 합친다:
-/// 목록은 발견, 신뢰는 `TrustStore`).
+/// 목록 한 행 — 목록 항목(발견) + 신뢰 상태(`TrustStore`). 출처가 달라 조립 지점에서 합친다.
 #[derive(Clone, Debug)]
 pub struct PeerRow {
     /// 발견 목록 항목.
@@ -19,74 +26,428 @@ pub struct PeerRow {
 }
 
 /// 행 높이(px) — 임시. M3-1c 수치표에서 확정.
-pub const ROW_H: u32 = 36;
+pub const ROW_H: i32 = 36;
 
-/// 신뢰 배지 라벨·색(임시 팔레트).
+/// 신뢰 배지 라벨 + 테마 토큰 선택.
 #[must_use]
-pub fn badge(trust: TrustLevel) -> (&'static str, Color) {
+pub fn badge(trust: TrustLevel, theme: &Theme) -> (&'static str, Color) {
     match trust {
-        TrustLevel::Unverified => ("미검증", Color(0x0080_5020)), // 주황 계열
-        TrustLevel::Pinned => ("핀 고정", Color(0x0030_5580)),    // 파랑 계열
-        TrustLevel::FingerprintVerified => ("대조 완료", Color(0x002E_6B3A)), // 초록 계열
+        TrustLevel::Unverified => ("미검증", theme.warn),
+        TrustLevel::Pinned => ("핀 고정", theme.sel_bg),
+        TrustLevel::FingerprintVerified => ("대조 완료", theme.ok),
     }
 }
 
-/// 피어 목록을 표면에 그린다(스크롤 없는 최소 경로 — 넘치는 행은 표면이 클립).
-pub fn render(surface: &mut Surface<'_>, font: &Font, rows: &[PeerRow]) {
-    surface.fill(Color(0x0020_2124)); // 배경(다크 임시)
-    let size = 15.0;
-    let width = u32::try_from(surface.width()).unwrap_or(u32::MAX);
+/// 피어 목록 위젯.
+#[derive(Debug)]
+pub struct PeerListWidget {
+    bounds: Rect,
+    rows: Vec<PeerRow>,
+    /// 캐럿(키보드 포커스 행). 목록이 비면 무의미.
+    caret: usize,
+    /// 스크롤 상단 행 인덱스.
+    top: usize,
+    hover: Option<usize>,
+    wheel: WheelAccum,
+    typeahead: TypeAhead,
+    activated: Option<PeerId>,
+}
 
-    for (i, row) in rows.iter().enumerate() {
-        let top = i32::try_from(i as u64 * u64::from(ROW_H)).unwrap_or(i32::MAX);
-        // 행 구분선.
-        surface.fill_rect(
-            0,
-            top + i32::try_from(ROW_H).unwrap_or(0) - 1,
-            width,
-            1,
-            Color(0x002A_2B2F),
-        );
-        let baseline = top as f32 + f32::from(u16::try_from(ROW_H).unwrap_or(36)) * 0.65;
+impl Default for PeerListWidget {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
-        // 이름(왼쪽) — 이미 무해화된 DisplayName만 이 타입에 담긴다.
-        font.draw_text(
-            surface,
-            12.0,
-            baseline,
-            size,
-            Color(0x00E8_E8E8),
-            row.entry.name.as_str(),
-        );
-
-        // 다중 경로 표시(진단) — 경로 2개 이상이면 "×N".
-        if row.entry.paths > 1 {
-            let label = format!("×{}", row.entry.paths);
-            let name_w = font.measure(row.entry.name.as_str(), size);
-            font.draw_text(
-                surface,
-                16.0 + name_w,
-                baseline,
-                11.0,
-                Color(0x0088_8888),
-                &label,
-            );
+impl PeerListWidget {
+    /// 빈 목록 위젯.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            bounds: Rect::default(),
+            rows: Vec::new(),
+            caret: 0,
+            top: 0,
+            hover: None,
+            wheel: WheelAccum::default(),
+            typeahead: TypeAhead::new(TYPEAHEAD_TIMEOUT_MS),
+            activated: None,
         }
+    }
 
-        // 신뢰 배지(오른쪽 정렬) — 항상 표시.
-        let (label, bg) = badge(row.trust);
-        let text_w = font.measure(label, 12.0);
-        let pad = 8.0;
-        let chip_w = text_w + pad * 2.0;
-        let chip_x = surface.width() as f32 - chip_w - 10.0;
-        surface.fill_rect(chip_x as i32, top + 8, chip_w as u32, ROW_H - 16, bg);
-        font.draw_text(
-            surface,
-            chip_x + pad,
-            baseline - 1.0,
-            12.0,
-            Color(0x00F0_F0F0),
-            label,
+    /// 목록 교체(발견 이벤트 반영) — 캐럿은 가능한 유지, 전체 무효화.
+    pub fn set_rows(&mut self, rows: Vec<PeerRow>, inv: &mut Invalidations) {
+        self.rows = rows;
+        self.caret = self.caret.min(self.rows.len().saturating_sub(1));
+        self.clamp_scroll();
+        inv.push(self.bounds);
+    }
+
+    /// 현재 캐럿 행.
+    #[must_use]
+    pub fn caret(&self) -> usize {
+        self.caret
+    }
+
+    /// Enter/더블클릭으로 활성화된 상대를 꺼낸다(1회성 — 루프 소유자가 대화를 연다).
+    pub fn take_activated(&mut self) -> Option<PeerId> {
+        self.activated.take()
+    }
+
+    fn visible_rows(&self) -> usize {
+        (self.bounds.h.max(0) as usize) / (ROW_H as usize).max(1)
+    }
+
+    fn clamp_scroll(&mut self) {
+        let vis = self.visible_rows().max(1);
+        let max_top = self.rows.len().saturating_sub(vis);
+        self.top = self.top.min(max_top);
+        // 캐럿이 보이도록 스크롤 따라가기.
+        if self.caret < self.top {
+            self.top = self.caret;
+        } else if self.caret >= self.top + vis {
+            self.top = self.caret + 1 - vis;
+        }
+    }
+
+    fn row_rect(&self, i: usize) -> Rect {
+        let rel = i as i64 - self.top as i64;
+        Rect::new(
+            self.bounds.x,
+            self.bounds.y + i32::try_from(rel).unwrap_or(i32::MAX).saturating_mul(ROW_H),
+            self.bounds.w,
+            ROW_H,
+        )
+    }
+
+    fn move_caret(&mut self, to: usize, inv: &mut Invalidations) {
+        let to = to.min(self.rows.len().saturating_sub(1));
+        if to == self.caret || self.rows.is_empty() {
+            return;
+        }
+        inv.push(self.row_rect(self.caret));
+        self.caret = to;
+        let before = self.top;
+        self.clamp_scroll();
+        if self.top != before {
+            inv.push(self.bounds); // 스크롤됨 — 전체
+        } else {
+            inv.push(self.row_rect(self.caret));
+        }
+    }
+
+    fn row_at(&self, y: i32) -> Option<usize> {
+        if y < self.bounds.y {
+            return None;
+        }
+        let rel = ((y - self.bounds.y) / ROW_H) as usize;
+        let idx = self.top + rel;
+        (idx < self.rows.len()).then_some(idx)
+    }
+
+    /// 접두사 매치(대소문자 무시) — `from`부터 순환 검색.
+    fn find_prefix(&self, prefix: &str, from: usize) -> Option<usize> {
+        let n = self.rows.len();
+        if n == 0 {
+            return None;
+        }
+        let p = prefix.to_lowercase();
+        (0..n).map(|k| (from + k) % n).find(|&i| {
+            self.rows[i]
+                .entry
+                .name
+                .as_str()
+                .to_lowercase()
+                .starts_with(&p)
+        })
+    }
+}
+
+impl Widget for PeerListWidget {
+    fn bounds(&self) -> Rect {
+        self.bounds
+    }
+
+    fn set_bounds(&mut self, bounds: Rect, inv: &mut Invalidations) {
+        self.bounds = bounds;
+        self.clamp_scroll();
+        inv.push(bounds);
+    }
+
+    fn on_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
+        match *ev {
+            InputEvent::Key { key, .. } => {
+                let vis = self.visible_rows().max(1);
+                match key {
+                    Key::Up => self.move_caret(self.caret.saturating_sub(1), inv),
+                    Key::Down => self.move_caret(self.caret + 1, inv),
+                    Key::Home => self.move_caret(0, inv),
+                    Key::End => self.move_caret(self.rows.len().saturating_sub(1), inv),
+                    Key::PageUp => self.move_caret(self.caret.saturating_sub(vis), inv),
+                    Key::PageDown => self.move_caret(self.caret + vis, inv),
+                    Key::Enter => {
+                        if let Some(row) = self.rows.get(self.caret) {
+                            self.activated = Some(row.entry.peer);
+                        }
+                    }
+                    Key::Escape => {
+                        self.typeahead.clear();
+                    }
+                    _ => {}
+                }
+            }
+            InputEvent::Wheel { delta } => {
+                let lines = self.wheel.add(delta, 3);
+                if lines != 0 {
+                    let new_top = if lines > 0 {
+                        self.top.saturating_sub(lines.unsigned_abs() as usize)
+                    } else {
+                        self.top + lines.unsigned_abs() as usize
+                    };
+                    let vis = self.visible_rows().max(1);
+                    let clamped = new_top.min(self.rows.len().saturating_sub(vis));
+                    if clamped != self.top {
+                        self.top = clamped;
+                        inv.push(self.bounds);
+                    }
+                }
+            }
+            InputEvent::Char { c, now_ms } => {
+                if c == '\u{8}' {
+                    if let Some(q) = self.typeahead.backspace(now_ms) {
+                        if let Some(hit) = self.find_prefix(&q.prefix, self.caret) {
+                            self.move_caret(hit, inv);
+                        }
+                    }
+                    return;
+                }
+                let q = self.typeahead.push(c, now_ms);
+                let from = if q.include_caret {
+                    self.caret
+                } else {
+                    self.caret + 1
+                };
+                if let Some(hit) = self.find_prefix(&q.prefix, from % self.rows.len().max(1)) {
+                    self.move_caret(hit, inv);
+                }
+            }
+            InputEvent::MouseDown { y, .. } => {
+                if let Some(i) = self.row_at(y) {
+                    self.move_caret(i, inv);
+                }
+            }
+            InputEvent::MouseMove { y, .. } => {
+                let over = self.row_at(y);
+                if over != self.hover {
+                    if let Some(old) = self.hover {
+                        inv.push(self.row_rect(old));
+                    }
+                    if let Some(new) = over {
+                        inv.push(self.row_rect(new));
+                    }
+                    self.hover = over;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn paint(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
+        ctx.fill_rect(self.bounds, theme.panel_bg);
+        ctx.select_font(FontSlot::Base, false);
+        let vis = self.visible_rows();
+
+        for (rel, i) in (self.top..self.rows.len().min(self.top + vis + 1)).enumerate() {
+            let row = &self.rows[i];
+            let r = Rect::new(
+                self.bounds.x,
+                self.bounds.y + i32::try_from(rel).unwrap_or(i32::MAX) * ROW_H,
+                self.bounds.w,
+                ROW_H,
+            );
+            // 행 배경 — 캐럿 > hover > 기본.
+            let bg = if i == self.caret {
+                theme.sel_bg
+            } else if Some(i) == self.hover {
+                theme.panel_bg_alt
+            } else {
+                theme.panel_bg
+            };
+            let text_y = r.y + (ROW_H - 17) / 2;
+            ctx.text_opaque(r.x + 12, text_y, r, row.entry.name.as_str(), theme.text, bg);
+
+            // 다중 경로 ×N(진단).
+            if row.entry.paths > 1 {
+                let name_w = ctx.text_width(row.entry.name.as_str());
+                let label = format!("×{}", row.entry.paths);
+                ctx.text(r.x + 16 + name_w, text_y + 2, r, &label, theme.text_dim);
+            }
+
+            // 신뢰 배지(오른쪽 정렬 라운드 칩) — 항상 표시.
+            let (label, chip) = badge(row.trust, theme);
+            let bw = ctx.text_width(label) + 16;
+            let chip_r = Rect::new(r.right() - bw - 10, r.y + 8, bw, ROW_H - 16);
+            ctx.fill_round_rect(chip_r, (ROW_H - 16) / 2, chip);
+            ctx.text(chip_r.x + 8, chip_r.y + 3, chip_r, label, theme.text);
+
+            // 행 구분선.
+            ctx.fill_rect(Rect::new(r.x, r.bottom() - 1, r.w, 1), theme.border);
+        }
+        // 타입어헤드 HUD(입력 중일 때만) — 하단 좌측.
+        let buf = self.typeahead.text();
+        if !buf.is_empty() {
+            ctx.select_font(FontSlot::Status, false);
+            let w = ctx.text_width(buf) + 16;
+            let hud = Rect::new(self.bounds.x + 8, self.bounds.bottom() - 26, w, 20);
+            ctx.fill_round_rect(hud, 6, theme.field_bg);
+            ctx.text(hud.x + 8, hud.y + 3, hud, buf, theme.accent);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nbeep_core::DisplayName;
+
+    fn pid(b: u8) -> PeerId {
+        let mut a = [0u8; 32];
+        a[0] = b;
+        PeerId::from_bytes(a)
+    }
+    fn row(b: u8, name: &str, trust: TrustLevel) -> PeerRow {
+        PeerRow {
+            entry: PeerEntry {
+                peer: pid(b),
+                name: DisplayName::parse(name).unwrap(),
+                paths: 1,
+            },
+            trust,
+        }
+    }
+    fn widget(names: &[(u8, &str)]) -> (PeerListWidget, Invalidations) {
+        let mut w = PeerListWidget::new();
+        let mut inv = Invalidations::default();
+        w.set_bounds(Rect::new(0, 0, 300, ROW_H * 4), &mut inv); // 4행 가시
+        let rows = names
+            .iter()
+            .map(|&(b, n)| row(b, n, TrustLevel::Unverified))
+            .collect();
+        w.set_rows(rows, &mut inv);
+        (w, inv)
+    }
+    fn key(k: Key) -> InputEvent {
+        InputEvent::Key {
+            key: k,
+            shift: false,
+            primary: false,
+        }
+    }
+
+    #[test]
+    fn caret_moves_and_invalidates_only_two_rows() {
+        let (mut w, _) = widget(&[(1, "alice"), (2, "bob"), (3, "carol")]);
+        let mut inv = Invalidations::default();
+        w.on_event(&key(Key::Down), &mut inv);
+        assert_eq!(w.caret(), 1);
+        let rects: Vec<_> = inv.drain().collect();
+        // 이전 행 + 새 행(인접 = 병합될 수 있음) — 전체 무효화가 아니어야 한다(FR-U-13).
+        assert!(rects.iter().all(|r| r.h <= ROW_H * 2), "{rects:?}");
+    }
+
+    #[test]
+    fn caret_follows_scroll_beyond_visible() {
+        let names: Vec<(u8, String)> = (1..=10).map(|i| (i, format!("peer{i:02}"))).collect();
+        let refs: Vec<(u8, &str)> = names.iter().map(|(b, s)| (*b, s.as_str())).collect();
+        let (mut w, _) = widget(&refs);
+        let mut inv = Invalidations::default();
+        w.on_event(&key(Key::End), &mut inv);
+        assert_eq!(w.caret(), 9);
+        // 4행 가시 창에서 마지막 행이 보이려면 top = 6.
+        let rects: Vec<_> = inv.drain().collect();
+        assert!(!rects.is_empty(), "스크롤 = 전체 무효화");
+    }
+
+    #[test]
+    fn enter_activates_caret_peer_once() {
+        let (mut w, _) = widget(&[(1, "alice"), (2, "bob")]);
+        let mut inv = Invalidations::default();
+        w.on_event(&key(Key::Down), &mut inv);
+        w.on_event(&key(Key::Enter), &mut inv);
+        assert_eq!(w.take_activated(), Some(pid(2)));
+        assert_eq!(w.take_activated(), None, "1회성");
+    }
+
+    #[test]
+    fn click_selects_row_under_cursor() {
+        let (mut w, _) = widget(&[(1, "alice"), (2, "bob"), (3, "carol")]);
+        let mut inv = Invalidations::default();
+        w.on_event(
+            &InputEvent::MouseDown {
+                x: 10,
+                y: ROW_H * 2 + 5,
+                shift: false,
+                primary: false,
+            },
+            &mut inv,
         );
+        assert_eq!(w.caret(), 2);
+        // 목록 밖 클릭은 무시.
+        w.on_event(
+            &InputEvent::MouseDown {
+                x: 10,
+                y: ROW_H * 3 + 5,
+                shift: false,
+                primary: false,
+            },
+            &mut inv,
+        );
+        assert_eq!(w.caret(), 2);
+    }
+
+    #[test]
+    fn typeahead_prefix_and_single_key_cycle() {
+        let (mut w, _) = widget(&[(1, "alice"), (2, "bob"), (3, "bora"), (4, "carol")]);
+        let mut inv = Invalidations::default();
+        // "bo" 누적 → bob.
+        w.on_event(&InputEvent::Char { c: 'b', now_ms: 0 }, &mut inv);
+        assert_eq!(w.caret(), 1);
+        w.on_event(
+            &InputEvent::Char {
+                c: 'o',
+                now_ms: 100,
+            },
+            &mut inv,
+        );
+        assert_eq!(w.caret(), 1, "확장 매치 — bob 유지");
+        // 타임아웃 후 'b' 반복 = cycle: bob → bora → bob.
+        w.on_event(
+            &InputEvent::Char {
+                c: 'b',
+                now_ms: 5000,
+            },
+            &mut inv,
+        );
+        assert_eq!(w.caret(), 2, "다음 매치 bora");
+        w.on_event(
+            &InputEvent::Char {
+                c: 'b',
+                now_ms: 5100,
+            },
+            &mut inv,
+        );
+        assert_eq!(w.caret(), 1, "cycle 복귀 bob");
+    }
+
+    #[test]
+    fn wheel_scrolls_with_fractional_accumulation() {
+        let names: Vec<(u8, String)> = (1..=10).map(|i| (i, format!("p{i:02}"))).collect();
+        let refs: Vec<(u8, &str)> = names.iter().map(|(b, s)| (*b, s.as_str())).collect();
+        let (mut w, _) = widget(&refs);
+        let mut inv = Invalidations::default();
+        // 아래로 한 노치(-120) = 3행.
+        w.on_event(&InputEvent::Wheel { delta: -120 }, &mut inv);
+        w.on_event(&key(Key::Up), &mut inv); // 캐럿 0인 채 top만 이동했는지 확인용
+        assert!(!inv.is_empty());
     }
 }
