@@ -135,7 +135,7 @@ M-1 설계 ──► M0 기반 ──► M1 발견 ──► M2 대화 ──►
 
 | ID | 항목 | 우선 | 규모 | 의존 | 상태 |
 |---|---|---|---|---|---|
-| M3-1 | **위젯 세트 신규 구현** — `nexa-gui` 인프라 이식(`DrawCtx`/`Widget`/`event`/`geom`/`theme`/`edit`/`typeahead`) + `WidgetBase` 컴포지션 + 트레이트 기본 메서드 전파([14 §2](14-control-ux-architecture.md)). ⚠️ `ctl` 코드 재사용 안 함 | P0 | 대 | M2-7 | ☐ |
+| M3-1 | **위젯 세트 신규 구현** — `nexa-gui` 인프라 이식(`DrawCtx`/`Widget`/`event`/`geom`/`theme`/`edit`/`typeahead`) + `WidgetBase` 컴포지션 + 트레이트 기본 메서드 전파([14 §2](14-control-ux-architecture.md)). ⚠️ `ctl` 코드 재사용 안 함 | P0 | 대 | M2-7 | 🚧 (08-08 — **슬라이스 1 완료**: `geom`/`event`(휠 누적기·now_ms 주입)/`widget`(Invalidations 병합)/`theme`(토큰+danger)/`draw`(DrawCtx — dir2 전용 어휘 제외) 이식 + **`RasterCtx` 신규**(우리 gfx 위 백엔드 — SDF 커버리지 AA 라운드 사각형·타원·폴리라인·클립 텍스트). 잔여 = `edit`/`typeahead` 이식·WidgetBase·개별 위젯·peer_list Widget 전환) |
 | M3-1b | **OS 동작 어댑터**(`PlatformConventions`) — 수정 키·표준 단축키(`StdAccel`)·스크롤 관성·컨텍스트 메뉴·창 닫기([14 §6](14-control-ux-architecture.md)) | P0 | 중 | M3-1 | ☐ |
 | M3-1c | **macOS 시각 언어 수치표 확정** — 라운드 반경·간격·타이포·상태 6종 시각 규약. 시안 대조([14 §5·§9](14-control-ux-architecture.md)) | P0 | 중 | M3-1 | ☐ |
 | M3-1d | **3단계 이벤트 전파**(캡처→타겟→버블) · 포인터 캡처 · hover 합성 · IME 조합 중 단축키 가로채기 금지([14 §3](14-control-ux-architecture.md)) | P0 | 중 | M3-1 | ☐ |
