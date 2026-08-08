@@ -270,9 +270,20 @@ impl GalleryWidget {
         inv.push(self.bounds);
     }
 
-    /// Choose 컨트롤에 찾기 창 어댑터를 꽂는다(bin이 단일 파일 선택기 주입 · Adapter 패턴).
+    /// Choose 컨트롤에 찾기 창 어댑터를 꽂는다(인라인 오버레이 모드 · Adapter 패턴).
     pub fn set_choose_picker(&mut self, picker: Box<dyn ChoosePicker>) {
         self.ext.set_picker(picker);
+    }
+
+    /// "Choose…"가 눌렸는가(1회성) — 어댑터 미장착 시 호스트가 **별도 모달 창**을 연다.
+    pub fn take_choose_request(&mut self) -> bool {
+        self.ext.take_chose()
+    }
+
+    /// 모달 선택 결과를 Choose 값으로 반영.
+    pub fn set_choose_value(&mut self, v: &str, inv: &mut Invalidations) {
+        self.ext.set_text(v);
+        inv.push(self.bounds);
     }
 
     /// 스크롤바 페이드 틱(호스트가 ~5Hz 호출) — 갤러리 자체 + 내부 트리/그리드 바 모두.

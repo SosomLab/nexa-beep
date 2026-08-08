@@ -661,7 +661,7 @@ mod tests {
             &mut inv,
         );
         assert_eq!(w.caret(), 1, "확장 매치 — bob 유지");
-        // 타임아웃 후 'b' 반복 = cycle: bob → bora → bob.
+        // 타임아웃 후 'b' = 새 접두사(캐럿 다음부터 첫 매치). 반복 키 자동 순환 없음(↑↓ 전용).
         w.on_event(
             &InputEvent::Char {
                 c: 'b',
@@ -669,7 +669,7 @@ mod tests {
             },
             &mut inv,
         );
-        assert_eq!(w.caret(), 2, "다음 매치 bora");
+        assert_eq!(w.caret(), 2, "새 접두사 = 다음 매치 bora");
         w.on_event(
             &InputEvent::Char {
                 c: 'b',
@@ -677,7 +677,7 @@ mod tests {
             },
             &mut inv,
         );
-        assert_eq!(w.caret(), 1, "cycle 복귀 bob");
+        assert_eq!(w.caret(), 2, "'bb' 누적 — 매치 없으면 유지(자동 순환 제거)");
     }
 
     #[test]

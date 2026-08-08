@@ -83,7 +83,7 @@ impl TypeAhead {
     }
 
     /// 문자 입력(확정). 타임아웃이 지났으면 새 접두사로 시작.
-    /// 반복 단일키(`r`,`r`,…)는 누적하지 않고 같은 접두사의 **다음 매치로 cycle**(탐색기 규약).
+    /// **반복 키 자동 순환 없음**(사용자 확정 — 순환은 ↑↓ 방향키 전용). 입력은 항상 누적된다.
     pub fn push(&mut self, c: char, now_ms: u64) -> Query {
         self.preedit.clear(); // 확정 문자 도착 = 조합 종료
         let expired = self.buf.is_empty() || now_ms.saturating_sub(self.last_ms) > self.timeout_ms;
@@ -91,16 +91,9 @@ impl TypeAhead {
         if expired {
             self.buf.clear();
             self.buf.push(c);
-            return Query {
-                prefix: self.buf.clone(),
-                include_caret: false, // 새 접두사 = 캐럿 다음부터
-            };
-        }
-        let single_repeat = self.buf.chars().count() == 1 && self.buf.starts_with(c);
-        if single_repeat {
             Query {
                 prefix: self.buf.clone(),
-                include_caret: false, // cycle = 다음 매치
+                include_caret: false, // 새 접두사 = 캐럿 다음부터
             }
         } else {
             self.buf.push(c);
@@ -192,14 +185,13 @@ mod tests {
     }
 
     #[test]
-    fn single_key_repeat_cycles_instead_of_accumulating() {
+    fn repeated_key_accumulates_no_auto_cycle() {
+        // 순환은 ↑↓ 전용(사용자 확정) — 같은 키 반복도 그대로 누적된다.
         let mut t = TypeAhead::new(1000);
-        t.push('r', 0);
-        let q = t.push('r', 300);
-        assert_eq!(q.prefix, "r");
-        assert!(!q.include_caret, "반복 = 다음 매치로 cycle");
-        // 다른 글자가 오면 누적으로 복귀
-        assert_eq!(t.push('e', 600).prefix, "re");
+        t.push('b', 0);
+        let q = t.push('b', 300);
+        assert_eq!(q.prefix, "bb");
+        assert!(q.include_caret, "누적 = 확장 매치");
     }
 
     #[test]
