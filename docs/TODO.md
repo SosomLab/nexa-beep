@@ -123,7 +123,7 @@ M-1 설계 ──► M0 기반 ──► M1 발견 ──► M2 대화 ──►
 | M2-4 | 1:1 텍스트 송수신 · **논리 시퀀스 · 중복 제거**(발신 경로 = PeerId 집합 일반화, D-21) | P0 | 중 | M2-3 | ✅ (08-08 — `ChatMessage` 봉투(`[ver][sender_device 32B][seq][kind][utf8]` · 골든 테스트) · `Sequencer`(재시작 복원 API) · `DedupIndex`(키=(기기,seq)·창 1024·창 밖 과거=중복 간주 fail-closed) · `fanout`(1:1=그룹=같은 경로·개별 전달 보고 FR-G-4) · **sender_device≠세션 인증 상대 = 거부** · 미지 kind는 Unsupported로 순서 보존. 실물 Noise 종단 통합) |
 | M2-4b | **등급·확인 프로토콜 자리**(N-1~N-4 · [24 §7](24-adr-0010-message-priority-notification.md)) — 메시지 봉투 `importance` 1B(미지 값=`Normal`) · **`ack` 제어 메시지**(`Delivered`/`Acknowledged`) · 기록 레코드 상태·시각 필드 · `ActionKind` 5종 + `stable_code` 대역. **M2-4와 같은 슬라이스** — 나중이면 포맷 변경 | P0 | 소 | M2-4 · D-23확정 | ☐ |
 | M2-5 | `store` — 데이터 경로 결정(포터블/폴백 FR-P-3) · **암호화 대화 기록 저장**([17](17-adr-0005-history-at-rest.md)) · 키 계층(마스터 래핑) · **동기화 폴더 감지 경고** · 크립토 셰레딩 | P0 | 대 | M2-4 · D-18확정 | ☐ |
-| M2-6 | 텍스트 **무해화**(RLO·제어문자 FR-S-13 — `core`/`safe` 경계) · 링크 자동 열기 금지(FR-S-14) | P0 | 소 | M2-4 | ☐ |
+| M2-6 | 텍스트 **무해화**(RLO·제어문자 FR-S-13 — `core`/`safe` 경계) · 링크 자동 열기 금지(FR-S-14) | P0 | 소 | M2-4 | ✅ (08-08 — `safetext`: `sanitize_message`(이름과 달리 **개행·탭 보존**·CRLF 정규화·상한 16,384자 잘림 보고) · `find_links`(http/https 화이트리스트·범위만 보고 — **열기 API 부재가 구조 보증**) |
 | M2-7 | UI 신뢰 배지 — **미검증 / 검증됨 / 대조 완료** · 재연결·경로 변경 시 스레드 연속 표시 | P0 | 중 | M2-2 · M1-6 | ☐ (근거는 준비됨 — `TrustDecision`·`TrustLevel`·`name_conflict`) |
 
 ---
