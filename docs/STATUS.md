@@ -3,7 +3,13 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
-> **갱신: 2026-08-08 27차 (KST)** — **M1-4 슬라이스 2·3 — LocalDirect 실물 종단 + GUI 실물 발견**(`feat/m1-localdirect` → main 병합):
+> **갱신: 2026-08-08 28차 (KST)** — **M2-7 비동기 수신 펌프 — 실시간 양방향 대화 완성**(`feat/m2-recvpump` → main 병합):
+> ① **세션 액터 모델** — snow `TransportState`가 read/write에 `&mut` 요구(한 세션=한 스레드)라, 세션을 전용 스레드로 옮기고 **송신은 채널·수신은 winit `EventLoopProxy`** 로 GUI를 깨운다. `set_recv_timeout` 전 계층 위임 신설(Link→Session→Noise/Plain/Trusted/Mux · TcpLink 실구현) — 액터가 recv 폴 ↔ 송신 교대.
+> ② **인바운드→GUI 대화 자동 생성** — 수락 스레드는 핸드셰이크만(블로킹) → `AppEvent::Inbound`로 GUI 전달 → 메인 스레드가 TOFU 판정→대화·창 생성(Separate=새 창·Single=목록이면 열고 대화 중이면 알림). **두 live GUI가 서로 발견·연결해 양방향 실시간 대화** 성립. 수신도 `DedupIndex` 통과.
+> ③ ★ **M2 게이트 완성** — "고르면 암호화 대화"가 **실물 네트워크 + 실시간 양방향**으로 닫힘.
+> ④ **테스트 경계 실측** — 맥 GUI ↔ docker-linux는 멀티캐스트 상호 발견 불가(Docker Desktop = 내부 VM). Linux↔Linux는 컨테이너 2개로 완결 · 맥↔진짜 리눅스는 실기/브리지 VM/DR-19(미구현) 필요. **157테스트 green**. [journal/2026-08-08.md](journal/2026-08-08.md).
+>
+> **직전(08-08 27차)** — **M1-4 슬라이스 2·3 — LocalDirect 실물 종단 + GUI 실물 발견**(`feat/m1-localdirect` → main 병합):
 > ① **`LocalDirect` 실물 전송** — `TcpLink`(길이 접두 프레이밍·폴 타임아웃 · `TimedOut` = "끊김"과 "지금 없음" 분리) + `UdpDiscovery`(발견)를 `Transport` 트레이트로 묶음. **InMemory fake가 서 있던 자리에 그대로**([09] 회수 · 상위 코드 불변).
 > ② ★ **실물 종단 왕복 실증** — `--live-echo` 헤드리스로 **발견→TCP→Noise 핸드셰이크→암호화 대화 왕복**이 맥 2프로세스 + **Docker 컨테이너 2노드**(c3674cc4↔9db62201 양방향) 동작. InMemory 데모가 아니라 **진짜 소켓·진짜 암호화**.
 > ③ **GUI 실물 발견 배선** — 창 `transport`를 `Box<dyn Transport>`로(조립 지점 한 줄 교체). **`--window --live`** = 같은 LAN·컨테이너 실제 상대가 목록에 뜨고 클릭 시 진짜 세션. 인바운드 수락 펌프·상태바 모드 표시. ⚠️ **수신 실시간 GUI 반영은 M2-7**(비동기 수신 펌프 — 지금은 개시자 동기 왕복만 표시).
