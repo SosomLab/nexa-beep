@@ -3,7 +3,17 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
-> **갱신: 2026-08-08 8차 (KST)** — **M0 기반 완료 + SP-1 예산 검증 + P2 채택 — main 병합·push 완료**(`origin/main` 동기화):
+> **갱신: 2026-08-08 9차 (KST)** — **M1-1 착수 — 전송 경계 + `InMemoryTransport` fake**(`feat/m1-transport` → main 병합·push):
+> ① **ADR-0003 전송 추상화 ✅ Accepted**(구현으로 비준) — `nbeep-net`에 `Transport`·`Link`·`PeerHint`·`DiscoveryEvent` 경계.
+> ② **`InMemoryTransport` fake**(testkit·릴리스 미포함) — 소켓 없이 노드들이 **발견→연결→양방향 송수신→이탈** 검증(5테스트).
+> **M2 세션·M5 그룹이 이 fake 위에서 네트워크 없이 테스트**된다(요청하신 단위별 개발+테스트 더블의 실체).
+> ③ **설계 정정** — `PeerHint`는 `Locator`를 담지 않는다(경로는 전송 내부만·규칙 1을 `pub(crate)` 타입으로 강제). 구현이 ADR 문서 모호함을 잡음.
+> ④ core **`DisplayName`** — 이름 무해화(RLO·제어문자·0폭 제거 · FR-S-13 · parse-don't-validate).
+> **외부 crate 0으로 구현**(std mpsc만·async 런타임 유보) · **44테스트 green**·clippy/rustdoc/fmt clean·**릴리스 0.40MB 불변**.
+> **남은 것** = M1-2(L1 링크 상태 구독)·M1-3(와이어 포맷·소켓 옵션)부터 **실물 OS 네트워크 API**(실기 검증 병합 조건). M2 세션은 fake 위에서 지금 진행 가능.
+> [journal/2026-08-08.md](journal/2026-08-08.md).
+>
+> **직전(08-08 8차)** — **M0 기반 완료 + SP-1 예산 검증 + P2 채택 — main 병합·push 완료**(`origin/main` 동기화):
 > ① **M0 기반 골격 완성**(`feat/m0-scaffold` 병합) — 9크레이트 워크스페이스·의존성 역전·`ActionKind` 단일 통로·인터셉터 파이프라인·포트 4종·안정 코드·`redact` 마스킹·CI 4잡·빌드/테스트 SSOT.
 > ② **M0-2 SP-1 예산 검증**(`spike/sp1-budget` 병합) — **R-8 크기 차원 결정적 해소**: 빈 창 **0.40MB**(NFR-B-3 10MB의 4%)·**라이선스 퍼미시브 100%**.
 > ③ **ADR-0001 P2 채택 확정**(사용자) — **winit 0.30 + softbuffer 0.4**([10 §3 원장](10-decision-record.md)). 의존성 Win15/mac32/Linux75(DR-8 첫 예외 — 4타깃 창·IME·Wayland/X11 직접 구현 R-3 회피).

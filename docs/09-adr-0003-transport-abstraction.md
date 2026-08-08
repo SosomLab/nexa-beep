@@ -1,6 +1,7 @@
 # 09 · ADR-0003 — 전송 계층 추상화 (로컬 직접 / 릴레이 2모드 경계)
 
-> **상태: 📐 Proposed (사용자 확정 대기)** · 제안 2026-08-08 · 결정자 Sangyong Bae
+> **상태: ✅ Accepted** · 제안·확정 2026-08-08 (사용자 "다음 진행" 지시로 확정) · 결정자 Sangyong Bae
+> M1-1 구현 반영: `PeerHint`는 `Locator`를 담지 않는다(경로는 전송 내부에만 — 규칙 1을 타입으로 강제). 발견은 `Receiver<DiscoveryEvent>` 스트림.
 > [DR-8](10-decision-record.md)의 "2모드 전제 설계"를 **구체적인 경계선**으로 옮긴 문서.
 > 관련: [08 ADR-0002](08-adr-0002-discovery-transport.md)(프로토콜) · [06](06-network-stack.md)(L1~L4) · [05](05-requirements.md) FR-R-1
 

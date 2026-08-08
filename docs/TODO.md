@@ -56,7 +56,7 @@ M-1 설계 ──► M0 기반 ──► M1 발견 ──► M2 대화 ──►
 | D-5 | [05 요구사항](05-requirements.md) — FR/NFR(**예산 수치 확정**)/제약/리스크 | P0 | 중 | D-4 | ✅ (08-08 — FR·NFR-B 예산 게이트·제약 C-1~6·리스크 R-1~9) |
 | D-6 | **ADR-0001 스택** → [07](07-adr-0001-stack.md) | P0 | 대 | D-5 | ✅ **Accepted** (Rust·자체 CPU 래스터라이저·P2·Wayland+X11·시스템폰트) |
 | D-7 | **ADR-0002 디스커버리·전송·암호** → [08](08-adr-0002-discovery-transport.md) | P0 | 대 | D-6 | ✅ **Accepted** (자체 UDP·TCP·Noise_XX·TOFU·발견은 미검증 힌트) |
-| D-9 | **ADR-0003 전송 추상화** → [09](09-adr-0003-transport-abstraction.md) | P0 | 중 | D-7 | 🚧 **Proposed** |
+| D-9 | **ADR-0003 전송 추상화** → [09](09-adr-0003-transport-abstraction.md) | P0 | 중 | D-7 | ✅ **Accepted** (08-08 · M1-1에서 구현) |
 | D-10 | [01 아키텍처](01-architecture.md) · [02 로드맵](02-roadmap.md) | P0 | 중 | D-9 | ✅ (08-08 — 9크레이트·단방향 의존·스레딩·데이터흐름·M0~M5) |
 | D-11 | **차용 자산 실측 평가** → [12](12-asset-reuse.md) | P0 | 중 | D-6 | ✅ (08-08 — **`ctl` 재사용 불가**, 실제 자산 `nexa-gui` 1,187 LOC. R-3·M3 정정) |
 | D-12 | **ADR-0004 수신 무해화** → [11](11-adr-0004-quarantine.md) | P0 | 대 | D-6 | 🚧 **Proposed** |
@@ -93,7 +93,7 @@ M-1 설계 ──► M0 기반 ──► M1 발견 ──► M2 대화 ──►
 
 | ID | 항목 | 우선 | 규모 | 의존 | 상태 |
 |---|---|---|---|---|---|
-| M1-1 | `net` 골격 — `Transport` 경계 · **`InMemoryTransport`**(테스트용·[09](09-adr-0003-transport-abstraction.md)) | P0 | 중 | M0-1b · D-9확정 | ☐ |
+| M1-1 | `net` 골격 — `Transport` 경계 · **`InMemoryTransport`**(테스트용·[09](09-adr-0003-transport-abstraction.md)) | P0 | 중 | M0-1b · D-9확정 | ✅ (08-08 — Transport/Link/PeerHint/DiscoveryEvent · InMemoryTransport fake(발견·연결·이탈) · core `DisplayName`(RLO 무해화). net 5 + name 6 테스트 green) |
 | M1-2 | **L1 링크 상태 구독 3구현**(D-13) — Win `NotifyIpInterfaceChange`/mac `PF_ROUTE`/Linux netlink + 디바운스([06 §2](06-network-stack.md)) | P0 | 중 | M1-1 | ☐ |
 | M1-3 | 와이어 포맷 확정([08 §2](08-adr-0002-discovery-transport.md)) · 인터페이스별 바인딩(`IP_MULTICAST_IF`/`IP_PKTINFO`) · **소켓 옵션 크로스플랫폼 검증표**(D-14 · [06 §5-2](06-network-stack.md)) | P0 | 중 | M1-1 | ☐ |
 | M1-4 | 발견 **S1~S3**(IPv6/IPv4 멀티캐스트 · 브로드캐스트) **동시 시도** · 자기 패킷 키 필터 | P0 | 중 | M1-3 | ☐ |

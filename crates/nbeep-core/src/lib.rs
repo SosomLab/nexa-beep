@@ -14,6 +14,7 @@
 
 pub mod action;
 pub mod identity;
+pub mod name;
 pub mod pipeline;
 pub mod ports;
 pub mod redact;
@@ -24,6 +25,7 @@ pub mod testkit;
 // ── 편의 재수출(공개 표면 설계 — 내부 모듈 경로를 그대로 노출하지 않는다) ──
 pub use action::{ActionKind, FailCode, Outcome, RejectCode, RiskLevel, ScanOutcome};
 pub use identity::{DeviceId, PeerId, Recipients, TrustLevel, UserId};
+pub use name::{DisplayName, NameError};
 pub use pipeline::{ActionCtx, ActionId, Interceptor, Pipeline, Reject};
 pub use ports::{Actor, Clock, Meter, MeterEvent, MonoInstant, Quantity, Rng, Tracer, WallTime};
 
