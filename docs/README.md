@@ -41,6 +41,7 @@
 | [08 ADR-0002 디스커버리·전송·암호](08-adr-0002-discovery-transport.md) | ✅ **Accepted** — 자체 컴팩트 UDP · TCP 세션 · **Noise_XX + TOFU** · 발견은 "미검증 힌트" |
 | [09 ADR-0003 전송 추상화](09-adr-0003-transport-abstraction.md) | 📐 **Proposed** — 4계층 경계 · `PeerId`/`Locator`/`Link`/`Session` · 인메모리 전송으로 네트워크 없는 테스트 |
 | [11 ADR-0004 수신 무해화](11-adr-0004-quarantine.md) | 📐 **Proposed** — `.beepq` 레이아웃 · 위험 등급 4단계 확장자표 · 상태 기계(fail-closed) · MotW/quarantine API |
+| [19 ADR-0006 수동 엔드포인트 등록](19-adr-0006-manual-endpoint.md) | 📐 **Proposed** — 직접 IP/DDNS로 노드 추가 · **원격 신뢰 등급** · 인바운드 요청 대기 · 릴레이와의 경계 |
 | [17 ADR-0005 기록 저장 암호화](17-adr-0005-history-at-rest.md) | 📐 **Proposed** — 기기 키 파생 + 승격 옵션 · **블라인드 인덱스 검색** · **크립토 셰레딩** · 위협 모델 H-1~H-8 |
 | [12 차용 자산 실측 평가](12-asset-reuse.md) | ★ **`ctl` 재사용 불가 판정**(HWND 모델) · 실제 자산은 `nexa-gui` 인프라 1,187 LOC · R-3 재평가 |
 | [13 코드 설계 표준](13-code-design-standards.md) | ★★ 모듈화 · 포트&어댑터 · **`ActionKind` 단일 통로** · **인터셉터** · **사용 계측 레저** · 코드 리뷰 체크리스트 |
@@ -64,6 +65,7 @@
 | **13** | 코드 설계 표준 | ✅ |
 | **14** | 컨트롤·UX 아키텍처 | ✅ |
 | **17** | **ADR-0005 기록 저장 암호화** | 📐 Proposed |
+| **19** | **ADR-0006 수동 엔드포인트 등록** | 📐 Proposed |
 | **15 · 16 · 18** | 개발 방법론 · 문서/git 규약 · 빌드&테스트 | ✅ |
 
 ## ③ 진행 경과 · 할 일
