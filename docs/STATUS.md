@@ -3,6 +3,15 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
+> **갱신: 2026-08-08 (종료 경로 발견 차) (KST)** — 🔴 **R-16 신설 — 정상 종료 경로가 없어 FR-D-8의 절반이 비어 있다**(사용자 제보에서 출발):
+> ① **증상** — `docker run --rm -p 47200:47200 … /nexa-beep --serve 47200` 후 **Ctrl+C를 눌러도 컨테이너가 살아 있었다**.
+> ② **원인 = PID 1 시그널 규칙** — 리눅스 커널은 **PID 1에게 시그널 기본 동작을 적용하지 않는다.** 핸들러가 없는 프로세스가 PID 1이면 `SIGINT`·`SIGTERM`이 **그대로 무시**된다. `docker run`은 SIGINT를 정확히 전달했고, [`serve_manual`](../crates/nexa-beep/src/main.rs)에 핸들러가 없어 무시된 것. `--rm`은 컨테이너가 종료돼야 발동하므로 컨테이너도 남았다.
+> ③ **실측으로 확정** — `docker stop` **10.26초**(SIGTERM 무시 → 10초 타임아웃 → SIGKILL) vs **`--init` 사용 시 0초**(tini가 중계 → 자식은 PID 1이 아니라 정상 종료). 47201·47202로 재현 검증.
+> ④ ★ **진짜 문제는 Docker가 아니다** — **앱에 종료 경로가 없다는 사실**이고, 요구 셋이 여기 걸려 있다: **FR-D-8**(이탈 = GOODBYE + 타임아웃 **이중** 판정인데 **GOODBYE를 보낼 지점이 없어 절반이 구조적으로 빈다**) · **NFR-B-6**(종료 경로 테스트가 병합 조건인데 검증 대상 자체가 없다) · **FR-S-22**(zeroize 훅 없음).
+> ⑤ ⚠️ **핸들러만으로는 부족** — `serve_manual`은 `listener.incoming()`에 블로킹돼 있어 플래그를 세워도 다음 연결까지 안 깨어난다. **깨우기 수단**(accept 타임아웃·셧다운 소켓)이 함께 필요하다.
+> ⑥ **등록** — **FR-P-7**(정상 종료) · **R-16**(🔴 미해결) · **M3-13** 태스크 · [01 §6-1](01-architecture.md) 종료 경로 절 + 다이어그램 · [18 §2-1](18-build-and-test.md) **컨테이너 실행은 `--init` 필수** 규약(우회이지 해결이 아님을 명시).
+> ⑦ 코드는 **건드리지 않았다** — 동시 진행 세션이 `main.rs`를 수정 중. [journal/2026-08-08.md](journal/2026-08-08.md).
+>
 > **갱신: 2026-08-08 29차 (KST)** — **DR-19 수동 엔드포인트 — 맥↔docker-linux IP 대화 실증**(`feat/m1-manual` → main 병합):
 > ① 앞서 실측한 발견 경계(맥 ↔ Docker Desktop 멀티캐스트 불가)를 **IP 직접 연결로 우회**. `Transport::add_endpoint`(트레이트 기본 미지원 + LocalDirect 구현 — host:port·DDNS 해석 → TCP · **신원은 Noise 핸드셰이크가 확정** — DR-8 주소=힌트). **새 Transport 안 만듦**(ADR-0006 §3 — 연결 후 경로 동일).
 > ② bin `--serve <port>`/`--connect <host:port>` 헤드리스 모드. **실증**: docker-linux `--serve 47200`(`-p` 매핑) ↔ 맥 `--connect` → 지문 확정·인사·에코 왕복. **맥 arm64 ↔ linux amd64 암호화 대화가 IP로 성립**.
