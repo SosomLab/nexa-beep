@@ -197,21 +197,49 @@ impl Widget for ChatViewWidget {
         );
         ctx.select_font(FontSlot::Message, false);
         let text = self.input.text();
-        let (shown, fg) = if text.is_empty() {
-            (
-                "메시지 입력… (Enter 전송 · Esc 목록)".to_string(),
+        let tx = input.x + self.s(10);
+        let ty = input.y + self.s(7);
+        if text.is_empty() {
+            ctx.text(
+                tx,
+                ty,
+                input,
+                "메시지 입력… (Enter 전송 · Esc 목록)",
                 theme.text_dim,
-            )
+            );
         } else {
-            // 캐럿 위치에 '▏' 삽입(임시 커서 — 폰트 실측 커서는 M3-3).
-            let caret = self.input.caret();
             let chars: Vec<char> = text.chars().collect();
-            let mut with_caret: String = chars[..caret].iter().collect();
-            with_caret.push('▏');
-            with_caret.extend(&chars[caret..]);
-            (with_caret, theme.text)
-        };
-        ctx.text(input.x + self.s(10), input.y + self.s(7), input, &shown, fg);
+            let upto = |ctx: &mut dyn DrawCtx, n: usize| -> i32 {
+                let prefix: String = chars[..n].iter().collect();
+                ctx.text_width(&prefix)
+            };
+            // 선택 하이라이트(텍스트 뒤에 먼저).
+            if let Some((a, b)) = self.input.selection() {
+                let x0 = tx + upto(ctx, a);
+                let x1 = tx + upto(ctx, b);
+                ctx.fill_rect(
+                    Rect::new(
+                        x0,
+                        input.y + self.s(4),
+                        (x1 - x0).max(1),
+                        input.h - self.s(8),
+                    ),
+                    theme.sel_bg,
+                );
+            }
+            ctx.text(tx, ty, input, &text, theme.text);
+            // 폰트 실측 픽셀 커서 — 캐럿까지 폭만큼 오른쪽에 세로선.
+            let cx = tx + upto(ctx, self.input.caret());
+            ctx.fill_rect(
+                Rect::new(
+                    cx,
+                    input.y + self.s(6),
+                    self.s(2).max(1),
+                    input.h - self.s(12),
+                ),
+                theme.accent,
+            );
+        }
     }
 }
 

@@ -7,6 +7,8 @@
 
 ## 2026-08-08
 
+- **입력창 폰트 실측 커서 + 선택 하이라이트**(feat/m3-edit): 임시 `▏` 문자 삽입(레이아웃 왜곡)을 폐기하고 **`DrawCtx::text_width`로 캐럿까지 폭을 실측**해 픽셀 세로선(accent)으로 커서를 긋는다. 선택 범위는 [a..b] 폭을 재 배경 사각형(sel_bg)으로 텍스트 뒤에 칠한다. 이제 대화 입력이 진짜 텍스트 필드처럼 보인다(캐럿·선택 시각 정확). GUI 스모크 통과. 168테스트 green.
+
 - **텍스트 편집 모델(`edit`) 이식 + 대화 입력창 배선**(feat/m3-edit): `nexa-gui/edit.rs`의 **순수 편집 로직**을 `nbeep-ui::edit`로 이식 — `EditState`(char 단위 버퍼·캐럿 `0..=len`·선택 anchor↔caret) · `insert`/`insert_str`(IME 확정·붙여넣기)/`backspace`/`cut`/`set_text` · `key`(Left/Right/Home/End/SelectAll/DeleteForward, 비Shift 이동 시 선택 가장자리 접기). **char 단위라 한글·이모지 경계 자동 보존**(UTF-8 바이트 인덱싱 함정 회피). 레이아웃·클릭 히트테스트는 뺌(위젯이 폰트 실측 — M3-3). `ChatViewWidget` 입력을 임시 append(캐럿 이동 불가)에서 `EditState`로 교체 — **캐럿 이동·선택·중간 삽입·SelectAll**이 동작, 캐럿 위치에 임시 커서(▏) 표시. 9(edit)+1(위젯 캐럿) 테스트. 168테스트 green. 상세 [journal/2026-08-08.md](journal/2026-08-08.md).
 
 - **S1 IPv6 멀티캐스트 발견 — best-effort 병행**(feat/m1-ipv6): `UdpDiscovery`가 IPv6 소켓 쌍(전용 recv/send·`IPV6_V6ONLY`·`ff02::beb` 링크로컬 그룹 기본 인터페이스 가입)을 추가해 S1+S2+S3를 **동시 발신**(`send_all`). IPv6 셋업 실패(미지원 환경)는 `.ok()`로 **조용히 IPv4만** — 회귀 없음. 이로써 M1-4의 "S1~S3 동시 시도"가 코드로 완성. 로컬 프로브 2개 발견 정상(IPv4 경로 우선 도달 — 둘 다 발신). ⚠️ IPv6 단독 전달·링크로컬 인터페이스 정밀 선택 검증은 D-8b(S3와 같은 한계). 159테스트 green. 상세 [journal/2026-08-08.md](journal/2026-08-08.md).
