@@ -6,6 +6,15 @@
 // 테스트 코드는 unwrap 허용(docs/13 §9 — 금지는 프로덕션 경로 한정).
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
+/// 앱 브랜딩 아이콘 — raw RGBA(투명 배경)로 임베드. 창 아이콘·이미지 데모 공용.
+/// 원본은 `packaging/branding/icon.svg` → `crates/nbeep-ui/assets/brand-64.rgba`.
+pub mod brand {
+    /// 64×64 RGBA(straight alpha) 바이트(= 64*64*4).
+    pub const ICON_RGBA: &[u8] = include_bytes!("../assets/brand-64.rgba");
+    /// 변 크기(px).
+    pub const ICON_SIZE: u32 = 64;
+}
+
 pub mod chat_view;
 pub mod controls;
 pub mod draw;

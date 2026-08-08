@@ -783,6 +783,8 @@ mod app_window {
         settings_view: Option<SettingsWidget>,
         /// 컨트롤 갤러리 뷰(임시 검수) — 열려 있을 때만 Some.
         gallery_view: Option<GalleryWidget>,
+        /// 앱 창 아이콘(브랜딩 · 전 창 공통). 지원 안 되면 None.
+        icon: Option<winit::window::Icon>,
         /// OS 주 수식키(⌘/Ctrl) 눌림 상태 — `Cmd/Ctrl+,` 판정.
         primary_down: bool,
         /// 세션 액터가 GUI를 깨우는 통로(M2-7).
@@ -991,7 +993,9 @@ mod app_window {
                 return;
             }
             let title = format!("Nexa Beep — {}", self.peer_title(peer));
-            let attrs = Window::default_attributes().with_title(title);
+            let attrs = Window::default_attributes()
+                .with_title(title)
+                .with_window_icon(self.icon.clone());
             let window = Rc::new(el.create_window(attrs).unwrap());
             window.set_ime_allowed(true);
             let scale = window.scale_factor() as f32;
@@ -1043,10 +1047,12 @@ mod app_window {
                 }
                 return;
             }
-            let attrs = Window::default_attributes().with_title(format!(
-                "Nexa Beep — {}",
-                nbeep_core::t(nbeep_core::Msg::SettingsTitle)
-            ));
+            let attrs = Window::default_attributes()
+                .with_title(format!(
+                    "Nexa Beep — {}",
+                    nbeep_core::t(nbeep_core::Msg::SettingsTitle)
+                ))
+                .with_window_icon(self.icon.clone());
             let window = Rc::new(el.create_window(attrs).unwrap());
             window.set_ime_allowed(true);
             let scale = window.scale_factor() as f32;
@@ -1076,7 +1082,9 @@ mod app_window {
                 }
                 return;
             }
-            let attrs = Window::default_attributes().with_title("Nexa Beep — 컨트롤 갤러리 (임시)");
+            let attrs = Window::default_attributes()
+                .with_title("Nexa Beep — 컨트롤 갤러리 (임시)")
+                .with_window_icon(self.icon.clone());
             let window = Rc::new(el.create_window(attrs).unwrap());
             window.set_ime_allowed(true);
             let scale = window.scale_factor() as f32;
@@ -1464,7 +1472,9 @@ mod app_window {
             if self.main_id.is_some() {
                 return;
             }
-            let attrs = Window::default_attributes().with_title("Nexa Beep");
+            let attrs = Window::default_attributes()
+                .with_title("Nexa Beep")
+                .with_window_icon(self.icon.clone());
             let window = Rc::new(el.create_window(attrs).unwrap());
             window.set_ime_allowed(true); // 한글 타입어헤드 — IME 커밋 문자
             let scale = window.scale_factor() as f32;
@@ -1916,6 +1926,12 @@ mod app_window {
             settings,
             settings_view: None,
             gallery_view: None,
+            icon: winit::window::Icon::from_rgba(
+                nbeep_ui::brand::ICON_RGBA.to_vec(),
+                nbeep_ui::brand::ICON_SIZE,
+                nbeep_ui::brand::ICON_SIZE,
+            )
+            .ok(),
             primary_down: false,
             proxy,
             adding: None,
