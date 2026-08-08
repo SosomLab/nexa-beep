@@ -62,7 +62,9 @@ pub struct GalleryWidget {
     combo: Combo,
     ext: Choose,
     tree: TreeView,
+    tree_img: TreeView,
     grid: TreeGrid,
+    grid_img: TreeGrid,
     btn_text: Button,
     btn_icon: Button,
     btn_img: Button,
@@ -118,15 +120,50 @@ impl GalleryWidget {
         combo.set_help("New tab opens in this location by default.");
         combo.set_show_help(true);
 
-        // 트리/그리드 외곽 테두리 두께 1(반투명 · 사용자 확정).
-        let border = BorderSpec::new(1, Color::from_rgb(0x8A, 0x91, 0x9C), 0.6);
+        // 행 앞 이미지가 들어간 트리/그리드 모델(우측 버전용).
+        let ti = |rgb| Rc::new(IconImage::swatch(16, rgb));
+        let tree_img_model = TreeModel::new(vec![
+            TreeNode::branch(
+                "Path Finder",
+                vec![
+                    TreeNode::leaf("About Path Finder").with_image(ti((0x3D, 0x8B, 0xFF))),
+                    TreeNode::branch(
+                        "Trash",
+                        vec![TreeNode::leaf("Empty Trash").with_image(ti((0xE5, 0x53, 0x4B)))],
+                    )
+                    .with_image(ti((0x8A, 0x91, 0x9C))),
+                ],
+            )
+            .with_image(ti((0x3D, 0x8B, 0xFF))),
+            TreeNode::leaf("Show Desktop").with_image(ti((0x2E, 0xA0, 0x43))),
+        ]);
+        let grid_img_model = TreeModel::new(vec![TreeNode::branch(
+            "Path Finder",
+            vec![
+                TreeNode::leaf("About Path Finder")
+                    .with_cells(vec![String::new()])
+                    .with_image(ti((0x3D, 0x8B, 0xFF))),
+                TreeNode::leaf("Settings…")
+                    .with_cells(vec!["⌘,".into()])
+                    .with_image(ti((0x8A, 0x91, 0x9C))),
+                TreeNode::leaf("Empty Trash")
+                    .with_cells(vec!["⇧⌘⌫".into()])
+                    .with_image(ti((0xE5, 0x53, 0x4B))),
+            ],
+        )
+        .with_image(ti((0x3D, 0x8B, 0xFF)))]);
+
+        // 트리/그리드 외곽 테두리 두께 0.5px(반투명 · 사용자 확정).
+        let border = BorderSpec::new(0.5, Color::from_rgb(0x8A, 0x91, 0x9C), 0.6);
+        let cols = || vec![GridColumn::new("Menu", 220), GridColumn::new("Command", 90)];
         let mut tree = TreeView::new(tree_model);
         tree.set_border(border);
-        let mut grid = TreeGrid::new(
-            grid_model,
-            vec![GridColumn::new("Menu", 220), GridColumn::new("Command", 90)],
-        );
+        let mut tree_img = TreeView::new(tree_img_model);
+        tree_img.set_border(border);
+        let mut grid = TreeGrid::new(grid_model, cols());
         grid.set_border(border);
+        let mut grid_img = TreeGrid::new(grid_img_model, cols());
+        grid_img.set_border(border);
 
         Self {
             bounds: Rect::default(),
@@ -151,7 +188,9 @@ impl GalleryWidget {
             combo,
             ext: Choose::new(ext_items, 0, "Choose…").with_choose_icon("⌕"),
             tree,
+            tree_img,
             grid,
+            grid_img,
             btn_text: Button::new("Save").with_image(img((0x3D, 0x8B, 0xFF))),
             btn_icon: Button::icon(img((0x2E, 0xA0, 0x43))),
             btn_img: Button::icon(img((0x5B, 0x6C, 0xFF))).image_fill(ImageFit::Cover),
@@ -174,7 +213,9 @@ impl GalleryWidget {
         self.combo.set_scale(s);
         self.ext.set_scale(s);
         self.tree.set_scale(s);
+        self.tree_img.set_scale(s);
         self.grid.set_scale(s);
+        self.grid_img.set_scale(s);
         self.relayout(inv);
     }
 
@@ -197,14 +238,27 @@ impl GalleryWidget {
         y = place(&mut self.textbox, x, y, w, ctrl_h, label_h, gap, inv);
         y = place(&mut self.combo, x, y, w, ctrl_h, label_h, gap, inv);
         y = place(&mut self.ext, x, y, w, ctrl_h, label_h, gap, inv);
-        y = place(&mut self.tree, x, y, w, tree_h, label_h, gap, inv);
-        y = place(&mut self.grid, x, y, w, grid_h, label_h, gap, inv);
+        // 트리 쌍(좌: 기본 · 우: 행 이미지) — 같은 y에 나란히.
+        let tcolw = self.s(210);
+        let ty = y + label_h;
+        self.tree.set_bounds(Rect::new(x, ty, tcolw, tree_h), inv);
+        self.tree_img
+            .set_bounds(Rect::new(x + tcolw + gap, ty, tcolw, tree_h), inv);
+        y = ty + tree_h + gap;
+        // 그리드 쌍(좌: 기본 · 우: 행 이미지).
+        let gcolw = self.s(320);
+        let gy = y + label_h;
+        self.grid.set_bounds(Rect::new(x, gy, gcolw, grid_h), inv);
+        self.grid_img
+            .set_bounds(Rect::new(x + gcolw + gap, gy, gcolw, grid_h), inv);
+        y = gy + grid_h + gap;
         y = place(&mut self.btn_text, x, y, btn_tw, ctrl_h, label_h, gap, inv);
         y = place(&mut self.btn_icon, x, y, btn_iw, ctrl_h, label_h, gap, inv);
         y = place(&mut self.btn_img, x, y, btn_imw, btn_imh, label_h, gap, inv);
-        // 콘텐츠 총 크기(스크롤 클램프 근거) — 오프셋을 되돌려 계산.
+        // 콘텐츠 총 크기 — 가장 넓은 행(트리·그리드 쌍) 기준.
+        let widest = w.max(tcolw * 2 + gap).max(gcolw * 2 + gap);
         self.content_h = (y - top) + pad;
-        self.content_w = w + pad * 2;
+        self.content_w = widest + pad * 2;
         inv.push(self.bounds);
     }
 
@@ -230,7 +284,7 @@ impl GalleryWidget {
         self.scroll_x = self.scroll_x.clamp(0, max_x);
     }
 
-    fn labels() -> [&'static str; 12] {
+    fn labels() -> [&'static str; 14] {
         [
             "Checkbox — 라벨 오른쪽 (+ 도움말 ?)",
             "Checkbox — 라벨 왼쪽",
@@ -240,7 +294,9 @@ impl GalleryWidget {
             "Combo — 일반 (∨)",
             "Choose — 확장 (⇕ · Choose…)",
             "TreeView — 계층",
+            "TreeView — 행 이미지",
             "TreeGrid — 그리드 + 트리",
+            "TreeGrid — 행 이미지",
             "Button — 이미지 + 텍스트",
             "Button — 이미지만",
             "Button — 이미지 버튼(Cover)",
@@ -307,7 +363,11 @@ impl Widget for GalleryWidget {
             self.combo.set_focused(self.combo.bounds().contains(p));
             self.ext.set_focused(self.ext.bounds().contains(p));
             self.tree.set_focused(self.tree.bounds().contains(p));
+            self.tree_img
+                .set_focused(self.tree_img.bounds().contains(p));
             self.grid.set_focused(self.grid.bounds().contains(p));
+            self.grid_img
+                .set_focused(self.grid_img.bounds().contains(p));
             self.btn_text
                 .set_focused(self.btn_text.bounds().contains(p));
             self.btn_icon
@@ -323,7 +383,9 @@ impl Widget for GalleryWidget {
         self.combo.on_event(ev, inv);
         self.ext.on_event(ev, inv);
         self.tree.on_event(ev, inv);
+        self.tree_img.on_event(ev, inv);
         self.grid.on_event(ev, inv);
+        self.grid_img.on_event(ev, inv);
         self.btn_text.on_event(ev, inv);
         self.btn_icon.on_event(ev, inv);
         self.btn_img.on_event(ev, inv);
@@ -332,7 +394,7 @@ impl Widget for GalleryWidget {
     fn paint(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
         ctx.fill_rect(self.bounds, theme.panel_bg);
         let labels = Self::labels();
-        let widgets: [&dyn Widget; 12] = [
+        let widgets: [&dyn Widget; 14] = [
             &self.cb_right,
             &self.cb_left,
             &self.cb_only,
@@ -341,21 +403,18 @@ impl Widget for GalleryWidget {
             &self.combo,
             &self.ext,
             &self.tree,
+            &self.tree_img,
             &self.grid,
+            &self.grid_img,
             &self.btn_text,
             &self.btn_icon,
             &self.btn_img,
         ];
-        // 섹션 라벨(각 컨트롤 위).
+        // 섹션 라벨(각 컨트롤 위 — 컨트롤의 x에 맞춰 그린다: 좌·우 나란한 트리 쌍 라벨 분리).
         ctx.select_font(FontSlot::Status, false);
         for (label, w) in labels.iter().zip(widgets.iter()) {
             let b = w.bounds();
-            let lr = Rect::new(
-                self.bounds.x + self.s(PAD),
-                b.y - self.s(LABEL_H),
-                self.bounds.w,
-                self.s(LABEL_H),
-            );
+            let lr = Rect::new(b.x, b.y - self.s(LABEL_H), self.bounds.w, self.s(LABEL_H));
             ctx.text(lr.x, lr.y + self.s(2), lr, label, theme.text_dim);
         }
         for w in widgets {

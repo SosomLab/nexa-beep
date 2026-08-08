@@ -469,10 +469,10 @@ impl Widget for TreeView {
 
 /// 외곽 테두리 그리기(두께 0이면 생략) — 트리/그리드 공용.
 fn draw_border(ctx: &mut dyn DrawCtx, b: Rect, border: BorderSpec, scale: f32) {
-    if border.width <= 0 {
+    if border.width <= 0.0 {
         return;
     }
-    let w = (border.width as f32 * scale).max(1.0);
+    let w = (border.width * scale).max(0.5); // 소수 두께 허용(0.5px 얇은 선)
     ctx.stroke_round_rect_alpha(b, 0, border.color, w, border.alpha);
 }
 

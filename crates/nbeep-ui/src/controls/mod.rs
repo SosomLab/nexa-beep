@@ -33,11 +33,11 @@ use crate::draw::{DrawCtx, FontSlot};
 use crate::geom::{Point, Rect};
 use crate::theme::{Color, Theme};
 
-/// 외곽 테두리 설정 — 두께(논리 px)·색·투명도(0..=1). 두께 0 = 테두리 없음(기본).
+/// 외곽 테두리 설정 — 두께(논리 px · 소수 가능 예: 0.5)·색·투명도(0..=1). 두께 ≤0 = 없음(기본).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BorderSpec {
-    /// 두께(논리 px). 0이면 그리지 않는다.
-    pub width: i32,
+    /// 두께(논리 px). 0 이하면 그리지 않는다. 0.5 같은 소수도 허용(SDF AA 얇은 선).
+    pub width: f32,
     /// 색.
     pub color: Color,
     /// 불투명도(0.0~1.0).
@@ -47,7 +47,7 @@ pub struct BorderSpec {
 impl Default for BorderSpec {
     fn default() -> Self {
         Self {
-            width: 0,
+            width: 0.0,
             color: Color::from_rgb(0x36, 0x3C, 0x46),
             alpha: 1.0,
         }
@@ -57,7 +57,7 @@ impl Default for BorderSpec {
 impl BorderSpec {
     /// (두께, 색, 투명도)로 만든다.
     #[must_use]
-    pub fn new(width: i32, color: Color, alpha: f32) -> Self {
+    pub fn new(width: f32, color: Color, alpha: f32) -> Self {
         Self {
             width,
             color,
