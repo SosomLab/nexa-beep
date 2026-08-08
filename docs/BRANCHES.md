@@ -8,6 +8,7 @@
 
 | 브랜치 | 생성 | 병합(커밋) | 삭제 | 커밋수 | 작업 요약 | 상세 |
 | --- | --- | --- | --- | --- | --- | --- |
+| `feat/m2-recvpump` | 2026-08-08 | _진행 중_ | — | 2 | **M2-7 비동기 수신 펌프 + 인바운드→GUI 대화** — 세션 액터·`set_recv_timeout` 전 계층·`EventLoopProxy` 실시간 수신·인바운드 TOFU 판정 후 대화/창 자동 생성. **양방향 실시간 대화 완성**(M2 게이트) | [journal/2026-08-08](journal/2026-08-08.md) |
 | `feat/m1-localdirect` | 2026-08-08 | 2026-08-08 (2c7c30e --no-ff) | 2026-08-08 | 3 | **M1-4 슬라이스 2·3** — `TcpLink`·`LocalDirect`(발견+TCP를 Transport로) · **실물 종단 왕복**(맥 2프로세스·Docker 2노드) · GUI `--live` 배선(`Box<dyn Transport>` 한 지점 교체) | [journal/2026-08-08](journal/2026-08-08.md) |
 | `feat/m1-udp` | 2026-08-08 | 2026-08-08 (2c435c9 --no-ff) | 2026-08-08 | 2 | **M1-4 슬라이스 1** — 첫 실물 소켓 `UdpDiscovery`(S2·socket2·키 필터·GOODBYE 2회) · `--discover-probe` · **실증 3건**(맥 2인스턴스·프로브 2프로세스·**Docker 컨테이너 2노드 교차 발견**) | [journal/2026-08-08](journal/2026-08-08.md) |
 | `feat/m1-wire` | 2026-08-08 | 2026-08-08 (1ab72a5 --no-ff) | 2026-08-08 | 2 | **D-22 확정 구현 + M1-3 와이어 포맷** — `instance` 16B·`CloneWatch`(U-P1) · `SelfPeer` 거부(U-P2) · 512B 강제·전방 호환·골든 레이아웃 | [journal/2026-08-08](journal/2026-08-08.md) |

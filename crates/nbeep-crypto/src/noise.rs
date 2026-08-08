@@ -192,6 +192,10 @@ impl<L: Link> Session for NoiseSession<L> {
         Ok(())
     }
 
+    fn set_recv_timeout(&mut self, dur: Option<core::time::Duration>) {
+        let _ = self.link.set_recv_timeout(dur); // 실패해도 블로킹 폴백(다음 recv에서 드러남)
+    }
+
     fn recv(&mut self) -> Result<Vec<u8>, SessionError> {
         let ciphertext = self.link.recv()?;
         if ciphertext.len() > NOISE_MAX {

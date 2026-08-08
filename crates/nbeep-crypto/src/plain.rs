@@ -72,6 +72,9 @@ impl<L: Link> Session for PlainSession<L> {
     fn recv(&mut self) -> Result<Vec<u8>, SessionError> {
         Ok(self.link.recv()?)
     }
+    fn set_recv_timeout(&mut self, dur: Option<core::time::Duration>) {
+        let _ = self.link.set_recv_timeout(dur);
+    }
 }
 
 #[cfg(test)]

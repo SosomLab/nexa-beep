@@ -73,6 +73,9 @@ impl<S: Session> Session for TrustedSession<S> {
     fn recv(&mut self) -> Result<Vec<u8>, SessionError> {
         self.inner.recv()
     }
+    fn set_recv_timeout(&mut self, dur: Option<core::time::Duration>) {
+        self.inner.set_recv_timeout(dur);
+    }
 }
 
 #[cfg(test)]

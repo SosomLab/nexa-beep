@@ -216,13 +216,94 @@ mod app_window {
         nbeep_core::TrustedSession<nbeep_crypto::NoiseSession<Box<dyn nbeep_core::Link>>>,
     >;
 
-    /// 대화 상태 — **뷰(창)와 분리**된 상대별 세션+스레드(DR-26).
-    ///
-    /// 뷰를 닫아도 대화는 살아 있다 — 세션 유지·스레드 보존·재진입 시 복원(재핸드셰이크 없음).
-    /// 창 모드는 뷰 계층만의 문제다: 어느 모드든 이 구조는 그대로고 뷰가 몇 개 붙느냐만 다르다.
+    /// GUI 이벤트 루프를 깨우는 커스텀 이벤트(M2-7 비동기 수신 펌프) — 세션 액터 스레드가
+    /// `EventLoopProxy`로 보낸다. winit 단일 스레드 규약을 지키면서 백그라운드 수신을 GUI에 반영.
+    #[derive(Debug)]
+    enum AppEvent {
+        /// 상대가 보낸 대화 한 줄(복호·검증·무해화 완료).
+        Recv {
+            peer: PeerId,
+            text: nbeep_core::SafeText,
+            seq: u64,
+            sender: PeerId,
+        },
+        /// 세션 종료(상대 이탈·오류).
+        Closed { peer: PeerId },
+        /// **인바운드** — 남이 나에게 연결해 핸드셰이크가 끝난 세션(아직 TOFU 미판정).
+        /// GUI(메인 스레드)가 TrustStore로 판정 후 대화·창을 연다.
+        Inbound { session: Box<InboundSession> },
+    }
+
+    /// 인바운드 세션 봉투 — `AppEvent`가 Debug라야 해서 수동 Debug.
+    struct InboundSession {
+        session: nbeep_crypto::NoiseSession<Box<dyn nbeep_core::Link>>,
+    }
+    impl std::fmt::Debug for InboundSession {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("InboundSession").finish_non_exhaustive()
+        }
+    }
+
+    /// 대화 상태 — **뷰(창)와 분리**(DR-26). 세션은 **액터 스레드**가 소유하고, 여기엔 그
+    /// 액터로 보내는 송신 채널과 스레드 이력만 둔다(M2-7 — 비동기 수신 펌프).
     struct Conversation {
-        session: LiveSession,
+        /// 액터에 보낼 발신 바이트(인코딩된 `ChatMessage`). 드롭 = 액터 종료 신호.
+        out_tx: std::sync::mpsc::Sender<Vec<u8>>,
         lines: Vec<ChatLine>,
+    }
+
+    /// 세션 액터 — 세션을 전용 스레드로 옮겨 **수신(GUI로 프록시)과 송신(채널)을 교대**한다.
+    /// snow `TransportState`가 read/write에 `&mut`를 요구해 한 세션은 한 스레드가 소유해야
+    /// 하므로, 송신은 채널로 요청받는 액터 모델이 정석이다.
+    fn spawn_session_actor(
+        mut session: LiveSession,
+        out_rx: std::sync::mpsc::Receiver<Vec<u8>>,
+        proxy: winit::event_loop::EventLoopProxy<AppEvent>,
+    ) {
+        use nbeep_core::mux::StreamId;
+        let peer = session.peer();
+        // 수신 폴 타임아웃 — recv가 200ms마다 TimedOut으로 돌아와 송신과 교대한다.
+        session.set_recv_timeout(Some(std::time::Duration::from_millis(200)));
+        std::thread::spawn(move || {
+            loop {
+                // 송신 먼저(즉시성) — 대기 중 발신 요청을 모두 흘려보낸다.
+                loop {
+                    match out_rx.try_recv() {
+                        Ok(bytes) => {
+                            if session.send(StreamId::Chat, &bytes).is_err() {
+                                let _ = proxy.send_event(AppEvent::Closed { peer });
+                                return;
+                            }
+                        }
+                        Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => return, // 대화 닫힘
+                    }
+                }
+                // 수신 폴.
+                match session.recv(StreamId::Chat) {
+                    Ok(bytes) => {
+                        if let Ok(m) = nbeep_core::ChatMessage::decode(&bytes, peer) {
+                            if let nbeep_core::MessageBody::Text(t) = m.body {
+                                let ev = AppEvent::Recv {
+                                    peer,
+                                    text: nbeep_core::sanitize_message(&t),
+                                    seq: m.seq,
+                                    sender: m.sender_device,
+                                };
+                                if proxy.send_event(ev).is_err() {
+                                    return; // 이벤트 루프 종료
+                                }
+                            }
+                        }
+                    }
+                    Err(nbeep_core::SessionError::TimedOut) => {} // 정상 — 송신 교대로
+                    Err(_) => {
+                        let _ = proxy.send_event(AppEvent::Closed { peer });
+                        return;
+                    }
+                }
+            }
+        });
     }
 
     /// OS 창 하나 — 역할(목록/특정 대화) + 표면 + 창별 상태.
@@ -284,37 +365,25 @@ mod app_window {
 
     /// 인바운드 세션 수락 펌프 — 남이 나에게 연결하면 accept 후 에코 응답(대칭 대화 데모).
     /// GUI 스레드로의 실시간 수신 반영(양쪽 창에 표시)은 M2-7(비동기 수신 펌프·EventLoopProxy).
-    fn spawn_inbound_echo(
+    /// 인바운드 수락 펌프 — 남이 나에게 연결하면 **핸드셰이크만** 하고(블로킹) 완성 세션을
+    /// GUI로 넘긴다. TOFU 판정·대화 생성은 메인 스레드(user_event) 몫 — TrustStore가 거기 있다.
+    fn spawn_inbound_accept(
         incoming: std::sync::mpsc::Receiver<Box<dyn nbeep_core::Link>>,
         identity: std::sync::Arc<nbeep_crypto::Identity>,
+        proxy: winit::event_loop::EventLoopProxy<AppEvent>,
     ) {
-        use nbeep_core::mux::{MuxSession, StreamId};
-        use nbeep_core::{ChatMessage, MessageBody, Sequencer, Session as _};
         std::thread::spawn(move || {
             while let Ok(link) = incoming.recv() {
                 let identity = std::sync::Arc::clone(&identity);
+                let proxy = proxy.clone();
                 std::thread::spawn(move || {
+                    // 핸드셰이크(블로킹) — 실패(자기 키 복제 U-P2 포함)면 조용히 버린다.
                     let Ok(session) = nbeep_crypto::NoiseSession::accept(link, &identity) else {
                         return;
                     };
-                    let user = session.peer();
-                    let mut mux = MuxSession::new(session);
-                    let mut seq = Sequencer::new();
-                    while let Ok(bytes) = mux.recv(StreamId::Chat) {
-                        let Ok(m) = ChatMessage::decode(&bytes, user) else {
-                            break;
-                        };
-                        if let MessageBody::Text(t) = m.body {
-                            let reply = ChatMessage {
-                                sender_device: identity.peer_id(),
-                                seq: seq.issue(),
-                                body: MessageBody::Text(format!("에코: {t}")),
-                            };
-                            if mux.send(StreamId::Chat, &reply.encode()).is_err() {
-                                break;
-                            }
-                        }
-                    }
+                    let _ = proxy.send_event(AppEvent::Inbound {
+                        session: Box::new(InboundSession { session }),
+                    });
                 });
             }
         });
@@ -351,6 +420,8 @@ mod app_window {
         settings_view: Option<SettingsWidget>,
         /// OS 주 수식키(⌘/Ctrl) 눌림 상태 — `Cmd/Ctrl+,` 판정.
         primary_down: bool,
+        /// 세션 액터가 GUI를 깨우는 통로(M2-7).
+        proxy: winit::event_loop::EventLoopProxy<AppEvent>,
     }
 
     impl App {
@@ -365,6 +436,28 @@ mod app_window {
         fn request_redraw(&self, id: WindowId) {
             if let Some(e) = self.windows.get(&id) {
                 e.window.request_redraw();
+            }
+        }
+
+        /// `peer` 대화가 보이는 창을 다시 그린다(Separate = 그 창, Single = 주 창이 이 대화일 때).
+        fn redraw_conversation(&self, peer: PeerId) {
+            match self.mode {
+                WindowMode::Separate => {
+                    if let Some((id, _)) = self
+                        .windows
+                        .iter()
+                        .find(|(_, e)| e.role == Role::Chat(peer))
+                    {
+                        self.request_redraw(*id);
+                    }
+                }
+                WindowMode::Single => {
+                    if self.single_open == Some(peer) {
+                        if let Some(id) = self.main_id {
+                            self.request_redraw(id);
+                        }
+                    }
+                }
             }
         }
 
@@ -431,17 +524,82 @@ mod app_window {
                 .map_or_else(|| format!("{peer:?}"), |e| e.name.as_str().to_string())
         }
 
+        /// 수립된 세션을 액터로 옮기고 대화 상태를 등록한다(아웃바운드·인바운드 공용).
+        fn install_conversation(&mut self, session: LiveSession) {
+            let peer = session.peer();
+            let (out_tx, out_rx) = std::sync::mpsc::channel();
+            spawn_session_actor(session, out_rx, self.proxy.clone());
+            self.conversations.insert(
+                peer,
+                Conversation {
+                    out_tx,
+                    lines: Vec::new(),
+                },
+            );
+        }
+
+        /// 대화 뷰 생성(스레드 복원 — 상태-뷰 분리).
+        fn build_chat_view(&self, peer: PeerId) -> ChatViewWidget {
+            let mut chat = ChatViewWidget::new(self.peer_title(peer));
+            let mut inv = Invalidations::default();
+            if let Some(conv) = self.conversations.get(&peer) {
+                for line in &conv.lines {
+                    chat.push_line(line.clone(), &mut inv);
+                }
+            }
+            chat
+        }
+
+        /// Separate 모드 — `peer` 대화의 별도 창을 생성한다(이미 있으면 포커스).
+        fn open_separate_window(
+            &mut self,
+            peer: PeerId,
+            chat: ChatViewWidget,
+            el: &ActiveEventLoop,
+        ) {
+            if let Some((id, _)) = self
+                .windows
+                .iter()
+                .find(|(_, e)| e.role == Role::Chat(peer))
+            {
+                if let Some(e) = self.windows.get(id) {
+                    e.window.focus_window();
+                }
+                return;
+            }
+            let title = format!("Nexa Beep — {}", self.peer_title(peer));
+            let attrs = Window::default_attributes().with_title(title);
+            let window = Rc::new(el.create_window(attrs).unwrap());
+            window.set_ime_allowed(true);
+            let scale = window.scale_factor() as f32;
+            let context = softbuffer::Context::new(window.clone()).unwrap();
+            let surface = SbSurface::new(&context, window.clone()).unwrap();
+            let id = window.id();
+            self.windows.insert(
+                id,
+                WinEntry {
+                    role: Role::Chat(peer),
+                    window,
+                    surface,
+                    cursor: (0, 0),
+                    scale,
+                },
+            );
+            self.chats.insert(peer, chat);
+            self.layout_window(id);
+            let mut inv = Invalidations::default();
+            self.refresh_rows(&mut inv);
+            if let Some(mid) = self.main_id {
+                self.request_redraw(mid);
+            }
+            self.request_redraw(id);
+        }
+
         /// 대화 상태 확보(없으면 세션 수립) + 뷰 생성(스레드 복원).
         fn ensure_conversation(&mut self, peer: PeerId) -> Result<ChatViewWidget, String> {
             if !self.conversations.contains_key(&peer) {
                 let (session, decision) = self.open_session(peer)?;
-                self.conversations.insert(
-                    peer,
-                    Conversation {
-                        session,
-                        lines: Vec::new(),
-                    },
-                );
+                self.install_conversation(session);
                 self.status = match decision {
                     nbeep_core::TrustDecision::FirstContact => {
                         "Noise 세션 수립 — 첫 접촉(TOFU 핀 고정)".into()
@@ -451,14 +609,7 @@ mod app_window {
             } else {
                 self.status = "대화 복원 — 세션 유지 중".into();
             }
-            let mut chat = ChatViewWidget::new(self.peer_title(peer));
-            let mut inv = Invalidations::default();
-            if let Some(conv) = self.conversations.get(&peer) {
-                for line in &conv.lines {
-                    chat.push_line(line.clone(), &mut inv);
-                }
-            }
-            Ok(chat)
+            Ok(self.build_chat_view(peer))
         }
 
         /// 설정 창을 연다(있으면 포커스) — `Cmd/Ctrl+,`.
@@ -540,56 +691,15 @@ mod app_window {
                     }
                     Err(e) => self.status = format!("연결 실패: {e}"),
                 },
-                WindowMode::Separate => {
-                    // 같은 상대 재활성화 = 기존 창 포커스(14 §11).
-                    let existing = self
-                        .windows
-                        .iter()
-                        .find(|(_, e)| e.role == Role::Chat(peer))
-                        .map(|(id, _)| *id);
-                    if let Some(id) = existing {
-                        if let Some(e) = self.windows.get(&id) {
-                            e.window.focus_window();
-                        }
-                        return;
-                    }
-                    match self.ensure_conversation(peer) {
-                        Ok(chat) => {
-                            let title = format!("Nexa Beep — {}", self.peer_title(peer));
-                            let attrs = Window::default_attributes().with_title(title);
-                            let window = Rc::new(el.create_window(attrs).unwrap());
-                            window.set_ime_allowed(true);
-                            let scale = window.scale_factor() as f32;
-                            let context = softbuffer::Context::new(window.clone()).unwrap();
-                            let surface = SbSurface::new(&context, window.clone()).unwrap();
-                            let id = window.id();
-                            self.windows.insert(
-                                id,
-                                WinEntry {
-                                    role: Role::Chat(peer),
-                                    window,
-                                    surface,
-                                    cursor: (0, 0),
-                                    scale,
-                                },
-                            );
-                            self.chats.insert(peer, chat);
-                            self.layout_window(id);
-                            let mut inv = Invalidations::default();
-                            self.refresh_rows(&mut inv);
-                            if let Some(mid) = self.main_id {
-                                self.request_redraw(mid);
-                            }
-                            self.request_redraw(id);
-                        }
-                        Err(e) => {
-                            self.status = format!("연결 실패: {e}");
-                            if let Some(mid) = self.main_id {
-                                self.request_redraw(mid);
-                            }
+                WindowMode::Separate => match self.ensure_conversation(peer) {
+                    Ok(chat) => self.open_separate_window(peer, chat, el),
+                    Err(e) => {
+                        self.status = format!("연결 실패: {e}");
+                        if let Some(mid) = self.main_id {
+                            self.request_redraw(mid);
                         }
                     }
-                }
+                },
             }
         }
 
@@ -653,33 +763,11 @@ mod app_window {
                 }
                 if let Some(conv) = self.conversations.get_mut(&peer) {
                     conv.lines.push(ChatLine { mine: true, text });
-                    use nbeep_core::mux::StreamId;
-                    let session = &mut conv.session;
-                    let authenticated = session.peer();
-                    let sent = session.send(StreamId::Chat, &msg.encode());
-                    // 데모: 에코 봇이 즉시 응답(인프로세스) — 블로킹 수신.
-                    // 실물 네트워크의 비동기 수신 펌프는 M2-7에서.
-                    let reply = sent.and_then(|()| session.recv(StreamId::Chat));
-                    match reply {
-                        Ok(bytes) => {
-                            if let Ok(rmsg) = nbeep_core::ChatMessage::decode(&bytes, authenticated)
-                            {
-                                if self.dedup.accept(rmsg.sender_device, rmsg.seq) {
-                                    if let nbeep_core::MessageBody::Text(t) = rmsg.body {
-                                        let line = ChatLine {
-                                            mine: false,
-                                            text: nbeep_core::sanitize_message(&t),
-                                        };
-                                        conv.lines.push(line.clone());
-                                        if let Some(chat) = self.chats.get_mut(&peer) {
-                                            chat.push_line(line, &mut inv);
-                                        }
-                                    }
-                                }
-                            }
-                            self.status = format!("암호화 왕복 OK — seq={}", msg.seq);
-                        }
-                        Err(e) => self.status = format!("세션 오류: {e}"),
+                    // 액터에 발신 요청 — 수신은 비동기로 AppEvent::Recv로 돌아온다(M2-7).
+                    if conv.out_tx.send(msg.encode()).is_err() {
+                        self.status = "세션 종료됨".into();
+                    } else {
+                        self.status = format!("전송 seq={} (응답 대기)", msg.seq);
                     }
                 }
                 self.request_redraw(id);
@@ -810,7 +898,7 @@ mod app_window {
         }
     }
 
-    impl ApplicationHandler for App {
+    impl ApplicationHandler<AppEvent> for App {
         fn resumed(&mut self, el: &ActiveEventLoop) {
             if self.main_id.is_some() {
                 return;
@@ -834,6 +922,80 @@ mod app_window {
             );
             self.main_id = Some(id);
             self.layout_window(id);
+        }
+
+        fn user_event(&mut self, el: &ActiveEventLoop, event: AppEvent) {
+            // 세션 액터 → GUI(M2-7). 수신 메시지를 해당 대화 스레드에 실시간 반영한다.
+            match event {
+                AppEvent::Recv {
+                    peer,
+                    text,
+                    seq,
+                    sender,
+                } => {
+                    if !self.dedup.accept(sender, seq) {
+                        return; // 중복(다중 경로 — FR-M-9)
+                    }
+                    let line = ChatLine { mine: false, text };
+                    if let Some(conv) = self.conversations.get_mut(&peer) {
+                        conv.lines.push(line.clone());
+                    }
+                    let mut inv = Invalidations::default();
+                    if let Some(chat) = self.chats.get_mut(&peer) {
+                        chat.push_line(line, &mut inv);
+                    }
+                    // 이 대화가 보이는 창을 다시 그린다.
+                    self.redraw_conversation(peer);
+                }
+                AppEvent::Closed { peer } => {
+                    self.conversations.remove(&peer);
+                    self.status = "상대와의 세션이 종료됨".into();
+                    if let Some(id) = self.main_id {
+                        self.request_redraw(id);
+                    }
+                }
+                AppEvent::Inbound { session } => {
+                    use nbeep_core::Session as _;
+                    let peer = session.session.peer();
+                    if self.conversations.contains_key(&peer) {
+                        return; // 이미 이 상대와 대화 중(아웃바운드 세션 존재) — 중복 인바운드 무시
+                    }
+                    // TOFU 판정(메인 스레드 — TrustStore가 여기 있다) → 다중화 → 대화 등록.
+                    let est =
+                        match nbeep_core::TrustedSession::wrap(session.session, &mut self.trust) {
+                            Ok(est) => est,
+                            Err(_) => return, // 차단 상대 등 — fail-closed
+                        };
+                    self.install_conversation(nbeep_core::MuxSession::new(est.session));
+                    let title = self.peer_title(peer);
+                    let mut inv = Invalidations::default();
+                    self.refresh_rows(&mut inv);
+                    match self.mode {
+                        WindowMode::Separate => {
+                            // 인바운드도 상대별 창을 연다(대칭 실시간 대화).
+                            let chat = self.build_chat_view(peer);
+                            self.open_separate_window(peer, chat, el);
+                        }
+                        WindowMode::Single => {
+                            if self.single_open.is_none() {
+                                // 목록 화면이면 새 대화를 바로 연다.
+                                let chat = self.build_chat_view(peer);
+                                self.chats.insert(peer, chat);
+                                self.single_open = Some(peer);
+                                if let Some(mid) = self.main_id {
+                                    self.layout_window(mid);
+                                }
+                            } else {
+                                // 다른 대화 중 — 뺏지 않는다. 백그라운드로 쌓이고 목록에서 열면 복원.
+                                self.status = format!("새 대화 도착: {title} (목록에서 열기)");
+                            }
+                        }
+                    }
+                    if let Some(mid) = self.main_id {
+                        self.request_redraw(mid);
+                    }
+                }
+            }
         }
 
         fn about_to_wait(&mut self, _el: &ActiveEventLoop) {
@@ -982,6 +1144,10 @@ mod app_window {
         let identity = std::sync::Arc::new(nbeep_crypto::Identity::generate());
         use nbeep_net::Transport as _;
 
+        // 이벤트 루프·프록시 먼저 — 인바운드 수락 펌프가 프록시를 필요로 한다(M2-7).
+        let event_loop = EventLoop::<AppEvent>::with_user_event().build().unwrap();
+        let proxy = event_loop.create_proxy();
+
         let (transport, discovery): (Box<dyn nbeep_net::Transport>, _) = if live {
             // 실물 — LocalDirect(UDP 발견 + TCP 세션). 실기·컨테이너 상대가 목록에 뜬다.
             let mut instance = [0u8; 16];
@@ -994,7 +1160,11 @@ mod app_window {
                 .expect("LocalDirect 시작(방화벽·인터페이스)");
             let discovery = local.discovery();
             // 인바운드 수락 펌프 — 남이 나에게 연결하면 accept+에코(대칭 대화·비동기 GUI 펌프는 M2-7).
-            spawn_inbound_echo(local.incoming(), std::sync::Arc::clone(&identity));
+            spawn_inbound_accept(
+                local.incoming(),
+                std::sync::Arc::clone(&identity),
+                proxy.clone(),
+            );
             (Box::new(local), discovery)
         } else {
             // 데모 — InMemory 버스 + 에코 봇 3명.
@@ -1015,7 +1185,6 @@ mod app_window {
         if mode == WindowMode::Separate {
             settings.set("chat.window_mode", "separate".into());
         }
-        let event_loop = EventLoop::new().unwrap();
         let net_hint = if live {
             "실물 발견(LAN)"
         } else {
@@ -1047,6 +1216,7 @@ mod app_window {
             settings,
             settings_view: None,
             primary_down: false,
+            proxy,
         };
         event_loop.run_app(&mut app).unwrap();
     }
