@@ -51,6 +51,8 @@ pub struct PeerListWidget {
     wheel: WheelAccum,
     typeahead: TypeAhead,
     activated: Option<PeerId>,
+    /// 배율(고DPI — FR-U-6). 행 높이·여백에 곱한다. 좌표·bounds는 물리 px.
+    scale: f32,
 }
 
 impl Default for PeerListWidget {
@@ -72,7 +74,29 @@ impl PeerListWidget {
             wheel: WheelAccum::default(),
             typeahead: TypeAhead::new(TYPEAHEAD_TIMEOUT_MS),
             activated: None,
+            scale: 1.0,
         }
+    }
+
+    /// 배율 지정(창 scale factor 변경·모니터 이동 시) — 레이아웃 전체가 다시 계산된다.
+    pub fn set_scale(&mut self, scale: f32, inv: &mut Invalidations) {
+        let scale = scale.max(0.5);
+        if (scale - self.scale).abs() > f32::EPSILON {
+            self.scale = scale;
+            self.clamp_scroll();
+            inv.push(self.bounds);
+        }
+    }
+
+    /// 물리 px 행 높이(배율 반영).
+    #[must_use]
+    pub fn row_h(&self) -> i32 {
+        (ROW_H as f32 * self.scale).round() as i32
+    }
+
+    /// 물리 px 보조 치수.
+    fn s(&self, logical: i32) -> i32 {
+        (logical as f32 * self.scale).round() as i32
     }
 
     /// 목록 교체(발견 이벤트 반영) — 캐럿은 가능한 유지, 전체 무효화.
@@ -95,7 +119,7 @@ impl PeerListWidget {
     }
 
     fn visible_rows(&self) -> usize {
-        (self.bounds.h.max(0) as usize) / (ROW_H as usize).max(1)
+        (self.bounds.h.max(0) as usize) / (self.row_h().max(1) as usize)
     }
 
     fn clamp_scroll(&mut self) {
@@ -114,9 +138,12 @@ impl PeerListWidget {
         let rel = i as i64 - self.top as i64;
         Rect::new(
             self.bounds.x,
-            self.bounds.y + i32::try_from(rel).unwrap_or(i32::MAX).saturating_mul(ROW_H),
+            self.bounds.y
+                + i32::try_from(rel)
+                    .unwrap_or(i32::MAX)
+                    .saturating_mul(self.row_h()),
             self.bounds.w,
-            ROW_H,
+            self.row_h(),
         )
     }
 
@@ -140,7 +167,7 @@ impl PeerListWidget {
         if y < self.bounds.y {
             return None;
         }
-        let rel = ((y - self.bounds.y) / ROW_H) as usize;
+        let rel = ((y - self.bounds.y) / self.row_h().max(1)) as usize;
         let idx = self.top + rel;
         (idx < self.rows.len()).then_some(idx)
     }
@@ -257,13 +284,14 @@ impl Widget for PeerListWidget {
         ctx.select_font(FontSlot::Base, false);
         let vis = self.visible_rows();
 
+        let rh = self.row_h();
         for (rel, i) in (self.top..self.rows.len().min(self.top + vis + 1)).enumerate() {
             let row = &self.rows[i];
             let r = Rect::new(
                 self.bounds.x,
-                self.bounds.y + i32::try_from(rel).unwrap_or(i32::MAX) * ROW_H,
+                self.bounds.y + i32::try_from(rel).unwrap_or(i32::MAX) * rh,
                 self.bounds.w,
-                ROW_H,
+                rh,
             );
             // 행 배경 — 캐럿 > hover > 기본.
             let bg = if i == self.caret {
@@ -273,22 +301,46 @@ impl Widget for PeerListWidget {
             } else {
                 theme.panel_bg
             };
-            let text_y = r.y + (ROW_H - 17) / 2;
-            ctx.text_opaque(r.x + 12, text_y, r, row.entry.name.as_str(), theme.text, bg);
+            let text_y = r.y + (rh - self.s(17)) / 2;
+            ctx.text_opaque(
+                r.x + self.s(12),
+                text_y,
+                r,
+                row.entry.name.as_str(),
+                theme.text,
+                bg,
+            );
 
             // 다중 경로 ×N(진단).
             if row.entry.paths > 1 {
                 let name_w = ctx.text_width(row.entry.name.as_str());
                 let label = format!("×{}", row.entry.paths);
-                ctx.text(r.x + 16 + name_w, text_y + 2, r, &label, theme.text_dim);
+                ctx.text(
+                    r.x + self.s(16) + name_w,
+                    text_y + self.s(2),
+                    r,
+                    &label,
+                    theme.text_dim,
+                );
             }
 
             // 신뢰 배지(오른쪽 정렬 라운드 칩) — 항상 표시.
             let (label, chip) = badge(row.trust, theme);
-            let bw = ctx.text_width(label) + 16;
-            let chip_r = Rect::new(r.right() - bw - 10, r.y + 8, bw, ROW_H - 16);
-            ctx.fill_round_rect(chip_r, (ROW_H - 16) / 2, chip);
-            ctx.text(chip_r.x + 8, chip_r.y + 3, chip_r, label, theme.text);
+            let bw = ctx.text_width(label) + self.s(16);
+            let chip_r = Rect::new(
+                r.right() - bw - self.s(10),
+                r.y + self.s(8),
+                bw,
+                rh - self.s(16),
+            );
+            ctx.fill_round_rect(chip_r, (rh - self.s(16)) / 2, chip);
+            ctx.text(
+                chip_r.x + self.s(8),
+                chip_r.y + self.s(3),
+                chip_r,
+                label,
+                theme.text,
+            );
 
             // 행 구분선.
             ctx.fill_rect(Rect::new(r.x, r.bottom() - 1, r.w, 1), theme.border);
@@ -297,10 +349,15 @@ impl Widget for PeerListWidget {
         let buf = self.typeahead.text();
         if !buf.is_empty() {
             ctx.select_font(FontSlot::Status, false);
-            let w = ctx.text_width(buf) + 16;
-            let hud = Rect::new(self.bounds.x + 8, self.bounds.bottom() - 26, w, 20);
-            ctx.fill_round_rect(hud, 6, theme.field_bg);
-            ctx.text(hud.x + 8, hud.y + 3, hud, buf, theme.accent);
+            let w = ctx.text_width(buf) + self.s(16);
+            let hud = Rect::new(
+                self.bounds.x + self.s(8),
+                self.bounds.bottom() - self.s(26),
+                w,
+                self.s(20),
+            );
+            ctx.fill_round_rect(hud, self.s(6), theme.field_bg);
+            ctx.text(hud.x + self.s(8), hud.y + self.s(3), hud, buf, theme.accent);
         }
     }
 }
@@ -437,6 +494,26 @@ mod tests {
             &mut inv,
         );
         assert_eq!(w.caret(), 1, "cycle 복귀 bob");
+    }
+
+    #[test]
+    fn scale_resizes_rows_and_hit_testing() {
+        // 2배율에서 행 높이·클릭 좌표→행 매핑이 함께 커진다(FR-U-6).
+        let (mut w, _) = widget(&[(1, "alice"), (2, "bob"), (3, "carol")]);
+        let mut inv = Invalidations::default();
+        w.set_scale(2.0, &mut inv);
+        assert!(!inv.is_empty(), "배율 변경 = 전체 무효화");
+        assert_eq!(w.row_h(), ROW_H * 2);
+        w.on_event(
+            &InputEvent::MouseDown {
+                x: 10,
+                y: ROW_H * 2 + 5, // 1배율이면 2행, 2배율이면 1행
+                shift: false,
+                primary: false,
+            },
+            &mut inv,
+        );
+        assert_eq!(w.caret(), 1, "물리 좌표는 배율 행 높이로 나눈다");
     }
 
     #[test]

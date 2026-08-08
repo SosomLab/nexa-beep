@@ -21,6 +21,8 @@ pub struct RasterCtx<'s, 'b, 'f> {
     surface: &'s mut Surface<'b>,
     font: &'f Font,
     size: f32,
+    /// 배율(고DPI — FR-U-6). 슬롯 크기에 곱한다. 좌표는 이미 물리 px(호출자 몫).
+    scale: f32,
 }
 
 impl<'s, 'b, 'f> RasterCtx<'s, 'b, 'f> {
@@ -30,7 +32,16 @@ impl<'s, 'b, 'f> RasterCtx<'s, 'b, 'f> {
             surface,
             font,
             size: SIZE_BASE,
+            scale: 1.0,
         }
+    }
+
+    /// 배율 지정(창의 scale factor — 텍스트 크기에 반영).
+    #[must_use]
+    pub fn with_scale(mut self, scale: f32) -> Self {
+        self.scale = scale.max(0.5);
+        self.size = SIZE_BASE * self.scale;
+        self
     }
 
     fn clip_of(rect: Rect) -> (i32, i32, i32, i32) {
@@ -77,11 +88,12 @@ fn seg_dist(px: f32, py: f32, ax: f32, ay: f32, bx: f32, by: f32) -> f32 {
 impl DrawCtx for RasterCtx<'_, '_, '_> {
     fn select_font(&mut self, slot: FontSlot, _bold: bool) {
         // bold 파생은 폰트 패밀리 확장(M3-3)에서 — 지금은 크기만 슬롯별.
-        self.size = match slot {
-            FontSlot::Base => SIZE_BASE,
-            FontSlot::Message => SIZE_MESSAGE,
-            FontSlot::Status => SIZE_STATUS,
-        };
+        self.size = self.scale
+            * match slot {
+                FontSlot::Base => SIZE_BASE,
+                FontSlot::Message => SIZE_MESSAGE,
+                FontSlot::Status => SIZE_STATUS,
+            };
     }
 
     fn fill_rect(&mut self, rect: Rect, color: Color) {
