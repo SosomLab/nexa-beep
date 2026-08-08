@@ -3,7 +3,12 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
-> **갱신: 2026-08-08 24차 (KST)** — **설정 화면(DR-24) + M1-2 개시 + 테스트 환경 확정**(`feat/m3-settings`+`feat/m1-linkwatch` → main 병합):
+> **갱신: 2026-08-08 25차 (KST)** — **D-22 확정 + M1-3 와이어 포맷**(`feat/m1-wire` → main 병합 · 사용자 승인 — 추천안 수용):
+> ① **D-22 = U-P1+U-P2 둘 다 채택 · 확정과 같은 커밋에서 구현** — R-12(키 파일 복제)의 관문이 닫혔고 **와이어 포맷 잠금이 풀렸다**. U-P1: 발견 패킷 `instance` 16B + `CloneWatch`(같은 키·다른 instance 창 내 공존 = 복제 경고 · 재시작 무오탐 · 창 수치는 D-8b 주입). U-P2: `NoiseSession` **`SelfPeer` 거부**(같은 개인키 두 실체의 핸드셰이크가 **양쪽 다** 거부 — 테스트 고정). **탐지이지 방지 아님** 명시(NFR-S-5).
+> ② **M1-3 와이어 포맷 확정** — `net/wire.rs`: `[NXBP][ver][type][flags][pubkey 32][port][epoch][seq][instance 16][name]` 고정부 71B · **512B 인코딩 강제** · 미지 버전/종류 **무시**(전방 호환 3번째 적용) · 깨진 이름 = **지문 라벨 폴백**(존재를 숨기지 않음) · **골든 레이아웃 테스트**(오프셋 리터럴 — 호환 파괴를 CI가 차단).
+> ③ 잔여 = M1-4 실물 소켓 — 🔴 **socket2 의존 확정 대기**(std 미노출 옵션 `SO_REUSEPORT`/`IP_MULTICAST_IF` — rust 공식 팀 관리·MIT/Apache·추천). **155테스트 green**. [journal/2026-08-08.md](journal/2026-08-08.md).
+>
+> **직전(08-08 24차)** — **설정 화면(DR-24) + M1-2 개시 + 테스트 환경 확정**(`feat/m3-settings`+`feat/m1-linkwatch` → main 병합):
 > ① **M3-11 설정 화면 슬라이스 1·2** — `⌘/Ctrl+,` 별도 창 · **Entry 레지스트리 단일 원천**(사이드바 매치 합 == 레지스트리 전체 — 테스트 단언) · **좌측 카테고리 트리**(VS Code식 — 사용자 요청) · 검색 중 매치 카테고리만+"(N)"(X-10 ①) · 즉시 적용. **`chat.window_mode` 설정 연동 완결**(M3-12 잔여 해소 — 단일↔별도 창을 설정에서 전환·새 대화부터) + `ui.theme`(다크/라이트 전 창 즉시 — 토큰 "값 교체만" 실증). 잔여 = 다단 계층·확인 훅·값 영속(M2-5).
 > ② **M1-2 슬라이스 1** — `LinkEvent` + trailing `Debouncer`(도킹 폭주 → 1회 재발견 · quiet_ms 주입 — D-8b 실측 대기). OS 구독(PF_ROUTE/netlink)은 다음 슬라이스 · Windows는 `windows-sys` 결정 필요.
 > ③ **테스트 환경 확정**(사용자 2건) — **Docker 실증**: Linux 컨테이너 **146테스트 green** + **컨테이너 간 UDP 멀티캐스트 실도달**(M1-4 테스트베드 성립 · Linux↔Linux N노드) · **Windows VM 불요**: CI windows-latest(자동) + 원격 Windows PC(실행·방화벽·IME) + Docker 분담, **맥↔Win LAN 상호운용만 D-8b 실기 날로 이월**. **147테스트 green**(맥). [journal/2026-08-08.md](journal/2026-08-08.md).
