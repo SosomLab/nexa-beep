@@ -3,7 +3,12 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
-> **갱신: 2026-08-08 20차 (KST)** — **대화 화면 첫 슬라이스 — ChatViewWidget + 목록↔대화 전환**(`feat/m3-chatview` → main 병합):
+> **갱신: 2026-08-08 21차 (KST)** — **InMemory 종단 데모 + DR-26 대화 창 모델**(`feat/m3-inmem-e2e` → main 병합):
+> ① **전 계층 실물 왕복이 화면에서 실증** — 에코 봇 3명이 실물 `Identity`로 버스 join(발견 힌트 PeerId == Noise 정적 키), 목록 = **실제 발견 이벤트**→`PeerTable`→배지 조립, Enter = connect→**Noise 핸드셰이크→TOFU 핀**(상태바·배지 즉시 갱신)→다중화, 발신 = 봉투→암호화→에코 수신→검증→중복 제거→무해화→스레드. **M2 게이트("InMemory로 상위 계층 green")의 GUI 실증.** 데모 타협 2건 명기 — 블로킹 수신(비동기 펌프 = M2-7)·bin net testkit 임시(M1-4에서 제거).
+> ② **DR-26 대화 창 모델**(사용자 요구→확정: *"별도 창 동시 대화+옵션"* → *"지금은 1개·쉽게 전환 가능해야·구조 변경은 즉시"* → *"설정에서 수정"*) — 판정 결과 세션·스레드가 뷰에 묶여 있어(Esc = 세션 드롭) **상태-뷰 분리를 즉시 반영**: `Conversation { session, lines }` 맵이 실체, 뷰는 표시. **Esc = 뷰만 닫힘·재진입 시 스레드 복원·재핸드셰이크 없음.** 창 모드 `chat.window_mode`(v1 기본 SingleWindow / SeparateWindows = M3-12) — 설정 화면 Entry·새 대화부터 적용. [14 §11](14-control-ux-architecture.md) 신설 · FR-U-18.
+> **136테스트 green** · 릴리스 0.76MB. [journal/2026-08-08.md](journal/2026-08-08.md).
+>
+> **직전(08-08 20차)** — **대화 화면 첫 슬라이스 — ChatViewWidget + 목록↔대화 전환**(`feat/m3-chatview` → main 병합):
 > ① 상태바의 약속("Enter = 대화 열기")이 실제가 됐다 — 목록 Enter → **대화 화면**(헤더·스레드·한 줄 입력·한글 가능) → Esc 복귀.
 > ② ★ **타입이 무해화를 강제** — 스레드 본문 타입 = `SafeText`(`sanitize_message` 미통과 문자열은 **컴파일 불가**). 발신 입력도 확정 시 통과(RLO 붙여넣기 테스트 고정) — M2-6 "타입=증명" 패턴의 UI 연장.
 > ③ **발신 = 실물 도메인 경로** — `Identity`(실물 키) sender_device · `Sequencer` seq · `ChatMessage` 봉투. **전송(fanout)만 M1-4·M2-7 몫** — 상태바가 "발신 봉투 seq=N — 전송 배선은 M2-7"로 정직하게 표시.

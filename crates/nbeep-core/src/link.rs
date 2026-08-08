@@ -33,3 +33,15 @@ pub trait Link: Send {
     /// 상대가 닫았으면 [`LinkError::Closed`].
     fn recv(&mut self) -> Result<Vec<u8>, LinkError>;
 }
+
+impl Link for Box<dyn Link> {
+    fn peer(&self) -> PeerId {
+        (**self).peer()
+    }
+    fn send(&mut self, frame: &[u8]) -> Result<(), LinkError> {
+        (**self).send(frame)
+    }
+    fn recv(&mut self) -> Result<Vec<u8>, LinkError> {
+        (**self).recv()
+    }
+}

@@ -19,7 +19,9 @@ workspace = true
 # 본체 = 조립 지점. 전 크레이트를 와이어링(어댑터 주입).
 [dependencies]
 nbeep-core.workspace = true
-nbeep-net.workspace = true
+# ⚠️ testkit 임시 — 데모 창이 InMemory 전송을 쓴다(발견·세션·에코 실물 스택 시연).
+# M1-4(실물 발견)에서 LocalDirect로 교체하며 feature 제거(docs/13 §11 원칙 복원).
+nbeep-net = { workspace = true, features = ["testkit"] }
 nbeep-crypto.workspace = true
 nbeep-safe.workspace = true
 nbeep-store.workspace = true
