@@ -43,6 +43,22 @@ fn main() {
         connect_manual(&addr);
         return;
     }
+    if let Some(pos) = args.iter().position(|a| a == "--chat-serve") {
+        let port = args
+            .get(pos + 1)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(47_200);
+        chat_interactive(ChatRole::Serve(port));
+        return;
+    }
+    if let Some(pos) = args.iter().position(|a| a == "--chat-connect") {
+        let Some(addr) = args.get(pos + 1).cloned() else {
+            eprintln!("--chat-connect <host:port> 필요");
+            return;
+        };
+        chat_interactive(ChatRole::Connect(addr));
+        return;
+    }
     let open_window = args.iter().any(|a| a == "--window");
     let separate = args.iter().any(|a| a == "--separate-windows");
     let live = args.iter().any(|a| a == "--live");
@@ -55,7 +71,7 @@ fn main() {
         app_window::run(mode, live);
     } else {
         println!(
-            "nexa-beep {} — scaffold (창 `--window [--live]` · 발견 `--discover-probe [초]` · 수동 서버 `--serve [port]` · 수동 연결 `--connect <host:port>`)",
+            "nexa-beep {} — scaffold (창 `--window [--live]` · 발견 `--discover-probe [초]` · 수동 `--serve`/`--connect` · 인터랙티브 채팅 `--chat-serve [port]`/`--chat-connect <host:port>`)",
             env!("CARGO_PKG_VERSION")
         );
     }
@@ -198,6 +214,140 @@ fn connect_manual(addr: &str) {
         }
     }
     println!("DONE");
+}
+
+/// 인터랙티브 채팅 역할.
+enum ChatRole {
+    /// 고정 포트로 한 상대의 연결을 기다린다.
+    Serve(u16),
+    /// 주소로 직접 연결한다(DR-19 수동).
+    Connect(String),
+}
+
+/// **인터랙티브 헤드리스 채팅**(사람이 stdin으로 타이핑·수신 실시간 출력). docker 터미널
+/// (`-it`)과 맥 GUI/터미널이 사람 대 사람으로 양방향 대화한다. 세션 스택은 GUI와 동일
+/// (Noise→TOFU→다중화) — 프레젠테이션만 stdin/stdout.
+fn chat_interactive(role: ChatRole) {
+    use nbeep_core::mux::{MuxSession, StreamId};
+    use nbeep_core::{ChatMessage, MessageBody, Sequencer, Session as _};
+    use std::io::BufRead as _;
+
+    let identity = nbeep_crypto::Identity::generate();
+
+    // 역할별로 Link 하나를 얻는다(서버=accept, 클라=connect). 이후 경로는 100% 같다.
+    let link: Box<dyn nbeep_core::Link> = match &role {
+        ChatRole::Serve(port) => {
+            let listener = std::net::TcpListener::bind(("0.0.0.0", *port)).expect("포트 바인딩");
+            println!(
+                "[대기] {} 에서 상대를 기다립니다… (me={})",
+                port,
+                identity.peer_id().short()
+            );
+            let (stream, from) = listener.accept().expect("accept");
+            println!("[연결] {from} 에서 연결됨");
+            Box::new(nbeep_net::TcpLink::new(stream).expect("링크"))
+        }
+        ChatRole::Connect(addr) => {
+            let mut instance = [0u8; 16];
+            instance
+                .copy_from_slice(&nbeep_crypto::Identity::generate().peer_id().as_bytes()[..16]);
+            let name = nbeep_core::DisplayName::parse("chat").expect("라벨");
+            let transport =
+                nbeep_net::LocalDirect::spawn(identity.peer_id(), instance, name, 5000, 1)
+                    .expect("전송");
+            use nbeep_net::Transport as _;
+            match transport.add_endpoint(addr) {
+                Ok(l) => {
+                    println!(
+                        "[연결] {addr} 로 연결됨 (me={})",
+                        identity.peer_id().short()
+                    );
+                    l
+                }
+                Err(e) => {
+                    eprintln!("[실패] 연결 실패({addr}): {e:?}");
+                    return;
+                }
+            }
+        }
+    };
+
+    // 핸드셰이크(서버=accept·클라=initiate) → 신원 확정.
+    let session = match &role {
+        ChatRole::Serve(_) => nbeep_crypto::NoiseSession::accept(link, &identity),
+        ChatRole::Connect(_) => nbeep_crypto::NoiseSession::initiate(link, &identity),
+    };
+    let mut session = match session {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("[실패] 핸드셰이크: {e}");
+            return;
+        }
+    };
+    let peer = session.peer();
+    println!(
+        "[대화 시작] 상대={} · 한 줄 입력 = 전송, Ctrl+D = 종료",
+        peer.short()
+    );
+
+    // 수신 스레드: 세션을 소유하고 recv를 폴하며 도착분을 출력한다(액터와 같은 이유 — 한 세션 1스레드).
+    // 송신은 채널로 요청받아 교대한다.
+    session.set_recv_timeout(Some(std::time::Duration::from_millis(150)));
+    let (out_tx, out_rx) = std::sync::mpsc::channel::<Vec<u8>>();
+    let me = identity.peer_id();
+    let net = std::thread::spawn(move || {
+        let mut mux = MuxSession::new(session);
+        loop {
+            loop {
+                match out_rx.try_recv() {
+                    Ok(bytes) => {
+                        if mux.send(StreamId::Chat, &bytes).is_err() {
+                            println!("[종료] 세션 끊김");
+                            return;
+                        }
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => return, // stdin 종료
+                }
+            }
+            match mux.recv(StreamId::Chat) {
+                Ok(bytes) => {
+                    if let Ok(m) = ChatMessage::decode(&bytes, peer) {
+                        if let MessageBody::Text(t) = m.body {
+                            let safe = nbeep_core::sanitize_message(&t);
+                            println!("{}> {}", peer.short(), safe.as_str());
+                        }
+                    }
+                }
+                Err(nbeep_core::SessionError::TimedOut) => {}
+                Err(_) => {
+                    println!("[종료] 세션 끊김");
+                    return;
+                }
+            }
+        }
+    });
+
+    // 메인: stdin 라인 → 발신 봉투 → 채널.
+    let mut seq = Sequencer::new();
+    let stdin = std::io::stdin();
+    for line in stdin.lock().lines() {
+        let Ok(line) = line else { break };
+        if line.is_empty() {
+            continue;
+        }
+        let msg = ChatMessage {
+            sender_device: me,
+            seq: seq.issue(),
+            body: MessageBody::Text(line),
+        };
+        if out_tx.send(msg.encode()).is_err() {
+            break;
+        }
+    }
+    drop(out_tx); // Ctrl+D — 수신 스레드도 종료
+    let _ = net.join();
+    println!("[끝]");
 }
 
 /// 실물 종단(M1-4 · D-8a) — LocalDirect로 발견→연결→Noise→대화 왕복을 헤드리스로 검증한다.
