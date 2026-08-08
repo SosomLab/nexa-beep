@@ -1851,9 +1851,18 @@ mod app_window {
             );
             (Box::new(local), discovery)
         } else {
-            // 데모 — InMemory 버스 + 에코 봇 3명.
+            // 데모 — InMemory 버스 + 에코 봇. 순환 탐색 테스트용으로 같은 접두사(김*/bob* 등)를
+            // 여러 개 둔다(타입어헤드 ↑↓ 순환 확인).
             let bus = nbeep_net::inmem::InMemoryBus::new();
-            for name in ["김철수의 MacBook", "이영희 (개발2팀)", "bob-linux"] {
+            for name in [
+                "김철수의 MacBook",
+                "김영희 데스크탑",
+                "김민수 노트북",
+                "이영희 (개발2팀)",
+                "bob-linux",
+                "bora-win",
+                "bill-mac",
+            ] {
                 spawn_echo_bot(&bus, name);
             }
             let transport = bus.join(

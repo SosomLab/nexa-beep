@@ -280,21 +280,37 @@ impl PeerListWidget {
         (idx < self.rows.len()).then_some(idx)
     }
 
-    /// 접두사 매치(대소문자 무시) — `from`부터 순환 검색.
+    /// 접두사 매치(대소문자 무시) — `from`부터 **앞으로** 순환 검색.
     fn find_prefix(&self, prefix: &str, from: usize) -> Option<usize> {
         let n = self.rows.len();
         if n == 0 {
             return None;
         }
         let p = prefix.to_lowercase();
-        (0..n).map(|k| (from + k) % n).find(|&i| {
-            self.rows[i]
-                .entry
-                .name
-                .as_str()
-                .to_lowercase()
-                .starts_with(&p)
-        })
+        (0..n)
+            .map(|k| (from + k) % n)
+            .find(|&i| self.row_matches(i, &p))
+    }
+
+    /// 접두사 매치 — `from`부터 **뒤로** 순환 검색(↑ 순환용).
+    fn find_prefix_rev(&self, prefix: &str, from: usize) -> Option<usize> {
+        let n = self.rows.len();
+        if n == 0 {
+            return None;
+        }
+        let p = prefix.to_lowercase();
+        (0..n)
+            .map(|k| (from + n - (k % n)) % n)
+            .find(|&i| self.row_matches(i, &p))
+    }
+
+    fn row_matches(&self, i: usize, lower_prefix: &str) -> bool {
+        self.rows[i]
+            .entry
+            .name
+            .as_str()
+            .to_lowercase()
+            .starts_with(lower_prefix)
     }
 }
 
@@ -314,8 +330,28 @@ impl Widget for PeerListWidget {
             InputEvent::Key { key, .. } => {
                 let vis = self.visible_rows().max(1);
                 match key {
-                    Key::Up => self.move_caret(self.caret.saturating_sub(1), inv),
-                    Key::Down => self.move_caret(self.caret + 1, inv),
+                    // 타입어헤드 활성이면 ↑/↓ = 현재 접두사 매치 순환(역방향 포함 · 언어 중립).
+                    Key::Down => {
+                        let p = self.typeahead.composing();
+                        if p.is_empty() {
+                            self.move_caret(self.caret + 1, inv);
+                        } else {
+                            let n = self.rows.len().max(1);
+                            if let Some(hit) = self.find_prefix(&p, (self.caret + 1) % n) {
+                                self.move_caret(hit, inv);
+                            }
+                        }
+                    }
+                    Key::Up => {
+                        let p = self.typeahead.composing();
+                        if p.is_empty() {
+                            self.move_caret(self.caret.saturating_sub(1), inv);
+                        } else if let Some(hit) =
+                            self.find_prefix_rev(&p, self.caret.saturating_sub(1))
+                        {
+                            self.move_caret(hit, inv);
+                        }
+                    }
                     Key::Home => self.move_caret(0, inv),
                     Key::End => self.move_caret(self.rows.len().saturating_sub(1), inv),
                     Key::PageUp => self.move_caret(self.caret.saturating_sub(vis), inv),
@@ -629,6 +665,30 @@ mod tests {
             &mut inv,
         );
         assert_eq!(w.caret(), 1, "cycle 복귀 bob");
+    }
+
+    #[test]
+    fn arrows_cycle_matches_when_typeahead_active() {
+        let (mut w, _) = widget(&[
+            (1, "alice"),
+            (2, "bob"),
+            (3, "bora"),
+            (4, "bill"),
+            (5, "carol"),
+        ]);
+        let mut inv = Invalidations::default();
+        w.on_event(&InputEvent::Char { c: 'b', now_ms: 0 }, &mut inv);
+        assert_eq!(w.caret(), 1, "첫 b = bob");
+        w.on_event(&key(Key::Down), &mut inv);
+        assert_eq!(w.caret(), 2, "↓ = bora");
+        w.on_event(&key(Key::Down), &mut inv);
+        assert_eq!(w.caret(), 3, "↓ = bill");
+        w.on_event(&key(Key::Up), &mut inv);
+        assert_eq!(w.caret(), 2, "↑ = 역순 bora");
+        // 타입어헤드 비활성이면 ↓는 일반 행 이동.
+        w.on_event(&key(Key::Escape), &mut inv); // 버퍼 소거
+        w.on_event(&key(Key::Down), &mut inv);
+        assert_eq!(w.caret(), 3, "비활성 = 다음 행(전체)");
     }
 
     #[test]

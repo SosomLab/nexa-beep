@@ -84,8 +84,13 @@ impl GalleryWidget {
         cb_right.set_help("A confirmation dialog appears before the Trash is emptied.");
         cb_right.set_show_help(true);
 
-        // 투명 배경 이미지 아이콘(글리프가 아니라 실제 RGBA 이미지 · 색상별 스와치).
-        let img = |rgb| Rc::new(IconImage::swatch(16, rgb));
+        // 이미지 데모 = **브랜딩 이미지(앱 아이콘)** — raw RGBA로 임베드(런타임 디코더 불요).
+        let brand = Rc::new(IconImage::from_rgba(
+            64,
+            64,
+            include_bytes!("../assets/brand-64.rgba").to_vec(),
+        ));
+        let img = |_rgb: (u8, u8, u8)| brand.clone();
         let combo_items = vec![
             ComboItem::new("home", "Home").with_image(img((0x3D, 0x8B, 0xFF))),
             ComboItem::new("recents", "Recents").with_image(img((0x2E, 0xA0, 0x43))),
@@ -120,8 +125,8 @@ impl GalleryWidget {
         combo.set_help("New tab opens in this location by default.");
         combo.set_show_help(true);
 
-        // 행 앞 이미지가 들어간 트리/그리드 모델(우측 버전용).
-        let ti = |rgb| Rc::new(IconImage::swatch(16, rgb));
+        // 행 앞 이미지가 들어간 트리/그리드 모델(우측 버전용) — 브랜딩 이미지 사용.
+        let ti = |_rgb: (u8, u8, u8)| brand.clone();
         let tree_img_model = TreeModel::new(vec![
             TreeNode::branch(
                 "Path Finder",
