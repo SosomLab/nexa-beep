@@ -123,10 +123,14 @@ impl TypeAhead {
         }
     }
 
-    /// 주기 점검 — 타임아웃 경과 시 버퍼 소거. 소거했으면 `true`(HUD 다시 그리기).
+    /// 주기 점검 — 타임아웃 경과 시 버퍼 소거(**조합 중 텍스트 포함**). 소거했으면 `true`.
+    /// buf뿐 아니라 preedit도 봐야 한다 — 한글 조합("김")은 확정 전이라 buf가 비어 있다(HUD가
+    /// 안 사라지던 버그).
     pub fn tick(&mut self, now_ms: u64) -> bool {
-        if !self.buf.is_empty() && now_ms.saturating_sub(self.last_ms) > self.timeout_ms {
+        let active = !self.buf.is_empty() || !self.preedit.is_empty();
+        if active && now_ms.saturating_sub(self.last_ms) > self.timeout_ms {
             self.buf.clear();
+            self.preedit.clear();
             true
         } else {
             false
