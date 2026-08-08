@@ -144,7 +144,7 @@ B안에서 플랫폼 계층이 할 일은 **창 생성 · 픽셀 버퍼 표시 �
 
 **부분 판정** — **크기 차원 R-8 해소**(0.40MB ≪ 10MB). 메모리는 실기 재측정 대상이나 **GUI 프레임워크 공통 비용**이라 스택 교체로 해결되지 않는다. **P1 vs P2의 진짜 축 = 의존성 수(Linux 75) vs 직접 구현 코드량(R-3)** 으로 좁혀졌다.
 
-**후속** — ⓐ **P2 채택 확정**은 사용자 결정(첫 대규모 의존성·DR-8 예외) ⓑ 실기 SP-1b/d/e 후 [05 NFR-B-1](05-requirements.md)에 **플랫폼별 메모리 지표**(macOS=phys_footprint) 단서 추가 ⓒ 게이트를 위협하면 P1으로 좁히거나 NFR 정정(과거 값 삭제 금지 — [16 §2-5](16-doc-git-conventions.md)).
+**후속** — ⓐ ✅ **P2 채택 확정**(2026-08-08 사용자 — winit+softbuffer, [10 §3 원장](10-decision-record.md)) ⓑ 실기 SP-1b/d/e 후 [05 NFR-B-1](05-requirements.md)에 **플랫폼별 메모리 지표**(macOS=phys_footprint) 단서 추가 ⓒ 게이트를 위협하면 NFR 정정(과거 값 삭제 금지 — [16 §2-5](16-doc-git-conventions.md)). Linux·Windows 코드 경로는 `cargo check` 크로스 검증 완료(08-08).
 
 ---
 
