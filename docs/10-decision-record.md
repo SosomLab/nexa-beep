@@ -86,7 +86,7 @@
 | **[ADR-0003](09-adr-0003-transport-abstraction.md)** | 전송 추상화(4계층 경계) | ✅ **Accepted**(08-08 — **구현으로 비준**: M1-1 `Transport`/`Link`/`PeerHint`, M2-1a `Session`. 구현이 문서 모호함 1건을 정정 — `PeerHint`는 `Locator`를 담지 않는다) |
 | **[ADR-0004](11-adr-0004-quarantine.md)** | 수신 파일 무해화 — `.beepq` 컨테이너·위험 등급·승인 UX | 📐 **Proposed**(08-08) — 컨테이너 레이아웃 · 등급 4단계 확장자표 · 상태 기계(fail-closed) · 플랫폼 표식 API |
 | **[ADR-0005](17-adr-0005-history-at-rest.md)** | 대화 기록 저장 암호화(at-rest) | 📐 **Proposed**(08-08) — 기기 키 파생 기본 + 승격 옵션 · 블라인드 인덱스 검색 · 크립토 셰레딩 |
-| **[ADR-0006](19-adr-0006-manual-endpoint.md)** | 수동 엔드포인트 등록(직접 IP로 노드 추가) | 📐 **Proposed**(08-08) — `Locator::Manual` · 원격 신뢰 등급 · 인바운드 요청 대기 |
+| **[ADR-0006](19-adr-0006-manual-endpoint.md)** | 수동 엔드포인트 등록(직접 IP로 노드 추가) | ✅ **Accepted**(08-08 — `Transport::add_endpoint` 구현·발견 우회 IP 연결·**맥↔docker-linux IP 대화 실증**. 원격 신뢰 등급·인바운드 요청 대기 세부는 M4/후속) |
 | **[ADR-0007](20-adr-0007-multi-device-identity.md)** | 다중 기기 신원(UserId 1:M PeerId) | ✅ **Accepted**(08-08) — 서명된 기기 목록 · 그룹 팬아웃 재사용 · **주 기기 + 복구 시드** · 기기 관리 화면 · **v1 제약 4건** |
 | **[ADR-0008](22-adr-0008-profile-disclosure.md)** | 프로필 옵트인 노출(발견 시 식별 정보 공개) | ✅ **Accepted**(08-08) — 브로드캐스트 미포함 · 세션 경유 + 자동 프리페치 · 필드 단위 옵트인 |
 | **[ADR-0009](23-adr-0009-shared-folders.md)** | 공유 폴더 — 가상경로·풀 다운로드 | ✅ **Accepted**(08-08 — 기본 scope `Connected`·설정에서 변경 가능) — 가상 루트 · fail-closed 경로 해석 · scope 3종 · pull도 동일 무해화 게이트 |
