@@ -15,6 +15,7 @@
 pub mod action;
 pub mod identity;
 pub mod link;
+pub mod mux;
 pub mod name;
 pub mod pipeline;
 pub mod ports;
@@ -30,6 +31,7 @@ pub mod testkit;
 pub use action::{ActionKind, FailCode, Outcome, RejectCode, RiskLevel, ScanOutcome};
 pub use identity::{DeviceId, PeerId, Recipients, TrustLevel, UserId};
 pub use link::{Link, LinkError};
+pub use mux::{MuxSession, StreamId};
 pub use name::{DisplayName, NameError};
 pub use pipeline::{ActionCtx, ActionId, Interceptor, Pipeline, Reject};
 pub use ports::{Actor, Clock, Meter, MeterEvent, MonoInstant, Quantity, Rng, Tracer, WallTime};

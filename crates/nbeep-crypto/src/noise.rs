@@ -167,7 +167,7 @@ impl<L: Link> Session for NoiseSession<L> {
 
     fn send(&mut self, message: &[u8]) -> Result<(), SessionError> {
         if message.len() > NOISE_MAX - TAG_LEN {
-            return Err(SessionError::TooLarge); // 큰 메시지 청킹은 M2-3
+            return Err(SessionError::TooLarge); // 큰 메시지 청킹은 M4(파일 전송)
         }
         let mut out = vec![0u8; message.len() + TAG_LEN];
         let n = self
@@ -359,5 +359,38 @@ mod trust_integration {
             .map(|_| ())
             .unwrap_err();
         assert_eq!(err, SessionError::Blocked);
+    }
+}
+
+#[cfg(test)]
+mod mux_integration {
+    //! 실물 Noise 세션 위 다중화(M2-3) — 암호화 세션 하나로 제어/대화 스트림이 독립 동작.
+
+    use super::*;
+    use nbeep_core::mux::{MuxSession, StreamId};
+    use nbeep_core::testkit::duplex;
+    use std::thread;
+
+    #[test]
+    fn control_and_chat_share_one_encrypted_session() {
+        let (alice, bob) = (Identity::generate(), Identity::generate());
+        let bob_id = bob.peer_id();
+        let (la, lb) = duplex(alice.peer_id(), bob.peer_id());
+        let hb = thread::spawn(move || NoiseSession::accept(lb, &bob));
+        let a = NoiseSession::initiate(la, &alice).expect("a 수립");
+        let b = hb.join().unwrap().expect("b 수립");
+
+        let (mut ma, mut mb) = (MuxSession::new(a), MuxSession::new(b));
+        // 한 세션에서 제어(ack)와 대화가 섞여 흘러도 스트림별로 분리 수신된다.
+        ma.send(StreamId::Chat, b"hi bob").unwrap();
+        ma.send(StreamId::Control, b"ack:42").unwrap();
+        assert_eq!(mb.recv(StreamId::Control).unwrap(), b"ack:42");
+        assert_eq!(mb.recv(StreamId::Chat).unwrap(), b"hi bob");
+        // 역방향도 동일.
+        mb.send(StreamId::Chat, b"hi alice").unwrap();
+        assert_eq!(ma.recv(StreamId::Chat).unwrap(), b"hi alice");
+        // 위임 확인 — mux가 안쪽 세션의 인증 결과를 그대로 노출한다.
+        assert_eq!(ma.peer(), bob_id);
+        assert_eq!(mb.trust(), TrustLevel::Unverified);
     }
 }

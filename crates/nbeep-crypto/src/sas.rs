@@ -122,10 +122,13 @@ mod tests {
         // 뒷 묶음(두 번째 해시 영역)도 키에 따라 달라진다 — 앞 8바이트만 접던 구멍 회귀 방지.
         let a = safety_number(pid(1), pid(2));
         let b = safety_number(pid(1), pid(4));
-        let (ta, tb) = (a.split(' ').last().unwrap(), b.split(' ').last().unwrap());
+        let (ta, tb) = (
+            a.split(' ').next_back().unwrap(),
+            b.split(' ').next_back().unwrap(),
+        );
         // 마지막 묶음까지 확률적으로 달라야 정상(같으면 1/100000 우연 — 키 셋 바꿔 재확인).
         let c = safety_number(pid(2), pid(3));
-        let tc = c.split(' ').last().unwrap();
+        let tc = c.split(' ').next_back().unwrap();
         assert!(
             ta != tb || ta != tc,
             "마지막 묶음이 전부 같으면 뒷 영역 미사용 의심"
