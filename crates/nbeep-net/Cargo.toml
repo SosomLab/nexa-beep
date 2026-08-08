@@ -10,5 +10,9 @@ repository.workspace = true
 [lints]
 workspace = true
 
+[features]
+# InMemoryTransport fake 노출(테스트 전용 · 릴리스 미포함). 상위 크레이트는 dev-dep에서 켠다.
+testkit = []
+
 [dependencies]
 nbeep-core.workspace = true
