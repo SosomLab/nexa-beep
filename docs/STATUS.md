@@ -3,7 +3,12 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
-> **갱신: 2026-08-08 33차 (KST)** — **S1 IPv6 발견 + 텍스트 편집 모델 + 입력창 정식 렌더**(`feat/m3-edit`(+`feat/m1-ipv6` 스택) → main 병합):
+> **갱신: 2026-08-08 34차 (KST)** — **M3-3 IME 조합 표시 + 그룹 모델(FR-G)**(`feat/m3-ime`(+`feat/m5-groups`) → main 병합):
+> ① **IME 프리에딧** — 조합 중 텍스트를 캐럿에 accent+밑줄로(확정 전). `set_preedit`(위젯 메서드 — InputEvent가 Copy라 String 변형 회피)·bin `Ime::Preedit` 라우팅·`Char` 도착 시 클리어+삽입. 한글 조합이 눈에 보이며 입력.
+> ② **그룹 모델(FR-G)** — `Group`/`GroupStore`(CRUD). ★ **순수 로컬**(서버·합의·서명 없음 — `UserId`와 정반대). `recipients()`→기존 `fanout`(1:1=그룹 같은 함수 · FR-G-6, 그룹 전용 전송 0줄). **실물 세션 통합**: 그룹 2인에 암호화 전송·복호 도달(FR-G-2).
+> **177테스트 green**. 잔여 = GUI 그룹 관리·그룹 스레드(FR-G-4)·영속(M2-5). [journal/2026-08-08.md](journal/2026-08-08.md).
+>
+> **직전(08-08 33차)** — **S1 IPv6 발견 + 텍스트 편집 모델 + 입력창 정식 렌더**(`feat/m3-edit`(+`feat/m1-ipv6` 스택) → main 병합):
 > ① **S1 IPv6 멀티캐스트** best-effort 병행(ff02::beb·전용 소켓·미지원 시 IPv4만) — M1-4 "S1~S3 동시 시도" 코드 완성. IPv6 단독 전달은 D-8b.
 > ② **`edit` 모델 이식** — `EditState`(char 버퍼·캐럿·선택·insert/insert_str/backspace/cut/key). **char 단위라 한글·이모지 경계 자동 보존.** IME(M3-3) 확정 문자열 진입점.
 > ③ **대화 입력창 정식화** — 임시 append(캐럿 이동 불가) → `EditState` 배선(←→·Home/End·Shift 선택·중간 삽입·⌘A) + **폰트 실측 픽셀 커서·선택 하이라이트**(`text_width` 기반). 진짜 텍스트 필드.
