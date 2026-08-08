@@ -7,6 +7,8 @@
 
 ## 2026-08-08
 
+- **GUI 수동 추가 UI(⌘/Ctrl+K) — 창에서 IP로 대화**(feat/m3-manual-ui): 헤드리스 `--connect`로 증명한 DR-19 수동 연결을 **창에서** 가능하게. `⌘/Ctrl+K` → 상태바가 주소 입력창이 됨(host:port · Enter 연결 · Esc 취소 · 새 위젯 없이 상태바 재사용 — 최소 위험) → `add_endpoint`→Noise→TOFU→대화 자동 오픈(`open_session_addr`). 목록 타입어헤드와 충돌 없음(입력 모드가 문자를 가로챔). ⚠️ 핸드셰이크는 블로킹(LAN 수십 ms). **이제 창에서 docker-linux `--serve`에 IP로 붙어 대화 가능**(발견 경계 우회). GUI 기동 스모크·수동 경로 회귀 통과. 157테스트 green. 상세 [journal/2026-08-08.md](journal/2026-08-08.md).
+
 - **DR-19 수동 엔드포인트 — 맥↔docker-linux IP 대화 실증**(feat/m1-manual): 발견 경계(맥↔Docker Desktop 멀티캐스트 불가)를 **IP 직접 연결**로 우회. `Transport::add_endpoint`(기본 미지원 — InMemory 등 · LocalDirect 구현: 발견 없이 host:port/DDNS 해석 후 TCP 연결, **신원은 Noise 핸드셰이크가 확정** — DR-8 주소는 힌트) + bin `--serve <port>`(수동 서버·고정 포트)·`--connect <host:port>`(수동 클라이언트). **실증**: docker-linux `--serve 47200`(`-p 47200:47200`) ↔ 맥 `--connect 127.0.0.1:47200` → 지문 확정·"안녕! 수동 연결이야"·"에코:" 왕복. **크로스플랫폼(맥 arm64 ↔ linux amd64) 암호화 대화가 IP로 성립**. ADR-0006 Accepted(핵심). 157테스트 green. 상세 [journal/2026-08-08.md](journal/2026-08-08.md).
 
 - **M2-7 마무리 — 인바운드→GUI 대화 자동 생성**(feat/m2-recvpump): 인바운드가 백그라운드 에코이던 것을 **진짜 대화로 승격**. `spawn_inbound_accept`(수락 스레드는 **핸드셰이크만** 블로킹 수행 → 완성 세션을 `AppEvent::Inbound`로 GUI에 전달) + `user_event`가 메인 스레드에서 **TOFU 판정**(TrustStore가 여기 있다)→다중화→대화·뷰 생성. Separate=상대별 새 창, Single=목록 화면이면 열고 대화 중이면 알림(포커스 안 뺏음). 뷰 생성/창 생성 헬퍼(`install_conversation`/`build_chat_view`/`open_separate_window`)로 아웃바운드·인바운드 공용화. **두 live GUI가 서로를 발견·연결해 양방향 실시간 대화**가 성립(두 인스턴스 동시 기동 스모크 통과). 157테스트 green. 상세 [journal/2026-08-08.md](journal/2026-08-08.md).

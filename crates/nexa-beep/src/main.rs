@@ -541,6 +541,8 @@ mod app_window {
         primary_down: bool,
         /// 세션 액터가 GUI를 깨우는 통로(M2-7).
         proxy: winit::event_loop::EventLoopProxy<AppEvent>,
+        /// 수동 엔드포인트 입력 중 버퍼(DR-19 · `⌘/Ctrl+K`). None = 입력 아님.
+        adding: Option<String>,
     }
 
     impl App {
@@ -635,6 +637,43 @@ mod app_window {
             let est = nbeep_core::TrustedSession::wrap(noise, &mut self.trust)
                 .map_err(|e| e.to_string())?;
             Ok((nbeep_core::MuxSession::new(est.session), est.decision))
+        }
+
+        /// 수동 주소로 세션 수립(DR-19) — add_endpoint(발견 우회)→Noise→TOFU→대화 등록.
+        /// 반환 = 확정된 `PeerId`(주소는 힌트·신원은 지문). ⚠️ 핸드셰이크는 블로킹(LAN 수십 ms).
+        fn open_session_addr(&mut self, addr: &str) -> Result<PeerId, String> {
+            use nbeep_core::Session as _;
+            let link = self
+                .transport
+                .add_endpoint(addr)
+                .map_err(|e| format!("{e:?}"))?;
+            let noise = nbeep_crypto::NoiseSession::initiate(link, &self.identity)
+                .map_err(|e| e.to_string())?;
+            let est = nbeep_core::TrustedSession::wrap(noise, &mut self.trust)
+                .map_err(|e| e.to_string())?;
+            let peer = est.session.peer();
+            self.install_conversation(nbeep_core::MuxSession::new(est.session));
+            Ok(peer)
+        }
+
+        /// 수동 입력 확정 — 주소로 연결하고 대화를 연다.
+        fn commit_manual_add(&mut self, addr: String, el: &ActiveEventLoop) {
+            let addr = addr.trim().to_string();
+            self.adding = None;
+            if addr.is_empty() {
+                return;
+            }
+            match self.open_session_addr(&addr) {
+                Ok(peer) => {
+                    self.status = format!("수동 연결 성공 — {}", peer.short());
+                    // 대화 뷰 열기(이미 conversation 등록됨 → ensure는 복원 경로).
+                    self.activate(peer, el);
+                }
+                Err(e) => self.status = format!("수동 연결 실패({addr}): {e}"),
+            }
+            if let Some(mid) = self.main_id {
+                self.request_redraw(mid);
+            }
         }
 
         fn peer_title(&self, peer: PeerId) -> String {
@@ -993,11 +1032,15 @@ mod app_window {
                     ctx.select_font(nbeep_ui::FontSlot::Status, false);
                     let pad = (8.0 * entry.scale).round() as i32;
                     let dy = (bar_h - (14.0 * entry.scale) as i32) / 2;
+                    let bar_text = match &self.adding {
+                        Some(buf) => format!("주소(host:port): {buf}▏"),
+                        None => self.status.clone(),
+                    };
                     ctx.text_opaque(
                         bar.x + pad,
                         bar.y + dy,
                         bar,
-                        &self.status,
+                        &bar_text,
                         theme.text_dim,
                         theme.chrome_bg,
                     );
@@ -1203,14 +1246,60 @@ mod app_window {
                     if event.state != ElementState::Pressed {
                         return;
                     }
-                    // Cmd/Ctrl+, = 설정(DR-24 · VS Code/macOS 표준).
+                    // Cmd/Ctrl+, = 설정 · Cmd/Ctrl+K = 수동 엔드포인트 추가(DR-19).
                     if self.primary_down {
                         if let WKey::Character(t) = &event.logical_key {
-                            if t.as_str() == "," {
-                                self.open_settings(el);
-                                return;
+                            match t.as_str() {
+                                "," => {
+                                    self.open_settings(el);
+                                    return;
+                                }
+                                "k" | "K" => {
+                                    self.adding = Some(String::new());
+                                    self.status =
+                                        "주소 입력(host:port) · Enter 연결 · Esc 취소: ".into();
+                                    if let Some(mid) = self.main_id {
+                                        self.request_redraw(mid);
+                                    }
+                                    return;
+                                }
+                                _ => {}
                             }
                         }
+                    }
+                    // 수동 입력 모드 — 문자/Enter/Esc를 목록이 아니라 주소 버퍼로.
+                    if self.adding.is_some() {
+                        match &event.logical_key {
+                            WKey::Named(NamedKey::Enter) => {
+                                let addr = self.adding.take().unwrap_or_default();
+                                self.commit_manual_add(addr, el);
+                            }
+                            WKey::Named(NamedKey::Escape) => {
+                                self.adding = None;
+                                self.status = "수동 추가 취소".into();
+                                if let Some(mid) = self.main_id {
+                                    self.request_redraw(mid);
+                                }
+                            }
+                            WKey::Named(NamedKey::Backspace) => {
+                                if let Some(buf) = self.adding.as_mut() {
+                                    buf.pop();
+                                }
+                                if let Some(mid) = self.main_id {
+                                    self.request_redraw(mid);
+                                }
+                            }
+                            WKey::Character(t) => {
+                                if let Some(buf) = self.adding.as_mut() {
+                                    buf.push_str(t);
+                                }
+                                if let Some(mid) = self.main_id {
+                                    self.request_redraw(mid);
+                                }
+                            }
+                            _ => {}
+                        }
+                        return;
                     }
                     let key = match &event.logical_key {
                         WKey::Named(NamedKey::ArrowUp) => Some(Key::Up),
@@ -1331,11 +1420,12 @@ mod app_window {
             conversations: HashMap::new(),
             dedup: nbeep_core::DedupIndex::new(),
             started: Instant::now(),
-            status: format!("[{net_hint}] {mode_hint} · ⌘/Ctrl+, = 설정"),
+            status: format!("[{net_hint}] {mode_hint} · ⌘/Ctrl+K = 주소 추가 · ⌘/Ctrl+, = 설정"),
             settings,
             settings_view: None,
             primary_down: false,
             proxy,
+            adding: None,
         };
         event_loop.run_app(&mut app).unwrap();
     }
