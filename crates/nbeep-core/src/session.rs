@@ -22,6 +22,8 @@ pub enum SessionError {
     TooLarge,
     /// 차단된 상대 — 수립 금지([`crate::trust`] · fail-closed).
     Blocked,
+    /// 수신 큐 초과 — 무한 버퍼 대신 세션 종료([`crate::mux`] · fail-closed).
+    Backpressure,
 }
 
 impl From<LinkError> for SessionError {
@@ -38,6 +40,7 @@ impl core::fmt::Display for SessionError {
             SessionError::Handshake => f.write_str("핸드셰이크 실패"),
             SessionError::TooLarge => f.write_str("프레임 상한 초과"),
             SessionError::Blocked => f.write_str("차단된 상대"),
+            SessionError::Backpressure => f.write_str("수신 큐 초과"),
         }
     }
 }

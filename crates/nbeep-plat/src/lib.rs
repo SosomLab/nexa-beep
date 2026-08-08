@@ -2,3 +2,5 @@
 //!
 //! 플랫폼 의존 코드를 여기 하나에 격리(NFR-C-3). OS 동작 어댑터(`PlatformConventions`, [docs/14 §6]).
 //! `unsafe`는 이 크레이트와 `nbeep-net`의 지정 모듈에만(docs/13 §10).
+
+pub mod font;

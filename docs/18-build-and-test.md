@@ -11,10 +11,10 @@
 |---|---|
 | 개발 빌드 | `cargo build --workspace` |
 | 릴리스 빌드 | `cargo build --release -p nexa-beep -p nbeep-imgdec` → `target/release/{nexa-beep,nbeep-imgdec}` |
-| **테스트**(green 기준) | `cargo test --workspace --features nbeep-core/testkit` — **전부 통과 + 0 ignored 예상 밖 없음** |
+| **테스트**(green 기준) | `cargo test --workspace --features nbeep-core/testkit,nbeep-net/testkit,nbeep-crypto/testkit` — **전부 통과 + 0 ignored 예상 밖 없음** |
 | 포맷 | `cargo fmt --all --check` (수정은 `--check` 없이) |
-| 린트 | `cargo clippy --workspace --all-targets --features nbeep-core/testkit -- -D warnings` |
-| rustdoc 링크 | `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --features nbeep-core/testkit` |
+| 린트 | `cargo clippy --workspace --all-targets --features nbeep-core/testkit,nbeep-net/testkit,nbeep-crypto/testkit -- -D warnings` |
+| rustdoc 링크 | `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --features nbeep-core/testkit,nbeep-net/testkit,nbeep-crypto/testkit` |
 | 크로스 빌드 | `cargo build --workspace --target <TARGET>` (예: `aarch64-pc-windows-msvc`) |
 | 산출물 크기 | 릴리스 빌드 후 `wc -c target/release/<bin>` — **≤10MB/바이너리**(NFR-B-3) |
 
@@ -22,6 +22,8 @@
 (테스트 실행은 네이티브 3-OS, ARM/타OS는 **빌드 검증만** — [CI](#4-ci--githubworkflowsciyml).)
 
 > **테스트 더블**([13 §11-1](13-code-design-standards.md)): 미완 협력자는 `testkit`(feature 게이트)의 fake/spy로 대체해 단위별로 검증한다. 릴리스엔 미포함.
+>
+> ★ **테스트 의무 + CI 회귀 게이트(사용자 확정 08-08)** — **모든 목적 기능은 테스트 로직과 함께**만 완료로 친다(테스트 없는 기능 커밋 금지). 완료된 기능의 테스트는 CI `test` 잡(3-OS)이 **매 push·PR마다 전부** 실행한다 — 다른 기능 구현이 기존 동작을 되돌리면 CI가 red가 되어 main 병합이 막힌다(main 항상 green). **새 크레이트에 testkit feature를 추가하면 CI·이 표의 `--features` 목록에 같은 커밋으로 추가**한다 — 빠뜨리면 그 표면이 회귀 게이트 밖에 놓인다.
 
 ## 2. 검증 항목 (기능 도착 시 절차화)
 

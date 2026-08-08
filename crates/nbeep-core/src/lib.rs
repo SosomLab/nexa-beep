@@ -13,12 +13,16 @@
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
 pub mod action;
+pub mod chat;
 pub mod identity;
 pub mod link;
+pub mod mux;
 pub mod name;
+pub mod peers;
 pub mod pipeline;
 pub mod ports;
 pub mod redact;
+pub mod safetext;
 pub mod session;
 pub mod trust;
 pub mod trusted;
@@ -28,11 +32,15 @@ pub mod testkit;
 
 // ── 편의 재수출(공개 표면 설계 — 내부 모듈 경로를 그대로 노출하지 않는다) ──
 pub use action::{ActionKind, FailCode, Outcome, RejectCode, RiskLevel, ScanOutcome};
+pub use chat::{fanout, ChatMessage, DedupIndex, FanoutReport, MessageBody, Sequencer, WireError};
 pub use identity::{DeviceId, PeerId, Recipients, TrustLevel, UserId};
 pub use link::{Link, LinkError};
+pub use mux::{MuxSession, StreamId};
 pub use name::{DisplayName, NameError};
+pub use peers::{DepartReason, PeerEntry, PeerEvent, PeerTable, SourceId};
 pub use pipeline::{ActionCtx, ActionId, Interceptor, Pipeline, Reject};
 pub use ports::{Actor, Clock, Meter, MeterEvent, MonoInstant, Quantity, Rng, Tracer, WallTime};
+pub use safetext::{find_links, sanitize_message, LinkSpan, SafeText};
 pub use session::{Session, SessionError};
 pub use trust::{MemoryTrustStore, TrustDecision, TrustStore};
 pub use trusted::{Established, TrustedSession};
