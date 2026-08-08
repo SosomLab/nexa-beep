@@ -16,6 +16,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
 pub mod transport;
+pub mod udp;
 pub mod wire;
 
 /// 소켓 없는 전송 fake — 릴리스 미포함(feature `testkit` 또는 테스트 빌드).

@@ -15,6 +15,11 @@
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    if let Some(pos) = args.iter().position(|a| a == "--discover-probe") {
+        let secs = args.get(pos + 1).and_then(|s| s.parse().ok()).unwrap_or(8);
+        discover_probe(secs);
+        return;
+    }
     let open_window = args.iter().any(|a| a == "--window");
     let separate = args.iter().any(|a| a == "--separate-windows");
     if open_window || separate {
@@ -25,10 +30,48 @@ fn main() {
         });
     } else {
         println!(
-            "nexa-beep {} — scaffold (창은 `--window` · 상대별 별도 창은 `--separate-windows`)",
+            "nexa-beep {} — scaffold (창 `--window` · 별도 창 `--separate-windows` · 발견 프로브 `--discover-probe [초]`)",
             env!("CARGO_PKG_VERSION")
         );
     }
+}
+
+/// 헤드리스 발견 프로브(M1-4 · D-8a) — 실물 멀티캐스트로 `secs`초 동안 발견을 찍는다.
+/// Docker 컨테이너 N개 교차 검증·실기 D-8b에서 그대로 쓴다(창 불요).
+fn discover_probe(secs: u64) {
+    let identity = nbeep_crypto::Identity::generate();
+    let me = identity.peer_id();
+    // 기동 인스턴스 난수(D-22 U-P1) — 별도 키 생성의 앞 16B(프로브 한정 간이 난수).
+    let mut instance = [0u8; 16];
+    instance.copy_from_slice(&nbeep_crypto::Identity::generate().peer_id().as_bytes()[..16]);
+    let name = nbeep_core::DisplayName::parse(&format!("probe-{}", me.short()))
+        .expect("지문 라벨은 항상 유효");
+    let d = nbeep_net::udp::UdpDiscovery::spawn(me, instance, name, 0, 1, 500)
+        .expect("발견 시작 실패(방화벽·인터페이스)");
+    println!("PROBE me={} {}s", me.short(), secs);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+    let mut clones = nbeep_net::CloneWatch::new(10_000);
+    let started = std::time::Instant::now();
+    while std::time::Instant::now() < deadline {
+        if let Ok(o) = d
+            .events()
+            .recv_timeout(std::time::Duration::from_millis(300))
+        {
+            let now = nbeep_core::MonoInstant(
+                u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX),
+            );
+            let clone_flag = clones.observe(o.packet.peer, o.packet.instance, now);
+            println!(
+                "SAW peer={} name={} kind={:?} from={}{}",
+                o.packet.peer.short(),
+                o.packet.name.as_str(),
+                o.packet.kind,
+                o.from,
+                if clone_flag { " ⚠️CLONE" } else { "" }
+            );
+        }
+    }
+    println!("DONE");
 }
 
 /// 창 + 위젯 조립 — winit 이벤트를 `InputEvent`로 번역해 위젯에 라우팅.

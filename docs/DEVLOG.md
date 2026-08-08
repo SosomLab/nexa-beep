@@ -7,6 +7,8 @@
 
 ## 2026-08-08
 
+- **M1-4 슬라이스 1 — 첫 실물 소켓: S2 멀티캐스트 발견 + 실증 3건**(feat/m1-udp · socket2 사용자 승인): `UdpDiscovery` — socket2(REUSEADDR/REUSEPORT — 같은 호스트 다중 인스턴스)·그룹 가입·**자기 패킷은 주소가 아니라 키로 필터**([08 §5]) · 기동 HELLO 1회 + 주기 ANNOUNCE(주입) · 드롭 시 **GOODBYE 2회**(FR-D-8) · 그룹/포트/TTL은 잠정 상수 명시(D-8b 확정 대상). **실증 3건**: ① 맥 같은 호스트 2인스턴스 상호 발견(`--ignored` 테스트 — CI 러너 멀티캐스트 비보장이라 로컬/Docker 실행 절차) ② 맥 프로브 2프로세스 — 실 LAN 주소(192.168.45.84)로 Hello·Announce 왕복 ③ **Docker Linux 컨테이너 2노드 교차 발견** — `--discover-probe` 헤드리스 모드로 172.18.0.2↔0.3 상호 SAW(**D-8a-Linux: 실물 NXBP 프로토콜이 컨테이너 테스트베드에서 동작**). 프로브에 `CloneWatch` 배선(같은 키·다른 instance = ⚠️CLONE 표시). 원장 socket2 등재. 155테스트 green. 상세 [journal/2026-08-08.md](journal/2026-08-08.md).
+
 - **D-22 확정 + M1-3 와이어 포맷**(feat/m1-wire · 사용자 승인 — 추천안 수용 *"계속 진행"*): ① **D-22 = U-P1+U-P2 둘 다 채택·즉시 구현** — 발견 패킷에 `instance` 16B(기동 난수)가 들어갔고(**포맷 확정 전 마지막 공짜 시점**에 맞춤), `CloneWatch`(같은 키·다른 instance가 창 내 공존 = 복제 경고 · 재시작은 무오탐)와 `NoiseSession`의 `SelfPeer` 거부(복제 키 양방향 거부 테스트 — 같은 개인키 두 실체가 핸드셰이크하면 양쪽 다 실패)로 실체화. **탐지이지 방지가 아님**을 코드 주석·문서에 명시 ② **M1-3 와이어 포맷 확정** — `net/wire.rs`: `[NXBP][ver][type][flags][pubkey 32][port][epoch][seq][instance 16][name]` 고정부 71B · **512B 강제**(인코딩이 초과 불가) · 미지 버전/종류 **무시**(전방 호환) · 이름 무해화+**지문 라벨 폴백**(깨진 이름이 존재를 숨기지 않게) · **골든 레이아웃 테스트**(바이트 오프셋 고정 — 바뀌면 CI가 막음). 잔여 = 소켓 바인딩(M1-4 — socket2 의존 결정 대기). **155테스트 green**. 상세 [journal/2026-08-08.md](journal/2026-08-08.md).
 
 - **Windows VM 불요 확정**(사용자 — *"리눅스가 된다면 굳이 윈도우 VM은 없어도"*): Windows 커버리지 재정리 — 단위·회귀 = **CI windows-latest**(매 push 자동), 실행·GUI·방화벽·IME = **원격 Windows PC**(망 달라도 무관), 크로스 OS 조기 신호 = Docker Linux 컨테이너 테스트베드. **유일한 공백 = 맥↔Win LAN 상호운용 → D-8b 실기 날로 이월**(어차피 필요한 날이라 일정 손실 0). TODO D-8a 재정의.

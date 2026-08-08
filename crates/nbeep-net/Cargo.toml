@@ -16,3 +16,4 @@ testkit = []
 
 [dependencies]
 nbeep-core.workspace = true
+socket2 = { version = "0.5", features = ["all"] }

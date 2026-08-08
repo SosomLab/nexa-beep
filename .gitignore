@@ -19,3 +19,4 @@ desktop.ini
 # 로컬 실행 데이터 (포터블 모드 영속물 — DR-4)
 /data/
 *.log
+/.docker-target

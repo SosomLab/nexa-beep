@@ -104,6 +104,7 @@
 | **winit** 0.30 | 창·입력·**IME**·DPI (ADR-0001 **P2** 창 라이브러리) | Apache-2.0 (OR MIT) | 4타깃(Win/mac/Linux Wayland+X11) 창·IME를 직접 구현(R-3) 대신 위임. 사실상 표준 | ✅ **채택**(08-08 사용자 확정 · SP-1) |
 | **softbuffer** 0.4 | CPU 픽셀 버퍼 present(ADR-0001 B안) | MIT OR Apache-2.0 | winit 창에 우리 래스터라이저 출력을 표시. GPU 미사용(NFR-B-1) | ✅ **채택**(08-08 사용자 확정 · SP-1) |
 | **snow** 0.9 | Noise 프로토콜 프레임워크 — `Noise_XX_25519_ChaChaPoly_BLAKE2s`([08](08-adr-0002-discovery-transport.md) · DR-11) | MIT OR Apache-2.0 | 암호를 직접 구현하지 않고(NFR-S-3) 검증된 표준 프레임워크에 위임. WireGuard 계열 실전 검증 | ✅ **채택**(08-08 사용자 확정 · M2-1b) |
+| **socket2** 0.5 | 발견 소켓 옵션(`SO_REUSEPORT`·멀티캐스트 IF 등 std 미노출) — M1-4 실물 발견 | MIT OR Apache-2.0 (서브트리 = libc뿐) | rust 공식 라이브러리 팀 관리 · mio/tokio의 기반 크레이트 · 대안(libc 직접)은 unsafe 소켓 코드가 우리 몫이 됨 | ✅ **채택**(08-08 사용자 승인 — 추천안 수용) |
 | **memmap2** 0.9 | 시스템 폰트 파일 메모리 매핑 — 힙 복사 제거(유휴 RSS — NFR-B-1) | MIT OR Apache-2.0 | mac 한글 TTC 55MB·win 맑은 고딕 12.8MB를 `fs::read`로 힙에 들면 RSS 예산(≤30MB)을 잠식. mmap = 파일 백드 페이지(사용 글리프만 상주·OS가 회수) | ✅ **채택**(08-08 사용자 확정 — *"메모리 매핑 방식으로 적용"*) |
 | **ab_glyph** 0.2 | 폰트 파싱(ttf-parser 계열)·글리프 래스터 — 텍스트 스택 최소 경로([07 §SP-1c](07-adr-0001-stack.md)) | Apache-2.0 (서브트리 4개 전부 Apache/MIT) | SP-1c 3후보 실측 최소(+99KB·외부 4) · 한글 TTC 검증 · 셰이핑은 v1 불요(완성형)라 파서+래스터만 | ✅ **채택**(08-08 사용자 확정 · SP-1c) |
 
