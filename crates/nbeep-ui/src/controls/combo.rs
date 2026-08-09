@@ -168,6 +168,15 @@ pub trait ComboControl: Control {
     fn extra_rows(&self) -> Vec<ComboItem> {
         Vec::new()
     }
+    /// 목록에서 ✓를 그릴 항목(기본 = 선택 index). 커스텀 값 활성 시 `None`(Combo 재정의).
+    fn checked_index(&self) -> Option<usize> {
+        Some(self.core().selected)
+    }
+    /// 확장 항목 `j`에 ✓ 표시 여부(기본 없음) — 직접 입력 값 활성 시 true(Combo 재정의).
+    fn extra_checked(&self, j: usize) -> bool {
+        let _ = j;
+        false
+    }
 
     // ── 상태 조작(상속 기본 메서드) ──
     /// 드롭다운 열림 여부.
@@ -342,7 +351,7 @@ pub trait ComboControl: Control {
             // 선택 ✓(크기 70% — 사용자 확정 · 16→11).
             let cs = self.s(11);
             let check = Rect::new(row.x + self.s(6), row.y + (rh - cs) / 2, cs, cs);
-            if i == self.core().selected {
+            if Some(i) == self.checked_index() {
                 draw_check_mark(ctx, check, self.accent_now(theme));
             }
             let cy = row.y + rh / 2;
@@ -371,13 +380,19 @@ pub trait ComboControl: Control {
                 theme.border,
             );
             y += self.s(SEP_H);
-            for it in &extras {
+            for (j, it) in extras.iter().enumerate() {
                 let row = Rect::new(pop.x + self.s(3), y, pop.w - self.s(6), rh);
                 let cy = row.y + rh / 2;
+                // 항목과 같은 ✓ 슬롯(정렬 통일) — 직접 입력 값 활성 시 "직접 입력…"에 ✓.
+                let cs = self.s(11);
+                let check = Rect::new(row.x + self.s(6), row.y + (rh - cs) / 2, cs, cs);
+                if self.extra_checked(j) {
+                    draw_check_mark(ctx, check, self.accent_now(theme));
+                }
                 let tx = draw_leading(
                     ctx,
                     it,
-                    row.x + self.s(10),
+                    check.right() + self.s(6),
                     cy,
                     self.s(ICON_SZ),
                     self.s(16),
@@ -530,6 +545,17 @@ impl ComboControl for Combo {
         self.buf = self.value().chars().filter(char::is_ascii_digit).collect();
         self.editing = true;
         inv.push(self.base.bounds);
+    }
+    fn checked_index(&self) -> Option<usize> {
+        // 커스텀 값이 살아 있으면 목록 어디에도 ✓를 찍지 않는다(표시 착오 방지).
+        if self.custom_value.is_some() {
+            None
+        } else {
+            Some(self.core.selected)
+        }
+    }
+    fn extra_checked(&self, _j: usize) -> bool {
+        self.custom_value.is_some()
     }
 }
 
@@ -1041,11 +1067,16 @@ mod tests {
         }
         c.on_event(&key(Key::Enter), &mut inv);
         assert_eq!(c.take_changed().as_deref(), Some("7500"), "커스텀 값 보고");
+        // 커스텀 활성 = ✓가 목록이 아니라 "직접 입력…"에 붙는다(사용자 지적 08-09).
+        assert_eq!(c.checked_index(), None, "목록 ✓ 없음");
+        assert!(c.extra_checked(0), "직접 입력 ✓");
         // 목록 재선택 = 커스텀 해제.
         c.on_event(&click(10, 10), &mut inv);
         let pop = c.popup_rect();
         c.on_event(&click(pop.x + 10, pop.y + 6), &mut inv); // 첫 항목
         assert_eq!(c.take_changed().as_deref(), Some("1000"));
+        assert_eq!(c.checked_index(), Some(0), "재선택 = 목록 ✓ 복귀");
+        assert!(!c.extra_checked(0));
     }
     fn key(k: Key) -> InputEvent {
         InputEvent::Key {
