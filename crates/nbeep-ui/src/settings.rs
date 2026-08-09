@@ -265,6 +265,42 @@ pub fn registry() -> &'static [Entry] {
             ]),
             key: "xfer.approval_window",
         },
+        Entry {
+            cat: Msg::CatFiles,
+            sub: None,
+            label: Msg::SendRate,
+            desc: Msg::SendRateDesc,
+            kind: SettingKind::RadioInput(
+                &[
+                    ("auto", Msg::RateAuto),
+                    ("100k", Msg::Rate100k),
+                    ("1m", Msg::Rate1m),
+                    ("10m", Msg::Rate10m),
+                    ("100m", Msg::Rate100m),
+                    ("1g", Msg::Rate1g),
+                ],
+                "B/s",
+            ),
+            key: "xfer.send_rate",
+        },
+        Entry {
+            cat: Msg::CatFiles,
+            sub: None,
+            label: Msg::RecvRate,
+            desc: Msg::RecvRateDesc,
+            kind: SettingKind::RadioInput(
+                &[
+                    ("auto", Msg::RateAuto),
+                    ("100k", Msg::Rate100k),
+                    ("1m", Msg::Rate1m),
+                    ("10m", Msg::Rate10m),
+                    ("100m", Msg::Rate100m),
+                    ("1g", Msg::Rate1g),
+                ],
+                "B/s",
+            ),
+            key: "xfer.recv_rate",
+        },
     ]
 }
 

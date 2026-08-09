@@ -118,6 +118,20 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
             .and_then(|i| args.get(i + 1))
             .and_then(|v| v.parse::<u64>().ok())
             .map_or(nbeep_core::MAX_FILE, |mib| mib * 1024 * 1024);
+        // 수신 속도 상한(--xfer-rate-kb · 0/미지정 = 무제한). Accept로 상대에게 공지되어
+        // **쌍방 중 낮은 쪽**이 적용된다.
+        let recv_cap: u64 = args
+            .iter()
+            .position(|a| a == "--xfer-rate-kb")
+            .and_then(|i| args.get(i + 1))
+            .and_then(|v| v.parse::<u64>().ok())
+            .map_or(0, |kb| kb * 1024);
+        if recv_cap > 0 {
+            println!(
+                "[파일] 수신 속도 상한 {} KB/s (상대에게 공지)",
+                recv_cap / 1024
+            );
+        }
         let mut inbox = XferInbox::with_max_file(limit);
         // 파일 수신 정책 — GUI와 **같은 도메인 함수**를 쓴다(정책이 두 벌이면 뚫린다).
         let mut ledger = nbeep_core::ExchangeLedger::new();
@@ -174,7 +188,14 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
                     Ok(Cmd::Accept) => {
                         if let Some(id) = pending_in {
                             if inbox.accept(&id).is_ok() {
-                                let _ = mux.send(StreamId::File, &XferMsg::Accept { id }.encode());
+                                let _ = mux.send(
+                                    StreamId::File,
+                                    &XferMsg::Accept {
+                                        id,
+                                        rate_cap: recv_cap,
+                                    }
+                                    .encode(),
+                                );
                                 println!("[파일] 수락 — 수신 시작");
                             }
                         } else {
@@ -255,8 +276,14 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
                                     && inbox.accept(&id).is_ok()
                                 {
                                     {
-                                        let _ = mux
-                                            .send(StreamId::File, &XferMsg::Accept { id }.encode());
+                                        let _ = mux.send(
+                                            StreamId::File,
+                                            &XferMsg::Accept {
+                                                id,
+                                                rate_cap: recv_cap,
+                                            }
+                                            .encode(),
+                                        );
                                         println!("[파일] 자동 수락 — 수신 시작");
                                     }
                                 }
@@ -275,14 +302,34 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
                             }
                         }
                     }
-                    Ok(XferMsg::Accept { id }) => {
+                    Ok(XferMsg::Accept { id, rate_cap }) => {
                         // 상대가 수락 — 청크 스트리밍 + 완료.
                         if let Some(bytes) = outgoing.remove(&id) {
                             let total = bytes.len() as u64;
                             let mut sent_bytes = 0u64;
+                            // 쌍방 협상 — 상대가 공지한 상한을 그대로 쓴다(CLI 자체 상한 없음).
+                            let mut pacer = nbeep_core::Pacer::new(rate_cap);
+                            if rate_cap > 0 {
+                                println!(
+                                    "[파일] 속도 협상 = {} KB/s (창 {}B)",
+                                    rate_cap / 1024,
+                                    pacer.burst_bytes()
+                                );
+                            }
+                            let t0 = std::time::Instant::now();
                             for c in chunks_of(id, &bytes) {
                                 if let XferMsg::Chunk { ref data, .. } = c {
                                     sent_bytes += data.len() as u64;
+                                }
+                                let wait = pacer.take(
+                                    match c {
+                                        XferMsg::Chunk { ref data, .. } => data.len() as u64,
+                                        _ => 0,
+                                    },
+                                    t0.elapsed().as_millis() as u64,
+                                );
+                                if wait > 0 {
+                                    std::thread::sleep(std::time::Duration::from_millis(wait));
                                 }
                                 if mux.send(StreamId::File, &c.encode()).is_err() {
                                     println!("[종료] 세션 끊김");

@@ -7,7 +7,7 @@
 //! | kind | 값 | 본문 |
 //! |---|---|---|
 //! | Offer | 1 | `[size 8B][sha256 32B][name_len 2B][name bytes(원본)]` |
-//! | Accept | 2 | — |
+//! | Accept | 2 | `[rate_cap 8B]` — 수신측 속도 상한(B/s · 0 = 무제한) |
 //! | Reject | 3 | `[reason 1B][limit 8B]` — `limit` = 수신측 상한 공지(0 = 미공개) |
 //! | Chunk | 4 | `[offset 8B][data …]` |
 //! | Done | 5 | — |
@@ -88,10 +88,12 @@ pub enum XferMsg {
         /// 원본 파일명 바이트.
         name: Vec<u8>,
     },
-    /// 수락(이때부터 청크 허용).
+    /// 수락(이때부터 청크 허용) — **수신측 속도 상한을 함께 알린다**(쌍방 협상).
     Accept {
         /// 전송 id.
         id: XferId,
+        /// 수신측이 감당할 상한(B/s · 0 = 무제한). 발신측은 자기 상한과 **낮은 쪽**을 쓴다.
+        rate_cap: u64,
     },
     /// 거절 — `TooLarge`면 수신측 상한을 공지해 발신자가 재시도 판단을 할 수 있다.
     Reject {
@@ -183,9 +185,10 @@ impl XferMsg {
                 out.extend_from_slice(&nlen.to_le_bytes());
                 out.extend_from_slice(&name[..nlen as usize]);
             }
-            Self::Accept { id } => {
+            Self::Accept { id, rate_cap } => {
                 out.push(K_ACCEPT);
                 out.extend_from_slice(id);
+                out.extend_from_slice(&rate_cap.to_le_bytes());
             }
             Self::Reject { id, why, limit } => {
                 out.push(K_REJECT);
@@ -245,7 +248,15 @@ impl XferMsg {
                     name: rest[42..42 + nlen].to_vec(),
                 }
             }
-            K_ACCEPT => Self::Accept { id },
+            K_ACCEPT => {
+                // 구버전(상한 없음)도 받아 준다 — 없으면 무제한으로 본다(전방 호환).
+                let rate_cap = if rest.len() >= 8 {
+                    u64::from_le_bytes(rest[0..8].try_into().expect("8B"))
+                } else {
+                    0
+                };
+                Self::Accept { id, rate_cap }
+            }
             K_REJECT => {
                 if rest.len() < 9 {
                     return Err(XferError::Truncated);
@@ -474,7 +485,10 @@ mod tests {
                 sha256: [9u8; 32],
                 name: "보고서.pdf".as_bytes().to_vec(),
             },
-            XferMsg::Accept { id: xid(1) },
+            XferMsg::Accept {
+                id: xid(1),
+                rate_cap: 1_048_576,
+            },
             XferMsg::Reject {
                 id: xid(1),
                 why: RejectWhy::TooLarge,
@@ -496,10 +510,18 @@ mod tests {
     #[test]
     fn wire_rejects_unknown_and_truncated() {
         assert_eq!(XferMsg::decode(&[]), Err(XferError::Truncated));
-        let mut v = XferMsg::Accept { id: xid(1) }.encode();
+        let mut v = XferMsg::Accept {
+            id: xid(1),
+            rate_cap: 0,
+        }
+        .encode();
         v[0] = 9;
         assert_eq!(XferMsg::decode(&v), Err(XferError::Version(9)));
-        let mut v = XferMsg::Accept { id: xid(1) }.encode();
+        let mut v = XferMsg::Accept {
+            id: xid(1),
+            rate_cap: 0,
+        }
+        .encode();
         v[1] = 99;
         assert_eq!(XferMsg::decode(&v), Err(XferError::Kind(99)));
     }
@@ -599,6 +621,16 @@ mod tests {
             name: b"huge".to_vec(),
         });
         assert_eq!(r, Err(XferError::FileTooBig));
+    }
+
+    #[test]
+    fn accept_carries_receiver_rate_cap() {
+        let m = XferMsg::Accept {
+            id: xid(9),
+            rate_cap: 512_000,
+        };
+        let back = XferMsg::decode(&m.encode()).unwrap();
+        assert_eq!(back, m, "상한이 왕복해야 발신측이 협상할 수 있다");
     }
 
     #[test]

@@ -113,7 +113,11 @@ enum SessionCmd {
         bytes: Vec<u8>,
     },
     /// 수신 제안 수락/거절(사용자 결정 — 자동 경로 없음).
-    AcceptXfer(nbeep_core::XferId),
+    AcceptXfer {
+        id: nbeep_core::XferId,
+        /// 수신측 상한(B/s · 0 = 무제한) — Accept에 실어 발신측이 협상한다.
+        rate_cap: u64,
+    },
     /// 발신 취소(타임아웃·사용자) — 상대에게 Cancel 통지.
     CancelXfer(nbeep_core::XferId),
     RejectXfer {
@@ -147,6 +151,7 @@ fn spawn_session_actor(
     mut session: LiveSession,
     out_rx: std::sync::mpsc::Receiver<SessionCmd>,
     proxy: winit::event_loop::EventLoopProxy<AppEvent>,
+    send_rate: nbeep_core::RateLimit,
 ) {
     use nbeep_core::mux::StreamId;
     use nbeep_core::{XferInbox, XferMsg};
@@ -158,6 +163,7 @@ fn spawn_session_actor(
         // 메인 스레드를 막지 않게).
         let mut inbox = XferInbox::new();
         let mut outgoing: HashMap<nbeep_core::XferId, Vec<u8>> = HashMap::new();
+        let mut send_meter = nbeep_core::RateMeter::default();
         loop {
             // 송신 먼저(즉시성) — 대기 중 발신 요청을 모두 흘려보낸다.
             loop {
@@ -183,9 +189,9 @@ fn spawn_session_actor(
                         outgoing.insert(id, bytes);
                         session.send(StreamId::File, &offer.encode())
                     }
-                    SessionCmd::AcceptXfer(id) => {
+                    SessionCmd::AcceptXfer { id, rate_cap } => {
                         if inbox.accept(&id).is_ok() {
-                            session.send(StreamId::File, &XferMsg::Accept { id }.encode())
+                            session.send(StreamId::File, &XferMsg::Accept { id, rate_cap }.encode())
                         } else {
                             Ok(())
                         }
@@ -240,6 +246,8 @@ fn spawn_session_actor(
                         &mut inbox,
                         &mut outgoing,
                         &proxy,
+                        send_rate,
+                        &mut send_meter,
                     )
                     .is_err()
                     {
@@ -257,6 +265,14 @@ fn spawn_session_actor(
     });
 }
 
+/// 속도 표기(B/s → 사람이 읽는 단위).
+fn rate_label(bps: u64) -> String {
+    if bps == 0 {
+        return "무제한".into();
+    }
+    format!("{}/s", human_size(bps))
+}
+
 /// 사람이 읽는 크기 표기(상태바) — 1024 단위.
 fn human_size(bytes: u64) -> String {
     const K: u64 = 1024;
@@ -268,6 +284,7 @@ fn human_size(bytes: u64) -> String {
 }
 
 /// 파일 스트림 한 프레임 처리(액터 스레드) — 오류 = 세션 종료 신호.
+#[allow(clippy::too_many_arguments)] // 액터 한 프레임의 협력자 — 묶으면 오히려 흐릿해진다
 fn xfer_step(
     bytes: &[u8],
     peer: PeerId,
@@ -275,7 +292,17 @@ fn xfer_step(
     inbox: &mut nbeep_core::XferInbox,
     outgoing: &mut HashMap<nbeep_core::XferId, Vec<u8>>,
     proxy: &winit::event_loop::EventLoopProxy<AppEvent>,
+    send_rate: nbeep_core::RateLimit,
+    meter: &mut nbeep_core::RateMeter,
 ) -> Result<(), ()> {
+    /// 액터 스레드의 단조 시각(ms).
+    fn now_ms() -> u64 {
+        use std::sync::OnceLock;
+        static T0: OnceLock<std::time::Instant> = OnceLock::new();
+        T0.get_or_init(std::time::Instant::now)
+            .elapsed()
+            .as_millis() as u64
+    }
     use nbeep_core::mux::StreamId;
     use nbeep_core::{chunks_of, XferMsg};
     let fail = |why: String| {
@@ -307,10 +334,13 @@ fn xfer_step(
                 }
             }
         }
-        Ok(XferMsg::Accept { id }) => {
+        Ok(XferMsg::Accept { id, rate_cap }) => {
             if let Some(data) = outgoing.remove(&id) {
                 let _ = proxy.send_event(AppEvent::XferAccepted { peer });
                 let total = data.len() as u64;
+                // ★ 쌍방 협상 — 내 상한과 상대가 공지한 상한 중 **낮은 쪽**으로 창을 잡는다.
+                let local = send_rate.target_bps(meter);
+                let mut pacer = nbeep_core::Pacer::new(nbeep_core::negotiate(local, rate_cap));
                 for c in chunks_of(id, &data) {
                     let nbeep_core::XferMsg::Chunk {
                         offset, ref data, ..
@@ -318,8 +348,15 @@ fn xfer_step(
                     else {
                         continue;
                     };
-                    let done = offset + data.len() as u64;
+                    let n = data.len() as u64;
+                    // 창이 모자라면 그만큼 쉰다(대역을 통째로 점유하지 않는다).
+                    let wait = pacer.take(n, now_ms());
+                    if wait > 0 {
+                        std::thread::sleep(std::time::Duration::from_millis(wait));
+                    }
+                    let done = offset + n;
                     session.send(StreamId::File, &c.encode()).map_err(|_| ())?;
+                    meter.observe(n, now_ms());
                     let _ = proxy.send_event(AppEvent::XferProgress {
                         peer,
                         got: done,
@@ -560,6 +597,13 @@ struct App {
     send_wait: HashMap<PeerId, nbeep_ui::TimeoutButton>,
     /// 다음 루프에서 만들 발신 대기 창(창 생성은 ActiveEventLoop가 필요하다).
     pending_send_window: Option<PeerId>,
+    /// 보내기 속도 상한(설정 `xfer.send_rate`).
+    send_rate: nbeep_core::RateLimit,
+    /// 받기 속도 상한(설정 `xfer.recv_rate`) — Accept로 상대에게 공지된다.
+    recv_rate: nbeep_core::RateLimit,
+    /// 처리량 계측 — 자동 모드의 근거(관측 최고치의 50%).
+    send_meter: nbeep_core::RateMeter,
+    recv_meter: nbeep_core::RateMeter,
     /// 주 창 상단 Pull-down 메뉴(목록 모드 전용).
     menu: MenuBar,
     /// 주 창 툴바(메뉴 아래 · 이미지 버튼 · 목록 모드 전용).
@@ -858,7 +902,9 @@ impl App {
         why: nbeep_core::RejectWhy,
     ) -> bool {
         let cmd = if accept {
-            SessionCmd::AcceptXfer(xid)
+            // 수신 상한을 함께 알린다 — 발신측이 **둘 중 낮은 쪽**으로 맞춘다.
+            let rate_cap = self.recv_rate.target_bps(&self.recv_meter);
+            SessionCmd::AcceptXfer { id: xid, rate_cap }
         } else {
             SessionCmd::RejectXfer { id: xid, why }
         };
@@ -1038,7 +1084,7 @@ impl App {
     fn install_conversation(&mut self, session: LiveSession) {
         let peer = session.peer();
         let (out_tx, out_rx) = std::sync::mpsc::channel();
-        spawn_session_actor(session, out_rx, self.proxy.clone());
+        spawn_session_actor(session, out_rx, self.proxy.clone(), self.send_rate);
         self.conversations.insert(
             peer,
             Conversation {
@@ -1490,6 +1536,20 @@ impl App {
                         Some(ms) => format!("파일 수신: {}분간 자동 수락", ms / 60_000),
                         None => format!("파일 수신 승인 = {value}"),
                     };
+                }
+                "xfer.send_rate" => {
+                    self.send_rate = nbeep_core::RateLimit::from_code(&value);
+                    self.status = format!(
+                        "보내기 제한 = {}",
+                        rate_label(self.send_rate.target_bps(&self.send_meter))
+                    );
+                }
+                "xfer.recv_rate" => {
+                    self.recv_rate = nbeep_core::RateLimit::from_code(&value);
+                    self.status = format!(
+                        "받기 제한 = {} (상대에게 공지됨)",
+                        rate_label(self.recv_rate.target_bps(&self.recv_meter))
+                    );
                 }
                 "xfer.approval_window" => {
                     if let Some(w) = nbeep_core::AutoWindow::from_code(&value) {
@@ -2725,6 +2785,10 @@ pub(crate) fn run(mode: WindowMode, live: bool) {
         awaiting_accept: HashMap::new(),
         send_wait: HashMap::new(),
         pending_send_window: None,
+        send_rate: nbeep_core::RateLimit::Auto,
+        recv_rate: nbeep_core::RateLimit::Auto,
+        send_meter: nbeep_core::RateMeter::default(),
+        recv_meter: nbeep_core::RateMeter::default(),
         menu: MenuBar::new(build_menus()),
         toolbar: Toolbar::new(vec![
             ToolItem::new(
