@@ -171,6 +171,8 @@ pub enum Msg {
     // ── 툴바·메뉴 ──
     MenuLabel,
     MenuGallery,
+    /// 메뉴바 '도움말' 라벨.
+    MenuHelp,
     ToolbarSize,
     ToolbarSizeDesc,
     Tb16,
@@ -341,6 +343,7 @@ impl Msg {
             Msg::ToggleApply => ["On", "적용", "开", "オン"],
             Msg::ToggleIgnore => ["Off", "미적용", "关", "オフ"],
             Msg::MenuLabel => ["Menu", "메뉴", "菜单", "メニュー"],
+            Msg::MenuHelp => ["Help", "도움말", "帮助", "ヘルプ"],
             Msg::MenuGallery => [
                 "Controls gallery",
                 "컨트롤 갤러리",

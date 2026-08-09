@@ -526,12 +526,30 @@ mod app_window {
     use nbeep_core::PeerId;
     use nbeep_ui::{
         AboutInfo, AboutWidget, ChatLine, ChatViewWidget, ComboItem, Control as _, DrawCtx,
-        GalleryWidget, InputEvent, Invalidations, Key, LinkState, PeerListWidget, PeerRow,
-        PullDown, RasterCtx, Rect, SettingsState, SettingsWidget, Theme, ToolIcon, ToolItem,
-        Toolbar, Widget,
+        GalleryWidget, InputEvent, Invalidations, Key, LinkState, MenuBar, MenuDef, MenuEntry,
+        PeerListWidget, PeerRow, RasterCtx, Rect, SettingsState, SettingsWidget, Theme, ToolIcon,
+        ToolItem, Toolbar, Widget,
     };
 
     type SbSurface = softbuffer::Surface<Rc<Window>, Rc<Window>>;
+
+    /// 메뉴바 구성(i18n 현재 언어 기준) — 초기화·언어 전환 시 재호출.
+    fn build_menus() -> Vec<MenuDef> {
+        use nbeep_core::{t, Msg};
+        vec![
+            MenuDef::new(
+                t(Msg::MenuLabel),
+                vec![
+                    MenuEntry::Item(ComboItem::new("settings", t(Msg::SettingsTitle))),
+                    MenuEntry::Item(ComboItem::new("gallery", t(Msg::MenuGallery))),
+                ],
+            ),
+            MenuDef::new(
+                t(Msg::MenuHelp),
+                vec![MenuEntry::Item(ComboItem::new("about", "About"))],
+            ),
+        ]
+    }
 
     /// 창 모드(DR-26). 설정 연동(`chat.window_mode`)은 M3-11.
     #[derive(Clone, Copy, PartialEq, Eq)]
@@ -796,7 +814,7 @@ mod app_window {
         /// About 뷰(열려 있을 때만 Some).
         about_view: Option<AboutWidget>,
         /// 주 창 상단 Pull-down 메뉴(목록 모드 전용).
-        menu: PullDown,
+        menu: MenuBar,
         /// 주 창 툴바(메뉴 아래 · 이미지 버튼 · 목록 모드 전용).
         toolbar: Toolbar,
         /// 세션이 끊긴 상대(AppEvent::Closed) — 목록 상태 점 Lost 근거. 재수립 시 제거.
@@ -1328,20 +1346,10 @@ mod app_window {
                         nbeep_core::set_lang(
                             nbeep_core::Lang::from_code(&value).unwrap_or_default(),
                         );
-                        // 메뉴 라벨은 생성 시 고정이라 재생성.
-                        {
-                            use nbeep_core::{t, Msg};
-                            self.menu = PullDown::new(
-                                t(Msg::MenuLabel),
-                                vec![
-                                    ComboItem::new("settings", t(Msg::SettingsTitle)),
-                                    ComboItem::new("gallery", t(Msg::MenuGallery)),
-                                    ComboItem::new("about", "About"),
-                                ],
-                            );
-                            if let Some(mid) = self.main_id {
-                                self.layout_window(mid);
-                            }
+                        // 메뉴 라벨은 생성 시 고정이라 재구성.
+                        self.menu.set_menus(build_menus());
+                        if let Some(mid) = self.main_id {
+                            self.layout_window(mid);
                         }
                         for e in self.windows.values() {
                             e.window.request_redraw();
@@ -1431,10 +1439,7 @@ mod app_window {
                     if chrome > 0 {
                         let menu_h = (30.0 * scale).round() as i32;
                         self.menu.set_scale(scale);
-                        self.menu.set_bounds(
-                            Rect::new(8, 2, (140.0 * scale) as i32, menu_h - 4),
-                            &mut inv,
-                        );
+                        self.menu.set_bounds(Rect::new(0, 0, w, menu_h), &mut inv);
                         self.toolbar.set_scale(scale);
                         self.toolbar
                             .set_bounds(Rect::new(0, menu_h, w, chrome - menu_h), &mut inv);
@@ -1529,6 +1534,9 @@ mod app_window {
                         self.set_main_ime(false); // 목록 복귀 = 직접 조합 모드
                         self.status =
                             "↑↓ 이동 · 타이핑 = 이름 점프(한글 가능) · Enter = 대화 열기".into();
+                        // 복귀 재레이아웃 — 대화 중 크롬 0으로 잡힌 목록 bounds를
+                        // 크롬 아래로 되돌린다(없으면 목록이 메뉴·툴바 뒤에 숨는다).
+                        self.layout_window(id);
                         self.request_redraw(id);
                     }
                     WindowMode::Separate => {
@@ -2278,17 +2286,7 @@ mod app_window {
             settings_view: None,
             gallery_view: None,
             about_view: None,
-            menu: {
-                use nbeep_core::{t, Msg};
-                PullDown::new(
-                    t(Msg::MenuLabel),
-                    vec![
-                        ComboItem::new("settings", t(Msg::SettingsTitle)),
-                        ComboItem::new("gallery", t(Msg::MenuGallery)),
-                        ComboItem::new("about", "About"),
-                    ],
-                )
-            },
+            menu: MenuBar::new(build_menus()),
             toolbar: Toolbar::new(vec![
                 ToolItem::new("refresh", ToolIcon::Refresh),
                 ToolItem::new(

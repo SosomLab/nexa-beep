@@ -26,7 +26,7 @@ pub mod tree;
 pub use button::{Button, ButtonMode, ImageFit};
 pub use checkbox::Checkbox;
 pub use combo::{Choose, ChoosePicker, Combo, ComboControl, ComboItem, PopupHit};
-pub use pulldown::PullDown;
+pub use pulldown::{MenuBar, MenuDef, MenuEntry};
 pub use radio::{RadioGroup, RadioOption};
 pub use scroll::ScrollBars;
 pub use textbox::TextBox;
