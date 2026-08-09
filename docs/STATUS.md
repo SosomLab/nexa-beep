@@ -25,6 +25,15 @@
 > ⑥ **브랜딩 아이콘**([packaging/branding](packaging/branding/) `icon.svg`→PNG/ICO · Nexa 계열 말풍선+비콘 파동) + **앱 창 아이콘 적용**.
 > **워크스페이스 218 green**(ui 97·core 91·gfx 5) · clippy·fmt clean. ⏳후속: Choose 별도 모달 창 · 설정 on/off 체크박스화 · 컨트롤 설정 정식 통합 · 런타임 독 아이콘. [journal/2026-08-09.md](journal/2026-08-09.md).
 >
+> **갱신: 2026-08-09 (전수 검증 차) (KST)** — **"코드는 있는데 동작을 본 적 없는 기능" 전수 점검**(사용자 요청) → [26 §7-1 검증 현황 매트릭스](26-run-and-manual-test.md):
+> ① 🔴 **먼저 CI가 main에서 3회 연속 red였다** — 원인은 **rustdoc `-D warnings` 6건**(private 항목 `Msg::row` 링크 2 · `[TextBox](글꼴명)` 링크 문법 오용 2 · redundant explicit link 2). **코드 동작과 무관한 문서 주석**이었고 **✅ 해소**. "main 항상 green"이 깨진 채로 완료 처리를 할 수는 없어 이걸 먼저 고쳤다.
+> ② **게이트 재확인** — fmt ✅ · clippy **0** · **테스트 243 통과** · rustdoc ✅.
+> ③ ★ **실증 8건**(직접 실행) — **실물 멀티캐스트 양방향 발견** · **`--live-echo` 종단 왕복**(발견→Noise→한글 대화) · **종료 SIGTERM 0.09s / SIGINT 0.11s** · ★ **GOODBYE 실제 발신 확인**(관찰 노드가 `kind=Goodbye` 4회 수신 — **FR-D-8의 비어 있던 절반이 실제로 채워졌다**) · 수동 엔드포인트 지문 확정 · 인터랙티브 채팅(맥↔Docker 포함) · `--chat-live` 한글 이름 광고 · 빌드 게이트 전항목.
+> ④ **미확인 분류** — 🖥 **육안(GUI) 필요 7건**(목록·신뢰 배지·다중 창·설정 화면·컨트롤 갤러리·이미지 아이콘·i18n·IME) · 🔬 **시나리오 재현 필요 5건**(U-P1/U-P2 클론 탐지 · `name_conflict` · **SAS 60자리는 출력 지점 자체가 없다** · 백프레셔 · 중복 제거) · ⏸ **실기 필요**(D-8b·S4·Windows/Linux·24h 누수·유휴 RSS).
+> ⑤ ⚠️ **`.beepq` 코덱(M4-1)은 main에 없다** — `feat/m4-quarantine` 브랜치에만 있다.
+> ⑥ 사소 발견 — `--live-echo` 2노드 동시 실행 시 **stdout 인터리빙**(검증 도구 한정).
+> [journal/2026-08-09.md](journal/2026-08-09.md).
+>
 > **갱신: 2026-08-08 (i18n·커스텀 컨트롤 차) (KST)** — **i18n + 커스텀 컨트롤 툴킷 + 갤러리**(`feat/m3-font-sections` · 사용자 요청 다수):
 > ① **글꼴 설정 섹션화** — `SettingKind::FontSection`(제목+글꼴명 텍스트박스+크기 콤보+설명) · 굵게/기울임 제거 · **PeerList 슬롯 신설**(사용자 목록 크기 실동작) · 대화창모드·테마도 콤보(▾).
 > ② **i18n** — `nbeep-core::i18n`(Lang En/Ko/Zh/Ja·**영어 기본**·Msg 키·tr/t·전역 현재 언어). 외부 크레이트 0(DR-5/12). settings 전면 + `ui.language` 콤보 · **검색은 전 언어 매치** · chat_view/peer_list/bin 배선.

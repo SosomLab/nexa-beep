@@ -7,6 +7,10 @@
 
 ## 2026-08-09
 
+- **전수 검증 — "코드는 있는데 동작을 본 적 없는 기능" 점검**(사용자 요청 · [26 §7-1](26-run-and-manual-test.md) 매트릭스 신설): ① 🔴 **점검을 시작하자마자 CI가 main에서 3회 연속 red**인 것을 발견 — rustdoc `-D warnings` **6건**(private `Msg::row` 링크 · `[TextBox](글꼴명)` 링크 문법 오용 · redundant explicit link). **코드 동작과 무관한 문서 주석**이었고 해소했다. *"main 항상 green"이 깨진 채로 완료 처리를 할 수는 없다* ② **게이트 재확인** — fmt ✅ · clippy 0 · **243테스트** · rustdoc ✅ ③ ★ **실증 8건 직접 실행** — 실물 멀티캐스트 **양방향** 발견 · `--live-echo` **종단 왕복**(발견→Noise→한글 대화) · 종료 **SIGTERM 0.09s/SIGINT 0.11s** · ★ **GOODBYE 실제 발신 확인**(관찰 노드가 `kind=Goodbye` 4회 — **FR-D-8의 비어 있던 절반이 채워진 것을 눈으로 봤다**) · 수동 엔드포인트 지문 확정 · 인터랙티브 채팅(맥↔Docker) · `--chat-live` 한글 이름 광고 · 빌드 게이트 ④ **미확인을 성격별로 분류** — 🖥 육안(GUI) 7건 · 🔬 시나리오 재현 5건(그중 **SAS 60자리는 구현됐는데 출력 지점 자체가 없다** — M3-6) · ⏸ 실기(D-8b·S4·Windows/Linux·24h·RSS) ⑤ ⚠️ **`.beepq`(M4-1)은 main에 없다** — 브랜치에만 있다 ⑥ 사소 — `--live-echo` stdout 인터리빙. 상세 [journal/2026-08-09.md](journal/2026-08-09.md).
+
+## 2026-08-09
+
 - **타입어헤드 한글 직접 조합 — IME 탈피**(main 직커밋 · [문서 27](27-typeahead-hangul-composition.md) 신설): 실기 재현 4종으로 macOS IME 세션 소유권 한계 확정(보정 5회 실패 연대기 기록) → 목록은 IME off + `hangul::Composer`(두벌식 오토마타·도깨비불·자모 백스페이스) 직접 조합. 타임아웃/ESC=reset 하나(결정적). **사용자 실기 검증 통과**. 병행: 버튼 image_front·H/V 정렬 공통화·이미지 전용 정중앙·ESC 즉시 초기화. 243 green. 상세 [journal/2026-08-09.md](journal/2026-08-09.md).
 
 - **설정 화면 커스텀 컨트롤 전면 교체 + 모달 파일 선택 + 타입어헤드 확정판**(feat/m3-settings-controls): 설정=TextBox/TreeView/Combo/**Checkbox(Toggle 신설)**/글꼴 TextBox+Combo(모달 캡처·계약 유지) · Choose…=**별도 모달 창**(Role::Picker · ChoosePicker 어댑터를 TreeView로) · 타입어헤드(Space 유실 수정·반복 자동순환 제거(↑↓ 전용)·touch·HUD 즉시 갱신) · 버튼 이미지 진짜 원인=배율 미전파 수정+LEADING_ICON 단일 원천 · **전수 설계 점검**(층 준수·unwrap 0 확인, 개선 후보 6건 기록). 233 green. 상세 [journal/2026-08-09.md](journal/2026-08-09.md).
