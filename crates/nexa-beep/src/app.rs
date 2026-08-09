@@ -2916,6 +2916,11 @@ impl ApplicationHandler<AppEvent> for App {
                                 self.open_gallery(el);
                                 return;
                             }
+                            // 텍스트 기본 단축키 — 전체 선택(사용자 지적 08-09).
+                            "a" | "A" => {
+                                self.route(id, InputEvent::SelectAll, el);
+                                return;
+                            }
                             "y" | "Y" => {
                                 self.answer_offer(id, true);
                                 return;
@@ -2977,6 +2982,7 @@ impl ApplicationHandler<AppEvent> for App {
                     WKey::Named(NamedKey::PageUp) => Some(Key::PageUp),
                     WKey::Named(NamedKey::PageDown) => Some(Key::PageDown),
                     WKey::Named(NamedKey::Home) => Some(Key::Home),
+                    WKey::Named(NamedKey::Delete) => Some(Key::Delete),
                     WKey::Named(NamedKey::End) => Some(Key::End),
                     WKey::Named(NamedKey::Enter) => Some(Key::Enter),
                     WKey::Named(NamedKey::Escape) => Some(Key::Escape),

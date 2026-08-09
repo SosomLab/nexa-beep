@@ -124,6 +124,26 @@ impl EditState {
         Some(t)
     }
 
+    /// 캐럿을 옮긴다 — `extend`면 기존 앵커를 유지해 범위가 늘어난다(드래그·Shift 이동).
+    pub fn set_caret(&mut self, idx: usize, extend: bool) {
+        let i = idx.min(self.buf.len());
+        if extend {
+            if self.anchor.is_none() {
+                self.anchor = Some(self.caret);
+            }
+        } else {
+            self.anchor = None;
+        }
+        self.caret = i;
+    }
+
+    /// 범위를 직접 선택한다(더블클릭 단어 선택 등).
+    pub fn set_selection(&mut self, from: usize, to: usize) {
+        let n = self.buf.len();
+        self.anchor = Some(from.min(n));
+        self.caret = to.min(n);
+    }
+
     /// 전체 교체(캐럿 끝·선택 해제).
     pub fn set_text(&mut self, text: &str) {
         self.buf = text.chars().collect();
