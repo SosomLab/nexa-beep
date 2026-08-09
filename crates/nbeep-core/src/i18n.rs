@@ -100,6 +100,8 @@ pub enum Msg {
     CatConversation,
     CatAppearance,
     CatFont,
+    /// 모양 하위: 타입어헤드.
+    CatTypeahead,
     // ── 설정: 공통 ──
     SearchPlaceholder,
     SystemDefaultFont,
@@ -192,6 +194,7 @@ impl Msg {
             Msg::CatConversation => ["Conversation", "대화", "对话", "会話"],
             Msg::CatAppearance => ["Appearance", "모양", "外观", "外観"],
             Msg::CatFont => ["Font", "글꼴", "字体", "フォント"],
+            Msg::CatTypeahead => ["Type-ahead", "타입어헤드", "预输入", "先行入力"],
             Msg::SearchPlaceholder => [
                 "Search (space = AND)",
                 "검색 (공백=AND)",

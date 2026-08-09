@@ -73,6 +73,8 @@ pub struct Entry {
     pub label: Msg,
     /// 회색 설명 한 줄(검색 대상).
     pub desc: Msg,
+    /// 하위 카테고리(없으면 최상위 직속) — 사이드바 계층·필터 근거.
+    pub sub: Option<Msg>,
     /// 컨트롤 형태.
     pub kind: SettingKind,
     /// 값 키(안정 계약 — rename 시 마이그레이션). 글꼴 섹션에선 `family_key`와 동일.
@@ -110,6 +112,7 @@ pub fn registry() -> &'static [Entry] {
     &[
         Entry {
             cat: Msg::CatConversation,
+            sub: None,
             label: Msg::ChatWindowMode,
             desc: Msg::ChatWindowModeDesc,
             kind: SettingKind::Radio(&[
@@ -120,6 +123,7 @@ pub fn registry() -> &'static [Entry] {
         },
         Entry {
             cat: Msg::CatAppearance,
+            sub: None,
             label: Msg::Theme,
             desc: Msg::ThemeDesc,
             kind: SettingKind::Radio(&[("dark", Msg::ThemeDark), ("light", Msg::ThemeLight)]),
@@ -127,6 +131,7 @@ pub fn registry() -> &'static [Entry] {
         },
         Entry {
             cat: Msg::CatAppearance,
+            sub: None,
             label: Msg::Language,
             desc: Msg::LanguageDesc,
             kind: SettingKind::Radio(&[
@@ -139,6 +144,7 @@ pub fn registry() -> &'static [Entry] {
         },
         Entry {
             cat: Msg::CatAppearance,
+            sub: None,
             label: Msg::ToolbarSize,
             desc: Msg::ToolbarSizeDesc,
             kind: SettingKind::Radio(&[
@@ -151,6 +157,7 @@ pub fn registry() -> &'static [Entry] {
         },
         Entry {
             cat: Msg::CatAppearance,
+            sub: Some(Msg::CatTypeahead),
             label: Msg::TypeaheadTimeout,
             desc: Msg::TypeaheadTimeoutDesc,
             kind: SettingKind::RadioInput(
@@ -167,6 +174,7 @@ pub fn registry() -> &'static [Entry] {
         },
         Entry {
             cat: Msg::CatAppearance,
+            sub: Some(Msg::CatTypeahead),
             label: Msg::TypeaheadPos,
             desc: Msg::TypeaheadPosDesc,
             kind: SettingKind::PositionGrid,
@@ -174,6 +182,7 @@ pub fn registry() -> &'static [Entry] {
         },
         Entry {
             cat: Msg::CatAppearance,
+            sub: Some(Msg::CatTypeahead),
             label: Msg::TypeaheadSpace,
             desc: Msg::TypeaheadSpaceDesc,
             kind: SettingKind::Toggle,
@@ -181,6 +190,7 @@ pub fn registry() -> &'static [Entry] {
         },
         Entry {
             cat: Msg::CatAppearance,
+            sub: Some(Msg::CatTypeahead),
             label: Msg::TypeaheadSpecial,
             desc: Msg::TypeaheadSpecialDesc,
             kind: SettingKind::Toggle,
@@ -188,6 +198,7 @@ pub fn registry() -> &'static [Entry] {
         },
         Entry {
             cat: Msg::CatFont,
+            sub: None,
             label: Msg::FontBase,
             desc: Msg::FontBaseDesc,
             kind: SettingKind::FontSection {
@@ -198,6 +209,7 @@ pub fn registry() -> &'static [Entry] {
         },
         Entry {
             cat: Msg::CatFont,
+            sub: None,
             label: Msg::FontPeerList,
             desc: Msg::FontPeerListDesc,
             kind: SettingKind::FontSection {
@@ -208,6 +220,7 @@ pub fn registry() -> &'static [Entry] {
         },
         Entry {
             cat: Msg::CatFont,
+            sub: None,
             label: Msg::FontMessage,
             desc: Msg::FontMessageDesc,
             kind: SettingKind::FontSection {
@@ -218,6 +231,7 @@ pub fn registry() -> &'static [Entry] {
         },
         Entry {
             cat: Msg::CatFont,
+            sub: None,
             label: Msg::FontStatus,
             desc: Msg::FontStatusDesc,
             kind: SettingKind::FontSection {
@@ -329,10 +343,12 @@ pub struct SettingsWidget {
     query: String,
     /// 카테고리 사이드바(TreeView).
     tree: TreeView,
-    /// 사이드바 가시 행 → cats() 인덱스.
-    cat_map: Vec<usize>,
+    /// 사이드바 가시 행 → (cats() 인덱스, 하위 카테고리).
+    cat_map: Vec<(usize, Option<Msg>)>,
     /// 선택 카테고리(cats() 인덱스).
     selected_cat: usize,
+    /// 선택 하위 카테고리(None = 최상위 — 하위 항목도 함께 보인다).
+    selected_sub: Option<Msg>,
     /// 우측 행들(가시 항목 + 컨트롤).
     rows: Vec<RowUi>,
     /// 현재 값 스냅숏(컨트롤 초기화·보고 근거).
@@ -365,6 +381,7 @@ impl SettingsWidget {
             tree: TreeView::new(TreeModel::default()),
             cat_map: Vec::new(),
             selected_cat: 0,
+            selected_sub: None,
             rows: Vec::new(),
             values,
             changes: Vec::new(),
@@ -401,21 +418,28 @@ impl SettingsWidget {
         (v as f32 * self.scale).round() as i32
     }
 
-    /// 카테고리 목록(레지스트리 순서·중복 제거).
-    fn cats() -> Vec<Msg> {
-        let mut out: Vec<Msg> = Vec::new();
+    /// 카테고리 목록(레지스트리 순서·중복 제거) — (최상위, 하위들).
+    fn cats() -> Vec<(Msg, Vec<Msg>)> {
+        let mut out: Vec<(Msg, Vec<Msg>)> = Vec::new();
         for e in registry() {
-            if !out.contains(&e.cat) {
-                out.push(e.cat);
+            if !out.iter().any(|(c, _)| *c == e.cat) {
+                out.push((e.cat, Vec::new()));
+            }
+            if let Some(sub) = e.sub {
+                if let Some((_, subs)) = out.iter_mut().find(|(c, _)| *c == e.cat) {
+                    if !subs.contains(&sub) {
+                        subs.push(sub);
+                    }
+                }
             }
         }
         out
     }
 
-    fn cat_match_count(cat: Msg, toks: &[String]) -> usize {
+    fn cat_match_count(cat: Msg, sub: Option<Msg>, toks: &[String]) -> usize {
         registry()
             .iter()
-            .filter(|e| e.cat == cat && entry_matches(e, toks))
+            .filter(|e| e.cat == cat && (sub.is_none() || e.sub == sub) && entry_matches(e, toks))
             .count()
     }
 
@@ -423,15 +447,18 @@ impl SettingsWidget {
     fn visible_indices(&self) -> Vec<usize> {
         let toks = tokens(&self.query);
         let searching = !toks.is_empty();
-        let selected = Self::cats().get(self.selected_cat).copied();
+        let selected = Self::cats().get(self.selected_cat).map(|(c, _)| *c);
         registry()
             .iter()
             .enumerate()
             .filter(|(_, e)| {
                 if searching {
                     entry_matches(e, &toks)
+                } else if Some(e.cat) != selected {
+                    false
                 } else {
-                    Some(e.cat) == selected
+                    // 최상위 선택 = 하위 포함 전부 · 하위 선택 = 그 하위만(VS Code식).
+                    self.selected_sub.is_none() || e.sub == self.selected_sub
                 }
             })
             .map(|(i, _)| i)
@@ -444,22 +471,40 @@ impl SettingsWidget {
         let toks = tokens(&self.query);
         let searching = !toks.is_empty();
 
-        // ── 사이드바 트리(카테고리 · 검색 중엔 매치만 + "(N)") ──
+        // ── 사이드바 트리(계층 카테고리 · 검색 중엔 매치만 + "(N)") ──
         let cats = Self::cats();
         self.cat_map.clear();
         let mut roots = Vec::new();
-        for (ci, &cat) in cats.iter().enumerate() {
-            let n = Self::cat_match_count(cat, &toks);
+        for (ci, (cat, subs)) in cats.iter().enumerate() {
+            let n = Self::cat_match_count(*cat, None, &toks);
             if searching && n == 0 {
                 continue;
             }
             let label = if searching {
-                format!("{} ({n})", tr(lang, cat))
+                format!("{} ({n})", tr(lang, *cat))
             } else {
-                tr(lang, cat).to_string()
+                tr(lang, *cat).to_string()
             };
-            roots.push(TreeNode::leaf(label));
-            self.cat_map.push(ci);
+            self.cat_map.push((ci, None));
+            let mut children = Vec::new();
+            for &sub in subs {
+                let sn = Self::cat_match_count(*cat, Some(sub), &toks);
+                if searching && sn == 0 {
+                    continue;
+                }
+                let sl = if searching {
+                    format!("{} ({sn})", tr(lang, sub))
+                } else {
+                    tr(lang, sub).to_string()
+                };
+                children.push(TreeNode::leaf(sl));
+                self.cat_map.push((ci, Some(sub)));
+            }
+            if children.is_empty() {
+                roots.push(TreeNode::leaf(label));
+            } else {
+                roots.push(TreeNode::branch(label, children)); // 기본 펼침
+            }
         }
         let mut tree = TreeView::new(TreeModel::new(roots));
         tree.set_scale(self.scale);
@@ -467,7 +512,7 @@ impl SettingsWidget {
         let sel_row = self
             .cat_map
             .iter()
-            .position(|&c| c == self.selected_cat)
+            .position(|&(c, sub)| c == self.selected_cat && sub == self.selected_sub)
             .unwrap_or(0);
         tree.set_selected_row(sel_row);
         self.tree = tree;
@@ -765,8 +810,9 @@ impl Widget for SettingsWidget {
                 if self.tree.bounds().contains(p) && after != before
                     || (self.tree.bounds().contains(p) && !self.query.is_empty())
                 {
-                    if let Some(&ci) = self.cat_map.get(after) {
+                    if let Some(&(ci, sub)) = self.cat_map.get(after) {
                         self.selected_cat = ci;
+                        self.selected_sub = sub;
                     }
                     self.query.clear();
                     self.search.set_text("");
@@ -845,8 +891,9 @@ impl Widget for SettingsWidget {
                     self.tree.on_event(ev, inv);
                     let after = self.tree.selected_row();
                     if after != before {
-                        if let Some(&ci) = self.cat_map.get(after) {
+                        if let Some(&(ci, sub)) = self.cat_map.get(after) {
                             self.selected_cat = ci;
+                            self.selected_sub = sub;
                         }
                         self.rebuild(inv);
                     }
@@ -984,9 +1031,10 @@ mod tests {
     fn select_cat(w: &mut SettingsWidget, cat: Msg) {
         let ci = SettingsWidget::cats()
             .iter()
-            .position(|&c| c == cat)
+            .position(|(c, _)| *c == cat)
             .unwrap();
         w.selected_cat = ci;
+        w.selected_sub = None;
         let mut inv = Invalidations::default();
         w.rebuild(&mut inv);
         w.set_bounds(Rect::new(0, 0, 560, 560), &mut inv);
@@ -1112,6 +1160,30 @@ mod tests {
         w.on_event(&click(tb.x + 10, tb.y + 24 + 5), &mut inv);
         assert_eq!(w.selected_cat, 1, "모양 선택");
         assert!(w.rows.iter().any(|r| registry()[r.idx].key == "ui.theme"));
+    }
+
+    #[test]
+    fn subcategory_filters_vscode_style() {
+        let (mut w, mut inv) = widget();
+        // 최상위(모양) 선택 = 하위(타입어헤드) 항목 포함 전부.
+        select_cat(&mut w, Msg::CatAppearance);
+        let all = w.visible_indices().len();
+        let ta = w
+            .visible_indices()
+            .iter()
+            .filter(|&&i| registry()[i].sub == Some(Msg::CatTypeahead))
+            .count();
+        assert_eq!(ta, 4, "타입어헤드 4건 포함");
+        assert!(all > ta, "모양 자체 항목도 함께");
+        // 하위(타입어헤드) 선택 = 4건만.
+        w.selected_sub = Some(Msg::CatTypeahead);
+        w.rebuild(&mut inv);
+        assert_eq!(w.visible_indices().len(), 4, "하위 선택 = 그 항목만");
+        // 사이드바에 하위 행이 존재(모양 아래).
+        assert!(
+            w.cat_map.contains(&(1, Some(Msg::CatTypeahead))),
+            "사이드바 하위 행"
+        );
     }
 
     #[test]
