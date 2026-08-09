@@ -2011,6 +2011,18 @@ mod app_window {
                     if let Some(e) = self.windows.get_mut(&id) {
                         e.cursor = (position.x as i32, position.y as i32);
                         let (x, y) = e.cursor;
+                        // 설정 창 스플리터 hover/드래그 = 좌우 리사이즈 커서(그 외 기본).
+                        if e.role == Role::Settings {
+                            let resize = self
+                                .settings_view
+                                .as_ref()
+                                .is_some_and(|sv| sv.wants_col_resize_cursor(x, y));
+                            e.window.set_cursor(if resize {
+                                winit::window::CursorIcon::ColResize
+                            } else {
+                                winit::window::CursorIcon::Default
+                            });
+                        }
                         self.route(id, InputEvent::MouseMove { x, y }, el);
                     }
                 }

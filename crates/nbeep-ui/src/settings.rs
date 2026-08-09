@@ -593,6 +593,17 @@ impl SettingsWidget {
         self.bars.tick() || self.tree.tick()
     }
 
+    /// 이 좌표에서 좌우 리사이즈 커서를 보여야 하는가 — 스플리터 hover/드래그
+    /// (호스트가 OS 커서로 번역 · 사용자 요청 08-09: 조절 가능함을 직관적으로).
+    #[must_use]
+    pub fn wants_col_resize_cursor(&self, x: i32, y: i32) -> bool {
+        if self.split_drag {
+            return true;
+        }
+        let split_x = self.bounds.x + self.s(self.sidebar_w);
+        (x - split_x).abs() <= self.s(4) && y >= self.bounds.y && y < self.bounds.bottom()
+    }
+
     /// 현 bounds에 맞춰 자식 컨트롤 배치.
     fn layout(&mut self, inv: &mut Invalidations) {
         let sw = self.s(self.sidebar_w);
