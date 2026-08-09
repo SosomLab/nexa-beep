@@ -870,6 +870,7 @@ mod app_window {
             let attrs = Window::default_attributes()
                 .with_title("Nexa Beep — About")
                 .with_inner_size(winit::dpi::LogicalSize::new(420.0, 520.0))
+                .with_resizable(false) // 모달 대화상자 — 크기 고정
                 .with_window_icon(self.icon.clone());
             let window = Rc::new(el.create_window(attrs).unwrap());
             let scale = window.scale_factor() as f32;
@@ -1552,6 +1553,15 @@ mod app_window {
                 return;
             };
             let role = entry.role;
+            // About = 모달 — 열려 있는 동안 다른 창 입력은 삼키고 About으로 포커스 복귀.
+            if self.about_view.is_some() && role != Role::About {
+                if let Some((_, e)) = self.windows.iter().find(|(_, e)| e.role == Role::About) {
+                    if matches!(ev, InputEvent::MouseDown { .. } | InputEvent::Key { .. }) {
+                        e.window.focus_window();
+                    }
+                    return;
+                }
+            }
             let mut inv = Invalidations::default();
             match role {
                 Role::Main => {
