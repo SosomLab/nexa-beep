@@ -3,7 +3,7 @@
 //! 조립 지점의 창 계층. 도메인은 `nbeep-core`, 렌더는 `nbeep-ui`가 갖고 여기는
 //! **winit ↔ 위젯 번역 + 창 생명주기**만 맡는다. 창 코드의 `nbeep-plat` 이관은 M3-2.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::num::NonZeroU32;
 use std::rc::Rc;
 use std::time::Instant;
@@ -95,6 +95,10 @@ enum AppEvent {
     },
     /// 전송 실패·거절 — 사유 문장(표시 전용).
     XferFailed { peer: PeerId, why: String },
+    /// 상대가 **수락**했다 — 대기 창을 닫고 스트리밍이 시작된다.
+    XferAccepted { peer: PeerId },
+    /// 발신 1건 완료 — 큐의 다음 파일로 넘어간다.
+    XferSendDone { peer: PeerId },
 }
 
 /// 세션 액터에 보내는 명령 — 대화 바이트와 파일 제어를 한 채널로 교대한다.
@@ -110,6 +114,8 @@ enum SessionCmd {
     },
     /// 수신 제안 수락/거절(사용자 결정 — 자동 경로 없음).
     AcceptXfer(nbeep_core::XferId),
+    /// 발신 취소(타임아웃·사용자) — 상대에게 Cancel 통지.
+    CancelXfer(nbeep_core::XferId),
     RejectXfer {
         id: nbeep_core::XferId,
         why: nbeep_core::RejectWhy,
@@ -183,6 +189,10 @@ fn spawn_session_actor(
                         } else {
                             Ok(())
                         }
+                    }
+                    SessionCmd::CancelXfer(id) => {
+                        outgoing.remove(&id);
+                        session.send(StreamId::File, &XferMsg::Cancel { id }.encode())
                     }
                     SessionCmd::RejectXfer { id, why } => {
                         inbox.drop_xfer(&id);
@@ -299,6 +309,7 @@ fn xfer_step(
         }
         Ok(XferMsg::Accept { id }) => {
             if let Some(data) = outgoing.remove(&id) {
+                let _ = proxy.send_event(AppEvent::XferAccepted { peer });
                 let total = data.len() as u64;
                 for c in chunks_of(id, &data) {
                     let nbeep_core::XferMsg::Chunk {
@@ -319,6 +330,7 @@ fn xfer_step(
                 session
                     .send(StreamId::File, &XferMsg::Done { id }.encode())
                     .map_err(|_| ())?;
+                let _ = proxy.send_event(AppEvent::XferSendDone { peer });
             }
         }
         Ok(XferMsg::Reject { id, why, limit }) => {
@@ -392,6 +404,8 @@ enum Role {
     About,
     /// 격리함 — 수신 파일 승인·삭제(M4-3 · [docs/11] §7 등급별 마찰).
     Quarantine,
+    /// 발신 대기 — 상대 승인을 기다리는 창(60초 타임아웃 후 자동 취소).
+    Sending(PeerId),
 }
 
 /// 에코 봇 — 버스에 실물 신원으로 참여해 수신 세션을 받고, Chat 메시지를 에코한다.
@@ -535,7 +549,17 @@ struct App {
     /// 기간 자동 승인 길이(설정 `xfer.approval_window`).
     approval_window: nbeep_core::AutoWindow,
     /// 상대별 수락 대기 큐 — **오퍼 1건당 승인 1번**(2번 보내면 2번 물어본다).
-    pending_offers: HashMap<PeerId, std::collections::VecDeque<(nbeep_core::XferId, String, u64)>>,
+    pending_offers: HashMap<PeerId, VecDeque<(nbeep_core::XferId, String, u64)>>,
+    /// 상대별 발신 대기 파일 큐(다중 드롭 — 한 번에 하나씩 협상한다).
+    send_queue: HashMap<PeerId, VecDeque<std::path::PathBuf>>,
+    /// 상대별 배치 집계 (보낸 파일 수, 총 파일 수, 보낸 바이트, 총 바이트).
+    send_batch: HashMap<PeerId, (u32, u32, u64, u64)>,
+    /// 발신 협상 대기 중인가(수락 전) — 큐 진행 판단.
+    awaiting_accept: HashMap<PeerId, nbeep_core::XferId>,
+    /// 발신 대기 창의 타임아웃 버튼(상대별).
+    send_wait: HashMap<PeerId, nbeep_ui::TimeoutButton>,
+    /// 다음 루프에서 만들 발신 대기 창(창 생성은 ActiveEventLoop가 필요하다).
+    pending_send_window: Option<PeerId>,
     /// 주 창 상단 Pull-down 메뉴(목록 모드 전용).
     menu: MenuBar,
     /// 주 창 툴바(메뉴 아래 · 이미지 버튼 · 목록 모드 전용).
@@ -666,10 +690,11 @@ impl App {
         }
     }
 
-    /// 드롭된 파일을 이 창의 대화 상대에게 **제안**한다(수락 전 데이터 전송 없음 · FR-X-3).
+    /// 드롭된 파일을 **큐에 넣는다**(다중 드롭 = 여러 번 호출된다 · winit는 파일마다
+    /// 이벤트를 준다). 협상은 한 번에 하나씩 — 승인도 파일마다 받아야 하기 때문이다.
     fn offer_file(&mut self, id: WindowId, path: &std::path::Path) {
         let Some(peer) = self.chat_peer_for(id) else {
-            self.status = "파일 전송은 대화를 연 뒤에 — 상대를 먼저 선택하라".into();
+            self.status = "파일 전송은 대화를 연 뒤에 — 상대를 먼저 선택하세요".into();
             self.request_redraw(id);
             return;
         };
@@ -684,11 +709,38 @@ impl App {
                 return;
             }
         }
-        let bytes = match std::fs::read(path) {
+        let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+        self.send_queue
+            .entry(peer)
+            .or_default()
+            .push_back(path.to_path_buf());
+        let b = self.send_batch.entry(peer).or_insert((0, 0, 0, 0));
+        b.1 += 1;
+        b.3 += size;
+        self.status = format!(
+            "전송 대기 {}개 · 총 {}",
+            self.send_queue.get(&peer).map_or(0, VecDeque::len),
+            human_size(b.3)
+        );
+        self.pump_send_queue(peer);
+        self.request_redraw(id);
+    }
+
+    /// 큐에서 다음 파일을 꺼내 오퍼를 보낸다(협상 중이면 대기).
+    fn pump_send_queue(&mut self, peer: PeerId) {
+        if self.awaiting_accept.contains_key(&peer) {
+            return; // 앞 파일 협상 중
+        }
+        let Some(path) = self.send_queue.get_mut(&peer).and_then(VecDeque::pop_front) else {
+            // 큐가 비었다 — 배치 종료.
+            self.send_batch.remove(&peer);
+            return;
+        };
+        let bytes = match std::fs::read(&path) {
             Ok(b) => b,
             Err(e) => {
                 self.status = format!("파일 읽기 실패: {e}");
-                self.request_redraw(id);
+                self.pump_send_queue(peer);
                 return;
             }
         };
@@ -700,26 +752,67 @@ impl App {
         xid.copy_from_slice(&nbeep_crypto::Identity::generate().peer_id().as_bytes()[..16]);
         let sha = nbeep_crypto::sha256(&bytes);
         let size = bytes.len() as u64;
-        let Some(conv) = self.conversations.get(&peer) else {
-            self.status = "세션이 없다 — 대화를 다시 열어라".into();
-            self.request_redraw(id);
+        let sent = self.conversations.get(&peer).is_some_and(|c| {
+            c.out_tx
+                .send(SessionCmd::OfferFile {
+                    id: xid,
+                    name: name.clone(),
+                    sha,
+                    bytes,
+                })
+                .is_ok()
+        });
+        if !sent {
+            self.status = "세션이 끊겨 전송할 수 없습니다".into();
+            self.send_queue.remove(&peer);
+            self.send_batch.remove(&peer);
             return;
-        };
-        if conv
-            .out_tx
-            .send(SessionCmd::OfferFile {
-                id: xid,
-                name: name.clone(),
-                sha,
-                bytes,
-            })
-            .is_err()
-        {
-            self.status = "세션이 끊겨 전송할 수 없다".into();
-        } else {
-            self.status = format!("파일 제안: {name} ({}) — 상대 수락 대기", human_size(size));
         }
-        self.request_redraw(id);
+        self.awaiting_accept.insert(peer, xid);
+        self.status = format!("파일 제안: {name} ({}) — 상대 승인 대기", human_size(size));
+        self.open_send_wait(peer, &name);
+    }
+
+    /// 발신 대기 창 — **60초 타임아웃 버튼**이 자동으로 눌려 창을 닫고 전송을 취소한다.
+    fn open_send_wait(&mut self, peer: PeerId, name: &str) {
+        let mut tb = nbeep_ui::TimeoutButton::new(format!("전송 취소 — {name}"), 60_000);
+        tb.start(self.now_ms());
+        self.send_wait.insert(peer, tb);
+        self.pending_send_window = Some(peer); // 다음 about_to_wait에서 창을 만든다
+    }
+
+    /// 발신 대기 종료 — 창을 닫고 상태를 정리한다.
+    fn close_send_wait(&mut self, peer: PeerId) {
+        self.send_wait.remove(&peer);
+        if let Some((wid, _)) = self
+            .windows
+            .iter()
+            .find(|(_, e)| e.role == Role::Sending(peer))
+        {
+            let wid = *wid;
+            self.windows.remove(&wid);
+        }
+    }
+
+    /// 발신 취소(타임아웃·사용자) — 상대에게 Cancel을 보내고 큐를 비운다.
+    fn cancel_send(&mut self, peer: PeerId, by_timeout: bool) {
+        if let Some(xid) = self.awaiting_accept.remove(&peer) {
+            if let Some(c) = self.conversations.get(&peer) {
+                let _ = c.out_tx.send(SessionCmd::CancelXfer(xid));
+            }
+        }
+        self.send_queue.remove(&peer);
+        self.send_batch.remove(&peer);
+        self.close_send_wait(peer);
+        self.clear_xfer(peer);
+        self.status = if by_timeout {
+            "60초 동안 응답이 없어 전송을 취소했습니다".into()
+        } else {
+            "전송을 취소했습니다".into()
+        };
+        if let Some(mid) = self.main_id {
+            self.request_redraw(mid);
+        }
     }
 
     /// 수신 제안에 답한다(⌘/Ctrl+Y 수락 · ⌘/Ctrl+N 거절) — **사용자 명시 결정만**(FR-S-9).
@@ -731,17 +824,14 @@ impl App {
         let Some((xid, name, _)) = self
             .pending_offers
             .get_mut(&peer)
-            .and_then(std::collections::VecDeque::pop_front)
+            .and_then(VecDeque::pop_front)
         else {
             self.status = "수락 대기 중인 파일 제안이 없습니다".into();
             self.request_redraw(id);
             return;
         };
         let ok = self.send_xfer_decision(peer, xid, accept, nbeep_core::RejectWhy::Declined);
-        let left = self
-            .pending_offers
-            .get(&peer)
-            .map_or(0, std::collections::VecDeque::len);
+        let left = self.pending_offers.get(&peer).map_or(0, VecDeque::len);
         self.status = if ok {
             let head = if accept {
                 format!("수락 — {name} 수신 시작")
@@ -1520,6 +1610,17 @@ impl App {
                     qv.set_bounds(Rect::new(0, 0, w, h), &mut inv);
                 }
             }
+            Role::Sending(peer) => {
+                if let Some(tb) = self.send_wait.get_mut(&peer) {
+                    tb.set_scale(scale);
+                    let bw = (200.0 * scale) as i32;
+                    let bh = (30.0 * scale) as i32;
+                    tb.set_bounds(
+                        Rect::new((w - bw) / 2, h - bh - (16.0 * scale) as i32, bw, bh),
+                        &mut inv,
+                    );
+                }
+            }
         }
     }
 
@@ -1729,6 +1830,17 @@ impl App {
                     }
                 }
             }
+            Role::Sending(peer) => {
+                let mut fired = None;
+                if let Some(tb) = self.send_wait.get_mut(&peer) {
+                    tb.on_event(&ev, &mut inv);
+                    fired = tb.take_fired();
+                }
+                if fired.is_some() {
+                    // 클릭이든 만료든 결과는 같다 — 전송 취소 + 창 닫기(사용자 확정).
+                    self.cancel_send(peer, false);
+                }
+            }
             Role::Quarantine => {
                 let mut act = None;
                 if let Some(qv) = &mut self.quarantine_view {
@@ -1838,6 +1950,23 @@ impl App {
             Role::Quarantine => {
                 if let Some(qv) = &self.quarantine_view {
                     qv.paint(&mut ctx, &theme);
+                }
+            }
+            Role::Sending(peer) => {
+                ctx.fill_rect(Rect::new(0, 0, 10_000, 10_000), theme.panel_bg);
+                ctx.select_font(nbeep_ui::FontSlot::Base, false);
+                let msg = "상대의 승인을 기다리는 중…";
+                let tw = ctx.text_width(msg);
+                let ww = i32::try_from(size.width).unwrap_or(0);
+                ctx.text(
+                    (ww - tw) / 2,
+                    (40.0 * entry.scale) as i32,
+                    Rect::new(0, 0, ww, 10_000),
+                    msg,
+                    theme.text,
+                );
+                if let Some(tb) = self.send_wait.get(&peer) {
+                    tb.paint(&mut ctx, &theme);
                 }
             }
         }
@@ -1989,8 +2118,49 @@ impl ApplicationHandler<AppEvent> for App {
                 self.clear_xfer(peer);
                 self.redraw_conversation(peer);
             }
+            AppEvent::XferAccepted { peer } => {
+                // 협상 성립 — 대기 창을 닫고 스트리밍 진행률로 넘어간다.
+                self.awaiting_accept.remove(&peer);
+                self.close_send_wait(peer);
+                self.status = "상대가 수락 — 전송 시작".into();
+                self.redraw_conversation(peer);
+            }
+            AppEvent::XferSendDone { peer } => {
+                // 배치 집계 갱신 후 다음 파일로.
+                if let Some(b) = self.send_batch.get_mut(&peer) {
+                    b.0 += 1;
+                    if let Some(xp) = self.xfer_progress.get(&peer) {
+                        b.2 = b.2.saturating_add(xp.total_bytes);
+                    }
+                    let (done_f, total_f, done_b, total_b) = *b;
+                    self.xfer_progress.insert(
+                        peer,
+                        nbeep_ui::XferProgress {
+                            done_bytes: done_b,
+                            total_bytes: total_b.max(done_b),
+                            done_files: done_f,
+                            total_files: total_f,
+                            sending: true,
+                        },
+                    );
+                    self.apply_xfer_view(peer);
+                    self.status = format!("전송 완료 {done_f}/{total_f}");
+                }
+                let more = self.send_queue.get(&peer).is_some_and(|q| !q.is_empty());
+                if more {
+                    self.pump_send_queue(peer);
+                } else {
+                    self.send_batch.remove(&peer);
+                    self.clear_xfer(peer);
+                }
+                self.redraw_conversation(peer);
+            }
             AppEvent::XferFailed { peer, why } => {
                 self.status = format!("파일: {why}");
+                self.awaiting_accept.remove(&peer);
+                self.close_send_wait(peer);
+                self.send_queue.remove(&peer);
+                self.send_batch.remove(&peer);
                 self.clear_xfer(peer);
                 self.redraw_conversation(peer);
             }
@@ -2075,6 +2245,70 @@ impl ApplicationHandler<AppEvent> for App {
                 }
             }
         }
+        // 발신 대기 창 생성(창 생성은 여기서만 — ActiveEventLoop가 필요하다).
+        if let Some(peer) = self.pending_send_window.take() {
+            if !self.windows.values().any(|e| e.role == Role::Sending(peer)) {
+                let attrs = Window::default_attributes()
+                    .with_title("Nexa Beep — 전송 대기")
+                    .with_inner_size(winit::dpi::LogicalSize::new(360.0, 130.0))
+                    .with_resizable(false)
+                    .with_window_icon(self.icon.clone());
+                if let Ok(window) = el.create_window(attrs) {
+                    let window = Rc::new(window);
+                    let scale = window.scale_factor() as f32;
+                    if let Ok(context) = softbuffer::Context::new(window.clone()) {
+                        if let Ok(surface) = SbSurface::new(&context, window.clone()) {
+                            let id = window.id();
+                            self.windows.insert(
+                                id,
+                                WinEntry {
+                                    role: Role::Sending(peer),
+                                    window,
+                                    surface,
+                                    cursor: (0, 0),
+                                    scale,
+                                },
+                            );
+                            self.layout_window(id);
+                            self.request_redraw(id);
+                        }
+                    }
+                }
+            }
+        }
+        // 발신 대기 타임아웃 — 60초가 지나면 **버튼이 스스로 눌려** 전송을 취소한다.
+        {
+            let now = self.now_ms();
+            let mut fired: Vec<PeerId> = Vec::new();
+            let mut redraw: Vec<PeerId> = Vec::new();
+            for (peer, tb) in &mut self.send_wait {
+                if tb.tick(now) {
+                    redraw.push(*peer);
+                }
+                if tb.take_fired().is_some() {
+                    fired.push(*peer);
+                }
+            }
+            for peer in redraw {
+                if let Some((wid, _)) = self
+                    .windows
+                    .iter()
+                    .find(|(_, e)| e.role == Role::Sending(peer))
+                {
+                    let wid = *wid;
+                    self.request_redraw(wid);
+                }
+            }
+            for peer in fired {
+                self.cancel_send(peer, true);
+            }
+        }
+        // 기간 자동 승인 만료 확인(켜 둔 걸 잊어도 되돌아온다).
+        if self.tick_approval() {
+            if let Some(mid) = self.main_id {
+                self.request_redraw(mid);
+            }
+        }
         // 설정 우측 패널 스크롤바 페이드 틱(~5Hz).
         if let Some(sv) = &mut self.settings_view {
             if sv.tick() {
@@ -2116,6 +2350,7 @@ impl ApplicationHandler<AppEvent> for App {
                         Role::Picker => self.picker_view = None,
                         Role::About => self.about_view = None,
                         Role::Quarantine => self.quarantine_view = None,
+                        Role::Sending(peer) => self.cancel_send(peer, false),
                         Role::Main => {}
                     }
                 }
@@ -2485,6 +2720,11 @@ pub(crate) fn run(mode: WindowMode, live: bool) {
         approval: nbeep_core::ApprovalPolicy::default(),
         approval_window: nbeep_core::AutoWindow::Hour1,
         pending_offers: HashMap::new(),
+        send_queue: HashMap::new(),
+        send_batch: HashMap::new(),
+        awaiting_accept: HashMap::new(),
+        send_wait: HashMap::new(),
+        pending_send_window: None,
         menu: MenuBar::new(build_menus()),
         toolbar: Toolbar::new(vec![
             ToolItem::new(
