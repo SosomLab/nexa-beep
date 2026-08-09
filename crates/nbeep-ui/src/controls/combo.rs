@@ -168,6 +168,15 @@ pub trait ComboControl: Control {
     fn extra_rows(&self) -> Vec<ComboItem> {
         Vec::new()
     }
+    /// 목록에서 ✓를 그릴 항목(기본 = 선택 index). 커스텀 값 활성 시 `None`(Combo 재정의).
+    fn checked_index(&self) -> Option<usize> {
+        Some(self.core().selected)
+    }
+    /// 확장 항목 `j`에 ✓ 표시 여부(기본 없음) — 직접 입력 값 활성 시 true(Combo 재정의).
+    fn extra_checked(&self, j: usize) -> bool {
+        let _ = j;
+        false
+    }
 
     // ── 상태 조작(상속 기본 메서드) ──
     /// 드롭다운 열림 여부.
@@ -305,7 +314,8 @@ pub trait ComboControl: Control {
             );
         }
         ctx.select_font(FontSlot::Base, false);
-        ctx.text(tx, cy - self.s(16) / 2, b, box_text, theme.text);
+        let th = ctx.text_height();
+        ctx.text(tx, cy - th / 2, b, box_text, theme.text);
 
         // 셰브론(⇕ 확장 / ∨ 일반) — 트리와 동일한 회색 계열(text_dim).
         let chev = self.chevron_rect();
@@ -341,7 +351,7 @@ pub trait ComboControl: Control {
             // 선택 ✓(크기 70% — 사용자 확정 · 16→11).
             let cs = self.s(11);
             let check = Rect::new(row.x + self.s(6), row.y + (rh - cs) / 2, cs, cs);
-            if i == self.core().selected {
+            if Some(i) == self.checked_index() {
                 draw_check_mark(ctx, check, self.accent_now(theme));
             }
             let cy = row.y + rh / 2;
@@ -357,7 +367,8 @@ pub trait ComboControl: Control {
                 theme.text,
             );
             ctx.select_font(FontSlot::Base, false);
-            ctx.text(tx, cy - self.s(16) / 2, row, &it.label, theme.text);
+            let th = ctx.text_height();
+            ctx.text(tx, cy - th / 2, row, &it.label, theme.text);
             y += rh;
         }
         // 구분자(Horizon) + 확장 항목("Choose…" 등 · 아이콘 옵션).
@@ -369,13 +380,19 @@ pub trait ComboControl: Control {
                 theme.border,
             );
             y += self.s(SEP_H);
-            for it in &extras {
+            for (j, it) in extras.iter().enumerate() {
                 let row = Rect::new(pop.x + self.s(3), y, pop.w - self.s(6), rh);
                 let cy = row.y + rh / 2;
+                // 항목과 같은 ✓ 슬롯(정렬 통일) — 직접 입력 값 활성 시 "직접 입력…"에 ✓.
+                let cs = self.s(11);
+                let check = Rect::new(row.x + self.s(6), row.y + (rh - cs) / 2, cs, cs);
+                if self.extra_checked(j) {
+                    draw_check_mark(ctx, check, self.accent_now(theme));
+                }
                 let tx = draw_leading(
                     ctx,
                     it,
-                    row.x + self.s(10),
+                    check.right() + self.s(6),
                     cy,
                     self.s(ICON_SZ),
                     self.s(16),
@@ -384,7 +401,8 @@ pub trait ComboControl: Control {
                     theme.accent,
                 );
                 ctx.select_font(FontSlot::Base, false);
-                ctx.text(tx, cy - self.s(16) / 2, row, &it.label, theme.accent);
+                let th = ctx.text_height();
+                ctx.text(tx, cy - th / 2, row, &it.label, theme.accent);
                 y += rh;
             }
         }
@@ -404,10 +422,24 @@ fn popup_or_box<C: ComboControl + ?Sized>(box_b: Rect, c: &C) -> Rect {
 // ───────────────────────────── 일반 콤보(∨) ─────────────────────────────
 
 /// 일반 콤보박스 — 목록에서 택일(∨).
+///
+/// **직접 입력(옵션)**: [`Combo::set_custom_entry`]를 켜면 구분자 아래 "직접 입력…" 항목이
+/// 생기고, 고르면 읽기 전용이던 박스가 **인라인 숫자 편집**으로 바뀐다(사용자 요청 08-09).
+/// Enter/바깥 클릭 = 확정(값 보고) · Esc = 취소. 목록에 없는 값은 `값+접미`로 표시된다.
 #[derive(Debug)]
 pub struct Combo {
     base: ControlBase,
     core: ComboCore,
+    /// 직접 입력 항목 라벨(None = 기능 꺼짐).
+    custom_label: Option<String>,
+    /// 커스텀 값 표시 접미(예: "ms").
+    custom_suffix: String,
+    /// 목록에 없는 커스텀 값(직접 입력 결과 · 원시 문자열).
+    custom_value: Option<String>,
+    /// 인라인 편집 중.
+    editing: bool,
+    /// 편집 버퍼(숫자 전용).
+    buf: String,
 }
 
 impl Combo {
@@ -417,6 +449,11 @@ impl Combo {
         Self {
             base: ControlBase::default(),
             core: ComboCore::new(items, selected),
+            custom_label: None,
+            custom_suffix: String::new(),
+            custom_value: None,
+            editing: false,
+            buf: String::new(),
         }
     }
     /// 선택된 값.
@@ -424,12 +461,40 @@ impl Combo {
     pub fn selected_value(&self) -> String {
         self.value()
     }
-    /// 값으로 선택 지정(보고 없음).
+    /// 값으로 선택 지정(보고 없음). 목록에 없으면(직접 입력 켜짐) 커스텀 값으로 표시.
     pub fn select_value(&mut self, value: &str) {
         if let Some(i) = self.core.items.iter().position(|it| it.value == value) {
             self.core.selected = i;
             self.core.hover = i;
+            self.custom_value = None;
+        } else if self.custom_label.is_some() && !value.is_empty() {
+            self.custom_value = Some(value.to_string());
         }
+    }
+    /// 직접 입력 항목을 켠다 — (드롭다운 라벨, 표시 접미).
+    pub fn set_custom_entry(&mut self, label: impl Into<String>, suffix: impl Into<String>) {
+        self.custom_label = Some(label.into());
+        self.custom_suffix = suffix.into();
+    }
+    /// 인라인 편집 중인가(호스트 라우팅 근거 — 편집은 모달).
+    #[must_use]
+    pub fn is_editing(&self) -> bool {
+        self.editing
+    }
+    /// 편집 확정 — 버퍼가 비지 않으면 값 보고(목록과 일치하면 그 항목 선택으로 환원).
+    fn commit_edit(&mut self, inv: &mut Invalidations) {
+        self.editing = false;
+        if !self.buf.is_empty() {
+            let v = std::mem::take(&mut self.buf);
+            if let Some(i) = self.core.items.iter().position(|it| it.value == v) {
+                self.core.selected = i;
+                self.custom_value = None;
+            } else {
+                self.custom_value = Some(v);
+            }
+            self.core.changed = true;
+        }
+        inv.push(self.base.bounds);
     }
 }
 
@@ -448,6 +513,50 @@ impl ComboControl for Combo {
     fn core_mut(&mut self) -> &mut ComboCore {
         &mut self.core
     }
+    fn extra_rows(&self) -> Vec<ComboItem> {
+        self.custom_label
+            .as_deref()
+            .map(|l| vec![ComboItem::new("__custom__", l)])
+            .unwrap_or_default()
+    }
+    fn value(&self) -> String {
+        // 커스텀 값이 살아 있으면 그것이 현재 값.
+        self.custom_value.clone().unwrap_or_else(|| {
+            self.core
+                .items
+                .get(self.core.selected)
+                .map(|it| it.value.clone())
+                .unwrap_or_default()
+        })
+    }
+    fn choose_index(&mut self, i: usize, inv: &mut Invalidations) {
+        if i < self.core.items.len() {
+            let changed = self.core.selected != i || self.custom_value.is_some();
+            self.core.selected = i;
+            self.core.open = false;
+            self.core.changed |= changed;
+            self.custom_value = None; // 목록 선택 = 커스텀 해제
+            inv.push(self.base.bounds);
+        }
+    }
+    fn on_extra(&mut self, _j: usize, inv: &mut Invalidations) {
+        // "직접 입력…" — 박스를 인라인 편집으로 전환(현재 값의 숫자만 남겨 시작).
+        self.core.open = false;
+        self.buf = self.value().chars().filter(char::is_ascii_digit).collect();
+        self.editing = true;
+        inv.push(self.base.bounds);
+    }
+    fn checked_index(&self) -> Option<usize> {
+        // 커스텀 값이 살아 있으면 목록 어디에도 ✓를 찍지 않는다(표시 착오 방지).
+        if self.custom_value.is_some() {
+            None
+        } else {
+            Some(self.core.selected)
+        }
+    }
+    fn extra_checked(&self, _j: usize) -> bool {
+        self.custom_value.is_some()
+    }
 }
 
 impl Widget for Combo {
@@ -459,15 +568,67 @@ impl Widget for Combo {
         inv.push(bounds);
     }
     fn on_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
+        // 인라인 편집 중 = 모달 — 숫자만 받고 Enter/바깥 클릭 확정 · Esc 취소.
+        if self.editing {
+            match *ev {
+                InputEvent::Char { c, .. } => {
+                    if c == '\u{8}' {
+                        self.buf.pop();
+                    } else if c.is_ascii_digit() && self.buf.len() < 6 {
+                        self.buf.push(c);
+                    }
+                    inv.push(self.base.bounds);
+                }
+                InputEvent::Key { key, .. } => match key {
+                    Key::Enter => self.commit_edit(inv),
+                    Key::Escape => {
+                        self.editing = false;
+                        self.buf.clear();
+                        inv.push(self.base.bounds);
+                    }
+                    _ => {}
+                },
+                InputEvent::MouseDown { x, y, .. }
+                    if !self.base.bounds.contains(Point { x, y }) =>
+                {
+                    self.commit_edit(inv); // 바깥 클릭 = 확정
+                }
+                _ => {}
+            }
+            return;
+        }
         combo_event(self, ev, inv);
     }
     fn paint(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
-        let text = self
-            .core
-            .items
-            .get(self.core.selected)
-            .map_or("", |it| it.label.as_str())
-            .to_string();
+        if self.editing {
+            // 편집 모드 — 버퍼 + 캐럿 + accent 테두리(입력 가능 상태 식별).
+            self.paint_combo(ctx, theme, &self.buf);
+            let b = self.base.bounds;
+            ctx.select_font(FontSlot::Base, false);
+            let tw = ctx.text_width(&self.buf);
+            let th = ctx.text_height();
+            ctx.fill_rect(
+                Rect::new(
+                    b.x + self.s(10) + tw + 1,
+                    b.y + (b.h - th) / 2,
+                    self.s(1).max(1),
+                    th,
+                ),
+                theme.text,
+            );
+            ctx.stroke_round_rect(b, self.s(6), self.accent_now(theme), 1.0);
+            return;
+        }
+        let text = self.custom_value.as_ref().map_or_else(
+            || {
+                self.core
+                    .items
+                    .get(self.core.selected)
+                    .map_or("", |it| it.label.as_str())
+                    .to_string()
+            },
+            |v| format!("{v}{}", self.custom_suffix),
+        );
         self.paint_combo(ctx, theme, &text);
     }
 }
@@ -762,7 +923,8 @@ impl Choose {
                 theme.text,
             );
             ctx.select_font(FontSlot::Base, false);
-            ctx.text(tx, cy - self.s(16) / 2, row, &it.label, theme.text);
+            let th = ctx.text_height();
+            ctx.text(tx, cy - th / 2, row, &it.label, theme.text);
         }
         let ch = items.len() as i32 * rh;
         self.pick_bars.paint(
@@ -846,6 +1008,75 @@ mod tests {
             shift: false,
             primary: false,
         }
+    }
+
+    #[test]
+    fn custom_entry_inline_edit_commits_value() {
+        let mut c = Combo::new(items(), 0);
+        c.set_custom_entry("직접 입력…", "ms");
+        let mut inv = Invalidations::default();
+        c.set_bounds(Rect::new(0, 0, 160, 26), &mut inv);
+        // 열고 → 확장 항목("직접 입력…") 클릭 → 편집 모드.
+        c.on_event(&click(10, 10), &mut inv);
+        assert!(c.is_open());
+        let pop = c.popup_rect();
+        c.on_event(&click(pop.x + 10, pop.bottom() - 8), &mut inv); // 마지막 행 = 확장
+        assert!(c.is_editing(), "직접 입력 = 인라인 편집");
+        // 숫자만 받는다 + Enter 확정.
+        for d in ['a', '3', '5', '0', '0'] {
+            c.on_event(&ch(d), &mut inv);
+        }
+        c.on_event(&key(Key::Enter), &mut inv);
+        assert!(!c.is_editing());
+        assert_eq!(
+            c.take_changed().as_deref(),
+            Some("3500"),
+            "비숫자 시작값은 비워진다"
+        );
+    }
+
+    #[test]
+    fn custom_edit_starts_from_current_and_esc_cancels() {
+        let mut c = Combo::new(
+            vec![
+                ComboItem::new("1000", "1000ms"),
+                ComboItem::new("2000", "2000ms"),
+            ],
+            1,
+        );
+        c.set_custom_entry("직접 입력…", "ms");
+        let mut inv = Invalidations::default();
+        c.set_bounds(Rect::new(0, 0, 160, 26), &mut inv);
+        c.on_event(&click(10, 10), &mut inv);
+        let pop = c.popup_rect();
+        c.on_event(&click(pop.x + 10, pop.bottom() - 8), &mut inv);
+        assert!(c.is_editing());
+        // Esc = 취소(보고 없음).
+        c.on_event(&key(Key::Escape), &mut inv);
+        assert!(!c.is_editing());
+        assert!(c.take_changed().is_none());
+        // 백스페이스로 지우고 새 값 입력 → 목록에 없는 값 = 커스텀, 있으면 그 항목.
+        c.on_event(&click(10, 10), &mut inv);
+        let pop = c.popup_rect();
+        c.on_event(&click(pop.x + 10, pop.bottom() - 8), &mut inv);
+        for _ in 0..4 {
+            c.on_event(&ch('\u{8}'), &mut inv);
+        }
+        for d in ['7', '5', '0', '0'] {
+            c.on_event(&ch(d), &mut inv);
+        }
+        c.on_event(&key(Key::Enter), &mut inv);
+        assert_eq!(c.take_changed().as_deref(), Some("7500"), "커스텀 값 보고");
+        // 커스텀 활성 = ✓가 목록이 아니라 "직접 입력…"에 붙는다(사용자 지적 08-09).
+        assert_eq!(c.checked_index(), None, "목록 ✓ 없음");
+        assert!(c.extra_checked(0), "직접 입력 ✓");
+        // 목록 재선택 = 커스텀 해제.
+        c.on_event(&click(10, 10), &mut inv);
+        let pop = c.popup_rect();
+        c.on_event(&click(pop.x + 10, pop.y + 6), &mut inv); // 첫 항목
+        assert_eq!(c.take_changed().as_deref(), Some("1000"));
+        assert_eq!(c.checked_index(), Some(0), "재선택 = 목록 ✓ 복귀");
+        assert!(!c.extra_checked(0));
     }
     fn key(k: Key) -> InputEvent {
         InputEvent::Key {

@@ -1922,6 +1922,17 @@ mod app_window {
                     }
                 }
             }
+            // 설정 우측 패널 스크롤바 페이드 틱(~5Hz).
+            if let Some(sv) = &mut self.settings_view {
+                if sv.tick() {
+                    if let Some((sid, _)) =
+                        self.windows.iter().find(|(_, e)| e.role == Role::Settings)
+                    {
+                        let sid = *sid;
+                        self.request_redraw(sid);
+                    }
+                }
+            }
             // 오버레이 스크롤바 페이드 틱(~5Hz) — 상태 변화 시 갤러리 재그리기.
             if let Some(gv) = &mut self.gallery_view {
                 if gv.tick() {
@@ -2000,6 +2011,18 @@ mod app_window {
                     if let Some(e) = self.windows.get_mut(&id) {
                         e.cursor = (position.x as i32, position.y as i32);
                         let (x, y) = e.cursor;
+                        // 설정 창 스플리터 hover/드래그 = 좌우 리사이즈 커서(그 외 기본).
+                        if e.role == Role::Settings {
+                            let resize = self
+                                .settings_view
+                                .as_ref()
+                                .is_some_and(|sv| sv.wants_col_resize_cursor(x, y));
+                            e.window.set_cursor(if resize {
+                                winit::window::CursorIcon::ColResize
+                            } else {
+                                winit::window::CursorIcon::Default
+                            });
+                        }
                         self.route(id, InputEvent::MouseMove { x, y }, el);
                     }
                 }

@@ -3,6 +3,13 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
+> **갱신: 2026-08-09 (설정 화면 개선 차) (KST)** — **실측 정렬 전면화 + 설정 UX 일괄**(feat/m3-metrics → main · 사용자 실기 확인):
+> ① **텍스트 세로 정렬 실측 전면 교체** — 전 컨트롤의 고정 s(16) 근사 폐기(`text_height()` · 측정은 `select_font` 이후 규칙). 설정 우측 패널 **오버레이 스크롤** 추가.
+> ② **설정 UX** — 타임아웃 **ms 표시 + "직접 입력…"**(콤보 인라인 숫자 편집 · ✓는 커스텀 활성 시 직접 입력 항목으로) · **위치 3×3 시각 선택기**(4:3 미니 화면 · `HudPos` 코드 재사용) · **계층 카테고리**(Appearance ▸ Type-ahead · VS Code식: 상위=하위 포함/하위=그것만) · **사이드바 폭 드래그**(ColResize 커서 힌트) · **검색 ×**(`with_clearable`).
+> ③ ★ **캐럿 축소 원인 = 고정 근사 + 배율 미전파 재발** — "새 컨트롤 인스턴스 = set_scale 전파" 체크리스트가 두 번째로 적중(버튼 원복 버그와 동형). 컨트롤 신설 시 상시 점검 항목.
+> ④ 새 이음새: `SettingKind::RadioInput/PositionGrid` · `Entry.sub` · `Combo::set_custom_entry` · `TextBox::with_clearable` · `wants_col_resize_cursor`(위젯=힌트만 보고).
+> [journal/2026-08-09.md](journal/2026-08-09.md).
+>
 > **갱신: 2026-08-09 (아이콘 규약·UX 차) (KST)** — **아이콘 규약 확정 + 툴바/도움말 UX + 더블클릭**(feat/m3-toolbar-svg → main):
 > ① **아이콘 소스 규약(사용자 확정)** — **SVG = 모양만 + 테마 기준색 틴트**(다크=밝은 회색/라이트=아주 어두운 회색 · `ToolIcon::Mask` + 사전 래스터 알파 마스크 임베드 = 런타임 SVG 파서 의존 0) / **PNG = 원본 그대로**. 새로고침 버튼을 사용자 SVG로 교체.
 > ② **툴바 UX** — hover 반투명 배경+SVG 선색 accent 전환 · pressed 진한 배경+1px 내림. 기본 아이콘 24px · 메인 창 460×640.

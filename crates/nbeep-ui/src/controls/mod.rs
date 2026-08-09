@@ -16,6 +16,7 @@
 pub mod button;
 pub mod checkbox;
 pub mod combo;
+pub mod posgrid;
 pub mod pulldown;
 pub mod radio;
 pub mod scroll;
@@ -26,6 +27,7 @@ pub mod tree;
 pub use button::{Button, ButtonMode, ImageFit};
 pub use checkbox::Checkbox;
 pub use combo::{Choose, ChoosePicker, Combo, ComboControl, ComboItem, PopupHit};
+pub use posgrid::PositionPicker;
 pub use pulldown::{MenuBar, MenuDef, MenuEntry};
 pub use radio::{RadioGroup, RadioOption};
 pub use scroll::ScrollBars;
@@ -283,6 +285,7 @@ pub trait Control: crate::widget::Widget {
         }
         ctx.select_font(FontSlot::Status, false);
         let qw = ctx.text_width("?");
+        let th = ctx.text_height();
         let fg = if open {
             Color::from_rgb(255, 255, 255)
         } else {
@@ -291,7 +294,7 @@ pub trait Control: crate::widget::Widget {
         // "?"를 배지 정중앙에(가로·세로) — 상태 글꼴 높이 기준으로 세로 중앙 정렬.
         ctx.text(
             badge.x + (badge.w - qw) / 2,
-            badge.y + (badge.h - self.s(13)) / 2,
+            badge.y + (badge.h - th) / 2,
             badge,
             "?",
             fg,

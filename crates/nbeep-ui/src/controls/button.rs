@@ -253,8 +253,8 @@ impl Widget for Button {
 
                 // 아이콘 변 = 공용 단일 원천(콤보/Choose/트리와 동일 — 드리프트 방지).
                 let icon = self.s(super::LEADING_ICON);
-                let s16 = self.s(16);
                 ctx.select_font(FontSlot::Base, false);
+                let th = ctx.text_height();
                 let label_w = self.label.as_deref().map_or(0, |l| ctx.text_width(l));
                 let (img_x, text_x) = Self::normal_positions(
                     b,
@@ -269,7 +269,7 @@ impl Widget for Button {
                 );
                 // 세로 배치 = VAlign(기본 중앙).
                 let icon_y = self.align_y(b, icon, self.s(4));
-                let text_y = self.align_y(b, s16, self.s(4));
+                let text_y = self.align_y(b, th, self.s(4));
                 if let (Some(x), Some(img)) = (img_x, self.image.as_deref()) {
                     let boxr = Rect::new(x, icon_y, icon, icon);
                     let fit = image_fit_contain(boxr, img.w as i32, img.h as i32);

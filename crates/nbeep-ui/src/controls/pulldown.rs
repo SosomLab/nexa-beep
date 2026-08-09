@@ -344,6 +344,8 @@ impl Widget for MenuBar {
                 .collect();
         }
 
+        // 텍스트 세로 중앙 = 실측 높이(고정 16 근사 폐기 — 08-09).
+        let th = ctx.text_height();
         // 최상위 라벨들 — 평평한 텍스트, 열림 = 선택색 / hover = 옅은 배경(Windows 스타일).
         for (i, d) in self.menus.iter().enumerate() {
             let lr = self.label_rect(i);
@@ -356,7 +358,7 @@ impl Widget for MenuBar {
             let tw = ctx.text_width(&d.label);
             ctx.text(
                 lr.x + (lr.w - tw) / 2,
-                lr.y + (lr.h - self.s(16)) / 2,
+                lr.y + (lr.h - th) / 2,
                 lr,
                 &d.label,
                 theme.text,
@@ -392,7 +394,7 @@ impl Widget for MenuBar {
                             ctx.image_scaled(fit, img, row);
                         }
                         let tx = tx + self.s(LEADING_ICON) + self.s(6);
-                        ctx.text(tx, cy - self.s(16) / 2, row, &it.label, theme.text);
+                        ctx.text(tx, cy - th / 2, row, &it.label, theme.text);
                     }
                 }
                 y += h;

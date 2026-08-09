@@ -100,6 +100,8 @@ pub enum Msg {
     CatConversation,
     CatAppearance,
     CatFont,
+    /// 모양 하위: 타입어헤드.
+    CatTypeahead,
     // ── 설정: 공통 ──
     SearchPlaceholder,
     SystemDefaultFont,
@@ -153,6 +155,9 @@ pub enum Msg {
     TaSec2,
     TaSec3,
     TaSec5,
+    TaSec10,
+    /// 콤보 "직접 입력…" 항목.
+    CustomInput,
     PosTopLeft,
     PosTopCenter,
     PosTopRight,
@@ -189,6 +194,7 @@ impl Msg {
             Msg::CatConversation => ["Conversation", "대화", "对话", "会話"],
             Msg::CatAppearance => ["Appearance", "모양", "外观", "外観"],
             Msg::CatFont => ["Font", "글꼴", "字体", "フォント"],
+            Msg::CatTypeahead => ["Type-ahead", "타입어헤드", "预输入", "先行入力"],
             Msg::SearchPlaceholder => [
                 "Search (space = AND)",
                 "검색 (공백=AND)",
@@ -313,10 +319,12 @@ impl Msg {
                 "预输入提示出现的位置(3×3)",
                 "先行入力表示の位置(3×3)",
             ],
-            Msg::TaSec1 => ["1.0s"; 4],
-            Msg::TaSec2 => ["2.0s"; 4],
-            Msg::TaSec3 => ["3.0s"; 4],
-            Msg::TaSec5 => ["5.0s"; 4],
+            Msg::TaSec1 => ["1000ms"; 4],
+            Msg::TaSec2 => ["2000ms"; 4],
+            Msg::TaSec3 => ["3000ms"; 4],
+            Msg::TaSec5 => ["5000ms"; 4],
+            Msg::TaSec10 => ["10000ms"; 4],
+            Msg::CustomInput => ["Custom…", "직접 입력…", "直接输入…", "直接入力…"],
             Msg::PosTopLeft => ["↖"; 4],
             Msg::PosTopCenter => ["↑"; 4],
             Msg::PosTopRight => ["↗"; 4],
