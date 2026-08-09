@@ -71,6 +71,22 @@ impl IconImage {
         Self { w, h, rgba }
     }
 
+    /// 알파 마스크(1채널 `w*h` 커버리지)에 단색을 입혀 만든다 — **SVG 유래 모양 틴트**.
+    /// 모양은 마스크가, 색은 호출자(테마 기준색)가 정한다(사용자 규약 08-09:
+    /// SVG는 모양만 참조·색은 기준색, PNG는 원본 그대로).
+    ///
+    /// # Panics
+    /// `alpha.len() != w*h`면 패닉(구성 오류).
+    #[must_use]
+    pub fn from_alpha_tinted(w: u32, h: u32, alpha: &[u8], (r, g, b): (u8, u8, u8)) -> Self {
+        assert_eq!(alpha.len(), (w * h) as usize, "알파 마스크 길이 불일치");
+        let mut rgba = Vec::with_capacity(alpha.len() * 4);
+        for &a in alpha {
+            rgba.extend_from_slice(&[r, g, b, a]);
+        }
+        Self { w, h, rgba }
+    }
+
     /// 데모용 — **투명 배경의 라운드 사각형** 아이콘(앱 아이콘 느낌). 모서리는 알파 0.
     #[must_use]
     pub fn swatch(size: u32, (r, g, b): (u8, u8, u8)) -> Self {

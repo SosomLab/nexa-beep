@@ -1,25 +1,37 @@
-//! **툴바** — 이미지 버튼 가로 배열(사용자 요청 08-09 · Pull-down 메뉴 아래 배치).
+//! **툴바** — 이미지 버튼 가로 배열(사용자 요청 08-09 · 메뉴바 아래 배치).
 //!
-//! 아이콘 크기는 설정으로 지정(`ui.toolbar_size` — 16/24/32/64 · **기본 32**),
-//! [`Toolbar::set_icon_size`]로 즉시 반영된다. 항목 아이콘은 이미지([`IconImage`]) 또는
-//! 내장 글리프([`ToolIcon::Refresh`] — 폰트 글리프 의존 없이 폴리라인으로 직접 그림).
-//! 클릭은 [`Toolbar::take_clicked`] 1회성 보고(액션 id).
+//! 아이콘 크기는 설정으로 지정(`ui.toolbar_size` — 16/24/32/64 · **기본 24**),
+//! [`Toolbar::set_icon_size`]로 즉시 반영된다. 아이콘 소스 규약(사용자 확정 08-09):
+//! - [`ToolIcon::Image`](PNG 등 RGBA) = **원본 색 그대로**(슬롯에 contain 맞춤).
+//! - [`ToolIcon::Mask`](SVG 유래 알파 마스크) = **모양만** — 색은 테마 기준색으로 틴트
+//!   (다크 = 밝은 회색 · 라이트 = 아주 어두운 회색 = `Theme::text`) · **hover = 선색 변경**(accent).
+//!
+//! 상호작용 UX(사용자 요청 08-09): hover = 기준색 반투명 배경(다크/라이트 공용) ·
+//! pressed = 더 진한 배경 + 아이콘 1px 내림(눌림 식별). 클릭은 [`Toolbar::take_clicked`] 1회성.
 
 use super::{image_fit_contain, Control, ControlBase};
 use crate::draw::DrawCtx;
 use crate::event::InputEvent;
 use crate::geom::{Point, Rect};
-use crate::theme::{IconImage, Theme};
+use crate::theme::{Color, IconImage, Theme};
 use crate::widget::{Invalidations, Widget};
+use std::cell::RefCell;
 use std::rc::Rc;
 
 /// 항목 아이콘 종류.
 #[derive(Clone, Debug)]
 pub enum ToolIcon {
-    /// 이미지(투명 배경 RGBA · 슬롯에 contain 맞춤).
+    /// 이미지(투명 배경 RGBA) — **원본 색 그대로**.
     Image(Rc<IconImage>),
-    /// 내장 새로고침 글리프(원호+화살촉 — 폰트 의존 없음).
-    Refresh,
+    /// SVG 유래 알파 마스크 — **테마 기준색 틴트**(hover/pressed = accent).
+    Mask {
+        /// 폭(px).
+        w: u32,
+        /// 높이(px).
+        h: u32,
+        /// `w*h` 길이의 1채널 커버리지.
+        alpha: &'static [u8],
+    },
 }
 
 /// 툴바 항목 — 액션 id + 아이콘.
@@ -45,8 +57,15 @@ impl ToolItem {
 const SLOT_PAD: i32 = 4;
 /// 툴바 상하 여백(논리 px).
 const BAR_PAD: i32 = 4;
-/// 기본 아이콘 크기(논리 px) — 사용자 확정.
-pub const DEFAULT_ICON: i32 = 32;
+/// 기본 아이콘 크기(논리 px) — 사용자 확정(08-09 · 32→24).
+pub const DEFAULT_ICON: i32 = 24;
+/// hover 배경 불투명도(기준색 틴트 — 다크/라이트 공용).
+const HOVER_BG_ALPHA: f32 = 0.10;
+/// pressed 배경 불투명도 — hover보다 진해 눌림이 식별된다.
+const PRESS_BG_ALPHA: f32 = 0.20;
+
+/// 항목별 틴트 캐시 슬롯 — (틴트 색, 생성된 이미지).
+type TintSlot = Option<(Color, Rc<IconImage>)>;
 
 /// 툴바 컨트롤.
 #[derive(Debug)]
@@ -58,12 +77,15 @@ pub struct Toolbar {
     hover: Option<usize>,
     pressed: Option<usize>,
     clicked: Option<String>,
+    /// 마스크 틴트 캐시(항목별 · 같은 색이면 재사용) — 페인트가 `&self`라 내부 가변.
+    tint: RefCell<Vec<TintSlot>>,
 }
 
 impl Toolbar {
-    /// 항목으로 만든다(아이콘 기본 32).
+    /// 항목으로 만든다(아이콘 기본 24).
     #[must_use]
     pub fn new(items: Vec<ToolItem>) -> Self {
+        let n = items.len();
         Self {
             base: ControlBase::default(),
             items,
@@ -71,6 +93,7 @@ impl Toolbar {
             hover: None,
             pressed: None,
             clicked: None,
+            tint: RefCell::new(vec![None; n]),
         }
     }
 
@@ -115,36 +138,29 @@ impl Toolbar {
     fn item_at(&self, x: i32, y: i32) -> Option<usize> {
         (0..self.items.len()).find(|&i| self.slot_rect(i).contains(Point { x, y }))
     }
-}
 
-/// 새로고침 글리프(↻) — 원호(폴리라인 근사) + 화살촉. 폰트 글리프 의존 없음.
-fn draw_refresh(ctx: &mut dyn DrawCtx, area: Rect, color: crate::theme::Color, width: f32) {
-    let cx = area.x as f32 + area.w as f32 / 2.0;
-    let cy = area.y as f32 + area.h as f32 / 2.0;
-    let r = (area.w.min(area.h) as f32 / 2.0) - width - 1.0;
-    // 30°→300° 원호를 12분할 폴리라인으로.
-    let mut pts = Vec::with_capacity(13);
-    for k in 0..=12 {
-        let a = (30.0 + 270.0 * (k as f32) / 12.0).to_radians();
-        pts.push((cx + r * a.cos(), cy - r * a.sin()));
+    /// 마스크 항목의 틴트 이미지(캐시) — 색이 바뀌면(테마·hover) 다시 만든다.
+    fn tinted(
+        &self,
+        i: usize,
+        w: u32,
+        h: u32,
+        alpha: &'static [u8],
+        color: Color,
+    ) -> Rc<IconImage> {
+        let mut cache = self.tint.borrow_mut();
+        if cache.len() != self.items.len() {
+            cache.resize(self.items.len(), None);
+        }
+        if let Some((c, img)) = &cache[i] {
+            if *c == color {
+                return Rc::clone(img);
+            }
+        }
+        let img = Rc::new(IconImage::from_alpha_tinted(w, h, alpha, color.rgb()));
+        cache[i] = Some((color, Rc::clone(&img)));
+        img
     }
-    let ipts: Vec<(i32, i32)> = pts.iter().map(|&(x, y)| (x as i32, y as i32)).collect();
-    ctx.polyline(&ipts, color, width);
-    // 화살촉 — 원호 끝(300° = -60°) 접선 방향.
-    let end = *pts.last().unwrap_or(&(cx, cy));
-    let a = 300.0_f32.to_radians();
-    // 접선(시계 반대 진행이므로 -sin, -cos 방향 회전) 기준 두 날개.
-    let (tx, ty) = (a.sin(), a.cos()); // 근사 접선
-    let l = r * 0.55;
-    let head = |ang: f32| {
-        let (s, c) = ang.sin_cos();
-        (
-            (end.0 + l * (tx * c - ty * s)) as i32,
-            (end.1 + l * (tx * s + ty * c)) as i32,
-        )
-    };
-    let e = (end.0 as i32, end.1 as i32);
-    ctx.polyline(&[head(0.5), e, head(-0.9)], color, width);
 }
 
 impl Control for Toolbar {
@@ -199,15 +215,20 @@ impl Widget for Toolbar {
         ctx.fill_rect(Rect::new(b.x, b.bottom() - 1, b.w, 1), theme.border);
         for (i, it) in self.items.iter().enumerate() {
             let slot = self.slot_rect(i);
-            if self.pressed == Some(i) {
-                ctx.fill_round_rect(slot, self.s(6), theme.sel_bg);
-            } else if self.hover == Some(i) {
-                ctx.fill_round_rect(slot, self.s(6), theme.panel_bg_alt);
+            let is_pressed = self.pressed == Some(i);
+            let is_hover = self.hover == Some(i);
+            // 기준색 반투명 배경 — 다크/라이트 모두 "선택된 느낌".
+            if is_pressed {
+                ctx.fill_round_rect_alpha(slot, self.s(6), theme.text, PRESS_BG_ALPHA);
+            } else if is_hover {
+                ctx.fill_round_rect_alpha(slot, self.s(6), theme.text, HOVER_BG_ALPHA);
             }
             let pad = self.s(SLOT_PAD);
+            // 눌림 식별 — 아이콘을 1px 내려 그린다.
+            let dy = i32::from(is_pressed);
             let icon_area = Rect::new(
                 slot.x + pad,
-                slot.y + pad,
+                slot.y + pad + dy,
                 slot.w - pad * 2,
                 slot.h - pad * 2,
             );
@@ -216,9 +237,16 @@ impl Widget for Toolbar {
                     let fit = image_fit_contain(icon_area, img.w as i32, img.h as i32);
                     ctx.image_scaled(fit, img, slot);
                 }
-                ToolIcon::Refresh => {
-                    let w = (icon_area.w as f32 / 12.0).max(1.6);
-                    draw_refresh(ctx, icon_area, theme.text, w);
+                ToolIcon::Mask { w, h, alpha } => {
+                    // SVG 유래 = 테마 기준색 · hover/pressed = 선색 변경(accent).
+                    let color = if is_hover || is_pressed {
+                        theme.accent
+                    } else {
+                        theme.text
+                    };
+                    let img = self.tinted(i, *w, *h, alpha, color);
+                    let fit = image_fit_contain(icon_area, img.w as i32, img.h as i32);
+                    ctx.image_scaled(fit, &img, slot);
                 }
             }
         }
@@ -230,9 +258,19 @@ mod tests {
     use super::*;
     use crate::event::InputEvent;
 
+    /// 4×4 더미 마스크.
+    const MASK4: &[u8] = &[255; 16];
+
     fn bar() -> (Toolbar, Invalidations) {
         let mut t = Toolbar::new(vec![
-            ToolItem::new("refresh", ToolIcon::Refresh),
+            ToolItem::new(
+                "refresh",
+                ToolIcon::Mask {
+                    w: 4,
+                    h: 4,
+                    alpha: MASK4,
+                },
+            ),
             ToolItem::new(
                 "gallery",
                 ToolIcon::Image(Rc::new(IconImage::swatch(16, (0, 0, 255)))),
@@ -276,12 +314,24 @@ mod tests {
     #[test]
     fn icon_size_drives_preferred_height_and_slots() {
         let (mut t, _) = bar();
-        assert_eq!(t.icon_size(), DEFAULT_ICON);
-        let h32 = t.preferred_height();
+        assert_eq!(t.icon_size(), DEFAULT_ICON, "기본 24");
+        let h24 = t.preferred_height();
         t.set_icon_size(64);
-        assert!(t.preferred_height() > h32, "64는 32보다 높다");
+        assert!(t.preferred_height() > h24, "64는 24보다 높다");
         t.set_icon_size(16);
         assert_eq!(t.icon_size(), 16);
-        assert!(t.preferred_height() < h32);
+        assert!(t.preferred_height() < h24);
+    }
+
+    #[test]
+    fn mask_tint_cache_rebuilds_on_color_change() {
+        let (t, _) = bar();
+        let a = t.tinted(0, 4, 4, MASK4, Color::from_rgb(200, 200, 200));
+        let b = t.tinted(0, 4, 4, MASK4, Color::from_rgb(200, 200, 200));
+        assert!(Rc::ptr_eq(&a, &b), "같은 색 = 캐시 재사용");
+        let c = t.tinted(0, 4, 4, MASK4, Color::from_rgb(61, 139, 255));
+        assert!(!Rc::ptr_eq(&a, &c), "색 변경 = 재생성");
+        assert_eq!(c.rgba[0], 61, "틴트 색 반영");
+        assert_eq!(c.rgba[3], 255, "마스크 알파 유지");
     }
 }

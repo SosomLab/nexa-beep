@@ -39,6 +39,10 @@ const SIZE_OPTS: &[(&str, Msg)] = &[
 /// 크기 기본값 — 순서와 무관하게 '보통' 고정.
 const SIZE_DEFAULT: &str = "m";
 
+/// Radio 기본값 예외 — 표시 순서(오름차순 등)와 기본값이 다른 키만 등록.
+/// 미등록 키의 기본은 첫 옵션(기존 규약).
+const RADIO_DEFAULTS: &[(&str, &str)] = &[("ui.toolbar_size", "24")];
+
 /// 항목 종류 — 우측 패널이 이 열거를 읽어 컨트롤을 동적 생성한다(새 설정 = Entry 1줄).
 #[derive(Clone, Copy, Debug)]
 pub enum SettingKind {
@@ -74,9 +78,12 @@ impl Entry {
     /// 레지스트리 기본값(각 값 키 → 기본 문자열).
     fn default_values(&self) -> Vec<(&'static str, String)> {
         match self.kind {
-            SettingKind::Radio(opts) => opts
-                .first()
-                .map(|(v, _)| (self.key, (*v).to_string()))
+            SettingKind::Radio(opts) => RADIO_DEFAULTS
+                .iter()
+                .find(|(k, _)| *k == self.key)
+                .map(|(_, v)| *v)
+                .or_else(|| opts.first().map(|(v, _)| *v))
+                .map(|v| (self.key, v.to_string()))
                 .into_iter()
                 .collect(),
             SettingKind::Toggle => vec![(self.key, "on".to_string())],
@@ -129,9 +136,9 @@ pub fn registry() -> &'static [Entry] {
             label: Msg::ToolbarSize,
             desc: Msg::ToolbarSizeDesc,
             kind: SettingKind::Radio(&[
-                ("32", Msg::Tb32),
                 ("16", Msg::Tb16),
                 ("24", Msg::Tb24),
+                ("32", Msg::Tb32),
                 ("64", Msg::Tb64),
             ]),
             key: "ui.toolbar_size",
