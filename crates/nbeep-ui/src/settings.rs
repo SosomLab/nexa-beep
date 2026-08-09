@@ -123,6 +123,18 @@ pub fn registry() -> &'static [Entry] {
         },
         Entry {
             cat: Msg::CatAppearance,
+            label: Msg::ToolbarSize,
+            desc: Msg::ToolbarSizeDesc,
+            kind: SettingKind::Radio(&[
+                ("32", Msg::Tb32),
+                ("16", Msg::Tb16),
+                ("24", Msg::Tb24),
+                ("64", Msg::Tb64),
+            ]),
+            key: "ui.toolbar_size",
+        },
+        Entry {
+            cat: Msg::CatAppearance,
             label: Msg::TypeaheadTimeout,
             desc: Msg::TypeaheadTimeoutDesc,
             kind: SettingKind::Radio(&[

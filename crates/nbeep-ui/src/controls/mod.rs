@@ -16,17 +16,21 @@
 pub mod button;
 pub mod checkbox;
 pub mod combo;
+pub mod pulldown;
 pub mod radio;
 pub mod scroll;
 pub mod textbox;
+pub mod toolbar;
 pub mod tree;
 
 pub use button::{Button, ButtonMode, ImageFit};
 pub use checkbox::Checkbox;
 pub use combo::{Choose, ChoosePicker, Combo, ComboControl, ComboItem, PopupHit};
+pub use pulldown::PullDown;
 pub use radio::{RadioGroup, RadioOption};
 pub use scroll::ScrollBars;
 pub use textbox::TextBox;
+pub use toolbar::{ToolIcon, ToolItem, Toolbar, DEFAULT_ICON};
 pub use tree::{FlatRow, GridColumn, TreeControl, TreeGrid, TreeModel, TreeNode, TreeView};
 
 use crate::draw::{DrawCtx, FontSlot};

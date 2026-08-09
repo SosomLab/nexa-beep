@@ -157,7 +157,7 @@ impl Default for FontPrefs {
             base: plain(16.0),
             peerlist: plain(16.0),
             message: plain(18.0),
-            status: plain(13.0),
+            status: plain(15.0), // 상태바 가독성 상향(13→15 · 사용자 확정 08-09)
         }
     }
 }
