@@ -45,6 +45,7 @@ nbeep-store = { path = "crates/nbeep-store" }
 nbeep-gfx = { path = "crates/nbeep-gfx" }
 nbeep-ui = { path = "crates/nbeep-ui" }
 nbeep-plat = { path = "crates/nbeep-plat" }
+sha2 = "0.10" # SHA-256(FR-X-6) — snow가 이미 끄는 의존(트리 증가 0)
 
 # 릴리스 = 예산 게이트(단일 실행 파일 ≤10MB — docs/05 NFR-B-3, docs/18).
 [profile.release]
