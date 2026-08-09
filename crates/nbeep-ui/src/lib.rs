@@ -22,6 +22,10 @@ pub mod icons {
     pub const REFRESH_ALPHA: &[u8] = include_bytes!("../assets/icon-refresh-96.alpha");
     /// 변 크기(px).
     pub const REFRESH_SIZE: u32 = 96;
+    /// 격리함(방패+체크) 96×96 알파 마스크.
+    pub const SHIELD_ALPHA: &[u8] = include_bytes!("../assets/icon-shield-96.alpha");
+    /// 변 크기(px).
+    pub const SHIELD_SIZE: u32 = 96;
 }
 
 pub mod about;
@@ -34,6 +38,7 @@ pub mod gallery;
 pub mod geom;
 pub mod hangul;
 pub mod peer_list;
+pub mod quarantine_view;
 pub mod raster;
 pub mod settings;
 pub mod theme;
@@ -54,6 +59,7 @@ pub use event::{InputEvent, Key, WheelAccum, WHEEL_DELTA};
 pub use gallery::GalleryWidget;
 pub use geom::{Point, Rect, Size};
 pub use peer_list::{badge, HudPos, LinkState, PeerListWidget, PeerRow, ROW_H};
+pub use quarantine_view::{QAction, QRow, QuarantineWidget};
 pub use raster::RasterCtx;
 pub use settings::{registry, Entry, SettingKind, SettingsState, SettingsWidget};
 pub use theme::{Color, FontPrefs, IconImage, SlotFont, Theme};
