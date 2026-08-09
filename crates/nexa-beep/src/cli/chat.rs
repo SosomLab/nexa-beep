@@ -119,6 +119,11 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
             .and_then(|v| v.parse::<u64>().ok())
             .map_or(nbeep_core::MAX_FILE, |mib| mib * 1024 * 1024);
         let mut inbox = XferInbox::with_max_file(limit);
+        // 파일 수신 정책 — GUI와 **같은 도메인 함수**를 쓴다(정책이 두 벌이면 뚫린다).
+        let mut ledger = nbeep_core::ExchangeLedger::new();
+        let approval = nbeep_core::ApprovalPolicy::default(); // CLI 기본 = 수동
+                                                              // 진행률 집계: (보낸 파일수, 총 파일수, 누적 바이트, 총 바이트).
+        let mut batch = (0u32, 0u32, 0u64, 0u64);
         println!(
             "[파일] 수신 상한 {}MiB (수신측 설정 — --xfer-limit-mib)",
             inbox.max_file() / (1024 * 1024)
@@ -131,6 +136,7 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
             loop {
                 match out_rx.try_recv() {
                     Ok(Cmd::Chat(bytes)) => {
+                        ledger.note_sent(peer); // 왕래 장부(상호 확인 근거)
                         if mux.send(StreamId::Chat, &bytes).is_err() {
                             println!("[종료] 세션 끊김");
                             return;
@@ -142,6 +148,16 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
                         sha,
                         bytes,
                     }) => {
+                        // 발신 자격 사전 점검 — 상대가 어차피 거절할 것을 미리 알린다.
+                        if let Err(r) = nbeep_core::check_send_eligibility(
+                            nbeep_core::TrustLevel::Pinned,
+                            ledger.get(peer),
+                        ) {
+                            println!("[파일] 보낼 수 없음 — {}", r.message());
+                            continue;
+                        }
+                        batch.1 += 1;
+                        batch.3 += bytes.len() as u64;
                         let offer = XferMsg::Offer {
                             id,
                             size: bytes.len() as u64,
@@ -188,6 +204,7 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
             match mux.recv(StreamId::Chat) {
                 Ok(bytes) => {
                     if let Ok(m) = ChatMessage::decode(&bytes, peer) {
+                        ledger.note_recv(peer); // 왕래 장부(상호 확인 근거)
                         if let MessageBody::Text(t) = m.body {
                             let safe = nbeep_core::sanitize_message(&t);
                             println!("{}> {}", peer.short(), safe.as_str());
@@ -205,6 +222,28 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
                 Ok(bytes) => match XferMsg::decode(&bytes) {
                     Ok(XferMsg::Offer { id, size, name, .. }) => {
                         let m = XferMsg::decode(&bytes).expect("방금 성공한 디코드");
+                        // ★ 자격 판정 먼저 — 상호 확인 없는 상대는 무조건 거부(사용자 규칙).
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map_or(0, |d| d.as_millis() as u64);
+                        let verdict = nbeep_core::judge_offer(
+                            nbeep_core::TrustLevel::Pinned,
+                            ledger.get(peer),
+                            approval,
+                            now,
+                        );
+                        if let nbeep_core::OfferVerdict::Deny(reason) = verdict {
+                            let why = match reason {
+                                nbeep_core::DenyReason::Blocked => nbeep_core::RejectWhy::Blocked,
+                                _ => nbeep_core::RejectWhy::Unverified,
+                            };
+                            let _ = mux.send(
+                                StreamId::File,
+                                &XferMsg::Reject { id, why, limit: 0 }.encode(),
+                            );
+                            println!("[파일] 수신 거부 — {}", reason.message());
+                            continue;
+                        }
                         match inbox.offer(&m) {
                             Ok(()) => {
                                 pending_in = Some(id);
@@ -212,6 +251,15 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
                                     "[파일] 오퍼: {} ({size}B) — /accept 또는 /reject",
                                     String::from_utf8_lossy(&name)
                                 );
+                                if matches!(verdict, nbeep_core::OfferVerdict::Accept)
+                                    && inbox.accept(&id).is_ok()
+                                {
+                                    {
+                                        let _ = mux
+                                            .send(StreamId::File, &XferMsg::Accept { id }.encode());
+                                        println!("[파일] 자동 수락 — 수신 시작");
+                                    }
+                                }
                             }
                             Err(e) => {
                                 let _ = mux.send(
@@ -230,15 +278,35 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
                     Ok(XferMsg::Accept { id }) => {
                         // 상대가 수락 — 청크 스트리밍 + 완료.
                         if let Some(bytes) = outgoing.remove(&id) {
-                            let total = bytes.len();
+                            let total = bytes.len() as u64;
+                            let mut sent_bytes = 0u64;
                             for c in chunks_of(id, &bytes) {
+                                if let XferMsg::Chunk { ref data, .. } = c {
+                                    sent_bytes += data.len() as u64;
+                                }
                                 if mux.send(StreamId::File, &c.encode()).is_err() {
                                     println!("[종료] 세션 끊김");
                                     return;
                                 }
+                                // 요청 형식: 전송완료용량/전체용량 (보낸파일수/총파일수)
+                                println!(
+                                    "[파일] 전송 {} / {} ({}/{})",
+                                    human(batch.2 + sent_bytes),
+                                    human(batch.3.max(total)),
+                                    batch.0,
+                                    batch.1
+                                );
                             }
+                            batch.0 += 1;
+                            batch.2 += total;
                             let _ = mux.send(StreamId::File, &XferMsg::Done { id }.encode());
-                            println!("[파일] 전송 완료({total}B)");
+                            println!(
+                                "[파일] 전송 완료 {} / {} ({}/{})",
+                                human(batch.2),
+                                human(batch.3),
+                                batch.0,
+                                batch.1
+                            );
                         }
                     }
                     Ok(XferMsg::Reject { id, why, limit }) => {
@@ -253,9 +321,16 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
                         }
                     }
                     Ok(XferMsg::Chunk { id, offset, data }) => {
-                        if let Err(e) = inbox.chunk(&id, offset, &data) {
-                            println!("[파일] 수신 오류: {e} — 폐기");
-                            pending_in = None;
+                        match inbox.chunk(&id, offset, &data) {
+                            Ok(()) => {
+                                if let Some((got, tot)) = inbox.progress(&id) {
+                                    println!("[파일] 수신 {} / {} (1/1)", human(got), human(tot));
+                                }
+                            }
+                            Err(e) => {
+                                println!("[파일] 수신 오류: {e} — 폐기");
+                                pending_in = None;
+                            }
                         }
                     }
                     Ok(XferMsg::Done { id }) => match inbox.done(&id) {
@@ -340,6 +415,16 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
     drop(out_tx);
     let _ = net.join();
     println!("[끝]");
+}
+
+/// 사람이 읽는 크기 표기(진행률).
+fn human(b: u64) -> String {
+    const K: u64 = 1024;
+    match b {
+        v if v >= K * K => format!("{:.1}MiB", v as f64 / (K * K) as f64),
+        v if v >= K => format!("{:.1}KiB", v as f64 / K as f64),
+        v => format!("{v}B"),
+    }
 }
 
 /// 수신 완료물 → **무해화 게이트 합류**(공용 [`crate::gate`]) 후 결과를 stdout에 보고.
