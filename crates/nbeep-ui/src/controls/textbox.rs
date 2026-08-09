@@ -23,6 +23,8 @@ pub struct TextBox {
     committed: bool,
     /// 내용 변경 1회성 보고.
     changed: bool,
+    /// 값이 있으면 우측에 ×(지우기) 버튼 표시(클릭 = 초기화 · 사용자 요청 08-09).
+    clearable: bool,
 }
 
 impl TextBox {
@@ -36,7 +38,23 @@ impl TextBox {
             image: None,
             committed: false,
             changed: false,
+            clearable: false,
         }
+    }
+
+    /// ×(지우기) 버튼 사용(체이닝) — 값이 있을 때만 표시, 클릭 = 즉시 초기화.
+    #[must_use]
+    pub fn with_clearable(mut self) -> Self {
+        self.clearable = true;
+        self
+    }
+
+    /// ×(지우기) 버튼 영역(값이 있을 때만 유효) — 호스트 테스트용 공개.
+    #[must_use]
+    pub fn clear_rect(&self) -> Rect {
+        let b = self.base.bounds;
+        let d = self.s(16);
+        Rect::new(b.right() - d - self.s(6), b.y + (b.h - d) / 2, d, d)
     }
 
     /// 선행 이미지 아이콘 지정(체이닝) — placeholder·캐럿이 아이콘 뒤로 배치된다.
@@ -99,6 +117,16 @@ impl Widget for TextBox {
             InputEvent::MouseDown { x, y, .. } => {
                 let badge = self.help_badge_rect(self.base.bounds);
                 if self.handle_help_click(x, y, badge) {
+                    inv.push(self.base.bounds);
+                    return;
+                }
+                // ×(지우기) — 값이 있을 때만. 클릭 = 초기화 + 변경 보고.
+                if self.clearable
+                    && !self.edit.text().is_empty()
+                    && self.clear_rect().contains(Point { x, y })
+                {
+                    self.edit.set_text("");
+                    self.changed = true;
                     inv.push(self.base.bounds);
                     return;
                 }
@@ -167,7 +195,26 @@ impl Widget for TextBox {
             let chars: Vec<char> = text.chars().collect();
             let upto: String = chars[..self.edit.caret().min(chars.len())].iter().collect();
             let cx = tx + ctx.text_width(&upto);
-            ctx.fill_rect(Rect::new(cx, ty, self.s(2).max(1), s16), theme.text);
+            // 캐럿 높이 = 실측 텍스트 높이(고정 16 근사는 고배율에서 반토막으로 보였다).
+            let th = ctx.text_height();
+            ctx.fill_rect(Rect::new(cx, ty, self.s(2).max(2), th), theme.text);
+        }
+
+        // ×(지우기) — 값이 있을 때만(원 배경 없이 × 두 획 · text_dim).
+        if self.clearable && !text.is_empty() {
+            let r = self.clear_rect();
+            let m = self.s(4);
+            let (x0, y0, x1, y1) = (r.x + m, r.y + m, r.right() - m, r.bottom() - m);
+            ctx.polyline(
+                &[(x0, y0), (x1, y1)],
+                theme.text_dim,
+                self.s(1).max(1) as f32 + 0.5,
+            );
+            ctx.polyline(
+                &[(x0, y1), (x1, y0)],
+                theme.text_dim,
+                self.s(1).max(1) as f32 + 0.5,
+            );
         }
 
         let badge = self.help_badge_rect(b);
@@ -236,6 +283,22 @@ mod tests {
         let (t, _) = tb();
         assert_eq!(t.text(), "");
         // placeholder는 렌더 전용 — 텍스트 값에는 포함되지 않는다.
+    }
+
+    #[test]
+    fn clear_button_resets_and_reports() {
+        let mut t = TextBox::new("Search").with_clearable();
+        let mut inv = Invalidations::default();
+        t.set_bounds(Rect::new(0, 0, 260, 30), &mut inv);
+        t.set_text("abc");
+        let r = t.clear_rect();
+        t.on_event(&click(r.x + 3, r.y + 3), &mut inv);
+        assert_eq!(t.text(), "", "× = 초기화");
+        assert_eq!(t.take_changed().as_deref(), Some(""), "변경 보고");
+        // 값이 없으면 × 영역 클릭은 일반 포커스 클릭.
+        t.on_event(&click(r.x + 3, r.y + 3), &mut inv);
+        assert_eq!(t.text(), "");
+        assert!(t.is_focused());
     }
 
     #[test]

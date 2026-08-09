@@ -361,6 +361,10 @@ pub struct SettingsWidget {
     content_h: i32,
     /// 우측 패널 오버레이 스크롤바.
     bars: ScrollBars,
+    /// 사이드바 폭(논리 px) — 스플리터 드래그로 조절(사용자 요청 08-09).
+    sidebar_w: i32,
+    /// 스플리터 드래그 중.
+    split_drag: bool,
 }
 
 impl SettingsWidget {
@@ -376,7 +380,7 @@ impl SettingsWidget {
         let mut w = Self {
             bounds: Rect::default(),
             scale: 1.0,
-            search: TextBox::new("Search"),
+            search: TextBox::new("Search").with_clearable(),
             query: String::new(),
             tree: TreeView::new(TreeModel::default()),
             cat_map: Vec::new(),
@@ -389,6 +393,8 @@ impl SettingsWidget {
             scroll: 0,
             content_h: 0,
             bars: ScrollBars::new(),
+            sidebar_w: SIDEBAR_W,
+            split_drag: false,
         };
         let mut inv = Invalidations::default();
         w.rebuild(&mut inv);
@@ -400,6 +406,7 @@ impl SettingsWidget {
         let s = scale.max(0.5);
         if (s - self.scale).abs() > f32::EPSILON {
             self.scale = s;
+            self.search.set_scale(s);
             self.rebuild(inv);
         }
     }
@@ -576,7 +583,7 @@ impl SettingsWidget {
 
     /// 우측 패널 뷰포트(사이드바 제외 영역).
     fn right_viewport(&self) -> Rect {
-        let sw = self.s(SIDEBAR_W);
+        let sw = self.s(self.sidebar_w);
         let b = self.bounds;
         Rect::new(b.x + sw, b.y, (b.w - sw).max(0), b.h)
     }
@@ -588,7 +595,7 @@ impl SettingsWidget {
 
     /// 현 bounds에 맞춰 자식 컨트롤 배치.
     fn layout(&mut self, inv: &mut Invalidations) {
-        let sw = self.s(SIDEBAR_W);
+        let sw = self.s(self.sidebar_w);
         let b = self.bounds;
         self.search.set_bounds(
             Rect::new(
@@ -772,6 +779,37 @@ impl Widget for SettingsWidget {
             return;
         }
 
+        // ── 사이드바 스플리터 드래그(폭 조절) ──
+        {
+            let bx = self.bounds.x;
+            let split_x = bx + self.s(self.sidebar_w);
+            match *ev {
+                InputEvent::MouseDown { x, y, .. }
+                    if (x - split_x).abs() <= self.s(4)
+                        && y >= self.bounds.y
+                        && y < self.bounds.bottom() =>
+                {
+                    self.split_drag = true;
+                    return;
+                }
+                InputEvent::MouseMove { x, .. } if self.split_drag => {
+                    let logical = ((x - bx) as f32 / self.scale).round() as i32;
+                    let clamped = logical.clamp(110, 320);
+                    if clamped != self.sidebar_w {
+                        self.sidebar_w = clamped;
+                        self.layout(inv);
+                        inv.push(self.bounds);
+                    }
+                    return;
+                }
+                InputEvent::MouseUp { .. } if self.split_drag => {
+                    self.split_drag = false;
+                    return;
+                }
+                _ => {}
+            }
+        }
+
         // ── 우측 패널 오버레이 스크롤(세로 전용) — 콤보 열림 중에는 위 캡처가 우선 ──
         {
             let vp = self.right_viewport();
@@ -794,6 +832,17 @@ impl Widget for SettingsWidget {
                 let p = Point { x, y };
                 // 검색/글꼴명 포커스는 클릭 위치 기준(각 컨트롤이 스스로 잡음 + 여기서 블러).
                 self.search.set_focused(self.search.bounds().contains(p));
+                // ×(지우기) 클릭 처리 — 값이 지워지면 검색 해제 재구성.
+                self.search.on_event(ev, inv);
+                if self.search.take_changed().is_some() {
+                    let q = self.search.text();
+                    if q != self.query {
+                        self.query = q;
+                        self.rebuild(inv);
+                        inv.push(self.bounds);
+                        return;
+                    }
+                }
                 for row in &mut self.rows {
                     match &mut row.ctl {
                         RowCtl::Font { family, .. } => {
@@ -910,7 +959,7 @@ impl Widget for SettingsWidget {
     fn paint(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
         let lang = current_lang();
         ctx.fill_rect(self.bounds, theme.panel_bg);
-        let sw = self.s(SIDEBAR_W);
+        let sw = self.s(self.sidebar_w);
 
         // 사이드바 배경 + 검색 + 트리 + 경계선.
         ctx.fill_rect(
@@ -1184,6 +1233,55 @@ mod tests {
             w.cat_map.contains(&(1, Some(Msg::CatTypeahead))),
             "사이드바 하위 행"
         );
+    }
+
+    #[test]
+    fn sidebar_splitter_drags_width() {
+        let (mut w, mut inv) = widget();
+        let sx = w.bounds.x + w.s(w.sidebar_w);
+        let down = InputEvent::MouseDown {
+            x: sx,
+            y: 100,
+            shift: false,
+            primary: false,
+        };
+        w.on_event(&down, &mut inv);
+        assert!(w.split_drag, "경계 클릭 = 드래그 시작");
+        w.on_event(&InputEvent::MouseMove { x: sx + 60, y: 100 }, &mut inv);
+        assert!(w.sidebar_w > SIDEBAR_W, "폭 확장");
+        w.on_event(&InputEvent::MouseUp { x: sx + 60, y: 100 }, &mut inv);
+        assert!(!w.split_drag);
+        // 클램프 하한.
+        w.on_event(
+            &InputEvent::MouseDown {
+                x: w.bounds.x + w.s(w.sidebar_w),
+                y: 100,
+                shift: false,
+                primary: false,
+            },
+            &mut inv,
+        );
+        w.on_event(
+            &InputEvent::MouseMove {
+                x: w.bounds.x + 10,
+                y: 100,
+            },
+            &mut inv,
+        );
+        assert_eq!(w.sidebar_w, 110, "하한 클램프");
+        w.on_event(&InputEvent::MouseUp { x: 0, y: 100 }, &mut inv);
+    }
+
+    #[test]
+    fn search_clear_button_resets_query() {
+        let (mut w, mut inv) = widget();
+        // 검색어 입력 → 필터.
+        w.on_event(&ch('t'), &mut inv);
+        assert!(!w.query.is_empty());
+        // × 클릭 = 초기화 + 전체 복귀.
+        let r = w.search.clear_rect();
+        w.on_event(&click(r.x + 3, r.y + 3), &mut inv);
+        assert!(w.query.is_empty(), "검색 해제");
     }
 
     #[test]
