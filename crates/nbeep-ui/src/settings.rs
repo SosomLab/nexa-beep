@@ -28,13 +28,16 @@ use crate::widget::{Invalidations, Widget};
 use nbeep_core::{current_lang, tr, Lang, Msg};
 use std::collections::HashMap;
 
-/// 크기 콤보 후보(전 글꼴 영역 공용) — (값, 라벨 Msg). 첫 값이 기본(보통).
+/// 크기 콤보 후보(전 글꼴 영역 공용) — (값, 라벨 Msg). 작은 것→큰 것 순(사용자 확정 08-09).
 const SIZE_OPTS: &[(&str, Msg)] = &[
+    ("s", Msg::SizeSmall),
     ("m", Msg::SizeNormal),
     ("l", Msg::SizeLarge),
     ("xl", Msg::SizeExtraLarge),
-    ("s", Msg::SizeSmall),
 ];
+
+/// 크기 기본값 — 순서와 무관하게 '보통' 고정.
+const SIZE_DEFAULT: &str = "m";
 
 /// 항목 종류 — 우측 패널이 이 열거를 읽어 컨트롤을 동적 생성한다(새 설정 = Entry 1줄).
 #[derive(Clone, Copy, Debug)]
@@ -82,7 +85,7 @@ impl Entry {
                 size_key,
             } => vec![
                 (family_key, String::new()), // 빈 문자열 = 시스템 기본 글꼴
-                (size_key, SIZE_OPTS[0].0.to_string()),
+                (size_key, SIZE_DEFAULT.to_string()),
             ],
         }
     }
@@ -120,6 +123,18 @@ pub fn registry() -> &'static [Entry] {
                 ("ja", Msg::LangJapanese),
             ]),
             key: "ui.language",
+        },
+        Entry {
+            cat: Msg::CatAppearance,
+            label: Msg::ToolbarSize,
+            desc: Msg::ToolbarSizeDesc,
+            kind: SettingKind::Radio(&[
+                ("32", Msg::Tb32),
+                ("16", Msg::Tb16),
+                ("24", Msg::Tb24),
+                ("64", Msg::Tb64),
+            ]),
+            key: "ui.toolbar_size",
         },
         Entry {
             cat: Msg::CatAppearance,

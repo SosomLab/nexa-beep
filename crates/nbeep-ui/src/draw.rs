@@ -44,6 +44,12 @@ pub trait DrawCtx {
     /// 텍스트 렌더 폭(px) — 우측 정렬·라벨 실측 정렬용.
     fn text_width(&mut self, text: &str) -> i32;
 
+    /// 현재 글꼴의 텍스트 상자 높이(px · 어센트+디센트) — 세로 중앙 정렬 실측용.
+    /// 기본 = 16(레거시 근사) — 실제 렌더러는 폰트 메트릭으로 오버라이드.
+    fn text_height(&mut self) -> i32 {
+        16
+    }
+
     /// RGBA 이미지 아이콘을 `(x, y)`(좌상단)에 알파 블렌드 — `clip` 밖은 잘린다. 기본 = no-op.
     fn image(&mut self, x: i32, y: i32, img: &crate::theme::IconImage, clip: Rect) {
         let _ = (x, y, img, clip);

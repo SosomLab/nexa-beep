@@ -23,6 +23,20 @@ pub struct PeerRow {
     pub entry: PeerEntry,
     /// 신뢰 상태(배지 결정).
     pub trust: TrustLevel,
+    /// 세션 링크 상태(상태 점 — 사용자 요청 08-09: 끊어진 대상 식별).
+    pub link: LinkState,
+}
+
+/// 세션 링크 상태 — 목록에서 색 점으로 식별한다.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum LinkState {
+    /// 발견만(세션 없음) — 회색.
+    #[default]
+    Idle,
+    /// 세션 활성(대화 중) — 초록.
+    Active,
+    /// 세션 끊김(있었는데 종료) — 빨강.
+    Lost,
 }
 
 /// 행 높이(px) — 임시. M3-1c 수치표에서 확정.
@@ -464,13 +478,23 @@ impl Widget for PeerListWidget {
                 theme.panel_bg
             };
             let text_y = r.y + (rh - self.s(20)) / 2;
-            ctx.text_opaque(
-                r.x + self.s(12),
+            // 행 배경 먼저(불투명) — 점·이름은 그 위에.
+            ctx.fill_rect(r, bg);
+            // 세션 상태 점(사용자 요청 — 끊어진 대상 식별): 초록=활성 · 빨강=끊김 · 회색=발견만.
+            let dot_d = self.s(8);
+            let dot = Rect::new(r.x + self.s(10), r.y + (rh - dot_d) / 2, dot_d, dot_d);
+            let dot_color = match row.link {
+                LinkState::Active => theme.ok,
+                LinkState::Lost => theme.danger,
+                LinkState::Idle => theme.text_dim,
+            };
+            ctx.fill_ellipse(dot, dot_color);
+            ctx.text(
+                dot.right() + self.s(8),
                 text_y,
                 r,
                 row.entry.name.as_str(),
                 theme.text,
-                bg,
             );
 
             // 다중 경로 ×N(진단).
@@ -478,7 +502,7 @@ impl Widget for PeerListWidget {
                 let name_w = ctx.text_width(row.entry.name.as_str());
                 let label = format!("×{}", row.entry.paths);
                 ctx.text(
-                    r.x + self.s(16) + name_w,
+                    r.x + self.s(10) + self.s(8) + self.s(8) + self.s(4) + name_w,
                     text_y + self.s(2),
                     r,
                     &label,
@@ -496,9 +520,11 @@ impl Widget for PeerListWidget {
                 rh - self.s(16),
             );
             ctx.fill_round_rect(chip_r, (rh - self.s(16)) / 2, chip);
+            // 텍스트 상자 높이 실측으로 정확히 세로 중앙(고정 오프셋은 하단 여백이 커 보인다).
+            let th = ctx.text_height();
             ctx.text(
                 chip_r.x + self.s(8),
-                chip_r.y + self.s(3),
+                chip_r.y + (chip_r.h - th) / 2,
                 chip_r,
                 label,
                 theme.text,
@@ -566,6 +592,7 @@ mod tests {
                 paths: 1,
             },
             trust,
+            link: LinkState::Idle,
         }
     }
     fn widget(names: &[(u8, &str)]) -> (PeerListWidget, Invalidations) {

@@ -168,6 +168,18 @@ pub enum Msg {
     TypeaheadSpecialDesc,
     ToggleApply,
     ToggleIgnore,
+    // ── 툴바·메뉴 ──
+    MenuLabel,
+    MenuGallery,
+    /// 메뉴바 '도움말' 라벨.
+    MenuHelp,
+    ToolbarSize,
+    ToolbarSizeDesc,
+    Tb16,
+    Tb24,
+    Tb32,
+    Tb64,
+    RefreshList,
 }
 
 impl Msg {
@@ -330,6 +342,31 @@ impl Msg {
             ],
             Msg::ToggleApply => ["On", "적용", "开", "オン"],
             Msg::ToggleIgnore => ["Off", "미적용", "关", "オフ"],
+            Msg::MenuLabel => ["Menu", "메뉴", "菜单", "メニュー"],
+            Msg::MenuHelp => ["Help", "도움말", "帮助", "ヘルプ"],
+            Msg::MenuGallery => [
+                "Controls gallery",
+                "컨트롤 갤러리",
+                "控件库",
+                "コントロールギャラリー",
+            ],
+            Msg::ToolbarSize => [
+                "Toolbar icon size",
+                "툴바 아이콘 크기",
+                "工具栏图标大小",
+                "ツールバーアイコンサイズ",
+            ],
+            Msg::ToolbarSizeDesc => [
+                "Size of toolbar image buttons — applies immediately",
+                "툴바 이미지 버튼의 크기 — 즉시 적용됩니다",
+                "工具栏图像按钮的大小 — 立即生效",
+                "ツールバー画像ボタンのサイズ — 即時適用",
+            ],
+            Msg::Tb16 => ["16×16"; 4],
+            Msg::Tb24 => ["24×24"; 4],
+            Msg::Tb32 => ["32×32"; 4],
+            Msg::Tb64 => ["64×64"; 4],
+            Msg::RefreshList => ["Refresh list", "목록 갱신", "刷新列表", "一覧を更新"],
         }
     }
 }

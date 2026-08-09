@@ -15,6 +15,7 @@ pub mod brand {
     pub const ICON_SIZE: u32 = 64;
 }
 
+pub mod about;
 pub mod chat_view;
 pub mod controls;
 pub mod draw;
@@ -30,19 +31,20 @@ pub mod theme;
 pub mod typeahead;
 pub mod widget;
 
+pub use about::{AboutInfo, AboutWidget};
 pub use chat_view::{ChatLine, ChatViewWidget};
 pub use controls::{
     BorderSpec, Button, ButtonMode, Checkbox, Choose, ChoosePicker, Combo, ComboControl, ComboItem,
     Control, ControlBase, FlatRow, GridColumn, ImageFit, LabelSide, PopupHit, RadioGroup,
     RadioOption, ScrollBars, TextBox, TreeControl, TreeGrid, TreeModel, TreeNode, TreeView,
 };
-pub use controls::{HAlign, VAlign};
+pub use controls::{HAlign, MenuBar, MenuDef, MenuEntry, ToolIcon, ToolItem, Toolbar, VAlign};
 pub use draw::{DrawCtx, FontSlot};
 pub use edit::{EditKey, EditState};
 pub use event::{InputEvent, Key, WheelAccum, WHEEL_DELTA};
 pub use gallery::GalleryWidget;
 pub use geom::{Point, Rect, Size};
-pub use peer_list::{badge, HudPos, PeerListWidget, PeerRow, ROW_H};
+pub use peer_list::{badge, HudPos, LinkState, PeerListWidget, PeerRow, ROW_H};
 pub use raster::RasterCtx;
 pub use settings::{registry, Entry, SettingKind, SettingsState, SettingsWidget};
 pub use theme::{Color, FontPrefs, IconImage, SlotFont, Theme};

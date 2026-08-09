@@ -525,11 +525,31 @@ mod app_window {
 
     use nbeep_core::PeerId;
     use nbeep_ui::{
-        ChatLine, ChatViewWidget, DrawCtx, GalleryWidget, InputEvent, Invalidations, Key,
-        PeerListWidget, PeerRow, RasterCtx, Rect, SettingsState, SettingsWidget, Theme, Widget,
+        AboutInfo, AboutWidget, ChatLine, ChatViewWidget, ComboItem, Control as _, DrawCtx,
+        GalleryWidget, InputEvent, Invalidations, Key, LinkState, MenuBar, MenuDef, MenuEntry,
+        PeerListWidget, PeerRow, RasterCtx, Rect, SettingsState, SettingsWidget, Theme, ToolIcon,
+        ToolItem, Toolbar, Widget,
     };
 
     type SbSurface = softbuffer::Surface<Rc<Window>, Rc<Window>>;
+
+    /// 메뉴바 구성(i18n 현재 언어 기준) — 초기화·언어 전환 시 재호출.
+    fn build_menus() -> Vec<MenuDef> {
+        use nbeep_core::{t, Msg};
+        vec![
+            MenuDef::new(
+                t(Msg::MenuLabel),
+                vec![
+                    MenuEntry::Item(ComboItem::new("settings", t(Msg::SettingsTitle))),
+                    MenuEntry::Item(ComboItem::new("gallery", t(Msg::MenuGallery))),
+                ],
+            ),
+            MenuDef::new(
+                t(Msg::MenuHelp),
+                vec![MenuEntry::Item(ComboItem::new("about", "About"))],
+            ),
+        ]
+    }
 
     /// 창 모드(DR-26). 설정 연동(`chat.window_mode`)은 M3-11.
     #[derive(Clone, Copy, PartialEq, Eq)]
@@ -656,6 +676,8 @@ mod app_window {
         Gallery,
         /// 파일 선택 모달 창(Choose… — ChoosePicker 어댑터 내용을 별도 창으로).
         Picker,
+        /// About 창(메뉴 → About — 브랜딩·링크).
+        About,
     }
 
     /// 에코 봇 — 버스에 실물 신원으로 참여해 수신 세션을 받고, Chat 메시지를 에코한다.
@@ -789,6 +811,14 @@ mod app_window {
         icon: Option<winit::window::Icon>,
         /// 파일 선택 모달 뷰(Choose… — 열려 있을 때만 Some).
         picker_view: Option<nbeep_ui::TreeView>,
+        /// About 뷰(열려 있을 때만 Some).
+        about_view: Option<AboutWidget>,
+        /// 주 창 상단 Pull-down 메뉴(목록 모드 전용).
+        menu: MenuBar,
+        /// 주 창 툴바(메뉴 아래 · 이미지 버튼 · 목록 모드 전용).
+        toolbar: Toolbar,
+        /// 세션이 끊긴 상대(AppEvent::Closed) — 목록 상태 점 Lost 근거. 재수립 시 제거.
+        closed_peers: std::collections::HashSet<PeerId>,
         /// IME 조합 중(macOS — Preedit 활성). 조합 중엔 KeyboardInput 문자/백스페이스를
         /// 라우팅하지 않는다(같은 키가 Ime 경로로도 와서 자모가 이중 유입되던 버그).
         ime_composing: bool,
@@ -817,6 +847,64 @@ mod app_window {
                 let now_ms = self.now_ms();
                 self.route(id, InputEvent::Char { c, now_ms }, el);
             }
+        }
+
+        /// 목록 모드 상단 크롬(메뉴+툴바) 높이(물리 px). 대화 중엔 0.
+        fn chrome_h(&self, scale: f32) -> i32 {
+            if self.single_open.is_some() {
+                return 0;
+            }
+            let menu_h = (30.0 * scale).round() as i32;
+            let tb_h = (self.toolbar.preferred_height() as f32 * scale).round() as i32;
+            menu_h + tb_h
+        }
+
+        /// About 창을 연다(메뉴 → About).
+        fn open_about(&mut self, el: &ActiveEventLoop) {
+            if let Some((aid, _)) = self.windows.iter().find(|(_, e)| e.role == Role::About) {
+                if let Some(e) = self.windows.get(aid) {
+                    e.window.focus_window();
+                }
+                return;
+            }
+            let attrs = Window::default_attributes()
+                .with_title("Nexa Beep — About")
+                .with_inner_size(winit::dpi::LogicalSize::new(420.0, 520.0))
+                .with_resizable(false) // 모달 대화상자 — 크기 고정
+                .with_window_icon(self.icon.clone());
+            let window = Rc::new(el.create_window(attrs).unwrap());
+            let scale = window.scale_factor() as f32;
+            let context = softbuffer::Context::new(window.clone()).unwrap();
+            let surface = SbSurface::new(&context, window.clone()).unwrap();
+            let id = window.id();
+            self.windows.insert(
+                id,
+                WinEntry {
+                    role: Role::About,
+                    window,
+                    surface,
+                    cursor: (0, 0),
+                    scale,
+                },
+            );
+            self.about_view = Some(AboutWidget::new(AboutInfo {
+                app: "Nexa Beep".into(),
+                version: env!("CARGO_PKG_VERSION").into(),
+                tagline: "제로 컨피그 로컬 네트워크 메신저 · Zero-config LAN messenger".into(),
+                links: vec![
+                    ("SosomLab".into(), "https://sosomlab.com".into()),
+                    (
+                        "Nexa Beep 홈페이지".into(),
+                        "https://sosomlab.com/apps/nexa-beep/".into(),
+                    ),
+                    (
+                        "GitHub".into(),
+                        "https://github.com/SosomLab/nexa-beep".into(),
+                    ),
+                ],
+            }));
+            self.layout_window(id);
+            self.request_redraw(id);
         }
 
         /// 주 창 IME 토글 — 목록(직접 조합) = off · 대화(실제 텍스트) = on.
@@ -914,7 +1002,15 @@ mod app_window {
                 .into_iter()
                 .map(|entry| {
                     let trust = self.trust.level(entry.peer);
-                    PeerRow { entry, trust }
+                    // 세션 상태 점(사용자 요청): 대화 중=Active · 끊김 기록=Lost · 그 외=Idle.
+                    let link = if self.conversations.contains_key(&entry.peer) {
+                        LinkState::Active
+                    } else if self.closed_peers.contains(&entry.peer) {
+                        LinkState::Lost
+                    } else {
+                        LinkState::Idle
+                    };
+                    PeerRow { entry, trust, link }
                 })
                 .collect();
             self.list.set_rows(rows, inv);
@@ -989,6 +1085,10 @@ mod app_window {
                     lines: Vec::new(),
                 },
             );
+            // 세션 재수립 = 끊김 상태 해제(목록 점 Active로).
+            self.closed_peers.remove(&peer);
+            let mut inv = Invalidations::default();
+            self.refresh_rows(&mut inv);
         }
 
         /// 대화 뷰 생성(스레드 복원 — 상태-뷰 분리).
@@ -1247,6 +1347,11 @@ mod app_window {
                         nbeep_core::set_lang(
                             nbeep_core::Lang::from_code(&value).unwrap_or_default(),
                         );
+                        // 메뉴 라벨은 생성 시 고정이라 재구성.
+                        self.menu.set_menus(build_menus());
+                        if let Some(mid) = self.main_id {
+                            self.layout_window(mid);
+                        }
                         for e in self.windows.values() {
                             e.window.request_redraw();
                         }
@@ -1260,6 +1365,15 @@ mod app_window {
                         let mut inv = Invalidations::default();
                         self.list
                             .set_hud_pos(nbeep_ui::HudPos::from_code(&value), &mut inv);
+                    }
+                    "ui.toolbar_size" => {
+                        if let Ok(px) = value.parse::<i32>() {
+                            self.toolbar.set_icon_size(px);
+                            if let Some(mid) = self.main_id {
+                                self.layout_window(mid);
+                                self.request_redraw(mid);
+                            }
+                        }
                     }
                     "ui.typeahead_space" => self.list.set_typeahead_space(value == "on"),
                     "ui.typeahead_special" => self.list.set_typeahead_special(value == "on"),
@@ -1321,8 +1435,19 @@ mod app_window {
             match role {
                 Role::Main => {
                     let body = (h - Self::bar_h(scale)).max(0);
+                    // 목록 모드 상단 크롬: Pull-down 메뉴 행 + 툴바(사용자 요청 08-09).
+                    let chrome = self.chrome_h(scale);
+                    if chrome > 0 {
+                        let menu_h = (30.0 * scale).round() as i32;
+                        self.menu.set_scale(scale);
+                        self.menu.set_bounds(Rect::new(0, 0, w, menu_h), &mut inv);
+                        self.toolbar.set_scale(scale);
+                        self.toolbar
+                            .set_bounds(Rect::new(0, menu_h, w, chrome - menu_h), &mut inv);
+                    }
                     self.list.set_scale(scale, &mut inv);
-                    self.list.set_bounds(Rect::new(0, 0, w, body), &mut inv);
+                    self.list
+                        .set_bounds(Rect::new(0, chrome, w, (body - chrome).max(0)), &mut inv);
                     if let Some(chat) = self.single_open.and_then(|p| self.chats.get_mut(&p)) {
                         chat.set_scale(scale, &mut inv);
                         chat.set_bounds(Rect::new(0, 0, w, body), &mut inv);
@@ -1348,9 +1473,14 @@ mod app_window {
                 }
                 Role::Picker => {
                     if let Some(pv) = &mut self.picker_view {
-                        use nbeep_ui::Control as _;
                         pv.set_scale(scale);
                         pv.set_bounds(Rect::new(0, 0, w, h), &mut inv);
+                    }
+                }
+                Role::About => {
+                    if let Some(av) = &mut self.about_view {
+                        av.set_scale(scale, &mut inv);
+                        av.set_bounds(Rect::new(0, 0, w, h), &mut inv);
                     }
                 }
             }
@@ -1405,6 +1535,9 @@ mod app_window {
                         self.set_main_ime(false); // 목록 복귀 = 직접 조합 모드
                         self.status =
                             "↑↓ 이동 · 타이핑 = 이름 점프(한글 가능) · Enter = 대화 열기".into();
+                        // 복귀 재레이아웃 — 대화 중 크롬 0으로 잡힌 목록 bounds를
+                        // 크롬 아래로 되돌린다(없으면 목록이 메뉴·툴바 뒤에 숨는다).
+                        self.layout_window(id);
                         self.request_redraw(id);
                     }
                     WindowMode::Separate => {
@@ -1420,6 +1553,15 @@ mod app_window {
                 return;
             };
             let role = entry.role;
+            // About = 모달 — 열려 있는 동안 다른 창 입력은 삼키고 About으로 포커스 복귀.
+            if self.about_view.is_some() && role != Role::About {
+                if let Some((_, e)) = self.windows.iter().find(|(_, e)| e.role == Role::About) {
+                    if matches!(ev, InputEvent::MouseDown { .. } | InputEvent::Key { .. }) {
+                        e.window.focus_window();
+                    }
+                    return;
+                }
+            }
             let mut inv = Invalidations::default();
             match role {
                 Role::Main => {
@@ -1429,7 +1571,38 @@ mod app_window {
                         }
                         self.drain_chat_effects(peer, id);
                     } else {
-                        self.list.on_event(&ev, &mut inv);
+                        // 메뉴가 열려 있으면 모달 캡처(목록으로 전파 금지).
+                        if self.menu.is_open() {
+                            self.menu.on_event(&ev, &mut inv);
+                            inv.push(self.list.bounds()); // 팝업 영역 재도색
+                        } else {
+                            self.menu.on_event(&ev, &mut inv);
+                            self.toolbar.on_event(&ev, &mut inv);
+                            if !self.menu.is_open() {
+                                self.list.on_event(&ev, &mut inv);
+                            }
+                        }
+                        // 액션 드레인 — 메뉴/툴바.
+                        if let Some(a) = self.menu.take_picked() {
+                            match a.as_str() {
+                                "settings" => self.open_settings(el),
+                                "gallery" => self.open_gallery(el),
+                                "about" => self.open_about(el),
+                                _ => {}
+                            }
+                        }
+                        if let Some(a) = self.toolbar.take_clicked() {
+                            match a.as_str() {
+                                "refresh" => {
+                                    // 목록 갱신(사용자 요청) — 발견 테이블·신뢰·세션 상태 재조립.
+                                    self.refresh_rows(&mut inv);
+                                    self.status =
+                                        nbeep_core::t(nbeep_core::Msg::RefreshList).to_string();
+                                }
+                                "gallery" => self.open_gallery(el),
+                                _ => {}
+                            }
+                        }
                         if let Some(peer) = self.list.take_activated() {
                             self.activate(peer, el);
                         }
@@ -1506,6 +1679,15 @@ mod app_window {
                         }
                     }
                 }
+                Role::About => {
+                    if let Some(av) = &mut self.about_view {
+                        av.on_event(&ev, &mut inv);
+                        if av.take_back() {
+                            self.about_view = None;
+                            self.windows.remove(&id);
+                        }
+                    }
+                }
             }
             if !inv.is_empty() {
                 self.request_redraw(id);
@@ -1536,6 +1718,9 @@ mod app_window {
                         chat.paint(&mut ctx, &theme);
                     } else {
                         self.list.paint(&mut ctx, &theme);
+                        // 상단 크롬(툴바 → 메뉴 순 — 메뉴 팝업이 최상위).
+                        self.toolbar.paint(&mut ctx, &theme);
+                        self.menu.paint(&mut ctx, &theme);
                     }
                     // 주 창 하단 상태바.
                     let hh = i32::try_from(size.height).unwrap_or(i32::MAX);
@@ -1589,6 +1774,11 @@ mod app_window {
                 Role::Picker => {
                     if let Some(pv) = &self.picker_view {
                         pv.paint(&mut ctx, &theme);
+                    }
+                }
+                Role::About => {
+                    if let Some(av) = &self.about_view {
+                        av.paint(&mut ctx, &theme);
                     }
                 }
             }
@@ -1651,7 +1841,10 @@ mod app_window {
                 }
                 AppEvent::Closed { peer } => {
                     self.conversations.remove(&peer);
+                    self.closed_peers.insert(peer); // 목록 상태 점 = 끊김(빨강)
                     self.status = "상대와의 세션이 종료됨".into();
+                    let mut inv = Invalidations::default();
+                    self.refresh_rows(&mut inv);
                     if let Some(id) = self.main_id {
                         self.request_redraw(id);
                     }
@@ -1759,6 +1952,7 @@ mod app_window {
                             Role::Settings => self.settings_view = None,
                             Role::Gallery => self.gallery_view = None,
                             Role::Picker => self.picker_view = None,
+                            Role::About => self.about_view = None,
                             Role::Main => {}
                         }
                     }
@@ -2101,6 +2295,20 @@ mod app_window {
             settings,
             settings_view: None,
             gallery_view: None,
+            about_view: None,
+            menu: MenuBar::new(build_menus()),
+            toolbar: Toolbar::new(vec![
+                ToolItem::new("refresh", ToolIcon::Refresh),
+                ToolItem::new(
+                    "gallery",
+                    ToolIcon::Image(std::rc::Rc::new(nbeep_ui::IconImage::from_rgba(
+                        nbeep_ui::brand::ICON_SIZE,
+                        nbeep_ui::brand::ICON_SIZE,
+                        nbeep_ui::brand::ICON_RGBA.to_vec(),
+                    ))),
+                ),
+            ]),
+            closed_peers: std::collections::HashSet::new(),
             icon: winit::window::Icon::from_rgba(
                 nbeep_ui::brand::ICON_RGBA.to_vec(),
                 nbeep_ui::brand::ICON_SIZE,
