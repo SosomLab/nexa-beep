@@ -5,5 +5,6 @@
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
 pub mod font;
+pub mod paths;
 pub mod quarantine;
 pub mod shutdown;

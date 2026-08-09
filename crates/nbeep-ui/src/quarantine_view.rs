@@ -98,6 +98,11 @@ pub struct QuarantineWidget {
     reject: Button,
     action: Option<QAction>,
     back: bool,
+    /// 호스트가 넣는 결과 문장(승인·삭제 결과) — 등급 안내보다 우선 표시.
+    message: Option<(String, bool)>,
+    /// 이 세션에서 실체화한 경로 — 행에 "실체화됨" 태그. `.beepq`는 보존되므로
+    /// 목록이 그대로라 **아무 일도 안 난 것처럼 보이던** 문제를 없앤다.
+    done: std::collections::HashSet<String>,
 }
 
 impl QuarantineWidget {
@@ -114,7 +119,25 @@ impl QuarantineWidget {
             reject: Button::new("삭제"),
             action: None,
             back: false,
+            message: None,
+            done: std::collections::HashSet::new(),
         }
+    }
+
+    /// 호스트 결과 문장 표시(실패면 `is_error = true` — 위험색).
+    pub fn set_message(
+        &mut self,
+        text: impl Into<String>,
+        is_error: bool,
+        inv: &mut Invalidations,
+    ) {
+        self.message = Some((text.into(), is_error));
+        inv.push(self.bounds);
+    }
+
+    /// 이 경로가 실체화되었음을 표시한다(행 태그).
+    pub fn mark_done(&mut self, path: impl Into<String>) {
+        self.done.insert(path.into());
     }
 
     /// 행 갱신(승인·삭제 후 호스트가 다시 채운다).
@@ -228,6 +251,7 @@ impl Widget for QuarantineWidget {
                         if i != self.sel {
                             self.sel = i;
                             self.confirming = false; // 다른 행 = 확인 단계 취소
+                            self.message = None;
                         }
                         inv.push(self.bounds);
                         break;
@@ -309,6 +333,19 @@ impl Widget for QuarantineWidget {
                 &size_txt,
                 theme.text_dim,
             );
+            if self.done.contains(&row.path) {
+                ctx.select_font(FontSlot::Status, false);
+                let tag = "실체화됨";
+                let tw = ctx.text_width(tag);
+                ctx.text(
+                    r.right() - sw - tw - self.s(24),
+                    r.y + self.s(8),
+                    r,
+                    tag,
+                    theme.ok,
+                );
+                ctx.select_font(FontSlot::Base, false);
+            }
 
             // 2행: 등급 칩 + 신뢰 배지 + 불일치 경고.
             let (rl, rc) = risk_badge(row.risk, theme);
@@ -357,6 +394,8 @@ impl Widget for QuarantineWidget {
                     .to_string(),
                 theme.danger,
             )
+        } else if let Some((m, err)) = &self.message {
+            (m.clone(), if *err { theme.danger } else { theme.ok })
         } else {
             self.selected()
                 .map_or((String::new(), theme.text_dim), |r| {

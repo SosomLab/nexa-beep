@@ -1080,9 +1080,16 @@ impl App {
                 })
             }
         }
+        // 결과는 주 창 상태바 + **격리함 창 자체**에 모두 남긴다(사용자 지적 08-09:
+        // 승인해도 그 창에선 아무 일도 안 난 것처럼 보였다).
+        let mut done_path: Option<String> = None;
+        let mut msg_err = false;
         match act {
             nbeep_ui::QAction::Approve(path) => {
-                let dest = std::env::temp_dir().join("nexa-beep-materialized");
+                // 실체화 기본 대상 = **다운로드 폴더**([docs/11] §4-1).
+                // 없으면 임시 폴더로 떨어뜨리되 경로를 그대로 보여 준다(숨기지 않는다).
+                let dest = nbeep_plat::paths::downloads_dir()
+                    .unwrap_or_else(|| std::env::temp_dir().join("nexa-beep-materialized"));
                 let out = std::fs::read(&path)
                     .map_err(|e| e.to_string())
                     .and_then(|b| Beepq::open(&b).map_err(|e| format!("{e:?}")))
@@ -1098,22 +1105,34 @@ impl App {
                             Ok(MarkOutcome::Unsupported) => "⚠️ OS 보호 표식 미지원",
                             Err(_) => "⚠️ OS 보호 표식 실패",
                         };
+                        done_path = Some(path);
                         format!("실체화 완료: {} · {mark}", m.path.display())
                     }
-                    Err(e) => format!("실체화 실패: {e} — 격리 유지"),
+                    Err(e) => {
+                        msg_err = true;
+                        format!("실체화 실패: {e} — 격리 유지")
+                    }
                 };
             }
             nbeep_ui::QAction::Reject(path) => {
                 self.status = match std::fs::remove_file(&path) {
                     Ok(()) => "격리물을 삭제했습니다".into(),
-                    Err(e) => format!("삭제 실패: {e}"),
+                    Err(e) => {
+                        msg_err = true;
+                        format!("삭제 실패: {e}")
+                    }
                 };
             }
         }
         let rows = self.quarantine_rows();
+        let msg = self.status.clone();
         if let Some(v) = &mut self.quarantine_view {
             let mut inv = Invalidations::default();
             v.set_rows(rows, &mut inv);
+            if let Some(p) = done_path {
+                v.mark_done(p);
+            }
+            v.set_message(msg, msg_err, &mut inv);
         }
         self.request_redraw(id);
         if let Some(mid) = self.main_id {
