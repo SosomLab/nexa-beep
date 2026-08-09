@@ -17,8 +17,8 @@
 //! M2-5(Repository 포트). i18n: 라벨은 [`Msg`] 키, 검색은 **전 언어 매치**.
 
 use crate::controls::{
-    Checkbox, Combo, ComboControl, ComboItem, Control, LabelSide, ScrollBars, TextBox, TreeControl,
-    TreeModel, TreeNode, TreeView,
+    Checkbox, Combo, ComboControl, ComboItem, Control, LabelSide, PositionPicker, ScrollBars,
+    TextBox, TreeControl, TreeModel, TreeNode, TreeView,
 };
 use crate::draw::{DrawCtx, FontSlot};
 use crate::event::{InputEvent, Key};
@@ -51,6 +51,8 @@ pub enum SettingKind {
     Radio(&'static [(&'static str, Msg)]),
     /// 택일 + **직접 입력** — 후보에 없는 값을 인라인 편집으로 넣는다(값, 표시 접미).
     RadioInput(&'static [(&'static str, Msg)], &'static str),
+    /// 3×3 위치 그리드 — 미니 화면(4:3) 셀로 직관 선택([`PositionPicker`]).
+    PositionGrid,
     /// on/off — [`Checkbox`]. 값은 `"on"`/`"off"`(기본 on).
     Toggle,
     /// 글꼴 영역 — 글꼴명 [`TextBox`] + 크기 [`Combo`].
@@ -90,6 +92,7 @@ impl Entry {
                 .into_iter()
                 .collect(),
             SettingKind::Toggle => vec![(self.key, "on".to_string())],
+            SettingKind::PositionGrid => vec![(self.key, "bl".to_string())],
             SettingKind::FontSection {
                 family_key,
                 size_key,
@@ -166,17 +169,7 @@ pub fn registry() -> &'static [Entry] {
             cat: Msg::CatAppearance,
             label: Msg::TypeaheadPos,
             desc: Msg::TypeaheadPosDesc,
-            kind: SettingKind::Radio(&[
-                ("bl", Msg::PosBottomLeft),
-                ("bc", Msg::PosBottomCenter),
-                ("br", Msg::PosBottomRight),
-                ("ml", Msg::PosMidLeft),
-                ("c", Msg::PosCenter),
-                ("mr", Msg::PosMidRight),
-                ("tl", Msg::PosTopLeft),
-                ("tc", Msg::PosTopCenter),
-                ("tr", Msg::PosTopRight),
-            ]),
+            kind: SettingKind::PositionGrid,
             key: "ui.typeahead_pos",
         },
         Entry {
@@ -295,6 +288,8 @@ const SIDEBAR_W: i32 = 150;
 const SEARCH_H: i32 = 30;
 const ENTRY_H: i32 = 52;
 const FONT_SECTION_H: i32 = 88;
+/// 위치 그리드 행 높이(3×3 미니 화면 93 + 여백).
+const POS_ROW_H: i32 = 110;
 const CTL_H: i32 = 26;
 const COMBO_W: i32 = 170;
 const SIZE_W: i32 = 112;
@@ -306,7 +301,12 @@ const PAD: i32 = 12;
 enum RowCtl {
     Combo(Combo),
     Check(Checkbox),
-    Font { family: TextBox, size: Combo },
+    Font {
+        family: TextBox,
+        size: Combo,
+    },
+    /// 3×3 위치 그리드.
+    Pos(PositionPicker),
 }
 
 #[derive(Debug)]
@@ -490,6 +490,12 @@ impl SettingsWidget {
                     c.set_scale(self.scale);
                     RowCtl::Combo(c)
                 }
+                SettingKind::PositionGrid => {
+                    let mut p = PositionPicker::new();
+                    p.select_value(self.values.get(e.key).map_or("bl", String::as_str));
+                    p.set_scale(self.scale);
+                    RowCtl::Pos(p)
+                }
                 SettingKind::Toggle => {
                     let mut c =
                         Checkbox::new("", self.values.get(e.key).map(String::as_str) == Some("on"))
@@ -557,12 +563,13 @@ impl SettingsWidget {
         let rx = b.x + sw; // 우측 패널 시작
         let rw = (b.w - sw).max(0);
         // 콘텐츠 총 높이 → 스크롤 클램프(행 추가/검색으로 줄어들면 위로 당긴다).
-        let (hf, he) = (self.s(FONT_SECTION_H), self.s(ENTRY_H));
+        let (hf, he, hp) = (self.s(FONT_SECTION_H), self.s(ENTRY_H), self.s(POS_ROW_H));
         self.content_h = self
             .rows
             .iter()
             .map(|row| match registry()[row.idx].kind {
                 SettingKind::FontSection { .. } => hf,
+                SettingKind::PositionGrid => hp,
                 _ => he,
             })
             .sum();
@@ -570,7 +577,7 @@ impl SettingsWidget {
         let mut top = b.y - self.scroll;
         // 차용 분리를 위해 치수 사전 계산.
         let (ctl_h, pad) = (self.s(CTL_H), self.s(PAD));
-        let (h_font, h_entry) = (self.s(FONT_SECTION_H), self.s(ENTRY_H));
+        let (h_font, h_entry, h_pos) = (self.s(FONT_SECTION_H), self.s(ENTRY_H), self.s(POS_ROW_H));
         let (combo_w, check_w) = (self.s(COMBO_W), self.s(22));
         let (family_w, size_w, gap10, dy32) =
             (self.s(FAMILY_W), self.s(SIZE_W), self.s(10), self.s(32));
@@ -578,6 +585,7 @@ impl SettingsWidget {
             let e = &registry()[row.idx];
             let h = match e.kind {
                 SettingKind::FontSection { .. } => h_font,
+                SettingKind::PositionGrid => h_pos,
                 _ => h_entry,
             };
             row.rect = Rect::new(rx, top, rw, h);
@@ -612,6 +620,14 @@ impl SettingsWidget {
                         inv,
                     );
                 }
+                RowCtl::Pos(p) => {
+                    p.set_scale(self.scale);
+                    let (pw, ph) = p.preferred_size();
+                    p.set_bounds(
+                        Rect::new(rx + rw - pw - pad, top + (h - ph) / 2, pw, ph),
+                        inv,
+                    );
+                }
             }
             top += h;
         }
@@ -626,6 +642,11 @@ impl SettingsWidget {
             match &mut row.ctl {
                 RowCtl::Combo(c) => {
                     if let Some(v) = c.take_changed() {
+                        got.push((e.key, v));
+                    }
+                }
+                RowCtl::Pos(g) => {
+                    if let Some(v) = g.take_changed() {
                         got.push((e.key, v));
                     }
                 }
@@ -729,8 +750,12 @@ impl Widget for SettingsWidget {
                 // 검색/글꼴명 포커스는 클릭 위치 기준(각 컨트롤이 스스로 잡음 + 여기서 블러).
                 self.search.set_focused(self.search.bounds().contains(p));
                 for row in &mut self.rows {
-                    if let RowCtl::Font { family, .. } = &mut row.ctl {
-                        family.set_focused(family.bounds().contains(p));
+                    match &mut row.ctl {
+                        RowCtl::Font { family, .. } => {
+                            family.set_focused(family.bounds().contains(p));
+                        }
+                        RowCtl::Pos(g) => g.set_focused(g.bounds().contains(p)),
+                        _ => {}
                     }
                 }
                 // 사이드바 트리 — 선택 변경 감지 → 카테고리 전환(검색 해제).
@@ -757,6 +782,7 @@ impl Widget for SettingsWidget {
                             family.on_event(ev, inv);
                             size.on_event(ev, inv);
                         }
+                        RowCtl::Pos(g) => g.on_event(ev, inv),
                     }
                 }
                 self.drain_changes(inv);
@@ -796,6 +822,22 @@ impl Widget for SettingsWidget {
                     } else {
                         self.back = true;
                     }
+                }
+                Key::Left | Key::Right | Key::Up | Key::Down
+                    if self
+                        .rows
+                        .iter()
+                        .any(|r| matches!(&r.ctl, RowCtl::Pos(g) if g.is_focused())) =>
+                {
+                    for row in &mut self.rows {
+                        if let RowCtl::Pos(g) = &mut row.ctl {
+                            if g.is_focused() {
+                                g.on_event(ev, inv);
+                            }
+                        }
+                    }
+                    self.drain_changes(inv);
+                    inv.push(self.bounds);
                 }
                 Key::Up | Key::Down if self.query.is_empty() => {
                     // 사이드바 카테고리 탐색(검색 중엔 유지).
@@ -840,7 +882,7 @@ impl Widget for SettingsWidget {
             let e = &registry()[row.idx];
             let r = row.rect;
             match &row.ctl {
-                RowCtl::Combo(_) | RowCtl::Check(_) => {
+                RowCtl::Combo(_) | RowCtl::Check(_) | RowCtl::Pos(_) => {
                     ctx.select_font(FontSlot::Base, false);
                     ctx.text(
                         r.x + self.s(PAD),
@@ -880,6 +922,7 @@ impl Widget for SettingsWidget {
             match &row.ctl {
                 RowCtl::Combo(c) => c.paint(ctx, theme),
                 RowCtl::Check(c) => c.paint(ctx, theme),
+                RowCtl::Pos(g) => g.paint(ctx, theme),
                 RowCtl::Font { family, size } => {
                     family.paint(ctx, theme);
                     size.paint(ctx, theme);
