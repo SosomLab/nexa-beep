@@ -371,7 +371,9 @@ impl Widget for PeerListWidget {
                         }
                     }
                     Key::Escape => {
+                        // 즉시 초기화 + HUD 숨김(사용자 확정).
                         self.typeahead.clear();
+                        inv.push(self.bounds);
                     }
                     _ => {}
                 }

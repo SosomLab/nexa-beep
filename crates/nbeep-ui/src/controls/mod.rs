@@ -69,6 +69,30 @@ impl BorderSpec {
     }
 }
 
+/// 가로 정렬 — **전 컨트롤 공통**([`ControlBase`] 상속 · 콘텐츠 배치 기준).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum HAlign {
+    /// 왼쪽.
+    Left,
+    /// 가운데(기본 — 현행 시각 유지).
+    #[default]
+    Center,
+    /// 오른쪽.
+    Right,
+}
+
+/// 세로 정렬 — **전 컨트롤 공통**([`ControlBase`] 상속).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum VAlign {
+    /// 위.
+    Top,
+    /// 세로 중앙(기본).
+    #[default]
+    Center,
+    /// 아래.
+    Bottom,
+}
+
 /// 라벨 위치 옵션 — 컨트롤 본체 기준(사용자 요청: 체크만/좌/우).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum LabelSide {
@@ -98,6 +122,10 @@ pub struct ControlBase {
     pub show_help: bool,
     /// 툴팁이 현재 열려 있는가(런타임).
     pub help_open: bool,
+    /// 콘텐츠 가로 정렬(전 컨트롤 상속 — 각 컨트롤이 배치에 반영).
+    pub halign: HAlign,
+    /// 콘텐츠 세로 정렬(전 컨트롤 상속).
+    pub valign: VAlign,
 }
 
 impl Default for ControlBase {
@@ -110,6 +138,8 @@ impl Default for ControlBase {
             help: None,
             show_help: false,
             help_open: false,
+            halign: HAlign::default(),
+            valign: VAlign::default(),
         }
     }
 }
@@ -150,6 +180,32 @@ pub trait Control: crate::widget::Widget {
     /// 배율 지정.
     fn set_scale(&mut self, scale: f32) {
         self.base_mut().scale = scale.max(0.5);
+    }
+
+    /// 가로 정렬 지정(전 컨트롤 공통).
+    fn set_halign(&mut self, a: HAlign) {
+        self.base_mut().halign = a;
+    }
+    /// 가로 정렬.
+    fn halign(&self) -> HAlign {
+        self.base().halign
+    }
+    /// 세로 정렬 지정(전 컨트롤 공통).
+    fn set_valign(&mut self, a: VAlign) {
+        self.base_mut().valign = a;
+    }
+    /// 세로 정렬.
+    fn valign(&self) -> VAlign {
+        self.base().valign
+    }
+
+    /// 세로 정렬 y 계산 — `area` 안에 높이 `item_h` 항목을 [`VAlign`]대로 놓는다(여백 `pad`).
+    fn align_y(&self, area: Rect, item_h: i32, pad: i32) -> i32 {
+        match self.valign() {
+            VAlign::Top => area.y + pad,
+            VAlign::Center => area.y + (area.h - item_h) / 2,
+            VAlign::Bottom => area.bottom() - pad - item_h,
+        }
     }
 
     /// 도움말 내용 지정.

@@ -7,7 +7,7 @@
 //!
 //! 공통 기능은 [`Control`] 기본 메서드로 상속([`super`]).
 
-use super::{image_fit_contain, image_fit_cover, Control, ControlBase};
+use super::{image_fit_contain, image_fit_cover, Control, ControlBase, HAlign};
 use crate::draw::{DrawCtx, FontSlot};
 use crate::event::{InputEvent, Key};
 use crate::geom::{Point, Rect};
@@ -44,6 +44,9 @@ pub struct Button {
     label: Option<String>,
     image: Option<Rc<IconImage>>,
     mode: ButtonMode,
+    /// **이미지 맨 앞 고정**(옵션): true면 텍스트 정렬과 무관하게 이미지가 버튼 앞(pad)에
+    /// 붙는다. false(기본)면 이미지+텍스트를 한 묶음으로 정렬(halign)한다.
+    image_leading: bool,
     pressed: bool,
     clicked: bool,
 }
@@ -57,6 +60,7 @@ impl Button {
             label: Some(label.into()),
             image: None,
             mode: ButtonMode::Normal,
+            image_leading: false,
             pressed: false,
             clicked: false,
         }
@@ -70,6 +74,7 @@ impl Button {
             label: None,
             image: Some(image),
             mode: ButtonMode::Normal,
+            image_leading: false,
             pressed: false,
             clicked: false,
         }
@@ -94,6 +99,61 @@ impl Button {
     pub fn image_fill(mut self, fit: ImageFit) -> Self {
         self.mode = ButtonMode::Image(fit);
         self
+    }
+
+    /// **이미지 맨 앞 고정** 옵션(체이닝). 텍스트 정렬 규칙(사용자 확정):
+    /// Left=이미지 뒤 · Center=버튼 전체 기준 중앙(이미지 무시) · Right=우측 정렬.
+    #[must_use]
+    pub fn image_front(mut self, on: bool) -> Self {
+        self.image_leading = on;
+        self
+    }
+
+    /// 이미지 맨 앞 고정 지정(런타임).
+    pub fn set_image_front(&mut self, on: bool) {
+        self.image_leading = on;
+    }
+
+    /// (Normal) 이미지/텍스트 x 배치 — 정렬·이미지 맨 앞 규칙의 **순수 계산**(테스트 근거).
+    /// 반환: (이미지 x, 텍스트 x). 물리 px.
+    #[allow(clippy::too_many_arguments)]
+    fn normal_positions(
+        b: Rect,
+        pad: i32,
+        gap: i32,
+        icon: i32,
+        label_w: i32,
+        has_img: bool,
+        has_label: bool,
+        leading: bool,
+        halign: HAlign,
+    ) -> (Option<i32>, Option<i32>) {
+        if leading && has_img {
+            let img_x = b.x + pad;
+            let text_x = has_label.then(|| match halign {
+                HAlign::Left => img_x + icon + gap,
+                HAlign::Center => b.x + (b.w - label_w) / 2, // 이미지 무시, 버튼 전체 기준
+                HAlign::Right => b.right() - pad - label_w,
+            });
+            return (Some(img_x), text_x);
+        }
+        // 묶음 정렬: 이미지+텍스트(사이 gap은 둘 다 있을 때만 — 이미지 전용은 정확히 중앙).
+        let group_w =
+            if has_img { icon } else { 0 } + if has_img && has_label { gap } else { 0 } + label_w;
+        let gx = match halign {
+            HAlign::Left => b.x + pad,
+            HAlign::Center => b.x + (b.w - group_w) / 2,
+            HAlign::Right => b.right() - pad - group_w,
+        };
+        let img_x = has_img.then_some(gx);
+        let text_x = has_label.then(|| {
+            gx + if has_img {
+                icon + if has_label { gap } else { 0 }
+            } else {
+                0
+            }
+        });
+        (img_x, text_x)
     }
 
     /// 눌렸으면 `true`(1회성) — 호스트가 동작 실행.
@@ -191,28 +251,32 @@ impl Widget for Button {
                 ctx.fill_round_rect(b, radius, bg);
                 ctx.stroke_round_rect(b, radius, theme.border, 1.0);
 
-                let cy = b.y + b.h / 2;
                 // 아이콘 변 = 공용 단일 원천(콤보/Choose/트리와 동일 — 드리프트 방지).
                 let icon = self.s(super::LEADING_ICON);
                 let s16 = self.s(16);
-                // 콘텐츠(아이콘 + 라벨) 폭을 재서 가운데 정렬.
-                let mut icon_w = 0;
-                if self.image.is_some() {
-                    icon_w = icon + self.s(GAP);
-                }
                 ctx.select_font(FontSlot::Base, false);
                 let label_w = self.label.as_deref().map_or(0, |l| ctx.text_width(l));
-                let content = icon_w + label_w;
-                let mut x = b.x + ((b.w - content) / 2).max(self.s(PAD));
-
-                if let Some(img) = self.image.as_deref() {
-                    let boxr = Rect::new(x, cy - icon / 2, icon, icon);
+                let (img_x, text_x) = Self::normal_positions(
+                    b,
+                    self.s(PAD),
+                    self.s(GAP),
+                    icon,
+                    label_w,
+                    self.image.is_some(),
+                    self.label.is_some(),
+                    self.image_leading,
+                    self.halign(),
+                );
+                // 세로 배치 = VAlign(기본 중앙).
+                let icon_y = self.align_y(b, icon, self.s(4));
+                let text_y = self.align_y(b, s16, self.s(4));
+                if let (Some(x), Some(img)) = (img_x, self.image.as_deref()) {
+                    let boxr = Rect::new(x, icon_y, icon, icon);
                     let fit = image_fit_contain(boxr, img.w as i32, img.h as i32);
                     ctx.image_scaled(fit, img, b);
-                    x += icon + self.s(GAP);
                 }
-                if let Some(label) = self.label.as_deref() {
-                    ctx.text(x, cy - s16 / 2, b, label, theme.text);
+                if let (Some(x), Some(label)) = (text_x, self.label.as_deref()) {
+                    ctx.text(x, text_y, b, label, theme.text);
                 }
             }
         }
@@ -289,6 +353,43 @@ mod tests {
             &mut inv,
         );
         assert!(b.take_clicked());
+    }
+
+    #[test]
+    fn icon_only_is_exactly_centered() {
+        // 이미지 전용 = 보이지 않는 gap 없이 정중앙(사용자 확정).
+        let b = Rect::new(0, 0, 100, 26);
+        let (img_x, text_x) =
+            Button::normal_positions(b, 8, 6, 13, 0, true, false, false, HAlign::Center);
+        assert_eq!(img_x, Some((100 - 13) / 2), "gap 미포함 정중앙");
+        assert_eq!(text_x, None);
+    }
+
+    #[test]
+    fn image_front_text_alignment_rules() {
+        let b = Rect::new(0, 0, 200, 26);
+        // Left: 이미지 뒤 + gap.
+        let (i, t) = Button::normal_positions(b, 8, 6, 13, 40, true, true, true, HAlign::Left);
+        assert_eq!(i, Some(8));
+        assert_eq!(t, Some(8 + 13 + 6));
+        // Center: 이미지 무시, 버튼 전체 기준 중앙.
+        let (_, t) = Button::normal_positions(b, 8, 6, 13, 40, true, true, true, HAlign::Center);
+        assert_eq!(t, Some((200 - 40) / 2));
+        // Right: 일반 우측 정렬.
+        let (_, t) = Button::normal_positions(b, 8, 6, 13, 40, true, true, true, HAlign::Right);
+        assert_eq!(t, Some(200 - 8 - 40));
+    }
+
+    #[test]
+    fn group_alignment_includes_image() {
+        // 이미지 앞 고정 미선택 = 이미지 포함 묶음으로 정렬(사용자 확정).
+        let b = Rect::new(0, 0, 200, 26);
+        let group = 13 + 6 + 40;
+        let (i, t) = Button::normal_positions(b, 8, 6, 13, 40, true, true, false, HAlign::Right);
+        assert_eq!(i, Some(200 - 8 - group));
+        assert_eq!(t, Some(200 - 8 - group + 13 + 6));
+        let (i, _) = Button::normal_positions(b, 8, 6, 13, 40, true, true, false, HAlign::Left);
+        assert_eq!(i, Some(8));
     }
 
     #[test]
