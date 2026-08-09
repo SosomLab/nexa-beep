@@ -2359,6 +2359,14 @@ pub(crate) fn run(mode: WindowMode, live: bool) {
                 },
             ),
             ToolItem::new(
+                "quarantine",
+                ToolIcon::Mask {
+                    w: nbeep_ui::icons::SHIELD_SIZE,
+                    h: nbeep_ui::icons::SHIELD_SIZE,
+                    alpha: nbeep_ui::icons::SHIELD_ALPHA,
+                },
+            ),
+            ToolItem::new(
                 "gallery",
                 ToolIcon::Image(std::rc::Rc::new(nbeep_ui::IconImage::from_rgba(
                     nbeep_ui::brand::ICON_SIZE,
