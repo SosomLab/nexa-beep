@@ -21,13 +21,15 @@ use crate::identity::{PeerId, TrustLevel};
 use crate::session::{Session, SessionError};
 use std::collections::VecDeque;
 
-/// 논리 스트림 번호. v1은 2종 — 추가는 뒤에 append(번호 불변).
+/// 논리 스트림 번호. v1은 3종 — 추가는 뒤에 append(번호 불변).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StreamId {
     /// 제어 — 수신 확인(ack)·프로필 조회·공유 목록 등 프로토콜 내부 트래픽.
     Control,
     /// 대화 — 사용자 메시지.
     Chat,
+    /// 파일 전송(M4-2 — 오퍼/수락/청크 · 대화를 막지 않는 별도 스트림).
+    File,
 }
 
 impl StreamId {
@@ -37,6 +39,7 @@ impl StreamId {
         match self {
             StreamId::Control => 0,
             StreamId::Chat => 1,
+            StreamId::File => 2,
         }
     }
 
@@ -46,6 +49,7 @@ impl StreamId {
         match b {
             0 => Some(StreamId::Control),
             1 => Some(StreamId::Chat),
+            2 => Some(StreamId::File),
             _ => None,
         }
     }
@@ -56,7 +60,7 @@ impl StreamId {
 }
 
 /// 스트림 수(내부 큐 배열 크기).
-const STREAMS: usize = 2;
+const STREAMS: usize = 3;
 
 /// 다중화 페이로드 상한 — Noise 메시지 상한(65535) − AEAD 태그(16) − 스트림 바이트(1).
 /// 넘는 메시지는 상위 계층이 쪼갠다(파일 전송 청킹은 M4).
@@ -78,7 +82,7 @@ impl<S: Session> MuxSession<S> {
     pub fn new(inner: S) -> Self {
         Self {
             inner,
-            queues: [VecDeque::new(), VecDeque::new()],
+            queues: [VecDeque::new(), VecDeque::new(), VecDeque::new()],
         }
     }
 

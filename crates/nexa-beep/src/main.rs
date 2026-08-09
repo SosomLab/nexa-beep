@@ -17,6 +17,14 @@
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    if let Some(pos) = args.iter().position(|a| a == "--quarantine-demo") {
+        let Some(path) = args.get(pos + 1) else {
+            eprintln!("--quarantine-demo <파일> 필요");
+            return;
+        };
+        quarantine_demo(std::path::Path::new(path));
+        return;
+    }
     if let Some(pos) = args.iter().position(|a| a == "--discover-probe") {
         let secs = args.get(pos + 1).and_then(|s| s.parse().ok()).unwrap_or(8);
         discover_probe(secs);
@@ -79,7 +87,7 @@ fn main() {
         app_window::run(mode, live);
     } else {
         println!(
-            "nexa-beep {} — scaffold (창 `--window [--live]` · 발견 `--discover-probe [초]` · 수동 `--serve`/`--connect` · 인터랙티브 `--chat-serve [port]`/`--chat-connect <host:port>`/`--chat-live [이름]`(GUI 목록에 뜸))",
+            "nexa-beep {} — scaffold (창 `--window [--live]` · 발견 `--discover-probe [초]` · 수동 `--serve`/`--connect` · 인터랙티브 `--chat-serve [port]`/`--chat-connect <host:port>`/`--chat-live [이름]`(GUI 목록에 뜸) · 무해화 실측 `--quarantine-demo <파일>` · 파일전송 수신상한 `--xfer-limit-mib <N>`(chat 모드 · 대화 중 `/send`·`/accept`·`/reject`))",
             env!("CARGO_PKG_VERSION")
         );
     }
@@ -87,6 +95,116 @@ fn main() {
 
 /// 헤드리스 발견 프로브(M1-4 · D-8a) — 실물 멀티캐스트로 `secs`초 동안 발견을 찍는다.
 /// Docker 컨테이너 N개 교차 검증·실기 D-8b에서 그대로 쓴다(창 불요).
+/// **M4-1 종단 실측 데모** — 봉인→격리 저장→상태 기계→실체화→OS 표식을 실파일로 관측.
+///
+/// ⚠️ 데모 전용: 승인(Approve)을 자동 수행한다 — 제품 경로에는 자동 승인이 없다(FR-S-9 ·
+/// `nbeep-safe::state`가 타입으로 보장). 조립 지점 어댑터(DR-21): 해시 = `nbeep-crypto::sha256`,
+/// 표식 = `nbeep-plat::quarantine`(macOS 실물 · 그 외 미지원 명시).
+fn quarantine_demo(src: &std::path::Path) {
+    use nbeep_safe::{
+        classify, friction_raised, step, Beepq, HashPort, MarkOutcome, MarkPort, Meta, QEvent,
+        QState, QuarantineDir,
+    };
+
+    /// 실물 SHA-256 어댑터.
+    struct CryptoHash;
+    impl HashPort for CryptoHash {
+        fn sha256(&self, data: &[u8]) -> [u8; 32] {
+            nbeep_crypto::sha256(data)
+        }
+    }
+    /// OS 격리 표식 어댑터(macOS = com.apple.quarantine).
+    struct OsMark;
+    impl MarkPort for OsMark {
+        fn apply(&self, path: &std::path::Path) -> std::io::Result<MarkOutcome> {
+            Ok(if nbeep_plat::quarantine::apply_quarantine_mark(path)? {
+                MarkOutcome::Applied
+            } else {
+                MarkOutcome::Unsupported
+            })
+        }
+    }
+
+    let original = match std::fs::read(src) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("읽기 실패: {e}");
+            return;
+        }
+    };
+    let name = src
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "file".into());
+
+    // ① 위험 등급 판정(확장자·매직 fail-closed).
+    let v = classify(&name, &original);
+    println!(
+        "① 판정: risk={:?} (확장자={:?} · 매직={:?}/{}) 불일치 경고={}",
+        v.risk,
+        v.by_ext,
+        v.by_magic,
+        v.detected.name(),
+        v.mismatch
+    );
+
+    // ② 봉인(.beepq) + 격리 저장.
+    let sha = CryptoHash.sha256(&original);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let meta = Meta {
+        orig_name: name.clone().into_bytes(),
+        declared_ext: nbeep_safe::risk::extension_of(&name),
+        declared_mime: String::new(),
+        detected_kind: v.detected.name().into(),
+        risk: v.risk,
+        sender: nbeep_core::PeerId::from_bytes([0u8; 32]), // 데모 — 실전은 세션 상대
+        received_at: now,
+        expires_at: now + 7 * 24 * 3600,
+        scan: nbeep_core::ScanOutcome::Unavailable,
+        xfer: String::new(),
+    };
+    let sealed = Beepq::seal(&original, sha, &meta);
+    let qdir = QuarantineDir::open(std::env::temp_dir().join("nexa-beep-quarantine")).unwrap();
+    let qpath = qdir.save(&sha, &sealed).unwrap();
+    println!("② 격리 저장: {} ({}B)", qpath.display(), sealed.len());
+
+    // ③ 상태 기계 — 수신 완료(해시 OK) → 검사(백신 어댑터 없음 = Unavailable) → 승인(데모).
+    let mut st = QState::Receiving;
+    for ev in [
+        QEvent::ReceiveComplete { hash_ok: true },
+        QEvent::Inspect(nbeep_core::ScanOutcome::Unavailable),
+    ] {
+        st = step(st, ev).unwrap();
+    }
+    println!(
+        "③ 상태: {st:?} (마찰 상승={} — 검사 못 함)",
+        friction_raised(st)
+    );
+    st = step(st, QEvent::Approve).unwrap(); // ⚠️ 데모 한정 자동 — 제품은 사용자 버튼만
+
+    // ④ 실체화 + OS 표식(rename 직후).
+    let opened = Beepq::open(&std::fs::read(&qpath).unwrap()).unwrap();
+    let dest = std::env::temp_dir().join("nexa-beep-materialized");
+    match QuarantineDir::materialize(&opened, &dest, &CryptoHash, &OsMark) {
+        Ok(m) => {
+            st = step(st, QEvent::MaterializeOk).unwrap();
+            println!(
+                "④ 실체화: {} · 표식={:?} · 상태={st:?}",
+                m.path.display(),
+                m.mark
+            );
+            println!("   (.beepq는 보존 — 재실체화·감사: {})", qpath.display());
+        }
+        Err(e) => {
+            st = step(st, QEvent::MaterializeFailed).unwrap();
+            println!("④ 실체화 실패: {e} → 롤백 상태={st:?}");
+        }
+    }
+}
+
 fn discover_probe(secs: u64) {
     let identity = nbeep_crypto::Identity::generate();
     let me = identity.peer_id();
@@ -312,32 +430,111 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
     me: PeerId,
 ) {
     use nbeep_core::mux::{MuxSession, StreamId};
-    use nbeep_core::{ChatMessage, MessageBody, Sequencer, Session as _};
+    use nbeep_core::{
+        chunks_of, ChatMessage, MessageBody, Sequencer, Session as _, XferInbox, XferMsg,
+    };
     use std::io::BufRead as _;
+
+    /// stdin 스레드 → 네트 스레드 명령.
+    enum Cmd {
+        Chat(Vec<u8>),
+        /// 파일 오퍼(발신) — id·이름·선언 해시·원본.
+        Offer {
+            id: nbeep_core::XferId,
+            name: String,
+            sha: [u8; 32],
+            bytes: Vec<u8>,
+        },
+        Accept,
+        Reject,
+    }
 
     let peer = session.peer();
     println!(
-        "[대화 시작] 상대={} · 한 줄 입력 = 전송, Ctrl+D = 종료",
+        "[대화 시작] 상대={} · 한 줄 = 전송 · /send <파일> = 파일 전송 · Ctrl+D = 종료",
         peer.short()
     );
     // 수신 스레드: 세션 소유·recv 폴·도착 출력(액터 — 한 세션 1스레드). 송신은 채널 교대.
-    session.set_recv_timeout(Some(std::time::Duration::from_millis(150)));
-    let (out_tx, out_rx) = std::sync::mpsc::channel::<Vec<u8>>();
+    session.set_recv_timeout(Some(std::time::Duration::from_millis(100)));
+    let (out_tx, out_rx) = std::sync::mpsc::channel::<Cmd>();
     let net = std::thread::spawn(move || {
         let mut mux = MuxSession::new(session);
+        // 수신 상한 = **수신측 설정**(사용자 확정 08-09) — CLI --xfer-limit-mib(기본 256MiB).
+        // GUI 경로는 설정 키로 연동 예정(hot-swap 규약).
+        let args: Vec<String> = std::env::args().collect();
+        let limit = args
+            .iter()
+            .position(|a| a == "--xfer-limit-mib")
+            .and_then(|i| args.get(i + 1))
+            .and_then(|v| v.parse::<u64>().ok())
+            .map_or(nbeep_core::MAX_FILE, |mib| mib * 1024 * 1024);
+        let mut inbox = XferInbox::with_max_file(limit);
+        println!(
+            "[파일] 수신 상한 {}MiB (수신측 설정 — --xfer-limit-mib)",
+            inbox.max_file() / (1024 * 1024)
+        );
+        // 발신 대기(수락을 기다리는 원본) · 수신 대기(수락/거절을 기다리는 오퍼 id).
+        let mut outgoing: std::collections::HashMap<nbeep_core::XferId, Vec<u8>> =
+            std::collections::HashMap::new();
+        let mut pending_in: Option<nbeep_core::XferId> = None;
         loop {
             loop {
                 match out_rx.try_recv() {
-                    Ok(bytes) => {
+                    Ok(Cmd::Chat(bytes)) => {
                         if mux.send(StreamId::Chat, &bytes).is_err() {
                             println!("[종료] 세션 끊김");
                             return;
+                        }
+                    }
+                    Ok(Cmd::Offer {
+                        id,
+                        name,
+                        sha,
+                        bytes,
+                    }) => {
+                        let offer = XferMsg::Offer {
+                            id,
+                            size: bytes.len() as u64,
+                            sha256: sha,
+                            name: name.into_bytes(),
+                        };
+                        outgoing.insert(id, bytes);
+                        if mux.send(StreamId::File, &offer.encode()).is_err() {
+                            println!("[종료] 세션 끊김");
+                            return;
+                        }
+                        println!("[파일] 오퍼 전송 — 상대 수락 대기");
+                    }
+                    Ok(Cmd::Accept) => {
+                        if let Some(id) = pending_in {
+                            if inbox.accept(&id).is_ok() {
+                                let _ = mux.send(StreamId::File, &XferMsg::Accept { id }.encode());
+                                println!("[파일] 수락 — 수신 시작");
+                            }
+                        } else {
+                            println!("[파일] 대기 중인 오퍼가 없다");
+                        }
+                    }
+                    Ok(Cmd::Reject) => {
+                        if let Some(id) = pending_in.take() {
+                            inbox.drop_xfer(&id);
+                            let _ = mux.send(
+                                StreamId::File,
+                                &XferMsg::Reject {
+                                    id,
+                                    why: nbeep_core::RejectWhy::Declined,
+                                    limit: 0,
+                                }
+                                .encode(),
+                            );
+                            println!("[파일] 거절");
                         }
                     }
                     Err(std::sync::mpsc::TryRecvError::Empty) => break,
                     Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
                 }
             }
+            // 대화 스트림.
             match mux.recv(StreamId::Chat) {
                 Ok(bytes) => {
                     if let Ok(m) = ChatMessage::decode(&bytes, peer) {
@@ -353,6 +550,84 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
                     return;
                 }
             }
+            // 파일 스트림.
+            match mux.recv(StreamId::File) {
+                Ok(bytes) => match XferMsg::decode(&bytes) {
+                    Ok(XferMsg::Offer { id, size, name, .. }) => {
+                        let m = XferMsg::decode(&bytes).expect("방금 성공한 디코드");
+                        match inbox.offer(&m) {
+                            Ok(()) => {
+                                pending_in = Some(id);
+                                println!(
+                                    "[파일] 오퍼: {} ({size}B) — /accept 또는 /reject",
+                                    String::from_utf8_lossy(&name)
+                                );
+                            }
+                            Err(e) => {
+                                let _ = mux.send(
+                                    StreamId::File,
+                                    &XferMsg::Reject {
+                                        id,
+                                        why: nbeep_core::RejectWhy::TooLarge,
+                                        limit: inbox.max_file(), // 수신측 상한 공지
+                                    }
+                                    .encode(),
+                                );
+                                println!("[파일] 오퍼 자동 거부: {e} (상한 공지)");
+                            }
+                        }
+                    }
+                    Ok(XferMsg::Accept { id }) => {
+                        // 상대가 수락 — 청크 스트리밍 + 완료.
+                        if let Some(bytes) = outgoing.remove(&id) {
+                            let total = bytes.len();
+                            for c in chunks_of(id, &bytes) {
+                                if mux.send(StreamId::File, &c.encode()).is_err() {
+                                    println!("[종료] 세션 끊김");
+                                    return;
+                                }
+                            }
+                            let _ = mux.send(StreamId::File, &XferMsg::Done { id }.encode());
+                            println!("[파일] 전송 완료({total}B)");
+                        }
+                    }
+                    Ok(XferMsg::Reject { id, why, limit }) => {
+                        outgoing.remove(&id); // 발신 대기물 폐기
+                        if limit > 0 && matches!(why, nbeep_core::RejectWhy::TooLarge) {
+                            println!(
+                                "[파일] 상대가 거절: {why:?} — 상대 수신 상한 {}MiB",
+                                limit / (1024 * 1024)
+                            );
+                        } else {
+                            println!("[파일] 상대가 거절: {why:?}");
+                        }
+                    }
+                    Ok(XferMsg::Chunk { id, offset, data }) => {
+                        if let Err(e) = inbox.chunk(&id, offset, &data) {
+                            println!("[파일] 수신 오류: {e} — 폐기");
+                            pending_in = None;
+                        }
+                    }
+                    Ok(XferMsg::Done { id }) => match inbox.done(&id) {
+                        Ok(got) => {
+                            pending_in = None;
+                            receive_into_quarantine(&got, peer);
+                        }
+                        Err(e) => println!("[파일] 완료 실패: {e} — 폐기"),
+                    },
+                    Ok(XferMsg::Cancel { id }) => {
+                        inbox.drop_xfer(&id);
+                        pending_in = None;
+                        println!("[파일] 상대가 취소");
+                    }
+                    Err(e) => println!("[파일] 와이어 오류: {e}"),
+                },
+                Err(nbeep_core::SessionError::TimedOut) => {}
+                Err(_) => {
+                    println!("[종료] 세션 끊김");
+                    return;
+                }
+            }
         }
     });
     let mut seq = Sequencer::new();
@@ -362,18 +637,107 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
         if line.is_empty() {
             continue;
         }
+        if let Some(path) = line.strip_prefix("/send ") {
+            match std::fs::read(path.trim()) {
+                Ok(bytes) => {
+                    let sha = nbeep_crypto::sha256(&bytes);
+                    // 전송 id — 새 키의 앞 16B(프로세스 내 유일 · 간이 난수).
+                    let mut id = [0u8; 16];
+                    id.copy_from_slice(
+                        &nbeep_crypto::Identity::generate().peer_id().as_bytes()[..16],
+                    );
+                    let name = std::path::Path::new(path.trim())
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| "file".into());
+                    if out_tx
+                        .send(Cmd::Offer {
+                            id,
+                            name,
+                            sha,
+                            bytes,
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                Err(e) => println!("[파일] 읽기 실패: {e}"),
+            }
+            continue;
+        }
+        if line.trim() == "/accept" {
+            if out_tx.send(Cmd::Accept).is_err() {
+                break;
+            }
+            continue;
+        }
+        if line.trim() == "/reject" {
+            if out_tx.send(Cmd::Reject).is_err() {
+                break;
+            }
+            continue;
+        }
         let msg = ChatMessage {
             sender_device: me,
             seq: seq.issue(),
             body: MessageBody::Text(line),
         };
-        if out_tx.send(msg.encode()).is_err() {
+        if out_tx.send(Cmd::Chat(msg.encode())).is_err() {
             break;
         }
     }
     drop(out_tx);
     let _ = net.join();
     println!("[끝]");
+}
+
+/// 수신 완료물 → **무해화 게이트 합류**: SHA-256 대조 → 판정 → `.beepq` 봉인 → 격리 저장.
+/// 원본이 평문으로 디스크에 닿지 않는다 — 실체화는 사용자 승인 후 별도 경로(FR-S-5~9).
+fn receive_into_quarantine(got: &nbeep_core::Received, sender: PeerId) {
+    use nbeep_safe::{classify, Beepq, Meta, QuarantineDir};
+    let actual = nbeep_crypto::sha256(&got.bytes);
+    if actual != got.declared_sha256 {
+        println!("[파일] SHA-256 불일치 — 즉시 폐기(FR-X-6)");
+        return;
+    }
+    let name = String::from_utf8_lossy(&got.name).into_owned();
+    let v = classify(&name, &got.bytes);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let meta = Meta {
+        orig_name: got.name.clone(),
+        declared_ext: nbeep_safe::risk::extension_of(&name),
+        declared_mime: String::new(),
+        detected_kind: v.detected.name().into(),
+        risk: v.risk,
+        sender,
+        received_at: now,
+        expires_at: now + 7 * 24 * 3600,
+        scan: nbeep_core::ScanOutcome::Unavailable,
+        xfer: String::new(),
+    };
+    let sealed = Beepq::seal(&got.bytes, actual, &meta);
+    match QuarantineDir::open(std::env::temp_dir().join("nexa-beep-quarantine"))
+        .and_then(|q| q.save(&actual, &sealed))
+    {
+        Ok(p) => {
+            println!(
+                "[파일] 격리 수신 완료: {name} · risk={:?}{} · {}",
+                v.risk,
+                if v.mismatch {
+                    " · ⚠️ 형식 불일치"
+                } else {
+                    ""
+                },
+                p.display()
+            );
+            println!("       (실체화는 승인 후 --quarantine-demo 참조 — 자동 실체화 없음)");
+        }
+        Err(e) => println!("[파일] 격리 저장 실패: {e} — 수신물 폐기"),
+    }
 }
 
 /// **발견 가능한 인터랙티브 클라이언트**(`--chat-live [이름]`) — LocalDirect로 **발견 광고**(GUI
