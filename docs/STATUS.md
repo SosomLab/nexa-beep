@@ -3,6 +3,11 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
+> **갱신: 2026-08-09 (한글 직접 조합 차) (KST)** — **타입어헤드 IME 탈피 · 두벌식 직접 조합**(main 직커밋 · **[문서 27](27-typeahead-hangul-composition.md) 신설**):
+> 실기 재현 4종(한영 첫 키 유실·"김최" 등)으로 macOS IME 세션 소유권 한계 확정 — 보정 5회(자모 필터→가드→stale→보류→토글) 전부 부분 성공에 그침(연대기 §2).
+> **전환**: 목록 = IME off + `nbeep-ui::hangul::Composer`(상태기계·겹모음/겹받침·**도깨비불**·자모 백스페이스) 직접 조합 · TypeAhead 소유 → 타임아웃/ESC = reset 하나(결정적) · 대화는 IME 유지(경계 = set_main_ime).
+> 재현 4종 테스트 고정 · **사용자 실기 검증 통과**. 병행: 버튼 image_front(앞 고정+정렬 규칙)·HAlign/VAlign 공통화·이미지 전용 버튼 정중앙·ESC 즉시 초기화. **243 green** · clippy·fmt clean. [journal/2026-08-09.md](journal/2026-08-09.md).
+>
 > **갱신: 2026-08-09 (설정 컨트롤화·모달 차) (KST)** — **설정 화면 커스텀 컨트롤 전면 교체 + 모달 파일 선택 + 타입어헤드 확정판**(`feat/m3-settings-controls`):
 > ① **설정 화면 재작성** — 검색=TextBox · 사이드바=TreeView(매치 "(N)") · 택일=Combo 드롭다운 · **on/off=Checkbox**(`SettingKind::Toggle` 신설) · 글꼴=TextBox+Combo · 열린 콤보 모달 캡처. `take_changes` 계약 유지(bin 무변경).
 > ② **Choose… 별도 모달 창**(`Role::Picker`) — ChoosePicker 어댑터(FilePicker)를 TreeView로 렌더 · 클릭=값 반영·닫힘 · Esc=취소 · 인라인 오버레이 모드와 공존.
