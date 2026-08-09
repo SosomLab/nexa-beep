@@ -29,6 +29,7 @@ pub mod safetext;
 pub mod session;
 pub mod trust;
 pub mod trusted;
+pub mod xfer;
 
 #[cfg(any(test, feature = "testkit"))]
 pub mod testkit;
@@ -50,6 +51,9 @@ pub use safetext::{find_links, sanitize_message, LinkSpan, SafeText};
 pub use session::{Session, SessionError};
 pub use trust::{MemoryTrustStore, TrustDecision, TrustStore};
 pub use trusted::{Established, TrustedSession};
+pub use xfer::{
+    chunks_of, Received, RejectWhy, XferError, XferId, XferInbox, XferMsg, MAX_CHUNK, MAX_FILE,
+};
 
 #[cfg(test)]
 mod integration_tests {
