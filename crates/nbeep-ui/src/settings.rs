@@ -41,13 +41,16 @@ const SIZE_DEFAULT: &str = "m";
 
 /// Radio 기본값 예외 — 표시 순서(오름차순 등)와 기본값이 다른 키만 등록.
 /// 미등록 키의 기본은 첫 옵션(기존 규약).
-const RADIO_DEFAULTS: &[(&str, &str)] = &[("ui.toolbar_size", "24")];
+const RADIO_DEFAULTS: &[(&str, &str)] =
+    &[("ui.toolbar_size", "24"), ("ui.typeahead_timeout", "2000")];
 
 /// 항목 종류 — 우측 패널이 이 열거를 읽어 컨트롤을 동적 생성한다(새 설정 = Entry 1줄).
 #[derive(Clone, Copy, Debug)]
 pub enum SettingKind {
     /// 값 후보 중 택일 — [`Combo`] 드롭다운.
     Radio(&'static [(&'static str, Msg)]),
+    /// 택일 + **직접 입력** — 후보에 없는 값을 인라인 편집으로 넣는다(값, 표시 접미).
+    RadioInput(&'static [(&'static str, Msg)], &'static str),
     /// on/off — [`Checkbox`]. 값은 `"on"`/`"off"`(기본 on).
     Toggle,
     /// 글꼴 영역 — 글꼴명 [`TextBox`] + 크기 [`Combo`].
@@ -78,7 +81,7 @@ impl Entry {
     /// 레지스트리 기본값(각 값 키 → 기본 문자열).
     fn default_values(&self) -> Vec<(&'static str, String)> {
         match self.kind {
-            SettingKind::Radio(opts) => RADIO_DEFAULTS
+            SettingKind::Radio(opts) | SettingKind::RadioInput(opts, _) => RADIO_DEFAULTS
                 .iter()
                 .find(|(k, _)| *k == self.key)
                 .map(|(_, v)| *v)
@@ -147,12 +150,16 @@ pub fn registry() -> &'static [Entry] {
             cat: Msg::CatAppearance,
             label: Msg::TypeaheadTimeout,
             desc: Msg::TypeaheadTimeoutDesc,
-            kind: SettingKind::Radio(&[
-                ("2000", Msg::TaSec2),
-                ("1000", Msg::TaSec1),
-                ("3000", Msg::TaSec3),
-                ("5000", Msg::TaSec5),
-            ]),
+            kind: SettingKind::RadioInput(
+                &[
+                    ("1000", Msg::TaSec1),
+                    ("2000", Msg::TaSec2),
+                    ("3000", Msg::TaSec3),
+                    ("5000", Msg::TaSec5),
+                    ("10000", Msg::TaSec10),
+                ],
+                "ms",
+            ),
             key: "ui.typeahead_timeout",
         },
         Entry {
@@ -470,12 +477,15 @@ impl SettingsWidget {
         for idx in self.visible_indices() {
             let e = &registry()[idx];
             let ctl = match e.kind {
-                SettingKind::Radio(opts) => {
+                SettingKind::Radio(opts) | SettingKind::RadioInput(opts, _) => {
                     let items: Vec<ComboItem> = opts
                         .iter()
                         .map(|(v, m)| ComboItem::new(*v, tr(lang, *m)))
                         .collect();
                     let mut c = Combo::new(items, 0);
+                    if let SettingKind::RadioInput(_, suffix) = e.kind {
+                        c.set_custom_entry(tr(lang, Msg::CustomInput), suffix);
+                    }
                     c.select_value(self.values.get(e.key).map_or("", String::as_str));
                     c.set_scale(self.scale);
                     RowCtl::Combo(c)
@@ -682,6 +692,17 @@ impl Widget for SettingsWidget {
             c.on_event(ev, inv);
             self.drain_changes(inv);
             inv.push(self.bounds); // 드롭다운 영역 재그리기
+            return;
+        }
+
+        // ── 인라인 편집(직접 입력) 모달 캡처 — 편집 중 콤보가 모든 입력을 받는다 ──
+        if let Some(c) = self.rows.iter_mut().find_map(|r| match &mut r.ctl {
+            RowCtl::Combo(c) if c.is_editing() => Some(c),
+            _ => None,
+        }) {
+            c.on_event(ev, inv);
+            self.drain_changes(inv);
+            inv.push(self.bounds);
             return;
         }
 
