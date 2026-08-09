@@ -19,6 +19,9 @@ pub struct Query {
 #[derive(Debug)]
 pub struct TypeAhead {
     buf: String,
+    /// 한글 **직접 조합기**(두벌식 · IME 탈피 — [`crate::hangul`]). 자모는 여기서 조합되고
+    /// 완성 글자만 `buf`로 넘어간다. 타임아웃/ESC 리셋이 결정적이다.
+    composer: crate::hangul::Composer,
     /// IME 조합 중 텍스트(확정 전 · 실시간 매칭용). 확정(`push`)·소거 시 비운다.
     preedit: String,
     /// 타임아웃 초기화 시점의 **묵은 조합 텍스트**. macOS IME 세션(marked text)은 앱이 강제로
@@ -34,6 +37,7 @@ impl TypeAhead {
     pub fn new(timeout_ms: u64) -> Self {
         TypeAhead {
             buf: String::new(),
+            composer: crate::hangul::Composer::new(),
             preedit: String::new(),
             stale: String::new(),
             last_ms: 0,
@@ -50,7 +54,11 @@ impl TypeAhead {
     /// 확정 버퍼 + 조합 중 텍스트(HUD 표시·매칭 접두사). 빈 값 = 비활성.
     #[must_use]
     pub fn composing(&self) -> String {
-        format!("{}{}", self.buf, self.preedit)
+        let mut s = format!("{}{}", self.buf, self.preedit);
+        if let Some(p) = self.composer.preview() {
+            s.push(p);
+        }
+        s
     }
 
     /// **IME 조합 중 텍스트 갱신** — 확정 전에도 실시간 매칭한다(한글 "김" 조합 즉시 이동).
@@ -84,7 +92,7 @@ impl TypeAhead {
 
     /// 활동 갱신 — 버퍼가 살아 있으면 타임아웃 기준 시각을 지금으로 리셋(↑↓ 순환 중 유지).
     pub fn touch(&mut self, now_ms: u64) {
-        if !self.buf.is_empty() || !self.preedit.is_empty() {
+        if !self.buf.is_empty() || !self.preedit.is_empty() || self.composer.is_composing() {
             self.last_ms = now_ms;
         }
     }
@@ -94,13 +102,14 @@ impl TypeAhead {
         self.buf.clear();
         self.preedit.clear();
         self.stale.clear();
+        self.composer.reset();
     }
 
     /// 문자 입력(확정). 타임아웃이 지났으면 새 접두사로 시작.
     /// **반복 키 자동 순환 없음**(사용자 확정 — 순환은 ↑↓ 방향키 전용). 입력은 항상 누적된다.
     pub fn push(&mut self, c: char, now_ms: u64) -> Query {
-        self.preedit.clear(); // 확정 문자 도착 = 조합 종료
-                              // 묵은 조합의 확정분("김")은 소비만 하고 버퍼에 넣지 않는다.
+        self.preedit.clear(); // 확정 문자 도착 = IME 조합 종료(레거시 경로)
+                              // 묵은 IME 조합의 확정분은 소비만(레거시 stale — 목록은 이제 직접 조합이라 거의 안 탄다).
         if !self.stale.is_empty() {
             if self.stale.starts_with(c) {
                 let n = c.len_utf8();
@@ -113,21 +122,18 @@ impl TypeAhead {
             }
             self.stale.clear();
         }
-        let expired = self.buf.is_empty() || now_ms.saturating_sub(self.last_ms) > self.timeout_ms;
+        let was_empty = self.buf.is_empty() && !self.composer.is_composing();
+        let expired = was_empty || now_ms.saturating_sub(self.last_ms) > self.timeout_ms;
         self.last_ms = now_ms;
         if expired {
             self.buf.clear();
-            self.buf.push(c);
-            Query {
-                prefix: self.buf.clone(),
-                include_caret: false, // 새 접두사 = 캐럿 다음부터
-            }
-        } else {
-            self.buf.push(c);
-            Query {
-                prefix: self.buf.clone(),
-                include_caret: true, // 확장 = 현재 행이 여전히 매치면 유지
-            }
+            self.composer.reset();
+        }
+        // 자모는 직접 조합기로(완성 글자만 buf에), 그 외는 조합 확정 후 그대로.
+        self.buf.push_str(&self.composer.feed(c));
+        Query {
+            prefix: self.composing(),
+            include_caret: !expired, // 새 접두사 = 캐럿 다음부터
         }
     }
 
@@ -135,17 +141,23 @@ impl TypeAhead {
     pub fn backspace(&mut self, now_ms: u64) -> Option<Query> {
         self.preedit.clear();
         self.stale.clear();
-        if self.buf.is_empty() || now_ms.saturating_sub(self.last_ms) > self.timeout_ms {
+        let timed_out = now_ms.saturating_sub(self.last_ms) > self.timeout_ms;
+        if timed_out {
             self.buf.clear();
+            self.composer.reset();
             return None;
         }
         self.last_ms = now_ms;
-        self.buf.pop();
-        if self.buf.is_empty() {
+        // 조합 중이면 자모 단위, 아니면 완성 글자 단위(사용자 확정).
+        if !self.composer.backspace() {
+            self.buf.pop();
+        }
+        let p = self.composing();
+        if p.is_empty() {
             None
         } else {
             Some(Query {
-                prefix: self.buf.clone(),
+                prefix: p,
                 include_caret: true,
             })
         }
@@ -155,10 +167,12 @@ impl TypeAhead {
     /// buf뿐 아니라 preedit도 봐야 한다 — 한글 조합("김")은 확정 전이라 buf가 비어 있다(HUD가
     /// 안 사라지던 버그).
     pub fn tick(&mut self, now_ms: u64) -> bool {
-        let active = !self.buf.is_empty() || !self.preedit.is_empty();
+        let active =
+            !self.buf.is_empty() || !self.preedit.is_empty() || self.composer.is_composing();
         if active && now_ms.saturating_sub(self.last_ms) > self.timeout_ms {
             self.buf.clear();
-            // 조합 중이던 텍스트는 IME 세션에 marked text로 남는다 — 접두사 제거용으로 기억.
+            self.composer.reset(); // 직접 조합 = 리셋이 곧 결정적 초기화
+                                   // (레거시 IME 경로) 조합 중이던 텍스트는 세션에 남을 수 있어 접두사 제거용으로 기억.
             self.stale = std::mem::take(&mut self.preedit);
             true
         } else {

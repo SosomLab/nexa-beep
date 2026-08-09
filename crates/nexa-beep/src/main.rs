@@ -819,6 +819,15 @@ mod app_window {
             }
         }
 
+        /// 주 창 IME 토글 — 목록(직접 조합) = off · 대화(실제 텍스트) = on.
+        fn set_main_ime(&self, on: bool) {
+            if let Some(mid) = self.main_id {
+                if let Some(e) = self.windows.get(&mid) {
+                    e.window.set_ime_allowed(on);
+                }
+            }
+        }
+
         fn bar_h(scale: f32) -> i32 {
             (26.0 * scale).round() as i32
         }
@@ -1276,6 +1285,7 @@ mod app_window {
                     Ok(chat) => {
                         self.chats.insert(peer, chat);
                         self.single_open = Some(peer);
+                        self.set_main_ime(true); // 대화 = 실제 텍스트 → IME 켬
                         if let Some(id) = self.main_id {
                             self.layout_window(id);
                             let mut inv = Invalidations::default();
@@ -1392,6 +1402,7 @@ mod app_window {
                 match self.mode {
                     WindowMode::Single => {
                         self.single_open = None;
+                        self.set_main_ime(false); // 목록 복귀 = 직접 조합 모드
                         self.status =
                             "↑↓ 이동 · 타이핑 = 이름 점프(한글 가능) · Enter = 대화 열기".into();
                         self.request_redraw(id);
@@ -1594,7 +1605,9 @@ mod app_window {
                 .with_title("Nexa Beep")
                 .with_window_icon(self.icon.clone());
             let window = Rc::new(el.create_window(attrs).unwrap());
-            window.set_ime_allowed(true); // 한글 타입어헤드 — IME 커밋 문자
+            // 목록(타입어헤드) = IME **끔** — raw 자모를 앱이 직접 조합(hangul::Composer ·
+            // OS 조합 세션 경합 제거). 대화 진입 시 켠다(set_main_ime).
+            window.set_ime_allowed(false);
             let scale = window.scale_factor() as f32;
             let context = softbuffer::Context::new(window.clone()).unwrap();
             let surface = SbSurface::new(&context, window.clone()).unwrap();
@@ -1671,6 +1684,7 @@ mod app_window {
                                 let chat = self.build_chat_view(peer);
                                 self.chats.insert(peer, chat);
                                 self.single_open = Some(peer);
+                                self.set_main_ime(true);
                                 if let Some(mid) = self.main_id {
                                     self.layout_window(mid);
                                 }
@@ -1706,17 +1720,10 @@ mod app_window {
                     }
                 }
                 if self.list.typeahead_tick(now_ms, &mut inv) {
-                    // ① TypeAhead는 조합 텍스트를 stale로 기억해 이후 Preedit/Commit에서 벗겨낸다.
-                    // ② IME 조합도 강제 종료(사용자 확정 — allowed 토글): 종료가 커밋을 유발해도
-                    //    stale이 그 문자를 소비하므로 안전하고, 세션이 실제로 끊기면 다음 입력이
-                    //    새 조합으로 시작한다(ESC를 눌렀을 때와 같은 상태).
-                    self.ime_composing = false;
+                    // 직접 조합 모드: TypeAhead.tick이 버퍼+조합기를 리셋 = 그게 전부(결정적).
+                    // 목록은 IME 자체가 꺼져 있어 세션 경합이 존재하지 않는다.
                     self.pending_jamo = None;
                     if let Some(id) = self.main_id {
-                        if let Some(e) = self.windows.get(&id) {
-                            e.window.set_ime_allowed(false);
-                            e.window.set_ime_allowed(true);
-                        }
                         self.request_redraw(id);
                     }
                 }
@@ -1980,9 +1987,12 @@ mod app_window {
                                 | '\u{3130}'..='\u{318F}' // Compat Jamo(ㄱ·ㅣ 등)
                                 | '\u{A960}'..='\u{A97F}'
                                 | '\u{D7B0}'..='\u{D7FF}');
-                            if is_jamo {
+                            let list_mode = Some(id) == self.main_id && self.single_open.is_none();
+                            if is_jamo && !list_mode {
+                                // IME 켜진 창(대화 등): 중복 가능성 → 보류-판정.
                                 self.pending_jamo = Some((id, c, now_ms));
                             } else if !c.is_control() {
+                                // 목록: IME 꺼짐 = 자모가 유일한 경로 → 즉시 직접 조합기로.
                                 self.route(id, InputEvent::Char { c, now_ms }, el);
                             }
                         }

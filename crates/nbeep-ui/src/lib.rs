@@ -22,6 +22,7 @@ pub mod edit;
 pub mod event;
 pub mod gallery;
 pub mod geom;
+pub mod hangul;
 pub mod peer_list;
 pub mod raster;
 pub mod settings;
