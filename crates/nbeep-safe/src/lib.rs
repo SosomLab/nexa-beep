@@ -5,12 +5,16 @@
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
+pub mod archive;
 pub mod container;
 pub mod risk;
 pub mod sanitize;
 pub mod state;
 pub mod store;
 
+pub use archive::{
+    check_archive, check_entry, safe_entry_path, ArchivePolicy, ArchiveReject, EntryDesc,
+};
 pub use container::{Beepq, Meta, QuarantineError, FLAG_SEALED, FORMAT_VER, MAGIC, MAX_SEAL};
 pub use risk::{classify, classify_ext, detect_magic, DetectedKind, Verdict};
 pub use sanitize::{sanitize_filename, MAX_NAME_CHARS};

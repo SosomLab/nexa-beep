@@ -1645,7 +1645,10 @@ impl ApplicationHandler<AppEvent> for App {
                 total,
                 sending,
             } => {
-                let pct = got.checked_mul(100).and_then(|n| n.checked_div(total)).unwrap_or(0);
+                let pct = got
+                    .checked_mul(100)
+                    .and_then(|n| n.checked_div(total))
+                    .unwrap_or(0);
                 self.status = format!(
                     "파일 {} {pct}% ({} / {})",
                     if sending { "전송" } else { "수신" },
