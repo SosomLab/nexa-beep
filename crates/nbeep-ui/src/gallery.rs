@@ -67,6 +67,7 @@ pub struct GalleryWidget {
     grid_img: TreeGrid,
     btn_text: Button,
     btn_icon: Button,
+    btn_front: Button,
     btn_img: Button,
 }
 
@@ -198,6 +199,9 @@ impl GalleryWidget {
             grid_img,
             btn_text: Button::new("Save").with_image(img((0x3D, 0x8B, 0xFF))),
             btn_icon: Button::icon(img((0x2E, 0xA0, 0x43))),
+            btn_front: Button::new("Send")
+                .with_image(img((0xB5, 0x7C, 0x1E)))
+                .image_front(true),
             btn_img: Button::icon(img((0x5B, 0x6C, 0xFF))).image_fill(ImageFit::Cover),
         }
     }
@@ -223,6 +227,7 @@ impl GalleryWidget {
         self.grid_img.set_scale(s);
         self.btn_text.set_scale(s);
         self.btn_icon.set_scale(s);
+        self.btn_front.set_scale(s);
         self.btn_img.set_scale(s);
         self.relayout(inv);
     }
@@ -236,7 +241,8 @@ impl GalleryWidget {
         let gap = self.s(GAP);
         let ctrl_h = self.s(CTRL_H);
         let (radio_h, tree_h, grid_h) = (self.s(24 * 3), self.s(24 * 5), self.s(26 + 24 * 4));
-        let (btn_tw, btn_iw, btn_imw, btn_imh) = (self.s(120), self.s(44), self.s(64), self.s(48));
+        let (btn_tw, btn_iw, btn_fw, btn_imw, btn_imh) =
+            (self.s(120), self.s(44), self.s(160), self.s(64), self.s(48));
         let top = self.bounds.y + pad - self.scroll;
         let mut y = top;
         y = place(&mut self.cb_right, x, y, w, ctrl_h, label_h, gap, inv);
@@ -262,6 +268,7 @@ impl GalleryWidget {
         y = gy + grid_h + gap;
         y = place(&mut self.btn_text, x, y, btn_tw, ctrl_h, label_h, gap, inv);
         y = place(&mut self.btn_icon, x, y, btn_iw, ctrl_h, label_h, gap, inv);
+        y = place(&mut self.btn_front, x, y, btn_fw, ctrl_h, label_h, gap, inv);
         y = place(&mut self.btn_img, x, y, btn_imw, btn_imh, label_h, gap, inv);
         // 콘텐츠 총 크기 — 가장 넓은 행(트리·그리드 쌍) 기준.
         let widest = w.max(tcolw * 2 + gap).max(gcolw * 2 + gap);
@@ -303,7 +310,7 @@ impl GalleryWidget {
         self.scroll_x = self.scroll_x.clamp(0, max_x);
     }
 
-    fn labels() -> [&'static str; 14] {
+    fn labels() -> [&'static str; 15] {
         [
             "Checkbox — 라벨 오른쪽 (+ 도움말 ?)",
             "Checkbox — 라벨 왼쪽",
@@ -318,6 +325,7 @@ impl GalleryWidget {
             "TreeGrid — 행 이미지",
             "Button — 이미지 + 텍스트",
             "Button — 이미지만",
+            "Button — 이미지 앞 고정(텍스트 중앙)",
             "Button — 이미지 버튼(Cover)",
         ]
     }
@@ -391,6 +399,8 @@ impl Widget for GalleryWidget {
                 .set_focused(self.btn_text.bounds().contains(p));
             self.btn_icon
                 .set_focused(self.btn_icon.bounds().contains(p));
+            self.btn_front
+                .set_focused(self.btn_front.bounds().contains(p));
             self.btn_img.set_focused(self.btn_img.bounds().contains(p));
         }
         // 이벤트를 전 컨트롤에 전달(각자 bounds/포커스로 자기 것만 처리).
@@ -407,13 +417,14 @@ impl Widget for GalleryWidget {
         self.grid_img.on_event(ev, inv);
         self.btn_text.on_event(ev, inv);
         self.btn_icon.on_event(ev, inv);
+        self.btn_front.on_event(ev, inv);
         self.btn_img.on_event(ev, inv);
     }
 
     fn paint(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
         ctx.fill_rect(self.bounds, theme.panel_bg);
         let labels = Self::labels();
-        let widgets: [&dyn Widget; 14] = [
+        let widgets: [&dyn Widget; 15] = [
             &self.cb_right,
             &self.cb_left,
             &self.cb_only,
@@ -427,6 +438,7 @@ impl Widget for GalleryWidget {
             &self.grid_img,
             &self.btn_text,
             &self.btn_icon,
+            &self.btn_front,
             &self.btn_img,
         ];
         // 섹션 라벨(각 컨트롤 위 — 컨트롤의 x에 맞춰 그린다: 좌·우 나란한 트리 쌍 라벨 분리).

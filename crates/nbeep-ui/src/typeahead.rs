@@ -21,6 +21,9 @@ pub struct TypeAhead {
     buf: String,
     /// IME 조합 중 텍스트(확정 전 · 실시간 매칭용). 확정(`push`)·소거 시 비운다.
     preedit: String,
+    /// 타임아웃 초기화 시점의 **묵은 조합 텍스트**. macOS IME 세션(marked text)은 앱이 강제로
+    /// 못 버리므로, 이후 Preedit/Commit에서 이 접두사를 벗겨내 "김"+"최"="김최" 유입을 막는다.
+    stale: String,
     last_ms: u64,
     timeout_ms: u64,
 }
@@ -32,6 +35,7 @@ impl TypeAhead {
         TypeAhead {
             buf: String::new(),
             preedit: String::new(),
+            stale: String::new(),
             last_ms: 0,
             timeout_ms,
         }
@@ -57,6 +61,15 @@ impl TypeAhead {
             self.buf.clear();
         }
         self.last_ms = now_ms;
+        // 묵은 세션 처리: 이어진 조합("김최")이면 접두사를 벗기고, 새 조합("ㅊ"…)이면 stale 폐기.
+        let text = if self.stale.is_empty() {
+            text
+        } else if let Some(rest) = text.strip_prefix(self.stale.as_str()) {
+            rest
+        } else {
+            self.stale.clear();
+            text
+        };
         self.preedit = text.to_string();
         Query {
             prefix: self.composing(),
@@ -80,12 +93,26 @@ impl TypeAhead {
     pub fn clear(&mut self) {
         self.buf.clear();
         self.preedit.clear();
+        self.stale.clear();
     }
 
     /// 문자 입력(확정). 타임아웃이 지났으면 새 접두사로 시작.
     /// **반복 키 자동 순환 없음**(사용자 확정 — 순환은 ↑↓ 방향키 전용). 입력은 항상 누적된다.
     pub fn push(&mut self, c: char, now_ms: u64) -> Query {
         self.preedit.clear(); // 확정 문자 도착 = 조합 종료
+                              // 묵은 조합의 확정분("김")은 소비만 하고 버퍼에 넣지 않는다.
+        if !self.stale.is_empty() {
+            if self.stale.starts_with(c) {
+                let n = c.len_utf8();
+                self.stale.drain(..n);
+                self.last_ms = now_ms;
+                return Query {
+                    prefix: self.composing(),
+                    include_caret: true,
+                };
+            }
+            self.stale.clear();
+        }
         let expired = self.buf.is_empty() || now_ms.saturating_sub(self.last_ms) > self.timeout_ms;
         self.last_ms = now_ms;
         if expired {
@@ -107,6 +134,7 @@ impl TypeAhead {
     /// Backspace — 접두사 축소 후 재평가. 비었으면 `None`(버퍼 종료·HUD 소거).
     pub fn backspace(&mut self, now_ms: u64) -> Option<Query> {
         self.preedit.clear();
+        self.stale.clear();
         if self.buf.is_empty() || now_ms.saturating_sub(self.last_ms) > self.timeout_ms {
             self.buf.clear();
             return None;
@@ -130,7 +158,8 @@ impl TypeAhead {
         let active = !self.buf.is_empty() || !self.preedit.is_empty();
         if active && now_ms.saturating_sub(self.last_ms) > self.timeout_ms {
             self.buf.clear();
-            self.preedit.clear();
+            // 조합 중이던 텍스트는 IME 세션에 marked text로 남는다 — 접두사 제거용으로 기억.
+            self.stale = std::mem::take(&mut self.preedit);
             true
         } else {
             false
@@ -155,6 +184,32 @@ mod tests {
         assert_eq!(q.prefix, "김");
         assert_eq!(t.composing(), "김");
         assert_eq!(t.text(), "김", "확정 버퍼로");
+    }
+
+    #[test]
+    fn stale_session_prefix_is_stripped() {
+        // "김" 조합 중 타임아웃 → IME 세션의 marked text는 살아 있다.
+        let mut t = TypeAhead::new(1000);
+        t.set_preedit("김", 0);
+        assert!(t.tick(1500), "타임아웃 소거");
+        assert_eq!(t.composing(), "", "HUD 비움");
+        // 세션이 이어져 "김최"가 와도 접두사를 벗겨 "최"만 반영(사용자 버그 재현 케이스).
+        assert_eq!(t.set_preedit("김ㅊ", 1600).prefix, "ㅊ");
+        assert_eq!(t.set_preedit("김최", 1700).prefix, "최");
+        // 확정 "김최"(문자 2개로 도착) → '김'은 stale 소비, '최'만 버퍼로.
+        t.push('김', 1800);
+        t.push('최', 1850);
+        assert_eq!(t.text(), "최", "stale '김' 소비 · '최'만 확정");
+    }
+
+    #[test]
+    fn fresh_session_after_timeout_drops_stale() {
+        // 타임아웃 후 IME가 실제로 새 세션을 시작하면(ㅊ부터) stale은 즉시 폐기.
+        let mut t = TypeAhead::new(1000);
+        t.set_preedit("김", 0);
+        t.tick(1500);
+        assert_eq!(t.set_preedit("ㅊ", 1600).prefix, "ㅊ", "새 조합 = 그대로");
+        assert_eq!(t.set_preedit("최", 1700).prefix, "최");
     }
 
     #[test]

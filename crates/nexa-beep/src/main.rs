@@ -792,9 +792,6 @@ mod app_window {
         /// IME 조합 중(macOS — Preedit 활성). 조합 중엔 KeyboardInput 문자/백스페이스를
         /// 라우팅하지 않는다(같은 키가 Ime 경로로도 와서 자모가 이중 유입되던 버그).
         ime_composing: bool,
-        /// 타임아웃으로 IME 세션을 강제 리셋한 직후 — 리셋이 유발하는 커밋 1회 무시
-        /// (묵은 조합 "김"이 다음 키에서 확정돼 "김최"가 되던 버그).
-        drop_next_commit: bool,
         /// OS 주 수식키(⌘/Ctrl) 눌림 상태 — `Cmd/Ctrl+,` 판정.
         primary_down: bool,
         /// 세션 액터가 GUI를 깨우는 통로(M2-7).
@@ -1691,16 +1688,9 @@ mod app_window {
                 let now_ms = self.now_ms();
                 let mut inv = Invalidations::default();
                 if self.list.typeahead_tick(now_ms, &mut inv) {
-                    // IME 조합 세션도 함께 리셋 — 세션이 살아 있으면 다음 키에서 묵은
-                    // 조합("김")이 Commit으로 유입돼 "김최"가 된다(사용자 보고).
-                    // 강제 종료(off→on)가 커밋을 유발할 수 있어 1회 무시 플래그를 세운다.
+                    // 묵은 IME 조합(marked text)은 TypeAhead가 stale 접두사로 기억해
+                    // 이후 Preedit/Commit에서 벗겨낸다("김최" 유입 차단 — 결정적 방식).
                     if let Some(id) = self.main_id {
-                        if let Some(e) = self.windows.get(&id) {
-                            e.window.set_ime_allowed(false);
-                            e.window.set_ime_allowed(true);
-                        }
-                        self.drop_next_commit = true;
-                        self.ime_composing = false;
                         self.request_redraw(id);
                     }
                 }
@@ -1754,9 +1744,6 @@ mod app_window {
                 WindowEvent::Ime(winit::event::Ime::Preedit(text, _)) => {
                     // 조합 세션 추적 — 비어 있지 않으면 조합 중(KeyboardInput 문자 차단 근거).
                     self.ime_composing = !text.is_empty();
-                    if self.ime_composing {
-                        self.drop_next_commit = false; // 새 조합 시작 = 리셋 커밋 무시 해제
-                    }
                     // 조합 중 — 대화 뷰면 프리에딧 밑줄(M3-3), 목록 모드면 실시간 타입어헤드.
                     if let Some(peer) = self.chat_peer_for(id) {
                         let mut inv = Invalidations::default();
@@ -1774,9 +1761,6 @@ mod app_window {
                 }
                 WindowEvent::Ime(winit::event::Ime::Commit(text)) => {
                     self.ime_composing = false; // 확정 = 조합 종료
-                    if std::mem::take(&mut self.drop_next_commit) {
-                        return; // 타임아웃 리셋이 유발한 묵은 조합 커밋 — 버린다
-                    }
                     let now_ms = self.now_ms();
                     for c in text.chars().filter(|c| !c.is_control()) {
                         self.route(id, InputEvent::Char { c, now_ms }, el);
@@ -2082,7 +2066,6 @@ mod app_window {
             .ok(),
             picker_view: None,
             ime_composing: false,
-            drop_next_commit: false,
             primary_down: false,
             proxy,
             adding: None,
