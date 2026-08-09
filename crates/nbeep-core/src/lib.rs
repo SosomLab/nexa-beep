@@ -30,6 +30,7 @@ pub mod session;
 pub mod trust;
 pub mod trusted;
 pub mod xfer;
+pub mod xfer_policy;
 
 #[cfg(any(test, feature = "testkit"))]
 pub mod testkit;
@@ -53,6 +54,10 @@ pub use trust::{MemoryTrustStore, TrustDecision, TrustStore};
 pub use trusted::{Established, TrustedSession};
 pub use xfer::{
     chunks_of, Received, RejectWhy, XferError, XferId, XferInbox, XferMsg, MAX_CHUNK, MAX_FILE,
+};
+pub use xfer_policy::{
+    check_send_eligibility, judge_offer, ApprovalPolicy, AutoWindow, BasicApproval, DenyReason,
+    Exchange, ExchangeLedger, OfferVerdict,
 };
 
 #[cfg(test)]

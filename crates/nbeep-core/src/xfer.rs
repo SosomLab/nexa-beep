@@ -47,6 +47,10 @@ pub enum RejectWhy {
     TooLarge,
     /// 동시 전송 상한 등 일시 불가.
     Busy,
+    /// **상호 확인되지 않은 사용자** — 양방향 대화 기록 없음(사용자 확정 규칙 08-09).
+    Unverified,
+    /// 수신자가 파일 수신을 거부로 설정.
+    Blocked,
 }
 
 impl RejectWhy {
@@ -55,12 +59,16 @@ impl RejectWhy {
             Self::Declined => 0,
             Self::TooLarge => 1,
             Self::Busy => 2,
+            Self::Unverified => 3,
+            Self::Blocked => 4,
         }
     }
     fn from_byte(b: u8) -> Self {
         match b {
             1 => Self::TooLarge,
             2 => Self::Busy,
+            3 => Self::Unverified,
+            4 => Self::Blocked,
             _ => Self::Declined, // 미지 사유 = 일반 거절(전방 호환)
         }
     }
