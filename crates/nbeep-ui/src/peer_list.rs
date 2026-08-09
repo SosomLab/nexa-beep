@@ -117,6 +117,8 @@ pub struct PeerListWidget {
     ta_special: bool,
     /// 마지막으로 관측한 단조 시각(ms) — Key 이벤트엔 시각이 없어 힌트로 보관(↑↓ touch용).
     now_hint: u64,
+    /// 더블클릭 판정 — 마지막 클릭 (행, 시각 ms). 같은 행 500ms 내 재클릭 = Enter와 동일.
+    last_click: Option<(usize, u64)>,
     /// 배율(고DPI — FR-U-6). 행 높이·여백에 곱한다. 좌표·bounds는 물리 px.
     scale: f32,
 }
@@ -144,6 +146,7 @@ impl PeerListWidget {
             ta_space: true,
             ta_special: true,
             now_hint: 0,
+            last_click: None,
             scale: 1.0,
         }
     }
@@ -437,6 +440,21 @@ impl Widget for PeerListWidget {
             InputEvent::MouseDown { y, .. } => {
                 if let Some(i) = self.row_at(y) {
                     self.move_caret(i, inv);
+                    // 더블클릭 = Enter 동일 동작(사용자 확정 08-09) — 같은 행 500ms 내 재클릭.
+                    // 시각은 now_hint(~5Hz 틱 해상도 ±200ms)라 여유 있는 임계값을 쓴다.
+                    let now = self.now_hint;
+                    if let Some((li, lt)) = self.last_click {
+                        if li == i && now.saturating_sub(lt) <= 500 {
+                            if let Some(row) = self.rows.get(i) {
+                                self.activated = Some(row.entry.peer);
+                            }
+                            self.last_click = None; // 트리플클릭 중복 활성화 방지
+                            return;
+                        }
+                    }
+                    self.last_click = Some((i, now));
+                } else {
+                    self.last_click = None;
                 }
             }
             InputEvent::MouseMove { y, .. } => {
@@ -636,6 +654,31 @@ mod tests {
         // 4행 가시 창에서 마지막 행이 보이려면 top = 6.
         let rects: Vec<_> = inv.drain().collect();
         assert!(!rects.is_empty(), "스크롤 = 전체 무효화");
+    }
+
+    #[test]
+    fn double_click_activates_like_enter() {
+        let (mut w, mut inv) = widget(&[(1, "alice"), (2, "bob")]);
+        w.typeahead_tick(1_000, &mut inv); // now_hint 주입
+        let down = |y| InputEvent::MouseDown {
+            x: 10,
+            y,
+            shift: false,
+            primary: false,
+        };
+        // 두 번째 행 더블클릭 = Enter 동일(활성화).
+        let y2 = ROW_H + 5;
+        w.on_event(&down(y2), &mut inv);
+        assert_eq!(w.take_activated(), None, "싱글클릭 = 선택만");
+        w.on_event(&down(y2), &mut inv);
+        assert_eq!(w.take_activated(), Some(pid(2)), "더블클릭 = 활성화");
+        // 트리플클릭이 또 활성화하지 않는다(활성화 직후 해제 — 이 클릭은 다시 무장).
+        w.on_event(&down(y2), &mut inv);
+        assert_eq!(w.take_activated(), None);
+        // 시간 경과(500ms 초과) 후 재클릭 = 더블 아님(위 클릭이 t=1000 무장 상태).
+        w.typeahead_tick(2_000, &mut inv);
+        w.on_event(&down(y2), &mut inv);
+        assert_eq!(w.take_activated(), None, "간격 초과 = 활성화 없음");
     }
 
     #[test]

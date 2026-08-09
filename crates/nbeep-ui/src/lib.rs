@@ -15,6 +15,15 @@ pub mod brand {
     pub const ICON_SIZE: u32 = 64;
 }
 
+/// 테마 틴트용 알파 마스크 아이콘(SVG 유래) — **모양만** 담는다. 색은 그리는 쪽이
+/// 테마 기준색(다크=밝은 회색·라이트=아주 어두운 회색 = `Theme::text`)으로 입힌다.
+pub mod icons {
+    /// 새로고침(회전 화살표 2개) 96×96 알파 마스크(1채널 = 96*96).
+    pub const REFRESH_ALPHA: &[u8] = include_bytes!("../assets/icon-refresh-96.alpha");
+    /// 변 크기(px).
+    pub const REFRESH_SIZE: u32 = 96;
+}
+
 pub mod about;
 pub mod chat_view;
 pub mod controls;

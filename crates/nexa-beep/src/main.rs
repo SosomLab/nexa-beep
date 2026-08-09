@@ -1793,6 +1793,7 @@ mod app_window {
             }
             let attrs = Window::default_attributes()
                 .with_title("Nexa Beep")
+                .with_inner_size(winit::dpi::LogicalSize::new(460.0, 640.0)) // 기본 크기(사용자 확정 08-09)
                 .with_window_icon(self.icon.clone());
             let window = Rc::new(el.create_window(attrs).unwrap());
             // 목록(타입어헤드) = IME **끔** — raw 자모를 앱이 직접 조합(hangul::Composer ·
@@ -2298,7 +2299,14 @@ mod app_window {
             about_view: None,
             menu: MenuBar::new(build_menus()),
             toolbar: Toolbar::new(vec![
-                ToolItem::new("refresh", ToolIcon::Refresh),
+                ToolItem::new(
+                    "refresh",
+                    ToolIcon::Mask {
+                        w: nbeep_ui::icons::REFRESH_SIZE,
+                        h: nbeep_ui::icons::REFRESH_SIZE,
+                        alpha: nbeep_ui::icons::REFRESH_ALPHA,
+                    },
+                ),
                 ToolItem::new(
                     "gallery",
                     ToolIcon::Image(std::rc::Rc::new(nbeep_ui::IconImage::from_rgba(

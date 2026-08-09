@@ -162,12 +162,13 @@ pub trait Control: crate::widget::Widget {
         (logical as f32 * self.base().scale).round() as i32
     }
 
-    /// 키보드 포커스 지정. 포커스를 잃으면 열린 도움말 툴팁도 닫는다.
+    /// 키보드 포커스 지정.
+    ///
+    /// ⚠️ 도움말 툴팁은 여기서 닫지 않는다 — 바깥 클릭 닫기는 [`Control::handle_help_click`]이
+    /// 담당한다. 호스트가 클릭마다 포커스를 재계산하는 구조에서 "?" 배지는 컨트롤 bounds
+    /// 밖이라, 여기서 닫으면 "닫기→토글" 순서가 되어 재클릭 닫기가 영원히 무효화된다(08-09).
     fn set_focused(&mut self, on: bool) {
         self.base_mut().focused = on;
-        if !on {
-            self.base_mut().help_open = false;
-        }
     }
     /// 키보드 포커스 여부.
     fn is_focused(&self) -> bool {
@@ -267,22 +268,33 @@ pub trait Control: crate::widget::Widget {
         Rect::new(after.right() + gap, cy, d, d)
     }
 
-    /// "?" 배지를 그린다(도움말 사용 시).
+    /// "?" 배지를 그린다(도움말 사용 시). 툴팁이 열려 있으면 **눌린 상태로 반전** —
+    /// 체크박스와 같은 밝은 파랑 채움 + 흰 "?"(직관적 식별 · 사용자 확정 08-09).
     fn draw_help_badge(&self, ctx: &mut dyn DrawCtx, theme: &Theme, badge: Rect) {
         if !self.has_help_badge() {
             return;
         }
-        ctx.fill_ellipse(badge, theme.field_bg);
-        ctx.stroke_round_rect(badge, badge.w / 2, theme.border, 1.0);
+        let open = self.base().help_open;
+        if open {
+            ctx.fill_ellipse(badge, self.accent_now(theme));
+        } else {
+            ctx.fill_ellipse(badge, theme.field_bg);
+            ctx.stroke_round_rect(badge, badge.w / 2, theme.border, 1.0);
+        }
         ctx.select_font(FontSlot::Status, false);
         let qw = ctx.text_width("?");
+        let fg = if open {
+            Color::from_rgb(255, 255, 255)
+        } else {
+            theme.text_dim
+        };
         // "?"를 배지 정중앙에(가로·세로) — 상태 글꼴 높이 기준으로 세로 중앙 정렬.
         ctx.text(
             badge.x + (badge.w - qw) / 2,
             badge.y + (badge.h - self.s(13)) / 2,
             badge,
             "?",
-            theme.text_dim,
+            fg,
         );
     }
 
