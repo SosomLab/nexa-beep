@@ -342,51 +342,24 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
     println!("[끝]");
 }
 
-/// 수신 완료물 → **무해화 게이트 합류**: SHA-256 대조 → 판정 → `.beepq` 봉인 → 격리 저장.
-/// 원본이 평문으로 디스크에 닿지 않는다 — 실체화는 사용자 승인 후 별도 경로(FR-S-5~9).
+/// 수신 완료물 → **무해화 게이트 합류**(공용 [`crate::gate`]) 후 결과를 stdout에 보고.
 fn receive_into_quarantine(got: &nbeep_core::Received, sender: PeerId) {
-    use nbeep_safe::{classify, Beepq, Meta, QuarantineDir};
-    let actual = nbeep_crypto::sha256(&got.bytes);
-    if actual != got.declared_sha256 {
-        println!("[파일] SHA-256 불일치 — 즉시 폐기(FR-X-6)");
-        return;
-    }
-    let name = String::from_utf8_lossy(&got.name).into_owned();
-    let v = classify(&name, &got.bytes);
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let meta = Meta {
-        orig_name: got.name.clone(),
-        declared_ext: nbeep_safe::risk::extension_of(&name),
-        declared_mime: String::new(),
-        detected_kind: v.detected.name().into(),
-        risk: v.risk,
-        sender,
-        received_at: now,
-        expires_at: now + 7 * 24 * 3600,
-        scan: nbeep_core::ScanOutcome::Unavailable,
-        xfer: String::new(),
-    };
-    let sealed = Beepq::seal(&got.bytes, actual, &meta);
-    match QuarantineDir::open(std::env::temp_dir().join("nexa-beep-quarantine"))
-        .and_then(|q| q.save(&actual, &sealed))
-    {
-        Ok(p) => {
+    match crate::gate::quarantine_received(got, sender) {
+        Ok(q) => {
             println!(
-                "[파일] 격리 수신 완료: {name} · risk={:?}{} · {}",
-                v.risk,
-                if v.mismatch {
+                "[파일] 격리 수신 완료: {} · risk={:?}{} · {}",
+                q.name,
+                q.risk,
+                if q.mismatch {
                     " · ⚠️ 형식 불일치"
                 } else {
                     ""
                 },
-                p.display()
+                q.path.display()
             );
             println!("       (실체화는 승인 후 --quarantine-demo 참조 — 자동 실체화 없음)");
         }
-        Err(e) => println!("[파일] 격리 저장 실패: {e} — 수신물 폐기"),
+        Err(e) => println!("[파일] {e} — 수신물 폐기"),
     }
 }
 

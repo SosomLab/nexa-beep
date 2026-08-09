@@ -71,6 +71,45 @@ enum AppEvent {
     /// **인바운드** — 남이 나에게 연결해 핸드셰이크가 끝난 세션(아직 TOFU 미판정).
     /// GUI(메인 스레드)가 TrustStore로 판정 후 대화·창을 연다.
     Inbound { session: Box<InboundSession> },
+    /// 파일 수신 제안 도착 — 사용자가 수락/거절할 때까지 데이터는 오지 않는다(FR-X-3).
+    XferOffer {
+        peer: PeerId,
+        id: nbeep_core::XferId,
+        name: String,
+        size: u64,
+    },
+    /// 전송 진행률(수신·발신 공용) — 상태바 표시용.
+    XferProgress {
+        peer: PeerId,
+        got: u64,
+        total: u64,
+        sending: bool,
+    },
+    /// 수신 완료 → **격리 보관까지 끝남**(실체화는 승인 후 별도 · FR-S-9).
+    XferDone {
+        peer: PeerId,
+        name: String,
+        risk: nbeep_core::RiskLevel,
+        mismatch: bool,
+    },
+    /// 전송 실패·거절 — 사유 문장(표시 전용).
+    XferFailed { peer: PeerId, why: String },
+}
+
+/// 세션 액터에 보내는 명령 — 대화 바이트와 파일 제어를 한 채널로 교대한다.
+enum SessionCmd {
+    /// 인코딩된 `ChatMessage`.
+    Chat(Vec<u8>),
+    /// 파일 오퍼 발신(원본은 액터가 들고 있다가 상대 수락 시 청크 전송).
+    OfferFile {
+        id: nbeep_core::XferId,
+        name: String,
+        sha: [u8; 32],
+        bytes: Vec<u8>,
+    },
+    /// 수신 제안 수락/거절(사용자 결정 — 자동 경로 없음).
+    AcceptXfer(nbeep_core::XferId),
+    RejectXfer(nbeep_core::XferId),
 }
 
 /// 인바운드 세션 봉투 — `AppEvent`가 Debug라야 해서 수동 Debug.
@@ -86,8 +125,10 @@ impl std::fmt::Debug for InboundSession {
 /// 대화 상태 — **뷰(창)와 분리**(DR-26). 세션은 **액터 스레드**가 소유하고, 여기엔 그
 /// 액터로 보내는 송신 채널과 스레드 이력만 둔다(M2-7 — 비동기 수신 펌프).
 struct Conversation {
-    /// 액터에 보낼 발신 바이트(인코딩된 `ChatMessage`). 드롭 = 액터 종료 신호.
-    out_tx: std::sync::mpsc::Sender<Vec<u8>>,
+    /// 액터에 보낼 명령(대화 바이트·파일 제어). 드롭 = 액터 종료 신호.
+    out_tx: std::sync::mpsc::Sender<SessionCmd>,
+    /// 수락 대기 중인 수신 제안(있으면 상태바가 수락/거절을 안내).
+    pending_offer: Option<(nbeep_core::XferId, String)>,
     lines: Vec<ChatLine>,
 }
 
@@ -96,29 +137,70 @@ struct Conversation {
 /// 하므로, 송신은 채널로 요청받는 액터 모델이 정석이다.
 fn spawn_session_actor(
     mut session: LiveSession,
-    out_rx: std::sync::mpsc::Receiver<Vec<u8>>,
+    out_rx: std::sync::mpsc::Receiver<SessionCmd>,
     proxy: winit::event_loop::EventLoopProxy<AppEvent>,
 ) {
     use nbeep_core::mux::StreamId;
+    use nbeep_core::{XferInbox, XferMsg};
     let peer = session.peer();
-    // 수신 폴 타임아웃 — recv가 200ms마다 TimedOut으로 돌아와 송신과 교대한다.
-    session.set_recv_timeout(Some(std::time::Duration::from_millis(200)));
+    // 수신 폴 타임아웃 — recv가 100ms마다 TimedOut으로 돌아와 송신과 교대한다.
+    session.set_recv_timeout(Some(std::time::Duration::from_millis(100)));
     std::thread::spawn(move || {
+        // 파일 상태는 액터가 소유한다 — GUI 스레드는 이벤트만 받는다(대용량 조립이
+        // 메인 스레드를 막지 않게).
+        let mut inbox = XferInbox::new();
+        let mut outgoing: HashMap<nbeep_core::XferId, Vec<u8>> = HashMap::new();
         loop {
             // 송신 먼저(즉시성) — 대기 중 발신 요청을 모두 흘려보낸다.
             loop {
-                match out_rx.try_recv() {
-                    Ok(bytes) => {
-                        if session.send(StreamId::Chat, &bytes).is_err() {
-                            let _ = proxy.send_event(AppEvent::Closed { peer });
-                            return;
-                        }
-                    }
+                let cmd = match out_rx.try_recv() {
+                    Ok(c) => c,
                     Err(std::sync::mpsc::TryRecvError::Empty) => break,
                     Err(std::sync::mpsc::TryRecvError::Disconnected) => return, // 대화 닫힘
+                };
+                let sent = match cmd {
+                    SessionCmd::Chat(bytes) => session.send(StreamId::Chat, &bytes),
+                    SessionCmd::OfferFile {
+                        id,
+                        name,
+                        sha,
+                        bytes,
+                    } => {
+                        let offer = XferMsg::Offer {
+                            id,
+                            size: bytes.len() as u64,
+                            sha256: sha,
+                            name: name.into_bytes(),
+                        };
+                        outgoing.insert(id, bytes);
+                        session.send(StreamId::File, &offer.encode())
+                    }
+                    SessionCmd::AcceptXfer(id) => {
+                        if inbox.accept(&id).is_ok() {
+                            session.send(StreamId::File, &XferMsg::Accept { id }.encode())
+                        } else {
+                            Ok(())
+                        }
+                    }
+                    SessionCmd::RejectXfer(id) => {
+                        inbox.drop_xfer(&id);
+                        session.send(
+                            StreamId::File,
+                            &XferMsg::Reject {
+                                id,
+                                why: nbeep_core::RejectWhy::Declined,
+                                limit: 0,
+                            }
+                            .encode(),
+                        )
+                    }
+                };
+                if sent.is_err() {
+                    let _ = proxy.send_event(AppEvent::Closed { peer });
+                    return;
                 }
             }
-            // 수신 폴.
+            // 대화 수신 폴.
             match session.recv(StreamId::Chat) {
                 Ok(bytes) => {
                     if let Ok(m) = nbeep_core::ChatMessage::decode(&bytes, peer) {
@@ -141,8 +223,151 @@ fn spawn_session_actor(
                     return;
                 }
             }
+            // 파일 수신 폴.
+            match session.recv(StreamId::File) {
+                Ok(bytes) => {
+                    if xfer_step(
+                        &bytes,
+                        peer,
+                        &mut session,
+                        &mut inbox,
+                        &mut outgoing,
+                        &proxy,
+                    )
+                    .is_err()
+                    {
+                        let _ = proxy.send_event(AppEvent::Closed { peer });
+                        return;
+                    }
+                }
+                Err(nbeep_core::SessionError::TimedOut) => {}
+                Err(_) => {
+                    let _ = proxy.send_event(AppEvent::Closed { peer });
+                    return;
+                }
+            }
         }
     });
+}
+
+/// 사람이 읽는 크기 표기(상태바) — 1024 단위.
+fn human_size(bytes: u64) -> String {
+    const K: u64 = 1024;
+    match bytes {
+        b if b >= K * K => format!("{:.1}MiB", b as f64 / (K * K) as f64),
+        b if b >= K => format!("{:.1}KiB", b as f64 / K as f64),
+        b => format!("{b}B"),
+    }
+}
+
+/// 파일 스트림 한 프레임 처리(액터 스레드) — 오류 = 세션 종료 신호.
+fn xfer_step(
+    bytes: &[u8],
+    peer: PeerId,
+    session: &mut LiveSession,
+    inbox: &mut nbeep_core::XferInbox,
+    outgoing: &mut HashMap<nbeep_core::XferId, Vec<u8>>,
+    proxy: &winit::event_loop::EventLoopProxy<AppEvent>,
+) -> Result<(), ()> {
+    use nbeep_core::mux::StreamId;
+    use nbeep_core::{chunks_of, XferMsg};
+    let fail = |why: String| {
+        let _ = proxy.send_event(AppEvent::XferFailed { peer, why });
+    };
+    match XferMsg::decode(bytes) {
+        Ok(XferMsg::Offer { id, size, name, .. }) => {
+            let m = XferMsg::decode(bytes).map_err(|_| ())?;
+            match inbox.offer(&m) {
+                Ok(()) => {
+                    let _ = proxy.send_event(AppEvent::XferOffer {
+                        peer,
+                        id,
+                        name: String::from_utf8_lossy(&name).into_owned(),
+                        size,
+                    });
+                }
+                Err(e) => {
+                    // 상한 초과 = 자동 거절 + **수신측 상한 공지**(발신자 재시도 판단 근거).
+                    let msg = XferMsg::Reject {
+                        id,
+                        why: nbeep_core::RejectWhy::TooLarge,
+                        limit: inbox.max_file(),
+                    };
+                    session
+                        .send(StreamId::File, &msg.encode())
+                        .map_err(|_| ())?;
+                    fail(format!("수신 거부: {e}"));
+                }
+            }
+        }
+        Ok(XferMsg::Accept { id }) => {
+            if let Some(data) = outgoing.remove(&id) {
+                let total = data.len() as u64;
+                for c in chunks_of(id, &data) {
+                    let nbeep_core::XferMsg::Chunk {
+                        offset, ref data, ..
+                    } = c
+                    else {
+                        continue;
+                    };
+                    let done = offset + data.len() as u64;
+                    session.send(StreamId::File, &c.encode()).map_err(|_| ())?;
+                    let _ = proxy.send_event(AppEvent::XferProgress {
+                        peer,
+                        got: done,
+                        total,
+                        sending: true,
+                    });
+                }
+                session
+                    .send(StreamId::File, &XferMsg::Done { id }.encode())
+                    .map_err(|_| ())?;
+            }
+        }
+        Ok(XferMsg::Reject { id, why, limit }) => {
+            outgoing.remove(&id);
+            let extra = if limit > 0 {
+                format!(" (상대 수신 상한 {}MiB)", limit / (1024 * 1024))
+            } else {
+                String::new()
+            };
+            fail(format!("상대가 거절: {why:?}{extra}"));
+        }
+        Ok(XferMsg::Chunk { id, offset, data }) => match inbox.chunk(&id, offset, &data) {
+            Ok(()) => {
+                if let Some((got, total)) = inbox.progress(&id) {
+                    let _ = proxy.send_event(AppEvent::XferProgress {
+                        peer,
+                        got,
+                        total,
+                        sending: false,
+                    });
+                }
+            }
+            Err(e) => fail(format!("수신 오류: {e} — 폐기")),
+        },
+        Ok(XferMsg::Done { id }) => match inbox.done(&id) {
+            Ok(got) => match crate::gate::quarantine_received(&got, peer) {
+                Ok(q) => {
+                    let _ = proxy.send_event(AppEvent::XferDone {
+                        peer,
+                        name: q.name,
+                        risk: q.risk,
+                        mismatch: q.mismatch,
+                    });
+                }
+                Err(e) => fail(format!("{e}")),
+            },
+            Err(e) => fail(format!("완료 실패: {e} — 폐기")),
+        },
+        Ok(XferMsg::Cancel { id }) => {
+            inbox.drop_xfer(&id);
+            outgoing.remove(&id);
+            fail("상대가 취소".into());
+        }
+        Err(e) => fail(format!("와이어 오류: {e}")),
+    }
+    Ok(())
 }
 
 /// OS 창 하나 — 역할(목록/특정 대화) + 표면 + 창별 상태.
@@ -431,6 +656,83 @@ impl App {
         }
     }
 
+    /// 드롭된 파일을 이 창의 대화 상대에게 **제안**한다(수락 전 데이터 전송 없음 · FR-X-3).
+    fn offer_file(&mut self, id: WindowId, path: &std::path::Path) {
+        let Some(peer) = self.chat_peer_for(id) else {
+            self.status = "파일 전송은 대화를 연 뒤에 — 상대를 먼저 선택하라".into();
+            self.request_redraw(id);
+            return;
+        };
+        let bytes = match std::fs::read(path) {
+            Ok(b) => b,
+            Err(e) => {
+                self.status = format!("파일 읽기 실패: {e}");
+                self.request_redraw(id);
+                return;
+            }
+        };
+        let name = path
+            .file_name()
+            .map_or_else(|| "file".to_string(), |n| n.to_string_lossy().into_owned());
+        // 전송 id — 새 키의 앞 16B(세션 내 유일하면 충분한 간이 난수).
+        let mut xid = [0u8; 16];
+        xid.copy_from_slice(&nbeep_crypto::Identity::generate().peer_id().as_bytes()[..16]);
+        let sha = nbeep_crypto::sha256(&bytes);
+        let size = bytes.len() as u64;
+        let Some(conv) = self.conversations.get(&peer) else {
+            self.status = "세션이 없다 — 대화를 다시 열어라".into();
+            self.request_redraw(id);
+            return;
+        };
+        if conv
+            .out_tx
+            .send(SessionCmd::OfferFile {
+                id: xid,
+                name: name.clone(),
+                sha,
+                bytes,
+            })
+            .is_err()
+        {
+            self.status = "세션이 끊겨 전송할 수 없다".into();
+        } else {
+            self.status = format!("파일 제안: {name} ({}) — 상대 수락 대기", human_size(size));
+        }
+        self.request_redraw(id);
+    }
+
+    /// 수신 제안에 답한다(⌘/Ctrl+Y 수락 · ⌘/Ctrl+N 거절) — **사용자 명시 결정만**(FR-S-9).
+    fn answer_offer(&mut self, id: WindowId, accept: bool) {
+        let Some(peer) = self.chat_peer_for(id) else {
+            return;
+        };
+        let Some(conv) = self.conversations.get_mut(&peer) else {
+            return;
+        };
+        let Some((xid, name)) = conv.pending_offer.clone() else {
+            self.status = "수락 대기 중인 파일 제안이 없다".into();
+            self.request_redraw(id);
+            return;
+        };
+        let cmd = if accept {
+            SessionCmd::AcceptXfer(xid)
+        } else {
+            SessionCmd::RejectXfer(xid)
+        };
+        let ok = conv.out_tx.send(cmd).is_ok();
+        if !accept || !ok {
+            conv.pending_offer = None;
+        }
+        self.status = if !ok {
+            "세션이 끊겨 응답하지 못했다".into()
+        } else if accept {
+            format!("수락 — {name} 수신 시작")
+        } else {
+            format!("거절 — {name}")
+        };
+        self.request_redraw(id);
+    }
+
     /// `peer` 대화가 보이는 창을 다시 그린다(Separate = 그 창, Single = 주 창이 이 대화일 때).
     fn redraw_conversation(&self, peer: PeerId) {
         match self.mode {
@@ -570,6 +872,7 @@ impl App {
             peer,
             Conversation {
                 out_tx,
+                pending_offer: None,
                 lines: Vec::new(),
             },
         );
@@ -992,7 +1295,7 @@ impl App {
             if let Some(conv) = self.conversations.get_mut(&peer) {
                 conv.lines.push(ChatLine { mine: true, text });
                 // 액터에 발신 요청 — 수신은 비동기로 AppEvent::Recv로 돌아온다(M2-7).
-                if conv.out_tx.send(msg.encode()).is_err() {
+                if conv.out_tx.send(SessionCmd::Chat(msg.encode())).is_err() {
                     self.status = "세션 종료됨".into();
                 } else {
                     self.status = format!("전송 seq={} (응답 대기)", msg.seq);
@@ -1320,6 +1623,64 @@ impl ApplicationHandler<AppEvent> for App {
                 // 이 대화가 보이는 창을 다시 그린다.
                 self.redraw_conversation(peer);
             }
+            AppEvent::XferOffer {
+                peer,
+                id,
+                name,
+                size,
+            } => {
+                // 수락 전에는 데이터가 오지 않는다 — 사용자 결정 대기(FR-X-3 · 자동 수락 없음).
+                if let Some(c) = self.conversations.get_mut(&peer) {
+                    c.pending_offer = Some((id, name.clone()));
+                }
+                self.status = format!(
+                    "파일 수신 요청: {name} ({}) — ⌘/Ctrl+Y 수락 · ⌘/Ctrl+N 거절",
+                    human_size(size)
+                );
+                self.redraw_conversation(peer);
+            }
+            AppEvent::XferProgress {
+                peer,
+                got,
+                total,
+                sending,
+            } => {
+                let pct = got.checked_mul(100).and_then(|n| n.checked_div(total)).unwrap_or(0);
+                self.status = format!(
+                    "파일 {} {pct}% ({} / {})",
+                    if sending { "전송" } else { "수신" },
+                    human_size(got),
+                    human_size(total)
+                );
+                self.redraw_conversation(peer);
+            }
+            AppEvent::XferDone {
+                peer,
+                name,
+                risk,
+                mismatch,
+            } => {
+                // 격리 보관까지 끝난 상태 — **실체화는 승인 후 별도**(FR-S-9).
+                self.status = format!(
+                    "파일 격리 완료: {name} · 위험 {risk:?}{} — 승인 전까지 실행 불가",
+                    if mismatch {
+                        " · ⚠️ 형식 불일치"
+                    } else {
+                        ""
+                    }
+                );
+                if let Some(c) = self.conversations.get_mut(&peer) {
+                    c.pending_offer = None;
+                }
+                self.redraw_conversation(peer);
+            }
+            AppEvent::XferFailed { peer, why } => {
+                self.status = format!("파일: {why}");
+                if let Some(c) = self.conversations.get_mut(&peer) {
+                    c.pending_offer = None;
+                }
+                self.redraw_conversation(peer);
+            }
             AppEvent::Closed { peer } => {
                 self.conversations.remove(&peer);
                 self.closed_peers.insert(peer); // 목록 상태 점 = 끊김(빨강)
@@ -1483,6 +1844,10 @@ impl ApplicationHandler<AppEvent> for App {
                     self.route(id, InputEvent::Char { c, now_ms }, el);
                 }
             }
+            WindowEvent::DroppedFile(path) => {
+                // 드래그앤드롭 = 파일 전송 시작(FR-X-1). 대화가 열린 창에서만 의미가 있다.
+                self.offer_file(id, &path);
+            }
             WindowEvent::CursorMoved { position, .. } => {
                 if let Some(e) = self.windows.get_mut(&id) {
                     e.cursor = (position.x as i32, position.y as i32);
@@ -1584,6 +1949,14 @@ impl ApplicationHandler<AppEvent> for App {
                             }
                             "g" | "G" => {
                                 self.open_gallery(el);
+                                return;
+                            }
+                            "y" | "Y" => {
+                                self.answer_offer(id, true);
+                                return;
+                            }
+                            "n" | "N" => {
+                                self.answer_offer(id, false);
                                 return;
                             }
                             "k" | "K" => {

@@ -17,6 +17,7 @@
 
 mod app;
 mod cli;
+mod gate;
 
 use cli::chat::{chat_interactive, chat_live, ChatRole};
 use cli::manual::{connect_manual, serve_manual};
