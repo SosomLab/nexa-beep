@@ -16,6 +16,7 @@ use crate::event::InputEvent;
 use crate::geom::Rect;
 use crate::theme::Theme;
 use crate::widget::{Invalidations, Widget};
+use nbeep_core::{t, Msg};
 
 /// 화면에 띄울 제안 정보(호스트가 채운다).
 #[derive(Clone, Debug)]
@@ -85,9 +86,9 @@ impl OfferPromptWidget {
             scale: 1.0,
             info,
             window: Combo::new(items, 0),
-            auto_btn: Button::new("자동 승인"),
-            approve: Button::new("승인"),
-            cancel: TimeoutButton::new("취소", timeout_secs.saturating_mul(1000)),
+            auto_btn: Button::new(t(Msg::OfferAutoBtn)),
+            approve: Button::new(t(Msg::QApprove)),
+            cancel: TimeoutButton::new(t(Msg::OfferCancel), timeout_secs.saturating_mul(1000)),
             choice: None,
         }
     }
@@ -195,9 +196,9 @@ impl Widget for OfferPromptWidget {
         ctx.select_font(FontSlot::Base, true);
         let th = ctx.text_height();
         let title = if self.info.queued > 1 {
-            format!("파일 수신 요청 (대기 {}건)", self.info.queued)
+            format!("{} ({})", t(Msg::OfferTitle), self.info.queued)
         } else {
-            "파일 수신 요청".to_string()
+            t(Msg::OfferTitle).to_string()
         };
         ctx.text(b.x + pad, b.y + pad, b, &title, theme.text);
 
@@ -205,10 +206,10 @@ impl Widget for OfferPromptWidget {
         let mut y = b.y + pad + th + self.s(12);
         let label_w = self.s(88);
         let rows = [
-            ("보낸 사람", self.info.sender.clone()),
-            ("받은 시각", self.info.when.clone()),
-            ("파일 이름", self.info.name.clone()),
-            ("크기", human(self.info.size)),
+            (t(Msg::OfferSender), self.info.sender.clone()),
+            (t(Msg::OfferWhen), self.info.when.clone()),
+            (t(Msg::OfferName), self.info.name.clone()),
+            (t(Msg::OfferSize), human(self.info.size)),
         ];
         for (k, v) in rows {
             ctx.select_font(FontSlot::Status, false);
@@ -229,7 +230,7 @@ impl Widget for OfferPromptWidget {
             b.x + pad,
             y + self.s(8),
             b,
-            "승인해도 격리함에 보관됩니다 — 실행 가능한 파일이 되려면 별도 승인이 필요합니다",
+            t(Msg::OfferQuarantineNote),
             theme.text_dim,
         );
         let _ = sh;

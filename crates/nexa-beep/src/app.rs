@@ -31,7 +31,7 @@ fn build_menus() -> Vec<MenuDef> {
             t(Msg::MenuLabel),
             vec![
                 MenuEntry::Item(ComboItem::new("settings", t(Msg::SettingsTitle))),
-                MenuEntry::Item(ComboItem::new("quarantine", "격리함")),
+                MenuEntry::Item(ComboItem::new("quarantine", t(Msg::QuarantineTitle))),
                 MenuEntry::Item(ComboItem::new("gallery", t(Msg::MenuGallery))),
             ],
         ),
@@ -1468,7 +1468,10 @@ impl App {
             return;
         }
         let attrs = Window::default_attributes()
-            .with_title("Nexa Beep — 격리함")
+            .with_title(format!(
+                "Nexa Beep — {}",
+                nbeep_core::t(nbeep_core::Msg::QuarantineTitle)
+            ))
             .with_inner_size(winit::dpi::LogicalSize::new(620.0, 420.0))
             .with_window_icon(self.icon.clone());
         let window = Rc::new(el.create_window(attrs).unwrap());

@@ -22,7 +22,7 @@ use crate::geom::{Point, Rect};
 use crate::peer_list::badge;
 use crate::theme::{Color, Theme};
 use crate::widget::{Invalidations, Widget};
-use nbeep_core::{RiskLevel, TrustLevel};
+use nbeep_core::{t, Msg, RiskLevel, TrustLevel};
 
 /// 목록 한 줄 — 호스트가 `.beepq` 메타에서 채운다.
 #[derive(Clone, Debug)]
@@ -58,20 +58,20 @@ const BAR_H: i32 = 44;
 /// 등급 라벨 + 색.
 fn risk_badge(risk: RiskLevel, theme: &Theme) -> (&'static str, Color) {
     match risk {
-        RiskLevel::Executable => ("실행형", theme.danger),
-        RiskLevel::ActiveDocument => ("능동 문서", theme.warn),
-        RiskLevel::Archive => ("아카이브", theme.accent),
-        RiskLevel::Data => ("데이터", theme.ok),
+        RiskLevel::Executable => (t(Msg::RiskExec), theme.danger),
+        RiskLevel::ActiveDocument => (t(Msg::RiskActive), theme.warn),
+        RiskLevel::Archive => (t(Msg::RiskArchive), theme.accent),
+        RiskLevel::Data => (t(Msg::RiskData), theme.ok),
     }
 }
 
 /// 등급별 안내 문구([docs/11] §7).
 fn risk_note(risk: RiskLevel) -> &'static str {
     match risk {
-        RiskLevel::Executable => "실행형 — 승인해도 앱이 실행하지 않는다. OS 보호 표식이 붙는다",
-        RiskLevel::ActiveDocument => "능동 문서 — 매크로·스크립트가 있을 수 있다(보호된 보기 권장)",
-        RiskLevel::Archive => "아카이브 — 저장만 된다. 자동으로 풀지 않는다",
-        RiskLevel::Data => "데이터 — 일반 파일",
+        RiskLevel::Executable => t(Msg::RiskExecNote),
+        RiskLevel::ActiveDocument => t(Msg::RiskActiveNote),
+        RiskLevel::Archive => t(Msg::RiskArchiveNote),
+        RiskLevel::Data => t(Msg::RiskDataNote),
     }
 }
 
@@ -115,8 +115,8 @@ impl QuarantineWidget {
             rows,
             sel: 0,
             confirming: false,
-            approve: Button::new("승인"),
-            reject: Button::new("삭제"),
+            approve: Button::new(t(Msg::QApprove)),
+            reject: Button::new(t(Msg::QReject)),
             action: None,
             back: false,
             message: None,
@@ -293,7 +293,7 @@ impl Widget for QuarantineWidget {
         ctx.fill_rect(b, theme.panel_bg);
         if self.rows.is_empty() {
             ctx.select_font(FontSlot::Base, false);
-            let msg = "격리된 파일이 없습니다";
+            let msg = t(Msg::QEmpty);
             let w = ctx.text_width(msg);
             ctx.text(
                 b.x + (b.w - w) / 2,
@@ -335,7 +335,7 @@ impl Widget for QuarantineWidget {
             );
             if self.done.contains(&row.path) {
                 ctx.select_font(FontSlot::Status, false);
-                let tag = "실체화됨";
+                let tag = t(Msg::QDoneTag);
                 let tw = ctx.text_width(tag);
                 ctx.text(
                     r.right() - sw - tw - self.s(24),
@@ -389,11 +389,7 @@ impl Widget for QuarantineWidget {
         ctx.select_font(FontSlot::Status, false);
         let sh = ctx.text_height();
         let (msg, color) = if self.confirming {
-            (
-                "위험: 실행형 파일입니다. 승인을 한 번 더 누르면 실체화합니다(Esc 취소)"
-                    .to_string(),
-                theme.danger,
-            )
+            (t(Msg::QConfirmExec).to_string(), theme.danger)
         } else if let Some((m, err)) = &self.message {
             (m.clone(), if *err { theme.danger } else { theme.ok })
         } else {
