@@ -48,6 +48,11 @@ jobs:
         run: cargo build --workspace
       - name: test
         run: cargo test --workspace --features nbeep-core/testkit,nbeep-net/testkit,nbeep-crypto/testkit
+      # ★ 안전 회귀 게이트([docs/18] 안전 송수신 · TODO §9 SEC-1) — 위 test에 이미
+      # 포함되지만 **이름을 가진 단계**로 한 번 더 돌린다. 파일 경로를 건드리는 PR에서
+      # 로그에 이 줄이 보여야 SEC-T6 트리거가 사람 기억에 의존하지 않는다.
+      - name: 안전 회귀(격리·Zip Slip·압축폭탄·파일명 무해화)
+        run: cargo test -p nbeep-safe --test safety_regression -- --nocapture
 
   # ── 크로스 빌드: 실행할 수 없는 타깃은 컴파일 검증 + 릴리스 크기 리포트 ──
   cross-build:

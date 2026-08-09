@@ -96,7 +96,7 @@ fn main() {
         app::run(mode, live);
     } else {
         println!(
-            "nexa-beep {} — scaffold (창 `--window [--live]` · 발견 `--discover-probe [초]` · 수동 `--serve`/`--connect` · 인터랙티브 `--chat-serve [port]`/`--chat-connect <host:port>`/`--chat-live [이름]`(GUI 목록에 뜸) · 무해화 실측 `--quarantine-demo <파일>` · 파일전송 수신상한 `--xfer-limit-mib <N>`(chat 모드 · 대화 중 `/send`·`/accept`·`/reject`))",
+            "nexa-beep {} — scaffold (창 `--window [--live]` · 발견 `--discover-probe [초]` · 수동 `--serve`/`--connect` · 인터랙티브 `--chat-serve [port]`/`--chat-connect <host:port>`/`--chat-live [이름]`(GUI 목록에 뜸) · 무해화 실측 `--quarantine-demo <파일>` · 파일전송 `--xfer-limit-mib <N>`·`--xfer-rate-kb <N>`(chat 모드 · 대화 중 `/send`·`/accept`·`/reject`))",
             env!("CARGO_PKG_VERSION")
         );
     }

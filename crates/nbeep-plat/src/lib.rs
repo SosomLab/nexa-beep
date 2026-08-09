@@ -4,6 +4,7 @@
 //! `unsafe`는 이 크레이트와 `nbeep-net`의 지정 모듈에만(docs/13 §10).
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
+pub mod clock;
 pub mod font;
 pub mod paths;
 pub mod quarantine;

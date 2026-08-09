@@ -24,12 +24,14 @@ pub mod name;
 pub mod peers;
 pub mod pipeline;
 pub mod ports;
+pub mod rate;
 pub mod redact;
 pub mod safetext;
 pub mod session;
 pub mod trust;
 pub mod trusted;
 pub mod xfer;
+pub mod xfer_policy;
 
 #[cfg(any(test, feature = "testkit"))]
 pub mod testkit;
@@ -47,12 +49,17 @@ pub use name::{DisplayName, NameError};
 pub use peers::{DepartReason, PeerEntry, PeerEvent, PeerTable, SourceId};
 pub use pipeline::{ActionCtx, ActionId, Interceptor, Pipeline, Reject};
 pub use ports::{Actor, Clock, Meter, MeterEvent, MonoInstant, Quantity, Rng, Tracer, WallTime};
+pub use rate::{negotiate, Pacer, RateLimit, RateMeter};
 pub use safetext::{find_links, sanitize_message, LinkSpan, SafeText};
 pub use session::{Session, SessionError};
 pub use trust::{MemoryTrustStore, TrustDecision, TrustStore};
 pub use trusted::{Established, TrustedSession};
 pub use xfer::{
     chunks_of, Received, RejectWhy, XferError, XferId, XferInbox, XferMsg, MAX_CHUNK, MAX_FILE,
+};
+pub use xfer_policy::{
+    check_send_eligibility, judge_offer, ApprovalPolicy, AutoWindow, BasicApproval, DenyReason,
+    Exchange, ExchangeLedger, OfferVerdict,
 };
 
 #[cfg(test)]

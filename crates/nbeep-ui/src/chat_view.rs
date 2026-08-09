@@ -38,9 +38,33 @@ pub struct ChatViewWidget {
     /// 스크롤 오프셋 — **하단(최신)에서 위로 밀어올린 줄 수**(0 = 최신 붙어 봄).
     scroll: usize,
     wheel: crate::event::WheelAccum,
+    /// 진행 중 파일 전송(헤더 아래 진척 줄 · 사용자 요청 08-09).
+    xfer: Option<crate::peer_list::XferProgress>,
+}
+
+/// 사람이 읽는 크기 표기.
+fn human_bytes(b: u64) -> String {
+    const K: u64 = 1024;
+    match b {
+        v if v >= K * K => format!("{:.1}MiB", v as f64 / (K * K) as f64),
+        v if v >= K => format!("{:.1}KiB", v as f64 / K as f64),
+        v => format!("{v}B"),
+    }
 }
 
 impl ChatViewWidget {
+    /// 진행 중 전송 상태 지정(`None` = 진행 없음 — 줄이 사라진다).
+    pub fn set_xfer(
+        &mut self,
+        xfer: Option<crate::peer_list::XferProgress>,
+        inv: &mut Invalidations,
+    ) {
+        if self.xfer != xfer {
+            self.xfer = xfer;
+            inv.push(self.bounds);
+        }
+    }
+
     /// 상대 이름으로 빈 대화 화면을 연다.
     #[must_use]
     pub fn new(title: String) -> Self {
@@ -55,6 +79,7 @@ impl ChatViewWidget {
             back: false,
             scroll: 0,
             wheel: crate::event::WheelAccum::default(),
+            xfer: None,
         }
     }
 
@@ -242,6 +267,48 @@ impl Widget for ChatViewWidget {
             theme.text,
             theme.chrome_bg,
         );
+
+        // 전송 진척 줄 — 헤더 바로 아래(대화 내용을 가리지 않는 자리).
+        if let Some(xp) = self.xfer {
+            let row = Rect::new(head.x, head.bottom(), head.w, self.s(22));
+            ctx.fill_rect(row, theme.chrome_bg);
+            ctx.select_font(FontSlot::Status, false);
+            let sh = ctx.text_height();
+            let pct = (xp.ratio() * 100.0).round() as u32;
+            let label = format!(
+                "{} {pct}% · {} / {} ({}/{} 파일)",
+                if xp.sending { "전송" } else { "수신" },
+                human_bytes(xp.done_bytes),
+                human_bytes(xp.total_bytes),
+                xp.done_files,
+                xp.total_files
+            );
+            ctx.text(
+                row.x + self.s(12),
+                row.y + (row.h - sh) / 2,
+                row,
+                &label,
+                theme.text_dim,
+            );
+            // 우측 소형 막대.
+            let bar_w = self.s(90);
+            let bar_h = self.s(5);
+            let bx = row.right() - bar_w - self.s(12);
+            let by = row.y + (row.h - bar_h) / 2;
+            ctx.fill_round_rect(
+                Rect::new(bx, by, bar_w, bar_h),
+                bar_h / 2,
+                theme.panel_bg_alt,
+            );
+            let fw = (bar_w as f32 * xp.ratio()).round() as i32;
+            if fw > 0 {
+                ctx.fill_round_rect(
+                    Rect::new(bx, by, fw, bar_h),
+                    bar_h / 2,
+                    if xp.sending { theme.accent } else { theme.ok },
+                );
+            }
+        }
 
         // 스레드 — 아래부터 최신(마지막 줄이 입력창 위).
         ctx.select_font(FontSlot::Message, false);

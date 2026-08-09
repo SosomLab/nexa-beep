@@ -37,6 +37,7 @@ pub mod event;
 pub mod gallery;
 pub mod geom;
 pub mod hangul;
+pub mod offer_prompt;
 pub mod peer_list;
 pub mod quarantine_view;
 pub mod raster;
@@ -52,15 +53,19 @@ pub use controls::{
     Control, ControlBase, FlatRow, GridColumn, ImageFit, LabelSide, PopupHit, RadioGroup,
     RadioOption, ScrollBars, TextBox, TreeControl, TreeGrid, TreeModel, TreeNode, TreeView,
 };
-pub use controls::{HAlign, MenuBar, MenuDef, MenuEntry, ToolIcon, ToolItem, Toolbar, VAlign};
+pub use controls::{
+    FiredBy, HAlign, MenuBar, MenuDef, MenuEntry, TimeoutButton, ToolIcon, ToolItem, Toolbar,
+    VAlign,
+};
 pub use draw::{DrawCtx, FontSlot};
 pub use edit::{EditKey, EditState};
 pub use event::{InputEvent, Key, WheelAccum, WHEEL_DELTA};
 pub use gallery::GalleryWidget;
 pub use geom::{Point, Rect, Size};
-pub use peer_list::{badge, HudPos, LinkState, PeerListWidget, PeerRow, ROW_H};
+pub use offer_prompt::{OfferChoice, OfferInfo, OfferPromptWidget};
+pub use peer_list::{badge, HudPos, LinkState, PeerListWidget, PeerRow, XferProgress, ROW_H};
 pub use quarantine_view::{QAction, QRow, QuarantineWidget};
-pub use raster::RasterCtx;
+pub use raster::{FontSet, RasterCtx};
 pub use settings::{registry, Entry, SettingKind, SettingsState, SettingsWidget};
 pub use theme::{Color, FontPrefs, IconImage, SlotFont, Theme};
 pub use typeahead::{Query, TypeAhead, TYPEAHEAD_TIMEOUT_MS};

@@ -32,6 +32,8 @@ pub enum Key {
     Enter,
     /// Esc(취소·닫기).
     Escape,
+    /// Delete(앞으로 삭제) — Backspace는 `Char('\u{8}')`로 온다.
+    Delete,
 }
 
 /// 위젯이 받는 입력 이벤트.

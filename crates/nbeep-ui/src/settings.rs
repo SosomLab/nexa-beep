@@ -53,6 +53,11 @@ pub enum SettingKind {
     RadioInput(&'static [(&'static str, Msg)], &'static str),
     /// 3×3 위치 그리드 — 미니 화면(4:3) 셀로 직관 선택([`PositionPicker`]).
     PositionGrid,
+    /// 글꼴 **얼굴만** — 크기는 Base UI를 따른다(고정폭 슬롯).
+    FontFace {
+        /// 글꼴명 값 키.
+        family_key: &'static str,
+    },
     /// on/off — [`Checkbox`]. 값은 `"on"`/`"off"`(기본 on).
     Toggle,
     /// 글꼴 영역 — 글꼴명 [`TextBox`] + 크기 [`Combo`].
@@ -95,6 +100,7 @@ impl Entry {
                 .collect(),
             SettingKind::Toggle => vec![(self.key, "on".to_string())],
             SettingKind::PositionGrid => vec![(self.key, "bl".to_string())],
+            SettingKind::FontFace { family_key } => vec![(family_key, String::new())],
             SettingKind::FontSection {
                 family_key,
                 size_key,
@@ -210,6 +216,16 @@ pub fn registry() -> &'static [Entry] {
         Entry {
             cat: Msg::CatFont,
             sub: None,
+            label: Msg::FontMono,
+            desc: Msg::FontMonoDesc,
+            kind: SettingKind::FontFace {
+                family_key: "font.mono.family",
+            },
+            key: "font.mono.family",
+        },
+        Entry {
+            cat: Msg::CatFont,
+            sub: None,
             label: Msg::FontPeerList,
             desc: Msg::FontPeerListDesc,
             kind: SettingKind::FontSection {
@@ -239,6 +255,83 @@ pub fn registry() -> &'static [Entry] {
                 size_key: "font.status.size",
             },
             key: "font.status.family",
+        },
+        Entry {
+            cat: Msg::CatFiles,
+            sub: None,
+            label: Msg::XferApproval,
+            desc: Msg::XferApprovalDesc,
+            kind: SettingKind::Radio(&[
+                ("manual", Msg::ApprovalManual),
+                ("auto", Msg::ApprovalAuto),
+                ("timed", Msg::ApprovalTimed),
+                ("block", Msg::ApprovalBlock),
+            ]),
+            key: "xfer.approval",
+        },
+        Entry {
+            cat: Msg::CatFiles,
+            sub: None,
+            label: Msg::XferWindow,
+            desc: Msg::XferWindowDesc,
+            kind: SettingKind::Radio(&[
+                ("1h", Msg::Win1h),
+                ("6h", Msg::Win6h),
+                ("today", Msg::WinToday),
+            ]),
+            key: "xfer.approval_window",
+        },
+        Entry {
+            cat: Msg::CatFiles,
+            sub: None,
+            label: Msg::SendRate,
+            desc: Msg::SendRateDesc,
+            kind: SettingKind::RadioInput(
+                &[
+                    ("auto", Msg::RateAuto),
+                    ("100k", Msg::Rate100k),
+                    ("1m", Msg::Rate1m),
+                    ("10m", Msg::Rate10m),
+                    ("100m", Msg::Rate100m),
+                    ("1g", Msg::Rate1g),
+                ],
+                "B/s",
+            ),
+            key: "xfer.send_rate",
+        },
+        Entry {
+            cat: Msg::CatFiles,
+            sub: None,
+            label: Msg::RecvRate,
+            desc: Msg::RecvRateDesc,
+            kind: SettingKind::RadioInput(
+                &[
+                    ("auto", Msg::RateAuto),
+                    ("100k", Msg::Rate100k),
+                    ("1m", Msg::Rate1m),
+                    ("10m", Msg::Rate10m),
+                    ("100m", Msg::Rate100m),
+                    ("1g", Msg::Rate1g),
+                ],
+                "B/s",
+            ),
+            key: "xfer.recv_rate",
+        },
+        Entry {
+            cat: Msg::CatFiles,
+            sub: None,
+            label: Msg::XferTimeout,
+            desc: Msg::XferTimeoutDesc,
+            kind: SettingKind::RadioInput(
+                &[
+                    ("60", Msg::Sec60),
+                    ("30", Msg::Sec30),
+                    ("120", Msg::Sec120),
+                    ("300", Msg::Sec300),
+                ],
+                "초",
+            ),
+            key: "xfer.timeout_sec",
         },
     ]
 }
@@ -302,6 +395,8 @@ const SIDEBAR_W: i32 = 150;
 const SEARCH_H: i32 = 30;
 const ENTRY_H: i32 = 52;
 const FONT_SECTION_H: i32 = 88;
+/// 설정 행에 붙는 정보 줄 높이(논리 px).
+const NOTE_H: i32 = 22;
 /// 위치 그리드 행 높이(3×3 미니 화면 93 + 여백).
 const POS_ROW_H: i32 = 110;
 const CTL_H: i32 = 26;
@@ -321,6 +416,8 @@ enum RowCtl {
     },
     /// 3×3 위치 그리드.
     Pos(PositionPicker),
+    /// 글꼴 **얼굴만**(고정폭 — 크기는 Base UI를 따른다).
+    Face(TextBox),
 }
 
 #[derive(Debug)]
@@ -365,6 +462,10 @@ pub struct SettingsWidget {
     sidebar_w: i32,
     /// 스플리터 드래그 중.
     split_drag: bool,
+    /// 비활성 설정 키(호스트가 지정) — 흐리게 그리고 입력을 받지 않는다.
+    disabled: std::collections::HashSet<&'static str>,
+    /// 특정 설정 행 **바로 아래**에 붙는 한 줄 정보(자리 고정 — 호스트가 채운다).
+    notes: HashMap<&'static str, String>,
 }
 
 impl SettingsWidget {
@@ -395,6 +496,8 @@ impl SettingsWidget {
             bars: ScrollBars::new(),
             sidebar_w: SIDEBAR_W,
             split_drag: false,
+            disabled: std::collections::HashSet::new(),
+            notes: HashMap::new(),
         };
         let mut inv = Invalidations::default();
         w.rebuild(&mut inv);
@@ -542,6 +645,12 @@ impl SettingsWidget {
                     c.set_scale(self.scale);
                     RowCtl::Combo(c)
                 }
+                SettingKind::FontFace { family_key } => {
+                    let mut family = TextBox::new(tr(lang, Msg::SystemDefaultFont))
+                        .with_text(self.values.get(family_key).map_or("", String::as_str));
+                    family.set_scale(self.scale);
+                    RowCtl::Face(family)
+                }
                 SettingKind::PositionGrid => {
                     let mut p = PositionPicker::new();
                     p.select_value(self.values.get(e.key).map_or("bl", String::as_str));
@@ -579,6 +688,62 @@ impl SettingsWidget {
             });
         }
         self.layout(inv);
+    }
+
+    /// 값을 외부에서 갱신한다(예: 기간 만료로 승인 방식이 되돌아갔을 때) —
+    /// 화면과 실제가 어긋나지 않게 콤보 표시까지 맞춘다.
+    pub fn set_value(&mut self, key: &'static str, value: &str, inv: &mut Invalidations) {
+        self.values.insert(key, value.to_string());
+        for row in &mut self.rows {
+            if registry()[row.idx].key != key {
+                continue;
+            }
+            if let RowCtl::Combo(c) = &mut row.ctl {
+                c.select_value(value);
+            }
+        }
+        inv.push(self.bounds);
+    }
+
+    /// 비활성 키 지정 — 조건부로만 쓰이는 설정을 흐리게 잠근다(예: 기간은 "기간 자동"일 때만).
+    pub fn set_disabled(&mut self, keys: &[&'static str], inv: &mut Invalidations) {
+        let next: std::collections::HashSet<&'static str> = keys.iter().copied().collect();
+        if next != self.disabled {
+            self.disabled = next;
+            inv.push(self.bounds);
+        }
+    }
+
+    /// 설정 행 아래 한 줄 정보 지정 — **자리가 고정**된다(빈 문자열 = 제거).
+    /// 값이 바뀔 때만 재배치·무효화하므로 1초 갱신에도 낭비가 없다.
+    pub fn set_row_note(&mut self, key: &'static str, text: &str, inv: &mut Invalidations) {
+        let had = self.notes.contains_key(key);
+        if self.notes.get(key).map(String::as_str) == Some(text) || (text.is_empty() && !had) {
+            return;
+        }
+        if text.is_empty() {
+            self.notes.remove(key);
+        } else {
+            self.notes.insert(key, text.to_string());
+        }
+        if had != self.notes.contains_key(key) {
+            self.layout(inv); // 줄이 생기거나 사라지면 행 높이가 달라진다
+        }
+        inv.push(self.bounds);
+    }
+
+    /// 이 행에 붙은 정보 줄 높이(없으면 0).
+    fn note_h(&self, idx: usize) -> i32 {
+        if self.notes.contains_key(registry()[idx].key) {
+            self.s(NOTE_H)
+        } else {
+            0
+        }
+    }
+
+    /// 이 행이 잠겼는가.
+    fn is_locked(&self, idx: usize) -> bool {
+        self.disabled.contains(registry()[idx].key)
     }
 
     /// 우측 패널 뷰포트(사이드바 제외 영역).
@@ -630,10 +795,13 @@ impl SettingsWidget {
         self.content_h = self
             .rows
             .iter()
-            .map(|row| match registry()[row.idx].kind {
-                SettingKind::FontSection { .. } => hf,
-                SettingKind::PositionGrid => hp,
-                _ => he,
+            .map(|row| {
+                let base = match registry()[row.idx].kind {
+                    SettingKind::FontSection { .. } => hf,
+                    SettingKind::PositionGrid => hp,
+                    _ => he,
+                };
+                base + self.note_h(row.idx)
             })
             .sum();
         self.scroll = self.scroll.clamp(0, (self.content_h - b.h).max(0));
@@ -644,13 +812,14 @@ impl SettingsWidget {
         let (combo_w, check_w) = (self.s(COMBO_W), self.s(22));
         let (family_w, size_w, gap10, dy32) =
             (self.s(FAMILY_W), self.s(SIZE_W), self.s(10), self.s(32));
-        for row in &mut self.rows {
+        let note_hs: Vec<i32> = self.rows.iter().map(|r| self.note_h(r.idx)).collect();
+        for (ri, row) in self.rows.iter_mut().enumerate() {
             let e = &registry()[row.idx];
             let h = match e.kind {
                 SettingKind::FontSection { .. } => h_font,
                 SettingKind::PositionGrid => h_pos,
                 _ => h_entry,
-            };
+            } + note_hs[ri];
             row.rect = Rect::new(rx, top, rw, h);
             match &mut row.ctl {
                 RowCtl::Combo(c) => {
@@ -683,6 +852,18 @@ impl SettingsWidget {
                         inv,
                     );
                 }
+                RowCtl::Face(family) => {
+                    // 크기 콤보가 없다 — 얼굴만 지정하고 크기는 Base UI를 따른다.
+                    family.set_bounds(
+                        Rect::new(
+                            rx + rw - family_w - pad,
+                            top + (h - ctl_h) / 2,
+                            family_w,
+                            ctl_h,
+                        ),
+                        inv,
+                    );
+                }
                 RowCtl::Pos(p) => {
                     p.set_scale(self.scale);
                     let (pw, ph) = p.preferred_size();
@@ -712,6 +893,14 @@ impl SettingsWidget {
                     if let Some(v) = g.take_changed() {
                         got.push((e.key, v));
                     }
+                }
+                RowCtl::Face(family) => {
+                    // ★ 글자마다 폰트를 찾으면 낭비다 — **Enter로 확정할 때만** 보고한다
+                    //   (사용자 지적 08-09: 입력해도 적용되지 않는다).
+                    if let Some(v) = family.take_committed() {
+                        got.push((e.key, v));
+                    }
+                    let _ = family.take_changed(); // 중간 변경은 버린다
                 }
                 RowCtl::Check(c) => {
                     if let Some(on) = c.take_toggled() {
@@ -854,13 +1043,20 @@ impl Widget for SettingsWidget {
                         return;
                     }
                 }
+                // ★ 포커스는 **매 클릭마다 전 컨트롤에 다시 계산**한다. 콤보는 자기 클릭에
+                // 스스로 포커스를 켜지만 남의 포커스를 끄지는 못해서, 이걸 빼먹으면
+                // 눌러 본 콤보마다 파란 테두리가 남는다(카테고리를 나갔다 오면 재생성돼
+                // 사라지던 그 증상 — 사용자 지적 08-09).
                 for row in &mut self.rows {
                     match &mut row.ctl {
-                        RowCtl::Font { family, .. } => {
+                        RowCtl::Font { family, size } => {
                             family.set_focused(family.bounds().contains(p));
+                            size.set_focused(size.bounds().contains(p));
                         }
                         RowCtl::Pos(g) => g.set_focused(g.bounds().contains(p)),
-                        _ => {}
+                        RowCtl::Face(f) => f.set_focused(f.bounds().contains(p)),
+                        RowCtl::Combo(c) => c.set_focused(c.bounds().contains(p)),
+                        RowCtl::Check(c) => c.set_focused(c.bounds().contains(p)),
                     }
                 }
                 // 사이드바 트리 — 선택 변경 감지 → 카테고리 전환(검색 해제).
@@ -880,7 +1076,11 @@ impl Widget for SettingsWidget {
                     return;
                 }
                 // 우측 컨트롤들.
-                for row in &mut self.rows {
+                let locked: Vec<bool> = self.rows.iter().map(|r| self.is_locked(r.idx)).collect();
+                for (row, lock) in self.rows.iter_mut().zip(locked) {
+                    if lock {
+                        continue; // 잠긴 설정 — 조건이 갖춰질 때까지 만질 수 없다
+                    }
                     match &mut row.ctl {
                         RowCtl::Combo(c) => c.on_event(ev, inv),
                         RowCtl::Check(c) => c.on_event(ev, inv),
@@ -889,6 +1089,7 @@ impl Widget for SettingsWidget {
                             size.on_event(ev, inv);
                         }
                         RowCtl::Pos(g) => g.on_event(ev, inv),
+                        RowCtl::Face(f) => f.on_event(ev, inv),
                     }
                 }
                 self.drain_changes(inv);
@@ -989,7 +1190,7 @@ impl Widget for SettingsWidget {
             let e = &registry()[row.idx];
             let r = row.rect;
             match &row.ctl {
-                RowCtl::Combo(_) | RowCtl::Check(_) | RowCtl::Pos(_) => {
+                RowCtl::Combo(_) | RowCtl::Check(_) | RowCtl::Pos(_) | RowCtl::Face(_) => {
                     ctx.select_font(FontSlot::Base, false);
                     ctx.text(
                         r.x + self.s(PAD),
@@ -1030,12 +1231,39 @@ impl Widget for SettingsWidget {
                 RowCtl::Combo(c) => c.paint(ctx, theme),
                 RowCtl::Check(c) => c.paint(ctx, theme),
                 RowCtl::Pos(g) => g.paint(ctx, theme),
+                RowCtl::Face(f) => f.paint(ctx, theme),
                 RowCtl::Font { family, size } => {
                     family.paint(ctx, theme);
                     size.paint(ctx, theme);
                 }
             }
         }
+        // 잠긴 행은 위에 얇은 가림막을 덮어 "지금은 못 만진다"를 보여 준다.
+        for row in &self.rows {
+            if self.is_locked(row.idx) {
+                ctx.fill_round_rect_alpha(row.rect, 0, theme.panel_bg, 0.55);
+            }
+        }
+
+        // 행에 붙은 정보 줄 — **행 바로 아래 고정 위치**.
+        // 고정폭으로 그린다: 숫자 폭이 변하면 1초마다 글자가 흔들린다(사용자 지적 08-09).
+        ctx.select_font(FontSlot::Mono, false);
+        for row in &self.rows {
+            let Some(note) = self.notes.get(registry()[row.idx].key) else {
+                continue;
+            };
+            let nh = self.s(NOTE_H);
+            let r = Rect::new(row.rect.x, row.rect.bottom() - nh, row.rect.w, nh);
+            let th = ctx.text_height();
+            ctx.text(
+                r.x + self.s(PAD),
+                r.y + (r.h - th) / 2,
+                r,
+                note,
+                theme.text_dim,
+            );
+        }
+
         // 열린 콤보 드롭다운은 맨 위에 다시 그린다(아래 행에 가리지 않게).
         for row in &self.rows {
             match &row.ctl {
