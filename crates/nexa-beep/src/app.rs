@@ -448,8 +448,10 @@ enum Role {
     About,
     /// 격리함 — 수신 파일 승인·삭제(M4-3 · [docs/11] §7 등급별 마찰).
     Quarantine,
-    /// 발신 대기 — 상대 승인을 기다리는 창(60초 타임아웃 후 자동 취소).
+    /// 발신 대기 — 상대 승인을 기다리는 창(타임아웃 후 자동 취소).
     Sending(PeerId),
+    /// 수신 승인 — 제안 정보를 보여 주고 결정을 받는 창(타임아웃 = 취소).
+    Approve(PeerId),
 }
 
 /// 에코 봇 — 버스에 실물 신원으로 참여해 수신 세션을 받고, Chat 메시지를 에코한다.
@@ -596,6 +598,12 @@ struct App {
     approval_started_unix: Option<u64>,
     /// 하단 정보를 마지막으로 갱신한 초(1초 주기 판단).
     approval_footer_sec: u64,
+    /// 대기 시간(초 · 설정 `xfer.timeout_sec`) — 승인 창·발신 대기 공용.
+    wait_timeout_sec: u64,
+    /// 상대별 승인 화면(열려 있는 동안 유지).
+    approve_view: HashMap<PeerId, nbeep_ui::OfferPromptWidget>,
+    /// 다음 루프에서 만들 승인 창.
+    pending_approve_window: Option<PeerId>,
     /// 상대별 수락 대기 큐 — **오퍼 1건당 승인 1번**(2번 보내면 2번 물어본다).
     pending_offers: HashMap<PeerId, VecDeque<(nbeep_core::XferId, String, u64)>>,
     /// 상대별 발신 대기 파일 큐(다중 드롭 — 한 번에 하나씩 협상한다).
@@ -830,7 +838,8 @@ impl App {
 
     /// 발신 대기 창 — **60초 타임아웃 버튼**이 자동으로 눌려 창을 닫고 전송을 취소한다.
     fn open_send_wait(&mut self, peer: PeerId, name: &str) {
-        let mut tb = nbeep_ui::TimeoutButton::new(format!("전송 취소 — {name}"), 60_000);
+        let ms = self.wait_timeout_sec.saturating_mul(1000);
+        let mut tb = nbeep_ui::TimeoutButton::new(format!("전송 취소 — {name}"), ms);
         tb.start(self.now_ms());
         self.send_wait.insert(peer, tb);
         self.pending_send_window = Some(peer); // 다음 about_to_wait에서 창을 만든다
@@ -861,7 +870,10 @@ impl App {
         self.close_send_wait(peer);
         self.clear_xfer(peer);
         self.status = if by_timeout {
-            "60초 동안 응답이 없어 전송을 취소했습니다".into()
+            format!(
+                "{}초 동안 응답이 없어 전송을 취소했습니다",
+                self.wait_timeout_sec
+            )
         } else {
             "전송을 취소했습니다".into()
         };
@@ -902,6 +914,120 @@ impl App {
             "세션이 끊겨 응답하지 못했습니다".into()
         };
         self.request_redraw(id);
+    }
+
+    /// 대기열 맨 앞 제안으로 승인 화면 내용을 만든다(없으면 `None`).
+    fn front_offer_info(&self, peer: PeerId) -> Option<nbeep_ui::OfferInfo> {
+        let q = self.pending_offers.get(&peer)?;
+        let (_, name, size) = q.front()?;
+        let sender = self
+            .table
+            .list()
+            .into_iter()
+            .find(|e| e.peer == peer)
+            .map_or_else(
+                || peer.short(),
+                |e| format!("{} ({})", e.name.as_str(), peer.short()),
+            );
+        Some(nbeep_ui::OfferInfo {
+            sender,
+            when: nbeep_plat::clock::local_hms(unix_now()).hms(),
+            name: name.clone(),
+            size: *size,
+            queued: q.len(),
+        })
+    }
+
+    /// 승인 화면 갱신 — 대기열이 비면 창을 닫는다.
+    fn refresh_approve_view(&mut self, peer: PeerId) {
+        let Some(info) = self.front_offer_info(peer) else {
+            self.close_approve(peer);
+            return;
+        };
+        let now = self.now_ms();
+        let secs = self.wait_timeout_sec;
+        let w = self
+            .approve_view
+            .entry(peer)
+            .or_insert_with(|| nbeep_ui::OfferPromptWidget::new(info.clone(), secs));
+        *w = nbeep_ui::OfferPromptWidget::new(info, secs); // 다음 건 = 시간도 새로 센다
+        w.start(now);
+        if let Some((wid, _)) = self
+            .windows
+            .iter()
+            .find(|(_, e)| e.role == Role::Approve(peer))
+        {
+            let wid = *wid;
+            self.layout_window(wid);
+            self.request_redraw(wid);
+        }
+    }
+
+    /// 승인 창 닫기.
+    fn close_approve(&mut self, peer: PeerId) {
+        self.approve_view.remove(&peer);
+        if let Some((wid, _)) = self
+            .windows
+            .iter()
+            .find(|(_, e)| e.role == Role::Approve(peer))
+        {
+            let wid = *wid;
+            self.windows.remove(&wid);
+        }
+    }
+
+    /// 승인 화면의 결정을 실행한다.
+    fn run_offer_choice(&mut self, peer: PeerId, choice: nbeep_ui::OfferChoice) {
+        use nbeep_ui::OfferChoice;
+        let front = self
+            .pending_offers
+            .get_mut(&peer)
+            .and_then(VecDeque::pop_front);
+        let Some((xid, name, _)) = front else {
+            self.close_approve(peer);
+            return;
+        };
+        match choice {
+            OfferChoice::Approve => {
+                self.send_xfer_decision(peer, xid, true, nbeep_core::RejectWhy::Declined);
+                self.status = format!("수락 — {name} 수신 시작");
+            }
+            OfferChoice::Cancel { by_timeout } => {
+                self.send_xfer_decision(peer, xid, false, nbeep_core::RejectWhy::Declined);
+                self.status = if by_timeout {
+                    format!(
+                        "{}초 동안 응답이 없어 거절했습니다 — {name}",
+                        self.wait_timeout_sec
+                    )
+                } else {
+                    format!("거절 — {name}")
+                };
+            }
+            OfferChoice::AutoFor(code) => {
+                // 설정 화면까지 가지 않고 여기서 기간 자동 수락을 켠다(설정 값도 함께 맞춘다).
+                if let Some(w) = nbeep_core::AutoWindow::from_code(code) {
+                    let now = self.now_ms();
+                    self.approval_window = w;
+                    self.approval = self.approval.start_timed(w, now);
+                    self.approval_started_unix = Some(unix_now());
+                    self.settings.set("xfer.approval", "timed".to_string());
+                    self.settings.set("xfer.approval_window", code.to_string());
+                    if let Some(sv) = &mut self.settings_view {
+                        let mut inv = Invalidations::default();
+                        sv.set_value("xfer.approval", "timed", &mut inv);
+                        sv.set_value("xfer.approval_window", code, &mut inv);
+                    }
+                    self.refresh_approval_ui();
+                }
+                self.send_xfer_decision(peer, xid, true, nbeep_core::RejectWhy::Declined);
+                self.status = format!("자동 수락 시작 — {name} 포함 이후 제안을 자동 수락합니다");
+            }
+        }
+        // 다음 제안이 있으면 이어서 묻는다(오퍼 1건당 승인 1번).
+        self.refresh_approve_view(peer);
+        if let Some(mid) = self.main_id {
+            self.request_redraw(mid);
+        }
     }
 
     /// 액터에 수락/거절 명령을 보낸다(성공 여부).
@@ -1620,6 +1746,11 @@ impl App {
                         rate_label(self.recv_rate.target_bps(&self.recv_meter))
                     );
                 }
+                "xfer.timeout_sec" => {
+                    if let Ok(v) = value.parse::<u64>() {
+                        self.wait_timeout_sec = v.clamp(5, 3600);
+                    }
+                }
                 "xfer.approval_window" => {
                     if let Some(w) = nbeep_core::AutoWindow::from_code(&value) {
                         self.approval_window = w;
@@ -1745,6 +1876,12 @@ impl App {
                 if let Some(qv) = &mut self.quarantine_view {
                     qv.set_scale(scale, &mut inv);
                     qv.set_bounds(Rect::new(0, 0, w, h), &mut inv);
+                }
+            }
+            Role::Approve(peer) => {
+                if let Some(pv) = self.approve_view.get_mut(&peer) {
+                    pv.set_scale(scale, &mut inv);
+                    pv.set_bounds(Rect::new(0, 0, w, h), &mut inv);
                 }
             }
             Role::Sending(peer) => {
@@ -1967,6 +2104,16 @@ impl App {
                     }
                 }
             }
+            Role::Approve(peer) => {
+                let mut choice = None;
+                if let Some(pv) = self.approve_view.get_mut(&peer) {
+                    pv.on_event(&ev, &mut inv);
+                    choice = pv.take_choice();
+                }
+                if let Some(c) = choice {
+                    self.run_offer_choice(peer, c);
+                }
+            }
             Role::Sending(peer) => {
                 let mut fired = None;
                 if let Some(tb) = self.send_wait.get_mut(&peer) {
@@ -2089,6 +2236,11 @@ impl App {
                     qv.paint(&mut ctx, &theme);
                 }
             }
+            Role::Approve(peer) => {
+                if let Some(pv) = self.approve_view.get(&peer) {
+                    pv.paint(&mut ctx, &theme);
+                }
+            }
             Role::Sending(peer) => {
                 ctx.fill_rect(Rect::new(0, 0, 10_000, 10_000), theme.panel_bg);
                 ctx.select_font(nbeep_ui::FontSlot::Base, false);
@@ -2193,6 +2345,10 @@ impl ApplicationHandler<AppEvent> for App {
                         let q = self.pending_offers.entry(peer).or_default();
                         q.push_back((id, name.clone(), size));
                         let n = q.len();
+                        // 승인 화면을 띄운다(이미 떠 있으면 그대로 — 큐에서 차례로 처리).
+                        if !self.approve_view.contains_key(&peer) {
+                            self.pending_approve_window = Some(peer);
+                        }
                         let more = if n > 1 {
                             format!(" (대기 {n}건)")
                         } else {
@@ -2382,6 +2538,67 @@ impl ApplicationHandler<AppEvent> for App {
                 }
             }
         }
+        // 수신 승인 창 생성.
+        if let Some(peer) = self.pending_approve_window.take() {
+            if let Some(info) = self.front_offer_info(peer) {
+                let mut pv = nbeep_ui::OfferPromptWidget::new(info, self.wait_timeout_sec);
+                pv.start(self.now_ms());
+                self.approve_view.insert(peer, pv);
+                let attrs = Window::default_attributes()
+                    .with_title("Nexa Beep — 파일 수신 요청")
+                    .with_inner_size(winit::dpi::LogicalSize::new(440.0, 300.0))
+                    .with_resizable(false)
+                    .with_window_icon(self.icon.clone());
+                if let Ok(window) = el.create_window(attrs) {
+                    let window = Rc::new(window);
+                    let scale = window.scale_factor() as f32;
+                    if let Ok(context) = softbuffer::Context::new(window.clone()) {
+                        if let Ok(surface) = SbSurface::new(&context, window.clone()) {
+                            let id = window.id();
+                            self.windows.insert(
+                                id,
+                                WinEntry {
+                                    role: Role::Approve(peer),
+                                    window,
+                                    surface,
+                                    cursor: (0, 0),
+                                    scale,
+                                },
+                            );
+                            self.layout_window(id);
+                            self.request_redraw(id);
+                        }
+                    }
+                }
+            }
+        }
+        // 승인 창 카운트다운 — 시간이 다 되면 스스로 거절하고 닫힌다.
+        {
+            let now = self.now_ms();
+            let mut choices: Vec<(PeerId, nbeep_ui::OfferChoice)> = Vec::new();
+            let mut redraw: Vec<PeerId> = Vec::new();
+            for (peer, pv) in &mut self.approve_view {
+                if pv.tick(now) {
+                    redraw.push(*peer);
+                }
+                if let Some(c) = pv.take_choice() {
+                    choices.push((*peer, c));
+                }
+            }
+            for peer in redraw {
+                if let Some((wid, _)) = self
+                    .windows
+                    .iter()
+                    .find(|(_, e)| e.role == Role::Approve(peer))
+                {
+                    let wid = *wid;
+                    self.request_redraw(wid);
+                }
+            }
+            for (peer, c) in choices {
+                self.run_offer_choice(peer, c);
+            }
+        }
         // 발신 대기 창 생성(창 생성은 여기서만 — ActiveEventLoop가 필요하다).
         if let Some(peer) = self.pending_send_window.take() {
             if !self.windows.values().any(|e| e.role == Role::Sending(peer)) {
@@ -2507,6 +2724,13 @@ impl ApplicationHandler<AppEvent> for App {
                         Role::About => self.about_view = None,
                         Role::Quarantine => self.quarantine_view = None,
                         Role::Sending(peer) => self.cancel_send(peer, false),
+                        Role::Approve(peer) => {
+                            // 창을 닫으면 거절로 본다(응답하지 않은 제안을 남기지 않는다).
+                            self.run_offer_choice(
+                                peer,
+                                nbeep_ui::OfferChoice::Cancel { by_timeout: false },
+                            );
+                        }
                         Role::Main => {}
                     }
                 }
@@ -2877,6 +3101,9 @@ pub(crate) fn run(mode: WindowMode, live: bool) {
         approval_window: nbeep_core::AutoWindow::Hour1,
         approval_started_unix: None,
         approval_footer_sec: 0,
+        wait_timeout_sec: 60,
+        approve_view: HashMap::new(),
+        pending_approve_window: None,
         pending_offers: HashMap::new(),
         send_queue: HashMap::new(),
         send_batch: HashMap::new(),

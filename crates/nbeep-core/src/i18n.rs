@@ -128,6 +128,13 @@ pub enum Msg {
     Rate10m,
     Rate100m,
     Rate1g,
+    /// 전송 대기 시간(승인/응답 자동 취소).
+    XferTimeout,
+    XferTimeoutDesc,
+    Sec30,
+    Sec60,
+    Sec120,
+    Sec300,
     // ── 설정: 공통 ──
     SearchPlaceholder,
     SystemDefaultFont,
@@ -293,6 +300,22 @@ impl Msg {
             Msg::Rate10m => ["10 MB/s"; 4],
             Msg::Rate100m => ["100 MB/s"; 4],
             Msg::Rate1g => ["1 GB/s"; 4],
+            Msg::XferTimeout => [
+                "Wait timeout",
+                "전송 대기 시간",
+                "等待超时",
+                "待機タイムアウト",
+            ],
+            Msg::XferTimeoutDesc => [
+                "Approval and response windows cancel themselves after this",
+                "승인 창과 응답 대기가 이 시간이 지나면 스스로 취소됩니다",
+                "批准窗口与响应等待超过此时间后自动取消",
+                "承認ウィンドウと応答待ちはこの時間で自動キャンセル",
+            ],
+            Msg::Sec30 => ["30s", "30초", "30秒", "30秒"],
+            Msg::Sec60 => ["60s", "60초", "60秒", "60秒"],
+            Msg::Sec120 => ["2m", "2분", "2分钟", "2分"],
+            Msg::Sec300 => ["5m", "5분", "5分钟", "5分"],
             Msg::SearchPlaceholder => [
                 "Search (space = AND)",
                 "검색 (공백=AND)",

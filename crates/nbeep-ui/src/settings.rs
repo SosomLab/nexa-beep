@@ -301,6 +301,22 @@ pub fn registry() -> &'static [Entry] {
             ),
             key: "xfer.recv_rate",
         },
+        Entry {
+            cat: Msg::CatFiles,
+            sub: None,
+            label: Msg::XferTimeout,
+            desc: Msg::XferTimeoutDesc,
+            kind: SettingKind::RadioInput(
+                &[
+                    ("60", Msg::Sec60),
+                    ("30", Msg::Sec30),
+                    ("120", Msg::Sec120),
+                    ("300", Msg::Sec300),
+                ],
+                "초",
+            ),
+            key: "xfer.timeout_sec",
+        },
     ]
 }
 
