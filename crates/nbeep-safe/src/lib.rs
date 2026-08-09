@@ -6,5 +6,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
 pub mod container;
+pub mod risk;
 
 pub use container::{Beepq, Meta, QuarantineError, FLAG_SEALED, FORMAT_VER, MAGIC, MAX_SEAL};
+pub use risk::{classify, classify_ext, detect_magic, DetectedKind, Verdict};
