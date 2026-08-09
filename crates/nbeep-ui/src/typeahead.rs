@@ -254,6 +254,22 @@ mod tests {
     }
 
     #[test]
+    fn cjk_passthrough_non_jamo_chars() {
+        // 일/중 완성 문자(한자·가나)가 유입되면 조합기 비자모 통과로 그대로 누적된다
+        // (목록 IME off라 통상 라틴만 오지만, 유입 시 안전성 고정 — 27 §7-1).
+        let mut t = TypeAhead::new(1000);
+        t.push('橋', 0);
+        t.push('本', 100);
+        assert_eq!(t.composing(), "橋本");
+        t.push('あ', 200);
+        assert_eq!(t.composing(), "橋本あ");
+        // 한글 조합과 혼합돼도 경계가 유지된다.
+        t.push('ㄱ', 300);
+        t.push('ㅣ', 350);
+        assert_eq!(t.composing(), "橋本あ기");
+    }
+
+    #[test]
     fn repeated_key_accumulates_no_auto_cycle() {
         // 순환은 ↑↓ 전용(사용자 확정) — 같은 키 반복도 그대로 누적된다.
         let mut t = TypeAhead::new(1000);
