@@ -604,6 +604,12 @@ struct App {
     approve_view: HashMap<PeerId, nbeep_ui::OfferPromptWidget>,
     /// 다음 루프에서 만들 승인 창.
     pending_approve_window: Option<PeerId>,
+    /// 슬롯별 얼굴(설정 글꼴명으로 로드 · 없으면 기본 폰트).
+    face_peerlist: Option<nbeep_gfx::Font>,
+    face_message: Option<nbeep_gfx::Font>,
+    face_status: Option<nbeep_gfx::Font>,
+    /// 고정폭 얼굴 — 지정 없으면 OS 기본.
+    face_mono: Option<nbeep_gfx::Font>,
     /// 상대별 수락 대기 큐 — **오퍼 1건당 승인 1번**(2번 보내면 2번 물어본다).
     pending_offers: HashMap<PeerId, VecDeque<(nbeep_core::XferId, String, u64)>>,
     /// 상대별 발신 대기 파일 큐(다중 드롭 — 한 번에 하나씩 협상한다).
@@ -1092,6 +1098,25 @@ impl App {
             self.refresh_approval_ui();
         }
         reverted
+    }
+
+    /// 설정의 글꼴명으로 슬롯 얼굴을 다시 로드한다(빈 값 = 기본 폰트 사용).
+    fn reload_faces(&mut self) {
+        let load = |name: &str| -> Option<nbeep_gfx::Font> {
+            if name.trim().is_empty() {
+                return None;
+            }
+            let (bytes, idx) = nbeep_plat::font::find_font_by_family(name)?;
+            nbeep_gfx::Font::from_static(bytes, idx).ok()
+        };
+        self.face_peerlist = load(self.settings.get("font.peerlist.family"));
+        self.face_message = load(self.settings.get("font.message.family"));
+        self.face_status = load(self.settings.get("font.status.family"));
+        // 고정폭: 지정이 있으면 그것, 없으면 **OS 기본 고정폭**(사용자 확정 08-09).
+        self.face_mono = load(self.settings.get("font.mono.family")).or_else(|| {
+            let (bytes, idx) = nbeep_plat::font::system_mono_font()?;
+            nbeep_gfx::Font::from_static(bytes, idx).ok()
+        });
     }
 
     /// 설정 화면의 **잠금·하단 정보**를 현재 승인 정책에 맞춘다(1초 주기 갱신).
@@ -1768,6 +1793,7 @@ impl App {
                 "ui.typeahead_special" => self.list.set_typeahead_special(value == "on"),
                 k if k.starts_with("font.") => {
                     self.fonts = Self::fonts_from_settings(&self.settings);
+                    self.reload_faces(); // 글꼴명 → 실제 얼굴 로드(Enter 확정 시 도달)
                     self.status = "글꼴 설정 적용됨".into();
                     for e in self.windows.values() {
                         e.window.request_redraw();
@@ -2147,6 +2173,16 @@ impl App {
 
     fn redraw(&mut self, id: WindowId) {
         let theme = self.theme;
+        let prefs = self.fonts;
+        // 슬롯 얼굴을 **필드에서 직접** 빌린다 — 헬퍼 메서드로 감싸면 self 전체를 빌려
+        // 아래 windows 가변 차용과 충돌한다(필드 단위 분할 차용을 쓰기 위한 형태).
+        let fonts = nbeep_ui::FontSet {
+            base: &self.font,
+            peerlist: self.face_peerlist.as_ref(),
+            message: self.face_message.as_ref(),
+            status: self.face_status.as_ref(),
+            mono: self.face_mono.as_ref(),
+        };
         let Some(entry) = self.windows.get_mut(&id) else {
             return;
         };
@@ -2159,8 +2195,8 @@ impl App {
         let mut px =
             nbeep_gfx::Surface::new(&mut buffer, size.width as usize, size.height as usize);
         px.fill(theme.window_bg);
-        let mut ctx = RasterCtx::new(&mut px, &self.font)
-            .with_fonts(self.fonts)
+        let mut ctx = RasterCtx::with_font_set(&mut px, fonts)
+            .with_fonts(prefs)
             .with_scale(entry.scale);
         match entry.role {
             Role::Main => {
@@ -3104,6 +3140,10 @@ pub(crate) fn run(mode: WindowMode, live: bool) {
         wait_timeout_sec: 60,
         approve_view: HashMap::new(),
         pending_approve_window: None,
+        face_peerlist: None,
+        face_message: None,
+        face_status: None,
+        face_mono: None,
         pending_offers: HashMap::new(),
         send_queue: HashMap::new(),
         send_batch: HashMap::new(),
@@ -3156,5 +3196,6 @@ pub(crate) fn run(mode: WindowMode, live: bool) {
         adding: None,
         shutdown,
     };
+    app.reload_faces(); // 고정폭 등 슬롯 얼굴 초기 로드
     event_loop.run_app(&mut app).unwrap();
 }

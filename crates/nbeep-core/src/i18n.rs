@@ -135,6 +135,9 @@ pub enum Msg {
     Sec60,
     Sec120,
     Sec300,
+    /// 고정폭 글꼴(Base UI와 크기 공유).
+    FontMono,
+    FontMonoDesc,
     // ── 설정: 공통 ──
     SearchPlaceholder,
     SystemDefaultFont,
@@ -316,6 +319,18 @@ impl Msg {
             Msg::Sec60 => ["60s", "60초", "60秒", "60秒"],
             Msg::Sec120 => ["2m", "2분", "2分钟", "2分"],
             Msg::Sec300 => ["5m", "5분", "5分钟", "5分"],
+            Msg::FontMono => [
+                "Base UI (monospace)",
+                "Base UI (고정폭)",
+                "Base UI (等宽)",
+                "Base UI (等幅)",
+            ],
+            Msg::FontMonoDesc => [
+                "Face only — size follows Base UI. Used where digits must not jitter",
+                "얼굴만 지정 — 크기는 Base UI를 따릅니다. 숫자가 흔들리면 안 되는 곳에 쓰입니다",
+                "仅字形 — 大小跟随 Base UI，用于数字不能抖动之处",
+                "字体のみ — サイズは Base UI に従う。数字が揺れては困る箇所に使用",
+            ],
             Msg::SearchPlaceholder => [
                 "Search (space = AND)",
                 "검색 (공백=AND)",

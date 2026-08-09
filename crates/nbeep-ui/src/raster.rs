@@ -11,9 +11,56 @@ use crate::theme::{Color, FontPrefs, SlotFont};
 use nbeep_gfx::{Font, Surface, TextStyle};
 
 /// [`Surface`] + [`Font`] 위의 [`DrawCtx`] 구현체.
+/// 슬롯별 글꼴 **페이스** 묶음 — 없는 슬롯은 [`FontSet::base`]로 폴백한다.
+///
+/// 크기·굵기는 [`FontPrefs`]가, **얼굴은 여기가** 정한다. 고정폭 슬롯([`FontSet::mono`])은
+/// 숫자 폭이 변해 화면이 떨리는 것을 막는 자리다(사용자 요청 08-09).
+#[allow(missing_debug_implementations)]
+pub struct FontSet<'f> {
+    /// 기본 얼굴(항상 있어야 한다 — 나머지의 폴백).
+    pub base: &'f Font,
+    /// 사용자 목록.
+    pub peerlist: Option<&'f Font>,
+    /// 대화 본문.
+    pub message: Option<&'f Font>,
+    /// 상태바.
+    pub status: Option<&'f Font>,
+    /// 고정폭(시각·수치 표시).
+    pub mono: Option<&'f Font>,
+}
+
+impl<'f> FontSet<'f> {
+    /// 기본 얼굴 하나로 만든다(전 슬롯 동일).
+    #[must_use]
+    pub fn single(base: &'f Font) -> Self {
+        Self {
+            base,
+            peerlist: None,
+            message: None,
+            status: None,
+            mono: None,
+        }
+    }
+
+    /// 슬롯의 얼굴(없으면 기본).
+    #[must_use]
+    pub fn face(&self, slot: FontSlot) -> &'f Font {
+        match slot {
+            FontSlot::Base => Some(self.base),
+            FontSlot::PeerList => self.peerlist,
+            FontSlot::Message => self.message,
+            FontSlot::Status => self.status,
+            FontSlot::Mono => self.mono,
+        }
+        .unwrap_or(self.base)
+    }
+}
+
 #[allow(missing_debug_implementations)]
 pub struct RasterCtx<'s, 'b, 'f> {
     surface: &'s mut Surface<'b>,
+    fonts: FontSet<'f>,
+    /// 현재 슬롯의 얼굴(select_font가 갱신).
     font: &'f Font,
     /// 영역별 글꼴 설정(사용자 설정).
     prefs: FontPrefs,
@@ -26,9 +73,16 @@ pub struct RasterCtx<'s, 'b, 'f> {
 impl<'s, 'b, 'f> RasterCtx<'s, 'b, 'f> {
     /// 표면과 폰트로 컨텍스트를 만든다(기본 슬롯 = Base).
     pub fn new(surface: &'s mut Surface<'b>, font: &'f Font) -> Self {
+        Self::with_font_set(surface, FontSet::single(font))
+    }
+
+    /// 슬롯별 얼굴을 가진 컨텍스트(기본 슬롯 = Base).
+    pub fn with_font_set(surface: &'s mut Surface<'b>, fonts: FontSet<'f>) -> Self {
         let prefs = FontPrefs::default();
+        let font = fonts.base;
         Self {
             surface,
+            fonts,
             font,
             prefs,
             cur: prefs.base,
@@ -123,7 +177,10 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
             FontSlot::PeerList => self.prefs.peerlist,
             FontSlot::Message => self.prefs.message,
             FontSlot::Status => self.prefs.status,
+            // 고정폭은 **크기를 기본 UI와 공유**한다(얼굴만 다르다 — 사용자 확정).
+            FontSlot::Mono => self.prefs.base,
         };
+        self.font = self.fonts.face(slot);
         // 인자 bold는 슬롯 설정 위 강제 볼드(예: 강조 라벨).
         self.cur.bold |= bold;
     }

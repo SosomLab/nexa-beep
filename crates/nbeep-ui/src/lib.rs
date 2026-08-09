@@ -65,7 +65,7 @@ pub use geom::{Point, Rect, Size};
 pub use offer_prompt::{OfferChoice, OfferInfo, OfferPromptWidget};
 pub use peer_list::{badge, HudPos, LinkState, PeerListWidget, PeerRow, XferProgress, ROW_H};
 pub use quarantine_view::{QAction, QRow, QuarantineWidget};
-pub use raster::RasterCtx;
+pub use raster::{FontSet, RasterCtx};
 pub use settings::{registry, Entry, SettingKind, SettingsState, SettingsWidget};
 pub use theme::{Color, FontPrefs, IconImage, SlotFont, Theme};
 pub use typeahead::{Query, TypeAhead, TYPEAHEAD_TIMEOUT_MS};

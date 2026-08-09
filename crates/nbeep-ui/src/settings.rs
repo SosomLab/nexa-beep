@@ -53,6 +53,11 @@ pub enum SettingKind {
     RadioInput(&'static [(&'static str, Msg)], &'static str),
     /// 3×3 위치 그리드 — 미니 화면(4:3) 셀로 직관 선택([`PositionPicker`]).
     PositionGrid,
+    /// 글꼴 **얼굴만** — 크기는 Base UI를 따른다(고정폭 슬롯).
+    FontFace {
+        /// 글꼴명 값 키.
+        family_key: &'static str,
+    },
     /// on/off — [`Checkbox`]. 값은 `"on"`/`"off"`(기본 on).
     Toggle,
     /// 글꼴 영역 — 글꼴명 [`TextBox`] + 크기 [`Combo`].
@@ -95,6 +100,7 @@ impl Entry {
                 .collect(),
             SettingKind::Toggle => vec![(self.key, "on".to_string())],
             SettingKind::PositionGrid => vec![(self.key, "bl".to_string())],
+            SettingKind::FontFace { family_key } => vec![(family_key, String::new())],
             SettingKind::FontSection {
                 family_key,
                 size_key,
@@ -206,6 +212,16 @@ pub fn registry() -> &'static [Entry] {
                 size_key: "font.base.size",
             },
             key: "font.base.family",
+        },
+        Entry {
+            cat: Msg::CatFont,
+            sub: None,
+            label: Msg::FontMono,
+            desc: Msg::FontMonoDesc,
+            kind: SettingKind::FontFace {
+                family_key: "font.mono.family",
+            },
+            key: "font.mono.family",
         },
         Entry {
             cat: Msg::CatFont,
@@ -400,6 +416,8 @@ enum RowCtl {
     },
     /// 3×3 위치 그리드.
     Pos(PositionPicker),
+    /// 글꼴 **얼굴만**(고정폭 — 크기는 Base UI를 따른다).
+    Face(TextBox),
 }
 
 #[derive(Debug)]
@@ -627,6 +645,12 @@ impl SettingsWidget {
                     c.set_scale(self.scale);
                     RowCtl::Combo(c)
                 }
+                SettingKind::FontFace { family_key } => {
+                    let mut family = TextBox::new(tr(lang, Msg::SystemDefaultFont))
+                        .with_text(self.values.get(family_key).map_or("", String::as_str));
+                    family.set_scale(self.scale);
+                    RowCtl::Face(family)
+                }
                 SettingKind::PositionGrid => {
                     let mut p = PositionPicker::new();
                     p.select_value(self.values.get(e.key).map_or("bl", String::as_str));
@@ -828,6 +852,18 @@ impl SettingsWidget {
                         inv,
                     );
                 }
+                RowCtl::Face(family) => {
+                    // 크기 콤보가 없다 — 얼굴만 지정하고 크기는 Base UI를 따른다.
+                    family.set_bounds(
+                        Rect::new(
+                            rx + rw - family_w - pad,
+                            top + (h - ctl_h) / 2,
+                            family_w,
+                            ctl_h,
+                        ),
+                        inv,
+                    );
+                }
                 RowCtl::Pos(p) => {
                     p.set_scale(self.scale);
                     let (pw, ph) = p.preferred_size();
@@ -857,6 +893,14 @@ impl SettingsWidget {
                     if let Some(v) = g.take_changed() {
                         got.push((e.key, v));
                     }
+                }
+                RowCtl::Face(family) => {
+                    // ★ 글자마다 폰트를 찾으면 낭비다 — **Enter로 확정할 때만** 보고한다
+                    //   (사용자 지적 08-09: 입력해도 적용되지 않는다).
+                    if let Some(v) = family.take_committed() {
+                        got.push((e.key, v));
+                    }
+                    let _ = family.take_changed(); // 중간 변경은 버린다
                 }
                 RowCtl::Check(c) => {
                     if let Some(on) = c.take_toggled() {
@@ -1010,6 +1054,7 @@ impl Widget for SettingsWidget {
                             size.set_focused(size.bounds().contains(p));
                         }
                         RowCtl::Pos(g) => g.set_focused(g.bounds().contains(p)),
+                        RowCtl::Face(f) => f.set_focused(f.bounds().contains(p)),
                         RowCtl::Combo(c) => c.set_focused(c.bounds().contains(p)),
                         RowCtl::Check(c) => c.set_focused(c.bounds().contains(p)),
                     }
@@ -1044,6 +1089,7 @@ impl Widget for SettingsWidget {
                             size.on_event(ev, inv);
                         }
                         RowCtl::Pos(g) => g.on_event(ev, inv),
+                        RowCtl::Face(f) => f.on_event(ev, inv),
                     }
                 }
                 self.drain_changes(inv);
@@ -1144,7 +1190,7 @@ impl Widget for SettingsWidget {
             let e = &registry()[row.idx];
             let r = row.rect;
             match &row.ctl {
-                RowCtl::Combo(_) | RowCtl::Check(_) | RowCtl::Pos(_) => {
+                RowCtl::Combo(_) | RowCtl::Check(_) | RowCtl::Pos(_) | RowCtl::Face(_) => {
                     ctx.select_font(FontSlot::Base, false);
                     ctx.text(
                         r.x + self.s(PAD),
@@ -1185,6 +1231,7 @@ impl Widget for SettingsWidget {
                 RowCtl::Combo(c) => c.paint(ctx, theme),
                 RowCtl::Check(c) => c.paint(ctx, theme),
                 RowCtl::Pos(g) => g.paint(ctx, theme),
+                RowCtl::Face(f) => f.paint(ctx, theme),
                 RowCtl::Font { family, size } => {
                     family.paint(ctx, theme);
                     size.paint(ctx, theme);
@@ -1199,7 +1246,8 @@ impl Widget for SettingsWidget {
         }
 
         // 행에 붙은 정보 줄 — **행 바로 아래 고정 위치**.
-        ctx.select_font(FontSlot::Status, false);
+        // 고정폭으로 그린다: 숫자 폭이 변하면 1초마다 글자가 흔들린다(사용자 지적 08-09).
+        ctx.select_font(FontSlot::Mono, false);
         for row in &self.rows {
             let Some(note) = self.notes.get(registry()[row.idx].key) else {
                 continue;
