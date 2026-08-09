@@ -35,6 +35,7 @@ pub use controls::{
     Control, ControlBase, FlatRow, GridColumn, ImageFit, LabelSide, PopupHit, RadioGroup,
     RadioOption, ScrollBars, TextBox, TreeControl, TreeGrid, TreeModel, TreeNode, TreeView,
 };
+pub use controls::{HAlign, VAlign};
 pub use draw::{DrawCtx, FontSlot};
 pub use edit::{EditKey, EditState};
 pub use event::{InputEvent, Key, WheelAccum, WHEEL_DELTA};
