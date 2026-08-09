@@ -530,6 +530,8 @@ struct App {
     /// About 뷰(열려 있을 때만 Some).
     about_view: Option<AboutWidget>,
     quarantine_view: Option<nbeep_ui::QuarantineWidget>,
+    /// 상대별 진행 중 전송(목록 막대·대화창 진척 줄 공용).
+    xfer_progress: HashMap<PeerId, nbeep_ui::XferProgress>,
     /// 주 창 상단 Pull-down 메뉴(목록 모드 전용).
     menu: MenuBar,
     /// 주 창 툴바(메뉴 아래 · 이미지 버튼 · 목록 모드 전용).
@@ -804,7 +806,14 @@ impl App {
                 } else {
                     LinkState::Idle
                 };
-                PeerRow { entry, trust, link }
+                // 진행 중 전송이 있으면 이름 아래 막대로 보인다(슬라이스 4에서 채운다).
+                let xfer = self.xfer_progress.get(&entry.peer).copied();
+                PeerRow {
+                    entry,
+                    trust,
+                    link,
+                    xfer,
+                }
             })
             .collect();
         self.list.set_rows(rows, inv);
@@ -2348,6 +2357,7 @@ pub(crate) fn run(mode: WindowMode, live: bool) {
         gallery_view: None,
         about_view: None,
         quarantine_view: None,
+        xfer_progress: HashMap::new(),
         menu: MenuBar::new(build_menus()),
         toolbar: Toolbar::new(vec![
             ToolItem::new(

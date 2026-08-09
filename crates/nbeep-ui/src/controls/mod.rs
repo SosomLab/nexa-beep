@@ -21,6 +21,7 @@ pub mod pulldown;
 pub mod radio;
 pub mod scroll;
 pub mod textbox;
+pub mod timeout_button;
 pub mod toolbar;
 pub mod tree;
 
@@ -32,6 +33,7 @@ pub use pulldown::{MenuBar, MenuDef, MenuEntry};
 pub use radio::{RadioGroup, RadioOption};
 pub use scroll::ScrollBars;
 pub use textbox::TextBox;
+pub use timeout_button::{FiredBy, TimeoutButton};
 pub use toolbar::{ToolIcon, ToolItem, Toolbar, DEFAULT_ICON};
 pub use tree::{FlatRow, GridColumn, TreeControl, TreeGrid, TreeModel, TreeNode, TreeView};
 

@@ -25,6 +25,34 @@ pub struct PeerRow {
     pub trust: TrustLevel,
     /// 세션 링크 상태(상태 점 — 사용자 요청 08-09: 끊어진 대상 식별).
     pub link: LinkState,
+    /// 진행 중 파일 전송(있으면 이름 **바로 아래**에 진행 막대 · 사용자 요청 08-09).
+    pub xfer: Option<XferProgress>,
+}
+
+/// 목록 행에 그릴 전송 진행 상태.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct XferProgress {
+    /// 전송된 바이트(현재 파일까지 누적).
+    pub done_bytes: u64,
+    /// 전체 대상 바이트.
+    pub total_bytes: u64,
+    /// 완료된 파일 수.
+    pub done_files: u32,
+    /// 전체 파일 수.
+    pub total_files: u32,
+    /// 보내는 중인가(false = 받는 중) — 막대 색을 가른다.
+    pub sending: bool,
+}
+
+impl XferProgress {
+    /// 0.0~1.0 비율.
+    #[must_use]
+    pub fn ratio(self) -> f32 {
+        if self.total_bytes == 0 {
+            return 0.0;
+        }
+        (self.done_bytes as f32 / self.total_bytes as f32).clamp(0.0, 1.0)
+    }
 }
 
 /// 세션 링크 상태 — 목록에서 색 점으로 식별한다.
@@ -515,6 +543,24 @@ impl Widget for PeerListWidget {
                 theme.text,
             );
 
+            // 전송 진행 막대 — 이름 **바로 아래**(사용자 요청). 진행 중일 때만 자리를 쓴다.
+            if let Some(xp) = row.xfer {
+                let bar_h = self.s(4);
+                let bar_y = text_y + ctx.text_height() + self.s(3);
+                let bar_x = dot.right() + self.s(8);
+                let bar_w = (r.right() - bar_x - self.s(120)).max(self.s(40));
+                let track = Rect::new(bar_x, bar_y, bar_w, bar_h);
+                ctx.fill_round_rect(track, bar_h / 2, theme.panel_bg_alt);
+                let fill_w = (bar_w as f32 * xp.ratio()).round() as i32;
+                if fill_w > 0 {
+                    ctx.fill_round_rect(
+                        Rect::new(bar_x, bar_y, fill_w, bar_h),
+                        bar_h / 2,
+                        if xp.sending { theme.accent } else { theme.ok },
+                    );
+                }
+            }
+
             // 다중 경로 ×N(진단).
             if row.entry.paths > 1 {
                 let name_w = ctx.text_width(row.entry.name.as_str());
@@ -611,6 +657,7 @@ mod tests {
             },
             trust,
             link: LinkState::Idle,
+            xfer: None,
         }
     }
     fn widget(names: &[(u8, &str)]) -> (PeerListWidget, Invalidations) {
