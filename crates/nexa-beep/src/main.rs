@@ -1922,6 +1922,17 @@ mod app_window {
                     }
                 }
             }
+            // 설정 우측 패널 스크롤바 페이드 틱(~5Hz).
+            if let Some(sv) = &mut self.settings_view {
+                if sv.tick() {
+                    if let Some((sid, _)) =
+                        self.windows.iter().find(|(_, e)| e.role == Role::Settings)
+                    {
+                        let sid = *sid;
+                        self.request_redraw(sid);
+                    }
+                }
+            }
             // 오버레이 스크롤바 페이드 틱(~5Hz) — 상태 변화 시 갤러리 재그리기.
             if let Some(gv) = &mut self.gallery_view {
                 if gv.tick() {

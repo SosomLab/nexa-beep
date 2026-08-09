@@ -495,8 +495,8 @@ impl Widget for PeerListWidget {
             } else {
                 theme.panel_bg
             };
-            let text_y = r.y + (rh - self.s(20)) / 2;
-            // 행 배경 먼저(불투명) — 점·이름은 그 위에.
+            let text_y = r.y + (rh - ctx.text_height()) / 2; // 실측 세로 중앙
+                                                             // 행 배경 먼저(불투명) — 점·이름은 그 위에.
             ctx.fill_rect(r, bg);
             // 세션 상태 점(사용자 요청 — 끊어진 대상 식별): 초록=활성 · 빨강=끊김 · 회색=발견만.
             let dot_d = self.s(8);

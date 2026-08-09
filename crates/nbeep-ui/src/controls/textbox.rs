@@ -142,7 +142,8 @@ impl Widget for TextBox {
 
         let cy = b.y + b.h / 2;
         let s16 = self.s(16);
-        let ty = cy - s16 / 2;
+        ctx.select_font(FontSlot::Base, false);
+        let ty = cy - ctx.text_height() / 2;
         // 선행 이미지(있으면) — placeholder·텍스트·캐럿의 시작 x를 그 뒤로 민다.
         let mut tx = b.x + self.s(10);
         if let Some(img) = self.image.as_deref() {

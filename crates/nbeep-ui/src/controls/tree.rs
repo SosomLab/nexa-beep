@@ -299,7 +299,7 @@ pub trait TreeControl: Control {
             tx += isz + self.s(4);
         }
         ctx.select_font(FontSlot::Base, false);
-        let ty = cell.y + (cell.h - self.s(16)) / 2;
+        let ty = cell.y + (cell.h - ctx.text_height()) / 2;
         ctx.text(tx, ty, cell, &row.label, theme.text);
     }
 }
@@ -604,9 +604,9 @@ impl Widget for TreeGrid {
         // 헤더(가로 스크롤 반영 · b.w로 텍스트 클립). 텍스트는 헤더 높이의 세로 중앙.
         let header = Rect::new(b.x, b.y, b.w, self.s(HEADER_H));
         ctx.fill_rect(header, theme.chrome_bg);
-        let hty = header.y + (header.h - self.s(13)) / 2; // 상·하 여백 동일
         let mut cx = b.x - ox;
         ctx.select_font(FontSlot::Status, false);
+        let hty = header.y + (header.h - ctx.text_height()) / 2; // 상·하 여백 동일(실측)
         for col in &self.columns {
             let w = self.s(col.width);
             ctx.text(cx + self.s(8), hty, header, &col.title, theme.text_dim);
@@ -644,9 +644,10 @@ impl Widget for TreeGrid {
                 let w = self.s(col.width);
                 if let Some(val) = row.cells.get(ci - 1) {
                     ctx.select_font(FontSlot::Base, false);
+                    let th = ctx.text_height();
                     ctx.text(
                         colx + self.s(8),
-                        y + (rh - self.s(16)) / 2,
+                        y + (rh - th) / 2,
                         Rect::new(colx, y, w, rh),
                         val,
                         theme.text,

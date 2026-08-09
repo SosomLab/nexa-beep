@@ -305,7 +305,8 @@ pub trait ComboControl: Control {
             );
         }
         ctx.select_font(FontSlot::Base, false);
-        ctx.text(tx, cy - self.s(16) / 2, b, box_text, theme.text);
+        let th = ctx.text_height();
+        ctx.text(tx, cy - th / 2, b, box_text, theme.text);
 
         // 셰브론(⇕ 확장 / ∨ 일반) — 트리와 동일한 회색 계열(text_dim).
         let chev = self.chevron_rect();
@@ -357,7 +358,8 @@ pub trait ComboControl: Control {
                 theme.text,
             );
             ctx.select_font(FontSlot::Base, false);
-            ctx.text(tx, cy - self.s(16) / 2, row, &it.label, theme.text);
+            let th = ctx.text_height();
+            ctx.text(tx, cy - th / 2, row, &it.label, theme.text);
             y += rh;
         }
         // 구분자(Horizon) + 확장 항목("Choose…" 등 · 아이콘 옵션).
@@ -384,7 +386,8 @@ pub trait ComboControl: Control {
                     theme.accent,
                 );
                 ctx.select_font(FontSlot::Base, false);
-                ctx.text(tx, cy - self.s(16) / 2, row, &it.label, theme.accent);
+                let th = ctx.text_height();
+                ctx.text(tx, cy - th / 2, row, &it.label, theme.accent);
                 y += rh;
             }
         }
@@ -762,7 +765,8 @@ impl Choose {
                 theme.text,
             );
             ctx.select_font(FontSlot::Base, false);
-            ctx.text(tx, cy - self.s(16) / 2, row, &it.label, theme.text);
+            let th = ctx.text_height();
+            ctx.text(tx, cy - th / 2, row, &it.label, theme.text);
         }
         let ch = items.len() as i32 * rh;
         self.pick_bars.paint(

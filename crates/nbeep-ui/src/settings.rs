@@ -17,8 +17,8 @@
 //! M2-5(Repository 포트). i18n: 라벨은 [`Msg`] 키, 검색은 **전 언어 매치**.
 
 use crate::controls::{
-    Checkbox, Combo, ComboControl, ComboItem, Control, LabelSide, TextBox, TreeControl, TreeModel,
-    TreeNode, TreeView,
+    Checkbox, Combo, ComboControl, ComboItem, Control, LabelSide, ScrollBars, TextBox, TreeControl,
+    TreeModel, TreeNode, TreeView,
 };
 use crate::draw::{DrawCtx, FontSlot};
 use crate::event::{InputEvent, Key};
@@ -332,6 +332,12 @@ pub struct SettingsWidget {
     values: HashMap<&'static str, String>,
     changes: Vec<(&'static str, String)>,
     back: bool,
+    /// 우측 패널 세로 스크롤 오프셋(물리 px).
+    scroll: i32,
+    /// 우측 패널 콘텐츠 총 높이(물리 px) — layout에서 계산.
+    content_h: i32,
+    /// 우측 패널 오버레이 스크롤바.
+    bars: ScrollBars,
 }
 
 impl SettingsWidget {
@@ -356,6 +362,9 @@ impl SettingsWidget {
             values,
             changes: Vec::new(),
             back: false,
+            scroll: 0,
+            content_h: 0,
+            bars: ScrollBars::new(),
         };
         let mut inv = Invalidations::default();
         w.rebuild(&mut inv);
@@ -504,6 +513,18 @@ impl SettingsWidget {
         self.layout(inv);
     }
 
+    /// 우측 패널 뷰포트(사이드바 제외 영역).
+    fn right_viewport(&self) -> Rect {
+        let sw = self.s(SIDEBAR_W);
+        let b = self.bounds;
+        Rect::new(b.x + sw, b.y, (b.w - sw).max(0), b.h)
+    }
+
+    /// 스크롤바 페이드 틱(호스트 ~5Hz) — 표시가 바뀌면 `true`(재그리기).
+    pub fn tick(&mut self) -> bool {
+        self.bars.tick() || self.tree.tick()
+    }
+
     /// 현 bounds에 맞춰 자식 컨트롤 배치.
     fn layout(&mut self, inv: &mut Invalidations) {
         let sw = self.s(SIDEBAR_W);
@@ -525,7 +546,18 @@ impl SettingsWidget {
 
         let rx = b.x + sw; // 우측 패널 시작
         let rw = (b.w - sw).max(0);
-        let mut top = b.y;
+        // 콘텐츠 총 높이 → 스크롤 클램프(행 추가/검색으로 줄어들면 위로 당긴다).
+        let (hf, he) = (self.s(FONT_SECTION_H), self.s(ENTRY_H));
+        self.content_h = self
+            .rows
+            .iter()
+            .map(|row| match registry()[row.idx].kind {
+                SettingKind::FontSection { .. } => hf,
+                _ => he,
+            })
+            .sum();
+        self.scroll = self.scroll.clamp(0, (self.content_h - b.h).max(0));
+        let mut top = b.y - self.scroll;
         // 차용 분리를 위해 치수 사전 계산.
         let (ctl_h, pad) = (self.s(CTL_H), self.s(PAD));
         let (h_font, h_entry) = (self.s(FONT_SECTION_H), self.s(ENTRY_H));
@@ -651,6 +683,23 @@ impl Widget for SettingsWidget {
             self.drain_changes(inv);
             inv.push(self.bounds); // 드롭다운 영역 재그리기
             return;
+        }
+
+        // ── 우측 패널 오버레이 스크롤(세로 전용) — 콤보 열림 중에는 위 캡처가 우선 ──
+        {
+            let vp = self.right_viewport();
+            let (_, ny, consumed) =
+                self.bars
+                    .on_event(ev, vp, vp.w, self.content_h, 0, self.scroll, self.scale);
+            if ny != self.scroll {
+                self.scroll = ny;
+                self.layout(inv);
+                inv.push(self.bounds);
+            }
+            if consumed {
+                inv.push(self.bounds);
+                return;
+            }
         }
 
         match *ev {
@@ -824,6 +873,18 @@ impl Widget for SettingsWidget {
                 _ => {}
             }
         }
+        // 우측 패널 오버레이 스크롤바(맨 위에 겹침 · 세로 전용).
+        let vp = self.right_viewport();
+        self.bars.paint(
+            ctx,
+            theme,
+            vp,
+            vp.w,
+            self.content_h,
+            0,
+            self.scroll,
+            self.scale,
+        );
     }
 }
 
