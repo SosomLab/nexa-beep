@@ -210,6 +210,18 @@ mod tests {
     }
 
     #[test]
+    fn help_badge_reclick_closes_tip() {
+        let (mut c, mut inv) = cb();
+        c.set_help("x");
+        c.set_show_help(true);
+        let badge = c.help_badge_rect(c.hit_rect());
+        c.on_event(&click(badge.x + 2, badge.y + 2), &mut inv);
+        assert!(c.base().help_open, "1클릭 = 열림");
+        c.on_event(&click(badge.x + 2, badge.y + 2), &mut inv);
+        assert!(!c.base().help_open, "재클릭 = 닫힘(토글)");
+    }
+
+    #[test]
     fn label_side_moves_the_box() {
         let (mut c, mut inv) = cb();
         let left_x = c.box_rect().x;
