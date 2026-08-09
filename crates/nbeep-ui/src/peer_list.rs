@@ -520,9 +520,11 @@ impl Widget for PeerListWidget {
                 rh - self.s(16),
             );
             ctx.fill_round_rect(chip_r, (rh - self.s(16)) / 2, chip);
+            // 텍스트 상자 높이 실측으로 정확히 세로 중앙(고정 오프셋은 하단 여백이 커 보인다).
+            let th = ctx.text_height();
             ctx.text(
                 chip_r.x + self.s(8),
-                chip_r.y + self.s(3),
+                chip_r.y + (chip_r.h - th) / 2,
                 chip_r,
                 label,
                 theme.text,

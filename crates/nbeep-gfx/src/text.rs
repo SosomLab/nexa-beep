@@ -92,6 +92,14 @@ impl Font {
         self.inner.as_scaled(size).ascent()
     }
 
+    /// `size`에서의 텍스트 상자 높이(어센트+디센트, px) — 세로 중앙 정렬 실측용.
+    /// `line_height`와 달리 줄 간격(line gap)을 빼서 한 줄 배치에 쓴다.
+    #[must_use]
+    pub fn text_box_height(&self, size: f32) -> f32 {
+        let s = self.inner.as_scaled(size);
+        s.ascent() - s.descent()
+    }
+
     /// [`Font::draw_text`]의 클립 변형 — `clip = (x0, y0, x1, y1)` 밖 픽셀은 찍지 않는다
     /// (행 배경 안에서만 그리는 `text_opaque` 모델의 기초).
     #[allow(clippy::too_many_arguments)]

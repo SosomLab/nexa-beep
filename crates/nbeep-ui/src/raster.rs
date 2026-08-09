@@ -165,6 +165,10 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
         self.font.measure(text, self.px_size()).ceil() as i32
     }
 
+    fn text_height(&mut self) -> i32 {
+        self.font.text_box_height(self.px_size()).ceil() as i32
+    }
+
     fn image(&mut self, x: i32, y: i32, img: &crate::theme::IconImage, clip: Rect) {
         self.surface.blend_image(x, y, img, Self::clip_of(clip));
     }
