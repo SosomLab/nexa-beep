@@ -8,7 +8,7 @@
 //! |---|---|---|
 //! | Offer | 1 | `[size 8B][sha256 32B][name_len 2B][name bytes(원본)]` |
 //! | Accept | 2 | — |
-//! | Reject | 3 | `[reason 1B]` |
+//! | Reject | 3 | `[reason 1B][limit 8B]` — `limit` = 수신측 상한 공지(0 = 미공개) |
 //! | Chunk | 4 | `[offset 8B][data …]` |
 //! | Done | 5 | — |
 //! | Cancel | 6 | — |
@@ -29,10 +29,13 @@ const WIRE_VER: u8 = 1;
 /// 전송 식별자(발신자가 생성 — 세션 내 유일).
 pub type XferId = [u8; 16];
 
-/// 청크 최대 크기(64 KiB) — 초과 = 거부(수신 메모리 상한 근거).
-pub const MAX_CHUNK: usize = 64 * 1024;
+/// 청크 최대 크기(32 KiB) — Noise 프레임 상한(65535 − AEAD 태그 16 − mux/xfer 헤더 27)
+/// 안에 **여유 있게** 들어가야 한다. 64KiB로 잡으면 헤더+태그를 더한 뒤 상한을 넘겨
+/// 전송 자체가 실패한다(실측: 128KiB 전송이 첫 청크에서 세션 끊김 — 08-09).
+pub const MAX_CHUNK: usize = 32 * 1024;
 
-/// v1 파일 크기 상한(256 MiB) — 오퍼 단계에서 거부(협상 실패, FR-X-3).
+/// 수신 상한 **기본값**(256 MiB) — 실제 상한은 **수신측이 설정**한다
+/// ([`XferInbox::with_max_file`] — 사용자 확정 08-09: 핸드셰이크에서 수신측 제약).
 pub const MAX_FILE: u64 = 256 * 1024 * 1024;
 
 /// 거부 사유 와이어 값.
@@ -82,12 +85,14 @@ pub enum XferMsg {
         /// 전송 id.
         id: XferId,
     },
-    /// 거절.
+    /// 거절 — `TooLarge`면 수신측 상한을 공지해 발신자가 재시도 판단을 할 수 있다.
     Reject {
         /// 전송 id.
         id: XferId,
         /// 사유.
         why: RejectWhy,
+        /// 수신측 상한 공지(바이트 · 0 = 미공개/무관).
+        limit: u64,
     },
     /// 데이터 청크(연속 오프셋 강제).
     Chunk {
@@ -174,10 +179,11 @@ impl XferMsg {
                 out.push(K_ACCEPT);
                 out.extend_from_slice(id);
             }
-            Self::Reject { id, why } => {
+            Self::Reject { id, why, limit } => {
                 out.push(K_REJECT);
                 out.extend_from_slice(id);
                 out.push(why.to_byte());
+                out.extend_from_slice(&limit.to_le_bytes());
             }
             Self::Chunk { id, offset, data } => {
                 out.push(K_CHUNK);
@@ -233,8 +239,12 @@ impl XferMsg {
             }
             K_ACCEPT => Self::Accept { id },
             K_REJECT => {
-                let why = RejectWhy::from_byte(*rest.first().ok_or(XferError::Truncated)?);
-                Self::Reject { id, why }
+                if rest.len() < 9 {
+                    return Err(XferError::Truncated);
+                }
+                let why = RejectWhy::from_byte(rest[0]);
+                let limit = u64::from_le_bytes(rest[1..9].try_into().expect("8B"));
+                Self::Reject { id, why, limit }
             }
             K_CHUNK => {
                 if rest.len() < 8 {
@@ -292,16 +302,51 @@ pub struct Received {
 }
 
 /// 수신 조립기 — 세션당 하나. 오퍼 수신→(호스트 결정) 수락→청크 연속 조립→완료.
-#[derive(Debug, Default)]
+///
+/// **크기 상한은 수신측 정책**이다(사용자 확정 08-09) — 발신측 상수가 아니라 수신자가
+/// [`XferInbox::with_max_file`]/[`XferInbox::set_max_file`]로 정하고, 초과 오퍼는
+/// [`XferError::FileTooBig`]으로 거부하며 거절 와이어에 상한을 공지한다.
+#[derive(Debug)]
 pub struct XferInbox {
     inflight: HashMap<XferId, Incoming>,
+    /// 수신 허용 상한(바이트).
+    max_file: u64,
+}
+
+impl Default for XferInbox {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl XferInbox {
-    /// 새 조립기.
+    /// 새 조립기(상한 = [`MAX_FILE`] 기본값).
     #[must_use]
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            inflight: HashMap::new(),
+            max_file: MAX_FILE,
+        }
+    }
+
+    /// 수신 상한을 정해 만든다(수신측 정책 — 설정/호스트가 주입).
+    #[must_use]
+    pub fn with_max_file(max_file: u64) -> Self {
+        Self {
+            inflight: HashMap::new(),
+            max_file,
+        }
+    }
+
+    /// 수신 상한 변경(설정 hot-swap 경로).
+    pub fn set_max_file(&mut self, max_file: u64) {
+        self.max_file = max_file;
+    }
+
+    /// 현재 수신 상한(바이트) — 거절 공지·UI 표시용.
+    #[must_use]
+    pub fn max_file(&self) -> u64 {
+        self.max_file
     }
 
     /// 오퍼 접수 — 상한 검사만 하고 **대기**(수락은 호스트/사용자 결정 · FR-X-3).
@@ -318,7 +363,7 @@ impl XferInbox {
         else {
             return Ok(()); // 오퍼 아님 — 무시(호출 편의)
         };
-        if *size > MAX_FILE {
+        if *size > self.max_file {
             return Err(XferError::FileTooBig);
         }
         self.inflight.insert(
@@ -425,6 +470,7 @@ mod tests {
             XferMsg::Reject {
                 id: xid(1),
                 why: RejectWhy::TooLarge,
+                limit: 8 * 1024 * 1024,
             },
             XferMsg::Chunk {
                 id: xid(1),
@@ -545,5 +591,23 @@ mod tests {
             name: b"huge".to_vec(),
         });
         assert_eq!(r, Err(XferError::FileTooBig));
+    }
+
+    #[test]
+    fn receiver_sets_its_own_limit() {
+        // 수신측 정책 — 발신 상수가 아니라 수신자가 정한다(사용자 확정 08-09).
+        let mut inbox = XferInbox::with_max_file(1024);
+        assert_eq!(inbox.max_file(), 1024);
+        let offer = |size| XferMsg::Offer {
+            id: xid(8),
+            size,
+            sha256: [0u8; 32],
+            name: b"f".to_vec(),
+        };
+        assert_eq!(inbox.offer(&offer(1025)), Err(XferError::FileTooBig));
+        assert!(inbox.offer(&offer(1024)).is_ok(), "상한 이하 = 접수");
+        // hot-swap 축소 후 새 오퍼부터 적용.
+        inbox.set_max_file(10);
+        assert_eq!(inbox.offer(&offer(11)), Err(XferError::FileTooBig));
     }
 }
