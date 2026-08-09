@@ -102,6 +102,21 @@ pub enum Msg {
     CatFont,
     /// 모양 하위: 타입어헤드.
     CatTypeahead,
+    /// 카테고리: 파일 전송.
+    CatFiles,
+    /// 파일 수신 승인 방식.
+    XferApproval,
+    XferApprovalDesc,
+    ApprovalManual,
+    ApprovalAuto,
+    ApprovalTimed,
+    ApprovalBlock,
+    /// 기간 자동 승인 길이.
+    XferWindow,
+    XferWindowDesc,
+    Win1h,
+    Win6h,
+    WinToday,
     // ── 설정: 공통 ──
     SearchPlaceholder,
     SystemDefaultFont,
@@ -195,6 +210,43 @@ impl Msg {
             Msg::CatAppearance => ["Appearance", "모양", "外观", "外観"],
             Msg::CatFont => ["Font", "글꼴", "字体", "フォント"],
             Msg::CatTypeahead => ["Type-ahead", "타입어헤드", "预输入", "先行入力"],
+            Msg::CatFiles => ["Files", "파일", "文件", "ファイル"],
+            Msg::XferApproval => [
+                "Incoming file approval",
+                "파일 수신 승인",
+                "文件接收批准",
+                "ファイル受信承認",
+            ],
+            Msg::XferApprovalDesc => [
+                "How to handle each incoming file offer — one approval per offer",
+                "수신 제안마다 어떻게 처리할지 — 제안 1건당 승인 1번",
+                "如何处理每个接收提议 — 每个提议一次批准",
+                "受信提案ごとの扱い — 提案1件につき承認1回",
+            ],
+            Msg::ApprovalManual => ["Ask each time", "매번 확인(기본)", "每次询问", "毎回確認"],
+            Msg::ApprovalAuto => ["Always accept", "항상 수락", "始终接受", "常に受諾"],
+            Msg::ApprovalTimed => [
+                "Accept for a period",
+                "기간만 자동 수락",
+                "限时自动接受",
+                "期間限定で自動受諾",
+            ],
+            Msg::ApprovalBlock => ["Reject all", "모두 거부", "全部拒绝", "すべて拒否"],
+            Msg::XferWindow => [
+                "Auto-accept period",
+                "자동 수락 기간",
+                "自动接受时长",
+                "自動受諾期間",
+            ],
+            Msg::XferWindowDesc => [
+                "Reverts to the previous choice when it ends",
+                "기간이 끝나면 직전 방식으로 되돌아갑니다",
+                "结束后恢复为上一个选项",
+                "終了後は直前の方式に戻ります",
+            ],
+            Msg::Win1h => ["1 hour", "1시간", "1小时", "1時間"],
+            Msg::Win6h => ["6 hours", "6시간", "6小时", "6時間"],
+            Msg::WinToday => ["Today", "오늘(24시간)", "今天", "今日"],
             Msg::SearchPlaceholder => [
                 "Search (space = AND)",
                 "검색 (공백=AND)",

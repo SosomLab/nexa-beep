@@ -240,6 +240,31 @@ pub fn registry() -> &'static [Entry] {
             },
             key: "font.status.family",
         },
+        Entry {
+            cat: Msg::CatFiles,
+            sub: None,
+            label: Msg::XferApproval,
+            desc: Msg::XferApprovalDesc,
+            kind: SettingKind::Radio(&[
+                ("manual", Msg::ApprovalManual),
+                ("auto", Msg::ApprovalAuto),
+                ("timed", Msg::ApprovalTimed),
+                ("block", Msg::ApprovalBlock),
+            ]),
+            key: "xfer.approval",
+        },
+        Entry {
+            cat: Msg::CatFiles,
+            sub: None,
+            label: Msg::XferWindow,
+            desc: Msg::XferWindowDesc,
+            kind: SettingKind::Radio(&[
+                ("1h", Msg::Win1h),
+                ("6h", Msg::Win6h),
+                ("today", Msg::WinToday),
+            ]),
+            key: "xfer.approval_window",
+        },
     ]
 }
 
