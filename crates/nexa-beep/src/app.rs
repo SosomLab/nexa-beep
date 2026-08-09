@@ -31,6 +31,7 @@ fn build_menus() -> Vec<MenuDef> {
             t(Msg::MenuLabel),
             vec![
                 MenuEntry::Item(ComboItem::new("settings", t(Msg::SettingsTitle))),
+                MenuEntry::Item(ComboItem::new("quarantine", "격리함")),
                 MenuEntry::Item(ComboItem::new("gallery", t(Msg::MenuGallery))),
             ],
         ),
@@ -393,6 +394,8 @@ enum Role {
     Picker,
     /// About 창(메뉴 → About — 브랜딩·링크).
     About,
+    /// 격리함 — 수신 파일 승인·삭제(M4-3 · [docs/11] §7 등급별 마찰).
+    Quarantine,
 }
 
 /// 에코 봇 — 버스에 실물 신원으로 참여해 수신 세션을 받고, Chat 메시지를 에코한다.
@@ -526,6 +529,7 @@ struct App {
     picker_view: Option<nbeep_ui::TreeView>,
     /// About 뷰(열려 있을 때만 Some).
     about_view: Option<AboutWidget>,
+    quarantine_view: Option<nbeep_ui::QuarantineWidget>,
     /// 주 창 상단 Pull-down 메뉴(목록 모드 전용).
     menu: MenuBar,
     /// 주 창 툴바(메뉴 아래 · 이미지 버튼 · 목록 모드 전용).
@@ -989,6 +993,134 @@ impl App {
     }
 
     /// 컨트롤 갤러리 창을 연다(임시 검수 — 이미 열려 있으면 포커스).
+    /// 격리함 행 적재 — `.beepq`를 읽어 메타를 표시용으로 옮긴다(호스트가 IO 담당).
+    fn quarantine_rows(&self) -> Vec<nbeep_ui::QRow> {
+        use nbeep_core::TrustStore as _;
+        use nbeep_safe::{Beepq, QuarantineDir};
+        let Ok(dir) = QuarantineDir::open(crate::gate::quarantine_root()) else {
+            return Vec::new();
+        };
+        let Ok(paths) = dir.list() else {
+            return Vec::new();
+        };
+        paths
+            .into_iter()
+            .filter_map(|p| {
+                let bytes = std::fs::read(&p).ok()?;
+                let bq = Beepq::open(&bytes).ok()?;
+                // 표시용 불일치 경고 — 저장 시점 판정을 다시 계산하지 않고
+                // 메타(선언 확장자 vs 매직 형식)만 대조한다.
+                let mismatch = bq.meta.detected_kind != "unknown"
+                    && !bq.meta.declared_ext.is_empty()
+                    && !bq.meta.detected_kind.contains(&bq.meta.declared_ext);
+                Some(nbeep_ui::QRow {
+                    name: String::from_utf8_lossy(&bq.meta.orig_name).into_owned(),
+                    risk: bq.meta.risk,
+                    mismatch,
+                    size: bq.original_size,
+                    trust: self.trust.level(bq.meta.sender),
+                    path: p.to_string_lossy().into_owned(),
+                })
+            })
+            .collect()
+    }
+
+    /// 격리함 창(메뉴 → 격리함) — 승인 = 실체화, 삭제 = `.beepq` 제거.
+    fn open_quarantine(&mut self, el: &ActiveEventLoop) {
+        if let Some((qid, _)) = self
+            .windows
+            .iter()
+            .find(|(_, e)| e.role == Role::Quarantine)
+        {
+            if let Some(e) = self.windows.get(qid) {
+                e.window.focus_window();
+            }
+            return;
+        }
+        let attrs = Window::default_attributes()
+            .with_title("Nexa Beep — 격리함")
+            .with_inner_size(winit::dpi::LogicalSize::new(620.0, 420.0))
+            .with_window_icon(self.icon.clone());
+        let window = Rc::new(el.create_window(attrs).unwrap());
+        let scale = window.scale_factor() as f32;
+        let context = softbuffer::Context::new(window.clone()).unwrap();
+        let surface = SbSurface::new(&context, window.clone()).unwrap();
+        let id = window.id();
+        self.windows.insert(
+            id,
+            WinEntry {
+                role: Role::Quarantine,
+                window,
+                surface,
+                cursor: (0, 0),
+                scale,
+            },
+        );
+        self.quarantine_view = Some(nbeep_ui::QuarantineWidget::new(self.quarantine_rows()));
+        self.layout_window(id);
+        self.request_redraw(id);
+    }
+
+    /// 격리함 결정 실행 — 승인 = 실체화(해시 재검증·OS 표식), 삭제 = `.beepq` 제거.
+    fn run_quarantine_action(&mut self, act: nbeep_ui::QAction, id: WindowId) {
+        use nbeep_safe::{Beepq, HashPort, MarkOutcome, MarkPort, QuarantineDir};
+        struct CryptoHash;
+        impl HashPort for CryptoHash {
+            fn sha256(&self, data: &[u8]) -> [u8; 32] {
+                nbeep_crypto::sha256(data)
+            }
+        }
+        struct OsMark;
+        impl MarkPort for OsMark {
+            fn apply(&self, path: &std::path::Path) -> std::io::Result<MarkOutcome> {
+                Ok(if nbeep_plat::quarantine::apply_quarantine_mark(path)? {
+                    MarkOutcome::Applied
+                } else {
+                    MarkOutcome::Unsupported
+                })
+            }
+        }
+        match act {
+            nbeep_ui::QAction::Approve(path) => {
+                let dest = std::env::temp_dir().join("nexa-beep-materialized");
+                let out = std::fs::read(&path)
+                    .map_err(|e| e.to_string())
+                    .and_then(|b| Beepq::open(&b).map_err(|e| format!("{e:?}")))
+                    .and_then(|bq| {
+                        QuarantineDir::materialize(&bq, &dest, &CryptoHash, &OsMark)
+                            .map_err(|e| e.to_string())
+                    });
+                self.status = match out {
+                    Ok(m) => {
+                        // 표식 실패도 **명시**한다(조용히 넘어가지 않는다 — [docs/11] §5).
+                        let mark = match m.mark {
+                            Ok(MarkOutcome::Applied) => "OS 보호 표식 부착",
+                            Ok(MarkOutcome::Unsupported) => "⚠️ OS 보호 표식 미지원",
+                            Err(_) => "⚠️ OS 보호 표식 실패",
+                        };
+                        format!("실체화 완료: {} · {mark}", m.path.display())
+                    }
+                    Err(e) => format!("실체화 실패: {e} — 격리 유지"),
+                };
+            }
+            nbeep_ui::QAction::Reject(path) => {
+                self.status = match std::fs::remove_file(&path) {
+                    Ok(()) => "격리물을 삭제했습니다".into(),
+                    Err(e) => format!("삭제 실패: {e}"),
+                };
+            }
+        }
+        let rows = self.quarantine_rows();
+        if let Some(v) = &mut self.quarantine_view {
+            let mut inv = Invalidations::default();
+            v.set_rows(rows, &mut inv);
+        }
+        self.request_redraw(id);
+        if let Some(mid) = self.main_id {
+            self.request_redraw(mid);
+        }
+    }
+
     fn open_gallery(&mut self, el: &ActiveEventLoop) {
         if let Some((gid, _)) = self.windows.iter().find(|(_, e)| e.role == Role::Gallery) {
             if let Some(e) = self.windows.get(gid) {
@@ -1267,6 +1399,12 @@ impl App {
                     av.set_bounds(Rect::new(0, 0, w, h), &mut inv);
                 }
             }
+            Role::Quarantine => {
+                if let Some(qv) = &mut self.quarantine_view {
+                    qv.set_scale(scale, &mut inv);
+                    qv.set_bounds(Rect::new(0, 0, w, h), &mut inv);
+                }
+            }
         }
     }
 
@@ -1370,6 +1508,7 @@ impl App {
                     if let Some(a) = self.menu.take_picked() {
                         match a.as_str() {
                             "settings" => self.open_settings(el),
+                            "quarantine" => self.open_quarantine(el),
                             "gallery" => self.open_gallery(el),
                             "about" => self.open_about(el),
                             _ => {}
@@ -1383,6 +1522,7 @@ impl App {
                                 self.status =
                                     nbeep_core::t(nbeep_core::Msg::RefreshList).to_string();
                             }
+                            "quarantine" => self.open_quarantine(el),
                             "gallery" => self.open_gallery(el),
                             _ => {}
                         }
@@ -1470,6 +1610,20 @@ impl App {
                         self.about_view = None;
                         self.windows.remove(&id);
                     }
+                }
+            }
+            Role::Quarantine => {
+                let mut act = None;
+                if let Some(qv) = &mut self.quarantine_view {
+                    qv.on_event(&ev, &mut inv);
+                    act = qv.take_action();
+                    if qv.take_back() {
+                        self.quarantine_view = None;
+                        self.windows.remove(&id);
+                    }
+                }
+                if let Some(a) = act {
+                    self.run_quarantine_action(a, id);
                 }
             }
         }
@@ -1562,6 +1716,11 @@ impl App {
             Role::About => {
                 if let Some(av) = &self.about_view {
                     av.paint(&mut ctx, &theme);
+                }
+            }
+            Role::Quarantine => {
+                if let Some(qv) = &self.quarantine_view {
+                    qv.paint(&mut ctx, &theme);
                 }
             }
         }
@@ -1805,6 +1964,7 @@ impl ApplicationHandler<AppEvent> for App {
                         Role::Gallery => self.gallery_view = None,
                         Role::Picker => self.picker_view = None,
                         Role::About => self.about_view = None,
+                        Role::Quarantine => self.quarantine_view = None,
                         Role::Main => {}
                     }
                 }
@@ -2168,6 +2328,7 @@ pub(crate) fn run(mode: WindowMode, live: bool) {
         settings_view: None,
         gallery_view: None,
         about_view: None,
+        quarantine_view: None,
         menu: MenuBar::new(build_menus()),
         toolbar: Toolbar::new(vec![
             ToolItem::new(
