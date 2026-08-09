@@ -7,8 +7,10 @@
 
 pub mod container;
 pub mod risk;
+pub mod sanitize;
 pub mod state;
 
 pub use container::{Beepq, Meta, QuarantineError, FLAG_SEALED, FORMAT_VER, MAGIC, MAX_SEAL};
 pub use risk::{classify, classify_ext, detect_magic, DetectedKind, Verdict};
+pub use sanitize::{sanitize_filename, MAX_NAME_CHARS};
 pub use state::{friction_raised, step, InvalidTransition, QEvent, QState};
