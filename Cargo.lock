@@ -835,6 +835,7 @@ name = "nbeep-crypto"
 version = "0.1.0"
 dependencies = [
  "nbeep-core",
+ "sha2",
  "snow",
 ]
 

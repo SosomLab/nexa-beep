@@ -15,6 +15,7 @@ workspace = true
 testkit = ["nbeep-core/testkit"]
 
 [dependencies]
+sha2.workspace = true
 nbeep-core.workspace = true
 snow = "0.9.6"
 
