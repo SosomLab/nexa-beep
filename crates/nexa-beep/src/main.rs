@@ -792,6 +792,10 @@ mod app_window {
         /// IME 조합 중(macOS — Preedit 활성). 조합 중엔 KeyboardInput 문자/백스페이스를
         /// 라우팅하지 않는다(같은 키가 Ime 경로로도 와서 자모가 이중 유입되던 버그).
         ime_composing: bool,
+        /// 판정 보류 중인 단독 자모(창, 문자, 시각). Character("ㄱ")는 ①곧 Preedit가 따라오는
+        /// **중복**이거나 ②IME가 아직 안 붙은 **진짜 입력**(한영 전환 직후 첫 키)이다 —
+        /// 즉시 버리면 ②가 유실되므로 보류했다가 Ime 이벤트가 오면 폐기, 안 오면 라우팅한다.
+        pending_jamo: Option<(WindowId, char, u64)>,
         /// OS 주 수식키(⌘/Ctrl) 눌림 상태 — `Cmd/Ctrl+,` 판정.
         primary_down: bool,
         /// 세션 액터가 GUI를 깨우는 통로(M2-7).
@@ -805,6 +809,14 @@ mod app_window {
     impl App {
         fn now_ms(&self) -> u64 {
             u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX)
+        }
+
+        /// 보류 자모 방출 — Ime 이벤트가 따라오지 않았다 = 진짜 단독 입력이었다.
+        fn flush_pending_jamo(&mut self, el: &ActiveEventLoop) {
+            if let Some((id, c, _)) = self.pending_jamo.take() {
+                let now_ms = self.now_ms();
+                self.route(id, InputEvent::Char { c, now_ms }, el);
+            }
         }
 
         fn bar_h(scale: f32) -> i32 {
@@ -1687,10 +1699,24 @@ mod app_window {
             {
                 let now_ms = self.now_ms();
                 let mut inv = Invalidations::default();
+                // 보류 자모: IME 이벤트가 따라오지 않았으면 진짜 입력 — 다음 틱(~200ms)에 방출.
+                if let Some((_, _, t)) = self.pending_jamo {
+                    if !self.ime_composing && now_ms.saturating_sub(t) >= 150 {
+                        self.flush_pending_jamo(el);
+                    }
+                }
                 if self.list.typeahead_tick(now_ms, &mut inv) {
-                    // 묵은 IME 조합(marked text)은 TypeAhead가 stale 접두사로 기억해
-                    // 이후 Preedit/Commit에서 벗겨낸다("김최" 유입 차단 — 결정적 방식).
+                    // ① TypeAhead는 조합 텍스트를 stale로 기억해 이후 Preedit/Commit에서 벗겨낸다.
+                    // ② IME 조합도 강제 종료(사용자 확정 — allowed 토글): 종료가 커밋을 유발해도
+                    //    stale이 그 문자를 소비하므로 안전하고, 세션이 실제로 끊기면 다음 입력이
+                    //    새 조합으로 시작한다(ESC를 눌렀을 때와 같은 상태).
+                    self.ime_composing = false;
+                    self.pending_jamo = None;
                     if let Some(id) = self.main_id {
+                        if let Some(e) = self.windows.get(&id) {
+                            e.window.set_ime_allowed(false);
+                            e.window.set_ime_allowed(true);
+                        }
                         self.request_redraw(id);
                     }
                 }
@@ -1744,7 +1770,8 @@ mod app_window {
                 WindowEvent::Ime(winit::event::Ime::Preedit(text, _)) => {
                     // 조합 세션 추적 — 비어 있지 않으면 조합 중(KeyboardInput 문자 차단 근거).
                     self.ime_composing = !text.is_empty();
-                    // 조합 중 — 대화 뷰면 프리에딧 밑줄(M3-3), 목록 모드면 실시간 타입어헤드.
+                    self.pending_jamo = None; // IME가 살아 있다 = 보류 자모는 중복이었다
+                                              // 조합 중 — 대화 뷰면 프리에딧 밑줄(M3-3), 목록 모드면 실시간 타입어헤드.
                     if let Some(peer) = self.chat_peer_for(id) {
                         let mut inv = Invalidations::default();
                         if let Some(chat) = self.chats.get_mut(&peer) {
@@ -1761,6 +1788,7 @@ mod app_window {
                 }
                 WindowEvent::Ime(winit::event::Ime::Commit(text)) => {
                     self.ime_composing = false; // 확정 = 조합 종료
+                    self.pending_jamo = None; // IME 경로 확인 — 보류 자모는 중복이었다
                     let now_ms = self.now_ms();
                     for c in text.chars().filter(|c| !c.is_control()) {
                         self.route(id, InputEvent::Char { c, now_ms }, el);
@@ -1845,6 +1873,8 @@ mod app_window {
                     if self.ime_composing {
                         return;
                     }
+                    // 새 키가 왔는데 보류 자모가 남아 있으면 = 앞 키에 IME가 안 붙었다 → 먼저 방출.
+                    self.flush_pending_jamo(el);
                     // Cmd/Ctrl+, = 설정 · Cmd/Ctrl+K = 수동 엔드포인트 추가(DR-19).
                     if self.primary_down {
                         if let WKey::Character(t) = &event.logical_key {
@@ -1942,14 +1972,17 @@ mod app_window {
                     if let WKey::Character(text) = &event.logical_key {
                         let now_ms = self.now_ms();
                         if let Some(c) = text.chars().next() {
-                            // 단독 한글 자모 = 조합 세션 시작 직전 새는 원시 키(첫 키 경합).
-                            // 같은 입력이 Ime::Preedit로 다시 오므로 여기서는 버린다.
+                            // 단독 한글 자모: ①중복(곧 Preedit가 온다) ②진짜 입력(IME 미접속 —
+                            // 한영 전환 직후 첫 키). 즉시 버리면 ②가 유실되므로 **보류** 후
+                            // Ime 이벤트가 오면 폐기, 안 오면(~틱) 라우팅한다.
                             let is_jamo = matches!(c,
                                 '\u{1100}'..='\u{11FF}' // Hangul Jamo
                                 | '\u{3130}'..='\u{318F}' // Compat Jamo(ㄱ·ㅣ 등)
                                 | '\u{A960}'..='\u{A97F}'
                                 | '\u{D7B0}'..='\u{D7FF}');
-                            if !c.is_control() && !is_jamo {
+                            if is_jamo {
+                                self.pending_jamo = Some((id, c, now_ms));
+                            } else if !c.is_control() {
                                 self.route(id, InputEvent::Char { c, now_ms }, el);
                             }
                         }
@@ -2066,6 +2099,7 @@ mod app_window {
             .ok(),
             picker_view: None,
             ime_composing: false,
+            pending_jamo: None,
             primary_down: false,
             proxy,
             adding: None,
