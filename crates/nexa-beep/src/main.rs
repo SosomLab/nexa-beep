@@ -789,6 +789,9 @@ mod app_window {
         icon: Option<winit::window::Icon>,
         /// 파일 선택 모달 뷰(Choose… — 열려 있을 때만 Some).
         picker_view: Option<nbeep_ui::TreeView>,
+        /// IME 조합 중(macOS — Preedit 활성). 조합 중엔 KeyboardInput 문자/백스페이스를
+        /// 라우팅하지 않는다(같은 키가 Ime 경로로도 와서 자모가 이중 유입되던 버그).
+        ime_composing: bool,
         /// OS 주 수식키(⌘/Ctrl) 눌림 상태 — `Cmd/Ctrl+,` 판정.
         primary_down: bool,
         /// 세션 액터가 GUI를 깨우는 통로(M2-7).
@@ -1737,6 +1740,8 @@ mod app_window {
                     self.request_redraw(id);
                 }
                 WindowEvent::Ime(winit::event::Ime::Preedit(text, _)) => {
+                    // 조합 세션 추적 — 비어 있지 않으면 조합 중(KeyboardInput 문자 차단 근거).
+                    self.ime_composing = !text.is_empty();
                     // 조합 중 — 대화 뷰면 프리에딧 밑줄(M3-3), 목록 모드면 실시간 타입어헤드.
                     if let Some(peer) = self.chat_peer_for(id) {
                         let mut inv = Invalidations::default();
@@ -1753,6 +1758,7 @@ mod app_window {
                     }
                 }
                 WindowEvent::Ime(winit::event::Ime::Commit(text)) => {
+                    self.ime_composing = false; // 확정 = 조합 종료
                     let now_ms = self.now_ms();
                     for c in text.chars().filter(|c| !c.is_control()) {
                         self.route(id, InputEvent::Char { c, now_ms }, el);
@@ -1829,6 +1835,12 @@ mod app_window {
                 }
                 WindowEvent::KeyboardInput { event, .. } => {
                     if event.state != ElementState::Pressed {
+                        return;
+                    }
+                    // IME 조합 중엔 키를 IME가 소유한다 — 같은 키가 KeyboardInput으로도 와서
+                    // 자모('ㄱ','ㅣ','ㅁ')가 확정 버퍼에 이중 유입되던 간헐 버그의 차단점.
+                    // (조합 결과는 Ime::Preedit/Commit으로만 반영한다.)
+                    if self.ime_composing {
                         return;
                     }
                     // Cmd/Ctrl+, = 설정 · Cmd/Ctrl+K = 수동 엔드포인트 추가(DR-19).
@@ -1928,7 +1940,14 @@ mod app_window {
                     if let WKey::Character(text) = &event.logical_key {
                         let now_ms = self.now_ms();
                         if let Some(c) = text.chars().next() {
-                            if !c.is_control() {
+                            // 단독 한글 자모 = 조합 세션 시작 직전 새는 원시 키(첫 키 경합).
+                            // 같은 입력이 Ime::Preedit로 다시 오므로 여기서는 버린다.
+                            let is_jamo = matches!(c,
+                                '\u{1100}'..='\u{11FF}' // Hangul Jamo
+                                | '\u{3130}'..='\u{318F}' // Compat Jamo(ㄱ·ㅣ 등)
+                                | '\u{A960}'..='\u{A97F}'
+                                | '\u{D7B0}'..='\u{D7FF}');
+                            if !c.is_control() && !is_jamo {
                                 self.route(id, InputEvent::Char { c, now_ms }, el);
                             }
                         }
@@ -2044,6 +2063,7 @@ mod app_window {
             )
             .ok(),
             picker_view: None,
+            ime_composing: false,
             primary_down: false,
             proxy,
             adding: None,
