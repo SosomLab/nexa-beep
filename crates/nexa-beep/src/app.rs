@@ -265,6 +265,13 @@ fn spawn_session_actor(
     });
 }
 
+/// 현재 Unix 초(표시용 벽시계 — 정책 판단은 단조 시계를 쓴다).
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
 /// 속도 표기(B/s → 사람이 읽는 단위).
 fn rate_label(bps: u64) -> String {
     if bps == 0 {
@@ -585,6 +592,10 @@ struct App {
     approval: nbeep_core::ApprovalPolicy,
     /// 기간 자동 승인 길이(설정 `xfer.approval_window`).
     approval_window: nbeep_core::AutoWindow,
+    /// 기간 자동 승인 시작 시각(Unix 초 · 표시용).
+    approval_started_unix: Option<u64>,
+    /// 하단 정보를 마지막으로 갱신한 초(1초 주기 판단).
+    approval_footer_sec: u64,
     /// 상대별 수락 대기 큐 — **오퍼 1건당 승인 1번**(2번 보내면 2번 물어본다).
     pending_offers: HashMap<PeerId, VecDeque<(nbeep_core::XferId, String, u64)>>,
     /// 상대별 발신 대기 파일 큐(다중 드롭 — 한 번에 하나씩 협상한다).
@@ -934,13 +945,62 @@ impl App {
 
     /// 승인 정책 만료 확인 — 기간이 끝났으면 **직전 방식으로 되돌리고** 알린다.
     fn tick_approval(&mut self) -> bool {
+        use nbeep_core::{ApprovalPolicy, BasicApproval};
         let now = self.now_ms();
         let (next, reverted) = self.approval.tick(now);
         if reverted {
             self.approval = next;
+            self.approval_started_unix = None;
+            // 설정 화면의 값도 함께 되돌린다 — 화면과 실제가 어긋나면 안 된다.
+            let code = match next {
+                ApprovalPolicy::Basic(BasicApproval::Auto) => "auto",
+                ApprovalPolicy::Basic(BasicApproval::Block) => "block",
+                _ => "manual",
+            };
+            self.settings.set("xfer.approval", code.to_string());
+            if let Some(sv) = &mut self.settings_view {
+                let mut inv = Invalidations::default();
+                sv.set_value("xfer.approval", code, &mut inv);
+            }
             self.status = "자동 수락 기간이 끝나 직전 방식으로 되돌렸습니다".into();
+            self.refresh_approval_ui();
         }
         reverted
+    }
+
+    /// 설정 화면의 **잠금·하단 정보**를 현재 승인 정책에 맞춘다(1초 주기 갱신).
+    fn refresh_approval_ui(&mut self) {
+        let now = self.now_ms();
+        let remain = self.approval.remaining_ms(now);
+        let started = self.approval_started_unix;
+        let Some(sv) = &mut self.settings_view else {
+            return;
+        };
+        let mut inv = Invalidations::default();
+        if let (Some(remain_ms), Some(start_unix)) = (remain, started) {
+            sv.set_disabled(&[], &mut inv);
+            let elapsed = unix_now().saturating_sub(start_unix);
+            let end_unix = start_unix + elapsed + remain_ms / 1000;
+            let st = nbeep_plat::clock::local_hms(start_unix);
+            let en = nbeep_plat::clock::local_hms(end_unix);
+            let tz = if st.is_local { "" } else { " (UTC)" };
+            sv.set_footer(
+                vec![
+                    format!("시작 시간: {}{tz}", st.hms()),
+                    format!("경과 시간: {}", nbeep_plat::clock::duration_ko(elapsed)),
+                    format!(
+                        "남은 시간: {}",
+                        nbeep_plat::clock::duration_ko(remain_ms / 1000)
+                    ),
+                    format!("종료 예정: {}{tz}", en.hms()),
+                ],
+                &mut inv,
+            );
+        } else {
+            // 기간 자동이 아니면 기간 설정은 쓰이지 않는다 — 잠근다.
+            sv.set_disabled(&["xfer.approval_window"], &mut inv);
+            sv.set_footer(Vec::new(), &mut inv);
+        }
     }
 
     /// `peer` 대화가 보이는 창을 다시 그린다(Separate = 그 창, Single = 주 창이 이 대화일 때).
@@ -1200,6 +1260,7 @@ impl App {
             },
         );
         self.settings_view = Some(SettingsWidget::new(&self.settings));
+        self.refresh_approval_ui(); // 잠금·하단 정보 초기 반영
         self.layout_window(id);
         self.request_redraw(id);
     }
@@ -1532,10 +1593,12 @@ impl App {
                         "timed" => self.approval.start_timed(self.approval_window, now),
                         _ => ApprovalPolicy::Basic(BasicApproval::Manual),
                     };
+                    self.approval_started_unix = (value == "timed").then(unix_now);
                     self.status = match self.approval.remaining_ms(now) {
                         Some(ms) => format!("파일 수신: {}분간 자동 수락", ms / 60_000),
                         None => format!("파일 수신 승인 = {value}"),
                     };
+                    self.refresh_approval_ui();
                 }
                 "xfer.send_rate" => {
                     self.send_rate = nbeep_core::RateLimit::from_code(&value);
@@ -1554,7 +1617,15 @@ impl App {
                 "xfer.approval_window" => {
                     if let Some(w) = nbeep_core::AutoWindow::from_code(&value) {
                         self.approval_window = w;
+                        // 기간 자동이 켜져 있으면 **그때부터 다시 시작**(사용자 확정 08-09).
+                        if self.approval.remaining_ms(self.now_ms()).is_some() {
+                            let now = self.now_ms();
+                            self.approval = self.approval.start_timed(w, now);
+                            self.approval_started_unix = Some(unix_now());
+                            self.status = "자동 수락 기간을 다시 시작했습니다".into();
+                        }
                     }
+                    self.refresh_approval_ui();
                 }
                 "ui.typeahead_space" => self.list.set_typeahead_space(value == "on"),
                 "ui.typeahead_special" => self.list.set_typeahead_special(value == "on"),
@@ -2363,10 +2434,28 @@ impl ApplicationHandler<AppEvent> for App {
                 self.cancel_send(peer, true);
             }
         }
-        // 기간 자동 승인 만료 확인(켜 둔 걸 잊어도 되돌아온다).
-        if self.tick_approval() {
-            if let Some(mid) = self.main_id {
-                self.request_redraw(mid);
+        // 기간 자동 승인 — 만료 확인 + **1초마다 남은 시간 갱신**(사용자 확정 08-09).
+        {
+            let reverted = self.tick_approval();
+            let sec = unix_now();
+            if self.approval_started_unix.is_some() && sec != self.approval_footer_sec {
+                self.approval_footer_sec = sec;
+                self.refresh_approval_ui();
+                if let Some((sid, _)) = self.windows.iter().find(|(_, e)| e.role == Role::Settings)
+                {
+                    let sid = *sid;
+                    self.request_redraw(sid);
+                }
+            }
+            if reverted {
+                if let Some(mid) = self.main_id {
+                    self.request_redraw(mid);
+                }
+                if let Some((sid, _)) = self.windows.iter().find(|(_, e)| e.role == Role::Settings)
+                {
+                    let sid = *sid;
+                    self.request_redraw(sid);
+                }
             }
         }
         // 설정 우측 패널 스크롤바 페이드 틱(~5Hz).
@@ -2779,6 +2868,8 @@ pub(crate) fn run(mode: WindowMode, live: bool) {
         ledger: nbeep_core::ExchangeLedger::new(),
         approval: nbeep_core::ApprovalPolicy::default(),
         approval_window: nbeep_core::AutoWindow::Hour1,
+        approval_started_unix: None,
+        approval_footer_sec: 0,
         pending_offers: HashMap::new(),
         send_queue: HashMap::new(),
         send_batch: HashMap::new(),

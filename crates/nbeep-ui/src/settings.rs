@@ -426,6 +426,10 @@ pub struct SettingsWidget {
     sidebar_w: i32,
     /// 스플리터 드래그 중.
     split_drag: bool,
+    /// 비활성 설정 키(호스트가 지정) — 흐리게 그리고 입력을 받지 않는다.
+    disabled: std::collections::HashSet<&'static str>,
+    /// 우측 패널 하단 정보 줄(호스트가 채운다 — 예: 자동 수락 남은 시간).
+    footer: Vec<String>,
 }
 
 impl SettingsWidget {
@@ -456,6 +460,8 @@ impl SettingsWidget {
             bars: ScrollBars::new(),
             sidebar_w: SIDEBAR_W,
             split_drag: false,
+            disabled: std::collections::HashSet::new(),
+            footer: Vec::new(),
         };
         let mut inv = Invalidations::default();
         w.rebuild(&mut inv);
@@ -640,6 +646,43 @@ impl SettingsWidget {
             });
         }
         self.layout(inv);
+    }
+
+    /// 값을 외부에서 갱신한다(예: 기간 만료로 승인 방식이 되돌아갔을 때) —
+    /// 화면과 실제가 어긋나지 않게 콤보 표시까지 맞춘다.
+    pub fn set_value(&mut self, key: &'static str, value: &str, inv: &mut Invalidations) {
+        self.values.insert(key, value.to_string());
+        for row in &mut self.rows {
+            if registry()[row.idx].key != key {
+                continue;
+            }
+            if let RowCtl::Combo(c) = &mut row.ctl {
+                c.select_value(value);
+            }
+        }
+        inv.push(self.bounds);
+    }
+
+    /// 비활성 키 지정 — 조건부로만 쓰이는 설정을 흐리게 잠근다(예: 기간은 "기간 자동"일 때만).
+    pub fn set_disabled(&mut self, keys: &[&'static str], inv: &mut Invalidations) {
+        let next: std::collections::HashSet<&'static str> = keys.iter().copied().collect();
+        if next != self.disabled {
+            self.disabled = next;
+            inv.push(self.bounds);
+        }
+    }
+
+    /// 하단 정보 줄 지정(빈 배열 = 숨김).
+    pub fn set_footer(&mut self, lines: Vec<String>, inv: &mut Invalidations) {
+        if lines != self.footer {
+            self.footer = lines;
+            inv.push(self.bounds);
+        }
+    }
+
+    /// 이 행이 잠겼는가.
+    fn is_locked(&self, idx: usize) -> bool {
+        self.disabled.contains(registry()[idx].key)
     }
 
     /// 우측 패널 뷰포트(사이드바 제외 영역).
@@ -915,13 +958,19 @@ impl Widget for SettingsWidget {
                         return;
                     }
                 }
+                // ★ 포커스는 **매 클릭마다 전 컨트롤에 다시 계산**한다. 콤보는 자기 클릭에
+                // 스스로 포커스를 켜지만 남의 포커스를 끄지는 못해서, 이걸 빼먹으면
+                // 눌러 본 콤보마다 파란 테두리가 남는다(카테고리를 나갔다 오면 재생성돼
+                // 사라지던 그 증상 — 사용자 지적 08-09).
                 for row in &mut self.rows {
                     match &mut row.ctl {
-                        RowCtl::Font { family, .. } => {
+                        RowCtl::Font { family, size } => {
                             family.set_focused(family.bounds().contains(p));
+                            size.set_focused(size.bounds().contains(p));
                         }
                         RowCtl::Pos(g) => g.set_focused(g.bounds().contains(p)),
-                        _ => {}
+                        RowCtl::Combo(c) => c.set_focused(c.bounds().contains(p)),
+                        RowCtl::Check(c) => c.set_focused(c.bounds().contains(p)),
                     }
                 }
                 // 사이드바 트리 — 선택 변경 감지 → 카테고리 전환(검색 해제).
@@ -941,7 +990,11 @@ impl Widget for SettingsWidget {
                     return;
                 }
                 // 우측 컨트롤들.
-                for row in &mut self.rows {
+                let locked: Vec<bool> = self.rows.iter().map(|r| self.is_locked(r.idx)).collect();
+                for (row, lock) in self.rows.iter_mut().zip(locked) {
+                    if lock {
+                        continue; // 잠긴 설정 — 조건이 갖춰질 때까지 만질 수 없다
+                    }
                     match &mut row.ctl {
                         RowCtl::Combo(c) => c.on_event(ev, inv),
                         RowCtl::Check(c) => c.on_event(ev, inv),
@@ -1097,6 +1150,32 @@ impl Widget for SettingsWidget {
                 }
             }
         }
+        // 잠긴 행은 위에 얇은 가림막을 덮어 "지금은 못 만진다"를 보여 준다.
+        for row in &self.rows {
+            if self.is_locked(row.idx) {
+                ctx.fill_round_rect_alpha(row.rect, 0, theme.panel_bg, 0.55);
+            }
+        }
+
+        // 하단 정보 줄(자동 수락 진행 상황 등) — 마지막 행 아래.
+        if !self.footer.is_empty() {
+            let sw = self.s(self.sidebar_w);
+            let x = self.bounds.x + sw + self.s(PAD);
+            let mut y = self.rows.last().map_or(self.bounds.y, |r| r.rect.bottom()) + self.s(10);
+            ctx.select_font(FontSlot::Status, false);
+            let lh = ctx.text_height() + self.s(6);
+            for line in &self.footer {
+                ctx.text(
+                    x,
+                    y,
+                    Rect::new(x, y, self.bounds.right() - x, lh),
+                    line,
+                    theme.text_dim,
+                );
+                y += lh;
+            }
+        }
+
         // 열린 콤보 드롭다운은 맨 위에 다시 그린다(아래 행에 가리지 않게).
         for row in &self.rows {
             match &row.ctl {
