@@ -363,6 +363,8 @@ const SIDEBAR_W: i32 = 150;
 const SEARCH_H: i32 = 30;
 const ENTRY_H: i32 = 52;
 const FONT_SECTION_H: i32 = 88;
+/// 설정 행에 붙는 정보 줄 높이(논리 px).
+const NOTE_H: i32 = 22;
 /// 위치 그리드 행 높이(3×3 미니 화면 93 + 여백).
 const POS_ROW_H: i32 = 110;
 const CTL_H: i32 = 26;
@@ -428,8 +430,8 @@ pub struct SettingsWidget {
     split_drag: bool,
     /// 비활성 설정 키(호스트가 지정) — 흐리게 그리고 입력을 받지 않는다.
     disabled: std::collections::HashSet<&'static str>,
-    /// 우측 패널 하단 정보 줄(호스트가 채운다 — 예: 자동 수락 남은 시간).
-    footer: Vec<String>,
+    /// 특정 설정 행 **바로 아래**에 붙는 한 줄 정보(자리 고정 — 호스트가 채운다).
+    notes: HashMap<&'static str, String>,
 }
 
 impl SettingsWidget {
@@ -461,7 +463,7 @@ impl SettingsWidget {
             sidebar_w: SIDEBAR_W,
             split_drag: false,
             disabled: std::collections::HashSet::new(),
-            footer: Vec::new(),
+            notes: HashMap::new(),
         };
         let mut inv = Invalidations::default();
         w.rebuild(&mut inv);
@@ -672,11 +674,30 @@ impl SettingsWidget {
         }
     }
 
-    /// 하단 정보 줄 지정(빈 배열 = 숨김).
-    pub fn set_footer(&mut self, lines: Vec<String>, inv: &mut Invalidations) {
-        if lines != self.footer {
-            self.footer = lines;
-            inv.push(self.bounds);
+    /// 설정 행 아래 한 줄 정보 지정 — **자리가 고정**된다(빈 문자열 = 제거).
+    /// 값이 바뀔 때만 재배치·무효화하므로 1초 갱신에도 낭비가 없다.
+    pub fn set_row_note(&mut self, key: &'static str, text: &str, inv: &mut Invalidations) {
+        let had = self.notes.contains_key(key);
+        if self.notes.get(key).map(String::as_str) == Some(text) || (text.is_empty() && !had) {
+            return;
+        }
+        if text.is_empty() {
+            self.notes.remove(key);
+        } else {
+            self.notes.insert(key, text.to_string());
+        }
+        if had != self.notes.contains_key(key) {
+            self.layout(inv); // 줄이 생기거나 사라지면 행 높이가 달라진다
+        }
+        inv.push(self.bounds);
+    }
+
+    /// 이 행에 붙은 정보 줄 높이(없으면 0).
+    fn note_h(&self, idx: usize) -> i32 {
+        if self.notes.contains_key(registry()[idx].key) {
+            self.s(NOTE_H)
+        } else {
+            0
         }
     }
 
@@ -734,10 +755,13 @@ impl SettingsWidget {
         self.content_h = self
             .rows
             .iter()
-            .map(|row| match registry()[row.idx].kind {
-                SettingKind::FontSection { .. } => hf,
-                SettingKind::PositionGrid => hp,
-                _ => he,
+            .map(|row| {
+                let base = match registry()[row.idx].kind {
+                    SettingKind::FontSection { .. } => hf,
+                    SettingKind::PositionGrid => hp,
+                    _ => he,
+                };
+                base + self.note_h(row.idx)
             })
             .sum();
         self.scroll = self.scroll.clamp(0, (self.content_h - b.h).max(0));
@@ -748,13 +772,14 @@ impl SettingsWidget {
         let (combo_w, check_w) = (self.s(COMBO_W), self.s(22));
         let (family_w, size_w, gap10, dy32) =
             (self.s(FAMILY_W), self.s(SIZE_W), self.s(10), self.s(32));
-        for row in &mut self.rows {
+        let note_hs: Vec<i32> = self.rows.iter().map(|r| self.note_h(r.idx)).collect();
+        for (ri, row) in self.rows.iter_mut().enumerate() {
             let e = &registry()[row.idx];
             let h = match e.kind {
                 SettingKind::FontSection { .. } => h_font,
                 SettingKind::PositionGrid => h_pos,
                 _ => h_entry,
-            };
+            } + note_hs[ri];
             row.rect = Rect::new(rx, top, rw, h);
             match &mut row.ctl {
                 RowCtl::Combo(c) => {
@@ -1157,23 +1182,22 @@ impl Widget for SettingsWidget {
             }
         }
 
-        // 하단 정보 줄(자동 수락 진행 상황 등) — 마지막 행 아래.
-        if !self.footer.is_empty() {
-            let sw = self.s(self.sidebar_w);
-            let x = self.bounds.x + sw + self.s(PAD);
-            let mut y = self.rows.last().map_or(self.bounds.y, |r| r.rect.bottom()) + self.s(10);
-            ctx.select_font(FontSlot::Status, false);
-            let lh = ctx.text_height() + self.s(6);
-            for line in &self.footer {
-                ctx.text(
-                    x,
-                    y,
-                    Rect::new(x, y, self.bounds.right() - x, lh),
-                    line,
-                    theme.text_dim,
-                );
-                y += lh;
-            }
+        // 행에 붙은 정보 줄 — **행 바로 아래 고정 위치**.
+        ctx.select_font(FontSlot::Status, false);
+        for row in &self.rows {
+            let Some(note) = self.notes.get(registry()[row.idx].key) else {
+                continue;
+            };
+            let nh = self.s(NOTE_H);
+            let r = Rect::new(row.rect.x, row.rect.bottom() - nh, row.rect.w, nh);
+            let th = ctx.text_height();
+            ctx.text(
+                r.x + self.s(PAD),
+                r.y + (r.h - th) / 2,
+                r,
+                note,
+                theme.text_dim,
+            );
         }
 
         // 열린 콤보 드롭다운은 맨 위에 다시 그린다(아래 행에 가리지 않게).

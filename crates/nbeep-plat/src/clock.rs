@@ -71,6 +71,17 @@ fn utc(unix_secs: u64) -> Hms {
     }
 }
 
+/// 초 → `00:00:00` 고정 폭 표기(하루를 넘겨도 시를 그대로 늘린다 — 사용자 확정 08-09).
+#[must_use]
+pub fn clock_hms(secs: u64) -> String {
+    format!(
+        "{:02}:{:02}:{:02}",
+        secs / 3600,
+        (secs % 3600) / 60,
+        secs % 60
+    )
+}
+
 /// 초 → `1시간 5분` 같은 짧은 한국어 기간 표기(0초 = `0초`).
 #[must_use]
 pub fn duration_ko(mut secs: u64) -> String {
@@ -118,6 +129,15 @@ mod tests {
         assert!(t.h < 24 && t.m < 60 && t.s <= 60);
         #[cfg(unix)]
         assert!(t.is_local, "unix는 localtime_r로 지역 시각을 얻는다");
+    }
+
+    #[test]
+    fn clock_format_is_fixed_width() {
+        assert_eq!(clock_hms(0), "00:00:00");
+        assert_eq!(clock_hms(59), "00:00:59");
+        assert_eq!(clock_hms(3600), "01:00:00");
+        assert_eq!(clock_hms(3661), "01:01:01");
+        assert_eq!(clock_hms(86_400), "24:00:00", "하루를 넘겨도 시를 늘린다");
     }
 
     #[test]

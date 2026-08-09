@@ -977,29 +977,35 @@ impl App {
             return;
         };
         let mut inv = Invalidations::default();
-        if let (Some(remain_ms), Some(start_unix)) = (remain, started) {
+        // 네 값을 **한 줄·고정 자리**로 보여 준다. 쓰이지 않을 때도 자리를 지키고
+        // 00:00:00을 표시한다 — 줄이 생겼다 사라지면 아래 항목이 출렁인다.
+        let (start_s, elapsed_s, remain_s, end_s) =
+            if let (Some(remain_ms), Some(start_unix)) = (remain, started) {
+                let elapsed = unix_now().saturating_sub(start_unix);
+                let remain_secs = remain_ms / 1000;
+                let end_unix = start_unix + elapsed + remain_secs;
+                let st = nbeep_plat::clock::local_hms(start_unix);
+                let en = nbeep_plat::clock::local_hms(end_unix);
+                (
+                    st.hms(),
+                    nbeep_plat::clock::clock_hms(elapsed),
+                    nbeep_plat::clock::clock_hms(remain_secs),
+                    en.hms(),
+                )
+            } else {
+                let z = || "00:00:00".to_string();
+                (z(), z(), z(), z())
+            };
+        sv.set_row_note(
+            "xfer.approval_window",
+            &format!("시작 {start_s}, 경과 {elapsed_s}, 잔여 {remain_s}, 종료 {end_s}"),
+            &mut inv,
+        );
+        if remain.is_some() {
             sv.set_disabled(&[], &mut inv);
-            let elapsed = unix_now().saturating_sub(start_unix);
-            let end_unix = start_unix + elapsed + remain_ms / 1000;
-            let st = nbeep_plat::clock::local_hms(start_unix);
-            let en = nbeep_plat::clock::local_hms(end_unix);
-            let tz = if st.is_local { "" } else { " (UTC)" };
-            sv.set_footer(
-                vec![
-                    format!("시작 시간: {}{tz}", st.hms()),
-                    format!("경과 시간: {}", nbeep_plat::clock::duration_ko(elapsed)),
-                    format!(
-                        "남은 시간: {}",
-                        nbeep_plat::clock::duration_ko(remain_ms / 1000)
-                    ),
-                    format!("종료 예정: {}{tz}", en.hms()),
-                ],
-                &mut inv,
-            );
         } else {
             // 기간 자동이 아니면 기간 설정은 쓰이지 않는다 — 잠근다.
             sv.set_disabled(&["xfer.approval_window"], &mut inv);
-            sv.set_footer(Vec::new(), &mut inv);
         }
     }
 
@@ -2438,7 +2444,8 @@ impl ApplicationHandler<AppEvent> for App {
         {
             let reverted = self.tick_approval();
             let sec = unix_now();
-            if self.approval_started_unix.is_some() && sec != self.approval_footer_sec {
+            // 설정 화면이 떠 있을 때만 1초 갱신한다 — 닫혀 있으면 그릴 곳이 없다.
+            if self.settings_view.is_some() && sec != self.approval_footer_sec {
                 self.approval_footer_sec = sec;
                 self.refresh_approval_ui();
                 if let Some((sid, _)) = self.windows.iter().find(|(_, e)| e.role == Role::Settings)
