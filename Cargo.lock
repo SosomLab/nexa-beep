@@ -828,11 +828,11 @@ dependencies = [
 
 [[package]]
 name = "nbeep-core"
-version = "0.1.1"
+version = "0.1.2"
 
 [[package]]
 name = "nbeep-crypto"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "nbeep-core",
  "sha2",
@@ -841,18 +841,18 @@ dependencies = [
 
 [[package]]
 name = "nbeep-gfx"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "ab_glyph",
 ]
 
 [[package]]
 name = "nbeep-imgdec"
-version = "0.1.1"
+version = "0.1.2"
 
 [[package]]
 name = "nbeep-net"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "nbeep-core",
  "socket2",
@@ -860,7 +860,7 @@ dependencies = [
 
 [[package]]
 name = "nbeep-plat"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "libc",
  "memmap2",
@@ -869,21 +869,21 @@ dependencies = [
 
 [[package]]
 name = "nbeep-safe"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "nbeep-core",
 ]
 
 [[package]]
 name = "nbeep-store"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "nbeep-core",
 ]
 
 [[package]]
 name = "nbeep-ui"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "nbeep-core",
  "nbeep-gfx",
@@ -921,7 +921,7 @@ dependencies = [
 
 [[package]]
 name = "nexa-beep"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "nbeep-core",
  "nbeep-crypto",
