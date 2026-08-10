@@ -6,6 +6,13 @@
 
 use nbeep_core::PeerId;
 
+/// 대화 중 쓸 수 있는 명령 안내 — **한 곳에서만 적는다**(안내와 구현이 갈리면 거짓말이 된다).
+const HELP_COMMANDS: &str = "[명령] /quit(/exit) = 종료 · /send <파일> = 파일 전송 · \
+/accept · /reject · /help · Ctrl+D = 종료";
+
+/// 상대를 기다리는 동안 쓸 수 있는 것 — 이때는 전송할 상대가 없으니 종료만 가능하다.
+const HELP_WAITING: &str = "[대기] /quit + Enter 또는 Ctrl+D = 종료 (Ctrl+C도 됩니다)";
+
 /// 인터랙티브 채팅 역할.
 pub(crate) enum ChatRole {
     /// 고정 포트로 한 상대의 연결을 기다린다.
@@ -24,12 +31,19 @@ pub(crate) fn chat_interactive(role: ChatRole) {
     let link: Box<dyn nbeep_core::Link> = match &role {
         ChatRole::Serve(port) => {
             let listener = std::net::TcpListener::bind(("0.0.0.0", *port)).expect("포트 바인딩");
+            // 논블로킹 — 기다리는 동안 stdin(`/quit`)과 종료 신호도 함께 본다.
+            listener.set_nonblocking(true).expect("논블로킹");
             println!(
                 "[대기] {} 에서 상대를 기다립니다… (me={})",
                 port,
                 identity.peer_id().short()
             );
-            let (stream, from) = listener.accept().expect("accept");
+            // `.ok()` = WouldBlock 포함 실패는 "아직" — 계속 기다린다.
+            let Some((stream, from)) = wait_with_quit(|| listener.accept().ok()) else {
+                return;
+            };
+            // 대화 루프는 블로킹 소켓을 전제한다(수신 타임아웃은 세션이 건다).
+            stream.set_nonblocking(false).expect("블로킹 복귀");
             println!("[연결] {from} 에서 연결됨");
             Box::new(nbeep_net::TcpLink::new(stream).expect("링크"))
         }
@@ -73,6 +87,85 @@ pub(crate) fn chat_interactive(role: ChatRole) {
     run_interactive(session, identity.peer_id());
 }
 
+/// 상대를 기다리는 동안 **stdin도 함께 본다** — `/quit`·Ctrl+D로 나갈 수 있게.
+///
+/// ★ 왜 필요한가: 예전에는 대기 구간이 `accept()`/`recv()`에 **통째로 갇혀** 있어서
+/// 키를 읽는 쪽이 아예 없었다. 그래서 Ctrl+D가 듣지 않았고(실측 08-11), Ctrl+C만
+/// 남았는데 그건 `Drop`을 건너뛰어 **터미널을 raw 모드로 남긴다**(에코가 죽어 셸이
+/// 먹통처럼 보인다). 폴링 raw 모드로 바꿔 두 문제를 함께 없앤다.
+///
+/// `poll`은 100ms마다 불리며 `Some(T)`를 주면 기다림이 끝난 것이다.
+/// 사용자가 종료를 원하면 `None`을 돌려준다(호출 측은 조용히 반환 — 정리는 `Drop`).
+fn wait_with_quit<T>(mut poll: impl FnMut() -> Option<T>) -> Option<T> {
+    use nbeep_plat::term::{parse_key, TermKey};
+    use std::io::Read as _;
+
+    let shutdown = nbeep_plat::shutdown::install();
+    // 폴링 모드 — 키가 없으면 0.1초 뒤 돌아온다(그 틈에 연결·종료 신호를 본다).
+    let raw = nbeep_plat::term::RawTerm::enter_polling();
+    if raw.is_raw() {
+        println!("{HELP_WAITING}");
+    }
+    let mut stdin = std::io::stdin();
+    let mut pending = Vec::<u8>::new();
+    let mut line = String::new();
+    let mut chunk = [0u8; 256];
+    loop {
+        if let Some(v) = poll() {
+            return Some(v);
+        }
+        // Ctrl+C는 이제 핸들러가 잡는다 — 기본 종료가 아니라 여기로 와서
+        // `raw`의 Drop이 돌고 터미널이 원래대로 복원된다.
+        if shutdown.requested() {
+            println!("\r[종료] 중단합니다.");
+            return None;
+        }
+        if !raw.is_raw() {
+            // TTY가 아니면(파이프·CI) 키를 볼 것이 없다 — 연결만 기다린다.
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            continue;
+        }
+        let n = match stdin.read(&mut chunk) {
+            Ok(n) => n,
+            Err(_) => continue, // 시그널로 끊긴 read — 위에서 플래그를 다시 본다
+        };
+        pending.extend_from_slice(&chunk[..n]);
+        while let Some((key, used)) = parse_key(&pending) {
+            pending.drain(..used);
+            match key {
+                TermKey::Eof => {
+                    println!("\r[종료] 대기를 중단합니다.");
+                    return None;
+                }
+                TermKey::Enter => {
+                    let typed = core::mem::take(&mut line);
+                    print!("\r\n");
+                    let _ = std::io::Write::flush(&mut std::io::stdout());
+                    if matches!(typed.trim(), "/quit" | "/exit" | "/q") {
+                        println!("\r[종료] 대기를 중단합니다.");
+                        return None;
+                    }
+                    if !typed.trim().is_empty() {
+                        println!("\r{HELP_WAITING}");
+                    }
+                }
+                TermKey::Backspace => {
+                    if line.pop().is_some() {
+                        print!("\u{8} \u{8}");
+                        let _ = std::io::Write::flush(&mut std::io::stdout());
+                    }
+                }
+                TermKey::Char(c) => {
+                    line.push(c);
+                    print!("{c}");
+                    let _ = std::io::Write::flush(&mut std::io::stdout());
+                }
+                TermKey::ShiftEnter | TermKey::Other => {}
+            }
+        }
+    }
+}
+
 /// 수립된 세션 위 **인터랙티브 대화 루프** — stdin 라인 = 전송, 수신은 실시간 출력, Ctrl+D 종료.
 /// serve/connect/live가 공용(세션 출처만 다르고 대화는 같다).
 fn run_interactive<L: nbeep_core::Link + 'static>(
@@ -99,10 +192,8 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
     }
 
     let peer = session.peer();
-    println!(
-        "[대화 시작] 상대={} · 한 줄 = 전송 · /send <파일> = 파일 전송 · Ctrl+D = 종료",
-        peer.short()
-    );
+    println!("[대화 시작] 상대={} · 한 줄 = 전송", peer.short());
+    println!("{HELP_COMMANDS}");
     // 수신 스레드: 세션 소유·recv 폴·도착 출력(액터 — 한 세션 1스레드). 송신은 채널 교대.
     session.set_recv_timeout(Some(std::time::Duration::from_millis(100)));
     let (out_tx, out_rx) = std::sync::mpsc::channel::<Cmd>();
@@ -432,6 +523,16 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
             }
             return true;
         }
+        // ★ 명시적 종료 — Ctrl+D를 모르는 사람도, 그 키가 막힌 터미널에서도 나갈 수 있어야 한다.
+        //   `false`를 돌려주면 두 입력 경로(raw·파이프)가 **같은 정리 절차**로 빠져나간다.
+        if matches!(line.trim(), "/quit" | "/exit" | "/q") {
+            println!("\r[종료] 대화를 끝냅니다.");
+            return false;
+        }
+        if line.trim() == "/help" || line.trim() == "/?" {
+            println!("\r{HELP_COMMANDS}");
+            return true;
+        }
         if line.trim() == "/accept" {
             return out_tx.send(Cmd::Accept).is_ok();
         }
@@ -453,7 +554,7 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
     if raw.is_raw() {
         use nbeep_plat::term::{parse_key, TermKey};
         use std::io::{Read as _, Write as _};
-        println!("[입력] Enter = 전송 · Shift+Enter = 줄바꿈(터미널이 지원할 때) · \\ 끝 = 줄바꿈 · Ctrl+D = 종료");
+        println!("[입력] Enter = 전송 · Shift+Enter = 줄바꿈(터미널이 지원할 때) · \\ 끝 = 줄바꿈");
         let mut stdin = std::io::stdin();
         let mut pending = Vec::<u8>::new();
         let mut line = String::new();
@@ -577,8 +678,12 @@ pub(crate) fn chat_live(name: &str) {
         identity.peer_id().short()
     );
     let incoming = transport.incoming();
-    let Ok(link) = incoming.recv() else {
-        eprintln!("[실패] 인바운드 없음");
+    // 타임아웃·끊김은 `.ok()`로 흘린다 — 종료 조건은 `wait_with_quit`이 본다.
+    let Some(link) = wait_with_quit(|| {
+        incoming
+            .recv_timeout(std::time::Duration::from_millis(100))
+            .ok()
+    }) else {
         return;
     };
     match nbeep_crypto::NoiseSession::accept(link, &identity) {

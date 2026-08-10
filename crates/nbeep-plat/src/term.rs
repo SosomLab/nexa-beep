@@ -34,6 +34,22 @@ impl RawTerm {
     /// TTY가 아니거나 실패하면 **아무것도 바꾸지 않은 가드**를 돌려준다(호출 측은 그대로 진행).
     #[must_use]
     pub fn enter() -> Self {
+        Self::enter_with(true)
+    }
+
+    /// **폴링 raw 모드** — `read`가 입력이 없으면 ~100ms 후 0을 돌려주고 돌아온다.
+    ///
+    /// 상대를 기다리는 동안처럼 **다른 일도 같이 봐야 하는 루프**에서 쓴다. 블로킹
+    /// 모드로 기다리면 키 하나가 올 때까지 갇혀서, 그 사이 도착한 연결·종료 신호를
+    /// 처리하지 못한다(그래서 대기 중에는 `/quit`도 Ctrl+D도 듣지 않았다 — 08-11).
+    #[must_use]
+    pub fn enter_polling() -> Self {
+        Self::enter_with(false)
+    }
+
+    /// `blocking = false`면 `VMIN=0`·`VTIME=1`(0.1초)로 폴링 모드가 된다.
+    #[must_use]
+    fn enter_with(blocking: bool) -> Self {
         #[cfg(unix)]
         {
             if !is_tty() {
@@ -53,8 +69,14 @@ impl RawTerm {
             let saved = t;
             // 줄 조립(ICANON)·에코(ECHO)만 끈다. 신호(ISIG)는 남겨 Ctrl+C가 살아 있게 한다.
             t.c_lflag &= !(libc::ICANON | libc::ECHO);
-            t.c_cc[libc::VMIN] = 1;
-            t.c_cc[libc::VTIME] = 0;
+            if blocking {
+                t.c_cc[libc::VMIN] = 1;
+                t.c_cc[libc::VTIME] = 0;
+            } else {
+                // VMIN=0·VTIME=1 — 0.1초 안에 온 것만 주고 없으면 0을 돌려준다.
+                t.c_cc[libc::VMIN] = 0;
+                t.c_cc[libc::VTIME] = 1;
+            }
             // SAFETY: 위와 동일.
             if unsafe { libc::tcsetattr(0, libc::TCSANOW, &t) } != 0 {
                 return Self {
@@ -75,6 +97,7 @@ impl RawTerm {
         #[cfg(not(unix))]
         {
             // Windows 콘솔 raw 모드는 별도 슬라이스(R-16 콘솔 핸들러와 함께).
+            let _ = blocking;
             Self { extended: false }
         }
     }
@@ -256,6 +279,26 @@ mod tests {
         assert_eq!(parse_key(b"\x1b[1;5C"), Some((TermKey::Other, 6)));
         // 미완 시퀀스는 더 읽는다.
         assert_eq!(parse_key(b"\x1b["), None);
+    }
+
+    #[test]
+    fn ctrl_d_is_reported_so_callers_can_exit() {
+        // 대기 구간·대화 구간 **양쪽**이 이걸로 빠져나간다(08-11 종료 경로 정리).
+        assert_eq!(parse_key(b"\x04"), Some((TermKey::Eof, 1)));
+    }
+
+    #[test]
+    fn polling_mode_guard_restores_like_blocking_one() {
+        // TTY가 없는 CI에서는 둘 다 "아무것도 바꾸지 않은 가드"여야 한다 —
+        // 여기서 터미널을 건드리면 테스트 러너의 셸이 망가진다.
+        let a = RawTerm::enter_polling();
+        let b = RawTerm::enter();
+        if !is_tty() {
+            assert!(
+                !a.is_raw() && !b.is_raw(),
+                "비-TTY에서는 raw로 들어가지 않는다"
+            );
+        }
     }
 
     #[test]

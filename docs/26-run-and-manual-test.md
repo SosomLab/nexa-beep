@@ -49,7 +49,7 @@ docker run --rm -v "$PWD":/src -w /src -e CARGO_TARGET_DIR=/src/.docker-target \
 2. **GUI 목록에 "테스트단말"이 뜬다** → 클릭 → 대화창이 열린다(Noise 핸드셰이크·TOFU 핀).
 3. **GUI에서 타이핑 → Enter** 하면 터미널에 `<지문>> 메시지` 로 뜬다.
 4. **터미널에서 타이핑 → Enter** 하면 GUI 대화창에 실시간으로 뜬다(M2-7 수신 펌프).
-5. 터미널은 `Ctrl+D`로 종료(⚠️ `Ctrl+C`는 아직 안 됨 — [18 §2-2](18-build-and-test.md)).
+5. 터미널은 **`/quit`**(또는 `/exit`) · `Ctrl+D` · `Ctrl+C` 어느 것으로든 종료된다.
 
 > 같은 호스트라 멀티캐스트 루프백으로 서로 발견된다. 발견이 안 뜨면 시나리오 B(IP 직접)로.
 
@@ -115,11 +115,23 @@ docker rm -f node_a node_b; docker network rm beepnet
 
 ## 7. 정상 종료 (R-16 · FR-P-7)
 
+> ★ **인터랙티브 채팅의 종료 경로**(08-11 실측으로 정리) — 세 가지가 모두 같은 정리
+> 절차를 탄다: 명령(`/quit`) · `Ctrl+D` · `Ctrl+C`. **상대를 기다리는 구간에서도** 듣는다.
+>
+> 그전에는 대기 구간이 `accept()`/`recv()`에 통째로 갇혀 **키를 읽는 쪽이 없었고**,
+> 남은 `Ctrl+C`는 `Drop`을 건너뛰어 **터미널을 raw 모드로 남겼다**(에코가 죽어 셸이
+> 먹통처럼 보인다 — 사용자가 "종료가 안 된다"고 한 실체). 지금은 종료 포트
+> (`plat::shutdown`)를 채팅 모드에도 걸어, `Ctrl+C`도 `Drop`을 거쳐 터미널을 복원한다.
+>
+> ⚠️ **파이프 입력(비-TTY)에서는 대기 중 `/quit`을 읽지 않는다** — 자동화가 보낸 줄은
+> 대화용이지 대기용이 아니기 때문이다. 그 경우엔 `SIGTERM`/`SIGINT`로 끝낸다(실측 확인).
+
+
 | 대상 | 종료 |
 |---|---|
 | GUI 창 | 창 닫기 · `SIGTERM`(실측 0.28초 — GOODBYE·정리) |
 | `--serve`/`--live-echo`/`--discover-probe` | `Ctrl+C`(`SIGINT`) — 정상 종료 |
-| `--chat-*`(인터랙티브) | **`Ctrl+D`**(⚠️ `Ctrl+C` 미배선 — [18 §2-2](18-build-and-test.md)) |
+| `--chat-*`(인터랙티브) | **`/quit`**(`/exit`·`/q`) · `Ctrl+D` · `Ctrl+C` — **상대를 기다리는 중에도 된다**(08-11) |
 | 컨테이너 | **`docker run --init` 필수** — 없으면 `docker stop`이 10초(SIGKILL 대기). 실측: `--init`+시그널 핸들러 = **0.38초** |
 
 ## 7-1. ★ 검증 현황 매트릭스 (2026-08-09 전수 점검)
