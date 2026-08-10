@@ -118,11 +118,14 @@ mod tests {
 
 #[cfg(not(target_os = "windows"))]
 mod imp {
+    // 비공개 모듈이라 `pub`은 도달 불가다 — 상위에서만 쓰이므로 `pub(super)`
+    // (CI 린트는 `-D warnings`라 이 차이가 곧 실패다 · Windows 빌드에선 이 모듈이
+    // 컴파일되지 않아 그쪽 clippy에는 보이지 않는다).
     /// 의도된 보류 — macOS/Linux 클립보드는 M3-1b(OS 동작 어댑터)에서.
-    pub fn get_text() -> Option<String> {
+    pub(super) fn get_text() -> Option<String> {
         None
     }
-    pub fn set_text(_text: &str) -> bool {
+    pub(super) fn set_text(_text: &str) -> bool {
         false
     }
 }

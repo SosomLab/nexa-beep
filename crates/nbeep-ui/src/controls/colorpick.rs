@@ -183,7 +183,7 @@ impl Widget for ColorPicker {
         // 내장 입력으로 전달(포커스 게이트는 TextBox 자신이 한다).
         self.hex.on_event(ev, inv);
         if let Some(t) = self.hex.take_committed() {
-            self.commit(&t.clone(), inv);
+            self.commit(&t, inv);
         }
     }
 

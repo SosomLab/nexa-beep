@@ -21,7 +21,7 @@ pub use sas::safety_number;
 
 /// 원본 전체의 SHA-256(FR-X-6 파일 무결성 · [docs/11] `.beepq` `content_sha256`).
 ///
-/// 어댑터 함수 — 도메인([`nbeep-safe`]의 `HashPort`)은 이 함수를 모르고,
+/// 어댑터 함수 — 도메인(`nbeep-safe`의 `HashPort`)은 이 함수를 모르고,
 /// 조립 지점(bin)이 포트에 꽂는다(DR-21).
 #[must_use]
 pub fn sha256(data: &[u8]) -> [u8; 32] {

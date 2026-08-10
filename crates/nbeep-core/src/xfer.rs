@@ -447,7 +447,7 @@ impl XferInbox {
     /// 완료 처리 — 크기 대조 후 수신물 반환(해시 대조는 호출자 몫 — 문서 참조).
     ///
     /// # Errors
-    /// [`XferError::UnknownXfer`]·[`XferError::SizeMismatch`](폐기).
+    /// [`XferError::UnknownXfer`]·[`XferError::SizeMismatch`] — 둘 다 해당 전송을 폐기한다.
     pub fn done(&mut self, id: &XferId) -> Result<Received, XferError> {
         let x = self.inflight.remove(id).ok_or(XferError::UnknownXfer)?;
         if x.buf.len() as u64 != x.size {
