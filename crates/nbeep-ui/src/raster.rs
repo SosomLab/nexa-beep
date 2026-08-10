@@ -220,6 +220,12 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
         self.cur.bold |= bold;
     }
 
+    fn select_font_sized(&mut self, slot: FontSlot, bold: bool, delta_px: f32) {
+        self.select_font(slot, bold);
+        // 증분은 슬롯 크기 **위에** 얹는다 — 사용자가 글꼴 크기를 키우면 제목도 같이 큰다.
+        self.cur.size = (self.cur.size + delta_px).max(1.0);
+    }
+
     fn fill_rect(&mut self, rect: Rect, color: Color) {
         if rect.is_empty() {
             return;

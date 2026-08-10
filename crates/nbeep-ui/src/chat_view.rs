@@ -643,6 +643,19 @@ impl ChatViewWidget {
             .unwrap_or(0)
     }
 
+    /// 입력창 가로 썸의 현재 rect(테스트·검증용) — 없으면 `None`.
+    #[cfg(test)]
+    fn input_h_thumb_for_test(&self) -> Option<Rect> {
+        let input = self.input_bar();
+        let content_w = (self.input_content_w() + self.s(20)).max(input.w);
+        crate::controls::ScrollBars::h_thumb_for_test(
+            input,
+            content_w,
+            self.input_hscroll,
+            self.scale,
+        )
+    }
+
     /// **가로** 스크롤을 캐럿이 보이도록 맞춘다(줄바꿈 없는 긴 문장 대응).
     /// paint가 남긴 문자 경계 실측을 쓴다 — 폭 계산을 두 벌로 만들지 않는다.
     fn ensure_caret_visible_h(&mut self) {
@@ -872,14 +885,21 @@ impl Widget for ChatViewWidget {
 
         // ── 입력창 스크롤(멀티라인) — 입력창 위의 휠은 **입력 내용만** 스크롤한다 ──
         let count = self.input_line_count();
-        if count > INPUT_MAX_LINES && (!is_wheel || over_input) {
-            let input = self.input_bar();
+        // 가로 콘텐츠 폭을 함께 넘겨야 **가로 막대 드래그·가로 휠**이 산다.
+        let content_w = self.input_content_w() + self.s(20);
+        let input_rect = self.input_bar();
+        // ★ 세로 조건만 보면 안 된다 — 줄바꿈 없는 긴 한 줄은 **세로로는 1줄**이라
+        //   여기서 걸러졌고, 그 결과 가로 막대는 그려지는데 클릭·드래그·가로 휠이
+        //   전혀 닿지 않았다(08-11 지적: "좌우 스크롤을 클릭해서 드래그할 수 없다",
+        //   "트랙패드 두 손가락 좌우 이동에도 막대가 뜨지 않는다").
+        let needs_v = count > INPUT_MAX_LINES;
+        let needs_h = content_w > input_rect.w;
+        if (needs_v || needs_h) && (!is_wheel || over_input) {
+            let input = input_rect;
             let line_h = self.s(INPUT_LINE_H);
             // 콘텐츠 높이에 상하 여백 포함 — 뷰포트(input.h)에도 여백이 들어 있어,
             // 빼먹으면 최대 스크롤이 정확히 1줄 모자란다(사용자 재현 08-10).
             let content_h = count as i32 * line_h + self.s(INPUT_PAD_V) * 2;
-            // 가로 콘텐츠 폭을 함께 넘겨야 **가로 막대 드래그·Shift+휠**이 산다.
-            let content_w = self.input_content_w() + self.s(20);
             let (nx, ny, consumed) = self.input_bars.on_event(
                 ev,
                 input,
@@ -1535,6 +1555,59 @@ mod tests {
             },
             inv,
         );
+    }
+
+    #[test]
+    fn single_long_line_can_be_scrolled_horizontally_by_wheel_and_drag() {
+        // ★ 회귀(08-11): 입력창 스크롤바가 "세로 4줄 초과"일 때만 이벤트를 받아,
+        //   줄바꿈 없는 긴 한 줄(=세로 1줄)에서는 막대가 **보이는데 잡히지 않았다**.
+        let (mut w, mut inv) = widget();
+        for _ in 0..200 {
+            ch(&mut w, 'x', &mut inv);
+        }
+        paint_once(&w); // 문자 경계 실측 캐시(가로 폭의 근거)
+        assert_eq!(w.input_line_count(), 1, "줄바꿈이 없으니 한 줄");
+        assert!(
+            w.input_content_w() > w.input_view_w(),
+            "가로로 넘쳐야 의미 있는 검증"
+        );
+
+        // ① 가로 휠(트랙패드 두 손가락 좌우) — 오프셋이 움직이고 막대가 떠야 한다.
+        w.input_hscroll = 0;
+        let input = w.input_bar();
+        w.on_event(
+            &InputEvent::MouseMove {
+                x: input.x + 10,
+                y: input.y + 4,
+            },
+            &mut inv,
+        );
+        w.on_event(&InputEvent::HWheel { delta: 300 }, &mut inv);
+        assert!(w.input_hscroll > 0, "가로 휠로 스크롤되어야 한다");
+        w.input_bars.tick(0);
+        assert!(w.input_bars.is_visible(), "스크롤하면 막대가 뜬다");
+
+        // ② 가로 썸 클릭 → 드래그로 오프셋이 따라와야 한다.
+        w.input_hscroll = 0;
+        paint_once(&w);
+        let thumb = w.input_h_thumb_for_test().expect("가로 썸이 있어야 한다");
+        w.on_event(
+            &InputEvent::MouseDown {
+                x: thumb.x + thumb.w / 2,
+                y: thumb.y + thumb.h / 2,
+                shift: false,
+                primary: true,
+            },
+            &mut inv,
+        );
+        w.on_event(
+            &InputEvent::MouseMove {
+                x: thumb.x + thumb.w / 2 + 60,
+                y: thumb.y + thumb.h / 2,
+            },
+            &mut inv,
+        );
+        assert!(w.input_hscroll > 0, "썸 드래그로 가로 스크롤되어야 한다");
     }
 
     #[test]

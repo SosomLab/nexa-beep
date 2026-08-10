@@ -33,6 +33,14 @@ pub trait DrawCtx {
         let _ = (slot, bold);
     }
 
+    /// 슬롯 선택 + **크기 증분**(논리 px) — 제목처럼 "본문보다 조금 크게"를 표현할 때.
+    /// 절대 크기를 박으면 사용자가 글꼴 크기를 바꿔도 제목만 그대로 남아 위계가 깨진다.
+    /// 기본 = 증분 무시(단일 폰트 백엔드).
+    fn select_font_sized(&mut self, slot: FontSlot, bold: bool, delta_px: f32) {
+        let _ = delta_px;
+        self.select_font(slot, bold);
+    }
+
     /// rect를 단색으로 불투명하게 채운다.
     fn fill_rect(&mut self, rect: Rect, color: Color);
 

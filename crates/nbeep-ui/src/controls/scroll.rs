@@ -83,6 +83,18 @@ impl ScrollBars {
         Self::default()
     }
 
+    /// 지금 화면에 보이는가(자동 숨김 전 단계).
+    #[must_use]
+    pub fn is_visible(&self) -> bool {
+        self.active
+    }
+
+    /// 가로 썸 rect(호스트 검증·테스트용) — 필요 없으면 `None`. 두께는 잡기 쉬운 THICK 기준.
+    #[must_use]
+    pub fn h_thumb_for_test(vp: Rect, content_w: i32, off_x: i32, scale: f32) -> Option<Rect> {
+        Self::h_thumb(vp, content_w, off_x, scale, sc(THICK, scale))
+    }
+
     fn v_needed(vp: Rect, content_h: i32) -> bool {
         content_h > vp.h
     }

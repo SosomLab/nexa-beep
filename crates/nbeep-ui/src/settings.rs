@@ -515,8 +515,11 @@ const COMBO_W: i32 = 170;
 const SIZE_W: i32 = 112;
 const FAMILY_W: i32 = 180;
 const PAD: i32 = 12;
-/// 스크롤 영역 안의 하위 섹션 제목 높이.
-const SUB_HEAD_H: i32 = 34;
+/// 스크롤 영역 안의 하위 섹션 제목 높이 — **위쪽 여백을 크게** 둬서 앞 그룹과 확실히 끊는다
+/// (사용자 지적 08-11: 그룹 경계가 눈에 잘 안 띈다). 제목 글자는 이 상자의 **아래쪽**에 붙는다.
+const SUB_HEAD_H: i32 = 52;
+/// 하위 제목 상자에서 글자 아래 여백 — 제목이 자기 그룹 첫 행에 가깝게 붙게 한다.
+const SUB_HEAD_PAD_B: i32 = 8;
 /// 상단 고정 밴드 — 상위 제목 줄 + 하위 제목 줄(하위가 없으면 아랫줄은 비워 둔다).
 /// **높이를 고정**해야 그룹을 넘나들 때 내용이 위아래로 튀지 않는다.
 const CRUMB_CAT_H: i32 = 30;
@@ -1488,7 +1491,8 @@ impl Widget for SettingsWidget {
 
         // 하위 섹션 제목(스크롤과 함께 올라간다 — 고정 밴드가 그 위를 덮는다).
         let vp_clip = self.right_viewport();
-        ctx.select_font(FontSlot::Base, true);
+        // 하위 제목 = 본문(Base)보다 **+1px · 굵게**(사용자 확정 08-11).
+        ctx.select_font_sized(FontSlot::Base, true, 1.0);
         for row in &self.rows {
             let Some(sub) = row.head else { continue };
             let hr = Rect::new(row.rect.x, row.rect.y - row.head_h, row.rect.w, row.head_h);
@@ -1496,9 +1500,10 @@ impl Widget for SettingsWidget {
                 continue; // 화면 밖
             }
             let th = ctx.text_height();
+            // 상자 **아래쪽**에 붙인다 — 남는 높이가 곧 위 여백이 되어 앞 그룹과 끊긴다.
             ctx.text(
                 hr.x + self.s(PAD),
-                hr.y + (hr.h - th) / 2 + self.s(4),
+                hr.bottom() - self.s(SUB_HEAD_PAD_B) - th,
                 vp_clip,
                 tr(lang, sub),
                 theme.text,
@@ -1622,7 +1627,8 @@ impl Widget for SettingsWidget {
         );
         ctx.fill_rect(crumb, theme.panel_bg);
         if let Some((cat, sub)) = self.current_group() {
-            ctx.select_font(FontSlot::Base, true);
+            // 상위 제목 = 본문(Base)보다 **+2px · 굵게**(사용자 확정 08-11).
+            ctx.select_font_sized(FontSlot::Base, true, 2.0);
             let th = ctx.text_height();
             let cat_h = self.s(CRUMB_CAT_H);
             ctx.text(
@@ -1634,7 +1640,8 @@ impl Widget for SettingsWidget {
             );
             // 하위 줄 — 직속 설정 구간이면 비워 둔다(자리는 유지).
             if let Some(sub) = sub {
-                ctx.select_font(FontSlot::Base, false);
+                // 밴드의 하위 줄은 본문 섹션 제목과 **같은 위계** = 같은 모양으로 보인다.
+                ctx.select_font_sized(FontSlot::Base, true, 1.0);
                 let sth = ctx.text_height();
                 let sub_h = self.s(CRUMB_SUB_H);
                 // 한 단 들여써서 "상위 아래"임을 보인다.
