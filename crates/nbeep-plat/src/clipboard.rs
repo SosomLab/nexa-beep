@@ -118,14 +118,77 @@ mod tests {
 
 #[cfg(not(target_os = "windows"))]
 mod imp {
-    // 비공개 모듈이라 `pub`은 도달 불가다 — 상위에서만 쓰이므로 `pub(super)`
-    // (CI 린트는 `-D warnings`라 이 차이가 곧 실패다 · Windows 빌드에선 이 모듈이
-    // 컴파일되지 않아 그쪽 clippy에는 보이지 않는다).
-    /// 의도된 보류 — macOS/Linux 클립보드는 M3-1b(OS 동작 어댑터)에서.
-    pub(super) fn get_text() -> Option<String> {
-        None
+    //! macOS·Linux — **OS 기본 도구**를 파이프로 쓴다(외부 크레이트 0 · DR-5).
+    //! macOS `pbcopy`/`pbpaste` · Linux는 Wayland(`wl-copy`/`wl-paste`)를 먼저 보고
+    //! X11(`xclip`)로 폴백한다. 도구가 없으면 실패를 그대로 보고한다(조용히 성공한 척
+    //! 하지 않는다 — 복사가 안 됐는데 됐다고 하면 사용자가 붙여넣기에서 잃는다).
+
+    use std::io::Write as _;
+    use std::process::{Command, Stdio};
+
+    /// 명령을 실행해 표준 출력을 문자열로 받는다.
+    fn read_from(cmd: &str, args: &[&str]) -> Option<String> {
+        let out = Command::new(cmd)
+            .args(args)
+            .stderr(Stdio::null())
+            .output()
+            .ok()?;
+        out.status
+            .success()
+            .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
     }
-    pub(super) fn set_text(_text: &str) -> bool {
-        false
+
+    /// 명령에 표준 입력으로 텍스트를 밀어 넣는다.
+    fn write_to(cmd: &str, args: &[&str], text: &str) -> bool {
+        let Ok(mut child) = Command::new(cmd)
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        else {
+            return false;
+        };
+        let wrote = child
+            .stdin
+            .as_mut()
+            .is_some_and(|si| si.write_all(text.as_bytes()).is_ok());
+        // stdin을 닫아야 도구가 입력 끝을 안다(닫지 않으면 wait에서 멈춘다).
+        drop(child.stdin.take());
+        wrote && child.wait().is_ok_and(|s| s.success())
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(super) fn get_text() -> Option<String> {
+        read_from("pbpaste", &[])
+    }
+    #[cfg(target_os = "macos")]
+    pub(super) fn set_text(text: &str) -> bool {
+        write_to("pbcopy", &[], text)
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    pub(super) fn get_text() -> Option<String> {
+        read_from("wl-paste", &["--no-newline"])
+            .or_else(|| read_from("xclip", &["-selection", "clipboard", "-o"]))
+    }
+    #[cfg(not(target_os = "macos"))]
+    pub(super) fn set_text(text: &str) -> bool {
+        write_to("wl-copy", &[], text) || write_to("xclip", &["-selection", "clipboard"], text)
+    }
+}
+
+#[cfg(all(test, not(target_os = "windows")))]
+mod unix_tests {
+    /// 실측 — 이 기기에서 실제로 왕복하는가(도구가 없으면 건너뛴다).
+    #[test]
+    fn roundtrip_on_this_machine() {
+        let marker = "nexa-beep 클립보드 \"왕복\" 시험";
+        if !super::set_text(marker) {
+            eprintln!("(클립보드 도구 없음 — 건너뜀)");
+            return;
+        }
+        let got = super::get_text().expect("쓴 뒤에는 읽혀야 한다");
+        assert_eq!(got.trim_end(), marker, "쓴 그대로 돌아와야 한다");
     }
 }
