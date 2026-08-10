@@ -839,6 +839,8 @@ impl App {
         }
         self.awaiting_accept.insert(peer, xid);
         self.status = format!("파일 제안: {name} ({}) — 상대 승인 대기", human_size(size));
+        // 스레드에 송신 항목 추가(승인 대기 → 진행 → 완료가 이 항목 위에서 갱신된다).
+        self.push_xfer_line(peer, true, &name, size);
         self.open_send_wait(peer, &name);
     }
 
@@ -871,6 +873,17 @@ impl App {
                 let _ = c.out_tx.send(SessionCmd::CancelXfer(xid));
             }
         }
+        self.set_xfer_line(
+            peer,
+            true,
+            nbeep_ui::XferLineState::Failed {
+                why: if by_timeout {
+                    "응답 없음 — 시간 초과로 취소".into()
+                } else {
+                    "취소함".into()
+                },
+            },
+        );
         self.send_queue.remove(&peer);
         self.send_batch.remove(&peer);
         self.close_send_wait(peer);
@@ -904,6 +917,15 @@ impl App {
             return;
         };
         let ok = self.send_xfer_decision(peer, xid, accept, nbeep_core::RejectWhy::Declined);
+        if !accept {
+            self.set_xfer_line(
+                peer,
+                false,
+                nbeep_ui::XferLineState::Failed {
+                    why: "거절함".into(),
+                },
+            );
+        }
         let left = self.pending_offers.get(&peer).map_or(0, VecDeque::len);
         self.status = if ok {
             let head = if accept {
@@ -1000,6 +1022,17 @@ impl App {
             }
             OfferChoice::Cancel { by_timeout } => {
                 self.send_xfer_decision(peer, xid, false, nbeep_core::RejectWhy::Declined);
+                self.set_xfer_line(
+                    peer,
+                    false,
+                    nbeep_ui::XferLineState::Failed {
+                        why: if by_timeout {
+                            "응답 없음 — 시간 초과로 거절".into()
+                        } else {
+                            "거절함".into()
+                        },
+                    },
+                );
                 self.status = if by_timeout {
                     format!(
                         "{}초 동안 응답이 없어 거절했습니다 — {name}",
@@ -1073,6 +1106,33 @@ impl App {
         if let Some(mid) = self.main_id {
             self.request_redraw(mid);
         }
+    }
+
+    /// 파일 전송 항목을 대화 스레드에 추가 — **저장소+뷰 동시**(DR-26). 완료 후에도
+    /// 기록으로 남고, 뷰를 닫았다 열어도 복원된다(사용자 요청 08-10).
+    fn push_xfer_line(&mut self, peer: PeerId, mine: bool, name: &str, size: u64) {
+        // 파일명은 원격 제공 값일 수 있다 — 스레드 표시 전 무해화(RLO 등).
+        let line = ChatLine::xfer(mine, nbeep_core::sanitize_message(name), size);
+        if let Some(conv) = self.conversations.get_mut(&peer) {
+            conv.lines.push(line.clone());
+        }
+        let mut inv = Invalidations::default();
+        if let Some(chat) = self.chats.get_mut(&peer) {
+            chat.push_line(line, &mut inv);
+        }
+        self.redraw_conversation(peer);
+    }
+
+    /// 진행 중 전송 항목(방향 일치·마지막 미종결)의 상태 갱신 — 저장소+뷰 동시.
+    fn set_xfer_line(&mut self, peer: PeerId, mine: bool, state: nbeep_ui::XferLineState) {
+        if let Some(conv) = self.conversations.get_mut(&peer) {
+            nbeep_ui::update_xfer_in(&mut conv.lines, mine, state.clone());
+        }
+        let mut inv = Invalidations::default();
+        if let Some(chat) = self.chats.get_mut(&peer) {
+            chat.update_xfer_line(mine, state, &mut inv);
+        }
+        self.redraw_conversation(peer);
     }
 
     /// 승인 정책 만료 확인 — 기간이 끝났으면 **직전 방식으로 되돌리고** 알린다.
@@ -1941,18 +2001,12 @@ impl App {
                 body: nbeep_core::MessageBody::Text(text.as_str().to_string()),
             };
             if let Some(chat) = self.chats.get_mut(&peer) {
-                chat.push_line(
-                    ChatLine {
-                        mine: true,
-                        text: text.clone(),
-                    },
-                    &mut inv,
-                );
+                chat.push_line(ChatLine::text(true, text.clone()), &mut inv);
             }
             // 왕래 장부 — 파일 전송 자격(상호 확인)의 근거(사용자 확정 08-09).
             self.ledger.note_sent(peer);
             if let Some(conv) = self.conversations.get_mut(&peer) {
-                conv.lines.push(ChatLine { mine: true, text });
+                conv.lines.push(ChatLine::text(true, text));
                 // 액터에 발신 요청 — 수신은 비동기로 AppEvent::Recv로 돌아온다(M2-7).
                 if conv.out_tx.send(SessionCmd::Chat(msg.encode())).is_err() {
                     self.status = "세션 종료됨".into();
@@ -2346,7 +2400,7 @@ impl ApplicationHandler<AppEvent> for App {
                     return; // 중복(다중 경로 — FR-M-9)
                 }
                 self.ledger.note_recv(peer); // 왕래 장부(상호 확인)
-                let line = ChatLine { mine: false, text };
+                let line = ChatLine::text(false, text);
                 if let Some(conv) = self.conversations.get_mut(&peer) {
                     conv.lines.push(line.clone());
                 }
@@ -2379,8 +2433,11 @@ impl ApplicationHandler<AppEvent> for App {
                     OfferVerdict::Accept => {
                         self.send_xfer_decision(peer, id, true, RejectWhy::Declined);
                         self.status = format!("자동 수락: {name} ({}) 수신 시작", human_size(size));
+                        self.push_xfer_line(peer, false, &name, size);
                     }
                     OfferVerdict::Ask => {
+                        // 스레드에 수신 항목(승인 대기) — 거절하면 이 항목이 실패로 남는다.
+                        self.push_xfer_line(peer, false, &name, size);
                         let q = self.pending_offers.entry(peer).or_default();
                         q.push_back((id, name.clone(), size));
                         let n = q.len();
@@ -2426,6 +2483,8 @@ impl ApplicationHandler<AppEvent> for App {
                     sending,
                 };
                 self.xfer_progress.insert(peer, xp);
+                // 스레드 항목 진행률 — 방향 일치(발신=mine)·현재 파일 누적 바이트.
+                self.set_xfer_line(peer, sending, nbeep_ui::XferLineState::Active { done: got });
                 self.apply_xfer_view(peer);
                 self.redraw_conversation(peer);
                 if let Some(mid) = self.main_id {
@@ -2447,6 +2506,16 @@ impl ApplicationHandler<AppEvent> for App {
                         ""
                     }
                 );
+                self.set_xfer_line(
+                    peer,
+                    false,
+                    nbeep_ui::XferLineState::Done {
+                        note: format!(
+                            "격리됨 · 위험 {risk:?}{}",
+                            if mismatch { " · 형식 불일치" } else { "" }
+                        ),
+                    },
+                );
                 self.clear_xfer(peer);
                 self.redraw_conversation(peer);
             }
@@ -2454,10 +2523,18 @@ impl ApplicationHandler<AppEvent> for App {
                 // 협상 성립 — 대기 창을 닫고 스트리밍 진행률로 넘어간다.
                 self.awaiting_accept.remove(&peer);
                 self.close_send_wait(peer);
+                self.set_xfer_line(peer, true, nbeep_ui::XferLineState::Active { done: 0 });
                 self.status = "상대가 수락 — 전송 시작".into();
                 self.redraw_conversation(peer);
             }
             AppEvent::XferSendDone { peer } => {
+                self.set_xfer_line(
+                    peer,
+                    true,
+                    nbeep_ui::XferLineState::Done {
+                        note: String::new(),
+                    },
+                );
                 // 배치 집계 갱신 후 다음 파일로.
                 if let Some(b) = self.send_batch.get_mut(&peer) {
                     b.0 += 1;
@@ -2488,6 +2565,14 @@ impl ApplicationHandler<AppEvent> for App {
                 self.redraw_conversation(peer);
             }
             AppEvent::XferFailed { peer, why } => {
+                // 방향 판정 — 발신이 걸려 있으면 발신 실패, 아니면 수신 실패.
+                let mine =
+                    self.awaiting_accept.contains_key(&peer) || self.send_batch.contains_key(&peer);
+                self.set_xfer_line(
+                    peer,
+                    mine,
+                    nbeep_ui::XferLineState::Failed { why: why.clone() },
+                );
                 self.status = format!("파일: {why}");
                 self.awaiting_accept.remove(&peer);
                 self.close_send_wait(peer);
