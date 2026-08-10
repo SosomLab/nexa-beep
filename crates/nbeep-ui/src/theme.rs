@@ -18,6 +18,9 @@ pub struct Theme {
     pub panel_bg: Color,
     /// 행 교대 음영.
     pub panel_bg_alt: Color,
+    /// 수신 말풍선 배경(대화 — 발신은 `accent`). 패널과의 대비 확보:
+    /// **다크 = 패널보다 밝게 · 라이트 = 패널보다 어둡게**(사용자 확정 08-10).
+    pub bubble_peer: Color,
     /// 입력 필드.
     pub field_bg: Color,
     /// 경계선·스플리터.
@@ -53,6 +56,7 @@ impl Theme {
             chrome_bg: Color(0x001E_2228),
             panel_bg: Color(0x0019_1C21),
             panel_bg_alt: Color(0x001F_242B),
+            bubble_peer: Color(0x0031_3947),
             field_bg: Color(0x0026_2B33),
             border: Color(0x0036_3C46),
             accent: Color(0x003D_8BFF),
@@ -76,6 +80,7 @@ impl Theme {
             chrome_bg: Color(0x00EE_F1F5),
             panel_bg: Color(0x00FF_FFFF),
             panel_bg_alt: Color(0x00F5_F7FA),
+            bubble_peer: Color(0x00E2_E7EE),
             field_bg: Color(0x00FF_FFFF),
             border: Color(0x00D5_DAE1),
             accent: Color(0x003D_8BFF),
@@ -96,6 +101,22 @@ impl Default for Theme {
     fn default() -> Self {
         Theme::dark()
     }
+}
+
+/// `#RRGGBB`/`RRGGBB` → 토큰 색(형식 오류 = `None`) — 색상 설정 파싱(08-10).
+#[must_use]
+pub fn color_from_hex(s: &str) -> Option<Color> {
+    let h = s.trim().trim_start_matches('#');
+    if h.len() != 6 || !h.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    u32::from_str_radix(h, 16).ok().map(Color)
+}
+
+/// 토큰 색 → `#RRGGBB`(대문자) — 설정 저장·표시 형식.
+#[must_use]
+pub fn color_to_hex(c: Color) -> String {
+    format!("#{:06X}", c.0 & 0x00FF_FFFF)
 }
 
 #[cfg(test)]

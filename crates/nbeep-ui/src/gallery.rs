@@ -4,10 +4,10 @@
 //! 실물로 확인한다. **제품 화면이 아니라 검수용** — 정식 UI 통합은 별도.
 
 use crate::controls::{
-    BorderSpec, Button, Checkbox, Choose, ChoosePicker, Combo, ComboControl, ComboItem, Control,
-    GridColumn, ImageFit, LabelSide, MenuBar, MenuDef, MenuEntry, PositionPicker, RadioGroup,
-    RadioOption, ScrollBars, TextBox, TimeoutButton, ToolIcon, ToolItem, Toolbar, TreeGrid,
-    TreeModel, TreeNode, TreeView,
+    BorderSpec, Button, Checkbox, Choose, ChoosePicker, ColorPicker, Combo, ComboControl,
+    ComboItem, Control, GridColumn, ImageFit, LabelSide, MenuBar, MenuDef, MenuEntry,
+    PositionPicker, RadioGroup, RadioOption, ScrollBars, TextBox, TimeoutButton, ToolIcon,
+    ToolItem, Toolbar, TreeGrid, TreeModel, TreeNode, TreeView,
 };
 use crate::draw::{DrawCtx, FontSlot};
 use crate::event::InputEvent;
@@ -82,6 +82,8 @@ pub struct GalleryWidget {
     tb_started: bool,
     /// 3×3 위치 선택 그리드(타입어헤드 HUD 위치 설정 — M3).
     posgrid: PositionPicker,
+    /// 색상 선택기(테마 색 설정 — 08-10).
+    colorpick: ColorPicker,
 }
 
 impl Default for GalleryWidget {
@@ -260,6 +262,7 @@ impl GalleryWidget {
             t0: std::time::Instant::now(),
             tb_started: false,
             posgrid: PositionPicker::new(),
+            colorpick: ColorPicker::new("#3D8BFF"),
         }
     }
 
@@ -290,6 +293,7 @@ impl GalleryWidget {
         self.toolbar.set_scale(s);
         self.timeout_btn.set_scale(s);
         self.posgrid.set_scale(s);
+        self.colorpick.set_scale(s);
         self.relayout(inv);
     }
 
@@ -344,6 +348,8 @@ impl GalleryWidget {
         y = place(&mut self.toolbar, x, y, w, tool_h, label_h, gap, inv);
         y = place(&mut self.timeout_btn, x, y, tb_w, tb_h, label_h, gap, inv);
         y = place(&mut self.posgrid, x, y, pos_w, pos_h, label_h, gap, inv);
+        let (cp_w, cp_h) = (self.colorpick.preferred_width(), self.s(30));
+        y = place(&mut self.colorpick, x, y, cp_w, cp_h, label_h, gap, inv);
         // 콘텐츠 총 크기 — 가장 넓은 행(트리·그리드 쌍) 기준.
         let widest = w.max(tcolw * 2 + gap).max(gcolw * 2 + gap);
         self.content_h = (y - top) + pad;
@@ -396,7 +402,7 @@ impl GalleryWidget {
         self.scroll_x = self.scroll_x.clamp(0, max_x);
     }
 
-    fn labels() -> [&'static str; 19] {
+    fn labels() -> [&'static str; 20] {
         [
             "Checkbox — 라벨 오른쪽 (+ 도움말 ?)",
             "Checkbox — 라벨 왼쪽",
@@ -417,6 +423,7 @@ impl GalleryWidget {
             "Toolbar — SVG 알파 마스크 아이콘(테마 틴트)",
             "TimeoutButton — 스스로 눌리는 버튼(만료 시 데모 재시작)",
             "PositionPicker — 3×3 위치 그리드",
+            "ColorPicker — 스와치 · #RRGGBB · 프리셋(테마 색 설정)",
         ]
     }
 }
@@ -501,6 +508,9 @@ impl Widget for GalleryWidget {
             self.timeout_btn
                 .set_focused(self.timeout_btn.bounds().contains(p));
             self.posgrid.set_focused(self.posgrid.bounds().contains(p));
+            if !self.colorpick.bounds().contains(p) {
+                self.colorpick.set_focused(false);
+            }
         }
         // 이벤트를 전 컨트롤에 전달(각자 bounds/포커스로 자기 것만 처리).
         self.cb_right.on_event(ev, inv);
@@ -530,12 +540,14 @@ impl Widget for GalleryWidget {
         }
         self.posgrid.on_event(ev, inv);
         let _ = self.posgrid.take_changed();
+        self.colorpick.on_event(ev, inv);
+        let _ = self.colorpick.take_changed(); // 데모 — 값은 소비만
     }
 
     fn paint(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
         ctx.fill_rect(self.bounds, theme.panel_bg);
         let labels = Self::labels();
-        let widgets: [&dyn Widget; 19] = [
+        let widgets: [&dyn Widget; 20] = [
             &self.cb_right,
             &self.cb_left,
             &self.cb_only,
@@ -555,6 +567,7 @@ impl Widget for GalleryWidget {
             &self.toolbar,
             &self.timeout_btn,
             &self.posgrid,
+            &self.colorpick,
         ];
         // 섹션 라벨(각 컨트롤 위 — 컨트롤의 x에 맞춰 그린다: 좌·우 나란한 트리 쌍 라벨 분리).
         ctx.select_font(FontSlot::Status, false);

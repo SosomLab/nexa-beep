@@ -1024,7 +1024,8 @@ impl Widget for ChatViewWidget {
                 let (bg, fg) = if l.mine {
                     (theme.accent, theme.chrome_bg)
                 } else {
-                    (theme.panel_bg_alt, theme.text)
+                    // 수신 풍선 — 다크는 패널보다 밝게, 라이트는 어둡게(대비 확보 · 08-10).
+                    (theme.bubble_peer, theme.text)
                 };
                 ctx.fill_round_rect(bub, self.s(9), bg);
                 // 꼬리 — 발신은 오른쪽, 수신은 왼쪽을 가리켜 방향을 구별(사용자 요청 08-10).

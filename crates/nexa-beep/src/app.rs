@@ -1322,6 +1322,26 @@ impl App {
         self.list.set_rows(rows, inv);
     }
 
+    /// 팔레트 + 사용자 색 오버라이드(설정 `theme.{dark|light}.*`)로 테마 재구성(08-10).
+    /// 다크/라이트 **각각** 자기 오버라이드를 갖는다 — 전환해도 상대 테마 색은 안 섞인다.
+    fn rebuild_theme(&mut self) {
+        let light = self.settings.get("ui.theme") == "light";
+        let mut t = if light { Theme::light() } else { Theme::dark() };
+        let prefix = if light { "theme.light" } else { "theme.dark" };
+        let ov = |settings: &SettingsState, field: &mut nbeep_ui::Color, key: &str| {
+            if let Some(c) =
+                nbeep_ui::theme::color_from_hex(settings.get(&format!("{prefix}.{key}")))
+            {
+                *field = c;
+            }
+        };
+        ov(&self.settings, &mut t.accent, "accent");
+        ov(&self.settings, &mut t.bubble_peer, "bubble_peer");
+        ov(&self.settings, &mut t.panel_bg, "panel_bg");
+        ov(&self.settings, &mut t.text, "text");
+        self.theme = t;
+    }
+
     /// 연결 수립을 **워커 스레드**로 시작한다(M2-8 — 사용자 실기 08-10 "응답 없음").
     ///
     /// connect(후보 순차 시도 — 최악 수십 초)+Noise 핸드셰이크가 이벤트 루프에서 돌면
@@ -1853,12 +1873,16 @@ impl App {
                     }
                 }
                 "ui.theme" => {
-                    self.theme = if value == "light" {
-                        Theme::light()
-                    } else {
-                        Theme::dark()
-                    };
-                    // 전 창 다시 그리기.
+                    self.rebuild_theme(); // 팔레트 + 사용자 색 오버라이드(08-10)
+                                          // 전 창 다시 그리기.
+                    for e in self.windows.values() {
+                        e.window.request_redraw();
+                    }
+                }
+                // 테마 주요 색 사용자 지정(08-10) — 현재 테마에 즉시 적용.
+                k if k.starts_with("theme.") => {
+                    self.rebuild_theme();
+                    self.status = format!("색 적용 — {k} = {value}");
                     for e in self.windows.values() {
                         e.window.request_redraw();
                     }

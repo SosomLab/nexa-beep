@@ -15,6 +15,7 @@
 
 pub mod button;
 pub mod checkbox;
+pub mod colorpick;
 pub mod combo;
 pub mod posgrid;
 pub mod pulldown;
@@ -27,6 +28,7 @@ pub mod tree;
 
 pub use button::{Button, ButtonMode, ImageFit};
 pub use checkbox::Checkbox;
+pub use colorpick::ColorPicker;
 pub use combo::{Choose, ChoosePicker, Combo, ComboControl, ComboItem, PopupHit};
 pub use posgrid::PositionPicker;
 pub use pulldown::{MenuBar, MenuDef, MenuEntry};

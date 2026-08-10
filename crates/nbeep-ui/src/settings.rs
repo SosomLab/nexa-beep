@@ -17,8 +17,8 @@
 //! M2-5(Repository 포트). i18n: 라벨은 [`Msg`] 키, 검색은 **전 언어 매치**.
 
 use crate::controls::{
-    Checkbox, Combo, ComboControl, ComboItem, Control, LabelSide, PositionPicker, ScrollBars,
-    TextBox, TreeControl, TreeModel, TreeNode, TreeView,
+    Checkbox, ColorPicker, Combo, ComboControl, ComboItem, Control, LabelSide, PositionPicker,
+    ScrollBars, TextBox, TreeControl, TreeModel, TreeNode, TreeView,
 };
 use crate::draw::{DrawCtx, FontSlot};
 use crate::event::{InputEvent, Key};
@@ -60,6 +60,11 @@ pub enum SettingKind {
     },
     /// on/off — [`Checkbox`]. 값은 `"on"`/`"off"`(기본 on).
     Toggle,
+    /// 색상 — [`ColorPicker`](스와치 + `#RRGGBB` 입력 + 프리셋). 값 = `#RRGGBB`(08-10).
+    Color {
+        /// 기본 hex(테마 팔레트의 원값).
+        default: &'static str,
+    },
     /// 글꼴 영역 — 글꼴명 [`TextBox`] + 크기 [`Combo`].
     FontSection {
         /// 글꼴명 값 키(`font.{region}.family`).
@@ -99,6 +104,7 @@ impl Entry {
                 .into_iter()
                 .collect(),
             SettingKind::Toggle => vec![(self.key, "on".to_string())],
+            SettingKind::Color { default } => vec![(self.key, default.to_string())],
             SettingKind::PositionGrid => vec![(self.key, "bl".to_string())],
             SettingKind::FontFace { family_key } => vec![(family_key, String::new())],
             SettingKind::FontSection {
@@ -153,6 +159,71 @@ pub fn registry() -> &'static [Entry] {
             desc: Msg::ThemeDesc,
             kind: SettingKind::Radio(&[("dark", Msg::ThemeDark), ("light", Msg::ThemeLight)]),
             key: "ui.theme",
+        },
+        // ── 테마 주요 색(08-10 · 사용자 요청) — 다크/라이트 각각. 즉시 적용(영속은 M3-15). ──
+        Entry {
+            cat: Msg::CatAppearance,
+            sub: Some(Msg::CatColorsDark),
+            label: Msg::ColorAccent,
+            desc: Msg::ColorAccentDesc,
+            kind: SettingKind::Color { default: "#3D8BFF" },
+            key: "theme.dark.accent",
+        },
+        Entry {
+            cat: Msg::CatAppearance,
+            sub: Some(Msg::CatColorsDark),
+            label: Msg::ColorBubblePeer,
+            desc: Msg::ColorBubblePeerDesc,
+            kind: SettingKind::Color { default: "#313947" },
+            key: "theme.dark.bubble_peer",
+        },
+        Entry {
+            cat: Msg::CatAppearance,
+            sub: Some(Msg::CatColorsDark),
+            label: Msg::ColorPanelBg,
+            desc: Msg::ColorPanelBgDesc,
+            kind: SettingKind::Color { default: "#191C21" },
+            key: "theme.dark.panel_bg",
+        },
+        Entry {
+            cat: Msg::CatAppearance,
+            sub: Some(Msg::CatColorsDark),
+            label: Msg::ColorText,
+            desc: Msg::ColorTextDesc,
+            kind: SettingKind::Color { default: "#D6DAE0" },
+            key: "theme.dark.text",
+        },
+        Entry {
+            cat: Msg::CatAppearance,
+            sub: Some(Msg::CatColorsLight),
+            label: Msg::ColorAccent,
+            desc: Msg::ColorAccentDesc,
+            kind: SettingKind::Color { default: "#3D8BFF" },
+            key: "theme.light.accent",
+        },
+        Entry {
+            cat: Msg::CatAppearance,
+            sub: Some(Msg::CatColorsLight),
+            label: Msg::ColorBubblePeer,
+            desc: Msg::ColorBubblePeerDesc,
+            kind: SettingKind::Color { default: "#E2E7EE" },
+            key: "theme.light.bubble_peer",
+        },
+        Entry {
+            cat: Msg::CatAppearance,
+            sub: Some(Msg::CatColorsLight),
+            label: Msg::ColorPanelBg,
+            desc: Msg::ColorPanelBgDesc,
+            kind: SettingKind::Color { default: "#FFFFFF" },
+            key: "theme.light.panel_bg",
+        },
+        Entry {
+            cat: Msg::CatAppearance,
+            sub: Some(Msg::CatColorsLight),
+            label: Msg::ColorText,
+            desc: Msg::ColorTextDesc,
+            kind: SettingKind::Color { default: "#1B1F26" },
+            key: "theme.light.text",
         },
         Entry {
             cat: Msg::CatAppearance,
@@ -437,6 +508,8 @@ enum RowCtl {
     Pos(PositionPicker),
     /// 글꼴 **얼굴만**(고정폭 — 크기는 Base UI를 따른다).
     Face(TextBox),
+    /// 색상(스와치 + hex + 프리셋 · 08-10).
+    Color(ColorPicker),
 }
 
 #[derive(Debug)]
@@ -693,6 +766,12 @@ impl SettingsWidget {
                     p.set_scale(self.scale);
                     RowCtl::Pos(p)
                 }
+                SettingKind::Color { default } => {
+                    let mut c =
+                        ColorPicker::new(self.values.get(e.key).map_or(default, String::as_str));
+                    c.set_scale(self.scale);
+                    RowCtl::Color(c)
+                }
                 SettingKind::Toggle => {
                     let mut c =
                         Checkbox::new("", self.values.get(e.key).map(String::as_str) == Some("on"))
@@ -917,6 +996,14 @@ impl SettingsWidget {
                         inv,
                     );
                 }
+                RowCtl::Color(c) => {
+                    c.set_scale(self.scale);
+                    let cw = c.preferred_width().min(rw - pad * 2);
+                    c.set_bounds(
+                        Rect::new(rx + rw - cw - pad, top + (h - ctl_h) / 2, cw, ctl_h),
+                        inv,
+                    );
+                }
             }
             top += h;
         }
@@ -946,6 +1033,11 @@ impl SettingsWidget {
                         got.push((e.key, v));
                     }
                     let _ = family.take_changed(); // 중간 변경은 버린다
+                }
+                RowCtl::Color(c) => {
+                    if let Some(v) = c.take_changed() {
+                        got.push((e.key, v));
+                    }
                 }
                 RowCtl::Check(c) => {
                     if let Some(on) = c.take_toggled() {
@@ -999,9 +1091,11 @@ impl SettingsWidget {
     fn any_family_focused(&self) -> bool {
         // ★ Face(얼굴만 지정 — 고정폭)도 글꼴명 입력이다 — 여기서 빠지면 그 입력이
         // "기본 타이핑 = 검색" 폴백으로 새어 검색창에 글자가 들어간다(사용자 지적 08-10).
+        // Color의 hex 입력도 같은 부류(같은 사고를 반복하지 않는다).
         self.rows.iter().any(|r| match &r.ctl {
             RowCtl::Font { family, .. } => family.is_focused(),
             RowCtl::Face(f) => f.is_focused(),
+            RowCtl::Color(c) => c.hex_focused(),
             _ => false,
         })
     }
@@ -1113,6 +1207,11 @@ impl Widget for SettingsWidget {
                         }
                         RowCtl::Pos(g) => g.set_focused(g.bounds().contains(p)),
                         RowCtl::Face(f) => f.set_focused(f.bounds().contains(p)),
+                        RowCtl::Color(c) => {
+                            if !c.bounds().contains(p) {
+                                c.set_focused(false); // 내부 hex 포커스는 자신의 클릭 처리로
+                            }
+                        }
                         RowCtl::Combo(c) => c.set_focused(c.bounds().contains(p)),
                         RowCtl::Check(c) => c.set_focused(c.bounds().contains(p)),
                     }
@@ -1148,6 +1247,7 @@ impl Widget for SettingsWidget {
                         }
                         RowCtl::Pos(g) => g.on_event(ev, inv),
                         RowCtl::Face(f) => f.on_event(ev, inv),
+                        RowCtl::Color(c) => c.on_event(ev, inv),
                     }
                 }
                 self.drain_changes(inv);
@@ -1161,6 +1261,7 @@ impl Widget for SettingsWidget {
                                 family.on_event(ev, inv);
                             }
                             RowCtl::Face(f) if f.is_focused() => f.on_event(ev, inv),
+                            RowCtl::Color(c) if c.hex_focused() => c.on_event(ev, inv),
                             _ => {}
                         }
                     }
@@ -1184,6 +1285,7 @@ impl Widget for SettingsWidget {
                             match &mut row.ctl {
                                 RowCtl::Font { family, .. } => family.set_focused(false),
                                 RowCtl::Face(f) => f.set_focused(false),
+                                RowCtl::Color(c) => c.set_focused(false),
                                 _ => {}
                             }
                         }
@@ -1203,6 +1305,7 @@ impl Widget for SettingsWidget {
                                 family.on_event(ev, inv);
                             }
                             RowCtl::Face(f) if f.is_focused() => f.on_event(ev, inv),
+                            RowCtl::Color(c) if c.hex_focused() => c.on_event(ev, inv),
                             _ => {}
                         }
                     }
@@ -1269,7 +1372,11 @@ impl Widget for SettingsWidget {
             let e = &registry()[row.idx];
             let r = row.rect;
             match &row.ctl {
-                RowCtl::Combo(_) | RowCtl::Check(_) | RowCtl::Pos(_) | RowCtl::Face(_) => {
+                RowCtl::Combo(_)
+                | RowCtl::Check(_)
+                | RowCtl::Pos(_)
+                | RowCtl::Face(_)
+                | RowCtl::Color(_) => {
                     ctx.select_font(FontSlot::Base, false);
                     ctx.text(
                         r.x + self.s(PAD),
@@ -1311,6 +1418,7 @@ impl Widget for SettingsWidget {
                 RowCtl::Check(c) => c.paint(ctx, theme),
                 RowCtl::Pos(g) => g.paint(ctx, theme),
                 RowCtl::Face(f) => f.paint(ctx, theme),
+                RowCtl::Color(c) => c.paint(ctx, theme),
                 RowCtl::Font { family, size } => {
                     family.paint(ctx, theme);
                     size.paint(ctx, theme);
