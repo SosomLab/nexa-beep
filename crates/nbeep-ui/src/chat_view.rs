@@ -301,6 +301,16 @@ pub struct ChatViewWidget {
     hit_rects: RefCell<Vec<(Rect, usize)>>,
     /// 우클릭 복사 요청(1회성) — 호스트가 OS 클립보드에 쓴다.
     copy_out: Option<String>,
+    /// 우클릭 컨텍스트 메뉴(입력란 · 말풍선).
+    ctx_menu: crate::controls::ContextMenu,
+    /// 메뉴를 연 시점의 말풍선 인덱스(있으면 "메시지 복사" 대상).
+    ctx_bubble: Option<usize>,
+    /// 붙여넣기 요청(1회성) — 클립보드는 호스트만 읽을 수 있다.
+    paste_req: bool,
+    /// 클립보드에 붙여넣을 것이 있는가 — 호스트가 우클릭 직전에 알려준다.
+    /// (UI 크레이트는 OS를 모른다. 모르면 "붙여넣기"를 항상 활성으로 두게 되는데,
+    ///  눌러도 아무 일이 없는 항목은 고장으로 읽힌다.)
+    clip_has_text: bool,
 }
 
 impl ChatViewWidget {
@@ -330,6 +340,10 @@ impl ChatViewWidget {
             input_bars: ScrollBars::new(),
             hit_rects: RefCell::new(Vec::new()),
             copy_out: None,
+            ctx_menu: crate::controls::ContextMenu::new(),
+            ctx_bubble: None,
+            paste_req: false,
+            clip_has_text: false,
         }
     }
 
@@ -449,6 +463,96 @@ impl ChatViewWidget {
             self.after_input_edit(inv);
         }
         t
+    }
+
+    /// 우클릭 위치에 맞는 컨텍스트 메뉴를 연다.
+    ///
+    /// 위치로 대상이 갈린다 — **입력란**이면 편집 3종, **말풍선**이면 메시지 복사.
+    /// 둘 다 아니면 열지 않는다(빈 곳 우클릭에 메뉴가 뜨면 무엇에 대한 메뉴인지 모른다).
+    fn open_ctx_menu(&mut self, x: i32, y: i32, inv: &mut Invalidations) {
+        use crate::controls::CtxItem;
+        use nbeep_core::i18n::{t, Msg};
+
+        let p = Point { x, y };
+        let mut items = Vec::new();
+        self.ctx_bubble = None;
+
+        if self.input_bar().contains(p) {
+            let has_sel = self.input.selected_text().is_some();
+            let has_text = !self.input.text().is_empty();
+            items.push(CtxItem::maybe("copy", t(Msg::CtxCopy), has_sel));
+            items.push(CtxItem::maybe("cut", t(Msg::CtxCut), has_sel));
+            items.push(CtxItem::maybe(
+                "paste",
+                t(Msg::CtxPaste),
+                self.clip_has_text,
+            ));
+            items.push(CtxItem::Separator);
+            items.push(CtxItem::maybe("select_all", t(Msg::CtxSelectAll), has_text));
+        } else if let Some(i) = self
+            .hit_rects
+            .borrow()
+            .iter()
+            .find(|(r, _)| r.contains(p))
+            .map(|&(_, i)| i)
+        {
+            // 풍선 우클릭 — 예전에는 여기서 곧바로 클립보드를 덮어썼다(08-10 지적).
+            self.ctx_bubble = Some(i);
+            items.push(CtxItem::item("copy_message", t(Msg::CtxCopyMessage)));
+        }
+
+        if items.is_empty() {
+            return;
+        }
+        // 폭 측정은 paint 밖에서 못 한다 — 가장 긴 라벨의 글자 수로 근사한다
+        // (한글은 대략 배 폭이라 그만큼 더 잡는다. 모자라면 잘리므로 넉넉히).
+        let widest = items
+            .iter()
+            .map(|it| match it {
+                CtxItem::Item { label, .. } => label
+                    .chars()
+                    .map(|c| if c.is_ascii() { 8 } else { 15 })
+                    .sum::<i32>(),
+                CtxItem::Separator => 0,
+            })
+            .max()
+            .unwrap_or(0);
+        self.ctx_menu.set_scale(self.scale);
+        self.ctx_menu.open_at(x, y, items, self.bounds, widest);
+        inv.push(self.ctx_menu.bounds());
+    }
+
+    /// 메뉴에서 고른 항목을 실행한다.
+    fn run_ctx_action(&mut self, id: &str, inv: &mut Invalidations) {
+        match id {
+            "copy" => self.copy_out = self.input.selected_text(),
+            "cut" => self.copy_out = self.cut_selection(inv),
+            // 클립보드는 호스트만 읽는다 — 요청만 남기고 돌아간다.
+            "paste" => self.paste_req = true,
+            "select_all" => {
+                self.input.key(crate::edit::EditKey::SelectAll, false);
+                inv.push(self.input_bar());
+            }
+            "copy_message" => {
+                if let Some(i) = self.ctx_bubble.take() {
+                    if let Some(line) = self.lines.get(i) {
+                        self.copy_out = Some(self.body_text(line));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// 컨텍스트 메뉴가 요청한 붙여넣기를 가져간다(1회성) — 호스트가 클립보드를 읽어
+    /// [`ChatViewWidget::paste`]를 부른다.
+    pub fn take_paste_request(&mut self) -> bool {
+        core::mem::take(&mut self.paste_req)
+    }
+
+    /// 클립보드에 붙여넣을 텍스트가 있는지 알려 준다(우클릭 직전에 호스트가 갱신).
+    pub fn set_clipboard_has_text(&mut self, yes: bool) {
+        self.clip_has_text = yes;
     }
 
     /// 붙여넣기 — CRLF는 LF로, 개행·탭 외 제어문자는 버린다(무해화는 전송 시 한 번 더).
@@ -743,6 +847,19 @@ impl Widget for ChatViewWidget {
     fn on_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
         use crate::edit::EditKey;
 
+        // ── 컨텍스트 메뉴가 열려 있으면 **가장 먼저** 먹는다(팝업은 최상위 레이어) ──
+        if self.ctx_menu.is_open() {
+            let menu_rect = self.ctx_menu.bounds();
+            if self.ctx_menu.on_event(ev) {
+                inv.push(menu_rect);
+                inv.push(self.bounds);
+                if let Some(id) = self.ctx_menu.take_picked() {
+                    self.run_ctx_action(&id, inv);
+                }
+                return;
+            }
+        }
+
         // 커서 추적 — 휠의 대상(스레드 vs 입력창)을 위치로 가른다(사용자 확정 08-10).
         if let InputEvent::MouseMove { x, y } = *ev {
             self.cursor = (x, y);
@@ -944,16 +1061,7 @@ impl Widget for ChatViewWidget {
                 self.dragging = false;
             }
             InputEvent::RightDown { x, y } => {
-                // 풍선 우클릭 = 그 메시지 복사(paint가 캐시한 히트 rect — 08-10).
-                let hit = self
-                    .hit_rects
-                    .borrow()
-                    .iter()
-                    .find(|(r, _)| r.contains(Point { x, y }))
-                    .map(|&(_, i)| i);
-                if let Some(i) = hit {
-                    self.copy_out = Some(self.body_text(&self.lines[i]));
-                }
+                self.open_ctx_menu(x, y, inv);
             }
             InputEvent::SelectAll => {
                 self.input.key(EditKey::SelectAll, false);
@@ -1375,6 +1483,8 @@ impl Widget for ChatViewWidget {
                 );
             }
         }
+        // ── 컨텍스트 메뉴는 **맨 마지막** — 팝업은 무엇보다 위에 떠야 한다 ──
+        self.ctx_menu.paint(ctx, theme);
     }
 }
 
@@ -1412,6 +1522,112 @@ mod tests {
         let theme = crate::theme::Theme::dark();
         w.paint(&mut probe, &theme);
     }
+    fn rclick(w: &mut ChatViewWidget, x: i32, y: i32, inv: &mut Invalidations) {
+        w.on_event(&InputEvent::RightDown { x, y }, inv);
+    }
+    fn lclick(w: &mut ChatViewWidget, x: i32, y: i32, inv: &mut Invalidations) {
+        w.on_event(
+            &InputEvent::MouseDown {
+                x,
+                y,
+                shift: false,
+                primary: true,
+            },
+            inv,
+        );
+    }
+
+    #[test]
+    fn bubble_right_click_shows_a_menu_instead_of_copying_immediately() {
+        // 예전엔 우클릭 = 즉시 클립보드 덮어쓰기였다(08-10 지적). 이제 메뉴가 먼저 뜬다.
+        let (mut w, mut inv) = widget();
+        w.push_line(tline(false, "안녕하세요", 0), &mut inv);
+        paint_once(&w); // 풍선 히트 rect 캐시를 채운다
+        let (r, _) = w.hit_rects.borrow()[0];
+        rclick(&mut w, r.x + 2, r.y + 2, &mut inv);
+        assert!(w.ctx_menu.is_open(), "메뉴가 떠야 한다");
+        assert_eq!(w.take_copy_text(), None, "아직 복사되면 안 된다");
+        // 첫 항목("메시지 복사")을 고르면 그때 복사된다.
+        let row = w.ctx_menu.row_rect_of(0).unwrap();
+        lclick(&mut w, row.x + 4, row.y + 2, &mut inv);
+        assert!(!w.ctx_menu.is_open(), "고르면 닫힌다");
+        assert_eq!(w.take_copy_text().as_deref(), Some("안녕하세요"));
+    }
+
+    #[test]
+    fn input_right_click_offers_edit_actions_gated_by_state() {
+        let (mut w, mut inv) = widget();
+        w.set_clipboard_has_text(false);
+        let input = w.input_bar();
+        rclick(&mut w, input.x + 20, input.y + 4, &mut inv);
+        assert!(w.ctx_menu.is_open());
+        // 선택도 없고 클립보드도 비었으면 셋 다 비활성 — 눌러도 안 되는 걸 활성으로 보이면 거짓말이다.
+        let enabled: Vec<bool> = w
+            .ctx_menu
+            .items_for_test()
+            .iter()
+            .filter_map(|it| match it {
+                crate::controls::CtxItem::Item { id, enabled, .. } => Some((id.clone(), *enabled)),
+                crate::controls::CtxItem::Separator => None,
+            })
+            .map(|(_, e)| e)
+            .collect();
+        assert_eq!(enabled, vec![false, false, false, false], "빈 상태");
+    }
+
+    #[test]
+    fn input_right_click_enables_paste_when_clipboard_has_text() {
+        let (mut w, mut inv) = widget();
+        ch(&mut w, '가', &mut inv);
+        w.set_clipboard_has_text(true);
+        let input = w.input_bar();
+        rclick(&mut w, input.x + 20, input.y + 4, &mut inv);
+        let items = w.ctx_menu.items_for_test();
+        let by = |want: &str| {
+            items.iter().find_map(|it| match it {
+                crate::controls::CtxItem::Item { id, enabled, .. } if id == want => Some(*enabled),
+                _ => None,
+            })
+        };
+        assert_eq!(
+            by("paste"),
+            Some(true),
+            "클립보드에 글이 있으면 붙여넣기 가능"
+        );
+        assert_eq!(by("copy"), Some(false), "선택이 없으면 복사 불가");
+        assert_eq!(
+            by("select_all"),
+            Some(true),
+            "입력된 글이 있으면 전체 선택 가능"
+        );
+        // 붙여넣기를 고르면 **요청만** 남는다(클립보드 읽기는 호스트 몫).
+        let row = w.ctx_menu.row_rect_of(2).unwrap();
+        lclick(&mut w, row.x + 4, row.y + 2, &mut inv);
+        assert!(w.take_paste_request(), "붙여넣기 요청이 올라온다");
+        assert!(!w.take_paste_request(), "요청은 1회성");
+    }
+
+    #[test]
+    fn right_click_on_empty_area_opens_nothing() {
+        // 무엇에 대한 메뉴인지 모를 자리에는 띄우지 않는다.
+        let (mut w, mut inv) = widget();
+        rclick(&mut w, 200, 120, &mut inv);
+        assert!(!w.ctx_menu.is_open());
+    }
+
+    #[test]
+    fn open_menu_swallows_the_next_click_and_does_not_move_the_caret() {
+        let (mut w, mut inv) = widget();
+        w.set_clipboard_has_text(true);
+        let input = w.input_bar();
+        rclick(&mut w, input.x + 20, input.y + 4, &mut inv);
+        assert!(w.ctx_menu.is_open());
+        // 메뉴 바깥 클릭 = 닫기만. 뒤 콘텐츠로 새면 캐럿이 엉뚱하게 옮겨간다.
+        lclick(&mut w, 5, 5, &mut inv);
+        assert!(!w.ctx_menu.is_open());
+        assert!(!w.dragging, "닫기 클릭이 드래그 선택을 시작하면 안 된다");
+    }
+
     fn ch(w: &mut ChatViewWidget, c: char, inv: &mut Invalidations) {
         w.on_event(&InputEvent::Char { c, now_ms: 0 }, inv);
     }

@@ -228,6 +228,13 @@ pub enum Msg {
     TypeaheadTimeoutDesc,
     TypeaheadPos,
     TypeaheadPosDesc,
+    // ── 컨텍스트 메뉴(우클릭) ──
+    CtxCopy,
+    CtxCut,
+    CtxPaste,
+    CtxSelectAll,
+    /// 말풍선 우클릭 — 메시지 본문 전체 복사.
+    CtxCopyMessage,
     // ── 스크롤바 설정 ──
     ScrollbarHide,
     ScrollbarHideDesc,
@@ -635,6 +642,16 @@ impl Msg {
                 "타입어헤드 표시가 나타나는 위치(3×3)",
                 "预输入提示出现的位置(3×3)",
                 "先行入力表示の位置(3×3)",
+            ],
+            Msg::CtxCopy => ["Copy", "복사", "复制", "コピー"],
+            Msg::CtxCut => ["Cut", "잘라내기", "剪切", "切り取り"],
+            Msg::CtxPaste => ["Paste", "붙여넣기", "粘贴", "貼り付け"],
+            Msg::CtxSelectAll => ["Select All", "전체 선택", "全选", "すべて選択"],
+            Msg::CtxCopyMessage => [
+                "Copy message",
+                "메시지 복사",
+                "复制消息",
+                "メッセージをコピー",
             ],
             Msg::ScrollbarHide => [
                 "Scrollbar auto-hide (ms)",

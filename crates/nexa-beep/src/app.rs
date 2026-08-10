@@ -2129,6 +2129,24 @@ impl App {
                 self.request_redraw(mid);
             }
         }
+        // 컨텍스트 메뉴의 "붙여넣기" — 위젯은 요청만 남기고, OS 읽기는 여기서 한다.
+        if self
+            .chats
+            .get_mut(&peer)
+            .is_some_and(ChatViewWidget::take_paste_request)
+        {
+            if let Some(t) = nbeep_plat::clipboard::get_text() {
+                if let Some(c) = self.chats.get_mut(&peer) {
+                    c.paste(&t, &mut inv);
+                }
+            } else {
+                self.status = "붙여넣기 실패 — 클립보드를 읽을 수 없습니다".into();
+                if let Some(mid) = self.main_id {
+                    self.request_redraw(mid);
+                }
+            }
+            self.request_redraw(id);
+        }
         let outgoing = self
             .chats
             .get_mut(&peer)
@@ -3149,9 +3167,18 @@ impl ApplicationHandler<AppEvent> for App {
                 button: MouseButton::Right,
                 ..
             } => {
-                // 우클릭 — 대화 풍선 복사 등 컨텍스트 동작(08-10).
+                // 우클릭 — 컨텍스트 메뉴(08-10). 메뉴가 "붙여넣기"를 활성으로 보여도 되는지는
+                // 클립보드에 실제로 뭐가 있느냐에 달렸고, 그건 호스트만 안다. 여는 순간
+                // 한 번만 확인해 알려준다(매 프레임 클립보드를 긁으면 낭비다).
                 if let Some(e) = self.windows.get(&id) {
                     let (x, y) = e.cursor;
+                    let has_clip = nbeep_plat::clipboard::get_text()
+                        .is_some_and(|t| !t.trim_matches(char::from(0)).is_empty());
+                    if let Some(peer) = self.chat_peer_for(id) {
+                        if let Some(c) = self.chats.get_mut(&peer) {
+                            c.set_clipboard_has_text(has_clip);
+                        }
+                    }
                     self.route(id, InputEvent::RightDown { x, y }, el);
                 }
             }
