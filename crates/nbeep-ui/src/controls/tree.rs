@@ -387,9 +387,9 @@ impl TreeView {
         self.rows().get(self.selected).map(|r| r.label.clone())
     }
 
-    /// 스크롤바 페이드 틱(호스트가 ~5Hz 호출) — 표시 상태 변화 시 `true`.
-    pub fn tick(&mut self) -> bool {
-        self.bars.tick()
+    /// 스크롤바 자동숨김 틱 — 표시 상태 변화 시 `true`. `now_ms`는 호스트 시계(단조).
+    pub fn tick(&mut self, now_ms: u64) -> bool {
+        self.bars.tick(now_ms)
     }
 }
 
@@ -537,9 +537,9 @@ impl TreeGrid {
         self.columns.iter().map(|c| self.s(c.width)).sum()
     }
 
-    /// 스크롤바 페이드 틱(호스트가 ~5Hz 호출) — 표시 상태 변화 시 `true`.
-    pub fn tick(&mut self) -> bool {
-        self.bars.tick()
+    /// 스크롤바 자동숨김 틱 — 표시 상태 변화 시 `true`. `now_ms`는 호스트 시계(단조).
+    pub fn tick(&mut self, now_ms: u64) -> bool {
+        self.bars.tick(now_ms)
     }
 }
 

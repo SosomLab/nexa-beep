@@ -21,8 +21,25 @@ const MIN_THUMB: i32 = 28;
 /// 반투명도 — 항상 은은하게.
 const ALPHA_IDLE: f32 = 0.35;
 const ALPHA_HOT: f32 = 0.6;
-/// 활동 없음 시 숨김까지의 틱 수(호스트가 ~5Hz로 [`ScrollBars::tick`] 호출 → 약 1.2초).
-const HIDE_TICKS: u32 = 6;
+
+/// 자동 숨김까지의 기본 지연(ms) — 사용자 확정 08-10. 설정에서 바꾼다.
+pub const DEFAULT_HIDE_MS: u64 = 2000;
+
+/// 전역 자동 숨김 지연 — 설정 변경이 **모든 스크롤 영역에 즉시** 반영되도록 프로세스 전역에 둔다
+/// (스크롤바는 목록·트리·갤러리·대화·설정에 흩어져 있어, 값을 일일이 들고 다니면
+/// 한 군데만 옛 값으로 남는다 — 핫스왑 원칙).
+static HIDE_MS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(DEFAULT_HIDE_MS);
+
+/// 자동 숨김 지연을 바꾼다(설정 즉시 적용). 0이면 **숨기지 않는다**(항상 표시).
+pub fn set_hide_delay_ms(ms: u64) {
+    HIDE_MS.store(ms, core::sync::atomic::Ordering::Relaxed);
+}
+
+/// 현재 자동 숨김 지연(ms).
+#[must_use]
+pub fn hide_delay_ms() -> u64 {
+    HIDE_MS.load(core::sync::atomic::Ordering::Relaxed)
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Axis {
@@ -38,8 +55,13 @@ pub struct ScrollBars {
     drag: Option<(Axis, i32)>,
     /// 스크롤/접근/드래그로 활성화되어 보이는가(1·2단계).
     active: bool,
-    /// 활동 없음 카운트다운 — 0이 되면 숨긴다(1→0단계). 활동마다 리셋.
-    hide_ticks: u32,
+    /// 이 시각(ms)이 지나면 숨긴다(1→0단계). 활동마다 뒤로 민다.
+    hide_at_ms: u64,
+    /// 활동이 있었다 — 다음 [`ScrollBars::tick`]에서 마감 시각을 다시 잡는다.
+    /// (`on_event`는 시계를 모른다. 시각 주입은 호스트가 하는 `tick` 한 곳으로 모은다.)
+    bumped: bool,
+    /// 모습이 바뀌어 다시 그려야 한다(표시 전환·호버 두께) — `tick`이 호스트에 알린다.
+    dirty: bool,
 }
 
 /// px 헬퍼.
@@ -52,8 +74,7 @@ impl ScrollBars {
     /// (타이핑으로 가로 스크롤이 따라붙는 경우 등). 이걸 부르지 않으면 막대가
     /// `on_event` 전까지 숨어 있어 "스크롤이 생기지 않는다"로 보인다(08-10 지적).
     pub fn show(&mut self) {
-        self.active = true;
-        self.hide_ticks = HIDE_TICKS;
+        self.wake();
     }
 
     /// 새 스크롤바.
@@ -180,6 +201,7 @@ impl ScrollBars {
                 }
                 // 호버 판정(썸 위 = 2단계 두껍게). 바가 보일 때만 판정한다
                 // (0단계에선 접근으로 다시 뜨지 않는다 — 스크롤로만 깨어난다).
+                let was_hover = self.hover;
                 self.hover = None;
                 if self.active {
                     if let Some(t) = Self::v_thumb(vp, content_h, oy, scale, thick) {
@@ -194,9 +216,9 @@ impl ScrollBars {
                             }
                         }
                     }
-                    // 호버(2단계)면 살려둔다. 아니면 카운트다운은 tick이 진행.
-                    if self.hover.is_some() {
-                        self.hide_ticks = HIDE_TICKS;
+                    // 호버가 바뀌면 두께가 바뀐다 — 다시 그려야 보인다.
+                    if self.hover != was_hover {
+                        self.dirty = true;
                     }
                 }
                 (ox, oy, false)
@@ -205,7 +227,7 @@ impl ScrollBars {
                 let was = self.drag.is_some();
                 self.drag = None;
                 if was {
-                    self.hide_ticks = HIDE_TICKS;
+                    self.wake(); // 놓는 순간부터 다시 카운트 — 곧바로 사라지지 않는다
                 }
                 (ox, oy, was)
             }
@@ -213,25 +235,37 @@ impl ScrollBars {
         }
     }
 
-    /// 스크롤/드래그 활동 → 표시(1단계) + 숨김 카운트다운 리셋.
+    /// 스크롤/드래그 활동 → 표시(1단계) + 숨김 마감 연기.
     fn wake(&mut self) {
+        if !self.active {
+            self.dirty = true; // 숨김 → 표시 전환은 다시 그려야 보인다
+        }
         self.active = true;
-        self.hide_ticks = HIDE_TICKS;
+        self.bumped = true;
     }
 
-    /// 호스트가 주기적으로(~5Hz) 호출 — 활동 없으면 카운트다운, 0이면 숨긴다(1→0단계).
-    /// 호버/드래그 중(2단계)엔 유지. 표시 상태가 바뀌면 `true`(재그리기 필요).
-    pub fn tick(&mut self) -> bool {
-        if !self.active || self.hover.is_some() || self.drag.is_some() {
-            return false;
+    /// 호스트가 호출 — `now_ms`가 마감을 넘겼고 호버/드래그가 아니면 숨긴다(1→0단계).
+    /// 표시 상태가 바뀌면 `true`(재그리기 필요).
+    ///
+    /// ★ **시간 기반이어야 한다** — 예전에는 호출 횟수를 셌는데, 호스트는 유휴 시 5Hz지만
+    /// **이벤트가 들어오면 그때마다** 부른다. 그래서 드래그 중에는 초당 수십 번 깎여
+    /// 막대가 0.2초 만에 사라졌다(08-10 지적: "드래그하면 잠깐 보였다 금방 사라짐").
+    /// 벽시계로 재면 호출 빈도와 무관하게 항상 설정된 시간만큼 보인다.
+    pub fn tick(&mut self, now_ms: u64) -> bool {
+        let delay = hide_delay_ms();
+        let mut redraw = core::mem::take(&mut self.dirty);
+        // 활동이 있었거나 호버/드래그 중(2단계)이면 마감을 계속 뒤로 민다.
+        if self.bumped || self.hover.is_some() || self.drag.is_some() {
+            self.bumped = false;
+            self.hide_at_ms = now_ms.saturating_add(delay);
+            return redraw;
         }
-        if self.hide_ticks > 0 {
-            self.hide_ticks -= 1;
-            false
-        } else {
+        // delay 0 = 자동 숨김 안 함(사용자가 항상 보이길 택한 경우).
+        if self.active && delay != 0 && now_ms >= self.hide_at_ms {
             self.active = false;
-            true
+            redraw = true;
         }
+        redraw
     }
 
     /// 오버레이 렌더 — `active`일 때만 그린다(스크롤 전엔 보이지 않는다).
@@ -301,6 +335,13 @@ mod tests {
         InputEvent::MouseUp { x: 0, y: 0 }
     }
 
+    /// 숨김 지연은 **프로세스 전역**이라, 값을 바꾸는 테스트와 시간에 의존하는 테스트가
+    /// 동시에 돌면 서로를 흔든다. 그 테스트들만 이 잠금을 잡는다.
+    static DELAY_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    fn lock_delay() -> std::sync::MutexGuard<'static, ()> {
+        DELAY_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     #[test]
     fn hidden_until_scrolled() {
         let sb = ScrollBars::new();
@@ -342,34 +383,81 @@ mod tests {
     }
 
     #[test]
-    fn fades_after_inactivity_ticks() {
-        // 스크롤(1단계) 후 활동 없으면 tick이 카운트다운해 0단계로.
+    fn fades_after_the_configured_delay_not_before() {
+        let _g = lock_delay();
         let mut sb = ScrollBars::new();
         sb.on_event(&wheel(-100), vp(), 200, 400, 0, 0, 1.0);
         assert!(sb.active, "스크롤 = 1단계 표시");
-        let mut changed = false;
-        for _ in 0..20 {
-            changed |= sb.tick();
-        }
-        assert!(changed && !sb.active, "활동 없음 → 0단계(숨김)");
+        sb.tick(0); // 마감 = 0 + 2000ms
+        assert!(!sb.tick(1999) && sb.active, "지연 이전엔 유지");
+        assert!(sb.tick(2000) && !sb.active, "지연이 지나면 숨김");
     }
 
     #[test]
-    fn hover_keeps_visible_until_unhover() {
+    fn frequent_ticks_do_not_shorten_the_delay() {
+        let _g = lock_delay();
+        // ★ 회귀: 예전 구현은 tick **횟수**를 셌다. 호스트는 이벤트마다 tick을 부르므로
+        //   드래그 중 초당 수십 번 불려 막대가 0.2초 만에 사라졌다(08-10 지적).
         let mut sb = ScrollBars::new();
         sb.on_event(&wheel(-100), vp(), 200, 400, 0, 0, 1.0);
-        // 세로 썸 위로 호버(2단계) — 아무리 tick해도 유지.
+        sb.tick(0);
+        for i in 0..500 {
+            // 500번 불러도 시계가 1.5초 안이면 살아 있어야 한다.
+            assert!(!sb.tick(i * 3), "호출 횟수로 사라지면 안 된다(t={})", i * 3);
+        }
+        assert!(sb.active);
+    }
+
+    #[test]
+    fn hide_delay_is_configurable_and_zero_means_always_on() {
+        let _g = lock_delay();
+        let mut sb = ScrollBars::new();
+        set_hide_delay_ms(500);
+        sb.on_event(&wheel(-100), vp(), 200, 400, 0, 0, 1.0);
+        sb.tick(0);
+        assert!(!sb.tick(499));
+        assert!(sb.tick(500) && !sb.active, "설정한 500ms에 숨는다");
+        // 0 = 자동 숨김 없음.
+        set_hide_delay_ms(0);
+        sb.on_event(&wheel(-100), vp(), 200, 400, 0, 0, 1.0);
+        sb.tick(0);
+        assert!(!sb.tick(u64::MAX) && sb.active, "0이면 숨기지 않는다");
+        set_hide_delay_ms(DEFAULT_HIDE_MS); // 전역이라 되돌린다
+    }
+
+    #[test]
+    fn hover_keeps_visible_until_unhover_and_is_thicker() {
+        let _g = lock_delay();
+        let mut sb = ScrollBars::new();
+        sb.on_event(&wheel(-100), vp(), 200, 400, 0, 0, 1.0);
+        // 세로 썸 위로 호버(2단계) — 시간이 아무리 흘러도 유지.
         let t = ScrollBars::v_thumb(vp(), 400, 0, 1.0, 11).unwrap();
         sb.on_event(&mv(t.x + 2, t.y + 2), vp(), 200, 400, 0, 0, 1.0);
-        for _ in 0..20 {
-            sb.tick();
+        assert_eq!(sb.hover, Some(Axis::V), "썸 위 = 호버");
+        for i in 0..50 {
+            sb.tick(i * 1000);
         }
-        assert!(sb.active, "호버 중(2단계)엔 유지");
-        // 썸 밖으로 이동(1단계) → 이후 tick으로 숨김.
+        assert!(sb.active, "호버 중(2단계)엔 유지 — 사라지지 않는다");
+        // 마지막 호버 틱이 t=49_000이었으니 마감은 51_000.
+        // 썸 밖으로 이동(1단계) → 남은 지연을 채운 뒤에야 숨는다(즉시 사라지지 않는다).
         sb.on_event(&mv(0, 0), vp(), 200, 400, 0, 0, 1.0);
-        for _ in 0..20 {
-            sb.tick();
-        }
-        assert!(!sb.active, "언호버 후 무활동 → 숨김");
+        assert_eq!(sb.hover, None);
+        sb.tick(50_000);
+        assert!(sb.active, "언호버 직후엔 아직 지연이 남아 있다");
+        assert!(sb.tick(51_000) && !sb.active, "언호버 후 지연 경과 → 숨김");
+    }
+
+    #[test]
+    fn hover_change_requests_a_redraw() {
+        let _g = lock_delay();
+        // 두께가 바뀌는데 다시 그리지 않으면 사용자 눈엔 아무 일도 안 일어난다.
+        let mut sb = ScrollBars::new();
+        sb.on_event(&wheel(-100), vp(), 200, 400, 0, 0, 1.0);
+        sb.tick(0);
+        let t = ScrollBars::v_thumb(vp(), 400, 0, 1.0, 11).unwrap();
+        sb.on_event(&mv(t.x + 2, t.y + 2), vp(), 200, 400, 0, 0, 1.0);
+        assert!(sb.tick(1), "호버 진입 = 재그리기 요청");
+        sb.on_event(&mv(0, 0), vp(), 200, 400, 0, 0, 1.0);
+        assert!(sb.tick(2), "호버 이탈 = 재그리기 요청");
     }
 }

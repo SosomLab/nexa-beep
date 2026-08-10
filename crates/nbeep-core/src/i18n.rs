@@ -228,6 +228,11 @@ pub enum Msg {
     TypeaheadTimeoutDesc,
     TypeaheadPos,
     TypeaheadPosDesc,
+    // ── 스크롤바 설정 ──
+    ScrollbarHide,
+    ScrollbarHideDesc,
+    /// 자동 숨김 없음(항상 표시).
+    ScrollbarHideNever,
     TaSec1,
     TaSec2,
     TaSec3,
@@ -630,6 +635,24 @@ impl Msg {
                 "타입어헤드 표시가 나타나는 위치(3×3)",
                 "预输入提示出现的位置(3×3)",
                 "先行入力表示の位置(3×3)",
+            ],
+            Msg::ScrollbarHide => [
+                "Scrollbar auto-hide (ms)",
+                "스크롤바 자동 숨김(ms)",
+                "滚动条自动隐藏(ms)",
+                "スクロールバー自動非表示(ms)",
+            ],
+            Msg::ScrollbarHideDesc => [
+                "Hide the overlay scrollbar this long after scrolling stops (hovering the bar keeps it visible)",
+                "스크롤이 멈추고 이 시간이 지나면 오버레이 스크롤바를 숨긴다(막대에 마우스를 올리면 계속 보인다)",
+                "停止滚动后经过此时间隐藏浮层滚动条(鼠标停留在滚动条上时保持显示)",
+                "スクロール停止からこの時間で重ねて表示のスクロールバーを隠す(バーにカーソルを置くと表示を維持)",
+            ],
+            Msg::ScrollbarHideNever => [
+                "Never hide",
+                "숨기지 않음",
+                "不隐藏",
+                "隠さない",
             ],
             Msg::TaSec1 => ["1000ms"; 4],
             Msg::TaSec2 => ["2000ms"; 4],

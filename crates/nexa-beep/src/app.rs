@@ -1904,6 +1904,12 @@ impl App {
                         self.list.set_typeahead_timeout(ms);
                     }
                 }
+                // 전역이라 이 한 줄로 모든 스크롤 영역(목록·트리·갤러리·대화·설정)에 즉시 반영된다.
+                "ui.scrollbar_hide" => {
+                    if let Ok(ms) = value.parse::<u64>() {
+                        nbeep_ui::controls::scroll::set_hide_delay_ms(ms);
+                    }
+                }
                 "ui.typeahead_pos" => {
                     let mut inv = Invalidations::default();
                     self.list
@@ -2991,9 +2997,11 @@ impl ApplicationHandler<AppEvent> for App {
                 }
             }
         }
-        // 설정 우측 패널 스크롤바 페이드 틱(~5Hz).
+        // 스크롤바 자동 숨김 틱 — **시각을 넘긴다**(호출 횟수가 아니라 벽시계로 재야
+        // 이벤트가 몰리는 드래그 중에도 설정한 시간만큼 보인다 · 08-10).
+        let bar_now = self.now_ms();
         if let Some(sv) = &mut self.settings_view {
-            if sv.tick() {
+            if sv.tick(bar_now) {
                 if let Some((sid, _)) = self.windows.iter().find(|(_, e)| e.role == Role::Settings)
                 {
                     let sid = *sid;
@@ -3006,15 +3014,15 @@ impl ApplicationHandler<AppEvent> for App {
             let peers: Vec<PeerId> = self
                 .chats
                 .iter_mut()
-                .filter_map(|(p, c)| c.tick().then_some(*p))
+                .filter_map(|(p, c)| c.tick(bar_now).then_some(*p))
                 .collect();
             for p in peers {
                 self.redraw_conversation(p);
             }
         }
-        // 오버레이 스크롤바 페이드 틱(~5Hz) — 상태 변화 시 갤러리 재그리기.
+        // 갤러리(트리·그리드 포함) 스크롤바 틱 — 상태 변화 시 재그리기.
         if let Some(gv) = &mut self.gallery_view {
-            if gv.tick() {
+            if gv.tick(bar_now) {
                 if let Some((gid, _)) = self.windows.iter().find(|(_, e)| e.role == Role::Gallery) {
                     let gid = *gid;
                     self.request_redraw(gid);
@@ -3433,6 +3441,11 @@ pub(crate) fn run(mode: WindowMode, live: bool) {
     nbeep_core::set_lang(
         nbeep_core::Lang::from_code(settings.get("ui.language")).unwrap_or_default(),
     );
+    // 스크롤바 자동 숨김도 부팅 때 한 번 반영한다 — 설정을 바꿔야만 적용되면
+    // 첫 실행에서 기본값이 코드 상수와 어긋나도 아무도 모른다.
+    if let Ok(ms) = settings.get("ui.scrollbar_hide").parse::<u64>() {
+        nbeep_ui::controls::scroll::set_hide_delay_ms(ms);
+    }
     let net_hint = if live {
         "실물 발견(LAN)"
     } else {
@@ -3519,14 +3532,8 @@ pub(crate) fn run(mode: WindowMode, live: bool) {
                     alpha: nbeep_ui::icons::SHIELD_ALPHA,
                 },
             ),
-            ToolItem::new(
-                "gallery",
-                ToolIcon::Image(std::rc::Rc::new(nbeep_ui::IconImage::from_rgba(
-                    nbeep_ui::brand::ICON_SIZE,
-                    nbeep_ui::brand::ICON_SIZE,
-                    nbeep_ui::brand::ICON_RGBA.to_vec(),
-                ))),
-            ),
+            // 컨트롤 갤러리는 툴바에서 뺐다(사용자 요청 08-10) — 메뉴(보기 ▸ 컨트롤 갤러리)와
+            // ⌘/Ctrl+G로 열 수 있으니, 상시 노출할 임시 검수용 항목은 툴바를 차지할 이유가 없다.
         ]),
         closed_peers: std::collections::HashSet::new(),
         icon: winit::window::Icon::from_rgba(

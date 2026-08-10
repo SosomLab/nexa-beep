@@ -359,9 +359,9 @@ impl ChatViewWidget {
         }
     }
 
-    /// 스크롤바 페이드 틱(호스트 ~5Hz) — 표시가 바뀌면 `true`.
-    pub fn tick(&mut self) -> bool {
-        self.thread_bars.tick() | self.input_bars.tick()
+    /// 스크롤바 자동숨김 틱 — 표시가 바뀌면 `true`. `now_ms`는 호스트 시계(단조).
+    pub fn tick(&mut self, now_ms: u64) -> bool {
+        self.thread_bars.tick(now_ms) | self.input_bars.tick(now_ms)
     }
 
     /// 배율 지정(고DPI).

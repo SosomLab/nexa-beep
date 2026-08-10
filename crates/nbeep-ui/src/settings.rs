@@ -41,8 +41,11 @@ const SIZE_DEFAULT: &str = "m";
 
 /// Radio 기본값 예외 — 표시 순서(오름차순 등)와 기본값이 다른 키만 등록.
 /// 미등록 키의 기본은 첫 옵션(기존 규약).
-const RADIO_DEFAULTS: &[(&str, &str)] =
-    &[("ui.toolbar_size", "24"), ("ui.typeahead_timeout", "2000")];
+const RADIO_DEFAULTS: &[(&str, &str)] = &[
+    ("ui.toolbar_size", "24"),
+    ("ui.typeahead_timeout", "2000"),
+    ("ui.scrollbar_hide", "2000"),
+];
 
 /// 항목 종류 — 우측 패널이 이 열거를 읽어 컨트롤을 동적 생성한다(새 설정 = Entry 1줄).
 #[derive(Clone, Copy, Debug)]
@@ -250,6 +253,24 @@ pub fn registry() -> &'static [Entry] {
                 ("64", Msg::Tb64),
             ]),
             key: "ui.toolbar_size",
+        },
+        Entry {
+            cat: Msg::CatAppearance,
+            sub: None,
+            label: Msg::ScrollbarHide,
+            desc: Msg::ScrollbarHideDesc,
+            kind: SettingKind::RadioInput(
+                &[
+                    ("0", Msg::ScrollbarHideNever),
+                    ("1000", Msg::TaSec1),
+                    ("2000", Msg::TaSec2),
+                    ("3000", Msg::TaSec3),
+                    ("5000", Msg::TaSec5),
+                    ("10000", Msg::TaSec10),
+                ],
+                "ms",
+            ),
+            key: "ui.scrollbar_hide",
         },
         Entry {
             cat: Msg::CatAppearance,
@@ -877,9 +898,10 @@ impl SettingsWidget {
         Rect::new(b.x + sw, b.y, (b.w - sw).max(0), b.h)
     }
 
-    /// 스크롤바 페이드 틱(호스트 ~5Hz) — 표시가 바뀌면 `true`(재그리기).
-    pub fn tick(&mut self) -> bool {
-        self.bars.tick() || self.tree.tick()
+    /// 스크롤바 자동숨김 틱 — 표시가 바뀌면 `true`(재그리기). `now_ms`는 호스트 시계.
+    pub fn tick(&mut self, now_ms: u64) -> bool {
+        // `||`는 단축 평가라 트리 바가 안 돌 수 있다 — 둘 다 재워야 한다.
+        self.bars.tick(now_ms) | self.tree.tick(now_ms)
     }
 
     /// 이 좌표에서 좌우 리사이즈 커서를 보여야 하는가 — 스플리터 hover/드래그

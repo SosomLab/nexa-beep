@@ -375,10 +375,10 @@ impl GalleryWidget {
 
     /// 스크롤바 페이드 틱(호스트가 ~5Hz 호출) — 갤러리 자체 + 내부 트리/그리드 바 모두.
     /// 표시 상태가 바뀌면 `true`(재그리기 필요).
-    pub fn tick(&mut self) -> bool {
-        let mut changed = self.bars.tick();
-        changed |= self.tree.tick();
-        changed |= self.grid.tick();
+    pub fn tick(&mut self, now_ms: u64) -> bool {
+        let mut changed = self.bars.tick(now_ms);
+        changed |= self.tree.tick(now_ms);
+        changed |= self.grid.tick(now_ms);
         // TimeoutButton 데모 — 갤러리 자체 시계로 카운트다운, 만료(발화)하면 재시작.
         let now = u64::try_from(self.t0.elapsed().as_millis()).unwrap_or(u64::MAX);
         if !self.tb_started {
