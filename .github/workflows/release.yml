@@ -2,8 +2,10 @@
 #
 # 채널은 DR-4 그대로 **설치본 + 포터블 2채널**이고, 타깃은 DR-3 그대로
 # **Windows(x64·ARM64) · macOS(Apple Silicon·Intel) · Linux(x86_64)** 다.
-# 두 채널 모두 **zip으로도** 올린다(사용자 요청 08-11) — 설치본 원본(.exe/.dmg/.deb)과
-# 그 zip을 함께 제공하므로, 브라우저·사내 프록시가 실행 파일 확장자를 막아도 받을 수 있다.
+# **압축 형식은 플랫폼 관례를 따른다**(사용자 확정 08-11) — Windows는 zip
+# (포터블 zip + setup.exe의 zip 사본: 실행 파일 확장자를 막는 브라우저·사내 프록시 대비),
+# macOS/Linux는 포터블을 **tar.gz**로 낸다(실행 권한이 보존되고 그쪽 관례다).
+# `.dmg`/`.deb`은 이미 배포 형식이라 덧씌우지 않는다.
 #
 # ⚠️ **서명하지 않는다**(v1) — 코드 서명 인증서가 없다. macOS Gatekeeper와
 # Windows SmartScreen이 경고를 띄우며, 릴리스 노트에 우회 방법을 **숨기지 않고** 적는다.
@@ -137,7 +139,7 @@ jobs:
           cp README.md LICENSE.md LICENSE.ko.md "dist/$name/"
           echo "PORTABLE_NAME=$name" >> "$GITHUB_ENV"
 
-      - name: 포터블 zip
+      - name: 포터블 압축(Windows=zip · mac/Linux=tar.gz)
         shell: bash
         run: |
           set -euo pipefail
@@ -150,7 +152,8 @@ jobs:
             #    셸이 둘 겹칠 때는 **바깥 셸의 변수만** 쓴다.
             powershell -NoProfile -Command "Compress-Archive -Path '$PORTABLE_NAME' -DestinationPath '../out/$PORTABLE_NAME.zip' -Force"
           else
-            zip -qr "../out/$PORTABLE_NAME.zip" "$PORTABLE_NAME"
+            # tar.gz — zip과 달리 **실행 권한이 그대로 보존된다**(풀고 chmod할 필요 없다).
+            tar -czf "../out/$PORTABLE_NAME.tar.gz" "$PORTABLE_NAME"
           fi
 
       # ── 설치본: Windows = NSIS ──
@@ -199,6 +202,12 @@ jobs:
           sips -z 512 512 packaging/branding/nexa-beep-1024.png --out "$iconset/icon_512x512.png"    >/dev/null
           cp packaging/branding/nexa-beep-1024.png "$iconset/icon_512x512@2x.png"
           iconutil -c icns "$iconset" -o "$app/Contents/Resources/AppIcon.icns"
+          # 애드혹 서명 — 인증서가 없으니 공증은 못 하지만, **Apple Silicon은 서명이
+          # 아예 없는 번들을 실행하지 않는다**. 서명만으로 Gatekeeper 격리를 넘지는
+          # 못한다(08-11 실측: 격리된 상태면 서명 유무와 무관하게 SIGKILL) — 격리는
+          # Cask postflight에서 뗀다.
+          codesign --force --deep --sign - "$app"
+          codesign -dv "$app" 2>&1 | grep -E 'Signature|Identifier' || true
           # DMG — 드래그 설치가 되도록 /Applications 별칭을 같이 담는다.
           root=build/dmgroot
           mkdir -p "$root"
@@ -207,7 +216,6 @@ jobs:
           cp README.md LICENSE.md "$root/"
           dmg="nexa-beep-$VERSION-$SLUG.dmg"
           hdiutil create -volname "Nexa Beep $VERSION" -srcfolder "$root" -ov -format UDZO "out/$dmg" >/dev/null
-          (cd out && zip -q "$dmg.zip" "$dmg")
 
       # ── 설치본: Linux = .deb ──
       - name: Linux 설치본(.deb) + zip
@@ -229,7 +237,6 @@ jobs:
               packaging/linux/control > "$pkg/DEBIAN/control"
           deb="nexa-beep-${VERSION}-${SLUG}.deb"
           dpkg-deb --build --root-owner-group "$pkg" "out/$deb" >/dev/null
-          (cd out && zip -q "$deb.zip" "$deb")
 
       - name: 산출물 목록
         shell: bash
@@ -299,13 +306,13 @@ jobs:
 
           | 운영체제 | 설치본 | 포터블(압축 해제 후 바로 실행) |
           | --- | --- | --- |
-          | Windows x64 | \`...windows-x64-setup.exe\` | \`...windows-x64-portable.zip\` |
-          | Windows ARM64 | \`...windows-arm64-setup.exe\` | \`...windows-arm64-portable.zip\` |
-          | macOS (Apple Silicon) | \`...macos-arm64.dmg\` | \`...macos-arm64-portable.zip\` |
-          | macOS (Intel) | \`...macos-x64.dmg\` | \`...macos-x64-portable.zip\` |
-          | Linux x86_64 | \`...linux-x64.deb\` | \`...linux-x64-portable.zip\` |
+          | Windows x64 | \`...windows-x64-setup.exe\`(+`.zip`) | \`...windows-x64-portable.zip\` |
+          | Windows ARM64 | \`...windows-arm64-setup.exe\`(+`.zip`) | \`...windows-arm64-portable.zip\` |
+          | macOS (Apple Silicon) | \`...macos-arm64.dmg\` | \`...macos-arm64-portable.tar.gz\` |
+          | macOS (Intel) | \`...macos-x64.dmg\` | \`...macos-x64-portable.tar.gz\` |
+          | Linux x86_64 | \`...linux-x64.deb\` | \`...linux-x64-portable.tar.gz\` |
 
-          설치본에는 **같은 파일의 \`.zip\` 버전**도 함께 올려 두었다(실행 파일 확장자를
+          Windows 설치본은 **같은 파일의 \`.zip\`**도 함께 올려 두었다(실행 파일 확장자를
           막는 브라우저·사내 프록시 대비).
 
           ## 패키지 관리자 (macOS)
@@ -315,8 +322,8 @@ jobs:
           brew install kiros33/tap/nexa-beep-portable      # 포터블(실행 파일만)
           \`\`\`
 
-          Homebrew Cask는 설치할 때 quarantine 속성을 떼므로 **아래 Gatekeeper 경고 없이**
-          바로 실행된다 — macOS에서 가장 매끄러운 경로다.
+          **macOS는 brew 설치를 권한다.** Cask가 설치 시점에 격리 표식을 떼도록 해 두어
+          아래 경고·차단 없이 바로 실행된다. 직접 \`.dmg\`를 받으면 아래 조치가 필요하다.
 
           ## 패키지 관리자 (Windows)
 
@@ -337,8 +344,12 @@ jobs:
           숨기지 않고 적는다 — 경고를 무시하는 습관은 그 자체가 보안 위험이므로,
           받은 파일이 맞는지 \`SHA256SUMS.txt\`로 먼저 확인하길 권한다.
 
-          - macOS: 처음 실행 시 **우클릭 → 열기**, 또는
-            \`xattr -dr com.apple.quarantine "/Applications/Nexa Beep.app"\`
+          - macOS: \`.dmg\`로 직접 설치했다면 **격리 표식을 떼야 실행된다** —
+            떼지 않으면 앱이 실행 즉시 강제 종료되고 macOS가 앱을 치운다(실측 확인).
+            \`\`\`bash
+            xattr -dr com.apple.quarantine "/Applications/Nexa Beep.app"
+            \`\`\`
+            brew로 설치하면 이 과정이 자동이다.
           - Windows: SmartScreen 화면에서 **추가 정보 → 실행**
 
           ## 이 버전의 한계 (알고 받으시라)

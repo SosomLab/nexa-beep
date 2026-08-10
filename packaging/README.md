@@ -12,13 +12,39 @@
 | --- | --- | --- |
 | `windows-x64` | NSIS `.exe` (+`.zip`) | `.zip` |
 | `windows-arm64` | NSIS `.exe` (+`.zip`) | `.zip` |
-| `macos-arm64` | `.dmg` (+`.zip`) | `.zip` |
-| `macos-x64` | `.dmg` (+`.zip`) | `.zip` |
-| `linux-x64` | `.deb` (+`.zip`) | `.zip` |
+| `macos-arm64` | `.dmg` | `.tar.gz` |
+| `macos-x64` | `.dmg` | `.tar.gz` |
+| `linux-x64` | `.deb` | `.tar.gz` |
 
-설치본을 **원본과 zip 둘 다** 올리는 이유는 실행 파일 확장자를 막는 브라우저·사내
-프록시 때문이다(사용자 요청 08-11). 무결성 확인용 `SHA256SUMS.txt`도 함께 올린다 —
-서명이 없는 배포에서 사용자가 가진 유일한 검증 수단이다.
+**압축 형식은 플랫폼 관례를 따른다**(사용자 확정 08-11). Windows는 zip이고,
+`setup.exe`에는 **zip 사본을 하나 더** 올린다 — 실행 파일 확장자를 막는 브라우저·사내
+프록시 때문이다. macOS/Linux 포터블은 `tar.gz`로, **실행 권한이 보존된다**(풀고 나서
+`chmod`할 필요가 없다). `.dmg`/`.deb`은 이미 배포 형식이라 덧씌우지 않는다.
+
+무결성 확인용 `SHA256SUMS.txt`도 함께 올린다 — 서명이 없는 배포에서 사용자가 가진
+유일한 검증 수단이다.
+
+## ⚠️ macOS 격리(quarantine) — 실측으로 확인한 것
+
+서명·공증이 없는 앱은 격리 표식이 붙어 있으면 **실행 즉시 SIGKILL(exit 137)** 되고,
+macOS가 `/Applications`에서 앱을 치워 버린다. 08-11 실측(macOS 15 · Intel):
+
+| 상태 | 결과 |
+| --- | --- |
+| 서명 없음 + 격리 | `exit 137`(강제 종료 · 앱 삭제됨) |
+| **애드혹 서명** + 격리 | `exit 137` — **서명은 격리를 넘지 못한다** |
+| 격리 제거(서명 유무 무관) | 정상 실행 |
+
+→ ① `.app`에 **애드혹 서명**을 붙인다(Apple Silicon은 서명 없는 번들을 아예 실행하지
+않는다) ② **Cask `postflight`에서 격리 표식을 뗀다**(그것 외에 방법이 없다 — 공증에는
+Apple Developer 인증서가 필요하다). 무엇을 왜 하는지는 cask `caveats`와 릴리스 노트에
+그대로 밝힌다. **사용자가 모르는 채로 보안 검사를 끄지는 않는다.**
+
+`.dmg`를 직접 받은 경우에는 사용자가 직접 떼야 한다:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/Nexa Beep.app"
+```
 
 ## 트리거 정책 (사용자 확정 08-11)
 

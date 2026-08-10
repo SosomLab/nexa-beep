@@ -14,24 +14,24 @@ class NexaBeepPortable < Formula
 
   on_macos do
     on_arm do
-      url "https://github.com/SosomLab/nexa-beep/releases/download/v@VERSION@/nexa-beep-@VERSION@-macos-arm64-portable.zip"
+      url "https://github.com/SosomLab/nexa-beep/releases/download/v@VERSION@/nexa-beep-@VERSION@-macos-arm64-portable.tar.gz"
       sha256 "@SHA_MAC_ARM64_PORTABLE@"
     end
     on_intel do
-      url "https://github.com/SosomLab/nexa-beep/releases/download/v@VERSION@/nexa-beep-@VERSION@-macos-x64-portable.zip"
+      url "https://github.com/SosomLab/nexa-beep/releases/download/v@VERSION@/nexa-beep-@VERSION@-macos-x64-portable.tar.gz"
       sha256 "@SHA_MAC_X64_PORTABLE@"
     end
   end
 
   on_linux do
     on_intel do
-      url "https://github.com/SosomLab/nexa-beep/releases/download/v@VERSION@/nexa-beep-@VERSION@-linux-x64-portable.zip"
+      url "https://github.com/SosomLab/nexa-beep/releases/download/v@VERSION@/nexa-beep-@VERSION@-linux-x64-portable.tar.gz"
       sha256 "@SHA_LINUX_X64_PORTABLE@"
     end
   end
 
   def install
-    # zip 최상위에 폴더가 하나 있으면 brew가 벗겨 주지만, 그 동작에 기대지 않는다 —
+    # 최상위에 폴더가 하나면 brew가 벗겨 주지만, 그 동작에 기대지 않는다 —
     # 포장 구조가 바뀌는 날 조용히 깨지느니 여기서 찾아서 확실히 설치한다.
     exe = Dir["nexa-beep", "*/nexa-beep"].first
     odie "포터블 압축물에서 nexa-beep 실행 파일을 찾지 못했습니다" if exe.nil?

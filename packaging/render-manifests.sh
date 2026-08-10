@@ -36,9 +36,9 @@ SHA_WIN_X64_PORTABLE=$(sha "nexa-beep-$V-windows-x64-portable.zip")
 SHA_WIN_ARM64_PORTABLE=$(sha "nexa-beep-$V-windows-arm64-portable.zip")
 SHA_MAC_ARM64_DMG=$(sha    "nexa-beep-$V-macos-arm64.dmg")
 SHA_MAC_X64_DMG=$(sha      "nexa-beep-$V-macos-x64.dmg")
-SHA_MAC_ARM64_PORTABLE=$(sha "nexa-beep-$V-macos-arm64-portable.zip")
-SHA_MAC_X64_PORTABLE=$(sha "nexa-beep-$V-macos-x64-portable.zip")
-SHA_LINUX_X64_PORTABLE=$(sha "nexa-beep-$V-linux-x64-portable.zip")
+SHA_MAC_ARM64_PORTABLE=$(sha "nexa-beep-$V-macos-arm64-portable.tar.gz")
+SHA_MAC_X64_PORTABLE=$(sha "nexa-beep-$V-macos-x64-portable.tar.gz")
+SHA_LINUX_X64_PORTABLE=$(sha "nexa-beep-$V-linux-x64-portable.tar.gz")
 DATE=$(date -u +%Y-%m-%d)
 
 fill() {
