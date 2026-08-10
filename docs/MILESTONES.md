@@ -59,7 +59,7 @@
 | **대화** | **메시지 등급 + 알림 강도** — 등급=발신자 요청 / 강도=수신자 판정(신뢰 게이트) | DR-25 · [24](24-adr-0010-message-priority-notification.md) | 📐 설계(🔴 D-23 확정 대기 · M2-4b·M3-8) |
 | **대화** | **수신 확인**(수동 버튼) — `Delivered`/`Acknowledged` 분리 · "읽음" 없음 | DR-25 · [24 §5](24-adr-0010-message-priority-notification.md) | 📐 설계(🔴 확정 대기 · M3-9) |
 | **대화** | **수신자 릴레이** — 내 규칙으로 내 채널에 · 봉투만 · 다중 어댑터 팬아웃 | DR-25 · [24 §6](24-adr-0010-message-priority-notification.md) | 📐 설계(🔴 확정 대기 · M3-10 · **SP-2 종속**) |
-| 셸 | **설정 화면(VS Code 방식)** — Entry 레지스트리 · 검색 · 즉시 적용 | DR-24 · [14 §10](14-control-ux-architecture.md) | 🚧 (M3-11 진행) |
+| 셸 | **설정 화면(VS Code 방식)** — Entry 레지스트리 · 검색 · 즉시 적용 · **2단 계층 + 고정 밴드**(08-11) | DR-24 · [14 §10](14-control-ux-architecture.md) | 🚧 (M3-11 진행 — 화면 완성, **값 영속만 잔여**(M3-15 · D-25 대기)) |
 | 셸 | **대화 창 모델** — 상태-뷰 분리 · 상대별 별도 창 옵션 | DR-26 · [14 §11](14-control-ux-architecture.md) | 🚧 (M3-12 구현 ✅ · 잔여 = 설정 연동) |
 
 ### 2차 이후
