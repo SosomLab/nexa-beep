@@ -20,22 +20,67 @@
 프록시 때문이다(사용자 요청 08-11). 무결성 확인용 `SHA256SUMS.txt`도 함께 올린다 —
 서명이 없는 배포에서 사용자가 가진 유일한 검증 수단이다.
 
-## 첫 배포는 수기다 (사용자 확정 08-11)
+## 트리거 정책 (사용자 확정 08-11)
 
-`release.yml`의 **태그 push 트리거는 주석 처리되어 있다.** 태그를 밀어도 아무 일도
-일어나지 않는다. 릴리스는 다음 절차로만 만들어진다.
+**기본 배포는 자동, 패키지 매니저 제출은 채널마다 다르다.**
 
-1. GitHub → Actions → **release** → *Run workflow*
-2. `tag` 입력(예: `v0.1.0`) · `publish`는 **끈 채로 둔다**
-3. 산출물이 **초안(draft) 릴리스**로 올라온다 → 내려받아 실기 확인
-4. 문제 없으면 GitHub에서 **Publish release**
+| 무엇 | 언제 | 잠금 |
+| --- | --- | --- |
+| GitHub Release(설치본·포터블·체크섬) | `v*` 태그 push → **자동 공개** | 없음 |
+| Homebrew 탭(macOS/Linux) | 릴리스 직후 **자동** | `TAP_TOKEN` 시크릿 유무 |
+| winget · Chocolatey(Windows) | 릴리스 직후 실행되나 **기본 꺼짐** | **저장소 변수** + 시크릿 |
 
-자동 배포로 바꾸려면 `release.yml` 상단의 `push: tags` 블록 주석만 풀면 된다.
+```bash
+git tag v0.1.0 && git push origin v0.1.0     # 이게 전부
+```
+
+태그 없이 산출물만 확인하려면 Actions → **release** → *Run workflow*(그 경로로 만들면
+**초안**이다). 제출만 다시 하려면 **homebrew** 또는 **publish-windows-packages**
+워크플로를 태그를 주고 실행한다.
+
+### Windows 채널만 변수로 잠근 이유
+
+winget과 Chocolatey는 **중앙 저장소 검수**를 거치고, 한번 올라가면 되돌리기 어렵다.
+그래서 `nexa-memkeeper`(Windows 전용 프로젝트)에서 검증된 **변수+시크릿 이중 게이트**를
+그대로 차용했다 — 기본이 꺼짐이라 준비 전에는 아무것도 나가지 않고, 준비되면 변수
+하나만 켜면 된다(코드 무변경).
+
+| 채널 | 변수(Settings ▸ Variables) | 시크릿 |
+| --- | --- | --- |
+| winget | `WINGET_PUBLISH=true` | `WINGET_TOKEN` |
+| Chocolatey | `CHOCO_PUSH=true` | `CHOCO_API_KEY` |
+
+**Homebrew에는 이 스위치가 없다.** 검수가 없는 내 탭이고 되돌리기도 커밋 하나여서,
+릴리스와 함께 따라가는 편이 사용자에게 일관된다. `TAP_TOKEN`이 없으면 파일만 만들어
+아티팩트로 올리고 **왜 안 나갔는지 말한다**(조용히 성공한 척하지 않는다).
+
+변수가 꺼져 있어도 매니페스트는 **항상 만들어** 아티팩트·릴리스 자산으로 올린다 —
+손으로 제출할 수 있게.
+
+## Homebrew (macOS · Linux)
+
+탭 저장소 <https://github.com/kiros33/homebrew-tap>에 두 정의를 넣는다.
+
+| 채널 | 이름 | 설치 |
+| --- | --- | --- |
+| 설치본(.app) | Cask `nexa-beep` | `brew install --cask kiros33/tap/nexa-beep` |
+| 포터블(실행 파일) | Formula `nexa-beep-portable` | `brew install kiros33/tap/nexa-beep-portable` |
+
+이름을 다르게 둔 이유는, 같은 탭에 같은 이름의 cask와 formula가 있으면
+`brew install nexa-beep`이 무엇을 뜻하는지 모호해지기 때문이다.
+
+★ **Homebrew Cask는 설치 시 quarantine 속성을 뗀다** — 서명하지 않은 이 앱도
+Gatekeeper 경고 없이 실행된다. macOS 사용자에게 권할 경로다.
+
+> 참고 프로젝트(`sosomlab-tauri-test1`)에는 *"새 버전마다 cask의 version/sha256를
+> 손으로 갱신해야 한다"*가 마찰점으로 적혀 있었다. 여기서는 `render-manifests.sh`가
+> 실제 산출물에서 해시를 계산하므로 그 손작업이 없다.
 
 ## winget · Chocolatey
 
-매니페스트 **틀**은 이 디렉터리에 있고(`winget/`, `choco/`), 체크섬 자리는
-`@SHA_...@` 자리표시자다. 릴리스 워크플로가 **실제 산출물의 SHA256으로 채워서**
+매니페스트 **틀**은 이 디렉터리에 있고(`winget/`, `choco/`, `homebrew/`), 체크섬 자리는
+자리표시자다. **`render-manifests.sh`가 유일한 치환 지점**이며(릴리스 경로와 제출 경로가
+각자 치환하면 언젠가 갈라진다), 실제 산출물의 SHA256으로 채워
 `...package-manifests.zip`으로 릴리스에 첨부한다 — 손으로 적으면 언젠가 틀리고,
 체크섬이 틀린 매니페스트는 **사용자 기기에서 설치 실패**로 나타난다. 워크플로는
 치환되지 않은 자리표시자가 하나라도 남으면 거기서 멈춘다.
@@ -47,13 +92,14 @@
 | 설치본 | `SosomLab.NexaBeep` | `nexa-beep` |
 | 포터블 | `SosomLab.NexaBeep.Portable` | `nexa-beep-portable` |
 
-**제출도 수기다.**
+변수를 켜면 워크플로가 제출까지 한다 — winget은 `wingetcreate submit`으로 PR,
+choco는 `choco pack` 후 `choco push`. 손으로 하려면 아티팩트를 받아서:
 
-- **winget** — 생성된 `winget/manifests/s/SosomLab/...` 트리를
-  [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs) 같은 경로에 두고 PR.
-  로컬 검증: `winget validate <매니페스트 폴더>` · 설치 시험: `winget install --manifest <폴더>`
-- **choco** — `cd choco/nexa-beep && choco pack` 후 `choco push --api-key <키>`.
-  포터블도 같은 방식. (API 키는 저장소에 두지 않는다.)
+- **winget** — `winget validate <폴더>`로 검증 후
+  [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs)에 같은 경로로 PR.
+- **choco** — `choco push <nupkg> --source https://push.chocolatey.org/ --api-key <키>`.
+
+둘 다 **검수를 거쳐야 노출된다** — push했다고 바로 설치되지 않는다.
 
 ## 설치 위치와 권한
 

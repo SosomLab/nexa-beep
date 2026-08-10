@@ -1,0 +1,102 @@
+# homebrew — 탭 저장소(kiros33/homebrew-tap) 갱신 · **macOS/Linux 채널**
+#
+# Windows 채널(`publish-windows-packages.yml`)과 **완전히 분리되어 있다.**
+# 그쪽은 중앙 저장소 검수가 있어 저장소 변수로 게시를 잠가 두지만, 여기는 다르다 —
+# **내가 운영하는 탭이라 검수가 없고, 릴리스 자산을 가리키기만 한다.** 되돌리는 것도
+# 커밋 하나라, 릴리스와 함께 자동으로 따라가는 편이 사용자에게 일관된다.
+# 그래서 스위치 변수를 두지 않고 **`TAP_TOKEN` 유무만** 본다.
+#
+# 참고 프로젝트(sosomlab-tauri-test1)에서는 "새 버전마다 cask의 version/sha256를
+# 손으로 갱신"이 마찰점으로 남아 있었다. 그 손작업이 여기서는 없다.
+name: homebrew
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+      dry_run:
+        required: false
+        default: false
+        type: boolean
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "릴리스 태그(예: v0.1.0)"
+        required: true
+        type: string
+      dry_run:
+        description: "탭에 push하지 않고 정의만 확인"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  tap:
+    runs-on: macos-latest # brew·ruby가 있는 러너에서 정의를 검증한다
+    env:
+      TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 릴리스 자산 내려받기
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p assets
+          # **전부** 받는다 — 체크섬 계산이 한 스크립트에 모여 있어(갈라진 경로를 만들지
+          # 않으려고) 일부만 받으면 없는 자산에서 멈춘다.
+          gh release download "${{ inputs.tag }}" --dir assets --pattern 'nexa-beep-*'
+          ls -lh assets
+
+      - name: 매니페스트 생성
+        env:
+          TAG: ${{ inputs.tag }}
+        run: ./packaging/render-manifests.sh "${TAG#v}" assets out
+
+      - name: 정의 검증
+        run: |
+          set -euo pipefail
+          ruby -c out/homebrew/Casks/nexa-beep.rb
+          ruby -c out/homebrew/Formula/nexa-beep-portable.rb
+          # audit은 참고용 — 개인 탭·비-FOSS 라이선스라 경고가 날 수 있어 실패로 보지 않는다.
+          brew audit --cask --strict out/homebrew/Casks/nexa-beep.rb || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: homebrew-${{ inputs.tag }}
+          path: out/homebrew/**
+
+      - name: 탭에 반영
+        if: ${{ inputs.dry_run != true }}
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TAP_TOKEN:-}" ]; then
+            # 조용히 성공한 척하지 않는다 — 왜 안 나갔는지와 대안을 같이 말한다.
+            echo "::warning::시크릿 TAP_TOKEN이 없어 탭에 push하지 않았다."
+            echo "아티팩트 homebrew-$TAG를 받아 kiros33/homebrew-tap에 직접 커밋하면 된다:"
+            echo "  Casks/nexa-beep.rb · Formula/nexa-beep-portable.rb"
+            exit 0
+          fi
+          git clone --depth 1 "https://x-access-token:${TAP_TOKEN}@github.com/kiros33/homebrew-tap.git" tap
+          mkdir -p tap/Casks tap/Formula
+          cp out/homebrew/Casks/nexa-beep.rb            tap/Casks/
+          cp out/homebrew/Formula/nexa-beep-portable.rb tap/Formula/
+          cd tap
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/nexa-beep.rb Formula/nexa-beep-portable.rb
+          if git diff --cached --quiet; then
+            echo "변경 없음 — 이미 ${TAG#v}가 반영되어 있다."
+            exit 0
+          fi
+          git commit -m "nexa-beep ${TAG#v}"
+          git push
+          echo "탭 반영 완료 — brew install --cask kiros33/tap/nexa-beep"

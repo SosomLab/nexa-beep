@@ -10,13 +10,17 @@
 # 서명은 배포 신뢰의 문제라 "나중에 조용히"가 아니라 별도 결정으로 다뤄야 한다.
 name: release
 
-# ★ **자동 배포는 꺼져 있다**(사용자 확정 08-11 — 첫 배포는 수기).
-# 태그를 밀어도 아무 일이 일어나지 않는다. 릴리스는 Actions에서 이 워크플로를
-# 손으로 실행할 때만 만들어지고, 기본은 **초안(draft)** 이라 사람이 눌러야 공개된다.
-# 자동화로 되돌리려면 아래 `push: tags` 블록의 주석을 풀면 된다.
+# 트리거 정책(사용자 확정 08-11)
+# - **기본 배포는 자동** — `v*` 태그를 밀면 산출물이 만들어지고 릴리스가 **바로 공개**된다.
+# - **패키지 매니저 제출만 수동** — winget·Chocolatey·Homebrew는 각각 별도 워크플로
+#   (`winget.yml`·`chocolatey.yml`·`homebrew.yml`)이며 손으로 실행할 때만 돈다.
+#   중앙 검수(winget/choco)와 탭 즉시 반영(brew)은 되돌리는 비용이 서로 달라서,
+#   "언제 올릴지"를 사람이 정하는 편이 맞다.
+# 이 워크플로는 그 제출에 쓸 매니페스트까지 만들어 릴리스에 첨부한다.
 on:
-  # push:
-  #   tags: ["v*"]
+  push:
+    tags: ["v*"]
+  # 태그 없이 산출물만 확인하고 싶을 때 — 이 경로로 만들면 **초안**이다.
   workflow_dispatch:
     inputs:
       tag:
@@ -24,7 +28,7 @@ on:
         required: false
         type: string
       publish:
-        description: "초안이 아니라 바로 공개할지 — 기본은 초안"
+        description: "수동 실행에서도 바로 공개할지 — 기본은 초안"
         required: false
         default: false
         type: boolean
@@ -245,63 +249,17 @@ jobs:
           pattern: dist-*
           merge-multiple: true
 
-      # ── winget · Chocolatey 매니페스트(설치본 + 포터블 각각) ──
-      # 여기서 **실제 산출물의 SHA256으로 채운다** — 손으로 적으면 언젠가 틀리고,
-      # 체크섬이 틀린 매니페스트는 사용자 기기에서 설치 실패로 나타난다.
-      # 제출은 수기다(사용자 확정 08-11): 아래 결과물을 각 저장소에 PR로 올린다.
-      #   winget → microsoft/winget-pkgs · choco → `choco push`(API 키 필요)
-      - name: winget · choco 매니페스트 생성
+      # ── 패키지 매니저 매니페스트(winget · choco · brew · 설치본/포터블 각각) ──
+      # 제출은 하지 않는다 — 만들어서 릴리스에 붙여만 둔다. 제출은 각 전용 워크플로가
+      # 손으로 실행될 때 하고, **치환 로직은 render-manifests.sh 하나뿐이다**
+      # (워크플로마다 따로 치환하면 언젠가 갈라지고 그 지점이 곧 버그가 된다).
+      - name: 매니페스트 생성(winget · choco · brew)
         shell: bash
         env:
           VERSION: ${{ needs.meta.outputs.version }}
         run: |
           set -euo pipefail
-          sum() { sha256sum "staged/$1" | cut -d" " -f1; }
-          WIN_X64_SETUP=$(sum "nexa-beep-$VERSION-windows-x64-setup.exe")
-          WIN_ARM_SETUP=$(sum "nexa-beep-$VERSION-windows-arm64-setup.exe")
-          WIN_X64_PORT=$(sum "nexa-beep-$VERSION-windows-x64-portable.zip")
-          WIN_ARM_PORT=$(sum "nexa-beep-$VERSION-windows-arm64-portable.zip")
-          DATE=$(date -u +%Y-%m-%d)
-
-          fill() {
-            sed -e "s/@VERSION@/$VERSION/g" \
-                -e "s/@DATE@/$DATE/g" \
-                -e "s/@SHA_WIN_X64_SETUP@/$WIN_X64_SETUP/g" \
-                -e "s/@SHA_WIN_ARM64_SETUP@/$WIN_ARM_SETUP/g" \
-                -e "s/@SHA_WIN_X64_PORTABLE@/$WIN_X64_PORT/g" \
-                -e "s/@SHA_WIN_ARM64_PORTABLE@/$WIN_ARM_PORT/g" \
-                "$1" > "$2"
-          }
-
-          # winget: microsoft/winget-pkgs의 경로 규약대로 담아 둔다(그대로 복사 제출).
-          for ch in installer portable; do
-            id="SosomLab.NexaBeep"; [ "$ch" = portable ] && id="SosomLab.NexaBeep.Portable"
-            # winget-pkgs 경로 규약 = 소문자 첫 글자 / 식별자의 **점을 디렉터리로** 편다
-            #   SosomLab.NexaBeep          → s/SosomLab/NexaBeep/<ver>
-            #   SosomLab.NexaBeep.Portable → s/SosomLab/NexaBeep/Portable/<ver>
-            dir="manifests/winget/manifests/s/$(echo "$id" | tr '.' '/')/$VERSION"
-            mkdir -p "$dir"
-            fill "packaging/winget/$ch/version.yaml"   "$dir/$id.yaml"
-            fill "packaging/winget/$ch/locale.yaml"    "$dir/$id.locale.ko-KR.yaml"
-            fill "packaging/winget/$ch/installer.yaml" "$dir/$id.installer.yaml"
-          done
-
-          # choco: 그대로 `choco pack` 할 수 있는 형태로.
-          for ch in installer portable; do
-            pkg="nexa-beep"; [ "$ch" = portable ] && pkg="nexa-beep-portable"
-            dir="manifests/choco/$pkg"
-            mkdir -p "$dir/tools"
-            fill "packaging/choco/$ch/$pkg.nuspec"                "$dir/$pkg.nuspec"
-            fill "packaging/choco/$ch/tools/chocolateyinstall.ps1"   "$dir/tools/chocolateyinstall.ps1"
-            fill "packaging/choco/$ch/tools/chocolateyuninstall.ps1" "$dir/tools/chocolateyuninstall.ps1"
-          done
-
-          # 남은 치환자가 있으면 **여기서 멈춘다** — 체크섬 자리에 @가 남은 매니페스트가
-          # 제출되면 설치가 깨진다. 조용히 넘어가면 안 되는 종류의 실수다.
-          if grep -rn "@[A-Z_]*@" manifests; then
-            echo "::error::치환되지 않은 자리표시자가 남았다"; exit 1
-          fi
-          find manifests -type f | sort
+          ./packaging/render-manifests.sh "$VERSION" staged manifests
           (cd manifests && zip -qr "../staged/nexa-beep-$VERSION-package-manifests.zip" .)
 
       - uses: actions/upload-artifact@v4
@@ -345,6 +303,16 @@ jobs:
 
           설치본에는 **같은 파일의 \`.zip\` 버전**도 함께 올려 두었다(실행 파일 확장자를
           막는 브라우저·사내 프록시 대비).
+
+          ## 패키지 관리자 (macOS)
+
+          \`\`\`bash
+          brew install --cask kiros33/tap/nexa-beep        # 설치본(.app)
+          brew install kiros33/tap/nexa-beep-portable      # 포터블(실행 파일만)
+          \`\`\`
+
+          Homebrew Cask는 설치할 때 quarantine 속성을 떼므로 **아래 Gatekeeper 경고 없이**
+          바로 실행된다 — macOS에서 가장 매끄러운 경로다.
 
           ## 패키지 관리자 (Windows)
 
@@ -392,13 +360,36 @@ jobs:
           set -euo pipefail
           args=(--title "Nexa Beep ${TAG#v}" --notes-file notes.md --target "$GITHUB_SHA")
           [ "$PRE" = "true" ] && args+=(--prerelease)
-          # 기본은 **초안** — 수기 배포 방침(08-11)이라 사람이 확인하고 공개한다.
-          if [ "${{ inputs.publish }}" != "true" ]; then
+          # 태그 push = 정식 배포(바로 공개) · 수동 실행 = 기본 초안(실수 방지).
+          if [ "${{ github.ref_type }}" != "tag" ] && [ "${{ inputs.publish }}" != "true" ]; then
             args+=(--draft)
-            echo "초안으로 만든다 — 확인 후 GitHub에서 'Publish release'를 누르면 공개된다."
+            echo "수동 실행이라 초안으로 만든다 — GitHub에서 'Publish release'를 눌러 공개한다."
           fi
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" staged/* --clobber
           else
             gh release create "$TAG" staged/* "${args[@]}"
           fi
+
+  # ── 패키지 매니저 제출 ───────────────────────────────────────────
+  # 릴리스가 **공개된 뒤에만** 부른다 — 매니페스트가 릴리스 자산 URL과 그 해시를
+  # 가리키므로, 자산이 없는 상태로 제출하면 사용자 기기에서 404로 실패한다.
+  #
+  # Windows(winget·choco)는 중앙 저장소 검수가 있어 **저장소 변수로 잠겨 있다**
+  # (기본 꺼짐 — nexa-memkeeper 방식). macOS/Linux(Homebrew)는 내 탭이라 검수가
+  # 없고 되돌리기도 커밋 하나여서, 릴리스와 함께 자동으로 따라간다.
+  homebrew:
+    needs: [meta, publish]
+    if: github.ref_type == 'tag'
+    uses: ./.github/workflows/homebrew.yml
+    with:
+      tag: ${{ needs.meta.outputs.tag }}
+    secrets: inherit
+
+  windows-packages:
+    needs: [meta, publish]
+    if: github.ref_type == 'tag'
+    uses: ./.github/workflows/publish-windows-packages.yml
+    with:
+      tag: ${{ needs.meta.outputs.tag }}
+    secrets: inherit
