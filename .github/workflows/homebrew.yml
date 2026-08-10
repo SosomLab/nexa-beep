@@ -64,8 +64,11 @@ jobs:
           set -euo pipefail
           ruby -c out/homebrew/Casks/nexa-beep.rb
           ruby -c out/homebrew/Formula/nexa-beep-portable.rb
-          # audit은 참고용 — 개인 탭·비-FOSS 라이선스라 경고가 날 수 있어 실패로 보지 않는다.
-          brew audit --cask --strict out/homebrew/Casks/nexa-beep.rb || true
+          # ⚠️ `brew audit`은 **경로 인자를 더 이상 받지 않는다**(이름만) — 탭에 올리기
+          #    전에는 이름으로 부를 수 없으니 여기서는 쓸 수 없다. 파일 그대로 볼 수 있는
+          #    `brew style`로 대신한다. 개인 탭·비-FOSS라 경고가 날 수 있어 참고용이다.
+          brew style out/homebrew/Casks/nexa-beep.rb || true
+          brew style out/homebrew/Formula/nexa-beep-portable.rb || true
 
       - uses: actions/upload-artifact@v4
         with:
@@ -81,7 +84,7 @@ jobs:
           if [ -z "${TAP_TOKEN:-}" ]; then
             # 조용히 성공한 척하지 않는다 — 왜 안 나갔는지와 대안을 같이 말한다.
             echo "::warning::시크릿 TAP_TOKEN이 없어 탭에 push하지 않았다."
-            echo "아티팩트 homebrew-$TAG를 받아 kiros33/homebrew-tap에 직접 커밋하면 된다:"
+            echo "아티팩트 homebrew-${TAG}를 받아 kiros33/homebrew-tap에 직접 커밋하면 된다:"
             echo "  Casks/nexa-beep.rb · Formula/nexa-beep-portable.rb"
             exit 0
           fi

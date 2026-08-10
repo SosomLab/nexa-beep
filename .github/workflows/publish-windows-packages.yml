@@ -125,9 +125,15 @@ jobs:
           set -euo pipefail
           ./packaging/render-manifests.sh "${TAG#v}" assets out
           # winget 자체 검증기로 먼저 본다 — 형식 오류를 PR 리뷰어가 아니라 여기서 잡는다.
-          for d in $(find out/winget -mindepth 5 -maxdepth 5 -type d); do
+          # ⚠️ 깊이로 폴더를 찾으면 안 된다 — 포터블 식별자는 점이 하나 더 있어
+          #    `.../NexaBeep/Portable/<ver>`로 **한 단계 더 깊다**. 고정 깊이로 찾다가
+          #    매니페스트가 없는 상위 폴더를 검사해 실패했다(08-11 v0.1.0 첫 실행).
+          #    구조를 추측하지 말고 **매니페스트가 실제로 든 폴더**를 찾는다.
+          find out/winget -name '*.installer.yaml' -exec dirname {} \; | sort -u > dirs.txt
+          [ -s dirs.txt ] || { echo "::error::winget 매니페스트를 찾지 못했다"; exit 1; }
+          while read -r d; do
             echo "== $d"; winget validate --manifest "$d" || exit 1
-          done
+          done < dirs.txt
       - uses: actions/upload-artifact@v4
         with:
           name: winget-${{ inputs.tag }}
@@ -140,9 +146,10 @@ jobs:
           curl.exe -L -o wingetcreate.exe https://aka.ms/wingetcreate/latest
           # 우리가 만든 매니페스트를 그대로 제출한다(update가 아니라 submit) —
           # 첫 등록과 갱신을 같은 경로로 처리하고, 손으로 쓴 ko-KR 로캘도 보존된다.
-          for d in $(find out/winget -mindepth 5 -maxdepth 5 -type d); do
+          find out/winget -name '*.installer.yaml' -exec dirname {} \; | sort -u > dirs.txt
+          while read -r d; do
             ./wingetcreate.exe submit --token "$WINGET_TOKEN" "$d"
-          done
+          done < dirs.txt
           echo "PR 생성 — microsoft/winget-pkgs의 자동 검증·리뷰를 거쳐야 노출된다."
       - name: 건너뛴 이유 안내
         if: vars.WINGET_PUBLISH != 'true' || env.WINGET_TOKEN == ''
