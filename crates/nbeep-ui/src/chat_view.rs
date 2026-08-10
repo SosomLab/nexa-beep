@@ -103,6 +103,9 @@ pub struct ChatLine {
     pub at_ms: u64,
     /// 표시용 지역 벽시계(호스트가 plat에서 변환).
     pub wall: WallTime,
+    /// 송신자 표시 이름 — **단체 대화**에서 수신 풍선 위에 표시(08-10).
+    /// 1:1은 헤더가 상대를 식별하므로 `None`(생략).
+    pub from: Option<String>,
 }
 
 impl ChatLine {
@@ -114,7 +117,15 @@ impl ChatLine {
             body: ChatBody::Text(text),
             at_ms,
             wall,
+            from: None,
         }
+    }
+
+    /// 송신자 이름을 붙인다(단체 대화 수신 풍선 식별 — 빌더).
+    #[must_use]
+    pub fn with_from(mut self, name: impl Into<String>) -> Self {
+        self.from = Some(name.into());
+        self
     }
 
     /// 파일 전송 항목 — `승인 대기` 상태로 시작한다.
@@ -129,6 +140,7 @@ impl ChatLine {
             }),
             at_ms,
             wall,
+            from: None,
         }
     }
 }
@@ -222,6 +234,8 @@ const ENTRY_GAP: i32 = 6;
 /// 날짜 알약 높이·상하 간격.
 const PILL_H: i32 = 24;
 const PILL_GAP: i32 = 8;
+/// 수신 풍선 위 송신자 이름 행 높이(단체 대화).
+const NAME_H: i32 = 18;
 /// 스레드 좌우 안쪽 여백.
 const TH_INSET: i32 = 12;
 /// 입력창 표시 줄 상한 — 초과분은 캐럿을 따라 스크롤(사용자 확정 08-10).
@@ -560,6 +574,9 @@ impl ChatViewWidget {
                 ChatBody::Text(t) => t.as_str().split('\n').count().max(1),
                 ChatBody::Xfer(_) => 1,
             } as i32;
+            if !l.mine && l.from.is_some() {
+                h += self.s(NAME_H); // 상한 추정(연속 묶음 생략은 paint가 정확히)
+            }
             h += subs * self.s(TH_LINE_H) + self.s(BUB_PAD_V) * 2 + self.s(ENTRY_GAP);
             prev = Some(l.wall);
         }
@@ -918,10 +935,13 @@ impl Widget for ChatViewWidget {
         // 1패스 — 블록 레이아웃(알약·풍선 줄들·높이).
         struct Block {
             pill: Option<String>,
+            /// 수신 풍선 위 송신자 이름(단체 대화 — 같은 송신자 연속 묶음은 첫 풍선에만).
+            name: Option<String>,
             entry: usize,
             lines: Vec<String>,
             h: i32,
         }
+        let name_h = self.s(NAME_H);
         let mut blocks: Vec<Block> = Vec::with_capacity(self.lines.len());
         let mut content = 0;
         let mut prev: Option<WallTime> = None;
@@ -932,11 +952,28 @@ impl Widget for ChatViewWidget {
             } else {
                 None
             };
+            let name = if l.mine {
+                None
+            } else {
+                match &l.from {
+                    Some(n)
+                        if pill.is_some()
+                            || i == 0
+                            || self.lines[i - 1].mine
+                            || self.lines[i - 1].from.as_deref() != Some(n.as_str()) =>
+                    {
+                        Some(n.clone())
+                    }
+                    _ => None,
+                }
+            };
             let wrapped = wrap_text(ctx, &self.body_text(l), max_text_w);
-            let h = wrapped.len() as i32 * line_h + pad_v * 2;
+            let h =
+                wrapped.len() as i32 * line_h + pad_v * 2 + if name.is_some() { name_h } else { 0 };
             content += h + self.s(ENTRY_GAP);
             blocks.push(Block {
                 pill,
+                name,
                 entry: i,
                 lines: wrapped,
                 h,
@@ -970,6 +1007,21 @@ impl Widget for ChatViewWidget {
             }
             let l = &self.lines[b.entry];
             if y + b.h >= vp.y && y < vp.bottom() {
+                // 송신자 이름(단체 대화 · 수신 풍선 위 — 같은 송신자 연속 묶음은 첫 풍선에만).
+                let mut by0 = y;
+                if let Some(n) = &b.name {
+                    ctx.select_font(FontSlot::Status, false);
+                    let sh = ctx.text_height();
+                    ctx.text(
+                        vp.x + inset + self.s(2),
+                        by0 + (name_h - sh) / 2,
+                        Rect::new(vp.x, by0, vp.w, name_h),
+                        n,
+                        theme.text_dim,
+                    );
+                    ctx.select_font(FontSlot::Message, false);
+                    by0 += name_h;
+                }
                 // 풍선 — 수신 좌측 / 발신 우측(사용자 확정 08-10).
                 let widest = b.lines.iter().map(|s| ctx.text_width(s)).max().unwrap_or(0);
                 let bw = widest + pad_h * 2;
@@ -978,7 +1030,8 @@ impl Widget for ChatViewWidget {
                 } else {
                     vp.x + inset
                 };
-                let bub = Rect::new(bx, y, bw, b.h);
+                let bub_h = b.h - if b.name.is_some() { name_h } else { 0 };
+                let bub = Rect::new(bx, by0, bw, bub_h);
                 let (bg, fg) = if l.mine {
                     (theme.accent, theme.chrome_bg)
                 } else {
@@ -986,7 +1039,7 @@ impl Widget for ChatViewWidget {
                 };
                 ctx.fill_round_rect(bub, self.s(9), bg);
                 for (si, s) in b.lines.iter().enumerate() {
-                    let ly = y + pad_v + si as i32 * line_h;
+                    let ly = by0 + pad_v + si as i32 * line_h;
                     let clip = Rect::new(bub.x, ly, bub.w, line_h);
                     ctx.text(bub.x + pad_h, ly + (line_h - th) / 2, clip, s, fg);
                 }
@@ -1547,6 +1600,24 @@ mod tests {
         };
         assert_eq!(fmt_date_pill(w, false), "2026-08-10 (월)");
         assert_eq!(fmt_date_pill(w, true), "8/10 (월)");
+    }
+
+    #[test]
+    fn group_sender_name_adds_row_height() {
+        // 단체 대화 — 수신 항목에 송신자 이름이 붙으면 이름 행만큼 커진다(발신엔 무시).
+        let (mut w, mut inv) = widget();
+        w.push_line(tline(false, "a", 0), &mut inv);
+        let base = w.content_h_estimate();
+        let (mut w2, mut inv2) = widget();
+        w2.push_line(tline(false, "a", 0).with_from("라이언"), &mut inv2);
+        assert_eq!(
+            w2.content_h_estimate(),
+            base + w2.s(NAME_H),
+            "수신 + 이름 = 이름 행 추가"
+        );
+        let (mut w3, mut inv3) = widget();
+        w3.push_line(tline(true, "a", 0).with_from("나"), &mut inv3);
+        assert_eq!(w3.content_h_estimate(), base, "발신 풍선엔 이름 행 없음");
     }
 
     #[test]
