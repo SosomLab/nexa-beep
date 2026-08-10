@@ -144,7 +144,11 @@ jobs:
           mkdir -p out
           cd dist
           if [ "${{ runner.os }}" = "Windows" ]; then
-            powershell -NoProfile -Command "Compress-Archive -Path '$env:PORTABLE_NAME' -DestinationPath '../out/$env:PORTABLE_NAME.zip' -Force"
+            # ⚠️ PowerShell 변수 문법(`$env:NAME`)을 bash 큰따옴표 안에 쓰면 안 된다 —
+            #    bash가 `$env`를 먼저 빈 문자열로 펼쳐 `:NAME`만 남고, PowerShell은
+            #    존재하지 않는 경로를 압축하려다 실패한다(08-11 v0.1.0 첫 실행에서 발생).
+            #    셸이 둘 겹칠 때는 **바깥 셸의 변수만** 쓴다.
+            powershell -NoProfile -Command "Compress-Archive -Path '$PORTABLE_NAME' -DestinationPath '../out/$PORTABLE_NAME.zip' -Force"
           else
             zip -qr "../out/$PORTABLE_NAME.zip" "$PORTABLE_NAME"
           fi
