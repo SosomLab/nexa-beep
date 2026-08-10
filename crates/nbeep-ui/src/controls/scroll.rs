@@ -48,6 +48,14 @@ fn sc(v: i32, scale: f32) -> i32 {
 }
 
 impl ScrollBars {
+    /// **프로그램적 표시** — 사용자 입력이 아니라 코드가 스크롤을 옮겼을 때 부른다
+    /// (타이핑으로 가로 스크롤이 따라붙는 경우 등). 이걸 부르지 않으면 막대가
+    /// `on_event` 전까지 숨어 있어 "스크롤이 생기지 않는다"로 보인다(08-10 지적).
+    pub fn show(&mut self) {
+        self.active = true;
+        self.hide_ticks = HIDE_TICKS;
+    }
+
     /// 새 스크롤바.
     #[must_use]
     pub fn new() -> Self {

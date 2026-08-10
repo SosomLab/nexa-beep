@@ -542,6 +542,7 @@ impl ChatViewWidget {
     /// **가로** 스크롤을 캐럿이 보이도록 맞춘다(줄바꿈 없는 긴 문장 대응).
     /// paint가 남긴 문자 경계 실측을 쓴다 — 폭 계산을 두 벌로 만들지 않는다.
     fn ensure_caret_visible_h(&mut self) {
+        let before = self.input_hscroll;
         let (cline, ccol) = self.caret_line_col();
         let cx = {
             let g = self.input_geom.borrow();
@@ -559,7 +560,13 @@ impl ChatViewWidget {
             self.input_hscroll = (cx - margin).max(0);
         }
         let max_h = (self.input_content_w() - view + margin).max(0);
-        self.input_hscroll = self.input_hscroll.clamp(0, max_h);
+        let next = self.input_hscroll.clamp(0, max_h);
+        if next != before {
+            // 코드가 옮긴 스크롤도 **막대를 보여 준다** — 안 그러면 사용자 눈에는
+            // "가로 스크롤이 생기지 않는다"로 보인다(08-10 지적).
+            self.input_bars.show();
+        }
+        self.input_hscroll = next;
     }
 
     /// 편집 후 공통 — 캐럿이 보이도록 입력 스크롤을 따라붙인다.
@@ -912,7 +919,22 @@ impl Widget for ChatViewWidget {
                         let max_top = self.input_line_count().saturating_sub(INPUT_MAX_LINES);
                         self.input_scroll = (self.input_scroll + 1).min(max_top);
                     }
-                    if let Some(idx) = self.input_hit(x, y) {
+                    // **좌우** 자동 스크롤 — 창 밖으로 끌면 가려진 글자까지 선택이 이어진다
+                    // (08-10 지적: 드래그로 좌우 선택이 불가능했다).
+                    let edge = self.s(12);
+                    let step = self.s(24);
+                    let max_h = (self.input_content_w() - self.input_view_w() + self.s(24)).max(0);
+                    if x < input.x + edge {
+                        self.input_hscroll = (self.input_hscroll - step).max(0);
+                        self.input_bars.show();
+                    } else if x > input.right() - edge {
+                        self.input_hscroll = (self.input_hscroll + step).min(max_h);
+                        self.input_bars.show();
+                    }
+                    // 자동 스크롤로 창 밖까지 끌 때도 캐럿이 끝까지 따라가게 좌표를 가둔다.
+                    let hx = x.clamp(input.x + self.s(1), input.right() - self.s(1));
+                    let hy = y.clamp(input.y + self.s(1), input.bottom() - self.s(1));
+                    if let Some(idx) = self.input_hit(hx, hy) {
                         self.input.set_caret(idx, true);
                     }
                     inv.push(self.bounds);
@@ -1821,5 +1843,46 @@ mod tests {
         paint_once(&w);
         w.ensure_caret_visible_h();
         assert_eq!(w.input_hscroll, 0, "짧아졌는데 스크롤이 남아 있다");
+    }
+
+    /// 창 밖으로 끌면 **좌우로 자동 스크롤**되어 가려진 글자까지 선택된다(08-10 지적).
+    #[test]
+    fn drag_past_right_edge_scrolls_horizontally() {
+        let (mut w, mut inv) = widget();
+        w.set_bounds(Rect::new(0, 0, 300, 200), &mut inv);
+        for _ in 0..200 {
+            ch(&mut w, 'x', &mut inv);
+        }
+        paint_once(&w);
+        // 왼쪽 끝으로 스크롤을 되돌린 뒤 드래그를 시작한다.
+        w.input_hscroll = 0;
+        let input = w.input_bar();
+        w.on_event(
+            &InputEvent::MouseDown {
+                x: input.x + 20,
+                y: input.y + 10,
+                shift: false,
+                primary: false,
+            },
+            &mut inv,
+        );
+        // 오른쪽 경계 밖으로 끈다 — 여러 번 움직이면 계속 밀려야 한다.
+        for _ in 0..3 {
+            w.on_event(
+                &InputEvent::MouseMove {
+                    x: input.right() + 30,
+                    y: input.y + 10,
+                },
+                &mut inv,
+            );
+        }
+        assert!(
+            w.input_hscroll > 0,
+            "오른쪽 밖으로 끌었는데 가로 스크롤이 그대로다"
+        );
+        assert!(
+            w.input.selection().is_some(),
+            "자동 스크롤 중에도 선택이 이어져야 한다"
+        );
     }
 }
