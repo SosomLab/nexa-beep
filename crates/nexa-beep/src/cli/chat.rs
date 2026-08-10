@@ -476,7 +476,7 @@ fn human(b: u64) -> String {
 
 /// 수신 완료물 → **무해화 게이트 합류**(공용 [`crate::gate`]) 후 결과를 stdout에 보고.
 fn receive_into_quarantine(got: &nbeep_core::Received, sender: PeerId) {
-    match crate::gate::quarantine_received(got, sender) {
+    match crate::gate::quarantine_received(got, sender, crate::gate::CH_CLI) {
         Ok(q) => {
             println!(
                 "[파일] 격리 수신 완료: {} · risk={:?}{} · {}",

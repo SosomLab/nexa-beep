@@ -72,7 +72,7 @@ pub(crate) fn quarantine_demo(src: &std::path::Path) {
         xfer: String::new(),
     };
     let sealed = Beepq::seal(&original, sha, &meta);
-    let qdir = QuarantineDir::open(std::env::temp_dir().join("nexa-beep-quarantine")).unwrap();
+    let qdir = QuarantineDir::open(crate::gate::quarantine_root(crate::gate::CH_CLI)).unwrap();
     let qpath = qdir.save(&sha, &sealed).unwrap();
     println!("② 격리 저장: {} ({}B)", qpath.display(), sealed.len());
 
