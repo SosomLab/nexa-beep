@@ -3,7 +3,7 @@
 //! 조립 지점의 창 계층. 도메인은 `nbeep-core`, 렌더는 `nbeep-ui`가 갖고 여기는
 //! **winit ↔ 위젯 번역 + 창 생명주기**만 맡는다. 창 코드의 `nbeep-plat` 이관은 M3-2.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::num::NonZeroU32;
 use std::rc::Rc;
 use std::time::Instant;
@@ -72,6 +72,11 @@ enum AppEvent {
     /// **인바운드** — 남이 나에게 연결해 핸드셰이크가 끝난 세션(아직 TOFU 미판정).
     /// GUI(메인 스레드)가 TrustStore로 판정 후 대화·창을 연다.
     Inbound { session: Box<InboundSession> },
+    /// **아웃바운드 성립**(M2-8) — 워커 스레드가 connect+Noise를 마친 세션(TOFU 미판정).
+    /// 연결 수립이 이벤트 루프를 막지 않게 하는 절반(인바운드와 대칭).
+    Outbound { session: Box<InboundSession> },
+    /// 아웃바운드 연결 실패(M2-8) — 죽은 상대를 클릭해도 UI는 살아 있고 이것만 온다.
+    ConnectFailed { peer: PeerId, why: String },
     /// 파일 수신 제안 도착 — 사용자가 수락/거절할 때까지 데이터는 오지 않는다(FR-X-3).
     XferOffer {
         peer: PeerId,
@@ -580,7 +585,10 @@ struct App {
     identity: std::sync::Arc<nbeep_crypto::Identity>,
     seq: nbeep_core::Sequencer,
     /// 전송 — 데모(InMemory) 또는 실물(`LocalDirect`). 같은 `Transport` 트레이트라 App은 구별 안 함.
-    transport: Box<dyn nbeep_net::Transport>,
+    /// `Arc` = 연결 수립 워커(M2-8)와 공유 — 죽은 상대 연결이 UI 스레드를 막지 않는다.
+    transport: std::sync::Arc<dyn nbeep_net::Transport + Send + Sync>,
+    /// 연결 수립 중인 상대(M2-8 — 중복 클릭 가드).
+    connecting: HashSet<PeerId>,
     discovery: std::sync::mpsc::Receiver<nbeep_net::DiscoveryEvent>,
     table: nbeep_core::PeerTable,
     trust: nbeep_core::MemoryTrustStore,
@@ -1314,18 +1322,36 @@ impl App {
         self.list.set_rows(rows, inv);
     }
 
-    /// 연결 → Noise 핸드셰이크 → TOFU 판정 → 다중화(실물 스택 전체).
-    fn open_session(
-        &mut self,
-        peer: PeerId,
-    ) -> Result<(LiveSession, nbeep_core::TrustDecision), String> {
-        // dyn Transport — 메서드는 트레이트 객체에 직접 있어 use 불요.
-        let link = self.transport.connect(peer).map_err(|e| format!("{e:?}"))?;
-        let noise = nbeep_crypto::NoiseSession::initiate(link, &self.identity)
-            .map_err(|e| e.to_string())?;
-        let est =
-            nbeep_core::TrustedSession::wrap(noise, &mut self.trust).map_err(|e| e.to_string())?;
-        Ok((nbeep_core::MuxSession::new(est.session), est.decision))
+    /// 연결 수립을 **워커 스레드**로 시작한다(M2-8 — 사용자 실기 08-10 "응답 없음").
+    ///
+    /// connect(후보 순차 시도 — 최악 수십 초)+Noise 핸드셰이크가 이벤트 루프에서 돌면
+    /// 죽은 상대(강제 종료 → GOODBYE 없이 잔존)를 클릭하는 순간 GUI 전체가 멈춘다.
+    /// 인바운드와 대칭으로 워커가 세션을 만들어 `AppEvent::Outbound`로 돌아오고,
+    /// **TOFU 판정은 지금처럼 메인 스레드**(TrustStore가 여기 있다).
+    fn start_connect(&mut self, peer: PeerId) {
+        if !self.connecting.insert(peer) {
+            self.status = format!("연결 중… {} (이미 시도 중)", self.peer_title(peer));
+            return; // 중복 클릭 가드
+        }
+        self.status = format!("연결 중… {}", self.peer_title(peer));
+        let transport = std::sync::Arc::clone(&self.transport);
+        let identity = std::sync::Arc::clone(&self.identity);
+        let proxy = self.proxy.clone();
+        std::thread::spawn(move || {
+            let r = transport
+                .connect(peer)
+                .map_err(|e| format!("{e:?}"))
+                .and_then(|link| {
+                    nbeep_crypto::NoiseSession::initiate(link, &identity)
+                        .map_err(|e| e.to_string())
+                });
+            let _ = match r {
+                Ok(session) => proxy.send_event(AppEvent::Outbound {
+                    session: Box::new(InboundSession { session }),
+                }),
+                Err(why) => proxy.send_event(AppEvent::ConnectFailed { peer, why }),
+            };
+        });
     }
 
     /// 수동 주소로 세션 수립(DR-19) — add_endpoint(발견 우회)→Noise→TOFU→대화 등록.
@@ -1449,22 +1475,6 @@ impl App {
         self.request_redraw(id);
     }
 
-    /// 대화 상태 확보(없으면 세션 수립) + 뷰 생성(스레드 복원).
-    fn ensure_conversation(&mut self, peer: PeerId) -> Result<ChatViewWidget, String> {
-        if !self.conversations.contains_key(&peer) {
-            let (session, decision) = self.open_session(peer)?;
-            self.install_conversation(session);
-            self.status = match decision {
-                nbeep_core::TrustDecision::FirstContact => {
-                    "Noise 세션 수립 — 첫 접촉(TOFU 핀 고정)".into()
-                }
-                d => format!("Noise 세션 수립 — {d:?}"),
-            };
-        } else {
-            self.status = "대화 복원 — 세션 유지 중".into();
-        }
-        Ok(self.build_chat_view(peer))
-    }
 
     /// 설정 창을 연다(있으면 포커스) — `Cmd/Ctrl+,`.
     fn open_settings(&mut self, el: &ActiveEventLoop) {
@@ -1954,31 +1964,32 @@ impl App {
     }
 
     /// 대화 활성화 — 모드에 따라 주 창 전환 또는 별도 창 생성/포커스(14 §11).
+    ///
+    /// 세션이 없으면 **워커로 연결을 시작하고 즉시 돌아온다**(M2-8 — UI 무정지).
+    /// 성립하면 `AppEvent::Outbound`가 이 함수를 다시 부른다.
     fn activate(&mut self, peer: PeerId, el: &ActiveEventLoop) {
+        if !self.conversations.contains_key(&peer) {
+            self.start_connect(peer);
+            if let Some(mid) = self.main_id {
+                self.request_redraw(mid);
+            }
+            return;
+        }
+        self.status = "대화 열림 — 세션 유지 중".into();
+        let chat = self.build_chat_view(peer);
         match self.mode {
-            WindowMode::Single => match self.ensure_conversation(peer) {
-                Ok(chat) => {
-                    self.chats.insert(peer, chat);
-                    self.single_open = Some(peer);
-                    self.set_main_ime(true); // 대화 = 실제 텍스트 → IME 켬
-                    if let Some(id) = self.main_id {
-                        self.layout_window(id);
-                        let mut inv = Invalidations::default();
-                        self.refresh_rows(&mut inv);
-                        self.request_redraw(id);
-                    }
+            WindowMode::Single => {
+                self.chats.insert(peer, chat);
+                self.single_open = Some(peer);
+                self.set_main_ime(true); // 대화 = 실제 텍스트 → IME 켬
+                if let Some(id) = self.main_id {
+                    self.layout_window(id);
+                    let mut inv = Invalidations::default();
+                    self.refresh_rows(&mut inv);
+                    self.request_redraw(id);
                 }
-                Err(e) => self.status = format!("연결 실패: {e}"),
-            },
-            WindowMode::Separate => match self.ensure_conversation(peer) {
-                Ok(chat) => self.open_separate_window(peer, chat, el),
-                Err(e) => {
-                    self.status = format!("연결 실패: {e}");
-                    if let Some(mid) = self.main_id {
-                        self.request_redraw(mid);
-                    }
-                }
-            },
+            }
+            WindowMode::Separate => self.open_separate_window(peer, chat, el),
         }
     }
 
@@ -2696,6 +2707,49 @@ impl ApplicationHandler<AppEvent> for App {
                     self.request_redraw(id);
                 }
             }
+            AppEvent::Outbound { session } => {
+                // 워커가 만든 아웃바운드 세션(M2-8) — TOFU 판정은 여기(메인 · TrustStore 소유).
+                use nbeep_core::Session as _;
+                let peer = session.session.peer();
+                self.connecting.remove(&peer);
+                if !self.conversations.contains_key(&peer) {
+                    let est =
+                        match nbeep_core::TrustedSession::wrap(session.session, &mut self.trust) {
+                            Ok(est) => est,
+                            Err(e) => {
+                                self.status = format!("신뢰 판정 거부: {e}");
+                                if let Some(mid) = self.main_id {
+                                    self.request_redraw(mid);
+                                }
+                                return;
+                            }
+                        };
+                    let decision = est.decision;
+                    self.install_conversation(nbeep_core::MuxSession::new(est.session));
+                    self.activate(peer, el); // 사용자가 클릭한 연결 — 뷰를 연다
+                    self.status = match decision {
+                        nbeep_core::TrustDecision::FirstContact => {
+                            "Noise 세션 수립 — 첫 접촉(TOFU 핀 고정)".into()
+                        }
+                        d => format!("Noise 세션 수립 — {d:?}"),
+                    };
+                } else {
+                    // 그 사이 인바운드가 먼저 성립 — 이 세션은 버리고 그 대화를 연다.
+                    self.activate(peer, el);
+                }
+                if let Some(mid) = self.main_id {
+                    self.request_redraw(mid);
+                }
+            }
+            AppEvent::ConnectFailed { peer, why } => {
+                self.connecting.remove(&peer);
+                self.status = format!("연결 실패({}): {why}", self.peer_title(peer));
+                let mut inv = Invalidations::default();
+                self.refresh_rows(&mut inv);
+                if let Some(mid) = self.main_id {
+                    self.request_redraw(mid);
+                }
+            }
             AppEvent::Inbound { session } => {
                 use nbeep_core::Session as _;
                 let peer = session.session.peer();
@@ -3302,7 +3356,8 @@ pub(crate) fn run(mode: WindowMode, live: bool) {
     let proxy = event_loop.create_proxy();
     let shutdown = nbeep_plat::shutdown::install(); // R-16 — SIGINT/SIGTERM 포트
 
-    let (transport, discovery): (Box<dyn nbeep_net::Transport>, _) = if live {
+    let (transport, discovery): (std::sync::Arc<dyn nbeep_net::Transport + Send + Sync>, _) =
+        if live {
         // 실물 — LocalDirect(UDP 발견 + TCP 세션). 실기·컨테이너 상대가 목록에 뜬다.
         let mut instance = [0u8; 16];
         instance.copy_from_slice(&nbeep_crypto::Identity::generate().peer_id().as_bytes()[..16]);
@@ -3317,8 +3372,8 @@ pub(crate) fn run(mode: WindowMode, live: bool) {
             std::sync::Arc::clone(&identity),
             proxy.clone(),
         );
-        (Box::new(local), discovery)
-    } else {
+            (std::sync::Arc::new(local), discovery)
+        } else {
         // 데모 — InMemory 버스 + 에코 봇. 순환 탐색 테스트용으로 같은 접두사(김*/bob* 등)를
         // 여러 개 둔다(타입어헤드 ↑↓ 순환 확인).
         let bus = nbeep_net::inmem::InMemoryBus::new();
@@ -3338,9 +3393,9 @@ pub(crate) fn run(mode: WindowMode, live: bool) {
             nbeep_core::DisplayName::parse("나").unwrap(),
             nbeep_net::Caps::default(),
         );
-        let discovery = transport.discovery();
-        (Box::new(transport), discovery)
-    };
+            let discovery = transport.discovery();
+            (std::sync::Arc::new(transport), discovery)
+        };
 
     let mut settings = SettingsState::with_defaults();
     if mode == WindowMode::Separate {
@@ -3371,6 +3426,7 @@ pub(crate) fn run(mode: WindowMode, live: bool) {
         identity,
         seq: nbeep_core::Sequencer::new(),
         transport,
+        connecting: HashSet::new(),
         discovery,
         table: nbeep_core::PeerTable::new(60_000),
         trust: nbeep_core::MemoryTrustStore::new(),
