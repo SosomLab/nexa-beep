@@ -157,15 +157,23 @@ impl<'a> Surface<'a> {
     }
 
     /// 사각형 채우기 — 표면 밖은 잘린다(음수·초과 좌표 안전).
+    ///
+    /// ★ 시작 좌표도 **표면 크기로 클램프**한다. 예전에는 `x0`만 `max(0)` 하고 상한을
+    /// 두지 않아, 표면 오른쪽 **밖에서 시작하는** 사각형에서 `x0 > x1`이 되어 역전 범위로
+    /// 패닉했다(08-10 — 긴 한 줄 입력이 오른쪽으로 넘어가며 앱이 죽었다).
     pub fn fill_rect(&mut self, x: i32, y: i32, w: u32, h: u32, color: Color) {
-        let x0 = x.max(0) as usize;
-        let y0 = y.max(0) as usize;
+        let x0 = (x.max(0) as usize).min(self.width);
+        let y0 = (y.max(0) as usize).min(self.height);
         let x1 = usize::try_from(i64::from(x) + i64::from(w))
             .unwrap_or(0)
             .min(self.width);
         let y1 = usize::try_from(i64::from(y) + i64::from(h))
             .unwrap_or(0)
             .min(self.height);
+        // 완전히 밖이면 그릴 것이 없다(역전 방지 — 여기서 걸러야 슬라이스가 안전하다).
+        if x1 <= x0 || y1 <= y0 {
+            return;
+        }
         for row in y0..y1 {
             self.buf[row * self.width + x0..row * self.width + x1].fill(color.0);
         }
@@ -309,5 +317,36 @@ mod tests {
         let mut s = Surface::new(&mut buf, 1, 1);
         s.blend_px(0, 0, Color(0x0012_3456), 1.0);
         assert_eq!(buf[0], 0x0012_3456);
+    }
+
+    /// 표면 밖 사각형은 **그리지 않되 죽지도 않는다**(08-10 회귀 — 역전 슬라이스 패닉).
+    #[test]
+    fn fill_rect_outside_surface_never_panics() {
+        let mut buf = vec![0u32; 40 * 10];
+        let mut s = Surface::new(&mut buf, 40, 10);
+        let red = Color(0x00FF_0000);
+        // 오른쪽 밖에서 시작 — 예전에 x0 > x1로 패닉하던 경우.
+        s.fill_rect(100, 0, 20, 5, red);
+        // 아래쪽 밖에서 시작.
+        s.fill_rect(0, 100, 20, 5, red);
+        // 완전히 왼쪽·위쪽 밖.
+        s.fill_rect(-50, -50, 10, 10, red);
+        // 폭·높이 0.
+        s.fill_rect(5, 5, 0, 0, red);
+        assert!(buf.iter().all(|p| *p == 0), "밖에 있는 사각형이 그려졌다");
+    }
+
+    /// 경계를 걸친 사각형은 **보이는 부분만** 칠한다.
+    #[test]
+    fn fill_rect_straddling_edges_is_clipped() {
+        let mut buf = vec![0u32; 8 * 4];
+        let mut s = Surface::new(&mut buf, 8, 4);
+        let red = Color(0x00FF_0000);
+        s.fill_rect(6, 1, 10, 10, red); // 오른쪽·아래로 넘침
+                                        // (6,1)~(7,3)만 칠해져야 한다.
+        assert_eq!(buf[8 + 6], red.0);
+        assert_eq!(buf[3 * 8 + 7], red.0);
+        assert_eq!(buf[8 + 5], 0, "왼쪽은 건드리지 않는다");
+        assert_eq!(buf[6], 0, "위쪽은 건드리지 않는다");
     }
 }

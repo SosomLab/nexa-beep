@@ -281,6 +281,8 @@ pub struct ChatViewWidget {
     xfer: Option<crate::peer_list::XferProgress>,
     /// 입력창 세로 스크롤 — 맨 위 표시 줄(멀티라인 · 표시 상한 [`INPUT_MAX_LINES`]).
     input_scroll: usize,
+    /// 입력창 **가로** 스크롤(px) — 줄바꿈 없는 긴 문장을 따라간다(사용자 요청 08-10).
+    input_hscroll: i32,
     /// 입력창 드래그 선택 중.
     dragging: bool,
     /// paint가 캐시하는 입력 지오메트리 — 마우스 히트테스트용.
@@ -318,6 +320,7 @@ impl ChatViewWidget {
             cursor: (0, 0),
             xfer: None,
             input_scroll: 0,
+            input_hscroll: 0,
             dragging: false,
             input_geom: RefCell::new(InputGeom::default()),
             content_h: Cell::new(0),
@@ -520,6 +523,45 @@ impl ChatViewWidget {
         text.chars().count()
     }
 
+    /// 입력창에서 실제로 글자가 보이는 가로 폭(px).
+    fn input_view_w(&self) -> i32 {
+        (self.input_bar().w - self.s(20)).max(1)
+    }
+
+    /// 현재 입력 내용의 최대 줄 폭(px · paint 캐시 기준 · 캐시 전엔 0).
+    fn input_content_w(&self) -> i32 {
+        self.input_geom
+            .borrow()
+            .lines
+            .iter()
+            .filter_map(|xs| xs.last().copied())
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// **가로** 스크롤을 캐럿이 보이도록 맞춘다(줄바꿈 없는 긴 문장 대응).
+    /// paint가 남긴 문자 경계 실측을 쓴다 — 폭 계산을 두 벌로 만들지 않는다.
+    fn ensure_caret_visible_h(&mut self) {
+        let (cline, ccol) = self.caret_line_col();
+        let cx = {
+            let g = self.input_geom.borrow();
+            match g.lines.get(cline) {
+                Some(xs) => xs[ccol.min(xs.len().saturating_sub(1))],
+                None => 0,
+            }
+        };
+        let view = self.input_view_w();
+        let margin = self.s(24); // 캐럿이 가장자리에 붙지 않게 여유를 둔다
+        if cx - self.input_hscroll > view - margin {
+            self.input_hscroll = cx - view + margin;
+        }
+        if cx - self.input_hscroll < 0 {
+            self.input_hscroll = (cx - margin).max(0);
+        }
+        let max_h = (self.input_content_w() - view + margin).max(0);
+        self.input_hscroll = self.input_hscroll.clamp(0, max_h);
+    }
+
     /// 편집 후 공통 — 캐럿이 보이도록 입력 스크롤을 따라붙인다.
     fn after_input_edit(&mut self, inv: &mut Invalidations) {
         let (line, _) = self.caret_line_col();
@@ -531,6 +573,7 @@ impl ChatViewWidget {
             self.input_scroll = line + 1 - INPUT_MAX_LINES;
         }
         self.input_scroll = self.input_scroll.min(max_top);
+        self.ensure_caret_visible_h();
         inv.push(self.bounds); // 줄 수 변화 = 입력창 높이 변화(전체 재배치)
     }
 
@@ -711,15 +754,21 @@ impl Widget for ChatViewWidget {
             // 콘텐츠 높이에 상하 여백 포함 — 뷰포트(input.h)에도 여백이 들어 있어,
             // 빼먹으면 최대 스크롤이 정확히 1줄 모자란다(사용자 재현 08-10).
             let content_h = count as i32 * line_h + self.s(INPUT_PAD_V) * 2;
-            let (_, ny, consumed) = self.input_bars.on_event(
+            // 가로 콘텐츠 폭을 함께 넘겨야 **가로 막대 드래그·Shift+휠**이 산다.
+            let content_w = self.input_content_w() + self.s(20);
+            let (nx, ny, consumed) = self.input_bars.on_event(
                 ev,
                 input,
-                input.w,
+                content_w.max(input.w),
                 content_h,
-                0,
+                self.input_hscroll,
                 self.input_scroll as i32 * line_h,
                 self.scale,
             );
+            if nx != self.input_hscroll {
+                self.input_hscroll = nx.max(0);
+                inv.push(self.bounds);
+            }
             // 반올림 — 내림이면 경계에서 마지막 줄에 못 닿는다.
             let nl = ((ny + line_h / 2) / line_h.max(1)).max(0) as usize;
             if nl != self.input_scroll {
@@ -1170,7 +1219,8 @@ impl Widget for ChatViewWidget {
         let ith = ctx.text_height();
         let iline_h = self.s(INPUT_LINE_H);
         let pad_v_in = self.s(INPUT_PAD_V);
-        let tx = input.x + self.s(10);
+        // 가로 스크롤 반영 — 줄바꿈 없는 긴 문장이 캐럿을 따라 흐른다.
+        let tx = input.x + self.s(10) - self.input_hscroll;
         let text = self.input.text();
         let all_lines: Vec<&str> = text.split('\n').collect();
         let count = all_lines.len().max(1);
@@ -1236,16 +1286,21 @@ impl Widget for ChatViewWidget {
                     let sa = a.max(ls);
                     let sb = b.min(le + 1); // 개행까지 선택되면 줄 끝 +약간
                     if sa < sb {
-                        let x0 = tx + xs[(sa - ls).min(xs.len() - 1)];
+                        // 가로 스크롤로 밀린 만큼 입력창 밖으로 나갈 수 있다 — 잘라 그린다
+                        // (fill_rect는 표면 기준으로만 자르므로 여기서 창 기준으로 한 번 더).
+                        let x0 = (tx + xs[(sa - ls).min(xs.len() - 1)]).max(input.x);
                         let x1 = if sb > le {
                             tx + xs[xs.len() - 1] + self.s(4)
                         } else {
                             tx + xs[sb - ls]
-                        };
-                        ctx.fill_rect(
-                            Rect::new(x0, ly + self.s(1), (x1 - x0).max(1), iline_h - self.s(2)),
-                            theme.sel_bg,
-                        );
+                        }
+                        .min(input.right());
+                        if x1 > x0 {
+                            ctx.fill_rect(
+                                Rect::new(x0, ly + self.s(1), x1 - x0, iline_h - self.s(2)),
+                                theme.sel_bg,
+                            );
+                        }
                     }
                 }
                 ctx.text(tx, ty, input, all_lines[li], theme.text);
@@ -1253,7 +1308,10 @@ impl Widget for ChatViewWidget {
                 if li == cline && (top_line..top_line + visible).contains(&cline) {
                     let cx = tx + xs[ccol.min(xs.len() - 1)];
                     if self.preedit.is_empty() {
-                        ctx.fill_rect(Rect::new(cx, ty, self.s(2).max(1), ith), theme.accent);
+                        // 창 안에 있을 때만 — 밖이면 그리지 않는다(가로 스크롤 경계).
+                        if cx >= input.x && cx < input.right() {
+                            ctx.fill_rect(Rect::new(cx, ty, self.s(2).max(1), ith), theme.accent);
+                        }
                     } else {
                         // IME 조합 중 — 캐럿 위치에 프리에딧을 accent 색 + 밑줄로(확정 전).
                         ctx.text(cx, ty, input, &self.preedit, theme.accent);
@@ -1265,6 +1323,13 @@ impl Widget for ChatViewWidget {
                     }
                 }
             }
+            // 콘텐츠 폭은 캐시로 넘기기 **전에** 잰다(넘기면 소유가 옮겨간다).
+            let content_w = geom_lines
+                .iter()
+                .filter_map(|xs| xs.last().copied())
+                .max()
+                .unwrap_or(0)
+                + self.s(20);
             *self.input_geom.borrow_mut() = InputGeom {
                 tx,
                 top: input.y + pad_v_in,
@@ -1272,15 +1337,17 @@ impl Widget for ChatViewWidget {
                 scroll: top_line,
                 lines: geom_lines,
             };
-            // 입력창 오버레이 스크롤바(4줄 초과 시).
-            if count > INPUT_MAX_LINES {
+            // 입력창 오버레이 스크롤바 — 세로(4줄 초과)와 **가로**(줄이 창보다 길 때).
+            let needs_v = count > INPUT_MAX_LINES;
+            let needs_h = content_w > input.w;
+            if needs_v || needs_h {
                 self.input_bars.paint(
                     ctx,
                     theme,
                     input,
-                    input.w,
+                    content_w.max(input.w),
                     count as i32 * iline_h + pad_v_in * 2,
-                    0,
+                    self.input_hscroll,
                     top_line as i32 * iline_h,
                     self.scale,
                 );
@@ -1316,6 +1383,12 @@ mod tests {
         let mut inv = Invalidations::default();
         w.set_bounds(Rect::new(0, 0, 400, 300), &mut inv);
         (w, inv)
+    }
+    /// 페인트를 한 번 태워 문자 경계 실측 캐시를 채운다(가로 스크롤 계산의 전제).
+    fn paint_once(w: &ChatViewWidget) {
+        let mut probe = crate::controls::ProbeCtx;
+        let theme = crate::theme::Theme::dark();
+        w.paint(&mut probe, &theme);
     }
     fn ch(w: &mut ChatViewWidget, c: char, inv: &mut Invalidations) {
         w.on_event(&InputEvent::Char { c, now_ms: 0 }, inv);
@@ -1699,5 +1772,54 @@ mod tests {
             two_days > one_day + w.s(TH_LINE_H),
             "날짜 변경 = 알약 행 추가: {one_day} → {two_days}"
         );
+    }
+
+    /// 줄바꿈 없는 긴 문장 — **가로 스크롤이 캐럿을 따라간다**(사용자 요청 08-10).
+    /// 예전에는 텍스트가 오른쪽으로 그냥 흘러 나가 `fill_rect` 역전 슬라이스로 앱이 죽었다.
+    #[test]
+    fn long_single_line_scrolls_horizontally() {
+        let (mut w, mut inv) = widget();
+        w.set_bounds(Rect::new(0, 0, 300, 200), &mut inv);
+        // 창보다 훨씬 긴 한 줄(개행 없음).
+        for _ in 0..200 {
+            ch(&mut w, 'x', &mut inv);
+        }
+        // paint가 실측 폭을 남기고, 그걸로 가로 스크롤이 잡힌다.
+        paint_once(&w);
+        w.ensure_caret_visible_h();
+        assert!(
+            w.input_hscroll > 0,
+            "긴 줄인데 가로 스크롤이 0이다(캐럿이 화면 밖)"
+        );
+        // 캐럿이 보이는 범위 안에 들어와야 한다.
+        let (line, col) = w.caret_line_col();
+        let cx = w.input_geom.borrow().lines[line][col];
+        let visible = cx - w.input_hscroll;
+        assert!(
+            visible >= 0 && visible <= w.input_view_w(),
+            "캐럿이 보이지 않는다: cx={cx} hscroll={} view={}",
+            w.input_hscroll,
+            w.input_view_w()
+        );
+    }
+
+    /// 짧은 줄로 되돌아오면 가로 스크롤도 0으로 풀린다.
+    #[test]
+    fn hscroll_resets_when_text_shrinks() {
+        let (mut w, mut inv) = widget();
+        w.set_bounds(Rect::new(0, 0, 300, 200), &mut inv);
+        for _ in 0..200 {
+            ch(&mut w, 'x', &mut inv);
+        }
+        paint_once(&w);
+        w.ensure_caret_visible_h();
+        assert!(w.input_hscroll > 0);
+        // 전부 지운다.
+        for _ in 0..200 {
+            ch(&mut w, '\u{8}', &mut inv);
+        }
+        paint_once(&w);
+        w.ensure_caret_visible_h();
+        assert_eq!(w.input_hscroll, 0, "짧아졌는데 스크롤이 남아 있다");
     }
 }
