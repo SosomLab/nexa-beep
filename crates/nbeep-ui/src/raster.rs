@@ -157,6 +157,26 @@ fn round_rect_sdf(x: f32, y: f32, cx: f32, cy: f32, hw: f32, hh: f32, r: f32) ->
     (ax * ax + ay * ay).sqrt() + qx.max(qy).min(0.0) - r
 }
 
+/// 텍스트를 (폴백 필요 여부, 연속 구간)으로 나눈다 — 글리프 폴백용(08-10).
+/// 공백은 앞 구간에 붙인다(구간 난립 방지 — 공백 폭 차이는 미세해 무시).
+fn split_runs(text: &str, has: impl Fn(char) -> bool) -> Vec<(bool, String)> {
+    let mut out: Vec<(bool, String)> = Vec::new();
+    for c in text.chars() {
+        if c == ' ' {
+            if let Some((_, run)) = out.last_mut() {
+                run.push(c);
+                continue;
+            }
+        }
+        let fb = !has(c);
+        match out.last_mut() {
+            Some((lf, run)) if *lf == fb => run.push(c),
+            _ => out.push((fb, c.to_string())),
+        }
+    }
+    out
+}
+
 /// 점-선분 거리.
 fn seg_dist(px: f32, py: f32, ax: f32, ay: f32, bx: f32, by: f32) -> f32 {
     let (dx, dy) = (bx - ax, by - ay);
@@ -206,20 +226,53 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
     fn text(&mut self, x: i32, y: i32, clip: Rect, text: &str, fg: Color) {
         let size = self.px_size();
         let baseline = y as f32 + self.font.ascent(size);
-        self.font.draw_styled(
-            self.surface,
-            x as f32,
-            baseline,
-            size,
-            fg,
-            text,
-            Self::clip_of(clip),
-            self.cur_style(),
-        );
+        // 슬롯 얼굴에 없는 글자는 **기본 얼굴로 폴백**(08-10 — 고정폭 Consolas에 한글이
+        // 없어 두부(□)가 나던 문제. 베이스라인은 슬롯 얼굴 기준으로 공유 = 줄이 안 흔들린다).
+        if core::ptr::eq(self.font, self.fonts.base) || text.chars().all(|c| self.font.has_glyph(c))
+        {
+            self.font.draw_styled(
+                self.surface,
+                x as f32,
+                baseline,
+                size,
+                fg,
+                text,
+                Self::clip_of(clip),
+                self.cur_style(),
+            );
+            return;
+        }
+        let mut fx = x as f32;
+        for (fallback, run) in split_runs(text, |c| self.font.has_glyph(c)) {
+            let f: &Font = if fallback { self.fonts.base } else { self.font };
+            f.draw_styled(
+                self.surface,
+                fx,
+                baseline,
+                size,
+                fg,
+                &run,
+                Self::clip_of(clip),
+                self.cur_style(),
+            );
+            fx += f.measure(&run, size);
+        }
     }
 
     fn text_width(&mut self, text: &str) -> i32 {
-        self.font.measure(text, self.px_size()).ceil() as i32
+        let size = self.px_size();
+        if core::ptr::eq(self.font, self.fonts.base) || text.chars().all(|c| self.font.has_glyph(c))
+        {
+            return self.font.measure(text, size).ceil() as i32;
+        }
+        split_runs(text, |c| self.font.has_glyph(c))
+            .into_iter()
+            .map(|(fallback, run)| {
+                let f: &Font = if fallback { self.fonts.base } else { self.font };
+                f.measure(&run, size)
+            })
+            .sum::<f32>()
+            .ceil() as i32
     }
 
     fn text_height(&mut self) -> i32 {

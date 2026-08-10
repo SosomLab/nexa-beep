@@ -92,6 +92,12 @@ impl Font {
         self.inner.as_scaled(size).ascent()
     }
 
+    /// 이 폰트에 `c`의 글리프가 있는가(.notdef = 없음) — 슬롯 폴백 판단용(08-10).
+    #[must_use]
+    pub fn has_glyph(&self, c: char) -> bool {
+        self.inner.glyph_id(c).0 != 0
+    }
+
     /// `size`에서의 텍스트 상자 높이(어센트+디센트, px) — 세로 중앙 정렬 실측용.
     /// `line_height`와 달리 줄 간격(line gap)을 빼서 한 줄 배치에 쓴다.
     #[must_use]
