@@ -295,6 +295,10 @@ pub struct ChatViewWidget {
     thread_bars: ScrollBars,
     /// 입력창 오버레이 스크롤바(4줄 초과 시).
     input_bars: ScrollBars,
+    /// paint가 캐시하는 풍선 히트 rect(→ 항목 인덱스) — 우클릭 복사용.
+    hit_rects: RefCell<Vec<(Rect, usize)>>,
+    /// 우클릭 복사 요청(1회성) — 호스트가 OS 클립보드에 쓴다.
+    copy_out: Option<String>,
 }
 
 impl ChatViewWidget {
@@ -321,7 +325,14 @@ impl ChatViewWidget {
             date_short: false,
             thread_bars: ScrollBars::new(),
             input_bars: ScrollBars::new(),
+            hit_rects: RefCell::new(Vec::new()),
+            copy_out: None,
         }
+    }
+
+    /// 우클릭으로 복사 요청된 메시지 본문(1회성 — 사용자 요청 08-10).
+    pub fn take_copy_text(&mut self) -> Option<String> {
+        self.copy_out.take()
     }
 
     /// 진행 중 전송 상태 지정(`None` = 진행 없음 — 줄이 사라진다).
@@ -697,16 +708,20 @@ impl Widget for ChatViewWidget {
         if count > INPUT_MAX_LINES && (!is_wheel || over_input) {
             let input = self.input_bar();
             let line_h = self.s(INPUT_LINE_H);
+            // 콘텐츠 높이에 상하 여백 포함 — 뷰포트(input.h)에도 여백이 들어 있어,
+            // 빼먹으면 최대 스크롤이 정확히 1줄 모자란다(사용자 재현 08-10).
+            let content_h = count as i32 * line_h + self.s(INPUT_PAD_V) * 2;
             let (_, ny, consumed) = self.input_bars.on_event(
                 ev,
                 input,
                 input.w,
-                count as i32 * line_h,
+                content_h,
                 0,
                 self.input_scroll as i32 * line_h,
                 self.scale,
             );
-            let nl = (ny / line_h.max(1)).max(0) as usize;
+            // 반올림 — 내림이면 경계에서 마지막 줄에 못 닿는다.
+            let nl = ((ny + line_h / 2) / line_h.max(1)).max(0) as usize;
             if nl != self.input_scroll {
                 self.input_scroll = nl.min(count.saturating_sub(INPUT_MAX_LINES));
                 inv.push(self.bounds);
@@ -839,14 +854,35 @@ impl Widget for ChatViewWidget {
             }
             InputEvent::MouseMove { x, y } => {
                 if self.dragging {
+                    // 영역 밖 드래그 = 자동 스크롤 — 가려진 윗줄/아랫줄까지 선택이
+                    // 이어진다(사용자 보완 요청 08-10).
+                    let input = self.input_bar();
+                    if y < input.y + self.s(INPUT_PAD_V) {
+                        self.input_scroll = self.input_scroll.saturating_sub(1);
+                    } else if y > input.bottom() - self.s(INPUT_PAD_V) {
+                        let max_top = self.input_line_count().saturating_sub(INPUT_MAX_LINES);
+                        self.input_scroll = (self.input_scroll + 1).min(max_top);
+                    }
                     if let Some(idx) = self.input_hit(x, y) {
                         self.input.set_caret(idx, true);
-                        inv.push(self.input_bar());
                     }
+                    inv.push(self.bounds);
                 }
             }
             InputEvent::MouseUp { .. } => {
                 self.dragging = false;
+            }
+            InputEvent::RightDown { x, y } => {
+                // 풍선 우클릭 = 그 메시지 복사(paint가 캐시한 히트 rect — 08-10).
+                let hit = self
+                    .hit_rects
+                    .borrow()
+                    .iter()
+                    .find(|(r, _)| r.contains(Point { x, y }))
+                    .map(|&(_, i)| i);
+                if let Some(i) = hit {
+                    self.copy_out = Some(self.body_text(&self.lines[i]));
+                }
             }
             InputEvent::SelectAll => {
                 self.input.key(EditKey::SelectAll, false);
@@ -868,59 +904,10 @@ impl Widget for ChatViewWidget {
     #[allow(clippy::too_many_lines)]
     fn paint(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
         ctx.fill_rect(self.bounds, theme.panel_bg);
-        // 헤더.
-        let head_h = self.s(34);
-        let head = Rect::new(self.bounds.x, self.bounds.y, self.bounds.w, head_h);
-        ctx.select_font(FontSlot::Base, false);
-        ctx.text_opaque(
-            head.x + self.s(12),
-            head.y + self.s(7),
-            head,
-            &self.title,
-            theme.text,
-            theme.chrome_bg,
-        );
-
-        // 전송 진척 줄 — 헤더 바로 아래(배치 합계 — 항목별 진행은 스레드 풍선에).
-        if let Some(xp) = self.xfer {
-            let row = Rect::new(head.x, head.bottom(), head.w, self.s(22));
-            ctx.fill_rect(row, theme.chrome_bg);
-            ctx.select_font(FontSlot::Status, false);
-            let sh = ctx.text_height();
-            let pct = (xp.ratio() * 100.0).round() as u32;
-            let label = format!(
-                "{} {pct}% · {} / {} ({}/{} 파일)",
-                if xp.sending { "전송" } else { "수신" },
-                human_bytes(xp.done_bytes),
-                human_bytes(xp.total_bytes),
-                xp.done_files,
-                xp.total_files
-            );
-            ctx.text(
-                row.x + self.s(12),
-                row.y + (row.h - sh) / 2,
-                row,
-                &label,
-                theme.text_dim,
-            );
-            let bar_w = self.s(90);
-            let bar_h = self.s(5);
-            let bx = row.right() - bar_w - self.s(12);
-            let by = row.y + (row.h - bar_h) / 2;
-            ctx.fill_round_rect(
-                Rect::new(bx, by, bar_w, bar_h),
-                bar_h / 2,
-                theme.panel_bg_alt,
-            );
-            let fw = (bar_w as f32 * xp.ratio()).round() as i32;
-            if fw > 0 {
-                ctx.fill_round_rect(
-                    Rect::new(bx, by, fw, bar_h),
-                    bar_h / 2,
-                    if xp.sending { theme.accent } else { theme.ok },
-                );
-            }
-        }
+        // ⚠️ 그리기 순서 = 스레드 먼저, **헤더는 마지막**(사용자 버그 지적 08-10 —
+        // 스크롤로 잘린 풍선이 타이틀 위로 올라와 보였다. 헤더가 위 레이어가 되어 덮는다.
+        // 그룹 대화의 참여자 목록/커스텀 타이틀도 같은 헤더 영역이고, 스크롤 영역은
+        // 그 아래부터다 — thread_viewport가 이미 그렇게 자른다).
 
         // ── 스레드(말풍선) — 전체 레이아웃을 계산해 총 높이를 캐시하고, 보이는 것만 그린다 ──
         let vp = self.thread_viewport();
@@ -985,6 +972,7 @@ impl Widget for ChatViewWidget {
         let scroll = self.scroll.clamp(0, (content - vp.h).max(0));
 
         // 2패스 — 그리기(top-down · 콘텐츠가 뷰포트보다 작으면 하단 정렬).
+        self.hit_rects.borrow_mut().clear();
         let mut y = if content >= vp.h {
             vp.y - (content - vp.h - scroll)
         } else {
@@ -1039,6 +1027,7 @@ impl Widget for ChatViewWidget {
                     (theme.panel_bg_alt, theme.text)
                 };
                 ctx.fill_round_rect(bub, self.s(9), bg);
+                self.hit_rects.borrow_mut().push((bub, b.entry)); // 우클릭 복사 히트
                 for (si, s) in b.lines.iter().enumerate() {
                     let ly = by0 + pad_v + si as i32 * line_h;
                     let clip = Rect::new(bub.x, ly, bub.w, line_h);
@@ -1097,6 +1086,60 @@ impl Widget for ChatViewWidget {
         let top_off = (content - vp.h - scroll).max(0);
         self.thread_bars
             .paint(ctx, theme, vp, vp.w, content, 0, top_off, self.scale);
+
+        // ── 헤더(맨 위 레이어 — 스크롤된 풍선을 덮는다 · 그룹 참여자 목록/타이틀 자리) ──
+        let head_h = self.s(34);
+        let head = Rect::new(self.bounds.x, self.bounds.y, self.bounds.w, head_h);
+        ctx.select_font(FontSlot::Base, false);
+        ctx.text_opaque(
+            head.x + self.s(12),
+            head.y + self.s(7),
+            head,
+            &self.title,
+            theme.text,
+            theme.chrome_bg,
+        );
+
+        // 전송 진척 줄 — 헤더 바로 아래(배치 합계 — 항목별 진행은 스레드 풍선에).
+        if let Some(xp) = self.xfer {
+            let row = Rect::new(head.x, head.bottom(), head.w, self.s(22));
+            ctx.fill_rect(row, theme.chrome_bg);
+            ctx.select_font(FontSlot::Status, false);
+            let sh = ctx.text_height();
+            let pct = (xp.ratio() * 100.0).round() as u32;
+            let label = format!(
+                "{} {pct}% · {} / {} ({}/{} 파일)",
+                if xp.sending { "전송" } else { "수신" },
+                human_bytes(xp.done_bytes),
+                human_bytes(xp.total_bytes),
+                xp.done_files,
+                xp.total_files
+            );
+            ctx.text(
+                row.x + self.s(12),
+                row.y + (row.h - sh) / 2,
+                row,
+                &label,
+                theme.text_dim,
+            );
+            let bar_w = self.s(90);
+            let bar_h = self.s(5);
+            let bx = row.right() - bar_w - self.s(12);
+            let by = row.y + (row.h - bar_h) / 2;
+            ctx.fill_round_rect(
+                Rect::new(bx, by, bar_w, bar_h),
+                bar_h / 2,
+                theme.panel_bg_alt,
+            );
+            let fw = (bar_w as f32 * xp.ratio()).round() as i32;
+            if fw > 0 {
+                ctx.fill_round_rect(
+                    Rect::new(bx, by, fw, bar_h),
+                    bar_h / 2,
+                    if xp.sending { theme.accent } else { theme.ok },
+                );
+            }
+        }
 
         // ── 입력창(멀티라인 · 상하 여백 동일 — 세로 중앙 정렬) ──
         let input = self.input_bar();

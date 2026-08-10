@@ -2073,6 +2073,19 @@ impl App {
     /// 대화 뷰에서 나온 발신·복귀를 처리한다. `peer` = 그 뷰의 상대.
     fn drain_chat_effects(&mut self, peer: PeerId, id: WindowId) {
         let mut inv = Invalidations::default();
+        // 풍선 우클릭 복사(08-10) — 위젯은 OS를 모르므로 여기서 클립보드에 쓴다.
+        if let Some(t) = self
+            .chats
+            .get_mut(&peer)
+            .and_then(ChatViewWidget::take_copy_text)
+        {
+            if nbeep_plat::clipboard::set_text(&t) {
+                self.status = "메시지 복사됨".into();
+                if let Some(mid) = self.main_id {
+                    self.request_redraw(mid);
+                }
+            }
+        }
         let outgoing = self
             .chats
             .get_mut(&peer)
@@ -3041,6 +3054,17 @@ impl ApplicationHandler<AppEvent> for App {
                         },
                         el,
                     );
+                }
+            }
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: MouseButton::Right,
+                ..
+            } => {
+                // 우클릭 — 대화 풍선 복사 등 컨텍스트 동작(08-10).
+                if let Some(e) = self.windows.get(&id) {
+                    let (x, y) = e.cursor;
+                    self.route(id, InputEvent::RightDown { x, y }, el);
                 }
             }
             WindowEvent::MouseInput {
