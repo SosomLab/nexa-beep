@@ -83,7 +83,6 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
     use nbeep_core::{
         chunks_of, ChatMessage, MessageBody, Sequencer, Session as _, XferInbox, XferMsg,
     };
-    use std::io::BufRead as _;
 
     /// stdin 스레드 → 네트 스레드 명령.
     enum Cmd {
@@ -403,11 +402,10 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
         }
     });
     let mut seq = Sequencer::new();
-    let stdin = std::io::stdin();
-    for line in stdin.lock().lines() {
-        let Ok(line) = line else { break };
-        if line.is_empty() {
-            continue;
+    // 입력 한 줄을 처리한다(명령 or 전송) — 계속하려면 true.
+    let mut handle_line = |line: String| -> bool {
+        if line.trim().is_empty() {
+            return true;
         }
         if let Some(path) = line.strip_prefix("/send ") {
             match std::fs::read(path.trim()) {
@@ -420,45 +418,106 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
                     );
                     let name = std::path::Path::new(path.trim())
                         .file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| "file".into());
-                    if out_tx
+                        .map_or_else(|| "file".to_string(), |n| n.to_string_lossy().into_owned());
+                    return out_tx
                         .send(Cmd::Offer {
                             id,
                             name,
                             sha,
                             bytes,
                         })
-                        .is_err()
-                    {
-                        break;
-                    }
+                        .is_ok();
                 }
                 Err(e) => println!("[파일] 읽기 실패: {e}"),
             }
-            continue;
+            return true;
         }
         if line.trim() == "/accept" {
-            if out_tx.send(Cmd::Accept).is_err() {
-                break;
-            }
-            continue;
+            return out_tx.send(Cmd::Accept).is_ok();
         }
         if line.trim() == "/reject" {
-            if out_tx.send(Cmd::Reject).is_err() {
-                break;
-            }
-            continue;
+            return out_tx.send(Cmd::Reject).is_ok();
         }
         let msg = ChatMessage {
             sender_device: me,
             seq: seq.issue(),
             body: MessageBody::Text(line),
         };
-        if out_tx.send(Cmd::Chat(msg.encode())).is_err() {
-            break;
+        out_tx.send(Cmd::Chat(msg.encode())).is_ok()
+    };
+
+    // ── 입력 루프 ──
+    // TTY면 **raw 모드**로 키를 직접 읽어 Shift+Enter(줄바꿈)를 Enter(전송)와 구분한다.
+    // 파이프 입력(자동화)이면 기존 줄 단위 경로를 그대로 쓴다.
+    let raw = nbeep_plat::term::RawTerm::enter();
+    if raw.is_raw() {
+        use nbeep_plat::term::{parse_key, TermKey};
+        use std::io::{Read as _, Write as _};
+        println!("[입력] Enter = 전송 · Shift+Enter = 줄바꿈(터미널이 지원할 때) · \\ 끝 = 줄바꿈 · Ctrl+D = 종료");
+        let mut stdin = std::io::stdin();
+        let mut pending = Vec::<u8>::new();
+        let mut line = String::new();
+        let mut chunk = [0u8; 256];
+        'outer: loop {
+            let n = match stdin.read(&mut chunk) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => n,
+            };
+            pending.extend_from_slice(&chunk[..n]);
+            // 버퍼에서 뗄 수 있는 키를 모두 처리한다.
+            while let Some((key, used)) = parse_key(&pending) {
+                pending.drain(..used);
+                match key {
+                    TermKey::Eof => break 'outer,
+                    TermKey::Enter => {
+                        // ★ 대체 수단: 줄 끝 `\`도 줄바꿈으로 친다 — Shift+Enter를
+                        //   보고하지 않는 터미널(macOS Terminal.app 등)에서도 여러 줄을 쓴다.
+                        if line.ends_with('\\') {
+                            line.pop();
+                            line.push('\n');
+                            print!("\r\n… ");
+                            let _ = std::io::stdout().flush();
+                            continue;
+                        }
+                        let sent = core::mem::take(&mut line);
+                        print!("\r\n");
+                        let _ = std::io::stdout().flush();
+                        if !handle_line(sent) {
+                            break 'outer;
+                        }
+                    }
+                    TermKey::ShiftEnter => {
+                        line.push('\n');
+                        print!("\r\n… ");
+                        let _ = std::io::stdout().flush();
+                    }
+                    TermKey::Backspace => {
+                        if line.pop().is_some() {
+                            // 지운 자리를 시각적으로 되돌린다.
+                            print!("\u{8} \u{8}");
+                            let _ = std::io::stdout().flush();
+                        }
+                    }
+                    TermKey::Char(c) => {
+                        line.push(c);
+                        print!("{c}");
+                        let _ = std::io::stdout().flush();
+                    }
+                    TermKey::Other => {}
+                }
+            }
+        }
+    } else {
+        use std::io::BufRead as _;
+        let stdin = std::io::stdin();
+        for line in stdin.lock().lines() {
+            let Ok(line) = line else { break };
+            if !handle_line(line) {
+                break;
+            }
         }
     }
+    drop(raw);
     drop(out_tx);
     let _ = net.join();
     println!("[끝]");
