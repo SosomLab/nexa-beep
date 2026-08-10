@@ -128,6 +128,25 @@ pub fn registry() -> &'static [Entry] {
             key: "chat.window_mode",
         },
         Entry {
+            cat: Msg::CatConversation,
+            sub: None,
+            label: Msg::Time24h,
+            desc: Msg::Time24hDesc,
+            kind: SettingKind::Toggle,
+            key: "chat.time_24h",
+        },
+        Entry {
+            cat: Msg::CatConversation,
+            sub: None,
+            label: Msg::DateFormat,
+            desc: Msg::DateFormatDesc,
+            kind: SettingKind::Radio(&[
+                ("iso", Msg::DateFormatIso),
+                ("short", Msg::DateFormatShort),
+            ]),
+            key: "chat.date_format",
+        },
+        Entry {
             cat: Msg::CatAppearance,
             sub: None,
             label: Msg::Theme,

@@ -272,6 +272,25 @@ fn unix_now() -> u64 {
         .map_or(0, |d| d.as_secs())
 }
 
+/// 스레드 기록용 타임스탬프 — **밀리초 원본 + 표시용 지역 벽시계**(사용자 확정 08-10:
+/// 보관은 전체 정밀도, 표시는 분 단위).
+fn now_stamp() -> (u64, nbeep_ui::WallTime) {
+    let ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
+    let lt = nbeep_plat::clock::local_time(ms / 1000);
+    (
+        ms,
+        nbeep_ui::WallTime {
+            y: lt.y,
+            mo: lt.mo,
+            d: lt.d,
+            h: lt.h,
+            m: lt.m,
+        },
+    )
+}
+
 /// 속도 표기(B/s → 사람이 읽는 단위).
 fn rate_label(bps: u64) -> String {
     if bps == 0 {
@@ -644,6 +663,8 @@ struct App {
     pending_jamo: Option<(WindowId, char, u64)>,
     /// OS 주 수식키(⌘/Ctrl) 눌림 상태 — `Cmd/Ctrl+,` 판정.
     primary_down: bool,
+    /// Shift 눌림 상태 — Shift+Enter 줄바꿈·Shift+이동 선택(08-10).
+    shift_down: bool,
     /// 세션 액터가 GUI를 깨우는 통로(M2-7).
     proxy: winit::event_loop::EventLoopProxy<AppEvent>,
     /// 수동 엔드포인트 입력 중 버퍼(DR-19 · `⌘/Ctrl+K`). None = 입력 아님.
@@ -1104,7 +1125,8 @@ impl App {
     /// 기록으로 남고, 뷰를 닫았다 열어도 복원된다(사용자 요청 08-10).
     fn push_xfer_line(&mut self, peer: PeerId, mine: bool, name: &str, size: u64) {
         // 파일명은 원격 제공 값일 수 있다 — 스레드 표시 전 무해화(RLO 등).
-        let line = ChatLine::xfer(mine, nbeep_core::sanitize_message(name), size);
+        let (at_ms, wall) = now_stamp();
+        let line = ChatLine::xfer(mine, nbeep_core::sanitize_message(name), size, at_ms, wall);
         if let Some(conv) = self.conversations.get_mut(&peer) {
             conv.lines.push(line.clone());
         }
@@ -1371,6 +1393,12 @@ impl App {
     fn build_chat_view(&self, peer: PeerId) -> ChatViewWidget {
         let mut chat = ChatViewWidget::new(self.peer_title(peer));
         let mut inv = Invalidations::default();
+        // 시각 표시 형식(설정 — 08-10).
+        chat.set_time_format(
+            self.settings.get("chat.time_24h") != "off",
+            self.settings.get("chat.date_format") == "short",
+            &mut inv,
+        );
         if let Some(conv) = self.conversations.get(&peer) {
             for line in &conv.lines {
                 chat.push_line(line.clone(), &mut inv);
@@ -1793,6 +1821,19 @@ impl App {
                     };
                     self.status = format!("창 모드 = {value} (새 대화부터 적용)");
                 }
+                // 시각 표시 형식(08-10) — 열린 대화 위젯 전부에 즉시 적용.
+                "chat.time_24h" | "chat.date_format" => {
+                    let h24 = self.settings.get("chat.time_24h") != "off";
+                    let short = self.settings.get("chat.date_format") == "short";
+                    let mut inv = Invalidations::default();
+                    for chat in self.chats.values_mut() {
+                        chat.set_time_format(h24, short, &mut inv);
+                    }
+                    let ids: Vec<WindowId> = self.windows.keys().copied().collect();
+                    for wid in ids {
+                        self.request_redraw(wid);
+                    }
+                }
                 "ui.theme" => {
                     self.theme = if value == "light" {
                         Theme::light()
@@ -2032,13 +2073,14 @@ impl App {
                 seq: self.seq.issue(),
                 body: nbeep_core::MessageBody::Text(text.as_str().to_string()),
             };
+            let (at_ms, wall) = now_stamp();
             if let Some(chat) = self.chats.get_mut(&peer) {
-                chat.push_line(ChatLine::text(true, text.clone()), &mut inv);
+                chat.push_line(ChatLine::text(true, text.clone(), at_ms, wall), &mut inv);
             }
             // 왕래 장부 — 파일 전송 자격(상호 확인)의 근거(사용자 확정 08-09).
             self.ledger.note_sent(peer);
             if let Some(conv) = self.conversations.get_mut(&peer) {
-                conv.lines.push(ChatLine::text(true, text));
+                conv.lines.push(ChatLine::text(true, text, at_ms, wall));
                 // 액터에 발신 요청 — 수신은 비동기로 AppEvent::Recv로 돌아온다(M2-7).
                 if conv.out_tx.send(SessionCmd::Chat(msg.encode())).is_err() {
                     self.status = "세션 종료됨".into();
@@ -2425,7 +2467,8 @@ impl ApplicationHandler<AppEvent> for App {
                     return; // 중복(다중 경로 — FR-M-9)
                 }
                 self.ledger.note_recv(peer); // 왕래 장부(상호 확인)
-                let line = ChatLine::text(false, text);
+                let (at_ms, wall) = now_stamp();
+                let line = ChatLine::text(false, text, at_ms, wall);
                 if let Some(conv) = self.conversations.get_mut(&peer) {
                     conv.lines.push(line.clone());
                 }
@@ -2841,6 +2884,17 @@ impl ApplicationHandler<AppEvent> for App {
                 }
             }
         }
+        // 대화 스레드·입력창 스크롤바 페이드 틱(~5Hz · 08-10).
+        {
+            let peers: Vec<PeerId> = self
+                .chats
+                .iter_mut()
+                .filter_map(|(p, c)| c.tick().then_some(*p))
+                .collect();
+            for p in peers {
+                self.redraw_conversation(p);
+            }
+        }
         // 오버레이 스크롤바 페이드 틱(~5Hz) — 상태 변화 시 갤러리 재그리기.
         if let Some(gv) = &mut self.gallery_view {
             if gv.tick() {
@@ -2996,6 +3050,8 @@ impl ApplicationHandler<AppEvent> for App {
                 } else {
                     st.control_key()
                 };
+                // Shift 상태 — Shift+Enter 줄바꿈·Shift+이동 선택에 쓴다(08-10).
+                self.shift_down = st.shift_key();
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 if event.state != ElementState::Pressed {
@@ -3024,6 +3080,44 @@ impl ApplicationHandler<AppEvent> for App {
                             // 텍스트 기본 단축키 — 전체 선택(사용자 지적 08-09).
                             "a" | "A" => {
                                 self.route(id, InputEvent::SelectAll, el);
+                                return;
+                            }
+                            // 복사/잘라내기/붙여넣기 — 대화 입력창 ↔ OS 클립보드(08-10 ·
+                            // ui는 OS를 모른다 — plat 어댑터가 잇는다).
+                            "c" | "C" => {
+                                if let Some(t) = self
+                                    .chat_peer_for(id)
+                                    .and_then(|p| self.chats.get(&p))
+                                    .and_then(ChatViewWidget::copy_selection)
+                                {
+                                    if nbeep_plat::clipboard::set_text(&t) {
+                                        self.status = "복사됨".into();
+                                    }
+                                }
+                                return;
+                            }
+                            "x" | "X" => {
+                                let mut inv = Invalidations::default();
+                                if let Some(t) = self
+                                    .chat_peer_for(id)
+                                    .and_then(|p| self.chats.get_mut(&p))
+                                    .and_then(|c| c.cut_selection(&mut inv))
+                                {
+                                    nbeep_plat::clipboard::set_text(&t);
+                                    self.request_redraw(id);
+                                }
+                                return;
+                            }
+                            "v" | "V" => {
+                                if let Some(peer) = self.chat_peer_for(id) {
+                                    if let Some(t) = nbeep_plat::clipboard::get_text() {
+                                        let mut inv = Invalidations::default();
+                                        if let Some(c) = self.chats.get_mut(&peer) {
+                                            c.paste(&t, &mut inv);
+                                        }
+                                        self.request_redraw(id);
+                                    }
+                                }
                                 return;
                             }
                             "y" | "Y" => {
@@ -3084,6 +3178,8 @@ impl ApplicationHandler<AppEvent> for App {
                 let key = match &event.logical_key {
                     WKey::Named(NamedKey::ArrowUp) => Some(Key::Up),
                     WKey::Named(NamedKey::ArrowDown) => Some(Key::Down),
+                    WKey::Named(NamedKey::ArrowLeft) => Some(Key::Left),
+                    WKey::Named(NamedKey::ArrowRight) => Some(Key::Right),
                     WKey::Named(NamedKey::PageUp) => Some(Key::PageUp),
                     WKey::Named(NamedKey::PageDown) => Some(Key::PageDown),
                     WKey::Named(NamedKey::Home) => Some(Key::Home),
@@ -3098,8 +3194,8 @@ impl ApplicationHandler<AppEvent> for App {
                         id,
                         InputEvent::Key {
                             key,
-                            shift: false,
-                            primary: false,
+                            shift: self.shift_down,
+                            primary: self.primary_down,
                         },
                         el,
                     );
@@ -3311,6 +3407,7 @@ pub(crate) fn run(mode: WindowMode, live: bool) {
         ime_composing: false,
         pending_jamo: None,
         primary_down: false,
+        shift_down: false,
         proxy,
         adding: None,
         shutdown,
