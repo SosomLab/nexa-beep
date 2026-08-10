@@ -1,0 +1,16 @@
+Package: nexa-beep
+Version: @VERSION@
+Section: net
+Priority: optional
+Architecture: amd64
+Maintainer: Sangyong Bae <kiros33@gmail.com>
+Installed-Size: @SIZE@
+Depends: libc6 (>= 2.31)
+Recommends: libx11-6, libxkbcommon0, libwayland-client0
+Homepage: https://github.com/SosomLab/nexa-beep
+Description: 제로 컨피그 로컬 네트워크 메신저
+ 서버 주소 입력·계정 생성·상대 등록이 없습니다. 실행하면 같은 로컬 네트워크에서
+ 실행 중인 사용자가 자동으로 목록에 나타나고, 고르면 즉시 대화합니다.
+ .
+ 메시지는 단말 간에 암호화되며(E2E), 수신한 파일은 무해화 게이트를 거쳐야
+ 실체화됩니다. 런타임 의존이 없는 단일 실행 파일입니다.

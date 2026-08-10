@@ -1,0 +1,404 @@
+# release — 4타깃 배포 산출물(설치본 + 포터블) · GitHub Releases 게시
+#
+# 채널은 DR-4 그대로 **설치본 + 포터블 2채널**이고, 타깃은 DR-3 그대로
+# **Windows(x64·ARM64) · macOS(Apple Silicon·Intel) · Linux(x86_64)** 다.
+# 두 채널 모두 **zip으로도** 올린다(사용자 요청 08-11) — 설치본 원본(.exe/.dmg/.deb)과
+# 그 zip을 함께 제공하므로, 브라우저·사내 프록시가 실행 파일 확장자를 막아도 받을 수 있다.
+#
+# ⚠️ **서명하지 않는다**(v1) — 코드 서명 인증서가 없다. macOS Gatekeeper와
+# Windows SmartScreen이 경고를 띄우며, 릴리스 노트에 우회 방법을 **숨기지 않고** 적는다.
+# 서명은 배포 신뢰의 문제라 "나중에 조용히"가 아니라 별도 결정으로 다뤄야 한다.
+name: release
+
+# ★ **자동 배포는 꺼져 있다**(사용자 확정 08-11 — 첫 배포는 수기).
+# 태그를 밀어도 아무 일이 일어나지 않는다. 릴리스는 Actions에서 이 워크플로를
+# 손으로 실행할 때만 만들어지고, 기본은 **초안(draft)** 이라 사람이 눌러야 공개된다.
+# 자동화로 되돌리려면 아래 `push: tags` 블록의 주석을 풀면 된다.
+on:
+  # push:
+  #   tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "릴리스 태그(예: v0.1.0) — 없으면 커밋 SHA로 초안 생성"
+        required: false
+        type: string
+      publish:
+        description: "초안이 아니라 바로 공개할지 — 기본은 초안"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write # 릴리스 생성·자산 업로드
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  # ── 버전 산정: 태그 → 0.1.0 / 수동 실행 → 0.1.0-dev.<sha> ─────────
+  meta:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+      prerelease: ${{ steps.v.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        shell: bash
+        run: |
+          set -euo pipefail
+          input_tag="${{ inputs.tag }}"
+          if [ -n "${GITHUB_REF_NAME:-}" ] && [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            tag="$GITHUB_REF_NAME"
+          elif [ -n "$input_tag" ]; then
+            tag="$input_tag"
+          else
+            tag="v0.0.0-dev.${GITHUB_SHA::7}"
+          fi
+          version="${tag#v}"
+          # 하이픈이 있으면 사전 배포(0.1.0-rc.1 등) — 정식 릴리스로 표시하지 않는다.
+          case "$version" in *-*) pre=true ;; *) pre=false ;; esac
+          echo "tag=$tag"        >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$pre"  >> "$GITHUB_OUTPUT"
+          echo "릴리스 $tag (버전 $version · prerelease=$pre)"
+
+  # ── 타깃별 빌드 + 포장 ────────────────────────────────────────────
+  package:
+    needs: meta
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            slug: windows-x64
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            slug: windows-arm64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            slug: macos-arm64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            slug: macos-x64
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            slug: linux-x64
+    runs-on: ${{ matrix.os }}
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+      TARGET: ${{ matrix.target }}
+      SLUG: ${{ matrix.slug }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+
+      - name: 타깃 추가
+        run: rustup target add ${{ matrix.target }}
+
+      - name: 릴리스 빌드
+        run: cargo build --release -p nexa-beep --target ${{ matrix.target }}
+
+      # 예산 게이트를 릴리스 산출물에도 건다 — CI에서 통과한 것과 **같은 바이너리**여야
+      # 한다(NFR-B-3 ≤10MB). 여기서 넘치면 배포를 멈추는 게 맞다.
+      - name: 크기 게이트(≤10MB · NFR-B-3)
+        shell: bash
+        run: |
+          set -euo pipefail
+          bin="target/$TARGET/release/nexa-beep"
+          [ "${{ runner.os }}" = "Windows" ] && bin="$bin.exe"
+          size=$(wc -c < "$bin")
+          printf '%s: %d bytes (%.2f MB)\n' "$TARGET" "$size" "$(awk "BEGIN{print $size/1048576}")"
+          [ "$size" -le $((10*1024*1024)) ] || { echo "::error::$TARGET > 10MB(NFR-B-3)"; exit 1; }
+
+      # ── 포터블(공통) — 압축 풀면 바로 실행(DR-4) ──
+      - name: 포터블 구성
+        shell: bash
+        run: |
+          set -euo pipefail
+          name="nexa-beep-$VERSION-$SLUG-portable"
+          mkdir -p "dist/$name"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp "target/$TARGET/release/nexa-beep.exe" "dist/$name/"
+          else
+            cp "target/$TARGET/release/nexa-beep" "dist/$name/"
+            chmod +x "dist/$name/nexa-beep"
+          fi
+          cp README.md LICENSE.md LICENSE.ko.md "dist/$name/"
+          echo "PORTABLE_NAME=$name" >> "$GITHUB_ENV"
+
+      - name: 포터블 zip
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          cd dist
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            powershell -NoProfile -Command "Compress-Archive -Path '$env:PORTABLE_NAME' -DestinationPath '../out/$env:PORTABLE_NAME.zip' -Force"
+          else
+            zip -qr "../out/$PORTABLE_NAME.zip" "$PORTABLE_NAME"
+          fi
+
+      # ── 설치본: Windows = NSIS ──
+      - name: NSIS 설치
+        if: runner.os == 'Windows'
+        run: choco install nsis -y --no-progress
+
+      - name: Windows 설치본(.exe) + zip
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/nsis
+          cp "target/$TARGET/release/nexa-beep.exe" build/nsis/
+          cp packaging/branding/nexa-beep.ico build/nsis/
+          cp README.md LICENSE.md build/nsis/
+          sed -e "s/@VERSION@/$VERSION/g" -e "s/@SLUG@/$SLUG/g" \
+              packaging/windows/installer.nsi > build/nsis/installer.nsi
+          "/c/Program Files (x86)/NSIS/makensis.exe" -V2 build/nsis/installer.nsi
+          setup="nexa-beep-$VERSION-$SLUG-setup.exe"
+          mv "build/nsis/$setup" "out/$setup"
+          powershell -NoProfile -Command "Compress-Archive -Path 'out/$setup' -DestinationPath 'out/$setup.zip' -Force"
+
+      # ── 설치본: macOS = .app 번들 → .dmg ──
+      - name: macOS 설치본(.dmg) + zip
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="build/Nexa Beep.app"
+          mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+          cp "target/$TARGET/release/nexa-beep" "$app/Contents/MacOS/nexa-beep"
+          chmod +x "$app/Contents/MacOS/nexa-beep"
+          sed "s/@VERSION@/$VERSION/g" packaging/macos/Info.plist > "$app/Contents/Info.plist"
+          # .icns는 PNG에서 만든다(iconutil = OS 내장 · 추가 도구 0).
+          iconset=build/AppIcon.iconset
+          mkdir -p "$iconset"
+          sips -z 16 16   packaging/branding/nexa-beep-1024.png --out "$iconset/icon_16x16.png"      >/dev/null
+          sips -z 32 32   packaging/branding/nexa-beep-1024.png --out "$iconset/icon_16x16@2x.png"   >/dev/null
+          sips -z 32 32   packaging/branding/nexa-beep-1024.png --out "$iconset/icon_32x32.png"      >/dev/null
+          sips -z 64 64   packaging/branding/nexa-beep-1024.png --out "$iconset/icon_32x32@2x.png"   >/dev/null
+          sips -z 128 128 packaging/branding/nexa-beep-1024.png --out "$iconset/icon_128x128.png"    >/dev/null
+          sips -z 256 256 packaging/branding/nexa-beep-1024.png --out "$iconset/icon_128x128@2x.png" >/dev/null
+          sips -z 256 256 packaging/branding/nexa-beep-1024.png --out "$iconset/icon_256x256.png"    >/dev/null
+          sips -z 512 512 packaging/branding/nexa-beep-1024.png --out "$iconset/icon_256x256@2x.png" >/dev/null
+          sips -z 512 512 packaging/branding/nexa-beep-1024.png --out "$iconset/icon_512x512.png"    >/dev/null
+          cp packaging/branding/nexa-beep-1024.png "$iconset/icon_512x512@2x.png"
+          iconutil -c icns "$iconset" -o "$app/Contents/Resources/AppIcon.icns"
+          # DMG — 드래그 설치가 되도록 /Applications 별칭을 같이 담는다.
+          root=build/dmgroot
+          mkdir -p "$root"
+          cp -R "$app" "$root/"
+          ln -s /Applications "$root/Applications"
+          cp README.md LICENSE.md "$root/"
+          dmg="nexa-beep-$VERSION-$SLUG.dmg"
+          hdiutil create -volname "Nexa Beep $VERSION" -srcfolder "$root" -ov -format UDZO "out/$dmg" >/dev/null
+          (cd out && zip -q "$dmg.zip" "$dmg")
+
+      # ── 설치본: Linux = .deb ──
+      - name: Linux 설치본(.deb) + zip
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          pkg="build/deb"
+          mkdir -p "$pkg/DEBIAN" "$pkg/usr/bin" \
+                   "$pkg/usr/share/applications" \
+                   "$pkg/usr/share/icons/hicolor/256x256/apps" \
+                   "$pkg/usr/share/doc/nexa-beep"
+          install -m 0755 "target/$TARGET/release/nexa-beep" "$pkg/usr/bin/nexa-beep"
+          install -m 0644 packaging/linux/nexa-beep.desktop "$pkg/usr/share/applications/nexa-beep.desktop"
+          install -m 0644 packaging/branding/nexa-beep-256.png "$pkg/usr/share/icons/hicolor/256x256/apps/nexa-beep.png"
+          install -m 0644 README.md LICENSE.md "$pkg/usr/share/doc/nexa-beep/"
+          size_kb=$(du -sk "$pkg/usr" | cut -f1)
+          sed -e "s/@VERSION@/$VERSION/g" -e "s/@SIZE@/$size_kb/g" \
+              packaging/linux/control > "$pkg/DEBIAN/control"
+          deb="nexa-beep-${VERSION}-${SLUG}.deb"
+          dpkg-deb --build --root-owner-group "$pkg" "out/$deb" >/dev/null
+          (cd out && zip -q "$deb.zip" "$deb")
+
+      - name: 산출물 목록
+        shell: bash
+        run: ls -lh out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.slug }}
+          path: out/*
+          if-no-files-found: error
+
+  # ── 릴리스 게시 ───────────────────────────────────────────────────
+  publish:
+    needs: [meta, package]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: staged
+          pattern: dist-*
+          merge-multiple: true
+
+      # ── winget · Chocolatey 매니페스트(설치본 + 포터블 각각) ──
+      # 여기서 **실제 산출물의 SHA256으로 채운다** — 손으로 적으면 언젠가 틀리고,
+      # 체크섬이 틀린 매니페스트는 사용자 기기에서 설치 실패로 나타난다.
+      # 제출은 수기다(사용자 확정 08-11): 아래 결과물을 각 저장소에 PR로 올린다.
+      #   winget → microsoft/winget-pkgs · choco → `choco push`(API 키 필요)
+      - name: winget · choco 매니페스트 생성
+        shell: bash
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          sum() { sha256sum "staged/$1" | cut -d" " -f1; }
+          WIN_X64_SETUP=$(sum "nexa-beep-$VERSION-windows-x64-setup.exe")
+          WIN_ARM_SETUP=$(sum "nexa-beep-$VERSION-windows-arm64-setup.exe")
+          WIN_X64_PORT=$(sum "nexa-beep-$VERSION-windows-x64-portable.zip")
+          WIN_ARM_PORT=$(sum "nexa-beep-$VERSION-windows-arm64-portable.zip")
+          DATE=$(date -u +%Y-%m-%d)
+
+          fill() {
+            sed -e "s/@VERSION@/$VERSION/g" \
+                -e "s/@DATE@/$DATE/g" \
+                -e "s/@SHA_WIN_X64_SETUP@/$WIN_X64_SETUP/g" \
+                -e "s/@SHA_WIN_ARM64_SETUP@/$WIN_ARM_SETUP/g" \
+                -e "s/@SHA_WIN_X64_PORTABLE@/$WIN_X64_PORT/g" \
+                -e "s/@SHA_WIN_ARM64_PORTABLE@/$WIN_ARM_PORT/g" \
+                "$1" > "$2"
+          }
+
+          # winget: microsoft/winget-pkgs의 경로 규약대로 담아 둔다(그대로 복사 제출).
+          for ch in installer portable; do
+            id="SosomLab.NexaBeep"; [ "$ch" = portable ] && id="SosomLab.NexaBeep.Portable"
+            # winget-pkgs 경로 규약 = 소문자 첫 글자 / 식별자의 **점을 디렉터리로** 편다
+            #   SosomLab.NexaBeep          → s/SosomLab/NexaBeep/<ver>
+            #   SosomLab.NexaBeep.Portable → s/SosomLab/NexaBeep/Portable/<ver>
+            dir="manifests/winget/manifests/s/$(echo "$id" | tr '.' '/')/$VERSION"
+            mkdir -p "$dir"
+            fill "packaging/winget/$ch/version.yaml"   "$dir/$id.yaml"
+            fill "packaging/winget/$ch/locale.yaml"    "$dir/$id.locale.ko-KR.yaml"
+            fill "packaging/winget/$ch/installer.yaml" "$dir/$id.installer.yaml"
+          done
+
+          # choco: 그대로 `choco pack` 할 수 있는 형태로.
+          for ch in installer portable; do
+            pkg="nexa-beep"; [ "$ch" = portable ] && pkg="nexa-beep-portable"
+            dir="manifests/choco/$pkg"
+            mkdir -p "$dir/tools"
+            fill "packaging/choco/$ch/$pkg.nuspec"                "$dir/$pkg.nuspec"
+            fill "packaging/choco/$ch/tools/chocolateyinstall.ps1"   "$dir/tools/chocolateyinstall.ps1"
+            fill "packaging/choco/$ch/tools/chocolateyuninstall.ps1" "$dir/tools/chocolateyuninstall.ps1"
+          done
+
+          # 남은 치환자가 있으면 **여기서 멈춘다** — 체크섬 자리에 @가 남은 매니페스트가
+          # 제출되면 설치가 깨진다. 조용히 넘어가면 안 되는 종류의 실수다.
+          if grep -rn "@[A-Z_]*@" manifests; then
+            echo "::error::치환되지 않은 자리표시자가 남았다"; exit 1
+          fi
+          find manifests -type f | sort
+          (cd manifests && zip -qr "../staged/nexa-beep-$VERSION-package-manifests.zip" .)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-manifests
+          path: manifests/**
+          if-no-files-found: error
+
+      # 무결성 확인 수단을 **같이** 준다 — 서명이 없는 배포에서 사용자가 가진
+      # 유일한 검증 수단이다(다운로드가 바뀌지 않았음은 확인할 수 있다).
+      # ★ 매니페스트 zip까지 staged에 들어온 **뒤에** 만든다 — 먼저 만들면 그 파일만
+      #   목록에서 빠져, 하필 체크섬을 확인하려는 사람에게 구멍으로 보인다.
+      - name: SHA256SUMS
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd staged
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: 릴리스 노트
+        shell: bash
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          cat > notes.md <<EOF
+          # Nexa Beep $VERSION
+
+          제로 컨피그 로컬 네트워크 메신저 — 실행하면 같은 LAN의 사용자가 자동으로 목록에 뜬다.
+
+          ## 받을 파일 고르기
+
+          | 운영체제 | 설치본 | 포터블(압축 해제 후 바로 실행) |
+          | --- | --- | --- |
+          | Windows x64 | \`...windows-x64-setup.exe\` | \`...windows-x64-portable.zip\` |
+          | Windows ARM64 | \`...windows-arm64-setup.exe\` | \`...windows-arm64-portable.zip\` |
+          | macOS (Apple Silicon) | \`...macos-arm64.dmg\` | \`...macos-arm64-portable.zip\` |
+          | macOS (Intel) | \`...macos-x64.dmg\` | \`...macos-x64-portable.zip\` |
+          | Linux x86_64 | \`...linux-x64.deb\` | \`...linux-x64-portable.zip\` |
+
+          설치본에는 **같은 파일의 \`.zip\` 버전**도 함께 올려 두었다(실행 파일 확장자를
+          막는 브라우저·사내 프록시 대비).
+
+          ## 패키지 관리자 (Windows)
+
+          \`\`\`powershell
+          winget install SosomLab.NexaBeep              # 설치본
+          winget install SosomLab.NexaBeep.Portable     # 포터블(shim만 등록)
+          choco  install nexa-beep                      # 설치본
+          choco  install nexa-beep-portable             # 포터블
+          \`\`\`
+
+          ⚠️ **첫 배포는 등록 심사 중일 수 있다** — 이 릴리스에 함께 올린
+          \`...package-manifests.zip\`이 실제 제출본이며, winget-pkgs PR과
+          Chocolatey 심사가 통과해야 위 명령이 동작한다.
+
+          ## ⚠️ 서명하지 않은 배포다
+
+          코드 서명 인증서가 없어 **macOS Gatekeeper와 Windows SmartScreen이 경고**한다.
+          숨기지 않고 적는다 — 경고를 무시하는 습관은 그 자체가 보안 위험이므로,
+          받은 파일이 맞는지 \`SHA256SUMS.txt\`로 먼저 확인하길 권한다.
+
+          - macOS: 처음 실행 시 **우클릭 → 열기**, 또는
+            \`xattr -dr com.apple.quarantine "/Applications/Nexa Beep.app"\`
+          - Windows: SmartScreen 화면에서 **추가 정보 → 실행**
+
+          ## 이 버전의 한계 (알고 받으시라)
+
+          - **설정값이 저장되지 않는다** — 재시작하면 기본값으로 돌아간다(M3-15 · 설계 확정 대기).
+          - **신뢰 핀(TOFU)이 메모리 전용** — 재시작하면 상대가 다시 "미검증"이 된다(M2-5a).
+          - **포터블/설치본의 동작 차이는 아직 없다** — 저장하는 것이 없어서다.
+            채널만 먼저 갈라 두었고, 데이터 위치 분리는 설정 영속과 함께 들어간다.
+          - **전송 완료가 종단 확인이 아니다** — 발신 "완료"는 소켓에 쓴 시점이다(M4-9).
+          - v1은 **로컬 직접 전송만** — 릴레이는 이후 별도 서버(\`nexa-beepd\`).
+
+          라이선스: PolyForm Noncommercial 1.0.0 (비상업적 사용).
+          EOF
+          cat notes.md
+
+      - name: 게시
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.meta.outputs.tag }}
+          PRE: ${{ needs.meta.outputs.prerelease }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(--title "Nexa Beep ${TAG#v}" --notes-file notes.md --target "$GITHUB_SHA")
+          [ "$PRE" = "true" ] && args+=(--prerelease)
+          # 기본은 **초안** — 수기 배포 방침(08-11)이라 사람이 확인하고 공개한다.
+          if [ "${{ inputs.publish }}" != "true" ]; then
+            args+=(--draft)
+            echo "초안으로 만든다 — 확인 후 GitHub에서 'Publish release'를 누르면 공개된다."
+          fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" staged/* --clobber
+          else
+            gh release create "$TAG" staged/* "${args[@]}"
+          fi

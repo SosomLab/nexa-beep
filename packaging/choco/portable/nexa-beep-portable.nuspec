@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
+  <metadata>
+    <id>nexa-beep-portable</id>
+    <version>@VERSION@</version>
+    <packageSourceUrl>https://github.com/SosomLab/nexa-beep/tree/main/packaging/choco/portable</packageSourceUrl>
+    <owners>SosomLab</owners>
+    <title>Nexa Beep (Portable)</title>
+    <authors>Sangyong Bae</authors>
+    <projectUrl>https://github.com/SosomLab/nexa-beep</projectUrl>
+    <iconUrl>https://raw.githubusercontent.com/SosomLab/nexa-beep/main/packaging/branding/nexa-beep-256.png</iconUrl>
+    <licenseUrl>https://github.com/SosomLab/nexa-beep/blob/main/LICENSE.md</licenseUrl>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <projectSourceUrl>https://github.com/SosomLab/nexa-beep</projectSourceUrl>
+    <bugTrackerUrl>https://github.com/SosomLab/nexa-beep/issues</bugTrackerUrl>
+    <releaseNotes>https://github.com/SosomLab/nexa-beep/releases/tag/v@VERSION@</releaseNotes>
+    <tags>chat lan messenger p2p zero-config</tags>
+    <summary>제로 컨피그 로컬 네트워크 메신저</summary>
+    <description>
+서버 주소 입력·계정 생성·상대 등록이 없습니다. 실행하면 같은 로컬 네트워크에서
+실행 중인 사용자가 자동으로 목록에 나타나고, 고르면 즉시 대화합니다.
+
+메시지는 단말 간에 암호화되며(E2E), 수신한 파일은 무해화 게이트를 거쳐야
+실체화됩니다. 런타임 의존이 없는 단일 실행 파일입니다.
+
+라이선스: PolyForm Noncommercial 1.0.0 (비상업적 사용).
+    </description>
+  </metadata>
+  <files>
+    <file src="tools\**" target="tools" />
+  </files>
+</package>

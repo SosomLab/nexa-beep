@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key>                 <string>Nexa Beep</string>
+  <key>CFBundleDisplayName</key>          <string>Nexa Beep</string>
+  <key>CFBundleIdentifier</key>           <string>io.github.sosomlab.nexa-beep</string>
+  <key>CFBundleExecutable</key>           <string>nexa-beep</string>
+  <key>CFBundleIconFile</key>             <string>AppIcon</string>
+  <key>CFBundleVersion</key>              <string>@VERSION@</string>
+  <key>CFBundleShortVersionString</key>   <string>@VERSION@</string>
+  <key>CFBundlePackageType</key>          <string>APPL</string>
+  <key>LSMinimumSystemVersion</key>       <string>11.0</string>
+  <key>NSHighResolutionCapable</key>      <true/>
+  <!-- 같은 LAN의 상대를 스스로 찾는 것이 제품의 정체성이다(DR-1) — macOS는 그 접근에
+       사용자 동의를 요구하므로, 무엇을 왜 하는지 그대로 적는다. -->
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>같은 네트워크에서 실행 중인 사용자를 찾아 대화하기 위해 로컬 네트워크를 사용합니다. 대화 내용은 단말 간에 암호화되며 외부 서버로 전송하지 않습니다.</string>
+  <key>NSBonjourServices</key>
+  <array><string>_nexabeep._udp</string><string>_nexabeep._tcp</string></array>
+</dict>
+</plist>

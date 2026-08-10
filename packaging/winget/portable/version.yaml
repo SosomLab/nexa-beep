@@ -1,0 +1,6 @@
+# winget 매니페스트 — 포터블. @플레이스홀더@는 릴리스 워크플로가 치환한다.
+PackageIdentifier: SosomLab.NexaBeep.Portable
+PackageVersion: "@VERSION@"
+DefaultLocale: ko-KR
+ManifestType: version
+ManifestVersion: 1.6.0
