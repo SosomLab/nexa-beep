@@ -37,6 +37,10 @@ pub struct QRow {
     pub size: u64,
     /// 발신자 신뢰 상태(같은 화면에 표시 — [docs/11] §7 공통).
     pub trust: TrustLevel,
+    /// 보낸 사람(표시 이름 + 지문 — 호스트가 채운다 · 무해화는 신원 무관이지만 출처 표시는 판단에 유용).
+    pub from: String,
+    /// 수신 시각(표시 문자열 — 호스트가 채운다).
+    pub when: String,
     /// `.beepq` 경로(호스트가 행을 되찾는 열쇠).
     pub path: String,
 }
@@ -48,6 +52,8 @@ pub enum QAction {
     Approve(String),
     /// 거부 — 격리물 삭제.
     Reject(String),
+    /// 격리함 비우기 — **전부 삭제**(2단계 확인을 통과한 상태 · 사용자 요청 08-10).
+    Clear,
 }
 
 /// 행 높이(논리 px).
@@ -94,8 +100,11 @@ pub struct QuarantineWidget {
     sel: usize,
     /// 🔴 실행형 2단계 확인 중(고지 → 재확인).
     confirming: bool,
+    /// 비우기 2단계 확인 중(전부 삭제는 파괴적 — 승인과 같은 문법).
+    confirming_clear: bool,
     approve: Button,
     reject: Button,
+    clear: Button,
     action: Option<QAction>,
     back: bool,
     /// 호스트가 넣는 결과 문장(승인·삭제 결과) — 등급 안내보다 우선 표시.
@@ -115,8 +124,10 @@ impl QuarantineWidget {
             rows,
             sel: 0,
             confirming: false,
+            confirming_clear: false,
             approve: Button::new(t(Msg::QApprove)),
             reject: Button::new(t(Msg::QReject)),
+            clear: Button::new(t(Msg::QClear)),
             action: None,
             back: false,
             message: None,
@@ -145,6 +156,7 @@ impl QuarantineWidget {
         self.sel = self.sel.min(rows.len().saturating_sub(1));
         self.rows = rows;
         self.confirming = false;
+        self.confirming_clear = false;
         inv.push(self.bounds);
     }
 
@@ -153,6 +165,7 @@ impl QuarantineWidget {
         self.scale = scale.max(0.5);
         self.approve.set_scale(self.scale);
         self.reject.set_scale(self.scale);
+        self.clear.set_scale(self.scale);
         inv.push(self.bounds);
     }
 
@@ -202,8 +215,24 @@ impl QuarantineWidget {
         if let Some(row) = self.selected() {
             self.action = Some(QAction::Reject(row.path.clone()));
             self.confirming = false;
+            self.confirming_clear = false;
             inv.push(self.bounds);
         }
+    }
+
+    /// 비우기 누름 — **2단계**(첫 누름 = 고지, 두 번째 = 전부 삭제 확정).
+    fn press_clear(&mut self, inv: &mut Invalidations) {
+        if self.rows.is_empty() {
+            return;
+        }
+        if self.confirming_clear {
+            self.action = Some(QAction::Clear);
+            self.confirming_clear = false;
+        } else {
+            self.confirming_clear = true;
+            self.confirming = false;
+        }
+        inv.push(self.bounds);
     }
 
     fn bar_rect(&self) -> Rect {
@@ -229,18 +258,27 @@ impl Widget for QuarantineWidget {
         );
         self.reject
             .set_bounds(Rect::new(bar.right() - bw - self.s(10), by, bw, bh), inv);
+        // 비우기 — 좌측(개별 행 동작과 시각적으로 분리).
+        self.clear
+            .set_bounds(Rect::new(bar.x + self.s(10), by, bw, bh), inv);
         inv.push(bounds);
     }
 
     fn on_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
         self.approve.on_event(ev, inv);
         self.reject.on_event(ev, inv);
+        self.clear.on_event(ev, inv);
         if self.approve.take_clicked() {
+            self.confirming_clear = false;
             self.press_approve(inv);
             return;
         }
         if self.reject.take_clicked() {
             self.press_reject(inv);
+            return;
+        }
+        if self.clear.take_clicked() {
+            self.press_clear(inv);
             return;
         }
         match *ev {
@@ -253,6 +291,7 @@ impl Widget for QuarantineWidget {
                             self.confirming = false; // 다른 행 = 확인 단계 취소
                             self.message = None;
                         }
+                        self.confirming_clear = false; // 행 조작 = 비우기 확인 취소
                         inv.push(self.bounds);
                         break;
                     }
@@ -260,9 +299,10 @@ impl Widget for QuarantineWidget {
             }
             InputEvent::Key { key, .. } => match key {
                 Key::Escape => {
-                    // 확인 단계에서는 Esc가 **승인 취소**(창 닫기 아님).
-                    if self.confirming {
+                    // 확인 단계에서는 Esc가 **확인 취소**(창 닫기 아님).
+                    if self.confirming || self.confirming_clear {
                         self.confirming = false;
+                        self.confirming_clear = false;
                         inv.push(self.bounds);
                     } else {
                         self.back = true;
@@ -379,6 +419,23 @@ impl Widget for QuarantineWidget {
                     theme.danger,
                 );
             }
+            // 출처 — 보낸 사람 · 수신 시각(우측 정렬 · 사용자 요청 08-10).
+            let origin = match (row.from.is_empty(), row.when.is_empty()) {
+                (false, false) => format!("{} · {}", row.from, row.when),
+                (false, true) => row.from.clone(),
+                (true, false) => row.when.clone(),
+                (true, true) => String::new(),
+            };
+            if !origin.is_empty() {
+                let ow = ctx.text_width(&origin);
+                ctx.text(
+                    r.right() - ow - self.s(12),
+                    chip.y + (chip.h - sh) / 2,
+                    r,
+                    &origin,
+                    theme.text_dim,
+                );
+            }
             let _ = th;
         }
 
@@ -388,7 +445,9 @@ impl Widget for QuarantineWidget {
         ctx.fill_rect(Rect::new(bar.x, bar.y, bar.w, 1), theme.border);
         ctx.select_font(FontSlot::Status, false);
         let sh = ctx.text_height();
-        let (msg, color) = if self.confirming {
+        let (msg, color) = if self.confirming_clear {
+            (t(Msg::QClearConfirm).to_string(), theme.danger)
+        } else if self.confirming {
             (t(Msg::QConfirmExec).to_string(), theme.danger)
         } else if let Some((m, err)) = &self.message {
             (m.clone(), if *err { theme.danger } else { theme.ok })
@@ -407,6 +466,7 @@ impl Widget for QuarantineWidget {
         );
         self.approve.paint(ctx, theme);
         self.reject.paint(ctx, theme);
+        self.clear.paint(ctx, theme);
     }
 }
 
@@ -421,6 +481,8 @@ mod tests {
             mismatch: false,
             size: 1234,
             trust: TrustLevel::Unverified,
+            from: "상대 (abcd1234)".into(),
+            when: "12:34:56".into(),
             path: format!("/q/{name}.beepq"),
         }
     }
@@ -549,5 +611,66 @@ mod tests {
         let (mut w, mut inv) = widget(Vec::new());
         press_approve(&mut w, &mut inv);
         assert!(w.take_action().is_none());
+    }
+
+    /// 비우기 버튼을 실제로 누른다(눌림→뗌).
+    fn press_clear(w: &mut QuarantineWidget, inv: &mut Invalidations) {
+        let b = w.clear.bounds();
+        w.on_event(&click(b.x + 5, b.y + 5), inv);
+        w.on_event(
+            &InputEvent::MouseUp {
+                x: b.x + 5,
+                y: b.y + 5,
+            },
+            inv,
+        );
+    }
+
+    #[test]
+    fn clear_requires_two_steps() {
+        let (mut w, mut inv) = widget(vec![
+            row("a.txt", RiskLevel::Data),
+            row("b.zip", RiskLevel::Archive),
+        ]);
+        press_clear(&mut w, &mut inv);
+        assert!(
+            w.take_action().is_none(),
+            "첫 누름 = 고지만(전부 삭제는 파괴적)"
+        );
+        assert!(w.confirming_clear, "비우기 재확인 단계 진입");
+        press_clear(&mut w, &mut inv);
+        assert_eq!(w.take_action(), Some(QAction::Clear), "두 번째 누름 = 확정");
+        assert!(!w.confirming_clear);
+    }
+
+    #[test]
+    fn escape_cancels_clear_confirmation() {
+        let (mut w, mut inv) = widget(vec![row("a.txt", RiskLevel::Data)]);
+        press_clear(&mut w, &mut inv);
+        assert!(w.confirming_clear);
+        w.on_event(&key(Key::Escape), &mut inv);
+        assert!(!w.confirming_clear, "Esc = 비우기 취소");
+        assert!(!w.take_back(), "확인 취소가 창 닫기로 새지 않는다");
+    }
+
+    #[test]
+    fn clear_on_empty_list_is_noop() {
+        let (mut w, mut inv) = widget(Vec::new());
+        press_clear(&mut w, &mut inv);
+        assert!(w.take_action().is_none());
+        assert!(!w.confirming_clear, "빈 목록 = 비우기 무시");
+    }
+
+    #[test]
+    fn row_click_cancels_clear_confirmation() {
+        let (mut w, mut inv) = widget(vec![
+            row("a.txt", RiskLevel::Data),
+            row("b.zip", RiskLevel::Archive),
+        ]);
+        press_clear(&mut w, &mut inv);
+        assert!(w.confirming_clear);
+        let r = w.row_rect(1);
+        w.on_event(&click(r.x + 5, r.y + 5), &mut inv);
+        assert!(!w.confirming_clear, "행 조작 = 비우기 확인 취소");
     }
 }

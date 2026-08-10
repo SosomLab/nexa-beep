@@ -10,10 +10,23 @@
 use nbeep_core::{PeerId, Received, RiskLevel};
 use std::path::PathBuf;
 
+/// GUI 노드의 격리 채널 — DR-18(PC 1대 = 노드 1개)의 그 노드.
+pub(crate) const CH_GUI: &str = "gui";
+/// CLI 헤드리스 도구(`--chat-*`·`--serve` 등)의 격리 채널 — 테스트·검증용 별도 노드.
+pub(crate) const CH_CLI: &str = "cli";
+
 /// 격리 보관 위치 — v1은 임시 폴더(영속 위치는 M2-5 저장소 확정 후).
+///
+/// **채널(하위 폴더)로 가른다** — 같은 PC에서 GUI와 CLI 도구를 함께 돌리면(테스트)
+/// 서로 다른 노드의 수신물인데 한 폴더에 섞여, 남이 받은 파일이 내 격리함에 보였다
+/// (사용자 지적 08-10). 신원(PeerId)별 분리가 정도이지만 신원이 아직 실행마다 새로
+/// 생성되므로(영속은 M2-5·D-18), 그 전까지는 실행 채널로 가른다 — 재시작 후에도
+/// 같은 채널이라 격리물이 계속 보인다(7일 보관과 양립).
 #[must_use]
-pub(crate) fn quarantine_root() -> PathBuf {
-    std::env::temp_dir().join("nexa-beep-quarantine")
+pub(crate) fn quarantine_root(channel: &str) -> PathBuf {
+    std::env::temp_dir()
+        .join("nexa-beep-quarantine")
+        .join(channel)
 }
 
 /// 격리 성공 결과 — 표시 계층이 그대로 렌더한다.
@@ -54,6 +67,7 @@ impl core::fmt::Display for GateError {
 pub(crate) fn quarantine_received(
     got: &Received,
     sender: PeerId,
+    channel: &str,
 ) -> Result<Quarantined, GateError> {
     use nbeep_safe::{classify, Beepq, Meta, QuarantineDir};
 
@@ -84,7 +98,7 @@ pub(crate) fn quarantine_received(
         xfer: String::new(),
     };
     let sealed = Beepq::seal(&got.bytes, actual, &meta);
-    let path = QuarantineDir::open(quarantine_root())
+    let path = QuarantineDir::open(quarantine_root(channel))
         .and_then(|q| q.save(&actual, &sealed))
         .map_err(GateError::Store)?;
 

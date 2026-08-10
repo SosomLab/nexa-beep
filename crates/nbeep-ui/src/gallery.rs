@@ -5,7 +5,8 @@
 
 use crate::controls::{
     BorderSpec, Button, Checkbox, Choose, ChoosePicker, Combo, ComboControl, ComboItem, Control,
-    GridColumn, ImageFit, LabelSide, RadioGroup, RadioOption, ScrollBars, TextBox, TreeGrid,
+    GridColumn, ImageFit, LabelSide, MenuBar, MenuDef, MenuEntry, PositionPicker, RadioGroup,
+    RadioOption, ScrollBars, TextBox, TimeoutButton, ToolIcon, ToolItem, Toolbar, TreeGrid,
     TreeModel, TreeNode, TreeView,
 };
 use crate::draw::{DrawCtx, FontSlot};
@@ -69,6 +70,18 @@ pub struct GalleryWidget {
     btn_icon: Button,
     btn_front: Button,
     btn_img: Button,
+    // ── 08-10 추가 반영(사용자 요청 — "전체 기능이 식별되도록") ──
+    /// 메뉴 바(자체 렌더 풀다운 — M3 도구 배치).
+    menubar: MenuBar,
+    /// 툴바(SVG 알파 마스크 아이콘 — 테마 틴트).
+    toolbar: Toolbar,
+    /// 스스로 눌리는 버튼(수신 승인·발신 대기 UX — M4). 만료 시 데모로 재시작한다.
+    timeout_btn: TimeoutButton,
+    /// 갤러리 자체 시계(데모 전용 — 호스트 tick과 무관하게 자립).
+    t0: std::time::Instant,
+    tb_started: bool,
+    /// 3×3 위치 선택 그리드(타입어헤드 HUD 위치 설정 — M3).
+    posgrid: PositionPicker,
 }
 
 impl Default for GalleryWidget {
@@ -203,6 +216,50 @@ impl GalleryWidget {
                 .with_image(img((0xB5, 0x7C, 0x1E)))
                 .image_front(true),
             btn_img: Button::icon(img((0x5B, 0x6C, 0xFF))).image_fill(ImageFit::Cover),
+            menubar: MenuBar::new(vec![
+                MenuDef::new(
+                    "Menu",
+                    vec![
+                        MenuEntry::Item(ComboItem::new("about", "About Nexa Beep")),
+                        MenuEntry::Separator,
+                        MenuEntry::Item(ComboItem::new("settings", "Settings…")),
+                    ],
+                ),
+                MenuDef::new(
+                    "Help",
+                    vec![MenuEntry::Item(ComboItem::new("docs", "Documentation"))],
+                ),
+            ]),
+            toolbar: Toolbar::new(vec![
+                ToolItem::new(
+                    "refresh",
+                    ToolIcon::Mask {
+                        w: crate::icons::REFRESH_SIZE,
+                        h: crate::icons::REFRESH_SIZE,
+                        alpha: crate::icons::REFRESH_ALPHA,
+                    },
+                ),
+                ToolItem::new(
+                    "add",
+                    ToolIcon::Mask {
+                        w: crate::icons::ADD_SIZE,
+                        h: crate::icons::ADD_SIZE,
+                        alpha: crate::icons::ADD_ALPHA,
+                    },
+                ),
+                ToolItem::new(
+                    "quarantine",
+                    ToolIcon::Mask {
+                        w: crate::icons::SHIELD_SIZE,
+                        h: crate::icons::SHIELD_SIZE,
+                        alpha: crate::icons::SHIELD_ALPHA,
+                    },
+                ),
+            ]),
+            timeout_btn: TimeoutButton::new("Cancel — demo", 30_000),
+            t0: std::time::Instant::now(),
+            tb_started: false,
+            posgrid: PositionPicker::new(),
         }
     }
 
@@ -229,6 +286,10 @@ impl GalleryWidget {
         self.btn_icon.set_scale(s);
         self.btn_front.set_scale(s);
         self.btn_img.set_scale(s);
+        self.menubar.set_scale(s);
+        self.toolbar.set_scale(s);
+        self.timeout_btn.set_scale(s);
+        self.posgrid.set_scale(s);
         self.relayout(inv);
     }
 
@@ -270,6 +331,19 @@ impl GalleryWidget {
         y = place(&mut self.btn_icon, x, y, btn_iw, ctrl_h, label_h, gap, inv);
         y = place(&mut self.btn_front, x, y, btn_fw, ctrl_h, label_h, gap, inv);
         y = place(&mut self.btn_img, x, y, btn_imw, btn_imh, label_h, gap, inv);
+        // ── 08-10 추가 컨트롤 ──
+        let (menu_h, tool_h, tb_w, tb_h, pos_w, pos_h) = (
+            self.s(28),
+            self.s(36),
+            self.s(220),
+            self.s(30),
+            self.s(128),
+            self.s(96),
+        );
+        y = place(&mut self.menubar, x, y, w, menu_h, label_h, gap, inv);
+        y = place(&mut self.toolbar, x, y, w, tool_h, label_h, gap, inv);
+        y = place(&mut self.timeout_btn, x, y, tb_w, tb_h, label_h, gap, inv);
+        y = place(&mut self.posgrid, x, y, pos_w, pos_h, label_h, gap, inv);
         // 콘텐츠 총 크기 — 가장 넓은 행(트리·그리드 쌍) 기준.
         let widest = w.max(tcolw * 2 + gap).max(gcolw * 2 + gap);
         self.content_h = (y - top) + pad;
@@ -299,6 +373,18 @@ impl GalleryWidget {
         let mut changed = self.bars.tick();
         changed |= self.tree.tick();
         changed |= self.grid.tick();
+        // TimeoutButton 데모 — 갤러리 자체 시계로 카운트다운, 만료(발화)하면 재시작.
+        let now = u64::try_from(self.t0.elapsed().as_millis()).unwrap_or(u64::MAX);
+        if !self.tb_started {
+            self.timeout_btn.start(now);
+            self.tb_started = true;
+            changed = true;
+        }
+        changed |= self.timeout_btn.tick(now);
+        if self.timeout_btn.take_fired().is_some() {
+            self.timeout_btn.start(now);
+            changed = true;
+        }
         changed
     }
 
@@ -310,7 +396,7 @@ impl GalleryWidget {
         self.scroll_x = self.scroll_x.clamp(0, max_x);
     }
 
-    fn labels() -> [&'static str; 15] {
+    fn labels() -> [&'static str; 19] {
         [
             "Checkbox — 라벨 오른쪽 (+ 도움말 ?)",
             "Checkbox — 라벨 왼쪽",
@@ -327,6 +413,10 @@ impl GalleryWidget {
             "Button — 이미지만",
             "Button — 이미지 앞 고정(텍스트 중앙)",
             "Button — 이미지 버튼(Cover)",
+            "MenuBar — 자체 렌더 풀다운",
+            "Toolbar — SVG 알파 마스크 아이콘(테마 틴트)",
+            "TimeoutButton — 스스로 눌리는 버튼(만료 시 데모 재시작)",
+            "PositionPicker — 3×3 위치 그리드",
         ]
     }
 }
@@ -366,7 +456,7 @@ impl Widget for GalleryWidget {
         if consumed {
             return;
         }
-        // ★ 모달 캡처 — 콤보/Choose 오버레이가 열려 있으면 그 컨트롤만 이벤트를 받는다.
+        // ★ 모달 캡처 — 콤보/Choose/메뉴 오버레이가 열려 있으면 그 컨트롤만 이벤트를 받는다.
         // (드롭다운 항목 클릭이 뒤에 있는 다른 컨트롤로 전파되던 버그 차단.)
         if self.combo.is_open() {
             self.combo.on_event(ev, inv);
@@ -375,6 +465,12 @@ impl Widget for GalleryWidget {
         }
         if self.ext.is_open() || self.ext.is_picking() {
             self.ext.on_event(ev, inv);
+            inv.push(self.bounds);
+            return;
+        }
+        if self.menubar.is_open() {
+            self.menubar.on_event(ev, inv);
+            let _ = self.menubar.take_picked(); // 데모 — 선택은 소비만 한다
             inv.push(self.bounds);
             return;
         }
@@ -402,6 +498,9 @@ impl Widget for GalleryWidget {
             self.btn_front
                 .set_focused(self.btn_front.bounds().contains(p));
             self.btn_img.set_focused(self.btn_img.bounds().contains(p));
+            self.timeout_btn
+                .set_focused(self.timeout_btn.bounds().contains(p));
+            self.posgrid.set_focused(self.posgrid.bounds().contains(p));
         }
         // 이벤트를 전 컨트롤에 전달(각자 bounds/포커스로 자기 것만 처리).
         self.cb_right.on_event(ev, inv);
@@ -419,12 +518,24 @@ impl Widget for GalleryWidget {
         self.btn_icon.on_event(ev, inv);
         self.btn_front.on_event(ev, inv);
         self.btn_img.on_event(ev, inv);
+        self.menubar.on_event(ev, inv);
+        let _ = self.menubar.take_picked(); // 데모 — 선택은 소비만 한다
+        self.toolbar.on_event(ev, inv);
+        let _ = self.toolbar.take_clicked();
+        self.timeout_btn.on_event(ev, inv);
+        if self.timeout_btn.take_fired().is_some() {
+            // 클릭 발화 데모 — 즉시 재시작(다음 tick에서 시계가 이어진다).
+            let now = u64::try_from(self.t0.elapsed().as_millis()).unwrap_or(u64::MAX);
+            self.timeout_btn.start(now);
+        }
+        self.posgrid.on_event(ev, inv);
+        let _ = self.posgrid.take_changed();
     }
 
     fn paint(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
         ctx.fill_rect(self.bounds, theme.panel_bg);
         let labels = Self::labels();
-        let widgets: [&dyn Widget; 15] = [
+        let widgets: [&dyn Widget; 19] = [
             &self.cb_right,
             &self.cb_left,
             &self.cb_only,
@@ -440,6 +551,10 @@ impl Widget for GalleryWidget {
             &self.btn_icon,
             &self.btn_front,
             &self.btn_img,
+            &self.menubar,
+            &self.toolbar,
+            &self.timeout_btn,
+            &self.posgrid,
         ];
         // 섹션 라벨(각 컨트롤 위 — 컨트롤의 x에 맞춰 그린다: 좌·우 나란한 트리 쌍 라벨 분리).
         ctx.select_font(FontSlot::Status, false);
@@ -458,6 +573,9 @@ impl Widget for GalleryWidget {
         }
         if self.ext.is_open() || self.ext.is_picking() {
             self.ext.paint(ctx, theme);
+        }
+        if self.menubar.is_open() {
+            self.menubar.paint(ctx, theme); // 풀다운 오버레이 — 아래 컨트롤 위에 겹침
         }
         // 오버레이 스크롤바(맨 위에 겹침).
         self.bars.paint(

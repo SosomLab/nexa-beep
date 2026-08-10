@@ -942,8 +942,11 @@ impl SettingsWidget {
     }
 
     fn any_family_focused(&self) -> bool {
+        // ★ Face(얼굴만 지정 — 고정폭)도 글꼴명 입력이다 — 여기서 빠지면 그 입력이
+        // "기본 타이핑 = 검색" 폴백으로 새어 검색창에 글자가 들어간다(사용자 지적 08-10).
         self.rows.iter().any(|r| match &r.ctl {
             RowCtl::Font { family, .. } => family.is_focused(),
+            RowCtl::Face(f) => f.is_focused(),
             _ => false,
         })
     }
@@ -1098,10 +1101,12 @@ impl Widget for SettingsWidget {
             InputEvent::Char { .. } => {
                 if self.any_family_focused() {
                     for row in &mut self.rows {
-                        if let RowCtl::Font { family, .. } = &mut row.ctl {
-                            if family.is_focused() {
+                        match &mut row.ctl {
+                            RowCtl::Font { family, .. } if family.is_focused() => {
                                 family.on_event(ev, inv);
                             }
+                            RowCtl::Face(f) if f.is_focused() => f.on_event(ev, inv),
+                            _ => {}
                         }
                     }
                     self.drain_changes(inv);
@@ -1121,14 +1126,33 @@ impl Widget for SettingsWidget {
                 Key::Escape => {
                     if self.any_family_focused() {
                         for row in &mut self.rows {
-                            if let RowCtl::Font { family, .. } = &mut row.ctl {
-                                family.set_focused(false);
+                            match &mut row.ctl {
+                                RowCtl::Font { family, .. } => family.set_focused(false),
+                                RowCtl::Face(f) => f.set_focused(false),
+                                _ => {}
                             }
                         }
                         inv.push(self.bounds);
                     } else {
                         self.back = true;
                     }
+                }
+                // 글꼴명 입력 중 — Enter(확정)·캐럿 이동을 그 텍스트박스로.
+                // (없으면 Face는 take_committed 확정 경로가 영원히 안 밟힌다.)
+                Key::Enter | Key::Left | Key::Right | Key::Home | Key::End
+                    if self.any_family_focused() =>
+                {
+                    for row in &mut self.rows {
+                        match &mut row.ctl {
+                            RowCtl::Font { family, .. } if family.is_focused() => {
+                                family.on_event(ev, inv);
+                            }
+                            RowCtl::Face(f) if f.is_focused() => f.on_event(ev, inv),
+                            _ => {}
+                        }
+                    }
+                    self.drain_changes(inv);
+                    inv.push(self.bounds);
                 }
                 Key::Left | Key::Right | Key::Up | Key::Down
                     if self
@@ -1418,6 +1442,35 @@ mod tests {
         assert!(!w.take_back());
         w.on_event(&key(Key::Escape), &mut inv);
         assert!(w.take_back());
+    }
+
+    #[test]
+    fn mono_face_input_stays_out_of_search_and_commits_on_enter() {
+        // 사용자 지적 08-10 — Face(고정폭 얼굴) 입력이 "기본 타이핑 = 검색" 폴백으로
+        // 새어 검색창에 글자가 들어가고, Enter 확정 경로도 없었다.
+        let (mut w, mut inv) = widget();
+        select_cat(&mut w, Msg::CatFont);
+        let (i, fb) = w
+            .rows
+            .iter()
+            .enumerate()
+            .find_map(|(i, r)| match &r.ctl {
+                RowCtl::Face(f) => Some((i, f.bounds())),
+                _ => None,
+            })
+            .expect("Face 행 존재");
+        let key_name = registry()[w.rows[i].idx].key;
+        w.on_event(&click(fb.x + 5, fb.y + 5), &mut inv);
+        for c in "D2".chars() {
+            w.on_event(&ch(c), &mut inv);
+        }
+        assert!(w.query.is_empty(), "글꼴 얼굴 입력이 검색으로 새면 안 된다");
+        w.on_event(&key(Key::Enter), &mut inv);
+        let changes = w.take_changes();
+        assert!(
+            changes.iter().any(|(k, v)| *k == key_name && v == "D2"),
+            "Enter 확정이 보고돼야 한다: {changes:?}"
+        );
     }
 
     #[test]

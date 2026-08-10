@@ -400,7 +400,7 @@ fn xfer_step(
             Err(e) => fail(format!("수신 오류: {e} — 폐기")),
         },
         Ok(XferMsg::Done { id }) => match inbox.done(&id) {
-            Ok(got) => match crate::gate::quarantine_received(&got, peer) {
+            Ok(got) => match crate::gate::quarantine_received(&got, peer, crate::gate::CH_GUI) {
                 Ok(q) => {
                     let _ = proxy.send_event(AppEvent::XferDone {
                         peer,
@@ -734,14 +734,6 @@ impl App {
 
     fn bar_h(scale: f32) -> i32 {
         (26.0 * scale).round() as i32
-    }
-
-    /// 주 창 하단바 오른쪽의 "컨트롤 갤러리" 버튼 rect(임시 검수 진입점).
-    fn gallery_btn(win_w: i32, win_h: i32, scale: f32) -> Rect {
-        let bar_h = Self::bar_h(scale);
-        let m = (4.0 * scale).round() as i32;
-        let bw = (108.0 * scale).round() as i32;
-        Rect::new(win_w - bw - m, win_h - bar_h + m, bw, bar_h - m * 2)
     }
 
     fn request_redraw(&self, id: WindowId) {
@@ -1487,7 +1479,7 @@ impl App {
     fn quarantine_rows(&self) -> Vec<nbeep_ui::QRow> {
         use nbeep_core::TrustStore as _;
         use nbeep_safe::{Beepq, QuarantineDir};
-        let Ok(dir) = QuarantineDir::open(crate::gate::quarantine_root()) else {
+        let Ok(dir) = QuarantineDir::open(crate::gate::quarantine_root(crate::gate::CH_GUI)) else {
             return Vec::new();
         };
         let Ok(paths) = dir.list() else {
@@ -1503,12 +1495,30 @@ impl App {
                 let mismatch = bq.meta.detected_kind != "unknown"
                     && !bq.meta.declared_ext.is_empty()
                     && !bq.meta.detected_kind.contains(&bq.meta.declared_ext);
+                // 출처 — 보낸 사람(목록에 있으면 이름, 없으면 지문)과 수신 시각.
+                let from = self
+                    .table
+                    .list()
+                    .into_iter()
+                    .find(|e| e.peer == bq.meta.sender)
+                    .map_or_else(
+                        || bq.meta.sender.short(),
+                        |e| format!("{} ({})", e.name.as_str(), bq.meta.sender.short()),
+                    );
+                let age = unix_now().saturating_sub(bq.meta.received_at);
+                let when = if age >= 86_400 {
+                    format!("{}일 전", age / 86_400)
+                } else {
+                    nbeep_plat::clock::local_hms(bq.meta.received_at).hms()
+                };
                 Some(nbeep_ui::QRow {
                     name: String::from_utf8_lossy(&bq.meta.orig_name).into_owned(),
                     risk: bq.meta.risk,
                     mismatch,
                     size: bq.original_size,
                     trust: self.trust.level(bq.meta.sender),
+                    from,
+                    when,
                     path: p.to_string_lossy().into_owned(),
                 })
             })
@@ -1614,6 +1624,28 @@ impl App {
                         msg_err = true;
                         format!("삭제 실패: {e}")
                     }
+                };
+            }
+            nbeep_ui::QAction::Clear => {
+                // 비우기 — 위젯이 2단계 확인을 통과시킨 상태(사용자 요청 08-10).
+                let (mut n, mut failed) = (0u32, 0u32);
+                if let Ok(dir) =
+                    QuarantineDir::open(crate::gate::quarantine_root(crate::gate::CH_GUI))
+                {
+                    if let Ok(paths) = dir.list() {
+                        for p in paths {
+                            match std::fs::remove_file(&p) {
+                                Ok(()) => n += 1,
+                                Err(_) => failed += 1,
+                            }
+                        }
+                    }
+                }
+                self.status = if failed == 0 {
+                    format!("격리함을 비웠습니다 — {n}건 삭제")
+                } else {
+                    msg_err = true;
+                    format!("격리함 비우기 — {n}건 삭제 · {failed}건 실패")
                 };
             }
         }
@@ -2097,6 +2129,12 @@ impl App {
                                 self.status =
                                     nbeep_core::t(nbeep_core::Msg::RefreshList).to_string();
                             }
+                            // 직접 등록(DR-19 수동 엔드포인트) — ⌘/Ctrl+K와 같은 입력 흐름.
+                            "add" => {
+                                self.adding = Some(String::new());
+                                self.status =
+                                    "주소 입력(host:port) · Enter 연결 · Esc 취소: ".into();
+                            }
                             "quarantine" => self.open_quarantine(el),
                             "gallery" => self.open_gallery(el),
                             _ => {}
@@ -2284,19 +2322,6 @@ impl App {
                     &bar_text,
                     theme.text_dim,
                     theme.chrome_bg,
-                );
-                // 임시: "컨트롤 갤러리" 버튼(⌘/Ctrl+G).
-                let btn = Self::gallery_btn(ww, hh, entry.scale);
-                ctx.fill_round_rect(btn, (6.0 * entry.scale) as i32, theme.accent);
-                ctx.select_font(nbeep_ui::FontSlot::Status, false);
-                let label = "🎛 컨트롤";
-                let lw = ctx.text_width(label);
-                ctx.text(
-                    btn.x + (btn.w - lw) / 2,
-                    btn.y + (btn.h - (13.0 * entry.scale) as i32) / 2,
-                    btn,
-                    label,
-                    theme.panel_bg,
                 );
             }
             Role::Chat(peer) => {
@@ -2927,15 +2952,7 @@ impl ApplicationHandler<AppEvent> for App {
             } => {
                 if let Some(e) = self.windows.get(&id) {
                     let (x, y) = e.cursor;
-                    // 주 창 하단 "컨트롤 갤러리" 버튼 먼저 판정(임시 검수 진입점).
-                    if e.role == Role::Main {
-                        let sz = e.window.inner_size();
-                        let btn = Self::gallery_btn(sz.width as i32, sz.height as i32, e.scale);
-                        if btn.contains(nbeep_ui::Point { x, y }) {
-                            self.open_gallery(el);
-                            return;
-                        }
-                    }
+                    // 갤러리 진입은 메뉴·⌘/Ctrl+G — 하단 버튼은 제거(사용자 요청 08-10).
                     self.route(
                         id,
                         InputEvent::MouseDown {
@@ -3256,6 +3273,14 @@ pub(crate) fn run(mode: WindowMode, live: bool) {
                     w: nbeep_ui::icons::REFRESH_SIZE,
                     h: nbeep_ui::icons::REFRESH_SIZE,
                     alpha: nbeep_ui::icons::REFRESH_ALPHA,
+                },
+            ),
+            ToolItem::new(
+                "add",
+                ToolIcon::Mask {
+                    w: nbeep_ui::icons::ADD_SIZE,
+                    h: nbeep_ui::icons::ADD_SIZE,
+                    alpha: nbeep_ui::icons::ADD_ALPHA,
                 },
             ),
             ToolItem::new(

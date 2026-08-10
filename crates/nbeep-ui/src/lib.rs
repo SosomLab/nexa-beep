@@ -22,6 +22,10 @@ pub mod icons {
     pub const REFRESH_ALPHA: &[u8] = include_bytes!("../assets/icon-refresh-96.alpha");
     /// 변 크기(px).
     pub const REFRESH_SIZE: u32 = 96;
+    /// 직접 등록(+ · 수동 엔드포인트 DR-19) 96×96 알파 마스크.
+    pub const ADD_ALPHA: &[u8] = include_bytes!("../assets/icon-add-96.alpha");
+    /// 변 크기(px).
+    pub const ADD_SIZE: u32 = 96;
     /// 격리함(방패+체크) 96×96 알파 마스크.
     pub const SHIELD_ALPHA: &[u8] = include_bytes!("../assets/icon-shield-96.alpha");
     /// 변 크기(px).
