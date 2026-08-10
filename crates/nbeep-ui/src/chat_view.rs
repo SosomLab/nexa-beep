@@ -275,7 +275,8 @@ pub struct ChatViewWidget {
     back: bool,
     /// 스레드 스크롤 — **하단에서 위로 밀어올린 물리 px**(0 = 최신 붙어 봄).
     scroll: i32,
-    wheel: crate::event::WheelAccum,
+    /// 마지막 커서 위치 — 휠 대상(스레드/입력창) 판정용.
+    cursor: (i32, i32),
     /// 진행 중 파일 전송(헤더 아래 진척 줄 · 사용자 요청 08-09).
     xfer: Option<crate::peer_list::XferProgress>,
     /// 입력창 세로 스크롤 — 맨 위 표시 줄(멀티라인 · 표시 상한 [`INPUT_MAX_LINES`]).
@@ -310,7 +311,7 @@ impl ChatViewWidget {
             outgoing: None,
             back: false,
             scroll: 0,
-            wheel: crate::event::WheelAccum::default(),
+            cursor: (0, 0),
             xfer: None,
             input_scroll: 0,
             dragging: false,
@@ -681,8 +682,42 @@ impl Widget for ChatViewWidget {
     fn on_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
         use crate::edit::EditKey;
 
-        // ── 오버레이 스크롤바(휠 제외 — 휠은 아래 자체 처리) ──
-        if !matches!(ev, InputEvent::Wheel { .. } | InputEvent::HWheel { .. }) {
+        // 커서 추적 — 휠의 대상(스레드 vs 입력창)을 위치로 가른다(사용자 확정 08-10).
+        if let InputEvent::MouseMove { x, y } = *ev {
+            self.cursor = (x, y);
+        }
+        let is_wheel = matches!(ev, InputEvent::Wheel { .. } | InputEvent::HWheel { .. });
+        let over_input = self.input_bar().contains(Point {
+            x: self.cursor.0,
+            y: self.cursor.1,
+        });
+
+        // ── 입력창 스크롤(멀티라인) — 입력창 위의 휠은 **입력 내용만** 스크롤한다 ──
+        let count = self.input_line_count();
+        if count > INPUT_MAX_LINES && (!is_wheel || over_input) {
+            let input = self.input_bar();
+            let line_h = self.s(INPUT_LINE_H);
+            let (_, ny, consumed) = self.input_bars.on_event(
+                ev,
+                input,
+                input.w,
+                count as i32 * line_h,
+                0,
+                self.input_scroll as i32 * line_h,
+                self.scale,
+            );
+            let nl = (ny / line_h.max(1)).max(0) as usize;
+            if nl != self.input_scroll {
+                self.input_scroll = nl.min(count.saturating_sub(INPUT_MAX_LINES));
+                inv.push(self.bounds);
+            }
+            if consumed {
+                return;
+            }
+        }
+        // ── 스레드 스크롤바 — 휠 포함(활동 감지·페이드는 컴포넌트 몫 · 갤러리와 동일 문법).
+        //    단 입력창 위의 휠은 스레드로 새지 않는다(위에서 입력창이 대상).
+        if !is_wheel || !over_input {
             let vp = self.thread_viewport();
             let content = self.content_h.get().max(self.content_h_estimate());
             let top_off = (content - vp.h - self.scroll).max(0);
@@ -695,29 +730,6 @@ impl Widget for ChatViewWidget {
             }
             if consumed {
                 return;
-            }
-            // 입력창 스크롤바(4줄 초과 시).
-            let count = self.input_line_count();
-            if count > INPUT_MAX_LINES {
-                let input = self.input_bar();
-                let line_h = self.s(INPUT_LINE_H);
-                let (_, ny, consumed) = self.input_bars.on_event(
-                    ev,
-                    input,
-                    input.w,
-                    count as i32 * line_h,
-                    0,
-                    self.input_scroll as i32 * line_h,
-                    self.scale,
-                );
-                let nl = (ny / line_h.max(1)).max(0) as usize;
-                if nl != self.input_scroll {
-                    self.input_scroll = nl.min(count.saturating_sub(INPUT_MAX_LINES));
-                    inv.push(self.bounds);
-                }
-                if consumed {
-                    return;
-                }
             }
         }
 
@@ -835,17 +847,6 @@ impl Widget for ChatViewWidget {
             }
             InputEvent::MouseUp { .. } => {
                 self.dragging = false;
-            }
-            InputEvent::Wheel { delta } => {
-                let lines = self.wheel.add(delta, 3);
-                if lines != 0 {
-                    let step = self.s(TH_LINE_H);
-                    let ns = (self.scroll + lines * step).clamp(0, self.max_scroll());
-                    if ns != self.scroll {
-                        self.scroll = ns;
-                        inv.push(self.bounds);
-                    }
-                }
             }
             InputEvent::SelectAll => {
                 self.input.key(EditKey::SelectAll, false);

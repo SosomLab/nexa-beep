@@ -457,6 +457,10 @@ pub struct SettingsWidget {
     search: TextBox,
     /// 검색어 미러(rebuild 트리거 비교용).
     query: String,
+    /// 시스템 기본 폰트 표시 이름(placeholder 식별 — 비면 이름 생략).
+    default_base_name: String,
+    /// 시스템 고정폭 폰트 표시 이름.
+    default_mono_name: String,
     /// 카테고리 사이드바(TreeView).
     tree: TreeView,
     /// 사이드바 가시 행 → (cats() 인덱스, 하위 카테고리).
@@ -502,6 +506,8 @@ impl SettingsWidget {
             scale: 1.0,
             search: TextBox::new("Search").with_clearable(),
             query: String::new(),
+            default_base_name: String::new(),
+            default_mono_name: String::new(),
             tree: TreeView::new(TreeModel::default()),
             cat_map: Vec::new(),
             selected_cat: 0,
@@ -665,7 +671,18 @@ impl SettingsWidget {
                     RowCtl::Combo(c)
                 }
                 SettingKind::FontFace { family_key } => {
-                    let mut family = TextBox::new(tr(lang, Msg::SystemDefaultFont))
+                    // 기본이 **무엇인지** 보여 준다(사용자 지적 08-10 — "(시스템 기본)"만으로는
+                    // 식별 불가). 고정폭 행이므로 고정폭 기본 이름.
+                    let ph = if self.default_mono_name.is_empty() {
+                        tr(lang, Msg::SystemDefaultFont).to_string()
+                    } else {
+                        format!(
+                            "{} {}",
+                            self.default_mono_name,
+                            tr(lang, Msg::SystemDefaultFont)
+                        )
+                    };
+                    let mut family = TextBox::new(ph)
                         .with_text(self.values.get(family_key).map_or("", String::as_str));
                     family.set_scale(self.scale);
                     RowCtl::Face(family)
@@ -687,7 +704,16 @@ impl SettingsWidget {
                     family_key,
                     size_key,
                 } => {
-                    let mut family = TextBox::new(tr(lang, Msg::SystemDefaultFont))
+                    let ph = if self.default_base_name.is_empty() {
+                        tr(lang, Msg::SystemDefaultFont).to_string()
+                    } else {
+                        format!(
+                            "{} {}",
+                            self.default_base_name,
+                            tr(lang, Msg::SystemDefaultFont)
+                        )
+                    };
+                    let mut family = TextBox::new(ph)
                         .with_text(self.values.get(family_key).map_or("", String::as_str));
                     family.set_scale(self.scale);
                     let items: Vec<ComboItem> = SIZE_OPTS
@@ -958,6 +984,16 @@ impl SettingsWidget {
             RowCtl::Font { size, .. } if size.is_open() => Some(size),
             _ => None,
         })
+    }
+
+    /// 시스템 기본 폰트의 표시 이름 지정 — "(시스템 기본)"이 무엇인지 placeholder에
+    /// 보여 준다(사용자 지적 08-10). 호스트가 plat에서 조회해 넣는다(ui는 OS를 모른다).
+    pub fn set_default_font_names(&mut self, base: &str, mono: &str, inv: &mut Invalidations) {
+        if self.default_base_name != base || self.default_mono_name != mono {
+            self.default_base_name = base.to_string();
+            self.default_mono_name = mono.to_string();
+            self.rebuild(inv);
+        }
     }
 
     fn any_family_focused(&self) -> bool {

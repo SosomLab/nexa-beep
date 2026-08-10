@@ -1496,7 +1496,17 @@ impl App {
                 scale,
             },
         );
-        self.settings_view = Some(SettingsWidget::new(&self.settings));
+        let mut sv = SettingsWidget::new(&self.settings);
+        {
+            // "(시스템 기본)"이 무엇인지 식별(사용자 지적 08-10) — plat에서 이름 조회.
+            let mut inv = Invalidations::default();
+            sv.set_default_font_names(
+                nbeep_plat::font::system_ui_font_name().unwrap_or(""),
+                nbeep_plat::font::system_mono_font_name().unwrap_or(""),
+                &mut inv,
+            );
+        }
+        self.settings_view = Some(sv);
         self.refresh_approval_ui(); // 잠금·하단 정보 초기 반영
         self.layout_window(id);
         self.request_redraw(id);
@@ -2354,7 +2364,7 @@ impl App {
                 let pad = (8.0 * entry.scale).round() as i32;
                 let dy = (bar_h - (14.0 * entry.scale) as i32) / 2;
                 let bar_text = match &self.adding {
-                    Some(buf) => format!("주소(host:port): {buf}▏"),
+                    Some(buf) => format!("주소(host:port): {buf}"),
                     None => self.status.clone(),
                 };
                 ctx.text_opaque(
@@ -2365,6 +2375,20 @@ impl App {
                     theme.text_dim,
                     theme.chrome_bg,
                 );
+                // 주소 입력 중 — 문자 "▏" 대신 **Beam 캐럿**(글자 실측 높이 · 08-10).
+                if self.adding.is_some() {
+                    let tw = ctx.text_width(&bar_text);
+                    let ch = ctx.text_height();
+                    ctx.fill_rect(
+                        Rect::new(
+                            bar.x + pad + tw + (2.0 * entry.scale) as i32,
+                            bar.y + (bar_h - ch) / 2,
+                            ((2.0 * entry.scale).round() as i32).max(1),
+                            ch,
+                        ),
+                        theme.accent,
+                    );
+                }
             }
             Role::Chat(peer) => {
                 if let Some(chat) = self.chats.get(&peer) {

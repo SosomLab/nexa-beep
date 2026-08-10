@@ -16,48 +16,74 @@ use memmap2::Mmap;
 use std::fs::File;
 use std::path::Path;
 
-/// OS별 후보(경로, TTC 인덱스) — 앞이 우선.
+/// OS별 후보(경로, TTC 인덱스, 표시 이름) — 앞이 우선. 이름은 설정 화면의
+/// "(시스템 기본)"이 **무엇인지 식별**하는 데 쓴다(사용자 지적 08-10).
 #[cfg(target_os = "macos")]
-const CANDIDATES: &[(&str, u32)] = &[
-    ("/System/Library/Fonts/AppleSDGothicNeo.ttc", 0), // 한글 UI 표준
-    ("/System/Library/Fonts/Helvetica.ttc", 0),        // 라틴 폴백
+const CANDIDATES: &[(&str, u32, &str)] = &[
+    (
+        "/System/Library/Fonts/AppleSDGothicNeo.ttc",
+        0,
+        "Apple SD Gothic Neo",
+    ), // 한글 UI 표준
+    ("/System/Library/Fonts/Helvetica.ttc", 0, "Helvetica"), // 라틴 폴백
 ];
 
 #[cfg(target_os = "windows")]
-const CANDIDATES: &[(&str, u32)] = &[
-    ("C:\\Windows\\Fonts\\malgun.ttf", 0), // 맑은 고딕(한글 UI 표준)
-    ("C:\\Windows\\Fonts\\segoeui.ttf", 0), // 라틴 폴백
+const CANDIDATES: &[(&str, u32, &str)] = &[
+    ("C:\\Windows\\Fonts\\malgun.ttf", 0, "맑은 고딕"), // 한글 UI 표준
+    ("C:\\Windows\\Fonts\\segoeui.ttf", 0, "Segoe UI"), // 라틴 폴백
 ];
 
 #[cfg(target_os = "linux")]
-const CANDIDATES: &[(&str, u32)] = &[
-    ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 2), // 인덱스 2 = KR
-    ("/usr/share/fonts/truetype/nanum/NanumGothic.ttf", 0),
-    ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 0), // 라틴 폴백(CI 러너 포함)
+const CANDIDATES: &[(&str, u32, &str)] = &[
+    (
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        2, // 인덱스 2 = KR
+        "Noto Sans CJK KR",
+    ),
+    (
+        "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
+        0,
+        "나눔고딕",
+    ),
+    (
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        0,
+        "DejaVu Sans",
+    ), // 라틴 폴백(CI 러너 포함)
 ];
 
 /// OS별 **고정폭** 후보(사용자 요청 08-09 — 숫자 폭이 변해 화면이 떨리는 것을 막는다).
 #[cfg(target_os = "macos")]
-const MONO_CANDIDATES: &[(&str, u32)] = &[
-    ("/System/Library/Fonts/Menlo.ttc", 0),
-    ("/System/Library/Fonts/SFNSMono.ttf", 0),
-    ("/System/Library/Fonts/Monaco.ttf", 0),
+const MONO_CANDIDATES: &[(&str, u32, &str)] = &[
+    ("/System/Library/Fonts/Menlo.ttc", 0, "Menlo"),
+    ("/System/Library/Fonts/SFNSMono.ttf", 0, "SF Mono"),
+    ("/System/Library/Fonts/Monaco.ttf", 0, "Monaco"),
 ];
 
 #[cfg(target_os = "windows")]
-const MONO_CANDIDATES: &[(&str, u32)] = &[
-    ("C:\\Windows\\Fonts\\consola.ttf", 0),
-    ("C:\\Windows\\Fonts\\cour.ttf", 0),
+const MONO_CANDIDATES: &[(&str, u32, &str)] = &[
+    ("C:\\Windows\\Fonts\\consola.ttf", 0, "Consolas"),
+    ("C:\\Windows\\Fonts\\cour.ttf", 0, "Courier New"),
 ];
 
 #[cfg(target_os = "linux")]
-const MONO_CANDIDATES: &[(&str, u32)] = &[
-    ("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", 0),
+const MONO_CANDIDATES: &[(&str, u32, &str)] = &[
+    (
+        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+        0,
+        "DejaVu Sans Mono",
+    ),
     (
         "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
         0,
+        "Liberation Mono",
     ),
-    ("/usr/share/fonts/opentype/noto/NotoSansMono-Regular.ttf", 0),
+    (
+        "/usr/share/fonts/opentype/noto/NotoSansMono-Regular.ttf",
+        0,
+        "Noto Sans Mono",
+    ),
 ];
 
 /// 사용자 폰트를 찾을 디렉터리(앞이 우선 — 사용자 설치본이 시스템보다 먼저).
@@ -145,7 +171,7 @@ pub fn find_font_by_family(family: &str) -> Option<(&'static [u8], u32)> {
 /// OS 기본 **고정폭** 폰트(없으면 `None` — 호출 측이 UI 폰트로 폴백).
 #[must_use]
 pub fn system_mono_font() -> Option<(&'static [u8], u32)> {
-    for &(path, index) in MONO_CANDIDATES {
+    for &(path, index, _) in MONO_CANDIDATES {
         let p = Path::new(path);
         if p.exists() {
             if let Some(bytes) = map_font(p) {
@@ -156,11 +182,29 @@ pub fn system_mono_font() -> Option<(&'static [u8], u32)> {
     None
 }
 
+/// 시스템 UI 폰트의 **표시 이름**(설정 화면 "(시스템 기본)" 식별 — 사용자 지적 08-10).
+#[must_use]
+pub fn system_ui_font_name() -> Option<&'static str> {
+    CANDIDATES
+        .iter()
+        .find(|(p, _, _)| Path::new(p).exists())
+        .map(|&(_, _, name)| name)
+}
+
+/// 시스템 고정폭 폰트의 표시 이름.
+#[must_use]
+pub fn system_mono_font_name() -> Option<&'static str> {
+    MONO_CANDIDATES
+        .iter()
+        .find(|(p, _, _)| Path::new(p).exists())
+        .map(|&(_, _, name)| name)
+}
+
 /// 시스템 UI 폰트를 **메모리 매핑**해 바이트와 TTC 인덱스를 돌려준다.
 /// 후보가 하나도 없으면 `None`(호출 측이 "폰트 없음" 오류 UI — 조용히 죽지 않는다).
 #[must_use]
 pub fn system_ui_font() -> Option<(&'static [u8], u32)> {
-    for &(path, index) in CANDIDATES {
+    for &(path, index, _) in CANDIDATES {
         if !Path::new(path).exists() {
             continue;
         }
