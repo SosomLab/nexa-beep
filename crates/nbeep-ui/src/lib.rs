@@ -47,7 +47,7 @@ pub mod typeahead;
 pub mod widget;
 
 pub use about::{AboutInfo, AboutWidget};
-pub use chat_view::{ChatLine, ChatViewWidget};
+pub use chat_view::{update_xfer_in, ChatBody, ChatLine, ChatViewWidget, XferLine, XferLineState};
 pub use controls::{
     BorderSpec, Button, ButtonMode, Checkbox, Choose, ChoosePicker, Combo, ComboControl, ComboItem,
     Control, ControlBase, FlatRow, GridColumn, ImageFit, LabelSide, PopupHit, RadioGroup,

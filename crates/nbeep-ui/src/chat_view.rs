@@ -18,8 +18,99 @@ use nbeep_core::safetext::{sanitize_message, SafeText};
 pub struct ChatLine {
     /// 내가 보낸 것인가(정렬·색 구분).
     pub mine: bool,
-    /// 무해화된 본문.
-    pub text: SafeText,
+    /// 본문 — 텍스트 또는 파일 전송 기록.
+    pub body: ChatBody,
+}
+
+impl ChatLine {
+    /// 텍스트 줄(이미 무해화된 타입만).
+    #[must_use]
+    pub fn text(mine: bool, text: SafeText) -> Self {
+        Self {
+            mine,
+            body: ChatBody::Text(text),
+        }
+    }
+
+    /// 파일 전송 항목 — `승인 대기` 상태로 시작한다.
+    #[must_use]
+    pub fn xfer(mine: bool, name: SafeText, size: u64) -> Self {
+        Self {
+            mine,
+            body: ChatBody::Xfer(XferLine {
+                name,
+                size,
+                state: XferLineState::Waiting,
+            }),
+        }
+    }
+}
+
+/// 스레드 줄의 본문 종류.
+#[derive(Clone, Debug)]
+pub enum ChatBody {
+    /// 무해화된 텍스트.
+    Text(SafeText),
+    /// 파일 전송 기록 — 진행 중엔 상태가 갱신되고, **완료 후에도 스레드에 남는다**
+    /// (송신·수신 이력을 대화에서 본다 — 사용자 요청 08-10).
+    Xfer(XferLine),
+}
+
+/// 파일 전송 스레드 항목.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct XferLine {
+    /// 무해화된 파일명(원격 제공 이름 — 표시 전 무해화 필수).
+    pub name: SafeText,
+    /// 전체 크기(바이트).
+    pub size: u64,
+    /// 현재 상태.
+    pub state: XferLineState,
+}
+
+/// 파일 전송 항목의 상태 — `Waiting`/`Active`만 갱신 대상(종결 상태는 불변).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum XferLineState {
+    /// 승인 대기(발신 = 상대 승인 · 수신 = 내 승인).
+    Waiting,
+    /// 전송 중(누적 바이트).
+    Active {
+        /// 지금까지 오간 바이트.
+        done: u64,
+    },
+    /// 완료(부가 설명 — 예: 격리·위험 등급).
+    Done {
+        /// 상태 뒤에 붙는 설명(비면 "완료"만).
+        note: String,
+    },
+    /// 실패·거절·취소(사유).
+    Failed {
+        /// 사람이 읽는 사유.
+        why: String,
+    },
+}
+
+/// `lines`에서 **가장 오래된 미종결 전송 항목**(방향 일치)의 상태를 갱신한다.
+///
+/// 앞에서부터 찾는 이유 — 오퍼 큐가 FIFO라 결정·진행도 오래된 것부터 처리된다
+/// (뒤에서 찾으면 대기 2건일 때 앞 건의 거절이 뒤 항목에 붙는다).
+/// 종결(`Done`/`Failed`) 항목은 건드리지 않는다 — 완료 기록은 불변이고,
+/// 같은 상대와의 새 전송은 새 항목으로 쌓인다. 갱신했으면 `true`.
+pub fn update_xfer_in(lines: &mut [ChatLine], mine: bool, state: XferLineState) -> bool {
+    for line in lines.iter_mut() {
+        if line.mine != mine {
+            continue;
+        }
+        if let ChatBody::Xfer(x) = &mut line.body {
+            if matches!(
+                x.state,
+                XferLineState::Waiting | XferLineState::Active { .. }
+            ) {
+                x.state = state;
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// 대화 화면 위젯.
@@ -97,6 +188,20 @@ impl ChatViewWidget {
         self.lines.push(line);
         self.scroll = 0; // 새 메시지 = 최신으로 스냅(표준 채팅 동작)
         inv.push(self.bounds);
+    }
+
+    /// 마지막 미종결 전송 항목(방향 일치)의 상태를 갱신한다([`update_xfer_in`]).
+    pub fn update_xfer_line(
+        &mut self,
+        mine: bool,
+        state: XferLineState,
+        inv: &mut Invalidations,
+    ) -> bool {
+        let hit = update_xfer_in(&mut self.lines, mine, state);
+        if hit {
+            inv.push(self.bounds);
+        }
+        hit
     }
 
     /// 화면에 들어가는 스레드 줄 수(헤더·입력창 제외).
@@ -326,9 +431,61 @@ impl Widget for ChatViewWidget {
             } else {
                 nbeep_core::t(nbeep_core::Msg::ChatPrefixPeer)
             };
-            let text = format!("{prefix}{}", line.text.as_str());
             let clip = Rect::new(self.bounds.x, y, self.bounds.w, line_h);
-            ctx.text(self.bounds.x + self.s(12), y, clip, &text, fg);
+            match &line.body {
+                ChatBody::Text(t) => {
+                    let text = format!("{prefix}{}", t.as_str());
+                    ctx.text(self.bounds.x + self.s(12), y, clip, &text, fg);
+                }
+                ChatBody::Xfer(x) => {
+                    let dir = if line.mine { "전송" } else { "수신" };
+                    let state = match &x.state {
+                        XferLineState::Waiting => "승인 대기".to_string(),
+                        XferLineState::Active { done } => {
+                            let pct = if x.size > 0 {
+                                (*done as f64 / x.size as f64 * 100.0).round() as u32
+                            } else {
+                                0
+                            };
+                            format!("{dir} {pct}% · {}", human_bytes(*done))
+                        }
+                        XferLineState::Done { note } if note.is_empty() => "완료".to_string(),
+                        XferLineState::Done { note } => format!("완료 — {note}"),
+                        XferLineState::Failed { why } => format!("실패 — {why}"),
+                    };
+                    let text = format!(
+                        "{prefix}[파일] {} ({}) · {state}",
+                        x.name.as_str(),
+                        human_bytes(x.size)
+                    );
+                    ctx.text(self.bounds.x + self.s(12), y, clip, &text, fg);
+                    // 진행 중엔 우측에 소형 막대(헤더 진척 줄과 같은 문법).
+                    if let XferLineState::Active { done } = x.state {
+                        let ratio = if x.size > 0 {
+                            (done as f32 / x.size as f32).clamp(0.0, 1.0)
+                        } else {
+                            0.0
+                        };
+                        let bar_w = self.s(70);
+                        let bar_h = self.s(5);
+                        let bx = clip.right() - bar_w - self.s(12);
+                        let by = y + (line_h - bar_h) / 2;
+                        ctx.fill_round_rect(
+                            Rect::new(bx, by, bar_w, bar_h),
+                            bar_h / 2,
+                            theme.panel_bg_alt,
+                        );
+                        let fw = (bar_w as f32 * ratio).round() as i32;
+                        if fw > 0 {
+                            ctx.fill_round_rect(
+                                Rect::new(bx, by, fw, bar_h),
+                                bar_h / 2,
+                                if line.mine { theme.accent } else { theme.ok },
+                            );
+                        }
+                    }
+                }
+            }
             y -= line_h;
         }
 
@@ -451,10 +608,7 @@ mod tests {
         // bounds 400x300 · 헤더30·입력34 → 스레드 영역 ~236 / 24 ≈ 9줄 가시.
         for i in 0..30 {
             w.push_line(
-                ChatLine {
-                    mine: true,
-                    text: nbeep_core::sanitize_message(&format!("m{i}")),
-                },
+                ChatLine::text(true, nbeep_core::sanitize_message(&format!("m{i}"))),
                 &mut inv,
             );
         }
@@ -477,10 +631,7 @@ mod tests {
         assert!(w.scroll() > before);
         // 새 메시지 도착 = 최신으로 스냅.
         w.push_line(
-            ChatLine {
-                mine: false,
-                text: nbeep_core::sanitize_message("새 메시지"),
-            },
+            ChatLine::text(false, nbeep_core::sanitize_message("새 메시지")),
             &mut inv,
         );
         assert_eq!(w.scroll(), 0, "새 메시지 = 하단 스냅");
@@ -491,10 +642,7 @@ mod tests {
         let (mut w, mut inv) = widget();
         for i in 0..3 {
             w.push_line(
-                ChatLine {
-                    mine: true,
-                    text: nbeep_core::sanitize_message(&format!("m{i}")),
-                },
+                ChatLine::text(true, nbeep_core::sanitize_message(&format!("m{i}"))),
                 &mut inv,
             );
         }
@@ -572,6 +720,140 @@ mod tests {
         ch(&mut w, ' ', &mut inv);
         enter(&mut w, &mut inv);
         assert!(w.take_outgoing().is_none(), "공백만 = 미전송");
+    }
+
+    // ── 파일 전송 스레드 항목(사용자 요청 08-10 — 송수신 이력·진행률·완료 잔존) ──
+
+    fn xfer_state(line: &ChatLine) -> &XferLineState {
+        match &line.body {
+            ChatBody::Xfer(x) => &x.state,
+            ChatBody::Text(_) => panic!("전송 항목이어야 한다"),
+        }
+    }
+
+    #[test]
+    fn xfer_line_lifecycle_waiting_active_done() {
+        let (mut w, mut inv) = widget();
+        w.push_line(
+            ChatLine::xfer(true, nbeep_core::sanitize_message("a.bin"), 100),
+            &mut inv,
+        );
+        assert_eq!(*xfer_state(&w.lines[0]), XferLineState::Waiting);
+        assert!(w.update_xfer_line(true, XferLineState::Active { done: 40 }, &mut inv));
+        assert_eq!(*xfer_state(&w.lines[0]), XferLineState::Active { done: 40 });
+        assert!(w.update_xfer_line(
+            true,
+            XferLineState::Done {
+                note: String::new()
+            },
+            &mut inv
+        ));
+        // 종결 후엔 갱신 대상이 없다 — 완료 기록은 불변.
+        assert!(
+            !w.update_xfer_line(true, XferLineState::Active { done: 99 }, &mut inv),
+            "종결 항목은 갱신 불가"
+        );
+        assert_eq!(
+            *xfer_state(&w.lines[0]),
+            XferLineState::Done {
+                note: String::new()
+            }
+        );
+    }
+
+    #[test]
+    fn xfer_update_matches_direction_only() {
+        let (mut w, mut inv) = widget();
+        w.push_line(
+            ChatLine::xfer(false, nbeep_core::sanitize_message("recv.bin"), 10),
+            &mut inv,
+        );
+        // 발신 방향 갱신은 수신 항목을 건드리지 않는다.
+        assert!(!w.update_xfer_line(true, XferLineState::Active { done: 1 }, &mut inv));
+        assert_eq!(*xfer_state(&w.lines[0]), XferLineState::Waiting);
+    }
+
+    #[test]
+    fn xfer_update_fifo_two_open_offers() {
+        // 수신 오퍼 2건 대기 — 결정은 큐 순서(FIFO)라 **앞 항목**부터 갱신돼야 한다.
+        let (mut w, mut inv) = widget();
+        w.push_line(
+            ChatLine::xfer(false, nbeep_core::sanitize_message("first.bin"), 10),
+            &mut inv,
+        );
+        w.push_line(
+            ChatLine::xfer(false, nbeep_core::sanitize_message("second.bin"), 20),
+            &mut inv,
+        );
+        assert!(w.update_xfer_line(
+            false,
+            XferLineState::Failed {
+                why: "거절함".into()
+            },
+            &mut inv
+        ));
+        assert_eq!(
+            *xfer_state(&w.lines[0]),
+            XferLineState::Failed {
+                why: "거절함".into()
+            },
+            "앞(오래된) 오퍼가 먼저 갱신"
+        );
+        assert_eq!(*xfer_state(&w.lines[1]), XferLineState::Waiting);
+    }
+
+    #[test]
+    fn xfer_update_skips_text_and_terminal_hits_open() {
+        let (mut w, mut inv) = widget();
+        // [종결된 전송] [텍스트] [새 전송] — 갱신은 미종결 항목에만.
+        w.push_line(
+            ChatLine::xfer(true, nbeep_core::sanitize_message("old.bin"), 10),
+            &mut inv,
+        );
+        assert!(w.update_xfer_line(
+            true,
+            XferLineState::Failed {
+                why: "취소".into()
+            },
+            &mut inv
+        ));
+        w.push_line(
+            ChatLine::text(true, nbeep_core::sanitize_message("중간 메시지")),
+            &mut inv,
+        );
+        w.push_line(
+            ChatLine::xfer(true, nbeep_core::sanitize_message("new.bin"), 20),
+            &mut inv,
+        );
+        assert!(w.update_xfer_line(true, XferLineState::Active { done: 5 }, &mut inv));
+        assert_eq!(
+            *xfer_state(&w.lines[0]),
+            XferLineState::Failed {
+                why: "취소".into()
+            },
+            "이전 종결 기록은 그대로"
+        );
+        assert_eq!(*xfer_state(&w.lines[2]), XferLineState::Active { done: 5 });
+    }
+
+    #[test]
+    fn xfer_push_snaps_to_latest() {
+        let (mut w, mut inv) = widget();
+        for i in 0..30 {
+            w.push_line(
+                ChatLine::text(true, nbeep_core::sanitize_message(&format!("m{i}"))),
+                &mut inv,
+            );
+        }
+        for _ in 0..5 {
+            wheel_up(&mut w, &mut inv);
+        }
+        assert!(w.scroll() > 0);
+        w.push_line(
+            ChatLine::xfer(false, nbeep_core::sanitize_message("f.bin"), 1),
+            &mut inv,
+        );
+        assert_eq!(w.scroll(), 0, "전송 항목도 새 줄 = 최신 스냅");
     }
 
     #[test]
