@@ -16,6 +16,7 @@
 | 린트 | `cargo clippy --workspace --all-targets --features nbeep-core/testkit,nbeep-net/testkit,nbeep-crypto/testkit -- -D warnings` |
 | rustdoc 링크 | `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --features nbeep-core/testkit,nbeep-net/testkit,nbeep-crypto/testkit` |
 | 크로스 빌드 | `cargo build --workspace --target <TARGET>` (예: `aarch64-pc-windows-msvc`) |
+| **크로스 타입검사** | `cargo check --workspace --all-targets --target <TARGET>` — **링크가 필요 없어 맥/리눅스에서도 Windows 타깃을 검사할 수 있다** |
 | 산출물 크기 | 릴리스 빌드 후 `wc -c target/release/<bin>` — **≤10MB/바이너리**(NFR-B-3) |
 
 **4타깃**: `x86_64-pc-windows-msvc` · `aarch64-pc-windows-msvc` · `x86_64-apple-darwin` · `aarch64-apple-darwin` · `x86_64-unknown-linux-gnu`.
@@ -114,6 +115,12 @@ docker run --rm -it --init -p 47200:47200 \
 - **main은 항상 green** — 테스트·린트 통과 전 병합 금지.
 - **[13 §12 코드 리뷰 체크리스트](13-code-design-standards.md) 통과**가 병합 조건이다(파이프라인 우회 없음·포트 주입·민감 타입 마스킹·상한 있는 큐 등).
 - 네트워크 기능은 단위 테스트만으로 신뢰하지 않는다. **2대 이상 실기 확인**을 병합 조건에 포함하고, 결과 수치를 journal에 남긴다.
+- ★ **조건부 컴파일(`#[cfg(...)]`)을 건드렸으면 반대편 타깃을 타입검사한다** — 내 OS의 게이트는 그 코드를 **보지도 않는다**. 08-11에 `use std::io::Write as _;`를 `#[cfg(unix)]`로 묶었다가 main이 red가 됐다: 그 트레이트를 쓰는 `Drop`은 **모든 플랫폼에서 컴파일된다**(Windows에선 실행만 안 될 뿐). *"안 도는 코드"와 "컴파일 안 되는 코드"는 다르다.*
+  ```bash
+  cargo check --workspace --all-targets --target x86_64-pc-windows-msvc
+  cargo check --workspace --all-targets --target aarch64-pc-windows-msvc
+  ```
+- **로컬 게이트는 4종 전부**(`fmt --check` · `clippy` · `test` · **`doc`**) + 위 크로스 타입검사. rustdoc을 빼먹으면 한국어 `[대괄호]`가 intra-doc 링크로 해석돼 CI가 red가 된다.
 
 ## 4. CI — `.github/workflows/ci.yml`
 
@@ -128,3 +135,45 @@ docker run --rm -it --init -p 47200:47200 \
 
 - 전역 `RUSTFLAGS=-D warnings` · `RUSTDOCFLAGS=-D warnings` — 경고 = 실패.
 - ⏳ **미발효(실물 도착 후 추가)**: 임포트 화이트리스트(NFR-B-5 · OS 인박스만 — SP-1/M0-2) · 유휴 RSS·24h 누수(NFR-B-1/6 — M1+) · 안전 회귀([§2](#2-검증-항목-기능-도착-시-절차화)) · 발견 실측 E-1~E-9(실기).
+
+## 5. 배포 — `.github/workflows/release.yml`
+
+> 포장 상세(채널·타깃·매니페스트·게시 스위치)는 [`packaging/README.md`](../packaging/README.md)가 SSOT.
+> 여기서는 **개발자가 밟는 절차**만 적는다.
+
+```bash
+# 1) main이 green인지 먼저 확인한다 — red 상태로 태그를 밀지 않는다.
+gh run list --branch main --workflow ci --limit 1
+# 2) 버전을 올린다(워크스페이스 단일 버전).
+#    태그와 Cargo 버전이 어긋나면 brew formula의 test가 잡는다.
+$EDITOR Cargo.toml       # [workspace.package] version
+# 3) 태그를 밀면 끝 — 빌드·릴리스 공개·brew 탭 반영이 자동으로 이어진다.
+git tag -a v0.1.2 -m "..." && git push origin v0.1.2
+```
+
+| 단계 | 자동 | 잠금 |
+|---|---|---|
+| 5타깃 포장 + GitHub Release **공개** | ✅ 태그 push | — |
+| Homebrew 탭 반영 | ✅ 릴리스 직후 | `TAP_TOKEN` 시크릿 유무 |
+| winget · Chocolatey 제출 | 실행되나 **기본 꺼짐** | 저장소 변수 `WINGET_PUBLISH`/`CHOCO_PUSH` + 시크릿 |
+
+- 태그 없이 확인만 하려면 Actions ▸ **release** ▸ *Run workflow*(그 경로는 **초안**을 만든다).
+- 제출만 다시 하려면 **homebrew** / **publish-windows-packages** 워크플로를 태그를 주고 실행한다.
+- ★ **공개된 버전의 자산은 덮어쓰지 않는다.** 같은 버전의 파일이 바뀌면 `SHA256SUMS.txt`가
+  지키려던 것을 스스로 깨는 셈이다 — 고칠 것이 생기면 **버전을 올려 새로 낸다**.
+
+### 배포 후 실기 확인(사람이 한다)
+
+CI가 통과해도 *"설치해서 실제로 뜨는가"* 는 다른 질문이다. 08-11 첫 배포에서 실제로
+깨져 있었던 것들이다.
+
+```bash
+brew update && brew install --cask kiros33/tap/nexa-beep
+xattr "/Applications/Nexa Beep.app"          # 격리 속성이 남아 있으면 실행 즉시 죽는다
+open -a "/Applications/Nexa Beep.app"        # ★ Finder 실행 = 인자 없음 경로
+brew install kiros33/tap/nexa-beep-portable && nexa-beep --version
+```
+
+⚠️ **macOS 격리** — 서명·공증이 없는 앱은 격리 표식이 붙어 있으면 **`exit 137`(SIGKILL)**
+되고 macOS가 앱을 삭제한다. 애드혹 서명으로도 넘지 못한다(08-11 실측). Cask가
+`postflight`에서 표식을 떼는 것이 **임시방편**이며, 제대로 된 해결은 서명·공증이다(M5-4 잔여).
