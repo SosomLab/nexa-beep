@@ -357,10 +357,10 @@ impl Msg {
                 "Base UI (等幅)",
             ],
             Msg::FontMonoDesc => [
-                "Face only — size follows Base UI. Used where digits must not jitter",
-                "얼굴만 지정 — 크기는 Base UI를 따릅니다. 숫자가 흔들리면 안 되는 곳에 쓰입니다",
-                "仅字形 — 大小跟随 Base UI，用于数字不能抖动之处",
-                "字体のみ — サイズは Base UI に従う。数字が揺れては困る箇所に使用",
+                "Face only — size follows Status bar. Used where digits must not jitter",
+                "얼굴만 지정 — 크기는 상태 표시줄을 따릅니다. 숫자가 흔들리면 안 되는 곳에 쓰입니다",
+                "仅字形 — 大小跟随状态栏，用于数字不能抖动之处",
+                "字体のみ — サイズはステータスバーに従う。数字が揺れては困る箇所に使用",
             ],
             Msg::Time24h => [
                 "Use 24-hour time",

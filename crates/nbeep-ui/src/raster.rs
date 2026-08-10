@@ -197,8 +197,10 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
             FontSlot::PeerList => self.prefs.peerlist,
             FontSlot::Message => self.prefs.message,
             FontSlot::Status => self.prefs.status,
-            // 고정폭은 **크기를 기본 UI와 공유**한다(얼굴만 다르다 — 사용자 확정).
-            FontSlot::Mono => self.prefs.base,
+            // 고정폭은 별도 크기 설정이 없다(얼굴만 지정). 크기는 **Status를 따른다** —
+            // 쓰이는 곳이 보조 정보 줄(설명문 13px 사이)이라 Base(16px)면 혼자 커 보인다
+            // (사용자 지적 08-10 — Consolas 밀도까지 겹쳐 차이가 도드라졌다).
+            FontSlot::Mono => self.prefs.status,
         };
         self.font = self.fonts.face(slot);
         // 인자 bold는 슬롯 설정 위 강제 볼드(예: 강조 라벨).
