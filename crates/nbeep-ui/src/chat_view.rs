@@ -1027,6 +1027,23 @@ impl Widget for ChatViewWidget {
                     (theme.panel_bg_alt, theme.text)
                 };
                 ctx.fill_round_rect(bub, self.s(9), bg);
+                // 꼬리 — 발신은 오른쪽, 수신은 왼쪽을 가리켜 방향을 구별(사용자 요청 08-10).
+                let tail_y = by0 + self.s(6);
+                if l.mine {
+                    ctx.fill_triangle(
+                        (bub.right() - 1, tail_y),
+                        (bub.right() - 1, tail_y + self.s(10)),
+                        (bub.right() + self.s(6), tail_y + self.s(2)),
+                        bg,
+                    );
+                } else {
+                    ctx.fill_triangle(
+                        (bub.x + 1, tail_y),
+                        (bub.x + 1, tail_y + self.s(10)),
+                        (bub.x - self.s(6), tail_y + self.s(2)),
+                        bg,
+                    );
+                }
                 self.hit_rects.borrow_mut().push((bub, b.entry)); // 우클릭 복사 히트
                 for (si, s) in b.lines.iter().enumerate() {
                     let ly = by0 + pad_v + si as i32 * line_h;

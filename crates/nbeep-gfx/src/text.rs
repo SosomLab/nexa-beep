@@ -98,6 +98,20 @@ impl Font {
         self.inner.glyph_id(c).0 != 0
     }
 
+    /// `size`에서 숫자 '0'의 **실측 외곽 높이**(px) — 광학 크기 보정용(08-10).
+    /// 같은 px라도 폰트마다 숫자가 차지하는 높이가 달라(Consolas ≫ 맑은 고딕)
+    /// 나란히 그리면 커 보인다. 외곽선이 없으면 경험 근사(0.7em).
+    #[must_use]
+    pub fn digit_height(&self, size: f32) -> f32 {
+        let g = self
+            .inner
+            .glyph_id('0')
+            .with_scale_and_position(size, ab_glyph::point(0.0, 0.0));
+        self.inner
+            .outline_glyph(g)
+            .map_or(size * 0.7, |og| og.px_bounds().height())
+    }
+
     /// `size`에서의 텍스트 상자 높이(어센트+디센트, px) — 세로 중앙 정렬 실측용.
     /// `line_height`와 달리 줄 간격(line gap)을 빼서 한 줄 배치에 쓴다.
     #[must_use]

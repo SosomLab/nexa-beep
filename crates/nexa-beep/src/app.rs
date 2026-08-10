@@ -1342,8 +1342,7 @@ impl App {
                 .connect(peer)
                 .map_err(|e| format!("{e:?}"))
                 .and_then(|link| {
-                    nbeep_crypto::NoiseSession::initiate(link, &identity)
-                        .map_err(|e| e.to_string())
+                    nbeep_crypto::NoiseSession::initiate(link, &identity).map_err(|e| e.to_string())
                 });
             let _ = match r {
                 Ok(session) => proxy.send_event(AppEvent::Outbound {
@@ -1474,7 +1473,6 @@ impl App {
         }
         self.request_redraw(id);
     }
-
 
     /// 설정 창을 연다(있으면 포커스) — `Cmd/Ctrl+,`.
     fn open_settings(&mut self, el: &ActiveEventLoop) {
@@ -2090,11 +2088,15 @@ impl App {
             .get_mut(&peer)
             .and_then(ChatViewWidget::take_copy_text)
         {
-            if nbeep_plat::clipboard::set_text(&t) {
-                self.status = "메시지 복사됨".into();
-                if let Some(mid) = self.main_id {
-                    self.request_redraw(mid);
-                }
+            // 실패도 말한다(조용한 무반응은 디버깅 불가 — 08-10 실기에서 배운 것).
+            self.status = if nbeep_plat::clipboard::set_text(&t) {
+                "메시지 복사됨".into()
+            } else {
+                "복사 실패 — 클립보드를 열 수 없습니다".into()
+            };
+            self.request_redraw(id);
+            if let Some(mid) = self.main_id {
+                self.request_redraw(mid);
             }
         }
         let outgoing = self
@@ -3358,41 +3360,43 @@ pub(crate) fn run(mode: WindowMode, live: bool) {
 
     let (transport, discovery): (std::sync::Arc<dyn nbeep_net::Transport + Send + Sync>, _) =
         if live {
-        // 실물 — LocalDirect(UDP 발견 + TCP 세션). 실기·컨테이너 상대가 목록에 뜬다.
-        let mut instance = [0u8; 16];
-        instance.copy_from_slice(&nbeep_crypto::Identity::generate().peer_id().as_bytes()[..16]);
-        let name = nbeep_core::DisplayName::parse(&format!("나-{}", identity.peer_id().short()))
-            .expect("라벨");
-        let local = nbeep_net::LocalDirect::spawn(identity.peer_id(), instance, name, 800, 1)
-            .expect("LocalDirect 시작(방화벽·인터페이스)");
-        let discovery = local.discovery();
-        // 인바운드 수락 펌프 — 남이 나에게 연결하면 accept+에코(대칭 대화·비동기 GUI 펌프는 M2-7).
-        spawn_inbound_accept(
-            local.incoming(),
-            std::sync::Arc::clone(&identity),
-            proxy.clone(),
-        );
+            // 실물 — LocalDirect(UDP 발견 + TCP 세션). 실기·컨테이너 상대가 목록에 뜬다.
+            let mut instance = [0u8; 16];
+            instance
+                .copy_from_slice(&nbeep_crypto::Identity::generate().peer_id().as_bytes()[..16]);
+            let name =
+                nbeep_core::DisplayName::parse(&format!("나-{}", identity.peer_id().short()))
+                    .expect("라벨");
+            let local = nbeep_net::LocalDirect::spawn(identity.peer_id(), instance, name, 800, 1)
+                .expect("LocalDirect 시작(방화벽·인터페이스)");
+            let discovery = local.discovery();
+            // 인바운드 수락 펌프 — 남이 나에게 연결하면 accept+에코(대칭 대화·비동기 GUI 펌프는 M2-7).
+            spawn_inbound_accept(
+                local.incoming(),
+                std::sync::Arc::clone(&identity),
+                proxy.clone(),
+            );
             (std::sync::Arc::new(local), discovery)
         } else {
-        // 데모 — InMemory 버스 + 에코 봇. 순환 탐색 테스트용으로 같은 접두사(김*/bob* 등)를
-        // 여러 개 둔다(타입어헤드 ↑↓ 순환 확인).
-        let bus = nbeep_net::inmem::InMemoryBus::new();
-        for name in [
-            "김철수의 MacBook",
-            "김영희 데스크탑",
-            "김민수 노트북",
-            "이영희 (개발2팀)",
-            "bob-linux",
-            "bora-win",
-            "bill-mac",
-        ] {
-            spawn_echo_bot(&bus, name);
-        }
-        let transport = bus.join(
-            identity.peer_id(),
-            nbeep_core::DisplayName::parse("나").unwrap(),
-            nbeep_net::Caps::default(),
-        );
+            // 데모 — InMemory 버스 + 에코 봇. 순환 탐색 테스트용으로 같은 접두사(김*/bob* 등)를
+            // 여러 개 둔다(타입어헤드 ↑↓ 순환 확인).
+            let bus = nbeep_net::inmem::InMemoryBus::new();
+            for name in [
+                "김철수의 MacBook",
+                "김영희 데스크탑",
+                "김민수 노트북",
+                "이영희 (개발2팀)",
+                "bob-linux",
+                "bora-win",
+                "bill-mac",
+            ] {
+                spawn_echo_bot(&bus, name);
+            }
+            let transport = bus.join(
+                identity.peer_id(),
+                nbeep_core::DisplayName::parse("나").unwrap(),
+                nbeep_net::Caps::default(),
+            );
             let discovery = transport.discovery();
             (std::sync::Arc::new(transport), discovery)
         };

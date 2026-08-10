@@ -52,6 +52,11 @@ pub trait DrawCtx {
         16
     }
 
+    /// 삼각형을 단색 AA로 채운다(말풍선 꼬리 등 — 08-10). 기본 = no-op.
+    fn fill_triangle(&mut self, a: (i32, i32), b: (i32, i32), c: (i32, i32), color: Color) {
+        let _ = (a, b, c, color);
+    }
+
     /// RGBA 이미지 아이콘을 `(x, y)`(좌상단)에 알파 블렌드 — `clip` 밖은 잘린다. 기본 = no-op.
     fn image(&mut self, x: i32, y: i32, img: &crate::theme::IconImage, clip: Rect) {
         let _ = (x, y, img, clip);

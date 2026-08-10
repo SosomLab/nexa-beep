@@ -68,6 +68,9 @@ pub struct RasterCtx<'s, 'b, 'f> {
     cur: SlotFont,
     /// 배율(고DPI — FR-U-6). 크기에 곱한다. 좌표는 이미 물리 px(호출자 몫).
     scale: f32,
+    /// 광학 크기 보정(고정폭 전용 · 08-10) — 같은 px에서 숫자가 차지하는 높이를
+    /// 기본 얼굴과 일치시키는 배수(Consolas는 숫자가 커서 <1.0). 다른 슬롯은 1.0.
+    mono_mult: f32,
 }
 
 impl<'s, 'b, 'f> RasterCtx<'s, 'b, 'f> {
@@ -87,6 +90,7 @@ impl<'s, 'b, 'f> RasterCtx<'s, 'b, 'f> {
             prefs,
             cur: prefs.base,
             scale: 1.0,
+            mono_mult: 1.0,
         }
     }
 
@@ -203,6 +207,15 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
             FontSlot::Mono => self.prefs.status,
         };
         self.font = self.fonts.face(slot);
+        // 광학 크기 보정 — 같은 px라도 고정폭 숫자는 본문보다 커 보인다(사용자 지적
+        // 08-10 2차: px를 맞춰도 차이가 심하다). 숫자 '0'의 실측 외곽 높이 비로 맞춘다.
+        self.mono_mult = if matches!(slot, FontSlot::Mono)
+            && !core::ptr::eq(self.font as *const Font, self.fonts.base as *const Font)
+        {
+            (self.fonts.base.digit_height(100.0) / self.font.digit_height(100.0)).clamp(0.75, 1.15)
+        } else {
+            1.0
+        };
         // 인자 bold는 슬롯 설정 위 강제 볼드(예: 강조 라벨).
         self.cur.bold |= bold;
     }
@@ -225,18 +238,49 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
         self.text(x, y, clip, text, fg);
     }
 
+    fn fill_triangle(&mut self, a: (i32, i32), b: (i32, i32), c: (i32, i32), color: Color) {
+        let (a, b, c) = (
+            (a.0 as f32, a.1 as f32),
+            (b.0 as f32, b.1 as f32),
+            (c.0 as f32, c.1 as f32),
+        );
+        // 세 반평면의 부호 거리 — 무게중심에서 부호를 재 감김 방향을 정규화한다.
+        let edge = |p: (f32, f32), q: (f32, f32), x: f32, y: f32| {
+            let (ex, ey) = (q.0 - p.0, q.1 - p.1);
+            let len = (ex * ex + ey * ey).sqrt().max(f32::EPSILON);
+            ((x - p.0) * ey - (y - p.1) * ex) / len
+        };
+        let cx = (a.0 + b.0 + c.0) / 3.0;
+        let cy = (a.1 + b.1 + c.1) / 3.0;
+        let s = if edge(a, b, cx, cy) < 0.0 { -1.0 } else { 1.0 };
+        let rect = Rect::new(
+            a.0.min(b.0).min(c.0).floor() as i32 - 1,
+            a.1.min(b.1).min(c.1).floor() as i32 - 1,
+            (a.0.max(b.0).max(c.0) - a.0.min(b.0).min(c.0)).ceil() as i32 + 2,
+            (a.1.max(b.1).max(c.1) - a.1.min(b.1).min(c.1)).ceil() as i32 + 2,
+        );
+        // 내부 = 세 거리 모두 양수(정규화 후) → dist = -(최솟값): 내부 음수·외부 양수.
+        self.coverage_fill(rect, color, move |x, y| {
+            -(s * edge(a, b, x, y))
+                .min(s * edge(b, c, x, y))
+                .min(s * edge(c, a, x, y))
+        });
+    }
+
     fn text(&mut self, x: i32, y: i32, clip: Rect, text: &str, fg: Color) {
         let size = self.px_size();
-        let baseline = y as f32 + self.font.ascent(size);
+        // 광학 보정 — 슬롯 얼굴(고정폭)은 보정 크기로, 폴백(기본 얼굴)은 명목 크기로.
+        let own = size * self.mono_mult;
         // 슬롯 얼굴에 없는 글자는 **기본 얼굴로 폴백**(08-10 — 고정폭 Consolas에 한글이
-        // 없어 두부(□)가 나던 문제. 베이스라인은 슬롯 얼굴 기준으로 공유 = 줄이 안 흔들린다).
+        // 없어 두부(□)가 나던 문제. 베이스라인은 공유 = 줄이 안 흔들린다).
         if core::ptr::eq(self.font, self.fonts.base) || text.chars().all(|c| self.font.has_glyph(c))
         {
+            let baseline = y as f32 + self.font.ascent(own);
             self.font.draw_styled(
                 self.surface,
                 x as f32,
                 baseline,
-                size,
+                own,
                 fg,
                 text,
                 Self::clip_of(clip),
@@ -244,40 +288,53 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
             );
             return;
         }
+        let baseline = y as f32 + self.font.ascent(own).max(self.fonts.base.ascent(size));
         let mut fx = x as f32;
         for (fallback, run) in split_runs(text, |c| self.font.has_glyph(c)) {
-            let f: &Font = if fallback { self.fonts.base } else { self.font };
+            let (f, s): (&Font, f32) = if fallback {
+                (self.fonts.base, size)
+            } else {
+                (self.font, own)
+            };
             f.draw_styled(
                 self.surface,
                 fx,
                 baseline,
-                size,
+                s,
                 fg,
                 &run,
                 Self::clip_of(clip),
                 self.cur_style(),
             );
-            fx += f.measure(&run, size);
+            fx += f.measure(&run, s);
         }
     }
 
     fn text_width(&mut self, text: &str) -> i32 {
         let size = self.px_size();
+        let own = size * self.mono_mult;
         if core::ptr::eq(self.font, self.fonts.base) || text.chars().all(|c| self.font.has_glyph(c))
         {
-            return self.font.measure(text, size).ceil() as i32;
+            return self.font.measure(text, own).ceil() as i32;
         }
         split_runs(text, |c| self.font.has_glyph(c))
             .into_iter()
             .map(|(fallback, run)| {
-                let f: &Font = if fallback { self.fonts.base } else { self.font };
-                f.measure(&run, size)
+                if fallback {
+                    self.fonts.base.measure(&run, size)
+                } else {
+                    self.font.measure(&run, own)
+                }
             })
             .sum::<f32>()
             .ceil() as i32
     }
 
     fn text_height(&mut self) -> i32 {
+        if (self.mono_mult - 1.0).abs() > f32::EPSILON {
+            // 고정폭 줄엔 한글 폴백(기본 얼굴·명목 크기)이 섞인다 — 그 기준으로 센터링.
+            return self.fonts.base.text_box_height(self.px_size()).ceil() as i32;
+        }
         self.font.text_box_height(self.px_size()).ceil() as i32
     }
 

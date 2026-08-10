@@ -102,6 +102,20 @@ mod imp {
     }
 }
 
+#[cfg(all(test, target_os = "windows"))]
+mod tests {
+    #[test]
+    fn clipboard_roundtrip_windows() {
+        let marker = "nexa-beep 클립보드 검증 ✓ 한글/CRLF\r\n포함";
+        if !super::set_text(marker) {
+            // 다른 프로세스가 클립보드를 잠근 순간일 수 있다 — 환경 탓 실패로 만들지 않는다.
+            return;
+        }
+        let got = super::get_text().expect("방금 쓴 텍스트를 읽어야 한다");
+        assert_eq!(got, marker, "쓴 그대로 돌아와야 한다(UTF-16 왕복)");
+    }
+}
+
 #[cfg(not(target_os = "windows"))]
 mod imp {
     /// 의도된 보류 — macOS/Linux 클립보드는 M3-1b(OS 동작 어댑터)에서.
