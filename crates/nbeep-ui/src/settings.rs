@@ -515,6 +515,12 @@ const COMBO_W: i32 = 170;
 const SIZE_W: i32 = 112;
 const FAMILY_W: i32 = 180;
 const PAD: i32 = 12;
+/// 스크롤 영역 안의 하위 섹션 제목 높이.
+const SUB_HEAD_H: i32 = 34;
+/// 상단 고정 밴드 — 상위 제목 줄 + 하위 제목 줄(하위가 없으면 아랫줄은 비워 둔다).
+/// **높이를 고정**해야 그룹을 넘나들 때 내용이 위아래로 튀지 않는다.
+const CRUMB_CAT_H: i32 = 30;
+const CRUMB_SUB_H: i32 = 24;
 
 /// 우측 한 행 = 레지스트리 항목 + 실물 컨트롤.
 #[derive(Debug)]
@@ -540,6 +546,13 @@ struct RowUi {
     /// 행 영역(우측 패널 안 · 물리 px).
     rect: Rect,
     ctl: RowCtl,
+    /// 이 행이 속한 그룹 `(상위, 하위)` — 상단 고정 밴드가 무엇을 보여줄지 정한다.
+    group: (Msg, Option<Msg>),
+    /// 이 행 **위에** 그릴 하위 섹션 제목(그룹의 첫 행에만). 상위 직속 구간은 `None`
+    /// (상위 제목은 스크롤되지 않는 밴드가 늘 보여주므로 본문에 또 적지 않는다).
+    head: Option<Msg>,
+    /// 헤더까지 포함한 이 행의 시작 y(레이아웃이 채운다) — 밴드 판정에 쓴다.
+    head_h: i32,
 }
 
 /// 설정 위젯 — 커스텀 컨트롤 컴포지션.
@@ -673,11 +686,16 @@ impl SettingsWidget {
     }
 
     /// 가시 항목(registry 인덱스) — 검색 중=전 카테고리 매치, 아니면 선택 카테고리.
+    ///
+    /// **그룹 순서로 정렬해서 돌려준다** — 상위에 직속인 설정이 먼저, 그다음 하위 그룹이
+    /// 사이드바에 보이는 순서대로 이어진다(사용자 확정 08-10). registry 순서를 그대로
+    /// 쓰면 "다크 색 → 라이트 색 → 언어 → 타입어헤드"처럼 섞여 나와, 지금 보는 값이
+    /// 어느 그룹의 것인지 화면만 봐서는 알 수 없다. 그룹 안에서는 registry 순서를 지킨다.
     fn visible_indices(&self) -> Vec<usize> {
         let toks = tokens(&self.query);
         let searching = !toks.is_empty();
         let selected = Self::cats().get(self.selected_cat).map(|(c, _)| *c);
-        registry()
+        let mut hits: Vec<usize> = registry()
             .iter()
             .enumerate()
             .filter(|(_, e)| {
@@ -691,7 +709,27 @@ impl SettingsWidget {
                 }
             })
             .map(|(i, _)| i)
-            .collect()
+            .collect();
+        // 정렬 키 = (상위 순서, 하위 순서). 직속(sub=None)은 하위보다 **먼저**(=0).
+        let cats = Self::cats();
+        let key = |idx: &usize| -> (usize, usize) {
+            let e = &registry()[*idx];
+            let ci = cats
+                .iter()
+                .position(|(c, _)| *c == e.cat)
+                .unwrap_or(usize::MAX);
+            let si = match e.sub {
+                None => 0,
+                Some(sub) => cats
+                    .get(ci)
+                    .and_then(|(_, subs)| subs.iter().position(|s| *s == sub))
+                    .map_or(usize::MAX, |p| p + 1),
+            };
+            (ci, si)
+        };
+        // 안정 정렬 — 같은 그룹 안에서는 registry 순서가 그대로 남는다.
+        hits.sort_by_key(key);
+        hits
     }
 
     /// 사이드바·우측 행(컨트롤 포함)을 현재 상태(검색·선택·값)로 다시 만든다.
@@ -826,10 +864,23 @@ impl SettingsWidget {
                     RowCtl::Font { family, size }
                 }
             };
+            // 그룹이 바뀌는 첫 행에만 하위 섹션 제목을 붙인다(상위 제목은 고정 밴드 몫).
+            let group = (e.cat, e.sub);
+            let head = match (self.rows.last().map(|r| r.group), e.sub) {
+                (_, None) => None,
+                (Some(prev), Some(sub)) if prev == group => {
+                    let _ = sub;
+                    None
+                }
+                (_, Some(sub)) => Some(sub),
+            };
             self.rows.push(RowUi {
                 idx,
                 rect: Rect::default(),
                 ctl,
+                group,
+                head,
+                head_h: 0,
             });
         }
         self.layout(inv);
@@ -891,11 +942,29 @@ impl SettingsWidget {
         self.disabled.contains(registry()[idx].key)
     }
 
-    /// 우측 패널 뷰포트(사이드바 제외 영역).
+    /// 상단 고정 밴드(상위 + 하위 제목) 높이 — 하위가 없어도 **줄어들지 않는다**.
+    /// 그룹 경계를 넘을 때 아래 내용이 위아래로 튀면 읽던 자리를 잃는다.
+    fn crumb_h(&self) -> i32 {
+        self.s(CRUMB_CAT_H) + self.s(CRUMB_SUB_H)
+    }
+
+    /// 우측 패널 뷰포트(사이드바 제외 · **고정 밴드 아래**부터).
     fn right_viewport(&self) -> Rect {
         let sw = self.s(self.sidebar_w);
         let b = self.bounds;
-        Rect::new(b.x + sw, b.y, (b.w - sw).max(0), b.h)
+        let top = b.y + self.crumb_h();
+        Rect::new(b.x + sw, top, (b.w - sw).max(0), (b.bottom() - top).max(0))
+    }
+
+    /// 스크롤 위치 기준으로 지금 보이는 그룹 `(상위, 하위)` — 고정 밴드가 이걸 그린다.
+    /// 뷰포트 맨 위에 걸친 행의 그룹을 쓴다(그 행이 곧 사용자가 지금 읽는 것).
+    fn current_group(&self) -> Option<(Msg, Option<Msg>)> {
+        let vp = self.right_viewport();
+        self.rows
+            .iter()
+            .find(|r| r.rect.bottom() > vp.y)
+            .or_else(|| self.rows.last())
+            .map(|r| r.group)
     }
 
     /// 스크롤바 자동숨김 틱 — 표시가 바뀌면 `true`(재그리기). `now_ms`는 호스트 시계.
@@ -938,6 +1007,7 @@ impl SettingsWidget {
         let rw = (b.w - sw).max(0);
         // 콘텐츠 총 높이 → 스크롤 클램프(행 추가/검색으로 줄어들면 위로 당긴다).
         let (hf, he, hp) = (self.s(FONT_SECTION_H), self.s(ENTRY_H), self.s(POS_ROW_H));
+        let head_h = self.s(SUB_HEAD_H);
         self.content_h = self
             .rows
             .iter()
@@ -947,11 +1017,13 @@ impl SettingsWidget {
                     SettingKind::PositionGrid => hp,
                     _ => he,
                 };
-                base + self.note_h(row.idx)
+                base + self.note_h(row.idx) + if row.head.is_some() { head_h } else { 0 }
             })
             .sum();
-        self.scroll = self.scroll.clamp(0, (self.content_h - b.h).max(0));
-        let mut top = b.y - self.scroll;
+        let vp_h = self.right_viewport().h;
+        self.scroll = self.scroll.clamp(0, (self.content_h - vp_h).max(0));
+        // 내용은 **밴드 아래**에서 시작한다(밴드가 첫 행을 가리면 못 만진다).
+        let mut top = b.y + self.crumb_h() - self.scroll;
         // 차용 분리를 위해 치수 사전 계산.
         let (ctl_h, pad) = (self.s(CTL_H), self.s(PAD));
         let (h_font, h_entry, h_pos) = (self.s(FONT_SECTION_H), self.s(ENTRY_H), self.s(POS_ROW_H));
@@ -966,6 +1038,9 @@ impl SettingsWidget {
                 SettingKind::PositionGrid => h_pos,
                 _ => h_entry,
             } + note_hs[ri];
+            // 하위 섹션 제목 자리를 행 **위에** 비워 둔다.
+            row.head_h = if row.head.is_some() { head_h } else { 0 };
+            top += row.head_h;
             row.rect = Rect::new(rx, top, rw, h);
             match &mut row.ctl {
                 RowCtl::Combo(c) => {
@@ -1184,6 +1259,28 @@ impl Widget for SettingsWidget {
             }
         }
 
+        // ── 상단 고정 밴드는 클릭을 **먹는다** ──
+        // 밴드는 스크롤해 올라간 행 위에 덮여 있다. 막지 않으면 제목을 눌렀을 뿐인데
+        // 보이지도 않는 행의 콤보가 열린다.
+        {
+            let sw = self.s(self.sidebar_w);
+            let crumb = Rect::new(
+                self.bounds.x + sw,
+                self.bounds.y,
+                (self.bounds.w - sw).max(0),
+                self.crumb_h(),
+            );
+            let inside = match *ev {
+                InputEvent::MouseDown { x, y, .. } | InputEvent::MouseUp { x, y } => {
+                    crumb.contains(Point { x, y })
+                }
+                _ => false,
+            };
+            if inside {
+                return;
+            }
+        }
+
         // ── 우측 패널 오버레이 스크롤(세로 전용) — 콤보 열림 중에는 위 캡처가 우선 ──
         {
             let vp = self.right_viewport();
@@ -1389,6 +1486,25 @@ impl Widget for SettingsWidget {
             theme.border,
         );
 
+        // 하위 섹션 제목(스크롤과 함께 올라간다 — 고정 밴드가 그 위를 덮는다).
+        let vp_clip = self.right_viewport();
+        ctx.select_font(FontSlot::Base, true);
+        for row in &self.rows {
+            let Some(sub) = row.head else { continue };
+            let hr = Rect::new(row.rect.x, row.rect.y - row.head_h, row.rect.w, row.head_h);
+            if hr.bottom() <= vp_clip.y || hr.y >= vp_clip.bottom() {
+                continue; // 화면 밖
+            }
+            let th = ctx.text_height();
+            ctx.text(
+                hr.x + self.s(PAD),
+                hr.y + (hr.h - th) / 2 + self.s(4),
+                vp_clip,
+                tr(lang, sub),
+                theme.text,
+            );
+        }
+
         // 우측 행: 라벨/설명 + 컨트롤.
         for row in &self.rows {
             let e = &registry()[row.idx];
@@ -1493,6 +1609,48 @@ impl Widget for SettingsWidget {
             self.scroll,
             self.scale,
         );
+
+        // ── 상단 고정 밴드: 지금 보고 있는 설정의 계층 ──
+        // 스크롤해 올라간 섹션 제목이 사라지면, 화면 가운데의 "Accent"가 다크의 것인지
+        // 라이트의 것인지 알 수 없다(사용자 지적 08-10). 그래서 **늘 남긴다**.
+        // 스크롤 내용을 덮어야 하므로 **맨 마지막에, 불투명하게** 그린다.
+        let crumb = Rect::new(
+            self.bounds.x + sw,
+            self.bounds.y,
+            (self.bounds.w - sw).max(0),
+            self.crumb_h(),
+        );
+        ctx.fill_rect(crumb, theme.panel_bg);
+        if let Some((cat, sub)) = self.current_group() {
+            ctx.select_font(FontSlot::Base, true);
+            let th = ctx.text_height();
+            let cat_h = self.s(CRUMB_CAT_H);
+            ctx.text(
+                crumb.x + self.s(PAD),
+                crumb.y + (cat_h - th) / 2,
+                crumb,
+                tr(lang, cat),
+                theme.text,
+            );
+            // 하위 줄 — 직속 설정 구간이면 비워 둔다(자리는 유지).
+            if let Some(sub) = sub {
+                ctx.select_font(FontSlot::Base, false);
+                let sth = ctx.text_height();
+                let sub_h = self.s(CRUMB_SUB_H);
+                // 한 단 들여써서 "상위 아래"임을 보인다.
+                ctx.text(
+                    crumb.x + self.s(PAD) + self.s(14),
+                    crumb.y + cat_h + (sub_h - sth) / 2,
+                    crumb,
+                    tr(lang, sub),
+                    theme.text_dim,
+                );
+            }
+        }
+        ctx.fill_rect(
+            Rect::new(crumb.x, crumb.bottom() - 1, crumb.w, 1),
+            theme.border,
+        );
     }
 }
 
@@ -1535,6 +1693,107 @@ mod tests {
         let mut inv = Invalidations::default();
         w.rebuild(&mut inv);
         w.set_bounds(Rect::new(0, 0, 560, 560), &mut inv);
+    }
+
+    #[test]
+    fn direct_settings_come_first_then_each_sub_group() {
+        // 사용자 확정 08-10 — 상위 직속 → 하위1 → 하위2 순서.
+        // registry 순서 그대로면 다크 색과 라이트 색 사이에 언어·툴바가 끼어든다.
+        let (mut w, _) = widget();
+        select_cat(&mut w, Msg::CatAppearance);
+        let groups: Vec<Option<Msg>> = w.rows.iter().map(|r| r.group.1).collect();
+        assert!(!groups.is_empty());
+        // 직속(None)이 앞에 몰려 있어야 한다 — 뒤쪽에 None이 다시 나오면 섞인 것이다.
+        let last_direct = groups.iter().rposition(Option::is_none).unwrap();
+        let first_sub = groups.iter().position(Option::is_some).unwrap();
+        assert!(
+            last_direct < first_sub,
+            "직속 설정이 하위 그룹 뒤로 흩어졌다: {groups:?}"
+        );
+        // 같은 하위는 **연속**해야 한다(한 번 끝난 그룹이 다시 나오면 안 된다).
+        let mut seen = Vec::new();
+        for g in groups.iter().flatten() {
+            if seen.last() != Some(g) {
+                assert!(!seen.contains(g), "그룹 {g:?}이 두 번 나온다: {groups:?}");
+                seen.push(*g);
+            }
+        }
+        assert!(seen.len() >= 2, "하위 그룹이 둘 이상이어야 의미 있는 검증");
+    }
+
+    #[test]
+    fn each_sub_group_gets_exactly_one_header() {
+        let (mut w, _) = widget();
+        select_cat(&mut w, Msg::CatAppearance);
+        let heads: Vec<Msg> = w.rows.iter().filter_map(|r| r.head).collect();
+        let subs: Vec<Msg> = {
+            let mut v: Vec<Msg> = w.rows.iter().filter_map(|r| r.group.1).collect();
+            v.dedup();
+            v
+        };
+        assert_eq!(heads, subs, "그룹마다 제목 하나 — 빠지거나 겹치지 않는다");
+        // 직속 구간에는 제목을 붙이지 않는다(상위 제목은 고정 밴드가 늘 보여준다).
+        assert!(
+            w.rows
+                .iter()
+                .all(|r| r.group.1.is_some() || r.head.is_none()),
+            "직속 행에 하위 제목이 붙었다"
+        );
+    }
+
+    #[test]
+    fn pinned_band_follows_the_scroll_position() {
+        let (mut w, mut inv) = widget();
+        select_cat(&mut w, Msg::CatAppearance);
+        // 맨 위 = 상위 직속 구간이므로 하위 줄은 비어 있다.
+        assert_eq!(w.current_group(), Some((Msg::CatAppearance, None)));
+        // 첫 하위 그룹의 첫 행까지 스크롤하면 밴드가 그 하위를 가리켜야 한다.
+        let (want_sub, y) = w
+            .rows
+            .iter()
+            .find_map(|r| r.group.1.map(|s| (s, r.rect.y)))
+            .unwrap();
+        w.scroll += y - w.right_viewport().y;
+        w.layout(&mut inv);
+        assert_eq!(
+            w.current_group(),
+            Some((Msg::CatAppearance, Some(want_sub))),
+            "스크롤한 그룹이 상단에 남아야 한다"
+        );
+    }
+
+    #[test]
+    fn content_starts_below_the_pinned_band() {
+        // 밴드가 첫 행을 덮으면 그 설정은 영영 못 만진다.
+        let (mut w, _) = widget();
+        select_cat(&mut w, Msg::CatAppearance);
+        let first = w.rows.first().unwrap().rect;
+        assert!(
+            first.y >= w.bounds.y + w.crumb_h(),
+            "첫 행이 밴드 아래에서 시작해야 한다: {} < {}",
+            first.y,
+            w.bounds.y + w.crumb_h()
+        );
+    }
+
+    #[test]
+    fn band_swallows_clicks_so_hidden_rows_are_not_hit() {
+        let (mut w, mut inv) = widget();
+        select_cat(&mut w, Msg::CatAppearance);
+        // 아래로 스크롤해 행들이 밴드 뒤로 올라가게 한다.
+        w.scroll = 200;
+        w.layout(&mut inv);
+        let before: Vec<Rect> = w.rows.iter().map(|r| r.rect).collect();
+        let sw = w.s(w.sidebar_w);
+        w.on_event(&click(w.bounds.x + sw + 20, w.bounds.y + 4), &mut inv);
+        let after: Vec<Rect> = w.rows.iter().map(|r| r.rect).collect();
+        assert_eq!(before, after, "밴드 클릭이 뒤 행을 건드리면 안 된다");
+        assert!(
+            w.rows
+                .iter()
+                .all(|r| !matches!(&r.ctl, RowCtl::Combo(c) if c.is_open())),
+            "보이지 않는 행의 콤보가 열렸다"
+        );
     }
 
     #[test]
