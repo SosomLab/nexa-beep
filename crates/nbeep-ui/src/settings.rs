@@ -476,6 +476,52 @@ impl SettingsState {
     pub fn set(&mut self, key: &'static str, value: String) {
         self.values.insert(key, value);
     }
+
+    /// 저장 스냅샷 — 전체 (키, 값) 쌍을 **키 정렬**로(직렬화가 결정적이어야
+    /// "직전 저장분과 같으면 쓰지 않는다"(ADR-0011 S-3) 비교가 성립한다).
+    #[must_use]
+    pub fn known_pairs(&self) -> Vec<(&'static str, &str)> {
+        let mut pairs: Vec<_> = self.values.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        pairs.sort_unstable_by_key(|(k, _)| *k);
+        pairs
+    }
+
+    /// 파일에서 읽은 (키, 값)을 적용한다 — **아는 키만**, 값은 Kind별 관용 검증
+    /// (ADR-0011 §4-3: 거부·실패가 아니라 무시 = 기본값 유지). 반환 = 아는 키였는가
+    /// (거짓이면 호출자가 미지 키로 보존한다 — F-1).
+    pub fn set_by_name(&mut self, key: &str, value: &str) -> bool {
+        // &'static str 키는 레지스트리에서 찾는다(default_values가 파생 키 포함 전부).
+        let mut found: Option<&'static str> = None;
+        let mut kind: Option<SettingKind> = None;
+        'outer: for e in registry() {
+            for (k, _) in e.default_values() {
+                if k == key {
+                    found = Some(k);
+                    // FontSection의 size 파생 키는 Radio류가 아니므로 kind 검증에서
+                    // family/size를 구분한다 — 아래 검증 참조.
+                    kind = Some(e.kind);
+                    break 'outer;
+                }
+            }
+        }
+        let (Some(k), Some(kind)) = (found, kind) else {
+            return false;
+        };
+        let valid = match kind {
+            SettingKind::Radio(opts) => opts.iter().any(|(v, _)| *v == value),
+            // 직접 입력 허용 — 빈 값만 거른다(빈 문자열은 기본값 의미가 아니다).
+            SettingKind::RadioInput(..) => !value.is_empty(),
+            SettingKind::Toggle => value == "on" || value == "off",
+            SettingKind::Color { .. } => crate::theme::color_from_hex(value).is_some(),
+            // 위치 코드·글꼴명(빈 값 = 시스템 기본)·크기 코드는 소비처가 관용 파싱한다.
+            SettingKind::PositionGrid | SettingKind::FontFace { .. } => true,
+            SettingKind::FontSection { .. } => true,
+        };
+        if valid {
+            self.values.insert(k, value.to_string());
+        }
+        true // 아는 키다 — 값이 무효여도 미지 키로 보존하지 않는다(기본값 유지).
+    }
 }
 
 /// 검색어 → 소문자 토큰(공백 구분 **AND 매칭** — VS Code 규약).
@@ -1677,6 +1723,43 @@ mod tests {
             shift: false,
             primary: false,
         }
+    }
+
+    /// ADR-0011 T-7 — 파일에서 온 값의 관용 검증: 무효 값은 거부가 아니라
+    /// **무시(기본값 유지)**, 모르는 키만 거짓(미지 키 보존 대상).
+    #[test]
+    fn set_by_name_lenient_validation() {
+        let mut s = SettingsState::with_defaults();
+        // Radio: 후보 밖 값은 무시, 후보 값은 적용.
+        assert!(s.set_by_name("chat.window_mode", "쓰레기"));
+        assert_eq!(s.get("chat.window_mode"), "single");
+        assert!(s.set_by_name("chat.window_mode", "separate"));
+        assert_eq!(s.get("chat.window_mode"), "separate");
+        // Toggle: on/off 외 무시.
+        assert!(s.set_by_name("chat.time_24h", "yes"));
+        assert_eq!(s.get("chat.time_24h"), "on");
+        assert!(s.set_by_name("chat.time_24h", "off"));
+        assert_eq!(s.get("chat.time_24h"), "off");
+        // Color: #RRGGBB 아니면 무시.
+        let before = s.get("theme.dark.accent").to_string();
+        assert!(s.set_by_name("theme.dark.accent", "red"));
+        assert_eq!(s.get("theme.dark.accent"), before);
+        assert!(s.set_by_name("theme.dark.accent", "#112233"));
+        assert_eq!(s.get("theme.dark.accent"), "#112233");
+        // FontSection 파생 size 키도 아는 키다.
+        assert!(s.set_by_name("font.base.size", "l"));
+        // 모르는 키만 거짓.
+        assert!(!s.set_by_name("future.key", "x"));
+    }
+
+    /// known_pairs는 키 정렬(결정적 직렬화 — S-3 비교 성립 조건).
+    #[test]
+    fn known_pairs_sorted_and_complete() {
+        let s = SettingsState::with_defaults();
+        let pairs = s.known_pairs();
+        assert!(pairs.windows(2).all(|w| w[0].0 < w[1].0), "정렬·중복 없음");
+        assert!(pairs.iter().any(|(k, _)| *k == "chat.window_mode"));
+        assert!(pairs.iter().any(|(k, _)| *k == "font.base.size"));
     }
     fn ch(c: char) -> InputEvent {
         InputEvent::Char { c, now_ms: 0 }
