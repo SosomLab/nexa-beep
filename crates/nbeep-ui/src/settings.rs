@@ -17,8 +17,8 @@
 //! M2-5(Repository 포트). i18n: 라벨은 [`Msg`] 키, 검색은 **전 언어 매치**.
 
 use crate::controls::{
-    Checkbox, ColorPicker, Combo, ComboControl, ComboItem, Control, LabelSide, PositionPicker,
-    ScrollBars, TextBox, TreeControl, TreeModel, TreeNode, TreeView,
+    Button, ColorPicker, Combo, ComboControl, ComboItem, Control, LabelSide, PositionPicker,
+    ScrollBars, Switch, TextBox, TreeControl, TreeModel, TreeNode, TreeView,
 };
 use crate::draw::{DrawCtx, FontSlot};
 use crate::event::{InputEvent, Key};
@@ -38,6 +38,13 @@ const SIZE_OPTS: &[(&str, Msg)] = &[
 
 /// 크기 기본값 — 순서와 무관하게 '보통' 고정.
 const SIZE_DEFAULT: &str = "m";
+
+/// 기본 off 토글 — 프로필 공개(DR-22 **기본 전부 비노출** · 옵트인). 미등록 토글은 on.
+const TOGGLE_DEFAULT_OFF: &[&str] = &[
+    "profile.share.basic",
+    "profile.share.email",
+    "profile.share.phone",
+];
 
 /// Radio 기본값 예외 — 표시 순서(오름차순 등)와 기본값이 다른 키만 등록.
 /// 미등록 키의 기본은 첫 옵션(기존 규약).
@@ -75,6 +82,12 @@ pub enum SettingKind {
         /// 크기 값 키(`font.{region}.size`).
         size_key: &'static str,
     },
+    /// 실행 버튼 — 값이 아니라 **행위**(백업·복원 등). 클릭 = `(key, "run")` 변경 방출.
+    /// 값 키가 없어(`default_values` 빈 목록) 영속 파일에 실리지 않는다.
+    Action {
+        /// 버튼 라벨.
+        verb: Msg,
+    },
 }
 
 /// 설정 항목(레지스트리 최소 단위).
@@ -106,7 +119,11 @@ impl Entry {
                 .map(|v| (self.key, v.to_string()))
                 .into_iter()
                 .collect(),
-            SettingKind::Toggle => vec![(self.key, "on".to_string())],
+            SettingKind::Toggle => {
+                // 프로필 공개는 **기본 비노출**(DR-22 — 옵트인). 그 외 토글은 기본 on.
+                let on = !TOGGLE_DEFAULT_OFF.contains(&self.key);
+                vec![(self.key, if on { "on" } else { "off" }.to_string())]
+            }
             SettingKind::Color { default } => vec![(self.key, default.to_string())],
             SettingKind::PositionGrid => vec![(self.key, "bl".to_string())],
             SettingKind::FontFace { family_key } => vec![(family_key, String::new())],
@@ -117,6 +134,8 @@ impl Entry {
                 (family_key, String::new()), // 빈 문자열 = 시스템 기본 글꼴
                 (size_key, SIZE_DEFAULT.to_string()),
             ],
+            // 행위 항목은 값이 없다 — 영속·검증 대상에서 자연히 빠진다.
+            SettingKind::Action { .. } => vec![],
         }
     }
 }
@@ -134,6 +153,53 @@ pub fn registry() -> &'static [Entry] {
             desc: Msg::DisplayNameDesc,
             kind: SettingKind::RadioInput(&[("auto", Msg::NameAuto)], ""),
             key: "profile.display_name",
+        },
+        // 프로필 공개(DR-22 옵트인 · ADR-0008) — 기본 전부 off. 값 교환은 세션 경유
+        // (브로드캐스트 미포함) — 교환 프로토콜은 프로필 슬라이스(M3-17)에서.
+        Entry {
+            cat: Msg::CatProfile,
+            sub: None,
+            label: Msg::ShareBasic,
+            desc: Msg::ShareBasicDesc,
+            kind: SettingKind::Toggle,
+            key: "profile.share.basic",
+        },
+        Entry {
+            cat: Msg::CatProfile,
+            sub: None,
+            label: Msg::ShareEmail,
+            desc: Msg::ShareEmailDesc,
+            kind: SettingKind::Toggle,
+            key: "profile.share.email",
+        },
+        Entry {
+            cat: Msg::CatProfile,
+            sub: None,
+            label: Msg::SharePhone,
+            desc: Msg::SharePhoneDesc,
+            kind: SettingKind::Toggle,
+            key: "profile.share.phone",
+        },
+        // 신원 키 백업·복원(M2-5a · 사용자 요청 08-11) — 값이 아니라 행위.
+        Entry {
+            cat: Msg::CatProfile,
+            sub: None,
+            label: Msg::IdBackup,
+            desc: Msg::IdBackupDesc,
+            kind: SettingKind::Action {
+                verb: Msg::ActBackup,
+            },
+            key: "profile.identity.backup",
+        },
+        Entry {
+            cat: Msg::CatProfile,
+            sub: None,
+            label: Msg::IdRestore,
+            desc: Msg::IdRestoreDesc,
+            kind: SettingKind::Action {
+                verb: Msg::ActRestore,
+            },
+            key: "profile.identity.restore",
         },
         Entry {
             cat: Msg::CatConversation,
@@ -526,6 +592,8 @@ impl SettingsState {
             // 위치 코드·글꼴명(빈 값 = 시스템 기본)·크기 코드는 소비처가 관용 파싱한다.
             SettingKind::PositionGrid | SettingKind::FontFace { .. } => true,
             SettingKind::FontSection { .. } => true,
+            // 행위 항목은 값이 없다 — 파일에서 와도 무시(default_values가 비어 도달 불가).
+            SettingKind::Action { .. } => false,
         };
         if valid {
             self.values.insert(k, value.to_string());
@@ -585,7 +653,10 @@ const CRUMB_SUB_H: i32 = 24;
 #[derive(Debug)]
 enum RowCtl {
     Combo(Combo),
-    Check(Checkbox),
+    /// on/off 토글 — mac(iOS) 스타일 [`Switch`](08-11 · 기존 Checkbox에서 교체).
+    Check(Switch),
+    /// 실행 버튼(백업·복원 등 행위 항목).
+    Act(Button),
     Font {
         family: TextBox,
         size: Combo,
@@ -891,11 +962,18 @@ impl SettingsWidget {
                     RowCtl::Color(c)
                 }
                 SettingKind::Toggle => {
+                    // mac(iOS) 스타일 스위치(08-11 사용자 요청) — 라벨은 행 왼쪽 제목이
+                    // 이미 있으므로 토글만([`LabelSide::None`]).
                     let mut c =
-                        Checkbox::new("", self.values.get(e.key).map(String::as_str) == Some("on"))
+                        Switch::new("", self.values.get(e.key).map(String::as_str) == Some("on"))
                             .with_label_side(LabelSide::None);
                     c.set_scale(self.scale);
                     RowCtl::Check(c)
+                }
+                SettingKind::Action { verb } => {
+                    let mut b = Button::new(tr(lang, verb));
+                    b.set_scale(self.scale);
+                    RowCtl::Act(b)
                 }
                 SettingKind::FontSection {
                     family_key,
@@ -1086,7 +1164,8 @@ impl SettingsWidget {
         // 차용 분리를 위해 치수 사전 계산.
         let (ctl_h, pad) = (self.s(CTL_H), self.s(PAD));
         let (h_font, h_entry, h_pos) = (self.s(FONT_SECTION_H), self.s(ENTRY_H), self.s(POS_ROW_H));
-        let (combo_w, check_w) = (self.s(COMBO_W), self.s(22));
+        // 토글 폭 = Switch 트랙(40) — Checkbox(22)에서 교체(08-11).
+        let (combo_w, check_w) = (self.s(COMBO_W), self.s(40));
         let (family_w, size_w, gap10, dy32) =
             (self.s(FAMILY_W), self.s(SIZE_W), self.s(10), self.s(32));
         let note_hs: Vec<i32> = self.rows.iter().map(|r| self.note_h(r.idx)).collect();
@@ -1160,6 +1239,18 @@ impl SettingsWidget {
                         inv,
                     );
                 }
+                RowCtl::Act(b) => {
+                    b.set_scale(self.scale);
+                    b.set_bounds(
+                        Rect::new(
+                            rx + rw - combo_w - pad,
+                            top + (h - ctl_h) / 2,
+                            combo_w,
+                            ctl_h,
+                        ),
+                        inv,
+                    );
+                }
             }
             top += h;
         }
@@ -1198,6 +1289,12 @@ impl SettingsWidget {
                 RowCtl::Check(c) => {
                     if let Some(on) = c.take_toggled() {
                         got.push((e.key, if on { "on" } else { "off" }.to_string()));
+                    }
+                }
+                RowCtl::Act(b) => {
+                    // 행위 항목 — 값이 아니라 트리거. 호스트가 key로 분기한다.
+                    if b.take_clicked() {
+                        got.push((e.key, "run".to_string()));
                     }
                 }
                 RowCtl::Font { family, size } => {
@@ -1392,6 +1489,7 @@ impl Widget for SettingsWidget {
                         }
                         RowCtl::Combo(c) => c.set_focused(c.bounds().contains(p)),
                         RowCtl::Check(c) => c.set_focused(c.bounds().contains(p)),
+                        RowCtl::Act(b) => b.set_focused(b.bounds().contains(p)),
                     }
                 }
                 // 사이드바 트리 — 선택 변경 감지 → 카테고리 전환(검색 해제).
@@ -1426,10 +1524,21 @@ impl Widget for SettingsWidget {
                         RowCtl::Pos(g) => g.on_event(ev, inv),
                         RowCtl::Face(f) => f.on_event(ev, inv),
                         RowCtl::Color(c) => c.on_event(ev, inv),
+                        RowCtl::Act(b) => b.on_event(ev, inv),
                     }
                 }
                 self.drain_changes(inv);
                 inv.push(self.bounds);
+            }
+            InputEvent::MouseUp { .. } => {
+                // 실행 버튼은 "안에서 떼야" 클릭이다(Button 계약) — MouseUp을 전달해야
+                // take_clicked가 성립한다(다른 컨트롤은 MouseDown에서 완결).
+                for row in &mut self.rows {
+                    if let RowCtl::Act(b) = &mut row.ctl {
+                        b.on_event(ev, inv);
+                    }
+                }
+                self.drain_changes(inv);
             }
             InputEvent::Char { .. } => {
                 if self.any_family_focused() {
@@ -1573,6 +1682,7 @@ impl Widget for SettingsWidget {
             match &row.ctl {
                 RowCtl::Combo(_)
                 | RowCtl::Check(_)
+                | RowCtl::Act(_)
                 | RowCtl::Pos(_)
                 | RowCtl::Face(_)
                 | RowCtl::Color(_) => {
@@ -1615,6 +1725,7 @@ impl Widget for SettingsWidget {
             match &row.ctl {
                 RowCtl::Combo(c) => c.paint(ctx, theme),
                 RowCtl::Check(c) => c.paint(ctx, theme),
+                RowCtl::Act(b) => b.paint(ctx, theme),
                 RowCtl::Pos(g) => g.paint(ctx, theme),
                 RowCtl::Face(f) => f.paint(ctx, theme),
                 RowCtl::Color(c) => c.paint(ctx, theme),

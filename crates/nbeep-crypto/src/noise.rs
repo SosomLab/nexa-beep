@@ -69,6 +69,45 @@ impl Identity {
             public: other.public,
         }
     }
+
+    /// 저장용 키 자료(개인 32B ‖ 공개 32B) — [`crate::keyfile`] 전용(M2-5a).
+    /// **로그·전송 금지**(NFR-S-1). 공개키를 함께 저장하는 이유: 개인키에서 공개키를
+    /// 유도하려면 X25519 스칼라 곱이 필요한데 snow가 노출하지 않는다 — 쌍을 저장하고,
+    /// 불일치(변조)는 핸드셰이크 실패로 드러난다(가용성 문제일 뿐 기밀성 문제가 아니다).
+    ///
+    /// # Panics
+    /// 개인키가 32바이트가 아니면(생성 경로상 불가) 패닉.
+    #[must_use]
+    pub fn key_bytes(&self) -> [u8; 64] {
+        let mut out = [0u8; 64];
+        out[..32].copy_from_slice(&self.private);
+        out[32..].copy_from_slice(&self.public);
+        out
+    }
+
+    /// 저장된 키 자료 복원 — [`Self::key_bytes`]의 역. 파일 무결성(매직·길이)은
+    /// [`crate::keyfile`]이 거른다.
+    #[must_use]
+    pub fn from_key_bytes(bytes: &[u8; 64]) -> Self {
+        let mut public = [0u8; PeerId::LEN];
+        public.copy_from_slice(&bytes[32..]);
+        Self {
+            private: bytes[..32].to_vec(),
+            public,
+        }
+    }
+
+    /// 래핑 KDF 원료(개인키 32B — ADR-0005 §3 기본 A "기기 키 파생"). **로그 금지.**
+    /// 256비트 무작위 키라 메모리-하드 KDF가 불필요하다(암호가 아니다 — 승격 ②만 해당).
+    ///
+    /// # Panics
+    /// 개인키가 32바이트가 아니면(생성 경로상 불가) 패닉.
+    #[must_use]
+    pub fn wrap_secret(&self) -> [u8; 32] {
+        let mut out = [0u8; 32];
+        out.copy_from_slice(&self.private);
+        out
+    }
 }
 
 fn builder(id: &Identity) -> Result<Builder<'_>, SessionError> {

@@ -566,6 +566,38 @@ fn spawn_inbound_accept(
     });
 }
 
+/// 파일 선택 창의 용도(M2-5a 백업·복원 확장) — 같은 Role::Picker 창을 용도별로 쓴다.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PickerPurpose {
+    /// 갤러리 Choose… 실증(기존 — HOME 평면 목록).
+    GallerySample,
+    /// 신원 키 **백업 폴더** 선택 — 폴더 탐색 + "여기에 저장".
+    BackupDir,
+    /// 신원 키 **백업 파일** 선택(복원) — 폴더 탐색 + 파일 선택.
+    RestoreKey,
+}
+
+/// 탐색형 피커의 행 하나가 뜻하는 것(라벨 → 행위 매핑).
+#[derive(Clone, Debug)]
+enum PickEntry {
+    /// 상위 폴더로.
+    Up,
+    /// 하위 폴더 진입.
+    Dir(std::path::PathBuf),
+    /// 파일 선택(복원 대상).
+    File(std::path::PathBuf),
+    /// 현재 폴더에 저장(백업).
+    SaveHere,
+}
+
+/// 열린 피커의 상태 — 용도·현재 폴더·라벨→행위 매핑.
+#[derive(Debug)]
+struct PickerCtx {
+    purpose: PickerPurpose,
+    dir: std::path::PathBuf,
+    entries: Vec<(String, PickEntry)>,
+}
+
 /// 샘플 찾기 어댑터 — 한 폴더의 **단일 파일 선택기**(Adapter 패턴 실증).
 /// `nbeep_ui::ChoosePicker`를 구현한 어떤 화면도 Choose에 꽂을 수 있다(UI 계층은 I/O를 모른다).
 #[derive(Debug)]
@@ -615,7 +647,8 @@ struct App {
     connecting: HashSet<PeerId>,
     discovery: std::sync::mpsc::Receiver<nbeep_net::DiscoveryEvent>,
     table: nbeep_core::PeerTable,
-    trust: nbeep_core::MemoryTrustStore,
+    /// TOFU 신뢰 저장 — 파일 영속(M2-5a · 변경 즉시 암호화 저장 · R-17 해소).
+    trust: nbeep_store::FileTrustStore,
     /// 상대별 대화 상태 — 뷰와 무관하게 유지(동시 대화의 실체).
     conversations: HashMap<PeerId, Conversation>,
     dedup: nbeep_core::DedupIndex,
@@ -636,6 +669,14 @@ struct App {
     icon: Option<winit::window::Icon>,
     /// 파일 선택 모달 뷰(Choose… — 열려 있을 때만 Some).
     picker_view: Option<nbeep_ui::TreeView>,
+    /// 피커 용도·탐색 상태(M2-5a 백업·복원 — None = 갤러리 실증 모드).
+    picker_ctx: Option<PickerCtx>,
+    /// 설정 화면에서 요청된 피커 열기(이벤트 루프 참조가 없는 지점 → about_to_wait에서 연다).
+    pending_picker: Option<PickerPurpose>,
+    /// 데이터 디렉터리(신원 키·핀 세그먼트·설정 — 백업·복원이 원본 위치로 쓴다).
+    data_dir: std::path::PathBuf,
+    /// 실물 전송 여부 — 신원 복원 핫 로딩 시 전송 재시작 판단(데모는 교체만).
+    live: bool,
     /// 주소 입력 모달 뷰(DR-19 · M3-16 — 열려 있을 때만 Some).
     addr_view: Option<nbeep_ui::AddrPromptWidget>,
     /// About 뷰(열려 있을 때만 Some).
@@ -1807,34 +1848,113 @@ impl App {
         self.request_redraw(id);
     }
 
+    /// 사용자 홈 폴더(탐색 시작점) — Windows `USERPROFILE` · Unix `HOME`.
+    fn home_dir() -> std::path::PathBuf {
+        std::env::var_os("USERPROFILE")
+            .or_else(|| std::env::var_os("HOME"))
+            .map(std::path::PathBuf::from)
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_default()
+    }
+
+    /// 백업 파일 기본 이름(추천) — 지문이 들어가 어느 신원의 백업인지 파일명으로 구분된다.
+    fn default_backup_name(&self) -> String {
+        format!("nexa-beep-identity-{}.key", self.identity.peer_id().short())
+    }
+
+    /// 탐색형 피커 목록 구성 — (창 제목, 트리 행, 라벨→행위). 라벨 접두로 종류를
+    /// 구분한다(글리프 폴백만으로 충분한 문자 — 이모지 금지).
+    fn picker_listing(
+        purpose: PickerPurpose,
+        dir: &std::path::Path,
+        save_name: &str,
+    ) -> (String, Vec<nbeep_ui::TreeNode>, Vec<(String, PickEntry)>) {
+        let mut entries: Vec<(String, PickEntry)> = Vec::new();
+        if purpose == PickerPurpose::BackupDir {
+            entries.push((format!("[여기에 저장] {save_name}"), PickEntry::SaveHere));
+        }
+        if let Some(parent) = dir.parent().filter(|p| !p.as_os_str().is_empty()) {
+            let _ = parent;
+            entries.push(("[..] 상위 폴더".to_string(), PickEntry::Up));
+        }
+        let mut dirs: Vec<(String, std::path::PathBuf)> = Vec::new();
+        let mut files: Vec<(String, std::path::PathBuf)> = Vec::new();
+        if let Ok(rd) = std::fs::read_dir(dir) {
+            for e in rd.flatten() {
+                let name = e.file_name().to_string_lossy().into_owned();
+                if name.starts_with('.') {
+                    continue; // 숨김 항목 — 백업 대상지로 부적합
+                }
+                match e.file_type() {
+                    Ok(t) if t.is_dir() => dirs.push((name, e.path())),
+                    Ok(t) if t.is_file() && purpose == PickerPurpose::RestoreKey => {
+                        files.push((name, e.path()));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        dirs.sort_by(|a, b| a.0.cmp(&b.0));
+        files.sort_by(|a, b| a.0.cmp(&b.0));
+        for (name, p) in dirs {
+            entries.push((format!("[폴더] {name}"), PickEntry::Dir(p)));
+        }
+        for (name, p) in files {
+            entries.push((name, PickEntry::File(p)));
+        }
+        let title = match purpose {
+            PickerPurpose::BackupDir => format!("백업 폴더 선택 — {}", dir.display()),
+            PickerPurpose::RestoreKey => format!("백업 파일 선택 — {}", dir.display()),
+            PickerPurpose::GallerySample => String::new(),
+        };
+        let roots = entries
+            .iter()
+            .map(|(label, _)| nbeep_ui::TreeNode::leaf(label.clone()))
+            .collect();
+        (title, roots, entries)
+    }
+
     /// 파일 선택 **모달 창**(Choose… · ChoosePicker 어댑터 내용을 별도 창으로 · 사용자 확정).
     /// 항목 클릭 = 선택 확정(값 반영) 후 닫힘 · Esc/닫기 = 취소.
-    fn open_picker(&mut self, el: &ActiveEventLoop) {
+    /// M2-5a: `purpose`에 따라 갤러리 실증(평면) / 백업·복원(폴더 탐색)으로 갈린다.
+    fn open_picker(&mut self, el: &ActiveEventLoop, purpose: PickerPurpose) {
         if let Some((pid, _)) = self.windows.iter().find(|(_, e)| e.role == Role::Picker) {
             if let Some(e) = self.windows.get(pid) {
                 e.window.focus_window();
             }
             return;
         }
-        // 어댑터: HOME 단일 파일 선택기(ChoosePicker 인터페이스 — 어떤 구현도 가능).
-        let dir = std::env::var_os("HOME")
-            .map(std::path::PathBuf::from)
-            .or_else(|| std::env::current_dir().ok())
-            .unwrap_or_default();
-        let picker = FilePicker { dir };
-        use nbeep_ui::ChoosePicker as _;
-        let title = picker.title();
-        let roots: Vec<nbeep_ui::TreeNode> = picker
-            .items()
-            .into_iter()
-            .map(|it| {
-                let mut n = nbeep_ui::TreeNode::leaf(it.label);
-                if let Some(img) = it.image {
-                    n = n.with_image(img);
-                }
-                n
-            })
-            .collect();
+        let (title, roots) = if purpose == PickerPurpose::GallerySample {
+            // 어댑터: HOME 단일 파일 선택기(ChoosePicker 인터페이스 — 어떤 구현도 가능).
+            let picker = FilePicker {
+                dir: Self::home_dir(),
+            };
+            use nbeep_ui::ChoosePicker as _;
+            let title = picker.title();
+            let roots: Vec<nbeep_ui::TreeNode> = picker
+                .items()
+                .into_iter()
+                .map(|it| {
+                    let mut n = nbeep_ui::TreeNode::leaf(it.label);
+                    if let Some(img) = it.image {
+                        n = n.with_image(img);
+                    }
+                    n
+                })
+                .collect();
+            self.picker_ctx = None;
+            (title, roots)
+        } else {
+            let dir = Self::home_dir();
+            let (title, roots, entries) =
+                Self::picker_listing(purpose, &dir, &self.default_backup_name());
+            self.picker_ctx = Some(PickerCtx {
+                purpose,
+                dir,
+                entries,
+            });
+            (title, roots)
+        };
         let mut tree = nbeep_ui::TreeView::new(nbeep_ui::TreeModel::new(roots));
         {
             use nbeep_ui::Control as _;
@@ -1862,6 +1982,128 @@ impl App {
         self.picker_view = Some(tree);
         self.layout_window(id);
         self.request_redraw(id);
+    }
+
+    /// 탐색형 피커의 폴더 이동 후 재구성 — 트리·제목을 현재 폴더로 갱신.
+    fn repopulate_picker(&mut self, id: WindowId) {
+        let Some(ctx) = &self.picker_ctx else { return };
+        let (title, roots, entries) =
+            Self::picker_listing(ctx.purpose, &ctx.dir, &self.default_backup_name());
+        if let Some(ctx) = &mut self.picker_ctx {
+            ctx.entries = entries;
+        }
+        let mut tree = nbeep_ui::TreeView::new(nbeep_ui::TreeModel::new(roots));
+        {
+            use nbeep_ui::Control as _;
+            tree.set_focused(true);
+        }
+        self.picker_view = Some(tree);
+        if let Some(e) = self.windows.get(&id) {
+            e.window.set_title(&title);
+        }
+        self.layout_window(id);
+        self.request_redraw(id);
+    }
+
+    /// 신원 키 백업(M2-5a · 사용자 요청 08-11) — 현재 폴더로 복사. 기본 이름에 지문이
+    /// 들어가고, 동명 파일이 있으면 덮어쓰지 않고 번호를 붙인다.
+    fn do_backup_identity(&mut self, dir: &std::path::Path) -> String {
+        let src = self.data_dir.join("identity.key");
+        let base = format!("nexa-beep-identity-{}", self.identity.peer_id().short());
+        let mut dst = dir.join(format!("{base}.key"));
+        let mut n = 2;
+        while dst.exists() {
+            dst = dir.join(format!("{base}-{n}.key"));
+            n += 1;
+        }
+        match std::fs::copy(&src, &dst) {
+            Ok(_) => format!("신원 키 백업됨 — {} (안전하게 보관하세요)", dst.display()),
+            Err(e) => format!("백업 실패: {e}"),
+        }
+    }
+
+    /// 신원 키 복원 + **핫 로딩**(M2-5a · 사용자 요청 08-11) — 검증 → 원자적 교체 →
+    /// 신원·신뢰 저장소·전송을 그 자리에서 갈아끼운다(재시작 불필요).
+    /// 이전 신원의 세션·대화는 무효라 닫는다(설정 desc에 고지).
+    fn do_restore_identity(&mut self, file: &std::path::Path) -> String {
+        // ① 검증 — 매직·길이(keyfile 포맷). 손상 파일로 교체해 버리면 되돌릴 수 없다.
+        let bytes = match std::fs::read(file) {
+            Ok(b) => b,
+            Err(e) => return format!("복원 실패(읽기): {e}"),
+        };
+        if bytes.len() != 68 || &bytes[..4] != b"NBK1" {
+            return "복원 실패: 신원 키 백업 파일이 아닙니다(형식 불일치)".into();
+        }
+        let mut key = [0u8; 64];
+        key.copy_from_slice(&bytes[4..]);
+        let restored = nbeep_crypto::Identity::from_key_bytes(&key);
+        if restored.peer_id() == self.identity.peer_id() {
+            return "이미 사용 중인 신원입니다 — 변경 없음".into();
+        }
+        // ② 원자적 교체 — temp 기록 후 rename(키 파일 절반 기록 창 방지).
+        let dst = self.data_dir.join("identity.key");
+        let tmp = dst.with_extension(format!("tmp.{}", std::process::id()));
+        if let Err(e) = std::fs::write(&tmp, &bytes) {
+            return format!("복원 실패(기록): {e}");
+        }
+        if let Err(e) = std::fs::rename(&tmp, &dst) {
+            let _ = std::fs::remove_file(&tmp);
+            return format!("복원 실패(교체): {e}");
+        }
+        // ③ 핫 로딩 — 신원 → 신뢰 저장소(래핑 원료가 바뀐다) → 대화 정리 → 전송 재시작.
+        self.identity = std::sync::Arc::new(restored);
+        let (trust, load) = nbeep_store::FileTrustStore::open(
+            self.data_dir.join("trust.seg"),
+            self.identity.wrap_secret(),
+        );
+        self.trust = trust;
+        self.conversations.clear();
+        self.chats.clear();
+        self.single_open = None;
+        self.connecting.clear();
+        let chat_wins: Vec<WindowId> = self
+            .windows
+            .iter()
+            .filter(|(_, e)| matches!(e.role, Role::Chat(_) | Role::Sending(_)))
+            .map(|(id, _)| *id)
+            .collect();
+        for wid in chat_wins {
+            self.windows.remove(&wid);
+        }
+        let mut net_note = "";
+        if self.live {
+            let mut instance = [0u8; 16];
+            instance
+                .copy_from_slice(&nbeep_crypto::Identity::generate().peer_id().as_bytes()[..16]);
+            let name = effective_display_name(&self.settings, &self.identity.peer_id());
+            match nbeep_net::LocalDirect::spawn(self.identity.peer_id(), instance, name, 800, 1) {
+                Ok(local) => {
+                    use nbeep_net::Transport as _;
+                    self.discovery = local.discovery();
+                    spawn_inbound_accept(
+                        local.incoming(),
+                        std::sync::Arc::clone(&self.identity),
+                        self.proxy.clone(),
+                    );
+                    self.transport = std::sync::Arc::new(local);
+                    self.table = nbeep_core::PeerTable::new(60_000);
+                }
+                Err(_) => net_note = " · ⚠ 전송 재시작 실패(발견 불가 — 재실행 필요)",
+            }
+        }
+        let mut inv = Invalidations::default();
+        self.refresh_rows(&mut inv);
+        if let Some(mid) = self.main_id {
+            self.request_redraw(mid);
+        }
+        let trust_note = match load {
+            nbeep_store::TrustLoad::Locked => " · ⚠ 신뢰 목록 잠김(이 신원의 백업이 아님)",
+            _ => "",
+        };
+        format!(
+            "신원 복원됨 — 새 지문 {} (핫 로딩 완료{trust_note}{net_note})",
+            self.identity.peer_id().short()
+        )
     }
 
     /// 주소 직접 입력 모달을 연다(DR-19 · M3-16 — `⌘/Ctrl+K`·툴바 +). 이미 있으면 포커스.
@@ -2027,6 +2269,19 @@ impl App {
             self.conf_mark();
         }
         for (key, value) in changes {
+            // 행위 항목(값 아님 · M2-5a) — 저장에 태우지 않고 피커를 연다(el은
+            // about_to_wait에 있다 — pending_approve_window와 같은 패턴).
+            match key {
+                "profile.identity.backup" => {
+                    self.pending_picker = Some(PickerPurpose::BackupDir);
+                    continue;
+                }
+                "profile.identity.restore" => {
+                    self.pending_picker = Some(PickerPurpose::RestoreKey);
+                    continue;
+                }
+                _ => {}
+            }
             self.settings.set(key, value.clone());
             match key {
                 "chat.window_mode" => {
@@ -2494,7 +2749,7 @@ impl App {
                     gv.on_event(&ev, &mut inv);
                     // Choose… → 별도 모달 파일 선택 창.
                     if gv.take_choose_request() {
-                        self.open_picker(el);
+                        self.open_picker(el, PickerPurpose::GallerySample);
                     }
                 }
             }
@@ -2507,12 +2762,58 @@ impl App {
                     }
                 ) {
                     self.picker_view = None;
+                    self.picker_ctx = None;
                     self.windows.remove(&id); // 취소
                 } else if let Some(pv) = &mut self.picker_view {
                     pv.on_event(&ev, &mut inv);
-                    // 항목 클릭 = 선택 확정 → 갤러리 Choose 값 반영 + 창 닫기.
                     if matches!(ev, InputEvent::MouseDown { .. }) {
                         if let Some(label) = pv.selected_label() {
+                            // ── 탐색형(백업·복원) — 라벨을 행위로 해석(M2-5a) ──
+                            if let Some(ctx) = &self.picker_ctx {
+                                let hit = ctx
+                                    .entries
+                                    .iter()
+                                    .find(|(l, _)| *l == label)
+                                    .map(|(_, e)| e.clone());
+                                match hit {
+                                    Some(PickEntry::Up) => {
+                                        if let Some(ctx) = &mut self.picker_ctx {
+                                            if let Some(p) = ctx.dir.parent() {
+                                                ctx.dir = p.to_path_buf();
+                                            }
+                                        }
+                                        self.repopulate_picker(id);
+                                    }
+                                    Some(PickEntry::Dir(p)) => {
+                                        if let Some(ctx) = &mut self.picker_ctx {
+                                            ctx.dir = p;
+                                        }
+                                        self.repopulate_picker(id);
+                                    }
+                                    Some(PickEntry::SaveHere) => {
+                                        let dir = ctx.dir.clone();
+                                        self.status = self.do_backup_identity(&dir);
+                                        self.picker_view = None;
+                                        self.picker_ctx = None;
+                                        self.windows.remove(&id);
+                                        if let Some(mid) = self.main_id {
+                                            self.request_redraw(mid);
+                                        }
+                                    }
+                                    Some(PickEntry::File(p)) => {
+                                        self.status = self.do_restore_identity(&p);
+                                        self.picker_view = None;
+                                        self.picker_ctx = None;
+                                        self.windows.remove(&id);
+                                        if let Some(mid) = self.main_id {
+                                            self.request_redraw(mid);
+                                        }
+                                    }
+                                    None => {}
+                                }
+                                return;
+                            }
+                            // ── 갤러리 실증(기존) — Choose 값 반영 + 창 닫기 ──
                             if let Some(gv) = &mut self.gallery_view {
                                 let mut ginv = Invalidations::default();
                                 gv.set_choose_value(&label, &mut ginv);
@@ -3110,6 +3411,10 @@ impl ApplicationHandler<AppEvent> for App {
                 }
             }
         }
+        // 설정에서 요청된 백업·복원 피커 열기(M2-5a).
+        if let Some(purpose) = self.pending_picker.take() {
+            self.open_picker(el, purpose);
+        }
         // 수신 승인 창 생성.
         if let Some(peer) = self.pending_approve_window.take() {
             if let Some(info) = self.front_offer_info(peer) {
@@ -3638,30 +3943,48 @@ fn effective_display_name(
     nbeep_core::default_display_name(nbeep_plat::host::hostname().as_deref(), peer)
 }
 
-/// 설정 파일 경로(FR-P-3 · docs/28 §4-2) — 실행 파일 옆 `data/` 쓰기 가능(포터블)
+/// 데이터 디렉터리(FR-P-3 · DR-4) — 실행 파일 옆 `data/` 쓰기 가능(포터블)
 /// → 사용자 설정 폴더 → 임시 폴더(최후 폴백 — 저장은 되지만 재부팅에 진다).
-/// 경로는 여기서 정해 **인자로 넘긴다**(nexa-conf는 경로를 소유하지 않는다).
-fn conf_path() -> std::path::PathBuf {
+/// 설정(`settings.cfg`)·신원 키(`identity.key`)·핀 세그먼트(`trust.seg`)가 전부
+/// 여기 산다. 경로는 여기서 정해 **인자로 넘긴다**(소비 크레이트는 경로 비소유).
+fn data_dir() -> std::path::PathBuf {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             let data = dir.join("data");
             if nexa_conf::dir_writable(&data) {
-                return data.join("settings.cfg");
+                return data;
             }
         }
     }
     if let Some(dir) = nexa_conf::user_config_dir("nexa-beep") {
         if nexa_conf::dir_writable(&dir) {
-            return dir.join("settings.cfg");
+            return dir;
         }
     }
-    std::env::temp_dir().join("nexa-beep").join("settings.cfg")
+    std::env::temp_dir().join("nexa-beep")
 }
 
 pub(crate) fn run(mode: WindowMode, live: bool) {
     let (data, index) = nbeep_plat::font::system_ui_font().expect("시스템 UI 폰트 없음");
     let font = nbeep_gfx::Font::from_static(data, index).expect("폰트 파싱");
-    let identity = std::sync::Arc::new(nbeep_crypto::Identity::generate());
+    let dir = data_dir();
+    // 신원 영속(M2-5a) — 재시작해도 같은 PeerId. 키 파일 손상 시 **덮어쓰지 않고**
+    // 임시 신원으로 강등(fail-closed — 조용히 새 키를 만들면 상대 핀에서 남이 된다).
+    let (identity, id_note) =
+        match nbeep_crypto::keyfile::load_or_generate(&dir.join("identity.key")) {
+            Ok((id, created)) => (id, created.then_some("새 신원 키 생성")),
+            Err(e) => {
+                eprintln!("신원 키 파일 사용 불가({e}) — 이번 실행은 임시 신원");
+                (
+                    nbeep_crypto::Identity::generate(),
+                    Some("⚠ 신원 키 파일 손상 — 임시 신원(재시작하면 바뀜)"),
+                )
+            }
+        };
+    let identity = std::sync::Arc::new(identity);
+    // 핀 세그먼트(M2-5a · R-17 해소) — 래핑 원료 = 기기 신원 키(ADR-0005 §3 기본 A).
+    let (trust, trust_load) =
+        nbeep_store::FileTrustStore::open(dir.join("trust.seg"), identity.wrap_secret());
     use nbeep_net::Transport as _;
 
     // 이벤트 루프·프록시 먼저 — 인바운드 수락 펌프가 프록시를 필요로 한다(M2-7).
@@ -3674,7 +3997,7 @@ pub(crate) fn run(mode: WindowMode, live: bool) {
     // 설정 영속(M3-15 · ADR-0011) — 기본값 시드 후 파일의 아는 키만 덮어쓴다(관용 파싱).
     // 모르는 키는 Store가 보존해 다음 저장 때 그대로 재방출한다(F-1 — 구버전이
     // 신버전 파일을 저장해도 신규 키가 살아남는다).
-    let (mut conf, doc) = nexa_conf::Store::open(conf_path(), 1_000, 10_000);
+    let (mut conf, doc) = nexa_conf::Store::open(dir.join("settings.cfg"), 1_000, 10_000);
     for (k, v) in doc.pairs {
         if !settings.set_by_name(&k, &v) {
             conf.keep_unknown(k, v);
@@ -3749,6 +4072,12 @@ pub(crate) fn run(mode: WindowMode, live: bool) {
         WindowMode::Single => "Enter = 대화 열기",
         WindowMode::Separate => "Enter = 상대별 새 창(동시 대화)",
     };
+    // 신뢰 저장 상태 고지(M2-5a) — 잠김은 fail-closed라 반드시 사용자에게 보인다.
+    let trust_hint = match trust_load {
+        nbeep_store::TrustLoad::Locked => " · ⚠ 신뢰 목록 잠김(파일 손상 — 전부 미검증 취급)",
+        nbeep_store::TrustLoad::Loaded(_) | nbeep_store::TrustLoad::Fresh => "",
+    };
+    let id_hint = id_note.map(|n| format!(" · {n}")).unwrap_or_default();
     let mut app = App {
         mode,
         windows: HashMap::new(),
@@ -3764,12 +4093,12 @@ pub(crate) fn run(mode: WindowMode, live: bool) {
         connecting: HashSet::new(),
         discovery,
         table: nbeep_core::PeerTable::new(60_000),
-        trust: nbeep_core::MemoryTrustStore::new(),
+        trust,
         conversations: HashMap::new(),
         dedup: nbeep_core::DedupIndex::new(),
         started: Instant::now(),
         status: format!(
-            "[{net_hint}] {mode_hint} · ⌘/Ctrl+K = 주소 추가 · ⌘/Ctrl+, = 설정 · ⌘/Ctrl+G = 컨트롤 갤러리"
+            "[{net_hint}] {mode_hint} · ⌘/Ctrl+K = 주소 추가 · ⌘/Ctrl+, = 설정 · ⌘/Ctrl+G = 컨트롤 갤러리{trust_hint}{id_hint}"
         ),
         fonts: App::fonts_from_settings(&settings),
         settings,
@@ -3840,6 +4169,10 @@ pub(crate) fn run(mode: WindowMode, live: bool) {
         )
         .ok(),
         picker_view: None,
+        picker_ctx: None,
+        pending_picker: None,
+        data_dir: dir,
+        live,
         addr_view: None,
         ime_composing: false,
         pending_jamo: None,

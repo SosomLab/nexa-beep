@@ -6,7 +6,7 @@
 use crate::controls::{
     BorderSpec, Button, Checkbox, Choose, ChoosePicker, ColorPicker, Combo, ComboControl,
     ComboItem, Control, GridColumn, ImageFit, LabelSide, MenuBar, MenuDef, MenuEntry,
-    PositionPicker, RadioGroup, RadioOption, ScrollBars, TextBox, TimeoutButton, ToolIcon,
+    PositionPicker, RadioGroup, RadioOption, ScrollBars, Switch, TextBox, TimeoutButton, ToolIcon,
     ToolItem, Toolbar, TreeGrid, TreeModel, TreeNode, TreeView,
 };
 use crate::draw::{DrawCtx, FontSlot};
@@ -58,6 +58,10 @@ pub struct GalleryWidget {
     cb_right: Checkbox,
     cb_left: Checkbox,
     cb_only: Checkbox,
+    /// mac(iOS) 스타일 토글 스위치 3형(라벨 우/좌/토글만 — 08-11).
+    sw_right: Switch,
+    sw_left: Switch,
+    sw_only: Switch,
     radio: RadioGroup,
     textbox: TextBox,
     combo: Combo,
@@ -197,6 +201,9 @@ impl GalleryWidget {
             cb_right,
             cb_left: Checkbox::new("Enable bug reporter", false).with_label_side(LabelSide::Left),
             cb_only: Checkbox::new("", true).with_label_side(LabelSide::None),
+            sw_right: Switch::new("Wi-Fi", true),
+            sw_left: Switch::new("Bluetooth", false).with_label_side(LabelSide::Left),
+            sw_only: Switch::new("", true).with_label_side(LabelSide::None),
             radio: RadioGroup::new(
                 vec![
                     RadioOption::new("icon", "Icon view"),
@@ -277,6 +284,9 @@ impl GalleryWidget {
         self.cb_right.set_scale(s);
         self.cb_left.set_scale(s);
         self.cb_only.set_scale(s);
+        self.sw_right.set_scale(s);
+        self.sw_left.set_scale(s);
+        self.sw_only.set_scale(s);
         self.radio.set_scale(s);
         self.textbox.set_scale(s);
         self.combo.set_scale(s);
@@ -313,6 +323,9 @@ impl GalleryWidget {
         y = place(&mut self.cb_right, x, y, w, ctrl_h, label_h, gap, inv);
         y = place(&mut self.cb_left, x, y, w, ctrl_h, label_h, gap, inv);
         y = place(&mut self.cb_only, x, y, w, ctrl_h, label_h, gap, inv);
+        y = place(&mut self.sw_right, x, y, w, ctrl_h, label_h, gap, inv);
+        y = place(&mut self.sw_left, x, y, w, ctrl_h, label_h, gap, inv);
+        y = place(&mut self.sw_only, x, y, w, ctrl_h, label_h, gap, inv);
         y = place(&mut self.radio, x, y, w, radio_h, label_h, gap, inv);
         y = place(&mut self.textbox, x, y, w, ctrl_h, label_h, gap, inv);
         y = place(&mut self.combo, x, y, w, ctrl_h, label_h, gap, inv);
@@ -402,11 +415,14 @@ impl GalleryWidget {
         self.scroll_x = self.scroll_x.clamp(0, max_x);
     }
 
-    fn labels() -> [&'static str; 20] {
+    fn labels() -> [&'static str; 23] {
         [
             "Checkbox — 라벨 오른쪽 (+ 도움말 ?)",
             "Checkbox — 라벨 왼쪽",
             "Checkbox — 체크만",
+            "Switch — mac(iOS) 토글 · 라벨 오른쪽",
+            "Switch — 라벨 왼쪽",
+            "Switch — 토글만",
             "RadioGroup (옵션 박스)",
             "TextBox — placeholder",
             "Combo — 일반 (∨)",
@@ -488,6 +504,10 @@ impl Widget for GalleryWidget {
                 .set_focused(self.cb_right.bounds().contains(p));
             self.cb_left.set_focused(self.cb_left.bounds().contains(p));
             self.cb_only.set_focused(self.cb_only.bounds().contains(p));
+            self.sw_right
+                .set_focused(self.sw_right.bounds().contains(p));
+            self.sw_left.set_focused(self.sw_left.bounds().contains(p));
+            self.sw_only.set_focused(self.sw_only.bounds().contains(p));
             self.radio.set_focused(self.radio.bounds().contains(p));
             self.textbox.set_focused(self.textbox.bounds().contains(p));
             self.combo.set_focused(self.combo.bounds().contains(p));
@@ -516,6 +536,9 @@ impl Widget for GalleryWidget {
         self.cb_right.on_event(ev, inv);
         self.cb_left.on_event(ev, inv);
         self.cb_only.on_event(ev, inv);
+        self.sw_right.on_event(ev, inv);
+        self.sw_left.on_event(ev, inv);
+        self.sw_only.on_event(ev, inv);
         self.radio.on_event(ev, inv);
         self.textbox.on_event(ev, inv);
         self.combo.on_event(ev, inv);
@@ -547,10 +570,13 @@ impl Widget for GalleryWidget {
     fn paint(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
         ctx.fill_rect(self.bounds, theme.panel_bg);
         let labels = Self::labels();
-        let widgets: [&dyn Widget; 20] = [
+        let widgets: [&dyn Widget; 23] = [
             &self.cb_right,
             &self.cb_left,
             &self.cb_only,
+            &self.sw_right,
+            &self.sw_left,
+            &self.sw_only,
             &self.radio,
             &self.textbox,
             &self.combo,

@@ -12,3 +12,7 @@ workspace = true
 
 [dependencies]
 nbeep-core.workspace = true
+# 아래 셋은 snow(nbeep-crypto)가 이미 끄는 의존 — 트리 증가 0(docs/10 §3 원장).
+sha2.workspace = true            # 래핑 키 KDF(SHA-256 — 원료가 256비트 무작위 키라 충분)
+chacha20poly1305 = "0.10"        # 핀 세그먼트 AEAD(ADR-0005 §4-2 · Noise와 같은 계열)
+getrandom = "0.2"                # 마스터 키·논스 난수(OS CSPRNG)
