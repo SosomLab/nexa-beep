@@ -3,7 +3,11 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
-> **갱신: 2026-08-11 18차 (KST)** — **M4-5ⓐ imgdec 배포 동봉 — 5타깃 포장 전부**(main 직커밋):
+> **갱신: 2026-08-12 1차 (KST)** — **M4-5ⓑ 수신 이미지 미리보기 — 격리함 썸네일 + 스레드 인라인**(`feat/m4-5-preview`):
+> ① `thumb_from_beepq` — `.beepq` 원본 재조립(프리픽스‖본문·정합 검증·1MiB 상한) → **imgdec 격리 디코드**(본체는 픽셀을 만들지 않는다 — 원칙 유지). 이미지가 아니면 조용히 없음.
+> ② **격리함**: `QRow.thumb` 좌측 36px(이름·칩 자동 이동 — 승인 판단 보조·등급 판정 대체 아님) ③ **대화 스레드**: `XferLine.thumb` 풍선 인라인 18px(Done 항목 부착 · `XferDone`에 qpath) — 확대 보기는 후속. ④ **472 green** · clippy 0. ⏸ 실기: `/send <이미지>` → 스레드·격리함 육안. 다음 = **v0.1.4 릴리스**(imgdec 동봉 CI 검증 겸). [journal/2026-08-11.md](journal/2026-08-11.md).
+>
+> **직전(08-11 18차)** — **M4-5ⓐ imgdec 배포 동봉 — 5타깃 포장 전부**(main 직커밋):
 > release.yml 빌드 `-p nbeep-imgdec` + **크기 게이트 2종**(imgdec 362KB) · 포터블(zip/tar.gz)·NSIS(File+Delete)·`.app/Contents/MacOS`(--deep 서명 포함)·deb `/usr/bin` 동봉 · brew Formula 조건부 `bin.install` · choco **shim 제외**(.ignore — 보조 실행 파일) · winget 무수정(zip 전체 추출 = 형제 유지). 설치본 실측은 **다음 태그 CI**(로컬 NSIS 부재) — 형제 부재 실패 모드는 이니셜 폴백이라 안전. 잔여 = M4-5 ⓑ 수신 파일 미리보기 · ⓒ 권한 강등. [journal/2026-08-11.md](journal/2026-08-11.md).
 >
 > **직전(08-11 17차)** — **★ M4-5 이미지 격리 디코드(imgdec) 실물화 — 아바타 실사진 개통**(`feat/m4-5-imgdec`):

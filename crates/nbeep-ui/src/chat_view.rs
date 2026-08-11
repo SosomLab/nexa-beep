@@ -134,6 +134,7 @@ impl ChatLine {
         Self {
             mine,
             body: ChatBody::Xfer(XferLine {
+                thumb: None,
                 name,
                 size,
                 state: XferLineState::Waiting,
@@ -158,6 +159,9 @@ pub enum ChatBody {
 /// 파일 전송 스레드 항목.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct XferLine {
+    /// 수신 이미지 소형 미리보기(M4-5ⓑ — imgdec 격리 디코드 · 인라인 18px).
+    /// 확대 미리보기는 격리함 몫(후속).
+    pub thumb: Option<std::rc::Rc<crate::theme::IconImage>>,
     /// 무해화된 파일명(원격 제공 이름 — 표시 전 무해화 필수).
     pub name: SafeText,
     /// 전체 크기(바이트).
@@ -226,6 +230,27 @@ pub fn update_xfer_ack(lines: &mut [ChatLine], mine: bool, terminal: XferLineSta
         if let ChatBody::Xfer(x) = &mut line.body {
             if x.state == XferLineState::AwaitingAck {
                 x.state = terminal;
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// 수신 이미지 소형 미리보기 부착(M4-5ⓑ) — **가장 최근의 종결(Done)·미부착** 항목에.
+/// 격리 완료 직후 호출되므로 방금 닫힌 항목이 대상이다(FIFO 갱신과 같은 계약).
+pub fn attach_xfer_thumb(
+    lines: &mut [ChatLine],
+    mine: bool,
+    thumb: std::rc::Rc<crate::theme::IconImage>,
+) -> bool {
+    for line in lines.iter_mut().rev() {
+        if line.mine != mine {
+            continue;
+        }
+        if let ChatBody::Xfer(x) = &mut line.body {
+            if matches!(x.state, XferLineState::Done { .. }) && x.thumb.is_none() {
+                x.thumb = Some(thumb);
                 return true;
             }
         }
@@ -430,6 +455,20 @@ impl ChatViewWidget {
     }
 
     /// 가장 오래된 확인 대기 항목을 종결 상태로 닫는다([`update_xfer_ack`] · M4-9).
+    /// 수신 이미지 소형 미리보기 부착(M4-5ⓑ — 종결 항목에 · 뷰 열려 있을 때 즉시 반영).
+    pub fn attach_xfer_thumb(
+        &mut self,
+        mine: bool,
+        thumb: std::rc::Rc<crate::theme::IconImage>,
+        inv: &mut Invalidations,
+    ) -> bool {
+        let hit = attach_xfer_thumb(&mut self.lines, mine, thumb);
+        if hit {
+            inv.push(self.bounds);
+        }
+        hit
+    }
+
     pub fn ack_xfer_line(
         &mut self,
         mine: bool,
@@ -1247,8 +1286,14 @@ impl Widget for ChatViewWidget {
                     by0 += name_h;
                 }
                 // 풍선 — 수신 좌측 / 발신 우측(사용자 확정 08-10).
+                // 수신 이미지 소형 미리보기(M4-5ⓑ) — 있으면 첫 줄 앞 18px 자리.
+                let xthumb = match &l.body {
+                    ChatBody::Xfer(x) => x.thumb.clone(),
+                    ChatBody::Text(_) => None,
+                };
+                let thumb_pad = if xthumb.is_some() { self.s(24) } else { 0 };
                 let widest = b.lines.iter().map(|s| ctx.text_width(s)).max().unwrap_or(0);
-                let bw = widest + pad_h * 2;
+                let bw = widest + pad_h * 2 + thumb_pad;
                 let bx = if l.mine {
                     vp.right() - inset - bw
                 } else {
@@ -1281,10 +1326,21 @@ impl Widget for ChatViewWidget {
                     );
                 }
                 self.hit_rects.borrow_mut().push((bub, b.entry)); // 우클릭 복사 히트
+                if let Some(img) = &xthumb {
+                    let d = self.s(18);
+                    let ir = Rect::new(bub.x + pad_h, by0 + pad_v + (line_h - d) / 2, d, d);
+                    ctx.image_scaled(ir, img, bub);
+                }
                 for (si, s) in b.lines.iter().enumerate() {
                     let ly = by0 + pad_v + si as i32 * line_h;
                     let clip = Rect::new(bub.x, ly, bub.w, line_h);
-                    ctx.text(bub.x + pad_h, ly + (line_h - th) / 2, clip, s, fg);
+                    ctx.text(
+                        bub.x + pad_h + thumb_pad,
+                        ly + (line_h - th) / 2,
+                        clip,
+                        s,
+                        fg,
+                    );
                 }
                 // 진행 중 전송 풍선 — 하단에 소형 막대.
                 if let ChatBody::Xfer(x) = &l.body {

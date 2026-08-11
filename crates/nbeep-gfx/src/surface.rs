@@ -41,7 +41,7 @@ impl Color {
 /// 글꼴 글리프가 아니라 진짜 래스터 이미지다. PNG 등 파일은 상위 계층에서 디코드해
 /// [`IconImage::from_rgba`]로 넘긴다(UI/gfx는 파일 포맷을 모른다). 데모용 생성자
 /// [`IconImage::swatch`]는 투명 배경의 라운드 사각형 아이콘을 코드로 만든다.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct IconImage {
     /// 폭(px).
     pub w: u32,
