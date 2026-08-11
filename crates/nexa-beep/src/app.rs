@@ -102,8 +102,11 @@ enum AppEvent {
     XferFailed { peer: PeerId, why: String },
     /// 상대가 **수락**했다 — 대기 창을 닫고 스트리밍이 시작된다.
     XferAccepted { peer: PeerId },
-    /// 발신 1건 완료 — 큐의 다음 파일로 넘어간다.
+    /// 발신 1건 **전송 끝(청크+Done 발신)** — 큐의 다음 파일로 넘어가되, UI는 아직 "완료"가
+    /// 아니라 **확인 대기**다(수신 ack `XferAcked`가 와야 완료 · M4-9).
     XferSendDone { peer: PeerId },
+    /// **수신 종단 확인**(M4-9) — 상대가 격리까지 마쳤(`ok=true`)거나 실패(`ok=false`)했다.
+    XferAcked { peer: PeerId, ok: bool },
 }
 
 /// 세션 액터에 보내는 명령 — 대화 바이트와 파일 제어를 한 채널로 교대한다.
@@ -426,6 +429,9 @@ fn xfer_step(
         Ok(XferMsg::Done { id }) => match inbox.done(&id) {
             Ok(got) => match crate::gate::quarantine_received(&got, peer, crate::gate::CH_GUI) {
                 Ok(q) => {
+                    // ★ 종단 확인(M4-9) — 격리까지 성공했으니 발신자에게 Received를 돌려준다.
+                    //    이걸 받아야 상대의 "완료"가 참이 된다("보냈다"≠"닿았다").
+                    let _ = session.send(StreamId::File, &XferMsg::Received { id }.encode());
                     let _ = proxy.send_event(AppEvent::XferDone {
                         peer,
                         name: q.name,
@@ -433,10 +439,24 @@ fn xfer_step(
                         mismatch: q.mismatch,
                     });
                 }
-                Err(e) => fail(format!("{e}")),
+                Err(e) => {
+                    // 수신측 실패 — 발신자가 거짓 완료를 남기지 않게 Failed를 되돌린다.
+                    let _ = session.send(StreamId::File, &XferMsg::Failed { id }.encode());
+                    fail(format!("{e}"));
+                }
             },
-            Err(e) => fail(format!("완료 실패: {e} — 폐기")),
+            Err(e) => {
+                let _ = session.send(StreamId::File, &XferMsg::Failed { id }.encode());
+                fail(format!("완료 실패: {e} — 폐기"));
+            }
         },
+        // ★ 발신측이 받는 종단 확인(M4-9) — 확인 대기 항목을 완료/실패로 닫는다.
+        Ok(XferMsg::Received { .. }) => {
+            let _ = proxy.send_event(AppEvent::XferAcked { peer, ok: true });
+        }
+        Ok(XferMsg::Failed { .. }) => {
+            let _ = proxy.send_event(AppEvent::XferAcked { peer, ok: false });
+        }
         Ok(XferMsg::Cancel { id }) => {
             inbox.drop_xfer(&id);
             outgoing.remove(&id);
@@ -645,6 +665,10 @@ struct App {
     send_batch: HashMap<PeerId, (u32, u32, u64, u64)>,
     /// 발신 협상 대기 중인가(수락 전) — 큐 진행 판단.
     awaiting_accept: HashMap<PeerId, nbeep_core::XferId>,
+    /// 발신했으나 **수신 종단 확인(ack) 대기 중**인 건수(상대별 · M4-9). 종료 가드가 본다.
+    awaiting_ack: HashMap<PeerId, u32>,
+    /// 종료 가드 — 미확인 전송이 있을 때 첫 닫기는 경고만, 두 번째로 확정(파괴적 확인 문법).
+    close_armed: bool,
     /// 발신 대기 창의 타임아웃 버튼(상대별).
     send_wait: HashMap<PeerId, nbeep_ui::TimeoutButton>,
     /// 다음 루프에서 만들 발신 대기 창(창 생성은 ActiveEventLoop가 필요하다).
@@ -1153,6 +1177,18 @@ impl App {
         let mut inv = Invalidations::default();
         if let Some(chat) = self.chats.get_mut(&peer) {
             chat.update_xfer_line(mine, state, &mut inv);
+        }
+        self.redraw_conversation(peer);
+    }
+
+    /// 확인 대기(발신) 항목을 수신 ack로 종결한다(M4-9 — `Received`→완료 · `Failed`→실패).
+    fn ack_xfer_line(&mut self, peer: PeerId, terminal: nbeep_ui::XferLineState) {
+        if let Some(conv) = self.conversations.get_mut(&peer) {
+            nbeep_ui::update_xfer_ack(&mut conv.lines, true, terminal.clone());
+        }
+        let mut inv = Invalidations::default();
+        if let Some(chat) = self.chats.get_mut(&peer) {
+            chat.ack_xfer_line(true, terminal, &mut inv);
         }
         self.redraw_conversation(peer);
     }
@@ -2694,13 +2730,10 @@ impl ApplicationHandler<AppEvent> for App {
                 self.redraw_conversation(peer);
             }
             AppEvent::XferSendDone { peer } => {
-                self.set_xfer_line(
-                    peer,
-                    true,
-                    nbeep_ui::XferLineState::Done {
-                        note: String::new(),
-                    },
-                );
+                // ★ 전송 끝 ≠ 완료(M4-9) — 청크·Done을 다 보냈을 뿐, 상대 격리 확인(ack)
+                //   전까지는 **확인 대기**다. 미확인 카운트를 올려 종료 가드가 본다.
+                self.set_xfer_line(peer, true, nbeep_ui::XferLineState::AwaitingAck);
+                *self.awaiting_ack.entry(peer).or_insert(0) += 1;
                 // 배치 집계 갱신 후 다음 파일로.
                 if let Some(b) = self.send_batch.get_mut(&peer) {
                     b.0 += 1;
@@ -2719,7 +2752,7 @@ impl ApplicationHandler<AppEvent> for App {
                         },
                     );
                     self.apply_xfer_view(peer);
-                    self.status = format!("전송 완료 {done_f}/{total_f}");
+                    self.status = format!("전달됨 {done_f}/{total_f} — 상대 확인 대기");
                 }
                 let more = self.send_queue.get(&peer).is_some_and(|q| !q.is_empty());
                 if more {
@@ -2729,6 +2762,37 @@ impl ApplicationHandler<AppEvent> for App {
                     self.clear_xfer(peer);
                 }
                 self.redraw_conversation(peer);
+            }
+            AppEvent::XferAcked { peer, ok } => {
+                // 수신 종단 확인 도착 — 확인 대기 항목을 완료/실패로 닫는다(M4-9).
+                let terminal = if ok {
+                    nbeep_ui::XferLineState::Done {
+                        note: String::new(),
+                    }
+                } else {
+                    nbeep_ui::XferLineState::Failed {
+                        why: "상대가 받지 못함(무결성·저장 실패)".into(),
+                    }
+                };
+                self.ack_xfer_line(peer, terminal);
+                if let Some(n) = self.awaiting_ack.get_mut(&peer) {
+                    *n = n.saturating_sub(1);
+                    if *n == 0 {
+                        self.awaiting_ack.remove(&peer);
+                    }
+                }
+                if self.awaiting_ack.is_empty() {
+                    self.close_armed = false; // 확인이 다 끝났으면 종료 가드 해제
+                }
+                self.status = if ok {
+                    "상대 수신 확인 — 완료".into()
+                } else {
+                    "상대가 받지 못함 — 실패".into()
+                };
+                self.redraw_conversation(peer);
+                if let Some(mid) = self.main_id {
+                    self.request_redraw(mid);
+                }
             }
             AppEvent::XferFailed { peer, why } => {
                 // 방향 판정 — 발신이 걸려 있으면 발신 실패, 아니면 수신 실패.
@@ -3057,6 +3121,20 @@ impl ApplicationHandler<AppEvent> for App {
         match event {
             WindowEvent::CloseRequested => {
                 if Some(id) == self.main_id {
+                    // ★ 종료 가드(M4-9) — 미확인·진행 중 전송이 있으면 조용히 끊지 않는다.
+                    //   "보냈다"가 "닿았다"가 아니라, 확인 전 종료는 수신측 폐기로 이어질 수 있다.
+                    let pending: u32 = self.awaiting_ack.values().sum::<u32>()
+                        + u32::try_from(self.awaiting_accept.len()).unwrap_or(0)
+                        + u32::try_from(self.send_batch.len()).unwrap_or(0);
+                    if pending > 0 && !self.close_armed {
+                        self.close_armed = true;
+                        self.status =
+                            format!("전송 {pending}건 확인 대기 중 — 다시 닫으면 그대로 종료");
+                        if let Some(mid) = self.main_id {
+                            self.request_redraw(mid);
+                        }
+                        return;
+                    }
                     el.exit(); // 주 창 닫기 = 종료(트레이 상주는 M3-2)
                 } else if let Some(entry) = self.windows.remove(&id) {
                     match entry.role {
@@ -3527,6 +3605,8 @@ pub(crate) fn run(mode: WindowMode, live: bool) {
         send_queue: HashMap::new(),
         send_batch: HashMap::new(),
         awaiting_accept: HashMap::new(),
+        awaiting_ack: HashMap::new(),
+        close_armed: false,
         send_wait: HashMap::new(),
         pending_send_window: None,
         send_rate: nbeep_core::RateLimit::Auto,
