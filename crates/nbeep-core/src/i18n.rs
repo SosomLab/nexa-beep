@@ -274,6 +274,15 @@ pub enum Msg {
     Tb32,
     Tb64,
     RefreshList,
+    // ── 프로필 (M1-10 · FR-S-50) ──
+    /// 카테고리: 프로필.
+    CatProfile,
+    /// 표시 이름 항목.
+    DisplayNameLabel,
+    /// 표시 이름 설명 — **LAN 평문 방송 고지**(R-19 옵트인 조건).
+    DisplayNameDesc,
+    /// 기본값(정제된 호스트명·지문 라벨) 선택지.
+    NameAuto,
 }
 
 impl Msg {
@@ -727,6 +736,20 @@ impl Msg {
             Msg::Tb32 => ["32×32"; 4],
             Msg::Tb64 => ["64×64"; 4],
             Msg::RefreshList => ["Refresh list", "목록 갱신", "刷新列表", "一覧を更新"],
+            Msg::CatProfile => ["Profile", "프로필", "个人资料", "プロフィール"],
+            Msg::DisplayNameLabel => ["Display name", "표시 이름", "显示名称", "表示名"],
+            Msg::DisplayNameDesc => [
+                "Broadcast in PLAIN TEXT to everyone on the LAN. Default hides personal parts of the host name.",
+                "LAN 전체에 평문으로 방송됩니다. 기본값은 호스트명에서 개인 정보 부분을 제거한 이름입니다.",
+                "以明文向局域网内所有人广播。默认值会去除主机名中的个人信息部分。",
+                "LAN 全体に平文でブロードキャストされます。既定値はホスト名から個人情報部分を除いた名前です。",
+            ],
+            Msg::NameAuto => [
+                "Auto (cleaned host name)",
+                "자동(정제된 호스트명)",
+                "自动（净化后的主机名）",
+                "自動（整形済みホスト名）",
+            ],
         }
     }
 }

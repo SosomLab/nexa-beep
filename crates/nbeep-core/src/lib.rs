@@ -45,7 +45,7 @@ pub use identity::{DeviceId, PeerId, Recipients, TrustLevel, UserId};
 pub use link::{Link, LinkError};
 pub use linkwatch::{Debouncer, LinkEvent};
 pub use mux::{MuxSession, StreamId};
-pub use name::{DisplayName, NameError};
+pub use name::{default_display_name, neutral_from_host, DisplayName, NameError};
 pub use peers::{DepartReason, PeerEntry, PeerEvent, PeerTable, SourceId};
 pub use pipeline::{ActionCtx, ActionId, Interceptor, Pipeline, Reject};
 pub use ports::{Actor, Clock, Meter, MeterEvent, MonoInstant, Quantity, Rng, Tracer, WallTime};

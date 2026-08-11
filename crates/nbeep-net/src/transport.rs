@@ -93,4 +93,8 @@ pub trait Transport: Send + Sync {
 
     /// 이 전송이 광고하는 능력.
     fn caps(&self) -> Caps;
+
+    /// 표시 이름 교체(M1-10 · FR-S-50) — 발견 광고가 있는 전송은 **즉시 재공지**해
+    /// 상대 목록이 갱신되게 한다. 기본 = 아무 것도 안 함(발견 없는 전송·데모).
+    fn set_display_name(&self, _name: DisplayName) {}
 }

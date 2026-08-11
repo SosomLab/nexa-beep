@@ -93,8 +93,8 @@ pub struct LocalDirect {
     addrs: Arc<Mutex<HashMap<PeerId, PeerAddrs>>>,
     discovery_rx: Mutex<Option<Receiver<DiscoveryEvent>>>,
     incoming_rx: Mutex<Option<Receiver<Box<dyn Link>>>>,
-    /// 발견 핸들 — 드롭 시 GOODBYE.
-    _discovery: UdpDiscovery,
+    /// 발견 핸들 — 드롭 시 GOODBYE · 이름 교체 재공지(M1-10).
+    disc: UdpDiscovery,
 }
 
 impl LocalDirect {
@@ -172,7 +172,7 @@ impl LocalDirect {
             addrs,
             discovery_rx: Mutex::new(Some(discovery_rx)),
             incoming_rx: Mutex::new(Some(incoming_rx)),
-            _discovery: discovery,
+            disc: discovery,
         })
     }
 }
@@ -235,6 +235,11 @@ impl Transport for LocalDirect {
 
     fn caps(&self) -> Caps {
         Caps::default()
+    }
+
+    fn set_display_name(&self, name: DisplayName) {
+        // 즉시 재공지(M1-10) — 상대는 PeerTable Renamed로 목록이 갱신된다.
+        self.disc.set_name(name);
     }
 }
 

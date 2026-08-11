@@ -7,6 +7,7 @@
 pub mod clipboard;
 pub mod clock;
 pub mod font;
+pub mod host;
 pub mod launch;
 pub mod paths;
 pub mod quarantine;
