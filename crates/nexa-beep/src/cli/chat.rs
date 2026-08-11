@@ -236,6 +236,19 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
         let mut outgoing: std::collections::HashMap<nbeep_core::XferId, Vec<u8>> =
             std::collections::HashMap::new();
         let mut pending_in: Option<nbeep_core::XferId> = None;
+        // ── 프로필(M3-17 · 검증 도구) — 테스트 프로필로 응답하고, 상대 프로필도 1회 요청 ──
+        // 이름 = "★{표시이름}"(GUI 목록에서 발견 이름과 한눈에 구분되게) · 이미지 = 70KiB
+        // 의사 바이트(청크 3개 — 조립 경로 실측용 · 픽셀 아님).
+        let my_name = args
+            .iter()
+            .position(|a| a == "--chat-live")
+            .and_then(|i| args.get(i + 1))
+            .filter(|s| !s.starts_with("--"))
+            .cloned()
+            .unwrap_or_else(|| "테스트단말".into());
+        let _ = mux.send(StreamId::Control, &nbeep_core::ProfileMsg::Request.encode());
+        println!("[프로필] 상대 프로필 요청 발신(자동 프리페치와 동일 경로)");
+        let mut img_got = 0usize; // 상대 이미지 수신 누계(도구 — 바이트는 버린다)
         loop {
             loop {
                 match out_rx.try_recv() {
@@ -322,6 +335,67 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
                         }
                     }
                 }
+                Err(nbeep_core::SessionError::TimedOut) => {}
+                Err(_) => {
+                    println!("[종료] 세션 끊김");
+                    return;
+                }
+            }
+            // 프로필 스트림(Control — M3-17 검증).
+            match mux.recv(StreamId::Control) {
+                Ok(bytes) => match nbeep_core::ProfileMsg::decode(&bytes) {
+                    Some(nbeep_core::ProfileMsg::Request) => {
+                        println!("[프로필] 상대가 요청 — 테스트 프로필 응답(★{my_name})");
+                        let img: Vec<u8> = (0..70_000u32).map(|i| (i % 251) as u8).collect();
+                        let mut frames = vec![nbeep_core::ProfileMsg::Info {
+                            name: Some(format!("★{my_name}")),
+                            email: Some(format!("{my_name}@test.local")),
+                            phone: Some("010-0000-0000".into()),
+                            image_len: u32::try_from(img.len()).unwrap_or(0),
+                        }
+                        .encode()];
+                        let mut off = 0usize;
+                        while off < img.len() {
+                            let end = (off + nbeep_core::PROFILE_IMAGE_CHUNK).min(img.len());
+                            frames.push(
+                                nbeep_core::ProfileMsg::ImageChunk {
+                                    offset: u32::try_from(off).unwrap_or(u32::MAX),
+                                    last: end == img.len(),
+                                    bytes: img[off..end].to_vec(),
+                                }
+                                .encode(),
+                            );
+                            off = end;
+                        }
+                        for f in frames {
+                            if mux.send(StreamId::Control, &f).is_err() {
+                                println!("[종료] 세션 끊김");
+                                return;
+                            }
+                        }
+                    }
+                    Some(nbeep_core::ProfileMsg::Info {
+                        name,
+                        email,
+                        phone,
+                        image_len,
+                    }) => {
+                        println!(
+                            "[프로필] 수신 — 이름={} 이메일={} 전화={} 이미지={image_len}B (미공개 필드는 애초에 안 실려 옴)",
+                            name.as_deref().unwrap_or("(비공개)"),
+                            email.as_deref().unwrap_or("(비공개)"),
+                            phone.as_deref().unwrap_or("(비공개)"),
+                        );
+                        img_got = 0;
+                    }
+                    Some(nbeep_core::ProfileMsg::ImageChunk { bytes, last, .. }) => {
+                        img_got += bytes.len();
+                        if last {
+                            println!("[프로필] 이미지 수신 완료 — {img_got}B(도구라 버림)");
+                        }
+                    }
+                    None => {}
+                },
                 Err(nbeep_core::SessionError::TimedOut) => {}
                 Err(_) => {
                     println!("[종료] 세션 끊김");
