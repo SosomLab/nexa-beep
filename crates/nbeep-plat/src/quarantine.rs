@@ -3,8 +3,13 @@
 //! macOS: `com.apple.quarantine` 확장 속성 직접 기록 — Gatekeeper·XProtect가 첫 실행/열기
 //! 시 검사를 발동한다. 값 형식은 `플래그;16진 시각;에이전트명;`(UUID 항은 생략 가능 —
 //! LaunchServices DB 참조가 없을 때의 관례).
-//! Windows(MotW Zone.Identifier ADS)·`IAttachmentExecute`는 실기 검증과 함께 별도
-//! 슬라이스(⏸ — 이 모듈의 비-macOS 폴백은 "미지원"을 **명시**한다 · §5 공통 규칙).
+//! Windows(M4-3 · 08-11): **`Zone.Identifier` NTFS 대체 데이터 스트림(ADS) 직접 기록** —
+//! SmartScreen·첨부 파일 관리자·Office 보호 보기가 이 표식으로 발동한다. `ZoneId=3`
+//! (인터넷 영역) = 브라우저 다운로드와 같은 취급. `IAttachmentExecute` COM 대신 ADS
+//! 직접 기록을 택했다 — 의존 0·T0 무권한·표식 내용이 결정적(검증 가능). ⚠️ ADS는
+//! NTFS 전용 — FAT/exFAT 볼륨(USB 등)에선 쓰기가 실패하고 **오류를 그대로 보고**한다
+//! (macOS xattr 미지원 볼륨과 같은 정책 — 조용히 삼키지 않는다).
+//! Linux xattr은 별도 슬라이스(⏸ — 비지원 플랫폼 폴백은 "미지원"을 **명시**한다 · §5 공통 규칙).
 //!
 //! 어댑터 함수만 노출한다 — 도메인 포트(`nbeep-safe::MarkPort`)에는 조립 지점(bin)이 꽂는다
 //! (DR-21 — 이 크레이트는 도메인을 모른다).
@@ -54,10 +59,51 @@ fn imp(path: &Path) -> io::Result<bool> {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(windows)]
+fn imp(path: &Path) -> io::Result<bool> {
+    use std::ffi::OsString;
+    // MotW = 파일의 `Zone.Identifier` ADS. 경로 뒤에 `:스트림명`을 붙이면 NTFS가
+    // 대체 스트림으로 연다(별도 API 불필요 — 첨부 파일 관리자(urlmon)가 쓰는 형식
+    // 그대로 CRLF). ZoneId=3 = URLZONE_INTERNET.
+    let mut ads = OsString::from(path.as_os_str());
+    ads.push(":Zone.Identifier");
+    std::fs::write(&ads, b"[ZoneTransfer]\r\nZoneId=3\r\n")?;
+    Ok(true)
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
 fn imp(_path: &Path) -> io::Result<bool> {
-    // Windows MotW·Linux xattr는 별도 슬라이스(⏸) — 미지원을 명시적으로 보고.
+    // Linux xattr는 별도 슬라이스(⏸) — 미지원을 명시적으로 보고.
     Ok(false)
+}
+
+#[cfg(all(test, windows))]
+mod win_tests {
+    use super::*;
+
+    /// ADS를 실제로 읽어 확인(실측 — 추정 금지). 파일 본문은 그대로여야 한다.
+    #[test]
+    fn motw_ads_is_written_and_readable() {
+        let dir = std::env::temp_dir().join(format!("nbeep-plat-motw-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("marked.txt");
+        std::fs::write(&f, b"payload").unwrap();
+
+        assert!(apply_quarantine_mark(&f).unwrap(), "Windows = 부착");
+        // 스트림 직접 읽기 — PowerShell `Get-Content -Stream Zone.Identifier`와 동일 실체.
+        let mut ads = std::ffi::OsString::from(f.as_os_str());
+        ads.push(":Zone.Identifier");
+        let v = std::fs::read_to_string(&ads).expect("ADS 존재");
+        assert!(
+            v.contains("[ZoneTransfer]") && v.contains("ZoneId=3"),
+            "{v}"
+        );
+        // 본문 무손상 + 기존 표식 위에 다시 표식(멱등)도 성립.
+        assert_eq!(std::fs::read(&f).unwrap(), b"payload");
+        assert!(apply_quarantine_mark(&f).unwrap());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 #[cfg(all(test, target_os = "macos"))]

@@ -3,7 +3,13 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
-> **갱신: 2026-08-11 11차 (KST)** — **★ Q-29-1 확정 → M1-10 표시 이름 기본값 — R-19(실명 평문 방송) 해소**(`feat/m1-10-display-name`):
+> **갱신: 2026-08-11 12차 (KST)** — **M4-3 일부 — Windows MotW 표식 어댑터(Zone.Identifier ADS) · 이 PC 실측**(`feat/m4-3-win-motw`):
+> ① 08-10 Windows 감사의 빈칸(**DR-13 "복원 후에도 표식 유지"가 macOS에서만 성립**)을 닫음 — `plat::quarantine` Windows 분기: `:Zone.Identifier` ADS에 `[ZoneTransfer]/ZoneId=3` 직접 기록(인터넷 영역 — SmartScreen·첨부 관리자·Office 보호 보기 발동 근거).
+> ② 선택: **IAttachmentExecute COM 대신 ADS 직접 기록** — 의존 0 · T0 무권한 · 내용 결정적. **FAT/exFAT은 오류 명시**(macOS xattr 정책 동일 — 조용히 삼키면 거짓). 조립 지점 변경 0(OS 중립 진입점 뒤).
+> ③ **실측(이 PC)** — 단위(ADS 왕복·본문 무손상·멱등) · 종단 `--quarantine-demo`: 실체화 후 **`표식=Ok(Applied)`**(이전 Windows = Unsupported) · 독립 검증 `Get-Item -Stream *` = `Zone.Identifier` 26B 실존. **451 green** · clippy 0.
+> ④ ⇒ **DR-13이 mac·Win 2/3-OS 성립.** 잔여 = Linux xattr · AMSI(FR-S-15) · 검사(§6) 어댑터. [journal/2026-08-11.md](journal/2026-08-11.md).
+>
+> **직전(08-11 11차)** — **★ Q-29-1 확정 → M1-10 표시 이름 기본값 — R-19(실명 평문 방송) 해소**(`feat/m1-10-display-name`):
 > ① **Q-29-1 사용자 확정** — 기본값 = **ⓐ 호스트명 정제**("Sangyongs-MacBook-Pro"→"MacBook-Pro" · 장치 단어 없으면 **fail-closed → `beep-{지문}`** 폴백 — 전체가 이름일 수 있다) · 사용자 지정 이름은 **즉시 적용(재공지)**.
 > ② 구현 — core `neutral_from_host`+`default_display_name` · plat `host::hostname`(원시 — "그대로 쓰지 말 것" 명기) · `Transport::set_display_name`(기본 no-op) + `UdpDiscovery::set_name`(광고 템플릿 `Arc<Mutex>` 공유 · **즉시 ANNOUNCE 1회** · 상대 목록은 기존 `PeerTable Renamed` 경로 — 새 개념 0) · 설정 **`profile.display_name`**(CatProfile 신설 · "자동"/직접 입력 · desc = **LAN 평문 방송 고지** 4어) · 부팅 시 설정 로드를 전송 생성 앞으로(이름이 광고에 실린다).
 > ③ **450 green** · clippy 0 · 재공지 회귀 실측(주기 60s 전 도달 = 즉시 발신) · ★ **이 PC 종단 실측: 방송 이름 = `beep-6808efd4`**(호스트명 `KIROS33-GALAXYB` → 폴백) — **사용자명 미노출**. 부수: 설정 사이드바 테스트 2건이 카테고리 인덱스 하드코딩이라 깨짐 → 위치 탐색으로 재작성.
