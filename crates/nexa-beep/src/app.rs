@@ -109,6 +109,18 @@ enum AppEvent {
     XferAcked { peer: PeerId, ok: bool },
     /// 수동 주소 연결 실패(DR-19 · M2-8 잔여 — 워커에서 돌아온다. 성공은 `Outbound`).
     AddFailed { addr: String, why: String },
+    /// 상대가 내 프로필을 요청(M3-17) — 응답 구성은 메인 스레드가 한다(공개 정책
+    /// 판단 단일 지점 — TOFU와 같은 문법).
+    ProfileRequested { peer: PeerId },
+    /// 상대 프로필 도착(M3-17) — 켠 필드만 실려 온다. 이미지는 바이트 그대로
+    /// (디코드는 M4-5 imgdec 몫 — 여기서는 캐시만).
+    PeerProfile {
+        peer: PeerId,
+        name: Option<String>,
+        email: Option<String>,
+        phone: Option<String>,
+        image: Option<Vec<u8>>,
+    },
 }
 
 /// 세션 액터에 보내는 명령 — 대화 바이트와 파일 제어를 한 채널로 교대한다.
@@ -134,6 +146,9 @@ enum SessionCmd {
         id: nbeep_core::XferId,
         why: nbeep_core::RejectWhy,
     },
+    /// Control 스트림으로 보낼 인코딩된 프레임들(프로필 요청/응답 — M3-17).
+    /// 내용 구성은 메인 스레드 몫(공개 정책 판단 단일 지점) — 액터는 나르기만 한다.
+    Control(Vec<Vec<u8>>),
 }
 
 /// 인바운드 세션 봉투 — `AppEvent`가 Debug라야 해서 수동 Debug.
@@ -144,6 +159,19 @@ impl std::fmt::Debug for InboundSession {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("InboundSession").finish_non_exhaustive()
     }
+}
+
+/// 상대 프로필(M3-17 — 세션 경유 수신 · ADR-0008). 켠 필드만 온다.
+#[derive(Debug, Default)]
+struct PeerProfile {
+    /// 프로필 표시 이름(무해화 완료) — 있으면 발견 이름보다 우선 표시.
+    name: Option<nbeep_core::DisplayName>,
+    /// 이메일(옵트인).
+    email: Option<String>,
+    /// 전화번호(옵트인).
+    phone: Option<String>,
+    /// 캐시된 이미지 파일(`data/profiles/…` — 픽셀 렌더는 M4-5 imgdec 이후).
+    image_file: Option<std::path::PathBuf>,
 }
 
 /// 대화 상태 — **뷰(창)와 분리**(DR-26). 세션은 **액터 스레드**가 소유하고, 여기엔 그
@@ -174,6 +202,13 @@ fn spawn_session_actor(
         let mut inbox = XferInbox::new();
         let mut outgoing: HashMap<nbeep_core::XferId, Vec<u8>> = HashMap::new();
         let mut send_meter = nbeep_core::RateMeter::default();
+        // 프로필 이미지 조립 상태(M3-17) — (텍스트 필드, 기대 총량, 누적 바이트).
+        type PendingProfile = (
+            (Option<String>, Option<String>, Option<String>),
+            u32,
+            Vec<u8>,
+        );
+        let mut pending_profile: Option<PendingProfile> = None;
         loop {
             // 송신 먼저(즉시성) — 대기 중 발신 요청을 모두 흘려보낸다.
             loop {
@@ -217,6 +252,16 @@ fn spawn_session_actor(
                             &XferMsg::Reject { id, why, limit: 0 }.encode(),
                         )
                     }
+                    SessionCmd::Control(frames) => {
+                        let mut r = Ok(());
+                        for f in frames {
+                            r = session.send(StreamId::Control, &f);
+                            if r.is_err() {
+                                break;
+                            }
+                        }
+                        r
+                    }
                 };
                 if sent.is_err() {
                     let _ = proxy.send_event(AppEvent::Closed { peer });
@@ -241,6 +286,75 @@ fn spawn_session_actor(
                     }
                 }
                 Err(nbeep_core::SessionError::TimedOut) => {} // 정상 — 송신 교대로
+                Err(_) => {
+                    let _ = proxy.send_event(AppEvent::Closed { peer });
+                    return;
+                }
+            }
+            // 프로필 수신 폴(Control — M3-17). 요청은 메인으로 올리고(정책 단일 지점),
+            // 응답은 여기서 조립해 완성본만 올린다(대용량 조립이 메인을 막지 않게).
+            match session.recv(StreamId::Control) {
+                Ok(bytes) => match nbeep_core::ProfileMsg::decode(&bytes) {
+                    Some(nbeep_core::ProfileMsg::Request) => {
+                        if proxy
+                            .send_event(AppEvent::ProfileRequested { peer })
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                    Some(nbeep_core::ProfileMsg::Info {
+                        name,
+                        email,
+                        phone,
+                        image_len,
+                    }) => {
+                        let len = image_len as usize;
+                        if len == 0 || len > nbeep_core::PROFILE_IMAGE_MAX {
+                            // 이미지 없음 또는 상한 초과 주장 — 텍스트만 반영(fail-closed).
+                            let _ = proxy.send_event(AppEvent::PeerProfile {
+                                peer,
+                                name,
+                                email,
+                                phone,
+                                image: None,
+                            });
+                            pending_profile = None;
+                        } else {
+                            pending_profile =
+                                Some(((name, email, phone), image_len, Vec::with_capacity(len)));
+                        }
+                    }
+                    Some(nbeep_core::ProfileMsg::ImageChunk {
+                        offset,
+                        last,
+                        bytes,
+                    }) => {
+                        if let Some((fields, want, buf)) = &mut pending_profile {
+                            let in_order = buf.len() == offset as usize
+                                && buf.len() + bytes.len() <= nbeep_core::PROFILE_IMAGE_MAX;
+                            if in_order {
+                                buf.extend_from_slice(&bytes);
+                            }
+                            if !in_order || last {
+                                // 종결 — 정합(순서·총량 일치)일 때만 이미지 채택.
+                                let (name, email, phone) = fields.clone();
+                                let ok = in_order && last && buf.len() == *want as usize;
+                                let image = ok.then(|| std::mem::take(buf));
+                                let _ = proxy.send_event(AppEvent::PeerProfile {
+                                    peer,
+                                    name,
+                                    email,
+                                    phone,
+                                    image,
+                                });
+                                pending_profile = None;
+                            }
+                        }
+                    }
+                    None => {} // 미지 kind — 전방 호환 무시
+                },
+                Err(nbeep_core::SessionError::TimedOut) => {}
                 Err(_) => {
                     let _ = proxy.send_event(AppEvent::Closed { peer });
                     return;
@@ -683,6 +797,8 @@ struct App {
     live: bool,
     /// 프로필 변경 화면 뷰(M3-17 — 열려 있을 때만 Some).
     profile_view: Option<nbeep_ui::ProfileWidget>,
+    /// 상대 프로필(M3-17 — 세션 경유 수신 · 목록·제목 표시 우선).
+    peer_profiles: HashMap<PeerId, PeerProfile>,
     /// 주소 입력 모달 뷰(DR-19 · M3-16 — 열려 있을 때만 Some).
     addr_view: Option<nbeep_ui::AddrPromptWidget>,
     /// About 뷰(열려 있을 때만 Some).
@@ -1390,7 +1506,14 @@ impl App {
             .table
             .list()
             .into_iter()
-            .map(|entry| {
+            .map(|mut entry| {
+                // 프로필 이름 우선(M3-17) — 본인이 공개한 이름이 발견 이름을 덮는다
+                // (신원은 여전히 키 — 표시만 바뀐다).
+                if let Some(p) = self.peer_profiles.get(&entry.peer) {
+                    if let Some(n) = &p.name {
+                        entry.name = n.clone();
+                    }
+                }
                 let trust = self.trust.level(entry.peer);
                 // 세션 상태 점(사용자 요청): 대화 중=Active · 끊김 기록=Lost · 그 외=Idle.
                 let link = if self.conversations.contains_key(&entry.peer) {
@@ -1502,9 +1625,66 @@ impl App {
     }
 
     fn peer_title(&self, peer: PeerId) -> String {
+        // 프로필 이름 우선(M3-17 — 본인이 공개한 이름) · 없으면 발견 이름.
+        if let Some(p) = self.peer_profiles.get(&peer) {
+            if let Some(n) = &p.name {
+                return n.as_str().to_string();
+            }
+        }
         self.table
             .get(peer)
             .map_or_else(|| format!("{peer:?}"), |e| e.name.as_str().to_string())
+    }
+
+    /// 내 프로필 응답 프레임(M3-17) — **공개 정책 판단은 여기 한 곳**(메인 스레드).
+    /// 켠 필드만 싣고, 이미지는 기본정보 공개가 켜져 있고 상한 이내일 때만 청크로 잇는다.
+    fn my_profile_frames(&self) -> Vec<Vec<u8>> {
+        use nbeep_core::{ProfileMsg, PROFILE_IMAGE_CHUNK, PROFILE_IMAGE_MAX};
+        let on = |k: &str| self.settings.get(k) == "on";
+        let share_basic = on("profile.share.basic");
+        let name = share_basic.then(|| {
+            effective_display_name(&self.settings, &self.identity.peer_id())
+                .as_str()
+                .to_string()
+        });
+        let email = (on("profile.share.email"))
+            .then(|| self.settings.get("profile.email").to_string())
+            .filter(|s| !s.is_empty());
+        let phone = (on("profile.share.phone"))
+            .then(|| self.settings.get("profile.phone").to_string())
+            .filter(|s| !s.is_empty());
+        // 이미지 — 기본정보 공개 + 파일 존재 + 상한 이내(초과는 조용히 생략 · 텍스트는 나감).
+        let image = share_basic
+            .then(|| self.settings.get("profile.image_path").to_string())
+            .filter(|p| !p.is_empty())
+            .and_then(|p| std::fs::read(p).ok())
+            .filter(|b| !b.is_empty() && b.len() <= PROFILE_IMAGE_MAX);
+        let image_len = image.as_ref().map_or(0u32, |b| {
+            u32::try_from(b.len()).unwrap_or(0) // MAX 256KiB라 실패 불가
+        });
+        let mut frames = vec![ProfileMsg::Info {
+            name,
+            email,
+            phone,
+            image_len,
+        }
+        .encode()];
+        if let Some(bytes) = image {
+            let mut off = 0usize;
+            while off < bytes.len() {
+                let end = (off + PROFILE_IMAGE_CHUNK).min(bytes.len());
+                frames.push(
+                    ProfileMsg::ImageChunk {
+                        offset: u32::try_from(off).unwrap_or(u32::MAX),
+                        last: end == bytes.len(),
+                        bytes: bytes[off..end].to_vec(),
+                    }
+                    .encode(),
+                );
+                off = end;
+            }
+        }
+        frames
     }
 
     /// 수립된 세션을 액터로 옮기고 대화 상태를 등록한다(아웃바운드·인바운드 공용).
@@ -1512,6 +1692,11 @@ impl App {
         let peer = session.peer();
         let (out_tx, out_rx) = std::sync::mpsc::channel();
         spawn_session_actor(session, out_rx, self.proxy.clone(), self.send_rate);
+        // 프로필 자동 프리페치(M3-17 · ADR-0008) — 세션이 섰으니 요청 1회.
+        // 상대가 전부 비공개면 빈 응답이 온다(그래도 요청은 무해).
+        let _ = out_tx.send(SessionCmd::Control(vec![
+            nbeep_core::ProfileMsg::Request.encode()
+        ]));
         self.conversations.insert(
             peer,
             Conversation {
@@ -2530,7 +2715,23 @@ impl App {
             }
             return;
         }
-        self.status = "대화 열림 — 세션 유지 중".into();
+        // 프로필 연락처가 있으면 대화 열 때 함께 보여준다(M3-17 — 상세 UI 전 최소 노출).
+        self.status = match self.peer_profiles.get(&peer) {
+            Some(p) if p.email.is_some() || p.phone.is_some() || p.image_file.is_some() => {
+                let mut parts: Vec<String> = Vec::new();
+                if let Some(e) = &p.email {
+                    parts.push(e.clone());
+                }
+                if let Some(ph) = &p.phone {
+                    parts.push(ph.clone());
+                }
+                if p.image_file.is_some() {
+                    parts.push("이미지 있음".into());
+                }
+                format!("대화 열림 — 프로필: {}", parts.join(" · "))
+            }
+            _ => "대화 열림 — 세션 유지 중".into(),
+        };
         let chat = self.build_chat_view(peer);
         match self.mode {
             WindowMode::Single => {
@@ -3474,6 +3675,71 @@ impl ApplicationHandler<AppEvent> for App {
                     self.request_redraw(mid);
                 }
             }
+            AppEvent::ProfileRequested { peer } => {
+                // 응답 구성은 여기(메인) — 공개 정책 판단 단일 지점(M3-17).
+                let frames = self.my_profile_frames();
+                if let Some(conv) = self.conversations.get(&peer) {
+                    let _ = conv.out_tx.send(SessionCmd::Control(frames));
+                }
+            }
+            AppEvent::PeerProfile {
+                peer,
+                name,
+                email,
+                phone,
+                image,
+            } => {
+                // 이름은 무해화(DisplayName) 통과분만 채택 · 이력은 신뢰 저장소에도 남긴다.
+                let display = name.and_then(|n| nbeep_core::DisplayName::parse(&n).ok());
+                if let Some(n) = &display {
+                    self.trust.record_name(peer, n.clone());
+                }
+                // 이미지 바이트 캐시(픽셀 렌더는 M4-5 imgdec 이후 — 지금은 보관만).
+                let image_file = image.and_then(|bytes| {
+                    let dir = self.data_dir.join("profiles");
+                    std::fs::create_dir_all(&dir).ok()?;
+                    let path = dir.join(format!("{}.img", peer.short()));
+                    std::fs::write(&path, bytes).ok()?;
+                    Some(path)
+                });
+                let has_any =
+                    display.is_some() || email.is_some() || phone.is_some() || image_file.is_some();
+                if has_any {
+                    // 받은 항목을 상태바에 요약(연락처 상세 표시 UI는 M3-17 잔여).
+                    let mut got: Vec<&str> = Vec::new();
+                    if display.is_some() {
+                        got.push("이름");
+                    }
+                    if email.is_some() {
+                        got.push("이메일");
+                    }
+                    if phone.is_some() {
+                        got.push("전화");
+                    }
+                    if image_file.is_some() {
+                        got.push("이미지");
+                    }
+                    self.peer_profiles.insert(
+                        peer,
+                        PeerProfile {
+                            name: display,
+                            email,
+                            phone,
+                            image_file,
+                        },
+                    );
+                    self.status =
+                        format!("프로필 수신({}) — {}", self.peer_title(peer), got.join("·"));
+                } else {
+                    // 전부 비공개(빈 응답) — 이전 프로필이 있었다면 걷어낸다(철회 반영).
+                    self.peer_profiles.remove(&peer);
+                }
+                let mut inv = Invalidations::default();
+                self.refresh_rows(&mut inv);
+                if let Some(mid) = self.main_id {
+                    self.request_redraw(mid);
+                }
+            }
             AppEvent::Inbound { session } => {
                 use nbeep_core::Session as _;
                 let peer = session.session.peer();
@@ -4326,6 +4592,7 @@ pub(crate) fn run(mode: WindowMode, live: bool) {
         .ok(),
         picker_view: None,
         profile_view: None,
+        peer_profiles: HashMap::new(),
         picker_ctx: None,
         pending_picker: None,
         data_dir: dir,
