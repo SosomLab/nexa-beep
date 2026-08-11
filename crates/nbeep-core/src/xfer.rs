@@ -123,6 +123,18 @@ pub enum XferMsg {
         /// 전송 id.
         id: XferId,
     },
+    /// **수신 종단 확인**(M4-9) — 수신측이 해시 재검증·격리까지 마쳤음을 발신자에게 알린다.
+    /// 이걸 받아야 발신 "완료"가 참이 된다("보냈다"≠"닿았다" — 그전엔 "확인 대기").
+    Received {
+        /// 전송 id.
+        id: XferId,
+    },
+    /// **수신 종단 실패**(M4-9) — 수신측 해시 불일치·저장 실패. 발신자가 거짓 완료를
+    /// 남기지 않게 실패를 되돌려 알린다.
+    Failed {
+        /// 전송 id.
+        id: XferId,
+    },
 }
 
 /// 와이어 오류 — 전부 명시 거부(fail-closed).
@@ -163,6 +175,8 @@ const K_REJECT: u8 = 3;
 const K_CHUNK: u8 = 4;
 const K_DONE: u8 = 5;
 const K_CANCEL: u8 = 6;
+const K_RECEIVED: u8 = 7;
+const K_FAILED: u8 = 8;
 
 impl XferMsg {
     /// 와이어 인코딩.
@@ -208,6 +222,14 @@ impl XferMsg {
             }
             Self::Cancel { id } => {
                 out.push(K_CANCEL);
+                out.extend_from_slice(id);
+            }
+            Self::Received { id } => {
+                out.push(K_RECEIVED);
+                out.extend_from_slice(id);
+            }
+            Self::Failed { id } => {
+                out.push(K_FAILED);
                 out.extend_from_slice(id);
             }
         }
@@ -278,6 +300,8 @@ impl XferMsg {
             }
             K_DONE => Self::Done { id },
             K_CANCEL => Self::Cancel { id },
+            K_RECEIVED => Self::Received { id },
+            K_FAILED => Self::Failed { id },
             k => return Err(XferError::Kind(k)),
         })
     }
@@ -501,6 +525,8 @@ mod tests {
             },
             XferMsg::Done { id: xid(1) },
             XferMsg::Cancel { id: xid(1) },
+            XferMsg::Received { id: xid(1) },
+            XferMsg::Failed { id: xid(1) },
         ];
         for m in msgs {
             assert_eq!(XferMsg::decode(&m.encode()).unwrap(), m);

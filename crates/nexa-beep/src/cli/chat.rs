@@ -437,8 +437,9 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
                             batch.0 += 1;
                             batch.2 += total;
                             let _ = mux.send(StreamId::File, &XferMsg::Done { id }.encode());
+                            // ★ 전송 끝 ≠ 완료(M4-9) — 상대의 Received 확인 전까지는 확인 대기.
                             println!(
-                                "[파일] 전송 완료 {} / {} ({}/{})",
+                                "[파일] 전달됨 {} / {} ({}/{}) — 상대 확인 대기",
                                 human(batch.2),
                                 human(batch.3),
                                 batch.0,
@@ -473,10 +474,27 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
                     Ok(XferMsg::Done { id }) => match inbox.done(&id) {
                         Ok(got) => {
                             pending_in = None;
-                            receive_into_quarantine(&got, peer);
+                            let ok = receive_into_quarantine(&got, peer);
+                            // ★ 종단 확인(M4-9) — 격리 성패를 발신자에게 되돌린다.
+                            let ack = if ok {
+                                XferMsg::Received { id }
+                            } else {
+                                XferMsg::Failed { id }
+                            };
+                            let _ = mux.send(StreamId::File, &ack.encode());
                         }
-                        Err(e) => println!("[파일] 완료 실패: {e} — 폐기"),
+                        Err(e) => {
+                            println!("[파일] 완료 실패: {e} — 폐기");
+                            let _ = mux.send(StreamId::File, &XferMsg::Failed { id }.encode());
+                        }
                     },
+                    // ★ 발신측이 받는 종단 확인(M4-9) — 확인 대기가 여기서 닫힌다.
+                    Ok(XferMsg::Received { .. }) => {
+                        println!("[파일] 상대 수신 확인 — 완료");
+                    }
+                    Ok(XferMsg::Failed { .. }) => {
+                        println!("[파일] 상대가 받지 못함 — 실패(무결성·저장)");
+                    }
                     Ok(XferMsg::Cancel { id }) => {
                         inbox.drop_xfer(&id);
                         pending_in = None;
@@ -635,7 +653,8 @@ fn human(b: u64) -> String {
 }
 
 /// 수신 완료물 → **무해화 게이트 합류**(공용 [`crate::gate`]) 후 결과를 stdout에 보고.
-fn receive_into_quarantine(got: &nbeep_core::Received, sender: PeerId) {
+/// 수신물을 격리하고 **성공 여부**를 돌려준다(M4-9 — 발신자에게 종단 확인 ack를 보내기 위해).
+fn receive_into_quarantine(got: &nbeep_core::Received, sender: PeerId) -> bool {
     match crate::gate::quarantine_received(got, sender, crate::gate::CH_CLI) {
         Ok(q) => {
             println!(
@@ -650,8 +669,12 @@ fn receive_into_quarantine(got: &nbeep_core::Received, sender: PeerId) {
                 q.path.display()
             );
             println!("       (실체화는 승인 후 --quarantine-demo 참조 — 자동 실체화 없음)");
+            true
         }
-        Err(e) => println!("[파일] {e} — 수신물 폐기"),
+        Err(e) => {
+            println!("[파일] {e} — 수신물 폐기");
+            false
+        }
     }
 }
 

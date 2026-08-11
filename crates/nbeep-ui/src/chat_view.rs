@@ -166,7 +166,7 @@ pub struct XferLine {
     pub state: XferLineState,
 }
 
-/// 파일 전송 항목의 상태 — `Waiting`/`Active`만 갱신 대상(종결 상태는 불변).
+/// 파일 전송 항목의 상태 — `Waiting`/`Active`만 [`update_xfer_in`] 갱신 대상.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum XferLineState {
     /// 승인 대기(발신 = 상대 승인 · 수신 = 내 승인).
@@ -176,6 +176,9 @@ pub enum XferLineState {
         /// 지금까지 오간 바이트.
         done: u64,
     },
+    /// **발신 후 수신 종단 확인 대기**(M4-9) — 청크·Done을 다 보냈지만 상대의 `Received`
+    /// ack가 아직 안 왔다. "보냈다"≠"닿았다"라 아직 완료가 아니다([`update_xfer_ack`] 대상).
+    AwaitingAck,
     /// 완료(부가 설명 — 예: 격리·위험 등급).
     Done {
         /// 상태 뒤에 붙는 설명(비면 "완료"만).
@@ -188,12 +191,13 @@ pub enum XferLineState {
     },
 }
 
-/// `lines`에서 **가장 오래된 미종결 전송 항목**(방향 일치)의 상태를 갱신한다.
+/// `lines`에서 **가장 오래된 진행 항목**(`Waiting`/`Active` · 방향 일치)의 상태를 갱신한다.
 ///
 /// 앞에서부터 찾는 이유 — 오퍼 큐가 FIFO라 결정·진행도 오래된 것부터 처리된다
 /// (뒤에서 찾으면 대기 2건일 때 앞 건의 거절이 뒤 항목에 붙는다).
-/// 종결(`Done`/`Failed`) 항목은 건드리지 않는다 — 완료 기록은 불변이고,
-/// 같은 상대와의 새 전송은 새 항목으로 쌓인다. 갱신했으면 `true`.
+/// **`AwaitingAck`·종결(`Done`/`Failed`)은 건드리지 않는다** — 확인 대기 항목은
+/// [`update_xfer_ack`]가 따로 닫는다(그래야 다음 파일의 진행이 앞 파일의 확인 대기를
+/// 덮지 않는다 · M4-9). 갱신했으면 `true`.
 pub fn update_xfer_in(lines: &mut [ChatLine], mine: bool, state: XferLineState) -> bool {
     for line in lines.iter_mut() {
         if line.mine != mine {
@@ -205,6 +209,23 @@ pub fn update_xfer_in(lines: &mut [ChatLine], mine: bool, state: XferLineState) 
                 XferLineState::Waiting | XferLineState::Active { .. }
             ) {
                 x.state = state;
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// `lines`에서 **가장 오래된 확인 대기 항목**(`AwaitingAck` · 방향 일치)을 종결 상태로
+/// 닫는다(M4-9 — 수신 ack `Received`→완료 · `Failed`→실패). 갱신했으면 `true`.
+pub fn update_xfer_ack(lines: &mut [ChatLine], mine: bool, terminal: XferLineState) -> bool {
+    for line in lines.iter_mut() {
+        if line.mine != mine {
+            continue;
+        }
+        if let ChatBody::Xfer(x) = &mut line.body {
+            if x.state == XferLineState::AwaitingAck {
+                x.state = terminal;
                 return true;
             }
         }
@@ -402,6 +423,20 @@ impl ChatViewWidget {
         inv: &mut Invalidations,
     ) -> bool {
         let hit = update_xfer_in(&mut self.lines, mine, state);
+        if hit {
+            inv.push(self.bounds);
+        }
+        hit
+    }
+
+    /// 가장 오래된 확인 대기 항목을 종결 상태로 닫는다([`update_xfer_ack`] · M4-9).
+    pub fn ack_xfer_line(
+        &mut self,
+        mine: bool,
+        terminal: XferLineState,
+        inv: &mut Invalidations,
+    ) -> bool {
+        let hit = update_xfer_ack(&mut self.lines, mine, terminal);
         if hit {
             inv.push(self.bounds);
         }
@@ -793,6 +828,7 @@ impl ChatViewWidget {
                         };
                         format!("{dir} {pct}% · {}", human_bytes(*done))
                     }
+                    XferLineState::AwaitingAck => "전달됨 · 확인 대기".to_string(),
                     XferLineState::Done { note } if note.is_empty() => "완료".to_string(),
                     XferLineState::Done { note } => format!("완료 — {note}"),
                     XferLineState::Failed { why } => format!("실패 — {why}"),
@@ -1946,6 +1982,54 @@ mod tests {
             !w.update_xfer_line(true, XferLineState::Active { done: 99 }, &mut inv),
             "종결 항목은 갱신 불가"
         );
+    }
+
+    #[test]
+    fn xfer_ack_closes_awaiting_and_progress_skips_it() {
+        // M4-9 — 발신 2건: A는 확인 대기(AwaitingAck), B는 아직 진행 중.
+        // B의 진행 갱신이 A의 확인 대기를 덮으면 안 되고(update_xfer_in은 AwaitingAck 제외),
+        // ack는 A만 닫아야 한다(update_xfer_ack는 AwaitingAck만).
+        let (mut w, mut inv) = widget();
+        w.push_line(xline(true, "a.bin", 100, 0), &mut inv); // A
+        w.push_line(xline(true, "b.bin", 200, 1), &mut inv); // B
+                                                             // A 전송 끝 → 확인 대기(가장 오래된 진행 항목이 A).
+        assert!(w.update_xfer_line(true, XferLineState::AwaitingAck, &mut inv));
+        assert_eq!(*xfer_state(&w.lines[0]), XferLineState::AwaitingAck);
+        // B 진행 → update_xfer_in은 AwaitingAck을 건너뛰고 B(다음 진행 항목)를 잡는다.
+        assert!(w.update_xfer_line(true, XferLineState::Active { done: 50 }, &mut inv));
+        assert_eq!(
+            *xfer_state(&w.lines[0]),
+            XferLineState::AwaitingAck,
+            "A 확인 대기 유지"
+        );
+        assert_eq!(*xfer_state(&w.lines[1]), XferLineState::Active { done: 50 });
+        // A의 ack 도착 → 확인 대기(A)만 완료로 닫는다.
+        assert!(w.ack_xfer_line(
+            true,
+            XferLineState::Done {
+                note: String::new()
+            },
+            &mut inv
+        ));
+        assert_eq!(
+            *xfer_state(&w.lines[0]),
+            XferLineState::Done {
+                note: String::new()
+            }
+        );
+        assert_eq!(
+            *xfer_state(&w.lines[1]),
+            XferLineState::Active { done: 50 },
+            "B는 그대로"
+        );
+        // 더 닫을 확인 대기 없음.
+        assert!(!w.ack_xfer_line(
+            true,
+            XferLineState::Done {
+                note: String::new()
+            },
+            &mut inv
+        ));
     }
 
     #[test]
