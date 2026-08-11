@@ -3,7 +3,13 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
-> **갱신: 2026-08-11 4차 (KST)** — **Windows 배포 실기 검증 — v0.1.2**(이 Windows PC · M5-4b 선행 · macOS 트랙만 실측돼 있던 빈칸을 채움):
+> **갱신: 2026-08-11 5차 (KST)** — **M5-4d 수정 — Windows 더블클릭 무반응**(`fix/m5-4d-windows-double-click` · 4차 실기서 발견한 P0 즉시 수정):
+> ① **판정 = "탐색기가 새 콘솔을 할당했는가"** — `plat::launch::from_gui_shell()`가 `GetConsoleProcessList` 휴리스틱(붙은 프로세스가 자기뿐=반환 1 → 탐색기 실행 · 터미널이면 셸까지 2+ → false). main에서 `gui_launch = 번들(mac) || (무인자 && from_gui_shell())` — **macOS 번들 판정의 Windows 대칭**.
+> ② **잔존 콘솔 제거** — 콘솔 서브시스템이라 창 모드로 가도 콘솔이 남는다 → `hide_gui_console()`(FreeConsole · count==1일 때만 = 마지막 detach로 창 닫힘). NSIS 바로가기·완료 실행에 `--window --live` 두 번째 방어선.
+> ③ **실측(이 PC)** — 터미널 무인자 = 스캐폴드(**CLI 보존**) · `Start-Process`(탐색기 방식) = **"Nexa Beep" 창 전환·콘솔 잔존 없음**. 워크스페이스 **431테스트 green** · clippy 0.
+> ④ ⇒ **M5-4b 게시 잠금 해제** — 코드 수정 완료, **v0.1.3 릴리스에 실려 나가면** winget/choco 변수만 켜면 됨. [journal/2026-08-11.md](journal/2026-08-11.md).
+>
+> **직전(08-11 4차)** — **Windows 배포 실기 검증 — v0.1.2**(이 Windows PC · M5-4b 선행 · macOS 트랙만 실측돼 있던 빈칸을 채움):
 > ① **파이프라인·매니페스트·설치 흐름은 전부 정상** — SHA-256 **3/3 일치** · 포터블 MotW 전파 정상 · 설치본 무인 설치(`/S`)·업그레이드(0.1.1→0.1.2)·**완전 제거**(잔재 0) 통과(전부 사용자 단위 HKCU·무권한) · **winget validate 성공**(설치본·포터블) · 매니페스트 InstallerSha256이 실측 자산과 정확히 일치.
 > ② 🔴 **결함 1건 — Windows 더블클릭 무반응 = macOS 번들 버그(v0.1.2 ⑤)의 미수정 쌍둥이**: 포터블 exe가 **콘솔 서브시스템 + 인자 없음** → 더블클릭 시 콘솔 번쩍 후 종료. NSIS **시작 메뉴 바로가기·완료 실행도 인자 없이** 호출해 **설치본 정식 실행 경로도 동일하게 깨짐**. `launched_from_app_bundle()`이 `.app/Contents/MacOS/` 전용이라 Windows 대응이 없다 → **M5-4d 등록(P0)** · 권장 = Explorer 실행 감지 → 창 모드(macOS와 대칭) · v0.1.3.
 > ③ **M5-4b 갱신** — "Windows 실기 확인 선행" 조건 **충족(더블클릭 결함 제외)** · 의존을 **M5-4d로** 바꿈(고쳐야 스토어 사용자가 첫 실행에서 안 막힌다).
