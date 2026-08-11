@@ -30,6 +30,10 @@ pub mod icons {
     pub const SHIELD_ALPHA: &[u8] = include_bytes!("../assets/icon-shield-96.alpha");
     /// 변 크기(px).
     pub const SHIELD_SIZE: u32 = 96;
+    /// 프로필(사람 실루엣 — 머리 원 + 어깨) 96×96 알파 마스크(M3-17 화면 진입).
+    pub const PERSON_ALPHA: &[u8] = include_bytes!("../assets/icon-person-96.alpha");
+    /// 변 크기(px).
+    pub const PERSON_SIZE: u32 = 96;
 }
 
 pub mod about;
@@ -44,6 +48,7 @@ pub mod geom;
 pub mod hangul;
 pub mod offer_prompt;
 pub mod peer_list;
+pub mod profile;
 pub mod quarantine_view;
 pub mod raster;
 pub mod settings;
@@ -73,6 +78,7 @@ pub use gallery::GalleryWidget;
 pub use geom::{Point, Rect, Size};
 pub use offer_prompt::{OfferChoice, OfferInfo, OfferPromptWidget};
 pub use peer_list::{badge, HudPos, LinkState, PeerListWidget, PeerRow, XferProgress, ROW_H};
+pub use profile::{ProfileValues, ProfileWidget};
 pub use quarantine_view::{QAction, QRow, QuarantineWidget};
 pub use raster::{FontSet, RasterCtx};
 pub use settings::{registry, Entry, SettingKind, SettingsState, SettingsWidget};

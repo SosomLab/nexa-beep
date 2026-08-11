@@ -45,6 +45,41 @@ pub use tree::{FlatRow, GridColumn, TreeControl, TreeGrid, TreeModel, TreeNode, 
 
 use crate::draw::{DrawCtx, FontSlot};
 use crate::geom::{Point, Rect};
+
+/// 컨트롤 크기 배율(체크·스위치·옵션박스 글리프 — 08-11 사용자 요청) —
+/// f32 비트를 원자적으로 보관(스크롤바 숨김 지연과 같은 전역 설정 문법).
+/// 기본 1.0(= 현재 크기) · 설정 `ui.control_size` s/m/l/xl → 0.8/1.0/1.3/1.6.
+static CTL_SIZE_MULT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x3F80_0000); // 1.0f32 비트
+
+/// 배율 지정(호스트 — 설정 적용·부팅 반영).
+pub fn set_control_size_mult(m: f32) {
+    CTL_SIZE_MULT.store(m.to_bits(), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// 현재 배율.
+#[must_use]
+pub fn control_size_mult() -> f32 {
+    f32::from_bits(CTL_SIZE_MULT.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+/// 설정 코드(s/m/l/xl) → 배율. 미지 값은 기본 1.0(관용).
+#[must_use]
+pub fn control_size_mult_from_code(code: &str) -> f32 {
+    match code {
+        "s" => 0.8,
+        "l" => 1.3,
+        "xl" => 1.6,
+        _ => 1.0,
+    }
+}
+
+/// 논리 px에 컨트롤 크기 배율 적용(글리프 치수 전용 — 행 높이·여백은 그대로).
+#[must_use]
+pub fn ctl_size(logical: i32) -> i32 {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+    let v = (logical as f32 * control_size_mult()).round() as i32;
+    v.max(1)
+}
 use crate::theme::{Color, Theme};
 
 /// 선행 아이콘 변 크기(논리 px) — **콤보/Choose/트리/버튼 공용 단일 원천**(크기 드리프트 방지).
