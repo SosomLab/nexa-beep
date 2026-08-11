@@ -13,11 +13,12 @@ use crate::geom::{Point, Rect};
 use crate::theme::{Color, Theme};
 use crate::widget::{Invalidations, Widget};
 
-/// 트랙 크기(논리 px) — iOS 51×31 비례 축소.
-const TRACK_W: i32 = 40;
-const TRACK_H: i32 = 24;
+/// 트랙 크기(논리 px) — iOS 51×31 비례 축소. 초판 40×24는 과대(사용자 지적 08-11
+/// "절반으로") → 20×12.
+const TRACK_W: i32 = 20;
+const TRACK_H: i32 = 12;
 /// 손잡이 상하좌우 여백.
-const KNOB_PAD: i32 = 2;
+const KNOB_PAD: i32 = 1;
 /// 트랙 ↔ 라벨 간격(논리 px).
 const GAP: i32 = 8;
 /// 켜짐 트랙 — iOS 시스템 그린(#34C759) · 다크/라이트 공통(참고 이미지 색).
@@ -78,10 +79,10 @@ impl Switch {
         inv.push(self.base.bounds);
     }
 
-    /// 트랙 rect(라벨 위치에 따라 좌/우 끝 정렬).
+    /// 트랙 rect(라벨 위치에 따라 좌/우 끝 정렬). 크기 배율(`ui.control_size`) 적용.
     fn track_rect(&self) -> Rect {
-        let w = self.s(TRACK_W);
-        let h = self.s(TRACK_H);
+        let w = self.s(super::ctl_size(TRACK_W));
+        let h = self.s(super::ctl_size(TRACK_H));
         let b = self.base.bounds;
         let y = b.y + (b.h - h) / 2;
         match self.side {
@@ -92,7 +93,7 @@ impl Switch {
     }
 
     fn label_rect(&self) -> Rect {
-        let w = self.s(TRACK_W);
+        let w = self.s(super::ctl_size(TRACK_W));
         let gap = self.s(GAP);
         let b = self.base.bounds;
         match self.side {

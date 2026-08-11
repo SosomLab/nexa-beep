@@ -67,9 +67,9 @@ impl Checkbox {
         inv.push(self.base.bounds);
     }
 
-    /// 글리프 rect(라벨 위치에 따라 좌/우).
+    /// 글리프 rect(라벨 위치에 따라 좌/우). 크기 배율(`ui.control_size`) 적용.
     fn box_rect(&self) -> Rect {
-        let d = self.s(BOX);
+        let d = self.s(super::ctl_size(BOX));
         let b = self.base.bounds;
         let y = b.y + (b.h - d) / 2;
         match self.side {
@@ -80,7 +80,7 @@ impl Checkbox {
 
     /// 라벨 텍스트 rect.
     fn label_rect(&self) -> Rect {
-        let d = self.s(BOX);
+        let d = self.s(super::ctl_size(BOX));
         let gap = self.s(GAP);
         let b = self.base.bounds;
         match self.side {

@@ -39,6 +39,14 @@ const SIZE_OPTS: &[(&str, Msg)] = &[
 /// 크기 기본값 — 순서와 무관하게 '보통' 고정.
 const SIZE_DEFAULT: &str = "m";
 
+/// [`SIZE_OPTS`]의 `Radio` kind용 정적 참조(컨트롤 크기 항목 재사용).
+const SIZE_OPTS_STATIC: &[(&str, Msg)] = SIZE_OPTS;
+
+/// 설정 **화면에는 없지만** 영속되는 키(M3-17 프로필 화면이 쓴다) — 기본 빈 문자열.
+/// ⚠ 이메일·전화는 PII다 — 평문 settings.cfg 보관은 잠정이며 M2-5b(암호화 저장)로
+/// 이관 후보(journal 08-11 명기).
+const HIDDEN_KEYS: &[&str] = &["profile.email", "profile.phone", "profile.image_path"];
+
 /// 기본 off 토글 — 프로필 공개(DR-22 **기본 전부 비노출** · 옵트인). 미등록 토글은 on.
 const TOGGLE_DEFAULT_OFF: &[&str] = &[
     "profile.share.basic",
@@ -52,6 +60,8 @@ const RADIO_DEFAULTS: &[(&str, &str)] = &[
     ("ui.toolbar_size", "24"),
     ("ui.typeahead_timeout", "2000"),
     ("ui.scrollbar_hide", "2000"),
+    // 컨트롤 글리프 크기 — 기본 "크게"(사용자 확정 08-11 · 설정 Switch가 크게 보이도록).
+    ("ui.control_size", "l"),
 ];
 
 /// 항목 종류 — 우측 패널이 이 열거를 읽어 컨트롤을 동적 생성한다(새 설정 = Entry 1줄).
@@ -317,6 +327,15 @@ pub fn registry() -> &'static [Entry] {
             ]),
             key: "ui.language",
         },
+        // 컨트롤 글리프 크기(체크·스위치·옵션박스 — 08-11 사용자 요청 · 기본 "크게").
+        Entry {
+            cat: Msg::CatAppearance,
+            sub: None,
+            label: Msg::ControlSize,
+            desc: Msg::ControlSizeDesc,
+            kind: SettingKind::Radio(SIZE_OPTS_STATIC),
+            key: "ui.control_size",
+        },
         Entry {
             cat: Msg::CatAppearance,
             sub: None,
@@ -539,6 +558,9 @@ impl SettingsState {
                 values.insert(k, v);
             }
         }
+        for k in HIDDEN_KEYS {
+            values.insert(*k, String::new());
+        }
         Self { values }
     }
 
@@ -566,6 +588,11 @@ impl SettingsState {
     /// (ADR-0011 §4-3: 거부·실패가 아니라 무시 = 기본값 유지). 반환 = 아는 키였는가
     /// (거짓이면 호출자가 미지 키로 보존한다 — F-1).
     pub fn set_by_name(&mut self, key: &str, value: &str) -> bool {
+        // 화면 밖 영속 키(M3-17 프로필 필드) — 자유 문자열 그대로.
+        if let Some(k) = HIDDEN_KEYS.iter().find(|k| **k == key) {
+            self.values.insert(k, value.to_string());
+            return true;
+        }
         // &'static str 키는 레지스트리에서 찾는다(default_values가 파생 키 포함 전부).
         let mut found: Option<&'static str> = None;
         let mut kind: Option<SettingKind> = None;
@@ -607,6 +634,59 @@ fn tokens(q: &str) -> Vec<String> {
     q.split_whitespace().map(str::to_lowercase).collect()
 }
 
+/// 설명 워드랩(08-11) — `avail`(물리 px) 안에서 그리디 줄바꿈. 공백 없는 긴 조각
+/// (CJK 문장 등)은 문자 단위로 쪼갠다. `max_lines` 초과분은 마지막 줄 끝을 `…`로 접는다
+/// (예약 줄 수는 레이아웃의 추정 — 실측이 넘치면 자르는 쪽이 침범보다 낫다).
+pub(crate) fn wrap_text(
+    ctx: &mut dyn DrawCtx,
+    text: &str,
+    avail: i32,
+    max_lines: usize,
+) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    for word in text.split(' ') {
+        let cand = if cur.is_empty() {
+            word.to_string()
+        } else {
+            format!("{cur} {word}")
+        };
+        if ctx.text_width(&cand) <= avail {
+            cur = cand;
+            continue;
+        }
+        if !cur.is_empty() {
+            lines.push(std::mem::take(&mut cur));
+        }
+        if ctx.text_width(word) > avail {
+            for ch in word.chars() {
+                let cand = format!("{cur}{ch}");
+                if cur.is_empty() || ctx.text_width(&cand) <= avail {
+                    cur = cand;
+                } else {
+                    lines.push(std::mem::take(&mut cur));
+                    cur = ch.to_string();
+                }
+            }
+        } else {
+            cur = word.to_string();
+        }
+    }
+    if !cur.is_empty() || lines.is_empty() {
+        lines.push(cur);
+    }
+    if lines.len() > max_lines {
+        lines.truncate(max_lines.max(1));
+        if let Some(last) = lines.last_mut() {
+            while !last.is_empty() && ctx.text_width(&format!("{last}…")) > avail {
+                last.pop();
+            }
+            last.push('…');
+        }
+    }
+    lines
+}
+
 /// 전 언어에 걸쳐 매칭한다 — 영어 UI에서도 "테마"로, 한국어 UI에서도 "theme"로 찾힌다.
 fn entry_matches(e: &Entry, toks: &[String]) -> bool {
     if toks.is_empty() {
@@ -632,6 +712,8 @@ const ENTRY_H: i32 = 52;
 const FONT_SECTION_H: i32 = 88;
 /// 설정 행에 붙는 정보 줄 높이(논리 px).
 const NOTE_H: i32 = 22;
+/// 설명 워드랩 줄 높이(논리 px — Status 폰트 한 줄 + 행간).
+const DESC_LINE_H: i32 = 16;
 /// 위치 그리드 행 높이(3×3 미니 화면 93 + 여백).
 const POS_ROW_H: i32 = 110;
 const CTL_H: i32 = 26;
@@ -683,6 +765,10 @@ struct RowUi {
     head: Option<Msg>,
     /// 헤더까지 포함한 이 행의 시작 y(레이아웃이 채운다) — 밴드 판정에 쓴다.
     head_h: i32,
+    /// 설명에 예약된 줄 수(1~3 · 레이아웃이 추정) — 워드랩이 이 안에서 그린다(08-11).
+    desc_lines: i32,
+    /// 설명 워드랩 가용 폭(물리 px — 컨트롤 왼쪽까지). 레이아웃·페인트가 같은 값을 쓴다.
+    desc_avail: i32,
 }
 
 /// 설정 위젯 — 커스텀 컨트롤 컴포지션.
@@ -1018,6 +1104,8 @@ impl SettingsWidget {
                 group,
                 head,
                 head_h: 0,
+                desc_lines: 1,
+                desc_avail: 0,
             });
         }
         self.layout(inv);
@@ -1164,18 +1252,43 @@ impl SettingsWidget {
         // 차용 분리를 위해 치수 사전 계산.
         let (ctl_h, pad) = (self.s(CTL_H), self.s(PAD));
         let (h_font, h_entry, h_pos) = (self.s(FONT_SECTION_H), self.s(ENTRY_H), self.s(POS_ROW_H));
-        // 토글 폭 = Switch 트랙(40) — Checkbox(22)에서 교체(08-11).
-        let (combo_w, check_w) = (self.s(COMBO_W), self.s(40));
+        // 토글 폭 = Switch 트랙(20) × 컨트롤 크기 배율(ui.control_size).
+        let (combo_w, check_w) = (self.s(COMBO_W), self.s(crate::controls::ctl_size(20)));
         let (family_w, size_w, gap10, dy32) =
             (self.s(FAMILY_W), self.s(SIZE_W), self.s(10), self.s(32));
         let note_hs: Vec<i32> = self.rows.iter().map(|r| self.note_h(r.idx)).collect();
+        let lang = current_lang();
+        let scale = self.scale;
+        let desc_line_h = self.s(DESC_LINE_H);
+        let min_avail = self.s(60);
         for (ri, row) in self.rows.iter_mut().enumerate() {
             let e = &registry()[row.idx];
+            // ── 설명 워드랩 예약(08-11 — 설명이 컨트롤을 침범하지 않게) ──
+            // 가용 폭 = 행 폭 − 좌우 여백 − 그 행 컨트롤 폭 − 간격. 줄 수는 문자 폭
+            // 추정(ASCII 7·그 외 14 논리px — 실측은 페인트가 하고, 여기는 **예약**이라
+            // 약간의 과대/과소는 여백/말줄임으로 흡수된다).
+            let ctl_w = match &row.ctl {
+                RowCtl::Combo(_) | RowCtl::Act(_) => combo_w,
+                RowCtl::Check(_) => check_w,
+                RowCtl::Face(_) => family_w,
+                RowCtl::Pos(p) => p.preferred_size().0,
+                RowCtl::Color(c) => c.preferred_width().min(rw - pad * 2),
+                RowCtl::Font { .. } => 0, // 설명이 전폭을 쓴다(컨트롤이 아래 줄)
+            };
+            row.desc_avail = (rw - pad * 2 - ctl_w - gap10).max(min_avail);
+            let est_logical: i32 = tr(lang, e.desc)
+                .chars()
+                .map(|c| if c.is_ascii() { 7 } else { 14 })
+                .sum();
+            #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+            let est_px = (est_logical as f32 * scale).round() as i32;
+            row.desc_lines = ((est_px + row.desc_avail - 1) / row.desc_avail).clamp(1, 3);
             let h = match e.kind {
                 SettingKind::FontSection { .. } => h_font,
                 SettingKind::PositionGrid => h_pos,
                 _ => h_entry,
-            } + note_hs[ri];
+            } + (row.desc_lines - 1) * desc_line_h
+                + note_hs[ri];
             // 하위 섹션 제목 자리를 행 **위에** 비워 둔다.
             row.head_h = if row.head.is_some() { head_h } else { 0 };
             top += row.head_h;
@@ -1694,14 +1807,20 @@ impl Widget for SettingsWidget {
                         tr(lang, e.label),
                         theme.text,
                     );
+                    // 설명 — 컨트롤을 침범하지 않게 워드랩(08-11 사용자 지적).
                     ctx.select_font(FontSlot::Status, false);
-                    ctx.text(
-                        r.x + self.s(PAD),
-                        r.y + self.s(30),
-                        r,
+                    #[allow(clippy::cast_sign_loss)]
+                    let lines = wrap_text(
+                        ctx,
                         tr(lang, e.desc),
-                        theme.text_dim,
+                        row.desc_avail,
+                        row.desc_lines as usize,
                     );
+                    for (i, line) in lines.iter().enumerate() {
+                        #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+                        let dy = self.s(30) + i as i32 * self.s(DESC_LINE_H);
+                        ctx.text(r.x + self.s(PAD), r.y + dy, r, line, theme.text_dim);
+                    }
                 }
                 RowCtl::Font { .. } => {
                     ctx.select_font(FontSlot::Base, true);
@@ -1713,13 +1832,18 @@ impl Widget for SettingsWidget {
                         theme.text,
                     );
                     ctx.select_font(FontSlot::Status, false);
-                    ctx.text(
-                        r.x + self.s(PAD),
-                        r.y + self.s(64),
-                        r,
+                    #[allow(clippy::cast_sign_loss)]
+                    let lines = wrap_text(
+                        ctx,
                         tr(lang, e.desc),
-                        theme.text_dim,
+                        row.desc_avail,
+                        row.desc_lines as usize,
                     );
+                    for (i, line) in lines.iter().enumerate() {
+                        #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+                        let dy = self.s(64) + i as i32 * self.s(DESC_LINE_H);
+                        ctx.text(r.x + self.s(PAD), r.y + dy, r, line, theme.text_dim);
+                    }
                 }
             }
             match &row.ctl {

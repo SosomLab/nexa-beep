@@ -492,6 +492,8 @@ enum Role {
     Picker,
     /// About 창(메뉴 → About — 브랜딩·링크).
     About,
+    /// 프로필 변경 화면(M3-17 — 이미지·이름·연락처 + 공개 토글).
+    Profile,
     /// 격리함 — 수신 파일 승인·삭제(M4-3 · [docs/11] §7 등급별 마찰).
     Quarantine,
     /// 발신 대기 — 상대 승인을 기다리는 창(타임아웃 후 자동 취소).
@@ -575,6 +577,8 @@ enum PickerPurpose {
     BackupDir,
     /// 신원 키 **백업 파일** 선택(복원) — 폴더 탐색 + 파일 선택.
     RestoreKey,
+    /// 프로필 이미지 선택(M3-17) — 폴더 탐색 + 이미지 파일만.
+    ProfileImage,
 }
 
 /// 탐색형 피커의 행 하나가 뜻하는 것(라벨 → 행위 매핑).
@@ -677,6 +681,8 @@ struct App {
     data_dir: std::path::PathBuf,
     /// 실물 전송 여부 — 신원 복원 핫 로딩 시 전송 재시작 판단(데모는 교체만).
     live: bool,
+    /// 프로필 변경 화면 뷰(M3-17 — 열려 있을 때만 Some).
+    profile_view: Option<nbeep_ui::ProfileWidget>,
     /// 주소 입력 모달 뷰(DR-19 · M3-16 — 열려 있을 때만 Some).
     addr_view: Option<nbeep_ui::AddrPromptWidget>,
     /// About 뷰(열려 있을 때만 Some).
@@ -1887,8 +1893,20 @@ impl App {
                 }
                 match e.file_type() {
                     Ok(t) if t.is_dir() => dirs.push((name, e.path())),
-                    Ok(t) if t.is_file() && purpose == PickerPurpose::RestoreKey => {
-                        files.push((name, e.path()));
+                    Ok(t) if t.is_file() => {
+                        let take = match purpose {
+                            PickerPurpose::RestoreKey => true,
+                            PickerPurpose::ProfileImage => {
+                                let lower = name.to_ascii_lowercase();
+                                ["png", "jpg", "jpeg", "gif", "bmp", "webp", "ico"]
+                                    .iter()
+                                    .any(|ext| lower.ends_with(&format!(".{ext}")))
+                            }
+                            _ => false,
+                        };
+                        if take {
+                            files.push((name, e.path()));
+                        }
                     }
                     _ => {}
                 }
@@ -1905,6 +1923,7 @@ impl App {
         let title = match purpose {
             PickerPurpose::BackupDir => format!("백업 폴더 선택 — {}", dir.display()),
             PickerPurpose::RestoreKey => format!("백업 파일 선택 — {}", dir.display()),
+            PickerPurpose::ProfileImage => format!("프로필 이미지 선택 — {}", dir.display()),
             PickerPurpose::GallerySample => String::new(),
         };
         let roots = entries
@@ -2106,6 +2125,58 @@ impl App {
         )
     }
 
+    /// 프로필 변경 화면을 연다(M3-17 — 툴바 사람 아이콘). 이미 있으면 포커스.
+    fn open_profile(&mut self, el: &ActiveEventLoop) {
+        if let Some((pid, _)) = self.windows.iter().find(|(_, e)| e.role == Role::Profile) {
+            if let Some(e) = self.windows.get(pid) {
+                e.window.focus_window();
+            }
+            return;
+        }
+        let values = nbeep_ui::ProfileValues {
+            display_name: self.settings.get("profile.display_name").to_string(),
+            email: self.settings.get("profile.email").to_string(),
+            phone: self.settings.get("profile.phone").to_string(),
+            image_path: self.settings.get("profile.image_path").to_string(),
+            share_basic: self.settings.get("profile.share.basic") == "on",
+            share_email: self.settings.get("profile.share.email") == "on",
+            share_phone: self.settings.get("profile.share.phone") == "on",
+        };
+        let attrs = Window::default_attributes()
+            .with_title("Nexa Beep — 프로필")
+            .with_inner_size(winit::dpi::LogicalSize::new(440.0, 430.0))
+            .with_resizable(false)
+            .with_window_icon(self.icon.clone());
+        let window = Rc::new(el.create_window(attrs).unwrap());
+        window.set_ime_allowed(true); // 이름·연락처에 한글 입력
+        let scale = window.scale_factor() as f32;
+        let context = softbuffer::Context::new(window.clone()).unwrap();
+        let surface = SbSurface::new(&context, window.clone()).unwrap();
+        let id = window.id();
+        self.windows.insert(
+            id,
+            WinEntry {
+                role: Role::Profile,
+                window,
+                surface,
+                cursor: (0, 0),
+                scale,
+            },
+        );
+        self.profile_view = Some(nbeep_ui::ProfileWidget::new(&values));
+        self.layout_window(id);
+        self.request_redraw(id);
+    }
+
+    /// 프로필 창 닫기(뷰·창 동시 정리).
+    fn close_profile(&mut self) {
+        self.profile_view = None;
+        if let Some((pid, _)) = self.windows.iter().find(|(_, e)| e.role == Role::Profile) {
+            let pid = *pid;
+            self.windows.remove(&pid);
+        }
+    }
+
     /// 주소 직접 입력 모달을 연다(DR-19 · M3-16 — `⌘/Ctrl+K`·툴바 +). 이미 있으면 포커스.
     fn open_add_endpoint(&mut self, el: &ActiveEventLoop) {
         if let Some((aid, _)) = self
@@ -2240,6 +2311,9 @@ impl App {
         if let Ok(px) = self.settings.get("ui.toolbar_size").parse::<i32>() {
             self.toolbar.set_icon_size(px);
         }
+        nbeep_ui::controls::set_control_size_mult(nbeep_ui::controls::control_size_mult_from_code(
+            self.settings.get("ui.control_size"),
+        ));
         // 파일 수신 승인 — 정상 경로에선 "timed"가 파일에 없다(conf_save가 복귀
         // 대상으로 치환 · 사용자 확정 08-09). 그래도 들어오면(구버전·수기 편집)
         // 시작 시각이 없으니 되살리지 않고 manual로 정규화한다(기간 연장 방지).
@@ -2348,6 +2422,18 @@ impl App {
                     let mut inv = Invalidations::default();
                     self.list
                         .set_hud_pos(nbeep_ui::HudPos::from_code(&value), &mut inv);
+                }
+                // 컨트롤 글리프 크기(체크·스위치·옵션박스 — 08-11) — 전역 배율이라
+                // 전 창 재배치·재그리기.
+                "ui.control_size" => {
+                    nbeep_ui::controls::set_control_size_mult(
+                        nbeep_ui::controls::control_size_mult_from_code(&value),
+                    );
+                    let ids: Vec<WindowId> = self.windows.keys().copied().collect();
+                    for wid in ids {
+                        self.layout_window(wid);
+                        self.request_redraw(wid);
+                    }
                 }
                 "ui.toolbar_size" => {
                     if let Ok(px) = value.parse::<i32>() {
@@ -2530,6 +2616,12 @@ impl App {
                     av.set_bounds(Rect::new(0, 0, w, h), &mut inv);
                 }
             }
+            Role::Profile => {
+                if let Some(pv) = &mut self.profile_view {
+                    pv.set_scale(scale, &mut inv);
+                    pv.set_bounds(Rect::new(0, 0, w, h), &mut inv);
+                }
+            }
             Role::Quarantine => {
                 if let Some(qv) = &mut self.quarantine_view {
                     qv.set_scale(scale, &mut inv);
@@ -2705,6 +2797,7 @@ impl App {
                             // 직접 등록(DR-19 수동 엔드포인트) — 별도 모달 창(M3-16).
                             "add" => self.open_add_endpoint(el),
                             "quarantine" => self.open_quarantine(el),
+                            "profile" => self.open_profile(el),
                             "gallery" => self.open_gallery(el),
                             _ => {}
                         }
@@ -2801,7 +2894,33 @@ impl App {
                                         }
                                     }
                                     Some(PickEntry::File(p)) => {
-                                        self.status = self.do_restore_identity(&p);
+                                        match ctx.purpose {
+                                            PickerPurpose::ProfileImage => {
+                                                // 프로필 이미지 경로 반영(M3-17) — 저장 +
+                                                // 열린 프로필 화면 갱신.
+                                                let path = p.to_string_lossy().into_owned();
+                                                self.settings
+                                                    .set("profile.image_path", path.clone());
+                                                self.conf_mark();
+                                                if let Some(pv) = &mut self.profile_view {
+                                                    let mut pinv = Invalidations::default();
+                                                    pv.set_image_path(&path, &mut pinv);
+                                                    let _ = pv.take_changes(); // 저장은 위에서 이미
+                                                }
+                                                self.status = format!("프로필 이미지 = {path}");
+                                                if let Some((pid, _)) = self
+                                                    .windows
+                                                    .iter()
+                                                    .find(|(_, e)| e.role == Role::Profile)
+                                                {
+                                                    let pid = *pid;
+                                                    self.request_redraw(pid);
+                                                }
+                                            }
+                                            _ => {
+                                                self.status = self.do_restore_identity(&p);
+                                            }
+                                        }
                                         self.picker_view = None;
                                         self.picker_ctx = None;
                                         self.windows.remove(&id);
@@ -2852,6 +2971,28 @@ impl App {
                     self.commit_manual_add(addr, el); // 워커 이관은 M2-8 잔여 — 지금은 기존 경로
                 } else if cancel {
                     self.close_add_endpoint();
+                    if let Some(mid) = self.main_id {
+                        self.request_redraw(mid);
+                    }
+                }
+            }
+            Role::Profile => {
+                let (mut changes, mut pick, mut closed) = (Vec::new(), false, false);
+                if let Some(pv) = &mut self.profile_view {
+                    pv.on_event(&ev, &mut inv);
+                    changes = pv.take_changes();
+                    pick = pv.take_pick_image();
+                    closed = pv.take_closed();
+                }
+                if !changes.is_empty() {
+                    // 설정 깔때기 재사용 — display_name 변경은 즉시 재공지 arm을 탄다.
+                    self.apply_settings(changes);
+                }
+                if pick {
+                    self.pending_picker = Some(PickerPurpose::ProfileImage);
+                }
+                if closed {
+                    self.close_profile();
                     if let Some(mid) = self.main_id {
                         self.request_redraw(mid);
                     }
@@ -2980,6 +3121,11 @@ impl App {
             Role::AddEndpoint => {
                 if let Some(av) = &self.addr_view {
                     av.paint(&mut ctx, &theme);
+                }
+            }
+            Role::Profile => {
+                if let Some(pv) = &self.profile_view {
+                    pv.paint(&mut ctx, &theme);
                 }
             }
             Role::Quarantine => {
@@ -3627,6 +3773,7 @@ impl ApplicationHandler<AppEvent> for App {
                         Role::Picker => self.picker_view = None,
                         Role::About => self.about_view = None,
                         Role::AddEndpoint => self.addr_view = None,
+                        Role::Profile => self.profile_view = None,
                         Role::Quarantine => self.quarantine_view = None,
                         Role::Sending(peer) => self.cancel_send(peer, false),
                         Role::Approve(peer) => {
@@ -4158,6 +4305,15 @@ pub(crate) fn run(mode: WindowMode, live: bool) {
                     alpha: nbeep_ui::icons::SHIELD_ALPHA,
                 },
             ),
+            // 프로필 변경 화면(M3-17 — 사람 실루엣 · 사용자 요청 08-11).
+            ToolItem::new(
+                "profile",
+                ToolIcon::Mask {
+                    w: nbeep_ui::icons::PERSON_SIZE,
+                    h: nbeep_ui::icons::PERSON_SIZE,
+                    alpha: nbeep_ui::icons::PERSON_ALPHA,
+                },
+            ),
             // 컨트롤 갤러리는 툴바에서 뺐다(사용자 요청 08-10) — 메뉴(보기 ▸ 컨트롤 갤러리)와
             // ⌘/Ctrl+G로 열 수 있으니, 상시 노출할 임시 검수용 항목은 툴바를 차지할 이유가 없다.
         ]),
@@ -4169,6 +4325,7 @@ pub(crate) fn run(mode: WindowMode, live: bool) {
         )
         .ok(),
         picker_view: None,
+        profile_view: None,
         picker_ctx: None,
         pending_picker: None,
         data_dir: dir,

@@ -301,6 +301,21 @@ pub enum Msg {
     /// 추가정보 개별 공개 — 전화번호.
     SharePhone,
     SharePhoneDesc,
+    /// 컨트롤 크기(체크·스위치·옵션박스 글리프 배율).
+    ControlSize,
+    ControlSizeDesc,
+    /// 프로필 화면(M3-17).
+    ProfileTitle,
+    /// 프로필 이미지 필드.
+    ProfileImage,
+    /// 파일 선택 버튼.
+    ActChoose,
+    /// 이메일 필드.
+    FieldEmail,
+    /// 전화번호 필드.
+    FieldPhone,
+    /// "LAN에 방송되지 않음 · 연결된 상대의 요청에만" 안내.
+    ProfileShareNote,
 }
 
 impl Msg {
@@ -797,6 +812,24 @@ impl Msg {
                 "기본 비공개. 연결된 상대에게만 제공됩니다.",
                 "默认关闭。仅提供给已连接的对方。",
                 "既定でオフ。接続済みの相手にのみ提供されます。",
+            ],
+            Msg::ProfileTitle => ["Profile", "프로필", "个人资料", "プロフィール"],
+            Msg::ProfileImage => ["Profile image", "프로필 이미지", "头像", "プロフィール画像"],
+            Msg::ActChoose => ["Choose…", "선택…", "选择…", "選択…"],
+            Msg::FieldEmail => ["Email", "이메일", "电子邮件", "メール"],
+            Msg::FieldPhone => ["Phone", "전화번호", "电话", "電話番号"],
+            Msg::ProfileShareNote => [
+                "Never broadcast. Shared only with connected peers, and only fields you turned on.",
+                "브로드캐스트에 실리지 않습니다. 연결된 상대에게만, 켠 항목만 제공됩니다.",
+                "绝不广播。仅提供给已连接的对方，且仅限已开启的字段。",
+                "ブロードキャストされません。接続済みの相手にのみ、オンにした項目だけ提供されます。",
+            ],
+            Msg::ControlSize => ["Control size", "컨트롤 크기", "控件大小", "コントロールの大きさ"],
+            Msg::ControlSizeDesc => [
+                "Size of checkboxes, switches and option glyphs.",
+                "체크박스·스위치·옵션박스 표시 크기입니다.",
+                "复选框、开关与选项标记的显示大小。",
+                "チェックボックス・スイッチ・オプション記号の表示サイズ。",
             ],
             Msg::SharePhone => ["Share phone number", "전화번호 공개", "公开电话号码", "電話番号を公開"],
             Msg::SharePhoneDesc => [

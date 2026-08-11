@@ -107,7 +107,8 @@ impl RadioGroup {
     }
 
     fn glyph_rect(&self, i: usize) -> Rect {
-        let d = self.s(DOT);
+        // 크기 배율(`ui.control_size`) 적용 — 옵션 행 높이는 그대로, 글리프만 커진다.
+        let d = self.s(super::ctl_size(DOT));
         let h = self.s(OPT_H);
         let y = self.base.bounds.y + h * i as i32 + (h - d) / 2;
         Rect::new(self.base.bounds.x, y, d, d)
