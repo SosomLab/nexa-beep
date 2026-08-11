@@ -87,19 +87,28 @@ fn main() {
     let open_window = args.iter().any(|a| a == "--window");
     let separate = args.iter().any(|a| a == "--separate-windows");
     let live = args.iter().any(|a| a == "--live");
-    // ★ macOS `.app`을 더블클릭하면 **인자가 하나도 오지 않는다** — 그대로 두면
-    //   스캐폴드 안내만 찍고 즉시 끝나, 사용자 눈에는 "눌러도 아무 일이 없다"가 된다
-    //   (08-11 실기: brew로 설치한 앱을 Finder에서 열었을 때). 번들 안에서 인자 없이
-    //   실행됐다면 **창 모드가 의도**다. 터미널에서 부른 경우는 경로가 다르니 영향 없다.
-    let bundled = launched_from_app_bundle();
-    if open_window || separate || bundled {
+    // ★ GUI 셸에서 **인자 없이** 열면(macOS `.app` 더블클릭 · Windows 탐색기 더블클릭·
+    //   시작 메뉴 바로가기) 그대로 두면 스캐폴드만 찍고 끝나 "눌러도 아무 일이 없다"가 된다
+    //   (08-11 실기: mac brew·Windows 배포 v0.1.2 실측 = M5-4d). 그 경우 **창 모드가 의도**다.
+    //   - macOS: 실행 경로가 `.app/Contents/MacOS/`인가([`launched_from_app_bundle`]).
+    //   - Windows: 탐색기가 **새 콘솔을 할당**했는가([`nbeep_plat::launch::from_gui_shell`]).
+    //   터미널·brew shim에서 부르면 둘 다 false라 CLI 동작이 그대로 남는다.
+    let no_real_args = !open_window && !separate && !live;
+    let gui_launch =
+        launched_from_app_bundle() || (no_real_args && nbeep_plat::launch::from_gui_shell());
+    if open_window || separate || gui_launch {
+        // 탐색기가 새로 띄운 콘솔은 GUI 창 옆에 남으므로 떼어낸다(Windows · M5-4d).
+        // 인자로 부른 `--window`는 기존 터미널을 쓰던 것일 수 있어 건드리지 않는다.
+        if gui_launch && no_real_args {
+            nbeep_plat::launch::hide_gui_console();
+        }
         let mode = if separate {
             app::WindowMode::Separate
         } else {
             app::WindowMode::Single
         };
-        // 번들 실행은 실물 발견이 기본이다 — 데모(에코 봇)를 보여 줄 자리가 아니다.
-        app::run(mode, live || (bundled && !open_window && !separate));
+        // GUI 실행은 실물 발견이 기본이다 — 데모(에코 봇)를 보여 줄 자리가 아니다.
+        app::run(mode, live || (gui_launch && !open_window && !separate));
     } else {
         println!(
             "nexa-beep {} — scaffold (창 `--window [--live]` · 발견 `--discover-probe [초]` · 수동 `--serve`/`--connect` · 인터랙티브 `--chat-serve [port]`/`--chat-connect <host:port>`/`--chat-live [이름]`(GUI 목록에 뜸) · 무해화 실측 `--quarantine-demo <파일>` · 파일전송 `--xfer-limit-mib <N>`·`--xfer-rate-kb <N>`(chat 모드 · 대화 중 `/send`·`/accept`·`/reject`))",
