@@ -51,8 +51,9 @@ pub struct UdpDiscovery {
     events: std::sync::Mutex<Option<Receiver<Observation>>>,
     stop: Arc<AtomicBool>,
     send_sock: UdpSocket,
-    /// GOODBYE에 넣을 내 광고 원본(seq는 전송 시 갱신).
-    template: Packet,
+    /// 내 광고 원본(seq는 전송 시 갱신) — 애넌서와 공유. 이름 변경(M1-10 즉시
+    /// 재공지)이 여기를 갱신하면 다음 주기부터 새 이름으로 나간다.
+    template: Arc<std::sync::Mutex<Packet>>,
     seq: Arc<AtomicU32>,
 }
 
@@ -89,7 +90,7 @@ impl UdpDiscovery {
         // ── S1: IPv6 멀티캐스트(best-effort — 실패해도 IPv4로 계속) ──
         let v6 = Self::setup_ipv6().ok();
 
-        let template = Packet {
+        let template = Arc::new(std::sync::Mutex::new(Packet {
             kind: PacketKind::Announce,
             flags: 0,
             peer: me,
@@ -98,7 +99,7 @@ impl UdpDiscovery {
             seq: 0,
             instance,
             name,
-        };
+        }));
         let stop = Arc::new(AtomicBool::new(false));
         let seq = Arc::new(AtomicU32::new(0));
         let (tx, events) = channel::<Observation>();
@@ -115,7 +116,7 @@ impl UdpDiscovery {
         Self::spawn_announcer(
             send_sock.try_clone()?,
             v6_send,
-            template.clone(),
+            Arc::clone(&template),
             announce_ms,
             Arc::clone(&stop),
             Arc::clone(&seq),
@@ -189,17 +190,24 @@ impl UdpDiscovery {
     fn spawn_announcer(
         sock: UdpSocket,
         v6: Option<UdpSocket>,
-        mut template: Packet,
+        template: Arc<std::sync::Mutex<Packet>>,
         announce_ms: u32,
         stop: Arc<AtomicBool>,
         seq: Arc<AtomicU32>,
     ) {
         std::thread::spawn(move || {
+            // 스냅샷 발신 — 잠금은 복사 순간만(소켓 I/O 중 잠금 유지 금지).
+            let snapshot = |kind: PacketKind| {
+                let mut p = match template.lock() {
+                    Ok(g) => g.clone(),
+                    Err(e) => e.into_inner().clone(),
+                };
+                p.kind = kind;
+                p.seq = seq.fetch_add(1, Ordering::Relaxed);
+                p
+            };
             // 기동 직후 HELLO(응답 유도) 1회, 이후 주기 ANNOUNCE.
-            template.kind = PacketKind::Hello;
-            template.seq = seq.fetch_add(1, Ordering::Relaxed);
-            Self::send_all(&sock, v6.as_ref(), &template.encode());
-            template.kind = PacketKind::Announce;
+            Self::send_all(&sock, v6.as_ref(), &snapshot(PacketKind::Hello).encode());
             let step = Duration::from_millis(100);
             let mut waited = Duration::ZERO;
             loop {
@@ -210,11 +218,28 @@ impl UdpDiscovery {
                 waited += step;
                 if waited >= Duration::from_millis(u64::from(announce_ms)) {
                     waited = Duration::ZERO;
-                    template.seq = seq.fetch_add(1, Ordering::Relaxed);
-                    Self::send_all(&sock, v6.as_ref(), &template.encode());
+                    Self::send_all(&sock, v6.as_ref(), &snapshot(PacketKind::Announce).encode());
                 }
             }
         });
+    }
+
+    /// 표시 이름 교체 + **즉시 재공지**(M1-10 · 사용자 확정 08-11) — 상대 목록은
+    /// `PeerTable::observe`의 `Renamed` 경로로 갱신된다. 즉시 발신은 v4(멀티캐스트+
+    /// 브로드캐스트)로 하고, v6은 다음 주기 광고에 실린다(GOODBYE와 같은 정책).
+    pub fn set_name(&self, name: DisplayName) {
+        let announce = {
+            let mut t = match self.template.lock() {
+                Ok(g) => g,
+                Err(e) => e.into_inner(),
+            };
+            t.name = name;
+            let mut p = t.clone();
+            p.kind = PacketKind::Announce;
+            p.seq = self.seq.fetch_add(1, Ordering::Relaxed);
+            p
+        };
+        Self::send_all(&self.send_sock, None, &announce.encode());
     }
 
     fn spawn_receiver(sock: UdpSocket, me: PeerId, tx: Sender<Observation>, stop: Arc<AtomicBool>) {
@@ -247,7 +272,10 @@ impl Drop for UdpDiscovery {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
         // 명시적 이탈(FR-D-8) — 유실 대비 2회(수신 중복은 무해).
-        let mut bye = self.template.clone();
+        let mut bye = match self.template.lock() {
+            Ok(g) => g.clone(),
+            Err(e) => e.into_inner().clone(),
+        };
         bye.kind = PacketKind::Goodbye;
         for _ in 0..2 {
             bye.seq = self.seq.fetch_add(1, Ordering::Relaxed);
@@ -302,5 +330,33 @@ mod tests {
             a_saw && b_saw,
             "상호 발견 실패(a_saw={a_saw} b_saw={b_saw})"
         );
+    }
+
+    /// M1-10 — `set_name`이 **즉시 재공지**하고, 이후 주기 광고에도 새 이름이 실린다.
+    #[test]
+    #[ignore = "실네트워크 멀티캐스트 필요 — 로컬/Docker에서 --ignored로 실행(D-8a)"]
+    fn rename_reannounces_immediately() {
+        let a = UdpDiscovery::spawn(pid(1), [1; 16], name("before"), 1000, 1, 60_000).unwrap();
+        let b = UdpDiscovery::spawn(pid(2), [2; 16], name("watcher"), 2000, 1, 60_000).unwrap();
+        let b_ev = b.take_events();
+        // a의 기동 HELLO가 b에 닿을 때까지 대기(채널 정착).
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let mut seen_before = false;
+        while std::time::Instant::now() < deadline && !seen_before {
+            if let Ok(o) = b_ev.recv_timeout(Duration::from_millis(200)) {
+                seen_before = o.packet.peer == pid(1) && o.packet.name.as_str() == "before";
+            }
+        }
+        assert!(seen_before, "기동 광고 미도달");
+        // 주기(60s)가 오기 한참 전에 — set_name의 즉시 발신만으로 새 이름이 닿아야 한다.
+        a.set_name(name("after"));
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let mut seen_after = false;
+        while std::time::Instant::now() < deadline && !seen_after {
+            if let Ok(o) = b_ev.recv_timeout(Duration::from_millis(200)) {
+                seen_after = o.packet.peer == pid(1) && o.packet.name.as_str() == "after";
+            }
+        }
+        assert!(seen_after, "즉시 재공지 미도달(주기 60s 내 도달 = 실패)");
     }
 }

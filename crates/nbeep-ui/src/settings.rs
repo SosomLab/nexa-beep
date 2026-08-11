@@ -125,6 +125,16 @@ impl Entry {
 #[must_use]
 pub fn registry() -> &'static [Entry] {
     &[
+        // 프로필 — 표시 이름(M1-10 · FR-S-50). "auto" = 정제된 호스트명(실명 제거 ·
+        // 실패 시 지문 라벨). 직접 입력 = 옵트인 실명 — desc가 LAN 평문 방송을 고지한다.
+        Entry {
+            cat: Msg::CatProfile,
+            sub: None,
+            label: Msg::DisplayNameLabel,
+            desc: Msg::DisplayNameDesc,
+            kind: SettingKind::RadioInput(&[("auto", Msg::NameAuto)], ""),
+            key: "profile.display_name",
+        },
         Entry {
             cat: Msg::CatConversation,
             sub: None,
@@ -2030,10 +2040,20 @@ mod tests {
     #[test]
     fn sidebar_click_switches_category_and_clears_search() {
         let (mut w, mut inv) = widget();
-        // 트리 두 번째 행(모양) 클릭.
+        // "모양" 행 위치를 찾아 클릭 — 레지스트리에 카테고리가 늘어도 안 깨진다(M1-10에서 학습).
+        let row = w
+            .cat_map
+            .iter()
+            .position(|(c, s)| SettingsWidget::cats()[*c].0 == Msg::CatAppearance && s.is_none())
+            .expect("모양 행");
         let tb = w.tree.bounds();
-        w.on_event(&click(tb.x + 10, tb.y + 24 + 5), &mut inv);
-        assert_eq!(w.selected_cat, 1, "모양 선택");
+        #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+        w.on_event(&click(tb.x + 10, tb.y + 24 * row as i32 + 5), &mut inv);
+        assert_eq!(
+            SettingsWidget::cats()[w.selected_cat].0,
+            Msg::CatAppearance,
+            "모양 선택"
+        );
         assert!(w.rows.iter().any(|r| registry()[r.idx].key == "ui.theme"));
     }
 
@@ -2054,9 +2074,13 @@ mod tests {
         w.selected_sub = Some(Msg::CatTypeahead);
         w.rebuild(&mut inv);
         assert_eq!(w.visible_indices().len(), 4, "하위 선택 = 그 항목만");
-        // 사이드바에 하위 행이 존재(모양 아래).
+        // 사이드바에 하위 행이 존재(모양 아래) — 카테고리 인덱스는 위치로 찾는다.
+        let ai = SettingsWidget::cats()
+            .iter()
+            .position(|(c, _)| *c == Msg::CatAppearance)
+            .expect("모양 카테고리");
         assert!(
-            w.cat_map.contains(&(1, Some(Msg::CatTypeahead))),
+            w.cat_map.contains(&(ai, Some(Msg::CatTypeahead))),
             "사이드바 하위 행"
         );
     }

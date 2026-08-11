@@ -2152,6 +2152,13 @@ impl App {
                     }
                     self.refresh_approval_ui();
                 }
+                // 표시 이름(M1-10) — 즉시 재공지(사용자 확정 08-11). 상대 목록은
+                // PeerTable Renamed 경로로 갱신된다.
+                "profile.display_name" => {
+                    let name = effective_display_name(&self.settings, &self.identity.peer_id());
+                    self.transport.set_display_name(name.clone());
+                    self.status = format!("표시 이름 = {name} — LAN 전체에 방송됩니다");
+                }
                 "ui.typeahead_space" => self.list.set_typeahead_space(value == "on"),
                 "ui.typeahead_special" => self.list.set_typeahead_special(value == "on"),
                 k if k.starts_with("font.") => {
@@ -3615,6 +3622,22 @@ impl ApplicationHandler<AppEvent> for App {
 
 /// 창을 띄우고 이벤트 루프를 돈다(주 창을 닫으면 종료).
 /// 창을 띄운다. `live=true`면 실물 발견(`LocalDirect`), 아니면 InMemory 데모(에코 봇).
+/// 유효 표시 이름(M1-10 · FR-S-50) — 설정 `profile.display_name`이 "auto"면
+/// **정제된 호스트명**(실명 추정 부분 제거 · 실패 시 지문 라벨 `beep-xxxx`),
+/// 직접 입력이면 그 이름(무해화 실패 시 기본값 폴백). 어느 경로든 무해화를 거친다.
+fn effective_display_name(
+    settings: &SettingsState,
+    peer: &nbeep_core::PeerId,
+) -> nbeep_core::DisplayName {
+    let v = settings.get("profile.display_name");
+    if v != "auto" {
+        if let Ok(n) = nbeep_core::DisplayName::parse(v) {
+            return n;
+        }
+    }
+    nbeep_core::default_display_name(nbeep_plat::host::hostname().as_deref(), peer)
+}
+
 /// 설정 파일 경로(FR-P-3 · docs/28 §4-2) — 실행 파일 옆 `data/` 쓰기 가능(포터블)
 /// → 사용자 설정 폴더 → 임시 폴더(최후 폴백 — 저장은 되지만 재부팅에 진다).
 /// 경로는 여기서 정해 **인자로 넘긴다**(nexa-conf는 경로를 소유하지 않는다).
@@ -3646,15 +3669,38 @@ pub(crate) fn run(mode: WindowMode, live: bool) {
     let proxy = event_loop.create_proxy();
     let shutdown = nbeep_plat::shutdown::install(); // R-16 — SIGINT/SIGTERM 포트
 
+    // 설정 로드는 전송 생성보다 먼저 — 표시 이름(M1-10)이 발견 광고에 실린다.
+    let mut settings = SettingsState::with_defaults();
+    // 설정 영속(M3-15 · ADR-0011) — 기본값 시드 후 파일의 아는 키만 덮어쓴다(관용 파싱).
+    // 모르는 키는 Store가 보존해 다음 저장 때 그대로 재방출한다(F-1 — 구버전이
+    // 신버전 파일을 저장해도 신규 키가 살아남는다).
+    let (mut conf, doc) = nexa_conf::Store::open(conf_path(), 1_000, 10_000);
+    for (k, v) in doc.pairs {
+        if !settings.set_by_name(&k, &v) {
+            conf.keep_unknown(k, v);
+        }
+    }
+    // CLI 플래그는 이 세션만 이긴다 — 저장값을 덮어쓰되 dirty를 세우지 않는다
+    // (플래그 실행이 영속 설정을 바꿔버리면 다음 무플래그 실행이 놀란다).
+    if mode == WindowMode::Separate {
+        settings.set("chat.window_mode", "separate".into());
+    }
+    // 유효 창 모드 = 영속값 반영(플래그 없으면 저장된 선택이 부팅에 살아난다 — DR-26).
+    let mode = if settings.get("chat.window_mode") == "separate" {
+        WindowMode::Separate
+    } else {
+        WindowMode::Single
+    };
+    // 표시 이름(M1-10 · R-19) — 실명이 아니라 정제된 호스트명/지문 라벨이 기본.
+    let display_name = effective_display_name(&settings, &identity.peer_id());
+
     let (transport, discovery): (std::sync::Arc<dyn nbeep_net::Transport + Send + Sync>, _) =
         if live {
             // 실물 — LocalDirect(UDP 발견 + TCP 세션). 실기·컨테이너 상대가 목록에 뜬다.
             let mut instance = [0u8; 16];
             instance
                 .copy_from_slice(&nbeep_crypto::Identity::generate().peer_id().as_bytes()[..16]);
-            let name =
-                nbeep_core::DisplayName::parse(&format!("나-{}", identity.peer_id().short()))
-                    .expect("라벨");
+            let name = display_name;
             let local = nbeep_net::LocalDirect::spawn(identity.peer_id(), instance, name, 800, 1)
                 .expect("LocalDirect 시작(방화벽·인터페이스)");
             let discovery = local.discovery();
@@ -3680,36 +3726,11 @@ pub(crate) fn run(mode: WindowMode, live: bool) {
             ] {
                 spawn_echo_bot(&bus, name);
             }
-            let transport = bus.join(
-                identity.peer_id(),
-                nbeep_core::DisplayName::parse("나").unwrap(),
-                nbeep_net::Caps::default(),
-            );
+            let transport = bus.join(identity.peer_id(), display_name, nbeep_net::Caps::default());
             let discovery = transport.discovery();
             (std::sync::Arc::new(transport), discovery)
         };
 
-    let mut settings = SettingsState::with_defaults();
-    // 설정 영속(M3-15 · ADR-0011) — 기본값 시드 후 파일의 아는 키만 덮어쓴다(관용 파싱).
-    // 모르는 키는 Store가 보존해 다음 저장 때 그대로 재방출한다(F-1 — 구버전이
-    // 신버전 파일을 저장해도 신규 키가 살아남는다).
-    let (mut conf, doc) = nexa_conf::Store::open(conf_path(), 1_000, 10_000);
-    for (k, v) in doc.pairs {
-        if !settings.set_by_name(&k, &v) {
-            conf.keep_unknown(k, v);
-        }
-    }
-    // CLI 플래그는 이 세션만 이긴다 — 저장값을 덮어쓰되 dirty를 세우지 않는다
-    // (플래그 실행이 영속 설정을 바꿔버리면 다음 무플래그 실행이 놀란다).
-    if mode == WindowMode::Separate {
-        settings.set("chat.window_mode", "separate".into());
-    }
-    // 유효 창 모드 = 영속값 반영(플래그 없으면 저장된 선택이 부팅에 살아난다 — DR-26).
-    let mode = if settings.get("chat.window_mode") == "separate" {
-        WindowMode::Separate
-    } else {
-        WindowMode::Single
-    };
     // 현재 언어를 설정값으로 초기화(기본 en — i18n).
     nbeep_core::set_lang(
         nbeep_core::Lang::from_code(settings.get("ui.language")).unwrap_or_default(),

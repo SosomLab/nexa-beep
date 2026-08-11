@@ -103,6 +103,76 @@ fn is_stripped(ch: char) -> bool {
     ) || (ch.is_control() && !ch.is_whitespace())
 }
 
+// ─────────────────────────── 기본 표시 이름 (M1-10 · R-19 · FR-S-50)
+
+/// 정제 기준 장치 단어 — 이 단어가 나오면 **그 앞은 사람 이름 추정 부분**으로 보고
+/// 버린다. ASCII는 소문자 비교, 한글은 그대로 비교.
+const DEVICE_WORDS: &[&str] = &[
+    // ASCII (소문자 비교)
+    "macbook",
+    "mac",
+    "imac",
+    "macmini",
+    "macstudio",
+    "pc",
+    "desktop",
+    "laptop",
+    "notebook",
+    "workstation",
+    "surface",
+    "thinkpad",
+    "server",
+    "tower",
+    "book",
+    // 한글 (macOS ComputerName·수기 명명)
+    "맥북",
+    "맥",
+    "아이맥",
+    "노트북",
+    "데스크탑",
+    "데스크톱",
+    "컴퓨터",
+    "피씨",
+];
+
+/// 호스트명에서 실명 추정 부분을 정제한다(FR-S-50 · Q-29-1 ⓐ).
+///
+/// 규칙: 첫 DNS 라벨만 취해 `-`/`_`/공백으로 토큰화 → **처음 나오는 장치 단어부터
+/// 끝까지**를 `-`로 이어 돌려준다("Sangyongs-MacBook-Pro" → "MacBook-Pro" ·
+/// "홍길동의 MacBook Pro" → "MacBook-Pro" · "DESKTOP-AB12CD"는 그대로).
+/// 장치 단어가 없으면 `None` — **호스트명 전체가 이름일 수 있어**(예: "gildong-hong")
+/// 판별 불가는 버린다(fail-closed).
+#[must_use]
+pub fn neutral_from_host(raw: &str) -> Option<String> {
+    let label = raw.split('.').next().unwrap_or("");
+    let tokens: Vec<&str> = label
+        .split(['-', '_', ' '])
+        .filter(|t| !t.is_empty())
+        .collect();
+    let start = tokens.iter().position(|t| {
+        let lower = t.to_ascii_lowercase();
+        DEVICE_WORDS.iter().any(|w| lower == *w || *t == *w)
+    })?;
+    let joined = tokens[start..].join("-");
+    (!joined.is_empty()).then_some(joined)
+}
+
+/// 기본 표시 이름(M1-10) — 정제된 호스트명, 실패 시 **지문 기반 중립 라벨**
+/// (`beep-{지문4}`)로 폴백. 어느 쪽도 실명을 싣지 않는다(R-19 해소).
+/// 호스트명 취득은 플랫폼 경계(nbeep-plat) 몫이라 **인자로 받는다**.
+#[must_use]
+pub fn default_display_name(raw_host: Option<&str>, peer: &crate::PeerId) -> DisplayName {
+    if let Some(host) = raw_host {
+        if let Some(neutral) = neutral_from_host(host) {
+            if let Ok(name) = DisplayName::parse(&neutral) {
+                return name;
+            }
+        }
+    }
+    DisplayName::parse(&format!("beep-{}", peer.short()))
+        .unwrap_or_else(|_| DisplayName::parse("beep").expect("고정 문자열"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -113,6 +183,45 @@ mod tests {
             DisplayName::parse("홍길동-맥북").unwrap().as_str(),
             "홍길동-맥북"
         );
+    }
+
+    /// M1-10 · R-19 — 실명 추정 접두가 떨어지고 장치 설명만 남는다.
+    #[test]
+    fn neutral_strips_personal_prefix() {
+        assert_eq!(
+            neutral_from_host("Sangyongs-MacBook-Pro.local").as_deref(),
+            Some("MacBook-Pro")
+        );
+        assert_eq!(
+            neutral_from_host("홍길동의 MacBook Pro").as_deref(),
+            Some("MacBook-Pro")
+        );
+        assert_eq!(
+            neutral_from_host("김철수 노트북").as_deref(),
+            Some("노트북")
+        );
+        // 장치 단어로 시작하면 전부 유지(Windows 기본 등 — 개인 정보 없음).
+        assert_eq!(
+            neutral_from_host("DESKTOP-AB12CD").as_deref(),
+            Some("DESKTOP-AB12CD")
+        );
+    }
+
+    /// 장치 단어가 없으면(전체가 이름일 수 있음) 정제 포기 — 지문 라벨 폴백.
+    #[test]
+    fn neutral_fails_closed_without_device_word() {
+        assert_eq!(neutral_from_host("gildong-hong"), None);
+        assert_eq!(neutral_from_host("홍길동"), None);
+        let peer = crate::PeerId::from_bytes([0xAB; 32]);
+        let name = default_display_name(Some("gildong-hong"), &peer);
+        assert!(
+            name.as_str().starts_with("beep-"),
+            "폴백은 지문 라벨: {name}"
+        );
+        // 호스트명 자체가 없어도 항상 성립한다.
+        assert!(default_display_name(None, &peer)
+            .as_str()
+            .starts_with("beep-"));
     }
 
     #[test]
