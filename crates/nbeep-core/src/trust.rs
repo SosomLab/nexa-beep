@@ -49,6 +49,20 @@ pub trait TrustStore {
     fn is_blocked(&self, peer: PeerId) -> bool;
 }
 
+/// 영속 스냅샷 단위(M2-5a) — `nbeep-store`가 이 형태로 파일에 나르고 되돌린다.
+/// 도메인 로직은 이 타입을 소비하지 않는다(직렬화 경계 전용).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PinRecord {
+    /// 키(= 신뢰의 유일한 귀속 대상).
+    pub peer: PeerId,
+    /// 신뢰 등급.
+    pub level: TrustLevel,
+    /// 차단 여부.
+    pub blocked: bool,
+    /// 이 키로 본 이름 이력(가장 최근이 뒤).
+    pub names: Vec<DisplayName>,
+}
+
 /// 인메모리 TOFU 저장(순수 로직). 영속은 `nbeep-store`가 이걸 파일로 감싼다(M2-5).
 #[derive(Debug, Default)]
 pub struct MemoryTrustStore {
@@ -99,6 +113,40 @@ impl MemoryTrustStore {
     #[must_use]
     pub fn names(&self, peer: PeerId) -> &[DisplayName] {
         self.records.get(&peer).map_or(&[], |r| &r.names)
+    }
+
+    /// 영속 스냅샷(M2-5a) — **키 바이트 정렬**로 결정적(같은 상태 = 같은 직렬화).
+    #[must_use]
+    pub fn export(&self) -> Vec<PinRecord> {
+        let mut out: Vec<PinRecord> = self
+            .records
+            .iter()
+            .map(|(&peer, r)| PinRecord {
+                peer,
+                level: r.level,
+                blocked: r.blocked,
+                names: r.names.clone(),
+            })
+            .collect();
+        out.sort_unstable_by(|a, b| a.peer.as_bytes().cmp(b.peer.as_bytes()));
+        out
+    }
+
+    /// 스냅샷 복원(M2-5a) — [`Self::export`]의 역.
+    #[must_use]
+    pub fn from_records(records: Vec<PinRecord>) -> Self {
+        let mut store = Self::default();
+        for r in records {
+            store.records.insert(
+                r.peer,
+                Record {
+                    level: r.level,
+                    blocked: r.blocked,
+                    names: r.names,
+                },
+            );
+        }
+        store
     }
 }
 

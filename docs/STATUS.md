@@ -3,7 +3,13 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
-> **갱신: 2026-08-11 12차 (KST)** — **M4-3 일부 — Windows MotW 표식 어댑터(Zone.Identifier ADS) · 이 PC 실측**(`feat/m4-3-win-motw`):
+> **갱신: 2026-08-11 13차 (KST)** — **★ D-18 §3 확정 → M2-5a 신원·핀 영속 + 백업/복원 핫 로딩 + Switch 컨트롤**(`feat/m2-5a-trust-persist`):
+> ① **D-18 §3 사용자 확정**(A 기본: 기기 키 파생 래핑 + B/C 선택 승격) → 즉시 구현 — **R-17(TOFU 핀 비영속 = MITM 창 상시 개방) 해소**. 신원 영속이 전제(`identity.key` 68B · 손상 시 **덮어쓰지 않고** 임시 신원 강등) + `nbeep-store::FileTrustStore`(`trust.seg` — 마스터 무작위+래핑 한 겹(DR-20 V1-4) · ChaCha20Poly1305 · **의존 트리 증가 0** · 이름·PeerId **평문 미노출 테스트** · **fail-closed 잠김**(원본 보존·재핀 오염 방지) · 변경 즉시 저장). ★ 실측: 재시작 전후 **같은 PeerId(`17c470c2`) 방송**.
+> ② **신원 키 백업·복원**(사용자 요청 · 설정 ▸ 프로필) — `SettingKind::Action` 신설(행위 항목 — 영속에 안 실림) · **탐색형 피커**(자체 구현 폴더/파일 탐색 — DR-6 · 백업 = "[여기에 저장] 기본이름(지문)" · 복원 = 파일 선택) · **복원 = 핫 로딩**(검증→원자 교체→신원·신뢰 재오픈→대화 정리→live 전송 재시작 — 재시작 불필요).
+> ③ **Switch 컨트롤 신규(17종째)** — mac(iOS) 스타일(알약+흰 원 · #34C759 · **손잡이 위치가 상태** — 색 단독 구분 금지) · 라벨 좌/우/토글만 · 설정 Toggle을 Checkbox→Switch 교체 · 갤러리 23종. **프로필 공개 토글 골격**(기본정보/이메일/전화 · **기본 전부 off** — DR-22 옵트인).
+> ④ **462 green** · clippy 0 · 설계 등록 3건(사용자 검토 요청): **M1-13**(발견 호환성 — 버전 무시=조용한 비호환·포트 47100 점유 시 패닉 → dual-announce·세대 비트·발신 전용 강등안) · **M4-10**(전송 진행 동기 — 청크 윈도 권장 · 이탈 내성 — 재개·지연 ack) · **M3-17**(프로필 화면·교환 — ADR-0008 세션 경유). ⏸ 백업/복원 GUI 실기·2-PC 핀 유지 실기. [journal/2026-08-11.md](journal/2026-08-11.md).
+>
+> **직전(08-11 12차)** — **M4-3 일부 — Windows MotW 표식 어댑터(Zone.Identifier ADS) · 이 PC 실측**(`feat/m4-3-win-motw`):
 > ① 08-10 Windows 감사의 빈칸(**DR-13 "복원 후에도 표식 유지"가 macOS에서만 성립**)을 닫음 — `plat::quarantine` Windows 분기: `:Zone.Identifier` ADS에 `[ZoneTransfer]/ZoneId=3` 직접 기록(인터넷 영역 — SmartScreen·첨부 관리자·Office 보호 보기 발동 근거).
 > ② 선택: **IAttachmentExecute COM 대신 ADS 직접 기록** — 의존 0 · T0 무권한 · 내용 결정적. **FAT/exFAT은 오류 명시**(macOS xattr 정책 동일 — 조용히 삼키면 거짓). 조립 지점 변경 0(OS 중립 진입점 뒤).
 > ③ **실측(이 PC)** — 단위(ADS 왕복·본문 무손상·멱등) · 종단 `--quarantine-demo`: 실체화 후 **`표식=Ok(Applied)`**(이전 Windows = Unsupported) · 독립 검증 `Get-Item -Stream *` = `Zone.Identifier` 26B 실존. **451 green** · clippy 0.

@@ -8,3 +8,7 @@
 //! 바꿀 때마다 전 기록 재암호화가 필요하고 [docs/20] 다중 기기가 불가능해진다. 지금은 간접 한 겹 비용뿐.
 //! (M0-1b에 이 자리를 세운 이유 — 나중에 넣으면 저장 포맷 마이그레이션이 된다.)
 #![forbid(unsafe_op_in_unsafe_fn)]
+
+pub mod trustfile;
+
+pub use trustfile::{FileTrustStore, TrustLoad};

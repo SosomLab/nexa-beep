@@ -9,6 +9,7 @@
 // 테스트 코드는 unwrap 허용(docs/13 §9 — 금지는 프로덕션 경로 한정).
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
+pub mod keyfile;
 pub mod noise;
 pub mod sas;
 

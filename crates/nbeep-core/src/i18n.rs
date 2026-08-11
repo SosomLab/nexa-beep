@@ -283,6 +283,24 @@ pub enum Msg {
     DisplayNameDesc,
     /// 기본값(정제된 호스트명·지문 라벨) 선택지.
     NameAuto,
+    /// 신원 키 백업(M2-5a).
+    IdBackup,
+    IdBackupDesc,
+    /// 백업 버튼 라벨.
+    ActBackup,
+    /// 신원 키 복원.
+    IdRestore,
+    IdRestoreDesc,
+    ActRestore,
+    /// 프로필 공개(DR-22 옵트인) — 기본정보(사진·표시 이름).
+    ShareBasic,
+    ShareBasicDesc,
+    /// 추가정보 개별 공개 — 이메일.
+    ShareEmail,
+    ShareEmailDesc,
+    /// 추가정보 개별 공개 — 전화번호.
+    SharePhone,
+    SharePhoneDesc,
 }
 
 impl Msg {
@@ -749,6 +767,43 @@ impl Msg {
                 "자동(정제된 호스트명)",
                 "自动（净化后的主机名）",
                 "自動（整形済みホスト名）",
+            ],
+            Msg::IdBackup => ["Back up identity key", "신원 키 백업", "备份身份密钥", "識別キーをバックアップ"],
+            Msg::IdBackupDesc => [
+                "Copies your identity key to a folder you choose. Anyone with this file can act as you — store it safely.",
+                "신원 키를 선택한 폴더로 복사합니다. 이 파일을 가진 사람은 나로 행세할 수 있습니다 — 안전하게 보관하세요.",
+                "将身份密钥复制到所选文件夹。持有此文件者可冒充您——请妥善保管。",
+                "識別キーを選択したフォルダーへコピーします。このファイルの所持者はあなたに成りすませます——安全に保管してください。",
+            ],
+            Msg::ActBackup => ["Back up…", "백업…", "备份…", "バックアップ…"],
+            Msg::IdRestore => ["Restore identity key", "신원 키 복원", "恢复身份密钥", "識別キーを復元"],
+            Msg::IdRestoreDesc => [
+                "Pick a backup file to replace the current identity. Applies immediately — open conversations are closed.",
+                "백업 파일을 선택해 현재 신원을 교체합니다. 즉시 적용되며 열린 대화는 닫힙니다.",
+                "选择备份文件以替换当前身份。立即生效，已打开的对话将关闭。",
+                "バックアップファイルを選んで現在の識別を置き換えます。即時適用され、開いている会話は閉じられます。",
+            ],
+            Msg::ActRestore => ["Restore…", "복원…", "恢复…", "復元…"],
+            Msg::ShareBasic => ["Share basic profile", "기본 정보 공개", "公开基本资料", "基本情報を公開"],
+            Msg::ShareBasicDesc => [
+                "Photo and display name — shown only to connected peers on request (never broadcast).",
+                "사진·표시 이름 — 연결된 상대의 요청에만 제공됩니다(브로드캐스트에 실리지 않음).",
+                "照片与显示名称——仅应已连接对方的请求提供（绝不广播）。",
+                "写真と表示名——接続済みの相手のリクエストにのみ提供（ブロードキャストされません）。",
+            ],
+            Msg::ShareEmail => ["Share email", "이메일 공개", "公开电子邮件", "メールを公開"],
+            Msg::ShareEmailDesc => [
+                "Off by default. Shared only with connected peers.",
+                "기본 비공개. 연결된 상대에게만 제공됩니다.",
+                "默认关闭。仅提供给已连接的对方。",
+                "既定でオフ。接続済みの相手にのみ提供されます。",
+            ],
+            Msg::SharePhone => ["Share phone number", "전화번호 공개", "公开电话号码", "電話番号を公開"],
+            Msg::SharePhoneDesc => [
+                "Off by default. Shared only with connected peers.",
+                "기본 비공개. 연결된 상대에게만 제공됩니다.",
+                "默认关闭。仅提供给已连接的对方。",
+                "既定でオフ。接続済みの相手にのみ提供されます。",
             ],
         }
     }

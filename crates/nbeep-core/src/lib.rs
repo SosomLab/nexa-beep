@@ -52,7 +52,7 @@ pub use ports::{Actor, Clock, Meter, MeterEvent, MonoInstant, Quantity, Rng, Tra
 pub use rate::{negotiate, Pacer, RateLimit, RateMeter};
 pub use safetext::{find_links, sanitize_message, LinkSpan, SafeText};
 pub use session::{Session, SessionError};
-pub use trust::{MemoryTrustStore, TrustDecision, TrustStore};
+pub use trust::{MemoryTrustStore, PinRecord, TrustDecision, TrustStore};
 pub use trusted::{Established, TrustedSession};
 pub use xfer::{
     chunks_of, Received, RejectWhy, XferError, XferId, XferInbox, XferMsg, MAX_CHUNK, MAX_FILE,
