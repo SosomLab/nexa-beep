@@ -7,6 +7,7 @@
 
 ## 2026-08-11
 
+- **M4-5ⓑ 수신 이미지 미리보기**(`feat/m4-5-preview`): `.beepq` 원본 재조립→imgdec(본체 픽셀 생성 없음 그대로) — **격리함 36px 썸네일**(QRow.thumb) + **스레드 인라인 18px**(XferLine.thumb · Done 항목 부착 · XferDone에 qpath) · 1MiB 상한·비이미지 조용히 없음. 472 green. 상세 [journal/2026-08-11.md](journal/2026-08-11.md).
 - **M4-5ⓐ imgdec 배포 동봉**(main 직커밋): release.yml(-p nbeep-imgdec · 게이트 2종 · 포터블/NSIS/.app/deb 동봉) · installer.nsi File+Delete · brew Formula 조건부 설치 · choco shim 제외(.ignore) · winget 무수정(zip 전체 추출). 설치본 실측은 다음 태그 CI. 상세 [journal/2026-08-11.md](journal/2026-08-11.md).
 - **★ M4-5 이미지 격리 디코드(imgdec) 실물화**(`feat/m4-5-imgdec`): 본체는 이미지 파서를 **링크하지 않는다**(R-5 · FR-S-12) — `nbeep-imgdec` bin에만 png/jpeg-decoder(원장 기록) · 프로토콜 stdin→`NIMG`+RGBA(원본 1MiB·픽셀 2048²·`--max-side` 박스 축소) · 부모가 3초 kill·응답 재검증 · **원형 마스크 후 목록·카드·편집 화면 실사진 렌더**(실패 = 이니셜 폴백). 실측: PNG/JPEG 256² 왕복·쓰레기 fail-closed · **472 green**. 잔여 = 포장 동봉·수신 파일 미리보기·권한 강등. 상세 [journal/2026-08-11.md](journal/2026-08-11.md).
 - **M3-17 목록·프로필 시각 개편**(`feat/m3-17-list-avatar`): **이니셜 아바타 가상 이미지**(`ui::avatar` — 이름 2글자 벡터 렌더·키 지문 시드 팔레트 8색·사진 렌더는 M4-5 후(R-5)) · 목록 행 42→**56**(아바타 40·상태 점 아바타 우하단·**1줄 굵게 = 발견 이름·2줄 = 프로필 이름**) · **우클릭 ▸ 프로필 보기**(컨텍스트 메뉴 → `PeerInfoWidget` 카드 — 큰 아바타 120·미공개 "(비공개)" 명시·키 지문 고지) · 프로필 편집 화면 상단 **120px 아바타**(입력 실시간 반영 · 창 440×570). **471 green**. 상세 [journal/2026-08-11.md](journal/2026-08-11.md).

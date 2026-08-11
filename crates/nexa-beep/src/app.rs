@@ -97,6 +97,8 @@ enum AppEvent {
         name: String,
         risk: nbeep_core::RiskLevel,
         mismatch: bool,
+        /// `.beepq` 경로 — 이미지면 썸네일(imgdec 격리 디코드 · M4-5ⓑ) 시도용.
+        qpath: String,
     },
     /// 전송 실패·거절 — 사유 문장(표시 전용).
     XferFailed { peer: PeerId, why: String },
@@ -555,6 +557,7 @@ fn xfer_step(
                         name: q.name,
                         risk: q.risk,
                         mismatch: q.mismatch,
+                        qpath: q.path.to_string_lossy().into_owned(),
                     });
                 }
                 Err(e) => {
@@ -1873,6 +1876,9 @@ impl App {
                     trust: self.trust.level(bq.meta.sender),
                     from,
                     when,
+                    // 이미지 미리보기(M4-5ⓑ) — 픽셀은 imgdec(격리)가 만든다.
+                    // 이미지가 아니면 조용히 없음.
+                    thumb: crate::imgdec::thumb_from_beepq(&p, 64).map(std::rc::Rc::new),
                     path: p.to_string_lossy().into_owned(),
                 })
             })
@@ -3621,6 +3627,7 @@ impl ApplicationHandler<AppEvent> for App {
                 name,
                 risk,
                 mismatch,
+                qpath,
             } => {
                 // 격리 보관까지 끝난 상태 — **실체화는 승인 후 별도**(FR-S-9).
                 self.status = format!(
@@ -3641,6 +3648,24 @@ impl ApplicationHandler<AppEvent> for App {
                         ),
                     },
                 );
+                // 이미지면 소형 미리보기 부착(M4-5ⓑ) — 픽셀은 imgdec(격리)가 만든다.
+                // 이미지가 아니거나 실패면 조용히 없음(스레드는 텍스트 그대로).
+                if let Some(thumb) =
+                    crate::imgdec::thumb_from_beepq(std::path::Path::new(&qpath), 96)
+                {
+                    let thumb = std::rc::Rc::new(thumb);
+                    if let Some(conv) = self.conversations.get_mut(&peer) {
+                        nbeep_ui::chat_view::attach_xfer_thumb(
+                            &mut conv.lines,
+                            false,
+                            thumb.clone(),
+                        );
+                    }
+                    if let Some(chat) = self.chats.get_mut(&peer) {
+                        let mut inv = Invalidations::default();
+                        chat.attach_xfer_thumb(false, thumb, &mut inv);
+                    }
+                }
                 self.clear_xfer(peer);
                 self.redraw_conversation(peer);
             }

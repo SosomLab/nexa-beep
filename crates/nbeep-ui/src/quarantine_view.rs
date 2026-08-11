@@ -43,6 +43,9 @@ pub struct QRow {
     pub when: String,
     /// `.beepq` 경로(호스트가 행을 되찾는 열쇠).
     pub path: String,
+    /// 이미지 미리보기(M4-5ⓑ — imgdec 격리 디코드 · 호스트가 채운다 · 없으면 없음).
+    /// **실체화 전 격리물의 픽셀을 본체가 만들지 않는다** — 디코드는 격리 프로세스 몫.
+    pub thumb: Option<std::rc::Rc<crate::theme::IconImage>>,
 }
 
 /// 사용자 결정 — 호스트가 실행한다.
@@ -360,10 +363,23 @@ impl Widget for QuarantineWidget {
                 },
             );
 
+            // 이미지 미리보기(M4-5ⓑ) — 있으면 좌측 36px 정사각(행 세로 중앙).
+            let thumb_pad = if row.thumb.is_some() { self.s(42) } else { 0 };
+            if let Some(img) = &row.thumb {
+                let d = self.s(36);
+                let ir = Rect::new(r.x + self.s(10), r.y + (rh - d) / 2, d, d);
+                ctx.image_scaled(ir, img, r);
+            }
             // 1행: 이름 + 크기.
             ctx.select_font(FontSlot::Base, false);
             let th = ctx.text_height();
-            ctx.text(r.x + self.s(12), r.y + self.s(6), r, &row.name, theme.text);
+            ctx.text(
+                r.x + self.s(12) + thumb_pad,
+                r.y + self.s(6),
+                r,
+                &row.name,
+                theme.text,
+            );
             let size_txt = human(row.size);
             let sw = ctx.text_width(&size_txt);
             ctx.text(
@@ -393,7 +409,7 @@ impl Widget for QuarantineWidget {
             let sh = ctx.text_height();
             let chip_w = ctx.text_width(rl) + self.s(14);
             let chip = Rect::new(
-                r.x + self.s(12),
+                r.x + self.s(12) + thumb_pad,
                 r.y + rh - sh - self.s(12),
                 chip_w,
                 sh + self.s(6),
@@ -484,6 +500,7 @@ mod tests {
             from: "상대 (abcd1234)".into(),
             when: "12:34:56".into(),
             path: format!("/q/{name}.beepq"),
+            thumb: None,
         }
     }
 
