@@ -134,6 +134,37 @@ docker rm -f node_a node_b; docker network rm beepnet
 | `--chat-*`(인터랙티브) | **`/quit`**(`/exit`·`/q`) · `Ctrl+D` · `Ctrl+C` — **상대를 기다리는 중에도 된다**(08-11) |
 | 컨테이너 | **`docker run --init` 필수** — 없으면 `docker stop`이 10초(SIGKILL 대기). 실측: `--init`+시그널 핸들러 = **0.38초** |
 
+## 7-2. 배포본 실기 검증 (Windows · 2026-08-11 v0.1.2 실측)
+
+릴리스 자산은 **CI가 만들기만 하고 실행 안 해 본** 상태로 나간다 — 실기 검증이 게시(M5-4b)의
+선행 조건이다. Windows x64 v0.1.2 전 구간 실측 절차(이 PC에서 통과):
+
+```powershell
+# ① 무결성 — 자산 + 체크섬 대조
+gh release download v0.1.2 -R SosomLab/nexa-beep -p "*windows-x64-*" -p "SHA256SUMS.txt"
+# SHA256SUMS.txt의 각 줄과 Get-FileHash 대조 → 3/3 일치 확인
+
+# ② 포터블 — 셸(Explorer) 해제로 MotW 전파 확인(Expand-Archive는 MotW를 안 옮긴다)
+#    exe·문서에 Zone.Identifier(ZoneId=3)가 붙는지 → 정상. --version 실행.
+
+# ③ 설치본 — 무인 설치·업그레이드·완전 제거(전부 사용자 단위 HKCU·무권한)
+Start-Process nexa-beep-0.1.1-windows-x64-setup.exe /S -Wait      # 설치
+Start-Process nexa-beep-0.1.2-windows-x64-setup.exe /S -Wait      # 업그레이드(덮어쓰기)
+Start-Process "$env:LOCALAPPDATA\Programs\NexaBeep\uninstall.exe" /S -Wait   # 제거
+#    확인: HKCU\…\Uninstall\NexaBeep(DisplayVersion) · 시작 메뉴 .lnk · 제거 후 잔재 0
+
+# ④ 매니페스트 정합 — winget 스키마 + 해시
+Expand-Archive nexa-beep-0.1.2-package-manifests.zip -DestinationPath manifests
+winget validate --manifest manifests\winget\manifests\s\SosomLab\NexaBeep\0.1.2
+#    InstallerSha256가 ② 자산 Get-FileHash와 일치하는지 대조
+```
+
+**실측 결과(v0.1.2 · win x64)**: 체크섬 3/3 · MotW 전파 정상 · 설치/업그레이드/제거 통과 ·
+PATH 미등록(설계 — 시작 메뉴만) · winget validate 통과 · 매니페스트 해시 일치.
+🔴 **1건 결함**: 포터블 exe가 콘솔 서브시스템 + 인자 없음이라 **더블클릭 시 콘솔 번쩍 후 종료**
+(시작 메뉴 바로가기도 동일) — macOS 번들 버그의 미수정 쌍둥이(M5-4d). ⏸ SmartScreen 마찰은
+헤드리스로 관측 불가(서명 결정 M5-4a 실기 날 관측). arm64는 x64 PC에서 실행 미검증.
+
 ## 7-1. ★ 검증 현황 매트릭스 (2026-08-09 전수 점검)
 
 > **"코드가 있다"와 "동작을 봤다"는 다르다.** 아래는 구현된 기능을 **어떤 수준까지 확인했는지** 한 장으로 본 것이다.
