@@ -38,7 +38,10 @@ VIAddVersionKey "LegalCopyright"  "PolyForm Noncommercial 1.0.0"
 !define MUI_ICON   "nexa-beep.ico"
 !define MUI_UNICON "nexa-beep.ico"
 !define MUI_ABORTWARNING
+; GUI 실행 인자를 명시한다 — 런타임 감지(M5-4d)가 첫 방어선이고, 이건 두 번째 방어선이다
+; (바로가기·완료 실행이 인자 없이 부르면 콘솔이 번쩍이던 문제 · 08-11 실기).
 !define MUI_FINISHPAGE_RUN "$INSTDIR\${EXENAME}"
+!define MUI_FINISHPAGE_RUN_PARAMETERS "--window --live"
 
 !insertmacro MUI_PAGE_LICENSE "LICENSE.md"
 !insertmacro MUI_PAGE_DIRECTORY
@@ -57,7 +60,8 @@ Section "설치"
   File "README.md"
   File "LICENSE.md"
 
-  CreateShortcut "$SMPROGRAMS\${APPNAME}.lnk" "$INSTDIR\${EXENAME}" "" "$INSTDIR\nexa-beep.ico"
+  ; 시작 메뉴 바로가기 = GUI 실행(인자 명시 · M5-4d 두 번째 방어선).
+  CreateShortcut "$SMPROGRAMS\${APPNAME}.lnk" "$INSTDIR\${EXENAME}" "--window --live" "$INSTDIR\nexa-beep.ico"
 
   WriteRegStr HKCU "Software\${COMPANY}\NexaBeep" "InstallDir" "$INSTDIR"
   WriteRegStr HKCU "Software\${COMPANY}\NexaBeep" "Version"    "${VERSION}"
