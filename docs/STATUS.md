@@ -3,7 +3,13 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
-> **갱신: 2026-08-11 5차 (KST)** — **M5-4d 수정 — Windows 더블클릭 무반응**(`fix/m5-4d-windows-double-click` · 4차 실기서 발견한 P0 즉시 수정):
+> **갱신: 2026-08-11 6차 (KST)** — **M4-9 — 전송 완료 종단 확인(ack) + 종료 가드**(`feat/m4-9-transfer-ack` · 08-10 점검으로 등록한 **마지막 열린 P0** 완료):
+> ① **거짓 완료 제거** — 발신 "완료"가 소켓 쓰기 시점일 뿐이던 것을, 수신측 격리 성패를 **와이어로 되돌려** 확정. `XferMsg::Received{id}`(kind 7)·`Failed{id}`(kind 8) 신설(전방 호환).
+> ② **발신 UI 상태 = 전달됨 · 확인 대기(`AwaitingAck`) → ack로 완료/실패**. ★ 다중 파일 함정 방지: `update_xfer_in`은 확인 대기를 건너뛰고 `update_xfer_ack`가 그것만 닫아, **다음 파일 진행이 앞 파일의 확인 대기를 덮지 않는다**(단위 테스트 고정).
+> ③ **종료 가드** — 미확인 전송(`awaiting_ack`)·진행 중이 있으면 주 창 첫 닫기는 경고("N건 확인 대기 — 다시 닫으면 종료"), 둘째로 확정 · ack 완료 시 자동 해제(2단계 확인 문법 재사용).
+> ④ actor·CLI(`--chat-*`) 양쪽 ack 배선. 워크스페이스 **432테스트 green** · clippy 0. ⏸ 2노드 실물 왕복(전달됨→확인 대기→완료 · 수신 강제 종료 시 실패)은 GUI+chat-live 실기 확인 대기. **→ 열린 P0 없음.** [journal/2026-08-11.md](journal/2026-08-11.md).
+>
+> **직전(08-11 5차)** — **M5-4d 수정 — Windows 더블클릭 무반응**(`fix/m5-4d-windows-double-click` · 4차 실기서 발견한 P0 즉시 수정):
 > ① **판정 = "탐색기가 새 콘솔을 할당했는가"** — `plat::launch::from_gui_shell()`가 `GetConsoleProcessList` 휴리스틱(붙은 프로세스가 자기뿐=반환 1 → 탐색기 실행 · 터미널이면 셸까지 2+ → false). main에서 `gui_launch = 번들(mac) || (무인자 && from_gui_shell())` — **macOS 번들 판정의 Windows 대칭**.
 > ② **잔존 콘솔 제거** — 콘솔 서브시스템이라 창 모드로 가도 콘솔이 남는다 → `hide_gui_console()`(FreeConsole · count==1일 때만 = 마지막 detach로 창 닫힘). NSIS 바로가기·완료 실행에 `--window --live` 두 번째 방어선.
 > ③ **실측(이 PC)** — 터미널 무인자 = 스캐폴드(**CLI 보존**) · `Start-Process`(탐색기 방식) = **"Nexa Beep" 창 전환·콘솔 잔존 없음**. 워크스페이스 **431테스트 green** · clippy 0.
