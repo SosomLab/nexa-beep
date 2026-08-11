@@ -30,6 +30,10 @@ pub struct ProfileValues {
     pub share_email: bool,
     /// 전화번호 공개.
     pub share_phone: bool,
+    /// 해석된 표시 이름(이니셜 아바타 원료 — "auto"의 실제 값은 호스트만 안다).
+    pub resolved_name: String,
+    /// 아바타 색 시드(내 키 지문).
+    pub seed: Vec<u8>,
 }
 
 /// 프로필 변경 화면 위젯.
@@ -45,6 +49,8 @@ pub struct ProfileWidget {
     sw_email: Switch,
     sw_phone: Switch,
     image_path: String,
+    resolved_name: String,
+    seed: Vec<u8>,
     changes: Vec<(&'static str, String)>,
     pick_image: bool,
     closed: bool,
@@ -73,6 +79,8 @@ impl ProfileWidget {
             sw_phone: Switch::new(t(Msg::SharePhone), v.share_phone)
                 .with_label_side(LabelSide::Left),
             image_path: v.image_path.clone(),
+            resolved_name: v.resolved_name.clone(),
+            seed: v.seed.clone(),
             changes: Vec::new(),
             pick_image: false,
             closed: false,
@@ -127,25 +135,25 @@ impl ProfileWidget {
         let bw = self.s(80);
         // 이미지 행(라벨은 paint) — 버튼 우측.
         self.choose_img.set_bounds(
-            Rect::new(b.right() - pad - bw, b.y + self.s(44), bw, field_h),
+            Rect::new(b.right() - pad - bw, b.y + self.s(174), bw, field_h),
             inv,
         );
         // 입력 3종 — 라벨 아래 필드.
         let fw = b.w - pad * 2;
         self.name
-            .set_bounds(Rect::new(b.x + pad, b.y + self.s(104), fw, field_h), inv);
+            .set_bounds(Rect::new(b.x + pad, b.y + self.s(234), fw, field_h), inv);
         self.email
-            .set_bounds(Rect::new(b.x + pad, b.y + self.s(162), fw, field_h), inv);
+            .set_bounds(Rect::new(b.x + pad, b.y + self.s(292), fw, field_h), inv);
         self.phone
-            .set_bounds(Rect::new(b.x + pad, b.y + self.s(220), fw, field_h), inv);
+            .set_bounds(Rect::new(b.x + pad, b.y + self.s(350), fw, field_h), inv);
         // 공개 토글 3종 — 라벨 왼쪽·토글 오른쪽 끝.
         let sw_h = self.s(26);
         self.sw_basic
-            .set_bounds(Rect::new(b.x + pad, b.y + self.s(266), fw, sw_h), inv);
+            .set_bounds(Rect::new(b.x + pad, b.y + self.s(396), fw, sw_h), inv);
         self.sw_email
-            .set_bounds(Rect::new(b.x + pad, b.y + self.s(298), fw, sw_h), inv);
+            .set_bounds(Rect::new(b.x + pad, b.y + self.s(428), fw, sw_h), inv);
         self.sw_phone
-            .set_bounds(Rect::new(b.x + pad, b.y + self.s(330), fw, sw_h), inv);
+            .set_bounds(Rect::new(b.x + pad, b.y + self.s(460), fw, sw_h), inv);
     }
 
     /// 표시용 이미지 파일명(경로 말고 이름만 — 좁은 창).
@@ -239,11 +247,24 @@ impl Widget for ProfileWidget {
             t(Msg::ProfileTitle),
             theme.text,
         );
+        // 큰 원형 아바타(목록 40의 3배 = 120 · 사용자 요청 08-11) — 이니셜 가상 이미지.
+        // 사진을 골라도 픽셀 렌더는 M4-5(imgdec) 후 — 그때까지 이니셜 + 파일명 표기.
+        let d = self.s(120);
+        let av = Rect::new(b.x + (b.w - d) / 2, b.y + self.s(40), d, d);
+        let ini_src = {
+            let typed = self.name.text();
+            if typed.trim().is_empty() {
+                self.resolved_name.clone()
+            } else {
+                typed
+            }
+        };
+        crate::avatar::draw_avatar(ctx, av, &ini_src, &self.seed, 34.0);
         // 이미지 행 — 라벨 + 파일명(버튼 왼쪽까지 클립).
         ctx.select_font(FontSlot::Base, false);
         ctx.text(
             b.x + pad,
-            b.y + self.s(48),
+            b.y + self.s(178),
             b,
             t(Msg::ProfileImage),
             theme.text,
@@ -251,22 +272,22 @@ impl Widget for ProfileWidget {
         ctx.select_font(FontSlot::Status, false);
         let clip = Rect::new(
             b.x + pad,
-            b.y + self.s(44),
+            b.y + self.s(174),
             (self.choose_img.bounds().x - self.s(8) - (b.x + pad + self.s(110))).max(0),
             self.s(28),
         );
         ctx.text(
             b.x + pad + self.s(110),
-            b.y + self.s(50),
+            b.y + self.s(180),
             clip,
             &self.image_label(),
             theme.text_dim,
         );
         // 필드 라벨.
         let labels = [
-            (Msg::DisplayNameLabel, self.s(86)),
-            (Msg::FieldEmail, self.s(144)),
-            (Msg::FieldPhone, self.s(202)),
+            (Msg::DisplayNameLabel, self.s(216)),
+            (Msg::FieldEmail, self.s(274)),
+            (Msg::FieldPhone, self.s(332)),
         ];
         for (m, dy) in labels {
             ctx.select_font(FontSlot::Status, false);
@@ -285,7 +306,7 @@ impl Widget for ProfileWidget {
         let lines = crate::settings::wrap_text(ctx, t(Msg::ProfileShareNote), avail, 2);
         for (i, line) in lines.iter().enumerate() {
             #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-            let dy = self.s(368) + i as i32 * self.s(16);
+            let dy = self.s(498) + i as i32 * self.s(16);
             ctx.text(b.x + pad, b.y + dy, b, line, theme.text_dim);
         }
     }

@@ -38,6 +38,7 @@ pub mod icons {
 
 pub mod about;
 pub mod addr_prompt;
+pub mod avatar;
 pub mod chat_view;
 pub mod controls;
 pub mod draw;
@@ -47,6 +48,7 @@ pub mod gallery;
 pub mod geom;
 pub mod hangul;
 pub mod offer_prompt;
+pub mod peer_info;
 pub mod peer_list;
 pub mod profile;
 pub mod quarantine_view;
@@ -77,6 +79,7 @@ pub use event::{InputEvent, Key, WheelAccum, WHEEL_DELTA};
 pub use gallery::GalleryWidget;
 pub use geom::{Point, Rect, Size};
 pub use offer_prompt::{OfferChoice, OfferInfo, OfferPromptWidget};
+pub use peer_info::{PeerInfo, PeerInfoWidget};
 pub use peer_list::{badge, HudPos, LinkState, PeerListWidget, PeerRow, XferProgress, ROW_H};
 pub use profile::{ProfileValues, ProfileWidget};
 pub use quarantine_view::{QAction, QRow, QuarantineWidget};
