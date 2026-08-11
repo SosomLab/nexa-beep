@@ -27,6 +27,9 @@ pub struct PeerRow {
     pub link: LinkState,
     /// 진행 중 파일 전송(있으면 이름 **바로 아래**에 진행 막대 · 사용자 요청 08-09).
     pub xfer: Option<XferProgress>,
+    /// 프로필에 등록된 표시 이름(M3-17 — 2번째 줄 · 없으면 공백).
+    /// 굵은 1번째 줄은 언제나 **기본(발견) 이름**이다(사용자 확정 08-11).
+    pub profile_name: Option<String>,
 }
 
 /// 목록 행에 그릴 전송 진행 상태.
@@ -69,8 +72,10 @@ pub enum LinkState {
     Connecting,
 }
 
-/// 행 높이(px) — 임시. M3-1c 수치표에서 확정.
-pub const ROW_H: i32 = 42;
+/// 행 높이(px) — 아바타 + 2줄(기본 이름·프로필 이름)용으로 확장(사용자 요청 08-11).
+pub const ROW_H: i32 = 56;
+/// 아바타 지름(논리 px) — 행 높이에서 상하 여백을 뺀 원.
+pub const AVATAR_D: i32 = 40;
 
 /// 타입어헤드 HUD 표시 위치 — 3×3 중 택1(기본 좌측하단 · 사용자 확정).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -151,6 +156,12 @@ pub struct PeerListWidget {
     last_click: Option<(usize, u64)>,
     /// 배율(고DPI — FR-U-6). 행 높이·여백에 곱한다. 좌표·bounds는 물리 px.
     scale: f32,
+    /// 우클릭 메뉴(08-11 — "프로필 보기").
+    ctx_menu: crate::controls::ContextMenu,
+    /// 메뉴가 가리키는 행의 상대.
+    ctx_peer: Option<PeerId>,
+    /// "프로필 보기" 선택 결과(1회성 — 호스트 폴).
+    profile_req: Option<PeerId>,
 }
 
 impl Default for PeerListWidget {
@@ -178,7 +189,15 @@ impl PeerListWidget {
             now_hint: 0,
             last_click: None,
             scale: 1.0,
+            ctx_menu: crate::controls::ContextMenu::new(),
+            ctx_peer: None,
+            profile_req: None,
         }
+    }
+
+    /// "프로필 보기" 선택(1회성) — 호스트가 상대 프로필 창을 연다.
+    pub fn take_profile_request(&mut self) -> Option<PeerId> {
+        self.profile_req.take()
     }
 
     /// 타입어헤드 유효시간(ms) 설정 — 마지막 입력 후 이 시간 지나면 초기화.
@@ -377,6 +396,34 @@ impl Widget for PeerListWidget {
     }
 
     fn on_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
+        // ── 컨텍스트 메뉴가 열려 있으면 가장 먼저 먹는다(팝업 최상위 — 대화 창과 동일) ──
+        if self.ctx_menu.is_open() {
+            let menu_rect = self.ctx_menu.bounds();
+            if self.ctx_menu.on_event(ev) {
+                inv.push(menu_rect);
+                inv.push(self.bounds);
+                if let Some(id) = self.ctx_menu.take_picked() {
+                    if id == "profile" {
+                        self.profile_req = self.ctx_peer.take();
+                    }
+                }
+                return;
+            }
+        }
+        // ── 우클릭 = "프로필 보기" 메뉴(08-11 · 즉시 실행이 아니라 메뉴 경유) ──
+        if let InputEvent::RightDown { x, y } = *ev {
+            if let Some(idx) = self.row_at(y) {
+                if self.bounds.contains(crate::geom::Point { x, y }) {
+                    self.caret = idx;
+                    self.ctx_peer = Some(self.rows[idx].entry.peer);
+                    let items = vec![crate::controls::CtxItem::item("profile", "프로필 보기")];
+                    self.ctx_menu.set_scale(self.scale);
+                    self.ctx_menu.open_at(x, y, items, self.bounds, 8 * 15);
+                    inv.push(self.bounds);
+                    return;
+                }
+            }
+        }
         match *ev {
             InputEvent::Key { key, .. } => {
                 let vis = self.visible_rows().max(1);
@@ -525,68 +572,92 @@ impl Widget for PeerListWidget {
             } else {
                 theme.panel_bg
             };
-            let text_y = r.y + (rh - ctx.text_height()) / 2; // 실측 세로 중앙
-                                                             // 행 배경 먼저(불투명) — 점·이름은 그 위에.
+            // 행 배경 먼저(불투명) — 아바타·이름은 그 위에.
             ctx.fill_rect(r, bg);
-            // 세션 상태 점(사용자 요청 — 끊어진 대상 식별): 초록=활성 · 빨강=끊김 · 회색=발견만.
-            let dot_d = self.s(8);
-            let dot = Rect::new(r.x + self.s(10), r.y + (rh - dot_d) / 2, dot_d, dot_d);
+            // ── 원형 이니셜 아바타(가상 이미지 · 08-11) — 색 시드 = 키 지문(안정) ──
+            // 실제 사진 렌더는 M4-5(imgdec) 후 — 그때까지 프로필 이미지가 있어도 이니셜.
+            let av_d = self.s(AVATAR_D);
+            let av = Rect::new(r.x + self.s(8), r.y + (rh - av_d) / 2, av_d, av_d);
+            crate::avatar::draw_avatar(
+                ctx,
+                av,
+                row.entry.name.as_str(),
+                row.entry.peer.as_bytes(),
+                6.0,
+            );
+            // 세션 상태 점 — 아바타 우하단에 겹쳐(메신저 관례 · 색 의미는 기존 그대로).
+            let dot_d = self.s(11);
+            let dot = Rect::new(
+                av.right() - dot_d + self.s(2),
+                av.bottom() - dot_d + self.s(2),
+                dot_d,
+                dot_d,
+            );
             let dot_color = match row.link {
                 LinkState::Active => theme.ok,
                 LinkState::Lost => theme.danger,
                 LinkState::Idle => theme.text_dim,
                 LinkState::Connecting => theme.accent, // 연결 중(M2-8)
             };
+            ctx.fill_ellipse(
+                Rect::new(dot.x - 1, dot.y - 1, dot.w + 2, dot.h + 2),
+                theme.panel_bg,
+            ); // 배경색 테두리 — 아바타와 분리
             ctx.fill_ellipse(dot, dot_color);
-            ctx.text(
-                dot.right() + self.s(8),
-                text_y,
-                r,
-                row.entry.name.as_str(),
-                theme.text,
-            );
 
-            // 전송 진행 막대 — 이름 **바로 아래**(사용자 요청). 진행 중일 때만 자리를 쓴다.
+            // 1줄: **기본(발견) 이름 — 굵게**(사용자 확정 08-11).
+            let name_x = av.right() + self.s(10);
+            ctx.select_font(FontSlot::PeerList, true);
+            let name_th = ctx.text_height();
+            let name_y = r.y + self.s(8);
+            ctx.text(name_x, name_y, r, row.entry.name.as_str(), theme.text);
+            // 다중 경로 ×N(진단) — 이름 뒤.
+            if row.entry.paths > 1 {
+                let name_w = ctx.text_width(row.entry.name.as_str());
+                ctx.select_font(FontSlot::Status, false);
+                ctx.text(
+                    name_x + name_w + self.s(6),
+                    name_y + self.s(2),
+                    r,
+                    &format!("×{}", row.entry.paths),
+                    theme.text_dim,
+                );
+            }
+            // 2줄: 프로필에 등록된 표시 이름(없으면 공백 · M3-17).
+            if let Some(pn) = &row.profile_name {
+                ctx.select_font(FontSlot::Status, false);
+                ctx.text(name_x, name_y + name_th + self.s(3), r, pn, theme.text_dim);
+            }
+
+            // 전송 진행 막대 — 행 하단(이름·프로필 줄 아래). 진행 중일 때만.
             if let Some(xp) = row.xfer {
                 let bar_h = self.s(4);
-                let bar_y = text_y + ctx.text_height() + self.s(3);
-                let bar_x = dot.right() + self.s(8);
-                let bar_w = (r.right() - bar_x - self.s(120)).max(self.s(40));
-                let track = Rect::new(bar_x, bar_y, bar_w, bar_h);
+                let bar_y = r.bottom() - self.s(8);
+                let bar_w = (r.right() - name_x - self.s(120)).max(self.s(40));
+                let track = Rect::new(name_x, bar_y, bar_w, bar_h);
                 ctx.fill_round_rect(track, bar_h / 2, theme.panel_bg_alt);
                 let fill_w = (bar_w as f32 * xp.ratio()).round() as i32;
                 if fill_w > 0 {
                     ctx.fill_round_rect(
-                        Rect::new(bar_x, bar_y, fill_w, bar_h),
+                        Rect::new(name_x, bar_y, fill_w, bar_h),
                         bar_h / 2,
                         if xp.sending { theme.accent } else { theme.ok },
                     );
                 }
             }
 
-            // 다중 경로 ×N(진단).
-            if row.entry.paths > 1 {
-                let name_w = ctx.text_width(row.entry.name.as_str());
-                let label = format!("×{}", row.entry.paths);
-                ctx.text(
-                    r.x + self.s(10) + self.s(8) + self.s(8) + self.s(4) + name_w,
-                    text_y + self.s(2),
-                    r,
-                    &label,
-                    theme.text_dim,
-                );
-            }
-
-            // 신뢰 배지(오른쪽 정렬 라운드 칩) — 항상 표시.
+            // 신뢰 배지(오른쪽 정렬 라운드 칩) — 항상 표시 · 높이 고정(행이 커져도 칩은 그대로).
+            ctx.select_font(FontSlot::PeerList, false);
             let (label, chip) = badge(row.trust, theme);
             let bw = ctx.text_width(label) + self.s(16);
+            let chip_h = self.s(22);
             let chip_r = Rect::new(
                 r.right() - bw - self.s(10),
-                r.y + self.s(8),
+                r.y + (rh - chip_h) / 2,
                 bw,
-                rh - self.s(16),
+                chip_h,
             );
-            ctx.fill_round_rect(chip_r, (rh - self.s(16)) / 2, chip);
+            ctx.fill_round_rect(chip_r, chip_h / 2, chip);
             // 텍스트 상자 높이 실측으로 정확히 세로 중앙(고정 오프셋은 하단 여백이 커 보인다).
             let th = ctx.text_height();
             ctx.text(
@@ -600,6 +671,9 @@ impl Widget for PeerListWidget {
             // 행 구분선.
             ctx.fill_rect(Rect::new(r.x, r.bottom() - 1, r.w, 1), theme.border);
         }
+        ctx.select_font(FontSlot::PeerList, false);
+        // 우클릭 메뉴(최상위 레이어).
+        self.ctx_menu.paint(ctx, theme);
         // 타입어헤드 HUD(입력·조합 중일 때만) — 위치는 설정(3×3). 조합 중 텍스트도 표시.
         let buf = self.typeahead.composing();
         if !buf.is_empty() {
@@ -661,6 +735,7 @@ mod tests {
             trust,
             link: LinkState::Idle,
             xfer: None,
+            profile_name: None,
         }
     }
     fn widget(names: &[(u8, &str)]) -> (PeerListWidget, Invalidations) {

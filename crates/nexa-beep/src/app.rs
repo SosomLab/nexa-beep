@@ -608,6 +608,8 @@ enum Role {
     About,
     /// 프로필 변경 화면(M3-17 — 이미지·이름·연락처 + 공개 토글).
     Profile,
+    /// 상대 프로필 보기 카드(M3-17 — 목록 우클릭 ▸ 프로필 보기).
+    PeerInfo(PeerId),
     /// 격리함 — 수신 파일 승인·삭제(M4-3 · [docs/11] §7 등급별 마찰).
     Quarantine,
     /// 발신 대기 — 상대 승인을 기다리는 창(타임아웃 후 자동 취소).
@@ -799,6 +801,8 @@ struct App {
     profile_view: Option<nbeep_ui::ProfileWidget>,
     /// 상대 프로필(M3-17 — 세션 경유 수신 · 목록·제목 표시 우선).
     peer_profiles: HashMap<PeerId, PeerProfile>,
+    /// 상대 프로필 보기 뷰(우클릭 ▸ 프로필 보기 — 열려 있을 때만 Some).
+    peer_info_view: Option<nbeep_ui::PeerInfoWidget>,
     /// 주소 입력 모달 뷰(DR-19 · M3-16 — 열려 있을 때만 Some).
     addr_view: Option<nbeep_ui::AddrPromptWidget>,
     /// About 뷰(열려 있을 때만 Some).
@@ -1506,14 +1510,14 @@ impl App {
             .table
             .list()
             .into_iter()
-            .map(|mut entry| {
-                // 프로필 이름 우선(M3-17) — 본인이 공개한 이름이 발견 이름을 덮는다
-                // (신원은 여전히 키 — 표시만 바뀐다).
-                if let Some(p) = self.peer_profiles.get(&entry.peer) {
-                    if let Some(n) = &p.name {
-                        entry.name = n.clone();
-                    }
-                }
+            .map(|entry| {
+                // 프로필 이름은 **2번째 줄**(사용자 확정 08-11 — 굵은 1줄은 언제나
+                // 기본(발견) 이름 · 신원은 여전히 키).
+                let profile_name = self
+                    .peer_profiles
+                    .get(&entry.peer)
+                    .and_then(|p| p.name.as_ref())
+                    .map(|n| n.as_str().to_string());
                 let trust = self.trust.level(entry.peer);
                 // 세션 상태 점(사용자 요청): 대화 중=Active · 끊김 기록=Lost · 그 외=Idle.
                 let link = if self.conversations.contains_key(&entry.peer) {
@@ -1532,6 +1536,7 @@ impl App {
                     trust,
                     link,
                     xfer,
+                    profile_name,
                 }
             })
             .collect();
@@ -2326,10 +2331,14 @@ impl App {
             share_basic: self.settings.get("profile.share.basic") == "on",
             share_email: self.settings.get("profile.share.email") == "on",
             share_phone: self.settings.get("profile.share.phone") == "on",
+            resolved_name: effective_display_name(&self.settings, &self.identity.peer_id())
+                .as_str()
+                .to_string(),
+            seed: self.identity.peer_id().as_bytes().to_vec(),
         };
         let attrs = Window::default_attributes()
             .with_title("Nexa Beep — 프로필")
-            .with_inner_size(winit::dpi::LogicalSize::new(440.0, 430.0))
+            .with_inner_size(winit::dpi::LogicalSize::new(440.0, 570.0))
             .with_resizable(false)
             .with_window_icon(self.icon.clone());
         let window = Rc::new(el.create_window(attrs).unwrap());
@@ -2349,6 +2358,64 @@ impl App {
             },
         );
         self.profile_view = Some(nbeep_ui::ProfileWidget::new(&values));
+        self.layout_window(id);
+        self.request_redraw(id);
+    }
+
+    /// 상대 프로필 보기 카드(M3-17 — 목록 우클릭). 이미 있으면 갱신·포커스.
+    fn open_peer_info(&mut self, peer: PeerId, el: &ActiveEventLoop) {
+        let p = self.peer_profiles.get(&peer);
+        let info = nbeep_ui::PeerInfo {
+            name: self
+                .table
+                .get(peer)
+                .map_or_else(|| format!("{peer:?}"), |e| e.name.as_str().to_string()),
+            profile_name: p
+                .and_then(|p| p.name.as_ref())
+                .map(|n| n.as_str().to_string())
+                .unwrap_or_default(),
+            email: p.and_then(|p| p.email.clone()).unwrap_or_default(),
+            phone: p.and_then(|p| p.phone.clone()).unwrap_or_default(),
+            has_image: p.is_some_and(|p| p.image_file.is_some()),
+            fingerprint: peer.short(),
+            seed: peer.as_bytes().to_vec(),
+        };
+        if let Some((wid, _)) = self
+            .windows
+            .iter()
+            .find(|(_, e)| matches!(e.role, Role::PeerInfo(_)))
+        {
+            let wid = *wid;
+            if let Some(e) = self.windows.get_mut(&wid) {
+                e.role = Role::PeerInfo(peer);
+                e.window.focus_window();
+            }
+            self.peer_info_view = Some(nbeep_ui::PeerInfoWidget::new(info));
+            self.layout_window(wid);
+            self.request_redraw(wid);
+            return;
+        }
+        let attrs = Window::default_attributes()
+            .with_title("Nexa Beep — 상대 프로필")
+            .with_inner_size(winit::dpi::LogicalSize::new(360.0, 380.0))
+            .with_resizable(false)
+            .with_window_icon(self.icon.clone());
+        let window = Rc::new(el.create_window(attrs).unwrap());
+        let scale = window.scale_factor() as f32;
+        let context = softbuffer::Context::new(window.clone()).unwrap();
+        let surface = SbSurface::new(&context, window.clone()).unwrap();
+        let id = window.id();
+        self.windows.insert(
+            id,
+            WinEntry {
+                role: Role::PeerInfo(peer),
+                window,
+                surface,
+                cursor: (0, 0),
+                scale,
+            },
+        );
+        self.peer_info_view = Some(nbeep_ui::PeerInfoWidget::new(info));
         self.layout_window(id);
         self.request_redraw(id);
     }
@@ -2823,6 +2890,12 @@ impl App {
                     pv.set_bounds(Rect::new(0, 0, w, h), &mut inv);
                 }
             }
+            Role::PeerInfo(_) => {
+                if let Some(pv) = &mut self.peer_info_view {
+                    pv.set_scale(scale, &mut inv);
+                    pv.set_bounds(Rect::new(0, 0, w, h), &mut inv);
+                }
+            }
             Role::Quarantine => {
                 if let Some(qv) = &mut self.quarantine_view {
                     qv.set_scale(scale, &mut inv);
@@ -3006,6 +3079,10 @@ impl App {
                     if let Some(peer) = self.list.take_activated() {
                         self.activate(peer, el);
                     }
+                    // 우클릭 ▸ 프로필 보기(M3-17).
+                    if let Some(peer) = self.list.take_profile_request() {
+                        self.open_peer_info(peer, el);
+                    }
                 }
             }
             Role::Chat(peer) => {
@@ -3177,6 +3254,17 @@ impl App {
                     }
                 }
             }
+            Role::PeerInfo(_) => {
+                let mut closed = false;
+                if let Some(pv) = &mut self.peer_info_view {
+                    pv.on_event(&ev, &mut inv);
+                    closed = pv.take_closed();
+                }
+                if closed {
+                    self.peer_info_view = None;
+                    self.windows.remove(&id);
+                }
+            }
             Role::Profile => {
                 let (mut changes, mut pick, mut closed) = (Vec::new(), false, false);
                 if let Some(pv) = &mut self.profile_view {
@@ -3326,6 +3414,11 @@ impl App {
             }
             Role::Profile => {
                 if let Some(pv) = &self.profile_view {
+                    pv.paint(&mut ctx, &theme);
+                }
+            }
+            Role::PeerInfo(_) => {
+                if let Some(pv) = &self.peer_info_view {
                     pv.paint(&mut ctx, &theme);
                 }
             }
@@ -4040,6 +4133,7 @@ impl ApplicationHandler<AppEvent> for App {
                         Role::About => self.about_view = None,
                         Role::AddEndpoint => self.addr_view = None,
                         Role::Profile => self.profile_view = None,
+                        Role::PeerInfo(_) => self.peer_info_view = None,
                         Role::Quarantine => self.quarantine_view = None,
                         Role::Sending(peer) => self.cancel_send(peer, false),
                         Role::Approve(peer) => {
@@ -4593,6 +4687,7 @@ pub(crate) fn run(mode: WindowMode, live: bool) {
         picker_view: None,
         profile_view: None,
         peer_profiles: HashMap::new(),
+        peer_info_view: None,
         picker_ctx: None,
         pending_picker: None,
         data_dir: dir,
