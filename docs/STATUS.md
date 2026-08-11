@@ -3,7 +3,13 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
-> **갱신: 2026-08-11 9차 (KST)** — **v0.1.3 릴리스 — 08-11 완결분(M5-4d·M4-9·M3-16·M2-8) 5타깃 공개**(main 직커밋 `0dc3d4f` + 태그 `v0.1.3`):
+> **갱신: 2026-08-11 10차 (KST)** — **★ D-25 확정 → M3-15 설정 영속 구현 — `crates/nexa-conf` 신설**(`feat/m3-15-settings-persist`):
+> ① **D-25 사용자 확정** — ADR-0011 **✅ Accepted** · Q-28-1 = **저장소 안 `crates/nexa-conf`**(분리 가능 상태 유지). 확정 즉시 구현 — 지금까지 **모든 설정(테마 색·시간 형식·전송 정책)이 재시작하면 사라졌다**.
+> ② **크레이트**(재사용 · nbeep 의존 0) — 관용 파싱(`_schema` **실제 키**) · **미지 키 보존**(F-1: 구버전이 저장해도 신버전 키 생존) · `SaveScheduler`(quiet 1s **OR** max 10s — F-3 · mark=플래그만·중간 상태 무저장) · **원자적 쓰기**(PID temp·`sync_all`·덮어쓰기 rename·부모 fsync — F-2) · S-3(동일 스냅샷 무기록) · 경로는 인자(싱글톤 금지).
+> ③ **앱 배선** — 부팅 로드(`set_by_name` — Kind별 **관용 검증**: 무효 값은 무시=기본값 유지) + `apply_boot_settings`(테마·타입어헤드·툴바·전송 정책) · 변경=mark(깔때기+직접 set 2곳) · `about_to_wait` tick · winit `exiting` flush(주기와 같은 직렬화 — S-2) · 경로 = exe 옆 `data/`(포터블)→사용자 폴더→임시. ★ **`timed` 승인은 저장 시점에 복귀 대상으로 치환**(사용자 확정 08-09 그대로 — 재시작 시 기간 연장 없음).
+> ④ **447 green**(+11) · clippy 0 · **종단 실측**: 손상 줄·무효 값·미지 키 파일로 정상 기동 · 변경 없으면 파일 무접촉 · 왕복에서 전체 스냅샷 35키·`future.key` 생존·`ui.theme=light` 유지. ⏸ GUI 변경→재시작 실기 확인(사용자). [journal/2026-08-11.md](journal/2026-08-11.md).
+>
+> **직전(08-11 9차)** — **v0.1.3 릴리스 — 08-11 완결분(M5-4d·M4-9·M3-16·M2-8) 5타깃 공개**(main 직커밋 `0dc3d4f` + 태그 `v0.1.3`):
 > ① 버전 0.1.2→0.1.3(+Cargo.lock) · **436 green** 확인 후 태그 push → `release.yml` 자동 공개 — **자산 14종**(win x64/arm64 포터블·설치본·zip · mac x64/arm64 tar.gz·dmg · linux tar.gz·deb · 매니페스트 zip · SHA256SUMS).
 > ② **배포 실물 검증(이 PC)** — windows-x64-portable.zip 다운로드 SHA-256 **일치** · `--version` = 0.1.3 · ★ **인자 없는 `Start-Process`(탐색기 방식) → "Nexa Beep" 창 실행** = M5-4d 수정이 배포본에 실렸다(터미널 무인자 CLI도 보존).
 > ③ winget/choco 게시는 의도대로 **변수 잠금 유지** → **M5-4b는 이제 변수(`WINGET_PUBLISH`/`CHOCO_PUSH`)·시크릿(사용자 소유)만 켜면 되는 상태**. ⏸ brew 재검증은 mac PC 몫 · arm64 실행 검증 빈칸.

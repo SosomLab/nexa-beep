@@ -13,6 +13,7 @@ members = [
   "crates/nbeep-ui",      # 컨트롤·화면(플랫폼 중립)
   "crates/nbeep-plat",    # 플랫폼 경계(창·입력·IME·격리표식)
   "crates/nbeep-imgdec",  # (bin) 이미지 격리 디코드 — 별도 프로세스
+  "crates/nexa-conf",     # 설정 직렬화·영속(ADR-0011 · 재사용 — nbeep 의존 0)
   "crates/nexa-beep",     # (bin) 진입·조립·생명주기
 ]
 
@@ -45,6 +46,7 @@ nbeep-store = { path = "crates/nbeep-store" }
 nbeep-gfx = { path = "crates/nbeep-gfx" }
 nbeep-ui = { path = "crates/nbeep-ui" }
 nbeep-plat = { path = "crates/nbeep-plat" }
+nexa-conf = { path = "crates/nexa-conf" }
 sha2 = "0.10" # SHA-256(FR-X-6) — snow가 이미 끄는 의존(트리 증가 0)
 
 # 릴리스 = 예산 게이트(단일 실행 파일 ≤10MB — docs/05 NFR-B-3, docs/18).

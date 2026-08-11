@@ -28,5 +28,6 @@ nbeep-store.workspace = true
 nbeep-gfx.workspace = true
 nbeep-ui.workspace = true
 nbeep-plat.workspace = true
+nexa-conf.workspace = true # 설정 영속(M3-15 · ADR-0011)
 winit = "0.30"
 softbuffer = "0.4"

@@ -1,0 +1,16 @@
+# nexa-conf — 설정 직렬화·영속 표준(ADR-0011 · DR-27). 재사용 크레이트:
+# 도메인 타입 0 · 시계 비소유 · 경로 비소유 · UI 비의존(docs/28 §5).
+# 다른 저장소로 분리 가능한 상태 유지가 규칙 — nbeep-* 의존 금지.
+[package]
+name = "nexa-conf"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]

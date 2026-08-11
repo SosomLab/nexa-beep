@@ -622,8 +622,10 @@ struct App {
     started: Instant,
     /// 주 창 하단 상태바 문구.
     status: String,
-    /// 설정 값(런타임 — 영속은 M2-5). `chat.window_mode`·`ui.theme`·`font.*`.
+    /// 설정 값(런타임). `chat.window_mode`·`ui.theme`·`font.*`.
     settings: SettingsState,
+    /// 설정 영속(M3-15 · ADR-0011) — 변경은 mark만, 저장은 tick/종료 flush가 1회씩.
+    conf: nexa_conf::Store,
     /// 영역별 글꼴 설정(설정에서 파생 — 크기·굵기·기울임).
     fonts: nbeep_ui::FontPrefs,
     /// 열린 설정 창의 뷰(설정 창은 항상 별도 OS 창 1개).
@@ -1100,6 +1102,7 @@ impl App {
                     self.approval_started_unix = Some(unix_now());
                     self.settings.set("xfer.approval", "timed".to_string());
                     self.settings.set("xfer.approval_window", code.to_string());
+                    self.conf_mark();
                     if let Some(sv) = &mut self.settings_view {
                         let mut inv = Invalidations::default();
                         sv.set_value("xfer.approval", "timed", &mut inv);
@@ -1212,6 +1215,7 @@ impl App {
                 _ => "manual",
             };
             self.settings.set("xfer.approval", code.to_string());
+            self.conf_mark();
             if let Some(sv) = &mut self.settings_view {
                 let mut inv = Invalidations::default();
                 sv.set_value("xfer.approval", code, &mut inv);
@@ -1937,7 +1941,91 @@ impl App {
         }
     }
 
+    /// 설정 영속 mark — 변경 지점은 플래그만 세운다(직렬화·값 복사 없음 · FR-P-9).
+    fn conf_mark(&mut self) {
+        self.conf.sched.mark(Instant::now());
+    }
+
+    /// 설정 스냅샷 저장 — 주기(tick)·종료(flush) 두 경로가 이 하나를 쓴다(S-2).
+    /// 실패는 치명적이지 않다(S-4) — 단 종료 경로 실패는 stderr로 알린다.
+    ///
+    /// ★ 기간 자동 승인(`xfer.approval` = `timed`)은 **저장하지 않는다**(사용자 확정
+    /// 08-09 · TODO M3-15) — 런타임 전용 상태라 저장 시점에 **복귀 대상**(직전 기본
+    /// 방식)으로 치환해 기록한다. 재시작하면 기간이 아닌 직전 설정으로 뜬다.
+    fn conf_save(&mut self, exiting: bool) {
+        use nbeep_core::{ApprovalPolicy, BasicApproval};
+        let timed_subst =
+            (self.settings.get("xfer.approval") == "timed").then_some(match &self.approval {
+                ApprovalPolicy::TimedAuto { revert_to, .. } => match revert_to {
+                    BasicApproval::Auto => "auto",
+                    BasicApproval::Block => "block",
+                    BasicApproval::Manual => "manual",
+                },
+                _ => "manual",
+            });
+        let mut pairs = self.settings.known_pairs();
+        if let Some(code) = timed_subst {
+            if let Some(p) = pairs.iter_mut().find(|(k, _)| *k == "xfer.approval") {
+                p.1 = code;
+            }
+        }
+        if let Err(e) = self.conf.save(&pairs) {
+            let path = self.conf.path().display();
+            if exiting {
+                eprintln!("설정 저장 실패(종료 경로) — {path}: {e}");
+            } else {
+                self.status = format!("설정 저장 실패 — {e} (다음 변경 때 재시도)");
+            }
+        }
+    }
+
+    /// 영속 설정의 부팅 반영(M3-15) — 파생 런타임 상태를 가진 키만.
+    /// [`Self::apply_settings`]의 부팅판: status 문구·redraw 없이 상태만 맞춘다
+    /// (`ui.language`·`ui.scrollbar_hide`는 run()이 창 생성 전에 이미 반영).
+    fn apply_boot_settings(&mut self) {
+        use nbeep_core::{ApprovalPolicy, BasicApproval};
+        self.rebuild_theme(); // ui.theme + theme.* 색 오버라이드
+        if let Ok(ms) = self.settings.get("ui.typeahead_timeout").parse::<u64>() {
+            self.list.set_typeahead_timeout(ms);
+        }
+        let mut inv = Invalidations::default();
+        let pos = nbeep_ui::HudPos::from_code(self.settings.get("ui.typeahead_pos"));
+        self.list.set_hud_pos(pos, &mut inv);
+        self.list
+            .set_typeahead_space(self.settings.get("ui.typeahead_space") == "on");
+        self.list
+            .set_typeahead_special(self.settings.get("ui.typeahead_special") == "on");
+        if let Ok(px) = self.settings.get("ui.toolbar_size").parse::<i32>() {
+            self.toolbar.set_icon_size(px);
+        }
+        // 파일 수신 승인 — 정상 경로에선 "timed"가 파일에 없다(conf_save가 복귀
+        // 대상으로 치환 · 사용자 확정 08-09). 그래도 들어오면(구버전·수기 편집)
+        // 시작 시각이 없으니 되살리지 않고 manual로 정규화한다(기간 연장 방지).
+        match self.settings.get("xfer.approval") {
+            "auto" => self.approval = ApprovalPolicy::Basic(BasicApproval::Auto),
+            "block" => self.approval = ApprovalPolicy::Basic(BasicApproval::Block),
+            "timed" => {
+                self.settings.set("xfer.approval", "manual".to_string());
+                self.conf_mark();
+            }
+            _ => {}
+        }
+        if let Some(w) =
+            nbeep_core::AutoWindow::from_code(self.settings.get("xfer.approval_window"))
+        {
+            self.approval_window = w;
+        }
+        self.send_rate = nbeep_core::RateLimit::from_code(self.settings.get("xfer.send_rate"));
+        self.recv_rate = nbeep_core::RateLimit::from_code(self.settings.get("xfer.recv_rate"));
+        if let Ok(v) = self.settings.get("xfer.timeout_sec").parse::<u64>() {
+            self.wait_timeout_sec = v.clamp(5, 3600);
+        }
+    }
+
     fn apply_settings(&mut self, changes: Vec<(&'static str, String)>) {
+        if !changes.is_empty() {
+            self.conf_mark();
+        }
         for (key, value) in changes {
             self.settings.set(key, value.clone());
             match key {
@@ -2976,6 +3064,14 @@ impl ApplicationHandler<AppEvent> for App {
         }
     }
 
+    fn exiting(&mut self, _el: &ActiveEventLoop) {
+        // 종료 강제 flush(S-1) — 디바운스가 마지막 변경을 삼키면 안 된다.
+        // 주기 경로와 같은 스냅샷·직렬화를 쓴다(S-2 — conf_save 하나뿐).
+        if self.conf.sched.flush_now() {
+            self.conf_save(true);
+        }
+    }
+
     fn about_to_wait(&mut self, el: &ActiveEventLoop) {
         // 종료 신호(SIGINT/SIGTERM) → 이벤트 루프 종료. run_app 반환 → App Drop →
         // transport(LocalDirect) Drop → GOODBYE 발신·소켓/스레드 정리(R-16 · FR-P-7).
@@ -2984,6 +3080,10 @@ impl ApplicationHandler<AppEvent> for App {
             return;
         }
         self.poll_discovery();
+        // 설정 영속 tick(FR-P-9) — 조용 1s OR 상한 10s 충족 시 스냅샷 1회 저장.
+        if self.conf.sched.tick(Instant::now()) {
+            self.conf_save(false);
+        }
         // 타입어헤드 유효시간 경과 → 버퍼 초기화·HUD 자동 숨김(마지막 입력 후 N초).
         {
             let now_ms = self.now_ms();
@@ -3515,6 +3615,26 @@ impl ApplicationHandler<AppEvent> for App {
 
 /// 창을 띄우고 이벤트 루프를 돈다(주 창을 닫으면 종료).
 /// 창을 띄운다. `live=true`면 실물 발견(`LocalDirect`), 아니면 InMemory 데모(에코 봇).
+/// 설정 파일 경로(FR-P-3 · docs/28 §4-2) — 실행 파일 옆 `data/` 쓰기 가능(포터블)
+/// → 사용자 설정 폴더 → 임시 폴더(최후 폴백 — 저장은 되지만 재부팅에 진다).
+/// 경로는 여기서 정해 **인자로 넘긴다**(nexa-conf는 경로를 소유하지 않는다).
+fn conf_path() -> std::path::PathBuf {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let data = dir.join("data");
+            if nexa_conf::dir_writable(&data) {
+                return data.join("settings.cfg");
+            }
+        }
+    }
+    if let Some(dir) = nexa_conf::user_config_dir("nexa-beep") {
+        if nexa_conf::dir_writable(&dir) {
+            return dir.join("settings.cfg");
+        }
+    }
+    std::env::temp_dir().join("nexa-beep").join("settings.cfg")
+}
+
 pub(crate) fn run(mode: WindowMode, live: bool) {
     let (data, index) = nbeep_plat::font::system_ui_font().expect("시스템 UI 폰트 없음");
     let font = nbeep_gfx::Font::from_static(data, index).expect("폰트 파싱");
@@ -3570,9 +3690,26 @@ pub(crate) fn run(mode: WindowMode, live: bool) {
         };
 
     let mut settings = SettingsState::with_defaults();
+    // 설정 영속(M3-15 · ADR-0011) — 기본값 시드 후 파일의 아는 키만 덮어쓴다(관용 파싱).
+    // 모르는 키는 Store가 보존해 다음 저장 때 그대로 재방출한다(F-1 — 구버전이
+    // 신버전 파일을 저장해도 신규 키가 살아남는다).
+    let (mut conf, doc) = nexa_conf::Store::open(conf_path(), 1_000, 10_000);
+    for (k, v) in doc.pairs {
+        if !settings.set_by_name(&k, &v) {
+            conf.keep_unknown(k, v);
+        }
+    }
+    // CLI 플래그는 이 세션만 이긴다 — 저장값을 덮어쓰되 dirty를 세우지 않는다
+    // (플래그 실행이 영속 설정을 바꿔버리면 다음 무플래그 실행이 놀란다).
     if mode == WindowMode::Separate {
         settings.set("chat.window_mode", "separate".into());
     }
+    // 유효 창 모드 = 영속값 반영(플래그 없으면 저장된 선택이 부팅에 살아난다 — DR-26).
+    let mode = if settings.get("chat.window_mode") == "separate" {
+        WindowMode::Separate
+    } else {
+        WindowMode::Single
+    };
     // 현재 언어를 설정값으로 초기화(기본 en — i18n).
     nbeep_core::set_lang(
         nbeep_core::Lang::from_code(settings.get("ui.language")).unwrap_or_default(),
@@ -3615,6 +3752,7 @@ pub(crate) fn run(mode: WindowMode, live: bool) {
         ),
         fonts: App::fonts_from_settings(&settings),
         settings,
+        conf,
         settings_view: None,
         gallery_view: None,
         about_view: None,
@@ -3690,5 +3828,6 @@ pub(crate) fn run(mode: WindowMode, live: bool) {
         shutdown,
     };
     app.reload_faces(); // 고정폭 등 슬롯 얼굴 초기 로드
+    app.apply_boot_settings(); // 영속 설정 → 파생 런타임 상태(테마·정책 등 · M3-15)
     event_loop.run_app(&mut app).unwrap();
 }

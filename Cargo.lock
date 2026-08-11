@@ -931,9 +931,14 @@ dependencies = [
  "nbeep-safe",
  "nbeep-store",
  "nbeep-ui",
+ "nexa-conf",
  "softbuffer",
  "winit",
 ]
+
+[[package]]
+name = "nexa-conf"
+version = "0.1.3"
 
 [[package]]
 name = "num_enum"
