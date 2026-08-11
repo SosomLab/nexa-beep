@@ -7,6 +7,7 @@
 
 ## 2026-08-11
 
+- **v0.1.3 릴리스 — 08-11 완결분 5타깃 공개**(main 직커밋 `0dc3d4f` + 태그): M5-4d(Windows 더블클릭)·M4-9(전송 ack)·M3-16(주소 모달)·M2-8 완결을 실제 채널로 — 자산 14종 · 체크섬 실측 일치 · **배포 실물에서 무인자 Start-Process → "Nexa Beep" 창 확인**(M5-4d가 실려 나감) · winget/choco는 의도대로 변수 잠김 유지 → **M5-4b는 변수·시크릿만 켜면 되는 상태**. 상세 [journal/2026-08-11.md](journal/2026-08-11.md).
 - **M2-8 잔여 소진 — 수동 주소 연결 워커 이관 + "연결 중" 행 표시**(`fix/m2-8-manual-worker`): ⌘K 모달 경로가 아직 동기(add_endpoint 해석+후보별 5초)라 죽은 주소에 UI가 멈추던 것 → 워커 이관(성공 = `Outbound` **합류점 일원화** · 실패 = `AddFailed{addr}`) · 동기 `open_session_addr` 제거 = **블로킹 연결 경로 0** · `LinkState::Connecting`(강조색 점 — 기존 점 문법과 일관). 436 green. 상세 [journal/2026-08-11.md](journal/2026-08-11.md).
 - **M3-16 — 주소 입력 모달 창**(`feat/m3-16-addr-modal` · 사용자 요청): DR-19 진입을 상태바 인라인 입력에서 별도 모달로 승격 — `AddrPromptWidget`(TextBox+**형식 검증** host:port/[v6]:port·포트 1~65535·유효/무효 실시간 표시+Connect/Cancel) · `Role::AddEndpoint`(⌘K·툴바 + 진입) · ★ 인라인 `adding` 경로 완전 제거(공존 시 갈라짐 방지) · addr_prompt 테스트 4 · **436 green**. 상세 [journal/2026-08-11.md](journal/2026-08-11.md).
 - **★ M4-9 — 전송 완료 종단 확인(ack) + 종료 가드**(`feat/m4-9-transfer-ack` · 08-10 점검으로 등록한 마지막 P0): 발신 "완료"가 소켓 쓰기 시점일 뿐이던 거짓 완료 제거 — ① 와이어 `XferMsg::Received{id}`·`Failed{id}` 신설(수신측 격리 성패 반송) ② 발신 UI `AwaitingAck`("전달됨·확인 대기")→ack로 완료/실패 종결 · ★ `update_xfer_in`이 AwaitingAck 건너뛰고 `update_xfer_ack`가 확인 대기만 닫아 **다중 파일에서 다음 진행이 앞 확인 대기를 안 덮음**(단위 테스트 고정) ③ **종료 가드**(미확인 전송 시 2단계 닫기 · ack 완료 시 자동 해제). actor·CLI 양쪽 ack 배선. **432 green** · ⏸ 2노드 실물 왕복 실기 대기. 상세 [journal/2026-08-11.md](journal/2026-08-11.md).

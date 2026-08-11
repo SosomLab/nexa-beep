@@ -3,7 +3,13 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
-> **갱신: 2026-08-11 8차 (KST)** — **M2-8 잔여 소진 — 수동 주소 연결 워커 이관 + "연결 중" 행 표시**(`fix/m2-8-manual-worker`):
+> **갱신: 2026-08-11 9차 (KST)** — **v0.1.3 릴리스 — 08-11 완결분(M5-4d·M4-9·M3-16·M2-8) 5타깃 공개**(main 직커밋 `0dc3d4f` + 태그 `v0.1.3`):
+> ① 버전 0.1.2→0.1.3(+Cargo.lock) · **436 green** 확인 후 태그 push → `release.yml` 자동 공개 — **자산 14종**(win x64/arm64 포터블·설치본·zip · mac x64/arm64 tar.gz·dmg · linux tar.gz·deb · 매니페스트 zip · SHA256SUMS).
+> ② **배포 실물 검증(이 PC)** — windows-x64-portable.zip 다운로드 SHA-256 **일치** · `--version` = 0.1.3 · ★ **인자 없는 `Start-Process`(탐색기 방식) → "Nexa Beep" 창 실행** = M5-4d 수정이 배포본에 실렸다(터미널 무인자 CLI도 보존).
+> ③ winget/choco 게시는 의도대로 **변수 잠금 유지** → **M5-4b는 이제 변수(`WINGET_PUBLISH`/`CHOCO_PUSH`)·시크릿(사용자 소유)만 켜면 되는 상태**. ⏸ brew 재검증은 mac PC 몫 · arm64 실행 검증 빈칸.
+> ④ 다음 = **D-25(ADR-0011 설정 영속) 확정 → M3-15** — ★ 지금은 설정값(색·시간 형식 포함)이 전혀 저장되지 않는다. [journal/2026-08-11.md](journal/2026-08-11.md).
+>
+> **직전(08-11 8차)** — **M2-8 잔여 소진 — 수동 주소 연결 워커 이관 + "연결 중" 행 표시**(`fix/m2-8-manual-worker`):
 > ① ⌘K 모달의 수동 연결이 아직 동기(add_endpoint = 해석+후보별 5초)라 죽은 주소에 UI가 멈추던 것 → **워커 이관**. 성공은 `AppEvent::Outbound`로 **발견 경로와 같은 합류점**(TOFU·대화 등록·뷰 열기 일원화) · 실패는 `AddFailed{addr,why}`. 동기 `open_session_addr` 제거 — **블로킹 연결 경로 0**.
 > ② `LinkState::Connecting` — 연결 수립 중 목록 행 점을 강조색으로(기존 초록/빨강/회색 문법과 일관 · start_connect 즉시 반영).
 > ③ **436테스트 green** · clippy 0. M2-8 잔여 2건(행 표시·⌘K 이관) 모두 소진. [journal/2026-08-11.md](journal/2026-08-11.md).
