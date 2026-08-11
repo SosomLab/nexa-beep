@@ -7,6 +7,7 @@
 
 ## 2026-08-11
 
+- **M4-5ⓐ imgdec 배포 동봉**(main 직커밋): release.yml(-p nbeep-imgdec · 게이트 2종 · 포터블/NSIS/.app/deb 동봉) · installer.nsi File+Delete · brew Formula 조건부 설치 · choco shim 제외(.ignore) · winget 무수정(zip 전체 추출). 설치본 실측은 다음 태그 CI. 상세 [journal/2026-08-11.md](journal/2026-08-11.md).
 - **★ M4-5 이미지 격리 디코드(imgdec) 실물화**(`feat/m4-5-imgdec`): 본체는 이미지 파서를 **링크하지 않는다**(R-5 · FR-S-12) — `nbeep-imgdec` bin에만 png/jpeg-decoder(원장 기록) · 프로토콜 stdin→`NIMG`+RGBA(원본 1MiB·픽셀 2048²·`--max-side` 박스 축소) · 부모가 3초 kill·응답 재검증 · **원형 마스크 후 목록·카드·편집 화면 실사진 렌더**(실패 = 이니셜 폴백). 실측: PNG/JPEG 256² 왕복·쓰레기 fail-closed · **472 green**. 잔여 = 포장 동봉·수신 파일 미리보기·권한 강등. 상세 [journal/2026-08-11.md](journal/2026-08-11.md).
 - **M3-17 목록·프로필 시각 개편**(`feat/m3-17-list-avatar`): **이니셜 아바타 가상 이미지**(`ui::avatar` — 이름 2글자 벡터 렌더·키 지문 시드 팔레트 8색·사진 렌더는 M4-5 후(R-5)) · 목록 행 42→**56**(아바타 40·상태 점 아바타 우하단·**1줄 굵게 = 발견 이름·2줄 = 프로필 이름**) · **우클릭 ▸ 프로필 보기**(컨텍스트 메뉴 → `PeerInfoWidget` 카드 — 큰 아바타 120·미공개 "(비공개)" 명시·키 지문 고지) · 프로필 편집 화면 상단 **120px 아바타**(입력 실시간 반영 · 창 440×570). **471 green**. 상세 [journal/2026-08-11.md](journal/2026-08-11.md).
 - **M3-17 프로필 교환 와이어**(`feat/m3-17-profile-wire`): Control 스트림(예약석)에 `ProfileMsg`(Request/Info/ImageChunk — **켠 필드만·미공개는 필드 부재**·이미지 256KiB 상한·32KiB 청크) · **자동 프리페치**(세션 성립 합류점 1회) · 정책 판단은 메인 단일 지점(액터는 나르기만·조립만) · **프로필 이름이 목록·제목에서 발견 이름보다 우선**(무해화 통과분만·이력은 신뢰 저장소 연동) · 이미지는 바이트 캐시만(**픽셀 렌더는 M4-5 imgdec 후** — R-5). **468 green**. ⏸ 2-PC 실기(GUI 2대 필요). 상세 [journal/2026-08-11.md](journal/2026-08-11.md).

@@ -56,6 +56,7 @@ VIAddVersionKey "LegalCopyright"  "PolyForm Noncommercial 1.0.0"
 Section "설치"
   SetOutPath "$INSTDIR"
   File "${EXENAME}"
+  File "nbeep-imgdec.exe" ; 이미지 격리 디코드(M4-5) — 없으면 아바타 이니셜 폴백
   File "nexa-beep.ico"
   File "README.md"
   File "LICENSE.md"
@@ -84,6 +85,7 @@ Section "Uninstall"
   ; ⚠️ 사용자가 만든 것은 지우지 않는다 — 설치가 놓은 파일만 이름으로 지운다.
   ;    포터블 규약(실행 파일 옆 영속물)을 생각하면 RMDir /r는 위험하다.
   Delete "$INSTDIR\${EXENAME}"
+  Delete "$INSTDIR\nbeep-imgdec.exe"
   Delete "$INSTDIR\nexa-beep.ico"
   Delete "$INSTDIR\README.md"
   Delete "$INSTDIR\LICENSE.md"

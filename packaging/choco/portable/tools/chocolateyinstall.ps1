@@ -11,3 +11,9 @@ Install-ChocolateyZipPackage `
   -Url64bit    'https://github.com/SosomLab/nexa-beep/releases/download/v@VERSION@/nexa-beep-@VERSION@-windows-x64-portable.zip' `
   -Checksum64  '@SHA_WIN_X64_PORTABLE@' -ChecksumType64 'sha256' `
   -UnzipLocation $toolsDir
+
+# nbeep-imgdec(이미지 격리 디코드 · M4-5)는 본체가 형제 경로에서 부르는 보조 실행
+# 파일이다 — 사용자 명령이 아니므로 shim을 만들지 않는다(.ignore).
+Get-ChildItem $toolsDir -Recurse -Filter 'nbeep-imgdec.exe' | ForEach-Object {
+  New-Item -ItemType File -Path "$($_.FullName).ignore" -Force | Out-Null
+}

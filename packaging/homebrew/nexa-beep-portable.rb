@@ -36,6 +36,10 @@ class NexaBeepPortable < Formula
     exe = Dir["nexa-beep", "*/nexa-beep"].first
     odie "포터블 압축물에서 nexa-beep 실행 파일을 찾지 못했습니다" if exe.nil?
     bin.install exe => "nexa-beep"
+    # 이미지 격리 디코드(M4-5) — 본체가 형제 경로에서 찾는다. 없으면 아바타 이니셜 폴백
+    # 이라 치명적이진 않지만, 있으면 같이 설치한다(구버전 압축물 호환 = 없어도 통과).
+    imgdec = Dir["nbeep-imgdec", "*/nbeep-imgdec"].first
+    bin.install imgdec => "nbeep-imgdec" unless imgdec.nil?
   end
 
   def caveats

@@ -109,7 +109,9 @@ jobs:
         run: rustup target add ${{ matrix.target }}
 
       - name: 릴리스 빌드
-        run: cargo build --release -p nexa-beep --target ${{ matrix.target }}
+        # imgdec(이미지 격리 디코드 · M4-5)은 본체의 형제 실행 파일로 동봉된다 —
+        # 없으면 아바타가 이니셜 폴백으로만 뜬다(기능 저하 · 크래시는 아님).
+        run: cargo build --release -p nexa-beep -p nbeep-imgdec --target ${{ matrix.target }}
 
       # 예산 게이트를 릴리스 산출물에도 건다 — CI에서 통과한 것과 **같은 바이너리**여야
       # 한다(NFR-B-3 ≤10MB). 여기서 넘치면 배포를 멈추는 게 맞다.
@@ -117,11 +119,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          bin="target/$TARGET/release/nexa-beep"
-          [ "${{ runner.os }}" = "Windows" ] && bin="$bin.exe"
-          size=$(wc -c < "$bin")
-          printf '%s: %d bytes (%.2f MB)\n' "$TARGET" "$size" "$(awk "BEGIN{print $size/1048576}")"
-          [ "$size" -le $((10*1024*1024)) ] || { echo "::error::$TARGET > 10MB(NFR-B-3)"; exit 1; }
+          for name in nexa-beep nbeep-imgdec; do
+            bin="target/$TARGET/release/$name"
+            [ "${{ runner.os }}" = "Windows" ] && bin="$bin.exe"
+            size=$(wc -c < "$bin")
+            printf '%s(%s): %d bytes (%.2f MB)\n' "$TARGET" "$name" "$size" "$(awk "BEGIN{print $size/1048576}")"
+            [ "$size" -le $((10*1024*1024)) ] || { echo "::error::$TARGET $name > 10MB(NFR-B-3)"; exit 1; }
+          done
 
       # ── 포터블(공통) — 압축 풀면 바로 실행(DR-4) ──
       - name: 포터블 구성
@@ -132,9 +136,11 @@ jobs:
           mkdir -p "dist/$name"
           if [ "${{ runner.os }}" = "Windows" ]; then
             cp "target/$TARGET/release/nexa-beep.exe" "dist/$name/"
+            cp "target/$TARGET/release/nbeep-imgdec.exe" "dist/$name/"
           else
             cp "target/$TARGET/release/nexa-beep" "dist/$name/"
-            chmod +x "dist/$name/nexa-beep"
+            cp "target/$TARGET/release/nbeep-imgdec" "dist/$name/"
+            chmod +x "dist/$name/nexa-beep" "dist/$name/nbeep-imgdec"
           fi
           cp README.md LICENSE.md LICENSE.ko.md "dist/$name/"
           echo "PORTABLE_NAME=$name" >> "$GITHUB_ENV"
@@ -168,6 +174,7 @@ jobs:
           set -euo pipefail
           mkdir -p build/nsis
           cp "target/$TARGET/release/nexa-beep.exe" build/nsis/
+          cp "target/$TARGET/release/nbeep-imgdec.exe" build/nsis/
           cp packaging/branding/nexa-beep.ico build/nsis/
           cp README.md LICENSE.md build/nsis/
           sed -e "s/@VERSION@/$VERSION/g" -e "s/@SLUG@/$SLUG/g" \
@@ -186,7 +193,8 @@ jobs:
           app="build/Nexa Beep.app"
           mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
           cp "target/$TARGET/release/nexa-beep" "$app/Contents/MacOS/nexa-beep"
-          chmod +x "$app/Contents/MacOS/nexa-beep"
+          cp "target/$TARGET/release/nbeep-imgdec" "$app/Contents/MacOS/nbeep-imgdec"
+          chmod +x "$app/Contents/MacOS/nexa-beep" "$app/Contents/MacOS/nbeep-imgdec"
           sed "s/@VERSION@/$VERSION/g" packaging/macos/Info.plist > "$app/Contents/Info.plist"
           # .icns는 PNG에서 만든다(iconutil = OS 내장 · 추가 도구 0).
           iconset=build/AppIcon.iconset
@@ -229,6 +237,7 @@ jobs:
                    "$pkg/usr/share/icons/hicolor/256x256/apps" \
                    "$pkg/usr/share/doc/nexa-beep"
           install -m 0755 "target/$TARGET/release/nexa-beep" "$pkg/usr/bin/nexa-beep"
+          install -m 0755 "target/$TARGET/release/nbeep-imgdec" "$pkg/usr/bin/nbeep-imgdec"
           install -m 0644 packaging/linux/nexa-beep.desktop "$pkg/usr/share/applications/nexa-beep.desktop"
           install -m 0644 packaging/branding/nexa-beep-256.png "$pkg/usr/share/icons/hicolor/256x256/apps/nexa-beep.png"
           install -m 0644 README.md LICENSE.md "$pkg/usr/share/doc/nexa-beep/"
