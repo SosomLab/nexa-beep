@@ -18,6 +18,7 @@
 mod app;
 mod cli;
 mod gate;
+mod imgdec;
 
 use cli::chat::{chat_interactive, chat_live, ChatRole};
 use cli::manual::{connect_manual, serve_manual};

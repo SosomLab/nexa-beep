@@ -17,4 +17,8 @@ workspace = true
 
 # ⚠️ 의도적으로 nbeep 크레이트 의존 0 — 신뢰 못 할 입력을 다루는 격리 프로세스라
 # 본체 코드와 링크되지 않는다(파서 취약점이 본체를 못 건드림 — docs/01 §2 · FR-S-12).
+# ★ 디코더 crate는 **여기에만** 둔다(M4-5) — 본체는 이미지 파서를 절대 링크하지 않는다.
+# 의존 기록(docs/10 §3 원장): png(MIT/Apache-2.0) · jpeg-decoder(MIT/Apache-2.0).
 [dependencies]
+png = "0.17"
+jpeg-decoder = "0.3"
