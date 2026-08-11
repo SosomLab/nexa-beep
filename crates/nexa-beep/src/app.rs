@@ -170,8 +170,10 @@ struct PeerProfile {
     email: Option<String>,
     /// 전화번호(옵트인).
     phone: Option<String>,
-    /// 캐시된 이미지 파일(`data/profiles/…` — 픽셀 렌더는 M4-5 imgdec 이후).
+    /// 캐시된 이미지 파일(`data/profiles/…`).
     image_file: Option<std::path::PathBuf>,
+    /// imgdec 격리 디코드 결과(원형 마스크 완료 · M4-5) — 목록·카드가 그린다.
+    avatar: Option<std::rc::Rc<nbeep_ui::IconImage>>,
 }
 
 /// 대화 상태 — **뷰(창)와 분리**(DR-26). 세션은 **액터 스레드**가 소유하고, 여기엔 그
@@ -1518,6 +1520,10 @@ impl App {
                     .get(&entry.peer)
                     .and_then(|p| p.name.as_ref())
                     .map(|n| n.as_str().to_string());
+                let avatar = self
+                    .peer_profiles
+                    .get(&entry.peer)
+                    .and_then(|p| p.avatar.clone());
                 let trust = self.trust.level(entry.peer);
                 // 세션 상태 점(사용자 요청): 대화 중=Active · 끊김 기록=Lost · 그 외=Idle.
                 let link = if self.conversations.contains_key(&entry.peer) {
@@ -1537,6 +1543,7 @@ impl App {
                     link,
                     xfer,
                     profile_name,
+                    avatar,
                 }
             })
             .collect();
@@ -2335,6 +2342,14 @@ impl App {
                 .as_str()
                 .to_string(),
             seed: self.identity.peer_id().as_bytes().to_vec(),
+            avatar: {
+                // 내 사진 미리보기(M4-5) — 저장된 경로를 imgdec로 격리 디코드.
+                let p = self.settings.get("profile.image_path");
+                (!p.is_empty())
+                    .then(|| crate::imgdec::avatar_from_file(std::path::Path::new(p), 256))
+                    .flatten()
+                    .map(std::rc::Rc::new)
+            },
         };
         let attrs = Window::default_attributes()
             .with_title("Nexa Beep — 프로필")
@@ -2379,6 +2394,7 @@ impl App {
             has_image: p.is_some_and(|p| p.image_file.is_some()),
             fingerprint: peer.short(),
             seed: peer.as_bytes().to_vec(),
+            avatar: p.and_then(|p| p.avatar.clone()),
         };
         if let Some((wid, _)) = self
             .windows
@@ -3180,12 +3196,22 @@ impl App {
                                                 self.settings
                                                     .set("profile.image_path", path.clone());
                                                 self.conf_mark();
+                                                // 격리 디코드(M4-5) — 미리보기 즉시 갱신.
+                                                let avatar =
+                                                    crate::imgdec::avatar_from_file(&p, 256)
+                                                        .map(std::rc::Rc::new);
+                                                let decoded = avatar.is_some();
                                                 if let Some(pv) = &mut self.profile_view {
                                                     let mut pinv = Invalidations::default();
                                                     pv.set_image_path(&path, &mut pinv);
+                                                    pv.set_avatar(avatar, &mut pinv);
                                                     let _ = pv.take_changes(); // 저장은 위에서 이미
                                                 }
-                                                self.status = format!("프로필 이미지 = {path}");
+                                                self.status = if decoded {
+                                                    format!("프로필 이미지 = {path}")
+                                                } else {
+                                                    format!("프로필 이미지 = {path} (미리보기 불가 — PNG/JPEG 아님/imgdec 부재)")
+                                                };
                                                 if let Some((pid, _)) = self
                                                     .windows
                                                     .iter()
@@ -3787,12 +3813,15 @@ impl ApplicationHandler<AppEvent> for App {
                 if let Some(n) = &display {
                     self.trust.record_name(peer, n.clone());
                 }
-                // 이미지 바이트 캐시(픽셀 렌더는 M4-5 imgdec 이후 — 지금은 보관만).
+                // 이미지 바이트 캐시 + **격리 디코드**(M4-5 — imgdec 자식 프로세스 ·
+                // 본체는 파서를 링크하지 않는다. 실패 = 이니셜 폴백).
+                let mut avatar = None;
                 let image_file = image.and_then(|bytes| {
                     let dir = self.data_dir.join("profiles");
                     std::fs::create_dir_all(&dir).ok()?;
                     let path = dir.join(format!("{}.img", peer.short()));
-                    std::fs::write(&path, bytes).ok()?;
+                    std::fs::write(&path, &bytes).ok()?;
+                    avatar = crate::imgdec::avatar_from_bytes(&bytes, 256).map(std::rc::Rc::new);
                     Some(path)
                 });
                 let has_any =
@@ -3819,6 +3848,7 @@ impl ApplicationHandler<AppEvent> for App {
                             email,
                             phone,
                             image_file,
+                            avatar,
                         },
                     );
                     self.status =

@@ -26,6 +26,8 @@ pub struct PeerInfo {
     pub fingerprint: String,
     /// 아바타 색 시드(키 지문 바이트).
     pub seed: Vec<u8>,
+    /// 프로필 사진(M4-5 imgdec — 원형 마스크 완료본). 없으면 이니셜.
+    pub avatar: Option<std::rc::Rc<crate::theme::IconImage>>,
 }
 
 /// 상대 프로필 카드 위젯.
@@ -95,7 +97,11 @@ impl Widget for PeerInfoWidget {
         // 큰 아바타(목록 40의 3배 = 120) — 가운데 상단.
         let d = self.s(120);
         let av = Rect::new(b.x + (b.w - d) / 2, b.y + self.s(20), d, d);
-        crate::avatar::draw_avatar(ctx, av, &self.info.name, &self.info.seed, 34.0);
+        if let Some(img) = &self.info.avatar {
+            ctx.image_scaled(av, img, b);
+        } else {
+            crate::avatar::draw_avatar(ctx, av, &self.info.name, &self.info.seed, 34.0);
+        }
         // 기본 이름(굵게 · 중앙).
         ctx.select_font_sized(FontSlot::Base, true, 3.0);
         let tw = ctx.text_width(&self.info.name);

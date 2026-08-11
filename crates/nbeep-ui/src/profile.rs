@@ -34,6 +34,8 @@ pub struct ProfileValues {
     pub resolved_name: String,
     /// 아바타 색 시드(내 키 지문).
     pub seed: Vec<u8>,
+    /// 내 사진(M4-5 — 호스트가 imgdec로 디코드·원형 마스크해 넘긴다). 없으면 이니셜.
+    pub avatar: Option<std::rc::Rc<crate::theme::IconImage>>,
 }
 
 /// 프로필 변경 화면 위젯.
@@ -51,6 +53,7 @@ pub struct ProfileWidget {
     image_path: String,
     resolved_name: String,
     seed: Vec<u8>,
+    avatar: Option<std::rc::Rc<crate::theme::IconImage>>,
     changes: Vec<(&'static str, String)>,
     pick_image: bool,
     closed: bool,
@@ -81,10 +84,21 @@ impl ProfileWidget {
             image_path: v.image_path.clone(),
             resolved_name: v.resolved_name.clone(),
             seed: v.seed.clone(),
+            avatar: v.avatar.clone(),
             changes: Vec::new(),
             pick_image: false,
             closed: false,
         }
+    }
+
+    /// 사진 미리보기 교체(호스트 — 이미지 선택 직후 imgdec 결과 반영).
+    pub fn set_avatar(
+        &mut self,
+        img: Option<std::rc::Rc<crate::theme::IconImage>>,
+        inv: &mut Invalidations,
+    ) {
+        self.avatar = img;
+        inv.push(self.bounds);
     }
 
     /// 바뀐 (설정 키, 값) 회수(1회성) — 호스트가 설정 적용 깔때기에 넘긴다.
@@ -251,15 +265,20 @@ impl Widget for ProfileWidget {
         // 사진을 골라도 픽셀 렌더는 M4-5(imgdec) 후 — 그때까지 이니셜 + 파일명 표기.
         let d = self.s(120);
         let av = Rect::new(b.x + (b.w - d) / 2, b.y + self.s(40), d, d);
-        let ini_src = {
-            let typed = self.name.text();
-            if typed.trim().is_empty() {
-                self.resolved_name.clone()
-            } else {
-                typed
-            }
-        };
-        crate::avatar::draw_avatar(ctx, av, &ini_src, &self.seed, 34.0);
+        if let Some(img) = &self.avatar {
+            // 선택된 사진(M4-5 imgdec — 원형 마스크 완료본) — 동그랗고 큰 미리보기.
+            ctx.image_scaled(av, img, b);
+        } else {
+            let ini_src = {
+                let typed = self.name.text();
+                if typed.trim().is_empty() {
+                    self.resolved_name.clone()
+                } else {
+                    typed
+                }
+            };
+            crate::avatar::draw_avatar(ctx, av, &ini_src, &self.seed, 34.0);
+        }
         // 이미지 행 — 라벨 + 파일명(버튼 왼쪽까지 클립).
         ctx.select_font(FontSlot::Base, false);
         ctx.text(

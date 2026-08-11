@@ -30,6 +30,8 @@ pub struct PeerRow {
     /// 프로필에 등록된 표시 이름(M3-17 — 2번째 줄 · 없으면 공백).
     /// 굵은 1번째 줄은 언제나 **기본(발견) 이름**이다(사용자 확정 08-11).
     pub profile_name: Option<String>,
+    /// 프로필 사진(M4-5 — imgdec 격리 디코드·원형 마스크 완료본). 없으면 이니셜.
+    pub avatar: Option<std::rc::Rc<crate::theme::IconImage>>,
 }
 
 /// 목록 행에 그릴 전송 진행 상태.
@@ -578,13 +580,18 @@ impl Widget for PeerListWidget {
             // 실제 사진 렌더는 M4-5(imgdec) 후 — 그때까지 프로필 이미지가 있어도 이니셜.
             let av_d = self.s(AVATAR_D);
             let av = Rect::new(r.x + self.s(8), r.y + (rh - av_d) / 2, av_d, av_d);
-            crate::avatar::draw_avatar(
-                ctx,
-                av,
-                row.entry.name.as_str(),
-                row.entry.peer.as_bytes(),
-                6.0,
-            );
+            if let Some(img) = &row.avatar {
+                // 실사진(M4-5 imgdec — 원형 마스크 완료본).
+                ctx.image_scaled(av, img, r);
+            } else {
+                crate::avatar::draw_avatar(
+                    ctx,
+                    av,
+                    row.entry.name.as_str(),
+                    row.entry.peer.as_bytes(),
+                    6.0,
+                );
+            }
             // 세션 상태 점 — 아바타 우하단에 겹쳐(메신저 관례 · 색 의미는 기존 그대로).
             let dot_d = self.s(11);
             let dot = Rect::new(
@@ -736,6 +743,7 @@ mod tests {
             link: LinkState::Idle,
             xfer: None,
             profile_name: None,
+            avatar: None,
         }
     }
     fn widget(names: &[(u8, &str)]) -> (PeerListWidget, Invalidations) {
