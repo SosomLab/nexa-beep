@@ -65,6 +65,8 @@ pub enum LinkState {
     Active,
     /// 세션 끊김(있었는데 종료) — 빨강.
     Lost,
+    /// 연결 수립 중(워커가 connect+Noise 진행 · M2-8) — 강조색.
+    Connecting,
 }
 
 /// 행 높이(px) — 임시. M3-1c 수치표에서 확정.
@@ -533,6 +535,7 @@ impl Widget for PeerListWidget {
                 LinkState::Active => theme.ok,
                 LinkState::Lost => theme.danger,
                 LinkState::Idle => theme.text_dim,
+                LinkState::Connecting => theme.accent, // 연결 중(M2-8)
             };
             ctx.fill_ellipse(dot, dot_color);
             ctx.text(

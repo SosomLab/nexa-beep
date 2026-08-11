@@ -107,6 +107,8 @@ enum AppEvent {
     XferSendDone { peer: PeerId },
     /// **수신 종단 확인**(M4-9) — 상대가 격리까지 마쳤(`ok=true`)거나 실패(`ok=false`)했다.
     XferAcked { peer: PeerId, ok: bool },
+    /// 수동 주소 연결 실패(DR-19 · M2-8 잔여 — 워커에서 돌아온다. 성공은 `Outbound`).
+    AddFailed { addr: String, why: String },
 }
 
 /// 세션 액터에 보내는 명령 — 대화 바이트와 파일 제어를 한 채널로 교대한다.
@@ -1342,6 +1344,8 @@ impl App {
                 // 세션 상태 점(사용자 요청): 대화 중=Active · 끊김 기록=Lost · 그 외=Idle.
                 let link = if self.conversations.contains_key(&entry.peer) {
                     LinkState::Active
+                } else if self.connecting.contains(&entry.peer) {
+                    LinkState::Connecting // 워커가 connect+Noise 진행 중(M2-8)
                 } else if self.closed_peers.contains(&entry.peer) {
                     LinkState::Lost
                 } else {
@@ -1392,6 +1396,9 @@ impl App {
             return; // 중복 클릭 가드
         }
         self.status = format!("연결 중… {}", self.peer_title(peer));
+        // 목록 행 점을 즉시 "연결 중"(강조색)으로(M2-8 잔여).
+        let mut inv = Invalidations::default();
+        self.refresh_rows(&mut inv);
         let transport = std::sync::Arc::clone(&self.transport);
         let identity = std::sync::Arc::clone(&self.identity);
         let proxy = self.proxy.clone();
@@ -1411,37 +1418,33 @@ impl App {
         });
     }
 
-    /// 수동 주소로 세션 수립(DR-19) — add_endpoint(발견 우회)→Noise→TOFU→대화 등록.
-    /// 반환 = 확정된 `PeerId`(주소는 힌트·신원은 지문). ⚠️ 핸드셰이크는 블로킹(LAN 수십 ms).
-    fn open_session_addr(&mut self, addr: &str) -> Result<PeerId, String> {
-        use nbeep_core::Session as _;
-        let link = self
-            .transport
-            .add_endpoint(addr)
-            .map_err(|e| format!("{e:?}"))?;
-        let noise = nbeep_crypto::NoiseSession::initiate(link, &self.identity)
-            .map_err(|e| e.to_string())?;
-        let est =
-            nbeep_core::TrustedSession::wrap(noise, &mut self.trust).map_err(|e| e.to_string())?;
-        let peer = est.session.peer();
-        self.install_conversation(nbeep_core::MuxSession::new(est.session));
-        Ok(peer)
-    }
-
-    /// 수동 입력 확정 — 주소로 연결하고 대화를 연다(모달에서 형식 검증 후 호출 · M3-16).
-    fn commit_manual_add(&mut self, addr: String, el: &ActiveEventLoop) {
+    /// 수동 입력 확정(DR-19 · 모달에서 형식 검증 후 호출) — **워커 스레드**에서
+    /// add_endpoint(해석·순차 연결·최대 수 초)+Noise를 수행한다(M2-8 잔여 이관 08-11 —
+    /// 죽은 주소를 넣어도 UI가 멈추지 않는다). 성공 = `AppEvent::Outbound`(발견 경로와
+    /// 같은 합류점 — TOFU 판정·대화 등록·뷰 열기) · 실패 = `AppEvent::AddFailed`.
+    fn commit_manual_add(&mut self, addr: String, _el: &ActiveEventLoop) {
         let addr = addr.trim().to_string();
         if addr.is_empty() {
             return;
         }
-        match self.open_session_addr(&addr) {
-            Ok(peer) => {
-                self.status = format!("수동 연결 성공 — {}", peer.short());
-                // 대화 뷰 열기(이미 conversation 등록됨 → ensure는 복원 경로).
-                self.activate(peer, el);
-            }
-            Err(e) => self.status = format!("수동 연결 실패({addr}): {e}"),
-        }
+        self.status = format!("연결 중… {addr}");
+        let transport = std::sync::Arc::clone(&self.transport);
+        let identity = std::sync::Arc::clone(&self.identity);
+        let proxy = self.proxy.clone();
+        std::thread::spawn(move || {
+            let r = transport
+                .add_endpoint(&addr)
+                .map_err(|e| format!("{e:?}"))
+                .and_then(|link| {
+                    nbeep_crypto::NoiseSession::initiate(link, &identity).map_err(|e| e.to_string())
+                });
+            let _ = match r {
+                Ok(session) => proxy.send_event(AppEvent::Outbound {
+                    session: Box::new(InboundSession { session }),
+                }),
+                Err(why) => proxy.send_event(AppEvent::AddFailed { addr, why }),
+            };
+        });
         if let Some(mid) = self.main_id {
             self.request_redraw(mid);
         }
@@ -2918,6 +2921,13 @@ impl ApplicationHandler<AppEvent> for App {
                 self.status = format!("연결 실패({}): {why}", self.peer_title(peer));
                 let mut inv = Invalidations::default();
                 self.refresh_rows(&mut inv);
+                if let Some(mid) = self.main_id {
+                    self.request_redraw(mid);
+                }
+            }
+            AppEvent::AddFailed { addr, why } => {
+                // 수동 주소 연결 실패(워커에서 복귀 · M2-8 잔여) — 주소로 알린다(피어 미확정).
+                self.status = format!("수동 연결 실패({addr}): {why}");
                 if let Some(mid) = self.main_id {
                     self.request_redraw(mid);
                 }
