@@ -496,6 +496,8 @@ enum Role {
     Sending(PeerId),
     /// 수신 승인 — 제안 정보를 보여 주고 결정을 받는 창(타임아웃 = 취소).
     Approve(PeerId),
+    /// 주소 직접 입력 모달(DR-19 · M3-16 — `⌘/Ctrl+K`·툴바 +).
+    AddEndpoint,
 }
 
 /// 에코 봇 — 버스에 실물 신원으로 참여해 수신 세션을 받고, Chat 메시지를 에코한다.
@@ -630,6 +632,8 @@ struct App {
     icon: Option<winit::window::Icon>,
     /// 파일 선택 모달 뷰(Choose… — 열려 있을 때만 Some).
     picker_view: Option<nbeep_ui::TreeView>,
+    /// 주소 입력 모달 뷰(DR-19 · M3-16 — 열려 있을 때만 Some).
+    addr_view: Option<nbeep_ui::AddrPromptWidget>,
     /// About 뷰(열려 있을 때만 Some).
     about_view: Option<AboutWidget>,
     quarantine_view: Option<nbeep_ui::QuarantineWidget>,
@@ -699,8 +703,6 @@ struct App {
     shift_down: bool,
     /// 세션 액터가 GUI를 깨우는 통로(M2-7).
     proxy: winit::event_loop::EventLoopProxy<AppEvent>,
-    /// 수동 엔드포인트 입력 중 버퍼(DR-19 · `⌘/Ctrl+K`). None = 입력 아님.
-    adding: Option<String>,
     /// 종료 신호(R-16 · FR-P-7) — SIGINT/SIGTERM 시 el.exit() → Drop 체인이 GOODBYE·정리.
     shutdown: nbeep_plat::shutdown::Shutdown,
 }
@@ -1426,10 +1428,9 @@ impl App {
         Ok(peer)
     }
 
-    /// 수동 입력 확정 — 주소로 연결하고 대화를 연다.
+    /// 수동 입력 확정 — 주소로 연결하고 대화를 연다(모달에서 형식 검증 후 호출 · M3-16).
     fn commit_manual_add(&mut self, addr: String, el: &ActiveEventLoop) {
         let addr = addr.trim().to_string();
-        self.adding = None;
         if addr.is_empty() {
             return;
         }
@@ -1856,6 +1857,57 @@ impl App {
         self.request_redraw(id);
     }
 
+    /// 주소 직접 입력 모달을 연다(DR-19 · M3-16 — `⌘/Ctrl+K`·툴바 +). 이미 있으면 포커스.
+    fn open_add_endpoint(&mut self, el: &ActiveEventLoop) {
+        if let Some((aid, _)) = self
+            .windows
+            .iter()
+            .find(|(_, e)| e.role == Role::AddEndpoint)
+        {
+            if let Some(e) = self.windows.get(aid) {
+                e.window.focus_window();
+            }
+            return;
+        }
+        let attrs = Window::default_attributes()
+            .with_title("Nexa Beep — 주소로 연결")
+            .with_inner_size(winit::dpi::LogicalSize::new(380.0, 150.0))
+            .with_resizable(false)
+            .with_window_icon(self.icon.clone());
+        let window = Rc::new(el.create_window(attrs).unwrap());
+        window.set_ime_allowed(true);
+        let scale = window.scale_factor() as f32;
+        let context = softbuffer::Context::new(window.clone()).unwrap();
+        let surface = SbSurface::new(&context, window.clone()).unwrap();
+        let id = window.id();
+        self.windows.insert(
+            id,
+            WinEntry {
+                role: Role::AddEndpoint,
+                window,
+                surface,
+                cursor: (0, 0),
+                scale,
+            },
+        );
+        self.addr_view = Some(nbeep_ui::AddrPromptWidget::new());
+        self.layout_window(id);
+        self.request_redraw(id);
+    }
+
+    /// 주소 입력 모달을 닫는다.
+    fn close_add_endpoint(&mut self) {
+        self.addr_view = None;
+        if let Some((aid, _)) = self
+            .windows
+            .iter()
+            .find(|(_, e)| e.role == Role::AddEndpoint)
+        {
+            let aid = *aid;
+            self.windows.remove(&aid);
+        }
+    }
+
     /// 설정 변경 즉시 적용(DR-24 — 저장 버튼 없음).
     /// 설정 값에서 영역별 글꼴 설정을 만든다(크기 키 s/m/l/xl → px).
     fn fonts_from_settings(settings: &SettingsState) -> nbeep_ui::FontPrefs {
@@ -2119,6 +2171,12 @@ impl App {
                     av.set_bounds(Rect::new(0, 0, w, h), &mut inv);
                 }
             }
+            Role::AddEndpoint => {
+                if let Some(av) = &mut self.addr_view {
+                    av.set_scale(scale, &mut inv);
+                    av.set_bounds(Rect::new(0, 0, w, h), &mut inv);
+                }
+            }
             Role::Quarantine => {
                 if let Some(qv) = &mut self.quarantine_view {
                     qv.set_scale(scale, &mut inv);
@@ -2291,12 +2349,8 @@ impl App {
                                 self.status =
                                     nbeep_core::t(nbeep_core::Msg::RefreshList).to_string();
                             }
-                            // 직접 등록(DR-19 수동 엔드포인트) — ⌘/Ctrl+K와 같은 입력 흐름.
-                            "add" => {
-                                self.adding = Some(String::new());
-                                self.status =
-                                    "주소 입력(host:port) · Enter 연결 · Esc 취소: ".into();
-                            }
+                            // 직접 등록(DR-19 수동 엔드포인트) — 별도 모달 창(M3-16).
+                            "add" => self.open_add_endpoint(el),
                             "quarantine" => self.open_quarantine(el),
                             "gallery" => self.open_gallery(el),
                             _ => {}
@@ -2387,6 +2441,23 @@ impl App {
                     }
                 }
             }
+            Role::AddEndpoint => {
+                let (mut submit, mut cancel) = (None, false);
+                if let Some(av) = &mut self.addr_view {
+                    av.on_event(&ev, &mut inv);
+                    submit = av.take_submit();
+                    cancel = av.take_cancel();
+                }
+                if let Some(addr) = submit {
+                    self.close_add_endpoint();
+                    self.commit_manual_add(addr, el); // 워커 이관은 M2-8 잔여 — 지금은 기존 경로
+                } else if cancel {
+                    self.close_add_endpoint();
+                    if let Some(mid) = self.main_id {
+                        self.request_redraw(mid);
+                    }
+                }
+            }
             Role::Approve(peer) => {
                 let mut choice = None;
                 if let Some(pv) = self.approve_view.get_mut(&peer) {
@@ -2473,32 +2544,14 @@ impl App {
                 ctx.select_font(nbeep_ui::FontSlot::Status, false);
                 let pad = (8.0 * entry.scale).round() as i32;
                 let dy = (bar_h - (14.0 * entry.scale) as i32) / 2;
-                let bar_text = match &self.adding {
-                    Some(buf) => format!("주소(host:port): {buf}"),
-                    None => self.status.clone(),
-                };
                 ctx.text_opaque(
                     bar.x + pad,
                     bar.y + dy,
                     bar,
-                    &bar_text,
+                    &self.status,
                     theme.text_dim,
                     theme.chrome_bg,
                 );
-                // 주소 입력 중 — 문자 "▏" 대신 **Beam 캐럿**(글자 실측 높이 · 08-10).
-                if self.adding.is_some() {
-                    let tw = ctx.text_width(&bar_text);
-                    let ch = ctx.text_height();
-                    ctx.fill_rect(
-                        Rect::new(
-                            bar.x + pad + tw + (2.0 * entry.scale) as i32,
-                            bar.y + (bar_h - ch) / 2,
-                            ((2.0 * entry.scale).round() as i32).max(1),
-                            ch,
-                        ),
-                        theme.accent,
-                    );
-                }
             }
             Role::Chat(peer) => {
                 if let Some(chat) = self.chats.get(&peer) {
@@ -2522,6 +2575,11 @@ impl App {
             }
             Role::About => {
                 if let Some(av) = &self.about_view {
+                    av.paint(&mut ctx, &theme);
+                }
+            }
+            Role::AddEndpoint => {
+                if let Some(av) = &self.addr_view {
                     av.paint(&mut ctx, &theme);
                 }
             }
@@ -3146,6 +3204,7 @@ impl ApplicationHandler<AppEvent> for App {
                         Role::Gallery => self.gallery_view = None,
                         Role::Picker => self.picker_view = None,
                         Role::About => self.about_view = None,
+                        Role::AddEndpoint => self.addr_view = None,
                         Role::Quarantine => self.quarantine_view = None,
                         Role::Sending(peer) => self.cancel_send(peer, false),
                         Role::Approve(peer) => {
@@ -3369,52 +3428,14 @@ impl ApplicationHandler<AppEvent> for App {
                                 self.answer_offer(id, false);
                                 return;
                             }
+                            // 주소 직접 입력 = 별도 모달 창(M3-16 · 인라인 상태바 입력 대체).
                             "k" | "K" => {
-                                self.adding = Some(String::new());
-                                self.status =
-                                    "주소 입력(host:port) · Enter 연결 · Esc 취소: ".into();
-                                if let Some(mid) = self.main_id {
-                                    self.request_redraw(mid);
-                                }
+                                self.open_add_endpoint(el);
                                 return;
                             }
                             _ => {}
                         }
                     }
-                }
-                // 수동 입력 모드 — 문자/Enter/Esc를 목록이 아니라 주소 버퍼로.
-                if self.adding.is_some() {
-                    match &event.logical_key {
-                        WKey::Named(NamedKey::Enter) => {
-                            let addr = self.adding.take().unwrap_or_default();
-                            self.commit_manual_add(addr, el);
-                        }
-                        WKey::Named(NamedKey::Escape) => {
-                            self.adding = None;
-                            self.status = "수동 추가 취소".into();
-                            if let Some(mid) = self.main_id {
-                                self.request_redraw(mid);
-                            }
-                        }
-                        WKey::Named(NamedKey::Backspace) => {
-                            if let Some(buf) = self.adding.as_mut() {
-                                buf.pop();
-                            }
-                            if let Some(mid) = self.main_id {
-                                self.request_redraw(mid);
-                            }
-                        }
-                        WKey::Character(t) => {
-                            if let Some(buf) = self.adding.as_mut() {
-                                buf.push_str(t);
-                            }
-                            if let Some(mid) = self.main_id {
-                                self.request_redraw(mid);
-                            }
-                        }
-                        _ => {}
-                    }
-                    return;
                 }
                 let key = match &event.logical_key {
                     WKey::Named(NamedKey::ArrowUp) => Some(Key::Up),
@@ -3650,12 +3671,12 @@ pub(crate) fn run(mode: WindowMode, live: bool) {
         )
         .ok(),
         picker_view: None,
+        addr_view: None,
         ime_composing: false,
         pending_jamo: None,
         primary_down: false,
         shift_down: false,
         proxy,
-        adding: None,
         shutdown,
     };
     app.reload_faces(); // 고정폭 등 슬롯 얼굴 초기 로드
