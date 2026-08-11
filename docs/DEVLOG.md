@@ -5,6 +5,10 @@
 
 ---
 
+## 2026-08-12
+
+- **v0.1.4 릴리스 — 프로필·아바타·imgdec·영속 일습**(main 직커밋+태그): 08-11 하루치 공개 · ★ **imgdec 5타깃 동봉 첫 CI 검증 통과**(windows-x64 포터블 zip에 `nbeep-imgdec.exe` 362KB 실재·체크섬 일치·자산 14종) · winget/choco 잠금 유지. 상세 [journal/2026-08-12.md](journal/2026-08-12.md).
+
 ## 2026-08-11
 
 - **M4-5ⓑ 수신 이미지 미리보기**(`feat/m4-5-preview`): `.beepq` 원본 재조립→imgdec(본체 픽셀 생성 없음 그대로) — **격리함 36px 썸네일**(QRow.thumb) + **스레드 인라인 18px**(XferLine.thumb · Done 항목 부착 · XferDone에 qpath) · 1MiB 상한·비이미지 조용히 없음. 472 green. 상세 [journal/2026-08-11.md](journal/2026-08-11.md).
