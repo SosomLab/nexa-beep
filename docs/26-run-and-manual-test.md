@@ -211,6 +211,108 @@ docker run --rm --network beepnet -it --init -v "$B:/nexa-beep:ro" \
 
 정리: `docker rm -f live_p srv_a && docker network rm beepnet`
 
+### 4-3. ★ 표준 케이스 — 맥 GUI ↔ Docker Linux 인터랙티브 (2026-08-13 실측)
+
+> **이 절은 "양쪽을 각자 빌드해서, 맥은 창으로 · 리눅스는 콘솔로 붙는" 표준 왕복 시험이다.**
+> 앞의 §4-1(stdin)·§4-2(포트)에서 하나씩 확인한 것을 한 번에 꿴다.
+
+#### ① 빌드 — 양쪽 모두 **`nbeep-imgdec`까지**
+
+```bash
+# 맥(또는 Windows) 호스트
+cargo build --release -p nexa-beep -p nbeep-imgdec
+
+# 리눅스(Docker) — 호스트 target/ 과 섞이지 않게 CARGO_TARGET_DIR 을 따로 준다
+docker run --rm -v "$PWD":/src -w /src -e CARGO_TARGET_DIR=/src/.docker-target \
+  rust:1-slim bash -c 'apt-get update -qq && apt-get install -y -qq pkg-config >/dev/null; \
+  cargo build --release -p nexa-beep -p nbeep-imgdec'
+```
+
+**`nbeep-imgdec`는 왜 같이 빌드하는가 — 빠뜨려도 오류가 안 난다.**
+본체는 이미지 파서를 링크하지 않는다(R-5 · 격리 디코드). 이미지 미리보기·아바타는 전부
+**자식 프로세스 `nbeep-imgdec`**가 처리하고, 본체는 그것을 `current_exe()`의 **바로 옆 디렉터리**에서
+찾는다([`imgdec.rs`](../crates/nexa-beep/src/imgdec.rs)). 없으면 **조용히 이니셜 폴백** — 경고 한 줄 없다.
+그래서 "이미지가 안 보인다"가 버그로 오인되기 쉽다. **없으면 이미지 기능만 죽는다**가 정확한 표현이고,
+채팅·파일 전송 자체는 멀쩡히 돈다.
+
+→ 컨테이너에는 **파일 하나가 아니라 디렉터리째** 마운트한다. 그래야 둘이 나란히 놓인다.
+
+#### ② 맥 — GUI 를 정상 상태로 띄운다
+
+```bash
+./target/release/nexa-beep --window --live
+```
+
+#### ③ 리눅스 — 포트를 바꿔 인터랙티브로 띄운다
+
+```bash
+cd <저장소 루트>   # ★ $PWD 가 저장소여야 한다. 아래 ⚠️ 참조
+
+docker run -dit --name beep_lin --init -p 43211:43211 \
+  -v "$PWD/.docker-target/release:/opt/beep:ro" \
+  debian:stable-slim /opt/beep/nexa-beep --chat-live --port 43211 테스트단말
+
+docker attach beep_lin      # 콘솔 접속 — 여기서 타이핑하면 전송
+```
+
+`--chat-live --port 43211 테스트단말`처럼 **옵션이 이름보다 앞에 와도 된다**(08-13 수정).
+그 전에는 `--port`를 이름으로 먹어 표시 이름이 `터미널`로 떨어졌다.
+
+떠야 하는 두 줄:
+
+```
+[대기] '테스트단말'(me=9c37bba8) 로 발견 광고 중 …
+[포트] 세션 수신 43211 — 발견이 닿지 않는 상대에겐 `--chat-connect <내IP>:43211` 로 알려준다
+```
+
+#### ④ 잇는다 — **발견은 안 된다, IP로 붙는다**
+
+맥 호스트와 Docker 브리지는 **브로드캐스트 도메인이 다르다.** 그래서 ③의 광고는 맥 GUI 목록에
+뜨지 않는다. 정상이다(§4 전체가 IP 직접인 이유). 맥 GUI 목록의 **`+`** 에 아래를 넣는다:
+
+```
+127.0.0.1:43211          # -p 로 게시했으므로 호스트 루프백으로 닿는다
+```
+
+반대로 리눅스에서 맥을 부를 때는 `--chat-connect host.docker.internal:47200`.
+
+#### ⑤ 실측 결과 (2026-08-13)
+
+| 확인 | 결과 |
+| --- | --- |
+| 리눅스 빌드 산출물 | `nexa-beep` 2.96MB · `nbeep-imgdec` 589KB (linux/amd64) |
+| 자식 바이너리 동거 | `docker exec beep_lin ls /opt/beep` → 둘 다 존재 |
+| 포트 고정 | 로그 `[포트] 세션 수신 43211` |
+| 옵션 선행 인자 | 표시 이름 `테스트단말` 정상(수정 후) |
+| 맥 → 리눅스 | `4b00d4d1> 맥에서 보냄` |
+| 리눅스 → 맥 | `a3ae162a> 리눅스 콘솔에서 보냄` |
+| 프로필 교환 | 양방향 자동 프리페치 · 이미지 70000B 수신 완료 |
+
+#### ⑥ 걸린 곳 두 군데 (실제로 밟았다)
+
+**⚠️ `[FATAL tini] exec /nexa-beep failed: Permission denied`**
+`$PWD`가 저장소가 아닐 때 난다(예: 홈에서 실행). Docker는 **없는 호스트 경로를 마운트하면
+빈 디렉터리를 만들어 준다** — 그래서 `/nexa-beep`이 파일이 아니라 디렉터리가 되고 exec가 실패한다.
+바이너리가 깨진 게 아니다.
+
+```bash
+ls ~/.docker-target && rm -rf ~/.docker-target   # 잘못 생긴 빈 디렉터리 치우기
+cd <저장소 루트>                                  # 그리고 여기서 다시
+```
+
+**⚠️ `cannot attach stdin to a TTY-enabled container because stdin is not a terminal`**
+`-dit`로 띄운 컨테이너에 **파이프로** 붙으려 할 때 난다. 사람이 터미널에서 `docker attach`를
+직접 치면 문제없다. **자동화(CI·스크립트)라면 `-t`를 빼고 `-di`로 띄운다** — 그러면 파이프 입력이 통한다.
+
+```bash
+docker run -di --name beep_lin --init -p 43211:43211 \
+  -v "$PWD/.docker-target/release:/opt/beep:ro" \
+  debian:stable-slim /opt/beep/nexa-beep --chat-live --port 43211 테스트단말
+printf '리눅스 콘솔에서 보냄\n' | docker attach --sig-proxy=false beep_lin
+```
+
+정리: `docker rm -f beep_lin`
+
 ## 5. 시나리오 D — Docker 2노드 (Linux↔Linux 발견, 자동)
 
 컨테이너끼리는 같은 브리지 네트워크에서 **멀티캐스트 발견이 된다**(발견 테스트베드).

@@ -643,7 +643,14 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
     // ── 입력 루프 ──
     // TTY면 **raw 모드**로 키를 직접 읽어 Shift+Enter(줄바꿈)를 Enter(전송)와 구분한다.
     // 파이프 입력(자동화)이면 기존 줄 단위 경로를 그대로 쓴다.
-    let raw = nbeep_plat::term::RawTerm::enter();
+    //
+    // ★ **폴링 모드 + 종료 플래그**(실기 08-13 — kitty 프로토콜 누수): 그전엔 블로킹
+    // raw였고 connect/live 경로는 시그널 핸들러도 없어서, 대화 중 Ctrl+C = 즉사 =
+    // `Drop` 생략 = **터미널이 kitty 모드로 남았다**(그 pane의 Ctrl+C가 `9;5u`로 찍힘).
+    // wait_with_quit과 같은 패턴으로 — 신호는 플래그로 받고, 나가는 길은 언제나
+    // 정리(Drop → 복원)를 지난다.
+    let shutdown = nbeep_plat::shutdown::install();
+    let raw = nbeep_plat::term::RawTerm::enter_polling();
     if raw.is_raw() {
         use nbeep_plat::term::{parse_key, TermKey};
         use std::io::{Read as _, Write as _};
@@ -653,8 +660,13 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
         let mut line = String::new();
         let mut chunk = [0u8; 256];
         'outer: loop {
+            if shutdown.requested() {
+                println!("\r[종료] 중단합니다.");
+                break;
+            }
             let n = match stdin.read(&mut chunk) {
-                Ok(0) | Err(_) => break,
+                Ok(0) => continue,  // 폴링 타임아웃(0.1초) — 종료 신호를 다시 본다
+                Err(_) => continue, // EINTR 등 — 위에서 플래그를 다시 본다
                 Ok(n) => n,
             };
             pending.extend_from_slice(&chunk[..n]);

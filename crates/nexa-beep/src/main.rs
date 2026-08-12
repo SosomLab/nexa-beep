@@ -78,12 +78,6 @@ fn main() {
         return;
     }
     if let Some(pos) = args.iter().position(|a| a == "--chat-live") {
-        // 이름은 위치 인자지만 `--port`가 바로 뒤에 올 수 있다 — 옵션을 이름으로 먹지 않는다.
-        let name = args
-            .get(pos + 1)
-            .filter(|v| !v.starts_with("--"))
-            .cloned()
-            .unwrap_or_else(|| "터미널".into());
         // 포트 지정(08-13) — 창 모드 `--port`와 같은 규약. 생략·0이면 임의 포트.
         let port = args
             .iter()
@@ -91,6 +85,24 @@ fn main() {
             .and_then(|i| args.get(i + 1))
             .and_then(|v| v.parse().ok())
             .unwrap_or(0);
+        // 이름은 위치 인자다. ⚠️ `--chat-live --port 43211 테스트단말`처럼 **옵션이 먼저 와도**
+        // 이름을 찾아야 한다(08-13 사용자 지적) — 옵션과 그 값을 건너뛰고 첫 일반 토큰을 쓴다.
+        let name = {
+            let mut it = args[pos + 1..].iter();
+            let mut found = None;
+            while let Some(a) = it.next() {
+                if a.starts_with("--") {
+                    // 값을 받는 옵션이면 그 값까지 건너뛴다.
+                    if a == "--port" {
+                        it.next();
+                    }
+                    continue;
+                }
+                found = Some(a.clone());
+                break;
+            }
+            found.unwrap_or_else(|| "터미널".into())
+        };
         chat_live(&name, port);
         return;
     }
