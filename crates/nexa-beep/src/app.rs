@@ -3,7 +3,7 @@
 //! 조립 지점의 창 계층. 도메인은 `nbeep-core`, 렌더는 `nbeep-ui`가 갖고 여기는
 //! **winit ↔ 위젯 번역 + 창 생명주기**만 맡는다. 창 코드의 `nbeep-plat` 이관은 M3-2.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::num::NonZeroU32;
 use std::rc::Rc;
 use std::time::Instant;
@@ -78,6 +78,9 @@ enum AppEvent {
     Outbound {
         session: Box<InboundSession>,
         via_addr: Option<String>,
+        /// **클릭한 상대**(연결 시도 래치를 넣을 때 쓴 키 — `ConnectLatch` 참조).
+        /// 핸드셰이크로 밝혀진 신원과 다를 수 있어(주소 재사용) 따로 나른다. 수동 등록은 `None`.
+        intent: Option<PeerId>,
     },
     /// 아웃바운드 연결 실패(M2-8) — 죽은 상대를 클릭해도 UI는 살아 있고 이것만 온다.
     ConnectFailed { peer: PeerId, why: String },
@@ -155,6 +158,41 @@ enum SessionCmd {
     /// Control 스트림으로 보낼 인코딩된 프레임들(프로필 요청/응답 — M3-17).
     /// 내용 구성은 메인 스레드 몫(공개 정책 판단 단일 지점) — 액터는 나르기만 한다.
     Control(Vec<Vec<u8>>),
+}
+
+/// 연결 시도 래치(M2-8 중복 클릭 가드) — **넣은 키로 뺀다.**
+///
+/// ⚠️ 08-13에 이걸로 한 번 물렸다. 넣을 때는 **클릭한 상대**(목록 행의 `PeerId`)로 넣고
+/// 뺄 때는 **핸드셰이크로 밝혀진 상대**로 뺐는데, 이 둘은 **다를 수 있다.** 수동 주소
+/// 폴백(`manual_addrs`)은 *주소*로 붙기 때문에, 그 주소의 상대가 신원을 새로 만들면
+/// (컨테이너 재기동 — 실측: 실행마다 `me=`가 바뀐다) 성립한 세션은 **다른 `PeerId`** 다.
+/// 그러면 클릭한 쪽 키가 래치에 영원히 남아 그 행은 **다시는 열리지 않는다**
+/// ("연결 중… (이미 시도 중)"이 계속 뜬다 — 재시작 전까지 회복 불가).
+#[derive(Debug, Default)]
+struct ConnectLatch(std::collections::HashSet<PeerId>);
+
+impl ConnectLatch {
+    /// 시도 시작 — 이미 진행 중이면 `false`(중복 클릭 가드).
+    fn begin(&mut self, peer: PeerId) -> bool {
+        self.0.insert(peer)
+    }
+
+    /// 시도 종료 — **클릭한 상대**(`intent`)와 **성립한 상대**(`actual`) 둘 다 해제한다.
+    /// 둘을 함께 지우는 것이 이 타입의 존재 이유다(위 ⚠️).
+    fn finish(&mut self, intent: Option<PeerId>, actual: Option<PeerId>) {
+        for p in [intent, actual].into_iter().flatten() {
+            self.0.remove(&p);
+        }
+    }
+
+    fn contains(&self, peer: PeerId) -> bool {
+        self.0.contains(&peer)
+    }
+
+    /// 신원 교체(백업 복원 등) — 진행 중 시도는 전부 무효.
+    fn clear(&mut self) {
+        self.0.clear();
+    }
 }
 
 /// 인바운드 세션 봉투 — `AppEvent`가 Debug라야 해서 수동 Debug.
@@ -764,7 +802,7 @@ struct App {
     /// `Arc` = 연결 수립 워커(M2-8)와 공유 — 죽은 상대 연결이 UI 스레드를 막지 않는다.
     transport: std::sync::Arc<dyn nbeep_net::Transport + Send + Sync>,
     /// 연결 수립 중인 상대(M2-8 — 중복 클릭 가드).
-    connecting: HashSet<PeerId>,
+    connecting: ConnectLatch,
     discovery: std::sync::mpsc::Receiver<nbeep_net::DiscoveryEvent>,
     table: nbeep_core::PeerTable,
     /// TOFU 신뢰 저장 — 파일 영속(M2-5a · 변경 즉시 암호화 저장 · R-17 해소).
@@ -1560,7 +1598,7 @@ impl App {
                 // 세션 상태 점(사용자 요청): 대화 중=Active · 끊김 기록=Lost · 그 외=Idle.
                 let link = if self.conversations.contains_key(&entry.peer) {
                     LinkState::Active
-                } else if self.connecting.contains(&entry.peer) {
+                } else if self.connecting.contains(entry.peer) {
                     LinkState::Connecting // 워커가 connect+Noise 진행 중(M2-8)
                 } else if self.closed_peers.contains(&entry.peer) {
                     LinkState::Lost
@@ -1620,7 +1658,7 @@ impl App {
     /// 인바운드와 대칭으로 워커가 세션을 만들어 `AppEvent::Outbound`로 돌아오고,
     /// **TOFU 판정은 지금처럼 메인 스레드**(TrustStore가 여기 있다).
     fn start_connect(&mut self, peer: PeerId) {
-        if !self.connecting.insert(peer) {
+        if !self.connecting.begin(peer) {
             self.status = format!("연결 중… {} (이미 시도 중)", self.peer_title(peer));
             return; // 중복 클릭 가드
         }
@@ -1649,6 +1687,7 @@ impl App {
                 Ok(session) => proxy.send_event(AppEvent::Outbound {
                     session: Box::new(InboundSession { session }),
                     via_addr: None, // 수동 주소는 이미 기억돼 있다(성공 시 갱신 불요)
+                    intent: Some(peer), // ★ 래치는 **넣은 키로** 뺀다
                 }),
                 Err(why) => proxy.send_event(AppEvent::ConnectFailed { peer, why }),
             };
@@ -1679,6 +1718,7 @@ impl App {
                 Ok(session) => proxy.send_event(AppEvent::Outbound {
                     session: Box::new(InboundSession { session }),
                     via_addr: Some(addr), // 성공한 수동 주소 — 재연결용 기억(④)
+                    intent: None,         // 수동 등록은 래치를 쓰지 않는다
                 }),
                 Err(why) => proxy.send_event(AppEvent::AddFailed { addr, why }),
             };
@@ -4021,11 +4061,15 @@ impl ApplicationHandler<AppEvent> for App {
                     self.request_redraw(id);
                 }
             }
-            AppEvent::Outbound { session, via_addr } => {
+            AppEvent::Outbound {
+                session,
+                via_addr,
+                intent,
+            } => {
                 // 워커가 만든 아웃바운드 세션(M2-8) — TOFU 판정은 여기(메인 · TrustStore 소유).
                 use nbeep_core::Session as _;
                 let peer = session.session.peer();
-                self.connecting.remove(&peer);
+                self.connecting.finish(intent, Some(peer));
                 if let Some(addr) = via_addr {
                     // 수동 등록 성공(DR-19) — 세션이 끊겨도 이 주소로 재연결한다(④).
                     self.manual_addrs.insert(peer, addr);
@@ -4060,7 +4104,7 @@ impl ApplicationHandler<AppEvent> for App {
                 }
             }
             AppEvent::ConnectFailed { peer, why } => {
-                self.connecting.remove(&peer);
+                self.connecting.finish(Some(peer), None);
                 self.status = format!("연결 실패({}): {why}", self.peer_title(peer));
                 let mut inv = Invalidations::default();
                 self.refresh_rows(&mut inv);
@@ -4905,7 +4949,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         identity,
         seq: nbeep_core::Sequencer::new(),
         transport,
-        connecting: HashSet::new(),
+        connecting: ConnectLatch::default(),
         discovery,
         table: nbeep_core::PeerTable::new(60_000),
         trust,
@@ -5016,4 +5060,55 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
     app.reload_faces(); // 고정폭 등 슬롯 얼굴 초기 로드
     app.apply_boot_settings(); // 영속 설정 → 파생 런타임 상태(테마·정책 등 · M3-15)
     event_loop.run_app(&mut app).unwrap();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ConnectLatch;
+    use nbeep_core::PeerId;
+
+    fn pid(b: u8) -> PeerId {
+        let mut a = [0u8; 32];
+        a[0] = b;
+        PeerId::from_bytes(a)
+    }
+
+    /// ★ 실패 재현(08-13) — **성립한 상대로만 빼면 클릭한 상대가 영원히 남는다.**
+    ///
+    /// 수동 주소 폴백은 *주소*로 붙으므로, 그 주소의 상대가 신원을 새로 만들면
+    /// (컨테이너 재기동 — 실측: 실행마다 `me=`가 바뀐다) 성립 세션은 다른 `PeerId`다.
+    #[test]
+    fn clearing_by_actual_only_strands_the_clicked_peer() {
+        let (clicked, actual) = (pid(1), pid(2)); // 주소는 같고 신원만 바뀐 상황
+        let mut latch = ConnectLatch::default();
+        assert!(latch.begin(clicked));
+        latch.finish(None, Some(actual)); // ← 옛 동작
+        assert!(
+            latch.contains(clicked),
+            "이게 남으면 그 행은 다시는 안 열린다"
+        );
+        assert!(!latch.begin(clicked), "다음 클릭 = '이미 시도 중'");
+    }
+
+    /// 회귀 방지 — `intent`를 함께 넘기면 래치가 풀린다.
+    #[test]
+    fn clearing_by_intent_releases_the_clicked_peer() {
+        let (clicked, actual) = (pid(1), pid(2));
+        let mut latch = ConnectLatch::default();
+        assert!(latch.begin(clicked));
+        latch.finish(Some(clicked), Some(actual)); // ← 새 동작
+        assert!(!latch.contains(clicked));
+        assert!(latch.begin(clicked), "다시 클릭하면 또 시도된다");
+    }
+
+    /// 연결 실패도 같은 통로로 풀린다(intent만 있고 성립 세션은 없다).
+    #[test]
+    fn connect_failure_releases_the_latch() {
+        let p = pid(7);
+        let mut latch = ConnectLatch::default();
+        assert!(latch.begin(p));
+        assert!(!latch.begin(p), "진행 중 중복 클릭은 막는다");
+        latch.finish(Some(p), None);
+        assert!(latch.begin(p));
+    }
 }
