@@ -7,6 +7,7 @@
 
 ## 2026-08-12
 
+- **전체 진행 점검 + 문서 일괄 현행화**(저장소 6문서 + 위키 6면 · 코드 변경 0): MILESTONES 개요표가 **08-08에 멈춰 있던 것**을 재작성 · **05 리스크 등록부 상태 6건 정정**(R-12·R-17·R-19 해소 / R-5·R-16 🚧 / R-8에 Windows RSS 관측) · 문서 홈 색인 수치·**ADR-0004/0006을 Proposed로 정정**(Accepted 오기) · **루트 README가 "M-1 설계 단계"라고 적고 있던 것**을 v0.1.4 현황+설치로 교체 · CLAUDE.md 현행화 · 위키 push(`5256bce`). ★ 정정의 공통 원인 = **"설계 확정"과 "구현 완료"의 혼선**(양방향 오기). 472 green 유지. 상세 [journal/2026-08-12.md](journal/2026-08-12.md).
 - **Windows 전체 빌드·실기 기동 점검**(이 Windows PC): 동기 신규 없음(`163572c`) · 디버그+릴리스 빌드 green · GUI(`--window --live`)+테스트단말(`--chat-live`) 기동 생존 · ★ **RSS 관측 GUI 17.1MB·단말 8.5MB**(발견만 도는 상태 — NFR-B-1 30MB 안쪽 첫 Windows 관측 · 정식 유휴 실측은 아님). 상세 [journal/2026-08-12.md](journal/2026-08-12.md).
 - **v0.1.4 릴리스 — 프로필·아바타·imgdec·영속 일습**(main 직커밋+태그): 08-11 하루치 공개 · ★ **imgdec 5타깃 동봉 첫 CI 검증 통과**(windows-x64 포터블 zip에 `nbeep-imgdec.exe` 362KB 실재·체크섬 일치·자산 14종) · winget/choco 잠금 유지. 상세 [journal/2026-08-12.md](journal/2026-08-12.md).
 

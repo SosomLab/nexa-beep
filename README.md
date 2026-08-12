@@ -24,15 +24,44 @@
 | **로컬 직접**(기본) | LAN 자동 발견 + P2P 직접 연결. 서버 없음 | v1 범위 |
 | **릴레이 경유**(선택) | 특정 서버를 추가하면 IP·로컬에 매이지 않고 일반 메신저처럼 통신. 서버는 봉투만 보고 내용은 못 읽는다 | 설계에 반영 · 구현은 v1 이후 (서버는 별도 프로젝트 `nexa-beepd`) |
 
-## 현재 상태
+## 현재 상태 (2026-08-12 · **v0.1.4 공개**)
 
-- 단계: **M-1 설계** — [비전](docs/00-vision.md) · [경쟁 조사 37종](docs/03-competitive-landscape.md) · [안전 송수신](docs/04-safe-transfer.md) · [요구사항](docs/05-requirements.md) · [네트워크 스택](docs/06-network-stack.md) 완료. 기술 스택 ADR 진행 예정.
+**설계는 거의 끝났고(문서 31종·ADR 11종), 코드는 M1~M4가 병렬로 진행 중이며, 배포는 먼저 완주했다.**
+
+| 항목 | 상태 |
+| --- | --- |
+| **되는 것** | 실행하면 같은 LAN의 상대가 자동으로 뜨고(UDP 발견) → 고르면 **Noise_XX 암호화 세션** → 대화 · **파일 송수신**(무해화 게이트 + 수신측 격리 성공까지 확인하는 종단 ack) · 프로필 교환 · 설정/신원/신뢰 핀 영속 |
+| **배포** | **v0.1.4** — Windows(x64·ARM64) · macOS(x64·ARM64) · Linux(x64) **5타깃 × 2채널**(설치본·포터블) · Homebrew 탭 · 태그 push = 자동 공개 → [Releases](https://github.com/SosomLab/nexa-beep/releases) |
+| **테스트** | 워크스페이스 **472 green** · clippy 경고 0 · CI 4잡(lint / test 3-OS / cross-build / 예산 게이트) |
+| **예산** | 산출물 **0.76MB**/게이트 10MB ✅ · 유휴 RSS — Windows 관측 **17.1MB**(≤30MB 안쪽) · **mac 85.7MB 재실측 잔여** |
+| **다음 관문** | 🔴 사용자 확정 대기 — 메시지 등급·알림(ADR-0010) · v1.0 기능 커트라인 · 기록 저장 암호화 잔여(ADR-0005 §4~) |
+
 - 예산 목표: 유휴 RSS **≤30MB** · 산출물 **≤10MB**/타깃 · **런타임 의존 0** · 24시간 상주 누수 0 ([05 NFR-B](docs/05-requirements.md)).
-- 상세 → [docs/STATUS.md](docs/STATUS.md)
+- 한 장 현황 → [docs/STATUS.md](docs/STATUS.md) · 기능별 → [docs/MILESTONES.md](docs/MILESTONES.md)
+
+## 설치
+
+모든 채널은 태그 릴리스에서 나온다. 자세한 안내는 **[위키 Install](https://github.com/SosomLab/nexa-beep/wiki/Install)**.
+
+```sh
+# macOS — Homebrew
+brew tap kiros33/tap && brew install --cask nexa-beep
+
+# Linux — deb 또는 포터블
+sudo dpkg -i nexa-beep-*-linux-x64.deb
+```
+
+Windows는 설치본(`*-setup.exe` — 사용자 단위·무권한) 또는 포터블 zip을 풀고 `nexa-beep.exe`를 더블클릭한다.
+릴리스마다 `SHA256SUMS.txt`가 함께 올라간다.
+
+> ⚠️ 아직 **코드 서명·공증 전**이다. macOS Cask는 설치 시 격리 표식을 제거하며(임시방편), Windows는 SmartScreen 경고가 날 수 있다.
 
 ## 문서 — 📖 [문서 홈](docs/README.md)에서 시작
 
-바로가기: [현황 STATUS](docs/STATUS.md) · [진행 DEVLOG](docs/DEVLOG.md) · [기능·마일스톤](docs/MILESTONES.md) · [경쟁 조사 03](docs/03-competitive-landscape.md) · [결정 기록 10](docs/10-decision-record.md) · [이식 메모리](CLAUDE.md)
+바로가기: [현황 STATUS](docs/STATUS.md) · [진행 DEVLOG](docs/DEVLOG.md) · [기능·마일스톤](docs/MILESTONES.md) · [종단 동작 설명서 30](docs/30-end-to-end-walkthrough.md) · [경쟁 조사 03](docs/03-competitive-landscape.md) · [결정 기록 10](docs/10-decision-record.md) · [이식 메모리](CLAUDE.md)
+
+요약·안내는 **[위키](https://github.com/SosomLab/nexa-beep/wiki)**(Install · Features · Architecture · Security · Development · Release Notes).
+단일 진실 원천(SSOT)은 언제나 저장소 `docs/`다.
 
 ## 프로젝트 정보 / 라이선스
 
