@@ -7,6 +7,7 @@
 
 ## 2026-08-12
 
+- **Windows 전체 빌드·실기 기동 점검**(이 Windows PC): 동기 신규 없음(`163572c`) · 디버그+릴리스 빌드 green · GUI(`--window --live`)+테스트단말(`--chat-live`) 기동 생존 · ★ **RSS 관측 GUI 17.1MB·단말 8.5MB**(발견만 도는 상태 — NFR-B-1 30MB 안쪽 첫 Windows 관측 · 정식 유휴 실측은 아님). 상세 [journal/2026-08-12.md](journal/2026-08-12.md).
 - **v0.1.4 릴리스 — 프로필·아바타·imgdec·영속 일습**(main 직커밋+태그): 08-11 하루치 공개 · ★ **imgdec 5타깃 동봉 첫 CI 검증 통과**(windows-x64 포터블 zip에 `nbeep-imgdec.exe` 362KB 실재·체크섬 일치·자산 14종) · winget/choco 잠금 유지. 상세 [journal/2026-08-12.md](journal/2026-08-12.md).
 
 ## 2026-08-11
