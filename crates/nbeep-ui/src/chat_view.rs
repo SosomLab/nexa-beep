@@ -68,7 +68,9 @@ impl WallTime {
 }
 
 /// `19:02` 또는 `PM 7:02`(24시간 표시 설정 — 사용자 확정 08-10).
-fn fmt_hm(w: WallTime, h24: bool) -> String {
+/// 목록의 "마지막 확인 시각"(③ 08-13)도 같은 표기를 쓴다 — 시각 표기는 한 벌.
+#[must_use]
+pub fn fmt_hm(w: WallTime, h24: bool) -> String {
     if h24 {
         format!("{:02}:{:02}", w.h, w.m)
     } else {

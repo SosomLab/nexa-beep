@@ -74,7 +74,11 @@ enum AppEvent {
     Inbound { session: Box<InboundSession> },
     /// **아웃바운드 성립**(M2-8) — 워커 스레드가 connect+Noise를 마친 세션(TOFU 미판정).
     /// 연결 수립이 이벤트 루프를 막지 않게 하는 절반(인바운드와 대칭).
-    Outbound { session: Box<InboundSession> },
+    /// `via_addr` = 수동 등록(DR-19)으로 성립했을 때 그 주소 — 재연결용으로 기억한다.
+    Outbound {
+        session: Box<InboundSession>,
+        via_addr: Option<String>,
+    },
     /// 아웃바운드 연결 실패(M2-8) — 죽은 상대를 클릭해도 UI는 살아 있고 이것만 온다.
     ConnectFailed { peer: PeerId, why: String },
     /// 파일 수신 제안 도착 — 사용자가 수락/거절할 때까지 데이터는 오지 않는다(FR-X-3).
@@ -869,6 +873,17 @@ struct App {
     toolbar: Toolbar,
     /// 세션이 끊긴 상대(AppEvent::Closed) — 목록 상태 점 Lost 근거. 재수립 시 제거.
     closed_peers: std::collections::HashSet<PeerId>,
+    /// **비발견 상대**(수동 등록·다른 서브넷 인바운드 — 사용자 실기 08-13) — 발견
+    /// 테이블에 ANNOUNCE가 안 닿아도 목록에 유지한다(대화창을 닫으면 사라지던 버그).
+    /// 이름은 성립 시 스냅샷(프로필 이름은 2줄째로 따로 표시된다).
+    extra_peers: HashMap<PeerId, nbeep_core::DisplayName>,
+    /// 성공한 수동 등록 주소(DR-19) — 세션이 끊긴 뒤 목록에서 다시 클릭하면
+    /// 발견 주소록에 없어도 이 주소로 재연결한다.
+    manual_addrs: HashMap<PeerId, String>,
+    /// 읽지 않은 수신 메시지 수(③ — 대화 뷰가 닫혀 있는 동안 도착한 것).
+    unread: HashMap<PeerId, u32>,
+    /// 그 대화를 마지막으로 확인한 시각(뷰가 열려 있던 마지막 순간 — 목록에 표시).
+    last_read: HashMap<PeerId, nbeep_ui::WallTime>,
     /// IME 조합 중(macOS — Preedit 활성). 조합 중엔 KeyboardInput 문자/백스페이스를
     /// 라우팅하지 않는다(같은 키가 Ime 경로로도 와서 자모가 이중 유입되던 버그).
     ime_composing: bool,
@@ -1348,6 +1363,10 @@ impl App {
         if let Some(chat) = self.chats.get_mut(&peer) {
             chat.push_line(line, &mut inv);
         }
+        if !mine {
+            // 파일 수신도 "새 소식"이다(③) — 뷰가 닫혀 있으면 배지·제목으로.
+            self.note_incoming(peer);
+        }
         self.redraw_conversation(peer);
     }
 
@@ -1514,9 +1533,25 @@ impl App {
     /// 목록 행 재구성 — 발견(PeerTable) + 신뢰(TrustStore)의 조립.
     fn refresh_rows(&mut self, inv: &mut Invalidations) {
         use nbeep_core::TrustStore as _;
-        let rows = self
-            .table
-            .list()
+        // 발견 목록 + 비발견 상대(④ — 수동 등록·다른 서브넷 인바운드) 병합.
+        // 발견이 나중에 닿으면 테이블 항목이 이긴다(같은 PeerId는 한 행).
+        let mut entries = self.table.list();
+        for (&peer, name) in &self.extra_peers {
+            if self.table.get(peer).is_none() {
+                entries.push(nbeep_core::PeerEntry {
+                    peer,
+                    name: name.clone(),
+                    paths: 0, // 발견 경로 없음 — 세션·수동 주소로만 닿는 상대
+                });
+            }
+        }
+        entries.sort_by(|a, b| {
+            a.name
+                .as_str()
+                .cmp(b.name.as_str())
+                .then(a.peer.cmp(&b.peer))
+        });
+        let rows = entries
             .into_iter()
             .map(|entry| {
                 // 프로필 이름은 **2번째 줄**(사용자 확정 08-11 — 굵은 1줄은 언제나
@@ -1543,6 +1578,15 @@ impl App {
                 };
                 // 진행 중 전송이 있으면 이름 아래 막대로 보인다(슬라이스 4에서 채운다).
                 let xfer = self.xfer_progress.get(&entry.peer).copied();
+                // 읽지 않은 메시지 배지(③) — 개수 + 마지막 확인 시각(있을 때만).
+                let unread = self.unread.get(&entry.peer).copied().unwrap_or(0);
+                let last_read = (unread > 0)
+                    .then(|| {
+                        self.last_read.get(&entry.peer).map(|w| {
+                            nbeep_ui::fmt_hm(*w, self.settings.get("chat.time_24h") != "off")
+                        })
+                    })
+                    .flatten();
                 PeerRow {
                     entry,
                     trust,
@@ -1550,6 +1594,8 @@ impl App {
                     xfer,
                     profile_name,
                     avatar,
+                    unread,
+                    last_read,
                 }
             })
             .collect();
@@ -1594,16 +1640,24 @@ impl App {
         let transport = std::sync::Arc::clone(&self.transport);
         let identity = std::sync::Arc::clone(&self.identity);
         let proxy = self.proxy.clone();
+        // 비발견 상대(수동 등록 이력)는 발견 주소록이 비어 connect가 실패한다 —
+        // 성공했던 수동 주소로 폴백(08-13 실기: 대화창 닫은 뒤 재연결이 이 경로).
+        let manual = self.manual_addrs.get(&peer).cloned();
         std::thread::spawn(move || {
-            let r = transport
-                .connect(peer)
-                .map_err(|e| format!("{e:?}"))
-                .and_then(|link| {
-                    nbeep_crypto::NoiseSession::initiate(link, &identity).map_err(|e| e.to_string())
-                });
+            let conn = match transport.connect(peer) {
+                Ok(link) => Ok(link),
+                Err(e) => match &manual {
+                    Some(addr) => transport.add_endpoint(addr).map_err(|e2| format!("{e2:?}")),
+                    None => Err(format!("{e:?}")),
+                },
+            };
+            let r = conn.and_then(|link| {
+                nbeep_crypto::NoiseSession::initiate(link, &identity).map_err(|e| e.to_string())
+            });
             let _ = match r {
                 Ok(session) => proxy.send_event(AppEvent::Outbound {
                     session: Box::new(InboundSession { session }),
+                    via_addr: None, // 수동 주소는 이미 기억돼 있다(성공 시 갱신 불요)
                 }),
                 Err(why) => proxy.send_event(AppEvent::ConnectFailed { peer, why }),
             };
@@ -1633,6 +1687,7 @@ impl App {
             let _ = match r {
                 Ok(session) => proxy.send_event(AppEvent::Outbound {
                     session: Box::new(InboundSession { session }),
+                    via_addr: Some(addr), // 성공한 수동 주소 — 재연결용 기억(④)
                 }),
                 Err(why) => proxy.send_event(AppEvent::AddFailed { addr, why }),
             };
@@ -1649,9 +1704,141 @@ impl App {
                 return n.as_str().to_string();
             }
         }
-        self.table
-            .get(peer)
-            .map_or_else(|| format!("{peer:?}"), |e| e.name.as_str().to_string())
+        if let Some(e) = self.table.get(peer) {
+            return e.name.as_str().to_string();
+        }
+        // 비발견 상대(④) — 성립 시 스냅샷한 이름.
+        self.extra_peers
+            .get(&peer)
+            .map_or_else(|| format!("{peer:?}"), |n| n.as_str().to_string())
+    }
+
+    /// 그 창의 포커스된 텍스트 컨트롤에서 선택을 복사한다(① 08-13 — 창 역할로 라우팅).
+    fn clipboard_copy_for(&self, id: WindowId) -> Option<String> {
+        // 대화 입력창(주 창 단일 모드 포함)이 먼저 — chat_peer_for가 둘 다 안다.
+        if let Some(t) = self
+            .chat_peer_for(id)
+            .and_then(|p| self.chats.get(&p))
+            .and_then(ChatViewWidget::copy_selection)
+        {
+            return Some(t);
+        }
+        match self.windows.get(&id).map(|e| e.role)? {
+            Role::AddEndpoint => self.addr_view.as_ref()?.clipboard_copy(),
+            Role::Profile => self.profile_view.as_ref()?.clipboard_copy(),
+            Role::Settings => self.settings_view.as_ref()?.clipboard_copy(),
+            _ => None,
+        }
+    }
+
+    /// 잘라내기(①) — 복사와 같은 라우팅, 선택 삭제까지.
+    fn clipboard_cut_for(&mut self, id: WindowId) -> Option<String> {
+        let mut inv = Invalidations::default();
+        if let Some(t) = self
+            .chat_peer_for(id)
+            .and_then(|p| self.chats.get_mut(&p))
+            .and_then(|c| c.cut_selection(&mut inv))
+        {
+            return Some(t);
+        }
+        match self.windows.get(&id).map(|e| e.role)? {
+            Role::AddEndpoint => self.addr_view.as_mut()?.clipboard_cut(&mut inv),
+            Role::Profile => self.profile_view.as_mut()?.clipboard_cut(&mut inv),
+            Role::Settings => self.settings_view.as_mut()?.clipboard_cut(&mut inv),
+            _ => None,
+        }
+    }
+
+    /// 붙여넣기(①) — 그 창의 포커스된 텍스트 컨트롤로.
+    fn clipboard_paste_for(&mut self, id: WindowId, text: &str) {
+        let mut inv = Invalidations::default();
+        if let Some(peer) = self.chat_peer_for(id) {
+            if let Some(c) = self.chats.get_mut(&peer) {
+                c.paste(text, &mut inv);
+                return;
+            }
+        }
+        match self.windows.get(&id).map(|e| e.role) {
+            Some(Role::AddEndpoint) => {
+                if let Some(v) = self.addr_view.as_mut() {
+                    v.clipboard_paste(text, &mut inv);
+                }
+            }
+            Some(Role::Profile) => {
+                if let Some(v) = self.profile_view.as_mut() {
+                    v.clipboard_paste(text, &mut inv);
+                }
+            }
+            Some(Role::Settings) => {
+                if let Some(v) = self.settings_view.as_mut() {
+                    v.clipboard_paste(text, &mut inv);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// 이 상대의 대화 뷰가 **지금 화면에 있는가**(③ — 읽음/안읽음 판정의 기준).
+    fn chat_visible(&self, peer: PeerId) -> bool {
+        match self.mode {
+            WindowMode::Single => self.single_open == Some(peer),
+            WindowMode::Separate => self
+                .windows
+                .values()
+                .any(|e| matches!(e.role, Role::Chat(p) if p == peer)),
+        }
+    }
+
+    /// 읽음 처리(③) — 뷰를 열거나 닫는 순간, 그리고 뷰가 보이는 동안 호출된다.
+    /// "마지막 확인한 시각"은 뷰가 화면에 있던 마지막 순간이다.
+    fn mark_read(&mut self, peer: PeerId) {
+        let (_, wall) = now_stamp();
+        self.last_read.insert(peer, wall);
+        if self.unread.remove(&peer).is_some() {
+            let mut inv = Invalidations::default();
+            self.refresh_rows(&mut inv);
+            if let Some(mid) = self.main_id {
+                self.request_redraw(mid);
+            }
+        }
+        self.update_main_title();
+    }
+
+    /// 수신 1건 계상(③) — 뷰가 보이면 확인 시각만 갱신, 아니면 미확인 +1과
+    /// 상태바·제목으로 알린다(OS 알림·소리는 M3-8/ADR-0010 확정 후).
+    fn note_incoming(&mut self, peer: PeerId) {
+        if self.chat_visible(peer) {
+            let (_, wall) = now_stamp();
+            self.last_read.insert(peer, wall);
+            return;
+        }
+        let n = {
+            let e = self.unread.entry(peer).or_insert(0);
+            *e = e.saturating_add(1);
+            *e
+        };
+        self.status = format!("새 메시지: {} (읽지 않음 {n})", self.peer_title(peer));
+        let mut inv = Invalidations::default();
+        self.refresh_rows(&mut inv);
+        self.update_main_title();
+        if let Some(mid) = self.main_id {
+            self.request_redraw(mid);
+        }
+    }
+
+    /// 주 창 제목에 미확인 총계(③) — 창이 뒤에 있어도 작업 표시줄·독에서 보인다.
+    fn update_main_title(&self) {
+        let Some(mid) = self.main_id else { return };
+        let Some(e) = self.windows.get(&mid) else {
+            return;
+        };
+        let total: u32 = self.unread.values().sum();
+        if total > 0 {
+            e.window
+                .set_title(&format!("Nexa Beep — 새 메시지 {total}"));
+        } else {
+            e.window.set_title("Nexa Beep");
+        }
     }
 
     /// 내 프로필 응답 프레임(M3-17) — **공개 정책 판단은 여기 한 곳**(메인 스레드).
@@ -1724,6 +1911,13 @@ impl App {
         );
         // 세션 재수립 = 끊김 상태 해제(목록 점 Active로).
         self.closed_peers.remove(&peer);
+        // 비발견 상대(수동 등록·다른 서브넷 인바운드)는 발견 테이블에 없다 — 목록에
+        // 유지할 이름을 스냅샷(④ 실기 08-13: 대화창을 닫으면 목록에서 사라지던 버그).
+        if self.table.get(peer).is_none() {
+            self.extra_peers
+                .entry(peer)
+                .or_insert_with(|| nbeep_core::default_display_name(None, &peer));
+        }
         let mut inv = Invalidations::default();
         self.refresh_rows(&mut inv);
     }
@@ -2347,6 +2541,8 @@ impl App {
             .with_title("Nexa Beep — 프로필")
             .with_inner_size(winit::dpi::LogicalSize::new(440.0, 570.0))
             .with_resizable(false)
+            // 모달(⑤ 사용자 요청 08-13) — 다른 창에 가려지지 않고 항상 위에서 입력.
+            .with_window_level(winit::window::WindowLevel::AlwaysOnTop)
             .with_window_icon(self.icon.clone());
         let window = Rc::new(el.create_window(attrs).unwrap());
         window.set_ime_allowed(true); // 이름·연락처에 한글 입력
@@ -2453,6 +2649,8 @@ impl App {
             .with_title("Nexa Beep — 주소로 연결")
             .with_inner_size(winit::dpi::LogicalSize::new(380.0, 150.0))
             .with_resizable(false)
+            // 모달(⑤ 사용자 요청 08-13) — 다른 창에 가려지지 않고 항상 위에서 입력.
+            .with_window_level(winit::window::WindowLevel::AlwaysOnTop)
             .with_window_icon(self.icon.clone());
         let window = Rc::new(el.create_window(attrs).unwrap());
         window.set_ime_allowed(true);
@@ -2471,9 +2669,12 @@ impl App {
             },
         );
         // 포트 생략 시 붙일 기본 = 설정 수신 포트(ⓐ — 조직이 같은 값을 쓰면 IP만으로 붙는다).
-        self.addr_view = Some(nbeep_ui::AddrPromptWidget::new(session_port_from(
-            &self.settings,
-        )));
+        // 내 포트가 0(임의)이면 걸 때의 기본으로 못 쓴다 — 표준 기본 포트로 폴백.
+        let dial_default = match session_port_from(&self.settings) {
+            0 => nbeep_ui::addr_prompt::DEFAULT_PORT,
+            p => p,
+        };
+        self.addr_view = Some(nbeep_ui::AddrPromptWidget::new(dial_default));
         self.layout_window(id);
         self.request_redraw(id);
     }
@@ -2882,6 +3083,7 @@ impl App {
             }
             WindowMode::Separate => self.open_separate_window(peer, chat, el),
         }
+        self.mark_read(peer); // 뷰가 열렸다 = 확인했다(③)
     }
 
     /// 창 크기·배율에 맞춰 그 창의 위젯 경계를 다시 계산한다.
@@ -3065,6 +3267,7 @@ impl App {
         {
             // 뷰만 닫는다 — 대화(세션·스레드)는 유지(DR-26).
             self.chats.remove(&peer);
+            self.mark_read(peer); // 닫는 순간까지 보고 있었다(③ — 마지막 확인 시각)
             match self.mode {
                 WindowMode::Single => {
                     self.single_open = None;
@@ -3595,6 +3798,8 @@ impl ApplicationHandler<AppEvent> for App {
                 if let Some(chat) = self.chats.get_mut(&peer) {
                     chat.push_line(line, &mut inv);
                 }
+                // 읽음/안읽음 계상(③) — 뷰가 닫혀 있으면 배지·제목으로 알린다.
+                self.note_incoming(peer);
                 // 이 대화가 보이는 창을 다시 그린다.
                 self.redraw_conversation(peer);
             }
@@ -3825,11 +4030,15 @@ impl ApplicationHandler<AppEvent> for App {
                     self.request_redraw(id);
                 }
             }
-            AppEvent::Outbound { session } => {
+            AppEvent::Outbound { session, via_addr } => {
                 // 워커가 만든 아웃바운드 세션(M2-8) — TOFU 판정은 여기(메인 · TrustStore 소유).
                 use nbeep_core::Session as _;
                 let peer = session.session.peer();
                 self.connecting.remove(&peer);
+                if let Some(addr) = via_addr {
+                    // 수동 등록 성공(DR-19) — 세션이 끊겨도 이 주소로 재연결한다(④).
+                    self.manual_addrs.insert(peer, addr);
+                }
                 if !self.conversations.contains_key(&peer) {
                     let est =
                         match nbeep_core::TrustedSession::wrap(session.session, &mut self.trust) {
@@ -3959,28 +4168,10 @@ impl ApplicationHandler<AppEvent> for App {
                 let title = self.peer_title(peer);
                 let mut inv = Invalidations::default();
                 self.refresh_rows(&mut inv);
-                match self.mode {
-                    WindowMode::Separate => {
-                        // 인바운드도 상대별 창을 연다(대칭 실시간 대화).
-                        let chat = self.build_chat_view(peer);
-                        self.open_separate_window(peer, chat, el);
-                    }
-                    WindowMode::Single => {
-                        if self.single_open.is_none() {
-                            // 목록 화면이면 새 대화를 바로 연다.
-                            let chat = self.build_chat_view(peer);
-                            self.chats.insert(peer, chat);
-                            self.single_open = Some(peer);
-                            self.set_main_ime(true);
-                            if let Some(mid) = self.main_id {
-                                self.layout_window(mid);
-                            }
-                        } else {
-                            // 다른 대화 중 — 뺏지 않는다. 백그라운드로 쌓이고 목록에서 열면 복원.
-                            self.status = format!("새 대화 도착: {title} (목록에서 열기)");
-                        }
-                    }
-                }
+                // ② 자동 열림 금지(사용자 확정 08-13) — 인바운드는 창을 뺏지 않는다.
+                // 목록에 행이 뜨고(비발견 상대는 extra_peers ④), 메시지가 오면
+                // 배지·제목 카운트(③)로 알린다. 여는 것은 언제나 사용자.
+                self.status = format!("연결됨: {title} — 목록에서 열기");
                 if let Some(mid) = self.main_id {
                     self.request_redraw(mid);
                 }
@@ -4237,6 +4428,7 @@ impl ApplicationHandler<AppEvent> for App {
                         // 대화 창 닫기 = 뷰만 닫힘(대화 유지 — DR-26).
                         Role::Chat(peer) => {
                             self.chats.remove(&peer);
+                            self.mark_read(peer); // 닫는 순간까지 확인(③)
                         }
                         Role::Settings => self.settings_view = None,
                         Role::Gallery => self.gallery_view = None,
@@ -4422,14 +4614,10 @@ impl ApplicationHandler<AppEvent> for App {
                                 self.route(id, InputEvent::SelectAll, el);
                                 return;
                             }
-                            // 복사/잘라내기/붙여넣기 — 대화 입력창 ↔ OS 클립보드(08-10 ·
-                            // ui는 OS를 모른다 — plat 어댑터가 잇는다).
+                            // 복사/잘라내기/붙여넣기 — **모든 텍스트 컨트롤**(① 08-13 —
+                            // 그전엔 대화 입력창만). ui는 OS를 모른다 — plat 어댑터가 잇는다.
                             "c" | "C" => {
-                                if let Some(t) = self
-                                    .chat_peer_for(id)
-                                    .and_then(|p| self.chats.get(&p))
-                                    .and_then(ChatViewWidget::copy_selection)
-                                {
+                                if let Some(t) = self.clipboard_copy_for(id) {
                                     if nbeep_plat::clipboard::set_text(&t) {
                                         self.status = "복사됨".into();
                                     }
@@ -4437,26 +4625,16 @@ impl ApplicationHandler<AppEvent> for App {
                                 return;
                             }
                             "x" | "X" => {
-                                let mut inv = Invalidations::default();
-                                if let Some(t) = self
-                                    .chat_peer_for(id)
-                                    .and_then(|p| self.chats.get_mut(&p))
-                                    .and_then(|c| c.cut_selection(&mut inv))
-                                {
+                                if let Some(t) = self.clipboard_cut_for(id) {
                                     nbeep_plat::clipboard::set_text(&t);
                                     self.request_redraw(id);
                                 }
                                 return;
                             }
                             "v" | "V" => {
-                                if let Some(peer) = self.chat_peer_for(id) {
-                                    if let Some(t) = nbeep_plat::clipboard::get_text() {
-                                        let mut inv = Invalidations::default();
-                                        if let Some(c) = self.chats.get_mut(&peer) {
-                                            c.paste(&t, &mut inv);
-                                        }
-                                        self.request_redraw(id);
-                                    }
+                                if let Some(t) = nbeep_plat::clipboard::get_text() {
+                                    self.clipboard_paste_for(id, &t);
+                                    self.request_redraw(id);
                                 }
                                 return;
                             }
@@ -4562,14 +4740,15 @@ fn effective_display_name(
 }
 
 /// 유효 세션 포트 — 설정 `net.session_port` 관용 파싱(ADR-0011 §4-3 원칙 그대로:
-/// 무효·범위 밖(0 포함)은 거부가 아니라 **기본값으로 본다**). 듣는 포트이자 주소 입력에서
+/// 무효·범위 밖은 거부가 아니라 **기본값으로 본다**). 듣는 포트이자 주소 입력에서
 /// 포트 생략 시 거는 포트(사용자 확정 08-13 ⓐ — 하나의 값).
+/// **`0` = 임의 포트**(테스트·다중 인스턴스 — `--port 0`) — 걸 때의 기본값으로는 못 쓰므로
+/// 주소 입력 기본은 47200으로 폴백한다(소비처 참조).
 fn session_port_from(settings: &SettingsState) -> u16 {
     settings
         .get("net.session_port")
         .parse::<u16>()
         .ok()
-        .filter(|p| *p != 0)
         .unwrap_or(nbeep_net::DEFAULT_SESSION_PORT)
 }
 
@@ -4594,7 +4773,7 @@ fn data_dir() -> std::path::PathBuf {
     std::env::temp_dir().join("nexa-beep")
 }
 
-pub(crate) fn run(mode: WindowMode, live: bool) {
+pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
     let (data, index) = nbeep_plat::font::system_ui_font().expect("시스템 UI 폰트 없음");
     let font = nbeep_gfx::Font::from_static(data, index).expect("폰트 파싱");
     let dir = data_dir();
@@ -4637,6 +4816,11 @@ pub(crate) fn run(mode: WindowMode, live: bool) {
     // (플래그 실행이 영속 설정을 바꿔버리면 다음 무플래그 실행이 놀란다).
     if mode == WindowMode::Separate {
         settings.set("chat.window_mode", "separate".into());
+    }
+    // `--port N`(⑥ 08-13) — 이 세션의 수신 포트만 덮는다(dirty 없음 = 영속 안 됨).
+    // 0도 유효하다(임의 포트 — 같은 PC에 여러 인스턴스를 띄우는 테스트).
+    if let Some(p) = port_flag {
+        settings.set("net.session_port", p.to_string());
     }
     // 유효 창 모드 = 영속값 반영(플래그 없으면 저장된 선택이 부팅에 살아난다 — DR-26).
     let mode = if settings.get("chat.window_mode") == "separate" {
@@ -4811,6 +4995,10 @@ pub(crate) fn run(mode: WindowMode, live: bool) {
             // ⌘/Ctrl+G로 열 수 있으니, 상시 노출할 임시 검수용 항목은 툴바를 차지할 이유가 없다.
         ]),
         closed_peers: std::collections::HashSet::new(),
+        extra_peers: HashMap::new(),
+        manual_addrs: HashMap::new(),
+        unread: HashMap::new(),
+        last_read: HashMap::new(),
         icon: winit::window::Icon::from_rgba(
             nbeep_ui::brand::ICON_RGBA.to_vec(),
             nbeep_ui::brand::ICON_SIZE,

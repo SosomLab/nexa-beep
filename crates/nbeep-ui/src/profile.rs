@@ -107,6 +107,30 @@ impl ProfileWidget {
     }
 
     /// 이미지 선택 요청(1회성 · 선택… 버튼) — 호스트가 피커를 연다.
+    /// 선택 복사(① 08-13) — 포커스된 입력 필드에서만 나온다(비포커스는 None).
+    #[must_use]
+    pub fn clipboard_copy(&self) -> Option<String> {
+        self.name
+            .copy_selection()
+            .or_else(|| self.email.copy_selection())
+            .or_else(|| self.phone.copy_selection())
+    }
+
+    /// 선택 잘라내기(①) — 포커스된 필드에서만.
+    pub fn clipboard_cut(&mut self, inv: &mut Invalidations) -> Option<String> {
+        self.name
+            .cut_selection(inv)
+            .or_else(|| self.email.cut_selection(inv))
+            .or_else(|| self.phone.cut_selection(inv))
+    }
+
+    /// 붙여넣기(①) — 포커스된 필드만 받는다(TextBox가 비포커스면 무시).
+    pub fn clipboard_paste(&mut self, text: &str, inv: &mut Invalidations) {
+        self.name.paste(text, inv);
+        self.email.paste(text, inv);
+        self.phone.paste(text, inv);
+    }
+
     pub fn take_pick_image(&mut self) -> bool {
         std::mem::take(&mut self.pick_image)
     }

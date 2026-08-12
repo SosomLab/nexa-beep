@@ -61,8 +61,8 @@ pub mod widget;
 pub use about::{AboutInfo, AboutWidget};
 pub use addr_prompt::AddrPromptWidget;
 pub use chat_view::{
-    update_xfer_ack, update_xfer_in, ChatBody, ChatLine, ChatViewWidget, WallTime, XferLine,
-    XferLineState,
+    fmt_hm, update_xfer_ack, update_xfer_in, ChatBody, ChatLine, ChatViewWidget, WallTime,
+    XferLine, XferLineState,
 };
 pub use controls::{
     BorderSpec, Button, ButtonMode, Checkbox, Choose, ChoosePicker, Combo, ComboControl, ComboItem,

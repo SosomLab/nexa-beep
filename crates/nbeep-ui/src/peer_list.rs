@@ -32,6 +32,10 @@ pub struct PeerRow {
     pub profile_name: Option<String>,
     /// 프로필 사진(M4-5 — imgdec 격리 디코드·원형 마스크 완료본). 없으면 이니셜.
     pub avatar: Option<std::rc::Rc<crate::theme::IconImage>>,
+    /// 읽지 않은 수신 메시지 수(③ 08-13) — 0이면 배지 없음.
+    pub unread: u32,
+    /// 마지막으로 대화를 확인한 시각 라벨(③ — `unread > 0`일 때만 Some · 배지 왼쪽에 흐리게).
+    pub last_read: Option<String>,
 }
 
 /// 목록 행에 그릴 전송 진행 상태.
@@ -675,6 +679,43 @@ impl Widget for PeerListWidget {
                 theme.text,
             );
 
+            // 읽지 않은 메시지 배지(③ 08-13) — 신뢰 칩 왼쪽에 강조색 알약 + 개수.
+            // 뷰가 닫혀 있는 동안 도착한 수신만 센다(여는 순간 사라진다).
+            if row.unread > 0 {
+                ctx.select_font(FontSlot::Status, false);
+                let label = if row.unread > 99 {
+                    "99+".to_string()
+                } else {
+                    row.unread.to_string()
+                };
+                let bh = self.s(18);
+                let bwd = (ctx.text_width(&label) + self.s(12)).max(bh);
+                let br = Rect::new(chip_r.x - bwd - self.s(8), r.y + (rh - bh) / 2, bwd, bh);
+                ctx.fill_round_rect(br, bh / 2, theme.accent);
+                let bth = ctx.text_height();
+                let btw = ctx.text_width(&label);
+                ctx.text(
+                    br.x + (br.w - btw) / 2,
+                    br.y + (br.h - bth) / 2,
+                    br,
+                    &label,
+                    theme.text,
+                );
+                // 마지막 확인 시각(③) — 배지 왼쪽에 흐리게("그 뒤로 안 봤다"의 기준점).
+                if let Some(tl) = &row.last_read {
+                    let full = format!("확인 {tl}");
+                    let ftw = ctx.text_width(&full);
+                    ctx.text(
+                        br.x - ftw - self.s(8),
+                        r.y + (rh - bth) / 2,
+                        r,
+                        &full,
+                        theme.text_dim,
+                    );
+                }
+                ctx.select_font(FontSlot::PeerList, false);
+            }
+
             // 행 구분선.
             ctx.fill_rect(Rect::new(r.x, r.bottom() - 1, r.w, 1), theme.border);
         }
@@ -744,6 +785,8 @@ mod tests {
             xfer: None,
             profile_name: None,
             avatar: None,
+            unread: 0,
+            last_read: None,
         }
     }
     fn widget(names: &[(u8, &str)]) -> (PeerListWidget, Invalidations) {

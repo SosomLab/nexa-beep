@@ -864,6 +864,50 @@ impl SettingsWidget {
         w
     }
 
+    /// 선택 복사(① 08-13) — 포커스된 텍스트 입력(검색·글꼴명)에서만 나온다.
+    #[must_use]
+    pub fn clipboard_copy(&self) -> Option<String> {
+        if let Some(t) = self.search.copy_selection() {
+            return Some(t);
+        }
+        self.rows.iter().find_map(|r| match &r.ctl {
+            RowCtl::Font { family, .. } | RowCtl::Face(family) => family.copy_selection(),
+            _ => None,
+        })
+    }
+
+    /// 선택 잘라내기(①).
+    pub fn clipboard_cut(&mut self, inv: &mut Invalidations) -> Option<String> {
+        if let Some(t) = self.search.cut_selection(inv) {
+            self.sync_query(inv);
+            return Some(t);
+        }
+        self.rows.iter_mut().find_map(|r| match &mut r.ctl {
+            RowCtl::Font { family, .. } | RowCtl::Face(family) => family.cut_selection(inv),
+            _ => None,
+        })
+    }
+
+    /// 붙여넣기(①) — 포커스된 텍스트 입력만 받는다.
+    pub fn clipboard_paste(&mut self, text: &str, inv: &mut Invalidations) {
+        self.search.paste(text, inv);
+        self.sync_query(inv);
+        for r in &mut self.rows {
+            if let RowCtl::Font { family, .. } | RowCtl::Face(family) = &mut r.ctl {
+                family.paste(text, inv);
+            }
+        }
+    }
+
+    /// 검색 텍스트가 코드 경로(잘라내기·붙여넣기)로 바뀌었으면 결과를 재구성한다.
+    fn sync_query(&mut self, inv: &mut Invalidations) {
+        let q = self.search.text();
+        if q != self.query {
+            self.query = q;
+            self.rebuild(inv);
+        }
+    }
+
     /// 배율 지정(고DPI) — 전 컨트롤 전파 + 재구성.
     pub fn set_scale(&mut self, scale: f32, inv: &mut Invalidations) {
         let s = scale.max(0.5);

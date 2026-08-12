@@ -88,6 +88,13 @@ fn main() {
     let open_window = args.iter().any(|a| a == "--window");
     let separate = args.iter().any(|a| a == "--separate-windows");
     let live = args.iter().any(|a| a == "--live");
+    // 수신 포트 지정(⑥ 사용자 요청 08-13) — **이 세션만 이긴다**(--separate-windows와
+    // 같은 규칙: 저장된 설정 `net.session_port`는 건드리지 않는다). 0 = 임의 포트.
+    let port: Option<u16> = args
+        .iter()
+        .position(|a| a == "--port")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|v| v.parse().ok());
     // ★ GUI 셸에서 **인자 없이** 열면(macOS `.app` 더블클릭 · Windows 탐색기 더블클릭·
     //   시작 메뉴 바로가기) 그대로 두면 스캐폴드만 찍고 끝나 "눌러도 아무 일이 없다"가 된다
     //   (08-11 실기: mac brew·Windows 배포 v0.1.2 실측 = M5-4d). 그 경우 **창 모드가 의도**다.
@@ -109,10 +116,14 @@ fn main() {
             app::WindowMode::Single
         };
         // GUI 실행은 실물 발견이 기본이다 — 데모(에코 봇)를 보여 줄 자리가 아니다.
-        app::run(mode, live || (gui_launch && !open_window && !separate));
+        app::run(
+            mode,
+            live || (gui_launch && !open_window && !separate),
+            port,
+        );
     } else {
         println!(
-            "nexa-beep {} — scaffold (창 `--window [--live]` · 발견 `--discover-probe [초]` · 수동 `--serve`/`--connect` · 인터랙티브 `--chat-serve [port]`/`--chat-connect <host:port>`/`--chat-live [이름]`(GUI 목록에 뜸) · 무해화 실측 `--quarantine-demo <파일>` · 파일전송 `--xfer-limit-mib <N>`·`--xfer-rate-kb <N>`(chat 모드 · 대화 중 `/send`·`/accept`·`/reject`))",
+            "nexa-beep {} — scaffold (창 `--window [--live] [--port <N>]` · 발견 `--discover-probe [초]` · 수동 `--serve`/`--connect` · 인터랙티브 `--chat-serve [port]`/`--chat-connect <host:port>`/`--chat-live [이름]`(GUI 목록에 뜸) · 무해화 실측 `--quarantine-demo <파일>` · 파일전송 `--xfer-limit-mib <N>`·`--xfer-rate-kb <N>`(chat 모드 · 대화 중 `/send`·`/accept`·`/reject`))",
             env!("CARGO_PKG_VERSION")
         );
     }

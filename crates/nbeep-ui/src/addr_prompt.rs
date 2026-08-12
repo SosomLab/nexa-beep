@@ -127,6 +127,22 @@ impl AddrPromptWidget {
         self.input.text()
     }
 
+    /// 선택 복사(① 08-13) — OS 클립보드 쓰기는 호스트 몫.
+    #[must_use]
+    pub fn clipboard_copy(&self) -> Option<String> {
+        self.input.copy_selection()
+    }
+
+    /// 선택 잘라내기(①).
+    pub fn clipboard_cut(&mut self, inv: &mut Invalidations) -> Option<String> {
+        self.input.cut_selection(inv)
+    }
+
+    /// 붙여넣기(① — 호스트가 읽은 텍스트).
+    pub fn clipboard_paste(&mut self, text: &str, inv: &mut Invalidations) {
+        self.input.paste(text, inv);
+    }
+
     /// 배율 지정 — 내부 컨트롤 전파.
     pub fn set_scale(&mut self, scale: f32, inv: &mut Invalidations) {
         self.scale = scale.max(0.5);

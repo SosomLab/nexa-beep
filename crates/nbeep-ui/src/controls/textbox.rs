@@ -33,6 +33,9 @@ pub struct TextBox {
     dragging: bool,
     /// 마지막 클릭 (시각 ms, 연속 횟수) — 더블·트리플 판정.
     last_click: (u64, u8),
+    /// 가로 스크롤(px · ① 08-13) — 텍스트가 폭을 넘으면 **캐럿이 항상 보이게**
+    /// 페인트가 조정한다(셀: 페인트는 &self).
+    hscroll: std::cell::Cell<i32>,
 }
 
 impl TextBox {
@@ -51,6 +54,7 @@ impl TextBox {
             caret_xs: std::cell::RefCell::new(Vec::new()),
             dragging: false,
             last_click: (0, 0),
+            hscroll: std::cell::Cell::new(0),
         }
     }
 
@@ -136,6 +140,50 @@ impl TextBox {
         std::mem::take(&mut self.changed).then(|| self.edit.text())
     }
 
+    /// 선택 텍스트(복사 — ① 08-13). 위젯은 OS 클립보드를 모른다 — 호스트가 잇는다.
+    #[must_use]
+    pub fn copy_selection(&self) -> Option<String> {
+        self.base.focused.then(|| self.edit.selected_text())?
+    }
+
+    /// 선택 텍스트를 잘라낸다(① — 반환 텍스트를 호스트가 클립보드에 쓴다).
+    pub fn cut_selection(&mut self, inv: &mut Invalidations) -> Option<String> {
+        if !self.base.focused {
+            return None;
+        }
+        let t = self.edit.cut()?;
+        self.changed = true;
+        inv.push(self.base.bounds);
+        Some(t)
+    }
+
+    /// 붙여넣기(① — 호스트가 읽은 클립보드 텍스트). 단일 행 컨트롤이라
+    /// 개행·제어문자는 공백 하나로 접는다(주소·이름·검색 어디서든 안전).
+    pub fn paste(&mut self, text: &str, inv: &mut Invalidations) {
+        if !self.base.focused || text.is_empty() {
+            return;
+        }
+        let mut cleaned = String::with_capacity(text.len());
+        let mut ws = false;
+        for c in text.chars() {
+            if c.is_control() {
+                ws = true;
+                continue;
+            }
+            if ws {
+                cleaned.push(' ');
+                ws = false;
+            }
+            cleaned.push(c);
+        }
+        if cleaned.is_empty() {
+            return;
+        }
+        self.edit.insert_str(&cleaned);
+        self.changed = true;
+        inv.push(self.base.bounds);
+    }
+
     /// Enter 확정되었으면 텍스트를 꺼낸다(1회성).
     pub fn take_committed(&mut self) -> Option<String> {
         std::mem::take(&mut self.committed).then(|| self.edit.text())
@@ -200,7 +248,15 @@ impl Widget for TextBox {
                 }
             }
             InputEvent::MouseMove { x, .. } if self.dragging => {
-                let idx = self.caret_at_x(x);
+                // 영역 밖으로 끌면 **한 글자씩 자동 진행**(① 08-13) — 페인트가 캐럿을
+                // 따라 스크롤하므로, 마우스를 밖에 둔 채 움직이면 계속 밀린다.
+                let idx = if x > self.base.bounds.right() {
+                    self.edit.caret().saturating_add(1)
+                } else if x < self.base.bounds.x {
+                    self.edit.caret().saturating_sub(1)
+                } else {
+                    self.caret_at_x(x)
+                };
                 self.edit.set_caret(idx, true); // 앵커 유지 = 범위 확장
                 inv.push(self.base.bounds);
             }
@@ -258,10 +314,31 @@ impl Widget for TextBox {
             tx += s16 + self.s(6);
         }
 
-        // 텍스트/placeholder는 **항상 고정 위치**(tx)에 그린다(캐럿으로 밀리지 않게).
+        // 텍스트/placeholder는 고정 시작점(tx)에서 그리되, 폭을 넘으면 **가로 스크롤**로
+        // 캐럿을 따라간다(① 08-13 — 그전엔 긴 텍스트에서 캐럿이 화면 밖으로 사라졌다).
         ctx.select_font(FontSlot::Base, false);
         let text = self.edit.text();
-        // 문자 경계 x를 실측해 남긴다 — 이벤트 경로는 폰트를 모른다(클릭→캐럿 변환 근거).
+        let chars: Vec<char> = text.chars().collect();
+        let upto: String = chars[..self.edit.caret().min(chars.len())].iter().collect();
+        let caret_px = ctx.text_width(&upto); // 텍스트 시작 기준 캐럿 오프셋
+        let total_px = ctx.text_width(&text);
+        // 가용 폭 — 우측 여백(×·도움말 배지 자리)을 뺀다.
+        let avail = (b.right() - self.s(24) - tx).max(self.s(20));
+        let mut hs = self.hscroll.get();
+        if total_px <= avail {
+            hs = 0; // 다 들어가면 스크롤 없음
+        } else {
+            hs = hs.clamp(0, total_px - avail); // 텍스트가 줄면 빈 공간이 남지 않게
+            if caret_px - hs > avail {
+                hs = caret_px - avail; // 캐럿이 오른쪽 밖 → 따라간다
+            }
+            if caret_px - hs < 0 {
+                hs = caret_px; // 캐럿이 왼쪽 밖
+            }
+        }
+        self.hscroll.set(hs);
+        let tx = tx - hs;
+        // 문자 경계 x(화면 좌표 — 스크롤 반영)를 실측해 남긴다 — 클릭→캐럿 변환 근거.
         {
             self.text_x.set(tx);
             let mut xs = self.caret_xs.borrow_mut();
@@ -281,9 +358,7 @@ impl Widget for TextBox {
 
         // 캐럿은 **별도 세로 막대**로 그린다(문자열에 '|'를 끼워 넣지 않음 → 위치 고정).
         if self.base.focused {
-            let chars: Vec<char> = text.chars().collect();
-            let upto: String = chars[..self.edit.caret().min(chars.len())].iter().collect();
-            let cx = tx + ctx.text_width(&upto);
+            let cx = tx + caret_px;
             // 캐럿 높이 = 실측 텍스트 높이(고정 16 근사는 고배율에서 반토막으로 보였다).
             let th = ctx.text_height();
             ctx.fill_rect(Rect::new(cx, ty, self.s(2).max(2), th), theme.text);
@@ -445,5 +520,73 @@ mod tests {
         t.base.focused = true;
         t.on_event(&ch('\u{8}'), &mut inv);
         assert_eq!(t.text(), "ab");
+    }
+
+    #[test]
+    fn clipboard_copy_cut_paste_roundtrip() {
+        // ① 08-13 — 모든 텍스트 컨트롤의 기본 에디터 기능(클립보드는 호스트가 잇는다).
+        let (mut t, mut inv) = tb();
+        t.set_text("hello world");
+        t.base.focused = true;
+        t.edit.set_selection(0, 5);
+        assert_eq!(t.copy_selection().as_deref(), Some("hello"), "복사");
+        assert_eq!(t.text(), "hello world", "복사는 내용 불변");
+        assert_eq!(
+            t.cut_selection(&mut inv).as_deref(),
+            Some("hello"),
+            "잘라내기"
+        );
+        assert_eq!(t.text(), " world");
+        // 붙여넣기 — 개행·제어문자는 공백 하나로 접는다(단일 행 컨트롤).
+        t.edit.set_caret(0, false);
+        t.paste("multi\nline\ttext", &mut inv);
+        assert_eq!(t.text(), "multi line text world");
+        // 비포커스면 전부 무시(다른 컨트롤의 단축키를 삼키지 않는다).
+        t.base.focused = false;
+        assert!(t.copy_selection().is_none());
+        assert!(t.cut_selection(&mut inv).is_none());
+        let before = t.text();
+        t.paste("x", &mut inv);
+        assert_eq!(t.text(), before);
+    }
+
+    #[test]
+    fn drag_beyond_edges_advances_selection() {
+        // ① — 영역 밖 드래그 = 한 글자씩 자동 진행(페인트가 캐럿을 따라 스크롤).
+        let (mut t, mut inv) = tb();
+        t.set_text("abcdef");
+        measure(&t);
+        t.on_event(&click(5, 15), &mut inv); // 앞쪽 클릭 → 드래그 시작
+        let start = t.edit.caret();
+        let b = t.bounds();
+        for _ in 0..3 {
+            t.on_event(
+                &InputEvent::MouseMove {
+                    x: b.right() + 20,
+                    y: 15,
+                },
+                &mut inv,
+            );
+        }
+        assert_eq!(t.edit.caret(), (start + 3).min(6), "오른쪽 밖 = +1씩");
+        assert!(t.edit.selected_text().is_some(), "앵커 유지 = 선택 확장");
+        for _ in 0..10 {
+            t.on_event(&InputEvent::MouseMove { x: b.x - 20, y: 15 }, &mut inv);
+        }
+        assert_eq!(t.edit.caret(), 0, "왼쪽 밖 = -1씩(0에서 멈춤)");
+    }
+
+    #[test]
+    fn hscroll_follows_caret_and_resets_when_fits() {
+        // ① — 긴 텍스트에서 캐럿이 항상 보인다(그전엔 오른쪽 밖으로 사라졌다).
+        let (mut t, _inv) = tb();
+        t.set_text(&"m".repeat(200)); // 260px 상자를 확실히 넘긴다
+        t.base.focused = true;
+        t.edit.set_caret(200, false);
+        measure(&t); // 페인트가 스크롤을 조정한다
+        assert!(t.hscroll.get() > 0, "캐럿(끝)이 보이려면 스크롤돼야 한다");
+        t.set_text("short");
+        measure(&t);
+        assert_eq!(t.hscroll.get(), 0, "다 들어가면 스크롤 없음");
     }
 }
