@@ -129,6 +129,48 @@ docker run --rm -it --init \
 
 **대화 중 명령** — `/send <파일>` · `/accept` · `/reject` · `/help` · `/quit`. 종료는 `/quit` 또는 `Ctrl+D`(⚠️ **`Ctrl+C`는 컨테이너에서 `--init` 없이는 무시된다** — [18 §2-1](18-build-and-test.md)).
 
+### 4-2. 포트를 바꿔서 시험하기 — **기본 포트가 아니어도 도는가**
+
+기본 포트(47200)가 점유됐거나 조직이 다른 포트를 쓰는 상황을 재현한다. 컨테이너는 호스트 포트와 겹치지 않아 **여러 포트를 동시에 띄우기 좋다**.
+
+```bash
+docker network create beepnet
+B="$PWD/.docker-target/release/nexa-beep"
+
+# A — 비기본 포트 47999로 대기
+docker run -d --name srv_a --network beepnet -i --init \
+  -v "$B:/nexa-beep:ro" debian:stable-slim /nexa-beep --chat-serve 47999
+A_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' srv_a)
+
+# B — 포트를 **명시**해 연결
+docker run --rm --network beepnet -it --init \
+  -v "$B:/nexa-beep:ro" debian:stable-slim /nexa-beep --chat-connect "$A_IP:47999"
+```
+
+**실측(2026-08-13)** — 연결·핸드셰이크·프로필 교환·**이미지 70,000B 전달**까지 정상.
+
+```
+[연결] 172.18.0.2:47999 로 연결됨 (me=068d333e)
+[대화 시작] 상대=4260da01 · 한 줄 = 전송
+[프로필] 수신 — 이름=★테스트단말 … 이미지=70000B
+```
+
+#### 대조군 두 개 — 이걸 같이 봐야 "포트가 진짜로 쓰인다"가 증명된다
+
+| 시험 | 명령 | 결과(실측) | 뜻 |
+|---|---|---|---|
+| **명시 포트** | `--chat-connect $A_IP:47999` | ✅ 연결 | 상대가 어떤 포트든 붙는다 |
+| **포트 생략** | `--chat-connect $A_IP` | ❌ **`BadAddress`** | ⚠️ **CLI는 포트를 보완하지 않는다**(아래) |
+| **발견 경유** | A를 `--chat-live`로, B를 `--live-echo`로 | ✅ 연결 | **발견은 포트와 무관** — 실제 포트가 패킷에 실려 온다 |
+
+> ★ **세 번째가 핵심이다.** `--chat-live`는 **임의 포트**로 뜨는데도 상대가 정확히 찾아 붙는다. 발견 패킷의 `tcp_port` 필드가 **실제 바인딩된 포트**를 나르기 때문이다([29 §3](29-wire-security-audit.md) 실측). **같은 서브넷이면 포트를 맞출 필요가 전혀 없다.**
+
+> ⚠️ **알려진 불일치(08-13 발견)** — **포트 생략은 GUI 모달에서만 보완된다.** 주소창에 `10.0.0.5`를 넣으면 `:47200`이 붙지만, CLI `--chat-connect 10.0.0.5`는 **`BadAddress`** 로 떨어진다. CLI에도 같은 정규화가 필요하다.
+
+> ⚠️ **`--discover-probe`의 `from=`은 UDP 발신 주소다** — TCP 포트가 아니라 **그대로 연결에 쓰면 실패한다**(08-13 실제로 겪음). 프로브는 아직 `tcp_port`를 출력하지 않는다.
+
+정리: `docker rm -f srv_a && docker network rm beepnet`
+
 ## 5. 시나리오 D — Docker 2노드 (Linux↔Linux 발견, 자동)
 
 컨테이너끼리는 같은 브리지 네트워크에서 **멀티캐스트 발견이 된다**(발견 테스트베드).
