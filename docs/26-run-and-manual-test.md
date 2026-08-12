@@ -169,7 +169,47 @@ docker run --rm --network beepnet -it --init \
 
 > ⚠️ **`--discover-probe`의 `from=`은 UDP 발신 주소다** — TCP 포트가 아니라 **그대로 연결에 쓰면 실패한다**(08-13 실제로 겪음). 프로브는 아직 `tcp_port`를 출력하지 않는다.
 
-정리: `docker rm -f srv_a && docker network rm beepnet`
+#### `--chat-live`를 **포트 고정**으로 띄우기 (컨테이너)
+
+`--chat-live`는 원래 임의 포트로 뜬다(발견 광고가 실제 포트를 알리므로 같은 서브넷에서는 문제가 없다).
+**호스트에 포트를 매핑하거나 다른 서브넷에서 붙어야 할 때**는 `--port`로 고정한다(08-13 추가).
+
+```bash
+B="$PWD/.docker-target/release/nexa-beep"
+docker network create beepnet 2>/dev/null
+
+# 컨테이너를 "발견 가능한 터미널 단말"로 · 포트 47999 고정 · 호스트에도 매핑
+docker run -d --name live_p --network beepnet -i --init -p 47999:47999 \
+  -v "$B:/nexa-beep:ro" debian:stable-slim /nexa-beep --chat-live "리눅스단말" --port 47999
+docker logs live_p
+```
+
+```
+[대기] '리눅스단말'(me=77be3c80) 로 발견 광고 중 — 실행 중인 GUI(--window --live) 목록에서 클릭하세요…
+[포트] 세션 수신 47999 — 발견이 닿지 않는 상대에겐 `--chat-connect <내IP>:47999` 로 알려준다
+```
+
+> ★ **두 번째 줄이 요점이다** — 실제 리슨 포트를 찍는다. 발견이 닿지 않는 상대에게는 **사람이 이 값을 알려줘야** 수동 연결이 된다(ADR-0006 §3-1).
+
+**붙는 쪽 — 같은 컨테이너 망**
+
+```bash
+IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' live_p)
+docker run --rm --network beepnet -it --init -v "$B:/nexa-beep:ro" \
+  debian:stable-slim /nexa-beep --chat-connect "$IP:47999"
+```
+
+**붙는 쪽 — 맥 호스트**(포트를 매핑했으므로 `127.0.0.1`로 보인다)
+
+```bash
+./target/release/nexa-beep --chat-connect 127.0.0.1:47999
+```
+
+**실측(2026-08-13)** — 컨테이너가 47999로 대기 → 같은 망에서 연결 → 핸드셰이크 → **메시지 수신**(`8582012b> 포트 고정 chat-live 접속`) → 프로필 교환까지 정상.
+
+> ⚠️ **`-i`(또는 `-it`)를 빠뜨리지 말 것** — `--chat-live`도 대화 모드라 stdin이 없으면 붙자마자 끊긴다([§4-1](#4-1-★-인터랙티브-모드--stdin이-관건이다)).
+
+정리: `docker rm -f live_p srv_a && docker network rm beepnet`
 
 ## 5. 시나리오 D — Docker 2노드 (Linux↔Linux 발견, 자동)
 

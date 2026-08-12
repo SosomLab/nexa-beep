@@ -756,16 +756,19 @@ fn receive_into_quarantine(got: &nbeep_core::Received, sender: PeerId) -> bool {
 /// **발견 가능한 인터랙티브 클라이언트**(`--chat-live [이름]`) — LocalDirect로 **발견 광고**(GUI
 /// 목록에 뜬다) + 첫 인바운드(GUI가 클릭해 연결) 수락 → 인터랙티브 대화. 실행 중인 `--window --live`
 /// GUI를 터미널에서 붙어 테스트하는 용도.
-pub(crate) fn chat_live(name: &str) {
+pub(crate) fn chat_live(name: &str, port: u16) {
     use nbeep_net::Transport as _;
     let identity = nbeep_crypto::Identity::generate();
     let mut instance = [0u8; 16];
     instance.copy_from_slice(&nbeep_crypto::Identity::generate().peer_id().as_bytes()[..16]);
     let display = nbeep_core::DisplayName::parse(name)
         .unwrap_or_else(|_| nbeep_core::DisplayName::parse("chat-live").expect("라벨"));
-    // 수신 포트 0(임의) — GUI 옆에서 띄우는 테스트 단말. 발견 광고가 실제 포트를 알린다.
+    // 수신 포트 — 기본은 0(임의)이고, `--port`로 고정할 수 있다(08-13).
+    // 같은 서브넷이면 **발견 광고가 실제 포트를 알리므로** 값이 무엇이든 상관없다.
+    // 고정이 필요한 경우는 **발견이 닿지 않는 곳**(다른 서브넷·컨테이너 경계)뿐이다.
     let transport =
-        match nbeep_net::LocalDirect::spawn_on(identity.peer_id(), instance, display, 800, 1, 0) {
+        match nbeep_net::LocalDirect::spawn_on(identity.peer_id(), instance, display, 800, 1, port)
+        {
             Ok(t) => t,
             Err(e) => {
                 eprintln!("[실패] 전송 시작: {e}");
@@ -775,6 +778,13 @@ pub(crate) fn chat_live(name: &str) {
     println!(
         "[대기] '{name}'(me={}) 로 발견 광고 중 — 실행 중인 GUI(--window --live) 목록에서 클릭하세요…",
         identity.peer_id().short()
+    );
+    // ★ 실제 리슨 포트를 찍는다 — 발견이 닿지 않는 상대(다른 서브넷·컨테이너 경계)에게는
+    //   사람이 이 값을 알려줘야 수동 연결이 된다(ADR-0006 §3-1 · 08-13 실기에서 막혔던 지점).
+    println!(
+        "[포트] 세션 수신 {} — 발견이 닿지 않는 상대에겐 `--chat-connect <내IP>:{}` 로 알려준다",
+        transport.tcp_port(),
+        transport.tcp_port()
     );
     let incoming = transport.incoming();
     // 타임아웃·끊김은 `.ok()`로 흘린다 — 종료 조건은 `wait_with_quit`이 본다.

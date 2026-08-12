@@ -78,11 +78,20 @@ fn main() {
         return;
     }
     if let Some(pos) = args.iter().position(|a| a == "--chat-live") {
+        // 이름은 위치 인자지만 `--port`가 바로 뒤에 올 수 있다 — 옵션을 이름으로 먹지 않는다.
         let name = args
             .get(pos + 1)
+            .filter(|v| !v.starts_with("--"))
             .cloned()
             .unwrap_or_else(|| "터미널".into());
-        chat_live(&name);
+        // 포트 지정(08-13) — 창 모드 `--port`와 같은 규약. 생략·0이면 임의 포트.
+        let port = args
+            .iter()
+            .position(|a| a == "--port")
+            .and_then(|i| args.get(i + 1))
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+        chat_live(&name, port);
         return;
     }
     let open_window = args.iter().any(|a| a == "--window");
@@ -123,7 +132,7 @@ fn main() {
         );
     } else {
         println!(
-            "nexa-beep {} — scaffold (창 `--window [--live] [--port <N>]` · 발견 `--discover-probe [초]` · 수동 `--serve`/`--connect` · 인터랙티브 `--chat-serve [port]`/`--chat-connect <host:port>`/`--chat-live [이름]`(GUI 목록에 뜸) · 무해화 실측 `--quarantine-demo <파일>` · 파일전송 `--xfer-limit-mib <N>`·`--xfer-rate-kb <N>`(chat 모드 · 대화 중 `/send`·`/accept`·`/reject`))",
+            "nexa-beep {} — scaffold (창 `--window [--live] [--port <N>]` · 발견 `--discover-probe [초]` · 수동 `--serve`/`--connect` · 인터랙티브 `--chat-serve [port]`/`--chat-connect <host:port>`/`--chat-live [이름] [--port <N>]`(GUI 목록에 뜸) · 무해화 실측 `--quarantine-demo <파일>` · 파일전송 `--xfer-limit-mib <N>`·`--xfer-rate-kb <N>`(chat 모드 · 대화 중 `/send`·`/accept`·`/reject`))",
             env!("CARGO_PKG_VERSION")
         );
     }
