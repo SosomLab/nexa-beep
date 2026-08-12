@@ -802,6 +802,9 @@ struct App {
     data_dir: std::path::PathBuf,
     /// 실물 전송 여부 — 신원 복원 핫 로딩 시 전송 재시작 판단(데모는 교체만).
     live: bool,
+    /// 실제로 듣고 있는 세션 포트(live 한정 · 선호 포트 점유 시 폴백 값) — 상태바 우측 표시.
+    /// 발견이 닿지 않는 상대에게 사람이 알려줄 값이라 **화면에 항상 보여야 한다**(DR-19).
+    listen_port: Option<u16>,
     /// 프로필 변경 화면 뷰(M3-17 — 열려 있을 때만 Some).
     profile_view: Option<nbeep_ui::ProfileWidget>,
     /// 상대 프로필(M3-17 — 세션 경유 수신 · 목록·제목 표시 우선).
@@ -2293,25 +2296,8 @@ impl App {
             self.windows.remove(&wid);
         }
         let mut net_note = "";
-        if self.live {
-            let mut instance = [0u8; 16];
-            instance
-                .copy_from_slice(&nbeep_crypto::Identity::generate().peer_id().as_bytes()[..16]);
-            let name = effective_display_name(&self.settings, &self.identity.peer_id());
-            match nbeep_net::LocalDirect::spawn(self.identity.peer_id(), instance, name, 800, 1) {
-                Ok(local) => {
-                    use nbeep_net::Transport as _;
-                    self.discovery = local.discovery();
-                    spawn_inbound_accept(
-                        local.incoming(),
-                        std::sync::Arc::clone(&self.identity),
-                        self.proxy.clone(),
-                    );
-                    self.transport = std::sync::Arc::new(local);
-                    self.table = nbeep_core::PeerTable::new(60_000);
-                }
-                Err(_) => net_note = " · ⚠ 전송 재시작 실패(발견 불가 — 재실행 필요)",
-            }
+        if self.live && self.respawn_transport().is_err() {
+            net_note = " · ⚠ 전송 재시작 실패(발견 불가 — 재실행 필요)";
         }
         let mut inv = Invalidations::default();
         self.refresh_rows(&mut inv);
@@ -2484,7 +2470,10 @@ impl App {
                 scale,
             },
         );
-        self.addr_view = Some(nbeep_ui::AddrPromptWidget::new());
+        // 포트 생략 시 붙일 기본 = 설정 수신 포트(ⓐ — 조직이 같은 값을 쓰면 IP만으로 붙는다).
+        self.addr_view = Some(nbeep_ui::AddrPromptWidget::new(session_port_from(
+            &self.settings,
+        )));
         self.layout_window(id);
         self.request_redraw(id);
     }
@@ -2610,6 +2599,37 @@ impl App {
         if let Ok(v) = self.settings.get("xfer.timeout_sec").parse::<u64>() {
             self.wait_timeout_sec = v.clamp(5, 3600);
         }
+    }
+
+    /// 실물 전송 재시작(신원 복원 핫 로딩 · 수신 포트 변경) — `LocalDirect`를 새로 띄워
+    /// 교체한다. 성립해 있는 대화 세션은 **개별 소켓이라 살아남고**, 발견 목록은 상대
+    /// 재공지(≤수 초)로 다시 찬다. 실패 시 기존 전송을 그대로 둔다(호출자가 고지).
+    /// 반환 = 실제 바인딩된 수신 포트(선호 포트 점유 시 폴백 값).
+    fn respawn_transport(&mut self) -> std::io::Result<u16> {
+        let mut instance = [0u8; 16];
+        instance.copy_from_slice(&nbeep_crypto::Identity::generate().peer_id().as_bytes()[..16]);
+        let name = effective_display_name(&self.settings, &self.identity.peer_id());
+        let port = session_port_from(&self.settings);
+        let local = nbeep_net::LocalDirect::spawn_on(
+            self.identity.peer_id(),
+            instance,
+            name,
+            800,
+            1,
+            port,
+        )?;
+        use nbeep_net::Transport as _;
+        let bound = local.tcp_port();
+        self.discovery = local.discovery();
+        spawn_inbound_accept(
+            local.incoming(),
+            std::sync::Arc::clone(&self.identity),
+            self.proxy.clone(),
+        );
+        self.transport = std::sync::Arc::new(local);
+        self.table = nbeep_core::PeerTable::new(60_000);
+        self.listen_port = Some(bound);
+        Ok(bound)
     }
 
     fn apply_settings(&mut self, changes: Vec<(&'static str, String)>) {
@@ -2773,6 +2793,32 @@ impl App {
                     let name = effective_display_name(&self.settings, &self.identity.peer_id());
                     self.transport.set_display_name(name.clone());
                     self.status = format!("표시 이름 = {name} — LAN 전체에 방송됩니다");
+                }
+                // 수신 포트(08-13 ⓐ — 듣는 포트 = 거는 기본 포트). 즉시 적용 = 전송 재시작
+                // (성립한 대화 세션은 개별 소켓이라 유지 · 발견 목록은 재공지로 회복).
+                "net.session_port" => {
+                    let want = session_port_from(&self.settings);
+                    if !self.live {
+                        self.status =
+                            format!("수신 포트 = {want} (데모 모드 — 실물 전송에서 적용)");
+                    } else if self.listen_port == Some(want) {
+                        self.status = format!("수신 포트 = {want} (이미 이 포트로 듣는 중)");
+                    } else {
+                        match self.respawn_transport() {
+                            Ok(bound) if bound == want => {
+                                self.status = format!("수신 포트 = {bound} — 즉시 적용(재공지)");
+                            }
+                            // 폴백을 조용히 하지 않는다 — 상대에게 알려줄 값은 실제 포트다.
+                            Ok(bound) => {
+                                self.status = format!(
+                                    "포트 {want} 점유 — 임의 포트 {bound}로 듣는 중(설정값은 유지)"
+                                );
+                            }
+                            Err(e) => {
+                                self.status = format!("전송 재시작 실패: {e} — 기존 포트 유지");
+                            }
+                        }
+                    }
                 }
                 "ui.typeahead_space" => self.list.set_typeahead_space(value == "on"),
                 "ui.typeahead_special" => self.list.set_typeahead_special(value == "on"),
@@ -3405,10 +3451,20 @@ impl App {
                 ctx.select_font(nbeep_ui::FontSlot::Status, false);
                 let pad = (8.0 * entry.scale).round() as i32;
                 let dy = (bar_h - (14.0 * entry.scale) as i32) / 2;
+                // 우측: 실제 수신 포트(DR-19 — 발견이 안 닿는 상대에게 알려줄 값이라 상시 표시).
+                let mut status_clip = bar;
+                if let Some(p) = self.listen_port {
+                    let label = format!("수신 :{p}");
+                    let lw = ctx.text_width(&label);
+                    let lx = bar.right() - pad - lw;
+                    ctx.text_opaque(lx, bar.y + dy, bar, &label, theme.text_dim, theme.chrome_bg);
+                    // 상태 문구가 포트 표시를 덮지 않게 클립을 좁힌다.
+                    status_clip.w = (lx - pad - bar.x).max(0);
+                }
                 ctx.text_opaque(
                     bar.x + pad,
                     bar.y + dy,
-                    bar,
+                    status_clip,
                     &self.status,
                     theme.text_dim,
                     theme.chrome_bg,
@@ -4505,6 +4561,18 @@ fn effective_display_name(
     nbeep_core::default_display_name(nbeep_plat::host::hostname().as_deref(), peer)
 }
 
+/// 유효 세션 포트 — 설정 `net.session_port` 관용 파싱(ADR-0011 §4-3 원칙 그대로:
+/// 무효·범위 밖(0 포함)은 거부가 아니라 **기본값으로 본다**). 듣는 포트이자 주소 입력에서
+/// 포트 생략 시 거는 포트(사용자 확정 08-13 ⓐ — 하나의 값).
+fn session_port_from(settings: &SettingsState) -> u16 {
+    settings
+        .get("net.session_port")
+        .parse::<u16>()
+        .ok()
+        .filter(|p| *p != 0)
+        .unwrap_or(nbeep_net::DEFAULT_SESSION_PORT)
+}
+
 /// 데이터 디렉터리(FR-P-3 · DR-4) — 실행 파일 옆 `data/` 쓰기 가능(포터블)
 /// → 사용자 설정 폴더 → 임시 폴더(최후 폴백 — 저장은 되지만 재부팅에 진다).
 /// 설정(`settings.cfg`)·신원 키(`identity.key`)·핀 세그먼트(`trust.seg`)가 전부
@@ -4579,15 +4647,25 @@ pub(crate) fn run(mode: WindowMode, live: bool) {
     // 표시 이름(M1-10 · R-19) — 실명이 아니라 정제된 호스트명/지문 라벨이 기본.
     let display_name = effective_display_name(&settings, &identity.peer_id());
 
+    let mut listen_port: Option<u16> = None;
     let (transport, discovery): (std::sync::Arc<dyn nbeep_net::Transport + Send + Sync>, _) =
         if live {
             // 실물 — LocalDirect(UDP 발견 + TCP 세션). 실기·컨테이너 상대가 목록에 뜬다.
+            // 수신 포트 = 설정(기본 47200 · 점유 시 임의 폴백 — 실제 값은 상태바에 표시).
             let mut instance = [0u8; 16];
             instance
                 .copy_from_slice(&nbeep_crypto::Identity::generate().peer_id().as_bytes()[..16]);
             let name = display_name;
-            let local = nbeep_net::LocalDirect::spawn(identity.peer_id(), instance, name, 800, 1)
-                .expect("LocalDirect 시작(방화벽·인터페이스)");
+            let local = nbeep_net::LocalDirect::spawn_on(
+                identity.peer_id(),
+                instance,
+                name,
+                800,
+                1,
+                session_port_from(&settings),
+            )
+            .expect("LocalDirect 시작(방화벽·인터페이스)");
+            listen_port = Some(local.tcp_port());
             let discovery = local.discovery();
             // 인바운드 수락 펌프 — 남이 나에게 연결하면 accept+에코(대칭 대화·비동기 GUI 펌프는 M2-7).
             spawn_inbound_accept(
@@ -4747,6 +4825,7 @@ pub(crate) fn run(mode: WindowMode, live: bool) {
         pending_picker: None,
         data_dir: dir,
         live,
+        listen_port,
         addr_view: None,
         ime_composing: false,
         pending_jamo: None,

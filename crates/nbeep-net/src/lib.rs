@@ -26,7 +26,7 @@ pub mod wire;
 pub mod inmem;
 
 // `Link`/`LinkError`는 core 소유(Session이 net을 몰라도 되게 — [docs/09]). 편의 재수출.
-pub use local::LocalDirect;
+pub use local::{LocalDirect, DEFAULT_SESSION_PORT};
 pub use nbeep_core::link::{Link, LinkError};
 pub use tcp::TcpLink;
 pub use transport::{AddError, Caps, ConnectError, DiscoveryEvent, PeerHint, Transport};

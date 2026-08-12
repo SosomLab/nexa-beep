@@ -51,8 +51,10 @@ pub(crate) fn live_echo(secs: u64) {
     let mut instance = [0u8; 16];
     instance.copy_from_slice(&nbeep_crypto::Identity::generate().peer_id().as_bytes()[..16]);
     let name = nbeep_core::DisplayName::parse(&format!("live-{}", me.short())).expect("라벨");
+    // 수신 포트 0(임의) — 테스트 단말은 발견 광고로 포트를 알리므로 고정 포트가 필요 없고,
+    // 같은 PC의 GUI가 기본 포트(47200)를 가져가야 한다.
     let transport = std::sync::Arc::new(
-        nbeep_net::LocalDirect::spawn(me, instance, name, 500, 1).expect("LocalDirect 시작"),
+        nbeep_net::LocalDirect::spawn_on(me, instance, name, 500, 1, 0).expect("LocalDirect 시작"),
     );
     println!("LIVE me={} {}s", me.short(), secs);
 

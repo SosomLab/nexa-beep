@@ -95,6 +95,30 @@ pub struct LocalDirect {
     incoming_rx: Mutex<Option<Receiver<Box<dyn Link>>>>,
     /// 발견 핸들 — 드롭 시 GOODBYE · 이름 교체 재공지(M1-10).
     disc: UdpDiscovery,
+    /// 실제로 바인딩된 세션 수신 포트(선호 포트가 점유면 임의 폴백 — 값이 달라질 수 있다).
+    tcp_port: u16,
+}
+
+/// **세션 수신 TCP 기본 포트**(DR-19 · ADR-0006 §3-1).
+///
+/// 발견이 닿는 곳에서는 광고된 포트를 쓰므로 값이 무엇이든 상관없다. 문제는 **발견이 닿지
+/// 않는 곳**(다른 서브넷·라우터 너머)이다 — 거기서는 수동 등록이 유일한 길인데, 포트가
+/// 매 실행 바뀌면 **넣을 주소를 알 수 없어 수동 등록 자체가 성립하지 않는다**(2026-08-13 실측).
+/// 그래서 **먼저 이 포트를 시도**하고, 점유돼 있을 때만 임의 포트로 물러선다.
+/// `--serve`/`--chat-serve` 기본값과 같은 값이라 CLI↔GUI도 맞물린다.
+pub const DEFAULT_SESSION_PORT: u16 = 47_200;
+
+/// 선호 포트를 먼저 시도하고, 실패하면 임의 포트로 폴백한다.
+///
+/// 폴백을 **조용히** 하지 않는다 — 실제 포트는 [`LocalDirect::tcp_port`]로 노출되고
+/// 화면에 표시된다(사람이 상대에게 알려줄 수 있어야 한다).
+fn bind_session_listener(preferred: u16) -> std::io::Result<TcpListener> {
+    if preferred != 0 {
+        if let Ok(l) = TcpListener::bind(("0.0.0.0", preferred)) {
+            return Ok(l);
+        }
+    }
+    TcpListener::bind("0.0.0.0:0")
 }
 
 impl LocalDirect {
@@ -109,8 +133,25 @@ impl LocalDirect {
         announce_ms: u32,
         epoch: u64,
     ) -> std::io::Result<Self> {
-        // 세션 수신 TCP — 포트 0(임의)·발견 패킷에 광고.
-        let listener = TcpListener::bind("0.0.0.0:0")?;
+        Self::spawn_on(me, instance, name, announce_ms, epoch, DEFAULT_SESSION_PORT)
+    }
+
+    /// 수신 포트를 지정해 시작한다 — `0`이면 임의 포트.
+    ///
+    /// 같은 PC에서 인스턴스를 여럿 띄우는 테스트·데모는 `0`을 넘겨 충돌을 피한다.
+    ///
+    /// # Errors
+    /// TCP 바인딩·발견 소켓 실패 시 `io::Error`.
+    pub fn spawn_on(
+        me: PeerId,
+        instance: [u8; 16],
+        name: DisplayName,
+        announce_ms: u32,
+        epoch: u64,
+        preferred_port: u16,
+    ) -> std::io::Result<Self> {
+        // 세션 수신 TCP — 선호 포트 우선·점유 시 임의 폴백. 실제 포트를 발견 패킷에 광고한다.
+        let listener = bind_session_listener(preferred_port)?;
         let tcp_port = listener.local_addr()?.port();
 
         let discovery = UdpDiscovery::spawn(me, instance, name, tcp_port, epoch, announce_ms)?;
@@ -173,7 +214,17 @@ impl LocalDirect {
             discovery_rx: Mutex::new(Some(discovery_rx)),
             incoming_rx: Mutex::new(Some(incoming_rx)),
             disc: discovery,
+            tcp_port,
         })
+    }
+
+    /// **실제로 듣고 있는 세션 포트.** 선호 포트가 점유돼 폴백했으면 그 값이 나온다.
+    ///
+    /// 발견이 닿지 않는 상대에게는 사람이 이 값을 알려줘야 수동 등록이 가능하다
+    /// — 그래서 UI가 이걸 표시한다(ADR-0006 §3-1).
+    #[must_use]
+    pub fn tcp_port(&self) -> u16 {
+        self.tcp_port
     }
 }
 
@@ -331,5 +382,37 @@ mod tests {
             l.local_addr().unwrap()
         };
         assert!(connect_first(&[dead], Duration::from_millis(300)).is_none());
+    }
+
+    /// 선호 포트가 비어 있으면 **그 포트로** 바인딩된다(08-13 — 수동 등록의 전제).
+    /// 고정 47200을 시험하면 CI·병렬 테스트와 경합하므로, OS가 준 임의 포트를 "선호"로
+    /// 재사용해 검증한다(닫은 직후라 재점유 가능성은 무시할 수준).
+    #[test]
+    fn preferred_port_is_used_when_free() {
+        let free = {
+            let l = TcpListener::bind("127.0.0.1:0").unwrap();
+            l.local_addr().unwrap().port()
+        };
+        let bound = bind_session_listener(free).unwrap();
+        assert_eq!(bound.local_addr().unwrap().port(), free);
+    }
+
+    /// 선호 포트가 점유돼 있으면 **실패가 아니라 임의 포트 폴백**이다(DR-4 포터블 —
+    /// 같은 PC 다중 인스턴스에서 두 번째가 죽으면 안 된다). 폴백 값은 노출된다.
+    #[test]
+    fn occupied_preferred_port_falls_back_to_random() {
+        let holder = TcpListener::bind("0.0.0.0:0").unwrap();
+        let taken = holder.local_addr().unwrap().port();
+        let bound = bind_session_listener(taken).unwrap();
+        let got = bound.local_addr().unwrap().port();
+        assert_ne!(got, taken, "점유 포트를 뺏을 수 없다");
+        assert_ne!(got, 0);
+    }
+
+    /// `0` = 처음부터 임의 포트(테스트·데모 경로).
+    #[test]
+    fn zero_means_random_port() {
+        let bound = bind_session_listener(0).unwrap();
+        assert_ne!(bound.local_addr().unwrap().port(), 0);
     }
 }

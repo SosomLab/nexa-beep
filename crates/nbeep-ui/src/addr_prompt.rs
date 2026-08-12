@@ -12,27 +12,60 @@ use crate::geom::{Point, Rect};
 use crate::theme::Theme;
 use crate::widget::{Invalidations, Widget};
 
-/// 주소 형식 검증 — `host:port` 또는 `[v6]:port`. 포트 1~65535·호스트 비어있지 않음.
-/// 관대하게(호스트 문자 집합은 안 따진다 — 해석은 `to_socket_addrs` 몫) 그러나 **포트는
-/// 반드시 있고 숫자여야** 오타를 즉시 잡는다.
+/// 세션 기본 포트 — 포트를 생략한 입력에 붙인다(`nbeep_net::DEFAULT_SESSION_PORT`와 같은 값).
+///
+/// ⚠️ UI 크레이트는 `net`에 의존하지 않으므로([docs/01] 단방향 의존) 값을 여기 다시 둔다.
+/// 두 값이 갈리면 안 되므로 테스트가 문서화된 값(47200)을 고정한다.
+/// 설정 `net.session_port`(듣는 포트 = 거는 기본 포트 — 08-13 ⓐ)를 바꾸면 호스트가
+/// [`AddrPromptWidget::new`]에 그 값을 넘긴다 — 이 상수는 미배선 경로의 폴백.
+pub const DEFAULT_PORT: u16 = 47_200;
+
+/// 주소를 정규화한다 — **포트를 생략하면 `default_port`를 붙인다.**
+///
+/// 사용자가 `10.60.218.157`만 넣어도 연결되게 하는 것이 목적이다(2026-08-13 사용자 요구).
+/// 포트를 적었으면 그대로 두고, 형식이 틀렸으면 `None`.
+///
+/// ```
+/// # use nbeep_ui::addr_prompt::{normalize_endpoint, DEFAULT_PORT};
+/// assert_eq!(normalize_endpoint("10.0.0.1", DEFAULT_PORT).as_deref(), Some("10.0.0.1:47200"));
+/// assert_eq!(normalize_endpoint("10.0.0.1:9000", DEFAULT_PORT).as_deref(), Some("10.0.0.1:9000"));
+/// assert_eq!(normalize_endpoint("[fe80::1]", 48000).as_deref(), Some("[fe80::1]:48000"));
+/// assert_eq!(normalize_endpoint("", DEFAULT_PORT), None);
+/// ```
 #[must_use]
-pub fn valid_endpoint(s: &str) -> bool {
+pub fn normalize_endpoint(s: &str, default_port: u16) -> Option<String> {
     let s = s.trim();
     if s.is_empty() {
-        return false;
+        return None;
     }
-    // [v6]:port
+    // [v6] 또는 [v6]:port
     if let Some(rest) = s.strip_prefix('[') {
-        let Some((host, port)) = rest.split_once("]:") else {
-            return false;
-        };
-        return !host.is_empty() && valid_port(port);
+        if let Some((host, port)) = rest.split_once("]:") {
+            return (!host.is_empty() && valid_port(port)).then(|| s.to_string());
+        }
+        // 포트 없는 [v6]
+        let host = rest.strip_suffix(']')?;
+        return (!host.is_empty()).then(|| format!("[{host}]:{default_port}"));
     }
-    // host:port — 마지막 ':' 기준(host에 ':'가 없어야 하므로 정확히 하나).
+    // 대괄호 없는 v6(':'가 둘 이상) — 포트를 붙이려면 대괄호가 필요하다.
+    if s.matches(':').count() >= 2 {
+        return None;
+    }
     match s.rsplit_once(':') {
-        Some((host, port)) => !host.is_empty() && !host.contains(':') && valid_port(port),
-        None => false,
+        // host:port
+        Some((host, port)) => (!host.is_empty() && valid_port(port)).then(|| s.to_string()),
+        // 포트 생략 — 기본 포트를 붙인다.
+        None => Some(format!("{s}:{default_port}")),
     }
+}
+
+/// 주소 형식 검증 — `host[:port]` 또는 `[v6][:port]`. **포트는 생략 가능**(기본 포트 사용).
+/// 호스트 문자 집합은 안 따진다(해석은 `to_socket_addrs` 몫) — 그러나 포트를 **적었다면**
+/// 숫자·1~65535여야 오타를 즉시 잡는다.
+#[must_use]
+pub fn valid_endpoint(s: &str) -> bool {
+    // 유효성은 기본 포트 값과 무관하다(붙는 값만 달라진다).
+    normalize_endpoint(s, DEFAULT_PORT).is_some()
 }
 
 fn valid_port(p: &str) -> bool {
@@ -49,19 +82,22 @@ pub struct AddrPromptWidget {
     cancel: Button,
     submit: Option<String>,
     canceled: bool,
+    /// 포트 생략 시 붙일 기본 포트 — 설정 `net.session_port`(듣는 포트와 같은 값 · ⓐ).
+    default_port: u16,
 }
 
 impl Default for AddrPromptWidget {
     fn default() -> Self {
-        Self::new()
+        Self::new(DEFAULT_PORT)
     }
 }
 
 impl AddrPromptWidget {
-    /// 빈 입력으로 만든다(입력에 포커스).
+    /// 빈 입력으로 만든다(입력에 포커스). `default_port` = 포트 생략 시 붙일 값
+    /// (호스트가 설정 `net.session_port`를 넘긴다 — 듣는 포트 = 거는 기본 포트).
     #[must_use]
-    pub fn new() -> Self {
-        let mut input = TextBox::new("host:port · [v6]:port");
+    pub fn new(default_port: u16) -> Self {
+        let mut input = TextBox::new("host 또는 host:port · [v6]:port");
         input.set_focused(true);
         Self {
             bounds: Rect::default(),
@@ -71,6 +107,7 @@ impl AddrPromptWidget {
             cancel: Button::new(t_cancel()),
             submit: None,
             canceled: false,
+            default_port,
         }
     }
 
@@ -125,8 +162,10 @@ impl AddrPromptWidget {
 
     fn try_submit(&mut self, inv: &mut Invalidations) {
         let text = self.input.text();
-        if valid_endpoint(&text) {
-            self.submit = Some(text.trim().to_string());
+        // ★ 포트를 생략했으면 여기서 기본 포트가 붙는다 — 호스트는 완성된 주소만 본다.
+        // 형식이 틀리면 `None`이라 제출되지 않는다(검증과 정규화가 한 함수 = 판정이 갈리지 않는다).
+        if let Some(addr) = normalize_endpoint(&text, self.default_port) {
+            self.submit = Some(addr);
         }
         inv.push(self.bounds);
     }
@@ -205,19 +244,21 @@ impl Widget for AddrPromptWidget {
         // 형식 힌트 — 유효하면 회색, 비어있지 않은데 무효면 위험색으로 즉시 알린다.
         let text = self.input.text();
         ctx.select_font(FontSlot::Status, false);
+        let p = self.default_port;
         let (hint, color) = if text.trim().is_empty() {
-            ("예: 192.168.0.5:47300 · [fe80::1]:47300", theme.text_dim)
+            (
+                format!("예: 10.0.0.5 (포트 생략 시 {p}) · 10.0.0.5:{p} · [fe80::1]:{p}"),
+                theme.text_dim,
+            )
         } else if valid_endpoint(&text) {
-            ("Enter로 연결", theme.ok)
+            ("Enter로 연결".to_string(), theme.ok)
         } else {
             (
-                "형식: host:port 또는 [v6]:port (포트 1~65535)",
+                "형식: host:port 또는 [v6]:port (포트 1~65535)".to_string(),
                 theme.danger,
             )
         };
-        let sh = ctx.text_height();
-        ctx.text(b.x + self.s(16), b.y + self.s(80), b, hint, color);
-        let _ = sh;
+        ctx.text(b.x + self.s(16), b.y + self.s(80), b, &hint, color);
         self.connect.paint(ctx, theme);
         self.cancel.paint(ctx, theme);
     }
@@ -228,7 +269,7 @@ mod tests {
     use super::*;
 
     fn widget() -> (AddrPromptWidget, Invalidations) {
-        let mut w = AddrPromptWidget::new();
+        let mut w = AddrPromptWidget::new(DEFAULT_PORT);
         let mut inv = Invalidations::default();
         w.set_bounds(Rect::new(0, 0, 360, 150), &mut inv);
         (w, inv)
@@ -253,7 +294,7 @@ mod tests {
         assert!(valid_endpoint("host.example:22"));
         assert!(valid_endpoint("[fe80::1]:47300"));
         assert!(valid_endpoint("[::1]:1"));
-        assert!(!valid_endpoint("192.168.0.5"), "포트 없음");
+        assert!(valid_endpoint("192.168.0.5"), "포트 생략 = 기본 포트");
         assert!(!valid_endpoint("192.168.0.5:"), "빈 포트");
         assert!(!valid_endpoint(":47300"), "빈 호스트");
         assert!(!valid_endpoint("192.168.0.5:99999"), "포트 범위 초과");
@@ -263,18 +304,96 @@ mod tests {
     }
 
     #[test]
-    fn enter_submits_only_valid() {
+    fn omitted_port_gets_default() {
+        // 사용자 요구(08-13) — IP만 넣어도 연결되어야 한다.
+        assert_eq!(
+            normalize_endpoint("10.60.218.157", DEFAULT_PORT).as_deref(),
+            Some("10.60.218.157:47200")
+        );
+        assert_eq!(
+            normalize_endpoint("host.example", DEFAULT_PORT).as_deref(),
+            Some("host.example:47200")
+        );
+        assert_eq!(
+            normalize_endpoint("[fe80::1]", DEFAULT_PORT).as_deref(),
+            Some("[fe80::1]:47200")
+        );
+    }
+
+    #[test]
+    fn explicit_port_is_kept() {
+        assert_eq!(
+            normalize_endpoint("10.0.0.1:9000", DEFAULT_PORT).as_deref(),
+            Some("10.0.0.1:9000")
+        );
+        assert_eq!(
+            normalize_endpoint("[fe80::1]:9000", DEFAULT_PORT).as_deref(),
+            Some("[fe80::1]:9000")
+        );
+    }
+
+    #[test]
+    fn bare_v6_without_brackets_is_rejected() {
+        // 대괄호가 없으면 마지막 ':'가 포트인지 v6 구분자인지 알 수 없다 — 추측하지 않는다.
+        assert_eq!(normalize_endpoint("fe80::1", DEFAULT_PORT), None);
+        assert_eq!(normalize_endpoint("::1", DEFAULT_PORT), None);
+    }
+
+    #[test]
+    fn custom_default_port_is_used_on_omission() {
+        // 설정 `net.session_port`를 바꾸면(ⓐ — 듣는 포트 = 거는 기본 포트) 생략 입력에
+        // 그 값이 붙어야 한다. 명시 포트는 설정과 무관하게 유지.
+        assert_eq!(
+            normalize_endpoint("10.0.0.1", 48123).as_deref(),
+            Some("10.0.0.1:48123")
+        );
+        assert_eq!(
+            normalize_endpoint("10.0.0.1:9000", 48123).as_deref(),
+            Some("10.0.0.1:9000")
+        );
+        let mut w = AddrPromptWidget::new(48123);
+        let mut inv = Invalidations::default();
+        w.set_bounds(Rect::new(0, 0, 360, 150), &mut inv);
+        for c in "10.0.0.7".chars() {
+            ch(&mut w, c, &mut inv);
+        }
+        enter(&mut w, &mut inv);
+        assert_eq!(w.take_submit().as_deref(), Some("10.0.0.7:48123"));
+    }
+
+    #[test]
+    fn default_port_matches_documented_value() {
+        // net 크레이트의 DEFAULT_SESSION_PORT와 같아야 한다(의존 방향상 상수를 공유할 수 없다).
+        assert_eq!(DEFAULT_PORT, 47_200);
+    }
+
+    #[test]
+    fn submit_carries_normalized_address() {
         let (mut w, mut inv) = widget();
         for c in "10.0.0.1".chars() {
             ch(&mut w, c, &mut inv);
         }
         enter(&mut w, &mut inv);
-        assert!(w.take_submit().is_none(), "포트 없음 = 확정 안 됨");
-        for c in ":47300".chars() {
+        assert_eq!(w.take_submit().as_deref(), Some("10.0.0.1:47200"));
+    }
+
+    #[test]
+    fn enter_submits_only_valid() {
+        // ⚠️ 정정(08-13) — "포트 없음"은 이제 **유효**하다(기본 포트가 붙는다).
+        // 이 테스트가 지키는 것은 "형식이 틀린 것은 확정되지 않는다"로 좁혀졌다.
+        let (mut w, mut inv) = widget();
+        for c in "10.0.0.1:99999".chars() {
             ch(&mut w, c, &mut inv);
         }
         enter(&mut w, &mut inv);
-        assert_eq!(w.take_submit().as_deref(), Some("10.0.0.1:47300"));
+        assert!(w.take_submit().is_none(), "포트 범위 초과 = 확정 안 됨");
+        // 새 위젯으로 유효한 값 확인(지우기 키는 이 테스트의 관심사가 아니다).
+        let (mut w, mut inv) = widget();
+        for c in "10.0.0.1:47200".chars() {
+            ch(&mut w, c, &mut inv);
+        }
+        enter(&mut w, &mut inv);
+        assert_eq!(w.take_submit().as_deref(), Some("10.0.0.1:47200"));
         assert!(w.take_submit().is_none(), "1회성");
     }
 

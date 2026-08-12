@@ -52,8 +52,9 @@ pub(crate) fn chat_interactive(role: ChatRole) {
             instance
                 .copy_from_slice(&nbeep_crypto::Identity::generate().peer_id().as_bytes()[..16]);
             let name = nbeep_core::DisplayName::parse("chat").expect("라벨");
+            // 수신 포트 0(임의) — 발신 전용 경로. 같은 PC GUI의 기본 포트를 뺏지 않는다.
             let transport =
-                nbeep_net::LocalDirect::spawn(identity.peer_id(), instance, name, 5000, 1)
+                nbeep_net::LocalDirect::spawn_on(identity.peer_id(), instance, name, 5000, 1, 0)
                     .expect("전송");
             use nbeep_net::Transport as _;
             match transport.add_endpoint(addr) {
@@ -762,8 +763,9 @@ pub(crate) fn chat_live(name: &str) {
     instance.copy_from_slice(&nbeep_crypto::Identity::generate().peer_id().as_bytes()[..16]);
     let display = nbeep_core::DisplayName::parse(name)
         .unwrap_or_else(|_| nbeep_core::DisplayName::parse("chat-live").expect("라벨"));
+    // 수신 포트 0(임의) — GUI 옆에서 띄우는 테스트 단말. 발견 광고가 실제 포트를 알린다.
     let transport =
-        match nbeep_net::LocalDirect::spawn(identity.peer_id(), instance, display, 800, 1) {
+        match nbeep_net::LocalDirect::spawn_on(identity.peer_id(), instance, display, 800, 1, 0) {
             Ok(t) => t,
             Err(e) => {
                 eprintln!("[실패] 전송 시작: {e}");

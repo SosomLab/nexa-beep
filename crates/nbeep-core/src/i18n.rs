@@ -316,6 +316,14 @@ pub enum Msg {
     FieldPhone,
     /// "LAN에 방송되지 않음 · 연결된 상대의 요청에만" 안내.
     ProfileShareNote,
+    // ── 네트워크 (DR-19 · ADR-0006 — 수동 등록이 성립하려면 포트가 예측 가능해야) ──
+    /// 카테고리: 네트워크.
+    CatNetwork,
+    /// 세션 수신 포트 항목 — **듣는 포트 = 주소 입력에서 포트 생략 시 거는 포트**(사용자 확정 08-13 ⓐ).
+    SessionPort,
+    SessionPortDesc,
+    /// 기본 포트(47200) 선택지 라벨.
+    PortDefault,
 }
 
 impl Msg {
@@ -837,6 +845,20 @@ impl Msg {
                 "기본 비공개. 연결된 상대에게만 제공됩니다.",
                 "默认关闭。仅提供给已连接的对方。",
                 "既定でオフ。接続済みの相手にのみ提供されます。",
+            ],
+            Msg::CatNetwork => ["Network", "네트워크", "网络", "ネットワーク"],
+            Msg::SessionPort => ["Listening port", "수신 포트", "监听端口", "受信ポート"],
+            Msg::SessionPortDesc => [
+                "Port for incoming connections; also used when an address omits a port. Falls back to a random port if taken.",
+                "연결을 받는 포트이며, 주소에서 포트를 생략하면 이 포트로 겁니다. 점유 중이면 임의 포트로 물러납니다.",
+                "接收连接的端口；地址省略端口时也使用此端口。被占用时退回随机端口。",
+                "接続を受け付けるポートで、アドレスでポート省略時にもこの値を使用。使用中なら任意ポートへ退避。",
+            ],
+            Msg::PortDefault => [
+                "Default (47200)",
+                "기본(47200)",
+                "默认(47200)",
+                "既定(47200)",
             ],
         }
     }

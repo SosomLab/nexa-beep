@@ -69,14 +69,15 @@ pub(crate) fn connect_manual(addr: &str) {
     instance.copy_from_slice(&nbeep_crypto::Identity::generate().peer_id().as_bytes()[..16]);
     let name = nbeep_core::DisplayName::parse("manual").expect("라벨");
     // LocalDirect(발견 스레드 포함 — add_endpoint만 쓴다). 발견 실패해도 add_endpoint는 독립.
-    let transport = match nbeep_net::LocalDirect::spawn(identity.peer_id(), instance, name, 5000, 1)
-    {
-        Ok(t) => t,
-        Err(e) => {
-            eprintln!("전송 시작 실패: {e}");
-            return;
-        }
-    };
+    // 수신 포트 0(임의) — 발신 전용 도구가 같은 PC GUI의 기본 포트(47200)를 뺏으면 안 된다.
+    let transport =
+        match nbeep_net::LocalDirect::spawn_on(identity.peer_id(), instance, name, 5000, 1, 0) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("전송 시작 실패: {e}");
+                return;
+            }
+        };
     let link = match transport.add_endpoint(addr) {
         Ok(l) => l,
         Err(e) => {

@@ -10,7 +10,7 @@
 //! | 검색 | [`TextBox`](placeholder·Beam 캐럿) |
 //! | 카테고리 사이드바 | [`TreeView`](검색 중 매치 카테고리 + "(N)") |
 //! | 택일 설정 | [`Combo`](드롭다운 · 선택 ✓) |
-//! | on/off 설정 | [`Checkbox`] |
+//! | on/off 설정 | [`Checkbox`](crate::controls::Checkbox) |
 //! | 글꼴 영역 | [`TextBox`] 글꼴명 + [`Combo`] 크기 |
 //!
 //! 값 반영은 기존 계약 그대로 — **즉시 적용**([`SettingsWidget::take_changes`] 폴링), 영속은
@@ -78,7 +78,7 @@ pub enum SettingKind {
         /// 글꼴명 값 키.
         family_key: &'static str,
     },
-    /// on/off — [`Checkbox`]. 값은 `"on"`/`"off"`(기본 on).
+    /// on/off — [`Checkbox`](crate::controls::Checkbox). 값은 `"on"`/`"off"`(기본 on).
     Toggle,
     /// 색상 — [`ColorPicker`](스와치 + `#RRGGBB` 입력 + 프리셋). 값 = `#RRGGBB`(08-10).
     Color {
@@ -538,6 +538,18 @@ pub fn registry() -> &'static [Entry] {
                 "초",
             ),
             key: "xfer.timeout_sec",
+        },
+        // 네트워크 — 세션 수신 포트(DR-19 · ADR-0006 §3-1). **듣는 포트이자 주소 입력에서
+        // 포트를 생략했을 때 거는 기본 포트**(하나의 값 — 사용자 확정 08-13 ⓐ: 조직이 같은
+        // 값을 쓰면 IP만으로 서로 붙는다). 값 검증(1~65535)은 소비처가 관용 파싱 —
+        // 무효·범위 밖은 기본 47200으로 본다.
+        Entry {
+            cat: Msg::CatNetwork,
+            sub: None,
+            label: Msg::SessionPort,
+            desc: Msg::SessionPortDesc,
+            kind: SettingKind::RadioInput(&[("47200", Msg::PortDefault)], ""),
+            key: "net.session_port",
         },
     ]
 }
