@@ -12,15 +12,16 @@
 //!
 //! ## 상한 (fail-closed)
 //!
-//! - 원본 ≤ 1MiB · 디코드 픽셀 ≤ 4,194,304(= 2048², RGBA 16MiB) · 변 ≤ 8192.
+//! - 원본 ≤ 1MiB · 디코드 픽셀 ≤ 16,777,216(= 4096², RGBA 64MiB) · 변 ≤ 8192.
 //! - 시간 상한은 **부모가 kill**로 강제한다(여기서 재는 시계는 신뢰 경계 밖).
 
 use std::io::{Read as _, Write as _};
 
 /// 원본 바이트 상한(프로필 이미지 256KiB 대비 여유 — 그 외 소비처도 1MiB면 충분).
 const SRC_MAX: usize = 1024 * 1024;
-/// 디코드 픽셀 상한(w*h) — RGBA 16MiB.
-const PIXELS_MAX: u64 = 4_194_304;
+/// 디코드 픽셀 상한(w*h) — RGBA 64MiB. 원본 1MiB JPEG은 12MP대가 흔해
+/// 2048²(4MP)로는 폰 사진 대부분이 거부됐다(수신 미리보기 실기 08-13).
+const PIXELS_MAX: u64 = 16_777_216;
 /// 변 상한.
 const SIDE_MAX: u32 = 8192;
 
@@ -192,4 +193,24 @@ fn downscale_box(w: u32, h: u32, rgba: &[u8], max_side: u32) -> (u32, u32, Vec<u
         }
     }
     (nw, nh, out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 실기(08-13)에서 거부됐던 폰 사진 해상도들이 상한 안에 들어야 한다.
+    #[test]
+    fn phone_photos_within_pixel_cap() {
+        assert!(size_ok(2198, 2198)); // 483만 px — 구 상한(2048²)에서 거부됐던 실물
+        assert!(size_ok(4000, 3000)); // 12MP — 1MiB JPEG로 흔한 크기
+        assert!(size_ok(4096, 4096)); // 정확히 상한
+    }
+
+    #[test]
+    fn oversized_still_rejected() {
+        assert!(!size_ok(4097, 4096)); // 픽셀 상한 초과
+        assert!(!size_ok(8193, 1)); // 변 상한 초과
+        assert!(!size_ok(0, 100)); // 퇴화
+    }
 }
