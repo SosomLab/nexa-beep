@@ -276,9 +276,19 @@ fn spawn_session_actor(
                     return;
                 }
             }
-            // 대화 수신 폴.
-            match session.recv(StreamId::Chat) {
-                Ok(bytes) => {
+            // ★ 수신은 **스트림별이 아니라 도착 순서로** 뽑는다(08-13 — 스트림별 폴링은
+            // 파일 전송 2MiB 지점에서 Backpressure로 끊겼다. 근거 = `MuxSession::recv_any`).
+            let (stream, bytes) = match session.recv_any() {
+                Ok(v) => v,
+                Err(nbeep_core::SessionError::TimedOut) => continue, // 정상 — 송신 교대로
+                Err(_) => {
+                    let _ = proxy.send_event(AppEvent::Closed { peer });
+                    return;
+                }
+            };
+            match stream {
+                // 대화 수신.
+                StreamId::Chat => {
                     if let Ok(m) = nbeep_core::ChatMessage::decode(&bytes, peer) {
                         if let nbeep_core::MessageBody::Text(t) = m.body {
                             let ev = AppEvent::Recv {
@@ -293,16 +303,9 @@ fn spawn_session_actor(
                         }
                     }
                 }
-                Err(nbeep_core::SessionError::TimedOut) => {} // 정상 — 송신 교대로
-                Err(_) => {
-                    let _ = proxy.send_event(AppEvent::Closed { peer });
-                    return;
-                }
-            }
-            // 프로필 수신 폴(Control — M3-17). 요청은 메인으로 올리고(정책 단일 지점),
-            // 응답은 여기서 조립해 완성본만 올린다(대용량 조립이 메인을 막지 않게).
-            match session.recv(StreamId::Control) {
-                Ok(bytes) => match nbeep_core::ProfileMsg::decode(&bytes) {
+                // 프로필 수신(Control — M3-17). 요청은 메인으로 올리고(정책 단일 지점),
+                // 응답은 여기서 조립해 완성본만 올린다(대용량 조립이 메인을 막지 않게).
+                StreamId::Control => match nbeep_core::ProfileMsg::decode(&bytes) {
                     Some(nbeep_core::ProfileMsg::Request) => {
                         if proxy
                             .send_event(AppEvent::ProfileRequested { peer })
@@ -362,15 +365,8 @@ fn spawn_session_actor(
                     }
                     None => {} // 미지 kind — 전방 호환 무시
                 },
-                Err(nbeep_core::SessionError::TimedOut) => {}
-                Err(_) => {
-                    let _ = proxy.send_event(AppEvent::Closed { peer });
-                    return;
-                }
-            }
-            // 파일 수신 폴.
-            match session.recv(StreamId::File) {
-                Ok(bytes) => {
+                // 파일 수신.
+                StreamId::File => {
                     if xfer_step(
                         &bytes,
                         peer,
@@ -386,11 +382,6 @@ fn spawn_session_actor(
                         let _ = proxy.send_event(AppEvent::Closed { peer });
                         return;
                     }
-                }
-                Err(nbeep_core::SessionError::TimedOut) => {}
-                Err(_) => {
-                    let _ = proxy.send_event(AppEvent::Closed { peer });
-                    return;
                 }
             }
         }

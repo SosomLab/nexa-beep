@@ -325,9 +325,19 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
                     Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
                 }
             }
+            // ★ 수신은 **스트림별이 아니라 도착 순서로** 뽑는다(08-13 — 스트림별 폴링은
+            // 파일 전송 2MiB 지점에서 Backpressure로 끊겼다. 근거 = `MuxSession::recv_any`).
+            let (stream, bytes) = match mux.recv_any() {
+                Ok(v) => v,
+                Err(nbeep_core::SessionError::TimedOut) => continue,
+                Err(_) => {
+                    println!("[종료] 세션 끊김");
+                    return;
+                }
+            };
             // 대화 스트림.
-            match mux.recv(StreamId::Chat) {
-                Ok(bytes) => {
+            match stream {
+                StreamId::Chat => {
                     if let Ok(m) = ChatMessage::decode(&bytes, peer) {
                         ledger.note_recv(peer); // 왕래 장부(상호 확인 근거)
                         if let MessageBody::Text(t) = m.body {
@@ -336,15 +346,8 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
                         }
                     }
                 }
-                Err(nbeep_core::SessionError::TimedOut) => {}
-                Err(_) => {
-                    println!("[종료] 세션 끊김");
-                    return;
-                }
-            }
-            // 프로필 스트림(Control — M3-17 검증).
-            match mux.recv(StreamId::Control) {
-                Ok(bytes) => match nbeep_core::ProfileMsg::decode(&bytes) {
+                // 프로필 스트림(Control — M3-17 검증).
+                StreamId::Control => match nbeep_core::ProfileMsg::decode(&bytes) {
                     Some(nbeep_core::ProfileMsg::Request) => {
                         println!("[프로필] 상대가 요청 — 테스트 프로필 응답(★{my_name})");
                         let img: Vec<u8> = (0..70_000u32).map(|i| (i % 251) as u8).collect();
@@ -397,15 +400,8 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
                     }
                     None => {}
                 },
-                Err(nbeep_core::SessionError::TimedOut) => {}
-                Err(_) => {
-                    println!("[종료] 세션 끊김");
-                    return;
-                }
-            }
-            // 파일 스트림.
-            match mux.recv(StreamId::File) {
-                Ok(bytes) => match XferMsg::decode(&bytes) {
+                // 파일 스트림.
+                StreamId::File => match XferMsg::decode(&bytes) {
                     Ok(XferMsg::Offer { id, size, name, .. }) => {
                         let m = XferMsg::decode(&bytes).expect("방금 성공한 디코드");
                         // ★ 자격 판정 먼저 — 상호 확인 없는 상대는 무조건 거부(사용자 규칙).
@@ -577,11 +573,6 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
                     }
                     Err(e) => println!("[파일] 와이어 오류: {e}"),
                 },
-                Err(nbeep_core::SessionError::TimedOut) => {}
-                Err(_) => {
-                    println!("[종료] 세션 끊김");
-                    return;
-                }
             }
         }
     });

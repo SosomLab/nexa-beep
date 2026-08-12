@@ -145,6 +145,41 @@ impl<S: Session> MuxSession<S> {
             q.push_back(frame);
         }
     }
+
+    /// **아무 스트림**의 다음 메시지 수신 — 폴링 펌프 전용(M2-7 · CLI/GUI 수신 루프).
+    ///
+    /// 스트림별 [`recv`](Self::recv)를 돌려 쓰면 **한 스트림이 몰릴 때 세션이 끊긴다.**
+    /// `recv(Chat)`은 Chat 프레임이 올 때까지 File 프레임을 계속 큐에 쌓는데, 펌프는 한
+    /// 바퀴에 File을 **하나만** 빼간다. 들어오는 쪽이 빠지는 쪽보다 빠르니 큐는 단조 증가하고
+    /// [`MAX_QUEUED`]를 넘는 순간 [`SessionError::Backpressure`](fail-closed)로 끊긴다.
+    /// **실측(08-13)**: 32KiB 청크 × 64 = **2MiB 지점에서 파일 전송이 매번 죽었다.**
+    ///
+    /// 펌프가 원하는 것은 "다음에 온 것"이지 "특정 스트림의 다음 것"이 아니다. 이 함수는
+    /// 큐를 만들지 않으므로 그 실패 양식 자체가 없어진다. `MAX_QUEUED` 방어는
+    /// [`recv`](Self::recv)에 그대로 남는다(진짜 남용은 여전히 끊는다).
+    ///
+    /// 큐에 남은 것(다른 경로가 쌓아둔 것)을 **먼저** 비우고, 없으면 와이어에서 하나 읽는다.
+    ///
+    /// # Errors
+    /// 링크 종료 [`SessionError::Closed`] · 빈 프레임은 프로토콜 위반 [`SessionError::Handshake`].
+    pub fn recv_any(&mut self) -> Result<(StreamId, Vec<u8>), SessionError> {
+        for s in [StreamId::Control, StreamId::Chat, StreamId::File] {
+            if let Some(m) = self.queues[s.index()].pop_front() {
+                return Ok((s, m));
+            }
+        }
+        loop {
+            let mut frame = self.inner.recv()?;
+            let Some(&id_byte) = frame.first() else {
+                return Err(SessionError::Handshake); // 빈 프레임 = 위반
+            };
+            frame.drain(..1);
+            let Some(id) = StreamId::from_byte(id_byte) else {
+                continue; // 미지 스트림 — 조용히 버림(전방 호환)
+            };
+            return Ok((id, frame));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -217,6 +252,54 @@ mod tests {
         assert_eq!(b.recv(StreamId::Chat).unwrap(), b"m1");
         assert_eq!(b.recv(StreamId::Control).unwrap(), b"c1");
         assert_eq!(b.recv(StreamId::Control).unwrap(), b"c2");
+    }
+
+    /// ★ 실패 재현(08-13) — **스트림별 폴링은 한 스트림이 몰리면 세션을 끊는다.**
+    ///
+    /// 파일 전송 실기에서 매번 2MiB 지점(= 32KiB × [`MAX_QUEUED`])에서 죽었다.
+    /// 이 테스트는 그 인과를 고정한다: File이 몰리는 동안 Chat을 폴하면 Backpressure.
+    #[test]
+    fn per_stream_poll_overflows_on_one_sided_flood() {
+        let (mut a, mut b) = pair();
+        for i in 0..=MAX_QUEUED {
+            a.send(StreamId::File, format!("chunk{i}").as_bytes())
+                .unwrap();
+        }
+        // Chat을 기다리는 동안 File 프레임이 큐에 쌓여 상한을 넘는다 = fail-closed.
+        assert_eq!(
+            b.recv(StreamId::Chat).err(),
+            Some(SessionError::Backpressure)
+        );
+    }
+
+    /// ★ 회귀 방지 — `recv_any`는 같은 홍수를 끊지 않고 **도착 순서대로** 준다.
+    #[test]
+    fn recv_any_survives_one_sided_flood() {
+        let (mut a, mut b) = pair();
+        let n = MAX_QUEUED * 4; // 상한의 4배를 몰아넣어도 끊기면 안 된다
+        for i in 0..n {
+            a.send(StreamId::File, format!("chunk{i}").as_bytes())
+                .unwrap();
+        }
+        for i in 0..n {
+            let (s, m) = b.recv_any().expect("홍수에도 끊기지 않는다");
+            assert_eq!(s, StreamId::File);
+            assert_eq!(m, format!("chunk{i}").as_bytes(), "도착 순서가 보존된다");
+        }
+    }
+
+    /// `recv_any`는 큐에 남은 것(다른 경로가 쌓아둔 것)을 먼저 비운다.
+    #[test]
+    fn recv_any_drains_queue_before_wire() {
+        let (mut a, mut b) = pair();
+        a.send(StreamId::Control, b"c1").unwrap();
+        a.send(StreamId::Chat, b"m1").unwrap();
+        // Chat을 먼저 읽어 Control을 큐에 남긴다.
+        assert_eq!(b.recv(StreamId::Chat).unwrap(), b"m1");
+        a.send(StreamId::File, b"f1").unwrap();
+        // 와이어에 File이 있어도 큐의 Control이 먼저 나온다.
+        assert_eq!(b.recv_any().unwrap(), (StreamId::Control, b"c1".to_vec()));
+        assert_eq!(b.recv_any().unwrap(), (StreamId::File, b"f1".to_vec()));
     }
 
     /// 원시 프레임을 직접 주입할 수 있는 수신 전용 mux(프로토콜 위반·전방 호환 테스트용).
