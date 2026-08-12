@@ -31,6 +31,19 @@ docker run --rm -v "$PWD":/src -w /src -e CARGO_TARGET_DIR=/src/.docker-target \
 `CARGO_TARGET_DIR`를 나누는 이유 — 호스트 `target/`과 섞으면 맥·리눅스 산출물이 충돌해 **매번 전체 재컴파일**이 된다.
 Docker 데몬이 꺼져 있으면 `open -a Docker` 후 `docker info`가 응답할 때까지 기다린다.
 
+⚠️ **처음 몇 분간 `debconf` 경고 여러 줄 + `downloading 9 components`가 길게 이어지는 것은
+오류가 아니다**(실기 08-13 — 실패로 오인). ① debconf = TTY 없는 apt의 무해한 소음(Noninteractive
+폴백으로 정상 진행) ② rustup 다운로드 = 저장소의 `rust-toolchain.toml`이 stable + rustfmt/clippy +
+크로스 타깃 4종을 요구하는데 `--rm` 컨테이너는 매번 백지라 **수백 MB를 매회 다시 받는다**.
+`Compiling …`이 보이면 빌드 단계다. 반복해서 쓸 거면 캐시를 이름 있는 볼륨으로 남겨라(재실행이 분 단위 → 초 단위):
+
+```bash
+docker run --rm -v "$PWD":/src -w /src -e CARGO_TARGET_DIR=/src/.docker-target \
+  -v beep-rustup:/usr/local/rustup -v beep-cargo:/usr/local/cargo/registry \
+  rust:1-slim bash -c 'apt-get update -qq && apt-get install -y -qq pkg-config >/dev/null; \
+  cargo build --release -p nexa-beep -p nbeep-imgdec'
+```
+
 ### 1-3. ★ `nbeep-imgdec`를 반드시 함께 — 빠뜨려도 **오류가 안 난다**
 
 본체는 이미지 파서를 링크하지 않는다(R-5 · 격리 디코드). 미리보기·아바타는 전부 **자식 프로세스**가
