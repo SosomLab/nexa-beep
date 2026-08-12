@@ -19,6 +19,34 @@
 // 맥에서 도는 게이트로는 잡히지 않는 종류라, 조건부 컴파일은 항상 반대편을 의심한다.
 use std::io::Write as _;
 
+/// 복원해야 할 터미널 상태(전역 1슬롯) — **Drop이 돌지 못하는 경로**(릴리스는
+/// `panic = "abort"`라 되감기 없음 · 시그널 기본 동작 즉사)에서도 [`restore_now`]가
+/// 여길 보고 되돌린다. 실기(08-13): kitty 플래그가 켜진 채 죽으면 그 pane의 Ctrl+C가
+/// `9;5u`로 찍히고 인터럽트가 죽는다 — 상태는 셸이 아니라 **터미널 에뮬레이터**에 남는다.
+#[cfg(unix)]
+static ACTIVE: std::sync::Mutex<Option<libc::termios>> = std::sync::Mutex::new(None);
+/// 패닉 훅은 프로세스에 1회만 설치한다.
+static PANIC_HOOK: std::sync::Once = std::sync::Once::new();
+
+/// **지금 즉시** 터미널을 복원한다(멱등 — 복원할 것이 없으면 no-op).
+///
+/// 정상 경로는 [`RawTerm`]의 `Drop`이 처리한다. 이 함수는 그 밖의 경로 몫이다:
+/// 패닉 훅(`panic = "abort"`에서도 훅은 돈다) · 시그널 후 정리 · 이중 방어.
+pub fn restore_now() {
+    #[cfg(unix)]
+    {
+        let Ok(mut slot) = ACTIVE.lock() else { return };
+        let Some(saved) = slot.take() else { return };
+        let mut out = std::io::stdout();
+        let _ = out.write_all(b"\x1b[<u"); // kitty 확장 키 리포팅 pop
+        let _ = out.flush();
+        // SAFETY: 진입 때 저장해 둔 원본 설정을 그대로 복원한다.
+        unsafe {
+            libc::tcsetattr(0, libc::TCSANOW, &saved);
+        }
+    }
+}
+
 /// raw 모드 진입/복원을 소유하는 가드. `Drop`에서 **반드시** 원래 설정으로 돌린다
 /// (여기서 새면 사용자 셸이 망가진 채로 남는다).
 #[derive(Debug)]
@@ -89,6 +117,18 @@ impl RawTerm {
             let mut out = std::io::stdout();
             let _ = out.write_all(b"\x1b[>1u");
             let _ = out.flush();
+            // 전역 복원 레지스트리 + 패닉 훅(1회) — Drop이 못 도는 죽음(패닉 abort ·
+            // 시그널 기본 동작)에서도 터미널이 kitty 모드로 남지 않게(실기 08-13).
+            if let Ok(mut slot) = ACTIVE.lock() {
+                *slot = Some(saved);
+            }
+            PANIC_HOOK.call_once(|| {
+                let prev = std::panic::take_hook();
+                std::panic::set_hook(Box::new(move |info| {
+                    restore_now();
+                    prev(info);
+                }));
+            });
             Self {
                 saved: Some(saved),
                 extended: true,
@@ -118,17 +158,18 @@ impl RawTerm {
 
 impl Drop for RawTerm {
     fn drop(&mut self) {
+        // 정상 경로 복원 — 전역 레지스트리를 비우며 되돌린다(멱등 · 패닉 훅과 공유).
+        #[cfg(unix)]
+        if self.extended {
+            restore_now();
+        }
+        // 비-unix에서 extended가 켜질 일은 아직 없지만(콘솔 raw는 R-16 후속),
+        // 켜졌다면 pop만이라도 되돌린다.
+        #[cfg(not(unix))]
         if self.extended {
             let mut out = std::io::stdout();
-            let _ = out.write_all(b"\x1b[<u"); // 확장 키 리포팅 해제
+            let _ = out.write_all(b"\x1b[<u");
             let _ = out.flush();
-        }
-        #[cfg(unix)]
-        if let Some(saved) = self.saved {
-            // SAFETY: 진입 때 저장해 둔 원본 설정을 그대로 복원한다.
-            unsafe {
-                libc::tcsetattr(0, libc::TCSANOW, &saved);
-            }
         }
     }
 }
@@ -304,5 +345,16 @@ mod tests {
     #[test]
     fn empty_input_needs_more() {
         assert_eq!(parse_key(b""), None);
+    }
+
+    #[test]
+    fn restore_now_is_idempotent_and_safe_without_tty() {
+        // 패닉 훅·시그널 경로가 몇 번을 불러도, 복원할 것이 없어도 안전해야 한다
+        // (실기 08-13 — kitty 프로토콜 누수의 이중 방어).
+        restore_now();
+        restore_now();
+        let g = RawTerm::enter_polling();
+        drop(g); // Drop 경로도 restore_now와 같은 레지스트리를 지난다(멱등 검증)
+        restore_now();
     }
 }
