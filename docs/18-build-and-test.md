@@ -60,6 +60,8 @@ docker run --rm --init -p 47200:47200 \
 | `--init` 없음 | **10.26초** | SIGTERM 무시 → 10초 타임아웃 → **SIGKILL** |
 | **`--init`** | **0초** | tini가 시그널 중계 → 자식은 PID 1이 아니므로 정상 종료 |
 
+> ⚠️ **대화 모드는 `-it`(또는 최소 `-i`)가 필요하다** — `-d`·파이프로 띄우면 **stdin EOF = 종료**라 붙자마자 세션이 끊긴다. 자동화는 FIFO로 stdin을 열어둔다 → [26 §4-1](26-run-and-manual-test.md).
+>
 > 실측 2026-08-08([journal](journal/2026-08-08.md)). ⚠️ **`--init`은 우회이지 해결이 아니다** — 앱 자체의 종료 경로 부재는 **FR-P-7 · R-16**으로 등록돼 있다. 정리가 안 될 때는 `docker stop <id>`(10초) 또는 `docker kill <id>`(즉시).
 
 ### 2-2. 터미널로 사람 대 사람 대화 — `--chat-serve` / `--chat-connect`

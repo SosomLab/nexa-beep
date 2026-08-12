@@ -12,9 +12,15 @@ cargo build --release -p nexa-beep          # → target/release/nexa-beep
 # Linux(컨테이너) 릴리스 — Docker 테스트용(별도 타깃 디렉터리로 호스트 캐시와 분리)
 docker run --rm -v "$PWD":/src -w /src -e CARGO_TARGET_DIR=/src/.docker-target \
   rust:1-slim bash -c 'apt-get update -qq && apt-get install -y -qq pkg-config >/dev/null; \
-  cargo build --release -p nexa-beep'
-#   → .docker-target/release/nexa-beep  (linux/amd64)
+  cargo build --release -p nexa-beep -p nbeep-imgdec'
+#   → .docker-target/release/{nexa-beep,nbeep-imgdec}  (linux/amd64)
 ```
+
+> **`nbeep-imgdec`를 같이 빌드한다** — 이미지 미리보기·아바타는 **별도 프로세스**가 디코드한다(M4-5).
+> 본체만 빌드하면 그 경로가 조용히 죽는다.
+> **`CARGO_TARGET_DIR`를 분리하는 이유** — 호스트 `target/`과 섞으면 맥·리눅스 산출물이 충돌해 매번 전체 재컴파일이 된다.
+> Docker 데몬이 꺼져 있으면 `open -a Docker` 후 `docker info`가 응답할 때까지 기다린다.
+> **실측(2026-08-13)**: 첫 빌드 **2분 21초** · `nexa-beep` 2.82MB · `nbeep-imgdec` 0.56MB(ELF x86-64).
 
 ## 1. 실행 모드 한눈에
 
@@ -81,6 +87,47 @@ docker run --rm -it --init -p 47200:47200 \
 ```
 
 **실측(2026-08-08)**: 맥(arm64) ↔ 컨테이너(amd64) 사이에서 발견→TCP→Noise→대화 왕복 성공. `--chat-serve`↔`--chat-connect` 로 양쪽 사람이 타이핑하면 실시간 상호 수신(예: 맥 "맥에서 크로스플랫폼 인사" ↔ 리눅스 "나는 리눅스 컨테이너다").
+
+### 4-1. ★ 인터랙티브 모드 — **stdin이 관건이다**
+
+대화 모드(`--chat-serve`/`--chat-connect`/`--chat-live`)는 **stdin에서 한 줄씩 읽는다.** 그래서 컨테이너 실행 방식이 곧 동작을 가른다.
+
+| 실행 방식 | 결과 |
+|---|---|
+| **`-it`** (권장) | ✅ 정상 — 사람이 타이핑한다 |
+| `-i` 만 | ✅ 동작(TTY 없이도 stdin은 열린다) — 스크립트용 |
+| **`-d`(백그라운드)** | ❌ **연결되자마자 "상대와의 세션이 종료됨"** — stdin이 없어 **EOF = 종료**로 읽는다 |
+| **파이프 `echo … \|`** | ❌ 줄을 다 보낸 순간 EOF → **상대 응답을 못 보고 끝난다** |
+| 옵션 없음 | ❌ 위와 동일 |
+
+> ⚠️ **이건 버그가 아니라 설계다** — `Ctrl+D`(EOF) = 종료다. 다만 **백그라운드로 띄우면 같은 일이 조용히 일어나** "붙자마자 끊긴다"로 보인다(2026-08-08·08-13 두 번 겪음).
+
+**자동화에서 세션을 유지하려면** stdin을 열어둘 쓰기 끝이 필요하다 — FIFO가 가장 단순하다.
+
+```bash
+mkfifo /tmp/beep.in
+( sleep 3600 > /tmp/beep.in & )          # ← 쓰기 끝을 붙잡아 EOF를 막는다
+docker run --rm -i --init -p 47200:47200 \
+  -v "$PWD/.docker-target/release/nexa-beep:/nexa-beep:ro" \
+  debian:stable-slim /nexa-beep --chat-serve 47200 < /tmp/beep.in &
+
+echo "컨테이너에서 보냅니다" > /tmp/beep.in   # 아무 때나 한 줄씩 밀어 넣는다
+```
+
+**반대 방향 — 컨테이너가 맥으로 걸기**
+
+```bash
+# 맥(받는 쪽)
+./target/release/nexa-beep --chat-serve 47200
+# 컨테이너(거는 쪽) — 포트 매핑 불필요. 맥은 host.docker.internal 로 보인다
+docker run --rm -it --init \
+  -v "$PWD/.docker-target/release/nexa-beep:/nexa-beep:ro" \
+  debian:stable-slim /nexa-beep --chat-connect host.docker.internal:47200
+```
+
+**포트** — 세션 기본 포트는 **47200**(v0.1.5 · `DEFAULT_SESSION_PORT`)이다. GUI는 `--port <N>` 또는 설정 `net.session_port`로 바꾸고, **점유돼 있으면 임의 포트로 폴백**한다. 주소 입력에서 **포트를 생략하면 47200이 붙는다**(`10.0.0.5` = `10.0.0.5:47200`).
+
+**대화 중 명령** — `/send <파일>` · `/accept` · `/reject` · `/help` · `/quit`. 종료는 `/quit` 또는 `Ctrl+D`(⚠️ **`Ctrl+C`는 컨테이너에서 `--init` 없이는 무시된다** — [18 §2-1](18-build-and-test.md)).
 
 ## 5. 시나리오 D — Docker 2노드 (Linux↔Linux 발견, 자동)
 
