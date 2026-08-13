@@ -563,7 +563,8 @@ impl Widget for TextBox {
         }
 
         // 캐럿은 **별도 세로 막대**로 그린다(문자열에 '|'를 끼워 넣지 않음 → 위치 고정).
-        if self.base.focused {
+        // 깜빡임 위상(caret_on)은 호스트가 주입한다(08-13 — 포커스 창에서만 점멸).
+        if self.base.focused && ctx.caret_on() {
             let cx = tx + caret_px;
             // 캐럿 높이 = 실측 텍스트 높이(고정 16 근사는 고배율에서 반토막으로 보였다).
             let th = ctx.text_height();

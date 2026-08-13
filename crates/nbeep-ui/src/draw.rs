@@ -28,6 +28,12 @@ pub enum FontSlot {
 
 /// 위젯의 그리기 어휘. 기본 구현이 있는 메서드는 백엔드가 미구현해도 된다(테스트 백엔드).
 pub trait DrawCtx {
+    /// 이번 프레임에 **캐럿을 그릴 것인가**(깜빡임 위상 · 08-13 사용자 요청).
+    /// 위젯은 시계가 없으므로 호스트가 프레임마다 위상을 주입한다 — 포커스 창이
+    /// 아니거나 어두운 위상이면 `false`. 기본 = 항상 표시(테스트 백엔드·정적 렌더).
+    fn caret_on(&self) -> bool {
+        true
+    }
     /// 폰트 슬롯/장식 선택 — 이후의 `text*`/`text_width`에 적용. 기본 = no-op(단일 폰트 백엔드).
     fn select_font(&mut self, slot: FontSlot, bold: bool) {
         let _ = (slot, bold);

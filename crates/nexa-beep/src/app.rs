@@ -221,6 +221,10 @@ struct ConnectLatch(std::collections::HashSet<PeerId>);
 /// 클릭 = 처음부터 재개). 상시 주기 관찰(원격 프레즌스)은 ADR-0006 확장 결정 몫.
 const RECONNECT_BACKOFF_MS: [u64; 4] = [5_000, 15_000, 60_000, 300_000];
 
+/// 캐럿 깜빡임 반주기(ms) — Windows 기본 GetCaretBlinkTime≈530(DR-16 "동작 = OS
+/// 네이티브"). 위상 감지는 ~5Hz 틱이라 ±200ms 지터가 있지만 점멸 인지엔 충분하다.
+const CARET_BLINK_MS: u64 = 530;
+
 /// 이 단계의 대기 시간 — 단계를 다 썼으면 `None`(중단).
 fn reconnect_delay(stage: u8) -> Option<u64> {
     RECONNECT_BACKOFF_MS.get(stage as usize).copied()
@@ -1094,6 +1098,12 @@ struct App {
     /// Focused(false) 수동 합류 뒤 늦은 Commit("다")이 이중 입력을 만들었다).
     /// 1초 안 같은 창·같은 본문의 Commit을 1회 삼킨다(초과·불일치는 정상 입력).
     ime_selfcommit: Option<(WindowId, String, u64)>,
+    /// 지금 OS 포커스를 가진 창 — 캐럿 깜빡임(포커스 창만 점멸)·비포커스 캐럿 소등.
+    os_focused: Option<WindowId>,
+    /// 캐럿 깜빡임 기준 시각(ms) — 입력(키·IME·클릭)마다 리셋해 타이핑 중엔 항상 밝다.
+    blink_anchor_ms: u64,
+    /// 마지막으로 그린 깜빡임 위상 — 5Hz 틱이 위상 변화 프레임에만 다시 그린다.
+    blink_phase_seen: bool,
     /// OS 주 수식키(⌘/Ctrl) 눌림 상태 — `Cmd/Ctrl+,` 판정.
     primary_down: bool,
     /// Shift 눌림 상태 — Shift+Enter 줄바꿈·Shift+이동 선택(08-10).
@@ -5259,6 +5269,10 @@ impl App {
     fn redraw(&mut self, id: WindowId) {
         let theme = self.theme;
         let prefs = self.fonts;
+        // 캐럿 깜빡임 위상(08-13 사용자 요청) — **OS 포커스 창에서만** 점멸(비포커스
+        // 창은 소등 · 네이티브 관례 DR-16). 입력이 기준점을 리셋해 타이핑 중엔 항상 밝다.
+        let caret_on = self.os_focused == Some(id)
+            && (self.now_ms().saturating_sub(self.blink_anchor_ms) / CARET_BLINK_MS) % 2 == 0;
         // 슬롯 얼굴을 **필드에서 직접** 빌린다 — 헬퍼 메서드로 감싸면 self 전체를 빌려
         // 아래 windows 가변 차용과 충돌한다(필드 단위 분할 차용을 쓰기 위한 형태).
         let fonts = nbeep_ui::FontSet {
@@ -5282,7 +5296,8 @@ impl App {
         px.fill(theme.window_bg);
         let mut ctx = RasterCtx::with_font_set(&mut px, fonts)
             .with_fonts(prefs)
-            .with_scale(entry.scale);
+            .with_scale(entry.scale)
+            .with_caret_on(caret_on);
         match entry.role {
             Role::Main => {
                 if let Some(chat) = self.single_open_group.and_then(|g| self.gchats.get(&g)) {
@@ -6230,6 +6245,17 @@ impl ApplicationHandler<AppEvent> for App {
                 }
             }
         }
+        // 캐럿 깜빡임(08-13) — 위상이 **바뀌는 틱에만** 포커스 창을 다시 그린다
+        // (매 틱 전체 재도색은 유휴 CPU 낭비 — 위상 불변이면 화면도 불변이다).
+        {
+            let phase = (bar_now.saturating_sub(self.blink_anchor_ms) / CARET_BLINK_MS) % 2 == 0;
+            if phase != self.blink_phase_seen {
+                self.blink_phase_seen = phase;
+                if let Some(fid) = self.os_focused {
+                    self.request_redraw(fid);
+                }
+            }
+        }
         // 유휴에도 ~5Hz로 깨어나 발견 갱신·종료 신호를 폴한다(입력 없을 때도 목록이 산다).
         el.set_control_flow(ControlFlow::wait_duration(
             std::time::Duration::from_millis(200),
@@ -6301,7 +6327,18 @@ impl ApplicationHandler<AppEvent> for App {
                 self.layout_window(id);
                 self.request_redraw(id);
             }
+            WindowEvent::Focused(true) => {
+                // 캐럿 깜빡임 — 포커스 창 추적 + 기준점 리셋(받자마자 밝게 시작).
+                self.os_focused = Some(id);
+                self.blink_anchor_ms = self.now_ms();
+                self.request_redraw(id);
+            }
             WindowEvent::Focused(false) => {
+                // 캐럿 소등 — 비포커스 창은 캐럿을 그리지 않는다(네이티브 관례).
+                if self.os_focused == Some(id) {
+                    self.os_focused = None;
+                }
+                self.request_redraw(id);
                 if self.ime_trace {
                     eprintln!(
                         "[ime] focus-out preedit={:?} stash={:?}",
@@ -6338,6 +6375,7 @@ impl ApplicationHandler<AppEvent> for App {
                 }
             }
             WindowEvent::Ime(winit::event::Ime::Preedit(text, _)) => {
+                self.blink_anchor_ms = self.now_ms(); // 조합 중 = 캐럿 계열 항상 밝다
                 if self.ime_trace {
                     eprintln!(
                         "[ime] preedit={text:?} composing={} leak={}",
@@ -6403,6 +6441,7 @@ impl ApplicationHandler<AppEvent> for App {
                 }
             }
             WindowEvent::Ime(winit::event::Ime::Commit(text)) => {
+                self.blink_anchor_ms = self.now_ms(); // 확정 직후에도 밝게 시작
                 if self.ime_trace {
                     eprintln!(
                         "[ime] commit={text:?} pending={:?} leak={} selfcommit={:?}",
@@ -6529,6 +6568,7 @@ impl ApplicationHandler<AppEvent> for App {
             } => {
                 if let Some(e) = self.windows.get(&id) {
                     let (x, y) = e.cursor;
+                    self.blink_anchor_ms = self.now_ms(); // 캐럿 재배치 = 밝게 시작
                     // ★ 수식키를 마우스에 싣는다(08-13 실기 — false 하드코딩이라
                     // ⌘클릭 다중 선택이 죽어 있었다. 키 추적값을 그대로 전달).
                     self.route(
@@ -6635,6 +6675,7 @@ impl ApplicationHandler<AppEvent> for App {
                 if event.state != ElementState::Pressed {
                     return;
                 }
+                self.blink_anchor_ms = self.now_ms(); // 타이핑 중엔 캐럿이 항상 밝다
                 if self.ime_trace {
                     eprintln!(
                         "[ime] key={:?} composing={} leak={} pending={:?}",
@@ -7289,6 +7330,9 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         pending_arrow: None,
         ime_commit_echo: None,
         ime_selfcommit: None,
+        os_focused: None,
+        blink_anchor_ms: 0,
+        blink_phase_seen: true,
         primary_down: false,
         shift_down: false,
         hangul_mode: false,

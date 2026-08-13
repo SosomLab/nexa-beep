@@ -1497,10 +1497,13 @@ impl Widget for ChatViewWidget {
                 theme.text_dim,
             );
             // 빈 입력창에도 **Beam 커서** — 높이는 글자 실측(캐럿 과대 표시 수정 08-10).
-            ctx.fill_rect(
-                Rect::new(tx, ly + (iline_h - ith) / 2, self.s(2).max(1), ith),
-                theme.accent,
-            );
+            // 깜빡임 위상은 호스트 주입(08-13).
+            if ctx.caret_on() {
+                ctx.fill_rect(
+                    Rect::new(tx, ly + (iline_h - ith) / 2, self.s(2).max(1), ith),
+                    theme.accent,
+                );
+            }
             // 지오메트리 캐시(빈 텍스트).
             *self.input_geom.borrow_mut() = InputGeom {
                 tx,
@@ -1570,7 +1573,8 @@ impl Widget for ChatViewWidget {
                     let cx = tx + xs[ccol.min(xs.len() - 1)];
                     if self.preedit.is_empty() {
                         // 창 안에 있을 때만 — 밖이면 그리지 않는다(가로 스크롤 경계).
-                        if cx >= input.x && cx < input.right() {
+                        // 깜빡임 위상은 호스트 주입(08-13 · 조합 중 프리에딧은 항상 표시).
+                        if cx >= input.x && cx < input.right() && ctx.caret_on() {
                             ctx.fill_rect(Rect::new(cx, ty, self.s(2).max(1), ith), theme.accent);
                         }
                     } else {

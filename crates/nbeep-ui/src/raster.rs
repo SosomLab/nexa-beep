@@ -71,6 +71,8 @@ pub struct RasterCtx<'s, 'b, 'f> {
     /// 광학 크기 보정(고정폭 전용 · 08-10) — 같은 px에서 숫자가 차지하는 높이를
     /// 기본 얼굴과 일치시키는 배수(Consolas는 숫자가 커서 <1.0). 다른 슬롯은 1.0.
     mono_mult: f32,
+    /// 이번 프레임의 캐럿 표시 위상(08-13 — 깜빡임). 호스트가 시각·포커스로 주입.
+    caret_on: bool,
 }
 
 impl<'s, 'b, 'f> RasterCtx<'s, 'b, 'f> {
@@ -91,7 +93,15 @@ impl<'s, 'b, 'f> RasterCtx<'s, 'b, 'f> {
             cur: prefs.base,
             scale: 1.0,
             mono_mult: 1.0,
+            caret_on: true,
         }
+    }
+
+    /// 이번 프레임의 캐럿 표시 위상 지정(깜빡임 — 호스트가 시각·포커스로 계산).
+    #[must_use]
+    pub fn with_caret_on(mut self, on: bool) -> Self {
+        self.caret_on = on;
+        self
     }
 
     /// 사용자 글꼴 설정 지정.
@@ -195,6 +205,10 @@ fn seg_dist(px: f32, py: f32, ax: f32, ay: f32, bx: f32, by: f32) -> f32 {
 }
 
 impl DrawCtx for RasterCtx<'_, '_, '_> {
+    fn caret_on(&self) -> bool {
+        self.caret_on
+    }
+
     fn select_font(&mut self, slot: FontSlot, bold: bool) {
         self.cur = match slot {
             FontSlot::Base => self.prefs.base,

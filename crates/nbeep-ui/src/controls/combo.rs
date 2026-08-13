@@ -607,15 +607,18 @@ impl Widget for Combo {
             ctx.select_font(FontSlot::Base, false);
             let tw = ctx.text_width(&self.buf);
             let th = ctx.text_height();
-            ctx.fill_rect(
-                Rect::new(
-                    b.x + self.s(10) + tw + 1,
-                    b.y + (b.h - th) / 2,
-                    self.s(1).max(1),
-                    th,
-                ),
-                theme.text,
-            );
+            if ctx.caret_on() {
+                // 깜빡임 위상은 호스트 주입(08-13).
+                ctx.fill_rect(
+                    Rect::new(
+                        b.x + self.s(10) + tw + 1,
+                        b.y + (b.h - th) / 2,
+                        self.s(1).max(1),
+                        th,
+                    ),
+                    theme.text,
+                );
+            }
             ctx.stroke_round_rect(b, self.s(6), self.accent_now(theme), 1.0);
             return;
         }
