@@ -3,7 +3,13 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
-> **갱신: 2026-08-13 14차 (KST)** — **요약 문서 현행화 + push**(코드 변경 0):
+> **갱신: 2026-08-13 15차 (KST)** — **GUI 실행 가능 세션 판정 신설 + main CI red 해소**(사용자 요청):
+> ① **문제** = 창을 못 여는 자리에서 **그냥 죽었다**. 릴리스는 `panic = "abort"`라 `Exited (134)`(SIGABRT)에 "시스템 UI 폰트 없음" 한 줄이 전부. **무인자가 창이 된 뒤로(`ad7dbfa`) 원격 셸에서 무심코 친 `nexa-beep`이 바로 이 경로**라 더 중요해졌다.
+> ② **고침** = `nbeep-plat::gui` — **관측(OS API)과 판정(순수 함수)을 분리**해 3-OS × 세션 종류를 맥에서 테스트. Windows `GetProcessWindowStation`(대화형은 `WinSta0` 뿐 · **RDP는 통과** — 원격이라고 막으면 되는 걸 막는 것) · macOS `CGSessionCopyCurrentDictionary()` NULL(서브프로세스 없이 `launchctl managername`과 동치) · Linux `$DISPLAY`/`$WAYLAND_DISPLAY`(**`ssh -X`는 자동 통과** — SSH 여부보다 DISPLAY가 먼저) · **폰트 축 별도**(세션이 돼도 폰트 없으면 못 연다). 신호를 못 얻으면 **막지 않는다**(오탐이 더 나쁘다). 사유마다 대안(`--chat-live` 등) 안내 후 **exit 3**. 의존 0.
+> ③ **실측** — ★ **맥 SSH 실기**(사용자 제공 원격 맥 12.7.6 · `managername=Background`): 안내+exit 3, **SSH 환경변수를 지워도 동일** = CGSession API가 실제로 NULL(휴리스틱 아님). Linux 컨테이너 2종(디스플레이 없음 / DISPLAY 있고 폰트 없음) 각 사유로 exit 3 · macOS 콘솔 창 정상 · SSH에서 `--discover-probe` exit 0. **Windows는 크로스 컴파일만 통과 — 실행 검증은 [TODO WGUI-1~6](TODO.md) 등록**.
+> ④ **곁가지** = main CI가 `694a68d`에서 **lint(fmt) 실패 중**이었다(`196024b`·`d1f7614` 미포맷 3곳 + redundant clone 1건) → `47cb2d4`로 해소. 테스트 19건 추가 · **521 green** · clippy 0 · rustdoc 0. [journal/2026-08-13.md](journal/2026-08-13.md).
+>
+> **직전(08-13 14차)** — **요약 문서 현행화 + push**(코드 변경 0):
 > 오늘 후반(9~13차 · Windows 실기 주도 6슬라이스: 한/영 토글 · 조합 Enter 확정+전송 · 무인자=창+실물/`--help` · chat-live 대기 /quit · dedup 세션 리셋+스레드 대피 · imgdec 워커화)을 CLAUDE.md §5·현 단계 / README(502) / MILESTONES 표머리에 반영. **WIME-1·3·4·5·6 닫힘**(잔여 2·7~11). main 9커밋 push(`196024b`+현행화). [journal/2026-08-13.md](journal/2026-08-13.md).
 >
 > **직전(08-13 13차)** — **대화창 열림 1~2초 얼음 — imgdec 디코드를 워커로**(main · M4-5 · 사용자 실기):

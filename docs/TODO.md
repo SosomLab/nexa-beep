@@ -192,6 +192,17 @@ M-1 설계 ──► M0 기반 ──► M1 발견 ──► M2 대화 ──►
 - [ ] **WIME-10 설정 검색 TextBox** — 아직 레거시 IME 경로([27 §7](27-typeahead-hangul-composition.md)) — stale(묵은 조합) 증상 Windows 재현 여부(재현되면 조합기 재사용 검토) · **한글 AND 토큰 검색** 실동작
 - [ ] **WIME-11 신/구 MS IME 양쪽** — Windows 11 신형 IME + "이전 버전의 Microsoft IME" 호환 모드 각 1회전(구현이 달라 이벤트 순서·preedit 통지가 다를 수 있다) · 일/중 IME 첫 키 유출은 X-IME-CJK와 공유
 
+
+**GUI 세션 판정 실기 (WGUI)** — Windows 실기 · 근거 = `nbeep-plat::gui`([e230e58](../crates/nbeep-plat/src/gui.rs)) ·
+맥(콘솔·SSH)과 Linux(컨테이너 2종)는 08-13 실측 완료, **Windows만 실행 검증이 비어 있다**(크로스 컴파일만 통과):
+
+- [ ] **WGUI-1 로컬 콘솔** — 데스크톱에서 무인자 `nexa-beep` = **창이 뜬다**(게이트가 오탐으로 막지 않는가 — 가장 중요)
+- [ ] **WGUI-2 원격 PowerShell(WinRM)** — `Enter-PSSession`에서 무인자 실행 = **사유 안내 + exit 3**. 안내에 관측된 윈도우 스테이션 이름이 찍히는가(`Service-0x0-…$` 꼴)
+- [ ] **WGUI-3 OpenSSH** — Windows OpenSSH 서버로 접속해 무인자 실행 = 안내 + exit 3
+- [ ] **WGUI-4 ★ RDP는 통과해야 한다** — 원격 데스크톱 접속 후 무인자 실행 = **창이 뜬다**. RDP도 `WinSta0`이라 통과가 정답 — 여기서 막히면 **되는 걸 막는 것**이라 판정 기준을 고쳐야 한다
+- [ ] **WGUI-5 터미널 모드 비간섭** — 위 어느 세션에서든 `--chat-live`·`--discover-probe`·`--help`는 게이트에 걸리지 않는다(exit 0)
+- [ ] **WGUI-6 API 실패 폴백** — 스테이션 이름을 못 얻는 상황이 실제로 있는지(있다면 SSH 아닐 때 통과가 맞는지 재검토)
+
 ---
 
 ## §6. M4 — 전송 · 무해화
