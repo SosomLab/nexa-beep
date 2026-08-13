@@ -78,6 +78,11 @@ cargo check --target x86_64-pc-windows-msvc -p nexa-beep
 원리와 상세는 [26 §3-4](26-run-and-manual-test.md). 요지는 **`data_dir()`가 `실행파일 옆/data`를
 먼저 본다**(포터블 규칙 DR-4)는 것 — 폴더를 나누면 신원·핀·그룹·설정이 통째로 갈린다.
 
+> ★ **`data/`는 작업 디렉터리가 아니라 *실행 파일이 있는 곳*을 따라간다**(실측 확인 08-13).
+> 그래서 어디서 부르든 상관없고, **바이너리를 어느 폴더에 두었는가**만 신원을 가른다.
+
+#### macOS · Linux (bash)
+
 ```bash
 cd <저장소 루트>
 
@@ -87,14 +92,50 @@ cd <저장소 루트>
 # ② ③ 추가 신원 2개 — 같은 exe, 폴더만 분리
 S=/tmp/beep-multi; rm -rf $S; mkdir -p $S/A $S/B
 for d in A B; do cp target/release/nexa-beep target/release/nbeep-imgdec $S/$d/; done
-( cd $S/A && ./nexa-beep --window --live ) &
-( cd $S/B && ./nexa-beep --window --live ) &
+"$S/A/nexa-beep" --window --live &
+"$S/B/nexa-beep" --window --live &
 ```
+
+#### Windows (PowerShell)
+
+```powershell
+Set-Location <저장소 루트>
+
+# ① 기본 신원 — 저장소 빌드 그대로(데이터는 target\release\data)
+Start-Process .\target\release\nexa-beep.exe -ArgumentList '--window','--live'
+
+# ② ③ 추가 신원 2개 — 같은 exe, 폴더만 분리
+$S = "$env:TEMP\beep-multi"
+Remove-Item $S -Recurse -Force -ErrorAction SilentlyContinue
+'A','B' | ForEach-Object {
+    New-Item "$S\$_" -ItemType Directory -Force | Out-Null
+    Copy-Item .\target\release\nexa-beep.exe,.\target\release\nbeep-imgdec.exe "$S\$_"
+}
+'A','B' | ForEach-Object {
+    Start-Process "$S\$_\nexa-beep.exe" -ArgumentList '--window','--live'
+}
+```
+
+> ⚠️ **PowerShell 스크립트는 문법 검토만 거쳤다**(이 저장소는 mac에서 작성 — `pwsh` 미설치라
+> 실행 검증은 못 했다). Windows 실기에서 처음 돌릴 때 오류가 나면 [TODO WGUI](TODO.md)에 붙여 기록한다.
+
+> ⚠️ **Windows에서만 나오는 것 셋**
+> ① **방화벽 허용 창이 사본마다 뜬다** — 규칙은 *실행 파일 경로*별이라 3개면 3번. 전부 허용해야 발견이 된다.
+> ② **첫 실행이 느리다** — Defender가 새 exe를 실시간 검사한다(서명이 없어서). 두 번째부터는 빠르다.
+> ③ `Start-Process`를 쓰면 콘솔 없이 뜬다. 로그를 보려면 그냥 `.\nexa-beep.exe --window --live`로 직접 실행한다.
 
 **확인** — 창 3개가 뜨고, **각 창의 목록에 나머지 2명**이 보인다.
 
 ```bash
+# macOS · Linux
 ./target/release/nexa-beep --discover-probe 8 | grep -oE "peer=[0-9a-f]+ .*name=[^ ]*" | sort -u
+```
+
+```powershell
+# Windows
+.\target\release\nexa-beep.exe --discover-probe 8 |
+  Select-String -Pattern 'peer=\w+.*name=\S+' |
+  ForEach-Object { $_.Matches.Value } | Sort-Object -Unique
 ```
 
 **실측(2026-08-13)** — 셋 다 관측:
@@ -109,8 +150,21 @@ peer=d2cf5814 name=beep-d2cf5814      ← B
 > **그룹 구성원으로 쓰면 재시작 때마다 남이 된다.** 그룹 테스트의 3인은 **전부 GUI**여야 한다.
 > (Docker 컨테이너를 4번째로 붙일 수는 있으나, 재기동하면 roster에서 유령이 된다.)
 
-**정리** — `pkill -f nexa-beep && rm -rf /tmp/beep-multi`
-⚠️ 기본 신원을 초기화하려면 `target/release/data/`를 지운다(핀·그룹·설정도 함께 사라진다).
+**정리**
+
+```bash
+# macOS · Linux
+pkill -f nexa-beep; rm -rf /tmp/beep-multi
+```
+
+```powershell
+# Windows
+Get-Process nexa-beep -ErrorAction SilentlyContinue | Stop-Process
+Remove-Item "$env:TEMP\beep-multi" -Recurse -Force -ErrorAction SilentlyContinue
+```
+
+⚠️ 기본 신원을 초기화하려면 `target/release/data/`(Windows는 `target\release\data\`)를 지운다 —
+**핀·그룹·설정도 함께 사라진다.**
 
 ---
 
@@ -168,7 +222,7 @@ kiros33 님이 '개발팀' 그룹(구성원 3명)에 초대했습니다.
 
 ### T-4. 오프라인 구성원 (재동기)
 
-1. **M2 창을 닫는다**
+1. **M2 창을 닫는다**(창 닫기 = 종료. Windows는 `Get-Process nexa-beep | Where-Object Path -like "*\B\*" | Stop-Process` 로도 된다)
 2. O가 방에 2~3개 보낸다 → O 쪽에 **미전달 표시**
 3. **M2를 다시 띄운다**(같은 폴더 = 같은 신원)
 4. **확인** — 발신자가 밀어 준 메시지가 도착한다(보관 주체 = 송신자 · [31 §4](31-adr-0012-shared-group-chat.md))
