@@ -1081,6 +1081,10 @@ struct App {
     /// IME 이벤트 트레이스(`NEXA_IME_TRACE=1`) — 조합 경합은 추정 금지·실측 필수라
     /// 이벤트 순서를 stderr로 남긴다(개인 입력이 찍히므로 opt-in 전용).
     ime_trace: bool,
+    /// 조합 중 눌린 이동 키(창, 키, shift, primary) — mac IME는 화살표로 조합을
+    /// **확정만** 하고 이동은 앱 몫인데, 조합 게이트가 keydown을 버려 이동이
+    /// 유실됐다(08-13 실기: "입력 직후 ←가 안 먹힘"). Commit 직후 재생한다.
+    pending_arrow: Option<(WindowId, Key, bool, bool)>,
     /// 마지막 IME 확정의 끝 문자(문자, 시각) — **키다운 이중 배달 억제**(08-13 실측:
     /// commit=" " 직후 key=Named(Space)가 또 온다). 120ms 안의 같은 문자 키다운을
     /// 1회 소비한다(take — 진짜 연타의 두 번째는 통과).
@@ -5303,6 +5307,15 @@ impl App {
                     theme.text_dim,
                     theme.chrome_bg,
                 );
+                // 팝업(우클릭 메뉴) 재도색 — 상태 바가 메뉴를 덮지 않게 **맨 마지막**
+                // (08-13 실기: 메뉴가 하단 정보 텍스트 아래 깔렸다).
+                if let Some(chat) = self.single_open_group.and_then(|g| self.gchats.get(&g)) {
+                    chat.paint_popup(&mut ctx, &theme);
+                } else if let Some(chat) = self.single_open.and_then(|p| self.chats.get(&p)) {
+                    chat.paint_popup(&mut ctx, &theme);
+                } else {
+                    self.list.paint_popup(&mut ctx, &theme);
+                }
             }
             Role::Chat(peer) => {
                 if let Some(chat) = self.chats.get(&peer) {
@@ -6336,6 +6349,10 @@ impl ApplicationHandler<AppEvent> for App {
                 }
                 // (leak 조합 중에도 여기서 flush하지 않는다 — 뒤따르는 낱개 Commit
                 // 자모가 조합을 이어가고, 음절 Commit 일반 경로가 확정 직전에 flush.)
+                if !text.is_empty() {
+                    // 조합이 계속된다 = 보류 이동 키는 IME가 내부에서 쓴 것 — 폐기.
+                    self.pending_arrow = None;
+                }
                 let was_composing = self.ime_composing;
                 self.ime_composing = !text.is_empty();
                 if was_composing && !self.ime_composing {
@@ -6428,6 +6445,21 @@ impl ApplicationHandler<AppEvent> for App {
                     .rev()
                     .find(|c| !c.is_control())
                     .map(|c| (c, now_ms));
+                // 조합 중 눌린 이동 키 재생(08-13 실기: "입력 직후 ←가 안 먹힘" —
+                // IME가 이 키로 조합을 확정만 하고 이동은 앱 몫이다).
+                if let Some((pid, k, shift, primary)) = self.pending_arrow.take() {
+                    if pid == id {
+                        self.route(
+                            id,
+                            InputEvent::Key {
+                                key: k,
+                                shift,
+                                primary,
+                            },
+                            el,
+                        );
+                    }
+                }
             }
             WindowEvent::DroppedFile(path) => {
                 // 드래그앤드롭 = 파일 전송 시작(FR-X-1). 대화가 열린 창에서만 의미가 있다.
@@ -6573,6 +6605,22 @@ impl ApplicationHandler<AppEvent> for App {
                 // 자모('ㄱ','ㅣ','ㅁ')가 확정 버퍼에 이중 유입되던 간헐 버그의 차단점.
                 // (조합 결과는 Ime::Preedit/Commit으로만 반영한다.)
                 if self.ime_composing {
+                    // 이동 키(08-13 실기: "입력 직후 ←가 안 먹힘") — mac IME는 이 키로
+                    // 조합을 **확정만** 하고 이동은 앱 몫이다. 여기서 버리면 이동이
+                    // 유실되므로 보류했다가 Commit 직후 재생한다.
+                    let arrow = match &event.logical_key {
+                        WKey::Named(NamedKey::ArrowLeft) => Some(Key::Left),
+                        WKey::Named(NamedKey::ArrowRight) => Some(Key::Right),
+                        WKey::Named(NamedKey::ArrowUp) => Some(Key::Up),
+                        WKey::Named(NamedKey::ArrowDown) => Some(Key::Down),
+                        WKey::Named(NamedKey::Home) => Some(Key::Home),
+                        WKey::Named(NamedKey::End) => Some(Key::End),
+                        _ => None,
+                    };
+                    if let Some(k) = arrow {
+                        self.pending_arrow = Some((id, k, self.shift_down, self.primary_down));
+                        return;
+                    }
                     // 예외 — 비자모 문자('?','.')는 IME가 Commit에 실어줄 수도, 그냥
                     // 삼킬 수도 있다(경합 · 08-13 실기: '?' 유실). 즉시 버리지 않고
                     // 보류 → Commit 본문에 있으면 중복 폐기, 없으면 방출한다.
@@ -7195,6 +7243,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         leak: nbeep_ui::hangul::Composer::new(),
         leak_win: None,
         ime_trace: std::env::var_os("NEXA_IME_TRACE").is_some(),
+        pending_arrow: None,
         ime_commit_echo: None,
         primary_down: false,
         shift_down: false,

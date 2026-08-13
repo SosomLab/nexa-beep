@@ -455,6 +455,14 @@ impl PeerListWidget {
         )
     }
 
+    /// 팝업(우클릭 메뉴)만 다시 그린다 — 호스트가 상태 바 등 자기 크롬을 그린 뒤
+    /// 호출해 z-순서를 복구한다(08-13 실기: 메뉴가 하단 정보 텍스트에 덮였다).
+    pub fn paint_popup(&self, ctx: &mut dyn crate::draw::DrawCtx, theme: &crate::theme::Theme) {
+        if self.ctx_menu.is_open() {
+            self.ctx_menu.paint(ctx, theme);
+        }
+    }
+
     fn move_caret(&mut self, to: usize, inv: &mut Invalidations) {
         let to = to.min(self.total().saturating_sub(1));
         if to == self.caret || self.total() == 0 {
@@ -650,8 +658,9 @@ impl Widget for PeerListWidget {
                 self.selected = self.rows.iter().map(|r| r.entry.peer).collect();
                 inv.push(self.bounds);
             }
-            InputEvent::Key { key, .. } => {
+            InputEvent::Key { key, shift, .. } => {
                 let vis = self.visible_rows().max(1);
+                let caret_before = self.caret;
                 match key {
                     // 타입어헤드 활성이면 ↑/↓ = 현재 접두사 매치 순환(역방향 포함 · 언어 중립).
                     // 순환 중엔 타임아웃 기준 시각을 리셋한다(이동 중 초기화 방지 — 사용자 확정).
@@ -695,6 +704,17 @@ impl Widget for PeerListWidget {
                         inv.push(self.bounds);
                     }
                     _ => {}
+                }
+                // ⇧+이동 = 지나온 행들을 다중 선택에 추가(08-13 — 마우스 Shift클릭·
+                // 드래그 범위 선택과 같은 문법. 그룹 행은 건너뛴다).
+                if shift && self.caret != caret_before {
+                    let (lo, hi) = (caret_before.min(self.caret), caret_before.max(self.caret));
+                    for k in lo..=hi {
+                        if let Some(row) = self.peer_at(k) {
+                            self.selected.insert(row.entry.peer);
+                        }
+                    }
+                    inv.push(self.bounds);
                 }
             }
             InputEvent::Wheel { delta } => {

@@ -1619,6 +1619,16 @@ impl Widget for ChatViewWidget {
     }
 }
 
+impl ChatViewWidget {
+    /// 팝업(우클릭 메뉴)만 다시 그린다 — 호스트가 상태 바 등 **자기 크롬을 그린 뒤**
+    /// 호출해 z-순서를 복구한다(08-13 실기: 메뉴가 하단 정보 텍스트에 덮였다).
+    pub fn paint_popup(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
+        if self.ctx_menu.is_open() {
+            self.ctx_menu.paint(ctx, theme);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
