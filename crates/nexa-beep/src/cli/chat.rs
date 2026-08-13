@@ -450,6 +450,7 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
                             email: Some(format!("{my_name}@test.local")),
                             phone: Some("010-0000-0000".into()),
                             image_len: u32::try_from(img.len()).unwrap_or(0),
+                            avatar: None, // 테스트 도구 — 내장 아바타 키는 GUI 몫
                         }
                         .encode()];
                         let mut off = 0usize;
@@ -477,6 +478,7 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
                         email,
                         phone,
                         image_len,
+                        ..
                     }) => {
                         println!(
                             "[프로필] 수신 — 이름={} 이메일={} 전화={} 이미지={image_len}B (미공개 필드는 애초에 안 실려 옴)",

@@ -11,6 +11,7 @@ use crate::event::{InputEvent, Key};
 use crate::geom::{Point, Rect};
 use crate::theme::Theme;
 use crate::widget::{Invalidations, Widget};
+use nbeep_core::avatar::AvatarChoice;
 use nbeep_core::i18n::{t, Msg};
 
 /// 프로필 화면 초기값(호스트가 설정에서 읽어 넘긴다).
@@ -36,6 +37,9 @@ pub struct ProfileValues {
     pub seed: Vec<u8>,
     /// 내 사진(M4-5 — 호스트가 imgdec로 디코드·원형 마스크해 넘긴다). 없으면 이니셜.
     pub avatar: Option<std::rc::Rc<crate::theme::IconImage>>,
+    /// 아바타 선택 원문(`profile.avatar` — [`AvatarChoice`] 직렬). 사진(`image_path`)이
+    /// 있으면 사진이 우선한다(선택 UI에서 스와치를 고르면 사진을 비운다 — 상호 배타).
+    pub avatar_choice: String,
 }
 
 /// 프로필 변경 화면 위젯.
@@ -54,6 +58,10 @@ pub struct ProfileWidget {
     resolved_name: String,
     seed: Vec<u8>,
     avatar: Option<std::rc::Rc<crate::theme::IconImage>>,
+    /// 아바타 선택 원문(스와치 클릭으로 바뀐다 · 사진이 있으면 사진 우선).
+    avatar_choice: String,
+    /// 내장 12간지(키, 그림) — 스와치·프리뷰 공용(new에서 1회 해석).
+    builtins: Vec<(String, std::rc::Rc<crate::theme::IconImage>)>,
     changes: Vec<(&'static str, String)>,
     pick_image: bool,
     closed: bool,
@@ -85,10 +93,31 @@ impl ProfileWidget {
             resolved_name: v.resolved_name.clone(),
             seed: v.seed.clone(),
             avatar: v.avatar.clone(),
+            avatar_choice: v.avatar_choice.clone(),
+            builtins: crate::avatar_assets::builtins()
+                .into_iter()
+                .map(|b| (b.key, std::rc::Rc::new(b.image)))
+                .collect(),
             changes: Vec::new(),
             pick_image: false,
             closed: false,
         }
+    }
+
+    /// 스와치 목록 — [이니셜, 없음] + 내장 12간지(설정 저장값과 1:1).
+    fn swatch_values(&self) -> Vec<String> {
+        let mut v = vec!["initials".to_string(), "none".to_string()];
+        v.extend(self.builtins.iter().map(|(k, _)| format!("b:{k}")));
+        v
+    }
+
+    /// i번째 스와치 rect(한 줄 가로 배열 — 14개가 폭 안에 들어온다: 14×28-4 = 388 ≤ 408).
+    fn swatch_rect(&self, i: usize) -> Rect {
+        let d = self.s(24);
+        let gap = self.s(4);
+        #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+        let x = self.bounds.x + self.s(16) + (d + gap) * i as i32;
+        Rect::new(x, self.bounds.y + self.s(172), d, d)
     }
 
     /// IME 조합 중 문자열(08-13) — 초점 필드만 받는다(TextBox가 스스로 거른다 ·
@@ -194,27 +223,28 @@ impl ProfileWidget {
         let pad = self.s(16);
         let field_h = self.s(28);
         let bw = self.s(80);
+        // (y=172 = 아바타 스와치 행 — swatch_rect가 계산 · 아래 행들은 +40 시프트)
         // 이미지 행(라벨은 paint) — 버튼 우측.
         self.choose_img.set_bounds(
-            Rect::new(b.right() - pad - bw, b.y + self.s(174), bw, field_h),
+            Rect::new(b.right() - pad - bw, b.y + self.s(214), bw, field_h),
             inv,
         );
         // 입력 3종 — 라벨 아래 필드.
         let fw = b.w - pad * 2;
         self.name
-            .set_bounds(Rect::new(b.x + pad, b.y + self.s(234), fw, field_h), inv);
+            .set_bounds(Rect::new(b.x + pad, b.y + self.s(274), fw, field_h), inv);
         self.email
-            .set_bounds(Rect::new(b.x + pad, b.y + self.s(292), fw, field_h), inv);
+            .set_bounds(Rect::new(b.x + pad, b.y + self.s(332), fw, field_h), inv);
         self.phone
-            .set_bounds(Rect::new(b.x + pad, b.y + self.s(350), fw, field_h), inv);
+            .set_bounds(Rect::new(b.x + pad, b.y + self.s(390), fw, field_h), inv);
         // 공개 토글 3종 — 라벨 왼쪽·토글 오른쪽 끝.
         let sw_h = self.s(26);
         self.sw_basic
-            .set_bounds(Rect::new(b.x + pad, b.y + self.s(396), fw, sw_h), inv);
+            .set_bounds(Rect::new(b.x + pad, b.y + self.s(436), fw, sw_h), inv);
         self.sw_email
-            .set_bounds(Rect::new(b.x + pad, b.y + self.s(428), fw, sw_h), inv);
+            .set_bounds(Rect::new(b.x + pad, b.y + self.s(468), fw, sw_h), inv);
         self.sw_phone
-            .set_bounds(Rect::new(b.x + pad, b.y + self.s(460), fw, sw_h), inv);
+            .set_bounds(Rect::new(b.x + pad, b.y + self.s(500), fw, sw_h), inv);
     }
 
     /// 표시용 이미지 파일명(경로 말고 이름만 — 좁은 창).
@@ -262,6 +292,21 @@ impl Widget for ProfileWidget {
         }
         if let InputEvent::MouseDown { x, y, .. } = *ev {
             let p = Point { x, y };
+            // 아바타 스와치(08-14 — 이니셜·없음·12간지) — 클릭 = 즉시 선택 보고.
+            // 사진과는 상호 배타: 스와치를 고르면 image_path를 비운다(선택이 보여야 한다).
+            for (i, val) in self.swatch_values().into_iter().enumerate() {
+                if self.swatch_rect(i).contains(p) {
+                    self.avatar_choice = val.clone();
+                    self.avatar = None; // 사진 미리보기 해제(호스트도 image_path "" 반영)
+                    if !self.image_path.is_empty() {
+                        self.image_path.clear();
+                        self.changes.push(("profile.image_path", String::new()));
+                    }
+                    self.changes.push(("profile.avatar", val));
+                    inv.push(self.bounds);
+                    return;
+                }
+            }
             // 포커스는 **배타** — 클릭된 컨트롤만 갖는다(08-14 실기: Choose… 버튼이
             // 묵은 포커스를 쥔 채라 텍스트박스 Enter가 **버튼 클릭으로도** 처리되고
             // 포커스 링도 남았다. 브로드캐스트 전달 구조에선 포커스 단일성이 이중
@@ -326,9 +371,23 @@ impl Widget for ProfileWidget {
         // 사진을 골라도 픽셀 렌더는 M4-5(imgdec) 후 — 그때까지 이니셜 + 파일명 표기.
         let d = self.s(120);
         let av = Rect::new(b.x + (b.w - d) / 2, b.y + self.s(40), d, d);
+        // 프리뷰 우선순위(08-14): 사진 > 내장 12간지 > 없음(빈 원) > 이니셜.
+        let choice = AvatarChoice::parse(&self.avatar_choice);
+        let builtin_img = match &choice {
+            AvatarChoice::Builtin(k) => self
+                .builtins
+                .iter()
+                .find(|(bk, _)| bk == k)
+                .map(|(_, i)| i.clone()),
+            _ => None,
+        };
         if let Some(img) = &self.avatar {
             // 선택된 사진(M4-5 imgdec — 원형 마스크 완료본) — 동그랗고 큰 미리보기.
             ctx.image_scaled(av, img, b);
+        } else if let Some(img) = builtin_img {
+            crate::avatar::draw_builtin(ctx, av, &img, &self.seed);
+        } else if matches!(choice, AvatarChoice::None) {
+            crate::avatar::draw_avatar(ctx, av, "", &self.seed, 34.0); // 빈 원
         } else {
             let ini_src = {
                 // 조합 중 글자까지 반영(display_text) — 필드와 아바타가 같은 것을
@@ -342,11 +401,46 @@ impl Widget for ProfileWidget {
             };
             crate::avatar::draw_avatar(ctx, av, &ini_src, &self.seed, 34.0);
         }
+        // ── 아바타 스와치 행(08-14) — [이니셜][없음][12간지 …] · 현재 선택은 링 ──
+        let cur = if self.avatar.is_some() {
+            None // 사진 사용 중 — 스와치 어느 것도 "현재"가 아니다
+        } else {
+            Some(choice.to_setting())
+        };
+        for (i, val) in self.swatch_values().into_iter().enumerate() {
+            let r = self.swatch_rect(i);
+            match val.as_str() {
+                "initials" => {
+                    let ini_src = {
+                        let typed = self.name.display_text();
+                        if typed.trim().is_empty() {
+                            self.resolved_name.clone()
+                        } else {
+                            typed
+                        }
+                    };
+                    crate::avatar::draw_avatar(ctx, r, &ini_src, &self.seed, 0.0);
+                }
+                "none" => crate::avatar::draw_avatar(ctx, r, "", &self.seed, 0.0),
+                v => {
+                    if let Some((_, img)) =
+                        self.builtins.iter().find(|(k, _)| format!("b:{k}") == v)
+                    {
+                        crate::avatar::draw_builtin(ctx, r, img, &self.seed);
+                    }
+                }
+            }
+            if cur.as_deref() == Some(val.as_str()) {
+                // 선택 링 — 위치 신호(색만으로 가르지 않는다 규약과 정합).
+                let ring = Rect::new(r.x - 2, r.y - 2, r.w + 4, r.h + 4);
+                ctx.stroke_round_rect(ring, ring.w / 2, theme.accent, 2.0);
+            }
+        }
         // 이미지 행 — 라벨 + 파일명(버튼 왼쪽까지 클립).
         ctx.select_font(FontSlot::Base, false);
         ctx.text(
             b.x + pad,
-            b.y + self.s(178),
+            b.y + self.s(218),
             b,
             t(Msg::ProfileImage),
             theme.text,
@@ -354,22 +448,22 @@ impl Widget for ProfileWidget {
         ctx.select_font(FontSlot::Status, false);
         let clip = Rect::new(
             b.x + pad,
-            b.y + self.s(174),
+            b.y + self.s(214),
             (self.choose_img.bounds().x - self.s(8) - (b.x + pad + self.s(110))).max(0),
             self.s(28),
         );
         ctx.text(
             b.x + pad + self.s(110),
-            b.y + self.s(180),
+            b.y + self.s(220),
             clip,
             &self.image_label(),
             theme.text_dim,
         );
         // 필드 라벨.
         let labels = [
-            (Msg::DisplayNameLabel, self.s(216)),
-            (Msg::FieldEmail, self.s(274)),
-            (Msg::FieldPhone, self.s(332)),
+            (Msg::DisplayNameLabel, self.s(256)),
+            (Msg::FieldEmail, self.s(314)),
+            (Msg::FieldPhone, self.s(372)),
         ];
         for (m, dy) in labels {
             ctx.select_font(FontSlot::Status, false);
@@ -388,7 +482,7 @@ impl Widget for ProfileWidget {
         let lines = crate::settings::wrap_text(ctx, t(Msg::ProfileShareNote), avail, 2);
         for (i, line) in lines.iter().enumerate() {
             #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-            let dy = self.s(498) + i as i32 * self.s(16);
+            let dy = self.s(538) + i as i32 * self.s(16);
             ctx.text(b.x + pad, b.y + dy, b, line, theme.text_dim);
         }
         // 우클릭 편집 메뉴 — 모든 자식 뒤에 재도색(08-13 실기: Email 필드가
@@ -497,6 +591,38 @@ mod tests {
                 .iter()
                 .any(|(k, _)| *k == "profile.display_name"),
             "Enter = 표시 이름 확정 보고"
+        );
+    }
+
+    /// 아바타 스와치(08-14) — 클릭 = 선택 보고 · **사진과 상호 배타**(image_path 소거).
+    #[test]
+    fn swatch_click_reports_choice_and_clears_photo() {
+        let mut w = ProfileWidget::new(&ProfileValues {
+            display_name: "auto".into(),
+            image_path: "C:/pics/me.png".into(),
+            avatar_choice: "initials".into(),
+            ..ProfileValues::default()
+        });
+        let mut inv = Invalidations::default();
+        w.set_bounds(Rect::new(0, 0, 440, 610), &mut inv);
+        let r = w.swatch_rect(2); // [이니셜][없음] 다음 = 첫 12간지(rat)
+        w.on_event(
+            &InputEvent::MouseDown {
+                x: r.x + 2,
+                y: r.y + 2,
+                shift: false,
+                primary: true,
+            },
+            &mut inv,
+        );
+        let ch = w.take_changes();
+        assert!(
+            ch.contains(&("profile.avatar", "b:rat".to_string())),
+            "스와치 클릭 = 선택 보고: {ch:?}"
+        );
+        assert!(
+            ch.contains(&("profile.image_path", String::new())),
+            "사진과 배타 — image_path 소거: {ch:?}"
         );
     }
 

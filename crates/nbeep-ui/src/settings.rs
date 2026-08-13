@@ -45,7 +45,12 @@ const SIZE_OPTS_STATIC: &[(&str, Msg)] = SIZE_OPTS;
 /// 설정 **화면에는 없지만** 영속되는 키(M3-17 프로필 화면이 쓴다) — 기본 빈 문자열.
 /// ⚠ 이메일·전화는 PII다 — 평문 settings.cfg 보관은 잠정이며 M2-5b(암호화 저장)로
 /// 이관 후보(journal 08-11 명기).
-const HIDDEN_KEYS: &[&str] = &["profile.email", "profile.phone", "profile.image_path"];
+const HIDDEN_KEYS: &[&str] = &[
+    "profile.email",
+    "profile.phone",
+    "profile.image_path",
+    "profile.avatar", // 아바타 선택(08-14) — 프로필 화면 스와치가 편집한다
+];
 
 /// 기본 off 토글 — 프로필 공개(DR-22 **기본 전부 비노출** · 옵트인). 미등록 토글은 on.
 const TOGGLE_DEFAULT_OFF: &[&str] = &[

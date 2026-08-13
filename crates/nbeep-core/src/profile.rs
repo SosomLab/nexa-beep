@@ -10,12 +10,17 @@
 //!
 //! ```text
 //! kind 1 = Request   {}                                  ← 상대 프로필 요청
-//! kind 2 = Info      { flags u8 · (len u16 BE ‖ UTF-8)×켠 필드 · image_len u32 BE }
-//!                      flags: bit0=name · bit1=email · bit2=phone
+//! kind 2 = Info      { flags u8 · (len u16 BE ‖ UTF-8)×켠 필드 · image_len u32 BE
+//!                      · [avatar: len u16 BE ‖ UTF-8]    ← flags bit3일 때만(08-14)
+//!                    }  flags: bit0=name · bit1=email · bit2=phone · bit3=avatar
 //! kind 3 = ImageChunk{ offset u32 BE · last u8 · bytes } ← image_len>0일 때만 이어짐
 //! ```
 //!
 //! 미지 kind는 조용히 무시(전방 호환 — Control 스트림의 다른 미래 메시지와 공존).
+//! ★ `avatar`가 `image_len` **뒤**인 이유(08-14): 구버전 decode는 `image_len`까지 읽고
+//! **꼬리를 검사하지 않는다** — 그래서 뒤에 붙이면 구버전이 조용히 무시한다. 필드 사이에
+//! 끼우면 구버전의 `image_len` 오프셋이 틀어져 깨진다. 내장 아바타는 **키만** 나른다 —
+//! 상대도 같은 자산을 내장하고 있으니 그림 바이트를 실어 나를 이유가 없다.
 
 /// 프로필 이미지 총량 상한(바이트) — 초과 응답은 이미지 생략, 초과 수신은 폐기.
 pub const PROFILE_IMAGE_MAX: usize = 256 * 1024;
@@ -41,6 +46,9 @@ pub enum ProfileMsg {
         phone: Option<String>,
         /// 뒤따르는 이미지 총 바이트(0 = 없음).
         image_len: u32,
+        /// 내장 아바타 키(기본정보 공개 + [`crate::avatar::AvatarChoice::Builtin`]일 때 —
+        /// 08-14). 수신측은 자기 [`crate::avatar::ZODIAC`]으로 검증하고 미지 키는 버린다.
+        avatar: Option<String>,
     },
     /// 이미지 조각(Info 직후 순서대로 · `last`가 마지막 표시).
     ImageChunk {
@@ -64,6 +72,7 @@ impl ProfileMsg {
                 email,
                 phone,
                 image_len,
+                avatar,
             } => {
                 let mut out = Vec::with_capacity(64);
                 out.push(K_INFO);
@@ -77,6 +86,9 @@ impl ProfileMsg {
                 if phone.is_some() {
                     flags |= 4;
                 }
+                if avatar.is_some() {
+                    flags |= 8;
+                }
                 out.push(flags);
                 for field in [name, email, phone].into_iter().flatten() {
                     let b = field.as_bytes();
@@ -85,6 +97,13 @@ impl ProfileMsg {
                     out.extend_from_slice(&b[..usize::from(len)]);
                 }
                 out.extend_from_slice(&image_len.to_be_bytes());
+                // 아바타 키는 **맨 뒤**(구버전은 여기서 읽기를 멈춘다 — 전방 호환).
+                if let Some(a) = avatar {
+                    let b = a.as_bytes();
+                    let len = u16::try_from(b.len()).unwrap_or(u16::MAX);
+                    out.extend_from_slice(&len.to_be_bytes());
+                    out.extend_from_slice(&b[..usize::from(len)]);
+                }
                 out
             }
             ProfileMsg::ImageChunk {
@@ -109,25 +128,28 @@ impl ProfileMsg {
         match kind {
             K_REQUEST => Some(ProfileMsg::Request),
             K_INFO => {
-                let (&flags, mut p) = rest.split_first()?;
-                let mut take_str = |present: bool| -> Option<Option<String>> {
+                fn take_str(p: &mut &[u8], present: bool) -> Option<Option<String>> {
                     if !present {
                         return Some(None);
                     }
                     let len = usize::from(u16::from_be_bytes(p.get(..2)?.try_into().ok()?));
                     let s = std::str::from_utf8(p.get(2..2 + len)?).ok()?.to_string();
-                    p = &p[2 + len..];
+                    *p = &p[2 + len..];
                     Some(Some(s))
-                };
-                let name = take_str(flags & 1 != 0)?;
-                let email = take_str(flags & 2 != 0)?;
-                let phone = take_str(flags & 4 != 0)?;
+                }
+                let (&flags, mut p) = rest.split_first()?;
+                let name = take_str(&mut p, flags & 1 != 0)?;
+                let email = take_str(&mut p, flags & 2 != 0)?;
+                let phone = take_str(&mut p, flags & 4 != 0)?;
                 let image_len = u32::from_be_bytes(p.get(..4)?.try_into().ok()?);
+                p = &p[4..];
+                let avatar = take_str(&mut p, flags & 8 != 0)?;
                 Some(ProfileMsg::Info {
                     name,
                     email,
                     phone,
                     image_len,
+                    avatar,
                 })
             }
             K_IMAGE => {
@@ -158,12 +180,21 @@ mod tests {
                 email: None,
                 phone: Some("010-1234".into()),
                 image_len: 1234,
+                avatar: None,
             },
             ProfileMsg::Info {
                 name: None,
                 email: None,
                 phone: None,
                 image_len: 0,
+                avatar: None,
+            },
+            ProfileMsg::Info {
+                name: Some("bob".into()),
+                email: None,
+                phone: None,
+                image_len: 0,
+                avatar: Some("tiger".into()),
             },
             ProfileMsg::ImageChunk {
                 offset: 32 * 1024,
@@ -184,10 +215,46 @@ mod tests {
             email: None,
             phone: None,
             image_len: 0,
+            avatar: None,
         }
         .encode();
         // kind(1)+flags(1)+len(2)+"bob"(3)+image_len(4) = 11 — 이메일·전화 자리가 없다.
-        assert_eq!(enc.len(), 11);
+        assert_eq!(enc.len(), 11, "아바타 미포함이면 구버전과 같은 바이트");
+    }
+
+    /// ★ 전방 호환(08-14) — 아바타 키는 image_len **뒤**라 ① 구버전 인코딩(bit3 없음)을
+    /// 신버전이 avatar=None으로 해석하고 ② 신버전 인코딩의 꼬리를 구버전이 무시한다
+    /// (구버전 decode는 image_len에서 읽기를 멈추고 꼬리를 검사하지 않았다 — 그 관용을
+    /// 여기 신버전에도 유지해 미래 확장 자리를 남긴다).
+    #[test]
+    fn avatar_tail_is_forward_compatible() {
+        // ① bit3 없는 인코딩 = avatar None으로 해석.
+        let old = ProfileMsg::Info {
+            name: Some("bob".into()),
+            email: None,
+            phone: None,
+            image_len: 0,
+            avatar: None,
+        }
+        .encode();
+        assert!(matches!(
+            ProfileMsg::decode(&old),
+            Some(ProfileMsg::Info { avatar: None, .. })
+        ));
+        // ② 미래 확장 — 아바타 뒤에 모르는 꼬리가 더 붙어도 해석은 성공한다.
+        let mut newer = ProfileMsg::Info {
+            name: None,
+            email: None,
+            phone: None,
+            image_len: 0,
+            avatar: Some("ox".into()),
+        }
+        .encode();
+        newer.extend_from_slice(b"future-bytes");
+        assert!(matches!(
+            ProfileMsg::decode(&newer),
+            Some(ProfileMsg::Info { avatar: Some(a), .. }) if a == "ox"
+        ));
     }
 
     /// 미지 kind·손상은 None(무시) — Control 스트림 전방 호환.

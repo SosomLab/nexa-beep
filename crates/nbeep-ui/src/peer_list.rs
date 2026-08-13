@@ -956,7 +956,10 @@ impl Widget for PeerListWidget {
             let av_d = self.s(AVATAR_D);
             let av = Rect::new(r.x + self.s(8), r.y + (rh - av_d) / 2, av_d, av_d);
             if let Some(img) = &row.avatar {
-                // 실사진(M4-5 imgdec — 원형 마스크 완료본).
+                // 실사진(원형 마스크 완료본)·내장 12간지(투명 배경) 공용 — **원 배경을
+                // 깔고 얹는다**(08-14): 사진은 불투명 원이라 배경이 가려지고, 내장은
+                // 시드 색 원이 이니셜·사진과 같은 시각 문법을 만든다.
+                ctx.fill_ellipse(av, crate::avatar::avatar_color(row.entry.peer.as_bytes()));
                 ctx.image_scaled(av, img, r);
             } else {
                 crate::avatar::draw_avatar(

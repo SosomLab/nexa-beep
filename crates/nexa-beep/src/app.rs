@@ -137,6 +137,8 @@ enum AppEvent {
         email: Option<String>,
         phone: Option<String>,
         image: Option<Vec<u8>>,
+        /// 내장 아바타 키(08-14) — 바이트가 아니라 키만 온다(양쪽이 같은 자산 내장).
+        avatar: Option<String>,
     },
     /// 격리 디코드 완료(워커 → 메인 · M4-5). ★ 그전엔 자식 프로세스 왕복(스폰 +
     /// Defender 검사 — Windows 실측 1~2초)이 **메인 스레드에서 동기**로 돌아, 대화창이
@@ -307,9 +309,14 @@ fn spawn_session_actor(
         let mut inbox = XferInbox::new();
         let mut outgoing: HashMap<nbeep_core::XferId, Vec<u8>> = HashMap::new();
         let mut send_meter = nbeep_core::RateMeter::default();
-        // 프로필 이미지 조립 상태(M3-17) — (텍스트 필드, 기대 총량, 누적 바이트).
+        // 프로필 이미지 조립 상태(M3-17) — (텍스트 필드+아바타 키, 기대 총량, 누적 바이트).
         type PendingProfile = (
-            (Option<String>, Option<String>, Option<String>),
+            (
+                Option<String>,
+                Option<String>,
+                Option<String>,
+                Option<String>,
+            ),
             u32,
             Vec<u8>,
         );
@@ -426,6 +433,7 @@ fn spawn_session_actor(
                         email,
                         phone,
                         image_len,
+                        avatar,
                     }) => {
                         let len = image_len as usize;
                         if len == 0 || len > nbeep_core::PROFILE_IMAGE_MAX {
@@ -436,11 +444,15 @@ fn spawn_session_actor(
                                 email,
                                 phone,
                                 image: None,
+                                avatar,
                             });
                             pending_profile = None;
                         } else {
-                            pending_profile =
-                                Some(((name, email, phone), image_len, Vec::with_capacity(len)));
+                            pending_profile = Some((
+                                (name, email, phone, avatar),
+                                image_len,
+                                Vec::with_capacity(len),
+                            ));
                         }
                     }
                     Some(nbeep_core::ProfileMsg::ImageChunk {
@@ -456,7 +468,7 @@ fn spawn_session_actor(
                             }
                             if !in_order || last {
                                 // 종결 — 정합(순서·총량 일치)일 때만 이미지 채택.
-                                let (name, email, phone) = fields.clone();
+                                let (name, email, phone, avatar) = fields.clone();
                                 let ok = in_order && last && buf.len() == *want as usize;
                                 let image = ok.then(|| std::mem::take(buf));
                                 let _ = proxy.send_event(AppEvent::PeerProfile {
@@ -465,6 +477,7 @@ fn spawn_session_actor(
                                     email,
                                     phone,
                                     image,
+                                    avatar,
                                 });
                                 pending_profile = None;
                             }
@@ -944,6 +957,8 @@ struct App {
     profile_view: Option<nbeep_ui::ProfileWidget>,
     /// 상대 프로필(M3-17 — 세션 경유 수신 · 목록·제목 표시 우선).
     peer_profiles: HashMap<PeerId, PeerProfile>,
+    /// 내장 12간지 아바타(키 → 그림 · 08-14) — 기동 시 1회 해석(NBAV1 fail-soft).
+    builtin_avatars: HashMap<String, Rc<nbeep_ui::IconImage>>,
     /// 상대 프로필 보기 뷰(우클릭 ▸ 프로필 보기 — 열려 있을 때만 Some).
     peer_info_view: Option<nbeep_ui::PeerInfoWidget>,
     /// 주소 입력 모달 뷰(DR-19 · M3-16 — 열려 있을 때만 Some).
@@ -2401,11 +2416,21 @@ impl App {
         let image_len = image.as_ref().map_or(0u32, |b| {
             u32::try_from(b.len()).unwrap_or(0) // MAX 256KiB라 실패 불가
         });
+        // 내장 아바타 키(08-14) — 기본정보 공개 + 사진 미사용 + 내장 선택일 때만.
+        // 키만 나른다(상대도 같은 자산 내장 — 그림 바이트를 실어 나를 이유가 없다).
+        let avatar = (share_basic && image.is_none())
+            .then(|| {
+                nbeep_core::avatar::AvatarChoice::parse(self.settings.get("profile.avatar"))
+                    .builtin_key()
+                    .map(str::to_string)
+            })
+            .flatten();
         let mut frames = vec![ProfileMsg::Info {
             name,
             email,
             phone,
             image_len,
+            avatar,
         }
         .encode()];
         if let Some(bytes) = image {
@@ -3103,6 +3128,7 @@ impl App {
                 .as_str()
                 .to_string(),
             seed: self.identity.peer_id().as_bytes().to_vec(),
+            avatar_choice: self.settings.get("profile.avatar").to_string(),
             avatar: {
                 // 내 사진 미리보기(M4-5) — 격리 디코드는 워커로(창 열림이 1~2초 얼지
                 // 않게 · 08-13). 도착하면 `Decoded(MyAvatar)`가 채운다(그전엔 이니셜).
@@ -3119,7 +3145,7 @@ impl App {
         };
         let attrs = Window::default_attributes()
             .with_title("Nexa Beep — 프로필")
-            .with_inner_size(winit::dpi::LogicalSize::new(440.0, 570.0))
+            .with_inner_size(winit::dpi::LogicalSize::new(440.0, 610.0))
             .with_resizable(false)
             // 모달(⑤ 사용자 요청 08-13) — 다른 창에 가려지지 않고 항상 위에서 입력.
             .with_window_level(winit::window::WindowLevel::AlwaysOnTop)
@@ -3341,6 +3367,15 @@ impl App {
     /// (`ui.language`·`ui.scrollbar_hide`는 run()이 창 생성 전에 이미 반영).
     fn apply_boot_settings(&mut self) {
         use nbeep_core::{ApprovalPolicy, BasicApproval};
+        // 기본 아바타(08-14) — 미설정이면 **내 키 지문으로 12간지 하나를 안정 배정해
+        // 저장**한다. 실행마다 랜덤이면 상대 화면에서 내 얼굴이 요동친다(사칭처럼
+        // 보인다 — core::avatar). 저장하므로 사용자가 바꾸면 그대로 유지된다.
+        if self.settings.get("profile.avatar").is_empty() {
+            let v = nbeep_core::avatar::default_for_seed(self.identity.peer_id().as_bytes())
+                .to_setting();
+            self.settings.set("profile.avatar", v);
+            self.conf_mark();
+        }
         self.rebuild_theme(); // ui.theme + theme.* 색 오버라이드
         if let Ok(ms) = self.settings.get("ui.typeahead_timeout").parse::<u64>() {
             self.list.set_typeahead_timeout(ms);
@@ -3567,6 +3602,15 @@ impl App {
                         }
                     }
                     self.refresh_approval_ui();
+                }
+                // 아바타 선택(08-14) — 연결된 상대에게 프로필을 능동 재전송(키만).
+                // 상대는 Request 없이도 최신 얼굴을 받는다(변경 즉시 반영).
+                "profile.avatar" => {
+                    let frames = self.my_profile_frames();
+                    for conv in self.conversations.values() {
+                        let _ = conv.out_tx.send(SessionCmd::Control(frames.clone()));
+                    }
+                    self.status = "아바타 변경 — 연결된 상대에게 반영".into();
                 }
                 // 표시 이름(M1-10) — 즉시 재공지(사용자 확정 08-11). 상대 목록은
                 // PeerTable Renamed 경로로 갱신된다.
@@ -5846,16 +5890,23 @@ impl ApplicationHandler<AppEvent> for App {
                 email,
                 phone,
                 image,
+                avatar: avatar_key,
             } => {
                 // 이름은 무해화(DisplayName) 통과분만 채택 · 이력은 신뢰 저장소에도 남긴다.
                 let display = name.and_then(|n| nbeep_core::DisplayName::parse(&n).ok());
                 if let Some(n) = &display {
                     self.trust.record_name(peer, n.clone());
                 }
+                // 내장 아바타 키(08-14) — **내 자산의 12간지 키로 검증**하고 즉시 반영
+                // (바이트가 아니라 키라 디코드 자체가 없다 — imgdec 무관·R-5 무관).
+                // 미지 키(신버전 값)는 조용히 버린다(전방 호환).
+                let builtin = avatar_key
+                    .filter(|k| nbeep_core::avatar::ZODIAC.contains(&k.as_str()))
+                    .and_then(|k| self.builtin_avatars.get(&k).cloned());
                 // 이미지 바이트 캐시 + **격리 디코드는 워커로**(M4-5 — 자식 프로세스
                 // 왕복이 메인을 1~2초 멈췄다 · 08-13 실기). 도착 전엔 기존 아바타를
                 // 유지하고(깜빡임 방지) `Decoded(PeerAvatar)`가 교체한다. 실패 = 이니셜.
-                let mut avatar = None;
+                let mut avatar = builtin.clone();
                 let image_file = image.and_then(|bytes| {
                     let dir = self.data_dir.join("profiles");
                     std::fs::create_dir_all(&dir).ok()?;
@@ -5869,8 +5920,11 @@ impl ApplicationHandler<AppEvent> for App {
                     );
                     Some(path)
                 });
-                let has_any =
-                    display.is_some() || email.is_some() || phone.is_some() || image_file.is_some();
+                let has_any = display.is_some()
+                    || email.is_some()
+                    || phone.is_some()
+                    || image_file.is_some()
+                    || builtin.is_some();
                 if has_any {
                     // 받은 항목을 상태바에 요약(연락처 상세 표시 UI는 M3-17 잔여).
                     let mut got: Vec<&str> = Vec::new();
@@ -7310,6 +7364,10 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         picker_view: None,
         profile_view: None,
         peer_profiles: HashMap::new(),
+        builtin_avatars: nbeep_ui::avatar_assets::builtins()
+            .into_iter()
+            .map(|b| (b.key, Rc::new(b.image)))
+            .collect(),
         peer_info_view: None,
         picker_ctx: None,
         pending_picker: None,
