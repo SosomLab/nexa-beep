@@ -2053,10 +2053,7 @@ impl App {
                     .peer_profiles
                     .get(&entry.peer)
                     .and_then(|p| p.avatar.clone());
-                let border = self
-                    .peer_profiles
-                    .get(&entry.peer)
-                    .and_then(|p| p.border);
+                let border = self.peer_profiles.get(&entry.peer).and_then(|p| p.border);
                 let trust = self.trust.level(entry.peer);
                 // 세션 상태 점(사용자 요청): 대화 중=Active · 끊김 기록=Lost · 그 외=Idle.
                 let link = if self.conversations.contains_key(&entry.peer) {
@@ -3436,8 +3433,10 @@ impl App {
         if self.settings.get("profile.avatar_border").is_empty() {
             let rgb =
                 nbeep_core::avatar::default_border_for_seed(self.identity.peer_id().as_bytes());
-            self.settings
-                .set("profile.avatar_border", nbeep_core::avatar::border_to_setting(rgb));
+            self.settings.set(
+                "profile.avatar_border",
+                nbeep_core::avatar::border_to_setting(rgb),
+            );
             self.conf_mark();
         }
         self.rebuild_theme(); // ui.theme + theme.* 색 오버라이드
@@ -6714,8 +6713,8 @@ impl ApplicationHandler<AppEvent> for App {
                 if let Some(e) = self.windows.get(&id) {
                     let (x, y) = e.cursor;
                     self.blink_anchor_ms = self.now_ms(); // 캐럿 재배치 = 밝게 시작
-                    // ★ 수식키를 마우스에 싣는다(08-13 실기 — false 하드코딩이라
-                    // ⌘클릭 다중 선택이 죽어 있었다. 키 추적값을 그대로 전달).
+                                                          // ★ 수식키를 마우스에 싣는다(08-13 실기 — false 하드코딩이라
+                                                          // ⌘클릭 다중 선택이 죽어 있었다. 키 추적값을 그대로 전달).
                     self.route(
                         id,
                         InputEvent::MouseDown {

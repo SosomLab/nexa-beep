@@ -79,9 +79,11 @@ fn parse(b: &[u8]) -> Vec<BuiltinAvatar> {
             break;
         };
         p += key_len as usize;
-        let Some(len_bytes) = b.get(p..p + 4) else { break };
-        let rle_len = u32::from_le_bytes([len_bytes[0], len_bytes[1], len_bytes[2], len_bytes[3]])
-            as usize;
+        let Some(len_bytes) = b.get(p..p + 4) else {
+            break;
+        };
+        let rle_len =
+            u32::from_le_bytes([len_bytes[0], len_bytes[1], len_bytes[2], len_bytes[3]]) as usize;
         p += 4;
         let Some(rle) = b.get(p..p + rle_len) else {
             break;
@@ -205,7 +207,11 @@ mod tests {
         let flat: Vec<u8> = (0..side * side).flat_map(|_| [9, 9, 9, 255]).collect();
         let rle = compress(&flat);
         // 4096px / 255 = 17런 미만 — 원본 16KB가 100B 아래로.
-        assert!(rle.len() < 100, "평면은 극단적으로 줄어야 한다: {}", rle.len());
+        assert!(
+            rle.len() < 100,
+            "평면은 극단적으로 줄어야 한다: {}",
+            rle.len()
+        );
         assert_eq!(expand(&rle, (side * side) as usize).unwrap(), flat);
     }
 
@@ -213,7 +219,10 @@ mod tests {
     #[test]
     fn corrupt_asset_is_not_a_panic() {
         assert!(parse(b"").is_empty(), "빈 입력");
-        assert!(parse(b"NOTIT\x01\x00\x00\x00\x00").is_empty(), "매직 불일치");
+        assert!(
+            parse(b"NOTIT\x01\x00\x00\x00\x00").is_empty(),
+            "매직 불일치"
+        );
         // 매직은 맞고 본문이 잘린 경우 — 거기까지만.
         let side = 8;
         let full = bundle(&[("rat", side, synth(side, 1))], side);

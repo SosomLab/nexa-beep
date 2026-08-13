@@ -650,7 +650,7 @@ impl Widget for GalleryWidget {
             self.menubar.paint(ctx, theme); // 풀다운 오버레이 — 아래 컨트롤 위에 겹침
         }
         self.textbox.paint_popup(ctx, theme); // 우클릭 편집 메뉴 — 아래 콤보 위로
-        // 오버레이 스크롤바(맨 위에 겹침).
+                                              // 오버레이 스크롤바(맨 위에 겹침).
         self.bars.paint(
             ctx,
             theme,

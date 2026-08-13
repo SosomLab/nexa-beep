@@ -49,7 +49,7 @@ const HIDDEN_KEYS: &[&str] = &[
     "profile.email",
     "profile.phone",
     "profile.image_path",
-    "profile.avatar", // 아바타 선택(08-14) — 프로필 화면 스와치가 편집한다
+    "profile.avatar",        // 아바타 선택(08-14) — 프로필 화면 스와치가 편집한다
     "profile.avatar_border", // 아바타 보더 색(08-14) — 프로필 화면 ColorPick이 편집한다
 ];
 
@@ -63,7 +63,7 @@ const TOGGLE_DEFAULT_OFF: &[&str] = &[
 /// Radio 기본값 예외 — 표시 순서(오름차순 등)와 기본값이 다른 키만 등록.
 /// 미등록 키의 기본은 첫 옵션(기존 규약).
 const RADIO_DEFAULTS: &[(&str, &str)] = &[
-    ("ui.toolbar_size", "24"),
+    ("ui.toolbar_size", "32"),
     ("ui.typeahead_timeout", "2000"),
     ("ui.scrollbar_hide", "2000"),
     // 컨트롤 글리프 크기 — 기본 "크게"(사용자 확정 08-11 · 설정 Switch가 크게 보이도록).
@@ -351,6 +351,7 @@ pub fn registry() -> &'static [Entry] {
                 ("16", Msg::Tb16),
                 ("24", Msg::Tb24),
                 ("32", Msg::Tb32),
+                ("48", Msg::Tb48),
                 ("64", Msg::Tb64),
             ]),
             key: "ui.toolbar_size",

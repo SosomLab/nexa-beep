@@ -272,6 +272,7 @@ pub enum Msg {
     Tb16,
     Tb24,
     Tb32,
+    Tb48,
     Tb64,
     RefreshList,
     // ── 프로필 (M1-10 · FR-S-50) ──
@@ -791,6 +792,7 @@ impl Msg {
             Msg::Tb16 => ["16×16"; 4],
             Msg::Tb24 => ["24×24"; 4],
             Msg::Tb32 => ["32×32"; 4],
+            Msg::Tb48 => ["48×48"; 4],
             Msg::Tb64 => ["64×64"; 4],
             Msg::RefreshList => ["Refresh list", "목록 갱신", "刷新列表", "一覧を更新"],
             Msg::CatProfile => ["Profile", "프로필", "个人资料", "プロフィール"],

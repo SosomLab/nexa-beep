@@ -455,14 +455,21 @@ mod tests {
         m.open_at(10, 10, items(), host(), 60);
         m.on_event(&key(Key::Up));
         m.on_event(&key(Key::Enter));
-        assert_eq!(m.take_picked().as_deref(), Some("paste"), "↑ 시작 = 마지막 활성");
+        assert_eq!(
+            m.take_picked().as_deref(),
+            Some("paste"),
+            "↑ 시작 = 마지막 활성"
+        );
     }
 
     #[test]
     fn escape_closes_without_pick_and_enter_without_hover_closes() {
         let mut m = ContextMenu::new();
         m.open_at(10, 10, items(), host(), 60);
-        assert!(m.on_event(&key(Key::Escape)), "Esc 소비(창 닫기로 새면 안 된다)");
+        assert!(
+            m.on_event(&key(Key::Escape)),
+            "Esc 소비(창 닫기로 새면 안 된다)"
+        );
         assert!(!m.is_open());
         assert_eq!(m.take_picked(), None);
         m.open_at(10, 10, items(), host(), 60);

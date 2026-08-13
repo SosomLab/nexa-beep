@@ -71,12 +71,7 @@ pub fn draw_avatar(
 /// 그림은 mkavatars가 0.92 배율로 안착시켜 원 안에 들어온다. 원 배경을 까는 이유 =
 /// 일러스트가 투명 배경이라 패널 위에 맨몸으로 뜨면 "아바타"가 아니라 "스티커"로
 /// 보이고, 이니셜·사진(원형)과 시각 문법이 어긋난다.
-pub fn draw_builtin(
-    ctx: &mut dyn DrawCtx,
-    rect: Rect,
-    img: &crate::theme::IconImage,
-    seed: &[u8],
-) {
+pub fn draw_builtin(ctx: &mut dyn DrawCtx, rect: Rect, img: &crate::theme::IconImage, seed: &[u8]) {
     ctx.fill_ellipse(rect, avatar_color(seed));
     ctx.image_scaled(rect, img, rect);
 }

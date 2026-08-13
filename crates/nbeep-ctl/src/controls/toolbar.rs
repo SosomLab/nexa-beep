@@ -1,6 +1,6 @@
 //! **툴바** — 이미지 버튼 가로 배열(사용자 요청 08-09 · 메뉴바 아래 배치).
 //!
-//! 아이콘 크기는 설정으로 지정(`ui.toolbar_size` — 16/24/32/64 · **기본 24**),
+//! 아이콘 크기는 설정으로 지정(`ui.toolbar_size` — 16/24/32/48/64 · **기본 32**),
 //! [`Toolbar::set_icon_size`]로 즉시 반영된다. 아이콘 소스 규약(사용자 확정 08-09):
 //! - [`ToolIcon::Image`](PNG 등 RGBA) = **원본 색 그대로**(슬롯에 contain 맞춤).
 //! - [`ToolIcon::Mask`](SVG 유래 알파 마스크) = **모양만** — 색은 테마 기준색으로 틴트
@@ -79,8 +79,10 @@ impl ToolItem {
 const SLOT_PAD: i32 = 4;
 /// 툴바 상하 여백(논리 px).
 const BAR_PAD: i32 = 4;
-/// 기본 아이콘 크기(논리 px) — 사용자 확정(08-09 · 32→24).
-pub const DEFAULT_ICON: i32 = 24;
+/// 기본 아이콘 크기(논리 px) — 사용자 확정(08-14 · 24→**32**).
+/// 이력: 08-09에 32→24로 내렸다가, 툴바 프로필 버튼이 **내 아바타**를 쓰게 되면서
+/// 24px에서는 그림이 뭉개져 다시 32로 올렸다(선택지에 48도 추가).
+pub const DEFAULT_ICON: i32 = 32;
 /// hover 배경 불투명도(기준색 틴트 — 다크/라이트 공용).
 const HOVER_BG_ALPHA: f32 = 0.10;
 /// pressed 배경 불투명도 — hover보다 진해 눌림이 식별된다.
@@ -94,7 +96,7 @@ type TintSlot = Option<(Color, Rc<IconImage>)>;
 pub struct Toolbar {
     base: ControlBase,
     items: Vec<ToolItem>,
-    /// 아이콘 한 변(논리 px) — 16/24/32/64.
+    /// 아이콘 한 변(논리 px) — 16/24/32/48/64.
     icon_px: i32,
     hover: Option<usize>,
     pressed: Option<usize>,
@@ -104,7 +106,7 @@ pub struct Toolbar {
 }
 
 impl Toolbar {
-    /// 항목으로 만든다(아이콘 기본 24).
+    /// 항목으로 만든다(아이콘 기본 [`DEFAULT_ICON`]).
     #[must_use]
     pub fn new(items: Vec<ToolItem>) -> Self {
         let n = items.len();
@@ -302,12 +304,14 @@ impl Widget for Toolbar {
                         ctx.fill_ellipse(icon_area, crate::avatar::avatar_color(seed));
                         ctx.image_scaled(icon_area, img, slot);
                     } else if initials.is_empty() {
-                        ctx.fill_ellipse(icon_area, crate::avatar::avatar_color(seed)); // 빈 원
+                        ctx.fill_ellipse(icon_area, crate::avatar::avatar_color(seed));
+                    // 빈 원
                     } else {
                         crate::avatar::draw_avatar(ctx, icon_area, initials, seed, 0.0);
                     }
                     if let Some(c) = border {
-                        ctx.stroke_ellipse(icon_area, *c, self.s(2).max(2) as f32); // 소형 2px
+                        ctx.stroke_ellipse(icon_area, *c, self.s(2).max(2) as f32);
+                        // 소형 2px
                     }
                 }
             }
@@ -376,7 +380,7 @@ mod tests {
     #[test]
     fn icon_size_drives_preferred_height_and_slots() {
         let (mut t, _) = bar();
-        assert_eq!(t.icon_size(), DEFAULT_ICON, "기본 24");
+        assert_eq!(t.icon_size(), DEFAULT_ICON, "기본값은 DEFAULT_ICON");
         let h24 = t.preferred_height();
         t.set_icon_size(64);
         assert!(t.preferred_height() > h24, "64는 24보다 높다");

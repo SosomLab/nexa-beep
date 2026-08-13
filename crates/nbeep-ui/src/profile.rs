@@ -327,10 +327,14 @@ impl Widget for ProfileWidget {
             self.name.set_focused(self.name.bounds().contains(p));
             self.email.set_focused(self.email.bounds().contains(p));
             self.phone.set_focused(self.phone.bounds().contains(p));
-            self.choose_img.set_focused(self.choose_img.bounds().contains(p));
-            self.sw_basic.set_focused(self.sw_basic.bounds().contains(p));
-            self.sw_email.set_focused(self.sw_email.bounds().contains(p));
-            self.sw_phone.set_focused(self.sw_phone.bounds().contains(p));
+            self.choose_img
+                .set_focused(self.choose_img.bounds().contains(p));
+            self.sw_basic
+                .set_focused(self.sw_basic.bounds().contains(p));
+            self.sw_email
+                .set_focused(self.sw_email.bounds().contains(p));
+            self.sw_phone
+                .set_focused(self.sw_phone.bounds().contains(p));
             if !self.border.bounds().contains(p) {
                 self.border.set_focused(false); // ColorPick 내부(hex) 포커스도 배타
             }
@@ -460,9 +464,8 @@ impl Widget for ProfileWidget {
         }
         // 아바타 보더(08-14 사용자 요청) — **큰 프리뷰는 3px**(소형 2px는 목록 몫).
         if let Some((br, bg, bb)) = nbeep_core::avatar::parse_border(&self.border.value_hex()) {
-            let c = crate::theme::Color(
-                (u32::from(br) << 16) | (u32::from(bg) << 8) | u32::from(bb),
-            );
+            let c =
+                crate::theme::Color((u32::from(br) << 16) | (u32::from(bg) << 8) | u32::from(bb));
             ctx.stroke_ellipse(av, c, self.s(3).max(3) as f32);
         }
         // 보더 색 행(08-14) — 라벨 + ColorPick(우측).
@@ -598,7 +601,13 @@ mod tests {
             },
             &mut inv,
         );
-        w.on_event(&InputEvent::MouseUp { x: r.x + 2, y: r.y + 2 }, &mut inv);
+        w.on_event(
+            &InputEvent::MouseUp {
+                x: r.x + 2,
+                y: r.y + 2,
+            },
+            &mut inv,
+        );
         assert!(w.take_pick_image(), "버튼 클릭 = 피커 요청");
         // 이름 필드 클릭 — 버튼 포커스는 **해제**되어야 한다(배타).
         let n = w.name.bounds();
@@ -624,7 +633,10 @@ mod tests {
             },
             &mut inv,
         );
-        assert!(!w.take_pick_image(), "Enter가 묵은 포커스 버튼을 누르면 안 된다");
+        assert!(
+            !w.take_pick_image(),
+            "Enter가 묵은 포커스 버튼을 누르면 안 된다"
+        );
         assert!(
             w.take_changes()
                 .iter()

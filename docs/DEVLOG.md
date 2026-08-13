@@ -7,6 +7,7 @@
 
 ## 2026-08-14
 
+- **툴바 기본 32px + 48px 옵션**(main · 사용자 요청): 프로필 버튼이 **내 아바타**를 쓰게 되면서 24px가 12간지 그림을 뭉갠다 → 08-09의 32→24를 되돌림(`DEFAULT_ICON` 32 · `ui.toolbar_size` 옵션 16/24/32/**48**/64 · `Msg::Tb48` 신설). ★ **기본값이 두 군데**(컨트롤 `DEFAULT_ICON` = 설정 미로드 시 · `RADIO_DEFAULTS` = 화면 선택 표시)라 한 곳만 고치면 화면과 실제가 갈린다. 저장된 값은 그대로라 **기존 사용자는 24 유지**(ADR-0011 계약). 564 green·clippy 0. 상세 [journal/2026-08-14.md](journal/2026-08-14.md).
 - **컨트롤 라이브러리화 R1~R4**(main · 기능 불변): ★ **`nbeep-ctl` 크레이트 신설**(12번째) — 기반 9모듈+컨트롤 17종 분리 · 앱 도메인 의존 0 불변식 · Interface(`Widget`/`DrawCtx`)·Abstract(`Control`+`ControlBase`)·조합/위임 명문화 · 기존 경로 재수출 = 사용부 무변경. i18n 라벨 주입(R1) · **측정 O(n²)→O(n)**(`text_prefix_widths` 계약 — 비트 동일 복제 · 깜빡임 리페인트 비용 해소 · R3) · 조건 정리 실측 = 이미 깔끔(R4). 564 green·clippy 0·rustdoc 0. 상세 [journal/2026-08-14.md](journal/2026-08-14.md).
 - **아바타 보더 + 툴바 프로필 버튼 = 내 얼굴**(main): `stroke_ellipse` 링 신설 · `profile.avatar_border`(#RRGGBB · 시드 기본값 = r/g/b 채널별 유도) · ColorPicker 행 · 와이어 bit4(꼬리 확장 문법) · 표시 = 큰 3px/작은 2px(사용자 확정) · **프로필 버튼 우측 끝 + ToolIcon::Avatar**(사진>내장>이니셜+링 · 변경 훅 4곳). 563 green. 상세 [journal/2026-08-14.md](journal/2026-08-14.md).
 - **기본 아바타 일습 — 다른 세션 WIP 인계 완주**(main · 4커밋): 기반(12간지 NBAV1 내장·`AvatarChoice`·mkavatars) 인계 → **용량 305→160KB**(변 160 + clean() · 사용자 확정) → 프로필 **스와치 14개 선택 UI**(사진과 배타 · 프리뷰 사진>내장>빈원>이니셜 · `draw_builtin` 원 배경 문법) → **와이어 = 키만**(Info avatar 필드 · image_len 뒤 = 전방 호환 · ZODIAC 검증 · 변경 시 능동 재전송 · 부팅 시드 기본값 저장). 561 green. 상세 [journal/2026-08-14.md](journal/2026-08-14.md).

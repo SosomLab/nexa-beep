@@ -150,7 +150,11 @@ pub fn default_border_for_seed(seed: &[u8]) -> (u8, u8, u8) {
         }) as u8;
         v
     };
-    (h(0xcbf2_9ce4_8422_2325), h(0x9e37_79b9_7f4a_7c15), h(0x2545_f491_4f6c_dd1d))
+    (
+        h(0xcbf2_9ce4_8422_2325),
+        h(0x9e37_79b9_7f4a_7c15),
+        h(0x2545_f491_4f6c_dd1d),
+    )
 }
 
 #[cfg(test)]
@@ -220,7 +224,11 @@ mod tests {
         let picks: std::collections::HashSet<_> = (0u8..60)
             .map(|i| default_for_seed(&[i, i ^ 0x5a, i.wrapping_mul(7)]).to_setting())
             .collect();
-        assert!(picks.len() >= 6, "12간지에 고루 퍼져야 한다: {}", picks.len());
+        assert!(
+            picks.len() >= 6,
+            "12간지에 고루 퍼져야 한다: {}",
+            picks.len()
+        );
         // 빈 시드도 패닉 없이 유효한 선택.
         assert!(default_for_seed(&[]).builtin_key().is_some());
     }
@@ -235,17 +243,20 @@ mod tests {
             assert_eq!(parse_border(bad), None, "무효 값 {bad}");
         }
         // 시드 안정 + 시드별 분산(완전 일치 아님만 확인 — 채널 독립 유도).
-        assert_eq!(default_border_for_seed(b"abc"), default_border_for_seed(b"abc"));
-        assert_ne!(default_border_for_seed(b"abc"), default_border_for_seed(b"xyz"));
+        assert_eq!(
+            default_border_for_seed(b"abc"),
+            default_border_for_seed(b"abc")
+        );
+        assert_ne!(
+            default_border_for_seed(b"abc"),
+            default_border_for_seed(b"xyz")
+        );
     }
 
     /// 내장만 키를 내놓는다(사용자 이미지는 바이트로 가야 한다).
     #[test]
     fn only_builtin_exposes_key() {
-        assert_eq!(
-            AvatarChoice::Builtin("ox".into()).builtin_key(),
-            Some("ox")
-        );
+        assert_eq!(AvatarChoice::Builtin("ox".into()).builtin_key(), Some("ox"));
         assert!(AvatarChoice::Custom("a.img".into()).builtin_key().is_none());
         assert!(AvatarChoice::Initials.builtin_key().is_none());
         assert!(AvatarChoice::None.builtin_key().is_none());

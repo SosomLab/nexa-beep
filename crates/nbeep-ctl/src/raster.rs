@@ -443,7 +443,7 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
             let nx = (x - cx) / rx;
             let ny = (y - cy) / ry;
             let d = ((nx * nx + ny * ny).sqrt() - 1.0) * rx.min(ry); // 음수 = 안쪽
-            // 가장자리 안쪽 width 밴드(-width..0) — 링 SDF.
+                                                                     // 가장자리 안쪽 width 밴드(-width..0) — 링 SDF.
             (d + width / 2.0).abs() - width / 2.0
         });
     }
