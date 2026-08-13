@@ -514,10 +514,14 @@ impl Widget for TextBox {
             }
         }
         self.hscroll.set(hs);
-        // 텍스트 뷰포트 x 범위(스크롤 전 시작 ~ 가용 폭 끝) — fill_rect는 클립을
-        // 모르므로 선택 반전·밑줄은 이 범위로 **직접 잘라** 그린다(08-13 실기:
-        // 드래그 선택 하이라이트가 컨트롤 좌우로 삐져나왔다. 대화 입력과 같은 처방).
+        // 텍스트 뷰포트(스크롤 전 시작 ~ 가용 폭 끝) — fill_rect는 클립을 모르므로
+        // 선택 반전·밑줄은 이 범위로 **직접 잘라** 그린다(08-13 실기: 하이라이트가
+        // 좌우로 삐져나왔다). ★ 글자도 **같은 뷰포트로** 잘라야 한다(08-14 실기:
+        // 글자는 상자 전체(b)로 잘라 우측 여백(×·배지 자리) 아래까지 보이는데
+        // 하이라이트만 뷰포트에서 멈춰 "오른쪽 2글자 반전 누락"으로 보였다 —
+        // 둘의 클립이 다르면 어느 쪽이 맞아도 어긋나 보인다).
         let (view_x0, view_x1) = (tx, tx + avail);
+        let view = Rect::new(view_x0, b.y, avail, b.h);
         let tx = tx - hs;
         // 문자 경계 x(화면 좌표 — 스크롤 반영)를 실측해 남긴다 — 클릭→캐럿 변환 근거.
         {
@@ -553,9 +557,9 @@ impl Widget for TextBox {
             }
         }
         if shown.is_empty() {
-            ctx.text(tx, ty, b, &self.placeholder, theme.text_dim);
+            ctx.text(tx, ty, view, &self.placeholder, theme.text_dim);
         } else {
-            ctx.text(tx, ty, b, &shown, theme.text);
+            ctx.text(tx, ty, view, &shown, theme.text);
         }
         // 조합 구간 밑줄 — "여기가 아직 확정 전"임을 대화 입력과 같은 문법으로 표시.
         if !self.preedit.is_empty() {
@@ -949,6 +953,14 @@ mod tests {
                 "채움이 상자 밖으로 나갔다: {r:?} vs 상자 {b:?}"
             );
         }
+        // ★ 08-14 실기 — 하이라이트가 **뷰포트를 정확히 채워야** 한다(글자 클립과
+        // 동일 범위). 좌 10px·우 24px 어긋남이 "좌우 글자 반전 누락"으로 보였다.
+        let (vx0, vx1) = (b.x + 10, b.right() - 24); // scale 1.0 기준 s(10)·s(24)
+        assert!(
+            rec.0.iter().any(|r| r.x == vx0 && r.right() == vx1),
+            "전체 선택(스크롤 중) 하이라이트가 뷰포트 전폭이어야 한다: {:?}",
+            rec.0
+        );
         // 왼쪽 밖 케이스 — 캐럿을 앞으로 옮겨 스크롤을 왼쪽 끝으로 되돌린 뒤
         // 다시 전체 선택(앵커 끝 유지 → 선택이 왼쪽 밖까지 걸치는 상태).
         t.edit.set_caret(0, true);
