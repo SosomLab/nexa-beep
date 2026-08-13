@@ -137,15 +137,17 @@ impl Widget for TextPromptWidget {
 
     fn on_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
         match *ev {
+            // 우클릭 메뉴가 열려 있으면 Enter/Esc는 메뉴 몫(선택/닫기) — 아래
+            // 입력 전달 경로로 흘려보낸다(08-13 실기 — 메뉴 키보드 탐색).
             InputEvent::Key {
                 key: Key::Enter, ..
-            } => {
+            } if !self.input.popup_open() => {
                 self.try_submit(inv);
                 return;
             }
             InputEvent::Key {
                 key: Key::Escape, ..
-            } => {
+            } if !self.input.popup_open() => {
                 self.canceled = true;
                 return;
             }
@@ -184,6 +186,7 @@ impl Widget for TextPromptWidget {
         self.input.paint(ctx, theme);
         self.ok.paint(ctx, theme);
         self.cancel.paint(ctx, theme);
+        self.input.paint_popup(ctx, theme); // 우클릭 메뉴 — 버튼들 위로(최상위)
     }
 }
 

@@ -412,6 +412,13 @@ impl GalleryWidget {
         self.textbox.set_clipboard_has_text(yes);
     }
 
+    /// 데모 텍스트박스의 우클릭 메뉴가 열려 있는가 — 호스트의 Esc 가드용
+    /// (Esc가 갤러리 창 닫기로 새면 메뉴를 키보드로 못 닫는다).
+    #[must_use]
+    pub fn popup_open(&self) -> bool {
+        self.textbox.popup_open()
+    }
+
     /// 스크롤바 페이드 틱(호스트가 ~5Hz 호출) — 갤러리 자체 + 내부 트리/그리드 바 모두.
     /// 표시 상태가 바뀌면 `true`(재그리기 필요).
     pub fn tick(&mut self, now_ms: u64) -> bool {
@@ -642,6 +649,7 @@ impl Widget for GalleryWidget {
         if self.menubar.is_open() {
             self.menubar.paint(ctx, theme); // 풀다운 오버레이 — 아래 컨트롤 위에 겹침
         }
+        self.textbox.paint_popup(ctx, theme); // 우클릭 편집 메뉴 — 아래 콤보 위로
         // 오버레이 스크롤바(맨 위에 겹침).
         self.bars.paint(
             ctx,

@@ -236,6 +236,38 @@ impl TextBox {
     pub fn take_committed(&mut self) -> Option<String> {
         std::mem::take(&mut self.committed).then(|| self.edit.text())
     }
+
+    /// 우클릭 편집 메뉴가 열려 있는가 — 컨테이너의 Esc 가드용(08-13 실기:
+    /// 메뉴가 열려 있는데 Esc가 창 닫기로 새면 메뉴를 키보드로 못 닫는다).
+    #[must_use]
+    pub fn popup_open(&self) -> bool {
+        self.ctx_menu.is_open()
+    }
+
+    /// 조합 중(preedit) 문자열까지 캐럿 자리에 끼운 **표시용** 텍스트(편집 상태 불변).
+    /// 아바타 이니셜 미리보기 등 "지금 화면에 보이는 그대로"가 필요한 곳이 쓴다
+    /// (08-13 실기: 필드엔 "나다"가 보이는데 아바타는 "나"라 미입력처럼 보였다).
+    #[must_use]
+    pub fn display_text(&self) -> String {
+        if self.preedit.is_empty() {
+            return self.edit.text();
+        }
+        let chars: Vec<char> = self.edit.text().chars().collect();
+        let caret = self.edit.caret().min(chars.len());
+        let before: String = chars[..caret].iter().collect();
+        let after: String = chars[caret..].iter().collect();
+        format!("{before}{}{after}", self.preedit)
+    }
+
+    /// 우클릭 메뉴를 **최상위 레이어로** 다시 그린다(08-13 실기: 프로필에서 아래
+    /// 필드가 메뉴를 덮었다 — z순서는 그리는 순서가 전부다). `paint`도 그리지만
+    /// (단독 사용 안전망), 컨테이너는 **모든 자식을 그린 뒤** 이걸 한 번 더 불러
+    /// 팝업을 맨 위로 올린다.
+    pub fn paint_popup(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
+        if self.ctx_menu.is_open() {
+            self.ctx_menu.paint(ctx, theme);
+        }
+    }
 }
 
 impl Control for TextBox {
@@ -559,10 +591,9 @@ impl Widget for TextBox {
         self.draw_help_badge(ctx, theme, badge);
         self.draw_help_tip(ctx, theme, badge);
 
-        // 우클릭 편집 메뉴 — 최상위(마지막에 그린다).
-        if self.ctx_menu.is_open() {
-            self.ctx_menu.paint(ctx, theme);
-        }
+        // 우클릭 편집 메뉴 — 이 위젯 안에서는 최상위. 형제 위젯이 뒤에 그려지는
+        // 컨테이너에선 부족하다 — 컨테이너가 `paint_popup`을 끝에 한 번 더 부른다.
+        self.paint_popup(ctx, theme);
     }
 }
 
@@ -759,6 +790,19 @@ mod tests {
         t.on_event(&InputEvent::SelectAll, &mut inv);
         assert!(!inv.is_empty(), "⌘/Ctrl+A = 다시 그리기 요청");
         assert_eq!(t.edit.selected_text().as_deref(), Some("abc"));
+    }
+
+    #[test]
+    fn display_text_includes_preedit_at_caret() {
+        // 아바타 미리보기 등은 "화면에 보이는 그대로"를 써야 한다(08-13 실기).
+        let (mut t, mut inv) = tb();
+        t.set_text("나");
+        t.base.focused = true;
+        t.set_preedit("다", &mut inv);
+        assert_eq!(t.display_text(), "나다", "조합 중 글자 포함");
+        assert_eq!(t.text(), "나", "편집 상태(버퍼)는 불변");
+        t.set_preedit("", &mut inv);
+        assert_eq!(t.display_text(), "나", "소거 후엔 버퍼 그대로");
     }
 
     #[test]

@@ -4961,14 +4961,15 @@ impl App {
                 }
             }
             Role::Gallery => {
-                // Esc = 닫기. 그 외는 갤러리 위젯으로 전달.
+                // Esc = 닫기. 단 텍스트박스 우클릭 메뉴가 열려 있으면 메뉴 몫(메뉴만 닫힘).
                 if matches!(
                     ev,
                     InputEvent::Key {
                         key: Key::Escape,
                         ..
                     }
-                ) {
+                ) && !self.gallery_view.as_ref().is_some_and(|gv| gv.popup_open())
+                {
                     self.gallery_view = None;
                     self.windows.remove(&id);
                 } else if let Some(gv) = &mut self.gallery_view {
@@ -6318,16 +6319,10 @@ impl ApplicationHandler<AppEvent> for App {
                 if !text.is_empty() {
                     self.ime_composing = false;
                     self.ime_cleared_ms = Some(now_ms);
-                    let mut inv = Invalidations::default();
-                    if let Some(peer) = self.chat_peer_for(id) {
-                        if let Some(chat) = self.chats.get_mut(&peer) {
-                            chat.set_preedit(String::new(), &mut inv);
-                        }
-                    } else if let Some(gid) = self.group_chat_for(id) {
-                        if let Some(chat) = self.gchats.get_mut(&gid) {
-                            chat.set_preedit(String::new(), &mut inv);
-                        }
-                    }
+                    // 프리에딧 표시 소거는 **한 통로**(set_chat_preedit — 대화·그룹·프로필·
+                    // 프롬프트 전부)로. 대화 창만 직접 지우던 시절의 잔재가 프로필에서
+                    // "나다" 확정 합류 + 잔상 "다" = "나다다"로 보였다(08-13 실기).
+                    self.set_chat_preedit(id, String::new());
                     for c in text.chars().filter(|c| !c.is_control()) {
                         self.route(id, InputEvent::Char { c, now_ms }, el);
                     }

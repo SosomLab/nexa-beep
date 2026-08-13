@@ -251,8 +251,14 @@ impl Widget for ProfileWidget {
                 ..
             }
         ) {
-            self.closed = true;
-            return;
+            // 우클릭 메뉴가 열려 있으면 Esc는 메뉴 몫(메뉴만 닫는다) — 창 닫기가
+            // 가로채면 메뉴를 키보드로 못 닫는다(08-13 실기).
+            let popup =
+                self.name.popup_open() || self.email.popup_open() || self.phone.popup_open();
+            if !popup {
+                self.closed = true;
+                return;
+            }
         }
         if let InputEvent::MouseDown { x, y, .. } = *ev {
             let p = Point { x, y };
@@ -317,7 +323,9 @@ impl Widget for ProfileWidget {
             ctx.image_scaled(av, img, b);
         } else {
             let ini_src = {
-                let typed = self.name.text();
+                // 조합 중 글자까지 반영(display_text) — 필드와 아바타가 같은 것을
+                // 보여야 "입력이 안 됐다"로 오독하지 않는다(08-13 실기).
+                let typed = self.name.display_text();
                 if typed.trim().is_empty() {
                     self.resolved_name.clone()
                 } else {
@@ -375,6 +383,11 @@ impl Widget for ProfileWidget {
             let dy = self.s(498) + i as i32 * self.s(16);
             ctx.text(b.x + pad, b.y + dy, b, line, theme.text_dim);
         }
+        // 우클릭 편집 메뉴 — 모든 자식 뒤에 재도색(08-13 실기: Email 필드가
+        // Display name 메뉴의 가운데를 덮었다).
+        self.name.paint_popup(ctx, theme);
+        self.email.paint_popup(ctx, theme);
+        self.phone.paint_popup(ctx, theme);
     }
 }
 

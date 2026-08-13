@@ -10,7 +10,7 @@
 //! 화면 밖으로 나가지 않도록 **경계 안으로 접어 넣는다**(오른쪽·아래에서 열면 위/왼쪽으로).
 
 use crate::draw::DrawCtx;
-use crate::event::InputEvent;
+use crate::event::{InputEvent, Key};
 use crate::geom::{Point, Rect};
 use crate::theme::Theme;
 use crate::FontSlot;
@@ -185,6 +185,35 @@ impl ContextMenu {
         })
     }
 
+    /// 키보드 탐색(08-13 실기: "메뉴를 키보드로 이동 못 한다") — 활성 항목 사이를
+    /// 순환한다(비활성·구분선 건너뜀 · 처음 ↓ = 첫 항목, 처음 ↑ = 마지막).
+    fn move_hover(&mut self, down: bool) {
+        let sel: Vec<usize> = (0..self.items.len())
+            .filter(|&i| matches!(self.items[i], CtxItem::Item { enabled: true, .. }))
+            .collect();
+        if sel.is_empty() {
+            return;
+        }
+        let cur = self.hover.and_then(|h| sel.iter().position(|&i| i == h));
+        let next = match cur {
+            None => {
+                if down {
+                    0
+                } else {
+                    sel.len() - 1
+                }
+            }
+            Some(p) => {
+                if down {
+                    (p + 1) % sel.len()
+                } else {
+                    (p + sel.len() - 1) % sel.len()
+                }
+            }
+        };
+        self.hover = Some(sel[next]);
+    }
+
     /// 이벤트 처리 — `true`면 **소비**(호스트는 그 이벤트를 아래 콘텐츠에 쓰지 않는다).
     ///
     /// 열려 있는 동안은 바깥 클릭·Esc로 닫히며, 그 클릭도 소비한다
@@ -225,7 +254,25 @@ impl ContextMenu {
             InputEvent::MouseUp { .. } | InputEvent::Wheel { .. } | InputEvent::HWheel { .. } => {
                 true
             }
-            InputEvent::Key { .. } | InputEvent::Char { .. } => {
+            // 키보드 — ↑/↓ 이동 · Enter 선택 · 그 외(Esc 포함)는 메뉴만 닫는다.
+            InputEvent::Key { key, .. } => {
+                match key {
+                    Key::Down => self.move_hover(true),
+                    Key::Up => self.move_hover(false),
+                    Key::Enter => {
+                        if let Some(CtxItem::Item {
+                            id, enabled: true, ..
+                        }) = self.hover.map(|i| &self.items[i])
+                        {
+                            self.picked = Some(id.clone());
+                        }
+                        self.close();
+                    }
+                    _ => self.close(),
+                }
+                true
+            }
+            InputEvent::Char { .. } => {
                 self.close();
                 true
             }
@@ -379,6 +426,49 @@ mod tests {
         assert!(r.right() <= host().right(), "오른쪽 경계 안: {r:?}");
         assert!(r.bottom() <= host().bottom(), "아래 경계 안: {r:?}");
         assert!(r.x >= 0 && r.y >= 0);
+    }
+
+    fn key(k: Key) -> InputEvent {
+        InputEvent::Key {
+            key: k,
+            shift: false,
+            primary: false,
+        }
+    }
+
+    #[test]
+    fn keyboard_navigates_skipping_disabled_and_picks_with_enter() {
+        // 08-13 실기 — 키보드로 메뉴를 이동·선택할 수 없었다(모든 키가 닫기였다).
+        let mut m = ContextMenu::new();
+        m.open_at(10, 10, items(), host(), 60);
+        assert!(m.on_event(&key(Key::Down)), "키 소비");
+        assert!(m.is_open(), "↓는 메뉴를 닫지 않는다");
+        m.on_event(&key(Key::Down)); // copy → paste(비활성 cut·구분선 건너뜀)
+        m.on_event(&key(Key::Enter));
+        assert_eq!(m.take_picked().as_deref(), Some("paste"));
+        assert!(!m.is_open(), "Enter 선택 = 닫힘");
+    }
+
+    #[test]
+    fn up_from_nothing_starts_at_last_enabled() {
+        let mut m = ContextMenu::new();
+        m.open_at(10, 10, items(), host(), 60);
+        m.on_event(&key(Key::Up));
+        m.on_event(&key(Key::Enter));
+        assert_eq!(m.take_picked().as_deref(), Some("paste"), "↑ 시작 = 마지막 활성");
+    }
+
+    #[test]
+    fn escape_closes_without_pick_and_enter_without_hover_closes() {
+        let mut m = ContextMenu::new();
+        m.open_at(10, 10, items(), host(), 60);
+        assert!(m.on_event(&key(Key::Escape)), "Esc 소비(창 닫기로 새면 안 된다)");
+        assert!(!m.is_open());
+        assert_eq!(m.take_picked(), None);
+        m.open_at(10, 10, items(), host(), 60);
+        m.on_event(&key(Key::Enter)); // 아무것도 고르지 않은 Enter = 그냥 닫기
+        assert!(!m.is_open());
+        assert_eq!(m.take_picked(), None);
     }
 
     #[test]

@@ -2054,6 +2054,17 @@ impl Widget for SettingsWidget {
             Rect::new(crumb.x, crumb.bottom() - 1, crumb.w, 1),
             theme.border,
         );
+
+        // 텍스트 필드 우클릭 메뉴 — 진짜 최상위(고정 밴드보다도 위 · 08-13 실기:
+        // 프로필에서 형제 위젯이 메뉴를 덮던 것과 같은 z순서 계열).
+        self.search.paint_popup(ctx, theme);
+        for row in &self.rows {
+            match &row.ctl {
+                RowCtl::Font { family, .. } => family.paint_popup(ctx, theme),
+                RowCtl::Face(f) => f.paint_popup(ctx, theme),
+                _ => {}
+            }
+        }
     }
 }
 

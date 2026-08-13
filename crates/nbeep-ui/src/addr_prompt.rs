@@ -223,16 +223,17 @@ impl Widget for AddrPromptWidget {
 
     fn on_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
         // Enter = 연결 · Esc = 취소(입력 어디에 있든).
+        // 단 우클릭 메뉴가 열려 있으면 Enter/Esc는 메뉴 몫 — 입력 전달로 흘린다.
         match *ev {
             InputEvent::Key {
                 key: Key::Enter, ..
-            } => {
+            } if !self.input.popup_open() => {
                 self.try_submit(inv);
                 return;
             }
             InputEvent::Key {
                 key: Key::Escape, ..
-            } => {
+            } if !self.input.popup_open() => {
                 self.canceled = true;
                 return;
             }
@@ -292,6 +293,7 @@ impl Widget for AddrPromptWidget {
         ctx.text(b.x + self.s(16), b.y + self.s(80), b, &hint, color);
         self.connect.paint(ctx, theme);
         self.cancel.paint(ctx, theme);
+        self.input.paint_popup(ctx, theme); // 우클릭 메뉴 — 힌트·버튼 위로(최상위)
     }
 }
 
