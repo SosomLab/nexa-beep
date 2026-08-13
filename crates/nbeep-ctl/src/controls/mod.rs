@@ -14,6 +14,7 @@
 //! 물려받는다(확장 용이 — 사용자 요청).
 
 pub mod button;
+pub mod carousel;
 pub mod checkbox;
 pub mod colorpick;
 pub mod combo;
@@ -29,6 +30,7 @@ pub mod toolbar;
 pub mod tree;
 
 pub use button::{Button, ButtonMode, ImageFit};
+pub use carousel::Carousel;
 pub use checkbox::Checkbox;
 pub use colorpick::ColorPicker;
 pub use combo::{Choose, ChoosePicker, Combo, ComboControl, ComboItem, PopupHit};

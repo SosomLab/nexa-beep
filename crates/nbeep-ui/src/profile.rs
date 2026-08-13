@@ -5,7 +5,7 @@
 //! 영속(SettingsState/nexa-conf)·재공지·프로필 교환은 호스트 몫이다. 이미지 선택도
 //! [`ProfileWidget::take_pick_image`] 요청만 올리고 실제 파일 선택은 호스트 피커가 한다.
 
-use crate::controls::{Button, ColorPicker, Control as _, LabelSide, Switch, TextBox};
+use crate::controls::{Button, Carousel, ColorPicker, Control as _, LabelSide, Switch, TextBox};
 use crate::draw::{DrawCtx, FontSlot};
 use crate::event::{InputEvent, Key};
 use crate::geom::{Point, Rect};
@@ -67,6 +67,8 @@ pub struct ProfileWidget {
     border: ColorPicker,
     /// 내장 12간지(키, 그림) — 스와치·프리뷰 공용(new에서 1회 해석).
     builtins: Vec<(String, std::rc::Rc<crate::theme::IconImage>)>,
+    /// 스와치 캐러셀(08-14 사용자 확정 — 32px 아이템 · 넘칠 때만 좌/우 이동 버튼).
+    swatches: Carousel,
     changes: Vec<(&'static str, String)>,
     pick_image: bool,
     closed: bool,
@@ -81,6 +83,13 @@ impl ProfileWidget {
             name = TextBox::new(t(Msg::NameAuto)).with_text(&v.display_name);
         }
         name.set_focused(true);
+        let builtins: Vec<(String, std::rc::Rc<crate::theme::IconImage>)> =
+            crate::avatar_assets::builtins()
+                .into_iter()
+                .map(|b| (b.key, std::rc::Rc::new(b.image)))
+                .collect();
+        let mut swatches = Carousel::new(32, 4);
+        swatches.set_count(2 + builtins.len()); // [이니셜][없음] + 내장
         Self {
             bounds: Rect::default(),
             scale: 1.0,
@@ -100,10 +109,8 @@ impl ProfileWidget {
             avatar: v.avatar.clone(),
             avatar_choice: v.avatar_choice.clone(),
             border: ColorPicker::new(&v.avatar_border),
-            builtins: crate::avatar_assets::builtins()
-                .into_iter()
-                .map(|b| (b.key, std::rc::Rc::new(b.image)))
-                .collect(),
+            builtins,
+            swatches,
             changes: Vec::new(),
             pick_image: false,
             closed: false,
@@ -117,13 +124,19 @@ impl ProfileWidget {
         v
     }
 
-    /// i번째 스와치 rect(한 줄 가로 배열 — 14개가 폭 안에 들어온다: 14×28-4 = 388 ≤ 408).
-    fn swatch_rect(&self, i: usize) -> Rect {
-        let d = self.s(24);
-        let gap = self.s(4);
-        #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-        let x = self.bounds.x + self.s(16) + (d + gap) * i as i32;
-        Rect::new(x, self.bounds.y + self.s(172), d, d)
+    /// 스와치 선택 적용(캐러셀 클릭 → 전역 인덱스 · 08-14) — 사진과 상호 배타.
+    fn apply_swatch(&mut self, i: usize, inv: &mut Invalidations) {
+        let Some(val) = self.swatch_values().get(i).cloned() else {
+            return;
+        };
+        self.avatar_choice = val.clone();
+        self.avatar = None; // 사진 미리보기 해제(호스트도 image_path "" 반영)
+        if !self.image_path.is_empty() {
+            self.image_path.clear();
+            self.changes.push(("profile.image_path", String::new()));
+        }
+        self.changes.push(("profile.avatar", val));
+        inv.push(self.bounds);
     }
 
     /// IME 조합 중 문자열(08-13) — 초점 필드만 받는다(TextBox가 스스로 거른다 ·
@@ -211,6 +224,7 @@ impl ProfileWidget {
         self.name.set_scale(self.scale);
         self.email.set_scale(self.scale);
         self.phone.set_scale(self.scale);
+        self.swatches.set_scale(self.scale);
         self.border.set_scale(self.scale);
         self.choose_img.set_scale(self.scale);
         self.sw_basic.set_scale(self.scale);
@@ -230,7 +244,11 @@ impl ProfileWidget {
         let pad = self.s(16);
         let field_h = self.s(28);
         let bw = self.s(80);
-        // (y=172 = 아바타 스와치 행 — swatch_rect가 계산)
+        // 아바타 스와치 캐러셀(08-14 — 32px 아이템 · 넘치면 좌/우 이동 버튼).
+        self.swatches.set_bounds(
+            Rect::new(b.x + pad, b.y + self.s(164), b.w - pad * 2, self.s(36)),
+            inv,
+        );
         // 보더 색 행(08-14) — 라벨은 paint · ColorPick 우측 정렬.
         let pick_w = self.border.preferred_width();
         self.border.set_bounds(
@@ -303,23 +321,15 @@ impl Widget for ProfileWidget {
                 return;
             }
         }
+        // 아바타 스와치 캐러셀(08-14) — 이동 버튼·아이템 클릭 판정은 컨트롤 몫,
+        // 선택 적용(사진과 배타)은 여기서. 클릭이 잡히면 아래 포커스 처리로 안 흘린다.
+        self.swatches.on_event(ev, inv);
+        if let Some(i) = self.swatches.take_clicked() {
+            self.apply_swatch(i, inv);
+            return;
+        }
         if let InputEvent::MouseDown { x, y, .. } = *ev {
             let p = Point { x, y };
-            // 아바타 스와치(08-14 — 이니셜·없음·12간지) — 클릭 = 즉시 선택 보고.
-            // 사진과는 상호 배타: 스와치를 고르면 image_path를 비운다(선택이 보여야 한다).
-            for (i, val) in self.swatch_values().into_iter().enumerate() {
-                if self.swatch_rect(i).contains(p) {
-                    self.avatar_choice = val.clone();
-                    self.avatar = None; // 사진 미리보기 해제(호스트도 image_path "" 반영)
-                    if !self.image_path.is_empty() {
-                        self.image_path.clear();
-                        self.changes.push(("profile.image_path", String::new()));
-                    }
-                    self.changes.push(("profile.avatar", val));
-                    inv.push(self.bounds);
-                    return;
-                }
-            }
             // 포커스는 **배타** — 클릭된 컨트롤만 갖는다(08-14 실기: Choose… 버튼이
             // 묵은 포커스를 쥔 채라 텍스트박스 Enter가 **버튼 클릭으로도** 처리되고
             // 포커스 링도 남았다. 브로드캐스트 전달 구조에선 포커스 단일성이 이중
@@ -434,7 +444,9 @@ impl Widget for ProfileWidget {
             Some(choice.to_setting())
         };
         for (i, val) in self.swatch_values().into_iter().enumerate() {
-            let r = self.swatch_rect(i);
+            let Some(r) = self.swatches.item_rect(i) else {
+                continue; // 캐러셀 창 밖 — 이동 버튼으로 넘겨 본다
+            };
             match val.as_str() {
                 "initials" => {
                     let ini_src = {
@@ -462,6 +474,8 @@ impl Widget for ProfileWidget {
                 ctx.stroke_round_rect(ring, ring.w / 2, theme.accent, 2.0);
             }
         }
+        // 캐러셀 이동 버튼(넘칠 때만 · 08-14) — 아이템 위에 얹는다.
+        self.swatches.paint(ctx, theme);
         // 아바타 보더(08-14 사용자 요청) — **큰 프리뷰는 3px**(소형 2px는 목록 몫).
         if let Some((br, bg, bb)) = nbeep_core::avatar::parse_border(&self.border.value_hex()) {
             let c =
@@ -656,7 +670,7 @@ mod tests {
         });
         let mut inv = Invalidations::default();
         w.set_bounds(Rect::new(0, 0, 440, 610), &mut inv);
-        let r = w.swatch_rect(2); // [이니셜][없음] 다음 = 첫 12간지(rat)
+        let r = w.swatches.item_rect(2).expect("표시 중"); // [이니셜][없음] 다음 = 첫 12간지(rat)
         w.on_event(
             &InputEvent::MouseDown {
                 x: r.x + 2,

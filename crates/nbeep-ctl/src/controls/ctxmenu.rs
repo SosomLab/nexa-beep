@@ -64,15 +64,19 @@ impl CtxItem {
 #[derive(Clone, Debug, Default)]
 pub struct ContextMenu {
     items: Vec<CtxItem>,
-    /// 열려 있으면 좌상단 좌표(경계 보정 완료).
-    at: Option<Point>,
+    /// 열려 있으면 좌상단 좌표(경계 보정 완료 · 셀 — paint의 실측 재접기).
+    at: std::cell::Cell<Option<Point>>,
     hover: Option<usize>,
     picked: Option<String>,
     scale: f32,
-    /// 마지막으로 계산한 팝업 rect(히트 판정용) — paint가 아니라 열 때 정한다.
-    rect: Rect,
-    /// 항목 라벨의 최대 폭(px) — 열 때 측정해 둔다(paint에서만 잴 수 있어서).
-    measured_w: i32,
+    /// 마지막으로 계산한 팝업 rect(히트 판정용). 열 때는 호스트가 준 근사 폭으로
+    /// 잡고, **첫 paint가 실측 폭으로 보정**한다(셀 — paint는 `&self`).
+    rect: std::cell::Cell<Rect>,
+    /// 팝업이 넘어가면 안 되는 영역(열 때 저장 — 실측 보정 후 경계 재접기용).
+    host: Rect,
+    /// 라벨 최대 폭(px) — 열 때는 호스트 근사, paint가 실측으로 올려친다(08-14
+    /// 실기: 자당 근사가 글꼴 크기에 뒤처져 "소유자만 초대로 전환"이 잘렸다).
+    fit_w: std::cell::Cell<i32>,
 }
 
 impl ContextMenu {
@@ -97,14 +101,14 @@ impl ContextMenu {
     /// 열려 있는가.
     #[must_use]
     pub fn is_open(&self) -> bool {
-        self.at.is_some()
+        self.at.get().is_some()
     }
 
     /// 현재 팝업 영역(닫혀 있으면 빈 rect) — 호스트의 무효화 범위 계산용.
     #[must_use]
     pub fn bounds(&self) -> Rect {
         if self.is_open() {
-            self.rect
+            self.rect.get()
         } else {
             Rect::new(0, 0, 0, 0)
         }
@@ -112,7 +116,7 @@ impl ContextMenu {
 
     /// 닫는다.
     pub fn close(&mut self) {
-        self.at = None;
+        self.at.set(None);
         self.hover = None;
     }
 
@@ -125,7 +129,8 @@ impl ContextMenu {
             return;
         }
         self.items = items;
-        self.measured_w = text_w;
+        self.fit_w.set(text_w);
+        self.host = host;
         self.hover = None;
         self.picked = None;
         let (w, h) = self.size_px();
@@ -140,8 +145,8 @@ impl ContextMenu {
         } else {
             y
         };
-        self.at = Some(Point { x: px, y: py });
-        self.rect = Rect::new(px, py, w, h);
+        self.at.set(Some(Point { x: px, y: py }));
+        self.rect.set(Rect::new(px, py, w, h));
     }
 
     fn row_h(&self) -> i32 {
@@ -157,13 +162,13 @@ impl ContextMenu {
                 CtxItem::Separator => self.s(SEP_H),
             };
         }
-        let w = (self.measured_w + self.s(PAD_H) * 2).max(self.s(MIN_W));
+        let w = (self.fit_w.get() + self.s(PAD_H) * 2).max(self.s(MIN_W));
         (w, h)
     }
 
     /// 인덱스 → 그 행의 rect.
     fn row_rect(&self, idx: usize) -> Option<Rect> {
-        let at = self.at?;
+        let at = self.at.get()?;
         let mut y = at.y + self.s(PAD_V);
         for (i, it) in self.items.iter().enumerate() {
             let h = match it {
@@ -171,7 +176,7 @@ impl ContextMenu {
                 CtxItem::Separator => self.s(SEP_H),
             };
             if i == idx {
-                return Some(Rect::new(at.x, y, self.rect.w, h));
+                return Some(Rect::new(at.x, y, self.rect.get().w, h));
             }
             y += h;
         }
@@ -238,7 +243,7 @@ impl ContextMenu {
                     self.close();
                 } else {
                     // 팝업 안의 비활성 행/여백이면 그냥 무시, 바깥이면 닫는다.
-                    if !self.rect.contains(p) {
+                    if !self.rect.get().contains(p) {
                         self.close();
                     }
                 }
@@ -246,7 +251,7 @@ impl ContextMenu {
             }
             // 팝업이 열린 동안의 우클릭·휠·키는 모두 팝업이 먹고 닫는다.
             InputEvent::RightDown { x, y } => {
-                if !self.rect.contains(Point { x, y }) {
+                if !self.rect.get().contains(Point { x, y }) {
                     self.close();
                 }
                 true
@@ -299,8 +304,32 @@ impl ContextMenu {
 
     /// 팝업 렌더 — 다른 것들을 다 그린 **뒤에** 불러야 위에 뜬다.
     pub fn paint(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
-        let Some(at) = self.at else { return };
-        let r = self.rect;
+        let Some(mut at) = self.at.get() else { return };
+        // ★ 폭 실측 보정(08-14 실기 — 자당 근사가 글꼴 크기에 뒤처져 라벨이 잘렸다):
+        // 여기서만 글자를 잴 수 있으므로 첫 paint가 진짜 폭으로 올려치고, 넓어져서
+        // 호스트 오른쪽을 넘으면 경계 접기를 다시 한다(히트 판정 rect·at 동기 갱신).
+        ctx.select_font(FontSlot::Base, false);
+        let real = self
+            .items
+            .iter()
+            .map(|it| match it {
+                CtxItem::Item { label, .. } => ctx.text_width(label),
+                CtxItem::Separator => 0,
+            })
+            .max()
+            .unwrap_or(0);
+        if real > self.fit_w.get() {
+            self.fit_w.set(real);
+            let (w, h) = self.size_px();
+            let mut x = at.x;
+            if x + w > self.host.right() {
+                x = (self.host.right() - w).max(self.host.x);
+            }
+            at = Point { x, y: at.y };
+            self.at.set(Some(at));
+            self.rect.set(Rect::new(x, at.y, w, h));
+        }
+        let r = self.rect.get();
         // 바탕 + 테두리(그림자 대신 테두리로 층을 만든다 — 렌더러에 블러가 없다).
         ctx.fill_round_rect(r, self.s(RADIUS), theme.panel_bg);
         ctx.stroke_round_rect(r, self.s(RADIUS), theme.border, 1.0);
