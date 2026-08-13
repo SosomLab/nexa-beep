@@ -7199,6 +7199,18 @@ fn data_dir() -> std::path::PathBuf {
 }
 
 pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
+    // 컨트롤 내장 문자열 = 앱 i18n 연결(08-14 라이브러리화 — 컨트롤은 t()를 모른다.
+    // 공급자가 t()를 부르므로 언어 전환도 자동 반영된다).
+    nbeep_ui::controls::set_ctl_labels(|m| {
+        use nbeep_core::{t, Msg};
+        use nbeep_ui::controls::CtlMsg;
+        t(match m {
+            CtlMsg::CtxSelectAll => Msg::CtxSelectAll,
+            CtlMsg::CtxCopy => Msg::CtxCopy,
+            CtlMsg::CtxCut => Msg::CtxCut,
+            CtlMsg::CtxPaste => Msg::CtxPaste,
+        })
+    });
     let (data, index) = nbeep_plat::font::system_ui_font().expect("시스템 UI 폰트 없음");
     let font = nbeep_gfx::Font::from_static(data, index).expect("폰트 파싱");
     let dir = data_dir();

@@ -312,15 +312,16 @@ impl Widget for TextBox {
         }
         if let InputEvent::RightDown { x, y } = *ev {
             if self.base.bounds.contains(Point { x, y }) {
-                use nbeep_core::i18n::{t, Msg};
+                // 라벨은 주입 공급자에서(08-14 라이브러리화 — 컨트롤은 앱 i18n을 모른다).
+                use super::{ctl_label, CtlMsg};
                 self.base.focused = true; // 우클릭도 포커스(메뉴 행동의 대상이 된다)
                 let has_sel = self.edit.selected_text().is_some();
                 let has_text = !self.edit.text().is_empty();
                 let items = vec![
-                    super::CtxItem::maybe("select_all", t(Msg::CtxSelectAll), has_text),
-                    super::CtxItem::maybe("copy", t(Msg::CtxCopy), has_sel),
-                    super::CtxItem::maybe("cut", t(Msg::CtxCut), has_sel),
-                    super::CtxItem::maybe("paste", t(Msg::CtxPaste), self.clip_has_text),
+                    super::CtxItem::maybe("select_all", ctl_label(CtlMsg::CtxSelectAll), has_text),
+                    super::CtxItem::maybe("copy", ctl_label(CtlMsg::CtxCopy), has_sel),
+                    super::CtxItem::maybe("cut", ctl_label(CtlMsg::CtxCut), has_sel),
+                    super::CtxItem::maybe("paste", ctl_label(CtlMsg::CtxPaste), self.clip_has_text),
                 ];
                 self.ctx_menu.set_scale(self.base.scale);
                 // 팝업이 박스 밖(아래)으로 펼쳐질 공간 — 박스 사각형만 주면 안에 구겨진다.

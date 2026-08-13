@@ -73,6 +73,45 @@ pub fn control_size_mult_from_code(code: &str) -> f32 {
     }
 }
 
+/// 컨트롤 내장 문자열 키(우클릭 편집 메뉴 — 08-14 라이브러리화 준비).
+/// 컨트롤은 앱의 i18n을 모른다(DR-21 이음새) — 호스트가 부팅 시 공급자를 주입하고,
+/// 미주입 기본은 영어다. 공급자가 앱 i18n의 `t()`를 부르면 언어 전환도 자동 반영된다.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CtlMsg {
+    /// 전체 선택.
+    CtxSelectAll,
+    /// 복사.
+    CtxCopy,
+    /// 잘라내기.
+    CtxCut,
+    /// 붙여넣기.
+    CtxPaste,
+}
+
+/// 기본(영어) 라벨 — 라이브러리 단독 사용·주입 전 폴백.
+fn ctl_label_default(m: CtlMsg) -> &'static str {
+    match m {
+        CtlMsg::CtxSelectAll => "Select All",
+        CtlMsg::CtxCopy => "Copy",
+        CtlMsg::CtxCut => "Cut",
+        CtlMsg::CtxPaste => "Paste",
+    }
+}
+
+/// 라벨 공급자(1회 주입 — `set_control_size_mult`와 같은 전역 설정 문법).
+static CTL_LABELS: std::sync::OnceLock<fn(CtlMsg) -> &'static str> = std::sync::OnceLock::new();
+
+/// 라벨 공급자 주입(호스트 부팅 1회 — 이후 호출은 무시).
+pub fn set_ctl_labels(f: fn(CtlMsg) -> &'static str) {
+    let _ = CTL_LABELS.set(f);
+}
+
+/// 현재 라벨(주입 공급자 → 기본 영어 순).
+#[must_use]
+pub fn ctl_label(m: CtlMsg) -> &'static str {
+    CTL_LABELS.get().copied().unwrap_or(ctl_label_default)(m)
+}
+
 /// 논리 px에 컨트롤 크기 배율 적용(글리프 치수 전용 — 행 높이·여백은 그대로).
 #[must_use]
 pub fn ctl_size(logical: i32) -> i32 {
