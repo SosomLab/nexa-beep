@@ -84,15 +84,13 @@ impl Widget for AlertWidget {
     }
 
     fn on_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
-        match *ev {
-            InputEvent::Key {
-                key: Key::Enter | Key::Escape,
-                ..
-            } => {
-                self.closed = true;
-                return;
-            }
-            _ => {}
+        if let InputEvent::Key {
+            key: Key::Enter | Key::Escape,
+            ..
+        } = *ev
+        {
+            self.closed = true;
+            return;
         }
         self.ok.on_event(ev, inv);
         if self.ok.take_clicked() {

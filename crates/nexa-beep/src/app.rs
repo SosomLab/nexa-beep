@@ -81,6 +81,9 @@ enum AppEvent {
         /// **클릭한 상대**(연결 시도 래치를 넣을 때 쓴 키 — `ConnectLatch` 참조).
         /// 핸드셰이크로 밝혀진 신원과 다를 수 있어(주소 재사용) 따로 나른다. 수동 등록은 `None`.
         intent: Option<PeerId>,
+        /// 자동 재연결(ⓑ)로 성립했는가 — **자동은 창을 열지 않는다**(② 규칙과 동일:
+        /// 사용자 행위 없는 성립이 포커스를 뺏으면 안 된다).
+        auto: bool,
     },
     /// 아웃바운드 연결 실패(M2-8) — 죽은 상대를 클릭해도 UI는 살아 있고 이것만 온다.
     ConnectFailed { peer: PeerId, why: String },
@@ -170,6 +173,16 @@ enum SessionCmd {
 /// ("연결 중… (이미 시도 중)"이 계속 뜬다 — 재시작 전까지 회복 불가).
 #[derive(Debug, Default)]
 struct ConnectLatch(std::collections::HashSet<PeerId>);
+
+/// 자동 재연결 백오프 간격(ms · 사용자 확정 08-13 ⓑ) — 복구 시도이지 감시가 아니다.
+/// 상한(마지막 항) 시도까지 실패하면 **중단**한다(포트 스캔처럼 보이지 않게 · 수동
+/// 클릭 = 처음부터 재개). 상시 주기 관찰(원격 프레즌스)은 ADR-0006 확장 결정 몫.
+const RECONNECT_BACKOFF_MS: [u64; 4] = [5_000, 15_000, 60_000, 300_000];
+
+/// 이 단계의 대기 시간 — 단계를 다 썼으면 `None`(중단).
+fn reconnect_delay(stage: u8) -> Option<u64> {
+    RECONNECT_BACKOFF_MS.get(stage as usize).copied()
+}
 
 impl ConnectLatch {
     /// 시도 시작 — 이미 진행 중이면 `false`(중복 클릭 가드).
@@ -920,6 +933,9 @@ struct App {
     unread: HashMap<PeerId, u32>,
     /// 그 대화를 마지막으로 확인한 시각(뷰가 열려 있던 마지막 순간 — 목록에 표시).
     last_read: HashMap<PeerId, nbeep_ui::WallTime>,
+    /// 자동 재연결 스케줄(사용자 확정 08-13 ⓑ) — `(백오프 단계, 다음 시도 at_ms)`.
+    /// 끊김·연결 실패 시 등록, 성공·수동 클릭·상한 도달 시 해제.
+    reconnect: HashMap<PeerId, (u8, u64)>,
     /// IME 조합 중(macOS — Preedit 활성). 조합 중엔 KeyboardInput 문자/백스페이스를
     /// 라우팅하지 않는다(같은 키가 Ime 경로로도 와서 자모가 이중 유입되던 버그).
     ime_composing: bool,
@@ -1721,12 +1737,18 @@ impl App {
     /// 죽은 상대(강제 종료 → GOODBYE 없이 잔존)를 클릭하는 순간 GUI 전체가 멈춘다.
     /// 인바운드와 대칭으로 워커가 세션을 만들어 `AppEvent::Outbound`로 돌아오고,
     /// **TOFU 판정은 지금처럼 메인 스레드**(TrustStore가 여기 있다).
-    fn start_connect(&mut self, peer: PeerId) {
+    fn start_connect(&mut self, peer: PeerId, auto: bool) {
         if !self.connecting.begin(peer) {
-            self.status = format!("연결 중… {} (이미 시도 중)", self.peer_title(peer));
-            return; // 중복 클릭 가드
+            if !auto {
+                self.status = format!("연결 중… {} (이미 시도 중)", self.peer_title(peer));
+            }
+            return; // 중복 시도 가드(수동 클릭·자동 재연결 공용 — 워커는 하나만)
         }
-        self.status = format!("연결 중… {}", self.peer_title(peer));
+        self.status = if auto {
+            format!("자동 재연결 시도… {}", self.peer_title(peer))
+        } else {
+            format!("연결 중… {}", self.peer_title(peer))
+        };
         // 목록 행 점을 즉시 "연결 중"(강조색)으로(M2-8 잔여).
         let mut inv = Invalidations::default();
         self.refresh_rows(&mut inv);
@@ -1752,6 +1774,7 @@ impl App {
                     session: Box::new(InboundSession { session }),
                     via_addr: None, // 수동 주소는 이미 기억돼 있다(성공 시 갱신 불요)
                     intent: Some(peer), // ★ 래치는 **넣은 키로** 뺀다
+                    auto,
                 }),
                 Err(why) => proxy.send_event(AppEvent::ConnectFailed { peer, why }),
             };
@@ -1783,6 +1806,7 @@ impl App {
                     session: Box::new(InboundSession { session }),
                     via_addr: Some(addr), // 성공한 수동 주소 — 재연결용 기억(④)
                     intent: None,         // 수동 등록은 래치를 쓰지 않는다
+                    auto: false,          // 사용자가 직접 입력한 연결
                 }),
                 Err(why) => proxy.send_event(AppEvent::AddFailed { addr, why }),
             };
@@ -2575,6 +2599,7 @@ impl App {
         self.chats.clear();
         self.single_open = None;
         self.connecting.clear();
+        self.reconnect.clear(); // 신원 교체 — 옛 신원의 재연결 스케줄은 무효(ⓑ)
         let chat_wins: Vec<WindowId> = self
             .windows
             .iter()
@@ -3140,7 +3165,8 @@ impl App {
     /// 성립하면 `AppEvent::Outbound`가 이 함수를 다시 부른다.
     fn activate(&mut self, peer: PeerId, el: &ActiveEventLoop) {
         if !self.conversations.contains_key(&peer) {
-            self.start_connect(peer);
+            self.reconnect.remove(&peer); // 수동 클릭 = 백오프 처음부터(ⓑ)
+            self.start_connect(peer, false);
             if let Some(mid) = self.main_id {
                 self.request_redraw(mid);
             }
@@ -4145,6 +4171,10 @@ impl ApplicationHandler<AppEvent> for App {
                     self.extra_peers.remove(&peer);
                     self.unread.remove(&peer);
                     self.update_main_title();
+                } else {
+                    // 재연결 수단이 있는 상대는 자동 재연결 시작(ⓑ) — 첫 시도 5초 후.
+                    let due = self.now_ms() + RECONNECT_BACKOFF_MS[0];
+                    self.reconnect.insert(peer, (0, due));
                 }
                 self.status = "상대와의 세션이 종료됨".into();
                 let mut inv = Invalidations::default();
@@ -4157,11 +4187,13 @@ impl ApplicationHandler<AppEvent> for App {
                 session,
                 via_addr,
                 intent,
+                auto,
             } => {
                 // 워커가 만든 아웃바운드 세션(M2-8) — TOFU 판정은 여기(메인 · TrustStore 소유).
                 use nbeep_core::Session as _;
                 let peer = session.session.peer();
                 self.connecting.finish(intent, Some(peer));
+                self.reconnect.remove(&peer); // 성립 = 자동 재연결 스케줄 해제(ⓑ)
                 if let Some(addr) = via_addr {
                     // 수동 등록 성공(DR-19) — 세션이 끊겨도 이 주소로 재연결한다(④).
                     self.manual_addrs.insert(peer, addr);
@@ -4180,14 +4212,22 @@ impl ApplicationHandler<AppEvent> for App {
                         };
                     let decision = est.decision;
                     self.install_conversation(nbeep_core::MuxSession::new(est.session));
-                    self.activate(peer, el); // 사용자가 클릭한 연결 — 뷰를 연다
-                    self.status = match decision {
-                        nbeep_core::TrustDecision::FirstContact => {
-                            "Noise 세션 수립 — 첫 접촉(TOFU 핀 고정)".into()
-                        }
-                        d => format!("Noise 세션 수립 — {d:?}"),
-                    };
-                } else {
+                    if auto {
+                        // 자동 재연결(ⓑ) — 창을 열지 않는다(② 자동 열림 금지와 같은 규칙).
+                        self.status =
+                            format!("자동 재연결됨: {} — 목록에서 열기", self.peer_title(peer));
+                        let mut inv = Invalidations::default();
+                        self.refresh_rows(&mut inv);
+                    } else {
+                        self.activate(peer, el); // 사용자가 시작한 연결 — 뷰를 연다
+                        self.status = match decision {
+                            nbeep_core::TrustDecision::FirstContact => {
+                                "Noise 세션 수립 — 첫 접촉(TOFU 핀 고정)".into()
+                            }
+                            d => format!("Noise 세션 수립 — {d:?}"),
+                        };
+                    }
+                } else if !auto {
                     // 그 사이 인바운드가 먼저 성립 — 이 세션은 버리고 그 대화를 연다.
                     self.activate(peer, el);
                 }
@@ -4200,7 +4240,30 @@ impl ApplicationHandler<AppEvent> for App {
                 // 닿지 않은 상대 = 목록 점 빨강(08-13 실기 — 실패 후 회색으로 남으면
                 // "종료된 상대"라는 사실이 표시되지 않았다).
                 self.closed_peers.insert(peer);
-                self.status = format!("연결 실패({}): {why}", self.peer_title(peer));
+                // 자동 재연결 백오프 진행(ⓑ) — 다음 단계 등록, 다 썼으면 중단 고지.
+                // 수단(발견 중이거나 수동 주소)이 없는 상대는 등록하지 않는다 —
+                // 어차피 같은 이유로 실패만 반복한다(무의미 트래픽 금지).
+                let reachable =
+                    self.manual_addrs.contains_key(&peer) || self.table.get(peer).is_some();
+                let stage = self.reconnect.get(&peer).map_or(0, |(s, _)| s + 1);
+                match reconnect_delay(stage).filter(|_| reachable) {
+                    Some(delay) => {
+                        let due = self.now_ms() + delay;
+                        self.reconnect.insert(peer, (stage, due));
+                        self.status = format!(
+                            "연결 실패({}): {why} — {}초 후 재시도",
+                            self.peer_title(peer),
+                            delay / 1000
+                        );
+                    }
+                    None => {
+                        self.reconnect.remove(&peer);
+                        self.status = format!(
+                            "연결 실패({}): {why} — 자동 재시도 중단(클릭 = 재개)",
+                            self.peer_title(peer)
+                        );
+                    }
+                }
                 let mut inv = Invalidations::default();
                 self.refresh_rows(&mut inv);
                 if let Some(mid) = self.main_id {
@@ -4355,6 +4418,24 @@ impl ApplicationHandler<AppEvent> for App {
         // 경고 모달 열기(08-13 — 이벤트 루프 참조가 없는 지점의 요청을 여기서 처리).
         if let Some((title, message)) = self.pending_alert.take() {
             self.open_alert(el, &title, &message);
+        }
+        // 자동 재연결 tick(ⓑ) — 시점이 된 상대를 워커로 재시도(성패는 이벤트로 복귀).
+        // 유휴 폴(~5Hz · M1-8x)이 이 지점을 주기적으로 지나간다.
+        {
+            let now = self.now_ms();
+            let due: Vec<PeerId> = self
+                .reconnect
+                .iter()
+                .filter(|(p, (_, at))| now >= *at && !self.conversations.contains_key(p))
+                .map(|(p, _)| *p)
+                .collect();
+            for peer in due {
+                // 다음 실패가 단계를 올리도록 due를 미래로 밀어 둔다(중복 발사 방지).
+                if let Some(e) = self.reconnect.get_mut(&peer) {
+                    e.1 = u64::MAX;
+                }
+                self.start_connect(peer, true);
+            }
         }
         // 수신 승인 창 생성.
         if let Some(peer) = self.pending_approve_window.take() {
@@ -5136,6 +5217,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         manual_addrs: HashMap::new(),
         unread: HashMap::new(),
         last_read: HashMap::new(),
+        reconnect: HashMap::new(),
         icon: winit::window::Icon::from_rgba(
             nbeep_ui::brand::ICON_RGBA.to_vec(),
             nbeep_ui::brand::ICON_SIZE,
@@ -5212,5 +5294,17 @@ mod tests {
         assert!(!latch.begin(p), "진행 중 중복 클릭은 막는다");
         latch.finish(Some(p), None);
         assert!(latch.begin(p));
+    }
+
+    /// 자동 재연결 백오프(ⓑ 08-13) — 단계별 지연이 늘고, 다 쓰면 **중단**한다
+    /// (상시 관찰이 아니라 복구 시도 — 포트 스캔처럼 보이면 안 된다).
+    #[test]
+    fn reconnect_backoff_grows_then_stops() {
+        use super::reconnect_delay;
+        assert_eq!(reconnect_delay(0), Some(5_000));
+        assert_eq!(reconnect_delay(1), Some(15_000));
+        assert_eq!(reconnect_delay(2), Some(60_000));
+        assert_eq!(reconnect_delay(3), Some(300_000));
+        assert_eq!(reconnect_delay(4), None, "상한 도달 = 중단(수동 재개만)");
     }
 }
