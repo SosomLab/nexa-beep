@@ -939,6 +939,11 @@ struct App {
     /// IME 조합 중(macOS — Preedit 활성). 조합 중엔 KeyboardInput 문자/백스페이스를
     /// 라우팅하지 않는다(같은 키가 Ime 경로로도 와서 자모가 이중 유입되던 버그).
     ime_composing: bool,
+    /// 조합이 끝난 시각(Commit 또는 Preedit 소거) — **Windows IME 잔향 차단**(WIME-6).
+    /// macOS는 조합을 끝낸 Enter/Esc를 IME가 삼키지만, Windows는 Commit 뒤에 같은 키의
+    /// KeyboardInput이 **또** 온다 → 조합 확정 Enter가 곧장 전송으로 새던 실기 버그.
+    /// 종료 직후(<120ms)의 Enter/Esc는 "확정/취소"가 의도라 삼킨다(1회성 — 소비 시 해제).
+    ime_cleared_ms: Option<u64>,
     /// 판정 보류 중인 단독 자모(창, 문자, 시각). Character("ㄱ")는 ①곧 Preedit가 따라오는
     /// **중복**이거나 ②IME가 아직 안 붙은 **진짜 입력**(한영 전환 직후 첫 키)이다 —
     /// 즉시 버리면 ②가 유실되므로 보류했다가 Ime 이벤트가 오면 폐기, 안 오면 라우팅한다.
@@ -4683,7 +4688,12 @@ impl ApplicationHandler<AppEvent> for App {
             }
             WindowEvent::Ime(winit::event::Ime::Preedit(text, _)) => {
                 // 조합 세션 추적 — 비어 있지 않으면 조합 중(KeyboardInput 문자 차단 근거).
+                let was_composing = self.ime_composing;
                 self.ime_composing = !text.is_empty();
+                if was_composing && !self.ime_composing {
+                    // 조합 소거(Esc 취소 등) — 뒤따르는 키다운 잔향 차단용(WIME-6).
+                    self.ime_cleared_ms = Some(self.now_ms());
+                }
                 self.pending_jamo = None; // IME가 살아 있다 = 보류 자모는 중복이었다
                                           // 조합 중 — 대화 뷰면 프리에딧 밑줄(M3-3), 목록 모드면 실시간 타입어헤드.
                 if let Some(peer) = self.chat_peer_for(id) {
@@ -4702,6 +4712,7 @@ impl ApplicationHandler<AppEvent> for App {
             }
             WindowEvent::Ime(winit::event::Ime::Commit(text)) => {
                 self.ime_composing = false; // 확정 = 조합 종료
+                self.ime_cleared_ms = Some(self.now_ms()); // 키다운 잔향 차단용(WIME-6)
                 self.pending_jamo = None; // IME 경로 확인 — 보류 자모는 중복이었다
                 let now_ms = self.now_ms();
                 for c in text.chars().filter(|c| !c.is_control()) {
@@ -4913,6 +4924,20 @@ impl ApplicationHandler<AppEvent> for App {
                     _ => None,
                 };
                 if let Some(key) = key {
+                    // 조합을 끝낸 Enter/Esc의 키다운 잔향(Windows IME · WIME-6 실기):
+                    // Commit/소거 **직후**(<120ms) 도착한 Enter/Esc는 "확정/취소"가 의도다 —
+                    // 전송·화면 닫기로 보내지 않는다. 1회성(take)이라 곧이은 진짜 Enter는
+                    // 정상 전송. macOS는 IME가 키를 삼켜 이 잔향 자체가 없다(cfg 게이트).
+                    let now_ms = self.now_ms();
+                    if cfg!(windows)
+                        && matches!(key, Key::Enter | Key::Escape)
+                        && self
+                            .ime_cleared_ms
+                            .take_if(|t| now_ms.saturating_sub(*t) < 120)
+                            .is_some()
+                    {
+                        return;
+                    }
                     self.route(
                         id,
                         InputEvent::Key {
@@ -5275,6 +5300,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         listen_port,
         addr_view: None,
         ime_composing: false,
+        ime_cleared_ms: None,
         pending_jamo: None,
         primary_down: false,
         shift_down: false,

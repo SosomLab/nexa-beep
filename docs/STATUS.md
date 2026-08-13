@@ -3,7 +3,12 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
-> **갱신: 2026-08-13 9차 (KST)** — **Windows 목록 타입어헤드 한글 — 한/영 상태를 앱이 든다**(main · [27 §8](27-typeahead-hangul-composition.md)):
+> **갱신: 2026-08-13 10차 (KST)** — **무인자 기본 = 창+라이브 · `--help` 신설 · WIME-6(조합 Enter 전송) 수정**(main · 사용자 확정+실기):
+> ① **무인자 = `--window --live` 동등**(사용자 확정 — DR-1 "실행 = 참여"): 어디서 부르든 무인자면 창. `from_gui_shell` 휴리스틱(M5-4d)은 **탐색기 콘솔 분리에만** 잔존 · mac `launched_from_app_bundle` 제거 · **`--version` 명시 분리**(배포 검증 26 §7 의존이라 선행 필수) · **미지 인자는 GUI로 삼키지 않고 안내 후 종료**(오타 보호) · `--window` 명시 = InMemory 데모 유지. ⚠️ 헤드리스 무인자 = 창 시도(26 §6 주석).
+> ② **`--help`/`-h`** — 창 옵션·인터랙티브 단말(챗 서브모드·라이브챗·`--port`)·비대화 도구·대화 중 명령 안내.
+> ③ **WIME 실기(사용자)** — WIME-1 ✅(자소 백스페이스) · WIME-5 ✅(전환 경계) · **WIME-6 재현: 조합 중 Enter가 확정+전송**. 원인 = Windows IME는 **Commit 직후 같은 키의 KeyboardInput이 또 온다**(mac은 IME가 삼킴 — 기존 `ime_composing` 가드는 Commit이 먼저 내려 무력). 수정 = 조합 종료 <120ms의 Enter/Esc 잔향 1회성 삼킴(`ime_cleared_ms` · `cfg!(windows)`). **501 green** · clippy 0 · rustdoc 0. ⏸ 실기 재확인(조합 Enter=확정만·직후 Enter=전송). [journal/2026-08-13.md](journal/2026-08-13.md).
+>
+> **직전(08-13 9차)** — **Windows 목록 타입어헤드 한글 — 한/영 상태를 앱이 든다**(main · [27 §8](27-typeahead-hangul-composition.md)):
 > ① 실기(사용자): Windows 목록 창에서 한/영 전환 불가·영어만 입력(**대화창은 정상** — 이 관찰이 단서). 원인 = **회귀 아님**: 08-09 직접 조합 설계의 전제(IME 꺼도 자모가 온다)가 **macOS 전용**이었다 — Windows 한글은 US 레이아웃+IME 조합이라 IME를 끊으면(목록 창) 한/영 키 무력화·라틴만 도착. 27 §7 "Windows 실측 필요"가 이걸로 닫힘(답: 안 온다).
 > ② 처방 = **한/영 상태도 앱 소유**(조합 상태에 이은 원리 연장): `hangul::jamo_from_qwerty`(QWERTY→두벌식 · 시프트 상이 7종) + `app.hangul_mode` 토글(한/영 키 = winit `HangulMode`+`Lang1` 폴백 — **키보드 드라이버 수준이라 IME 없이 도달**, winit 소스 확인) · 상태바 고지 · `cfg!(windows)` 게이트(맥 경로 불변). 번역 자모는 기존 조합기 합류 — Composer·HUD 변경 0.
 > ③ **501 green**(+4 — 매핑 전수·시프트·종단 "rlachlthd"=김최송) · clippy 0 · rustdoc 0. ★ **실기 확인(같은 날·사용자)** — 한/영 키 도달(IME 비연결에도 토글 실증)·상태바 고지·한글 조합·영어 복귀 동작. 같은 세션 육안: ④ `--separate-windows` 다중 창 ✅(26 §7-1 해소) · 주소 창은 **모달리스 관찰**(AlwaysOnTop뿐 — P3 기록). ⚠️ 관찰 1건: 창을 닫아도 프로세스 2개 잔존(exe 잠금) — 재현 시 종료 경로(R-16) 관찰. [journal/2026-08-13.md](journal/2026-08-13.md).
