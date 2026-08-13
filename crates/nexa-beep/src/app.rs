@@ -2080,7 +2080,8 @@ impl App {
             .remove(&peer)
             .or_else(|| self.conversations.remove(&peer).map(|c| c.lines))
             .unwrap_or_default();
-        self.conversations.insert(peer, Conversation { out_tx, lines });
+        self.conversations
+            .insert(peer, Conversation { out_tx, lines });
         // ★ 새 세션 = 새 seq 공간(08-13 실기 — 상대가 재시작·재대화로 seq를 처음부터
         //   다시 발급하면 옛 기억이 새 메시지를 조용히 폐기했다). 옛 세션 재생은 Noise
         //   키가 원천 차단하므로 세션 경계 리셋은 안전하다(nbeep-core reset_device 문서).
@@ -3680,8 +3681,9 @@ impl App {
                                                     pv.set_image_path(&path, &mut pinv);
                                                     let _ = pv.take_changes(); // 저장은 위에서 이미
                                                 }
-                                                self.status =
-                                                    format!("프로필 이미지 = {path} (미리보기 준비 중…)");
+                                                self.status = format!(
+                                                    "프로필 이미지 = {path} (미리보기 준비 중…)"
+                                                );
                                                 if let Some((pid, _)) = self
                                                     .windows
                                                     .iter()
@@ -4143,10 +4145,12 @@ impl ApplicationHandler<AppEvent> for App {
                 // 마지막 수신 항목에 부착(연속 수신과의 경합 창은 짧다 — 실해 없음).
                 // 이미지가 아니거나 실패면 조용히 없음(스레드는 텍스트 그대로).
                 {
-                    let qp = qpath.clone();
-                    spawn_decode(self.proxy.clone(), DecodeTarget::XferThumb(peer), move || {
-                        crate::imgdec::thumb_raw_from_beepq(std::path::Path::new(&qp), 96)
-                    });
+                    let qp = qpath;
+                    spawn_decode(
+                        self.proxy.clone(),
+                        DecodeTarget::XferThumb(peer),
+                        move || crate::imgdec::thumb_raw_from_beepq(std::path::Path::new(&qp), 96),
+                    );
                 }
                 self.clear_xfer(peer);
                 self.redraw_conversation(peer);
@@ -4463,8 +4467,9 @@ impl ApplicationHandler<AppEvent> for App {
             }
             AppEvent::Decoded { target, image } => {
                 // 워커 격리 디코드 복귀(M4-5 · 08-13) — 메인은 감싸고, 꽂고, 다시 그린다.
-                let icon = image
-                    .map(|(w, h, rgba)| std::rc::Rc::new(nbeep_ui::IconImage::from_rgba(w, h, rgba)));
+                let icon = image.map(|(w, h, rgba)| {
+                    std::rc::Rc::new(nbeep_ui::IconImage::from_rgba(w, h, rgba))
+                });
                 match target {
                     DecodeTarget::PeerAvatar(peer) => {
                         if let Some(p) = self.peer_profiles.get_mut(&peer) {
@@ -4987,9 +4992,7 @@ impl ApplicationHandler<AppEvent> for App {
                 if cfg!(windows)
                     && (event.logical_key == WKey::Named(NamedKey::HangulMode)
                         || event.physical_key
-                            == winit::keyboard::PhysicalKey::Code(
-                                winit::keyboard::KeyCode::Lang1,
-                            ))
+                            == winit::keyboard::PhysicalKey::Code(winit::keyboard::KeyCode::Lang1))
                 {
                     let list_mode = Some(id) == self.main_id && self.single_open.is_none();
                     if list_mode {
