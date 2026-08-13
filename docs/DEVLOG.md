@@ -7,6 +7,7 @@
 
 ## 2026-08-13
 
+- **요약 문서 현행화 + push**(코드 0): 후반 6슬라이스(한/영·조합 Enter·무인자 기본·대기 /quit·dedup 리셋+스레드 대피·imgdec 워커화)를 CLAUDE.md·README(502)·MILESTONES에 반영 · WIME-1·3·4·5·6 닫힘 · main push. 상세 [journal/2026-08-13.md](journal/2026-08-13.md).
 - **대화창 열림 1~2초 얼음 해소 — imgdec 디코드를 워커로**(main · M4-5 · 사용자 실기): 프로필 이미지 수신이 메인 스레드에서 자식 프로세스 왕복(Windows 스폰+Defender 검사 = 1~2초)을 동기로 돌던 것 → `spawn_decode` 워커 + `Decoded` 이벤트 복귀(원시 RGBA 경계·메인이 Rc 래핑) · 대상 4종(상대/내 아바타·수신 썸네일·격리함 캐시 팝인). **502 green**. 상세 [journal/2026-08-13.md](journal/2026-08-13.md).
 - **재대화 메시지 증발 + 끊김 스레드 소실 수정**(main · 사용자 실기): ① seq 재발급 × 앱 수명 DedupIndex = 2번째 대화부터 조용히 폐기 → **`reset_device`**(새 세션 = 기기 기억 리셋 — 옛 세션 재생은 Noise가 차단) ② `Closed`의 대화 통째 삭제(DR-26 위반) → **`parked_lines` 대피·복원** ③ /quit 후 재개 = 자동 재연결 × 상주 accept 조합 — "정중한 종료(Bye)" 신호 부재를 M2-4b 검토로 등록. **502 green**(+1). 상세 [journal/2026-08-13.md](journal/2026-08-13.md).
 - **chat-live 대기 중 /quit 불통(Windows) 해소 — 공유 stdin 채널**(main · 사용자 실기): `RawTerm`이 unix 전용이라 대기 루프가 Windows 콘솔에서 stdin을 안 읽었다(파이프 가정에 대화형 콘솔이 같이 떨어짐). 전담 스레드 줄 채널을 대기·대화가 공유 소비 + **EOF 해석 분리**(터미널=종료/파이프·컨테이너=대기 유지) + 비-raw 대화도 **세션 끊김 즉시 복귀**(Enter 불요 — "/exit를 쳐야 했다" 해소). **501 green**. 상세 [journal/2026-08-13.md](journal/2026-08-13.md).

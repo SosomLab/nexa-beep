@@ -3,7 +3,10 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
-> **갱신: 2026-08-13 13차 (KST)** — **대화창 열림 1~2초 얼음 — imgdec 디코드를 워커로**(main · M4-5 · 사용자 실기):
+> **갱신: 2026-08-13 14차 (KST)** — **요약 문서 현행화 + push**(코드 변경 0):
+> 오늘 후반(9~13차 · Windows 실기 주도 6슬라이스: 한/영 토글 · 조합 Enter 확정+전송 · 무인자=창+실물/`--help` · chat-live 대기 /quit · dedup 세션 리셋+스레드 대피 · imgdec 워커화)을 CLAUDE.md §5·현 단계 / README(502) / MILESTONES 표머리에 반영. **WIME-1·3·4·5·6 닫힘**(잔여 2·7~11). main 9커밋 push(`196024b`+현행화). [journal/2026-08-13.md](journal/2026-08-13.md).
+>
+> **직전(08-13 13차)** — **대화창 열림 1~2초 얼음 — imgdec 디코드를 워커로**(main · M4-5 · 사용자 실기):
 > ① 원인 = 프로필 이미지 수신이 **메인 스레드에서** imgdec 자식 프로세스 왕복(스폰+파이프+최대 3s)을 동기로 — Windows **프로세스 생성+Defender 검사**가 스폰마다 1~2초. 격리 설계(R-5)의 의도된 비용을 UI 스레드가 물고 있었고, 대화창 첫 페인트 직전이라 "입력란 없는 빈 창 얼음"으로 보임. 같은 병 3곳(수신 썸네일·격리함 N배·내 아바타).
 > ② 수정 = **`spawn_decode` 워커 + `AppEvent::Decoded` 복귀**(M2-8 문법 · 픽셀은 원시 RGBA로 경계 통과 — `Rc<IconImage>`는 메인이 감쌈) · 대상 4종(PeerAvatar/MyAvatar/XferThumb/QThumb) · 격리함은 **경로 키 캐시(`qthumbs` · None 선점 = 중복·재시도 방지)** · UI는 이니셜 폴백 → **팝인**. **502 green** · clippy 0 · rustdoc 0. ⏸ 실기: 열림 무정지·팝인. [journal/2026-08-13.md](journal/2026-08-13.md).
 >
