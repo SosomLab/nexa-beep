@@ -26,6 +26,10 @@ use std::io::Write as _;
 #[cfg(unix)]
 static ACTIVE: std::sync::Mutex<Option<libc::termios>> = std::sync::Mutex::new(None);
 /// 패닉 훅은 프로세스에 1회만 설치한다.
+/// ⚠️ unix 전용으로 묶는다 — 설치 지점이 `enter_with`의 unix 블록뿐이라, 안 묶으면
+/// Windows에서 dead_code로 릴리스 빌드(-D warnings)가 깨진다(08-13 CI 실측 —
+/// 파일 상단 "조건부 컴파일은 반대편을 의심한다"의 재발).
+#[cfg(unix)]
 static PANIC_HOOK: std::sync::Once = std::sync::Once::new();
 
 /// **지금 즉시** 터미널을 복원한다(멱등 — 복원할 것이 없으면 no-op).
