@@ -6423,6 +6423,11 @@ impl ApplicationHandler<AppEvent> for App {
                 self.ime_composing = false; // 확정 = 조합 종료
                 self.ime_preedit.clear(); // 확정됨 — 포커스 이탈 보존 불필요
                 self.ime_preedit_stash = None;
+                // 위젯의 조합 표시도 **지금** 소거한다(08-13 실기 — 작업표시줄 클릭 등
+                // 포커스 이탈형 확정은 Windows IME가 Commit만 보내고 소거용 Preedit("")를
+                // 안 보낸다 → 잔상 "다"가 남아 "나다"+"다"="나다다". 조합이 이어지는
+                // 일반 타이핑은 다음 Preedit가 곧바로 다시 그린다).
+                self.set_chat_preedit(id, String::new());
                 self.ime_cleared_ms = Some(self.now_ms()); // 키다운 잔향 차단용(WIME-6)
                                                            // 보류 판정 — 자모는 무조건 중복. 비자모('?')는 Commit 본문에 실려
                                                            // 왔으면 중복, 아니면 IME가 삼킨 진짜 입력 → 본문 뒤에 방출한다.
