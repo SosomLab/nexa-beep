@@ -22,8 +22,10 @@
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
-/// 자산 한 변(px). 표시 최대치는 프로필 카드 120px이고 고DPI 배율(2x)까지 보므로 256이면 충분하다.
-const SIDE: u32 = 256;
+/// 자산 한 변(px) **기본값** — 3번째 인자로 바꿀 수 있다(크기 실험용).
+/// 표시 자리: 목록 40 · 프로필 카드 120(논리 px). 고배율에서 업스케일이 다소 소프트해도
+/// 평면 일러스트라 수용 — **내장 용량 최소화가 우선**(사용자 확정 08-14).
+const SIDE_DEFAULT: u32 = 160;
 /// 내용이 차지하는 비율 — 1.0이면 테두리에 딱 붙는다. 원형 마스크에 잘리지 않게 여유를 둔다.
 const CONTENT: f32 = 0.92;
 
@@ -39,6 +41,10 @@ fn main() {
     let dst = args
         .next()
         .unwrap_or_else(|| "crates/nbeep-ui/assets/avatars.nbav".into());
+    let side: u32 = args
+        .next()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(SIDE_DEFAULT);
 
     let files = collect(Path::new(&src));
     if files.is_empty() {
@@ -50,14 +56,15 @@ fn main() {
     for (i, path) in files.iter().enumerate() {
         let key = key_for(path, i);
         let (w, h, rgba) = read_png(path);
-        let norm = normalize(w, h, &rgba);
+        let mut norm = normalize(w, h, &rgba, side);
+        clean(&mut norm);
         let rle = compress(&norm);
         println!(
-            "{key:8} {:>4}x{:<4} → {SIDE}x{SIDE}  RLE {:>7}B  (원본 대비 {:.1}%)",
+            "{key:8} {:>4}x{:<4} → {side}x{side}  RLE {:>7}B  (원본 대비 {:.1}%)",
             w,
             h,
             rle.len(),
-            rle.len() as f32 / (SIDE * SIDE * 4) as f32 * 100.0
+            rle.len() as f32 / (side * side * 4) as f32 * 100.0
         );
         entries.push((key, rle));
     }
@@ -66,7 +73,7 @@ fn main() {
     out.extend_from_slice(b"NBAV1");
     out.push(1);
     out.extend_from_slice(&u16::try_from(entries.len()).expect("항목 수").to_le_bytes());
-    out.extend_from_slice(&u16::try_from(SIDE).expect("변").to_le_bytes());
+    out.extend_from_slice(&u16::try_from(side).expect("변").to_le_bytes());
     for (key, rle) in &entries {
         out.push(u8::try_from(key.len()).expect("키 길이"));
         out.extend_from_slice(key.as_bytes());
@@ -168,19 +175,19 @@ fn alpha_bbox(w: u32, h: u32, rgba: &[u8]) -> (u32, u32, u32, u32) {
 }
 
 /// 여백 제거 → 비율 유지 축소 → 정사각 중앙 배치. 축소는 **박스 평균**(imgdec와 같은 방식).
-fn normalize(w: u32, h: u32, rgba: &[u8]) -> Vec<u8> {
+fn normalize(w: u32, h: u32, rgba: &[u8], side: u32) -> Vec<u8> {
     let (x0, y0, x1, y1) = alpha_bbox(w, h, rgba);
     let (cw, ch) = (x1 - x0 + 1, y1 - y0 + 1);
 
-    // 내용이 들어갈 목표 크기(비율 유지 · 긴 변이 SIDE*CONTENT).
-    let box_px = (SIDE as f32 * CONTENT).round().max(1.0);
+    // 내용이 들어갈 목표 크기(비율 유지 · 긴 변이 side*CONTENT).
+    let box_px = (side as f32 * CONTENT).round().max(1.0);
     let scale = (box_px / cw.max(ch) as f32).min(1.0_f32.max(box_px / cw.max(ch) as f32));
-    let tw = ((cw as f32 * scale).round() as u32).clamp(1, SIDE);
-    let th = ((ch as f32 * scale).round() as u32).clamp(1, SIDE);
+    let tw = ((cw as f32 * scale).round() as u32).clamp(1, side);
+    let th = ((ch as f32 * scale).round() as u32).clamp(1, side);
 
-    let mut out = vec![0u8; (SIDE * SIDE * 4) as usize];
-    let ox = (SIDE - tw) / 2;
-    let oy = (SIDE - th) / 2;
+    let mut out = vec![0u8; (side * side * 4) as usize];
+    let ox = (side - tw) / 2;
+    let oy = (side - th) / 2;
 
     for ty in 0..th {
         for tx in 0..tw {
@@ -204,7 +211,7 @@ fn normalize(w: u32, h: u32, rgba: &[u8]) -> Vec<u8> {
             if n == 0.0 {
                 continue;
             }
-            let o = (((oy + ty) * SIDE + ox + tx) * 4) as usize;
+            let o = (((oy + ty) * side + ox + tx) * 4) as usize;
             // 알파 가중 평균을 되돌린다(a==0이면 완전 투명이라 색은 의미 없다).
             let inv = if a > 0.0 { 1.0 / a } else { 0.0 };
             out[o] = (r * inv).round().clamp(0.0, 255.0) as u8;
@@ -214,6 +221,24 @@ fn normalize(w: u32, h: u32, rgba: &[u8]) -> Vec<u8> {
         }
     }
     out
+}
+
+/// 용량 정리(사용자 확정 08-14 — "필요한 수준으로 축소·용량 최소화") — RLE는 **같은
+/// 픽셀의 연속**만 줄이므로, 보이지 않는 차이를 지워 런을 잇는다:
+/// ① 완전 투명(a≤8)은 색을 0으로 통일 — 투명 영역의 잡색이 런을 끊는 주범.
+/// ② 색/알파 하위 3비트 절사(8단위 · 최대 오차 3% — 평면 일러스트에서 비인지) —
+///    AA 경계의 미세 그라데이션이 1px 런 수백 개로 흩어지는 것을 뭉친다.
+fn clean(rgba: &mut [u8]) {
+    for p in rgba.chunks_exact_mut(4) {
+        if p[3] <= 8 {
+            p.copy_from_slice(&[0, 0, 0, 0]);
+        } else {
+            p[0] &= 0xF8;
+            p[1] &= 0xF8;
+            p[2] &= 0xF8;
+            p[3] &= 0xF8;
+        }
+    }
 }
 
 /// RGBA → RLE. `nbeep-ui::avatar_assets::compress`와 **같은 규칙**(리더가 그걸 되돌린다).
