@@ -6482,6 +6482,15 @@ impl ApplicationHandler<AppEvent> for App {
                 self.redraw_conversation(p);
             }
         }
+        // 프로필 최근 이미지 툴팁 틱(08-14 — 3초 호버 = 파일명 표시).
+        if let Some(pv) = &mut self.profile_view {
+            if pv.tick(bar_now) {
+                if let Some((pid, _)) = self.windows.iter().find(|(_, e)| e.role == Role::Profile) {
+                    let pid = *pid;
+                    self.request_redraw(pid);
+                }
+            }
+        }
         // 갤러리(트리·그리드 포함) 스크롤바 틱 — 상태 변화 시 재그리기.
         if let Some(gv) = &mut self.gallery_view {
             if gv.tick(bar_now) {
