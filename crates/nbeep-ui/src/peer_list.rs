@@ -287,6 +287,20 @@ impl PeerListWidget {
         self.selected.clear();
     }
 
+    #[cfg(test)]
+    fn click_at(&mut self, i: usize, shift: bool, primary: bool, inv: &mut Invalidations) {
+        let y = self.bounds.y + i32::try_from(i - self.top).unwrap_or(0) * self.row_h() + 2;
+        self.on_event(
+            &InputEvent::MouseDown {
+                x: self.bounds.x + 40,
+                y,
+                shift,
+                primary,
+            },
+            inv,
+        );
+    }
+
     /// "프로필 보기" 선택(1회성) — 호스트가 상대 프로필 창을 연다.
     pub fn take_profile_request(&mut self) -> Option<PeerId> {
         self.profile_req.take()
@@ -716,8 +730,24 @@ impl Widget for PeerListWidget {
                 // 캐럿이 안 움직여도(확장 매치 유지) HUD 텍스트는 바뀐다 — 항상 다시 그린다.
                 inv.push(self.bounds);
             }
-            InputEvent::MouseDown { y, primary, .. } => {
+            InputEvent::MouseDown {
+                y, primary, shift, ..
+            } => {
                 if let Some(i) = self.row_at(y) {
+                    // Shift+클릭 = **연속 범위 선택**(08-13 사용자 요청) — 캐럿(직전
+                    // 클릭 행)부터 이번 행까지의 피어들을 선택에 추가(그룹 행은 건너뜀).
+                    if shift && self.peer_at(i).is_some() {
+                        let (a, b) = (self.caret.min(i), self.caret.max(i));
+                        for k in a..=b {
+                            if let Some(row) = self.peer_at(k) {
+                                self.selected.insert(row.entry.peer);
+                            }
+                        }
+                        self.move_caret(i, inv);
+                        inv.push(self.bounds);
+                        self.last_click = None;
+                        return;
+                    }
                     // ⌘/Ctrl+클릭 = 다중 선택 토글(M5-1 — 그룹 만들기·구성원 편집의 재료).
                     // 그룹 행은 선택 대상이 아니다(선택은 사람 단위).
                     if primary {
@@ -1259,5 +1289,22 @@ mod tests {
         w.on_event(&InputEvent::Wheel { delta: -120 }, &mut inv);
         w.on_event(&key(Key::Up), &mut inv); // 캐럿 0인 채 top만 이동했는지 확인용
         assert!(!inv.is_empty());
+    }
+
+    /// 다중 선택(M5-1 · 08-13 수정) — ⌘클릭 토글 + Shift 범위 + 일반 클릭 해제.
+    /// (⌘클릭이 죽어 있던 원인은 앱의 마우스 변환이 수식키를 false로 하드코딩한 것 —
+    /// 위젯 계층은 이 테스트로 계약을 고정한다.)
+    #[test]
+    fn multi_select_toggle_and_shift_range() {
+        let (mut w, mut inv) = widget(&[(1, "a"), (2, "b"), (3, "c"), (4, "d")]);
+        w.click_at(0, false, true, &mut inv); // ⌘클릭 = 토글 on
+        w.click_at(2, false, true, &mut inv);
+        assert_eq!(w.selected_peers(), vec![pid(1), pid(3)]);
+        w.click_at(2, false, true, &mut inv); // 같은 행 다시 = 해제
+        assert_eq!(w.selected_peers(), vec![pid(1)]);
+        w.click_at(1, false, false, &mut inv); // 일반 클릭 = 전체 해제 + 캐럿 1
+        assert!(w.selected_peers().is_empty(), "일반 클릭 = 해제");
+        w.click_at(3, true, false, &mut inv); // Shift = 캐럿(1)..=3 범위 추가
+        assert_eq!(w.selected_peers(), vec![pid(2), pid(3), pid(4)]);
     }
 }

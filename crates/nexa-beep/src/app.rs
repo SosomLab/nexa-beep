@@ -6003,14 +6003,15 @@ impl ApplicationHandler<AppEvent> for App {
             } => {
                 if let Some(e) = self.windows.get(&id) {
                     let (x, y) = e.cursor;
-                    // 갤러리 진입은 메뉴·⌘/Ctrl+G — 하단 버튼은 제거(사용자 요청 08-10).
+                    // ★ 수식키를 마우스에 싣는다(08-13 실기 — false 하드코딩이라
+                    // ⌘클릭 다중 선택이 죽어 있었다. 키 추적값을 그대로 전달).
                     self.route(
                         id,
                         InputEvent::MouseDown {
                             x,
                             y,
-                            shift: false,
-                            primary: false,
+                            shift: self.shift_down,
+                            primary: self.primary_down,
                         },
                         el,
                     );
