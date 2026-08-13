@@ -31,18 +31,25 @@ docker run --rm -v "$PWD":/src -w /src -e CARGO_TARGET_DIR=/src/.docker-target \
 `CARGO_TARGET_DIR`를 나누는 이유 — 호스트 `target/`과 섞으면 맥·리눅스 산출물이 충돌해 **매번 전체 재컴파일**이 된다.
 Docker 데몬이 꺼져 있으면 `open -a Docker` 후 `docker info`가 응답할 때까지 기다린다.
 
-⚠️ **처음 몇 분간 `debconf` 경고 여러 줄 + `downloading 9 components`가 길게 이어지는 것은
-오류가 아니다**(실기 08-13 — 실패로 오인). ① debconf = TTY 없는 apt의 무해한 소음(Noninteractive
-폴백으로 정상 진행) ② rustup 다운로드 = 저장소의 `rust-toolchain.toml`이 stable + rustfmt/clippy +
-크로스 타깃 4종을 요구하는데 `--rm` 컨테이너는 매번 백지라 **수백 MB를 매회 다시 받는다**.
-`Compiling …`이 보이면 빌드 단계다. 반복해서 쓸 거면 캐시를 이름 있는 볼륨으로 남겨라(재실행이 분 단위 → 초 단위):
+⚠️ **처음 몇 분간의 `debconf` 경고 + `downloading 9 components`는 오류가 아니다**(실기 08-13 —
+실패로 오인): TTY 없는 apt의 소음 + `--rm` 백지 컨테이너가 `rust-toolchain.toml`(툴체인·크로스
+타깃)을 매회 다시 받는 것. `Compiling …`부터가 빌드다.
+
+**반복해서 빌드하면 컨테이너를 상주시켜 재사용한다** — 다운로드·컴파일 캐시가 살아 있어
+두 번째부터는 바뀐 크레이트만 컴파일한다(⚠️ `--rm` 컨테이너는 종료 시 자동 삭제라 rename으로 못 남긴다):
 
 ```bash
-docker run --rm -v "$PWD":/src -w /src -e CARGO_TARGET_DIR=/src/.docker-target \
-  -v beep-rustup:/usr/local/rustup -v beep-cargo:/usr/local/cargo/registry \
-  rust:1-slim bash -c 'apt-get update -qq && apt-get install -y -qq pkg-config >/dev/null; \
-  cargo build --release -p nexa-beep -p nbeep-imgdec'
+# 1회: 준비(위 일회성 명령 대신 — 컨테이너를 남긴다)
+docker run -d --name beep-builder -v "$PWD":/src -w /src -e CARGO_TARGET_DIR=/target \
+  rust:1-slim sleep infinity
+docker exec beep-builder bash -c 'apt-get update -qq && apt-get install -y -qq pkg-config >/dev/null; rustup show >/dev/null'
+# 매회: 증분 빌드 + 산출물 꺼내기
+docker exec beep-builder cargo build --release -p nexa-beep -p nbeep-imgdec
+docker exec beep-builder bash -c 'mkdir -p /src/.docker-target/release && cp /target/release/nexa-beep /target/release/nbeep-imgdec /src/.docker-target/release/'
 ```
+
+`/target` = 컨테이너 내부 FS — 맥 바인드 마운트의 느린 I/O를 피한다(소스는 마운트라 항상 최신).
+끝나면 `docker stop beep-builder` · 다음엔 `docker start beep-builder` 후 exec.
 
 ### 1-3. ★ `nbeep-imgdec`를 반드시 함께 — 빠뜨려도 **오류가 안 난다**
 
