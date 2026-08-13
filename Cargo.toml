@@ -10,7 +10,8 @@ members = [
   "crates/nbeep-safe",    # 수신 무해화(.beepq)
   "crates/nbeep-store",   # 영속·암호화 기록
   "crates/nbeep-gfx",     # CPU 래스터라이저·텍스트 스택
-  "crates/nbeep-ui",      # 컨트롤·화면(플랫폼 중립)
+  "crates/nbeep-ctl",     # 커스텀 컨트롤 라이브러리(렌더 기반·컨트롤 — 앱 도메인 의존 0)
+  "crates/nbeep-ui",      # 앱 화면(위젯 — nbeep-ctl 위에)
   "crates/nbeep-plat",    # 플랫폼 경계(창·입력·IME·격리표식)
   "crates/nbeep-imgdec",  # (bin) 이미지 격리 디코드 — 별도 프로세스
   "crates/nexa-conf",     # 설정 직렬화·영속(ADR-0011 · 재사용 — nbeep 의존 0)
@@ -45,6 +46,7 @@ nbeep-crypto = { path = "crates/nbeep-crypto" }
 nbeep-safe = { path = "crates/nbeep-safe" }
 nbeep-store = { path = "crates/nbeep-store" }
 nbeep-gfx = { path = "crates/nbeep-gfx" }
+nbeep-ctl = { path = "crates/nbeep-ctl" }
 nbeep-ui = { path = "crates/nbeep-ui" }
 nbeep-plat = { path = "crates/nbeep-plat" }
 nexa-conf = { path = "crates/nexa-conf" }

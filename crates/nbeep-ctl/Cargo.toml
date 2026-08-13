@@ -1,0 +1,17 @@
+[package]
+name = "nbeep-ctl"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "커스텀 컨트롤 라이브러리 — 렌더 기반(draw·raster)·기하·이벤트·위젯 계약·컨트롤 (앱 도메인 의존 0)"
+
+[lints]
+workspace = true
+
+# ⚠️ 앱 도메인(nbeep-core 등) 의존 금지 — 이 크레이트의 존재 이유다(DR-6·DR-21).
+# 문자열(i18n)·크기 배율 같은 앱 정책은 전부 **주입**으로 받는다(controls::set_ctl_labels 등).
+[dependencies]
+nbeep-gfx.workspace = true

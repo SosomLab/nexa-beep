@@ -2,7 +2,7 @@
 //!
 //! 각 셀은 **4:3 가로 화면**의 축소판이고, 그 안에 해당 위치(좌상단이면 좌상단)에
 //! 작은 회색 박스가 그려진다. 선택된 셀은 테두리·박스가 강조색으로 바뀐다.
-//! 값 코드는 [`HudPos::from_code`](crate::peer_list::HudPos) 체계(`tl…c…br`)와 동일.
+//! 값 코드는 `HudPos::from_code`(nbeep-ui `peer_list` — 앱 측) 체계(`tl…c…br`)와 동일.
 //! 클릭 또는 (포커스 시) 방향키로 고르고, [`PositionPicker::take_changed`] 1회성 보고.
 
 use super::{Control, ControlBase};

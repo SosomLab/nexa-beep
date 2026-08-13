@@ -12,4 +12,5 @@ workspace = true
 
 [dependencies]
 nbeep-core.workspace = true
+nbeep-ctl.workspace = true
 nbeep-gfx.workspace = true

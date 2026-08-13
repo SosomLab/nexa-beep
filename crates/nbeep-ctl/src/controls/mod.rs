@@ -632,11 +632,12 @@ pub fn draw_chevron_right(ctx: &mut dyn DrawCtx, area: Rect, color: Color) {
     );
 }
 
-/// 테스트용 측정 전용 [`DrawCtx`] — 그리기는 no-op, `text_width` = 문자수 × 7(결정적).
-#[cfg(test)]
-pub(crate) struct ProbeCtx;
+/// 측정 전용 [`DrawCtx`] **테스트 백엔드** — 그리기는 no-op, `text_width` = 문자수 ×
+/// 7(결정적). 라이브러리 밖(다운스트림 위젯 테스트)에서도 쓰라고 **공개**한다
+/// (08-14 분리 — `#[cfg(test)]`는 크레이트 경계를 넘지 못한다).
+#[derive(Debug, Default, Clone, Copy)]
+pub struct ProbeCtx;
 
-#[cfg(test)]
 impl DrawCtx for ProbeCtx {
     fn fill_rect(&mut self, _r: Rect, _c: Color) {}
     fn text_opaque(&mut self, _x: i32, _y: i32, _clip: Rect, _t: &str, _f: Color, _b: Color) {}

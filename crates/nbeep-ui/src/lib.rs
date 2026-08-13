@@ -36,18 +36,16 @@ pub mod icons {
     pub const PERSON_SIZE: u32 = 96;
 }
 
+// UI 기반·컨트롤은 별도 라이브러리로 분리(08-14 — `nbeep-ctl` · DR-6/DR-21).
+// 기존 경로(`nbeep_ui::controls::…` 등)는 모듈 재수출로 그대로 유지된다(호환 불변).
+pub use nbeep_ctl::{avatar, controls, draw, edit, event, geom, raster, theme, widget};
+
 pub mod about;
 pub mod addr_prompt;
 pub mod alert;
-pub mod avatar;
 pub mod avatar_assets;
 pub mod chat_view;
-pub mod controls;
-pub mod draw;
-pub mod edit;
-pub mod event;
 pub mod gallery;
-pub mod geom;
 pub mod hangul;
 pub mod offer_prompt;
 pub mod peer_info;
@@ -55,11 +53,8 @@ pub mod peer_list;
 pub mod profile;
 pub mod prompt;
 pub mod quarantine_view;
-pub mod raster;
 pub mod settings;
-pub mod theme;
 pub mod typeahead;
-pub mod widget;
 
 pub use about::{AboutInfo, AboutWidget};
 pub use addr_prompt::AddrPromptWidget;

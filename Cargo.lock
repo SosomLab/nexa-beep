@@ -925,6 +925,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "nbeep-ctl"
+version = "0.1.6"
+dependencies = [
+ "nbeep-gfx",
+]
+
+[[package]]
 name = "nbeep-gfx"
 version = "0.1.6"
 dependencies = [
@@ -978,6 +985,7 @@ name = "nbeep-ui"
 version = "0.1.6"
 dependencies = [
  "nbeep-core",
+ "nbeep-ctl",
  "nbeep-gfx",
 ]
 
