@@ -7,6 +7,7 @@
 
 ## 2026-08-13
 
+- **그룹 방 실기 5건 — IME 조합 일습 + Copy Message + 전달 라인**(main · 실기 보고): ① 그룹 방 Preedit 미표시(= `gchats` 배선 부재 → `group_chat_for` 신설·대칭 배선) ② 포커스 이탈 조합 유실(`ime_preedit` 보존 + `Focused(false)` 확정 · 순서 역전 대비 300ms 스태시) ③ 재포커스 유출 자모 "ㄴㅐ"(유출 조합기 `leak` — 두벌식 Composer 재사용) ④ 조합 중 `?` 삼킴(비자모 보류-판정 — Commit 본문 대조 후 방출) ⑤ 그룹 Copy Message 불통(`drain_group_effects` 클립보드 배선) + 전달 경과 라인 상태 바 이동(스레드는 ⚠ 실패만). 게이트 4종 green. 상세 [journal/2026-08-13.md](journal/2026-08-13.md).
 - ★ **[32 ADR-0013 서버 모드](32-adr-0013-server-modes.md) 방향 설계**(main `398f6ff` · 사용자 요청 · 방향성만): *세 모드 = 서버가 **아는 것**의 세 단계* · 불변식 S-0~S-3(fail-open **to LAN** / fail-closed **on data** — 방향이 반대인 게 핵심) · 회전 RID(R-18 확대 차단 + R-4 부수 효과) · 모드②는 ADR-0007 선행 · 조직 서명은 TOFU 미대체. **§5 그룹 결합** — **pairwise × 릴레이 = N배 업링크** 발견 → 모드②의 "1회 업로드 + N 키 봉투"가 답. 선행 제약 P-9~P-11을 M5-1g에 부착. 구멍 점검 G-1~23 · 질문 Q-32-1~9(**최시급 = Q-32-7**).
 - **구성원 초대(Suggest) + 방별 초대 정책**(main · 사용자 확정): 검토 결론 = 부분 가시성 분기 없음(명부 단일 진실 — 초대 요청도 소유자 경유 반영·전원 배포) · 초대 Fail 처리 안 함 · C↔D 미연결 = 전송 한계(릴레이 GS-2 해소). 구현 = `Suggest`(kind 7) · roster `member_invite`(★P-11 확장 영역 첫 사용 — 구버전 호환) · 전역 `group.member_invite` Switch(기본 허용 → 새 방 상속) · 방별 토글(소유자 우클릭) · 메뉴 소유자/비소유자 분기. **535 green**. 상세 [journal/2026-08-13.md](journal/2026-08-13.md).
 - **`recv_any`가 새 `Group` 스트림을 안 보던 구멍 수정**(main `1cd0963`): 4번째 스트림 추가 시 하드코딩 배열이 안 따라왔다 → `StreamId::ALL`로 구조화. 테스트 2건 · ★ fake에 수신 타임아웃(그전엔 이 버그가 **테스트 행**으로 나타났다 — 되살려 확인 0.20초 FAILED). **534 green**. 상세 [journal/2026-08-13.md](journal/2026-08-13.md).
