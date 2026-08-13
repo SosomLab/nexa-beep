@@ -619,6 +619,7 @@ mod tests {
             owner: pid(1),
             members: vec![pid(1), pid(2)],
             version: v,
+            member_invite: true,
         };
         let lid = {
             let (mut gs, _) = FileGroupStore::open(path.clone(), secret);

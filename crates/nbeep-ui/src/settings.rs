@@ -554,6 +554,16 @@ pub fn registry() -> &'static [Entry] {
         // 그룹(M5-1 · ADR-0012) — 재동기 보관 주체 = 송신자(사용자 확정 08-13).
         // 발신자가 구성원별로 미전달 그룹 메시지를 몇 개까지 보관할지(초과 = 오래된 것
         // 폐기 — 큐 상한 필수 NFR-B-6). 소비처(app)가 관용 파싱한다.
+        // 구성원 초대 허용(ADR-0012 정책 · 사용자 확정 08-13) — **새 방의 기본값**.
+        // 방별 변경은 그룹 행 우클릭(소유자) — 여기 값은 생성 시점에만 복사된다.
+        Entry {
+            cat: Msg::CatGroup,
+            sub: None,
+            label: Msg::GroupMemberInvite,
+            desc: Msg::GroupMemberInviteDesc,
+            kind: SettingKind::Toggle,
+            key: "group.member_invite",
+        },
         Entry {
             cat: Msg::CatGroup,
             sub: None,

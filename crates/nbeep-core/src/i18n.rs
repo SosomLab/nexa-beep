@@ -335,6 +335,9 @@ pub enum Msg {
     Count50,
     Count200,
     Count1000,
+    /// 구성원 초대 허용(새 방 기본값 · 방별로 소유자가 변경 — ADR-0012 정책).
+    GroupMemberInvite,
+    GroupMemberInviteDesc,
 }
 
 impl Msg {
@@ -883,6 +886,18 @@ impl Msg {
                 "구성원별로 미전달 그룹 메시지를 발신자가 몇 개까지 보관할지. 상대가 접속하면 이어 전달되고, 상한 초과분은 오래된 것부터 지워집니다.",
                 "发送方为每个成员保留多少条未送达的群消息。对方上线后补发，超限时从最旧的开始丢弃。",
                 "未配信のグループメッセージを送信者がメンバーごとに何件保持するか。相手の接続時に配信され、上限超過分は古い順に破棄。",
+            ],
+            Msg::GroupMemberInvite => [
+                "Members can invite (new room default)",
+                "구성원 초대 허용(새 방 기본값)",
+                "允许成员邀请（新房间默认）",
+                "メンバー招待を許可（新規ルーム既定）",
+            ],
+            Msg::GroupMemberInviteDesc => [
+                "Applied to rooms you create. Off = owner-only invites. Each room's owner can change it per room.",
+                "내가 만드는 방에 적용됩니다. 끄면 소유자만 초대할 수 있습니다. 방별 설정은 그룹 행 우클릭에서 소유자가 바꿉니다.",
+                "应用于你创建的房间。关闭后仅房主可邀请。各房间可由房主单独更改。",
+                "自分が作るルームに適用。オフ = オーナーのみ招待可。ルームごとの変更はオーナーが行う。",
             ],
             Msg::Count50 => ["50", "50개", "50条", "50件"],
             Msg::Count200 => ["200 (default)", "200개(기본)", "200条(默认)", "200件(既定)"],

@@ -49,6 +49,10 @@ pub struct Roster {
     pub members: Vec<PeerId>,
     /// 단조 증가 버전 — 낮은 버전은 무시한다.
     pub version: u64,
+    /// **구성원 초대 허용**(방 정책 · 기본 true — 사용자 확정 08-13).
+    /// 꺼지면 소유자만 초대. 정책은 명부의 일부라 소유자가 바꾸고 배포한다.
+    /// 와이어는 P-11 확장 영역에 실린다(빈 확장 = 기본 true — 구버전 호환).
+    pub member_invite: bool,
 }
 
 impl Roster {
@@ -89,7 +93,9 @@ impl Roster {
         for m in &self.members {
             out.extend_from_slice(m.as_bytes());
         }
-        out.extend_from_slice(&0u16.to_be_bytes()); // 정책 확장 영역(P-11) — 현재 빈 값
+        // 정책 확장 영역(P-11) — v1 정책 = 플래그 1B(bit0 = 구성원 초대 허용).
+        out.extend_from_slice(&1u16.to_be_bytes());
+        out.push(u8::from(self.member_invite));
         out
     }
 
@@ -116,10 +122,11 @@ impl Roster {
         for _ in 0..mc {
             members.push(PeerId::from_bytes(take(&mut p, 32)?.try_into().ok()?));
         }
-        // 정책 확장 영역(P-11) — 미지 내용은 **읽고 버린다**(전방 호환 · 구버전과의
-        // 경계는 길이 접두라 안전).
+        // 정책 확장 영역(P-11) — 첫 바이트 bit0 = 구성원 초대 허용(없으면 기본 true).
+        // 그 뒤 미지 내용은 **읽고 버린다**(전방 호환 · 경계는 길이 접두라 안전).
         let ext_len = usize::from(u16::from_be_bytes(take(&mut p, 2)?.try_into().ok()?));
-        let _ext = take(&mut p, ext_len)?;
+        let ext = take(&mut p, ext_len)?;
+        let member_invite = ext.first().is_none_or(|b| b & 1 != 0);
         Some((
             Self {
                 uid,
@@ -127,6 +134,7 @@ impl Roster {
                 owner,
                 version,
                 members,
+                member_invite,
             },
             p,
         ))
@@ -171,6 +179,15 @@ pub enum SGroupMsg {
         /// 대상 그룹.
         uid: GroupUid,
     },
+    /// **구성원의 초대 요청**(구성원 → 소유자 · 08-13 사용자 확정 — 기본 허용).
+    /// 명부 갱신은 언제나 소유자(G-6 유지 — 단일 진실이 부분 가시성 분기를 막는다).
+    /// 소유자는 방 정책(`member_invite`)이 켜져 있을 때만 반영한다.
+    Suggest {
+        /// 대상 그룹.
+        uid: GroupUid,
+        /// 초대하려는 상대들.
+        members: Vec<PeerId>,
+    },
 }
 
 const K_INVITE: u8 = 1;
@@ -179,6 +196,7 @@ const K_DECLINE: u8 = 3;
 const K_ROSTER: u8 = 4;
 const K_MSG: u8 = 5;
 const K_LEAVE: u8 = 6;
+const K_SUGGEST: u8 = 7;
 
 impl SGroupMsg {
     /// 와이어 인코딩(kind 1B + 본문).
@@ -217,6 +235,19 @@ impl SGroupMsg {
                 v.extend_from_slice(&uid.0);
                 v
             }
+            SGroupMsg::Suggest { uid, members } => {
+                let mut v = vec![K_SUGGEST];
+                v.extend_from_slice(&uid.0);
+                v.extend_from_slice(
+                    &u32::try_from(members.len())
+                        .unwrap_or(u32::MAX)
+                        .to_be_bytes(),
+                );
+                for m in members {
+                    v.extend_from_slice(m.as_bytes());
+                }
+                v
+            }
         }
     }
 
@@ -250,6 +281,20 @@ impl SGroupMsg {
             K_LEAVE => (rest.len() == 32).then(|| SGroupMsg::Leave {
                 uid: uid32(rest).unwrap_or(GroupUid([0; 32])),
             }),
+            K_SUGGEST => {
+                let uid = uid32(rest)?;
+                let mc = u32::from_be_bytes(rest.get(32..36)?.try_into().ok()?);
+                if mc > 4096 {
+                    return None; // 할당 폭탄 방지(roster와 같은 상한)
+                }
+                let mut members = Vec::with_capacity(mc as usize);
+                let mut p = 36usize;
+                for _ in 0..mc {
+                    members.push(PeerId::from_bytes(rest.get(p..p + 32)?.try_into().ok()?));
+                    p += 32;
+                }
+                (p == rest.len()).then_some(SGroupMsg::Suggest { uid, members })
+            }
             _ => None,
         }
     }
@@ -276,6 +321,7 @@ mod tests {
             owner: pid(1),
             members: vec![pid(1), pid(2), pid(3)],
             version: v,
+            member_invite: true,
         }
     }
 
@@ -308,6 +354,23 @@ mod tests {
         assert!(Roster::decode(&enc[..enc.len() - 1]).is_none());
     }
 
+    /// 정책 필드(P-11 확장 영역) — off 왕복 + 빈 확장 = 기본 허용(구버전 호환).
+    #[test]
+    fn policy_roundtrip_and_empty_ext_defaults_open() {
+        let mut r = roster(1);
+        r.member_invite = false;
+        let (back, _) = Roster::decode(&r.encode()).unwrap();
+        assert!(!back.member_invite, "소유자만 초대 왕복");
+        // 확장 영역이 빈 구버전 인코딩 — 기본 true.
+        let mut old = roster(1).encode();
+        let cut = old.len() - 3; // ext(u16 len=1 + 1B) 제거
+        old.truncate(cut);
+        old.extend_from_slice(&0u16.to_be_bytes()); // 빈 확장
+        let (back, used) = Roster::decode(&old).unwrap();
+        assert!(back.member_invite, "빈 확장 = 기본 허용");
+        assert_eq!(used, old.len());
+    }
+
     #[test]
     fn msg_codec_roundtrip_and_unknown_kind() {
         for m in [
@@ -321,6 +384,10 @@ mod tests {
                 text: "안녕 방!".into(),
             },
             SGroupMsg::Leave { uid: uid(6) },
+            SGroupMsg::Suggest {
+                uid: uid(7),
+                members: vec![pid(4), pid(5)],
+            },
         ] {
             assert_eq!(SGroupMsg::decode(&m.encode()), Some(m));
         }

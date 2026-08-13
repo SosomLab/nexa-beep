@@ -1852,6 +1852,8 @@ impl App {
                 )
                 .unwrap_or(u32::MAX),
                 unread: self.gunread.get(&s.local_id).copied().unwrap_or(0),
+                owned: s.roster.owner == me,
+                member_invite: s.roster.member_invite,
             })
             .collect();
         self.list.set_groups(grows, inv);
@@ -3380,7 +3382,26 @@ impl App {
                     return;
                 };
                 if s.roster.owner != me {
-                    self.status = "구성원 추가는 소유자만 할 수 있습니다".into();
+                    // 구성원 초대(08-13 사용자 확정 — 기본 허용): 명부 갱신은 소유자
+                    // 단일 진실을 유지해야 하므로 **요청(Suggest)을 소유자에게** 보낸다.
+                    // 소유자가 정책 확인 후 명부에 반영·전원 배포 — 부분 가시성 분기 없음.
+                    if !s.roster.member_invite {
+                        self.status = "이 방은 소유자만 초대할 수 있습니다".into();
+                        return;
+                    }
+                    let uid = s.roster.uid;
+                    let owner = s.roster.owner;
+                    let frame = nbeep_core::SGroupMsg::Suggest {
+                        uid,
+                        members: peers.clone(),
+                    }
+                    .encode();
+                    self.send_group_frames(owner, vec![frame]);
+                    self.list.clear_selection();
+                    self.status = format!(
+                        "{}명 초대 요청 발송 — 소유자가 명부에 반영하면 초대됩니다",
+                        peers.len()
+                    );
                     return;
                 }
                 let mut roster = s.roster.clone();
@@ -3432,6 +3453,26 @@ impl App {
                 }
                 self.broadcast_roster(roster);
                 self.status = "제외 완료 — 구성원에게 배포".into();
+                self.refresh_and_redraw();
+            }
+            GA::TogglePolicy(gid) => {
+                let Some(s) = self.groups.shared_by_id(gid) else {
+                    return;
+                };
+                if s.roster.owner != me {
+                    self.status = "방 정책은 소유자만 바꿀 수 있습니다".into();
+                    return;
+                }
+                let mut roster = s.roster.clone();
+                roster.member_invite = !roster.member_invite;
+                roster.version += 1;
+                let on = roster.member_invite;
+                self.broadcast_roster(roster);
+                self.status = if on {
+                    "이 방: 구성원 초대 허용 — 구성원에게 배포".into()
+                } else {
+                    "이 방: 소유자만 초대 — 구성원에게 배포".into()
+                };
                 self.refresh_and_redraw();
             }
             GA::Delete(gid) => {
@@ -3570,6 +3611,8 @@ impl App {
                     owner: me,
                     members: all,
                     version: 1,
+                    // 새 방 정책 = 전역 설정 상속(사용자 확정 08-13 — 이후 방별 변경).
+                    member_invite: self.settings.get("group.member_invite") != "off",
                 };
                 let invite = nbeep_core::SGroupMsg::Invite {
                     roster: roster.clone(),
@@ -4160,6 +4203,54 @@ impl App {
                 self.broadcast_roster(roster);
                 let mut inv = Invalidations::default();
                 self.push_group_note(gid, &format!("{who} 님이 나갔습니다"), &mut inv);
+                self.refresh_and_redraw();
+            }
+            G::Suggest { uid, members } => {
+                // 구성원의 초대 요청(08-13) — 소유자가 정책 확인 후 명부에 반영.
+                // 명부 단일 진실 유지: 반영·배포는 언제나 여기(소유자)서만.
+                let Some(s) = self.groups.shared_by_uid(uid) else {
+                    return;
+                };
+                if s.roster.owner != me || !s.roster.has_member(peer) {
+                    return; // 소유자 아님·명부 밖 요청자 — fail-closed
+                }
+                let gid = s.local_id;
+                let who = self.peer_title(peer);
+                if !s.roster.member_invite {
+                    // 정책 변경 전 시차 요청 — 조용히 버리지 않고 스레드에 남긴다.
+                    let mut inv = Invalidations::default();
+                    self.push_group_note(
+                        gid,
+                        &format!("{who} 님의 초대 요청 — 이 방은 소유자만 초대(거절)"),
+                        &mut inv,
+                    );
+                    return;
+                }
+                let mut roster = s.roster.clone();
+                let new: Vec<PeerId> = members
+                    .into_iter()
+                    .filter(|p| !roster.members.contains(p))
+                    .collect();
+                if new.is_empty() {
+                    return; // 이미 전원 구성원
+                }
+                roster.members.extend(new.iter().copied());
+                roster.members.sort();
+                roster.version += 1;
+                let invite = nbeep_core::SGroupMsg::Invite {
+                    roster: roster.clone(),
+                }
+                .encode();
+                self.broadcast_roster(roster);
+                for p in &new {
+                    self.send_group_frames(*p, vec![invite.clone()]);
+                }
+                let mut inv = Invalidations::default();
+                self.push_group_note(
+                    gid,
+                    &format!("{who} 님의 초대로 {}명에게 초대 발송", new.len()),
+                    &mut inv,
+                );
                 self.refresh_and_redraw();
             }
         }

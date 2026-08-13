@@ -30,6 +30,10 @@ pub struct GroupRow {
     pub online: u32,
     /// 읽지 않은 방 메시지 수(M5-1g — 0이면 배지 없음).
     pub unread: u32,
+    /// 내가 소유자인가(메뉴 분기 — 명부 편집·정책 토글은 소유자만).
+    pub owned: bool,
+    /// 이 방의 구성원 초대 허용 정책(메뉴 라벨·비소유자 초대 가능 여부).
+    pub member_invite: bool,
 }
 
 /// Enter/더블클릭 활성화 결과 — 그룹 행이 생기며 상대가 둘로 갈렸다.
@@ -52,8 +56,10 @@ pub enum GroupAction {
     AddMembers(GroupId, Vec<PeerId>),
     /// 현재 선택한 상대들을 이 그룹에서 제외.
     RemoveMembers(GroupId, Vec<PeerId>),
-    /// 그룹 삭제.
+    /// 그룹 삭제(소유자 = 해산 · 비소유자 = 탈퇴 — 호스트가 가른다).
     Delete(GroupId),
+    /// 구성원 초대 허용 정책 토글(소유자만 — 방별 설정 · 08-13 사용자 확정).
+    TogglePolicy(GroupId),
 }
 
 /// 목록 한 행 — 목록 항목(발견) + 신뢰 상태(`TrustStore`). 출처가 달라 조립 지점에서 합친다.
@@ -541,6 +547,10 @@ impl Widget for PeerListWidget {
                         "g-delete" => {
                             self.group_action = self.ctx_group.take().map(GroupAction::Delete);
                         }
+                        "g-policy" => {
+                            self.group_action =
+                                self.ctx_group.take().map(GroupAction::TogglePolicy);
+                        }
                         _ => {}
                     }
                 }
@@ -554,21 +564,42 @@ impl Widget for PeerListWidget {
                     self.caret = idx;
                     let sel_n = self.selected.len();
                     let items = if let Some(g) = self.groups.get(idx) {
-                        // 그룹 행 — 편입/제외는 현재 다중 선택을 재료로 쓴다.
+                        // 그룹 행(M5-1g) — 소유자/비소유자 메뉴 분기 · 편입/초대는
+                        // 현재 다중 선택을 재료로 쓴다.
                         self.ctx_group = Some(g.id);
                         self.ctx_peer = None;
-                        let mut v = vec![crate::controls::CtxItem::item("g-rename", "이름 변경")];
-                        if sel_n > 0 {
+                        let mut v = Vec::new();
+                        if g.owned {
+                            v.push(crate::controls::CtxItem::item("g-rename", "이름 변경"));
+                            if sel_n > 0 {
+                                v.push(crate::controls::CtxItem::item(
+                                    "g-add",
+                                    format!("선택한 {sel_n}명 초대"),
+                                ));
+                                v.push(crate::controls::CtxItem::item(
+                                    "g-remove",
+                                    format!("선택한 {sel_n}명 제외"),
+                                ));
+                            }
                             v.push(crate::controls::CtxItem::item(
-                                "g-add",
-                                format!("선택한 {sel_n}명 추가"),
+                                "g-policy",
+                                if g.member_invite {
+                                    "소유자만 초대로 전환"
+                                } else {
+                                    "구성원 초대 허용으로 전환"
+                                },
                             ));
-                            v.push(crate::controls::CtxItem::item(
-                                "g-remove",
-                                format!("선택한 {sel_n}명 제외"),
-                            ));
+                            v.push(crate::controls::CtxItem::item("g-delete", "그룹 해산"));
+                        } else {
+                            // 구성원 — 방 정책이 허용일 때만 초대(요청은 소유자 경유).
+                            if g.member_invite && sel_n > 0 {
+                                v.push(crate::controls::CtxItem::item(
+                                    "g-add",
+                                    format!("선택한 {sel_n}명 초대"),
+                                ));
+                            }
+                            v.push(crate::controls::CtxItem::item("g-delete", "그룹 나가기"));
                         }
-                        v.push(crate::controls::CtxItem::item("g-delete", "그룹 삭제"));
                         v
                     } else if let Some(row) = self.peer_at(idx) {
                         // 피어 행 — 우클릭 대상이 선택에 없으면 그 한 명도 재료에 포함되게
