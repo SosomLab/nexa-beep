@@ -386,6 +386,32 @@ impl GalleryWidget {
         inv.push(self.bounds);
     }
 
+    /// 선택 복사(08-13 실기 — 갤러리도 텍스트 컨트롤 시험대라 ⌘C/X/V가 통해야 한다).
+    #[must_use]
+    pub fn clipboard_copy(&self) -> Option<String> {
+        self.textbox.copy_selection()
+    }
+
+    /// 선택 잘라내기 — 포커스된 데모 텍스트박스에서만.
+    pub fn clipboard_cut(&mut self, inv: &mut Invalidations) -> Option<String> {
+        self.textbox.cut_selection(inv)
+    }
+
+    /// 붙여넣기 — 포커스된 데모 텍스트박스로(비포커스면 TextBox가 무시).
+    pub fn clipboard_paste(&mut self, text: &str, inv: &mut Invalidations) {
+        self.textbox.paste(text, inv);
+    }
+
+    /// 우클릭 편집 메뉴 행동(1회성) — 호스트가 ⌘C/X/V와 같은 경로로 잇는다.
+    pub fn take_edit_ctx(&mut self) -> Option<crate::controls::EditCtxAction> {
+        self.textbox.take_edit_ctx()
+    }
+
+    /// 클립보드 텍스트 유무 주입(우클릭 시점 — 붙여넣기 항목 활성 근거).
+    pub fn set_clipboard_has_text(&mut self, yes: bool) {
+        self.textbox.set_clipboard_has_text(yes);
+    }
+
     /// 스크롤바 페이드 틱(호스트가 ~5Hz 호출) — 갤러리 자체 + 내부 트리/그리드 바 모두.
     /// 표시 상태가 바뀌면 `true`(재그리기 필요).
     pub fn tick(&mut self, now_ms: u64) -> bool {

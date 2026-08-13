@@ -2220,6 +2220,7 @@ impl App {
             Role::Profile => self.profile_view.as_ref()?.clipboard_copy(),
             Role::Settings => self.settings_view.as_ref()?.clipboard_copy(),
             Role::NamePrompt => self.name_prompt.as_ref()?.clipboard_copy(),
+            Role::Gallery => self.gallery_view.as_ref()?.clipboard_copy(),
             _ => None,
         }
     }
@@ -2246,6 +2247,7 @@ impl App {
             Role::Profile => self.profile_view.as_mut()?.clipboard_cut(&mut inv),
             Role::Settings => self.settings_view.as_mut()?.clipboard_cut(&mut inv),
             Role::NamePrompt => self.name_prompt.as_mut()?.clipboard_cut(&mut inv),
+            Role::Gallery => self.gallery_view.as_mut()?.clipboard_cut(&mut inv),
             _ => None,
         }
     }
@@ -2283,6 +2285,11 @@ impl App {
             }
             Some(Role::Settings) => {
                 if let Some(v) = self.settings_view.as_mut() {
+                    v.clipboard_paste(text, &mut inv);
+                }
+            }
+            Some(Role::Gallery) => {
+                if let Some(v) = self.gallery_view.as_mut() {
                     v.clipboard_paste(text, &mut inv);
                 }
             }
@@ -5217,6 +5224,7 @@ impl App {
             Some(Role::NamePrompt) => self.name_prompt.as_mut().and_then(|v| v.take_edit_ctx()),
             Some(Role::AddEndpoint) => self.addr_view.as_mut().and_then(|v| v.take_edit_ctx()),
             Some(Role::Settings) => self.settings_view.as_mut().and_then(|v| v.take_edit_ctx()),
+            Some(Role::Gallery) => self.gallery_view.as_mut().and_then(|v| v.take_edit_ctx()),
             _ => None,
         };
         let Some(a) = action else { return };
@@ -6545,6 +6553,11 @@ impl ApplicationHandler<AppEvent> for App {
                             }
                             Some(Role::Settings) => {
                                 if let Some(v) = self.settings_view.as_mut() {
+                                    v.set_clipboard_has_text(has_clip);
+                                }
+                            }
+                            Some(Role::Gallery) => {
+                                if let Some(v) = self.gallery_view.as_mut() {
                                     v.set_clipboard_has_text(has_clip);
                                 }
                             }
