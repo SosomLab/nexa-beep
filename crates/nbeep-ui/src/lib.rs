@@ -40,6 +40,7 @@ pub mod about;
 pub mod addr_prompt;
 pub mod alert;
 pub mod avatar;
+pub mod avatar_assets;
 pub mod chat_view;
 pub mod controls;
 pub mod draw;

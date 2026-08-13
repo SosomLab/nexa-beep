@@ -905,6 +905,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "mkavatars"
+version = "0.1.6"
+dependencies = [
+ "png",
+]
+
+[[package]]
 name = "nbeep-core"
 version = "0.1.6"
 

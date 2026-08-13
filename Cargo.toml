@@ -15,6 +15,7 @@ members = [
   "crates/nbeep-imgdec",  # (bin) 이미지 격리 디코드 — 별도 프로세스
   "crates/nexa-conf",     # 설정 직렬화·영속(ADR-0011 · 재사용 — nbeep 의존 0)
   "crates/nexa-beep",     # (bin) 진입·조립·생명주기
+  "tools/mkavatars",      # (bin) 개발 도구 — 원본 PNG → 내장 아바타 자산. **배포물 아님**
 ]
 
 [workspace.package]

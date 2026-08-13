@@ -13,6 +13,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
 pub mod action;
+pub mod avatar;
 pub mod chat;
 pub mod group;
 pub mod i18n;

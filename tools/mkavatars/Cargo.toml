@@ -1,0 +1,24 @@
+[package]
+name = "mkavatars"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "빌드 도구 — 원본 PNG 12종을 내장 아바타 자산(NBAV1)으로 굽는다 (배포물 아님)"
+publish = false
+
+[[bin]]
+name = "mkavatars"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+# ⚠️ **개발 도구다 — 배포 바이너리가 아니다.** 그래서 PNG 디코더를 링크해도
+# R-5(본체는 이미지 파서를 링크하지 않는다)와 무관하다: 이 크레이트는 릴리스
+# 포장에 들어가지 않고, 읽는 입력도 저장소에 커밋된 우리 자산뿐이다.
+# 의존 기록(docs/10 §3 원장): png(MIT/Apache-2.0) — nbeep-imgdec와 같은 crate.
+[dependencies]
+png = "0.17"
