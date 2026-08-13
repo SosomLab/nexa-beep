@@ -118,6 +118,41 @@ pub fn default_for_seed(seed: &[u8]) -> AvatarChoice {
     AvatarChoice::Builtin(ZODIAC[idx].to_string())
 }
 
+/// 아바타 보더 색(08-14 사용자 요청) — `"#RRGGBB"`만 유효. 무효·미지는 `None`
+/// (호출자가 시드 기본값으로 폴백). 설정 파일은 사람이 고칠 수 있다 — 관용 파싱.
+#[must_use]
+pub fn parse_border(s: &str) -> Option<(u8, u8, u8)> {
+    let hex = s.trim().strip_prefix('#')?;
+    if hex.len() != 6 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    let v = u32::from_str_radix(hex, 16).ok()?;
+    #[allow(clippy::cast_possible_truncation)]
+    Some(((v >> 16) as u8, (v >> 8) as u8, v as u8))
+}
+
+/// (r, g, b) → 저장 문자열([`parse_border`]의 역).
+#[must_use]
+pub fn border_to_setting(rgb: (u8, u8, u8)) -> String {
+    format!("#{:02X}{:02X}{:02X}", rgb.0, rgb.1, rgb.2)
+}
+
+/// **기본 보더 색 — r/g/b 각각을 시드에서 유도**(사용자 확정 08-14 "각각 랜덤").
+/// [`default_for_seed`]와 같은 이유로 실행 난수가 아니라 **키 지문 시드 안정**이다
+/// (실행마다 바뀌면 상대 화면에서 테두리가 요동친다). 채널별 다른 해시 회전을 써서
+/// 서로 독립적으로 퍼진다.
+#[must_use]
+pub fn default_border_for_seed(seed: &[u8]) -> (u8, u8, u8) {
+    let h = |salt: u64| -> u8 {
+        #[allow(clippy::cast_possible_truncation)]
+        let v = seed.iter().fold(salt, |a, b| {
+            a.wrapping_mul(0x0100_0000_01b3).wrapping_add(u64::from(*b))
+        }) as u8;
+        v
+    };
+    (h(0xcbf2_9ce4_8422_2325), h(0x9e37_79b9_7f4a_7c15), h(0x2545_f491_4f6c_dd1d))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -188,6 +223,20 @@ mod tests {
         assert!(picks.len() >= 6, "12간지에 고루 퍼져야 한다: {}", picks.len());
         // 빈 시드도 패닉 없이 유효한 선택.
         assert!(default_for_seed(&[]).builtin_key().is_some());
+    }
+
+    /// 보더 색 — 왕복·관용 파싱·시드 안정(08-14).
+    #[test]
+    fn border_roundtrip_and_lenient_parse() {
+        for rgb in [(0u8, 0u8, 0u8), (255, 128, 7), (0x3D, 0x8B, 0xFF)] {
+            assert_eq!(parse_border(&border_to_setting(rgb)), Some(rgb));
+        }
+        for bad in ["", "#12345", "#GGGGGG", "3D8BFF", "#1234567", "red"] {
+            assert_eq!(parse_border(bad), None, "무효 값 {bad}");
+        }
+        // 시드 안정 + 시드별 분산(완전 일치 아님만 확인 — 채널 독립 유도).
+        assert_eq!(default_border_for_seed(b"abc"), default_border_for_seed(b"abc"));
+        assert_ne!(default_border_for_seed(b"abc"), default_border_for_seed(b"xyz"));
     }
 
     /// 내장만 키를 내놓는다(사용자 이미지는 바이트로 가야 한다).

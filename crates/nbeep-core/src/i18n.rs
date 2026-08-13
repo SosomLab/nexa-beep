@@ -308,6 +308,8 @@ pub enum Msg {
     ProfileTitle,
     /// 프로필 이미지 필드.
     ProfileImage,
+    /// 아바타 보더 색 필드(08-14).
+    AvatarBorderLabel,
     /// 파일 선택 버튼.
     ActChoose,
     /// 이메일 필드.
@@ -837,6 +839,7 @@ impl Msg {
             ],
             Msg::ProfileTitle => ["Profile", "프로필", "个人资料", "プロフィール"],
             Msg::ProfileImage => ["Profile image", "프로필 이미지", "头像", "プロフィール画像"],
+            Msg::AvatarBorderLabel => ["Border color", "테두리 색", "边框颜色", "枠線の色"],
             Msg::ActChoose => ["Choose…", "선택…", "选择…", "選択…"],
             Msg::FieldEmail => ["Email", "이메일", "电子邮件", "メール"],
             Msg::FieldPhone => ["Phone", "전화번호", "电话", "電話番号"],

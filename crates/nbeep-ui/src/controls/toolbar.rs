@@ -32,24 +32,46 @@ pub enum ToolIcon {
         /// `w*h` 길이의 1채널 커버리지.
         alpha: &'static [u8],
     },
+    /// **내 프로필 미니 아바타**(08-14 사용자 요청 — 프로필 버튼이 곧 내 얼굴).
+    /// 사진·내장 그림·이니셜·빈 원 + 보더 링(소형 2px)을 아바타 문법 그대로 그린다.
+    Avatar {
+        /// 사진(원형 마스크 완료본) 또는 내장 12간지(투명 배경). 없으면 이니셜/빈 원.
+        img: Option<Rc<IconImage>>,
+        /// 이니셜(이름 앞 2자 · 빈 문자열 = 빈 원) — `img` 없을 때만 쓰인다.
+        initials: String,
+        /// 원 배경·색 시드(내 키 지문).
+        seed: Vec<u8>,
+        /// 아바타 보더 색(소형이라 2px — 사용자 확정).
+        border: Option<Color>,
+    },
 }
 
-/// 툴바 항목 — 액션 id + 아이콘.
+/// 툴바 항목 — 액션 id + 아이콘 (+ 오른쪽 정렬 여부).
 #[derive(Clone, Debug)]
 pub struct ToolItem {
     /// 액션 id(클릭 보고 값).
     pub id: String,
     /// 아이콘.
     pub icon: ToolIcon,
+    /// `true`면 툴바 **오른쪽 끝**부터 배치(08-14 — 프로필 버튼).
+    pub right: bool,
 }
 
 impl ToolItem {
-    /// (id, 아이콘)으로 만든다.
+    /// (id, 아이콘)으로 만든다(왼쪽 정렬).
     pub fn new(id: impl Into<String>, icon: ToolIcon) -> Self {
         Self {
             id: id.into(),
             icon,
+            right: false,
         }
+    }
+
+    /// 오른쪽 끝 배치 항목(체이닝).
+    #[must_use]
+    pub fn align_right(mut self) -> Self {
+        self.right = true;
+        self
     }
 }
 
@@ -127,12 +149,33 @@ impl Toolbar {
         let b = self.base.bounds;
         let slot = self.slot();
         let gap = self.s(4);
-        Rect::new(
-            b.x + self.s(6) + (slot + gap) * i as i32,
-            b.y + (b.h - slot) / 2,
-            slot,
-            slot,
-        )
+        let y = b.y + (b.h - slot) / 2;
+        if self.items[i].right {
+            // 오른쪽 끝부터 — 내 뒤의 right 항목 수만큼 왼쪽으로 밀린다.
+            #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+            let after = self.items[i + 1..].iter().filter(|it| it.right).count() as i32;
+            Rect::new(
+                b.right() - self.s(6) - slot - (slot + gap) * after,
+                y,
+                slot,
+                slot,
+            )
+        } else {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+            let before = self.items[..i].iter().filter(|it| !it.right).count() as i32;
+            Rect::new(b.x + self.s(6) + (slot + gap) * before, y, slot, slot)
+        }
+    }
+
+    /// 항목 아이콘 교체(08-14 — 프로필 버튼이 내 얼굴을 따라간다). 미지 id는 무시.
+    pub fn set_item_icon(&mut self, id: &str, icon: ToolIcon, inv: &mut Invalidations) {
+        if let Some(i) = self.items.iter().position(|it| it.id == id) {
+            self.items[i].icon = icon;
+            if let Some(slot) = self.tint.borrow_mut().get_mut(i) {
+                *slot = None; // 틴트 캐시 무효화
+            }
+            inv.push(self.base.bounds);
+        }
     }
 
     fn item_at(&self, x: i32, y: i32) -> Option<usize> {
@@ -247,6 +290,25 @@ impl Widget for Toolbar {
                     let img = self.tinted(i, *w, *h, alpha, color);
                     let fit = image_fit_contain(icon_area, img.w as i32, img.h as i32);
                     ctx.image_scaled(fit, &img, slot);
+                }
+                ToolIcon::Avatar {
+                    img,
+                    initials,
+                    seed,
+                    border,
+                } => {
+                    // 내 얼굴 미니(08-14) — 목록 행과 같은 시각 문법(원 배경 + 그림/이니셜).
+                    if let Some(img) = img {
+                        ctx.fill_ellipse(icon_area, crate::avatar::avatar_color(seed));
+                        ctx.image_scaled(icon_area, img, slot);
+                    } else if initials.is_empty() {
+                        ctx.fill_ellipse(icon_area, crate::avatar::avatar_color(seed)); // 빈 원
+                    } else {
+                        crate::avatar::draw_avatar(ctx, icon_area, initials, seed, 0.0);
+                    }
+                    if let Some(c) = border {
+                        ctx.stroke_ellipse(icon_area, *c, self.s(2).max(2) as f32); // 소형 2px
+                    }
                 }
             }
         }

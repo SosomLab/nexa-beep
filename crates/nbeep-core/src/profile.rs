@@ -12,7 +12,8 @@
 //! kind 1 = Request   {}                                  ← 상대 프로필 요청
 //! kind 2 = Info      { flags u8 · (len u16 BE ‖ UTF-8)×켠 필드 · image_len u32 BE
 //!                      · [avatar: len u16 BE ‖ UTF-8]    ← flags bit3일 때만(08-14)
-//!                    }  flags: bit0=name · bit1=email · bit2=phone · bit3=avatar
+//!                      · [border: len u16 BE ‖ UTF-8]    ← flags bit4일 때만(08-14)
+//!                    }  flags: bit0=name · bit1=email · bit2=phone · bit3=avatar · bit4=border
 //! kind 3 = ImageChunk{ offset u32 BE · last u8 · bytes } ← image_len>0일 때만 이어짐
 //! ```
 //!
@@ -49,6 +50,9 @@ pub enum ProfileMsg {
         /// 내장 아바타 키(기본정보 공개 + [`crate::avatar::AvatarChoice::Builtin`]일 때 —
         /// 08-14). 수신측은 자기 [`crate::avatar::ZODIAC`]으로 검증하고 미지 키는 버린다.
         avatar: Option<String>,
+        /// 아바타 보더 색 `"#RRGGBB"`(기본정보 공개 시 — 08-14). 수신측은
+        /// [`crate::avatar::parse_border`]로 검증하고 무효는 버린다.
+        border: Option<String>,
     },
     /// 이미지 조각(Info 직후 순서대로 · `last`가 마지막 표시).
     ImageChunk {
@@ -73,6 +77,7 @@ impl ProfileMsg {
                 phone,
                 image_len,
                 avatar,
+                border,
             } => {
                 let mut out = Vec::with_capacity(64);
                 out.push(K_INFO);
@@ -89,6 +94,9 @@ impl ProfileMsg {
                 if avatar.is_some() {
                     flags |= 8;
                 }
+                if border.is_some() {
+                    flags |= 16;
+                }
                 out.push(flags);
                 for field in [name, email, phone].into_iter().flatten() {
                     let b = field.as_bytes();
@@ -97,9 +105,10 @@ impl ProfileMsg {
                     out.extend_from_slice(&b[..usize::from(len)]);
                 }
                 out.extend_from_slice(&image_len.to_be_bytes());
-                // 아바타 키는 **맨 뒤**(구버전은 여기서 읽기를 멈춘다 — 전방 호환).
-                if let Some(a) = avatar {
-                    let b = a.as_bytes();
+                // 확장 필드는 **맨 뒤에 순서대로**(구버전은 image_len에서 읽기를 멈춘다
+                // — 전방 호환. 새 필드는 언제나 이 꼬리 뒤에 붙인다).
+                for field in [avatar, border].into_iter().flatten() {
+                    let b = field.as_bytes();
                     let len = u16::try_from(b.len()).unwrap_or(u16::MAX);
                     out.extend_from_slice(&len.to_be_bytes());
                     out.extend_from_slice(&b[..usize::from(len)]);
@@ -144,12 +153,14 @@ impl ProfileMsg {
                 let image_len = u32::from_be_bytes(p.get(..4)?.try_into().ok()?);
                 p = &p[4..];
                 let avatar = take_str(&mut p, flags & 8 != 0)?;
+                let border = take_str(&mut p, flags & 16 != 0)?;
                 Some(ProfileMsg::Info {
                     name,
                     email,
                     phone,
                     image_len,
                     avatar,
+                    border,
                 })
             }
             K_IMAGE => {
@@ -181,6 +192,7 @@ mod tests {
                 phone: Some("010-1234".into()),
                 image_len: 1234,
                 avatar: None,
+                border: None,
             },
             ProfileMsg::Info {
                 name: None,
@@ -188,6 +200,7 @@ mod tests {
                 phone: None,
                 image_len: 0,
                 avatar: None,
+                border: None,
             },
             ProfileMsg::Info {
                 name: Some("bob".into()),
@@ -195,6 +208,7 @@ mod tests {
                 phone: None,
                 image_len: 0,
                 avatar: Some("tiger".into()),
+                border: Some("#3D8BFF".into()),
             },
             ProfileMsg::ImageChunk {
                 offset: 32 * 1024,
@@ -216,6 +230,7 @@ mod tests {
             phone: None,
             image_len: 0,
             avatar: None,
+            border: None,
         }
         .encode();
         // kind(1)+flags(1)+len(2)+"bob"(3)+image_len(4) = 11 — 이메일·전화 자리가 없다.
@@ -235,6 +250,7 @@ mod tests {
             phone: None,
             image_len: 0,
             avatar: None,
+            border: None,
         }
         .encode();
         assert!(matches!(
@@ -248,6 +264,7 @@ mod tests {
             phone: None,
             image_len: 0,
             avatar: Some("ox".into()),
+            border: None,
         }
         .encode();
         newer.extend_from_slice(b"future-bytes");

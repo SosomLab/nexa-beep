@@ -78,6 +78,8 @@ pub struct PeerRow {
     pub profile_name: Option<String>,
     /// 프로필 사진(M4-5 — imgdec 격리 디코드·원형 마스크 완료본). 없으면 이니셜.
     pub avatar: Option<std::rc::Rc<crate::theme::IconImage>>,
+    /// 아바타 보더 색(08-14 — 상대가 공개한 값 · 검증 통과분). 소형 표시라 2px.
+    pub border: Option<(u8, u8, u8)>,
     /// 읽지 않은 수신 메시지 수(③ 08-13) — 0이면 배지 없음.
     pub unread: u32,
     /// 마지막으로 대화를 확인한 시각 라벨(③ — `unread > 0`일 때만 Some · 배지 왼쪽에 흐리게).
@@ -970,6 +972,13 @@ impl Widget for PeerListWidget {
                     6.0,
                 );
             }
+            // 아바타 보더(08-14) — 상대가 공개한 색 · **소형은 2px**(사용자 확정).
+            if let Some((br, bg, bb)) = row.border {
+                let c = crate::theme::Color(
+                    (u32::from(br) << 16) | (u32::from(bg) << 8) | u32::from(bb),
+                );
+                ctx.stroke_ellipse(av, c, self.s(2).max(2) as f32);
+            }
             // 세션 상태 점 — 아바타 우하단에 겹쳐(메신저 관례 · 색 의미는 기존 그대로).
             let dot_d = self.s(11);
             let dot = Rect::new(
@@ -1159,6 +1168,7 @@ mod tests {
             xfer: None,
             profile_name: None,
             avatar: None,
+            border: None,
             unread: 0,
             last_read: None,
         }

@@ -87,6 +87,12 @@ pub trait DrawCtx {
         let _ = (rect, color);
     }
 
+    /// 타원 **테두리 링** AA(08-14 — 아바타 보더). `width`px 밴드를 가장자리 **안쪽**에
+    /// 그린다(rect 밖으로 나가지 않는다). 기본 = no-op.
+    fn stroke_ellipse(&mut self, rect: Rect, color: Color, width: f32) {
+        let _ = (rect, color, width);
+    }
+
     /// 라운드 사각형 AA 채움. 기본 = no-op.
     fn fill_round_rect(&mut self, rect: Rect, radius: i32, color: Color) {
         let _ = (rect, radius, color);

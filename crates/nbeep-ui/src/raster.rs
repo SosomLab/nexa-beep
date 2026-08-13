@@ -384,6 +384,24 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
         });
     }
 
+    fn stroke_ellipse(&mut self, rect: Rect, color: Color, width: f32) {
+        if rect.is_empty() || width <= 0.0 {
+            return;
+        }
+        let (cx, cy) = (
+            rect.x as f32 + rect.w as f32 / 2.0,
+            rect.y as f32 + rect.h as f32 / 2.0,
+        );
+        let (rx, ry) = (rect.w as f32 / 2.0, rect.h as f32 / 2.0);
+        self.coverage_fill(rect, color, move |x, y| {
+            let nx = (x - cx) / rx;
+            let ny = (y - cy) / ry;
+            let d = ((nx * nx + ny * ny).sqrt() - 1.0) * rx.min(ry); // 음수 = 안쪽
+            // 가장자리 안쪽 width 밴드(-width..0) — 링 SDF.
+            (d + width / 2.0).abs() - width / 2.0
+        });
+    }
+
     fn fill_round_rect(&mut self, rect: Rect, radius: i32, color: Color) {
         if rect.is_empty() {
             return;

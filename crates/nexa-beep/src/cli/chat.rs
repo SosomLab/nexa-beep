@@ -450,7 +450,8 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
                             email: Some(format!("{my_name}@test.local")),
                             phone: Some("010-0000-0000".into()),
                             image_len: u32::try_from(img.len()).unwrap_or(0),
-                            avatar: None, // 테스트 도구 — 내장 아바타 키는 GUI 몫
+                            avatar: None, // 테스트 도구 — 내장 아바타·보더는 GUI 몫
+                            border: None,
                         }
                         .encode()];
                         let mut off = 0usize;

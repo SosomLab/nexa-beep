@@ -139,6 +139,8 @@ enum AppEvent {
         image: Option<Vec<u8>>,
         /// 내장 아바타 키(08-14) — 바이트가 아니라 키만 온다(양쪽이 같은 자산 내장).
         avatar: Option<String>,
+        /// 아바타 보더 색 "#RRGGBB"(08-14) — 수신측 parse_border 검증 후 반영.
+        border: Option<String>,
     },
     /// 격리 디코드 완료(워커 → 메인 · M4-5). ★ 그전엔 자식 프로세스 왕복(스폰 +
     /// Defender 검사 — Windows 실측 1~2초)이 **메인 스레드에서 동기**로 돌아, 대화창이
@@ -279,6 +281,8 @@ struct PeerProfile {
     image_file: Option<std::path::PathBuf>,
     /// imgdec 격리 디코드 결과(원형 마스크 완료 · M4-5) — 목록·카드가 그린다.
     avatar: Option<std::rc::Rc<nbeep_ui::IconImage>>,
+    /// 아바타 보더 색(08-14 — parse_border 검증 통과분).
+    border: Option<(u8, u8, u8)>,
 }
 
 /// 대화 상태 — **뷰(창)와 분리**(DR-26). 세션은 **액터 스레드**가 소유하고, 여기엔 그
@@ -309,9 +313,10 @@ fn spawn_session_actor(
         let mut inbox = XferInbox::new();
         let mut outgoing: HashMap<nbeep_core::XferId, Vec<u8>> = HashMap::new();
         let mut send_meter = nbeep_core::RateMeter::default();
-        // 프로필 이미지 조립 상태(M3-17) — (텍스트 필드+아바타 키, 기대 총량, 누적 바이트).
+        // 프로필 이미지 조립 상태(M3-17) — (텍스트 필드+아바타 키+보더, 기대 총량, 누적 바이트).
         type PendingProfile = (
             (
+                Option<String>,
                 Option<String>,
                 Option<String>,
                 Option<String>,
@@ -434,6 +439,7 @@ fn spawn_session_actor(
                         phone,
                         image_len,
                         avatar,
+                        border,
                     }) => {
                         let len = image_len as usize;
                         if len == 0 || len > nbeep_core::PROFILE_IMAGE_MAX {
@@ -445,11 +451,12 @@ fn spawn_session_actor(
                                 phone,
                                 image: None,
                                 avatar,
+                                border,
                             });
                             pending_profile = None;
                         } else {
                             pending_profile = Some((
-                                (name, email, phone, avatar),
+                                (name, email, phone, avatar, border),
                                 image_len,
                                 Vec::with_capacity(len),
                             ));
@@ -468,7 +475,7 @@ fn spawn_session_actor(
                             }
                             if !in_order || last {
                                 // 종결 — 정합(순서·총량 일치)일 때만 이미지 채택.
-                                let (name, email, phone, avatar) = fields.clone();
+                                let (name, email, phone, avatar, border) = fields.clone();
                                 let ok = in_order && last && buf.len() == *want as usize;
                                 let image = ok.then(|| std::mem::take(buf));
                                 let _ = proxy.send_event(AppEvent::PeerProfile {
@@ -478,6 +485,7 @@ fn spawn_session_actor(
                                     phone,
                                     image,
                                     avatar,
+                                    border,
                                 });
                                 pending_profile = None;
                             }
@@ -959,6 +967,8 @@ struct App {
     peer_profiles: HashMap<PeerId, PeerProfile>,
     /// 내장 12간지 아바타(키 → 그림 · 08-14) — 기동 시 1회 해석(NBAV1 fail-soft).
     builtin_avatars: HashMap<String, Rc<nbeep_ui::IconImage>>,
+    /// 내 사진(imgdec 디코드 완료본 · 08-14) — 툴바 프로필 버튼·프로필 프리뷰 공용.
+    my_avatar: Option<Rc<nbeep_ui::IconImage>>,
     /// 상대 프로필 보기 뷰(우클릭 ▸ 프로필 보기 — 열려 있을 때만 Some).
     peer_info_view: Option<nbeep_ui::PeerInfoWidget>,
     /// 주소 입력 모달 뷰(DR-19 · M3-16 — 열려 있을 때만 Some).
@@ -2043,6 +2053,10 @@ impl App {
                     .peer_profiles
                     .get(&entry.peer)
                     .and_then(|p| p.avatar.clone());
+                let border = self
+                    .peer_profiles
+                    .get(&entry.peer)
+                    .and_then(|p| p.border);
                 let trust = self.trust.level(entry.peer);
                 // 세션 상태 점(사용자 요청): 대화 중=Active · 끊김 기록=Lost · 그 외=Idle.
                 let link = if self.conversations.contains_key(&entry.peer) {
@@ -2072,6 +2086,7 @@ impl App {
                     xfer,
                     profile_name,
                     avatar,
+                    border,
                     unread,
                     last_read,
                 }
@@ -2425,12 +2440,17 @@ impl App {
                     .map(str::to_string)
             })
             .flatten();
+        // 보더 색(08-14) — 기본정보 공개 시 유효 값만(어느 얼굴이든 링은 함께 간다).
+        let border = share_basic
+            .then(|| self.settings.get("profile.avatar_border").to_string())
+            .filter(|s| nbeep_core::avatar::parse_border(s).is_some());
         let mut frames = vec![ProfileMsg::Info {
             name,
             email,
             phone,
             image_len,
             avatar,
+            border,
         }
         .encode()];
         if let Some(bytes) = image {
@@ -3129,6 +3149,7 @@ impl App {
                 .to_string(),
             seed: self.identity.peer_id().as_bytes().to_vec(),
             avatar_choice: self.settings.get("profile.avatar").to_string(),
+            avatar_border: self.settings.get("profile.avatar_border").to_string(),
             avatar: {
                 // 내 사진 미리보기(M4-5) — 격리 디코드는 워커로(창 열림이 1~2초 얼지
                 // 않게 · 08-13). 도착하면 `Decoded(MyAvatar)`가 채운다(그전엔 이니셜).
@@ -3145,7 +3166,7 @@ impl App {
         };
         let attrs = Window::default_attributes()
             .with_title("Nexa Beep — 프로필")
-            .with_inner_size(winit::dpi::LogicalSize::new(440.0, 610.0))
+            .with_inner_size(winit::dpi::LogicalSize::new(440.0, 650.0))
             .with_resizable(false)
             // 모달(⑤ 사용자 요청 08-13) — 다른 창에 가려지지 않고 항상 위에서 입력.
             .with_window_level(winit::window::WindowLevel::AlwaysOnTop)
@@ -3325,6 +3346,41 @@ impl App {
     }
 
     /// 설정 영속 mark — 변경 지점은 플래그만 세운다(직렬화·값 복사 없음 · FR-P-9).
+    /// 툴바 프로필 버튼 = **지금의 내 얼굴**(08-14 사용자 요청) — 우선순위는 프로필
+    /// 프리뷰와 동일(사진 > 내장 > 이니셜/빈 원) + 보더 링(소형 2px).
+    fn refresh_toolbar_avatar(&mut self) {
+        use nbeep_core::avatar::{parse_border, AvatarChoice};
+        let choice = AvatarChoice::parse(self.settings.get("profile.avatar"));
+        let img = self.my_avatar.clone().or_else(|| match &choice {
+            AvatarChoice::Builtin(k) => self.builtin_avatars.get(k.as_str()).cloned(),
+            _ => None,
+        });
+        let initials = if matches!(choice, AvatarChoice::None) && img.is_none() {
+            String::new() // 없음 = 빈 원
+        } else {
+            nbeep_ui::avatar::initials(
+                effective_display_name(&self.settings, &self.identity.peer_id()).as_str(),
+            )
+        };
+        let border = parse_border(self.settings.get("profile.avatar_border")).map(|(r, g, b)| {
+            nbeep_ui::Color((u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b))
+        });
+        let mut inv = Invalidations::default();
+        self.toolbar.set_item_icon(
+            "profile",
+            ToolIcon::Avatar {
+                img,
+                initials,
+                seed: self.identity.peer_id().as_bytes().to_vec(),
+                border,
+            },
+            &mut inv,
+        );
+        if let Some(mid) = self.main_id {
+            self.request_redraw(mid);
+        }
+    }
+
     fn conf_mark(&mut self) {
         self.conf.sched.mark(Instant::now());
     }
@@ -3376,6 +3432,14 @@ impl App {
             self.settings.set("profile.avatar", v);
             self.conf_mark();
         }
+        // 기본 보더 색(08-14) — r/g/b 각각을 키 지문 시드에서 유도해 저장(같은 이유).
+        if self.settings.get("profile.avatar_border").is_empty() {
+            let rgb =
+                nbeep_core::avatar::default_border_for_seed(self.identity.peer_id().as_bytes());
+            self.settings
+                .set("profile.avatar_border", nbeep_core::avatar::border_to_setting(rgb));
+            self.conf_mark();
+        }
         self.rebuild_theme(); // ui.theme + theme.* 색 오버라이드
         if let Ok(ms) = self.settings.get("ui.typeahead_timeout").parse::<u64>() {
             self.list.set_typeahead_timeout(ms);
@@ -3414,6 +3478,17 @@ impl App {
         self.recv_rate = nbeep_core::RateLimit::from_code(self.settings.get("xfer.recv_rate"));
         if let Ok(v) = self.settings.get("xfer.timeout_sec").parse::<u64>() {
             self.wait_timeout_sec = v.clamp(5, 3600);
+        }
+        // 툴바 프로필 버튼 = 내 얼굴(08-14) — 부팅 반영 + 사진이 있으면 워커 디코드
+        // (도착 시 Decoded(MyAvatar)가 버튼을 갱신한다).
+        self.refresh_toolbar_avatar();
+        let p = self.settings.get("profile.image_path").to_string();
+        if !p.is_empty() {
+            spawn_decode(self.proxy.clone(), DecodeTarget::MyAvatar, move || {
+                std::fs::read(&p)
+                    .ok()
+                    .and_then(|b| crate::imgdec::avatar_raw_from_bytes(&b, 256))
+            });
         }
     }
 
@@ -3603,20 +3678,29 @@ impl App {
                     }
                     self.refresh_approval_ui();
                 }
-                // 아바타 선택(08-14) — 연결된 상대에게 프로필을 능동 재전송(키만).
+                // 아바타 선택·보더(08-14) — 연결된 상대에게 프로필을 능동 재전송.
                 // 상대는 Request 없이도 최신 얼굴을 받는다(변경 즉시 반영).
-                "profile.avatar" => {
+                "profile.avatar" | "profile.avatar_border" => {
                     let frames = self.my_profile_frames();
                     for conv in self.conversations.values() {
                         let _ = conv.out_tx.send(SessionCmd::Control(frames.clone()));
                     }
+                    self.refresh_toolbar_avatar(); // 프로필 버튼 = 내 얼굴
                     self.status = "아바타 변경 — 연결된 상대에게 반영".into();
+                }
+                // 사진 경로(08-14) — 스와치 선택이 비우면 툴바 버튼도 즉시 따라간다.
+                "profile.image_path" => {
+                    if value.is_empty() {
+                        self.my_avatar = None;
+                    }
+                    self.refresh_toolbar_avatar();
                 }
                 // 표시 이름(M1-10) — 즉시 재공지(사용자 확정 08-11). 상대 목록은
                 // PeerTable Renamed 경로로 갱신된다.
                 "profile.display_name" => {
                     let name = effective_display_name(&self.settings, &self.identity.peer_id());
                     self.transport.set_display_name(name.clone());
+                    self.refresh_toolbar_avatar(); // 이니셜이 이름을 따라간다(08-14)
                     self.status = format!("표시 이름 = {name} — LAN 전체에 방송됩니다");
                 }
                 // 수신 포트(08-13 ⓐ — 듣는 포트 = 거는 기본 포트). 즉시 적용 = 전송 재시작
@@ -5891,6 +5975,7 @@ impl ApplicationHandler<AppEvent> for App {
                 phone,
                 image,
                 avatar: avatar_key,
+                border,
             } => {
                 // 이름은 무해화(DisplayName) 통과분만 채택 · 이력은 신뢰 저장소에도 남긴다.
                 let display = name.and_then(|n| nbeep_core::DisplayName::parse(&n).ok());
@@ -5903,6 +5988,8 @@ impl ApplicationHandler<AppEvent> for App {
                 let builtin = avatar_key
                     .filter(|k| nbeep_core::avatar::ZODIAC.contains(&k.as_str()))
                     .and_then(|k| self.builtin_avatars.get(&k).cloned());
+                // 보더 색 — 검증 통과분만(무효는 조용히 폐기 · fail-closed).
+                let border = border.as_deref().and_then(nbeep_core::avatar::parse_border);
                 // 이미지 바이트 캐시 + **격리 디코드는 워커로**(M4-5 — 자식 프로세스
                 // 왕복이 메인을 1~2초 멈췄다 · 08-13 실기). 도착 전엔 기존 아바타를
                 // 유지하고(깜빡임 방지) `Decoded(PeerAvatar)`가 교체한다. 실패 = 이니셜.
@@ -5948,6 +6035,7 @@ impl ApplicationHandler<AppEvent> for App {
                             phone,
                             image_file,
                             avatar,
+                            border,
                         },
                     );
                     self.status =
@@ -6002,6 +6090,9 @@ impl ApplicationHandler<AppEvent> for App {
                         }
                     }
                     DecodeTarget::MyAvatar => {
+                        // 앱 보관(08-14) — 툴바 프로필 버튼이 상시 쓴다(프로필 창 없어도).
+                        self.my_avatar = icon.clone();
+                        self.refresh_toolbar_avatar();
                         if let Some(pv) = &mut self.profile_view {
                             let mut pinv = Invalidations::default();
                             if icon.is_none() {
@@ -7337,15 +7428,18 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
                     alpha: nbeep_ui::icons::SHIELD_ALPHA,
                 },
             ),
-            // 프로필 변경 화면(M3-17 — 사람 실루엣 · 사용자 요청 08-11).
+            // 프로필 버튼 = **내 얼굴 미니**(08-14 사용자 요청 — 우측 끝 배치).
+            // 실제 아이콘은 부팅 직후 refresh_toolbar_avatar가 설정값으로 채운다.
             ToolItem::new(
                 "profile",
-                ToolIcon::Mask {
-                    w: nbeep_ui::icons::PERSON_SIZE,
-                    h: nbeep_ui::icons::PERSON_SIZE,
-                    alpha: nbeep_ui::icons::PERSON_ALPHA,
+                ToolIcon::Avatar {
+                    img: None,
+                    initials: String::new(),
+                    seed: Vec::new(),
+                    border: None,
                 },
-            ),
+            )
+            .align_right(),
             // 컨트롤 갤러리는 툴바에서 뺐다(사용자 요청 08-10) — 메뉴(보기 ▸ 컨트롤 갤러리)와
             // ⌘/Ctrl+G로 열 수 있으니, 상시 노출할 임시 검수용 항목은 툴바를 차지할 이유가 없다.
         ]),
@@ -7368,6 +7462,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
             .into_iter()
             .map(|b| (b.key, Rc::new(b.image)))
             .collect(),
+        my_avatar: None,
         peer_info_view: None,
         picker_ctx: None,
         pending_picker: None,

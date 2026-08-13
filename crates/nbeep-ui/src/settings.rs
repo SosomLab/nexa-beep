@@ -50,6 +50,7 @@ const HIDDEN_KEYS: &[&str] = &[
     "profile.phone",
     "profile.image_path",
     "profile.avatar", // 아바타 선택(08-14) — 프로필 화면 스와치가 편집한다
+    "profile.avatar_border", // 아바타 보더 색(08-14) — 프로필 화면 ColorPick이 편집한다
 ];
 
 /// 기본 off 토글 — 프로필 공개(DR-22 **기본 전부 비노출** · 옵트인). 미등록 토글은 on.
