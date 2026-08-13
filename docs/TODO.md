@@ -185,7 +185,7 @@ M-1 설계 ──► M0 기반 ──► M1 발견 ──► M2 대화 ──►
 - [x] **WIME-3 목록 모드(IME off) 자모 도착** — ★ **실측 완료(08-13 · 사용자 실기): 자모가 오지 않는다**(라틴만 · 한/영 키 무력) — 우려대로 목록 한글 직접 조합이 Windows 무동작이었다. **처방 구현 = [27 §8](27-typeahead-hangul-composition.md)**: `jamo_from_qwerty`(QWERTY→두벌식) + 앱 소유 `hangul_mode` 토글 · 잔여 = 한글 이름 상대 **자소 접두 매칭 실동작**(GUI 실기)
 - [ ] **WIME-4 한/영 전환 키** — winit 소스 확인 + ★ **실기 실증(08-13 · 사용자)**: VK_HANGUL → `NamedKey::HangulMode`(물리 `Lang1`)가 **IME 비연결 목록 창에도 도달** — [27 §8](27-typeahead-hangul-composition.md) 앱 토글·상태바 고지·조합·복귀 동작 확인. 잔여 = 대화 창(IME on) 전환 직후 **첫 키 손실**(mac R2 유형) 재현 여부만
 - [x] **WIME-5 목록↔대화 전환 IME 토글** — ✅ **실기 확인(08-13 · 사용자)**: 전환 경계 묵은 조합 없음·첫 입력 정상
-- [ ] **WIME-6 조합 중 단축키·Enter** — ★ **실기 재현(08-13 · 사용자): 조합 중 Enter가 확정+전송까지 나갔다** — Windows IME는 Commit 후 같은 키의 KeyboardInput이 **또** 온다(macOS는 IME가 삼킴 — 그래서 mac에선 안 보였다). **수정 구현** = 조합 종료 직후(<120ms) Enter/Esc 키다운 잔향을 1회성으로 삼킴(`ime_cleared_ms` · `cfg!(windows)`). 잔여 = **수정 재확인**(조합 Enter = 확정만 · 직후 Enter = 전송) · 조합 중 Ctrl+K 등 단축키 오동작 여부
+- [x] **WIME-6 조합 중 Enter — ★ 사용자 확정(08-13): 조합 확정+전송이 한 번에** — Windows IME는 Commit 후 같은 키의 KeyboardInput이 **또** 온다(macOS는 IME가 삼킴). 처음엔 잔향으로 보고 삼켰으나(2단 전송) **사용자 확정 = 통과가 정답**: Commit이 버퍼에 먼저 들어가고 Enter가 전송 → "확정+전송 동시"(Windows 메신저 관례 · DR-16 동작=OS 네이티브 · chat-live 콘솔과 동일). **Esc 잔향만 차단**(조합 취소가 화면 닫기로 새는 것 — `ime_cleared_ms` 1회성 · `cfg!(windows)`). mac은 IME가 삼켜 확정만 되는 2단 — OS별 관례 차이 그대로. 잔여 = 조합 중 Ctrl+K 등 단축키 오동작 여부만(→ WIME-6b로 관찰)
 - [ ] **WIME-7 후보창·고DPI** — 한자 변환 후보창이 캐럿 근처에 뜨는가(Preedit cursor 위치 전달) · **배율 125%/150%**(FR-U-6)에서 preedit·후보창 위치가 캐럿에 붙는가
 - [ ] **WIME-8 한글 선택·클립보드 왕복** — 드래그 선택 → Ctrl+C → 메모장 붙여넣기 → 다시 Ctrl+V(**CF_UNICODETEXT 어댑터 08-10 구현분의 한글 실증** — M3-1b 연계)
 - [ ] **WIME-9 빠른 연속 타이핑** — 자소 유실·순서 뒤바뀜 없는가(이벤트 큐 경합·보류-판정 타이밍)

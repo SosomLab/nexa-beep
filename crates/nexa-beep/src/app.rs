@@ -939,10 +939,11 @@ struct App {
     /// IME 조합 중(macOS — Preedit 활성). 조합 중엔 KeyboardInput 문자/백스페이스를
     /// 라우팅하지 않는다(같은 키가 Ime 경로로도 와서 자모가 이중 유입되던 버그).
     ime_composing: bool,
-    /// 조합이 끝난 시각(Commit 또는 Preedit 소거) — **Windows IME 잔향 차단**(WIME-6).
-    /// macOS는 조합을 끝낸 Enter/Esc를 IME가 삼키지만, Windows는 Commit 뒤에 같은 키의
-    /// KeyboardInput이 **또** 온다 → 조합 확정 Enter가 곧장 전송으로 새던 실기 버그.
-    /// 종료 직후(<120ms)의 Enter/Esc는 "확정/취소"가 의도라 삼킨다(1회성 — 소비 시 해제).
+    /// 조합이 끝난 시각(Commit 또는 Preedit 소거) — **Windows IME Esc 잔향 차단**(WIME-6).
+    /// Windows는 조합을 끝낸 키의 KeyboardInput이 Commit/소거 뒤에 **또** 온다(macOS는
+    /// IME가 삼킴). **Enter는 일부러 통과시킨다** — 조합 확정과 전송이 한 번에(사용자
+    /// 확정 08-13 · Windows 메신저 관례 · DR-16 "동작 = OS 네이티브"). **Esc만** 차단
+    /// — 조합 취소가 화면 닫기로 새는 건 의도일 수 없다(1회성 — 소비 시 해제).
     ime_cleared_ms: Option<u64>,
     /// 판정 보류 중인 단독 자모(창, 문자, 시각). Character("ㄱ")는 ①곧 Preedit가 따라오는
     /// **중복**이거나 ②IME가 아직 안 붙은 **진짜 입력**(한영 전환 직후 첫 키)이다 —
@@ -4924,13 +4925,15 @@ impl ApplicationHandler<AppEvent> for App {
                     _ => None,
                 };
                 if let Some(key) = key {
-                    // 조합을 끝낸 Enter/Esc의 키다운 잔향(Windows IME · WIME-6 실기):
-                    // Commit/소거 **직후**(<120ms) 도착한 Enter/Esc는 "확정/취소"가 의도다 —
-                    // 전송·화면 닫기로 보내지 않는다. 1회성(take)이라 곧이은 진짜 Enter는
-                    // 정상 전송. macOS는 IME가 키를 삼켜 이 잔향 자체가 없다(cfg 게이트).
+                    // 조합을 끝낸 **Esc**의 키다운 잔향(Windows IME · WIME-6 실기): 조합
+                    // 취소 직후(<120ms) 도착한 Esc를 화면 닫기로 보내지 않는다(1회성).
+                    // ★ Enter는 **일부러 통과** — Commit(조합 확정)이 먼저 버퍼에 들어간 뒤
+                    // Enter가 전송하므로 "확정+전송이 한 번에"가 된다(사용자 확정 08-13 ·
+                    // Windows 메신저 관례 · DR-16 "동작 = OS 네이티브". macOS는 IME가 키를
+                    // 삼켜 확정만 되는 2단 — OS별 관례 차이 그대로 둔다).
                     let now_ms = self.now_ms();
                     if cfg!(windows)
-                        && matches!(key, Key::Enter | Key::Escape)
+                        && matches!(key, Key::Escape)
                         && self
                             .ime_cleared_ms
                             .take_if(|t| now_ms.saturating_sub(*t) < 120)
