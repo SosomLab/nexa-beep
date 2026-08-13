@@ -1042,6 +1042,8 @@ struct App {
     /// 그룹 발신 중 미연결 구성원에게 이어 보낼 본문(성립 시 flush — 사용자 확정
     /// "자동 연결 시도 후 전송" · 보관 주체 = 송신자). 백오프 소진 시 실패 라인으로 종결.
     pending_group_sends: HashMap<PeerId, Vec<(nbeep_core::group::GroupId, String)>>,
+    /// 미연결 구성원에게 이어 보낼 그룹 파일 경로(M5-1g 파일 팬아웃 — 08-13).
+    pending_group_files: HashMap<PeerId, Vec<(nbeep_core::group::GroupId, std::path::PathBuf)>>,
     /// 미연결 구성원에게 이어 보낼 그룹 제어 프레임(초대·명부 — M5-1g).
     pending_invites: HashMap<PeerId, Vec<Vec<u8>>>,
     /// 방 미확인 메시지 수(M5-1g — 그룹판 unread).
@@ -1076,6 +1078,9 @@ struct App {
     leak: nbeep_ui::hangul::Composer,
     /// 유출 조합이 진행 중인 창(미리보기 표시·확정 대상).
     leak_win: Option<WindowId>,
+    /// IME 이벤트 트레이스(`NEXA_IME_TRACE=1`) — 조합 경합은 추정 금지·실측 필수라
+    /// 이벤트 순서를 stderr로 남긴다(개인 입력이 찍히므로 opt-in 전용).
+    ime_trace: bool,
     /// OS 주 수식키(⌘/Ctrl) 눌림 상태 — `Cmd/Ctrl+,` 판정.
     primary_down: bool,
     /// Shift 눌림 상태 — Shift+Enter 줄바꿈·Shift+이동 선택(08-10).
@@ -1286,36 +1291,46 @@ impl App {
     /// 드롭된 파일을 **큐에 넣는다**(다중 드롭 = 여러 번 호출된다 · winit는 파일마다
     /// 이벤트를 준다). 협상은 한 번에 하나씩 — 승인도 파일마다 받아야 하기 때문이다.
     fn offer_file(&mut self, id: WindowId, path: &std::path::Path) {
+        // 그룹 방 — 명부 팬아웃. 대화 여부와 무관하게 시도 가능, 게이트는 수신자
+        // 승인이다(사용자 확정 08-13).
+        if let Some(gid) = self.group_chat_for(id) {
+            self.offer_file_group(gid, id, path);
+            return;
+        }
         let Some(peer) = self.chat_peer_for(id) else {
             self.status = "파일 전송은 대화를 연 뒤에 — 상대를 먼저 선택하세요".into();
             self.request_redraw(id);
             return;
         };
-        // 사전 점검 — 막혀 있어도 시도는 가능하지만, 미리 알려 주면 헛되이 기다리지 않는다.
+        // 사전 점검 — 핀 미고정·차단은 여전히 막는다. **상호 미왕래는 경고 후 진행**
+        // (08-13 확정: 수신측이 수동 승인으로 강등해 받으므로 발신을 막을 이유가 없다).
         {
             use nbeep_core::TrustStore as _;
             if let Err(reason) =
                 nbeep_core::check_send_eligibility(self.trust.level(peer), self.ledger.get(peer))
             {
-                // 모달로 세운다(08-13 사용자 실기 — 상태바 한 줄은 지나쳐서 "그냥 전송이
-                // 안 된다"로 보였다). 창 생성은 이벤트 루프 참조가 있는 about_to_wait 몫.
-                self.status = format!("보낼 수 없습니다 — {}", reason.message());
-                // 사유별로 "그래서 뭘 하면 되는지"까지 — 모달의 존재 이유다.
-                let how = match reason {
-                    nbeep_core::DenyReason::NoMutualConversation => {
-                        "\n\n이 대화에서 메시지를 서로 한 번씩 주고받으면 파일 전송이 열립니다(스팸 방어 — 상호 확인 규칙)."
-                    }
-                    nbeep_core::DenyReason::NotPinned => {
-                        "\n\n상대와 연결(세션)이 성립하면 신원이 고정됩니다 — 목록에서 상대를 열어 연결부터 하세요."
-                    }
-                    nbeep_core::DenyReason::Blocked => "",
-                };
-                self.pending_alert = Some((
-                    "파일을 보낼 수 없습니다".into(),
-                    format!("{}{how}", reason.message()),
-                ));
-                self.request_redraw(id);
-                return;
+                if matches!(reason, nbeep_core::DenyReason::NoMutualConversation) {
+                    self.push_peer_note(
+                        peer,
+                        "⚠ 아직 서로 메시지를 주고받은 적이 없는 상대입니다 — 상대가 수신 승인을 눌러야 전송이 진행됩니다",
+                    );
+                } else {
+                    // 모달로 세운다(08-13 사용자 실기 — 상태바 한 줄은 지나쳐서 "그냥
+                    // 전송이 안 된다"로 보였다). 창 생성은 about_to_wait 몫.
+                    self.status = format!("보낼 수 없습니다 — {}", reason.message());
+                    let how = match reason {
+                        nbeep_core::DenyReason::NotPinned => {
+                            "\n\n상대와 연결(세션)이 성립하면 신원이 고정됩니다 — 목록에서 상대를 열어 연결부터 하세요."
+                        }
+                        _ => "",
+                    };
+                    self.pending_alert = Some((
+                        "파일을 보낼 수 없습니다".into(),
+                        format!("{}{how}", reason.message()),
+                    ));
+                    self.request_redraw(id);
+                    return;
+                }
             }
         }
         let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
@@ -1333,6 +1348,95 @@ impl App {
         );
         self.pump_send_queue(peer);
         self.request_redraw(id);
+    }
+
+    /// 그룹 방 파일 전송 — 명부 팬아웃(M5-1g · 08-13 확정: 대화 여부 무관 시도 가능,
+    /// 게이트 = 수신자 승인). 미연결 구성원은 경로를 대기시키고 자동 연결한다.
+    fn offer_file_group(
+        &mut self,
+        gid: nbeep_core::group::GroupId,
+        id: WindowId,
+        path: &std::path::Path,
+    ) {
+        let me = self.identity.peer_id();
+        let members: Vec<PeerId> = match self.groups.shared_by_id(gid) {
+            Some(s) => s
+                .roster
+                .members
+                .iter()
+                .copied()
+                .filter(|m| *m != me)
+                .collect(),
+            None => {
+                self.status = "그룹이 없습니다(해산됨)".into();
+                self.request_redraw(id);
+                return;
+            }
+        };
+        let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+        let mut inv = Invalidations::default();
+        let mut offered = 0usize;
+        let mut waiting: Vec<PeerId> = Vec::new();
+        let mut first_contact: Vec<String> = Vec::new();
+        for m in &members {
+            if !self.ledger.get(*m).is_mutual() {
+                first_contact.push(self.peer_title(*m));
+            }
+            if self.conversations.contains_key(m) {
+                self.send_queue
+                    .entry(*m)
+                    .or_default()
+                    .push_back(path.to_path_buf());
+                let b = self.send_batch.entry(*m).or_insert((0, 0, 0, 0));
+                b.1 += 1;
+                b.3 += size;
+                self.pump_send_queue(*m);
+                offered += 1;
+            } else {
+                // 미연결 — 경로를 대기시키고 자동 연결(성립 시 flush_group_sends 합류).
+                let q = self.pending_group_files.entry(*m).or_default();
+                q.push((gid, path.to_path_buf()));
+                if q.len() > GROUP_FILE_KEEP {
+                    let n = q.len() - GROUP_FILE_KEEP;
+                    q.drain(..n);
+                }
+                waiting.push(*m);
+            }
+        }
+        for m in &waiting {
+            self.reconnect.remove(m); // 발신 의사 = 백오프 리셋(즉시 시도)
+            self.start_connect(*m, true); // 자동 — 창을 열지 않는다
+        }
+        // 첫 왕래 상대 1줄 경고(사용자 확정 08-13) — 왜 바로 안 가는지 보이게.
+        if !first_contact.is_empty() {
+            self.push_group_note(
+                gid,
+                &format!(
+                    "⚠ 아직 서로 메시지를 주고받은 적 없는 상대: {} — 수신 승인을 눌러야 전송이 진행됩니다",
+                    first_contact.join(", ")
+                ),
+                &mut inv,
+            );
+        }
+        self.status = format!(
+            "그룹 파일 전송 — 오퍼 {offered} · 연결 대기 {}",
+            waiting.len()
+        );
+        self.request_redraw(id);
+    }
+
+    /// 1:1 스레드에 시스템 안내 라인(그룹판 `push_group_note`와 동형).
+    fn push_peer_note(&mut self, peer: PeerId, note: &str) {
+        let (at_ms, wall) = now_stamp();
+        let line = ChatLine::text(false, nbeep_core::sanitize_message(note), at_ms, wall);
+        if let Some(conv) = self.conversations.get_mut(&peer) {
+            conv.lines.push(line.clone());
+        }
+        let mut inv = Invalidations::default();
+        if let Some(chat) = self.chats.get_mut(&peer) {
+            chat.push_line(line, &mut inv);
+        }
+        self.redraw_conversation(peer);
     }
 
     /// 큐에서 다음 파일을 꺼내 오퍼를 보낸다(협상 중이면 대기).
@@ -1497,6 +1601,13 @@ impl App {
                 || peer.short(),
                 |e| format!("{} ({})", e.name.as_str(), peer.short()),
             );
+        // 첫 왕래 경고(08-13 확정 — 미교환 상대는 거절 대신 수동 승인 강등이므로,
+        // "왜 물어보는지"를 승인 카드에서 바로 보이게 한다).
+        let sender = if self.ledger.get(peer).is_mutual() {
+            sender
+        } else {
+            format!("{sender} · ⚠ 서로 주고받은 메시지가 아직 없습니다")
+        };
         Some(nbeep_ui::OfferInfo {
             sender,
             when: nbeep_plat::clock::local_hms(unix_now()).hms(),
@@ -4030,6 +4141,17 @@ impl App {
                 let _ = conv.out_tx.send(SessionCmd::Group(frames));
             }
         }
+        // 대기 파일(그룹 팬아웃 — 08-13): 세션이 성립했으니 일반 오퍼 큐로 합류.
+        if let Some(files) = self.pending_group_files.remove(&peer) {
+            for (_gid, path) in files {
+                let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                self.send_queue.entry(peer).or_default().push_back(path);
+                let b = self.send_batch.entry(peer).or_insert((0, 0, 0, 0));
+                b.1 += 1;
+                b.3 += size;
+            }
+            self.pump_send_queue(peer);
+        }
         let Some(pends) = self.pending_group_sends.remove(&peer) else {
             return;
         };
@@ -4064,10 +4186,24 @@ impl App {
     /// 자동 연결이 끝내 실패한 상대의 그룹 대기분을 실패로 종결(FR-G-4 — 조용히 버리지 않는다).
     fn fail_group_sends(&mut self, peer: PeerId) {
         self.pending_invites.remove(&peer); // 초대·명부도 폐기(다음 편집 때 재배포된다)
+        let mut inv = Invalidations::default();
+        // 대기 파일도 실패로 종결(조용히 버리지 않는다 — FR-G-4).
+        if let Some(files) = self.pending_group_files.remove(&peer) {
+            let title = self.peer_title(peer);
+            for (gid, path) in files {
+                let name = path
+                    .file_name()
+                    .map_or_else(|| "?".into(), |n| n.to_string_lossy().into_owned());
+                self.push_group_note(
+                    gid,
+                    &format!("⚠ 파일 전달 실패(연결 안 됨): {title} — {name}"),
+                    &mut inv,
+                );
+            }
+        }
         let Some(pends) = self.pending_group_sends.remove(&peer) else {
             return;
         };
-        let mut inv = Invalidations::default();
         let title = self.peer_title(peer);
         for (gid, _) in pends {
             self.push_group_note(gid, &format!("⚠ 전달 실패(연결 안 됨): {title}"), &mut inv);
@@ -6042,6 +6178,13 @@ impl ApplicationHandler<AppEvent> for App {
                 self.request_redraw(id);
             }
             WindowEvent::Focused(false) => {
+                if self.ime_trace {
+                    eprintln!(
+                        "[ime] focus-out preedit={:?} stash={:?}",
+                        self.ime_preedit,
+                        self.ime_preedit_stash.as_ref().map(|(s, _)| s)
+                    );
+                }
                 self.flush_leak(el); // 유출 조합 중이던 음절도 이탈 전에 확정
                                      // 조합 중 포커스 이탈(08-13 실기): OS가 Commit 없이 조합을 버려 마지막
                                      // 음절이 유실됐다 — 남은 프리에딧(또는 직전 소거분)을 확정 문자로 합류.
@@ -6074,6 +6217,13 @@ impl ApplicationHandler<AppEvent> for App {
                 }
             }
             WindowEvent::Ime(winit::event::Ime::Preedit(text, _)) => {
+                if self.ime_trace {
+                    eprintln!(
+                        "[ime] preedit={text:?} composing={} leak={}",
+                        self.ime_composing,
+                        self.leak.is_composing()
+                    );
+                }
                 self.flush_leak(el); // 진짜 IME가 살아났다 — 유출 조합 먼저 확정
                                      // 조합 세션 추적 — 비어 있지 않으면 조합 중(KeyboardInput 문자 차단 근거).
                 let was_composing = self.ime_composing;
@@ -6121,6 +6271,39 @@ impl ApplicationHandler<AppEvent> for App {
                 }
             }
             WindowEvent::Ime(winit::event::Ime::Commit(text)) => {
+                if self.ime_trace {
+                    eprintln!(
+                        "[ime] commit={text:?} pending={:?} leak={}",
+                        self.pending_jamo.map(|(_, c, _)| c),
+                        self.leak.is_composing()
+                    );
+                }
+                // 한/영 전환 직후 macOS가 자모를 **낱개 Commit**으로 흘리는 경합(08-13
+                // 실기: "ㄴ"+"ㅐ"가 그대로 박혀 "ㄴㅐ") — 대화 입력이면 유출 조합기로
+                // 음절을 묶는다(flush 없이 조합을 잇는다).
+                let chat_target =
+                    self.chat_peer_for(id).is_some() || self.group_chat_for(id).is_some();
+                if chat_target && !text.is_empty() && text.chars().all(nbeep_ui::hangul::is_jamo) {
+                    self.ime_composing = false;
+                    self.ime_preedit.clear();
+                    self.ime_preedit_stash = None;
+                    self.ime_cleared_ms = Some(self.now_ms());
+                    self.pending_jamo = None; // 같은 키의 키다운 중복은 폐기
+                    if self.leak_win.is_some_and(|w| w != id) {
+                        self.flush_leak(el); // 다른 창 조합은 먼저 확정
+                    }
+                    let now_ms = self.now_ms();
+                    for c in text.chars() {
+                        let out = self.leak.feed(c);
+                        for oc in out.chars() {
+                            self.route(id, InputEvent::Char { c: oc, now_ms }, el);
+                        }
+                    }
+                    self.leak_win = Some(id);
+                    let p = self.leak.preview().map(String::from).unwrap_or_default();
+                    self.set_chat_preedit(id, p);
+                    return;
+                }
                 self.flush_leak(el); // 유출 조합분이 확정 본문보다 앞선 입력이다
                 self.ime_composing = false; // 확정 = 조합 종료
                 self.ime_preedit.clear(); // 확정됨 — 포커스 이탈 보존 불필요
@@ -6249,6 +6432,15 @@ impl ApplicationHandler<AppEvent> for App {
             WindowEvent::KeyboardInput { event, .. } => {
                 if event.state != ElementState::Pressed {
                     return;
+                }
+                if self.ime_trace {
+                    eprintln!(
+                        "[ime] key={:?} composing={} leak={} pending={:?}",
+                        event.logical_key,
+                        self.ime_composing,
+                        self.leak.is_composing(),
+                        self.pending_jamo.map(|(_, c, _)| c)
+                    );
                 }
                 // IME 조합 중엔 키를 IME가 소유한다 — 같은 키가 KeyboardInput으로도 와서
                 // 자모('ㄱ','ㅣ','ㅁ')가 확정 버퍼에 이중 유입되던 간헐 버그의 차단점.
@@ -6507,6 +6699,10 @@ fn group_resync_keep(settings: &SettingsState) -> usize {
         .unwrap_or(200)
 }
 
+/// 그룹 파일 팬아웃의 미연결 대기 경로 상한(13 §12-1 큐 상한 필수 — 텍스트와 달리
+/// 파일은 오퍼·승인 비용이 커서 낮게 잡는다).
+const GROUP_FILE_KEEP: usize = 16;
+
 fn session_port_from(settings: &SettingsState) -> u16 {
     settings
         .get("net.session_port")
@@ -6696,6 +6892,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         name_prompt: None,
         name_prompt_for: None,
         pending_group_sends: HashMap::new(),
+        pending_group_files: HashMap::new(),
         pending_invites: HashMap::new(),
         gunread: HashMap::new(),
         alert_ctx: None,
@@ -6808,6 +7005,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         pending_jamo: None,
         leak: nbeep_ui::hangul::Composer::new(),
         leak_win: None,
+        ime_trace: std::env::var_os("NEXA_IME_TRACE").is_some(),
         primary_down: false,
         shift_down: false,
         hangul_mode: false,

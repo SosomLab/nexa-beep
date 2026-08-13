@@ -209,10 +209,12 @@ pub enum OfferVerdict {
     Deny(DenyReason),
 }
 
-/// **수신 오퍼 판정** — 자격(핀·상호 대화) → 정책(거부/자동/수동) 순.
+/// **수신 오퍼 판정** — 자격(핀) → 정책(거부/자동/수동) 순.
 ///
-/// 자격 검사가 **항상 먼저**다: 수신 거부 설정을 자동으로 바꿔 놔도, 상호 확인이 안 된
-/// 상대의 파일은 여전히 거부된다.
+/// 자격 검사가 **항상 먼저**다: 수신 거부 설정을 자동으로 바꿔 놔도 미핀 상대는 거부.
+/// **상호 대화 미성립은 거절이 아니라 수동 승인 강등**(사용자 확정 08-13 — 그룹 등
+/// 첫 왕래 전에도 시도는 가능해야 하고, 게이트는 수신자의 승인이다). 단 자동
+/// 수락(Auto/기간 자동)은 상호 확인 전엔 적용하지 않는다 — 스팸 방어의 마지막 선.
 #[must_use]
 pub fn judge_offer(
     trust: TrustLevel,
@@ -223,15 +225,18 @@ pub fn judge_offer(
     if matches!(trust, TrustLevel::Unverified) {
         return OfferVerdict::Deny(DenyReason::NotPinned);
     }
-    if !exchange.is_mutual() {
-        return OfferVerdict::Deny(DenyReason::NoMutualConversation);
-    }
+    let mutual = exchange.is_mutual();
     match policy.tick(now_ms).0 {
         ApprovalPolicy::Basic(BasicApproval::Block) => OfferVerdict::Deny(DenyReason::Blocked),
-        ApprovalPolicy::Basic(BasicApproval::Auto) => OfferVerdict::Accept,
+        // 자동(즉시·기간)은 상호 확인된 상대에게만 — 첫 왕래는 반드시 묻는다.
+        ApprovalPolicy::Basic(BasicApproval::Auto) | ApprovalPolicy::TimedAuto { .. } => {
+            if mutual {
+                OfferVerdict::Accept
+            } else {
+                OfferVerdict::Ask
+            }
+        }
         ApprovalPolicy::Basic(BasicApproval::Manual) => OfferVerdict::Ask,
-        // 만료 전 기간 자동.
-        ApprovalPolicy::TimedAuto { .. } => OfferVerdict::Accept,
     }
 }
 
@@ -277,7 +282,7 @@ mod tests {
     }
 
     #[test]
-    fn unverified_or_unmutual_is_denied_regardless_of_policy() {
+    fn unverified_denied_and_unmutual_downgrades_to_ask() {
         let mutual = Exchange { sent: 1, recv: 1 };
         // 자동 승인이어도 미핀 상대는 거부.
         assert_eq!(
@@ -289,7 +294,8 @@ mod tests {
             ),
             OfferVerdict::Deny(DenyReason::NotPinned)
         );
-        // 핀됐어도 상호 대화가 없으면 거부(사용자 확정 규칙).
+        // 핀됐지만 상호 대화가 없으면 — 거절이 아니라 **수동 승인 강등**(08-13 확정).
+        // 자동 승인 설정도 첫 왕래엔 적용되지 않는다(반드시 묻는다).
         assert_eq!(
             judge_offer(
                 TrustLevel::Pinned,
@@ -297,7 +303,26 @@ mod tests {
                 ApprovalPolicy::Basic(BasicApproval::Auto),
                 0
             ),
-            OfferVerdict::Deny(DenyReason::NoMutualConversation)
+            OfferVerdict::Ask
+        );
+        // 수동 정책에서도 물론 Ask — 차단만이 첫 왕래를 막는다.
+        assert_eq!(
+            judge_offer(
+                TrustLevel::Pinned,
+                Exchange { sent: 0, recv: 0 },
+                ApprovalPolicy::Basic(BasicApproval::Manual),
+                0
+            ),
+            OfferVerdict::Ask
+        );
+        assert_eq!(
+            judge_offer(
+                TrustLevel::Pinned,
+                Exchange { sent: 0, recv: 0 },
+                ApprovalPolicy::Basic(BasicApproval::Block),
+                0
+            ),
+            OfferVerdict::Deny(DenyReason::Blocked)
         );
     }
 
