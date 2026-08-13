@@ -24,10 +24,22 @@ pub struct TcpLink {
 impl TcpLink {
     /// 연결된 스트림을 감싼다(NODELAY — 소량 프레임 지연 제거).
     ///
+    /// **TCP keepalive**(08-13 실기 — FIN 없는 죽음 감지): 상대가 전원 차단·강제 종료·
+    /// 망 단절로 사라지면 FIN/RST가 없어 세션이 **영원히 산 것처럼 보였다**(목록 점이
+    /// 초록으로 잔존). keepalive가 유휴 10초 후 5초 간격으로 찔러 죽은 연결을
+    /// 커널이 닫게 한다(read가 Err로 깨어나 세션 액터가 `Closed`를 낸다 — unix 약 25초,
+    /// Windows는 OS 기본 재시도 횟수라 약 1분). 진짜 생존 신호(하트비트)는 M2-4b.
+    ///
     /// # Errors
     /// 소켓 옵션 설정 실패 시 `io::Error`.
     pub fn new(stream: TcpStream) -> std::io::Result<Self> {
         stream.set_nodelay(true)?;
+        let ka = socket2::TcpKeepalive::new()
+            .with_time(Duration::from_secs(10))
+            .with_interval(Duration::from_secs(5));
+        #[cfg(unix)]
+        let ka = ka.with_retries(3);
+        socket2::SockRef::from(&stream).set_tcp_keepalive(&ka)?;
         Ok(Self { stream })
     }
 

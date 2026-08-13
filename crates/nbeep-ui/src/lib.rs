@@ -38,6 +38,7 @@ pub mod icons {
 
 pub mod about;
 pub mod addr_prompt;
+pub mod alert;
 pub mod avatar;
 pub mod chat_view;
 pub mod controls;
@@ -60,6 +61,7 @@ pub mod widget;
 
 pub use about::{AboutInfo, AboutWidget};
 pub use addr_prompt::AddrPromptWidget;
+pub use alert::AlertWidget;
 pub use chat_view::{
     fmt_hm, update_xfer_ack, update_xfer_in, ChatBody, ChatLine, ChatViewWidget, WallTime,
     XferLine, XferLineState,

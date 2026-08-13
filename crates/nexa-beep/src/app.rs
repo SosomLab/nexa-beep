@@ -656,6 +656,8 @@ enum Role {
     Approve(PeerId),
     /// 주소 직접 입력 모달(DR-19 · M3-16 — `⌘/Ctrl+K`·툴바 +).
     AddEndpoint,
+    /// 경고 모달(08-13 — 상태바 한 줄로는 지나치는 실패를 눈앞에 세운다).
+    Alert,
 }
 
 /// 에코 봇 — 버스에 실물 신원으로 참여해 수신 세션을 받고, Chat 메시지를 에코한다.
@@ -848,6 +850,11 @@ struct App {
     addr_view: Option<nbeep_ui::AddrPromptWidget>,
     /// About 뷰(열려 있을 때만 Some).
     about_view: Option<AboutWidget>,
+    /// 경고 모달 뷰(열려 있을 때만 Some).
+    alert_view: Option<nbeep_ui::AlertWidget>,
+    /// 열어야 할 경고(제목, 본문) — 이벤트 루프 참조가 없는 지점에서 요청되면
+    /// `about_to_wait`가 연다(pending_picker와 같은 패턴).
+    pending_alert: Option<(String, String)>,
     quarantine_view: Option<nbeep_ui::QuarantineWidget>,
     /// 상대별 진행 중 전송(목록 막대·대화창 진척 줄 공용).
     xfer_progress: HashMap<PeerId, nbeep_ui::XferProgress>,
@@ -1001,6 +1008,47 @@ impl App {
         self.request_redraw(id);
     }
 
+    /// 경고 모달을 연다(08-13) — 이미 열려 있으면 내용만 바꾸고 앞으로 가져온다.
+    /// 항상 위(AlwaysOnTop) — 상태바 한 줄로는 지나치는 실패를 눈앞에 세우는 것이 목적.
+    fn open_alert(&mut self, el: &ActiveEventLoop, title: &str, message: &str) {
+        if let Some((aid, _)) = self.windows.iter().find(|(_, e)| e.role == Role::Alert) {
+            let aid = *aid;
+            let mut inv = Invalidations::default();
+            if let Some(av) = &mut self.alert_view {
+                av.set_content(title, message, &mut inv);
+            }
+            if let Some(e) = self.windows.get(&aid) {
+                e.window.focus_window();
+            }
+            self.request_redraw(aid);
+            return;
+        }
+        let attrs = Window::default_attributes()
+            .with_title("Nexa Beep — 알림")
+            .with_inner_size(winit::dpi::LogicalSize::new(400.0, 170.0))
+            .with_resizable(false)
+            .with_window_level(winit::window::WindowLevel::AlwaysOnTop)
+            .with_window_icon(self.icon.clone());
+        let window = Rc::new(el.create_window(attrs).unwrap());
+        let scale = window.scale_factor() as f32;
+        let context = softbuffer::Context::new(window.clone()).unwrap();
+        let surface = SbSurface::new(&context, window.clone()).unwrap();
+        let id = window.id();
+        self.windows.insert(
+            id,
+            WinEntry {
+                role: Role::Alert,
+                window,
+                surface,
+                cursor: (0, 0),
+                scale,
+            },
+        );
+        self.alert_view = Some(nbeep_ui::AlertWidget::new(title, message));
+        self.layout_window(id);
+        self.request_redraw(id);
+    }
+
     /// 주 창 IME 토글 — 목록(직접 조합) = off · 대화(실제 텍스트) = on.
     fn set_main_ime(&self, on: bool) {
         if let Some(mid) = self.main_id {
@@ -1043,7 +1091,23 @@ impl App {
             if let Err(reason) =
                 nbeep_core::check_send_eligibility(self.trust.level(peer), self.ledger.get(peer))
             {
+                // 모달로 세운다(08-13 사용자 실기 — 상태바 한 줄은 지나쳐서 "그냥 전송이
+                // 안 된다"로 보였다). 창 생성은 이벤트 루프 참조가 있는 about_to_wait 몫.
                 self.status = format!("보낼 수 없습니다 — {}", reason.message());
+                // 사유별로 "그래서 뭘 하면 되는지"까지 — 모달의 존재 이유다.
+                let how = match reason {
+                    nbeep_core::DenyReason::NoMutualConversation => {
+                        "\n\n이 대화에서 메시지를 서로 한 번씩 주고받으면 파일 전송이 열립니다(스팸 방어 — 상호 확인 규칙)."
+                    }
+                    nbeep_core::DenyReason::NotPinned => {
+                        "\n\n상대와 연결(세션)이 성립하면 신원이 고정됩니다 — 목록에서 상대를 열어 연결부터 하세요."
+                    }
+                    nbeep_core::DenyReason::Blocked => "",
+                };
+                self.pending_alert = Some((
+                    "파일을 보낼 수 없습니다".into(),
+                    format!("{}{how}", reason.message()),
+                ));
                 self.request_redraw(id);
                 return;
             }
@@ -3179,6 +3243,12 @@ impl App {
                     av.set_bounds(Rect::new(0, 0, w, h), &mut inv);
                 }
             }
+            Role::Alert => {
+                if let Some(av) = &mut self.alert_view {
+                    av.set_scale(scale, &mut inv);
+                    av.set_bounds(Rect::new(0, 0, w, h), &mut inv);
+                }
+            }
             Role::AddEndpoint => {
                 if let Some(av) = &mut self.addr_view {
                     av.set_scale(scale, &mut inv);
@@ -3549,6 +3619,15 @@ impl App {
                     }
                 }
             }
+            Role::Alert => {
+                if let Some(av) = &mut self.alert_view {
+                    av.on_event(&ev, &mut inv);
+                    if av.take_closed() {
+                        self.alert_view = None;
+                        self.windows.remove(&id);
+                    }
+                }
+            }
             Role::AddEndpoint => {
                 let (mut submit, mut cancel) = (None, false);
                 if let Some(av) = &mut self.addr_view {
@@ -3726,6 +3805,11 @@ impl App {
             }
             Role::About => {
                 if let Some(av) = &self.about_view {
+                    av.paint(&mut ctx, &theme);
+                }
+            }
+            Role::Alert => {
+                if let Some(av) = &self.alert_view {
                     av.paint(&mut ctx, &theme);
                 }
             }
@@ -4054,6 +4138,14 @@ impl ApplicationHandler<AppEvent> for App {
             AppEvent::Closed { peer } => {
                 self.conversations.remove(&peer);
                 self.closed_peers.insert(peer); // 목록 상태 점 = 끊김(빨강)
+                                                // 인바운드 전용 비발견 상대(수동 주소도, 발견 경로도 없음)는 세션이
+                                                // 끝나면 **다시 닿을 수단이 없다** — 목록에 유령으로 남기지 않는다(08-13).
+                                                // 수동 주소가 있으면 남긴다(빨강 · 클릭 = 그 주소로 재연결).
+                if !self.manual_addrs.contains_key(&peer) && self.table.get(peer).is_none() {
+                    self.extra_peers.remove(&peer);
+                    self.unread.remove(&peer);
+                    self.update_main_title();
+                }
                 self.status = "상대와의 세션이 종료됨".into();
                 let mut inv = Invalidations::default();
                 self.refresh_rows(&mut inv);
@@ -4105,6 +4197,9 @@ impl ApplicationHandler<AppEvent> for App {
             }
             AppEvent::ConnectFailed { peer, why } => {
                 self.connecting.finish(Some(peer), None);
+                // 닿지 않은 상대 = 목록 점 빨강(08-13 실기 — 실패 후 회색으로 남으면
+                // "종료된 상대"라는 사실이 표시되지 않았다).
+                self.closed_peers.insert(peer);
                 self.status = format!("연결 실패({}): {why}", self.peer_title(peer));
                 let mut inv = Invalidations::default();
                 self.refresh_rows(&mut inv);
@@ -4256,6 +4351,10 @@ impl ApplicationHandler<AppEvent> for App {
         // 설정에서 요청된 백업·복원 피커 열기(M2-5a).
         if let Some(purpose) = self.pending_picker.take() {
             self.open_picker(el, purpose);
+        }
+        // 경고 모달 열기(08-13 — 이벤트 루프 참조가 없는 지점의 요청을 여기서 처리).
+        if let Some((title, message)) = self.pending_alert.take() {
+            self.open_alert(el, &title, &message);
         }
         // 수신 승인 창 생성.
         if let Some(peer) = self.pending_approve_window.take() {
@@ -4469,6 +4568,7 @@ impl ApplicationHandler<AppEvent> for App {
                         Role::Gallery => self.gallery_view = None,
                         Role::Picker => self.picker_view = None,
                         Role::About => self.about_view = None,
+                        Role::Alert => self.alert_view = None,
                         Role::AddEndpoint => self.addr_view = None,
                         Role::Profile => self.profile_view = None,
                         Role::PeerInfo(_) => self.peer_info_view = None,
@@ -4965,6 +5065,8 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         settings_view: None,
         gallery_view: None,
         about_view: None,
+        alert_view: None,
+        pending_alert: None,
         quarantine_view: None,
         xfer_progress: HashMap::new(),
         ledger: nbeep_core::ExchangeLedger::new(),
