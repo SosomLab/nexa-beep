@@ -3,6 +3,21 @@
 > **이 문서가 빌드·테스트·검증 절차의 SSOT다.** 절차를 바꾼 **그 커밋에서 이 문서를 같이 고친다**(사후 정리 금지).
 > 규약 출처 [16 §2-4](16-doc-git-conventions.md#2-문서-작성--필수-규칙-8).
 
+## 0-1. 재기동 한 방 — `tools/relaunch.sh`
+
+실기 반복에서 매번 한 단계씩 빠졌다(빌드를 잊거나 · 옛 프로세스가 포트를 물고 있거나 ·
+`nbeep-imgdec` 복사를 빠뜨려 아바타만 죽거나). 스크립트로 고정했다.
+
+```bash
+./tools/relaunch.sh            # ① 전부 종료 ② 릴리스 빌드 ③ 3신원 준비 ④ 기동 ⑤ 발견 확인
+./tools/relaunch.sh --fresh    # A·B 신원 초기화(⚠️ 핀·그룹·프로필 삭제)
+./tools/relaunch.sh --gate     # 빌드 대신 전체 게이트
+./tools/relaunch.sh --no-build # 재기동만
+```
+
+**기본은 신원 보존**이고, 마지막에 **상호 발견까지 확인**한 뒤에야 성공으로 친다
+(창만 떠도 발견이 막히면 아무것도 못 한다). 3신원의 근거는 [33 §2](33-group-chat-test-guide.md).
+
 ## 1. 명령 (SSOT) — Rust 워크스페이스([07](07-adr-0001-stack.md))
 
 > 로컬·CI 동일. `rust-toolchain.toml`이 stable·컴포넌트(rustfmt/clippy)·4타깃을 자동 고정한다.
