@@ -7,6 +7,7 @@
 
 ## 2026-08-13
 
+- **chat-live 대기 중 /quit 불통(Windows) 해소 — 공유 stdin 채널**(main · 사용자 실기): `RawTerm`이 unix 전용이라 대기 루프가 Windows 콘솔에서 stdin을 안 읽었다(파이프 가정에 대화형 콘솔이 같이 떨어짐). 전담 스레드 줄 채널을 대기·대화가 공유 소비 + **EOF 해석 분리**(터미널=종료/파이프·컨테이너=대기 유지) + 비-raw 대화도 **세션 끊김 즉시 복귀**(Enter 불요 — "/exit를 쳐야 했다" 해소). **501 green**. 상세 [journal/2026-08-13.md](journal/2026-08-13.md).
 - **WIME-6 종결 — 조합 중 Enter = 확정+전송 동시(사용자 확정)**(main): Windows IME는 Commit 직후 같은 키의 KeyboardInput이 **또** 온다(mac은 IME가 삼킴). 1차로 잔향을 삼켰다가(2단 전송) 재실기 피드백으로 **Enter는 통과가 정답**(Commit 선행 합류 → 확정+전송 한 번에 · Windows 메신저 관례·chat-live 콘솔과 동일·DR-16) — **Esc 잔향만 차단**. WIME-1·5 실기 ✅. **501 green**. 상세 [journal/2026-08-13.md](journal/2026-08-13.md).
 - **무인자 기본 = 창 모드+실물 발견 · `--help` 신설**(main · 사용자 확정): 무인자 = `--window --live` 동등(DR-1 "실행 = 참여") · `from_gui_shell`은 콘솔 분리에만 잔존 · `--version` 명시 분리(배포 검증 의존) · 미지 인자는 안내 후 종료(오타 보호) · `--help` = 모드·옵션·챗 서브모드 안내. 상세 [journal/2026-08-13.md](journal/2026-08-13.md).
 - **Windows 목록 타입어헤드 한글 — 한/영 상태를 앱이 든다**(main · [27 §8](27-typeahead-hangul-composition.md)): 실기(사용자) — 목록 창만 한/영 불가(대화창 정상 = 단서). 원인은 회귀가 아니라 **직접 조합 설계의 전제(IME 꺼도 자모 도착)가 macOS 전용** — Windows는 IME를 끊으면 라틴만 온다. 처방 = `hangul::jamo_from_qwerty`(QWERTY→두벌식) + `app.hangul_mode` 토글(한/영 키는 드라이버 수준이라 IME 없이 도달) · 상태바 고지 · 맥 경로 불변. **501 green**(+4). 같은 세션 육안: `--separate-windows` ✅ · 주소 창 모달리스 관찰(P3). 상세 [journal/2026-08-13.md](journal/2026-08-13.md).

@@ -11,7 +11,34 @@ const HELP_COMMANDS: &str = "[명령] /quit(/exit) = 종료 · /send <파일> = 
 /accept · /reject · /help · Ctrl+D = 종료";
 
 /// 상대를 기다리는 동안 쓸 수 있는 것 — 이때는 전송할 상대가 없으니 종료만 가능하다.
-const HELP_WAITING: &str = "[대기] /quit + Enter 또는 Ctrl+D = 종료 (Ctrl+C도 됩니다)";
+const HELP_WAITING: &str =
+    "[대기] /quit + Enter 또는 Ctrl+D(Windows는 Ctrl+Z+Enter) = 종료 (Ctrl+C도 됩니다)";
+
+/// 공유 stdin 줄 채널 — **raw 미지원 경로**(Windows 콘솔 · 파이프) 전용.
+///
+/// 스레드 하나가 stdin을 전담해 줄 단위로 채널에 넣는다. 대기 루프와 대화 루프가
+/// **같은 채널**을 번갈아 소비한다 — 각자 stdin을 직접 read하면 서로 줄을 뺏는다
+/// (대기 스레드가 대화의 첫 줄을 삼키는 식). 블로킹 read를 스레드로 밀어낸 이유는
+/// 폴링 루프가 연결·종료 신호를 계속 봐야 해서다(08-13 실기 — Windows 대기 중
+/// `/quit` 불통). EOF(Ctrl+Z+Enter · 파이프 끝) = 송신단 드롭 = 채널 닫힘.
+fn stdin_lines() -> &'static std::sync::Mutex<std::sync::mpsc::Receiver<String>> {
+    use std::sync::{mpsc, Mutex, OnceLock};
+    static CH: OnceLock<Mutex<mpsc::Receiver<String>>> = OnceLock::new();
+    CH.get_or_init(|| {
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            use std::io::BufRead as _;
+            let stdin = std::io::stdin();
+            for line in stdin.lock().lines() {
+                let Ok(line) = line else { break };
+                if tx.send(line).is_err() {
+                    break; // 소비자가 사라졌다(프로세스 종료 경로)
+                }
+            }
+        });
+        Mutex::new(rx)
+    })
+}
 
 /// 인터랙티브 채팅 역할.
 pub(crate) enum ChatRole {
@@ -107,9 +134,11 @@ fn wait_with_quit<T>(mut poll: impl FnMut() -> Option<T>) -> Option<T> {
     let shutdown = nbeep_plat::shutdown::install();
     // 폴링 모드 — 키가 없으면 0.1초 뒤 돌아온다(그 틈에 연결·종료 신호를 본다).
     let raw = nbeep_plat::term::RawTerm::enter_polling();
-    if raw.is_raw() {
-        println!("{HELP_WAITING}");
-    }
+    println!("{HELP_WAITING}");
+    // 대화형인가 — 채널 닫힘(EOF)의 해석이 갈린다: 사람 터미널이면 "종료 의사",
+    // 파이프·컨테이너(stdin 없음)면 "명령 경로가 없을 뿐"이라 연결 대기는 계속한다.
+    let interactive = std::io::IsTerminal::is_terminal(&std::io::stdin());
+    let mut chan_dead = false;
     let mut stdin = std::io::stdin();
     let mut pending = Vec::<u8>::new();
     let mut line = String::new();
@@ -125,8 +154,37 @@ fn wait_with_quit<T>(mut poll: impl FnMut() -> Option<T>) -> Option<T> {
             return None;
         }
         if !raw.is_raw() {
-            // TTY가 아니면(파이프·CI) 키를 볼 것이 없다 — 연결만 기다린다.
-            std::thread::sleep(std::time::Duration::from_millis(100));
+            // raw 미지원(Windows 콘솔 · 파이프) — 전담 스레드의 줄 채널로 명령을 받는다.
+            // 그전엔 여기서 stdin을 아예 안 읽어 **대기 중 /quit이 불통**이었다
+            // (08-13 Windows 실기 · 직접 블로킹 read는 연결 폴링을 세운다).
+            if chan_dead {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                continue;
+            }
+            match stdin_lines()
+                .lock()
+                .expect("stdin 채널 잠금")
+                .recv_timeout(std::time::Duration::from_millis(100))
+            {
+                Ok(typed) => {
+                    if matches!(typed.trim(), "/quit" | "/exit" | "/q") {
+                        println!("[종료] 대기를 중단합니다.");
+                        return None;
+                    }
+                    if !typed.trim().is_empty() {
+                        println!("{HELP_WAITING}");
+                    }
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    if interactive {
+                        // 사람 터미널의 EOF(Ctrl+Z+Enter) — Ctrl+D와 같은 종료 의사.
+                        println!("[종료] 대기를 중단합니다.");
+                        return None;
+                    }
+                    chan_dead = true; // 파이프 끝 — 명령만 없어진 것. 연결은 계속 기다린다.
+                }
+            }
             continue;
         }
         let n = match stdin.read(&mut chunk) {
@@ -727,12 +785,27 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
             }
         }
     } else {
-        use std::io::BufRead as _;
-        let stdin = std::io::stdin();
-        for line in stdin.lock().lines() {
-            let Ok(line) = line else { break };
-            if !handle_line(line) {
+        // raw 미지원(Windows 콘솔 · 파이프) — 대기 루프와 **같은** 공유 채널을 소비한다
+        // (직접 read하면 대기 스레드와 줄을 뺏고 뺏긴다). 타임아웃 폴이라 종료 신호와
+        // **세션 사망도 즉시** 본다 — 그전엔 블로킹 read라 세션이 끊겨도 Enter를 칠
+        // 때까지 갇혀 있었다(08-13 실기: "[종료] 세션 끊김" 후 /exit를 쳐야 했던 것).
+        let rx = stdin_lines().lock().expect("stdin 채널 잠금");
+        loop {
+            if shutdown.requested() {
+                println!("[종료] 중단합니다.");
                 break;
+            }
+            if !alive.load(std::sync::atomic::Ordering::Relaxed) {
+                break; // 세션이 끝났다 — 호출자(대기 루프)로 돌아간다
+            }
+            match rx.recv_timeout(std::time::Duration::from_millis(100)) {
+                Ok(line) => {
+                    if !handle_line(line) {
+                        break;
+                    }
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break, // EOF
             }
         }
     }

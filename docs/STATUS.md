@@ -3,7 +3,11 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
-> **갱신: 2026-08-13 10차 (KST)** — **무인자 기본 = 창+라이브 · `--help` 신설 · WIME-6(조합 Enter 전송) 수정**(main · 사용자 확정+실기):
+> **갱신: 2026-08-13 11차 (KST)** — **chat-live 대기 중 /quit 불통(Windows) — 공유 stdin 채널**(main · 사용자 실기):
+> ① 실기: 대화 중엔 입력이 되는데 **대기 중엔 /quit이 듣지 않는다**. 원인 = `RawTerm`이 unix 전용(Windows raw는 R-16과 별도 슬라이스)이라 대기 루프 비-raw 분기가 **stdin을 아예 안 읽음**(파이프·CI 가정에 Windows 대화형 콘솔이 같이 떨어짐). 대화 중 입력은 별도 블로킹 폴백 덕인데 이쪽은 반대로 **세션이 끊겨도 Enter까지 갇힘**(같은 날 "/exit를 쳐야 했다"의 원인).
+> ② 수정 = **전담 스레드 stdin 줄 채널**(`stdin_lines()`)을 대기·대화가 번갈아 소비(직접 read = 줄 뺏김) · 타임아웃 폴로 연결 폴링·세션 사망 즉시 반응 · **EOF 해석 분리**(`IsTerminal` — 사람 터미널 EOF=종료 / 파이프·`docker -d`=대기 유지 · 컨테이너 상주 회귀 방지) · unix raw 무변경. **501 green** · clippy 0. ⏸ 실기 재확인. [journal/2026-08-13.md](journal/2026-08-13.md).
+>
+> **직전(08-13 10차)** — **무인자 기본 = 창+라이브 · `--help` 신설 · WIME-6(조합 Enter 전송) 수정**(main · 사용자 확정+실기):
 > ① **무인자 = `--window --live` 동등**(사용자 확정 — DR-1 "실행 = 참여"): 어디서 부르든 무인자면 창. `from_gui_shell` 휴리스틱(M5-4d)은 **탐색기 콘솔 분리에만** 잔존 · mac `launched_from_app_bundle` 제거 · **`--version` 명시 분리**(배포 검증 26 §7 의존이라 선행 필수) · **미지 인자는 GUI로 삼키지 않고 안내 후 종료**(오타 보호) · `--window` 명시 = InMemory 데모 유지. ⚠️ 헤드리스 무인자 = 창 시도(26 §6 주석).
 > ② **`--help`/`-h`** — 창 옵션·인터랙티브 단말(챗 서브모드·라이브챗·`--port`)·비대화 도구·대화 중 명령 안내.
 > ③ **WIME 실기(사용자)** — WIME-1 ✅(자소 백스페이스) · WIME-5 ✅(전환 경계) · **WIME-6 = 사용자 확정으로 종결**: Windows IME는 Commit 직후 같은 키의 KeyboardInput이 또 온다(mac은 IME가 삼킴). 1차 수정(잔향 삼킴 = 2단 전송)을 재실기 후 **"조합 확정+전송 동시"로 확정** — Enter 잔향은 **일부러 통과**(Commit이 버퍼 먼저 → Enter 전송 · Windows 메신저 관례 · chat-live 콘솔과 동일 · DR-16), **Esc 잔향만 차단**(조합 취소→화면 닫기 새는 것 · `ime_cleared_ms` 1회성). 애초 실기의 `홍길ㄷ` 잘림은 타이핑 타이밍이지 통과의 문제가 아님(Commit 선행 합류). **501 green** · clippy 0 · rustdoc 0 · CLI 스모크 3종 실측(`--version`·`--help`·오타 인자 exit 2) · 무인자 창 기동 실측. [journal/2026-08-13.md](journal/2026-08-13.md).
