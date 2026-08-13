@@ -31,8 +31,10 @@ pub struct TextBox {
     caret_xs: std::cell::RefCell<Vec<i32>>,
     /// 드래그 선택 중.
     dragging: bool,
-    /// 마지막 클릭 (시각 ms, 연속 횟수) — 더블·트리플 판정.
-    last_click: (u64, u8),
+    /// 마지막 클릭 (캐럿 인덱스, 연속 횟수) — 더블·트리플 판정.
+    /// `MouseDown`에는 시각이 없어 **같은 위치 + 무개입**(사이에 키 입력 없음)으로
+    /// 연속을 판정한다(시각 주입은 M3-1e). 위치가 다르면 새 체인 = 캐럿 이동만.
+    last_click: (usize, u8),
     /// 가로 스크롤(px · ① 08-13) — 텍스트가 폭을 넘으면 **캐럿이 항상 보이게**
     /// 페인트가 조정한다(셀: 페인트는 &self).
     hscroll: std::cell::Cell<i32>,
@@ -323,11 +325,21 @@ impl Widget for TextBox {
                     self.base.focused = true;
                     // 클릭 지점으로 캐럿 이동 + 드래그 선택 시작(기본 텍스트 동작).
                     let idx = self.caret_at_x(x);
-                    self.last_click.1 = if self.last_click.1 >= 3 {
-                        1
+                    // 연속 클릭은 **같은 캐럿 위치일 때만** 잇는다(08-13 실기 — 위치 무관
+                    // 누적이라 두 번째 단일 클릭이 단어 선택이 돼 캐럿 재배치가 불가능했다).
+                    // Shift+클릭은 언제나 선택 확장 — 더블클릭 체인에 넣지 않는다.
+                    self.last_click.1 = if shift {
+                        0
+                    } else if self.last_click.0 == idx && self.last_click.1 > 0 {
+                        if self.last_click.1 >= 3 {
+                            1
+                        } else {
+                            self.last_click.1 + 1
+                        }
                     } else {
-                        self.last_click.1 + 1
+                        1
                     };
+                    self.last_click.0 = idx;
                     match self.last_click.1 {
                         2 => self.select_word_at(idx),                 // 더블 = 단어
                         3 => self.edit.key(EditKey::SelectAll, false), // 트리플 = 전체
@@ -356,6 +368,7 @@ impl Widget for TextBox {
                 self.dragging = false;
             }
             InputEvent::Char { c, .. } if self.base.focused => {
+                self.last_click.1 = 0; // 타이핑 = 클릭 체인 끊김(클릭-타이핑-클릭 ≠ 더블클릭)
                 if c == '\u{8}' {
                     self.edit.backspace();
                 } else if !c.is_control() {
@@ -368,27 +381,51 @@ impl Widget for TextBox {
                 key,
                 shift,
                 primary,
-            } if self.base.focused => match key {
-                Key::Enter => {
-                    self.committed = true;
-                    inv.push(self.base.bounds);
+            } if self.base.focused => {
+                self.last_click.1 = 0; // 키 개입 = 클릭 체인 끊김
+                match key {
+                    Key::Enter => {
+                        self.committed = true;
+                        inv.push(self.base.bounds);
+                    }
+                    // ⌘/Ctrl+←/→ = 줄 처음/끝(mac 관례 · DR-16 — 08-13 전수 검사).
+                    // 이동·선택 키는 **다시 그리기를 요청해야** 캐럿·선택 반전이 보인다
+                    // (08-13 실기 — 프로필 필드에서 ←/→·Shift+←·⌘A가 무반응으로 보였다).
+                    Key::Left if primary => {
+                        self.edit.key(EditKey::Home, shift);
+                        inv.push(self.base.bounds);
+                    }
+                    Key::Right if primary => {
+                        self.edit.key(EditKey::End, shift);
+                        inv.push(self.base.bounds);
+                    }
+                    Key::Left => {
+                        self.edit.key(EditKey::Left, shift);
+                        inv.push(self.base.bounds);
+                    }
+                    Key::Right => {
+                        self.edit.key(EditKey::Right, shift);
+                        inv.push(self.base.bounds);
+                    }
+                    Key::Home => {
+                        self.edit.key(EditKey::Home, shift);
+                        inv.push(self.base.bounds);
+                    }
+                    Key::End => {
+                        self.edit.key(EditKey::End, shift);
+                        inv.push(self.base.bounds);
+                    }
+                    Key::Delete => {
+                        self.edit.key(EditKey::DeleteForward, false);
+                        self.changed = true;
+                        inv.push(self.base.bounds);
+                    }
+                    _ => {}
                 }
-                // ⌘/Ctrl+←/→ = 줄 처음/끝(mac 관례 · DR-16 — 08-13 전수 검사).
-                Key::Left if primary => self.edit.key(EditKey::Home, shift),
-                Key::Right if primary => self.edit.key(EditKey::End, shift),
-                Key::Left => self.edit.key(EditKey::Left, shift),
-                Key::Right => self.edit.key(EditKey::Right, shift),
-                Key::Home => self.edit.key(EditKey::Home, shift),
-                Key::End => self.edit.key(EditKey::End, shift),
-                Key::Delete => {
-                    self.edit.key(EditKey::DeleteForward, false);
-                    self.changed = true;
-                    inv.push(self.base.bounds);
-                }
-                _ => {}
-            },
+            }
             InputEvent::SelectAll if self.base.focused => {
                 self.edit.key(EditKey::SelectAll, false);
+                inv.push(self.base.bounds); // 선택 반전이 즉시 보여야 한다
             }
             _ => {}
         }
@@ -647,6 +684,81 @@ mod tests {
         // 세 번째 = 전체.
         t.on_event(&click(5, 15), &mut inv);
         assert_eq!(t.edit.selected_text().as_deref(), Some("alpha beta"));
+    }
+
+    #[test]
+    fn second_click_elsewhere_moves_caret_without_selecting() {
+        // 08-13 실기 — 위치 무관 클릭 누적이라 두 번째 단일 클릭이 단어 선택이 됐다.
+        let (mut t, mut inv) = tb();
+        t.set_text("alpha beta");
+        measure(&t);
+        t.on_event(&click(5, 15), &mut inv); // 앞쪽
+        let far = *t.caret_xs.borrow().last().unwrap(); // 맨 끝 경계
+        t.on_event(&click(far, 15), &mut inv); // 다른 위치 = 새 체인
+        assert!(
+            t.edit.selected_text().is_none(),
+            "다른 위치의 두 번째 클릭은 캐럿 이동이지 단어 선택이 아니다"
+        );
+        assert_eq!(t.edit.caret(), 10, "캐럿은 클릭 지점으로");
+    }
+
+    #[test]
+    fn shift_click_extends_selection_not_word_select() {
+        let (mut t, mut inv) = tb();
+        t.set_text("alpha beta");
+        measure(&t);
+        t.on_event(&click(5, 15), &mut inv); // 캐럿 0
+        let far = *t.caret_xs.borrow().last().unwrap();
+        t.on_event(
+            &InputEvent::MouseDown {
+                x: far,
+                y: 15,
+                shift: true,
+                primary: false,
+            },
+            &mut inv,
+        );
+        assert_eq!(
+            t.edit.selected_text().as_deref(),
+            Some("alpha beta"),
+            "Shift+클릭 = 앵커에서 클릭 지점까지 확장"
+        );
+    }
+
+    #[test]
+    fn typing_breaks_click_chain() {
+        let (mut t, mut inv) = tb();
+        t.set_text("alpha");
+        measure(&t);
+        t.on_event(&click(5, 15), &mut inv);
+        t.on_event(&ch('x'), &mut inv); // 키 개입 = 체인 끊김
+        measure(&t);
+        t.on_event(&click(5, 15), &mut inv);
+        assert!(
+            t.edit.selected_text().is_none(),
+            "클릭-타이핑-클릭은 더블클릭이 아니다"
+        );
+    }
+
+    #[test]
+    fn movement_and_select_keys_request_repaint() {
+        // 08-13 실기 — 이동·선택 키가 무효화를 안 밀어 프로필 필드에서
+        // ←/→·Shift+←·⌘A가 무반응(화면 불변)으로 보였다.
+        let (mut t, _) = tb();
+        t.set_text("abc");
+        t.base.focused = true;
+        let key = |key, shift, primary| InputEvent::Key {
+            key,
+            shift,
+            primary,
+        };
+        let mut inv = Invalidations::default();
+        t.on_event(&key(Key::Left, true, false), &mut inv);
+        assert!(!inv.is_empty(), "Shift+← = 다시 그리기 요청");
+        let mut inv = Invalidations::default();
+        t.on_event(&InputEvent::SelectAll, &mut inv);
+        assert!(!inv.is_empty(), "⌘/Ctrl+A = 다시 그리기 요청");
+        assert_eq!(t.edit.selected_text().as_deref(), Some("abc"));
     }
 
     #[test]
