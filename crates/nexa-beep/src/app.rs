@@ -922,6 +922,11 @@ struct App {
     toolbar: Toolbar,
     /// 세션이 끊긴 상대(AppEvent::Closed) — 목록 상태 점 Lost 근거. 재수립 시 제거.
     closed_peers: std::collections::HashSet<PeerId>,
+    /// 끊긴 대화의 **스레드 대피소**(DR-26 — 대화 상태는 상대별 유지 · 08-13 실기).
+    /// `Closed`가 `Conversation`(세션 채널)을 지울 때 lines만 여기로 옮기고, 재수립
+    /// (`install_conversation`)이 되찾아 간다 — 그전엔 끊김 = 스레드 통째 소실이었다.
+    /// (영속 기록은 M2-5b — 이건 프로세스 수명 안의 보존이다.)
+    parked_lines: HashMap<PeerId, Vec<ChatLine>>,
     /// **비발견 상대**(수동 등록·다른 서브넷 인바운드 — 사용자 실기 08-13) — 발견
     /// 테이블에 ANNOUNCE가 안 닿아도 목록에 유지한다(대화창을 닫으면 사라지던 버그).
     /// 이름은 성립 시 스냅샷(프로필 이름은 2줄째로 따로 표시된다).
@@ -2031,13 +2036,18 @@ impl App {
         let _ = out_tx.send(SessionCmd::Control(vec![
             nbeep_core::ProfileMsg::Request.encode()
         ]));
-        self.conversations.insert(
-            peer,
-            Conversation {
-                out_tx,
-                lines: Vec::new(),
-            },
-        );
+        // ★ 스레드 보존(DR-26 · 08-13 실기) — 끊겼다 재수립돼도 대화 기록은 이어진다.
+        //   대피소(parked) 우선, 살아 있는 기존 대화를 갈아끼우는 경우(경합)도 이력 유지.
+        let lines = self
+            .parked_lines
+            .remove(&peer)
+            .or_else(|| self.conversations.remove(&peer).map(|c| c.lines))
+            .unwrap_or_default();
+        self.conversations.insert(peer, Conversation { out_tx, lines });
+        // ★ 새 세션 = 새 seq 공간(08-13 실기 — 상대가 재시작·재대화로 seq를 처음부터
+        //   다시 발급하면 옛 기억이 새 메시지를 조용히 폐기했다). 옛 세션 재생은 Noise
+        //   키가 원천 차단하므로 세션 경계 리셋은 안전하다(nbeep-core reset_device 문서).
+        self.dedup.reset_device(peer);
         // 세션 재수립 = 끊김 상태 해제(목록 점 Active로).
         self.closed_peers.remove(&peer);
         // 비발견 상대(수동 등록·다른 서브넷 인바운드)는 발견 테이블에 없다 — 목록에
@@ -4172,7 +4182,13 @@ impl ApplicationHandler<AppEvent> for App {
                 self.redraw_conversation(peer);
             }
             AppEvent::Closed { peer } => {
-                self.conversations.remove(&peer);
+                // 세션 채널은 지우되 **스레드는 대피**(DR-26 — 08-13 실기: 끊김·재연결마다
+                // 받았던 메시지가 통째로 사라졌다). 재수립 시 install이 되찾아 간다.
+                if let Some(c) = self.conversations.remove(&peer) {
+                    if !c.lines.is_empty() {
+                        self.parked_lines.insert(peer, c.lines);
+                    }
+                }
                 self.closed_peers.insert(peer); // 목록 상태 점 = 끊김(빨강)
                                                 // 인바운드 전용 비발견 상대(수동 주소도, 발견 경로도 없음)는 세션이
                                                 // 끝나면 **다시 닿을 수단이 없다** — 목록에 유령으로 남기지 않는다(08-13).
@@ -5304,6 +5320,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         addr_view: None,
         ime_composing: false,
         ime_cleared_ms: None,
+        parked_lines: HashMap::new(),
         pending_jamo: None,
         primary_down: false,
         shift_down: false,

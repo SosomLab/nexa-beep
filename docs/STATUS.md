@@ -3,7 +3,12 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
-> **갱신: 2026-08-13 11차 (KST)** — **chat-live 대기 중 /quit 불통(Windows) — 공유 stdin 채널**(main · 사용자 실기):
+> **갱신: 2026-08-13 12차 (KST)** — **재대화 메시지 증발 + 끊김 시 스레드 소실 수정**(main · 사용자 실기 3증상):
+> ① **메시지 증발** = CLI가 대화마다 seq 1부터 재발급 × GUI `DedupIndex`는 앱 수명 기억 → 2번째 대화부터 **조용히 중복 폐기**(GUI 재시작 시 역방향도 동일). 수정 = **`DedupIndex::reset_device`** — 새 세션 성립 = 그 기기 기억 리셋(옛 세션 재생은 Noise 키가 원천 차단 — 중복 창의 소임은 세션 안에서만).
+> ② **받은 메시지 소실** = `Closed`가 `Conversation`(세션 채널+스레드 한 몸)을 통째 삭제 — **DR-26 위반**. 수정 = **스레드 대피소 `parked_lines`**(Closed 시 lines 대피 → install이 복원 · `conversations` 존재 = 세션 술어인 기존 지점 전부 무변경).
+> ③ **/quit 후 대화 재개** = GUI 자동 재연결(ⓑ) × chat-live 상주 accept — 각자 설계대로, **"정중한 종료" 신호 부재**(설계 공백 · M2-4b N-1~N-4에 `Bye` 자리 검토 등록). 대기 중 `/quit`은 11차 수정 실기 ✅. **502 green**(+1) · clippy 0 · rustdoc 0. ⏸ 재실기: 재대화 양방향 도달·재연결 스레드 유지. [journal/2026-08-13.md](journal/2026-08-13.md).
+>
+> **직전(08-13 11차)** — **chat-live 대기 중 /quit 불통(Windows) — 공유 stdin 채널**(main · 사용자 실기):
 > ① 실기: 대화 중엔 입력이 되는데 **대기 중엔 /quit이 듣지 않는다**. 원인 = `RawTerm`이 unix 전용(Windows raw는 R-16과 별도 슬라이스)이라 대기 루프 비-raw 분기가 **stdin을 아예 안 읽음**(파이프·CI 가정에 Windows 대화형 콘솔이 같이 떨어짐). 대화 중 입력은 별도 블로킹 폴백 덕인데 이쪽은 반대로 **세션이 끊겨도 Enter까지 갇힘**(같은 날 "/exit를 쳐야 했다"의 원인).
 > ② 수정 = **전담 스레드 stdin 줄 채널**(`stdin_lines()`)을 대기·대화가 번갈아 소비(직접 read = 줄 뺏김) · 타임아웃 폴로 연결 폴링·세션 사망 즉시 반응 · **EOF 해석 분리**(`IsTerminal` — 사람 터미널 EOF=종료 / 파이프·`docker -d`=대기 유지 · 컨테이너 상주 회귀 방지) · unix raw 무변경. **501 green** · clippy 0. ⏸ 실기 재확인. [journal/2026-08-13.md](journal/2026-08-13.md).
 >

@@ -181,6 +181,16 @@ impl DedupIndex {
         }
         true
     }
+
+    /// **새 세션 성립 시** 그 기기의 기억을 지운다 — seq 공간은 사실상 프로세스·대화
+    /// 수명이라(영속은 M2-5b 전까지 없음), 상대가 재시작·재대화로 처음부터 다시
+    /// 발급하면 옛 기억이 새 메시지를 **조용히 중복 폐기**한다(08-13 실기 — 재대화
+    /// 메시지 증발). 옛 세션 메시지의 재생은 Noise 세션 키가 원천 차단하므로, 중복
+    /// 창의 소임(재전송·다중 경로)은 **세션 안**에서만 유효하다 — 세션 경계에서
+    /// 리셋해도 안전성이 줄지 않는다.
+    pub fn reset_device(&mut self, sender: PeerId) {
+        self.seen.remove(&sender);
+    }
 }
 
 /// 팬아웃 결과 — 개별 전달 상태(FR-G-4). 스레드 UI가 이 목록으로 전달/실패를 표시한다.
@@ -315,6 +325,21 @@ mod tests {
         assert!(d.accept(pid(1), DEDUP_WINDOW as u64));
         // 밀려난 옛 시퀀스의 재전송은 "중복으로 간주"(두 번 보이는 것보다 낫다).
         assert!(!d.accept(pid(1), 0), "창 밖 과거 = 중복 간주");
+    }
+
+    #[test]
+    fn dedup_reset_device_accepts_restarted_seq() {
+        // 08-13 실기 — 상대가 재시작·재대화로 seq를 처음부터 다시 발급하면
+        // 옛 기억이 새 메시지를 조용히 버렸다. 새 세션 성립 = reset_device.
+        let mut d = DedupIndex::new();
+        assert!(d.accept(pid(1), 1));
+        assert!(!d.accept(pid(1), 1), "같은 세션 재전송 = 중복");
+        d.reset_device(pid(1));
+        assert!(d.accept(pid(1), 1), "새 세션의 seq 재시작은 새 메시지");
+        // 다른 기기는 영향 없다.
+        assert!(d.accept(pid(2), 1));
+        d.reset_device(pid(1));
+        assert!(!d.accept(pid(2), 1), "리셋은 그 기기만");
     }
 
     mod fanout_tests {
