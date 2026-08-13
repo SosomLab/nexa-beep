@@ -41,6 +41,8 @@ pub enum StreamId {
     Chat,
     /// 파일 전송(M4-2 — 오퍼/수락/청크 · 대화를 막지 않는 별도 스트림).
     File,
+    /// 공유 그룹(M5-1g · ADR-0012 — 초대·명부·방 본문).
+    Group,
 }
 
 impl StreamId {
@@ -51,6 +53,7 @@ impl StreamId {
             StreamId::Control => 0,
             StreamId::Chat => 1,
             StreamId::File => 2,
+            StreamId::Group => 3,
         }
     }
 
@@ -61,6 +64,7 @@ impl StreamId {
             0 => Some(StreamId::Control),
             1 => Some(StreamId::Chat),
             2 => Some(StreamId::File),
+            3 => Some(StreamId::Group),
             _ => None,
         }
     }
@@ -71,7 +75,7 @@ impl StreamId {
 }
 
 /// 스트림 수(내부 큐 배열 크기).
-const STREAMS: usize = 3;
+const STREAMS: usize = 4;
 
 /// 다중화 페이로드 상한 — Noise 메시지 상한(65535) − AEAD 태그(16) − 스트림 바이트(1).
 /// 넘는 메시지는 상위 계층이 쪼갠다(파일 전송 청킹은 M4).
@@ -93,7 +97,12 @@ impl<S: Session> MuxSession<S> {
     pub fn new(inner: S) -> Self {
         Self {
             inner,
-            queues: [VecDeque::new(), VecDeque::new(), VecDeque::new()],
+            queues: [
+                VecDeque::new(),
+                VecDeque::new(),
+                VecDeque::new(),
+                VecDeque::new(),
+            ],
         }
     }
 

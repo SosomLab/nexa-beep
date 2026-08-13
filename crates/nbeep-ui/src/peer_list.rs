@@ -28,6 +28,8 @@ pub struct GroupRow {
     pub members: u32,
     /// 지금 세션이 살아 있는 구성원 수(발신 즉시 도달 예상치).
     pub online: u32,
+    /// 읽지 않은 방 메시지 수(M5-1g — 0이면 배지 없음).
+    pub unread: u32,
 }
 
 /// Enter/더블클릭 활성화 결과 — 그룹 행이 생기며 상대가 둘로 갈렸다.
@@ -788,6 +790,28 @@ impl Widget for PeerListWidget {
                     &format!("구성원 {} · 온라인 {}", g.members, g.online),
                     theme.text_dim,
                 );
+                // 읽지 않은 방 메시지 배지(M5-1g) — 피어 행과 같은 문법(우측 알약).
+                if g.unread > 0 {
+                    let label = if g.unread > 99 {
+                        "99+".to_string()
+                    } else {
+                        g.unread.to_string()
+                    };
+                    let bh2 = self.s(18);
+                    let bwd = (ctx.text_width(&label) + self.s(12)).max(bh2);
+                    let br =
+                        Rect::new(r.right() - bwd - self.s(10), r.y + (rh - bh2) / 2, bwd, bh2);
+                    ctx.fill_round_rect(br, bh2 / 2, theme.accent);
+                    let bth = ctx.text_height();
+                    let btw = ctx.text_width(&label);
+                    ctx.text(
+                        br.x + (br.w - btw) / 2,
+                        br.y + (br.h - bth) / 2,
+                        br,
+                        &label,
+                        theme.text,
+                    );
+                }
                 ctx.select_font(FontSlot::PeerList, false);
                 ctx.fill_rect(Rect::new(r.x, r.bottom() - 1, r.w, 1), theme.border);
                 continue;
@@ -1065,7 +1089,11 @@ mod tests {
         w.on_event(&down(y2), &mut inv);
         assert_eq!(w.take_activated(), None, "싱글클릭 = 선택만");
         w.on_event(&down(y2), &mut inv);
-        assert_eq!(w.take_activated(), Some(Activated::Peer(pid(2))), "더블클릭 = 활성화");
+        assert_eq!(
+            w.take_activated(),
+            Some(Activated::Peer(pid(2))),
+            "더블클릭 = 활성화"
+        );
         // 트리플클릭이 또 활성화하지 않는다(활성화 직후 해제 — 이 클릭은 다시 무장).
         w.on_event(&down(y2), &mut inv);
         assert_eq!(w.take_activated(), None);

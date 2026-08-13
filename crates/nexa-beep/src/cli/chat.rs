@@ -424,6 +424,23 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
                     }
                 }
                 // 프로필 스트림(Control — M3-17 검증).
+                // 공유 그룹(M5-1g) — 테스트 단말은 관찰만(초대·본문을 로그로 · 수락 UI 없음).
+                StreamId::Group => match nbeep_core::SGroupMsg::decode(&bytes) {
+                    Some(nbeep_core::SGroupMsg::Invite { roster }) => {
+                        println!(
+                            "[그룹] 초대 수신 — '{}' (구성원 {}명 · 소유자 {}) · 이 단말은 수락 UI가 없다(관찰용)",
+                            roster.name.as_str(),
+                            roster.members.len(),
+                            roster.owner.short()
+                        );
+                    }
+                    Some(nbeep_core::SGroupMsg::Msg { uid, text, .. }) => {
+                        let safe = nbeep_core::sanitize_message(&text);
+                        println!("[그룹 {}] {}> {}", uid.short(), peer.short(), safe.as_str());
+                    }
+                    Some(other) => println!("[그룹] 제어 수신 — {other:?}"),
+                    None => {}
+                },
                 StreamId::Control => match nbeep_core::ProfileMsg::decode(&bytes) {
                     Some(nbeep_core::ProfileMsg::Request) => {
                         println!("[프로필] 상대가 요청 — 테스트 프로필 응답(★{my_name})");

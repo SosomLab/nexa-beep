@@ -29,6 +29,7 @@ pub mod rate;
 pub mod redact;
 pub mod safetext;
 pub mod session;
+pub mod sgroup;
 pub mod trust;
 pub mod trusted;
 pub mod xfer;
@@ -54,6 +55,7 @@ pub use profile::{ProfileMsg, PROFILE_IMAGE_CHUNK, PROFILE_IMAGE_MAX};
 pub use rate::{negotiate, Pacer, RateLimit, RateMeter};
 pub use safetext::{find_links, sanitize_message, LinkSpan, SafeText};
 pub use session::{Session, SessionError};
+pub use sgroup::{GroupUid, Roster, SGroupMsg};
 pub use trust::{MemoryTrustStore, PinRecord, TrustDecision, TrustStore};
 pub use trusted::{Established, TrustedSession};
 pub use xfer::{

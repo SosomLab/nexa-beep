@@ -21,7 +21,11 @@ pub struct AlertWidget {
     /// 본문 — 폭에 맞춰 문자 단위로 접는다(한국어는 공백 워드랩이 안 통한다).
     message: String,
     ok: Button,
+    /// 두 번째 버튼(선택 모드 — 초대 수락/거절 등). None = 확인 하나(기존 경고).
+    no: Option<Button>,
     closed: bool,
+    /// 선택 결과(1회성 · 선택 모드에서만) — true = 긍정(수락).
+    choice: Option<bool>,
 }
 
 impl AlertWidget {
@@ -34,8 +38,24 @@ impl AlertWidget {
             title: title.into(),
             message: message.into(),
             ok: Button::new("확인"),
+            no: None,
             closed: false,
+            choice: None,
         }
+    }
+
+    /// **선택 모달**(M5-1g — 그룹 초대 수락/거절 등): 긍정/부정 두 버튼.
+    /// Enter = 긍정 · Esc = 부정. 결과는 [`AlertWidget::take_choice`].
+    #[must_use]
+    pub fn with_choice(mut self, yes: &str, no: &str) -> Self {
+        self.ok = Button::new(yes);
+        self.no = Some(Button::new(no));
+        self
+    }
+
+    /// 선택 결과(1회성 · 선택 모달에서만) — `true` = 긍정. 닫힘과 함께 소비한다.
+    pub fn take_choice(&mut self) -> Option<bool> {
+        self.choice.take()
     }
 
     /// 내용 교체(이미 열려 있는 창 재사용 — 창을 또 띄우지 않는다).
@@ -54,6 +74,9 @@ impl AlertWidget {
     pub fn set_scale(&mut self, scale: f32, inv: &mut Invalidations) {
         self.scale = scale.max(0.5);
         self.ok.set_scale(self.scale);
+        if let Some(no) = &mut self.no {
+            no.set_scale(self.scale);
+        }
         self.relayout(inv);
     }
 
@@ -69,6 +92,18 @@ impl AlertWidget {
             Rect::new(b.right() - pad - bw, b.bottom() - pad - bh, bw, bh),
             inv,
         );
+        let gap = self.s(8);
+        if let Some(no) = &mut self.no {
+            no.set_bounds(
+                Rect::new(
+                    b.right() - pad - bw * 2 - gap,
+                    b.bottom() - pad - bh,
+                    bw,
+                    bh,
+                ),
+                inv,
+            );
+        }
     }
 }
 
@@ -85,16 +120,39 @@ impl Widget for AlertWidget {
 
     fn on_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
         if let InputEvent::Key {
-            key: Key::Enter | Key::Escape,
-            ..
+            key: Key::Enter, ..
         } = *ev
         {
+            if self.no.is_some() {
+                self.choice = Some(true);
+            }
+            self.closed = true;
+            return;
+        }
+        if let InputEvent::Key {
+            key: Key::Escape, ..
+        } = *ev
+        {
+            if self.no.is_some() {
+                self.choice = Some(false);
+            }
             self.closed = true;
             return;
         }
         self.ok.on_event(ev, inv);
         if self.ok.take_clicked() {
+            if self.no.is_some() {
+                self.choice = Some(true);
+            }
             self.closed = true;
+            return;
+        }
+        if let Some(no) = &mut self.no {
+            no.on_event(ev, inv);
+            if no.take_clicked() {
+                self.choice = Some(false);
+                self.closed = true;
+            }
         }
     }
 
@@ -129,6 +187,9 @@ impl Widget for AlertWidget {
             ctx.text(b.x + pad, y, b, &line, theme.text);
         }
         self.ok.paint(ctx, theme);
+        if let Some(no) = &self.no {
+            no.paint(ctx, theme);
+        }
     }
 }
 
@@ -170,6 +231,49 @@ mod tests {
             &mut inv,
         );
         assert!(w.take_closed());
+    }
+
+    /// 선택 모달(M5-1g) — Enter=수락 · Esc=거절 · 버튼도 같은 결과.
+    #[test]
+    fn choice_mode_reports_yes_no() {
+        let mut w = AlertWidget::new("초대", "수락?").with_choice("수락", "거절");
+        let mut inv = Invalidations::default();
+        w.set_bounds(Rect::new(0, 0, 400, 170), &mut inv);
+        w.on_event(
+            &InputEvent::Key {
+                key: Key::Enter,
+                shift: false,
+                primary: false,
+            },
+            &mut inv,
+        );
+        assert!(w.take_closed());
+        assert_eq!(w.take_choice(), Some(true), "Enter = 수락");
+        let mut w = AlertWidget::new("초대", "수락?").with_choice("수락", "거절");
+        w.set_bounds(Rect::new(0, 0, 400, 170), &mut inv);
+        w.on_event(
+            &InputEvent::Key {
+                key: Key::Escape,
+                shift: false,
+                primary: false,
+            },
+            &mut inv,
+        );
+        assert!(w.take_closed());
+        assert_eq!(w.take_choice(), Some(false), "Esc = 거절");
+        // 일반 경고(버튼 1)는 choice가 없다.
+        let mut w = AlertWidget::new("경고", "본문");
+        w.set_bounds(Rect::new(0, 0, 400, 170), &mut inv);
+        w.on_event(
+            &InputEvent::Key {
+                key: Key::Enter,
+                shift: false,
+                primary: false,
+            },
+            &mut inv,
+        );
+        assert!(w.take_closed());
+        assert_eq!(w.take_choice(), None);
     }
 
     #[test]

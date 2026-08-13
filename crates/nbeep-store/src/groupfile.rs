@@ -23,12 +23,56 @@
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{ChaCha20Poly1305, Nonce};
 use nbeep_core::group::{Group, GroupId, GroupStore};
+use nbeep_core::sgroup::{GroupUid, Roster};
 use nbeep_core::{DisplayName, PeerId};
 use std::io;
 use std::path::PathBuf;
 
 const MAGIC: [u8; 4] = *b"NBGS";
-const VER: u8 = 1;
+/// v2(08-13) = v1(로컬 그룹) + **공유 그룹 레코드**(M5-1g · ADR-0012).
+/// v1 파일도 읽는다(공유 없음으로 — 전방·후방 관용).
+const VER: u8 = 2;
+const VER_V1: u8 = 1;
+
+/// 공유 그룹에서의 내 상태(ADR-0012 G-4 — 초대 수락제).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MineState {
+    /// 내가 소유자(생성자) — 명부 갱신 권한.
+    Owner,
+    /// 초대 수락 완료 — 방이 보인다.
+    Joined,
+    /// 초대만 받은 상태 — 수락 전(방 미표시 · 카드만).
+    Invited,
+}
+
+impl MineState {
+    fn to_byte(self) -> u8 {
+        match self {
+            MineState::Owner => 0,
+            MineState::Joined => 1,
+            MineState::Invited => 2,
+        }
+    }
+    fn from_byte(b: u8) -> Option<Self> {
+        match b {
+            0 => Some(MineState::Owner),
+            1 => Some(MineState::Joined),
+            2 => Some(MineState::Invited),
+            _ => None,
+        }
+    }
+}
+
+/// 공유 그룹 레코드 — 명부 + 내 상태 + UI 키(로컬 id).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SharedGroup {
+    /// UI·스레드 키(로컬 발급 — 로컬 그룹과 같은 id 공간).
+    pub local_id: GroupId,
+    /// 명부(진실 — 소유자 세션에서 온 것만 갱신).
+    pub roster: Roster,
+    /// 내 상태.
+    pub mine: MineState,
+}
 const SALT_LEN: usize = 16;
 const NONCE_LEN: usize = 12;
 const TAG_LEN: usize = 16;
@@ -53,6 +97,8 @@ pub enum GroupLoad {
 #[derive(Debug)]
 pub struct FileGroupStore {
     inner: GroupStore,
+    /// 공유 그룹(M5-1g) — uid가 진실 키 · local_id는 UI 키.
+    shared: Vec<SharedGroup>,
     path: PathBuf,
     /// 래핑 키 원료(기기 신원 키 32B — trust.seg와 같은 원료).
     wrap_secret: [u8; 32],
@@ -71,11 +117,12 @@ impl FileGroupStore {
     pub fn open(path: PathBuf, wrap_secret: [u8; 32]) -> (Self, GroupLoad) {
         match std::fs::read(&path) {
             Ok(bytes) => match Self::parse(&bytes, &wrap_secret) {
-                Some((salt, master, store)) => {
-                    let n = store.list().len();
+                Some((salt, master, store, shared)) => {
+                    let n = store.list().len() + shared.len();
                     (
                         Self {
                             inner: store,
+                            shared,
                             path,
                             wrap_secret,
                             salt,
@@ -90,6 +137,7 @@ impl FileGroupStore {
                     // ★ 잠김 — 파일은 보존(덮어쓰기 금지), 이번 실행은 메모리 전용.
                     Self {
                         inner: GroupStore::new(),
+                        shared: Vec::new(),
                         path,
                         wrap_secret,
                         salt: [0; SALT_LEN],
@@ -108,6 +156,7 @@ impl FileGroupStore {
                 (
                     Self {
                         inner: GroupStore::new(),
+                        shared: Vec::new(),
                         path,
                         wrap_secret,
                         salt,
@@ -125,6 +174,7 @@ impl FileGroupStore {
             Err(_) => (
                 Self {
                     inner: GroupStore::new(),
+                    shared: Vec::new(),
                     path,
                     wrap_secret,
                     salt: [0; SALT_LEN],
@@ -208,6 +258,70 @@ impl FileGroupStore {
         self.inner.list()
     }
 
+    // ── 공유 그룹(M5-1g · ADR-0012) ──
+
+    /// 공유 그룹 등록/갱신 — uid가 있으면 **roster 수용 규칙**([`Roster::accepts_update`])
+    /// 통과분만 교체, 없으면 새 레코드(로컬 id 발급). 반환 = UI 키.
+    /// ⚠️ 호출자는 "이 roster가 소유자 세션에서 왔는가"를 먼저 확인해야 한다(ADR §2 G-1).
+    pub fn upsert_shared(&mut self, roster: Roster, mine: MineState) -> Option<GroupId> {
+        if let Some(s) = self.shared.iter_mut().find(|s| s.roster.uid == roster.uid) {
+            if !s.roster.accepts_update(&roster) {
+                return None; // 구버전·소유자 불일치 — 거부(fail-closed)
+            }
+            s.roster = roster;
+            let id = s.local_id;
+            self.persist();
+            return Some(id);
+        }
+        let id = self.inner.alloc_id();
+        self.shared.push(SharedGroup {
+            local_id: id,
+            roster,
+            mine,
+        });
+        self.persist();
+        Some(id)
+    }
+
+    /// 내 상태 전환(초대 수락 등). 반환 = 성공 여부.
+    pub fn set_mine(&mut self, uid: GroupUid, mine: MineState) -> bool {
+        let Some(s) = self.shared.iter_mut().find(|s| s.roster.uid == uid) else {
+            return false;
+        };
+        s.mine = mine;
+        self.persist();
+        true
+    }
+
+    /// 공유 그룹 제거(거절·탈퇴·소유자의 삭제 통지).
+    pub fn remove_shared(&mut self, uid: GroupUid) -> bool {
+        let before = self.shared.len();
+        self.shared.retain(|s| s.roster.uid != uid);
+        let removed = self.shared.len() != before;
+        if removed {
+            self.persist();
+        }
+        removed
+    }
+
+    /// uid로 조회.
+    #[must_use]
+    pub fn shared_by_uid(&self, uid: GroupUid) -> Option<&SharedGroup> {
+        self.shared.iter().find(|s| s.roster.uid == uid)
+    }
+
+    /// UI 키(로컬 id)로 조회.
+    #[must_use]
+    pub fn shared_by_id(&self, id: GroupId) -> Option<&SharedGroup> {
+        self.shared.iter().find(|s| s.local_id == id)
+    }
+
+    /// 전체 공유 그룹.
+    #[must_use]
+    pub fn shared_list(&self) -> &[SharedGroup] {
+        &self.shared
+    }
+
     // ── 직렬화·암호화(트러스트 세그먼트와 같은 컨테이너 · 매직만 다름) ──
 
     fn wrap_key(salt: &[u8; SALT_LEN], secret: &[u8; 32]) -> [u8; 32] {
@@ -219,9 +333,16 @@ impl FileGroupStore {
         h.finalize().into()
     }
 
-    fn parse(bytes: &[u8], secret: &[u8; 32]) -> Option<([u8; SALT_LEN], [u8; 32], GroupStore)> {
-        if bytes.len() < WRAPPED_END + NONCE_LEN + TAG_LEN || bytes[..4] != MAGIC || bytes[4] != VER
-        {
+    #[allow(clippy::type_complexity)] // 내부 파서 반환 — 호출자 1곳
+    fn parse(
+        bytes: &[u8],
+        secret: &[u8; 32],
+    ) -> Option<([u8; SALT_LEN], [u8; 32], GroupStore, Vec<SharedGroup>)> {
+        if bytes.len() < WRAPPED_END + NONCE_LEN + TAG_LEN || bytes[..4] != MAGIC {
+            return None;
+        }
+        let ver = bytes[4];
+        if ver != VER && ver != VER_V1 {
             return None;
         }
         let mut salt = [0u8; SALT_LEN];
@@ -246,8 +367,8 @@ impl FileGroupStore {
                 },
             )
             .ok()?;
-        let store = decode_store(&body)?;
-        Some((salt, master, store))
+        let (store, shared) = decode_body(ver, &body)?;
+        Some((salt, master, store, shared))
     }
 
     /// 스냅샷 저장 — 실패는 치명적이지 않다(플래그만 · 다음 변경에서 재시도).
@@ -281,7 +402,7 @@ impl FileGroupStore {
             .map_err(|_| aead_err())?;
         out.extend_from_slice(&nonce);
         out.extend_from_slice(&wrapped);
-        let body_pt = encode_store(&self.inner);
+        let body_pt = encode_body(&self.inner, &self.shared);
         let mut bnonce = [0u8; NONCE_LEN];
         getrandom::getrandom(&mut bnonce).map_err(|_| rng_err())?;
         let body = ChaCha20Poly1305::new(&self.master.into())
@@ -339,7 +460,26 @@ fn encode_store(store: &GroupStore) -> Vec<u8> {
     out
 }
 
-fn decode_store(bytes: &[u8]) -> Option<GroupStore> {
+/// v2 본문 = 로컬부(기존 v1과 동일) + 공유부(`count u32` · 반복 `{ local_id u32 ·
+/// mine u8 · roster_len u32 · roster }`).
+fn encode_body(store: &GroupStore, shared: &[SharedGroup]) -> Vec<u8> {
+    let mut out = encode_store(store);
+    out.extend_from_slice(
+        &u32::try_from(shared.len())
+            .unwrap_or(u32::MAX)
+            .to_be_bytes(),
+    );
+    for s in shared {
+        out.extend_from_slice(&s.local_id.0.to_be_bytes());
+        out.push(s.mine.to_byte());
+        let rb = s.roster.encode();
+        out.extend_from_slice(&u32::try_from(rb.len()).unwrap_or(u32::MAX).to_be_bytes());
+        out.extend_from_slice(&rb);
+    }
+    out
+}
+
+fn decode_body(ver: u8, bytes: &[u8]) -> Option<(GroupStore, Vec<SharedGroup>)> {
     let mut p = 0usize;
     let take = |p: &mut usize, n: usize| -> Option<&[u8]> {
         let s = bytes.get(*p..*p + n)?;
@@ -360,7 +500,29 @@ fn decode_store(bytes: &[u8]) -> Option<GroupStore> {
         }
         list.push((id, name, members));
     }
-    (p == bytes.len()).then(|| GroupStore::from_export(next, list))
+    let mut shared = Vec::new();
+    if ver >= 2 {
+        let sc = u32::from_be_bytes(take(&mut p, 4)?.try_into().ok()?);
+        if sc > 4096 {
+            return None;
+        }
+        for _ in 0..sc {
+            let local_id = GroupId(u32::from_be_bytes(take(&mut p, 4)?.try_into().ok()?));
+            let mine = MineState::from_byte(take(&mut p, 1)?[0])?;
+            let rlen = u32::from_be_bytes(take(&mut p, 4)?.try_into().ok()?) as usize;
+            let rb = take(&mut p, rlen)?;
+            let (roster, used) = Roster::decode(rb)?;
+            if used != rlen {
+                return None;
+            }
+            shared.push(SharedGroup {
+                local_id,
+                roster,
+                mine,
+            });
+        }
+    }
+    (p == bytes.len()).then(|| (GroupStore::from_export(next, list), shared))
 }
 
 #[cfg(test)]
@@ -444,6 +606,47 @@ mod tests {
         );
     }
 
+    /// 공유 그룹(M5-1g) — 재오픈 유지 · roster 수용 규칙 · 상태 전환.
+    #[test]
+    fn shared_groups_survive_and_enforce_roster_rules() {
+        use nbeep_core::sgroup::{GroupUid, Roster};
+        let path = tmp("shared");
+        let secret = [7u8; 32];
+        let uid = GroupUid([9u8; 32]);
+        let roster = |v: u64| Roster {
+            uid,
+            name: name("개발방"),
+            owner: pid(1),
+            members: vec![pid(1), pid(2)],
+            version: v,
+        };
+        let lid = {
+            let (mut gs, _) = FileGroupStore::open(path.clone(), secret);
+            let lid = gs.upsert_shared(roster(1), MineState::Invited).unwrap();
+            assert!(gs.set_mine(uid, MineState::Joined));
+            // 구버전 roster는 거부(fail-closed).
+            assert!(gs.upsert_shared(roster(1), MineState::Joined).is_none());
+            // 소유자 바꿔치기 거부.
+            let mut hijack = roster(5);
+            hijack.owner = pid(8);
+            assert!(gs.upsert_shared(hijack, MineState::Joined).is_none());
+            // 정상 갱신은 같은 로컬 id 유지.
+            assert_eq!(gs.upsert_shared(roster(2), MineState::Joined), Some(lid));
+            lid
+        };
+        let (mut gs, load) = FileGroupStore::open(path, secret);
+        assert_eq!(load, GroupLoad::Loaded(1));
+        let s = gs.shared_by_id(lid).unwrap();
+        assert_eq!(s.roster.version, 2);
+        assert_eq!(s.mine, MineState::Joined, "수락 상태 유지");
+        assert_eq!(s.roster.name.as_str(), "개발방");
+        // 로컬 id 공간 공유 — 새 로컬 그룹 id와 충돌하지 않는다.
+        let g2 = gs.create(name("로컬"));
+        assert_ne!(g2, lid);
+        assert!(gs.remove_shared(uid));
+        assert!(gs.shared_by_uid(uid).is_none());
+    }
+
     /// 코덱 왕복 + 꼬리 쓰레기 거부.
     #[test]
     fn store_codec_roundtrip() {
@@ -452,11 +655,12 @@ mod tests {
         s.add_member(a, pid(1));
         s.add_member(a, pid(2));
         let _b = s.create(name("한국어 그룹"));
-        let enc = encode_store(&s);
-        let back = decode_store(&enc).unwrap();
+        let enc = encode_body(&s, &[]);
+        let (back, shared) = decode_body(VER, &enc).unwrap();
         assert_eq!(back.export(), s.export());
+        assert!(shared.is_empty());
         let mut bad = enc;
         bad.push(0);
-        assert!(decode_store(&bad).is_none());
+        assert!(decode_body(VER, &bad).is_none());
     }
 }

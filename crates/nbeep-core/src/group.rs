@@ -70,6 +70,13 @@ impl GroupStore {
         Self::default()
     }
 
+    /// 로컬 id 발급만(공유 그룹의 UI 키 — M5-1g. uid ↔ 로컬 id 매핑은 store 몫).
+    pub fn alloc_id(&mut self) -> GroupId {
+        let id = GroupId(self.next);
+        self.next += 1;
+        id
+    }
+
     /// 그룹 생성(빈 구성원). 로컬 발급 id 반환.
     pub fn create(&mut self, name: DisplayName) -> GroupId {
         let id = GroupId(self.next);

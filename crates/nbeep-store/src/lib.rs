@@ -12,5 +12,5 @@
 pub mod groupfile;
 pub mod trustfile;
 
-pub use groupfile::{FileGroupStore, GroupLoad};
+pub use groupfile::{FileGroupStore, GroupLoad, MineState, SharedGroup};
 pub use trustfile::{FileTrustStore, TrustLoad};
