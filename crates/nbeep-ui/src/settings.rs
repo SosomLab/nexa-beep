@@ -927,6 +927,27 @@ impl SettingsWidget {
         }
     }
 
+    /// 우클릭 편집 메뉴 행동(1회성 — 08-13 전수 검사) — 어느 텍스트 입력에서든.
+    pub fn take_edit_ctx(&mut self) -> Option<crate::controls::EditCtxAction> {
+        if let Some(a) = self.search.take_edit_ctx() {
+            return Some(a);
+        }
+        self.rows.iter_mut().find_map(|r| match &mut r.ctl {
+            RowCtl::Font { family, .. } | RowCtl::Face(family) => family.take_edit_ctx(),
+            _ => None,
+        })
+    }
+
+    /// 클립보드 텍스트 유무 주입(우클릭 시점 — 붙여넣기 항목 활성 근거).
+    pub fn set_clipboard_has_text(&mut self, yes: bool) {
+        self.search.set_clipboard_has_text(yes);
+        for r in &mut self.rows {
+            if let RowCtl::Font { family, .. } | RowCtl::Face(family) = &mut r.ctl {
+                family.set_clipboard_has_text(yes);
+            }
+        }
+    }
+
     /// 검색 텍스트가 코드 경로(잘라내기·붙여넣기)로 바뀌었으면 결과를 재구성한다.
     fn sync_query(&mut self, inv: &mut Invalidations) {
         let q = self.search.text();

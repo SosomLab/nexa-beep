@@ -5201,6 +5201,41 @@ impl App {
         if !inv.is_empty() {
             self.request_redraw(id);
         }
+        // 텍스트 필드 우클릭 메뉴의 클립보드 행동(08-13 전수 검사) — ⌘C/X/V와
+        // 같은 경로로 잇는다(위젯은 요청만 남기고 OS 클립보드는 여기서).
+        self.drain_edit_ctx(id);
+    }
+
+    /// 텍스트 필드(프로필·이름/주소 프롬프트·설정)의 우클릭 편집 메뉴 행동 처리.
+    fn drain_edit_ctx(&mut self, id: WindowId) {
+        let action = match self.windows.get(&id).map(|e| e.role) {
+            Some(Role::Profile) => self.profile_view.as_mut().and_then(|v| v.take_edit_ctx()),
+            Some(Role::NamePrompt) => self.name_prompt.as_mut().and_then(|v| v.take_edit_ctx()),
+            Some(Role::AddEndpoint) => self.addr_view.as_mut().and_then(|v| v.take_edit_ctx()),
+            Some(Role::Settings) => self.settings_view.as_mut().and_then(|v| v.take_edit_ctx()),
+            _ => None,
+        };
+        let Some(a) = action else { return };
+        match a {
+            nbeep_ui::controls::EditCtxAction::Copy => {
+                if let Some(t) = self.clipboard_copy_for(id) {
+                    if nbeep_plat::clipboard::set_text(&t) {
+                        self.status = "복사됨".into();
+                    }
+                }
+            }
+            nbeep_ui::controls::EditCtxAction::Cut => {
+                if let Some(t) = self.clipboard_cut_for(id) {
+                    nbeep_plat::clipboard::set_text(&t);
+                }
+            }
+            nbeep_ui::controls::EditCtxAction::Paste => {
+                if let Some(t) = nbeep_plat::clipboard::get_text() {
+                    self.clipboard_paste_for(id, &t);
+                }
+            }
+        }
+        self.request_redraw(id);
     }
 
     fn redraw(&mut self, id: WindowId) {
@@ -6458,6 +6493,31 @@ impl ApplicationHandler<AppEvent> for App {
                         if let Some(c) = self.gchats.get_mut(&gid) {
                             c.set_clipboard_has_text(has_clip);
                         }
+                    } else {
+                        // 텍스트 필드 창(08-13 전수 검사) — 붙여넣기 항목 활성 근거.
+                        match self.windows.get(&id).map(|e| e.role) {
+                            Some(Role::Profile) => {
+                                if let Some(v) = self.profile_view.as_mut() {
+                                    v.set_clipboard_has_text(has_clip);
+                                }
+                            }
+                            Some(Role::NamePrompt) => {
+                                if let Some(v) = self.name_prompt.as_mut() {
+                                    v.set_clipboard_has_text(has_clip);
+                                }
+                            }
+                            Some(Role::AddEndpoint) => {
+                                if let Some(v) = self.addr_view.as_mut() {
+                                    v.set_clipboard_has_text(has_clip);
+                                }
+                            }
+                            Some(Role::Settings) => {
+                                if let Some(v) = self.settings_view.as_mut() {
+                                    v.set_clipboard_has_text(has_clip);
+                                }
+                            }
+                            _ => {}
+                        }
                     }
                     self.route(id, InputEvent::RightDown { x, y }, el);
                 }
@@ -6582,59 +6642,87 @@ impl ApplicationHandler<AppEvent> for App {
                 }
                 // Cmd/Ctrl+, = 설정 · Cmd/Ctrl+K = 수동 엔드포인트 추가(DR-19).
                 if self.primary_down {
-                    if let WKey::Character(t) = &event.logical_key {
-                        match t.as_str() {
-                            "," => {
-                                self.open_settings(el);
-                                return;
-                            }
-                            "g" | "G" => {
-                                self.open_gallery(el);
-                                return;
-                            }
-                            // 텍스트 기본 단축키 — 전체 선택(사용자 지적 08-09).
-                            "a" | "A" => {
-                                self.route(id, InputEvent::SelectAll, el);
-                                return;
-                            }
-                            // 복사/잘라내기/붙여넣기 — **모든 텍스트 컨트롤**(① 08-13 —
-                            // 그전엔 대화 입력창만). ui는 OS를 모른다 — plat 어댑터가 잇는다.
-                            "c" | "C" => {
-                                if let Some(t) = self.clipboard_copy_for(id) {
-                                    if nbeep_plat::clipboard::set_text(&t) {
-                                        self.status = "복사됨".into();
+                    // 단축키 판정은 **물리 키 우선**(08-13 실기: 한글 자판에선 ⌘A의
+                    // logical이 "ㅁ"으로 와서 단축키 대신 자모가 입력됐다). 물리 KeyA는
+                    // 입력 소스와 무관 — [docs/27 §8] Lang1과 같은 원리. 물리 매핑이
+                    // 없는 배치(비QWERTY 등)는 logical로 폴백한다.
+                    {
+                        use winit::keyboard::KeyCode as KC;
+                        let phys = match event.physical_key {
+                            winit::keyboard::PhysicalKey::Code(c) => Some(c),
+                            winit::keyboard::PhysicalKey::Unidentified(_) => None,
+                        };
+                        let sc = match phys {
+                            Some(KC::KeyA) => Some("a"),
+                            Some(KC::KeyC) => Some("c"),
+                            Some(KC::KeyX) => Some("x"),
+                            Some(KC::KeyV) => Some("v"),
+                            Some(KC::KeyG) => Some("g"),
+                            Some(KC::KeyK) => Some("k"),
+                            Some(KC::KeyY) => Some("y"),
+                            Some(KC::KeyN) => Some("n"),
+                            Some(KC::Comma) => Some(","),
+                            _ => None,
+                        };
+                        let eff: Option<String> =
+                            sc.map(str::to_string).or_else(|| match &event.logical_key {
+                                WKey::Character(t) => Some(t.to_string()),
+                                _ => None,
+                            });
+                        if let Some(t) = eff {
+                            match t.as_str() {
+                                "," => {
+                                    self.open_settings(el);
+                                    return;
+                                }
+                                "g" | "G" => {
+                                    self.open_gallery(el);
+                                    return;
+                                }
+                                // 텍스트 기본 단축키 — 전체 선택(사용자 지적 08-09).
+                                "a" | "A" => {
+                                    self.route(id, InputEvent::SelectAll, el);
+                                    return;
+                                }
+                                // 복사/잘라내기/붙여넣기 — **모든 텍스트 컨트롤**(① 08-13 —
+                                // 그전엔 대화 입력창만). ui는 OS를 모른다 — plat 어댑터가 잇는다.
+                                "c" | "C" => {
+                                    if let Some(t) = self.clipboard_copy_for(id) {
+                                        if nbeep_plat::clipboard::set_text(&t) {
+                                            self.status = "복사됨".into();
+                                        }
                                     }
+                                    return;
                                 }
-                                return;
-                            }
-                            "x" | "X" => {
-                                if let Some(t) = self.clipboard_cut_for(id) {
-                                    nbeep_plat::clipboard::set_text(&t);
-                                    self.request_redraw(id);
+                                "x" | "X" => {
+                                    if let Some(t) = self.clipboard_cut_for(id) {
+                                        nbeep_plat::clipboard::set_text(&t);
+                                        self.request_redraw(id);
+                                    }
+                                    return;
                                 }
-                                return;
-                            }
-                            "v" | "V" => {
-                                if let Some(t) = nbeep_plat::clipboard::get_text() {
-                                    self.clipboard_paste_for(id, &t);
-                                    self.request_redraw(id);
+                                "v" | "V" => {
+                                    if let Some(t) = nbeep_plat::clipboard::get_text() {
+                                        self.clipboard_paste_for(id, &t);
+                                        self.request_redraw(id);
+                                    }
+                                    return;
                                 }
-                                return;
+                                "y" | "Y" => {
+                                    self.answer_offer(id, true);
+                                    return;
+                                }
+                                "n" | "N" => {
+                                    self.answer_offer(id, false);
+                                    return;
+                                }
+                                // 주소 직접 입력 = 별도 모달 창(M3-16 · 인라인 상태바 입력 대체).
+                                "k" | "K" => {
+                                    self.open_add_endpoint(el);
+                                    return;
+                                }
+                                _ => {}
                             }
-                            "y" | "Y" => {
-                                self.answer_offer(id, true);
-                                return;
-                            }
-                            "n" | "N" => {
-                                self.answer_offer(id, false);
-                                return;
-                            }
-                            // 주소 직접 입력 = 별도 모달 창(M3-16 · 인라인 상태바 입력 대체).
-                            "k" | "K" => {
-                                self.open_add_endpoint(el);
-                                return;
-                            }
-                            _ => {}
                         }
                     }
                 }

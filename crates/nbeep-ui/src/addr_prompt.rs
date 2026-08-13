@@ -132,6 +132,16 @@ impl AddrPromptWidget {
         self.input.set_preedit(text, inv);
     }
 
+    /// 우클릭 편집 메뉴 행동(1회성 — 08-13 전수 검사).
+    pub fn take_edit_ctx(&mut self) -> Option<crate::controls::EditCtxAction> {
+        self.input.take_edit_ctx()
+    }
+
+    /// 클립보드 텍스트 유무 주입(우클릭 시점 — 붙여넣기 항목 활성 근거).
+    pub fn set_clipboard_has_text(&mut self, yes: bool) {
+        self.input.set_clipboard_has_text(yes);
+    }
+
     /// 선택 복사(① 08-13) — OS 클립보드 쓰기는 호스트 몫.
     #[must_use]
     pub fn clipboard_copy(&self) -> Option<String> {

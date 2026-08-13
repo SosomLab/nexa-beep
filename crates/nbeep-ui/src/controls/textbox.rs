@@ -39,6 +39,23 @@ pub struct TextBox {
     /// IME 조합 중 문자열(08-13) — 캐럿 자리에 밑줄로 끼워 그린다. 확정 전에도
     /// 지금 치는 글자가 보여야 한다(대화 입력과 동일한 경험 — 호스트가 배선).
     preedit: String,
+    /// 우클릭 편집 메뉴(08-13 전수 검사 — 대화 입력에만 있고 일반 필드엔 없었다).
+    ctx_menu: super::ContextMenu,
+    /// 메뉴에서 고른 클립보드 행동(1회성) — OS 클립보드는 호스트 몫이라 요청만 남긴다.
+    edit_ctx: Option<EditCtxAction>,
+    /// 붙여넣기 항목 활성 근거(호스트가 우클릭 시점에 1회 주입 — 대화 입력과 동일).
+    clip_has_text: bool,
+}
+
+/// 우클릭 편집 메뉴에서 고른 행동 — 실행(클립보드 접근)은 호스트가 한다.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EditCtxAction {
+    /// 복사(⌘/Ctrl+C와 같은 경로).
+    Copy,
+    /// 잘라내기.
+    Cut,
+    /// 붙여넣기.
+    Paste,
 }
 
 impl TextBox {
@@ -59,7 +76,20 @@ impl TextBox {
             last_click: (0, 0),
             hscroll: std::cell::Cell::new(0),
             preedit: String::new(),
+            ctx_menu: super::ContextMenu::new(),
+            edit_ctx: None,
+            clip_has_text: true,
         }
+    }
+
+    /// 메뉴에서 고른 클립보드 행동(1회성) — 호스트가 ⌘C/X/V와 같은 경로로 잇는다.
+    pub fn take_edit_ctx(&mut self) -> Option<EditCtxAction> {
+        self.edit_ctx.take()
+    }
+
+    /// 클립보드에 텍스트가 있는가(호스트가 우클릭 시점에 1회 주입 — 붙여넣기 활성 근거).
+    pub fn set_clipboard_has_text(&mut self, yes: bool) {
+        self.clip_has_text = yes;
     }
 
     /// IME 조합 중 문자열 갱신(빈 문자열 = 소거). 포커스 없는 박스는 무시한다 —
@@ -226,6 +256,52 @@ impl Widget for TextBox {
     }
 
     fn on_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
+        // 우클릭 편집 메뉴가 열려 있으면 가장 먼저 먹는다(팝업 최상위).
+        if self.ctx_menu.is_open() {
+            let menu_rect = self.ctx_menu.bounds();
+            if self.ctx_menu.on_event(ev) {
+                inv.push(menu_rect);
+                inv.push(self.base.bounds);
+                if let Some(id) = self.ctx_menu.take_picked() {
+                    match id.as_str() {
+                        // 전체 선택은 위젯 내부 상태 — 즉시 실행.
+                        "select_all" => self.edit.key(EditKey::SelectAll, false),
+                        // 클립보드는 호스트 몫 — 요청만 남긴다(⌘C/X/V와 같은 경로).
+                        "copy" => self.edit_ctx = Some(EditCtxAction::Copy),
+                        "cut" => self.edit_ctx = Some(EditCtxAction::Cut),
+                        "paste" => self.edit_ctx = Some(EditCtxAction::Paste),
+                        _ => {}
+                    }
+                }
+                return;
+            }
+        }
+        if let InputEvent::RightDown { x, y } = *ev {
+            if self.base.bounds.contains(Point { x, y }) {
+                use nbeep_core::i18n::{t, Msg};
+                self.base.focused = true; // 우클릭도 포커스(메뉴 행동의 대상이 된다)
+                let has_sel = self.edit.selected_text().is_some();
+                let has_text = !self.edit.text().is_empty();
+                let items = vec![
+                    super::CtxItem::maybe("select_all", t(Msg::CtxSelectAll), has_text),
+                    super::CtxItem::maybe("copy", t(Msg::CtxCopy), has_sel),
+                    super::CtxItem::maybe("cut", t(Msg::CtxCut), has_sel),
+                    super::CtxItem::maybe("paste", t(Msg::CtxPaste), self.clip_has_text),
+                ];
+                self.ctx_menu.set_scale(self.base.scale);
+                // 팝업이 박스 밖(아래)으로 펼쳐질 공간 — 박스 사각형만 주면 안에 구겨진다.
+                let host = Rect::new(
+                    self.base.bounds.x,
+                    self.base.bounds.y,
+                    self.base.bounds.w.max(self.s(200)),
+                    self.base.bounds.h + self.s(140),
+                );
+                self.ctx_menu.open_at(x, y, items, host, 8 * 15);
+                inv.push(self.base.bounds);
+                inv.push(self.ctx_menu.bounds());
+            }
+            return;
+        }
         match *ev {
             InputEvent::MouseDown { x, y, shift, .. } => {
                 let badge = self.help_badge_rect(self.base.bounds);
@@ -382,6 +458,25 @@ impl Widget for TextBox {
                 xs.push(tx + ctx.text_width(&acc));
             }
         }
+        // 선택 반전(08-13 전수 검사: 선택은 되는데 하이라이트가 안 보였다) —
+        // 텍스트보다 먼저 채워야 글자가 위에 얹힌다. preedit 중엔 선택이 없다.
+        if let Some((a, b_end)) = self.edit.selection() {
+            let pre: String = chars[..a.min(chars.len())].iter().collect();
+            let mid: String = chars[a.min(chars.len())..b_end.min(chars.len())]
+                .iter()
+                .collect();
+            let x0 = tx + ctx.text_width(&pre);
+            let sw = ctx.text_width(&mid);
+            let th = ctx.text_height();
+            ctx.fill_rect(
+                Rect::new(x0, ty, sw, th),
+                if self.base.focused {
+                    theme.sel_bg
+                } else {
+                    theme.sel_bg_inactive
+                },
+            );
+        }
         if shown.is_empty() {
             ctx.text(tx, ty, b, &self.placeholder, theme.text_dim);
         } else {
@@ -426,6 +521,11 @@ impl Widget for TextBox {
         let badge = self.help_badge_rect(b);
         self.draw_help_badge(ctx, theme, badge);
         self.draw_help_tip(ctx, theme, badge);
+
+        // 우클릭 편집 메뉴 — 최상위(마지막에 그린다).
+        if self.ctx_menu.is_open() {
+            self.ctx_menu.paint(ctx, theme);
+        }
     }
 }
 

@@ -199,6 +199,8 @@ pub struct PeerListWidget {
     /// 스크롤 상단 행 인덱스.
     top: usize,
     hover: Option<usize>,
+    /// 드래그 다중 선택의 시작 행(일반 클릭에서 시작 — 08-13 전수 검사).
+    drag_from: Option<usize>,
     wheel: WheelAccum,
     typeahead: TypeAhead,
     activated: Option<Activated>,
@@ -242,6 +244,7 @@ impl PeerListWidget {
             caret: 0,
             top: 0,
             hover: None,
+            drag_from: None,
             wheel: WheelAccum::default(),
             typeahead: TypeAhead::new(TYPEAHEAD_TIMEOUT_MS),
             activated: None,
@@ -772,6 +775,8 @@ impl Widget for PeerListWidget {
                         inv.push(self.bounds);
                     }
                     self.move_caret(i, inv);
+                    // 일반 클릭 = 드래그 다중 선택의 시작 후보(움직여야 발동).
+                    self.drag_from = Some(i);
                     // 더블클릭 = Enter 동일 동작(사용자 확정 08-09) — 같은 행 500ms 내 재클릭.
                     // 시각은 now_hint(~5Hz 틱 해상도 ±200ms)라 여유 있는 임계값을 쓴다.
                     let now = self.now_hint;
@@ -790,6 +795,34 @@ impl Widget for PeerListWidget {
                 }
             }
             InputEvent::MouseMove { y, .. } => {
+                // 드래그 다중 선택(08-13 전수 검사) — 일반 클릭에서 끌면 시작 행부터
+                // 현재 행까지의 피어를 범위 선택(파일 관리자 관례 · 그룹 행은 건너뜀).
+                if let Some(a) = self.drag_from {
+                    // 경계 밖 = **자동 스크롤**(한 행씩) — 가려진 행까지 선택이 이어진다.
+                    if y < self.bounds.y {
+                        self.top = self.top.saturating_sub(1);
+                        inv.push(self.bounds);
+                    } else if y > self.bounds.bottom() {
+                        let vis = self.visible_rows().max(1);
+                        self.top = (self.top + 1).min(self.total().saturating_sub(vis));
+                        inv.push(self.bounds);
+                    }
+                    let yy = y.clamp(self.bounds.y, self.bounds.bottom() - 1);
+                    if let Some(j) = self.row_at(yy) {
+                        if j != a {
+                            let (lo, hi) = (a.min(j), a.max(j));
+                            self.selected.clear();
+                            for k in lo..=hi {
+                                if let Some(row) = self.peer_at(k) {
+                                    self.selected.insert(row.entry.peer);
+                                }
+                            }
+                            self.caret = j.min(self.total().saturating_sub(1));
+                            inv.push(self.bounds);
+                        }
+                    }
+                    return;
+                }
                 let over = self.row_at(y);
                 if over != self.hover {
                     if let Some(old) = self.hover {
@@ -800,6 +833,9 @@ impl Widget for PeerListWidget {
                     }
                     self.hover = over;
                 }
+            }
+            InputEvent::MouseUp { .. } => {
+                self.drag_from = None;
             }
             _ => {}
         }
@@ -818,9 +854,15 @@ impl Widget for PeerListWidget {
                 self.bounds.w,
                 rh,
             );
-            // 행 배경 — 캐럿 > hover > 기본.
+            // 행 배경 — 캐럿 > 다중 선택 > hover > 기본(다중 선택 = 반전 배경 +
+            // 좌측 강조 막대 · 08-13 실기: 막대만으로는 "선택됨"이 안 보였다).
+            let multi_sel = self
+                .peer_at(i)
+                .is_some_and(|row| self.selected.contains(&row.entry.peer));
             let bg = if i == self.caret {
                 theme.sel_bg
+            } else if multi_sel {
+                theme.sel_bg_inactive
             } else if Some(i) == self.hover {
                 theme.panel_bg_alt
             } else {

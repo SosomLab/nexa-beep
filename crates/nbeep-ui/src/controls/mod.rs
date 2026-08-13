@@ -38,7 +38,7 @@ pub use pulldown::{MenuBar, MenuDef, MenuEntry};
 pub use radio::{RadioGroup, RadioOption};
 pub use scroll::ScrollBars;
 pub use switch::Switch;
-pub use textbox::TextBox;
+pub use textbox::{EditCtxAction, TextBox};
 pub use timeout_button::{FiredBy, TimeoutButton};
 pub use toolbar::{ToolIcon, ToolItem, Toolbar, DEFAULT_ICON};
 pub use tree::{FlatRow, GridColumn, TreeControl, TreeGrid, TreeModel, TreeNode, TreeView};

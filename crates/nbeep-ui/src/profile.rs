@@ -99,6 +99,21 @@ impl ProfileWidget {
         self.phone.set_preedit(text, inv);
     }
 
+    /// 우클릭 편집 메뉴 행동(1회성 — 08-13 전수 검사).
+    pub fn take_edit_ctx(&mut self) -> Option<crate::controls::EditCtxAction> {
+        self.name
+            .take_edit_ctx()
+            .or_else(|| self.email.take_edit_ctx())
+            .or_else(|| self.phone.take_edit_ctx())
+    }
+
+    /// 클립보드 텍스트 유무 주입(우클릭 시점 — 붙여넣기 항목 활성 근거).
+    pub fn set_clipboard_has_text(&mut self, yes: bool) {
+        self.name.set_clipboard_has_text(yes);
+        self.email.set_clipboard_has_text(yes);
+        self.phone.set_clipboard_has_text(yes);
+    }
+
     /// 사진 미리보기 교체(호스트 — 이미지 선택 직후 imgdec 결과 반영).
     pub fn set_avatar(
         &mut self,
