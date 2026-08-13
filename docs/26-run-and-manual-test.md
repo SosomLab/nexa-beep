@@ -157,7 +157,49 @@ docker run --rm -v "$PWD":/src -w /src -e CARGO_TARGET_DIR=/src/.docker-target \
 GUI에서는 `⌘/Ctrl+K` → 주소 입력 → Enter. **GUI는 포트를 생략하면 `:47200`을 붙인다**
 (`10.0.0.5` = `10.0.0.5:47200`). ⚠️ CLI는 아직 보완하지 않는다 → [§6](#6-자주-막히는-곳--증상별).
 
-### 3-4. 헤드리스 관찰 — 사람 없이 확인
+### 3-4. ★ 여러 신원을 한 PC에서 동시에 — **폴더를 나눈다**
+
+한 대에서 2명(이상)을 흉내 내야 할 때가 있다 — 그룹 초대 왕복, 대화 상대 여럿, TOFU 핀 확인.
+**같은 실행 파일을 폴더만 나눠 복사하면 각자 다른 신원이 된다.**
+
+```bash
+S=/tmp/beep-multi; rm -rf $S; mkdir -p $S/A $S/B
+for d in A B; do cp target/release/{nexa-beep,nbeep-imgdec} $S/$d/; done   # imgdec 동거(§1-3)
+
+( cd $S/A && ./nexa-beep --window --live ) &      # 신원 A
+( cd $S/B && ./nexa-beep --window --live ) &      # 신원 B
+```
+
+두 창이 뜨고 **서로를 발견해 목록에 잡는다**(같은 호스트 = 멀티캐스트 루프백 · §3-2와 같은 원리).
+
+**왜 갈리나 — 포터블 규칙의 부수 효과(DR-4)**
+
+`data_dir()`는 **① `실행파일 옆/data`가 쓰기 가능하면 거기** → ② 사용자 설정 디렉터리 → ③ 임시 폴더
+순으로 고른다([app.rs](../crates/nexa-beep/src/app.rs)). 폴더를 나누면 ①에서 갈리므로
+**신원 키·핀·그룹·설정이 통째로 분리**된다.
+
+| 파일 | 무엇 |
+|---|---|
+| `data/identity.key` | 신원(= `PeerId`) — 이게 갈려서 서로 남이 된다 |
+| `data/trust.seg` | TOFU 핀 |
+| `data/groups.seg` | 그룹 |
+| `data/settings.cfg` · `data/profiles/` | 설정·프로필 |
+
+> ⚠️ **CLI 대화·프로브 모드는 매 실행 새 신원이다**(임시). `--chat-live`·`--chat-connect`·
+> `--discover-probe`는 `data/`를 만들지 않는다 — **폴더를 나눌 필요도 없고, 나눠도 영속되지 않는다.**
+> **폴더 분리가 의미 있는 건 GUI(무인자·`--window --live`)뿐이다.**
+
+**실측(2026-08-13)**
+
+| 확인 | 결과 |
+|---|---|
+| 폴더 A·B GUI 기동 | 각자 `data/identity.key` 생성 — **해시 상이**(`bce8c448…` vs `5fd2006b…`) |
+| `--discover-probe` 재실행 | `me=` 가 매번 바뀐다(`69859aa1` → `79b9b469`) = **임시 신원 확인** |
+
+**정리** — `rm -rf $S`. ⚠️ 저장소 빌드(`target/release/`)도 **`target/release/data/`를 쓴다** —
+그게 "기본 신원"이다. 초기화하려면 그 폴더를 지운다(핀·그룹·설정도 함께 사라진다).
+
+### 3-5. 헤드리스 관찰 — 사람 없이 확인
 
 ```bash
 ./target/release/nexa-beep --discover-probe 8   # 누가 보이나 · ⚠️CLONE 경고(D-22)
@@ -171,7 +213,7 @@ GUI에서는 `⌘/Ctrl+K` → 주소 입력 → Enter. **GUI는 포트를 생략
 ./target/release/nexa-beep --discover-probe 6 & ./target/release/nexa-beep --discover-probe 6 & wait
 ```
 
-### 3-5. 파일 전송 — 대화 중 명령
+### 3-6. 파일 전송 — 대화 중 명령
 
 3-2나 3-3으로 대화가 열린 상태에서:
 
