@@ -3,7 +3,10 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
-> **갱신: 2026-08-13 15차 (KST)** — **GUI 실행 가능 세션 판정 신설 + main CI red 해소**(사용자 요청):
+> **갱신: 2026-08-13 16차 (KST)** — **요약 계열 현행화**(코드 변경 0):
+> CLAUDE.md 현 단계(+`08-13 마감` 문단 신설 — 전송 Backpressure·연결 래치·chat-live 떠돌이 연결 내성·GUI 세션 판정) / README(521) / MILESTONES 표머리에 오늘 마감분 반영. 91행 "502 green"은 **08-13 후반 시점 기록이라 그대로 둔다**(시점 기록을 소급 수정하면 언제 무엇이 통과했는지 잃는다). CI **green 복귀**(`92476d9` success — 직전 `694a68d` failure). [journal/2026-08-13.md](journal/2026-08-13.md).
+>
+> **직전(08-13 15차)** — **GUI 실행 가능 세션 판정 신설 + main CI red 해소**(사용자 요청):
 > ① **문제** = 창을 못 여는 자리에서 **그냥 죽었다**. 릴리스는 `panic = "abort"`라 `Exited (134)`(SIGABRT)에 "시스템 UI 폰트 없음" 한 줄이 전부. **무인자가 창이 된 뒤로(`ad7dbfa`) 원격 셸에서 무심코 친 `nexa-beep`이 바로 이 경로**라 더 중요해졌다.
 > ② **고침** = `nbeep-plat::gui` — **관측(OS API)과 판정(순수 함수)을 분리**해 3-OS × 세션 종류를 맥에서 테스트. Windows `GetProcessWindowStation`(대화형은 `WinSta0` 뿐 · **RDP는 통과** — 원격이라고 막으면 되는 걸 막는 것) · macOS `CGSessionCopyCurrentDictionary()` NULL(서브프로세스 없이 `launchctl managername`과 동치) · Linux `$DISPLAY`/`$WAYLAND_DISPLAY`(**`ssh -X`는 자동 통과** — SSH 여부보다 DISPLAY가 먼저) · **폰트 축 별도**(세션이 돼도 폰트 없으면 못 연다). 신호를 못 얻으면 **막지 않는다**(오탐이 더 나쁘다). 사유마다 대안(`--chat-live` 등) 안내 후 **exit 3**. 의존 0.
 > ③ **실측** — ★ **맥 SSH 실기**(사용자 제공 원격 맥 12.7.6 · `managername=Background`): 안내+exit 3, **SSH 환경변수를 지워도 동일** = CGSession API가 실제로 NULL(휴리스틱 아님). Linux 컨테이너 2종(디스플레이 없음 / DISPLAY 있고 폰트 없음) 각 사유로 exit 3 · macOS 콘솔 창 정상 · SSH에서 `--discover-probe` exit 0. **Windows는 크로스 컴파일만 통과 — 실행 검증은 [TODO WGUI-1~6](TODO.md) 등록**.

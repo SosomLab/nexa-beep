@@ -7,6 +7,7 @@
 
 ## 2026-08-13
 
+- **요약 계열 현행화**(main `00f0ac8`): CLAUDE.md·README(521)·MILESTONES가 14차(502)에 멈춰 있어 오늘 마감분(전송 Backpressure·연결 래치·chat-live 내성·GUI 세션 판정) 반영. CLAUDE.md에 "08-13 마감" 문단 신설. 시점 기록(후반 502)은 소급 수정하지 않음. 코드 변경 0.
 - **GUI 실행 가능 세션 판정 신설**(main `e230e58` · 사용자 요청): 못 여는 자리에서 그냥 죽던 것(`Exited (134)`)을 **사유+대안 안내 후 exit 3**으로. `nbeep-plat::gui` — 관측(OS API)과 판정(순수 함수)을 나눠 **3-OS를 맥에서 테스트**. Windows=`WinSta0`(RDP는 통과) · macOS=`CGSessionCopyCurrentDictionary` · Linux=`$DISPLAY`(`ssh -X` 자동 통과) · 폰트 축 별도. ★ **맥 SSH 실기 확인**(원격 맥 12.7.6 · env 지워도 차단 = API가 실제로 NULL). 테스트 19 · **521 green**. 상세 [journal/2026-08-13.md](journal/2026-08-13.md).
 - **main CI red 해소**(main `47cb2d4`): `694a68d` lint(fmt) 실패 — 미포맷 3곳 + redundant clone 1건. 기능 변경 없음.
 - **요약 문서 현행화 + push**(코드 0): 후반 6슬라이스(한/영·조합 Enter·무인자 기본·대기 /quit·dedup 리셋+스레드 대피·imgdec 워커화)를 CLAUDE.md·README(502)·MILESTONES에 반영 · WIME-1·3·4·5·6 닫힘 · main push. 상세 [journal/2026-08-13.md](journal/2026-08-13.md).
