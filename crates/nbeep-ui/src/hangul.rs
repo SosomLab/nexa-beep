@@ -257,6 +257,56 @@ impl Composer {
     }
 }
 
+/// QWERTY 키 → 두벌식 자모(Windows 목록 타입어헤드 — [docs/27 §8]).
+///
+/// macOS는 한글 2벌식 **키보드 레이아웃**이 IME 없이도 자모 문자를 내보내지만,
+/// Windows의 한글 입력은 **US 레이아웃 + IME 조합**이라 IME를 끊으면(목록 창)
+/// 라틴 문자만 온다. 그래서 Windows에선 앱이 한/영 상태를 직접 들고 여기서
+/// 라틴 키를 자모로 번역해 [`Composer`]에 넣는다.
+///
+/// `shift`(대문자 입력 포함): ㅃㅉㄸㄲㅆ·ㅒㅖ 7종만 다르고 나머지는 동일(표준 두벌식).
+/// 라틴 알파벳이 아니면 `None` — 숫자·기호는 한글 모드에서도 그대로 통과시킨다.
+#[must_use]
+pub fn jamo_from_qwerty(c: char, shift: bool) -> Option<char> {
+    let base = c.to_ascii_lowercase();
+    Some(match (base, shift) {
+        ('q', false) => 'ㅂ',
+        ('q', true) => 'ㅃ',
+        ('w', false) => 'ㅈ',
+        ('w', true) => 'ㅉ',
+        ('e', false) => 'ㄷ',
+        ('e', true) => 'ㄸ',
+        ('r', false) => 'ㄱ',
+        ('r', true) => 'ㄲ',
+        ('t', false) => 'ㅅ',
+        ('t', true) => 'ㅆ',
+        ('y', _) => 'ㅛ',
+        ('u', _) => 'ㅕ',
+        ('i', _) => 'ㅑ',
+        ('o', false) => 'ㅐ',
+        ('o', true) => 'ㅒ',
+        ('p', false) => 'ㅔ',
+        ('p', true) => 'ㅖ',
+        ('a', _) => 'ㅁ',
+        ('s', _) => 'ㄴ',
+        ('d', _) => 'ㅇ',
+        ('f', _) => 'ㄹ',
+        ('g', _) => 'ㅎ',
+        ('h', _) => 'ㅗ',
+        ('j', _) => 'ㅓ',
+        ('k', _) => 'ㅏ',
+        ('l', _) => 'ㅣ',
+        ('z', _) => 'ㅋ',
+        ('x', _) => 'ㅌ',
+        ('c', _) => 'ㅊ',
+        ('v', _) => 'ㅍ',
+        ('b', _) => 'ㅠ',
+        ('n', _) => 'ㅜ',
+        ('m', _) => 'ㅡ',
+        _ => return None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -332,5 +382,61 @@ mod tests {
         out.push_str(&cm.feed('b'));
         assert_eq!(out, "기b", "조합 확정 후 ASCII 통과");
         assert!(!cm.is_composing());
+    }
+
+    #[test]
+    fn qwerty_maps_all_26_letters_to_jamo() {
+        // 라틴 26자 전부가 자모로 번역되고, 결과는 조합기가 아는 자모여야 한다.
+        for c in 'a'..='z' {
+            for shift in [false, true] {
+                let j = jamo_from_qwerty(c, shift)
+                    .unwrap_or_else(|| panic!("{c}(shift={shift}) 미매핑"));
+                assert!(is_jamo(j), "{c} → {j} 는 자모여야");
+            }
+        }
+    }
+
+    #[test]
+    fn qwerty_shift_variants_only_where_dubeolsik_defines() {
+        // 시프트가 갈리는 키 = ㅃㅉㄸㄲㅆ + ㅒㅖ (표준 두벌식).
+        for (k, plain, shifted) in [
+            ('q', 'ㅂ', 'ㅃ'),
+            ('w', 'ㅈ', 'ㅉ'),
+            ('e', 'ㄷ', 'ㄸ'),
+            ('r', 'ㄱ', 'ㄲ'),
+            ('t', 'ㅅ', 'ㅆ'),
+            ('o', 'ㅐ', 'ㅒ'),
+            ('p', 'ㅔ', 'ㅖ'),
+        ] {
+            assert_eq!(jamo_from_qwerty(k, false), Some(plain));
+            assert_eq!(jamo_from_qwerty(k, true), Some(shifted));
+        }
+        // 나머지는 시프트 무관 동일.
+        assert_eq!(jamo_from_qwerty('k', false), jamo_from_qwerty('k', true));
+        // 대문자 입력(논리 키가 시프트를 이미 반영)도 소문자와 같은 키로 본다.
+        assert_eq!(jamo_from_qwerty('Q', true), Some('ㅃ'));
+    }
+
+    #[test]
+    fn qwerty_non_letters_pass_none() {
+        // 숫자·기호·한글은 번역 대상이 아니다(호출측이 원문 그대로 라우팅).
+        for c in ['1', '-', ' ', 'ㄱ', '김'] {
+            assert_eq!(jamo_from_qwerty(c, false), None, "{c}");
+        }
+    }
+
+    #[test]
+    fn qwerty_full_word_through_composer() {
+        // "rlachlthd"(김최송) — 번역→조합 종단이 맥 자모 경로와 같은 결과를 내야 한다.
+        let mut cm = Composer::new();
+        let mut out = String::new();
+        for c in "rlachlthd".chars() {
+            let j = jamo_from_qwerty(c, false).unwrap();
+            out.push_str(&cm.feed(j));
+        }
+        if let Some(p) = cm.flush() {
+            out.push(p);
+        }
+        assert_eq!(out, "김최송");
     }
 }

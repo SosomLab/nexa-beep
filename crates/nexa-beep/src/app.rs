@@ -947,6 +947,10 @@ struct App {
     primary_down: bool,
     /// Shift 눌림 상태 — Shift+Enter 줄바꿈·Shift+이동 선택(08-10).
     shift_down: bool,
+    /// Windows 목록 타입어헤드 한/영 모드([docs/27 §8]). 목록 창은 IME를 끊는데
+    /// Windows 한글 입력은 IME 조합에서만 나오므로(레이아웃은 US) 한/영 키가 무력해진다
+    /// — 앱이 모드를 직접 들고 라틴 키를 두벌식 자모로 번역한다. macOS/Linux 미사용.
+    hangul_mode: bool,
     /// 세션 액터가 GUI를 깨우는 통로(M2-7).
     proxy: winit::event_loop::EventLoopProxy<AppEvent>,
     /// 종료 신호(R-16 · FR-P-7) — SIGINT/SIGTERM 시 el.exit() → Drop 체인이 GOODBYE·정리.
@@ -4813,6 +4817,29 @@ impl ApplicationHandler<AppEvent> for App {
                 }
                 // 새 키가 왔는데 보류 자모가 남아 있으면 = 앞 키에 IME가 안 붙었다 → 먼저 방출.
                 self.flush_pending_jamo(el);
+                // 한/영 키(Windows · 목록 전용 — [docs/27 §8]): 목록 창은 IME를 끊어
+                // OS 전환이 무력하므로 앱이 모드를 토글한다. VK_HANGUL은 키보드 드라이버
+                // 수준이라 IME 없이도 온다(winit: 논리 HangulMode · 물리 Lang1 — 둘 다 받는다).
+                // IME 켠 창(대화 등)은 OS IME 몫 — 상태를 건드리지 않고 문자 취급도 안 한다.
+                if cfg!(windows)
+                    && (event.logical_key == WKey::Named(NamedKey::HangulMode)
+                        || event.physical_key
+                            == winit::keyboard::PhysicalKey::Code(
+                                winit::keyboard::KeyCode::Lang1,
+                            ))
+                {
+                    let list_mode = Some(id) == self.main_id && self.single_open.is_none();
+                    if list_mode {
+                        self.hangul_mode = !self.hangul_mode;
+                        self.status = if self.hangul_mode {
+                            "입력: 한글 (한/영 키로 전환)".into()
+                        } else {
+                            "입력: English (한/영 키로 전환)".into()
+                        };
+                        self.request_redraw(id);
+                    }
+                    return;
+                }
                 // Cmd/Ctrl+, = 설정 · Cmd/Ctrl+K = 수동 엔드포인트 추가(DR-19).
                 if self.primary_down {
                     if let WKey::Character(t) = &event.logical_key {
@@ -4925,6 +4952,19 @@ impl ApplicationHandler<AppEvent> for App {
                             // IME 켜진 창(대화 등): 중복 가능성 → 보류-판정.
                             self.pending_jamo = Some((id, c, now_ms));
                         } else if !c.is_control() {
+                            // Windows 한글 모드(한/영 키 토글): IME가 없어 라틴이 온다 —
+                            // 두벌식 자모로 번역해 넣는다(대문자 = 시프트 반영·[docs/27 §8]).
+                            // 숫자·기호는 None → 원문 그대로(한글 모드에서도 통과).
+                            let c = if cfg!(windows)
+                                && list_mode
+                                && self.hangul_mode
+                                && !self.primary_down
+                            {
+                                nbeep_ui::hangul::jamo_from_qwerty(c, c.is_ascii_uppercase())
+                                    .unwrap_or(c)
+                            } else {
+                                c
+                            };
                             // 목록: IME 꺼짐 = 자모가 유일한 경로 → 즉시 직접 조합기로.
                             self.route(id, InputEvent::Char { c, now_ms }, el);
                         }
@@ -5238,6 +5278,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         pending_jamo: None,
         primary_down: false,
         shift_down: false,
+        hangul_mode: false,
         proxy,
         shutdown,
     };
