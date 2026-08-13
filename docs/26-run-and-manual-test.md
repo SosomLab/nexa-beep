@@ -19,38 +19,54 @@ cargo build --release -p nexa-beep -p nbeep-imgdec
 #   → target/release/{nexa-beep, nbeep-imgdec}
 ```
 
-### 1-2. Linux 바이너리(Docker 테스트용)
+### 1-2. Linux 바이너리 — **상주 빌더**(권장)
+
+컨테이너를 하나 띄워 두고 `exec`으로 빌드한다. 툴체인 다운로드와 컴파일 캐시가 살아 있어
+**두 번째부터는 바뀐 크레이트만** 컴파일한다. Docker 시험을 두 번 이상 할 거면 이쪽이 맞다.
+
+```bash
+# ① 1회 준비 — 컨테이너를 남긴다(`--rm`이면 종료 시 사라져 캐시가 날아간다)
+docker run -d --name beep-builder -v "$PWD":/src -w /src -e CARGO_TARGET_DIR=/target \
+  rust:1-slim sleep infinity
+docker exec beep-builder bash -c \
+  'apt-get update -qq && apt-get install -y -qq pkg-config >/dev/null; rustup show >/dev/null'
+
+# ② 매회 — 빌드와 반출을 **한 줄로** 묶는다(따로 두면 복사를 잊는다)
+docker exec beep-builder bash -c \
+  'cargo build --release -p nexa-beep -p nbeep-imgdec \
+   && mkdir -p /src/.docker-target/release \
+   && cp /target/release/nexa-beep /target/release/nbeep-imgdec /src/.docker-target/release/'
+#   → .docker-target/release/{nexa-beep, nbeep-imgdec}  (linux/amd64)
+```
+
+`docker stop beep-builder`로 세워 두고 `docker start beep-builder` 후 다시 `exec`하면 된다.
+
+**왜 `/target`(컨테이너 내부)인가 — 실측으로 갈랐다(08-13 · 맥 x64)**
+
+| 산출 위치 | 무변경 재빌드 | 한 크레이트 변경 | 복사 단계 |
+|---|---|---|---|
+| `/target`(내부 FS) | **0.36초** | **34.9초** | 필요 |
+| `/src/.docker-target`(바인드 마운트 직접) | 0.76초 | 37.2초 | 불필요 |
+
+맥 바인드 마운트 I/O가 느려 내부 FS가 빠르지만, 차이는 **2.4초**다. 진짜 위험은 속도가 아니라
+**복사를 잊고 옛 바이너리로 시험하는 것**이라, ②처럼 `&&`로 묶어 잊을 수 없게 만든다.
+그게 싫으면 `-e CARGO_TARGET_DIR=/src/.docker-target`로 덮어써 직접 쓰면 된다(복사 불요).
+
+콜드 스타트는 4분 29초. ⚠️ 그 몇 분간의 `debconf` 경고와 `downloading 9 components`는
+**오류가 아니다**(실기 08-13 — 실패로 오인): TTY 없는 apt의 소음 + `rust-toolchain.toml`이
+요구하는 툴체인·크로스 타깃 내려받기다. `Compiling …`부터가 빌드다.
+
+**일회성으로 딱 한 번만**(CI·다른 PC) — 캐시를 남기지 않는다:
 
 ```bash
 docker run --rm -v "$PWD":/src -w /src -e CARGO_TARGET_DIR=/src/.docker-target \
   rust:1-slim bash -c 'apt-get update -qq && apt-get install -y -qq pkg-config >/dev/null; \
   cargo build --release -p nexa-beep -p nbeep-imgdec'
-#   → .docker-target/release/{nexa-beep, nbeep-imgdec}  (linux/amd64)
 ```
 
-`CARGO_TARGET_DIR`를 나누는 이유 — 호스트 `target/`과 섞으면 맥·리눅스 산출물이 충돌해 **매번 전체 재컴파일**이 된다.
-Docker 데몬이 꺼져 있으면 `open -a Docker` 후 `docker info`가 응답할 때까지 기다린다.
-
-⚠️ **처음 몇 분간의 `debconf` 경고 + `downloading 9 components`는 오류가 아니다**(실기 08-13 —
-실패로 오인): TTY 없는 apt의 소음 + `--rm` 백지 컨테이너가 `rust-toolchain.toml`(툴체인·크로스
-타깃)을 매회 다시 받는 것. `Compiling …`부터가 빌드다.
-
-**반복해서 빌드하면 컨테이너를 상주시켜 재사용한다** — 다운로드·컴파일 캐시가 살아 있어
-두 번째부터는 바뀐 크레이트만 컴파일한다(⚠️ `--rm` 컨테이너는 종료 시 자동 삭제라 rename으로 못 남긴다):
-
-```bash
-# 1회: 준비(위 일회성 명령 대신 — 컨테이너를 남긴다)
-docker run -d --name beep-builder -v "$PWD":/src -w /src -e CARGO_TARGET_DIR=/target \
-  rust:1-slim sleep infinity
-docker exec beep-builder bash -c 'apt-get update -qq && apt-get install -y -qq pkg-config >/dev/null; rustup show >/dev/null'
-# 매회: 증분 빌드 + 산출물 꺼내기
-docker exec beep-builder cargo build --release -p nexa-beep -p nbeep-imgdec
-docker exec beep-builder bash -c 'mkdir -p /src/.docker-target/release && cp /target/release/nexa-beep /target/release/nbeep-imgdec /src/.docker-target/release/'
-```
-
-`/target` = 컨테이너 내부 FS — 맥 바인드 마운트의 느린 I/O를 피한다(소스는 마운트라 항상 최신).
-끝나면 `docker stop beep-builder` · 다음엔 `docker start beep-builder` 후 exec.
-실측(08-13 · 맥 x64): 콜드 4분 29초 → **무변경 재빌드 0.33초**(바뀐 크레이트만 그 사이).
+`CARGO_TARGET_DIR`를 호스트 `target/`과 나누는 이유 — 섞으면 맥·리눅스 산출물이 충돌해
+**매번 전체 재컴파일**이 된다. Docker 데몬이 꺼져 있으면 `open -a Docker` 후 `docker info`가
+응답할 때까지 기다린다.
 
 ### 1-3. ★ `nbeep-imgdec`를 반드시 함께 — 빠뜨려도 **오류가 안 난다**
 
@@ -64,7 +80,7 @@ docker exec beep-builder bash -c 'mkdir -p /src/.docker-target/release && cp /ta
 | 없어도 도는 것 | 채팅 · 파일 전송 · 발견 · 무해화 |
 | 그래서 | 컨테이너엔 **파일 하나가 아니라 디렉터리째** 마운트한다 |
 
-**실측(2026-08-13 · linux/amd64)** — `nexa-beep` 2.96MB · `nbeep-imgdec` 589KB · 첫 빌드 2분 21초.
+**실측(2026-08-13 · linux/amd64)** — `nexa-beep` 2.96MB · `nbeep-imgdec` 589KB. (빌드 시간은 [§1-2](#1-2-linux-바이너리--상주-빌더권장))
 
 ---
 
@@ -87,14 +103,18 @@ docker exec beep-builder bash -c 'mkdir -p /src/.docker-target/release && cp /ta
 **공통 옵션** — `--port <N>`(세션 수신 포트 · `--window`·`--chat-live`) · `--xfer-limit-mib <N>` ·
 `--xfer-rate-kb <N>`(대화 모드 파일 전송).
 
-### ★ 이 셋만 알면 대부분 안 막힌다
+### ★ 이 넷만 알면 대부분 안 막힌다
 
 **① `--live`가 없으면 밖과 못 붙는다.** 기본 `--window`는 InMemory 에코 봇이라 ⌘K 수동 연결도 안 먹는다.
 
 **② 대화 모드는 stdin이 곧 수명이다.** `--chat-*` 셋은 stdin을 한 줄씩 읽고, **EOF = 종료**다(`Ctrl+D`와 같다).
 백그라운드·파이프로 띄우면 이 일이 **조용히** 일어나 "붙자마자 끊긴다"로 보인다. 버그가 아니다 → [§6](#6-자주-막히는-곳--증상별).
 
-**③ 발견이 닿으면 포트를 맞출 필요가 없다.** 발견 패킷이 **실제 바인딩된 포트**(`tcp_port`)를 나른다
+**③ `--chat-live`는 죽지 않는다(08-13부터).** 핸드셰이크가 실패해도(포트 스캔·오연결) 그 연결만
+버리고 계속 기다리고, 대화가 끝나도 대기로 돌아간다. 그 전에는 **`nc -z` 한 번에 프로세스가
+종료**돼 "컨테이너가 자꾸 죽는다"로 보였다. 반면 `--chat-serve`는 **accept 1회**가 설계다([§9](#9-알려진-한계)).
+
+**④ 발견이 닿으면 포트를 맞출 필요가 없다.** 발견 패킷이 **실제 바인딩된 포트**(`tcp_port`)를 나른다
 ([29 §3](29-wire-security-audit.md) 실측). 포트가 문제되는 곳은 **발견이 닿지 않는 곳뿐**이고,
 거기서는 `--port`로 고정하고 그 값을 사람이 알려준다. 세션 기본 포트는 **47200**(`DEFAULT_SESSION_PORT` ·
 점유 시 임의 폴백 · 설정 `net.session_port`).
@@ -237,7 +257,7 @@ docker rm -f node_a node_b; docker network rm beepnet
 |---|---|---|---|
 | 명시 포트 | `--chat-connect $IP:47999` | ✅ 연결 | 어떤 포트든 붙는다 |
 | 포트 생략 | `--chat-connect $IP` | ❌ `BadAddress` | ⚠️ CLI 미보완 → [§6](#6-자주-막히는-곳--증상별) |
-| 발견 경유 | 한쪽 `--chat-live`, 한쪽 `--live-echo` | ✅ 연결 | **임의 포트인데도 찾아 붙는다** = §2 규칙 ③ |
+| 발견 경유 | 한쪽 `--chat-live`, 한쪽 `--live-echo` | ✅ 연결 | **임의 포트인데도 찾아 붙는다** = §2 규칙 ④ |
 
 ---
 
@@ -272,6 +292,8 @@ docker rm -f node_a node_b; docker network rm beepnet
 | **맥 GUI에 컨테이너가 안 뜬다** | 정상 — 브로드캐스트 도메인이 다르다(§4) | IP 직접(4-1) |
 | **이미지가 안 보인다** | `nbeep-imgdec`이 본체 옆에 없다. **경고가 안 난다**(§1-3) | 같이 빌드 + 디렉터리째 마운트 |
 | **컨테이너가 `Ctrl+C`로 안 죽는다** | `--init` 없음(PID 1은 기본 동작을 건너뛴다) | `docker run --init` |
+| **`docker attach`에서 나오려다 앱을 죽였다** | attach 중 `Ctrl+C`는 앱에 `SIGINT`로 간다 | 떼기만 하려면 **`Ctrl+P` → `Ctrl+Q`**(컨테이너는 계속 돈다) |
+| **빌드했는데 옛 동작 그대로** | 상주 빌더의 산출물을 `.docker-target`으로 **복사하지 않았다** | 빌드와 복사를 `&&`로 묶는다([§1-2](#1-2-linux-바이너리--상주-빌더권장) ②) |
 
 **자동화에서 세션을 유지하려면** — stdin 쓰기 끝을 붙잡아 EOF를 막는다.
 
