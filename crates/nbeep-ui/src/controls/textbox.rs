@@ -514,6 +514,10 @@ impl Widget for TextBox {
             }
         }
         self.hscroll.set(hs);
+        // 텍스트 뷰포트 x 범위(스크롤 전 시작 ~ 가용 폭 끝) — fill_rect는 클립을
+        // 모르므로 선택 반전·밑줄은 이 범위로 **직접 잘라** 그린다(08-13 실기:
+        // 드래그 선택 하이라이트가 컨트롤 좌우로 삐져나왔다. 대화 입력과 같은 처방).
+        let (view_x0, view_x1) = (tx, tx + avail);
         let tx = tx - hs;
         // 문자 경계 x(화면 좌표 — 스크롤 반영)를 실측해 남긴다 — 클릭→캐럿 변환 근거.
         {
@@ -534,17 +538,19 @@ impl Widget for TextBox {
             let mid: String = chars[a.min(chars.len())..b_end.min(chars.len())]
                 .iter()
                 .collect();
-            let x0 = tx + ctx.text_width(&pre);
-            let sw = ctx.text_width(&mid);
+            let x0 = (tx + ctx.text_width(&pre)).max(view_x0);
+            let x1 = (tx + ctx.text_width(&pre) + ctx.text_width(&mid)).min(view_x1);
             let th = ctx.text_height();
-            ctx.fill_rect(
-                Rect::new(x0, ty, sw, th),
-                if self.base.focused {
-                    theme.sel_bg
-                } else {
-                    theme.sel_bg_inactive
-                },
-            );
+            if x1 > x0 {
+                ctx.fill_rect(
+                    Rect::new(x0, ty, x1 - x0, th),
+                    if self.base.focused {
+                        theme.sel_bg
+                    } else {
+                        theme.sel_bg_inactive
+                    },
+                );
+            }
         }
         if shown.is_empty() {
             ctx.text(tx, ty, b, &self.placeholder, theme.text_dim);
@@ -554,10 +560,10 @@ impl Widget for TextBox {
         // 조합 구간 밑줄 — "여기가 아직 확정 전"임을 대화 입력과 같은 문법으로 표시.
         if !self.preedit.is_empty() {
             let th = ctx.text_height();
-            let ux0 = tx + pre_start_px;
-            let ux1 = tx + caret_px;
+            let ux0 = (tx + pre_start_px).max(view_x0);
+            let ux1 = (tx + caret_px).min(view_x1).max(ux0 + self.s(4));
             ctx.fill_rect(
-                Rect::new(ux0, ty + th, (ux1 - ux0).max(self.s(4)), self.s(1).max(1)),
+                Rect::new(ux0, ty + th, ux1 - ux0, self.s(1).max(1)),
                 theme.text_dim,
             );
         }
@@ -900,6 +906,60 @@ mod tests {
             t.on_event(&InputEvent::MouseMove { x: b.x - 20, y: 15 }, &mut inv);
         }
         assert_eq!(t.edit.caret(), 0, "왼쪽 밖 = -1씩(0에서 멈춤)");
+    }
+
+    /// fill_rect만 기록하는 캔버스 — 선택 반전·밑줄·캐럿이 상자를 넘는지 검증.
+    struct RecCtx(Vec<Rect>);
+    impl crate::draw::DrawCtx for RecCtx {
+        fn fill_rect(&mut self, r: Rect, _c: crate::theme::Color) {
+            self.0.push(r);
+        }
+        fn text_opaque(
+            &mut self,
+            _x: i32,
+            _y: i32,
+            _clip: Rect,
+            _t: &str,
+            _f: crate::theme::Color,
+            _b: crate::theme::Color,
+        ) {
+        }
+        fn text(&mut self, _x: i32, _y: i32, _clip: Rect, _t: &str, _f: crate::theme::Color) {}
+        fn text_width(&mut self, text: &str) -> i32 {
+            text.chars().count() as i32 * 7
+        }
+    }
+
+    #[test]
+    fn selection_highlight_clipped_to_box() {
+        // 08-13 실기 — 가로 스크롤 상태의 전체 선택 하이라이트가 컨트롤 좌우로
+        // 삐져나왔다(fill_rect는 클립을 모른다 — 뷰포트로 직접 잘라야 한다).
+        let (mut t, _inv) = tb();
+        t.set_text(&"가나다라마바사아자차".repeat(10)); // 260px 상자를 확실히 넘긴다
+        t.base.focused = true;
+        t.edit.key(EditKey::SelectAll, false); // 선택 끝(=캐럿)이 오른쪽 밖
+        let mut rec = RecCtx(Vec::new());
+        let theme = crate::theme::Theme::dark();
+        t.paint(&mut rec, &theme);
+        let b = t.bounds();
+        assert!(!rec.0.is_empty(), "선택 반전이 그려져야 한다");
+        for r in &rec.0 {
+            assert!(
+                r.x >= b.x && r.right() <= b.right(),
+                "채움이 상자 밖으로 나갔다: {r:?} vs 상자 {b:?}"
+            );
+        }
+        // 왼쪽 밖 케이스 — 캐럿을 앞으로 옮겨 스크롤을 왼쪽 끝으로 되돌린 뒤
+        // 다시 전체 선택(앵커 끝 유지 → 선택이 왼쪽 밖까지 걸치는 상태).
+        t.edit.set_caret(0, true);
+        let mut rec = RecCtx(Vec::new());
+        t.paint(&mut rec, &theme);
+        for r in &rec.0 {
+            assert!(
+                r.x >= b.x && r.right() <= b.right(),
+                "왼쪽 케이스 — 채움이 상자 밖: {r:?} vs {b:?}"
+            );
+        }
     }
 
     #[test]
