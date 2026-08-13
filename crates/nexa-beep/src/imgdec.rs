@@ -83,31 +83,27 @@ pub(crate) fn circle_mask(w: u32, h: u32, rgba: &mut [u8]) {
     }
 }
 
-/// 파일 → 원형 아바타 이미지(격리 디코드 + 마스크). 실패 = None(이니셜 폴백).
-pub(crate) fn avatar_from_file(
-    path: &std::path::Path,
-    max_side: u32,
-) -> Option<nbeep_ui::IconImage> {
-    let bytes = std::fs::read(path).ok()?;
-    avatar_from_bytes(&bytes, max_side)
-}
-
-/// 바이트 → 원형 아바타 이미지.
-pub(crate) fn avatar_from_bytes(bytes: &[u8], max_side: u32) -> Option<nbeep_ui::IconImage> {
+/// 바이트 → 원형 아바타 **원시 픽셀**(w, h, 마스크 적용 RGBA).
+///
+/// ★ 워커 스레드용(08-13 실기 — 자식 프로세스 왕복(스폰+Defender 검사)이 메인을
+/// 1~2초 멈췄다). 그리기 타입(`IconImage`·`Rc`)은 메인 소유라 **스레드 경계는
+/// 원시 바이트로** 건너고, 감싸는 건 메인(`AppEvent::Decoded` 처리부)이 한다.
+pub(crate) fn avatar_raw_from_bytes(bytes: &[u8], max_side: u32) -> Option<(u32, u32, Vec<u8>)> {
     let (w, h, mut rgba) = decode_isolated(bytes, max_side)?;
     circle_mask(w, h, &mut rgba);
-    Some(nbeep_ui::IconImage::from_rgba(w, h, rgba))
+    Some((w, h, rgba))
 }
 
-/// `.beepq` 격리물 → 사각 썸네일(M4-5ⓑ — 격리함·대화 스레드 미리보기).
+/// `.beepq` 격리물 → 사각 썸네일 **원시 픽셀**(M4-5ⓑ — 격리함·대화 스레드 미리보기).
 ///
 /// 원본을 **본체에서 해석하지 않는다** — `.beepq` 컨테이너에서 바이트를 꺼내
 /// (선두 봉인 프리픽스 ‖ 본문 재조립) imgdec에 그대로 넘길 뿐, 픽셀은 격리
 /// 프로세스가 만든다. 이미지가 아니거나 1MiB 초과·손상이면 None(미리보기 없음).
-pub(crate) fn thumb_from_beepq(
+/// [`avatar_raw_from_bytes`]와 같은 이유로 워커에서 돌고 원시 픽셀로 돌아온다.
+pub(crate) fn thumb_raw_from_beepq(
     path: &std::path::Path,
     max_side: u32,
-) -> Option<nbeep_ui::IconImage> {
+) -> Option<(u32, u32, Vec<u8>)> {
     let bytes = std::fs::read(path).ok()?;
     let q = nbeep_safe::Beepq::open(&bytes).ok()?;
     let total = q.sealed_prefix.len() + q.body.len();
@@ -117,8 +113,7 @@ pub(crate) fn thumb_from_beepq(
     let mut original = Vec::with_capacity(total);
     original.extend_from_slice(&q.sealed_prefix);
     original.extend_from_slice(&q.body);
-    let (w, h, rgba) = decode_isolated(&original, max_side)?;
-    Some(nbeep_ui::IconImage::from_rgba(w, h, rgba))
+    decode_isolated(&original, max_side)
 }
 
 #[cfg(test)]

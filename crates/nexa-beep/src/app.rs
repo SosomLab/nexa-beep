@@ -133,6 +133,40 @@ enum AppEvent {
         phone: Option<String>,
         image: Option<Vec<u8>>,
     },
+    /// 격리 디코드 완료(워커 → 메인 · M4-5). ★ 그전엔 자식 프로세스 왕복(스폰 +
+    /// Defender 검사 — Windows 실측 1~2초)이 **메인 스레드에서 동기**로 돌아, 대화창이
+    /// 입력란도 못 그린 채 얼었다(08-13 실기). 픽셀은 원시 RGBA로 건너오고(그리기
+    /// 타입 `Rc<IconImage>`는 메인 소유 — Send 아님) 감싸는 건 메인이 한다.
+    Decoded {
+        target: DecodeTarget,
+        image: Option<(u32, u32, Vec<u8>)>,
+    },
+}
+
+/// 격리 디코드 요청의 목적지 — 요청(`spawn_decode`)과 완료([`AppEvent::Decoded`])를 잇는다.
+#[derive(Debug)]
+enum DecodeTarget {
+    /// 상대 프로필 아바타(256 · 원형) — `peer_profiles`에 꽂고 목록 갱신.
+    PeerAvatar(PeerId),
+    /// 내 프로필 화면 아바타 미리보기(256 · 원형).
+    MyAvatar,
+    /// 수신 이미지의 대화 스레드 미리보기(96 · 사각 · M4-5ⓑ).
+    XferThumb(PeerId),
+    /// 격리함 행 썸네일(64 · 사각) — `.beepq` 경로 키의 캐시(`qthumbs`)로.
+    QThumb(String),
+}
+
+/// 격리 디코드를 **워커 스레드**로 보낸다(M2-8 연결 워커와 같은 문법 — 블로킹은
+/// 워커에서, 복귀는 이벤트로). 실패(`None`)도 이벤트로 돌아온다(대상별로 무시/폴백).
+fn spawn_decode(
+    proxy: winit::event_loop::EventLoopProxy<AppEvent>,
+    target: DecodeTarget,
+    job: impl FnOnce() -> Option<(u32, u32, Vec<u8>)> + Send + 'static,
+) {
+    std::thread::spawn(move || {
+        let image = job();
+        let _ = proxy.send_event(AppEvent::Decoded { target, image });
+    });
 }
 
 /// 세션 액터에 보내는 명령 — 대화 바이트와 파일 제어를 한 채널로 교대한다.
@@ -927,6 +961,9 @@ struct App {
     /// (`install_conversation`)이 되찾아 간다 — 그전엔 끊김 = 스레드 통째 소실이었다.
     /// (영속 기록은 M2-5b — 이건 프로세스 수명 안의 보존이다.)
     parked_lines: HashMap<PeerId, Vec<ChatLine>>,
+    /// 격리함 썸네일 캐시(`.beepq` 경로 → 디코드 결과 · `None` = 요청 중/실패·비이미지).
+    /// 채움은 워커(`Decoded(QThumb)`) — 행 재적재가 imgdec를 재호출하지 않게 한다.
+    qthumbs: HashMap<String, Option<std::rc::Rc<nbeep_ui::IconImage>>>,
     /// **비발견 상대**(수동 등록·다른 서브넷 인바운드 — 사용자 실기 08-13) — 발견
     /// 테이블에 ANNOUNCE가 안 닿아도 목록에 유지한다(대화창을 닫으면 사라지던 버그).
     /// 이름은 성립 시 스냅샷(프로필 이름은 2줄째로 따로 표시된다).
@@ -2169,7 +2206,9 @@ impl App {
 
     /// 컨트롤 갤러리 창을 연다(임시 검수 — 이미 열려 있으면 포커스).
     /// 격리함 행 적재 — `.beepq`를 읽어 메타를 표시용으로 옮긴다(호스트가 IO 담당).
-    fn quarantine_rows(&self) -> Vec<nbeep_ui::QRow> {
+    /// 썸네일은 **캐시만 본다**(&mut = 미보유분 워커 요청·선점 기록) — 그전엔 행마다
+    /// imgdec 자식 프로세스를 동기로 돌려 이미지 N개면 열기가 N배 얼었다(08-13).
+    fn quarantine_rows(&mut self) -> Vec<nbeep_ui::QRow> {
         use nbeep_core::TrustStore as _;
         use nbeep_safe::{Beepq, QuarantineDir};
         let Ok(dir) = QuarantineDir::open(crate::gate::quarantine_root(crate::gate::CH_GUI)) else {
@@ -2204,6 +2243,25 @@ impl App {
                 } else {
                     nbeep_plat::clock::local_hms(bq.meta.received_at).hms()
                 };
+                let path_s = p.to_string_lossy().into_owned();
+                // 이미지 미리보기(M4-5ⓑ) — 캐시 조회. 미보유면 `None` 선점 기록 후
+                // 워커 요청(중복 요청·실패 재시도 방지 겸용) → `Decoded(QThumb)`가
+                // 캐시를 채우고 행을 다시 그린다(팝인). 이미지가 아니면 조용히 없음.
+                let thumb = match self.qthumbs.get(&path_s) {
+                    Some(t) => t.clone(),
+                    None => {
+                        self.qthumbs.insert(path_s.clone(), None);
+                        let qp = path_s.clone();
+                        spawn_decode(
+                            self.proxy.clone(),
+                            DecodeTarget::QThumb(path_s.clone()),
+                            move || {
+                                crate::imgdec::thumb_raw_from_beepq(std::path::Path::new(&qp), 64)
+                            },
+                        );
+                        None
+                    }
+                };
                 Some(nbeep_ui::QRow {
                     name: String::from_utf8_lossy(&bq.meta.orig_name).into_owned(),
                     risk: bq.meta.risk,
@@ -2212,10 +2270,8 @@ impl App {
                     trust: self.trust.level(bq.meta.sender),
                     from,
                     when,
-                    // 이미지 미리보기(M4-5ⓑ) — 픽셀은 imgdec(격리)가 만든다.
-                    // 이미지가 아니면 조용히 없음.
-                    thumb: crate::imgdec::thumb_from_beepq(&p, 64).map(std::rc::Rc::new),
-                    path: p.to_string_lossy().into_owned(),
+                    thumb,
+                    path: path_s,
                 })
             })
             .collect()
@@ -2255,7 +2311,8 @@ impl App {
                 scale,
             },
         );
-        self.quarantine_view = Some(nbeep_ui::QuarantineWidget::new(self.quarantine_rows()));
+        let rows = self.quarantine_rows();
+        self.quarantine_view = Some(nbeep_ui::QuarantineWidget::new(rows));
         self.layout_window(id);
         self.request_redraw(id);
     }
@@ -2669,12 +2726,17 @@ impl App {
                 .to_string(),
             seed: self.identity.peer_id().as_bytes().to_vec(),
             avatar: {
-                // 내 사진 미리보기(M4-5) — 저장된 경로를 imgdec로 격리 디코드.
-                let p = self.settings.get("profile.image_path");
-                (!p.is_empty())
-                    .then(|| crate::imgdec::avatar_from_file(std::path::Path::new(p), 256))
-                    .flatten()
-                    .map(std::rc::Rc::new)
+                // 내 사진 미리보기(M4-5) — 격리 디코드는 워커로(창 열림이 1~2초 얼지
+                // 않게 · 08-13). 도착하면 `Decoded(MyAvatar)`가 채운다(그전엔 이니셜).
+                let p = self.settings.get("profile.image_path").to_string();
+                if !p.is_empty() {
+                    spawn_decode(self.proxy.clone(), DecodeTarget::MyAvatar, move || {
+                        std::fs::read(&p)
+                            .ok()
+                            .and_then(|b| crate::imgdec::avatar_raw_from_bytes(&b, 256))
+                    });
+                }
+                None
             },
         };
         let attrs = Window::default_attributes()
@@ -3598,22 +3660,28 @@ impl App {
                                                 self.settings
                                                     .set("profile.image_path", path.clone());
                                                 self.conf_mark();
-                                                // 격리 디코드(M4-5) — 미리보기 즉시 갱신.
-                                                let avatar =
-                                                    crate::imgdec::avatar_from_file(&p, 256)
-                                                        .map(std::rc::Rc::new);
-                                                let decoded = avatar.is_some();
+                                                // 격리 디코드는 워커로(M4-5 · 08-13 —
+                                                // 파일 고른 직후 1~2초 얼지 않게).
+                                                // 도착 = `Decoded(MyAvatar)`가 갱신.
+                                                let jp = p.clone();
+                                                spawn_decode(
+                                                    self.proxy.clone(),
+                                                    DecodeTarget::MyAvatar,
+                                                    move || {
+                                                        std::fs::read(&jp).ok().and_then(|b| {
+                                                            crate::imgdec::avatar_raw_from_bytes(
+                                                                &b, 256,
+                                                            )
+                                                        })
+                                                    },
+                                                );
                                                 if let Some(pv) = &mut self.profile_view {
                                                     let mut pinv = Invalidations::default();
                                                     pv.set_image_path(&path, &mut pinv);
-                                                    pv.set_avatar(avatar, &mut pinv);
                                                     let _ = pv.take_changes(); // 저장은 위에서 이미
                                                 }
-                                                self.status = if decoded {
-                                                    format!("프로필 이미지 = {path}")
-                                                } else {
-                                                    format!("프로필 이미지 = {path} (미리보기 불가 — PNG/JPEG 아님/imgdec 부재)")
-                                                };
+                                                self.status =
+                                                    format!("프로필 이미지 = {path} (미리보기 준비 중…)");
                                                 if let Some((pid, _)) = self
                                                     .windows
                                                     .iter()
@@ -4070,23 +4138,15 @@ impl ApplicationHandler<AppEvent> for App {
                         ),
                     },
                 );
-                // 이미지면 소형 미리보기 부착(M4-5ⓑ) — 픽셀은 imgdec(격리)가 만든다.
+                // 이미지면 소형 미리보기 부착(M4-5ⓑ) — 디코드는 워커로(08-13 —
+                // 수신 완료 순간 메인이 멈추지 않게). 도착 = `Decoded(XferThumb)`가
+                // 마지막 수신 항목에 부착(연속 수신과의 경합 창은 짧다 — 실해 없음).
                 // 이미지가 아니거나 실패면 조용히 없음(스레드는 텍스트 그대로).
-                if let Some(thumb) =
-                    crate::imgdec::thumb_from_beepq(std::path::Path::new(&qpath), 96)
                 {
-                    let thumb = std::rc::Rc::new(thumb);
-                    if let Some(conv) = self.conversations.get_mut(&peer) {
-                        nbeep_ui::chat_view::attach_xfer_thumb(
-                            &mut conv.lines,
-                            false,
-                            thumb.clone(),
-                        );
-                    }
-                    if let Some(chat) = self.chats.get_mut(&peer) {
-                        let mut inv = Invalidations::default();
-                        chat.attach_xfer_thumb(false, thumb, &mut inv);
-                    }
+                    let qp = qpath.clone();
+                    spawn_decode(self.proxy.clone(), DecodeTarget::XferThumb(peer), move || {
+                        crate::imgdec::thumb_raw_from_beepq(std::path::Path::new(&qp), 96)
+                    });
                 }
                 self.clear_xfer(peer);
                 self.redraw_conversation(peer);
@@ -4322,15 +4382,21 @@ impl ApplicationHandler<AppEvent> for App {
                 if let Some(n) = &display {
                     self.trust.record_name(peer, n.clone());
                 }
-                // 이미지 바이트 캐시 + **격리 디코드**(M4-5 — imgdec 자식 프로세스 ·
-                // 본체는 파서를 링크하지 않는다. 실패 = 이니셜 폴백).
+                // 이미지 바이트 캐시 + **격리 디코드는 워커로**(M4-5 — 자식 프로세스
+                // 왕복이 메인을 1~2초 멈췄다 · 08-13 실기). 도착 전엔 기존 아바타를
+                // 유지하고(깜빡임 방지) `Decoded(PeerAvatar)`가 교체한다. 실패 = 이니셜.
                 let mut avatar = None;
                 let image_file = image.and_then(|bytes| {
                     let dir = self.data_dir.join("profiles");
                     std::fs::create_dir_all(&dir).ok()?;
                     let path = dir.join(format!("{}.img", peer.short()));
                     std::fs::write(&path, &bytes).ok()?;
-                    avatar = crate::imgdec::avatar_from_bytes(&bytes, 256).map(std::rc::Rc::new);
+                    avatar = self.peer_profiles.get(&peer).and_then(|p| p.avatar.clone());
+                    spawn_decode(
+                        self.proxy.clone(),
+                        DecodeTarget::PeerAvatar(peer),
+                        move || crate::imgdec::avatar_raw_from_bytes(&bytes, 256),
+                    );
                     Some(path)
                 });
                 let has_any =
@@ -4393,6 +4459,75 @@ impl ApplicationHandler<AppEvent> for App {
                 self.status = format!("연결됨: {title} — 목록에서 열기");
                 if let Some(mid) = self.main_id {
                     self.request_redraw(mid);
+                }
+            }
+            AppEvent::Decoded { target, image } => {
+                // 워커 격리 디코드 복귀(M4-5 · 08-13) — 메인은 감싸고, 꽂고, 다시 그린다.
+                let icon = image
+                    .map(|(w, h, rgba)| std::rc::Rc::new(nbeep_ui::IconImage::from_rgba(w, h, rgba)));
+                match target {
+                    DecodeTarget::PeerAvatar(peer) => {
+                        if let Some(p) = self.peer_profiles.get_mut(&peer) {
+                            p.avatar = icon;
+                        }
+                        let mut inv = Invalidations::default();
+                        self.refresh_rows(&mut inv);
+                        if let Some(mid) = self.main_id {
+                            self.request_redraw(mid);
+                        }
+                    }
+                    DecodeTarget::MyAvatar => {
+                        if let Some(pv) = &mut self.profile_view {
+                            let mut pinv = Invalidations::default();
+                            if icon.is_none() {
+                                self.status =
+                                    "프로필 이미지 미리보기 불가 — PNG/JPEG 아님/imgdec 부재"
+                                        .into();
+                            }
+                            pv.set_avatar(icon, &mut pinv);
+                            let _ = pv.take_changes(); // 경로 저장은 선택 시점에 이미
+                        }
+                        if let Some((pid, _)) =
+                            self.windows.iter().find(|(_, e)| e.role == Role::Profile)
+                        {
+                            let pid = *pid;
+                            self.request_redraw(pid);
+                        }
+                    }
+                    DecodeTarget::XferThumb(peer) => {
+                        if let Some(t) = icon {
+                            if let Some(conv) = self.conversations.get_mut(&peer) {
+                                nbeep_ui::chat_view::attach_xfer_thumb(
+                                    &mut conv.lines,
+                                    false,
+                                    t.clone(),
+                                );
+                            }
+                            if let Some(chat) = self.chats.get_mut(&peer) {
+                                let mut inv = Invalidations::default();
+                                chat.attach_xfer_thumb(false, t, &mut inv);
+                            }
+                            self.redraw_conversation(peer);
+                        }
+                    }
+                    DecodeTarget::QThumb(path) => {
+                        self.qthumbs.insert(path, icon);
+                        if self.quarantine_view.is_some() {
+                            let rows = self.quarantine_rows();
+                            if let Some(v) = &mut self.quarantine_view {
+                                let mut inv = Invalidations::default();
+                                v.set_rows(rows, &mut inv);
+                            }
+                            if let Some((qid, _)) = self
+                                .windows
+                                .iter()
+                                .find(|(_, e)| e.role == Role::Quarantine)
+                            {
+                                let qid = *qid;
+                                self.request_redraw(qid);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -5321,6 +5456,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         ime_composing: false,
         ime_cleared_ms: None,
         parked_lines: HashMap::new(),
+        qthumbs: HashMap::new(),
         pending_jamo: None,
         primary_down: false,
         shift_down: false,
