@@ -350,6 +350,52 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
             .ceil() as i32
     }
 
+    /// 단일 패스 누적 폭(08-14 성능) — [`Self::text_width`]의 두 경로(기본·폴백 런)를
+    /// **같은 f32 접기 순서·같은 자리의 ceil**로 복제한다: 접두사 `i`의 결과가
+    /// `text_width(&text[..i])`와 **비트 동일**해야 캐럿·선택 좌표가 어긋나지 않는다
+    /// (값 동일 = 기능 불변의 근거 · 종전 O(n²) 접두사 재측정을 O(n)으로).
+    fn text_prefix_widths(&mut self, text: &str, out: &mut Vec<i32>) {
+        out.clear();
+        out.push(0);
+        let size = self.px_size();
+        let own = size * self.mono_mult;
+        let mut buf = [0u8; 4];
+        if core::ptr::eq(self.font, self.fonts.base) || text.chars().all(|c| self.font.has_glyph(c))
+        {
+            // 빠른 경로 — measure()와 같은 문자 순서의 f32 누적 · 접두사마다 ceil.
+            let mut sum = 0f32;
+            for c in text.chars() {
+                sum += self.font.measure(c.encode_utf8(&mut buf), own);
+                out.push(sum.ceil() as i32);
+            }
+            return;
+        }
+        // 폴백 경로 — split_runs의 런 구획(공백은 앞 런에 붙음)과 합산 접기 순서를
+        // 접두사 자리마다 복제: 접두사 폭 = (완료 런들의 좌측 접기) + 진행 런 부분합.
+        let (mut completed, mut run_sum) = (0f32, 0f32);
+        let mut cur_fb: Option<bool> = None;
+        for c in text.chars() {
+            let fb = if c == ' ' && cur_fb.is_some() {
+                cur_fb.unwrap_or(false) // 공백 = 현재 런 유지(split_runs 규칙)
+            } else {
+                !self.font.has_glyph(c)
+            };
+            if cur_fb != Some(fb) {
+                if cur_fb.is_some() {
+                    completed += run_sum; // 런 종결 = sum() 좌측 접기와 동일
+                }
+                run_sum = 0.0;
+                cur_fb = Some(fb);
+            }
+            run_sum += if fb {
+                self.fonts.base.measure(c.encode_utf8(&mut buf), size)
+            } else {
+                self.font.measure(c.encode_utf8(&mut buf), own)
+            };
+            out.push((completed + run_sum).ceil() as i32);
+        }
+    }
+
     fn text_height(&mut self) -> i32 {
         if (self.mono_mult - 1.0).abs() > f32::EPSILON {
             // 고정폭 줄엔 한글 폴백(기본 얼굴·명목 크기)이 섞인다 — 그 기준으로 센터링.

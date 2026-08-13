@@ -60,6 +60,21 @@ pub trait DrawCtx {
     /// 텍스트 렌더 폭(px) — 우측 정렬·라벨 실측 정렬용.
     fn text_width(&mut self, text: &str) -> i32;
 
+    /// 문자 경계 **누적 폭**(08-14 성능) — `out[i]` = 앞 `i`글자 접두사의
+    /// [`text_width`](Self::text_width)와 **동일 값**(0 포함 · 길이 = 문자수+1).
+    /// 캐럿·선택 좌표의 원천이라 **값 동일이 계약**이다. 기본 구현 = 접두사
+    /// 재측정(O(n²) — 종전 호출부 로직 그대로) · 렌더러는 단일 패스(O(n))로
+    /// 오버라이드한다(매 페인트 실측이라 캐럿 깜빡임 상시 리페인트에서 비용이 컸다).
+    fn text_prefix_widths(&mut self, text: &str, out: &mut Vec<i32>) {
+        out.clear();
+        out.push(0);
+        let mut acc = String::new();
+        for c in text.chars() {
+            acc.push(c);
+            out.push(self.text_width(&acc));
+        }
+    }
+
     /// 현재 글꼴의 텍스트 상자 높이(px · 어센트+디센트) — 세로 중앙 정렬 실측용.
     /// 기본 = 16(레거시 근사) — 실제 렌더러는 폰트 메트릭으로 오버라이드.
     fn text_height(&mut self) -> i32 {
@@ -127,5 +142,40 @@ pub trait DrawCtx {
     /// 꺾은선(✓·셰브론 등) — 둥근 캡, 폭 `width`px AA. 기본 = no-op.
     fn polyline(&mut self, pts: &[(i32, i32)], color: Color, width: f32) {
         let _ = (pts, color, width);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::geom::Rect;
+    use crate::theme::Color;
+
+    /// 비선형 폭 목업 — 누적이 "선형 가정"을 하면 어긋나도록 폭 = 문자수²×3.
+    struct Quirky;
+    impl DrawCtx for Quirky {
+        fn fill_rect(&mut self, _r: Rect, _c: Color) {}
+        fn text_opaque(&mut self, _x: i32, _y: i32, _c: Rect, _t: &str, _f: Color, _b: Color) {}
+        fn text(&mut self, _x: i32, _y: i32, _c: Rect, _t: &str, _f: Color) {}
+        fn text_width(&mut self, text: &str) -> i32 {
+            let n = i32::try_from(text.chars().count()).unwrap_or(i32::MAX);
+            n * n * 3
+        }
+    }
+
+    /// 계약(08-14): `out[i]` == `text_width(접두사 i)` · `out[0]` == 0 · 길이 = 문자수+1.
+    /// 캐럿·선택 좌표의 원천이라 이 동일성이 곧 기능 불변의 근거다.
+    #[test]
+    fn prefix_widths_default_matches_prefix_text_width() {
+        let mut ctx = Quirky;
+        let text = "한a b글";
+        let mut out = Vec::new();
+        ctx.text_prefix_widths(text, &mut out);
+        assert_eq!(out.len(), text.chars().count() + 1);
+        assert_eq!(out[0], 0);
+        for (i, w) in out.iter().enumerate() {
+            let prefix: String = text.chars().take(i).collect();
+            assert_eq!(*w, ctx.text_width(&prefix), "접두사 {i}");
+        }
     }
 }

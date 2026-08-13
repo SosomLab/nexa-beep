@@ -497,9 +497,17 @@ impl Widget for TextBox {
             let after: String = chars[caret_i..].iter().collect();
             format!("{before}{}{after}", self.preedit)
         };
-        let pre_start_px = ctx.text_width(&before);
+        // 문자 경계 누적 폭 — 단일 패스(08-14 성능 · 값은 접두사 재측정과 동일 계약.
+        // 캐럿 깜빡임이 포커스 창을 상시 리페인트해 매 프레임 O(n²) 측정이 비쌌다).
+        let mut w = Vec::new();
+        ctx.text_prefix_widths(&text, &mut w);
+        let pre_start_px = w.get(caret_i).copied().unwrap_or(0);
         let caret_px = pre_start_px + ctx.text_width(&self.preedit); // 조합 뒤가 캐럿
-        let total_px = ctx.text_width(&shown);
+        let total_px = if self.preedit.is_empty() {
+            w.last().copied().unwrap_or(0) // shown == text — 같은 값(계약)
+        } else {
+            ctx.text_width(&shown) // 조합 중 한정 — 종전 그대로
+        };
         // 가용 폭 — 우측 여백(×·도움말 배지 자리)을 뺀다.
         let avail = (b.right() - self.s(24) - tx).max(self.s(20));
         let mut hs = self.hscroll.get();
@@ -524,27 +532,22 @@ impl Widget for TextBox {
         let (view_x0, view_x1) = (tx, tx + avail);
         let view = Rect::new(view_x0, b.y, avail, b.h);
         let tx = tx - hs;
-        // 문자 경계 x(화면 좌표 — 스크롤 반영)를 실측해 남긴다 — 클릭→캐럿 변환 근거.
+        // 문자 경계 x(화면 좌표 — 스크롤 반영)를 남긴다 — 클릭→캐럿 변환 근거.
         {
             self.text_x.set(tx);
             let mut xs = self.caret_xs.borrow_mut();
             xs.clear();
-            xs.push(tx);
-            let mut acc = String::new();
-            for ch in text.chars() {
-                acc.push(ch);
-                xs.push(tx + ctx.text_width(&acc));
-            }
+            xs.extend(w.iter().map(|px| tx + px));
         }
         // 선택 반전(08-13 전수 검사: 선택은 되는데 하이라이트가 안 보였다) —
         // 텍스트보다 먼저 채워야 글자가 위에 얹힌다. preedit 중엔 선택이 없다.
         if let Some((a, b_end)) = self.edit.selection() {
-            let pre: String = chars[..a.min(chars.len())].iter().collect();
             let mid: String = chars[a.min(chars.len())..b_end.min(chars.len())]
                 .iter()
                 .collect();
-            let x0 = (tx + ctx.text_width(&pre)).max(view_x0);
-            let x1 = (tx + ctx.text_width(&pre) + ctx.text_width(&mid)).min(view_x1);
+            let wp = w.get(a.min(chars.len())).copied().unwrap_or(0); // 접두사 폭(누적 재사용)
+            let x0 = (tx + wp).max(view_x0);
+            let x1 = (tx + wp + ctx.text_width(&mid)).min(view_x1);
             let th = ctx.text_height();
             if x1 > x0 {
                 ctx.fill_rect(

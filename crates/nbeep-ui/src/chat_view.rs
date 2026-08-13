@@ -1514,15 +1514,11 @@ impl Widget for ChatViewWidget {
             };
         } else {
             // 줄별 문자 경계 x 캐시(전체 줄 — 히트테스트·캐럿·선택 공용).
+            // 단일 패스 누적(08-14 성능 — 종전 접두사 재측정 O(n²) · 값 동일 계약).
             let mut geom_lines: Vec<Vec<i32>> = Vec::with_capacity(count);
             for l in &all_lines {
                 let mut xs = Vec::with_capacity(l.chars().count() + 1);
-                xs.push(0);
-                let mut acc = String::new();
-                for c in l.chars() {
-                    acc.push(c);
-                    xs.push(ctx.text_width(&acc));
-                }
+                ctx.text_prefix_widths(l, &mut xs);
                 geom_lines.push(xs);
             }
             let sel = self.input.selection();
