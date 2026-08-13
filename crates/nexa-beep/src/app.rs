@@ -3584,10 +3584,15 @@ impl App {
                     }
                 }
                 // 미연결 — 본문을 상대별로 대기시키고 자동 연결(성립 시 flush).
-                self.pending_group_sends
-                    .entry(*m)
-                    .or_default()
-                    .push((gid, text.as_str().to_string()));
+                // 보관 상한 = 설정 `group.resync_keep`(사용 시점 읽기 — 즉시 반영) ·
+                // 초과분은 오래된 것부터 폐기(큐 상한 필수 — NFR-B-6 · 13 §12-1).
+                let keep = group_resync_keep(&self.settings);
+                let q = self.pending_group_sends.entry(*m).or_default();
+                q.push((gid, text.as_str().to_string()));
+                if q.len() > keep {
+                    let drop_n = q.len() - keep;
+                    q.drain(..drop_n);
+                }
                 queued.push(*m);
             }
             for m in &queued {
@@ -5701,6 +5706,18 @@ fn effective_display_name(
 /// 포트 생략 시 거는 포트(사용자 확정 08-13 ⓐ — 하나의 값).
 /// **`0` = 임의 포트**(테스트·다중 인스턴스 — `--port 0`) — 걸 때의 기본값으로는 못 쓰므로
 /// 주소 입력 기본은 47200으로 폴백한다(소비처 참조).
+/// 그룹 미전달 보관 상한(ADR-0012 §4 — 주체 = 송신자 · 사용자 확정 08-13).
+/// 설정 `group.resync_keep` 관용 파싱 — 무효·0은 기본 200. **사용 시점에 읽어**
+/// 설정 변경이 재시작 없이 반영된다(hot-swap 원칙).
+fn group_resync_keep(settings: &SettingsState) -> usize {
+    settings
+        .get("group.resync_keep")
+        .parse::<usize>()
+        .ok()
+        .filter(|n| *n > 0)
+        .unwrap_or(200)
+}
+
 fn session_port_from(settings: &SettingsState) -> u16 {
     settings
         .get("net.session_port")

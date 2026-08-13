@@ -551,6 +551,24 @@ pub fn registry() -> &'static [Entry] {
             kind: SettingKind::RadioInput(&[("47200", Msg::PortDefault)], ""),
             key: "net.session_port",
         },
+        // 그룹(M5-1 · ADR-0012) — 재동기 보관 주체 = 송신자(사용자 확정 08-13).
+        // 발신자가 구성원별로 미전달 그룹 메시지를 몇 개까지 보관할지(초과 = 오래된 것
+        // 폐기 — 큐 상한 필수 NFR-B-6). 소비처(app)가 관용 파싱한다.
+        Entry {
+            cat: Msg::CatGroup,
+            sub: None,
+            label: Msg::GroupResyncKeep,
+            desc: Msg::GroupResyncKeepDesc,
+            kind: SettingKind::RadioInput(
+                &[
+                    ("200", Msg::Count200),
+                    ("50", Msg::Count50),
+                    ("1000", Msg::Count1000),
+                ],
+                "개",
+            ),
+            key: "group.resync_keep",
+        },
     ]
 }
 

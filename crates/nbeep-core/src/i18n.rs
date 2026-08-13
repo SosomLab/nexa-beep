@@ -324,6 +324,17 @@ pub enum Msg {
     SessionPortDesc,
     /// 기본 포트(47200) 선택지 라벨.
     PortDefault,
+    // ── 그룹 (M5-1 · ADR-0012) ──
+    /// 카테고리: 그룹.
+    CatGroup,
+    /// 발신자 보관 상한 — 미전달 그룹 메시지를 발신자가 몇 개까지 보관하는가
+    /// (재동기 주체 = 송신자 · 사용자 확정 08-13).
+    GroupResyncKeep,
+    GroupResyncKeepDesc,
+    /// 보관 상한 선택지.
+    Count50,
+    Count200,
+    Count1000,
 }
 
 impl Msg {
@@ -860,6 +871,22 @@ impl Msg {
                 "默认(47200)",
                 "既定(47200)",
             ],
+            Msg::CatGroup => ["Groups", "그룹", "群组", "グループ"],
+            Msg::GroupResyncKeep => [
+                "Undelivered message retention",
+                "미전달 메시지 보관 상한",
+                "未送达消息保留上限",
+                "未配信メッセージ保持上限",
+            ],
+            Msg::GroupResyncKeepDesc => [
+                "How many undelivered group messages the sender keeps per member. Delivered when they come online; oldest dropped over the limit.",
+                "구성원별로 미전달 그룹 메시지를 발신자가 몇 개까지 보관할지. 상대가 접속하면 이어 전달되고, 상한 초과분은 오래된 것부터 지워집니다.",
+                "发送方为每个成员保留多少条未送达的群消息。对方上线后补发，超限时从最旧的开始丢弃。",
+                "未配信のグループメッセージを送信者がメンバーごとに何件保持するか。相手の接続時に配信され、上限超過分は古い順に破棄。",
+            ],
+            Msg::Count50 => ["50", "50개", "50条", "50件"],
+            Msg::Count200 => ["200 (default)", "200개(기본)", "200条(默认)", "200件(既定)"],
+            Msg::Count1000 => ["1000", "1000개", "1000条", "1000件"],
         }
     }
 }
