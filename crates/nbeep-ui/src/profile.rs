@@ -14,6 +14,9 @@ use crate::widget::{Invalidations, Widget};
 use nbeep_core::avatar::AvatarChoice;
 use nbeep_core::i18n::{t, Msg};
 
+/// 최근 프로필 이미지 보관 상한(08-14 사용자 확정 — 최대 10).
+const RECENT_MAX: usize = 10;
+
 /// 프로필 화면 초기값(호스트가 설정에서 읽어 넘긴다).
 #[derive(Debug, Default, Clone)]
 pub struct ProfileValues {
@@ -43,6 +46,9 @@ pub struct ProfileValues {
     /// 아바타 보더 색 `"#RRGGBB"`(`profile.avatar_border` — 부팅 시 시드 기본값 저장이
     /// 보장돼 비어 오지 않는다 · 08-14).
     pub avatar_border: String,
+    /// 최근 등록한 프로필 이미지 경로(`profile.image_recent` — 최신 먼저 · 최대 10 ·
+    /// 08-14 사용자 확정). 썸네일은 호스트가 격리 디코드해 `set_recent_thumb`로 채운다.
+    pub recent: Vec<String>,
 }
 
 /// 프로필 변경 화면 위젯.
@@ -69,6 +75,10 @@ pub struct ProfileWidget {
     builtins: Vec<(String, std::rc::Rc<crate::theme::IconImage>)>,
     /// 스와치 캐러셀(08-14 사용자 확정 — 32px 아이템 · 넘칠 때만 좌/우 이동 버튼).
     swatches: Carousel,
+    /// 최근 프로필 이미지(경로, 썸네일 — 호스트가 채움 · 최신 먼저 · 최대 10).
+    recent: Vec<(String, Option<std::rc::Rc<crate::theme::IconImage>>)>,
+    /// 최근 이미지 캐러셀(Profile image 라벨과 Choose… 사이 · 28px · × 삭제 오버레이).
+    recent_car: Carousel,
     changes: Vec<(&'static str, String)>,
     pick_image: bool,
     closed: bool,
@@ -90,6 +100,15 @@ impl ProfileWidget {
                 .collect();
         let mut swatches = Carousel::new(32, 4);
         swatches.set_count(2 + builtins.len()); // [이니셜][없음] + 내장
+        let recent: Vec<(String, Option<std::rc::Rc<crate::theme::IconImage>>)> = v
+            .recent
+            .iter()
+            .filter(|p| !p.is_empty())
+            .take(RECENT_MAX)
+            .map(|p| (p.clone(), None))
+            .collect();
+        let mut recent_car = Carousel::new(28, 4);
+        recent_car.set_count(recent.len());
         Self {
             bounds: Rect::default(),
             scale: 1.0,
@@ -111,6 +130,8 @@ impl ProfileWidget {
             border: ColorPicker::new(&v.avatar_border),
             builtins,
             swatches,
+            recent,
+            recent_car,
             changes: Vec::new(),
             pick_image: false,
             closed: false,
@@ -211,11 +232,50 @@ impl ProfileWidget {
         std::mem::take(&mut self.closed)
     }
 
-    /// 피커가 고른 이미지 경로 반영(호스트 호출) — 변경으로도 보고한다.
+    /// 피커가 고른 이미지 경로 반영(호스트 호출) — 변경으로도 보고하고 **최근 목록에
+    /// 편입**한다(최신 먼저 · 중복 승격 · 최대 10(`RECENT_MAX`) · 08-14 사용자 확정).
     pub fn set_image_path(&mut self, path: &str, inv: &mut Invalidations) {
         self.image_path = path.to_string();
         self.changes.push(("profile.image_path", path.to_string()));
+        if !path.is_empty() {
+            self.recent.retain(|(p, _)| p != path);
+            self.recent.insert(0, (path.to_string(), None));
+            self.recent.truncate(RECENT_MAX);
+            self.recent_car.set_count(self.recent.len());
+            self.changes
+                .push(("profile.image_recent", self.encode_recent()));
+        }
         inv.push(self.bounds);
+    }
+
+    /// 최근 목록 직렬화(`profile.image_recent` — 탭 구분 · 경로에 탭은 없다고 본다.
+    /// 개행은 nexa-conf가 공백으로 무해화하므로 못 쓴다).
+    fn encode_recent(&self) -> String {
+        self.recent
+            .iter()
+            .map(|(p, _)| p.as_str())
+            .collect::<Vec<_>>()
+            .join("\t")
+    }
+
+    /// 최근 이미지 썸네일 도착(호스트 — 격리 디코드 완료). 모르는 경로는 무시.
+    pub fn set_recent_thumb(
+        &mut self,
+        path: &str,
+        img: Option<std::rc::Rc<crate::theme::IconImage>>,
+        inv: &mut Invalidations,
+    ) {
+        if let Some(slot) = self.recent.iter_mut().find(|(p, _)| p == path) {
+            slot.1 = img;
+            inv.push(self.bounds);
+        }
+    }
+
+    /// i번째 최근 이미지의 × 삭제 오버레이 영역(우상단 — 표시 중일 때만).
+    fn recent_x_rect(&self, i: usize) -> Option<Rect> {
+        let r = self.recent_car.item_rect(i)?;
+        let d = self.s(12);
+        Some(Rect::new(r.right() - d + self.s(2), r.y - self.s(2), d, d))
     }
 
     /// 배율 지정 — 내부 컨트롤 전파.
@@ -225,6 +285,7 @@ impl ProfileWidget {
         self.email.set_scale(self.scale);
         self.phone.set_scale(self.scale);
         self.swatches.set_scale(self.scale);
+        self.recent_car.set_scale(self.scale);
         self.border.set_scale(self.scale);
         self.choose_img.set_scale(self.scale);
         self.sw_basic.set_scale(self.scale);
@@ -249,6 +310,11 @@ impl ProfileWidget {
             Rect::new(b.x + pad, b.y + self.s(164), b.w - pad * 2, self.s(36)),
             inv,
         );
+        // 최근 프로필 이미지 캐러셀(08-14) — "Profile image" 라벨과 Choose… 사이.
+        let rx = b.x + pad + self.s(110);
+        let rw = (b.right() - pad - self.s(80) - self.s(8) - rx).max(0);
+        self.recent_car
+            .set_bounds(Rect::new(rx, b.y + self.s(240), rw, self.s(36)), inv);
         // 보더 색 행(08-14) — 라벨은 paint · ColorPick 우측 정렬.
         let pick_w = self.border.preferred_width();
         self.border.set_bounds(
@@ -326,6 +392,30 @@ impl Widget for ProfileWidget {
         self.swatches.on_event(ev, inv);
         if let Some(i) = self.swatches.take_clicked() {
             self.apply_swatch(i, inv);
+            return;
+        }
+        // 최근 이미지 캐러셀(08-14) — × 오버레이가 아이템 클릭보다 **먼저**(겹친다).
+        if let InputEvent::MouseDown { x, y, .. } = *ev {
+            let p = Point { x, y };
+            for i in 0..self.recent.len() {
+                if self.recent_x_rect(i).is_some_and(|r| r.contains(p)) {
+                    self.recent.remove(i);
+                    self.recent_car.set_count(self.recent.len());
+                    self.changes
+                        .push(("profile.image_recent", self.encode_recent()));
+                    inv.push(self.bounds);
+                    return;
+                }
+            }
+        }
+        self.recent_car.on_event(ev, inv);
+        if let Some(i) = self.recent_car.take_clicked() {
+            if let Some((path, thumb)) = self.recent.get(i).cloned() {
+                // 최근 이미지 선택 = 그 사진으로 전환(사진 우선 — 스와치 링 해제).
+                self.image_path = path.clone();
+                self.avatar = thumb; // 큰 미리보기는 호스트 디코드(256)가 곧 교체
+                self.changes.push(("profile.image_path", path));
+            }
             return;
         }
         if let InputEvent::MouseDown { x, y, .. } = *ev {
@@ -501,20 +591,52 @@ impl Widget for ProfileWidget {
             t(Msg::ProfileImage),
             theme.text,
         );
-        ctx.select_font(FontSlot::Status, false);
-        let clip = Rect::new(
-            b.x + pad,
-            b.y + self.s(244),
-            (self.choose_img.bounds().x - self.s(8) - (b.x + pad + self.s(110))).max(0),
-            self.s(28),
-        );
-        ctx.text(
-            b.x + pad + self.s(110),
-            b.y + self.s(250),
-            clip,
-            &self.image_label(),
-            theme.text_dim,
-        );
+        // 최근 이미지 캐러셀(08-14) — 있으면 파일명 대신 이 띠가 자리를 쓴다.
+        if self.recent.is_empty() {
+            ctx.select_font(FontSlot::Status, false);
+            let clip = Rect::new(
+                b.x + pad,
+                b.y + self.s(244),
+                (self.choose_img.bounds().x - self.s(8) - (b.x + pad + self.s(110))).max(0),
+                self.s(28),
+            );
+            ctx.text(
+                b.x + pad + self.s(110),
+                b.y + self.s(250),
+                clip,
+                &self.image_label(),
+                theme.text_dim,
+            );
+        } else {
+            for (i, (path, thumb)) in self.recent.iter().enumerate() {
+                let Some(r) = self.recent_car.item_rect(i) else {
+                    continue;
+                };
+                if let Some(img) = thumb {
+                    let fit = crate::controls::image_fit_contain(r, img.w as i32, img.h as i32);
+                    ctx.image_scaled(fit, img, r);
+                } else {
+                    // 디코드 전/실패 — 빈 원 자리표시.
+                    ctx.fill_round_rect(r, r.w / 2, theme.field_bg);
+                }
+                // 현재 사용 중인 사진 = 링(스와치와 같은 문법).
+                if !self.image_path.is_empty() && *path == self.image_path {
+                    let ring = Rect::new(r.x - 2, r.y - 2, r.w + 4, r.h + 4);
+                    ctx.stroke_round_rect(ring, ring.w / 2, theme.accent, 2.0);
+                }
+                // × 삭제 오버레이(우상단 · 08-14 사용자 확정 — 렌더러에 반투명 채움이
+                // 없어 진한 빨강 원 + 흰 ×로 대비를 만든다).
+                if let Some(xr) = self.recent_x_rect(i) {
+                    ctx.fill_round_rect(xr, xr.w / 2, theme.danger);
+                    let m = self.s(3);
+                    let (x0, y0, x1, y1) = (xr.x + m, xr.y + m, xr.right() - m, xr.bottom() - m);
+                    let w = self.s(1).max(1) as f32 + 0.5;
+                    ctx.polyline(&[(x0, y0), (x1, y1)], crate::theme::Color(0x00FF_FFFF), w);
+                    ctx.polyline(&[(x0, y1), (x1, y0)], crate::theme::Color(0x00FF_FFFF), w);
+                }
+            }
+            self.recent_car.paint(ctx, theme);
+        }
         // 필드 라벨.
         let labels = [
             (Msg::DisplayNameLabel, self.s(286)),
@@ -709,10 +831,58 @@ mod tests {
         w.on_event(&InputEvent::MouseUp { x: cx, y: cy }, &mut inv);
         assert!(w.take_pick_image(), "선택 요청");
         w.set_image_path("C:/pics/me.png", &mut inv);
+        // 경로 저장 + **최근 목록 편입**(08-14 — 캐러셀 재선택 재료)이 함께 보고된다.
         assert_eq!(
             w.take_changes(),
-            vec![("profile.image_path", "C:/pics/me.png".to_string())]
+            vec![
+                ("profile.image_path", "C:/pics/me.png".to_string()),
+                ("profile.image_recent", "C:/pics/me.png".to_string()),
+            ]
         );
         assert_eq!(w.image_label(), "me.png");
+    }
+
+    #[test]
+    fn recent_click_selects_and_x_deletes() {
+        let mut w = ProfileWidget::new(&ProfileValues {
+            display_name: "auto".into(),
+            recent: vec!["/a.png".into(), "/b.png".into()],
+            ..ProfileValues::default()
+        });
+        let mut inv = Invalidations::default();
+        w.set_bounds(Rect::new(0, 0, 440, 610), &mut inv);
+        // 최근 아이템 클릭 = 그 사진으로 전환.
+        let r = w.recent_car.item_rect(1).expect("표시 중");
+        w.on_event(
+            &InputEvent::MouseDown {
+                x: r.x + r.w / 2,
+                y: r.y + r.h / 2,
+                shift: false,
+                primary: false,
+            },
+            &mut inv,
+        );
+        let ch = w.take_changes();
+        assert!(
+            ch.contains(&("profile.image_path", "/b.png".to_string())),
+            "최근 클릭 = 선택: {ch:?}"
+        );
+        // × 오버레이 클릭 = 목록에서 삭제(선택은 불변).
+        let xr = w.recent_x_rect(0).expect("표시 중");
+        w.on_event(
+            &InputEvent::MouseDown {
+                x: xr.x + xr.w / 2,
+                y: xr.y + xr.h / 2,
+                shift: false,
+                primary: false,
+            },
+            &mut inv,
+        );
+        let ch = w.take_changes();
+        assert!(
+            ch.contains(&("profile.image_recent", "/b.png".to_string())),
+            "× = 삭제 후 목록 재보고: {ch:?}"
+        );
+        assert_eq!(w.recent.len(), 1, "한 개 삭제됨");
     }
 }

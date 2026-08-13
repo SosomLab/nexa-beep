@@ -13,7 +13,7 @@
 
 use super::{Control, ControlBase};
 use crate::draw::DrawCtx;
-use crate::event::InputEvent;
+use crate::event::{InputEvent, WheelAccum};
 use crate::geom::{Point, Rect};
 use crate::theme::Theme;
 use crate::widget::{Invalidations, Widget};
@@ -32,6 +32,10 @@ pub struct Carousel {
     first: usize,
     /// 아이템 클릭(전역 인덱스 · 1회성).
     clicked: Option<usize>,
+    /// 커서가 띠 위에 있는가 — 가로 휠(트랙패드) 스크롤은 이 위에서만(08-14).
+    hover: bool,
+    /// 가로 휠 노치 누적(트랙패드 분수 delta).
+    hwheel: WheelAccum,
 }
 
 impl Carousel {
@@ -45,6 +49,8 @@ impl Carousel {
             count: 0,
             first: 0,
             clicked: None,
+            hover: false,
+            hwheel: WheelAccum::default(),
         }
     }
 
@@ -193,6 +199,30 @@ impl Widget for Carousel {
     }
 
     fn on_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
+        // 트랙패드 가로 스크롤(08-14 사용자 요청) — 띠 위에 커서가 있을 때만,
+        // 노치 누적으로 **아이템 단위** 이동(버튼은 페이지 단위 — 정밀/도약 분담).
+        match *ev {
+            InputEvent::MouseMove { x, y } => {
+                self.hover = self.base.bounds.contains(Point { x, y });
+                return;
+            }
+            InputEvent::HWheel { delta } if self.hover => {
+                let steps = self.hwheel.add(delta, 1);
+                if steps != 0 {
+                    // 양수 = 오른쪽(다음 아이템) — 목록 가로 스크롤 방향과 일치.
+                    if steps > 0 {
+                        self.first = (self.first + steps.unsigned_abs() as usize)
+                            .min(self.count.saturating_sub(1));
+                    } else {
+                        self.first = self.first.saturating_sub(steps.unsigned_abs() as usize);
+                    }
+                    self.clamp_first();
+                    inv.push(self.base.bounds);
+                }
+                return;
+            }
+            _ => {}
+        }
         let InputEvent::MouseDown { x, y, .. } = *ev else {
             return;
         };
@@ -306,6 +336,22 @@ mod tests {
         assert!(c.right_rect().is_none(), "오른쪽 끝 = 우버튼 없음");
         assert!(c.left_rect().is_some(), "오른쪽 끝 = 좌버튼만");
         assert!(c.item_rect(15).is_some(), "마지막 아이템이 보인다");
+    }
+
+    #[test]
+    fn trackpad_hwheel_scrolls_items_under_cursor() {
+        let mut c = car(200, 16);
+        let mut inv = Invalidations::default();
+        // 커서가 띠 밖 — 무시(다른 스크롤 영역과 경합하지 않게).
+        c.on_event(&InputEvent::HWheel { delta: 120 }, &mut inv);
+        assert!(c.item_rect(0).is_some(), "밖에서는 안 움직인다");
+        // 띠 위에 올리고 한 노치 = 한 아이템 전진.
+        c.on_event(&InputEvent::MouseMove { x: 10, y: 10 }, &mut inv);
+        c.on_event(&InputEvent::HWheel { delta: 120 }, &mut inv);
+        assert!(c.item_rect(0).is_none(), "한 노치 = 한 아이템 전진");
+        // 반대로 되돌리기.
+        c.on_event(&InputEvent::HWheel { delta: -120 }, &mut inv);
+        assert!(c.item_rect(0).is_some(), "반대 방향 복귀");
     }
 
     #[test]

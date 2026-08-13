@@ -163,6 +163,9 @@ enum DecodeTarget {
     XferThumb(PeerId),
     /// 격리함 행 썸네일(64 · 사각) — `.beepq` 경로 키의 캐시(`qthumbs`)로.
     QThumb(String),
+    /// 프로필 "최근 이미지" 캐러셀 썸네일(64 · 원형 · 08-14) — 경로 키로 프로필
+    /// 화면에 꽂는다(창이 닫혔으면 버린다 — 다음 열림에 재디코드).
+    RecentThumb(String),
 }
 
 /// 격리 디코드를 **워커 스레드**로 보낸다(M2-8 연결 워커와 같은 문법 — 블로킹은
@@ -3163,6 +3166,32 @@ impl App {
                 }
                 None
             },
+            recent: {
+                // 최근 프로필 이미지(08-14) — 탭 구분 목록. 썸네일은 워커 디코드로
+                // 뒤따라온다(Decoded(RecentThumb) — 그전엔 자리표시 원).
+                let list: Vec<String> = self
+                    .settings
+                    .get("profile.image_recent")
+                    .split('\t')
+                    .filter(|s| !s.is_empty())
+                    .take(10)
+                    .map(str::to_string)
+                    .collect();
+                for p in &list {
+                    let key = p.clone();
+                    let jp = p.clone();
+                    spawn_decode(
+                        self.proxy.clone(),
+                        DecodeTarget::RecentThumb(key),
+                        move || {
+                            std::fs::read(&jp)
+                                .ok()
+                                .and_then(|b| crate::imgdec::avatar_raw_from_bytes(&b, 64))
+                        },
+                    );
+                }
+                list
+            },
         };
         let attrs = Window::default_attributes()
             .with_title("Nexa Beep — 프로필")
@@ -3691,9 +3720,17 @@ impl App {
                     self.status = "아바타 변경 — 연결된 상대에게 반영".into();
                 }
                 // 사진 경로(08-14) — 스와치 선택이 비우면 툴바 버튼도 즉시 따라간다.
+                // 값이 차면(최근 캐러셀 선택 등) 그 사진을 디코드해 미리보기·툴바 갱신.
                 "profile.image_path" => {
                     if value.is_empty() {
                         self.my_avatar = None;
+                    } else {
+                        let jp = value.clone();
+                        spawn_decode(self.proxy.clone(), DecodeTarget::MyAvatar, move || {
+                            std::fs::read(&jp)
+                                .ok()
+                                .and_then(|b| crate::imgdec::avatar_raw_from_bytes(&b, 256))
+                        });
                     }
                     self.refresh_toolbar_avatar();
                 }
@@ -6145,6 +6182,12 @@ impl ApplicationHandler<AppEvent> for App {
                                     "프로필 이미지 미리보기 불가 — PNG/JPEG 아님/imgdec 부재"
                                         .into();
                             }
+                            // 현재 경로의 최근 캐러셀 썸네일도 이 디코드로 채운다
+                            // (같은 원본 — 별도 64 디코드가 필요 없다 · 08-14).
+                            let cur = self.settings.get("profile.image_path").to_string();
+                            if !cur.is_empty() {
+                                pv.set_recent_thumb(&cur, icon.clone(), &mut pinv);
+                            }
                             pv.set_avatar(icon, &mut pinv);
                             let _ = pv.take_changes(); // 경로 저장은 선택 시점에 이미
                         }
@@ -6169,6 +6212,19 @@ impl ApplicationHandler<AppEvent> for App {
                                 chat.attach_xfer_thumb(false, t, &mut inv);
                             }
                             self.redraw_conversation(peer);
+                        }
+                    }
+                    DecodeTarget::RecentThumb(path) => {
+                        // 프로필 창이 열려 있을 때만 의미(닫혔으면 버림 — 재열림에 재디코드).
+                        if let Some(pv) = &mut self.profile_view {
+                            let mut pinv = Invalidations::default();
+                            pv.set_recent_thumb(&path, icon, &mut pinv);
+                        }
+                        if let Some((pid, _)) =
+                            self.windows.iter().find(|(_, e)| e.role == Role::Profile)
+                        {
+                            let pid = *pid;
+                            self.request_redraw(pid);
                         }
                     }
                     DecodeTarget::QThumb(path) => {
