@@ -1089,6 +1089,11 @@ struct App {
     /// commit=" " 직후 key=Named(Space)가 또 온다). 120ms 안의 같은 문자 키다운을
     /// 1회 소비한다(take — 진짜 연타의 두 번째는 통과).
     ime_commit_echo: Option<(char, u64)>,
+    /// 포커스 이탈 시 **앱이 수동 확정한** 조합분(창, 본문, 시각) — 그 직후 IME가
+    /// 같은 본문을 Commit으로 **또** 보내면 잔향이다(08-13 실기 "나다다" 3차:
+    /// Focused(false) 수동 합류 뒤 늦은 Commit("다")이 이중 입력을 만들었다).
+    /// 1초 안 같은 창·같은 본문의 Commit을 1회 삼킨다(초과·불일치는 정상 입력).
+    ime_selfcommit: Option<(WindowId, String, u64)>,
     /// OS 주 수식키(⌘/Ctrl) 눌림 상태 — `Cmd/Ctrl+,` 판정.
     primary_down: bool,
     /// Shift 눌림 상태 — Shift+Enter 줄바꿈·Shift+이동 선택(08-10).
@@ -6323,6 +6328,9 @@ impl ApplicationHandler<AppEvent> for App {
                     // 프롬프트 전부)로. 대화 창만 직접 지우던 시절의 잔재가 프로필에서
                     // "나다" 확정 합류 + 잔상 "다" = "나다다"로 보였다(08-13 실기).
                     self.set_chat_preedit(id, String::new());
+                    // 수동 확정 기록 — IME가 같은 본문을 **늦은 Commit**으로 또 보내면
+                    // 잔향으로 판정해 버린다("나다다" 3차 — 이중 입력의 진범).
+                    self.ime_selfcommit = Some((id, text.clone(), now_ms));
                     for c in text.chars().filter(|c| !c.is_control()) {
                         self.route(id, InputEvent::Char { c, now_ms }, el);
                     }
@@ -6397,10 +6405,32 @@ impl ApplicationHandler<AppEvent> for App {
             WindowEvent::Ime(winit::event::Ime::Commit(text)) => {
                 if self.ime_trace {
                     eprintln!(
-                        "[ime] commit={text:?} pending={:?} leak={}",
+                        "[ime] commit={text:?} pending={:?} leak={} selfcommit={:?}",
                         self.pending_jamo.map(|(_, c, _)| c),
-                        self.leak.is_composing()
+                        self.leak.is_composing(),
+                        self.ime_selfcommit.as_ref().map(|(_, s, _)| s)
                     );
+                }
+                // 포커스 이탈 수동 확정(Focused(false))의 **늦은 Commit 잔향** — 같은
+                // 창·같은 본문이 1초 안에 또 오면 이미 합류된 입력이다(08-13 실기
+                // "나다다" 3차: 수동 확정 뒤 IME Commit("다")이 이중 입력을 만들었다.
+                // "Enter 확정 후엔 정상"이 단서 — Enter는 Commit을 정상 소비해 잔향이
+                // 없다). 표시만 소거하고 라우팅은 생략한다(1회성 · 불일치는 정상 입력).
+                {
+                    let now_ms = self.now_ms();
+                    if self
+                        .ime_selfcommit
+                        .take_if(|(pid, s, t)| {
+                            *pid == id && *s == text && now_ms.saturating_sub(*t) < 1000
+                        })
+                        .is_some()
+                    {
+                        self.ime_composing = false;
+                        self.ime_preedit.clear();
+                        self.ime_preedit_stash = None;
+                        self.set_chat_preedit(id, String::new());
+                        return;
+                    }
                 }
                 // 한/영 전환 직후 macOS가 자모를 **낱개 Commit**으로 흘리는 경합(08-13
                 // 실측: key=ㄴ 유출 + commit="ㅏ" — 모든 입력창 공통) — 목록(IME off)
@@ -7258,6 +7288,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         ime_trace: std::env::var_os("NEXA_IME_TRACE").is_some(),
         pending_arrow: None,
         ime_commit_echo: None,
+        ime_selfcommit: None,
         primary_down: false,
         shift_down: false,
         hangul_mode: false,
