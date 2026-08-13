@@ -78,6 +78,11 @@ impl TextPromptWidget {
         self.input.paste(text, inv);
     }
 
+    /// IME 조합 중 문자열(08-13 — 모든 텍스트 컨트롤 규칙: 확정 전에도 보인다).
+    pub fn set_preedit(&mut self, text: &str, inv: &mut Invalidations) {
+        self.input.set_preedit(text, inv);
+    }
+
     fn s(&self, v: i32) -> i32 {
         (v as f32 * self.scale).round() as i32
     }

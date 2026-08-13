@@ -91,6 +91,14 @@ impl ProfileWidget {
         }
     }
 
+    /// IME 조합 중 문자열(08-13) — 초점 필드만 받는다(TextBox가 스스로 거른다 ·
+    /// 빈 문자열은 소거라 전 필드에 전달).
+    pub fn set_preedit(&mut self, text: &str, inv: &mut Invalidations) {
+        self.name.set_preedit(text, inv);
+        self.email.set_preedit(text, inv);
+        self.phone.set_preedit(text, inv);
+    }
+
     /// 사진 미리보기 교체(호스트 — 이미지 선택 직후 imgdec 결과 반영).
     pub fn set_avatar(
         &mut self,

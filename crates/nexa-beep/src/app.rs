@@ -1123,7 +1123,8 @@ impl App {
         }
     }
 
-    /// IME 켠 대화 입력(1:1·그룹)의 프리에딧 표시를 갱신한다(조합 중 밑줄 표시).
+    /// IME 켠 창의 프리에딧 표시를 갱신한다(조합 중 밑줄 — 대화·프로필·이름/주소
+    /// 프롬프트. 08-13: "확정 전엔 안 보인다"가 모든 입력창 공통 문제였다).
     fn set_chat_preedit(&mut self, id: WindowId, text: String) {
         let mut inv = Invalidations::default();
         if let Some(peer) = self.chat_peer_for(id) {
@@ -1133,6 +1134,25 @@ impl App {
         } else if let Some(gid) = self.group_chat_for(id) {
             if let Some(chat) = self.gchats.get_mut(&gid) {
                 chat.set_preedit(text, &mut inv);
+            }
+        } else {
+            match self.windows.get(&id).map(|e| e.role) {
+                Some(Role::Profile) => {
+                    if let Some(v) = self.profile_view.as_mut() {
+                        v.set_preedit(&text, &mut inv);
+                    }
+                }
+                Some(Role::NamePrompt) => {
+                    if let Some(v) = self.name_prompt.as_mut() {
+                        v.set_preedit(&text, &mut inv);
+                    }
+                }
+                Some(Role::AddEndpoint) => {
+                    if let Some(v) = self.addr_view.as_mut() {
+                        v.set_preedit(&text, &mut inv);
+                    }
+                }
+                _ => {}
             }
         }
         self.request_redraw(id);
@@ -6276,26 +6296,19 @@ impl ApplicationHandler<AppEvent> for App {
                 } else {
                     text.clone()
                 };
-                if let Some(peer) = self.chat_peer_for(id) {
-                    let mut inv = Invalidations::default();
-                    if let Some(chat) = self.chats.get_mut(&peer) {
-                        chat.set_preedit(shown, &mut inv);
-                    }
-                    self.request_redraw(id);
-                } else if let Some(gid) = self.group_chat_for(id) {
-                    // 그룹 방(M5-1g) — 1:1과 같은 프리에딧 표시(08-13 실기: 이 분기가
-                    // 없어 조합 중 마지막 음절이 화면에 안 보였다).
-                    let mut inv = Invalidations::default();
-                    if let Some(chat) = self.gchats.get_mut(&gid) {
-                        chat.set_preedit(shown, &mut inv);
-                    }
-                    self.request_redraw(id);
-                } else if Some(id) == self.main_id && self.single_open.is_none() {
+                if Some(id) == self.main_id
+                    && self.single_open.is_none()
+                    && self.single_open_group.is_none()
+                {
                     // 목록에서 한글 조합 즉시 매칭(확정/Space 불필요).
                     let now_ms = self.now_ms();
                     let mut inv = Invalidations::default();
                     self.list.set_preedit(&text, now_ms, &mut inv);
                     self.request_redraw(id);
+                } else {
+                    // 대화(1:1·그룹)·프로필·이름/주소 프롬프트 — 조합 중 표시(08-13:
+                    // "확정 전엔 안 보인다"가 모든 입력창 공통이라 한 통로로 배선).
+                    self.set_chat_preedit(id, shown);
                 }
             }
             WindowEvent::Ime(winit::event::Ime::Commit(text)) => {

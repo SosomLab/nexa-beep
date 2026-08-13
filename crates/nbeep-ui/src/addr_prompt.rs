@@ -127,6 +127,11 @@ impl AddrPromptWidget {
         self.input.text()
     }
 
+    /// IME 조합 중 문자열(08-13 — 모든 텍스트 컨트롤 규칙: 확정 전에도 보인다).
+    pub fn set_preedit(&mut self, text: &str, inv: &mut Invalidations) {
+        self.input.set_preedit(text, inv);
+    }
+
     /// 선택 복사(① 08-13) — OS 클립보드 쓰기는 호스트 몫.
     #[must_use]
     pub fn clipboard_copy(&self) -> Option<String> {

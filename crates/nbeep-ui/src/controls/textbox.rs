@@ -36,6 +36,9 @@ pub struct TextBox {
     /// 가로 스크롤(px · ① 08-13) — 텍스트가 폭을 넘으면 **캐럿이 항상 보이게**
     /// 페인트가 조정한다(셀: 페인트는 &self).
     hscroll: std::cell::Cell<i32>,
+    /// IME 조합 중 문자열(08-13) — 캐럿 자리에 밑줄로 끼워 그린다. 확정 전에도
+    /// 지금 치는 글자가 보여야 한다(대화 입력과 동일한 경험 — 호스트가 배선).
+    preedit: String,
 }
 
 impl TextBox {
@@ -55,6 +58,19 @@ impl TextBox {
             dragging: false,
             last_click: (0, 0),
             hscroll: std::cell::Cell::new(0),
+            preedit: String::new(),
+        }
+    }
+
+    /// IME 조합 중 문자열 갱신(빈 문자열 = 소거). 포커스 없는 박스는 무시한다 —
+    /// 호스트가 창 단위로 보내므로 초점 필드만 받아야 이중 표시가 없다.
+    pub fn set_preedit(&mut self, text: &str, inv: &mut Invalidations) {
+        if !self.base.focused && !text.is_empty() {
+            return;
+        }
+        if self.preedit != text {
+            self.preedit = text.to_string();
+            inv.push(self.base.bounds);
         }
     }
 
@@ -319,9 +335,18 @@ impl Widget for TextBox {
         ctx.select_font(FontSlot::Base, false);
         let text = self.edit.text();
         let chars: Vec<char> = text.chars().collect();
-        let upto: String = chars[..self.edit.caret().min(chars.len())].iter().collect();
-        let caret_px = ctx.text_width(&upto); // 텍스트 시작 기준 캐럿 오프셋
-        let total_px = ctx.text_width(&text);
+        let caret_i = self.edit.caret().min(chars.len());
+        let before: String = chars[..caret_i].iter().collect();
+        // 조합 중 문자열(preedit)은 캐럿 자리에 끼워 **표시만** 한다(편집 상태 불변).
+        let shown = if self.preedit.is_empty() {
+            text.clone()
+        } else {
+            let after: String = chars[caret_i..].iter().collect();
+            format!("{before}{}{after}", self.preedit)
+        };
+        let pre_start_px = ctx.text_width(&before);
+        let caret_px = pre_start_px + ctx.text_width(&self.preedit); // 조합 뒤가 캐럿
+        let total_px = ctx.text_width(&shown);
         // 가용 폭 — 우측 여백(×·도움말 배지 자리)을 뺀다.
         let avail = (b.right() - self.s(24) - tx).max(self.s(20));
         let mut hs = self.hscroll.get();
@@ -350,10 +375,20 @@ impl Widget for TextBox {
                 xs.push(tx + ctx.text_width(&acc));
             }
         }
-        if text.is_empty() {
+        if shown.is_empty() {
             ctx.text(tx, ty, b, &self.placeholder, theme.text_dim);
         } else {
-            ctx.text(tx, ty, b, &text, theme.text);
+            ctx.text(tx, ty, b, &shown, theme.text);
+        }
+        // 조합 구간 밑줄 — "여기가 아직 확정 전"임을 대화 입력과 같은 문법으로 표시.
+        if !self.preedit.is_empty() {
+            let th = ctx.text_height();
+            let ux0 = tx + pre_start_px;
+            let ux1 = tx + caret_px;
+            ctx.fill_rect(
+                Rect::new(ux0, ty + th, (ux1 - ux0).max(self.s(4)), self.s(1).max(1)),
+                theme.text_dim,
+            );
         }
 
         // 캐럿은 **별도 세로 막대**로 그린다(문자열에 '|'를 끼워 넣지 않음 → 위치 고정).
