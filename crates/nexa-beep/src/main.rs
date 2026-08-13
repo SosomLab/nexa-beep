@@ -152,6 +152,14 @@ fn main() {
     //   창을 띄웠는데(M5-4d), 이제 어디서 부르든 무인자면 창이다. 휴리스틱은 **콘솔
     //   분리에만** 남는다 — 탐색기가 새로 할당한 콘솔은 떼고, 터미널 실행은 콘솔을
     //   유지한다(로그 관찰 용도 · macOS `.app`은 콘솔 자체가 없어 해당 없음).
+    // ★ 창을 열 수 있는 자리인가 — **열기 전에 묻는다**(사용자 요청 08-13).
+    //   못 여는 자리에서 열면 프로세스가 그냥 죽는다(컨테이너 실기: `Exited (134)` +
+    //   "시스템 UI 폰트 없음"). SSH·원격 PowerShell·서비스 세션도 같은 자리다.
+    //   무인자가 창이 된 뒤로는 **원격 셸에서 무심코 친 `nexa-beep`이 이 경로**라 더 중요하다.
+    if let Err(why) = nbeep_plat::gui::probe() {
+        eprintln!("{}", why.message());
+        std::process::exit(3);
+    }
     let no_real_args = !open_window && !separate && !live && port.is_none();
     if no_real_args && nbeep_plat::launch::from_gui_shell() {
         nbeep_plat::launch::hide_gui_console();
