@@ -262,9 +262,17 @@ impl Widget for ProfileWidget {
         }
         if let InputEvent::MouseDown { x, y, .. } = *ev {
             let p = Point { x, y };
+            // 포커스는 **배타** — 클릭된 컨트롤만 갖는다(08-14 실기: Choose… 버튼이
+            // 묵은 포커스를 쥔 채라 텍스트박스 Enter가 **버튼 클릭으로도** 처리되고
+            // 포커스 링도 남았다. 브로드캐스트 전달 구조에선 포커스 단일성이 이중
+            // 처리를 막는 유일한 문이다 — 갤러리는 처음부터 전 컨트롤 배타였다).
             self.name.set_focused(self.name.bounds().contains(p));
             self.email.set_focused(self.email.bounds().contains(p));
             self.phone.set_focused(self.phone.bounds().contains(p));
+            self.choose_img.set_focused(self.choose_img.bounds().contains(p));
+            self.sw_basic.set_focused(self.sw_basic.bounds().contains(p));
+            self.sw_email.set_focused(self.sw_email.bounds().contains(p));
+            self.sw_phone.set_focused(self.sw_phone.bounds().contains(p));
         }
         self.choose_img.on_event(ev, inv);
         if self.choose_img.take_clicked() {
@@ -439,6 +447,57 @@ mod tests {
         );
         let ch = w.take_changes();
         assert_eq!(ch, vec![("profile.display_name", "auto".to_string())]);
+    }
+
+    /// 08-14 실기 — Choose… 클릭 후 이름 필드를 편집하고 Enter를 치면 **버튼이
+    /// 묵은 포커스로 또 클릭**됐다(피커 재오픈). 포커스는 배타여야 한다.
+    #[test]
+    fn enter_in_textbox_does_not_click_stale_focused_button() {
+        let (mut w, mut inv) = widget();
+        // Choose… 클릭 — 버튼이 포커스를 얻고 피커 요청 1회.
+        let r = w.choose_img.bounds();
+        w.on_event(
+            &InputEvent::MouseDown {
+                x: r.x + 2,
+                y: r.y + 2,
+                shift: false,
+                primary: true,
+            },
+            &mut inv,
+        );
+        w.on_event(&InputEvent::MouseUp { x: r.x + 2, y: r.y + 2 }, &mut inv);
+        assert!(w.take_pick_image(), "버튼 클릭 = 피커 요청");
+        // 이름 필드 클릭 — 버튼 포커스는 **해제**되어야 한다(배타).
+        let n = w.name.bounds();
+        w.on_event(
+            &InputEvent::MouseDown {
+                x: n.x + 2,
+                y: n.y + 2,
+                shift: false,
+                primary: false,
+            },
+            &mut inv,
+        );
+        assert!(
+            !w.choose_img.is_focused(),
+            "텍스트박스 클릭 후 버튼 포커스 잔존(포커스 링·Enter 이중 처리의 원인)"
+        );
+        // Enter = 이름 확정만 — 버튼 클릭(피커 재요청)이 되면 안 된다.
+        w.on_event(
+            &InputEvent::Key {
+                key: Key::Enter,
+                shift: false,
+                primary: false,
+            },
+            &mut inv,
+        );
+        assert!(!w.take_pick_image(), "Enter가 묵은 포커스 버튼을 누르면 안 된다");
+        assert!(
+            w.take_changes()
+                .iter()
+                .any(|(k, _)| *k == "profile.display_name"),
+            "Enter = 표시 이름 확정 보고"
+        );
     }
 
     /// 이미지 선택 요청 · 경로 반영이 변경으로 보고된다.
