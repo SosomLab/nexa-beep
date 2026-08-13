@@ -10,7 +10,9 @@
 //! 유지된다. ⚠️ 모드 선택의 설정 화면 연동(`chat.window_mode`)은 M3-11 — 그 전까지 실행 인자.
 //!
 //! 실물 네트워크 배선은 M1-4, 창 코드의 `nbeep-plat` 이관은 M3-2.
-//! 기본 실행은 스캐폴드 출력(헤드리스 CI 안전).
+//! **기본 실행(무인자) = 창 모드 + 실물 발견**(사용자 확정 08-13 — DR-1 "실행 = 참여").
+//! 사용법 안내는 `--help`(무인자 스캐폴드 출력은 08-13 폐지 — GUI가 기본이 됐다).
+//! ⚠️ 헤드리스(컨테이너·CI)에서 무인자로 부르면 창을 시도한다 — 검증 도구는 항상 명시 인자.
 
 // 조립 지점 바이너리 — 창 초기화 경로의 unwrap 허용(docs/13 §9 — 복구 불가 구성 오류).
 #![allow(clippy::unwrap_used)]
@@ -27,6 +29,16 @@ use cli::quarantine::quarantine_demo;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    // 도움말·버전 — 어느 모드보다 먼저(배포 검증 절차 26 §7-2가 `--version`을 쓴다.
+    // 그전엔 무인자 스캐폴드가 버전을 겸했는데, 무인자 = 창이 되면서 명시 처리로 분리).
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        print_help();
+        return;
+    }
+    if args.iter().any(|a| a == "--version" || a == "-V") {
+        println!("nexa-beep {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
     if let Some(pos) = args.iter().position(|a| a == "--quarantine-demo") {
         let Some(path) = args.get(pos + 1) else {
             eprintln!("--quarantine-demo <파일> 필요");
@@ -116,52 +128,80 @@ fn main() {
         .position(|a| a == "--port")
         .and_then(|i| args.get(i + 1))
         .and_then(|v| v.parse().ok());
-    // ★ GUI 셸에서 **인자 없이** 열면(macOS `.app` 더블클릭 · Windows 탐색기 더블클릭·
-    //   시작 메뉴 바로가기) 그대로 두면 스캐폴드만 찍고 끝나 "눌러도 아무 일이 없다"가 된다
-    //   (08-11 실기: mac brew·Windows 배포 v0.1.2 실측 = M5-4d). 그 경우 **창 모드가 의도**다.
-    //   - macOS: 실행 경로가 `.app/Contents/MacOS/`인가([`launched_from_app_bundle`]).
-    //   - Windows: 탐색기가 **새 콘솔을 할당**했는가([`nbeep_plat::launch::from_gui_shell`]).
-    //   터미널·brew shim에서 부르면 둘 다 false라 CLI 동작이 그대로 남는다.
-    let no_real_args = !open_window && !separate && !live;
-    let gui_launch =
-        launched_from_app_bundle() || (no_real_args && nbeep_plat::launch::from_gui_shell());
-    if open_window || separate || gui_launch {
-        // 탐색기가 새로 띄운 콘솔은 GUI 창 옆에 남으므로 떼어낸다(Windows · M5-4d).
-        // 인자로 부른 `--window`는 기존 터미널을 쓰던 것일 수 있어 건드리지 않는다.
-        if gui_launch && no_real_args {
-            nbeep_plat::launch::hide_gui_console();
+    // 미지 인자 = 오타 가능성 — **조용히 창을 띄우지 않는다**(안내 후 종료). 무인자가
+    // 창이 된 순간, 잘못 친 인자를 무시하고 GUI가 뜨면 오타가 영영 발견되지 않는다.
+    // macOS Finder의 레거시 `-psn_...`만 무시(창 실행으로 취급).
+    {
+        let mut it = args.iter().skip(1);
+        while let Some(a) = it.next() {
+            match a.as_str() {
+                "--window" | "--separate-windows" | "--live" => {}
+                "--port" => {
+                    it.next(); // 값
+                }
+                _ if a.starts_with("-psn_") => {}
+                _ => {
+                    eprintln!("알 수 없는 인자: {a} — `nexa-beep --help` 참조");
+                    std::process::exit(2);
+                }
+            }
         }
-        let mode = if separate {
-            app::WindowMode::Separate
-        } else {
-            app::WindowMode::Single
-        };
-        // GUI 실행은 실물 발견이 기본이다 — 데모(에코 봇)를 보여 줄 자리가 아니다.
-        app::run(
-            mode,
-            live || (gui_launch && !open_window && !separate),
-            port,
-        );
-    } else {
-        println!(
-            "nexa-beep {} — scaffold (창 `--window [--live] [--port <N>]` · 발견 `--discover-probe [초]` · 수동 `--serve`/`--connect` · 인터랙티브 `--chat-serve [port]`/`--chat-connect <host:port>`/`--chat-live [이름] [--port <N>]`(GUI 목록에 뜸) · 무해화 실측 `--quarantine-demo <파일>` · 파일전송 `--xfer-limit-mib <N>`·`--xfer-rate-kb <N>`(chat 모드 · 대화 중 `/send`·`/accept`·`/reject`))",
-            env!("CARGO_PKG_VERSION")
-        );
     }
+    // ★ **무인자 기본 = 창 모드 + 실물 발견**(사용자 확정 08-13 — DR-1 "실행 = 참여").
+    //   그전엔 무인자 = 스캐폴드 출력이라 GUI 셸 실행(더블클릭·바로가기)만 휴리스틱으로
+    //   창을 띄웠는데(M5-4d), 이제 어디서 부르든 무인자면 창이다. 휴리스틱은 **콘솔
+    //   분리에만** 남는다 — 탐색기가 새로 할당한 콘솔은 떼고, 터미널 실행은 콘솔을
+    //   유지한다(로그 관찰 용도 · macOS `.app`은 콘솔 자체가 없어 해당 없음).
+    let no_real_args = !open_window && !separate && !live && port.is_none();
+    if no_real_args && nbeep_plat::launch::from_gui_shell() {
+        nbeep_plat::launch::hide_gui_console();
+    }
+    let mode = if separate {
+        app::WindowMode::Separate
+    } else {
+        app::WindowMode::Single
+    };
+    // 데모(에코 봇)는 `--window`/`--separate-windows`를 **명시**한 경우만(개발 도구) —
+    // 그 외 창 진입(무인자·--port·--live)은 전부 실물 발견이다.
+    app::run(mode, live || (!open_window && !separate), port);
 }
 
-/// macOS 앱 번들 안에서 **인자 없이** 실행됐는가(= Finder/Dock에서 열었다).
-///
-/// 실행 파일 경로가 `*.app/Contents/MacOS/*` 인지로 판정한다 — 번들 밖(터미널·brew shim)
-/// 에서 부른 경우는 해당하지 않아 CLI 동작이 그대로 남는다.
-/// macOS는 Finder 실행 시 `-psn_...` 인자를 붙이기도 해서, 그것도 인자 없음으로 본다.
-fn launched_from_app_bundle() -> bool {
-    if !cfg!(target_os = "macos") {
-        return false;
-    }
-    let has_real_args = std::env::args().skip(1).any(|a| !a.starts_with("-psn_"));
-    if has_real_args {
-        return false;
-    }
-    std::env::current_exe().is_ok_and(|p| p.to_string_lossy().contains(".app/Contents/MacOS/"))
+/// `--help`/`-h` — 모드·옵션 안내(사용자 요청 08-13).
+fn print_help() {
+    println!(
+        "\
+Nexa Beep {v} — 제로 컨피그 로컬 네트워크 메신저 (\"실행 = 참여\")
+
+사용법:
+  nexa-beep                        창 모드 + 실물 발견(기본) — 같은 LAN의 상대가
+                                   목록에 뜨고, 고르면 즉시 암호화 대화
+  nexa-beep [창 옵션]              창 모드 세부 지정
+  nexa-beep <검증 도구> [옵션]     터미널 검증 도구(개발·실측용 · 창 없음)
+
+창 옵션:
+  --port <N>            세션 수신 포트(이 실행만 · 기본 47200, 점유 시 임의 폴백 ·
+                        저장 설정은 net.session_port)
+  --separate-windows    상대별 별도 창으로 시작(기본 = 단일 창 · 설정 chat.window_mode)
+  --window              InMemory 데모(에코 봇 · 네트워크 없음 — 개발용).
+                        --live를 붙이면 무인자와 같은 실물 발견
+
+터미널 검증 도구(인터랙티브):
+  --chat-live [이름] [--port <N>]   발견 가능한 대화 단말 — 실행 중인 창(무인자/--live)
+                                    목록에 이름이 뜨고, 터미널에서 실시간 대화
+  --chat-serve [port]               고정 포트로 기다리는 대화 단말(기본 47200)
+  --chat-connect <host:port>        주소로 직접 붙는 대화 단말(발견 없이)
+      대화 중 명령: 한 줄 = 전송 · /send <파일> · /accept · /reject · /help · /quit(Ctrl+D)
+      파일 수신 옵션: --xfer-limit-mib <N>(수신 상한 · 기본 256) · --xfer-rate-kb <N>(속도 상한)
+
+터미널 검증 도구(비대화):
+  --serve [port] · --connect <host:port>   수동 엔드포인트 왕복 실증(DR-19)
+  --discover-probe [초]                    발견 브로드캐스트 관찰(기본 8초)
+  --live-echo [초]                         발견 + 에코 응답 노드(기본 15초)
+  --quarantine-demo <파일>                 수신 무해화 게이트 종단 실측(.beepq)
+
+기타:
+  -h, --help            이 도움말
+  -V, --version         버전 출력",
+        v = env!("CARGO_PKG_VERSION")
+    );
 }
