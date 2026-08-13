@@ -1100,7 +1100,24 @@ impl Widget for ChatViewWidget {
                     self.after_input_edit(inv);
                 }
             }
-            InputEvent::Key { key, shift, .. } => {
+            InputEvent::Key {
+                key,
+                shift,
+                primary,
+            } => {
+                // ⌘/Ctrl+←/→ = 줄 처음/끝(mac 관례 · DR-16 — 08-13 전수 검사.
+                // 멀티라인이라 Home/End 팔과 같은 줄 단위 이동).
+                if primary && matches!(key, Key::Left | Key::Right) {
+                    let (line, _) = self.caret_line_col();
+                    let col = if matches!(key, Key::Left) {
+                        0
+                    } else {
+                        usize::MAX
+                    };
+                    self.input.set_caret(self.index_at(line, col), shift);
+                    inv.push(self.input_bar());
+                    return;
+                }
                 let ek = match key {
                     Key::Left => Some(EditKey::Left),
                     Key::Right => Some(EditKey::Right),

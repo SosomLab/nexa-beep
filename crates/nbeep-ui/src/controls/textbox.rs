@@ -288,11 +288,18 @@ impl Widget for TextBox {
                 self.changed = true;
                 inv.push(self.base.bounds);
             }
-            InputEvent::Key { key, shift, .. } if self.base.focused => match key {
+            InputEvent::Key {
+                key,
+                shift,
+                primary,
+            } if self.base.focused => match key {
                 Key::Enter => {
                     self.committed = true;
                     inv.push(self.base.bounds);
                 }
+                // ⌘/Ctrl+←/→ = 줄 처음/끝(mac 관례 · DR-16 — 08-13 전수 검사).
+                Key::Left if primary => self.edit.key(EditKey::Home, shift),
+                Key::Right if primary => self.edit.key(EditKey::End, shift),
                 Key::Left => self.edit.key(EditKey::Left, shift),
                 Key::Right => self.edit.key(EditKey::Right, shift),
                 Key::Home => self.edit.key(EditKey::Home, shift),
@@ -442,6 +449,33 @@ mod tests {
             shift: false,
             primary: false,
         }
+    }
+
+    #[test]
+    fn primary_arrows_jump_line_edges() {
+        let (mut t, mut inv) = tb();
+        t.on_event(&click(5, 15), &mut inv);
+        for c in "abc".chars() {
+            t.on_event(&ch(c), &mut inv);
+        }
+        let key = |key, shift, primary| InputEvent::Key {
+            key,
+            shift,
+            primary,
+        };
+        t.on_event(&key(Key::Left, false, true), &mut inv); // ⌘← = 줄 처음
+        t.on_event(&ch('x'), &mut inv);
+        assert_eq!(t.text(), "xabc", "⌘/Ctrl+← = 줄 처음(삽입 위치로 검증)");
+        t.on_event(&key(Key::Right, false, true), &mut inv); // ⌘→ = 줄 끝
+        t.on_event(&ch('z'), &mut inv);
+        assert_eq!(t.text(), "xabcz", "⌘/Ctrl+→ = 줄 끝");
+        t.on_event(&key(Key::Left, false, true), &mut inv);
+        t.on_event(&key(Key::Right, true, true), &mut inv); // ⌘⇧→ = 끝까지 선택
+        assert_eq!(
+            t.copy_selection().as_deref(),
+            Some("xabcz"),
+            "⇧ 조합 = 범위 선택"
+        );
     }
 
     #[test]

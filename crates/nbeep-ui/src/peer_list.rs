@@ -641,6 +641,12 @@ impl Widget for PeerListWidget {
             }
         }
         match *ev {
+            // ⌘/Ctrl+A = 피어 전체 선택(다중 선택 집합 — 그룹 생성/초대 흐름 ·
+            // 08-13 전수 검사. 그룹 행은 선택 대상이 아니다 — 선택은 PeerId 집합).
+            InputEvent::SelectAll => {
+                self.selected = self.rows.iter().map(|r| r.entry.peer).collect();
+                inv.push(self.bounds);
+            }
             InputEvent::Key { key, .. } => {
                 let vis = self.visible_rows().max(1);
                 match key {
@@ -1306,5 +1312,16 @@ mod tests {
         assert!(w.selected_peers().is_empty(), "일반 클릭 = 해제");
         w.click_at(3, true, false, &mut inv); // Shift = 캐럿(1)..=3 범위 추가
         assert_eq!(w.selected_peers(), vec![pid(2), pid(3), pid(4)]);
+    }
+
+    #[test]
+    fn select_all_selects_every_peer() {
+        let (mut w, mut inv) = widget(&[(1, "a"), (2, "b"), (3, "c")]);
+        w.on_event(&InputEvent::SelectAll, &mut inv);
+        assert_eq!(
+            w.selected_peers(),
+            vec![pid(1), pid(2), pid(3)],
+            "⌘/Ctrl+A = 피어 전체 선택(그룹 생성 흐름)"
+        );
     }
 }

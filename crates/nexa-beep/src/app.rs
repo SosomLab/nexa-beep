@@ -2203,10 +2203,19 @@ impl App {
         {
             return Some(t);
         }
+        // 그룹 방 입력(M5-1g — 08-13 전수 검사: 이 분기가 없어 ⌘C가 무반응이었다).
+        if let Some(t) = self
+            .group_chat_for(id)
+            .and_then(|g| self.gchats.get(&g))
+            .and_then(ChatViewWidget::copy_selection)
+        {
+            return Some(t);
+        }
         match self.windows.get(&id).map(|e| e.role)? {
             Role::AddEndpoint => self.addr_view.as_ref()?.clipboard_copy(),
             Role::Profile => self.profile_view.as_ref()?.clipboard_copy(),
             Role::Settings => self.settings_view.as_ref()?.clipboard_copy(),
+            Role::NamePrompt => self.name_prompt.as_ref()?.clipboard_copy(),
             _ => None,
         }
     }
@@ -2221,10 +2230,18 @@ impl App {
         {
             return Some(t);
         }
+        if let Some(t) = self
+            .group_chat_for(id)
+            .and_then(|g| self.gchats.get_mut(&g))
+            .and_then(|c| c.cut_selection(&mut inv))
+        {
+            return Some(t);
+        }
         match self.windows.get(&id).map(|e| e.role)? {
             Role::AddEndpoint => self.addr_view.as_mut()?.clipboard_cut(&mut inv),
             Role::Profile => self.profile_view.as_mut()?.clipboard_cut(&mut inv),
             Role::Settings => self.settings_view.as_mut()?.clipboard_cut(&mut inv),
+            Role::NamePrompt => self.name_prompt.as_mut()?.clipboard_cut(&mut inv),
             _ => None,
         }
     }
@@ -2238,7 +2255,18 @@ impl App {
                 return;
             }
         }
+        if let Some(gid) = self.group_chat_for(id) {
+            if let Some(c) = self.gchats.get_mut(&gid) {
+                c.paste(text, &mut inv);
+                return;
+            }
+        }
         match self.windows.get(&id).map(|e| e.role) {
+            Some(Role::NamePrompt) => {
+                if let Some(v) = self.name_prompt.as_mut() {
+                    v.clipboard_paste(text, &mut inv);
+                }
+            }
             Some(Role::AddEndpoint) => {
                 if let Some(v) = self.addr_view.as_mut() {
                     v.clipboard_paste(text, &mut inv);
@@ -6654,6 +6682,19 @@ impl ApplicationHandler<AppEvent> for App {
                 }
                 if let WKey::Named(NamedKey::Backspace) = &event.logical_key {
                     let now_ms = self.now_ms();
+                    // ⌘/Ctrl+⌫ = 줄 처음까지 삭제(mac 관례 · DR-16 — 08-13 전수 검사):
+                    // 줄 처음까지 선택(Home+shift) 후 지우기 — 위젯 공통 문법 재사용.
+                    if self.primary_down {
+                        self.route(
+                            id,
+                            InputEvent::Key {
+                                key: Key::Home,
+                                shift: true,
+                                primary: false,
+                            },
+                            el,
+                        );
+                    }
                     self.route(id, InputEvent::Char { c: '\u{8}', now_ms }, el);
                     return;
                 }
