@@ -7,6 +7,8 @@
 
 ## 2026-08-13
 
+- **GUI 실행 가능 세션 판정 신설**(main `e230e58` · 사용자 요청): 못 여는 자리에서 그냥 죽던 것(`Exited (134)`)을 **사유+대안 안내 후 exit 3**으로. `nbeep-plat::gui` — 관측(OS API)과 판정(순수 함수)을 나눠 **3-OS를 맥에서 테스트**. Windows=`WinSta0`(RDP는 통과) · macOS=`CGSessionCopyCurrentDictionary` · Linux=`$DISPLAY`(`ssh -X` 자동 통과) · 폰트 축 별도. ★ **맥 SSH 실기 확인**(원격 맥 12.7.6 · env 지워도 차단 = API가 실제로 NULL). 테스트 19 · **521 green**. 상세 [journal/2026-08-13.md](journal/2026-08-13.md).
+- **main CI red 해소**(main `47cb2d4`): `694a68d` lint(fmt) 실패 — 미포맷 3곳 + redundant clone 1건. 기능 변경 없음.
 - **요약 문서 현행화 + push**(코드 0): 후반 6슬라이스(한/영·조합 Enter·무인자 기본·대기 /quit·dedup 리셋+스레드 대피·imgdec 워커화)를 CLAUDE.md·README(502)·MILESTONES에 반영 · WIME-1·3·4·5·6 닫힘 · main push. 상세 [journal/2026-08-13.md](journal/2026-08-13.md).
 - **대화창 열림 1~2초 얼음 해소 — imgdec 디코드를 워커로**(main · M4-5 · 사용자 실기): 프로필 이미지 수신이 메인 스레드에서 자식 프로세스 왕복(Windows 스폰+Defender 검사 = 1~2초)을 동기로 돌던 것 → `spawn_decode` 워커 + `Decoded` 이벤트 복귀(원시 RGBA 경계·메인이 Rc 래핑) · 대상 4종(상대/내 아바타·수신 썸네일·격리함 캐시 팝인). **502 green**. 상세 [journal/2026-08-13.md](journal/2026-08-13.md).
 - **재대화 메시지 증발 + 끊김 스레드 소실 수정**(main · 사용자 실기): ① seq 재발급 × 앱 수명 DedupIndex = 2번째 대화부터 조용히 폐기 → **`reset_device`**(새 세션 = 기기 기억 리셋 — 옛 세션 재생은 Noise가 차단) ② `Closed`의 대화 통째 삭제(DR-26 위반) → **`parked_lines` 대피·복원** ③ /quit 후 재개 = 자동 재연결 × 상주 accept 조합 — "정중한 종료(Bye)" 신호 부재를 M2-4b 검토로 등록. **502 green**(+1). 상세 [journal/2026-08-13.md](journal/2026-08-13.md).
