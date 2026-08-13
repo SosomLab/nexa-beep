@@ -46,6 +46,19 @@ pub enum StreamId {
 }
 
 impl StreamId {
+    /// **모든 스트림** — 스트림을 늘릴 때 여기 한 곳만 고치면 된다.
+    ///
+    /// ⚠️ 08-13에 [`Group`](Self::Group)이 추가되면서 [`recv_any`](MuxSession::recv_any)의
+    /// 큐 소진 목록에서 **빠졌다**(하드코딩된 3종 배열). 큐에 쌓인 Group 프레임을 아무도
+    /// 빼가지 않아 그대로 남고, 그 자리가 [`MAX_QUEUED`]를 잠식한다. 배열을 상수로 올려
+    /// **같은 실수를 구조적으로 막는다**(테스트 `every_stream_is_drainable_by_recv_any`).
+    pub const ALL: [StreamId; STREAMS] = [
+        StreamId::Control,
+        StreamId::Chat,
+        StreamId::File,
+        StreamId::Group,
+    ];
+
     /// 와이어 바이트.
     #[must_use]
     pub fn to_byte(self) -> u8 {
@@ -74,8 +87,8 @@ impl StreamId {
     }
 }
 
-/// 스트림 수(내부 큐 배열 크기).
-const STREAMS: usize = 4;
+/// 스트림 수(내부 큐 배열 크기 · [`StreamId::ALL`] 길이).
+pub const STREAMS: usize = 4;
 
 /// 다중화 페이로드 상한 — Noise 메시지 상한(65535) − AEAD 태그(16) − 스트림 바이트(1).
 /// 넘는 메시지는 상위 계층이 쪼갠다(파일 전송 청킹은 M4).
@@ -97,12 +110,7 @@ impl<S: Session> MuxSession<S> {
     pub fn new(inner: S) -> Self {
         Self {
             inner,
-            queues: [
-                VecDeque::new(),
-                VecDeque::new(),
-                VecDeque::new(),
-                VecDeque::new(),
-            ],
+            queues: core::array::from_fn(|_| VecDeque::new()),
         }
     }
 
@@ -183,7 +191,7 @@ impl<S: Session> MuxSession<S> {
     /// # Errors
     /// 링크 종료 [`SessionError::Closed`] · 빈 프레임은 프로토콜 위반 [`SessionError::Handshake`].
     pub fn recv_any(&mut self) -> Result<(StreamId, Vec<u8>), SessionError> {
-        for s in [StreamId::Control, StreamId::Chat, StreamId::File] {
+        for s in StreamId::ALL {
             if let Some(m) = self.queues[s.index()].pop_front() {
                 return Ok((s, m));
             }
@@ -208,11 +216,16 @@ mod tests {
     use std::sync::mpsc::{channel, Receiver, Sender};
 
     /// 링크 없이 mux만 검증하는 세션 fake(채널 페어).
+    ///
+    /// ⚠️ **수신 타임아웃을 지킨다** — 안 지키면 "프레임이 큐에 갇히는" 버그가 **테스트 행**으로
+    /// 나타난다(08-13 실측: `Group` 누락을 재현했더니 CI가 죽는 대신 멈췄다). 행은 신호가 아니라
+    /// 침묵이라 회귀 테스트로 쓸모가 없다.
     #[derive(Debug)]
     struct PairSession {
         peer: PeerId,
         tx: Sender<Vec<u8>>,
         rx: Receiver<Vec<u8>>,
+        timeout: Option<core::time::Duration>,
     }
     impl Session for PairSession {
         fn peer(&self) -> PeerId {
@@ -225,7 +238,16 @@ mod tests {
             self.tx.send(m.to_vec()).map_err(|_| SessionError::Closed)
         }
         fn recv(&mut self) -> Result<Vec<u8>, SessionError> {
-            self.rx.recv().map_err(|_| SessionError::Closed)
+            match self.timeout {
+                Some(d) => self.rx.recv_timeout(d).map_err(|e| match e {
+                    std::sync::mpsc::RecvTimeoutError::Timeout => SessionError::TimedOut,
+                    std::sync::mpsc::RecvTimeoutError::Disconnected => SessionError::Closed,
+                }),
+                None => self.rx.recv().map_err(|_| SessionError::Closed),
+            }
+        }
+        fn set_recv_timeout(&mut self, dur: Option<core::time::Duration>) {
+            self.timeout = dur;
         }
     }
 
@@ -243,11 +265,13 @@ mod tests {
                 peer: pid(2),
                 tx: atx,
                 rx: arx,
+                timeout: None,
             }),
             MuxSession::new(PairSession {
                 peer: pid(1),
                 tx: btx,
                 rx: brx,
+                timeout: None,
             }),
         )
     }
@@ -322,6 +346,48 @@ mod tests {
         assert_eq!(b.recv_any().unwrap(), (StreamId::File, b"f1".to_vec()));
     }
 
+    /// ★ 회귀 방지(08-13) — **스트림을 늘리고 `recv_any`를 안 고치면 여기서 걸린다.**
+    ///
+    /// `Group` 추가 때 실제로 빠뜨렸다: 큐에 쌓인 Group 프레임을 `recv_any`가 영영 안 빼가
+    /// `MAX_QUEUED` 자리를 잠식했다. 스트림마다 "큐에 넣고 → `recv_any`로 뺀다"를 전수 확인한다.
+    #[test]
+    fn every_stream_is_drainable_by_recv_any() {
+        assert_eq!(
+            StreamId::ALL.len(),
+            STREAMS,
+            "ALL과 큐 배열 길이가 어긋났다"
+        );
+        for s in StreamId::ALL {
+            let (mut a, mut b) = pair();
+            // 버그가 있으면 와이어를 무한 대기한다 — 타임아웃을 걸어 **실패로** 만든다.
+            b.set_recv_timeout(Some(core::time::Duration::from_millis(200)));
+            // 다른 스트림을 기다리게 해 `s` 프레임을 **큐에 쌓는다**.
+            let other = if s == StreamId::Chat {
+                StreamId::Control
+            } else {
+                StreamId::Chat
+            };
+            a.send(s, b"queued").unwrap();
+            a.send(other, b"wanted").unwrap();
+            assert_eq!(b.recv(other).unwrap(), b"wanted");
+            // 이제 큐에 `s`가 하나 남아 있다 — recv_any가 그것을 꺼내야 한다.
+            assert_eq!(
+                b.recv_any().unwrap(),
+                (s, b"queued".to_vec()),
+                "{s:?} 프레임이 큐에 갇혔다 — recv_any가 이 스트림을 안 본다"
+            );
+        }
+    }
+
+    /// 와이어 바이트와 `ALL`이 어긋나지 않는다(번호 불변 규약).
+    #[test]
+    fn all_matches_wire_bytes() {
+        for (i, s) in StreamId::ALL.into_iter().enumerate() {
+            assert_eq!(usize::from(s.to_byte()), i, "{s:?} 바이트가 순서와 다르다");
+            assert_eq!(StreamId::from_byte(s.to_byte()), Some(s));
+        }
+    }
+
     /// 원시 프레임을 직접 주입할 수 있는 수신 전용 mux(프로토콜 위반·전방 호환 테스트용).
     fn raw_rx() -> (Sender<Vec<u8>>, MuxSession<PairSession>) {
         let (raw_tx, rx) = channel();
@@ -333,6 +399,7 @@ mod tests {
                 peer: pid(1),
                 tx,
                 rx,
+                timeout: None,
             }),
         )
     }
