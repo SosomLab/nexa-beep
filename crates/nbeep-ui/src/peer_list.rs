@@ -647,7 +647,20 @@ impl Widget for PeerListWidget {
                         return;
                     };
                     self.ctx_menu.set_scale(self.scale);
-                    self.ctx_menu.open_at(x, y, items, self.bounds, 8 * 15);
+                    // 폭 = 가장 긴 라벨 근사(대화 뷰와 동일 — 고정 120px은 "소유자만
+                    // 초대로 전환" 같은 긴 항목이 잘렸다 · 08-14 실기).
+                    let widest = items
+                        .iter()
+                        .map(|it| match it {
+                            crate::controls::CtxItem::Item { label, .. } => label
+                                .chars()
+                                .map(|c| if c.is_ascii() { 8 } else { 15 })
+                                .sum::<i32>(),
+                            crate::controls::CtxItem::Separator => 0,
+                        })
+                        .max()
+                        .unwrap_or(0);
+                    self.ctx_menu.open_at(x, y, items, self.bounds, widest);
                     inv.push(self.bounds);
                     return;
                 }

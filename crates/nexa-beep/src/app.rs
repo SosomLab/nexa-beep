@@ -1159,6 +1159,9 @@ impl App {
             let list_mode = Some(id) == self.main_id
                 && self.single_open.is_none()
                 && self.single_open_group.is_none();
+            if self.ime_trace {
+                eprintln!("[ime] pending {c:?} → flush(다음 키/타임아웃 — Ime 이벤트 없음)");
+            }
             if nbeep_ui::hangul::is_jamo(c) && !list_mode {
                 self.leak_feed(id, c, el);
                 return;
@@ -4492,6 +4495,8 @@ impl App {
                             .map(|s| s.roster.name.as_str().to_string())
                             .unwrap_or_default();
                         self.status = format!("'{name}' 그룹에 참여했습니다 — 목록에서 열기");
+                        // 합류 = 구성원들과 연결(아바타·프로필은 세션 경유 · 08-14).
+                        self.connect_group_members(uid);
                     }
                 } else {
                     let frame = nbeep_core::SGroupMsg::Decline { uid }.encode();
@@ -4501,6 +4506,27 @@ impl App {
                 }
                 self.refresh_and_redraw();
             }
+        }
+    }
+
+    /// 그룹 구성원 중 **미연결 상대에게 자동 연결**(M5-1g · 08-14 실기: 세션이 없으면
+    /// 프로필(아바타)이 안 온다 — 프로필은 세션 경유가 원칙(DR-22)이라 브로드캐스트로
+    /// 풀지 않고 연결로 푼다. 방 발신 즉시 도달률도 함께 오른다). 자동(창 안 열음) ·
+    /// 중복은 ConnectLatch가 거른다(13 §12-1).
+    fn connect_group_members(&mut self, uid: nbeep_core::GroupUid) {
+        let me = self.identity.peer_id();
+        let members: Vec<PeerId> = match self.groups.shared_by_uid(uid) {
+            Some(s) if s.mine != nbeep_store::MineState::Invited => s
+                .roster
+                .members
+                .iter()
+                .copied()
+                .filter(|m| *m != me && !self.conversations.contains_key(m))
+                .collect(),
+            _ => return,
+        };
+        for m in members {
+            self.start_connect(m, true);
         }
     }
 
@@ -4582,6 +4608,7 @@ impl App {
                     return;
                 }
                 let ver = roster.version;
+                let uid = roster.uid;
                 if self
                     .groups
                     .upsert_shared(roster, nbeep_store::MineState::Joined)
@@ -4589,6 +4616,8 @@ impl App {
                 {
                     let mut inv = Invalidations::default();
                     self.push_group_note(gid, &format!("구성원 명부 갱신(v{ver})"), &mut inv);
+                    // 새 구성원과도 연결(아바타·프로필은 세션 경유 · 08-14).
+                    self.connect_group_members(uid);
                     self.refresh_and_redraw();
                 }
             }
@@ -5565,10 +5594,27 @@ impl ApplicationHandler<AppEvent> for App {
         if self.main_id.is_some() {
             return;
         }
-        let attrs = Window::default_attributes()
+        // 마지막 종료 위치·크기 복원(08-14 사용자 확정 — 다중 인스턴스 실기에서
+        // 매번 재배치하던 것. 신원(data/)별로 저장되니 인스턴스마다 자기 자리를
+        // 기억한다). 값이 없거나 무효면 기본값 — ADR-0011 관용 파싱 원칙 그대로.
+        let geo = |k: &str| self.settings.get(k).parse::<i32>().ok();
+        let (ww, wh) = match (geo("ui.win_w"), geo("ui.win_h")) {
+            (Some(w), Some(h)) if (200..=8000).contains(&w) && (150..=8000).contains(&h) => {
+                (f64::from(w), f64::from(h))
+            }
+            _ => (460.0, 640.0), // 기본 크기(사용자 확정 08-09)
+        };
+        let mut attrs = Window::default_attributes()
             .with_title("Nexa Beep")
-            .with_inner_size(winit::dpi::LogicalSize::new(460.0, 640.0)) // 기본 크기(사용자 확정 08-09)
+            .with_inner_size(winit::dpi::LogicalSize::new(ww, wh))
             .with_window_icon(self.icon.clone());
+        if let (Some(x), Some(y)) = (geo("ui.win_x"), geo("ui.win_y")) {
+            // 화면 밖 좌표 방어는 OS 몫이 크지만, 음수 심연(-32000 최소화 잔재)은 거른다.
+            if (-4000..=16000).contains(&x) && (-4000..=16000).contains(&y) {
+                attrs = attrs
+                    .with_position(winit::dpi::LogicalPosition::new(f64::from(x), f64::from(y)));
+            }
+        }
         let window = Rc::new(el.create_window(attrs).unwrap());
         // 목록(타입어헤드) = IME **끔** — raw 자모를 앱이 직접 조합(hangul::Composer ·
         // OS 조합 세션 경합 제거). 대화 진입 시 켠다(set_main_ime).
@@ -6460,9 +6506,38 @@ impl ApplicationHandler<AppEvent> for App {
                     }
                 }
             }
-            WindowEvent::Resized(_) => {
+            WindowEvent::Resized(size) => {
+                // 주 창 크기 기억(08-14 — 마지막 종료 위치·크기 복원). 저장은
+                // SaveScheduler가 디바운스한다(DR-27 — 리사이즈 연타에도 안전).
+                if Some(id) == self.main_id {
+                    if let Some(e) = self.windows.get(&id) {
+                        let s = f64::from(e.scale.max(0.5));
+                        let lw = (f64::from(size.width) / s).round() as i64;
+                        let lh = (f64::from(size.height) / s).round() as i64;
+                        if lw >= 200 && lh >= 150 {
+                            self.settings.set("ui.win_w", lw.to_string());
+                            self.settings.set("ui.win_h", lh.to_string());
+                            self.conf_mark();
+                        }
+                    }
+                }
                 self.layout_window(id);
                 self.request_redraw(id);
+            }
+            WindowEvent::Moved(pos) => {
+                // 주 창 위치 기억(08-14) — 최소화 시 OS가 주는 심연 좌표는 거른다.
+                if Some(id) == self.main_id {
+                    if let Some(e) = self.windows.get(&id) {
+                        let s = f64::from(e.scale.max(0.5));
+                        let lx = (f64::from(pos.x) / s).round() as i64;
+                        let ly = (f64::from(pos.y) / s).round() as i64;
+                        if (-4000..=16000).contains(&lx) && (-4000..=16000).contains(&ly) {
+                            self.settings.set("ui.win_x", lx.to_string());
+                            self.settings.set("ui.win_y", ly.to_string());
+                            self.conf_mark();
+                        }
+                    }
+                }
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 if let Some(e) = self.windows.get_mut(&id) {
@@ -6535,7 +6610,14 @@ impl ApplicationHandler<AppEvent> for App {
                 if let Some((pid, c, _)) = self.pending_jamo {
                     if nbeep_ui::hangul::is_jamo(c) {
                         self.pending_jamo = None;
-                        if !text.starts_with(c) {
+                        if text.starts_with(c) {
+                            if self.ime_trace {
+                                eprintln!("[ime] pending {c:?} → 폐기(프리에딧 중복)");
+                            }
+                        } else {
+                            if self.ime_trace {
+                                eprintln!("[ime] pending {c:?} → leak 합류(IME 미수신)");
+                            }
                             self.leak_feed(pid, c, el);
                         }
                     }
@@ -6650,8 +6732,20 @@ impl ApplicationHandler<AppEvent> for App {
                     {
                         Some(c)
                     }
-                    _ => None,
+                    other => {
+                        if self.ime_trace {
+                            if let Some((_, c, _)) = other {
+                                eprintln!("[ime] pending {c:?} → 폐기(Commit 본문 포함)");
+                            }
+                        }
+                        None
+                    }
                 };
+                if self.ime_trace {
+                    if let Some(c) = leftover {
+                        eprintln!("[ime] pending {c:?} → 방출(Commit 본문에 없음)");
+                    }
+                }
                 let now_ms = self.now_ms();
                 for c in text.chars().filter(|c| !c.is_control()) {
                     self.route(id, InputEvent::Char { c, now_ms }, el);
