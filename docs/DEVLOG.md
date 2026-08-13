@@ -7,6 +7,7 @@
 
 ## 2026-08-13
 
+- **★ M5-1 그룹 착수 — 기반 일습 + ADR-0012**(main): 사용자 확정 5건(⌘클릭 다중 선택 생성·상단 그룹 섹션·텍스트 먼저·자동 연결 후 전송·★**최종 = 진짜 그룹 한 방 대화**). 기반 커밋 = `groups.seg` 암호화 영속(FR-G-1 ✅)·목록 그룹 섹션·`TextPromptWidget`·동보 스레드+팬아웃(FR-G-2·6 ✅·G-4 초판) · **527 green**. **[31 ADR-0012](31-adr-0012-shared-group-chat.md) 신설**(📐·🔴 D-28 — 소유자 서명 roster·pairwise 팬아웃·초대 수락제·G1~G4). 상세 [journal/2026-08-13.md](journal/2026-08-13.md).
 - **요약 계열 현행화**(main `00f0ac8`): CLAUDE.md·README(521)·MILESTONES가 14차(502)에 멈춰 있어 오늘 마감분(전송 Backpressure·연결 래치·chat-live 내성·GUI 세션 판정) 반영. CLAUDE.md에 "08-13 마감" 문단 신설. 시점 기록(후반 502)은 소급 수정하지 않음. 코드 변경 0.
 - **GUI 실행 가능 세션 판정 신설**(main `e230e58` · 사용자 요청): 못 여는 자리에서 그냥 죽던 것(`Exited (134)`)을 **사유+대안 안내 후 exit 3**으로. `nbeep-plat::gui` — 관측(OS API)과 판정(순수 함수)을 나눠 **3-OS를 맥에서 테스트**. Windows=`WinSta0`(RDP는 통과) · macOS=`CGSessionCopyCurrentDictionary` · Linux=`$DISPLAY`(`ssh -X` 자동 통과) · 폰트 축 별도. ★ **맥 SSH 실기 확인**(원격 맥 12.7.6 · env 지워도 차단 = API가 실제로 NULL). 테스트 19 · **521 green**. 상세 [journal/2026-08-13.md](journal/2026-08-13.md).
 - **main CI red 해소**(main `47cb2d4`): `694a68d` lint(fmt) 실패 — 미포맷 3곳 + redundant clone 1건. 기능 변경 없음.
