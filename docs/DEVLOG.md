@@ -7,6 +7,7 @@
 
 ## 2026-08-14
 
+- **전체 문서·위키 현행화 + 3신원 재기동**(main): 재빌드 후 프로세스 전부 종료→3신원 기동(상호 발견 확인). 저장소 요약(문서 **36종**·ADR **14종**·**565 green**·크레이트 12) · **위키 5면**(`f90416f` — 498 green/31종에 멈춰 있던 것 · **Features에서 "그룹=예정"을 걷어내고 "그룹 대화" 절 신설** · Architecture에 `nbeep-ctl` · Security에 그룹/서버 메타데이터·한글 총람). **34 총람에 H-22~H-24**("나다다" 3회차 + 교훈 2건).
 - **툴바 기본 32px + 48px 옵션**(main · 사용자 요청): 프로필 버튼이 **내 아바타**를 쓰게 되면서 24px가 12간지 그림을 뭉갠다 → 08-09의 32→24를 되돌림(`DEFAULT_ICON` 32 · `ui.toolbar_size` 옵션 16/24/32/**48**/64 · `Msg::Tb48` 신설). ★ **기본값이 두 군데**(컨트롤 `DEFAULT_ICON` = 설정 미로드 시 · `RADIO_DEFAULTS` = 화면 선택 표시)라 한 곳만 고치면 화면과 실제가 갈린다. 저장된 값은 그대로라 **기존 사용자는 24 유지**(ADR-0011 계약). 564 green·clippy 0. 상세 [journal/2026-08-14.md](journal/2026-08-14.md).
 - **컨트롤 라이브러리화 R1~R4**(main · 기능 불변): ★ **`nbeep-ctl` 크레이트 신설**(12번째) — 기반 9모듈+컨트롤 17종 분리 · 앱 도메인 의존 0 불변식 · Interface(`Widget`/`DrawCtx`)·Abstract(`Control`+`ControlBase`)·조합/위임 명문화 · 기존 경로 재수출 = 사용부 무변경. i18n 라벨 주입(R1) · **측정 O(n²)→O(n)**(`text_prefix_widths` 계약 — 비트 동일 복제 · 깜빡임 리페인트 비용 해소 · R3) · 조건 정리 실측 = 이미 깔끔(R4). 564 green·clippy 0·rustdoc 0. 상세 [journal/2026-08-14.md](journal/2026-08-14.md).
 - **아바타 보더 + 툴바 프로필 버튼 = 내 얼굴**(main): `stroke_ellipse` 링 신설 · `profile.avatar_border`(#RRGGBB · 시드 기본값 = r/g/b 채널별 유도) · ColorPicker 행 · 와이어 bit4(꼬리 확장 문법) · 표시 = 큰 3px/작은 2px(사용자 확정) · **프로필 버튼 우측 끝 + ToolIcon::Avatar**(사진>내장>이니셜+링 · 변경 훅 4곳). 563 green. 상세 [journal/2026-08-14.md](journal/2026-08-14.md).
