@@ -9,6 +9,8 @@
 //! (M0-1b에 이 자리를 세운 이유 — 나중에 넣으면 저장 포맷 마이그레이션이 된다.)
 #![forbid(unsafe_op_in_unsafe_fn)]
 
+pub mod groupfile;
 pub mod trustfile;
 
+pub use groupfile::{FileGroupStore, GroupLoad};
 pub use trustfile::{FileTrustStore, TrustLoad};

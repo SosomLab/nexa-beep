@@ -13,8 +13,46 @@ use crate::geom::Rect;
 use crate::theme::{Color, Theme};
 use crate::typeahead::{TypeAhead, TYPEAHEAD_TIMEOUT_MS};
 use crate::widget::{Invalidations, Widget};
+use nbeep_core::group::GroupId;
 use nbeep_core::peers::PeerEntry;
 use nbeep_core::{PeerId, TrustLevel};
+
+/// 목록 상단 **그룹 섹션**의 한 행(M5-1 · 사용자 확정 08-13 — 그룹·개인을 한 화면에).
+#[derive(Clone, Debug)]
+pub struct GroupRow {
+    /// 그룹 식별자(로컬).
+    pub id: GroupId,
+    /// 그룹 이름.
+    pub name: String,
+    /// 구성원 수.
+    pub members: u32,
+    /// 지금 세션이 살아 있는 구성원 수(발신 즉시 도달 예상치).
+    pub online: u32,
+}
+
+/// Enter/더블클릭 활성화 결과 — 그룹 행이 생기며 상대가 둘로 갈렸다.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Activated {
+    /// 1:1 대화 열기.
+    Peer(PeerId),
+    /// 그룹 스레드 열기.
+    Group(GroupId),
+}
+
+/// 그룹 컨텍스트 메뉴·다중 선택에서 나온 **호스트 몫 행동**(위젯은 저장소를 모른다).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GroupAction {
+    /// 선택한 상대들로 그룹 생성(이름은 호스트가 모달로 받는다).
+    Create { members: Vec<PeerId> },
+    /// 그룹 이름 변경(새 이름은 호스트가 모달로 받는다).
+    Rename(GroupId),
+    /// 현재 선택한 상대들을 이 그룹에 추가.
+    AddMembers(GroupId, Vec<PeerId>),
+    /// 현재 선택한 상대들을 이 그룹에서 제외.
+    RemoveMembers(GroupId, Vec<PeerId>),
+    /// 그룹 삭제.
+    Delete(GroupId),
+}
 
 /// 목록 한 행 — 목록 항목(발견) + 신뢰 상태(`TrustStore`). 출처가 달라 조립 지점에서 합친다.
 #[derive(Clone, Debug)]
@@ -142,6 +180,12 @@ pub fn badge(trust: TrustLevel, theme: &Theme) -> (&'static str, Color) {
 pub struct PeerListWidget {
     bounds: Rect,
     rows: Vec<PeerRow>,
+    /// 그룹 섹션(목록 상단 · M5-1) — 인덱스 공간에서 그룹이 먼저 온다
+    /// (`i < groups.len()` = 그룹 행 · 그 뒤 = `rows[i - groups.len()]`).
+    groups: Vec<GroupRow>,
+    /// 다중 선택(⌘/Ctrl+클릭 토글 — 그룹 만들기·구성원 편집의 재료).
+    /// **PeerId 키**다 — 행 인덱스는 발견 이벤트마다 재배열되어 못 쓴다.
+    selected: std::collections::HashSet<PeerId>,
     /// 캐럿(키보드 포커스 행). 목록이 비면 무의미.
     caret: usize,
     /// 스크롤 상단 행 인덱스.
@@ -149,7 +193,7 @@ pub struct PeerListWidget {
     hover: Option<usize>,
     wheel: WheelAccum,
     typeahead: TypeAhead,
-    activated: Option<PeerId>,
+    activated: Option<Activated>,
     /// 타입어헤드 HUD 위치(설정).
     hud_pos: HudPos,
     /// 타입어헤드에 공백 포함(설정 · 기본 true).
@@ -162,12 +206,16 @@ pub struct PeerListWidget {
     last_click: Option<(usize, u64)>,
     /// 배율(고DPI — FR-U-6). 행 높이·여백에 곱한다. 좌표·bounds는 물리 px.
     scale: f32,
-    /// 우클릭 메뉴(08-11 — "프로필 보기").
+    /// 우클릭 메뉴(08-11 — "프로필 보기" · M5-1 그룹 항목 추가).
     ctx_menu: crate::controls::ContextMenu,
     /// 메뉴가 가리키는 행의 상대.
     ctx_peer: Option<PeerId>,
+    /// 메뉴가 가리키는 그룹 행.
+    ctx_group: Option<GroupId>,
     /// "프로필 보기" 선택 결과(1회성 — 호스트 폴).
     profile_req: Option<PeerId>,
+    /// 그룹 관련 행동(1회성 — 호스트가 저장소·모달로 처리).
+    group_action: Option<GroupAction>,
 }
 
 impl Default for PeerListWidget {
@@ -197,8 +245,38 @@ impl PeerListWidget {
             scale: 1.0,
             ctx_menu: crate::controls::ContextMenu::new(),
             ctx_peer: None,
+            ctx_group: None,
             profile_req: None,
+            group_action: None,
+            groups: Vec::new(),
+            selected: std::collections::HashSet::new(),
         }
+    }
+
+    /// 그룹 섹션 교체(M5-1) — 그룹 저장소 변경·온라인 수 갱신 시 호스트가 부른다.
+    pub fn set_groups(&mut self, groups: Vec<GroupRow>, inv: &mut Invalidations) {
+        self.groups = groups;
+        self.caret = self.caret.min(self.total().saturating_sub(1));
+        self.clamp_scroll();
+        inv.push(self.bounds);
+    }
+
+    /// 그룹 관련 행동(1회성) — 생성·개명은 호스트가 이름 모달을 이어 연다.
+    pub fn take_group_action(&mut self) -> Option<GroupAction> {
+        self.group_action.take()
+    }
+
+    /// 현재 다중 선택된 상대들(정렬 — 결정적).
+    #[must_use]
+    pub fn selected_peers(&self) -> Vec<PeerId> {
+        let mut v: Vec<PeerId> = self.selected.iter().copied().collect();
+        v.sort();
+        v
+    }
+
+    /// 다중 선택 해제(그룹 생성 완료 후 등 — 호스트 호출).
+    pub fn clear_selection(&mut self) {
+        self.selected.clear();
     }
 
     /// "프로필 보기" 선택(1회성) — 호스트가 상대 프로필 창을 연다.
@@ -271,11 +349,24 @@ impl PeerListWidget {
     }
 
     /// 목록 교체(발견 이벤트 반영) — 캐럿은 가능한 유지, 전체 무효화.
+    /// 선택은 **사라진 상대만** 걷어낸다(재배열에도 선택 유지 — PeerId 키의 이유).
     pub fn set_rows(&mut self, rows: Vec<PeerRow>, inv: &mut Invalidations) {
         self.rows = rows;
-        self.caret = self.caret.min(self.rows.len().saturating_sub(1));
+        self.selected
+            .retain(|p| self.rows.iter().any(|r| r.entry.peer == *p));
+        self.caret = self.caret.min(self.total().saturating_sub(1));
         self.clamp_scroll();
         inv.push(self.bounds);
+    }
+
+    /// 전체 행 수 = 그룹 섹션 + 피어(M5-1 — 인덱스 공간은 그룹이 먼저).
+    fn total(&self) -> usize {
+        self.groups.len() + self.rows.len()
+    }
+
+    /// 이 인덱스가 피어 행이면 그 행(그룹 행이면 None).
+    fn peer_at(&self, i: usize) -> Option<&PeerRow> {
+        self.rows.get(i.checked_sub(self.groups.len())?)
     }
 
     /// 현재 캐럿 행.
@@ -284,9 +375,17 @@ impl PeerListWidget {
         self.caret
     }
 
-    /// Enter/더블클릭으로 활성화된 상대를 꺼낸다(1회성 — 루프 소유자가 대화를 연다).
-    pub fn take_activated(&mut self) -> Option<PeerId> {
+    /// Enter/더블클릭으로 활성화된 대상(상대·그룹)을 꺼낸다(1회성 — 루프 소유자가 연다).
+    pub fn take_activated(&mut self) -> Option<Activated> {
         self.activated.take()
+    }
+
+    /// 이 인덱스의 활성화 대상.
+    fn activated_at(&self, i: usize) -> Option<Activated> {
+        if let Some(g) = self.groups.get(i) {
+            return Some(Activated::Group(g.id));
+        }
+        self.peer_at(i).map(|r| Activated::Peer(r.entry.peer))
     }
 
     /// **IME 조합 중 텍스트로 실시간 타입어헤드**(한글 "김" 조합 즉시 이동 — 확정/Space 불필요).
@@ -294,7 +393,7 @@ impl PeerListWidget {
     pub fn set_preedit(&mut self, text: &str, now_ms: u64, inv: &mut Invalidations) {
         let q = self.typeahead.set_preedit(text, now_ms);
         if !q.prefix.is_empty() {
-            let from = self.caret % self.rows.len().max(1);
+            let from = self.caret % self.total().max(1);
             if let Some(hit) = self.find_prefix(&q.prefix, from) {
                 self.move_caret(hit, inv);
             }
@@ -308,7 +407,7 @@ impl PeerListWidget {
 
     fn clamp_scroll(&mut self) {
         let vis = self.visible_rows().max(1);
-        let max_top = self.rows.len().saturating_sub(vis);
+        let max_top = self.total().saturating_sub(vis);
         self.top = self.top.min(max_top);
         // 캐럿이 보이도록 스크롤 따라가기.
         if self.caret < self.top {
@@ -332,8 +431,8 @@ impl PeerListWidget {
     }
 
     fn move_caret(&mut self, to: usize, inv: &mut Invalidations) {
-        let to = to.min(self.rows.len().saturating_sub(1));
-        if to == self.caret || self.rows.is_empty() {
+        let to = to.min(self.total().saturating_sub(1));
+        if to == self.caret || self.total() == 0 {
             return;
         }
         inv.push(self.row_rect(self.caret));
@@ -353,12 +452,13 @@ impl PeerListWidget {
         }
         let rel = ((y - self.bounds.y) / self.row_h().max(1)) as usize;
         let idx = self.top + rel;
-        (idx < self.rows.len()).then_some(idx)
+        (idx < self.total()).then_some(idx)
     }
 
     /// 접두사 매치(대소문자 무시) — `from`부터 **앞으로** 순환 검색.
+    /// 그룹 행도 매치한다(그룹 이름 점프 — M5-1).
     fn find_prefix(&self, prefix: &str, from: usize) -> Option<usize> {
-        let n = self.rows.len();
+        let n = self.total();
         if n == 0 {
             return None;
         }
@@ -370,7 +470,7 @@ impl PeerListWidget {
 
     /// 접두사 매치 — `from`부터 **뒤로** 순환 검색(↑ 순환용).
     fn find_prefix_rev(&self, prefix: &str, from: usize) -> Option<usize> {
-        let n = self.rows.len();
+        let n = self.total();
         if n == 0 {
             return None;
         }
@@ -381,12 +481,16 @@ impl PeerListWidget {
     }
 
     fn row_matches(&self, i: usize, lower_prefix: &str) -> bool {
-        self.rows[i]
-            .entry
-            .name
-            .as_str()
-            .to_lowercase()
-            .starts_with(lower_prefix)
+        if let Some(g) = self.groups.get(i) {
+            return g.name.to_lowercase().starts_with(lower_prefix);
+        }
+        self.peer_at(i).is_some_and(|r| {
+            r.entry
+                .name
+                .as_str()
+                .to_lowercase()
+                .starts_with(lower_prefix)
+        })
     }
 }
 
@@ -409,20 +513,79 @@ impl Widget for PeerListWidget {
                 inv.push(menu_rect);
                 inv.push(self.bounds);
                 if let Some(id) = self.ctx_menu.take_picked() {
-                    if id == "profile" {
-                        self.profile_req = self.ctx_peer.take();
+                    match id.as_str() {
+                        "profile" => self.profile_req = self.ctx_peer.take(),
+                        // ── 그룹 행동(M5-1) — 위젯은 요청만 남기고 저장소는 호스트 몫 ──
+                        "g-create" => {
+                            self.group_action = Some(GroupAction::Create {
+                                members: self.selected_peers(),
+                            });
+                        }
+                        "g-rename" => {
+                            self.group_action = self.ctx_group.take().map(GroupAction::Rename);
+                        }
+                        "g-add" => {
+                            self.group_action = self
+                                .ctx_group
+                                .take()
+                                .map(|g| GroupAction::AddMembers(g, self.selected_peers()));
+                        }
+                        "g-remove" => {
+                            self.group_action = self
+                                .ctx_group
+                                .take()
+                                .map(|g| GroupAction::RemoveMembers(g, self.selected_peers()));
+                        }
+                        "g-delete" => {
+                            self.group_action = self.ctx_group.take().map(GroupAction::Delete);
+                        }
+                        _ => {}
                     }
                 }
                 return;
             }
         }
-        // ── 우클릭 = "프로필 보기" 메뉴(08-11 · 즉시 실행이 아니라 메뉴 경유) ──
+        // ── 우클릭 메뉴(08-11 프로필 · M5-1 그룹) — 즉시 실행이 아니라 메뉴 경유 ──
         if let InputEvent::RightDown { x, y } = *ev {
             if let Some(idx) = self.row_at(y) {
                 if self.bounds.contains(crate::geom::Point { x, y }) {
                     self.caret = idx;
-                    self.ctx_peer = Some(self.rows[idx].entry.peer);
-                    let items = vec![crate::controls::CtxItem::item("profile", "프로필 보기")];
+                    let sel_n = self.selected.len();
+                    let items = if let Some(g) = self.groups.get(idx) {
+                        // 그룹 행 — 편입/제외는 현재 다중 선택을 재료로 쓴다.
+                        self.ctx_group = Some(g.id);
+                        self.ctx_peer = None;
+                        let mut v = vec![crate::controls::CtxItem::item("g-rename", "이름 변경")];
+                        if sel_n > 0 {
+                            v.push(crate::controls::CtxItem::item(
+                                "g-add",
+                                format!("선택한 {sel_n}명 추가"),
+                            ));
+                            v.push(crate::controls::CtxItem::item(
+                                "g-remove",
+                                format!("선택한 {sel_n}명 제외"),
+                            ));
+                        }
+                        v.push(crate::controls::CtxItem::item("g-delete", "그룹 삭제"));
+                        v
+                    } else if let Some(row) = self.peer_at(idx) {
+                        // 피어 행 — 우클릭 대상이 선택에 없으면 그 한 명도 재료에 포함되게
+                        // 선택에 넣는다(선택 없이 우클릭 → 그 상대 1명으로 그룹).
+                        let peer = row.entry.peer;
+                        self.ctx_peer = Some(peer);
+                        self.ctx_group = None;
+                        self.selected.insert(peer);
+                        let n = self.selected.len();
+                        vec![
+                            crate::controls::CtxItem::item("profile", "프로필 보기"),
+                            crate::controls::CtxItem::item(
+                                "g-create",
+                                format!("그룹 만들기 ({n}명)"),
+                            ),
+                        ]
+                    } else {
+                        return;
+                    };
                     self.ctx_menu.set_scale(self.scale);
                     self.ctx_menu.open_at(x, y, items, self.bounds, 8 * 15);
                     inv.push(self.bounds);
@@ -442,7 +605,7 @@ impl Widget for PeerListWidget {
                             self.move_caret(self.caret + 1, inv);
                         } else {
                             self.typeahead.touch(self.now_hint);
-                            let n = self.rows.len().max(1);
+                            let n = self.total().max(1);
                             if let Some(hit) = self.find_prefix(&p, (self.caret + 1) % n) {
                                 self.move_caret(hit, inv);
                             }
@@ -462,12 +625,12 @@ impl Widget for PeerListWidget {
                         }
                     }
                     Key::Home => self.move_caret(0, inv),
-                    Key::End => self.move_caret(self.rows.len().saturating_sub(1), inv),
+                    Key::End => self.move_caret(self.total().saturating_sub(1), inv),
                     Key::PageUp => self.move_caret(self.caret.saturating_sub(vis), inv),
                     Key::PageDown => self.move_caret(self.caret + vis, inv),
                     Key::Enter => {
-                        if let Some(row) = self.rows.get(self.caret) {
-                            self.activated = Some(row.entry.peer);
+                        if let Some(a) = self.activated_at(self.caret) {
+                            self.activated = Some(a);
                         }
                     }
                     Key::Escape => {
@@ -487,7 +650,7 @@ impl Widget for PeerListWidget {
                         self.top + lines.unsigned_abs() as usize
                     };
                     let vis = self.visible_rows().max(1);
-                    let clamped = new_top.min(self.rows.len().saturating_sub(vis));
+                    let clamped = new_top.min(self.total().saturating_sub(vis));
                     if clamped != self.top {
                         self.top = clamped;
                         inv.push(self.bounds);
@@ -514,22 +677,39 @@ impl Widget for PeerListWidget {
                 } else {
                     self.caret + 1
                 };
-                if let Some(hit) = self.find_prefix(&q.prefix, from % self.rows.len().max(1)) {
+                if let Some(hit) = self.find_prefix(&q.prefix, from % self.total().max(1)) {
                     self.move_caret(hit, inv);
                 }
                 // 캐럿이 안 움직여도(확장 매치 유지) HUD 텍스트는 바뀐다 — 항상 다시 그린다.
                 inv.push(self.bounds);
             }
-            InputEvent::MouseDown { y, .. } => {
+            InputEvent::MouseDown { y, primary, .. } => {
                 if let Some(i) = self.row_at(y) {
+                    // ⌘/Ctrl+클릭 = 다중 선택 토글(M5-1 — 그룹 만들기·구성원 편집의 재료).
+                    // 그룹 행은 선택 대상이 아니다(선택은 사람 단위).
+                    if primary {
+                        if let Some(row) = self.peer_at(i) {
+                            let peer = row.entry.peer;
+                            if !self.selected.remove(&peer) {
+                                self.selected.insert(peer);
+                            }
+                            inv.push(self.row_rect(i));
+                            self.last_click = None; // 선택 토글은 더블클릭으로 안 이어진다
+                            return;
+                        }
+                    } else if !self.selected.is_empty() {
+                        // 일반 클릭 = 선택 해제(파일 관리자 관례).
+                        self.selected.clear();
+                        inv.push(self.bounds);
+                    }
                     self.move_caret(i, inv);
                     // 더블클릭 = Enter 동일 동작(사용자 확정 08-09) — 같은 행 500ms 내 재클릭.
                     // 시각은 now_hint(~5Hz 틱 해상도 ±200ms)라 여유 있는 임계값을 쓴다.
                     let now = self.now_hint;
                     if let Some((li, lt)) = self.last_click {
                         if li == i && now.saturating_sub(lt) <= 500 {
-                            if let Some(row) = self.rows.get(i) {
-                                self.activated = Some(row.entry.peer);
+                            if let Some(a) = self.activated_at(i) {
+                                self.activated = Some(a);
                             }
                             self.last_click = None; // 트리플클릭 중복 활성화 방지
                             return;
@@ -562,8 +742,7 @@ impl Widget for PeerListWidget {
         let vis = self.visible_rows();
 
         let rh = self.row_h();
-        for (rel, i) in (self.top..self.rows.len().min(self.top + vis + 1)).enumerate() {
-            let row = &self.rows[i];
+        for (rel, i) in (self.top..self.total().min(self.top + vis + 1)).enumerate() {
             let r = Rect::new(
                 self.bounds.x,
                 self.bounds.y + i32::try_from(rel).unwrap_or(i32::MAX) * rh,
@@ -580,6 +759,45 @@ impl Widget for PeerListWidget {
             };
             // 행 배경 먼저(불투명) — 아바타·이름은 그 위에.
             ctx.fill_rect(r, bg);
+
+            // ── 그룹 행(M5-1 · 목록 상단 섹션) — 각진 아이콘으로 개인과 즉시 구분 ──
+            if let Some(g) = self.groups.get(i) {
+                let av_d = self.s(AVATAR_D);
+                let av = Rect::new(r.x + self.s(8), r.y + (rh - av_d) / 2, av_d, av_d);
+                ctx.fill_round_rect(av, self.s(10), theme.accent);
+                ctx.select_font(FontSlot::PeerList, true);
+                let initial: String = g.name.chars().take(1).collect();
+                let iw = ctx.text_width(&initial);
+                let ith = ctx.text_height();
+                ctx.text(
+                    av.x + (av.w - iw) / 2,
+                    av.y + (av.h - ith) / 2,
+                    av,
+                    &initial,
+                    theme.text,
+                );
+                let name_x = av.right() + self.s(10);
+                let name_th = ctx.text_height();
+                let name_y = r.y + self.s(8);
+                ctx.text(name_x, name_y, r, &g.name, theme.text);
+                ctx.select_font(FontSlot::Status, false);
+                ctx.text(
+                    name_x,
+                    name_y + name_th + self.s(3),
+                    r,
+                    &format!("구성원 {} · 온라인 {}", g.members, g.online),
+                    theme.text_dim,
+                );
+                ctx.select_font(FontSlot::PeerList, false);
+                ctx.fill_rect(Rect::new(r.x, r.bottom() - 1, r.w, 1), theme.border);
+                continue;
+            }
+            let Some(row) = self.peer_at(i) else { continue };
+
+            // 다중 선택 표시(M5-1) — 좌측 강조 막대(색만으로 안 가르는 규칙 — 위치 신호).
+            if self.selected.contains(&row.entry.peer) {
+                ctx.fill_rect(Rect::new(r.x, r.y, self.s(4), r.h), theme.accent);
+            }
             // ── 원형 이니셜 아바타(가상 이미지 · 08-11) — 색 시드 = 키 지문(안정) ──
             // 실제 사진 렌더는 M4-5(imgdec) 후 — 그때까지 프로필 이미지가 있어도 이니셜.
             let av_d = self.s(AVATAR_D);
@@ -847,7 +1065,7 @@ mod tests {
         w.on_event(&down(y2), &mut inv);
         assert_eq!(w.take_activated(), None, "싱글클릭 = 선택만");
         w.on_event(&down(y2), &mut inv);
-        assert_eq!(w.take_activated(), Some(pid(2)), "더블클릭 = 활성화");
+        assert_eq!(w.take_activated(), Some(Activated::Peer(pid(2))), "더블클릭 = 활성화");
         // 트리플클릭이 또 활성화하지 않는다(활성화 직후 해제 — 이 클릭은 다시 무장).
         w.on_event(&down(y2), &mut inv);
         assert_eq!(w.take_activated(), None);
@@ -863,7 +1081,7 @@ mod tests {
         let mut inv = Invalidations::default();
         w.on_event(&key(Key::Down), &mut inv);
         w.on_event(&key(Key::Enter), &mut inv);
-        assert_eq!(w.take_activated(), Some(pid(2)));
+        assert_eq!(w.take_activated(), Some(Activated::Peer(pid(2))));
         assert_eq!(w.take_activated(), None, "1회성");
     }
 

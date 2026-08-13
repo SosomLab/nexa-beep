@@ -705,6 +705,19 @@ enum Role {
     AddEndpoint,
     /// 경고 모달(08-13 — 상태바 한 줄로는 지나치는 실패를 눈앞에 세운다).
     Alert,
+    /// 한 줄 이름 입력 모달(M5-1 — 그룹 생성·개명).
+    NamePrompt,
+    /// 그룹 스레드 창(M5-1 · Separate 모드 — 팬아웃 발신을 하나의 스레드로 · FR-G-3).
+    GroupChat(nbeep_core::group::GroupId),
+}
+
+/// 이름 입력 모달의 용도(M5-1) — 제출된 이름을 어디에 쓸지.
+#[derive(Clone, Debug)]
+enum NamePurpose {
+    /// 선택한 구성원으로 그룹 생성.
+    CreateGroup(Vec<PeerId>),
+    /// 기존 그룹 개명.
+    RenameGroup(nbeep_core::group::GroupId),
 }
 
 /// 에코 봇 — 버스에 실물 신원으로 참여해 수신 세션을 받고, Chat 메시지를 에코한다.
@@ -976,8 +989,23 @@ struct App {
     /// 그 대화를 마지막으로 확인한 시각(뷰가 열려 있던 마지막 순간 — 목록에 표시).
     last_read: HashMap<PeerId, nbeep_ui::WallTime>,
     /// 자동 재연결 스케줄(사용자 확정 08-13 ⓑ) — `(백오프 단계, 다음 시도 at_ms)`.
-    /// 끊김·연결 실패 시 등록, 성공·수동 클릭·상한 도달 시 해제.
+    /// 끊김·연결 실패 시 해제, 성공·수동 클릭·상한 도달 시 해제.
     reconnect: HashMap<PeerId, (u8, u64)>,
+    /// 그룹 저장(M5-1 · FR-G-1) — `groups.seg` 암호화 영속(트러스트와 같은 결 —
+    /// 그룹 이름·구성원은 인간관계 목록이다).
+    groups: nbeep_store::FileGroupStore,
+    /// 그룹 스레드(FR-G-3 — 팬아웃 발신을 하나의 스레드로) — 뷰와 분리(DR-26 동형).
+    group_threads: HashMap<nbeep_core::group::GroupId, Vec<ChatLine>>,
+    /// 그룹 스레드 뷰(단일 모드 주 창 전환용) — 열려 있는 그룹.
+    single_open_group: Option<nbeep_core::group::GroupId>,
+    /// 그룹 스레드 뷰들(그룹별 · 단일/별도 창 공용 — chats와 동형).
+    gchats: HashMap<nbeep_core::group::GroupId, ChatViewWidget>,
+    /// 이름 입력 모달 뷰(열려 있을 때만 Some) + 용도.
+    name_prompt: Option<nbeep_ui::TextPromptWidget>,
+    name_prompt_for: Option<NamePurpose>,
+    /// 그룹 발신 중 미연결 구성원에게 이어 보낼 본문(성립 시 flush — 사용자 확정
+    /// "자동 연결 시도 후 전송"). 백오프 소진 시 실패 라인으로 종결.
+    pending_group_sends: HashMap<PeerId, Vec<(nbeep_core::group::GroupId, String)>>,
     /// IME 조합 중(macOS — Preedit 활성). 조합 중엔 KeyboardInput 문자/백스페이스를
     /// 라우팅하지 않는다(같은 키가 Ime 경로로도 와서 자모가 이중 유입되던 버그).
     ime_composing: bool,
@@ -1761,6 +1789,25 @@ impl App {
             })
             .collect();
         self.list.set_rows(rows, inv);
+        // 그룹 섹션(M5-1) — 온라인 수 = 세션이 살아 있는 구성원(발신 즉시 도달 예상치).
+        let grows: Vec<nbeep_ui::GroupRow> = self
+            .groups
+            .list()
+            .iter()
+            .map(|(id, g)| nbeep_ui::GroupRow {
+                id: *id,
+                name: g.name.as_str().to_string(),
+                members: u32::try_from(g.len()).unwrap_or(u32::MAX),
+                online: u32::try_from(
+                    g.members()
+                        .iter()
+                        .filter(|p| self.conversations.contains_key(p))
+                        .count(),
+                )
+                .unwrap_or(u32::MAX),
+            })
+            .collect();
+        self.list.set_groups(grows, inv);
     }
 
     /// 팔레트 + 사용자 색 오버라이드(설정 `theme.{dark|light}.*`)로 테마 재구성(08-10).
@@ -2673,15 +2720,29 @@ impl App {
             self.identity.wrap_secret(),
         );
         self.trust = trust;
+        // 그룹 세그먼트도 래핑 원료가 바뀐다(M5-1 — trust와 같은 결).
+        let (groups, _gload) = nbeep_store::FileGroupStore::open(
+            self.data_dir.join("groups.seg"),
+            self.identity.wrap_secret(),
+        );
+        self.groups = groups;
         self.conversations.clear();
         self.chats.clear();
         self.single_open = None;
+        self.single_open_group = None;
+        self.gchats.clear();
+        self.pending_group_sends.clear();
         self.connecting.clear();
         self.reconnect.clear(); // 신원 교체 — 옛 신원의 재연결 스케줄은 무효(ⓑ)
         let chat_wins: Vec<WindowId> = self
             .windows
             .iter()
-            .filter(|(_, e)| matches!(e.role, Role::Chat(_) | Role::Sending(_)))
+            .filter(|(_, e)| {
+                matches!(
+                    e.role,
+                    Role::Chat(_) | Role::Sending(_) | Role::GroupChat(_)
+                )
+            })
             .map(|(id, _)| *id)
             .collect();
         for wid in chat_wins {
@@ -3242,6 +3303,389 @@ impl App {
         }
     }
 
+    /// 그룹 행동 처리(M5-1) — 위젯 요청을 저장소·모달로 잇는다.
+    fn handle_group_action(&mut self, action: nbeep_ui::GroupAction, el: &ActiveEventLoop) {
+        use nbeep_ui::GroupAction as GA;
+        match action {
+            GA::Create { members } => {
+                if members.is_empty() {
+                    self.status = "그룹을 만들려면 ⌘/Ctrl+클릭으로 상대를 먼저 선택하세요".into();
+                    return;
+                }
+                self.open_name_prompt(
+                    el,
+                    NamePurpose::CreateGroup(members),
+                    "그룹 만들기 — 이름",
+                    "",
+                );
+            }
+            GA::Rename(gid) => {
+                let cur = self
+                    .groups
+                    .get(gid)
+                    .map(|g| g.name.as_str().to_string())
+                    .unwrap_or_default();
+                self.open_name_prompt(el, NamePurpose::RenameGroup(gid), "그룹 이름 변경", &cur);
+            }
+            GA::AddMembers(gid, peers) => {
+                let n = peers
+                    .iter()
+                    .filter(|p| self.groups.add_member(gid, **p))
+                    .count();
+                self.status = format!("그룹에 {n}명 추가");
+                self.refresh_and_redraw();
+            }
+            GA::RemoveMembers(gid, peers) => {
+                let n = peers
+                    .iter()
+                    .filter(|p| self.groups.remove_member(gid, **p))
+                    .count();
+                self.status = format!("그룹에서 {n}명 제외");
+                self.refresh_and_redraw();
+            }
+            GA::Delete(gid) => {
+                if self.groups.delete(gid) {
+                    // 열린 스레드 뷰 정리(단일·별도 창 모두).
+                    self.gchats.remove(&gid);
+                    self.group_threads.remove(&gid);
+                    if self.single_open_group == Some(gid) {
+                        self.single_open_group = None;
+                        self.set_main_ime(false);
+                        if let Some(mid) = self.main_id {
+                            self.layout_window(mid);
+                        }
+                    }
+                    let wins: Vec<WindowId> = self
+                        .windows
+                        .iter()
+                        .filter(|(_, e)| e.role == Role::GroupChat(gid))
+                        .map(|(id, _)| *id)
+                        .collect();
+                    for wid in wins {
+                        self.windows.remove(&wid);
+                    }
+                    self.status = "그룹 삭제됨".into();
+                    self.refresh_and_redraw();
+                }
+            }
+        }
+    }
+
+    /// 목록 갱신 + 주 창 재도(그룹 편집 후 공용 짧은 손).
+    fn refresh_and_redraw(&mut self) {
+        let mut inv = Invalidations::default();
+        self.refresh_rows(&mut inv);
+        if let Some(mid) = self.main_id {
+            self.request_redraw(mid);
+        }
+    }
+
+    /// 이름 입력 모달을 연다(M5-1 — 그룹 생성·개명 공용 · 항상 위).
+    fn open_name_prompt(
+        &mut self,
+        el: &ActiveEventLoop,
+        purpose: NamePurpose,
+        title: &str,
+        initial: &str,
+    ) {
+        // 이미 열려 있으면 새 용도로 교체(중복 창 금지 — 13 §12-1 중복 가드).
+        if let Some((pid, _)) = self
+            .windows
+            .iter()
+            .find(|(_, e)| e.role == Role::NamePrompt)
+        {
+            let pid = *pid;
+            self.windows.remove(&pid);
+        }
+        self.name_prompt_for = Some(purpose);
+        let attrs = Window::default_attributes()
+            .with_title("Nexa Beep — 그룹")
+            .with_inner_size(winit::dpi::LogicalSize::new(360.0, 150.0))
+            .with_resizable(false)
+            .with_window_level(winit::window::WindowLevel::AlwaysOnTop)
+            .with_window_icon(self.icon.clone());
+        let window = Rc::new(el.create_window(attrs).unwrap());
+        window.set_ime_allowed(true); // 그룹 이름 한글 입력
+        let scale = window.scale_factor() as f32;
+        let context = softbuffer::Context::new(window.clone()).unwrap();
+        let surface = SbSurface::new(&context, window.clone()).unwrap();
+        let id = window.id();
+        self.windows.insert(
+            id,
+            WinEntry {
+                role: Role::NamePrompt,
+                window,
+                surface,
+                cursor: (0, 0),
+                scale,
+            },
+        );
+        self.name_prompt = Some(nbeep_ui::TextPromptWidget::new(title, "그룹 이름", initial));
+        self.layout_window(id);
+        self.request_redraw(id);
+    }
+
+    /// 이름 모달 제출 적용(M5-1) — 무해화(DisplayName)는 여기서.
+    fn apply_name_prompt(&mut self, name: &str) {
+        let Ok(dn) = nbeep_core::DisplayName::parse(name) else {
+            self.status = "그룹 이름으로 쓸 수 없는 문자입니다".into();
+            return;
+        };
+        match self.name_prompt_for.take() {
+            Some(NamePurpose::CreateGroup(members)) => {
+                let gid = self.groups.create(dn);
+                for m in &members {
+                    let _ = self.groups.add_member(gid, *m);
+                }
+                self.list.clear_selection();
+                self.status = format!("그룹 생성 — 구성원 {}명", members.len());
+            }
+            Some(NamePurpose::RenameGroup(gid)) if self.groups.rename(gid, dn) => {
+                // 열린 스레드 제목은 다음 열기에서 반영(뷰 재생성 — 단순 유지).
+                self.status = "그룹 이름 변경됨".into();
+            }
+            Some(NamePurpose::RenameGroup(_)) => {}
+            None => {}
+        }
+        if self.groups.write_failed() {
+            self.status = format!("{} · ⚠ 그룹 저장 실패(다음 변경에서 재시도)", self.status);
+        }
+        self.refresh_and_redraw();
+    }
+
+    /// 그룹 스레드를 연다(M5-1 · FR-G-3 — 팬아웃을 하나의 스레드로).
+    fn open_group_thread(&mut self, gid: nbeep_core::group::GroupId, el: &ActiveEventLoop) {
+        let Some(g) = self.groups.get(gid) else {
+            return;
+        };
+        let title = format!("{} (그룹 {}명)", g.name.as_str(), g.len());
+        let mut chat = ChatViewWidget::new(title.clone());
+        let mut inv = Invalidations::default();
+        chat.set_time_format(
+            self.settings.get("chat.time_24h") != "off",
+            self.settings.get("chat.date_format") == "short",
+            &mut inv,
+        );
+        for line in self.group_threads.get(&gid).into_iter().flatten() {
+            chat.push_line(line.clone(), &mut inv);
+        }
+        match self.mode {
+            WindowMode::Single => {
+                self.gchats.insert(gid, chat);
+                self.single_open = None; // 1:1 뷰가 열려 있었다면 목록 상태로 접고 그룹으로
+                self.single_open_group = Some(gid);
+                self.set_main_ime(true);
+                if let Some(mid) = self.main_id {
+                    self.layout_window(mid);
+                    self.request_redraw(mid);
+                }
+            }
+            WindowMode::Separate => {
+                // 이미 열려 있으면 포커스(재활성화 = 기존 창 — DR-26 관례).
+                if let Some((wid, _)) = self
+                    .windows
+                    .iter()
+                    .find(|(_, e)| e.role == Role::GroupChat(gid))
+                {
+                    if let Some(e) = self.windows.get(wid) {
+                        e.window.focus_window();
+                    }
+                    return;
+                }
+                self.gchats.insert(gid, chat);
+                let attrs = Window::default_attributes()
+                    .with_title(format!("Nexa Beep — {title}"))
+                    .with_inner_size(winit::dpi::LogicalSize::new(520.0, 560.0))
+                    .with_window_icon(self.icon.clone());
+                let window = Rc::new(el.create_window(attrs).unwrap());
+                window.set_ime_allowed(true);
+                let scale = window.scale_factor() as f32;
+                let context = softbuffer::Context::new(window.clone()).unwrap();
+                let surface = SbSurface::new(&context, window.clone()).unwrap();
+                let id = window.id();
+                self.windows.insert(
+                    id,
+                    WinEntry {
+                        role: Role::GroupChat(gid),
+                        window,
+                        surface,
+                        cursor: (0, 0),
+                        scale,
+                    },
+                );
+                self.layout_window(id);
+                self.request_redraw(id);
+            }
+        }
+    }
+
+    /// 그룹 스레드 발신·복귀 처리(M5-1 · FR-G-2·G-6) — 구성원별 팬아웃.
+    /// 세션 있는 구성원 = 즉시 · 없는 구성원 = 자동 연결 + 성립 시 이어 전달(사용자 확정).
+    fn drain_group_effects(&mut self, gid: nbeep_core::group::GroupId, id: WindowId) {
+        let mut inv = Invalidations::default();
+        // 뷰 닫기(단일 모드 ← 버튼) — 뷰만 닫힌다(스레드 유지 · DR-26 동형).
+        if self
+            .gchats
+            .get_mut(&gid)
+            .is_some_and(ChatViewWidget::take_back)
+        {
+            self.gchats.remove(&gid);
+            match self.mode {
+                WindowMode::Single => {
+                    self.single_open_group = None;
+                    self.set_main_ime(false);
+                    self.layout_window(id);
+                    self.request_redraw(id);
+                }
+                WindowMode::Separate => {
+                    self.windows.remove(&id);
+                }
+            }
+            return;
+        }
+        let outgoing = self
+            .gchats
+            .get_mut(&gid)
+            .and_then(ChatViewWidget::take_outgoing);
+        if let Some(text) = outgoing {
+            let members = self
+                .groups
+                .get(gid)
+                .map(|g| g.members())
+                .unwrap_or_default();
+            if members.is_empty() {
+                self.status = "그룹에 구성원이 없습니다 — 목록에서 ⌘/Ctrl+클릭 후 추가".into();
+                self.request_redraw(id);
+                return;
+            }
+            let (at_ms, wall) = now_stamp();
+            // 내 말풍선은 스레드에 한 번(팬아웃과 무관 — FR-G-3 "하나의 스레드").
+            let line = ChatLine::text(true, text.clone(), at_ms, wall);
+            self.group_threads
+                .entry(gid)
+                .or_default()
+                .push(line.clone());
+            if let Some(chat) = self.gchats.get_mut(&gid) {
+                chat.push_line(line, &mut inv);
+            }
+            let mut sent = 0usize;
+            let mut queued: Vec<PeerId> = Vec::new();
+            for m in &members {
+                if let Some(conv) = self.conversations.get(m) {
+                    let msg = nbeep_core::ChatMessage {
+                        sender_device: self.identity.peer_id(),
+                        seq: self.seq.issue(),
+                        body: nbeep_core::MessageBody::Text(text.as_str().to_string()),
+                    };
+                    if conv.out_tx.send(SessionCmd::Chat(msg.encode())).is_ok() {
+                        self.ledger.note_sent(*m);
+                        sent += 1;
+                        continue;
+                    }
+                }
+                // 미연결 — 본문을 상대별로 대기시키고 자동 연결(성립 시 flush).
+                self.pending_group_sends
+                    .entry(*m)
+                    .or_default()
+                    .push((gid, text.as_str().to_string()));
+                queued.push(*m);
+            }
+            for m in &queued {
+                self.reconnect.remove(m); // 발신 의사 = 백오프 리셋(즉시 시도)
+                self.start_connect(*m, true); // 자동 — 창을 열지 않는다
+            }
+            // FR-G-4 초판 — 즉시/대기 요약을 스레드에 남긴다(개별 종결은 성립·소진 시).
+            if !queued.is_empty() {
+                let names: Vec<String> = queued.iter().map(|p| self.peer_title(*p)).collect();
+                self.push_group_note(
+                    gid,
+                    &format!(
+                        "전달 {sent}/{} · 연결 대기: {}",
+                        members.len(),
+                        names.join(", ")
+                    ),
+                    &mut inv,
+                );
+            }
+            self.status = format!("그룹 발신 — 즉시 {sent} · 연결 대기 {}", queued.len());
+            self.refresh_and_redraw();
+            self.request_redraw(id);
+        }
+    }
+
+    /// 그룹 스레드에 시스템 안내 라인(FR-G-4 — 전달 상태는 스레드에서 보인다).
+    fn push_group_note(
+        &mut self,
+        gid: nbeep_core::group::GroupId,
+        note: &str,
+        inv: &mut Invalidations,
+    ) {
+        let (at_ms, wall) = now_stamp();
+        let line = ChatLine::text(false, nbeep_core::sanitize_message(note), at_ms, wall);
+        self.group_threads
+            .entry(gid)
+            .or_default()
+            .push(line.clone());
+        if let Some(chat) = self.gchats.get_mut(&gid) {
+            chat.push_line(line, inv);
+        }
+        // 이 그룹 뷰가 보이는 창 재도.
+        if self.single_open_group == Some(gid) {
+            if let Some(mid) = self.main_id {
+                self.request_redraw(mid);
+            }
+        }
+        let wins: Vec<WindowId> = self
+            .windows
+            .iter()
+            .filter(|(_, e)| e.role == Role::GroupChat(gid))
+            .map(|(i, _)| *i)
+            .collect();
+        for w in wins {
+            self.request_redraw(w);
+        }
+    }
+
+    /// 성립한 상대에게 대기 중이던 그룹 본문을 이어 보낸다(M5-1 — Outbound 합류점에서).
+    fn flush_group_sends(&mut self, peer: PeerId) {
+        let Some(pends) = self.pending_group_sends.remove(&peer) else {
+            return;
+        };
+        let mut inv = Invalidations::default();
+        let title = self.peer_title(peer);
+        for (gid, text) in pends {
+            let sent = self.conversations.get(&peer).is_some_and(|conv| {
+                let msg = nbeep_core::ChatMessage {
+                    sender_device: self.identity.peer_id(),
+                    seq: self.seq.issue(),
+                    body: nbeep_core::MessageBody::Text(text.clone()),
+                };
+                conv.out_tx.send(SessionCmd::Chat(msg.encode())).is_ok()
+            });
+            if sent {
+                self.ledger.note_sent(peer);
+            }
+            let note = if sent {
+                format!("전달됨: {title}")
+            } else {
+                format!("⚠ 전달 실패: {title}")
+            };
+            self.push_group_note(gid, &note, &mut inv);
+        }
+    }
+
+    /// 자동 연결이 끝내 실패한 상대의 그룹 대기분을 실패로 종결(FR-G-4 — 조용히 버리지 않는다).
+    fn fail_group_sends(&mut self, peer: PeerId) {
+        let Some(pends) = self.pending_group_sends.remove(&peer) else {
+            return;
+        };
+        let mut inv = Invalidations::default();
+        let title = self.peer_title(peer);
+        for (gid, _) in pends {
+            self.push_group_note(gid, &format!("⚠ 전달 실패(연결 안 됨): {title}"), &mut inv);
+        }
+    }
+
     /// 대화 활성화 — 모드에 따라 주 창 전환 또는 별도 창 생성/포커스(14 §11).
     ///
     /// 세션이 없으면 **워커로 연결을 시작하고 즉시 돌아온다**(M2-8 — UI 무정지).
@@ -3321,11 +3765,27 @@ impl App {
                     chat.set_scale(scale, &mut inv);
                     chat.set_bounds(Rect::new(0, 0, w, body), &mut inv);
                 }
+                if let Some(chat) = self.single_open_group.and_then(|g| self.gchats.get_mut(&g)) {
+                    chat.set_scale(scale, &mut inv);
+                    chat.set_bounds(Rect::new(0, 0, w, body), &mut inv);
+                }
             }
             Role::Chat(peer) => {
                 if let Some(chat) = self.chats.get_mut(&peer) {
                     chat.set_scale(scale, &mut inv);
                     chat.set_bounds(Rect::new(0, 0, w, h), &mut inv);
+                }
+            }
+            Role::GroupChat(gid) => {
+                if let Some(chat) = self.gchats.get_mut(&gid) {
+                    chat.set_scale(scale, &mut inv);
+                    chat.set_bounds(Rect::new(0, 0, w, h), &mut inv);
+                }
+            }
+            Role::NamePrompt => {
+                if let Some(p) = &mut self.name_prompt {
+                    p.set_scale(scale, &mut inv);
+                    p.set_bounds(Rect::new(0, 0, w, h), &mut inv);
                 }
             }
             Role::Settings => {
@@ -3514,7 +3974,13 @@ impl App {
         let mut inv = Invalidations::default();
         match role {
             Role::Main => {
-                if let Some(peer) = self.single_open {
+                if let Some(gid) = self.single_open_group {
+                    // 그룹 스레드(단일 모드 · M5-1) — 1:1 전환과 같은 문법.
+                    if let Some(chat) = self.gchats.get_mut(&gid) {
+                        chat.on_event(&ev, &mut inv);
+                    }
+                    self.drain_group_effects(gid, id);
+                } else if let Some(peer) = self.single_open {
                     if let Some(chat) = self.chats.get_mut(&peer) {
                         chat.on_event(&ev, &mut inv);
                     }
@@ -3557,12 +4023,18 @@ impl App {
                             _ => {}
                         }
                     }
-                    if let Some(peer) = self.list.take_activated() {
-                        self.activate(peer, el);
+                    match self.list.take_activated() {
+                        Some(nbeep_ui::Activated::Peer(peer)) => self.activate(peer, el),
+                        Some(nbeep_ui::Activated::Group(gid)) => self.open_group_thread(gid, el),
+                        None => {}
                     }
                     // 우클릭 ▸ 프로필 보기(M3-17).
                     if let Some(peer) = self.list.take_profile_request() {
                         self.open_peer_info(peer, el);
+                    }
+                    // 그룹 행동(M5-1) — 저장소 반영·이름 모달은 여기(호스트) 몫.
+                    if let Some(action) = self.list.take_group_action() {
+                        self.handle_group_action(action, el);
                     }
                 }
             }
@@ -3571,6 +4043,28 @@ impl App {
                     chat.on_event(&ev, &mut inv);
                 }
                 self.drain_chat_effects(peer, id);
+            }
+            Role::GroupChat(gid) => {
+                if let Some(chat) = self.gchats.get_mut(&gid) {
+                    chat.on_event(&ev, &mut inv);
+                }
+                self.drain_group_effects(gid, id);
+            }
+            Role::NamePrompt => {
+                if let Some(p) = &mut self.name_prompt {
+                    p.on_event(&ev, &mut inv);
+                    let submit = p.take_submit();
+                    let cancel = p.take_cancel();
+                    if let Some(name) = submit {
+                        self.apply_name_prompt(&name);
+                        self.name_prompt = None;
+                        self.windows.remove(&id);
+                    } else if cancel {
+                        self.name_prompt = None;
+                        self.name_prompt_for = None;
+                        self.windows.remove(&id);
+                    }
+                }
             }
             Role::Settings => {
                 if let Some(sv) = &mut self.settings_view {
@@ -3864,7 +4358,9 @@ impl App {
             .with_scale(entry.scale);
         match entry.role {
             Role::Main => {
-                if let Some(chat) = self.single_open.and_then(|p| self.chats.get(&p)) {
+                if let Some(chat) = self.single_open_group.and_then(|g| self.gchats.get(&g)) {
+                    chat.paint(&mut ctx, &theme); // 그룹 스레드(M5-1 — 1:1 전환과 같은 문법)
+                } else if let Some(chat) = self.single_open.and_then(|p| self.chats.get(&p)) {
                     chat.paint(&mut ctx, &theme);
                 } else {
                     self.list.paint(&mut ctx, &theme);
@@ -3902,6 +4398,16 @@ impl App {
             Role::Chat(peer) => {
                 if let Some(chat) = self.chats.get(&peer) {
                     chat.paint(&mut ctx, &theme);
+                }
+            }
+            Role::GroupChat(gid) => {
+                if let Some(chat) = self.gchats.get(&gid) {
+                    chat.paint(&mut ctx, &theme);
+                }
+            }
+            Role::NamePrompt => {
+                if let Some(p) = &self.name_prompt {
+                    p.paint(&mut ctx, &theme);
                 }
             }
             Role::Settings => {
@@ -4284,6 +4790,8 @@ impl ApplicationHandler<AppEvent> for App {
                 let peer = session.session.peer();
                 self.connecting.finish(intent, Some(peer));
                 self.reconnect.remove(&peer); // 성립 = 자동 재연결 스케줄 해제(ⓑ)
+                                              // 대기 중이던 그룹 본문이 있으면 성립 직후 이어 보낸다(M5-1 — 자동 연결 후 전송).
+                                              // install보다 뒤여야 하지만 install은 아래 분기에서 일어난다 — flush는 그 뒤.
                 if let Some(addr) = via_addr {
                     // 수동 등록 성공(DR-19) — 세션이 끊겨도 이 주소로 재연결한다(④).
                     self.manual_addrs.insert(peer, addr);
@@ -4321,6 +4829,8 @@ impl ApplicationHandler<AppEvent> for App {
                     // 그 사이 인바운드가 먼저 성립 — 이 세션은 버리고 그 대화를 연다.
                     self.activate(peer, el);
                 }
+                // 대기 중이던 그룹 본문 이어 보내기(M5-1 — "자동 연결 시도 후 전송").
+                self.flush_group_sends(peer);
                 if let Some(mid) = self.main_id {
                     self.request_redraw(mid);
                 }
@@ -4348,6 +4858,8 @@ impl ApplicationHandler<AppEvent> for App {
                     }
                     None => {
                         self.reconnect.remove(&peer);
+                        // 그룹 대기 본문도 실패로 종결(FR-G-4 — 조용히 버리지 않는다).
+                        self.fail_group_sends(peer);
                         self.status = format!(
                             "연결 실패({}): {why} — 자동 재시도 중단(클릭 = 재개)",
                             self.peer_title(peer)
@@ -4811,6 +5323,13 @@ impl ApplicationHandler<AppEvent> for App {
                             self.chats.remove(&peer);
                             self.mark_read(peer); // 닫는 순간까지 확인(③)
                         }
+                        Role::GroupChat(gid) => {
+                            self.gchats.remove(&gid); // 뷰만 닫힘(스레드 유지 — DR-26 동형)
+                        }
+                        Role::NamePrompt => {
+                            self.name_prompt = None;
+                            self.name_prompt_for = None;
+                        }
                         Role::Settings => self.settings_view = None,
                         Role::Gallery => self.gallery_view = None,
                         Role::Picker => self.picker_view = None,
@@ -5232,6 +5751,9 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
     // 핀 세그먼트(M2-5a · R-17 해소) — 래핑 원료 = 기기 신원 키(ADR-0005 §3 기본 A).
     let (trust, trust_load) =
         nbeep_store::FileTrustStore::open(dir.join("trust.seg"), identity.wrap_secret());
+    // 그룹 세그먼트(M5-1 · FR-G-1 재시작 유지) — 같은 래핑 원료·같은 fail-closed.
+    let (groups, group_load) =
+        nbeep_store::FileGroupStore::open(dir.join("groups.seg"), identity.wrap_secret());
     use nbeep_net::Transport as _;
 
     // 이벤트 루프·프록시 먼저 — 인바운드 수락 펌프가 프록시를 필요로 한다(M2-7).
@@ -5339,6 +5861,11 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         nbeep_store::TrustLoad::Locked => " · ⚠ 신뢰 목록 잠김(파일 손상 — 전부 미검증 취급)",
         nbeep_store::TrustLoad::Loaded(_) | nbeep_store::TrustLoad::Fresh => "",
     };
+    // 그룹 저장 상태 고지(M5-1) — 같은 fail-closed 규약.
+    let group_hint = match group_load {
+        nbeep_store::GroupLoad::Locked => " · ⚠ 그룹 목록 잠김(파일 손상 — 이번 실행은 임시)",
+        nbeep_store::GroupLoad::Loaded(_) | nbeep_store::GroupLoad::Fresh => "",
+    };
     let id_hint = id_note.map(|n| format!(" · {n}")).unwrap_or_default();
     let mut app = App {
         mode,
@@ -5356,11 +5883,18 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         discovery,
         table: nbeep_core::PeerTable::new(60_000),
         trust,
+        groups,
+        group_threads: HashMap::new(),
+        single_open_group: None,
+        gchats: HashMap::new(),
+        name_prompt: None,
+        name_prompt_for: None,
+        pending_group_sends: HashMap::new(),
         conversations: HashMap::new(),
         dedup: nbeep_core::DedupIndex::new(),
         started: Instant::now(),
         status: format!(
-            "[{net_hint}] {mode_hint} · ⌘/Ctrl+K = 주소 추가 · ⌘/Ctrl+, = 설정 · ⌘/Ctrl+G = 컨트롤 갤러리{trust_hint}{id_hint}"
+            "[{net_hint}] {mode_hint} · ⌘/Ctrl+K = 주소 추가 · ⌘/Ctrl+, = 설정 · ⌘/Ctrl+G = 컨트롤 갤러리{trust_hint}{group_hint}{id_hint}"
         ),
         fonts: App::fonts_from_settings(&settings),
         settings,

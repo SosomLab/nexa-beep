@@ -144,6 +144,46 @@ impl GroupStore {
     /// (FR-D-12 고정 노드처럼 — 오프라인이어도 그룹에 남는다). 명시 제외만 지운다.
     /// (이 메서드는 그 불변을 문서화하는 no-op 자리표시 — 이탈 시 호출하지 않는다.)
     pub fn note_departed(&self, _peer: PeerId) {}
+
+    // ── 영속 통로(M5-1 · FR-G-1 "재시작 후 유지") — 도메인 변경 없이 추가 API만 ──
+
+    /// 영속 스냅샷 — `(다음 발급 번호, [(id, 이름, 구성원)])`. `nbeep-store`가 봉인한다.
+    #[must_use]
+    pub fn export(&self) -> (u32, Vec<(GroupId, DisplayName, Vec<PeerId>)>) {
+        (
+            self.next,
+            self.groups
+                .iter()
+                .map(|(id, g)| (*id, g.name.clone(), g.members()))
+                .collect(),
+        )
+    }
+
+    /// 영속 복원 — [`GroupStore::export`]의 역. `next`가 기존 id보다 작으면
+    /// **id 충돌을 막기 위해 최대 id+1로 승격**한다(손상·구버전 파일 관용).
+    #[must_use]
+    pub fn from_export(next: u32, list: Vec<(GroupId, DisplayName, Vec<PeerId>)>) -> Self {
+        let max_next = list
+            .iter()
+            .map(|(id, _, _)| id.0.saturating_add(1))
+            .max()
+            .unwrap_or(0);
+        Self {
+            next: next.max(max_next),
+            groups: list
+                .into_iter()
+                .map(|(id, name, members)| {
+                    (
+                        id,
+                        Group {
+                            name,
+                            members: members.into_iter().collect(),
+                        },
+                    )
+                })
+                .collect(),
+        }
+    }
 }
 
 #[cfg(test)]
