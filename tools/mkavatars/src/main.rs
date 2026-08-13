@@ -57,6 +57,7 @@ fn main() {
         let key = key_for(path, i);
         let (w, h, rgba) = read_png(path);
         let mut norm = normalize(w, h, &rgba, side);
+        circle_mask(side, &mut norm);
         clean(&mut norm);
         let rle = compress(&norm);
         println!(
@@ -221,6 +222,24 @@ fn normalize(w: u32, h: u32, rgba: &[u8], side: u32) -> Vec<u8> {
         }
     }
     out
+}
+
+/// 원형 마스크(사용자 확정 08-14 — "동그라미 밖은 잘라낸다") — 내접원 밖 알파 0 ·
+/// 가장자리 1px AA(imgdec `circle_mask`와 같은 공식). 0.92 안착이라도 정사각에
+/// 가까운 그림은 **모서리가 내접원을 넘는다**(모서리 거리 0.65 > 반지름 0.5) —
+/// 굽는 단계에서 잘라야 스와치·프리뷰·툴바 어디서든 원 밖이 없다. 부수 효과 =
+/// 투명해진 모서리가 RLE 런으로 뭉쳐 자산이 더 준다.
+fn circle_mask(side: u32, rgba: &mut [u8]) {
+    let c = side as f32 / 2.0;
+    for y in 0..side {
+        for x in 0..side {
+            let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+            let d = ((px - c).powi(2) + (py - c).powi(2)).sqrt();
+            let cov = (c - d + 0.5).clamp(0.0, 1.0);
+            let i = ((y * side + x) * 4 + 3) as usize;
+            rgba[i] = (f32::from(rgba[i]) * cov).round() as u8;
+        }
+    }
 }
 
 /// 용량 정리(사용자 확정 08-14 — "필요한 수준으로 축소·용량 최소화") — RLE는 **같은
