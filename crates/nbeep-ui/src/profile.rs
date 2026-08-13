@@ -49,6 +49,9 @@ pub struct ProfileValues {
     /// 최근 등록한 프로필 이미지 경로(`profile.image_recent` — 최신 먼저 · 최대 10 ·
     /// 08-14 사용자 확정). 썸네일은 호스트가 격리 디코드해 `set_recent_thumb`로 채운다.
     pub recent: Vec<String>,
+    /// 툴팁 표시 대기(ms · `ui.tooltip_ms` — 기본 2000 · 08-14). 200 미만(Default 0
+    /// 포함)은 기본값으로 본다(ADR-0011 관용 파싱과 같은 자세).
+    pub tooltip_ms: u64,
 }
 
 /// 프로필 변경 화면 위젯.
@@ -85,6 +88,8 @@ pub struct ProfileWidget {
     recent_hover_since: Option<u64>,
     /// 툴팁 표시 중(틱이 켜고 호버 이동이 끈다).
     recent_tip: bool,
+    /// 툴팁 표시 대기(ms — 설정 `ui.tooltip_ms` · 즉시 적용).
+    tip_delay_ms: u64,
     changes: Vec<(&'static str, String)>,
     pick_image: bool,
     closed: bool,
@@ -141,6 +146,11 @@ impl ProfileWidget {
             recent_hover: None,
             recent_hover_since: None,
             recent_tip: false,
+            tip_delay_ms: if v.tooltip_ms < 200 {
+                2000
+            } else {
+                v.tooltip_ms
+            },
             changes: Vec::new(),
             pick_image: false,
             closed: false,
@@ -287,7 +297,13 @@ impl ProfileWidget {
         Some(Rect::new(r.right() - d + self.s(2), r.y - self.s(2), d, d))
     }
 
-    /// 시간 틱(호스트 ~5Hz · 08-14) — 최근 아이템 3초 호버 = 파일명 툴팁.
+    /// 툴팁 표시 대기 변경(설정 `ui.tooltip_ms` — hot-swap · 08-14). 무효는 기본 2000.
+    pub fn set_tooltip_ms(&mut self, ms: u64) {
+        self.tip_delay_ms = if ms < 200 { 2000 } else { ms };
+    }
+
+    /// 시간 틱(호스트 ~5Hz · 08-14) — 최근 아이템을 설정 시간(기본 2000ms)만큼
+    /// 호버하면 파일명 툴팁.
     /// `true` = 다시 그려야 한다.
     pub fn tick(&mut self, now_ms: u64) -> bool {
         if self.recent_hover.is_none() {
@@ -297,7 +313,7 @@ impl ProfileWidget {
             return was;
         }
         let since = *self.recent_hover_since.get_or_insert(now_ms);
-        let show = now_ms.saturating_sub(since) >= 3_000;
+        let show = now_ms.saturating_sub(since) >= self.tip_delay_ms;
         if show != self.recent_tip {
             self.recent_tip = show;
             return true;

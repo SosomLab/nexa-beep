@@ -1313,7 +1313,6 @@ impl App {
             .with_title("Nexa Beep — 알림")
             .with_inner_size(winit::dpi::LogicalSize::new(400.0, 170.0))
             .with_resizable(false)
-            .with_window_level(winit::window::WindowLevel::AlwaysOnTop)
             .with_window_icon(self.icon.clone());
         let window = Rc::new(el.create_window(attrs).unwrap());
         let scale = window.scale_factor() as f32;
@@ -1361,6 +1360,26 @@ impl App {
             Some(Role::Main) => self.single_open,
             _ => None,
         }
+    }
+
+    /// 지금 열린 **앱 모달** 창(08-14 표준 재정리) — 겹치면 더 안쪽 층이 입력을
+    /// 갖는다(알림 > 피커 > 이름/주소 프롬프트 > 프로필 > About). 모달이 떠 있는
+    /// 동안 다른 앱 창은 입력 불가·클릭 시 모달이 앞으로 온다.
+    fn modal_id(&self) -> Option<WindowId> {
+        let picks: [fn(Role) -> bool; 6] = [
+            |r| matches!(r, Role::Alert),
+            |r| matches!(r, Role::Picker),
+            |r| matches!(r, Role::NamePrompt),
+            |r| matches!(r, Role::AddEndpoint),
+            |r| matches!(r, Role::Profile),
+            |r| matches!(r, Role::About),
+        ];
+        for pick in picks {
+            if let Some((wid, _)) = self.windows.iter().find(|(_, e)| pick(e.role)) {
+                return Some(*wid);
+            }
+        }
+        None
     }
 
     /// 이 창에서 열려 있는 그룹 방(M5-1g) — `chat_peer_for`의 그룹판.
@@ -3153,6 +3172,12 @@ impl App {
             seed: self.identity.peer_id().as_bytes().to_vec(),
             avatar_choice: self.settings.get("profile.avatar").to_string(),
             avatar_border: self.settings.get("profile.avatar_border").to_string(),
+            // 툴팁 대기(ms · 08-14) — 무효는 위젯이 기본 2000으로 본다(관용 파싱).
+            tooltip_ms: self
+                .settings
+                .get("ui.tooltip_ms")
+                .parse::<u64>()
+                .unwrap_or(2000),
             avatar: {
                 // 내 사진 미리보기(M4-5) — 격리 디코드는 워커로(창 열림이 1~2초 얼지
                 // 않게 · 08-13). 도착하면 `Decoded(MyAvatar)`가 채운다(그전엔 이니셜).
@@ -3197,8 +3222,8 @@ impl App {
             .with_title("Nexa Beep — 프로필")
             .with_inner_size(winit::dpi::LogicalSize::new(440.0, 650.0))
             .with_resizable(false)
-            // 모달(⑤ 사용자 요청 08-13) — 다른 창에 가려지지 않고 항상 위에서 입력.
-            .with_window_level(winit::window::WindowLevel::AlwaysOnTop)
+            // 앱 모달(08-14 표준 재정리) — 앱 창 입력은 모달이 흡수하되, 다른 앱은
+            // 자유롭게 위로 온다(AlwaysOnTop 금지 — OS 창 전환 관례).
             .with_window_icon(self.icon.clone());
         let window = Rc::new(el.create_window(attrs).unwrap());
         window.set_ime_allowed(true); // 이름·연락처에 한글 입력
@@ -3305,8 +3330,8 @@ impl App {
             .with_title("Nexa Beep — 주소로 연결")
             .with_inner_size(winit::dpi::LogicalSize::new(380.0, 150.0))
             .with_resizable(false)
-            // 모달(⑤ 사용자 요청 08-13) — 다른 창에 가려지지 않고 항상 위에서 입력.
-            .with_window_level(winit::window::WindowLevel::AlwaysOnTop)
+            // 앱 모달(08-14 표준 재정리) — 앱 창 입력은 모달이 흡수하되, 다른 앱은
+            // 자유롭게 위로 온다(AlwaysOnTop 금지 — OS 창 전환 관례).
             .with_window_icon(self.icon.clone());
         let window = Rc::new(el.create_window(attrs).unwrap());
         window.set_ime_allowed(true);
@@ -3709,6 +3734,14 @@ impl App {
                     }
                     self.refresh_approval_ui();
                 }
+                // 툴팁 대기(08-14) — 열린 프로필 화면에 즉시 적용(hot-swap 원칙).
+                "ui.tooltip_ms" => {
+                    let ms = value.parse::<u64>().unwrap_or(2000);
+                    if let Some(pv) = &mut self.profile_view {
+                        pv.set_tooltip_ms(ms);
+                    }
+                    self.status = format!("툴팁 표시 대기 = {ms}ms");
+                }
                 // 아바타 선택·보더(08-14) — 연결된 상대에게 프로필을 능동 재전송.
                 // 상대는 Request 없이도 최신 얼굴을 받는다(변경 즉시 반영).
                 "profile.avatar" | "profile.avatar_border" => {
@@ -3998,7 +4031,6 @@ impl App {
             .with_title("Nexa Beep — 그룹")
             .with_inner_size(winit::dpi::LogicalSize::new(360.0, 150.0))
             .with_resizable(false)
-            .with_window_level(winit::window::WindowLevel::AlwaysOnTop)
             .with_window_icon(self.icon.clone());
         let window = Rc::new(el.create_window(attrs).unwrap());
         window.set_ime_allowed(true); // 그룹 이름 한글 입력
@@ -4496,7 +4528,6 @@ impl App {
             .with_title("Nexa Beep — 그룹 초대")
             .with_inner_size(winit::dpi::LogicalSize::new(400.0, 170.0))
             .with_resizable(false)
-            .with_window_level(winit::window::WindowLevel::AlwaysOnTop)
             .with_window_icon(self.icon.clone());
         let window = Rc::new(el.create_window(attrs).unwrap());
         let scale = window.scale_factor() as f32;
@@ -5050,11 +5081,20 @@ impl App {
             return;
         };
         let role = entry.role;
-        // About = 모달 — 열려 있는 동안 다른 창 입력은 삼키고 About으로 포커스 복귀.
-        if self.about_view.is_some() && role != Role::About {
-            if let Some((_, e)) = self.windows.iter().find(|(_, e)| e.role == Role::About) {
-                if matches!(ev, InputEvent::MouseDown { .. } | InputEvent::Key { .. }) {
-                    e.window.focus_window();
+        // 앱 모달(08-14 표준 재정리 — About에만 있던 문법을 일반화): 모달이 열려
+        // 있으면 **다른 앱 창의 입력은 삼키고** 클릭/키는 모달로 포커스를 되돌린다.
+        // 다른 프로그램 위로는 뜨지 않는다(AlwaysOnTop 제거 — OS 창 전환 관례).
+        if let Some(mid) = self.modal_id() {
+            if mid != id {
+                if matches!(
+                    ev,
+                    InputEvent::MouseDown { .. }
+                        | InputEvent::Key { .. }
+                        | InputEvent::RightDown { .. }
+                ) {
+                    if let Some(e) = self.windows.get(&mid) {
+                        e.window.focus_window();
+                    }
                 }
                 return;
             }
@@ -6616,6 +6656,18 @@ impl ApplicationHandler<AppEvent> for App {
                 self.os_focused = Some(id);
                 self.blink_anchor_ms = self.now_ms();
                 self.request_redraw(id);
+            }
+            WindowEvent::Focused(true) => {
+                // 앱 모달이 열려 있는데 **우리 앱의 다른 창**이 활성화되면 모달을 다시
+                // 앞으로(표준 모달 — "메인을 클릭해도 모달이 위"). 다른 프로그램의
+                // 활성화에는 관여하지 않는다(08-14 사용자 확정).
+                if let Some(mid) = self.modal_id() {
+                    if mid != id {
+                        if let Some(e) = self.windows.get(&mid) {
+                            e.window.focus_window();
+                        }
+                    }
+                }
             }
             WindowEvent::Focused(false) => {
                 // 캐럿 소등 — 비포커스 창은 캐럿을 그리지 않는다(네이티브 관례).

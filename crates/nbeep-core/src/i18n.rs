@@ -238,6 +238,8 @@ pub enum Msg {
     // ── 스크롤바 설정 ──
     ScrollbarHide,
     ScrollbarHideDesc,
+    TooltipDelay,
+    TooltipDelayDesc,
     /// 자동 숨김 없음(항상 표시).
     ScrollbarHideNever,
     TaSec1,
@@ -719,6 +721,18 @@ impl Msg {
                 "메시지 복사",
                 "复制消息",
                 "メッセージをコピー",
+            ],
+            Msg::TooltipDelay => [
+                "Tooltip delay (ms)",
+                "툴팁 표시 대기(ms)",
+                "工具提示延迟(ms)",
+                "ツールチップ表示までの時間(ms)",
+            ],
+            Msg::TooltipDelayDesc => [
+                "Hover this long before a tooltip appears (e.g. recent profile image file name)",
+                "마우스를 이 시간만큼 올려 두면 툴팁을 표시한다(예: 최근 프로필 이미지의 파일명)",
+                "悬停此时间后显示工具提示(如最近头像的文件名)",
+                "この時間ホバーするとツールチップを表示(例: 最近のプロフィール画像のファイル名)",
             ],
             Msg::ScrollbarHide => [
                 "Scrollbar auto-hide (ms)",

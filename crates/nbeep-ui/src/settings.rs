@@ -66,6 +66,7 @@ const RADIO_DEFAULTS: &[(&str, &str)] = &[
     ("ui.toolbar_size", "32"),
     ("ui.typeahead_timeout", "2000"),
     ("ui.scrollbar_hide", "2000"),
+    ("ui.tooltip_ms", "2000"),
     // 컨트롤 글리프 크기 — 기본 "크게"(사용자 확정 08-11 · 설정 Switch가 크게 보이도록).
     ("ui.control_size", "l"),
 ];
@@ -355,6 +356,22 @@ pub fn registry() -> &'static [Entry] {
                 ("64", Msg::Tb64),
             ]),
             key: "ui.toolbar_size",
+        },
+        Entry {
+            cat: Msg::CatAppearance,
+            sub: None,
+            label: Msg::TooltipDelay,
+            desc: Msg::TooltipDelayDesc,
+            kind: SettingKind::RadioInput(
+                &[
+                    ("1000", Msg::TaSec1),
+                    ("2000", Msg::TaSec2),
+                    ("3000", Msg::TaSec3),
+                    ("5000", Msg::TaSec5),
+                ],
+                "ms",
+            ),
+            key: "ui.tooltip_ms",
         },
         Entry {
             cat: Msg::CatAppearance,
