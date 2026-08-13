@@ -50,6 +50,7 @@ docker exec beep-builder bash -c 'mkdir -p /src/.docker-target/release && cp /ta
 
 `/target` = 컨테이너 내부 FS — 맥 바인드 마운트의 느린 I/O를 피한다(소스는 마운트라 항상 최신).
 끝나면 `docker stop beep-builder` · 다음엔 `docker start beep-builder` 후 exec.
+실측(08-13 · 맥 x64): 콜드 4분 29초 → **무변경 재빌드 0.33초**(바뀐 크레이트만 그 사이).
 
 ### 1-3. ★ `nbeep-imgdec`를 반드시 함께 — 빠뜨려도 **오류가 안 난다**
 
