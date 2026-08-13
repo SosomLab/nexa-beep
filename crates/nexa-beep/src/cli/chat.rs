@@ -81,6 +81,9 @@ pub(crate) fn chat_interactive(role: ChatRole) {
     let session = match session {
         Ok(s) => s,
         Err(e) => {
+            // ⚠️ `--chat-serve`는 **accept 1회**가 문서화된 성질이라(26 §9) 여기서 끝난다.
+            // 떠돌이 연결에도 죽지 않아야 하는 쪽은 광고를 계속 띄우는 `--chat-live`고,
+            // 그쪽은 대기 루프로 고쳤다(08-13).
             eprintln!("[실패] 핸드셰이크: {e}");
             return;
         }
@@ -198,7 +201,23 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
     // 수신 스레드: 세션 소유·recv 폴·도착 출력(액터 — 한 세션 1스레드). 송신은 채널 교대.
     session.set_recv_timeout(Some(std::time::Duration::from_millis(100)));
     let (out_tx, out_rx) = std::sync::mpsc::channel::<Cmd>();
+    /// 세션이 끝났음을 입력 루프에 알리는 플래그 가드(08-13).
+    ///
+    /// 예전에는 세션이 끊겨도 **수신 스레드만** 죽고 입력 루프는 stdin에 묶여 남았다 —
+    /// `--chat-live`가 대기로 돌아가지 못해 **살아는 있는데 아무도 다시 붙지 못하는**
+    /// 상태가 됐다(실측: 상대 `/quit` 후 재연결 실패).
+    /// 수신 스레드에는 `return`이 여러 곳이라 `Drop`으로 거는 게 안전하다.
+    struct AliveGuard(std::sync::Arc<std::sync::atomic::AtomicBool>);
+    impl Drop for AliveGuard {
+        fn drop(&mut self) {
+            self.0.store(false, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+    let alive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let alive_net = std::sync::Arc::clone(&alive);
     let net = std::thread::spawn(move || {
+        // 어떤 경로로 끝나든(끊김·오류·정상) 입력 루프에 알린다.
+        let _guard = AliveGuard(alive_net);
         let mut mux = MuxSession::new(session);
         // 수신 상한 = **수신측 설정**(사용자 확정 08-09) — CLI --xfer-limit-mib(기본 256MiB).
         // GUI 경로는 설정 키로 연동 예정(hot-swap 규약).
@@ -655,6 +674,9 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
                 println!("\r[종료] 중단합니다.");
                 break;
             }
+            if !alive.load(std::sync::atomic::Ordering::Relaxed) {
+                break; // 세션이 끝났다 — 호출자(대기 루프)로 돌아간다
+            }
             let n = match stdin.read(&mut chunk) {
                 Ok(0) => continue,  // 폴링 타임아웃(0.1초) — 종료 신호를 다시 본다
                 Err(_) => continue, // EINTR 등 — 위에서 플래그를 다시 본다
@@ -790,16 +812,25 @@ pub(crate) fn chat_live(name: &str, port: u16) {
         transport.tcp_port()
     );
     let incoming = transport.incoming();
-    // 타임아웃·끊김은 `.ok()`로 흘린다 — 종료 조건은 `wait_with_quit`이 본다.
-    let Some(link) = wait_with_quit(|| {
-        incoming
-            .recv_timeout(std::time::Duration::from_millis(100))
-            .ok()
-    }) else {
-        return;
-    };
-    match nbeep_crypto::NoiseSession::accept(link, &identity) {
-        Ok(session) => run_interactive(session, identity.peer_id()),
-        Err(e) => eprintln!("[실패] 핸드셰이크: {e}"),
+    // ★ 대기는 **되풀이한다**(08-13). 예전에는 핸드셰이크가 한 번 실패하면 그대로 프로세스가
+    //   끝났다 — 즉 **떠돌이 TCP 연결 하나로 단말이 죽는다.** 포트 스캐너·헬스체크·`nc -z`
+    //   한 번이면 충분했다(실측: `nc -z 127.0.0.1 43211` → `[실패] 핸드셰이크: 세션 링크가
+    //   닫힘` → 컨테이너 종료). 광고를 계속 띄우는 단말이 아무나 건드리면 죽는 건 말이 안 된다.
+    //   대화가 끝난 뒤에도 마찬가지로 대기로 돌아간다 — 상대가 나갔다고 내가 종료할 이유는 없다.
+    loop {
+        // 타임아웃·끊김은 `.ok()`로 흘린다 — 종료 조건은 `wait_with_quit`이 본다.
+        let Some(link) = wait_with_quit(|| {
+            incoming
+                .recv_timeout(std::time::Duration::from_millis(100))
+                .ok()
+        }) else {
+            return; // 사용자가 /quit·Ctrl+D — 이때만 끝난다
+        };
+        match nbeep_crypto::NoiseSession::accept(link, &identity) {
+            Ok(session) => run_interactive(session, identity.peer_id()),
+            // 실패는 **그 연결만** 버린다. 신원이 안 밝혀졌으니 누구였는지도 적지 않는다.
+            Err(e) => eprintln!("[무시] 핸드셰이크 실패 — 계속 기다립니다: {e}"),
+        }
+        println!("[대기] 다시 상대를 기다립니다 — /quit + Enter 또는 Ctrl+D = 종료");
     }
 }
