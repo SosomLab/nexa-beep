@@ -7057,8 +7057,11 @@ impl ApplicationHandler<AppEvent> for App {
                 // (목록 타입어헤드·대화 입력 공통. 이전엔 직타 스페이스가 유실됐다).
                 if let WKey::Named(NamedKey::Space) = &event.logical_key {
                     let now_ms = self.now_ms();
-                    // (스페이스 이중 배달 잔향은 게이트 keydown_gate가 이미 걸렀다 — H-15.)
-                    self.route(id, InputEvent::Char { c: ' ', now_ms }, el);
+                    // 게이트 경유(★ G1 2차 회귀의 교훈): 직접 route하면 배달 증거가
+                    // 안 남아 raw 대조가 "미배달"로 오판·재주입한다. 잔향은 keydown_gate.
+                    let ime_on = !self.is_list_mode(id);
+                    let outs = self.ime.route_char(id, ' ', now_ms, ime_on);
+                    self.apply_ime(outs, el);
                     return;
                 }
                 if let WKey::Character(text) = &event.logical_key {
@@ -7080,6 +7083,9 @@ impl ApplicationHandler<AppEvent> for App {
                             let outs = self.ime.route_char(id, c, now_ms, true);
                             self.apply_ime(outs, el);
                         } else if !c.is_control() {
+                            // ★ 모든 문자는 게이트 경유(배달 증거 봉인) — "가나다12233"
+                            // 이중 입력의 진범이 이 직접 route 우회였다(증거 부재 →
+                            // raw 대조가 정상 배달분을 소비된 키로 오판·재주입).
                             // Windows 한글 모드(한/영 키 토글): IME가 없어 라틴이 온다 —
                             // 두벌식 자모로 번역해 넣는다(대문자 = 시프트 반영·[docs/27 §8]).
                             // 숫자·기호는 None → 원문 그대로(한글 모드에서도 통과).
@@ -7093,8 +7099,9 @@ impl ApplicationHandler<AppEvent> for App {
                             } else {
                                 c
                             };
-                            // 목록: IME 꺼짐 = 자모가 유일한 경로 → 즉시 직접 조합기로.
-                            self.route(id, InputEvent::Char { c, now_ms }, el);
+                            // 게이트 경유(목록 = ime_on false → 즉시 방출·증거 봉인).
+                            let outs = self.ime.route_char(id, c, now_ms, !list_mode);
+                            self.apply_ime(outs, el);
                         }
                     }
                 }
