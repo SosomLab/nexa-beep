@@ -368,6 +368,18 @@ pub fn registry() -> &'static [Entry] {
         Entry {
             cat: Msg::CatAppearance,
             sub: None,
+            label: Msg::CarouselScroll,
+            desc: Msg::CarouselScrollDesc,
+            kind: SettingKind::Radio(&[
+                ("auto", Msg::ScrollOsDefault),
+                ("fwd", Msg::ScrollForward),
+                ("rev", Msg::ScrollNatural),
+            ]),
+            key: "ui.carousel_scroll",
+        },
+        Entry {
+            cat: Msg::CatAppearance,
+            sub: None,
             label: Msg::TooltipDelay,
             desc: Msg::TooltipDelayDesc,
             kind: SettingKind::RadioInput(

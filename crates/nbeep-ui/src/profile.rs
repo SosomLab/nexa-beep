@@ -187,6 +187,12 @@ impl ProfileWidget {
         self.phone.set_preedit(text, inv);
     }
 
+    /// 캐러셀 스크롤 방향(설정 `ui.carousel_scroll` — 호스트가 OS 기본 해석 · 08-14).
+    pub fn set_carousel_inverted(&mut self, invert: bool) {
+        self.swatches.set_scroll_inverted(invert);
+        self.recent_car.set_scroll_inverted(invert);
+    }
+
     /// 우클릭 편집 메뉴 행동(1회성 — 08-13 전수 검사).
     pub fn take_edit_ctx(&mut self) -> Option<crate::controls::EditCtxAction> {
         self.name

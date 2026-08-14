@@ -240,6 +240,11 @@ pub enum Msg {
     ScrollbarHideDesc,
     TooltipDelay,
     TooltipDelayDesc,
+    CarouselScroll,
+    CarouselScrollDesc,
+    ScrollOsDefault,
+    ScrollForward,
+    ScrollNatural,
     /// 자동 숨김 없음(항상 표시).
     ScrollbarHideNever,
     TaSec1,
@@ -722,6 +727,21 @@ impl Msg {
                 "复制消息",
                 "メッセージをコピー",
             ],
+            Msg::CarouselScroll => [
+                "Carousel scroll direction",
+                "캐러셀 스크롤 방향",
+                "轮播滚动方向",
+                "カルーセルのスクロール方向",
+            ],
+            Msg::CarouselScrollDesc => [
+                "Trackpad horizontal scroll direction for image strips (OS default: natural on macOS)",
+                "이미지 띠의 트랙패드 가로 스크롤 방향(OS 기본: macOS는 내추럴)",
+                "图片条的触控板横向滚动方向(OS 默认: macOS 为自然方向)",
+                "画像ストリップのトラックパッド横スクロール方向(OS 既定: macOSはナチュラル)",
+            ],
+            Msg::ScrollOsDefault => ["OS default", "OS 기본", "OS 默认", "OS 既定"],
+            Msg::ScrollForward => ["Forward", "정방향", "正向", "順方向"],
+            Msg::ScrollNatural => ["Natural (reversed)", "내추럴(반전)", "自然(反向)", "ナチュラル(反転)"],
             Msg::TooltipDelay => [
                 "Tooltip delay (ms)",
                 "툴팁 표시 대기(ms)",

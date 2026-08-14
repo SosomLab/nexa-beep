@@ -3193,7 +3193,9 @@ impl App {
                 scale,
             },
         );
-        self.profile_view = Some(nbeep_ui::ProfileWidget::new(&values));
+        let mut pv = nbeep_ui::ProfileWidget::new(&values);
+        pv.set_carousel_inverted(carousel_inverted(&self.settings));
+        self.profile_view = Some(pv);
         self.layout_window(id);
         self.request_redraw(id);
     }
@@ -3685,6 +3687,21 @@ impl App {
                         }
                     }
                     self.refresh_approval_ui();
+                }
+                // 캐러셀 스크롤 방향(08-14) — 열린 프로필에 즉시 적용(hot-swap).
+                "ui.carousel_scroll" => {
+                    let inv = carousel_inverted(&self.settings);
+                    if let Some(pv) = &mut self.profile_view {
+                        pv.set_carousel_inverted(inv);
+                    }
+                    self.status = format!(
+                        "캐러셀 스크롤 = {}",
+                        if inv {
+                            "내추럴(반전)"
+                        } else {
+                            "정방향"
+                        }
+                    );
                 }
                 // 툴팁 대기(08-14) — 열린 프로필 화면에 즉시 적용(hot-swap 원칙).
                 "ui.tooltip_ms" => {
@@ -7159,6 +7176,16 @@ fn group_resync_keep(settings: &SettingsState) -> usize {
         .ok()
         .filter(|n| *n > 0)
         .unwrap_or(200)
+}
+
+/// 캐러셀 스크롤 방향 해석(`ui.carousel_scroll` — 08-14 사용자 확정):
+/// "auto" = OS 기본(**mac = 내추럴(반전)** · 그 외 = 정방향) · "fwd"/"rev" = 강제.
+fn carousel_inverted(settings: &SettingsState) -> bool {
+    match settings.get("ui.carousel_scroll") {
+        "fwd" => false,
+        "rev" => true,
+        _ => cfg!(target_os = "macos"),
+    }
 }
 
 /// 그룹 파일 팬아웃의 미연결 대기 경로 상한(13 §12-1 큐 상한 필수 — 텍스트와 달리

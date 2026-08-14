@@ -37,6 +37,9 @@ pub struct Carousel {
     hover: bool,
     /// 가로 휠 노치 누적(트랙패드 분수 delta).
     hwheel: WheelAccum,
+    /// 스크롤 방향 반전(08-14 사용자 확정 — 기본 false = 현행 방향). **컨트롤은
+    /// OS를 모른다** — 플랫폼 기본(mac = 내추럴 = 반전)은 호스트가 주입한다.
+    invert_scroll: bool,
 }
 
 impl Carousel {
@@ -52,7 +55,14 @@ impl Carousel {
             clicked: None,
             hover: false,
             hwheel: WheelAccum::default(),
+            invert_scroll: false,
         }
+    }
+
+    /// 스크롤 방향 반전 지정(설정 `ui.carousel_scroll` — 호스트가 OS 기본을 해석해
+    /// 넘긴다: mac 내추럴 = true · Windows 현행 = false).
+    pub fn set_scroll_inverted(&mut self, invert: bool) {
+        self.invert_scroll = invert;
     }
 
     /// 전체 아이템 수 갱신 — 줄어들면 스크롤을 안쪽으로 되민다.
@@ -172,7 +182,8 @@ impl Widget for Carousel {
             InputEvent::HWheel { delta } if self.hover => {
                 let steps = self.hwheel.add(delta, 1);
                 if steps != 0 {
-                    self.scroll_px += steps * (self.item_w() + self.gap_w());
+                    let dir = if self.invert_scroll { -1 } else { 1 };
+                    self.scroll_px += dir * steps * (self.item_w() + self.gap_w());
                     self.clamp();
                     inv.push(self.base.bounds);
                 }
@@ -319,6 +330,19 @@ mod tests {
         assert!(c.item_rect(0).is_none(), "한 노치 = 한 아이템 전진");
         c.on_event(&InputEvent::HWheel { delta: -120 }, &mut inv);
         assert!(c.item_rect(0).is_some(), "반대 방향 복귀");
+    }
+
+    /// 스크롤 방향 반전(08-14) — 같은 delta가 반대 방향으로 움직인다(내추럴).
+    #[test]
+    fn inverted_scroll_moves_opposite() {
+        let mut c = car(200, 16);
+        c.set_scroll_inverted(true);
+        let mut inv = Invalidations::default();
+        c.on_event(&InputEvent::MouseMove { x: 10, y: 10 }, &mut inv);
+        c.on_event(&InputEvent::HWheel { delta: 120 }, &mut inv);
+        assert!(c.item_rect(0).is_some(), "반전: +delta = 뒤로(왼끝 클램프)");
+        c.on_event(&InputEvent::HWheel { delta: -120 }, &mut inv);
+        assert!(c.item_rect(0).is_none(), "반전: -delta = 앞으로");
     }
 
     #[test]
