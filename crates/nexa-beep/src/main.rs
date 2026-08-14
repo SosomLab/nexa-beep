@@ -20,6 +20,7 @@
 mod app;
 mod cli;
 mod gate;
+mod ime_gate;
 mod imgdec;
 
 use cli::chat::{chat_interactive, chat_live, ChatRole};
