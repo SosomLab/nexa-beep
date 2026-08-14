@@ -152,6 +152,12 @@ enum AppEvent {
     },
     /// keytap 관측(G1 · H-26 — mac): 무수식 ASCII keydown이 모니터에 잡혔다.
     /// winit 도달 여부와 대조해 "삼켜진 1byte"만 보충 주입한다(판정은 틱에서).
+    ///
+    /// ⚠️ **mac 전용으로 막아 둔다** — 생산자(`install_keydown_tap`)가 mac 한정이라
+    /// 다른 OS에서는 **한 번도 만들어지지 않는 변형**이 되고, `-D warnings`인 CI가
+    /// `dead_code`로 떨군다(08-14 실측: budget·cross-build·test 3-OS 동시 red).
+    /// 이 저장소가 반복해 밟는 함정 — **조건부 컴파일은 항상 반대편을 의심한다.**
+    #[cfg(target_os = "macos")]
     RawKey(char),
 }
 
@@ -5664,6 +5670,7 @@ impl ApplicationHandler<AppEvent> for App {
     fn user_event(&mut self, el: &ActiveEventLoop, event: AppEvent) {
         // 세션 액터 → GUI(M2-7). 수신 메시지를 해당 대화 스레드에 실시간 반영한다.
         match event {
+            #[cfg(target_os = "macos")]
             AppEvent::RawKey(c) => {
                 // keytap 관측(G1) — 정산은 게이트가(다음 keydown 대조 · 틱 폴백).
                 let _ = el;
