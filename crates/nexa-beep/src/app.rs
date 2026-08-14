@@ -636,25 +636,24 @@ fn ago_label(unix_ms: u64) -> String {
     }
 }
 
-/// 목록 정렬 키(08-15 사용자 확정 — **고정 구획 먼저**, 그다음 모드별 속성 사슬).
-/// 반환은 오름차순 정렬용 튜플(작을수록 앞) — 시각·접속은 반전한다. 이름 동률은
-/// 호출자가 잇는다. 모드: "seen"(최근 접속·기본) · "chat"(최근 대화) ·
-/// "online"(접속 우선) · "name"(이름).
-fn peer_order_key(
-    mode: &str,
-    fav: bool,
-    online: bool,
-    seen: u64,
-    chat: u64,
-) -> (u8, u64, u64, u64) {
+/// 목록 정렬 키(08-15 사용자 확정 · 3차 개정) — **고정 구획 → 접속 계층 → 모드별
+/// 시각 사슬**. 반환은 오름차순 정렬용 튜플(작을수록 앞) · 이름 동률은 호출자 몫.
+///
+/// - 접속 계층 `tier`: 0 = 세션 중(녹색) · 1 = 발견됨 · 2 = 오프라인 — 발견만 된
+///   상대와 대화 세션 중인 상대를 같은 층에 두지 않는다(사용자 "온라인이 더 위").
+/// - ★ **최근 접속은 분 단위 버킷**으로 비교한다(08-15 실기 — 발견 비컨(800ms)이
+///   ms 단위 last_seen을 계속 밀어 올려, 마지막 비컨의 주인이 매 갱신 바뀌며
+///   **목록 순서가 갱신마다 뒤집혔다**. 버킷 동률은 이름순이라 안정된다).
+/// - 모드: "seen"(최근 접속·기본) · "chat"(최근 대화) · "name"(이름).
+fn peer_order_key(mode: &str, fav: bool, tier: u8, seen: u64, chat: u64) -> (u8, u8, u64, u64) {
     let inv = |t: u64| u64::MAX - t;
-    let on = u64::from(!online);
+    let seen_b = seen / 60_000; // 분 버킷 — 비컨 잡음이 순서를 못 흔든다
     let head = u8::from(!fav);
     match mode {
-        "chat" => (head, inv(chat), inv(seen), on),
-        "online" => (head, on, inv(chat), inv(seen)),
+        "chat" => (head, tier, inv(chat), inv(seen_b)),
         "name" => (head, 0, 0, 0),
-        _ => (head, inv(seen), inv(chat), on),
+        // "seen" 기본(구 "online" 저장값도 여기로 — 접속 계층 우선이 공통).
+        _ => (head, tier, inv(seen_b), inv(chat)),
     }
 }
 
@@ -2173,10 +2172,16 @@ impl App {
         let mode = self.settings.get("ui.list_sort").to_string();
         entries.sort_by(|a, b| {
             let key = |e: &nbeep_core::PeerEntry| {
-                let online =
-                    self.conversations.contains_key(&e.peer) || self.table.get(e.peer).is_some();
+                // 접속 계층 — 세션 중(0) > 발견됨(1) > 오프라인(2).
+                let tier = if self.conversations.contains_key(&e.peer) {
+                    0
+                } else if self.table.get(e.peer).is_some() {
+                    1
+                } else {
+                    2
+                };
                 let (seen, chat) = self.trust.meta(e.peer);
-                peer_order_key(&mode, self.trust.fav(e.peer), online, seen, chat)
+                peer_order_key(&mode, self.trust.fav(e.peer), tier, seen, chat)
             };
             key(a)
                 .cmp(&key(b))
@@ -8269,20 +8274,30 @@ mod tests {
         assert!(latch.begin(p));
     }
 
-    /// 목록 정렬 키(08-15 사용자 확정) — 고정 구획이 항상 먼저, 그다음 모드 사슬.
+    /// 목록 정렬 키(08-15 · 3차 개정) — 고정 → 접속 계층(세션>발견>오프라인) →
+    /// 시각 사슬. ★ 최근 접속은 **분 버킷**: 비컨(800ms)이 ms를 계속 밀어 올려도
+    /// 순서가 안 흔들린다(실기 — 갱신마다 순서가 뒤집히던 플리커의 회귀 방지).
     #[test]
-    fn peer_order_key_pins_first_then_mode_chain() {
+    fn peer_order_key_pins_then_tier_then_stable_chain() {
         use super::peer_order_key as k;
         // 고정은 어떤 속성보다 먼저.
-        assert!(k("seen", true, false, 0, 0) < k("seen", false, true, u64::MAX - 1, u64::MAX - 1));
-        // seen 모드 — 최근 접속이 더 최신인 쪽이 앞.
-        assert!(k("seen", false, false, 200, 0) < k("seen", false, false, 100, 0));
-        // chat 모드 — 최근 대화 우선.
-        assert!(k("chat", false, false, 0, 200) < k("chat", false, false, 999, 100));
-        // online 모드 — 접속이 시각보다 먼저.
-        assert!(k("online", false, true, 0, 0) < k("online", false, false, 999, 999));
+        assert!(k("seen", true, 2, 0, 0) < k("seen", false, 0, u64::MAX - 1, u64::MAX - 1));
+        // 접속 계층 — 세션 중 < 발견됨 < 오프라인(시각보다 먼저).
+        assert!(k("seen", false, 0, 0, 0) < k("seen", false, 1, u64::MAX - 1, 0));
+        assert!(k("seen", false, 1, 0, 0) < k("seen", false, 2, u64::MAX - 1, 0));
+        // ★ 같은 분 버킷 안의 ms 차이는 **동률**(비컨 잡음 → 이름순 안정).
+        assert_eq!(
+            k("seen", false, 1, 120_000, 0),
+            k("seen", false, 1, 179_999, 0)
+        );
+        // 버킷이 다르면 최근 쪽이 앞.
+        assert!(k("seen", false, 1, 180_000, 0) < k("seen", false, 1, 119_999, 0));
+        // chat 모드 — 같은 계층에서 최근 대화가 앞.
+        assert!(k("chat", false, 0, 0, 200) < k("chat", false, 0, 999, 100));
+        // 구 "online" 저장값 = 기본(seen) 사슬로 관용 폴백.
+        assert_eq!(k("online", false, 0, 5, 7), k("seen", false, 0, 5, 7));
         // name 모드 — 고정 외 속성 무시(이름 동률 비교는 호출자 몫).
-        assert_eq!(k("name", false, true, 5, 5), k("name", false, false, 9, 1));
+        assert_eq!(k("name", false, 0, 5, 5), k("name", false, 2, 9, 1));
     }
 
     /// ★ M3-21 — 프로필 응답 구성이 읽는 **키 전부**가 전파 깔때기에 있어야 한다.

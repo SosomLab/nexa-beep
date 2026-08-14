@@ -448,7 +448,6 @@ pub fn registry() -> &'static [Entry] {
             kind: SettingKind::Radio(&[
                 ("seen", Msg::SortSeen),
                 ("chat", Msg::SortChat),
-                ("online", Msg::SortOnline),
                 ("name", Msg::SortName),
             ]),
             key: "ui.list_sort",
@@ -1623,25 +1622,6 @@ impl SettingsWidget {
 
         let rx = b.x + sw; // 우측 패널 시작
         let rw = (b.w - sw).max(0);
-        // 콘텐츠 총 높이 → 스크롤 클램프(행 추가/검색으로 줄어들면 위로 당긴다).
-        let (hf, he, hp) = (self.s(FONT_SECTION_H), self.s(ENTRY_H), self.s(POS_ROW_H));
-        let head_h = self.s(SUB_HEAD_H);
-        self.content_h = self
-            .rows
-            .iter()
-            .map(|row| {
-                let base = match registry()[row.idx].kind {
-                    SettingKind::FontSection { .. } => hf,
-                    SettingKind::PositionGrid => hp,
-                    _ => he,
-                };
-                base + self.note_h(row.idx) + if row.head.is_some() { head_h } else { 0 }
-            })
-            .sum();
-        let vp_h = self.right_viewport().h;
-        self.scroll = self.scroll.clamp(0, (self.content_h - vp_h).max(0));
-        // 내용은 **밴드 아래**에서 시작한다(밴드가 첫 행을 가리면 못 만진다).
-        let mut top = b.y + self.crumb_h() - self.scroll;
         // 차용 분리를 위해 치수 사전 계산.
         let (ctl_h, pad) = (self.s(CTL_H), self.s(PAD));
         let (h_font, h_entry, h_pos) = (self.s(FONT_SECTION_H), self.s(ENTRY_H), self.s(POS_ROW_H));
@@ -1654,6 +1634,47 @@ impl SettingsWidget {
         let scale = self.scale;
         let desc_line_h = self.s(DESC_LINE_H);
         let min_avail = self.s(60);
+        // 콘텐츠 총 높이 → 스크롤 클램프(행 추가/검색으로 줄어들면 위로 당긴다).
+        // ★ **설명 워드랩 예약분 포함**(08-15 실기 — 이걸 빼고 합산하면 IME처럼
+        // 2줄 설명이 많은 카테고리에서 총높이가 과소평가돼 **끝까지 스크롤이 안 됐다**.
+        // 아래 배치 루프와 같은 추정식을 써야 상한이 실제 끝과 일치한다).
+        let head_h = self.s(SUB_HEAD_H);
+        self.content_h = self
+            .rows
+            .iter()
+            .enumerate()
+            .map(|(ri, row)| {
+                let e = &registry()[row.idx];
+                let base = match e.kind {
+                    SettingKind::FontSection { .. } => h_font,
+                    SettingKind::PositionGrid => h_pos,
+                    _ => h_entry,
+                };
+                let ctl_w = match &row.ctl {
+                    RowCtl::Combo(_) | RowCtl::Act(_) => combo_w,
+                    RowCtl::Check(_) => check_w,
+                    RowCtl::Face(_) => family_w,
+                    RowCtl::Pos(p) => p.preferred_size().0,
+                    RowCtl::Color(c) => c.preferred_width().min(rw - pad * 2),
+                    RowCtl::Font { .. } => 0,
+                };
+                let desc_avail = (rw - pad * 2 - ctl_w - gap10).max(min_avail);
+                let est_logical: i32 = tr(lang, e.desc)
+                    .chars()
+                    .map(|c| if c.is_ascii() { 7 } else { 14 })
+                    .sum();
+                #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+                let est_px = (est_logical as f32 * scale).round() as i32;
+                let desc_lines = ((est_px + desc_avail - 1) / desc_avail).clamp(1, 3);
+                base + (desc_lines - 1) * desc_line_h
+                    + note_hs[ri]
+                    + if row.head.is_some() { head_h } else { 0 }
+            })
+            .sum();
+        let vp_h = self.right_viewport().h;
+        self.scroll = self.scroll.clamp(0, (self.content_h - vp_h).max(0));
+        // 내용은 **밴드 아래**에서 시작한다(밴드가 첫 행을 가리면 못 만진다).
+        let mut top = b.y + self.crumb_h() - self.scroll;
         for (ri, row) in self.rows.iter_mut().enumerate() {
             let e = &registry()[row.idx];
             // ── 설명 워드랩 예약(08-11 — 설명이 컨트롤을 침범하지 않게) ──
@@ -2515,6 +2536,30 @@ mod tests {
             w.current_group(),
             Some((Msg::CatAppearance, Some(want_sub))),
             "스크롤한 그룹이 상단에 남아야 한다"
+        );
+    }
+
+    /// ★ 08-15 실기 — 설명 워드랩(2~3줄)이 많은 카테고리(IME)에서 **끝까지 스크롤이
+    /// 안 되던 것**: 총높이 합산이 워드랩 예약분을 빼고 계산돼 스크롤 상한이 실제
+    /// 콘텐츠 끝보다 작았다. 상한까지 스크롤하면 마지막 행이 뷰포트 안에 들어와야 한다.
+    #[test]
+    fn scroll_upper_bound_reaches_last_row() {
+        let (mut w, mut inv) = widget();
+        select_cat(&mut w, Msg::CatIme);
+        // 과도한 값 → layout이 상한으로 클램프.
+        w.scroll = 1_000_000;
+        w.layout(&mut inv);
+        let vp = w.right_viewport();
+        let last = w.rows.last().unwrap().rect;
+        assert!(
+            last.bottom() <= vp.bottom() + 2,
+            "상한 스크롤에서 마지막 행이 화면 안이어야 한다: bottom {} > vp {}",
+            last.bottom(),
+            vp.bottom()
+        );
+        assert!(
+            last.y >= vp.y - last.h,
+            "마지막 행이 위로 사라질 만큼 과도하게 스크롤되지도 않는다"
         );
     }
 
