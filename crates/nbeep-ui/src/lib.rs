@@ -35,6 +35,21 @@ pub mod icons {
     /// 변 크기(px).
     pub const PERSON_SIZE: u32 = 96;
 
+    /// 목록 정렬 아이콘 4종(08-15 — [`crate::controls::IconDropdown`] 첫 사용처).
+    /// 자체 작도(Lucide 스타일 참고 · 원본 `assets/icons-src/sort-*.svg` · 20px 판독 실측).
+    pub mod sort {
+        /// 기본(최근 대화 우선) — 말풍선 + 점 3개.
+        pub const RECENT_ALPHA: &[u8] = include_bytes!("../assets/icon-sort-recent-96.alpha");
+        /// 이름순 — A/Z + 아래 화살표.
+        pub const NAME_ALPHA: &[u8] = include_bytes!("../assets/icon-sort-name-96.alpha");
+        /// 최근 접속순(온라인 여부 무관) — 시계 + 아래 화살표.
+        pub const SEEN_ALPHA: &[u8] = include_bytes!("../assets/icon-sort-seen-96.alpha");
+        /// 온라인 우선(그 안은 최근 접속) — 상승 신호 막대.
+        pub const ONLINE_ALPHA: &[u8] = include_bytes!("../assets/icon-sort-online-96.alpha");
+        /// 변 크기(px) — 네 자산 공통.
+        pub const SIZE: u32 = 96;
+    }
+
     /// 연결 상태 아이콘 4종 — **큰 자리 전용**(≥20px · [docs/14 §12-7]).
     ///
     /// 원본 = **Lucide**(ISC · 사용자 확정 08-14 — 한 세트로 통일) ·
@@ -89,8 +104,8 @@ pub use controls::{
     RadioOption, ScrollBars, TextBox, TreeControl, TreeGrid, TreeModel, TreeNode, TreeView,
 };
 pub use controls::{
-    FiredBy, HAlign, MenuBar, MenuDef, MenuEntry, TimeoutButton, ToolIcon, ToolItem, Toolbar,
-    VAlign,
+    FiredBy, HAlign, IconDropItem, IconDropdown, MenuBar, MenuDef, MenuEntry, TimeoutButton,
+    ToolIcon, ToolItem, Toolbar, VAlign,
 };
 pub use draw::{DrawCtx, FontSlot};
 pub use edit::{EditKey, EditState};

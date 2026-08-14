@@ -169,6 +169,23 @@ impl Toolbar {
         }
     }
 
+    /// 좌측 정렬 항목들의 **끝 x**(물리 px · 08-15) — 호스트가 툴바 행에 다른
+    /// 컨트롤(정렬 드롭다운 등)을 이어 붙일 때의 기준선.
+    #[must_use]
+    pub fn left_items_end(&self) -> i32 {
+        let n = self.items.iter().filter(|it| !it.right).count();
+        if n == 0 {
+            return self.base.bounds.x + self.s(6);
+        }
+        self.slot_rect(n - 1).right()
+    }
+
+    /// 좌측 슬롯 한 변(물리 px) — 이어 붙일 컨트롤의 크기 맞춤용.
+    #[must_use]
+    pub fn slot_px(&self) -> i32 {
+        self.slot()
+    }
+
     /// 항목 아이콘 교체(08-14 — 프로필 버튼이 내 얼굴을 따라간다). 미지 id는 무시.
     pub fn set_item_icon(&mut self, id: &str, icon: ToolIcon, inv: &mut Invalidations) {
         if let Some(i) = self.items.iter().position(|it| it.id == id) {

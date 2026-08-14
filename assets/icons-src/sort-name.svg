@@ -1,0 +1,9 @@
+<!-- sort-name — 이름순 정렬. Lucide arrow-down-a-z를 14px 가독 기준으로 단순화한
+     자체 작도(08-15 — 원본의 소형 글자는 뭉갠다 · badge-question-mark-nb와 같은 규약). -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M19 5v14"/>
+  <path d="M15 15l4 4 4-4" transform="translate(-4 0)"/>
+  <path d="M4 10l3-6 3 6"/>
+  <path d="M5.2 8h3.6"/>
+  <path d="M4 14h6l-6 6h6"/>
+</svg>

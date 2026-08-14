@@ -5,9 +5,9 @@
 
 use crate::controls::{
     BorderSpec, Button, Carousel, Checkbox, Choose, ChoosePicker, ColorPicker, Combo, ComboControl,
-    ComboItem, Control, GridColumn, ImageFit, LabelSide, MenuBar, MenuDef, MenuEntry,
-    PositionPicker, RadioGroup, RadioOption, ScrollBars, Switch, TextBox, TimeoutButton, ToolIcon,
-    ToolItem, Toolbar, TreeGrid, TreeModel, TreeNode, TreeView,
+    ComboItem, Control, GridColumn, IconDropItem, IconDropdown, ImageFit, LabelSide, MenuBar,
+    MenuDef, MenuEntry, PositionPicker, RadioGroup, RadioOption, ScrollBars, Switch, TextBox,
+    TimeoutButton, ToolIcon, ToolItem, Toolbar, TreeGrid, TreeModel, TreeNode, TreeView,
 };
 use crate::draw::{DrawCtx, FontSlot};
 use crate::event::InputEvent;
@@ -96,6 +96,8 @@ pub struct GalleryWidget {
     car_items: Vec<Rc<IconImage>>,
     /// 캐러셀 데모 선택(클릭 링 — 위치 신호).
     car_sel: usize,
+    /// 이미지 드롭다운(08-15 — 19번째 컨트롤 · 목록 정렬 아이콘 4종 데모).
+    icondrop: IconDropdown,
 }
 
 impl Default for GalleryWidget {
@@ -288,6 +290,35 @@ impl GalleryWidget {
                 .map(|b| Rc::new(b.image))
                 .collect(),
             car_sel: 0,
+            icondrop: IconDropdown::new(
+                vec![
+                    IconDropItem {
+                        value: "chat",
+                        label: "기본(최근 대화)".into(),
+                        alpha: crate::icons::sort::RECENT_ALPHA,
+                        size: crate::icons::sort::SIZE,
+                    },
+                    IconDropItem {
+                        value: "name",
+                        label: "이름순".into(),
+                        alpha: crate::icons::sort::NAME_ALPHA,
+                        size: crate::icons::sort::SIZE,
+                    },
+                    IconDropItem {
+                        value: "seen",
+                        label: "최근 접속순".into(),
+                        alpha: crate::icons::sort::SEEN_ALPHA,
+                        size: crate::icons::sort::SIZE,
+                    },
+                    IconDropItem {
+                        value: "online",
+                        label: "온라인순".into(),
+                        alpha: crate::icons::sort::ONLINE_ALPHA,
+                        size: crate::icons::sort::SIZE,
+                    },
+                ],
+                "chat",
+            ),
         }
     }
 
@@ -323,6 +354,7 @@ impl GalleryWidget {
         self.posgrid.set_scale(s);
         self.colorpick.set_scale(s);
         self.carousel.set_scale(s);
+        self.icondrop.set_scale(s);
         self.relayout(inv);
     }
 
@@ -385,7 +417,11 @@ impl GalleryWidget {
         // ── 08-14 추가 컨트롤 ──
         let car_h = self.s(40);
         y = place(&mut self.carousel, x, y, w, car_h, label_h, gap, inv);
-        // 콘텐츠 총 크기 — 가장 넓은 행(트리·그리드 쌍) 기준.
+        // ── 08-15 추가 컨트롤 ──
+        let drop_s = self.s(32);
+        y = place(&mut self.icondrop, x, y, drop_s, drop_s, label_h, gap, inv);
+        y += self.s(110); // 팝업이 펼쳐질 여백(다음 컨트롤이 없어도 스크롤 여지)
+                          // 콘텐츠 총 크기 — 가장 넓은 행(트리·그리드 쌍) 기준.
         let widest = w.max(tcolw * 2 + gap).max(gcolw * 2 + gap);
         self.content_h = (y - top) + pad;
         self.content_w = widest + pad * 2;
@@ -470,7 +506,7 @@ impl GalleryWidget {
         self.scroll_x = self.scroll_x.clamp(0, max_x);
     }
 
-    fn labels() -> [&'static str; 24] {
+    fn labels() -> [&'static str; 25] {
         [
             "Checkbox — 라벨 오른쪽 (+ 도움말 ?)",
             "Checkbox — 라벨 왼쪽",
@@ -496,6 +532,7 @@ impl GalleryWidget {
             "PositionPicker — 3×3 위치 그리드",
             "ColorPicker — 스와치 · #RRGGBB · 프리셋(테마 색 설정)",
             "Carousel — 가로 픽셀 스크롤(트랙패드) · 양끝 고정 이동 버튼 · 클릭 선택",
+            "IconDropdown — 이미지 드롭다운(현재 아이콘 + ▾ · 클릭 = 아이콘/라벨 목록)",
         ]
     }
 }
@@ -533,6 +570,13 @@ impl Widget for GalleryWidget {
             inv.push(self.bounds);
         }
         if consumed {
+            return;
+        }
+        // ★ 모달 캡처 — 이미지 드롭다운 팝업(08-15 · 콤보와 같은 규약).
+        if self.icondrop.is_open() {
+            self.icondrop.on_event(ev, inv);
+            let _ = self.icondrop.take_changed(); // 데모 — 선택은 소비만
+            inv.push(self.bounds);
             return;
         }
         // ★ 모달 캡처 — 콤보/Choose/메뉴 오버레이가 열려 있으면 그 컨트롤만 이벤트를 받는다.
@@ -626,12 +670,14 @@ impl Widget for GalleryWidget {
             self.car_sel = i; // 데모 — 선택 링만 옮긴다
             inv.push(self.carousel.bounds());
         }
+        self.icondrop.on_event(ev, inv);
+        let _ = self.icondrop.take_changed(); // 데모 — 값은 소비만
     }
 
     fn paint(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
         ctx.fill_rect(self.bounds, theme.panel_bg);
         let labels = Self::labels();
-        let widgets: [&dyn Widget; 24] = [
+        let widgets: [&dyn Widget; 25] = [
             &self.cb_right,
             &self.cb_left,
             &self.cb_only,
@@ -656,6 +702,7 @@ impl Widget for GalleryWidget {
             &self.posgrid,
             &self.colorpick,
             &self.carousel,
+            &self.icondrop,
         ];
         // 섹션 라벨(각 컨트롤 위 — 컨트롤의 x에 맞춰 그린다: 좌·우 나란한 트리 쌍 라벨 분리).
         ctx.select_font(FontSlot::Status, false);
@@ -681,8 +728,9 @@ impl Widget for GalleryWidget {
             }
         }
         self.carousel.paint(ctx, theme);
-        // 콤보/Choose 드롭다운·찾기 오버레이는 아래 위젯(트리·그리드)에 가리면 안 되므로
-        // 열려 있으면 **맨 끝에 다시 그린다**(위에 겹침).
+        self.icondrop.paint_popup(ctx, theme); // 이미지 드롭다운 팝업(맨 위 · 08-15)
+                                               // 콤보/Choose 드롭다운·찾기 오버레이는 아래 위젯(트리·그리드)에 가리면 안 되므로
+                                               // 열려 있으면 **맨 끝에 다시 그린다**(위에 겹침).
         if self.combo.is_open() {
             self.combo.paint(ctx, theme);
         }

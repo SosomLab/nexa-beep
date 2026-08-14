@@ -650,10 +650,14 @@ fn peer_order_key(mode: &str, fav: bool, tier: u8, seen: u64, chat: u64) -> (u8,
     let seen_b = seen / 60_000; // 분 버킷 — 비컨 잡음이 순서를 못 흔든다
     let head = u8::from(!fav);
     match mode {
-        "seen" => (head, tier, inv(seen_b), inv(chat)),
+        // 이름순 — 상태·시각 무시(동률 = 이름 비교는 호출자).
         "name" => (head, 0, 0, 0),
-        // ★ 기본 = "chat"(사용자 확정 08-15: 같은 접속 구획 안에서 ① 최근 대화
-        //   ② 최근 접속 — 접속·비접속 구획 모두 같은 기준. 미지 저장값도 여기로).
+        // 최근 접속순 — **온라인 여부 무관**(사용자 확정 08-15 4모드).
+        "seen" => (head, 0, inv(seen_b), inv(chat)),
+        // 온라인 우선 — 접속 계층 먼저, 그 안은 최근 접속순.
+        "online" => (head, tier, inv(seen_b), inv(chat)),
+        // ★ 기본 = "chat"(같은 접속 구획 안에서 ① 최근 대화 ② 최근 접속 —
+        //   접속·비접속 구획 동일 기준 · 미지 저장값도 여기로).
         _ => (head, tier, inv(chat), inv(seen_b)),
     }
 }
@@ -1172,6 +1176,9 @@ struct App {
     menu: MenuBar,
     /// 주 창 툴바(메뉴 아래 · 이미지 버튼 · 목록 모드 전용).
     toolbar: Toolbar,
+    /// 목록 정렬 드롭다운(08-15 — 툴바 행 좌측 끝 슬롯 · IconDropdown 첫 사용처).
+    /// 값 = `ui.list_sort`(영속 · 설정 화면 Radio와 상호 동기화).
+    sort_drop: nbeep_ui::IconDropdown,
     /// 세션이 끊긴 상대(AppEvent::Closed) — 목록 상태 점 Lost 근거. 재수립 시 제거.
     closed_peers: std::collections::HashSet<PeerId>,
     /// 끊긴 대화의 **스레드 대피소**(DR-26 — 대화 상태는 상대별 유지 · 08-13 실기).
@@ -3953,6 +3960,38 @@ impl App {
         });
     }
 
+    /// 정렬 드롭다운 항목(08-15 — 아이콘·라벨은 언어에 따라 재구성).
+    fn sort_drop_items() -> Vec<nbeep_ui::IconDropItem> {
+        use nbeep_core::{t, Msg};
+        use nbeep_ui::icons::sort;
+        vec![
+            nbeep_ui::IconDropItem {
+                value: "chat",
+                label: t(Msg::SortChat).to_string(),
+                alpha: sort::RECENT_ALPHA,
+                size: sort::SIZE,
+            },
+            nbeep_ui::IconDropItem {
+                value: "name",
+                label: t(Msg::SortName).to_string(),
+                alpha: sort::NAME_ALPHA,
+                size: sort::SIZE,
+            },
+            nbeep_ui::IconDropItem {
+                value: "seen",
+                label: t(Msg::SortSeen).to_string(),
+                alpha: sort::SEEN_ALPHA,
+                size: sort::SIZE,
+            },
+            nbeep_ui::IconDropItem {
+                value: "online",
+                label: t(Msg::SortOnline).to_string(),
+                alpha: sort::ONLINE_ALPHA,
+                size: sort::SIZE,
+            },
+        ]
+    }
+
     fn apply_boot_settings(&mut self) {
         use nbeep_core::{ApprovalPolicy, BasicApproval};
         // 기본 아바타(08-14) — 미설정이면 **내 키 지문으로 12간지 하나를 안정 배정해
@@ -4143,6 +4182,9 @@ impl App {
                     nbeep_core::set_lang(nbeep_core::Lang::from_code(&value).unwrap_or_default());
                     // 메뉴 라벨은 생성 시 고정이라 재구성.
                     self.menu.set_menus(build_menus());
+                    // 정렬 드롭다운 라벨도 생성 시 고정 — 값 유지한 채 재구성(08-15).
+                    let keep = self.sort_drop.value().to_string();
+                    self.sort_drop = nbeep_ui::IconDropdown::new(Self::sort_drop_items(), &keep);
                     if let Some(mid) = self.main_id {
                         self.layout_window(mid);
                     }
@@ -4256,8 +4298,10 @@ impl App {
                     self.apply_ime_tuning();
                     self.status = "한글 입력(IME) 기준값 적용".into();
                 }
-                // 목록 정렬 모드(08-15) — 즉시 재조립.
+                // 목록 정렬 모드(08-15) — 즉시 재조립 + 드롭다운 동기화.
                 "ui.list_sort" => {
+                    let mut dinv = Invalidations::default();
+                    self.sort_drop.set_value(&value, &mut dinv);
                     self.refresh_and_redraw();
                 }
                 // 목록 갱신 주기(08-14) — 발견발 재조립을 이 간격으로 묶는다.
@@ -5459,6 +5503,15 @@ impl App {
                     self.toolbar.set_scale(scale);
                     self.toolbar
                         .set_bounds(Rect::new(0, menu_h, w, chrome - menu_h), &mut inv);
+                    // 정렬 드롭다운(08-15) — 좌측 아이콘들 끝에 이어 붙는 한 칸.
+                    let slot = self.toolbar.slot_px();
+                    let gap = (4.0 * scale).round() as i32;
+                    let ty = menu_h + ((chrome - menu_h) - slot) / 2;
+                    self.sort_drop.set_scale(scale);
+                    self.sort_drop.set_bounds(
+                        Rect::new(self.toolbar.left_items_end() + gap, ty, slot, slot),
+                        &mut inv,
+                    );
                 }
                 self.list.set_scale(scale, &mut inv);
                 self.list
@@ -5702,12 +5755,21 @@ impl App {
                     if self.menu.is_open() {
                         self.menu.on_event(&ev, &mut inv);
                         inv.push(self.list.bounds()); // 팝업 영역 재도색
+                    } else if self.sort_drop.is_open() {
+                        // 정렬 팝업 캡처(08-15) — 콤보·메뉴와 같은 모달 규약.
+                        self.sort_drop.on_event(&ev, &mut inv);
+                        inv.push(self.list.bounds());
                     } else {
                         self.menu.on_event(&ev, &mut inv);
                         self.toolbar.on_event(&ev, &mut inv);
-                        if !self.menu.is_open() {
+                        self.sort_drop.on_event(&ev, &mut inv);
+                        if !self.menu.is_open() && !self.sort_drop.is_open() {
                             self.list.on_event(&ev, &mut inv);
                         }
+                    }
+                    // 정렬 선택(08-15) — 정식 깔때기(영속 + hot-swap 재조립).
+                    if let Some(v) = self.sort_drop.take_changed() {
+                        self.apply_settings(vec![("ui.list_sort", v.to_string())]);
                     }
                     // 액션 드레인 — 메뉴/툴바.
                     if let Some(a) = self.menu.take_picked() {
@@ -6135,6 +6197,7 @@ impl App {
                     self.list.paint(&mut ctx, &theme);
                     // 상단 크롬(툴바 → 메뉴 순 — 메뉴 팝업이 최상위).
                     self.toolbar.paint(&mut ctx, &theme);
+                    self.sort_drop.paint(&mut ctx, &theme); // 정렬 드롭다운 버튼(08-15)
                     self.menu.paint(&mut ctx, &theme);
                 }
                 // 주 창 하단 상태바.
@@ -6171,6 +6234,7 @@ impl App {
                     chat.paint_popup(&mut ctx, &theme);
                 } else {
                     self.list.paint_popup(&mut ctx, &theme);
+                    self.sort_drop.paint_popup(&mut ctx, &theme); // 정렬 팝업(맨 위)
                 }
             }
             Role::Chat(peer) => {
@@ -8066,6 +8130,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         nbeep_store::GroupLoad::Loaded(_) | nbeep_store::GroupLoad::Fresh => "",
     };
     let id_hint = id_note.map(|n| format!(" · {n}")).unwrap_or_default();
+    let settings_sort_value = settings.get("ui.list_sort").to_string();
     let mut app = App {
         mode,
         windows: HashMap::new(),
@@ -8176,6 +8241,10 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
             // 컨트롤 갤러리는 툴바에서 뺐다(사용자 요청 08-10) — 메뉴(보기 ▸ 컨트롤 갤러리)와
             // ⌘/Ctrl+G로 열 수 있으니, 상시 노출할 임시 검수용 항목은 툴바를 차지할 이유가 없다.
         ]),
+        sort_drop: nbeep_ui::IconDropdown::new(
+            App::sort_drop_items(),
+            settings_sort_value.as_str(),
+        ),
         closed_peers: std::collections::HashSet::new(),
         extra_peers: HashMap::new(),
         manual_addrs: HashMap::new(),
@@ -8281,19 +8350,10 @@ mod tests {
     #[test]
     fn peer_order_key_pins_then_tier_then_stable_chain() {
         use super::peer_order_key as k;
-        // 고정은 어떤 속성보다 먼저.
-        assert!(k("seen", true, 2, 0, 0) < k("seen", false, 0, u64::MAX - 1, u64::MAX - 1));
-        // 접속 계층 — 세션 중 < 발견됨 < 오프라인(시각보다 먼저).
-        assert!(k("seen", false, 0, 0, 0) < k("seen", false, 1, u64::MAX - 1, 0));
-        assert!(k("seen", false, 1, 0, 0) < k("seen", false, 2, u64::MAX - 1, 0));
-        // ★ 같은 분 버킷 안의 ms 차이는 **동률**(비컨 잡음 → 이름순 안정).
-        assert_eq!(
-            k("seen", false, 1, 120_000, 0),
-            k("seen", false, 1, 179_999, 0)
-        );
-        // 버킷이 다르면 최근 쪽이 앞.
-        assert!(k("seen", false, 1, 180_000, 0) < k("seen", false, 1, 119_999, 0));
-        // ★ 기본(chat) — 같은 계층에서 ① 최근 대화 ② 최근 접속(사용자 확정 08-15).
+        // 고정은 어떤 속성보다 먼저(전 모드).
+        assert!(k("chat", true, 2, 0, 0) < k("chat", false, 0, u64::MAX - 1, u64::MAX - 1));
+        // 기본(chat) — 계층 먼저, 그 안 ① 최근 대화 ② 최근 접속(사용자 확정).
+        assert!(k("chat", false, 0, 0, 0) < k("chat", false, 1, u64::MAX - 1, u64::MAX - 1));
         assert!(k("chat", false, 0, 0, 200) < k("chat", false, 0, 999_999, 100));
         assert!(
             k("chat", false, 2, 0, 200) < k("chat", false, 2, 999_999, 100),
@@ -8303,8 +8363,22 @@ mod tests {
             k("chat", false, 0, 180_000, 50) < k("chat", false, 0, 60_000, 50),
             "대화 동률 = 최근 접속이 다음 기준"
         );
-        // 미지·구 저장값 = 기본(chat) 사슬로 관용 폴백.
-        assert_eq!(k("online", false, 0, 5, 7), k("chat", false, 0, 5, 7));
+        // ★ 최근 접속은 분 버킷 — 같은 버킷 안 ms 차이는 동률(비컨 잡음 → 이름순 안정).
+        assert_eq!(
+            k("online", false, 1, 120_000, 0),
+            k("online", false, 1, 179_999, 0)
+        );
+        assert!(k("online", false, 1, 180_000, 0) < k("online", false, 1, 119_999, 0));
+        // seen — **온라인 여부 무관** 최근 접속순(4모드 확정 08-15).
+        assert_eq!(
+            k("seen", false, 0, 120_000, 7),
+            k("seen", false, 2, 120_000, 7)
+        );
+        assert!(k("seen", false, 2, 180_000, 0) < k("seen", false, 0, 60_000, 0));
+        // online — 계층 먼저, 그 안 최근 접속순.
+        assert!(k("online", false, 0, 0, 0) < k("online", false, 1, u64::MAX - 1, 0));
+        // 미지 저장값 = 기본(chat) 사슬로 관용 폴백.
+        assert_eq!(k("whatever", false, 0, 5, 7), k("chat", false, 0, 5, 7));
         // name 모드 — 고정 외 속성 무시(이름 동률 비교는 호출자 몫).
         assert_eq!(k("name", false, 0, 5, 5), k("name", false, 2, 9, 1));
     }

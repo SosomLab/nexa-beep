@@ -1,0 +1,8 @@
+<!-- sort-seen — 최근 접속순(온라인 여부 무관). 시계 + 아래 화살표(자체 작도 08-15
+     · Lucide clock-arrow-down 참고 단순화). -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <circle cx="10" cy="10" r="7"/>
+  <path d="M10 6v4l2.5 2.5"/>
+  <path d="M19 14v6"/>
+  <path d="M16.5 17.5l2.5 2.5 2.5-2.5"/>
+</svg>
