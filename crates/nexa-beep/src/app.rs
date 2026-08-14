@@ -5278,32 +5278,24 @@ impl App {
                                     Some(PickEntry::File(p)) => {
                                         match ctx.purpose {
                                             PickerPurpose::ProfileImage => {
-                                                // 프로필 이미지 경로 반영(M3-17) — 저장 +
-                                                // 열린 프로필 화면 갱신.
+                                                // 프로필 이미지 경로 반영(M3-17) — 위젯에
+                                                // 넣고 **위젯이 보고한 변경 전부**를 정식
+                                                // 깔때기(apply_settings)로 저장한다.
+                                                // ★ 08-14 실기: 여기서 take_changes를
+                                                // 버려서 최근 목록(image_recent)이 영속되지
+                                                // 않았다(재시작 = 전부 증발). 디코드도
+                                                // apply_settings의 image_path 팔이 한다
+                                                // (수동 spawn과 이중이었다).
                                                 let path = p.to_string_lossy().into_owned();
-                                                self.settings
-                                                    .set("profile.image_path", path.clone());
-                                                self.conf_mark();
-                                                // 격리 디코드는 워커로(M4-5 · 08-13 —
-                                                // 파일 고른 직후 1~2초 얼지 않게).
-                                                // 도착 = `Decoded(MyAvatar)`가 갱신.
-                                                let jp = p.clone();
-                                                spawn_decode(
-                                                    self.proxy.clone(),
-                                                    DecodeTarget::MyAvatar,
-                                                    move || {
-                                                        std::fs::read(&jp).ok().and_then(|b| {
-                                                            crate::imgdec::avatar_raw_from_bytes(
-                                                                &b, 256,
-                                                            )
-                                                        })
-                                                    },
-                                                );
-                                                if let Some(pv) = &mut self.profile_view {
-                                                    let mut pinv = Invalidations::default();
-                                                    pv.set_image_path(&path, &mut pinv);
-                                                    let _ = pv.take_changes(); // 저장은 위에서 이미
-                                                }
+                                                let changes =
+                                                    if let Some(pv) = &mut self.profile_view {
+                                                        let mut pinv = Invalidations::default();
+                                                        pv.set_image_path(&path, &mut pinv);
+                                                        pv.take_changes()
+                                                    } else {
+                                                        vec![("profile.image_path", path.clone())]
+                                                    };
+                                                self.apply_settings(changes);
                                                 self.status = format!(
                                                     "프로필 이미지 = {path} (미리보기 준비 중…)"
                                                 );
@@ -6229,7 +6221,8 @@ impl ApplicationHandler<AppEvent> for App {
                                 pv.set_recent_thumb(&cur, icon.clone(), &mut pinv);
                             }
                             pv.set_avatar(icon, &mut pinv);
-                            let _ = pv.take_changes(); // 경로 저장은 선택 시점에 이미
+                            // (take_changes를 여기서 버리지 않는다 — 08-14: 그 버림이
+                            // 최근 목록 영속을 막았다. set_avatar는 변경을 안 만든다.)
                         }
                         if let Some((pid, _)) =
                             self.windows.iter().find(|(_, e)| e.role == Role::Profile)

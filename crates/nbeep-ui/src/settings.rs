@@ -51,6 +51,14 @@ const HIDDEN_KEYS: &[&str] = &[
     "profile.image_path",
     "profile.avatar",        // 아바타 선택(08-14) — 프로필 화면 스와치가 편집한다
     "profile.avatar_border", // 아바타 보더 색(08-14) — 프로필 화면 ColorPick이 편집한다
+    // 최근 프로필 이미지(08-14 — 탭 구분 목록). ★ 여기 없으면 저장은 되는데
+    // **부팅 로드에서 미지 키로 무시**돼 재시작마다 목록이 증발한다(실기로 잡음).
+    "profile.image_recent",
+    // 창 위치·크기 기억(08-14) — Moved/Resized가 쓰고 기동이 읽는다.
+    "ui.win_x",
+    "ui.win_y",
+    "ui.win_w",
+    "ui.win_h",
 ];
 
 /// 기본 off 토글 — 프로필 공개(DR-22 **기본 전부 비노출** · 옵트인). 미등록 토글은 on.
@@ -2145,6 +2153,23 @@ mod tests {
         assert!(pairs.windows(2).all(|w| w[0].0 < w[1].0), "정렬·중복 없음");
         assert!(pairs.iter().any(|(k, _)| *k == "chat.window_mode"));
         assert!(pairs.iter().any(|(k, _)| *k == "font.base.size"));
+    }
+
+    #[test]
+    fn hidden_keys_load_recent_and_window_geometry() {
+        // ★ 08-14 실기 회귀 — HIDDEN_KEYS에 없으면 **저장은 되는데 부팅 로드에서
+        // 미지 키로 무시**돼 재시작마다 증발한다(최근 이미지 목록이 실제로 당했다).
+        let mut s = SettingsState::with_defaults();
+        assert!(
+            s.set_by_name("profile.image_recent", "/a.png\t/b.png"),
+            "아는 키여야 한다"
+        );
+        assert_eq!(s.get("profile.image_recent"), "/a.png\t/b.png");
+        assert!(
+            s.set_by_name("ui.win_x", "120"),
+            "창 위치 키도 로드돼야 한다"
+        );
+        assert_eq!(s.get("ui.win_x"), "120");
     }
     fn ch(c: char) -> InputEvent {
         InputEvent::Char { c, now_ms: 0 }
