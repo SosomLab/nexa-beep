@@ -1089,10 +1089,6 @@ struct App {
     /// 유출 조합기·잔향 억제·이동 키 재생·프리에딧 보존을 **한 타입**으로. 실측
     /// 이벤트 순서는 ime_gate의 재생 테스트 10종이 지킨다(H-1~H-24 계보는 그쪽 문서).
     ime: crate::ime_gate::ImeGate<WindowId>,
-    /// winit이 배달한 keydown 문자(문자, 시각) 최근 기록 — RawKey 대조용(G1).
-    winit_keys: std::collections::VecDeque<(char, u64)>,
-    /// keytap 관측분(문자, 시각) — 250ms 유예 후 winit 미도달이면 보충 주입(G1).
-    raw_keys: std::collections::VecDeque<(char, u64)>,
     /// IME 이벤트 트레이스(`NEXA_IME_TRACE=1`) — 조합 경합은 추정 금지·실측 필수라
     /// 이벤트 순서를 stderr로 남긴다(개인 입력이 찍히므로 opt-in 전용).
     ime_trace: bool,
@@ -1128,14 +1124,6 @@ impl App {
             match o {
                 crate::ime_gate::Out::Char(wid, c) => {
                     let now_ms = self.now_ms();
-                    // 도달 증거(G1 개정) — commit 경유 배달도 기록해야 raw 대조가
-                    // 이중 주입 없이 성립한다(H-11 '?'가 commit 본문으로 온 경우 등).
-                    if c.is_ascii() && !c.is_ascii_control() {
-                        self.winit_keys.push_back((c, now_ms));
-                        if self.winit_keys.len() > 16 {
-                            self.winit_keys.pop_front();
-                        }
-                    }
                     self.route(wid, InputEvent::Char { c, now_ms }, el);
                 }
                 crate::ime_gate::Out::Key(wid, key, shift, primary) => {
@@ -5677,13 +5665,10 @@ impl ApplicationHandler<AppEvent> for App {
         // 세션 액터 → GUI(M2-7). 수신 메시지를 해당 대화 스레드에 실시간 반영한다.
         match event {
             AppEvent::RawKey(c) => {
-                // keytap 관측(G1) — 판정은 틱에서(250ms 유예: winit 도착을 기다린다).
+                // keytap 관측(G1) — 정산은 게이트가(다음 keydown 대조 · 틱 폴백).
                 let _ = el;
                 let now = self.now_ms();
-                self.raw_keys.push_back((c, now));
-                if self.raw_keys.len() > 8 {
-                    self.raw_keys.pop_front();
-                }
+                self.ime.observe_raw(c, now);
             }
             AppEvent::Recv {
                 peer,
@@ -6288,39 +6273,14 @@ impl ApplicationHandler<AppEvent> for App {
                 let outs = self.ime.tick(now_ms);
                 self.apply_ime(outs, el);
             }
-            // G1(H-26) 틱 폴백 — **뒤따르는 키가 없어** keydown 대조가 못 정산한
-            // 잔여만 여기서 주입한다(뒤 키가 없으니 순서도 깨질 수 없다). 조건은
-            // 삼중(조합 직후 · winit 미도달 · 모니터 도달) 그대로.
-            while let Some(&(c, t)) = self.raw_keys.front() {
-                if now_ms.saturating_sub(t) < 250 {
-                    break;
+            // G1 틱 폴백 — 뒤따르는 키가 없어 대조가 못 정산한 잔여(게이트 판정).
+            if let Some(fid) = self.os_focused {
+                let ime_on = !self.is_list_mode(fid);
+                let outs = self.ime.reconcile_stale(fid, now_ms, ime_on);
+                if self.ime_trace && !outs.is_empty() {
+                    eprintln!("[ime] inject(틱 폴백 — G1) {outs:?}");
                 }
-                self.raw_keys.pop_front();
-                let seen = self
-                    .winit_keys
-                    .iter()
-                    .any(|&(wc, wt)| wc == c && wt.abs_diff(t) < 400);
-                let after_ime = self
-                    .ime
-                    .cleared_at()
-                    .is_some_and(|ct| t >= ct && t - ct < 2000);
-                if !seen && after_ime {
-                    if let Some(fid) = self.os_focused {
-                        if self.ime_trace {
-                            eprintln!("[ime] inject {c:?} (winit 미도달 보충 — G1)");
-                        }
-                        let ime_on = !self.is_list_mode(fid);
-                        let outs = self.ime.route_char(fid, c, now_ms, ime_on);
-                        self.apply_ime(outs, el);
-                    }
-                }
-            }
-            while self
-                .winit_keys
-                .front()
-                .is_some_and(|&(_, wt)| now_ms.saturating_sub(wt) > 3000)
-            {
-                self.winit_keys.pop_front();
+                self.apply_ime(outs, el);
             }
             if self.list.typeahead_tick(now_ms, &mut inv) {
                 // 직접 조합 모드: TypeAhead.tick이 버퍼+조합기를 리셋 = 그게 전부(결정적).
@@ -6880,37 +6840,16 @@ impl ApplicationHandler<AppEvent> for App {
                     _ => crate::ime_gate::KeyIn::Other,
                 };
                 let now_ms = self.now_ms();
-                // ★ G1 개정(순서 보존): raw 스트림이 순서의 원천 — 지금 도달한 문자와
-                // 만나기 전에 남은 raw 항목 = winit이 삼킨 키 → **이 키보다 먼저** 주입.
-                // (시간 창 없음 · 뒤 키가 없을 때만 틱 유예 폴백이 담당.)
+                // ★ G1(개정 2차): raw 대조·배달 증거·주입은 전부 게이트가 판정 —
+                // 프록시 지연 재주입("가나다1223")을 배달 증거 링이 막는다(재생 테스트).
                 if let crate::ime_gate::KeyIn::Char(cur) = key_in {
-                    if cur.is_ascii() && !self.primary_down && !self.ime.composing() {
-                        while let Some(&(rc, rt)) = self.raw_keys.front() {
-                            if rc == cur {
-                                self.raw_keys.pop_front(); // 정상 도달 — 대조 소진
-                                break;
-                            }
-                            self.raw_keys.pop_front();
-                            let after_ime = self
-                                .ime
-                                .cleared_at()
-                                .is_some_and(|ct| rt >= ct && rt - ct < 2000);
-                            if after_ime {
-                                if self.ime_trace {
-                                    eprintln!("[ime] inject {rc:?} (순서 보존 — G1)");
-                                }
-                                let ime_on = !self.is_list_mode(id);
-                                let outs = self.ime.route_char(id, rc, now_ms, ime_on);
-                                self.apply_ime(outs, el);
-                            }
+                    if !self.primary_down {
+                        let ime_on = !self.is_list_mode(id);
+                        let outs = self.ime.reconcile_raw(id, cur, now_ms, ime_on);
+                        if self.ime_trace && !outs.is_empty() {
+                            eprintln!("[ime] inject(순서 보존 — G1) {outs:?}");
                         }
-                    }
-                }
-                // winit 도달 기록(G1) — RawKey 대조의 반대편 절반.
-                if let crate::ime_gate::KeyIn::Char(c) = key_in {
-                    self.winit_keys.push_back((c, now_ms));
-                    if self.winit_keys.len() > 8 {
-                        self.winit_keys.pop_front();
+                        self.apply_ime(outs, el);
                     }
                 }
                 if self
@@ -7512,8 +7451,6 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         listen_port,
         addr_view: None,
         ime: crate::ime_gate::ImeGate::new(),
-        winit_keys: std::collections::VecDeque::new(),
-        raw_keys: std::collections::VecDeque::new(),
         parked_lines: HashMap::new(),
         qthumbs: HashMap::new(),
         ime_trace: std::env::var_os("NEXA_IME_TRACE").is_some(),

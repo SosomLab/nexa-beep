@@ -83,6 +83,11 @@ pub struct ImeGate<W: Copy + Eq> {
     leak: Composer,
     /// 유출 조합이 진행 중인 창.
     leak_win: Option<W>,
+    /// keytap 관측 링(문자, 시각 — G1): winit보다 먼저 보는 **순서의 원천**.
+    raw: std::collections::VecDeque<(char, u64)>,
+    /// 배달 증거 링(문자, 시각 — G1): keydown·commit 어느 경로든 버퍼에 닿은 ASCII.
+    /// raw 대조에서 "이미 배달됨"을 가려 **프록시 지연 재주입**을 막는다.
+    delivered: std::collections::VecDeque<(char, u64)>,
 }
 
 impl<W: Copy + Eq> Default for ImeGate<W> {
@@ -98,6 +103,8 @@ impl<W: Copy + Eq> Default for ImeGate<W> {
             selfcommit: None,
             leak: Composer::new(),
             leak_win: None,
+            raw: std::collections::VecDeque::new(),
+            delivered: std::collections::VecDeque::new(),
         }
     }
 }
@@ -130,6 +137,85 @@ impl<W: Copy + Eq> ImeGate<W> {
             }
         }
         false
+    }
+
+    // ── G1 · keytap 대조(순서 보존 주입) ────────────────────────────────────
+
+    /// keytap 관측(무수식 ASCII keydown — winit보다 먼저 도착 순서대로).
+    pub fn observe_raw(&mut self, c: char, t: u64) {
+        self.raw.push_back((c, t));
+        if self.raw.len() > 8 {
+            self.raw.pop_front();
+        }
+    }
+
+    /// 배달 증거 기록(내부 — Out::Char로 나가는 ASCII 전부).
+    fn note_delivered(&mut self, c: char, t: u64) {
+        if c.is_ascii() && !c.is_ascii_control() {
+            self.delivered.push_back((c, t));
+            if self.delivered.len() > 16 {
+                self.delivered.pop_front();
+            }
+        }
+    }
+
+    /// 방출 직전 봉인 — Out::Char 전부를 배달 증거로 기록한 뒤 그대로 돌려준다.
+    fn seal(&mut self, outs: Vec<Out<W>>, t: u64) -> Vec<Out<W>> {
+        for o in &outs {
+            if let Out::Char(_, c) = o {
+                self.note_delivered(*c, t);
+            }
+        }
+        outs
+    }
+
+    /// 이 문자가 최근(±800ms) 배달됐는가 — 프록시 지연 재주입 방지의 핵심.
+    fn was_delivered(&self, c: char, t: u64) -> bool {
+        self.delivered
+            .iter()
+            .any(|&(dc, dt)| dc == c && dt.abs_diff(t) < 800)
+    }
+
+    /// ★ keydown 도달 시 raw 대조(G1 개정 2차): 현재 문자를 만나기 전의 잔여 중
+    /// **배달 증거가 없고 조합 직후인 것만** = winit이 삼킨 키 → 현재 키보다 먼저
+    /// 주입한다(순서 보존). 배달 증거가 있는 잔여 = 프록시 지연 잔재 → 조용히 소진.
+    pub fn reconcile_raw(&mut self, id: W, cur: char, now: u64, ime_on: bool) -> Vec<Out<W>> {
+        let mut outs = Vec::new();
+        if !cur.is_ascii() || self.composing {
+            return outs;
+        }
+        while let Some(&(rc, rt)) = self.raw.front() {
+            if rc == cur {
+                self.raw.pop_front(); // 정상 도달 — 대조 소진
+                break;
+            }
+            self.raw.pop_front();
+            let after_ime = self
+                .cleared_ms
+                .is_some_and(|ct| rt >= ct && rt.saturating_sub(ct) < 2_000);
+            if after_ime && !self.was_delivered(rc, rt) {
+                outs.extend(self.route_char(id, rc, now, ime_on));
+            }
+        }
+        outs
+    }
+
+    /// 틱 폴백(G1): 뒤따르는 키가 없어 대조가 못 정산한 250ms 경과 잔여를 주입.
+    pub fn reconcile_stale(&mut self, id: W, now: u64, ime_on: bool) -> Vec<Out<W>> {
+        let mut outs = Vec::new();
+        while let Some(&(rc, rt)) = self.raw.front() {
+            if now.saturating_sub(rt) < 250 {
+                break;
+            }
+            self.raw.pop_front();
+            let after_ime = self
+                .cleared_ms
+                .is_some_and(|ct| rt >= ct && rt.saturating_sub(ct) < 2_000);
+            if after_ime && !self.was_delivered(rc, rt) {
+                outs.extend(self.route_char(id, rc, now, ime_on));
+            }
+        }
+        outs
     }
 
     // ── keydown 경로 ────────────────────────────────────────────────────────
@@ -179,9 +265,10 @@ impl<W: Copy + Eq> ImeGate<W> {
             return Vec::new();
         };
         if hangul::is_jamo(c) && ime_on {
-            return self.leak_feed(id, c);
+            let outs = self.leak_feed(id, c);
+            return self.seal(outs, _now);
         }
-        vec![Out::Char(id, c)]
+        self.seal(vec![Out::Char(id, c)], _now)
     }
 
     /// 틱(~5Hz): 보류 유예(150ms) 경과분 방출. 조합 중엔 비자모 보류를 유지한다
@@ -252,8 +339,9 @@ impl<W: Copy + Eq> ImeGate<W> {
         if hangul::is_jamo(c) && ime_on_window {
             self.pending = Some((id, c, now, true));
             return Vec::new();
+            // (자모 보류 — 배달은 flush 시점에 봉인된다.)
         }
-        vec![Out::Char(id, c)]
+        self.seal(vec![Out::Char(id, c)], now)
     }
 
     // ── IME 이벤트 경로 ─────────────────────────────────────────────────────
@@ -326,7 +414,7 @@ impl<W: Copy + Eq> ImeGate<W> {
             for c in text.chars() {
                 outs.extend(self.leak_feed(id, c));
             }
-            return outs;
+            return self.seal(outs, now);
         }
         // 위젯 조합 표시 소거(H-23 — 포커스 이탈형 확정은 소거 Preedit가 안 온다).
         outs.push(Out::Preedit(id, String::new()));
@@ -356,7 +444,7 @@ impl<W: Copy + Eq> ImeGate<W> {
                 outs.push(Out::Key(id, k, shift, primary));
             }
         }
-        outs
+        self.seal(outs, now)
     }
 
     /// 포커스 이탈 — 유출 조합·조합 중 프리에딧을 확정 합류(H-9 · 스태시 300ms).
@@ -379,7 +467,7 @@ impl<W: Copy + Eq> ImeGate<W> {
                 outs.push(Out::Char(id, c));
             }
         }
-        outs
+        self.seal(outs, now)
     }
 
     /// 저장 트리거 직전 확정(G2 — "저장 트리거 전 조합 확정"): 유출 조합 + 조합 중
@@ -395,7 +483,7 @@ impl<W: Copy + Eq> ImeGate<W> {
                 outs.push(Out::Char(id, c));
             }
         }
-        outs
+        self.seal(outs, now)
     }
 
     // ── 내부 ────────────────────────────────────────────────────────────────
@@ -469,8 +557,15 @@ mod tests {
             }
         }
         /// keydown(문자) — app.rs 순서: gate → flush_pending → leak_intercept → route_char.
+        /// keytap 관측(프록시 — 실제로는 winit보다 먼저 도착).
+        fn raw(&mut self, c: char) {
+            self.gate.observe_raw(c, self.now + 1);
+        }
+        /// keydown(문자) — app.rs 순서: reconcile → gate → flush → leak → route.
         fn key_char(&mut self, c: char) {
             self.now += 30;
+            let outs = self.gate.reconcile_raw(W, c, self.now, true);
+            self.apply(outs);
             if self
                 .gate
                 .keydown_gate(W, KeyIn::Char(c), self.now, false, false)
@@ -530,6 +625,52 @@ mod tests {
             let outs = self.gate.commit(W, t, self.now, true);
             self.apply(outs);
         }
+    }
+
+    /// ★ G1 재생 — 소비된 첫 1byte가 **다음 키보다 먼저** 주입된다(순서 보존).
+    /// 프록시 지연(raw가 keydown보다 늦게 도착) 순서 그대로 재생.
+    #[test]
+    fn replay_g1_consumed_injected_in_order() {
+        let mut d = Driver::new();
+        d.preedit("나");
+        d.preedit("");
+        d.commit("나");
+        d.raw('!'); // 소비됨 — keydown 없음
+        d.key_char('@'); // '@' keydown이 자기 raw보다 먼저(프록시 지연)
+        d.raw('@');
+        d.key_char('#');
+        d.raw('#');
+        assert_eq!(d.buf, "나!@#", "유실 복구 + 정순");
+    }
+
+    /// ★ G1 회귀 — "가나다123 → 가나다1223" 이중 입력(프록시 지연 재주입) 방지.
+    #[test]
+    fn replay_g1_no_double_from_proxy_lag() {
+        let mut d = Driver::new();
+        d.preedit("다");
+        d.preedit("");
+        d.commit("다");
+        d.raw('1'); // 소비
+        d.key_char('2');
+        d.raw('2'); // 지연 도착
+        d.key_char('3');
+        d.raw('3');
+        let outs = d.gate.reconcile_stale(W, d.now + 400, true);
+        d.apply(outs);
+        assert_eq!(d.buf, "다123", "재주입 없이 정확히 한 번씩");
+    }
+
+    /// G1 — 평시(조합 없음)엔 어떤 주입도 없다.
+    #[test]
+    fn replay_g1_idle_never_injects() {
+        let mut d = Driver::new();
+        d.raw('x');
+        d.key_char('x');
+        d.raw('y');
+        d.key_char('y');
+        let outs = d.gate.reconcile_stale(W, d.now + 400, true);
+        d.apply(outs);
+        assert_eq!(d.buf, "xy");
     }
 
     /// ★ S1 재생(08-14 2차 수집 트레이스 원문 순서) — 전환 직후 첫 키 유출:
