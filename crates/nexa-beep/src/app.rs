@@ -3370,6 +3370,17 @@ impl App {
             ]));
         }
         let info = self.build_peer_info(peer);
+        self.show_peer_info_window(peer, info, "Nexa Beep — 상대 프로필", el);
+    }
+
+    /// 프로필 카드 창 표시(상대·내 카드 공용 — 08-14). 이미 있으면 재사용·포커스.
+    fn show_peer_info_window(
+        &mut self,
+        peer: PeerId,
+        info: nbeep_ui::PeerInfo,
+        title: &str,
+        el: &ActiveEventLoop,
+    ) {
         if let Some((wid, _)) = self
             .windows
             .iter()
@@ -3378,6 +3389,7 @@ impl App {
             let wid = *wid;
             if let Some(e) = self.windows.get_mut(&wid) {
                 e.role = Role::PeerInfo(peer);
+                e.window.set_title(title);
                 e.window.focus_window();
             }
             self.peer_info_view = Some(nbeep_ui::PeerInfoWidget::new(info));
@@ -3386,7 +3398,7 @@ impl App {
             return;
         }
         let attrs = Window::default_attributes()
-            .with_title("Nexa Beep — 상대 프로필")
+            .with_title(title)
             .with_inner_size(winit::dpi::LogicalSize::new(360.0, 380.0))
             .with_resizable(false)
             .with_window_icon(self.icon.clone());
@@ -3408,6 +3420,49 @@ impl App {
         self.peer_info_view = Some(nbeep_ui::PeerInfoWidget::new(info));
         self.layout_window(id);
         self.request_redraw(id);
+    }
+
+    /// **내 프로필 카드**(08-14 사용자 요청 — 프로필 화면의 큰 아바타 클릭):
+    /// **상대에게 보이는 그대로**(공유 게이트 통과분만) 미리 본다 — 응답 구성
+    /// (`my_profile_frames`)과 같은 게이트 규칙이라, 여기 보이면 상대에게도 보인다.
+    fn open_my_info(&mut self, el: &ActiveEventLoop) {
+        let me = self.identity.peer_id();
+        let on = |k: &str| self.settings.get(k) == "on";
+        let share_basic = on("profile.share.basic");
+        let name = effective_display_name(&self.settings, &me);
+        let avatar = if !share_basic {
+            None
+        } else if self.my_avatar.is_some() {
+            self.my_avatar.clone()
+        } else {
+            match nbeep_core::avatar::AvatarChoice::parse(self.settings.get("profile.avatar")) {
+                nbeep_core::avatar::AvatarChoice::Builtin(k) => {
+                    self.builtin_avatars.get(k.as_str()).cloned()
+                }
+                _ => None,
+            }
+        };
+        let info = nbeep_ui::PeerInfo {
+            name: name.as_str().to_string(),
+            profile_name: if share_basic {
+                name.as_str().to_string()
+            } else {
+                String::new()
+            },
+            email: on("profile.share.email")
+                .then(|| self.settings.get("profile.email").to_string())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_default(),
+            phone: on("profile.share.phone")
+                .then(|| self.settings.get("profile.phone").to_string())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_default(),
+            has_image: share_basic && !self.settings.get("profile.image_path").is_empty(),
+            fingerprint: me.short(),
+            seed: me.as_bytes().to_vec(),
+            avatar,
+        };
+        self.show_peer_info_window(me, info, "Nexa Beep — 내 프로필(상대에게 보이는 모습)", el);
     }
 
     /// 프로필 창 닫기(뷰·창 동시 정리).
@@ -5605,11 +5660,13 @@ impl App {
                 }
             }
             Role::Profile => {
-                let (mut changes, mut pick, mut closed) = (Vec::new(), false, false);
+                let (mut changes, mut pick, mut closed, mut view) =
+                    (Vec::new(), false, false, false);
                 if let Some(pv) = &mut self.profile_view {
                     pv.on_event(&ev, &mut inv);
                     changes = pv.take_changes();
                     pick = pv.take_pick_image();
+                    view = pv.take_view_request();
                     closed = pv.take_closed();
                 }
                 if !changes.is_empty() {
@@ -5618,6 +5675,10 @@ impl App {
                 }
                 if pick {
                     self.pending_picker = Some(PickerPurpose::ProfileImage);
+                }
+                if view {
+                    // 큰 아바타 클릭(08-14) — 상대에게 보이는 그대로의 내 카드.
+                    self.open_my_info(el);
                 }
                 if closed {
                     self.close_profile();
