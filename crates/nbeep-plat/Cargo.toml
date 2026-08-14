@@ -16,3 +16,10 @@ memmap2 = "0.9"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 nbeep-core.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# keytap(G1 · H-26) — winit과 같은 판(0.5/0.2 계열)으로 중복 트리 방지.
+objc2 = "0.5"
+objc2-app-kit = { version = "0.2", features = ["NSEvent", "block2"] }
+objc2-foundation = { version = "0.2", features = ["NSString"] }
+block2 = "0.5"

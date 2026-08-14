@@ -9,6 +9,7 @@ pub mod clock;
 pub mod font;
 pub mod gui;
 pub mod host;
+pub mod keytap;
 pub mod launch;
 pub mod paths;
 pub mod quarantine;
