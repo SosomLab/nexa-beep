@@ -115,6 +115,12 @@ impl<W: Copy + Eq> ImeGate<W> {
         self.composing
     }
 
+    /// 조합 종료 시각(비소비 조회 — G1 보충 주입의 "조합 직후" 판정).
+    #[must_use]
+    pub fn cleared_at(&self) -> Option<u64> {
+        self.cleared_ms
+    }
+
     /// 조합 종료 시각을 소비 조건으로 조회(WIME-6 Esc 잔향 — 1회성 take).
     pub fn take_cleared_if(&mut self, now: u64, within_ms: u64) -> bool {
         if let Some(t) = self.cleared_ms {

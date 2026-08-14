@@ -958,9 +958,13 @@ dependencies = [
 name = "nbeep-plat"
 version = "0.1.6"
 dependencies = [
+ "block2",
  "libc",
  "memmap2",
  "nbeep-core",
+ "objc2 0.5.2",
+ "objc2-app-kit",
+ "objc2-foundation 0.2.2",
 ]
 
 [[package]]
