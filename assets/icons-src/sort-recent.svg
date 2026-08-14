@@ -1,6 +1,6 @@
 <!-- sort-recent — 기본 정렬(최근 대화 우선) 아이콘. Lucide 스타일 자체 작도(08-15
-     · message-square 변형 + 점 3개). 라이선스 원장 docs/10 §4: 자체 제작(참고: Lucide ISC). -->
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+     · message-square 변형 + 점 3개). 라이선스 원장 docs/10 §4: 자체 제작(참고: Lucide ISC). · 선 두께 1.5/24 = sort-name(2/32)과 동일 상대 굵기(08-15 사용자 요청) -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
   <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
   <circle cx="8" cy="10" r="0.6"/>
   <circle cx="12" cy="10" r="0.6"/>
