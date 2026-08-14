@@ -2223,6 +2223,10 @@ impl App {
     /// 죽은 상대(강제 종료 → GOODBYE 없이 잔존)를 클릭하는 순간 GUI 전체가 멈춘다.
     /// 인바운드와 대칭으로 워커가 세션을 만들어 `AppEvent::Outbound`로 돌아오고,
     /// **TOFU 판정은 지금처럼 메인 스레드**(TrustStore가 여기 있다).
+    ///
+    /// `auto` = **조용한 연결**: 성립해도 대화 뷰를 열지 않는다(자동 재연결 ⓑ ·
+    /// 프로필 pull 08-14 — 카드와 대화는 분리). `false` = 사용자가 대화를 열려는
+    /// 연결(성립 시 `activate`가 뷰를 연다).
     fn start_connect(&mut self, peer: PeerId, auto: bool) {
         if !self.connecting.begin(peer) {
             if !auto {
@@ -3430,11 +3434,13 @@ impl App {
                 nbeep_core::ProfileMsg::Request.encode()
             ]));
         } else if self.live {
-            // 세션 없음(점이 녹색 아님 · 08-14 사용자 요청) — **연결을 시도**한다.
+            // 세션 없음(점이 녹색 아님 · 08-14 사용자 요청) — **조용한 연결**을 시도
+            // 한다(`auto=true` = 성립해도 대화 뷰를 열지 않는다 — 08-14 실기: false로
+            // 걸었더니 프로필 보기가 대화창을 자동으로 열었다. 카드와 대화는 분리).
             // 성립하면 자동 프리페치(install_conversation)가 돌고, 응답 도착이
             // `refresh_peer_info_card`로 열린 카드를 채운다. 실패는 기존 연결 실패
             // 경로 그대로(상태바) — 카드는 캐시로 남는다.
-            self.start_connect(peer, false);
+            self.start_connect(peer, true);
             self.status = format!("프로필 갱신을 위해 연결 중… {}", self.peer_title(peer));
         }
         let info = self.build_peer_info(peer);
@@ -6317,9 +6323,9 @@ impl ApplicationHandler<AppEvent> for App {
                     let decision = est.decision;
                     self.install_conversation(nbeep_core::MuxSession::new(est.session));
                     if auto {
-                        // 자동 재연결(ⓑ) — 창을 열지 않는다(② 자동 열림 금지와 같은 규칙).
-                        self.status =
-                            format!("자동 재연결됨: {} — 목록에서 열기", self.peer_title(peer));
+                        // **조용한 연결**(자동 재연결 ⓑ · 프로필 pull 08-14) — 창을
+                        // 열지 않는다(② 자동 열림 금지와 같은 규칙 · 카드와 대화 분리).
+                        self.status = format!("연결됨: {} — 목록에서 열기", self.peer_title(peer));
                         let mut inv = Invalidations::default();
                         self.refresh_rows(&mut inv);
                     } else {
