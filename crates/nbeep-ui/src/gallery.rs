@@ -4,7 +4,7 @@
 //! 실물로 확인한다. **제품 화면이 아니라 검수용** — 정식 UI 통합은 별도.
 
 use crate::controls::{
-    BorderSpec, Button, Checkbox, Choose, ChoosePicker, ColorPicker, Combo, ComboControl,
+    BorderSpec, Button, Carousel, Checkbox, Choose, ChoosePicker, ColorPicker, Combo, ComboControl,
     ComboItem, Control, GridColumn, ImageFit, LabelSide, MenuBar, MenuDef, MenuEntry,
     PositionPicker, RadioGroup, RadioOption, ScrollBars, Switch, TextBox, TimeoutButton, ToolIcon,
     ToolItem, Toolbar, TreeGrid, TreeModel, TreeNode, TreeView,
@@ -88,6 +88,14 @@ pub struct GalleryWidget {
     posgrid: PositionPicker,
     /// 색상 선택기(테마 색 설정 — 08-10).
     colorpick: ColorPicker,
+    // ── 08-14 추가 반영(사용자 요청 — 기능 단위별 최신화) ──
+    /// 가로 캐러셀(픽셀 스크롤 · 양끝 고정 이동 버튼 · 경계 마스크 — 18번째 컨트롤).
+    /// 아이템 그리기는 소유자 몫(프로필 스와치·최근 이미지와 같은 계약).
+    carousel: Carousel,
+    /// 캐러셀 데모 아이템(12간지 내장 아바타 — 실제 프로필 스와치와 같은 재료).
+    car_items: Vec<Rc<IconImage>>,
+    /// 캐러셀 데모 선택(클릭 링 — 위치 신호).
+    car_sel: usize,
 }
 
 impl Default for GalleryWidget {
@@ -270,6 +278,16 @@ impl GalleryWidget {
             tb_started: false,
             posgrid: PositionPicker::new(),
             colorpick: ColorPicker::new("#3D8BFF"),
+            carousel: {
+                let mut c = Carousel::new(32, 8);
+                c.set_count(crate::avatar_assets::builtins().len());
+                c
+            },
+            car_items: crate::avatar_assets::builtins()
+                .into_iter()
+                .map(|b| Rc::new(b.image))
+                .collect(),
+            car_sel: 0,
         }
     }
 
@@ -304,6 +322,7 @@ impl GalleryWidget {
         self.timeout_btn.set_scale(s);
         self.posgrid.set_scale(s);
         self.colorpick.set_scale(s);
+        self.carousel.set_scale(s);
         self.relayout(inv);
     }
 
@@ -363,6 +382,9 @@ impl GalleryWidget {
         y = place(&mut self.posgrid, x, y, pos_w, pos_h, label_h, gap, inv);
         let (cp_w, cp_h) = (self.colorpick.preferred_width(), self.s(30));
         y = place(&mut self.colorpick, x, y, cp_w, cp_h, label_h, gap, inv);
+        // ── 08-14 추가 컨트롤 ──
+        let car_h = self.s(40);
+        y = place(&mut self.carousel, x, y, w, car_h, label_h, gap, inv);
         // 콘텐츠 총 크기 — 가장 넓은 행(트리·그리드 쌍) 기준.
         let widest = w.max(tcolw * 2 + gap).max(gcolw * 2 + gap);
         self.content_h = (y - top) + pad;
@@ -448,7 +470,7 @@ impl GalleryWidget {
         self.scroll_x = self.scroll_x.clamp(0, max_x);
     }
 
-    fn labels() -> [&'static str; 23] {
+    fn labels() -> [&'static str; 24] {
         [
             "Checkbox — 라벨 오른쪽 (+ 도움말 ?)",
             "Checkbox — 라벨 왼쪽",
@@ -473,6 +495,7 @@ impl GalleryWidget {
             "TimeoutButton — 스스로 눌리는 버튼(만료 시 데모 재시작)",
             "PositionPicker — 3×3 위치 그리드",
             "ColorPicker — 스와치 · #RRGGBB · 프리셋(테마 색 설정)",
+            "Carousel — 가로 픽셀 스크롤(트랙패드) · 양끝 고정 이동 버튼 · 클릭 선택",
         ]
     }
 }
@@ -598,12 +621,17 @@ impl Widget for GalleryWidget {
         let _ = self.posgrid.take_changed();
         self.colorpick.on_event(ev, inv);
         let _ = self.colorpick.take_changed(); // 데모 — 값은 소비만
+        self.carousel.on_event(ev, inv);
+        if let Some(i) = self.carousel.take_clicked() {
+            self.car_sel = i; // 데모 — 선택 링만 옮긴다
+            inv.push(self.carousel.bounds());
+        }
     }
 
     fn paint(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
         ctx.fill_rect(self.bounds, theme.panel_bg);
         let labels = Self::labels();
-        let widgets: [&dyn Widget; 23] = [
+        let widgets: [&dyn Widget; 24] = [
             &self.cb_right,
             &self.cb_left,
             &self.cb_only,
@@ -627,6 +655,7 @@ impl Widget for GalleryWidget {
             &self.timeout_btn,
             &self.posgrid,
             &self.colorpick,
+            &self.carousel,
         ];
         // 섹션 라벨(각 컨트롤 위 — 컨트롤의 x에 맞춰 그린다: 좌·우 나란한 트리 쌍 라벨 분리).
         ctx.select_font(FontSlot::Status, false);
@@ -638,6 +667,20 @@ impl Widget for GalleryWidget {
         for w in widgets {
             w.paint(ctx, theme);
         }
+        // 캐러셀 아이템(12간지 데모) — 그리기는 소유자 몫(프로필 스와치와 같은 계약).
+        // 위젯 루프의 carousel.paint가 먼저 돌았으므로, 아이템을 얹고 이동 버튼·경계
+        // 마스크를 한 번 더 그려 프로필과 같은 겹침 순서(아이템 < 버튼)를 만든다.
+        for (i, img) in self.car_items.iter().enumerate() {
+            if let Some(r) = self.carousel.item_rect(i) {
+                ctx.image_scaled(r, img, self.bounds);
+                if i == self.car_sel {
+                    // 선택 링 — 위치 신호(색만으로 가르지 않는다 규약과 정합).
+                    let ring = Rect::new(r.x - 2, r.y - 2, r.w + 4, r.h + 4);
+                    ctx.stroke_round_rect(ring, ring.w / 2, theme.accent, 2.0);
+                }
+            }
+        }
+        self.carousel.paint(ctx, theme);
         // 콤보/Choose 드롭다운·찾기 오버레이는 아래 위젯(트리·그리드)에 가리면 안 되므로
         // 열려 있으면 **맨 끝에 다시 그린다**(위에 겹침).
         if self.combo.is_open() {
@@ -689,6 +732,17 @@ mod tests {
         // 첫 체크박스는 상단, 그리드는 하단.
         assert!(g.cb_right.bounds().y < g.grid.bounds().y);
         assert!(g.cb_right.bounds().w > 0);
+    }
+
+    /// 08-14 — Carousel(18번째 컨트롤) 갤러리 편입: 배치가 되고, 아이템 클릭이
+    /// 선택 링을 옮긴다(아이템 그리기 = 소유자 계약의 데모 배선 확인).
+    #[test]
+    fn carousel_item_click_moves_selection() {
+        let (mut w, mut inv) = gallery();
+        assert_eq!(w.car_items.len(), 12, "12간지 데모 아이템");
+        let r = w.carousel.item_rect(1).expect("두 번째 아이템은 창 안");
+        w.on_event(&click(r.x + r.w / 2, r.y + r.h / 2), &mut inv);
+        assert_eq!(w.car_sel, 1, "클릭 = 선택 이동");
     }
 
     #[test]
