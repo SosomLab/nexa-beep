@@ -32,6 +32,8 @@ pub struct PeerInfo {
     pub last_seen: String,
     /// 최근 대화 표시 문자열(08-15 — 빈 = 기록 없음).
     pub last_chat: String,
+    /// 아바타 보더 색(08-15 — 상대가 공개한 값 · 검증 통과분). 큰 프리뷰 = 3px.
+    pub border: Option<(u8, u8, u8)>,
 }
 
 /// 상대 프로필 카드 위젯.
@@ -102,9 +104,18 @@ impl Widget for PeerInfoWidget {
         let d = self.s(120);
         let av = Rect::new(b.x + (b.w - d) / 2, b.y + self.s(20), d, d);
         if let Some(img) = &self.info.avatar {
+            // 목록 행과 같은 문법(08-14) — 원 배경을 깔고 얹는다(내장 투명 배경 대비).
+            ctx.fill_ellipse(av, crate::avatar::avatar_color(&self.info.seed));
             ctx.image_scaled(av, img, b);
         } else {
             crate::avatar::draw_avatar(ctx, av, &self.info.name, &self.info.seed, 34.0);
+        }
+        // 아바타 보더(08-15 사용자 실기 — 카드에서만 빠져 있었다) — 큰 프리뷰 3px
+        // (프로필 화면과 같은 확정 규약 · 목록 소형은 2px).
+        if let Some((br, bg, bb)) = self.info.border {
+            let c =
+                crate::theme::Color((u32::from(br) << 16) | (u32::from(bg) << 8) | u32::from(bb));
+            ctx.stroke_ellipse(av, c, self.s(3).max(3) as f32);
         }
         // 기본 이름(굵게 · 중앙).
         ctx.select_font_sized(FontSlot::Base, true, 3.0);

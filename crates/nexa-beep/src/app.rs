@@ -3632,6 +3632,7 @@ impl App {
             avatar: p.and_then(|p| p.avatar.clone()),
             last_seen: ago_label(self.trust.meta(peer).0),
             last_chat: ago_label(self.trust.meta(peer).1),
+            border: p.and_then(|p| p.border),
         }
     }
 
