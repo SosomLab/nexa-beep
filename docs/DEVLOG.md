@@ -7,6 +7,7 @@
 
 ## 2026-08-14
 
+- **요약 계열 현행화**(main): 컨트롤 17→**18종**(Carousel) · **573 green** · CLAUDE.md "08-14 후반" 문단(재기동 규칙 `tools/relaunch.sh`·캐러셀·**모달 표준 재정리**(AlwaysOnTop 제거)·**영속 구멍 2겹**(저장·로드 양쪽을 고쳐야 살아난다)·H-25/26). 이관 시점 기록은 소급 수정하지 않음.
 - **최근 이미지 목록 증발 — 영속 구멍 2개**(main · 실기): ① 피커 경로의 `take_changes` 버림 = `image_recent` **저장 안 됨** → apply_settings 깔때기로(이중 디코드도 제거) ② `set_by_name` "아는 키만" = HIDDEN_KEYS 미등록 키는 **부팅 로드 무시** → `profile.image_recent` + ★`ui.win_x/y/w/h`(창 위치도 같은 구멍) 등록 + 왕복 회귀 테스트. **573 green**. 상세 [journal/2026-08-14.md](journal/2026-08-14.md).
 - ★ **앱 모달 표준 재정리 + 툴팁 설정화**(main · 사용자 확정): 모달 5창의 **AlwaysOnTop 제거**(다른 프로그램 위까지 뜨던 것) → `modal_id()` 단일 판정 + 입력 흡수 일반화(About 문법 확장) + `Focused(true)` 재부상("메인 클릭해도 모달이 위") · 툴팁 대기 기본 2000ms + `ui.tooltip_ms` 설정(hot-swap). **572 green**. 상세 [journal/2026-08-14.md](journal/2026-08-14.md).
 - **최근 이미지 캐러셀 다듬기**(main · 사용자 확정 3건): × = **호버 아이템에만** · 사용 중 사진 삭제 = **이니셜 폴백**(빈 상태 금지 · `profile.avatar=initials` 보고) · 파일명 라벨 제거 + **3초 호버 툴팁**(`ProfileWidget::tick` ~5Hz 합류). **572 green**. 상세 [journal/2026-08-14.md](journal/2026-08-14.md).
