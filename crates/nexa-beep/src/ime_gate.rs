@@ -472,12 +472,14 @@ impl<W: Copy + Eq> ImeGate<W> {
 
     /// 저장 트리거 직전 확정(G2 — "저장 트리거 전 조합 확정"): 유출 조합 + 조합 중
     /// 프리에딧을 지금 확정 합류시킨다. 포커스 이탈과 같은 규칙, 스태시는 안 본다.
+    /// 수동 확정이므로 **늦은 Commit 잔향 가드(H-24)도 동일하게** 건다.
     pub fn commit_now(&mut self, id: W, now: u64) -> Vec<Out<W>> {
         let mut outs = self.flush_leak();
         let text = std::mem::take(&mut self.preedit_text);
         if !text.is_empty() {
             self.composing = false;
             self.cleared_ms = Some(now);
+            self.selfcommit = Some((id, text.clone(), now));
             outs.push(Out::Preedit(id, String::new()));
             for c in text.chars().filter(|c| !c.is_control()) {
                 outs.push(Out::Char(id, c));
@@ -797,6 +799,18 @@ mod tests {
         d.preedit("");
         d.commit("다"); // 그 다음 진짜 입력은 정상
         assert_eq!(d.buf, "나다다");
+    }
+
+    /// G2 — commit_now 수동 확정 뒤 **늦은 Commit 잔향**도 H-24처럼 1회 삼킨다.
+    #[test]
+    fn commit_now_swallows_late_commit_echo() {
+        let mut d = Driver::new();
+        d.preedit("다"); // 조합 중 저장 트리거(클릭 등)
+        let outs = d.gate.commit_now(W, d.now + 10);
+        d.apply(outs);
+        assert_eq!(d.buf, "다", "수동 확정 합류");
+        d.commit("다"); // IME의 늦은 Commit — 잔향
+        assert_eq!(d.buf, "다", "이중 입력 방지(H-24 문법 공유)");
     }
 
     /// G2 — 저장 트리거 직전 확정(commit_now): 조합 중 음절이 값에 포함된다.

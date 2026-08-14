@@ -6528,6 +6528,12 @@ impl ApplicationHandler<AppEvent> for App {
     fn window_event(&mut self, el: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
         match event {
             WindowEvent::CloseRequested => {
+                // G2 — 창 닫기도 저장 트리거: 조합 중 음절을 먼저 확정 합류.
+                if self.ime.composing() {
+                    let now_ms = self.now_ms();
+                    let outs = self.ime.commit_now(id, now_ms);
+                    self.apply_ime(outs, el);
+                }
                 if Some(id) == self.main_id {
                     // ★ 종료 가드(M4-9) — 미확인·진행 중 전송이 있으면 조용히 끊지 않는다.
                     //   "보냈다"가 "닿았다"가 아니라, 확인 전 종료는 수신측 폐기로 이어질 수 있다.
@@ -6712,6 +6718,14 @@ impl ApplicationHandler<AppEvent> for App {
                 button: MouseButton::Left,
                 ..
             } => {
+                // ★ G2 — 클릭 = 조합 확정(저장 트리거 전 조합 확정 · [34 §4-4]):
+                // 조합 중 버튼/토글/다른 필드 클릭 시 조합 음절이 유실되지 않게,
+                // 클릭 라우팅 **전에** 지금 확정 합류시킨다(네이티브 관례와 동일).
+                if self.ime.composing() && !self.is_list_mode(id) {
+                    let now_ms = self.now_ms();
+                    let outs = self.ime.commit_now(id, now_ms);
+                    self.apply_ime(outs, el);
+                }
                 if let Some(e) = self.windows.get(&id) {
                     let (x, y) = e.cursor;
                     self.blink_anchor_ms = self.now_ms(); // 캐럿 재배치 = 밝게 시작

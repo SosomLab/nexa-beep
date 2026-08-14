@@ -100,6 +100,13 @@ impl TextBox {
         if !self.base.focused && !text.is_empty() {
             return;
         }
+        // ★ 조합 시작 = 선택 삭제(H-25 — OS 관례: 선택 위에서 타이핑하면 대체).
+        // 프리에딧은 표시 전용이라 확정 문자가 캐럿에 꽂히기 전, 여기서 지워야
+        // "선택 반전 + 조합 밑줄 병존"이라는 어리둥절한 화면이 안 나온다.
+        if !text.is_empty() && self.edit.selection().is_some() {
+            let _ = self.edit.cut();
+            self.changed = true;
+        }
         if self.preedit != text {
             self.preedit = text.to_string();
             inv.push(self.base.bounds);
@@ -659,6 +666,22 @@ mod tests {
             Some("xabcz"),
             "⇧ 조합 = 범위 선택"
         );
+    }
+
+    /// H-25 — 조합 시작(첫 프리에딧)이 선택을 대체한다(선택 삭제 → 확정 합류).
+    #[test]
+    fn preedit_start_replaces_selection() {
+        let (mut t, mut inv) = tb();
+        t.on_event(&click(5, 15), &mut inv);
+        for c in "abc".chars() {
+            t.on_event(&ch(c), &mut inv);
+        }
+        t.on_event(&InputEvent::SelectAll, &mut inv);
+        t.set_preedit("나", &mut inv); // 조합 시작 = 선택 즉시 삭제
+        assert_eq!(t.text(), "", "선택분 제거(표시엔 조합 밑줄만)");
+        t.set_preedit("", &mut inv);
+        t.on_event(&ch('나'), &mut inv); // 확정 문자 합류(호스트 라우팅 모사)
+        assert_eq!(t.text(), "나", "선택이 조합으로 대체됐다");
     }
 
     #[test]

@@ -514,6 +514,10 @@ impl ChatViewWidget {
 
     /// IME 조합 중 텍스트 설정(빈 문자열 = 조합 종료·취소). 확정은 `on_event`의 Char로.
     pub fn set_preedit(&mut self, text: String, inv: &mut Invalidations) {
+        // ★ 조합 시작 = 선택 삭제(H-25 — 선택 위 타이핑 = 대체 · TextBox와 동일 규칙).
+        if !text.is_empty() && self.input.selection().is_some() {
+            let _ = self.input.cut();
+        }
         self.preedit = text;
         inv.push(self.input_bar());
     }
