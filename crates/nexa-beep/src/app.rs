@@ -1334,6 +1334,10 @@ impl App {
     /// 경고 모달을 연다(08-13) — 이미 열려 있으면 내용만 바꾸고 앞으로 가져온다.
     /// 항상 위(AlwaysOnTop) — 상태바 한 줄로는 지나치는 실패를 눈앞에 세우는 것이 목적.
     fn open_alert(&mut self, el: &ActiveEventLoop, title: &str, message: &str) {
+        // 본문 줄 수에 맞춰 높이 산정(08-14 — 그룹 구성원 목록처럼 여러 줄 본문이
+        // 고정 170에서 잘리던 것). 워드랩 줄은 근사에서 빠지지만 명시 줄바꿈이 기준.
+        let lines = message.lines().count().max(1) as f64;
+        let win_h = (110.0 + lines * 22.0).clamp(170.0, 460.0);
         if let Some((aid, _)) = self.windows.iter().find(|(_, e)| e.role == Role::Alert) {
             let aid = *aid;
             let mut inv = Invalidations::default();
@@ -1341,6 +1345,9 @@ impl App {
                 av.set_content(title, message, &mut inv);
             }
             if let Some(e) = self.windows.get(&aid) {
+                let _ = e
+                    .window
+                    .request_inner_size(winit::dpi::LogicalSize::new(400.0, win_h));
                 e.window.focus_window();
             }
             self.request_redraw(aid);
@@ -1348,7 +1355,7 @@ impl App {
         }
         let attrs = Window::default_attributes()
             .with_title("Nexa Beep — 알림")
-            .with_inner_size(winit::dpi::LogicalSize::new(400.0, 170.0))
+            .with_inner_size(winit::dpi::LogicalSize::new(400.0, win_h))
             .with_resizable(false)
             .with_window_icon(self.icon.clone());
         let window = Rc::new(el.create_window(attrs).unwrap());
@@ -3321,6 +3328,60 @@ impl App {
     }
 
     /// 상대 프로필 보기 카드(M3-17 — 목록 우클릭). 이미 있으면 갱신·포커스.
+    /// 그룹 구성원 목록 모달 내용(08-14 사용자 요청) — **두 진입점이 같은 모달**:
+    /// 목록의 그룹 아이콘 클릭 + 방 헤더 클릭. 온라인 판정은 목록 행과 같은 기준.
+    fn group_members_summary(&self, gid: nbeep_core::group::GroupId) -> Option<(String, String)> {
+        let s = self.groups.shared_by_id(gid)?;
+        let me = self.identity.peer_id();
+        // 소유자 먼저, 나머지는 명부 순서(정렬돼 있다).
+        let mut members: Vec<PeerId> = s.roster.members.clone();
+        members.sort_by_key(|m| *m != s.roster.owner);
+        let lines: Vec<String> = members
+            .iter()
+            .map(|m| {
+                let online = *m == me || self.conversations.contains_key(m);
+                let mut line = format!(
+                    "{} {} — {}",
+                    if online { "●" } else { "○" },
+                    if *m == me {
+                        format!("{} (나)", self.my_display_name())
+                    } else {
+                        self.peer_title(*m)
+                    },
+                    m.short()
+                );
+                if *m == s.roster.owner {
+                    line.push_str(" · 소유자");
+                }
+                line
+            })
+            .collect();
+        let online_n = lines.iter().filter(|l| l.starts_with('●')).count();
+        Some((
+            format!(
+                "{} — 구성원 {} · 온라인 {}",
+                s.roster.name.as_str(),
+                members.len(),
+                online_n
+            ),
+            lines.join("\n"),
+        ))
+    }
+
+    /// 내 표시 이름(구성원 목록 등 — M1-10 규칙 그대로).
+    fn my_display_name(&self) -> String {
+        effective_display_name(&self.settings, &self.identity.peer_id())
+            .as_str()
+            .to_string()
+    }
+
+    /// 구성원 목록 모달 열기 — 알림 모달 재사용(`pending_alert` 경로 · el 불요).
+    fn open_group_members(&mut self, gid: nbeep_core::group::GroupId) {
+        if let Some((title, message)) = self.group_members_summary(gid) {
+            self.pending_alert = Some((title, message));
+        }
+    }
+
     /// 상대 프로필 카드 내용 조립(열기·갱신 공용 — M3-21).
     fn build_peer_info(&self, peer: PeerId) -> nbeep_ui::PeerInfo {
         let p = self.peer_profiles.get(&peer);
@@ -3368,6 +3429,13 @@ impl App {
             let _ = conv.out_tx.send(SessionCmd::Control(vec![
                 nbeep_core::ProfileMsg::Request.encode()
             ]));
+        } else if self.live {
+            // 세션 없음(점이 녹색 아님 · 08-14 사용자 요청) — **연결을 시도**한다.
+            // 성립하면 자동 프리페치(install_conversation)가 돌고, 응답 도착이
+            // `refresh_peer_info_card`로 열린 카드를 채운다. 실패는 기존 연결 실패
+            // 경로 그대로(상태바) — 카드는 캐시로 남는다.
+            self.start_connect(peer, false);
+            self.status = format!("프로필 갱신을 위해 연결 중… {}", self.peer_title(peer));
         }
         let info = self.build_peer_info(peer);
         if let Some((wid, _)) = self
@@ -4154,6 +4222,11 @@ impl App {
                 };
                 self.refresh_and_redraw();
             }
+            GA::Members(gid) => {
+                // 그룹 아이콘 클릭(08-14) — 방 헤더 클릭과 같은 구성원 모달.
+                self.open_group_members(gid);
+                let _ = el;
+            }
             GA::Delete(gid) => {
                 let Some(s) = self.groups.shared_by_id(gid) else {
                     return;
@@ -4460,6 +4533,14 @@ impl App {
     /// 세션 있는 구성원 = 즉시 · 없는 구성원 = 자동 연결 + 성립 시 이어 전달(사용자 확정).
     fn drain_group_effects(&mut self, gid: nbeep_core::group::GroupId, id: WindowId) {
         let mut inv = Invalidations::default();
+        // 방 헤더 클릭 = 구성원 목록(08-14 — 목록 그룹 아이콘 클릭과 같은 모달).
+        if self
+            .gchats
+            .get_mut(&gid)
+            .is_some_and(ChatViewWidget::take_header_click)
+        {
+            self.open_group_members(gid);
+        }
         // 풍선 우클릭 복사·붙여넣기 — 1:1 `drain_chat_effects`와 동형(위젯은 OS를
         // 모른다 · 08-13 실기: 이 배선이 없어 그룹 방 Copy Message가 무반응이었다).
         if let Some(t) = self

@@ -9,7 +9,7 @@
 
 use crate::draw::{DrawCtx, FontSlot};
 use crate::event::{InputEvent, Key, WheelAccum};
-use crate::geom::Rect;
+use crate::geom::{Point, Rect};
 use crate::theme::{Color, Theme};
 use crate::typeahead::{TypeAhead, TYPEAHEAD_TIMEOUT_MS};
 use crate::widget::{Invalidations, Widget};
@@ -60,6 +60,9 @@ pub enum GroupAction {
     Delete(GroupId),
     /// 구성원 초대 허용 정책 토글(소유자만 — 방별 설정 · 08-13 사용자 확정).
     TogglePolicy(GroupId),
+    /// 구성원 목록 보기(08-14 사용자 요청 — 그룹 아이콘 클릭 · 방 헤더 클릭과
+    /// **같은 모달**로 호스트가 처리).
+    Members(GroupId),
 }
 
 /// 목록 한 행 — 목록 항목(발견) + 신뢰 상태(`TrustStore`). 출처가 달라 조립 지점에서 합친다.
@@ -847,9 +850,51 @@ impl Widget for PeerListWidget {
                 inv.push(self.bounds);
             }
             InputEvent::MouseDown {
-                y, primary, shift, ..
+                x,
+                y,
+                primary,
+                shift,
+                ..
             } => {
                 if let Some(i) = self.row_at(y) {
+                    // 그룹 아이콘 클릭 = **구성원 목록**(08-14 사용자 요청 — 방 헤더
+                    // 클릭과 같은 모달). 각진 아이콘이라 사각 판정으로 충분하다.
+                    if !shift && !primary {
+                        if let Some(g) = self.groups.get(i) {
+                            let r = self.row_rect(i);
+                            let av_d = self.s(AVATAR_D);
+                            let icon = Rect::new(
+                                r.x + self.s(8),
+                                r.y + (self.row_h() - av_d) / 2,
+                                av_d,
+                                av_d,
+                            );
+                            if icon.contains(Point { x, y }) {
+                                self.group_action = Some(GroupAction::Members(g.id));
+                                self.last_click = None;
+                                return;
+                            }
+                        }
+                    }
+                    // 아바타 원 클릭 = **프로필 보기**(08-14 사용자 요청 — 우클릭 메뉴
+                    // "프로필 보기"와 같은 경로). **원 안쪽만**(행 선택과 구분되는 표적 —
+                    // 반지름 판정). ⇧/⌘ 수식 클릭은 선택 제스처가 우선이라 제외.
+                    if !shift && !primary {
+                        if let Some(row) = self.peer_at(i) {
+                            let r = self.row_rect(i);
+                            let av_d = self.s(AVATAR_D);
+                            let (cx, cy) = (
+                                r.x + self.s(8) + av_d / 2,
+                                r.y + (self.row_h() - av_d) / 2 + av_d / 2,
+                            );
+                            let (dx, dy) = (x - cx, y - cy);
+                            if dx * dx + dy * dy <= (av_d / 2) * (av_d / 2) {
+                                self.profile_req = Some(row.entry.peer);
+                                self.last_click = None; // 더블클릭(대화 열기)으로 안 이어진다
+                                return;
+                            }
+                        }
+                    }
                     // Shift+클릭 = **연속 범위 선택**(08-13 사용자 요청) — 캐럿(직전
                     // 클릭 행)부터 이번 행까지의 피어들을 선택에 추가(그룹 행은 건너뜀).
                     if shift && self.peer_at(i).is_some() {
@@ -1286,6 +1331,78 @@ mod tests {
         let rects: Vec<_> = inv.drain().collect();
         // 이전 행 + 새 행(인접 = 병합될 수 있음) — 전체 무효화가 아니어야 한다(FR-U-13).
         assert!(rects.iter().all(|r| r.h <= ROW_H * 2), "{rects:?}");
+    }
+
+    /// 그룹 아이콘 클릭 = 구성원 목록 요청(08-14 — 방 헤더 클릭과 같은 모달).
+    #[test]
+    fn group_icon_click_requests_members() {
+        let (mut w, mut inv) = widget(&[(1, "alice")]);
+        w.set_groups(
+            vec![GroupRow {
+                id: GroupId(7),
+                name: "동물농장".into(),
+                members: 3,
+                online: 1,
+                unread: 0,
+                owned: true,
+                member_invite: false,
+            }],
+            &mut inv,
+        );
+        // 그룹 행(인덱스 0)의 아이콘 중심 클릭.
+        let r = w.row_rect(0);
+        let av_d = w.s(AVATAR_D);
+        let (cx, cy) = (
+            r.x + w.s(8) + av_d / 2,
+            r.y + (w.row_h() - av_d) / 2 + av_d / 2,
+        );
+        w.on_event(&click(cx, cy), &mut inv);
+        assert_eq!(
+            w.take_group_action(),
+            Some(GroupAction::Members(GroupId(7))),
+            "아이콘 클릭 = 구성원 목록"
+        );
+        // 행 본문 클릭 = 캐럿 이동(기존 동작) · 액션 없음.
+        w.on_event(&click(r.x + r.w - 20, cy), &mut inv);
+        assert_eq!(w.take_group_action(), None);
+    }
+
+    /// 아바타 원 클릭 = 프로필 보기(08-14) — 원 안쪽만, 행 본문 클릭은 선택 그대로.
+    #[test]
+    fn avatar_circle_click_requests_profile_view() {
+        let (mut w, _) = widget(&[(1, "alice"), (2, "bob"), (3, "carol")]);
+        let mut inv = Invalidations::default();
+        // 두 번째 행(bob)의 아바타 중심.
+        let r = w.row_rect(1);
+        let av_d = w.s(AVATAR_D);
+        let (cx, cy) = (
+            r.x + w.s(8) + av_d / 2,
+            r.y + (w.row_h() - av_d) / 2 + av_d / 2,
+        );
+        w.on_event(&click(cx, cy), &mut inv);
+        assert_eq!(
+            w.take_profile_request(),
+            Some(pid(2)),
+            "아바타 원 클릭 = 프로필 보기(우클릭 메뉴와 같은 경로)"
+        );
+        assert_eq!(
+            w.caret(),
+            0,
+            "프로필 보기 클릭은 행 선택(캐럿)을 바꾸지 않는다"
+        );
+        // 행 본문(아바타 밖) 클릭 = 기존 선택 동작 그대로 · 프로필 요청 없음.
+        w.on_event(&click(r.x + r.w - 20, cy), &mut inv);
+        assert_eq!(w.take_profile_request(), None);
+        assert_eq!(w.caret(), 1, "본문 클릭 = 캐럿 이동");
+    }
+
+    fn click(x: i32, y: i32) -> InputEvent {
+        InputEvent::MouseDown {
+            x,
+            y,
+            shift: false,
+            primary: false,
+        }
     }
 
     /// ★ 실기 재현(08-14) — 발견 갱신이 뷰포트를 캐럿 행으로 끌어오면 안 된다.

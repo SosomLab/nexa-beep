@@ -359,6 +359,9 @@ pub struct ChatViewWidget {
     /// (UI 크레이트는 OS를 모른다. 모르면 "붙여넣기"를 항상 활성으로 두게 되는데,
     ///  눌러도 아무 일이 없는 항목은 고장으로 읽힌다.)
     clip_has_text: bool,
+    /// 헤더(타이틀 줄) 클릭(1회성 · 08-14) — 그룹 방은 **구성원 목록 모달**의
+    /// 트리거(호스트 폴). 1:1 방에서는 호스트가 무시한다.
+    header_click: bool,
 }
 
 impl ChatViewWidget {
@@ -392,7 +395,13 @@ impl ChatViewWidget {
             ctx_bubble: None,
             paste_req: false,
             clip_has_text: false,
+            header_click: false,
         }
+    }
+
+    /// 헤더 클릭(1회성 · 08-14) — 그룹 방 = 구성원 목록 모달 트리거.
+    pub fn take_header_click(&mut self) -> bool {
+        std::mem::take(&mut self.header_click)
     }
 
     /// 우클릭으로 복사 요청된 메시지 본문(1회성 — 사용자 요청 08-10).
@@ -954,6 +963,14 @@ impl Widget for ChatViewWidget {
             }
         }
 
+        // 헤더(타이틀 줄) 클릭(08-14) — 그룹 방 구성원 목록의 트리거. 헤더는
+        // 다른 히트 대상이 없어 여기서 소비해도 잃는 동작이 없다.
+        if let InputEvent::MouseDown { y, .. } = *ev {
+            if y >= self.bounds.y && y < self.bounds.y + self.s(34) {
+                self.header_click = true;
+                return;
+            }
+        }
         // 커서 추적 — 휠의 대상(스레드 vs 입력창)을 위치로 가른다(사용자 확정 08-10).
         if let InputEvent::MouseMove { x, y } = *ev {
             self.cursor = (x, y);
