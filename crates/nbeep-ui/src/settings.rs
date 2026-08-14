@@ -1512,8 +1512,11 @@ impl SettingsWidget {
             if registry()[row.idx].key != key {
                 continue;
             }
-            if let RowCtl::Combo(c) = &mut row.ctl {
-                c.select_value(value);
+            match &mut row.ctl {
+                RowCtl::Combo(c) => c.select_value(value),
+                // 토글도 역반영(08-15 — 쌍방 동기화: 다른 경로가 켠/끈 것을 표시).
+                RowCtl::Check(c) => c.set_on(value == "on"),
+                _ => {}
             }
         }
         inv.push(self.bounds);

@@ -283,15 +283,27 @@ impl Widget for IconDropdown {
             let img = self.tinted(self.sel, color);
             ctx.image_scaled(icon, &img, b);
         }
-        // ▾ 캐럿(작게 · 우하단) — 드롭다운임을 알리는 표식.
-        let cw = self.s(6);
-        let cx = b.right() - cw - self.s(2);
-        let cy = b.bottom() - self.s(5);
-        ctx.fill_rect(Rect::new(cx, cy, cw, self.s(2).max(2)), color);
-        ctx.fill_rect(
-            Rect::new(cx + self.s(2) / 2 + 1, cy + 2, cw - self.s(2) - 2, 2),
-            color,
+        // ▼ 드롭다운 표식(08-15 사용자 확정 — **우하단 · 아이콘 위 오버레이**).
+        // 작은 배경판을 깔아 아이콘 획 위에서도 화살표가 산다(오피스 툴바 관례).
+        let tri_w = self.s(7).max(5);
+        let tri_h = self.s(4).max(3);
+        let m = self.s(1).max(1);
+        let bx = b.right() - tri_w - self.s(2);
+        let by = b.bottom() - tri_h - self.s(2);
+        ctx.fill_round_rect_alpha(
+            Rect::new(bx - m * 2, by - m * 2, tri_w + m * 4, tri_h + m * 4),
+            self.s(2),
+            theme.panel_bg,
+            0.85,
         );
+        // 라인 프리미티브 없이 ▼ — 위에서 아래로 좁아지는 가로 막대 계단.
+        // 색 = **warn(호박색)**(08-15 사용자 확정 — 식별용 유채색 · 파랑(accent)은
+        // 선택/포커스가 쓰고, 녹색/빨강은 상태 점 의미가 있어 피한다).
+        for r in 0..tri_h {
+            let w = ((tri_w * (tri_h - r)) / tri_h).max(1);
+            let x = bx + (tri_w - w) / 2;
+            ctx.fill_rect(Rect::new(x, by + r, w, 1), theme.warn);
+        }
     }
 }
 

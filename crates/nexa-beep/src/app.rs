@@ -4139,6 +4139,21 @@ impl App {
                 _ => {}
             }
             self.settings.set(key, value.clone());
+            // ★ 열려 있는 설정 화면에 역반영(08-15 사용자 실기 — 툴바 정렬처럼
+            //   다른 경로의 변경이 설정 화면 표시와 어긋났다 · 쌍방 동기화).
+            //   설정 화면 자신이 낸 변경이면 같은 값이라 무해(no-op 표시 갱신).
+            if let Some(sv) = &mut self.settings_view {
+                let mut sinv = Invalidations::default();
+                sv.set_value(key, &value, &mut sinv);
+                if let Some(sid) = self
+                    .windows
+                    .iter()
+                    .find(|(_, e)| e.role == Role::Settings)
+                    .map(|(id, _)| *id)
+                {
+                    self.request_redraw(sid);
+                }
+            }
             match key {
                 "chat.window_mode" => {
                     // 새 대화부터 적용(DR-26 — 열린 창은 유지·소급 강제 없음).
