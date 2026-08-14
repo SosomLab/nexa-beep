@@ -185,6 +185,31 @@ pub fn badge(trust: TrustLevel, theme: &Theme) -> (&'static str, Color) {
     }
 }
 
+/// 목록 갱신 직후 스크롤 동작(사용자 확정 08-14 — `ui.list_refresh_scroll`).
+/// 발견 이벤트마다 목록이 재조립되는데, 그때 뷰포트를 어떻게 둘지의 3택이다.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RefreshScroll {
+    /// 현재 위치 유지(기본) — 갱신은 뷰포트를 옮기지 않는다.
+    #[default]
+    Keep,
+    /// 선택(캐럿) 행을 맨 위에 — 갱신마다 캐럿 행이 첫 행으로 온다.
+    CaretTop,
+    /// 맨 위로 이동.
+    Top,
+}
+
+impl RefreshScroll {
+    /// 설정 문자열 → 모드(미지 값 = 기본 Keep — 관용 파싱).
+    #[must_use]
+    pub fn from_code(s: &str) -> Self {
+        match s {
+            "caret" => Self::CaretTop,
+            "top" => Self::Top,
+            _ => Self::Keep,
+        }
+    }
+}
+
 /// 피어 목록 위젯.
 #[derive(Debug)]
 pub struct PeerListWidget {
@@ -228,6 +253,8 @@ pub struct PeerListWidget {
     profile_req: Option<PeerId>,
     /// 그룹 관련 행동(1회성 — 호스트가 저장소·모달로 처리).
     group_action: Option<GroupAction>,
+    /// 갱신 직후 스크롤 동작(설정 — 기본 = 현재 위치 유지 · 08-14).
+    refresh_scroll: RefreshScroll,
 }
 
 impl Default for PeerListWidget {
@@ -263,14 +290,18 @@ impl PeerListWidget {
             group_action: None,
             groups: Vec::new(),
             selected: std::collections::HashSet::new(),
+            refresh_scroll: RefreshScroll::default(),
         }
     }
 
     /// 그룹 섹션 교체(M5-1) — 그룹 저장소 변경·온라인 수 갱신 시 호스트가 부른다.
+    /// 스크롤 규칙은 [`Self::set_rows`]와 동일(그룹 수 변화가 인덱스를 밀어도
+    /// 캐럿은 상대 기준 유지 · 뷰포트는 갱신 정책을 따른다).
     pub fn set_groups(&mut self, groups: Vec<GroupRow>, inv: &mut Invalidations) {
+        let anchor = self.peer_at(self.caret).map(|r| r.entry.peer);
         self.groups = groups;
-        self.caret = self.caret.min(self.total().saturating_sub(1));
-        self.clamp_scroll();
+        self.re_anchor(anchor);
+        self.apply_refresh_scroll();
         inv.push(self.bounds);
     }
 
@@ -375,15 +406,35 @@ impl PeerListWidget {
         (logical as f32 * self.scale).round() as i32
     }
 
-    /// 목록 교체(발견 이벤트 반영) — 캐럿은 가능한 유지, 전체 무효화.
+    /// 목록 교체(발견 이벤트 반영) — 캐럿은 **상대 기준** 유지, 전체 무효화.
     /// 선택은 **사라진 상대만** 걷어낸다(재배열에도 선택 유지 — PeerId 키의 이유).
+    /// 스크롤은 [`RefreshScroll`] 모드를 따른다(기본 = 현재 위치 유지 · 08-14).
     pub fn set_rows(&mut self, rows: Vec<PeerRow>, inv: &mut Invalidations) {
+        let anchor = self.peer_at(self.caret).map(|r| r.entry.peer);
         self.rows = rows;
         self.selected
             .retain(|p| self.rows.iter().any(|r| r.entry.peer == *p));
-        self.caret = self.caret.min(self.total().saturating_sub(1));
-        self.clamp_scroll();
+        self.re_anchor(anchor);
+        self.apply_refresh_scroll();
         inv.push(self.bounds);
+    }
+
+    /// 갱신 직후 스크롤 정책 적용(사용자 확정 08-14 — 3택 옵션).
+    fn apply_refresh_scroll(&mut self) {
+        match self.refresh_scroll {
+            RefreshScroll::Keep => self.clamp_top(),
+            RefreshScroll::CaretTop => {
+                // 선택(캐럿) 행을 맨 위로 — 캐럿이 없으면 Keep과 같다.
+                self.top = self.caret;
+                self.clamp_top();
+            }
+            RefreshScroll::Top => self.top = 0,
+        }
+    }
+
+    /// 갱신 시 스크롤 동작 설정(`ui.list_refresh_scroll` — 호스트가 주입).
+    pub fn set_refresh_scroll(&mut self, mode: RefreshScroll) {
+        self.refresh_scroll = mode;
     }
 
     /// 전체 행 수 = 그룹 섹션 + 피어(M5-1 — 인덱스 공간은 그룹이 먼저).
@@ -432,16 +483,37 @@ impl PeerListWidget {
         (self.bounds.h.max(0) as usize) / (self.row_h().max(1) as usize)
     }
 
-    fn clamp_scroll(&mut self) {
+    /// 스크롤 **범위만** 보정(뷰포트 유지) — 내용 교체(set_rows/set_groups)용.
+    /// 여기서 캐럿을 따라가면 안 된다(08-14 사용자 실기: 발견 갱신마다 스크롤이
+    /// 캐럿 행으로 튀어, 아래로 내려 보던 목록이 1초 뒤 제자리로 끌려왔다).
+    fn clamp_top(&mut self) {
         let vis = self.visible_rows().max(1);
         let max_top = self.total().saturating_sub(vis);
         self.top = self.top.min(max_top);
-        // 캐럿이 보이도록 스크롤 따라가기.
+    }
+
+    /// 범위 보정 + **캐럿 따라가기** — 사용자 탐색(캐럿 이동·타입어헤드)용.
+    fn clamp_scroll(&mut self) {
+        self.clamp_top();
+        let vis = self.visible_rows().max(1);
         if self.caret < self.top {
             self.top = self.caret;
         } else if self.caret >= self.top + vis {
             self.top = self.caret + 1 - vis;
         }
+    }
+
+    /// 캐럿을 같은 **상대**에 다시 앵커한다 — 재정렬·행 증감에도 캐럿이 인덱스가
+    /// 아니라 상대를 따라간다(그전엔 갱신마다 캐럿이 다른 행을 가리킬 수 있었다).
+    /// 앵커 대상이 사라졌으면 인덱스 유지(범위 보정만).
+    fn re_anchor(&mut self, anchor: Option<PeerId>) {
+        if let Some(p) = anchor {
+            if let Some(i) = self.rows.iter().position(|r| r.entry.peer == p) {
+                self.caret = self.groups.len() + i;
+                return;
+            }
+        }
+        self.caret = self.caret.min(self.total().saturating_sub(1));
     }
 
     fn row_rect(&self, i: usize) -> Rect {
@@ -1214,6 +1286,87 @@ mod tests {
         let rects: Vec<_> = inv.drain().collect();
         // 이전 행 + 새 행(인접 = 병합될 수 있음) — 전체 무효화가 아니어야 한다(FR-U-13).
         assert!(rects.iter().all(|r| r.h <= ROW_H * 2), "{rects:?}");
+    }
+
+    /// ★ 실기 재현(08-14) — 발견 갱신이 뷰포트를 캐럿 행으로 끌어오면 안 된다.
+    /// (행 선택 → 아래로 스크롤 → ~1초 뒤 갱신 → 목록이 선택 행 위치로 튀던 버그.)
+    #[test]
+    fn refresh_keeps_viewport_by_default() {
+        let names: Vec<(u8, String)> = (1..=10).map(|i| (i, format!("peer{i:02}"))).collect();
+        let refs: Vec<(u8, &str)> = names.iter().map(|(b, s)| (*b, s.as_str())).collect();
+        let (mut w, _) = widget(&refs);
+        let mut inv = Invalidations::default();
+        // 캐럿은 0(선택 상태) 그대로, 휠로만 아래로 — 캐럿과 뷰포트를 분리한다.
+        for _ in 0..6 {
+            w.on_event(&InputEvent::Wheel { delta: -120 }, &mut inv);
+        }
+        let top_before = w.top;
+        assert!(top_before > 0, "휠로 내려간 상태여야 재현이 된다");
+        let rows2 = refs
+            .iter()
+            .map(|&(b, n)| row(b, n, TrustLevel::Unverified))
+            .collect();
+        w.set_rows(rows2, &mut inv);
+        assert_eq!(
+            w.top, top_before,
+            "기본(Keep) = 갱신이 뷰포트를 옮기지 않는다"
+        );
+        assert_eq!(w.caret, 0, "캐럿(선택) 불변");
+    }
+
+    /// 갱신으로 행 순서가 바뀌어도 캐럿은 인덱스가 아니라 **상대**를 따라간다.
+    #[test]
+    fn refresh_re_anchors_caret_to_peer() {
+        let (mut w, _) = widget(&[(1, "alice"), (2, "bob"), (3, "carol")]);
+        let mut inv = Invalidations::default();
+        w.on_event(&key(Key::Down), &mut inv);
+        assert_eq!(w.peer_at(w.caret).unwrap().entry.peer, pid(2), "캐럿 = bob");
+        // 새 상대가 앞에 끼어들어 인덱스가 밀리는 상황(발견 재정렬).
+        let rows2 = vec![
+            row(9, "aaron", TrustLevel::Unverified),
+            row(1, "alice", TrustLevel::Unverified),
+            row(2, "bob", TrustLevel::Unverified),
+            row(3, "carol", TrustLevel::Unverified),
+        ];
+        w.set_rows(rows2, &mut inv);
+        assert_eq!(
+            w.peer_at(w.caret).unwrap().entry.peer,
+            pid(2),
+            "캐럿은 여전히 bob(인덱스 1→2로 따라감)"
+        );
+    }
+
+    /// 3택 옵션(사용자 확정 08-14) — 선택 행 맨 위 / 맨 위로 이동.
+    #[test]
+    fn refresh_scroll_modes_caret_top_and_top() {
+        let names: Vec<(u8, String)> = (1..=10).map(|i| (i, format!("peer{i:02}"))).collect();
+        let refs: Vec<(u8, &str)> = names.iter().map(|(b, s)| (*b, s.as_str())).collect();
+        let (mut w, _) = widget(&refs);
+        let mut inv = Invalidations::default();
+        w.on_event(&key(Key::Down), &mut inv);
+        w.on_event(&key(Key::Down), &mut inv); // 캐럿 = 2
+        for _ in 0..6 {
+            w.on_event(&InputEvent::Wheel { delta: -120 }, &mut inv);
+        }
+        let fresh = |names: &[(u8, &str)]| -> Vec<PeerRow> {
+            names
+                .iter()
+                .map(|&(b, n)| row(b, n, TrustLevel::Unverified))
+                .collect()
+        };
+        w.set_refresh_scroll(RefreshScroll::CaretTop);
+        w.set_rows(fresh(&refs), &mut inv);
+        assert_eq!(w.top, w.caret, "선택 행이 맨 위");
+        w.set_refresh_scroll(RefreshScroll::Top);
+        for _ in 0..6 {
+            w.on_event(&InputEvent::Wheel { delta: -120 }, &mut inv);
+        }
+        w.set_rows(fresh(&refs), &mut inv);
+        assert_eq!(w.top, 0, "맨 위로 이동");
+        // 설정 문자열 매핑(관용 파싱 — 미지 값 = 기본).
+        assert_eq!(RefreshScroll::from_code("caret"), RefreshScroll::CaretTop);
+        assert_eq!(RefreshScroll::from_code("top"), RefreshScroll::Top);
+        assert_eq!(RefreshScroll::from_code("whatever"), RefreshScroll::Keep);
     }
 
     #[test]

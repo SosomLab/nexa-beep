@@ -75,6 +75,8 @@ const RADIO_DEFAULTS: &[(&str, &str)] = &[
     ("ui.typeahead_timeout", "2000"),
     ("ui.scrollbar_hide", "2000"),
     ("ui.tooltip_ms", "2000"),
+    // 목록 갱신 주기 — 기본 1500ms(사용자 확정 08-14).
+    ("ui.list_refresh_ms", "1500"),
     // 컨트롤 글리프 크기 — 기본 "크게"(사용자 확정 08-11 · 설정 Switch가 크게 보이도록).
     ("ui.control_size", "l"),
 ];
@@ -410,6 +412,35 @@ pub fn registry() -> &'static [Entry] {
                 "ms",
             ),
             key: "ui.scrollbar_hide",
+        },
+        // ── 목록 보기(08-14 사용자 확정) — 갱신 주기 + 갱신 시 스크롤 동작 ──
+        Entry {
+            cat: Msg::CatAppearance,
+            sub: Some(Msg::CatPeerList),
+            label: Msg::ListRefresh,
+            desc: Msg::ListRefreshDesc,
+            kind: SettingKind::RadioInput(
+                &[
+                    ("500", Msg::Ms500),
+                    ("1000", Msg::TaSec1),
+                    ("1500", Msg::Ms1500),
+                    ("3000", Msg::TaSec3),
+                ],
+                "ms",
+            ),
+            key: "ui.list_refresh_ms",
+        },
+        Entry {
+            cat: Msg::CatAppearance,
+            sub: Some(Msg::CatPeerList),
+            label: Msg::ListScroll,
+            desc: Msg::ListScrollDesc,
+            kind: SettingKind::Radio(&[
+                ("keep", Msg::ListScrollKeep),
+                ("caret", Msg::ListScrollCaret),
+                ("top", Msg::ListScrollTop),
+            ]),
+            key: "ui.list_refresh_scroll",
         },
         Entry {
             cat: Msg::CatAppearance,

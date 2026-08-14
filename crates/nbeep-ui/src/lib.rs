@@ -101,7 +101,7 @@ pub use offer_prompt::{OfferChoice, OfferInfo, OfferPromptWidget};
 pub use peer_info::{PeerInfo, PeerInfoWidget};
 pub use peer_list::{
     badge, Activated, GroupAction, GroupRow, HudPos, LinkState, PeerListWidget, PeerRow,
-    XferProgress, ROW_H,
+    RefreshScroll, XferProgress, ROW_H,
 };
 pub use profile::{ProfileValues, ProfileWidget};
 pub use prompt::TextPromptWidget;

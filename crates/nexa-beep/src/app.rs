@@ -1106,6 +1106,13 @@ struct App {
     /// 자동 재연결 스케줄(사용자 확정 08-13 ⓑ) — `(백오프 단계, 다음 시도 at_ms)`.
     /// 끊김·연결 실패 시 해제, 성공·수동 클릭·상한 도달 시 해제.
     reconnect: HashMap<PeerId, (u8, u64)>,
+    /// 발견발 목록 재조립 대기(08-14 — 목록 갱신 주기 설정). 발견 이벤트는 표시만
+    /// 바꾸므로 즉시 재조립하지 않고 주기에 맞춰 묶는다(그 외 경로는 즉시).
+    rows_dirty: bool,
+    /// 마지막 목록 재조립 시각(ms) — 어떤 경로든 재조립하면 갱신된다.
+    last_rows_ms: u64,
+    /// 목록 갱신 최소 간격(ms · `ui.list_refresh_ms` — 기본 1500 · 사용자 확정 08-14).
+    list_refresh_ms: u64,
     /// 그룹 저장(M5-1 · FR-G-1) — `groups.seg` 암호화 영속(트러스트와 같은 결 —
     /// 그룹 이름·구성원은 인간관계 목록이다).
     groups: nbeep_store::FileGroupStore,
@@ -2025,6 +2032,13 @@ impl App {
             changed = true;
         }
         if changed {
+            // 즉시 재조립하지 않는다(08-14 사용자 실기 — 800ms 비컨마다 목록이
+            // 재조립되며 스크롤이 튀었다). 주기 도래 시 아래에서 한 번에 반영.
+            self.rows_dirty = true;
+        }
+        if self.rows_dirty
+            && self.now_ms().saturating_sub(self.last_rows_ms) >= self.list_refresh_ms
+        {
             let mut inv = Invalidations::default();
             self.refresh_rows(&mut inv);
             if let Some(id) = self.main_id {
@@ -2036,6 +2050,9 @@ impl App {
     /// 목록 행 재구성 — 발견(PeerTable) + 신뢰(TrustStore)의 조립.
     fn refresh_rows(&mut self, inv: &mut Invalidations) {
         use nbeep_core::TrustStore as _;
+        // 어떤 경로로든 재조립했으면 발견발 대기분도 함께 소화된 것(주기 스로틀 기준점).
+        self.rows_dirty = false;
+        self.last_rows_ms = self.now_ms();
         // 발견 목록 + 비발견 상대(④ — 수동 등록·다른 서브넷 인바운드) 병합.
         // 발견이 나중에 닿으면 테이블 항목이 이긴다(같은 PeerId는 한 행).
         let mut entries = self.table.list();
@@ -3549,6 +3566,16 @@ impl App {
         if let Ok(ms) = self.settings.get("ui.typeahead_timeout").parse::<u64>() {
             self.list.set_typeahead_timeout(ms);
         }
+        // 목록 보기(08-14 사용자 확정) — 갱신 주기 + 갱신 시 스크롤 동작.
+        self.list_refresh_ms = self
+            .settings
+            .get("ui.list_refresh_ms")
+            .parse()
+            .unwrap_or(1500);
+        self.list
+            .set_refresh_scroll(nbeep_ui::RefreshScroll::from_code(
+                self.settings.get("ui.list_refresh_scroll"),
+            ));
         let mut inv = Invalidations::default();
         let pos = nbeep_ui::HudPos::from_code(self.settings.get("ui.typeahead_pos"));
         self.list.set_hud_pos(pos, &mut inv);
@@ -3797,6 +3824,16 @@ impl App {
                             "정방향"
                         }
                     );
+                }
+                // 목록 갱신 주기(08-14) — 발견발 재조립을 이 간격으로 묶는다.
+                "ui.list_refresh_ms" => {
+                    self.list_refresh_ms = value.parse().unwrap_or(1500);
+                    self.status = format!("목록 갱신 주기 = {}ms", self.list_refresh_ms);
+                }
+                // 목록 갱신 시 스크롤 동작(08-14 사용자 확정 3택).
+                "ui.list_refresh_scroll" => {
+                    self.list
+                        .set_refresh_scroll(nbeep_ui::RefreshScroll::from_code(&value));
                 }
                 // 툴팁 대기(08-14) — 열린 프로필 화면에 즉시 적용(hot-swap 원칙).
                 "ui.tooltip_ms" => {
@@ -7603,6 +7640,9 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         unread: HashMap::new(),
         last_read: HashMap::new(),
         reconnect: HashMap::new(),
+        rows_dirty: false,
+        last_rows_ms: 0,
+        list_refresh_ms: 1500,
         icon: winit::window::Icon::from_rgba(
             nbeep_ui::brand::ICON_RGBA.to_vec(),
             nbeep_ui::brand::ICON_SIZE,
