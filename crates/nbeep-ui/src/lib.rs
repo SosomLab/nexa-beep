@@ -34,6 +34,26 @@ pub mod icons {
     pub const PERSON_ALPHA: &[u8] = include_bytes!("../assets/icon-person-96.alpha");
     /// 변 크기(px).
     pub const PERSON_SIZE: u32 = 96;
+
+    /// 연결 상태 아이콘 4종 — **큰 자리 전용**(≥20px · [docs/14 §12-7]).
+    ///
+    /// 원본 = **Lucide**(ISC · 사용자 확정 08-14 — 한 세트로 통일) ·
+    /// 출처 SVG는 `assets/icons-src/`, 굽는 절차는 `tools/mkicons.sh`([docs/18]).
+    /// 상태 대응은 `Idle=PLUG` · `Connecting=PLUG_ZAP` · `Active=CABLE` · `Lost=UNPLUG`.
+    ///
+    /// ⚠️ 목록 행의 11px 배지에는 쓰지 않는다 — 그 자리는 실루엣 파냄(M3-19)이다.
+    pub mod link {
+        /// 플러그 하나(안 꽂힘) = `Idle`. 96×96 알파 마스크.
+        pub const PLUG_ALPHA: &[u8] = include_bytes!("../assets/icon-plug-96.alpha");
+        /// 플러그 + 번개 = `Connecting`. 96×96 알파 마스크.
+        pub const PLUG_ZAP_ALPHA: &[u8] = include_bytes!("../assets/icon-plug-zap-96.alpha");
+        /// 양끝 커넥터가 이어진 케이블 = `Active`. 96×96 알파 마스크.
+        pub const CABLE_ALPHA: &[u8] = include_bytes!("../assets/icon-cable-96.alpha");
+        /// 뽑히는 두 플러그 = `Lost`. 96×96 알파 마스크.
+        pub const UNPLUG_ALPHA: &[u8] = include_bytes!("../assets/icon-unplug-96.alpha");
+        /// 변 크기(px) — 네 자산 공통.
+        pub const SIZE: u32 = 96;
+    }
 }
 
 // UI 기반·컨트롤은 별도 라이브러리로 분리(08-14 — `nbeep-ctl` · DR-6/DR-21).

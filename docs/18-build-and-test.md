@@ -33,6 +33,9 @@
 | 크로스 빌드 | `cargo build --workspace --target <TARGET>` (예: `aarch64-pc-windows-msvc`) |
 | **크로스 타입검사** | `cargo check --workspace --all-targets --target <TARGET>` — **링크가 필요 없어 맥/리눅스에서도 Windows 타깃을 검사할 수 있다** |
 | 산출물 크기 | 릴리스 빌드 후 `wc -c target/release/<bin>` — **≤10MB/바이너리**(NFR-B-3) |
+| **아이콘 자산 굽기** | `tools/mkicons.sh [이름 …]` — `assets/icons-src/<name>.svg` → `crates/nbeep-ui/assets/icon-<name>-96.alpha`(9,216B 검증). 인자 없으면 전체 |
+
+> **아이콘 자산 절차**([14 §12-7](14-control-ux-architecture.md) · 원장 [10 §4](10-decision-record.md)): 본체는 **런타임 SVG 파서를 링크하지 않는다** — 모양을 빌드 전에 굽는다(`rsvg-convert` 96×96 → `magick -alpha extract` → 1채널 알파). 필요 도구는 macOS `brew install librsvg imagemagick` · Ubuntu `apt install librsvg2-bin imagemagick`. **CI에는 없다**(구운 결과물을 커밋하므로 빌드에 불필요). 구운 뒤 [`nbeep_ui::icons`](../crates/nbeep-ui/src/lib.rs)에 상수를 추가해야 실제로 쓰인다.
 
 **4타깃**: `x86_64-pc-windows-msvc` · `aarch64-pc-windows-msvc` · `x86_64-apple-darwin` · `aarch64-apple-darwin` · `x86_64-unknown-linux-gnu`.
 (테스트 실행은 네이티브 3-OS, ARM/타OS는 **빌드 검증만** — [CI](#4-ci--githubworkflowsciyml).)
