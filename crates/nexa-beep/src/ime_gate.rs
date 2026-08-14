@@ -27,6 +27,17 @@ const PENDING_MS: u64 = 150;
 const ECHO_MS: u64 = 120;
 /// 프리에딧 소거 → 포커스 이탈 순서 역전을 흡수하는 스태시 유효기간(ms · H-9).
 const STASH_MS: u64 = 300;
+/// 보류 자모가 "**같은 keypress**의 프리에딧"으로 인정되는 창(ms · H-27①).
+/// 같은 keypress의 keydown→Ime는 같은 OS 이벤트 처리 안이라 수 ms다 — 이보다 오래된
+/// 보류는 **유출된 이전 키**로 본다(같은 자모 반복 "ㅇㅇ"에서 starts_with 대조가
+/// 첫 ㅇ을 중복으로 오폐기하던 실측 08-15 — 문자 대조는 반복 입력을 못 가른다).
+const SAME_KEY_MS: u64 = 40;
+/// 프록시 지연 상쇄 창(ms · H-27②) — keydown이 먼저 오고 keytap 관측이 늦게 온
+/// 짝을 상쇄한다(같은 문자 · 이 시간 안).
+const OWED_MS: u64 = 800;
+/// 삼킴 판정에서 "조합을 닫은 그 keypress"를 인정하는 선행 여유(ms · H-27③) —
+/// keytap은 winit의 Commit 처리보다 **먼저** 찍히므로 rt가 cleared보다 약간 앞선다.
+const PRE_CLEAR_SLACK_MS: u64 = 300;
 
 /// 버퍼에 가할 명령 — 호스트가 순서대로 적용한다(라우팅·표시만, 상태 판단 없음).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,9 +96,11 @@ pub struct ImeGate<W: Copy + Eq> {
     leak_win: Option<W>,
     /// keytap 관측 링(문자, 시각 — G1): winit보다 먼저 보는 **순서의 원천**.
     raw: std::collections::VecDeque<(char, u64)>,
-    /// 배달 증거 링(문자, 시각 — G1): keydown·commit 어느 경로든 버퍼에 닿은 ASCII.
-    /// raw 대조에서 "이미 배달됨"을 가려 **프록시 지연 재주입**을 막는다.
-    delivered: std::collections::VecDeque<(char, u64)>,
+    /// 선배달 장부(문자, 시각 — H-27②): keydown이 도착했는데 raw에 짝이 없었다
+    /// = keytap 관측이 프록시 지연으로 늦는 중. 늦게 온 관측은 여기와 상쇄돼
+    /// **큐에 들어가지 않는다**(재주입 원천 차단 — 배달 증거 링의 후속 설계.
+    /// 증거 링은 같은 문자 반복(222)에서 진짜 삼킴까지 "이미 배달됨"으로 막았다).
+    owed: std::collections::VecDeque<(char, u64)>,
 }
 
 impl<W: Copy + Eq> Default for ImeGate<W> {
@@ -104,7 +117,7 @@ impl<W: Copy + Eq> Default for ImeGate<W> {
             leak: Composer::new(),
             leak_win: None,
             raw: std::collections::VecDeque::new(),
-            delivered: std::collections::VecDeque::new(),
+            owed: std::collections::VecDeque::new(),
         }
     }
 }
@@ -139,81 +152,109 @@ impl<W: Copy + Eq> ImeGate<W> {
         false
     }
 
-    // ── G1 · keytap 대조(순서 보존 주입) ────────────────────────────────────
+    // ── G1 · keytap 대조(순서 보존 주입 — H-27 개정 3차 08-15) ──────────────
+    //
+    // 불변식: **keytap 관측 수 = winit 도달 수 + 삼켜진 수.** 정렬은 FIFO 1:1이고
+    // 문자 내용은 정렬의 보조일 뿐이다 — 같은 문자 반복(222)에서 내용 대조만 쓰면
+    // 삼켜진 키와 정상 키를 못 가른다(실측 08-15: "ㅇㅇㅇ222" → 2 하나 유실).
+    // 프록시 지연(관측이 keydown보다 늦게 도착)은 **선배달 장부(owed)로 원천 상쇄**
+    // 한다 — 그래서 큐에 남는 잔여는 전부 진짜 삼킴 후보다.
 
-    /// keytap 관측(무수식 ASCII keydown — winit보다 먼저 도착 순서대로).
+    /// keytap 관측(무수식 ASCII keydown — 보통 winit보다 먼저). 프록시가 늦어
+    /// keydown이 먼저 지나갔으면(owed) 그 짝을 상쇄하고 큐에 넣지 않는다.
     pub fn observe_raw(&mut self, c: char, t: u64) {
+        if let Some(i) = self
+            .owed
+            .iter()
+            .position(|&(oc, ot)| oc == c && t.abs_diff(ot) < OWED_MS)
+        {
+            self.owed.remove(i); // 늦게 온 관측 — 이미 배달된 keydown의 짝
+            return;
+        }
         self.raw.push_back((c, t));
         if self.raw.len() > 8 {
             self.raw.pop_front();
         }
     }
 
-    /// 배달 증거 기록(내부 — Out::Char로 나가는 ASCII 전부).
-    fn note_delivered(&mut self, c: char, t: u64) {
-        if c.is_ascii() && !c.is_ascii_control() {
-            self.delivered.push_back((c, t));
-            if self.delivered.len() > 16 {
-                self.delivered.pop_front();
-            }
-        }
+    /// 이 관측이 "조합을 닫았거나 닫힌 직후의 키"인가 — 삼킴은 그 자리에서만
+    /// 일어난다(H-26 실측 규칙). 조합을 닫은 keypress 자신은 keytap이 winit의
+    /// Commit 처리보다 먼저 찍혀 rt가 cleared보다 약간 앞선다(선행 여유로 흡수).
+    fn swallow_eligible(&self, rt: u64) -> bool {
+        self.cleared_ms.is_some_and(|ct| {
+            rt.saturating_add(PRE_CLEAR_SLACK_MS) >= ct && rt.saturating_sub(ct) < 2_000
+        })
     }
 
-    /// 방출 직전 봉인 — Out::Char 전부를 배달 증거로 기록한 뒤 그대로 돌려준다.
-    fn seal(&mut self, outs: Vec<Out<W>>, t: u64) -> Vec<Out<W>> {
-        for o in &outs {
-            if let Out::Char(_, c) = o {
-                self.note_delivered(*c, t);
-            }
-        }
-        outs
-    }
-
-    /// 이 문자가 최근(±800ms) 배달됐는가 — 프록시 지연 재주입 방지의 핵심.
-    fn was_delivered(&self, c: char, t: u64) -> bool {
-        self.delivered
-            .iter()
-            .any(|&(dc, dt)| dc == c && dt.abs_diff(t) < 800)
-    }
-
-    /// ★ keydown 도달 시 raw 대조(G1 개정 2차): 현재 문자를 만나기 전의 잔여 중
-    /// **배달 증거가 없고 조합 직후인 것만** = winit이 삼킨 키 → 현재 키보다 먼저
-    /// 주입한다(순서 보존). 배달 증거가 있는 잔여 = 프록시 지연 잔재 → 조용히 소진.
+    /// ★ keydown 도달 시 raw 대조: 큐에서 현재 키의 짝을 찾아 소진하고, 그보다
+    /// 앞의 잔여(= winit이 삼킨 키)를 현재 키보다 **먼저** 주입한다(순서 보존).
+    /// 짝이 없으면(관측이 아직 안 옴 — 프록시 지연) 선배달 장부에 적는다.
     pub fn reconcile_raw(&mut self, id: W, cur: char, now: u64, ime_on: bool) -> Vec<Out<W>> {
         let mut outs = Vec::new();
-        if !cur.is_ascii() || self.composing {
+        if !cur.is_ascii() {
             return outs;
         }
+        if self.composing {
+            // 조합 중 keydown — 주입은 없지만 **짝은 소진**한다. 안 하면 이 키의
+            // 관측이 조합이 닫힌 뒤 stale에서 "삼킨 키"로 오판돼 이중 주입된다
+            // (H-11 보류 방출과 겹침). 앞선 잔여(이전 세션 삼킴 후보)는 건드리지
+            // 않고 이 문자만 골라 뺀다 — 그 잔여는 조합이 닫힌 뒤 stale 몫.
+            if let Some(pos) = self.raw.iter().position(|&(rc, _)| rc == cur) {
+                self.raw.remove(pos);
+            } else {
+                self.owed.push_back((cur, now));
+                if self.owed.len() > 8 {
+                    self.owed.pop_front();
+                }
+            }
+            return outs;
+        }
+        let mut matched = false;
         while let Some(&(rc, rt)) = self.raw.front() {
             if rc == cur {
-                self.raw.pop_front(); // 정상 도달 — 대조 소진
+                self.raw.pop_front(); // 현재 키의 짝 — 대조 소진
+                matched = true;
                 break;
             }
             self.raw.pop_front();
-            let after_ime = self
-                .cleared_ms
-                .is_some_and(|ct| rt >= ct && rt.saturating_sub(ct) < 2_000);
-            if after_ime && !self.was_delivered(rc, rt) {
-                outs.extend(self.route_char(id, rc, now, ime_on));
+            if self.swallow_eligible(rt) {
+                outs.extend(self.inject_char(id, rc, now, ime_on));
+            }
+        }
+        if !matched {
+            // 관측이 아직 안 온 keydown — 늦게 오면 observe_raw가 상쇄한다.
+            self.owed.push_back((cur, now));
+            if self.owed.len() > 8 {
+                self.owed.pop_front();
             }
         }
         outs
     }
 
     /// 틱 폴백(G1): 뒤따르는 키가 없어 대조가 못 정산한 250ms 경과 잔여를 주입.
+    /// ★ **조합 중엔 기다린다**(H-27③ · 08-15 실타 "ㅇㅇ2ㅇ22") — 삼켜진 키의
+    /// 제자리는 지금 조합 중인 음절의 Commit **뒤**다. 여기서 주입하면 확정될
+    /// 글자보다 앞에 박힌다. 조합이 닫히면 다음 틱이 이어서 정산한다.
     pub fn reconcile_stale(&mut self, id: W, now: u64, ime_on: bool) -> Vec<Out<W>> {
         let mut outs = Vec::new();
+        if self.composing {
+            return outs;
+        }
         while let Some(&(rc, rt)) = self.raw.front() {
             if now.saturating_sub(rt) < 250 {
                 break;
             }
             self.raw.pop_front();
-            let after_ime = self
-                .cleared_ms
-                .is_some_and(|ct| rt >= ct && rt.saturating_sub(ct) < 2_000);
-            if after_ime && !self.was_delivered(rc, rt) {
-                outs.extend(self.route_char(id, rc, now, ime_on));
+            if self.swallow_eligible(rt) {
+                outs.extend(self.inject_char(id, rc, now, ime_on));
             }
+        }
+        // 짝 없이 늙은 선배달 장부 청소(관측이 영영 안 온 경우 — 모니터 미부착 등).
+        while let Some(&(_, ot)) = self.owed.front() {
+            if now.saturating_sub(ot) < OWED_MS {
+                break;
+            }
+            self.owed.pop_front();
         }
         outs
     }
@@ -265,10 +306,9 @@ impl<W: Copy + Eq> ImeGate<W> {
             return Vec::new();
         };
         if hangul::is_jamo(c) && ime_on {
-            let outs = self.leak_feed(id, c);
-            return self.seal(outs, _now);
+            return self.leak_feed(id, c);
         }
-        self.seal(vec![Out::Char(id, c)], _now)
+        vec![Out::Char(id, c)]
     }
 
     /// 틱(~5Hz): 보류 유예(150ms) 경과분 방출. 조합 중엔 비자모 보류를 유지한다
@@ -334,26 +374,44 @@ impl<W: Copy + Eq> ImeGate<W> {
         (true, out)
     }
 
+    /// 보충 주입 라우팅(G1) — 진짜 keydown이면 leak_intercept가 했을 일(유출 조합
+    /// 선확정)을 대신한 뒤 라우팅한다. 안 하면 주입 문자가 leak에 보류 중인 음절보다
+    /// **앞에** 박힌다(08-15 재생에서 발견 — 주입도 입력 순서의 일원이다).
+    fn inject_char(&mut self, id: W, c: char, now: u64, ime_on: bool) -> Vec<Out<W>> {
+        let mut outs = if hangul::is_jamo(c) {
+            Vec::new() // 자모 주입은 leak 합류가 곧 순서 유지
+        } else {
+            self.flush_leak()
+        };
+        outs.extend(self.route_char(id, c, now, ime_on));
+        outs
+    }
+
     /// ④ 문자 라우팅: 자모 = 보류-판정 등록(IME 켠 창), 그 외 = 즉시 라우팅.
     pub fn route_char(&mut self, id: W, c: char, now: u64, ime_on_window: bool) -> Vec<Out<W>> {
         if hangul::is_jamo(c) && ime_on_window {
             self.pending = Some((id, c, now, true));
             return Vec::new();
-            // (자모 보류 — 배달은 flush 시점에 봉인된다.)
         }
-        self.seal(vec![Out::Char(id, c)], now)
+        vec![Out::Char(id, c)]
     }
 
     // ── IME 이벤트 경로 ─────────────────────────────────────────────────────
 
-    /// Preedit 도착 — 보류 자모 판정(H-14: 프리에딧이 그 자모로 시작할 때만 중복
-    /// 폐기, 아니면 유출 → leak 합류) · 조합 추적 · 표시 문자열 합성.
+    /// Preedit 도착 — 보류 자모 판정(H-14 · H-27①) · 조합 추적 · 표시 문자열 합성.
+    ///
+    /// 보류 자모가 "이 프리에딧과 같은 keypress"였을 때만 중복 폐기한다. 같은
+    /// keypress의 keydown→Ime는 같은 OS 처리 안이라 수 ms — 오래된 보류는 문자가
+    /// 같아도(starts_with) **유출된 이전 키**다(08-15 실측: "ㅇㅇ"에서 첫 ㅇ이
+    /// 다음 키의 preedit "ㅇ"에 중복으로 오폐기돼 한 글자가 사라졌다 — 문자 대조는
+    /// 같은 자모 반복을 못 가른다. 시각이 가른다).
     pub fn preedit(&mut self, id: W, text: &str, now: u64) -> Vec<Out<W>> {
         let mut outs = Vec::new();
-        if let Some((pid, c, _, _)) = self.pending {
+        if let Some((pid, c, t, _)) = self.pending {
             if hangul::is_jamo(c) {
                 self.pending = None;
-                if !text.starts_with(c) {
+                let same_keypress = now.saturating_sub(t) < SAME_KEY_MS && text.starts_with(c);
+                if !same_keypress {
                     outs.extend(self.leak_feed(pid, c));
                 }
             }
@@ -414,7 +472,7 @@ impl<W: Copy + Eq> ImeGate<W> {
             for c in text.chars() {
                 outs.extend(self.leak_feed(id, c));
             }
-            return self.seal(outs, now);
+            return outs;
         }
         // 위젯 조합 표시 소거(H-23 — 포커스 이탈형 확정은 소거 Preedit가 안 온다).
         outs.push(Out::Preedit(id, String::new()));
@@ -444,7 +502,7 @@ impl<W: Copy + Eq> ImeGate<W> {
                 outs.push(Out::Key(id, k, shift, primary));
             }
         }
-        self.seal(outs, now)
+        outs
     }
 
     /// 포커스 이탈 — 유출 조합·조합 중 프리에딧을 확정 합류(H-9 · 스태시 300ms).
@@ -467,7 +525,7 @@ impl<W: Copy + Eq> ImeGate<W> {
                 outs.push(Out::Char(id, c));
             }
         }
-        self.seal(outs, now)
+        outs
     }
 
     /// 저장 트리거 직전 확정(G2 — "저장 트리거 전 조합 확정"): 유출 조합 + 조합 중
@@ -485,7 +543,7 @@ impl<W: Copy + Eq> ImeGate<W> {
                 outs.push(Out::Char(id, c));
             }
         }
-        self.seal(outs, now)
+        outs
     }
 
     // ── 내부 ────────────────────────────────────────────────────────────────
@@ -627,6 +685,16 @@ mod tests {
             let outs = self.gate.commit(W, t, self.now, true);
             self.apply(outs);
         }
+        /// 사람 타이핑 간격 재현(H-27① — 같은 keypress 판정은 시각이 가른다).
+        fn lull(&mut self, ms: u64) {
+            self.now += ms;
+        }
+        /// 틱 폴백 구동(시각 경과 포함).
+        fn stale(&mut self, ms: u64) {
+            self.now += ms;
+            let outs = self.gate.reconcile_stale(W, self.now, true);
+            self.apply(outs);
+        }
     }
 
     /// ★ G1 재생 — 소비된 첫 1byte가 **다음 키보다 먼저** 주입된다(순서 보존).
@@ -660,6 +728,68 @@ mod tests {
         let outs = d.gate.reconcile_stale(W, d.now + 400, true);
         d.apply(outs);
         assert_eq!(d.buf, "다123", "재주입 없이 정확히 한 번씩");
+    }
+
+    /// ★ H-27 재생(08-15 합성 실측 트레이스 원문) — "ㅇㅇㅇ222"가 "ㅇㅇ22"로
+    /// 무너지던 2중 원인의 박제: ① 유출된 첫 ㅇ(보류)이 **다음 키**의 preedit
+    /// "ㅇ"에 starts_with 중복으로 오폐기(같은 자모 반복 — 시각으로 갈라야 한다)
+    /// ② 삼켜진 '2'가 같은 문자 반복 대조에서 정상 도달로 오인 소진 + 배달 증거
+    /// 가드에 막혀 영영 미주입. 기대 = 전 글자 생존 "ㅇㅇㅇ222".
+    #[test]
+    fn replay_h27_same_char_runs_survive() {
+        let mut d = Driver::new();
+        d.key_char('ㅇ'); // 첫 키 유출(보류) — IME 이벤트가 안 붙는다
+        d.lull(150);
+        d.preedit("ㅇ"); // 둘째 키의 프리에딧 — 보류는 150ms 전 = 유출(leak 합류)
+        d.preedit("");
+        d.commit("ㅇ"); // 낱개 자모 → leak: ㅇ+ㅇ 비결합 = 첫 ㅇ 방출·둘째 보류
+        d.preedit("");
+        d.preedit("ㅇ"); // 셋째 키
+        d.preedit("");
+        d.commit("ㅇ"); // leak: 둘째 ㅇ 방출·셋째 보류
+        d.preedit("");
+        // 숫자 연타 — 첫 '2'는 winit이 삼킴(관측만 있음 · H-26).
+        d.raw('2');
+        d.raw('2');
+        d.key_char('2'); // 둘째 '2' — leak_intercept가 셋째 ㅇ을 먼저 확정
+        d.raw('2');
+        d.key_char('2'); // 셋째 '2'
+        d.stale(400); // 잔여(삼켜진 '2') 정산
+        assert_eq!(d.buf, "ㅇㅇㅇ222", "같은 문자 반복에서도 전 글자 생존");
+    }
+
+    /// ★ H-27③ 재생(08-15 사용자 실타 "ㅇㅇ2ㅇ22") — 조합 중 stale 틱은 **기다린다**.
+    /// 삼켜진 키의 제자리는 조합 중인 음절의 Commit 뒤다 — 조합 중 주입하면
+    /// 확정될 글자보다 앞에 박힌다(2가 셋째 ㅇ 앞에 오던 실타).
+    #[test]
+    fn replay_h27_stale_waits_for_composition_close() {
+        let mut d = Driver::new();
+        d.preedit("ㅇ");
+        d.preedit("");
+        d.commit("ㅇ");
+        d.preedit("");
+        d.preedit("ㅇ"); // 둘째 음절 조합 중
+        d.raw('2'); // 삼켜진 '2'(세션을 닫는 keypress — Commit이 다음 틱까지 늦는다)
+        d.stale(260); // ★ 틱이 Commit보다 먼저 — 조합 중이므로 주입 금지(기다린다)
+        assert_eq!(d.buf, "", "조합 중엔 주입하지 않는다(첫 ㅇ은 leak 보류 중)");
+        d.preedit("");
+        d.commit("ㅇ"); // 삼킨 keypress의 Commit이 뒤늦게 도착(조합 닫힘)
+        d.stale(400); // 이제 정산 — Commit 뒤 제자리(leak 보류 음절도 선확정)
+        assert_eq!(d.buf, "ㅇㅇ2", "삼켜진 키는 Commit 뒤 제자리에");
+    }
+
+    /// H-27② — 조합 중 눌린 비자모의 관측 짝은 소진된다(안 하면 Commit 뒤 stale이
+    /// 그 관측을 삼킴으로 오판해 **이중 주입** — H-11 보류 방출과 겹친다).
+    #[test]
+    fn replay_h27_composing_keydown_consumes_its_raw() {
+        let mut d = Driver::new();
+        d.preedit("껀");
+        d.raw('?');
+        d.key_char('?'); // 조합 중 — 보류(Swallowed) · 관측 짝 소진
+        d.preedit("");
+        d.commit("껀"); // 본문에 '?' 없음 → 보류 방출(H-11)
+        d.stale(400); // 관측이 남았다면 여기서 '?'가 한 번 더 박힌다
+        assert_eq!(d.buf, "껀?", "보류 방출 1회뿐 — 관측 이중 주입 없음");
     }
 
     /// G1 — 평시(조합 없음)엔 어떤 주입도 없다.

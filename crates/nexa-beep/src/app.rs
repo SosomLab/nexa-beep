@@ -6026,6 +6026,9 @@ impl ApplicationHandler<AppEvent> for App {
                 // keytap 관측(G1) — 정산은 게이트가(다음 keydown 대조 · 틱 폴백).
                 let _ = el;
                 let now = self.now_ms();
+                if self.ime_trace {
+                    eprintln!("[ime] raw={c:?}");
+                }
                 self.ime.observe_raw(c, now);
             }
             AppEvent::Recv {
@@ -7251,8 +7254,9 @@ impl ApplicationHandler<AppEvent> for App {
                     _ => crate::ime_gate::KeyIn::Other,
                 };
                 let now_ms = self.now_ms();
-                // ★ G1(개정 2차): raw 대조·배달 증거·주입은 전부 게이트가 판정 —
-                // 프록시 지연 재주입("가나다1223")을 배달 증거 링이 막는다(재생 테스트).
+                // ★ G1(개정 3차 · H-27): raw 대조·선배달 상쇄·주입은 전부 게이트 판정 —
+                // 같은 문자 반복(222)·프록시 지연("가나다1223")·조합 중 순서는
+                // ime_gate의 replay_h27_*·replay_g1_* 재생 테스트가 지킨다.
                 if let crate::ime_gate::KeyIn::Char(cur) = key_in {
                     if !self.primary_down {
                         let ime_on = !self.is_list_mode(id);
