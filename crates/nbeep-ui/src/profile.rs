@@ -92,8 +92,6 @@ pub struct ProfileWidget {
     tip_delay_ms: u64,
     changes: Vec<(&'static str, String)>,
     pick_image: bool,
-    /// 큰 아바타 원 클릭(08-14) — 호스트가 "내 프로필 카드"를 연다(1회성).
-    view_req: bool,
     closed: bool,
 }
 
@@ -155,7 +153,6 @@ impl ProfileWidget {
             },
             changes: Vec::new(),
             pick_image: false,
-            view_req: false,
             closed: false,
         }
     }
@@ -253,12 +250,6 @@ impl ProfileWidget {
 
     pub fn take_pick_image(&mut self) -> bool {
         std::mem::take(&mut self.pick_image)
-    }
-
-    /// 큰 아바타 원이 클릭됐는가(1회성 — 08-14) — 호스트가 **내 프로필 카드**
-    /// (상대에게 보이는 그대로)를 연다.
-    pub fn take_view_request(&mut self) -> bool {
-        std::mem::take(&mut self.view_req)
     }
 
     /// 닫기 요청(1회성 · Esc).
@@ -428,18 +419,6 @@ impl Widget for ProfileWidget {
                 self.name.popup_open() || self.email.popup_open() || self.phone.popup_open();
             if !popup {
                 self.closed = true;
-                return;
-            }
-        }
-        // 큰 아바타 원 클릭 = 프로필 보기 요청(08-14 사용자 요청) — 원 **안쪽**만
-        // (사각 히트가 아니라 반지름 판정 — 모서리 빈 곳 클릭은 오발동하지 않게).
-        if let InputEvent::MouseDown { x, y, .. } = *ev {
-            let b = self.bounds;
-            let d = self.s(120);
-            let (cx, cy) = (b.x + b.w / 2, b.y + self.s(40) + d / 2);
-            let (dx, dy) = (x - cx, y - cy);
-            if dx * dx + dy * dy <= (d / 2) * (d / 2) {
-                self.view_req = true;
                 return;
             }
         }
@@ -779,38 +758,6 @@ mod tests {
         let mut inv = Invalidations::default();
         w.set_bounds(Rect::new(0, 0, 440, 430), &mut inv);
         (w, inv)
-    }
-
-    /// 큰 아바타 원 클릭 = 프로필 보기 요청(08-14) — **원 안쪽만**(모서리 제외).
-    #[test]
-    fn avatar_circle_click_requests_view() {
-        let (mut w, mut inv) = widget();
-        let b = w.bounds();
-        let d = w.s(120);
-        let (cx, cy) = (b.x + b.w / 2, b.y + w.s(40) + d / 2);
-        // 중심 클릭 = 요청.
-        w.on_event(
-            &InputEvent::MouseDown {
-                x: cx,
-                y: cy,
-                shift: false,
-                primary: true,
-            },
-            &mut inv,
-        );
-        assert!(w.take_view_request(), "원 중심 클릭 = 프로필 보기 요청");
-        assert!(!w.take_view_request(), "1회성");
-        // 사각 히트박스의 모서리(원 밖) = 미발동.
-        w.on_event(
-            &InputEvent::MouseDown {
-                x: cx - d / 2 + 2,
-                y: cy - d / 2 + 2,
-                shift: false,
-                primary: true,
-            },
-            &mut inv,
-        );
-        assert!(!w.take_view_request(), "원 밖(모서리)은 요청이 아니다");
     }
 
     /// 토글 클릭 → (키, on/off) 변경 보고.
