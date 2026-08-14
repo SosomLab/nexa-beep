@@ -14,6 +14,7 @@
 //!                      · [avatar: len u16 BE ‖ UTF-8]    ← flags bit3일 때만(08-14)
 //!                      · [border: len u16 BE ‖ UTF-8]    ← flags bit4일 때만(08-14)
 //!                    }  flags: bit0=name · bit1=email · bit2=phone · bit3=avatar · bit4=border
+//!                              · bit5=image_keep(값 없음 — M3-21 경량 갱신)
 //! kind 3 = ImageChunk{ offset u32 BE · last u8 · bytes } ← image_len>0일 때만 이어짐
 //! ```
 //!
@@ -53,6 +54,12 @@ pub enum ProfileMsg {
         /// 아바타 보더 색 `"#RRGGBB"`(기본정보 공개 시 — 08-14). 수신측은
         /// [`crate::avatar::parse_border`]로 검증하고 무효는 버린다.
         border: Option<String>,
+        /// **경량 갱신 마커**(M3-21 — flags bit5 · 값 없음): 참이면 "공유 사진은
+        /// 그대로 — 네 캐시를 유지하라". 텍스트·토글만 바뀐 변경이 256KiB 사진을
+        /// 매번 다시 실어 나르지 않게 한다. 거짓 + `image_len` 0 = 기존 규칙
+        /// 그대로 **사진 철회**. 구버전 수신측은 이 비트를 몰라 철회로 읽는다
+        /// (다음 성립 프리페치/Full에서 회복 — 전방 관용의 대가).
+        image_keep: bool,
     },
     /// 이미지 조각(Info 직후 순서대로 · `last`가 마지막 표시).
     ImageChunk {
@@ -78,6 +85,7 @@ impl ProfileMsg {
                 image_len,
                 avatar,
                 border,
+                image_keep,
             } => {
                 let mut out = Vec::with_capacity(64);
                 out.push(K_INFO);
@@ -96,6 +104,11 @@ impl ProfileMsg {
                 }
                 if border.is_some() {
                     flags |= 16;
+                }
+                // bit5 = image_keep(M3-21) — 값 필드가 없어 같은 flags 바이트만 쓴다
+                // (구버전은 모르는 비트를 안 보므로 오프셋이 틀어지지 않는다).
+                if *image_keep {
+                    flags |= 32;
                 }
                 out.push(flags);
                 for field in [name, email, phone].into_iter().flatten() {
@@ -161,6 +174,7 @@ impl ProfileMsg {
                     image_len,
                     avatar,
                     border,
+                    image_keep: flags & 32 != 0,
                 })
             }
             K_IMAGE => {
@@ -193,6 +207,7 @@ mod tests {
                 image_len: 1234,
                 avatar: None,
                 border: None,
+                image_keep: false,
             },
             ProfileMsg::Info {
                 name: None,
@@ -201,6 +216,7 @@ mod tests {
                 image_len: 0,
                 avatar: None,
                 border: None,
+                image_keep: false,
             },
             ProfileMsg::Info {
                 name: Some("bob".into()),
@@ -209,6 +225,7 @@ mod tests {
                 image_len: 0,
                 avatar: Some("tiger".into()),
                 border: Some("#3D8BFF".into()),
+                image_keep: false,
             },
             ProfileMsg::ImageChunk {
                 offset: 32 * 1024,
@@ -231,6 +248,7 @@ mod tests {
             image_len: 0,
             avatar: None,
             border: None,
+            image_keep: false,
         }
         .encode();
         // kind(1)+flags(1)+len(2)+"bob"(3)+image_len(4) = 11 — 이메일·전화 자리가 없다.
@@ -251,6 +269,7 @@ mod tests {
             image_len: 0,
             avatar: None,
             border: None,
+            image_keep: false,
         }
         .encode();
         assert!(matches!(
@@ -265,12 +284,62 @@ mod tests {
             image_len: 0,
             avatar: Some("ox".into()),
             border: None,
+            image_keep: false,
         }
         .encode();
         newer.extend_from_slice(b"future-bytes");
         assert!(matches!(
             ProfileMsg::decode(&newer),
             Some(ProfileMsg::Info { avatar: Some(a), .. }) if a == "ox"
+        ));
+    }
+
+    /// ★ M3-21 경량 갱신 — `image_keep`은 flags bit5뿐(값 필드 없음)이라
+    /// ① 왕복 보존 ② 레이아웃 불변(바이트 수 동일 — 구버전 오프셋 안전)
+    /// ③ 구버전 인코딩(bit5 없음) = false 해석.
+    #[test]
+    fn image_keep_bit_round_trips_without_layout_change() {
+        let base = ProfileMsg::Info {
+            name: Some("bob".into()),
+            email: Some("b@x.y".into()),
+            phone: None,
+            image_len: 0,
+            avatar: None,
+            border: Some("#3D8BFF".into()),
+            image_keep: false,
+        };
+        let kept = match &base {
+            ProfileMsg::Info {
+                name,
+                email,
+                phone,
+                image_len,
+                avatar,
+                border,
+                ..
+            } => ProfileMsg::Info {
+                name: name.clone(),
+                email: email.clone(),
+                phone: phone.clone(),
+                image_len: *image_len,
+                avatar: avatar.clone(),
+                border: border.clone(),
+                image_keep: true,
+            },
+            _ => unreachable!(),
+        };
+        assert_eq!(ProfileMsg::decode(&kept.encode()).unwrap(), kept);
+        assert_eq!(
+            base.encode().len(),
+            kept.encode().len(),
+            "bit5는 값 필드가 없다 — 레이아웃 불변(구버전 오프셋 안전)"
+        );
+        assert!(matches!(
+            ProfileMsg::decode(&base.encode()),
+            Some(ProfileMsg::Info {
+                image_keep: false,
+                ..
+            })
         ));
     }
 

@@ -452,6 +452,7 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
                             image_len: u32::try_from(img.len()).unwrap_or(0),
                             avatar: None, // 테스트 도구 — 내장 아바타·보더는 GUI 몫
                             border: None,
+                            image_keep: false, // 언제나 전체 응답(테스트 도구)
                         }
                         .encode()];
                         let mut off = 0usize;

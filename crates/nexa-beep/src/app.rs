@@ -141,6 +141,9 @@ enum AppEvent {
         avatar: Option<String>,
         /// 아바타 보더 색 "#RRGGBB"(08-14) — 수신측 parse_border 검증 후 반영.
         border: Option<String>,
+        /// 경량 갱신 마커(M3-21) — 참이면 "공유 사진 그대로": 캐시를 지우지 않고
+        /// 이전 사진·아바타를 승계한다(와이어 `Info.image_keep`).
+        image_keep: bool,
     },
     /// 격리 디코드 완료(워커 → 메인 · M4-5). ★ 그전엔 자식 프로세스 왕복(스폰 +
     /// Defender 검사 — Windows 실측 1~2초)이 **메인 스레드에서 동기**로 돌아, 대화창이
@@ -335,6 +338,36 @@ fn parse_profile_meta(s: &str) -> (Option<String>, Option<(u8, u8, u8)>) {
     (key, border)
 }
 
+/// 프로필 전파 유형(M3-21 — "되도록 묶어 한 번에, 필요하면 분화" · 사용자 확정).
+/// 정보량이 작아 기본은 전체 묶음이고, 무거운 것(사진 256KiB)만 유형을 가른다.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProfileScope {
+    /// Info + 사진 청크 전부 — 성립 프리페치·Request 응답·사진에 영향 주는 변경.
+    Full,
+    /// Info 한 프레임만 — 텍스트·토글·아바타 키·보더 변경. 공유 사진이 있으면
+    /// `image_keep` 마커로 "캐시 유지"를 알린다(사진 재전송 생략).
+    Info,
+}
+
+/// 이 설정 키의 변경이 프로필 전파를 요구하는가 — 요구하면 어떤 유형인가(M3-21).
+/// **프로필 응답 구성이 읽는 키 전부**가 여기 있어야 한다(빠지면 그 변경은 이미
+/// 연결된 상대에게 영영 안 닿는다 — 08-14 실기: 이메일 공유를 켰는데 상대는 "(비공개)").
+fn profile_push_scope(key: &str) -> Option<ProfileScope> {
+    match key {
+        // 사진 유무·내용이 바뀔 수 있는 키 = 전체(사진 청크 동반).
+        "profile.image_path" | "profile.share.basic" => Some(ProfileScope::Full),
+        // 텍스트·토글·아바타 키·보더 = 경량(사진은 image_keep으로 유지 통지).
+        "profile.display_name"
+        | "profile.email"
+        | "profile.phone"
+        | "profile.share.email"
+        | "profile.share.phone"
+        | "profile.avatar"
+        | "profile.avatar_border" => Some(ProfileScope::Info),
+        _ => None,
+    }
+}
+
 /// 대화 상태 — **뷰(창)와 분리**(DR-26). 세션은 **액터 스레드**가 소유하고, 여기엔 그
 /// 액터로 보내는 송신 채널과 스레드 이력만 둔다(M2-7 — 비동기 수신 펌프).
 struct Conversation {
@@ -490,10 +523,13 @@ fn spawn_session_actor(
                         image_len,
                         avatar,
                         border,
+                        image_keep,
                     }) => {
                         let len = image_len as usize;
                         if len == 0 || len > nbeep_core::PROFILE_IMAGE_MAX {
                             // 이미지 없음 또는 상한 초과 주장 — 텍스트만 반영(fail-closed).
+                            // image_keep(M3-21 경량 갱신)은 그대로 올린다 — 캐시 유지
+                            // 판단은 메인 몫(peer_profiles가 거기 있다).
                             let _ = proxy.send_event(AppEvent::PeerProfile {
                                 peer,
                                 name,
@@ -502,6 +538,7 @@ fn spawn_session_actor(
                                 image: None,
                                 avatar,
                                 border,
+                                image_keep,
                             });
                             pending_profile = None;
                         } else {
@@ -536,6 +573,9 @@ fn spawn_session_actor(
                                     image,
                                     avatar,
                                     border,
+                                    // 청크가 따라온 응답은 언제나 전체(Full) — 유지
+                                    // 마커가 아니라 실물이 왔다.
+                                    image_keep: false,
                                 });
                                 pending_profile = None;
                             }
@@ -2436,7 +2476,16 @@ impl App {
 
     /// 내 프로필 응답 프레임(M3-17) — **공개 정책 판단은 여기 한 곳**(메인 스레드).
     /// 켠 필드만 싣고, 이미지는 기본정보 공개가 켜져 있고 상한 이내일 때만 청크로 잇는다.
+    /// 전체 프로필 프레임(Info + 사진 청크) — 성립 프리페치 응답·Request 응답·
+    /// 사진에 영향 주는 변경(M3-21 [`ProfileScope::Full`])이 쓴다.
     fn my_profile_frames(&self) -> Vec<Vec<u8>> {
+        self.my_profile_frames_scoped(ProfileScope::Full)
+    }
+
+    /// scope별 프로필 프레임(M3-21 — "되도록 묶어 한 번에, 필요하면 유형 분화").
+    /// [`ProfileScope::Info`]는 Info 한 프레임만 — 공유 사진이 있으면 `image_keep`
+    /// 마커로 "네 캐시 유지"를 알린다(256KiB 사진을 텍스트 변경마다 재전송하지 않게).
+    fn my_profile_frames_scoped(&self, scope: ProfileScope) -> Vec<Vec<u8>> {
         use nbeep_core::{ProfileMsg, PROFILE_IMAGE_CHUNK, PROFILE_IMAGE_MAX};
         let on = |k: &str| self.settings.get(k) == "on";
         let share_basic = on("profile.share.basic");
@@ -2452,17 +2501,30 @@ impl App {
             .then(|| self.settings.get("profile.phone").to_string())
             .filter(|s| !s.is_empty());
         // 이미지 — 기본정보 공개 + 파일 존재 + 상한 이내(초과는 조용히 생략 · 텍스트는 나감).
-        let image = share_basic
+        // Info scope는 바이트를 읽지 않는다(존재·크기만 — image_keep 판정용 · M3-21).
+        let image_path = share_basic
             .then(|| self.settings.get("profile.image_path").to_string())
-            .filter(|p| !p.is_empty())
-            .and_then(|p| std::fs::read(p).ok())
+            .filter(|p| !p.is_empty());
+        let image = (scope == ProfileScope::Full)
+            .then(|| image_path.as_ref().and_then(|p| std::fs::read(p).ok()))
+            .flatten()
             .filter(|b| !b.is_empty() && b.len() <= PROFILE_IMAGE_MAX);
+        let image_shared = match scope {
+            ProfileScope::Full => image.is_some(),
+            ProfileScope::Info => image_path
+                .as_ref()
+                .and_then(|p| std::fs::metadata(p).ok())
+                .is_some_and(|m| {
+                    let len = usize::try_from(m.len()).unwrap_or(usize::MAX);
+                    len > 0 && len <= PROFILE_IMAGE_MAX
+                }),
+        };
         let image_len = image.as_ref().map_or(0u32, |b| {
             u32::try_from(b.len()).unwrap_or(0) // MAX 256KiB라 실패 불가
         });
         // 내장 아바타 키(08-14) — 기본정보 공개 + 사진 미사용 + 내장 선택일 때만.
         // 키만 나른다(상대도 같은 자산 내장 — 그림 바이트를 실어 나를 이유가 없다).
-        let avatar = (share_basic && image.is_none())
+        let avatar = (share_basic && !image_shared)
             .then(|| {
                 nbeep_core::avatar::AvatarChoice::parse(self.settings.get("profile.avatar"))
                     .builtin_key()
@@ -2480,6 +2542,9 @@ impl App {
             image_len,
             avatar,
             border,
+            // Info scope + 공유 사진 존재 = "네 캐시 유지"(사진 재전송 생략 · M3-21).
+            // Full은 언제나 false — 사진은 청크로 실려 가거나(존재) 철회다(부재).
+            image_keep: scope == ProfileScope::Info && image_shared,
         }
         .encode()];
         if let Some(bytes) = image {
@@ -3256,9 +3321,10 @@ impl App {
     }
 
     /// 상대 프로필 보기 카드(M3-17 — 목록 우클릭). 이미 있으면 갱신·포커스.
-    fn open_peer_info(&mut self, peer: PeerId, el: &ActiveEventLoop) {
+    /// 상대 프로필 카드 내용 조립(열기·갱신 공용 — M3-21).
+    fn build_peer_info(&self, peer: PeerId) -> nbeep_ui::PeerInfo {
         let p = self.peer_profiles.get(&peer);
-        let info = nbeep_ui::PeerInfo {
+        nbeep_ui::PeerInfo {
             name: self
                 .table
                 .get(peer)
@@ -3273,7 +3339,37 @@ impl App {
             fingerprint: peer.short(),
             seed: peer.as_bytes().to_vec(),
             avatar: p.and_then(|p| p.avatar.clone()),
+        }
+    }
+
+    /// 열려 있는 상대 프로필 카드 갱신(M3-21 — push/pull 응답·아바타 디코드 도착).
+    /// 그 상대의 카드가 열려 있을 때만 — 창은 두고 내용만 다시 짓는다.
+    fn refresh_peer_info_card(&mut self, peer: PeerId) {
+        let Some(wid) = self
+            .windows
+            .iter()
+            .find(|(_, e)| e.role == Role::PeerInfo(peer))
+            .map(|(wid, _)| *wid)
+        else {
+            return;
         };
+        self.peer_info_view = Some(nbeep_ui::PeerInfoWidget::new(self.build_peer_info(peer)));
+        self.layout_window(wid);
+        self.request_redraw(wid);
+    }
+
+    fn open_peer_info(&mut self, peer: PeerId, el: &ActiveEventLoop) {
+        // ★ Pull(M3-21 · 사용자 확정 08-14) — **카드를 여는 순간이 가장 신선해야
+        //   하는 순간**이라 세션이 살아 있으면 최신을 1회 요청한다(자동 반복 아님 —
+        //   사용자 행위 트리거 · 13 §12-1 무관). 캐시를 먼저 보여주고(아래) 응답이
+        //   오면 `refresh_peer_info_card`가 갱신한다. 구버전 발신자(push 미배선)의
+        //   낡은 캐시도 이 경로로 회복된다.
+        if let Some(conv) = self.conversations.get(&peer) {
+            let _ = conv.out_tx.send(SessionCmd::Control(vec![
+                nbeep_core::ProfileMsg::Request.encode()
+            ]));
+        }
+        let info = self.build_peer_info(peer);
         if let Some((wid, _)) = self
             .windows
             .iter()
@@ -3843,13 +3939,9 @@ impl App {
                     }
                     self.status = format!("툴팁 표시 대기 = {ms}ms");
                 }
-                // 아바타 선택·보더(08-14) — 연결된 상대에게 프로필을 능동 재전송.
-                // 상대는 Request 없이도 최신 얼굴을 받는다(변경 즉시 반영).
+                // 아바타 선택·보더(08-14) — 재전송은 아래 프로필 전파 깔때기가
+                // 맡는다(M3-21에서 키별 arm → 단일 깔때기로 이관).
                 "profile.avatar" | "profile.avatar_border" => {
-                    let frames = self.my_profile_frames();
-                    for conv in self.conversations.values() {
-                        let _ = conv.out_tx.send(SessionCmd::Control(frames.clone()));
-                    }
                     self.refresh_toolbar_avatar(); // 프로필 버튼 = 내 얼굴
                     self.status = "아바타 변경 — 연결된 상대에게 반영".into();
                 }
@@ -3914,9 +4006,28 @@ impl App {
                 }
                 _ => {}
             }
+            // ★ 프로필 전파 깔때기(M3-21 · 사용자 확정 08-14) — 응답 구성이 읽는
+            // 키의 변경은 **연결된 전 세션**(수동 등록 상대 포함)에 push. 추가·변경뿐
+            // 아니라 **끄는 변경도** 같은 응답에 "필드 부재"로 실려 상대 캐시가
+            // 지워진다(철회 대칭). 키별 arm에 재전송을 두지 않는 이유 = 빠뜨린 키가
+            // 곧 전파 안 되는 키가 되는 구조였다(이메일 공유 실기 구멍의 원인).
+            if let Some(scope) = profile_push_scope(key) {
+                self.push_profile(scope);
+            }
         }
         if let Some(id) = self.main_id {
             self.request_redraw(id);
+        }
+    }
+
+    /// 내 프로필을 연결된 전 세션에 push(M3-21) — scope가 프레임 무게를 정한다.
+    fn push_profile(&mut self, scope: ProfileScope) {
+        if self.conversations.is_empty() {
+            return;
+        }
+        let frames = self.my_profile_frames_scoped(scope);
+        for conv in self.conversations.values() {
+            let _ = conv.out_tx.send(SessionCmd::Control(frames.clone()));
         }
     }
 
@@ -6211,6 +6322,7 @@ impl ApplicationHandler<AppEvent> for App {
                 image,
                 avatar: avatar_key,
                 border,
+                image_keep,
             } => {
                 // 이름은 무해화(DisplayName) 통과분만 채택 · 이력은 신뢰 저장소에도 남긴다.
                 let display = name.and_then(|n| nbeep_core::DisplayName::parse(&n).ok());
@@ -6231,26 +6343,40 @@ impl ApplicationHandler<AppEvent> for App {
                 let dir = self.data_dir.join("profiles");
                 let img_path = dir.join(format!("{}.img", peer.short()));
                 let meta_path = dir.join(format!("{}.meta", peer.short()));
+                // 경량 갱신(M3-21) — image_keep = "공유 사진은 그대로": 이전 사진
+                // 경로·아바타를 승계한다(텍스트 변경마다 256KiB 재전송을 피하는 마커).
+                let kept = image_keep
+                    .then(|| self.peer_profiles.get(&peer))
+                    .flatten()
+                    .map(|p| (p.image_file.clone(), p.avatar.clone()));
                 // 이미지 바이트 캐시 + **격리 디코드는 워커로**(M4-5 — 자식 프로세스
                 // 왕복이 메인을 1~2초 멈췄다 · 08-13 실기). 도착 전엔 기존 아바타를
                 // 유지하고(깜빡임 방지) `Decoded(PeerAvatar)`가 교체한다. 실패 = 이니셜.
                 let mut avatar = builtin.clone();
                 let has_image = image.is_some();
-                let image_file = image.and_then(|bytes| {
-                    std::fs::create_dir_all(&dir).ok()?;
-                    std::fs::write(&img_path, &bytes).ok()?;
-                    avatar = self.peer_profiles.get(&peer).and_then(|p| p.avatar.clone());
-                    spawn_decode(
-                        self.proxy.clone(),
-                        DecodeTarget::PeerAvatar(peer),
-                        move || crate::imgdec::avatar_raw_from_bytes(&bytes, 256),
-                    );
-                    Some(img_path.clone())
-                });
-                if !has_image {
-                    // 이미지 철회(응답에 미포함) — 캐시 파일도 지운다. 안 지우면
-                    // 재시작 복원이 옛 사진을 되살린다(철회가 재시작에 안 남는 구멍).
+                let image_file = image
+                    .and_then(|bytes| {
+                        std::fs::create_dir_all(&dir).ok()?;
+                        std::fs::write(&img_path, &bytes).ok()?;
+                        avatar = self.peer_profiles.get(&peer).and_then(|p| p.avatar.clone());
+                        spawn_decode(
+                            self.proxy.clone(),
+                            DecodeTarget::PeerAvatar(peer),
+                            move || crate::imgdec::avatar_raw_from_bytes(&bytes, 256),
+                        );
+                        Some(img_path.clone())
+                    })
+                    .or_else(|| kept.as_ref().and_then(|(f, _)| f.clone()));
+                if !has_image && !image_keep {
+                    // 이미지 철회(응답에 미포함·유지 마커도 없음) — 캐시 파일도 지운다.
+                    // 안 지우면 재시작 복원이 옛 사진을 되살린다(철회 대칭).
                     let _ = std::fs::remove_file(&img_path);
+                }
+                if avatar.is_none() {
+                    // 승계(M3-21) — 유지 마커가 왔고 새 아바타 재료가 없으면 이전 그림.
+                    if let Some((_, prev)) = &kept {
+                        avatar = prev.clone();
+                    }
                 }
                 let has_any = display.is_some()
                     || email.is_some()
@@ -6301,6 +6427,8 @@ impl ApplicationHandler<AppEvent> for App {
                 }
                 let mut inv = Invalidations::default();
                 self.refresh_rows(&mut inv);
+                // 열려 있는 카드 즉시 갱신(M3-21 pull/push 도착 반영).
+                self.refresh_peer_info_card(peer);
                 if let Some(mid) = self.main_id {
                     self.request_redraw(mid);
                 }
@@ -6340,6 +6468,8 @@ impl ApplicationHandler<AppEvent> for App {
                         }
                         let mut inv = Invalidations::default();
                         self.refresh_rows(&mut inv);
+                        // 카드가 열려 있으면 새 얼굴로(M3-21 — pull 응답의 늦은 디코드).
+                        self.refresh_peer_info_card(peer);
                         if let Some(mid) = self.main_id {
                             self.request_redraw(mid);
                         }
@@ -7731,6 +7861,47 @@ mod tests {
         assert!(!latch.begin(p), "진행 중 중복 클릭은 막는다");
         latch.finish(Some(p), None);
         assert!(latch.begin(p));
+    }
+
+    /// ★ M3-21 — 프로필 응답 구성이 읽는 **키 전부**가 전파 깔때기에 있어야 한다.
+    /// 하나라도 빠지면 그 변경은 이미 연결된 상대에게 영영 안 닿는다(08-14 실기:
+    /// 이메일 공유를 켰는데 상대 카드는 "(비공개)" — 그 구멍의 회귀 방지).
+    #[test]
+    fn every_profile_key_has_a_push_scope() {
+        use super::{profile_push_scope, ProfileScope};
+        // my_profile_frames_scoped가 읽는 설정 키 전수(빠짐 검사).
+        for key in [
+            "profile.share.basic",
+            "profile.share.email",
+            "profile.share.phone",
+            "profile.display_name",
+            "profile.email",
+            "profile.phone",
+            "profile.image_path",
+            "profile.avatar",
+            "profile.avatar_border",
+        ] {
+            assert!(
+                profile_push_scope(key).is_some(),
+                "{key} 변경이 전파되지 않는다 — profile_push_scope에 등록할 것"
+            );
+        }
+        // 무게 배정 — 사진이 바뀔 수 있는 키만 Full(청크 동반), 나머지는 경량.
+        assert_eq!(
+            profile_push_scope("profile.image_path"),
+            Some(ProfileScope::Full)
+        );
+        assert_eq!(
+            profile_push_scope("profile.share.basic"),
+            Some(ProfileScope::Full)
+        );
+        assert_eq!(
+            profile_push_scope("profile.share.email"),
+            Some(ProfileScope::Info)
+        );
+        // 프로필 밖 키는 전파하지 않는다(무관 변경이 트래픽을 만들면 안 된다).
+        assert_eq!(profile_push_scope("ui.theme"), None);
+        assert_eq!(profile_push_scope("net.session_port"), None);
     }
 
     /// 프로필 캐시 메타(08-14 부팅 복원) — 수신 시 쓴 것을 복원이 그대로 읽는다.
