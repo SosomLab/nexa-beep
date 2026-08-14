@@ -21,23 +21,55 @@
 use nbeep_ui::event::Key;
 use nbeep_ui::hangul::{self, Composer};
 
-/// 보류 판정 유예(ms) — 이 시간 안에 Ime 이벤트가 안 오면 진짜 입력으로 방출(H-2·④).
-const PENDING_MS: u64 = 150;
-/// 확정 직후 같은 문자 키다운 = 이중 배달 잔향으로 보는 창(ms · H-15).
-const ECHO_MS: u64 = 120;
-/// 프리에딧 소거 → 포커스 이탈 순서 역전을 흡수하는 스태시 유효기간(ms · H-9).
-const STASH_MS: u64 = 300;
-/// 보류 자모가 "**같은 keypress**의 프리에딧"으로 인정되는 창(ms · H-27①).
-/// 같은 keypress의 keydown→Ime는 같은 OS 이벤트 처리 안이라 수 ms다 — 이보다 오래된
-/// 보류는 **유출된 이전 키**로 본다(같은 자모 반복 "ㅇㅇ"에서 starts_with 대조가
-/// 첫 ㅇ을 중복으로 오폐기하던 실측 08-15 — 문자 대조는 반복 입력을 못 가른다).
-const SAME_KEY_MS: u64 = 40;
-/// 프록시 지연 상쇄 창(ms · H-27②) — keydown이 먼저 오고 keytap 관측이 늦게 온
-/// 짝을 상쇄한다(같은 문자 · 이 시간 안).
-const OWED_MS: u64 = 800;
-/// 삼킴 판정에서 "조합을 닫은 그 keypress"를 인정하는 선행 여유(ms · H-27③) —
-/// keytap은 winit의 Commit 처리보다 **먼저** 찍히므로 rt가 cleared보다 약간 앞선다.
-const PRE_CLEAR_SLACK_MS: u64 = 300;
+/// IME 중재 기준값 일습(08-15 사용자 요청 — **전부 설정에서 조정 가능**).
+/// 기본값은 08-13~15 실측으로 굳힌 값들이다. 타이밍 상수는 기계·IME 버전에 따라
+/// 최적이 다를 수 있어(입력도 추정 금지·실측 필수) 사용자가 현장에서 조정한다.
+/// 값의 근거·계보는 각 필드 문서와 [34](../../docs/34-hangul-input-issues.md).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ImeTuning {
+    /// G1 보충 주입 전체 스위치(keytap 관측·대조·주입 — 끄면 삼킨 키는 유실).
+    pub inject: bool,
+    /// 유출 자모 로컬 조합기 스위치(H-10 — 끄면 유출 자모가 낱자로 들어간다).
+    pub leak: bool,
+    /// 틱 폴백 대기(ms) — 뒤따르는 키가 없을 때 삼킨 키를 주입하기까지(G1).
+    pub stale_ms: u64,
+    /// 같은 keypress 판정 창(ms · H-27①) — 이보다 오래된 보류 자모는 유출된
+    /// 이전 키로 본다(같은 자모 반복에서 starts_with 오폐기를 시각이 가른다).
+    pub same_key_ms: u64,
+    /// 보류 판정 유예(ms · H-2) — 이 안에 Ime 이벤트가 안 붙으면 진짜 입력으로 방출.
+    pub pending_ms: u64,
+    /// 확정 직후 같은 문자 키다운 = 이중 배달 잔향으로 보는 창(ms · H-15).
+    pub echo_ms: u64,
+    /// 프리에딧 소거 → 포커스 이탈 순서 역전을 흡수하는 스태시 유효기간(ms · H-9).
+    pub stash_ms: u64,
+    /// 프록시 지연 상쇄 창(ms · H-27②) — keydown이 먼저 오고 관측이 늦은 짝.
+    pub owed_ms: u64,
+    /// 삼킴 판정의 선행 여유(ms · H-27③) — 조합을 닫은 keypress의 관측은
+    /// Commit 처리보다 먼저 찍힌다.
+    pub pre_clear_ms: u64,
+    /// 삼킴 판정 창(ms · H-26) — 조합 종료 후 이 시간 안의 관측만 삼킴 후보.
+    pub swallow_ms: u64,
+    /// 수동 확정 뒤 늦은 Commit 잔향 창(ms · H-24).
+    pub selfcommit_ms: u64,
+}
+
+impl Default for ImeTuning {
+    fn default() -> Self {
+        Self {
+            inject: true,
+            leak: true,
+            stale_ms: 250,
+            same_key_ms: 40,
+            pending_ms: 150,
+            echo_ms: 120,
+            stash_ms: 300,
+            owed_ms: 800,
+            pre_clear_ms: 300,
+            swallow_ms: 2_000,
+            selfcommit_ms: 1_000,
+        }
+    }
+}
 
 /// 버퍼에 가할 명령 — 호스트가 순서대로 적용한다(라우팅·표시만, 상태 판단 없음).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,6 +133,8 @@ pub struct ImeGate<W: Copy + Eq> {
     /// **큐에 들어가지 않는다**(재주입 원천 차단 — 배달 증거 링의 후속 설계.
     /// 증거 링은 같은 문자 반복(222)에서 진짜 삼킴까지 "이미 배달됨"으로 막았다).
     owed: std::collections::VecDeque<(char, u64)>,
+    /// 기준값 일습(설정에서 조정 — [`ImeTuning`]).
+    tune: ImeTuning,
 }
 
 impl<W: Copy + Eq> Default for ImeGate<W> {
@@ -118,6 +152,7 @@ impl<W: Copy + Eq> Default for ImeGate<W> {
             leak_win: None,
             raw: std::collections::VecDeque::new(),
             owed: std::collections::VecDeque::new(),
+            tune: ImeTuning::default(),
         }
     }
 }
@@ -127,6 +162,15 @@ impl<W: Copy + Eq> ImeGate<W> {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// 기준값 교체(설정 변경 즉시 적용 — hot-swap). 주입을 끄면 관측 잔재도 비운다.
+    pub fn set_tuning(&mut self, t: ImeTuning) {
+        self.tune = t;
+        if !t.inject {
+            self.raw.clear();
+            self.owed.clear();
+        }
     }
 
     /// 조합 중인가(호스트의 표시 판단용).
@@ -163,10 +207,13 @@ impl<W: Copy + Eq> ImeGate<W> {
     /// keytap 관측(무수식 ASCII keydown — 보통 winit보다 먼저). 프록시가 늦어
     /// keydown이 먼저 지나갔으면(owed) 그 짝을 상쇄하고 큐에 넣지 않는다.
     pub fn observe_raw(&mut self, c: char, t: u64) {
+        if !self.tune.inject {
+            return;
+        }
         if let Some(i) = self
             .owed
             .iter()
-            .position(|&(oc, ot)| oc == c && t.abs_diff(ot) < OWED_MS)
+            .position(|&(oc, ot)| oc == c && t.abs_diff(ot) < self.tune.owed_ms)
         {
             self.owed.remove(i); // 늦게 온 관측 — 이미 배달된 keydown의 짝
             return;
@@ -182,7 +229,8 @@ impl<W: Copy + Eq> ImeGate<W> {
     /// Commit 처리보다 먼저 찍혀 rt가 cleared보다 약간 앞선다(선행 여유로 흡수).
     fn swallow_eligible(&self, rt: u64) -> bool {
         self.cleared_ms.is_some_and(|ct| {
-            rt.saturating_add(PRE_CLEAR_SLACK_MS) >= ct && rt.saturating_sub(ct) < 2_000
+            rt.saturating_add(self.tune.pre_clear_ms) >= ct
+                && rt.saturating_sub(ct) < self.tune.swallow_ms
         })
     }
 
@@ -191,7 +239,7 @@ impl<W: Copy + Eq> ImeGate<W> {
     /// 짝이 없으면(관측이 아직 안 옴 — 프록시 지연) 선배달 장부에 적는다.
     pub fn reconcile_raw(&mut self, id: W, cur: char, now: u64, ime_on: bool) -> Vec<Out<W>> {
         let mut outs = Vec::new();
-        if !cur.is_ascii() {
+        if !self.tune.inject || !cur.is_ascii() {
             return outs;
         }
         if self.composing {
@@ -237,11 +285,11 @@ impl<W: Copy + Eq> ImeGate<W> {
     /// 글자보다 앞에 박힌다. 조합이 닫히면 다음 틱이 이어서 정산한다.
     pub fn reconcile_stale(&mut self, id: W, now: u64, ime_on: bool) -> Vec<Out<W>> {
         let mut outs = Vec::new();
-        if self.composing {
+        if !self.tune.inject || self.composing {
             return outs;
         }
         while let Some(&(rc, rt)) = self.raw.front() {
-            if now.saturating_sub(rt) < 250 {
+            if now.saturating_sub(rt) < self.tune.stale_ms {
                 break;
             }
             self.raw.pop_front();
@@ -251,7 +299,7 @@ impl<W: Copy + Eq> ImeGate<W> {
         }
         // 짝 없이 늙은 선배달 장부 청소(관측이 영영 안 온 경우 — 모니터 미부착 등).
         while let Some(&(_, ot)) = self.owed.front() {
-            if now.saturating_sub(ot) < OWED_MS {
+            if now.saturating_sub(ot) < self.tune.owed_ms {
                 break;
             }
             self.owed.pop_front();
@@ -275,7 +323,7 @@ impl<W: Copy + Eq> ImeGate<W> {
         if let KeyIn::Char(c) = key {
             if !hangul::is_jamo(c) {
                 if let Some((ec, t)) = self.echo {
-                    if ec == c && now.saturating_sub(t) < ECHO_MS {
+                    if ec == c && now.saturating_sub(t) < self.tune.echo_ms {
                         self.echo = None;
                         return GatePass::Swallowed;
                     }
@@ -318,7 +366,7 @@ impl<W: Copy + Eq> ImeGate<W> {
             return Vec::new();
         }
         if let Some((_, _, t, _)) = self.pending {
-            if now.saturating_sub(t) >= PENDING_MS {
+            if now.saturating_sub(t) >= self.tune.pending_ms {
                 return self.flush_pending(now);
             }
         }
@@ -410,7 +458,8 @@ impl<W: Copy + Eq> ImeGate<W> {
         if let Some((pid, c, t, _)) = self.pending {
             if hangul::is_jamo(c) {
                 self.pending = None;
-                let same_keypress = now.saturating_sub(t) < SAME_KEY_MS && text.starts_with(c);
+                let same_keypress =
+                    now.saturating_sub(t) < self.tune.same_key_ms && text.starts_with(c);
                 if !same_keypress {
                     outs.extend(self.leak_feed(pid, c));
                 }
@@ -449,7 +498,7 @@ impl<W: Copy + Eq> ImeGate<W> {
         let mut outs = Vec::new();
         // 수동 확정 잔향(H-24) — focus_out이 이미 합류시킨 본문의 늦은 Commit은 1회 삼킨다.
         if let Some((sid, ref stext, st)) = self.selfcommit {
-            if sid == id && stext == text && now.saturating_sub(st) < 1_000 {
+            if sid == id && stext == text && now.saturating_sub(st) < self.tune.selfcommit_ms {
                 self.selfcommit = None;
                 self.composing = false;
                 self.preedit_text.clear();
@@ -511,7 +560,7 @@ impl<W: Copy + Eq> ImeGate<W> {
         let mut text = std::mem::take(&mut self.preedit_text);
         if text.is_empty() {
             if let Some((s, t)) = self.stash.take() {
-                if now.saturating_sub(t) < STASH_MS {
+                if now.saturating_sub(t) < self.tune.stash_ms {
                     text = s;
                 }
             }
@@ -550,6 +599,9 @@ impl<W: Copy + Eq> ImeGate<W> {
 
     /// 유출 자모를 로컬 조합기에 합류(완성 글자는 즉시 라우팅 · 미리보기 갱신).
     fn leak_feed(&mut self, id: W, c: char) -> Vec<Out<W>> {
+        if !self.tune.leak {
+            return vec![Out::Char(id, c)]; // 조합기 꺼짐 — 유출 자모를 낱자로
+        }
         let mut outs = Vec::new();
         if self.leak_win.is_some_and(|w| w != id) {
             outs.extend(self.flush_leak());
@@ -792,6 +844,35 @@ mod tests {
         assert_eq!(d.buf, "껀?", "보류 방출 1회뿐 — 관측 이중 주입 없음");
     }
 
+    /// 08-15 — 기준값은 설정으로 조정된다(stale 대기 단축 · 주입 스위치).
+    #[test]
+    fn tuning_adjusts_stale_and_toggles_inject() {
+        // stale 100ms로 단축 — 기본(250)이면 안 주입될 150ms 경과에 주입된다.
+        let mut d = Driver::new();
+        d.gate.set_tuning(ImeTuning {
+            stale_ms: 100,
+            ..ImeTuning::default()
+        });
+        d.preedit("ㅇ");
+        d.preedit("");
+        d.commit("ㅇ");
+        d.raw('1');
+        d.stale(150);
+        assert_eq!(d.buf, "ㅇ1", "stale_ms 단축 = 더 빠른 정산");
+        // 주입 끔 — 관측이 쌓이지 않고 주입도 없다(삼킨 키는 유실 — 사용자 선택).
+        let mut d = Driver::new();
+        d.gate.set_tuning(ImeTuning {
+            inject: false,
+            ..ImeTuning::default()
+        });
+        d.preedit("ㅇ");
+        d.preedit("");
+        d.commit("ㅇ");
+        d.raw('1');
+        d.stale(400);
+        assert_eq!(d.buf, "", "주입 꺼짐 = 보충 없음(낱개 ㅇ은 leak 보류 중)");
+    }
+
     /// G1 — 평시(조합 없음)엔 어떤 주입도 없다.
     #[test]
     fn replay_g1_idle_never_injects() {
@@ -962,7 +1043,7 @@ mod tests {
         let mut d = Driver::new();
         d.key_char('ㅁ'); // 보류
         assert_eq!(d.buf, "");
-        let outs = d.gate.tick(d.now + PENDING_MS);
+        let outs = d.gate.tick(d.now + ImeTuning::default().pending_ms);
         d.apply(outs);
         // 자모 하나는 조합 중(미리보기)이라 버퍼는 아직 비어 있고, 비자모가 오면 확정.
         d.key_char('.');

@@ -3711,6 +3711,27 @@ impl App {
         }
     }
 
+    /// 한글 입력(IME) 기준값 반영(08-15 사용자 요청 — 하드코딩이던 판정 창 전부를
+    /// 설정으로 · hot-swap). 기본값은 macOS 실측(H-27) — 잘못 넣은 값은 관용
+    /// 파싱으로 기본값 폴백(ADR-0011 자세).
+    fn apply_ime_tuning(&mut self) {
+        let d = crate::ime_gate::ImeTuning::default();
+        let ms = |k: &str, dv: u64| self.settings.get(k).parse().unwrap_or(dv);
+        self.ime.set_tuning(crate::ime_gate::ImeTuning {
+            inject: self.settings.get("ime.inject") != "off",
+            leak: self.settings.get("ime.leak") != "off",
+            stale_ms: ms("ime.stale_ms", d.stale_ms),
+            same_key_ms: ms("ime.same_key_ms", d.same_key_ms),
+            pending_ms: ms("ime.pending_ms", d.pending_ms),
+            echo_ms: ms("ime.echo_ms", d.echo_ms),
+            stash_ms: ms("ime.stash_ms", d.stash_ms),
+            owed_ms: ms("ime.owed_ms", d.owed_ms),
+            pre_clear_ms: ms("ime.pre_clear_ms", d.pre_clear_ms),
+            swallow_ms: ms("ime.swallow_ms", d.swallow_ms),
+            selfcommit_ms: ms("ime.selfcommit_ms", d.selfcommit_ms),
+        });
+    }
+
     fn apply_boot_settings(&mut self) {
         use nbeep_core::{ApprovalPolicy, BasicApproval};
         // 기본 아바타(08-14) — 미설정이면 **내 키 지문으로 12간지 하나를 안정 배정해
@@ -3736,7 +3757,8 @@ impl App {
         if let Ok(ms) = self.settings.get("ui.typeahead_timeout").parse::<u64>() {
             self.list.set_typeahead_timeout(ms);
         }
-        // 목록 보기(08-14 사용자 확정) — 갱신 주기 + 갱신 시 스크롤 동작.
+        self.apply_ime_tuning(); // 한글 입력(IME) 기준값(08-15 · H-27) — 부팅 반영
+                                 // 목록 보기(08-14 사용자 확정) — 갱신 주기 + 갱신 시 스크롤 동작.
         self.list_refresh_ms = self
             .settings
             .get("ui.list_refresh_ms")
@@ -3994,6 +4016,11 @@ impl App {
                             "정방향"
                         }
                     );
+                }
+                // 한글 입력(IME) 기준값(08-15 · H-27) — 어느 키든 일습 재적용(hot-swap).
+                k if k.starts_with("ime.") => {
+                    self.apply_ime_tuning();
+                    self.status = "한글 입력(IME) 기준값 적용".into();
                 }
                 // 목록 갱신 주기(08-14) — 발견발 재조립을 이 간격으로 묶는다.
                 "ui.list_refresh_ms" => {

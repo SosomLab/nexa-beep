@@ -77,6 +77,16 @@ const RADIO_DEFAULTS: &[(&str, &str)] = &[
     ("ui.tooltip_ms", "2000"),
     // 목록 갱신 주기 — 기본 1500ms(사용자 확정 08-14).
     ("ui.list_refresh_ms", "1500"),
+    // 한글 입력(IME) 기준값 — 기본은 macOS 실측값(H-27 · 08-15).
+    ("ime.stale_ms", "250"),
+    ("ime.same_key_ms", "40"),
+    ("ime.pending_ms", "150"),
+    ("ime.echo_ms", "120"),
+    ("ime.stash_ms", "300"),
+    ("ime.owed_ms", "800"),
+    ("ime.pre_clear_ms", "300"),
+    ("ime.swallow_ms", "2000"),
+    ("ime.selfcommit_ms", "1000"),
     // 컨트롤 글리프 크기 — 기본 "크게"(사용자 확정 08-11 · 설정 Switch가 크게 보이도록).
     ("ui.control_size", "l"),
 ];
@@ -653,6 +663,165 @@ pub fn registry() -> &'static [Entry] {
                 "개",
             ),
             key: "group.resync_keep",
+        },
+        // ── 한글 입력(IME) — 게이트 기준값 일습(08-15 사용자 요청 · H-27) ──
+        // 기본값은 macOS 실측으로 굳힌 값. 경합 양상은 기계·IME 버전마다 달라
+        // 현장 조정이 필요할 수 있다(입력도 추정 금지·실측 필수 — docs/34).
+        Entry {
+            cat: Msg::CatIme,
+            sub: None,
+            label: Msg::ImeInject,
+            desc: Msg::ImeInjectDesc,
+            kind: SettingKind::Toggle,
+            key: "ime.inject",
+        },
+        Entry {
+            cat: Msg::CatIme,
+            sub: None,
+            label: Msg::ImeLeak,
+            desc: Msg::ImeLeakDesc,
+            kind: SettingKind::Toggle,
+            key: "ime.leak",
+        },
+        Entry {
+            cat: Msg::CatIme,
+            sub: None,
+            label: Msg::ImeStale,
+            desc: Msg::ImeStaleDesc,
+            kind: SettingKind::RadioInput(
+                &[
+                    ("150", Msg::Ms150),
+                    ("250", Msg::Ms250),
+                    ("400", Msg::Ms400),
+                    ("800", Msg::Ms800),
+                ],
+                "ms",
+            ),
+            key: "ime.stale_ms",
+        },
+        Entry {
+            cat: Msg::CatIme,
+            sub: None,
+            label: Msg::ImeSameKey,
+            desc: Msg::ImeSameKeyDesc,
+            kind: SettingKind::RadioInput(
+                &[
+                    ("20", Msg::Ms20),
+                    ("40", Msg::Ms40),
+                    ("80", Msg::Ms80),
+                    ("120", Msg::Ms120),
+                ],
+                "ms",
+            ),
+            key: "ime.same_key_ms",
+        },
+        Entry {
+            cat: Msg::CatIme,
+            sub: None,
+            label: Msg::ImePending,
+            desc: Msg::ImePendingDesc,
+            kind: SettingKind::RadioInput(
+                &[
+                    ("80", Msg::Ms80),
+                    ("150", Msg::Ms150),
+                    ("250", Msg::Ms250),
+                    ("400", Msg::Ms400),
+                ],
+                "ms",
+            ),
+            key: "ime.pending_ms",
+        },
+        Entry {
+            cat: Msg::CatIme,
+            sub: None,
+            label: Msg::ImeEcho,
+            desc: Msg::ImeEchoDesc,
+            kind: SettingKind::RadioInput(
+                &[
+                    ("80", Msg::Ms80),
+                    ("120", Msg::Ms120),
+                    ("200", Msg::Ms200),
+                    ("300", Msg::Ms300),
+                ],
+                "ms",
+            ),
+            key: "ime.echo_ms",
+        },
+        Entry {
+            cat: Msg::CatIme,
+            sub: None,
+            label: Msg::ImeStash,
+            desc: Msg::ImeStashDesc,
+            kind: SettingKind::RadioInput(
+                &[
+                    ("150", Msg::Ms150),
+                    ("300", Msg::Ms300),
+                    ("500", Msg::Ms500),
+                    ("800", Msg::Ms800),
+                ],
+                "ms",
+            ),
+            key: "ime.stash_ms",
+        },
+        Entry {
+            cat: Msg::CatIme,
+            sub: None,
+            label: Msg::ImeOwed,
+            desc: Msg::ImeOwedDesc,
+            kind: SettingKind::RadioInput(
+                &[
+                    ("400", Msg::Ms400),
+                    ("800", Msg::Ms800),
+                    ("1600", Msg::Ms1600),
+                ],
+                "ms",
+            ),
+            key: "ime.owed_ms",
+        },
+        Entry {
+            cat: Msg::CatIme,
+            sub: None,
+            label: Msg::ImePreClear,
+            desc: Msg::ImePreClearDesc,
+            kind: SettingKind::RadioInput(
+                &[
+                    ("150", Msg::Ms150),
+                    ("300", Msg::Ms300),
+                    ("500", Msg::Ms500),
+                ],
+                "ms",
+            ),
+            key: "ime.pre_clear_ms",
+        },
+        Entry {
+            cat: Msg::CatIme,
+            sub: None,
+            label: Msg::ImeSwallow,
+            desc: Msg::ImeSwallowDesc,
+            kind: SettingKind::RadioInput(
+                &[
+                    ("1000", Msg::TaSec1),
+                    ("2000", Msg::TaSec2),
+                    ("3000", Msg::TaSec3),
+                ],
+                "ms",
+            ),
+            key: "ime.swallow_ms",
+        },
+        Entry {
+            cat: Msg::CatIme,
+            sub: None,
+            label: Msg::ImeSelfcommit,
+            desc: Msg::ImeSelfcommitDesc,
+            kind: SettingKind::RadioInput(
+                &[
+                    ("500", Msg::Ms500),
+                    ("1000", Msg::TaSec1),
+                    ("2000", Msg::TaSec2),
+                ],
+                "ms",
+            ),
+            key: "ime.selfcommit_ms",
         },
     ]
 }
