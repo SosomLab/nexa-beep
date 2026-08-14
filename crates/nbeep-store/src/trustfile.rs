@@ -33,7 +33,10 @@ use std::io;
 use std::path::PathBuf;
 
 const MAGIC: [u8; 4] = *b"NBTS";
-const VER: u8 = 1;
+/// v2(08-15) = v1 + 레코드 꼬리(목록 고정 fav · 최근 접속/대화 unix ms).
+/// v1 파일도 읽는다(꼬리 없음 = 기본값 — 전방·후방 관용, groupfile v2와 같은 문법).
+const VER: u8 = 2;
+const VER_V1: u8 = 1;
 const SALT_LEN: usize = 16;
 const NONCE_LEN: usize = 12;
 const TAG_LEN: usize = 16;
@@ -68,6 +71,9 @@ pub struct FileTrustStore {
     locked: bool,
     /// 마지막 저장 실패 여부(IO — 다음 변경에서 재시도).
     write_failed: bool,
+    /// 메타(최근 접속·대화)의 마지막 영속 시각 — **60초 스로틀**(발견 비컨마다
+    /// 파일을 다시 쓰지 않는다 · 핀·차단·이름은 여전히 즉시 저장).
+    meta_saved: Option<std::time::Instant>,
 }
 
 impl FileTrustStore {
@@ -87,6 +93,7 @@ impl FileTrustStore {
                             master,
                             locked: false,
                             write_failed: false,
+                            meta_saved: None,
                         },
                         TrustLoad::Loaded(n),
                     )
@@ -101,6 +108,7 @@ impl FileTrustStore {
                         master: [0; 32],
                         locked: true,
                         write_failed: false,
+                        meta_saved: None,
                     },
                     TrustLoad::Locked,
                 ),
@@ -120,6 +128,7 @@ impl FileTrustStore {
                         master,
                         locked: !ok,
                         write_failed: false,
+                        meta_saved: None,
                     },
                     if ok {
                         TrustLoad::Fresh
@@ -137,6 +146,7 @@ impl FileTrustStore {
                     master: [0; 32],
                     locked: true,
                     write_failed: false,
+                    meta_saved: None,
                 },
                 TrustLoad::Locked,
             ),
@@ -175,6 +185,50 @@ impl FileTrustStore {
         self.inner.names(peer)
     }
 
+    /// [`MemoryTrustStore::set_fav`] 위임 + 즉시 저장(목록 고정 — 08-15).
+    pub fn set_fav(&mut self, peer: PeerId, fav: bool) {
+        if self.inner.set_fav(peer, fav) {
+            self.persist();
+        }
+    }
+
+    /// [`MemoryTrustStore::fav`] 위임.
+    #[must_use]
+    pub fn fav(&self, peer: PeerId) -> bool {
+        self.inner.fav(peer)
+    }
+
+    /// [`MemoryTrustStore::note_seen`] 위임 + **60초 스로틀 저장**(발견 비컨이
+    /// 잦다 — 메타만으로 파일을 자주 다시 쓰지 않는다).
+    pub fn note_seen(&mut self, peer: PeerId, unix_ms: u64) {
+        if self.inner.note_seen(peer, unix_ms) {
+            self.persist_meta_throttled();
+        }
+    }
+
+    /// [`MemoryTrustStore::note_chat`] 위임 + 60초 스로틀 저장.
+    pub fn note_chat(&mut self, peer: PeerId, unix_ms: u64) {
+        if self.inner.note_chat(peer, unix_ms) {
+            self.persist_meta_throttled();
+        }
+    }
+
+    /// [`MemoryTrustStore::meta`] 위임 — (최근 접속, 최근 대화).
+    #[must_use]
+    pub fn meta(&self, peer: PeerId) -> (u64, u64) {
+        self.inner.meta(peer)
+    }
+
+    /// 메타 저장 스로틀 — 마지막 저장 후 60초 지났을 때만(그 사이 변경은 다음
+    /// 저장 계기(핀·이름·60초 경과)에 자연 합류한다).
+    fn persist_meta_throttled(&mut self) {
+        let due = self.meta_saved.is_none_or(|t| t.elapsed().as_secs() >= 60);
+        if due {
+            self.persist();
+            self.meta_saved = Some(std::time::Instant::now());
+        }
+    }
+
     /// [`MemoryTrustStore::export`] 위임 — 핀 스냅샷(읽기 전용).
     /// 부팅 시 "연결됐던 상대" 열람의 단일 통로다(08-14 프로필 캐시 복원) —
     /// 핀은 세션 성립에서만 생기므로 이 목록이 곧 연결 이력이다.
@@ -198,8 +252,11 @@ impl FileTrustStore {
         bytes: &[u8],
         secret: &[u8; 32],
     ) -> Option<([u8; SALT_LEN], [u8; 32], Vec<PinRecord>)> {
-        if bytes.len() < WRAPPED_END + NONCE_LEN + TAG_LEN || bytes[..4] != MAGIC || bytes[4] != VER
-        {
+        if bytes.len() < WRAPPED_END + NONCE_LEN + TAG_LEN || bytes[..4] != MAGIC {
+            return None;
+        }
+        let ver = bytes[4];
+        if ver != VER && ver != VER_V1 {
             return None;
         }
         let mut salt = [0u8; SALT_LEN];
@@ -224,7 +281,7 @@ impl FileTrustStore {
                 },
             )
             .ok()?;
-        let records = decode_records(&body)?;
+        let records = decode_records(ver, &body)?;
         Some((salt, master, records))
     }
 
@@ -349,11 +406,15 @@ fn encode_records(records: &[PinRecord]) -> Vec<u8> {
             out.extend_from_slice(&len.to_be_bytes());
             out.extend_from_slice(&b[..usize::from(len)]);
         }
+        // v2 꼬리(08-15) — 목록 고정 + 최근 접속/대화(unix ms).
+        out.push(u8::from(r.fav));
+        out.extend_from_slice(&r.last_seen.to_be_bytes());
+        out.extend_from_slice(&r.last_chat.to_be_bytes());
     }
     out
 }
 
-fn decode_records(bytes: &[u8]) -> Option<Vec<PinRecord>> {
+fn decode_records(ver: u8, bytes: &[u8]) -> Option<Vec<PinRecord>> {
     let mut p = 0usize;
     let take = |p: &mut usize, n: usize| -> Option<&[u8]> {
         let s = bytes.get(*p..*p + n)?;
@@ -378,11 +439,23 @@ fn decode_records(bytes: &[u8]) -> Option<Vec<PinRecord>> {
             let s = std::str::from_utf8(take(&mut p, len)?).ok()?;
             names.push(DisplayName::parse(s).ok()?);
         }
+        // v2 꼬리(08-15) — v1 파일은 기본값(0/false)으로 관용.
+        let (fav, last_seen, last_chat) = if ver >= 2 {
+            let fav = take(&mut p, 1)?[0] != 0;
+            let seen = u64::from_be_bytes(take(&mut p, 8)?.try_into().ok()?);
+            let chat = u64::from_be_bytes(take(&mut p, 8)?.try_into().ok()?);
+            (fav, seen, chat)
+        } else {
+            (false, 0, 0)
+        };
         out.push(PinRecord {
             peer,
             level,
             blocked,
             names,
+            fav,
+            last_seen,
+            last_chat,
         });
     }
     (p == bytes.len()).then_some(out)
@@ -502,6 +575,24 @@ mod tests {
         );
     }
 
+    /// v1 파일 관용(08-15 · v2) — 꼬리(고정·시각) 없는 레코드를 기본값으로 읽는다.
+    /// 업그레이드 첫 실행이 기존 핀을 잃으면 안 된다(R-17과 같은 무게).
+    #[test]
+    fn v1_records_read_with_default_tail() {
+        let mut b = Vec::new();
+        b.extend_from_slice(&1u32.to_be_bytes());
+        b.extend_from_slice(pid(3).as_bytes());
+        b.push(1); // Pinned
+        b.push(0); // blocked 아님
+        b.push(0); // 이름 0개
+        let recs = decode_records(VER_V1, &b).unwrap();
+        assert_eq!(recs.len(), 1);
+        assert!(!recs[0].fav);
+        assert_eq!((recs[0].last_seen, recs[0].last_chat), (0, 0));
+        // 같은 바이트를 v2로 읽으면 길이 부족 = 거부(버전이 코덱을 가른다).
+        assert!(decode_records(VER, &b).is_none());
+    }
+
     /// 레코드 코덱 왕복(경계 — 이름 0·다수·비ASCII).
     #[test]
     fn record_codec_roundtrip() {
@@ -511,6 +602,9 @@ mod tests {
                 level: TrustLevel::Pinned,
                 blocked: false,
                 names: vec![],
+                fav: false,
+                last_seen: 0,
+                last_chat: 0,
             },
             PinRecord {
                 peer: pid(2),
@@ -520,13 +614,16 @@ mod tests {
                     DisplayName::parse("bob").unwrap(),
                     DisplayName::parse("鮑勃").unwrap(),
                 ],
+                fav: true,
+                last_seen: 1_723_000_000_000,
+                last_chat: 42,
             },
         ];
         let enc = encode_records(&records);
-        assert_eq!(decode_records(&enc).unwrap(), records);
+        assert_eq!(decode_records(VER, &enc).unwrap(), records);
         // 꼬리 쓰레기는 거부(길이 정합).
         let mut bad = enc;
         bad.push(0);
-        assert!(decode_records(&bad).is_none());
+        assert!(decode_records(VER, &bad).is_none());
     }
 }

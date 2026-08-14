@@ -29,9 +29,11 @@ use std::io;
 use std::path::PathBuf;
 
 const MAGIC: [u8; 4] = *b"NBGS";
-/// v2(08-13) = v1(로컬 그룹) + **공유 그룹 레코드**(M5-1g · ADR-0012).
-/// v1 파일도 읽는다(공유 없음으로 — 전방·후방 관용).
-const VER: u8 = 2;
+/// v3(08-15) = v2 + 공유 그룹 **목록 고정(pinned) 꼬리**(사용자 요청 — 그룹방 핀).
+/// v2(08-13) = v1(로컬 그룹) + 공유 그룹 레코드(M5-1g · ADR-0012).
+/// 구버전 파일도 읽는다(없는 필드 = 기본값 — 전방·후방 관용).
+const VER: u8 = 3;
+const VER_V2: u8 = 2;
 const VER_V1: u8 = 1;
 
 /// 공유 그룹에서의 내 상태(ADR-0012 G-4 — 초대 수락제).
@@ -72,6 +74,8 @@ pub struct SharedGroup {
     pub roster: Roster,
     /// 내 상태.
     pub mine: MineState,
+    /// 목록 상단 고정(08-15 사용자 요청 — 상대 고정과 같은 축).
+    pub pinned: bool,
 }
 const SALT_LEN: usize = 16;
 const NONCE_LEN: usize = 12;
@@ -275,6 +279,7 @@ impl FileGroupStore {
         }
         let id = self.inner.alloc_id();
         self.shared.push(SharedGroup {
+            pinned: false,
             local_id: id,
             roster,
             mine,
@@ -316,6 +321,19 @@ impl FileGroupStore {
         self.shared.iter().find(|s| s.local_id == id)
     }
 
+    /// 공유 그룹 목록 고정 지정(08-15 · UI 키 기준) — 바뀌면 즉시 저장.
+    pub fn set_shared_pinned(&mut self, id: GroupId, pinned: bool) -> bool {
+        let Some(s) = self.shared.iter_mut().find(|s| s.local_id == id) else {
+            return false;
+        };
+        if s.pinned == pinned {
+            return false;
+        }
+        s.pinned = pinned;
+        self.persist();
+        true
+    }
+
     /// 전체 공유 그룹.
     #[must_use]
     pub fn shared_list(&self) -> &[SharedGroup] {
@@ -342,7 +360,7 @@ impl FileGroupStore {
             return None;
         }
         let ver = bytes[4];
-        if ver != VER && ver != VER_V1 {
+        if !matches!(ver, VER | VER_V2 | VER_V1) {
             return None;
         }
         let mut salt = [0u8; SALT_LEN];
@@ -472,6 +490,7 @@ fn encode_body(store: &GroupStore, shared: &[SharedGroup]) -> Vec<u8> {
     for s in shared {
         out.extend_from_slice(&s.local_id.0.to_be_bytes());
         out.push(s.mine.to_byte());
+        out.push(u8::from(s.pinned)); // v3 — 목록 고정
         let rb = s.roster.encode();
         out.extend_from_slice(&u32::try_from(rb.len()).unwrap_or(u32::MAX).to_be_bytes());
         out.extend_from_slice(&rb);
@@ -509,6 +528,12 @@ fn decode_body(ver: u8, bytes: &[u8]) -> Option<(GroupStore, Vec<SharedGroup>)> 
         for _ in 0..sc {
             let local_id = GroupId(u32::from_be_bytes(take(&mut p, 4)?.try_into().ok()?));
             let mine = MineState::from_byte(take(&mut p, 1)?[0])?;
+            // v3 — 목록 고정(v2 파일은 필드 없음 = false 관용).
+            let pinned = if ver >= 3 {
+                take(&mut p, 1)?[0] != 0
+            } else {
+                false
+            };
             let rlen = u32::from_be_bytes(take(&mut p, 4)?.try_into().ok()?) as usize;
             let rb = take(&mut p, rlen)?;
             let (roster, used) = Roster::decode(rb)?;
@@ -519,6 +544,7 @@ fn decode_body(ver: u8, bytes: &[u8]) -> Option<(GroupStore, Vec<SharedGroup>)> 
                 local_id,
                 roster,
                 mine,
+                pinned,
             });
         }
     }

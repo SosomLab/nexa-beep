@@ -26,6 +26,9 @@ pub struct AlertWidget {
     closed: bool,
     /// 선택 결과(1회성 · 선택 모드에서만) — true = 긍정(수락).
     choice: Option<bool>,
+    /// 상태 목록 모드(08-15 — 그룹 구성원): 줄 앞에 **목록과 같은 팔레트**
+    /// ([`crate::peer_list::link_color`])의 상태 점을 그린다. 비면 본문 워드랩.
+    status_list: Vec<(crate::peer_list::LinkState, String)>,
 }
 
 impl AlertWidget {
@@ -41,7 +44,18 @@ impl AlertWidget {
             no: None,
             closed: false,
             choice: None,
+            status_list: Vec::new(),
         }
+    }
+
+    /// 상태 목록 지정(그룹 구성원 — 08-15). 본문(message) 대신 이 줄들이 그려진다.
+    pub fn set_status_list(
+        &mut self,
+        lines: Vec<(crate::peer_list::LinkState, String)>,
+        inv: &mut Invalidations,
+    ) {
+        self.status_list = lines;
+        inv.push(self.bounds);
     }
 
     /// **선택 모달**(M5-1g — 그룹 초대 수락/거절 등): 긍정/부정 두 버튼.
@@ -59,9 +73,11 @@ impl AlertWidget {
     }
 
     /// 내용 교체(이미 열려 있는 창 재사용 — 창을 또 띄우지 않는다).
+    /// 상태 목록 모드는 해제된다(다음 set_status_list까지 본문 모드).
     pub fn set_content(&mut self, title: &str, message: &str, inv: &mut Invalidations) {
         self.title = title.to_string();
         self.message = message.to_string();
+        self.status_list.clear();
         inv.push(self.bounds);
     }
 
@@ -163,6 +179,28 @@ impl Widget for AlertWidget {
         // 제목(굵게).
         ctx.select_font(FontSlot::Base, true);
         ctx.text(b.x + pad, b.y + self.s(14), b, &self.title, theme.text);
+        // 상태 목록 모드(08-15 — 그룹 구성원): 목록과 같은 팔레트의 점 + 텍스트.
+        if !self.status_list.is_empty() {
+            ctx.select_font(FontSlot::Base, false);
+            let lh = ctx.text_height() + self.s(8);
+            let dot_d = self.s(10);
+            let mut y = b.y + self.s(44);
+            let flush_bottom = self.ok.bounds().y - lh;
+            for (link, text) in &self.status_list {
+                if y > flush_bottom {
+                    break; // 넘치면 자른다(모달은 요지 전달용)
+                }
+                let dot = Rect::new(b.x + pad, y + (ctx.text_height() - dot_d) / 2, dot_d, dot_d);
+                ctx.fill_ellipse(dot, crate::peer_list::link_color(theme, *link));
+                ctx.text(dot.right() + self.s(8), y, b, text, theme.text);
+                y += lh;
+            }
+            self.ok.paint(ctx, theme);
+            if let Some(no) = &self.no {
+                no.paint(ctx, theme);
+            }
+            return;
+        }
         // 본문 — 문자 단위 그리디 줄바꿈(CJK는 공백이 없다 · 설정 desc 워드랩과 같은 이유).
         ctx.select_font(FontSlot::Base, false);
         let avail = (b.w - pad * 2).max(self.s(40));

@@ -30,6 +30,8 @@ pub struct GroupRow {
     pub online: u32,
     /// 읽지 않은 방 메시지 수(M5-1g — 0이면 배지 없음).
     pub unread: u32,
+    /// 목록 상단 고정(08-15 사용자 요청 — ★ 표시·고정 구획 정렬).
+    pub fav: bool,
     /// 내가 소유자인가(메뉴 분기 — 명부 편집·정책 토글은 소유자만).
     pub owned: bool,
     /// 이 방의 구성원 초대 허용 정책(메뉴 라벨·비소유자 초대 가능 여부).
@@ -63,6 +65,8 @@ pub enum GroupAction {
     /// 구성원 목록 보기(08-14 사용자 요청 — 그룹 아이콘 클릭 · 방 헤더 클릭과
     /// **같은 모달**로 호스트가 처리).
     Members(GroupId),
+    /// 목록 상단 고정 토글(08-15 사용자 요청 — 그룹방 핀).
+    ToggleFav(GroupId),
 }
 
 /// 목록 한 행 — 목록 항목(발견) + 신뢰 상태(`TrustStore`). 출처가 달라 조립 지점에서 합친다.
@@ -87,6 +91,8 @@ pub struct PeerRow {
     pub unread: u32,
     /// 마지막으로 대화를 확인한 시각 라벨(③ — `unread > 0`일 때만 Some · 배지 왼쪽에 흐리게).
     pub last_read: Option<String>,
+    /// 목록 상단 고정(08-15 사용자 요청 — ★ 표시 · 고정 구획 정렬은 호스트 몫).
+    pub fav: bool,
 }
 
 /// 목록 행에 그릴 전송 진행 상태.
@@ -188,6 +194,18 @@ pub fn badge(trust: TrustLevel, theme: &Theme) -> (&'static str, Color) {
     }
 }
 
+/// 세션 상태 점 색(목록 행·그룹 구성원 모달 공용 — 08-15 사용자 요청 "색을 맞춰줘").
+/// 색의 뜻을 한 곳에 둔다 — 여기와 다르게 칠하는 곳이 생기면 그게 버그다.
+#[must_use]
+pub fn link_color(theme: &Theme, link: LinkState) -> Color {
+    match link {
+        LinkState::Active => theme.ok,
+        LinkState::Lost => theme.danger,
+        LinkState::Idle => theme.text_dim,
+        LinkState::Connecting => theme.accent, // 연결 중(M2-8)
+    }
+}
+
 /// 목록 갱신 직후 스크롤 동작(사용자 확정 08-14 — `ui.list_refresh_scroll`).
 /// 발견 이벤트마다 목록이 재조립되는데, 그때 뷰포트를 어떻게 둘지의 3택이다.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -254,6 +272,8 @@ pub struct PeerListWidget {
     ctx_group: Option<GroupId>,
     /// "프로필 보기" 선택 결과(1회성 — 호스트 폴).
     profile_req: Option<PeerId>,
+    /// 목록 고정 토글 요청(1회성 · 08-15) — (상대, 고정으로 바꿀 값).
+    fav_req: Option<(PeerId, bool)>,
     /// 그룹 관련 행동(1회성 — 호스트가 저장소·모달로 처리).
     group_action: Option<GroupAction>,
     /// 갱신 직후 스크롤 동작(설정 — 기본 = 현재 위치 유지 · 08-14).
@@ -290,6 +310,7 @@ impl PeerListWidget {
             ctx_peer: None,
             ctx_group: None,
             profile_req: None,
+            fav_req: None,
             group_action: None,
             groups: Vec::new(),
             selected: std::collections::HashSet::new(),
@@ -338,6 +359,11 @@ impl PeerListWidget {
             },
             inv,
         );
+    }
+
+    /// 목록 고정 토글 요청(1회성 · 08-15) — 호스트가 신뢰 저장소에 반영한다.
+    pub fn take_fav_toggle(&mut self) -> Option<(PeerId, bool)> {
+        self.fav_req.take()
     }
 
     /// "프로필 보기" 선택(1회성) — 호스트가 상대 프로필 창을 연다.
@@ -625,6 +651,19 @@ impl Widget for PeerListWidget {
                 if let Some(id) = self.ctx_menu.take_picked() {
                     match id.as_str() {
                         "profile" => self.profile_req = self.ctx_peer.take(),
+                        "fav" => {
+                            if let Some(p) = self.ctx_peer.take() {
+                                let cur = self
+                                    .rows
+                                    .iter()
+                                    .find(|r| r.entry.peer == p)
+                                    .is_some_and(|r| r.fav);
+                                self.fav_req = Some((p, !cur));
+                            }
+                        }
+                        "g-fav" => {
+                            self.group_action = self.ctx_group.take().map(GroupAction::ToggleFav);
+                        }
                         // ── 그룹 행동(M5-1) — 위젯은 요청만 남기고 저장소는 호스트 몫 ──
                         "g-create" => {
                             self.group_action = Some(GroupAction::Create {
@@ -671,6 +710,14 @@ impl Widget for PeerListWidget {
                         self.ctx_group = Some(g.id);
                         self.ctx_peer = None;
                         let mut v = Vec::new();
+                        v.push(crate::controls::CtxItem::item(
+                            "g-fav",
+                            if g.fav {
+                                "목록 고정 해제"
+                            } else {
+                                "목록 상단에 고정"
+                            },
+                        ));
                         if g.owned {
                             v.push(crate::controls::CtxItem::item("g-rename", "이름 변경"));
                             if sel_n > 0 {
@@ -703,16 +750,25 @@ impl Widget for PeerListWidget {
                             v.push(crate::controls::CtxItem::item("g-delete", "그룹 나가기"));
                         }
                         v
-                    } else if let Some(row) = self.peer_at(idx) {
+                    } else if let Some((peer, fav)) =
+                        self.peer_at(idx).map(|row| (row.entry.peer, row.fav))
+                    {
                         // 피어 행 — 우클릭 대상이 선택에 없으면 그 한 명도 재료에 포함되게
                         // 선택에 넣는다(선택 없이 우클릭 → 그 상대 1명으로 그룹).
-                        let peer = row.entry.peer;
                         self.ctx_peer = Some(peer);
                         self.ctx_group = None;
                         self.selected.insert(peer);
                         let n = self.selected.len();
                         vec![
                             crate::controls::CtxItem::item("profile", "프로필 보기"),
+                            crate::controls::CtxItem::item(
+                                "fav",
+                                if fav {
+                                    "목록 고정 해제"
+                                } else {
+                                    "목록 상단에 고정"
+                                },
+                            ),
                             crate::controls::CtxItem::item(
                                 "g-create",
                                 format!("그룹 만들기 ({n}명)"),
@@ -1042,7 +1098,13 @@ impl Widget for PeerListWidget {
                 let name_x = av.right() + self.s(10);
                 let name_th = ctx.text_height();
                 let name_y = r.y + self.s(8);
-                ctx.text(name_x, name_y, r, &g.name, theme.text);
+                // 고정 표시(08-15) — 색이 아니라 글리프(★)로(색맹 규약과 정합).
+                let gname = if g.fav {
+                    format!("★ {}", g.name)
+                } else {
+                    g.name.clone()
+                };
+                ctx.text(name_x, name_y, r, &gname, theme.text);
                 ctx.select_font(FontSlot::Status, false);
                 ctx.text(
                     name_x,
@@ -1117,12 +1179,7 @@ impl Widget for PeerListWidget {
                 dot_d,
                 dot_d,
             );
-            let dot_color = match row.link {
-                LinkState::Active => theme.ok,
-                LinkState::Lost => theme.danger,
-                LinkState::Idle => theme.text_dim,
-                LinkState::Connecting => theme.accent, // 연결 중(M2-8)
-            };
+            let dot_color = link_color(theme, row.link);
             ctx.fill_ellipse(
                 Rect::new(dot.x - 1, dot.y - 1, dot.w + 2, dot.h + 2),
                 theme.panel_bg,
@@ -1134,10 +1191,15 @@ impl Widget for PeerListWidget {
             ctx.select_font(FontSlot::PeerList, true);
             let name_th = ctx.text_height();
             let name_y = r.y + self.s(8);
-            ctx.text(name_x, name_y, r, row.entry.name.as_str(), theme.text);
+            let shown_name = if row.fav {
+                format!("★ {}", row.entry.name.as_str())
+            } else {
+                row.entry.name.as_str().to_string()
+            };
+            ctx.text(name_x, name_y, r, &shown_name, theme.text);
             // 다중 경로 ×N(진단) — 이름 뒤.
             if row.entry.paths > 1 {
-                let name_w = ctx.text_width(row.entry.name.as_str());
+                let name_w = ctx.text_width(&shown_name);
                 ctx.select_font(FontSlot::Status, false);
                 ctx.text(
                     name_x + name_w + self.s(6),
@@ -1301,6 +1363,7 @@ mod tests {
             border: None,
             unread: 0,
             last_read: None,
+            fav: false,
         }
     }
     fn widget(names: &[(u8, &str)]) -> (PeerListWidget, Invalidations) {
@@ -1344,6 +1407,7 @@ mod tests {
                 members: 3,
                 online: 1,
                 unread: 0,
+                fav: false,
                 owned: true,
                 member_invite: false,
             }],

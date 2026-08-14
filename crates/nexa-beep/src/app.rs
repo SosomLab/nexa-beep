@@ -614,6 +614,50 @@ fn spawn_session_actor(
     });
 }
 
+/// 현재 Unix 밀리초(목록 속성 — 최근 접속·대화 기록 · 08-15).
+fn unix_now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+}
+
+/// 상대 시각 표기(08-15 — 프로필 카드 "최근 접속/대화"). 0 = 기록 없음 = 빈 문자열.
+fn ago_label(unix_ms: u64) -> String {
+    if unix_ms == 0 {
+        return String::new();
+    }
+    let now = unix_now_ms();
+    let s = now.saturating_sub(unix_ms) / 1000;
+    match s {
+        0..=59 => "방금 전".into(),
+        60..=3_599 => format!("{}분 전", s / 60),
+        3_600..=86_399 => format!("{}시간 전", s / 3_600),
+        _ => format!("{}일 전", s / 86_400),
+    }
+}
+
+/// 목록 정렬 키(08-15 사용자 확정 — **고정 구획 먼저**, 그다음 모드별 속성 사슬).
+/// 반환은 오름차순 정렬용 튜플(작을수록 앞) — 시각·접속은 반전한다. 이름 동률은
+/// 호출자가 잇는다. 모드: "seen"(최근 접속·기본) · "chat"(최근 대화) ·
+/// "online"(접속 우선) · "name"(이름).
+fn peer_order_key(
+    mode: &str,
+    fav: bool,
+    online: bool,
+    seen: u64,
+    chat: u64,
+) -> (u8, u64, u64, u64) {
+    let inv = |t: u64| u64::MAX - t;
+    let on = u64::from(!online);
+    let head = u8::from(!fav);
+    match mode {
+        "chat" => (head, inv(chat), inv(seen), on),
+        "online" => (head, on, inv(chat), inv(seen)),
+        "name" => (head, 0, 0, 0),
+        _ => (head, inv(seen), inv(chat), on),
+    }
+}
+
 /// 현재 Unix 초(표시용 벽시계 — 정책 판단은 단조 시계를 쓴다).
 fn unix_now() -> u64 {
     std::time::SystemTime::now()
@@ -860,6 +904,8 @@ enum AlertCtx {
         uid: nbeep_core::GroupUid,
         owner: PeerId,
     },
+    /// 설정 초기화 확인(08-15 · 고급) — 긍정 = 표시 설정 전부 기본값.
+    SettingsReset,
 }
 
 /// 이름 입력 모달의 용도(M5-1) — 제출된 이름을 어디에 쓸지.
@@ -946,6 +992,10 @@ enum PickerPurpose {
     RestoreKey,
     /// 프로필 이미지 선택(M3-17) — 폴더 탐색 + 이미지 파일만.
     ProfileImage,
+    /// 설정 **백업 폴더** 선택(08-15) — 폴더 탐색 + "여기에 저장".
+    SettingsBackupDir,
+    /// 설정 **백업 파일** 선택(복원 · 08-15) — 폴더 탐색 + .cfg 파일.
+    SettingsRestoreFile,
 }
 
 /// 탐색형 피커의 행 하나가 뜻하는 것(라벨 → 행위 매핑).
@@ -1176,6 +1226,10 @@ struct App {
     gunread: HashMap<nbeep_core::group::GroupId, u32>,
     /// 열린 선택 모달의 문맥(초대 수락/거절 등) — Role::Alert 결과 라우팅.
     alert_ctx: Option<AlertCtx>,
+    /// 구성원 모달 열기 대기(08-15 — el은 about_to_wait에 있다 · 내용은 열 때 계산).
+    pending_members: Option<nbeep_core::group::GroupId>,
+    /// 설정 초기화 확인 대기(08-15 · 고급 — 확인 모달은 about_to_wait에서 연다).
+    pending_reset: bool,
     /// IME 중재 상태기계(M3-1e G3 — [`crate::ime_gate`]): 조합 게이트·보류-판정·
     /// 유출 조합기·잔향 억제·이동 키 재생·프리에딧 보존을 **한 타입**으로. 실측
     /// 이벤트 순서는 ime_gate의 재생 테스트 10종이 지킨다(H-1~H-24 계보는 그쪽 문서).
@@ -2069,6 +2123,8 @@ impl App {
         while let Ok(ev) = self.discovery.try_recv() {
             match ev {
                 DiscoveryEvent::Appeared(hint) => {
+                    // 최근 접속 관측(08-15 — 아는 상대만 · 60초 스로틀 영속).
+                    self.trust.note_seen(hint.peer, unix_now_ms());
                     self.table
                         .observe(hint.peer, hint.name, nbeep_core::SourceId(0), now);
                 }
@@ -2112,10 +2168,19 @@ impl App {
                 });
             }
         }
+        // 정렬(08-15 사용자 확정) — 고정(★) 구획이 먼저, 각 구획은 설정 모드
+        // (`ui.list_sort` — 최근 접속/최근 대화/접속 우선/이름)의 속성 사슬로.
+        let mode = self.settings.get("ui.list_sort").to_string();
         entries.sort_by(|a, b| {
-            a.name
-                .as_str()
-                .cmp(b.name.as_str())
+            let key = |e: &nbeep_core::PeerEntry| {
+                let online =
+                    self.conversations.contains_key(&e.peer) || self.table.get(e.peer).is_some();
+                let (seen, chat) = self.trust.meta(e.peer);
+                peer_order_key(&mode, self.trust.fav(e.peer), online, seen, chat)
+            };
+            key(a)
+                .cmp(&key(b))
+                .then_with(|| a.name.as_str().cmp(b.name.as_str()))
                 .then(a.peer.cmp(&b.peer))
         });
         let rows = entries
@@ -2155,6 +2220,7 @@ impl App {
                         })
                     })
                     .flatten();
+                let fav = self.trust.fav(entry.peer);
                 PeerRow {
                     entry,
                     trust,
@@ -2165,6 +2231,7 @@ impl App {
                     border,
                     unread,
                     last_read,
+                    fav,
                 }
             })
             .collect();
@@ -2190,10 +2257,14 @@ impl App {
                 )
                 .unwrap_or(u32::MAX),
                 unread: self.gunread.get(&s.local_id).copied().unwrap_or(0),
+                fav: s.pinned,
                 owned: s.roster.owner == me,
                 member_invite: s.roster.member_invite,
             })
             .collect();
+        let mut grows = grows;
+        // 그룹도 고정 먼저(08-15) — 각 구획은 이름순.
+        grows.sort_by(|a, b| (!a.fav, &a.name).cmp(&(!b.fav, &b.name)));
         self.list.set_groups(grows, inv);
     }
 
@@ -2595,6 +2666,8 @@ impl App {
             .unwrap_or_default();
         self.conversations
             .insert(peer, Conversation { out_tx, lines });
+        // 최근 접속(08-15) — 세션 성립도 접속 관측이다(발견 없는 수동 등록 포함).
+        self.trust.note_seen(peer, unix_now_ms());
         // ★ 새 세션 = 새 seq 공간(08-13 실기 — 상대가 재시작·재대화로 seq를 처음부터
         //   다시 발급하면 옛 기억이 새 메시지를 조용히 폐기했다). 옛 세션 재생은 Noise
         //   키가 원천 차단하므로 세션 경계 리셋은 안전하다(nbeep-core reset_device 문서).
@@ -2978,6 +3051,16 @@ impl App {
         format!("nexa-beep-identity-{}.key", self.identity.peer_id().short())
     }
 
+    /// 피커 "여기에 저장" 파일명 — 용도별(신원 키 vs 설정 · 08-15).
+    fn picker_save_name(&self, purpose: PickerPurpose) -> String {
+        match purpose {
+            PickerPurpose::SettingsBackupDir => {
+                format!("nexa-beep-settings-{}.cfg", self.identity.peer_id().short())
+            }
+            _ => self.default_backup_name(),
+        }
+    }
+
     /// 탐색형 피커 목록 구성 — (창 제목, 트리 행, 라벨→행위). 라벨 접두로 종류를
     /// 구분한다(글리프 폴백만으로 충분한 문자 — 이모지 금지).
     fn picker_listing(
@@ -2986,7 +3069,10 @@ impl App {
         save_name: &str,
     ) -> (String, Vec<nbeep_ui::TreeNode>, Vec<(String, PickEntry)>) {
         let mut entries: Vec<(String, PickEntry)> = Vec::new();
-        if purpose == PickerPurpose::BackupDir {
+        if matches!(
+            purpose,
+            PickerPurpose::BackupDir | PickerPurpose::SettingsBackupDir
+        ) {
             entries.push((format!("[여기에 저장] {save_name}"), PickEntry::SaveHere));
         }
         if let Some(parent) = dir.parent().filter(|p| !p.as_os_str().is_empty()) {
@@ -3006,6 +3092,9 @@ impl App {
                     Ok(t) if t.is_file() => {
                         let take = match purpose {
                             PickerPurpose::RestoreKey => true,
+                            PickerPurpose::SettingsRestoreFile => {
+                                name.to_ascii_lowercase().ends_with(".cfg")
+                            }
                             PickerPurpose::ProfileImage => {
                                 let lower = name.to_ascii_lowercase();
                                 ["png", "jpg", "jpeg", "gif", "bmp", "webp", "ico"]
@@ -3034,6 +3123,10 @@ impl App {
             PickerPurpose::BackupDir => format!("백업 폴더 선택 — {}", dir.display()),
             PickerPurpose::RestoreKey => format!("백업 파일 선택 — {}", dir.display()),
             PickerPurpose::ProfileImage => format!("프로필 이미지 선택 — {}", dir.display()),
+            PickerPurpose::SettingsBackupDir => format!("설정 백업 폴더 — {}", dir.display()),
+            PickerPurpose::SettingsRestoreFile => {
+                format!("설정 백업 파일 선택 — {}", dir.display())
+            }
             PickerPurpose::GallerySample => String::new(),
         };
         let roots = entries
@@ -3076,7 +3169,7 @@ impl App {
         } else {
             let dir = Self::home_dir();
             let (title, roots, entries) =
-                Self::picker_listing(purpose, &dir, &self.default_backup_name());
+                Self::picker_listing(purpose, &dir, &self.picker_save_name(purpose));
             self.picker_ctx = Some(PickerCtx {
                 purpose,
                 dir,
@@ -3117,7 +3210,7 @@ impl App {
     fn repopulate_picker(&mut self, id: WindowId) {
         let Some(ctx) = &self.picker_ctx else { return };
         let (title, roots, entries) =
-            Self::picker_listing(ctx.purpose, &ctx.dir, &self.default_backup_name());
+            Self::picker_listing(ctx.purpose, &ctx.dir, &self.picker_save_name(ctx.purpose));
         if let Some(ctx) = &mut self.picker_ctx {
             ctx.entries = entries;
         }
@@ -3132,6 +3225,62 @@ impl App {
         }
         self.layout_window(id);
         self.request_redraw(id);
+    }
+
+    /// 설정 백업(08-15 · 고급) — 대기 중 스냅샷까지 flush한 뒤 settings.cfg 복사.
+    fn do_backup_settings(&mut self, dir: &std::path::Path) -> String {
+        self.conf_save(false); // 스케줄 대기분 포함 최신본을 파일에
+        let src = self.data_dir.join("settings.cfg");
+        let dst = dir.join(self.picker_save_name(PickerPurpose::SettingsBackupDir));
+        match std::fs::copy(&src, &dst) {
+            Ok(_) => format!("설정 백업 완료 — {}", dst.display()),
+            Err(e) => format!("설정 백업 실패: {e}"),
+        }
+    }
+
+    /// 설정 복원(08-15 · 고급) — 백업 파일의 **아는 키 전부**를 정식 깔때기
+    /// (apply_settings)로 적용한다(hot-swap 일습 — 테마·IME·목록·프로필 전파까지).
+    /// 모르는 키는 보존 저장(F-1 관용).
+    fn do_restore_settings(&mut self, file: &std::path::Path) -> String {
+        let Ok(text) = std::fs::read_to_string(file) else {
+            return "설정 복원 실패 — 파일을 읽을 수 없습니다".into();
+        };
+        let doc = nexa_conf::parse(&text);
+        let mut changes: Vec<(&'static str, String)> = Vec::new();
+        let mut unknown = 0usize;
+        for (k, v) in doc.pairs {
+            // &'static 키로 정규화(레지스트리가 원천 — set_by_name과 같은 대조).
+            // 행위 키는 값이 아니라 제외(손편집 파일이 피커를 열게 두지 않는다).
+            if let Some(entry) = nbeep_ui::settings::registry().iter().find(|e| {
+                e.key == k && !matches!(e.kind, nbeep_ui::settings::SettingKind::Action { .. })
+            }) {
+                changes.push((entry.key, v));
+            } else {
+                self.conf.keep_unknown(k, v);
+                unknown += 1;
+            }
+        }
+        let n = changes.len();
+        // 행위 키(backup/restore/reset)는 파일에 없다(값이 아니라서 저장 안 됨).
+        self.apply_settings(changes);
+        format!("설정 복원 완료 — {n}개 적용(모르는 키 {unknown}개 보존)")
+    }
+
+    /// 설정 초기화(08-15 · 고급) — 레지스트리(표시 항목) 전부 기본값으로. 숨김 키
+    /// (창 위치·최근 목록)와 신원·핀·그룹은 건드리지 않는다.
+    fn do_reset_settings(&mut self) -> String {
+        let defaults = SettingsState::with_defaults();
+        let changes: Vec<(&'static str, String)> = nbeep_ui::settings::registry()
+            .iter()
+            .filter(|e| !matches!(e.kind, nbeep_ui::settings::SettingKind::Action { .. }))
+            .filter_map(|e| {
+                let d = defaults.get(e.key).to_string();
+                (self.settings.get(e.key) != d).then_some((e.key, d))
+            })
+            .collect();
+        let n = changes.len();
+        self.apply_settings(changes);
+        format!("설정 초기화 완료 — {n}개 항목을 기본값으로")
     }
 
     /// 신원 키 백업(M2-5a · 사용자 요청 08-11) — 현재 폴더로 복사. 기본 이름에 지문이
@@ -3334,19 +3483,31 @@ impl App {
     /// 상대 프로필 보기 카드(M3-17 — 목록 우클릭). 이미 있으면 갱신·포커스.
     /// 그룹 구성원 목록 모달 내용(08-14 사용자 요청) — **두 진입점이 같은 모달**:
     /// 목록의 그룹 아이콘 클릭 + 방 헤더 클릭. 온라인 판정은 목록 행과 같은 기준.
-    fn group_members_summary(&self, gid: nbeep_core::group::GroupId) -> Option<(String, String)> {
+    fn group_members_summary(
+        &self,
+        gid: nbeep_core::group::GroupId,
+    ) -> Option<(String, Vec<(LinkState, String)>)> {
         let s = self.groups.shared_by_id(gid)?;
         let me = self.identity.peer_id();
-        // 소유자 먼저, 나머지는 명부 순서(정렬돼 있다).
+        // 소유자 먼저, 나머지는 명부 순서(정렬돼 있다). 상태 점은 **목록 행과 같은
+        // 판정·같은 팔레트**(08-15 사용자 확정 "아바타 옆 점과 색을 맞춰줘").
         let mut members: Vec<PeerId> = s.roster.members.clone();
         members.sort_by_key(|m| *m != s.roster.owner);
-        let lines: Vec<String> = members
+        let lines: Vec<(LinkState, String)> = members
             .iter()
             .map(|m| {
-                let online = *m == me || self.conversations.contains_key(m);
+                // 목록 행과 같은 4상태 판정(refresh_rows와 동일 기준).
+                let link = if *m == me || self.conversations.contains_key(m) {
+                    LinkState::Active
+                } else if self.connecting.contains(*m) {
+                    LinkState::Connecting
+                } else if self.closed_peers.contains(m) {
+                    LinkState::Lost
+                } else {
+                    LinkState::Idle
+                };
                 let mut line = format!(
-                    "{} {} — {}",
-                    if online { "●" } else { "○" },
+                    "{} — {}",
                     if *m == me {
                         format!("{} (나)", self.my_display_name())
                     } else {
@@ -3357,10 +3518,13 @@ impl App {
                 if *m == s.roster.owner {
                     line.push_str(" · 소유자");
                 }
-                line
+                (link, line)
             })
             .collect();
-        let online_n = lines.iter().filter(|l| l.starts_with('●')).count();
+        let online_n = lines
+            .iter()
+            .filter(|(l, _)| *l == LinkState::Active)
+            .count();
         Some((
             format!(
                 "{} — 구성원 {} · 온라인 {}",
@@ -3368,7 +3532,7 @@ impl App {
                 members.len(),
                 online_n
             ),
-            lines.join("\n"),
+            lines,
         ))
     }
 
@@ -3379,11 +3543,60 @@ impl App {
             .to_string()
     }
 
-    /// 구성원 목록 모달 열기 — 알림 모달 재사용(`pending_alert` 경로 · el 불요).
+    /// 구성원 목록 모달 열기 요청 — 실제 열기는 `about_to_wait`(el이 거기 있다).
+    /// 내용은 열리는 순간 계산한다(그 사이 상태 변화 반영 — "확인할 때"의 상태).
     fn open_group_members(&mut self, gid: nbeep_core::group::GroupId) {
-        if let Some((title, message)) = self.group_members_summary(gid) {
-            self.pending_alert = Some((title, message));
+        self.pending_members = Some(gid);
+    }
+
+    /// 구성원 목록 모달 실제 열기(08-15) — 알림 모달 창 재사용 + 상태 목록 모드.
+    fn open_members_alert(&mut self, el: &ActiveEventLoop, gid: nbeep_core::group::GroupId) {
+        let Some((title, lines)) = self.group_members_summary(gid) else {
+            return;
+        };
+        let win_h = (110.0 + lines.len() as f64 * 26.0).clamp(170.0, 460.0);
+        if let Some((aid, _)) = self.windows.iter().find(|(_, e)| e.role == Role::Alert) {
+            let aid = *aid;
+            let mut inv = Invalidations::default();
+            if let Some(av) = &mut self.alert_view {
+                av.set_content(&title, "", &mut inv);
+                av.set_status_list(lines, &mut inv);
+            }
+            if let Some(e) = self.windows.get(&aid) {
+                let _ = e
+                    .window
+                    .request_inner_size(winit::dpi::LogicalSize::new(400.0, win_h));
+                e.window.focus_window();
+            }
+            self.request_redraw(aid);
+            return;
         }
+        let attrs = Window::default_attributes()
+            .with_title("Nexa Beep — 구성원")
+            .with_inner_size(winit::dpi::LogicalSize::new(400.0, win_h))
+            .with_resizable(false)
+            .with_window_icon(self.icon.clone());
+        let window = Rc::new(el.create_window(attrs).unwrap());
+        let scale = window.scale_factor() as f32;
+        let context = softbuffer::Context::new(window.clone()).unwrap();
+        let surface = SbSurface::new(&context, window.clone()).unwrap();
+        let id = window.id();
+        self.windows.insert(
+            id,
+            WinEntry {
+                role: Role::Alert,
+                window,
+                surface,
+                cursor: (0, 0),
+                scale,
+            },
+        );
+        let mut av = nbeep_ui::AlertWidget::new(title, "");
+        let mut inv = Invalidations::default();
+        av.set_status_list(lines, &mut inv);
+        self.alert_view = Some(av);
+        self.layout_window(id);
+        self.request_redraw(id);
     }
 
     /// 상대 프로필 카드 내용 조립(열기·갱신 공용 — M3-21).
@@ -3404,6 +3617,8 @@ impl App {
             fingerprint: peer.short(),
             seed: peer.as_bytes().to_vec(),
             avatar: p.and_then(|p| p.avatar.clone()),
+            last_seen: ago_label(self.trust.meta(peer).0),
+            last_chat: ago_label(self.trust.meta(peer).1),
         }
     }
 
@@ -3863,6 +4078,19 @@ impl App {
                     self.pending_picker = Some(PickerPurpose::RestoreKey);
                     continue;
                 }
+                // 설정 백업·복원·초기화(08-15 · 고급) — 값이 아니라 행위.
+                "settings.backup" => {
+                    self.pending_picker = Some(PickerPurpose::SettingsBackupDir);
+                    continue;
+                }
+                "settings.restore" => {
+                    self.pending_picker = Some(PickerPurpose::SettingsRestoreFile);
+                    continue;
+                }
+                "settings.reset" => {
+                    self.pending_reset = true; // 확인 모달은 about_to_wait(el)에서
+                    continue;
+                }
                 _ => {}
             }
             self.settings.set(key, value.clone());
@@ -4021,6 +4249,10 @@ impl App {
                 k if k.starts_with("ime.") => {
                     self.apply_ime_tuning();
                     self.status = "한글 입력(IME) 기준값 적용".into();
+                }
+                // 목록 정렬 모드(08-15) — 즉시 재조립.
+                "ui.list_sort" => {
+                    self.refresh_and_redraw();
                 }
                 // 목록 갱신 주기(08-14) — 발견발 재조립을 이 간격으로 묶는다.
                 "ui.list_refresh_ms" => {
@@ -4259,6 +4491,18 @@ impl App {
                 // 그룹 아이콘 클릭(08-14) — 방 헤더 클릭과 같은 구성원 모달.
                 self.open_group_members(gid);
                 let _ = el;
+            }
+            GA::ToggleFav(gid) => {
+                // 그룹 목록 고정(08-15) — groups.seg v3에 영속.
+                let cur = self.groups.shared_by_id(gid).is_some_and(|s| s.pinned);
+                if self.groups.set_shared_pinned(gid, !cur) {
+                    self.refresh_and_redraw();
+                    self.status = if cur {
+                        "그룹 — 목록 고정 해제".into()
+                    } else {
+                        "그룹 — 목록 상단에 고정".into()
+                    };
+                }
             }
             GA::Delete(gid) => {
                 let Some(s) = self.groups.shared_by_id(gid) else {
@@ -4851,7 +5095,7 @@ impl App {
         }
         self.alert_ctx = Some(ctx);
         let attrs = Window::default_attributes()
-            .with_title("Nexa Beep — 그룹 초대")
+            .with_title("Nexa Beep — 확인")
             .with_inner_size(winit::dpi::LogicalSize::new(400.0, 170.0))
             .with_resizable(false)
             .with_window_icon(self.icon.clone());
@@ -4878,6 +5122,13 @@ impl App {
     /// 선택 모달 결과 적용(M5-1g) — 초대 수락 = 방 합류 + 소유자에 통지.
     fn apply_alert_choice(&mut self, yes: bool, ctx: AlertCtx) {
         match ctx {
+            AlertCtx::SettingsReset => {
+                if yes {
+                    self.status = self.do_reset_settings();
+                } else {
+                    self.status = "설정 초기화 취소".into();
+                }
+            }
             AlertCtx::GroupInvite { uid, owner } => {
                 if yes {
                     if self.groups.set_mine(uid, nbeep_store::MineState::Joined) {
@@ -5361,6 +5612,7 @@ impl App {
             }
             // 왕래 장부 — 파일 전송 자격(상호 확인)의 근거(사용자 확정 08-09).
             self.ledger.note_sent(peer);
+            self.trust.note_chat(peer, unix_now_ms()); // 최근 대화(08-15 — 발신도)
             if let Some(conv) = self.conversations.get_mut(&peer) {
                 conv.lines.push(ChatLine::text(true, text, at_ms, wall));
                 // 액터에 발신 요청 — 수신은 비동기로 AppEvent::Recv로 돌아온다(M2-7).
@@ -5486,6 +5738,16 @@ impl App {
                     if let Some(peer) = self.list.take_profile_request() {
                         self.open_peer_info(peer, el);
                     }
+                    // 목록 고정 토글(08-15) — 신뢰 저장소(암호화 · trust.seg v2)에 영속.
+                    if let Some((peer, fav)) = self.list.take_fav_toggle() {
+                        self.trust.set_fav(peer, fav);
+                        self.refresh_and_redraw();
+                        self.status = if fav {
+                            format!("{} — 목록 상단에 고정", self.peer_title(peer))
+                        } else {
+                            format!("{} — 목록 고정 해제", self.peer_title(peer))
+                        };
+                    }
                     // 그룹 행동(M5-1) — 저장소 반영·이름 모달은 여기(호스트) 몫.
                     if let Some(action) = self.list.take_group_action() {
                         self.handle_group_action(action, el);
@@ -5593,7 +5855,12 @@ impl App {
                                     }
                                     Some(PickEntry::SaveHere) => {
                                         let dir = ctx.dir.clone();
-                                        self.status = self.do_backup_identity(&dir);
+                                        self.status = match ctx.purpose {
+                                            PickerPurpose::SettingsBackupDir => {
+                                                self.do_backup_settings(&dir)
+                                            }
+                                            _ => self.do_backup_identity(&dir),
+                                        };
                                         self.picker_view = None;
                                         self.picker_ctx = None;
                                         self.windows.remove(&id);
@@ -5633,6 +5900,9 @@ impl App {
                                                     let pid = *pid;
                                                     self.request_redraw(pid);
                                                 }
+                                            }
+                                            PickerPurpose::SettingsRestoreFile => {
+                                                self.status = self.do_restore_settings(&p);
                                             }
                                             _ => {
                                                 self.status = self.do_restore_identity(&p);
@@ -6068,6 +6338,7 @@ impl ApplicationHandler<AppEvent> for App {
                     return; // 중복(다중 경로 — FR-M-9)
                 }
                 self.ledger.note_recv(peer); // 왕래 장부(상호 확인)
+                self.trust.note_chat(peer, unix_now_ms()); // 최근 대화(08-15)
                 let (at_ms, wall) = now_stamp();
                 let line = ChatLine::text(false, text, at_ms, wall);
                 if let Some(conv) = self.conversations.get_mut(&peer) {
@@ -6724,6 +6995,21 @@ impl ApplicationHandler<AppEvent> for App {
         // 경고 모달 열기(08-13 — 이벤트 루프 참조가 없는 지점의 요청을 여기서 처리).
         if let Some((title, message)) = self.pending_alert.take() {
             self.open_alert(el, &title, &message);
+        }
+        // 구성원 모달(08-15) — 열리는 순간의 상태로 계산(pending_alert와 같은 문법).
+        if let Some(gid) = self.pending_members.take() {
+            self.open_members_alert(el, gid);
+        }
+        // 설정 초기화 확인(08-15 · 고급) — 파괴적 행위라 확인 모달을 먼저.
+        if std::mem::take(&mut self.pending_reset) {
+            self.open_choice(
+                el,
+                "설정 초기화",
+                "표시되는 설정 전부를 기본값으로 되돌립니다. 계속할까요?\n(신원·핀·그룹·창 위치 등 숨김 상태는 유지됩니다)",
+                "초기화",
+                "취소",
+                AlertCtx::SettingsReset,
+            );
         }
         // 자동 재연결 tick(ⓑ) — 시점이 된 상대를 워커로 재시도(성패는 이벤트로 복귀).
         // 유휴 폴(~5Hz · M1-8x)이 이 지점을 주기적으로 지나간다.
@@ -7801,6 +8087,8 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         pending_invites: HashMap::new(),
         gunread: HashMap::new(),
         alert_ctx: None,
+        pending_members: None,
+        pending_reset: false,
         conversations: HashMap::new(),
         dedup: nbeep_core::DedupIndex::new(),
         started: Instant::now(),
@@ -7979,6 +8267,22 @@ mod tests {
         assert!(!latch.begin(p), "진행 중 중복 클릭은 막는다");
         latch.finish(Some(p), None);
         assert!(latch.begin(p));
+    }
+
+    /// 목록 정렬 키(08-15 사용자 확정) — 고정 구획이 항상 먼저, 그다음 모드 사슬.
+    #[test]
+    fn peer_order_key_pins_first_then_mode_chain() {
+        use super::peer_order_key as k;
+        // 고정은 어떤 속성보다 먼저.
+        assert!(k("seen", true, false, 0, 0) < k("seen", false, true, u64::MAX - 1, u64::MAX - 1));
+        // seen 모드 — 최근 접속이 더 최신인 쪽이 앞.
+        assert!(k("seen", false, false, 200, 0) < k("seen", false, false, 100, 0));
+        // chat 모드 — 최근 대화 우선.
+        assert!(k("chat", false, false, 0, 200) < k("chat", false, false, 999, 100));
+        // online 모드 — 접속이 시각보다 먼저.
+        assert!(k("online", false, true, 0, 0) < k("online", false, false, 999, 999));
+        // name 모드 — 고정 외 속성 무시(이름 동률 비교는 호출자 몫).
+        assert_eq!(k("name", false, true, 5, 5), k("name", false, false, 9, 1));
     }
 
     /// ★ M3-21 — 프로필 응답 구성이 읽는 **키 전부**가 전파 깔때기에 있어야 한다.

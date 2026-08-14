@@ -33,6 +33,11 @@ struct Record {
     blocked: bool,
     /// 이 키로 본 표시 이름들(가장 최근이 뒤). 이름 위장 감사를 위해 이력을 남긴다.
     names: Vec<DisplayName>,
+    /// 목록 상단 고정(08-15 — TOFU "핀"과 별개인 즐겨찾기).
+    fav: bool,
+    /// 최근 접속·대화 시각(unix ms · 0 = 기록 없음).
+    last_seen: u64,
+    last_chat: u64,
 }
 
 /// 신뢰 저장 포트 — 파일 기반 구현은 `nbeep-store`(M2-5)가 이 트레이트로 제공한다.
@@ -61,6 +66,12 @@ pub struct PinRecord {
     pub blocked: bool,
     /// 이 키로 본 이름 이력(가장 최근이 뒤).
     pub names: Vec<DisplayName>,
+    /// 목록 상단 고정(08-15 사용자 요청 — TOFU "핀"과 별개인 즐겨찾기).
+    pub fav: bool,
+    /// 최근 접속 관측 시각(unix ms · 0 = 기록 없음) — 발견·세션 성립.
+    pub last_seen: u64,
+    /// 최근 대화 시각(unix ms · 0 = 기록 없음) — 메시지 송·수신.
+    pub last_chat: u64,
 }
 
 /// 인메모리 TOFU 저장(순수 로직). 영속은 `nbeep-store`가 이걸 파일로 감싼다(M2-5).
@@ -82,6 +93,9 @@ impl MemoryTrustStore {
             level: TrustLevel::Unverified,
             blocked: false,
             names: Vec::new(),
+            fav: false,
+            last_seen: 0,
+            last_chat: 0,
         });
         if rec.names.last() != Some(&name) {
             rec.names.push(name);
@@ -115,6 +129,54 @@ impl MemoryTrustStore {
         self.records.get(&peer).map_or(&[], |r| &r.names)
     }
 
+    /// 목록 고정 지정(08-15) — 기록이 있는(아는) 상대만. 바뀌었으면 `true`.
+    pub fn set_fav(&mut self, peer: PeerId, fav: bool) -> bool {
+        match self.records.get_mut(&peer) {
+            Some(r) if r.fav != fav => {
+                r.fav = fav;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// 목록 고정 여부.
+    #[must_use]
+    pub fn fav(&self, peer: PeerId) -> bool {
+        self.records.get(&peer).is_some_and(|r| r.fav)
+    }
+
+    /// 최근 접속 관측 기록(08-15) — **아는 상대만** 갱신한다(발견만 된 상대에 기록을
+    /// 만들면 "핀 = 연결됐던 기록"이라는 부팅 시드 의미가 깨진다). 바뀌면 `true`.
+    pub fn note_seen(&mut self, peer: PeerId, unix_ms: u64) -> bool {
+        match self.records.get_mut(&peer) {
+            Some(r) if r.last_seen < unix_ms => {
+                r.last_seen = unix_ms;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// 최근 대화 시각 기록(08-15) — 메시지 송·수신. 아는 상대만.
+    pub fn note_chat(&mut self, peer: PeerId, unix_ms: u64) -> bool {
+        match self.records.get_mut(&peer) {
+            Some(r) if r.last_chat < unix_ms => {
+                r.last_chat = unix_ms;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// (최근 접속, 최근 대화) — 없으면 (0, 0).
+    #[must_use]
+    pub fn meta(&self, peer: PeerId) -> (u64, u64) {
+        self.records
+            .get(&peer)
+            .map_or((0, 0), |r| (r.last_seen, r.last_chat))
+    }
+
     /// 영속 스냅샷(M2-5a) — **키 바이트 정렬**로 결정적(같은 상태 = 같은 직렬화).
     #[must_use]
     pub fn export(&self) -> Vec<PinRecord> {
@@ -126,6 +188,9 @@ impl MemoryTrustStore {
                 level: r.level,
                 blocked: r.blocked,
                 names: r.names.clone(),
+                fav: r.fav,
+                last_seen: r.last_seen,
+                last_chat: r.last_chat,
             })
             .collect();
         out.sort_unstable_by(|a, b| a.peer.as_bytes().cmp(b.peer.as_bytes()));
@@ -143,6 +208,9 @@ impl MemoryTrustStore {
                     level: r.level,
                     blocked: r.blocked,
                     names: r.names,
+                    fav: r.fav,
+                    last_seen: r.last_seen,
+                    last_chat: r.last_chat,
                 },
             );
         }
@@ -171,6 +239,9 @@ impl TrustStore for MemoryTrustStore {
                 level: TrustLevel::Pinned,
                 blocked: false,
                 names: Vec::new(),
+                fav: false,
+                last_seen: 0,
+                last_chat: 0,
             },
         );
         TrustDecision::FirstContact
@@ -187,6 +258,9 @@ impl TrustStore for MemoryTrustStore {
             level: TrustLevel::Unverified,
             blocked: false,
             names: Vec::new(),
+            fav: false,
+            last_seen: 0,
+            last_chat: 0,
         });
         rec.level = TrustLevel::FingerprintVerified;
     }
@@ -196,6 +270,9 @@ impl TrustStore for MemoryTrustStore {
             level: TrustLevel::Unverified,
             blocked: false,
             names: Vec::new(),
+            fav: false,
+            last_seen: 0,
+            last_chat: 0,
         });
         rec.blocked = true;
     }

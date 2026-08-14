@@ -28,6 +28,10 @@ pub struct PeerInfo {
     pub seed: Vec<u8>,
     /// 프로필 사진(M4-5 imgdec — 원형 마스크 완료본). 없으면 이니셜.
     pub avatar: Option<std::rc::Rc<crate::theme::IconImage>>,
+    /// 최근 접속 표시 문자열(08-15 — 호스트가 시각을 사람 표기로 변환 · 빈 = 기록 없음).
+    pub last_seen: String,
+    /// 최근 대화 표시 문자열(08-15 — 빈 = 기록 없음).
+    pub last_chat: String,
 }
 
 /// 상대 프로필 카드 위젯.
@@ -130,10 +134,24 @@ impl Widget for PeerInfoWidget {
         }
         // 상세 행(라벨: 값) — 없는 항목은 "(비공개)"로 명시(없음과 미공개를 숨기지 않는다).
         ctx.select_font(FontSlot::Status, false);
-        let rows = [("이메일", &self.info.email), ("전화번호", &self.info.phone)];
+        let rows = [
+            ("이메일", &self.info.email),
+            ("전화번호", &self.info.phone),
+            ("최근 접속", &self.info.last_seen),
+            ("최근 대화", &self.info.last_chat),
+        ];
         let x = b.x + self.s(28);
         for (label, val) in rows {
-            let shown = if val.is_empty() { "(비공개)" } else { val };
+            // 연락처의 빈 값 = 미공개, 시각의 빈 값 = 기록 없음(뜻이 다르다).
+            let shown = if val.is_empty() {
+                if matches!(label, "최근 접속" | "최근 대화") {
+                    "(기록 없음)"
+                } else {
+                    "(비공개)"
+                }
+            } else {
+                val
+            };
             ctx.text(x, y, b, &format!("{label}  ·  {shown}"), theme.text);
             y += ctx.text_height() + self.s(8);
         }

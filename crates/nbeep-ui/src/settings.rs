@@ -443,6 +443,19 @@ pub fn registry() -> &'static [Entry] {
         Entry {
             cat: Msg::CatAppearance,
             sub: Some(Msg::CatPeerList),
+            label: Msg::ListSort,
+            desc: Msg::ListSortDesc,
+            kind: SettingKind::Radio(&[
+                ("seen", Msg::SortSeen),
+                ("chat", Msg::SortChat),
+                ("online", Msg::SortOnline),
+                ("name", Msg::SortName),
+            ]),
+            key: "ui.list_sort",
+        },
+        Entry {
+            cat: Msg::CatAppearance,
+            sub: Some(Msg::CatPeerList),
             label: Msg::ListScroll,
             desc: Msg::ListScrollDesc,
             kind: SettingKind::Radio(&[
@@ -822,6 +835,37 @@ pub fn registry() -> &'static [Entry] {
                 "ms",
             ),
             key: "ime.selfcommit_ms",
+        },
+        // ── 고급(08-15 사용자 요청) — 설정 백업·복원·초기화(값이 아니라 행위) ──
+        Entry {
+            cat: Msg::CatAdvanced,
+            sub: None,
+            label: Msg::SetBackup,
+            desc: Msg::SetBackupDesc,
+            kind: SettingKind::Action {
+                verb: Msg::ActBackup,
+            },
+            key: "settings.backup",
+        },
+        Entry {
+            cat: Msg::CatAdvanced,
+            sub: None,
+            label: Msg::SetRestore,
+            desc: Msg::SetRestoreDesc,
+            kind: SettingKind::Action {
+                verb: Msg::ActRestore,
+            },
+            key: "settings.restore",
+        },
+        Entry {
+            cat: Msg::CatAdvanced,
+            sub: None,
+            label: Msg::SetReset,
+            desc: Msg::SetResetDesc,
+            kind: SettingKind::Action {
+                verb: Msg::ActReset,
+            },
+            key: "settings.reset",
         },
     ]
 }
