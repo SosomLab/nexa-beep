@@ -32,7 +32,7 @@
 | --- | --- |
 | **되는 것** | 실행하면 같은 LAN의 상대가 자동으로 뜨고(UDP 발견) → 고르면 **Noise_XX 암호화 세션** → 대화 · **파일 송수신**(무해화 게이트 + 수신측 격리 성공까지 확인하는 종단 ack) · 프로필 교환 · 설정/신원/신뢰 핀 영속 |
 | **배포** | **v0.1.5** — Windows(x64·ARM64) · macOS(x64·ARM64) · Linux(x64) **5타깃 × 2채널**(설치본·포터블) · Homebrew 탭 · 태그 push = 자동 공개 → [Releases](https://github.com/SosomLab/nexa-beep/releases) |
-| **테스트** | 워크스페이스 **573 green** · clippy 경고 0 · CI 4잡(lint / test 3-OS / cross-build / 예산 게이트) |
+| **테스트** | 워크스페이스 **586 green** · clippy 경고 0 · CI 4잡(lint / test 3-OS / cross-build / 예산 게이트) |
 | **예산** | 산출물 **0.76MB**/게이트 10MB ✅ · 유휴 RSS — Windows 관측 **17.1MB**(≤30MB 안쪽) · **mac 85.7MB 재실측 잔여** |
 | **다음 관문** | 🔴 사용자 확정 대기 — 메시지 등급·알림(ADR-0010) · v1.0 기능 커트라인 · 기록 저장 암호화 잔여(ADR-0005 §4~) |
 

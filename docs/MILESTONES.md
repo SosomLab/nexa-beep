@@ -20,7 +20,7 @@
 
 ## 기능 현황
 
-> **표 갱신: 2026-08-14** (테스트 **573 green** · 공개 **v0.1.6** — 2-PC 실증(Win↔Mac)·자동 재연결·keepalive·읽지 않음 배지·Windows 한/영 직접 토글([27 §8](27-typeahead-hangul-composition.md))·imgdec 디코드 워커화 · ★**대량 전송 Backpressure 해소**(`recv_any`)·**GUI 실행 가능 세션 판정**(3-OS)·★**공유 그룹 채팅 개통**([31 ADR-0012](31-adr-0012-shared-group-chat.md) ✅ G1~G3)·**서버 모드 방향 설계**([32 ADR-0013](32-adr-0013-server-modes.md) 📐)·★**기본 아바타 일습**(12간지 내장·와이어·툴바 내 얼굴)·★**컨트롤 라이브러리화**(`nbeep-ctl` 신설 — 앱 도메인 의존 0)). 후보 기능은 [03 §4 기능 매트릭스](03-competitive-landscape.md#4-기능-매트릭스--잘-쓰이는-인기-기능-집계)에서 **보편성(7제품 중 몇 곳이 갖췄나)** 기준으로 추렸다. FR 번호는 [05 요구사항](05-requirements.md)(119건)을 참조한다.
+> **표 갱신: 2026-08-14** (테스트 **586 green** · 공개 **v0.1.6** — 2-PC 실증(Win↔Mac)·자동 재연결·keepalive·읽지 않음 배지·Windows 한/영 직접 토글([27 §8](27-typeahead-hangul-composition.md))·imgdec 디코드 워커화 · ★**대량 전송 Backpressure 해소**(`recv_any`)·**GUI 실행 가능 세션 판정**(3-OS)·★**공유 그룹 채팅 개통**([31 ADR-0012](31-adr-0012-shared-group-chat.md) ✅ G1~G3)·**서버 모드 방향 설계**([32 ADR-0013](32-adr-0013-server-modes.md) 📐)·★**기본 아바타 일습**(12간지 내장·와이어·툴바 내 얼굴)·★**컨트롤 라이브러리화**(`nbeep-ctl` 신설 — 앱 도메인 의존 0)). 후보 기능은 [03 §4 기능 매트릭스](03-competitive-landscape.md#4-기능-매트릭스--잘-쓰이는-인기-기능-집계)에서 **보편성(7제품 중 몇 곳이 갖췄나)** 기준으로 추렸다. FR 번호는 [05 요구사항](05-requirements.md)(119건)을 참조한다.
 > **무엇을 v1.0에 넣을지의 판단은 [25 기능 범위](25-feature-scope.md)** — 🅐입장권/🅑정체성/🅒경쟁채택/🅓사용자확장/🅔제외 5등급(🔴 D-24 확정 대기).
 
 ### 1차 범위 (v1)
