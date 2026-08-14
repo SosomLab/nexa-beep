@@ -6644,16 +6644,17 @@ impl ApplicationHandler<AppEvent> for App {
                 self.layout_window(id);
                 self.request_redraw(id);
             }
+            // ⚠️ `Focused(true)`는 **한 팔로 유지한다.** 08-14에 캐럿 깜빡임과 모달 재부상이
+            //    각자 팔을 만들어, 뒤엣것(재부상)이 `unreachable_pattern`으로 죽어 있었다
+            //    — "메인을 클릭해도 모달이 위"가 조용히 동작하지 않았다.
             WindowEvent::Focused(true) => {
                 // 캐럿 깜빡임 — 포커스 창 추적 + 기준점 리셋(받자마자 밝게 시작).
                 self.os_focused = Some(id);
                 self.blink_anchor_ms = self.now_ms();
                 self.request_redraw(id);
-            }
-            WindowEvent::Focused(true) => {
                 // 앱 모달이 열려 있는데 **우리 앱의 다른 창**이 활성화되면 모달을 다시
-                // 앞으로(표준 모달 — "메인을 클릭해도 모달이 위"). 다른 프로그램의
-                // 활성화에는 관여하지 않는다(08-14 사용자 확정).
+                // 앞으로(표준 모달). 다른 프로그램의 활성화에는 관여하지 않는다
+                // (08-14 사용자 확정).
                 if let Some(mid) = self.modal_id() {
                     if mid != id {
                         if let Some(e) = self.windows.get(&mid) {
