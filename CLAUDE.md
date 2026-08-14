@@ -72,6 +72,7 @@
 
 - **문서·커밋/푸시 규약 SSOT = [docs/16](docs/16-doc-git-conventions.md)** — 4층 문서 체계·작성 규칙 8·커밋/브랜치/푸시 필수 규칙.
 - 개발 규율([docs/15](docs/15-dev-methodology.md)): **수직 슬라이스 · 단위=커밋 1개 · 초안→확장 · main 항상 green · Conventional Commits**.
+- **스테이징은 `git add <파일>`로 내가 고친 것만** — `git add -A`·`git add .` 금지([16 §3](docs/16-doc-git-conventions.md)). 이 저장소는 **여러 세션이 동시에 같은 작업 트리**를 만져서, 전부 담으면 남의 미완성 변경이 섞이고 **그쪽 커밋 사유가 유실된다**(08-14 두 번 발생). 커밋 전 `git status --short`로 확인.
 - **큰 단위=브랜치, 세부 기능=커밋. push는 사용자 명시 요청 시에만.** 파괴적 작업(삭제·reset·force push·덮어쓰기)은 실행 전 확인. 그 외 일상 작업·상태 md 갱신은 묻지 않고 자동 진행.
 - 기록: **한 작업 = 한 트랜잭션 갱신** — 커밋 → [journal/YYYY-MM-DD](docs/journal/) 상세 → [DEVLOG](docs/DEVLOG.md) 한 줄 → **[STATUS](docs/STATUS.md) 한 장(N차)** → [MILESTONES](docs/MILESTONES.md)/[TODO](docs/TODO.md) 상태 → (브랜치면) [BRANCHES](docs/BRANCHES.md).
 - 기록에는 **"왜 + 실측값"**. 네트워크 기능은 **추정 금지 · 실측 필수**(도달률·지연·패킷 크기).
