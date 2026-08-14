@@ -37,9 +37,15 @@ say "① 실행 중인 nexa-beep 종료"
 BEFORE=$(pgrep -f "nexa-beep" 2>/dev/null | wc -l | tr -d ' ')
 pkill -f "nexa-beep" 2>/dev/null
 sleep 2
+# 2차 — 안 죽은 것(끊긴 세션의 프로브 잔재 등)은 강제 종료한다. 하나라도 남으면
+# 포트·발견이 겹쳐 다음 단계 판정이 흐려진다(08-14: 고아 프로브 1개가 가드를 막았다).
+if [ -n "$(pgrep -f 'nexa-beep' 2>/dev/null)" ]; then
+  pkill -9 -f "nexa-beep" 2>/dev/null
+  sleep 1
+fi
 LEFT=$(pgrep -f "nexa-beep" 2>/dev/null | wc -l | tr -d ' ')
 echo "   종료 전 ${BEFORE}개 → 남은 ${LEFT}개"
-[ "$LEFT" != "0" ] && { echo "   ⚠️ 안 죽은 프로세스가 있다 — 확인 후 다시"; pgrep -fl "nexa-beep"; exit 1; }
+[ "$LEFT" != "0" ] && { echo "   ⚠️ 강제 종료 후에도 남았다 — 확인 후 다시"; pgrep -fl "nexa-beep"; exit 1; }
 
 # ── ② 빌드 ────────────────────────────────────────────────────────────────
 if [ "$GATE" = "1" ]; then
@@ -69,10 +75,16 @@ done
 echo "   기본 = $ROOT/target/release  ·  A·B = $MULTI/{A,B}"
 
 # ── ④ 기동 ────────────────────────────────────────────────────────────────
-say "④ 기동"
-./target/release/nexa-beep --window --live > /tmp/beep-base.log 2>&1 &
-"$MULTI/A/nexa-beep" --window --live > "$MULTI/A/out.log" 2>&1 &
-"$MULTI/B/nexa-beep" --window --live > "$MULTI/B/out.log" 2>&1 &
+# ★ nohup + disown 으로 **셸에서 떼어낸다**. 그냥 `&`로 띄우면 이 스크립트를 부른
+#   셸의 프로세스 그룹에 남아, 그 셸이 종료·중단될 때 창이 같이 죽는다(08-14 실측 —
+#   크래시 로그 없이 조용히 사라져 원인 찾는 데 시간을 썼다).
+say "④ 기동 (셸에서 분리)"
+nohup ./target/release/nexa-beep --window --live > /tmp/beep-base.log 2>&1 &
+disown
+nohup "$MULTI/A/nexa-beep" --window --live > "$MULTI/A/out.log" 2>&1 &
+disown
+nohup "$MULTI/B/nexa-beep" --window --live > "$MULTI/B/out.log" 2>&1 &
+disown
 sleep 6
 RUNNING=$(pgrep -f "nexa-beep --window" 2>/dev/null | wc -l | tr -d ' ')
 echo "   창 ${RUNNING}개"

@@ -1,15 +1,16 @@
-//! 캐러셀 — **가로 아이템 띠 + 넘칠 때만 나타나는 좌/우 이동 버튼**(08-14 사용자 확정).
+//! 캐러셀 — **가로 아이템 띠 + 고정 위치 좌/우 오버레이 버튼**(08-14 사용자 확정 2차).
 //!
-//! 규칙(사용자 명세 그대로):
-//! - 왼쪽 끝: `(아이템)(아이템)…(▶)` — 좌버튼 없음, 아이템부터.
-//! - 중간: `(◀)(아이템)…(▶)`.
-//! - 오른쪽 끝: `(◀)(아이템)…` — 우버튼 없음.
-//! - 안 넘치면 버튼이 아예 없다.
+//! 1차(아이템 단위 창 이동)에서 개정된 규칙:
+//! - **버튼 위치는 항상 고정**(좌 = 띠 왼끝 · 우 = 띠 오른끝). 표시/숨김만 토글되고,
+//!   보일 때는 언제나 같은 자리다(끝에 닿으면 그쪽 버튼 숨김 · 안 넘치면 둘 다 없음).
+//! - 버튼 영역도 **내용 영역이다** — 아이템이 그 밑을 지나가고, 버튼은 **맨 위**에
+//!   얹힌다(스크롤 중 반쯤 걸친 아이템 위로 버튼이 보인다).
+//! - 스크롤은 **픽셀 단위**(부드러운 이동 — 아이템이 절반만 보여도 된다).
 //!
-//! **아이템 그리기는 소유자 몫**이다(아바타·색상 등 내용을 컨트롤이 모른다 — 조합/위임).
-//! 컨트롤은 창(윈도잉)·버튼·클릭 판정만 책임진다: [`Carousel::item_rect`]로 보이는
-//! 아이템의 자리를 받아 소유자가 그리고, [`Carousel::paint`]가 버튼을 얹는다.
-//! 클릭은 [`Carousel::take_clicked`](1회성 · 아이템 **전역 인덱스**)로 회수한다.
+//! **아이템 그리기는 소유자 몫**이다(조합/위임): [`Carousel::item_rect`]로 자리를 받아
+//! 그리고, [`Carousel::paint`]가 경계 마스크와 버튼을 맨 위에 얹는다. 소유자 그리기가
+//! 띠 밖으로 번진 부분(클립 없는 렌더 경로)은 paint의 **경계 마스크**(배경색)가 덮는다.
+//! 클릭은 [`Carousel::take_clicked`](1회성 · 전역 인덱스)로 회수한다.
 
 use super::{Control, ControlBase};
 use crate::draw::DrawCtx;
@@ -18,7 +19,7 @@ use crate::geom::{Point, Rect};
 use crate::theme::Theme;
 use crate::widget::{Invalidations, Widget};
 
-/// 캐러셀 컨트롤 — 정사각 아이템 가로 띠.
+/// 캐러셀 컨트롤 — 정사각 아이템 가로 띠(픽셀 스크롤).
 #[derive(Debug)]
 pub struct Carousel {
     base: ControlBase,
@@ -28,11 +29,11 @@ pub struct Carousel {
     gap: i32,
     /// 전체 아이템 수(소유자가 갱신).
     count: usize,
-    /// 첫 표시 아이템 인덱스(스크롤 상태).
-    first: usize,
+    /// 스크롤 오프셋(물리 px · 0 = 왼쪽 끝).
+    scroll_px: i32,
     /// 아이템 클릭(전역 인덱스 · 1회성).
     clicked: Option<usize>,
-    /// 커서가 띠 위에 있는가 — 가로 휠(트랙패드) 스크롤은 이 위에서만(08-14).
+    /// 커서가 띠 위에 있는가 — 가로 휠 스크롤은 이 위에서만.
     hover: bool,
     /// 가로 휠 노치 누적(트랙패드 분수 delta).
     hwheel: WheelAccum,
@@ -47,7 +48,7 @@ impl Carousel {
             item_px,
             gap,
             count: 0,
-            first: 0,
+            scroll_px: 0,
             clicked: None,
             hover: false,
             hwheel: WheelAccum::default(),
@@ -57,7 +58,7 @@ impl Carousel {
     /// 전체 아이템 수 갱신 — 줄어들면 스크롤을 안쪽으로 되민다.
     pub fn set_count(&mut self, count: usize) {
         self.count = count;
-        self.clamp_first();
+        self.clamp();
     }
 
     /// 아이템 클릭(1회성 · 전역 인덱스).
@@ -76,104 +77,66 @@ impl Carousel {
         self.s(20)
     }
 
-    /// 이 `first`에서 좌버튼이 보이는가.
-    fn left_shown_at(first: usize) -> bool {
-        first > 0
-    }
-
-    /// 이 `first`에서 (표시 용량, 우버튼 표시 여부). 버튼 표시가 용량을 바꾸고
-    /// 용량이 버튼 표시를 바꾸므로 **우버튼 없는 가정 → 필요 판정 → 재계산** 2패스.
-    fn cap_at(&self, first: usize) -> (usize, bool) {
-        let iw = self.item_w() + self.gap_w();
-        if iw <= 0 {
-            return (0, false);
-        }
-        let mut avail = self.base.bounds.w;
-        if Self::left_shown_at(first) {
-            avail -= self.btn_w() + self.gap_w();
-        }
-        // 우버튼 없다고 가정한 용량.
-        let cap_no_r = ((avail + self.gap_w()).max(0) / iw).max(0) as usize;
-        if first + cap_no_r >= self.count {
-            return (cap_no_r.min(self.count - first.min(self.count)), false);
-        }
-        // 넘친다 — 우버튼 자리를 빼고 재계산.
-        let cap_r =
-            (((avail - self.btn_w() - self.gap_w() + self.gap_w()).max(0)) / iw).max(0) as usize;
-        (cap_r, true)
-    }
-
-    /// 오른쪽 끝을 채우도록 `first`를 되민다(마지막 페이지가 덜 차 보이지 않게).
-    fn clamp_first(&mut self) {
+    /// 내용 전체 폭(물리 px).
+    fn content_w(&self) -> i32 {
         if self.count == 0 {
-            self.first = 0;
-            return;
+            return 0;
         }
-        self.first = self.first.min(self.count - 1);
-        while self.first > 0 {
-            let (cap, _) = self.cap_at(self.first - 1);
-            if self.first - 1 + cap >= self.count {
-                self.first -= 1;
-            } else {
-                break;
-            }
-        }
+        #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+        let n = self.count as i32;
+        n * self.item_w() + (n - 1) * self.gap_w()
     }
 
-    /// 아이템 띠 시작 x(좌버튼 유무 반영).
-    fn strip_x(&self) -> i32 {
-        let mut x = self.base.bounds.x;
-        if Self::left_shown_at(self.first) {
-            x += self.btn_w() + self.gap_w();
-        }
-        x
+    /// 스크롤 상한(0 = 안 넘침).
+    fn max_scroll(&self) -> i32 {
+        (self.content_w() - self.base.bounds.w).max(0)
     }
 
-    /// i번째(전역) 아이템의 자리 — 지금 화면에 없으면 `None`. 소유자가 이 자리에 그린다.
+    fn clamp(&mut self) {
+        self.scroll_px = self.scroll_px.clamp(0, self.max_scroll());
+    }
+
+    /// i번째(전역) 아이템의 자리 — 띠와 겹치지 않으면 `None`(부분 겹침은 준다 —
+    /// 픽셀 스크롤이라 반쯤 보이는 아이템이 정상이다).
     #[must_use]
     pub fn item_rect(&self, i: usize) -> Option<Rect> {
-        let (cap, _) = self.cap_at(self.first);
-        if i < self.first || i >= self.first + cap || i >= self.count {
+        if i >= self.count {
             return None;
         }
+        let b = self.base.bounds;
         let d = self.item_w();
         #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-        let off = (d + self.gap_w()) * (i - self.first) as i32;
-        let y = self.base.bounds.y + (self.base.bounds.h - d) / 2;
-        Some(Rect::new(self.strip_x() + off, y, d, d))
+        let off = (d + self.gap_w()) * i as i32;
+        let x = b.x + off - self.scroll_px;
+        let y = b.y + (b.h - d) / 2;
+        let r = Rect::new(x, y, d, d);
+        r.intersects(&b).then_some(r)
     }
 
-    /// 좌 이동 버튼 자리(표시 중일 때만).
+    /// 좌 이동 버튼(고정 위치 — 표시 중일 때만 `Some`).
     #[must_use]
     pub fn left_rect(&self) -> Option<Rect> {
-        Self::left_shown_at(self.first).then(|| {
+        (self.scroll_px > 0).then(|| {
             let b = self.base.bounds;
             Rect::new(b.x, b.y, self.btn_w(), b.h)
         })
     }
 
-    /// 우 이동 버튼 자리(표시 중일 때만).
+    /// 우 이동 버튼(고정 위치 — 표시 중일 때만 `Some`).
     #[must_use]
     pub fn right_rect(&self) -> Option<Rect> {
-        let (cap, shown) = self.cap_at(self.first);
-        shown.then(|| {
+        (self.scroll_px < self.max_scroll()).then(|| {
             let b = self.base.bounds;
-            let x = self.strip_x()
-                + (self.item_w() + self.gap_w()) * i32::try_from(cap).unwrap_or(i32::MAX);
-            Rect::new(x, b.y, self.btn_w(), b.h)
+            Rect::new(b.right() - self.btn_w(), b.y, self.btn_w(), b.h)
         })
     }
 
-    /// 한 페이지(현재 표시 용량) 단위로 이동.
+    /// 한 페이지 이동(버튼) — 버튼 밑 가려지는 폭을 뺀 가시 폭만큼, 최소 한 아이템.
     fn page(&mut self, dir: i32, inv: &mut Invalidations) {
-        let (cap, _) = self.cap_at(self.first);
-        let step = cap.max(1);
-        if dir < 0 {
-            self.first = self.first.saturating_sub(step);
-        } else {
-            self.first = (self.first + step).min(self.count.saturating_sub(1));
-        }
-        self.clamp_first();
+        let step = (self.base.bounds.w - 2 * (self.btn_w() + self.gap_w()))
+            .max(self.item_w() + self.gap_w());
+        self.scroll_px += dir * step;
+        self.clamp();
         inv.push(self.base.bounds);
     }
 }
@@ -194,29 +157,23 @@ impl Widget for Carousel {
 
     fn set_bounds(&mut self, bounds: Rect, inv: &mut Invalidations) {
         self.base.bounds = bounds;
-        self.clamp_first();
+        self.clamp();
         inv.push(bounds);
     }
 
     fn on_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
-        // 트랙패드 가로 스크롤(08-14 사용자 요청) — 띠 위에 커서가 있을 때만,
-        // 노치 누적으로 **아이템 단위** 이동(버튼은 페이지 단위 — 정밀/도약 분담).
         match *ev {
             InputEvent::MouseMove { x, y } => {
                 self.hover = self.base.bounds.contains(Point { x, y });
                 return;
             }
+            // 트랙패드 가로 스크롤 — 띠 위에서만 · 노치 = 아이템 한 칸(부드러운
+            // 픽셀 단위는 delta 자체가 분수 노치라 칸 단위로도 충분히 미끄럽다).
             InputEvent::HWheel { delta } if self.hover => {
                 let steps = self.hwheel.add(delta, 1);
                 if steps != 0 {
-                    // 양수 = 오른쪽(다음 아이템) — 목록 가로 스크롤 방향과 일치.
-                    if steps > 0 {
-                        self.first = (self.first + steps.unsigned_abs() as usize)
-                            .min(self.count.saturating_sub(1));
-                    } else {
-                        self.first = self.first.saturating_sub(steps.unsigned_abs() as usize);
-                    }
-                    self.clamp_first();
+                    self.scroll_px += steps * (self.item_w() + self.gap_w());
+                    self.clamp();
                     inv.push(self.base.bounds);
                 }
                 return;
@@ -227,6 +184,7 @@ impl Widget for Carousel {
             return;
         };
         let p = Point { x, y };
+        // 버튼이 맨 위 — 아이템보다 먼저 판정한다(겹친다).
         if self.left_rect().is_some_and(|r| r.contains(p)) {
             self.page(-1, inv);
             return;
@@ -235,8 +193,10 @@ impl Widget for Carousel {
             self.page(1, inv);
             return;
         }
-        let (cap, _) = self.cap_at(self.first);
-        for i in self.first..(self.first + cap).min(self.count) {
+        if !self.base.bounds.contains(p) {
+            return;
+        }
+        for i in 0..self.count {
             if self.item_rect(i).is_some_and(|r| r.contains(p)) {
                 self.clicked = Some(i);
                 inv.push(self.base.bounds);
@@ -245,8 +205,15 @@ impl Widget for Carousel {
         }
     }
 
-    /// 버튼만 그린다 — 아이템은 소유자가 [`Carousel::item_rect`]로 그린 뒤 호출.
+    /// 경계 마스크 + 버튼을 그린다 — 아이템은 소유자가 [`Carousel::item_rect`]로
+    /// 그린 **뒤에** 부른다(버튼 = 맨 위 · 08-14 사용자 확정).
     fn paint(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
+        let b = self.base.bounds;
+        // 경계 마스크 — 클립 없는 렌더 경로가 띠 밖으로 번진 부분을 배경색으로 덮는다
+        // (한 아이템 폭이면 충분 — 부분 겹침 아이템만 번진다).
+        let bleed = self.item_w() + self.gap_w();
+        ctx.fill_rect(Rect::new(b.x - bleed, b.y, bleed, b.h), theme.panel_bg);
+        ctx.fill_rect(Rect::new(b.right(), b.y, bleed, b.h), theme.panel_bg);
         let chevron = |ctx: &mut dyn DrawCtx, r: Rect, dir: i32| {
             let cx = r.x + r.w / 2;
             let cy = r.y + r.h / 2;
@@ -258,16 +225,19 @@ impl Widget for Carousel {
                     (cx - dir * half / 2, cy),
                     (cx + dir * half / 2, cy + half),
                 ],
-                theme.text_dim,
+                theme.text,
                 w,
             );
         };
+        // 버튼 = 맨 위 오버레이(고정 위치 · 반쯤 걸친 아이템을 덮는다).
         if let Some(r) = self.left_rect() {
             ctx.fill_round_rect(r, self.s(4), theme.field_bg);
+            ctx.stroke_round_rect(r, self.s(4), theme.border, 1.0);
             chevron(ctx, r, 1); // ◀
         }
         if let Some(r) = self.right_rect() {
             ctx.fill_round_rect(r, self.s(4), theme.field_bg);
+            ctx.stroke_round_rect(r, self.s(4), theme.border, 1.0);
             chevron(ctx, r, -1); // ▶
         }
     }
@@ -285,6 +255,19 @@ mod tests {
         c
     }
 
+    fn click(c: &mut Carousel, r: Rect) {
+        let mut inv = Invalidations::default();
+        c.on_event(
+            &InputEvent::MouseDown {
+                x: r.x + r.w / 2,
+                y: r.y + r.h / 2,
+                shift: false,
+                primary: false,
+            },
+            &mut inv,
+        );
+    }
+
     #[test]
     fn no_buttons_when_content_fits() {
         let c = car(400, 5); // 5×36-4 = 176 ≤ 400
@@ -294,81 +277,65 @@ mod tests {
     }
 
     #[test]
-    fn right_button_appears_on_overflow_and_left_after_paging() {
+    fn buttons_are_fixed_at_edges_and_toggle() {
         let mut c = car(200, 16); // 넘친다
-        assert!(c.left_rect().is_none(), "왼쪽 끝 = 아이템부터");
-        assert!(c.right_rect().is_some(), "넘침 = 우버튼");
-        let first_rect = c.item_rect(0).expect("첫 아이템 표시");
-        assert_eq!(first_rect.x, 0, "좌버튼이 없으니 아이템이 맨 앞");
-        // ▶ 클릭 = 페이지 이동 → 좌버튼 등장.
-        let r = c.right_rect().unwrap();
-        let mut inv = Invalidations::default();
-        c.on_event(
-            &InputEvent::MouseDown {
-                x: r.x + 1,
-                y: r.y + 1,
-                shift: false,
-                primary: false,
-            },
-            &mut inv,
+        assert!(c.left_rect().is_none(), "왼쪽 끝 = 좌버튼 숨김");
+        let r0 = c.right_rect().expect("넘침 = 우버튼");
+        assert_eq!(r0.right(), 200, "우버튼 = 오른끝 고정");
+        assert_eq!(c.item_rect(0).unwrap().x, 0, "내용은 띠 전체를 쓴다");
+        // ▶ 페이지 이동 → 좌버튼 등장(왼끝 고정 위치).
+        click(&mut c, r0);
+        let l = c.left_rect().expect("이동 후 = 좌버튼");
+        assert_eq!(l.x, 0, "좌버튼 = 왼끝 고정");
+        assert_eq!(
+            c.right_rect().expect("아직 오른쪽 남음"),
+            r0,
+            "우버튼 위치 불변(고정)"
         );
-        assert!(c.left_rect().is_some(), "이동 후 = 좌버튼");
         assert!(c.item_rect(0).is_none(), "앞 아이템은 화면 밖");
     }
 
     #[test]
-    fn right_edge_hides_right_button_and_packs_items() {
+    fn right_edge_hides_right_button_only() {
         let mut c = car(200, 16);
-        let mut inv = Invalidations::default();
-        // 끝까지 이동.
-        for _ in 0..10 {
+        for _ in 0..12 {
             let Some(r) = c.right_rect() else { break };
-            c.on_event(
-                &InputEvent::MouseDown {
-                    x: r.x + 1,
-                    y: r.y + 1,
-                    shift: false,
-                    primary: false,
-                },
-                &mut inv,
-            );
+            click(&mut c, r);
         }
-        assert!(c.right_rect().is_none(), "오른쪽 끝 = 우버튼 없음");
-        assert!(c.left_rect().is_some(), "오른쪽 끝 = 좌버튼만");
-        assert!(c.item_rect(15).is_some(), "마지막 아이템이 보인다");
+        assert!(c.right_rect().is_none(), "오른쪽 끝 = 우버튼 숨김");
+        assert!(c.left_rect().is_some(), "좌버튼만");
+        let last = c.item_rect(15).expect("마지막 아이템이 보인다");
+        assert_eq!(last.right(), 200, "오른끝에 정확히 붙는다(픽셀 클램프)");
     }
 
     #[test]
     fn trackpad_hwheel_scrolls_items_under_cursor() {
         let mut c = car(200, 16);
         let mut inv = Invalidations::default();
-        // 커서가 띠 밖 — 무시(다른 스크롤 영역과 경합하지 않게).
         c.on_event(&InputEvent::HWheel { delta: 120 }, &mut inv);
         assert!(c.item_rect(0).is_some(), "밖에서는 안 움직인다");
-        // 띠 위에 올리고 한 노치 = 한 아이템 전진.
         c.on_event(&InputEvent::MouseMove { x: 10, y: 10 }, &mut inv);
         c.on_event(&InputEvent::HWheel { delta: 120 }, &mut inv);
         assert!(c.item_rect(0).is_none(), "한 노치 = 한 아이템 전진");
-        // 반대로 되돌리기.
         c.on_event(&InputEvent::HWheel { delta: -120 }, &mut inv);
         assert!(c.item_rect(0).is_some(), "반대 방향 복귀");
     }
 
     #[test]
-    fn item_click_reports_global_index() {
+    fn item_click_reports_global_index_and_buttons_win_overlap() {
         let mut c = car(200, 16);
-        let r = c.item_rect(1).unwrap();
-        let mut inv = Invalidations::default();
-        c.on_event(
-            &InputEvent::MouseDown {
-                x: r.x + 1,
-                y: r.y + 1,
-                shift: false,
-                primary: false,
-            },
-            &mut inv,
-        );
+        let r1 = c.item_rect(1).unwrap();
+        click(&mut c, r1);
         assert_eq!(c.take_clicked(), Some(1));
         assert_eq!(c.take_clicked(), None, "1회성");
+        // 우버튼 밑을 지나는 아이템 위 클릭 = 버튼이 이긴다(맨 위 레이어).
+        let rb = c.right_rect().unwrap();
+        click(&mut c, rb);
+        assert_eq!(
+            c.take_clicked(),
+            None,
+            "버튼 영역 클릭은 아이템 클릭이 아니다"
+        );
+        assert!(c.left_rect().is_some(), "페이지가 넘어갔다");
     }
 }

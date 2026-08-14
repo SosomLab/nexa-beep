@@ -7,6 +7,7 @@
 
 ## 2026-08-14
 
+- **Carousel 2차 — 픽셀 스크롤 + 고정 오버레이 버튼**(main · 사용자 확정): `first`(아이템 창) → `scroll_px`(부드러운 픽셀 이동 · 반쯤 보이는 아이템 정상) · 버튼 = **양끝 고정 + 맨 위 오버레이**(표시/숨김만 토글) · 경계 마스크(클립 없는 렌더 번짐 덮기) · 클릭 우선 = 버튼 > 아이템. 테스트 5. **573 green**. 상세 [journal/2026-08-14.md](journal/2026-08-14.md).
 - **요약 계열 현행화**(main): 컨트롤 17→**18종**(Carousel) · **573 green** · CLAUDE.md "08-14 후반" 문단(재기동 규칙 `tools/relaunch.sh`·캐러셀·**모달 표준 재정리**(AlwaysOnTop 제거)·**영속 구멍 2겹**(저장·로드 양쪽을 고쳐야 살아난다)·H-25/26). 이관 시점 기록은 소급 수정하지 않음.
 - **최근 이미지 목록 증발 — 영속 구멍 2개**(main · 실기): ① 피커 경로의 `take_changes` 버림 = `image_recent` **저장 안 됨** → apply_settings 깔때기로(이중 디코드도 제거) ② `set_by_name` "아는 키만" = HIDDEN_KEYS 미등록 키는 **부팅 로드 무시** → `profile.image_recent` + ★`ui.win_x/y/w/h`(창 위치도 같은 구멍) 등록 + 왕복 회귀 테스트. **573 green**. 상세 [journal/2026-08-14.md](journal/2026-08-14.md).
 - ★ **앱 모달 표준 재정리 + 툴팁 설정화**(main · 사용자 확정): 모달 5창의 **AlwaysOnTop 제거**(다른 프로그램 위까지 뜨던 것) → `modal_id()` 단일 판정 + 입력 흡수 일반화(About 문법 확장) + `Focused(true)` 재부상("메인 클릭해도 모달이 위") · 툴팁 대기 기본 2000ms + `ui.tooltip_ms` 설정(hot-swap). **572 green**. 상세 [journal/2026-08-14.md](journal/2026-08-14.md).
