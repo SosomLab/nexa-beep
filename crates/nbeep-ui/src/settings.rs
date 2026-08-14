@@ -446,8 +446,8 @@ pub fn registry() -> &'static [Entry] {
             label: Msg::ListSort,
             desc: Msg::ListSortDesc,
             kind: SettingKind::Radio(&[
-                ("seen", Msg::SortSeen),
                 ("chat", Msg::SortChat),
+                ("seen", Msg::SortSeen),
                 ("name", Msg::SortName),
             ]),
             key: "ui.list_sort",

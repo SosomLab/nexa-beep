@@ -650,10 +650,11 @@ fn peer_order_key(mode: &str, fav: bool, tier: u8, seen: u64, chat: u64) -> (u8,
     let seen_b = seen / 60_000; // 분 버킷 — 비컨 잡음이 순서를 못 흔든다
     let head = u8::from(!fav);
     match mode {
-        "chat" => (head, tier, inv(chat), inv(seen_b)),
+        "seen" => (head, tier, inv(seen_b), inv(chat)),
         "name" => (head, 0, 0, 0),
-        // "seen" 기본(구 "online" 저장값도 여기로 — 접속 계층 우선이 공통).
-        _ => (head, tier, inv(seen_b), inv(chat)),
+        // ★ 기본 = "chat"(사용자 확정 08-15: 같은 접속 구획 안에서 ① 최근 대화
+        //   ② 최근 접속 — 접속·비접속 구획 모두 같은 기준. 미지 저장값도 여기로).
+        _ => (head, tier, inv(chat), inv(seen_b)),
     }
 }
 
@@ -8292,10 +8293,18 @@ mod tests {
         );
         // 버킷이 다르면 최근 쪽이 앞.
         assert!(k("seen", false, 1, 180_000, 0) < k("seen", false, 1, 119_999, 0));
-        // chat 모드 — 같은 계층에서 최근 대화가 앞.
-        assert!(k("chat", false, 0, 0, 200) < k("chat", false, 0, 999, 100));
-        // 구 "online" 저장값 = 기본(seen) 사슬로 관용 폴백.
-        assert_eq!(k("online", false, 0, 5, 7), k("seen", false, 0, 5, 7));
+        // ★ 기본(chat) — 같은 계층에서 ① 최근 대화 ② 최근 접속(사용자 확정 08-15).
+        assert!(k("chat", false, 0, 0, 200) < k("chat", false, 0, 999_999, 100));
+        assert!(
+            k("chat", false, 2, 0, 200) < k("chat", false, 2, 999_999, 100),
+            "비접속 구획도 동일 기준"
+        );
+        assert!(
+            k("chat", false, 0, 180_000, 50) < k("chat", false, 0, 60_000, 50),
+            "대화 동률 = 최근 접속이 다음 기준"
+        );
+        // 미지·구 저장값 = 기본(chat) 사슬로 관용 폴백.
+        assert_eq!(k("online", false, 0, 5, 7), k("chat", false, 0, 5, 7));
         // name 모드 — 고정 외 속성 무시(이름 동률 비교는 호출자 몫).
         assert_eq!(k("name", false, 0, 5, 5), k("name", false, 2, 9, 1));
     }

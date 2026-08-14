@@ -1025,10 +1025,10 @@ impl Msg {
             Msg::ListScrollTop => ["Jump to top", "맨 위로 이동", "回到顶部", "先頭へ移動"],
             Msg::ListSort => ["List order", "목록 정렬", "列表排序", "リストの並び順"],
             Msg::ListSortDesc => [
-                "Pinned first, then online peers, then this attribute (name order ignores status)",
-                "고정 항목 → 접속 중 상대가 먼저 오고, 그 안을 이 속성으로 정렬한다(이름순은 상태 무시)",
-                "置顶→在线优先, 区内按此属性排序(名称序忽略状态)",
-                "固定→接続中が先、その中をこの属性で並べる(名前順は状態無視)",
+                "Pinned first, then online peers; within each section: recent chat, then recent presence (same rule offline · name order ignores status)",
+                "고정 → 접속 중이 먼저. 각 구획 안은 ① 최근 대화 ② 최근 접속 순(비접속도 동일 기준 · 이름순은 상태 무시)",
+                "置顶→在线优先; 区内①最近对话②最近上线(离线同规则·名称序忽略状态)",
+                "固定→接続中が先。区画内は①最近の会話②最近の接続(オフライン同基準)",
             ],
             Msg::SortSeen => [
                 "Recently seen",
