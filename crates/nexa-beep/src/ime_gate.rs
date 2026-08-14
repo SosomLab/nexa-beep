@@ -14,9 +14,9 @@
 //! [`ImeGate::preedit`]/[`ImeGate::commit`], 포커스 이탈은 [`ImeGate::focus_out`],
 //! 주기 틱은 [`ImeGate::tick`].
 
-// G3-2(app.rs 배선 교체) 전까지 — 재생 테스트가 유일한 사용처다. 배선이 끝나면 제거.
-#![allow(dead_code, clippy::redundant_pub_crate, unreachable_pub)]
-#![allow(clippy::missing_const_for_fn)]
+// commit_now(G2 저장 트리거 배선 전)만 대기 — 그때 dead_code 제거.
+// unreachable_pub: 바이너리 크레이트 내부 모듈이라 pub이 밖에 안 닿는다(문서 의도용).
+#![allow(dead_code, unreachable_pub)]
 
 use nbeep_ui::event::Key;
 use nbeep_ui::hangul::{self, Composer};

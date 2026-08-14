@@ -1082,50 +1082,13 @@ struct App {
     gunread: HashMap<nbeep_core::group::GroupId, u32>,
     /// 열린 선택 모달의 문맥(초대 수락/거절 등) — Role::Alert 결과 라우팅.
     alert_ctx: Option<AlertCtx>,
-    /// IME 조합 중(macOS — Preedit 활성). 조합 중엔 KeyboardInput 문자/백스페이스를
-    /// 라우팅하지 않는다(같은 키가 Ime 경로로도 와서 자모가 이중 유입되던 버그).
-    ime_composing: bool,
-    /// 마지막 프리에딧 문자열 — **포커스 이탈 시 조합 보존**(08-13 실기: 조합 중
-    /// 다른 앱 클릭 → OS가 Commit 없이 조합을 버려 마지막 음절이 유실됐다).
-    /// Focused(false) 시점에 남아 있으면 확정 문자로 입력창에 합류시킨다.
-    ime_preedit: String,
-    /// 프리에딧이 **Commit 없이 소거**된 직전 값(문자열, 시각). macOS는 포커스 이탈 때
-    /// Preedit("")를 Focused(false)보다 먼저 보낼 수 있다 — 그 경우 위 `ime_preedit`은
-    /// 이미 비어 있으므로, 300ms 안의 소거분을 여기서 건져 확정한다. Esc 취소도 여길
-    /// 채우지만 포커스 이탈이 뒤따르지 않으면 소비되지 않는다(무해).
-    ime_preedit_stash: Option<(String, u64)>,
-    /// 조합이 끝난 시각(Commit 또는 Preedit 소거) — **Windows IME Esc 잔향 차단**(WIME-6).
-    /// Windows는 조합을 끝낸 키의 KeyboardInput이 Commit/소거 뒤에 **또** 온다(macOS는
-    /// IME가 삼킴). **Enter는 일부러 통과시킨다** — 조합 확정과 전송이 한 번에(사용자
-    /// 확정 08-13 · Windows 메신저 관례 · DR-16 "동작 = OS 네이티브"). **Esc만** 차단
-    /// — 조합 취소가 화면 닫기로 새는 건 의도일 수 없다(1회성 — 소비 시 해제).
-    ime_cleared_ms: Option<u64>,
-    /// 판정 보류 중인 단독 자모(창, 문자, 시각). Character("ㄱ")는 ①곧 Preedit가 따라오는
-    /// **중복**이거나 ②IME가 아직 안 붙은 **진짜 입력**(한영 전환 직후 첫 키)이다 —
-    /// 즉시 버리면 ②가 유실되므로 보류했다가 Ime 이벤트가 오면 폐기, 안 오면 라우팅한다.
-    pending_jamo: Option<(WindowId, char, u64)>,
-    /// IME 미접속으로 유출된 자모를 음절로 묶는 로컬 조합기(재포커스 직후 첫 키가
-    /// IME를 비껴가는 macOS 경합 — 08-13 실기: "내"가 "ㄴㅐ"로 깨졌다). 목록
-    /// 타입어헤드와 같은 두벌식 조합기를 대화 입력의 유출분에만 쓴다.
-    leak: nbeep_ui::hangul::Composer,
-    /// 유출 조합이 진행 중인 창(미리보기 표시·확정 대상).
-    leak_win: Option<WindowId>,
+    /// IME 중재 상태기계(M3-1e G3 — [`crate::ime_gate`]): 조합 게이트·보류-판정·
+    /// 유출 조합기·잔향 억제·이동 키 재생·프리에딧 보존을 **한 타입**으로. 실측
+    /// 이벤트 순서는 ime_gate의 재생 테스트 10종이 지킨다(H-1~H-24 계보는 그쪽 문서).
+    ime: crate::ime_gate::ImeGate<WindowId>,
     /// IME 이벤트 트레이스(`NEXA_IME_TRACE=1`) — 조합 경합은 추정 금지·실측 필수라
     /// 이벤트 순서를 stderr로 남긴다(개인 입력이 찍히므로 opt-in 전용).
     ime_trace: bool,
-    /// 조합 중 눌린 이동 키(창, 키, shift, primary) — mac IME는 화살표로 조합을
-    /// **확정만** 하고 이동은 앱 몫인데, 조합 게이트가 keydown을 버려 이동이
-    /// 유실됐다(08-13 실기: "입력 직후 ←가 안 먹힘"). Commit 직후 재생한다.
-    pending_arrow: Option<(WindowId, Key, bool, bool)>,
-    /// 마지막 IME 확정의 끝 문자(문자, 시각) — **키다운 이중 배달 억제**(08-13 실측:
-    /// commit=" " 직후 key=Named(Space)가 또 온다). 120ms 안의 같은 문자 키다운을
-    /// 1회 소비한다(take — 진짜 연타의 두 번째는 통과).
-    ime_commit_echo: Option<(char, u64)>,
-    /// 포커스 이탈 시 **앱이 수동 확정한** 조합분(창, 본문, 시각) — 그 직후 IME가
-    /// 같은 본문을 Commit으로 **또** 보내면 잔향이다(08-13 실기 "나다다" 3차:
-    /// Focused(false) 수동 합류 뒤 늦은 Commit("다")이 이중 입력을 만들었다).
-    /// 1초 안 같은 창·같은 본문의 Commit을 1회 삼킨다(초과·불일치는 정상 입력).
-    ime_selfcommit: Option<(WindowId, String, u64)>,
     /// 지금 OS 포커스를 가진 창 — 캐럿 깜빡임(포커스 창만 점멸)·비포커스 캐럿 소등.
     os_focused: Option<WindowId>,
     /// 캐럿 깜빡임 기준 시각(ms) — 입력(키·IME·클릭)마다 리셋해 타이핑 중엔 항상 밝다.
@@ -1152,25 +1115,33 @@ impl App {
     }
 
     /// 보류 자모 방출 — Ime 이벤트가 따라오지 않았다 = 진짜 단독 입력이었다.
-    fn flush_pending_jamo(&mut self, el: &ActiveEventLoop) {
-        if let Some((id, c, _)) = self.pending_jamo.take() {
-            let now_ms = self.now_ms();
-            // IME 미접속 유출 자모(전환·재포커스 직후 경합): **목록만 예외**(IME off ·
-            // 자체 타입어헤드 조합기)이고, 그 외 모든 IME 창(대화·프로필·이름 프롬프트)
-            // 은 로컬 조합기로 음절을 묶는다 — 그대로 넣으면 "ㄴㅐ"처럼 깨진다(08-13
-            // 실측: 모든 입력창 공통).
-            let list_mode = Some(id) == self.main_id
-                && self.single_open.is_none()
-                && self.single_open_group.is_none();
-            if self.ime_trace {
-                eprintln!("[ime] pending {c:?} → flush(다음 키/타임아웃 — Ime 이벤트 없음)");
+    /// ImeGate 명령 적용(M3-1e G3) — 게이트는 판단만, 라우팅·표시는 여기서.
+    fn apply_ime(&mut self, outs: Vec<crate::ime_gate::Out<WindowId>>, el: &ActiveEventLoop) {
+        for o in outs {
+            match o {
+                crate::ime_gate::Out::Char(wid, c) => {
+                    let now_ms = self.now_ms();
+                    self.route(wid, InputEvent::Char { c, now_ms }, el);
+                }
+                crate::ime_gate::Out::Key(wid, key, shift, primary) => {
+                    self.route(
+                        wid,
+                        InputEvent::Key {
+                            key,
+                            shift,
+                            primary,
+                        },
+                        el,
+                    );
+                }
+                crate::ime_gate::Out::Preedit(wid, t) => self.set_chat_preedit(wid, t),
             }
-            if nbeep_ui::hangul::is_jamo(c) && !list_mode {
-                self.leak_feed(id, c, el);
-                return;
-            }
-            self.route(id, InputEvent::Char { c, now_ms }, el);
         }
+    }
+
+    /// 이 창이 목록 모드인가(IME off — 직접 조합 경로 B). 게이트 `ime_on`의 반대편.
+    fn is_list_mode(&self, id: WindowId) -> bool {
+        Some(id) == self.main_id && self.single_open.is_none() && self.single_open_group.is_none()
     }
 
     /// IME 켠 창의 프리에딧 표시를 갱신한다(조합 중 밑줄 — 대화·프로필·이름/주소
@@ -1206,34 +1177,6 @@ impl App {
             }
         }
         self.request_redraw(id);
-    }
-
-    /// 유출 자모 하나를 로컬 조합기에 합류시킨다(IME가 놓친 키 — 잃지 않는 게 우선).
-    /// 완성 글자는 즉시 라우팅, 조합 중 글자는 미리보기(대화 창만 표시·그 외 no-op).
-    fn leak_feed(&mut self, id: WindowId, c: char, el: &ActiveEventLoop) {
-        if self.leak_win.is_some_and(|w| w != id) {
-            self.flush_leak(el); // 창이 바뀌면 이전 창 조합 먼저 확정
-        }
-        let now_ms = self.now_ms();
-        let out = self.leak.feed(c);
-        for oc in out.chars() {
-            self.route(id, InputEvent::Char { c: oc, now_ms }, el);
-        }
-        self.leak_win = Some(id);
-        let p = self.leak.preview().map(String::from).unwrap_or_default();
-        self.set_chat_preedit(id, p);
-    }
-
-    /// 유출 조합기 확정 — 조합 중 글자를 입력창에 합류시키고 미리보기를 지운다.
-    fn flush_leak(&mut self, el: &ActiveEventLoop) {
-        if let Some(id) = self.leak_win.take() {
-            let out = self.leak.flush();
-            self.set_chat_preedit(id, String::new());
-            if let Some(c) = out {
-                let now_ms = self.now_ms();
-                self.route(id, InputEvent::Char { c, now_ms }, el);
-            }
-        }
     }
 
     /// 목록 모드 상단 크롬(메뉴+툴바) 높이(물리 px). 대화 중엔 0.
@@ -6308,15 +6251,13 @@ impl ApplicationHandler<AppEvent> for App {
             let now_ms = self.now_ms();
             let mut inv = Invalidations::default();
             // 보류 자모: IME 이벤트가 따라오지 않았으면 진짜 입력 — 다음 틱(~200ms)에 방출.
-            if let Some((_, _, t)) = self.pending_jamo {
-                if !self.ime_composing && now_ms.saturating_sub(t) >= 150 {
-                    self.flush_pending_jamo(el);
-                }
+            {
+                let outs = self.ime.tick(now_ms);
+                self.apply_ime(outs, el);
             }
             if self.list.typeahead_tick(now_ms, &mut inv) {
                 // 직접 조합 모드: TypeAhead.tick이 버퍼+조합기를 리셋 = 그게 전부(결정적).
-                // 목록은 IME 자체가 꺼져 있어 세션 경합이 존재하지 않는다.
-                self.pending_jamo = None;
+                // 목록은 IME 자체가 꺼져 있어 세션 경합이 존재하지 않는다(보류는 게이트 몫).
                 if let Some(id) = self.main_id {
                     self.request_redraw(id);
                 }
@@ -6670,222 +6611,44 @@ impl ApplicationHandler<AppEvent> for App {
                 }
                 self.request_redraw(id);
                 if self.ime_trace {
-                    eprintln!(
-                        "[ime] focus-out preedit={:?} stash={:?}",
-                        self.ime_preedit,
-                        self.ime_preedit_stash.as_ref().map(|(s, _)| s)
-                    );
+                    eprintln!("[ime] focus-out");
                 }
-                self.flush_leak(el); // 유출 조합 중이던 음절도 이탈 전에 확정
-                                     // 조합 중 포커스 이탈(08-13 실기): OS가 Commit 없이 조합을 버려 마지막
-                                     // 음절이 유실됐다 — 남은 프리에딧(또는 직전 소거분)을 확정 문자로 합류.
+                // 조합 보존·유출 확정·selfcommit 기록 — 전부 게이트 몫(H-9·H-24).
                 let now_ms = self.now_ms();
-                let mut text = std::mem::take(&mut self.ime_preedit);
-                if text.is_empty() {
-                    if let Some((s, t)) = self.ime_preedit_stash.take() {
-                        if now_ms.saturating_sub(t) < 300 {
-                            text = s;
-                        }
-                    }
-                }
-                if !text.is_empty() {
-                    self.ime_composing = false;
-                    self.ime_cleared_ms = Some(now_ms);
-                    // 프리에딧 표시 소거는 **한 통로**(set_chat_preedit — 대화·그룹·프로필·
-                    // 프롬프트 전부)로. 대화 창만 직접 지우던 시절의 잔재가 프로필에서
-                    // "나다" 확정 합류 + 잔상 "다" = "나다다"로 보였다(08-13 실기).
-                    self.set_chat_preedit(id, String::new());
-                    // 수동 확정 기록 — IME가 같은 본문을 **늦은 Commit**으로 또 보내면
-                    // 잔향으로 판정해 버린다("나다다" 3차 — 이중 입력의 진범).
-                    self.ime_selfcommit = Some((id, text.clone(), now_ms));
-                    for c in text.chars().filter(|c| !c.is_control()) {
-                        self.route(id, InputEvent::Char { c, now_ms }, el);
-                    }
-                    self.request_redraw(id);
-                }
+                let outs = self.ime.focus_out(id, now_ms);
+                self.apply_ime(outs, el);
+                self.request_redraw(id);
             }
             WindowEvent::Ime(winit::event::Ime::Preedit(text, _)) => {
                 self.blink_anchor_ms = self.now_ms(); // 조합 중 = 캐럿 계열 항상 밝다
                 if self.ime_trace {
-                    eprintln!(
-                        "[ime] preedit={text:?} composing={} leak={}",
-                        self.ime_composing,
-                        self.leak.is_composing()
-                    );
+                    eprintln!("[ime] preedit={text:?} composing={}", self.ime.composing());
                 }
-                // 보류 자모 판정(08-13 실측 개정): 프리에딧이 그 자모로 **시작하면**
-                // IME가 받은 키의 중복 → 폐기. 아니면 IME가 **놓친** 키다(트레이스:
-                // key=Character("ㄴ") 직후 preedit="ㅏ" — 첫 키가 IME를 비껴갔다) →
-                // 유출 조합기로 합류. 무조건 폐기가 첫 글자를 유실시키던 원인.
-                // 비자모 보류('?')는 Commit 판정까지 유지 — Preedit는 근거가 아니다.
-                if let Some((pid, c, _)) = self.pending_jamo {
-                    if nbeep_ui::hangul::is_jamo(c) {
-                        self.pending_jamo = None;
-                        if text.starts_with(c) {
-                            if self.ime_trace {
-                                eprintln!("[ime] pending {c:?} → 폐기(프리에딧 중복)");
-                            }
-                        } else {
-                            if self.ime_trace {
-                                eprintln!("[ime] pending {c:?} → leak 합류(IME 미수신)");
-                            }
-                            self.leak_feed(pid, c, el);
-                        }
-                    }
-                }
-                // (leak 조합 중에도 여기서 flush하지 않는다 — 뒤따르는 낱개 Commit
-                // 자모가 조합을 이어가고, 음절 Commit 일반 경로가 확정 직전에 flush.)
-                if !text.is_empty() {
-                    // 조합이 계속된다 = 보류 이동 키는 IME가 내부에서 쓴 것 — 폐기.
-                    self.pending_arrow = None;
-                }
-                let was_composing = self.ime_composing;
-                self.ime_composing = !text.is_empty();
-                if was_composing && !self.ime_composing {
-                    // 조합 소거(Esc 취소 등) — 뒤따르는 키다운 잔향 차단용(WIME-6).
-                    self.ime_cleared_ms = Some(self.now_ms());
-                }
-                // 조합 중 — 대화 뷰면 프리에딧 밑줄(M3-3), 목록 모드면 실시간 타입어헤드.
-                if text.is_empty() && !self.ime_preedit.is_empty() {
-                    // Commit 없는 소거 — 포커스 이탈 직전 순서 역전 대비 스태시.
-                    let prev = std::mem::take(&mut self.ime_preedit);
-                    self.ime_preedit_stash = Some((prev, self.now_ms()));
-                } else {
-                    self.ime_preedit = text.clone(); // 포커스 이탈 보존용(Focused(false))
-                }
-                // 표시 — 같은 창에서 유출 조합 중이면 그 미리보기를 앞에 붙인다
-                // ("ㄴ"+preedit"ㅏ" 과도기 → Commit("ㅏ")에서 "나"로 수렴).
-                let shown = if self.leak_win == Some(id) {
-                    let mut s = self.leak.preview().map(String::from).unwrap_or_default();
-                    s.push_str(&text);
-                    s
-                } else {
-                    text.clone()
-                };
-                if Some(id) == self.main_id
-                    && self.single_open.is_none()
-                    && self.single_open_group.is_none()
-                {
-                    // 목록에서 한글 조합 즉시 매칭(확정/Space 불필요).
+                if self.is_list_mode(id) {
+                    // 목록(경로 B) — 타입어헤드 즉시 매칭(게이트 미경유).
                     let now_ms = self.now_ms();
                     let mut inv = Invalidations::default();
                     self.list.set_preedit(&text, now_ms, &mut inv);
                     self.request_redraw(id);
                 } else {
-                    // 대화(1:1·그룹)·프로필·이름/주소 프롬프트 — 조합 중 표시(08-13:
-                    // "확정 전엔 안 보인다"가 모든 입력창 공통이라 한 통로로 배선).
-                    self.set_chat_preedit(id, shown);
+                    // 보류 자모 판정·조합 추적·프리에딧 보존·표시 합성 — 게이트 몫
+                    // (H-2·H-9·H-14·H-16 — 규칙은 ime_gate 재생 테스트가 지킨다).
+                    let now_ms = self.now_ms();
+                    let outs = self.ime.preedit(id, &text, now_ms);
+                    self.apply_ime(outs, el);
                 }
             }
             WindowEvent::Ime(winit::event::Ime::Commit(text)) => {
                 self.blink_anchor_ms = self.now_ms(); // 확정 직후에도 밝게 시작
                 if self.ime_trace {
-                    eprintln!(
-                        "[ime] commit={text:?} pending={:?} leak={} selfcommit={:?}",
-                        self.pending_jamo.map(|(_, c, _)| c),
-                        self.leak.is_composing(),
-                        self.ime_selfcommit.as_ref().map(|(_, s, _)| s)
-                    );
+                    eprintln!("[ime] commit={text:?}");
                 }
-                // 포커스 이탈 수동 확정(Focused(false))의 **늦은 Commit 잔향** — 같은
-                // 창·같은 본문이 1초 안에 또 오면 이미 합류된 입력이다(08-13 실기
-                // "나다다" 3차: 수동 확정 뒤 IME Commit("다")이 이중 입력을 만들었다.
-                // "Enter 확정 후엔 정상"이 단서 — Enter는 Commit을 정상 소비해 잔향이
-                // 없다). 표시만 소거하고 라우팅은 생략한다(1회성 · 불일치는 정상 입력).
-                {
-                    let now_ms = self.now_ms();
-                    if self
-                        .ime_selfcommit
-                        .take_if(|(pid, s, t)| {
-                            *pid == id && *s == text && now_ms.saturating_sub(*t) < 1000
-                        })
-                        .is_some()
-                    {
-                        self.ime_composing = false;
-                        self.ime_preedit.clear();
-                        self.ime_preedit_stash = None;
-                        self.set_chat_preedit(id, String::new());
-                        return;
-                    }
-                }
-                // 한/영 전환 직후 macOS가 자모를 **낱개 Commit**으로 흘리는 경합(08-13
-                // 실측: key=ㄴ 유출 + commit="ㅏ" — 모든 입력창 공통) — 목록(IME off)
-                // 을 뺀 모든 IME 창에서 유출 조합기로 음절을 묶는다(조합을 잇는다).
-                let list_target = Some(id) == self.main_id
-                    && self.single_open.is_none()
-                    && self.single_open_group.is_none();
-                if !list_target && !text.is_empty() && text.chars().all(nbeep_ui::hangul::is_jamo) {
-                    self.ime_composing = false;
-                    self.ime_preedit.clear();
-                    self.ime_preedit_stash = None;
-                    self.ime_cleared_ms = Some(self.now_ms());
-                    self.pending_jamo = None; // 같은 키의 키다운 중복은 폐기
-                    for c in text.chars() {
-                        self.leak_feed(id, c, el);
-                    }
-                    return;
-                }
-                self.flush_leak(el); // 유출 조합분이 확정 본문보다 앞선 입력이다
-                self.ime_composing = false; // 확정 = 조합 종료
-                self.ime_preedit.clear(); // 확정됨 — 포커스 이탈 보존 불필요
-                self.ime_preedit_stash = None;
-                // 위젯의 조합 표시도 **지금** 소거한다(08-13 실기 — 작업표시줄 클릭 등
-                // 포커스 이탈형 확정은 Windows IME가 Commit만 보내고 소거용 Preedit("")를
-                // 안 보낸다 → 잔상 "다"가 남아 "나다"+"다"="나다다". 조합이 이어지는
-                // 일반 타이핑은 다음 Preedit가 곧바로 다시 그린다).
-                self.set_chat_preedit(id, String::new());
-                self.ime_cleared_ms = Some(self.now_ms()); // 키다운 잔향 차단용(WIME-6)
-                                                           // 보류 판정 — 자모는 무조건 중복. 비자모('?')는 Commit 본문에 실려
-                                                           // 왔으면 중복, 아니면 IME가 삼킨 진짜 입력 → 본문 뒤에 방출한다.
-                let leftover = match self.pending_jamo.take() {
-                    Some((pid, c, _))
-                        if pid == id && !nbeep_ui::hangul::is_jamo(c) && !text.contains(c) =>
-                    {
-                        Some(c)
-                    }
-                    other => {
-                        if self.ime_trace {
-                            if let Some((_, c, _)) = other {
-                                eprintln!("[ime] pending {c:?} → 폐기(Commit 본문 포함)");
-                            }
-                        }
-                        None
-                    }
-                };
-                if self.ime_trace {
-                    if let Some(c) = leftover {
-                        eprintln!("[ime] pending {c:?} → 방출(Commit 본문에 없음)");
-                    }
-                }
+                // 낱개 자모 조합 잇기(H-14)·selfcommit 잔향(H-24)·보류 판정(H-11)·
+                // 잔향 기억(H-15)·이동 키 재생(H-16) — 전부 게이트 몫.
                 let now_ms = self.now_ms();
-                for c in text.chars().filter(|c| !c.is_control()) {
-                    self.route(id, InputEvent::Char { c, now_ms }, el);
-                }
-                if let Some(c) = leftover {
-                    self.route(id, InputEvent::Char { c, now_ms }, el);
-                }
-                // 키다운 이중 배달 억제(08-13 실측: commit=" " 직후 key=Named(Space)
-                // — 같은 키가 두 경로로 온다) — 마지막 확정 문자를 1회성으로 기억.
-                self.ime_commit_echo = text
-                    .chars()
-                    .rev()
-                    .find(|c| !c.is_control())
-                    .map(|c| (c, now_ms));
-                // 조합 중 눌린 이동 키 재생(08-13 실기: "입력 직후 ←가 안 먹힘" —
-                // IME가 이 키로 조합을 확정만 하고 이동은 앱 몫이다).
-                if let Some((pid, k, shift, primary)) = self.pending_arrow.take() {
-                    if pid == id {
-                        self.route(
-                            id,
-                            InputEvent::Key {
-                                key: k,
-                                shift,
-                                primary,
-                            },
-                            el,
-                        );
-                    }
-                }
+                let ime_on = !self.is_list_mode(id);
+                let outs = self.ime.commit(id, &text, now_ms, ime_on);
+                self.apply_ime(outs, el);
             }
             WindowEvent::DroppedFile(path) => {
                 // 드래그앤드롭 = 파일 전송 시작(FR-X-1). 대화가 열린 창에서만 의미가 있다.
@@ -7027,77 +6790,57 @@ impl ApplicationHandler<AppEvent> for App {
                 self.blink_anchor_ms = self.now_ms(); // 타이핑 중엔 캐럿이 항상 밝다
                 if self.ime_trace {
                     eprintln!(
-                        "[ime] key={:?} composing={} leak={} pending={:?}",
+                        "[ime] key={:?} composing={}",
                         event.logical_key,
-                        self.ime_composing,
-                        self.leak.is_composing(),
-                        self.pending_jamo.map(|(_, c, _)| c)
+                        self.ime.composing()
                     );
                 }
-                // IME 조합 중엔 키를 IME가 소유한다 — 같은 키가 KeyboardInput으로도 와서
-                // 자모('ㄱ','ㅣ','ㅁ')가 확정 버퍼에 이중 유입되던 간헐 버그의 차단점.
-                // (조합 결과는 Ime::Preedit/Commit으로만 반영한다.)
-                if self.ime_composing {
-                    // 이동 키(08-13 실기: "입력 직후 ←가 안 먹힘") — mac IME는 이 키로
-                    // 조합을 **확정만** 하고 이동은 앱 몫이다. 여기서 버리면 이동이
-                    // 유실되므로 보류했다가 Commit 직후 재생한다.
-                    let arrow = match &event.logical_key {
-                        WKey::Named(NamedKey::ArrowLeft) => Some(Key::Left),
-                        WKey::Named(NamedKey::ArrowRight) => Some(Key::Right),
-                        WKey::Named(NamedKey::ArrowUp) => Some(Key::Up),
-                        WKey::Named(NamedKey::ArrowDown) => Some(Key::Down),
-                        WKey::Named(NamedKey::Home) => Some(Key::Home),
-                        WKey::Named(NamedKey::End) => Some(Key::End),
-                        _ => None,
-                    };
-                    if let Some(k) = arrow {
-                        self.pending_arrow = Some((id, k, self.shift_down, self.primary_down));
-                        return;
-                    }
-                    // 예외 — 비자모 문자('?','.')는 IME가 Commit에 실어줄 수도, 그냥
-                    // 삼킬 수도 있다(경합 · 08-13 실기: '?' 유실). 즉시 버리지 않고
-                    // 보류 → Commit 본문에 있으면 중복 폐기, 없으면 방출한다.
-                    if !self.primary_down {
-                        if let WKey::Character(text) = &event.logical_key {
-                            if let Some(c) = text.chars().next() {
-                                if !nbeep_ui::hangul::is_jamo(c) && !c.is_control() {
-                                    self.pending_jamo = Some((id, c, self.now_ms()));
-                                }
-                            }
-                        }
-                    }
+                // ImeGate(M3-1e G3) — 조합 게이트(H-1)·잔향(H-15)·이동 키 보류(H-16)·
+                // 비자모 보류(H-11)·유출 조합 개입(H-10)을 한 곳에서. 규칙과 근거는
+                // ime_gate 문서·재생 테스트가 지킨다.
+                let key_in = match &event.logical_key {
+                    WKey::Character(t) => t
+                        .chars()
+                        .next()
+                        .map_or(crate::ime_gate::KeyIn::Other, crate::ime_gate::KeyIn::Char),
+                    WKey::Named(NamedKey::Space) => crate::ime_gate::KeyIn::Char(' '),
+                    WKey::Named(NamedKey::ArrowLeft) => crate::ime_gate::KeyIn::Arrow(Key::Left),
+                    WKey::Named(NamedKey::ArrowRight) => crate::ime_gate::KeyIn::Arrow(Key::Right),
+                    WKey::Named(NamedKey::ArrowUp) => crate::ime_gate::KeyIn::Arrow(Key::Up),
+                    WKey::Named(NamedKey::ArrowDown) => crate::ime_gate::KeyIn::Arrow(Key::Down),
+                    WKey::Named(NamedKey::Home) => crate::ime_gate::KeyIn::Arrow(Key::Home),
+                    WKey::Named(NamedKey::End) => crate::ime_gate::KeyIn::Arrow(Key::End),
+                    _ => crate::ime_gate::KeyIn::Other,
+                };
+                let now_ms = self.now_ms();
+                if self
+                    .ime
+                    .keydown_gate(id, key_in, now_ms, self.shift_down, self.primary_down)
+                    == crate::ime_gate::GatePass::Swallowed
+                {
                     return;
                 }
-                // 새 키가 왔는데 보류 자모가 남아 있으면 = 앞 키에 IME가 안 붙었다 → 먼저 방출.
-                self.flush_pending_jamo(el);
-                // 유출 조합기 개입(로컬 조합 중일 때만) — 백스페이스/Esc는 조합기 몫,
-                // 자모는 보류-판정 경로로 흘리고, 그 외 키는 조합을 먼저 확정한다.
-                if self.leak.is_composing() {
-                    match &event.logical_key {
-                        WKey::Named(NamedKey::Backspace) if !self.primary_down => {
-                            self.leak.backspace();
-                            let p = self.leak.preview().map(String::from).unwrap_or_default();
-                            if let Some(w) = self.leak_win {
-                                self.set_chat_preedit(w, p);
-                            }
-                            if !self.leak.is_composing() {
-                                self.leak_win = None;
-                            }
-                            return;
-                        }
-                        WKey::Named(NamedKey::Escape) => {
-                            self.leak.reset();
-                            if let Some(w) = self.leak_win.take() {
-                                self.set_chat_preedit(w, String::new());
-                            }
-                            return;
-                        }
-                        WKey::Character(t)
-                            if !self.primary_down
-                                && t.chars().next().is_some_and(nbeep_ui::hangul::is_jamo) => {}
-                        _ => self.flush_leak(el),
+                let outs = self.ime.flush_pending(now_ms);
+                self.apply_ime(outs, el);
+                // 유출 조합 개입 — Backspace/Esc는 조합기 몫(소비), 그 외는 게이트 판단.
+                if matches!(&event.logical_key, WKey::Named(NamedKey::Backspace))
+                    && !self.primary_down
+                {
+                    let (consumed, outs) = self.ime.leak_backspace();
+                    self.apply_ime(outs, el);
+                    if consumed {
+                        return;
                     }
                 }
+                if matches!(&event.logical_key, WKey::Named(NamedKey::Escape)) {
+                    let (consumed, outs) = self.ime.leak_cancel();
+                    self.apply_ime(outs, el);
+                    if consumed {
+                        return;
+                    }
+                }
+                let (_, outs) = self.ime.leak_intercept(key_in, self.primary_down);
+                self.apply_ime(outs, el);
                 // 한/영 키(Windows · 목록 전용 — [docs/27 §8]): 목록 창은 IME를 끊어
                 // OS 전환이 무력하므로 앱이 모드를 토글한다. VK_HANGUL은 키보드 드라이버
                 // 수준이라 IME 없이도 온다(winit: 논리 HangulMode · 물리 Lang1 — 둘 다 받는다).
@@ -7231,10 +6974,7 @@ impl ApplicationHandler<AppEvent> for App {
                     let now_ms = self.now_ms();
                     if cfg!(windows)
                         && matches!(key, Key::Escape)
-                        && self
-                            .ime_cleared_ms
-                            .take_if(|t| now_ms.saturating_sub(*t) < 120)
-                            .is_some()
+                        && self.ime.take_cleared_if(now_ms, 120)
                     {
                         return;
                     }
@@ -7271,14 +7011,7 @@ impl ApplicationHandler<AppEvent> for App {
                 // (목록 타입어헤드·대화 입력 공통. 이전엔 직타 스페이스가 유실됐다).
                 if let WKey::Named(NamedKey::Space) = &event.logical_key {
                     let now_ms = self.now_ms();
-                    // 이중 배달 억제(08-13 실측: commit=" " 직후 같은 스페이스 키다운).
-                    if self
-                        .ime_commit_echo
-                        .take_if(|(c, t)| *c == ' ' && now_ms.saturating_sub(*t) < 120)
-                        .is_some()
-                    {
-                        return;
-                    }
+                    // (스페이스 이중 배달 잔향은 게이트 keydown_gate가 이미 걸렀다 — H-15.)
                     self.route(id, InputEvent::Char { c: ' ', now_ms }, el);
                     return;
                 }
@@ -7293,21 +7026,13 @@ impl ApplicationHandler<AppEvent> for App {
                             | '\u{3130}'..='\u{318F}' // Compat Jamo(ㄱ·ㅣ 등)
                             | '\u{A960}'..='\u{A97F}'
                             | '\u{D7B0}'..='\u{D7FF}');
-                        // 이중 배달 억제 — 방금 IME가 확정한 그 문자의 키다운 잔향(1회성).
-                        if !is_jamo
-                            && self
-                                .ime_commit_echo
-                                .take_if(|(ec, t)| *ec == c && now_ms.saturating_sub(*t) < 120)
-                                .is_some()
-                        {
-                            return;
-                        }
                         let list_mode = Some(id) == self.main_id
                             && self.single_open.is_none()
                             && self.single_open_group.is_none();
                         if is_jamo && !list_mode {
-                            // IME 켜진 창(대화 등): 중복 가능성 → 보류-판정.
-                            self.pending_jamo = Some((id, c, now_ms));
+                            // IME 켜진 창: 중복/유출 판정은 게이트 몫(H-2 — 보류 등록).
+                            let outs = self.ime.route_char(id, c, now_ms, true);
+                            self.apply_ime(outs, el);
                         } else if !c.is_control() {
                             // Windows 한글 모드(한/영 키 토글): IME가 없어 라틴이 온다 —
                             // 두벌식 자모로 번역해 넣는다(대문자 = 시프트 반영·[docs/27 §8]).
@@ -7686,19 +7411,10 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         live,
         listen_port,
         addr_view: None,
-        ime_composing: false,
-        ime_preedit: String::new(),
-        ime_preedit_stash: None,
-        ime_cleared_ms: None,
+        ime: crate::ime_gate::ImeGate::new(),
         parked_lines: HashMap::new(),
         qthumbs: HashMap::new(),
-        pending_jamo: None,
-        leak: nbeep_ui::hangul::Composer::new(),
-        leak_win: None,
         ime_trace: std::env::var_os("NEXA_IME_TRACE").is_some(),
-        pending_arrow: None,
-        ime_commit_echo: None,
-        ime_selfcommit: None,
         os_focused: None,
         blink_anchor_ms: 0,
         blink_phase_seen: true,
