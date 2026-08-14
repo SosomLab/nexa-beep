@@ -175,6 +175,14 @@ impl FileTrustStore {
         self.inner.names(peer)
     }
 
+    /// [`MemoryTrustStore::export`] 위임 — 핀 스냅샷(읽기 전용).
+    /// 부팅 시 "연결됐던 상대" 열람의 단일 통로다(08-14 프로필 캐시 복원) —
+    /// 핀은 세션 성립에서만 생기므로 이 목록이 곧 연결 이력이다.
+    #[must_use]
+    pub fn export(&self) -> Vec<PinRecord> {
+        self.inner.export()
+    }
+
     // ── 직렬화·암호화 ──
 
     fn wrap_key(salt: &[u8; SALT_LEN], secret: &[u8; 32]) -> [u8; 32] {
@@ -421,6 +429,29 @@ mod tests {
         assert_eq!(ts.names(pid(1)), &[DisplayName::parse("bob").unwrap()]);
         assert_eq!(ts.level(pid(2)), TrustLevel::FingerprintVerified);
         assert_eq!(ts.on_session(pid(3)), TrustDecision::Blocked);
+    }
+
+    /// export = 재시작 후 "연결됐던 상대" 열람 통로(08-14 프로필 캐시 복원) —
+    /// 핀·이름·차단이 스냅샷에 그대로 실려야 부팅 복원이 차단 필터를 걸 수 있다.
+    #[test]
+    fn export_carries_pins_names_and_block_after_reopen() {
+        let path = tmp("export");
+        let secret = [9u8; 32];
+        {
+            let (mut ts, _) = FileTrustStore::open(path.clone(), secret);
+            let _ = ts.on_session(pid(1));
+            ts.record_name(pid(1), DisplayName::parse("영희 노트북").unwrap());
+            ts.block(pid(2));
+        }
+        let (ts, _) = FileTrustStore::open(path, secret);
+        let recs = ts.export();
+        let r1 = recs.iter().find(|r| r.peer == pid(1)).unwrap();
+        assert_eq!(
+            r1.names.last(),
+            Some(&DisplayName::parse("영희 노트북").unwrap())
+        );
+        assert!(!r1.blocked);
+        assert!(recs.iter().find(|r| r.peer == pid(2)).unwrap().blocked);
     }
 
     /// fail-closed — 다른 기기 키(래핑 원료)로는 열리지 않고 **잠김**이 보고된다.

@@ -297,6 +297,44 @@ struct PeerProfile {
     border: Option<(u8, u8, u8)>,
 }
 
+/// 프로필 캐시 메타 직렬화(08-14 사용자 요청 — 재시작 시 캐시된 프로필 표시).
+/// 여기 넣는 것은 **와이어 검증 통과분의 저민감 표시값**(내장 12간지 키·보더 색)뿐이다 —
+/// 이름은 trust.seg(암호화 · `record_name`)가, 이미지 바이트는 `profiles/{peer}.img`가
+/// 이미 들고 있고, **이메일·전화는 캐시하지 않는다**(연락처 평문 at-rest 회피 ·
+/// ADR-0005 결 — 재연결 프리페치가 다시 채운다).
+fn encode_profile_meta(avatar_key: Option<&str>, border: Option<(u8, u8, u8)>) -> String {
+    let mut out = String::new();
+    if let Some(k) = avatar_key {
+        out.push_str("avatar=");
+        out.push_str(k);
+        out.push('\n');
+    }
+    if let Some(rgb) = border {
+        out.push_str("border=");
+        out.push_str(&nbeep_core::avatar::border_to_setting(rgb));
+        out.push('\n');
+    }
+    out
+}
+
+/// [`encode_profile_meta`]의 역 — 미지 줄은 무시(전방 관용)하되 값은 **다시 검증**한다.
+/// 파일은 사람이 고칠 수 있다 — 12간지 밖 키·무효 색은 조용히 버림(fail-closed:
+/// 수신 경로와 같은 검증을 복원 경로에도 그대로 태운다).
+fn parse_profile_meta(s: &str) -> (Option<String>, Option<(u8, u8, u8)>) {
+    let mut key = None;
+    let mut border = None;
+    for line in s.lines() {
+        if let Some(v) = line.strip_prefix("avatar=") {
+            if nbeep_core::avatar::ZODIAC.contains(&v) {
+                key = Some(v.to_string());
+            }
+        } else if let Some(v) = line.strip_prefix("border=") {
+            border = nbeep_core::avatar::parse_border(v);
+        }
+    }
+    (key, border)
+}
+
 /// 대화 상태 — **뷰(창)와 분리**(DR-26). 세션은 **액터 스레드**가 소유하고, 여기엔 그
 /// 액터로 보내는 송신 채널과 스레드 이력만 둔다(M2-7 — 비동기 수신 펌프).
 struct Conversation {
@@ -3429,6 +3467,63 @@ impl App {
     /// 영속 설정의 부팅 반영(M3-15) — 파생 런타임 상태를 가진 키만.
     /// [`Self::apply_settings`]의 부팅판: status 문구·redraw 없이 상태만 맞춘다
     /// (`ui.language`·`ui.scrollbar_hide`는 run()이 창 생성 전에 이미 반영).
+    /// 부팅 시 프로필 캐시 복원(08-14 사용자 요청 — 재시작하면 아는 상대가 빈 지문
+    /// 행으로 시작하던 것). **핀 = "연결됐던 기록"**이 열쇠다: trust.seg 핀별로 마지막
+    /// 이름(`record_name` 이력)·내장 아바타/보더(`profiles/{peer}.meta`)·이미지
+    /// (`{peer}.img`)를 미리 채우고, live 모드면 목록 행도 시드한다(비발견 상대 유지
+    /// ④의 부팅판 — 발견이 닿으면 테이블 항목이 이긴다 · refresh_rows 병합 규칙).
+    /// 갱신·철회는 기존 규칙 그대로 — 세션이 서면 자동 프리페치가 최신으로 덮는다.
+    /// **부팅 자동 연결은 하지 않는다**: 핀 N개 전원 아웃바운드는 전원이 켤 때마다
+    /// 서로를 부르는 부팅 풀메시(N² 상시 세션)가 된다(13 §12-1 — 캐시로 충분).
+    fn restore_cached_profiles(&mut self) {
+        let dir = self.data_dir.join("profiles");
+        for rec in self.trust.export() {
+            if rec.blocked {
+                continue; // 차단 상대는 복원 대상이 아니다(목록·캐시 모두)
+            }
+            let peer = rec.peer;
+            let (key, border) = std::fs::read_to_string(dir.join(format!("{}.meta", peer.short())))
+                .map(|s| parse_profile_meta(&s))
+                .unwrap_or((None, None));
+            let avatar = key
+                .as_deref()
+                .and_then(|k| self.builtin_avatars.get(k).cloned());
+            let img_path = dir.join(format!("{}.img", peer.short()));
+            let image_file = img_path.exists().then(|| img_path.clone());
+            if image_file.is_some() {
+                // 파일 읽기·격리 디코드 모두 워커에서(M4-5 결 — 부팅 무정지).
+                spawn_decode(
+                    self.proxy.clone(),
+                    DecodeTarget::PeerAvatar(peer),
+                    move || {
+                        let bytes = std::fs::read(&img_path).ok()?;
+                        crate::imgdec::avatar_raw_from_bytes(&bytes, 256)
+                    },
+                );
+            }
+            if self.live {
+                // 데모(에코 봇) 모드는 시드하지 않는다 — 실기 핀이 봇 목록에 섞인다.
+                self.extra_peers
+                    .entry(peer)
+                    .or_insert_with(|| nbeep_core::default_display_name(None, &peer));
+            }
+            let name = rec.names.last().cloned();
+            if name.is_some() || avatar.is_some() || border.is_some() || image_file.is_some() {
+                self.peer_profiles.insert(
+                    peer,
+                    PeerProfile {
+                        name,
+                        email: None,
+                        phone: None,
+                        image_file,
+                        avatar,
+                        border,
+                    },
+                );
+            }
+        }
+    }
+
     fn apply_boot_settings(&mut self) {
         use nbeep_core::{ApprovalPolicy, BasicApproval};
         // 기본 아바타(08-14) — 미설정이면 **내 키 지문으로 12간지 하나를 안정 배정해
@@ -5673,6 +5768,10 @@ impl ApplicationHandler<AppEvent> for App {
         );
         self.main_id = Some(id);
         self.layout_window(id);
+        // 첫 그리기 전에 목록을 한 번 조립한다 — 부팅 복원(캐시 프로필·핀 행)이
+        // 발견 이벤트 없이도 바로 보이게(08-14 · 그전엔 첫 ANNOUNCE까지 빈 목록).
+        let mut inv = Invalidations::default();
+        self.refresh_rows(&mut inv);
         // keytap 설치(G1 · H-26 — mac 한정): winit이 삼키는 "조합 직후 첫 1byte"를
         // 로컬 모니터로 관측해 보충한다. 단일 설치(resumed는 main_id 가드로 1회).
         #[cfg(target_os = "macos")]
@@ -6084,34 +6183,52 @@ impl ApplicationHandler<AppEvent> for App {
                 // 내장 아바타 키(08-14) — **내 자산의 12간지 키로 검증**하고 즉시 반영
                 // (바이트가 아니라 키라 디코드 자체가 없다 — imgdec 무관·R-5 무관).
                 // 미지 키(신버전 값)는 조용히 버린다(전방 호환).
-                let builtin = avatar_key
-                    .filter(|k| nbeep_core::avatar::ZODIAC.contains(&k.as_str()))
-                    .and_then(|k| self.builtin_avatars.get(&k).cloned());
+                let builtin_key =
+                    avatar_key.filter(|k| nbeep_core::avatar::ZODIAC.contains(&k.as_str()));
+                let builtin = builtin_key
+                    .as_ref()
+                    .and_then(|k| self.builtin_avatars.get(k).cloned());
                 // 보더 색 — 검증 통과분만(무효는 조용히 폐기 · fail-closed).
                 let border = border.as_deref().and_then(nbeep_core::avatar::parse_border);
+                // 캐시 파일 경로(부팅 복원의 짝 — restore_cached_profiles가 읽는다).
+                let dir = self.data_dir.join("profiles");
+                let img_path = dir.join(format!("{}.img", peer.short()));
+                let meta_path = dir.join(format!("{}.meta", peer.short()));
                 // 이미지 바이트 캐시 + **격리 디코드는 워커로**(M4-5 — 자식 프로세스
                 // 왕복이 메인을 1~2초 멈췄다 · 08-13 실기). 도착 전엔 기존 아바타를
                 // 유지하고(깜빡임 방지) `Decoded(PeerAvatar)`가 교체한다. 실패 = 이니셜.
                 let mut avatar = builtin.clone();
+                let has_image = image.is_some();
                 let image_file = image.and_then(|bytes| {
-                    let dir = self.data_dir.join("profiles");
                     std::fs::create_dir_all(&dir).ok()?;
-                    let path = dir.join(format!("{}.img", peer.short()));
-                    std::fs::write(&path, &bytes).ok()?;
+                    std::fs::write(&img_path, &bytes).ok()?;
                     avatar = self.peer_profiles.get(&peer).and_then(|p| p.avatar.clone());
                     spawn_decode(
                         self.proxy.clone(),
                         DecodeTarget::PeerAvatar(peer),
                         move || crate::imgdec::avatar_raw_from_bytes(&bytes, 256),
                     );
-                    Some(path)
+                    Some(img_path.clone())
                 });
+                if !has_image {
+                    // 이미지 철회(응답에 미포함) — 캐시 파일도 지운다. 안 지우면
+                    // 재시작 복원이 옛 사진을 되살린다(철회가 재시작에 안 남는 구멍).
+                    let _ = std::fs::remove_file(&img_path);
+                }
                 let has_any = display.is_some()
                     || email.is_some()
                     || phone.is_some()
                     || image_file.is_some()
                     || builtin.is_some();
                 if has_any {
+                    // 메타 캐시(내장 키·보더 — 08-14 부팅 복원): 검증 통과분만 쓴다.
+                    // 둘 다 없으면 파일 제거(철회 반영 — 이미지와 같은 규칙).
+                    let meta = encode_profile_meta(builtin_key.as_deref(), border);
+                    if meta.is_empty() {
+                        let _ = std::fs::remove_file(&meta_path);
+                    } else if std::fs::create_dir_all(&dir).is_ok() {
+                        let _ = std::fs::write(&meta_path, meta);
+                    }
                     // 받은 항목을 상태바에 요약(연락처 상세 표시 UI는 M3-17 잔여).
                     let mut got: Vec<&str> = Vec::new();
                     if display.is_some() {
@@ -6141,7 +6258,9 @@ impl ApplicationHandler<AppEvent> for App {
                         format!("프로필 수신({}) — {}", self.peer_title(peer), got.join("·"));
                 } else {
                     // 전부 비공개(빈 응답) — 이전 프로필이 있었다면 걷어낸다(철회 반영).
+                    // 캐시 파일도 함께 — 재시작 복원이 철회를 되돌리면 안 된다.
                     self.peer_profiles.remove(&peer);
+                    let _ = std::fs::remove_file(&meta_path);
                 }
                 let mut inv = Invalidations::default();
                 self.refresh_rows(&mut inv);
@@ -7520,6 +7639,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
     };
     app.reload_faces(); // 고정폭 등 슬롯 얼굴 초기 로드
     app.apply_boot_settings(); // 영속 설정 → 파생 런타임 상태(테마·정책 등 · M3-15)
+    app.restore_cached_profiles(); // 핀 상대의 캐시 프로필·목록 행 복원(08-14)
     event_loop.run_app(&mut app).unwrap();
 }
 
@@ -7571,6 +7691,36 @@ mod tests {
         assert!(!latch.begin(p), "진행 중 중복 클릭은 막는다");
         latch.finish(Some(p), None);
         assert!(latch.begin(p));
+    }
+
+    /// 프로필 캐시 메타(08-14 부팅 복원) — 수신 시 쓴 것을 복원이 그대로 읽는다.
+    #[test]
+    fn profile_meta_round_trip() {
+        use super::{encode_profile_meta, parse_profile_meta};
+        let s = encode_profile_meta(Some("tiger"), Some((0x12, 0xAB, 0xFF)));
+        assert_eq!(
+            parse_profile_meta(&s),
+            (Some("tiger".into()), Some((0x12, 0xAB, 0xFF)))
+        );
+        // 부분만 있어도 각자 산다(켠 필드만 오는 프로필과 같은 결).
+        assert_eq!(
+            parse_profile_meta(&encode_profile_meta(None, Some((1, 2, 3)))),
+            (None, Some((1, 2, 3)))
+        );
+        assert!(
+            encode_profile_meta(None, None).is_empty(),
+            "빈 메타 = 파일 제거 신호"
+        );
+    }
+
+    /// 캐시 파일은 사람이 고칠 수 있다 — 복원 경로도 수신 경로와 같은 검증을 태운다
+    /// (12간지 밖 키·무효 색·미지 줄은 조용히 버림 = fail-closed·전방 관용).
+    #[test]
+    fn profile_meta_rejects_tampered_values() {
+        use super::parse_profile_meta;
+        let (k, b) = parse_profile_meta("avatar=dragon-lord\nborder=#ZZZZZZ\nfuture=1\n");
+        assert_eq!(k, None, "12간지 밖 키는 채택하지 않는다");
+        assert_eq!(b, None, "무효 색은 채택하지 않는다");
     }
 
     /// 자동 재연결 백오프(ⓑ 08-13) — 단계별 지연이 늘고, 다 쓰면 **중단**한다
