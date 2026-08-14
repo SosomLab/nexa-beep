@@ -71,11 +71,14 @@ pub struct ImeGate<W: Copy + Eq> {
     /// 조합 종료 시각 — Windows Esc 잔향 차단(WIME-6)용. 호스트가 조회.
     cleared_ms: Option<u64>,
     /// 보류 문자(창, 문자, 시각) — 자모(H-2 유출/중복 판정) · 비자모(H-11 '?' 판정).
-    pending: Option<(W, char, u64)>,
+    pending: Option<(W, char, u64, bool)>,
     /// 조합 중 눌린 이동 키(H-16) — Commit 직후 재생.
     pending_arrow: Option<(W, Key, bool, bool)>,
     /// 확정 끝 문자 잔향(H-15 — 같은 키 이중 배달 1회 소비).
     echo: Option<(char, u64)>,
+    /// 수동 확정분(창, 본문, 시각 — H-24): focus_out이 확정한 본문을 IME가 늦은
+    /// Commit으로 또 보내면 잔향 — 1초 안 같은 창·같은 본문 1회 삼킨다.
+    selfcommit: Option<(W, String, u64)>,
     /// 유출 자모 로컬 조합기(H-10·H-14).
     leak: Composer,
     /// 유출 조합이 진행 중인 창.
@@ -92,6 +95,7 @@ impl<W: Copy + Eq> Default for ImeGate<W> {
             pending: None,
             pending_arrow: None,
             echo: None,
+            selfcommit: None,
             leak: Composer::new(),
             leak_win: None,
         }
@@ -155,7 +159,7 @@ impl<W: Copy + Eq> ImeGate<W> {
                 self.pending_arrow = Some((id, k, shift, primary));
             }
             KeyIn::Char(c) if !primary && !hangul::is_jamo(c) && !c.is_control() => {
-                self.pending = Some((id, c, now));
+                self.pending = Some((id, c, now, true));
             }
             _ => {}
         }
@@ -164,11 +168,11 @@ impl<W: Copy + Eq> ImeGate<W> {
 
     /// ② 보류 방출: 새 keydown이 왔는데(또는 틱 유예 경과) Ime 이벤트가 안 붙었다.
     /// `ime_on_window` = 대상 창이 IME 켠 입력(목록 제외) — 자모를 leak 조합기로.
-    pub fn flush_pending(&mut self, _now: u64, ime_on_window: bool) -> Vec<Out<W>> {
-        let Some((id, c, _)) = self.pending.take() else {
+    pub fn flush_pending(&mut self, _now: u64) -> Vec<Out<W>> {
+        let Some((id, c, _, ime_on)) = self.pending.take() else {
             return Vec::new();
         };
-        if hangul::is_jamo(c) && ime_on_window {
+        if hangul::is_jamo(c) && ime_on {
             return self.leak_feed(id, c);
         }
         vec![Out::Char(id, c)]
@@ -176,13 +180,13 @@ impl<W: Copy + Eq> ImeGate<W> {
 
     /// 틱(~5Hz): 보류 유예(150ms) 경과분 방출. 조합 중엔 비자모 보류를 유지한다
     /// (Commit 판정까지 — H-11).
-    pub fn tick(&mut self, now: u64, ime_on_window: bool) -> Vec<Out<W>> {
+    pub fn tick(&mut self, now: u64) -> Vec<Out<W>> {
         if self.composing {
             return Vec::new();
         }
-        if let Some((_, _, t)) = self.pending {
+        if let Some((_, _, t, _)) = self.pending {
             if now.saturating_sub(t) >= PENDING_MS {
-                return self.flush_pending(now, ime_on_window);
+                return self.flush_pending(now);
             }
         }
         Vec::new()
@@ -206,6 +210,20 @@ impl<W: Copy + Eq> ImeGate<W> {
         }
     }
 
+    /// 유출 조합 취소(Esc) — 조합 중 글자를 버리고 소비한다(없으면 false).
+    pub fn leak_cancel(&mut self) -> (bool, Vec<Out<W>>) {
+        if !self.leak.is_composing() {
+            return (false, Vec::new());
+        }
+        self.leak.reset();
+        let out = self
+            .leak_win
+            .take()
+            .map(|w| vec![Out::Preedit(w, String::new())])
+            .unwrap_or_default();
+        (true, out)
+    }
+
     /// 유출 조합 중 Backspace — 자모 단위로 지우고 소비한다(없으면 false).
     pub fn leak_backspace(&mut self) -> (bool, Vec<Out<W>>) {
         if !self.leak.is_composing() {
@@ -226,7 +244,7 @@ impl<W: Copy + Eq> ImeGate<W> {
     /// ④ 문자 라우팅: 자모 = 보류-판정 등록(IME 켠 창), 그 외 = 즉시 라우팅.
     pub fn route_char(&mut self, id: W, c: char, now: u64, ime_on_window: bool) -> Vec<Out<W>> {
         if hangul::is_jamo(c) && ime_on_window {
-            self.pending = Some((id, c, now));
+            self.pending = Some((id, c, now, true));
             return Vec::new();
         }
         vec![Out::Char(id, c)]
@@ -238,7 +256,7 @@ impl<W: Copy + Eq> ImeGate<W> {
     /// 폐기, 아니면 유출 → leak 합류) · 조합 추적 · 표시 문자열 합성.
     pub fn preedit(&mut self, id: W, text: &str, now: u64) -> Vec<Out<W>> {
         let mut outs = Vec::new();
-        if let Some((pid, c, _)) = self.pending {
+        if let Some((pid, c, _, _)) = self.pending {
             if hangul::is_jamo(c) {
                 self.pending = None;
                 if !text.starts_with(c) {
@@ -277,6 +295,18 @@ impl<W: Copy + Eq> ImeGate<W> {
     /// 본문 라우팅 → 비자모 보류 판정(H-11) → 이동 키 재생(H-16) 순서.
     pub fn commit(&mut self, id: W, text: &str, now: u64, ime_on_window: bool) -> Vec<Out<W>> {
         let mut outs = Vec::new();
+        // 수동 확정 잔향(H-24) — focus_out이 이미 합류시킨 본문의 늦은 Commit은 1회 삼킨다.
+        if let Some((sid, ref stext, st)) = self.selfcommit {
+            if sid == id && stext == text && now.saturating_sub(st) < 1_000 {
+                self.selfcommit = None;
+                self.composing = false;
+                self.preedit_text.clear();
+                self.stash = None;
+                self.cleared_ms = Some(now);
+                return outs;
+            }
+        }
+        self.selfcommit = None;
         self.composing = false;
         self.preedit_text.clear();
         self.stash = None;
@@ -298,7 +328,9 @@ impl<W: Copy + Eq> ImeGate<W> {
         outs.extend(self.flush_leak());
         // 보류 판정(H-11) — 자모는 무조건 중복 폐기 · 비자모는 본문 대조.
         let leftover = match self.pending.take() {
-            Some((pid, c, _)) if pid == id && !hangul::is_jamo(c) && !text.contains(c) => Some(c),
+            Some((pid, c, _, _)) if pid == id && !hangul::is_jamo(c) && !text.contains(c) => {
+                Some(c)
+            }
             _ => None,
         };
         for c in text.chars().filter(|c| !c.is_control()) {
@@ -335,6 +367,7 @@ impl<W: Copy + Eq> ImeGate<W> {
         if !text.is_empty() {
             self.composing = false;
             self.cleared_ms = Some(now);
+            self.selfcommit = Some((id, text.clone(), now)); // H-24 늦은 Commit 잔향 대비
             outs.push(Out::Preedit(id, String::new()));
             for c in text.chars().filter(|c| !c.is_control()) {
                 outs.push(Out::Char(id, c));
@@ -439,7 +472,7 @@ mod tests {
             {
                 return;
             }
-            let outs = self.gate.flush_pending(self.now, true);
+            let outs = self.gate.flush_pending(self.now);
             self.apply(outs);
             let (consumed, outs) = self.gate.leak_intercept(KeyIn::Char(c), false);
             self.apply(outs);
@@ -459,7 +492,7 @@ mod tests {
             {
                 return;
             }
-            let outs = self.gate.flush_pending(self.now, true);
+            let outs = self.gate.flush_pending(self.now);
             self.apply(outs);
             let (_, outs) = self.gate.leak_intercept(KeyIn::Arrow(k), false);
             self.apply(outs);
@@ -475,7 +508,7 @@ mod tests {
             {
                 return;
             }
-            let outs = self.gate.flush_pending(self.now, true);
+            let outs = self.gate.flush_pending(self.now);
             self.apply(outs);
             let (_, outs) = self.gate.leak_intercept(KeyIn::Other, false);
             self.apply(outs);
@@ -598,6 +631,27 @@ mod tests {
         assert_eq!(d.buf, "지", "스태시 300ms 안 = 확정 합류");
     }
 
+    /// ★ H-24 재생("나다다") — 포커스 이탈 수동 확정 뒤 늦은 Commit(같은 본문)은
+    /// 1회 잔향으로 삼킨다(다른 본문·1초 초과는 정상 입력).
+    #[test]
+    fn replay_h24_late_commit_after_manual_flush_is_swallowed_once() {
+        let mut d = Driver::new();
+        d.preedit("나");
+        d.preedit("");
+        d.commit("나");
+        d.preedit("다"); // "다" 조합 중 포커스 이탈(작업표시줄 클릭류)
+        d.now += 50;
+        let outs = d.gate.focus_out(W, d.now);
+        d.apply(outs);
+        assert_eq!(d.buf, "나다", "수동 확정 합류");
+        d.commit("다"); // IME의 늦은 Commit — 잔향
+        assert_eq!(d.buf, "나다", "이중 입력('나다다') 방지");
+        d.preedit("다");
+        d.preedit("");
+        d.commit("다"); // 그 다음 진짜 입력은 정상
+        assert_eq!(d.buf, "나다다");
+    }
+
     /// G2 — 저장 트리거 직전 확정(commit_now): 조합 중 음절이 값에 포함된다.
     #[test]
     fn commit_now_flushes_composing_syllable() {
@@ -617,7 +671,7 @@ mod tests {
         let mut d = Driver::new();
         d.key_char('ㅁ'); // 보류
         assert_eq!(d.buf, "");
-        let outs = d.gate.tick(d.now + PENDING_MS, true);
+        let outs = d.gate.tick(d.now + PENDING_MS);
         d.apply(outs);
         // 자모 하나는 조합 중(미리보기)이라 버퍼는 아직 비어 있고, 비자모가 오면 확정.
         d.key_char('.');
