@@ -7383,7 +7383,26 @@ impl ApplicationHandler<AppEvent> for App {
                 // L1 재발견(M1-2) — 전송이 그룹 재조인 + 즉시 HELLO + S4로 반응.
                 // 목록은 상대 재공지(발견 이벤트)로 다시 찬다 — 여기서 지우지 않는다.
                 self.transport.link_changed();
-                self.status = "네트워크 변경 감지 — 재발견 중".into();
+                // ★ M1-2b(부분 · 사용자 요청 "전환에도 상태 유지"): 재연결 **가속** —
+                // 유선↔무선 전환 뒤 백오프의 긴 대기를 기다리지 않는다.
+                // ⓐ 걸려 있는 재연결 스케줄 = 전부 0단·지금으로 리셋(다음 펌프서 즉시).
+                let now = self.now_ms();
+                for e in self.reconnect.values_mut() {
+                    *e = (0, now);
+                }
+                // ⓑ 직전에 대화하다 끊긴 상대(스케줄 소진 포함) = 즉시 조용한 연결 1회
+                //    — 수단(발견·수동 주소)이 있는 상대만(무의미 트래픽 금지).
+                let targets: Vec<PeerId> = self
+                    .closed_peers
+                    .iter()
+                    .copied()
+                    .filter(|p| !self.conversations.contains_key(p))
+                    .filter(|p| self.manual_addrs.contains_key(p) || self.table.get(*p).is_some())
+                    .collect();
+                for p in targets {
+                    self.start_connect(p, true); // 중복 클릭 가드는 connecting이 맡는다
+                }
+                self.status = "네트워크 변경 감지 — 재발견·재연결 중".into();
                 if let Some(mid) = self.main_id {
                     self.request_redraw(mid);
                 }
