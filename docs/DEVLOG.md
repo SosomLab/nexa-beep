@@ -7,6 +7,7 @@
 
 ## 2026-08-15
 
+- ★ **M3-14b 신뢰 배지 개편**(main · 사용자 실기 지적 "유령 원"): Lucide badge 알파 마스크 폐기 → **Material Symbols 컬러 RGBA**(Apache-2.0 · 미검증=머리+?·대조=SNS 파란 실·차단=🚫·충돌=⚠) · **Pinned 목록 숨김**(문제 상태만) · 18px · `mkicons-rgba.sh` 컬러 파이프라인 신설 · 렌더 프로브+실기 소거 확인. 637 green. 상세 [journal/2026-08-15.md](journal/2026-08-15.md).
 - ★★ **배지 2종 + G4 잔여 + M1 잔여 일괄 — 9커밋 배치**(main · 사용자 지시 순서대로): **M3-19** 세션 배지 색+실루엣(빈 링/갭 링(캐럿 틱 회전)/찬 원/막대 · `fill_pie` 신설 · 픽셀 회귀 6종) · **M3-14** 신뢰 배지 Lucide 아이콘(9자산 14px 실측 굽기 · ★화면에 없던 `Blocked`·**이름 충돌**·FirstContact 가시화 · hover 툴팁) · **G4 완결**(세션 성립마다 소유 방 Invite 재송 — 인바운드 포함 · 로컬 그룹 부팅 승격) · **M1 5종**(M1-13ⓔ 포트 점유 = 발신 전용 강등 · M1-14 주소 정규화 공용 + IPv4 오타 DNS 차단 · M1-15 프로브 `tcp=` 실측 · M1-9 인터페이스별 발신+가상 제외 · M1-8 S4 이웃 유니캐스트+수신 응답 · **M1-2 L1 구독 3-OS**+디바운스+kick). 신설 = M1-2b(전환 세션 연속성 설계)·M3-22(Dock 아이콘)·WNET-1(Windows 어댑터). **637 green** · 3신원 relaunch 스모크 ✓. 상세 [journal/2026-08-15.md](journal/2026-08-15.md).
 - ★ **M3-2b macOS 메뉴바 상주 ✅ — 트레이 3-OS 개통**(main · mac 세션): NSStatusItem+NSMenu(좌/우 공통 · 이름 헤더/열기/종료) · 선언 클래스 셀렉터 → 프록시 · RGBA→NSImage 18pt(레티나 2x) · MainThreadMarker 강제(fail-soft) · thread_local 상태 · 의존 추가 0(keytap objc2 판 재사용) · **실측 = 메뉴바 diff로 아바타 아이콘 3개 등장/소거 확인**. 618 green. 상세 [journal/2026-08-15.md](journal/2026-08-15.md).
 - **M3-2c 🚧 Linux 트레이(SNI)**(main · 사용자 확정 = 폴백 대신 구현): zbus 5로 StatusNotifierItem+dbusmenu 서빙(IconPixmap ARGB32·Activate=열기·Event clicked=열기/종료·워처 부재=fail-soft None) · Linux 타깃 한정 의존 · **크로스 check/clippy 0** — 실기는 Linux 환경 잔여. 상세 [journal/2026-08-15.md](journal/2026-08-15.md).
