@@ -10,6 +10,15 @@
 //! - stdout(성공): `"NIMG"` 4B ‖ w u32 LE ‖ h u32 LE ‖ RGBA(straight) `w*h*4`B.
 //! - 실패: 아무 것도 쓰지 않고 비0 종료(사유는 stderr — 본체는 코드만 본다).
 //!
+//! ## 권한 강등 (M4-5ⓒ · R-5 종결)
+//!
+//! 입력(stdin)을 **전부 읽은 직후 · 파싱 전에** 자신을 잠근다 — 이후 허용되는
+//! 일은 메모리 할당·stdout/stderr 쓰기·종료뿐이다. 파서가 뚫려도(RCE) 열 수
+//! 있는 것이 없다: macOS = Seatbelt `pure-computation` · Linux = seccomp-bpf
+//! 허용 목록(+no_new_privs) · Windows = 완화 정책(동적 코드·원격 이미지 금지 —
+//! win32k 락아웃은 실기 검증 후 강화). 강등 실패 = **fail-closed**(디코드 포기 ·
+//! exit 4). 3-OS 실측은 통합 테스트(`tests/lockdown.rs`)가 CI에서 실행한다.
+//!
 //! ## 상한 (fail-closed)
 //!
 //! - 원본 ≤ 1MiB · 디코드 픽셀 ≤ 16,777,216(= 4096², RGBA 64MiB) · 변 ≤ 8192.
@@ -48,6 +57,17 @@ fn run() -> i32 {
     if n.is_err() || src.is_empty() || src.len() > SRC_MAX {
         eprintln!("imgdec: 입력 없음/상한 초과");
         return 2;
+    }
+
+    // ★ 권한 강등(M4-5ⓒ · R-5) — 입력을 전부 읽었으니 **파싱 전에** 잠근다.
+    //   실패 = fail-closed: 파서를 무방비로 돌리지 않는다(이미지만 죽는다 —
+    //   imgdec 부재와 같은 강도의 실패 · 본체는 이니셜 폴백).
+    match lockdown::engage() {
+        Ok(mode) => eprintln!("imgdec: lockdown = {mode}"),
+        Err(why) => {
+            eprintln!("imgdec: lockdown 실패({why}) — fail-closed");
+            return 4;
+        }
     }
 
     let decoded = if src.starts_with(&[0x89, b'P', b'N', b'G']) {
@@ -212,5 +232,212 @@ mod tests {
         assert!(!size_ok(4097, 4096)); // 픽셀 상한 초과
         assert!(!size_ok(8193, 1)); // 변 상한 초과
         assert!(!size_ok(0, 100)); // 퇴화
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// M4-5ⓒ 권한 강등(R-5 종결) — **입력을 전부 읽은 뒤 · 파싱 전에** 잠근다.
+// 이후 이 프로세스에 허용되는 일은 "메모리 할당 · stdout/stderr 쓰기 · 종료"뿐.
+// 강등 실패 = fail-closed(디코드 포기 · 비0 종료) — 파서를 무방비로 돌리지 않는다.
+// 실측 경로: 통합 테스트(tests/lockdown.rs)가 3-OS CI에서 실제 바이너리를 돌린다.
+mod lockdown {
+    // 바이너리 내부 모듈 — pub이 밖에 닿지 않는다(unreachable_pub 의도 문서용).
+    #![allow(unreachable_pub)]
+
+    /// 강등 적용 — `Ok(적용 방식)` / `Err(사유)`.
+    #[cfg(target_os = "macos")]
+    pub fn engage() -> Result<&'static str, String> {
+        // Seatbelt "pure-computation" 프로파일 — 파일/네트워크/exec 전부 차단,
+        // **이미 열린 fd의 read/write는 허용**(stdin은 이미 다 읽었고 stdout만 쓴다).
+        // sandbox_init는 deprecated 표기지만 시스템 헬퍼들이 여전히 쓰는 경로다.
+        unsafe extern "C" {
+            fn sandbox_init(profile: *const u8, flags: u64, errorbuf: *mut *mut u8) -> i32;
+            fn sandbox_free_error(errorbuf: *mut u8);
+        }
+        const SANDBOX_NAMED: u64 = 0x0001;
+        let mut err: *mut u8 = std::ptr::null_mut();
+        let rc =
+            unsafe { sandbox_init(c"pure-computation".as_ptr().cast(), SANDBOX_NAMED, &mut err) };
+        if rc == 0 {
+            return Ok("macos-seatbelt(pure-computation)");
+        }
+        let why = if err.is_null() {
+            "sandbox_init 실패".to_string()
+        } else {
+            let s = unsafe { std::ffi::CStr::from_ptr(err.cast()) }
+                .to_string_lossy()
+                .into_owned();
+            unsafe { sandbox_free_error(err) };
+            s
+        };
+        Err(why)
+    }
+
+    /// Linux — seccomp-bpf 허용 목록(할당·쓰기·종료 계열만) + no_new_privs.
+    /// 번호는 libc의 아키텍처별 상수를 쓴다(손 번호 금지 — x86_64/aarch64 분기 오류원).
+    #[cfg(target_os = "linux")]
+    pub fn engage() -> Result<&'static str, String> {
+        #[repr(C)]
+        struct SockFilter {
+            code: u16,
+            jt: u8,
+            jf: u8,
+            k: u32,
+        }
+        #[repr(C)]
+        struct SockFprog {
+            len: u16,
+            filter: *const SockFilter,
+        }
+        const BPF_LD_W_ABS: u16 = 0x20;
+        const BPF_JMP_JEQ_K: u16 = 0x15;
+        const BPF_RET_K: u16 = 0x06;
+        const SECCOMP_RET_ALLOW: u32 = 0x7fff_0000;
+        const SECCOMP_RET_KILL_PROCESS: u32 = 0x8000_0000;
+        // seccomp_data 오프셋: nr=0 · arch=4.
+        const OFF_NR: u32 = 0;
+        const OFF_ARCH: u32 = 4;
+        #[cfg(target_arch = "x86_64")]
+        const AUDIT_ARCH: u32 = 0xC000_003E; // AUDIT_ARCH_X86_64
+        #[cfg(target_arch = "aarch64")]
+        const AUDIT_ARCH: u32 = 0xC000_00B7; // AUDIT_ARCH_AARCH64
+
+        // 허용 syscall — 할당(brk/mmap 계열)·쓰기·동기화·종료·시그널 복귀.
+        // open/exec/socket 계열은 목록에 없다 = 즉사(KILL_PROCESS).
+        #[allow(clippy::cast_possible_truncation)]
+        let allow: Vec<u32> = vec![
+            libc::SYS_read as u32,
+            libc::SYS_write as u32,
+            libc::SYS_writev as u32,
+            libc::SYS_brk as u32,
+            libc::SYS_mmap as u32,
+            libc::SYS_munmap as u32,
+            libc::SYS_mremap as u32,
+            libc::SYS_mprotect as u32,
+            libc::SYS_madvise as u32,
+            libc::SYS_futex as u32,
+            libc::SYS_exit as u32,
+            libc::SYS_exit_group as u32,
+            libc::SYS_rt_sigreturn as u32,
+            libc::SYS_rt_sigprocmask as u32,
+            libc::SYS_sigaltstack as u32,
+            libc::SYS_getrandom as u32,
+            libc::SYS_clock_gettime as u32,
+            libc::SYS_tgkill as u32, // abort 경로(panic=abort·assert)
+            libc::SYS_sched_yield as u32,
+        ];
+        let mut prog: Vec<SockFilter> = Vec::with_capacity(allow.len() + 4);
+        let ld = |k: u32| SockFilter {
+            code: BPF_LD_W_ABS,
+            jt: 0,
+            jf: 0,
+            k,
+        };
+        // arch 검증(다른 ABI로의 우회 차단) → nr 비교 사다리 → 기본 즉사.
+        prog.push(ld(OFF_ARCH));
+        prog.push(SockFilter {
+            code: BPF_JMP_JEQ_K,
+            jt: 1,
+            jf: 0,
+            k: AUDIT_ARCH,
+        });
+        prog.push(SockFilter {
+            code: BPF_RET_K,
+            jt: 0,
+            jf: 0,
+            k: SECCOMP_RET_KILL_PROCESS,
+        });
+        prog.push(ld(OFF_NR));
+        for nr in &allow {
+            prog.push(SockFilter {
+                code: BPF_JMP_JEQ_K,
+                jt: 0,
+                jf: 1,
+                k: *nr,
+            });
+            prog.push(SockFilter {
+                code: BPF_RET_K,
+                jt: 0,
+                jf: 0,
+                k: SECCOMP_RET_ALLOW,
+            });
+        }
+        prog.push(SockFilter {
+            code: BPF_RET_K,
+            jt: 0,
+            jf: 0,
+            k: SECCOMP_RET_KILL_PROCESS,
+        });
+        let fprog = SockFprog {
+            len: u16::try_from(prog.len()).map_err(|_| "필터 과대".to_string())?,
+            filter: prog.as_ptr(),
+        };
+        // no_new_privs — seccomp 무권한 설치의 전제.
+        let rc = unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
+        if rc != 0 {
+            return Err("PR_SET_NO_NEW_PRIVS 실패".into());
+        }
+        let rc = unsafe {
+            libc::prctl(
+                libc::PR_SET_SECCOMP,
+                libc::SECCOMP_MODE_FILTER,
+                std::ptr::addr_of!(fprog),
+                0,
+                0,
+            )
+        };
+        if rc != 0 {
+            return Err("seccomp 필터 설치 실패".into());
+        }
+        Ok("linux-seccomp-bpf(allowlist)")
+    }
+
+    /// Windows — 프로세스 자체 완화 정책(동적 코드 금지 + 원격 이미지 로드 금지).
+    /// win32k 락아웃은 실기 검증 후 강화([TODO WGUI]) — 콘솔 경로 호환을 먼저 실측.
+    #[cfg(target_os = "windows")]
+    pub fn engage() -> Result<&'static str, String> {
+        #[repr(C)]
+        #[derive(Default)]
+        struct DynamicCodePolicy {
+            flags: u32, // bit0 = ProhibitDynamicCode
+        }
+        #[repr(C)]
+        #[derive(Default)]
+        struct ImageLoadPolicy {
+            flags: u32, // bit0 = NoRemoteImages · bit1 = NoLowMandatoryLabelImages
+        }
+        // ProcessDynamicCodePolicy = 2 · ProcessImageLoadPolicy = 10.
+        unsafe extern "system" {
+            fn SetProcessMitigationPolicy(
+                policy: i32,
+                buf: *const core::ffi::c_void,
+                len: usize,
+            ) -> i32;
+        }
+        let dc = DynamicCodePolicy { flags: 1 };
+        let il = ImageLoadPolicy { flags: 0b11 };
+        let ok1 = unsafe {
+            SetProcessMitigationPolicy(
+                2,
+                std::ptr::addr_of!(dc).cast(),
+                core::mem::size_of::<DynamicCodePolicy>(),
+            )
+        };
+        let ok2 = unsafe {
+            SetProcessMitigationPolicy(
+                10,
+                std::ptr::addr_of!(il).cast(),
+                core::mem::size_of::<ImageLoadPolicy>(),
+            )
+        };
+        if ok1 == 0 && ok2 == 0 {
+            return Err("SetProcessMitigationPolicy 실패".into());
+        }
+        Ok("windows-mitigation(dynamic-code·image-load)")
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    pub fn engage() -> Result<&'static str, String> {
+        Err("미지원 OS — 강등 수단 없음".into())
     }
 }

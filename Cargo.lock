@@ -943,6 +943,7 @@ name = "nbeep-imgdec"
 version = "0.1.6"
 dependencies = [
  "jpeg-decoder",
+ "libc",
  "png",
 ]
 

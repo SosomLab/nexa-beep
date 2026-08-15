@@ -22,3 +22,13 @@ workspace = true
 [dependencies]
 png = "0.17"
 jpeg-decoder = "0.3"
+
+# 권한 강등(M4-5ⓒ · R-5) — Linux seccomp-bpf의 아키텍처별 syscall 번호·prctl 상수.
+# libc는 이미 링크되는 시스템 라이브러리의 바인딩이라 런타임 의존 0(DR-5) 불변.
+# 라이선스 MIT/Apache-2.0(DR-12 ✅ · docs/10 §3 원장).
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+# 통합 테스트가 표본 PNG를 만들 때만 사용(배포물 아님).
+png = "0.17"
