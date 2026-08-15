@@ -3760,6 +3760,9 @@ impl App {
             .with_inner_size(winit::dpi::LogicalSize::new(360.0, 380.0))
             .with_resizable(false)
             .with_window_icon(self.icon.clone());
+        // 마우스 위치 + 메인 소유(08-15 — 내 프로필과 같은 카드 규약. 우클릭한
+        // 그 자리에서 열린다).
+        let attrs = self.modal_attrs(attrs, true);
         let window = Rc::new(el.create_window(attrs).unwrap());
         let scale = window.scale_factor() as f32;
         let context = softbuffer::Context::new(window.clone()).unwrap();
