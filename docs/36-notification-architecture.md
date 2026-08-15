@@ -57,7 +57,7 @@
 | OS | 방식 | 왜 이 방식인가(대안 탈락 근거) | 클릭 = 앱 열기 |
 |---|---|---|---|
 | **Windows** | **트레이 풍선** — `TrayHandle::notify` → `WM_APP_BALLOON` → 트레이 스레드가 `Shell_NotifyIconW(NIM_MODIFY, NIF_INFO)` | 정식 WinRT 토스트는 **AppUserModelID(시작 메뉴 바로가기) 요구** = 설치본 전용 → T0·포터블(DR-4) 불합. 트레이 아이콘(M3-2a)이 이미 떠 있어 자산 재사용 · 의존 0 | ✅ `NIN_BALLOONUSERCLICK`(0x405) → `TrayEvent::Open`(트레이 좌클릭과 같은 복원 경로) |
-| **macOS** | `osascript -e 'display notification …'` 스폰(시스템 도구 — `pbcopy`·`arp` 선례) | 정식 UserNotifications는 **번들(.app)+서명 요구** → 포터블·개발 실행(번들 밖)에서 불가. 서드파티(terminal-notifier)는 의존 추가라 탈락 | ❌ **구조적 불가** — 알림 소유자가 Script Editor(실기 스크린샷의 그룹명이 증거)라 클릭이 우리 프로세스로 못 돌아온다. 진짜 클릭-투-오픈 = 번들+UserNotifications+delegate = **M5-4a(서명·공증)와 한 몸** — 그때 번들 실행 한정으로 승격 |
+| **macOS** | **이원화(08-15 2차 — 사용자 확정 "정식 알림")**: ① **번들(.app) 실행 = `UNUserNotificationCenter` 정식 경로** — `objc2-user-notifications`(keytap과 같은 objc2 판) · 부팅 시 `notify::init`(번들 판정 = `NSBundle.bundleIdentifier`) → 권한 요청 + 클릭 delegate(`NbeepNotifyDelegate` — didReceive → 창 복원) · 알림 소유 = 우리 앱 ② **비번들(포터블·개발) = `osascript` 스폰 폴백** | UN은 **번들 신원(Info.plist) 필수**라 이원화가 구조적 정답. 서드파티(terminal-notifier) 의존 탈락 | 번들 = ✅ delegate(구현 완료 · **무서명 번들은 알림 권한이 프롬프트 없이 보류돼 실증은 서명(M5-4a) 또는 설정 수동 허용 후**) / 비번들 폴백 = ❌(소유자 = Script Editor) |
 | **Linux** | `notify-send` 스폰(libnotify 도구 · 대부분의 데스크톱 존재) — 없으면 조용히 실패(**fail-soft**: 알림은 보조 채널) | zbus 직접 D-Bus 호출 대비 코드 최소 · 데몬 부재 환경에서도 무해 | ⏸ `notify-send -A`(0.7.10+ · 클릭 액션 대기) 검토 잔여 — 버전 의존이라 보류 |
 
 **무음(silent)의 OS별 구현**: mac = `sound name` 절 생략 · Windows = `NIIF_NOSOUND`
@@ -108,8 +108,8 @@
 |---|---|
 | 등급 3종(Normal/Notice/Urgent)·강등표·`Urgent` 24h 카운트 | 🔴 **D-23 확정 → M2-4b**(와이어 자리와 한 몸 — 앞지르면 포맷 변경) |
 | 수신자 릴레이(Webhook 등 외부 팬아웃) | D-23 ⓑ + SP-2(M3-10) |
-| mac 알림 클릭 = 앱 열기 | **번들+UserNotifications 필요** — M5-4a(서명·공증) 후 번들 실행 한정 승격 |
-| mac 알림의 소속 표기 | Notification Center에 "Script Editor"로 뜬다(osascript 소유 — 같은 한계) |
+| mac 정식(UN) 경로의 권한 | **구현 완료** — 다만 무서명(ad-hoc) 번들은 권한 프롬프트가 뜨지 않아 배너가 보류된다(실측). 서명·공증(M5-4a) 또는 시스템 설정 수동 허용으로 열린다 |
+| mac 비번들 폴백의 소속 표기 | Notification Center에 "Script Editor"로 뜬다(osascript 소유 — 폴백 한계) |
 | Linux 실기 · 클릭 액션(`-A`) | 데스크톱 환경 잔여 |
 | Windows 풍선·클릭 실기 | Windows PC 잔여(WNOTI — 26 §7 결) |
 | 소리 포트 정식 3어댑터(winmm/NSSound/D-Bus) | DR-25 명세 잔여 — 지금은 OS 알림 채널의 기본 소리만 |

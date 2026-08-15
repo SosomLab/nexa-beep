@@ -8599,6 +8599,15 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
     let event_loop = EventLoop::<AppEvent>::with_user_event().build().unwrap();
     let proxy = event_loop.create_proxy();
     let shutdown = nbeep_plat::shutdown::install(); // R-16 — SIGINT/SIGTERM 포트
+                                                    // 정식 macOS 알림 초기화(M3-8b · 사용자 확정 "정식 알림") — **번들(.app) 실행**이면
+                                                    // UNUserNotificationCenter(권한 요청 + 클릭 delegate: 알림 클릭 = 창 복원 —
+                                                    // 트레이 Open과 같은 이벤트). 비번들·타 OS는 false = 기존 폴백 그대로.
+    {
+        let nproxy = proxy.clone();
+        let _ = nbeep_plat::notify::init(move || {
+            let _ = nproxy.send_event(AppEvent::Tray(nbeep_plat::tray::TrayEvent::Open));
+        });
+    }
 
     // 설정 로드는 전송 생성보다 먼저 — 표시 이름(M1-10)이 발견 광고에 실린다.
     let mut settings = SettingsState::with_defaults();

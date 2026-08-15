@@ -30,6 +30,15 @@ pub fn notify(n: &Note<'_>) -> bool {
     imp::notify(n)
 }
 
+/// 정식 알림 초기화(M3-8b · macOS 전용 의미 — 다른 OS는 no-op false).
+///
+/// **번들(.app) 실행이면** `UNUserNotificationCenter`를 켠다: 권한 요청 + 클릭
+/// delegate(`on_open` = 알림 클릭 → 앱 열기). **메인 스레드에서, 부팅 때 1회** 호출.
+/// 비번들(포터블·개발 실행)은 false — [`notify`]가 osascript 폴백을 그대로 쓴다.
+pub fn init<F: Fn() + Send + Sync + 'static>(on_open: F) -> bool {
+    imp::init(Box::new(on_open))
+}
+
 /// AppleScript 문자열 이스케이프(mac) — 역슬래시·따옴표만이 특수문자다.
 /// 스폰 인자로 스크립트를 넘기므로 셸 이스케이프는 불필요(Command = no shell).
 #[cfg(any(target_os = "macos", test))]
@@ -49,8 +58,120 @@ fn escape_applescript(s: &str) -> String {
 #[cfg(target_os = "macos")]
 mod imp {
     use super::Note;
+    use objc2::rc::Retained;
+    use objc2::runtime::NSObject;
+    use objc2::{declare_class, msg_send_id, mutability, ClassType, DeclaredClass};
+    use objc2_foundation::{NSBundle, NSObjectProtocol, NSString};
+    use objc2_user_notifications::{
+        UNAuthorizationOptions, UNMutableNotificationContent, UNNotificationRequest,
+        UNNotificationResponse, UNNotificationSound, UNUserNotificationCenter,
+        UNUserNotificationCenterDelegate,
+    };
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::OnceLock;
+
+    /// 클릭 콜백(M3-8b — 알림 클릭 = 앱 열기). delegate 응답 스레드는 임의라 Send+Sync.
+    static ON_OPEN: OnceLock<Box<dyn Fn() + Send + Sync>> = OnceLock::new();
+    /// UN 경로 활성(번들 실행 + 초기화 완료) — false면 osascript 폴백.
+    static UN_READY: AtomicBool = AtomicBool::new(false);
+    /// 요청 식별자 일련(같은 id는 이전 알림을 교체한다 — 고유하게).
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+
+    thread_local! {
+        /// delegate 보유(center의 delegate는 비소유 참조 — 우리가 살려 둔다).
+        /// 초기화가 메인 스레드 1회라 thread_local이 곧 수명이다(트레이와 같은 문법).
+        static DELEGATE: std::cell::RefCell<Option<Retained<NotifyDelegate>>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
+    declare_class!(
+        /// UN 클릭 delegate — 응답(배너 클릭) = `ON_OPEN`(앱 열기).
+        struct NotifyDelegate;
+
+        unsafe impl ClassType for NotifyDelegate {
+            type Super = NSObject;
+            type Mutability = mutability::InteriorMutable;
+            const NAME: &'static str = "NbeepNotifyDelegate";
+        }
+
+        impl DeclaredClass for NotifyDelegate {
+            type Ivars = ();
+        }
+
+        unsafe impl NSObjectProtocol for NotifyDelegate {}
+
+        unsafe impl UNUserNotificationCenterDelegate for NotifyDelegate {
+            #[method(userNotificationCenter:didReceiveNotificationResponse:withCompletionHandler:)]
+            unsafe fn did_receive(
+                &self,
+                _center: &UNUserNotificationCenter,
+                _response: &UNNotificationResponse,
+                completion: &block2::Block<dyn Fn()>,
+            ) {
+                if let Some(f) = ON_OPEN.get() {
+                    f();
+                }
+                completion.call(());
+            }
+        }
+    );
+
+    pub(super) fn init(on_open: Box<dyn Fn() + Send + Sync>) -> bool {
+        // 번들 판정 — UN은 번들 신원(Info.plist bundle id)이 없으면 못 산다.
+        // SAFETY: mainBundle 조회는 읽기 전용.
+        let bundled = unsafe { NSBundle::mainBundle().bundleIdentifier().is_some() };
+        if !bundled {
+            return false; // 포터블·개발 실행 — osascript 폴백 유지
+        }
+        let _ = ON_OPEN.set(on_open);
+        // SAFETY: 부팅(메인 스레드) 1회 — delegate 등록 + 권한 요청(비동기 · 결과는
+        // fail-soft: 거부돼도 notify는 조용히 무시될 뿐 앱 동작 불변).
+        unsafe {
+            let center = UNUserNotificationCenter::currentNotificationCenter();
+            let del: Retained<NotifyDelegate> = msg_send_id![NotifyDelegate::alloc(), init];
+            center.setDelegate(Some(objc2::runtime::ProtocolObject::from_ref(&*del)));
+            DELEGATE.with(|d| *d.borrow_mut() = Some(del));
+            let opts = UNAuthorizationOptions::UNAuthorizationOptionAlert
+                | UNAuthorizationOptions::UNAuthorizationOptionSound;
+            let done = block2::StackBlock::new(
+                |_granted: objc2::runtime::Bool, _err: *mut objc2_foundation::NSError| {},
+            );
+            center.requestAuthorizationWithOptions_completionHandler(opts, &done);
+        }
+        UN_READY.store(true, Ordering::Release);
+        true
+    }
 
     pub(super) fn notify(n: &Note<'_>) -> bool {
+        if UN_READY.load(Ordering::Acquire) {
+            // 정식 경로(번들) — 알림 소유가 우리 앱 · 클릭 = delegate → 앱 열기.
+            // SAFETY: UN 센터는 스레드 안전 · 우리는 메인에서만 부른다.
+            unsafe {
+                let content: Retained<UNMutableNotificationContent> =
+                    msg_send_id![UNMutableNotificationContent::alloc(), init];
+                content.setTitle(&NSString::from_str(n.title));
+                content.setBody(&NSString::from_str(n.body));
+                if n.silent {
+                    content.setSound(None); // DR-25 — 미검증은 소리 없음
+                } else {
+                    content.setSound(Some(&UNNotificationSound::defaultSound()));
+                }
+                let id = format!("nbeep-{}", SEQ.fetch_add(1, Ordering::Relaxed));
+                let req = UNNotificationRequest::requestWithIdentifier_content_trigger(
+                    &NSString::from_str(&id),
+                    &content,
+                    None, // 트리거 없음 = 즉시
+                );
+                UNUserNotificationCenter::currentNotificationCenter()
+                    .addNotificationRequest_withCompletionHandler(&req, None);
+            }
+            return true;
+        }
+        osascript(n)
+    }
+
+    /// 비번들 폴백 — 표시만 가능(클릭 콜백 없음 · 소유자 = Script Editor 한계 명문).
+    fn osascript(n: &Note<'_>) -> bool {
         let mut script = format!(
             "display notification \"{}\" with title \"{}\"",
             super::escape_applescript(n.body),
@@ -74,6 +195,10 @@ mod imp {
 mod imp {
     use super::Note;
 
+    pub(super) fn init(_on_open: Box<dyn Fn() + Send + Sync>) -> bool {
+        false // 정식 초기화는 macOS 의미 — Linux는 notify-send 그대로
+    }
+
     pub(super) fn notify(n: &Note<'_>) -> bool {
         let mut cmd = std::process::Command::new("notify-send");
         cmd.arg("--app-name=Nexa Beep");
@@ -93,6 +218,10 @@ mod imp {
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 mod imp {
     use super::Note;
+
+    pub(super) fn init(_on_open: Box<dyn Fn() + Send + Sync>) -> bool {
+        false // Windows = 트레이 풍선(클릭 포함) · 기타 OS = 없음
+    }
 
     pub(super) fn notify(_n: &Note<'_>) -> bool {
         false // Windows = 트레이 풍선 경로(tray::TrayHandle::notify) · 기타 OS = 없음
