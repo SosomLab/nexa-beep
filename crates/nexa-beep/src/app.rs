@@ -7746,6 +7746,20 @@ impl ApplicationHandler<AppEvent> for App {
                 for p in targets {
                     self.start_connect(p, true); // 중복 클릭 가드는 connecting이 맡는다
                 }
+                // ⓒ 활성 세션 능동 생사 촉진(M1-2b · 08-16) — 링크가 바뀐 직후의
+                //    "성립돼 있다고 믿는" 세션이 실제로는 죽었을 수 있다(경로 소멸).
+                //    새 와이어 프레임 없이 **기존 ProfileMsg::Request 1발**을 쏜다:
+                //    죽은 소켓은 write가 RST를 만나 즉시 Closed로 떨어지고(22초
+                //    keepalive 감지를 단축), 산 세션은 프로필 캐시가 신선해지는
+                //    부수 효과만 남는다. LinkChanged당 1회 — 반복 타이머 아님
+                //    (13 §12-1 · 진짜 주기 하트비트는 M2-4b 몫).
+                for conv in self.conversations.values() {
+                    let _ = conv
+                        .out_tx
+                        .send(SessionCmd::Control(vec![
+                            nbeep_core::ProfileMsg::Request.encode()
+                        ]));
+                }
                 self.status = "네트워크 변경 감지 — 재발견·재연결 중".into();
                 if let Some(mid) = self.main_id {
                     self.request_redraw(mid);
