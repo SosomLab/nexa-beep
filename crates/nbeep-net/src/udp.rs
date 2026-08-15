@@ -35,6 +35,11 @@ const MULTICAST_GROUP_V6: Ipv6Addr = Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 0, 0x0
 const TTL: u32 = 1;
 /// 수신 폴링 간격(정지 플래그 확인용).
 const RECV_POLL: Duration = Duration::from_millis(300);
+/// S4(M1-8) 라운드 주기 — 광고 몇 주기마다 이웃 유니캐스트 프로브를 도는가
+/// (기본 광고 800ms면 ≈12.8초 · macOS는 라운드마다 `arp -an` 스폰이라 성기게).
+const S4_EVERY: u32 = 16;
+/// S4 라운드당 프로브 상한(큐 상한 필수 규칙 — NFR-B-6 결).
+const S4_MAX: usize = 64;
 
 /// 수신된 발견 관측 — 해석된 패킷 + 발신 주소(연결 힌트).
 #[derive(Debug)]
@@ -124,7 +129,13 @@ impl UdpDiscovery {
         let (tx, events) = channel::<Observation>();
 
         if let Some(recv) = recv {
-            Self::spawn_receiver(recv, me, tx.clone(), Arc::clone(&stop));
+            // v4 수신자는 HELLO 유니캐스트 응답까지(S4 왕복 — 송신 소켓 복제 실패 시
+            // 응답 생략 = 종전 동작).
+            let reply = send_sock
+                .try_clone()
+                .ok()
+                .map(|s| (s, Arc::clone(&template), Arc::clone(&seq)));
+            Self::spawn_receiver_with_reply(recv, me, tx.clone(), Arc::clone(&stop), reply);
         }
         let v6_send = if let Some((v6_recv, v6_send)) = v6 {
             if let Ok(rx) = v6_recv.try_clone() {
@@ -253,8 +264,11 @@ impl UdpDiscovery {
             };
             // 기동 직후 HELLO(응답 유도) 1회, 이후 주기 ANNOUNCE.
             Self::send_all(&sock, v6.as_ref(), &snapshot(PacketKind::Hello).encode());
+            // ★ S4(M1-8) — 기동 직후 이웃 유니캐스트 1회(막힌 망에서 첫 발견을 당긴다).
+            Self::send_s4(&sock, &snapshot(PacketKind::Hello).encode());
             let step = Duration::from_millis(100);
             let mut waited = Duration::ZERO;
+            let mut cycles: u32 = 0;
             loop {
                 if stop.load(Ordering::Relaxed) {
                     return;
@@ -264,9 +278,30 @@ impl UdpDiscovery {
                 if waited >= Duration::from_millis(u64::from(announce_ms)) {
                     waited = Duration::ZERO;
                     Self::send_all(&sock, v6.as_ref(), &snapshot(PacketKind::Announce).encode());
+                    cycles = cycles.wrapping_add(1);
+                    // S4 주기 라운드 — 광고 틱 재사용(새 타이머 0 · [13 §12-1]):
+                    // 16주기(기본 800ms면 ≈12.8초)마다 이웃 테이블을 다시 읽어 프로브.
+                    // 멀티캐스트가 통하는 망에선 중복 관측일 뿐이고(무해), 막힌 망에선
+                    // 이것이 유일한 발견 경로다(S1~S3 폴백 사다리의 다음 단 — 06 §4).
+                    if cycles % S4_EVERY == 0 {
+                        Self::send_s4(&sock, &snapshot(PacketKind::Hello).encode());
+                    }
                 }
             }
         });
+    }
+
+    /// S4 유니캐스트 프로브(M1-8) — OS 이웃 테이블(ARP)의 주소 중 **자격 인터페이스
+    /// 서브넷 안**의 것들에게 1:1 HELLO. 봉투 원리: 프로브 내용은 방송과 동일하다
+    /// (이웃에게만 더 보내는 것 — 새 정보 없음). 상한 [`S4_MAX`](S4_MAX)로 폭주 방지.
+    fn send_s4(sock: &UdpSocket, bytes: &[u8]) {
+        for n in s4_targets(
+            &crate::netif::eligible_v4(),
+            crate::neigh::neighbors_v4(),
+            S4_MAX,
+        ) {
+            let _ = sock.send_to(bytes, SocketAddr::from((n, DISCOVERY_PORT)));
+        }
     }
 
     /// 표시 이름 교체 + **즉시 재공지**(M1-10 · 사용자 확정 08-11) — 상대 목록은
@@ -288,6 +323,21 @@ impl UdpDiscovery {
     }
 
     fn spawn_receiver(sock: UdpSocket, me: PeerId, tx: Sender<Observation>, stop: Arc<AtomicBool>) {
+        Self::spawn_receiver_with_reply(sock, me, tx, stop, None);
+    }
+
+    /// 수신 스레드 — `reply`가 있으면 **남의 HELLO에 유니캐스트 Announce로 응답**한다
+    /// (S4 왕복의 수신측 절반 · M1-8): 멀티캐스트가 막힌 망에선 내 주기 광고가 프로브
+    /// 발신자에게 닿지 않으므로, 발신 주소로 직접 되쏴야 상호 발견이 성립한다.
+    /// 멀티캐스트로 받은 HELLO에도 응답하지만 수신측 관측은 멱등이라 무해하고,
+    /// 응답은 Announce(비유도)라 응답 연쇄는 생기지 않는다.
+    fn spawn_receiver_with_reply(
+        sock: UdpSocket,
+        me: PeerId,
+        tx: Sender<Observation>,
+        stop: Arc<AtomicBool>,
+        reply: Option<(UdpSocket, Arc<std::sync::Mutex<Packet>>, Arc<AtomicU32>)>,
+    ) {
         std::thread::spawn(move || {
             let mut buf = [0u8; crate::wire::MAX_PACKET];
             loop {
@@ -298,7 +348,21 @@ impl UdpDiscovery {
                     Ok((n, from)) => {
                         if let Decoded::Packet(packet) = Packet::decode(&buf[..n]) {
                             // 자기 패킷 필터 — 주소가 아니라 키 기준(docs/08 §5).
-                            if packet.peer != me && tx.send(Observation { packet, from }).is_err() {
+                            if packet.peer == me {
+                                continue;
+                            }
+                            if packet.kind == PacketKind::Hello {
+                                if let Some((rs, template, seq)) = &reply {
+                                    let mut p = match template.lock() {
+                                        Ok(g) => g.clone(),
+                                        Err(e) => e.into_inner().clone(),
+                                    };
+                                    p.kind = PacketKind::Announce;
+                                    p.seq = seq.fetch_add(1, Ordering::Relaxed);
+                                    let _ = rs.send_to(&p.encode(), from);
+                                }
+                            }
+                            if tx.send(Observation { packet, from }).is_err() {
                                 return; // 수신자 소멸
                             }
                         }
@@ -311,6 +375,24 @@ impl UdpDiscovery {
             }
         });
     }
+}
+
+/// S4 프로브 대상 선별(M1-8 · 순수 — 회귀 대상): 이웃 중 **자격 인터페이스 서브넷
+/// 안**의 주소만, 내 주소 제외, `cap`개까지. 서브넷 밖 이웃(라우터 너머 잔존 항목)에
+/// 발견 패킷을 쏘지 않는다 — 링크 밖 유출 금지(FR-S-49 결).
+fn s4_targets(ifs: &[crate::netif::NetIf], neighbors: Vec<Ipv4Addr>, cap: usize) -> Vec<Ipv4Addr> {
+    neighbors
+        .into_iter()
+        .filter(|n| {
+            ifs.iter().any(|i| {
+                i.mask.is_some_and(|m| {
+                    let m = u32::from(m);
+                    m != 0 && (u32::from(*n) & m) == (u32::from(i.v4) & m) && *n != i.v4
+                })
+            })
+        })
+        .take(cap)
+        .collect()
 }
 
 impl Drop for UdpDiscovery {
@@ -341,6 +423,37 @@ mod tests {
     }
     fn name(s: &str) -> DisplayName {
         DisplayName::parse(s).unwrap()
+    }
+
+    /// S4 대상 선별(M1-8) — 서브넷 안만·내 주소 제외·상한. 라우터 너머 잔존
+    /// ARP 항목으로 발견 패킷이 새면 링크 밖 유출이다(FR-S-49 결).
+    #[test]
+    fn s4_targets_stay_inside_subnet_and_cap() {
+        use crate::netif::NetIf;
+        use std::net::Ipv4Addr;
+        let ifs = vec![NetIf {
+            name: "en0".into(),
+            v4: Ipv4Addr::new(192, 168, 45, 84),
+            mask: Some(Ipv4Addr::new(255, 255, 255, 0)),
+            up: true,
+            loopback: false,
+        }];
+        let neigh = vec![
+            Ipv4Addr::new(192, 168, 45, 1),   // 같은 서브넷 ✓
+            Ipv4Addr::new(192, 168, 45, 84),  // 나 자신 ✗
+            Ipv4Addr::new(10, 0, 0, 5),       // 다른 서브넷 ✗(잔존 항목)
+            Ipv4Addr::new(192, 168, 45, 200), // 같은 서브넷 ✓
+        ];
+        let t = s4_targets(&ifs, neigh.clone(), 64);
+        assert_eq!(
+            t,
+            vec![
+                Ipv4Addr::new(192, 168, 45, 1),
+                Ipv4Addr::new(192, 168, 45, 200)
+            ]
+        );
+        assert_eq!(s4_targets(&ifs, neigh, 1).len(), 1, "상한 준수");
+        assert!(s4_targets(&[], vec![Ipv4Addr::new(1, 2, 3, 4)], 64).is_empty());
     }
 
     /// M1-13ⓔ — 발견 포트를 다른 프로세스가 **배타 점유**해도 spawn은 성공하고
