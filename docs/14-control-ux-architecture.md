@@ -574,6 +574,12 @@ Lucide `badge-question-mark`의 안쪽 물음표는 **상단이 거의 반원**(
 - **툴팁은 필수**(색·모양만으로 등급명을 다 나르지 못한다) — 아이콘 hover 시 등급명 + 한 줄 설명. i18n 문자열은 기존 `Msg::Trust*` 재사용.
 - 색 팔레트는 **세션 축과 겹치지 않게** 고른다([§12-6](#12-6-️-한-행에-원형-표식이-둘이-된다--m3-14와의-충돌)). 세션이 ok/danger/accent/dim을 쓰므로 신뢰 축은 `warn`·`sel_bg`·`ok`·`danger`를 **윤곽선으로만** 쓴다(채움 금지 — 채우면 세션 디스크와 무게가 같아진다).
 
+> ⚠️ **이 절(13-2~13-4)의 Lucide `badge-*` 방향은 폐기됐다(08-15 · M3-14b)** — 14px 실화면에서
+> 톱니 윤곽이 뭉개고 Pinned 빈 배지가 유령 원으로 읽혔다(사용자 실기). 현행 = **Material
+> Symbols 컬러 RGBA**(`assets/icons-src/id-*.svg` · `tools/mkicons-rgba.sh` · **Pinned 목록
+> 숨김**) — 원장 [10 §4](10-decision-record.md). badge SVG 원본은 저장소에서 제거(git 이력 보존).
+> 아래는 설계 이력으로 남긴다(뭉갬 실측·파생본 규약은 여전히 유효한 교훈).
+
 ### 13-4. 자산 — 원본 SVG는 받아 뒀다 · 굽기는 M3-14에서
 
 [§12-7](#12-7-2층큰-자리--아이콘-세트는-여기서만-의미가-있다--lucide-단일-세트08-14-사용자-확정)의 연결 4종과 달리 **신뢰·경로 아이콘은 아직 알파 마스크로 굽지 않았다.** 다만 **원본 SVG 9종은 `assets/icons-src/`에 커밋해 뒀다**(`badge` · `badge-check` · `badge-x` · `badge-alert` · `badge-plus` · **`badge-question-mark-nb`**(파생) · `house` · `globe` · `waypoints`) — M3-14 착수 때 아래 한 줄이면 끝난다.
