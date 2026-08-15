@@ -170,10 +170,11 @@ enum AppEvent {
     },
     /// 트레이 사용자 행동(M3-2a — 트레이 스레드 → 메인. 좌클릭/메뉴 열기·종료).
     Tray(nbeep_plat::tray::TrayEvent),
-    /// 프로필 사진 **와이어 축소본** 생성 완료(워커 → 메인 · 08-16). `ok`면
-    /// `me.wire.png`가 준비된 것 — Full push로 상대에게 실사진을 전파한다.
-    /// 실패는 **소리 내어** 알린다(조용한 생략 금지 — 사용자 확정).
-    WireAvatar { ok: bool },
+    /// 프로필 사진 **와이어 축소본** 생성 완료(워커 → 메인 · 08-16). 바이트가
+    /// 오면 메인이 세대 일치를 확인하고 `me.wire.png`를 쓴 뒤 Full push로
+    /// 실사진을 전파한다(보류했던 push가 여기서 한 번에 나간다 — 2단계 깜빡임
+    /// 방지). 실패는 **소리 내어** 알린다(조용한 생략 금지 — 사용자 확정).
+    WireAvatar { gen: u64, png: Option<Vec<u8>> },
     /// keytap 관측(G1 · H-26 — mac): 무수식 ASCII keydown이 모니터에 잡혔다.
     /// winit 도달 여부와 대조해 "삼켜진 1byte"만 보충 주입한다(판정은 틱에서).
     ///
@@ -1153,6 +1154,12 @@ struct App {
     profile_view: Option<nbeep_ui::ProfileWidget>,
     /// 상대 프로필(M3-17 — 세션 경유 수신 · 목록·제목 표시 우선).
     peer_profiles: HashMap<PeerId, PeerProfile>,
+    /// 와이어 축소본 세대(08-16) — `image_path`가 바뀔 때마다 +1. 워커 완료
+    /// 이벤트가 이 값과 다르면 낡은 세대(그 사이 사진이 또 바뀜) — 조용히 폐기.
+    wire_gen: u64,
+    /// 축소본 워커가 도는 중 — 이 동안 [`Self::push_profile`]을 보류한다(2단계
+    /// 깜빡임 방지 · 08-16 실기: 상대가 "옛 내장 그림 → 실사진" 순서로 봤다).
+    wire_pending: bool,
     /// 내장 12간지 아바타(키 → 그림 · 08-14) — 기동 시 1회 해석(NBAV1 fail-soft).
     builtin_avatars: HashMap<String, Rc<nbeep_ui::IconImage>>,
     /// 내 사진(imgdec 디코드 완료본 · 08-14) — 툴바 프로필 버튼·프로필 프리뷰 공용.
@@ -4374,21 +4381,22 @@ impl App {
         if !over {
             return; // 원본이 그대로 실려 나간다 — 축소본 불필요
         }
-        let wire = self.wire_avatar_path();
-        if wire.is_file() {
+        if self.wire_avatar_path().is_file() {
             return; // 이미 준비됨(부팅 경로 재진입)
         }
+        if self.wire_pending {
+            return; // 워커가 이미 도는 중(중복 스폰 금지 — 13 §12-1)
+        }
+        self.wire_pending = true;
+        let gen = self.wire_gen;
         let proxy = self.proxy.clone();
         std::thread::spawn(move || {
-            let ok = std::fs::read(&path)
+            // 파일 쓰기는 메인 몫 — 워커가 직접 쓰면 그 사이 사진이 바뀐 낡은
+            // 세대가 새 축소본을 덮을 수 있다(세대 판정은 메인 단일 지점).
+            let png = std::fs::read(&path)
                 .ok()
-                .and_then(|b| crate::imgdec::wire_png_from_bytes(&b, 256))
-                .and_then(|png| {
-                    std::fs::create_dir_all(wire.parent()?).ok()?;
-                    std::fs::write(&wire, png).ok()
-                })
-                .is_some();
-            let _ = proxy.send_event(AppEvent::WireAvatar { ok });
+                .and_then(|b| crate::imgdec::wire_png_from_bytes(&b, 256));
+            let _ = proxy.send_event(AppEvent::WireAvatar { gen, png });
         });
     }
 
@@ -4878,6 +4886,9 @@ impl App {
                 "profile.image_path" => {
                     // 경로가 바뀌면 옛 와이어 축소본은 무효(NULL 엄격 — 08-16).
                     // 비움(철회)도 같은 규칙: 축소본이 남으면 철회가 안 나간다.
+                    // 세대를 올려 도는 중이던 워커의 결과도 함께 무효화한다.
+                    self.wire_gen = self.wire_gen.wrapping_add(1);
+                    self.wire_pending = false;
                     let _ = std::fs::remove_file(self.wire_avatar_path());
                     if value.is_empty() {
                         self.my_avatar = None;
@@ -4955,6 +4966,12 @@ impl App {
 
     /// 내 프로필을 연결된 전 세션에 push(M3-21) — scope가 프레임 무게를 정한다.
     fn push_profile(&mut self, scope: ProfileScope) {
+        if self.wire_pending {
+            // ★ 한 번에 밀기(08-16 실기) — 축소본 워커가 도는 동안 밀면 축소본이
+            // 없는 프레임(내장 키만)이 먼저 나가 상대가 "옛 내장 그림 → 실사진"
+            // 2단계를 본다. 완료 이벤트(WireAvatar)가 Full을 민다(Info 상위집합).
+            return;
+        }
         if self.conversations.is_empty() {
             return;
         }
@@ -7769,15 +7786,30 @@ impl ApplicationHandler<AppEvent> for App {
                 }
                 nbeep_plat::tray::TrayEvent::Quit => el.exit(),
             },
-            AppEvent::WireAvatar { ok } => {
+            AppEvent::WireAvatar { gen, png } => {
+                if gen != self.wire_gen {
+                    // 낡은 세대 — 그 사이 사진이 또 바뀌었다. 새 세대의 워커(또는
+                    // 무 워커 상태)가 진실이므로 조용히 폐기(pending도 안 만진다 —
+                    // 세대를 올린 쪽이 이미 재설정했다).
+                    return;
+                }
+                self.wire_pending = false;
+                let ok = png.is_some_and(|bytes| {
+                    let wire = self.wire_avatar_path();
+                    wire.parent()
+                        .is_some_and(|d| std::fs::create_dir_all(d).is_ok())
+                        && std::fs::write(&wire, bytes).is_ok()
+                });
                 if ok {
-                    // 축소본 준비 — 연결된 전 세션에 실사진(Full) 재전파. 변경 직후의
-                    // 깔때기 push는 축소본이 없어 키만 나갔다(자기 치유 순서).
+                    // 보류했던 push가 여기서 **한 번에** 나간다(실사진 동봉 —
+                    // 08-16 실기: 종전엔 키만 실린 프레임이 먼저 나가 2단계였다).
                     self.push_profile(ProfileScope::Full);
                     self.status = "프로필 사진 축소본 준비 — 연결된 상대에게 전파".into();
                 } else {
                     // ★ 조용한 생략 금지(08-16 사용자 확정) — 초과 사진이 안 나가면
-                    // 소리 내어 알린다. 상대는 함께 실린 내장 키/이니셜을 본다.
+                    // 소리 내어 알린다. 보류했던 push는 그래도 내보낸다(사진만 빠질
+                    // 뿐 텍스트·내장 키 폴백은 상대에게 닿아야 한다).
+                    self.push_profile(ProfileScope::Full);
                     self.status =
                         "⚠ 사진이 256KiB 초과인데 축소 생성에 실패해 상대에게 전송되지 않습니다"
                             .into();
@@ -9214,6 +9246,8 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         picker_view: None,
         profile_view: None,
         peer_profiles: HashMap::new(),
+        wire_gen: 0,
+        wire_pending: false,
         builtin_avatars: nbeep_ui::avatar_assets::builtins()
             .into_iter()
             .map(|b| (b.key, Rc::new(b.image)))
