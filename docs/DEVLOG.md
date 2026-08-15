@@ -5,6 +5,10 @@
 
 ---
 
+## 2026-08-16
+
+- **대화창 명령 `/…` GUI 도입**(main · 직전 세션 완성분 정리 커밋): 판정 단일 지점 `core::command`(첫 글자 `/`+한 줄+아는 이름 = 명령 · `//` escape · **미지 명령 = fail-closed 오류**) · GUI 4종 `/help`·`/trust`·`/verify`(SAS 카드)·`/close` — 결과는 로컬 공지 줄. 651 green. 상세 [journal/2026-08-16.md](journal/2026-08-16.md).
+
 ## 2026-08-15
 
 - ★ **release: v0.1.7 공개**(tag push → CI 5타깃×2채널 · Homebrew 자동 · winget/choco 잠금 유지 제외): 알림 3-OS(정식 mac UN)+배지 개편+SAS 대조+트레이 완주+M1 견고화 일습. 다음 = brew Cask로 무서명 번들 UN 권한 실증. 상세 [journal/2026-08-15.md](journal/2026-08-15.md).

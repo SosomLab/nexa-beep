@@ -1024,6 +1024,24 @@ enum PickerPurpose {
     SettingsRestoreFile,
 }
 
+/// 대화창 입력을 명령으로 가른 결과(08-15).
+enum CmdOutcome {
+    /// 보낼 것이 남았다(명령이 아니었거나 escape로 벗겨진 본문).
+    Send(Option<nbeep_core::SafeText>),
+    /// 명령으로 처리했다 — **상대에게 보내지 않는다**.
+    Handled,
+}
+
+/// 신뢰 등급의 사람 말 라벨(`/trust` 출력 · 카드·목록 문구와 같은 어휘).
+fn trust_label(lv: nbeep_core::TrustLevel) -> &'static str {
+    use nbeep_core::TrustLevel as L;
+    match lv {
+        L::Unverified => "미검증(핸드셰이크 전)",
+        L::Pinned => "고정됨(TOFU — 첫 접촉 키 기억)",
+        L::FingerprintVerified => "지문 대조 완료(사람이 확인)",
+    }
+}
+
 /// 탐색형 피커의 행 하나가 뜻하는 것(라벨 → 행위 매핑).
 #[derive(Clone, Debug)]
 enum PickEntry {
@@ -1264,6 +1282,10 @@ struct App {
     alert_ctx: Option<AlertCtx>,
     /// 구성원 모달 열기 대기(08-15 — el은 about_to_wait에 있다 · 내용은 열 때 계산).
     pending_members: Option<nbeep_core::group::GroupId>,
+    /// 상대 카드 열기 대기(`/verify` — el은 about_to_wait에 있다 · pending_members와 같은 문법).
+    pending_peer_info: Option<PeerId>,
+    /// 지문 대조를 이미 권한 상대(대화당 1회 — 반복되면 소음이 되고 안 읽힌다).
+    verify_hinted: std::collections::HashSet<PeerId>,
     /// 열려 있는 구성원 모달의 문맥(G4) — (방, 표시 순서의 구성원, 내가 소유자인가).
     /// 행 클릭(제외)의 인덱스 해석 근거 — 모달 내용과 같은 순서로 만든다.
     members_ctx: Option<(nbeep_core::group::GroupId, Vec<PeerId>, bool)>,
@@ -3809,6 +3831,121 @@ impl App {
         self.request_redraw(wid);
     }
 
+    /// 대화창 명령 실행 결과 — 보낼 것이 남았는가.
+    ///
+    /// 명령은 **로컬 지시**라 와이어로 나가지 않는다([`nbeep_core::command`] 문서).
+    /// `peer`가 `None`이면 그룹 방 — 상대가 하나로 정해지지 않는 명령(`/verify`)은
+    /// 거기서 쓸 수 없다고 알린다(조용히 아무 일도 안 하면 사용자는 실행된 줄 안다).
+    fn run_chat_command(
+        &mut self,
+        input: Option<&nbeep_core::SafeText>,
+        peer: Option<PeerId>,
+    ) -> CmdOutcome {
+        use nbeep_core::command::{parse, ChatCommand, Parsed};
+        let Some(text) = input else {
+            return CmdOutcome::Send(None);
+        };
+        match parse(text.as_str()) {
+            // escape(`//…`)로 벗겨진 본문이 원본과 다르면 그 본문을 보낸다.
+            Parsed::Text(t) => {
+                if t == text.as_str() {
+                    return CmdOutcome::Send(Some(text.clone()));
+                }
+                CmdOutcome::Send(Some(nbeep_core::sanitize_message(&t)))
+            }
+            Parsed::Empty => CmdOutcome::Send(None),
+            Parsed::Unknown(name) => {
+                self.status =
+                    format!("모르는 명령 `/{name}` — /help 로 목록을 봅니다(보내지 않았습니다)");
+                CmdOutcome::Handled
+            }
+            Parsed::Command(cmd) => {
+                match cmd {
+                    ChatCommand::Help => {
+                        self.push_chat_notice(peer, &nbeep_core::command::help_text());
+                    }
+                    ChatCommand::Trust => {
+                        let line = peer.map_or_else(
+                            || {
+                                "그룹 방에는 단일 상대가 없습니다 — 구성원 모달에서 각자 확인합니다"
+                                    .to_string()
+                            },
+                            |p| {
+                                use nbeep_core::TrustStore as _;
+                                let lv = self.trust.level(p);
+                                format!("{} — 신뢰 상태: {}", self.peer_title(p), trust_label(lv))
+                            },
+                        );
+                        self.push_chat_notice(peer, &line);
+                    }
+                    ChatCommand::Verify => match peer {
+                        Some(p) => {
+                            use nbeep_core::TrustStore as _;
+                            if self.trust.level(p) == nbeep_core::TrustLevel::FingerprintVerified {
+                                self.push_chat_notice(
+                                    peer,
+                                    "이미 지문 대조가 끝난 상대입니다(파란 실 배지).",
+                                );
+                            } else {
+                                // ⚠️ 카드를 열어 줄 뿐 — 승격은 **다른 채널로 숫자를 맞춘 뒤**
+                                //    사람이 버튼을 누를 때만. 이 통로 안의 "확인했어?"로
+                                //    승격하면 중간자가 그 문답을 대신할 수 있다.
+                                self.push_chat_notice(
+                                    peer,
+                                    "안전 번호 카드를 열었습니다. 전화·대면 등 **다른 채널**로 \
+                                     상대와 같은 번호인지 맞춰 본 뒤 '대조 완료'를 누르세요.",
+                                );
+                                self.pending_peer_info = Some(p);
+                            }
+                        }
+                        None => self.push_chat_notice(
+                            peer,
+                            "지문 대조는 1:1 대화에서만 가능합니다(상대가 하나로 정해져야 합니다).",
+                        ),
+                    },
+                    ChatCommand::Close => {
+                        self.close_chat_view(peer);
+                    }
+                }
+                CmdOutcome::Handled
+            }
+        }
+    }
+
+    /// 명령 결과를 **그 대화 스레드에 로컬 줄로** 남긴다(상대에게 가지 않는다).
+    /// 상태바는 한 줄뿐이라 여러 줄 안내(`/help`)를 담지 못한다.
+    fn push_chat_notice(&mut self, peer: Option<PeerId>, text: &str) {
+        let (at_ms, wall) = now_stamp();
+        let safe = nbeep_core::sanitize_message(text);
+        let mut inv = Invalidations::default();
+        match peer {
+            Some(p) => {
+                if let Some(chat) = self.chats.get_mut(&p) {
+                    chat.push_line(ChatLine::text(false, safe.clone(), at_ms, wall), &mut inv);
+                }
+                if let Some(conv) = self.conversations.get_mut(&p) {
+                    conv.lines.push(ChatLine::text(false, safe, at_ms, wall));
+                }
+            }
+            None => {
+                if let Some(gid) = self.single_open_group {
+                    if let Some(gc) = self.gchats.get_mut(&gid) {
+                        gc.push_line(ChatLine::text(false, safe, at_ms, wall), &mut inv);
+                    }
+                }
+            }
+        }
+    }
+
+    /// `/close` — 열려 있는 대화 뷰를 닫는다(단일 모드는 목록 복귀 · 별도 창은 창 닫기).
+    fn close_chat_view(&mut self, peer: Option<PeerId>) {
+        let _ = peer;
+        self.single_open = None;
+        self.single_open_group = None;
+        self.status = "대화창을 닫았습니다(대화는 유지됩니다)".into();
+        self.refresh_and_redraw();
+    }
+
     fn open_peer_info(&mut self, peer: PeerId, el: &ActiveEventLoop) {
         // ★ Pull(M3-21 · 사용자 확정 08-14) — **카드를 여는 순간이 가장 신선해야
         //   하는 순간**이라 세션이 살아 있으면 최신을 1회 요청한다(자동 반복 아님 —
@@ -5328,6 +5465,14 @@ impl App {
             .gchats
             .get_mut(&gid)
             .and_then(ChatViewWidget::take_outgoing);
+        // 명령 가름(08-15) — 그룹 방도 같은 문법. 단일 상대가 필요한 명령은 거절된다.
+        let outgoing = match self.run_chat_command(outgoing.as_ref(), None) {
+            CmdOutcome::Send(t) => t,
+            CmdOutcome::Handled => {
+                self.request_redraw(id);
+                return;
+            }
+        };
         if let Some(text) = outgoing {
             // 방 발신(M5-1g) — 명부 기준 팬아웃(나 제외 · Group 스트림 · ADR §4).
             let Some(s) = self.groups.shared_by_id(gid) else {
@@ -5953,6 +6098,32 @@ impl App {
             WindowMode::Separate => self.open_separate_window(peer, chat, el),
         }
         self.mark_read(peer); // 뷰가 열렸다 = 확인했다(③)
+        self.suggest_verify(peer); // 결정적 순간 유도(M3-6)
+    }
+
+    /// **지문 대조 추천**(08-15 사용자 요청) — 대화를 여는 순간이 대조를 권하기 좋은
+    /// 자리다(M3-6의 "결정적 순간 유도"). 조건을 좁게 잡는다:
+    ///
+    /// - `Pinned`일 때만(미검증은 아직 핸드셰이크 전 · 검증 완료는 권할 것이 없다).
+    /// - **대화당 1회**(`verify_hinted`) — 열 때마다 뜨면 그냥 소음이 되고, 소음이 되면
+    ///   사람은 읽지 않는다. 안 읽히는 경고는 없는 것과 같다.
+    ///
+    /// ⚠️ 추천은 **로컬 줄**이고 상대에게 가지 않는다. 승격은 여전히 사람이 다른 채널로
+    /// 숫자를 맞춘 뒤 버튼을 눌러야 한다(이 통로 안의 문답으로 승격하면 중간자가 그
+    /// 문답을 대신할 수 있다 — SAS가 막으려는 바로 그것).
+    fn suggest_verify(&mut self, peer: PeerId) {
+        use nbeep_core::TrustStore as _;
+        if self.trust.level(peer) != nbeep_core::TrustLevel::Pinned {
+            return;
+        }
+        if !self.verify_hinted.insert(peer) {
+            return; // 이 대화에서 이미 권했다
+        }
+        self.push_chat_notice(
+            Some(peer),
+            "이 상대는 아직 지문 대조 전입니다. /verify 를 입력하면 안전 번호를 봅니다 \
+             — 전화·대면 등 다른 채널로 같은 번호인지 맞춰 본 뒤 '대조 완료'를 누르세요.",
+        );
     }
 
     /// 창 크기·배율에 맞춰 그 창의 위젯 경계를 다시 계산한다.
@@ -6134,6 +6305,15 @@ impl App {
             .chats
             .get_mut(&peer)
             .and_then(ChatViewWidget::take_outgoing);
+        // ★ 명령 가름(08-15) — 입력이 `/…`면 **보내지 않고** 로컬에서 실행한다.
+        //   판정은 `core::command` 한 곳(1:1·그룹·CLI 공용 문법).
+        let outgoing = match self.run_chat_command(outgoing.as_ref(), Some(peer)) {
+            CmdOutcome::Send(t) => t,
+            CmdOutcome::Handled => {
+                self.request_redraw(id);
+                return;
+            }
+        };
         if let Some(text) = outgoing {
             let msg = nbeep_core::ChatMessage {
                 sender_device: self.identity.peer_id(),
@@ -7679,6 +7859,10 @@ impl ApplicationHandler<AppEvent> for App {
         if let Some(gid) = self.pending_members.take() {
             self.open_members_alert(el, gid);
         }
+        // `/verify` 로 연 상대 카드(08-15) — 같은 이유로 여기서 연다.
+        if let Some(p) = self.pending_peer_info.take() {
+            self.open_peer_info(p, el);
+        }
         // 설정 초기화 확인(08-15 · 고급) — 파괴적 행위라 확인 모달을 먼저.
         if std::mem::take(&mut self.pending_reset) {
             self.open_choice(
@@ -8838,6 +9022,8 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         gunread: HashMap::new(),
         alert_ctx: None,
         pending_members: None,
+        pending_peer_info: None,
+        verify_hinted: std::collections::HashSet::new(),
         members_ctx: None,
         pending_reset: false,
         conversations: HashMap::new(),
