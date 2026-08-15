@@ -7,6 +7,7 @@
 
 ## 2026-08-15
 
+- ★ **M3-6 ✅ SAS 대조 UX**(main): 카드에 안전 번호(고정폭 6×2줄)+'일치 확인' 버튼 → verify 영속 → **목록 파란 실 배지 — 종단 실측 완료**(도달 불가였던 인증 등급 개통). 부속: Win 풍선 클릭=열기 · M1-2b 재연결 가속 · docs/36 알림 아키텍처. 643 green. 상세 [journal/2026-08-15.md](journal/2026-08-15.md).
 - ★ **M3-8 최소 슬라이스 — OS 알림 3-OS**(main · 사용자 요청): mac osascript(번들 밖 동작)·Linux notify-send·**Win 트레이 풍선**(NIF_INFO — WinRT 토스트는 AUMID 요구라 T0 불합) · 1:1/그룹/파일 오퍼(파일명 미표시) · 포커스 억제+3초 스로틀 · **미검증 무음**(DR-25)+미리보기 기본 끔 · AppleScript 이스케이프 회귀 · ★mac 실측 3중(억제→배너→무음). 등급·릴레이는 D-23 잔여. 642 green. 상세 [journal/2026-08-15.md](journal/2026-08-15.md).
 - **설정 초기화 구멍 수정 + 잔재 정리**(main): Reset이 e.key 하나만 돌아 FontSection 짝 키(size)가 새던 것 → default_values 쌍 전체(시드와 같은 원천 = '초기화=첫 실행' 구조 보장) · 확정 기본값 회귀 고정(close_to_tray off 공통 등) · 폐기 Lucide badge SVG 6종+/tmp 잔재 정리. 641 green. 상세 [journal/2026-08-15.md](journal/2026-08-15.md).
 - **M1-12 ✅ + M3-2d 확정 + 트레이 mac 실기 + Quit 메뉴**(main · 승인 배치): wirecap.sh 첫 실측 통과(ASCII=이름만·새 재식별자 0) · close_to_tray = **공통 off 사용자 확정**+고급 맨 밑+★기본값 오염 청소(mac-on 빌드가 settings.cfg에 on 박제했던 것) · 트레이 숨김/Quit 실증(오조준 소동 끝 코드 무결) · Menu ▸ 종료 추가 · ★M1-2 종단 실기(Wi-Fi 토글 → Hello 관측 = kick 발화 직증). 상세 [journal/2026-08-15.md](journal/2026-08-15.md).
