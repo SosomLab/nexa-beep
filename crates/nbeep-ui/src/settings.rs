@@ -62,19 +62,11 @@ const HIDDEN_KEYS: &[&str] = &[
 ];
 
 /// 기본 off 토글 — 프로필 공개(DR-22 **기본 전부 비노출** · 옵트인). 미등록 토글은 on.
-// ★ M3-2d ① 확정(08-15): `ui.close_to_tray` 기본값 = **OS 관례 차등** —
-// macOS는 on(빨간 버튼 = 창만 닫히고 앱은 남는 것이 OS 관례 · DR-16 "동작 =
-// OS 네이티브") · Windows/Linux는 off(X = 종료가 관례 — 예측 가능성).
-// 사용자가 바꾼 값은 그대로 영속되므로 기본값 차등은 미설정 사용자에게만 닿는다.
-#[cfg(target_os = "macos")]
+// ★ M3-2d ① 확정(08-15 **사용자 확정 = 3-OS 공통 off**): `ui.close_to_tray`
+// 기본 꺼짐 — X = 종료(예측 가능성 우선). mac 관례 차등(빨간 버튼 = 유지)을
+// 권고했으나 사용자가 공통 off로 확정했다. 켜는 것은 설정 고급에서 옵트인.
 const TOGGLE_DEFAULT_OFF: &[&str] = &[
-    "profile.share.basic",
-    "profile.share.email",
-    "profile.share.phone",
-];
-#[cfg(not(target_os = "macos"))]
-const TOGGLE_DEFAULT_OFF: &[&str] = &[
-    "ui.close_to_tray", // 닫기 = 트레이(M3-2d — Win/Linux 기본 off)
+    "ui.close_to_tray", // 닫기 = 트레이(M3-2d — 기본 off · 사용자 확정)
     "profile.share.basic",
     "profile.share.email",
     "profile.share.phone",
@@ -528,14 +520,6 @@ pub fn registry() -> &'static [Entry] {
             key: "ui.typeahead_special",
         },
         Entry {
-            cat: Msg::CatAdvanced,
-            sub: None,
-            label: Msg::CloseToTray,
-            desc: Msg::CloseToTrayDesc,
-            kind: SettingKind::Toggle,
-            key: "ui.close_to_tray",
-        },
-        Entry {
             cat: Msg::CatFont,
             sub: None,
             label: Msg::FontBase,
@@ -865,7 +849,16 @@ pub fn registry() -> &'static [Entry] {
             ),
             key: "ime.selfcommit_ms",
         },
-        // ── 고급(08-15 사용자 요청) — 설정 백업·복원·초기화(값이 아니라 행위) ──
+        // ── 고급 — **가장 밑 배치**(08-15 사용자 확정 · 첫 등장 순서 = 사이드바 순서라
+        //    close_to_tray를 여기로 내렸다) · 스위치 먼저, 행위(백업·복원·초기화) 마지막 ──
+        Entry {
+            cat: Msg::CatAdvanced,
+            sub: None,
+            label: Msg::CloseToTray,
+            desc: Msg::CloseToTrayDesc,
+            kind: SettingKind::Toggle,
+            key: "ui.close_to_tray",
+        },
         Entry {
             cat: Msg::CatAdvanced,
             sub: None,
