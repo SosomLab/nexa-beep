@@ -33,6 +33,9 @@ fn build_menus() -> Vec<MenuDef> {
                 MenuEntry::Item(ComboItem::new("settings", t(Msg::SettingsTitle))),
                 MenuEntry::Item(ComboItem::new("quarantine", t(Msg::QuarantineTitle))),
                 MenuEntry::Item(ComboItem::new("gallery", t(Msg::MenuGallery))),
+                // 종료(08-15 사용자 요청) — close_to_tray가 켜지면 X로는 못 끝낸다.
+                MenuEntry::Separator,
+                MenuEntry::Item(ComboItem::new("quit", t(Msg::MenuQuit))),
             ],
         ),
         MenuDef::new(
@@ -6166,6 +6169,11 @@ impl App {
                             "quarantine" => self.open_quarantine(el),
                             "gallery" => self.open_gallery(el),
                             "about" => self.open_about(el),
+                            // 명시적 종료(사용자 요청 08-15 — 메뉴에 종료가 없어
+                            // close_to_tray on이면 앱을 끝낼 길이 트레이뿐이었다).
+                            // 트레이 '종료'와 같은 확정적 경로 = 즉시 exit(Drop 체인이
+                            // GOODBYE·정리 — X의 전송 가드는 습관적 닫기 방어라 별개).
+                            "quit" => el.exit(),
                             _ => {}
                         }
                     }

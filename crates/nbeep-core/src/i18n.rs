@@ -353,6 +353,8 @@ pub enum Msg {
     // ── 툴바·메뉴 ──
     MenuLabel,
     MenuGallery,
+    /// 메뉴 ▸ 종료(08-15 — close_to_tray가 켜지면 X로는 못 끝낸다).
+    MenuQuit,
     /// 메뉴바 '도움말' 라벨.
     MenuHelp,
     ToolbarSize,
@@ -1165,6 +1167,7 @@ impl Msg {
                 "控件库",
                 "コントロールギャラリー",
             ],
+            Msg::MenuQuit => ["Quit", "종료", "退出", "終了"],
             Msg::ToolbarSize => [
                 "Toolbar icon size",
                 "툴바 아이콘 크기",
