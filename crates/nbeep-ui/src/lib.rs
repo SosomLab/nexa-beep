@@ -70,27 +70,29 @@ pub mod icons {
         pub const SIZE: u32 = 96;
     }
 
-    /// 신뢰(인증) 배지 아이콘 — **Lucide `badge-*` 한 가족**(ISC · [docs/14 §13-2]).
+    /// 신뢰(인증) 배지 아이콘 — **Material Symbols 컬러 RGBA**(Apache-2.0 · 사용자
+    /// 확정 08-15 "Material Symbols로 진행" · M3-14b 개편).
     ///
-    /// 방패(`shield-*`)를 쓰지 않는 이유: `SHIELD_ALPHA`가 이미 격리함이다 —
-    /// 같은 그림에 두 뜻을 얹지 않는다. 물음표는 원본이 14px에서 동그라미로
-    /// 뭉개 **파생본 `-nb`**를 쓴다([docs/14 §13-2-1] — 훅 235° + 수직 스템).
-    /// 14px 실크기 렌더 판독 후 구움(08-15 — `rsvg-convert -w 14` ASCII 실측).
-    pub mod trust {
-        /// 빈 배지 = `Pinned`(정상 기본값 — **흐리게** 그린다).
-        pub const BADGE_ALPHA: &[u8] = include_bytes!("../assets/icon-badge-96.alpha");
-        /// 배지 + 체크 = `FingerprintVerified`.
-        pub const CHECK_ALPHA: &[u8] = include_bytes!("../assets/icon-badge-check-96.alpha");
-        /// 배지 + X = `Blocked`(등급을 덮는다).
-        pub const X_ALPHA: &[u8] = include_bytes!("../assets/icon-badge-x-96.alpha");
-        /// 배지 + 느낌표 = **이름 충돌**(등급 옆 덧붙는 표식 — v1 사칭 유일 신호).
-        pub const ALERT_ALPHA: &[u8] = include_bytes!("../assets/icon-badge-alert-96.alpha");
-        /// 배지 + 플러스 = `FirstContact`(**토스트 전용** — 행에는 남기지 않는다).
-        pub const PLUS_ALPHA: &[u8] = include_bytes!("../assets/icon-badge-plus-96.alpha");
-        /// 배지 + 물음표(파생본) = `Unverified`.
-        pub const QUESTION_ALPHA: &[u8] =
-            include_bytes!("../assets/icon-badge-question-mark-nb-96.alpha");
-        /// 변 크기(px) — 여섯 자산 공통.
+    /// 1차(Lucide `badge-*` 알파 마스크 14px)는 실기에서 **유령 원**으로 읽혔다 —
+    /// 톱니 윤곽이 소형에서 뭉개고, 정상 기본값(Pinned)까지 그려 의미 없는 원이
+    /// 반복됐다. 개편: ① **색이 정보다** — 상태색을 구운 컬러 RGBA(알파 마스크
+    /// 아님 · `IconImage::from_rgba` — brand 선례) ② **Pinned는 목록에서 숨긴다**
+    /// (문제 상태만 표시 — 조용한 목록·튀는 특이 상태) ③ 보편 관용 기호(웹 조사):
+    /// 인증 = SNS 파란 실 · 차단 = 🚫 · 경고 = ⚠. 굽기 = `tools/mkicons-rgba.sh`.
+    pub mod id {
+        /// 머리+물음표(`psychology-alt` · 호박) = `Unverified` — "누군지 모른다".
+        pub const UNVERIFIED_RGBA: &[u8] = include_bytes!("../assets/id-unverified-96.rgba");
+        /// 자물쇠(`lock` · 회색) = `Pinned` — 키 고정. **목록엔 안 그린다**(카드·툴팁 전용).
+        pub const PINNED_RGBA: &[u8] = include_bytes!("../assets/id-pinned-96.rgba");
+        /// 파란 실+체크(`verified`) = `FingerprintVerified` — SNS 인증 배지 관용 그대로.
+        pub const VERIFIED_RGBA: &[u8] = include_bytes!("../assets/id-verified-96.rgba");
+        /// 금지 표지(`block` · 빨강) = `Blocked`(등급을 덮는다 · fail-closed 가시화).
+        pub const BLOCKED_RGBA: &[u8] = include_bytes!("../assets/id-blocked-96.rgba");
+        /// 경고 삼각(`warning` · 호박) = **이름 충돌** 덧표식(v1 사칭 유일 신호).
+        pub const CONFLICT_RGBA: &[u8] = include_bytes!("../assets/id-conflict-96.rgba");
+        /// 사람+플러스(`person-add` · 파랑) = `FirstContact`(토스트 전용 — 자리).
+        pub const FIRSTCONTACT_RGBA: &[u8] = include_bytes!("../assets/id-firstcontact-96.rgba");
+        /// 변 크기(px) — 여섯 자산 공통(RGBA = 변×변×4 바이트).
         pub const SIZE: u32 = 96;
     }
 

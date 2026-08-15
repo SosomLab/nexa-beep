@@ -202,44 +202,37 @@ pub fn badge(trust: TrustLevel, theme: &Theme) -> (&'static str, Color) {
 /// 신뢰 아이콘 틴트 캐시 슬롯(M3-14) — ((마스크 ptr, 색), 96px 틴트 이미지).
 type TrustTintSlot = ((usize, u32), std::rc::Rc<crate::theme::IconImage>);
 
-/// 신뢰 배지 아이콘 선택(M3-14 · [14 §13]) — (알파 마스크, 틴트 색, 등급명, 툴팁 한 줄).
-/// `Blocked`가 등급을 **덮는다**(차단은 등급이 아니라 fail-closed 상태의 가시화).
-/// `Pinned`는 `text_dim`(정상 기본값 — 조용히) · 색은 **윤곽선 틴트로만** 쓴다
-/// (채움 금지 — 채우면 세션 디스크와 무게가 같아진다 · [14 §12-6]).
+/// 신뢰 배지 아이콘 선택(M3-14b · Material Symbols 컬러 — 08-15 개편).
+/// 반환 = (컬러 RGBA, 등급명, 툴팁 한 줄) · **`None` = 그리지 않는다**.
+///
+/// `Blocked`가 등급을 **덮고**(fail-closed의 가시화), `Pinned`(정상 기본값)는
+/// **목록에서 숨긴다** — 1차의 "흐린 빈 배지"가 실기에서 의미 없는 유령 원으로
+/// 읽혔다(사용자 확정 08-15: 문제 상태만 표시 · 색은 자산에 구워져 있다).
 #[must_use]
 pub fn trust_icon(
     trust: TrustLevel,
     blocked: bool,
-    theme: &Theme,
-) -> (&'static [u8], Color, &'static str, &'static str) {
+) -> Option<(&'static [u8], &'static str, &'static str)> {
     use nbeep_core::{t, Msg};
     if blocked {
-        return (
-            crate::icons::trust::X_ALPHA,
-            theme.danger,
+        return Some((
+            crate::icons::id::BLOCKED_RGBA,
             t(Msg::TrustBlocked),
             t(Msg::TrustBlockedTip),
-        );
+        ));
     }
     match trust {
-        TrustLevel::Unverified => (
-            crate::icons::trust::QUESTION_ALPHA,
-            theme.warn,
+        TrustLevel::Unverified => Some((
+            crate::icons::id::UNVERIFIED_RGBA,
             t(Msg::TrustUnverified),
             t(Msg::TrustUnverifiedTip),
-        ),
-        TrustLevel::Pinned => (
-            crate::icons::trust::BADGE_ALPHA,
-            theme.text_dim,
-            t(Msg::TrustPinned),
-            t(Msg::TrustPinnedTip),
-        ),
-        TrustLevel::FingerprintVerified => (
-            crate::icons::trust::CHECK_ALPHA,
-            theme.ok,
+        )),
+        TrustLevel::Pinned => None, // 정상 기본값 — 목록은 조용히(카드·툴팁에서만)
+        TrustLevel::FingerprintVerified => Some((
+            crate::icons::id::VERIFIED_RGBA,
             t(Msg::TrustVerified),
             t(Msg::TrustVerifiedTip),
-        ),
+        )),
     }
 }
 
@@ -441,9 +434,10 @@ impl PeerListWidget {
     }
 
     /// 신뢰 아이콘 자리(행 rect 기준 · **페인트·히트 공유** — 어긋나면 툴팁이 빗나간다).
-    /// 반환 = (등급 아이콘, 충돌 표식 자리 — `conflict`일 때만).
+    /// 반환 = (등급 아이콘, 충돌 표식 자리 — `conflict`일 때만). 18px(사용자 확정
+    /// 08-15 "조금 크게" — 컬러 자산이라 커도 소음이 아니라 신호다).
     fn trust_icon_rects(&self, r: Rect, conflict: bool) -> (Rect, Option<Rect>) {
-        let d = self.s(14);
+        let d = self.s(18);
         let tr = Rect::new(
             r.right() - self.s(10) - d,
             r.y + (self.row_h() - d) / 2,
@@ -454,25 +448,20 @@ impl PeerListWidget {
         (tr, cr)
     }
 
-    /// 96px 알파 마스크 → 틴트 이미지(캐시 — 마스크·색이 같으면 재사용).
-    fn tinted_trust(
-        &self,
-        alpha: &'static [u8],
-        color: crate::theme::Color,
-    ) -> std::rc::Rc<crate::theme::IconImage> {
-        let key = (alpha.as_ptr() as usize, color.0);
+    /// 96px 컬러 RGBA → 이미지(캐시 — 색이 자산에 구워져 있어 키는 ptr뿐).
+    fn trust_image(&self, rgba: &'static [u8]) -> std::rc::Rc<crate::theme::IconImage> {
+        let key = (rgba.as_ptr() as usize, 0);
         if let Some((_, img)) = self.trust_tint.borrow().iter().find(|(k, _)| *k == key) {
             return std::rc::Rc::clone(img);
         }
-        let img = std::rc::Rc::new(crate::theme::IconImage::from_alpha_tinted(
-            crate::icons::trust::SIZE,
-            crate::icons::trust::SIZE,
-            alpha,
-            color.rgb(),
+        let img = std::rc::Rc::new(crate::theme::IconImage::from_rgba(
+            crate::icons::id::SIZE,
+            crate::icons::id::SIZE,
+            rgba.to_vec(),
         ));
         let mut cache = self.trust_tint.borrow_mut();
         if cache.len() > 16 {
-            cache.clear(); // 테마 전환 누적 방지 — 재생성 비용은 무시 가능
+            cache.clear(); // 상한 — 자산 6종이라 실제로는 닿지 않는다
         }
         cache.push((key, std::rc::Rc::clone(&img)));
         img
@@ -1210,6 +1199,7 @@ impl Widget for PeerListWidget {
                     self.hover = over;
                 }
                 // 신뢰 아이콘 hover 툴팁(M3-14) — 페인트와 같은 기하로 히트.
+                // **그려진 표식만** 히트한다(Pinned 숨김 = 툴팁 대상도 아님).
                 let p = Point { x, y };
                 let tip = over.and_then(|i| {
                     let row = self.peer_at(i)?;
@@ -1219,7 +1209,8 @@ impl Widget for PeerListWidget {
                             return Some((i, true));
                         }
                     }
-                    tir.contains(p).then_some((i, false))
+                    (trust_icon(row.trust, row.blocked).is_some() && tir.contains(p))
+                        .then_some((i, false))
                 });
                 if tip != self.trust_tip {
                     self.trust_tip = tip;
@@ -1425,21 +1416,27 @@ impl Widget for PeerListWidget {
                 }
             }
 
-            // 신뢰 배지 아이콘(M3-14 · [14 §13]) — 글자 칩 → Lucide `badge-*` 14px.
-            // 기본 상태는 조용히(Pinned = 흐리게) · Blocked가 등급을 덮는다 ·
-            // 이름 충돌은 등급 **옆** 덧붙는 표식(v1 사칭 유일 신호). 등급명·설명은
-            // hover 툴팁으로(색·모양만으로 등급명을 다 나르지 못한다).
+            // 신뢰 배지 아이콘(M3-14b · Material Symbols 컬러 — 08-15 개편). 문제
+            // 상태만 그린다: Pinned(정상 기본값)는 숨김 — 1차의 흐린 빈 배지가
+            // 유령 원으로 읽혔다. Blocked가 등급을 덮고, 이름 충돌은 옆 덧표식.
+            // 등급명·설명은 hover 툴팁(아이콘만으로 등급명을 다 나르지 못한다).
             ctx.select_font(FontSlot::PeerList, false);
-            let (mask, tint, _label, _tip) = trust_icon(row.trust, row.blocked, theme);
             let (tir, cir) = self.trust_icon_rects(r, row.conflict);
-            let img = self.tinted_trust(mask, tint);
-            ctx.image_scaled(tir, &img, r);
+            let shown = trust_icon(row.trust, row.blocked);
+            if let Some((rgba, _label, _tip)) = shown {
+                let img = self.trust_image(rgba);
+                ctx.image_scaled(tir, &img, r);
+            }
             if let Some(cr) = cir {
-                let a = self.tinted_trust(crate::icons::trust::ALERT_ALPHA, theme.warn);
+                let a = self.trust_image(crate::icons::id::CONFLICT_RGBA);
                 ctx.image_scaled(cr, &a, r);
             }
-            // 뒤따르는 배지들의 왼쪽 기준(종전 칩 좌변 자리).
-            let chip_r = cir.unwrap_or(tir);
+            // 뒤따르는 배지들의 왼쪽 기준 — 그린 표식이 없으면 우측 여백 자리.
+            let chip_r = match (cir, shown.is_some()) {
+                (Some(cr), _) => cr,
+                (None, true) => tir,
+                (None, false) => Rect::new(r.right() - self.s(10), tir.y, 0, tir.h),
+            };
 
             // 읽지 않은 메시지 배지(③ 08-13) — 신뢰 칩 왼쪽에 강조색 알약 + 개수.
             // 뷰가 닫혀 있는 동안 도착한 수신만 센다(여는 순간 사라진다).
@@ -1488,34 +1485,37 @@ impl Widget for PeerListWidget {
                 let r = self.row_rect(i);
                 let (tir, cir) = self.trust_icon_rects(r, row.conflict);
                 let anchor = if on_conflict { cir.unwrap_or(tir) } else { tir };
-                let (label, tip) = if on_conflict {
-                    (
+                // 숨긴 표식(Pinned)은 대상이 아니다 — None이면 조용히 건너뛴다
+                // (paint는 계속돼야 한다 — 메뉴·HUD가 뒤에 그려진다).
+                let lt = if on_conflict {
+                    Some((
                         nbeep_core::t(nbeep_core::Msg::TrustConflict),
                         nbeep_core::t(nbeep_core::Msg::TrustConflictTip),
-                    )
+                    ))
                 } else {
-                    let (_, _, l, t) = trust_icon(row.trust, row.blocked, theme);
-                    (l, t)
+                    trust_icon(row.trust, row.blocked).map(|(_, l, t)| (l, t))
                 };
-                ctx.select_font(FontSlot::Status, false);
-                let text = format!("{label} — {tip}");
-                let tw = ctx.text_width(&text);
-                let th = ctx.text_height();
-                let (bw, bh) = (tw + self.s(12), th + self.s(8));
-                let bx = (anchor.x + anchor.w / 2 - bw / 2).clamp(
-                    self.bounds.x + 2,
-                    (self.bounds.right() - bw - 2).max(self.bounds.x + 2),
-                );
-                // 기본은 아이콘 위 — 첫 행처럼 위가 모자라면 아래로 뒤집는다.
-                let mut by = anchor.y - bh - self.s(4);
-                if by < self.bounds.y {
-                    by = anchor.bottom() + self.s(4);
+                if let Some((label, tip)) = lt {
+                    ctx.select_font(FontSlot::Status, false);
+                    let text = format!("{label} — {tip}");
+                    let tw = ctx.text_width(&text);
+                    let th = ctx.text_height();
+                    let (bw, bh) = (tw + self.s(12), th + self.s(8));
+                    let bx = (anchor.x + anchor.w / 2 - bw / 2).clamp(
+                        self.bounds.x + 2,
+                        (self.bounds.right() - bw - 2).max(self.bounds.x + 2),
+                    );
+                    // 기본은 아이콘 위 — 첫 행처럼 위가 모자라면 아래로 뒤집는다.
+                    let mut by = anchor.y - bh - self.s(4);
+                    if by < self.bounds.y {
+                        by = anchor.bottom() + self.s(4);
+                    }
+                    let tb = Rect::new(bx, by, bw, bh);
+                    ctx.fill_round_rect(tb, self.s(4), theme.panel_bg_alt);
+                    ctx.stroke_round_rect(tb, self.s(4), theme.border, 1.0);
+                    ctx.text(tb.x + self.s(6), tb.y + self.s(4), tb, &text, theme.text);
+                    ctx.select_font(FontSlot::PeerList, false);
                 }
-                let tb = Rect::new(bx, by, bw, bh);
-                ctx.fill_round_rect(tb, self.s(4), theme.panel_bg_alt);
-                ctx.stroke_round_rect(tb, self.s(4), theme.border, 1.0);
-                ctx.text(tb.x + self.s(6), tb.y + self.s(4), tb, &text, theme.text);
-                ctx.select_font(FontSlot::PeerList, false);
             }
         }
         // 우클릭 메뉴(최상위 레이어).
@@ -1972,23 +1972,33 @@ mod tests {
         );
     }
 
-    /// 신뢰 배지 아이콘 매핑(M3-14) — Blocked가 등급을 덮고, Pinned는 흐리게.
+    /// 신뢰 배지 아이콘 매핑(M3-14b) — Blocked가 등급을 덮고, **Pinned는 숨긴다**
+    /// (1차의 흐린 빈 배지가 유령 원으로 읽힌 실기 — 문제 상태만 표시).
     #[test]
     fn trust_icon_mapping_and_blocked_override() {
-        let th = Theme::dark();
-        let (m, c, _, _) = trust_icon(TrustLevel::Unverified, false, &th);
-        assert_eq!(m, crate::icons::trust::QUESTION_ALPHA);
-        assert_eq!(c, th.warn);
-        let (m, c, _, _) = trust_icon(TrustLevel::Pinned, false, &th);
-        assert_eq!(m, crate::icons::trust::BADGE_ALPHA);
-        assert_eq!(c, th.text_dim, "정상 기본값은 조용히(흐리게)");
-        let (m, c, _, _) = trust_icon(TrustLevel::FingerprintVerified, false, &th);
-        assert_eq!(m, crate::icons::trust::CHECK_ALPHA);
-        assert_eq!(c, th.ok);
-        // 차단은 등급이 아니라 fail-closed 상태 — 어떤 등급이든 덮는다.
-        let (m, c, _, _) = trust_icon(TrustLevel::FingerprintVerified, true, &th);
-        assert_eq!(m, crate::icons::trust::X_ALPHA);
-        assert_eq!(c, th.danger);
+        let (m, _, _) = trust_icon(TrustLevel::Unverified, false).expect("미검증은 표시");
+        assert_eq!(m, crate::icons::id::UNVERIFIED_RGBA);
+        assert!(
+            trust_icon(TrustLevel::Pinned, false).is_none(),
+            "정상 기본값은 그리지 않는다"
+        );
+        let (m, _, _) = trust_icon(TrustLevel::FingerprintVerified, false).expect("표시");
+        assert_eq!(m, crate::icons::id::VERIFIED_RGBA);
+        // 차단은 등급이 아니라 fail-closed 상태 — 어떤 등급이든 덮는다(Pinned조차).
+        let (m, _, _) = trust_icon(TrustLevel::Pinned, true).expect("차단은 항상 표시");
+        assert_eq!(m, crate::icons::id::BLOCKED_RGBA);
+        // 자산 계약 — 96×96 RGBA 원시 바이트.
+        let want = (crate::icons::id::SIZE * crate::icons::id::SIZE * 4) as usize;
+        for a in [
+            crate::icons::id::UNVERIFIED_RGBA,
+            crate::icons::id::PINNED_RGBA,
+            crate::icons::id::VERIFIED_RGBA,
+            crate::icons::id::BLOCKED_RGBA,
+            crate::icons::id::CONFLICT_RGBA,
+            crate::icons::id::FIRSTCONTACT_RGBA,
+        ] {
+            assert_eq!(a.len(), want);
+        }
     }
 
     /// 충돌 표식 자리(M3-14) — 등급 아이콘 **왼쪽**에 같은 크기로 나란히.
