@@ -19,7 +19,7 @@
 //!   갱신(NIM_MODIFY) 후 이전 HICON은 파괴(누수 방지).
 //!
 //! Linux = **SNI(StatusNotifierItem · D-Bus) 구현**(아래 `sni` — 실기는 Linux 환경 몫).
-//! macOS(NSStatusItem)는 스텁 — mac PC에서 구현한다(M3-2b).
+//! macOS = **메뉴바 NSStatusItem**(아래 `mac` — M3-2b · AppKit 메인 스레드 강제).
 
 /// 트레이에서 온 사용자 행동.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -59,9 +59,11 @@ pub use win::spawn;
 #[cfg(target_os = "linux")]
 pub use sni::spawn;
 
-#[cfg(not(any(windows, target_os = "linux")))]
-/// 스텁(macOS 등) — 트레이 없음(호스트는 `ui.close_to_tray`를 무시해야 한다).
-/// macOS 메뉴바(NSStatusItem)는 M3-2b — mac PC에서 구현한다.
+#[cfg(target_os = "macos")]
+pub use mac::spawn;
+
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+/// 스텁(기타 OS) — 트레이 없음(호스트는 `ui.close_to_tray`를 무시해야 한다).
 pub fn spawn<F: Fn(TrayEvent) + Send + Sync + 'static>(
     _content: TrayContent,
     _on_event: F,
@@ -69,10 +71,189 @@ pub fn spawn<F: Fn(TrayEvent) + Send + Sync + 'static>(
     None
 }
 
-#[cfg(not(any(windows, target_os = "linux")))]
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 impl TrayHandle {
     /// 표시 내용 갱신(스텁 — 도달 불가).
     pub fn update(&self, _content: TrayContent) {}
+}
+
+/// macOS — **메뉴바 NSStatusItem** 어댑터(M3-2b · 사용자 확정 08-15).
+///
+/// - **AppKit은 메인 스레드 강제**다 — `spawn`/`update`는 winit 메인 루프에서만
+///   불린다(호스트의 apply_boot_settings·refresh_tray가 그 자리). 메인 스레드가
+///   아니면 `None`(fail-soft — Windows의 "워처 부재"와 같은 강도).
+/// - 아이콘 = 호스트가 합성한 아바타 RGBA → `NSBitmapImageRep` → `NSImage`
+///   (표시 18×18pt — 32px 원본이라 레티나에서 2x로 선명).
+/// - 메뉴 = **좌/우클릭 공통**(mac 관례 — 분석 표 08-15): 이름 헤더(비활성) ·
+///   구분선 · 열기 · 종료. 액션은 선언 클래스(`NbeepTrayTarget`)의 셀렉터로 받아
+///   콜백(호스트 `EventLoopProxy`)에 넘긴다.
+/// - 상태(NSStatusItem 등 — `Send` 아님)는 **스레드 로컬**에 산다. `TrayHandle`은
+///   표식일 뿐이고, 메인 스레드 밖 `update`는 조용히 무시된다(도달 경로 없음).
+#[cfg(target_os = "macos")]
+mod mac {
+    use super::{TrayContent, TrayEvent, TrayHandle};
+    use objc2::rc::Retained;
+    use objc2::runtime::{AnyObject, NSObject};
+    use objc2::{declare_class, msg_send_id, mutability, sel, ClassType, DeclaredClass};
+    use objc2_app_kit::{
+        NSBitmapImageRep, NSImage, NSMenu, NSMenuItem, NSStatusBar, NSStatusItem,
+        NSVariableStatusItemLength,
+    };
+    use objc2_foundation::{MainThreadMarker, NSSize, NSString};
+    use std::cell::RefCell;
+    use std::sync::OnceLock;
+
+    /// 이벤트 콜백(호스트 프록시 래퍼) — 액션 셀렉터에서 부른다.
+    static ON_EVENT: OnceLock<Box<dyn Fn(TrayEvent) + Send + Sync>> = OnceLock::new();
+
+    struct State {
+        item: Retained<NSStatusItem>,
+        header: Retained<NSMenuItem>,
+        open: Retained<NSMenuItem>,
+        quit: Retained<NSMenuItem>,
+        _target: Retained<Target>,
+    }
+
+    thread_local! {
+        /// 메인 스레드 전용 상태(NSStatusItem은 Send가 아니다).
+        static STATE: RefCell<Option<State>> = const { RefCell::new(None) };
+    }
+
+    declare_class!(
+        /// 메뉴 액션 수신자 — 셀렉터를 콜백으로 잇는 것 외에 아무것도 모른다.
+        struct Target;
+
+        unsafe impl ClassType for Target {
+            type Super = NSObject;
+            type Mutability = mutability::InteriorMutable;
+            const NAME: &'static str = "NbeepTrayTarget";
+        }
+
+        impl DeclaredClass for Target {
+            type Ivars = ();
+        }
+
+        unsafe impl Target {
+            #[method(nbeepTrayOpen:)]
+            fn nbeep_tray_open(&self, _sender: Option<&AnyObject>) {
+                if let Some(f) = ON_EVENT.get() {
+                    f(TrayEvent::Open);
+                }
+            }
+
+            #[method(nbeepTrayQuit:)]
+            fn nbeep_tray_quit(&self, _sender: Option<&AnyObject>) {
+                if let Some(f) = ON_EVENT.get() {
+                    f(TrayEvent::Quit);
+                }
+            }
+        }
+    );
+
+    /// RGBA(straight) → NSImage(18×18pt 표시 · 원본 해상도 유지 = 레티나 2x).
+    fn image_from_rgba(rgba: &[u8], side: u32) -> Option<Retained<NSImage>> {
+        if side == 0 || rgba.len() != (side as usize) * (side as usize) * 4 {
+            return None;
+        }
+        unsafe {
+            let rep: Option<Retained<NSBitmapImageRep>> = msg_send_id![
+                NSBitmapImageRep::alloc(),
+                initWithBitmapDataPlanes: std::ptr::null_mut::<*mut u8>(),
+                pixelsWide: side as isize,
+                pixelsHigh: side as isize,
+                bitsPerSample: 8_isize,
+                samplesPerPixel: 4_isize,
+                hasAlpha: true,
+                isPlanar: false,
+                colorSpaceName: &*NSString::from_str("NSDeviceRGBColorSpace"),
+                bytesPerRow: (side * 4) as isize,
+                bitsPerPixel: 32_isize,
+            ];
+            let rep = rep?;
+            let data = rep.bitmapData();
+            if data.is_null() {
+                return None;
+            }
+            std::ptr::copy_nonoverlapping(rgba.as_ptr(), data, rgba.len());
+            let img = NSImage::initWithSize(NSImage::alloc(), NSSize::new(18.0, 18.0));
+            img.addRepresentation(&rep);
+            Some(img)
+        }
+    }
+
+    fn apply(mtm: MainThreadMarker, state: &State, content: &TrayContent) {
+        unsafe {
+            if let Some(btn) = state.item.button(mtm) {
+                if let Some(img) = image_from_rgba(&content.rgba, content.side) {
+                    btn.setImage(Some(&img));
+                }
+                btn.setToolTip(Some(&NSString::from_str(&content.tooltip)));
+            }
+            state.header.setTitle(&NSString::from_str(&content.name));
+            state
+                .open
+                .setTitle(&NSString::from_str(&content.open_label));
+            state
+                .quit
+                .setTitle(&NSString::from_str(&content.quit_label));
+        }
+    }
+
+    /// 메뉴바 상주 시작 — **메인 스레드에서만**(아니면 None · fail-soft).
+    pub fn spawn<F: Fn(TrayEvent) + Send + Sync + 'static>(
+        content: TrayContent,
+        on_event: F,
+    ) -> Option<TrayHandle> {
+        let mtm = MainThreadMarker::new()?; // AppKit 계약 — 메인 스레드 증명
+        let _ = ON_EVENT.set(Box::new(on_event));
+
+        let target: Retained<Target> = unsafe { msg_send_id![Target::alloc(), init] };
+        unsafe {
+            let bar = NSStatusBar::systemStatusBar();
+            let item = bar.statusItemWithLength(NSVariableStatusItemLength);
+
+            let menu = NSMenu::new(mtm);
+            let header = NSMenuItem::new(mtm);
+            header.setEnabled(false); // 이름 헤더(비활성 — Windows와 동일 문법)
+            menu.addItem(&header);
+            menu.addItem(&NSMenuItem::separatorItem(mtm));
+            let open = NSMenuItem::new(mtm);
+            open.setAction(Some(sel!(nbeepTrayOpen:)));
+            open.setTarget(Some(&target));
+            menu.addItem(&open);
+            let quit = NSMenuItem::new(mtm);
+            quit.setAction(Some(sel!(nbeepTrayQuit:)));
+            quit.setTarget(Some(&target));
+            menu.addItem(&quit);
+            // mac 관례 — 좌/우클릭 모두 메뉴(분석 표 08-15). 메뉴를 달면 둘 다 연다.
+            item.setMenu(Some(&menu));
+
+            let state = State {
+                item,
+                header,
+                open,
+                quit,
+                _target: target,
+            };
+            apply(mtm, &state, &content);
+            STATE.with(|s| *s.borrow_mut() = Some(state));
+        }
+        Some(TrayHandle { _priv: () })
+    }
+
+    impl TrayHandle {
+        /// 표시 내용 갱신 — 메인 스레드에서만 실제 반영(밖이면 무시 · 도달 경로 없음).
+        pub fn update(&self, content: TrayContent) {
+            let Some(mtm) = MainThreadMarker::new() else {
+                return;
+            };
+            STATE.with(|s| {
+                if let Some(state) = s.borrow().as_ref() {
+                    apply(mtm, state, &content);
+                }
+            });
+        }
+    }
 }
 
 /// Linux — **StatusNotifierItem(SNI · D-Bus)** 어댑터(M3-2c · 사용자 확정 08-15
@@ -751,9 +932,8 @@ mod win {
                     if RegisterClassW(&wc) == 0 {
                         return;
                     }
-                    let _ = TASKBAR_CREATED.set(RegisterWindowMessageW(
-                        wide("TaskbarCreated").as_ptr(),
-                    ));
+                    let _ = TASKBAR_CREATED
+                        .set(RegisterWindowMessageW(wide("TaskbarCreated").as_ptr()));
                     let hwnd = CreateWindowExW(
                         0,
                         class_name.as_ptr(),

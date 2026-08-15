@@ -23,8 +23,26 @@ libc = "0.2"
 nbeep-core.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
-# keytap(G1 · H-26) — winit과 같은 판(0.5/0.2 계열)으로 중복 트리 방지.
+# keytap(G1 · H-26) + 메뉴바 상주(M3-2b · NSStatusItem) — winit과 같은
+# 판(0.5/0.2 계열)으로 중복 트리 방지. 클래스별 feature는 트레이가 쓰는
+# 상속 사슬(NSStatusBarButton→NSButton→NSControl→NSView)까지 전부 명시.
 objc2 = "0.5"
-objc2-app-kit = { version = "0.2", features = ["NSEvent", "block2"] }
-objc2-foundation = { version = "0.2", features = ["NSString"] }
+objc2-app-kit = { version = "0.2", features = [
+    "NSEvent",
+    "block2",
+    "NSStatusBar",
+    "NSStatusItem",
+    "NSStatusBarButton",
+    "NSButton",
+    "NSControl",
+    "NSView",
+    "NSResponder",
+    "NSMenu",
+    "NSMenuItem",
+    "NSImage",
+    "NSImageRep",
+    "NSBitmapImageRep",
+    "NSCell",
+] }
+objc2-foundation = { version = "0.2", features = ["NSString", "NSGeometry", "NSThread"] }
 block2 = "0.5"
