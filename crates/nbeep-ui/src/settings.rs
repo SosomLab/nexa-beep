@@ -67,6 +67,7 @@ const HIDDEN_KEYS: &[&str] = &[
 // 권고했으나 사용자가 공통 off로 확정했다. 켜는 것은 설정 고급에서 옵트인.
 const TOGGLE_DEFAULT_OFF: &[&str] = &[
     "ui.close_to_tray", // 닫기 = 트레이(M3-2d — 기본 off · 사용자 확정)
+    "notify.preview",   // 알림 본문 표시(M3-8 — 기본 끔: 화면 공유·녹화 안전)
     "profile.share.basic",
     "profile.share.email",
     "profile.share.phone",
@@ -273,6 +274,23 @@ pub fn registry() -> &'static [Entry] {
                 ("short", Msg::DateFormatShort),
             ]),
             key: "chat.date_format",
+        },
+        // 알림(M3-8 최소 슬라이스) — 표시 on/off + 본문 미리보기(기본 끔 = FR-S-42 결).
+        Entry {
+            cat: Msg::CatConversation,
+            sub: None,
+            label: Msg::NotifyEnabled,
+            desc: Msg::NotifyEnabledDesc,
+            kind: SettingKind::Toggle,
+            key: "notify.enabled",
+        },
+        Entry {
+            cat: Msg::CatConversation,
+            sub: None,
+            label: Msg::NotifyPreview,
+            desc: Msg::NotifyPreviewDesc,
+            kind: SettingKind::Toggle,
+            key: "notify.preview",
         },
         Entry {
             cat: Msg::CatAppearance,

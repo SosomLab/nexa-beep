@@ -691,6 +691,7 @@ mod win {
 
     const WM_APP_CALLBACK: u32 = 0x8000 + 1; // WM_APP+1 — Shell_NotifyIcon 콜백
     const WM_APP_UPDATE: u32 = 0x8000 + 2; // 호스트 갱신 요청(상태는 STATE에)
+    const WM_APP_BALLOON: u32 = 0x8000 + 3; // 풍선 알림 요청(내용은 BALLOON에 · M3-8)
     const WM_LBUTTONUP: u32 = 0x0202;
     const WM_RBUTTONUP: u32 = 0x0205;
     const WM_DESTROY: u32 = 0x0002;
@@ -700,6 +701,9 @@ mod win {
     const NIF_MESSAGE: u32 = 0x01;
     const NIF_ICON: u32 = 0x02;
     const NIF_TIP: u32 = 0x04;
+    const NIF_INFO: u32 = 0x10; // 풍선(info/info_title/info_flags 유효 · M3-8)
+    const NIIF_INFO: u32 = 0x01;
+    const NIIF_NOSOUND: u32 = 0x10; // 신뢰 게이트 — 미검증은 소리 없음(DR-25)
     const MF_STRING: u32 = 0x0000;
     const MF_GRAYED: u32 = 0x0001;
     const MF_SEPARATOR: u32 = 0x0800;
@@ -715,6 +719,8 @@ mod win {
     static HWND: AtomicIsize = AtomicIsize::new(0);
     static PREV_ICON: AtomicIsize = AtomicIsize::new(0);
     static TASKBAR_CREATED: OnceLock<u32> = OnceLock::new();
+    /// 대기 중 풍선(M3-8) — (제목, 본문, 무음). 마지막 것만 유효(폭주는 호스트 스로틀).
+    static BALLOON: Mutex<Option<(String, String, bool)>> = Mutex::new(None);
 
     fn wide(s: &str) -> Vec<u16> {
         s.encode_utf16().chain(std::iter::once(0)).collect()
@@ -848,6 +854,41 @@ mod win {
         }
     }
 
+    /// 대기 중 풍선을 표시(M3-8) — NIF_INFO만 갱신(아이콘·툴팁 불변). 제목 63자·
+    /// 본문 255자 절단(u16 셀 마지막은 NUL). 무음 = NIIF_NOSOUND(DR-25 미검증).
+    fn show_balloon(hwnd: Handle) {
+        let Some((title, body, silent)) = BALLOON.lock().ok().and_then(|mut g| g.take()) else {
+            return;
+        };
+        let mut nid = NotifyIconDataW {
+            cb_size: u32::try_from(core::mem::size_of::<NotifyIconDataW>()).unwrap_or(0),
+            hwnd,
+            uid: 1,
+            flags: NIF_INFO,
+            callback_message: 0,
+            icon: core::ptr::null_mut(),
+            tip: [0u16; 128],
+            state: 0,
+            state_mask: 0,
+            info: [0u16; 256],
+            version: 0,
+            info_title: [0u16; 64],
+            info_flags: NIIF_INFO | if silent { NIIF_NOSOUND } else { 0 },
+            guid: [0u8; 16],
+            balloon_icon: core::ptr::null_mut(),
+        };
+        for (i, u) in title.encode_utf16().take(63).enumerate() {
+            nid.info_title[i] = u;
+        }
+        for (i, u) in body.encode_utf16().take(255).enumerate() {
+            nid.info[i] = u;
+        }
+        // SAFETY: 살아 있는 트레이 아이콘(uid 1)의 풍선 필드만 수정.
+        unsafe {
+            Shell_NotifyIconW(NIM_MODIFY, &mut nid);
+        }
+    }
+
     unsafe extern "system" fn wndproc(hwnd: Handle, msg: u32, w: usize, l: isize) -> isize {
         match msg {
             WM_APP_CALLBACK => {
@@ -862,6 +903,10 @@ mod win {
             }
             WM_APP_UPDATE => {
                 apply_state(hwnd, NIM_MODIFY);
+                0
+            }
+            WM_APP_BALLOON => {
+                show_balloon(hwnd);
                 0
             }
             WM_DESTROY => {
@@ -984,6 +1029,20 @@ mod win {
                 // SAFETY: 살아 있는 트레이 창으로 갱신 통지만 보낸다.
                 unsafe {
                     PostMessageW(hwnd as *mut _, WM_APP_UPDATE, 0, 0);
+                }
+            }
+        }
+
+        /// 풍선 알림(M3-8 · Windows = 트레이가 알림 채널) — 트레이 스레드가 표시.
+        pub fn notify(&self, title: &str, body: &str, silent: bool) {
+            if let Ok(mut g) = BALLOON.lock() {
+                *g = Some((title.to_string(), body.to_string(), silent));
+            }
+            let hwnd = HWND.load(Ordering::Acquire);
+            if hwnd != 0 {
+                // SAFETY: 살아 있는 트레이 창으로 표시 요청만 보낸다.
+                unsafe {
+                    PostMessageW(hwnd as *mut _, WM_APP_BALLOON, 0, 0);
                 }
             }
         }

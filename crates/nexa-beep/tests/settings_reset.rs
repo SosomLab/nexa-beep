@@ -46,4 +46,7 @@ fn confirmed_defaults_hold() {
     assert_eq!(d.get("ui.link_badge_shape"), "on");
     // 목록 정렬 기본(08-15 사용자 확정) — 최근 대화 우선.
     assert_eq!(d.get("ui.list_sort"), "chat");
+    // 알림(M3-8) — 표시는 기본 켬 · 본문 미리보기는 기본 끔(화면 공유 안전 — FR-S-42 결).
+    assert_eq!(d.get("notify.enabled"), "on");
+    assert_eq!(d.get("notify.preview"), "off");
 }

@@ -1213,6 +1213,8 @@ struct App {
     manual_addrs: HashMap<PeerId, String>,
     /// 읽지 않은 수신 메시지 수(③ — 대화 뷰가 닫혀 있는 동안 도착한 것).
     unread: HashMap<PeerId, u32>,
+    /// 알림 스로틀(M3-8) — 키(상대/방)별 마지막 알림 시각 ms(3초 안 중복 억제).
+    last_notify: HashMap<String, u64>,
     /// 그 대화를 마지막으로 확인한 시각(뷰가 열려 있던 마지막 순간 — 목록에 표시).
     last_read: HashMap<PeerId, nbeep_ui::WallTime>,
     /// 자동 재연결 스케줄(사용자 확정 08-13 ⓑ) — `(백오프 단계, 다음 시도 at_ms)`.
@@ -3345,6 +3347,48 @@ impl App {
 
     /// 설정 초기화(08-15 · 고급) — 레지스트리(표시 항목) 전부 기본값으로. 숨김 키
     /// (창 위치·최근 목록)와 신원·핀·그룹은 건드리지 않는다.
+    /// OS 알림(M3-8 최소 슬라이스 · 08-15) — 조건: 설정 on · **앱의 어느 창도
+    /// 포커스가 아님**(포커스 중엔 배지·제목이 맡는다) · 키별 3초 스로틀.
+    /// `silent` = DR-25 신뢰 게이트(미검증 발신자 = 소리 없음). 내용 정책은
+    /// 호출자가 끝낸다(미리보기 무해화·파일명 금지 — FR-S-41).
+    fn notify_user(&mut self, key: &str, title: &str, body: &str, silent: bool) {
+        if self.settings.get("notify.enabled") != "on" {
+            return;
+        }
+        if self.windows.values().any(|e| e.window.has_focus()) {
+            return;
+        }
+        let now = self.now_ms();
+        if now.saturating_sub(self.last_notify.get(key).copied().unwrap_or(0)) < 3000 {
+            return;
+        }
+        self.last_notify.insert(key.to_string(), now);
+        // Windows = 트레이 풍선(있을 때) · 그 외/트레이 부재 = plat 어댑터(fail-soft).
+        #[cfg(windows)]
+        if let Some(t) = &self.tray {
+            t.notify(title, body, silent);
+            return;
+        }
+        let _ = nbeep_plat::notify::notify(&nbeep_plat::notify::Note {
+            title,
+            body,
+            silent,
+        });
+    }
+
+    /// 알림 본문(M3-8) — 미리보기 설정 on이면 무해화된 본문 80자, off면 일반 문구.
+    fn notify_body(&self, text: &str) -> String {
+        if self.settings.get("notify.preview") == "on" {
+            let mut b: String = text.chars().take(80).collect();
+            if text.chars().count() > 80 {
+                b.push('…');
+            }
+            b
+        } else {
+            nbeep_core::t(nbeep_core::Msg::NotifyNewMessage).to_string()
+        }
+    }
+
     fn do_reset_settings(&mut self) -> String {
         // 항목의 **기본값 쌍 전체**를 돌린다(08-15 점검) — `e.key` 하나만 돌면
         // 값 키가 여럿인 항목(FontSection = family+size)의 짝 키가 초기화에서 샜다.
@@ -5717,6 +5761,7 @@ impl App {
                     return; // 재전송 중복
                 }
                 let gid = s.local_id;
+                let room = s.roster.name.as_str().to_string(); // 차용 종료(알림에서 &mut self)
                 self.ledger.note_recv(peer);
                 let (at_ms, wall) = now_stamp();
                 // 발신자 라벨 = 카카오톡류 수신 풍선 위 이름(기존 with_from 재사용).
@@ -5730,16 +5775,19 @@ impl App {
                 if let Some(chat) = self.gchats.get_mut(&gid) {
                     chat.push_line(line, &mut inv);
                 }
+                // OS 알림(M3-8) — 방 이름 제목 · 발신자 미검증 = 무음(DR-25).
+                {
+                    use nbeep_core::TrustStore as _;
+                    let silent = self.trust.level(peer) == nbeep_core::TrustLevel::Unverified;
+                    let body = self.notify_body(&text);
+                    self.notify_user(&format!("g:{gid:?}"), &room, &body, silent);
+                }
                 if self.group_visible(gid) {
                     // 보고 있는 방 — 재도만.
                 } else {
                     let e = self.gunread.entry(gid).or_insert(0);
                     *e = e.saturating_add(1);
-                    self.status = format!(
-                        "[{}] {}: 새 메시지",
-                        s.roster.name.as_str(),
-                        self.peer_title(peer)
-                    );
+                    self.status = format!("[{}] {}: 새 메시지", room, self.peer_title(peer));
                     self.update_main_title();
                 }
                 self.refresh_and_redraw();
@@ -6834,6 +6882,7 @@ impl ApplicationHandler<AppEvent> for App {
                 }
                 self.ledger.note_recv(peer); // 왕래 장부(상호 확인)
                 self.trust.note_chat(peer, unix_now_ms()); // 최근 대화(08-15)
+                let notify_body = self.notify_body(text.as_str()); // move 전에 뜬다
                 let (at_ms, wall) = now_stamp();
                 let line = ChatLine::text(false, text, at_ms, wall);
                 if let Some(conv) = self.conversations.get_mut(&peer) {
@@ -6845,6 +6894,11 @@ impl ApplicationHandler<AppEvent> for App {
                 }
                 // 읽음/안읽음 계상(③) — 뷰가 닫혀 있으면 배지·제목으로 알린다.
                 self.note_incoming(peer);
+                // OS 알림(M3-8) — 앱이 뒤에 있을 때만 · 미검증 = 무음(DR-25).
+                use nbeep_core::TrustStore as _;
+                let silent = self.trust.level(peer) == nbeep_core::TrustLevel::Unverified;
+                let title = self.peer_title(peer);
+                self.notify_user(&format!("p:{}", peer.short()), &title, &notify_body, silent);
                 // 이 대화가 보이는 창을 다시 그린다.
                 self.redraw_conversation(peer);
             }
@@ -6873,6 +6927,15 @@ impl ApplicationHandler<AppEvent> for App {
                         self.push_xfer_line(peer, false, &name, size);
                     }
                     OfferVerdict::Ask => {
+                        // OS 알림(M3-8) — **파일명은 싣지 않는다**(FR-S-41 금지 목록).
+                        {
+                            use nbeep_core::TrustStore as _;
+                            let silent =
+                                self.trust.level(peer) == nbeep_core::TrustLevel::Unverified;
+                            let title = self.peer_title(peer);
+                            let body = nbeep_core::t(nbeep_core::Msg::NotifyFileOffer).to_string();
+                            self.notify_user(&format!("x:{}", peer.short()), &title, &body, silent);
+                        }
                         // 스레드에 수신 항목(승인 대기) — 거절하면 이 항목이 실패로 남는다.
                         self.push_xfer_line(peer, false, &name, size);
                         let q = self.pending_offers.entry(peer).or_default();
@@ -8754,6 +8817,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         extra_peers: HashMap::new(),
         manual_addrs: HashMap::new(),
         unread: HashMap::new(),
+        last_notify: HashMap::new(),
         last_read: HashMap::new(),
         reconnect: HashMap::new(),
         rows_dirty: false,

@@ -355,6 +355,13 @@ pub enum Msg {
     MenuGallery,
     /// 메뉴 ▸ 종료(08-15 — close_to_tray가 켜지면 X로는 못 끝낸다).
     MenuQuit,
+    // ── 알림(M3-8 최소 슬라이스 · 08-15) ──
+    NotifyEnabled,
+    NotifyEnabledDesc,
+    NotifyPreview,
+    NotifyPreviewDesc,
+    NotifyNewMessage,
+    NotifyFileOffer,
     /// 메뉴바 '도움말' 라벨.
     MenuHelp,
     ToolbarSize,
@@ -1168,6 +1175,37 @@ impl Msg {
                 "コントロールギャラリー",
             ],
             Msg::MenuQuit => ["Quit", "종료", "退出", "終了"],
+            Msg::NotifyEnabled => [
+                "Desktop notifications",
+                "데스크톱 알림",
+                "桌面通知",
+                "デスクトップ通知",
+            ],
+            Msg::NotifyEnabledDesc => [
+                "Show an OS notification for new messages and file offers while the app is in the background (unverified senders are silent)",
+                "앱이 뒤에 있을 때 새 메시지·파일 요청을 OS 알림으로 — 미검증 상대는 소리 없음",
+                "应用在后台时以系统通知提示新消息与文件请求(未验证发送者静音)",
+                "アプリが背面のとき新着とファイル要求をOS通知で(未検証は無音)",
+            ],
+            Msg::NotifyPreview => [
+                "Show message text in notifications",
+                "알림에 메시지 내용 표시",
+                "通知中显示消息内容",
+                "通知に本文を表示",
+            ],
+            Msg::NotifyPreviewDesc => [
+                "Off shows only \"New message\" — safer on shared or recorded screens (file names are never shown)",
+                "끄면 \"새 메시지\"만 표시 — 화면 공유·녹화 자리에서 안전(파일명은 어떤 경우에도 표시하지 않음)",
+                "关闭时仅显示\"新消息\"(文件名从不显示)",
+                "オフは\"新着\"のみ表示(ファイル名は常に非表示)",
+            ],
+            Msg::NotifyNewMessage => ["New message", "새 메시지", "新消息", "新着メッセージ"],
+            Msg::NotifyFileOffer => [
+                "File transfer request",
+                "파일 수신 요청",
+                "文件传输请求",
+                "ファイル受信リクエスト",
+            ],
             Msg::ToolbarSize => [
                 "Toolbar icon size",
                 "툴바 아이콘 크기",
