@@ -3,7 +3,9 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
-> **갱신: 2026-08-15 10차 (KST)** — ★ **Windows 실기 배치 완주 — [26 §7-1](26-run-and-manual-test.md) W-A~W-H 8건 중 7건 통과**(빌드 `2512beb` · **소스 무변경** · 기록만):
+> **갱신: 2026-08-15 11차 (KST)** — **M3-2 트레이 분석·세분화**(docs · 사용자 요구 확정: 아이콘=**사용자 아바타**·툴팁/우클릭 표시 이름·우클릭 **종료**·`ui.close_to_tray` 스위치·3-OS 동일 패턴 · "크면 정리" 지침대로 분석 선행): 종전 🔴 "아이콘 의존 판단" **해소**(아바타 RGBA 자체 렌더 — 외부 에셋·`tray-icon` 불필요 · **직접 어댑터 판정**: Win `Shell_NotifyIcon`/mac `NSStatusItem` 시스템 API 직접 = 의존 0 · 트레이 메뉴는 OS 셸 영역 = 네이티브(ADR-0014 경계 획정과 같은 결)). OS 차이 핵심 = Win 콜백은 **숨은 메시지 창 스레드**(winit wndproc 불가침)·우클릭 메뉴+`SetForegroundWindow` 선행 / mac AppKit **메인 스레드 강제**·좌우 모두 메뉴·**빨간 버튼=창만 닫힘 관례**(스위치 기본값 차등 결정지) / Linux SNI 파편화(권고 = v1 폴백). **세분화 = M3-2a**(Windows — TrayPort+어댑터+설정+CloseRequested 인터셉트 · 이 PC 착수 1순위)·2b(mac)·2c(🔴 Linux 범위)·2d(🔴 결정지 2건). 상대 프로필 카드 마우스 위치+소유(`86b045a`)도 이번 배치. [journal/2026-08-15.md](journal/2026-08-15.md).
+>
+> **직전(08-15 10차)** — ★ **Windows 실기 배치 완주 — [26 §7-1](26-run-and-manual-test.md) W-A~W-H 8건 중 7건 통과**(빌드 `2512beb` · **소스 무변경** · 기록만):
 > ① **헤드리스로 증명 가능한 것을 먼저 끝냈다** — **W-A 마이그레이션**: 파일 헤더 직접 판독 `NBGS 03`(groups v2→v3)·`NBTS 02`(trust v1→v2) **3신원 전부** · `identity.key` **mtime 무변경**이고 파일에서 읽은 PeerId가 발견 결과와 일치 · trust.seg **828→1179B**(초기화면 줄었을 값 = **fail-closed 잠김 아님**). **W-B 권한 강등(R-5)**: 실바이너리 4갈래 — stderr `lockdown = windows-mitigation(dynamic-code·image-load)` · PNG→NIMG 256²·64² **바이트 정합** · 쓰레기·빈 입력 **exit 2·출력 0B**. ★ **"걸렸는가"만으로 부족하고 "걸린 채 정상 입력이 통과하는가"까지** 같은 배터리에서 봤다(과하면 이미지가 조용히 죽는다). **W-H**: `ime.*` 9종+토글 2·tooltip·carousel·list_refresh_scroll · **키 68개 중복 0**.
 > ② **부수 확인** — `ui.win_x/y/w/h`·`ui.list_sort` 저장 실측 = **08-14에 잡은 HIDDEN_KEYS 구멍이 실제로 막혔다** · `profile.avatar=b:ox`·`avatar_border` = 아바타 모델 종단 동작.
 > ③ **사용자 육안 4건 통과** — 정렬 팝업 렌더·선택 즉시 재정렬(W-C) · 순서 변경 + **깜빡임 없음**(W-D) · 캐러셀 Windows 방향 기획대로(W-F) · **3신원 그룹 생성·메시지 전달**(W-G).

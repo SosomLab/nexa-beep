@@ -7,6 +7,8 @@
 
 ## 2026-08-15
 
+- **M3-2 트레이 — 요구 확정·OS 분석·세분화**(docs): 아이콘 = 사용자 아바타로 확정되며 종전 🔴 의존 판단 해소(외부 에셋·크레이트 불필요 — Win Shell_NotifyIcon·mac NSStatusItem 직접, 메뉴는 OS 셸 = 네이티브). OS 차이표(콜백 스레딩·메뉴 관례·닫기 관례) + M3-2a(Windows 착수 1순위)~2d(결정지) 세분화. 상세 [journal/2026-08-15.md](journal/2026-08-15.md).
+
 - ★ **Windows 실기 배치 완주 — [26 §7-1](26-run-and-manual-test.md) 8건 중 7건 통과**(빌드 `2512beb` · 소스 무변경): **헤드리스 실측 4건** — W-A 마이그레이션(헤더 판독 `NBGS 03`·`NBTS 02` 3신원 · `identity.key` 무변경 · trust.seg 828→1179B = 잠김 아님) · **W-B 권한 강등 실바이너리**(`lockdown = windows-mitigation…` + PNG→NIMG 바이트 정합 + 쓰레기·빈 입력 exit 2·0B — ★ **걸린 채로 정상 입력이 통과**하는 두 방향을 같이 확인) · W-H 설정 신설(키 68 중복 0) · 부수로 **08-14 HIDDEN_KEYS 구멍이 실제로 막힌 것**(`ui.win_*`·`ui.list_sort`) 확인. **사용자 육안 4건** — 정렬 팝업·순서 변경·깜빡임 없음·캐러셀 Windows 방향·3신원 그룹 생성/메시지 전달. **잔여 = W-E 하나**(2-PC Win↔Mac). ⚠️ 실기 후 모달 3커밋이 들어와 **z순서는 재확인 대상**. 부수: `relaunch.sh`가 Windows에서 **exit 0으로 조용히 실패**(pkill 미작동 → 빌드 os error 5 → 중복 6개 기동 → 구 인스턴스를 발견해 "성공" 오판). 상세 [journal/2026-08-15.md](journal/2026-08-15.md).
 - **모달 = 마우스 위치 + 메인 소유**(main · Windows 실기 2건): 프로필이 멀리 열림 → `modal_attrs` 헬퍼(마우스 좌상단) · 2-앱에서 B 모달 선택 시 B 메인이 뒤에 남음 → **owned window**(`with_owner_window` — 클릭 시 창 묶음 부상 · AlwaysOnTop 금지 표준과 정합) 모달 8종 적용(대화 창은 제외 명문). 617 green. 상세 [journal/2026-08-15.md](journal/2026-08-15.md).
 
