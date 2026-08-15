@@ -94,7 +94,9 @@ pub(crate) fn quarantine_received(
         sender,
         received_at: now,
         expires_at: now + 7 * 24 * 3600,
-        scan: nbeep_core::ScanOutcome::Unavailable,
+        // 검사(§6 · ADR-0004) — 디스크 기록 전 버퍼 단계. 포트 뒤라(DR-21)
+        // Windows AMSI가 들어와도 이 줄은 안 바뀐다. 지금은 3-OS Unavailable.
+        scan: nbeep_plat::scan::scan(&name, &got.bytes),
         xfer: String::new(),
     };
     let sealed = Beepq::seal(&got.bytes, actual, &meta);

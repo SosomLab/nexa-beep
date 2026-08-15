@@ -83,6 +83,26 @@ pub trait Tracer: Send + Sync {
     fn observe(&self, ctx: &crate::pipeline::ActionCtx, outcome: Option<&Outcome>);
 }
 
+/// 파일 검사 포트(M4 §6 · ADR-0004 — 격리물 실체화 전 검사) — 도메인이 선언,
+/// OS 어댑터가 구현(DR-21: AMSI 등 외부 기술은 이 이음새 뒤에). **검사 불능은
+/// 실패가 아니라 [`crate::ScanOutcome::Unavailable`]** — 게이트가 마찰을 올린다
+/// (fail-closed는 상태기계 몫 · 검사가 없다고 실체화가 열리면 안 된다).
+pub trait FileScanner: Send + Sync {
+    /// 바이트 검사 — 디스크 기록 전 버퍼 단계([docs/11] §6). 이름은 판정 보조
+    /// (확장자 힌트)일 뿐 신뢰하지 않는다.
+    fn scan(&self, name: &str, bytes: &[u8]) -> crate::ScanOutcome;
+}
+
+/// 검사기 없음(기본) — 항상 `Unavailable`. mac/Linux 기본값이자 Windows에서
+/// AMSI 미설치·초기화 실패 시의 폴백(어댑터가 이걸 돌려줘도 된다).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NoScanner;
+impl FileScanner for NoScanner {
+    fn scan(&self, _name: &str, _bytes: &[u8]) -> crate::ScanOutcome {
+        crate::ScanOutcome::Unavailable
+    }
+}
+
 /// 행위 주체 — 자기 자신 또는 상대([docs/13] §6-2 "누가").
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Actor {

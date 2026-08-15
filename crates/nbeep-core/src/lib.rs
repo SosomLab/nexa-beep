@@ -53,7 +53,10 @@ pub use mux::{MuxSession, StreamId};
 pub use name::{default_display_name, neutral_from_host, DisplayName, NameError};
 pub use peers::{DepartReason, PeerEntry, PeerEvent, PeerTable, SourceId};
 pub use pipeline::{ActionCtx, ActionId, Interceptor, Pipeline, Reject};
-pub use ports::{Actor, Clock, Meter, MeterEvent, MonoInstant, Quantity, Rng, Tracer, WallTime};
+pub use ports::{
+    Actor, Clock, FileScanner, Meter, MeterEvent, MonoInstant, NoScanner, Quantity, Rng, Tracer,
+    WallTime,
+};
 pub use profile::{ProfileMsg, PROFILE_IMAGE_CHUNK, PROFILE_IMAGE_MAX};
 pub use rate::{negotiate, Pacer, RateLimit, RateMeter};
 pub use safetext::{find_links, sanitize_message, LinkSpan, SafeText};

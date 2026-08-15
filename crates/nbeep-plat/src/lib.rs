@@ -15,6 +15,7 @@ pub mod linkwatch;
 pub mod notify;
 pub mod paths;
 pub mod quarantine;
+pub mod scan;
 pub mod shutdown;
 pub mod term;
 pub mod tray;
