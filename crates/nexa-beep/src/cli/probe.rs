@@ -26,12 +26,16 @@ pub(crate) fn discover_probe(secs: u64) {
                 u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX),
             );
             let clone_flag = clones.observe(o.packet.peer, o.packet.instance, now);
+            // tcp= 는 상대가 광고한 **세션 수신 포트**(M1-15) — `from=`은 UDP 발신
+            // 주소라 그걸 --chat-connect에 넣으면 실패한다(08-13 실기에서 밟음).
+            // 수동 연결에 쓸 값 = from의 IP + tcp의 포트.
             println!(
-                "SAW peer={} name={} kind={:?} from={}{}",
+                "SAW peer={} name={} kind={:?} from={} tcp={}{}",
                 o.packet.peer.short(),
                 o.packet.name.as_str(),
                 o.packet.kind,
                 o.from,
+                o.packet.tcp_port,
                 if clone_flag { " ⚠️CLONE" } else { "" }
             );
         }

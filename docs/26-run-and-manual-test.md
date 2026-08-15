@@ -334,7 +334,7 @@ docker rm -f node_a node_b; docker network rm beepnet
 | **`exec /nexa-beep failed: Permission denied`** | `$PWD`가 저장소가 아니다. Docker는 **없는 호스트 경로를 마운트하면 빈 디렉터리를 만든다** → 파일이 아니라 디렉터리를 exec | `rm -rf ~/.docker-target` 후 **저장소 루트에서** 재실행. 바이너리 문제가 아니다 |
 | **`cannot attach stdin to a TTY-enabled container`** | `-dit` 컨테이너에 **파이프로** 붙으려 했다 | 사람은 `docker attach`를 직접 친다. 자동화는 `-t`를 빼고 **`-di`** 로 띄운다 |
 | **`--chat-connect 10.0.0.5` → `BadAddress`** | ⚠️ **포트 생략 보완이 GUI 모달에만 있다** | CLI는 `:47200`을 직접 쓴다. *(미해결 — CLI에도 같은 정규화 필요)* |
-| **프로브의 `from=`으로 연결 실패** | `from=`은 **UDP 발신 주소**지 TCP 포트가 아니다 | 상대의 `[포트] 세션 수신 N` 값을 쓴다. *(미해결 — 프로브가 `tcp_port`를 아직 출력 안 함)* |
+| **프로브의 `from=`으로 연결 실패** | `from=`은 **UDP 발신 주소**지 TCP 포트가 아니다 | `tcp=` 필드(M1-15 · 08-15 해소 — 광고된 세션 수신 포트)를 쓴다: 연결 주소 = **from의 IP + tcp의 포트** |
 | **GUI에서 밖이 안 보인다** | `--live`가 빠졌다(§2 규칙 ①) | `--window --live` |
 | **컨테이너에서 창이 안 뜬다** | 헤드리스라 디스플레이·폰트가 없다. ⚠️ **무인자도 GUI다**(08-13) | 08-13부터 **사유와 대안을 콘솔에 안내하고 exit 3** 으로 끝난다(그전엔 `Exited (134)`). 컨테이너는 `--chat-live --port N`(§4-1) |
 | **SSH·원격 PowerShell에서 창이 안 뜬다** | 창 서버(mac)·디스플레이(Linux)·대화형 데스크톱(Windows)이 없는 세션 | 안내대로 터미널 단말을 쓰거나, Linux는 `ssh -X`, Windows는 **RDP**(RDP는 창이 뜬다) |
