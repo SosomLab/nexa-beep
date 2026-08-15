@@ -704,6 +704,8 @@ mod win {
     const NIF_INFO: u32 = 0x10; // 풍선(info/info_title/info_flags 유효 · M3-8)
     const NIIF_INFO: u32 = 0x01;
     const NIIF_NOSOUND: u32 = 0x10; // 신뢰 게이트 — 미검증은 소리 없음(DR-25)
+    /// 풍선 클릭(레거시 콜백 lParam) — 알림 클릭 = 앱 열기(08-15 사용자 실기 후속).
+    const NIN_BALLOONUSERCLICK: u32 = 0x0405;
     const MF_STRING: u32 = 0x0000;
     const MF_GRAYED: u32 = 0x0001;
     const MF_SEPARATOR: u32 = 0x0800;
@@ -897,6 +899,8 @@ mod win {
                 match l as u32 {
                     WM_LBUTTONUP => emit(TrayEvent::Open),
                     WM_RBUTTONUP => show_menu(hwnd),
+                    // 풍선 알림 클릭 = 창 복원(트레이 좌클릭과 같은 경로 — M3-8).
+                    NIN_BALLOONUSERCLICK => emit(TrayEvent::Open),
                     _ => {}
                 }
                 0
