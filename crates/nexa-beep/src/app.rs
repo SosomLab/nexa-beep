@@ -8295,6 +8295,21 @@ impl ApplicationHandler<AppEvent> for App {
                 // 스페이스는 Named(Space)로 와서 Character 경로에 안 잡힌다 — 문자로 라우팅
                 // (목록 타입어헤드·대화 입력 공통. 이전엔 직타 스페이스가 유실됐다).
                 if let WKey::Named(NamedKey::Space) = &event.logical_key {
+                    // ⌘/Ctrl+Space = 목록 선택 토글(탐색기 키보드 다중 선택 · 08-15) —
+                    // 문자(타입어헤드) 경로보다 먼저 가로챈다. 목록 모드에서만(대화
+                    // 입력창의 ⌘Space는 OS 입력 전환 등과 충돌하지 않게 그대로 둔다).
+                    if self.primary_down && self.is_list_mode(id) {
+                        self.route(
+                            id,
+                            InputEvent::Key {
+                                key: nbeep_ui::Key::Space,
+                                shift: self.shift_down,
+                                primary: true,
+                            },
+                            el,
+                        );
+                        return;
+                    }
                     let now_ms = self.now_ms();
                     // 게이트 경유(★ G1 2차 회귀의 교훈): 직접 route하면 배달 증거가
                     // 안 남아 raw 대조가 "미배달"로 오판·재주입한다. 잔향은 keydown_gate.

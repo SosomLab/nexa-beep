@@ -341,6 +341,9 @@ pub struct PeerListWidget {
     selected: std::collections::HashSet<PeerId>,
     /// 캐럿(키보드 포커스 행). 목록이 비면 무의미.
     caret: usize,
+    /// 범위 선택 기준점(탐색기 anchor · 08-15) — 일반 클릭/⌘클릭/이동이 갱신하고
+    /// Shift 계열은 유지한다(Shift 반복 = 범위가 늘었다 줄었다).
+    anchor: usize,
     /// 스크롤 상단 행 인덱스.
     top: usize,
     hover: Option<usize>,
@@ -404,6 +407,7 @@ impl PeerListWidget {
             bounds: Rect::default(),
             rows: Vec::new(),
             caret: 0,
+            anchor: 0,
             top: 0,
             hover: None,
             drag_from: None,
@@ -494,6 +498,57 @@ impl PeerListWidget {
     /// 다중 선택 해제(그룹 생성 완료 후 등 — 호스트 호출).
     pub fn clear_selection(&mut self) {
         self.selected.clear();
+    }
+
+    /// 피어의 현재 행 인덱스(그룹 구획 오프셋 포함) — 선택 국소 무효화용.
+    fn index_of_peer(&self, p: PeerId) -> Option<usize> {
+        self.rows
+            .iter()
+            .position(|r| r.entry.peer == p)
+            .map(|k| k + self.groups.len())
+    }
+
+    /// 단일 선택(탐색기 일반 클릭·이동 문법) — 그 행 하나만 선택하고 anchor를 세운다.
+    /// 그룹 행이면 선택은 비워진다(선택은 사람 단위 — 그룹은 캐럿만).
+    /// 무효화는 **바뀐 행만**(캐럿 이동의 국소성 계약 FR-U-13과 한 몸 — 방향키
+    /// 이동마다 전체를 다시 그리면 안 된다).
+    fn select_single(&mut self, i: usize, inv: &mut Invalidations) {
+        let new = self.peer_at(i).map(|r| r.entry.peer);
+        self.anchor = i;
+        // 이미 그 한 명만 선택돼 있으면(연속 이동의 보통 경우) 변화 없음.
+        if self.selected.len() == usize::from(new.is_some())
+            && new.is_none_or(|p| self.selected.contains(&p))
+        {
+            return;
+        }
+        if self.selected.len() > 4 {
+            inv.push(self.bounds); // 넓은 범위가 접힌다 — 전체가 싸다
+        } else {
+            let old: Vec<PeerId> = self.selected.iter().copied().collect();
+            for p in old {
+                if let Some(idx) = self.index_of_peer(p) {
+                    inv.push(self.row_rect(idx));
+                }
+            }
+        }
+        self.selected.clear();
+        if let Some(p) = new {
+            self.selected.insert(p);
+            inv.push(self.row_rect(i));
+        }
+    }
+
+    /// anchor..=i 범위로 선택을 **교체**(탐색기 Shift 문법) — 더하기가 아니라
+    /// 교체라서 Shift를 반대로 움직이면 범위가 줄어든다. 그룹 행은 건너뛴다.
+    fn select_range_from_anchor(&mut self, i: usize, inv: &mut Invalidations) {
+        self.selected.clear();
+        let (lo, hi) = (self.anchor.min(i), self.anchor.max(i));
+        for k in lo..=hi {
+            if let Some(row) = self.peer_at(k) {
+                self.selected.insert(row.entry.peer);
+            }
+        }
+        inv.push(self.bounds);
     }
 
     #[cfg(test)]
@@ -823,9 +878,14 @@ impl Widget for PeerListWidget {
                         }
                         // ── 그룹 행동(M5-1) — 위젯은 요청만 남기고 저장소는 호스트 몫 ──
                         "g-create" => {
-                            self.group_action = Some(GroupAction::Create {
-                                members: self.selected_peers(),
-                            });
+                            // 선택이 비어 있으면(선택 밖 우클릭) 우클릭한 그 사람 1명이 재료.
+                            let mut members = self.selected_peers();
+                            if members.is_empty() {
+                                if let Some(p) = self.ctx_peer {
+                                    members.push(p);
+                                }
+                            }
+                            self.group_action = Some(GroupAction::Create { members });
                         }
                         "g-rename" => {
                             self.group_action = self.ctx_group.take().map(GroupAction::Rename);
@@ -910,12 +970,15 @@ impl Widget for PeerListWidget {
                     } else if let Some((peer, fav)) =
                         self.peer_at(idx).map(|row| (row.entry.peer, row.fav))
                     {
-                        // 피어 행 — 우클릭 대상이 선택에 없으면 그 한 명도 재료에 포함되게
-                        // 선택에 넣는다(선택 없이 우클릭 → 그 상대 1명으로 그룹).
+                        // 탐색기 관례(08-15 사용자 확정): **선택 밖 우클릭 = 기존 선택
+                        // 전부 해제**하고, 우클릭만으로는 선택하지 않는다(메뉴 재료는
+                        // ctx_peer 폴백). **선택 안 우클릭 = 선택 유지**(그룹 기능의 진입).
                         self.ctx_peer = Some(peer);
                         self.ctx_group = None;
-                        self.selected.insert(peer);
-                        let n = self.selected.len();
+                        if !self.selected.contains(&peer) {
+                            self.selected.clear();
+                        }
+                        let n = self.selected.len().max(1);
                         vec![
                             crate::controls::CtxItem::item("profile", "프로필 보기"),
                             crate::controls::CtxItem::item(
@@ -961,9 +1024,26 @@ impl Widget for PeerListWidget {
                 self.selected = self.rows.iter().map(|r| r.entry.peer).collect();
                 inv.push(self.bounds);
             }
-            InputEvent::Key { key, shift, .. } => {
+            InputEvent::Key {
+                key,
+                shift,
+                primary,
+            } => {
                 let vis = self.visible_rows().max(1);
                 let caret_before = self.caret;
+                // ⌘/Ctrl+Space = 캐럿 행 선택 토글(탐색기 — ⌘+방향키로 이동하며
+                // Space로 골라 담는 키보드 다중 선택 문법). anchor도 그 행으로.
+                if primary && matches!(key, Key::Space) {
+                    if let Some(row) = self.peer_at(self.caret) {
+                        let peer = row.entry.peer;
+                        if !self.selected.remove(&peer) {
+                            self.selected.insert(peer);
+                        }
+                        self.anchor = self.caret;
+                        inv.push(self.bounds);
+                    }
+                    return;
+                }
                 match key {
                     // 타입어헤드 활성이면 ↑/↓ = 현재 접두사 매치 순환(역방향 포함 · 언어 중립).
                     // 순환 중엔 타임아웃 기준 시각을 리셋한다(이동 중 초기화 방지 — 사용자 확정).
@@ -1008,16 +1088,16 @@ impl Widget for PeerListWidget {
                     }
                     _ => {}
                 }
-                // ⇧+이동 = 지나온 행들을 다중 선택에 추가(08-13 — 마우스 Shift클릭·
-                // 드래그 범위 선택과 같은 문법. 그룹 행은 건너뛴다).
-                if shift && self.caret != caret_before {
-                    let (lo, hi) = (caret_before.min(self.caret), caret_before.max(self.caret));
-                    for k in lo..=hi {
-                        if let Some(row) = self.peer_at(k) {
-                            self.selected.insert(row.entry.peer);
-                        }
+                // 이동 후 선택 규칙(탐색기 · 08-15 개편):
+                //   ⇧+이동 = anchor부터 캐럿까지 **범위 교체**(반대로 가면 줄어든다)
+                //   ⌘/Ctrl+이동 = 캐럿만(선택·anchor 불변 — Space로 골라 담는 짝)
+                //   무수식 이동 = 캐럿 행 **하나만 선택** + anchor 갱신
+                if self.caret != caret_before {
+                    if shift && !primary {
+                        self.select_range_from_anchor(self.caret, inv);
+                    } else if !shift && !primary {
+                        self.select_single(self.caret, inv);
                     }
-                    inv.push(self.bounds);
                 }
             }
             InputEvent::Wheel { delta } => {
@@ -1108,36 +1188,32 @@ impl Widget for PeerListWidget {
                             }
                         }
                     }
-                    // Shift+클릭 = **연속 범위 선택**(08-13 사용자 요청) — 캐럿(직전
-                    // 클릭 행)부터 이번 행까지의 피어들을 선택에 추가(그룹 행은 건너뜀).
+                    // Shift+클릭 = **anchor부터 범위 교체**(탐색기 문법 · 08-15 개편 —
+                    // 종전 "더하기"는 반대로 움직여도 안 줄었다). anchor는 유지.
                     if shift && self.peer_at(i).is_some() {
-                        let (a, b) = (self.caret.min(i), self.caret.max(i));
-                        for k in a..=b {
-                            if let Some(row) = self.peer_at(k) {
-                                self.selected.insert(row.entry.peer);
-                            }
-                        }
+                        self.select_range_from_anchor(i, inv);
                         self.move_caret(i, inv);
-                        inv.push(self.bounds);
                         self.last_click = None;
                         return;
                     }
-                    // ⌘/Ctrl+클릭 = 다중 선택 토글(M5-1 — 그룹 만들기·구성원 편집의 재료).
-                    // 그룹 행은 선택 대상이 아니다(선택은 사람 단위).
+                    // ⌘/Ctrl+클릭 = 개별 토글(선택은 사람 단위 — 그룹 행 제외) ·
+                    // 캐럿·anchor가 그 행으로 온다(탐색기와 동일).
                     if primary {
                         if let Some(row) = self.peer_at(i) {
                             let peer = row.entry.peer;
                             if !self.selected.remove(&peer) {
                                 self.selected.insert(peer);
                             }
-                            inv.push(self.row_rect(i));
+                            self.anchor = i;
+                            self.move_caret(i, inv);
+                            inv.push(self.bounds);
                             self.last_click = None; // 선택 토글은 더블클릭으로 안 이어진다
                             return;
                         }
-                    } else if !self.selected.is_empty() {
-                        // 일반 클릭 = 선택 해제(파일 관리자 관례).
-                        self.selected.clear();
-                        inv.push(self.bounds);
+                    } else {
+                        // 일반 클릭 = **그 행 하나만 선택**(탐색기 단일 선택 · 08-15 —
+                        // 종전 "해제만"에서 개편) + anchor 갱신.
+                        self.select_single(i, inv);
                     }
                     self.move_caret(i, inv);
                     // 일반 클릭 = 드래그 다중 선택의 시작 후보(움직여야 발동).
@@ -1955,10 +2031,73 @@ mod tests {
         assert_eq!(w.selected_peers(), vec![pid(1), pid(3)]);
         w.click_at(2, false, true, &mut inv); // 같은 행 다시 = 해제
         assert_eq!(w.selected_peers(), vec![pid(1)]);
-        w.click_at(1, false, false, &mut inv); // 일반 클릭 = 전체 해제 + 캐럿 1
-        assert!(w.selected_peers().is_empty(), "일반 클릭 = 해제");
-        w.click_at(3, true, false, &mut inv); // Shift = 캐럿(1)..=3 범위 추가
+        // 일반 클릭 = **그 행 하나만 선택**(탐색기 단일 선택 · 08-15 개편) + anchor.
+        w.click_at(1, false, false, &mut inv);
+        assert_eq!(w.selected_peers(), vec![pid(2)], "일반 클릭 = 단일 선택");
+        w.click_at(3, true, false, &mut inv); // Shift = anchor(1)..=3 범위 교체
         assert_eq!(w.selected_peers(), vec![pid(2), pid(3), pid(4)]);
+        // Shift를 반대로 = 범위가 **줄어든다**(교체 문법 — 종전 더하기와 다르다).
+        w.click_at(2, true, false, &mut inv);
+        assert_eq!(
+            w.selected_peers(),
+            vec![pid(2), pid(3)],
+            "역방향 Shift = 축소"
+        );
+    }
+
+    /// 탐색기 우클릭 규칙(08-15 사용자 확정) — ① 선택 밖 우클릭 = 전부 해제(우클릭
+    /// 만으로 선택하지 않는다) ② 선택 안 우클릭 = 선택 유지(그룹 기능 진입).
+    #[test]
+    fn right_click_outside_clears_inside_keeps() {
+        let (mut w, mut inv) = widget(&[(1, "a"), (2, "b"), (3, "c"), (4, "d")]);
+        w.click_at(0, false, true, &mut inv);
+        w.click_at(1, false, true, &mut inv);
+        assert_eq!(w.selected_peers(), vec![pid(1), pid(2)]);
+        let rd = |i: usize, w: &PeerListWidget| InputEvent::RightDown {
+            x: w.bounds.x + 40,
+            y: w.bounds.y + i32::try_from(i).unwrap() * w.row_h() + 2,
+        };
+        // 선택 안(행 1) 우클릭 = 유지.
+        w.on_event(&rd(1, &w), &mut inv);
+        assert_eq!(w.selected_peers(), vec![pid(1), pid(2)], "선택 안 = 유지");
+        w.ctx_menu.close();
+        // 선택 밖(행 3) 우클릭 = 전부 해제 + 그 행도 **선택되지 않는다**.
+        w.on_event(&rd(3, &w), &mut inv);
+        assert!(w.selected_peers().is_empty(), "선택 밖 = 전부 해제·미선택");
+    }
+
+    /// 키보드 문법(탐색기 · 08-15): 무수식 이동=단일 · ⇧이동=범위 교체(축소 포함) ·
+    /// ⌘이동=캐럿만 · ⌘Space=토글.
+    #[test]
+    fn keyboard_selection_grammar() {
+        let (mut w, mut inv) = widget(&[(1, "a"), (2, "b"), (3, "c"), (4, "d")]);
+        let k = |key, shift, primary| InputEvent::Key {
+            key,
+            shift,
+            primary,
+        };
+        w.on_event(&k(Key::Down, false, false), &mut inv); // 캐럿 1 = 단일 선택
+        assert_eq!(w.selected_peers(), vec![pid(2)]);
+        w.on_event(&k(Key::Down, true, false), &mut inv); // ⇧↓ = 1..=2
+        w.on_event(&k(Key::Down, true, false), &mut inv); // ⇧↓ = 1..=3
+        assert_eq!(w.selected_peers(), vec![pid(2), pid(3), pid(4)]);
+        w.on_event(&k(Key::Up, true, false), &mut inv); // ⇧↑ = 범위 축소 1..=2
+        assert_eq!(w.selected_peers(), vec![pid(2), pid(3)], "역방향 = 축소");
+        // ⌘↑ = 캐럿만 이동(선택 불변) → ⌘Space = 캐럿(1행) 토글 해제.
+        w.on_event(&k(Key::Up, false, true), &mut inv);
+        w.on_event(&k(Key::Up, false, true), &mut inv); // 캐럿 0
+        assert_eq!(
+            w.selected_peers(),
+            vec![pid(2), pid(3)],
+            "⌘이동 = 선택 불변"
+        );
+        w.on_event(&k(Key::Space, false, true), &mut inv); // ⌘Space = 0행(pid 1) 담기
+        assert_eq!(w.selected_peers(), vec![pid(1), pid(2), pid(3)]);
+        w.on_event(&k(Key::Space, false, true), &mut inv); // 다시 = 빼기
+        assert_eq!(w.selected_peers(), vec![pid(2), pid(3)]);
+        // 무수식 이동 = 단일로 복귀(탐색기 — 다중 선택이 접힌다).
+        w.on_event(&k(Key::Down, false, false), &mut inv);
+        assert_eq!(w.selected_peers().len(), 1);
     }
 
     #[test]
