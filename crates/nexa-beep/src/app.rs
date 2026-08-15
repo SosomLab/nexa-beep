@@ -4335,6 +4335,7 @@ impl App {
         )?;
         use nbeep_net::Transport as _;
         let bound = local.tcp_port();
+        let degraded = local.discovery_recv_degraded();
         self.discovery = local.discovery();
         spawn_inbound_accept(
             local.incoming(),
@@ -4344,6 +4345,11 @@ impl App {
         self.transport = std::sync::Arc::new(local);
         self.table = nbeep_core::PeerTable::new(60_000);
         self.listen_port = Some(bound);
+        if degraded {
+            // M1-13ⓔ — 조용한 비호환 금지: 듣지 못하는 상태는 반드시 화면에.
+            self.status =
+                "⚠ 발견 수신 불가(포트 47100 점유) — 발신 전용(상대 목록에서 나를 선택)".into();
+        }
         Ok(bound)
     }
 
@@ -8485,6 +8491,8 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
     let display_name = effective_display_name(&settings, &identity.peer_id());
 
     let mut listen_port: Option<u16> = None;
+    // 발견 수신 강등(M1-13ⓔ) — 포트 점유 시 패닉 대신 발신 전용 + 상태바 고지.
+    let mut discovery_degraded = false;
     let (transport, discovery): (std::sync::Arc<dyn nbeep_net::Transport + Send + Sync>, _) =
         if live {
             // 실물 — LocalDirect(UDP 발견 + TCP 세션). 실기·컨테이너 상대가 목록에 뜬다.
@@ -8501,8 +8509,9 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
                 1,
                 session_port_from(&settings),
             )
-            .expect("LocalDirect 시작(방화벽·인터페이스)");
+            .expect("LocalDirect 시작(송신 소켓·TCP 바인딩 — 발견 포트 점유는 오류 아님)");
             listen_port = Some(local.tcp_port());
+            discovery_degraded = local.discovery_recv_degraded();
             let discovery = local.discovery();
             // 인바운드 수락 펌프 — 남이 나에게 연결하면 accept+에코(대칭 대화·비동기 GUI 펌프는 M2-7).
             spawn_inbound_accept(
@@ -8540,10 +8549,13 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
     if let Ok(ms) = settings.get("ui.scrollbar_hide").parse::<u64>() {
         nbeep_ui::controls::scroll::set_hide_delay_ms(ms);
     }
-    let net_hint = if live {
-        "실물 발견(LAN)"
-    } else {
+    let net_hint = if !live {
         "데모(에코 봇)"
+    } else if discovery_degraded {
+        // M1-13ⓔ — "왜 아무도 안 보이는지"를 화면이 말해야 한다(조용한 비호환 금지).
+        "실물 발견 · ⚠ 수신 불가(포트 47100 점유) — 발신 전용(상대 목록에서 나를 선택)"
+    } else {
+        "실물 발견(LAN)"
     };
     let mode_hint = match mode {
         WindowMode::Single => "Enter = 대화 열기",

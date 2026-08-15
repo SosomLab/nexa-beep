@@ -55,13 +55,18 @@ pub struct UdpDiscovery {
     /// 재공지)이 여기를 갱신하면 다음 주기부터 새 이름으로 나간다.
     template: Arc<std::sync::Mutex<Packet>>,
     seq: Arc<AtomicU32>,
+    /// 수신 강등(M1-13ⓔ) — 발견 포트를 다른 프로세스가 배타 점유해 **듣지 못한다**.
+    /// 발신은 임의 포트라 정상(상대 목록에 나는 뜬다) — 호스트가 상태바에 고지한다.
+    recv_degraded: bool,
 }
 
 impl UdpDiscovery {
     /// 발견을 시작한다 — 광고 스레드(주기 `announce_ms`) + 수신 스레드.
     ///
     /// # Errors
-    /// 소켓 생성·바인딩·그룹 가입 실패 시 `io::Error`(방화벽·권한·인터페이스 부재).
+    /// **송신** 소켓 생성 실패 시 `io::Error`(방화벽·권한·인터페이스 부재).
+    /// 수신 소켓 실패(발견 포트 배타 점유)는 오류가 아니라 **발신 전용 강등**이다
+    /// (M1-13ⓔ — 종전엔 기동 패닉 · [`Self::recv_degraded`]로 조회).
     pub fn spawn(
         me: PeerId,
         instance: [u8; 16],
@@ -71,15 +76,23 @@ impl UdpDiscovery {
         announce_ms: u32,
     ) -> std::io::Result<Self> {
         // ── 수신 소켓: 발견 포트에 재사용 바인딩 + 그룹 가입 ──
-        let recv = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
-        recv.set_reuse_address(true)?;
-        #[cfg(unix)]
-        recv.set_reuse_port(true)?; // 같은 호스트 다중 인스턴스(개발·테스트)
-        recv.bind(&SocketAddr::from((Ipv4Addr::UNSPECIFIED, DISCOVERY_PORT)).into())?;
-        recv.join_multicast_v4(&MULTICAST_GROUP, &Ipv4Addr::UNSPECIFIED)?;
-        recv.set_multicast_loop_v4(true)?; // 같은 호스트 인스턴스 간 도달
-        let recv: UdpSocket = recv.into();
-        recv.set_read_timeout(Some(RECV_POLL))?;
+        // ★ 실패 = 치명 아님(M1-13ⓔ): 포트 47100은 프로토콜 헌법이라 바꿀 수 없고,
+        // 다른 앱이 배타 점유하면 들을 수만 없다. 발신·세션은 멀쩡하므로 수신만
+        // 포기한다 — 상대 화면에 나는 뜨고, 상대가 걸어오면 인바운드로 대화 성립.
+        let recv: Option<UdpSocket> = (|| -> std::io::Result<UdpSocket> {
+            let recv = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
+            recv.set_reuse_address(true)?;
+            #[cfg(unix)]
+            recv.set_reuse_port(true)?; // 같은 호스트 다중 인스턴스(개발·테스트)
+            recv.bind(&SocketAddr::from((Ipv4Addr::UNSPECIFIED, DISCOVERY_PORT)).into())?;
+            recv.join_multicast_v4(&MULTICAST_GROUP, &Ipv4Addr::UNSPECIFIED)?;
+            recv.set_multicast_loop_v4(true)?; // 같은 호스트 인스턴스 간 도달
+            let recv: UdpSocket = recv.into();
+            recv.set_read_timeout(Some(RECV_POLL))?;
+            Ok(recv)
+        })()
+        .ok();
+        let recv_degraded = recv.is_none();
 
         // ── 송신 소켓: 임의 포트(발신 주소가 연결 힌트가 된다) ──
         let send_sock = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))?;
@@ -104,7 +117,9 @@ impl UdpDiscovery {
         let seq = Arc::new(AtomicU32::new(0));
         let (tx, events) = channel::<Observation>();
 
-        Self::spawn_receiver(recv, me, tx.clone(), Arc::clone(&stop));
+        if let Some(recv) = recv {
+            Self::spawn_receiver(recv, me, tx.clone(), Arc::clone(&stop));
+        }
         let v6_send = if let Some((v6_recv, v6_send)) = v6 {
             if let Ok(rx) = v6_recv.try_clone() {
                 Self::spawn_receiver(rx, me, tx, Arc::clone(&stop));
@@ -128,7 +143,14 @@ impl UdpDiscovery {
             send_sock,
             template,
             seq,
+            recv_degraded,
         })
+    }
+
+    /// 수신 강등 여부(M1-13ⓔ) — true = 발견 포트 점유로 **듣지 못하는** 발신 전용.
+    #[must_use]
+    pub fn recv_degraded(&self) -> bool {
+        self.recv_degraded
     }
 
     /// 관측 수신단의 **소유권**을 가져간다(1회 — InMemory `discovery()`와 같은 계약).
@@ -296,6 +318,23 @@ mod tests {
     }
     fn name(s: &str) -> DisplayName {
         DisplayName::parse(s).unwrap()
+    }
+
+    /// M1-13ⓔ — 발견 포트를 다른 프로세스가 **배타 점유**해도 spawn은 성공하고
+    /// 발신 전용으로 강등된다(종전엔 기동 패닉 = 제로 컨피그 정체성 파탄).
+    ///
+    /// Windows는 SO_REUSEADDR 의미가 달라(비재사용 소켓의 포트도 빼앗을 수 있다)
+    /// 점유 시뮬레이션이 성립하지 않는다 — unix 한정("네트워크는 실측" · R-7 결).
+    #[cfg(unix)]
+    #[test]
+    fn occupied_discovery_port_degrades_to_send_only() {
+        // 재사용 플래그 없는 배타 점유자 — 우리 수신 바인딩(reuse여도)은 실패한다.
+        let Ok(_hog) = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, DISCOVERY_PORT)) else {
+            return; // 이 호스트에서 진짜 점유 중(다른 인스턴스) — 환경 의존이라 건너뜀
+        };
+        let d = UdpDiscovery::spawn(pid(9), [9; 16], name("hog"), 9000, 1, 60_000)
+            .expect("점유 시에도 spawn은 성공(발신 전용)");
+        assert!(d.recv_degraded(), "수신 강등이 표시돼야 호스트가 고지한다");
     }
 
     /// 같은 호스트 두 인스턴스의 상호 발견 — 실물 UDP 멀티캐스트.

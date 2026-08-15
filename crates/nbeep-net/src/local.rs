@@ -226,6 +226,13 @@ impl LocalDirect {
     pub fn tcp_port(&self) -> u16 {
         self.tcp_port
     }
+
+    /// 발견 **수신 강등** 여부(M1-13ⓔ) — true면 발견 포트가 배타 점유돼 남의 방송을
+    /// 듣지 못한다(발신·세션은 정상). 호스트가 상태바에 "단방향" 고지를 띄운다.
+    #[must_use]
+    pub fn discovery_recv_degraded(&self) -> bool {
+        self.disc.recv_degraded()
+    }
 }
 
 impl Transport for LocalDirect {
