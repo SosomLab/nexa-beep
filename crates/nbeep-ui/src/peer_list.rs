@@ -93,6 +93,11 @@ pub struct PeerRow {
     pub last_read: Option<String>,
     /// 목록 상단 고정(08-15 사용자 요청 — ★ 표시 · 고정 구획 정렬은 호스트 몫).
     pub fav: bool,
+    /// 이 키 차단됨(M3-14 — 등급 아이콘을 `badge-x`로 덮는다 · fail-closed의 가시화).
+    pub blocked: bool,
+    /// 같은 표시 이름을 **다른 키**가 쓴다(M3-14 — v1에서 사칭을 드러내는 유일한
+    /// 가시 신호 · 등급 아이콘 옆 `badge-alert` 덧붙는 표식).
+    pub conflict: bool,
 }
 
 /// 목록 행에 그릴 전송 진행 상태.
@@ -191,6 +196,50 @@ pub fn badge(trust: TrustLevel, theme: &Theme) -> (&'static str, Color) {
         TrustLevel::FingerprintVerified => {
             (nbeep_core::t(nbeep_core::Msg::TrustVerified), theme.ok)
         }
+    }
+}
+
+/// 신뢰 아이콘 틴트 캐시 슬롯(M3-14) — ((마스크 ptr, 색), 96px 틴트 이미지).
+type TrustTintSlot = ((usize, u32), std::rc::Rc<crate::theme::IconImage>);
+
+/// 신뢰 배지 아이콘 선택(M3-14 · [14 §13]) — (알파 마스크, 틴트 색, 등급명, 툴팁 한 줄).
+/// `Blocked`가 등급을 **덮는다**(차단은 등급이 아니라 fail-closed 상태의 가시화).
+/// `Pinned`는 `text_dim`(정상 기본값 — 조용히) · 색은 **윤곽선 틴트로만** 쓴다
+/// (채움 금지 — 채우면 세션 디스크와 무게가 같아진다 · [14 §12-6]).
+#[must_use]
+pub fn trust_icon(
+    trust: TrustLevel,
+    blocked: bool,
+    theme: &Theme,
+) -> (&'static [u8], Color, &'static str, &'static str) {
+    use nbeep_core::{t, Msg};
+    if blocked {
+        return (
+            crate::icons::trust::X_ALPHA,
+            theme.danger,
+            t(Msg::TrustBlocked),
+            t(Msg::TrustBlockedTip),
+        );
+    }
+    match trust {
+        TrustLevel::Unverified => (
+            crate::icons::trust::QUESTION_ALPHA,
+            theme.warn,
+            t(Msg::TrustUnverified),
+            t(Msg::TrustUnverifiedTip),
+        ),
+        TrustLevel::Pinned => (
+            crate::icons::trust::BADGE_ALPHA,
+            theme.text_dim,
+            t(Msg::TrustPinned),
+            t(Msg::TrustPinnedTip),
+        ),
+        TrustLevel::FingerprintVerified => (
+            crate::icons::trust::CHECK_ALPHA,
+            theme.ok,
+            t(Msg::TrustVerified),
+            t(Msg::TrustVerifiedTip),
+        ),
     }
 }
 
@@ -335,6 +384,12 @@ pub struct PeerListWidget {
     refresh_scroll: RefreshScroll,
     /// 세션 배지 실루엣 구분(M3-19 · `ui.link_badge_shape` — 기본 on). off = 종전 채운 원.
     badge_shape: bool,
+    /// 신뢰 아이콘 틴트 캐시(M3-14) — (마스크 ptr, 색) → 96px 틴트 이미지.
+    /// 페인트가 `&self`라 내부 가변(툴바 `tint`와 같은 문법).
+    trust_tint: std::cell::RefCell<Vec<TrustTintSlot>>,
+    /// 신뢰 아이콘 hover 툴팁(M3-14 — 등급명이 글자에서 아이콘이 되며 사라져 필수).
+    /// (행 인덱스, 충돌 표식 위인가).
+    trust_tip: Option<(usize, bool)>,
     /// `Connecting` 갭 링 회전 스텝(90°×4) — 캐럿 530ms 틱을 재사용한다(새 타이머 0).
     /// paint가 `&self`라 [`std::cell::Cell`](Cell)로 위상만 굴린다(레이아웃 불변).
     spin_step: std::cell::Cell<u8>,
@@ -380,7 +435,47 @@ impl PeerListWidget {
             badge_shape: true,
             spin_step: std::cell::Cell::new(0),
             spin_caret: std::cell::Cell::new(true),
+            trust_tint: std::cell::RefCell::new(Vec::new()),
+            trust_tip: None,
         }
+    }
+
+    /// 신뢰 아이콘 자리(행 rect 기준 · **페인트·히트 공유** — 어긋나면 툴팁이 빗나간다).
+    /// 반환 = (등급 아이콘, 충돌 표식 자리 — `conflict`일 때만).
+    fn trust_icon_rects(&self, r: Rect, conflict: bool) -> (Rect, Option<Rect>) {
+        let d = self.s(14);
+        let tr = Rect::new(
+            r.right() - self.s(10) - d,
+            r.y + (self.row_h() - d) / 2,
+            d,
+            d,
+        );
+        let cr = conflict.then(|| Rect::new(tr.x - d - self.s(4), tr.y, d, d));
+        (tr, cr)
+    }
+
+    /// 96px 알파 마스크 → 틴트 이미지(캐시 — 마스크·색이 같으면 재사용).
+    fn tinted_trust(
+        &self,
+        alpha: &'static [u8],
+        color: crate::theme::Color,
+    ) -> std::rc::Rc<crate::theme::IconImage> {
+        let key = (alpha.as_ptr() as usize, color.0);
+        if let Some((_, img)) = self.trust_tint.borrow().iter().find(|(k, _)| *k == key) {
+            return std::rc::Rc::clone(img);
+        }
+        let img = std::rc::Rc::new(crate::theme::IconImage::from_alpha_tinted(
+            crate::icons::trust::SIZE,
+            crate::icons::trust::SIZE,
+            alpha,
+            color.rgb(),
+        ));
+        let mut cache = self.trust_tint.borrow_mut();
+        if cache.len() > 16 {
+            cache.clear(); // 테마 전환 누적 방지 — 재생성 비용은 무시 가능
+        }
+        cache.push((key, std::rc::Rc::clone(&img)));
+        img
     }
 
     /// 그룹 섹션 교체(M5-1) — 그룹 저장소 변경·온라인 수 갱신 시 호스트가 부른다.
@@ -1075,7 +1170,7 @@ impl Widget for PeerListWidget {
                     self.last_click = None;
                 }
             }
-            InputEvent::MouseMove { y, .. } => {
+            InputEvent::MouseMove { x, y, .. } => {
                 // 드래그 다중 선택(08-13 전수 검사) — 일반 클릭에서 끌면 시작 행부터
                 // 현재 행까지의 피어를 범위 선택(파일 관리자 관례 · 그룹 행은 건너뜀).
                 if let Some(a) = self.drag_from {
@@ -1113,6 +1208,22 @@ impl Widget for PeerListWidget {
                         inv.push(self.row_rect(new));
                     }
                     self.hover = over;
+                }
+                // 신뢰 아이콘 hover 툴팁(M3-14) — 페인트와 같은 기하로 히트.
+                let p = Point { x, y };
+                let tip = over.and_then(|i| {
+                    let row = self.peer_at(i)?;
+                    let (tir, cir) = self.trust_icon_rects(self.row_rect(i), row.conflict);
+                    if let Some(cr) = cir {
+                        if cr.contains(p) {
+                            return Some((i, true));
+                        }
+                    }
+                    tir.contains(p).then_some((i, false))
+                });
+                if tip != self.trust_tip {
+                    self.trust_tip = tip;
+                    inv.push(self.bounds); // 툴팁은 행 경계를 넘는다 — 전체 무효화
                 }
             }
             InputEvent::MouseUp { .. } => {
@@ -1314,27 +1425,21 @@ impl Widget for PeerListWidget {
                 }
             }
 
-            // 신뢰 배지(오른쪽 정렬 라운드 칩) — 항상 표시 · 높이 고정(행이 커져도 칩은 그대로).
+            // 신뢰 배지 아이콘(M3-14 · [14 §13]) — 글자 칩 → Lucide `badge-*` 14px.
+            // 기본 상태는 조용히(Pinned = 흐리게) · Blocked가 등급을 덮는다 ·
+            // 이름 충돌은 등급 **옆** 덧붙는 표식(v1 사칭 유일 신호). 등급명·설명은
+            // hover 툴팁으로(색·모양만으로 등급명을 다 나르지 못한다).
             ctx.select_font(FontSlot::PeerList, false);
-            let (label, chip) = badge(row.trust, theme);
-            let bw = ctx.text_width(label) + self.s(16);
-            let chip_h = self.s(22);
-            let chip_r = Rect::new(
-                r.right() - bw - self.s(10),
-                r.y + (rh - chip_h) / 2,
-                bw,
-                chip_h,
-            );
-            ctx.fill_round_rect(chip_r, chip_h / 2, chip);
-            // 텍스트 상자 높이 실측으로 정확히 세로 중앙(고정 오프셋은 하단 여백이 커 보인다).
-            let th = ctx.text_height();
-            ctx.text(
-                chip_r.x + self.s(8),
-                chip_r.y + (chip_r.h - th) / 2,
-                chip_r,
-                label,
-                theme.text,
-            );
+            let (mask, tint, _label, _tip) = trust_icon(row.trust, row.blocked, theme);
+            let (tir, cir) = self.trust_icon_rects(r, row.conflict);
+            let img = self.tinted_trust(mask, tint);
+            ctx.image_scaled(tir, &img, r);
+            if let Some(cr) = cir {
+                let a = self.tinted_trust(crate::icons::trust::ALERT_ALPHA, theme.warn);
+                ctx.image_scaled(cr, &a, r);
+            }
+            // 뒤따르는 배지들의 왼쪽 기준(종전 칩 좌변 자리).
+            let chip_r = cir.unwrap_or(tir);
 
             // 읽지 않은 메시지 배지(③ 08-13) — 신뢰 칩 왼쪽에 강조색 알약 + 개수.
             // 뷰가 닫혀 있는 동안 도착한 수신만 센다(여는 순간 사라진다).
@@ -1377,6 +1482,42 @@ impl Widget for PeerListWidget {
             ctx.fill_rect(Rect::new(r.x, r.bottom() - 1, r.w, 1), theme.border);
         }
         ctx.select_font(FontSlot::PeerList, false);
+        // 신뢰 아이콘 툴팁(M3-14) — 등급명 + 한 줄 설명. 행들 위에 마지막으로 그린다.
+        if let Some((i, on_conflict)) = self.trust_tip {
+            if let Some(row) = self.peer_at(i) {
+                let r = self.row_rect(i);
+                let (tir, cir) = self.trust_icon_rects(r, row.conflict);
+                let anchor = if on_conflict { cir.unwrap_or(tir) } else { tir };
+                let (label, tip) = if on_conflict {
+                    (
+                        nbeep_core::t(nbeep_core::Msg::TrustConflict),
+                        nbeep_core::t(nbeep_core::Msg::TrustConflictTip),
+                    )
+                } else {
+                    let (_, _, l, t) = trust_icon(row.trust, row.blocked, theme);
+                    (l, t)
+                };
+                ctx.select_font(FontSlot::Status, false);
+                let text = format!("{label} — {tip}");
+                let tw = ctx.text_width(&text);
+                let th = ctx.text_height();
+                let (bw, bh) = (tw + self.s(12), th + self.s(8));
+                let bx = (anchor.x + anchor.w / 2 - bw / 2).clamp(
+                    self.bounds.x + 2,
+                    (self.bounds.right() - bw - 2).max(self.bounds.x + 2),
+                );
+                // 기본은 아이콘 위 — 첫 행처럼 위가 모자라면 아래로 뒤집는다.
+                let mut by = anchor.y - bh - self.s(4);
+                if by < self.bounds.y {
+                    by = anchor.bottom() + self.s(4);
+                }
+                let tb = Rect::new(bx, by, bw, bh);
+                ctx.fill_round_rect(tb, self.s(4), theme.panel_bg_alt);
+                ctx.stroke_round_rect(tb, self.s(4), theme.border, 1.0);
+                ctx.text(tb.x + self.s(6), tb.y + self.s(4), tb, &text, theme.text);
+                ctx.select_font(FontSlot::PeerList, false);
+            }
+        }
         // 우클릭 메뉴(최상위 레이어).
         self.ctx_menu.paint(ctx, theme);
         // 타입어헤드 HUD(입력·조합 중일 때만) — 위치는 설정(3×3). 조합 중 텍스트도 표시.
@@ -1446,6 +1587,8 @@ mod tests {
             unread: 0,
             last_read: None,
             fav: false,
+            blocked: false,
+            conflict: false,
         }
     }
     fn widget(names: &[(u8, &str)]) -> (PeerListWidget, Invalidations) {
@@ -1827,5 +1970,54 @@ mod tests {
             vec![pid(1), pid(2), pid(3)],
             "⌘/Ctrl+A = 피어 전체 선택(그룹 생성 흐름)"
         );
+    }
+
+    /// 신뢰 배지 아이콘 매핑(M3-14) — Blocked가 등급을 덮고, Pinned는 흐리게.
+    #[test]
+    fn trust_icon_mapping_and_blocked_override() {
+        let th = Theme::dark();
+        let (m, c, _, _) = trust_icon(TrustLevel::Unverified, false, &th);
+        assert_eq!(m, crate::icons::trust::QUESTION_ALPHA);
+        assert_eq!(c, th.warn);
+        let (m, c, _, _) = trust_icon(TrustLevel::Pinned, false, &th);
+        assert_eq!(m, crate::icons::trust::BADGE_ALPHA);
+        assert_eq!(c, th.text_dim, "정상 기본값은 조용히(흐리게)");
+        let (m, c, _, _) = trust_icon(TrustLevel::FingerprintVerified, false, &th);
+        assert_eq!(m, crate::icons::trust::CHECK_ALPHA);
+        assert_eq!(c, th.ok);
+        // 차단은 등급이 아니라 fail-closed 상태 — 어떤 등급이든 덮는다.
+        let (m, c, _, _) = trust_icon(TrustLevel::FingerprintVerified, true, &th);
+        assert_eq!(m, crate::icons::trust::X_ALPHA);
+        assert_eq!(c, th.danger);
+    }
+
+    /// 충돌 표식 자리(M3-14) — 등급 아이콘 **왼쪽**에 같은 크기로 나란히.
+    #[test]
+    fn conflict_rect_sits_left_of_trust_icon() {
+        let (w, _) = widget(&[(1, "a")]);
+        let r = w.row_rect(0);
+        let (tir, cir) = w.trust_icon_rects(r, true);
+        let cr = cir.expect("충돌 표식 자리");
+        assert_eq!(cr.w, tir.w);
+        assert_eq!(cr.y, tir.y);
+        assert!(cr.right() < tir.x, "충돌 표식은 등급 왼쪽");
+        assert!(tir.right() <= r.right(), "행 안에 있다");
+    }
+
+    /// 아이콘 hover = 툴팁 상태 성립·이탈 소거(M3-14 — 등급명이 글자에서 사라져 필수).
+    #[test]
+    fn trust_tooltip_arms_on_icon_hover() {
+        let (mut w, mut inv) = widget(&[(1, "a"), (2, "b")]);
+        let (tir, _) = w.trust_icon_rects(w.row_rect(0), false);
+        w.on_event(
+            &InputEvent::MouseMove {
+                x: tir.x + tir.w / 2,
+                y: tir.y + tir.h / 2,
+            },
+            &mut inv,
+        );
+        assert_eq!(w.trust_tip, Some((0, false)), "아이콘 위 = 툴팁");
+        w.on_event(&InputEvent::MouseMove { x: 5, y: tir.y }, &mut inv);
+        assert_eq!(w.trust_tip, None, "아이콘 밖 = 소거");
     }
 }

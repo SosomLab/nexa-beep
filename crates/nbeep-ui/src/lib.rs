@@ -69,6 +69,44 @@ pub mod icons {
         /// 변 크기(px) — 네 자산 공통.
         pub const SIZE: u32 = 96;
     }
+
+    /// 신뢰(인증) 배지 아이콘 — **Lucide `badge-*` 한 가족**(ISC · [docs/14 §13-2]).
+    ///
+    /// 방패(`shield-*`)를 쓰지 않는 이유: `SHIELD_ALPHA`가 이미 격리함이다 —
+    /// 같은 그림에 두 뜻을 얹지 않는다. 물음표는 원본이 14px에서 동그라미로
+    /// 뭉개 **파생본 `-nb`**를 쓴다([docs/14 §13-2-1] — 훅 235° + 수직 스템).
+    /// 14px 실크기 렌더 판독 후 구움(08-15 — `rsvg-convert -w 14` ASCII 실측).
+    pub mod trust {
+        /// 빈 배지 = `Pinned`(정상 기본값 — **흐리게** 그린다).
+        pub const BADGE_ALPHA: &[u8] = include_bytes!("../assets/icon-badge-96.alpha");
+        /// 배지 + 체크 = `FingerprintVerified`.
+        pub const CHECK_ALPHA: &[u8] = include_bytes!("../assets/icon-badge-check-96.alpha");
+        /// 배지 + X = `Blocked`(등급을 덮는다).
+        pub const X_ALPHA: &[u8] = include_bytes!("../assets/icon-badge-x-96.alpha");
+        /// 배지 + 느낌표 = **이름 충돌**(등급 옆 덧붙는 표식 — v1 사칭 유일 신호).
+        pub const ALERT_ALPHA: &[u8] = include_bytes!("../assets/icon-badge-alert-96.alpha");
+        /// 배지 + 플러스 = `FirstContact`(**토스트 전용** — 행에는 남기지 않는다).
+        pub const PLUS_ALPHA: &[u8] = include_bytes!("../assets/icon-badge-plus-96.alpha");
+        /// 배지 + 물음표(파생본) = `Unverified`.
+        pub const QUESTION_ALPHA: &[u8] =
+            include_bytes!("../assets/icon-badge-question-mark-nb-96.alpha");
+        /// 변 크기(px) — 여섯 자산 공통.
+        pub const SIZE: u32 = 96;
+    }
+
+    /// 경로 등급 아이콘(DR-28 — 신뢰 오른쪽 별도 자리 · **경로 축은 코드 미구현이라
+    /// 자리만**). `Local=HOUSE`(**정상 경로 = 그리지 않는다**) · `Manual=GLOBE` ·
+    /// `Relay=WAYPOINTS`(v2 · 12px에서 점이 뭉치는 경향 — 실사용 전 재판독).
+    pub mod path {
+        /// 같은 집(망) 안 = `Local`.
+        pub const HOUSE_ALPHA: &[u8] = include_bytes!("../assets/icon-house-96.alpha");
+        /// 인터넷 경유 = `Manual`(위협 모델이 다르다는 신호).
+        pub const GLOBE_ALPHA: &[u8] = include_bytes!("../assets/icon-globe-96.alpha");
+        /// 경유점 = `Relay`(v2).
+        pub const WAYPOINTS_ALPHA: &[u8] = include_bytes!("../assets/icon-waypoints-96.alpha");
+        /// 변 크기(px) — 세 자산 공통.
+        pub const SIZE: u32 = 96;
+    }
 }
 
 // UI 기반·컨트롤은 별도 라이브러리로 분리(08-14 — `nbeep-ctl` · DR-6/DR-21).

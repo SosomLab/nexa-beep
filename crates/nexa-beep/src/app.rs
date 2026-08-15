@@ -2284,6 +2284,10 @@ impl App {
                     })
                     .flatten();
                 let fav = self.trust.fav(entry.peer);
+                // 신뢰 배지 확장(M3-14) — 차단·이름 충돌은 도메인엔 있었는데
+                // 화면에 안 나오던 상태다(충돌 = v1 사칭 유일 가시 신호).
+                let blocked = self.trust.is_blocked(entry.peer);
+                let conflict = self.trust.name_conflict(entry.peer, &entry.name).is_some();
                 PeerRow {
                     entry,
                     trust,
@@ -2295,6 +2299,8 @@ impl App {
                     unread,
                     last_read,
                     fav,
+                    blocked,
+                    conflict,
                 }
             })
             .collect();

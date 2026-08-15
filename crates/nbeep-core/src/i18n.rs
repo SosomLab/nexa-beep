@@ -229,6 +229,14 @@ pub enum Msg {
     TrustUnverified,
     TrustPinned,
     TrustVerified,
+    // ── 신뢰 배지 확장(M3-14 · 08-15) — 화면에 없던 상태 + 툴팁 한 줄 ──
+    TrustBlocked,
+    TrustConflict,
+    TrustUnverifiedTip,
+    TrustPinnedTip,
+    TrustVerifiedTip,
+    TrustBlockedTip,
+    TrustConflictTip,
     // ── 창 제목 ──
     SettingsTitle,
     // ── 타입어헤드 설정 ──
@@ -779,6 +787,38 @@ impl Msg {
             Msg::TrustUnverified => ["Unverified", "미검증", "未验证", "未検証"],
             Msg::TrustPinned => ["Pinned", "핀 고정", "已固定", "ピン留め"],
             Msg::TrustVerified => ["Verified", "대조 완료", "已核对", "照合済み"],
+            Msg::TrustBlocked => ["Blocked", "차단됨", "已屏蔽", "ブロック済み"],
+            Msg::TrustConflict => ["Name conflict", "이름 충돌", "名称冲突", "名前の衝突"],
+            Msg::TrustUnverifiedTip => [
+                "Key not yet confirmed by a session",
+                "세션으로 아직 확인되지 않은 키",
+                "密钥尚未经会话确认",
+                "セッションで未確認の鍵",
+            ],
+            Msg::TrustPinnedTip => [
+                "Key pinned on first contact (TOFU)",
+                "첫 접촉에서 고정된 키(TOFU)",
+                "首次接触时固定的密钥(TOFU)",
+                "初回接触で固定した鍵(TOFU)",
+            ],
+            Msg::TrustVerifiedTip => [
+                "Fingerprint compared and confirmed",
+                "지문 대조까지 완료된 키",
+                "指纹已核对确认",
+                "指紋照合まで完了した鍵",
+            ],
+            Msg::TrustBlockedTip => [
+                "Sessions from this key are refused",
+                "이 키의 세션 수립을 거부한다",
+                "拒绝此密钥的会话",
+                "この鍵のセッションを拒否する",
+            ],
+            Msg::TrustConflictTip => [
+                "Same name on a different key — possible impersonation",
+                "같은 이름을 다른 키가 쓴다 — 사칭 의심",
+                "不同密钥使用相同名称 — 疑似冒充",
+                "同じ名前を別の鍵が使用 — なりすまし疑い",
+            ],
             Msg::SettingsTitle => ["Settings", "설정", "设置", "設定"],
             Msg::TypeaheadTimeout => [
                 "Type-ahead reset (ms)",
