@@ -508,17 +508,13 @@ impl PeerListWidget {
             .map(|k| k + self.groups.len())
     }
 
-    /// 단일 선택(탐색기 일반 클릭·이동 문법) — 그 행 하나만 선택하고 anchor를 세운다.
-    /// 그룹 행이면 선택은 비워진다(선택은 사람 단위 — 그룹은 캐럿만).
-    /// 무효화는 **바뀐 행만**(캐럿 이동의 국소성 계약 FR-U-13과 한 몸 — 방향키
-    /// 이동마다 전체를 다시 그리면 안 된다).
-    fn select_single(&mut self, i: usize, inv: &mut Invalidations) {
-        let new = self.peer_at(i).map(|r| r.entry.peer);
+    /// 포커스만(일반 클릭·무수식 이동 — 08-15 사용자 확정 2차: "일반 좌클릭은
+    /// Selection 없이 대상만"). 캐럿·anchor를 세우고 **기존 선택은 해제**한다 —
+    /// 파란 선택 표시는 Shift/⌘ 제스처에서만 생긴다. 무효화는 바뀐 행만
+    /// (캐럿 이동 국소성 계약 FR-U-13).
+    fn focus_only(&mut self, i: usize, inv: &mut Invalidations) {
         self.anchor = i;
-        // 이미 그 한 명만 선택돼 있으면(연속 이동의 보통 경우) 변화 없음.
-        if self.selected.len() == usize::from(new.is_some())
-            && new.is_none_or(|p| self.selected.contains(&p))
-        {
+        if self.selected.is_empty() {
             return;
         }
         if self.selected.len() > 4 {
@@ -532,10 +528,6 @@ impl PeerListWidget {
             }
         }
         self.selected.clear();
-        if let Some(p) = new {
-            self.selected.insert(p);
-            inv.push(self.row_rect(i));
-        }
     }
 
     /// anchor..=i 범위로 선택을 **교체**(탐색기 Shift 문법) — 더하기가 아니라
@@ -1091,12 +1083,12 @@ impl Widget for PeerListWidget {
                 // 이동 후 선택 규칙(탐색기 · 08-15 개편):
                 //   ⇧+이동 = anchor부터 캐럿까지 **범위 교체**(반대로 가면 줄어든다)
                 //   ⌘/Ctrl+이동 = 캐럿만(선택·anchor 불변 — Space로 골라 담는 짝)
-                //   무수식 이동 = 캐럿 행 **하나만 선택** + anchor 갱신
+                //   무수식 이동 = 캐럿만 + 기존 선택 해제(선택 표시는 Shift/⌘에서만)
                 if self.caret != caret_before {
                     if shift && !primary {
                         self.select_range_from_anchor(self.caret, inv);
                     } else if !shift && !primary {
-                        self.select_single(self.caret, inv);
+                        self.focus_only(self.caret, inv);
                     }
                 }
             }
@@ -1211,9 +1203,9 @@ impl Widget for PeerListWidget {
                             return;
                         }
                     } else {
-                        // 일반 클릭 = **그 행 하나만 선택**(탐색기 단일 선택 · 08-15 —
-                        // 종전 "해제만"에서 개편) + anchor 갱신.
-                        self.select_single(i, inv);
+                        // 일반 클릭 = **캐럿(대상)만** — 선택 표시는 만들지 않고 기존
+                        // 선택은 해제(사용자 확정 08-15 2차) + anchor 갱신.
+                        self.focus_only(i, inv);
                     }
                     self.move_caret(i, inv);
                     // 일반 클릭 = 드래그 다중 선택의 시작 후보(움직여야 발동).
@@ -2031,9 +2023,9 @@ mod tests {
         assert_eq!(w.selected_peers(), vec![pid(1), pid(3)]);
         w.click_at(2, false, true, &mut inv); // 같은 행 다시 = 해제
         assert_eq!(w.selected_peers(), vec![pid(1)]);
-        // 일반 클릭 = **그 행 하나만 선택**(탐색기 단일 선택 · 08-15 개편) + anchor.
+        // 일반 클릭 = 캐럿(대상)만 — 선택 표시 없음 + 기존 선택 해제 + anchor.
         w.click_at(1, false, false, &mut inv);
-        assert_eq!(w.selected_peers(), vec![pid(2)], "일반 클릭 = 단일 선택");
+        assert!(w.selected_peers().is_empty(), "일반 클릭 = 선택 없음");
         w.click_at(3, true, false, &mut inv); // Shift = anchor(1)..=3 범위 교체
         assert_eq!(w.selected_peers(), vec![pid(2), pid(3), pid(4)]);
         // Shift를 반대로 = 범위가 **줄어든다**(교체 문법 — 종전 더하기와 다르다).
@@ -2076,8 +2068,8 @@ mod tests {
             shift,
             primary,
         };
-        w.on_event(&k(Key::Down, false, false), &mut inv); // 캐럿 1 = 단일 선택
-        assert_eq!(w.selected_peers(), vec![pid(2)]);
+        w.on_event(&k(Key::Down, false, false), &mut inv); // 캐럿 1 — 선택 없음
+        assert!(w.selected_peers().is_empty(), "무수식 이동 = 선택 없음");
         w.on_event(&k(Key::Down, true, false), &mut inv); // ⇧↓ = 1..=2
         w.on_event(&k(Key::Down, true, false), &mut inv); // ⇧↓ = 1..=3
         assert_eq!(w.selected_peers(), vec![pid(2), pid(3), pid(4)]);
@@ -2095,9 +2087,9 @@ mod tests {
         assert_eq!(w.selected_peers(), vec![pid(1), pid(2), pid(3)]);
         w.on_event(&k(Key::Space, false, true), &mut inv); // 다시 = 빼기
         assert_eq!(w.selected_peers(), vec![pid(2), pid(3)]);
-        // 무수식 이동 = 단일로 복귀(탐색기 — 다중 선택이 접힌다).
+        // 무수식 이동 = 선택이 전부 접힌다(캐럿만 남는다 — 08-15 2차 확정).
         w.on_event(&k(Key::Down, false, false), &mut inv);
-        assert_eq!(w.selected_peers().len(), 1);
+        assert!(w.selected_peers().is_empty());
     }
 
     #[test]
