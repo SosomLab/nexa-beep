@@ -910,6 +910,11 @@ enum AlertCtx {
     },
     /// 설정 초기화 확인(08-15 · 고급) — 긍정 = 표시 설정 전부 기본값.
     SettingsReset,
+    /// 구성원 제외 확인(G4 · 08-15) — 긍정 = roster에서 제외·재배포(소유자만).
+    GroupKick {
+        gid: nbeep_core::group::GroupId,
+        peer: PeerId,
+    },
 }
 
 /// 이름 입력 모달의 용도(M5-1) — 제출된 이름을 어디에 쓸지.
@@ -1235,6 +1240,9 @@ struct App {
     alert_ctx: Option<AlertCtx>,
     /// 구성원 모달 열기 대기(08-15 — el은 about_to_wait에 있다 · 내용은 열 때 계산).
     pending_members: Option<nbeep_core::group::GroupId>,
+    /// 열려 있는 구성원 모달의 문맥(G4) — (방, 표시 순서의 구성원, 내가 소유자인가).
+    /// 행 클릭(제외)의 인덱스 해석 근거 — 모달 내용과 같은 순서로 만든다.
+    members_ctx: Option<(nbeep_core::group::GroupId, Vec<PeerId>, bool)>,
     /// 설정 초기화 확인 대기(08-15 · 고급 — 확인 모달은 about_to_wait에서 연다).
     pending_reset: bool,
     /// IME 중재 상태기계(M3-1e G3 — [`crate::ime_gate`]): 조합 게이트·보류-판정·
@@ -3564,9 +3572,24 @@ impl App {
 
     /// 구성원 목록 모달 실제 열기(08-15) — 알림 모달 창 재사용 + 상태 목록 모드.
     fn open_members_alert(&mut self, el: &ActiveEventLoop, gid: nbeep_core::group::GroupId) {
-        let Some((title, lines)) = self.group_members_summary(gid) else {
+        let Some((mut title, lines)) = self.group_members_summary(gid) else {
             return;
         };
+        // G4(08-15) — 소유자면 행 클릭 = 제외 진입. 문맥 = 모달과 같은 순서.
+        let me = self.identity.peer_id();
+        let (order, owned) = self
+            .groups
+            .shared_by_id(gid)
+            .map(|s| {
+                let mut m = s.roster.members.clone();
+                m.sort_by_key(|p| *p != s.roster.owner); // summary와 같은 정렬
+                (m, s.roster.owner == me)
+            })
+            .unwrap_or_default();
+        if owned {
+            title.push_str(" · 행 클릭 = 제외");
+        }
+        self.members_ctx = Some((gid, order, owned));
         let win_h = (110.0 + lines.len() as f64 * 26.0).clamp(170.0, 460.0);
         if let Some((aid, _)) = self.windows.iter().find(|(_, e)| e.role == Role::Alert) {
             let aid = *aid;
@@ -3574,6 +3597,7 @@ impl App {
             if let Some(av) = &mut self.alert_view {
                 av.set_content(&title, "", &mut inv);
                 av.set_status_list(lines, &mut inv);
+                av.set_rows_clickable(owned);
             }
             if let Some(e) = self.windows.get(&aid) {
                 let _ = e
@@ -3607,6 +3631,7 @@ impl App {
         let mut av = nbeep_ui::AlertWidget::new(title, "");
         let mut inv = Invalidations::default();
         av.set_status_list(lines, &mut inv);
+        av.set_rows_clickable(owned);
         self.alert_view = Some(av);
         self.layout_window(id);
         self.request_redraw(id);
@@ -5186,8 +5211,21 @@ impl App {
     }
 
     /// 선택 모달 결과 적용(M5-1g) — 초대 수락 = 방 합류 + 소유자에 통지.
-    fn apply_alert_choice(&mut self, yes: bool, ctx: AlertCtx) {
+    fn apply_alert_choice(&mut self, yes: bool, ctx: AlertCtx, el: &ActiveEventLoop) {
         match ctx {
+            AlertCtx::GroupKick { gid, peer } => {
+                if yes {
+                    // 기존 제외 경로 재사용(소유자 검증·마지막 명부 배포 포함 — G4).
+                    self.handle_group_action(
+                        nbeep_ui::GroupAction::RemoveMembers(gid, vec![peer]),
+                        el,
+                    );
+                    // 편집 후 구성원 모달을 새 명부로 다시 연다(이어서 편집).
+                    self.open_group_members(gid);
+                } else {
+                    self.status = "구성원 제외 취소".into();
+                }
+            }
             AlertCtx::SettingsReset => {
                 if yes {
                     self.status = self.do_reset_settings();
@@ -6031,16 +6069,46 @@ impl App {
                 }
             }
             Role::Alert => {
+                let mut row = None;
+                let mut closed_choice = None;
                 if let Some(av) = &mut self.alert_view {
                     av.on_event(&ev, &mut inv);
+                    row = av.take_row_clicked();
                     let choice = av.take_choice();
                     if av.take_closed() {
                         self.alert_view = None;
                         self.windows.remove(&id);
-                        // 선택 모달(초대 등) — 결과를 문맥으로 라우팅(M5-1g).
-                        if let (Some(yes), Some(ctx)) = (choice, self.alert_ctx.take()) {
-                            self.apply_alert_choice(yes, ctx);
+                        self.members_ctx = None; // 모달 닫힘 = 문맥 소거(G4)
+                        closed_choice = Some(choice);
+                    }
+                }
+                // G4(08-15) — 구성원 행 클릭(소유자) = 제외 확인 모달로 진입.
+                if let Some(i) = row {
+                    if let Some((gid, order, owned)) = self.members_ctx.clone() {
+                        let me = self.identity.peer_id();
+                        if owned {
+                            if let Some(&peer) = order.get(i) {
+                                if peer != me {
+                                    let name = self.peer_title(peer);
+                                    self.open_choice(
+                                        el,
+                                        "구성원 제외",
+                                        &format!(
+                                            "'{name}' 님을 이 그룹에서 제외할까요?\n(제외자에게 마지막 명부가 1회 배포됩니다)"
+                                        ),
+                                        "제외",
+                                        "취소",
+                                        AlertCtx::GroupKick { gid, peer },
+                                    );
+                                }
+                            }
                         }
+                    }
+                }
+                // 선택 모달(초대·제외 등) — 결과를 문맥으로 라우팅(M5-1g).
+                if let Some(choice) = closed_choice {
+                    if let (Some(yes), Some(ctx)) = (choice, self.alert_ctx.take()) {
+                        self.apply_alert_choice(yes, ctx, el);
                     }
                 }
             }
@@ -8175,6 +8243,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         gunread: HashMap::new(),
         alert_ctx: None,
         pending_members: None,
+        members_ctx: None,
         pending_reset: false,
         conversations: HashMap::new(),
         dedup: nbeep_core::DedupIndex::new(),

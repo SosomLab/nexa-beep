@@ -29,6 +29,10 @@ pub struct AlertWidget {
     /// 상태 목록 모드(08-15 — 그룹 구성원): 줄 앞에 **목록과 같은 팔레트**
     /// ([`crate::peer_list::link_color`])의 상태 점을 그린다. 비면 본문 워드랩.
     status_list: Vec<(crate::peer_list::LinkState, String)>,
+    /// 상태 목록 행 클릭 허용(G4 — 소유자의 구성원 편집 진입). 기본 꺼짐.
+    rows_clickable: bool,
+    /// 클릭된 행(1회성 — 호스트 폴 · 모달은 닫지 않는다).
+    row_clicked: Option<usize>,
 }
 
 impl AlertWidget {
@@ -45,7 +49,19 @@ impl AlertWidget {
             closed: false,
             choice: None,
             status_list: Vec::new(),
+            rows_clickable: false,
+            row_clicked: None,
         }
+    }
+
+    /// 상태 목록 행 클릭 허용 지정(G4 — 소유자만 켠다).
+    pub fn set_rows_clickable(&mut self, on: bool) {
+        self.rows_clickable = on;
+    }
+
+    /// 클릭된 행 인덱스(1회성) — 호스트가 문맥(구성원 순서)으로 해석한다.
+    pub fn take_row_clicked(&mut self) -> Option<usize> {
+        self.row_clicked.take()
     }
 
     /// 상태 목록 지정(그룹 구성원 — 08-15). 본문(message) 대신 이 줄들이 그려진다.
@@ -100,6 +116,11 @@ impl AlertWidget {
         (v as f32 * self.scale).round() as i32
     }
 
+    /// 상태 목록 행 높이(페인트·히트 공유 — 어긋나면 클릭이 빗나간다).
+    fn row_h(&self) -> i32 {
+        self.s(24)
+    }
+
     fn relayout(&mut self, inv: &mut Invalidations) {
         let b = self.bounds;
         let (bw, bh) = (self.s(88), self.s(28));
@@ -135,6 +156,28 @@ impl Widget for AlertWidget {
     }
 
     fn on_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
+        // 상태 목록 행 클릭(G4 · 08-15) — 확인 버튼보다 먼저 판정(행이 위에 있다).
+        if self.rows_clickable && !self.status_list.is_empty() {
+            if let InputEvent::MouseDown { x, y, .. } = *ev {
+                let p = crate::geom::Point { x, y };
+                let lh = self.row_h();
+                let top = self.bounds.y + self.s(44);
+                for i in 0..self.status_list.len() {
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+                    let r = Rect::new(
+                        self.bounds.x + self.s(12),
+                        top + lh * i as i32,
+                        self.bounds.w - self.s(24),
+                        lh,
+                    );
+                    if r.contains(p) {
+                        self.row_clicked = Some(i);
+                        inv.push(self.bounds);
+                        return;
+                    }
+                }
+            }
+        }
         if let InputEvent::Key {
             key: Key::Enter, ..
         } = *ev
@@ -182,7 +225,7 @@ impl Widget for AlertWidget {
         // 상태 목록 모드(08-15 — 그룹 구성원): 목록과 같은 팔레트의 점 + 텍스트.
         if !self.status_list.is_empty() {
             ctx.select_font(FontSlot::Base, false);
-            let lh = ctx.text_height() + self.s(8);
+            let lh = self.row_h();
             let dot_d = self.s(10);
             let mut y = b.y + self.s(44);
             let flush_bottom = self.ok.bounds().y - lh;
@@ -312,6 +355,37 @@ mod tests {
         );
         assert!(w.take_closed());
         assert_eq!(w.take_choice(), None);
+    }
+
+    /// G4(08-15) — 상태 목록 행 클릭: 허용 시에만 1회성 보고, 모달은 닫히지 않는다.
+    #[test]
+    fn status_row_click_reports_when_enabled() {
+        use crate::peer_list::LinkState;
+        let mut w = AlertWidget::new("구성원", "");
+        let mut inv = Invalidations::default();
+        w.set_bounds(Rect::new(0, 0, 400, 300), &mut inv);
+        w.set_status_list(
+            vec![
+                (LinkState::Active, "a".into()),
+                (LinkState::Idle, "b".into()),
+            ],
+            &mut inv,
+        );
+        let click = |x, y| InputEvent::MouseDown {
+            x,
+            y,
+            shift: false,
+            primary: false,
+        };
+        // 기본(비허용) — 무보고.
+        w.on_event(&click(50, 44 + 12), &mut inv);
+        assert_eq!(w.take_row_clicked(), None);
+        // 허용 — 둘째 행 클릭 = 인덱스 1 · 모달 유지.
+        w.set_rows_clickable(true);
+        w.on_event(&click(50, 44 + 24 + 12), &mut inv);
+        assert_eq!(w.take_row_clicked(), Some(1));
+        assert_eq!(w.take_row_clicked(), None, "1회성");
+        assert!(!w.take_closed(), "행 클릭은 모달을 닫지 않는다");
     }
 
     #[test]
