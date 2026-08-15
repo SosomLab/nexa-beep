@@ -3760,6 +3760,13 @@ impl App {
             last_seen: ago_label(self.trust.meta(peer).0),
             last_chat: ago_label(self.trust.meta(peer).1),
             border: p.and_then(|p| p.border),
+            // 안전 번호(M3-6 · SAS) — 두 키에서 결정적으로 파생(개시자 무관 정렬)
+            // 이라 세션 없이도 계산된다. 대조는 사람 몫(전화·대면).
+            safety_number: nbeep_crypto::safety_number(self.identity.peer_id(), peer),
+            verified: {
+                use nbeep_core::TrustStore as _;
+                self.trust.level(peer) == nbeep_core::TrustLevel::FingerprintVerified
+            },
         }
     }
 
@@ -6518,11 +6525,27 @@ impl App {
                     }
                 }
             }
-            Role::PeerInfo(_) => {
-                let mut closed = false;
+            Role::PeerInfo(peer) => {
+                let (mut closed, mut verify) = (false, false);
                 if let Some(pv) = &mut self.peer_info_view {
                     pv.on_event(&ev, &mut inv);
                     closed = pv.take_closed();
+                    verify = pv.take_verify();
+                }
+                if verify {
+                    // SAS 대조 완료(M3-6) — 사람이 확인했다는 선언을 신뢰 저장소에
+                    // 승격(FingerprintVerified · write-through 영속). 배지는 파란
+                    // 실(verified)로 — 목록·카드가 즉시 따라간다.
+                    use nbeep_core::TrustStore as _;
+                    self.trust.verify(peer);
+                    self.status = format!("지문 대조 완료 — {} 인증됨", self.peer_title(peer));
+                    let mut rinv = Invalidations::default();
+                    self.refresh_rows(&mut rinv);
+                    self.refresh_peer_info_card(peer); // 버튼 → ✓ 완료 표시로
+                    if let Some(mid) = self.main_id {
+                        self.request_redraw(mid);
+                    }
+                    self.request_redraw(id);
                 }
                 if closed {
                     self.peer_info_view = None;

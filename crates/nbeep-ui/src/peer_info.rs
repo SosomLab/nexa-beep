@@ -3,6 +3,7 @@
 //! 큰 원형 이니셜 아바타 + 기본(발견) 이름/프로필 이름/연락처/이미지 상태/키 지문.
 //! 실제 사진 렌더는 M4-5(imgdec) 후 — 그때까지 "이미지 캐시됨"으로 존재만 알린다.
 
+use crate::controls::Control as _;
 use crate::draw::{DrawCtx, FontSlot};
 use crate::event::{InputEvent, Key};
 use crate::geom::Rect;
@@ -34,6 +35,11 @@ pub struct PeerInfo {
     pub last_chat: String,
     /// 아바타 보더 색(08-15 — 상대가 공개한 값 · 검증 통과분). 큰 프리뷰 = 3px.
     pub border: Option<(u8, u8, u8)>,
+    /// 안전 번호(M3-6 · SAS 60자리 — 5자리×12그룹 공백 구분). 두 사람 화면에 같은
+    /// 값이 나온다(개시자 무관 정렬) — **다른 채널**(전화·대면)로 직접 대조한다.
+    pub safety_number: String,
+    /// 이미 지문 대조 완료(`FingerprintVerified`) — true면 버튼 대신 완료 표시.
+    pub verified: bool,
 }
 
 /// 상대 프로필 카드 위젯.
@@ -43,6 +49,10 @@ pub struct PeerInfoWidget {
     scale: f32,
     info: PeerInfo,
     closed: bool,
+    /// "대조 완료로 표시" 버튼(M3-6) — 이미 검증됐으면 그리지 않는다.
+    verify: crate::controls::Button,
+    /// 대조 완료 요청(1회성 — 호스트가 신뢰 저장소에 승격 반영).
+    verify_req: bool,
 }
 
 impl PeerInfoWidget {
@@ -54,7 +64,14 @@ impl PeerInfoWidget {
             scale: 1.0,
             info,
             closed: false,
+            verify: crate::controls::Button::new("일치 확인 — 대조 완료로 표시"),
+            verify_req: false,
         }
+    }
+
+    /// 대조 완료 요청(1회성) — 호스트가 `verify(peer)` + 영속 + 배지 갱신을 맡는다.
+    pub fn take_verify(&mut self) -> bool {
+        std::mem::take(&mut self.verify_req)
     }
 
     /// 닫기 요청(1회성 · Esc).
@@ -82,10 +99,22 @@ impl Widget for PeerInfoWidget {
 
     fn set_bounds(&mut self, bounds: Rect, inv: &mut Invalidations) {
         self.bounds = bounds;
+        // 대조 버튼(M3-6) — 하단 안내 위 · 중앙(결정적 순간의 단일 표적).
+        let (bw, bh) = (self.s(230), self.s(30));
+        self.verify.set_scale(self.scale);
+        self.verify.set_bounds(
+            Rect::new(
+                bounds.x + (bounds.w - bw) / 2,
+                bounds.bottom() - self.s(66),
+                bw,
+                bh,
+            ),
+            inv,
+        );
         inv.push(bounds);
     }
 
-    fn on_event(&mut self, ev: &InputEvent, _inv: &mut Invalidations) {
+    fn on_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
         if matches!(
             *ev,
             InputEvent::Key {
@@ -94,6 +123,13 @@ impl Widget for PeerInfoWidget {
             }
         ) {
             self.closed = true;
+        }
+        // 대조 버튼(M3-6) — 검증 전에만 산다(완료 후엔 표적 자체가 없다).
+        if !self.info.verified {
+            self.verify.on_event(ev, inv);
+            if self.verify.take_clicked() {
+                self.verify_req = true;
+            }
         }
     }
 
@@ -180,6 +216,30 @@ impl Widget for PeerInfoWidget {
             &format!("키 지문  ·  {}", self.info.fingerprint),
             theme.text_dim,
         );
+        y += ctx.text_height() + self.s(14);
+        // ── 안전 번호(M3-6 · SAS) — 두 화면에 같은 60자리가 뜬다. 고정폭으로
+        //    6그룹×2줄(줄이 흔들리면 눈 대조가 어긋난다 — Mono 슬롯이 그 자리).
+        if !self.info.safety_number.is_empty() {
+            ctx.select_font(FontSlot::Status, false);
+            ctx.text(x, y, b, "안전 번호  ·  전화·대면으로 직접 대조", theme.text);
+            y += ctx.text_height() + self.s(6);
+            ctx.select_font(FontSlot::Mono, false);
+            let groups: Vec<&str> = self.info.safety_number.split(' ').collect();
+            for line in groups.chunks(6) {
+                let t = line.join("  ");
+                let tw = ctx.text_width(&t);
+                ctx.text(b.x + (b.w - tw) / 2, y, b, &t, theme.text);
+                y += ctx.text_height() + self.s(4);
+            }
+            ctx.select_font(FontSlot::Status, false);
+            if self.info.verified {
+                let t = "✓ 지문 대조 완료 — 이 키는 사람이 확인했습니다";
+                let tw = ctx.text_width(t);
+                ctx.text(b.x + (b.w - tw) / 2, y + self.s(6), b, t, theme.ok);
+            } else {
+                self.verify.paint(ctx, theme);
+            }
+        }
         // 하단 안내.
         ctx.text(
             x,
@@ -194,6 +254,55 @@ impl Widget for PeerInfoWidget {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// SAS 대조 버튼(M3-6) — 클릭 = 1회성 요청 · 이미 검증됐으면 표적이 없다.
+    #[test]
+    fn verify_button_requests_once_and_only_when_unverified() {
+        let mut w = PeerInfoWidget::new(PeerInfo {
+            safety_number: "12345 67890".into(),
+            ..PeerInfo::default()
+        });
+        let mut inv = Invalidations::default();
+        w.set_bounds(Rect::new(0, 0, 360, 520), &mut inv);
+        let b = self_btn_bounds(&w);
+        let (cx, cy) = (b.x + b.w / 2, b.y + b.h / 2);
+        w.on_event(
+            &InputEvent::MouseDown {
+                x: cx,
+                y: cy,
+                shift: false,
+                primary: false,
+            },
+            &mut inv,
+        );
+        w.on_event(&InputEvent::MouseUp { x: cx, y: cy }, &mut inv);
+        assert!(w.take_verify(), "클릭 = 대조 완료 요청");
+        assert!(!w.take_verify(), "1회성");
+        // 검증 완료 상태 — 버튼 이벤트가 무시된다.
+        let mut v = PeerInfoWidget::new(PeerInfo {
+            safety_number: "12345 67890".into(),
+            verified: true,
+            ..PeerInfo::default()
+        });
+        v.set_bounds(Rect::new(0, 0, 360, 520), &mut inv);
+        let b2 = self_btn_bounds(&v);
+        let (cx2, cy2) = (b2.x + b2.w / 2, b2.y + b2.h / 2);
+        v.on_event(
+            &InputEvent::MouseDown {
+                x: cx2,
+                y: cy2,
+                shift: false,
+                primary: false,
+            },
+            &mut inv,
+        );
+        v.on_event(&InputEvent::MouseUp { x: cx2, y: cy2 }, &mut inv);
+        assert!(!v.take_verify(), "검증 후엔 요청 없음");
+    }
+
+    fn self_btn_bounds(w: &PeerInfoWidget) -> Rect {
+        w.verify.bounds()
+    }
 
     #[test]
     fn esc_requests_close_once() {
