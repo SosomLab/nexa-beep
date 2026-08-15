@@ -18,8 +18,8 @@
 //! - 아이콘 = RGBA→BGRA 32bpp + `CreateIconIndirect`(알파 존중 · 마스크는 형식상).
 //!   갱신(NIM_MODIFY) 후 이전 HICON은 파괴(누수 방지).
 //!
-//! 비-Windows: 현재 스텁(`spawn` = None). macOS(NSStatusItem)는 mac PC 몫,
-//! Linux(SNI)는 후속 슬라이스로 이 모듈에 붙는다.
+//! Linux = **SNI(StatusNotifierItem · D-Bus) 구현**(아래 `sni` — 실기는 Linux 환경 몫).
+//! macOS(NSStatusItem)는 스텁 — mac PC에서 구현한다(M3-2b).
 
 /// 트레이에서 온 사용자 행동.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,8 +56,12 @@ pub struct TrayHandle {
 #[cfg(windows)]
 pub use win::spawn;
 
-#[cfg(not(windows))]
-/// 비-Windows 스텁 — 트레이 없음(호스트는 `ui.close_to_tray`를 무시해야 한다).
+#[cfg(target_os = "linux")]
+pub use sni::spawn;
+
+#[cfg(not(any(windows, target_os = "linux")))]
+/// 스텁(macOS 등) — 트레이 없음(호스트는 `ui.close_to_tray`를 무시해야 한다).
+/// macOS 메뉴바(NSStatusItem)는 M3-2b — mac PC에서 구현한다.
 pub fn spawn<F: Fn(TrayEvent) + Send + Sync + 'static>(
     _content: TrayContent,
     _on_event: F,
@@ -65,10 +69,311 @@ pub fn spawn<F: Fn(TrayEvent) + Send + Sync + 'static>(
     None
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 impl TrayHandle {
     /// 표시 내용 갱신(스텁 — 도달 불가).
     pub fn update(&self, _content: TrayContent) {}
+}
+
+/// Linux — **StatusNotifierItem(SNI · D-Bus)** 어댑터(M3-2c · 사용자 확정 08-15
+/// "리눅스까지 여기서 구현"). ⚠ **이 PC에서 실기 불가** — 컴파일·CI 크로스 체크로
+/// 검증하고, 데스크톱 실기(KDE/GNOME+확장)는 추후 Linux 환경에서.
+///
+/// - 세션 버스에 `org.kde.StatusNotifierItem`(아이콘·툴팁·Activate=열기)과
+///   `com.canonical.dbusmenu`(`/MenuBar` — 이름 헤더·열기·종료)를 **서빙**하고
+///   `StatusNotifierWatcher`에 등록한다. **워처가 없으면(GNOME 확장 부재 등) None**
+///   (fail-soft — 호스트의 `close_to_tray` 가드가 "트레이 없으면 종전 종료"를 지킨다).
+/// - 아이콘 = `IconPixmap`(ARGB32 **네트워크 바이트 순서** — SNI 규격) · 갱신 =
+///   `NewIcon`/`NewToolTip`/`NewTitle` + dbusmenu `LayoutUpdated` 신호.
+/// - 의존 = `zbus`(MIT · 순수 Rust — 시스템 런타임 요구 없음 · Linux 타깃 한정.
+///   원장 docs/10 §3).
+#[cfg(target_os = "linux")]
+mod sni {
+    use super::{TrayContent, TrayEvent, TrayHandle};
+    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::{Mutex, OnceLock};
+    use zbus::blocking::Connection;
+    use zbus::zvariant::{ObjectPath, OwnedValue, Value};
+
+    static STATE: OnceLock<Mutex<TrayContent>> = OnceLock::new();
+    static ON_EVENT: OnceLock<Box<dyn Fn(TrayEvent) + Send + Sync>> = OnceLock::new();
+    static CONN: OnceLock<Connection> = OnceLock::new();
+    /// dbusmenu 레이아웃 리비전(갱신마다 증가 — 호스트가 재조회).
+    static MENU_REV: AtomicU32 = AtomicU32::new(1);
+
+    /// SNI 픽스맵 — `(w, h, ARGB32)` 목록(규격 시그니처 `a(iiay)`).
+    type Pixmaps = Vec<(i32, i32, Vec<u8>)>;
+    /// SNI 툴팁 — `(아이콘명, 픽스맵, 제목, 본문)`.
+    type ToolTip = (String, Pixmaps, String, String);
+    /// dbusmenu 항목 — `(id, 속성, 자식)`.
+    type MenuNode = (i32, HashMap<String, OwnedValue>, Vec<OwnedValue>);
+
+    const ITEM_PATH: &str = "/StatusNotifierItem";
+    const MENU_PATH: &str = "/MenuBar";
+    /// 메뉴 항목 id — 1 = 이름 헤더(비활성) · 2 = 구분선 · 3 = 열기 · 4 = 종료.
+    const ID_HEADER: i32 = 1;
+    const ID_SEP: i32 = 2;
+    const ID_OPEN: i32 = 3;
+    const ID_QUIT: i32 = 4;
+
+    fn emit(ev: TrayEvent) {
+        if let Some(cb) = ON_EVENT.get() {
+            cb(ev);
+        }
+    }
+
+    fn state() -> TrayContent {
+        STATE
+            .get()
+            .and_then(|m| m.lock().ok().map(|g| g.clone()))
+            .unwrap_or_default()
+    }
+
+    /// RGBA(straight) → SNI `IconPixmap`(ARGB32 · 네트워크 바이트 순서 = [A,R,G,B]).
+    fn argb_pixmap() -> Pixmaps {
+        let c = state();
+        let px = (c.side as usize) * (c.side as usize);
+        if c.side == 0 || c.rgba.len() < px * 4 {
+            return Vec::new();
+        }
+        let mut argb = Vec::with_capacity(px * 4);
+        for p in c.rgba[..px * 4].chunks_exact(4) {
+            argb.extend_from_slice(&[p[3], p[0], p[1], p[2]]);
+        }
+        let side = i32::try_from(c.side).unwrap_or(32);
+        vec![(side, side, argb)]
+    }
+
+    /// `Value` → `OwnedValue`(실패 = None — fd 없는 값이라 실질 불가).
+    fn ov<'a>(v: impl Into<Value<'a>>) -> Option<OwnedValue> {
+        v.into().try_to_owned().ok()
+    }
+
+    /// 메뉴 항목 속성 집합.
+    fn item_props(id: i32) -> HashMap<String, OwnedValue> {
+        let c = state();
+        let mut m = HashMap::new();
+        let mut put = |k: &str, v: Option<OwnedValue>| {
+            if let Some(v) = v {
+                m.insert(k.to_string(), v);
+            }
+        };
+        match id {
+            ID_HEADER => {
+                put("label", ov(c.name));
+                put("enabled", ov(false));
+            }
+            ID_SEP => put("type", ov("separator")),
+            ID_OPEN => put("label", ov(c.open_label)),
+            ID_QUIT => put("label", ov(c.quit_label)),
+            _ => {}
+        }
+        m
+    }
+
+    /// (id, 속성, 자식 없음) 구조 — dbusmenu 항목 `(ia{sv}av)`.
+    fn item_value(id: i32) -> Option<OwnedValue> {
+        ov((id, item_props(id), Vec::<OwnedValue>::new()))
+    }
+
+    /// `org.kde.StatusNotifierItem` — 호스트(트레이 영역)가 읽는다.
+    struct Item;
+
+    #[zbus::interface(name = "org.kde.StatusNotifierItem")]
+    impl Item {
+        #[zbus(property)]
+        fn category(&self) -> String {
+            "ApplicationStatus".into()
+        }
+        #[zbus(property)]
+        fn id(&self) -> String {
+            "nexa-beep".into()
+        }
+        #[zbus(property)]
+        fn title(&self) -> String {
+            state().name
+        }
+        #[zbus(property)]
+        fn status(&self) -> String {
+            "Active".into()
+        }
+        #[zbus(property)]
+        fn icon_name(&self) -> String {
+            String::new() // 픽스맵만 쓴다(테마 아이콘 없음 — 아바타가 곧 아이콘)
+        }
+        #[zbus(property)]
+        fn icon_pixmap(&self) -> Pixmaps {
+            argb_pixmap()
+        }
+        #[zbus(property)]
+        fn tool_tip(&self) -> ToolTip {
+            (String::new(), Vec::new(), state().tooltip, String::new())
+        }
+        #[zbus(property)]
+        fn menu(&self) -> ObjectPath<'static> {
+            ObjectPath::from_static_str_unchecked(MENU_PATH)
+        }
+        #[zbus(property)]
+        fn item_is_menu(&self) -> bool {
+            false // 좌클릭 = Activate(열기) · 메뉴는 우클릭(호스트 관례)
+        }
+        fn activate(&self, _x: i32, _y: i32) {
+            emit(TrayEvent::Open);
+        }
+        fn secondary_activate(&self, _x: i32, _y: i32) {
+            emit(TrayEvent::Open);
+        }
+        fn context_menu(&self, _x: i32, _y: i32) {
+            // 메뉴 렌더는 dbusmenu를 읽는 호스트 몫 — 여기 올 일은 드물다(no-op).
+        }
+        fn scroll(&self, _delta: i32, _orientation: String) {}
+    }
+
+    /// `com.canonical.dbusmenu` — 최소 구현(정적 4항목 · 클릭 이벤트만).
+    struct Menu;
+
+    #[zbus::interface(name = "com.canonical.dbusmenu")]
+    impl Menu {
+        #[zbus(property)]
+        fn version(&self) -> u32 {
+            3
+        }
+        #[zbus(property)]
+        fn status(&self) -> String {
+            "normal".into()
+        }
+        #[zbus(property)]
+        fn text_direction(&self) -> String {
+            "ltr".into()
+        }
+        #[zbus(property)]
+        fn icon_theme_path(&self) -> Vec<String> {
+            Vec::new()
+        }
+
+        /// 레이아웃 — 루트(0) 요청에만 4항목을 자식으로 준다(깊이 1 고정 메뉴).
+        fn get_layout(
+            &self,
+            parent_id: i32,
+            _recursion_depth: i32,
+            _property_names: Vec<String>,
+        ) -> zbus::fdo::Result<(u32, MenuNode)> {
+            let rev = MENU_REV.load(Ordering::Relaxed);
+            let children = if parent_id == 0 {
+                [ID_HEADER, ID_SEP, ID_OPEN, ID_QUIT]
+                    .into_iter()
+                    .filter_map(item_value)
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            Ok((rev, (0, HashMap::new(), children)))
+        }
+
+        fn get_group_properties(
+            &self,
+            ids: Vec<i32>,
+            _property_names: Vec<String>,
+        ) -> Vec<(i32, HashMap<String, OwnedValue>)> {
+            ids.into_iter().map(|id| (id, item_props(id))).collect()
+        }
+
+        fn get_property(&self, id: i32, name: String) -> zbus::fdo::Result<OwnedValue> {
+            item_props(id).remove(&name).ok_or_else(|| {
+                zbus::fdo::Error::InvalidArgs(format!("항목 {id}에 속성 {name} 없음"))
+            })
+        }
+
+        /// 클릭 처리 — 열기/종료만 의미가 있다.
+        fn event(&self, id: i32, event_id: String, _data: Value<'_>, _timestamp: u32) {
+            if event_id == "clicked" {
+                match id {
+                    ID_OPEN => emit(TrayEvent::Open),
+                    ID_QUIT => emit(TrayEvent::Quit),
+                    _ => {}
+                }
+            }
+        }
+
+        fn event_group(&self, events: Vec<(i32, String, OwnedValue, u32)>) -> Vec<i32> {
+            for (id, event_id, _d, _t) in events {
+                if event_id == "clicked" {
+                    match id {
+                        ID_OPEN => emit(TrayEvent::Open),
+                        ID_QUIT => emit(TrayEvent::Quit),
+                        _ => {}
+                    }
+                }
+            }
+            Vec::new()
+        }
+
+        fn about_to_show(&self, _id: i32) -> bool {
+            false
+        }
+
+        fn about_to_show_group(&self, _ids: Vec<i32>) -> (Vec<i32>, Vec<i32>) {
+            (Vec::new(), Vec::new())
+        }
+    }
+
+    /// 세션 버스에 서빙 + 워처 등록. 실패(버스 부재·워처 부재)는 None — fail-soft.
+    pub fn spawn<F: Fn(TrayEvent) + Send + Sync + 'static>(
+        content: TrayContent,
+        on_event: F,
+    ) -> Option<TrayHandle> {
+        if STATE.set(Mutex::new(content)).is_err() {
+            return None; // 이미 떠 있다
+        }
+        let _ = ON_EVENT.set(Box::new(on_event));
+        let conn = Connection::session().ok()?;
+        conn.object_server().at(ITEM_PATH, Item).ok()?;
+        conn.object_server().at(MENU_PATH, Menu).ok()?;
+        let unique = conn.unique_name()?.to_string();
+        // 워처 등록 — 이게 없으면 트레이를 그릴 호스트가 없다(fail-soft: None).
+        conn.call_method(
+            Some("org.kde.StatusNotifierWatcher"),
+            "/StatusNotifierWatcher",
+            Some("org.kde.StatusNotifierWatcher"),
+            "RegisterStatusNotifierItem",
+            &unique,
+        )
+        .ok()?;
+        let _ = CONN.set(conn);
+        Some(TrayHandle { _priv: () })
+    }
+
+    impl TrayHandle {
+        /// 표시 내용 갱신 — 신호(NewIcon 등)로 호스트가 재조회한다.
+        pub fn update(&self, content: TrayContent) {
+            if let Some(s) = STATE.get() {
+                if let Ok(mut g) = s.lock() {
+                    *g = content;
+                }
+            }
+            let rev = MENU_REV.fetch_add(1, Ordering::Relaxed) + 1;
+            if let Some(conn) = CONN.get() {
+                let iface = "org.kde.StatusNotifierItem";
+                for sig in ["NewIcon", "NewToolTip", "NewTitle"] {
+                    let _ = conn.emit_signal(
+                        None::<zbus::names::BusName<'_>>,
+                        ITEM_PATH,
+                        iface,
+                        sig,
+                        &(),
+                    );
+                }
+                let _ = conn.emit_signal(
+                    None::<zbus::names::BusName<'_>>,
+                    MENU_PATH,
+                    "com.canonical.dbusmenu",
+                    "LayoutUpdated",
+                    &(rev, 0i32),
+                );
+            }
+        }
+    }
 }
 
 #[cfg(windows)]

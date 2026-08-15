@@ -7,6 +7,8 @@
 
 ## 2026-08-15
 
+- **M3-2c 🚧 Linux 트레이(SNI)**(main · 사용자 확정 = 폴백 대신 구현): zbus 5로 StatusNotifierItem+dbusmenu 서빙(IconPixmap ARGB32·Activate=열기·Event clicked=열기/종료·워처 부재=fail-soft None) · Linux 타깃 한정 의존 · **크로스 check/clippy 0** — 실기는 Linux 환경 잔여. 상세 [journal/2026-08-15.md](journal/2026-08-15.md).
+
 - **M3-2a ✅ Windows 트레이**(main): `nbeep-plat::tray`(raw extern 의존 0 — 전용 스레드+일반 창(TaskbarCreated 재등록)·Shell_NotifyIcon·CreateIconIndirect·TrackPopupMenu(이름·열기·종료·SetForegroundWindow 선행)) · 아이콘 = **내 아바타 32px 합성**(시드 원+그림+보더 — 깔때기 동기) · `ui.close_to_tray`(CatAdvanced — 순서 결합 테스트 회피) · X=숨김/트레이 복귀. 플라이아웃 실측: 3신원 아이콘 각자 아바타 ✓. 617 green. 상세 [journal/2026-08-15.md](journal/2026-08-15.md).
 
 - **M3-2 트레이 — 요구 확정·OS 분석·세분화**(docs): 아이콘 = 사용자 아바타로 확정되며 종전 🔴 의존 판단 해소(외부 에셋·크레이트 불필요 — Win Shell_NotifyIcon·mac NSStatusItem 직접, 메뉴는 OS 셸 = 네이티브). OS 차이표(콜백 스레딩·메뉴 관례·닫기 관례) + M3-2a(Windows 착수 1순위)~2d(결정지) 세분화. 상세 [journal/2026-08-15.md](journal/2026-08-15.md).
