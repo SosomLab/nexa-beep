@@ -39,22 +39,31 @@ fn main() {
 }
 
 fn run() -> i32 {
-    let max_side: u32 = {
-        let args: Vec<String> = std::env::args().collect();
-        args.iter()
-            .position(|a| a == "--max-side")
-            .and_then(|i| args.get(i + 1))
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(256)
-    };
+    let args: Vec<String> = std::env::args().collect();
+    let max_side: u32 = args
+        .iter()
+        .position(|a| a == "--max-side")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(256);
+    // 출력 = PNG 재인코딩(08-16 · 프로필 와이어 축소본): 원본이 아무리 커도 축소
+    // 결과를 PNG로 되뱉는다 — 본체는 인코더도 링크하지 않는다(png는 여기만).
+    let encode_png = args.iter().any(|a| a == "--encode-png");
 
-    // 입력 — 상한 초과는 손상 취급(더 읽지 않고 실패).
+    // 입력 — 상한 초과는 손상 취급(더 읽지 않고 실패). 인코드(와이어 축소본) 모드는
+    // **원본 폰 사진**(수 MB JPEG)이 입력이라 상한이 넓다(16MiB) — 픽셀 상한(size_ok
+    // 4096² · RGBA 64MiB)은 동일하게 걸리므로 할당 폭탄 방어는 그대로다.
+    let src_max: usize = if encode_png {
+        16 * 1024 * 1024
+    } else {
+        SRC_MAX
+    };
     let mut src = Vec::with_capacity(64 * 1024);
     let n = std::io::stdin()
         .lock()
-        .take(SRC_MAX as u64 + 1)
+        .take(src_max as u64 + 1)
         .read_to_end(&mut src);
-    if n.is_err() || src.is_empty() || src.len() > SRC_MAX {
+    if n.is_err() || src.is_empty() || src.len() > src_max {
         eprintln!("imgdec: 입력 없음/상한 초과");
         return 2;
     }
@@ -83,12 +92,37 @@ fn run() -> i32 {
     };
 
     let (w, h, rgba) = downscale_box(w, h, &rgba, max_side);
+    if encode_png {
+        let Some(buf) = encode_png_rgba(w, h, &rgba) else {
+            return 3;
+        };
+        let mut out = std::io::stdout().lock();
+        return if out.write_all(&buf).is_ok() && out.flush().is_ok() {
+            0
+        } else {
+            3
+        };
+    }
     let mut out = std::io::stdout().lock();
     let ok = out.write_all(b"NIMG").is_ok()
         && out.write_all(&w.to_le_bytes()).is_ok()
         && out.write_all(&h.to_le_bytes()).is_ok()
         && out.write_all(&rgba).is_ok();
     i32::from(!ok)
+}
+
+/// 축소 픽셀 → PNG 인코딩(`--encode-png` — 프로필 와이어 축소본 · 08-16).
+/// 인코딩 입력은 방금 우리가 만든 픽셀(신뢰 데이터)이라 잠금 안에서 안전하다.
+fn encode_png_rgba(w: u32, h: u32, rgba: &[u8]) -> Option<Vec<u8>> {
+    let mut buf = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut buf, w, h);
+        enc.set_color(png::ColorType::Rgba);
+        enc.set_depth(png::BitDepth::Eight);
+        let mut wr = enc.write_header().ok()?;
+        wr.write_image_data(rgba).ok()?;
+    }
+    Some(buf)
 }
 
 /// 픽셀 상한 검사 — 파서가 크기를 주장하는 시점(할당 전)에 자른다.
@@ -231,6 +265,25 @@ mod tests {
     fn oversized_still_rejected() {
         assert!(!size_ok(4097, 4096)); // 픽셀 상한 초과
         assert!(!size_ok(8193, 1)); // 변 상한 초과
+    }
+
+    /// 인코드 왕복(08-16 · 와이어 축소본) — 구운 PNG를 우리 디코더가 도로 읽어
+    /// 같은 크기·같은 픽셀이 나와야 한다. 축소본이 256KiB 상한 안인 것도 함께
+    /// (256px 사진 축소본이 상한을 넘으면 파이프라인 전체가 무의미하다).
+    #[test]
+    fn encode_png_roundtrips_through_our_decoder() {
+        let (w, h) = (256u32, 256u32);
+        let rgba: Vec<u8> = (0..w * h * 4).map(|i| (i % 251) as u8).collect();
+        let png = encode_png_rgba(w, h, &rgba).expect("인코드");
+        assert!(png.starts_with(&[0x89, b'P', b'N', b'G']));
+        assert!(
+            png.len() <= 256 * 1024,
+            "축소본이 와이어 상한 초과: {}",
+            png.len()
+        );
+        let (dw, dh, back) = decode_png(&png).expect("왕복 디코드");
+        assert_eq!((dw, dh), (w, h));
+        assert_eq!(back, rgba, "픽셀 비트 동일");
         assert!(!size_ok(0, 100)); // 퇴화
     }
 }

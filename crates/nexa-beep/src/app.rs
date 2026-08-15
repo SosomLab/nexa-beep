@@ -170,6 +170,10 @@ enum AppEvent {
     },
     /// 트레이 사용자 행동(M3-2a — 트레이 스레드 → 메인. 좌클릭/메뉴 열기·종료).
     Tray(nbeep_plat::tray::TrayEvent),
+    /// 프로필 사진 **와이어 축소본** 생성 완료(워커 → 메인 · 08-16). `ok`면
+    /// `me.wire.png`가 준비된 것 — Full push로 상대에게 실사진을 전파한다.
+    /// 실패는 **소리 내어** 알린다(조용한 생략 금지 — 사용자 확정).
+    WireAvatar { ok: bool },
     /// keytap 관측(G1 · H-26 — mac): 무수식 ASCII keydown이 모니터에 잡혔다.
     /// winit 도달 여부와 대조해 "삼켜진 1byte"만 보충 주입한다(판정은 틱에서).
     ///
@@ -1026,7 +1030,7 @@ enum PickerPurpose {
 
 /// 대화창 입력을 명령으로 가른 결과(08-15).
 enum CmdOutcome {
-    /// 보낼 것이 남았다(명령이 아니었거나 escape로 벗겨진 본문).
+    /// 보낼 것이 남았다(명령이 아니었다 — 첫 글자가 `/`가 아닌 입력 · 08-16 규칙).
     Send(Option<nbeep_core::SafeText>),
     /// 명령으로 처리했다 — **상대에게 보내지 않는다**.
     Handled,
@@ -2693,18 +2697,28 @@ impl App {
         let phone = (on("profile.share.phone"))
             .then(|| self.settings.get("profile.phone").to_string())
             .filter(|s| !s.is_empty());
-        // 이미지 — 기본정보 공개 + 파일 존재 + 상한 이내(초과는 조용히 생략 · 텍스트는 나감).
+        // 이미지 — 기본정보 공개 + 파일 존재 + 상한 이내. ★ 원본이 상한(256KiB)을
+        // 넘으면 imgdec가 구운 **와이어 축소본**(me.wire.png)이 대신 나간다(08-16 —
+        // 종전엔 초과가 조용히 생략돼 "본인은 사진, 상대는 옛 내장 그림"이 됐다).
         // Info scope는 바이트를 읽지 않는다(존재·크기만 — image_keep 판정용 · M3-21).
         let image_path = share_basic
             .then(|| self.settings.get("profile.image_path").to_string())
             .filter(|p| !p.is_empty());
+        let wire_file = self.wire_avatar_path();
+        let eff_path = image_path.as_ref().map(|orig| {
+            if wire_file.is_file() {
+                wire_file.to_string_lossy().into_owned()
+            } else {
+                orig.clone()
+            }
+        });
         let image = (scope == ProfileScope::Full)
-            .then(|| image_path.as_ref().and_then(|p| std::fs::read(p).ok()))
+            .then(|| eff_path.as_ref().and_then(|p| std::fs::read(p).ok()))
             .flatten()
             .filter(|b| !b.is_empty() && b.len() <= PROFILE_IMAGE_MAX);
         let image_shared = match scope {
             ProfileScope::Full => image.is_some(),
-            ProfileScope::Info => image_path
+            ProfileScope::Info => eff_path
                 .as_ref()
                 .and_then(|p| std::fs::metadata(p).ok())
                 .is_some_and(|m| {
@@ -2715,9 +2729,11 @@ impl App {
         let image_len = image.as_ref().map_or(0u32, |b| {
             u32::try_from(b.len()).unwrap_or(0) // MAX 256KiB라 실패 불가
         });
-        // 내장 아바타 키(08-14) — 기본정보 공개 + 사진 미사용 + 내장 선택일 때만.
-        // 키만 나른다(상대도 같은 자산 내장 — 그림 바이트를 실어 나를 이유가 없다).
-        let avatar = (share_basic && !image_shared)
+        // 내장 아바타 키 — ★ 사진과 **동시에** 싣는다(08-16 확정: 두 필드 동시
+        // 송수신). 종전 `!image_shared` 조건은 사진이 어떤 이유로든 빠지는 순간
+        // (상한 초과·읽기 실패) 옛 내장 키를 광고하는 통로였다. 수신측은 사진
+        // 우선·키는 폴백으로 쓴다(PeerProfile 핸들러의 짝 규칙).
+        let avatar = share_basic
             .then(|| {
                 nbeep_core::avatar::AvatarChoice::parse(self.settings.get("profile.avatar"))
                     .builtin_key()
@@ -3846,7 +3862,8 @@ impl App {
             return CmdOutcome::Send(None);
         };
         match parse(text.as_str()) {
-            // escape(`//…`)로 벗겨진 본문이 원본과 다르면 그 본문을 보낸다.
+            // parse가 앞뒤 공백을 떨어낸 본문이 원본과 다르면 그 본문을 보낸다.
+            // (escape(`//…`)는 08-16 2차 확정으로 폐지 — `/` 시작은 전부 비전송.)
             Parsed::Text(t) => {
                 if t == text.as_str() {
                     return CmdOutcome::Send(Some(text.clone()));
@@ -4337,6 +4354,44 @@ impl App {
     /// 갱신·철회는 기존 규칙 그대로 — 세션이 서면 자동 프리페치가 최신으로 덮는다.
     /// **부팅 자동 연결은 하지 않는다**: 핀 N개 전원 아웃바운드는 전원이 켤 때마다
     /// 서로를 부르는 부팅 풀메시(N² 상시 세션)가 된다(13 §12-1 — 캐시로 충분).
+    /// 내 프로필 사진의 와이어 축소본 경로(`data/profiles/me.wire.png` · 08-16).
+    fn wire_avatar_path(&self) -> std::path::PathBuf {
+        self.data_dir.join("profiles").join("me.wire.png")
+    }
+
+    /// 원본 사진이 와이어 상한(256KiB)을 넘으면 **워커에서** imgdec 축소본을 굽는다
+    /// (08-16 — 자식 프로세스 왕복은 메인에서 돌리지 않는다 · M4-5 결). 완료는
+    /// [`AppEvent::WireAvatar`]로 돌아와 Full push(실사진 전파)로 이어진다.
+    /// 상한 이내 원본·이미 준비된 축소본은 아무것도 하지 않는다.
+    fn ensure_wire_avatar(&mut self) {
+        use nbeep_core::PROFILE_IMAGE_MAX;
+        let path = self.settings.get("profile.image_path").to_string();
+        if path.is_empty() {
+            return;
+        }
+        let over = std::fs::metadata(&path)
+            .is_ok_and(|m| usize::try_from(m.len()).unwrap_or(usize::MAX) > PROFILE_IMAGE_MAX);
+        if !over {
+            return; // 원본이 그대로 실려 나간다 — 축소본 불필요
+        }
+        let wire = self.wire_avatar_path();
+        if wire.is_file() {
+            return; // 이미 준비됨(부팅 경로 재진입)
+        }
+        let proxy = self.proxy.clone();
+        std::thread::spawn(move || {
+            let ok = std::fs::read(&path)
+                .ok()
+                .and_then(|b| crate::imgdec::wire_png_from_bytes(&b, 256))
+                .and_then(|png| {
+                    std::fs::create_dir_all(wire.parent()?).ok()?;
+                    std::fs::write(&wire, png).ok()
+                })
+                .is_some();
+            let _ = proxy.send_event(AppEvent::WireAvatar { ok });
+        });
+    }
+
     fn restore_cached_profiles(&mut self) {
         let dir = self.data_dir.join("profiles");
         for rec in self.trust.export() {
@@ -4821,6 +4876,9 @@ impl App {
                 // 사진 경로(08-14) — 스와치 선택이 비우면 툴바 버튼도 즉시 따라간다.
                 // 값이 차면(최근 캐러셀 선택 등) 그 사진을 디코드해 미리보기·툴바 갱신.
                 "profile.image_path" => {
+                    // 경로가 바뀌면 옛 와이어 축소본은 무효(NULL 엄격 — 08-16).
+                    // 비움(철회)도 같은 규칙: 축소본이 남으면 철회가 안 나간다.
+                    let _ = std::fs::remove_file(self.wire_avatar_path());
                     if value.is_empty() {
                         self.my_avatar = None;
                     } else {
@@ -4830,6 +4888,8 @@ impl App {
                                 .ok()
                                 .and_then(|b| crate::imgdec::avatar_raw_from_bytes(&b, 256))
                         });
+                        // 상한 초과 원본이면 워커가 축소본을 굽고 완료 시 Full 재전파.
+                        self.ensure_wire_avatar();
                     }
                     self.refresh_toolbar_avatar();
                 }
@@ -7563,9 +7623,15 @@ impl ApplicationHandler<AppEvent> for App {
                     // 안 지우면 재시작 복원이 옛 사진을 되살린다(철회 대칭).
                     let _ = std::fs::remove_file(&img_path);
                 }
-                if avatar.is_none() {
-                    // 승계(M3-21) — 유지 마커가 왔고 새 아바타 재료가 없으면 이전 그림.
-                    if let Some((_, prev)) = &kept {
+                if let Some((kept_file, prev)) = &kept {
+                    if kept_file.is_some() && prev.is_some() {
+                        // ★ 사진 우선(08-16 확정 — 두 필드 동시 수신): 유지 마커가
+                        // 왔고 공유 사진이 살아 있으면 그 그림을 승계한다. 함께 실려
+                        // 온 내장 키는 폴백일 뿐 — 사진을 덮으면 "본인은 사진,
+                        // 상대는 내장 그림" 불일치가 재발한다.
+                        avatar = prev.clone();
+                    } else if avatar.is_none() {
+                        // 종전 승계(M3-21) — 새 아바타 재료가 없으면 이전 그림.
                         avatar = prev.clone();
                     }
                 }
@@ -7703,6 +7769,23 @@ impl ApplicationHandler<AppEvent> for App {
                 }
                 nbeep_plat::tray::TrayEvent::Quit => el.exit(),
             },
+            AppEvent::WireAvatar { ok } => {
+                if ok {
+                    // 축소본 준비 — 연결된 전 세션에 실사진(Full) 재전파. 변경 직후의
+                    // 깔때기 push는 축소본이 없어 키만 나갔다(자기 치유 순서).
+                    self.push_profile(ProfileScope::Full);
+                    self.status = "프로필 사진 축소본 준비 — 연결된 상대에게 전파".into();
+                } else {
+                    // ★ 조용한 생략 금지(08-16 사용자 확정) — 초과 사진이 안 나가면
+                    // 소리 내어 알린다. 상대는 함께 실린 내장 키/이니셜을 본다.
+                    self.status =
+                        "⚠ 사진이 256KiB 초과인데 축소 생성에 실패해 상대에게 전송되지 않습니다"
+                            .into();
+                }
+                if let Some(id) = self.main_id {
+                    self.request_redraw(id);
+                }
+            }
             AppEvent::Decoded { target, image } => {
                 // 워커 격리 디코드 복귀(M4-5 · 08-13) — 메인은 감싸고, 꽂고, 다시 그린다.
                 let icon = image.map(|(w, h, rgba)| {
@@ -9161,6 +9244,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
     app.apply_boot_settings(); // 영속 설정 → 파생 런타임 상태(테마·정책 등 · M3-15)
     app.promote_local_groups(); // 구버전 로컬(동보) 그룹 → 그룹 대화(G4 마이그레이션)
     app.restore_cached_profiles(); // 핀 상대의 캐시 프로필·목록 행 복원(08-14)
+    app.ensure_wire_avatar(); // 상한 초과 사진의 와이어 축소본 보장(08-16 — 기존 사용자 자기 치유)
     event_loop.run_app(&mut app).unwrap();
 }
 

@@ -62,6 +62,54 @@ pub(crate) fn decode_isolated(bytes: &[u8], max_side: u32) -> Option<(u32, u32, 
     (out.len() == 12 + need).then(|| (w, h, out[12..].to_vec()))
 }
 
+/// 원본 사진 → **와이어용 축소 PNG**(08-16 · 프로필 사진 상한 대응).
+///
+/// 원본이 `PROFILE_IMAGE_MAX`(256KiB)를 넘으면 이 축소본(`me.wire.png`)이 대신
+/// 실려 나간다 — 종전에는 초과 사진이 **조용히 생략**되고 내장 아바타 키가 광고돼
+/// "본인은 사진, 상대는 옛 내장 그림"이 됐다. 인코딩도 imgdec 몫(본체는 이미지
+/// 인코더도 링크하지 않는다 — R-5 결). 실패는 None — 호출측이 **소리 내어** 알린다.
+pub(crate) fn wire_png_from_bytes(bytes: &[u8], max_side: u32) -> Option<Vec<u8>> {
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?;
+    let child_path = dir.join(if cfg!(windows) {
+        "nbeep-imgdec.exe"
+    } else {
+        "nbeep-imgdec"
+    });
+    if !child_path.exists() {
+        return None;
+    }
+    let mut child = Command::new(child_path)
+        .args(["--max-side", &max_side.to_string(), "--encode-png"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    child.stdin.take()?.write_all(bytes).ok()?;
+    let mut stdout = child.stdout.take()?;
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut out = Vec::new();
+        let ok = stdout.read_to_end(&mut out).is_ok();
+        let _ = tx.send(ok.then_some(out));
+    });
+    let out = match rx.recv_timeout(TIMEOUT) {
+        Ok(Some(out)) => out,
+        _ => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return None;
+        }
+    };
+    let status = child.wait().ok()?;
+    // PNG 서명 + 와이어 상한 재확인 — 축소했는데도 초과면 만들 이유가 없던 것.
+    (status.success()
+        && out.starts_with(&[0x89, b'P', b'N', b'G'])
+        && out.len() <= nbeep_core::PROFILE_IMAGE_MAX)
+        .then_some(out)
+}
+
 /// 원형 마스크(아바타) — 원 밖 알파 0 · 가장자리 1px AA. 정사각이 아니면 중앙 원.
 pub(crate) fn circle_mask(w: u32, h: u32, rgba: &mut [u8]) {
     let (cx, cy) = (f32::from(u16::try_from(w).unwrap_or(u16::MAX)) / 2.0, {
