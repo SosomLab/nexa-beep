@@ -75,12 +75,18 @@
    어댑터 = no-op), 그 외 OS는 `nbeep_plat::notify::notify` 스폰. 반환값은 버린다
    (**fail-soft** — 알림 실패가 수신 처리를 막으면 안 된다).
 
-**클릭 경로**(Windows만, v1):
+**클릭 경로**(Windows 풍선 + mac 번들 UN · 08-15 2차 — "클릭 = 해당 대화까지"):
 
-1. 사용자가 풍선 클릭 → 트레이 창 프로시저에 `NIN_BALLOONUSERCLICK`.
-2. `TrayEvent::Open` → `EventLoopProxy` → 메인 `AppEvent::Tray(Open)` →
-   메인 창 `set_visible(true)` + `focus_window()` — **트레이 좌클릭과 완전히 같은
-   경로**(새 코드 0 · 대화창 자동 열림은 하지 않는다 — "여는 것은 언제나 사용자").
+1. 알림 발신 시 **불투명 대상 토큰**(= 알림 키 `p:…`/`g:…`)을 실어 보낸다 —
+   mac = UN 요청 identifier(`"{일련}|{토큰}"` · `parse_target`과 한 쌍) ·
+   Windows = 풍선 표시 시 `LAST_TARGET`(아이콘당 풍선 1개라 마지막이 곧 화면).
+2. 클릭 → mac delegate `didReceive`가 identifier에서 토큰 파싱 / Windows
+   `NIN_BALLOONUSERCLICK`이 `LAST_TARGET` 회수 → `TrayEvent::OpenTarget(토큰)`.
+3. 메인: 창 표시+포커스 후 **`notify_targets` 맵으로만 토큰 해석**(OS에는 불투명 —
+   봉투 원리) → `Peer` = `activate`(단일 모드 = 메인 안 그 대화로 전환 · 분리 모드 =
+   대화 창 열어 마지막 스레드 — DR-26이 이력 유지) · `Group` = `open_group_thread`.
+   맵 미스(재시작 등) = 메인 표시만(안전 폴백). 알림 클릭은 **명시적 사용자 행위**라
+   "자동 열림 금지" 규칙과 충돌하지 않는다.
 
 ## 4. 설정
 
