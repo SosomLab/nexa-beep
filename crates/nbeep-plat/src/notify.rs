@@ -22,6 +22,10 @@ pub struct Note<'a> {
     pub body: &'a str,
     /// 소리 억제(DR-25 — 미검증 발신자).
     pub silent: bool,
+    /// 클릭 시 되돌아올 **불투명 대상 토큰**(호스트만 해석 · 빈 = 대상 없음).
+    /// mac 정식(UN) 경로에서만 왕복된다 — 요청 identifier에 실어 보내고 delegate
+    /// 응답에서 파싱해 `init`의 콜백 인자로 돌려준다.
+    pub target: &'a str,
 }
 
 /// 알림을 띄운다 — 성공 여부(false = 이 OS 경로 없음/실패 · fail-soft).
@@ -35,8 +39,20 @@ pub fn notify(n: &Note<'_>) -> bool {
 /// **번들(.app) 실행이면** `UNUserNotificationCenter`를 켠다: 권한 요청 + 클릭
 /// delegate(`on_open` = 알림 클릭 → 앱 열기). **메인 스레드에서, 부팅 때 1회** 호출.
 /// 비번들(포터블·개발 실행)은 false — [`notify`]가 osascript 폴백을 그대로 쓴다.
-pub fn init<F: Fn() + Send + Sync + 'static>(on_open: F) -> bool {
+/// 콜백 인자 = 클릭된 알림의 대상 토큰(`Note::target` 왕복 · None = 대상 없음).
+pub fn init<F: Fn(Option<String>) + Send + Sync + 'static>(on_open: F) -> bool {
     imp::init(Box::new(on_open))
+}
+
+/// UN 요청 identifier에서 대상 토큰을 파싱(형식 = `"{일련}|{토큰}"` · 토큰 없으면 None).
+/// 일련 접두는 identifier 고유성 몫이고, 토큰은 그대로 돌려준다(불투명).
+#[cfg(any(target_os = "macos", test))]
+fn parse_target(identifier: &str) -> Option<String> {
+    identifier
+        .split_once('|')
+        .map(|(_, t)| t)
+        .filter(|t| !t.is_empty())
+        .map(str::to_string)
 }
 
 /// AppleScript 문자열 이스케이프(mac) — 역슬래시·따옴표만이 특수문자다.
@@ -70,8 +86,8 @@ mod imp {
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::OnceLock;
 
-    /// 클릭 콜백(M3-8b — 알림 클릭 = 앱 열기). delegate 응답 스레드는 임의라 Send+Sync.
-    static ON_OPEN: OnceLock<Box<dyn Fn() + Send + Sync>> = OnceLock::new();
+    /// 클릭 콜백(M3-8b — 알림 클릭 = 앱 열기 + 대상 대화). 응답 스레드 임의 = Send+Sync.
+    static ON_OPEN: OnceLock<Box<dyn Fn(Option<String>) + Send + Sync>> = OnceLock::new();
     /// UN 경로 활성(번들 실행 + 초기화 완료) — false면 osascript 폴백.
     static UN_READY: AtomicBool = AtomicBool::new(false);
     /// 요청 식별자 일련(같은 id는 이전 알림을 교체한다 — 고유하게).
@@ -105,18 +121,23 @@ mod imp {
             unsafe fn did_receive(
                 &self,
                 _center: &UNUserNotificationCenter,
-                _response: &UNNotificationResponse,
+                response: &UNNotificationResponse,
                 completion: &block2::Block<dyn Fn()>,
             ) {
+                // 어느 알림인지 = 요청 identifier(우리가 대상 토큰을 실어 뒀다).
+                let target = {
+                    let id = response.notification().request().identifier();
+                    super::parse_target(&id.to_string())
+                };
                 if let Some(f) = ON_OPEN.get() {
-                    f();
+                    f(target);
                 }
                 completion.call(());
             }
         }
     );
 
-    pub(super) fn init(on_open: Box<dyn Fn() + Send + Sync>) -> bool {
+    pub(super) fn init(on_open: Box<dyn Fn(Option<String>) + Send + Sync>) -> bool {
         // 번들 판정 — UN은 번들 신원(Info.plist bundle id)이 없으면 못 산다.
         // SAFETY: mainBundle 조회는 읽기 전용.
         let bundled = unsafe { NSBundle::mainBundle().bundleIdentifier().is_some() };
@@ -156,7 +177,8 @@ mod imp {
                 } else {
                     content.setSound(Some(&UNNotificationSound::defaultSound()));
                 }
-                let id = format!("nbeep-{}", SEQ.fetch_add(1, Ordering::Relaxed));
+                // identifier = 일련 + 대상 토큰(클릭 왕복 — parse_target과 한 쌍).
+                let id = format!("{}|{}", SEQ.fetch_add(1, Ordering::Relaxed), n.target);
                 let req = UNNotificationRequest::requestWithIdentifier_content_trigger(
                     &NSString::from_str(&id),
                     &content,
@@ -195,7 +217,7 @@ mod imp {
 mod imp {
     use super::Note;
 
-    pub(super) fn init(_on_open: Box<dyn Fn() + Send + Sync>) -> bool {
+    pub(super) fn init(_on_open: Box<dyn Fn(Option<String>) + Send + Sync>) -> bool {
         false // 정식 초기화는 macOS 의미 — Linux는 notify-send 그대로
     }
 
@@ -219,7 +241,7 @@ mod imp {
 mod imp {
     use super::Note;
 
-    pub(super) fn init(_on_open: Box<dyn Fn() + Send + Sync>) -> bool {
+    pub(super) fn init(_on_open: Box<dyn Fn(Option<String>) + Send + Sync>) -> bool {
         false // Windows = 트레이 풍선(클릭 포함) · 기타 OS = 없음
     }
 
@@ -230,6 +252,19 @@ mod imp {
 
 #[cfg(test)]
 mod tests {
+    /// 대상 토큰 왕복(M3-8 클릭→대화) — identifier 형식과 파서가 한 쌍이다.
+    #[test]
+    fn target_roundtrips_through_identifier() {
+        assert_eq!(
+            super::parse_target("7|p:abcd1234"),
+            Some("p:abcd1234".into())
+        );
+        assert_eq!(super::parse_target("7|"), None, "빈 토큰 = 대상 없음");
+        assert_eq!(super::parse_target("legacy-id"), None, "구형식 관용");
+        // 토큰 안의 '|'도 살아남는다(첫 구분자만 뗀다 — 불투명 토큰 계약).
+        assert_eq!(super::parse_target("1|g:a|b"), Some("g:a|b".into()));
+    }
+
     #[test]
     fn applescript_escaping_neutralizes_quotes_and_backslashes() {
         // 수신 본문이 스크립트를 탈출하면 임의 osascript 실행이 된다 — 필수 회귀.

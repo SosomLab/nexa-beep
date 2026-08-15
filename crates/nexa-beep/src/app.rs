@@ -45,6 +45,15 @@ fn build_menus() -> Vec<MenuDef> {
     ]
 }
 
+/// 알림 클릭의 대상(M3-8 · 08-15) — 클릭 = 메인 표시 + 이 대화 열기.
+#[derive(Clone, Copy)]
+enum NotifyTarget {
+    /// 1:1 대화(파일 오퍼 포함 — 승인 흐름도 그 대화 문맥이다).
+    Peer(PeerId),
+    /// 그룹 방.
+    Group(nbeep_core::group::GroupId),
+}
+
 /// 창 모드(DR-26). 설정 연동(`chat.window_mode`)은 M3-11.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WindowMode {
@@ -1215,6 +1224,9 @@ struct App {
     unread: HashMap<PeerId, u32>,
     /// 알림 스로틀(M3-8) — 키(상대/방)별 마지막 알림 시각 ms(3초 안 중복 억제).
     last_notify: HashMap<String, u64>,
+    /// 알림 대상 맵(08-15 — 클릭 = 해당 대화 열기): 토큰(=알림 키) → 대상.
+    /// 토큰은 OS를 불투명하게 왕복하고, 해석은 여기서만 한다(봉투 원리).
+    notify_targets: HashMap<String, NotifyTarget>,
     /// 그 대화를 마지막으로 확인한 시각(뷰가 열려 있던 마지막 순간 — 목록에 표시).
     last_read: HashMap<PeerId, nbeep_ui::WallTime>,
     /// 자동 재연결 스케줄(사용자 확정 08-13 ⓑ) — `(백오프 단계, 다음 시도 at_ms)`.
@@ -3351,7 +3363,14 @@ impl App {
     /// 포커스가 아님**(포커스 중엔 배지·제목이 맡는다) · 키별 3초 스로틀.
     /// `silent` = DR-25 신뢰 게이트(미검증 발신자 = 소리 없음). 내용 정책은
     /// 호출자가 끝낸다(미리보기 무해화·파일명 금지 — FR-S-41).
-    fn notify_user(&mut self, key: &str, title: &str, body: &str, silent: bool) {
+    fn notify_user(
+        &mut self,
+        key: &str,
+        title: &str,
+        body: &str,
+        silent: bool,
+        target: NotifyTarget,
+    ) {
         if self.settings.get("notify.enabled") != "on" {
             return;
         }
@@ -3363,16 +3382,20 @@ impl App {
             return;
         }
         self.last_notify.insert(key.to_string(), now);
+        // 클릭 왕복(08-15 — 알림 클릭 = 해당 대화): 토큰(=키)을 OS에 실어 보내고
+        // 되돌아오면 이 맵으로만 해석한다(OS에는 불투명 — 봉투 원리).
+        self.notify_targets.insert(key.to_string(), target);
         // Windows = 트레이 풍선(있을 때) · 그 외/트레이 부재 = plat 어댑터(fail-soft).
         #[cfg(windows)]
         if let Some(t) = &self.tray {
-            t.notify(title, body, silent);
+            t.notify(title, body, silent, key);
             return;
         }
         let _ = nbeep_plat::notify::notify(&nbeep_plat::notify::Note {
             title,
             body,
             silent,
+            target: key,
         });
     }
 
@@ -5788,7 +5811,13 @@ impl App {
                     use nbeep_core::TrustStore as _;
                     let silent = self.trust.level(peer) == nbeep_core::TrustLevel::Unverified;
                     let body = self.notify_body(&text);
-                    self.notify_user(&format!("g:{gid:?}"), &room, &body, silent);
+                    self.notify_user(
+                        &format!("g:{gid:?}"),
+                        &room,
+                        &body,
+                        silent,
+                        NotifyTarget::Group(gid),
+                    );
                 }
                 if self.group_visible(gid) {
                     // 보고 있는 방 — 재도만.
@@ -6922,7 +6951,13 @@ impl ApplicationHandler<AppEvent> for App {
                 use nbeep_core::TrustStore as _;
                 let silent = self.trust.level(peer) == nbeep_core::TrustLevel::Unverified;
                 let title = self.peer_title(peer);
-                self.notify_user(&format!("p:{}", peer.short()), &title, &notify_body, silent);
+                self.notify_user(
+                    &format!("p:{}", peer.short()),
+                    &title,
+                    &notify_body,
+                    silent,
+                    NotifyTarget::Peer(peer),
+                );
                 // 이 대화가 보이는 창을 다시 그린다.
                 self.redraw_conversation(peer);
             }
@@ -6958,7 +6993,13 @@ impl ApplicationHandler<AppEvent> for App {
                                 self.trust.level(peer) == nbeep_core::TrustLevel::Unverified;
                             let title = self.peer_title(peer);
                             let body = nbeep_core::t(nbeep_core::Msg::NotifyFileOffer).to_string();
-                            self.notify_user(&format!("x:{}", peer.short()), &title, &body, silent);
+                            self.notify_user(
+                                &format!("x:{}", peer.short()),
+                                &title,
+                                &body,
+                                silent,
+                                NotifyTarget::Peer(peer),
+                            );
                         }
                         // 스레드에 수신 항목(승인 대기) — 거절하면 이 항목이 실패로 남는다.
                         self.push_xfer_line(peer, false, &name, size);
@@ -7463,6 +7504,21 @@ impl ApplicationHandler<AppEvent> for App {
                     if let Some(e) = self.main_id.and_then(|m| self.windows.get(&m)) {
                         e.window.set_visible(true);
                         e.window.focus_window();
+                    }
+                }
+                // 알림 클릭(08-15 사용자 요청) — 메인 표시 + **해당 대화까지**:
+                // 단일 모드 = 메인 안에서 그 대화로 전환 · 분리 모드 = 그 대화 창을
+                // 열어 마지막 스레드 표시 — 둘 다 기존 "대화 열기" 경로(activate/
+                // open_group_thread)가 모드 분기까지 그대로 맡는다(새 규칙 0).
+                nbeep_plat::tray::TrayEvent::OpenTarget(tok) => {
+                    if let Some(e) = self.main_id.and_then(|m| self.windows.get(&m)) {
+                        e.window.set_visible(true);
+                        e.window.focus_window();
+                    }
+                    match self.notify_targets.get(&tok).copied() {
+                        Some(NotifyTarget::Peer(p)) => self.activate(p, el),
+                        Some(NotifyTarget::Group(g)) => self.open_group_thread(g, el),
+                        None => {} // 재시작 등으로 맵이 비었다 — 메인 표시로 충분
                     }
                 }
                 nbeep_plat::tray::TrayEvent::Quit => el.exit(),
@@ -8604,8 +8660,12 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
                                                     // 트레이 Open과 같은 이벤트). 비번들·타 OS는 false = 기존 폴백 그대로.
     {
         let nproxy = proxy.clone();
-        let _ = nbeep_plat::notify::init(move || {
-            let _ = nproxy.send_event(AppEvent::Tray(nbeep_plat::tray::TrayEvent::Open));
+        let _ = nbeep_plat::notify::init(move |target| {
+            let ev = match target {
+                Some(t) => nbeep_plat::tray::TrayEvent::OpenTarget(t),
+                None => nbeep_plat::tray::TrayEvent::Open,
+            };
+            let _ = nproxy.send_event(AppEvent::Tray(ev));
         });
     }
 
@@ -8870,6 +8930,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         manual_addrs: HashMap::new(),
         unread: HashMap::new(),
         last_notify: HashMap::new(),
+        notify_targets: HashMap::new(),
         last_read: HashMap::new(),
         reconnect: HashMap::new(),
         rows_dirty: false,

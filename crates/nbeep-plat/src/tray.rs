@@ -22,10 +22,13 @@
 //! macOS = **메뉴바 NSStatusItem**(아래 `mac` — M3-2b · AppKit 메인 스레드 강제).
 
 /// 트레이에서 온 사용자 행동.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TrayEvent {
     /// 창 열기/복원(좌클릭 · 메뉴 "열기").
     Open,
+    /// **대상이 있는 열기**(M3-8 알림 클릭 — 08-15 사용자 요청 "대화창까지"):
+    /// 값 = 호스트가 알림에 실어 보낸 불투명 토큰(호스트만 해석 — 봉투 원리).
+    OpenTarget(String),
     /// 앱 종료(메뉴 "종료").
     Quit,
 }
@@ -721,8 +724,10 @@ mod win {
     static HWND: AtomicIsize = AtomicIsize::new(0);
     static PREV_ICON: AtomicIsize = AtomicIsize::new(0);
     static TASKBAR_CREATED: OnceLock<u32> = OnceLock::new();
-    /// 대기 중 풍선(M3-8) — (제목, 본문, 무음). 마지막 것만 유효(폭주는 호스트 스로틀).
-    static BALLOON: Mutex<Option<(String, String, bool)>> = Mutex::new(None);
+    /// 대기 중 풍선(M3-8) — (제목, 본문, 무음, 대상 토큰). 마지막 것만 유효.
+    static BALLOON: Mutex<Option<(String, String, bool, String)>> = Mutex::new(None);
+    /// 마지막 표시 풍선의 대상(클릭 복귀용 — 풍선은 아이콘당 1개라 마지막이 곧 화면).
+    static LAST_TARGET: Mutex<String> = Mutex::new(String::new());
 
     fn wide(s: &str) -> Vec<u16> {
         s.encode_utf16().chain(std::iter::once(0)).collect()
@@ -859,9 +864,13 @@ mod win {
     /// 대기 중 풍선을 표시(M3-8) — NIF_INFO만 갱신(아이콘·툴팁 불변). 제목 63자·
     /// 본문 255자 절단(u16 셀 마지막은 NUL). 무음 = NIIF_NOSOUND(DR-25 미검증).
     fn show_balloon(hwnd: Handle) {
-        let Some((title, body, silent)) = BALLOON.lock().ok().and_then(|mut g| g.take()) else {
+        let Some((title, body, silent, target)) = BALLOON.lock().ok().and_then(|mut g| g.take())
+        else {
             return;
         };
+        if let Ok(mut t) = LAST_TARGET.lock() {
+            *t = target;
+        }
         let mut nid = NotifyIconDataW {
             cb_size: u32::try_from(core::mem::size_of::<NotifyIconDataW>()).unwrap_or(0),
             hwnd,
@@ -899,8 +908,15 @@ mod win {
                 match l as u32 {
                     WM_LBUTTONUP => emit(TrayEvent::Open),
                     WM_RBUTTONUP => show_menu(hwnd),
-                    // 풍선 알림 클릭 = 창 복원(트레이 좌클릭과 같은 경로 — M3-8).
-                    NIN_BALLOONUSERCLICK => emit(TrayEvent::Open),
+                    // 풍선 알림 클릭 = 창 복원 + **해당 대화 열기**(08-15 — 대상 토큰).
+                    NIN_BALLOONUSERCLICK => {
+                        let t = LAST_TARGET.lock().map(|g| g.clone()).unwrap_or_default();
+                        if t.is_empty() {
+                            emit(TrayEvent::Open);
+                        } else {
+                            emit(TrayEvent::OpenTarget(t));
+                        }
+                    }
                     _ => {}
                 }
                 0
@@ -1038,9 +1054,15 @@ mod win {
         }
 
         /// 풍선 알림(M3-8 · Windows = 트레이가 알림 채널) — 트레이 스레드가 표시.
-        pub fn notify(&self, title: &str, body: &str, silent: bool) {
+        /// `target` = 클릭 시 되돌아올 토큰(빈 문자열 = 대상 없음 · OpenTarget/Open).
+        pub fn notify(&self, title: &str, body: &str, silent: bool, target: &str) {
             if let Ok(mut g) = BALLOON.lock() {
-                *g = Some((title.to_string(), body.to_string(), silent));
+                *g = Some((
+                    title.to_string(),
+                    body.to_string(),
+                    silent,
+                    target.to_string(),
+                ));
             }
             let hwnd = HWND.load(Ordering::Acquire);
             if hwnd != 0 {
