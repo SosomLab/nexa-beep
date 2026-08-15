@@ -236,6 +236,11 @@ impl LocalDirect {
 }
 
 impl Transport for LocalDirect {
+    fn link_changed(&self) {
+        // L1 변화(M1-2) — 발견에 재발견을 시킨다(그룹 재조인 + 즉시 HELLO + S4).
+        self.disc.kick();
+    }
+
     fn discovery(&self) -> Receiver<DiscoveryEvent> {
         self.discovery_rx
             .lock()

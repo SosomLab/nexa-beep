@@ -91,6 +91,11 @@ pub trait Transport: Send + Sync {
         Err(AddError::Unsupported)
     }
 
+    /// L1 링크 변화 통지(M1-2) — 호스트가 OS 구독(디바운스 후)으로 부른다.
+    /// 전송은 재발견(그룹 재조인·즉시 HELLO 등)으로 반응한다. 기본 = no-op
+    /// (InMemory 등 링크 개념이 없는 전송).
+    fn link_changed(&self) {}
+
     /// 이 전송이 광고하는 능력.
     fn caps(&self) -> Caps;
 

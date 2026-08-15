@@ -63,6 +63,9 @@ pub struct UdpDiscovery {
     /// 수신 강등(M1-13ⓔ) — 발견 포트를 다른 프로세스가 배타 점유해 **듣지 못한다**.
     /// 발신은 임의 포트라 정상(상대 목록에 나는 뜬다) — 호스트가 상태바에 고지한다.
     recv_degraded: bool,
+    /// 수신 소켓의 조인용 복제(M1-2 [`Self::kick`] — 링크 변화 시 새 인터페이스
+    /// 그룹 재조인). 소켓 옵션은 어느 핸들로든 같은 소켓에 적용된다.
+    recv_join: Option<UdpSocket>,
 }
 
 impl UdpDiscovery {
@@ -128,6 +131,7 @@ impl UdpDiscovery {
         let seq = Arc::new(AtomicU32::new(0));
         let (tx, events) = channel::<Observation>();
 
+        let recv_join = recv.as_ref().and_then(|r| r.try_clone().ok());
         if let Some(recv) = recv {
             // v4 수신자는 HELLO 유니캐스트 응답까지(S4 왕복 — 송신 소켓 복제 실패 시
             // 응답 생략 = 종전 동작).
@@ -161,6 +165,7 @@ impl UdpDiscovery {
             template,
             seq,
             recv_degraded,
+            recv_join,
         })
     }
 
@@ -168,6 +173,31 @@ impl UdpDiscovery {
     #[must_use]
     pub fn recv_degraded(&self) -> bool {
         self.recv_degraded
+    }
+
+    /// 링크 변화 후 재발견(M1-2) — 새로 생긴 인터페이스에 그룹 재조인(best-effort ·
+    /// 이미 조인된 곳은 오류 무시) + 즉시 HELLO(응답 유도) + S4 1라운드. 주기 광고를
+    /// 기다리지 않고 새 링크의 이웃을 당긴다. 호출 주체 = 호스트의 디바운서(폭주는
+    /// 거기서 접힌다 — 여기서는 접지 않는다).
+    pub fn kick(&self) {
+        if let Some(j) = &self.recv_join {
+            let sref = socket2::SockRef::from(j);
+            for i in crate::netif::eligible_v4() {
+                let _ = sref.join_multicast_v4(&MULTICAST_GROUP, &i.v4);
+            }
+        }
+        let hello = {
+            let mut p = match self.template.lock() {
+                Ok(g) => g.clone(),
+                Err(e) => e.into_inner().clone(),
+            };
+            p.kind = PacketKind::Hello;
+            p.seq = self.seq.fetch_add(1, Ordering::Relaxed);
+            p
+        }
+        .encode();
+        Self::send_all(&self.send_sock, None, &hello);
+        Self::send_s4(&self.send_sock, &hello);
     }
 
     /// 관측 수신단의 **소유권**을 가져간다(1회 — InMemory `discovery()`와 같은 계약).

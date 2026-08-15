@@ -87,6 +87,9 @@ enum AppEvent {
     },
     /// 아웃바운드 연결 실패(M2-8) — 죽은 상대를 클릭해도 UI는 살아 있고 이것만 온다.
     ConnectFailed { peer: PeerId, why: String },
+    /// L1 링크 변화(M1-2 · **디바운스 후**) — Wi-Fi 전환·케이블·절전 복귀.
+    /// 전송에 재발견을 시키고 상태바에 알린다(변화 자체는 OS 구독 스레드가 관측).
+    LinkChanged,
     /// 파일 수신 제안 도착 — 사용자가 수락/거절할 때까지 데이터는 오지 않는다(FR-X-3).
     XferOffer {
         peer: PeerId,
@@ -7306,6 +7309,15 @@ impl ApplicationHandler<AppEvent> for App {
                     self.request_redraw(mid);
                 }
             }
+            AppEvent::LinkChanged => {
+                // L1 재발견(M1-2) — 전송이 그룹 재조인 + 즉시 HELLO + S4로 반응.
+                // 목록은 상대 재공지(발견 이벤트)로 다시 찬다 — 여기서 지우지 않는다.
+                self.transport.link_changed();
+                self.status = "네트워크 변경 감지 — 재발견 중".into();
+                if let Some(mid) = self.main_id {
+                    self.request_redraw(mid);
+                }
+            }
             AppEvent::Inbound { session } => {
                 use nbeep_core::Session as _;
                 let peer = session.session.peer();
@@ -8519,6 +8531,34 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
                 std::sync::Arc::clone(&identity),
                 proxy.clone(),
             );
+            // L1 링크 구독(M1-2 · FR-D-5) — OS raw 이벤트(폭주)를 디바운스로 접어
+            // LinkChanged 1회로. quiet 1000ms는 잠정(D-8b 실측 후 확정 — [08 §8]).
+            // 구독 실패(None)는 조용히 폴백 — 주기 광고가 결국 따라잡는다(fail-soft).
+            if let Some(raw) = nbeep_plat::linkwatch::spawn() {
+                let lproxy = proxy.clone();
+                std::thread::spawn(move || {
+                    let mut deb = nbeep_core::linkwatch::Debouncer::new(1000);
+                    let t0 = std::time::Instant::now();
+                    let mono = |t0: &std::time::Instant| {
+                        nbeep_core::MonoInstant(
+                            u64::try_from(t0.elapsed().as_nanos()).unwrap_or(u64::MAX),
+                        )
+                    };
+                    // 200ms 폴은 trailing 디바운스 마감 확인용(이벤트 없으면 통과) —
+                    // 종료 = 채널 끊김(구독 스레드 소멸과 함께 자연 종료).
+                    loop {
+                        match raw.recv_timeout(std::time::Duration::from_millis(200)) {
+                            Ok(()) => deb.observe(mono(&t0)),
+                            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
+                        }
+                        if deb.fire(mono(&t0)) && lproxy.send_event(AppEvent::LinkChanged).is_err()
+                        {
+                            return;
+                        }
+                    }
+                });
+            }
             (std::sync::Arc::new(local), discovery)
         } else {
             // 데모 — InMemory 버스 + 에코 봇. 순환 탐색 테스트용으로 같은 접두사(김*/bob* 등)를
