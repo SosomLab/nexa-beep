@@ -1365,6 +1365,7 @@ impl App {
             .with_inner_size(winit::dpi::LogicalSize::new(420.0, 520.0))
             .with_resizable(false) // 모달 대화상자 — 크기 고정
             .with_window_icon(self.icon.clone());
+        let attrs = self.modal_attrs(attrs, false); // 메인 소유(08-15 — 창 묶음 부상)
         let window = Rc::new(el.create_window(attrs).unwrap());
         let scale = window.scale_factor() as f32;
         let context = softbuffer::Context::new(window.clone()).unwrap();
@@ -1427,6 +1428,7 @@ impl App {
             .with_inner_size(winit::dpi::LogicalSize::new(400.0, win_h))
             .with_resizable(false)
             .with_window_icon(self.icon.clone());
+        let attrs = self.modal_attrs(attrs, false); // 메인 소유(08-15 — 창 묶음 부상)
         let window = Rc::new(el.create_window(attrs).unwrap());
         let scale = window.scale_factor() as f32;
         let context = softbuffer::Context::new(window.clone()).unwrap();
@@ -1493,6 +1495,42 @@ impl App {
             }
         }
         None
+    }
+
+    /// 앱 모달 창 속성(08-15 사용자 요청 2건) — ① `at_cursor`면 **현재 마우스
+    /// 위치가 창 좌상단**(기본 위치로 멀리 열려 커서 왕복이 번거롭다) ②
+    /// **Windows는 메인 창 소유(owned)** — 소유 창을 클릭하면 OS가 소유자(메인)까지
+    /// 함께 앞으로 올린다. 2-앱 실기: B 모달을 선택해도 B 메인이 A 창들 뒤에
+    /// 남던 문제의 처방 — AlwaysOnTop 없이 "모달은 메인 위 + 같은 앱 창 묶음
+    /// 부상"이 성립하고 다른 앱을 가리지도 않는다(창 전환 관례).
+    fn modal_attrs(
+        &self,
+        attrs: winit::window::WindowAttributes,
+        at_cursor: bool,
+    ) -> winit::window::WindowAttributes {
+        let Some(e) = self.main_id.and_then(|m| self.windows.get(&m)) else {
+            return attrs;
+        };
+        let mut attrs = attrs;
+        if at_cursor {
+            if let Ok(p) = e.window.inner_position() {
+                attrs = attrs.with_position(winit::dpi::PhysicalPosition::new(
+                    p.x + e.cursor.0,
+                    p.y + e.cursor.1,
+                ));
+            }
+        }
+        #[cfg(windows)]
+        {
+            use winit::platform::windows::WindowAttributesExtWindows;
+            use winit::raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
+            if let Ok(h) = e.window.window_handle() {
+                if let RawWindowHandle::Win32(w) = h.as_raw() {
+                    attrs = attrs.with_owner_window(w.hwnd.get());
+                }
+            }
+        }
+        attrs
     }
 
     /// 이 창에서 열려 있는 그룹 방(M5-1g) — `chat_peer_for`의 그룹판.
@@ -2737,6 +2775,7 @@ impl App {
             return;
         }
         let title = format!("Nexa Beep — {}", self.peer_title(peer));
+        // 대화 창은 모달이 아니다 — 메인에 종속시키지 않는다(자유로운 독립 창).
         let attrs = Window::default_attributes()
             .with_title(title)
             .with_window_icon(self.icon.clone());
@@ -3207,6 +3246,7 @@ impl App {
         let attrs = Window::default_attributes()
             .with_title(title)
             .with_window_icon(self.icon.clone());
+        let attrs = self.modal_attrs(attrs, false); // 메인 소유(08-15 — 창 묶음 부상)
         let window = Rc::new(el.create_window(attrs).unwrap());
         let scale = window.scale_factor() as f32;
         let context = softbuffer::Context::new(window.clone()).unwrap();
@@ -3478,6 +3518,7 @@ impl App {
             // 앱 모달(08-14 표준 재정리) — 앱 창 입력은 모달이 흡수하되, 다른 앱은
             // 자유롭게 위로 온다(AlwaysOnTop 금지 — OS 창 전환 관례).
             .with_window_icon(self.icon.clone());
+        let attrs = self.modal_attrs(attrs, true); // 마우스 위치 + 메인 소유(08-15)
         let window = Rc::new(el.create_window(attrs).unwrap());
         window.set_ime_allowed(true); // 이름·연락처에 한글 입력
         let scale = window.scale_factor() as f32;
@@ -3613,6 +3654,7 @@ impl App {
             .with_inner_size(winit::dpi::LogicalSize::new(400.0, win_h))
             .with_resizable(false)
             .with_window_icon(self.icon.clone());
+        let attrs = self.modal_attrs(attrs, false); // 메인 소유(08-15 — 창 묶음 부상)
         let window = Rc::new(el.create_window(attrs).unwrap());
         let scale = window.scale_factor() as f32;
         let context = softbuffer::Context::new(window.clone()).unwrap();
@@ -3766,6 +3808,7 @@ impl App {
             // 앱 모달(08-14 표준 재정리) — 앱 창 입력은 모달이 흡수하되, 다른 앱은
             // 자유롭게 위로 온다(AlwaysOnTop 금지 — OS 창 전환 관례).
             .with_window_icon(self.icon.clone());
+        let attrs = self.modal_attrs(attrs, false); // 메인 소유(08-15 — 창 묶음 부상)
         let window = Rc::new(el.create_window(attrs).unwrap());
         window.set_ime_allowed(true);
         let scale = window.scale_factor() as f32;
@@ -4685,6 +4728,7 @@ impl App {
             .with_inner_size(winit::dpi::LogicalSize::new(360.0, 150.0))
             .with_resizable(false)
             .with_window_icon(self.icon.clone());
+        let attrs = self.modal_attrs(attrs, false); // 메인 소유(08-15 — 창 묶음 부상)
         let window = Rc::new(el.create_window(attrs).unwrap());
         window.set_ime_allowed(true); // 그룹 이름 한글 입력
         let scale = window.scale_factor() as f32;
@@ -5190,6 +5234,7 @@ impl App {
             .with_inner_size(winit::dpi::LogicalSize::new(400.0, 170.0))
             .with_resizable(false)
             .with_window_icon(self.icon.clone());
+        let attrs = self.modal_attrs(attrs, false); // 메인 소유(08-15 — 창 묶음 부상)
         let window = Rc::new(el.create_window(attrs).unwrap());
         let scale = window.scale_factor() as f32;
         let context = softbuffer::Context::new(window.clone()).unwrap();

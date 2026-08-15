@@ -3,7 +3,9 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
-> **갱신: 2026-08-15 8차 (KST)** — **Windows 실기 핸드오프**(사용자가 Windows에서 pull 후 실기 예정):
+> **갱신: 2026-08-15 9차 (KST)** — **모달 창 = 마우스 위치 + 메인 창 소유**(main · Windows 실기 보고 2건): ① 프로필 열기 = **현재 마우스 위치가 창 좌상단**(멀리 열려 커서 왕복 — `modal_attrs(at_cursor)` · 메인 inner_position+클라이언트 커서) ② **2-앱 z순서**(A·B 각각 프로필 연 상태에서 B 모달 선택 시 B 메인이 A 뒤에 남음) — **Windows owned window**(`with_owner_window`): 소유 창 클릭 = OS가 소유자(메인)까지 함께 부상(창 묶음 · AlwaysOnTop 금지 표준(08-14)과 정합 · 다른 앱 안 가림). 모달 8종 전부(About·알림·구성원·확인·Picker·그룹 이름·주소·프로필) · **대화 창은 제외 명문**(첫 패치가 잘못 걸었다 원복). **617 green** · clippy 0 · relaunch 실기. [journal/2026-08-15.md](journal/2026-08-15.md).
+>
+> **직전(08-15 8차)** — **Windows 실기 핸드오프**(사용자가 Windows에서 pull 후 실기 예정):
 > 08-14~15 배치의 Windows 확인 항목 8종(W-A~H)을 **[26 §7-1](26-run-and-manual-test.md) 체크리스트로 정리** — 최우선 = **W-A 저장소 마이그레이션**(기존 data/ 첫 실행에서 핀·그룹 유지 — trust.seg v2·groups.seg v3 관용) · imgdec 강등 실기 · 정렬 드롭다운 · 정렬/핀 · 2-PC 프로필 전파 · 캐러셀 방향 · G4 모달 · 설정 신설 3종. CI 3-OS green(lockdown 실측 포함) · main 동기 상태에서 인계. [journal/2026-08-15.md](journal/2026-08-15.md).
 >
 > **직전(08-15 7차)** — ★★ **보안·측정 4건 일괄(사용자 지시 "모두 진행")**:
