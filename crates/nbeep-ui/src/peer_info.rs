@@ -33,6 +33,8 @@ pub struct PeerInfo {
     pub last_seen: String,
     /// 최근 대화 표시 문자열(08-15 — 빈 = 기록 없음).
     pub last_chat: String,
+    /// 프로필 수신 시각 표시 문자열(M3-21 ③ — 카드 신선도 · 빈 = 수신 기록 없음).
+    pub received: String,
     /// 아바타 보더 색(08-15 — 상대가 공개한 값 · 검증 통과분). 큰 프리뷰 = 3px.
     pub border: Option<(u8, u8, u8)>,
     /// 안전 번호(M3-6 · SAS 60자리 — 5자리×12그룹 공백 구분). 두 사람 화면에 같은
@@ -202,12 +204,15 @@ impl Widget for PeerInfoWidget {
             ctx.text(x, y, b, &format!("{label}  ·  {shown}"), theme.text);
             y += ctx.text_height() + self.s(8);
         }
-        let img = if self.info.has_image {
-            "이미지  ·  캐시됨(렌더는 imgdec 후)"
-        } else {
-            "이미지  ·  (없음/비공개)"
+        // 신선도(M3-21 ③) — 이 카드 내용이 언제 받은 것인지. 캐시가 낡았을 수
+        // 있음을 사용자가 안다(카드 열기 pull이 곧 갱신하지만, 비연결이면 이대로).
+        let img = match (self.info.has_image, self.info.received.is_empty()) {
+            (true, false) => format!("이미지  ·  캐시됨  ·  {} 수신", self.info.received),
+            (true, true) => "이미지  ·  캐시됨".into(),
+            (false, false) => format!("프로필  ·  {} 수신", self.info.received),
+            (false, true) => "이미지  ·  (없음/비공개)".into(),
         };
-        ctx.text(x, y, b, img, theme.text_dim);
+        ctx.text(x, y, b, &img, theme.text_dim);
         y += ctx.text_height() + self.s(8);
         ctx.text(
             x,

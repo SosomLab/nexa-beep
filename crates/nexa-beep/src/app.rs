@@ -320,6 +320,9 @@ struct PeerProfile {
     avatar: Option<std::rc::Rc<nbeep_ui::IconImage>>,
     /// 아바타 보더 색(08-14 — parse_border 검증 통과분).
     border: Option<(u8, u8, u8)>,
+    /// 마지막 프로필 수신 시각(unix ms · M3-21 ③) — 0 = 미상(부팅 캐시 복원분은
+    /// 파일 mtime · 없으면 0). 카드가 신선도로 표기한다("N분 전 수신").
+    received_ms: u64,
 }
 
 /// 프로필 캐시 메타 직렬화(08-14 사용자 요청 — 재시작 시 캐시된 프로필 표시).
@@ -3827,6 +3830,7 @@ impl App {
             avatar: p.and_then(|p| p.avatar.clone()),
             last_seen: ago_label(self.trust.meta(peer).0),
             last_chat: ago_label(self.trust.meta(peer).1),
+            received: ago_label(p.map_or(0, |p| p.received_ms)),
             border: p.and_then(|p| p.border),
             // 안전 번호(M3-6 · SAS) — 두 키에서 결정적으로 파생(개시자 무관 정렬)
             // 이라 세션 없이도 계산된다. 대조는 사람 몫(전화·대면).
@@ -4434,6 +4438,16 @@ impl App {
             }
             let name = rec.names.last().cloned();
             if name.is_some() || avatar.is_some() || border.is_some() || image_file.is_some() {
+                // 수신 시각(M3-21 ③) — 캐시 파일 mtime으로 근사(meta 우선 · 없으면
+                // img · 둘 다 없으면 0 = 미상). .meta에 시각을 넣지 않는 이유 =
+                // 그 파일 규약은 "와이어 검증 통과 표시값"뿐(encode_profile_meta).
+                let received_ms = std::iter::once(dir.join(format!("{}.meta", peer.short())))
+                    .chain(image_file.clone())
+                    .filter_map(|f| std::fs::metadata(f).ok()?.modified().ok())
+                    .filter_map(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| u64::try_from(d.as_millis()).unwrap_or(0))
+                    .max()
+                    .unwrap_or(0);
                 self.peer_profiles.insert(
                     peer,
                     PeerProfile {
@@ -4443,6 +4457,7 @@ impl App {
                         image_file,
                         avatar,
                         border,
+                        received_ms,
                     },
                 );
             }
@@ -7666,7 +7681,7 @@ impl ApplicationHandler<AppEvent> for App {
                     } else if std::fs::create_dir_all(&dir).is_ok() {
                         let _ = std::fs::write(&meta_path, meta);
                     }
-                    // 받은 항목을 상태바에 요약(연락처 상세 표시 UI는 M3-17 잔여).
+                    // 받은 항목을 상태바에 요약(상세는 프로필 카드가 그린다).
                     let mut got: Vec<&str> = Vec::new();
                     if display.is_some() {
                         got.push("이름");
@@ -7689,6 +7704,7 @@ impl ApplicationHandler<AppEvent> for App {
                             image_file,
                             avatar,
                             border,
+                            received_ms: unix_now_ms(), // 경량(Info)도 수신이다
                         },
                     );
                     self.status =
