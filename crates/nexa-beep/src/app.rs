@@ -4365,6 +4365,46 @@ impl App {
     /// 갱신·철회는 기존 규칙 그대로 — 세션이 서면 자동 프리페치가 최신으로 덮는다.
     /// **부팅 자동 연결은 하지 않는다**: 핀 N개 전원 아웃바운드는 전원이 켤 때마다
     /// 서로를 부르는 부팅 풀메시(N² 상시 세션)가 된다(13 §12-1 — 캐시로 충분).
+    /// 사용자 사진 **관리 복사**(M3-17 잔여 `c:` 이관 · 08-16) — 선택한 원본을
+    /// `data/profiles/custom/`으로 복사하고 그 사본 경로를 쓴다. 원본을 옮기거나
+    /// 지워도 프로필·최근 목록·재전송이 깨지지 않는다(종전엔 원본 절대 경로를
+    /// 매번 읽었다). 이름 = 내용 해시 8자리 + 정제된 원본 이름 — **같은 사진
+    /// 재선택 = 같은 사본 재사용**(중복 누적 없음). 실패 = 원본 경로 그대로
+    /// (fail-soft — 종전 동작과 동일 · 포터블 이동 시에도 data/가 통째로 간다).
+    fn manage_profile_image(&self, path: &str) -> String {
+        let dir = self.data_dir.join("profiles").join("custom");
+        let p = std::path::Path::new(path);
+        if p.starts_with(&dir) {
+            return path.to_string(); // 이미 관리 사본(최근 목록 재선택)
+        }
+        let Ok(bytes) = std::fs::read(p) else {
+            return path.to_string();
+        };
+        let h = nbeep_crypto::sha256(&bytes);
+        let tag: String = h[..4].iter().map(|b| format!("{b:02x}")).collect();
+        let orig = p
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let safe: String = orig
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+            .take(48)
+            .collect();
+        let name = if safe.is_empty() {
+            format!("{tag}.img")
+        } else {
+            format!("{tag}-{safe}")
+        };
+        let dst = dir.join(name);
+        if !dst.is_file()
+            && (std::fs::create_dir_all(&dir).is_err() || std::fs::write(&dst, &bytes).is_err())
+        {
+            return path.to_string();
+        }
+        dst.to_string_lossy().into_owned()
+    }
+
     /// 내 프로필 사진의 와이어 축소본 경로(`data/profiles/me.wire.png` · 08-16).
     fn wire_avatar_path(&self) -> std::path::PathBuf {
         self.data_dir.join("profiles").join("me.wire.png")
@@ -6699,7 +6739,10 @@ impl App {
                                                 // 않았다(재시작 = 전부 증발). 디코드도
                                                 // apply_settings의 image_path 팔이 한다
                                                 // (수동 spawn과 이중이었다).
-                                                let path = p.to_string_lossy().into_owned();
+                                                // 관리 복사(08-16) — 사본 경로가 정본.
+                                                let path = self.manage_profile_image(
+                                                    &p.to_string_lossy(),
+                                                );
                                                 let changes =
                                                     if let Some(pv) = &mut self.profile_view {
                                                         let mut pinv = Invalidations::default();
@@ -6863,6 +6906,18 @@ impl App {
                     closed = pv.take_closed();
                 }
                 if !changes.is_empty() {
+                    // 관리 복사 관문(08-16) — 위젯발 image_path(캐러셀의 옛 원본
+                    // 경로 항목 포함)도 사본으로 치환해 한 관문으로 모은다.
+                    let changes: Vec<_> = changes
+                        .into_iter()
+                        .map(|(k, v)| {
+                            if k == "profile.image_path" && !v.is_empty() {
+                                (k, self.manage_profile_image(&v))
+                            } else {
+                                (k, v)
+                            }
+                        })
+                        .collect();
                     // 설정 깔때기 재사용 — display_name 변경은 즉시 재공지 arm을 탄다.
                     self.apply_settings(changes);
                 }
