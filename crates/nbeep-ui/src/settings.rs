@@ -62,8 +62,19 @@ const HIDDEN_KEYS: &[&str] = &[
 ];
 
 /// 기본 off 토글 — 프로필 공개(DR-22 **기본 전부 비노출** · 옵트인). 미등록 토글은 on.
+// ★ M3-2d ① 확정(08-15): `ui.close_to_tray` 기본값 = **OS 관례 차등** —
+// macOS는 on(빨간 버튼 = 창만 닫히고 앱은 남는 것이 OS 관례 · DR-16 "동작 =
+// OS 네이티브") · Windows/Linux는 off(X = 종료가 관례 — 예측 가능성).
+// 사용자가 바꾼 값은 그대로 영속되므로 기본값 차등은 미설정 사용자에게만 닿는다.
+#[cfg(target_os = "macos")]
 const TOGGLE_DEFAULT_OFF: &[&str] = &[
-    "ui.close_to_tray", // 닫기 = 트레이(M3-2 — 기본 off · M3-2d 결정지)
+    "profile.share.basic",
+    "profile.share.email",
+    "profile.share.phone",
+];
+#[cfg(not(target_os = "macos"))]
+const TOGGLE_DEFAULT_OFF: &[&str] = &[
+    "ui.close_to_tray", // 닫기 = 트레이(M3-2d — Win/Linux 기본 off)
     "profile.share.basic",
     "profile.share.email",
     "profile.share.phone",
