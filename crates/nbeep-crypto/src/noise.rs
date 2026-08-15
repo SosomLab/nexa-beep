@@ -356,6 +356,114 @@ mod tests {
         );
     }
 
+    /// ★ M1-11③ tap 평문 부재의 일반화 — 단일 문자열이 아니라 **금칙어 목록**
+    /// (이메일·전화·한글 본문·프로필 설정 키)으로 확장. 세션에 실어 보낸 어떤
+    /// 민감 문자열도 링크 바이트에 그대로 나타나면 안 된다(FR-S-51).
+    #[test]
+    fn wire_never_carries_forbidden_plaintext() {
+        use nbeep_core::link::{Link, LinkError};
+        use std::sync::mpsc::{channel, Receiver, Sender};
+        struct Tap {
+            peer: PeerId,
+            tx: Sender<Vec<u8>>,
+            rx: Receiver<Vec<u8>>,
+            sniff: Sender<Vec<u8>>,
+        }
+        impl Link for Tap {
+            fn peer(&self) -> PeerId {
+                self.peer
+            }
+            fn send(&mut self, f: &[u8]) -> Result<(), LinkError> {
+                self.sniff.send(f.to_vec()).ok();
+                self.tx.send(f.to_vec()).map_err(|_| LinkError::Closed)
+            }
+            fn recv(&mut self) -> Result<Vec<u8>, LinkError> {
+                self.rx.recv().map_err(|_| LinkError::Closed)
+            }
+        }
+        struct Plain {
+            peer: PeerId,
+            tx: Sender<Vec<u8>>,
+            rx: Receiver<Vec<u8>>,
+        }
+        impl Link for Plain {
+            fn peer(&self) -> PeerId {
+                self.peer
+            }
+            fn send(&mut self, f: &[u8]) -> Result<(), LinkError> {
+                self.tx.send(f.to_vec()).map_err(|_| LinkError::Closed)
+            }
+            fn recv(&mut self) -> Result<Vec<u8>, LinkError> {
+                self.rx.recv().map_err(|_| LinkError::Closed)
+            }
+        }
+        let alice = Identity::generate();
+        let bob = Identity::generate();
+        let (a_id, b_id) = (alice.peer_id(), bob.peer_id());
+        let (a_tx, a_rx) = channel();
+        let (b_tx, b_rx) = channel();
+        let (sniff_tx, sniff_rx) = channel();
+        let la = Tap {
+            peer: b_id,
+            tx: a_tx,
+            rx: b_rx,
+            sniff: sniff_tx,
+        };
+        let lb = Plain {
+            peer: a_id,
+            tx: b_tx,
+            rx: a_rx,
+        };
+        let hb = thread::spawn(move || NoiseSession::accept(lb, &bob));
+        let mut a = NoiseSession::initiate(la, &alice).expect("a 수립");
+        let mut b = hb.join().unwrap().expect("b 수립");
+        while sniff_rx.try_recv().is_ok() {}
+
+        // 금칙어 세트 — 프로필·연락처·한글 본문(29 §4-1 취지: 사람이 읽을 것).
+        const FORBIDDEN: &[&[u8]] = &[
+            b"kiros33@gmail.com",
+            b"010-1234-5678",
+            b"profile.share.email",
+            "홍길동".as_bytes(),
+            "비밀 회의는 3시".as_bytes(),
+        ];
+        for f in FORBIDDEN {
+            a.send(f).unwrap();
+            assert_eq!(&b.recv().unwrap(), f, "복호는 온전");
+        }
+        let mut wire = Vec::new();
+        while let Ok(fr) = sniff_rx.try_recv() {
+            wire.extend_from_slice(&fr);
+        }
+        assert!(!wire.is_empty());
+        for f in FORBIDDEN {
+            assert!(
+                !wire.windows(f.len()).any(|w| w == *f),
+                "링크 바이트에 금칙어 노출: {:?}",
+                String::from_utf8_lossy(f)
+            );
+        }
+    }
+
+    /// ★ M1-11④ Debug 마스킹 — Identity의 Debug 출력에 개인키 바이트가 새지
+    /// 않는다(docs/13 §7 · 로그는 상태만). 지문(공개)만 허용.
+    #[test]
+    fn identity_debug_never_leaks_private_key() {
+        let id = Identity::generate();
+        let dbg = format!("{id:?}");
+        // 개인키의 어떤 4바이트 연속도 hex로 나타나지 않아야 한다(전수 검사 —
+        // 2바이트는 공개 지문과 우연히 겹칠 확률이 있어 4바이트로 판정).
+        for w in id.private.windows(4) {
+            let hex_lower = format!("{:02x}{:02x}{:02x}{:02x}", w[0], w[1], w[2], w[3]);
+            let hex_upper = hex_lower.to_uppercase();
+            assert!(
+                !dbg.contains(&hex_lower) && !dbg.contains(&hex_upper),
+                "Debug에 개인키 hex 조각: {dbg}"
+            );
+        }
+        assert!(dbg.contains("Identity"), "형식 확인: {dbg}");
+    }
+
     #[test]
     fn distinct_identities_have_distinct_peer_ids() {
         assert_ne!(

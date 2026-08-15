@@ -245,6 +245,62 @@ mod tests {
         assert!(b.len() <= MAX_PACKET);
     }
 
+    /// ★ M1-11① 허용 목록의 구조적 강제 — 인코딩 전체가 **허용 필드의 연접과
+    /// 바이트 단위로 동일**해야 한다(W-1: "허용 목록 밖의 바이트가 한 개도 없다").
+    /// 누군가 Packet에 필드를 추가해 몰래 실으면 이 테스트가 바로 깨진다.
+    #[test]
+    fn every_byte_comes_from_the_allow_list() {
+        for kind in [
+            PacketKind::Hello,
+            PacketKind::Announce,
+            PacketKind::Probe,
+            PacketKind::Goodbye,
+        ] {
+            let mut p = packet();
+            p.kind = kind;
+            let b = p.encode();
+            let mut want = Vec::new();
+            want.extend_from_slice(b"NXBP");
+            want.push(1);
+            want.push(kind as u8);
+            want.extend_from_slice(&p.flags.to_be_bytes());
+            want.extend_from_slice(p.peer.as_bytes());
+            want.extend_from_slice(&p.tcp_port.to_be_bytes());
+            want.extend_from_slice(&p.epoch.to_be_bytes());
+            want.extend_from_slice(&p.seq.to_be_bytes());
+            want.extend_from_slice(&p.instance);
+            let nb = p.name.as_str().as_bytes();
+            want.push(u8::try_from(nb.len()).unwrap());
+            want.extend_from_slice(nb);
+            assert_eq!(b, want, "{kind:?} — 허용 목록 연접과 정확히 일치해야 한다");
+        }
+    }
+
+    /// ★ M1-11② 금칙어 스캔 — 프로필 계열 문자열(이메일·전화·설정 키)이 발견
+    /// 패킷 어디에도 실릴 수 없다(구조적으로 입력이 없지만, 필드 추가 회귀 감시).
+    #[test]
+    fn discovery_never_carries_profile_content() {
+        const FORBIDDEN: &[&[u8]] = &[b"@", b"profile.", b"share", b"010-", b"kiros", b".com"];
+        for kind in [
+            PacketKind::Hello,
+            PacketKind::Announce,
+            PacketKind::Probe,
+            PacketKind::Goodbye,
+        ] {
+            let mut p = packet();
+            p.kind = kind;
+            p.name = name("beep-1a2b3c4d"); // 기본 이름 규약(M1-10 — 실명 미노출)
+            let b = p.encode();
+            for f in FORBIDDEN {
+                assert!(
+                    !b.windows(f.len()).any(|w| w == *f),
+                    "{kind:?} 패킷에 금칙어 {:?}",
+                    String::from_utf8_lossy(f)
+                );
+            }
+        }
+    }
+
     #[test]
     fn unknown_version_and_kind_are_ignored_not_invalid() {
         let mut future_ver = packet().encode();
