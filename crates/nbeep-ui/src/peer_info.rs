@@ -105,7 +105,7 @@ impl Widget for PeerInfoWidget {
         self.verify.set_bounds(
             Rect::new(
                 bounds.x + (bounds.w - bw) / 2,
-                bounds.bottom() - self.s(66),
+                bounds.bottom() - self.s(72),
                 bw,
                 bh,
             ),

@@ -3824,7 +3824,8 @@ impl App {
         }
         let attrs = Window::default_attributes()
             .with_title("Nexa Beep — 상대 프로필")
-            .with_inner_size(winit::dpi::LogicalSize::new(360.0, 380.0))
+            // 높이 500(M3-6 — 안전 번호 2줄+버튼이 380에선 지문·안내와 겹쳤다 · 실기).
+            .with_inner_size(winit::dpi::LogicalSize::new(360.0, 500.0))
             .with_resizable(false)
             .with_window_icon(self.icon.clone());
         // 마우스 위치 + 메인 소유(08-15 — 내 프로필과 같은 카드 규약. 우클릭한
