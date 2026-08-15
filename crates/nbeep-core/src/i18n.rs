@@ -315,6 +315,9 @@ pub enum Msg {
     ListScrollKeep,
     ListScrollCaret,
     ListScrollTop,
+    // ── 세션 배지 실루엣(M3-19 · 08-15) — 색+모양 2중 부호화 ──
+    LinkBadgeShape,
+    LinkBadgeShapeDesc,
     // ── 목록 정렬(08-15) — 고정 구획 + 속성 사슬 ──
     ListSort,
     ListSortDesc,
@@ -1045,6 +1048,18 @@ impl Msg {
                 "選択行を最上部に",
             ],
             Msg::ListScrollTop => ["Jump to top", "맨 위로 이동", "回到顶部", "先頭へ移動"],
+            Msg::LinkBadgeShape => [
+                "Status badge shapes",
+                "상태 배지 모양 구분",
+                "状态徽章形状",
+                "状態バッジの形状",
+            ],
+            Msg::LinkBadgeShapeDesc => [
+                "Show session state by shape as well as color (empty ring / gap ring / filled / bar) — readable without color vision",
+                "세션 상태를 색과 함께 모양(빈 링·갭 링·찬 원·막대)으로도 구분 — 색을 못 읽어도 상태가 보인다",
+                "用形状与颜色共同表示会话状态(空环/缺口环/实心/横条)",
+                "セッション状態を色に加えて形(空リング/欠けリング/塗り/バー)でも表示",
+            ],
             Msg::ListSort => ["List order", "목록 정렬", "列表排序", "リストの並び順"],
             Msg::ListSortDesc => [
                 "Pinned first, then online peers; within each section: recent chat, then recent presence (same rule offline · name order ignores status)",

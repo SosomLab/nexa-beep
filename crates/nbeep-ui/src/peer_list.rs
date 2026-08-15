@@ -206,6 +206,61 @@ pub fn link_color(theme: &Theme, link: LinkState) -> Color {
     }
 }
 
+/// 세션 상태 배지(M3-19 · [14 §12]) — **색 + 실루엣 2중 부호화**. 적록 색각·저대비에서
+/// 색이 무너져도 모양이 남는다: `Idle`=빈 링 · `Connecting`=갭 링(90°·회전) ·
+/// `Active`=꽉 찬 원 · `Lost`=가로 막대. 기하는 지름 `D` **비율 고정**(구멍 0.53D ·
+/// 막대 0.56×0.19D · 갭 90°)이라 배율 무관. `shape=false`(`ui.link_badge_shape` off)면
+/// 종전 채운 원. 자산·의존 0 — 전부 수식 렌더다.
+pub fn draw_link_badge(
+    ctx: &mut dyn DrawCtx,
+    dot: Rect,
+    theme: &Theme,
+    link: LinkState,
+    shape: bool,
+    spin_step: u8,
+) {
+    // 배경색 테두리 — 아바타와 분리(현행 유지 · 파냄도 같은 면으로 뚫는다).
+    let back = Rect::new(dot.x - 1, dot.y - 1, dot.w + 2, dot.h + 2);
+    ctx.fill_ellipse(back, theme.panel_bg);
+    let color = link_color(theme, link);
+    if !shape {
+        ctx.fill_ellipse(dot, color);
+        return;
+    }
+    let d = dot.w.min(dot.h) as f32;
+    match link {
+        LinkState::Active => ctx.fill_ellipse(dot, color), // 가장 꽉 찬 실루엣 = 살아 있는 세션
+        LinkState::Idle | LinkState::Connecting => {
+            ctx.fill_ellipse(dot, color);
+            let hole = ((d * 0.53).round() as i32).max(2);
+            ctx.fill_ellipse(
+                Rect::new(
+                    dot.x + (dot.w - hole) / 2,
+                    dot.y + (dot.h - hole) / 2,
+                    hole,
+                    hole,
+                ),
+                theme.panel_bg,
+            );
+            if matches!(link, LinkState::Connecting) {
+                // 갭 90° — 캐럿 530ms 틱마다 90°씩 회전(새 타이머 0). 파이 반경을
+                // 배경 테두리(+1)까지 잡아 링 바깥 AA 잔흔 없이, 테두리 밖은 안 나간다.
+                ctx.fill_pie(back, 90.0 * f32::from(spin_step % 4), 90.0, theme.panel_bg);
+            }
+        }
+        LinkState::Lost => {
+            ctx.fill_ellipse(dot, color);
+            let bw = ((d * 0.56).round() as i32).max(3);
+            let bh = ((d * 0.19).round() as i32).max(2);
+            ctx.fill_round_rect(
+                Rect::new(dot.x + (dot.w - bw) / 2, dot.y + (dot.h - bh) / 2, bw, bh),
+                (d * 0.09).round() as i32,
+                theme.panel_bg,
+            );
+        }
+    }
+}
+
 /// 목록 갱신 직후 스크롤 동작(사용자 확정 08-14 — `ui.list_refresh_scroll`).
 /// 발견 이벤트마다 목록이 재조립되는데, 그때 뷰포트를 어떻게 둘지의 3택이다.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -278,6 +333,13 @@ pub struct PeerListWidget {
     group_action: Option<GroupAction>,
     /// 갱신 직후 스크롤 동작(설정 — 기본 = 현재 위치 유지 · 08-14).
     refresh_scroll: RefreshScroll,
+    /// 세션 배지 실루엣 구분(M3-19 · `ui.link_badge_shape` — 기본 on). off = 종전 채운 원.
+    badge_shape: bool,
+    /// `Connecting` 갭 링 회전 스텝(90°×4) — 캐럿 530ms 틱을 재사용한다(새 타이머 0).
+    /// paint가 `&self`라 [`std::cell::Cell`](Cell)로 위상만 굴린다(레이아웃 불변).
+    spin_step: std::cell::Cell<u8>,
+    /// 마지막으로 관측한 캐럿 위상 — 뒤집힐 때마다 스텝 전진.
+    spin_caret: std::cell::Cell<bool>,
 }
 
 impl Default for PeerListWidget {
@@ -315,6 +377,9 @@ impl PeerListWidget {
             groups: Vec::new(),
             selected: std::collections::HashSet::new(),
             refresh_scroll: RefreshScroll::default(),
+            badge_shape: true,
+            spin_step: std::cell::Cell::new(0),
+            spin_caret: std::cell::Cell::new(true),
         }
     }
 
@@ -464,6 +529,14 @@ impl PeerListWidget {
     /// 갱신 시 스크롤 동작 설정(`ui.list_refresh_scroll` — 호스트가 주입).
     pub fn set_refresh_scroll(&mut self, mode: RefreshScroll) {
         self.refresh_scroll = mode;
+    }
+
+    /// 세션 배지 실루엣 on/off(M3-19 · `ui.link_badge_shape` — 핫 스왑).
+    pub fn set_badge_shape(&mut self, on: bool, inv: &mut Invalidations) {
+        if self.badge_shape != on {
+            self.badge_shape = on;
+            inv.push(self.bounds);
+        }
     }
 
     /// 전체 행 수 = 그룹 섹션 + 피어(M5-1 — 인덱스 공간은 그룹이 먼저).
@@ -1052,6 +1125,13 @@ impl Widget for PeerListWidget {
     fn paint(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
         ctx.fill_rect(self.bounds, theme.panel_bg);
         ctx.select_font(FontSlot::PeerList, false);
+        // Connecting 갭 링 회전(M3-19) — 캐럿 위상이 뒤집힐 때마다 90° 전진.
+        // 새 타이머 없이 기존 530ms 틱을 재사용한다(포커스 창이 아니면 정지 = fail-soft).
+        let caret_phase = ctx.caret_on();
+        if self.spin_caret.get() != caret_phase {
+            self.spin_caret.set(caret_phase);
+            self.spin_step.set(self.spin_step.get().wrapping_add(1) % 4);
+        }
         let vis = self.visible_rows();
 
         let rh = self.row_h();
@@ -1171,7 +1251,7 @@ impl Widget for PeerListWidget {
                 );
                 ctx.stroke_ellipse(av, c, self.s(2).max(2) as f32);
             }
-            // 세션 상태 점 — 아바타 우하단에 겹쳐(메신저 관례 · 색 의미는 기존 그대로).
+            // 세션 상태 배지 — 아바타 우하단에 겹쳐(메신저 관례 · M3-19 색+실루엣).
             let dot_d = self.s(11);
             let dot = Rect::new(
                 av.right() - dot_d + self.s(2),
@@ -1179,12 +1259,14 @@ impl Widget for PeerListWidget {
                 dot_d,
                 dot_d,
             );
-            let dot_color = link_color(theme, row.link);
-            ctx.fill_ellipse(
-                Rect::new(dot.x - 1, dot.y - 1, dot.w + 2, dot.h + 2),
-                theme.panel_bg,
-            ); // 배경색 테두리 — 아바타와 분리
-            ctx.fill_ellipse(dot, dot_color);
+            draw_link_badge(
+                ctx,
+                dot,
+                theme,
+                row.link,
+                self.badge_shape,
+                self.spin_step.get(),
+            );
 
             // 1줄: **기본(발견) 이름 — 굵게**(사용자 확정 08-11).
             let name_x = av.right() + self.s(10);

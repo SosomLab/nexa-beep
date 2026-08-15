@@ -33,6 +33,8 @@ pub struct AlertWidget {
     rows_clickable: bool,
     /// 클릭된 행(1회성 — 호스트 폴 · 모달은 닫지 않는다).
     row_clicked: Option<usize>,
+    /// 상태 점 실루엣 구분(M3-19 — 목록 배지와 같은 문법 · `ui.link_badge_shape`).
+    badge_shape: bool,
 }
 
 impl AlertWidget {
@@ -51,7 +53,13 @@ impl AlertWidget {
             status_list: Vec::new(),
             rows_clickable: false,
             row_clicked: None,
+            badge_shape: true,
         }
+    }
+
+    /// 상태 점 실루엣 on/off(M3-19 · `ui.link_badge_shape` — 호스트가 주입).
+    pub fn set_badge_shape(&mut self, on: bool) {
+        self.badge_shape = on;
     }
 
     /// 상태 목록 행 클릭 허용 지정(G4 — 소유자만 켠다).
@@ -234,7 +242,8 @@ impl Widget for AlertWidget {
                     break; // 넘치면 자른다(모달은 요지 전달용)
                 }
                 let dot = Rect::new(b.x + pad, y + (ctx.text_height() - dot_d) / 2, dot_d, dot_d);
-                ctx.fill_ellipse(dot, crate::peer_list::link_color(theme, *link));
+                // 목록 배지와 같은 실루엣 문법(M3-19) — 회전은 없다(모달은 정적 스냅샷).
+                crate::peer_list::draw_link_badge(ctx, dot, theme, *link, self.badge_shape, 0);
                 ctx.text(dot.right() + self.s(8), y, b, text, theme.text);
                 y += lh;
             }

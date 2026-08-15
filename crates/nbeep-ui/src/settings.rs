@@ -466,6 +466,15 @@ pub fn registry() -> &'static [Entry] {
             ]),
             key: "ui.list_refresh_scroll",
         },
+        // 세션 배지 실루엣(M3-19) — 색+모양 2중 부호화. off = 종전 채운 원(색만).
+        Entry {
+            cat: Msg::CatAppearance,
+            sub: Some(Msg::CatPeerList),
+            label: Msg::LinkBadgeShape,
+            desc: Msg::LinkBadgeShapeDesc,
+            kind: SettingKind::Toggle,
+            key: "ui.link_badge_shape",
+        },
         Entry {
             cat: Msg::CatAppearance,
             sub: Some(Msg::CatTypeahead),
@@ -2668,11 +2677,12 @@ mod tests {
                 _ => None,
             })
             .expect("토글 행 존재");
-        assert_eq!(registry()[w.rows[i].idx].key, "ui.typeahead_space");
+        // 외양 카테고리의 첫 토글(레지스트리 순서 — 항목이 앞에 끼면 여기도 갱신).
+        assert_eq!(registry()[w.rows[i].idx].key, "ui.link_badge_shape");
         w.on_event(&click(cb.x + 3, cb.y + cb.h / 2), &mut inv);
         assert_eq!(
             w.take_changes(),
-            vec![("ui.typeahead_space", "off".to_string())]
+            vec![("ui.link_badge_shape", "off".to_string())]
         );
     }
 

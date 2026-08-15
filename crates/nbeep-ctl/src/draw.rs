@@ -108,6 +108,13 @@ pub trait DrawCtx {
         let _ = (rect, color, width);
     }
 
+    /// 부채꼴(파이) AA 채움 — `rect` 내접 타원에서 **12시 = 0° · 시계 방향**으로
+    /// `start_deg`부터 `sweep_deg`만큼. 반평면 2장의 교집합이라 **`sweep_deg` ≤ 180°만
+    /// 보증**한다(M3-19 갭 링의 "파냄" 용도 — 그 이상이 필요하면 두 번 부른다). 기본 = no-op.
+    fn fill_pie(&mut self, rect: Rect, start_deg: f32, sweep_deg: f32, color: Color) {
+        let _ = (rect, start_deg, sweep_deg, color);
+    }
+
     /// 라운드 사각형 AA 채움. 기본 = no-op.
     fn fill_round_rect(&mut self, rect: Rect, radius: i32, color: Color) {
         let _ = (rect, radius, color);

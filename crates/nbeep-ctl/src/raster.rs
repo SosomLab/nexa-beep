@@ -448,6 +448,35 @@ impl DrawCtx for RasterCtx<'_, '_, '_> {
         });
     }
 
+    fn fill_pie(&mut self, rect: Rect, start_deg: f32, sweep_deg: f32, color: Color) {
+        if rect.is_empty() || sweep_deg <= 0.0 {
+            return;
+        }
+        let (cx, cy) = (
+            rect.x as f32 + rect.w as f32 / 2.0,
+            rect.y as f32 + rect.h as f32 / 2.0,
+        );
+        let (rx, ry) = (rect.w as f32 / 2.0, rect.h as f32 / 2.0);
+        // 12시 = 0° · 시계 방향(화면 좌표는 y가 아래로 큰다) — 각도의 단위 방향.
+        let dir = |deg: f32| {
+            let r = deg.to_radians();
+            (r.sin(), -r.cos())
+        };
+        let (sx, sy) = dir(start_deg);
+        let (ex, ey) = dir(start_deg + sweep_deg.min(180.0));
+        self.coverage_fill(rect, color, move |x, y| {
+            let (px, py) = (x - cx, y - cy);
+            let nx = px / rx;
+            let ny = py / ry;
+            let de = ((nx * nx + ny * ny).sqrt() - 1.0) * rx.min(ry);
+            // 시작 변의 안쪽 = 시계쪽(외적 양수) · 끝 변의 안쪽 = 반시계쪽 —
+            // 부호 거리(음수 = 안)로 뒤집어 타원 SDF와 max 교집합.
+            let d0 = -(sx * py - sy * px);
+            let d1 = ex * py - ey * px;
+            de.max(d0).max(d1)
+        });
+    }
+
     fn fill_round_rect(&mut self, rect: Rect, radius: i32, color: Color) {
         if rect.is_empty() {
             return;

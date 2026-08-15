@@ -3678,6 +3678,7 @@ impl App {
         let mut inv = Invalidations::default();
         av.set_status_list(lines, &mut inv);
         av.set_rows_clickable(owned);
+        av.set_badge_shape(self.settings.get("ui.link_badge_shape") == "on");
         self.alert_view = Some(av);
         self.layout_window(id);
         self.request_redraw(id);
@@ -4252,6 +4253,8 @@ impl App {
                 self.settings.get("ui.list_refresh_scroll"),
             ));
         let mut inv = Invalidations::default();
+        let badge_shape = self.settings.get("ui.link_badge_shape") == "on";
+        self.list.set_badge_shape(badge_shape, &mut inv);
         let pos = nbeep_ui::HudPos::from_code(self.settings.get("ui.typeahead_pos"));
         self.list.set_hud_pos(pos, &mut inv);
         self.list
@@ -4559,6 +4562,18 @@ impl App {
                 "ui.list_refresh_scroll" => {
                     self.list
                         .set_refresh_scroll(nbeep_ui::RefreshScroll::from_code(&value));
+                }
+                // 세션 배지 실루엣(M3-19) — 목록 + 열린 구성원 모달까지 즉시(hot-swap 원칙).
+                "ui.link_badge_shape" => {
+                    let on = value == "on";
+                    let mut binv = Invalidations::default();
+                    self.list.set_badge_shape(on, &mut binv);
+                    if let Some(al) = &mut self.alert_view {
+                        al.set_badge_shape(on);
+                    }
+                    if let Some(mid) = self.main_id {
+                        self.request_redraw(mid);
+                    }
                 }
                 // 툴팁 대기(08-14) — 열린 프로필 화면에 즉시 적용(hot-swap 원칙).
                 "ui.tooltip_ms" => {
