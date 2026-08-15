@@ -88,6 +88,8 @@
 
 ## 5. 다음 단계 (2026-08-15 · STATUS 08-15 2차 기준)
 
+> **08-15 후반~08-16 요약** — ★**v0.1.7 공개**(알림 3-OS(정식 mac UNUserNotificationCenter — brew Cask 실증 ✅ 사용자 확인)·신뢰 배지 개편·SAS 대조·**트레이 완주**·M1 발견 견고화 · 알림 클릭 = 해당 대화(단일=전환·분리=대화 창)) · ★**대화창 명령 `/…` GUI 도입**(08-16 — 판정 단일 지점 `core::command`: `/`+한 줄+아는 이름 = 명령 · `//` escape · **미지 명령 = fail-closed 오류** · 전부 로컬 · GUI 4종 `/help`·`/trust`·**`/verify`(SAS 카드 — M3-6 출력 지점)**·`/close`) · M1-14 endpoint 정규화 코어 단일화 · linkwatch(M1-2 계열) 진행. **651 green**.
+>
 > **08-15 추가 2(트레이 상주 M3-2)** — ★**Windows 트레이 ✅**(`nbeep-plat::tray` — Shell_NotifyIcon 직접(의존 0) · **아이콘 = 내 아바타 32px 합성**(시드 원+그림+보더) · 툴팁/메뉴 헤더 = 표시 이름 · 우클릭 = 이름·열기·**종료**(네이티브 TrackPopupMenu) · 좌클릭 = 복원 · **`ui.close_to_tray`**(고급 · 기본 off) = X 눌러도 숨김·상주 · 플라이아웃 실측 3신원 아이콘 각자 아바타) · ★**Linux SNI 구현 🚧**(사용자 확정 "여기서 구현" — zbus 5(Linux 한정)로 StatusNotifierItem+dbusmenu 서빙 · 워처 부재 fail-soft · **크로스 check/clippy 0 — 실기는 Linux 환경 잔여**) · **mac = M3-2b 잔여**(mac PC 몫 — NSStatusItem·좌우 모두 메뉴·AppKit 메인 스레드 · 스텁 준비됨) · 결정지 M3-2d(스위치 기본값 공통/차등 · 숨김 중 수신 배지).
 >
 > **08-15 추가(모달 창 규약)** — ★**모달 = 마우스 위치 + 메인 창 소유**(`modal_attrs` — 프로필은 커서 좌상단에 열림 · Windows `with_owner_window`로 모달 8종이 메인에 종속: **모달 클릭 = 그 앱 창 묶음이 함께 부상**(2-앱 z순서 실기 해소) · AlwaysOnTop 금지 표준과 정합 · 대화 창은 종속 금지 명문). **617 green**. ⚠ relaunch 스크립트 종료·창 카운트가 Windows 미동작(TODO 등록).
