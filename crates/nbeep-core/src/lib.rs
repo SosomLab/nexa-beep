@@ -15,6 +15,7 @@
 pub mod action;
 pub mod avatar;
 pub mod chat;
+pub mod endpoint;
 pub mod group;
 pub mod i18n;
 pub mod identity;

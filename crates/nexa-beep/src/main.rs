@@ -67,8 +67,16 @@ fn main() {
         return;
     }
     if let Some(pos) = args.iter().position(|a| a == "--connect") {
-        let Some(addr) = args.get(pos + 1).cloned() else {
-            eprintln!("--connect <host:port> 필요");
+        // 정규화 = GUI 모달과 같은 규칙(M1-14) — 포트 생략은 기본 포트, 옥텟 오타는
+        // DNS로 흘리지 않고 즉시 거절(오해를 주는 Unreachable 방지).
+        let Some(raw) = args.get(pos + 1) else {
+            eprintln!("--connect <host[:port]> 필요 (예: 10.0.0.5 · 10.0.0.5:47200)");
+            return;
+        };
+        let Some(addr) =
+            nbeep_core::endpoint::normalize_endpoint(raw, nbeep_net::DEFAULT_SESSION_PORT)
+        else {
+            eprintln!("--connect 주소 형식 오류: {raw} (예: 10.0.0.5 · [fe80::1]:47200)");
             return;
         };
         connect_manual(&addr);
@@ -83,8 +91,15 @@ fn main() {
         return;
     }
     if let Some(pos) = args.iter().position(|a| a == "--chat-connect") {
-        let Some(addr) = args.get(pos + 1).cloned() else {
-            eprintln!("--chat-connect <host:port> 필요");
+        let Some(raw) = args.get(pos + 1) else {
+            eprintln!("--chat-connect <host[:port]> 필요 (예: 10.0.0.5 · 10.0.0.5:47200)");
+            return;
+        };
+        // GUI 모달과 같은 정규화(M1-14) — `10.0.0.5`만 넣어도 붙는다.
+        let Some(addr) =
+            nbeep_core::endpoint::normalize_endpoint(raw, nbeep_net::DEFAULT_SESSION_PORT)
+        else {
+            eprintln!("--chat-connect 주소 형식 오류: {raw} (예: 10.0.0.5 · [fe80::1]:47200)");
             return;
         };
         chat_interactive(ChatRole::Connect(addr));
@@ -198,12 +213,12 @@ Nexa Beep {v} — 제로 컨피그 로컬 네트워크 메신저 (\"실행 = 참
   --chat-live [이름] [--port <N>]   발견 가능한 대화 단말 — 실행 중인 창(무인자/--live)
                                     목록에 이름이 뜨고, 터미널에서 실시간 대화
   --chat-serve [port]               고정 포트로 기다리는 대화 단말(기본 47200)
-  --chat-connect <host:port>        주소로 직접 붙는 대화 단말(발견 없이)
+  --chat-connect <host[:port]>      주소로 직접 붙는 대화 단말(발견 없이 · 포트 생략 = 47200)
       대화 중 명령: 한 줄 = 전송 · /send <파일> · /accept · /reject · /help · /quit(Ctrl+D)
       파일 수신 옵션: --xfer-limit-mib <N>(수신 상한 · 기본 256) · --xfer-rate-kb <N>(속도 상한)
 
 터미널 검증 도구(비대화):
-  --serve [port] · --connect <host:port>   수동 엔드포인트 왕복 실증(DR-19)
+  --serve [port] · --connect <host[:port]>   수동 엔드포인트 왕복 실증(DR-19 · 포트 생략 = 47200)
   --discover-probe [초]                    발견 브로드캐스트 관찰(기본 8초)
   --live-echo [초]                         발견 + 에코 응답 노드(기본 15초)
   --quarantine-demo <파일>                 수신 무해화 게이트 종단 실측(.beepq)

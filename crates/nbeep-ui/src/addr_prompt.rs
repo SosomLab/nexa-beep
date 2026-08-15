@@ -20,57 +20,10 @@ use crate::widget::{Invalidations, Widget};
 /// [`AddrPromptWidget::new`]에 그 값을 넘긴다 — 이 상수는 미배선 경로의 폴백.
 pub const DEFAULT_PORT: u16 = 47_200;
 
-/// 주소를 정규화한다 — **포트를 생략하면 `default_port`를 붙인다.**
-///
-/// 사용자가 `10.60.218.157`만 넣어도 연결되게 하는 것이 목적이다(2026-08-13 사용자 요구).
-/// 포트를 적었으면 그대로 두고, 형식이 틀렸으면 `None`.
-///
-/// ```
-/// # use nbeep_ui::addr_prompt::{normalize_endpoint, DEFAULT_PORT};
-/// assert_eq!(normalize_endpoint("10.0.0.1", DEFAULT_PORT).as_deref(), Some("10.0.0.1:47200"));
-/// assert_eq!(normalize_endpoint("10.0.0.1:9000", DEFAULT_PORT).as_deref(), Some("10.0.0.1:9000"));
-/// assert_eq!(normalize_endpoint("[fe80::1]", 48000).as_deref(), Some("[fe80::1]:48000"));
-/// assert_eq!(normalize_endpoint("", DEFAULT_PORT), None);
-/// ```
-#[must_use]
-pub fn normalize_endpoint(s: &str, default_port: u16) -> Option<String> {
-    let s = s.trim();
-    if s.is_empty() {
-        return None;
-    }
-    // [v6] 또는 [v6]:port
-    if let Some(rest) = s.strip_prefix('[') {
-        if let Some((host, port)) = rest.split_once("]:") {
-            return (!host.is_empty() && valid_port(port)).then(|| s.to_string());
-        }
-        // 포트 없는 [v6]
-        let host = rest.strip_suffix(']')?;
-        return (!host.is_empty()).then(|| format!("[{host}]:{default_port}"));
-    }
-    // 대괄호 없는 v6(':'가 둘 이상) — 포트를 붙이려면 대괄호가 필요하다.
-    if s.matches(':').count() >= 2 {
-        return None;
-    }
-    match s.rsplit_once(':') {
-        // host:port
-        Some((host, port)) => (!host.is_empty() && valid_port(port)).then(|| s.to_string()),
-        // 포트 생략 — 기본 포트를 붙인다.
-        None => Some(format!("{s}:{default_port}")),
-    }
-}
-
-/// 주소 형식 검증 — `host[:port]` 또는 `[v6][:port]`. **포트는 생략 가능**(기본 포트 사용).
-/// 호스트 문자 집합은 안 따진다(해석은 `to_socket_addrs` 몫) — 그러나 포트를 **적었다면**
-/// 숫자·1~65535여야 오타를 즉시 잡는다.
-#[must_use]
-pub fn valid_endpoint(s: &str) -> bool {
-    // 유효성은 기본 포트 값과 무관하다(붙는 값만 달라진다).
-    normalize_endpoint(s, DEFAULT_PORT).is_some()
-}
-
-fn valid_port(p: &str) -> bool {
-    p.parse::<u32>().is_ok_and(|n| (1..=65_535).contains(&n))
-}
+// 정규화·검증 규칙의 원천은 코어(M1-14 — CLI `--connect`/`--chat-connect`와 같은
+// 규칙을 쓴다: 같은 입력이 경로에 따라 갈리면 규약이 아니라 누락이다). 여기 재수출은
+// 기존 사용부(`nbeep_ui::addr_prompt::normalize_endpoint`) 무변경을 위해서다.
+pub use nbeep_core::endpoint::{normalize_endpoint, valid_endpoint};
 
 /// 주소 입력 모달 위젯.
 #[derive(Debug)]
