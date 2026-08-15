@@ -149,8 +149,10 @@ pub struct Entry {
 }
 
 impl Entry {
-    /// 레지스트리 기본값(각 값 키 → 기본 문자열).
-    fn default_values(&self) -> Vec<(&'static str, String)> {
+    /// 레지스트리 기본값(각 값 키 → 기본 문자열). **한 항목이 값 키를 여럿 가질 수
+    /// 있다**(FontSection = family+size) — 초기화·시드가 `key` 하나만 돌면 짝 키가
+    /// 새므로, 기본값을 다루는 쪽은 반드시 이 목록을 쓴다(08-15 초기화 점검).
+    pub fn default_values(&self) -> Vec<(&'static str, String)> {
         match self.kind {
             SettingKind::Radio(opts) | SettingKind::RadioInput(opts, _) => RADIO_DEFAULTS
                 .iter()

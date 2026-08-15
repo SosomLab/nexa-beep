@@ -3346,14 +3346,13 @@ impl App {
     /// 설정 초기화(08-15 · 고급) — 레지스트리(표시 항목) 전부 기본값으로. 숨김 키
     /// (창 위치·최근 목록)와 신원·핀·그룹은 건드리지 않는다.
     fn do_reset_settings(&mut self) -> String {
-        let defaults = SettingsState::with_defaults();
+        // 항목의 **기본값 쌍 전체**를 돌린다(08-15 점검) — `e.key` 하나만 돌면
+        // 값 키가 여럿인 항목(FontSection = family+size)의 짝 키가 초기화에서 샜다.
         let changes: Vec<(&'static str, String)> = nbeep_ui::settings::registry()
             .iter()
             .filter(|e| !matches!(e.kind, nbeep_ui::settings::SettingKind::Action { .. }))
-            .filter_map(|e| {
-                let d = defaults.get(e.key).to_string();
-                (self.settings.get(e.key) != d).then_some((e.key, d))
-            })
+            .flat_map(nbeep_ui::settings::Entry::default_values)
+            .filter(|(k, d)| self.settings.get(k) != d)
             .collect();
         let n = changes.len();
         self.apply_settings(changes);
