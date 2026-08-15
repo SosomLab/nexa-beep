@@ -106,33 +106,21 @@ FR-D-9는 표시 이름 기본값을 **호스트명 기반**으로 둔다. macOS
 | W-8 | **tap 링크**로 프레임을 가로채 평문 부재 단언 — 기존 `ciphertext_on_the_wire_is_not_plaintext`를 **금칙어 목록 기반으로 일반화** |
 | W-11 | 실행 출력·`Debug` 문자열 스캔 |
 
-### 4-2. 수동 캡처 (실기 · 권한 불필요) — ★ 오늘 쓴 절차
+### 4-2. 수동 캡처 (실기 · 권한 불필요) — ★ 절차 = **[`tools/wirecap.sh`](../tools/wirecap.sh)** (M1-12 · 08-15 상시화)
 
-**우리 프로토콜은 멀티캐스트라 `sudo` 없이도 그룹에 조인해 받을 수 있다.** 이게 곧 *"공격자도 이만큼 쉽게 본다"* 는 증명이다.
+**우리 프로토콜은 멀티캐스트라 `sudo` 없이도 그룹에 조인해 받을 수 있다.** 이게 곧 *"공격자도 이만큼 쉽게 본다"* 는 증명이다. 그동안 여기 붙어 있던 인라인 파이썬을 저장소 스크립트로 승격했다 — 실행 수단이 상비돼야 트리거(SEC-T1)가 규약으로 성립한다.
 
 ```bash
-# 터미널 1 — 관측 대상
-./target/release/nexa-beep --chat-live "홍길동-MacBook"
-
-# 터미널 2 — 그룹 조인 후 hex+ASCII 덤프 (239.255.77.77:47100)
-python3 - <<'EOF'
-import socket, struct, binascii
-GROUP, PORT = '239.255.77.77', 47100
-s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-s.bind(('', PORT))
-s.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP,
-             struct.pack('4s4s', socket.inet_aton(GROUP), socket.inet_aton('0.0.0.0')))
-for _ in range(3):
-    d, a = s.recvfrom(2048)
-    print(f"--- {len(d)}B from {a[0]} ---")
-    print(binascii.hexlify(d, ' ', 1).decode())
-    print("ASCII:", ''.join(chr(b) if 32<=b<127 else '.' for b in d))
-EOF
+tools/wirecap.sh 6   # 6초 수신 — 실행 중 인스턴스의 실물 패킷을 hex+ASCII로
 ```
 
-**판정법**: ASCII 줄에 **사람이 읽을 수 있는 것이 보이면 그게 곧 유출**이다. 고정 필드를 여러 패킷에서 비교해 **바뀌지 않는 값**(= 재식별자)을 찾는다.
+**실행 시점 = SEC-T1**: 발견 와이어 포맷을 바꾼 커밋 + **발신 경로가 늘어난 커밋**(유니캐스트 S4·인터페이스별 발신 등)마다 재실행하고 판정을 journal에 남긴다.
+
+**판정법**(스크립트가 재료를 만들고, 판단은 사람이 한다):
+1. **ASCII 열** — 사람이 읽을 수 있는 것이 매직(`NXBP`)과 **표시 이름 하나뿐**인가. 이메일·호스트명 조각·전화가 보이면 그게 곧 유출이다.
+2. **고정 구간 요약** — 같은 발신원의 패킷 간 불변 바이트(스크립트가 자동 표시). 알려진 고정값(매직·ver·kind·flags·**키 지문(R-18 기등록)**·tcp_port·epoch·instance(기동 무작위 · D-22)) 외의 **새 고정값 = 심사 대상**(재식별자).
+
+**첫 실측(08-15 · 3신원 · M1-8/M1-9 반영 빌드)**: ① ASCII = `NXBP` + 표시 이름만(한글은 UTF-8이라 점 표시 · `kiros33`은 사용자 옵트인 이름) — **통과** ② 고정 구간 = 전부 알려진 필드 · 새 재식별자 없음 — **통과**. 같은 seq 사본 5부 수신 = M1-9 팬아웃(기본+인터페이스별+지향 브로드캐스트)의 같은 주기 중복(수신측 관측 멱등 — 무해).
 
 ### 4-3. 세션 구간 캡처 (실기 · 권한 필요)
 
