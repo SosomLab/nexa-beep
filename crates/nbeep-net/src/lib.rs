@@ -16,6 +16,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
 pub mod local;
+pub mod netif;
 pub mod tcp;
 pub mod transport;
 pub mod udp;

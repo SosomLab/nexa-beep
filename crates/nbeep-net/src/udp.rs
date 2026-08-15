@@ -86,6 +86,12 @@ impl UdpDiscovery {
             recv.set_reuse_port(true)?; // 같은 호스트 다중 인스턴스(개발·테스트)
             recv.bind(&SocketAddr::from((Ipv4Addr::UNSPECIFIED, DISCOVERY_PORT)).into())?;
             recv.join_multicast_v4(&MULTICAST_GROUP, &Ipv4Addr::UNSPECIFIED)?;
+            // 인터페이스별 그룹 가입(M1-9) — 기본 경로 인터페이스만 조인되면
+            // 링크로컬 직결(169.254)·보조 NIC의 광고를 못 듣는다. 실패는 무시
+            // (이미 조인된 인터페이스는 EADDRINUSE류 — best-effort).
+            for i in crate::netif::eligible_v4() {
+                let _ = recv.join_multicast_v4(&MULTICAST_GROUP, &i.v4);
+            }
             recv.set_multicast_loop_v4(true)?; // 같은 호스트 인스턴스 간 도달
             let recv: UdpSocket = recv.into();
             recv.set_read_timeout(Some(RECV_POLL))?;
@@ -202,8 +208,25 @@ impl UdpDiscovery {
 
     /// S2 멀티캐스트 + S3 브로드캐스트 (+ 있으면 S1 IPv6) 동시 발신 — 하나만 통과해도 발견 성립.
     fn send_all(v4: &UdpSocket, v6: Option<&UdpSocket>, bytes: &[u8]) {
+        // 기본 경로 발신(종전 동작) — 인터페이스 열거가 비는 환경(Windows 폴백 등)의
+        // 안전망. 멀티캐스트 IF를 바꾼 뒤에도 마지막에 기본으로 되돌린다.
         let _ = v4.send_to(bytes, Self::dest());
         let _ = v4.send_to(bytes, Self::broadcast_dest());
+        // ★ 인터페이스별 명시 발신(M1-9 · FR-D-7) — 기본 경로가 없는 링크로컬 직결
+        // (자기 배정 169.254)·다중 NIC에서도 상대 링크로 나간다. 가상·터널 제외는
+        // netif가 맡는다(VPN으로 존재 방송 금지 — R-18 결).
+        let sref = socket2::SockRef::from(v4);
+        for i in crate::netif::eligible_v4() {
+            if sref.set_multicast_if_v4(&i.v4).is_ok() {
+                let _ = v4.send_to(bytes, Self::dest());
+            }
+            // S3 지향 브로드캐스트 — 서브넷 브로드캐스트는 IF 지정과 무관하게
+            // 목적지 주소로 경로가 정해진다(255.255.255.255와 달리 링크가 특정된다).
+            if let Some(b) = i.subnet_broadcast() {
+                let _ = v4.send_to(bytes, SocketAddr::from((b, DISCOVERY_PORT)));
+            }
+        }
+        let _ = sref.set_multicast_if_v4(&Ipv4Addr::UNSPECIFIED);
         if let Some(v6) = v6 {
             let _ = v6.send_to(bytes, Self::dest_v6());
         }

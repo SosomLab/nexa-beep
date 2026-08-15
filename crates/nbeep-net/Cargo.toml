@@ -17,3 +17,8 @@ testkit = []
 [dependencies]
 nbeep-core.workspace = true
 socket2 = { version = "0.5", features = ["all"] }
+
+# 인터페이스 열거(M1-9 · netif) — getifaddrs. 이미 링크되는 시스템 라이브러리의
+# 바인딩이라 런타임 의존 0(DR-5) 불변 · MIT/Apache(DR-12 · 원장 docs/10 §3).
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
