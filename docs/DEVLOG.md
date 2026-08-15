@@ -7,6 +7,7 @@
 
 ## 2026-08-15
 
+- **설정 초기화 구멍 수정 + 잔재 정리**(main): Reset이 e.key 하나만 돌아 FontSection 짝 키(size)가 새던 것 → default_values 쌍 전체(시드와 같은 원천 = '초기화=첫 실행' 구조 보장) · 확정 기본값 회귀 고정(close_to_tray off 공통 등) · 폐기 Lucide badge SVG 6종+/tmp 잔재 정리. 641 green. 상세 [journal/2026-08-15.md](journal/2026-08-15.md).
 - **M1-12 ✅ + M3-2d 확정 + 트레이 mac 실기 + Quit 메뉴**(main · 승인 배치): wirecap.sh 첫 실측 통과(ASCII=이름만·새 재식별자 0) · close_to_tray = **공통 off 사용자 확정**+고급 맨 밑+★기본값 오염 청소(mac-on 빌드가 settings.cfg에 on 박제했던 것) · 트레이 숨김/Quit 실증(오조준 소동 끝 코드 무결) · Menu ▸ 종료 추가 · ★M1-2 종단 실기(Wi-Fi 토글 → Hello 관측 = kick 발화 직증). 상세 [journal/2026-08-15.md](journal/2026-08-15.md).
 - **목록 선택 = 탐색기 표준**(main · 사용자 규칙 3 + 2차 확정): 일반 클릭/무수식 이동=**캐럿만**(선택 표시 없음·기존 선택 해제) · Shift=범위 **교체**(축소 가능) · ⌘클릭 토글 · ⌘이동=캐럿만 · ⌘Space 담기 · ★우클릭 = 선택 밖 전부 해제(우클릭만으론 미선택)/선택 안 유지. 회귀 3종. 639 green. 상세 [journal/2026-08-15.md](journal/2026-08-15.md).
 - ★ **M3-14b 신뢰 배지 개편**(main · 사용자 실기 지적 "유령 원"): Lucide badge 알파 마스크 폐기 → **Material Symbols 컬러 RGBA**(Apache-2.0 · 미검증=머리+?·대조=SNS 파란 실·차단=🚫·충돌=⚠) · **Pinned 목록 숨김**(문제 상태만) · 18px · `mkicons-rgba.sh` 컬러 파이프라인 신설 · 렌더 프로브+실기 소거 확인. 637 green. 상세 [journal/2026-08-15.md](journal/2026-08-15.md).
