@@ -598,6 +598,38 @@ mod tests {
         assert_ne!(g2, gid);
     }
 
+    /// 로컬 승격 마이그레이션(G4 · 08-15) — 로컬 그룹을 공유 그룹으로 올리고 로컬을
+    /// 지운 결과가 **재시작을 살아남는다**(승격이 반쪽만 영속되면 방이 두 개가 된다).
+    #[test]
+    fn local_promotion_survives_reopen() {
+        use nbeep_core::sgroup::{GroupUid, Roster};
+        let path = tmp("promote");
+        let secret = [7u8; 32];
+        {
+            let (mut gs, _) = FileGroupStore::open(path.clone(), secret);
+            let g = gs.create(name("옛동보팀"));
+            gs.add_member(g, pid(1));
+            // 승격 = 같은 이름·구성원의 공유 그룹 upsert + 로컬 삭제(app 부팅 경로).
+            let roster = Roster {
+                uid: GroupUid([3u8; 32]),
+                name: name("옛동보팀"),
+                owner: pid(9),
+                members: vec![pid(1), pid(9)],
+                version: 1,
+                member_invite: true,
+            };
+            assert!(gs.upsert_shared(roster, MineState::Owner).is_some());
+            assert!(gs.delete(g));
+        }
+        let (gs, load) = FileGroupStore::open(path, secret);
+        assert_eq!(load, GroupLoad::Loaded(1), "공유 1(로컬+공유 합산 카운트)");
+        assert!(gs.list().is_empty(), "로컬은 사라졌다");
+        let s = &gs.shared_list()[0];
+        assert_eq!(s.roster.name.as_str(), "옛동보팀");
+        assert_eq!(s.mine, MineState::Owner);
+        assert_eq!(s.roster.members, vec![pid(1), pid(9)]);
+    }
+
     /// fail-closed — 다른 기기 키로는 열리지 않고 잠김 · 잠긴 동안 파일 불변.
     #[test]
     fn wrong_secret_locks_and_preserves_file() {

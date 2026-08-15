@@ -5016,6 +5016,54 @@ impl App {
         self.start_connect(peer, true);
     }
 
+    /// 로컬(동보) 그룹 → 그룹 대화 승격(G4 · 08-15) — 부팅 1회 마이그레이션.
+    ///
+    /// 동보 그룹 UI는 숨겨져(ADR-0012 §7 · 08-13 확정) 구버전에서 만든 로컬 그룹이
+    /// **보이지도 지워지지도 않는 채** 남는다 → 같은 이름·구성원의 공유 그룹(내가
+    /// 소유자·roster v1)으로 올리고 로컬 기록은 지운다. 초대는 즉시 쏘지 않는다 —
+    /// 부팅 시점엔 주소가 없어 연결이 전부 실패한다. [`Self::flush_group_sends`]의
+    /// 재동기 push(소유 방 Invite 재송)가 **세션이 성립하는 순간** 전달을 맡는다.
+    fn promote_local_groups(&mut self) {
+        let locals: Vec<(
+            nbeep_core::group::GroupId,
+            nbeep_core::DisplayName,
+            Vec<PeerId>,
+        )> = self
+            .groups
+            .list()
+            .iter()
+            .map(|(id, g)| (*id, g.name.clone(), g.members()))
+            .collect();
+        if locals.is_empty() {
+            return;
+        }
+        let me = self.identity.peer_id();
+        let n = locals.len();
+        for (id, name, members) in locals {
+            let mut all = members;
+            if !all.contains(&me) {
+                all.push(me);
+            }
+            all.sort();
+            let roster = nbeep_core::Roster {
+                // uid = 무작위 32B(생성 플로와 같은 관례 — CSPRNG 유래).
+                uid: nbeep_core::GroupUid(*nbeep_crypto::Identity::generate().peer_id().as_bytes()),
+                name,
+                owner: me,
+                members: all,
+                version: 1,
+                member_invite: self.settings.get("group.member_invite") != "off",
+            };
+            let _ = self
+                .groups
+                .upsert_shared(roster, nbeep_store::MineState::Owner);
+            let _ = self.groups.delete(id);
+        }
+        self.status = format!(
+            "로컬 그룹 {n}개를 그룹 대화로 승격 — 구성원에게는 연결될 때 초대가 전달됩니다"
+        );
+    }
+
     /// 공유 그룹 개명(소유자만) — roster v+1 재배포.
     fn rename_shared(&mut self, gid: nbeep_core::group::GroupId, dn: nbeep_core::DisplayName) {
         let Some(s) = self.groups.shared_by_id(gid) else {
@@ -5308,8 +5356,32 @@ impl App {
     }
 
     /// 성립한 상대에게 대기 중이던 그룹 본문·제어 프레임을 이어 보낸다(M5-1g —
-    /// Outbound 합류점 · 재동기 주체 = 송신자).
+    /// **Outbound·Inbound 공용** 합류점 · 재동기 주체 = 송신자).
     fn flush_group_sends(&mut self, peer: PeerId) {
+        // ★ 재동기 확장(G4 · 08-15) — 내가 소유한 방에 이 상대가 있으면 **세션 성립마다
+        // 현행 명부를 Invite로 1회 재송**한다. 소유자는 상대의 수락·수신 여부를 모르므로
+        // Invite가 세 경우를 전부 닫는다: ① 초대가 유실된 상대(자동 연결 소진으로
+        // pending이 폐기됐던) = 초대 카드 ② 배포를 놓쳐 명부가 낡은 구성원 = 명부
+        // 갱신(수신측이 카드 재노출 없이 처리) ③ 최신 상대 = 같은 버전이라 조용히 무시.
+        // 이벤트 구동(세션 성립)·소유 방 수 상한·멱등이라 [13 §12-1] 자동 반복 아님.
+        let me = self.identity.peer_id();
+        let resync: Vec<Vec<u8>> = self
+            .groups
+            .shared_list()
+            .iter()
+            .filter(|s| s.roster.owner == me && s.roster.has_member(peer) && peer != me)
+            .map(|s| {
+                nbeep_core::SGroupMsg::Invite {
+                    roster: s.roster.clone(),
+                }
+                .encode()
+            })
+            .collect();
+        if !resync.is_empty() {
+            if let Some(conv) = self.conversations.get(&peer) {
+                let _ = conv.out_tx.send(SessionCmd::Group(resync));
+            }
+        }
         // 제어 프레임(초대·명부) 먼저 — 본문보다 명부가 앞서야 수신측이 방을 안다.
         if let Some(frames) = self.pending_invites.remove(&peer) {
             if let Some(conv) = self.conversations.get(&peer) {
@@ -5516,6 +5588,31 @@ impl App {
                 // 세션 인증이 서명을 대체한다(ADR §2 G-1) — 발신자 = 소유자만 수용.
                 if peer != roster.owner || !roster.has_member(me) {
                     return; // 위조·오배송 — fail-closed(조용히 버림)
+                }
+                // 재동기 재초대(G4) — 이미 있는 방(수락 여부 확정 후)이면 초대 카드를
+                // 다시 열지 않고 **명부 갱신으로만** 취급한다(G::Roster와 같은 처리 —
+                // 소유자는 상대의 수락 여부를 몰라 세션 성립마다 Invite를 재송한다).
+                if let Some(s) = self.groups.shared_by_uid(roster.uid) {
+                    if s.mine != nbeep_store::MineState::Invited {
+                        let gid = s.local_id;
+                        let ver = roster.version;
+                        let uid = roster.uid;
+                        if self
+                            .groups
+                            .upsert_shared(roster, nbeep_store::MineState::Joined)
+                            .is_some()
+                        {
+                            let mut inv = Invalidations::default();
+                            self.push_group_note(
+                                gid,
+                                &format!("구성원 명부 갱신(v{ver})"),
+                                &mut inv,
+                            );
+                            self.connect_group_members(uid);
+                            self.refresh_and_redraw();
+                        }
+                        return; // 같은 버전 재송 = 조용히 무시(멱등)
+                    }
                 }
                 let name = roster.name.as_str().to_string();
                 let uid = roster.uid;
@@ -7221,6 +7318,9 @@ impl ApplicationHandler<AppEvent> for App {
                 // ② 자동 열림 금지(사용자 확정 08-13) — 인바운드는 창을 뺏지 않는다.
                 // 목록에 행이 뜨고(비발견 상대는 extra_peers ④), 메시지가 오면
                 // 배지·제목 카운트(③)로 알린다. 여는 것은 언제나 사용자.
+                // ★ 재동기는 인바운드에서도(G4) — "접속하면 발신자가 밀어준다"의
+                // 세션 성립에는 상대가 나에게 걸어온 경우도 포함된다(종전엔 Outbound만).
+                self.flush_group_sends(peer);
                 self.status = format!("연결됨: {title} — 목록에서 열기");
                 if let Some(mid) = self.main_id {
                     self.request_redraw(mid);
@@ -8622,6 +8722,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
     };
     app.reload_faces(); // 고정폭 등 슬롯 얼굴 초기 로드
     app.apply_boot_settings(); // 영속 설정 → 파생 런타임 상태(테마·정책 등 · M3-15)
+    app.promote_local_groups(); // 구버전 로컬(동보) 그룹 → 그룹 대화(G4 마이그레이션)
     app.restore_cached_profiles(); // 핀 상대의 캐시 프로필·목록 행 복원(08-14)
     event_loop.run_app(&mut app).unwrap();
 }
