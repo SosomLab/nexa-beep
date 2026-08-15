@@ -3,7 +3,13 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
-> **갱신: 2026-08-15 9차 (KST)** — **모달 창 = 마우스 위치 + 메인 창 소유**(main · Windows 실기 보고 2건): ① 프로필 열기 = **현재 마우스 위치가 창 좌상단**(멀리 열려 커서 왕복 — `modal_attrs(at_cursor)` · 메인 inner_position+클라이언트 커서) ② **2-앱 z순서**(A·B 각각 프로필 연 상태에서 B 모달 선택 시 B 메인이 A 뒤에 남음) — **Windows owned window**(`with_owner_window`): 소유 창 클릭 = OS가 소유자(메인)까지 함께 부상(창 묶음 · AlwaysOnTop 금지 표준(08-14)과 정합 · 다른 앱 안 가림). 모달 8종 전부(About·알림·구성원·확인·Picker·그룹 이름·주소·프로필) · **대화 창은 제외 명문**(첫 패치가 잘못 걸었다 원복). **617 green** · clippy 0 · relaunch 실기. [journal/2026-08-15.md](journal/2026-08-15.md).
+> **갱신: 2026-08-15 10차 (KST)** — ★ **Windows 실기 배치 완주 — [26 §7-1](26-run-and-manual-test.md) W-A~W-H 8건 중 7건 통과**(빌드 `2512beb` · **소스 무변경** · 기록만):
+> ① **헤드리스로 증명 가능한 것을 먼저 끝냈다** — **W-A 마이그레이션**: 파일 헤더 직접 판독 `NBGS 03`(groups v2→v3)·`NBTS 02`(trust v1→v2) **3신원 전부** · `identity.key` **mtime 무변경**이고 파일에서 읽은 PeerId가 발견 결과와 일치 · trust.seg **828→1179B**(초기화면 줄었을 값 = **fail-closed 잠김 아님**). **W-B 권한 강등(R-5)**: 실바이너리 4갈래 — stderr `lockdown = windows-mitigation(dynamic-code·image-load)` · PNG→NIMG 256²·64² **바이트 정합** · 쓰레기·빈 입력 **exit 2·출력 0B**. ★ **"걸렸는가"만으로 부족하고 "걸린 채 정상 입력이 통과하는가"까지** 같은 배터리에서 봤다(과하면 이미지가 조용히 죽는다). **W-H**: `ime.*` 9종+토글 2·tooltip·carousel·list_refresh_scroll · **키 68개 중복 0**.
+> ② **부수 확인** — `ui.win_x/y/w/h`·`ui.list_sort` 저장 실측 = **08-14에 잡은 HIDDEN_KEYS 구멍이 실제로 막혔다** · `profile.avatar=b:ox`·`avatar_border` = 아바타 모델 종단 동작.
+> ③ **사용자 육안 4건 통과** — 정렬 팝업 렌더·선택 즉시 재정렬(W-C) · 순서 변경 + **깜빡임 없음**(W-D) · 캐러셀 Windows 방향 기획대로(W-F) · **3신원 그룹 생성·메시지 전달**(W-G).
+> ④ **잔여 = W-E 하나**(2-PC Win↔Mac 프로필 전파 — Windows 단독 불가). ⚠️ 실기 후 모달 3커밋(`8d1b046`~`86b045a`)이 들어와 **z순서는 재확인 대상**. 부수: **`relaunch.sh`가 Windows에서 exit 0으로 조용히 실패**(pkill 미작동 → 빌드 `os error 5` → 중복 6개 기동 → 구 인스턴스 발견을 "성공"으로 오판) — 08-13 "빌드 조용한 실패"와 같은 계열. [journal/2026-08-15.md](journal/2026-08-15.md).
+>
+> **직전(08-15 9차)** — **모달 창 = 마우스 위치 + 메인 창 소유**(main · Windows 실기 보고 2건): ① 프로필 열기 = **현재 마우스 위치가 창 좌상단**(멀리 열려 커서 왕복 — `modal_attrs(at_cursor)` · 메인 inner_position+클라이언트 커서) ② **2-앱 z순서**(A·B 각각 프로필 연 상태에서 B 모달 선택 시 B 메인이 A 뒤에 남음) — **Windows owned window**(`with_owner_window`): 소유 창 클릭 = OS가 소유자(메인)까지 함께 부상(창 묶음 · AlwaysOnTop 금지 표준(08-14)과 정합 · 다른 앱 안 가림). 모달 8종 전부(About·알림·구성원·확인·Picker·그룹 이름·주소·프로필) · **대화 창은 제외 명문**(첫 패치가 잘못 걸었다 원복). **617 green** · clippy 0 · relaunch 실기. [journal/2026-08-15.md](journal/2026-08-15.md).
 >
 > **직전(08-15 8차)** — **Windows 실기 핸드오프**(사용자가 Windows에서 pull 후 실기 예정):
 > 08-14~15 배치의 Windows 확인 항목 8종(W-A~H)을 **[26 §7-1](26-run-and-manual-test.md) 체크리스트로 정리** — 최우선 = **W-A 저장소 마이그레이션**(기존 data/ 첫 실행에서 핀·그룹 유지 — trust.seg v2·groups.seg v3 관용) · imgdec 강등 실기 · 정렬 드롭다운 · 정렬/핀 · 2-PC 프로필 전파 · 캐러셀 방향 · G4 모달 · 설정 신설 3종. CI 3-OS green(lockdown 실측 포함) · main 동기 상태에서 인계. [journal/2026-08-15.md](journal/2026-08-15.md).
