@@ -63,6 +63,7 @@ const HIDDEN_KEYS: &[&str] = &[
 
 /// 기본 off 토글 — 프로필 공개(DR-22 **기본 전부 비노출** · 옵트인). 미등록 토글은 on.
 const TOGGLE_DEFAULT_OFF: &[&str] = &[
+    "ui.close_to_tray", // 닫기 = 트레이(M3-2 — 기본 off · M3-2d 결정지)
     "profile.share.basic",
     "profile.share.email",
     "profile.share.phone",
@@ -505,6 +506,14 @@ pub fn registry() -> &'static [Entry] {
             desc: Msg::TypeaheadSpecialDesc,
             kind: SettingKind::Toggle,
             key: "ui.typeahead_special",
+        },
+        Entry {
+            cat: Msg::CatAdvanced,
+            sub: None,
+            label: Msg::CloseToTray,
+            desc: Msg::CloseToTrayDesc,
+            kind: SettingKind::Toggle,
+            key: "ui.close_to_tray",
         },
         Entry {
             cat: Msg::CatFont,

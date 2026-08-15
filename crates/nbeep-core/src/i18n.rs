@@ -190,6 +190,14 @@ pub enum Msg {
     // ── 설정: 모양 ──
     Theme,
     ThemeDesc,
+    /// 닫기 버튼 = 트레이 상주(M3-2 · 08-15).
+    CloseToTray,
+    /// 닫기 = 트레이 설명.
+    CloseToTrayDesc,
+    /// 트레이 메뉴 — 열기.
+    TrayOpen,
+    /// 트레이 메뉴 — 종료.
+    TrayQuit,
     ThemeDark,
     ThemeLight,
     Language,
@@ -698,6 +706,20 @@ impl Msg {
                 "整体明暗配色 — 立即生效",
                 "全体の明暗パレット — 即時適用",
             ],
+            Msg::CloseToTray => [
+                "Close button minimizes to tray",
+                "닫기 버튼 = 트레이로(종료하지 않음)",
+                "关闭按钮最小化到托盘",
+                "閉じるボタンでトレイに常駐",
+            ],
+            Msg::CloseToTrayDesc => [
+                "Keep running in the system tray when the main window is closed. Right-click the tray icon to quit. (Windows)",
+                "메인 창을 닫아도 시스템 트레이에 남아 계속 실행됩니다. 종료는 트레이 아이콘 우클릭 메뉴에서. (Windows)",
+                "关闭主窗口后仍驻留在系统托盘。右键托盘图标可退出。(Windows)",
+                "メインウィンドウを閉じてもトレイに常駐します。終了はトレイの右クリックから。(Windows)",
+            ],
+            Msg::TrayOpen => ["Open", "열기", "打开", "開く"],
+            Msg::TrayQuit => ["Quit", "종료", "退出", "終了"],
             Msg::ThemeDark => ["Dark", "다크", "深色", "ダーク"],
             Msg::ThemeLight => ["Light", "라이트", "浅色", "ライト"],
             Msg::Language => ["Language", "언어", "语言", "言語"],

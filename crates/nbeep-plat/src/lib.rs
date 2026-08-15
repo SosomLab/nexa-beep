@@ -14,4 +14,5 @@ pub mod launch;
 pub mod paths;
 pub mod quarantine;
 pub mod shutdown;
+pub mod tray;
 pub mod term;

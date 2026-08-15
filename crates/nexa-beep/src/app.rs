@@ -153,6 +153,8 @@ enum AppEvent {
         target: DecodeTarget,
         image: Option<(u32, u32, Vec<u8>)>,
     },
+    /// 트레이 사용자 행동(M3-2a — 트레이 스레드 → 메인. 좌클릭/메뉴 열기·종료).
+    Tray(nbeep_plat::tray::TrayEvent),
     /// keytap 관측(G1 · H-26 — mac): 무수식 ASCII keydown이 모니터에 잡혔다.
     /// winit 도달 여부와 대조해 "삼켜진 1byte"만 보충 주입한다(판정은 틱에서).
     ///
@@ -1118,6 +1120,8 @@ struct App {
     builtin_avatars: HashMap<String, Rc<nbeep_ui::IconImage>>,
     /// 내 사진(imgdec 디코드 완료본 · 08-14) — 툴바 프로필 버튼·프로필 프리뷰 공용.
     my_avatar: Option<Rc<nbeep_ui::IconImage>>,
+    /// 시스템 트레이(M3-2a · Windows — 비지원 OS는 None). 아이콘 = 내 아바타.
+    tray: Option<nbeep_plat::tray::TrayHandle>,
     /// 상대 프로필 보기 뷰(우클릭 ▸ 프로필 보기 — 열려 있을 때만 Some).
     peer_info_view: Option<nbeep_ui::PeerInfoWidget>,
     /// 주소 입력 모달 뷰(DR-19 · M3-16 — 열려 있을 때만 Some).
@@ -3879,6 +3883,152 @@ impl App {
     }
 
     /// 설정 영속 mark — 변경 지점은 플래그만 세운다(직렬화·값 복사 없음 · FR-P-9).
+    /// 내 아바타 RGBA 합성(트레이 아이콘 · M3-2a) — 투명 바탕 → 시드 색 원(1px AA)
+    /// → (사진 > 내장) **박스 평균 축소** 알파 블렌드 → 보더 링(소형 규약).
+    /// 이니셜 글자는 생략(트레이 크기에서 판독성 낮음 — 툴팁·메뉴가 이름을 보인다).
+    #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+    #[allow(clippy::cast_sign_loss)]
+    fn my_avatar_rgba(&self, side: u32) -> Vec<u8> {
+        use nbeep_core::avatar::{parse_border, AvatarChoice};
+        let n = side as usize;
+        let mut out = vec![0u8; n * n * 4];
+        let seed = self.identity.peer_id().as_bytes().to_vec();
+        let base = nbeep_ui::avatar::avatar_color(&seed).0;
+        let (cr, cg, cb) = (
+            ((base >> 16) & 0xFF) as u8,
+            ((base >> 8) & 0xFF) as u8,
+            (base & 0xFF) as u8,
+        );
+        let c = side as f32 / 2.0;
+        // ① 시드 색 원.
+        for y in 0..n {
+            for x in 0..n {
+                let d = (((x as f32 + 0.5) - c).powi(2) + ((y as f32 + 0.5) - c).powi(2)).sqrt();
+                let cov = (c - d + 0.5).clamp(0.0, 1.0);
+                if cov > 0.0 {
+                    let i = (y * n + x) * 4;
+                    out[i] = cr;
+                    out[i + 1] = cg;
+                    out[i + 2] = cb;
+                    out[i + 3] = (cov * 255.0).round() as u8;
+                }
+            }
+        }
+        // ② 그림(사진 > 내장) — 박스 평균 축소 + over 블렌드.
+        let img = self.my_avatar.clone().or_else(|| {
+            match AvatarChoice::parse(self.settings.get("profile.avatar")) {
+                AvatarChoice::Builtin(k) => self.builtin_avatars.get(&k).cloned(),
+                _ => None,
+            }
+        });
+        if let Some(img) = img {
+            let (sw, sh) = (img.w as usize, img.h as usize);
+            if sw > 0 && sh > 0 {
+                for y in 0..n {
+                    for x in 0..n {
+                        let sx0 = x * sw / n;
+                        let sx1 = ((x + 1) * sw).div_ceil(n).clamp(sx0 + 1, sw);
+                        let sy0 = y * sh / n;
+                        let sy1 = ((y + 1) * sh).div_ceil(n).clamp(sy0 + 1, sh);
+                        let (mut r, mut g, mut b, mut a, mut cnt) = (0f32, 0f32, 0f32, 0f32, 0f32);
+                        for sy in sy0..sy1 {
+                            for sx in sx0..sx1 {
+                                let si = (sy * sw + sx) * 4;
+                                let av = f32::from(img.rgba[si + 3]) / 255.0;
+                                r += f32::from(img.rgba[si]) * av;
+                                g += f32::from(img.rgba[si + 1]) * av;
+                                b += f32::from(img.rgba[si + 2]) * av;
+                                a += av;
+                                cnt += 1.0;
+                            }
+                        }
+                        let aa = if cnt > 0.0 { a / cnt } else { 0.0 };
+                        if aa <= 0.0 {
+                            continue;
+                        }
+                        let inv = 1.0 / a;
+                        let (pr, pg, pb) = (r * inv, g * inv, b * inv);
+                        let i = (y * n + x) * 4;
+                        let da = f32::from(out[i + 3]) / 255.0;
+                        let oa = aa + da * (1.0 - aa);
+                        if oa > 0.0 {
+                            out[i] = ((pr * aa + f32::from(out[i]) * da * (1.0 - aa)) / oa)
+                                .round()
+                                .clamp(0.0, 255.0) as u8;
+                            out[i + 1] = ((pg * aa + f32::from(out[i + 1]) * da * (1.0 - aa)) / oa)
+                                .round()
+                                .clamp(0.0, 255.0) as u8;
+                            out[i + 2] = ((pb * aa + f32::from(out[i + 2]) * da * (1.0 - aa)) / oa)
+                                .round()
+                                .clamp(0.0, 255.0) as u8;
+                            out[i + 3] = (oa * 255.0).round() as u8;
+                        }
+                    }
+                }
+            }
+        }
+        // ③ 보더 링 — 가장자리 안쪽 밴드(소형 2px 상당 · 32px 기준).
+        if let Some((rr, rg, rb)) = parse_border(self.settings.get("profile.avatar_border")) {
+            let w = (side as f32 / 16.0).max(2.0);
+            for y in 0..n {
+                for x in 0..n {
+                    let d = (((x as f32 + 0.5) - c).powi(2) + ((y as f32 + 0.5) - c).powi(2))
+                        .sqrt()
+                        - c; // 음수 = 안쪽
+                    let ring = (d + w / 2.0).abs() - w / 2.0;
+                    let cov = (0.5 - ring).clamp(0.0, 1.0);
+                    if cov > 0.0 {
+                        let i = (y * n + x) * 4;
+                        let da = f32::from(out[i + 3]) / 255.0;
+                        let oa = cov + da * (1.0 - cov);
+                        if oa > 0.0 {
+                            out[i] = ((f32::from(rr) * cov + f32::from(out[i]) * da * (1.0 - cov))
+                                / oa)
+                                .round()
+                                .clamp(0.0, 255.0) as u8;
+                            out[i + 1] = ((f32::from(rg) * cov
+                                + f32::from(out[i + 1]) * da * (1.0 - cov))
+                                / oa)
+                                .round()
+                                .clamp(0.0, 255.0) as u8;
+                            out[i + 2] = ((f32::from(rb) * cov
+                                + f32::from(out[i + 2]) * da * (1.0 - cov))
+                                / oa)
+                                .round()
+                                .clamp(0.0, 255.0) as u8;
+                            out[i + 3] = (oa * 255.0).round() as u8;
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// 트레이 표시 내용(M3-2a) — 아이콘 32px 아바타 · 툴팁/헤더 = 표시 이름 ·
+    /// 라벨 = i18n(언어 전환 시 refresh_tray로 재주입).
+    fn tray_content(&self) -> nbeep_plat::tray::TrayContent {
+        use nbeep_core::{t, Msg};
+        let name = effective_display_name(&self.settings, &self.identity.peer_id())
+            .as_str()
+            .to_string();
+        nbeep_plat::tray::TrayContent {
+            rgba: self.my_avatar_rgba(32),
+            side: 32,
+            tooltip: format!("Nexa Beep — {name}"),
+            name,
+            open_label: t(Msg::TrayOpen).to_string(),
+            quit_label: t(Msg::TrayQuit).to_string(),
+        }
+    }
+
+    /// 트레이 갱신(아바타·보더·표시 이름 변경 동기 — refresh_toolbar_avatar 깔때기).
+    fn refresh_tray(&self) {
+        if let Some(t) = &self.tray {
+            t.update(self.tray_content());
+        }
+    }
+
     /// 툴바 프로필 버튼 = **지금의 내 얼굴**(08-14 사용자 요청) — 우선순위는 프로필
     /// 프리뷰와 동일(사진 > 내장 > 이니셜/빈 원) + 보더 링(소형 2px).
     fn refresh_toolbar_avatar(&mut self) {
@@ -3909,6 +4059,7 @@ impl App {
             },
             &mut inv,
         );
+        self.refresh_tray(); // 트레이 아이콘·툴팁도 같은 깔때기로(M3-2a)
         if let Some(mid) = self.main_id {
             self.request_redraw(mid);
         }
@@ -4134,6 +4285,14 @@ impl App {
         self.recv_rate = nbeep_core::RateLimit::from_code(self.settings.get("xfer.recv_rate"));
         if let Ok(v) = self.settings.get("xfer.timeout_sec").parse::<u64>() {
             self.wait_timeout_sec = v.clamp(5, 3600);
+        }
+        // 트레이 상주(M3-2a · Windows — 비지원 OS는 None): 아이콘 = 내 아바타 ·
+        // 이벤트는 프록시로 메인에 복귀(좌클릭/열기·종료).
+        if self.tray.is_none() {
+            let proxy = self.proxy.clone();
+            self.tray = nbeep_plat::tray::spawn(self.tray_content(), move |ev| {
+                let _ = proxy.send_event(AppEvent::Tray(ev));
+            });
         }
         // 툴바 프로필 버튼 = 내 얼굴(08-14) — 부팅 반영 + 사진이 있으면 워커 디코드
         // (도착 시 Decoded(MyAvatar)가 버튼을 갱신한다).
@@ -7046,6 +7205,16 @@ impl ApplicationHandler<AppEvent> for App {
                     self.request_redraw(mid);
                 }
             }
+            AppEvent::Tray(ev) => match ev {
+                // 트레이(M3-2a) — 좌클릭/"열기" = 메인 복원 · "종료" = 명시적 종료.
+                nbeep_plat::tray::TrayEvent::Open => {
+                    if let Some(e) = self.main_id.and_then(|m| self.windows.get(&m)) {
+                        e.window.set_visible(true);
+                        e.window.focus_window();
+                    }
+                }
+                nbeep_plat::tray::TrayEvent::Quit => el.exit(),
+            },
             AppEvent::Decoded { target, image } => {
                 // 워커 격리 디코드 복귀(M4-5 · 08-13) — 메인은 감싸고, 꽂고, 다시 그린다.
                 let icon = image.map(|(w, h, rgba)| {
@@ -7443,6 +7612,14 @@ impl ApplicationHandler<AppEvent> for App {
                     self.apply_ime(outs, el);
                 }
                 if Some(id) == self.main_id {
+                    // 트레이 상주(M3-2a · 사용자 확정 08-15) — 스위치 on이면 종료 대신
+                    // 숨김(전송·세션은 계속 돈다 · 복귀 = 트레이 좌클릭/열기).
+                    if self.settings.get("ui.close_to_tray") == "on" && self.tray.is_some() {
+                        if let Some(e) = self.windows.get(&id) {
+                            e.window.set_visible(false);
+                        }
+                        return;
+                    }
                     // ★ 종료 가드(M4-9) — 미확인·진행 중 전송이 있으면 조용히 끊지 않는다.
                     //   "보냈다"가 "닿았다"가 아니라, 확인 전 종료는 수신측 폐기로 이어질 수 있다.
                     let pending: u32 = self.awaiting_ack.values().sum::<u32>()
@@ -8401,6 +8578,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
             .map(|b| (b.key, Rc::new(b.image)))
             .collect(),
         my_avatar: None,
+        tray: None,
         peer_info_view: None,
         picker_ctx: None,
         pending_picker: None,
