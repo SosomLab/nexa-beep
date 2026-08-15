@@ -90,21 +90,18 @@ pub fn parse(input: &str) -> Parsed {
     if !input.starts_with('/') {
         return Parsed::Text(input.trim().to_string());
     }
-    // ② escape — `//…`는 `/`로 시작하는 **메시지**다(앞 `/` 하나만 벗긴다).
-    if let Some(rest) = input.strip_prefix("//") {
-        return Parsed::Text(format!("/{}", rest.trim_end()));
-    }
-    // ★ **명령은 한 줄이다.** 줄바꿈이 있으면 메시지로 본다 — 그러지 않으면
-    //   `"/help⏎둘째 줄"`(Shift+Enter 멀티라인)에서 첫 줄만 명령으로 먹고
-    //   **나머지가 조용히 사라진다**(08-16 실측으로 잡은 데이터 손실).
-    if input.contains('\n') {
-        return Parsed::Text(input.trim().to_string());
-    }
-    let body = &input[1..];
-    // 인자는 아직 쓰지 않지만 `/verify 어쩌고`도 명령으로 받는다(뒤는 무시).
-    let word = body.split_whitespace().next().unwrap_or("").to_lowercase();
+    // ★ 여기부터는 **무조건 비전송**(08-16 2차 확정 — "첫 글자 `/` = 전달 대상 아님",
+    //   예외 없음). 종전의 `//` escape·한 줄 예외·`/` 단독 예외 전부 폐지 — 아는
+    //   이름이면 실행, 아니면 오류 안내뿐. 멀티라인이어도 첫 줄로 판정한다(전체가
+    //   비전송이라 뒷줄이 "몰래 사라지는" 일은 없다 — 안 보냈음이 안내로 보인다).
+    let first_line = input.lines().next().unwrap_or("");
+    let word = first_line[1..]
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .to_lowercase();
     if word.is_empty() {
-        return Parsed::Text(input.trim().to_string()); // `/` 한 글자·`/   `는 메시지
+        return Parsed::Unknown(String::new()); // `/` 단독·`/   ` — 안내(비전송)
     }
     for (names, cmd) in TABLE {
         if names.contains(&word.as_str()) {
@@ -123,7 +120,7 @@ pub fn help_text() -> String {
         "  /verify          지문(안전 번호) 대조 카드 열기",
         "  /trust           이 상대의 신뢰 상태 보기",
         "  /close           대화창 닫기",
-        "  //로 시작         '/'로 시작하는 메시지를 보낼 때(예: //안녕 → /안녕)",
+        "  ※ /로 시작하는 입력은 어떤 경우에도 전송되지 않습니다",
     ]
     .join("\n")
 }
@@ -157,15 +154,19 @@ mod tests {
     }
 
     /// ★ escape가 없으면 `/`로 시작하는 문장을 영영 못 보낸다.
+    /// ★ 08-16 2차 확정 — `/`로 시작하면 **무조건 비전송**: escape(`//`)·`/` 단독
+    /// 예외 폐지. 어떤 형태든 Text로 새면 이 테스트가 잡는다.
     #[test]
-    fn double_slash_escapes_to_message() {
-        assert_eq!(parse("//verify"), Parsed::Text("/verify".into()));
-        assert_eq!(parse("//안녕"), Parsed::Text("/안녕".into()));
-        assert_eq!(
-            parse("/"),
-            Parsed::Text("/".into()),
-            "슬래시 한 글자는 메시지"
-        );
+    fn any_leading_slash_is_never_sent() {
+        for s in ["//verify", "//안녕", "/", "/   ", "/zzz", "/help\n둘째 줄"] {
+            assert!(
+                !matches!(parse(s), Parsed::Text(_) | Parsed::Empty),
+                "비전송이어야 한다: {s:?} → {:?}",
+                parse(s)
+            );
+        }
+        assert_eq!(parse("//verify"), Parsed::Unknown("/verify".into()));
+        assert_eq!(parse("/"), Parsed::Unknown(String::new()), "안내 대상");
     }
 
     /// ★ 오타를 **상대에게 보내지 않는다** — 보내면 사용자는 명령이 실행된 줄 안다.
@@ -192,24 +193,15 @@ mod tests {
         assert_eq!(parse("/help  "), Parsed::Command(ChatCommand::Help));
     }
 
-    /// ★ **명령은 한 줄** — 멀티라인(Shift+Enter)의 뒷줄이 사라지면 안 된다.
-    /// 08-16 실측으로 잡은 조용한 데이터 손실.
+    /// 멀티라인도 첫 글자 `/`면 비전송(08-16 2차) — 첫 줄 이름으로 판정만 한다.
     #[test]
-    fn multiline_starting_with_slash_is_a_message() {
-        let m = "/help\n두 번째 줄";
+    fn multiline_starting_with_slash_is_not_sent() {
         assert_eq!(
-            parse(m),
-            Parsed::Text(m.to_string()),
-            "뒷줄이 보존돼야 한다"
+            parse("/help\n두 번째 줄"),
+            Parsed::Command(ChatCommand::Help),
+            "첫 줄이 아는 이름이면 실행(전체 비전송)"
         );
-        let e = "//안녕\n둘째";
-        assert_eq!(
-            parse(e),
-            Parsed::Text("/안녕\n둘째".into()),
-            "escape + 멀티라인"
-        );
-        // 한 줄이면 그대로 명령.
-        assert_eq!(parse("/help"), Parsed::Command(ChatCommand::Help));
+        assert_eq!(parse("/zzz\n둘째"), Parsed::Unknown("zzz".into()));
     }
 
     /// 중간에 나온 `/`는 명령이 아니다(첫 글자 규칙의 반대편).
