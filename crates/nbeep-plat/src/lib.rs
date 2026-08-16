@@ -6,6 +6,7 @@
 
 pub mod clipboard;
 pub mod clock;
+pub mod conventions;
 pub mod font;
 pub mod gui;
 pub mod host;

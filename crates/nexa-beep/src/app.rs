@@ -9118,7 +9118,8 @@ impl ApplicationHandler<AppEvent> for App {
             }
             WindowEvent::ModifiersChanged(mods) => {
                 let st = mods.state();
-                self.primary_down = if cfg!(target_os = "macos") {
+                // 주 키 판정은 conventions 한 곳(M3-1b — 종전 cfg! 리터럴 산재).
+                self.primary_down = if nbeep_plat::conventions::primary_is_super() {
                     st.super_key()
                 } else {
                     st.control_key()
@@ -9250,23 +9251,25 @@ impl ApplicationHandler<AppEvent> for App {
                                 _ => None,
                             });
                         if let Some(t) = eff {
-                            match t.as_str() {
-                                "," => {
+                            // 매핑은 conventions 한 곳(M3-1b) — 여기는 **행동만**.
+                            use nbeep_plat::conventions::{std_accel, StdAccel};
+                            match std_accel(&t) {
+                                Some(StdAccel::Settings) => {
                                     self.open_settings(el);
                                     return;
                                 }
-                                "g" | "G" => {
+                                Some(StdAccel::Gallery) => {
                                     self.open_gallery(el);
                                     return;
                                 }
                                 // 텍스트 기본 단축키 — 전체 선택(사용자 지적 08-09).
-                                "a" | "A" => {
+                                Some(StdAccel::SelectAll) => {
                                     self.route(id, InputEvent::SelectAll, el);
                                     return;
                                 }
                                 // 복사/잘라내기/붙여넣기 — **모든 텍스트 컨트롤**(① 08-13 —
                                 // 그전엔 대화 입력창만). ui는 OS를 모른다 — plat 어댑터가 잇는다.
-                                "c" | "C" => {
+                                Some(StdAccel::Copy) => {
                                     if let Some(t) = self.clipboard_copy_for(id) {
                                         if nbeep_plat::clipboard::set_text(&t) {
                                             self.status = "복사됨".into();
@@ -9274,30 +9277,30 @@ impl ApplicationHandler<AppEvent> for App {
                                     }
                                     return;
                                 }
-                                "x" | "X" => {
+                                Some(StdAccel::Cut) => {
                                     if let Some(t) = self.clipboard_cut_for(id) {
                                         nbeep_plat::clipboard::set_text(&t);
                                         self.request_redraw(id);
                                     }
                                     return;
                                 }
-                                "v" | "V" => {
+                                Some(StdAccel::Paste) => {
                                     if let Some(t) = nbeep_plat::clipboard::get_text() {
                                         self.clipboard_paste_for(id, &t);
                                         self.request_redraw(id);
                                     }
                                     return;
                                 }
-                                "y" | "Y" => {
+                                Some(StdAccel::AcceptOffer) => {
                                     self.answer_offer(id, true);
                                     return;
                                 }
-                                "n" | "N" => {
+                                Some(StdAccel::RejectOffer) => {
                                     self.answer_offer(id, false);
                                     return;
                                 }
                                 // 주소 직접 입력 = 별도 모달 창(M3-16 · 인라인 상태바 입력 대체).
-                                "k" | "K" => {
+                                Some(StdAccel::AddEndpoint) => {
                                     self.open_add_endpoint(el);
                                     return;
                                 }
