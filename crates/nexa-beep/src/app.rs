@@ -137,6 +137,9 @@ enum AppEvent {
         peer: PeerId,
         /// 평균 송신 속도(B/s · 08-16 — 청크 첫 발신~Done 송신 기준).
         avg_bps: u64,
+        /// 세션 계측기의 **관측 최고**(B/s · 08-16) — Auto 설정 행 하단 표시용.
+        /// 평균은 대기가 섞여 링크 능력을 과소 평가한다([`nbeep_core::RateMeter`] 문서).
+        peak_bps: u64,
     },
     /// **수신 종단 확인**(M4-9) — 상대가 격리까지 마쳤(`ok=true`)거나 실패(`ok=false`)했다.
     XferAcked { peer: PeerId, ok: bool },
@@ -643,7 +646,11 @@ fn spawn_session_actor(
                         let _ = proxy.send_event(AppEvent::Closed { peer });
                         return;
                     }
-                    let _ = proxy.send_event(AppEvent::XferSendDone { peer, avg_bps });
+                    let _ = proxy.send_event(AppEvent::XferSendDone {
+                        peer,
+                        avg_bps,
+                        peak_bps: send_meter.peak_bps(),
+                    });
                 }
             }
             // ★ 수신은 **스트림별이 아니라 도착 순서로** 뽑는다(08-13 — 스트림별 폴링은
@@ -874,6 +881,41 @@ fn now_stamp() -> (u64, nbeep_ui::WallTime) {
 }
 
 /// 속도 표기(B/s → 사람이 읽는 단위).
+/// Auto 속도 행의 하단 정보(08-16) — 실측 최고와 그 절반(발신 목표) 또는 무주장
+/// 원칙(수신 — [`nbeep_core::RateLimit::advertised_cap`])을 보여 준다.
+/// Auto가 아니면 빈 문자열 = 줄 제거. 발신 peak가 세션 재시작으로 비면 "실측 전".
+fn auto_rate_note(
+    limit: nbeep_core::RateLimit,
+    meter: &nbeep_core::RateMeter,
+    sending: bool,
+) -> String {
+    if limit != nbeep_core::RateLimit::Auto {
+        return String::new();
+    }
+    let peak = meter.peak_bps();
+    if sending {
+        if peak == 0 {
+            format!(
+                "실측 전 — 하한 {}에서 시작",
+                rate_label(nbeep_core::rate::AUTO_FLOOR_BPS)
+            )
+        } else {
+            format!(
+                "실측 최고 {} → 자동 목표 {}",
+                rate_label(peak),
+                rate_label(meter.auto_target())
+            )
+        }
+    } else if peak == 0 {
+        "실측 전 · 상한 무주장 — 발신자가 자기 실측의 절반으로 양보".into()
+    } else {
+        format!(
+            "실측 최고 {} · 상한 무주장 — 발신자가 절반으로 양보",
+            rate_label(peak)
+        )
+    }
+}
+
 fn rate_label(bps: u64) -> String {
     if bps == 0 {
         return "무제한".into();
@@ -2373,6 +2415,18 @@ impl App {
         sv.set_row_note(
             "xfer.approval_window",
             &format!("시작 {start_s}, 경과 {elapsed_s}, 잔여 {remain_s}, 종료 {end_s}"),
+            &mut inv,
+        );
+        // Auto 속도 실측 표시(08-16 사용자 요청) — 값이 안 바뀌면 `set_row_note`가
+        // 무효화를 건너뛰므로 1초 주기에 태워도 비용이 없다(peak는 전송 완료 때만 변한다).
+        sv.set_row_note(
+            "xfer.send_rate",
+            &auto_rate_note(self.send_rate, &self.send_meter, true),
+            &mut inv,
+        );
+        sv.set_row_note(
+            "xfer.recv_rate",
+            &auto_rate_note(self.recv_rate, &self.recv_meter, false),
             &mut inv,
         );
         if remain.is_some() {
@@ -7749,7 +7803,10 @@ impl ApplicationHandler<AppEvent> for App {
                 avg_bps,
             } => {
                 self.active_recv.remove(&peer); // 수신 완결 — 취소 대상 아님(08-16)
-                                                // 격리 보관까지 끝난 상태 — **실체화는 승인 후 별도**(FR-S-9).
+                // 수신은 액터에 계측기가 없다 — 평균이 유일한 실측(보수적 하한).
+                self.recv_meter.note_peak(avg_bps);
+                self.refresh_approval_ui();
+                // 격리 보관까지 끝난 상태 — **실체화는 승인 후 별도**(FR-S-9).
                 self.status = format!(
                     "파일 격리 완료: {name} · 위험 {risk:?}{} — 승인 전까지 실행 불가",
                     if mismatch {
@@ -7796,8 +7853,16 @@ impl ApplicationHandler<AppEvent> for App {
                 self.status = "상대가 수락 — 전송 시작".into();
                 self.redraw_conversation(peer);
             }
-            AppEvent::XferSendDone { peer, avg_bps } => {
+            AppEvent::XferSendDone {
+                peer,
+                avg_bps,
+                peak_bps,
+            } => {
                 self.active_send.remove(&peer); // 다 보냈다 — 취소 대상 아님(08-16)
+                // Auto 설정 행 표시용 집계(08-16) — 세션 peak가 0일 수 있다
+                // (프로브 크기 미만의 작은 파일 — 창이 한 번도 안 닫힘). 평균이 하한.
+                self.send_meter.note_peak(peak_bps.max(avg_bps));
+                self.refresh_approval_ui();
                 self.send_avg.insert(peer, avg_bps); // ack 도착 시 완료 문구에(08-16)
                                                      // ★ 전송 끝 ≠ 완료(M4-9) — 청크·Done을 다 보냈을 뿐, 상대 격리 확인(ack)
                                                      //   전까지는 **확인 대기**다. 미확인 카운트를 올려 종료 가드가 본다.

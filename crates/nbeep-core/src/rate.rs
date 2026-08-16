@@ -116,6 +116,12 @@ impl RateMeter {
         self.peak_bps = self.peak_bps.max(bps);
     }
 
+    /// 이미 계산된 속도(B/s)를 peak 후보로 반영(08-16) — 액터 세션의 실측을
+    /// GUI 집계기로 전달할 때 쓴다(집계기는 바이트 흐름을 직접 보지 못한다).
+    pub fn note_peak(&mut self, bps: u64) {
+        self.peak_bps = self.peak_bps.max(bps);
+    }
+
     /// 전송/수신한 바이트를 기록한다.
     pub fn observe(&mut self, bytes: u64, now_ms: u64) {
         if self.total_bytes == 0 && self.win_bytes == 0 {
@@ -252,6 +258,17 @@ impl Pacer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `note_peak` = 최고치 후보 주입 — 더 큰 값만 남고 작은 값은 깎지 못한다.
+    #[test]
+    fn note_peak_keeps_maximum_only() {
+        let mut m = RateMeter::default();
+        assert_eq!(m.peak_bps(), 0);
+        m.note_peak(2_000_000);
+        m.note_peak(500_000); // 나중의 느린 실측이 peak를 되돌리면 안 된다
+        assert_eq!(m.peak_bps(), 2_000_000);
+        assert_eq!(m.auto_target(), 1_000_000); // 50%가 하한(256KiB)보다 크다
+    }
 
     #[test]
     fn codes_map_to_expected_limits() {
