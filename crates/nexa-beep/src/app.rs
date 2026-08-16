@@ -193,8 +193,11 @@ enum DecodeTarget {
     PeerAvatar(PeerId),
     /// 내 프로필 화면 아바타 미리보기(256 · 원형).
     MyAvatar,
-    /// 수신 이미지의 대화 스레드 미리보기(96 · 사각 · M4-5ⓑ).
-    XferThumb(PeerId),
+    /// 수신 이미지의 대화 스레드 미리보기(96 · 사각 · M4-5ⓑ). 경로는 확대
+    /// 미리보기 클릭 키로 스레드 항목에 함께 붙는다(08-16).
+    XferThumb(PeerId, String),
+    /// 확대 미리보기 원본(1024 · 사각 · 08-16) — 열린 뷰어 창에 꽂는다.
+    FullImage(String),
     /// 격리함 행 썸네일(64 · 사각) — `.beepq` 경로 키의 캐시(`qthumbs`)로.
     QThumb(String),
     /// 프로필 "최근 이미지" 캐러셀 썸네일(64 · 원형 · 08-14) — 경로 키로 프로필
@@ -303,6 +306,19 @@ impl std::fmt::Debug for InboundSession {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("InboundSession").finish_non_exhaustive()
     }
+}
+
+/// 확대 미리보기 상태(08-16) — 격리물 경로가 키. 디코드는 워커(imgdec 격리 ·
+/// 1MiB 미리보기 상한 그대로 — 초과·손상은 Failed 안내).
+struct ImageViewState {
+    qpath: String,
+    img: ImgLoad,
+}
+
+enum ImgLoad {
+    Loading,
+    Ready(std::rc::Rc<nbeep_ui::IconImage>),
+    Failed,
 }
 
 /// 상대 프로필(M3-17 — 세션 경유 수신 · ADR-0008). 켠 필드만 온다.
@@ -955,6 +971,9 @@ struct WinEntry {
 enum Role {
     /// 주 창 — 목록(단일 모드에서는 대화 전환도 이 창에서).
     Main,
+    /// 수신 이미지 **확대 미리보기**(08-16 · M4-5 잔여) — 단일 창(peer_info 패턴 ·
+    /// 내용은 [`App::image_view`]가 든다 · Role은 Copy라 경로는 상태에).
+    ImageView,
     /// 상대별 대화 창(Separate 모드).
     Chat(PeerId),
     /// 설정 창(`Cmd/Ctrl+,` — DR-24).
@@ -1277,6 +1296,8 @@ struct App {
     active_send: HashMap<PeerId, nbeep_core::XferId>,
     /// 진행 중(수락 후) 수신 — 위와 대칭.
     active_recv: HashMap<PeerId, nbeep_core::XferId>,
+    /// 확대 미리보기 창 내용(08-16 — 단일 창 · [`Role::ImageView`]의 짝).
+    image_view: Option<ImageViewState>,
     /// 발신했으나 **수신 종단 확인(ack) 대기 중**인 건수(상대별 · M4-9). 종료 가드가 본다.
     awaiting_ack: HashMap<PeerId, u32>,
     /// 종료 가드 — 미확인 전송이 있을 때 첫 닫기는 경고만, 두 번째로 확정(파괴적 확인 문법).
@@ -4120,6 +4141,71 @@ impl App {
         }
     }
 
+    /// 확대 미리보기 열기(08-16 · M4-5 잔여) — 단일 창(peer_info 패턴): 이미
+    /// 열려 있으면 내용 교체·포커스. 디코드는 워커(imgdec 격리 · 1024px 상한).
+    fn open_image_view(&mut self, el: &ActiveEventLoop, qpath: String, title: String) {
+        let same = self
+            .image_view
+            .as_ref()
+            .is_some_and(|v| v.qpath == qpath && !matches!(v.img, ImgLoad::Failed));
+        if same {
+            // 같은 이미지가 이미 열려 있다 — 재디코드 없이 창만 앞으로.
+            if let Some((_, e)) = self.windows.iter().find(|(_, e)| e.role == Role::ImageView) {
+                e.window.focus_window();
+            }
+            return;
+        }
+        self.image_view = Some(ImageViewState {
+            qpath: qpath.clone(),
+            img: ImgLoad::Loading,
+        });
+        let qp = qpath.clone();
+        spawn_decode(
+            self.proxy.clone(),
+            DecodeTarget::FullImage(qpath),
+            move || crate::imgdec::thumb_raw_from_beepq(std::path::Path::new(&qp), 1024),
+        );
+        if let Some((wid, _)) = self.windows.iter().find(|(_, e)| e.role == Role::ImageView) {
+            let wid = *wid;
+            if let Some(e) = self.windows.get_mut(&wid) {
+                e.window.set_title(&format!("미리보기 — {title}"));
+                e.window.focus_window();
+            }
+            self.request_redraw(wid);
+            return;
+        }
+        let attrs = Window::default_attributes()
+            .with_title(format!("미리보기 — {title}"))
+            .with_inner_size(winit::dpi::LogicalSize::new(640.0, 560.0))
+            .with_window_icon(self.icon.clone());
+        let attrs = self.modal_attrs(attrs, true); // 커서 자리 + 메인 소유(카드 규약)
+        let window = Rc::new(el.create_window(attrs).unwrap());
+        let scale = window.scale_factor() as f32;
+        let context = softbuffer::Context::new(window.clone()).unwrap();
+        let surface = SbSurface::new(&context, window.clone()).unwrap();
+        let id = window.id();
+        self.windows.insert(
+            id,
+            WinEntry {
+                role: Role::ImageView,
+                window,
+                surface,
+                cursor: (0, 0),
+                scale,
+            },
+        );
+        self.request_redraw(id);
+    }
+
+    /// 확대 미리보기 닫기(뷰·창 동시 정리 — close_profile과 같은 문법).
+    fn close_image_view(&mut self) {
+        self.image_view = None;
+        if let Some((wid, _)) = self.windows.iter().find(|(_, e)| e.role == Role::ImageView) {
+            let wid = *wid;
+            self.windows.remove(&wid);
+        }
+    }
+
     /// 주소 직접 입력 모달을 연다(DR-19 · M3-16 — `⌘/Ctrl+K`·툴바 +). 이미 있으면 포커스.
     fn open_add_endpoint(&mut self, el: &ActiveEventLoop) {
         if let Some((aid, _)) = self
@@ -6342,6 +6428,7 @@ impl App {
         let h = i32::try_from(size.height).unwrap_or(i32::MAX);
         let mut inv = Invalidations::default();
         match role {
+            Role::ImageView => {} // 뷰어는 페인트가 창 크기로 직접 맞춘다(위젯 없음)
             Role::Main => {
                 let body = (h - Self::bar_h(scale)).max(0);
                 // 목록 모드 상단 크롬: Pull-down 메뉴 행 + 툴바(사용자 요청 08-09).
@@ -6509,7 +6596,7 @@ impl App {
     }
 
     /// 대화 뷰에서 나온 발신·복귀를 처리한다. `peer` = 그 뷰의 상대.
-    fn drain_chat_effects(&mut self, peer: PeerId, id: WindowId) {
+    fn drain_chat_effects(&mut self, el: &ActiveEventLoop, peer: PeerId, id: WindowId) {
         let mut inv = Invalidations::default();
         // 진행 배너 "취소"(08-16) — 위젯은 세션을 모른다 · 라우팅은 호스트.
         if self
@@ -6518,6 +6605,19 @@ impl App {
             .is_some_and(ChatViewWidget::take_xfer_cancel)
         {
             self.cancel_active_xfer(peer);
+        }
+        // 인라인 썸네일 클릭 = 확대 미리보기(08-16 · M4-5 잔여) — 파일명은 그
+        // 항목의 무해화 통과분을 쓴다(경로 basename은 격리 해시 이름이라 무의미).
+        if let Some(qp) = self
+            .chats
+            .get_mut(&peer)
+            .and_then(ChatViewWidget::take_open_image)
+        {
+            let title = std::path::Path::new(&qp)
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "이미지".into());
+            self.open_image_view(el, qp, title);
         }
         // 풍선 우클릭 복사(08-10) — 위젯은 OS를 모르므로 여기서 클립보드에 쓴다.
         if let Some(t) = self
@@ -6646,6 +6746,18 @@ impl App {
         }
         let mut inv = Invalidations::default();
         match role {
+            Role::ImageView => {
+                // 확대 미리보기(08-16) — Esc = 닫기(카드류 관례). 그 외 입력 없음.
+                if matches!(
+                    ev,
+                    nbeep_ui::InputEvent::Key {
+                        key: nbeep_ui::Key::Escape,
+                        ..
+                    }
+                ) {
+                    self.close_image_view();
+                }
+            }
             Role::Main => {
                 if let Some(gid) = self.single_open_group {
                     // 그룹 스레드(단일 모드 · M5-1) — 1:1 전환과 같은 문법.
@@ -6657,7 +6769,7 @@ impl App {
                     if let Some(chat) = self.chats.get_mut(&peer) {
                         chat.on_event(&ev, &mut inv);
                     }
-                    self.drain_chat_effects(peer, id);
+                    self.drain_chat_effects(el, peer, id);
                 } else {
                     // 메뉴가 열려 있으면 모달 캡처(목록으로 전파 금지).
                     if self.menu.is_open() {
@@ -6739,7 +6851,7 @@ impl App {
                 if let Some(chat) = self.chats.get_mut(&peer) {
                     chat.on_event(&ev, &mut inv);
                 }
-                self.drain_chat_effects(peer, id);
+                self.drain_chat_effects(el, peer, id);
             }
             Role::GroupChat(gid) => {
                 if let Some(chat) = self.gchats.get_mut(&gid) {
@@ -7161,6 +7273,45 @@ impl App {
             .with_scale(entry.scale)
             .with_caret_on(caret_on);
         match entry.role {
+            Role::ImageView => {
+                // 확대 미리보기(08-16) — contain 맞춤 중앙 배치 · 상태 3종.
+                let (fw, fh) = (size.width as i32, size.height as i32);
+                let full = Rect::new(0, 0, fw, fh);
+                ctx.fill_rect(full, theme.panel_bg);
+                match self.image_view.as_ref().map(|v| &v.img) {
+                    Some(ImgLoad::Ready(img)) => {
+                        let (iw, ih) = (img.w as i32, img.h as i32);
+                        if iw > 0 && ih > 0 {
+                            let pad = (8.0 * entry.scale) as i32;
+                            let (aw, ah) = ((fw - pad * 2).max(1), (fh - pad * 2).max(1));
+                            // contain — 비율 유지 최대(확대는 원본 크기까지만 —
+                            // 96px 썸네일 뻥튀기의 흐림을 피한다).
+                            let sc = (f64::from(aw) / f64::from(iw))
+                                .min(f64::from(ah) / f64::from(ih))
+                                .min(f64::from(entry.scale)); // 논리 1x 이상 확대 금지
+                            #[allow(clippy::cast_possible_truncation)]
+                            let (dw, dh) = (
+                                ((f64::from(iw) * sc).round() as i32).max(1),
+                                ((f64::from(ih) * sc).round() as i32).max(1),
+                            );
+                            let dst = Rect::new((fw - dw) / 2, (fh - dh) / 2, dw, dh);
+                            ctx.image_scaled(dst, img, full);
+                        }
+                    }
+                    Some(ImgLoad::Loading) => {
+                        ctx.select_font(nbeep_ui::FontSlot::Status, false);
+                        let msg = "불러오는 중…";
+                        let tw = ctx.text_width(msg);
+                        ctx.text((fw - tw) / 2, fh / 2, full, msg, theme.text_dim);
+                    }
+                    _ => {
+                        ctx.select_font(nbeep_ui::FontSlot::Status, false);
+                        let msg = "미리보기를 만들 수 없습니다(1MiB 초과·손상·imgdec 부재)";
+                        let tw = ctx.text_width(msg);
+                        ctx.text((fw - tw) / 2, fh / 2, full, msg, theme.text_dim);
+                    }
+                }
+            }
             Role::Main => {
                 if let Some(chat) = self.single_open_group.and_then(|g| self.gchats.get(&g)) {
                     chat.paint(&mut ctx, &theme); // 그룹 스레드(M5-1 — 1:1 전환과 같은 문법)
@@ -7535,10 +7686,10 @@ impl ApplicationHandler<AppEvent> for App {
                 // 마지막 수신 항목에 부착(연속 수신과의 경합 창은 짧다 — 실해 없음).
                 // 이미지가 아니거나 실패면 조용히 없음(스레드는 텍스트 그대로).
                 {
-                    let qp = qpath;
+                    let qp = qpath.clone();
                     spawn_decode(
                         self.proxy.clone(),
-                        DecodeTarget::XferThumb(peer),
+                        DecodeTarget::XferThumb(peer, qpath),
                         move || crate::imgdec::thumb_raw_from_beepq(std::path::Path::new(&qp), 96),
                     );
                 }
@@ -8077,20 +8228,35 @@ impl ApplicationHandler<AppEvent> for App {
                             self.request_redraw(pid);
                         }
                     }
-                    DecodeTarget::XferThumb(peer) => {
+                    DecodeTarget::XferThumb(peer, qpath) => {
                         if let Some(t) = icon {
                             if let Some(conv) = self.conversations.get_mut(&peer) {
                                 nbeep_ui::chat_view::attach_xfer_thumb(
                                     &mut conv.lines,
                                     false,
                                     t.clone(),
+                                    Some(qpath.clone()),
                                 );
                             }
                             if let Some(chat) = self.chats.get_mut(&peer) {
                                 let mut inv = Invalidations::default();
-                                chat.attach_xfer_thumb(false, t, &mut inv);
+                                chat.attach_xfer_thumb(false, t, Some(qpath), &mut inv);
                             }
                             self.redraw_conversation(peer);
+                        }
+                    }
+                    DecodeTarget::FullImage(qpath) => {
+                        // 확대 미리보기 도착(08-16) — 열린 뷰어의 경로와 일치할 때만.
+                        if let Some(v) = self.image_view.as_mut() {
+                            if v.qpath == qpath {
+                                v.img = icon.map_or(ImgLoad::Failed, ImgLoad::Ready);
+                                if let Some((wid, _)) =
+                                    self.windows.iter().find(|(_, e)| e.role == Role::ImageView)
+                                {
+                                    let wid = *wid;
+                                    self.request_redraw(wid);
+                                }
+                            }
                         }
                     }
                     DecodeTarget::RecentThumb(path) => {
@@ -8477,6 +8643,7 @@ impl ApplicationHandler<AppEvent> for App {
                         Role::AddEndpoint => self.addr_view = None,
                         Role::Profile => self.profile_view = None,
                         Role::PeerInfo(_) => self.peer_info_view = None,
+                        Role::ImageView => self.image_view = None,
                         Role::Quarantine => self.quarantine_view = None,
                         Role::Sending(peer) => self.cancel_send(peer, false),
                         Role::Approve(peer) => {
@@ -9388,6 +9555,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         awaiting_accept: HashMap::new(),
         active_send: HashMap::new(),
         active_recv: HashMap::new(),
+        image_view: None,
         awaiting_ack: HashMap::new(),
         close_armed: false,
         send_wait: HashMap::new(),

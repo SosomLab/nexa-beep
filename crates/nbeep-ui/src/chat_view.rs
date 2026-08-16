@@ -137,6 +137,7 @@ impl ChatLine {
             mine,
             body: ChatBody::Xfer(XferLine {
                 thumb: None,
+                qpath: None,
                 name,
                 size,
                 state: XferLineState::Waiting,
@@ -162,8 +163,9 @@ pub enum ChatBody {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct XferLine {
     /// 수신 이미지 소형 미리보기(M4-5ⓑ — imgdec 격리 디코드 · 인라인 18px).
-    /// 확대 미리보기는 격리함 몫(후속).
     pub thumb: Option<std::rc::Rc<crate::theme::IconImage>>,
+    /// 격리물 경로(썸네일이 붙은 항목만 · 08-16) — 클릭 = 확대 미리보기의 키.
+    pub qpath: Option<String>,
     /// 무해화된 파일명(원격 제공 이름 — 표시 전 무해화 필수).
     pub name: SafeText,
     /// 전체 크기(바이트).
@@ -245,6 +247,7 @@ pub fn attach_xfer_thumb(
     lines: &mut [ChatLine],
     mine: bool,
     thumb: std::rc::Rc<crate::theme::IconImage>,
+    qpath: Option<String>,
 ) -> bool {
     for line in lines.iter_mut().rev() {
         if line.mine != mine {
@@ -253,6 +256,7 @@ pub fn attach_xfer_thumb(
         if let ChatBody::Xfer(x) = &mut line.body {
             if matches!(x.state, XferLineState::Done { .. }) && x.thumb.is_none() {
                 x.thumb = Some(thumb);
+                x.qpath = qpath; // 클릭 = 확대 미리보기 키(08-16)
                 return true;
             }
         }
@@ -356,6 +360,10 @@ pub struct ChatViewWidget {
     /// 취소 버튼 눌림 상태(Button 컨트롤과 같은 문법 — MouseDown 누름 표시,
     /// MouseUp이 영역 안이면 발화 · 08-16 실기: "클릭 효과가 안 느껴진다").
     xfer_cancel_pressed: bool,
+    /// 인라인 썸네일 히트(페인트 갱신 · 08-16 확대 미리보기) — (영역, 격리물 경로).
+    thumb_hits: std::cell::RefCell<Vec<(Rect, String)>>,
+    /// 썸네일 클릭 = 확대 미리보기 요청(1회성 — 호스트가 뷰어를 연다).
+    open_image: Option<String>,
     /// 우클릭 컨텍스트 메뉴(입력란 · 말풍선).
     ctx_menu: crate::controls::ContextMenu,
     /// 메뉴를 연 시점의 말풍선 인덱스(있으면 "메시지 복사" 대상).
@@ -401,6 +409,8 @@ impl ChatViewWidget {
             xfer_cancel_hit: std::cell::Cell::new(None),
             xfer_cancel_req: false,
             xfer_cancel_pressed: false,
+            thumb_hits: std::cell::RefCell::new(Vec::new()),
+            open_image: None,
             ctx_menu: crate::controls::ContextMenu::new(),
             ctx_bubble: None,
             paste_req: false,
@@ -422,6 +432,11 @@ impl ChatViewWidget {
     /// 진행 배너 "취소" 클릭(1회성 · 08-16) — 호스트가 CancelXfer로 라우팅한다.
     pub fn take_xfer_cancel(&mut self) -> bool {
         std::mem::take(&mut self.xfer_cancel_req)
+    }
+
+    /// 썸네일 클릭 = 확대 미리보기 요청(1회성 · 08-16) — 격리물 경로를 돌려준다.
+    pub fn take_open_image(&mut self) -> Option<String> {
+        self.open_image.take()
     }
 
     /// 진행 중 전송 상태 지정(`None` = 진행 없음 — 줄이 사라진다).
@@ -486,9 +501,10 @@ impl ChatViewWidget {
         &mut self,
         mine: bool,
         thumb: std::rc::Rc<crate::theme::IconImage>,
+        qpath: Option<String>,
         inv: &mut Invalidations,
     ) -> bool {
-        let hit = attach_xfer_thumb(&mut self.lines, mine, thumb);
+        let hit = attach_xfer_thumb(&mut self.lines, mine, thumb, qpath);
         if hit {
             inv.push(self.bounds);
         }
@@ -1175,6 +1191,13 @@ impl Widget for ChatViewWidget {
                         return;
                     }
                 }
+                // 인라인 썸네일 클릭 = 확대 미리보기(08-16).
+                for (r, qp) in self.thumb_hits.borrow().iter() {
+                    if r.contains(Point { x, y }) {
+                        self.open_image = Some(qp.clone());
+                        return;
+                    }
+                }
                 let input = self.input_bar();
                 if input.contains(Point { x, y }) {
                     if let Some(idx) = self.input_hit(x, y) {
@@ -1321,6 +1344,7 @@ impl Widget for ChatViewWidget {
 
         // 2패스 — 그리기(top-down · 콘텐츠가 뷰포트보다 작으면 하단 정렬).
         self.hit_rects.borrow_mut().clear();
+        self.thumb_hits.borrow_mut().clear();
         let mut y = if content >= vp.h {
             vp.y - (content - vp.h - scroll)
         } else {
@@ -1361,9 +1385,9 @@ impl Widget for ChatViewWidget {
                 }
                 // 풍선 — 수신 좌측 / 발신 우측(사용자 확정 08-10).
                 // 수신 이미지 소형 미리보기(M4-5ⓑ) — 있으면 첫 줄 앞 18px 자리.
-                let xthumb = match &l.body {
-                    ChatBody::Xfer(x) => x.thumb.clone(),
-                    ChatBody::Text(_) => None,
+                let (xthumb, xqpath) = match &l.body {
+                    ChatBody::Xfer(x) => (x.thumb.clone(), x.qpath.clone()),
+                    ChatBody::Text(_) => (None, None),
                 };
                 let thumb_pad = if xthumb.is_some() { self.s(24) } else { 0 };
                 let widest = b.lines.iter().map(|s| ctx.text_width(s)).max().unwrap_or(0);
@@ -1404,6 +1428,12 @@ impl Widget for ChatViewWidget {
                     let d = self.s(18);
                     let ir = Rect::new(bub.x + pad_h, by0 + pad_v + (line_h - d) / 2, d, d);
                     ctx.image_scaled(ir, img, bub);
+                    if let Some(qp) = &xqpath {
+                        // 확대 미리보기 히트(08-16) — 18px는 좁아 3px 확장.
+                        let pad = self.s(3);
+                        let hr = Rect::new(ir.x - pad, ir.y - pad, d + pad * 2, d + pad * 2);
+                        self.thumb_hits.borrow_mut().push((hr, qp.clone()));
+                    }
                 }
                 for (si, s) in b.lines.iter().enumerate() {
                     let ly = by0 + pad_v + si as i32 * line_h;
