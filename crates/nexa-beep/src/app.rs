@@ -465,6 +465,10 @@ fn spawn_session_actor(
         //   블로킹 루프가 전량을 쏟아, 펌프가 도는 동안 명령(취소)도 수신(상대
         //   취소)도 못 봤다. 상태로 들고 틱마다 조금씩 보내며 교대한다.
         let mut sending: Option<ActiveSend> = None;
+        // 수신 폴 타임아웃(ms) — 유휴 100ms / **전송 중 1ms**. 틱당 4청크 뒤
+        // 100ms를 꽉 채워 기다리면 처리량이 128KiB/100ms ≈ 1.3MB/s로 조인다
+        // (08-16 실기 — localhost 11.6MiB가 9초. 재개형 펌프 도입의 회귀).
+        let mut recv_to_ms: u64 = 100;
         // 프로필 이미지 조립 상태(M3-17) — (텍스트 필드+아바타 키+보더, 기대 총량, 누적 바이트).
         type PendingProfile = (
             (
@@ -553,6 +557,11 @@ fn spawn_session_actor(
             }
             // 발신 펌프 틱 — 한 틱 최대 4청크(128KiB) 보내고 명령·수신과 교대한다
             // (취소 지연 상한 = 청크 4개 + 페이싱 대기 · 대역 협상은 Pacer 그대로).
+            let want_to: u64 = if sending.is_some() { 1 } else { 100 };
+            if want_to != recv_to_ms {
+                recv_to_ms = want_to;
+                session.set_recv_timeout(Some(std::time::Duration::from_millis(want_to)));
+            }
             if let Some(st) = sending.as_mut() {
                 let mut done = false;
                 for _ in 0..4 {
