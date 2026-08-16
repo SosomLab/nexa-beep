@@ -24,9 +24,44 @@ pub(crate) const CH_CLI: &str = "cli";
 /// 같은 채널이라 격리물이 계속 보인다(7일 보관과 양립).
 #[must_use]
 pub(crate) fn quarantine_root(channel: &str) -> PathBuf {
-    std::env::temp_dir()
+    // ★ 신원 폴더 소속(08-16 사용자 확정 — 종전 전역 temp는 같은 PC 다중
+    //   인스턴스가 한 격리함을 공유했고(3신원 실기에서 발각 — 남의 격리물이
+    //   보이고 Clear All이 남의 것까지 지웠다), OS temp 청소에 격리물이
+    //   증발할 수 있었다(DR-4 위반 — 격리물은 승인 대기 중인 실데이터다).
+    let root = crate::app::data_dir().join("quarantine").join(channel);
+    migrate_legacy_quarantine(channel, &root);
+    root
+}
+
+/// 구 전역 temp 격리함 → 신원 폴더 1회 이관(베스트 에포트 · 08-16). 공유
+/// 위치라 남은 항목은 **먼저 여는 신원이 거둔다** — 격리 메타에 발신자만
+/// 있고 수신 신원 표식이 없어 더 정밀한 귀속은 불가능하다(실기 데이터 한정
+/// 한계 · 새 격리물은 처음부터 신원 폴더에 쌓인다).
+fn migrate_legacy_quarantine(channel: &str, new_root: &std::path::Path) {
+    let legacy = std::env::temp_dir()
         .join("nexa-beep-quarantine")
-        .join(channel)
+        .join(channel);
+    let Ok(rd) = std::fs::read_dir(&legacy) else {
+        return; // 구 격리함 없음(이미 이관됐거나 신규 설치)
+    };
+    let _ = std::fs::create_dir_all(new_root);
+    for e in rd.flatten() {
+        let from = e.path();
+        let Some(name) = from.file_name() else {
+            continue;
+        };
+        let to = new_root.join(name);
+        if to.exists() {
+            continue; // 동시 이관 경합(다른 인스턴스가 먼저) — 그쪽이 진실
+        }
+        if std::fs::rename(&from, &to).is_err() {
+            // 볼륨 경계(temp ≠ data 볼륨) — 복사 후 제거. 실패는 다음에 재시도.
+            if std::fs::copy(&from, &to).is_ok() {
+                let _ = std::fs::remove_file(&from);
+            }
+        }
+    }
+    let _ = std::fs::remove_dir(&legacy); // 비었을 때만 지워진다(경합 안전)
 }
 
 /// 격리 성공 결과 — 표시 계층이 그대로 렌더한다.
