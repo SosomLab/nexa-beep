@@ -23,6 +23,7 @@ use nbeep_net::TcpLink;
 const MARK_CHAT: &str = "PLAINTEXT-CANARY-chat-7f3a9d";
 const MARK_EMAIL: &str = "canary-7f3a9d@leak.example";
 const MARK_FILE: &str = "PLAINTEXT-CANARY-file-7f3a9d.txt";
+const MARK_CONTENT: &str = "PLAINTEXT-CANARY-content-7f3a9d";
 
 /// 투명 TCP 릴레이 — a↔b 사이 바이트를 복사하며 **전부** 캡처한다.
 fn spawn_relay(to_addr: std::net::SocketAddr) -> (std::net::SocketAddr, Arc<Mutex<Vec<u8>>>) {
@@ -79,8 +80,9 @@ fn session_wire_carries_no_plaintext() {
         let peer_a = session.peer();
         let mut mux = MuxSession::new(session);
         // 도달 검증(빈 테스트 방지) — 3종을 받는다(도착 순서 무관 recv_any).
-        let (mut got_chat, mut got_profile, mut got_offer) = (false, false, false);
-        for _ in 0..3 {
+        let (mut got_chat, mut got_profile, mut got_offer, mut got_chunk) =
+            (false, false, false, false);
+        for _ in 0..4 {
             let (stream, bytes) = mux.recv_any().expect("수신");
             match stream {
                 StreamId::Chat => {
@@ -98,19 +100,23 @@ fn session_wire_carries_no_plaintext() {
                     assert_eq!(email.as_deref(), Some(MARK_EMAIL));
                     got_profile = true;
                 }
-                StreamId::File => {
-                    let Ok(XferMsg::Offer { name, .. }) = XferMsg::decode(&bytes) else {
-                        panic!("offer")
-                    };
-                    assert_eq!(String::from_utf8_lossy(&name), MARK_FILE);
-                    got_offer = true;
-                }
+                StreamId::File => match XferMsg::decode(&bytes) {
+                    Ok(XferMsg::Offer { name, .. }) => {
+                        assert_eq!(String::from_utf8_lossy(&name), MARK_FILE);
+                        got_offer = true;
+                    }
+                    Ok(XferMsg::Chunk { data, .. }) => {
+                        assert_eq!(String::from_utf8_lossy(&data), MARK_CONTENT);
+                        got_chunk = true;
+                    }
+                    other => panic!("예상 밖 파일 프레임: {other:?}"),
+                },
                 other => panic!("예상 밖 스트림: {other:?}"),
             }
         }
         assert!(
-            got_chat && got_profile && got_offer,
-            "3종 전부 도달해야 한다"
+            got_chat && got_profile && got_offer && got_chunk,
+            "4종 전부 도달해야 한다"
         );
     });
 
@@ -147,6 +153,14 @@ fn session_wire_carries_no_plaintext() {
     };
     mux.send(StreamId::File, &offer.encode())
         .expect("offer 송신");
+    // 파일 **내용**(청크) — 오퍼 메타만 검사하면 실데이터 평문 유출을 놓친다.
+    let chunk = XferMsg::Chunk {
+        id: [9u8; 16],
+        offset: 0,
+        data: MARK_CONTENT.as_bytes().to_vec(),
+    };
+    mux.send(StreamId::File, &chunk.encode())
+        .expect("chunk 송신");
 
     b.join().expect("B 종단 정상 종료");
 
@@ -157,6 +171,7 @@ fn session_wire_carries_no_plaintext() {
         ("대화 본문", MARK_CHAT),
         ("프로필 이메일", MARK_EMAIL),
         ("파일 이름", MARK_FILE),
+        ("파일 내용", MARK_CONTENT),
     ] {
         assert!(
             !contains(&wire, mark.as_bytes()),
