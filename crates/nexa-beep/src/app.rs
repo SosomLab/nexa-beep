@@ -1939,10 +1939,6 @@ impl App {
             return;
         };
         let ok = self.send_xfer_decision(peer, xid, accept, nbeep_core::RejectWhy::Declined);
-        if ok && accept {
-            // 수락 후 취소 UX(08-16) — 진행 중 xid를 놓치면 취소 수단이 없다.
-            self.active_recv.insert(peer, xid);
-        }
         if !accept {
             self.set_xfer_line(
                 peer,
@@ -2118,9 +2114,17 @@ impl App {
         } else {
             SessionCmd::RejectXfer { id: xid, why }
         };
-        self.conversations
+        let sent = self
+            .conversations
             .get(&peer)
-            .is_some_and(|c| c.out_tx.send(cmd).is_ok())
+            .is_some_and(|c| c.out_tx.send(cmd).is_ok());
+        if sent && accept {
+            // 수락 후 취소 UX(08-16) — 등록은 **여기 한 곳**: 수락 경로가 둘이라
+            // (⌘Y answer_offer · 승인 창 run_offer_choice) 호출부에 두면 빠뜨린다
+            // (실기 08-16: 승인 창 수락은 취소 버튼이 무반응이었다).
+            self.active_recv.insert(peer, xid);
+        }
+        sent
     }
 
     /// 진행률을 위젯에 반영(목록 행 + 열려 있는 대화창).
@@ -6472,7 +6476,13 @@ impl App {
             None => (self.active_recv.remove(&peer), false),
         };
         let Some(xid) = xid else {
-            return; // 배너가 남아 있었을 뿐 활성 전송 없음 — 조용히
+            // 실패도 말한다(08-10 교훈 — 조용한 무반응은 디버깅 불가). 배너 잔존
+            // 등으로 활성 xid가 없으면 왜 안 되는지 상태바로 알린다.
+            self.status = "취소할 진행 중 전송이 없습니다".into();
+            if let Some(mid) = self.main_id {
+                self.request_redraw(mid);
+            }
+            return;
         };
         let sent = self
             .conversations
