@@ -7,6 +7,8 @@
 
 ## 2026-08-16
 
+- **Windows 빌드 파손 수정**(main): scan.rs(3-OS 공용)가 쓰는 nbeep-core가 plat에서 unix 한정 의존 → E0432(mac에서만 검증) → **전 타깃 승격**. "조건부 컴파일은 반대편을 의심한다"의 의존 선언판. 655 green(Win). 상세 [journal/2026-08-16.md](journal/2026-08-16.md).
+
 - **프로브 실측 즉시 반영(note_burst)** — 1차 전송 316KiB/s 재발(500ms 창 미도래) → 경계에서 창 대기 없이 peak 반영 = 1차부터 전속 적응. M3-22 설정 확장(log.enabled Switch·retain_days·max_total_mb·hot-swap).
 - **M3-22 설계 등록**(상태바 로깅+로그 보기 — 개발 후속) — status 깔때기 선행(108곳 산재)·bounded 큐+드롭(백프레셔 금지)·전용 스레드·data/logs 회전·launch 재사용.
 - **완료 항목 평균 속도 표기** — 발신(수락~Done·ack 시점)/수신(첫 청크~격리) 각각 "평균 N/s" · 와이어 0.

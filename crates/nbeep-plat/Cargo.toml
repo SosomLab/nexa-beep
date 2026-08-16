@@ -12,6 +12,10 @@ workspace = true
 
 [dependencies]
 memmap2 = "0.9"
+# 포트 구현의 계약 타입(scan.rs FileScanner 등 — M4 §6) · **전 타깃**.
+# ⚠ 08-16까지 unix 한정이었고, mac 세션의 scan.rs(3-OS 공용)가 Windows 빌드를
+# 깨뜨렸다(E0432 — "조건부 컴파일은 반대편을 의심한다"의 의존 선언판).
+nbeep-core.workspace = true
 
 # Linux 트레이(M3-2c · SNI) — zbus(MIT · 순수 Rust · 시스템 런타임 요구 없음).
 # 원장: docs/10 §3. Linux 타깃 한정 — 다른 OS 산출물 크기 불변.
@@ -20,7 +24,6 @@ zbus = "5"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
-nbeep-core.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # keytap(G1 · H-26) + 메뉴바 상주(M3-2b · NSStatusItem) — winit과 같은
