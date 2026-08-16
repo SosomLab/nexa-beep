@@ -349,6 +349,10 @@ pub enum Msg {
     TypeaheadSpecial,
     TypeaheadSpecialDesc,
     ToggleApply,
+    /// 프로필 적용 버튼(M3-18).
+    ActApply,
+    /// 프로필 미저장 닫기 경고(M3-18 — Esc 2단계).
+    ProfileUnsavedHint,
     ToggleIgnore,
     // ── 툴바·메뉴 ──
     MenuLabel,
@@ -1165,6 +1169,13 @@ impl Msg {
                 "記号キーを先行入力に含める",
             ],
             Msg::ToggleApply => ["On", "적용", "开", "オン"],
+            Msg::ActApply => ["Apply", "적용", "应用", "適用"],
+            Msg::ProfileUnsavedHint => [
+                "Unsaved changes — Esc again to discard",
+                "저장 안 된 변경 — 한 번 더 Esc면 버립니다",
+                "未保存的更改 — 再按 Esc 放弃",
+                "未保存の変更 — もう一度 Esc で破棄",
+            ],
             Msg::ToggleIgnore => ["Off", "미적용", "关", "オフ"],
             Msg::MenuLabel => ["Menu", "메뉴", "菜单", "メニュー"],
             Msg::MenuHelp => ["Help", "도움말", "帮助", "ヘルプ"],

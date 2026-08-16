@@ -7172,8 +7172,10 @@ impl App {
                                                         vec![("profile.image_path", path.clone())]
                                                     };
                                                 self.apply_settings(changes);
+                                                // M3-18 — 선택은 보류 편입: 적용을
+                                                // 눌러야 저장·전파된다(원자적 저장).
                                                 self.status = format!(
-                                                    "프로필 이미지 = {path} (미리보기 준비 중…)"
+                                                    "프로필 이미지 = {path} — 적용 시 반영"
                                                 );
                                                 if let Some((pid, _)) = self
                                                     .windows

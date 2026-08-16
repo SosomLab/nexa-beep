@@ -91,6 +91,16 @@ pub struct ProfileWidget {
     /// 툴팁 표시 대기(ms — 설정 `ui.tooltip_ms` · 즉시 적용).
     tip_delay_ms: u64,
     changes: Vec<(&'static str, String)>,
+    /// 적용 확정분(M3-18) — [`Self::take_changes`]는 이것만 내놓는다: 편집은
+    /// `changes`에 **보류**되고, 적용 버튼이 눌릴 때 일괄 이동한다(원자적 저장 —
+    /// 사용자 확정 08-13 · 설정 화면의 "즉시 적용"과 의도적으로 다른 화면 규약).
+    ready: Vec<(&'static str, String)>,
+    /// 적용/취소 버튼(M3-18).
+    apply_btn: Button,
+    cancel_btn: Button,
+    /// 미저장 닫기 2단계 확인(M3-18 ④ — 격리함 confirming 문법): Esc 1차 = 경고
+    /// 표시, 2차 = 버리고 닫기. 다른 입력이 오면 해제.
+    discard_arm: bool,
     pick_image: bool,
     closed: bool,
 }
@@ -152,9 +162,19 @@ impl ProfileWidget {
                 v.tooltip_ms
             },
             changes: Vec::new(),
+            ready: Vec::new(),
+            apply_btn: Button::new(t(Msg::ActApply)),
+            cancel_btn: Button::new(t(Msg::OfferCancel)),
+            discard_arm: false,
             pick_image: false,
             closed: false,
         }
+    }
+
+    /// 저장 안 된 편집이 있는가(M3-18 — 호스트의 닫기 판단·상태 표시용).
+    #[must_use]
+    pub fn dirty(&self) -> bool {
+        !self.changes.is_empty()
     }
 
     /// 스와치 목록 — [이니셜, 없음] + 내장 12간지(설정 저장값과 1:1).
@@ -220,7 +240,10 @@ impl ProfileWidget {
 
     /// 바뀐 (설정 키, 값) 회수(1회성) — 호스트가 설정 적용 깔때기에 넘긴다.
     pub fn take_changes(&mut self) -> Vec<(&'static str, String)> {
-        std::mem::take(&mut self.changes)
+        // M3-18: 편집은 보류(`changes`) — 적용 버튼이 옮긴 `ready`만 나간다.
+        // 같은 키 중복은 그대로 둔다(apply_settings가 순차 적용 = 마지막 값이
+        // 이기고, image_path↔avatar 배타의 push 순서도 보존된다).
+        std::mem::take(&mut self.ready)
     }
 
     /// 이미지 선택 요청(1회성 · 선택… 버튼) — 호스트가 피커를 연다.
@@ -337,6 +360,8 @@ impl ProfileWidget {
         self.recent_car.set_scale(self.scale);
         self.border.set_scale(self.scale);
         self.choose_img.set_scale(self.scale);
+        self.apply_btn.set_scale(self.scale);
+        self.cancel_btn.set_scale(self.scale);
         self.sw_basic.set_scale(self.scale);
         self.sw_email.set_scale(self.scale);
         self.sw_phone.set_scale(self.scale);
@@ -391,6 +416,14 @@ impl ProfileWidget {
             .set_bounds(Rect::new(b.x + pad, b.y + self.s(498), fw, sw_h), inv);
         self.sw_phone
             .set_bounds(Rect::new(b.x + pad, b.y + self.s(530), fw, sw_h), inv);
+        // 적용/취소(M3-18) — 우측 정렬 · 토글 아래(경고줄은 paint가 왼쪽에).
+        let by = b.y + self.s(572);
+        self.cancel_btn
+            .set_bounds(Rect::new(b.right() - pad - bw, by, bw, field_h), inv);
+        self.apply_btn.set_bounds(
+            Rect::new(b.right() - pad - bw * 2 - self.s(8), by, bw, field_h),
+            inv,
+        );
     }
 }
 
@@ -418,6 +451,13 @@ impl Widget for ProfileWidget {
             let popup =
                 self.name.popup_open() || self.email.popup_open() || self.phone.popup_open();
             if !popup {
+                // M3-18 ④ — 미저장 변경이 있으면 1차 Esc = 경고, 2차 = 버리고 닫기.
+                if self.dirty() && !self.discard_arm {
+                    self.discard_arm = true;
+                    inv.push(self.bounds);
+                    return;
+                }
+                self.changes.clear(); // 버리기(취소와 동일 — 적용분만 ready로 나간다)
                 self.closed = true;
                 return;
             }
@@ -497,6 +537,24 @@ impl Widget for ProfileWidget {
             if !self.border.bounds().contains(p) {
                 self.border.set_focused(false); // ColorPick 내부(hex) 포커스도 배타
             }
+        }
+        self.apply_btn.on_event(ev, inv);
+        if self.apply_btn.take_clicked() {
+            // 적용(M3-18) — 보류분 일괄 확정 + 닫기(대화상자 관례).
+            let held = std::mem::take(&mut self.changes);
+            self.ready.extend(held);
+            self.closed = true;
+            return;
+        }
+        self.cancel_btn.on_event(ev, inv);
+        if self.cancel_btn.take_clicked() {
+            self.changes.clear(); // 무반영 폐기 — 다음 열림 = 저장값(복원과 동등)
+            self.closed = true;
+            return;
+        }
+        if self.discard_arm && !matches!(*ev, InputEvent::MouseMove { .. }) {
+            self.discard_arm = false; // 다른 조작 = 경고 해제(격리함 문법)
+            inv.push(self.bounds);
         }
         self.choose_img.on_event(ev, inv);
         if self.choose_img.take_clicked() {
@@ -725,6 +783,22 @@ impl Widget for ProfileWidget {
         self.email.paint(ctx, theme);
         self.phone.paint(ctx, theme);
         self.choose_img.paint(ctx, theme);
+        // 적용/취소(M3-18) + 미저장 경고줄(Esc 2단계 — 격리함 confirming 문법).
+        self.apply_btn.paint(ctx, theme);
+        self.cancel_btn.paint(ctx, theme);
+        if self.discard_arm {
+            ctx.select_font(FontSlot::Status, false);
+            let ay = self.apply_btn.bounds().y;
+            let ah = self.apply_btn.bounds().h;
+            let sh = ctx.text_height();
+            ctx.text(
+                b.x + pad,
+                ay + (ah - sh) / 2,
+                b,
+                t(Msg::ProfileUnsavedHint),
+                theme.warn,
+            );
+        }
         self.sw_basic.paint(ctx, theme);
         self.sw_email.paint(ctx, theme);
         self.sw_phone.paint(ctx, theme);
@@ -750,6 +824,67 @@ mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
 
+    /// 적용 버튼 클릭(M3-18) — 편집은 보류되므로 테스트는 이걸 눌러 회수한다.
+    fn click_apply(w: &mut ProfileWidget, inv: &mut Invalidations) {
+        let r = w.apply_btn.bounds();
+        w.on_event(
+            &InputEvent::MouseDown {
+                x: r.x + 2,
+                y: r.y + 2,
+                shift: false,
+                primary: false,
+            },
+            inv,
+        );
+        w.on_event(
+            &InputEvent::MouseUp {
+                x: r.x + 2,
+                y: r.y + 2,
+            },
+            inv,
+        );
+    }
+
+    /// ★ M3-18 계약 — 편집은 보류: 적용 전 take_changes는 비고, 취소는 폐기한다.
+    #[test]
+    fn edits_are_held_until_apply_and_cancel_discards() {
+        let (mut w, mut inv) = widget();
+        let r = w.sw_basic.bounds();
+        let click = |w: &mut ProfileWidget, inv: &mut Invalidations, r: Rect| {
+            w.on_event(
+                &InputEvent::MouseDown {
+                    x: r.x + 2,
+                    y: r.y + 2,
+                    shift: false,
+                    primary: false,
+                },
+                inv,
+            );
+            w.on_event(
+                &InputEvent::MouseUp {
+                    x: r.x + 2,
+                    y: r.y + 2,
+                },
+                inv,
+            );
+        };
+        click(&mut w, &mut inv, r);
+        assert!(w.dirty(), "편집됨");
+        assert!(w.take_changes().is_empty(), "적용 전엔 나가지 않는다");
+        click_apply(&mut w, &mut inv);
+        assert!(!w.take_changes().is_empty(), "적용 = 일괄 확정");
+        assert!(w.take_closed(), "적용 = 닫기(대화상자 관례)");
+        // 취소 — 편집 후 폐기.
+        let (mut w, mut inv) = widget();
+        let r = w.sw_basic.bounds();
+        click(&mut w, &mut inv, r);
+        let c = w.cancel_btn.bounds();
+        click(&mut w, &mut inv, c);
+        assert!(w.take_changes().is_empty(), "취소 = 무반영 폐기");
+        assert!(w.take_closed(), "취소 = 닫기");
+        assert!(!w.dirty(), "폐기 후 깨끗");
+    }
+
     fn widget() -> (ProfileWidget, Invalidations) {
         let mut w = ProfileWidget::new(&ProfileValues {
             display_name: "auto".into(),
@@ -774,6 +909,7 @@ mod tests {
             },
             &mut inv,
         );
+        click_apply(&mut w, &mut inv);
         let ch = w.take_changes();
         assert_eq!(ch, vec![("profile.share.basic", "on".to_string())]);
         assert!(w.take_changes().is_empty(), "1회성");
@@ -791,6 +927,7 @@ mod tests {
             },
             &mut inv,
         );
+        click_apply(&mut w, &mut inv);
         let ch = w.take_changes();
         assert_eq!(ch, vec![("profile.display_name", "auto".to_string())]);
     }
@@ -847,6 +984,7 @@ mod tests {
             !w.take_pick_image(),
             "Enter가 묵은 포커스 버튼을 누르면 안 된다"
         );
+        click_apply(&mut w, &mut inv);
         assert!(
             w.take_changes()
                 .iter()
@@ -876,6 +1014,7 @@ mod tests {
             },
             &mut inv,
         );
+        click_apply(&mut w, &mut inv);
         let ch = w.take_changes();
         assert!(
             ch.contains(&("profile.avatar", "b:rat".to_string())),
@@ -905,6 +1044,7 @@ mod tests {
         w.on_event(&InputEvent::MouseUp { x: cx, y: cy }, &mut inv);
         assert!(w.take_pick_image(), "선택 요청");
         w.set_image_path("C:/pics/me.png", &mut inv);
+        click_apply(&mut w, &mut inv);
         // 경로 저장 + **최근 목록 편입**(08-14 — 캐러셀 재선택 재료)이 함께 보고된다.
         assert_eq!(
             w.take_changes(),
@@ -935,6 +1075,7 @@ mod tests {
             },
             &mut inv,
         );
+        click_apply(&mut w, &mut inv);
         let ch = w.take_changes();
         assert!(
             ch.contains(&("profile.image_path", "/b.png".to_string())),
@@ -959,6 +1100,7 @@ mod tests {
             },
             &mut inv,
         );
+        click_apply(&mut w, &mut inv);
         let ch = w.take_changes();
         assert!(
             ch.contains(&("profile.image_recent", "/b.png".to_string())),
@@ -995,6 +1137,7 @@ mod tests {
             },
             &mut inv,
         );
+        click_apply(&mut w, &mut inv);
         let ch = w.take_changes();
         assert!(
             ch.contains(&("profile.image_path", String::new())),
