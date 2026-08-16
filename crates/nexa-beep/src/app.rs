@@ -401,6 +401,30 @@ struct Conversation {
     lines: Vec<ChatLine>,
 }
 
+/// 진행 중 발신 상태(08-16 · 재개형 펌프) — Accept가 등록하고 액터 루프 틱이
+/// 조금씩 보낸다. 취소(내 명령·상대 Cancel)는 이 상태를 지우는 것으로 끝난다.
+struct ActiveSend {
+    id: nbeep_core::XferId,
+    data: Vec<u8>,
+    /// 다음 보낼 오프셋(bytes).
+    next: u64,
+    total: u64,
+    pacer: nbeep_core::Pacer,
+}
+
+/// 액터 쪽 단조 시각(ms) — Pacer·RateMeter가 **같은 기준**을 봐야 해서 한 곳
+/// (xfer_step과 펌프 틱이 공유 · 기준이 갈리면 대역 계산이 깨진다).
+fn xfer_now_ms() -> u64 {
+    use std::sync::OnceLock;
+    static T0: OnceLock<std::time::Instant> = OnceLock::new();
+    #[allow(clippy::cast_possible_truncation)]
+    {
+        T0.get_or_init(std::time::Instant::now)
+            .elapsed()
+            .as_millis() as u64
+    }
+}
+
 /// 세션 액터 — 세션을 전용 스레드로 옮겨 **수신(GUI로 프록시)과 송신(채널)을 교대**한다.
 /// snow `TransportState`가 read/write에 `&mut`를 요구해 한 세션은 한 스레드가 소유해야
 /// 하므로, 송신은 채널로 요청받는 액터 모델이 정석이다.
@@ -421,6 +445,10 @@ fn spawn_session_actor(
         let mut inbox = XferInbox::new();
         let mut outgoing: HashMap<nbeep_core::XferId, Vec<u8>> = HashMap::new();
         let mut send_meter = nbeep_core::RateMeter::default();
+        // ★ 재개형 발신 펌프(08-16 · 취소 UX 선행) — 종전엔 Accept 처리 안의
+        //   블로킹 루프가 전량을 쏟아, 펌프가 도는 동안 명령(취소)도 수신(상대
+        //   취소)도 못 봤다. 상태로 들고 틱마다 조금씩 보내며 교대한다.
+        let mut sending: Option<ActiveSend> = None;
         // 프로필 이미지 조립 상태(M3-17) — (텍스트 필드+아바타 키+보더, 기대 총량, 누적 바이트).
         type PendingProfile = (
             (
@@ -468,6 +496,10 @@ fn spawn_session_actor(
                     }
                     SessionCmd::CancelXfer(id) => {
                         outgoing.remove(&id);
+                        inbox.drop_xfer(&id); // 수신측 취소 — 부분 조립 폐기(08-16)
+                        if sending.as_ref().is_some_and(|st| st.id == id) {
+                            sending = None; // 진행 중 발신 취소 — 펌프 즉시 중단
+                        }
                         session.send(StreamId::File, &XferMsg::Cancel { id }.encode())
                     }
                     SessionCmd::RejectXfer { id, why } => {
@@ -501,6 +533,55 @@ fn spawn_session_actor(
                 if sent.is_err() {
                     let _ = proxy.send_event(AppEvent::Closed { peer });
                     return;
+                }
+            }
+            // 발신 펌프 틱 — 한 틱 최대 4청크(128KiB) 보내고 명령·수신과 교대한다
+            // (취소 지연 상한 = 청크 4개 + 페이싱 대기 · 대역 협상은 Pacer 그대로).
+            if let Some(st) = sending.as_mut() {
+                let mut done = false;
+                for _ in 0..4 {
+                    if st.next >= st.total {
+                        done = true;
+                        break;
+                    }
+                    let off = st.next;
+                    let end = (off + nbeep_core::MAX_CHUNK as u64).min(st.total);
+                    let n = end - off;
+                    // 창이 모자라면 그만큼 쉰다(종전 문법 그대로 — 예약 후 대기).
+                    let wait = st.pacer.take(n, xfer_now_ms());
+                    if wait > 0 {
+                        std::thread::sleep(std::time::Duration::from_millis(wait));
+                    }
+                    #[allow(clippy::cast_possible_truncation)]
+                    let chunk = XferMsg::Chunk {
+                        id: st.id,
+                        offset: off,
+                        data: st.data[off as usize..end as usize].to_vec(),
+                    };
+                    if session.send(StreamId::File, &chunk.encode()).is_err() {
+                        let _ = proxy.send_event(AppEvent::Closed { peer });
+                        return;
+                    }
+                    st.next = end;
+                    send_meter.observe(n, xfer_now_ms());
+                    let _ = proxy.send_event(AppEvent::XferProgress {
+                        peer,
+                        got: end,
+                        total: st.total,
+                        sending: true,
+                    });
+                }
+                if done {
+                    let id = st.id;
+                    sending = None;
+                    if session
+                        .send(StreamId::File, &XferMsg::Done { id }.encode())
+                        .is_err()
+                    {
+                        let _ = proxy.send_event(AppEvent::Closed { peer });
+                        return;
+                    }
+                    let _ = proxy.send_event(AppEvent::XferSendDone { peer });
                 }
             }
             // ★ 수신은 **스트림별이 아니라 도착 순서로** 뽑는다(08-13 — 스트림별 폴링은
@@ -624,6 +705,7 @@ fn spawn_session_actor(
                         &mut session,
                         &mut inbox,
                         &mut outgoing,
+                        &mut sending,
                         &proxy,
                         send_rate,
                         &mut send_meter,
@@ -739,20 +821,13 @@ fn xfer_step(
     session: &mut LiveSession,
     inbox: &mut nbeep_core::XferInbox,
     outgoing: &mut HashMap<nbeep_core::XferId, Vec<u8>>,
+    sending: &mut Option<ActiveSend>,
     proxy: &winit::event_loop::EventLoopProxy<AppEvent>,
     send_rate: nbeep_core::RateLimit,
     meter: &mut nbeep_core::RateMeter,
 ) -> Result<(), ()> {
-    /// 액터 스레드의 단조 시각(ms).
-    fn now_ms() -> u64 {
-        use std::sync::OnceLock;
-        static T0: OnceLock<std::time::Instant> = OnceLock::new();
-        T0.get_or_init(std::time::Instant::now)
-            .elapsed()
-            .as_millis() as u64
-    }
     use nbeep_core::mux::StreamId;
-    use nbeep_core::{chunks_of, XferMsg};
+    use nbeep_core::XferMsg;
     let fail = |why: String| {
         let _ = proxy.send_event(AppEvent::XferFailed { peer, why });
     };
@@ -787,35 +862,17 @@ fn xfer_step(
                 let _ = proxy.send_event(AppEvent::XferAccepted { peer });
                 let total = data.len() as u64;
                 // ★ 쌍방 협상 — 내 상한과 상대가 공지한 상한 중 **낮은 쪽**으로 창을 잡는다.
+                // ★ 08-16: 여기서 전량을 쏟지 않는다 — 상태로 등록만 하고 액터 루프
+                //   틱이 조금씩 보낸다(그전엔 이 블로킹 루프 동안 취소 명령도 상대
+                //   Cancel도 못 봤다 — 취소 UX의 구조적 선행).
                 let local = send_rate.target_bps(meter);
-                let mut pacer = nbeep_core::Pacer::new(nbeep_core::negotiate(local, rate_cap));
-                for c in chunks_of(id, &data) {
-                    let nbeep_core::XferMsg::Chunk {
-                        offset, ref data, ..
-                    } = c
-                    else {
-                        continue;
-                    };
-                    let n = data.len() as u64;
-                    // 창이 모자라면 그만큼 쉰다(대역을 통째로 점유하지 않는다).
-                    let wait = pacer.take(n, now_ms());
-                    if wait > 0 {
-                        std::thread::sleep(std::time::Duration::from_millis(wait));
-                    }
-                    let done = offset + n;
-                    session.send(StreamId::File, &c.encode()).map_err(|_| ())?;
-                    meter.observe(n, now_ms());
-                    let _ = proxy.send_event(AppEvent::XferProgress {
-                        peer,
-                        got: done,
-                        total,
-                        sending: true,
-                    });
-                }
-                session
-                    .send(StreamId::File, &XferMsg::Done { id }.encode())
-                    .map_err(|_| ())?;
-                let _ = proxy.send_event(AppEvent::XferSendDone { peer });
+                *sending = Some(ActiveSend {
+                    id,
+                    data,
+                    next: 0,
+                    total,
+                    pacer: nbeep_core::Pacer::new(nbeep_core::negotiate(local, rate_cap)),
+                });
             }
         }
         Ok(XferMsg::Reject { id, why, limit }) => {
@@ -875,6 +932,9 @@ fn xfer_step(
         Ok(XferMsg::Cancel { id }) => {
             inbox.drop_xfer(&id);
             outgoing.remove(&id);
+            if sending.as_ref().is_some_and(|st| st.id == id) {
+                *sending = None; // 상대(수신측)가 진행 중 취소 — 펌프 즉시 중단(08-16)
+            }
             fail("상대가 취소".into());
         }
         Err(e) => fail(format!("와이어 오류: {e}")),
@@ -1213,6 +1273,10 @@ struct App {
     send_batch: HashMap<PeerId, (u32, u32, u64, u64)>,
     /// 발신 협상 대기 중인가(수락 전) — 큐 진행 판단.
     awaiting_accept: HashMap<PeerId, nbeep_core::XferId>,
+    /// 진행 중(수락 후) 발신 — 취소 라우팅용(08-16 · 배너 "취소" → CancelXfer).
+    active_send: HashMap<PeerId, nbeep_core::XferId>,
+    /// 진행 중(수락 후) 수신 — 위와 대칭.
+    active_recv: HashMap<PeerId, nbeep_core::XferId>,
     /// 발신했으나 **수신 종단 확인(ack) 대기 중**인 건수(상대별 · M4-9). 종료 가드가 본다.
     awaiting_ack: HashMap<PeerId, u32>,
     /// 종료 가드 — 미확인 전송이 있을 때 첫 닫기는 경고만, 두 번째로 확정(파괴적 확인 문법).
@@ -1875,6 +1939,10 @@ impl App {
             return;
         };
         let ok = self.send_xfer_decision(peer, xid, accept, nbeep_core::RejectWhy::Declined);
+        if ok && accept {
+            // 수락 후 취소 UX(08-16) — 진행 중 xid를 놓치면 취소 수단이 없다.
+            self.active_recv.insert(peer, xid);
+        }
         if !accept {
             self.set_xfer_line(
                 peer,
@@ -6395,9 +6463,52 @@ impl App {
         }
     }
 
+    /// 진행 중 전송 취소(08-16 — 배너 "취소" 버튼) — 방향 불문 그 상대의 활성
+    /// 전송 하나를 끊는다. 발신 배치가 걸려 있으면 대기 큐도 함께 비운다(취소는
+    /// "이 작업 그만"이지 "이 파일만 건너뛰기"가 아니다).
+    fn cancel_active_xfer(&mut self, peer: PeerId) {
+        let (xid, mine) = match self.active_send.remove(&peer) {
+            Some(x) => (Some(x), true),
+            None => (self.active_recv.remove(&peer), false),
+        };
+        let Some(xid) = xid else {
+            return; // 배너가 남아 있었을 뿐 활성 전송 없음 — 조용히
+        };
+        let sent = self
+            .conversations
+            .get(&peer)
+            .is_some_and(|c| c.out_tx.send(SessionCmd::CancelXfer(xid)).is_ok());
+        if mine {
+            self.send_queue.remove(&peer);
+            self.send_batch.remove(&peer);
+        }
+        self.set_xfer_line(
+            peer,
+            mine,
+            nbeep_ui::XferLineState::Failed {
+                why: "취소함".into(),
+            },
+        );
+        self.clear_xfer(peer);
+        self.status = if sent {
+            format!("전송 취소 — {}", self.peer_title(peer))
+        } else {
+            "취소 — 세션이 이미 끊겨 있음(로컬 정리만)".into()
+        };
+        self.redraw_conversation(peer);
+    }
+
     /// 대화 뷰에서 나온 발신·복귀를 처리한다. `peer` = 그 뷰의 상대.
     fn drain_chat_effects(&mut self, peer: PeerId, id: WindowId) {
         let mut inv = Invalidations::default();
+        // 진행 배너 "취소"(08-16) — 위젯은 세션을 모른다 · 라우팅은 호스트.
+        if self
+            .chats
+            .get_mut(&peer)
+            .is_some_and(ChatViewWidget::take_xfer_cancel)
+        {
+            self.cancel_active_xfer(peer);
+        }
         // 풍선 우클릭 복사(08-10) — 위젯은 OS를 모르므로 여기서 클립보드에 쓴다.
         if let Some(t) = self
             .chats
@@ -6740,9 +6851,8 @@ impl App {
                                                 // apply_settings의 image_path 팔이 한다
                                                 // (수동 spawn과 이중이었다).
                                                 // 관리 복사(08-16) — 사본 경로가 정본.
-                                                let path = self.manage_profile_image(
-                                                    &p.to_string_lossy(),
-                                                );
+                                                let path =
+                                                    self.manage_profile_image(&p.to_string_lossy());
                                                 let changes =
                                                     if let Some(pv) = &mut self.profile_view {
                                                         let mut pinv = Invalidations::default();
@@ -7390,7 +7500,8 @@ impl ApplicationHandler<AppEvent> for App {
                 mismatch,
                 qpath,
             } => {
-                // 격리 보관까지 끝난 상태 — **실체화는 승인 후 별도**(FR-S-9).
+                self.active_recv.remove(&peer); // 수신 완결 — 취소 대상 아님(08-16)
+                                                // 격리 보관까지 끝난 상태 — **실체화는 승인 후 별도**(FR-S-9).
                 self.status = format!(
                     "파일 격리 완료: {name} · 위험 {risk:?}{} — 승인 전까지 실행 불가",
                     if mismatch {
@@ -7425,6 +7536,10 @@ impl ApplicationHandler<AppEvent> for App {
                 self.redraw_conversation(peer);
             }
             AppEvent::XferAccepted { peer } => {
+                // 수락 후 취소 UX(08-16) — 대기 xid를 진행 중으로 이동(취소 경로 유지).
+                if let Some(xid) = self.awaiting_accept.get(&peer).copied() {
+                    self.active_send.insert(peer, xid);
+                }
                 // 협상 성립 — 대기 창을 닫고 스트리밍 진행률로 넘어간다.
                 self.awaiting_accept.remove(&peer);
                 self.close_send_wait(peer);
@@ -7433,8 +7548,9 @@ impl ApplicationHandler<AppEvent> for App {
                 self.redraw_conversation(peer);
             }
             AppEvent::XferSendDone { peer } => {
-                // ★ 전송 끝 ≠ 완료(M4-9) — 청크·Done을 다 보냈을 뿐, 상대 격리 확인(ack)
-                //   전까지는 **확인 대기**다. 미확인 카운트를 올려 종료 가드가 본다.
+                self.active_send.remove(&peer); // 다 보냈다 — 취소 대상 아님(08-16)
+                                                // ★ 전송 끝 ≠ 완료(M4-9) — 청크·Done을 다 보냈을 뿐, 상대 격리 확인(ack)
+                                                //   전까지는 **확인 대기**다. 미확인 카운트를 올려 종료 가드가 본다.
                 self.set_xfer_line(peer, true, nbeep_ui::XferLineState::AwaitingAck);
                 *self.awaiting_ack.entry(peer).or_insert(0) += 1;
                 // 배치 집계 갱신 후 다음 파일로.
@@ -7498,6 +7614,8 @@ impl ApplicationHandler<AppEvent> for App {
                 }
             }
             AppEvent::XferFailed { peer, why } => {
+                self.active_send.remove(&peer);
+                self.active_recv.remove(&peer);
                 // 방향 판정 — 발신이 걸려 있으면 발신 실패, 아니면 수신 실패.
                 let mine =
                     self.awaiting_accept.contains_key(&peer) || self.send_batch.contains_key(&peer);
@@ -7515,6 +7633,8 @@ impl ApplicationHandler<AppEvent> for App {
                 self.redraw_conversation(peer);
             }
             AppEvent::Closed { peer } => {
+                self.active_send.remove(&peer);
+                self.active_recv.remove(&peer);
                 // 세션 채널은 지우되 **스레드는 대피**(DR-26 — 08-13 실기: 끊김·재연결마다
                 // 받았던 메시지가 통째로 사라졌다). 재수립 시 install이 되찾아 간다.
                 if let Some(c) = self.conversations.remove(&peer) {
@@ -7809,11 +7929,9 @@ impl ApplicationHandler<AppEvent> for App {
                 //    부수 효과만 남는다. LinkChanged당 1회 — 반복 타이머 아님
                 //    (13 §12-1 · 진짜 주기 하트비트는 M2-4b 몫).
                 for conv in self.conversations.values() {
-                    let _ = conv
-                        .out_tx
-                        .send(SessionCmd::Control(vec![
-                            nbeep_core::ProfileMsg::Request.encode()
-                        ]));
+                    let _ = conv.out_tx.send(SessionCmd::Control(vec![
+                        nbeep_core::ProfileMsg::Request.encode(),
+                    ]));
                 }
                 self.status = "네트워크 변경 감지 — 재발견·재연결 중".into();
                 if let Some(mid) = self.main_id {
@@ -9258,6 +9376,8 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         send_queue: HashMap::new(),
         send_batch: HashMap::new(),
         awaiting_accept: HashMap::new(),
+        active_send: HashMap::new(),
+        active_recv: HashMap::new(),
         awaiting_ack: HashMap::new(),
         close_armed: false,
         send_wait: HashMap::new(),

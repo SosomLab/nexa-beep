@@ -349,6 +349,10 @@ pub struct ChatViewWidget {
     hit_rects: RefCell<Vec<(Rect, usize)>>,
     /// 우클릭 복사 요청(1회성) — 호스트가 OS 클립보드에 쓴다.
     copy_out: Option<String>,
+    /// 진행 배너의 "취소" 히트 영역(페인트가 갱신 · 08-16 수락 후 취소 UX).
+    xfer_cancel_hit: std::cell::Cell<Option<Rect>>,
+    /// 취소 클릭 요청(1회성 — 호스트가 CancelXfer로 라우팅).
+    xfer_cancel_req: bool,
     /// 우클릭 컨텍스트 메뉴(입력란 · 말풍선).
     ctx_menu: crate::controls::ContextMenu,
     /// 메뉴를 연 시점의 말풍선 인덱스(있으면 "메시지 복사" 대상).
@@ -391,6 +395,8 @@ impl ChatViewWidget {
             input_bars: ScrollBars::new(),
             hit_rects: RefCell::new(Vec::new()),
             copy_out: None,
+            xfer_cancel_hit: std::cell::Cell::new(None),
+            xfer_cancel_req: false,
             ctx_menu: crate::controls::ContextMenu::new(),
             ctx_bubble: None,
             paste_req: false,
@@ -407,6 +413,11 @@ impl ChatViewWidget {
     /// 우클릭으로 복사 요청된 메시지 본문(1회성 — 사용자 요청 08-10).
     pub fn take_copy_text(&mut self) -> Option<String> {
         self.copy_out.take()
+    }
+
+    /// 진행 배너 "취소" 클릭(1회성 · 08-16) — 호스트가 CancelXfer로 라우팅한다.
+    pub fn take_xfer_cancel(&mut self) -> bool {
+        std::mem::take(&mut self.xfer_cancel_req)
     }
 
     /// 진행 중 전송 상태 지정(`None` = 진행 없음 — 줄이 사라진다).
@@ -1151,6 +1162,14 @@ impl Widget for ChatViewWidget {
                 }
             }
             InputEvent::MouseDown { x, y, shift, .. } => {
+                // 진행 배너 "취소"(08-16) — 히트는 페인트가 기록한 사각형 기준.
+                if let Some(r) = self.xfer_cancel_hit.get() {
+                    if self.xfer.is_some() && r.contains(Point { x, y }) {
+                        self.xfer_cancel_req = true;
+                        inv.push(r);
+                        return;
+                    }
+                }
                 let input = self.input_bar();
                 if input.contains(Point { x, y }) {
                     if let Some(idx) = self.input_hit(x, y) {
@@ -1450,6 +1469,9 @@ impl Widget for ChatViewWidget {
         );
 
         // 전송 진척 줄 — 헤더 바로 아래(배치 합계 — 항목별 진행은 스레드 풍선에).
+        if self.xfer.is_none() {
+            self.xfer_cancel_hit.set(None);
+        }
         if let Some(xp) = self.xfer {
             let row = Rect::new(head.x, head.bottom(), head.w, self.s(22));
             ctx.fill_rect(row, theme.chrome_bg);
@@ -1471,9 +1493,24 @@ impl Widget for ChatViewWidget {
                 &label,
                 theme.text_dim,
             );
+            // "취소" 버튼(08-16) — 수락 후에도 중단 수단이 있어야 한다(그전엔
+            // 수락 순간 취소 경로가 사라졌다). 히트 영역은 페인트가 기록한다.
+            let cw = self.s(34);
+            let cx = row.right() - cw - self.s(10);
+            let crect = Rect::new(cx, row.y + self.s(2), cw, row.h - self.s(4));
+            ctx.fill_round_rect(crect, self.s(3), theme.panel_bg_alt);
+            let ctw = ctx.text_width("취소");
+            ctx.text(
+                cx + (cw - ctw) / 2,
+                row.y + (row.h - sh) / 2,
+                row,
+                "취소",
+                theme.text,
+            );
+            self.xfer_cancel_hit.set(Some(crect));
             let bar_w = self.s(90);
             let bar_h = self.s(5);
-            let bx = row.right() - bar_w - self.s(12);
+            let bx = cx - bar_w - self.s(10);
             let by = row.y + (row.h - bar_h) / 2;
             ctx.fill_round_rect(
                 Rect::new(bx, by, bar_w, bar_h),
