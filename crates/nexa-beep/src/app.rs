@@ -595,6 +595,11 @@ fn spawn_session_actor(
                     // **진짜 peak**를 안다. 목표를 실측 기반으로 재산출(한 번만).
                     if !st.probed && off >= RATE_PROBE_BYTES.min(st.total.saturating_sub(1)) {
                         st.probed = true;
+                        // 프로브 실측을 peak에 즉시 반영(M4-11 후속) — 관측 창
+                        // (500ms)이 닫히길 기다리면 localhost에선 peak=0인 채
+                        // 재산출돼 하한 조임이 재발한다(실기: 1차만 316KiB/s).
+                        let probe_dur = xfer_now_ms().saturating_sub(st.started_ms);
+                        send_meter.note_burst(off, probe_dur);
                         let local = send_rate.target_bps(&send_meter);
                         st.pacer =
                             nbeep_core::Pacer::new(nbeep_core::negotiate(local, st.rate_cap));

@@ -106,6 +106,16 @@ impl RateMeter {
         }
     }
 
+    /// 구간 실측을 peak에 **직접** 반영(M4-11 후속 · 08-16) — 무페이싱 프로브가
+    /// 관측 창(500ms)보다 빨리 끝나면(localhost 2MiB ≈ 수십 ms) 창이 한 번도 안
+    /// 닫힌 채 재산출이 일어나 peak=0 → 하한 조임이 재발한다(실기: 1차 전송
+    /// 316KiB/s · 2차만 2.4MiB/s — 1차의 peak가 500ms 뒤에야 기록된 탓).
+    /// 경계 시점에 프로브 구간(bytes/dur)을 즉시 peak 후보로 넣는다.
+    pub fn note_burst(&mut self, bytes: u64, dur_ms: u64) {
+        let bps = bytes.saturating_mul(1000) / dur_ms.max(1);
+        self.peak_bps = self.peak_bps.max(bps);
+    }
+
     /// 전송/수신한 바이트를 기록한다.
     pub fn observe(&mut self, bytes: u64, now_ms: u64) {
         if self.total_bytes == 0 && self.win_bytes == 0 {
@@ -266,6 +276,15 @@ mod tests {
         m.observe(1_000, 5_000);
         m.observe(0, 5_100);
         assert_eq!(m.peak_bps(), fast, "평균이 아니라 최고치");
+    }
+
+    #[test]
+    fn note_burst_updates_peak_without_window() {
+        // 프로브(수십 ms)가 500ms 창보다 빨리 끝나도 peak가 즉시 선다(M4-11).
+        let mut m = RateMeter::new(500);
+        m.note_burst(2 * 1024 * 1024, 40); // 2MiB / 40ms = 50MiB/s
+        assert!(m.peak_bps() >= 50 * 1024 * 1024);
+        assert!(m.auto_target() >= 25 * 1024 * 1024, "절반 목표가 즉시 선다");
     }
 
     #[test]
