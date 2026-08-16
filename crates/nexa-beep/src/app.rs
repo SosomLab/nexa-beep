@@ -2133,12 +2133,25 @@ impl App {
         } else {
             format!("{sender} · ⚠ 서로 주고받은 메시지가 아직 없습니다")
         };
+        // 강등 안내(08-16 실기 — "자동승인 켰는데 왜 묻지?"가 버그로 오인됐다):
+        // 자동(즉시·기간)이 켜져 있는데 이 창이 떴다 = 첫 왕래 전 강등이 이유다.
+        let auto_on = matches!(
+            self.approval.tick(self.now_ms()).0,
+            nbeep_core::ApprovalPolicy::Basic(nbeep_core::BasicApproval::Auto)
+                | nbeep_core::ApprovalPolicy::TimedAuto { .. }
+        );
+        let downgrade_note = if auto_on && !self.ledger.get(peer).is_mutual() {
+            "자동 승인 기간 중이지만 첫 왕래 전이라 확인이 필요합니다".to_string()
+        } else {
+            String::new()
+        };
         Some(nbeep_ui::OfferInfo {
             sender,
             when: nbeep_plat::clock::local_hms(unix_now()).hms(),
             name: name.clone(),
             size: *size,
             queued: q.len(),
+            downgrade_note,
         })
     }
 
@@ -7803,7 +7816,7 @@ impl ApplicationHandler<AppEvent> for App {
                 avg_bps,
             } => {
                 self.active_recv.remove(&peer); // 수신 완결 — 취소 대상 아님(08-16)
-                // 수신은 액터에 계측기가 없다 — 평균이 유일한 실측(보수적 하한).
+                                                // 수신은 액터에 계측기가 없다 — 평균이 유일한 실측(보수적 하한).
                 self.recv_meter.note_peak(avg_bps);
                 self.refresh_approval_ui();
                 // 격리 보관까지 끝난 상태 — **실체화는 승인 후 별도**(FR-S-9).
@@ -7859,8 +7872,8 @@ impl ApplicationHandler<AppEvent> for App {
                 peak_bps,
             } => {
                 self.active_send.remove(&peer); // 다 보냈다 — 취소 대상 아님(08-16)
-                // Auto 설정 행 표시용 집계(08-16) — 세션 peak가 0일 수 있다
-                // (프로브 크기 미만의 작은 파일 — 창이 한 번도 안 닫힘). 평균이 하한.
+                                                // Auto 설정 행 표시용 집계(08-16) — 세션 peak가 0일 수 있다
+                                                // (프로브 크기 미만의 작은 파일 — 창이 한 번도 안 닫힘). 평균이 하한.
                 self.send_meter.note_peak(peak_bps.max(avg_bps));
                 self.refresh_approval_ui();
                 self.send_avg.insert(peer, avg_bps); // ack 도착 시 완료 문구에(08-16)

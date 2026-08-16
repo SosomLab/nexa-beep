@@ -31,6 +31,9 @@ pub struct OfferInfo {
     pub size: u64,
     /// 같은 상대에게서 대기 중인 제안 수(1이면 표시하지 않는다).
     pub queued: usize,
+    /// 자동 승인 강등 안내(08-16 — 자동 승인 중인데 이 창이 뜬 이유를 설명:
+    /// 빈 값 = 표시 없음). 실기에서 "자동인데 왜 묻지?"가 버그로 오인됐다.
+    pub downgrade_note: String,
 }
 
 /// 사용자 결정.
@@ -220,6 +223,15 @@ impl Widget for OfferPromptWidget {
             y += sh + self.s(10);
         }
 
+        // 강등 안내(08-16) — 자동 승인 중인데 이 창이 뜬 이유(첫 왕래 전 강등).
+        // 설정과 실제 동작의 괴리가 버그로 오인되는 것을 막는다(실기).
+        if !self.info.downgrade_note.is_empty() {
+            ctx.select_font(FontSlot::Status, false);
+            let sh = ctx.text_height();
+            ctx.text(b.x + pad, y, b, &self.info.downgrade_note, theme.warn);
+            y += sh + self.s(8);
+        }
+
         // 구분선.
         ctx.fill_rect(Rect::new(b.x + pad, y, b.w - pad * 2, 1), theme.border);
 
@@ -257,6 +269,7 @@ mod tests {
             name: "보고서.pdf".into(),
             size: 1024 * 1024,
             queued: 1,
+            downgrade_note: String::new(),
         }
     }
 
