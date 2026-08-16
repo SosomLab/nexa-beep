@@ -353,6 +353,9 @@ pub struct ChatViewWidget {
     xfer_cancel_hit: std::cell::Cell<Option<Rect>>,
     /// 취소 클릭 요청(1회성 — 호스트가 CancelXfer로 라우팅).
     xfer_cancel_req: bool,
+    /// 취소 버튼 눌림 상태(Button 컨트롤과 같은 문법 — MouseDown 누름 표시,
+    /// MouseUp이 영역 안이면 발화 · 08-16 실기: "클릭 효과가 안 느껴진다").
+    xfer_cancel_pressed: bool,
     /// 우클릭 컨텍스트 메뉴(입력란 · 말풍선).
     ctx_menu: crate::controls::ContextMenu,
     /// 메뉴를 연 시점의 말풍선 인덱스(있으면 "메시지 복사" 대상).
@@ -397,6 +400,7 @@ impl ChatViewWidget {
             copy_out: None,
             xfer_cancel_hit: std::cell::Cell::new(None),
             xfer_cancel_req: false,
+            xfer_cancel_pressed: false,
             ctx_menu: crate::controls::ContextMenu::new(),
             ctx_bubble: None,
             paste_req: false,
@@ -1163,9 +1167,10 @@ impl Widget for ChatViewWidget {
             }
             InputEvent::MouseDown { x, y, shift, .. } => {
                 // 진행 배너 "취소"(08-16) — 히트는 페인트가 기록한 사각형 기준.
+                // 표준 버튼 의미론: 누름은 표시만, 발화는 MouseUp이 영역 안일 때.
                 if let Some(r) = self.xfer_cancel_hit.get() {
                     if self.xfer.is_some() && r.contains(Point { x, y }) {
-                        self.xfer_cancel_req = true;
+                        self.xfer_cancel_pressed = true;
                         inv.push(r);
                         return;
                     }
@@ -1211,8 +1216,18 @@ impl Widget for ChatViewWidget {
                     inv.push(self.bounds);
                 }
             }
-            InputEvent::MouseUp { .. } => {
+            InputEvent::MouseUp { x, y } => {
                 self.dragging = false;
+                // 취소 버튼 발화(08-16) — 눌린 채 영역 안에서 뗐을 때만(표준 버튼).
+                if self.xfer_cancel_pressed {
+                    self.xfer_cancel_pressed = false;
+                    if let Some(r) = self.xfer_cancel_hit.get() {
+                        if self.xfer.is_some() && r.contains(Point { x, y }) {
+                            self.xfer_cancel_req = true;
+                        }
+                        inv.push(r);
+                    }
+                }
             }
             InputEvent::RightDown { x, y } => {
                 self.open_ctx_menu(x, y, inv);
@@ -1495,17 +1510,25 @@ impl Widget for ChatViewWidget {
             );
             // "취소" 버튼(08-16) — 수락 후에도 중단 수단이 있어야 한다(그전엔
             // 수락 순간 취소 경로가 사라졌다). 히트 영역은 페인트가 기록한다.
-            let cw = self.s(34);
+            // 모양은 Button 컨트롤 문법 그대로(field_bg+border · 눌림 = sel_bg) +
+            // **위험색 라벨**(실기 08-16: 배경과 같은 회색이라 버튼인 줄 몰랐다).
+            let cw = self.s(44);
             let cx = row.right() - cw - self.s(10);
             let crect = Rect::new(cx, row.y + self.s(2), cw, row.h - self.s(4));
-            ctx.fill_round_rect(crect, self.s(3), theme.panel_bg_alt);
+            let bg = if self.xfer_cancel_pressed {
+                theme.sel_bg
+            } else {
+                theme.field_bg
+            };
+            ctx.fill_round_rect(crect, self.s(3), bg);
+            ctx.stroke_round_rect(crect, self.s(3), theme.border, 1.0);
             let ctw = ctx.text_width("취소");
             ctx.text(
                 cx + (cw - ctw) / 2,
                 row.y + (row.h - sh) / 2,
                 row,
                 "취소",
-                theme.text,
+                theme.danger,
             );
             self.xfer_cancel_hit.set(Some(crect));
             let bar_w = self.s(90);
