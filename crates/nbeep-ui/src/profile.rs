@@ -101,6 +101,12 @@ pub struct ProfileWidget {
     /// 미저장 닫기 2단계 확인(M3-18 ④ — 격리함 confirming 문법): Esc 1차 = 경고
     /// 표시, 2차 = 버리고 닫기. 다른 입력이 오면 해제.
     discard_arm: bool,
+    /// 열림 시점의 텍스트 3종 원값(정규화 후 · M3-18 후속 08-16) — 적용 시
+    /// **Enter 없이 타이핑만 한 값**도 수확하되, 원값과 같으면 보고하지 않는다
+    /// (같은 값 재보고 = 불필요한 이름 재공지·프로필 재전파).
+    orig_name: String,
+    orig_email: String,
+    orig_phone: String,
     pick_image: bool,
     closed: bool,
 }
@@ -166,15 +172,78 @@ impl ProfileWidget {
             apply_btn: Button::new(t(Msg::ActApply)),
             cancel_btn: Button::new(t(Msg::OfferCancel)),
             discard_arm: false,
+            orig_name: v.display_name.clone(),
+            orig_email: v.email.clone(),
+            orig_phone: v.phone.clone(),
             pick_image: false,
             closed: false,
         }
     }
 
+    /// 텍스트 3종의 현재 값을 수확한다(M3-18 후속 — 실기: Enter를 안 누르고
+    /// 적용을 누르면 타이핑한 값이 사라졌다). Enter 확정 경로와 **같은 정규화**
+    /// (trim · 빈 이름 = "auto")를 거치고, 마지막 보고값(없으면 원값)과 다를
+    /// 때만 changes에 넣는다.
+    fn harvest_texts(&mut self) {
+        let items = [
+            (
+                self.name.text(),
+                "profile.display_name",
+                true,
+                self.orig_name.clone(),
+            ),
+            (
+                self.email.text(),
+                "profile.email",
+                false,
+                self.orig_email.clone(),
+            ),
+            (
+                self.phone.text(),
+                "profile.phone",
+                false,
+                self.orig_phone.clone(),
+            ),
+        ];
+        for (raw, key, auto_empty, orig) in items {
+            let v = raw.trim().to_string();
+            let out = if v.is_empty() && auto_empty {
+                "auto".to_string()
+            } else {
+                v
+            };
+            let last = self
+                .changes
+                .iter()
+                .rev()
+                .find(|(k, _)| *k == key)
+                .map_or(orig, |(_, v)| v.clone());
+            if out != last {
+                self.changes.push((key, out));
+            }
+        }
+    }
+
+    /// 미확정 타이핑까지 포함한 편집 여부(M3-18 — Esc 2단계 판정도 이걸 본다).
+    fn texts_dirty(&self) -> bool {
+        let norm = |raw: String, auto_empty: bool| {
+            let v = raw.trim().to_string();
+            if v.is_empty() && auto_empty {
+                "auto".to_string()
+            } else {
+                v
+            }
+        };
+        norm(self.name.text(), true) != self.orig_name
+            || norm(self.email.text(), false) != self.orig_email
+            || norm(self.phone.text(), false) != self.orig_phone
+    }
+
     /// 저장 안 된 편집이 있는가(M3-18 — 호스트의 닫기 판단·상태 표시용).
+    /// Enter 안 누른 타이핑도 포함한다(수확은 적용 시점 · 08-16 실기).
     #[must_use]
     pub fn dirty(&self) -> bool {
-        !self.changes.is_empty()
+        !self.changes.is_empty() || self.texts_dirty()
     }
 
     /// 스와치 목록 — [이니셜, 없음] + 내장 12간지(설정 저장값과 1:1).
@@ -416,8 +485,9 @@ impl ProfileWidget {
             .set_bounds(Rect::new(b.x + pad, b.y + self.s(498), fw, sw_h), inv);
         self.sw_phone
             .set_bounds(Rect::new(b.x + pad, b.y + self.s(530), fw, sw_h), inv);
-        // 적용/취소(M3-18) — 우측 정렬 · 토글 아래(경고줄은 paint가 왼쪽에).
-        let by = b.y + self.s(572);
+        // 적용/취소(M3-18) — 우측 정렬 · **공유 안내문 아래**(08-16 실기: 572에
+        // 두니 안내문(568 + 2줄×16)을 가렸다 · 창 650 — 하단 여백 18 확보).
+        let by = b.y + self.s(604);
         self.cancel_btn
             .set_bounds(Rect::new(b.right() - pad - bw, by, bw, field_h), inv);
         self.apply_btn.set_bounds(
@@ -540,7 +610,9 @@ impl Widget for ProfileWidget {
         }
         self.apply_btn.on_event(ev, inv);
         if self.apply_btn.take_clicked() {
-            // 적용(M3-18) — 보류분 일괄 확정 + 닫기(대화상자 관례).
+            // 적용(M3-18) — **Enter 없이 타이핑한 값까지 수확** 후(08-16 실기:
+            // 엔터를 안 누르면 적용이 안 됐다) 보류분 일괄 확정 + 닫기.
+            self.harvest_texts();
             let held = std::mem::take(&mut self.changes);
             self.ready.extend(held);
             self.closed = true;
@@ -843,6 +915,37 @@ mod tests {
             },
             inv,
         );
+    }
+
+    /// ★ M3-18 후속(08-16 실기) — **Enter 없이 타이핑만 한 값도 적용이 수확**한다.
+    /// 종전엔 Enter 확정분만 나가서 "엔터를 안 누르면 적용이 안 되는" 함정이었다.
+    #[test]
+    fn apply_harvests_uncommitted_typing() {
+        let (mut w, mut inv) = widget();
+        let r = w.email.bounds();
+        w.on_event(
+            &InputEvent::MouseDown {
+                x: r.x + 4,
+                y: r.y + 4,
+                shift: false,
+                primary: false,
+            },
+            &mut inv,
+        );
+        for c in "a@b.c".chars() {
+            w.on_event(&InputEvent::Char { c, now_ms: 0 }, &mut inv);
+        }
+        // Enter 없이 바로 적용.
+        click_apply(&mut w, &mut inv);
+        let ch = w.take_changes();
+        assert!(
+            ch.contains(&("profile.email", "a@b.c".to_string())),
+            "미확정 타이핑 수확: {ch:?}"
+        );
+        // 원값과 같으면 재보고하지 않는다(불필요한 재공지 방지).
+        let (mut w2, mut inv2) = widget();
+        click_apply(&mut w2, &mut inv2);
+        assert!(w2.take_changes().is_empty(), "무편집 적용 = 보고 0");
     }
 
     /// ★ M3-18 계약 — 편집은 보류: 적용 전 take_changes는 비고, 취소는 폐기한다.
