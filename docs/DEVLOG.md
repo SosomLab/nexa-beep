@@ -7,6 +7,7 @@
 
 ## 2026-08-17
 
+- **M3-1b StdAccel ✅** — conventions 계층(매핑 단일화·배선 2지점·전수 회귀) · 관성은 mac OS 제공 확인(합성은 Win/Linux 실기 몫) · M3-1e ①은 전용 세션 판단.
 - **2순위 3종 일괄** — ★**R-8 해소**(mac RSS = 측정 지표 문제: 실점유 footprint 18~20MB vs ps RSS 120~270MB(reclaimable 209MB 허수) — 3-OS 예산 안쪽 · 05 지표 개정) · **M1-11 세션 계층 보강**(투명 릴레이 실소켓 캡처 — 08-15 인코더 검사와 별개 계층) · **M1-8y 완결**(SIGKILL 선제 pop — pty 실측 · 비TTY ESC 0건 · 4경로 닫힘). 662 green.
 
 ## 2026-08-16
