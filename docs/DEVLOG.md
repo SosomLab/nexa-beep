@@ -5,6 +5,10 @@
 
 ---
 
+## 2026-08-17
+
+- **2순위 3종 일괄** — ★**R-8 해소**(mac RSS = 측정 지표 문제: 실점유 footprint 18~20MB vs ps RSS 120~270MB(reclaimable 209MB 허수) — 3-OS 예산 안쪽 · 05 지표 개정) · **M1-11 세션 계층 보강**(투명 릴레이 실소켓 캡처 — 08-15 인코더 검사와 별개 계층) · **M1-8y 완결**(SIGKILL 선제 pop — pty 실측 · 비TTY ESC 0건 · 4경로 닫힘). 662 green.
+
 ## 2026-08-16
 
 - **Auto 속도 실측값 표시**(main): 설정 Upload/Download limit(Auto) 행 하단에 실측 최고·자동 목표 표시(사용자 요청). 액터 실측을 완료 이벤트(`peak_bps`)로 GUI 집계기에 전달(`note_peak` 신설) · 표시 = 기존 노트 채널(값 불변 = 무효화 생략 → 갱신 비용 0). 656 green. 상세 [journal/2026-08-16.md](journal/2026-08-16.md).
