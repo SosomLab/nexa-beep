@@ -57,6 +57,20 @@ impl RateLimit {
             Self::PerSec(v) => v,
         }
     }
+
+    /// **상대에게 공지할 상한**(M4-11 · 08-16) — [`Self::target_bps`]와 다르다:
+    /// 그건 *내 발신 페이싱 목표*고, 이건 *상대에게 주장하는 내 수신 상한*이다.
+    /// Auto = **0(상한 무주장)** — 종전엔 관측 없는 수신측이 하한(256KiB/s)을
+    /// 공지해 쌍방 negotiate가 하한에 고착됐다(로컬 0.25MB/s 실기). 자동 모드의
+    /// 뜻은 "내가 수신 대역을 조절하지 않는다 — 발신자가 자기 관측의 절반으로
+    /// 알아서 양보한다"이므로 상한을 주장하지 않는 게 맞다. 명시(PerSec)만 주장.
+    #[must_use]
+    pub fn advertised_cap(self) -> u64 {
+        match self {
+            Self::Auto => 0,
+            Self::PerSec(v) => v,
+        }
+    }
 }
 
 /// 처리량 계측 — 관측 최고치(B/s)를 남긴다.
@@ -252,6 +266,14 @@ mod tests {
         m.observe(1_000, 5_000);
         m.observe(0, 5_100);
         assert_eq!(m.peak_bps(), fast, "평균이 아니라 최고치");
+    }
+
+    #[test]
+    fn advertised_cap_claims_nothing_on_auto() {
+        // Auto = 상한 무주장(0) — 관측 유무와 무관. 종전 target_bps를 공지에
+        // 쓰면 관측 없는 수신측이 하한을 주장해 협상이 하한에 고착된다(M4-11).
+        assert_eq!(RateLimit::Auto.advertised_cap(), 0);
+        assert_eq!(RateLimit::PerSec(1_000).advertised_cap(), 1_000);
     }
 
     #[test]
