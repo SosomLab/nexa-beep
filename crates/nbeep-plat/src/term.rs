@@ -116,9 +116,16 @@ impl RawTerm {
                     extended: false,
                 };
             }
+            // ★ 선제 청소(M1-8y ① · 08-17) — **SIGKILL은 어떤 훅도 못 돈다**:
+            //   이전 실행이 kill -9로 죽었다면 kitty 플래그가 터미널 에뮬레이터에
+            //   남아 있다(상태는 셸이 아니라 에뮬레이터 소유 — 08-13 실기 2회).
+            //   진입 직전에 pop을 한 번 쏴서 잔존 상태를 걷어낸다. kitty 프로토콜은
+            //   스택형이라 **빈 스택 pop은 무해**하고, 미지원 터미널은 무시한다.
+            //   같은 TTY 다중 인스턴스의 pop 경합(M1-8y ③)도 이 청소가 흡수한다.
+            let mut out = std::io::stdout();
+            let _ = out.write_all(b"\x1b[<u");
             // kitty 키보드 프로토콜(플래그 1 = disambiguate escape codes) 요청.
             // 지원하지 않는 터미널은 이 시퀀스를 조용히 무시한다.
-            let mut out = std::io::stdout();
             let _ = out.write_all(b"\x1b[>1u");
             let _ = out.flush();
             // 전역 복원 레지스트리 + 패닉 훅(1회) — Drop이 못 도는 죽음(패닉 abort ·
