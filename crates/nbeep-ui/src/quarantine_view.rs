@@ -26,6 +26,9 @@ use nbeep_core::{t, Msg, RiskLevel, TrustLevel};
 
 /// 목록 한 줄 — 호스트가 `.beepq` 메타에서 채운다.
 #[derive(Clone, Debug)]
+/// 미리보기 요청(08-16 — 확대 미리보기 진입점 ②): **이미 선택된 행을 다시
+/// 클릭**하면 발화한다(위젯엔 시계가 없어 시간 기반 더블클릭 대신 상태 기반 —
+/// 첫 클릭 = 선택, 재클릭 = 열기. 탐색기 더블클릭과 같은 손동작이 그대로 된다).
 pub struct QRow {
     /// 원본 파일명(표시용).
     pub name: String,
@@ -115,6 +118,8 @@ pub struct QuarantineWidget {
     /// 이 세션에서 실체화한 경로 — 행에 "실체화됨" 태그. `.beepq`는 보존되므로
     /// 목록이 그대로라 **아무 일도 안 난 것처럼 보이던** 문제를 없앤다.
     done: std::collections::HashSet<String>,
+    /// 미리보기 요청(1회성 · 08-16) — 선택된 행 재클릭 = 격리물 확대 미리보기.
+    preview_req: Option<String>,
 }
 
 impl QuarantineWidget {
@@ -135,6 +140,7 @@ impl QuarantineWidget {
             back: false,
             message: None,
             done: std::collections::HashSet::new(),
+            preview_req: None,
         }
     }
 
@@ -194,6 +200,11 @@ impl QuarantineWidget {
             self.bounds.w,
             rh,
         )
+    }
+
+    /// 미리보기 요청 회수(1회성 · 08-16) — 호스트가 확대 뷰어를 연다.
+    pub fn take_preview(&mut self) -> Option<String> {
+        self.preview_req.take()
     }
 
     fn selected(&self) -> Option<&QRow> {
@@ -293,6 +304,11 @@ impl Widget for QuarantineWidget {
                             self.sel = i;
                             self.confirming = false; // 다른 행 = 확인 단계 취소
                             self.message = None;
+                        } else {
+                            // 선택된 행 재클릭 = 미리보기(08-16 — 격리 상태
+                            // 그대로 크게 본다 · 실체화 아님). 이미지가 아니면
+                            // 뷰어가 "만들 수 없음"을 말한다(조용한 무반응 금지).
+                            self.preview_req = Some(self.rows[i].path.clone());
                         }
                         self.confirming_clear = false; // 행 조작 = 비우기 확인 취소
                         inv.push(self.bounds);

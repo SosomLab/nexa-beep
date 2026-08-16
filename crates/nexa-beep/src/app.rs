@@ -7338,14 +7338,24 @@ impl App {
                 }
             }
             Role::Quarantine => {
-                let mut act = None;
+                let (mut act, mut preview) = (None, None);
                 if let Some(qv) = &mut self.quarantine_view {
                     qv.on_event(&ev, &mut inv);
                     act = qv.take_action();
+                    preview = qv.take_preview();
                     if qv.take_back() {
                         self.quarantine_view = None;
                         self.windows.remove(&id);
                     }
+                }
+                if let Some(qp) = preview {
+                    // 선택 행 재클릭 = 확대 미리보기(08-16 — 진입점 ② · 격리
+                    // 상태 그대로 · 스레드 썸네일과 같은 뷰어).
+                    let title = std::path::Path::new(&qp)
+                        .file_stem()
+                        .map(|t| t.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| "격리물".into());
+                    self.open_image_view(el, qp, title);
                 }
                 if let Some(a) = act {
                     self.run_quarantine_action(a, id);
