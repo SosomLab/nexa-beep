@@ -426,7 +426,16 @@ struct ActiveSend {
     next: u64,
     total: u64,
     pacer: nbeep_core::Pacer,
+    /// 상대가 공지한 수신 상한(0 = 무제한) — 프로브 후 재협상에 다시 쓴다.
+    rate_cap: u64,
+    /// 프로브(첫 2MiB 무페이싱) 종료 후 실측 기반 재산출을 마쳤는가(M4-11 ⓑ).
+    probed: bool,
 }
+
+/// 무페이싱 프로브 구간(M4-11 ⓑ) — 첫 2MiB는 전속으로 보내 **진짜 링크
+/// 능력**을 관측한다. 종전엔 하한으로 조인 채 보내 관측이 목표에 갇혔다
+/// (페이싱 중 관측은 링크 능력이 아니라 자기 목표를 재는 것 — 되먹임 고착).
+const RATE_PROBE_BYTES: u64 = 2 * 1024 * 1024;
 
 /// 액터 쪽 단조 시각(ms) — Pacer·RateMeter가 **같은 기준**을 봐야 해서 한 곳
 /// (xfer_step과 펌프 틱이 공유 · 기준이 갈리면 대역 계산이 깨진다).
@@ -572,10 +581,21 @@ fn spawn_session_actor(
                     let off = st.next;
                     let end = (off + nbeep_core::MAX_CHUNK as u64).min(st.total);
                     let n = end - off;
-                    // 창이 모자라면 그만큼 쉰다(종전 문법 그대로 — 예약 후 대기).
-                    let wait = st.pacer.take(n, xfer_now_ms());
-                    if wait > 0 {
-                        std::thread::sleep(std::time::Duration::from_millis(wait));
+                    // 프로브 경계(M4-11 ⓑ) — 첫 2MiB를 전속으로 보냈으니 meter가
+                    // **진짜 peak**를 안다. 목표를 실측 기반으로 재산출(한 번만).
+                    if !st.probed && off >= RATE_PROBE_BYTES.min(st.total.saturating_sub(1)) {
+                        st.probed = true;
+                        let local = send_rate.target_bps(&send_meter);
+                        st.pacer =
+                            nbeep_core::Pacer::new(nbeep_core::negotiate(local, st.rate_cap));
+                    }
+                    // 프로브 구간은 무페이싱(전속) — 작은 파일(≤2MiB)은 전체가 프로브.
+                    if st.probed {
+                        // 창이 모자라면 그만큼 쉰다(종전 문법 그대로 — 예약 후 대기).
+                        let wait = st.pacer.take(n, xfer_now_ms());
+                        if wait > 0 {
+                            std::thread::sleep(std::time::Duration::from_millis(wait));
+                        }
                     }
                     #[allow(clippy::cast_possible_truncation)]
                     let chunk = XferMsg::Chunk {
@@ -897,6 +917,8 @@ fn xfer_step(
                     next: 0,
                     total,
                     pacer: nbeep_core::Pacer::new(nbeep_core::negotiate(local, rate_cap)),
+                    rate_cap,
+                    probed: false,
                 });
             }
         }
@@ -2142,8 +2164,10 @@ impl App {
         why: nbeep_core::RejectWhy,
     ) -> bool {
         let cmd = if accept {
-            // 수신 상한을 함께 알린다 — 발신측이 **둘 중 낮은 쪽**으로 맞춘다.
-            let rate_cap = self.recv_rate.target_bps(&self.recv_meter);
+            // 수신 상한 공지(M4-11 개정) — Auto는 **상한 무주장(0)**: 종전
+            // target_bps 공지는 관측 없는 수신측이 하한(256KiB/s)을 주장해
+            // 쌍방 협상이 하한에 고착됐다(로컬 0.25MB/s 실기). 명시 설정만 주장.
+            let rate_cap = self.recv_rate.advertised_cap();
             SessionCmd::AcceptXfer { id: xid, rate_cap }
         } else {
             SessionCmd::RejectXfer { id: xid, why }
