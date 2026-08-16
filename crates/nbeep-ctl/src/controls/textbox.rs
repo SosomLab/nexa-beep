@@ -42,7 +42,7 @@ pub struct TextBox {
     /// 지금 치는 글자가 보여야 한다(대화 입력과 동일한 경험 — 호스트가 배선).
     preedit: String,
     /// 우클릭 편집 메뉴(08-13 전수 검사 — 대화 입력에만 있고 일반 필드엔 없었다).
-    ctx_menu: super::ContextMenu,
+    ctx_menu: super::EditMenu,
     /// 메뉴에서 고른 클립보드 행동(1회성) — OS 클립보드는 호스트 몫이라 요청만 남긴다.
     edit_ctx: Option<EditCtxAction>,
     /// 붙여넣기 항목 활성 근거(호스트가 우클릭 시점에 1회 주입 — 대화 입력과 동일).
@@ -78,7 +78,7 @@ impl TextBox {
             last_click: (0, 0),
             hscroll: std::cell::Cell::new(0),
             preedit: String::new(),
-            ctx_menu: super::ContextMenu::new(),
+            ctx_menu: super::EditMenu::new(),
             edit_ctx: None,
             clip_has_text: true,
         }
@@ -303,15 +303,16 @@ impl Widget for TextBox {
             if self.ctx_menu.on_event(ev) {
                 inv.push(menu_rect);
                 inv.push(self.base.bounds);
-                if let Some(id) = self.ctx_menu.take_picked() {
-                    match id.as_str() {
+                if let Some(a) = self.ctx_menu.take_action() {
+                    use super::EditMenuAction as A;
+                    match a {
                         // 전체 선택은 위젯 내부 상태 — 즉시 실행.
-                        "select_all" => self.edit.key(EditKey::SelectAll, false),
+                        A::SelectAll => self.edit.key(EditKey::SelectAll, false),
                         // 클립보드는 호스트 몫 — 요청만 남긴다(⌘C/X/V와 같은 경로).
-                        "copy" => self.edit_ctx = Some(EditCtxAction::Copy),
-                        "cut" => self.edit_ctx = Some(EditCtxAction::Cut),
-                        "paste" => self.edit_ctx = Some(EditCtxAction::Paste),
-                        _ => {}
+                        A::Copy => self.edit_ctx = Some(EditCtxAction::Copy),
+                        A::Cut => self.edit_ctx = Some(EditCtxAction::Cut),
+                        A::Paste => self.edit_ctx = Some(EditCtxAction::Paste),
+                        A::Extra(_) => {}
                     }
                 }
                 return;
@@ -319,18 +320,13 @@ impl Widget for TextBox {
         }
         if let InputEvent::RightDown { x, y } = *ev {
             if self.base.bounds.contains(Point { x, y }) {
-                // 라벨은 주입 공급자에서(08-14 라이브러리화 — 컨트롤은 앱 i18n을 모른다).
-                use super::{ctl_label, CtlMsg};
+                // 항목 구성·게이트·순서는 EditMenu 한 벌(M3-1e ① 1슬라이스).
                 self.base.focused = true; // 우클릭도 포커스(메뉴 행동의 대상이 된다)
-                let has_sel = self.edit.selected_text().is_some();
-                let has_text = !self.edit.text().is_empty();
-                let items = vec![
-                    super::CtxItem::maybe("select_all", ctl_label(CtlMsg::CtxSelectAll), has_text),
-                    super::CtxItem::maybe("copy", ctl_label(CtlMsg::CtxCopy), has_sel),
-                    super::CtxItem::maybe("cut", ctl_label(CtlMsg::CtxCut), has_sel),
-                    super::CtxItem::maybe("paste", ctl_label(CtlMsg::CtxPaste), self.clip_has_text),
-                ];
-                self.ctx_menu.set_scale(self.base.scale);
+                let caps = super::EditMenuCaps {
+                    has_sel: self.edit.selected_text().is_some(),
+                    has_text: !self.edit.text().is_empty(),
+                    clip_has_text: self.clip_has_text,
+                };
                 // 팝업이 박스 밖(아래)으로 펼쳐질 공간 — 박스 사각형만 주면 안에 구겨진다.
                 let host = Rect::new(
                     self.base.bounds.x,
@@ -338,7 +334,8 @@ impl Widget for TextBox {
                     self.base.bounds.w.max(self.s(200)),
                     self.base.bounds.h + self.s(140),
                 );
-                self.ctx_menu.open_at(x, y, items, host, 8 * 15);
+                self.ctx_menu
+                    .open_at(x, y, self.base.scale, host, caps, Vec::new());
                 inv.push(self.base.bounds);
                 inv.push(self.ctx_menu.bounds());
             }

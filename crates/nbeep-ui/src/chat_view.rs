@@ -365,7 +365,7 @@ pub struct ChatViewWidget {
     /// 썸네일 클릭 = 확대 미리보기 요청(1회성 — 호스트가 뷰어를 연다).
     open_image: Option<String>,
     /// 우클릭 컨텍스트 메뉴(입력란 · 말풍선).
-    ctx_menu: crate::controls::ContextMenu,
+    ctx_menu: crate::controls::EditMenu,
     /// 메뉴를 연 시점의 말풍선 인덱스(있으면 "메시지 복사" 대상).
     ctx_bubble: Option<usize>,
     /// 붙여넣기 요청(1회성) — 클립보드는 호스트만 읽을 수 있다.
@@ -411,7 +411,7 @@ impl ChatViewWidget {
             xfer_cancel_pressed: false,
             thumb_hits: std::cell::RefCell::new(Vec::new()),
             open_image: None,
-            ctx_menu: crate::controls::ContextMenu::new(),
+            ctx_menu: crate::controls::EditMenu::new(),
             ctx_bubble: None,
             paste_req: false,
             clip_has_text: false,
@@ -590,25 +590,22 @@ impl ChatViewWidget {
     /// 위치로 대상이 갈린다 — **입력란**이면 편집 3종, **말풍선**이면 메시지 복사.
     /// 둘 다 아니면 열지 않는다(빈 곳 우클릭에 메뉴가 뜨면 무엇에 대한 메뉴인지 모른다).
     fn open_ctx_menu(&mut self, x: i32, y: i32, inv: &mut Invalidations) {
-        use crate::controls::CtxItem;
+        use crate::controls::{CtxItem, EditMenuCaps};
         use nbeep_core::i18n::{t, Msg};
 
         let p = Point { x, y };
-        let mut items = Vec::new();
         self.ctx_bubble = None;
 
+        // 항목 구성·게이트·순서·폭은 EditMenu 한 벌(M3-1e ① 1슬라이스 — 종전엔
+        // TextBox와 여기가 두 벌이었고 순서까지 달랐다).
         if self.input_bar().contains(p) {
-            let has_sel = self.input.selected_text().is_some();
-            let has_text = !self.input.text().is_empty();
-            items.push(CtxItem::maybe("copy", t(Msg::CtxCopy), has_sel));
-            items.push(CtxItem::maybe("cut", t(Msg::CtxCut), has_sel));
-            items.push(CtxItem::maybe(
-                "paste",
-                t(Msg::CtxPaste),
-                self.clip_has_text,
-            ));
-            items.push(CtxItem::Separator);
-            items.push(CtxItem::maybe("select_all", t(Msg::CtxSelectAll), has_text));
+            let caps = EditMenuCaps {
+                has_sel: self.input.selected_text().is_some(),
+                has_text: !self.input.text().is_empty(),
+                clip_has_text: self.clip_has_text,
+            };
+            self.ctx_menu
+                .open_at(x, y, self.scale, self.bounds, caps, Vec::new());
         } else if let Some(i) = self
             .hit_rects
             .borrow()
@@ -617,28 +614,25 @@ impl ChatViewWidget {
             .map(|&(_, i)| i)
         {
             // 풍선 우클릭 — 예전에는 여기서 곧바로 클립보드를 덮어썼다(08-10 지적).
+            // 편집 항목 없이 extra 단독이면 편집 4종은 전부 비활성 게이트로 눕는
+            // 대신, 풍선 문맥에선 입력창 편집이 무의미하므로 caps 전부 false.
             self.ctx_bubble = Some(i);
-            items.push(CtxItem::item("copy_message", t(Msg::CtxCopyMessage)));
-        }
-
-        if items.is_empty() {
+            let caps = EditMenuCaps {
+                has_sel: false,
+                has_text: false,
+                clip_has_text: false,
+            };
+            self.ctx_menu.open_at(
+                x,
+                y,
+                self.scale,
+                self.bounds,
+                caps,
+                vec![CtxItem::item("copy_message", t(Msg::CtxCopyMessage))],
+            );
+        } else {
             return;
         }
-        // 폭 측정은 paint 밖에서 못 한다 — 가장 긴 라벨의 글자 수로 근사한다
-        // (한글은 대략 배 폭이라 그만큼 더 잡는다. 모자라면 잘리므로 넉넉히).
-        let widest = items
-            .iter()
-            .map(|it| match it {
-                CtxItem::Item { label, .. } => label
-                    .chars()
-                    .map(|c| if c.is_ascii() { 8 } else { 15 })
-                    .sum::<i32>(),
-                CtxItem::Separator => 0,
-            })
-            .max()
-            .unwrap_or(0);
-        self.ctx_menu.set_scale(self.scale);
-        self.ctx_menu.open_at(x, y, items, self.bounds, widest);
         inv.push(self.ctx_menu.bounds());
     }
 
@@ -987,7 +981,15 @@ impl Widget for ChatViewWidget {
             if self.ctx_menu.on_event(ev) {
                 inv.push(menu_rect);
                 inv.push(self.bounds);
-                if let Some(id) = self.ctx_menu.take_picked() {
+                if let Some(a) = self.ctx_menu.take_action() {
+                    use crate::controls::EditMenuAction as A;
+                    let id = match a {
+                        A::Copy => "copy".to_string(),
+                        A::Cut => "cut".to_string(),
+                        A::Paste => "paste".to_string(),
+                        A::SelectAll => "select_all".to_string(),
+                        A::Extra(id) => id,
+                    };
                     self.run_ctx_action(&id, inv);
                 }
                 return;
