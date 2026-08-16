@@ -43,7 +43,26 @@ mod imp {
             loop {
                 // SAFETY: buf 범위 내 read. 0 이하 = 소켓 닫힘/오류 → 스레드 종료.
                 let n = unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) };
-                if n <= 0 || tx.send(()).is_err() {
+                if n <= 0 {
+                    // SAFETY: 위에서 연 fd — 한 번만 닫는다.
+                    unsafe { libc::close(fd) };
+                    return;
+                }
+                // ★ 자기 유발 무시(08-16 실기 — 무한 루프): 재발견 kick의 멀티캐스트
+                //   재조인이 RTM_NEWMADDR를 방출하고, 무파싱이던 이 감시가 그걸 다시
+                //   "변화"로 읽어 **감지 → 재조인 → 감지** 1초 루프가 됐다(전송 중
+                //   "네트워크 변경 감지"·프로필 재수신 반복). 헤더의 타입 1바이트만
+                //   보고 링크·주소 변화만 신호한다 — 내용은 여전히 안 본다.
+                //   (rt_msghdr: [len u16][version u8][type u8] — mac ABI 고정.)
+                if n >= 4 {
+                    let t = i32::from(buf[3]);
+                    let relevant =
+                        t == libc::RTM_IFINFO || t == libc::RTM_NEWADDR || t == libc::RTM_DELADDR;
+                    if !relevant {
+                        continue; // 멀티캐스트 조인·라우팅 캐시 등 — 전환이 아니다
+                    }
+                }
+                if tx.send(()).is_err() {
                     // SAFETY: 위에서 연 fd — 한 번만 닫는다.
                     unsafe { libc::close(fd) };
                     return;

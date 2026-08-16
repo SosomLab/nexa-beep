@@ -1307,6 +1307,10 @@ struct App {
     active_recv: HashMap<PeerId, nbeep_core::XferId>,
     /// 확대 미리보기 창 내용(08-16 — 단일 창 · [`Role::ImageView`]의 짝).
     image_view: Option<ImageViewState>,
+    /// 마지막 LinkChanged 생사 프로브 시각(ms · 08-16) — 쿨다운 10초(13 §12-1
+    /// 중복 가드: 감시 오작동·이벤트 폭주가 Request 폭주로 번지지 않게 — 실기:
+    /// 1초 루프 × 프로필 Full(이미지 동반) 양방향 = 쓰기-쓰기 교착의 방아쇠).
+    last_link_probe_ms: u64,
     /// 발신했으나 **수신 종단 확인(ack) 대기 중**인 건수(상대별 · M4-9). 종료 가드가 본다.
     awaiting_ack: HashMap<PeerId, u32>,
     /// 종료 가드 — 미확인 전송이 있을 때 첫 닫기는 경고만, 두 번째로 확정(파괴적 확인 문법).
@@ -8091,6 +8095,7 @@ impl ApplicationHandler<AppEvent> for App {
                 for p in targets {
                     self.start_connect(p, true); // 중복 클릭 가드는 connecting이 맡는다
                 }
+                let probe_ok = now.saturating_sub(self.last_link_probe_ms) >= 10_000;
                 // ⓒ 활성 세션 능동 생사 촉진(M1-2b · 08-16) — 링크가 바뀐 직후의
                 //    "성립돼 있다고 믿는" 세션이 실제로는 죽었을 수 있다(경로 소멸).
                 //    새 와이어 프레임 없이 **기존 ProfileMsg::Request 1발**을 쏜다:
@@ -8098,10 +8103,13 @@ impl ApplicationHandler<AppEvent> for App {
                 //    keepalive 감지를 단축), 산 세션은 프로필 캐시가 신선해지는
                 //    부수 효과만 남는다. LinkChanged당 1회 — 반복 타이머 아님
                 //    (13 §12-1 · 진짜 주기 하트비트는 M2-4b 몫).
-                for conv in self.conversations.values() {
-                    let _ = conv.out_tx.send(SessionCmd::Control(vec![
-                        nbeep_core::ProfileMsg::Request.encode(),
-                    ]));
+                if probe_ok {
+                    self.last_link_probe_ms = now;
+                    for conv in self.conversations.values() {
+                        let _ = conv.out_tx.send(SessionCmd::Control(vec![
+                            nbeep_core::ProfileMsg::Request.encode(),
+                        ]));
+                    }
                 }
                 self.status = "네트워크 변경 감지 — 재발견·재연결 중".into();
                 if let Some(mid) = self.main_id {
@@ -9565,6 +9573,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         active_send: HashMap::new(),
         active_recv: HashMap::new(),
         image_view: None,
+        last_link_probe_ms: 0,
         awaiting_ack: HashMap::new(),
         close_armed: false,
         send_wait: HashMap::new(),

@@ -40,6 +40,12 @@ impl TcpLink {
         #[cfg(unix)]
         let ka = ka.with_retries(3);
         socket2::SockRef::from(&stream).set_tcp_keepalive(&ka)?;
+        // ★ 쓰기 타임아웃 30초(08-16 실기 — 쓰기-쓰기 교착): 대용량 청크 홍수와
+        //   양방향 대형 Control 프레임이 겹치면 **양쪽 소켓 버퍼가 동시에 가득**
+        //   차 서로 write에서 영구 블록될 수 있다(액터가 굳어 취소·채팅 전부
+        //   정지 — 전송 86%/80% 동결 실측). 30초면 정상 배압은 절대 안 걸리고,
+        //   진짜 교착만 Err → Closed → 백오프 재연결로 **자기 치유**된다.
+        stream.set_write_timeout(Some(Duration::from_secs(30)))?;
         Ok(Self { stream })
     }
 
