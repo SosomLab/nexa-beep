@@ -119,6 +119,8 @@ enum AppEvent {
     /// 수신 완료 → **격리 보관까지 끝남**(실체화는 승인 후 별도 · FR-S-9).
     XferDone {
         peer: PeerId,
+        /// 평균 수신 속도(B/s · 08-16 — 첫 청크~Done 기준).
+        avg_bps: u64,
         name: String,
         risk: nbeep_core::RiskLevel,
         mismatch: bool,
@@ -131,7 +133,11 @@ enum AppEvent {
     XferAccepted { peer: PeerId },
     /// 발신 1건 **전송 끝(청크+Done 발신)** — 큐의 다음 파일로 넘어가되, UI는 아직 "완료"가
     /// 아니라 **확인 대기**다(수신 ack `XferAcked`가 와야 완료 · M4-9).
-    XferSendDone { peer: PeerId },
+    XferSendDone {
+        peer: PeerId,
+        /// 평균 송신 속도(B/s · 08-16 — 청크 첫 발신~Done 송신 기준).
+        avg_bps: u64,
+    },
     /// **수신 종단 확인**(M4-9) — 상대가 격리까지 마쳤(`ok=true`)거나 실패(`ok=false`)했다.
     XferAcked { peer: PeerId, ok: bool },
     /// 수동 주소 연결 실패(DR-19 · M2-8 잔여 — 워커에서 돌아온다. 성공은 `Outbound`).
@@ -430,6 +436,8 @@ struct ActiveSend {
     rate_cap: u64,
     /// 프로브(첫 2MiB 무페이싱) 종료 후 실측 기반 재산출을 마쳤는가(M4-11 ⓑ).
     probed: bool,
+    /// 발신 시작 시각(ms — 평균 속도 표기용 · 08-16).
+    started_ms: u64,
 }
 
 /// 무페이싱 프로브 구간(M4-11 ⓑ) — 첫 2MiB는 전속으로 보내 **진짜 링크
@@ -469,6 +477,8 @@ fn spawn_session_actor(
         // 메인 스레드를 막지 않게).
         let mut inbox = XferInbox::new();
         let mut outgoing: HashMap<nbeep_core::XferId, Vec<u8>> = HashMap::new();
+        // 수신 시작 시각(xid별 · 08-16) — 평균 수신 속도 표기용(첫 청크 기준).
+        let mut recv_started: HashMap<nbeep_core::XferId, u64> = HashMap::new();
         let mut send_meter = nbeep_core::RateMeter::default();
         // ★ 재개형 발신 펌프(08-16 · 취소 UX 선행) — 종전엔 Accept 처리 안의
         //   블로킹 루프가 전량을 쏟아, 펌프가 도는 동안 명령(취소)도 수신(상대
@@ -618,6 +628,8 @@ fn spawn_session_actor(
                 }
                 if done {
                     let id = st.id;
+                    let dur = xfer_now_ms().saturating_sub(st.started_ms).max(1);
+                    let avg_bps = st.total.saturating_mul(1000) / dur;
                     sending = None;
                     if session
                         .send(StreamId::File, &XferMsg::Done { id }.encode())
@@ -626,7 +638,7 @@ fn spawn_session_actor(
                         let _ = proxy.send_event(AppEvent::Closed { peer });
                         return;
                     }
-                    let _ = proxy.send_event(AppEvent::XferSendDone { peer });
+                    let _ = proxy.send_event(AppEvent::XferSendDone { peer, avg_bps });
                 }
             }
             // ★ 수신은 **스트림별이 아니라 도착 순서로** 뽑는다(08-13 — 스트림별 폴링은
@@ -751,6 +763,7 @@ fn spawn_session_actor(
                         &mut inbox,
                         &mut outgoing,
                         &mut sending,
+                        &mut recv_started,
                         &proxy,
                         send_rate,
                         &mut send_meter,
@@ -764,6 +777,21 @@ fn spawn_session_actor(
             }
         }
     });
+}
+
+/// 평균 속도 라벨(08-16 — 완료 항목 "평균 N/s"). 0은 표기 생략용 빈 문자열.
+fn speed_label(bps: u64) -> String {
+    const K: u64 = 1024;
+    if bps == 0 {
+        return String::new();
+    }
+    #[allow(clippy::cast_precision_loss)]
+    let t = match bps {
+        v if v >= K * K => format!("{:.1}MiB/s", v as f64 / (K * K) as f64),
+        v if v >= K => format!("{:.1}KiB/s", v as f64 / K as f64),
+        v => format!("{v}B/s"),
+    };
+    t
 }
 
 /// 현재 Unix 밀리초(목록 속성 — 최근 접속·대화 기록 · 08-15).
@@ -867,6 +895,7 @@ fn xfer_step(
     inbox: &mut nbeep_core::XferInbox,
     outgoing: &mut HashMap<nbeep_core::XferId, Vec<u8>>,
     sending: &mut Option<ActiveSend>,
+    recv_started: &mut HashMap<nbeep_core::XferId, u64>,
     proxy: &winit::event_loop::EventLoopProxy<AppEvent>,
     send_rate: nbeep_core::RateLimit,
     meter: &mut nbeep_core::RateMeter,
@@ -919,6 +948,7 @@ fn xfer_step(
                     pacer: nbeep_core::Pacer::new(nbeep_core::negotiate(local, rate_cap)),
                     rate_cap,
                     probed: false,
+                    started_ms: xfer_now_ms(),
                 });
             }
         }
@@ -931,22 +961,32 @@ fn xfer_step(
             };
             fail(format!("상대가 거절: {why:?}{extra}"));
         }
-        Ok(XferMsg::Chunk { id, offset, data }) => match inbox.chunk(&id, offset, &data) {
-            Ok(()) => {
-                if let Some((got, total)) = inbox.progress(&id) {
-                    let _ = proxy.send_event(AppEvent::XferProgress {
-                        peer,
-                        got,
-                        total,
-                        sending: false,
-                    });
+        Ok(XferMsg::Chunk { id, offset, data }) => {
+            recv_started.entry(id).or_insert_with(xfer_now_ms); // 평균 속도 기준점
+            match inbox.chunk(&id, offset, &data) {
+                Ok(()) => {
+                    if let Some((got, total)) = inbox.progress(&id) {
+                        let _ = proxy.send_event(AppEvent::XferProgress {
+                            peer,
+                            got,
+                            total,
+                            sending: false,
+                        });
+                    }
                 }
+                Err(e) => fail(format!("수신 오류: {e} — 폐기")),
             }
-            Err(e) => fail(format!("수신 오류: {e} — 폐기")),
-        },
+        }
         Ok(XferMsg::Done { id }) => match inbox.done(&id) {
             Ok(got) => match crate::gate::quarantine_received(&got, peer, crate::gate::CH_GUI) {
                 Ok(q) => {
+                    // 평균 수신 속도(08-16) — 첫 청크~Done. 표기는 스레드 완료 항목.
+                    let avg_bps = {
+                        let dur = xfer_now_ms()
+                            .saturating_sub(recv_started.remove(&id).unwrap_or_else(xfer_now_ms))
+                            .max(1);
+                        (got.bytes.len() as u64).saturating_mul(1000) / dur
+                    };
                     // ★ 종단 확인(M4-9) — 격리까지 성공했으니 발신자에게 Received를 돌려준다.
                     //    이걸 받아야 상대의 "완료"가 참이 된다("보냈다"≠"닿았다").
                     let _ = session.send(StreamId::File, &XferMsg::Received { id }.encode());
@@ -956,6 +996,7 @@ fn xfer_step(
                         risk: q.risk,
                         mismatch: q.mismatch,
                         qpath: q.path.to_string_lossy().into_owned(),
+                        avg_bps,
                     });
                 }
                 Err(e) => {
@@ -979,6 +1020,7 @@ fn xfer_step(
         Ok(XferMsg::Cancel { id }) => {
             inbox.drop_xfer(&id);
             outgoing.remove(&id);
+            recv_started.remove(&id);
             if sending.as_ref().is_some_and(|st| st.id == id) {
                 *sending = None; // 상대(수신측)가 진행 중 취소 — 펌프 즉시 중단(08-16)
             }
@@ -1329,6 +1371,8 @@ struct App {
     active_recv: HashMap<PeerId, nbeep_core::XferId>,
     /// 확대 미리보기 창 내용(08-16 — 단일 창 · [`Role::ImageView`]의 짝).
     image_view: Option<ImageViewState>,
+    /// 완료 대기 중 발신 평균 속도(B/s · 08-16) — 종단 ack 도착 시 완료 문구에.
+    send_avg: HashMap<PeerId, u64>,
     /// 마지막 LinkChanged 생사 프로브 시각(ms · 08-16) — 쿨다운 10초(13 §12-1
     /// 중복 가드: 감시 오작동·이벤트 폭주가 Request 폭주로 번지지 않게 — 실기:
     /// 1초 루프 × 프로필 Full(이미지 동반) 양방향 = 쓰기-쓰기 교착의 방아쇠).
@@ -7697,6 +7741,7 @@ impl ApplicationHandler<AppEvent> for App {
                 risk,
                 mismatch,
                 qpath,
+                avg_bps,
             } => {
                 self.active_recv.remove(&peer); // 수신 완결 — 취소 대상 아님(08-16)
                                                 // 격리 보관까지 끝난 상태 — **실체화는 승인 후 별도**(FR-S-9).
@@ -7713,8 +7758,9 @@ impl ApplicationHandler<AppEvent> for App {
                     false,
                     nbeep_ui::XferLineState::Done {
                         note: format!(
-                            "격리됨 · 위험 {risk:?}{}",
-                            if mismatch { " · 형식 불일치" } else { "" }
+                            "격리됨 · 위험 {risk:?}{} · 평균 {}",
+                            if mismatch { " · 형식 불일치" } else { "" },
+                            speed_label(avg_bps)
                         ),
                     },
                 );
@@ -7745,10 +7791,11 @@ impl ApplicationHandler<AppEvent> for App {
                 self.status = "상대가 수락 — 전송 시작".into();
                 self.redraw_conversation(peer);
             }
-            AppEvent::XferSendDone { peer } => {
+            AppEvent::XferSendDone { peer, avg_bps } => {
                 self.active_send.remove(&peer); // 다 보냈다 — 취소 대상 아님(08-16)
-                                                // ★ 전송 끝 ≠ 완료(M4-9) — 청크·Done을 다 보냈을 뿐, 상대 격리 확인(ack)
-                                                //   전까지는 **확인 대기**다. 미확인 카운트를 올려 종료 가드가 본다.
+                self.send_avg.insert(peer, avg_bps); // ack 도착 시 완료 문구에(08-16)
+                                                     // ★ 전송 끝 ≠ 완료(M4-9) — 청크·Done을 다 보냈을 뿐, 상대 격리 확인(ack)
+                                                     //   전까지는 **확인 대기**다. 미확인 카운트를 올려 종료 가드가 본다.
                 self.set_xfer_line(peer, true, nbeep_ui::XferLineState::AwaitingAck);
                 *self.awaiting_ack.entry(peer).or_insert(0) += 1;
                 // 배치 집계 갱신 후 다음 파일로.
@@ -7784,7 +7831,12 @@ impl ApplicationHandler<AppEvent> for App {
                 // 수신 종단 확인 도착 — 확인 대기 항목을 완료/실패로 닫는다(M4-9).
                 let terminal = if ok {
                     nbeep_ui::XferLineState::Done {
-                        note: String::new(),
+                        // 평균 송신 속도(08-16) — 청크 첫 발신~Done 기준.
+                        note: self
+                            .send_avg
+                            .remove(&peer)
+                            .map(|b| format!("평균 {}", speed_label(b)))
+                            .unwrap_or_default(),
                     }
                 } else {
                     nbeep_ui::XferLineState::Failed {
@@ -9598,6 +9650,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         active_recv: HashMap::new(),
         image_view: None,
         last_link_probe_ms: 0,
+        send_avg: HashMap::new(),
         awaiting_ack: HashMap::new(),
         close_armed: false,
         send_wait: HashMap::new(),
