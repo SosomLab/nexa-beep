@@ -5,7 +5,7 @@
 //!
 //! ## 프로토콜 (v1 — 파이프)
 //!
-//! - stdin: 이미지 바이트 전체(EOF까지 · **1MiB 상한** — 초과분은 자름 = 손상 취급).
+//! - stdin: 이미지 바이트 전체(EOF까지 · **16MiB 상한** — 초과분은 자름 = 손상 취급).
 //! - argv: `--max-side <px>`(기본 256) — 출력 긴 변 상한(박스 축소).
 //! - stdout(성공): `"NIMG"` 4B ‖ w u32 LE ‖ h u32 LE ‖ RGBA(straight) `w*h*4`B.
 //! - 실패: 아무 것도 쓰지 않고 비0 종료(사유는 stderr — 본체는 코드만 본다).
@@ -21,13 +21,15 @@
 //!
 //! ## 상한 (fail-closed)
 //!
-//! - 원본 ≤ 1MiB · 디코드 픽셀 ≤ 16,777,216(= 4096², RGBA 64MiB) · 변 ≤ 8192.
+//! - 원본 ≤ 16MiB · 디코드 픽셀 ≤ 16,777,216(= 4096², RGBA 64MiB) · 변 ≤ 8192.
 //! - 시간 상한은 **부모가 kill**로 강제한다(여기서 재는 시계는 신뢰 경계 밖).
 
 use std::io::{Read as _, Write as _};
 
-/// 원본 바이트 상한(프로필 이미지 256KiB 대비 여유 — 그 외 소비처도 1MiB면 충분).
-const SRC_MAX: usize = 1024 * 1024;
+/// 원본 바이트 상한(08-16 16MiB 상향 — 폰 사진·고해상도가 1MiB 초과가 보통이라
+/// 수신 미리보기가 자주 침묵했다. 할당 폭탄은 픽셀 상한이, CPU 폭탄은 부모 3초
+/// kill이 막으므로 바이트 상한 상향은 방어선을 옮기지 않는다).
+const SRC_MAX: usize = 16 * 1024 * 1024;
 /// 디코드 픽셀 상한(w*h) — RGBA 64MiB. 원본 1MiB JPEG은 12MP대가 흔해
 /// 2048²(4MP)로는 폰 사진 대부분이 거부됐다(수신 미리보기 실기 08-13).
 const PIXELS_MAX: u64 = 16_777_216;
@@ -50,20 +52,14 @@ fn run() -> i32 {
     // 결과를 PNG로 되뱉는다 — 본체는 인코더도 링크하지 않는다(png는 여기만).
     let encode_png = args.iter().any(|a| a == "--encode-png");
 
-    // 입력 — 상한 초과는 손상 취급(더 읽지 않고 실패). 인코드(와이어 축소본) 모드는
-    // **원본 폰 사진**(수 MB JPEG)이 입력이라 상한이 넓다(16MiB) — 픽셀 상한(size_ok
-    // 4096² · RGBA 64MiB)은 동일하게 걸리므로 할당 폭탄 방어는 그대로다.
-    let src_max: usize = if encode_png {
-        16 * 1024 * 1024
-    } else {
-        SRC_MAX
-    };
+    // 입력 — 상한 초과는 손상 취급(더 읽지 않고 실패). 16MiB는 디코드·인코드
+    // 공통(08-16 상향 — 종전 디코드 1MiB는 폰 사진에서 미리보기를 침묵시켰다).
     let mut src = Vec::with_capacity(64 * 1024);
     let n = std::io::stdin()
         .lock()
-        .take(src_max as u64 + 1)
+        .take(SRC_MAX as u64 + 1)
         .read_to_end(&mut src);
-    if n.is_err() || src.is_empty() || src.len() > src_max {
+    if n.is_err() || src.is_empty() || src.len() > SRC_MAX {
         eprintln!("imgdec: 입력 없음/상한 초과");
         return 2;
     }

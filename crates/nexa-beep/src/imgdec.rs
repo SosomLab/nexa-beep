@@ -146,7 +146,7 @@ pub(crate) fn avatar_raw_from_bytes(bytes: &[u8], max_side: u32) -> Option<(u32,
 ///
 /// 원본을 **본체에서 해석하지 않는다** — `.beepq` 컨테이너에서 바이트를 꺼내
 /// (선두 봉인 프리픽스 ‖ 본문 재조립) imgdec에 그대로 넘길 뿐, 픽셀은 격리
-/// 프로세스가 만든다. 이미지가 아니거나 1MiB 초과·손상이면 None(미리보기 없음).
+/// 프로세스가 만든다. 이미지가 아니거나 16MiB 초과·손상이면 None(미리보기 없음).
 /// [`avatar_raw_from_bytes`]와 같은 이유로 워커에서 돌고 원시 픽셀로 돌아온다.
 pub(crate) fn thumb_raw_from_beepq(
     path: &std::path::Path,
@@ -155,7 +155,7 @@ pub(crate) fn thumb_raw_from_beepq(
     let bytes = std::fs::read(path).ok()?;
     let q = nbeep_safe::Beepq::open(&bytes).ok()?;
     let total = q.sealed_prefix.len() + q.body.len();
-    if total as u64 != q.original_size || total > 1024 * 1024 {
+    if total as u64 != q.original_size || total > 16 * 1024 * 1024 {
         return None; // 크기 불일치(손상) 또는 미리보기 상한 초과 — 조용히 없음
     }
     let mut original = Vec::with_capacity(total);

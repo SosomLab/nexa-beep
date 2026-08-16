@@ -309,7 +309,7 @@ impl std::fmt::Debug for InboundSession {
 }
 
 /// 확대 미리보기 상태(08-16) — 격리물 경로가 키. 디코드는 워커(imgdec 격리 ·
-/// 1MiB 미리보기 상한 그대로 — 초과·손상은 Failed 안내).
+/// 16MiB 미리보기 상한(08-16 상향) — 초과·손상은 Failed 안내).
 struct ImageViewState {
     qpath: String,
     img: ImgLoad,
@@ -7306,7 +7306,7 @@ impl App {
                     }
                     _ => {
                         ctx.select_font(nbeep_ui::FontSlot::Status, false);
-                        let msg = "미리보기를 만들 수 없습니다(1MiB 초과·손상·imgdec 부재)";
+                        let msg = "미리보기를 만들 수 없습니다(16MiB 초과·손상·imgdec 부재)";
                         let tw = ctx.text_width(msg);
                         ctx.text((fw - tw) / 2, fh / 2, full, msg, theme.text_dim);
                     }
