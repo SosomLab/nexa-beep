@@ -441,12 +441,22 @@ struct ActiveSend {
     probed: bool,
     /// 발신 시작 시각(ms — 평균 속도 표기용 · 08-16).
     started_ms: u64,
+    /// 다음 상향 프로브 시작 오프셋(M4-11 ⓐ · u64::MAX = 미정 — 첫 프로브 후 설정).
+    next_probe: u64,
+    /// 진행 중 상향 버스트의 (시작 오프셋, 시작 시각) — Some = 무페이싱 구간.
+    bursting: Option<(u64, u64)>,
 }
 
 /// 무페이싱 프로브 구간(M4-11 ⓑ) — 첫 2MiB는 전속으로 보내 **진짜 링크
 /// 능력**을 관측한다. 종전엔 하한으로 조인 채 보내 관측이 목표에 갇혔다
 /// (페이싱 중 관측은 링크 능력이 아니라 자기 목표를 재는 것 — 되먹임 고착).
 const RATE_PROBE_BYTES: u64 = 2 * 1024 * 1024;
+/// 주기 상향 프로브(M4-11 ⓐ · 08-16) — 페이싱 중 8MiB마다 512KiB를 전속으로
+/// 보내 재관측한다: 첫 프로브가 TCP 슬로우스타트에 걸려 **과소 관측**했으면
+/// 여기서 따라 오른다(상향 전용 — note_burst는 max라 내려가지 않는다 · 링크
+/// 악화 대응은 범위 밖). 버스트 비중 512KiB/8MiB ≈ 6% — 양보 원칙 실질 유지.
+const REPROBE_INTERVAL: u64 = 8 * 1024 * 1024;
+const REPROBE_BURST: u64 = 512 * 1024;
 
 /// 액터 쪽 단조 시각(ms) — Pacer·RateMeter가 **같은 기준**을 봐야 해서 한 곳
 /// (xfer_step과 펌프 틱이 공유 · 기준이 갈리면 대역 계산이 깨진다).
@@ -606,9 +616,32 @@ fn spawn_session_actor(
                         let local = send_rate.target_bps(&send_meter);
                         st.pacer =
                             nbeep_core::Pacer::new(nbeep_core::negotiate(local, st.rate_cap));
+                        st.next_probe = off + REPROBE_INTERVAL;
                     }
-                    // 프로브 구간은 무페이싱(전속) — 작은 파일(≤2MiB)은 전체가 프로브.
+                    // 상향 프로브(ⓐ) — 페이싱 중 주기 버스트로 재관측(과소 보정).
+                    let mut unpaced = !st.probed;
                     if st.probed {
+                        if let Some((b_off, b_t0)) = st.bursting {
+                            if off.saturating_sub(b_off) >= REPROBE_BURST {
+                                // 버스트 종료 — 실측 반영·목표 재산출(상향 전용).
+                                send_meter
+                                    .note_burst(off - b_off, xfer_now_ms().saturating_sub(b_t0));
+                                let local = send_rate.target_bps(&send_meter);
+                                st.pacer = nbeep_core::Pacer::new(nbeep_core::negotiate(
+                                    local,
+                                    st.rate_cap,
+                                ));
+                                st.bursting = None;
+                                st.next_probe = off + REPROBE_INTERVAL;
+                            } else {
+                                unpaced = true; // 버스트 진행 중 — 전속
+                            }
+                        } else if off >= st.next_probe {
+                            st.bursting = Some((off, xfer_now_ms()));
+                            unpaced = true;
+                        }
+                    }
+                    if !unpaced {
                         // 창이 모자라면 그만큼 쉰다(종전 문법 그대로 — 예약 후 대기).
                         let wait = st.pacer.take(n, xfer_now_ms());
                         if wait > 0 {
@@ -996,6 +1029,8 @@ fn xfer_step(
                     rate_cap,
                     probed: false,
                     started_ms: xfer_now_ms(),
+                    next_probe: u64::MAX,
+                    bursting: None,
                 });
             }
         }
