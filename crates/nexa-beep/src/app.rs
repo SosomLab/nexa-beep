@@ -174,6 +174,8 @@ enum AppEvent {
         /// 경량 갱신 마커(M3-21) — 참이면 "공유 사진 그대로": 캐시를 지우지 않고
         /// 이전 사진·아바타를 승계한다(와이어 `Info.image_keep`).
         image_keep: bool,
+        /// 소개글(08-17 · 와이어 `Info.bio`) — 목록 2번째 줄·카드에 표시.
+        bio: Option<String>,
     },
     /// 격리 디코드 완료(워커 → 메인 · M4-5). ★ 그전엔 자식 프로세스 왕복(스폰 +
     /// Defender 검사 — Windows 실측 1~2초)이 **메인 스레드에서 동기**로 돌아, 대화창이
@@ -345,6 +347,8 @@ struct PeerProfile {
     email: Option<String>,
     /// 전화번호(옵트인).
     phone: Option<String>,
+    /// 소개글(08-17 · 옵트인 — 목록 2번째 줄·카드). 여러 줄 가능.
+    bio: Option<String>,
     /// 캐시된 이미지 파일(`data/profiles/…`).
     image_file: Option<std::path::PathBuf>,
     /// imgdec 격리 디코드 결과(원형 마스크 완료 · M4-5) — 목록·카드가 그린다.
@@ -416,6 +420,7 @@ fn profile_push_scope(key: &str) -> Option<ProfileScope> {
         "profile.display_name"
         | "profile.email"
         | "profile.phone"
+        | "profile.bio"
         | "profile.share.email"
         | "profile.share.phone"
         | "profile.avatar"
@@ -516,6 +521,7 @@ fn spawn_session_actor(
                 Option<String>,
                 Option<String>,
                 Option<String>,
+                Option<String>, // bio(08-17)
             ),
             u32,
             Vec<u8>,
@@ -752,6 +758,7 @@ fn spawn_session_actor(
                         avatar,
                         border,
                         image_keep,
+                        bio,
                     }) => {
                         let len = image_len as usize;
                         if len == 0 || len > nbeep_core::PROFILE_IMAGE_MAX {
@@ -767,11 +774,12 @@ fn spawn_session_actor(
                                 avatar,
                                 border,
                                 image_keep,
+                                bio,
                             });
                             pending_profile = None;
                         } else {
                             pending_profile = Some((
-                                (name, email, phone, avatar, border),
+                                (name, email, phone, avatar, border, bio),
                                 image_len,
                                 Vec::with_capacity(len),
                             ));
@@ -790,7 +798,7 @@ fn spawn_session_actor(
                             }
                             if !in_order || last {
                                 // 종결 — 정합(순서·총량 일치)일 때만 이미지 채택.
-                                let (name, email, phone, avatar, border) = fields.clone();
+                                let (name, email, phone, avatar, border, bio) = fields.clone();
                                 let ok = in_order && last && buf.len() == *want as usize;
                                 let image = ok.then(|| std::mem::take(buf));
                                 let _ = proxy.send_event(AppEvent::PeerProfile {
@@ -804,6 +812,7 @@ fn spawn_session_actor(
                                     // 청크가 따라온 응답은 언제나 전체(Full) — 유지
                                     // 마커가 아니라 실물이 왔다.
                                     image_keep: false,
+                                    bio,
                                 });
                                 pending_profile = None;
                             }
@@ -2773,6 +2782,11 @@ impl App {
                     .get(&entry.peer)
                     .and_then(|p| p.name.as_ref())
                     .map(|n| n.as_str().to_string());
+                // 소개글(08-17) — 목록 2번째 줄(줄바꿈은 위젯이 접는다).
+                let bio = self
+                    .peer_profiles
+                    .get(&entry.peer)
+                    .and_then(|p| p.bio.clone());
                 let avatar = self
                     .peer_profiles
                     .get(&entry.peer)
@@ -2813,6 +2827,7 @@ impl App {
                     link,
                     xfer,
                     profile_name,
+                    bio,
                     avatar,
                     border,
                     unread,
@@ -3197,6 +3212,10 @@ impl App {
                 .as_str()
                 .to_string()
         });
+        // 소개글(08-17) — 기본정보 공개 시 · 빈 값은 안 싣는다(name과 같은 결).
+        let bio = share_basic
+            .then(|| self.settings.get("profile.bio").to_string())
+            .filter(|s| !s.is_empty());
         let email = (on("profile.share.email"))
             .then(|| self.settings.get("profile.email").to_string())
             .filter(|s| !s.is_empty());
@@ -3260,6 +3279,7 @@ impl App {
             // Info scope + 공유 사진 존재 = "네 캐시 유지"(사진 재전송 생략 · M3-21).
             // Full은 언제나 false — 사진은 청크로 실려 가거나(존재) 철회다(부재).
             image_keep: scope == ProfileScope::Info && image_shared,
+            bio,
         }
         .encode()];
         if let Some(bytes) = image {
@@ -4110,6 +4130,7 @@ impl App {
             display_name: self.settings.get("profile.display_name").to_string(),
             email: self.settings.get("profile.email").to_string(),
             phone: self.settings.get("profile.phone").to_string(),
+            bio: self.settings.get("profile.bio").to_string(),
             image_path: self.settings.get("profile.image_path").to_string(),
             share_basic: self.settings.get("profile.share.basic") == "on",
             share_email: self.settings.get("profile.share.email") == "on",
@@ -4171,7 +4192,7 @@ impl App {
         };
         let attrs = Window::default_attributes()
             .with_title("Nexa Beep — 프로필")
-            .with_inner_size(winit::dpi::LogicalSize::new(440.0, 650.0))
+            .with_inner_size(winit::dpi::LogicalSize::new(440.0, 730.0))
             .with_resizable(false)
             // 앱 모달(08-14 표준 재정리) — 앱 창 입력은 모달이 흡수하되, 다른 앱은
             // 자유롭게 위로 온다(AlwaysOnTop 금지 — OS 창 전환 관례).
@@ -5333,6 +5354,9 @@ impl App {
                         name,
                         email: None,
                         phone: None,
+                        // 소개글은 이메일·전화처럼 부팅 캐시하지 않는다(재연결
+                        // 프리페치가 다시 채운다 · at-rest 최소화 결).
+                        bio: None,
                         image_file,
                         avatar,
                         border,
@@ -8788,6 +8812,7 @@ impl ApplicationHandler<AppEvent> for App {
                 avatar: avatar_key,
                 border,
                 image_keep,
+                bio,
             } => {
                 // 이름은 무해화(DisplayName) 통과분만 채택 · 이력은 신뢰 저장소에도 남긴다.
                 let display = name.and_then(|n| nbeep_core::DisplayName::parse(&n).ok());
@@ -8858,11 +8883,13 @@ impl ApplicationHandler<AppEvent> for App {
                         avatar = prev.clone();
                     }
                 }
+                let bio = bio.filter(|s| !s.is_empty());
                 let has_any = display.is_some()
                     || email.is_some()
                     || phone.is_some()
                     || image_file.is_some()
-                    || builtin.is_some();
+                    || builtin.is_some()
+                    || bio.is_some();
                 if has_any {
                     // 메타 캐시(내장 키·보더 — 08-14 부팅 복원): 검증 통과분만 쓴다.
                     // 둘 다 없으면 파일 제거(철회 반영 — 이미지와 같은 규칙).
@@ -8892,6 +8919,7 @@ impl ApplicationHandler<AppEvent> for App {
                             name: display,
                             email,
                             phone,
+                            bio,
                             image_file,
                             avatar,
                             border,

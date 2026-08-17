@@ -80,9 +80,11 @@ pub struct PeerRow {
     pub link: LinkState,
     /// 진행 중 파일 전송(있으면 이름 **바로 아래**에 진행 막대 · 사용자 요청 08-09).
     pub xfer: Option<XferProgress>,
-    /// 프로필에 등록된 표시 이름(M3-17 — 2번째 줄 · 없으면 공백).
-    /// 굵은 1번째 줄은 언제나 **기본(발견) 이름**이다(사용자 확정 08-11).
+    /// 프로필에 등록된 표시 이름(M3-17). 08-17 사용자 확정 — **굵은 1줄 = 표시
+    /// 이름**(프로필 이름 있으면 그것, 없으면 발견 기본 `beep-xxxx`).
     pub profile_name: Option<String>,
+    /// 소개글(08-17 · 2번째 회색 줄 — 줄바꿈은 접어 한 줄로). 없으면 공백.
+    pub bio: Option<String>,
     /// 프로필 사진(M4-5 — imgdec 격리 디코드·원형 마스크 완료본). 없으면 이니셜.
     pub avatar: Option<std::rc::Rc<crate::theme::IconImage>>,
     /// 아바타 보더 색(08-14 — 상대가 공개한 값 · 검증 통과분). 소형 표시라 2px.
@@ -1469,15 +1471,20 @@ impl Widget for PeerListWidget {
                 self.spin_step.get(),
             );
 
-            // 1줄: **기본(발견) 이름 — 굵게**(사용자 확정 08-11).
+            // 1줄: **표시 이름 — 굵게**(08-17 사용자 확정): 프로필 이름이 있으면
+            // 그것, 없으면 발견 기본(beep-xxxx). 신원은 여전히 키 지문(카드가 보인다).
             let name_x = av.right() + self.s(10);
             ctx.select_font(FontSlot::PeerList, true);
             let name_th = ctx.text_height();
             let name_y = r.y + self.s(8);
+            let display_name = row
+                .profile_name
+                .as_deref()
+                .unwrap_or_else(|| row.entry.name.as_str());
             let shown_name = if row.fav {
-                format!("★ {}", row.entry.name.as_str())
+                format!("★ {display_name}")
             } else {
-                row.entry.name.as_str().to_string()
+                display_name.to_string()
             };
             ctx.text(name_x, name_y, r, &shown_name, theme.text);
             // 다중 경로 ×N(진단) — 이름 뒤.
@@ -1492,10 +1499,20 @@ impl Widget for PeerListWidget {
                     theme.text_dim,
                 );
             }
-            // 2줄: 프로필에 등록된 표시 이름(없으면 공백 · M3-17).
-            if let Some(pn) = &row.profile_name {
-                ctx.select_font(FontSlot::Status, false);
-                ctx.text(name_x, name_y + name_th + self.s(3), r, pn, theme.text_dim);
+            // 2줄: 소개글(08-17 사용자 확정 — 줄바꿈을 공백으로 접어 한 줄로).
+            // 없으면 공백. 이름 중복(예전 "이름/이름")을 없앤 자리다.
+            if let Some(bio) = &row.bio {
+                let one_line: String = bio.split_whitespace().collect::<Vec<_>>().join(" ");
+                if !one_line.is_empty() {
+                    ctx.select_font(FontSlot::Status, false);
+                    ctx.text(
+                        name_x,
+                        name_y + name_th + self.s(3),
+                        r,
+                        &one_line,
+                        theme.text_dim,
+                    );
+                }
             }
 
             // 전송 진행 막대 — 행 하단(이름·프로필 줄 아래). 진행 중일 때만.
@@ -1681,6 +1698,7 @@ mod tests {
             link: LinkState::Idle,
             xfer: None,
             profile_name: None,
+            bio: None,
             avatar: None,
             border: None,
             unread: 0,

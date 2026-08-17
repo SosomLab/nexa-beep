@@ -13,8 +13,9 @@
 //! kind 2 = Info      { flags u8 · (len u16 BE ‖ UTF-8)×켠 필드 · image_len u32 BE
 //!                      · [avatar: len u16 BE ‖ UTF-8]    ← flags bit3일 때만(08-14)
 //!                      · [border: len u16 BE ‖ UTF-8]    ← flags bit4일 때만(08-14)
+//!                      · [bio:    len u16 BE ‖ UTF-8]    ← flags bit6일 때만(08-17)
 //!                    }  flags: bit0=name · bit1=email · bit2=phone · bit3=avatar · bit4=border
-//!                              · bit5=image_keep(값 없음 — M3-21 경량 갱신)
+//!                              · bit5=image_keep(값 없음 — M3-21 경량 갱신) · bit6=bio(08-17)
 //! kind 3 = ImageChunk{ offset u32 BE · last u8 · bytes } ← image_len>0일 때만 이어짐
 //! ```
 //!
@@ -60,6 +61,9 @@ pub enum ProfileMsg {
         /// 그대로 **사진 철회**. 구버전 수신측은 이 비트를 몰라 철회로 읽는다
         /// (다음 성립 프리페치/Full에서 회복 — 전방 관용의 대가).
         image_keep: bool,
+        /// 소개글(08-17 · flags bit6 — 기본정보 공개 시). 여러 줄 가능(목록은
+        /// 줄바꿈을 무시해 한 줄로 접어 보인다). 꼬리 확장 필드라 구버전은 무시.
+        bio: Option<String>,
     },
     /// 이미지 조각(Info 직후 순서대로 · `last`가 마지막 표시).
     ImageChunk {
@@ -86,6 +90,7 @@ impl ProfileMsg {
                 avatar,
                 border,
                 image_keep,
+                bio,
             } => {
                 let mut out = Vec::with_capacity(64);
                 out.push(K_INFO);
@@ -110,6 +115,9 @@ impl ProfileMsg {
                 if *image_keep {
                     flags |= 32;
                 }
+                if bio.is_some() {
+                    flags |= 64; // bit6 = 소개글(08-17)
+                }
                 out.push(flags);
                 for field in [name, email, phone].into_iter().flatten() {
                     let b = field.as_bytes();
@@ -119,8 +127,9 @@ impl ProfileMsg {
                 }
                 out.extend_from_slice(&image_len.to_be_bytes());
                 // 확장 필드는 **맨 뒤에 순서대로**(구버전은 image_len에서 읽기를 멈춘다
-                // — 전방 호환. 새 필드는 언제나 이 꼬리 뒤에 붙인다).
-                for field in [avatar, border].into_iter().flatten() {
+                // — 전방 호환. 새 필드는 언제나 이 꼬리 뒤에 붙인다). 순서 = avatar,
+                // border, bio(bit3, bit4, bit6 · 오프셋 규약을 깨지 않게 append-only).
+                for field in [avatar, border, bio].into_iter().flatten() {
                     let b = field.as_bytes();
                     let len = u16::try_from(b.len()).unwrap_or(u16::MAX);
                     out.extend_from_slice(&len.to_be_bytes());
@@ -167,6 +176,7 @@ impl ProfileMsg {
                 p = &p[4..];
                 let avatar = take_str(&mut p, flags & 8 != 0)?;
                 let border = take_str(&mut p, flags & 16 != 0)?;
+                let bio = take_str(&mut p, flags & 64 != 0)?;
                 Some(ProfileMsg::Info {
                     name,
                     email,
@@ -175,6 +185,7 @@ impl ProfileMsg {
                     avatar,
                     border,
                     image_keep: flags & 32 != 0,
+                    bio,
                 })
             }
             K_IMAGE => {
@@ -208,6 +219,7 @@ mod tests {
                 avatar: None,
                 border: None,
                 image_keep: false,
+                bio: None,
             },
             ProfileMsg::Info {
                 name: None,
@@ -217,6 +229,7 @@ mod tests {
                 avatar: None,
                 border: None,
                 image_keep: false,
+                bio: None,
             },
             ProfileMsg::Info {
                 name: Some("bob".into()),
@@ -226,6 +239,7 @@ mod tests {
                 avatar: Some("tiger".into()),
                 border: Some("#3D8BFF".into()),
                 image_keep: false,
+                bio: None,
             },
             ProfileMsg::ImageChunk {
                 offset: 32 * 1024,
@@ -249,6 +263,7 @@ mod tests {
             avatar: None,
             border: None,
             image_keep: false,
+            bio: None,
         }
         .encode();
         // kind(1)+flags(1)+len(2)+"bob"(3)+image_len(4) = 11 — 이메일·전화 자리가 없다.
@@ -270,6 +285,7 @@ mod tests {
             avatar: None,
             border: None,
             image_keep: false,
+            bio: None,
         }
         .encode();
         assert!(matches!(
@@ -285,6 +301,7 @@ mod tests {
             avatar: Some("ox".into()),
             border: None,
             image_keep: false,
+            bio: None,
         }
         .encode();
         newer.extend_from_slice(b"future-bytes");
@@ -307,6 +324,7 @@ mod tests {
             avatar: None,
             border: Some("#3D8BFF".into()),
             image_keep: false,
+            bio: None,
         };
         let kept = match &base {
             ProfileMsg::Info {
@@ -325,6 +343,7 @@ mod tests {
                 avatar: avatar.clone(),
                 border: border.clone(),
                 image_keep: true,
+                bio: None,
             },
             _ => unreachable!(),
         };
@@ -338,8 +357,41 @@ mod tests {
             ProfileMsg::decode(&base.encode()),
             Some(ProfileMsg::Info {
                 image_keep: false,
+                bio: None,
                 ..
             })
+        ));
+    }
+
+    /// ★ 소개글(08-17 · bit6) — ① 왕복 보존 ② 꼬리 확장이라 구버전(bit6 없음)
+    /// 인코딩을 신버전이 bio=None으로 해석 ③ avatar·border와 공존(오프셋 안전).
+    #[test]
+    fn bio_bit6_round_trips_and_coexists() {
+        let m = ProfileMsg::Info {
+            name: Some("bob".into()),
+            email: None,
+            phone: None,
+            image_len: 0,
+            avatar: Some("tiger".into()),
+            border: Some("#3D8BFF".into()),
+            image_keep: false,
+            bio: Some("한 줄\n두 줄 소개".into()),
+        };
+        assert_eq!(ProfileMsg::decode(&m.encode()).unwrap(), m);
+        // 구버전(bio 없음) = None 해석.
+        let no_bio = ProfileMsg::Info {
+            name: Some("bob".into()),
+            email: None,
+            phone: None,
+            image_len: 0,
+            avatar: None,
+            border: None,
+            image_keep: false,
+            bio: None,
+        };
+        assert!(matches!(
+            ProfileMsg::decode(&no_bio.encode()),
+            Some(ProfileMsg::Info { bio: None, .. })
         ));
     }
 

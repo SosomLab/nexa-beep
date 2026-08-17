@@ -26,6 +26,8 @@ pub struct ProfileValues {
     pub email: String,
     /// 전화번호(빈 값 = 미설정).
     pub phone: String,
+    /// 소개글(08-17 · 여러 줄 가능 — 빈 값 = 미설정).
+    pub bio: String,
     /// 프로필 이미지 경로(빈 값 = 없음).
     pub image_path: String,
     /// 공개 여부 — 기본정보(사진·이름)/이메일/전화.
@@ -64,6 +66,8 @@ pub struct ProfileWidget {
     name: TextBox,
     email: TextBox,
     phone: TextBox,
+    /// 소개글(08-17 · 멀티라인 — Enter가 개행). 목록은 줄바꿈을 접어 한 줄로 본다.
+    bio: TextBox,
     choose_img: Button,
     sw_basic: Switch,
     sw_email: Switch,
@@ -110,6 +114,7 @@ pub struct ProfileWidget {
     orig_name: String,
     orig_email: String,
     orig_phone: String,
+    orig_bio: String,
     pick_image: bool,
     closed: bool,
 }
@@ -145,6 +150,9 @@ impl ProfileWidget {
             name,
             email: TextBox::new("name@example.com").with_text(&v.email),
             phone: TextBox::new("010-0000-0000").with_text(&v.phone),
+            bio: TextBox::new(t(Msg::BioPlaceholder))
+                .with_multiline()
+                .with_text(&v.bio),
             choose_img: Button::new(t(Msg::ActChoose)),
             sw_basic: Switch::new(t(Msg::ShareBasic), v.share_basic)
                 .with_label_side(LabelSide::Left),
@@ -179,6 +187,7 @@ impl ProfileWidget {
             orig_name: v.display_name.clone(),
             orig_email: v.email.clone(),
             orig_phone: v.phone.clone(),
+            orig_bio: v.bio.clone(),
             pick_image: false,
             closed: false,
         }
@@ -208,6 +217,7 @@ impl ProfileWidget {
                 false,
                 self.orig_phone.clone(),
             ),
+            (self.bio.text(), "profile.bio", false, self.orig_bio.clone()),
         ];
         for (raw, key, auto_empty, orig) in items {
             let v = raw.trim().to_string();
@@ -241,6 +251,7 @@ impl ProfileWidget {
         norm(self.name.text(), true) != self.orig_name
             || norm(self.email.text(), false) != self.orig_email
             || norm(self.phone.text(), false) != self.orig_phone
+            || norm(self.bio.text(), false) != self.orig_bio
     }
 
     /// 저장 안 된 편집이 있는가(M3-18 — 호스트의 닫기 판단·상태 표시용).
@@ -278,6 +289,7 @@ impl ProfileWidget {
         self.name.set_preedit(text, inv);
         self.email.set_preedit(text, inv);
         self.phone.set_preedit(text, inv);
+        self.bio.set_preedit(text, inv);
     }
 
     /// 캐러셀 스크롤 방향(설정 `ui.carousel_scroll` — 호스트가 OS 기본 해석 · 08-14).
@@ -292,6 +304,7 @@ impl ProfileWidget {
             .take_edit_ctx()
             .or_else(|| self.email.take_edit_ctx())
             .or_else(|| self.phone.take_edit_ctx())
+            .or_else(|| self.bio.take_edit_ctx())
     }
 
     /// 클립보드 텍스트 유무 주입(우클릭 시점 — 붙여넣기 항목 활성 근거).
@@ -299,6 +312,7 @@ impl ProfileWidget {
         self.name.set_clipboard_has_text(yes);
         self.email.set_clipboard_has_text(yes);
         self.phone.set_clipboard_has_text(yes);
+        self.bio.set_clipboard_has_text(yes);
     }
 
     /// 사진 미리보기 교체(호스트 — 이미지 선택 직후 imgdec 결과 반영).
@@ -327,6 +341,7 @@ impl ProfileWidget {
             .copy_selection()
             .or_else(|| self.email.copy_selection())
             .or_else(|| self.phone.copy_selection())
+            .or_else(|| self.bio.copy_selection())
     }
 
     /// 선택 잘라내기(①) — 포커스된 필드에서만.
@@ -335,6 +350,7 @@ impl ProfileWidget {
             .cut_selection(inv)
             .or_else(|| self.email.cut_selection(inv))
             .or_else(|| self.phone.cut_selection(inv))
+            .or_else(|| self.bio.cut_selection(inv))
     }
 
     /// 붙여넣기(①) — 포커스된 필드만 받는다(TextBox가 비포커스면 무시).
@@ -342,6 +358,7 @@ impl ProfileWidget {
         self.name.paste(text, inv);
         self.email.paste(text, inv);
         self.phone.paste(text, inv);
+        self.bio.paste(text, inv);
     }
 
     pub fn take_pick_image(&mut self) -> bool {
@@ -429,6 +446,7 @@ impl ProfileWidget {
         self.name.set_scale(self.scale);
         self.email.set_scale(self.scale);
         self.phone.set_scale(self.scale);
+        self.bio.set_scale(self.scale);
         self.swatches.set_scale(self.scale);
         self.recent_car.set_scale(self.scale);
         self.border.set_scale(self.scale);
@@ -481,17 +499,20 @@ impl ProfileWidget {
             .set_bounds(Rect::new(b.x + pad, b.y + self.s(362), fw, field_h), inv);
         self.phone
             .set_bounds(Rect::new(b.x + pad, b.y + self.s(420), fw, field_h), inv);
+        // 소개글(08-17) — 라벨 y456 아래 멀티라인 필드(3줄 높이 58). 이 아래로
+        // 토글·안내·버튼이 92px 내려간다(창 730).
+        self.bio
+            .set_bounds(Rect::new(b.x + pad, b.y + self.s(474), fw, self.s(58)), inv);
         // 공개 토글 3종 — 라벨 왼쪽·토글 오른쪽 끝.
         let sw_h = self.s(26);
         self.sw_basic
-            .set_bounds(Rect::new(b.x + pad, b.y + self.s(466), fw, sw_h), inv);
+            .set_bounds(Rect::new(b.x + pad, b.y + self.s(558), fw, sw_h), inv);
         self.sw_email
-            .set_bounds(Rect::new(b.x + pad, b.y + self.s(498), fw, sw_h), inv);
+            .set_bounds(Rect::new(b.x + pad, b.y + self.s(590), fw, sw_h), inv);
         self.sw_phone
-            .set_bounds(Rect::new(b.x + pad, b.y + self.s(530), fw, sw_h), inv);
-        // 적용/취소(M3-18) — 우측 정렬 · **공유 안내문 아래**(08-16 실기: 572에
-        // 두니 안내문(568 + 2줄×16)을 가렸다 · 창 650 — 하단 여백 18 확보).
-        let by = b.y + self.s(604);
+            .set_bounds(Rect::new(b.x + pad, b.y + self.s(622), fw, sw_h), inv);
+        // 적용/취소(M3-18) — 우측 정렬 · **공유 안내문 아래**(창 730 — 하단 여백 확보).
+        let by = b.y + self.s(696);
         self.cancel_btn
             .set_bounds(Rect::new(b.right() - pad - bw, by, bw, field_h), inv);
         self.apply_btn.set_bounds(
@@ -600,6 +621,7 @@ impl Widget for ProfileWidget {
             self.name.set_focused(self.name.bounds().contains(p));
             self.email.set_focused(self.email.bounds().contains(p));
             self.phone.set_focused(self.phone.bounds().contains(p));
+            self.bio.set_focused(self.bio.bounds().contains(p));
             self.choose_img
                 .set_focused(self.choose_img.bounds().contains(p));
             self.sw_basic
@@ -672,6 +694,10 @@ impl Widget for ProfileWidget {
             }
             let _ = tbx.take_changed();
         }
+        // 소개글(08-17) — 멀티라인이라 Enter=개행(확정 없음). 값은 적용 시
+        // harvest_texts가 .text()로 수확한다(여기선 편집 이벤트만 흘린다).
+        self.bio.on_event(ev, inv);
+        let _ = self.bio.take_changed();
     }
 
     fn paint(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
@@ -864,6 +890,7 @@ impl Widget for ProfileWidget {
             (Msg::DisplayNameLabel, self.s(286)),
             (Msg::FieldEmail, self.s(344)),
             (Msg::FieldPhone, self.s(402)),
+            (Msg::BioLabel, self.s(458)),
         ];
         for (m, dy) in labels {
             ctx.select_font(FontSlot::Status, false);
@@ -872,6 +899,7 @@ impl Widget for ProfileWidget {
         self.name.paint(ctx, theme);
         self.email.paint(ctx, theme);
         self.phone.paint(ctx, theme);
+        self.bio.paint(ctx, theme);
         self.choose_img.paint(ctx, theme);
         // 적용/취소(M3-18) + 미저장 경고줄(Esc 2단계 — 격리함 confirming 문법).
         self.apply_btn.paint(ctx, theme);
@@ -898,7 +926,7 @@ impl Widget for ProfileWidget {
         let lines = crate::settings::wrap_text(ctx, t(Msg::ProfileShareNote), avail, 2);
         for (i, line) in lines.iter().enumerate() {
             #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-            let dy = self.s(568) + i as i32 * self.s(16);
+            let dy = self.s(660) + i as i32 * self.s(16);
             ctx.text(b.x + pad, b.y + dy, b, line, theme.text_dim);
         }
         // 우클릭 편집 메뉴 — 모든 자식 뒤에 재도색(08-13 실기: Email 필드가
@@ -906,6 +934,7 @@ impl Widget for ProfileWidget {
         self.name.paint_popup(ctx, theme);
         self.email.paint_popup(ctx, theme);
         self.phone.paint_popup(ctx, theme);
+        self.bio.paint_popup(ctx, theme);
     }
 }
 

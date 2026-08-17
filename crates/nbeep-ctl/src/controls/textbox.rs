@@ -46,6 +46,24 @@ pub struct TextBox {
     edit_ctx: Option<EditCtxAction>,
     /// 붙여넣기 항목 활성 근거(호스트가 우클릭 시점에 1회 주입 — 대화 입력과 동일).
     clip_has_text: bool,
+    /// 멀티라인(소개글) 모드(08-17) — Enter가 확정 대신 개행, 세로 여러 줄 렌더.
+    /// 단일 라인 경로는 이 플래그가 꺼져 있어 종전 그대로다.
+    multiline: bool,
+    /// 멀티라인 세로 스크롤(첫 보이는 논리 줄 인덱스 · 캐럿을 따라간다).
+    vscroll: std::cell::Cell<usize>,
+    /// 멀티라인 클릭→캐럿 변환용 줄 배치(페인트가 남긴다).
+    line_lay: std::cell::RefCell<Vec<MlLine>>,
+}
+
+/// 멀티라인 한 줄의 화면 배치(클릭 매핑용 · 페인트가 채운다).
+#[derive(Clone, Debug)]
+struct MlLine {
+    /// 줄 상단 y.
+    top: i32,
+    /// 이 줄 첫 글자의 **버퍼 char 인덱스**.
+    start_idx: usize,
+    /// 글자 경계 절대 x(len = 줄 글자수 + 1).
+    xs: Vec<i32>,
 }
 
 /// 우클릭 편집 메뉴에서 고른 행동 — 실행(클립보드 접근)은 호스트가 한다.
@@ -79,7 +97,121 @@ impl TextBox {
             ctx_menu: super::EditMenu::new(),
             edit_ctx: None,
             clip_has_text: true,
+            multiline: false,
+            vscroll: std::cell::Cell::new(0),
+            line_lay: std::cell::RefCell::new(Vec::new()),
         }
+    }
+
+    /// 멀티라인(소개글) 모드로 만든다(체이닝 · 08-17) — Enter = 개행. 보이는 줄
+    /// 수는 상자 높이가 정한다(호스트가 relayout에서 높이를 준다).
+    #[must_use]
+    pub fn with_multiline(mut self) -> Self {
+        self.multiline = true;
+        self
+    }
+
+    /// 논리 줄 분해 — `(첫 글자 char 인덱스, 줄 문자열)`. `'\n'`은 줄에 안 담고
+    /// 다음 줄의 start를 그 뒤로 민다. 빈 텍스트도 한 줄(빈 줄)로 본다.
+    fn logical_lines(text: &str) -> Vec<(usize, String)> {
+        let mut out = Vec::new();
+        let mut line_start = 0usize; // 이 줄 첫 글자의 char 인덱스
+        let mut pos = 0usize; // 지금까지 훑은 char 수
+        let mut cur = String::new();
+        for ch in text.chars() {
+            if ch == '\n' {
+                out.push((line_start, std::mem::take(&mut cur)));
+                pos += 1;
+                line_start = pos; // 다음 줄 시작 = '\n' 바로 뒤
+            } else {
+                cur.push(ch);
+                pos += 1;
+            }
+        }
+        out.push((line_start, cur)); // 마지막 줄(개행으로 안 끝난 부분)
+        out
+    }
+
+    /// 멀티라인 세로 이동(위/아래) — 같은 열을 목표로, 짧은 줄이면 줄 끝으로.
+    fn ml_move_vert(&mut self, down: bool, shift: bool) {
+        let text = self.edit.text();
+        let chars: Vec<char> = text.chars().collect();
+        let caret = self.edit.caret().min(chars.len());
+        let line_start = chars[..caret]
+            .iter()
+            .rposition(|&c| c == '\n')
+            .map_or(0, |p| p + 1);
+        let col = caret - line_start;
+        if down {
+            let rel = chars[line_start..].iter().position(|&c| c == '\n');
+            let Some(nl) = rel else { return }; // 마지막 줄 — 아래 없음
+            let next_start = line_start + nl + 1;
+            let next_end = next_start
+                + chars[next_start..]
+                    .iter()
+                    .position(|&c| c == '\n')
+                    .unwrap_or(chars.len() - next_start);
+            self.edit.set_caret((next_start + col).min(next_end), shift);
+        } else {
+            if line_start == 0 {
+                return; // 첫 줄 — 위 없음
+            }
+            let prev_end = line_start - 1; // '\n' 위치
+            let prev_start = chars[..prev_end]
+                .iter()
+                .rposition(|&c| c == '\n')
+                .map_or(0, |p| p + 1);
+            self.edit.set_caret((prev_start + col).min(prev_end), shift);
+        }
+    }
+
+    /// 멀티라인 줄 처음/끝 인덱스(Home/End).
+    fn ml_line_edge(&self, end: bool) -> usize {
+        let text = self.edit.text();
+        let chars: Vec<char> = text.chars().collect();
+        let caret = self.edit.caret().min(chars.len());
+        let start = chars[..caret]
+            .iter()
+            .rposition(|&c| c == '\n')
+            .map_or(0, |p| p + 1);
+        if end {
+            start
+                + chars[start..]
+                    .iter()
+                    .position(|&c| c == '\n')
+                    .unwrap_or(chars.len() - start)
+        } else {
+            start
+        }
+    }
+
+    /// 멀티라인 클릭 → 캐럿 인덱스(페인트가 남긴 줄 배치에서 가장 가까운 경계).
+    fn ml_caret_at(&self, x: i32, y: i32) -> usize {
+        let lay = self.line_lay.borrow();
+        if lay.is_empty() {
+            return 0;
+        }
+        // y로 줄 선택(위/아래 밖은 처음/끝 줄로 클램프).
+        let li = lay
+            .iter()
+            .position(|l| y < l.top + self.line_h())
+            .unwrap_or(lay.len() - 1);
+        let line = &lay[li];
+        let mut best = 0usize;
+        let mut best_d = i32::MAX;
+        for (i, cx) in line.xs.iter().enumerate() {
+            let d = (x - cx).abs();
+            if d < best_d {
+                best_d = d;
+                best = i;
+            }
+        }
+        line.start_idx + best
+    }
+
+    /// 멀티라인 한 줄 높이(글꼴 실측 + 여백은 페인트와 같은 값).
+    fn line_h(&self) -> i32 {
+        self.s(20)
     }
 
     /// 메뉴에서 고른 클립보드 행동(1회성) — 호스트가 ⌘C/X/V와 같은 경로로 잇는다.
@@ -264,6 +396,108 @@ impl TextBox {
             self.ctx_menu.paint(ctx, theme);
         }
     }
+
+    /// 멀티라인(소개글) 페인트(08-17) — 논리 줄을 위에서부터 여러 줄로 그린다.
+    /// 캐럿 줄이 보이도록 세로 스크롤을 따라가고, 클릭→캐럿 변환용 줄 배치를 남긴다.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    fn paint_multiline(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
+        let b = self.base.bounds;
+        ctx.fill_round_rect(b, self.s(6), theme.field_bg);
+        ctx.stroke_round_rect(b, self.s(6), theme.border, 1.0);
+        self.draw_focus_ring(ctx, theme, b);
+        ctx.select_font(FontSlot::Base, false);
+        let th = ctx.text_height();
+        let lh = self.line_h();
+        let tx = b.x + self.s(10);
+        let top0 = b.y + self.s(8);
+        let avail = (b.right() - self.s(10) - tx).max(self.s(20));
+
+        // 표시 텍스트 — 조합 중이면 캐럿 자리에 preedit를 끼워 그린다(편집 불변).
+        let text = self.edit.text();
+        let chars: Vec<char> = text.chars().collect();
+        let caret_i = self.edit.caret().min(chars.len());
+        let preedit_n = self.edit.preedit().chars().count();
+        let display = if preedit_n == 0 {
+            text
+        } else {
+            let before: String = chars[..caret_i].iter().collect();
+            let after: String = chars[caret_i..].iter().collect();
+            format!("{before}{}{after}", self.edit.preedit())
+        };
+        let disp_caret = caret_i + preedit_n;
+        let lines = Self::logical_lines(&display);
+        let caret_line = display
+            .chars()
+            .take(disp_caret)
+            .filter(|&c| c == '\n')
+            .count();
+
+        // 보이는 줄 수 + 캐럿 줄이 보이도록 세로 스크롤 조정.
+        let rows = (((b.h - self.s(12)) / lh).max(1)) as usize;
+        let mut top = self.vscroll.get();
+        if caret_line < top {
+            top = caret_line;
+        } else if caret_line >= top + rows {
+            top = caret_line + 1 - rows;
+        }
+        top = top.min(lines.len().saturating_sub(1));
+        self.vscroll.set(top);
+
+        // 빈 값 = placeholder(첫 줄).
+        let empty = display.is_empty();
+        let sel = if preedit_n == 0 {
+            self.edit.selection()
+        } else {
+            None
+        };
+
+        let mut lay = self.line_lay.borrow_mut();
+        lay.clear();
+        for (vi, li) in (top..lines.len().min(top + rows)).enumerate() {
+            let (start_idx, line_str) = &lines[li];
+            let y = top0 + (vi as i32) * lh;
+            let view = Rect::new(tx, y, avail, lh);
+            let mut w = Vec::new();
+            ctx.text_prefix_widths(line_str, &mut w);
+            let line_len = line_str.chars().count();
+            // 선택 반전(줄 범위와 겹치는 부분만 · 텍스트 아래에 먼저 채운다).
+            if let Some((a, e)) = sel {
+                let (ls, le) = (*start_idx, *start_idx + line_len);
+                let s0 = a.max(ls);
+                let s1 = e.min(le);
+                if s1 > s0 {
+                    let x0 = tx + w.get(s0 - ls).copied().unwrap_or(0);
+                    let x1 = tx + w.get(s1 - ls).copied().unwrap_or(0);
+                    ctx.fill_rect(
+                        Rect::new(x0, y, (x1 - x0).max(1), th),
+                        if self.base.focused {
+                            theme.sel_bg
+                        } else {
+                            theme.sel_bg_inactive
+                        },
+                    );
+                }
+            }
+            if empty && li == 0 {
+                ctx.text(tx, y, view, &self.placeholder, theme.text_dim);
+            } else {
+                ctx.text(tx, y, view, line_str, theme.text);
+            }
+            // 캐럿 — 이 줄이 캐럿 줄일 때(포커스·깜빡임 위상).
+            if self.base.focused && ctx.caret_on() && li == caret_line {
+                let col = disp_caret - start_idx;
+                let cx = tx + w.get(col).copied().unwrap_or(0);
+                ctx.fill_rect(Rect::new(cx, y, self.s(2).max(2), th), theme.text);
+            }
+            lay.push(MlLine {
+                top: y,
+                start_idx: *start_idx,
+                xs: w.iter().map(|px| tx + px).collect(),
+            });
+        }
+        drop(lay);
+        self.paint_popup(ctx, theme);
+    }
 }
 
 impl Control for TextBox {
@@ -347,6 +581,18 @@ impl Widget for TextBox {
                     inv.push(self.base.bounds);
                     return;
                 }
+                // 멀티라인(08-17) — (x,y)로 줄·열을 함께 잡는다(세로 매핑).
+                // 조합 중(preedit)엔 배치 인덱스가 표시 텍스트 기준이라 클릭 재배치는
+                // 건너뛰고 포커스만(조합은 곧 확정된다).
+                if self.multiline && self.base.bounds.contains(Point { x, y }) {
+                    self.base.focused = true;
+                    if self.edit.preedit().is_empty() {
+                        self.edit.set_caret(self.ml_caret_at(x, y), shift);
+                        self.dragging = true;
+                    }
+                    inv.push(self.base.bounds);
+                    return;
+                }
                 if self.base.bounds.contains(Point { x, y }) {
                     self.base.focused = true;
                     // 클릭 지점으로 캐럿 이동 + 드래그 선택 시작(기본 텍스트 동작).
@@ -376,6 +622,11 @@ impl Widget for TextBox {
                     }
                     inv.push(self.base.bounds);
                 }
+            }
+            InputEvent::MouseMove { x, y } if self.dragging && self.multiline => {
+                // 멀티라인 드래그 — (x,y)로 줄·열을 잡아 선택 확장.
+                self.edit.set_caret(self.ml_caret_at(x, y), true);
+                inv.push(self.base.bounds);
             }
             InputEvent::MouseMove { x, .. } if self.dragging => {
                 // 영역 밖으로 끌면 **한 글자씩 자동 진행**(① 08-13) — 페인트가 캐럿을
@@ -411,18 +662,42 @@ impl Widget for TextBox {
                 self.last_click.1 = 0; // 키 개입 = 클릭 체인 끊김
                 match key {
                     Key::Enter => {
-                        self.committed = true;
+                        // 멀티라인은 Enter = 개행(확정은 상위의 적용 버튼 몫).
+                        if self.multiline {
+                            self.edit.insert('\n');
+                            self.changed = true;
+                        } else {
+                            self.committed = true;
+                        }
+                        inv.push(self.base.bounds);
+                    }
+                    // 멀티라인 세로 이동(08-17) — 같은 열을 목표로 위/아래 줄.
+                    Key::Up if self.multiline => {
+                        self.ml_move_vert(false, shift);
+                        inv.push(self.base.bounds);
+                    }
+                    Key::Down if self.multiline => {
+                        self.ml_move_vert(true, shift);
                         inv.push(self.base.bounds);
                     }
                     // ⌘/Ctrl+←/→ = 줄 처음/끝(mac 관례 · DR-16 — 08-13 전수 검사).
+                    // 멀티라인은 **현재 줄**의 처음/끝(단일 라인은 버퍼 전체).
                     // 이동·선택 키는 **다시 그리기를 요청해야** 캐럿·선택 반전이 보인다
                     // (08-13 실기 — 프로필 필드에서 ←/→·Shift+←·⌘A가 무반응으로 보였다).
                     Key::Left if primary => {
-                        self.edit.key(EditKey::Home, shift);
+                        if self.multiline {
+                            self.edit.set_caret(self.ml_line_edge(false), shift);
+                        } else {
+                            self.edit.key(EditKey::Home, shift);
+                        }
                         inv.push(self.base.bounds);
                     }
                     Key::Right if primary => {
-                        self.edit.key(EditKey::End, shift);
+                        if self.multiline {
+                            self.edit.set_caret(self.ml_line_edge(true), shift);
+                        } else {
+                            self.edit.key(EditKey::End, shift);
+                        }
                         inv.push(self.base.bounds);
                     }
                     Key::Left => {
@@ -434,11 +709,19 @@ impl Widget for TextBox {
                         inv.push(self.base.bounds);
                     }
                     Key::Home => {
-                        self.edit.key(EditKey::Home, shift);
+                        if self.multiline {
+                            self.edit.set_caret(self.ml_line_edge(false), shift);
+                        } else {
+                            self.edit.key(EditKey::Home, shift);
+                        }
                         inv.push(self.base.bounds);
                     }
                     Key::End => {
-                        self.edit.key(EditKey::End, shift);
+                        if self.multiline {
+                            self.edit.set_caret(self.ml_line_edge(true), shift);
+                        } else {
+                            self.edit.key(EditKey::End, shift);
+                        }
                         inv.push(self.base.bounds);
                     }
                     Key::Delete => {
@@ -458,6 +741,10 @@ impl Widget for TextBox {
     }
 
     fn paint(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
+        if self.multiline {
+            self.paint_multiline(ctx, theme);
+            return;
+        }
         let b = self.base.bounds;
         ctx.fill_round_rect(b, self.s(6), theme.field_bg);
         ctx.stroke_round_rect(b, self.s(6), theme.border, 1.0);
@@ -625,6 +912,48 @@ mod tests {
             shift: false,
             primary: false,
         }
+    }
+
+    /// 멀티라인(08-17) — Enter가 개행, 세로 이동이 같은 열을 목표로 한다.
+    #[test]
+    fn multiline_enter_inserts_newline_and_vertical_move() {
+        let mut t = TextBox::new("bio").with_multiline();
+        let mut inv = Invalidations::default();
+        t.set_bounds(Rect::new(0, 0, 200, 80), &mut inv);
+        t.set_focused(true);
+        let key = |k| InputEvent::Key {
+            key: k,
+            shift: false,
+            primary: false,
+        };
+        for c in "ab".chars() {
+            t.on_event(&ch(c), &mut inv);
+        }
+        t.on_event(&key(Key::Enter), &mut inv); // 개행(확정 아님)
+        for c in "cd".chars() {
+            t.on_event(&ch(c), &mut inv);
+        }
+        assert_eq!(t.text(), "ab\ncd", "Enter = 개행");
+        assert!(
+            t.take_committed().is_none(),
+            "멀티라인은 Enter로 확정하지 않는다"
+        );
+        // 캐럿은 2번째 줄 끝(열 2) — Up이면 1번째 줄 같은 열(끝, 열 2).
+        t.on_event(&key(Key::Up), &mut inv);
+        for c in "X".chars() {
+            t.on_event(&ch(c), &mut inv);
+        }
+        assert_eq!(t.text(), "abX\ncd", "Up = 윗줄 같은 열");
+    }
+
+    /// 논리 줄 분해 — 첫 글자 char 인덱스가 정확해야 클릭 매핑이 맞는다.
+    #[test]
+    fn logical_lines_indices() {
+        let v = TextBox::logical_lines("ab\ncde\n");
+        assert_eq!(v.len(), 3);
+        assert_eq!(v[0], (0, "ab".to_string()));
+        assert_eq!(v[1], (3, "cde".to_string()));
+        assert_eq!(v[2], (7, String::new()));
     }
 
     #[test]

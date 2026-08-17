@@ -453,6 +453,7 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
                             avatar: None, // 테스트 도구 — 내장 아바타·보더는 GUI 몫
                             border: None,
                             image_keep: false, // 언제나 전체 응답(테스트 도구)
+                            bio: Some("테스트 소개글".into()),
                         }
                         .encode()];
                         let mut off = 0usize;

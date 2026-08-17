@@ -529,6 +529,10 @@ pub enum Msg {
     ListGroupMembers,
     /// "키 지문" 라벨(프로필·상대 카드 공용 · 08-17).
     FingerprintLabel,
+    /// 소개글 필드 라벨(프로필 · 08-17).
+    BioLabel,
+    /// 소개글 필드 placeholder(08-17).
+    BioPlaceholder,
     StfAutoAcceptRecv,
     StfFileRejected,
     StfDeliveredWait,
@@ -668,6 +672,8 @@ impl Msg {
             Msg::StfUnverified => ["Verification canceled — {} demoted", "인증 취소 — {} 대조 해제", "已取消验证 — {} 已降级", "認証取り消し — {} を降格"],
             Msg::ListGroupMembers => ["Members {} · Online {}", "구성원 {} · 온라인 {}", "成员 {} · 在线 {}", "メンバー {} · オンライン {}"],
             Msg::FingerprintLabel => ["Key fingerprint", "키 지문", "密钥指纹", "鍵フィンガープリント"],
+            Msg::BioLabel => ["Bio", "소개글", "简介", "自己紹介"],
+            Msg::BioPlaceholder => ["A short intro (multiple lines allowed)", "간단한 소개 (여러 줄 가능)", "简短介绍（可多行）", "短い自己紹介（複数行可）"],
             Msg::StfAutoAcceptRecv => ["Auto-accepted: {} ({}) receiving", "자동 수락: {} ({}) 수신 시작", "自动接受：{}（{}）开始接收", "自動受信: {} ({}) 受信開始"],
             Msg::StfFileRejected => ["File rejected ({}): {}", "파일 거부({}): {}", "文件已拒绝（{}）：{}", "ファイル拒否({}): {}"],
             Msg::StfDeliveredWait => ["Delivered {}/{} — awaiting peer confirmation", "전달됨 {}/{} — 상대 확인 대기", "已送达 {}/{} — 等待对方确认", "配信済み {}/{} — 相手の確認待ち"],

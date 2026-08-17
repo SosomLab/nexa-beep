@@ -48,6 +48,7 @@ const SIZE_OPTS_STATIC: &[(&str, Msg)] = SIZE_OPTS;
 const HIDDEN_KEYS: &[&str] = &[
     "profile.email",
     "profile.phone",
+    "profile.bio", // 소개글(08-17) — 프로필 화면 멀티라인 필드가 편집·영속
     "profile.image_path",
     "profile.avatar",        // 아바타 선택(08-14) — 프로필 화면 스와치가 편집한다
     "profile.avatar_border", // 아바타 보더 색(08-14) — 프로필 화면 ColorPick이 편집한다
