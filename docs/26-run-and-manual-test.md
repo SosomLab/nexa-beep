@@ -424,7 +424,7 @@ winget validate 통과 · 해시 일치.
 
 | 항목 | 비고 |
 |---|---|
-| `FingerprintVerified` 배지(3번째) | `Unverified`·`Pinned` 2종은 실증. **3번째는 SAS 대조 UX가 없어 도달 불가**(확인 문제가 아니라 미구현 — M3-6) |
+| `FingerprintVerified` 배지(3번째) | ✅ **도달 가능**(v0.1.7 카드 대조 완료 버튼 → 08-18 **지문 비교로 전환**): `/fingerprint` 로 키 지문 확인 → 다른 채널 대조 → `/verify` **직접 대조 완료**(파란 실 배지) · `/unverify` 강등 |
 | ~~상대별 별도 창(`--separate-windows`)~~ | ✅ **육안 확인(08-13 · 사용자 · Windows)** — 다중 창 동작(M3-12 완결). 같은 날 관찰: 주소 입력 창은 **모달리스**(AlwaysOnTop뿐 · P3 — M3-16) |
 | ~~Windows 목록 타입어헤드 **한/영 토글·한글 조합**([27 §8](27-typeahead-hangul-composition.md))~~ | ✅ **실기 확인(08-13 · 사용자)** — 한/영 키 도달(IME 비연결)·상태바 고지·조합·복귀 동작 |
 | 설정 화면(트리·검색·즉시 적용) · 컨트롤 갤러리 | M3-11 · M3-1 |
