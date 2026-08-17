@@ -36,8 +36,8 @@ impl TextPromptWidget {
             scale: 1.0,
             title: title.into(),
             input,
-            ok: Button::new("확인"),
-            cancel: Button::new("취소"),
+            ok: Button::new(nbeep_core::t(nbeep_core::Msg::ActOk)),
+            cancel: Button::new(nbeep_core::t(nbeep_core::Msg::OfferCancel)),
             submit: None,
             canceled: false,
         }

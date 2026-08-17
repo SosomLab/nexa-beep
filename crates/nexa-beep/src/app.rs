@@ -2233,7 +2233,10 @@ impl App {
     /// 발신 대기 창 — **60초 타임아웃 버튼**이 자동으로 눌려 창을 닫고 전송을 취소한다.
     fn open_send_wait(&mut self, peer: PeerId, name: &str) {
         let ms = self.wait_timeout_sec.saturating_mul(1000);
-        let mut tb = nbeep_ui::TimeoutButton::new(format!("전송 취소 — {name}"), ms);
+        let mut tb = nbeep_ui::TimeoutButton::new(
+            nbeep_core::tf(nbeep_core::Msg::XferCancelBtn, &[name]),
+            ms,
+        );
         tb.start(self.now_ms());
         self.send_wait.insert(peer, tb);
         self.pending_send_window = Some(peer); // 다음 about_to_wait에서 창을 만든다
@@ -7163,11 +7166,7 @@ impl App {
         if !self.verify_hinted.insert(peer) {
             return; // 이 대화에서 이미 권했다
         }
-        self.push_chat_notice(
-            Some(peer),
-            "이 상대는 아직 지문 대조 전입니다. /verify 를 입력하면 안전 번호를 봅니다 \
-             — 전화·대면 등 다른 채널로 같은 번호인지 맞춰 본 뒤 '대조 완료'를 누르세요.",
-        );
+        self.push_chat_notice(Some(peer), nbeep_core::t(nbeep_core::Msg::SuggestVerify));
     }
 
     /// 창 크기·배율에 맞춰 그 창의 위젯 경계를 다시 계산한다.

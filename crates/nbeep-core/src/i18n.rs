@@ -650,6 +650,12 @@ pub enum Msg {
     CmdUnverify1to1,
     /// 목록 복귀 안내(08-18 i18n · "(한글 가능)"만 한글 고정 유지).
     ListNavHint,
+    /// 지문 대조 추천 안내(08-18 i18n · `/verify` suggest).
+    SuggestVerify,
+    /// 확인 버튼(모달 OK · 08-18 i18n).
+    ActOk,
+    /// 전송 취소 버튼(08-18 i18n · `{0}` = 파일명).
+    XferCancelBtn,
     StfAutoAcceptRecv,
     StfFileRejected,
     StfDeliveredWait,
@@ -884,6 +890,9 @@ impl Msg {
             Msg::CmdUnverifyNone => ["This peer is not in a verified state (nothing to cancel).", "이 상대는 지문 대조 상태가 아닙니다(취소할 인증이 없습니다).", "对方并非已验证状态(无可取消的验证)。", "この相手は照合済み状態ではありません(取り消す認証がありません)。"],
             Msg::CmdUnverify1to1 => ["Canceling verification is only for 1:1 chats (a single peer required).", "인증 취소는 1:1 대화에서만 가능합니다(상대가 하나로 정해져야 합니다).", "取消验证仅在 1:1 对话中可用(需确定单一对象)。", "認証取り消しは 1:1 の会話でのみ可能です(相手が一人に定まる必要があります)。"],
             Msg::ListNavHint => ["↑↓ move · type = jump to name(한글 가능) · Enter = open chat", "↑↓ 이동 · 타이핑 = 이름 점프(한글 가능) · Enter = 대화 열기", "↑↓ 移动 · 输入 = 跳转到名称(한글 가능) · Enter = 打开对话", "↑↓ 移動 · 入力 = 名前ジャンプ(한글 가능) · Enter = 会話を開く"],
+            Msg::SuggestVerify => ["This peer isn't fingerprint-verified yet. Type /verify to see the safety number — compare it over another channel (phone/in person), then press 'Verified'.", "이 상대는 아직 지문 대조 전입니다. /verify 를 입력하면 안전 번호를 봅니다 — 전화·대면 등 다른 채널로 같은 번호인지 맞춰 본 뒤 '대조 완료'를 누르세요.", "对方尚未完成指纹核对。输入 /verify 可查看安全码 — 请通过电话/当面等其他渠道核对号码，然后按'核对完成'。", "この相手はまだ指紋照合前です。/verify を入力すると安全番号が見られます — 電話・対面など別の経路で番号を照合し、'照合完了'を押してください。"],
+            Msg::ActOk => ["OK", "확인", "确定", "OK"],
+            Msg::XferCancelBtn => ["Cancel transfer — {}", "전송 취소 — {}", "取消传输 — {}", "転送キャンセル — {}"],
             Msg::StfAutoAcceptRecv => ["Auto-accepted: {} ({}) receiving", "자동 수락: {} ({}) 수신 시작", "自动接受：{}（{}）开始接收", "自動受信: {} ({}) 受信開始"],
             Msg::StfFileRejected => ["File rejected ({}): {}", "파일 거부({}): {}", "文件已拒绝（{}）：{}", "ファイル拒否({}): {}"],
             Msg::StfDeliveredWait => ["Delivered {}/{} — awaiting peer confirmation", "전달됨 {}/{} — 상대 확인 대기", "已送达 {}/{} — 等待对方确认", "配信済み {}/{} — 相手の確認待ち"],

@@ -46,7 +46,7 @@ impl AlertWidget {
             scale: 1.0,
             title: title.into(),
             message: message.into(),
-            ok: Button::new("확인"),
+            ok: Button::new(nbeep_core::t(nbeep_core::Msg::ActOk)),
             no: None,
             closed: false,
             choice: None,
