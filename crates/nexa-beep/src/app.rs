@@ -4237,10 +4237,12 @@ impl App {
             .count();
         Some((
             format!(
-                "{} — 구성원 {} · 온라인 {}",
+                "{} — {}",
                 s.roster.name.as_str(),
-                members.len(),
-                online_n
+                nbeep_core::tf(
+                    nbeep_core::Msg::ListGroupMembers,
+                    &[&members.len().to_string(), &online_n.to_string()],
+                )
             ),
             lines,
         ))
@@ -4449,20 +4451,32 @@ impl App {
                             "지문 대조는 1:1 대화에서만 가능합니다(상대가 하나로 정해져야 합니다).",
                         ),
                     },
-                    ChatCommand::Unverify => {
-                        // 안전 번호 카드를 닫는다(대조 취소). 대기 요청도 지운다.
-                        // ★ 이미 '대조 완료'로 승격한 신뢰는 되돌리지 않는다 —
-                        //   카드를 여닫는 것과 신뢰 등급은 별개(카드 = 표시 UI일 뿐).
-                        let closed = self.close_peer_info_card();
-                        self.push_chat_notice(
-                            peer,
-                            if closed {
-                                "안전 번호 카드를 닫았습니다(대조 취소 — 신뢰 등급은 그대로)."
+                    ChatCommand::Unverify => match peer {
+                        // 인증 취소 — SAS 승격을 **실제로 되돌린다**(파란 배지 강등).
+                        // 카드가 열려 있으면 함께 닫는다. 1:1에서만(대상이 하나여야).
+                        Some(p) => {
+                            use nbeep_core::TrustStore as _;
+                            if self.trust.level(p) == nbeep_core::TrustLevel::FingerprintVerified {
+                                self.unverify_peer(p);
+                                self.close_peer_info_card();
+                                self.push_chat_notice(
+                                    peer,
+                                    "인증을 취소했습니다 — 지문 대조 상태가 해제됐습니다(다시 \
+                                     대조하려면 /verify).",
+                                );
                             } else {
-                                "닫을 안전 번호 카드가 없습니다."
-                            },
-                        );
-                    }
+                                self.close_peer_info_card();
+                                self.push_chat_notice(
+                                    peer,
+                                    "이 상대는 지문 대조 상태가 아닙니다(취소할 인증이 없습니다).",
+                                );
+                            }
+                        }
+                        None => self.push_chat_notice(
+                            peer,
+                            "인증 취소는 1:1 대화에서만 가능합니다(상대가 하나로 정해져야 합니다).",
+                        ),
+                    },
                     ChatCommand::Close => {
                         self.close_chat_view(peer);
                     }
@@ -4472,9 +4486,19 @@ impl App {
         }
     }
 
-    /// SAS(안전 번호) 카드를 닫는다(`/unverify` · 08-17) — 열려 있으면 창·뷰·대기
-    /// 요청을 지우고 true. **신뢰 등급은 건드리지 않는다**(카드는 표시 UI일 뿐 ·
-    /// 승격은 '대조 완료' 버튼이 신뢰 저장소에 이미 반영). 열린 게 없으면 false.
+    /// 인증 취소(08-17 · `/unverify`·카드 버튼 공통) — SAS 승격을 되돌려 신뢰를
+    /// `Pinned`로 강등(write-through 영속)하고 목록 배지를 즉시 갱신한다. verify와
+    /// 대칭(승격의 역).
+    fn unverify_peer(&mut self, peer: PeerId) {
+        use nbeep_core::TrustStore as _;
+        self.trust.unverify(peer);
+        self.status = nbeep_core::tf(nbeep_core::Msg::StfUnverified, &[&self.peer_title(peer)]);
+        let mut rinv = Invalidations::default();
+        self.refresh_rows(&mut rinv);
+    }
+
+    /// SAS(안전 번호) 카드를 닫는다(08-17) — 열려 있으면 창·뷰·대기 요청을 지우고
+    /// true. 신뢰 등급은 건드리지 않는다(카드는 표시 UI일 뿐). 열린 게 없으면 false.
     fn close_peer_info_card(&mut self) -> bool {
         self.pending_peer_info = None;
         let wid = self
@@ -7757,11 +7781,22 @@ impl App {
                 }
             }
             Role::PeerInfo(peer) => {
-                let (mut closed, mut verify) = (false, false);
+                let (mut closed, mut verify, mut unverify) = (false, false, false);
                 if let Some(pv) = &mut self.peer_info_view {
                     pv.on_event(&ev, &mut inv);
                     closed = pv.take_closed();
                     verify = pv.take_verify();
+                    unverify = pv.take_unverify();
+                }
+                if unverify {
+                    // 인증 취소(08-17) — SAS 승격을 되돌려 배지를 강등한다(`/unverify`와
+                    // 같은 동작). 카드는 열어 둔 채 버튼만 다시 '대조 완료'로 돌아간다.
+                    self.unverify_peer(peer);
+                    self.refresh_peer_info_card(peer);
+                    if let Some(mid) = self.main_id {
+                        self.request_redraw(mid);
+                    }
+                    self.request_redraw(id);
                 }
                 if verify {
                     // SAS 대조 완료(M3-6) — 사람이 확인했다는 선언을 신뢰 저장소에

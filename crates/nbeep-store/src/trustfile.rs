@@ -371,6 +371,11 @@ impl TrustStore for FileTrustStore {
         self.persist();
     }
 
+    fn unverify(&mut self, peer: PeerId) {
+        self.inner.unverify(peer);
+        self.persist();
+    }
+
     fn block(&mut self, peer: PeerId) {
         self.inner.block(peer);
         self.persist();

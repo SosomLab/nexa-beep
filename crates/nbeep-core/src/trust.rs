@@ -48,6 +48,10 @@ pub trait TrustStore {
     fn level(&self, peer: PeerId) -> TrustLevel;
     /// SAS 지문 대조 완료 → [`TrustLevel::FingerprintVerified`]로 승격.
     fn verify(&mut self, peer: PeerId);
+    /// 인증 취소 — SAS 승격을 되돌린다(`/unverify`). `FingerprintVerified`였던
+    /// 키만 [`TrustLevel::Pinned`]로 강등한다(핸드셰이크로 재확인된 TOFU 상태 =
+    /// 안전한 하한). 그 아래 등급·미지 키는 손대지 않는다(멱등).
+    fn unverify(&mut self, peer: PeerId);
     /// 차단(사람이 아니라 이 키 단위).
     fn block(&mut self, peer: PeerId);
     /// 차단 여부.
@@ -263,6 +267,14 @@ impl TrustStore for MemoryTrustStore {
             last_chat: 0,
         });
         rec.level = TrustLevel::FingerprintVerified;
+    }
+
+    fn unverify(&mut self, peer: PeerId) {
+        if let Some(rec) = self.records.get_mut(&peer) {
+            if rec.level == TrustLevel::FingerprintVerified {
+                rec.level = TrustLevel::Pinned;
+            }
+        }
     }
 
     fn block(&mut self, peer: PeerId) {

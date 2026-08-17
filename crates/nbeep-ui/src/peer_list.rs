@@ -1360,7 +1360,10 @@ impl Widget for PeerListWidget {
                     name_x,
                     name_y + name_th + self.s(3),
                     r,
-                    &format!("구성원 {} · 온라인 {}", g.members, g.online),
+                    &nbeep_core::tf(
+                        nbeep_core::Msg::ListGroupMembers,
+                        &[&g.members.to_string(), &g.online.to_string()],
+                    ),
                     theme.text_dim,
                 );
                 // 읽지 않은 방 메시지 배지(M5-1g) — 피어 행과 같은 문법(우측 알약).

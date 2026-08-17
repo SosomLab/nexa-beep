@@ -742,7 +742,6 @@ pub fn registry() -> &'static [Entry] {
             desc: Msg::ServerTypeDesc,
             kind: SettingKind::Radio(&[
                 ("auto", Msg::ServerTypeAuto),
-                ("gateway", Msg::ServerTypeGateway),
                 ("relay", Msg::ServerTypeRelay),
                 ("content", Msg::ServerTypeContent),
                 ("registered", Msg::ServerTypeRegistered),

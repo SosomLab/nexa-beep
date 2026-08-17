@@ -55,6 +55,10 @@ pub struct PeerInfoWidget {
     verify: crate::controls::Button,
     /// 대조 완료 요청(1회성 — 호스트가 신뢰 저장소에 승격 반영).
     verify_req: bool,
+    /// "인증 취소" 버튼 — **검증 완료 상태에서만** 그린다(`/unverify`와 같은 동작).
+    unverify: crate::controls::Button,
+    /// 인증 취소 요청(1회성 — 호스트가 `unverify(peer)` + 영속 + 배지 강등).
+    unverify_req: bool,
 }
 
 impl PeerInfoWidget {
@@ -68,12 +72,19 @@ impl PeerInfoWidget {
             closed: false,
             verify: crate::controls::Button::new("일치 확인 — 대조 완료로 표시"),
             verify_req: false,
+            unverify: crate::controls::Button::new("인증 취소"),
+            unverify_req: false,
         }
     }
 
     /// 대조 완료 요청(1회성) — 호스트가 `verify(peer)` + 영속 + 배지 갱신을 맡는다.
     pub fn take_verify(&mut self) -> bool {
         std::mem::take(&mut self.verify_req)
+    }
+
+    /// 인증 취소 요청(1회성) — 호스트가 `unverify(peer)` + 영속 + 배지 강등을 맡는다.
+    pub fn take_unverify(&mut self) -> bool {
+        std::mem::take(&mut self.unverify_req)
     }
 
     /// 닫기 요청(1회성 · Esc).
@@ -103,14 +114,18 @@ impl Widget for PeerInfoWidget {
         self.bounds = bounds;
         // 대조 버튼(M3-6) — 하단 안내 위 · 중앙(결정적 순간의 단일 표적).
         let (bw, bh) = (self.s(230), self.s(30));
+        let slot_y = bounds.bottom() - self.s(72);
         self.verify.set_scale(self.scale);
         self.verify.set_bounds(
-            Rect::new(
-                bounds.x + (bounds.w - bw) / 2,
-                bounds.bottom() - self.s(72),
-                bw,
-                bh,
-            ),
+            Rect::new(bounds.x + (bounds.w - bw) / 2, slot_y, bw, bh),
+            inv,
+        );
+        // 인증 취소 버튼 — 검증 완료 상태 전용. 좁게(140) 중앙, 같은 하단 슬롯
+        // (verify와 상호 배타라 자리를 공유한다).
+        let uw = self.s(140);
+        self.unverify.set_scale(self.scale);
+        self.unverify.set_bounds(
+            Rect::new(bounds.x + (bounds.w - uw) / 2, slot_y, uw, bh),
             inv,
         );
         inv.push(bounds);
@@ -126,8 +141,13 @@ impl Widget for PeerInfoWidget {
         ) {
             self.closed = true;
         }
-        // 대조 버튼(M3-6) — 검증 전에만 산다(완료 후엔 표적 자체가 없다).
-        if !self.info.verified {
+        // 대조 버튼(M3-6) — 검증 전엔 "대조 완료", 검증 후엔 "인증 취소"(상호 배타).
+        if self.info.verified {
+            self.unverify.on_event(ev, inv);
+            if self.unverify.take_clicked() {
+                self.unverify_req = true;
+            }
+        } else {
             self.verify.on_event(ev, inv);
             if self.verify.take_clicked() {
                 self.verify_req = true;
@@ -238,9 +258,14 @@ impl Widget for PeerInfoWidget {
             }
             ctx.select_font(FontSlot::Status, false);
             if self.info.verified {
+                // 완료 문구는 흐름 y에, "인증 취소" 버튼은 하단 슬롯에(겹치지 않게
+                // 버튼 위에 고정 배치 — 흐름 y가 슬롯을 침범하면 위로 끌어올린다).
                 let t = "✓ 지문 대조 완료 — 이 키는 사람이 확인했습니다";
                 let tw = ctx.text_width(t);
-                ctx.text(b.x + (b.w - tw) / 2, y + self.s(6), b, t, theme.ok);
+                let btn_top = self.unverify.bounds().y;
+                let ty = (y + self.s(6)).min(btn_top - ctx.text_height() - self.s(10));
+                ctx.text(b.x + (b.w - tw) / 2, ty, b, t, theme.ok);
+                self.unverify.paint(ctx, theme);
             } else {
                 self.verify.paint(ctx, theme);
             }
@@ -307,6 +332,51 @@ mod tests {
 
     fn self_btn_bounds(w: &PeerInfoWidget) -> Rect {
         w.verify.bounds()
+    }
+
+    /// 인증 취소 버튼 — **검증 완료 상태에서만** 산다 · 클릭 = 1회성 요청.
+    #[test]
+    fn unverify_button_requests_once_and_only_when_verified() {
+        let mut w = PeerInfoWidget::new(PeerInfo {
+            safety_number: "12345 67890".into(),
+            verified: true,
+            ..PeerInfo::default()
+        });
+        let mut inv = Invalidations::default();
+        w.set_bounds(Rect::new(0, 0, 360, 520), &mut inv);
+        let b = w.unverify.bounds();
+        let (cx, cy) = (b.x + b.w / 2, b.y + b.h / 2);
+        w.on_event(
+            &InputEvent::MouseDown {
+                x: cx,
+                y: cy,
+                shift: false,
+                primary: false,
+            },
+            &mut inv,
+        );
+        w.on_event(&InputEvent::MouseUp { x: cx, y: cy }, &mut inv);
+        assert!(w.take_unverify(), "클릭 = 인증 취소 요청");
+        assert!(!w.take_unverify(), "1회성");
+        // 미검증 상태 — 인증 취소 표적이 없다(대조 버튼만 산다).
+        let mut u = PeerInfoWidget::new(PeerInfo {
+            safety_number: "12345 67890".into(),
+            ..PeerInfo::default()
+        });
+        u.set_bounds(Rect::new(0, 0, 360, 520), &mut inv);
+        let b2 = u.unverify.bounds();
+        let (cx2, cy2) = (b2.x + b2.w / 2, b2.y + b2.h / 2);
+        u.on_event(
+            &InputEvent::MouseDown {
+                x: cx2,
+                y: cy2,
+                shift: false,
+                primary: false,
+            },
+            &mut inv,
+        );
+        u.on_event(&InputEvent::MouseUp { x: cx2, y: cy2 }, &mut inv);
+        assert!(!u.take_unverify(), "미검증 상태엔 인증 취소 요청 없음");
     }
 
     #[test]
