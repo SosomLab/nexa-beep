@@ -17,6 +17,28 @@ use nbeep_core::group::GroupId;
 use nbeep_core::peers::PeerEntry;
 use nbeep_core::{PeerId, TrustLevel};
 
+/// 문자열을 `maxw`(px) 안에 들도록 말줄임(…)한다(08-18 — 목록 소개글 1줄).
+/// 들어가면 원문 그대로. 문자 경계 누적 폭으로 한 번에 자른다.
+fn fit_ellipsis(ctx: &mut dyn DrawCtx, s: &str, maxw: i32) -> String {
+    if ctx.text_width(s) <= maxw {
+        return s.to_string();
+    }
+    let mut w = Vec::new();
+    ctx.text_prefix_widths(s, &mut w);
+    let ell = ctx.text_width("…");
+    let chars: Vec<char> = s.chars().collect();
+    let mut n = 0;
+    for i in 0..chars.len() {
+        if w.get(i + 1).copied().unwrap_or(i32::MAX) + ell > maxw {
+            break;
+        }
+        n = i + 1;
+    }
+    let mut out: String = chars[..n].iter().collect();
+    out.push('…');
+    out
+}
+
 /// 목록 상단 **그룹 섹션**의 한 행(M5-1 · 사용자 확정 08-13 — 그룹·개인을 한 화면에).
 #[derive(Clone, Debug)]
 pub struct GroupRow {
@@ -1511,16 +1533,19 @@ impl Widget for PeerListWidget {
                 );
             }
             // 2줄: 소개글(08-17 사용자 확정 — 줄바꿈을 공백으로 접어 한 줄로).
-            // 없으면 공백. 이름 중복(예전 "이름/이름")을 없앤 자리다.
+            // 없으면 공백. 이름 중복(예전 "이름/이름")을 없앤 자리다. 08-18: 폭을
+            // 넘으면 말줄임(…) — 우측 배지 자리를 남긴다.
             if let Some(bio) = &row.bio {
                 let one_line: String = bio.split_whitespace().collect::<Vec<_>>().join(" ");
                 if !one_line.is_empty() {
                     ctx.select_font(FontSlot::Status, false);
+                    let avail = (r.right() - name_x - self.s(44)).max(self.s(20));
+                    let fitted = fit_ellipsis(ctx, &one_line, avail);
                     ctx.text(
                         name_x,
                         name_y + name_th + self.s(3),
                         r,
-                        &one_line,
+                        &fitted,
                         theme.text_dim,
                     );
                 }
