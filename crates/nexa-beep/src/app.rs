@@ -2043,7 +2043,8 @@ impl App {
                 } else {
                     // 모달로 세운다(08-13 사용자 실기 — 상태바 한 줄은 지나쳐서 "그냥
                     // 전송이 안 된다"로 보였다). 창 생성은 about_to_wait 몫.
-                    self.status = format!("보낼 수 없습니다 — {}", reason.message());
+                    self.status =
+                        nbeep_core::tf(nbeep_core::Msg::StfCannotSend, &[reason.message()]);
                     let how = match reason {
                         nbeep_core::DenyReason::NotPinned => {
                             "\n\n상대와 연결(세션)이 성립하면 신원이 고정됩니다 — 목록에서 상대를 열어 연결부터 하세요."
@@ -2179,7 +2180,7 @@ impl App {
         let bytes = match std::fs::read(&path) {
             Ok(b) => b,
             Err(e) => {
-                self.status = format!("파일 읽기 실패: {e}");
+                self.status = nbeep_core::tf(nbeep_core::Msg::StfFileReadFail, &[&e.to_string()]);
                 self.pump_send_queue(peer);
                 return;
             }
@@ -2209,7 +2210,7 @@ impl App {
             return;
         }
         self.awaiting_accept.insert(peer, xid);
-        self.status = format!("파일 제안: {name} ({}) — 상대 승인 대기", human_size(size));
+        self.status = nbeep_core::tf(nbeep_core::Msg::StfFileOffer, &[&name, &human_size(size)]);
         // 스레드에 송신 항목 추가(승인 대기 → 진행 → 완료가 이 항목 위에서 갱신된다).
         self.push_xfer_line(peer, true, &name, size);
         self.open_send_wait(peer, &name);
@@ -2409,7 +2410,7 @@ impl App {
         match choice {
             OfferChoice::Approve => {
                 self.send_xfer_decision(peer, xid, true, nbeep_core::RejectWhy::Declined);
-                self.status = format!("수락 — {name} 수신 시작");
+                self.status = nbeep_core::tf(nbeep_core::Msg::StfAcceptRecv, &[&name]);
             }
             OfferChoice::Cancel { by_timeout } => {
                 self.send_xfer_decision(peer, xid, false, nbeep_core::RejectWhy::Declined);
@@ -2451,7 +2452,7 @@ impl App {
                     self.refresh_approval_ui();
                 }
                 self.send_xfer_decision(peer, xid, true, nbeep_core::RejectWhy::Declined);
-                self.status = format!("자동 수락 시작 — {name} 포함 이후 제안을 자동 수락합니다");
+                self.status = nbeep_core::tf(nbeep_core::Msg::StfAutoAcceptStart, &[&name]);
             }
         }
         // 다음 제안이 있으면 이어서 묻는다(오퍼 1건당 승인 1번).
@@ -2882,7 +2883,10 @@ impl App {
     fn start_connect(&mut self, peer: PeerId, auto: bool) {
         if !self.connecting.begin(peer) {
             if !auto {
-                self.status = format!("연결 중… {} (이미 시도 중)", self.peer_title(peer));
+                self.status = nbeep_core::tf(
+                    nbeep_core::Msg::StfConnectingBusy,
+                    &[&self.peer_title(peer)],
+                );
             }
             return; // 중복 시도 가드(수동 클릭·자동 재연결 공용 — 워커는 하나만)
         }
@@ -2932,7 +2936,7 @@ impl App {
         if addr.is_empty() {
             return;
         }
-        self.status = format!("연결 중… {addr}");
+        self.status = nbeep_core::tf(nbeep_core::Msg::StfConnecting, &[&addr]);
         let transport = std::sync::Arc::clone(&self.transport);
         let identity = std::sync::Arc::clone(&self.identity);
         let proxy = self.proxy.clone();
@@ -3139,7 +3143,10 @@ impl App {
             *e = e.saturating_add(1);
             *e
         };
-        self.status = format!("새 메시지: {} (읽지 않음 {n})", self.peer_title(peer));
+        self.status = nbeep_core::tf(
+            nbeep_core::Msg::StfNewMsgUnread,
+            &[&self.peer_title(peer), &n.to_string()],
+        );
         let mut inv = Invalidations::default();
         self.refresh_rows(&mut inv);
         self.update_main_title();
@@ -4504,7 +4511,10 @@ impl App {
             // `refresh_peer_info_card`로 열린 카드를 채운다. 실패는 기존 연결 실패
             // 경로 그대로(상태바) — 카드는 캐시로 남는다.
             self.start_connect(peer, true);
-            self.status = format!("프로필 갱신을 위해 연결 중… {}", self.peer_title(peer));
+            self.status = nbeep_core::tf(
+                nbeep_core::Msg::StfConnectingProfile,
+                &[&self.peer_title(peer)],
+            );
         }
         let info = self.build_peer_info(peer);
         if let Some((wid, _)) = self
@@ -4932,7 +4942,8 @@ impl App {
             if exiting {
                 eprintln!("설정 저장 실패(종료 경로) — {path}: {e}");
             } else {
-                self.status = format!("설정 저장 실패 — {e} (다음 변경 때 재시도)");
+                self.status =
+                    nbeep_core::tf(nbeep_core::Msg::StfSettingsSaveFail, &[&e.to_string()]);
             }
         }
         // 사이드카는 pairs(설정 빌림) 소비 후 — cfg와 같은 저장 사이클에 봉인 기록.
@@ -5481,7 +5492,7 @@ impl App {
                     } else {
                         WindowMode::Single
                     };
-                    self.status = format!("창 모드 = {value} (새 대화부터 적용)");
+                    self.status = nbeep_core::tf(nbeep_core::Msg::StfWindowMode, &[&value]);
                 }
                 // 시각 표시 형식(08-10) — 열린 대화 위젯 전부에 즉시 적용.
                 "chat.time_24h" | "chat.date_format" => {
@@ -5506,7 +5517,7 @@ impl App {
                 // 테마 주요 색 사용자 지정(08-10) — 현재 테마에 즉시 적용.
                 k if k.starts_with("theme.") => {
                     self.rebuild_theme();
-                    self.status = format!("색 적용 — {k} = {value}");
+                    self.status = nbeep_core::tf(nbeep_core::Msg::StfColorApplied, &[k, &value]);
                     for e in self.windows.values() {
                         e.window.request_redraw();
                     }
@@ -5641,7 +5652,10 @@ impl App {
                 // 목록 갱신 주기(08-14) — 발견발 재조립을 이 간격으로 묶는다.
                 "ui.list_refresh_ms" => {
                     self.list_refresh_ms = value.parse().unwrap_or(1500);
-                    self.status = format!("목록 갱신 주기 = {}ms", self.list_refresh_ms);
+                    self.status = nbeep_core::tf(
+                        nbeep_core::Msg::StfListRefresh,
+                        &[&self.list_refresh_ms.to_string()],
+                    );
                 }
                 // 목록 갱신 시 스크롤 동작(08-14 사용자 확정 3택).
                 "ui.list_refresh_scroll" => {
@@ -5666,7 +5680,8 @@ impl App {
                     if let Some(pv) = &mut self.profile_view {
                         pv.set_tooltip_ms(ms);
                     }
-                    self.status = format!("툴팁 표시 대기 = {ms}ms");
+                    self.status =
+                        nbeep_core::tf(nbeep_core::Msg::StfTooltipDelay, &[&ms.to_string()]);
                 }
                 // 아바타 선택·보더(08-14) — 재전송은 아래 프로필 전파 깔때기가
                 // 맡는다(M3-21에서 키별 arm → 단일 깔때기로 이관).
@@ -5703,7 +5718,7 @@ impl App {
                     let name = effective_display_name(&self.settings, &self.identity.peer_id());
                     self.transport.set_display_name(name.clone());
                     self.refresh_toolbar_avatar(); // 이니셜이 이름을 따라간다(08-14)
-                    self.status = format!("표시 이름 = {name} — LAN 전체에 방송됩니다");
+                    self.status = nbeep_core::tf(nbeep_core::Msg::StfDisplayName, &[name.as_str()]);
                 }
                 // 수신 포트(08-13 ⓐ — 듣는 포트 = 거는 기본 포트). 즉시 적용 = 전송 재시작
                 // (성립한 대화 세션은 개별 소켓이라 유지 · 발견 목록은 재공지로 회복).
@@ -5713,11 +5728,15 @@ impl App {
                         self.status =
                             format!("수신 포트 = {want} (데모 모드 — 실물 전송에서 적용)");
                     } else if self.listen_port == Some(want) {
-                        self.status = format!("수신 포트 = {want} (이미 이 포트로 듣는 중)");
+                        self.status =
+                            nbeep_core::tf(nbeep_core::Msg::StfPortListening, &[&want.to_string()]);
                     } else {
                         match self.respawn_transport() {
                             Ok(bound) if bound == want => {
-                                self.status = format!("수신 포트 = {bound} — 즉시 적용(재공지)");
+                                self.status = nbeep_core::tf(
+                                    nbeep_core::Msg::StfPortApplied,
+                                    &[&bound.to_string()],
+                                );
                             }
                             // 폴백을 조용히 하지 않는다 — 상대에게 알려줄 값은 실제 포트다.
                             Ok(bound) => {
@@ -5726,7 +5745,10 @@ impl App {
                                 );
                             }
                             Err(e) => {
-                                self.status = format!("전송 재시작 실패: {e} — 기존 포트 유지");
+                                self.status = nbeep_core::tf(
+                                    nbeep_core::Msg::StfRestartFail,
+                                    &[&e.to_string()],
+                                );
                             }
                         }
                     }
@@ -5847,7 +5869,8 @@ impl App {
                 for p in &new {
                     self.send_group_frames(*p, vec![invite.clone()]);
                 }
-                self.status = format!("{}명 초대 발송(수락 대기)", new.len());
+                self.status =
+                    nbeep_core::tf(nbeep_core::Msg::StfInvitesSent, &[&new.len().to_string()]);
                 self.refresh_and_redraw();
             }
             GA::RemoveMembers(gid, peers) => {
@@ -6073,7 +6096,8 @@ impl App {
             None => {}
         }
         if self.groups.write_failed() {
-            self.status = format!("{} · ⚠ 그룹 저장 실패(다음 변경에서 재시도)", self.status);
+            self.status =
+                nbeep_core::tf(nbeep_core::Msg::StfGroupSaveFail, &[&self.status.clone()]);
         }
         self.refresh_and_redraw();
     }
@@ -6521,7 +6545,7 @@ impl App {
             if sent {
                 self.ledger.note_sent(peer);
                 // 성공 종결은 상태 바만 — 스레드는 대화 몫(08-13 실기 피드백).
-                self.status = format!("그룹 대기분 전달됨: {title}");
+                self.status = nbeep_core::tf(nbeep_core::Msg::StfGroupPendingSent, &[&title]);
                 if let Some(mid) = self.main_id {
                     self.request_redraw(mid);
                 }
@@ -6644,7 +6668,7 @@ impl App {
                             .shared_by_uid(uid)
                             .map(|s| s.roster.name.as_str().to_string())
                             .unwrap_or_default();
-                        self.status = format!("'{name}' 그룹에 참여했습니다 — 목록에서 열기");
+                        self.status = nbeep_core::tf(nbeep_core::Msg::StfJoinedGroup, &[&name]);
                         // 합류 = 구성원들과 연결(아바타·프로필은 세션 경유 · 08-14).
                         self.connect_group_members(uid);
                     }
@@ -6761,7 +6785,10 @@ impl App {
                 roster.members.retain(|m| *m != peer);
                 roster.version += 1;
                 self.broadcast_roster(roster);
-                self.status = format!("{} 님이 초대를 거절했습니다", self.peer_title(peer));
+                self.status = nbeep_core::tf(
+                    nbeep_core::Msg::StfInviteDeclinedBy,
+                    &[&self.peer_title(peer)],
+                );
                 self.refresh_and_redraw();
             }
             G::Roster { roster } => {
@@ -6778,7 +6805,7 @@ impl App {
                     let name = s.roster.name.as_str().to_string();
                     let _ = self.groups.remove_shared(roster.uid);
                     self.close_group_views(gid);
-                    self.status = format!("'{name}' 그룹에서 제외되었습니다");
+                    self.status = nbeep_core::tf(nbeep_core::Msg::StfRemovedFromGroup, &[&name]);
                     self.refresh_and_redraw();
                     return;
                 }
@@ -6839,7 +6866,10 @@ impl App {
                 } else {
                     let e = self.gunread.entry(gid).or_insert(0);
                     *e = e.saturating_add(1);
-                    self.status = format!("[{}] {}: 새 메시지", room, self.peer_title(peer));
+                    self.status = nbeep_core::tf(
+                        nbeep_core::Msg::StfGroupNewMsg,
+                        &[&room, &self.peer_title(peer)],
+                    );
                     self.update_main_title();
                 }
                 self.refresh_and_redraw();
@@ -7272,7 +7302,8 @@ impl App {
                 if conv.out_tx.send(SessionCmd::Chat(msg.encode())).is_err() {
                     self.status = nbeep_core::t(nbeep_core::Msg::StSessionEnded).into();
                 } else {
-                    self.status = format!("전송 seq={} (응답 대기)", msg.seq);
+                    self.status =
+                        nbeep_core::tf(nbeep_core::Msg::StfSentSeq, &[&msg.seq.to_string()]);
                 }
             }
             self.record_history(peer); // 대화 기록 영속(M2-5b · 빌림 밖)
@@ -7704,7 +7735,8 @@ impl App {
                     // 실(verified)로 — 목록·카드가 즉시 따라간다.
                     use nbeep_core::TrustStore as _;
                     self.trust.verify(peer);
-                    self.status = format!("지문 대조 완료 — {} 인증됨", self.peer_title(peer));
+                    self.status =
+                        nbeep_core::tf(nbeep_core::Msg::StfVerified, &[&self.peer_title(peer)]);
                     let mut rinv = Invalidations::default();
                     self.refresh_rows(&mut rinv);
                     self.refresh_peer_info_card(peer); // 버튼 → ✓ 완료 표시로
@@ -8235,7 +8267,10 @@ impl ApplicationHandler<AppEvent> for App {
                 match verdict {
                     OfferVerdict::Accept => {
                         self.send_xfer_decision(peer, id, true, RejectWhy::Declined);
-                        self.status = format!("자동 수락: {name} ({}) 수신 시작", human_size(size));
+                        self.status = nbeep_core::tf(
+                            nbeep_core::Msg::StfAutoAcceptRecv,
+                            &[&name, &human_size(size)],
+                        );
                         self.push_xfer_line(peer, false, &name, size);
                     }
                     OfferVerdict::Ask => {
@@ -8281,7 +8316,10 @@ impl ApplicationHandler<AppEvent> for App {
                             }
                         };
                         self.send_xfer_decision(peer, id, false, why);
-                        self.status = format!("파일 거부({name}): {}", reason.message());
+                        self.status = nbeep_core::tf(
+                            nbeep_core::Msg::StfFileRejected,
+                            &[&name, reason.message()],
+                        );
                     }
                 }
                 self.redraw_conversation(peer);
@@ -8415,7 +8453,10 @@ impl ApplicationHandler<AppEvent> for App {
                         },
                     );
                     self.apply_xfer_view(peer);
-                    self.status = format!("전달됨 {done_f}/{total_f} — 상대 확인 대기");
+                    self.status = nbeep_core::tf(
+                        nbeep_core::Msg::StfDeliveredWait,
+                        &[&done_f.to_string(), &total_f.to_string()],
+                    );
                 }
                 let more = self.send_queue.get(&peer).is_some_and(|q| !q.is_empty());
                 if more {
@@ -8479,7 +8520,7 @@ impl ApplicationHandler<AppEvent> for App {
                     mine,
                     nbeep_ui::XferLineState::Failed { why: why.clone() },
                 );
-                self.status = format!("파일: {why}");
+                self.status = nbeep_core::tf(nbeep_core::Msg::StfFileWhy, &[&why]);
                 self.awaiting_accept.remove(&peer);
                 self.close_send_wait(peer);
                 self.send_queue.remove(&peer);
@@ -8539,7 +8580,10 @@ impl ApplicationHandler<AppEvent> for App {
                         match nbeep_core::TrustedSession::wrap(session.session, &mut self.trust) {
                             Ok(est) => est,
                             Err(e) => {
-                                self.status = format!("신뢰 판정 거부: {e}");
+                                self.status = nbeep_core::tf(
+                                    nbeep_core::Msg::StfTrustReject,
+                                    &[&e.to_string()],
+                                );
                                 if let Some(mid) = self.main_id {
                                     self.request_redraw(mid);
                                 }
@@ -8551,7 +8595,10 @@ impl ApplicationHandler<AppEvent> for App {
                     if auto {
                         // **조용한 연결**(자동 재연결 ⓑ · 프로필 pull 08-14) — 창을
                         // 열지 않는다(② 자동 열림 금지와 같은 규칙 · 카드와 대화 분리).
-                        self.status = format!("연결됨: {} — 목록에서 열기", self.peer_title(peer));
+                        self.status = nbeep_core::tf(
+                            nbeep_core::Msg::StfConnectedOpen,
+                            &[&self.peer_title(peer)],
+                        );
                         let mut inv = Invalidations::default();
                         self.refresh_rows(&mut inv);
                     } else {
@@ -8615,7 +8662,7 @@ impl ApplicationHandler<AppEvent> for App {
             }
             AppEvent::AddFailed { addr, why } => {
                 // 수동 주소 연결 실패(워커에서 복귀 · M2-8 잔여) — 주소로 알린다(피어 미확정).
-                self.status = format!("수동 연결 실패({addr}): {why}");
+                self.status = nbeep_core::tf(nbeep_core::Msg::StfManualConnFail, &[&addr, &why]);
                 if let Some(mid) = self.main_id {
                     self.request_redraw(mid);
                 }
@@ -8827,7 +8874,7 @@ impl ApplicationHandler<AppEvent> for App {
                 // ★ 재동기는 인바운드에서도(G4) — "접속하면 발신자가 밀어준다"의
                 // 세션 성립에는 상대가 나에게 걸어온 경우도 포함된다(종전엔 Outbound만).
                 self.flush_group_sends(peer);
-                self.status = format!("연결됨: {title} — 목록에서 열기");
+                self.status = nbeep_core::tf(nbeep_core::Msg::StfConnectedOpen, &[&title]);
                 if let Some(mid) = self.main_id {
                     self.request_redraw(mid);
                 }
