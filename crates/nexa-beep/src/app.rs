@@ -2024,7 +2024,7 @@ impl App {
             return;
         }
         let Some(peer) = self.chat_peer_for(id) else {
-            self.status = "파일 전송은 대화를 연 뒤에 — 상대를 먼저 선택하세요".into();
+            self.status = nbeep_core::t(nbeep_core::Msg::StXferNeedPeer).into();
             self.request_redraw(id);
             return;
         };
@@ -2094,7 +2094,7 @@ impl App {
                 .filter(|m| *m != me)
                 .collect(),
             None => {
-                self.status = "그룹이 없습니다(해산됨)".into();
+                self.status = nbeep_core::t(nbeep_core::Msg::StGroupGone).into();
                 self.request_redraw(id);
                 return;
             }
@@ -2203,7 +2203,7 @@ impl App {
                 .is_ok()
         });
         if !sent {
-            self.status = "세션이 끊겨 전송할 수 없습니다".into();
+            self.status = nbeep_core::t(nbeep_core::Msg::StSessionDropSend).into();
             self.send_queue.remove(&peer);
             self.send_batch.remove(&peer);
             return;
@@ -2283,7 +2283,7 @@ impl App {
             .get_mut(&peer)
             .and_then(VecDeque::pop_front)
         else {
-            self.status = "수락 대기 중인 파일 제안이 없습니다".into();
+            self.status = nbeep_core::t(nbeep_core::Msg::StNoPendingOffer).into();
             self.request_redraw(id);
             return;
         };
@@ -2582,7 +2582,7 @@ impl App {
                 let mut inv = Invalidations::default();
                 sv.set_value("xfer.approval", code, &mut inv);
             }
-            self.status = "자동 수락 기간이 끝나 직전 방식으로 되돌렸습니다".into();
+            self.status = nbeep_core::t(nbeep_core::Msg::StAutoRevert).into();
             self.refresh_approval_ui();
         }
         reverted
@@ -4482,7 +4482,7 @@ impl App {
         let _ = peer;
         self.single_open = None;
         self.single_open_group = None;
-        self.status = "대화창을 닫았습니다(대화는 유지됩니다)".into();
+        self.status = nbeep_core::t(nbeep_core::Msg::StChatClosed).into();
         self.refresh_and_redraw();
     }
 
@@ -4964,12 +4964,12 @@ impl App {
         ) {
             Ok(env) => {
                 if std::fs::write(&path, env).is_err() {
-                    self.status = "⚠ 연락처 보호 저장 실패 — 다음 변경 때 재시도".into();
+                    self.status = nbeep_core::t(nbeep_core::Msg::StContactSaveFail).into();
                 }
             }
             Err(_) => {
                 // 봉인 실패 = 평문 폴백 없음(원칙) — 소리 내어 알린다.
-                self.status = "⚠ 연락처 봉인 실패 — 저장하지 않음".into();
+                self.status = nbeep_core::t(nbeep_core::Msg::StContactSealFail).into();
             }
         }
     }
@@ -4986,7 +4986,7 @@ impl App {
             nbeep_store::sealed::open(crate::gate::SEAL_PII, &self.identity.wrap_secret(), &raw)
         else {
             // 다른 신원·손상 — fail-closed(평문인 척 읽지 않는다). 값은 비워 둔다.
-            self.status = "⚠ 연락처 보호 파일을 열 수 없음(다른 신원·손상)".into();
+            self.status = nbeep_core::t(nbeep_core::Msg::StContactOpenFail).into();
             return;
         };
         if let Ok(text) = String::from_utf8(body) {
@@ -5111,7 +5111,7 @@ impl App {
             &self.identity.wrap_secret(),
             &plain,
         ) else {
-            self.status = "⚠ 대화 기록 봉인 실패 — 저장하지 않음".into();
+            self.status = nbeep_core::t(nbeep_core::Msg::StHistorySealFail).into();
             return;
         };
         if std::fs::create_dir_all(&dir).is_ok() {
@@ -5607,7 +5607,7 @@ impl App {
                             let now = self.now_ms();
                             self.approval = self.approval.start_timed(w, now);
                             self.approval_started_unix = Some(unix_now());
-                            self.status = "자동 수락 기간을 다시 시작했습니다".into();
+                            self.status = nbeep_core::t(nbeep_core::Msg::StAutoRestart).into();
                         }
                     }
                     self.refresh_approval_ui();
@@ -5630,7 +5630,7 @@ impl App {
                 // 한글 입력(IME) 기준값(08-15 · H-27) — 어느 키든 일습 재적용(hot-swap).
                 k if k.starts_with("ime.") => {
                     self.apply_ime_tuning();
-                    self.status = "한글 입력(IME) 기준값 적용".into();
+                    self.status = nbeep_core::t(nbeep_core::Msg::StImeApplied).into();
                 }
                 // 목록 정렬 모드(08-15) — 즉시 재조립 + 드롭다운 동기화.
                 "ui.list_sort" => {
@@ -5672,7 +5672,7 @@ impl App {
                 // 맡는다(M3-21에서 키별 arm → 단일 깔때기로 이관).
                 "profile.avatar" | "profile.avatar_border" => {
                     self.refresh_toolbar_avatar(); // 프로필 버튼 = 내 얼굴
-                    self.status = "아바타 변경 — 연결된 상대에게 반영".into();
+                    self.status = nbeep_core::t(nbeep_core::Msg::StAvatarChanged).into();
                 }
                 // 사진 경로(08-14) — 스와치 선택이 비우면 툴바 버튼도 즉시 따라간다.
                 // 값이 차면(최근 캐러셀 선택 등) 그 사진을 디코드해 미리보기·툴바 갱신.
@@ -5736,7 +5736,7 @@ impl App {
                 k if k.starts_with("font.") => {
                     self.fonts = Self::fonts_from_settings(&self.settings);
                     self.reload_faces(); // 글꼴명 → 실제 얼굴 로드(Enter 확정 시 도달)
-                    self.status = "글꼴 설정 적용됨".into();
+                    self.status = nbeep_core::t(nbeep_core::Msg::StFontApplied).into();
                     for e in self.windows.values() {
                         e.window.request_redraw();
                     }
@@ -5781,7 +5781,7 @@ impl App {
         match action {
             GA::Create { members } => {
                 if members.is_empty() {
-                    self.status = "그룹을 만들려면 ⌘/Ctrl+클릭으로 상대를 먼저 선택하세요".into();
+                    self.status = nbeep_core::t(nbeep_core::Msg::StGroupNeedSelect).into();
                     return;
                 }
                 self.open_name_prompt(
@@ -5808,7 +5808,7 @@ impl App {
                     // 단일 진실을 유지해야 하므로 **요청(Suggest)을 소유자에게** 보낸다.
                     // 소유자가 정책 확인 후 명부에 반영·전원 배포 — 부분 가시성 분기 없음.
                     if !s.roster.member_invite {
-                        self.status = "이 방은 소유자만 초대할 수 있습니다".into();
+                        self.status = nbeep_core::t(nbeep_core::Msg::StGroupOwnerInvite).into();
                         return;
                     }
                     let uid = s.roster.uid;
@@ -5832,7 +5832,7 @@ impl App {
                     .filter(|p| !roster.members.contains(p))
                     .collect();
                 if new.is_empty() {
-                    self.status = "이미 전원 구성원입니다".into();
+                    self.status = nbeep_core::t(nbeep_core::Msg::StGroupAllMembers).into();
                     return;
                 }
                 roster.members.extend(new.iter().copied());
@@ -5855,7 +5855,7 @@ impl App {
                     return;
                 };
                 if s.roster.owner != me {
-                    self.status = "구성원 제외는 소유자만 할 수 있습니다".into();
+                    self.status = nbeep_core::t(nbeep_core::Msg::StGroupOwnerRemove).into();
                     return;
                 }
                 let mut roster = s.roster.clone();
@@ -5874,7 +5874,7 @@ impl App {
                     self.send_group_frames(*p, vec![frame.clone()]);
                 }
                 self.broadcast_roster(roster);
-                self.status = "제외 완료 — 구성원에게 배포".into();
+                self.status = nbeep_core::t(nbeep_core::Msg::StGroupRemoved).into();
                 self.refresh_and_redraw();
             }
             GA::TogglePolicy(gid) => {
@@ -5882,7 +5882,7 @@ impl App {
                     return;
                 };
                 if s.roster.owner != me {
-                    self.status = "방 정책은 소유자만 바꿀 수 있습니다".into();
+                    self.status = nbeep_core::t(nbeep_core::Msg::StGroupOwnerPolicy).into();
                     return;
                 }
                 let mut roster = s.roster.clone();
@@ -5934,13 +5934,13 @@ impl App {
                     for p in old {
                         self.send_group_frames(p, vec![frame.clone()]);
                     }
-                    self.status = "그룹 해산 — 구성원에게 통지".into();
+                    self.status = nbeep_core::t(nbeep_core::Msg::StGroupDisband).into();
                 } else {
                     // 탈퇴 — 소유자에게 통지(명부 갱신은 소유자 몫).
                     let leave = nbeep_core::SGroupMsg::Leave { uid }.encode();
                     let owner = s.roster.owner;
                     self.send_group_frames(owner, vec![leave]);
-                    self.status = "그룹 탈퇴 — 소유자에게 통지".into();
+                    self.status = nbeep_core::t(nbeep_core::Msg::StGroupLeave).into();
                 }
                 let _ = self.groups.remove_shared(uid);
                 self.close_group_views(gid);
@@ -6030,7 +6030,7 @@ impl App {
     /// 생성 = **공유 그룹**(ADR-0012): roster v1 서명석(세션 인증) + 전 구성원 초대 발송.
     fn apply_name_prompt(&mut self, name: &str) {
         let Ok(dn) = nbeep_core::DisplayName::parse(name) else {
-            self.status = "그룹 이름으로 쓸 수 없는 문자입니다".into();
+            self.status = nbeep_core::t(nbeep_core::Msg::StGroupBadName).into();
             return;
         };
         match self.name_prompt_for.take() {
@@ -6163,14 +6163,14 @@ impl App {
             return;
         };
         if s.roster.owner != self.identity.peer_id() {
-            self.status = "그룹 이름은 소유자만 바꿀 수 있습니다".into();
+            self.status = nbeep_core::t(nbeep_core::Msg::StGroupOwnerRename).into();
             return;
         }
         let mut roster = s.roster.clone();
         roster.name = dn;
         roster.version += 1;
         self.broadcast_roster(roster);
-        self.status = "그룹 이름 변경됨 — 구성원에게 배포".into();
+        self.status = nbeep_core::t(nbeep_core::Msg::StGroupRenamed).into();
     }
 
     /// 새 roster를 저장하고 전 구성원(나 제외)에게 배포(소유자 전용 경로).
@@ -6304,7 +6304,7 @@ impl App {
                     c.paste(&t, &mut inv);
                 }
             } else {
-                self.status = "붙여넣기 실패 — 클립보드를 읽을 수 없습니다".into();
+                self.status = nbeep_core::t(nbeep_core::Msg::StPasteFail).into();
                 if let Some(mid) = self.main_id {
                     self.request_redraw(mid);
                 }
@@ -6346,7 +6346,7 @@ impl App {
         if let Some(text) = outgoing {
             // 방 발신(M5-1g) — 명부 기준 팬아웃(나 제외 · Group 스트림 · ADR §4).
             let Some(s) = self.groups.shared_by_id(gid) else {
-                self.status = "그룹이 없습니다(해산됨)".into();
+                self.status = nbeep_core::t(nbeep_core::Msg::StGroupGone).into();
                 self.request_redraw(id);
                 return;
             };
@@ -6360,7 +6360,7 @@ impl App {
                 .filter(|m| *m != me)
                 .collect();
             if members.is_empty() {
-                self.status = "이 방에는 아직 다른 구성원이 없습니다".into();
+                self.status = nbeep_core::t(nbeep_core::Msg::StGroupNoMembers).into();
                 self.request_redraw(id);
                 return;
             }
@@ -6624,14 +6624,14 @@ impl App {
                     // 편집 후 구성원 모달을 새 명부로 다시 연다(이어서 편집).
                     self.open_group_members(gid);
                 } else {
-                    self.status = "구성원 제외 취소".into();
+                    self.status = nbeep_core::t(nbeep_core::Msg::StRemoveCancel).into();
                 }
             }
             AlertCtx::SettingsReset => {
                 if yes {
                     self.status = self.do_reset_settings();
                 } else {
-                    self.status = "설정 초기화 취소".into();
+                    self.status = nbeep_core::t(nbeep_core::Msg::StResetCancel).into();
                 }
             }
             AlertCtx::GroupInvite { uid, owner } => {
@@ -6652,7 +6652,7 @@ impl App {
                     let frame = nbeep_core::SGroupMsg::Decline { uid }.encode();
                     self.send_group_frames(owner, vec![frame]);
                     let _ = self.groups.remove_shared(uid);
-                    self.status = "그룹 초대를 거절했습니다".into();
+                    self.status = nbeep_core::t(nbeep_core::Msg::StInviteDeclined).into();
                 }
                 self.refresh_and_redraw();
             }
@@ -7146,7 +7146,7 @@ impl App {
         let Some(xid) = xid else {
             // 실패도 말한다(08-10 교훈 — 조용한 무반응은 디버깅 불가). 배너 잔존
             // 등으로 활성 xid가 없으면 왜 안 되는지 상태바로 알린다.
-            self.status = "취소할 진행 중 전송이 없습니다".into();
+            self.status = nbeep_core::t(nbeep_core::Msg::StNoActiveXfer).into();
             if let Some(mid) = self.main_id {
                 self.request_redraw(mid);
             }
@@ -7228,7 +7228,7 @@ impl App {
                     c.paste(&t, &mut inv);
                 }
             } else {
-                self.status = "붙여넣기 실패 — 클립보드를 읽을 수 없습니다".into();
+                self.status = nbeep_core::t(nbeep_core::Msg::StPasteFail).into();
                 if let Some(mid) = self.main_id {
                     self.request_redraw(mid);
                 }
@@ -7270,7 +7270,7 @@ impl App {
                     .push(ChatLine::text(true, text, at_ms, wall).with_seq(msg.seq));
                 // 액터에 발신 요청 — 수신은 비동기로 AppEvent::Recv로 돌아온다(M2-7).
                 if conv.out_tx.send(SessionCmd::Chat(msg.encode())).is_err() {
-                    self.status = "세션 종료됨".into();
+                    self.status = nbeep_core::t(nbeep_core::Msg::StSessionEnded).into();
                 } else {
                     self.status = format!("전송 seq={} (응답 대기)", msg.seq);
                 }
@@ -7821,7 +7821,7 @@ impl App {
             nbeep_ui::controls::EditCtxAction::Copy => {
                 if let Some(t) = self.clipboard_copy_for(id) {
                     if nbeep_plat::clipboard::set_text(&t) {
-                        self.status = "복사됨".into();
+                        self.status = nbeep_core::t(nbeep_core::Msg::StCopied).into();
                     }
                 }
             }
@@ -7934,7 +7934,7 @@ impl App {
                 // 우측: 실제 수신 포트(DR-19 — 발견이 안 닿는 상대에게 알려줄 값이라 상시 표시).
                 let mut status_clip = bar;
                 if let Some(p) = self.listen_port {
-                    let label = format!("수신 :{p}");
+                    let label = format!("{}{p}", nbeep_core::t(nbeep_core::Msg::PortLabel));
                     let lw = ctx.text_width(&label);
                     let lx = bar.right() - pad - lw;
                     ctx.text_opaque(lx, bar.y + dy, bar, &label, theme.text_dim, theme.chrome_bg);
@@ -8379,7 +8379,7 @@ impl ApplicationHandler<AppEvent> for App {
                 self.awaiting_accept.remove(&peer);
                 self.close_send_wait(peer);
                 self.set_xfer_line(peer, true, nbeep_ui::XferLineState::Active { done: 0 });
-                self.status = "상대가 수락 — 전송 시작".into();
+                self.status = nbeep_core::t(nbeep_core::Msg::StPeerAccepted).into();
                 self.redraw_conversation(peer);
             }
             AppEvent::XferSendDone {
@@ -8510,7 +8510,7 @@ impl ApplicationHandler<AppEvent> for App {
                     let due = self.now_ms() + RECONNECT_BACKOFF_MS[0];
                     self.reconnect.insert(peer, (0, due));
                 }
-                self.status = "상대와의 세션이 종료됨".into();
+                self.status = nbeep_core::t(nbeep_core::Msg::StSessionEndedPeer).into();
                 let mut inv = Invalidations::default();
                 self.refresh_rows(&mut inv);
                 if let Some(id) = self.main_id {
@@ -8801,7 +8801,7 @@ impl ApplicationHandler<AppEvent> for App {
                         ]));
                     }
                 }
-                self.status = "네트워크 변경 감지 — 재발견·재연결 중".into();
+                self.status = nbeep_core::t(nbeep_core::Msg::StNetChanged).into();
                 if let Some(mid) = self.main_id {
                     self.request_redraw(mid);
                 }
@@ -8875,7 +8875,7 @@ impl ApplicationHandler<AppEvent> for App {
                     // 보류했던 push가 여기서 **한 번에** 나간다(실사진 동봉 —
                     // 08-16 실기: 종전엔 키만 실린 프레임이 먼저 나가 2단계였다).
                     self.push_profile(ProfileScope::Full);
-                    self.status = "프로필 사진 축소본 준비 — 연결된 상대에게 전파".into();
+                    self.status = nbeep_core::t(nbeep_core::Msg::StWireAvatarReady).into();
                 } else {
                     // ★ 조용한 생략 금지(08-16 사용자 확정) — 초과 사진이 안 나가면
                     // 소리 내어 알린다. 보류했던 push는 그래도 내보낸다(사진만 빠질
@@ -9756,7 +9756,8 @@ impl ApplicationHandler<AppEvent> for App {
                                 Some(StdAccel::Copy) => {
                                     if let Some(t) = self.clipboard_copy_for(id) {
                                         if nbeep_plat::clipboard::set_text(&t) {
-                                            self.status = "복사됨".into();
+                                            self.status =
+                                                nbeep_core::t(nbeep_core::Msg::StCopied).into();
                                         }
                                     }
                                     return;
