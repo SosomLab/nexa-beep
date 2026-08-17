@@ -2394,12 +2394,23 @@ impl Widget for SettingsWidget {
         }
 
         // 행에 붙은 정보 줄 — **행 바로 아래 고정 위치**.
-        // 고정폭으로 그린다: 숫자 폭이 변하면 1초마다 글자가 흔들린다(사용자 지적 08-09).
-        ctx.select_font(FontSlot::Mono, false);
+        // ★ 카운트다운(초 단위 갱신)만 고정폭: 숫자 폭이 변하면 1초마다 글자가
+        //   흔들린다(사용자 지적 08-09). 그 외 산문 노트(속도 설명 등)는 **설명과
+        //   같은 폰트**로 그린다(고정폭은 산문에 부적절 · 사용자 요청 08-18).
         for row in &self.rows {
-            let Some(note) = self.notes.get(registry()[row.idx].key) else {
+            let key = registry()[row.idx].key;
+            let Some(note) = self.notes.get(key) else {
                 continue;
             };
+            let mono = key == "xfer.approval_window"; // 자동 수락 카운트다운만
+            ctx.select_font(
+                if mono {
+                    FontSlot::Mono
+                } else {
+                    FontSlot::Status
+                },
+                false,
+            );
             let nh = self.s(NOTE_H);
             let r = Rect::new(row.rect.x, row.rect.bottom() - nh, row.rect.w, nh);
             let th = ctx.text_height();
