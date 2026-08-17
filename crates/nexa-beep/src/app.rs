@@ -4449,12 +4449,46 @@ impl App {
                             "지문 대조는 1:1 대화에서만 가능합니다(상대가 하나로 정해져야 합니다).",
                         ),
                     },
+                    ChatCommand::Unverify => {
+                        // 안전 번호 카드를 닫는다(대조 취소). 대기 요청도 지운다.
+                        // ★ 이미 '대조 완료'로 승격한 신뢰는 되돌리지 않는다 —
+                        //   카드를 여닫는 것과 신뢰 등급은 별개(카드 = 표시 UI일 뿐).
+                        let closed = self.close_peer_info_card();
+                        self.push_chat_notice(
+                            peer,
+                            if closed {
+                                "안전 번호 카드를 닫았습니다(대조 취소 — 신뢰 등급은 그대로)."
+                            } else {
+                                "닫을 안전 번호 카드가 없습니다."
+                            },
+                        );
+                    }
                     ChatCommand::Close => {
                         self.close_chat_view(peer);
                     }
                 }
                 CmdOutcome::Handled
             }
+        }
+    }
+
+    /// SAS(안전 번호) 카드를 닫는다(`/unverify` · 08-17) — 열려 있으면 창·뷰·대기
+    /// 요청을 지우고 true. **신뢰 등급은 건드리지 않는다**(카드는 표시 UI일 뿐 ·
+    /// 승격은 '대조 완료' 버튼이 신뢰 저장소에 이미 반영). 열린 게 없으면 false.
+    fn close_peer_info_card(&mut self) -> bool {
+        self.pending_peer_info = None;
+        let wid = self
+            .windows
+            .iter()
+            .find(|(_, e)| matches!(e.role, Role::PeerInfo(_)))
+            .map(|(w, _)| *w);
+        let had_view = self.peer_info_view.is_some();
+        self.peer_info_view = None;
+        if let Some(w) = wid {
+            self.windows.remove(&w);
+            true
+        } else {
+            had_view
         }
     }
 

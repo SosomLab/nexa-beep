@@ -34,6 +34,9 @@ pub enum ChatCommand {
     Verify,
     /// 이 대화 상대의 신뢰 상태를 한 줄로.
     Trust,
+    /// **지문 대조 취소** — `/verify`로 연 안전 번호 카드를 닫는다(대조 자체를
+    /// 되돌리지 않는다 — 이미 '대조 완료'를 눌러 승격했다면 그건 그대로).
+    Unverify,
     /// 대화창 닫기.
     Close,
 }
@@ -45,6 +48,7 @@ impl ChatCommand {
         match self {
             Self::Help => "/help",
             Self::Verify => "/verify",
+            Self::Unverify => "/unverify",
             Self::Trust => "/trust",
             Self::Close => "/close",
         }
@@ -70,6 +74,10 @@ const TABLE: &[(&[&str], ChatCommand)] = &[
     (
         &["verify", "verified", "sas", "지문", "대조"],
         ChatCommand::Verify,
+    ),
+    (
+        &["unverify", "cancelverify", "대조취소", "지문취소"],
+        ChatCommand::Unverify,
     ),
     (&["trust", "신뢰"], ChatCommand::Trust),
     (&["close", "quit", "exit", "q", "닫기"], ChatCommand::Close),
@@ -118,6 +126,7 @@ pub fn help_text() -> String {
         "사용 가능한 명령",
         "  /help            이 안내",
         "  /verify          지문(안전 번호) 대조 카드 열기",
+        "  /unverify        대조 카드 닫기(취소)",
         "  /trust           이 상대의 신뢰 상태 보기",
         "  /close           대화창 닫기",
         "  ※ /로 시작하는 입력은 어떤 경우에도 전송되지 않습니다",
@@ -213,6 +222,12 @@ mod tests {
             parse("경로는 /usr/bin"),
             Parsed::Text("경로는 /usr/bin".into())
         );
+    }
+
+    #[test]
+    fn unverify_cancels_verify() {
+        assert_eq!(parse("/unverify"), Parsed::Command(ChatCommand::Unverify));
+        assert_eq!(parse("/대조취소"), Parsed::Command(ChatCommand::Unverify));
     }
 
     /// 인자가 붙어도 명령으로 받는다(뒤는 지금 무시 — 확장 자리).
