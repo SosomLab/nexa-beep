@@ -934,20 +934,45 @@ const HISTORY_MAX: usize = 2000;
 /// 필드가 붙어 직렬화 대상 아님). 레코드 = tag(1) ‖ mine(1) ‖ at_ms(8 LE) ‖
 /// len(4 LE) ‖ utf8. tag로 전방 확장.
 fn encode_history(lines: &[ChatLine]) -> Vec<u8> {
-    let mut out = Vec::new();
-    let texts: Vec<&ChatLine> = lines
+    use nbeep_ui::{ChatBody, XferLineState as St};
+    // 보관 대상 = 텍스트 전부 + **종결 전송(Done/Failed)**. 진행 중 전송은 재시작
+    // 시점에 이미 중단됐으므로 이력이 아니다(Waiting/Active/AwaitingAck 제외).
+    let keep: Vec<&ChatLine> = lines
         .iter()
-        .filter(|l| matches!(l.body, nbeep_ui::ChatBody::Text(_)))
+        .filter(|l| match &l.body {
+            ChatBody::Text(_) => true,
+            ChatBody::Xfer(x) => matches!(x.state, St::Done { .. } | St::Failed { .. }),
+        })
         .collect();
-    let start = texts.len().saturating_sub(HISTORY_MAX);
-    for l in &texts[start..] {
-        if let nbeep_ui::ChatBody::Text(t) = &l.body {
-            let b = t.as_str().as_bytes();
-            out.push(1u8);
-            out.push(u8::from(l.mine));
-            out.extend_from_slice(&l.at_ms.to_le_bytes());
-            out.extend_from_slice(&(u32::try_from(b.len()).unwrap_or(0)).to_le_bytes());
-            out.extend_from_slice(b);
+    let start = keep.len().saturating_sub(HISTORY_MAX);
+    let mut out = Vec::new();
+    let put_str = |out: &mut Vec<u8>, sx: &str| {
+        let b = sx.as_bytes();
+        out.extend_from_slice(&(u32::try_from(b.len()).unwrap_or(0)).to_le_bytes());
+        out.extend_from_slice(b);
+    };
+    for l in &keep[start..] {
+        match &l.body {
+            ChatBody::Text(t) => {
+                out.push(1u8);
+                out.push(u8::from(l.mine));
+                out.extend_from_slice(&l.at_ms.to_le_bytes());
+                put_str(&mut out, t.as_str());
+            }
+            ChatBody::Xfer(x) => {
+                let (term, msg) = match &x.state {
+                    St::Done { note } => (0u8, note.as_str()),
+                    St::Failed { why } => (1u8, why.as_str()),
+                    _ => continue,
+                };
+                out.push(2u8);
+                out.push(u8::from(l.mine));
+                out.extend_from_slice(&l.at_ms.to_le_bytes());
+                out.push(term);
+                out.extend_from_slice(&x.size.to_le_bytes());
+                put_str(&mut out, x.name.as_str());
+                put_str(&mut out, msg);
+            }
         }
     }
     out
@@ -955,27 +980,70 @@ fn encode_history(lines: &[ChatLine]) -> Vec<u8> {
 
 /// 대화 기록 역직렬화(M2-5b) — 손상·미지 tag는 거기서 멈춘다(fail-soft).
 fn decode_history(bytes: &[u8]) -> Vec<ChatLine> {
+    use nbeep_ui::{ChatBody, XferLine, XferLineState as St};
+    // 길이-접두 문자열 읽기 — (문자열, 다음 오프셋). 범위 밖이면 None(손상 멈춤).
+    let read_str = |b: &[u8], p: usize| -> Option<(String, usize)> {
+        let e = p.checked_add(4)?;
+        if e > b.len() {
+            return None;
+        }
+        let n = u32::from_le_bytes(b[p..e].try_into().ok()?) as usize;
+        let end = e.checked_add(n).filter(|x| *x <= b.len())?;
+        Some((String::from_utf8_lossy(&b[e..end]).into_owned(), end))
+    };
     let mut out = Vec::new();
     let mut i = 0;
-    while i + 14 <= bytes.len() {
-        if bytes[i] != 1 {
-            break;
-        }
+    while i + 10 <= bytes.len() {
+        let tag = bytes[i];
         let mine = bytes[i + 1] != 0;
         let at_ms = u64::from_le_bytes(bytes[i + 2..i + 10].try_into().unwrap_or([0; 8]));
-        let len = u32::from_le_bytes(bytes[i + 10..i + 14].try_into().unwrap_or([0; 4])) as usize;
-        let body_start = i + 14;
-        let Some(end) = body_start.checked_add(len).filter(|e| *e <= bytes.len()) else {
-            break;
-        };
-        let text = String::from_utf8_lossy(&bytes[body_start..end]).into_owned();
-        out.push(ChatLine::text(
-            mine,
-            nbeep_core::sanitize_message(&text),
-            at_ms,
-            wall_from_ms(at_ms),
-        ));
-        i = end;
+        match tag {
+            1 => {
+                let Some((text, next)) = read_str(bytes, i + 10) else {
+                    break;
+                };
+                out.push(ChatLine::text(
+                    mine,
+                    nbeep_core::sanitize_message(&text),
+                    at_ms,
+                    wall_from_ms(at_ms),
+                ));
+                i = next;
+            }
+            2 => {
+                if i + 19 > bytes.len() {
+                    break;
+                }
+                let term = bytes[i + 10];
+                let size = u64::from_le_bytes(bytes[i + 11..i + 19].try_into().unwrap_or([0; 8]));
+                let Some((name, p1)) = read_str(bytes, i + 19) else {
+                    break;
+                };
+                let Some((msg, next)) = read_str(bytes, p1) else {
+                    break;
+                };
+                let state = if term == 0 {
+                    St::Done { note: msg }
+                } else {
+                    St::Failed { why: msg }
+                };
+                out.push(ChatLine {
+                    mine,
+                    body: ChatBody::Xfer(XferLine {
+                        thumb: None,
+                        qpath: None,
+                        name: nbeep_core::sanitize_message(&name),
+                        size,
+                        state,
+                    }),
+                    at_ms,
+                    wall: wall_from_ms(at_ms),
+                    from: None,
+                });
+                i = next;
+            }
+            _ => break, // 미지 tag — 여기까지(전방 확장은 append라 안전)
+        }
     }
     out
 }
@@ -2442,6 +2510,13 @@ impl App {
         if let Some(conv) = self.conversations.get_mut(&peer) {
             nbeep_ui::update_xfer_in(&mut conv.lines, mine, state.clone());
         }
+        // 종결(Done/Failed) 갱신이면 기록 영속(M2-5b — 진행 중은 이력 아님).
+        if matches!(
+            state,
+            nbeep_ui::XferLineState::Done { .. } | nbeep_ui::XferLineState::Failed { .. }
+        ) {
+            self.record_history(peer);
+        }
         let mut inv = Invalidations::default();
         if let Some(chat) = self.chats.get_mut(&peer) {
             chat.update_xfer_line(mine, state, &mut inv);
@@ -2454,6 +2529,7 @@ impl App {
         if let Some(conv) = self.conversations.get_mut(&peer) {
             nbeep_ui::update_xfer_ack(&mut conv.lines, true, terminal.clone());
         }
+        self.record_history(peer); // 종단 ack로 종결 = 기록 영속(M2-5b)
         let mut inv = Invalidations::default();
         if let Some(chat) = self.chats.get_mut(&peer) {
             chat.ack_xfer_line(true, terminal, &mut inv);
@@ -10371,6 +10447,38 @@ mod tests {
             panic!("텍스트")
         };
         assert_eq!(t0.as_str(), "안녕 hello");
+    }
+
+    /// M2-5b — 종결 전송(Done/Failed)은 기록되고, 진행 중(Active/Waiting)은 제외.
+    #[test]
+    fn history_persists_terminal_xfers_only() {
+        use super::{decode_history, encode_history, wall_from_ms, ChatLine};
+        use nbeep_ui::{ChatBody, XferLineState as St};
+        let w = wall_from_ms(0);
+        let done = {
+            let mut l = ChatLine::xfer(true, nbeep_core::sanitize_message("a.jpg"), 100, 1, w);
+            if let ChatBody::Xfer(x) = &mut l.body {
+                x.state = St::Done {
+                    note: "격리됨".into(),
+                };
+            }
+            l
+        };
+        let active = {
+            let mut l = ChatLine::xfer(false, nbeep_core::sanitize_message("b.bin"), 200, 2, w);
+            if let ChatBody::Xfer(x) = &mut l.body {
+                x.state = St::Active { done: 50 };
+            }
+            l
+        };
+        let back = decode_history(&encode_history(&[done, active]));
+        assert_eq!(back.len(), 1, "종결만 — 진행 중 제외");
+        let ChatBody::Xfer(x) = &back[0].body else {
+            panic!("xfer")
+        };
+        assert_eq!(x.name.as_str(), "a.jpg");
+        assert_eq!(x.size, 100);
+        assert!(matches!(x.state, St::Done { .. }));
     }
 
     /// M2-5b — 손상은 fail-soft: 읽은 데까지 살리고 멈춘다(빈 봉투 안 만든다).
