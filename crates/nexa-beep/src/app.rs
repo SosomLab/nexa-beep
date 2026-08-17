@@ -1909,7 +1909,10 @@ impl App {
             return;
         }
         let attrs = Window::default_attributes()
-            .with_title("Nexa Beep — 알림")
+            .with_title(format!(
+                "Nexa Beep — {}",
+                nbeep_core::t(nbeep_core::Msg::WinAlert)
+            ))
             .with_inner_size(winit::dpi::LogicalSize::new(400.0, win_h))
             .with_resizable(false)
             .with_window_icon(self.icon.clone());
@@ -2819,8 +2822,6 @@ impl App {
                 // 화면에 안 나오던 상태다(충돌 = v1 사칭 유일 가시 신호).
                 let blocked = self.trust.is_blocked(entry.peer);
                 let conflict = self.trust.name_conflict(entry.peer, &entry.name).is_some();
-                // 마지막 접속 상대 표기(08-17 — 우클릭 삭제 메뉴가 보여준다).
-                let last_seen_label = ago_label(self.trust.meta(entry.peer).0);
                 PeerRow {
                     entry,
                     trust,
@@ -2835,7 +2836,6 @@ impl App {
                     fav,
                     blocked,
                     conflict,
-                    last_seen_label,
                 }
             })
             .collect();
@@ -3185,8 +3185,10 @@ impl App {
         };
         let total: u32 = self.unread.values().sum::<u32>() + self.gunread.values().sum::<u32>();
         if total > 0 {
-            e.window
-                .set_title(&format!("Nexa Beep — 새 메시지 {total}"));
+            e.window.set_title(&format!(
+                "Nexa Beep — {}",
+                nbeep_core::tf(nbeep_core::Msg::WinNewMessages, &[&total.to_string()])
+            ));
         } else {
             e.window.set_title("Nexa Beep");
         }
@@ -4191,7 +4193,10 @@ impl App {
             },
         };
         let attrs = Window::default_attributes()
-            .with_title("Nexa Beep — 프로필")
+            .with_title(format!(
+                "Nexa Beep — {}",
+                nbeep_core::t(nbeep_core::Msg::ProfileTitle)
+            ))
             .with_inner_size(winit::dpi::LogicalSize::new(440.0, 730.0))
             .with_resizable(false)
             // 앱 모달(08-14 표준 재정리) — 앱 창 입력은 모달이 흡수하되, 다른 앱은
@@ -4331,7 +4336,10 @@ impl App {
             return;
         }
         let attrs = Window::default_attributes()
-            .with_title("Nexa Beep — 구성원")
+            .with_title(format!(
+                "Nexa Beep — {}",
+                nbeep_core::t(nbeep_core::Msg::WinMembers)
+            ))
             .with_inner_size(winit::dpi::LogicalSize::new(400.0, win_h))
             .with_resizable(false)
             .with_window_icon(self.icon.clone());
@@ -4373,6 +4381,7 @@ impl App {
                 .and_then(|p| p.name.as_ref())
                 .map(|n| n.as_str().to_string())
                 .unwrap_or_default(),
+            bio: p.and_then(|p| p.bio.clone()).unwrap_or_default(),
             email: p.and_then(|p| p.email.clone()).unwrap_or_default(),
             phone: p.and_then(|p| p.phone.clone()).unwrap_or_default(),
             has_image: p.is_some_and(|p| p.image_file.is_some()),
@@ -4644,7 +4653,10 @@ impl App {
             return;
         }
         let attrs = Window::default_attributes()
-            .with_title("Nexa Beep — 상대 프로필")
+            .with_title(format!(
+                "Nexa Beep — {}",
+                nbeep_core::t(nbeep_core::Msg::WinPeerProfile)
+            ))
             // 높이 500(M3-6 — 안전 번호 2줄+버튼이 380에선 지문·안내와 겹쳤다 · 실기).
             .with_inner_size(winit::dpi::LogicalSize::new(360.0, 500.0))
             .with_resizable(false)
@@ -4709,14 +4721,15 @@ impl App {
         if let Some((wid, _)) = self.windows.iter().find(|(_, e)| e.role == Role::ImageView) {
             let wid = *wid;
             if let Some(e) = self.windows.get_mut(&wid) {
-                e.window.set_title(&format!("미리보기 — {title}"));
+                e.window
+                    .set_title(&nbeep_core::tf(nbeep_core::Msg::WinPreview, &[&title]));
                 e.window.focus_window();
             }
             self.request_redraw(wid);
             return;
         }
         let attrs = Window::default_attributes()
-            .with_title(format!("미리보기 — {title}"))
+            .with_title(nbeep_core::tf(nbeep_core::Msg::WinPreview, &[&title]))
             .with_inner_size(winit::dpi::LogicalSize::new(640.0, 560.0))
             .with_window_icon(self.icon.clone());
         let attrs = self.modal_attrs(attrs, true); // 커서 자리 + 메인 소유(카드 규약)
@@ -4760,7 +4773,10 @@ impl App {
             return;
         }
         let attrs = Window::default_attributes()
-            .with_title("Nexa Beep — 주소로 연결")
+            .with_title(format!(
+                "Nexa Beep — {}",
+                nbeep_core::t(nbeep_core::Msg::WinConnectAddr)
+            ))
             .with_inner_size(winit::dpi::LogicalSize::new(380.0, 150.0))
             .with_resizable(false)
             // 앱 모달(08-14 표준 재정리) — 앱 창 입력은 모달이 흡수하되, 다른 앱은
@@ -6137,7 +6153,10 @@ impl App {
         }
         self.name_prompt_for = Some(purpose);
         let attrs = Window::default_attributes()
-            .with_title("Nexa Beep — 그룹")
+            .with_title(format!(
+                "Nexa Beep — {}",
+                nbeep_core::t(nbeep_core::Msg::WinGroup)
+            ))
             .with_inner_size(winit::dpi::LogicalSize::new(360.0, 150.0))
             .with_resizable(false)
             .with_window_icon(self.icon.clone());
@@ -6724,7 +6743,10 @@ impl App {
         }
         self.alert_ctx = Some(ctx);
         let attrs = Window::default_attributes()
-            .with_title("Nexa Beep — 확인")
+            .with_title(format!(
+                "Nexa Beep — {}",
+                nbeep_core::t(nbeep_core::Msg::WinConfirm)
+            ))
             .with_inner_size(winit::dpi::LogicalSize::new(400.0, 170.0))
             .with_resizable(false)
             .with_window_icon(self.icon.clone());
@@ -9280,7 +9302,10 @@ impl ApplicationHandler<AppEvent> for App {
                 pv.start(self.now_ms());
                 self.approve_view.insert(peer, pv);
                 let attrs = Window::default_attributes()
-                    .with_title("Nexa Beep — 파일 수신 요청")
+                    .with_title(format!(
+                        "Nexa Beep — {}",
+                        nbeep_core::t(nbeep_core::Msg::WinFileRequest)
+                    ))
                     .with_inner_size(winit::dpi::LogicalSize::new(440.0, 300.0))
                     .with_resizable(false)
                     .with_window_icon(self.icon.clone());
@@ -9338,7 +9363,10 @@ impl ApplicationHandler<AppEvent> for App {
         if let Some(peer) = self.pending_send_window.take() {
             if !self.windows.values().any(|e| e.role == Role::Sending(peer)) {
                 let attrs = Window::default_attributes()
-                    .with_title("Nexa Beep — 전송 대기")
+                    .with_title(format!(
+                        "Nexa Beep — {}",
+                        nbeep_core::t(nbeep_core::Msg::WinTransferWait)
+                    ))
                     .with_inner_size(winit::dpi::LogicalSize::new(360.0, 130.0))
                     .with_resizable(false)
                     .with_window_icon(self.icon.clone());

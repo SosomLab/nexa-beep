@@ -15,8 +15,10 @@ use crate::widget::{Invalidations, Widget};
 pub struct PeerInfo {
     /// 기본(발견) 이름.
     pub name: String,
-    /// 프로필에 등록된 표시 이름(없으면 빈 값).
+    /// 프로필에 등록된 표시 이름(없으면 빈 값). 08-17 — 큰 이름은 이게 있으면 이걸.
     pub profile_name: String,
+    /// 소개글(08-17 · 큰 이름 아래 회색 줄 — 목록과 같은 자리 · 줄바꿈은 접는다).
+    pub bio: String,
     /// 이메일(없으면 빈 값).
     pub email: String,
     /// 전화번호(없으면 빈 값).
@@ -70,9 +72,15 @@ impl PeerInfoWidget {
             scale: 1.0,
             info,
             closed: false,
-            verify: crate::controls::Button::new("일치 확인 — 대조 완료로 표시"),
+            // 08-17 사용자 확정 — 대조 완료 = 안전(초록) · 인증 취소 = 되돌림(붉은
+            // 벽돌). 흰 글씨. 카드 본문 폰트(Status)에 맞춘다.
+            verify: crate::controls::Button::new(nbeep_core::t(nbeep_core::Msg::CardVerifyBtn))
+                .with_tone(crate::controls::ButtonTone::Safe)
+                .with_font(crate::draw::FontSlot::Status),
             verify_req: false,
-            unverify: crate::controls::Button::new("인증 취소"),
+            unverify: crate::controls::Button::new(nbeep_core::t(nbeep_core::Msg::CardUnverifyBtn))
+                .with_tone(crate::controls::ButtonTone::Danger)
+                .with_font(crate::draw::FontSlot::Status),
             unverify_req: false,
         }
     }
@@ -112,17 +120,18 @@ impl Widget for PeerInfoWidget {
 
     fn set_bounds(&mut self, bounds: Rect, inv: &mut Invalidations) {
         self.bounds = bounds;
-        // 대조 버튼(M3-6) — 하단 안내 위 · 중앙(결정적 순간의 단일 표적).
-        let (bw, bh) = (self.s(230), self.s(30));
-        let slot_y = bounds.bottom() - self.s(72);
+        // 대조/인증 취소 버튼(M3-6) — 하단 안내 위 · 중앙. 08-17: 카드 본문
+        // 폰트(Status)에 맞춰 **작게**(높이 26 · 폭도 축소).
+        let bh = self.s(26);
+        let slot_y = bounds.bottom() - self.s(64);
+        let bw = self.s(190);
         self.verify.set_scale(self.scale);
         self.verify.set_bounds(
             Rect::new(bounds.x + (bounds.w - bw) / 2, slot_y, bw, bh),
             inv,
         );
-        // 인증 취소 버튼 — 검증 완료 상태 전용. 좁게(140) 중앙, 같은 하단 슬롯
-        // (verify와 상호 배타라 자리를 공유한다).
-        let uw = self.s(140);
+        // 인증 취소 — 좁게(110) 중앙, 같은 슬롯(verify와 상호 배타).
+        let uw = self.s(110);
         self.unverify.set_scale(self.scale);
         self.unverify.set_bounds(
             Rect::new(bounds.x + (bounds.w - uw) / 2, slot_y, uw, bh),
@@ -175,48 +184,56 @@ impl Widget for PeerInfoWidget {
                 crate::theme::Color((u32::from(br) << 16) | (u32::from(bg) << 8) | u32::from(bb));
             ctx.stroke_ellipse(av, c, self.s(3).max(3) as f32);
         }
-        // 기본 이름(굵게 · 중앙).
+        use nbeep_core::{t, Msg};
+        // 큰 이름(굵게 · 중앙) = 표시 이름(프로필名 우선·없으면 발견名 · 08-17
+        // — 목록과 같은 규약. 신원은 여전히 아래 키 지문).
+        let big = if self.info.profile_name.is_empty() {
+            &self.info.name
+        } else {
+            &self.info.profile_name
+        };
         ctx.select_font_sized(FontSlot::Base, true, 3.0);
-        let tw = ctx.text_width(&self.info.name);
+        let tw = ctx.text_width(big);
         ctx.text(
             b.x + (b.w - tw) / 2,
             av.bottom() + self.s(14),
             b,
-            &self.info.name,
+            big,
             theme.text,
         );
-        // 프로필 이름(있으면 아래 — 회색).
+        // 소개글(있으면 아래 — 회색·작은 폰트·줄바꿈 접음 · 08-17 사용자 요청:
+        // 종전엔 이름이 두 번 나왔다). 목록 2번째 줄과 같은 자리·규약.
         let mut y = av.bottom() + self.s(14) + ctx.text_height() + self.s(6);
-        if !self.info.profile_name.is_empty() {
-            ctx.select_font(FontSlot::Base, false);
-            let tw = ctx.text_width(&self.info.profile_name);
-            ctx.text(
-                b.x + (b.w - tw) / 2,
-                y,
-                b,
-                &self.info.profile_name,
-                theme.text_dim,
-            );
+        let bio_one: String = self
+            .info
+            .bio
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        if !bio_one.is_empty() {
+            ctx.select_font(FontSlot::Status, false);
+            let tw = ctx.text_width(&bio_one);
+            ctx.text(b.x + (b.w - tw) / 2, y, b, &bio_one, theme.text_dim);
             y += ctx.text_height() + self.s(12);
         } else {
             y += self.s(8);
         }
-        // 상세 행(라벨: 값) — 없는 항목은 "(비공개)"로 명시(없음과 미공개를 숨기지 않는다).
+        // 상세 행(라벨 · 값) — 빈 값은 (비공개)/(기록 없음)으로 명시. 08-17 i18n.
         ctx.select_font(FontSlot::Status, false);
-        let rows = [
-            ("이메일", &self.info.email),
-            ("전화번호", &self.info.phone),
-            ("최근 접속", &self.info.last_seen),
-            ("최근 대화", &self.info.last_chat),
+        let rows: [(&str, &str, bool); 4] = [
+            (t(Msg::FieldEmail), &self.info.email, false),
+            (t(Msg::FieldPhone), &self.info.phone, false),
+            (t(Msg::CardLastSeen), &self.info.last_seen, true),
+            (t(Msg::CardLastChat), &self.info.last_chat, true),
         ];
         let x = b.x + self.s(28);
-        for (label, val) in rows {
+        for (label, val, is_time) in rows {
             // 연락처의 빈 값 = 미공개, 시각의 빈 값 = 기록 없음(뜻이 다르다).
             let shown = if val.is_empty() {
-                if matches!(label, "최근 접속" | "최근 대화") {
-                    "(기록 없음)"
+                if is_time {
+                    t(Msg::CardNoRecord)
                 } else {
-                    "(비공개)"
+                    t(Msg::CardPrivate)
                 }
             } else {
                 val
@@ -224,13 +241,12 @@ impl Widget for PeerInfoWidget {
             ctx.text(x, y, b, &format!("{label}  ·  {shown}"), theme.text);
             y += ctx.text_height() + self.s(8);
         }
-        // 신선도(M3-21 ③) — 이 카드 내용이 언제 받은 것인지. 캐시가 낡았을 수
-        // 있음을 사용자가 안다(카드 열기 pull이 곧 갱신하지만, 비연결이면 이대로).
+        // 신선도(M3-21 ③) — 이 카드 내용이 언제 받은 것인지(08-17 i18n).
         let img = match (self.info.has_image, self.info.received.is_empty()) {
-            (true, false) => format!("이미지  ·  캐시됨  ·  {} 수신", self.info.received),
-            (true, true) => "이미지  ·  캐시됨".into(),
-            (false, false) => format!("프로필  ·  {} 수신", self.info.received),
-            (false, true) => "이미지  ·  (없음/비공개)".into(),
+            (true, false) => nbeep_core::tf(Msg::CardImageCachedAt, &[&self.info.received]),
+            (true, true) => t(Msg::CardImageCached).to_string(),
+            (false, false) => nbeep_core::tf(Msg::CardProfileAt, &[&self.info.received]),
+            (false, true) => t(Msg::CardImageNone).to_string(),
         };
         ctx.text(x, y, b, &img, theme.text_dim);
         y += ctx.text_height() + self.s(8);
@@ -238,48 +254,35 @@ impl Widget for PeerInfoWidget {
             x,
             y,
             b,
-            &format!(
-                "{}  ·  {}",
-                nbeep_core::t(nbeep_core::Msg::FingerprintLabel),
-                self.info.fingerprint
-            ),
+            &format!("{}  ·  {}", t(Msg::FingerprintLabel), self.info.fingerprint),
             theme.text_dim,
         );
         y += ctx.text_height() + self.s(14);
-        // ── 안전 번호(M3-6 · SAS) — 두 화면에 같은 60자리가 뜬다. 고정폭으로
-        //    6그룹×2줄(줄이 흔들리면 눈 대조가 어긋난다 — Mono 슬롯이 그 자리).
+        // ── 지문 대조(M3-6) — 08-17 사용자 확정: 60자리 SAS는 숨기고 위 키 지문만
+        //    다른 채널로 대조. safety_number는 "대조 가능한 상대" 게이트로만 쓴다.
         if !self.info.safety_number.is_empty() {
             ctx.select_font(FontSlot::Status, false);
-            ctx.text(x, y, b, "안전 번호  ·  전화·대면으로 직접 대조", theme.text);
+            ctx.text(x, y, b, t(Msg::CardVerifyPrompt), theme.text);
             y += ctx.text_height() + self.s(6);
-            ctx.select_font(FontSlot::Mono, false);
-            let groups: Vec<&str> = self.info.safety_number.split(' ').collect();
-            for line in groups.chunks(6) {
-                let t = line.join("  ");
-                let tw = ctx.text_width(&t);
-                ctx.text(b.x + (b.w - tw) / 2, y, b, &t, theme.text);
-                y += ctx.text_height() + self.s(4);
-            }
-            ctx.select_font(FontSlot::Status, false);
             if self.info.verified {
-                // 완료 문구는 흐름 y에, "인증 취소" 버튼은 하단 슬롯에(겹치지 않게
-                // 버튼 위에 고정 배치 — 흐름 y가 슬롯을 침범하면 위로 끌어올린다).
-                let t = "✓ 지문 대조 완료 — 이 키는 사람이 확인했습니다";
-                let tw = ctx.text_width(t);
+                // 완료 문구는 흐름 y, 버튼은 하단 슬롯(겹치면 문구를 위로 끌어올림).
+                let vt = t(Msg::CardVerified);
+                let tw = ctx.text_width(vt);
                 let btn_top = self.unverify.bounds().y;
                 let ty = (y + self.s(6)).min(btn_top - ctx.text_height() - self.s(10));
-                ctx.text(b.x + (b.w - tw) / 2, ty, b, t, theme.ok);
+                ctx.text(b.x + (b.w - tw) / 2, ty, b, vt, theme.ok);
                 self.unverify.paint(ctx, theme);
             } else {
                 self.verify.paint(ctx, theme);
             }
         }
-        // 하단 안내.
+        // 하단 안내 — 08-17: 이메일 행과 같은 작은 폰트(Status) · i18n.
+        ctx.select_font(FontSlot::Status, false);
         ctx.text(
             x,
-            b.bottom() - self.s(26),
+            b.bottom() - self.s(24),
             b,
-            "Esc = 닫기 · 신원은 이름이 아니라 키 지문입니다",
+            t(Msg::CardFooter),
             theme.text_dim,
         );
     }

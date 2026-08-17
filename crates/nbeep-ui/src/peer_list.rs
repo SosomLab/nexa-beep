@@ -100,10 +100,6 @@ pub struct PeerRow {
     /// 같은 표시 이름을 **다른 키**가 쓴다(M3-14 — v1에서 사칭을 드러내는 유일한
     /// 가시 신호 · 등급 아이콘 옆 `badge-alert` 덧붙는 표식).
     pub conflict: bool,
-    /// 마지막 접속 상대 표기(08-17 — 우클릭 삭제 메뉴가 "언제 마지막 봤는지"를
-    /// 보여준다. 빈 값 = 기록 없음. 벽시계 상대 시각은 호스트만 계산할 수 있어
-    /// 여기 라벨로 실어 보낸다).
-    pub last_seen_label: String,
 }
 
 /// 목록 행에 그릴 전송 진행 상태.
@@ -986,19 +982,6 @@ impl Widget for PeerListWidget {
                             self.selected.clear();
                         }
                         let n = self.selected.len().max(1);
-                        // 삭제 항목(08-17) — 라벨에 마지막 접속 상대 시각을 함께 실어
-                        // "언제 마지막 봤는지" 보고 지울 수 있게(기록 없으면 시각 생략).
-                        let last = self
-                            .rows
-                            .iter()
-                            .find(|r| r.entry.peer == peer)
-                            .map(|r| r.last_seen_label.clone())
-                            .unwrap_or_default();
-                        let forget_label = if last.is_empty() {
-                            "목록에서 삭제".to_string()
-                        } else {
-                            format!("목록에서 삭제 · 마지막 접속 {last}")
-                        };
                         vec![
                             crate::controls::CtxItem::item("profile", "프로필 보기"),
                             crate::controls::CtxItem::item(
@@ -1014,7 +997,7 @@ impl Widget for PeerListWidget {
                                 format!("그룹 만들기 ({n}명)"),
                             ),
                             crate::controls::CtxItem::Separator,
-                            crate::controls::CtxItem::item("forget", forget_label),
+                            crate::controls::CtxItem::item("forget", "목록에서 삭제"),
                         ]
                     } else {
                         return;
@@ -1706,7 +1689,6 @@ mod tests {
             fav: false,
             blocked: false,
             conflict: false,
-            last_seen_label: String::new(),
         }
     }
     fn widget(names: &[(u8, &str)]) -> (PeerListWidget, Invalidations) {

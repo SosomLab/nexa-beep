@@ -31,7 +31,7 @@ pub mod timeout_button;
 pub mod toolbar;
 pub mod tree;
 
-pub use button::{Button, ButtonMode, ImageFit};
+pub use button::{Button, ButtonMode, ButtonTone, ImageFit};
 pub use carousel::Carousel;
 pub use checkbox::Checkbox;
 pub use colorpick::ColorPicker;

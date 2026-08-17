@@ -37,6 +37,28 @@ pub enum ButtonMode {
     Image(ImageFit),
 }
 
+/// 색을 눌림 상태에서 약간 어둡게(색조 유지 · 08-17). `Color`는 `0x00RRGGBB`.
+fn dim_if(c: crate::theme::Color, pressed: bool) -> crate::theme::Color {
+    if !pressed {
+        return c;
+    }
+    let v = c.0;
+    let ch = |sh: u32| ((v >> sh) & 0xFF) * 80 / 100; // 80%로 어둡게
+    crate::theme::Color((ch(16) << 16) | (ch(8) << 8) | ch(0))
+}
+
+/// 버튼 색조(08-17) — 위험도를 배경색으로 신호(색 위 흰 글씨). 기본은 중립.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum ButtonTone {
+    /// 중립(테마 field_bg — 종전 기본).
+    #[default]
+    Default,
+    /// 안전한 확정(초록 = theme.ok · 예: 지문 대조 완료).
+    Safe,
+    /// 되돌림·위험(붉은 벽돌 = theme.danger · 예: 인증 취소).
+    Danger,
+}
+
 /// 버튼 컨트롤(이미지 버튼 포함 — 별도 컨트롤로 나누지 않음 · 사용자 확정).
 #[derive(Debug)]
 pub struct Button {
@@ -49,6 +71,10 @@ pub struct Button {
     image_leading: bool,
     pressed: bool,
     clicked: bool,
+    /// 색조(08-17 — 배경색으로 위험도 신호). 기본 중립.
+    tone: ButtonTone,
+    /// 라벨 폰트 슬롯(08-17 — 카드 등 작은 폰트에 맞추려면 Status). 기본 Base.
+    font: FontSlot,
 }
 
 impl Button {
@@ -63,6 +89,8 @@ impl Button {
             image_leading: false,
             pressed: false,
             clicked: false,
+            tone: ButtonTone::Default,
+            font: FontSlot::Base,
         }
     }
 
@@ -77,7 +105,23 @@ impl Button {
             image_leading: false,
             pressed: false,
             clicked: false,
+            tone: ButtonTone::Default,
+            font: FontSlot::Base,
         }
+    }
+
+    /// 색조 지정(체이닝 · 08-17) — Safe(초록)·Danger(붉은 벽돌)는 흰 글씨.
+    #[must_use]
+    pub fn with_tone(mut self, tone: ButtonTone) -> Self {
+        self.tone = tone;
+        self
+    }
+
+    /// 라벨 폰트 슬롯 지정(체이닝 · 08-17) — 카드 본문에 맞추려면 Status.
+    #[must_use]
+    pub fn with_font(mut self, font: FontSlot) -> Self {
+        self.font = font;
+        self
     }
 
     /// 선행 이미지 지정(체이닝).
@@ -243,17 +287,27 @@ impl Widget for Button {
                 ctx.stroke_round_rect(b, radius, theme.border, 1.0);
             }
             ButtonMode::Normal => {
-                let bg = if self.pressed {
-                    theme.sel_bg
-                } else {
-                    theme.field_bg
+                // 색조(08-17) — Safe/Danger는 테마 색 배경 + 흰 글씨(가시성). 눌림은
+                // 살짝 어둡게(색조 유지). 중립은 종전 그대로.
+                let on = crate::theme::Color(0x00FF_FFFF); // 색 위 흰 글씨
+                let (bg, fg) = match self.tone {
+                    ButtonTone::Default => (
+                        if self.pressed {
+                            theme.sel_bg
+                        } else {
+                            theme.field_bg
+                        },
+                        theme.text,
+                    ),
+                    ButtonTone::Safe => (dim_if(theme.ok, self.pressed), on),
+                    ButtonTone::Danger => (dim_if(theme.danger, self.pressed), on),
                 };
                 ctx.fill_round_rect(b, radius, bg);
                 ctx.stroke_round_rect(b, radius, theme.border, 1.0);
 
                 // 아이콘 변 = 공용 단일 원천(콤보/Choose/트리와 동일 — 드리프트 방지).
                 let icon = self.s(super::LEADING_ICON);
-                ctx.select_font(FontSlot::Base, false);
+                ctx.select_font(self.font, false);
                 let th = ctx.text_height();
                 let label_w = self.label.as_deref().map_or(0, |l| ctx.text_width(l));
                 let (img_x, text_x) = Self::normal_positions(
@@ -276,7 +330,7 @@ impl Widget for Button {
                     ctx.image_scaled(fit, img, b);
                 }
                 if let (Some(x), Some(label)) = (text_x, self.label.as_deref()) {
-                    ctx.text(x, text_y, b, label, theme.text);
+                    ctx.text(x, text_y, b, label, fg);
                 }
             }
         }
