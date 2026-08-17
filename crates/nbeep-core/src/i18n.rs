@@ -446,6 +446,8 @@ pub enum Msg {
     ServerTypeRelay,
     ServerTypeContent,
     ServerTypeRegistered,
+    SendDelivered,
+    SendDeliveredDesc,
     // ── 그룹 (M5-1 · ADR-0012) ──
     /// 카테고리: 그룹.
     CatGroup,
@@ -467,6 +469,18 @@ impl Msg {
     const fn row(self) -> [&'static str; 4] {
         match self {
             Msg::CatConversation => ["Conversation", "대화", "对话", "会話"],
+            Msg::SendDelivered => [
+                "Send delivery receipts",
+                "수신 확인 보내기",
+                "发送送达回执",
+                "配信確認を送る",
+            ],
+            Msg::SendDeliveredDesc => [
+                "Let senders know their message reached you (verified peers only). Off = you stay silent.",
+                "상대가 보낸 메시지가 나에게 닿았음을 알립니다(검증된 상대만). 끄면 확인을 보내지 않습니다.",
+                "让发送者知道消息已送达（仅限已验证的对方）。关闭 = 不发送回执。",
+                "相手のメッセージが届いたことを知らせます（検証済みの相手のみ）。オフ = 送りません。",
+            ],
             Msg::CatAppearance => ["Appearance", "모양", "外观", "外観"],
             Msg::CatFont => ["Font", "글꼴", "字体", "フォント"],
             Msg::CatTypeahead => ["Type-ahead", "타입어헤드", "预输入", "先行入力"],

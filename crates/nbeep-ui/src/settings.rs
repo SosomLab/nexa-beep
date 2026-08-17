@@ -275,6 +275,16 @@ pub fn registry() -> &'static [Entry] {
             ]),
             key: "chat.date_format",
         },
+        // 수신 확인(N-2 · ADR-0010 §5 · 사용자 요청 08-17 — **수신자 제어**). 기본 on ·
+        // 켜도 검증된 상대에게만 자동 Delivered(미검증엔 안 보냄 — 프라이버시 게이트).
+        Entry {
+            cat: Msg::CatConversation,
+            sub: None,
+            label: Msg::SendDelivered,
+            desc: Msg::SendDeliveredDesc,
+            kind: SettingKind::Toggle,
+            key: "chat.send_delivered",
+        },
         // 알림(M3-8 최소 슬라이스) — 표시 on/off + 본문 미리보기(기본 끔 = FR-S-42 결).
         Entry {
             cat: Msg::CatConversation,

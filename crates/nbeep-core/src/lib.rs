@@ -12,6 +12,7 @@
 // 테스트 코드는 unwrap 허용(docs/13 §9 — 금지는 프로덕션 경로 한정).
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
+pub mod ack;
 pub mod action;
 pub mod avatar;
 pub mod chat;
@@ -42,6 +43,7 @@ pub mod xfer_policy;
 pub mod testkit;
 
 // ── 편의 재수출(공개 표면 설계 — 내부 모듈 경로를 그대로 노출하지 않는다) ──
+pub use ack::{AckKind, ChatAck, ACK_TAG};
 pub use action::{ActionKind, FailCode, Outcome, RejectCode, RiskLevel, ScanOutcome};
 pub use chat::{
     fanout, ChatMessage, DedupIndex, FanoutReport, Importance, MessageBody, Sequencer, WireError,

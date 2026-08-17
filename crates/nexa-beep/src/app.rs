@@ -143,6 +143,12 @@ enum AppEvent {
     },
     /// **수신 종단 확인**(M4-9) — 상대가 격리까지 마쳤(`ok=true`)거나 실패(`ok=false`)했다.
     XferAcked { peer: PeerId, ok: bool },
+    /// 대화 수신 확인 도착(N-2 · ADR-0010 §5) — 내가 보낸 메시지(seq)가 전달/확인됨.
+    ChatAck {
+        peer: PeerId,
+        target_seq: u64,
+        kind: nbeep_core::AckKind,
+    },
     /// 수동 주소 연결 실패(DR-19 · M2-8 잔여 — 워커에서 돌아온다. 성공은 `Outbound`).
     AddFailed { addr: String, why: String },
     /// 공유 그룹 프레임 도착(M5-1g · ADR-0012) — 검증·적용은 메인(명부 단일 지점).
@@ -716,6 +722,19 @@ fn spawn_session_actor(
                 }
                 // 프로필 수신(Control — M3-17). 요청은 메인으로 올리고(정책 단일 지점),
                 // 응답은 여기서 조립해 완성본만 올린다(대용량 조립이 메인을 막지 않게).
+                StreamId::Control if nbeep_core::ChatAck::decode(&bytes).is_some() => {
+                    // 수신 확인(N-2) — 태그로 프로필과 구분. 도착만 메인에 올린다.
+                    if let Some(ack) = nbeep_core::ChatAck::decode(&bytes) {
+                        let ev = AppEvent::ChatAck {
+                            peer,
+                            target_seq: ack.target_seq,
+                            kind: ack.kind,
+                        };
+                        if proxy.send_event(ev).is_err() {
+                            return;
+                        }
+                    }
+                }
                 StreamId::Control => match nbeep_core::ProfileMsg::decode(&bytes) {
                     Some(nbeep_core::ProfileMsg::Request) => {
                         if proxy
@@ -8084,6 +8103,25 @@ impl ApplicationHandler<AppEvent> for App {
                     conv.lines.push(line.clone());
                 }
                 self.record_history(peer); // 대화 기록 영속(M2-5b · 빌림 밖)
+                                           // ★ 수신 확인(N-2 · 사용자 요청 08-17) — **수신자가 설정으로 제어**.
+                                           //   `chat.send_delivered`가 켜져 있고, **검증된 상대**일 때만 자동
+                                           //   Delivered를 되쏜다(프라이버시: 미검증에게 "받았다/온라인"을 안
+                                           //   흘린다 — 알림 신뢰 게이트와 같은 결). 사람 확인(Acknowledged)은
+                                           //   수동 버튼(M3-9). 액터가 아니라 여기서 — 설정이 단일 원천(hot-swap).
+                {
+                    use nbeep_core::TrustStore as _;
+                    let on = self.settings.get("chat.send_delivered") == "on";
+                    let verified = self.trust.level(peer) != nbeep_core::TrustLevel::Unverified;
+                    if on && verified {
+                        if let Some(conv) = self.conversations.get(&peer) {
+                            let ack = nbeep_core::ChatAck {
+                                target_seq: seq,
+                                kind: nbeep_core::AckKind::Delivered,
+                            };
+                            let _ = conv.out_tx.send(SessionCmd::Control(vec![ack.encode()]));
+                        }
+                    }
+                }
                 let mut inv = Invalidations::default();
                 if let Some(chat) = self.chats.get_mut(&peer) {
                     chat.push_line(line, &mut inv);
@@ -8103,6 +8141,29 @@ impl ApplicationHandler<AppEvent> for App {
                 );
                 // 이 대화가 보이는 창을 다시 그린다.
                 self.redraw_conversation(peer);
+            }
+            AppEvent::ChatAck {
+                peer,
+                target_seq,
+                kind,
+            } => {
+                // 수신 확인 도착(N-2) — 내가 보낸 seq가 전달/확인됐다. 스레드 배지·
+                // 발신자 상태 표시(M3-9)는 잔여 · 지금은 상태바로 왕복을 확인한다.
+                use nbeep_core::AckKind;
+                self.status = match kind {
+                    AckKind::Delivered => {
+                        format!("전달 확인 — {} (seq={target_seq})", self.peer_title(peer))
+                    }
+                    AckKind::Acknowledged => {
+                        format!(
+                            "상대가 확인함 — {} (seq={target_seq})",
+                            self.peer_title(peer)
+                        )
+                    }
+                };
+                if let Some(mid) = self.main_id {
+                    self.request_redraw(mid);
+                }
             }
             AppEvent::XferOffer {
                 peer,
