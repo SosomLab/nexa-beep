@@ -561,11 +561,13 @@ impl TextBox {
         }
         drop(lay);
         // 스크롤바 오버레이(08-18 · 대화 입력창과 동일) — 상하+좌우 · 자동 숨김.
+        // content_w에 좌우 여백 s(20)을 더해 스크롤 범위를 max_hs와 맞춘다(끝 글자
+        // 가림 수정 · on_event와 같은 값).
         self.ml_bars.paint(
             ctx,
             theme,
             b,
-            content_w.max(avail),
+            (content_w + self.s(20)).max(b.w),
             content_h.max(b.h),
             hs,
             (top as i32) * lh,
@@ -646,10 +648,14 @@ impl Widget for TextBox {
             let vp = self.base.bounds;
             let (cw, ch) = self.ml_content.get();
             let line_h = self.line_h();
+            // ★ 스크롤바는 뷰포트를 vp.w로 보지만 실제 텍스트 뷰포트는 좌우 여백
+            //   s(20)을 뺀 값이다(08-18 실기: 끝 ~2글자가 여백만큼 안 보였다).
+            //   content_w에 그 여백을 더해 스크롤 범위를 paint의 max_hs와 맞춘다.
+            let cw_bars = cw + self.s(20);
             let (nx, ny, consumed) = self.ml_bars.on_event(
                 ev,
                 vp,
-                cw.max(vp.w),
+                cw_bars.max(vp.w),
                 ch.max(vp.h),
                 self.mhscroll.get(),
                 (self.vscroll.get() as i32) * line_h,
