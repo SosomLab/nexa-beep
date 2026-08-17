@@ -49,7 +49,7 @@ pub use chat::{
     fanout, ChatMessage, DedupIndex, FanoutReport, Importance, MessageBody, Sequencer, WireError,
 };
 pub use group::{Group, GroupId, GroupStore};
-pub use i18n::{current_lang, set_lang, t, tr, Lang, Msg};
+pub use i18n::{current_lang, set_lang, t, tf, tr, Lang, Msg};
 pub use identity::{DeviceId, PeerId, Recipients, TrustLevel, UserId};
 pub use link::{Link, LinkError};
 pub use linkwatch::{Debouncer, LinkEvent};

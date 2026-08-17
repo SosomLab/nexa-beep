@@ -450,6 +450,16 @@ pub enum Msg {
     SendDeliveredDesc,
     SendRead,
     SendReadDesc,
+    // 파일 전송 스레드 메시지(i18n-1 · 08-17 · 대화에 남는 영구 텍스트)
+    XferDeclined,
+    XferCanceled,
+    XferTimeoutReject,
+    XferTimeoutCancel,
+    XferPeerFailed,
+    XferQuarantined,
+    XferRisk,
+    XferMismatch,
+    XferAvg,
     // ── 그룹 (M5-1 · ADR-0012) ──
     /// 카테고리: 그룹.
     CatGroup,
@@ -490,6 +500,30 @@ impl Msg {
                 "打开对话读取消息时通知对方已读（仅限已验证的对方）。与送达独立。关闭 = 不发送。",
                 "チャットを開いて読むと既読を知らせます（検証済みの相手のみ）。配信とは独立。オフ = 送りません。",
             ],
+            Msg::XferDeclined => ["Declined", "거절함", "已拒绝", "拒否しました"],
+            Msg::XferCanceled => ["Canceled", "취소함", "已取消", "キャンセルしました"],
+            Msg::XferTimeoutReject => [
+                "No response — declined on timeout",
+                "응답 없음 — 시간 초과로 거절",
+                "无响应 — 超时拒绝",
+                "応答なし — タイムアウトで拒否",
+            ],
+            Msg::XferTimeoutCancel => [
+                "No response — canceled on timeout",
+                "응답 없음 — 시간 초과로 취소",
+                "无响应 — 超时取消",
+                "応答なし — タイムアウトでキャンセル",
+            ],
+            Msg::XferPeerFailed => [
+                "Peer could not receive (integrity/save failed)",
+                "상대가 받지 못함(무결성·저장 실패)",
+                "对方无法接收（完整性/保存失败）",
+                "相手が受信できませんでした（整合性・保存失敗）",
+            ],
+            Msg::XferQuarantined => ["Quarantined", "격리됨", "已隔离", "隔離済み"],
+            Msg::XferRisk => ["risk", "위험", "风险", "リスク"],
+            Msg::XferMismatch => ["type mismatch", "형식 불일치", "类型不匹配", "形式不一致"],
+            Msg::XferAvg => ["avg", "평균", "平均", "平均"],
             Msg::CatAppearance => ["Appearance", "모양", "外观", "外観"],
             Msg::CatFont => ["Font", "글꼴", "字体", "フォント"],
             Msg::CatTypeahead => ["Type-ahead", "타입어헤드", "预输入", "先行入力"],
@@ -1478,6 +1512,28 @@ pub fn t(msg: Msg) -> &'static str {
     tr(current_lang(), msg)
 }
 
+/// 인자 있는 번역(i18n-1 · 08-17) — 번역 템플릿의 `{}`를 **순서대로** `args`로
+/// 치환한다. 정적 `t()`로는 못 담는 동적 문자열(파일명·수·오류 등)용. 언어마다
+/// 어순이 달라도 템플릿이 언어별로 다르므로 `{}` 위치가 자연스럽게 맞는다.
+/// `{}`보다 args가 적으면 남은 `{}`는 그대로 둔다(누락 티가 나게 · fail-visible).
+#[must_use]
+pub fn tf(msg: Msg, args: &[&str]) -> String {
+    let template = t(msg);
+    let mut out = String::with_capacity(template.len() + 16);
+    let mut rest = template;
+    let mut it = args.iter();
+    while let Some(pos) = rest.find("{}") {
+        out.push_str(&rest[..pos]);
+        match it.next() {
+            Some(a) => out.push_str(a),
+            None => out.push_str("{}"), // args 소진 — 자리 유지
+        }
+        rest = &rest[pos + 2..];
+    }
+    out.push_str(rest);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1501,6 +1557,14 @@ mod tests {
                 assert!(!tr(lang, k).is_empty(), "{lang:?}/{k:?} 비어 있음");
             }
         }
+    }
+
+    #[test]
+    fn tf_replaces_in_order() {
+        set_lang(Lang::En);
+        // 임의 템플릿 키로 순서 치환 검증(Theme는 '{}' 없어 그대로).
+        assert_eq!(tf(Msg::Theme, &["x"]), "Theme"); // {} 없으면 원문
+        set_lang(Lang::En);
     }
 
     #[test]

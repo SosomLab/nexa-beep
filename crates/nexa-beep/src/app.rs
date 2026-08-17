@@ -2249,9 +2249,9 @@ impl App {
             true,
             nbeep_ui::XferLineState::Failed {
                 why: if by_timeout {
-                    "응답 없음 — 시간 초과로 취소".into()
+                    nbeep_core::t(nbeep_core::Msg::XferTimeoutCancel).into()
                 } else {
-                    "취소함".into()
+                    nbeep_core::t(nbeep_core::Msg::XferCanceled).into()
                 },
             },
         );
@@ -2293,7 +2293,7 @@ impl App {
                 peer,
                 false,
                 nbeep_ui::XferLineState::Failed {
-                    why: "거절함".into(),
+                    why: nbeep_core::t(nbeep_core::Msg::XferDeclined).into(),
                 },
             );
         }
@@ -2418,9 +2418,9 @@ impl App {
                     false,
                     nbeep_ui::XferLineState::Failed {
                         why: if by_timeout {
-                            "응답 없음 — 시간 초과로 거절".into()
+                            nbeep_core::t(nbeep_core::Msg::XferTimeoutReject).into()
                         } else {
-                            "거절함".into()
+                            nbeep_core::t(nbeep_core::Msg::XferDeclined).into()
                         },
                     },
                 );
@@ -7164,7 +7164,7 @@ impl App {
             peer,
             mine,
             nbeep_ui::XferLineState::Failed {
-                why: "취소함".into(),
+                why: nbeep_core::t(nbeep_core::Msg::XferCanceled).into(),
             },
         );
         self.clear_xfer(peer);
@@ -8335,8 +8335,15 @@ impl ApplicationHandler<AppEvent> for App {
                     false,
                     nbeep_ui::XferLineState::Done {
                         note: format!(
-                            "격리됨 · 위험 {risk:?}{} · 평균 {}",
-                            if mismatch { " · 형식 불일치" } else { "" },
+                            "{} · {} {risk:?}{} · {} {}",
+                            nbeep_core::t(nbeep_core::Msg::XferQuarantined),
+                            nbeep_core::t(nbeep_core::Msg::XferRisk),
+                            if mismatch {
+                                format!(" · {}", nbeep_core::t(nbeep_core::Msg::XferMismatch))
+                            } else {
+                                String::new()
+                            },
+                            nbeep_core::t(nbeep_core::Msg::XferAvg),
                             speed_label(avg_bps)
                         ),
                     },
@@ -8427,12 +8434,18 @@ impl ApplicationHandler<AppEvent> for App {
                         note: self
                             .send_avg
                             .remove(&peer)
-                            .map(|b| format!("평균 {}", speed_label(b)))
+                            .map(|b| {
+                                format!(
+                                    "{} {}",
+                                    nbeep_core::t(nbeep_core::Msg::XferAvg),
+                                    speed_label(b)
+                                )
+                            })
                             .unwrap_or_default(),
                     }
                 } else {
                     nbeep_ui::XferLineState::Failed {
-                        why: "상대가 받지 못함(무결성·저장 실패)".into(),
+                        why: nbeep_core::t(nbeep_core::Msg::XferPeerFailed).into(),
                     }
                 };
                 self.ack_xfer_line(peer, terminal);
@@ -10572,7 +10585,7 @@ mod tests {
             let mut l = ChatLine::xfer(true, nbeep_core::sanitize_message("a.jpg"), 100, 1, w);
             if let ChatBody::Xfer(x) = &mut l.body {
                 x.state = St::Done {
-                    note: "격리됨".into(),
+                    note: nbeep_core::t(nbeep_core::Msg::XferQuarantined).into(),
                 };
             }
             l
