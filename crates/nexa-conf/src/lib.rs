@@ -52,7 +52,10 @@ pub fn parse(text: &str) -> Doc {
         if k == "_schema" {
             doc.schema = v.trim().parse().unwrap_or(0);
         } else {
-            doc.pairs.push((k.to_string(), v.to_string()));
+            // 줄 분리자(U+2028/2029)로 저장된 개행을 복원(08-18 — 멀티라인 값
+            // 왕복 · serialize의 역). 경로의 역슬래시와 충돌하지 않는다.
+            let v = v.replace('\u{2028}', "\n").replace('\u{2029}', "\r");
+            doc.pairs.push((k.to_string(), v));
         }
     }
     doc
@@ -60,7 +63,10 @@ pub fn parse(text: &str) -> Doc {
 
 /// 직렬화 — `_schema` 먼저, 아는 키(호출자 순서), 그 뒤 미지 키 **그대로 재방출**
 /// (F-1 정정: 구버전이 저장해도 신버전 키가 살아남는다).
-/// 값 속 개행은 공백으로 바꾼다(한 줄 = 한 키 불변식 보호).
+/// 값 속 개행은 **줄 분리자 U+2028/2029로 치환**해 한 줄 = 한 키 불변식을 지키되
+/// **왕복 보존**한다(08-18 — 멀티라인 소개글 등). `str::lines()`는 U+2028/2029로
+/// 줄을 나누지 않으므로 값이 한 물리 줄에 머문다. parse가 역치환한다. ★ `\n`→`\\n`
+/// 이스케이프는 Windows 경로(`C:\new` → `\n`)와 충돌하므로 쓰지 않는다.
 #[must_use]
 pub fn serialize(known: &[(&str, &str)], unknown: &[(String, String)]) -> String {
     let mut out = String::with_capacity(64 + (known.len() + unknown.len()) * 24);
@@ -71,7 +77,11 @@ pub fn serialize(known: &[(&str, &str)], unknown: &[(String, String)]) -> String
         out.push_str(k);
         out.push('=');
         for ch in v.chars() {
-            out.push(if ch == '\n' || ch == '\r' { ' ' } else { ch });
+            out.push(match ch {
+                '\n' => '\u{2028}',
+                '\r' => '\u{2029}',
+                c => c,
+            });
         }
         out.push('\n');
     };
@@ -404,12 +414,28 @@ mod tests {
         let _ = fs::remove_dir_all(&d);
     }
 
-    /// 개행이 값에 들어와도 한 줄 = 한 키 불변식이 깨지지 않는다.
+    /// 개행이 값에 들어와도 ① 한 줄 = 한 키 불변식이 깨지지 않고(직렬화 결과는
+    /// `_schema` 줄 + 키 줄 = 2줄) ② **왕복 보존**된다(08-18 — U+2028/2029).
     #[test]
-    fn newline_in_value_sanitized() {
+    fn newline_in_value_round_trips() {
         let text = serialize(&[("k", "a\nb\rc")], &[]);
+        assert_eq!(
+            text.lines().count(),
+            2,
+            "값 속 개행이 물리 줄을 늘리지 않는다"
+        );
         let doc = parse(&text);
-        assert_eq!(doc.pairs, vec![("k".to_string(), "a b c".to_string())]);
+        assert_eq!(doc.pairs, vec![("k".to_string(), "a\nb\rc".to_string())]);
+    }
+
+    /// ★ Windows 경로(역슬래시)는 개행 복원과 충돌하지 않는다(`\n`→개행 이스케이프
+    /// 를 안 쓰는 이유). `C:\new` 가 `C:`+개행+`ew` 로 깨지지 않는다.
+    #[test]
+    fn backslash_path_survives() {
+        let p = r"C:\new\readme.txt";
+        let text = serialize(&[("path", p)], &[]);
+        let doc = parse(&text);
+        assert_eq!(doc.pairs, vec![("path".to_string(), p.to_string())]);
     }
 
     #[test]
