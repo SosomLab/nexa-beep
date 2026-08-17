@@ -100,6 +100,10 @@ pub struct PeerRow {
     /// 같은 표시 이름을 **다른 키**가 쓴다(M3-14 — v1에서 사칭을 드러내는 유일한
     /// 가시 신호 · 등급 아이콘 옆 `badge-alert` 덧붙는 표식).
     pub conflict: bool,
+    /// 최근 접속 상대 시각 라벨(08-17 — 삭제 메뉴가 "언제 마지막 봤는지" 시각만
+    /// 보여준다 · "마지막 접속" 문구 없이. 빈 값 = 기록 없음. 벽시계 상대 시각은
+    /// 호스트만 계산해 여기 라벨로 싣는다).
+    pub last_seen_label: String,
 }
 
 /// 목록 행에 그릴 전송 진행 상태.
@@ -929,45 +933,55 @@ impl Widget for PeerListWidget {
                         // 현재 다중 선택을 재료로 쓴다.
                         self.ctx_group = Some(g.id);
                         self.ctx_peer = None;
+                        use nbeep_core::{t, tf, Msg};
                         let mut v = Vec::new();
                         v.push(crate::controls::CtxItem::item(
                             "g-fav",
                             if g.fav {
-                                "목록 고정 해제"
+                                t(Msg::MenuUnpin)
                             } else {
-                                "목록 상단에 고정"
+                                t(Msg::MenuPinTop)
                             },
                         ));
                         if g.owned {
-                            v.push(crate::controls::CtxItem::item("g-rename", "이름 변경"));
+                            v.push(crate::controls::CtxItem::item(
+                                "g-rename",
+                                t(Msg::MenuGroupRename),
+                            ));
                             if sel_n > 0 {
                                 v.push(crate::controls::CtxItem::item(
                                     "g-add",
-                                    format!("선택한 {sel_n}명 초대"),
+                                    tf(Msg::MenuGroupInvite, &[&sel_n.to_string()]),
                                 ));
                                 v.push(crate::controls::CtxItem::item(
                                     "g-remove",
-                                    format!("선택한 {sel_n}명 제외"),
+                                    tf(Msg::MenuGroupRemoveMembers, &[&sel_n.to_string()]),
                                 ));
                             }
                             v.push(crate::controls::CtxItem::item(
                                 "g-policy",
                                 if g.member_invite {
-                                    "소유자만 초대로 전환"
+                                    t(Msg::MenuGroupPolicyToOwner)
                                 } else {
-                                    "구성원 초대 허용으로 전환"
+                                    t(Msg::MenuGroupPolicyToMembers)
                                 },
                             ));
-                            v.push(crate::controls::CtxItem::item("g-delete", "그룹 해산"));
+                            v.push(crate::controls::CtxItem::item(
+                                "g-delete",
+                                t(Msg::MenuGroupDisband),
+                            ));
                         } else {
                             // 구성원 — 방 정책이 허용일 때만 초대(요청은 소유자 경유).
                             if g.member_invite && sel_n > 0 {
                                 v.push(crate::controls::CtxItem::item(
                                     "g-add",
-                                    format!("선택한 {sel_n}명 초대"),
+                                    tf(Msg::MenuGroupInvite, &[&sel_n.to_string()]),
                                 ));
                             }
-                            v.push(crate::controls::CtxItem::item("g-delete", "그룹 나가기"));
+                            v.push(crate::controls::CtxItem::item(
+                                "g-delete",
+                                t(Msg::MenuGroupLeave),
+                            ));
                         }
                         v
                     } else if let Some((peer, fav)) =
@@ -981,23 +995,37 @@ impl Widget for PeerListWidget {
                         if !self.selected.contains(&peer) {
                             self.selected.clear();
                         }
+                        use nbeep_core::{t, tf, Msg};
                         let n = self.selected.len().max(1);
+                        // 삭제 라벨 — 최근 접속 상대 시각만 뒤에 붙인다("마지막 접속"
+                        // 문구 없이 · 08-17 사용자 확정). 기록 없으면 시각 생략.
+                        let last = self
+                            .rows
+                            .iter()
+                            .find(|r| r.entry.peer == peer)
+                            .map(|r| r.last_seen_label.clone())
+                            .unwrap_or_default();
+                        let forget_label = if last.is_empty() {
+                            t(Msg::MenuForget).to_string()
+                        } else {
+                            tf(Msg::MenuForgetAt, &[&last])
+                        };
                         vec![
-                            crate::controls::CtxItem::item("profile", "프로필 보기"),
+                            crate::controls::CtxItem::item("profile", t(Msg::MenuProfile)),
                             crate::controls::CtxItem::item(
                                 "fav",
                                 if fav {
-                                    "목록 고정 해제"
+                                    t(Msg::MenuUnpin)
                                 } else {
-                                    "목록 상단에 고정"
+                                    t(Msg::MenuPinTop)
                                 },
                             ),
                             crate::controls::CtxItem::item(
                                 "g-create",
-                                format!("그룹 만들기 ({n}명)"),
+                                tf(Msg::MenuCreateGroup, &[&n.to_string()]),
                             ),
                             crate::controls::CtxItem::Separator,
-                            crate::controls::CtxItem::item("forget", "목록에서 삭제"),
+                            crate::controls::CtxItem::item("forget", forget_label),
                         ]
                     } else {
                         return;
@@ -1689,6 +1717,7 @@ mod tests {
             fav: false,
             blocked: false,
             conflict: false,
+            last_seen_label: String::new(),
         }
     }
     fn widget(names: &[(u8, &str)]) -> (PeerListWidget, Invalidations) {

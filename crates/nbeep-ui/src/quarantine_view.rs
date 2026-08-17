@@ -443,11 +443,13 @@ impl Widget for QuarantineWidget {
             ctx.text(x, chip.y + (chip.h - sh) / 2, r, tl, theme.text_dim);
             if row.mismatch {
                 x += ctx.text_width(tl) + self.s(10);
+                // 08-17: ⚠(U+26A0)가 앱 글꼴에 없어 두부 박스로 떴다 → 제거하고
+                //   i18n 텍스트만(위험색이 경고를 전달). "!" ASCII로 표식.
                 ctx.text(
                     x,
                     chip.y + (chip.h - sh) / 2,
                     r,
-                    "⚠ 형식 불일치",
+                    &format!("! {}", nbeep_core::t(nbeep_core::Msg::XferMismatch)),
                     theme.danger,
                 );
             }
@@ -489,13 +491,12 @@ impl Widget for QuarantineWidget {
                     (risk_note(r.risk).to_string(), theme.text_dim)
                 })
         };
-        ctx.text(
-            bar.x + self.s(12),
-            bar.y + (bar.h - sh) / 2,
-            bar,
-            &msg,
-            color,
-        );
+        // 08-17: 노트를 **Clear 버튼 오른쪽**에서 시작하고 Approve 앞까지 클립한다
+        //   (종전엔 bar.x+12에서 시작해 Clear 버튼이 그 위를 덮었다).
+        let note_x = self.clear.bounds().right() + self.s(12);
+        let note_w = (self.approve.bounds().x - self.s(10) - note_x).max(0);
+        let note_rect = Rect::new(note_x, bar.y, note_w, bar.h);
+        ctx.text(note_x, bar.y + (bar.h - sh) / 2, note_rect, &msg, color);
         self.approve.paint(ctx, theme);
         self.reject.paint(ctx, theme);
         self.clear.paint(ctx, theme);

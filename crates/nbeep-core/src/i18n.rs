@@ -591,6 +591,42 @@ pub enum Msg {
     /// 구성원 표기 설명(08-17 i18n) — `표시이름 — 지문 · {설명}`.
     MemberSelf,
     MemberOwner,
+    /// 설정 Files 페이지 속도 노트(08-17 i18n).
+    RateSendFloor, // `{0}` = 하한
+    RateSendMeasured,  // `{0}` = 실측 최고, `{1}` = 자동 목표
+    RateRecvUnclaimed, // (인자 없음)
+    RateRecvMeasured,  // `{0}` = 실측 최고
+    /// 자동 수락 카운트다운 — `{0}`시작 `{1}`경과 `{2}`잔여 `{3}`종료.
+    AutoAcceptCountdown,
+    /// 우클릭 메뉴(08-17 i18n) — 목록/그룹.
+    MenuProfile,
+    MenuPinTop,
+    MenuUnpin,
+    /// `{0}` = 선택 수.
+    MenuCreateGroup,
+    MenuForget,
+    /// `{0}` = 최근 접속 상대 시각. 삭제 옆 시각 표기.
+    MenuForgetAt,
+    MenuGroupRename,
+    /// `{0}` = 선택 수.
+    MenuGroupInvite,
+    /// `{0}` = 선택 수.
+    MenuGroupRemoveMembers,
+    MenuGroupPolicyToOwner,
+    MenuGroupPolicyToMembers,
+    MenuGroupDisband,
+    MenuGroupLeave,
+    /// 주소로 연결 다이얼로그(08-17 i18n).
+    AddrTitle,
+    AddrPlaceholder,
+    AddrConnect,
+    /// `{0}`·`{1}`·`{2}` = 기본 포트(3회).
+    AddrExample,
+    AddrEnterConnect,
+    AddrFormatHint,
+    /// About 페이지(08-17 i18n).
+    AboutTagline,
+    AboutHomepage,
     StfAutoAcceptRecv,
     StfFileRejected,
     StfDeliveredWait,
@@ -779,6 +815,32 @@ impl Msg {
             Msg::ItemBio => ["bio", "소개글", "简介", "自己紹介"],
             Msg::MemberSelf => ["me", "나", "我", "自分"],
             Msg::MemberOwner => ["owner", "소유자", "所有者", "オーナー"],
+            Msg::RateSendFloor => ["Before measurement — starts at floor {}", "실측 전 — 하한 {}에서 시작", "测量前 — 从下限 {} 开始", "実測前 — 下限 {} から開始"],
+            Msg::RateSendMeasured => ["Measured peak {} → auto target {}", "실측 최고 {} → 자동 목표 {}", "实测峰值 {} → 自动目标 {}", "実測ピーク {} → 自動目標 {}"],
+            Msg::RateRecvUnclaimed => ["Before measurement · no cap claimed — sender yields to half its own measurement", "실측 전 · 상한 무주장 — 발신자가 자기 실측의 절반으로 양보", "测量前 · 不主张上限 — 发送方让步至自身实测的一半", "実測前 · 上限を主張せず — 送信者が自身の実測の半分に譲る"],
+            Msg::RateRecvMeasured => ["Measured peak {} · no cap claimed — sender yields to half", "실측 최고 {} · 상한 무주장 — 발신자가 절반으로 양보", "实测峰值 {} · 不主张上限 — 发送方让步至一半", "実測ピーク {} · 上限を主張せず — 送信者が半分に譲る"],
+            Msg::AutoAcceptCountdown => ["start {}, elapsed {}, remaining {}, end {}", "시작 {}, 경과 {}, 잔여 {}, 종료 {}", "开始 {}，已过 {}，剩余 {}，结束 {}", "開始 {}、経過 {}、残り {}、終了 {}"],
+            Msg::MenuProfile => ["View profile", "프로필 보기", "查看资料", "プロフィールを見る"],
+            Msg::MenuPinTop => ["Pin to top", "목록 상단에 고정", "置顶", "リスト上部に固定"],
+            Msg::MenuUnpin => ["Unpin", "목록 고정 해제", "取消置顶", "固定を解除"],
+            Msg::MenuCreateGroup => ["Create group ({})", "그룹 만들기 ({}명)", "创建群组({})", "グループ作成({})"],
+            Msg::MenuForget => ["Remove from list", "목록에서 삭제", "从列表移除", "リストから削除"],
+            Msg::MenuForgetAt => ["Remove from list · {}", "목록에서 삭제 · {}", "从列表移除 · {}", "リストから削除 · {}"],
+            Msg::MenuGroupRename => ["Rename", "이름 변경", "重命名", "名前変更"],
+            Msg::MenuGroupInvite => ["Invite {} selected", "선택한 {}명 초대", "邀请所选 {} 人", "選択した {} 名を招待"],
+            Msg::MenuGroupRemoveMembers => ["Remove {} selected", "선택한 {}명 제외", "移除所选 {} 人", "選択した {} 名を除外"],
+            Msg::MenuGroupPolicyToOwner => ["Switch to owner-only invites", "소유자만 초대로 전환", "切换为仅所有者可邀请", "オーナーのみ招待に切替"],
+            Msg::MenuGroupPolicyToMembers => ["Allow member invites", "구성원 초대 허용으로 전환", "切换为允许成员邀请", "メンバー招待許可に切替"],
+            Msg::MenuGroupDisband => ["Disband group", "그룹 해산", "解散群组", "グループ解散"],
+            Msg::MenuGroupLeave => ["Leave group", "그룹 나가기", "退出群组", "グループを退出"],
+            Msg::AddrTitle => ["Connect directly by address (DR-19)", "주소로 직접 연결 (DR-19)", "按地址直接连接 (DR-19)", "アドレスで直接接続 (DR-19)"],
+            Msg::AddrPlaceholder => ["host or host:port · [v6]:port", "host 또는 host:port · [v6]:port", "host 或 host:port · [v6]:port", "host または host:port · [v6]:port"],
+            Msg::AddrConnect => ["Connect", "연결", "连接", "接続"],
+            Msg::AddrExample => ["e.g. 10.0.0.5 (port omitted → {}) · 10.0.0.5:{} · [fe80::1]:{}", "예: 10.0.0.5 (포트 생략 시 {}) · 10.0.0.5:{} · [fe80::1]:{}", "例: 10.0.0.5 (省略端口 → {}) · 10.0.0.5:{} · [fe80::1]:{}", "例: 10.0.0.5 (ポート省略 → {}) · 10.0.0.5:{} · [fe80::1]:{}"],
+            Msg::AddrEnterConnect => ["Enter to connect", "Enter로 연결", "按 Enter 连接", "Enter で接続"],
+            Msg::AddrFormatHint => ["format: host:port or [v6]:port (port 1–65535)", "형식: host:port 또는 [v6]:port (포트 1~65535)", "格式: host:port 或 [v6]:port (端口 1~65535)", "形式: host:port または [v6]:port (ポート 1~65535)"],
+            Msg::AboutTagline => ["Zero-config LAN messenger", "제로 컨피그 로컬 네트워크 메신저 · Zero-config LAN messenger", "零配置局域网通讯 · Zero-config LAN messenger", "ゼロ設定ローカルメッセンジャー · Zero-config LAN messenger"],
+            Msg::AboutHomepage => ["Nexa Beep homepage", "Nexa Beep 홈페이지", "Nexa Beep 主页", "Nexa Beep ホームページ"],
             Msg::StfAutoAcceptRecv => ["Auto-accepted: {} ({}) receiving", "자동 수락: {} ({}) 수신 시작", "自动接受：{}（{}）开始接收", "自動受信: {} ({}) 受信開始"],
             Msg::StfFileRejected => ["File rejected ({}): {}", "파일 거부({}): {}", "文件已拒绝（{}）：{}", "ファイル拒否({}): {}"],
             Msg::StfDeliveredWait => ["Delivered {}/{} — awaiting peer confirmation", "전달됨 {}/{} — 상대 확인 대기", "已送达 {}/{} — 等待对方确认", "配信済み {}/{} — 相手の確認待ち"],

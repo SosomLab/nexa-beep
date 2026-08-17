@@ -50,7 +50,7 @@ impl AddrPromptWidget {
     /// (호스트가 설정 `net.session_port`를 넘긴다 — 듣는 포트 = 거는 기본 포트).
     #[must_use]
     pub fn new(default_port: u16) -> Self {
-        let mut input = TextBox::new("host 또는 host:port · [v6]:port");
+        let mut input = TextBox::new(nbeep_core::t(nbeep_core::Msg::AddrPlaceholder));
         input.set_focused(true);
         Self {
             bounds: Rect::default(),
@@ -157,10 +157,10 @@ impl AddrPromptWidget {
 
 /// 연결/취소 라벨 — i18n 표에 별도 키를 두기보다 대화·공통에 이미 있는 어휘를 쓴다.
 fn t_connect() -> &'static str {
-    "연결"
+    nbeep_core::t(nbeep_core::Msg::AddrConnect)
 }
 fn t_cancel() -> &'static str {
-    "취소"
+    nbeep_core::t(nbeep_core::Msg::OfferCancel)
 }
 
 impl Widget for AddrPromptWidget {
@@ -222,7 +222,7 @@ impl Widget for AddrPromptWidget {
             b.x + self.s(16),
             b.y + self.s(14),
             b,
-            "주소로 직접 연결 (DR-19)",
+            nbeep_core::t(nbeep_core::Msg::AddrTitle),
             theme.text,
         );
         self.input.paint(ctx, theme);
@@ -232,14 +232,20 @@ impl Widget for AddrPromptWidget {
         let p = self.default_port;
         let (hint, color) = if text.trim().is_empty() {
             (
-                format!("예: 10.0.0.5 (포트 생략 시 {p}) · 10.0.0.5:{p} · [fe80::1]:{p}"),
+                nbeep_core::tf(
+                    nbeep_core::Msg::AddrExample,
+                    &[&p.to_string(), &p.to_string(), &p.to_string()],
+                ),
                 theme.text_dim,
             )
         } else if valid_endpoint(&text) {
-            ("Enter로 연결".to_string(), theme.ok)
+            (
+                nbeep_core::t(nbeep_core::Msg::AddrEnterConnect).to_string(),
+                theme.ok,
+            )
         } else {
             (
-                "형식: host:port 또는 [v6]:port (포트 1~65535)".to_string(),
+                nbeep_core::t(nbeep_core::Msg::AddrFormatHint).to_string(),
                 theme.danger,
             )
         };

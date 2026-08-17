@@ -1097,26 +1097,23 @@ fn auto_rate_note(
         return String::new();
     }
     let peak = meter.peak_bps();
+    use nbeep_core::{t, tf, Msg};
     if sending {
         if peak == 0 {
-            format!(
-                "실측 전 — 하한 {}에서 시작",
-                rate_label(nbeep_core::rate::AUTO_FLOOR_BPS)
+            tf(
+                Msg::RateSendFloor,
+                &[&rate_label(nbeep_core::rate::AUTO_FLOOR_BPS)],
             )
         } else {
-            format!(
-                "실측 최고 {} → 자동 목표 {}",
-                rate_label(peak),
-                rate_label(meter.auto_target())
+            tf(
+                Msg::RateSendMeasured,
+                &[&rate_label(peak), &rate_label(meter.auto_target())],
             )
         }
     } else if peak == 0 {
-        "실측 전 · 상한 무주장 — 발신자가 자기 실측의 절반으로 양보".into()
+        t(Msg::RateRecvUnclaimed).to_string()
     } else {
-        format!(
-            "실측 최고 {} · 상한 무주장 — 발신자가 절반으로 양보",
-            rate_label(peak)
-        )
+        tf(Msg::RateRecvMeasured, &[&rate_label(peak)])
     }
 }
 
@@ -1870,11 +1867,11 @@ impl App {
         self.about_view = Some(AboutWidget::new(AboutInfo {
             app: "Nexa Beep".into(),
             version: env!("CARGO_PKG_VERSION").into(),
-            tagline: "제로 컨피그 로컬 네트워크 메신저 · Zero-config LAN messenger".into(),
+            tagline: nbeep_core::t(nbeep_core::Msg::AboutTagline).into(),
             links: vec![
                 ("SosomLab".into(), "https://sosomlab.com".into()),
                 (
-                    "Nexa Beep 홈페이지".into(),
+                    nbeep_core::t(nbeep_core::Msg::AboutHomepage).into(),
                     "https://sosomlab.com/apps/nexa-beep/".into(),
                 ),
                 (
@@ -2655,7 +2652,10 @@ impl App {
             };
         sv.set_row_note(
             "xfer.approval_window",
-            &format!("시작 {start_s}, 경과 {elapsed_s}, 잔여 {remain_s}, 종료 {end_s}"),
+            &nbeep_core::tf(
+                nbeep_core::Msg::AutoAcceptCountdown,
+                &[&start_s, &elapsed_s, &remain_s, &end_s],
+            ),
             &mut inv,
         );
         // Auto 속도 실측 표시(08-16 사용자 요청) — 값이 안 바뀌면 `set_row_note`가
@@ -2823,6 +2823,8 @@ impl App {
                 // 화면에 안 나오던 상태다(충돌 = v1 사칭 유일 가시 신호).
                 let blocked = self.trust.is_blocked(entry.peer);
                 let conflict = self.trust.name_conflict(entry.peer, &entry.name).is_some();
+                // 최근 접속 상대 시각(08-17 — 삭제 메뉴가 시각만 표시).
+                let last_seen_label = ago_label(self.trust.meta(entry.peer).0);
                 PeerRow {
                     entry,
                     trust,
@@ -2837,6 +2839,7 @@ impl App {
                     fav,
                     blocked,
                     conflict,
+                    last_seen_label,
                 }
             })
             .collect();
@@ -4198,7 +4201,8 @@ impl App {
                 "Nexa Beep — {}",
                 nbeep_core::t(nbeep_core::Msg::ProfileTitle)
             ))
-            .with_inner_size(winit::dpi::LogicalSize::new(440.0, 730.0))
+            // 창 높이 740 — 버튼(y+696·h28 → 724) 아래 여백이 좌우 pad(16)와 같아진다.
+            .with_inner_size(winit::dpi::LogicalSize::new(440.0, 740.0))
             .with_resizable(false)
             // 앱 모달(08-14 표준 재정리) — 앱 창 입력은 모달이 흡수하되, 다른 앱은
             // 자유롭게 위로 온다(AlwaysOnTop 금지 — OS 창 전환 관례).

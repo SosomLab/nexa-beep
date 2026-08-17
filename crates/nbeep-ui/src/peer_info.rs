@@ -10,6 +10,28 @@ use crate::geom::Rect;
 use crate::theme::Theme;
 use crate::widget::{Invalidations, Widget};
 
+/// 문자열을 `maxw`(px) 안에 들도록 말줄임(…)한다(08-17 — 소개글 1줄 고정).
+/// 들어가면 원문 그대로. 문자 경계 누적 폭으로 한 번에 자른다.
+fn fit_ellipsis(ctx: &mut dyn DrawCtx, s: &str, maxw: i32) -> String {
+    if ctx.text_width(s) <= maxw {
+        return s.to_string();
+    }
+    let mut w = Vec::new();
+    ctx.text_prefix_widths(s, &mut w);
+    let ell = ctx.text_width("…");
+    let chars: Vec<char> = s.chars().collect();
+    let mut n = 0;
+    for i in 0..chars.len() {
+        if w.get(i + 1).copied().unwrap_or(i32::MAX) + ell > maxw {
+            break;
+        }
+        n = i + 1;
+    }
+    let mut out: String = chars[..n].iter().collect();
+    out.push('…');
+    out
+}
+
 /// 카드에 실을 내용(호스트가 채운다 — 위젯은 출처를 모른다).
 #[derive(Debug, Default, Clone)]
 pub struct PeerInfo {
@@ -212,8 +234,17 @@ impl Widget for PeerInfoWidget {
             .join(" ");
         if !bio_one.is_empty() {
             ctx.select_font(FontSlot::Status, false);
-            let tw = ctx.text_width(&bio_one);
-            ctx.text(b.x + (b.w - tw) / 2, y, b, &bio_one, theme.text_dim);
+            // ★ 항상 1줄(08-17 사용자 확정 — 워드랩 없음): 카드 폭을 넘으면 말줄임
+            //   후 좌측 정렬, 들어가면 가운데. 여러 줄·긴 소개도 한 줄로만.
+            let avail = b.w - self.s(28) * 2;
+            let fitted = fit_ellipsis(ctx, &bio_one, avail);
+            let tw = ctx.text_width(&fitted);
+            let bx = if tw < avail {
+                b.x + (b.w - tw) / 2
+            } else {
+                b.x + self.s(28)
+            };
+            ctx.text(bx, y, b, &fitted, theme.text_dim);
             y += ctx.text_height() + self.s(12);
         } else {
             y += self.s(8);

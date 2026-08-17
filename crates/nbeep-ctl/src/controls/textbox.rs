@@ -51,6 +51,8 @@ pub struct TextBox {
     multiline: bool,
     /// 멀티라인 세로 스크롤(첫 보이는 논리 줄 인덱스 · 캐럿을 따라간다).
     vscroll: std::cell::Cell<usize>,
+    /// 멀티라인 가로 스크롤(px · 캐럿 열을 따라간다 · 08-17 드래그 자동 스크롤).
+    mhscroll: std::cell::Cell<i32>,
     /// 멀티라인 클릭→캐럿 변환용 줄 배치(페인트가 남긴다).
     line_lay: std::cell::RefCell<Vec<MlLine>>,
 }
@@ -99,6 +101,7 @@ impl TextBox {
             clip_has_text: true,
             multiline: false,
             vscroll: std::cell::Cell::new(0),
+            mhscroll: std::cell::Cell::new(0),
             line_lay: std::cell::RefCell::new(Vec::new()),
         }
     }
@@ -443,6 +446,22 @@ impl TextBox {
         top = top.min(lines.len().saturating_sub(1));
         self.vscroll.set(top);
 
+        // 가로 스크롤(08-17) — 캐럿 열이 보이도록 따라간다(긴 줄·드래그 자동 스크롤).
+        let (caret_start, caret_str) = &lines[caret_line.min(lines.len() - 1)];
+        let caret_col = disp_caret.saturating_sub(*caret_start);
+        let mut cw = Vec::new();
+        ctx.text_prefix_widths(caret_str, &mut cw);
+        let caret_px = cw.get(caret_col).copied().unwrap_or(0);
+        let mut hs = self.mhscroll.get();
+        if caret_px - hs > avail {
+            hs = caret_px - avail;
+        }
+        if caret_px - hs < 0 {
+            hs = caret_px;
+        }
+        hs = hs.max(0);
+        self.mhscroll.set(hs);
+
         // 빈 값 = placeholder(첫 줄).
         let empty = display.is_empty();
         let sel = if preedit_n == 0 {
@@ -453,6 +472,8 @@ impl TextBox {
 
         let mut lay = self.line_lay.borrow_mut();
         lay.clear();
+        let dx = tx - hs; // 가로 스크롤 반영 시작 x
+        let (vx0, vx1) = (tx, tx + avail); // 뷰포트(선택 반전 클립 범위)
         for (vi, li) in (top..lines.len().min(top + rows)).enumerate() {
             let (start_idx, line_str) = &lines[li];
             let y = top0 + (vi as i32) * lh;
@@ -460,39 +481,43 @@ impl TextBox {
             let mut w = Vec::new();
             ctx.text_prefix_widths(line_str, &mut w);
             let line_len = line_str.chars().count();
-            // 선택 반전(줄 범위와 겹치는 부분만 · 텍스트 아래에 먼저 채운다).
+            // 선택 반전(줄 범위와 겹치는 부분만 · 뷰포트로 클립 · 텍스트 아래 먼저).
             if let Some((a, e)) = sel {
                 let (ls, le) = (*start_idx, *start_idx + line_len);
                 let s0 = a.max(ls);
                 let s1 = e.min(le);
                 if s1 > s0 {
-                    let x0 = tx + w.get(s0 - ls).copied().unwrap_or(0);
-                    let x1 = tx + w.get(s1 - ls).copied().unwrap_or(0);
-                    ctx.fill_rect(
-                        Rect::new(x0, y, (x1 - x0).max(1), th),
-                        if self.base.focused {
-                            theme.sel_bg
-                        } else {
-                            theme.sel_bg_inactive
-                        },
-                    );
+                    let x0 = (dx + w.get(s0 - ls).copied().unwrap_or(0)).max(vx0);
+                    let x1 = (dx + w.get(s1 - ls).copied().unwrap_or(0)).min(vx1);
+                    if x1 > x0 {
+                        ctx.fill_rect(
+                            Rect::new(x0, y, x1 - x0, th),
+                            if self.base.focused {
+                                theme.sel_bg
+                            } else {
+                                theme.sel_bg_inactive
+                            },
+                        );
+                    }
                 }
             }
             if empty && li == 0 {
-                ctx.text(tx, y, view, &self.placeholder, theme.text_dim);
+                ctx.text(dx, y, view, &self.placeholder, theme.text_dim);
             } else {
-                ctx.text(tx, y, view, line_str, theme.text);
+                ctx.text(dx, y, view, line_str, theme.text);
             }
             // 캐럿 — 이 줄이 캐럿 줄일 때(포커스·깜빡임 위상).
             if self.base.focused && ctx.caret_on() && li == caret_line {
                 let col = disp_caret - start_idx;
-                let cx = tx + w.get(col).copied().unwrap_or(0);
-                ctx.fill_rect(Rect::new(cx, y, self.s(2).max(2), th), theme.text);
+                let cx = dx + w.get(col).copied().unwrap_or(0);
+                if cx >= vx0 && cx <= vx1 {
+                    ctx.fill_rect(Rect::new(cx, y, self.s(2).max(2), th), theme.text);
+                }
             }
             lay.push(MlLine {
                 top: y,
                 start_idx: *start_idx,
-                xs: w.iter().map(|px| tx + px).collect(),
+                xs: w.iter().map(|px| dx + px).collect(),
             });
         }
         drop(lay);
@@ -624,9 +649,21 @@ impl Widget for TextBox {
                 }
             }
             InputEvent::MouseMove { x, y } if self.dragging && self.multiline => {
-                // 멀티라인 드래그 — (x,y)로 줄·열을 잡아 선택 확장.
-                self.edit.set_caret(self.ml_caret_at(x, y), true);
-                inv.push(self.base.bounds);
+                // 멀티라인 드래그 자동 스크롤(08-17) — 상/하 밖 = 줄 단위 세로 이동
+                // (vscroll이 따라온다), 좌/우 밖 = 한 글자 가로 이동(mhscroll이 따라온다).
+                let b = self.base.bounds;
+                if y < b.y {
+                    self.ml_move_vert(false, true);
+                } else if y > b.bottom() {
+                    self.ml_move_vert(true, true);
+                } else if x > b.right() - self.s(8) {
+                    self.edit.key(EditKey::Right, true);
+                } else if x < b.x + self.s(8) {
+                    self.edit.key(EditKey::Left, true);
+                } else {
+                    self.edit.set_caret(self.ml_caret_at(x, y), true);
+                }
+                inv.push(b);
             }
             InputEvent::MouseMove { x, .. } if self.dragging => {
                 // 영역 밖으로 끌면 **한 글자씩 자동 진행**(① 08-13) — 페인트가 캐럿을
