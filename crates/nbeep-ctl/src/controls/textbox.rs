@@ -366,19 +366,34 @@ impl TextBox {
         if !self.base.focused || text.is_empty() {
             return;
         }
-        let mut cleaned = String::with_capacity(text.len());
-        let mut ws = false;
-        for c in text.chars() {
-            if c.is_control() {
-                ws = true;
-                continue;
+        // 멀티라인은 개행을 **보존**(08-18 사용자 실기 — 여러 줄 붙여넣기가 한 줄이
+        // 됐다): `\r\n`/`\r`을 `\n`으로 정규화하고 그 외 제어문자만 공백으로 접는다.
+        // 단일 행은 종전대로 개행·제어를 공백 하나로 접는다.
+        let cleaned = if self.multiline {
+            let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+            let mut out = String::with_capacity(normalized.len());
+            for c in normalized.chars() {
+                if c == '\n' || !c.is_control() {
+                    out.push(c);
+                }
             }
-            if ws {
-                cleaned.push(' ');
-                ws = false;
+            out
+        } else {
+            let mut out = String::with_capacity(text.len());
+            let mut ws = false;
+            for c in text.chars() {
+                if c.is_control() {
+                    ws = true;
+                    continue;
+                }
+                if ws {
+                    out.push(' ');
+                    ws = false;
+                }
+                out.push(c);
             }
-            cleaned.push(c);
-        }
+            out
+        };
         if cleaned.is_empty() {
             return;
         }
@@ -1356,6 +1371,18 @@ mod tests {
         let before = t.text();
         t.paste("x", &mut inv);
         assert_eq!(t.text(), before);
+    }
+
+    /// 멀티라인 붙여넣기(08-18) — 개행을 **보존**한다(단일 행은 공백으로 접음).
+    /// `\r\n`/`\r`은 `\n`으로 정규화하고 그 외 제어문자(탭)만 접는다.
+    #[test]
+    fn multiline_paste_preserves_newlines() {
+        let mut t = TextBox::new("bio").with_multiline();
+        let mut inv = Invalidations::default();
+        t.set_bounds(Rect::new(0, 0, 200, 80), &mut inv);
+        t.set_focused(true);
+        t.paste("가나다\r\n라마바\nAB\tCD", &mut inv);
+        assert_eq!(t.text(), "가나다\n라마바\nABCD");
     }
 
     #[test]
