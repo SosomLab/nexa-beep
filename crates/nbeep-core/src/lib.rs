@@ -43,7 +43,9 @@ pub mod testkit;
 
 // ── 편의 재수출(공개 표면 설계 — 내부 모듈 경로를 그대로 노출하지 않는다) ──
 pub use action::{ActionKind, FailCode, Outcome, RejectCode, RiskLevel, ScanOutcome};
-pub use chat::{fanout, ChatMessage, DedupIndex, FanoutReport, MessageBody, Sequencer, WireError};
+pub use chat::{
+    fanout, ChatMessage, DedupIndex, FanoutReport, Importance, MessageBody, Sequencer, WireError,
+};
 pub use group::{Group, GroupId, GroupStore};
 pub use i18n::{current_lang, set_lang, t, tr, Lang, Msg};
 pub use identity::{DeviceId, PeerId, Recipients, TrustLevel, UserId};

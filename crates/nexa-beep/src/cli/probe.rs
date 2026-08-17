@@ -87,6 +87,7 @@ pub(crate) fn live_echo(secs: u64) {
                                 sender_device: identity.peer_id(),
                                 seq: seq.issue(),
                                 body: MessageBody::Text(format!("에코: {t}")),
+                                importance: nbeep_core::Importance::Normal,
                             };
                             if mux.send(StreamId::Chat, &reply.encode()).is_err() {
                                 break;
@@ -123,6 +124,7 @@ pub(crate) fn live_echo(secs: u64) {
                         sender_device: me,
                         seq: seq.issue(),
                         body: MessageBody::Text("안녕! 실물 세션이야".into()),
+                        importance: nbeep_core::Importance::Normal,
                     };
                     if mux.send(StreamId::Chat, &msg.encode()).is_ok() {
                         if let Ok(bytes) = mux.recv(StreamId::Chat) {

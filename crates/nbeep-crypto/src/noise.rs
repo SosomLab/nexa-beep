@@ -588,6 +588,7 @@ mod chat_integration {
             sender_device: a_id,
             seq: seq.issue(),
             body: MessageBody::Text("첫 암호화 메시지".into()),
+            importance: nbeep_core::Importance::Normal,
         };
         let report = fanout(&mut sessions, &Recipients::one(b_id), &m);
         assert!(report[0].1.is_ok());
@@ -682,6 +683,7 @@ mod group_fanout {
             sender_device: me.peer_id(),
             seq: seq.issue(),
             body: MessageBody::Text("팀 전체 공지".into()),
+            importance: nbeep_core::Importance::Normal,
         };
         let report = fanout(&mut sessions, &groups.get(g).unwrap().recipients(), &msg);
         assert!(

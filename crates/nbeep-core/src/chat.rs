@@ -26,6 +26,8 @@ use std::collections::{BTreeSet, HashMap};
 const WIRE_VER: u8 = 1;
 
 /// 본문 종류 와이어 값. 추가는 뒤에 append(값 불변).
+// ★ N-1(08-17): kind는 **하위 니블(0~15)** — 상위 니블은 등급(Importance).
+// 메시지 종류가 16개면 충분(text·향후 reaction/edit 등). 상위 니블 kind는 못 쓴다.
 const KIND_TEXT: u8 = 1;
 
 /// 본문 — v1은 텍스트만. Image·File은 무해화 게이트와 함께 M4.
@@ -37,6 +39,43 @@ pub enum MessageBody {
     Unsupported(u8),
 }
 
+/// 메시지 등급(N-1 · ADR-0010 §3-1 — **발신자의 중요도 요청**). 수신자의 알림
+/// 강도는 별개 축(수신자가 신뢰 게이트로 판정 · ADR-0010 §3-2). 와이어에는
+/// `kind` 바이트의 **상위 니블**로 실린다: `Normal`(0)이면 바이트가 종전과
+/// **동일**(완전 하위 호환) · 미지 값(구버전이 못 읽는 신값)은 수신 시 `Normal`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Importance {
+    /// 보통(기본) — 알림 강도는 수신자 정책대로.
+    #[default]
+    Normal,
+    /// 알림 — "지금 봐 줬으면".
+    Notice,
+    /// 긴급 — 확인 마찰 있음(ADR-0010 §3).
+    Urgent,
+}
+
+impl Importance {
+    /// 와이어 니블 값.
+    #[must_use]
+    pub fn to_nibble(self) -> u8 {
+        match self {
+            Self::Normal => 0,
+            Self::Notice => 1,
+            Self::Urgent => 2,
+        }
+    }
+
+    /// 니블에서 — **미지 값은 Normal**(전방 호환 · ADR-0010).
+    #[must_use]
+    pub fn from_nibble(n: u8) -> Self {
+        match n {
+            1 => Self::Notice,
+            2 => Self::Urgent,
+            _ => Self::Normal,
+        }
+    }
+}
+
 /// 대화 메시지 봉투.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChatMessage {
@@ -46,6 +85,8 @@ pub struct ChatMessage {
     pub seq: u64,
     /// 본문.
     pub body: MessageBody,
+    /// 발신자 등급(N-1 · 기본 Normal). 와이어 = kind 상위 니블.
+    pub importance: Importance,
 }
 
 /// 봉투 해석 오류.
@@ -72,6 +113,9 @@ impl ChatMessage {
             MessageBody::Text(t) => (KIND_TEXT, t.as_str()),
             MessageBody::Unsupported(k) => (*k, ""),
         };
+        // 등급은 kind 상위 니블(N-1) — Normal(0)이면 종전 바이트와 동일(하위 호환).
+        // kind는 하위 니블만(0~15 · 상위는 등급 전용) — 니블 도입의 대가.
+        let kind = (kind & 0x0F) | (self.importance.to_nibble() << 4);
         let mut out = Vec::with_capacity(HEADER + text.len());
         out.push(WIRE_VER);
         out.extend_from_slice(self.sender_device.as_bytes());
@@ -104,7 +148,9 @@ impl ChatMessage {
             .try_into()
             .map_err(|_| WireError::Truncated)?;
         let seq = u64::from_be_bytes(seq_bytes);
-        let kind = bytes[HEADER - 1];
+        let raw = bytes[HEADER - 1];
+        let kind = raw & 0x0F; // 하위 니블 = 메시지 종류
+        let importance = Importance::from_nibble(raw >> 4); // 상위 니블 = 등급(N-1)
         let body = match kind {
             KIND_TEXT => MessageBody::Text(
                 String::from_utf8(bytes[HEADER..].to_vec()).map_err(|_| WireError::Utf8)?,
@@ -115,6 +161,7 @@ impl ChatMessage {
             sender_device,
             seq,
             body,
+            importance,
         })
     }
 }
@@ -226,6 +273,43 @@ pub fn fanout<S: Session>(
 mod tests {
     use super::*;
 
+    /// N-1 — 등급 니블. Normal은 바이트 완전 동일(하위 호환)·미지 등급 = Normal.
+    #[test]
+    fn importance_rides_kind_nibble_normal_is_identical() {
+        let peer = PeerId::from_bytes([7u8; PeerId::LEN]);
+        let base = ChatMessage {
+            sender_device: peer,
+            seq: 1,
+            body: MessageBody::Text("hi".into()),
+            importance: Importance::Normal,
+        };
+        let urgent = ChatMessage {
+            importance: Importance::Urgent,
+            ..base.clone()
+        };
+        // Normal 인코딩 = kind 바이트 상위 니블 0 → 종전과 동일.
+        let nb = base.encode();
+        assert_eq!(nb[HEADER - 1] & 0xF0, 0, "Normal = 상위 니블 0(하위 호환)");
+        // Urgent는 상위 니블 2 · 왕복 보존.
+        let ub = urgent.encode();
+        assert_eq!(ub[HEADER - 1] >> 4, 2);
+        assert_eq!(
+            ChatMessage::decode(&ub, peer).unwrap().importance,
+            Importance::Urgent
+        );
+        assert_eq!(
+            ChatMessage::decode(&nb, peer).unwrap().importance,
+            Importance::Normal
+        );
+        // 미지 등급 니블(예: 9)은 Normal로 강등(전방 호환).
+        let mut weird = nb;
+        weird[HEADER - 1] = (9 << 4) | (weird[HEADER - 1] & 0x0F);
+        assert_eq!(
+            ChatMessage::decode(&weird, peer).unwrap().importance,
+            Importance::Normal
+        );
+    }
+
     fn pid(b: u8) -> PeerId {
         let mut a = [0u8; 32];
         a[0] = b;
@@ -237,6 +321,7 @@ mod tests {
             sender_device: sender,
             seq,
             body: MessageBody::Text(text.into()),
+            importance: Importance::Normal,
         }
     }
 
@@ -279,11 +364,17 @@ mod tests {
             ChatMessage::decode(&bad_ver, pid(1)).err(),
             Some(WireError::Version(99))
         );
-        // 미지 kind는 거부가 아니라 Unsupported — 스레드 순서 보존(전방 호환).
+        // 미지 kind(하위 니블 · N-1 이후 kind는 4비트)는 거부가 아니라 Unsupported —
+        // 스레드 순서 보존(전방 호환). 상위 니블(등급)은 별개로 Normal 강등.
         let mut future_kind = m.encode();
-        future_kind[41] = 200;
+        future_kind[41] = (2 << 4) | 8; // 등급 니블 2(Urgent) + 미지 kind 8
         let decoded = ChatMessage::decode(&future_kind, pid(1)).unwrap();
-        assert_eq!(decoded.body, MessageBody::Unsupported(200));
+        assert_eq!(decoded.body, MessageBody::Unsupported(8));
+        assert_eq!(
+            decoded.importance,
+            Importance::Urgent,
+            "등급 니블은 독립 해석"
+        );
         assert_eq!(decoded.seq, 7, "시퀀스는 유지 — 구멍나지 않는다");
     }
 

@@ -1355,6 +1355,7 @@ fn spawn_echo_bot(bus: &std::sync::Arc<nbeep_net::inmem::InMemoryBus>, name: &st
                     sender_device: identity.peer_id(),
                     seq: seq.issue(),
                     body: MessageBody::Text(format!("에코: {text}")),
+                    importance: nbeep_core::Importance::Normal,
                 };
                 if mux.send(StreamId::Chat, &reply.encode()).is_err() {
                     break;
@@ -7201,6 +7202,7 @@ impl App {
                 sender_device: self.identity.peer_id(),
                 seq: self.seq.issue(),
                 body: nbeep_core::MessageBody::Text(text.as_str().to_string()),
+                importance: nbeep_core::Importance::Normal,
             };
             let (at_ms, wall) = now_stamp();
             if let Some(chat) = self.chats.get_mut(&peer) {

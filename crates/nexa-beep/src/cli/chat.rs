@@ -725,6 +725,7 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
             sender_device: me,
             seq: seq.issue(),
             body: MessageBody::Text(line),
+            importance: nbeep_core::Importance::Normal,
         };
         out_tx.send(Cmd::Chat(msg.encode())).is_ok()
     };
