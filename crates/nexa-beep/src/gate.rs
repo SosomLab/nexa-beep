@@ -99,10 +99,25 @@ impl core::fmt::Display for GateError {
 ///
 /// # Errors
 /// [`GateError`] — 해시 불일치·저장 실패. 두 경우 모두 아무것도 남기지 않는다.
+/// 격리물 봉투 도메인(ADR-0005 §4~ · 08-17 — sealed 문법의 도메인 분리 축).
+pub(crate) const SEAL_QUARANTINE: &[u8] = b"quarantine-v1";
+
+/// 격리물 파일 읽기 **관문**(08-17 — 평문 3면 조치 ①) — 봉인본은 개봉하고,
+/// 구본(봉인 도입 전 평문 `.beepq`)은 그대로 돌려준다(관용 — 이관은 목록
+/// 로드가 lazy 재봉인). 개봉 실패(다른 신원·손상·바꿔치기) = None(fail-closed).
+pub(crate) fn read_beepq_bytes(path: &std::path::Path, secret: &[u8; 32]) -> Option<Vec<u8>> {
+    let bytes = std::fs::read(path).ok()?;
+    if nbeep_store::sealed::is_sealed(&bytes) {
+        return nbeep_store::sealed::open(SEAL_QUARANTINE, secret, &bytes);
+    }
+    Some(bytes) // 구본 관용 — 매직 우연 충돌은 위 open 실패로 드러난다
+}
+
 pub(crate) fn quarantine_received(
     got: &Received,
     sender: PeerId,
     channel: &str,
+    seal_secret: &[u8; 32],
 ) -> Result<Quarantined, GateError> {
     use nbeep_safe::{classify, Beepq, Meta, QuarantineDir};
 
@@ -135,6 +150,12 @@ pub(crate) fn quarantine_received(
         xfer: String::new(),
     };
     let sealed = Beepq::seal(&got.bytes, actual, &meta);
+    // ★ 디스크 봉인(08-17 — 종전 .beepq는 무결성 봉인뿐 **평문**이었다):
+    //   신원 파생 키(D-18 §3 계층)로 AEAD — 이 신원의 이 앱만 연다(같은 PC
+    //   다른 계정·다른 신원·백업 유출 전부 fail-closed). 봉인 실패 = 저장 포기
+    //   (평문으로 쓰는 폴백은 없다 — 원칙이 무너진다).
+    let sealed = nbeep_store::sealed::seal(SEAL_QUARANTINE, seal_secret, &sealed)
+        .map_err(GateError::Store)?;
     let path = QuarantineDir::open(quarantine_root(channel))
         .and_then(|q| q.save(&actual, &sealed))
         .map_err(GateError::Store)?;
@@ -146,3 +167,10 @@ pub(crate) fn quarantine_received(
         path,
     })
 }
+
+/// 프로필 이미지 캐시 봉투 도메인(08-17 — 평문 3면 조치 ③).
+pub(crate) const SEAL_PROFILE_CACHE: &[u8] = b"profile-cache-v1";
+
+/// PII 봉인 사이드카 도메인 + 대상 키(08-17 — 평문 3면 조치 ②).
+pub(crate) const SEAL_PII: &[u8] = b"pii-v1";
+pub(crate) const PII_KEYS: &[&str] = &["profile.email", "profile.phone"];

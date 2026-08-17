@@ -72,6 +72,13 @@ pub(crate) fn quarantine_demo(src: &std::path::Path) {
         xfer: String::new(),
     };
     let sealed = Beepq::seal(&original, sha, &meta);
+    // 디스크 봉인(08-17 — GUI 게이트와 같은 문법 · 영속 신원 키).
+    let (id, _) =
+        nbeep_crypto::keyfile::load_or_generate(&crate::app::data_dir().join("identity.key"))
+            .expect("신원 키");
+    let sealed =
+        nbeep_store::sealed::seal(crate::gate::SEAL_QUARANTINE, &id.wrap_secret(), &sealed)
+            .expect("봉인");
     let qdir = QuarantineDir::open(crate::gate::quarantine_root(crate::gate::CH_CLI)).unwrap();
     let qpath = qdir.save(&sha, &sealed).unwrap();
     println!("② 격리 저장: {} ({}B)", qpath.display(), sealed.len());
@@ -91,7 +98,8 @@ pub(crate) fn quarantine_demo(src: &std::path::Path) {
     st = step(st, QEvent::Approve).unwrap(); // ⚠️ 데모 한정 자동 — 제품은 사용자 버튼만
 
     // ④ 실체화 + OS 표식(rename 직후).
-    let opened = Beepq::open(&std::fs::read(&qpath).unwrap()).unwrap();
+    let opened_bytes = crate::gate::read_beepq_bytes(&qpath, &id.wrap_secret()).expect("봉인 개봉");
+    let opened = Beepq::open(&opened_bytes).unwrap();
     let dest = std::env::temp_dir().join("nexa-beep-materialized");
     match QuarantineDir::materialize(&opened, &dest, &CryptoHash, &OsMark) {
         Ok(m) => {

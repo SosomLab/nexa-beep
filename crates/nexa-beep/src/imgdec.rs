@@ -151,8 +151,10 @@ pub(crate) fn avatar_raw_from_bytes(bytes: &[u8], max_side: u32) -> Option<(u32,
 pub(crate) fn thumb_raw_from_beepq(
     path: &std::path::Path,
     max_side: u32,
+    seal_secret: &[u8; 32],
 ) -> Option<(u32, u32, Vec<u8>)> {
-    let bytes = std::fs::read(path).ok()?;
+    // 봉인 관문 경유(08-17 — 격리물 디스크 봉인 · 구본 관용은 관문 정책).
+    let bytes = crate::gate::read_beepq_bytes(path, seal_secret)?;
     let q = nbeep_safe::Beepq::open(&bytes).ok()?;
     let total = q.sealed_prefix.len() + q.body.len();
     if total as u64 != q.original_size || total > 16 * 1024 * 1024 {

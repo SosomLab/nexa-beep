@@ -479,6 +479,7 @@ fn spawn_session_actor(
     out_rx: std::sync::mpsc::Receiver<SessionCmd>,
     proxy: winit::event_loop::EventLoopProxy<AppEvent>,
     send_rate: nbeep_core::RateLimit,
+    seal_secret: [u8; 32],
 ) {
     use nbeep_core::mux::StreamId;
     use nbeep_core::{XferInbox, XferMsg};
@@ -812,6 +813,7 @@ fn spawn_session_actor(
                         &proxy,
                         send_rate,
                         &mut send_meter,
+                        &seal_secret,
                     )
                     .is_err()
                     {
@@ -979,6 +981,7 @@ fn xfer_step(
     proxy: &winit::event_loop::EventLoopProxy<AppEvent>,
     send_rate: nbeep_core::RateLimit,
     meter: &mut nbeep_core::RateMeter,
+    seal_secret: &[u8; 32],
 ) -> Result<(), ()> {
     use nbeep_core::mux::StreamId;
     use nbeep_core::XferMsg;
@@ -1060,33 +1063,38 @@ fn xfer_step(
             }
         }
         Ok(XferMsg::Done { id }) => match inbox.done(&id) {
-            Ok(got) => match crate::gate::quarantine_received(&got, peer, crate::gate::CH_GUI) {
-                Ok(q) => {
-                    // 평균 수신 속도(08-16) — 첫 청크~Done. 표기는 스레드 완료 항목.
-                    let avg_bps = {
-                        let dur = xfer_now_ms()
-                            .saturating_sub(recv_started.remove(&id).unwrap_or_else(xfer_now_ms))
-                            .max(1);
-                        (got.bytes.len() as u64).saturating_mul(1000) / dur
-                    };
-                    // ★ 종단 확인(M4-9) — 격리까지 성공했으니 발신자에게 Received를 돌려준다.
-                    //    이걸 받아야 상대의 "완료"가 참이 된다("보냈다"≠"닿았다").
-                    let _ = session.send(StreamId::File, &XferMsg::Received { id }.encode());
-                    let _ = proxy.send_event(AppEvent::XferDone {
-                        peer,
-                        name: q.name,
-                        risk: q.risk,
-                        mismatch: q.mismatch,
-                        qpath: q.path.to_string_lossy().into_owned(),
-                        avg_bps,
-                    });
+            Ok(got) => {
+                match crate::gate::quarantine_received(&got, peer, crate::gate::CH_GUI, seal_secret)
+                {
+                    Ok(q) => {
+                        // 평균 수신 속도(08-16) — 첫 청크~Done. 표기는 스레드 완료 항목.
+                        let avg_bps = {
+                            let dur = xfer_now_ms()
+                                .saturating_sub(
+                                    recv_started.remove(&id).unwrap_or_else(xfer_now_ms),
+                                )
+                                .max(1);
+                            (got.bytes.len() as u64).saturating_mul(1000) / dur
+                        };
+                        // ★ 종단 확인(M4-9) — 격리까지 성공했으니 발신자에게 Received를 돌려준다.
+                        //    이걸 받아야 상대의 "완료"가 참이 된다("보냈다"≠"닿았다").
+                        let _ = session.send(StreamId::File, &XferMsg::Received { id }.encode());
+                        let _ = proxy.send_event(AppEvent::XferDone {
+                            peer,
+                            name: q.name,
+                            risk: q.risk,
+                            mismatch: q.mismatch,
+                            qpath: q.path.to_string_lossy().into_owned(),
+                            avg_bps,
+                        });
+                    }
+                    Err(e) => {
+                        // 수신측 실패 — 발신자가 거짓 완료를 남기지 않게 Failed를 되돌린다.
+                        let _ = session.send(StreamId::File, &XferMsg::Failed { id }.encode());
+                        fail(format!("{e}"));
+                    }
                 }
-                Err(e) => {
-                    // 수신측 실패 — 발신자가 거짓 완료를 남기지 않게 Failed를 되돌린다.
-                    let _ = session.send(StreamId::File, &XferMsg::Failed { id }.encode());
-                    fail(format!("{e}"));
-                }
-            },
+            }
             Err(e) => {
                 let _ = session.send(StreamId::File, &XferMsg::Failed { id }.encode());
                 fail(format!("완료 실패: {e} — 폐기"));
@@ -3069,7 +3077,13 @@ impl App {
     fn install_conversation(&mut self, session: LiveSession) {
         let peer = session.peer();
         let (out_tx, out_rx) = std::sync::mpsc::channel();
-        spawn_session_actor(session, out_rx, self.proxy.clone(), self.send_rate);
+        spawn_session_actor(
+            session,
+            out_rx,
+            self.proxy.clone(),
+            self.send_rate,
+            self.identity.wrap_secret(),
+        );
         // 프로필 자동 프리페치(M3-17 · ADR-0008) — 세션이 섰으니 요청 1회.
         // 상대가 전부 비공개면 빈 응답이 온다(그래도 요청은 무해).
         let _ = out_tx.send(SessionCmd::Control(vec![
@@ -3223,10 +3237,20 @@ impl App {
         let Ok(paths) = dir.list() else {
             return Vec::new();
         };
+        let secret = self.identity.wrap_secret();
         paths
             .into_iter()
             .filter_map(|p| {
-                let bytes = std::fs::read(&p).ok()?;
+                let bytes = crate::gate::read_beepq_bytes(&p, &secret)?;
+                // 구본(평문) 이관 — 여기서 lazy 재봉인(다음 열람부턴 봉인본).
+                // 실패는 조용히 두지 않는다(다음 로드가 재시도).
+                if !nbeep_store::sealed::is_sealed(&std::fs::read(&p).ok()?) {
+                    if let Ok(sealed) =
+                        nbeep_store::sealed::seal(crate::gate::SEAL_QUARANTINE, &secret, &bytes)
+                    {
+                        let _ = std::fs::write(&p, sealed);
+                    }
+                }
                 let bq = Beepq::open(&bytes).ok()?;
                 // 표시용 불일치 경고 — 저장 시점 판정을 다시 계산하지 않고
                 // 메타(선언 확장자 vs 매직 형식)만 대조한다.
@@ -3262,7 +3286,11 @@ impl App {
                             self.proxy.clone(),
                             DecodeTarget::QThumb(path_s.clone()),
                             move || {
-                                crate::imgdec::thumb_raw_from_beepq(std::path::Path::new(&qp), 64)
+                                crate::imgdec::thumb_raw_from_beepq(
+                                    std::path::Path::new(&qp),
+                                    64,
+                                    &secret,
+                                )
                             },
                         );
                         None
@@ -3352,13 +3380,16 @@ impl App {
                 // 없으면 임시 폴더로 떨어뜨리되 경로를 그대로 보여 준다(숨기지 않는다).
                 let dest = nbeep_plat::paths::downloads_dir()
                     .unwrap_or_else(|| std::env::temp_dir().join("nexa-beep-materialized"));
-                let out = std::fs::read(&path)
-                    .map_err(|e| e.to_string())
-                    .and_then(|b| Beepq::open(&b).map_err(|e| format!("{e:?}")))
-                    .and_then(|bq| {
-                        QuarantineDir::materialize(&bq, &dest, &CryptoHash, &OsMark)
-                            .map_err(|e| e.to_string())
-                    });
+                let out = crate::gate::read_beepq_bytes(
+                    std::path::Path::new(&path),
+                    &self.identity.wrap_secret(),
+                )
+                .ok_or_else(|| "봉인 개봉 실패(다른 신원·손상)".to_string())
+                .and_then(|b| Beepq::open(&b).map_err(|e| format!("{e:?}")))
+                .and_then(|bq| {
+                    QuarantineDir::materialize(&bq, &dest, &CryptoHash, &OsMark)
+                        .map_err(|e| e.to_string())
+                });
                 self.status = match out {
                     Ok(m) => {
                         // 표식 실패도 **명시**한다(조용히 넘어가지 않는다 — [docs/11] §5).
@@ -4348,10 +4379,11 @@ impl App {
             img: ImgLoad::Loading,
         });
         let qp = qpath.clone();
+        let secret = self.identity.wrap_secret();
         spawn_decode(
             self.proxy.clone(),
             DecodeTarget::FullImage(qpath),
-            move || crate::imgdec::thumb_raw_from_beepq(std::path::Path::new(&qp), 1024),
+            move || crate::imgdec::thumb_raw_from_beepq(std::path::Path::new(&qp), 1024, &secret),
         );
         if let Some((wid, _)) = self.windows.iter().find(|(_, e)| e.role == Role::ImageView) {
             let wid = *wid;
@@ -4690,12 +4722,83 @@ impl App {
                 p.1 = code;
             }
         }
+        // ★ PII는 cfg에 안 쓴다(08-17 평문 3면 ② — 이메일·전화는 사람이 읽는
+        //   설정 파일에 평문으로 남길 값이 아니다). 값은 메모리 Entry에 그대로
+        //   있고(화면·전파 경로 무변경), 영속은 봉인 사이드카(profile.sec)가 맡는다.
+        //   known에서 빠지므로 cfg에서 사라진다(구본 평문의 제거 = 이 저장 1회).
+        pairs.retain(|(k, _)| !crate::gate::PII_KEYS.contains(k));
         if let Err(e) = self.conf.save(&pairs) {
             let path = self.conf.path().display();
             if exiting {
                 eprintln!("설정 저장 실패(종료 경로) — {path}: {e}");
             } else {
                 self.status = format!("설정 저장 실패 — {e} (다음 변경 때 재시도)");
+            }
+        }
+        // 사이드카는 pairs(설정 빌림) 소비 후 — cfg와 같은 저장 사이클에 봉인 기록.
+        self.save_pii_sidecar();
+    }
+
+    /// PII 봉인 사이드카 저장(08-17 평문 3면 ②) — `data/profile.sec`.
+    /// 형식: 봉인 평문 = `key\tvalue` 줄들(빈 값 키는 생략 · 전부 비면 파일 삭제).
+    fn save_pii_sidecar(&mut self) {
+        let path = self.data_dir.join("profile.sec");
+        let mut body = String::new();
+        for k in crate::gate::PII_KEYS {
+            let v = self.settings.get(k).to_string();
+            if !v.is_empty() {
+                body.push_str(k);
+                body.push('\t');
+                body.push_str(&v);
+                body.push('\n');
+            }
+        }
+        if body.is_empty() {
+            let _ = std::fs::remove_file(&path); // 철회 대칭 — 빈 봉투를 남기지 않는다
+            return;
+        }
+        match nbeep_store::sealed::seal(
+            crate::gate::SEAL_PII,
+            &self.identity.wrap_secret(),
+            body.as_bytes(),
+        ) {
+            Ok(env) => {
+                if std::fs::write(&path, env).is_err() {
+                    self.status = "⚠ 연락처 보호 저장 실패 — 다음 변경 때 재시도".into();
+                }
+            }
+            Err(_) => {
+                // 봉인 실패 = 평문 폴백 없음(원칙) — 소리 내어 알린다.
+                self.status = "⚠ 연락처 봉인 실패 — 저장하지 않음".into();
+            }
+        }
+    }
+
+    /// PII 사이드카 로드(부팅 · 08-17) — 열리면 메모리 Entry에 주입(사이드카가
+    /// cfg 구본보다 우선). cfg에 남은 구본 평문은 다음 저장에서 제거된다(known
+    /// 제외 — 이관은 저장 1회로 완결).
+    fn load_pii_sidecar(&mut self) {
+        let path = self.data_dir.join("profile.sec");
+        let Ok(raw) = std::fs::read(&path) else {
+            return;
+        };
+        let Some(body) =
+            nbeep_store::sealed::open(crate::gate::SEAL_PII, &self.identity.wrap_secret(), &raw)
+        else {
+            // 다른 신원·손상 — fail-closed(평문인 척 읽지 않는다). 값은 비워 둔다.
+            self.status = "⚠ 연락처 보호 파일을 열 수 없음(다른 신원·손상)".into();
+            return;
+        };
+        if let Ok(text) = String::from_utf8(body) {
+            for line in text.lines() {
+                if let Some((k, v)) = line.split_once('\t') {
+                    // &'static 키로 매칭해 주입(set의 키 수명 요구).
+                    for &sk in crate::gate::PII_KEYS {
+                        if sk == k {
+                            self.settings.set(sk, v.to_string());
+                        }
+                    }
+                }
             }
         }
     }
@@ -4807,11 +4910,29 @@ impl App {
             let image_file = img_path.exists().then(|| img_path.clone());
             if image_file.is_some() {
                 // 파일 읽기·격리 디코드 모두 워커에서(M4-5 결 — 부팅 무정지).
+                // 봉인 개봉 + 구본(평문) 관용 — 구본이면 여기서 lazy 재봉인(이관).
+                let secret = self.identity.wrap_secret();
                 spawn_decode(
                     self.proxy.clone(),
                     DecodeTarget::PeerAvatar(peer),
                     move || {
-                        let bytes = std::fs::read(&img_path).ok()?;
+                        let raw = std::fs::read(&img_path).ok()?;
+                        let bytes = if nbeep_store::sealed::is_sealed(&raw) {
+                            nbeep_store::sealed::open(
+                                crate::gate::SEAL_PROFILE_CACHE,
+                                &secret,
+                                &raw,
+                            )?
+                        } else {
+                            if let Ok(env) = nbeep_store::sealed::seal(
+                                crate::gate::SEAL_PROFILE_CACHE,
+                                &secret,
+                                &raw,
+                            ) {
+                                let _ = std::fs::write(&img_path, env);
+                            }
+                            raw
+                        };
                         crate::imgdec::avatar_raw_from_bytes(&bytes, 256)
                     },
                 );
@@ -7892,10 +8013,17 @@ impl ApplicationHandler<AppEvent> for App {
                 // 이미지가 아니거나 실패면 조용히 없음(스레드는 텍스트 그대로).
                 {
                     let qp = qpath.clone();
+                    let secret = self.identity.wrap_secret();
                     spawn_decode(
                         self.proxy.clone(),
                         DecodeTarget::XferThumb(peer, qpath),
-                        move || crate::imgdec::thumb_raw_from_beepq(std::path::Path::new(&qp), 96),
+                        move || {
+                            crate::imgdec::thumb_raw_from_beepq(
+                                std::path::Path::new(&qp),
+                                96,
+                                &secret,
+                            )
+                        },
                     );
                 }
                 self.clear_xfer(peer);
@@ -8195,7 +8323,16 @@ impl ApplicationHandler<AppEvent> for App {
                 let image_file = image
                     .and_then(|bytes| {
                         std::fs::create_dir_all(&dir).ok()?;
-                        std::fs::write(&img_path, &bytes).ok()?;
+                        // 디스크 봉인(08-17 평문 3면 ③) — 상대의 사진은 상대가 나에게만
+                        // 공개한 PII다. 봉인 실패 = 캐시 포기(평문 폴백 없음 · 표시용
+                        // 디코드는 메모리의 bytes로 그대로 진행되니 화면은 안 죽는다).
+                        let env = nbeep_store::sealed::seal(
+                            crate::gate::SEAL_PROFILE_CACHE,
+                            &self.identity.wrap_secret(),
+                            &bytes,
+                        )
+                        .ok()?;
+                        std::fs::write(&img_path, env).ok()?;
                         avatar = self.peer_profiles.get(&peer).and_then(|p| p.avatar.clone());
                         spawn_decode(
                             self.proxy.clone(),
@@ -9888,6 +10025,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
     app.reload_faces(); // 고정폭 등 슬롯 얼굴 초기 로드
     app.apply_boot_settings(); // 영속 설정 → 파생 런타임 상태(테마·정책 등 · M3-15)
     app.promote_local_groups(); // 구버전 로컬(동보) 그룹 → 그룹 대화(G4 마이그레이션)
+    app.load_pii_sidecar(); // 연락처(PII) 봉인 사이드카 — cfg 구본보다 우선(08-17)
     app.restore_cached_profiles(); // 핀 상대의 캐시 프로필·목록 행 복원(08-14)
     app.ensure_wire_avatar(); // 상한 초과 사진의 와이어 축소본 보장(08-16 — 기존 사용자 자기 치유)
     event_loop.run_app(&mut app).unwrap();

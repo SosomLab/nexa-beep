@@ -849,7 +849,15 @@ fn human(b: u64) -> String {
 /// 수신 완료물 → **무해화 게이트 합류**(공용 [`crate::gate`]) 후 결과를 stdout에 보고.
 /// 수신물을 격리하고 **성공 여부**를 돌려준다(M4-9 — 발신자에게 종단 확인 ack를 보내기 위해).
 fn receive_into_quarantine(got: &nbeep_core::Received, sender: PeerId) -> bool {
-    match crate::gate::quarantine_received(got, sender, crate::gate::CH_CLI) {
+    // 봉인 키 = **영속 신원**(identity.key — CLI 대화의 임시 신원으로 봉인하면
+    // 그 실행이 끝나는 순간 아무도 못 연다 · GUI·CLI 격리함이 같은 봉투를 연다).
+    let Ok((id, _)) =
+        nbeep_crypto::keyfile::load_or_generate(&crate::app::data_dir().join("identity.key"))
+    else {
+        println!("[파일] 격리 실패: 신원 키를 열 수 없음(봉인 불가 — 평문 저장 안 함)");
+        return false;
+    };
+    match crate::gate::quarantine_received(got, sender, crate::gate::CH_CLI, &id.wrap_secret()) {
         Ok(q) => {
             println!(
                 "[파일] 격리 수신 완료: {} · risk={:?}{} · {}",

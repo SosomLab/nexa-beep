@@ -10,6 +10,7 @@
 #![forbid(unsafe_op_in_unsafe_fn)]
 
 pub mod groupfile;
+pub mod sealed;
 pub mod trustfile;
 
 pub use groupfile::{FileGroupStore, GroupLoad, MineState, SharedGroup};
