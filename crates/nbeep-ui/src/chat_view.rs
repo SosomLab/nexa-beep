@@ -321,7 +321,6 @@ pub struct ChatViewWidget {
     lines: Vec<ChatLine>,
     input: crate::edit::EditState,
     /// IME 조합 중 텍스트(확정 전 — 밑줄 표시. 확정은 input에 삽입).
-    preedit: String,
     scale: f32,
     outgoing: Option<SafeText>,
     back: bool,
@@ -388,7 +387,6 @@ impl ChatViewWidget {
             title,
             lines: Vec::new(),
             input: crate::edit::EditState::new(),
-            preedit: String::new(),
             scale: 1.0,
             outgoing: None,
             back: false,
@@ -554,18 +552,16 @@ impl ChatViewWidget {
 
     /// IME 조합 중 텍스트 설정(빈 문자열 = 조합 종료·취소). 확정은 `on_event`의 Char로.
     pub fn set_preedit(&mut self, text: String, inv: &mut Invalidations) {
-        // ★ 조합 시작 = 선택 삭제(H-25 — 선택 위 타이핑 = 대체 · TextBox와 동일 규칙).
-        if !text.is_empty() && self.input.selection().is_some() {
-            let _ = self.input.cut();
-        }
-        self.preedit = text;
+        // H-25(조합 시작 = 선택 삭제)는 EditState::set_preedit 공용(M3-1e ① — TextBox와
+        // 같은 코어). 대화 입력은 dirty 추적이 없어 반환값은 무시한다.
+        self.input.set_preedit(&text);
         inv.push(self.input_bar());
     }
 
     /// 조합 중 텍스트(테스트·렌더).
     #[must_use]
     pub fn preedit(&self) -> &str {
-        &self.preedit
+        self.input.preedit()
     }
 
     // ── 클립보드(호스트가 OS와 잇는다 — ui는 OS를 모른다) ──
@@ -1262,7 +1258,7 @@ impl Widget for ChatViewWidget {
                 inv.push(self.input_bar());
             }
             InputEvent::Char { c, .. } => {
-                self.preedit.clear(); // 확정 문자 도착 = 조합 종료
+                self.input.set_preedit(""); // 확정 문자 도착 = 조합 종료
                 if c == '\u{8}' {
                     self.input.backspace();
                 } else if !c.is_control() {
@@ -1600,7 +1596,7 @@ impl Widget for ChatViewWidget {
         let count = all_lines.len().max(1);
         let top_line = self.input_scroll.min(count.saturating_sub(1));
 
-        if text.is_empty() && self.preedit.is_empty() {
+        if text.is_empty() && self.input.preedit().is_empty() {
             let ly = input.y + pad_v_in;
             ctx.text(
                 tx,
@@ -1680,7 +1676,7 @@ impl Widget for ChatViewWidget {
                 // 캐럿(글자 실측 높이 — 세로 중앙).
                 if li == cline && (top_line..top_line + visible).contains(&cline) {
                     let cx = tx + xs[ccol.min(xs.len() - 1)];
-                    if self.preedit.is_empty() {
+                    if self.input.preedit().is_empty() {
                         // 창 안에 있을 때만 — 밖이면 그리지 않는다(가로 스크롤 경계).
                         // 깜빡임 위상은 호스트 주입(08-13 · 조합 중 프리에딧은 항상 표시).
                         if cx >= input.x && cx < input.right() && ctx.caret_on() {
@@ -1688,8 +1684,8 @@ impl Widget for ChatViewWidget {
                         }
                     } else {
                         // IME 조합 중 — 캐럿 위치에 프리에딧을 accent 색 + 밑줄로(확정 전).
-                        ctx.text(cx, ty, input, &self.preedit, theme.accent);
-                        let pw = ctx.text_width(&self.preedit);
+                        ctx.text(cx, ty, input, self.input.preedit(), theme.accent);
+                        let pw = ctx.text_width(self.input.preedit());
                         ctx.fill_rect(
                             Rect::new(cx, ty + ith, pw.max(1), self.s(2).max(1)),
                             theme.accent,

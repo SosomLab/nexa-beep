@@ -29,6 +29,10 @@ pub struct EditState {
     buf: Vec<char>,
     caret: usize,
     anchor: Option<usize>,
+    /// IME 조합 중 문자열(M3-1e ① — TextBox·대화 입력 공용). **표시 전용**:
+    /// 편집 버퍼(`buf`)에 들어가지 않고, `display_text`가 캐럿 자리에 끼워 보인다.
+    /// 확정 문자는 `insert`로 버퍼에 들어오고 조합은 끝난다(호출측이 preedit 비움).
+    preedit: String,
 }
 
 impl EditState {
@@ -44,7 +48,12 @@ impl EditState {
         let buf: Vec<char> = text.chars().collect();
         let caret = buf.len();
         let anchor = (select_all && !buf.is_empty()).then_some(0);
-        Self { buf, caret, anchor }
+        Self {
+            buf,
+            caret,
+            anchor,
+            preedit: String::new(),
+        }
     }
 
     /// 현재 텍스트.
@@ -80,6 +89,39 @@ impl EditState {
     pub fn selected_text(&self) -> Option<String> {
         let (a, b) = self.selection()?;
         Some(self.buf[a..b].iter().collect())
+    }
+
+    /// 조합 중 문자열 지정(M3-1e ① 공용) — **H-25 규칙 내장**: 조합 시작(빈→비움
+    /// 아님)에 선택이 있으면 그 선택을 삭제한다(OS 관례 — 선택 위 타이핑 = 대체 ·
+    /// "선택 반전 + 조합 밑줄 병존"의 어리둥절한 화면 방지). 버퍼를 바꿨으면(선택
+    /// 삭제) `true` — 호스트가 dirty 플래그를 갱신하는 근거.
+    pub fn set_preedit(&mut self, text: &str) -> bool {
+        let cut = if !text.is_empty() && self.selection().is_some() {
+            self.delete_selection()
+        } else {
+            false
+        };
+        self.preedit = text.to_string();
+        cut
+    }
+
+    /// 조합 중 문자열(표시·테스트).
+    #[must_use]
+    pub fn preedit(&self) -> &str {
+        &self.preedit
+    }
+
+    /// **표시용 텍스트** — 조합 중 문자열을 캐럿 자리에 끼운 것(편집 버퍼 불변).
+    /// 필드에 보이는 그대로가 필요한 곳(아바타 이니셜 미리보기 등)이 쓴다.
+    #[must_use]
+    pub fn display_text(&self) -> String {
+        if self.preedit.is_empty() {
+            return self.text();
+        }
+        let caret = self.caret.min(self.buf.len());
+        let before: String = self.buf[..caret].iter().collect();
+        let after: String = self.buf[caret..].iter().collect();
+        format!("{before}{}{after}", self.preedit)
     }
 
     fn delete_selection(&mut self) -> bool {

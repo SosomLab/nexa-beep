@@ -40,7 +40,6 @@ pub struct TextBox {
     hscroll: std::cell::Cell<i32>,
     /// IME 조합 중 문자열(08-13) — 캐럿 자리에 밑줄로 끼워 그린다. 확정 전에도
     /// 지금 치는 글자가 보여야 한다(대화 입력과 동일한 경험 — 호스트가 배선).
-    preedit: String,
     /// 우클릭 편집 메뉴(08-13 전수 검사 — 대화 입력에만 있고 일반 필드엔 없었다).
     ctx_menu: super::EditMenu,
     /// 메뉴에서 고른 클립보드 행동(1회성) — OS 클립보드는 호스트 몫이라 요청만 남긴다.
@@ -77,7 +76,6 @@ impl TextBox {
             dragging: false,
             last_click: (0, 0),
             hscroll: std::cell::Cell::new(0),
-            preedit: String::new(),
             ctx_menu: super::EditMenu::new(),
             edit_ctx: None,
             clip_has_text: true,
@@ -98,17 +96,15 @@ impl TextBox {
     /// 호스트가 창 단위로 보내므로 초점 필드만 받아야 이중 표시가 없다.
     pub fn set_preedit(&mut self, text: &str, inv: &mut Invalidations) {
         if !self.base.focused && !text.is_empty() {
-            return;
+            return; // 포커스 가드는 위젯 몫(H-25 선택 삭제·저장은 EditState 공용)
         }
-        // ★ 조합 시작 = 선택 삭제(H-25 — OS 관례: 선택 위에서 타이핑하면 대체).
-        // 프리에딧은 표시 전용이라 확정 문자가 캐럿에 꽂히기 전, 여기서 지워야
-        // "선택 반전 + 조합 밑줄 병존"이라는 어리둥절한 화면이 안 나온다.
-        if !text.is_empty() && self.edit.selection().is_some() {
-            let _ = self.edit.cut();
+        let changed = self.edit.preedit() != text;
+        // H-25(조합 시작 = 선택 삭제)는 EditState::set_preedit이 공용으로 처리하고,
+        // 버퍼를 바꿨으면 true를 준다 — dirty 플래그 갱신 근거(M3-1e ①).
+        if self.edit.set_preedit(text) {
             self.changed = true;
         }
-        if self.preedit != text {
-            self.preedit = text.to_string();
+        if changed {
             inv.push(self.base.bounds);
         }
     }
@@ -256,14 +252,7 @@ impl TextBox {
     /// (08-13 실기: 필드엔 "나다"가 보이는데 아바타는 "나"라 미입력처럼 보였다).
     #[must_use]
     pub fn display_text(&self) -> String {
-        if self.preedit.is_empty() {
-            return self.edit.text();
-        }
-        let chars: Vec<char> = self.edit.text().chars().collect();
-        let caret = self.edit.caret().min(chars.len());
-        let before: String = chars[..caret].iter().collect();
-        let after: String = chars[caret..].iter().collect();
-        format!("{before}{}{after}", self.preedit)
+        self.edit.display_text()
     }
 
     /// 우클릭 메뉴를 **최상위 레이어로** 다시 그린다(08-13 실기: 프로필에서 아래
@@ -495,19 +484,19 @@ impl Widget for TextBox {
         let caret_i = self.edit.caret().min(chars.len());
         let before: String = chars[..caret_i].iter().collect();
         // 조합 중 문자열(preedit)은 캐럿 자리에 끼워 **표시만** 한다(편집 상태 불변).
-        let shown = if self.preedit.is_empty() {
+        let shown = if self.edit.preedit().is_empty() {
             text.clone()
         } else {
             let after: String = chars[caret_i..].iter().collect();
-            format!("{before}{}{after}", self.preedit)
+            format!("{before}{}{after}", self.edit.preedit())
         };
         // 문자 경계 누적 폭 — 단일 패스(08-14 성능 · 값은 접두사 재측정과 동일 계약.
         // 캐럿 깜빡임이 포커스 창을 상시 리페인트해 매 프레임 O(n²) 측정이 비쌌다).
         let mut w = Vec::new();
         ctx.text_prefix_widths(&text, &mut w);
         let pre_start_px = w.get(caret_i).copied().unwrap_or(0);
-        let caret_px = pre_start_px + ctx.text_width(&self.preedit); // 조합 뒤가 캐럿
-        let total_px = if self.preedit.is_empty() {
+        let caret_px = pre_start_px + ctx.text_width(self.edit.preedit()); // 조합 뒤가 캐럿
+        let total_px = if self.edit.preedit().is_empty() {
             w.last().copied().unwrap_or(0) // shown == text — 같은 값(계약)
         } else {
             ctx.text_width(&shown) // 조합 중 한정 — 종전 그대로
@@ -570,7 +559,7 @@ impl Widget for TextBox {
             ctx.text(tx, ty, view, &shown, theme.text);
         }
         // 조합 구간 밑줄 — "여기가 아직 확정 전"임을 대화 입력과 같은 문법으로 표시.
-        if !self.preedit.is_empty() {
+        if !self.edit.preedit().is_empty() {
             let th = ctx.text_height();
             let ux0 = (tx + pre_start_px).max(view_x0);
             let ux1 = (tx + caret_px).min(view_x1).max(ux0 + self.s(4));
