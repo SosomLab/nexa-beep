@@ -682,6 +682,53 @@ pub fn registry() -> &'static [Entry] {
             kind: SettingKind::RadioInput(&[("47200", Msg::PortDefault)], ""),
             key: "net.session_port",
         },
+        // ── 서버(ADR-0013 · 08-17) — ★ **개발 범위 = 이 설정값 저장까지만**.
+        //   Managed 네트워킹·릴레이 서버는 TODO(개발 제외 · 사용자 확정). 기본
+        //   Unmanaged(Radio 첫 옵션 = 자동 기본)라 서버를 몰라도 제품이 완전하다(S-0).
+        Entry {
+            cat: Msg::CatServer,
+            sub: None,
+            label: Msg::ServerMode,
+            desc: Msg::ServerModeDesc,
+            kind: SettingKind::Radio(&[
+                ("unmanaged", Msg::ServerModeUnmanaged),
+                ("managed", Msg::ServerModeManaged),
+            ]),
+            key: "net.server.mode",
+        },
+        // 서버 주소·포트 — Managed에서만 의미(값은 항상 영속 · 네트워킹 배선은 TODO).
+        Entry {
+            cat: Msg::CatServer,
+            sub: None,
+            label: Msg::ServerAddress,
+            desc: Msg::ServerAddressDesc,
+            kind: SettingKind::RadioInput(&[], ""),
+            key: "net.server.address",
+        },
+        Entry {
+            cat: Msg::CatServer,
+            sub: None,
+            label: Msg::ServerPort,
+            desc: Msg::ServerPortDesc,
+            kind: SettingKind::RadioInput(&[("47300", Msg::PortDefault)], ""),
+            key: "net.server.port",
+        },
+        // 서버 타입 — 기본 auto(서버 제공). Managed에서만 직접 선택(제약은 네트워킹
+        // 슬라이스에서 · 지금은 값만 저장). Radio 첫 옵션 = auto가 기본.
+        Entry {
+            cat: Msg::CatServer,
+            sub: None,
+            label: Msg::ServerType,
+            desc: Msg::ServerTypeDesc,
+            kind: SettingKind::Radio(&[
+                ("auto", Msg::ServerTypeAuto),
+                ("gateway", Msg::ServerTypeGateway),
+                ("relay", Msg::ServerTypeRelay),
+                ("content", Msg::ServerTypeContent),
+                ("registered", Msg::ServerTypeRegistered),
+            ]),
+            key: "net.server.type",
+        },
         // 그룹(M5-1 · ADR-0012) — 재동기 보관 주체 = 송신자(사용자 확정 08-13).
         // 발신자가 구성원별로 미전달 그룹 메시지를 몇 개까지 보관할지(초과 = 오래된 것
         // 폐기 — 큐 상한 필수 NFR-B-6). 소비처(app)가 관용 파싱한다.
