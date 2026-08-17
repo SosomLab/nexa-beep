@@ -3,7 +3,9 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
-> **갱신: 2026-08-17 9차 (KST)** — ★ **M3-1e ① 착수(슬라이스 1 = 프리에딧 공용화)**: 편집 상태(EditState)는 이미 공용인데 IME 프리에딧만 TextBox·대화 입력 **두 벌**(preedit 필드·H-25 규칙·표시 텍스트)이었다 → EditState로 로직 이동(`set_preedit` H-25 내장·`preedit()`·`display_text`) · 두 위젯 위임(고유 글루만) · **동작 불변**(양쪽 IME 회귀 전부 통과 — 규칙 동일). 다음 슬라이스 = 선택 그리기·드래그 자동 스크롤(페인트 경로·더 신중히). **673 green** · clippy 0. [journal/2026-08-17.md](journal/2026-08-17.md).
+> **갱신: 2026-08-17 10차 (KST)** — ★ **M3-1e ① 종료(사용자 확정 "여기서 마무리")**: 입력 스택 단일화를 상태·로직 축에서 완료(EditState 버퍼·캐럿·선택 + EditMenu 우클릭 편집 메뉴 + 프리에딧·H-25·display_text — 전부 공용). **선택 하이라이트 페인트는 공용화 안 함 = 명시적 미시행 근거**(TextBox 단일행+가로 스크롤 vs ChatView 멀티행+줄바꿈+세로 스크롤 = 기하 근본 상이 · 강제 공유 = 추상 비용+H-1~27 픽셀 회귀 위험 > 이득 · TODO 박제). M3-1e 전체(①②) ✅. **673 green**. [journal/2026-08-17.md](journal/2026-08-17.md).
+>
+> **직전(08-17 9차)** — ★ **M3-1e ① 착수(슬라이스 1 = 프리에딧 공용화)**: 편집 상태(EditState)는 이미 공용인데 IME 프리에딧만 TextBox·대화 입력 **두 벌**(preedit 필드·H-25 규칙·표시 텍스트)이었다 → EditState로 로직 이동(`set_preedit` H-25 내장·`preedit()`·`display_text`) · 두 위젯 위임(고유 글루만) · **동작 불변**(양쪽 IME 회귀 전부 통과 — 규칙 동일). 다음 슬라이스 = 선택 그리기·드래그 자동 스크롤(페인트 경로·더 신중히). **673 green** · clippy 0. [journal/2026-08-17.md](journal/2026-08-17.md).
 >
 > **직전(08-17 8차)** — ★ **M2-5b 코어(대화 기록 봉인 영속) — M2 마지막 조각**(D-18 해소로 잠금 풀림): sealed 봉투(도메인 `history-v1`·A 단일 키)로 **1:1 텍스트 대화가 재시작 후에도 남는다** · `record_history`(훅 4지점 · 원자적 `data/history/{short}.seg` · 봉인 실패 = 저장 포기·평문 폴백 없음) + `restore_history`(부팅 → **parked_lines 재사용**: 대화창 열면 뜨고 재연결하면 install_conversation이 이어받음) + build_chat_view parked 폴백 · 상한 2000줄 · **회귀 3종**(왕복·손상 fail-soft·상한). **이어서 완결** = 파일 전송 줄(종결 Done/Failed만 · 진행 중 제외 · tag=2). 잔여 = 시간 만료(Q-32-11)·블라인드 인덱스 검색(Q-32-2). ★ **D-12 확정** = [ADR-0004 격리](11-adr-0004-quarantine.md) **✅ Accepted**(구현 완료 · 공식 확정만 남아 있던 것). **673 green**. [journal/2026-08-17.md](journal/2026-08-17.md).
 >
