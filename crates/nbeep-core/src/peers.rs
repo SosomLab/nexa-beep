@@ -120,6 +120,13 @@ impl PeerTable {
         None
     }
 
+    /// 발견 테이블에서 즉시 제거(08-17 — 사용자 "목록에서 삭제"). 살아 있는
+    /// 모든 경로를 지운다. 상대가 다시 비컨하면 새 [`PeerEvent::Appeared`]로 돌아온다
+    /// (삭제 = 역사 지움이지 영구 차단이 아니다 — 차단은 `TrustStore::block`).
+    pub fn forget(&mut self, peer: PeerId) {
+        self.entries.remove(&peer);
+    }
+
     /// 무응답 판정 — `now` 기준 임계를 넘긴 항목을 이탈시킨다. 주기 호출(발견 틱).
     pub fn sweep(&mut self, now: MonoInstant) -> Vec<PeerEvent> {
         let timeout = self.timeout_ms;

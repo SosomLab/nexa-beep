@@ -98,6 +98,10 @@ pub struct PeerRow {
     /// 같은 표시 이름을 **다른 키**가 쓴다(M3-14 — v1에서 사칭을 드러내는 유일한
     /// 가시 신호 · 등급 아이콘 옆 `badge-alert` 덧붙는 표식).
     pub conflict: bool,
+    /// 마지막 접속 상대 표기(08-17 — 우클릭 삭제 메뉴가 "언제 마지막 봤는지"를
+    /// 보여준다. 빈 값 = 기록 없음. 벽시계 상대 시각은 호스트만 계산할 수 있어
+    /// 여기 라벨로 실어 보낸다).
+    pub last_seen_label: String,
 }
 
 /// 목록 행에 그릴 전송 진행 상태.
@@ -374,6 +378,8 @@ pub struct PeerListWidget {
     profile_req: Option<PeerId>,
     /// 목록 고정 토글 요청(1회성 · 08-15) — (상대, 고정으로 바꿀 값).
     fav_req: Option<(PeerId, bool)>,
+    /// 목록에서 삭제 요청(1회성 · 08-17) — 호스트가 핀·캐시 파일을 지운다.
+    forget_req: Option<PeerId>,
     /// 그룹 관련 행동(1회성 — 호스트가 저장소·모달로 처리).
     group_action: Option<GroupAction>,
     /// 갱신 직후 스크롤 동작(설정 — 기본 = 현재 위치 유지 · 08-14).
@@ -425,6 +431,7 @@ impl PeerListWidget {
             ctx_group: None,
             profile_req: None,
             fav_req: None,
+            forget_req: None,
             group_action: None,
             groups: Vec::new(),
             selected: std::collections::HashSet::new(),
@@ -565,6 +572,11 @@ impl PeerListWidget {
     /// "프로필 보기" 선택(1회성) — 호스트가 상대 프로필 창을 연다.
     pub fn take_profile_request(&mut self) -> Option<PeerId> {
         self.profile_req.take()
+    }
+
+    /// 목록에서 삭제 요청 회수(1회성 · 08-17) — 호스트가 핀·캐시를 지우고 목록 갱신.
+    pub fn take_forget_request(&mut self) -> Option<PeerId> {
+        self.forget_req.take()
     }
 
     /// 타입어헤드 유효시간(ms) 설정 — 마지막 입력 후 이 시간 지나면 초기화.
@@ -855,6 +867,7 @@ impl Widget for PeerListWidget {
                 if let Some(id) = self.ctx_menu.take_picked() {
                     match id.as_str() {
                         "profile" => self.profile_req = self.ctx_peer.take(),
+                        "forget" => self.forget_req = self.ctx_peer.take(),
                         "fav" => {
                             if let Some(p) = self.ctx_peer.take() {
                                 let cur = self
@@ -971,6 +984,19 @@ impl Widget for PeerListWidget {
                             self.selected.clear();
                         }
                         let n = self.selected.len().max(1);
+                        // 삭제 항목(08-17) — 라벨에 마지막 접속 상대 시각을 함께 실어
+                        // "언제 마지막 봤는지" 보고 지울 수 있게(기록 없으면 시각 생략).
+                        let last = self
+                            .rows
+                            .iter()
+                            .find(|r| r.entry.peer == peer)
+                            .map(|r| r.last_seen_label.clone())
+                            .unwrap_or_default();
+                        let forget_label = if last.is_empty() {
+                            "목록에서 삭제".to_string()
+                        } else {
+                            format!("목록에서 삭제 · 마지막 접속 {last}")
+                        };
                         vec![
                             crate::controls::CtxItem::item("profile", "프로필 보기"),
                             crate::controls::CtxItem::item(
@@ -985,6 +1011,8 @@ impl Widget for PeerListWidget {
                                 "g-create",
                                 format!("그룹 만들기 ({n}명)"),
                             ),
+                            crate::controls::CtxItem::Separator,
+                            crate::controls::CtxItem::item("forget", forget_label),
                         ]
                     } else {
                         return;
@@ -1660,6 +1688,7 @@ mod tests {
             fav: false,
             blocked: false,
             conflict: false,
+            last_seen_label: String::new(),
         }
     }
     fn widget(names: &[(u8, &str)]) -> (PeerListWidget, Invalidations) {

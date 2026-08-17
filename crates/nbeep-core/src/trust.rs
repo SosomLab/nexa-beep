@@ -52,6 +52,11 @@ pub trait TrustStore {
     /// 키만 [`TrustLevel::Pinned`]로 강등한다(핸드셰이크로 재확인된 TOFU 상태 =
     /// 안전한 하한). 그 아래 등급·미지 키는 손대지 않는다(멱등).
     fn unverify(&mut self, peer: PeerId);
+    /// 목록에서 삭제 — 이 키의 핀 레코드를 통째로 지운다(08-17 사용자 요청).
+    /// 신뢰·이름 이력·즐겨찾기가 모두 사라진다. 그 키가 다시 세션을 맺으면
+    /// [`TrustDecision::FirstContact`]로 처음처럼 새로 핀된다(되돌릴 수 있음 =
+    /// 삭제를 안전한 기본으로 두는 근거). 없던 키면 아무 일도 없다(멱등).
+    fn forget(&mut self, peer: PeerId);
     /// 차단(사람이 아니라 이 키 단위).
     fn block(&mut self, peer: PeerId);
     /// 차단 여부.
@@ -277,6 +282,10 @@ impl TrustStore for MemoryTrustStore {
         }
     }
 
+    fn forget(&mut self, peer: PeerId) {
+        self.records.remove(&peer);
+    }
+
     fn block(&mut self, peer: PeerId) {
         let rec = self.records.entry(peer).or_insert_with(|| Record {
             level: TrustLevel::Unverified,
@@ -335,6 +344,31 @@ mod tests {
             ts.on_session(pid(1)),
             TrustDecision::Known(TrustLevel::FingerprintVerified)
         );
+    }
+
+    #[test]
+    fn unverify_demotes_only_verified() {
+        let mut ts = MemoryTrustStore::new();
+        ts.on_session(pid(1)); // Pinned
+        ts.verify(pid(1)); // FingerprintVerified
+        ts.unverify(pid(1));
+        assert_eq!(ts.level(pid(1)), TrustLevel::Pinned, "검증만 되돌린다");
+        // Pinned에 unverify = 무변(멱등) · 미지 키에도 안전.
+        ts.unverify(pid(1));
+        assert_eq!(ts.level(pid(1)), TrustLevel::Pinned);
+        ts.unverify(pid(99));
+        assert_eq!(ts.level(pid(99)), TrustLevel::Unverified);
+    }
+
+    #[test]
+    fn forget_removes_record() {
+        let mut ts = MemoryTrustStore::new();
+        ts.on_session(pid(1));
+        ts.verify(pid(1));
+        ts.forget(pid(1));
+        assert_eq!(ts.level(pid(1)), TrustLevel::Unverified, "레코드 삭제");
+        // 삭제 후 재세션 = 처음처럼 새 핀.
+        assert_eq!(ts.on_session(pid(1)), TrustDecision::FirstContact);
     }
 
     #[test]

@@ -376,6 +376,11 @@ impl TrustStore for FileTrustStore {
         self.persist();
     }
 
+    fn forget(&mut self, peer: PeerId) {
+        self.inner.forget(peer);
+        self.persist();
+    }
+
     fn block(&mut self, peer: PeerId) {
         self.inner.block(peer);
         self.persist();

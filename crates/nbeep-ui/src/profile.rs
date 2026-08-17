@@ -38,6 +38,8 @@ pub struct ProfileValues {
     pub resolved_name: String,
     /// 아바타 색 시드(내 키 지문).
     pub seed: Vec<u8>,
+    /// 내 키 지문 짧은 표기(08-17 — 상대 카드의 "키 지문"과 같은 값 · 대조 기준).
+    pub fingerprint: String,
     /// 내 사진(M4-5 — 호스트가 imgdec로 디코드·원형 마스크해 넘긴다). 없으면 이니셜.
     pub avatar: Option<std::rc::Rc<crate::theme::IconImage>>,
     /// 아바타 선택 원문(`profile.avatar` — [`AvatarChoice`] 직렬). 사진(`image_path`)이
@@ -69,6 +71,7 @@ pub struct ProfileWidget {
     image_path: String,
     resolved_name: String,
     seed: Vec<u8>,
+    fingerprint: String,
     avatar: Option<std::rc::Rc<crate::theme::IconImage>>,
     /// 아바타 선택 원문(스와치 클릭으로 바뀐다 · 사진이 있으면 사진 우선).
     avatar_choice: String,
@@ -152,6 +155,7 @@ impl ProfileWidget {
             image_path: v.image_path.clone(),
             resolved_name: v.resolved_name.clone(),
             seed: v.seed.clone(),
+            fingerprint: v.fingerprint.clone(),
             avatar: v.avatar.clone(),
             avatar_choice: v.avatar_choice.clone(),
             border: ColorPicker::new(&v.avatar_border),
@@ -682,6 +686,20 @@ impl Widget for ProfileWidget {
             t(Msg::ProfileTitle),
             theme.text,
         );
+        // 내 키 지문(08-17 — 제목 줄 우측 · 상대 카드의 "키 지문"과 같은 값을 나도
+        // 볼 수 있게. 신원은 이름이 아니라 이 지문이다).
+        if !self.fingerprint.is_empty() {
+            ctx.select_font(FontSlot::Status, false);
+            let fp = format!("{}  ·  {}", t(Msg::FingerprintLabel), self.fingerprint);
+            let tw = ctx.text_width(&fp);
+            ctx.text(
+                b.right() - pad - tw,
+                b.y + self.s(16),
+                b,
+                &fp,
+                theme.text_dim,
+            );
+        }
         // 큰 원형 아바타(목록 40의 3배 = 120 · 사용자 요청 08-11) — 이니셜 가상 이미지.
         // 사진을 골라도 픽셀 렌더는 M4-5(imgdec) 후 — 그때까지 이니셜 + 파일명 표기.
         let d = self.s(120);

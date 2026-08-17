@@ -527,6 +527,8 @@ pub enum Msg {
     StfUnverified,
     /// 그룹 행·구성원 모달 부제 — `{0}` = 구성원 수, `{1}` = 온라인 수.
     ListGroupMembers,
+    /// "키 지문" 라벨(프로필·상대 카드 공용 · 08-17).
+    FingerprintLabel,
     StfAutoAcceptRecv,
     StfFileRejected,
     StfDeliveredWait,
@@ -665,6 +667,7 @@ impl Msg {
             Msg::StfVerified => ["Fingerprint verified — {} authenticated", "지문 대조 완료 — {} 인증됨", "指纹核对完成 — {} 已验证", "指紋照合完了 — {} を認証"],
             Msg::StfUnverified => ["Verification canceled — {} demoted", "인증 취소 — {} 대조 해제", "已取消验证 — {} 已降级", "認証取り消し — {} を降格"],
             Msg::ListGroupMembers => ["Members {} · Online {}", "구성원 {} · 온라인 {}", "成员 {} · 在线 {}", "メンバー {} · オンライン {}"],
+            Msg::FingerprintLabel => ["Key fingerprint", "키 지문", "密钥指纹", "鍵フィンガープリント"],
             Msg::StfAutoAcceptRecv => ["Auto-accepted: {} ({}) receiving", "자동 수락: {} ({}) 수신 시작", "自动接受：{}（{}）开始接收", "自動受信: {} ({}) 受信開始"],
             Msg::StfFileRejected => ["File rejected ({}): {}", "파일 거부({}): {}", "文件已拒绝（{}）：{}", "ファイル拒否({}): {}"],
             Msg::StfDeliveredWait => ["Delivered {}/{} — awaiting peer confirmation", "전달됨 {}/{} — 상대 확인 대기", "已送达 {}/{} — 等待对方确认", "配信済み {}/{} — 相手の確認待ち"],

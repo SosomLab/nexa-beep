@@ -238,7 +238,11 @@ impl Widget for PeerInfoWidget {
             x,
             y,
             b,
-            &format!("키 지문  ·  {}", self.info.fingerprint),
+            &format!(
+                "{}  ·  {}",
+                nbeep_core::t(nbeep_core::Msg::FingerprintLabel),
+                self.info.fingerprint
+            ),
             theme.text_dim,
         );
         y += ctx.text_height() + self.s(14);

@@ -878,7 +878,11 @@ fn ago_label(unix_ms: u64) -> String {
         0..=59 => "방금 전".into(),
         60..=3_599 => format!("{}분 전", s / 60),
         3_600..=86_399 => format!("{}시간 전", s / 3_600),
-        _ => format!("{}일 전", s / 86_400),
+        // 달·년(08-17 사용자 요청) — 달 = 30일 근사, 년 = 365일 근사(상대 표기는
+        // 정확한 달력이 아니라 사람이 읽는 어림이면 충분).
+        86_400..=2_591_999 => format!("{}일 전", s / 86_400),
+        2_592_000..=31_535_999 => format!("{}달 전", s / 2_592_000),
+        _ => format!("{}년 전", s / 31_536_000),
     }
 }
 
@@ -2801,6 +2805,8 @@ impl App {
                 // 화면에 안 나오던 상태다(충돌 = v1 사칭 유일 가시 신호).
                 let blocked = self.trust.is_blocked(entry.peer);
                 let conflict = self.trust.name_conflict(entry.peer, &entry.name).is_some();
+                // 마지막 접속 상대 표기(08-17 — 우클릭 삭제 메뉴가 보여준다).
+                let last_seen_label = ago_label(self.trust.meta(entry.peer).0);
                 PeerRow {
                     entry,
                     trust,
@@ -2814,6 +2820,7 @@ impl App {
                     fav,
                     blocked,
                     conflict,
+                    last_seen_label,
                 }
             })
             .collect();
@@ -4111,6 +4118,9 @@ impl App {
                 .as_str()
                 .to_string(),
             seed: self.identity.peer_id().as_bytes().to_vec(),
+            // 내 키 지문(08-17 사용자 요청 — 상대가 내 카드에서 보는 "키 지문"과
+            // 같은 값을 나도 볼 수 있게. 대조의 기준점).
+            fingerprint: self.identity.peer_id().short(),
             avatar_choice: self.settings.get("profile.avatar").to_string(),
             avatar_border: self.settings.get("profile.avatar_border").to_string(),
             // 툴팁 대기(ms · 08-14) — 무효는 위젯이 기본 2000으로 본다(관용 파싱).
@@ -4495,6 +4505,28 @@ impl App {
         self.status = nbeep_core::tf(nbeep_core::Msg::StfUnverified, &[&self.peer_title(peer)]);
         let mut rinv = Invalidations::default();
         self.refresh_rows(&mut rinv);
+    }
+
+    /// 목록에서 삭제(08-17 · 사용자 요청) — 핀(trust.seg)·프로필 캐시 파일·목록/미읽음
+    /// 상태를 통째로 지운다. **차단이 아니다** — 상대가 다시 세션을 맺으면 처음처럼
+    /// 새로 뜬다(되돌릴 수 있으니 안전한 기본). 열린 대화 세션은 건드리지 않는다
+    /// (지금 대화 중인 사람을 목록에서 지워도 그 창은 그대로 — 다음 부팅에 안 뜬다).
+    fn forget_peer(&mut self, peer: PeerId) {
+        use nbeep_core::TrustStore as _;
+        let title = self.peer_title(peer);
+        self.trust.forget(peer); // 핀·이름 이력·즐겨찾기 삭제(write-through)
+                                 // 프로필 캐시 파일(부팅 복원의 근거) — 지워야 다음 부팅에 안 되살아난다.
+        let dir = self.data_dir.join("profiles");
+        let _ = std::fs::remove_file(dir.join(format!("{}.img", peer.short())));
+        let _ = std::fs::remove_file(dir.join(format!("{}.meta", peer.short())));
+        self.peer_profiles.remove(&peer);
+        self.extra_peers.remove(&peer); // 비발견 시드 제거(재부팅 재시드 방지)
+        self.closed_peers.remove(&peer);
+        self.unread.remove(&peer);
+        self.last_read.remove(&peer);
+        self.table.forget(peer); // 발견 테이블에서도 즉시(다시 비컨하면 새로 뜬다)
+        self.status = format!("{title} — 목록에서 삭제(핀·캐시 정리 · 다시 만나면 새로 뜹니다)");
+        self.refresh_and_redraw();
     }
 
     /// SAS(안전 번호) 카드를 닫는다(08-17) — 열려 있으면 창·뷰·대기 요청을 지우고
@@ -7516,6 +7548,10 @@ impl App {
                         } else {
                             format!("{} — 목록 고정 해제", self.peer_title(peer))
                         };
+                    }
+                    // 우클릭 ▸ 목록에서 삭제(08-17) — 핀·캐시 파일까지 지운다.
+                    if let Some(peer) = self.list.take_forget_request() {
+                        self.forget_peer(peer);
                     }
                     // 그룹 행동(M5-1) — 저장소 반영·이름 모달은 여기(호스트) 몫.
                     if let Some(action) = self.list.take_group_action() {
