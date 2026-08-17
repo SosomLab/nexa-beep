@@ -637,8 +637,13 @@ pub enum Msg {
     CmdHelpVerify,
     CmdHelpUnverify,
     CmdHelpTrust,
+    CmdHelpFingerprint,
     CmdHelpClose,
     CmdHelpNote,
+    /// `/fingerprint` 출력(08-18) — `{0}` = 내 지문, `{1}` = 상대 이름, `{2}` = 상대 지문.
+    CmdFingerprint,
+    /// `/verify` 직접 검증 완료(08-18).
+    CmdVerifiedNow,
     CmdUnknown, // `{0}` = 이름
     CmdTrustGroup,
     CmdTrustStatus, // `{0}` = 상대, `{1}` = 등급
@@ -875,7 +880,10 @@ impl Msg {
             Msg::StItemImagePresent => ["has image", "이미지 있음", "有图片", "画像あり"],
             Msg::CmdHelpHeader => ["Available commands", "사용 가능한 명령", "可用命令", "使用可能なコマンド"],
             Msg::CmdHelpHelp => ["  /help       this help", "  /help            이 안내", "  /help       此帮助", "  /help       このヘルプ"],
-            Msg::CmdHelpVerify => ["  /verify     open fingerprint (safety number) card", "  /verify          지문(안전 번호) 대조 카드 열기", "  /verify     打开指纹(安全码)核对卡", "  /verify     指紋(安全番号)照合カードを開く"],
+            Msg::CmdHelpVerify => ["  /verify     mark this peer verified (compare fingerprint first)", "  /verify          이 상대를 대조 완료로 표시(먼저 지문 대조)", "  /verify     标记对方为已核对(请先核对指纹)", "  /verify     この相手を照合完了に(先に指紋照合)"],
+            Msg::CmdHelpFingerprint => ["  /fingerprint show this peer's key fingerprint", "  /fingerprint     이 상대의 키 지문 출력", "  /fingerprint 显示对方的密钥指纹", "  /fingerprint 相手の鍵指紋を表示"],
+            Msg::CmdFingerprint => ["Key fingerprint — you: {} · {}: {} — compare over another channel (phone/in person), then /verify", "키 지문 — 나: {} · {}: {} — 전화·대면 등 다른 채널로 맞춰 본 뒤 /verify", "密钥指纹 — 我: {} · {}: {} — 通过电话/当面等其他渠道核对后 /verify", "鍵指紋 — 自分: {} · {}: {} — 電話・対面など別の経路で照合後 /verify"],
+            Msg::CmdVerifiedNow => ["Marked verified — this key is now trusted (blue seal badge).", "대조 완료로 표시했습니다 — 이 키를 신뢰합니다(파란 실 배지).", "已标记为已核对 — 现已信任此密钥(蓝色印章徽章)。", "照合完了に設定 — この鍵を信頼します(青いシール)。"],
             Msg::CmdHelpUnverify => ["  /unverify   cancel verification", "  /unverify        인증 취소", "  /unverify   取消验证", "  /unverify   認証取り消し"],
             Msg::CmdHelpTrust => ["  /trust      show this peer's trust status", "  /trust           이 상대의 신뢰 상태 보기", "  /trust      查看对方的信任状态", "  /trust      相手の信頼状態を見る"],
             Msg::CmdHelpClose => ["  /close      close the chat window", "  /close           대화창 닫기", "  /close      关闭对话窗口", "  /close      会話ウィンドウを閉じる"],
@@ -890,7 +898,7 @@ impl Msg {
             Msg::CmdUnverifyNone => ["This peer is not in a verified state (nothing to cancel).", "이 상대는 지문 대조 상태가 아닙니다(취소할 인증이 없습니다).", "对方并非已验证状态(无可取消的验证)。", "この相手は照合済み状態ではありません(取り消す認証がありません)。"],
             Msg::CmdUnverify1to1 => ["Canceling verification is only for 1:1 chats (a single peer required).", "인증 취소는 1:1 대화에서만 가능합니다(상대가 하나로 정해져야 합니다).", "取消验证仅在 1:1 对话中可用(需确定单一对象)。", "認証取り消しは 1:1 の会話でのみ可能です(相手が一人に定まる必要があります)。"],
             Msg::ListNavHint => ["↑↓ move · type = jump to name(한글 가능) · Enter = open chat", "↑↓ 이동 · 타이핑 = 이름 점프(한글 가능) · Enter = 대화 열기", "↑↓ 移动 · 输入 = 跳转到名称(한글 가능) · Enter = 打开对话", "↑↓ 移動 · 入力 = 名前ジャンプ(한글 가능) · Enter = 会話を開く"],
-            Msg::SuggestVerify => ["This peer isn't fingerprint-verified yet. Type /verify to see the safety number — compare it over another channel (phone/in person), then press 'Verified'.", "이 상대는 아직 지문 대조 전입니다. /verify 를 입력하면 안전 번호를 봅니다 — 전화·대면 등 다른 채널로 같은 번호인지 맞춰 본 뒤 '대조 완료'를 누르세요.", "对方尚未完成指纹核对。输入 /verify 可查看安全码 — 请通过电话/当面等其他渠道核对号码，然后按'核对完成'。", "この相手はまだ指紋照合前です。/verify を入力すると安全番号が見られます — 電話・対面など別の経路で番号を照合し、'照合完了'を押してください。"],
+            Msg::SuggestVerify => ["This peer isn't fingerprint-verified yet. Type /fingerprint to see the key fingerprint, compare it over another channel (phone/in person), then /verify.", "이 상대는 아직 지문 대조 전입니다. /fingerprint 로 키 지문을 확인하고, 전화·대면 등 다른 채널로 맞춰 본 뒤 /verify 를 입력하세요.", "对方尚未完成指纹核对。用 /fingerprint 查看密钥指纹，通过电话/当面等其他渠道核对后输入 /verify。", "この相手はまだ指紋照合前です。/fingerprint で鍵指紋を確認し、電話・対面など別の経路で照合してから /verify を入力してください。"],
             Msg::ActOk => ["OK", "확인", "确定", "OK"],
             Msg::XferCancelBtn => ["Cancel transfer — {}", "전송 취소 — {}", "取消传输 — {}", "転送キャンセル — {}"],
             Msg::StfAutoAcceptRecv => ["Auto-accepted: {} ({}) receiving", "자동 수락: {} ({}) 수신 시작", "自动接受：{}（{}）开始接收", "自動受信: {} ({}) 受信開始"],

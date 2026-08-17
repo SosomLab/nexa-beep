@@ -37,6 +37,8 @@ pub enum ChatCommand {
     /// **지문 대조 취소** — `/verify`로 연 안전 번호 카드를 닫는다(대조 자체를
     /// 되돌리지 않는다 — 이미 '대조 완료'를 눌러 승격했다면 그건 그대로).
     Unverify,
+    /// 이 상대의 키 지문 출력(08-18 — 비교용). 상대에게 보내지 않는다.
+    Fingerprint,
     /// 대화창 닫기.
     Close,
 }
@@ -50,6 +52,7 @@ impl ChatCommand {
             Self::Verify => "/verify",
             Self::Unverify => "/unverify",
             Self::Trust => "/trust",
+            Self::Fingerprint => "/fingerprint",
             Self::Close => "/close",
         }
     }
@@ -80,6 +83,10 @@ const TABLE: &[(&[&str], ChatCommand)] = &[
         ChatCommand::Unverify,
     ),
     (&["trust", "신뢰"], ChatCommand::Trust),
+    (
+        &["fingerprint", "fp", "fpr", "지문값"],
+        ChatCommand::Fingerprint,
+    ),
     (&["close", "quit", "exit", "q", "닫기"], ChatCommand::Close),
 ];
 
@@ -126,6 +133,7 @@ pub fn help_text() -> String {
     [
         t(Msg::CmdHelpHeader),
         t(Msg::CmdHelpHelp),
+        t(Msg::CmdHelpFingerprint),
         t(Msg::CmdHelpVerify),
         t(Msg::CmdHelpUnverify),
         t(Msg::CmdHelpTrust),
@@ -152,6 +160,13 @@ mod tests {
         assert_eq!(parse("/verify"), Parsed::Command(ChatCommand::Verify));
         assert_eq!(parse("/close"), Parsed::Command(ChatCommand::Close));
         assert_eq!(parse("/trust"), Parsed::Command(ChatCommand::Trust));
+        // /fingerprint(08-18) — 별칭 fp·fpr·지문값. Verify의 "지문"과 구분된다.
+        assert_eq!(
+            parse("/fingerprint"),
+            Parsed::Command(ChatCommand::Fingerprint)
+        );
+        assert_eq!(parse("/fp"), Parsed::Command(ChatCommand::Fingerprint));
+        assert_eq!(parse("/지문"), Parsed::Command(ChatCommand::Verify), "지문=대조");
     }
 
     /// 사용자가 요청한 철자(`/verified`)와 한글 별칭도 받는다.

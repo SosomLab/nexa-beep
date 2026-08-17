@@ -4481,6 +4481,8 @@ impl App {
                         self.push_chat_notice(peer, &line);
                     }
                     ChatCommand::Verify => match peer {
+                        // 08-18 사용자 확정 — 카드+버튼 대신 **직접 대조 완료**. 사람이
+                        // 먼저 /fingerprint 로 지문을 다른 채널로 맞춘 뒤 부르는 전제.
                         Some(p) => {
                             use nbeep_core::TrustStore as _;
                             if self.trust.level(p) == nbeep_core::TrustLevel::FingerprintVerified {
@@ -4489,18 +4491,31 @@ impl App {
                                     nbeep_core::t(nbeep_core::Msg::CmdVerifyAlready),
                                 );
                             } else {
-                                // ⚠️ 카드를 열어 줄 뿐 — 승격은 **다른 채널로 숫자를 맞춘 뒤**
-                                //    사람이 버튼을 누를 때만. 이 통로 안의 "확인했어?"로
-                                //    승격하면 중간자가 그 문답을 대신할 수 있다.
+                                self.verify_peer(p);
                                 self.push_chat_notice(
                                     peer,
-                                    nbeep_core::t(nbeep_core::Msg::CmdVerifyOpened),
+                                    nbeep_core::t(nbeep_core::Msg::CmdVerifiedNow),
                                 );
-                                self.pending_peer_info = Some(p);
                             }
                         }
                         None => self
                             .push_chat_notice(peer, nbeep_core::t(nbeep_core::Msg::CmdVerify1to1)),
+                    },
+                    ChatCommand::Fingerprint => match peer {
+                        // 상대·내 키 지문 출력(08-18) — 비교용(다른 채널로 맞춘 뒤 /verify).
+                        Some(p) => {
+                            let line = nbeep_core::tf(
+                                nbeep_core::Msg::CmdFingerprint,
+                                &[
+                                    &self.identity.peer_id().short(),
+                                    &self.peer_title(p),
+                                    &p.short(),
+                                ],
+                            );
+                            self.push_chat_notice(peer, &line);
+                        }
+                        None => self
+                            .push_chat_notice(peer, nbeep_core::t(nbeep_core::Msg::CmdTrustGroup)),
                     },
                     ChatCommand::Unverify => match peer {
                         // 인증 취소 — SAS 승격을 **실제로 되돌린다**(파란 배지 강등).
@@ -4534,6 +4549,19 @@ impl App {
                 CmdOutcome::Handled
             }
         }
+    }
+
+    /// 지문 대조 완료로 승격(08-18 · `/verify`·카드 버튼 공통) — 신뢰를
+    /// `FingerprintVerified`로 올리고(write-through 영속) 목록·카드 배지를 즉시 갱신.
+    /// 사람이 다른 채널로 지문을 맞춘 뒤 부르는 것이 전제(SAS 카드를 여는 대신
+    /// `/fingerprint` 비교 → `/verify` 흐름 · 사용자 확정 08-18).
+    fn verify_peer(&mut self, peer: PeerId) {
+        use nbeep_core::TrustStore as _;
+        self.trust.verify(peer);
+        self.status = nbeep_core::tf(nbeep_core::Msg::StfVerified, &[&self.peer_title(peer)]);
+        let mut rinv = Invalidations::default();
+        self.refresh_rows(&mut rinv);
+        self.refresh_peer_info_card(peer);
     }
 
     /// 인증 취소(08-17 · `/unverify`·카드 버튼 공통) — SAS 승격을 되돌려 신뢰를
