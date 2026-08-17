@@ -1058,6 +1058,9 @@ fn decode_history(bytes: &[u8]) -> Vec<ChatLine> {
                     at_ms,
                     wall: wall_from_ms(at_ms),
                     from: None,
+                    seq: 0,
+                    delivered: false,
+                    read: false,
                 });
                 i = next;
             }
@@ -1612,6 +1615,8 @@ struct App {
     active_send: HashMap<PeerId, nbeep_core::XferId>,
     /// 진행 중(수락 후) 수신 — 위와 대칭.
     active_recv: HashMap<PeerId, nbeep_core::XferId>,
+    /// 상대에게서 받은 마지막 메시지 seq(N-2 읽음 up-to · 읽음 ack 대상).
+    last_recv_seq: HashMap<PeerId, u64>,
     /// 확대 미리보기 창 내용(08-16 — 단일 창 · [`Role::ImageView`]의 짝).
     image_view: Option<ImageViewState>,
     /// 완료 대기 중 발신 평균 속도(B/s · 08-16) — 종단 ack 도착 시 완료 문구에.
@@ -3097,10 +3102,36 @@ impl App {
 
     /// 수신 1건 계상(③) — 뷰가 보이면 확인 시각만 갱신, 아니면 미확인 +1과
     /// 상태바·제목으로 알린다(OS 알림·소리는 M3-8/ADR-0010 확정 후).
+    /// 읽음 확인 되쏘기(N-2 · 수신자가 대화창에서 봤을 때). `chat.send_read`(기본
+    /// on · 수신자 제어) AND 검증 상대일 때만(프라이버시 게이트 · 전달과 **독립**).
+    fn send_read_ack(&self, peer: PeerId) {
+        use nbeep_core::TrustStore as _;
+        if self.settings.get("chat.send_read") != "on" {
+            return;
+        }
+        if self.trust.level(peer) == nbeep_core::TrustLevel::Unverified {
+            return;
+        }
+        let Some(&seq) = self.last_recv_seq.get(&peer) else {
+            return;
+        };
+        if seq == 0 {
+            return;
+        }
+        if let Some(conv) = self.conversations.get(&peer) {
+            let ack = nbeep_core::ChatAck {
+                target_seq: seq,
+                kind: nbeep_core::AckKind::Read,
+            };
+            let _ = conv.out_tx.send(SessionCmd::Control(vec![ack.encode()]));
+        }
+    }
+
     fn note_incoming(&mut self, peer: PeerId) {
         if self.chat_visible(peer) {
             let (_, wall) = now_stamp();
             self.last_read.insert(peer, wall);
+            self.send_read_ack(peer); // 보이는 중 도착 = 즉시 읽음(N-2)
             return;
         }
         let n = {
@@ -6921,6 +6952,7 @@ impl App {
             }
             _ => "대화 열림 — 세션 유지 중".into(),
         };
+        self.send_read_ack(peer); // 대화창 열기 = 받은 것 읽음(N-2 · 사용자 요청)
         let chat = self.build_chat_view(peer);
         match self.mode {
             WindowMode::Single => {
@@ -7225,13 +7257,17 @@ impl App {
             };
             let (at_ms, wall) = now_stamp();
             if let Some(chat) = self.chats.get_mut(&peer) {
-                chat.push_line(ChatLine::text(true, text.clone(), at_ms, wall), &mut inv);
+                chat.push_line(
+                    ChatLine::text(true, text.clone(), at_ms, wall).with_seq(msg.seq),
+                    &mut inv,
+                );
             }
             // 왕래 장부 — 파일 전송 자격(상호 확인)의 근거(사용자 확정 08-09).
             self.ledger.note_sent(peer);
             self.trust.note_chat(peer, unix_now_ms()); // 최근 대화(08-15 — 발신도)
             if let Some(conv) = self.conversations.get_mut(&peer) {
-                conv.lines.push(ChatLine::text(true, text, at_ms, wall));
+                conv.lines
+                    .push(ChatLine::text(true, text, at_ms, wall).with_seq(msg.seq));
                 // 액터에 발신 요청 — 수신은 비동기로 AppEvent::Recv로 돌아온다(M2-7).
                 if conv.out_tx.send(SessionCmd::Chat(msg.encode())).is_err() {
                     self.status = "세션 종료됨".into();
@@ -8094,6 +8130,8 @@ impl ApplicationHandler<AppEvent> for App {
                 if !self.dedup.accept(sender, seq) {
                     return; // 중복(다중 경로 — FR-M-9)
                 }
+                let cur = self.last_recv_seq.entry(peer).or_insert(0);
+                *cur = (*cur).max(seq); // 읽음 ack 대상(N-2 up-to)
                 self.ledger.note_recv(peer); // 왕래 장부(상호 확인)
                 self.trust.note_chat(peer, unix_now_ms()); // 최근 대화(08-15)
                 let notify_body = self.notify_body(text.as_str()); // move 전에 뜬다
@@ -8147,23 +8185,34 @@ impl ApplicationHandler<AppEvent> for App {
                 target_seq,
                 kind,
             } => {
-                // 수신 확인 도착(N-2) — 내가 보낸 seq가 전달/확인됐다. 스레드 배지·
-                // 발신자 상태 표시(M3-9)는 잔여 · 지금은 상태바로 왕복을 확인한다.
+                // 수신 확인 도착(N-2) — 내가 보낸 seq의 전달/읽음을 **독립 갱신**.
+                // '읽음 up-to' 규약: Read는 그 seq 이하 내 메시지 전부 읽음(대화창
+                // 열면 보이는 것 다 읽힌다) · Delivered는 그 seq 하나(전달과 독립).
                 use nbeep_core::AckKind;
-                self.status = match kind {
-                    AckKind::Delivered => {
-                        format!("전달 확인 — {} (seq={target_seq})", self.peer_title(peer))
-                    }
-                    AckKind::Acknowledged => {
-                        format!(
-                            "상대가 확인함 — {} (seq={target_seq})",
-                            self.peer_title(peer)
-                        )
-                    }
+                let (deliv, read) = match kind {
+                    AckKind::Delivered => (true, false),
+                    AckKind::Read => (false, true),
                 };
-                if let Some(mid) = self.main_id {
-                    self.request_redraw(mid);
+                let mut inv = Invalidations::default();
+                if let Some(chat) = self.chats.get_mut(&peer) {
+                    if read {
+                        chat.mark_read_upto(target_seq, &mut inv);
+                    } else {
+                        chat.mark_ack(target_seq, deliv, false, &mut inv);
+                    }
                 }
+                if let Some(conv) = self.conversations.get_mut(&peer) {
+                    for l in &mut conv.lines {
+                        if l.mine && l.seq != 0 {
+                            if read && l.seq <= target_seq {
+                                l.read = true;
+                            } else if deliv && l.seq == target_seq {
+                                l.delivered = true;
+                            }
+                        }
+                    }
+                }
+                self.redraw_conversation(peer);
             }
             AppEvent::XferOffer {
                 peer,
@@ -10203,6 +10252,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         awaiting_accept: HashMap::new(),
         active_send: HashMap::new(),
         active_recv: HashMap::new(),
+        last_recv_seq: HashMap::new(),
         image_view: None,
         last_link_probe_ms: 0,
         send_avg: HashMap::new(),

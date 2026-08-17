@@ -448,6 +448,8 @@ pub enum Msg {
     ServerTypeRegistered,
     SendDelivered,
     SendDeliveredDesc,
+    SendRead,
+    SendReadDesc,
     // ── 그룹 (M5-1 · ADR-0012) ──
     /// 카테고리: 그룹.
     CatGroup,
@@ -480,6 +482,13 @@ impl Msg {
                 "상대가 보낸 메시지가 나에게 닿았음을 알립니다(검증된 상대만). 끄면 확인을 보내지 않습니다.",
                 "让发送者知道消息已送达（仅限已验证的对方）。关闭 = 不发送回执。",
                 "相手のメッセージが届いたことを知らせます（検証済みの相手のみ）。オフ = 送りません。",
+            ],
+            Msg::SendRead => ["Send read receipts", "읽음 확인 보내기", "发送已读回执", "既読を送る"],
+            Msg::SendReadDesc => [
+                "Let senders know you read their message when you open the chat (verified peers only). Independent of delivery. Off = you stay silent.",
+                "대화창을 열어 상대의 메시지를 읽으면 읽음을 알립니다(검증된 상대만). 전달 확인과 독립입니다. 끄면 읽음을 보내지 않습니다.",
+                "打开对话读取消息时通知对方已读（仅限已验证的对方）。与送达独立。关闭 = 不发送。",
+                "チャットを開いて読むと既読を知らせます（検証済みの相手のみ）。配信とは独立。オフ = 送りません。",
             ],
             Msg::CatAppearance => ["Appearance", "모양", "外观", "外観"],
             Msg::CatFont => ["Font", "글꼴", "字体", "フォント"],

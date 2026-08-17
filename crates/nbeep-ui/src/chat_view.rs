@@ -108,6 +108,13 @@ pub struct ChatLine {
     /// 송신자 표시 이름 — **단체 대화**에서 수신 풍선 위에 표시(08-10).
     /// 1:1은 헤더가 상대를 식별하므로 `None`(생략).
     pub from: Option<String>,
+    /// 발신 seq(N-2 · 내 메시지만 의미) — ack를 이 seq로 되찾아 상태를 갱신한다.
+    pub seq: u64,
+    /// 전달됨(상대 세션 도착 · 자동). **읽음과 독립**(사용자 확정 08-17).
+    pub delivered: bool,
+    /// 읽음(상대가 대화창에서 봄 · 자동). 전달과 독립 — 설정 조합에 따라 전달
+    /// 없이 읽음만 뜰 수도 있다.
+    pub read: bool,
 }
 
 impl ChatLine {
@@ -120,7 +127,17 @@ impl ChatLine {
             at_ms,
             wall,
             from: None,
+            seq: 0,
+            delivered: false,
+            read: false,
         }
+    }
+
+    /// 내 메시지에 발신 seq를 붙인다(ack 되찾기 키 · N-2 빌더).
+    #[must_use]
+    pub fn with_seq(mut self, seq: u64) -> Self {
+        self.seq = seq;
+        self
     }
 
     /// 송신자 이름을 붙인다(단체 대화 수신 풍선 식별 — 빌더).
@@ -145,6 +162,9 @@ impl ChatLine {
             at_ms,
             wall,
             from: None,
+            seq: 0,
+            delivered: false,
+            read: false,
         }
     }
 }
@@ -445,6 +465,43 @@ impl ChatViewWidget {
     ) {
         if self.xfer != xfer {
             self.xfer = xfer;
+            inv.push(self.bounds);
+        }
+    }
+
+    /// N-2 — 내 메시지(seq)의 전달/읽음 상태 갱신(발신자 측 · 독립 축). `read`가
+    /// 오면 전달도 함의하지 않는다(완전 독립 — 사용자 확정). 바뀌면 무효화.
+    pub fn mark_ack(&mut self, seq: u64, delivered: bool, read: bool, inv: &mut Invalidations) {
+        for l in &mut self.lines {
+            if l.mine && l.seq == seq {
+                let mut changed = false;
+                if delivered && !l.delivered {
+                    l.delivered = true;
+                    changed = true;
+                }
+                if read && !l.read {
+                    l.read = true;
+                    changed = true;
+                }
+                if changed {
+                    inv.push(self.bounds);
+                }
+                return;
+            }
+        }
+    }
+
+    /// N-2 — 읽음 up-to: seq 이하 내 메시지 전부 읽음(대화창 열면 보이는 것
+    /// 다 읽힌다). 전달과 독립.
+    pub fn mark_read_upto(&mut self, seq: u64, inv: &mut Invalidations) {
+        let mut changed = false;
+        for l in &mut self.lines {
+            if l.mine && l.seq != 0 && l.seq <= seq && !l.read {
+                l.read = true;
+                changed = true;
+            }
+        }
+        if changed {
             inv.push(self.bounds);
         }
     }
@@ -1489,6 +1546,25 @@ impl Widget for ChatViewWidget {
                         theme.text_dim,
                     );
                     ctx.select_font(FontSlot::Message, false);
+                    // ★ 전달/읽음 마크(N-2 · 내 메시지만) — 시각 왼쪽. 색맹 안전
+                    //   이중 부호화(M3-19 교훈): **점 개수(모양) + 색**. 전달 = 점
+                    //   1개(dim) · 읽음 = 점 2개(강조색) · 미전달·미읽음 = 없음(깔끔).
+                    if l.mine && l.seq != 0 && (l.delivered || l.read) {
+                        let d = self.s(4).max(2); // 점 지름
+                        let gap = self.s(2).max(1);
+                        let (n, col) = if l.read {
+                            (2, theme.accent)
+                        } else {
+                            (1, theme.text_dim)
+                        };
+                        let total = n * d + (n - 1) * gap;
+                        let mut dx = lx - self.s(5) - total; // 시각 라벨 lx 왼쪽
+                        let dy = bub.bottom() - sh - self.s(2) + (sh - d) / 2;
+                        for _ in 0..n {
+                            ctx.fill_round_rect(Rect::new(dx, dy, d, d), d / 2, col);
+                            dx += d + gap;
+                        }
+                    }
                 }
             }
             y += b.h + self.s(ENTRY_GAP);

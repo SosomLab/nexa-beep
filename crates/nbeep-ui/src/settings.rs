@@ -285,6 +285,16 @@ pub fn registry() -> &'static [Entry] {
             kind: SettingKind::Toggle,
             key: "chat.send_delivered",
         },
+        // 읽음 확인(N-2 · 사용자 요청 08-17 — 전달과 **독립** · 수신자 제어 · 기본 on).
+        // 대화창을 열어 읽으면 읽음이 발신자에게(검증 상대만 · 프라이버시 게이트).
+        Entry {
+            cat: Msg::CatConversation,
+            sub: None,
+            label: Msg::SendRead,
+            desc: Msg::SendReadDesc,
+            kind: SettingKind::Toggle,
+            key: "chat.send_read",
+        },
         // 알림(M3-8 최소 슬라이스) — 표시 on/off + 본문 미리보기(기본 끔 = FR-S-42 결).
         Entry {
             cat: Msg::CatConversation,

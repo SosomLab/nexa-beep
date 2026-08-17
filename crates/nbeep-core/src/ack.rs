@@ -15,8 +15,11 @@
 pub enum AckKind {
     /// 기술적 전달(자동).
     Delivered,
-    /// 사람이 확인 버튼을 누름(수동).
-    Acknowledged,
+    /// **읽음**(자동 · 사용자 요청 08-17) — 수신자가 대화창에서 그 메시지를 봤다.
+    /// ADR-0010 §5의 원안(수동 Acknowledged)을 사용자 확정으로 **자동 읽음**으로
+    /// 개정 — 창을 열어 보면 전달과 **독립적으로** 읽음이 발신자에게 간다.
+    /// 발신 여부는 수신자 설정(`chat.send_read`)이 제어(기본 on).
+    Read,
 }
 
 /// 대화 확인 메시지 — 대상 seq + 종류. Control 스트림 태그 [`ACK_TAG`].
@@ -39,7 +42,7 @@ impl ChatAck {
         out.push(ACK_TAG);
         out.push(match self.kind {
             AckKind::Delivered => 0,
-            AckKind::Acknowledged => 1,
+            AckKind::Read => 1,
         });
         out.extend_from_slice(&self.target_seq.to_be_bytes());
         out
@@ -53,7 +56,7 @@ impl ChatAck {
         }
         let kind = match bytes[1] {
             0 => AckKind::Delivered,
-            1 => AckKind::Acknowledged,
+            1 => AckKind::Read,
             _ => return None, // 미지 종류 — 버린다
         };
         let target_seq = u64::from_be_bytes(bytes[2..10].try_into().ok()?);
@@ -67,7 +70,7 @@ mod tests {
 
     #[test]
     fn ack_roundtrips_and_rejects_foreign() {
-        for kind in [AckKind::Delivered, AckKind::Acknowledged] {
+        for kind in [AckKind::Delivered, AckKind::Read] {
             let a = ChatAck {
                 target_seq: 0x0102_0304_0506_0708,
                 kind,
