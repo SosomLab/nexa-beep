@@ -915,6 +915,71 @@ fn now_stamp() -> (u64, nbeep_ui::WallTime) {
     )
 }
 
+/// 저장된 시각(unix ms)에서 표시용 벽시계 복원(M2-5b — 기록 로드).
+fn wall_from_ms(ms: u64) -> nbeep_ui::WallTime {
+    let lt = nbeep_plat::clock::local_time(ms / 1000);
+    nbeep_ui::WallTime {
+        y: lt.y,
+        mo: lt.mo,
+        d: lt.d,
+        h: lt.h,
+        m: lt.m,
+    }
+}
+
+/// 대화 기록 보관 상한(줄) — 스레드당. 초과 = 오래된 것부터(시간 만료는 Q-32-11).
+const HISTORY_MAX: usize = 2000;
+
+/// 대화 기록 직렬화(M2-5b · 봉인 전 평문) — 텍스트 줄만(파일 기록은 후속 · 런타임
+/// 필드가 붙어 직렬화 대상 아님). 레코드 = tag(1) ‖ mine(1) ‖ at_ms(8 LE) ‖
+/// len(4 LE) ‖ utf8. tag로 전방 확장.
+fn encode_history(lines: &[ChatLine]) -> Vec<u8> {
+    let mut out = Vec::new();
+    let texts: Vec<&ChatLine> = lines
+        .iter()
+        .filter(|l| matches!(l.body, nbeep_ui::ChatBody::Text(_)))
+        .collect();
+    let start = texts.len().saturating_sub(HISTORY_MAX);
+    for l in &texts[start..] {
+        if let nbeep_ui::ChatBody::Text(t) = &l.body {
+            let b = t.as_str().as_bytes();
+            out.push(1u8);
+            out.push(u8::from(l.mine));
+            out.extend_from_slice(&l.at_ms.to_le_bytes());
+            out.extend_from_slice(&(u32::try_from(b.len()).unwrap_or(0)).to_le_bytes());
+            out.extend_from_slice(b);
+        }
+    }
+    out
+}
+
+/// 대화 기록 역직렬화(M2-5b) — 손상·미지 tag는 거기서 멈춘다(fail-soft).
+fn decode_history(bytes: &[u8]) -> Vec<ChatLine> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i + 14 <= bytes.len() {
+        if bytes[i] != 1 {
+            break;
+        }
+        let mine = bytes[i + 1] != 0;
+        let at_ms = u64::from_le_bytes(bytes[i + 2..i + 10].try_into().unwrap_or([0; 8]));
+        let len = u32::from_le_bytes(bytes[i + 10..i + 14].try_into().unwrap_or([0; 4])) as usize;
+        let body_start = i + 14;
+        let Some(end) = body_start.checked_add(len).filter(|e| *e <= bytes.len()) else {
+            break;
+        };
+        let text = String::from_utf8_lossy(&bytes[body_start..end]).into_owned();
+        out.push(ChatLine::text(
+            mine,
+            nbeep_core::sanitize_message(&text),
+            at_ms,
+            wall_from_ms(at_ms),
+        ));
+        i = end;
+    }
+    out
+}
+
 /// 속도 표기(B/s → 사람이 읽는 단위).
 /// Auto 속도 행의 하단 정보(08-16) — 실측 최고와 그 절반(발신 목표) 또는 무주장
 /// 원칙(수신 — [`nbeep_core::RateLimit::advertised_cap`])을 보여 준다.
@@ -2000,6 +2065,7 @@ impl App {
         if let Some(conv) = self.conversations.get_mut(&peer) {
             conv.lines.push(line.clone());
         }
+        self.record_history(peer); // 대화 기록 영속(M2-5b)
         let mut inv = Invalidations::default();
         if let Some(chat) = self.chats.get_mut(&peer) {
             chat.push_line(line, &mut inv);
@@ -3127,8 +3193,14 @@ impl App {
             self.settings.get("chat.date_format") == "short",
             &mut inv,
         );
-        if let Some(conv) = self.conversations.get(&peer) {
-            for line in &conv.lines {
+        // 세션 있으면 conv, 없으면 대피/복원(parked) — 재시작 후 열어도 뜬다(M2-5b).
+        let lines = self
+            .conversations
+            .get(&peer)
+            .map(|c| &c.lines)
+            .or_else(|| self.parked_lines.get(&peer));
+        if let Some(lines) = lines {
+            for line in lines {
                 chat.push_line(line.clone(), &mut inv);
             }
         }
@@ -4266,6 +4338,7 @@ impl App {
                 if let Some(conv) = self.conversations.get_mut(&p) {
                     conv.lines.push(ChatLine::text(false, safe, at_ms, wall));
                 }
+                self.record_history(p); // 대화 기록 영속(M2-5b)
             }
             None => {
                 if let Some(gid) = self.single_open_group {
@@ -4891,6 +4964,77 @@ impl App {
                 .and_then(|b| crate::imgdec::wire_png_from_bytes(&b, 256));
             let _ = proxy.send_event(AppEvent::WireAvatar { gen, png });
         });
+    }
+
+    /// 대화 기록 봉인 저장(M2-5b) — sealed(history-v1 · A 단일 키) → 원자적
+    /// `data/history/{short}.seg`. 빈 스레드 = 파일 삭제. 봉인 실패 = 저장 포기.
+    fn record_history(&mut self, peer: PeerId) {
+        let Some(conv) = self.conversations.get(&peer) else {
+            return;
+        };
+        let dir = self.data_dir.join("history");
+        let path = dir.join(format!("{}.seg", peer.short()));
+        let plain = encode_history(&conv.lines);
+        if plain.is_empty() {
+            let _ = std::fs::remove_file(&path);
+            return;
+        }
+        let Ok(env) = nbeep_store::sealed::seal(
+            crate::gate::SEAL_HISTORY,
+            &self.identity.wrap_secret(),
+            &plain,
+        ) else {
+            self.status = "⚠ 대화 기록 봉인 실패 — 저장하지 않음".into();
+            return;
+        };
+        if std::fs::create_dir_all(&dir).is_ok() {
+            let tmp = path.with_extension(format!("tmp.{}", std::process::id()));
+            if std::fs::write(&tmp, &env).is_ok() {
+                let _ = std::fs::rename(&tmp, &path);
+            }
+        }
+    }
+
+    /// 부팅 대화 기록 복원(M2-5b) — 개봉해 parked_lines에(대화창 열면 뜨고,
+    /// 재연결하면 install_conversation이 이어받는다). 차단 상대·개봉 실패는 건너뜀.
+    fn restore_history(&mut self) {
+        let dir = self.data_dir.join("history");
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            return;
+        };
+        let recs = self.trust.export();
+        let secret = self.identity.wrap_secret();
+        for e in rd.flatten() {
+            let path = e.path();
+            if path.extension().and_then(|x| x.to_str()) != Some("seg") {
+                continue;
+            }
+            let Some(short) = path.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            let Some(peer) = recs
+                .iter()
+                .find(|r| !r.blocked && r.peer.short() == short)
+                .map(|r| r.peer)
+            else {
+                continue; // 핀 없는/차단된 기록 — 매핑 불가 or 제외
+            };
+            let Some(bytes) = std::fs::read(&path).ok().and_then(|raw| {
+                nbeep_store::sealed::open(crate::gate::SEAL_HISTORY, &secret, &raw)
+            }) else {
+                continue;
+            };
+            let lines = decode_history(&bytes);
+            if lines.is_empty() {
+                continue;
+            }
+            self.parked_lines.insert(peer, lines);
+            if self.live {
+                self.extra_peers
+                    .entry(peer)
+                    .or_insert_with(|| nbeep_core::default_display_name(None, &peer));
+            }
+        }
     }
 
     fn restore_cached_profiles(&mut self) {
@@ -6998,6 +7142,7 @@ impl App {
                     self.status = format!("전송 seq={} (응답 대기)", msg.seq);
                 }
             }
+            self.record_history(peer); // 대화 기록 영속(M2-5b · 빌림 밖)
             self.request_redraw(id);
             if let Some(mid) = self.main_id {
                 self.request_redraw(mid); // 상태바 갱신
@@ -7860,6 +8005,7 @@ impl ApplicationHandler<AppEvent> for App {
                 if let Some(conv) = self.conversations.get_mut(&peer) {
                     conv.lines.push(line.clone());
                 }
+                self.record_history(peer); // 대화 기록 영속(M2-5b · 빌림 밖)
                 let mut inv = Invalidations::default();
                 if let Some(chat) = self.chats.get_mut(&peer) {
                     chat.push_line(line, &mut inv);
@@ -10026,6 +10172,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
     app.apply_boot_settings(); // 영속 설정 → 파생 런타임 상태(테마·정책 등 · M3-15)
     app.promote_local_groups(); // 구버전 로컬(동보) 그룹 → 그룹 대화(G4 마이그레이션)
     app.load_pii_sidecar(); // 연락처(PII) 봉인 사이드카 — cfg 구본보다 우선(08-17)
+    app.restore_history(); // 대화 기록 복원(M2-5b · parked_lines에 · 대화창 열면 뜬다)
     app.restore_cached_profiles(); // 핀 상대의 캐시 프로필·목록 행 복원(08-14)
     app.ensure_wire_avatar(); // 상한 초과 사진의 와이어 축소본 보장(08-16 — 기존 사용자 자기 치유)
     event_loop.run_app(&mut app).unwrap();
@@ -10201,5 +10348,65 @@ mod tests {
         assert_eq!(reconnect_delay(2), Some(60_000));
         assert_eq!(reconnect_delay(3), Some(300_000));
         assert_eq!(reconnect_delay(4), None, "상한 도달 = 중단(수동 재개만)");
+    }
+
+    /// M2-5b — 대화 기록 왕복(텍스트·방향·시각 보존 · Xfer 줄은 제외).
+    #[test]
+    fn history_roundtrips_text_lines() {
+        use super::{decode_history, encode_history, wall_from_ms, ChatLine};
+        let w = wall_from_ms(1_700_000_000_000);
+        let lines = vec![
+            ChatLine::text(true, nbeep_core::sanitize_message("안녕 hello"), 1000, w),
+            ChatLine::text(false, nbeep_core::sanitize_message("답장 reply"), 2000, w),
+            // 파일 전송 줄 — 직렬화 대상 아님(텍스트만).
+            ChatLine::xfer(true, nbeep_core::sanitize_message("a.bin"), 42, 3000, w),
+            ChatLine::text(true, nbeep_core::sanitize_message("셋째"), 4000, w),
+        ];
+        let back = decode_history(&encode_history(&lines));
+        assert_eq!(back.len(), 3, "텍스트 3줄만(Xfer 제외)");
+        assert!(back[0].mine && back[0].at_ms == 1000);
+        assert!(!back[1].mine && back[1].at_ms == 2000);
+        assert_eq!(back[2].at_ms, 4000, "Xfer 건너뛰고 순서 보존");
+        let nbeep_ui::ChatBody::Text(t0) = &back[0].body else {
+            panic!("텍스트")
+        };
+        assert_eq!(t0.as_str(), "안녕 hello");
+    }
+
+    /// M2-5b — 손상은 fail-soft: 읽은 데까지 살리고 멈춘다(빈 봉투 안 만든다).
+    #[test]
+    fn history_decode_is_fail_soft() {
+        use super::{decode_history, encode_history, wall_from_ms, ChatLine};
+        let w = wall_from_ms(0);
+        let good = encode_history(&[ChatLine::text(
+            true,
+            nbeep_core::sanitize_message("ok"),
+            10,
+            w,
+        )]);
+        let mut truncated = good;
+        truncated.push(1); // 잘린 레코드 시작 — 헤더 미만이라 그 앞까지만
+        assert_eq!(decode_history(&truncated).len(), 1, "온전한 1줄은 산다");
+        assert!(decode_history(b"garbage").is_empty(), "쓰레기 = 빈 결과");
+    }
+
+    /// M2-5b — 스레드 상한(오래된 것부터 버림).
+    #[test]
+    fn history_caps_to_max_keeping_recent() {
+        use super::{decode_history, encode_history, wall_from_ms, ChatLine, HISTORY_MAX};
+        let w = wall_from_ms(0);
+        let lines: Vec<ChatLine> = (0..HISTORY_MAX + 50)
+            .map(|i| {
+                ChatLine::text(
+                    true,
+                    nbeep_core::sanitize_message(&format!("m{i}")),
+                    i as u64,
+                    w,
+                )
+            })
+            .collect();
+        let back = decode_history(&encode_history(&lines));
+        assert_eq!(back.len(), HISTORY_MAX, "상한 유지");
+        assert_eq!(back[0].at_ms, 50, "오래된 50개 버려짐(최근 유지)");
     }
 }

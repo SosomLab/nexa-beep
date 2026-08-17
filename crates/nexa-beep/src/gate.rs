@@ -174,3 +174,6 @@ pub(crate) const SEAL_PROFILE_CACHE: &[u8] = b"profile-cache-v1";
 /// PII 봉인 사이드카 도메인 + 대상 키(08-17 — 평문 3면 조치 ②).
 pub(crate) const SEAL_PII: &[u8] = b"pii-v1";
 pub(crate) const PII_KEYS: &[&str] = &["profile.email", "profile.phone"];
+
+/// 대화 기록 봉투 도메인(ADR-0005 §4 · M2-5b — 저장 암호화 A 단일).
+pub(crate) const SEAL_HISTORY: &[u8] = b"history-v1";
