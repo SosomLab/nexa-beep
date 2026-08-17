@@ -53,9 +53,14 @@ pub struct TextBox {
     vscroll: std::cell::Cell<usize>,
     /// 멀티라인 가로 스크롤(px · 캐럿 열을 따라간다 · 08-17 드래그 자동 스크롤).
     mhscroll: std::cell::Cell<i32>,
-    /// 사용자가 휠로 세로 스크롤했다(08-18) — 참이면 paint가 캐럿을 따라가지 않고
-    /// vscroll을 그대로 존중(자유 스크롤). 편집(캐럿 이동) 시 거짓으로 리셋.
+    /// 사용자가 휠/바로 스크롤했다(08-18) — 참이면 paint가 캐럿을 따라가지 않고
+    /// vscroll/mhscroll을 그대로 존중(자유 스크롤). 편집(캐럿 이동) 시 거짓으로 리셋.
     ml_user_scrolled: bool,
+    /// 멀티라인 스크롤바(08-18 · 대화 입력창과 동일 컨트롤 · 상하+좌우 · 자동 숨김).
+    ml_bars: super::ScrollBars,
+    /// 멀티라인 콘텐츠 크기 (content_w, content_h) px — paint가 실측해 캐시하고
+    /// on_event(폰트 못 재는 경로)가 스크롤바 계산에 쓴다.
+    ml_content: std::cell::Cell<(i32, i32)>,
     /// 멀티라인 클릭→캐럿 변환용 줄 배치(페인트가 남긴다).
     line_lay: std::cell::RefCell<Vec<MlLine>>,
 }
@@ -106,27 +111,16 @@ impl TextBox {
             vscroll: std::cell::Cell::new(0),
             mhscroll: std::cell::Cell::new(0),
             ml_user_scrolled: false,
+            ml_bars: super::ScrollBars::new(),
+            ml_content: std::cell::Cell::new((0, 0)),
             line_lay: std::cell::RefCell::new(Vec::new()),
         }
     }
 
-    /// 멀티라인 논리 줄 수(08-18 — 호스트가 필드 높이 자동 성장에 쓴다).
-    #[must_use]
-    pub fn line_count(&self) -> usize {
-        self.edit.text().split('\n').count()
-    }
-
-    /// 멀티라인 휠 스크롤(08-18) — 위(+)/아래(−) 한 줄씩. 사용자 스크롤 플래그를
-    /// 세워 paint가 캐럿을 따라가지 않게 한다(편집 시 자동 해제).
-    pub fn wheel_scroll(&mut self, up: bool, inv: &mut Invalidations) {
-        if !self.multiline {
-            return;
-        }
-        let cur = self.vscroll.get();
-        self.vscroll
-            .set(if up { cur.saturating_sub(1) } else { cur + 1 });
-        self.ml_user_scrolled = true;
-        inv.push(self.base.bounds);
+    /// 멀티라인 스크롤바 시간 틱(08-18 · 자동 숨김) — 호스트(프로필)가 부른다.
+    /// `true` = 다시 그려야 한다.
+    pub fn tick(&mut self, now_ms: u64) -> bool {
+        self.ml_bars.tick(now_ms)
     }
 
     /// 멀티라인(소개글) 모드로 만든다(체이닝 · 08-17) — Enter = 개행. 보이는 줄
@@ -481,14 +475,30 @@ impl TextBox {
         let mut cw = Vec::new();
         ctx.text_prefix_widths(caret_str, &mut cw);
         let caret_px = cw.get(caret_col).copied().unwrap_or(0);
+        // 콘텐츠 크기(스크롤바·클램프용) — 모든 줄의 최대 폭 + 총 높이. on_event가
+        // 폰트를 못 재므로 여기서 실측해 캐시한다.
+        let content_w = lines
+            .iter()
+            .map(|(_, s)| ctx.text_width(s))
+            .max()
+            .unwrap_or(0);
+        let content_h = lines.len() as i32 * lh + self.s(16);
+        self.ml_content.set((content_w, content_h));
+        let max_hs = (content_w - avail).max(0);
         let mut hs = self.mhscroll.get();
-        if caret_px - hs > avail {
-            hs = caret_px - avail;
+        if self.ml_user_scrolled {
+            // 사용자 스크롤(바/휠) — 캐럿 안 따라감. 콘텐츠 범위로만 클램프.
+            hs = hs.clamp(0, max_hs);
+        } else {
+            // 캐럿 열이 보이도록 따라간다(편집 중).
+            if caret_px - hs > avail {
+                hs = caret_px - avail;
+            }
+            if caret_px - hs < 0 {
+                hs = caret_px;
+            }
+            hs = hs.clamp(0, max_hs);
         }
-        if caret_px - hs < 0 {
-            hs = caret_px;
-        }
-        hs = hs.max(0);
         self.mhscroll.set(hs);
 
         // 빈 값 = placeholder(첫 줄).
@@ -550,6 +560,17 @@ impl TextBox {
             });
         }
         drop(lay);
+        // 스크롤바 오버레이(08-18 · 대화 입력창과 동일) — 상하+좌우 · 자동 숨김.
+        self.ml_bars.paint(
+            ctx,
+            theme,
+            b,
+            content_w.max(avail),
+            content_h.max(b.h),
+            hs,
+            (top as i32) * lh,
+            self.base.scale,
+        );
         self.paint_popup(ctx, theme);
     }
 }
@@ -617,6 +638,40 @@ impl Widget for TextBox {
                 inv.push(self.ctx_menu.bounds());
             }
             return;
+        }
+        // 멀티라인 스크롤바(08-18 · 대화 입력창과 동일) — 휠·HWheel·썸 드래그를
+        // 먼저 먹는다. vp/콘텐츠 크기는 paint가 캐시한 값. 소비되면 텍스트 처리로
+        // 흘리지 않는다(썸 드래그가 캐럿 이동으로 새지 않게).
+        if self.multiline {
+            let vp = self.base.bounds;
+            let (cw, ch) = self.ml_content.get();
+            let line_h = self.line_h();
+            let (nx, ny, consumed) = self.ml_bars.on_event(
+                ev,
+                vp,
+                cw.max(vp.w),
+                ch.max(vp.h),
+                self.mhscroll.get(),
+                (self.vscroll.get() as i32) * line_h,
+                self.base.scale,
+            );
+            let mut moved = false;
+            if nx != self.mhscroll.get() {
+                self.mhscroll.set(nx.max(0));
+                moved = true;
+            }
+            let nl = ((ny + line_h / 2) / line_h.max(1)).max(0) as usize;
+            if nl != self.vscroll.get() {
+                self.vscroll.set(nl);
+                moved = true;
+            }
+            if moved {
+                self.ml_user_scrolled = true;
+                inv.push(vp);
+            }
+            if consumed {
+                return;
+            }
         }
         match *ev {
             InputEvent::MouseDown { x, y, shift, .. } => {

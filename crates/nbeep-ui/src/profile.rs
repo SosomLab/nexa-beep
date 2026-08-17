@@ -442,19 +442,24 @@ impl ProfileWidget {
     /// 호버하면 파일명 툴팁.
     /// `true` = 다시 그려야 한다.
     pub fn tick(&mut self, now_ms: u64) -> bool {
-        if self.recent_hover.is_none() {
+        // bio 스크롤바 자동 숨김 틱(08-18) — 항상 돌린다(툴팁 로직과 독립).
+        let bars = self.bio.tick(now_ms);
+        let tip = if self.recent_hover.is_none() {
             let was = self.recent_tip;
             self.recent_hover_since = None;
             self.recent_tip = false;
-            return was;
-        }
-        let since = *self.recent_hover_since.get_or_insert(now_ms);
-        let show = now_ms.saturating_sub(since) >= self.tip_delay_ms;
-        if show != self.recent_tip {
-            self.recent_tip = show;
-            return true;
-        }
-        false
+            was
+        } else {
+            let since = *self.recent_hover_since.get_or_insert(now_ms);
+            let show = now_ms.saturating_sub(since) >= self.tip_delay_ms;
+            if show != self.recent_tip {
+                self.recent_tip = show;
+                true
+            } else {
+                false
+            }
+        };
+        bars || tip
     }
 
     /// 배율 지정 — 내부 컨트롤 전파.
@@ -563,11 +568,11 @@ impl Widget for ProfileWidget {
         if let InputEvent::MouseMove { x, y } = *ev {
             self.last_cursor = Point { x, y };
         }
-        // 마우스 휠 — bio 위면 bio 내부 세로 스크롤(3줄 초과분). 그 외 컨트롤 위는
-        // 지금은 스크롤 대상이 없다(중간영역 스크롤은 후속 TODO).
-        if let InputEvent::Wheel { delta } = *ev {
-            if delta != 0 && self.bio.bounds().contains(self.last_cursor) {
-                self.bio.wheel_scroll(delta > 0, inv);
+        // 마우스 휠(세로/가로) — bio 위면 bio로 넘겨 스크롤바가 처리(3줄 초과분 ·
+        // 상하+좌우). 그 외 컨트롤 위는 지금 스크롤 대상 없음(중간영역은 후속 TODO).
+        if matches!(*ev, InputEvent::Wheel { .. } | InputEvent::HWheel { .. }) {
+            if self.bio.bounds().contains(self.last_cursor) {
+                self.bio.on_event(ev, inv);
             }
             return;
         }
