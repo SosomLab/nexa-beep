@@ -1678,7 +1678,7 @@ impl Widget for ChatViewWidget {
                 tx,
                 ly + (iline_h - ith) / 2,
                 input,
-                "메시지 입력… (Enter 전송 · Shift+Enter 줄바꿈 · Esc 목록)",
+                nbeep_core::i18n::t(nbeep_core::i18n::Msg::ChatInputPlaceholder),
                 theme.text_dim,
             );
             // 빈 입력창에도 **Beam 커서** — 높이는 글자 실측(캐럿 과대 표시 수정 08-10).
