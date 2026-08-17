@@ -883,15 +883,16 @@ fn ago_label(unix_ms: u64) -> String {
     }
     let now = unix_now_ms();
     let s = now.saturating_sub(unix_ms) / 1000;
+    // 상대 시각(08-17 i18n) — 달 = 30일·년 = 365일 근사(사람이 읽는 어림).
+    use nbeep_core::{tf, Msg};
+    let n = |v: u64| v.to_string();
     match s {
-        0..=59 => "방금 전".into(),
-        60..=3_599 => format!("{}분 전", s / 60),
-        3_600..=86_399 => format!("{}시간 전", s / 3_600),
-        // 달·년(08-17 사용자 요청) — 달 = 30일 근사, 년 = 365일 근사(상대 표기는
-        // 정확한 달력이 아니라 사람이 읽는 어림이면 충분).
-        86_400..=2_591_999 => format!("{}일 전", s / 86_400),
-        2_592_000..=31_535_999 => format!("{}달 전", s / 2_592_000),
-        _ => format!("{}년 전", s / 31_536_000),
+        0..=59 => nbeep_core::t(Msg::AgoJustNow).to_string(),
+        60..=3_599 => tf(Msg::AgoMinutes, &[&n(s / 60)]),
+        3_600..=86_399 => tf(Msg::AgoHours, &[&n(s / 3_600)]),
+        86_400..=2_591_999 => tf(Msg::AgoDays, &[&n(s / 86_400)]),
+        2_592_000..=31_535_999 => tf(Msg::AgoMonths, &[&n(s / 2_592_000)]),
+        _ => tf(Msg::AgoYears, &[&n(s / 31_536_000)]),
     }
 }
 
@@ -3504,7 +3505,7 @@ impl App {
                     );
                 let age = unix_now().saturating_sub(bq.meta.received_at);
                 let when = if age >= 86_400 {
-                    format!("{}일 전", age / 86_400)
+                    nbeep_core::tf(nbeep_core::Msg::AgoDays, &[&(age / 86_400).to_string()])
                 } else {
                     nbeep_plat::clock::local_hms(bq.meta.received_at).hms()
                 };
@@ -4252,17 +4253,23 @@ impl App {
                 } else {
                     LinkState::Idle
                 };
-                let mut line = format!(
-                    "{} — {}",
-                    if *m == me {
-                        format!("{} (나)", self.my_display_name())
-                    } else {
-                        self.peer_title(*m)
-                    },
-                    m.short()
-                );
+                // 통일 표기(08-17 사용자 확정): `표시 이름 — 지문 · 설명(나·소유자)`.
+                let name = if *m == me {
+                    self.my_display_name()
+                } else {
+                    self.peer_title(*m)
+                };
+                let mut line = format!("{name} — {}", m.short());
+                let mut descs: Vec<&str> = Vec::new();
+                if *m == me {
+                    descs.push(nbeep_core::t(nbeep_core::Msg::MemberSelf));
+                }
                 if *m == s.roster.owner {
-                    line.push_str(" · 소유자");
+                    descs.push(nbeep_core::t(nbeep_core::Msg::MemberOwner));
+                }
+                if !descs.is_empty() {
+                    line.push_str(" · ");
+                    line.push_str(&descs.join(" · "));
                 }
                 (link, line)
             })
@@ -8922,18 +8929,22 @@ impl ApplicationHandler<AppEvent> for App {
                         let _ = std::fs::write(&meta_path, meta);
                     }
                     // 받은 항목을 상태바에 요약(상세는 프로필 카드가 그린다).
+                    // 받은 항목 요약(08-17 i18n) — 상세는 카드가 그린다.
                     let mut got: Vec<&str> = Vec::new();
                     if display.is_some() {
-                        got.push("이름");
+                        got.push(nbeep_core::t(nbeep_core::Msg::ItemName));
                     }
                     if email.is_some() {
-                        got.push("이메일");
+                        got.push(nbeep_core::t(nbeep_core::Msg::ItemEmail));
                     }
                     if phone.is_some() {
-                        got.push("전화");
+                        got.push(nbeep_core::t(nbeep_core::Msg::ItemPhone));
+                    }
+                    if bio.is_some() {
+                        got.push(nbeep_core::t(nbeep_core::Msg::ItemBio));
                     }
                     if image_file.is_some() {
-                        got.push("이미지");
+                        got.push(nbeep_core::t(nbeep_core::Msg::ItemImage));
                     }
                     self.peer_profiles.insert(
                         peer,
@@ -8948,8 +8959,10 @@ impl ApplicationHandler<AppEvent> for App {
                             received_ms: unix_now_ms(), // 경량(Info)도 수신이다
                         },
                     );
-                    self.status =
-                        format!("프로필 수신({}) — {}", self.peer_title(peer), got.join("·"));
+                    self.status = nbeep_core::tf(
+                        nbeep_core::Msg::ProfileReceived,
+                        &[&self.peer_title(peer), &got.join("·")],
+                    );
                 } else {
                     // 전부 비공개(빈 응답) — 이전 프로필이 있었다면 걷어낸다(철회 반영).
                     // 캐시 파일도 함께 — 재시작 복원이 철회를 되돌리면 안 된다.
@@ -10384,27 +10397,32 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
     if let Ok(ms) = settings.get("ui.scrollbar_hide").parse::<u64>() {
         nbeep_ui::controls::scroll::set_hide_delay_ms(ms);
     }
+    // 하단 상태바 기동 안내(08-17 i18n).
     let net_hint = if !live {
-        "데모(에코 봇)"
+        nbeep_core::t(nbeep_core::Msg::HintDemo)
     } else if discovery_degraded {
         // M1-13ⓔ — "왜 아무도 안 보이는지"를 화면이 말해야 한다(조용한 비호환 금지).
-        "실물 발견 · ⚠ 수신 불가(포트 47100 점유) — 발신 전용(상대 목록에서 나를 선택)"
+        nbeep_core::t(nbeep_core::Msg::HintDiscoveryDegraded)
     } else {
-        "실물 발견(LAN)"
+        nbeep_core::t(nbeep_core::Msg::HintDiscovery)
     };
     let mode_hint = match mode {
-        WindowMode::Single => "Enter = 대화 열기",
-        WindowMode::Separate => "Enter = 상대별 새 창(동시 대화)",
+        WindowMode::Single => nbeep_core::t(nbeep_core::Msg::HintOpenChat),
+        WindowMode::Separate => nbeep_core::t(nbeep_core::Msg::HintNewWindow),
     };
     // 신뢰 저장 상태 고지(M2-5a) — 잠김은 fail-closed라 반드시 사용자에게 보인다.
     let trust_hint = match trust_load {
-        nbeep_store::TrustLoad::Locked => " · ⚠ 신뢰 목록 잠김(파일 손상 — 전부 미검증 취급)",
-        nbeep_store::TrustLoad::Loaded(_) | nbeep_store::TrustLoad::Fresh => "",
+        nbeep_store::TrustLoad::Locked => {
+            format!(" · {}", nbeep_core::t(nbeep_core::Msg::HintTrustLocked))
+        }
+        nbeep_store::TrustLoad::Loaded(_) | nbeep_store::TrustLoad::Fresh => String::new(),
     };
     // 그룹 저장 상태 고지(M5-1) — 같은 fail-closed 규약.
     let group_hint = match group_load {
-        nbeep_store::GroupLoad::Locked => " · ⚠ 그룹 목록 잠김(파일 손상 — 이번 실행은 임시)",
-        nbeep_store::GroupLoad::Loaded(_) | nbeep_store::GroupLoad::Fresh => "",
+        nbeep_store::GroupLoad::Locked => {
+            format!(" · {}", nbeep_core::t(nbeep_core::Msg::HintGroupLocked))
+        }
+        nbeep_store::GroupLoad::Loaded(_) | nbeep_store::GroupLoad::Fresh => String::new(),
     };
     let id_hint = id_note.map(|n| format!(" · {n}")).unwrap_or_default();
     let settings_sort_value = settings.get("ui.list_sort").to_string();
@@ -10444,7 +10462,10 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         dedup: nbeep_core::DedupIndex::new(),
         started: Instant::now(),
         status: format!(
-            "[{net_hint}] {mode_hint} · ⌘/Ctrl+K = 주소 추가 · ⌘/Ctrl+, = 설정 · ⌘/Ctrl+G = 컨트롤 갤러리{trust_hint}{group_hint}{id_hint}"
+            "[{net_hint}] {mode_hint} · {} · {} · {}{trust_hint}{group_hint}{id_hint}",
+            nbeep_core::t(nbeep_core::Msg::HintAddAddr),
+            nbeep_core::t(nbeep_core::Msg::HintSettings),
+            nbeep_core::t(nbeep_core::Msg::HintGallery),
         ),
         fonts: App::fonts_from_settings(&settings),
         settings,
