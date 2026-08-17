@@ -1,6 +1,7 @@
 # 11 · ADR-0004 — 수신 파일 무해화 (`.beepq` 격리 컨테이너 · 위험 등급 · 승인 UX)
 
-> **상태: 📐 Proposed (사용자 확정 대기)** · 제안 2026-08-08 · 결정자 Sangyong Bae
+> **상태: ✅ Accepted (사용자 확정 08-17 — D-12)** · 제안 2026-08-08 · 결정자 Sangyong Bae
+> **구현 완료**(M4-1 · `nbeep-safe` — 4단계 게이트·위험 등급·`.beepq`·승인 UX · 08-17 격리물 봉인 sealed 추가). 공식 확정만 남아 있던 것을 확정.
 > [04 안전 송수신](04-safe-transfer.md)의 설계를 **구현 가능한 규격**으로 확정하는 문서. DR-13의 실체.
 > 관련: [05](05-requirements.md) FR-S-5~17 · [01 §4-3](01-architecture.md)(데이터 흐름) · [02](02-roadmap.md) M4-1
 
