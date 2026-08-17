@@ -4455,8 +4455,7 @@ impl App {
             }
             Parsed::Empty => CmdOutcome::Send(None),
             Parsed::Unknown(name) => {
-                self.status =
-                    format!("모르는 명령 `/{name}` — /help 로 목록을 봅니다(보내지 않았습니다)");
+                self.status = nbeep_core::tf(nbeep_core::Msg::CmdUnknown, &[&name]);
                 CmdOutcome::Handled
             }
             Parsed::Command(cmd) => {
@@ -4466,14 +4465,14 @@ impl App {
                     }
                     ChatCommand::Trust => {
                         let line = peer.map_or_else(
-                            || {
-                                "그룹 방에는 단일 상대가 없습니다 — 구성원 모달에서 각자 확인합니다"
-                                    .to_string()
-                            },
+                            || nbeep_core::t(nbeep_core::Msg::CmdTrustGroup).to_string(),
                             |p| {
                                 use nbeep_core::TrustStore as _;
                                 let lv = self.trust.level(p);
-                                format!("{} — 신뢰 상태: {}", self.peer_title(p), trust_label(lv))
+                                nbeep_core::tf(
+                                    nbeep_core::Msg::CmdTrustStatus,
+                                    &[&self.peer_title(p), trust_label(lv)],
+                                )
                             },
                         );
                         self.push_chat_notice(peer, &line);
@@ -4484,7 +4483,7 @@ impl App {
                             if self.trust.level(p) == nbeep_core::TrustLevel::FingerprintVerified {
                                 self.push_chat_notice(
                                     peer,
-                                    "이미 지문 대조가 끝난 상대입니다(파란 실 배지).",
+                                    nbeep_core::t(nbeep_core::Msg::CmdVerifyAlready),
                                 );
                             } else {
                                 // ⚠️ 카드를 열어 줄 뿐 — 승격은 **다른 채널로 숫자를 맞춘 뒤**
@@ -4492,16 +4491,13 @@ impl App {
                                 //    승격하면 중간자가 그 문답을 대신할 수 있다.
                                 self.push_chat_notice(
                                     peer,
-                                    "안전 번호 카드를 열었습니다. 전화·대면 등 **다른 채널**로 \
-                                     상대와 같은 번호인지 맞춰 본 뒤 '대조 완료'를 누르세요.",
+                                    nbeep_core::t(nbeep_core::Msg::CmdVerifyOpened),
                                 );
                                 self.pending_peer_info = Some(p);
                             }
                         }
-                        None => self.push_chat_notice(
-                            peer,
-                            "지문 대조는 1:1 대화에서만 가능합니다(상대가 하나로 정해져야 합니다).",
-                        ),
+                        None => self
+                            .push_chat_notice(peer, nbeep_core::t(nbeep_core::Msg::CmdVerify1to1)),
                     },
                     ChatCommand::Unverify => match peer {
                         // 인증 취소 — SAS 승격을 **실제로 되돌린다**(파란 배지 강등).
@@ -4513,20 +4509,19 @@ impl App {
                                 self.close_peer_info_card();
                                 self.push_chat_notice(
                                     peer,
-                                    "인증을 취소했습니다 — 지문 대조 상태가 해제됐습니다(다시 \
-                                     대조하려면 /verify).",
+                                    nbeep_core::t(nbeep_core::Msg::CmdUnverifyDone),
                                 );
                             } else {
                                 self.close_peer_info_card();
                                 self.push_chat_notice(
                                     peer,
-                                    "이 상대는 지문 대조 상태가 아닙니다(취소할 인증이 없습니다).",
+                                    nbeep_core::t(nbeep_core::Msg::CmdUnverifyNone),
                                 );
                             }
                         }
                         None => self.push_chat_notice(
                             peer,
-                            "인증 취소는 1:1 대화에서만 가능합니다(상대가 하나로 정해져야 합니다).",
+                            nbeep_core::t(nbeep_core::Msg::CmdUnverify1to1),
                         ),
                     },
                     ChatCommand::Close => {

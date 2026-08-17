@@ -122,14 +122,15 @@ pub fn parse(input: &str) -> Parsed {
 /// 명령 안내 문구(`/help` 출력 · 화면·CLI 공용).
 #[must_use]
 pub fn help_text() -> String {
+    use crate::i18n::{t, Msg};
     [
-        "사용 가능한 명령",
-        "  /help            이 안내",
-        "  /verify          지문(안전 번호) 대조 카드 열기",
-        "  /unverify        대조 카드 닫기(취소)",
-        "  /trust           이 상대의 신뢰 상태 보기",
-        "  /close           대화창 닫기",
-        "  ※ /로 시작하는 입력은 어떤 경우에도 전송되지 않습니다",
+        t(Msg::CmdHelpHeader),
+        t(Msg::CmdHelpHelp),
+        t(Msg::CmdHelpVerify),
+        t(Msg::CmdHelpUnverify),
+        t(Msg::CmdHelpTrust),
+        t(Msg::CmdHelpClose),
+        t(Msg::CmdHelpNote),
     ]
     .join("\n")
 }
