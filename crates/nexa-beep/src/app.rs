@@ -4201,8 +4201,9 @@ impl App {
                 "Nexa Beep — {}",
                 nbeep_core::t(nbeep_core::Msg::ProfileTitle)
             ))
-            // 창 높이 740 — 버튼(y+696·h28 → 724) 아래 여백이 좌우 pad(16)와 같아진다.
-            .with_inner_size(winit::dpi::LogicalSize::new(440.0, 740.0))
+            // 창 높이 790 — bio 고정 4줄 + 흐름 배치(토글·안내·버튼)가 다 들어간다.
+            // (창 크기 조정은 아직 없음 · 08-18 — 향후 스크롤 구조 준비 예정).
+            .with_inner_size(winit::dpi::LogicalSize::new(440.0, 790.0))
             .with_resizable(false)
             // 앱 모달(08-14 표준 재정리) — 앱 창 입력은 모달이 흡수하되, 다른 앱은
             // 자유롭게 위로 온다(AlwaysOnTop 금지 — OS 창 전환 관례).
@@ -7123,11 +7124,11 @@ impl App {
                     parts.push(ph.clone());
                 }
                 if p.image_file.is_some() {
-                    parts.push("이미지 있음".into());
+                    parts.push(nbeep_core::t(nbeep_core::Msg::StItemImagePresent).into());
                 }
-                format!("대화 열림 — 프로필: {}", parts.join(" · "))
+                nbeep_core::tf(nbeep_core::Msg::ChatOpenedProfile, &[&parts.join(" · ")])
             }
-            _ => "대화 열림 — 세션 유지 중".into(),
+            _ => nbeep_core::t(nbeep_core::Msg::ChatOpenedSession).into(),
         };
         self.send_read_ack(peer); // 대화창 열기 = 받은 것 읽음(N-2 · 사용자 요청)
         let chat = self.build_chat_view(peer);

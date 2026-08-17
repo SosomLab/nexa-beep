@@ -115,9 +115,19 @@ pub struct ProfileWidget {
     orig_email: String,
     orig_phone: String,
     orig_bio: String,
+    /// 소개글 표시 줄 수(08-18 — 고정 [`BIO_MAX_LINES`]줄 · 초과분은 필드 내부
+    /// 스크롤. 창 크기는 지금 고정이라 성장시키지 않는다).
+    bio_lines: usize,
+    /// 공유 안내문 y 오프셋(relayout이 bio 높이에 맞춰 계산 · paint가 읽는다).
+    note_dy: i32,
     pick_image: bool,
     closed: bool,
 }
+
+/// 소개글 표시 최대 줄 수(초과분은 캐럿 추종 스크롤 · 채팅 입력창과 동일).
+const BIO_MAX_LINES: usize = 4;
+/// 소개글 한 줄 높이(멀티라인 TextBox의 line_h와 같은 값 · 배율 전).
+const BIO_LINE_H: i32 = 20;
 
 impl ProfileWidget {
     /// 현재 값으로 화면을 만든다.
@@ -188,6 +198,8 @@ impl ProfileWidget {
             orig_email: v.email.clone(),
             orig_phone: v.phone.clone(),
             orig_bio: v.bio.clone(),
+            bio_lines: BIO_MAX_LINES, // 고정 4줄(초과는 내부 스크롤 · 창 성장 안 함)
+            note_dy: 0,
             pick_image: false,
             closed: false,
         }
@@ -499,20 +511,28 @@ impl ProfileWidget {
             .set_bounds(Rect::new(b.x + pad, b.y + self.s(362), fw, field_h), inv);
         self.phone
             .set_bounds(Rect::new(b.x + pad, b.y + self.s(420), fw, field_h), inv);
-        // 소개글(08-17) — 라벨 y456 아래 멀티라인 필드(3줄 높이 58). 이 아래로
-        // 토글·안내·버튼이 92px 내려간다(창 730).
+        // 소개글(08-18) — 라벨 y456 아래 멀티라인 필드. **채팅 입력창처럼 1~4줄
+        // 자동 성장**(초과 스크롤): 높이 = 줄 수 × line_h + 상하 여백. 아래 컨트롤은
+        // 이 높이에 맞춰 **흐름 배치**(창도 함께 커진다).
+        let bio_y = b.y + self.s(474);
+        let bio_h = self.bio_lines as i32 * self.s(BIO_LINE_H) + self.s(16);
         self.bio
-            .set_bounds(Rect::new(b.x + pad, b.y + self.s(474), fw, self.s(58)), inv);
-        // 공개 토글 3종 — 라벨 왼쪽·토글 오른쪽 끝.
+            .set_bounds(Rect::new(b.x + pad, bio_y, fw, bio_h), inv);
+        // 이하 흐름 배치 — bio 아래에서 이어진다.
         let sw_h = self.s(26);
+        let sw1 = bio_y + bio_h + self.s(26);
         self.sw_basic
-            .set_bounds(Rect::new(b.x + pad, b.y + self.s(558), fw, sw_h), inv);
+            .set_bounds(Rect::new(b.x + pad, sw1, fw, sw_h), inv);
+        let sw2 = sw1 + self.s(32);
         self.sw_email
-            .set_bounds(Rect::new(b.x + pad, b.y + self.s(590), fw, sw_h), inv);
+            .set_bounds(Rect::new(b.x + pad, sw2, fw, sw_h), inv);
+        let sw3 = sw2 + self.s(32);
         self.sw_phone
-            .set_bounds(Rect::new(b.x + pad, b.y + self.s(622), fw, sw_h), inv);
-        // 적용/취소(M3-18) — 우측 정렬 · **공유 안내문 아래**(창 730 — 하단 여백 확보).
-        let by = b.y + self.s(696);
+            .set_bounds(Rect::new(b.x + pad, sw3, fw, sw_h), inv);
+        // 공유 안내문(2줄 · 각 s(16)) — 토글 아래. paint가 note_dy(오프셋)로 그린다.
+        self.note_dy = (sw3 + sw_h + self.s(12)) - b.y;
+        // 적용/취소(M3-18) — 안내문(2줄) 아래 우측 정렬.
+        let by = b.y + self.note_dy + self.s(32) + self.s(14);
         self.cancel_btn
             .set_bounds(Rect::new(b.right() - pad - bw, by, bw, field_h), inv);
         self.apply_btn.set_bounds(
@@ -696,6 +716,7 @@ impl Widget for ProfileWidget {
         }
         // 소개글(08-17) — 멀티라인이라 Enter=개행(확정 없음). 값은 적용 시
         // harvest_texts가 .text()로 수확한다(여기선 편집 이벤트만 흘린다).
+        // 08-18: 창 크기 조정은 하지 않는다(고정 4줄 · 초과는 필드 내부 스크롤).
         self.bio.on_event(ev, inv);
         let _ = self.bio.take_changed();
     }
@@ -926,7 +947,7 @@ impl Widget for ProfileWidget {
         let lines = crate::settings::wrap_text(ctx, t(Msg::ProfileShareNote), avail, 2);
         for (i, line) in lines.iter().enumerate() {
             #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-            let dy = self.s(660) + i as i32 * self.s(16);
+            let dy = self.note_dy + i as i32 * self.s(16);
             ctx.text(b.x + pad, b.y + dy, b, line, theme.text_dim);
         }
         // 우클릭 편집 메뉴 — 모든 자식 뒤에 재도색(08-13 실기: Email 필드가

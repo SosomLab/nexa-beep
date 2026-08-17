@@ -627,6 +627,10 @@ pub enum Msg {
     /// About 페이지(08-17 i18n).
     AboutTagline,
     AboutHomepage,
+    /// 대화 열림 상태바(08-18 i18n).
+    ChatOpenedProfile, // `{0}` = 연락처 목록
+    ChatOpenedSession,
+    StItemImagePresent,
     StfAutoAcceptRecv,
     StfFileRejected,
     StfDeliveredWait,
@@ -841,6 +845,9 @@ impl Msg {
             Msg::AddrFormatHint => ["format: host:port or [v6]:port (port 1–65535)", "형식: host:port 또는 [v6]:port (포트 1~65535)", "格式: host:port 或 [v6]:port (端口 1~65535)", "形式: host:port または [v6]:port (ポート 1~65535)"],
             Msg::AboutTagline => ["Zero-config LAN messenger", "제로 컨피그 로컬 네트워크 메신저 · Zero-config LAN messenger", "零配置局域网通讯 · Zero-config LAN messenger", "ゼロ設定ローカルメッセンジャー · Zero-config LAN messenger"],
             Msg::AboutHomepage => ["Nexa Beep homepage", "Nexa Beep 홈페이지", "Nexa Beep 主页", "Nexa Beep ホームページ"],
+            Msg::ChatOpenedProfile => ["Chat opened — profile: {}", "대화 열림 — 프로필: {}", "已打开对话 — 资料: {}", "会話を開いた — プロフィール: {}"],
+            Msg::ChatOpenedSession => ["Chat opened — session active", "대화 열림 — 세션 유지 중", "已打开对话 — 会话保持中", "会話を開いた — セッション維持中"],
+            Msg::StItemImagePresent => ["has image", "이미지 있음", "有图片", "画像あり"],
             Msg::StfAutoAcceptRecv => ["Auto-accepted: {} ({}) receiving", "자동 수락: {} ({}) 수신 시작", "自动接受：{}（{}）开始接收", "自動受信: {} ({}) 受信開始"],
             Msg::StfFileRejected => ["File rejected ({}): {}", "파일 거부({}): {}", "文件已拒绝（{}）：{}", "ファイル拒否({}): {}"],
             Msg::StfDeliveredWait => ["Delivered {}/{} — awaiting peer confirmation", "전달됨 {}/{} — 상대 확인 대기", "已送达 {}/{} — 等待对方确认", "配信済み {}/{} — 相手の確認待ち"],
