@@ -648,6 +648,8 @@ pub enum Msg {
     CmdUnverifyDone,
     CmdUnverifyNone,
     CmdUnverify1to1,
+    /// 목록 복귀 안내(08-18 i18n · "(한글 가능)"만 한글 고정 유지).
+    ListNavHint,
     StfAutoAcceptRecv,
     StfFileRejected,
     StfDeliveredWait,
@@ -881,6 +883,7 @@ impl Msg {
             Msg::CmdUnverifyDone => ["Verification canceled — fingerprint match cleared (use /verify to compare again).", "인증을 취소했습니다 — 지문 대조 상태가 해제됐습니다(다시 대조하려면 /verify).", "已取消验证 — 指纹核对状态已解除(重新核对请用 /verify)。", "認証を取り消しました — 指紋照合状態が解除されました(再照合は /verify)。"],
             Msg::CmdUnverifyNone => ["This peer is not in a verified state (nothing to cancel).", "이 상대는 지문 대조 상태가 아닙니다(취소할 인증이 없습니다).", "对方并非已验证状态(无可取消的验证)。", "この相手は照合済み状態ではありません(取り消す認証がありません)。"],
             Msg::CmdUnverify1to1 => ["Canceling verification is only for 1:1 chats (a single peer required).", "인증 취소는 1:1 대화에서만 가능합니다(상대가 하나로 정해져야 합니다).", "取消验证仅在 1:1 对话中可用(需确定单一对象)。", "認証取り消しは 1:1 の会話でのみ可能です(相手が一人に定まる必要があります)。"],
+            Msg::ListNavHint => ["↑↓ move · type = jump to name(한글 가능) · Enter = open chat", "↑↓ 이동 · 타이핑 = 이름 점프(한글 가능) · Enter = 대화 열기", "↑↓ 移动 · 输入 = 跳转到名称(한글 가능) · Enter = 打开对话", "↑↓ 移動 · 入力 = 名前ジャンプ(한글 가능) · Enter = 会話を開く"],
             Msg::StfAutoAcceptRecv => ["Auto-accepted: {} ({}) receiving", "자동 수락: {} ({}) 수신 시작", "自动接受：{}（{}）开始接收", "自動受信: {} ({}) 受信開始"],
             Msg::StfFileRejected => ["File rejected ({}): {}", "파일 거부({}): {}", "文件已拒绝（{}）：{}", "ファイル拒否({}): {}"],
             Msg::StfDeliveredWait => ["Delivered {}/{} — awaiting peer confirmation", "전달됨 {}/{} — 상대 확인 대기", "已送达 {}/{} — 等待对方确认", "配信済み {}/{} — 相手の確認待ち"],

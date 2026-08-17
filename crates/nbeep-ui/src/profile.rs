@@ -120,12 +120,16 @@ pub struct ProfileWidget {
     bio_lines: usize,
     /// 공유 안내문 y 오프셋(relayout이 bio 높이에 맞춰 계산 · paint가 읽는다).
     note_dy: i32,
+    /// 마지막 커서 위치(08-18 — 휠은 좌표가 없어 hover 판정에 쓴다: bio 위 휠 =
+    /// bio 내부 스크롤).
+    last_cursor: Point,
     pick_image: bool,
     closed: bool,
 }
 
-/// 소개글 표시 최대 줄 수(초과분은 캐럿 추종 스크롤 · 채팅 입력창과 동일).
-const BIO_MAX_LINES: usize = 4;
+/// 소개글 표시 줄 수(08-18 사용자 확정 — **고정 3줄** · 초과분은 필드 내부
+/// 스크롤(키보드 이동 + 마우스 휠). 창 크기 조정·스크롤 영역 재설계는 취소).
+const BIO_MAX_LINES: usize = 3;
 /// 소개글 한 줄 높이(멀티라인 TextBox의 line_h와 같은 값 · 배율 전).
 const BIO_LINE_H: i32 = 20;
 
@@ -198,8 +202,9 @@ impl ProfileWidget {
             orig_email: v.email.clone(),
             orig_phone: v.phone.clone(),
             orig_bio: v.bio.clone(),
-            bio_lines: BIO_MAX_LINES, // 고정 4줄(초과는 내부 스크롤 · 창 성장 안 함)
+            bio_lines: BIO_MAX_LINES, // 고정 3줄(초과는 내부 스크롤 · 창 성장 안 함)
             note_dy: 0,
+            last_cursor: Point { x: 0, y: 0 },
             pick_image: false,
             closed: false,
         }
@@ -511,9 +516,9 @@ impl ProfileWidget {
             .set_bounds(Rect::new(b.x + pad, b.y + self.s(362), fw, field_h), inv);
         self.phone
             .set_bounds(Rect::new(b.x + pad, b.y + self.s(420), fw, field_h), inv);
-        // 소개글(08-18) — 라벨 y456 아래 멀티라인 필드. **채팅 입력창처럼 1~4줄
-        // 자동 성장**(초과 스크롤): 높이 = 줄 수 × line_h + 상하 여백. 아래 컨트롤은
-        // 이 높이에 맞춰 **흐름 배치**(창도 함께 커진다).
+        // 소개글(08-18 사용자 확정) — 라벨 y456 아래 멀티라인 필드. **고정 3줄**:
+        // 높이 = 3 × line_h + 상하 여백. 초과분은 필드 내부 스크롤(키보드 + 마우스
+        // 휠). 창 크기 조정·중간영역 스크롤 재설계는 취소(후속 TODO).
         let bio_y = b.y + self.s(474);
         let bio_h = self.bio_lines as i32 * self.s(BIO_LINE_H) + self.s(16);
         self.bio
@@ -554,6 +559,18 @@ impl Widget for ProfileWidget {
     }
 
     fn on_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
+        // 커서 추적(08-18) — 휠 hover 판정용(휠 이벤트엔 좌표가 없다).
+        if let InputEvent::MouseMove { x, y } = *ev {
+            self.last_cursor = Point { x, y };
+        }
+        // 마우스 휠 — bio 위면 bio 내부 세로 스크롤(3줄 초과분). 그 외 컨트롤 위는
+        // 지금은 스크롤 대상이 없다(중간영역 스크롤은 후속 TODO).
+        if let InputEvent::Wheel { delta } = *ev {
+            if delta != 0 && self.bio.bounds().contains(self.last_cursor) {
+                self.bio.wheel_scroll(delta > 0, inv);
+            }
+            return;
+        }
         if matches!(
             *ev,
             InputEvent::Key {

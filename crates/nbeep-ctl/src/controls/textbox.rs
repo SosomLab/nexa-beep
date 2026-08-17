@@ -53,6 +53,9 @@ pub struct TextBox {
     vscroll: std::cell::Cell<usize>,
     /// 멀티라인 가로 스크롤(px · 캐럿 열을 따라간다 · 08-17 드래그 자동 스크롤).
     mhscroll: std::cell::Cell<i32>,
+    /// 사용자가 휠로 세로 스크롤했다(08-18) — 참이면 paint가 캐럿을 따라가지 않고
+    /// vscroll을 그대로 존중(자유 스크롤). 편집(캐럿 이동) 시 거짓으로 리셋.
+    ml_user_scrolled: bool,
     /// 멀티라인 클릭→캐럿 변환용 줄 배치(페인트가 남긴다).
     line_lay: std::cell::RefCell<Vec<MlLine>>,
 }
@@ -102,8 +105,28 @@ impl TextBox {
             multiline: false,
             vscroll: std::cell::Cell::new(0),
             mhscroll: std::cell::Cell::new(0),
+            ml_user_scrolled: false,
             line_lay: std::cell::RefCell::new(Vec::new()),
         }
+    }
+
+    /// 멀티라인 논리 줄 수(08-18 — 호스트가 필드 높이 자동 성장에 쓴다).
+    #[must_use]
+    pub fn line_count(&self) -> usize {
+        self.edit.text().split('\n').count()
+    }
+
+    /// 멀티라인 휠 스크롤(08-18) — 위(+)/아래(−) 한 줄씩. 사용자 스크롤 플래그를
+    /// 세워 paint가 캐럿을 따라가지 않게 한다(편집 시 자동 해제).
+    pub fn wheel_scroll(&mut self, up: bool, inv: &mut Invalidations) {
+        if !self.multiline {
+            return;
+        }
+        let cur = self.vscroll.get();
+        self.vscroll
+            .set(if up { cur.saturating_sub(1) } else { cur + 1 });
+        self.ml_user_scrolled = true;
+        inv.push(self.base.bounds);
     }
 
     /// 멀티라인(소개글) 모드로 만든다(체이닝 · 08-17) — Enter = 개행. 보이는 줄
@@ -435,15 +458,21 @@ impl TextBox {
             .filter(|&c| c == '\n')
             .count();
 
-        // 보이는 줄 수 + 캐럿 줄이 보이도록 세로 스크롤 조정.
+        // 보이는 줄 수 + 세로 스크롤. 08-18: 사용자가 휠로 스크롤 중이면 vscroll을
+        // 그대로 존중(자유 스크롤 · 캐럿 안 따라감). 아니면 캐럿을 따라간다.
         let rows = (((b.h - self.s(12)) / lh).max(1)) as usize;
+        let max_top = lines.len().saturating_sub(rows);
         let mut top = self.vscroll.get();
-        if caret_line < top {
-            top = caret_line;
-        } else if caret_line >= top + rows {
-            top = caret_line + 1 - rows;
+        if self.ml_user_scrolled {
+            top = top.min(max_top);
+        } else {
+            if caret_line < top {
+                top = caret_line;
+            } else if caret_line >= top + rows {
+                top = caret_line + 1 - rows;
+            }
+            top = top.min(lines.len().saturating_sub(1));
         }
-        top = top.min(lines.len().saturating_sub(1));
         self.vscroll.set(top);
 
         // 가로 스크롤(08-17) — 캐럿 열이 보이도록 따라간다(긴 줄·드래그 자동 스크롤).
@@ -611,6 +640,7 @@ impl Widget for TextBox {
                 // 건너뛰고 포커스만(조합은 곧 확정된다).
                 if self.multiline && self.base.bounds.contains(Point { x, y }) {
                     self.base.focused = true;
+                    self.ml_user_scrolled = false; // 클릭 = 캐럿 이동 → 캐럿 추종 재개
                     if self.edit.preedit().is_empty() {
                         self.edit.set_caret(self.ml_caret_at(x, y), shift);
                         self.dragging = true;
@@ -683,6 +713,7 @@ impl Widget for TextBox {
             }
             InputEvent::Char { c, .. } if self.base.focused => {
                 self.last_click.1 = 0; // 타이핑 = 클릭 체인 끊김(클릭-타이핑-클릭 ≠ 더블클릭)
+                self.ml_user_scrolled = false; // 타이핑 = 캐럿 이동 → 캐럿 추종 재개
                 if c == '\u{8}' {
                     self.edit.backspace();
                 } else if !c.is_control() {
@@ -697,6 +728,7 @@ impl Widget for TextBox {
                 primary,
             } if self.base.focused => {
                 self.last_click.1 = 0; // 키 개입 = 클릭 체인 끊김
+                self.ml_user_scrolled = false; // 키 이동/편집 = 캐럿 이동 → 캐럿 추종 재개
                 match key {
                     Key::Enter => {
                         // 멀티라인은 Enter = 개행(확정은 상위의 적용 버튼 몫).

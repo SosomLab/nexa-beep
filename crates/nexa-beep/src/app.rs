@@ -4201,9 +4201,9 @@ impl App {
                 "Nexa Beep — {}",
                 nbeep_core::t(nbeep_core::Msg::ProfileTitle)
             ))
-            // 창 높이 790 — bio 고정 4줄 + 흐름 배치(토글·안내·버튼)가 다 들어간다.
-            // (창 크기 조정은 아직 없음 · 08-18 — 향후 스크롤 구조 준비 예정).
-            .with_inner_size(winit::dpi::LogicalSize::new(440.0, 790.0))
+            // 창 높이 770 — bio 고정 3줄 + 토글·안내·버튼이 다 들어간다(08-18 확정 ·
+            // 창 크기 조정 없음 · 중간영역 스크롤 재설계는 후속 TODO).
+            .with_inner_size(winit::dpi::LogicalSize::new(440.0, 770.0))
             .with_resizable(false)
             // 앱 모달(08-14 표준 재정리) — 앱 창 입력은 모달이 흡수하되, 다른 앱은
             // 자유롭게 위로 온다(AlwaysOnTop 금지 — OS 창 전환 관례).
@@ -7467,8 +7467,7 @@ impl App {
                 WindowMode::Single => {
                     self.single_open = None;
                     self.set_main_ime(false); // 목록 복귀 = 직접 조합 모드
-                    self.status =
-                        "↑↓ 이동 · 타이핑 = 이름 점프(한글 가능) · Enter = 대화 열기".into();
+                    self.status = nbeep_core::t(nbeep_core::Msg::ListNavHint).into();
                     // 복귀 재레이아웃 — 대화 중 크롬 0으로 잡힌 목록 bounds를
                     // 크롬 아래로 되돌린다(없으면 목록이 메뉴·툴바 뒤에 숨는다).
                     self.layout_window(id);
