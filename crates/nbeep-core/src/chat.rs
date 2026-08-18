@@ -167,16 +167,26 @@ impl ChatMessage {
 }
 
 /// 발신 시퀀서 — 기기당 하나, 단조 증가. 영속(재시작 후 이어가기)은 M2-5 `store` 소관.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Sequencer {
     next: u64,
 }
 
+impl Default for Sequencer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Sequencer {
-    /// 0부터 시작하는 시퀀서.
+    /// **1부터** 시작하는 시퀀서 — 0은 표시·ack 계층의 "seq 없음" 센티널이라
+    /// 발급하지 않는다(08-18 실기: 매 세션 첫 메시지(seq 0)만 전달/읽음 마크가
+    /// 영영 안 붙었다 — 수신측 읽음 ack 생략 + 발신측 갱신·페인트 제외 동시).
+    /// 와이어는 숫자일 뿐이라 구버전 혼용 무해(구버전의 seq 0 첫 메시지만 종전과
+    /// 동일하게 마크 없이 지나간다).
     #[must_use]
     pub fn new() -> Self {
-        Self::default()
+        Self { next: 1 }
     }
 
     /// 재시작 복원용 — 마지막으로 쓴 값 다음부터.
@@ -392,9 +402,10 @@ mod tests {
     #[test]
     fn sequencer_is_monotonic_and_resumable() {
         let mut s = Sequencer::new();
-        assert_eq!((s.issue(), s.issue(), s.issue()), (0, 1, 2));
-        let mut r = Sequencer::resume_after(2);
-        assert_eq!(r.issue(), 3, "재시작 후 이어간다");
+        // 1부터 — 0은 "seq 없음" 센티널이라 발급 금지(08-18 첫 메시지 마크 소실).
+        assert_eq!((s.issue(), s.issue(), s.issue()), (1, 2, 3));
+        let mut r = Sequencer::resume_after(3);
+        assert_eq!(r.issue(), 4, "재시작 후 이어간다");
     }
 
     #[test]
