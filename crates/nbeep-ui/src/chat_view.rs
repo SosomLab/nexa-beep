@@ -1432,8 +1432,21 @@ impl Widget for ChatViewWidget {
                 }
             };
             let wrapped = wrap_text(ctx, &self.body_text(l), max_text_w);
-            let h =
-                wrapped.len() as i32 * line_h + pad_v * 2 + if name.is_some() { name_h } else { 0 };
+            // 진행 중 전송 풍선 = 하단 막대 자리 예약(08-18 실기 — 텍스트와 막대가
+            // 붙어 보였다: 막대 높이 + 위 간격 6px을 풍선 높이에 더한다).
+            let bar_extra = if matches!(
+                &l.body,
+                ChatBody::Xfer(x) if matches!(x.state, XferLineState::Active { .. })
+            ) {
+                // 텍스트~막대 여유 = 일반 줄간격 한 줄(사용자 확정 08-18).
+                self.s(4) + line_h
+            } else {
+                0
+            };
+            let h = wrapped.len() as i32 * line_h
+                + pad_v * 2
+                + bar_extra
+                + if name.is_some() { name_h } else { 0 };
             content += h + self.s(ENTRY_GAP);
             blocks.push(Block {
                 pill,
