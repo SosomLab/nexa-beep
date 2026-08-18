@@ -7,6 +7,8 @@
 
 ## 2026-08-18
 
+- ★**결정 4건 확정 + RL 일괄 9건**(main): D-30(ADR-0014 채택)·D-31(전송 재개 승인+착수)·log.enabled off·D-24 별도 세션. RL-1·2·4·5·6·11·12·14·16ⓑ 구현(수신 지문·push 배치·netlink 필터·sweep+오프라인 강등·전송 목록 스로틀·wire watchdog·recv 타임아웃 복원·ack 정리+그룹 틱·무변화 생략+60s 심장박동). 683 green. 상세 [journal/2026-08-18.md](journal/2026-08-18.md).
+
 - ★**Windows 실기 라운드 완주 + 발각 4건 즉시 수정**(Windows PC): mac 71커밋 인계분 전수 확인(속도·취소·미리보기·알림 클릭·트레이·지문 검증·전달/읽음·Bio — 전부 사용자 ✓) · 수정 = **T-relaunch 종결**(PowerShell POSIX 경로 조용한 실패 → cygpath) · **첫 메시지 마크 소실**(Sequencer 0시작 vs seq 0 센티널 → 1부터 발급) · **격리함 미리보기 z순서**(모달 소유자를 연 창으로 — `modal_attrs_from`) · **취소 배너 잔존**(지각 진행 이벤트 게이트 + 액터 canceled 집합). 682 green(Win). 상세 [journal/2026-08-18.md](journal/2026-08-18.md).
 
 - ★**지문 기반 검증 흐름**(사용자 요청) — SAS 카드+버튼 대신: **/fingerprint** 신설(내·상대 키 지문 출력 · 비교용) → 다른 채널 대조 → **/verify = 직접 대조 완료**(카드 없이 trust.verify + 배지 즉시 갱신). 안내·help 문구 새 흐름으로 갱신 · 파싱 회귀. 160 green. 상세 [journal/2026-08-18.md](journal/2026-08-18.md).
