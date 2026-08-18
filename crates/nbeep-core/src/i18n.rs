@@ -485,6 +485,25 @@ pub enum Msg {
     XferReofferN,
     /// 발신 사전 상한 초과(M4 메모리 조립 상한 — {0} = 파일명 · {1} = 상한).
     XferTooBigLocal,
+    /// 스레드 실패줄 짧은 사유 — `{}` = 상한.
+    XferTooBigWhy,
+    /// 상대 수신 상한 차단(스레드 사유) — `{}` = 상한.
+    XferPeerCapBlock,
+    /// 상대 수신 상한 차단(상태바) — `{}` 파일명 · `{}` 상한.
+    XferPeerCapBlockStatus,
+    /// 해시 진행 — `{}` 파일명 · `{}` %.
+    XferHashingPct,
+    /// 발신 대기 상태바 — `{}` 건수 · `{}` 총량.
+    StfSendQueued,
+    /// 상대 거절 상태 — `{}` 사유 · `{}` 부가(상한 공지 등 · 빈 문자열 가능).
+    XferPeerRejected,
+    /// 상한 공지 부가 — `{}` = 상한(사람 표기).
+    PeerCapSuffix,
+    /// 파일 준비(전체 해시 계산) 상태 — `{}` = 파일명. 대용량은 수십 초 걸린다.
+    XferHashing,
+    /// 첫 왕래 전 상대에게 파일을 보낼 때의 안내(스레드 공지) — 두부(⚠ 글리프
+    /// 부재) 회피를 위해 '!' ASCII 접두(08-17 격리함과 같은 처방).
+    NoticeFirstContact,
     /// 파일 크기 상한 설정(M4 · 08-18 — 발신/수신 각각).
     XferSendMax,
     XferSendMaxDesc,
@@ -774,10 +793,10 @@ impl Msg {
                 "相手がキャンセル",
             ],
             Msg::XferResumeFrom => [
-                "Resume — {0} from {1}%",
-                "이어받기 — {0} {1}%부터",
-                "续传 — {0} 从 {1}%",
-                "再開 — {0} {1}%から",
+                "Resume — {} from {}%",
+                "이어받기 — {} {}%부터",
+                "续传 — {} 从 {}%",
+                "再開 — {} {}%から",
             ],
             Msg::XferSendMax => [
                 "Max send file size",
@@ -808,17 +827,71 @@ impl Msg {
             Msg::Cap512MiB => ["512 MiB", "512 MiB", "512 MiB", "512 MiB"],
             Msg::Cap1GiB => ["1 GiB", "1 GiB", "1 GiB", "1 GiB"],
             Msg::CapUnlimited => ["Unlimited", "무제한", "无限制", "無制限"],
+            Msg::XferPeerCapBlock => [
+                "over peer receive cap {}",
+                "상대 수신 상한 {} 초과",
+                "超出对方接收上限 {}",
+                "相手の受信上限 {} 超過",
+            ],
+            Msg::XferPeerCapBlockStatus => [
+                "{} exceeds peer receive cap {} — not sent",
+                "{} — 상대 수신 상한 {} 초과로 보내지 않았습니다",
+                "{} 超出对方接收上限 {} — 未发送",
+                "{} は相手の受信上限 {} を超えるため送信しません",
+            ],
+            Msg::XferHashingPct => [
+                "Preparing {} — {}%",
+                "{} 준비 중 — {}%",
+                "正在准备 {} — {}%",
+                "{} を準備中 — {}%",
+            ],
+            Msg::StfSendQueued => [
+                "Queued {} file(s) · total {}",
+                "전송 대기 {}건 · 총 {}",
+                "排队 {} 个文件 · 共 {}",
+                "送信待ち {}件 · 合計 {}",
+            ],
+            Msg::XferPeerRejected => [
+                "Peer rejected: {}{}",
+                "상대가 거절: {}{}",
+                "对方拒绝：{}{}",
+                "相手が拒否: {}{}",
+            ],
+            Msg::PeerCapSuffix => [
+                " (peer receive cap {})",
+                " (상대 수신 상한 {})",
+                "（对方接收上限 {}）",
+                "（相手の受信上限 {}）",
+            ],
+            Msg::XferTooBigWhy => [
+                "over cap {}",
+                "상한 {} 초과",
+                "超出上限 {}",
+                "上限 {} 超過",
+            ],
+            Msg::XferHashing => [
+                "Preparing {} (integrity hash) — large files take a while",
+                "{} 준비 중(무결성 해시) — 대용량은 수십 초 걸립니다",
+                "正在准备 {}（完整性哈希）— 大文件需要一些时间",
+                "{} を準備中（整合性ハッシュ）— 大容量は時間がかかります",
+            ],
+            Msg::NoticeFirstContact => [
+                "! You have not exchanged messages with this peer yet — they must approve receiving before the transfer proceeds",
+                "! 아직 서로 메시지를 주고받은 적이 없는 상대입니다 — 상대가 수신 승인을 눌러야 전송이 진행됩니다",
+                "! 你与该用户尚未互发过消息 — 对方需批准接收后传输才会进行",
+                "! この相手とはまだメッセージを交わしていません — 相手が受信を承認すると転送が始まります",
+            ],
             Msg::XferTooBigLocal => [
-                "{0} is too large — cap {1} per file",
-                "{0} — 파일당 상한 {1}을 넘습니다",
-                "{0} 过大 — 单文件上限 {1}",
-                "{0} が大きすぎます — 1ファイル上限 {1}",
+                "{} is too large — cap {} per file",
+                "{} — 파일당 상한 {}을 넘습니다",
+                "{} 过大 — 单文件上限 {}",
+                "{} が大きすぎます — 1ファイル上限 {}",
             ],
             Msg::XferReofferN => [
-                "Re-offering {0} interrupted transfer(s)",
-                "중단 전송 재제안 — {0}건 (이어받기 협상)",
-                "重新提议 {0} 个中断的传输",
-                "中断転送を再提案 — {0}件",
+                "Re-offering {} interrupted transfer(s)",
+                "중단 전송 재제안 — {}건 (이어받기 협상)",
+                "重新提议 {} 个中断的传输",
+                "中断転送を再提案 — {}件",
             ],
             Msg::XferTimeoutReject => [
                 "No response — declined on timeout",
@@ -1250,7 +1323,7 @@ impl Msg {
             Msg::OfferSize => ["Size", "크기", "大小", "サイズ"],
             Msg::OfferAutoBtn => ["Auto-accept", "자동 승인", "自动接受", "自動承認"],
             Msg::OfferCancel => ["Cancel", "취소", "取消", "キャンセル"],
-            Msg::OfferResumeBtn => ["Resume {0}%", "이어받기 {0}%", "续传 {0}%", "再開 {0}%"],
+            Msg::OfferResumeBtn => ["Resume {}%", "이어받기 {}%", "续传 {}%", "再開 {}%"],
             Msg::SubLog => ["Log", "로그", "日志", "ログ"],
             Msg::LogEnabled => ["Status logging", "상태 로그 기록", "状态日志", "ステータスログ"],
             Msg::LogEnabledDesc => [

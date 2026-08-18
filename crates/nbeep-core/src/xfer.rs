@@ -341,6 +341,45 @@ impl XferMsg {
     }
 }
 
+/// 수신 파일 상한 공지 태그(Control 스트림 · 08-18 — ChatAck 10·ProfileMsg 1~3과
+/// 불충돌). 세션 성립·설정 변경 시 상대에게 알린다: 발신자가 **해시 전에**
+/// 초과를 즉시 차단한다(10GB 전체 해시 뒤에야 TooLarge 거절을 받던 낭비 제거).
+pub const CAP_TAG: u8 = 11;
+
+/// 상한 공지 인코딩 — `CAP_TAG(1) ‖ recv_max(8 LE)`. `u64::MAX` = 무제한.
+#[must_use]
+pub fn encode_cap_advert(recv_max: u64) -> Vec<u8> {
+    let mut out = Vec::with_capacity(9);
+    out.push(CAP_TAG);
+    out.extend_from_slice(&recv_max.to_le_bytes());
+    out
+}
+
+/// 상한 공지 해석 — 태그·길이 불일치 = None(다른 Control 프레임).
+#[must_use]
+pub fn decode_cap_advert(bytes: &[u8]) -> Option<u64> {
+    if bytes.len() != 9 || bytes[0] != CAP_TAG {
+        return None;
+    }
+    Some(u64::from_le_bytes(bytes[1..9].try_into().ok()?))
+}
+
+/// 상한 **질의** 태그(08-18 — 송신 직전 신선도 확인: 상대 설정이 그새 바뀌었을
+/// 수 있다 · 사용자 요청). 응답은 [`encode_cap_advert`] 그대로.
+pub const CAP_REQ_TAG: u8 = 12;
+
+/// 상한 질의 인코딩 — 본문 없음.
+#[must_use]
+pub fn encode_cap_request() -> Vec<u8> {
+    vec![CAP_REQ_TAG]
+}
+
+/// 상한 질의인가.
+#[must_use]
+pub fn is_cap_request(bytes: &[u8]) -> bool {
+    bytes == [CAP_REQ_TAG]
+}
+
 /// 발신 청커 — 원본을 [`MAX_CHUNK`] 단위 [`XferMsg::Chunk`]로 자른다.
 #[must_use]
 pub fn chunks_of(id: XferId, original: &[u8]) -> Vec<XferMsg> {
@@ -602,6 +641,24 @@ mod tests {
 
     fn xid(b: u8) -> XferId {
         [b; 16]
+    }
+
+    /// CapAdvert(08-18) — 왕복 + 태그/길이 불일치 거부.
+    #[test]
+    fn cap_advert_roundtrip() {
+        assert_eq!(
+            decode_cap_advert(&encode_cap_advert(512 * 1024 * 1024)),
+            Some(512 * 1024 * 1024)
+        );
+        assert_eq!(
+            decode_cap_advert(&encode_cap_advert(u64::MAX)),
+            Some(u64::MAX)
+        );
+        assert_eq!(decode_cap_advert(&[CAP_TAG, 1, 2]), None, "짧으면 None");
+        assert_eq!(decode_cap_advert(&encode_cap_advert(1)[..8]), None);
+        let mut w = encode_cap_advert(7);
+        w[0] = 12;
+        assert_eq!(decode_cap_advert(&w), None, "다른 태그 = 남의 프레임");
     }
 
     #[test]

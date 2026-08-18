@@ -32,6 +32,33 @@ pub fn sha256(data: &[u8]) -> [u8; 32] {
     h.finalize().into()
 }
 
+/// 증분 SHA-256(08-18 — 해시 진행률 표시용): update를 나눠 부르고 finalize.
+#[derive(Debug)]
+pub struct Sha256Stream(sha2::Sha256);
+
+impl Default for Sha256Stream {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Sha256Stream {
+    #[must_use]
+    pub fn new() -> Self {
+        use sha2::Digest as _;
+        Self(sha2::Sha256::new())
+    }
+    pub fn update(&mut self, data: &[u8]) {
+        use sha2::Digest as _;
+        self.0.update(data);
+    }
+    #[must_use]
+    pub fn finalize(self) -> [u8; 32] {
+        use sha2::Digest as _;
+        self.0.finalize().into()
+    }
+}
+
 /// 리더의 **앞 `limit` 바이트**를 스트리밍 해시(M4 발신 스트리밍 · 08-18) —
 /// 대용량 파일을 메모리에 올리지 않고 전체 해시(limit = u64::MAX)나 재개
 /// 프리픽스 해시를 구한다. 1MiB 버퍼 단위 · 읽기 오류 = None(fail-closed).
