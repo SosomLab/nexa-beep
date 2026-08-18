@@ -166,7 +166,11 @@ mod tests {
             Parsed::Command(ChatCommand::Fingerprint)
         );
         assert_eq!(parse("/fp"), Parsed::Command(ChatCommand::Fingerprint));
-        assert_eq!(parse("/지문"), Parsed::Command(ChatCommand::Verify), "지문=대조");
+        assert_eq!(
+            parse("/지문"),
+            Parsed::Command(ChatCommand::Verify),
+            "지문=대조"
+        );
     }
 
     /// 사용자가 요청한 철자(`/verified`)와 한글 별칭도 받는다.

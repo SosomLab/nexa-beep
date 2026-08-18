@@ -374,6 +374,8 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
                                     &XferMsg::Accept {
                                         id,
                                         rate_cap: recv_cap,
+                                        resume_offset: 0, // CLI는 재개 미지원(M4-10)
+                                        prefix_sha: [0u8; 32],
                                     }
                                     .encode(),
                                 );
@@ -541,6 +543,8 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
                                             &XferMsg::Accept {
                                                 id,
                                                 rate_cap: recv_cap,
+                                                resume_offset: 0,
+                                                prefix_sha: [0u8; 32],
                                             }
                                             .encode(),
                                         );
@@ -562,7 +566,7 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
                             }
                         }
                     }
-                    Ok(XferMsg::Accept { id, rate_cap }) => {
+                    Ok(XferMsg::Accept { id, rate_cap, .. }) => {
                         // 상대가 수락 — 청크 스트리밍 + 완료.
                         if let Some(bytes) = outgoing.remove(&id) {
                             let total = bytes.len() as u64;

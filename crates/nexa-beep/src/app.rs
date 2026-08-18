@@ -108,6 +108,8 @@ enum AppEvent {
         id: nbeep_core::XferId,
         name: String,
         size: u64,
+        /// 선언 전체 SHA-256(M4-10) — `.part` 재개 후보 판정의 앵커.
+        sha256: [u8; 32],
     },
     /// 전송 진행률(수신·발신 공용) — 상태바 표시용.
     XferProgress {
@@ -251,6 +253,9 @@ enum SessionCmd {
         id: nbeep_core::XferId,
         /// 수신측 상한(B/s · 0 = 무제한) — Accept에 실어 발신측이 협상한다.
         rate_cap: u64,
+        /// **이어받기 프리픽스**(M4-10 — `.part` 보존분). Some = 조립기에 선적재하고
+        /// Accept에 재개 오프셋+프리픽스 해시를 실어 발신측 검증을 요청한다.
+        resume: Option<Vec<u8>>,
     },
     /// 발신 취소(타임아웃·사용자) — 상대에게 Cancel 통지.
     CancelXfer(nbeep_core::XferId),
@@ -442,6 +447,9 @@ struct Conversation {
 
 /// 진행 중 발신 상태(08-16 · 재개형 펌프) — Accept가 등록하고 액터 루프 틱이
 /// 조금씩 보낸다. 취소(내 명령·상대 Cancel)는 이 상태를 지우는 것으로 끝난다.
+/// 대기 중 수신 제안 한 건 — (전송 id, 파일명, 크기, 전체 sha · M4-10 재개 앵커).
+type PendingOffer = (nbeep_core::XferId, String, u64, [u8; 32]);
+
 struct ActiveSend {
     id: nbeep_core::XferId,
     data: Vec<u8>,
@@ -455,6 +463,9 @@ struct ActiveSend {
     probed: bool,
     /// 발신 시작 시각(ms — 평균 속도 표기용 · 08-16).
     started_ms: u64,
+    /// 이번 세션에서 **실제로 보내기 시작한 오프셋**(M4-10b 재개 — 0이 아니면
+    /// 이어보내기). 평균 속도는 (total − from)/시간이어야 정직하다.
+    from: u64,
     /// 다음 상향 프로브 시작 오프셋(M4-11 ⓐ · u64::MAX = 미정 — 첫 프로브 후 설정).
     next_probe: u64,
     /// 진행 중 상향 버스트의 (시작 오프셋, 시작 시각) — Some = 무페이싱 구간.
@@ -536,331 +547,379 @@ fn spawn_session_actor(
             Vec<u8>,
         );
         let mut pending_profile: Option<PendingProfile> = None;
-        loop {
-            // 송신 먼저(즉시성) — 대기 중 발신 요청을 모두 흘려보낸다.
+        // ★ 루프를 IIFE로 감싼다(M4-10a) — 내부의 `return`(세션 종료 경로 전부)이
+        //   클로저만 빠져나오고, 아래의 **부분 수신물 보존**이 반드시 돈다.
+        (|| {
             loop {
-                let cmd = match out_rx.try_recv() {
-                    Ok(c) => c,
-                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
-                    Err(std::sync::mpsc::TryRecvError::Disconnected) => return, // 대화 닫힘
-                };
-                let sent = match cmd {
-                    SessionCmd::Chat(bytes) => session.send(StreamId::Chat, &bytes),
-                    SessionCmd::OfferFile {
-                        id,
-                        name,
-                        sha,
-                        bytes,
-                    } => {
-                        let offer = XferMsg::Offer {
-                            id,
-                            size: bytes.len() as u64,
-                            sha256: sha,
-                            name: name.into_bytes(),
-                        };
-                        outgoing.insert(id, bytes);
-                        session.send(StreamId::File, &offer.encode())
-                    }
-                    SessionCmd::AcceptXfer { id, rate_cap } => {
-                        if inbox.accept(&id).is_ok() {
-                            session.send(StreamId::File, &XferMsg::Accept { id, rate_cap }.encode())
-                        } else {
-                            Ok(())
-                        }
-                    }
-                    SessionCmd::CancelXfer(id) => {
-                        outgoing.remove(&id);
-                        inbox.drop_xfer(&id); // 수신측 취소 — 부분 조립 폐기(08-16)
-                        canceled.insert(id); // 잔류 청크 조용히 폐기(08-18)
-                        if sending.as_ref().is_some_and(|st| st.id == id) {
-                            sending = None; // 진행 중 발신 취소 — 펌프 즉시 중단
-                        }
-                        session.send(StreamId::File, &XferMsg::Cancel { id }.encode())
-                    }
-                    SessionCmd::RejectXfer { id, why } => {
-                        inbox.drop_xfer(&id);
-                        session.send(
-                            StreamId::File,
-                            &XferMsg::Reject { id, why, limit: 0 }.encode(),
-                        )
-                    }
-                    SessionCmd::Control(frames) => {
-                        let mut r = Ok(());
-                        for f in frames {
-                            r = session.send(StreamId::Control, &f);
-                            if r.is_err() {
-                                break;
-                            }
-                        }
-                        r
-                    }
-                    SessionCmd::Group(frames) => {
-                        let mut r = Ok(());
-                        for f in frames {
-                            r = session.send(StreamId::Group, &f);
-                            if r.is_err() {
-                                break;
-                            }
-                        }
-                        r
-                    }
-                };
-                if sent.is_err() {
-                    let _ = proxy.send_event(AppEvent::Closed { peer });
-                    return;
-                }
-            }
-            // 발신 펌프 틱 — 한 틱 최대 4청크(128KiB) 보내고 명령·수신과 교대한다
-            // (취소 지연 상한 = 청크 4개 + 페이싱 대기 · 대역 협상은 Pacer 그대로).
-            let want_to: u64 = if sending.is_some() { 1 } else { 100 };
-            if want_to != recv_to_ms {
-                recv_to_ms = want_to;
-                session.set_recv_timeout(Some(std::time::Duration::from_millis(want_to)));
-            }
-            if let Some(st) = sending.as_mut() {
-                let mut done = false;
-                for _ in 0..4 {
-                    if st.next >= st.total {
-                        done = true;
-                        break;
-                    }
-                    let off = st.next;
-                    let end = (off + nbeep_core::MAX_CHUNK as u64).min(st.total);
-                    let n = end - off;
-                    // 프로브 경계(M4-11 ⓑ) — 첫 2MiB를 전속으로 보냈으니 meter가
-                    // **진짜 peak**를 안다. 목표를 실측 기반으로 재산출(한 번만).
-                    if !st.probed && off >= RATE_PROBE_BYTES.min(st.total.saturating_sub(1)) {
-                        st.probed = true;
-                        // 프로브 실측을 peak에 즉시 반영(M4-11 후속) — 관측 창
-                        // (500ms)이 닫히길 기다리면 localhost에선 peak=0인 채
-                        // 재산출돼 하한 조임이 재발한다(실기: 1차만 316KiB/s).
-                        let probe_dur = xfer_now_ms().saturating_sub(st.started_ms);
-                        send_meter.note_burst(off, probe_dur);
-                        let local = send_rate.target_bps(&send_meter);
-                        st.pacer =
-                            nbeep_core::Pacer::new(nbeep_core::negotiate(local, st.rate_cap));
-                        st.next_probe = off + REPROBE_INTERVAL;
-                    }
-                    // 상향 프로브(ⓐ) — 페이싱 중 주기 버스트로 재관측(과소 보정).
-                    let mut unpaced = !st.probed;
-                    if st.probed {
-                        if let Some((b_off, b_t0)) = st.bursting {
-                            if off.saturating_sub(b_off) >= REPROBE_BURST {
-                                // 버스트 종료 — 실측 반영·목표 재산출(상향 전용).
-                                send_meter
-                                    .note_burst(off - b_off, xfer_now_ms().saturating_sub(b_t0));
-                                let local = send_rate.target_bps(&send_meter);
-                                st.pacer = nbeep_core::Pacer::new(nbeep_core::negotiate(
-                                    local,
-                                    st.rate_cap,
-                                ));
-                                st.bursting = None;
-                                st.next_probe = off + REPROBE_INTERVAL;
-                            } else {
-                                unpaced = true; // 버스트 진행 중 — 전속
-                            }
-                        } else if off >= st.next_probe {
-                            st.bursting = Some((off, xfer_now_ms()));
-                            unpaced = true;
-                        }
-                    }
-                    if !unpaced {
-                        // 창이 모자라면 그만큼 쉰다(종전 문법 그대로 — 예약 후 대기).
-                        let wait = st.pacer.take(n, xfer_now_ms());
-                        if wait > 0 {
-                            std::thread::sleep(std::time::Duration::from_millis(wait));
-                        }
-                    }
-                    #[allow(clippy::cast_possible_truncation)]
-                    let chunk = XferMsg::Chunk {
-                        id: st.id,
-                        offset: off,
-                        data: st.data[off as usize..end as usize].to_vec(),
+                // 송신 먼저(즉시성) — 대기 중 발신 요청을 모두 흘려보낸다.
+                loop {
+                    let cmd = match out_rx.try_recv() {
+                        Ok(c) => c,
+                        Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => return, // 대화 닫힘
                     };
-                    if session.send(StreamId::File, &chunk.encode()).is_err() {
-                        let _ = proxy.send_event(AppEvent::Closed { peer });
-                        return;
-                    }
-                    st.next = end;
-                    send_meter.observe(n, xfer_now_ms());
-                    let _ = proxy.send_event(AppEvent::XferProgress {
-                        peer,
-                        got: end,
-                        total: st.total,
-                        sending: true,
-                    });
-                }
-                if done {
-                    let id = st.id;
-                    let dur = xfer_now_ms().saturating_sub(st.started_ms).max(1);
-                    let avg_bps = st.total.saturating_mul(1000) / dur;
-                    sending = None;
-                    if session
-                        .send(StreamId::File, &XferMsg::Done { id }.encode())
-                        .is_err()
-                    {
-                        let _ = proxy.send_event(AppEvent::Closed { peer });
-                        return;
-                    }
-                    let _ = proxy.send_event(AppEvent::XferSendDone {
-                        peer,
-                        avg_bps,
-                        peak_bps: send_meter.peak_bps(),
-                    });
-                }
-            }
-            // ★ 수신은 **스트림별이 아니라 도착 순서로** 뽑는다(08-13 — 스트림별 폴링은
-            // 파일 전송 2MiB 지점에서 Backpressure로 끊겼다. 근거 = `MuxSession::recv_any`).
-            let (stream, bytes) = match session.recv_any() {
-                Ok(v) => v,
-                Err(nbeep_core::SessionError::TimedOut) => continue, // 정상 — 송신 교대로
-                Err(_) => {
-                    let _ = proxy.send_event(AppEvent::Closed { peer });
-                    return;
-                }
-            };
-            match stream {
-                // 대화 수신.
-                StreamId::Chat => {
-                    if let Ok(m) = nbeep_core::ChatMessage::decode(&bytes, peer) {
-                        if let nbeep_core::MessageBody::Text(t) = m.body {
-                            let ev = AppEvent::Recv {
-                                peer,
-                                text: nbeep_core::sanitize_message(&t),
-                                seq: m.seq,
-                                sender: m.sender_device,
+                    let sent = match cmd {
+                        SessionCmd::Chat(bytes) => session.send(StreamId::Chat, &bytes),
+                        SessionCmd::OfferFile {
+                            id,
+                            name,
+                            sha,
+                            bytes,
+                        } => {
+                            let offer = XferMsg::Offer {
+                                id,
+                                size: bytes.len() as u64,
+                                sha256: sha,
+                                name: name.into_bytes(),
                             };
-                            if proxy.send_event(ev).is_err() {
-                                return; // 이벤트 루프 종료
+                            outgoing.insert(id, bytes);
+                            session.send(StreamId::File, &offer.encode())
+                        }
+                        SessionCmd::AcceptXfer {
+                            id,
+                            rate_cap,
+                            resume,
+                        } => {
+                            // 이어받기(M4-10) — 프리픽스 선적재 + 재개 꼬리. 선적재
+                            // 실패(범위 초과 등)면 처음부터(재개는 최적화 — fail-open으로
+                            // 전송 자체는 살린다 · 손상 방지는 발신측 해시 대조가 맡는다).
+                            let (resume_offset, prefix_sha) = match resume {
+                                Some(prefix) if !prefix.is_empty() => {
+                                    let sha = nbeep_crypto::sha256(&prefix);
+                                    let off = prefix.len() as u64;
+                                    if inbox.accept_with_prefix(&id, prefix).is_ok() {
+                                        (off, sha)
+                                    } else if inbox.accept(&id).is_ok() {
+                                        (0, [0u8; 32])
+                                    } else {
+                                        (u64::MAX, [0u8; 32]) // 미지 xfer — 아래서 무시
+                                    }
+                                }
+                                _ => {
+                                    if inbox.accept(&id).is_ok() {
+                                        (0, [0u8; 32])
+                                    } else {
+                                        (u64::MAX, [0u8; 32])
+                                    }
+                                }
+                            };
+                            if resume_offset == u64::MAX {
+                                Ok(())
+                            } else {
+                                session.send(
+                                    StreamId::File,
+                                    &XferMsg::Accept {
+                                        id,
+                                        rate_cap,
+                                        resume_offset,
+                                        prefix_sha,
+                                    }
+                                    .encode(),
+                                )
                             }
                         }
+                        SessionCmd::CancelXfer(id) => {
+                            outgoing.remove(&id);
+                            inbox.drop_xfer(&id); // 수신측 취소 — 부분 조립 폐기(08-16)
+                            canceled.insert(id); // 잔류 청크 조용히 폐기(08-18)
+                            if sending.as_ref().is_some_and(|st| st.id == id) {
+                                sending = None; // 진행 중 발신 취소 — 펌프 즉시 중단
+                            }
+                            session.send(StreamId::File, &XferMsg::Cancel { id }.encode())
+                        }
+                        SessionCmd::RejectXfer { id, why } => {
+                            inbox.drop_xfer(&id);
+                            session.send(
+                                StreamId::File,
+                                &XferMsg::Reject { id, why, limit: 0 }.encode(),
+                            )
+                        }
+                        SessionCmd::Control(frames) => {
+                            let mut r = Ok(());
+                            for f in frames {
+                                r = session.send(StreamId::Control, &f);
+                                if r.is_err() {
+                                    break;
+                                }
+                            }
+                            r
+                        }
+                        SessionCmd::Group(frames) => {
+                            let mut r = Ok(());
+                            for f in frames {
+                                r = session.send(StreamId::Group, &f);
+                                if r.is_err() {
+                                    break;
+                                }
+                            }
+                            r
+                        }
+                    };
+                    if sent.is_err() {
+                        let _ = proxy.send_event(AppEvent::Closed { peer });
+                        return;
                     }
                 }
-                // 프로필 수신(Control — M3-17). 요청은 메인으로 올리고(정책 단일 지점),
-                // 응답은 여기서 조립해 완성본만 올린다(대용량 조립이 메인을 막지 않게).
-                StreamId::Control if nbeep_core::ChatAck::decode(&bytes).is_some() => {
-                    // 수신 확인(N-2) — 태그로 프로필과 구분. 도착만 메인에 올린다.
-                    if let Some(ack) = nbeep_core::ChatAck::decode(&bytes) {
-                        let ev = AppEvent::ChatAck {
-                            peer,
-                            target_seq: ack.target_seq,
-                            kind: ack.kind,
+                // 발신 펌프 틱 — 한 틱 최대 4청크(128KiB) 보내고 명령·수신과 교대한다
+                // (취소 지연 상한 = 청크 4개 + 페이싱 대기 · 대역 협상은 Pacer 그대로).
+                let want_to: u64 = if sending.is_some() { 1 } else { 100 };
+                if want_to != recv_to_ms {
+                    recv_to_ms = want_to;
+                    session.set_recv_timeout(Some(std::time::Duration::from_millis(want_to)));
+                }
+                if let Some(st) = sending.as_mut() {
+                    let mut done = false;
+                    for _ in 0..4 {
+                        if st.next >= st.total {
+                            done = true;
+                            break;
+                        }
+                        let off = st.next;
+                        let end = (off + nbeep_core::MAX_CHUNK as u64).min(st.total);
+                        let n = end - off;
+                        // 프로브 경계(M4-11 ⓑ) — 첫 2MiB를 전속으로 보냈으니 meter가
+                        // **진짜 peak**를 안다. 목표를 실측 기반으로 재산출(한 번만).
+                        if !st.probed && off >= RATE_PROBE_BYTES.min(st.total.saturating_sub(1)) {
+                            st.probed = true;
+                            // 프로브 실측을 peak에 즉시 반영(M4-11 후속) — 관측 창
+                            // (500ms)이 닫히길 기다리면 localhost에선 peak=0인 채
+                            // 재산출돼 하한 조임이 재발한다(실기: 1차만 316KiB/s).
+                            let probe_dur = xfer_now_ms().saturating_sub(st.started_ms);
+                            send_meter.note_burst(off, probe_dur);
+                            let local = send_rate.target_bps(&send_meter);
+                            st.pacer =
+                                nbeep_core::Pacer::new(nbeep_core::negotiate(local, st.rate_cap));
+                            st.next_probe = off + REPROBE_INTERVAL;
+                        }
+                        // 상향 프로브(ⓐ) — 페이싱 중 주기 버스트로 재관측(과소 보정).
+                        let mut unpaced = !st.probed;
+                        if st.probed {
+                            if let Some((b_off, b_t0)) = st.bursting {
+                                if off.saturating_sub(b_off) >= REPROBE_BURST {
+                                    // 버스트 종료 — 실측 반영·목표 재산출(상향 전용).
+                                    send_meter.note_burst(
+                                        off - b_off,
+                                        xfer_now_ms().saturating_sub(b_t0),
+                                    );
+                                    let local = send_rate.target_bps(&send_meter);
+                                    st.pacer = nbeep_core::Pacer::new(nbeep_core::negotiate(
+                                        local,
+                                        st.rate_cap,
+                                    ));
+                                    st.bursting = None;
+                                    st.next_probe = off + REPROBE_INTERVAL;
+                                } else {
+                                    unpaced = true; // 버스트 진행 중 — 전속
+                                }
+                            } else if off >= st.next_probe {
+                                st.bursting = Some((off, xfer_now_ms()));
+                                unpaced = true;
+                            }
+                        }
+                        if !unpaced {
+                            // 창이 모자라면 그만큼 쉰다(종전 문법 그대로 — 예약 후 대기).
+                            let wait = st.pacer.take(n, xfer_now_ms());
+                            if wait > 0 {
+                                std::thread::sleep(std::time::Duration::from_millis(wait));
+                            }
+                        }
+                        #[allow(clippy::cast_possible_truncation)]
+                        let chunk = XferMsg::Chunk {
+                            id: st.id,
+                            offset: off,
+                            data: st.data[off as usize..end as usize].to_vec(),
                         };
-                        if proxy.send_event(ev).is_err() {
+                        if session.send(StreamId::File, &chunk.encode()).is_err() {
+                            let _ = proxy.send_event(AppEvent::Closed { peer });
                             return;
                         }
+                        st.next = end;
+                        send_meter.observe(n, xfer_now_ms());
+                        let _ = proxy.send_event(AppEvent::XferProgress {
+                            peer,
+                            got: end,
+                            total: st.total,
+                            sending: true,
+                        });
                     }
-                }
-                StreamId::Control => match nbeep_core::ProfileMsg::decode(&bytes) {
-                    Some(nbeep_core::ProfileMsg::Request) => {
-                        if proxy
-                            .send_event(AppEvent::ProfileRequested { peer })
+                    if done {
+                        let id = st.id;
+                        let dur = xfer_now_ms().saturating_sub(st.started_ms).max(1);
+                        // 재개면 이번 세션에 보낸 분량 기준(M4-10b — total로 나누면 과대).
+                        let avg_bps = st.total.saturating_sub(st.from).saturating_mul(1000) / dur;
+                        sending = None;
+                        if session
+                            .send(StreamId::File, &XferMsg::Done { id }.encode())
                             .is_err()
                         {
+                            let _ = proxy.send_event(AppEvent::Closed { peer });
                             return;
                         }
+                        let _ = proxy.send_event(AppEvent::XferSendDone {
+                            peer,
+                            avg_bps,
+                            peak_bps: send_meter.peak_bps(),
+                        });
                     }
-                    Some(nbeep_core::ProfileMsg::Info {
-                        name,
-                        email,
-                        phone,
-                        image_len,
-                        avatar,
-                        border,
-                        image_keep,
-                        bio,
-                    }) => {
-                        let len = image_len as usize;
-                        if len == 0 || len > nbeep_core::PROFILE_IMAGE_MAX {
-                            // 이미지 없음 또는 상한 초과 주장 — 텍스트만 반영(fail-closed).
-                            // image_keep(M3-21 경량 갱신)은 그대로 올린다 — 캐시 유지
-                            // 판단은 메인 몫(peer_profiles가 거기 있다).
-                            let _ = proxy.send_event(AppEvent::PeerProfile {
-                                peer,
-                                name,
-                                email,
-                                phone,
-                                image: None,
-                                avatar,
-                                border,
-                                image_keep,
-                                bio,
-                            });
-                            pending_profile = None;
-                        } else {
-                            pending_profile = Some((
-                                (name, email, phone, avatar, border, bio),
-                                image_len,
-                                Vec::with_capacity(len),
-                            ));
+                }
+                // ★ 수신은 **스트림별이 아니라 도착 순서로** 뽑는다(08-13 — 스트림별 폴링은
+                // 파일 전송 2MiB 지점에서 Backpressure로 끊겼다. 근거 = `MuxSession::recv_any`).
+                let (stream, bytes) = match session.recv_any() {
+                    Ok(v) => v,
+                    Err(nbeep_core::SessionError::TimedOut) => continue, // 정상 — 송신 교대로
+                    Err(_) => {
+                        let _ = proxy.send_event(AppEvent::Closed { peer });
+                        return;
+                    }
+                };
+                match stream {
+                    // 대화 수신.
+                    StreamId::Chat => {
+                        if let Ok(m) = nbeep_core::ChatMessage::decode(&bytes, peer) {
+                            if let nbeep_core::MessageBody::Text(t) = m.body {
+                                let ev = AppEvent::Recv {
+                                    peer,
+                                    text: nbeep_core::sanitize_message(&t),
+                                    seq: m.seq,
+                                    sender: m.sender_device,
+                                };
+                                if proxy.send_event(ev).is_err() {
+                                    return; // 이벤트 루프 종료
+                                }
+                            }
                         }
                     }
-                    Some(nbeep_core::ProfileMsg::ImageChunk {
-                        offset,
-                        last,
-                        bytes,
-                    }) => {
-                        if let Some((fields, want, buf)) = &mut pending_profile {
-                            let in_order = buf.len() == offset as usize
-                                && buf.len() + bytes.len() <= nbeep_core::PROFILE_IMAGE_MAX;
-                            if in_order {
-                                buf.extend_from_slice(&bytes);
+                    // 프로필 수신(Control — M3-17). 요청은 메인으로 올리고(정책 단일 지점),
+                    // 응답은 여기서 조립해 완성본만 올린다(대용량 조립이 메인을 막지 않게).
+                    StreamId::Control if nbeep_core::ChatAck::decode(&bytes).is_some() => {
+                        // 수신 확인(N-2) — 태그로 프로필과 구분. 도착만 메인에 올린다.
+                        if let Some(ack) = nbeep_core::ChatAck::decode(&bytes) {
+                            let ev = AppEvent::ChatAck {
+                                peer,
+                                target_seq: ack.target_seq,
+                                kind: ack.kind,
+                            };
+                            if proxy.send_event(ev).is_err() {
+                                return;
                             }
-                            if !in_order || last {
-                                // 종결 — 정합(순서·총량 일치)일 때만 이미지 채택.
-                                let (name, email, phone, avatar, border, bio) = fields.clone();
-                                let ok = in_order && last && buf.len() == *want as usize;
-                                let image = ok.then(|| std::mem::take(buf));
+                        }
+                    }
+                    StreamId::Control => match nbeep_core::ProfileMsg::decode(&bytes) {
+                        Some(nbeep_core::ProfileMsg::Request) => {
+                            if proxy
+                                .send_event(AppEvent::ProfileRequested { peer })
+                                .is_err()
+                            {
+                                return;
+                            }
+                        }
+                        Some(nbeep_core::ProfileMsg::Info {
+                            name,
+                            email,
+                            phone,
+                            image_len,
+                            avatar,
+                            border,
+                            image_keep,
+                            bio,
+                        }) => {
+                            let len = image_len as usize;
+                            if len == 0 || len > nbeep_core::PROFILE_IMAGE_MAX {
+                                // 이미지 없음 또는 상한 초과 주장 — 텍스트만 반영(fail-closed).
+                                // image_keep(M3-21 경량 갱신)은 그대로 올린다 — 캐시 유지
+                                // 판단은 메인 몫(peer_profiles가 거기 있다).
                                 let _ = proxy.send_event(AppEvent::PeerProfile {
                                     peer,
                                     name,
                                     email,
                                     phone,
-                                    image,
+                                    image: None,
                                     avatar,
                                     border,
-                                    // 청크가 따라온 응답은 언제나 전체(Full) — 유지
-                                    // 마커가 아니라 실물이 왔다.
-                                    image_keep: false,
+                                    image_keep,
                                     bio,
                                 });
                                 pending_profile = None;
+                            } else {
+                                pending_profile = Some((
+                                    (name, email, phone, avatar, border, bio),
+                                    image_len,
+                                    Vec::with_capacity(len),
+                                ));
                             }
                         }
+                        Some(nbeep_core::ProfileMsg::ImageChunk {
+                            offset,
+                            last,
+                            bytes,
+                        }) => {
+                            if let Some((fields, want, buf)) = &mut pending_profile {
+                                let in_order = buf.len() == offset as usize
+                                    && buf.len() + bytes.len() <= nbeep_core::PROFILE_IMAGE_MAX;
+                                if in_order {
+                                    buf.extend_from_slice(&bytes);
+                                }
+                                if !in_order || last {
+                                    // 종결 — 정합(순서·총량 일치)일 때만 이미지 채택.
+                                    let (name, email, phone, avatar, border, bio) = fields.clone();
+                                    let ok = in_order && last && buf.len() == *want as usize;
+                                    let image = ok.then(|| std::mem::take(buf));
+                                    let _ = proxy.send_event(AppEvent::PeerProfile {
+                                        peer,
+                                        name,
+                                        email,
+                                        phone,
+                                        image,
+                                        avatar,
+                                        border,
+                                        // 청크가 따라온 응답은 언제나 전체(Full) — 유지
+                                        // 마커가 아니라 실물이 왔다.
+                                        image_keep: false,
+                                        bio,
+                                    });
+                                    pending_profile = None;
+                                }
+                            }
+                        }
+                        None => {} // 미지 kind — 전방 호환 무시
+                    },
+                    // 공유 그룹(M5-1g) — 검증(소유자·명부)은 메인 몫, 액터는 해독·전달만.
+                    StreamId::Group => {
+                        if let Some(msg) = nbeep_core::SGroupMsg::decode(&bytes) {
+                            if proxy.send_event(AppEvent::SGroup { peer, msg }).is_err() {
+                                return;
+                            }
+                        } // 미지 kind — 전방 호환 무시
                     }
-                    None => {} // 미지 kind — 전방 호환 무시
-                },
-                // 공유 그룹(M5-1g) — 검증(소유자·명부)은 메인 몫, 액터는 해독·전달만.
-                StreamId::Group => {
-                    if let Some(msg) = nbeep_core::SGroupMsg::decode(&bytes) {
-                        if proxy.send_event(AppEvent::SGroup { peer, msg }).is_err() {
+                    // 파일 수신.
+                    StreamId::File => {
+                        if xfer_step(
+                            &bytes,
+                            peer,
+                            &mut session,
+                            &mut inbox,
+                            &mut outgoing,
+                            &mut sending,
+                            &mut recv_started,
+                            &mut canceled,
+                            &proxy,
+                            send_rate,
+                            &mut send_meter,
+                            &seal_secret,
+                        )
+                        .is_err()
+                        {
+                            let _ = proxy.send_event(AppEvent::Closed { peer });
                             return;
                         }
-                    } // 미지 kind — 전방 호환 무시
-                }
-                // 파일 수신.
-                StreamId::File => {
-                    if xfer_step(
-                        &bytes,
-                        peer,
-                        &mut session,
-                        &mut inbox,
-                        &mut outgoing,
-                        &mut sending,
-                        &mut recv_started,
-                        &mut canceled,
-                        &proxy,
-                        send_rate,
-                        &mut send_meter,
-                        &seal_secret,
-                    )
-                    .is_err()
-                    {
-                        let _ = proxy.send_event(AppEvent::Closed { peer });
-                        return;
                     }
                 }
             }
+        })();
+        // 세션 종료 — 수락된 부분 수신물을 봉인 보존한다(M4-10a · D-31).
+        // 재개 협상의 원료: 같은 sha+size Offer가 다시 오면 "이어받기"가 된다.
+        for p in inbox.take_partials() {
+            crate::part::save_partial(crate::gate::CH_GUI, &seal_secret, peer, &p);
         }
     });
 }
@@ -1167,7 +1226,12 @@ fn xfer_step(
         let _ = proxy.send_event(AppEvent::XferFailed { peer, why });
     };
     match XferMsg::decode(bytes) {
-        Ok(XferMsg::Offer { id, size, name, .. }) => {
+        Ok(XferMsg::Offer {
+            id,
+            size,
+            name,
+            sha256,
+        }) => {
             let m = XferMsg::decode(bytes).map_err(|_| ())?;
             match inbox.offer(&m) {
                 Ok(()) => {
@@ -1176,6 +1240,7 @@ fn xfer_step(
                         id,
                         name: String::from_utf8_lossy(&name).into_owned(),
                         size,
+                        sha256,
                     });
                 }
                 Err(e) => {
@@ -1192,10 +1257,28 @@ fn xfer_step(
                 }
             }
         }
-        Ok(XferMsg::Accept { id, rate_cap }) => {
+        Ok(XferMsg::Accept {
+            id,
+            rate_cap,
+            resume_offset,
+            prefix_sha,
+        }) => {
             if let Some(data) = outgoing.remove(&id) {
                 let _ = proxy.send_event(AppEvent::XferAccepted { peer });
                 let total = data.len() as u64;
+                // ★ 재개(M4-10b) — 요청 오프셋의 내 원본 프리픽스 해시가 상대의
+                //   보존분 해시와 **일치할 때만** 그 지점부터. 불일치·범위 초과 =
+                //   처음부터(fail-closed — 조용히 이어붙여 손상 파일을 만들지 않는다).
+                let start = if resume_offset > 0 && resume_offset < total {
+                    let cut = usize::try_from(resume_offset).unwrap_or(0);
+                    if cut > 0 && nbeep_crypto::sha256(&data[..cut]) == prefix_sha {
+                        resume_offset
+                    } else {
+                        0
+                    }
+                } else {
+                    0
+                };
                 // ★ 쌍방 협상 — 내 상한과 상대가 공지한 상한 중 **낮은 쪽**으로 창을 잡는다.
                 // ★ 08-16: 여기서 전량을 쏟지 않는다 — 상태로 등록만 하고 액터 루프
                 //   틱이 조금씩 보낸다(그전엔 이 블로킹 루프 동안 취소 명령도 상대
@@ -1204,7 +1287,8 @@ fn xfer_step(
                 *sending = Some(ActiveSend {
                     id,
                     data,
-                    next: 0,
+                    next: start,
+                    from: start,
                     total,
                     pacer: nbeep_core::Pacer::new(nbeep_core::negotiate(local, rate_cap)),
                     rate_cap,
@@ -1583,6 +1667,8 @@ struct App {
     profile_view: Option<nbeep_ui::ProfileWidget>,
     /// 상대 프로필(M3-17 — 세션 경유 수신 · 목록·제목 표시 우선).
     peer_profiles: HashMap<PeerId, PeerProfile>,
+    /// 이어받기로 수락한 수신의 원본 sha(M4-10) — 완료·취소 때 `.part` 정리.
+    resumed_recv: HashMap<PeerId, [u8; 32]>,
     /// 마지막으로 **적용한** 프로필 수신 내용의 지문(RL-1 · 08-18) — 동일 내용
     /// 재수신이면 하류 전부(사진 재봉인·imgdec 자식·trust 재암호화·목록 재조립)를
     /// 건너뛴다. 08-16 수정은 트리거 빈도만 낮췄고, 비용 측은 이 한 겹이 막는다.
@@ -1639,7 +1725,7 @@ struct App {
     /// 고정폭 얼굴 — 지정 없으면 OS 기본.
     face_mono: Option<nbeep_gfx::Font>,
     /// 상대별 수락 대기 큐 — **오퍼 1건당 승인 1번**(2번 보내면 2번 물어본다).
-    pending_offers: HashMap<PeerId, VecDeque<(nbeep_core::XferId, String, u64)>>,
+    pending_offers: HashMap<PeerId, VecDeque<PendingOffer>>,
     /// 상대별 발신 대기 파일 큐(다중 드롭 — 한 번에 하나씩 협상한다).
     send_queue: HashMap<PeerId, VecDeque<std::path::PathBuf>>,
     /// 상대별 배치 집계 (보낸 파일 수, 총 파일 수, 보낸 바이트, 총 바이트).
@@ -2336,7 +2422,7 @@ impl App {
         let Some(peer) = self.chat_peer_for(id) else {
             return;
         };
-        let Some((xid, name, _)) = self
+        let Some((xid, name, size, sha)) = self
             .pending_offers
             .get_mut(&peer)
             .and_then(VecDeque::pop_front)
@@ -2345,7 +2431,17 @@ impl App {
             self.request_redraw(id);
             return;
         };
-        let ok = self.send_xfer_decision(peer, xid, accept, nbeep_core::RejectWhy::Declined);
+        let resume = if accept {
+            self.load_resume(peer, &sha, size)
+        } else {
+            None
+        };
+        let resumed = resume.as_ref().map(Vec::len);
+        let ok =
+            self.send_xfer_decision(peer, xid, accept, nbeep_core::RejectWhy::Declined, resume);
+        if let Some(got) = resumed {
+            self.status = format!("이어받기 — {name} {}%부터", got as u64 * 100 / size.max(1));
+        }
         if !accept {
             self.set_xfer_line(
                 peer,
@@ -2376,7 +2472,7 @@ impl App {
     /// 대기열 맨 앞 제안으로 승인 화면 내용을 만든다(없으면 `None`).
     fn front_offer_info(&self, peer: PeerId) -> Option<nbeep_ui::OfferInfo> {
         let q = self.pending_offers.get(&peer)?;
-        let (_, name, size) = q.front()?;
+        let (_, name, size, _) = q.front()?;
         let sender = self
             .table
             .list()
@@ -2460,17 +2556,23 @@ impl App {
             .pending_offers
             .get_mut(&peer)
             .and_then(VecDeque::pop_front);
-        let Some((xid, name, _)) = front else {
+        let Some((xid, name, size, sha)) = front else {
             self.close_approve(peer);
             return;
         };
         match choice {
             OfferChoice::Approve => {
-                self.send_xfer_decision(peer, xid, true, nbeep_core::RejectWhy::Declined);
-                self.status = nbeep_core::tf(nbeep_core::Msg::StfAcceptRecv, &[&name]);
+                let resume = self.load_resume(peer, &sha, size);
+                let resumed = resume.as_ref().map(Vec::len);
+                self.send_xfer_decision(peer, xid, true, nbeep_core::RejectWhy::Declined, resume);
+                self.status = if let Some(got) = resumed {
+                    format!("이어받기 — {name} {}%부터", got as u64 * 100 / size.max(1))
+                } else {
+                    nbeep_core::tf(nbeep_core::Msg::StfAcceptRecv, &[&name])
+                };
             }
             OfferChoice::Cancel { by_timeout } => {
-                self.send_xfer_decision(peer, xid, false, nbeep_core::RejectWhy::Declined);
+                self.send_xfer_decision(peer, xid, false, nbeep_core::RejectWhy::Declined, None);
                 self.set_xfer_line(
                     peer,
                     false,
@@ -2508,7 +2610,8 @@ impl App {
                     }
                     self.refresh_approval_ui();
                 }
-                self.send_xfer_decision(peer, xid, true, nbeep_core::RejectWhy::Declined);
+                let resume = self.load_resume(peer, &sha, size);
+                self.send_xfer_decision(peer, xid, true, nbeep_core::RejectWhy::Declined, resume);
                 self.status = nbeep_core::tf(nbeep_core::Msg::StfAutoAcceptStart, &[&name]);
             }
         }
@@ -2519,6 +2622,15 @@ impl App {
         }
     }
 
+    /// `.part` 재개 후보 조회(M4-10) — 있으면 (프리픽스, 보존율%). 조회 시점에
+    /// 크기 불일치·손상은 part 모듈이 폐기한다(fail-closed).
+    fn load_resume(&mut self, peer: PeerId, sha: &[u8; 32], size: u64) -> Option<Vec<u8>> {
+        let secret = self.identity.wrap_secret();
+        let prefix = crate::part::load_partial(crate::gate::CH_GUI, &secret, sha, size)?;
+        self.resumed_recv.insert(peer, *sha); // 완료·취소 시 .part 정리용
+        Some(prefix)
+    }
+
     /// 액터에 수락/거절 명령을 보낸다(성공 여부).
     fn send_xfer_decision(
         &mut self,
@@ -2526,13 +2638,18 @@ impl App {
         xid: nbeep_core::XferId,
         accept: bool,
         why: nbeep_core::RejectWhy,
+        resume: Option<Vec<u8>>,
     ) -> bool {
         let cmd = if accept {
             // 수신 상한 공지(M4-11 개정) — Auto는 **상한 무주장(0)**: 종전
             // target_bps 공지는 관측 없는 수신측이 하한(256KiB/s)을 주장해
             // 쌍방 협상이 하한에 고착됐다(로컬 0.25MB/s 실기). 명시 설정만 주장.
             let rate_cap = self.recv_rate.advertised_cap();
-            SessionCmd::AcceptXfer { id: xid, rate_cap }
+            SessionCmd::AcceptXfer {
+                id: xid,
+                rate_cap,
+                resume,
+            }
         } else {
             SessionCmd::RejectXfer { id: xid, why }
         };
@@ -7497,6 +7614,9 @@ impl App {
         if mine {
             self.send_queue.remove(&peer);
             self.send_batch.remove(&peer);
+        } else if let Some(sha) = self.resumed_recv.remove(&peer) {
+            // 수동 취소 = 의사 표시 — 보존 부분물도 함께 폐기(재개 제안 금지 · M4-10).
+            crate::part::remove_partial(crate::gate::CH_GUI, &sha);
         }
         self.set_xfer_line(
             peer,
@@ -8573,6 +8693,7 @@ impl ApplicationHandler<AppEvent> for App {
                 id,
                 name,
                 size,
+                sha256,
             } => {
                 use nbeep_core::{
                     judge_offer, DenyReason, OfferVerdict, RejectWhy, TrustStore as _,
@@ -8588,7 +8709,8 @@ impl ApplicationHandler<AppEvent> for App {
                 );
                 match verdict {
                     OfferVerdict::Accept => {
-                        self.send_xfer_decision(peer, id, true, RejectWhy::Declined);
+                        let resume = self.load_resume(peer, &sha256, size);
+                        self.send_xfer_decision(peer, id, true, RejectWhy::Declined, resume);
                         self.status = nbeep_core::tf(
                             nbeep_core::Msg::StfAutoAcceptRecv,
                             &[&name, &human_size(size)],
@@ -8614,7 +8736,7 @@ impl ApplicationHandler<AppEvent> for App {
                         // 스레드에 수신 항목(승인 대기) — 거절하면 이 항목이 실패로 남는다.
                         self.push_xfer_line(peer, false, &name, size);
                         let q = self.pending_offers.entry(peer).or_default();
-                        q.push_back((id, name.clone(), size));
+                        q.push_back((id, name.clone(), size, sha256));
                         let n = q.len();
                         // 승인 화면을 띄운다(이미 떠 있으면 그대로 — 큐에서 차례로 처리).
                         if !self.approve_view.contains_key(&peer) {
@@ -8637,7 +8759,7 @@ impl ApplicationHandler<AppEvent> for App {
                                 RejectWhy::Unverified
                             }
                         };
-                        self.send_xfer_decision(peer, id, false, why);
+                        self.send_xfer_decision(peer, id, false, why, None);
                         self.status = nbeep_core::tf(
                             nbeep_core::Msg::StfFileRejected,
                             &[&name, reason.message()],
@@ -8692,6 +8814,10 @@ impl ApplicationHandler<AppEvent> for App {
             } => {
                 self.active_recv.remove(&peer); // 수신 완결 — 취소 대상 아님(08-16)
                                                 // 수신은 액터에 계측기가 없다 — 평균이 유일한 실측(보수적 하한).
+                                                // 이어받기였다면 `.part`는 승격 완료로 소임을 다했다(M4-10a).
+                if let Some(sha) = self.resumed_recv.remove(&peer) {
+                    crate::part::remove_partial(crate::gate::CH_GUI, &sha);
+                }
                 self.recv_meter.note_peak(avg_bps);
                 self.refresh_approval_ui();
                 // 격리 보관까지 끝난 상태 — **실체화는 승인 후 별도**(FR-S-9).
@@ -8847,7 +8973,8 @@ impl ApplicationHandler<AppEvent> for App {
             AppEvent::XferFailed { peer, why } => {
                 self.active_send.remove(&peer);
                 self.active_recv.remove(&peer);
-                // 방향 판정 — 발신이 걸려 있으면 발신 실패, 아니면 수신 실패.
+                self.resumed_recv.remove(&peer); // .part는 남긴다 — 실패가 곧 재개 사유
+                                                 // 방향 판정 — 발신이 걸려 있으면 발신 실패, 아니면 수신 실패.
                 let mine =
                     self.awaiting_accept.contains_key(&peer) || self.send_batch.contains_key(&peer);
                 self.set_xfer_line(
@@ -10819,6 +10946,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         profile_view: None,
         peer_profiles: HashMap::new(),
         peer_profile_fp: HashMap::new(),
+        resumed_recv: HashMap::new(),
         wire_gen: 0,
         wire_pending: false,
         wire_pending_ms: 0,
@@ -10855,6 +10983,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
     app.restore_history(); // 대화 기록 복원(M2-5b · parked_lines에 · 대화창 열면 뜬다)
     app.restore_cached_profiles(); // 핀 상대의 캐시 프로필·목록 행 복원(08-14)
     app.ensure_wire_avatar(); // 상한 초과 사진의 와이어 축소본 보장(08-16 — 기존 사용자 자기 치유)
+    crate::part::sweep_partials(crate::gate::CH_GUI); // 부분물 수명 정리(M4-10a — 72h·1GiB)
     event_loop.run_app(&mut app).unwrap();
 }
 

@@ -94,6 +94,13 @@ pub enum XferMsg {
         id: XferId,
         /// 수신측이 감당할 상한(B/s · 0 = 무제한). 발신측은 자기 상한과 **낮은 쪽**을 쓴다.
         rate_cap: u64,
+        /// **재개 오프셋**(M4-10 · D-31) — "이 오프셋부터 보내라". 0 = 처음부터
+        /// (구버전 동작과 동일 · 와이어 꼬리 확장이라 구버전은 무시하고 0부터 보낸다).
+        resume_offset: u64,
+        /// 보존 부분의 SHA-256(M4-10) — 발신측이 자기 원본 같은 구간과 대조해
+        /// **일치할 때만** 이어 보낸다(불일치 = 처음부터 · fail-closed).
+        /// `resume_offset == 0`이면 무의미(0 배열).
+        prefix_sha: [u8; 32],
     },
     /// 거절 — `TooLarge`면 수신측 상한을 공지해 발신자가 재시도 판단을 할 수 있다.
     Reject {
@@ -199,10 +206,22 @@ impl XferMsg {
                 out.extend_from_slice(&nlen.to_le_bytes());
                 out.extend_from_slice(&name[..nlen as usize]);
             }
-            Self::Accept { id, rate_cap } => {
+            Self::Accept {
+                id,
+                rate_cap,
+                resume_offset,
+                prefix_sha,
+            } => {
                 out.push(K_ACCEPT);
                 out.extend_from_slice(id);
                 out.extend_from_slice(&rate_cap.to_le_bytes());
+                // 재개 꼬리(M4-10) — 재개일 때만 싣는다: 0이면 구버전과 **바이트
+                // 동일**(하위 호환 검증이 쉽고, 미지 꼬리를 안 좋아하는 중간자
+                // 검사기와의 마찰도 없다). 구버전 수신자는 꼬리를 무시한다.
+                if *resume_offset > 0 {
+                    out.extend_from_slice(&resume_offset.to_le_bytes());
+                    out.extend_from_slice(prefix_sha);
+                }
             }
             Self::Reject { id, why, limit } => {
                 out.push(K_REJECT);
@@ -277,7 +296,22 @@ impl XferMsg {
                 } else {
                     0
                 };
-                Self::Accept { id, rate_cap }
+                // 재개 꼬리(M4-10 — 없으면 0 = 처음부터 · 잘린 꼬리도 0 취급:
+                // 재개는 최적화라 관용이 안전하다. 청크 검증이 최종 방어선).
+                let (resume_offset, prefix_sha) = if rest.len() >= 8 + 8 + 32 {
+                    let off = u64::from_le_bytes(rest[8..16].try_into().expect("8B"));
+                    let mut sha = [0u8; 32];
+                    sha.copy_from_slice(&rest[16..48]);
+                    (off, sha)
+                } else {
+                    (0, [0u8; 32])
+                };
+                Self::Accept {
+                    id,
+                    rate_cap,
+                    resume_offset,
+                    prefix_sha,
+                }
             }
             K_REJECT => {
                 if rest.len() < 9 {
@@ -433,6 +467,22 @@ impl XferInbox {
             .ok_or(XferError::UnknownXfer)
     }
 
+    /// 수락 + **보존 부분 선적재**(M4-10 재개) — 이후 청크는 `prefix.len()`부터
+    /// 이어진다(연속 오프셋 검사가 buf 길이 기준이라 그대로 성립). 구버전 발신자가
+    /// 0부터 다시 보내도 [`Self::chunk`]의 중복 프리픽스 관용이 흡수한다.
+    ///
+    /// # Errors
+    /// [`XferError::UnknownXfer`] · [`XferError::Overflow`](prefix가 선언 크기 초과).
+    pub fn accept_with_prefix(&mut self, id: &XferId, prefix: Vec<u8>) -> Result<(), XferError> {
+        let x = self.inflight.get_mut(id).ok_or(XferError::UnknownXfer)?;
+        if prefix.len() as u64 > x.size {
+            return Err(XferError::Overflow);
+        }
+        x.accepted = true;
+        x.buf = prefix;
+        Ok(())
+    }
+
     /// 거절/취소 — 부분 수신물 즉시 폐기(잔존 금지).
     pub fn drop_xfer(&mut self, id: &XferId) {
         self.inflight.remove(id);
@@ -457,6 +507,23 @@ impl XferInbox {
         let x = self.inflight.get_mut(id).ok_or(XferError::UnknownXfer)?;
         if !x.accepted {
             return Err(XferError::NotAccepted);
+        }
+        // 중복 프리픽스 관용(M4-10 — 재개 Accept를 무시한 구버전 발신자가 0부터
+        // 다시 보내는 경우): 이미 가진 구간과 **바이트가 일치할 때만** 버리고,
+        // 어긋나면 즉시 폐기(조용히 이어붙여 손상 파일을 만들지 않는다).
+        if offset < x.buf.len() as u64 {
+            let have = usize::try_from(x.buf.len() as u64 - offset).unwrap_or(usize::MAX);
+            let dup = have.min(data.len());
+            let start = usize::try_from(offset).map_err(|_| XferError::OutOfOrder)?;
+            if x.buf[start..start + dup] != data[..dup] {
+                return Err(XferError::OutOfOrder);
+            }
+            let tail = &data[dup..];
+            if x.buf.len() as u64 + tail.len() as u64 > x.size {
+                return Err(XferError::Overflow);
+            }
+            x.buf.extend_from_slice(tail);
+            return Ok(());
         }
         if offset != x.buf.len() as u64 {
             return Err(XferError::OutOfOrder);
@@ -490,6 +557,43 @@ impl XferInbox {
     pub fn progress(&self, id: &XferId) -> Option<(u64, u64)> {
         self.inflight.get(id).map(|x| (x.buf.len() as u64, x.size))
     }
+
+    /// 세션 종료 시 **수락된 부분 수신물 회수**(M4-10a) — 보존은 호스트 몫
+    /// (`.part` 봉인 저장). 미수락(오퍼만) 항목은 보존 가치가 없어 버린다.
+    pub fn take_partials(&mut self) -> Vec<PartialXfer> {
+        let ids: Vec<XferId> = self
+            .inflight
+            .iter()
+            .filter(|(_, x)| x.accepted && !x.buf.is_empty() && (x.buf.len() as u64) < x.size)
+            .map(|(id, _)| *id)
+            .collect();
+        ids.into_iter()
+            .filter_map(|id| {
+                self.inflight.remove(&id).map(|x| PartialXfer {
+                    id,
+                    size: x.size,
+                    sha256: x.sha256,
+                    name: x.name,
+                    bytes: x.buf,
+                })
+            })
+            .collect()
+    }
+}
+
+/// 중단된 수신 전송의 부분 상태(M4-10a) — 세션 액터가 회수해 호스트가 보존한다.
+#[derive(Debug)]
+pub struct PartialXfer {
+    /// 전송 id(원 Offer의 것 — 재개 협상은 sha·size로 하므로 참고용).
+    pub id: XferId,
+    /// 선언 전체 크기.
+    pub size: u64,
+    /// 선언 전체 SHA-256 — **재개 후보 판정의 앵커**(같은 sha+size Offer = 같은 파일).
+    pub sha256: [u8; 32],
+    /// 원본 파일명 바이트.
+    pub name: Vec<u8>,
+    /// 수신 완료 구간(연속 · 0부터).
+    pub bytes: Vec<u8>,
 }
 
 #[cfg(test)]
@@ -512,6 +616,8 @@ mod tests {
             XferMsg::Accept {
                 id: xid(1),
                 rate_cap: 1_048_576,
+                resume_offset: 0,
+                prefix_sha: [0u8; 32],
             },
             XferMsg::Reject {
                 id: xid(1),
@@ -539,6 +645,8 @@ mod tests {
         let mut v = XferMsg::Accept {
             id: xid(1),
             rate_cap: 0,
+            resume_offset: 0,
+            prefix_sha: [0u8; 32],
         }
         .encode();
         v[0] = 9;
@@ -546,6 +654,8 @@ mod tests {
         let mut v = XferMsg::Accept {
             id: xid(1),
             rate_cap: 0,
+            resume_offset: 0,
+            prefix_sha: [0u8; 32],
         }
         .encode();
         v[1] = 99;
@@ -654,9 +764,115 @@ mod tests {
         let m = XferMsg::Accept {
             id: xid(9),
             rate_cap: 512_000,
+            resume_offset: 0,
+            prefix_sha: [0u8; 32],
         };
         let back = XferMsg::decode(&m.encode()).unwrap();
         assert_eq!(back, m, "상한이 왕복해야 발신측이 협상할 수 있다");
+    }
+
+    /// M4-10 재개 꼬리 — ① 왕복 보존 ② 재개 0 = 구버전과 바이트 동일(하위 호환)
+    /// ③ 꼬리 없는 구버전 프레임 = 0/영배열 해석.
+    #[test]
+    fn accept_resume_tail_roundtrip_and_backcompat() {
+        let m = XferMsg::Accept {
+            id: xid(9),
+            rate_cap: 0,
+            resume_offset: 8 * 1024 * 1024,
+            prefix_sha: [7u8; 32],
+        };
+        assert_eq!(XferMsg::decode(&m.encode()).unwrap(), m, "재개 꼬리 왕복");
+        let zero = XferMsg::Accept {
+            id: xid(9),
+            rate_cap: 44,
+            resume_offset: 0,
+            prefix_sha: [9u8; 32], // 0 오프셋이면 안 실린다 — 수신은 영배열
+        };
+        let bytes = zero.encode();
+        assert_eq!(bytes.len(), 2 + 16 + 8, "재개 0 = 구버전과 같은 길이");
+        let back = XferMsg::decode(&bytes).unwrap();
+        assert_eq!(
+            back,
+            XferMsg::Accept {
+                id: xid(9),
+                rate_cap: 44,
+                resume_offset: 0,
+                prefix_sha: [0u8; 32],
+            }
+        );
+    }
+
+    /// M4-10a·b — 프리픽스 선적재 재개: 이어받기 → 완료. 구버전 발신자가 0부터
+    /// 다시 보내는 중복 프리픽스도 흡수하고, **어긋난 프리픽스는 폐기**한다.
+    #[test]
+    fn resume_with_prefix_and_duplicate_prefix_tolerance() {
+        let original: Vec<u8> = (0..100_000u32).map(|i| (i % 249) as u8).collect();
+        let offer = |id| XferMsg::Offer {
+            id,
+            size: original.len() as u64,
+            sha256: [7u8; 32],
+            name: b"big.bin".to_vec(),
+        };
+        // ① 프리픽스 선적재 후 그 지점부터 이어받아 완료.
+        let mut inbox = XferInbox::new();
+        inbox.offer(&offer(xid(1))).unwrap();
+        let cut = 40_000usize;
+        inbox
+            .accept_with_prefix(&xid(1), original[..cut].to_vec())
+            .unwrap();
+        let mut off = cut as u64;
+        for c in original[cut..].chunks(MAX_CHUNK) {
+            inbox.chunk(&xid(1), off, c).unwrap();
+            off += c.len() as u64;
+        }
+        assert_eq!(inbox.done(&xid(1)).unwrap().bytes, original);
+        // ② 구버전 발신자 — 재개 요청을 무시하고 0부터 전량 재송신해도 조립된다.
+        let mut inbox = XferInbox::new();
+        inbox.offer(&offer(xid(2))).unwrap();
+        inbox
+            .accept_with_prefix(&xid(2), original[..cut].to_vec())
+            .unwrap();
+        for m in chunks_of(xid(2), &original) {
+            let XferMsg::Chunk { id, offset, data } = m else {
+                unreachable!()
+            };
+            inbox.chunk(&id, offset, &data).unwrap();
+        }
+        assert_eq!(inbox.done(&xid(2)).unwrap().bytes, original);
+        // ③ 어긋난 프리픽스(다른 파일) — 중복 구간 대조 실패 = 즉시 폐기.
+        let mut inbox = XferInbox::new();
+        inbox.offer(&offer(xid(3))).unwrap();
+        inbox.accept_with_prefix(&xid(3), vec![0xEE; cut]).unwrap();
+        let r = inbox.chunk(&xid(3), 0, &original[..MAX_CHUNK]);
+        assert_eq!(
+            r,
+            Err(XferError::OutOfOrder),
+            "어긋난 중복 = 손상 방지 폐기"
+        );
+        assert!(inbox.progress(&xid(3)).is_none());
+    }
+
+    /// M4-10a — 세션 종료 시 수락·부분 수신분만 회수된다(오퍼만·완료분 제외).
+    #[test]
+    fn take_partials_returns_accepted_incomplete_only() {
+        let mut inbox = XferInbox::new();
+        let offer = |id, size| XferMsg::Offer {
+            id,
+            size,
+            sha256: [3u8; 32],
+            name: b"f".to_vec(),
+        };
+        inbox.offer(&offer(xid(1), 100)).unwrap(); // 미수락 — 제외
+        inbox.offer(&offer(xid(2), 100)).unwrap(); // 수락+부분 — 회수
+        inbox.accept(&xid(2)).unwrap();
+        inbox.chunk(&xid(2), 0, &[1u8; 40]).unwrap();
+        inbox.offer(&offer(xid(3), 100)).unwrap(); // 수락+0바이트 — 제외
+        inbox.accept(&xid(3)).unwrap();
+        let parts = inbox.take_partials();
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0].id, xid(2));
+        assert_eq!(parts[0].bytes.len(), 40);
+        assert_eq!(parts[0].size, 100);
     }
 
     #[test]
