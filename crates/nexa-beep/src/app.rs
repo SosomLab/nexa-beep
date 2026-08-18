@@ -507,6 +507,12 @@ fn spawn_session_actor(
         let mut outgoing: HashMap<nbeep_core::XferId, Vec<u8>> = HashMap::new();
         // 수신 시작 시각(xid별 · 08-16) — 평균 수신 속도 표기용(첫 청크 기준).
         let mut recv_started: HashMap<nbeep_core::XferId, u64> = HashMap::new();
+        // 취소된 전송(08-18 실기) — 취소 후에도 와이어에 남은 청크·Done이 몇 개
+        // 도착한다(발신 펌프가 앞서 보낸 것). 아는 취소분은 **조용히 버린다** —
+        // 종전엔 UnknownXfer로 "수신 오류" 실패 이벤트가 건마다 발화했다.
+        // 세션 수명 동안 전송 수만큼만 자란다(상한 실질 무해).
+        let mut canceled: std::collections::HashSet<nbeep_core::XferId> =
+            std::collections::HashSet::new();
         let mut send_meter = nbeep_core::RateMeter::default();
         // ★ 재개형 발신 펌프(08-16 · 취소 UX 선행) — 종전엔 Accept 처리 안의
         //   블로킹 루프가 전량을 쏟아, 펌프가 도는 동안 명령(취소)도 수신(상대
@@ -565,6 +571,7 @@ fn spawn_session_actor(
                     SessionCmd::CancelXfer(id) => {
                         outgoing.remove(&id);
                         inbox.drop_xfer(&id); // 수신측 취소 — 부분 조립 폐기(08-16)
+                        canceled.insert(id); // 잔류 청크 조용히 폐기(08-18)
                         if sending.as_ref().is_some_and(|st| st.id == id) {
                             sending = None; // 진행 중 발신 취소 — 펌프 즉시 중단
                         }
@@ -841,6 +848,7 @@ fn spawn_session_actor(
                         &mut outgoing,
                         &mut sending,
                         &mut recv_started,
+                        &mut canceled,
                         &proxy,
                         send_rate,
                         &mut send_meter,
@@ -1147,6 +1155,7 @@ fn xfer_step(
     outgoing: &mut HashMap<nbeep_core::XferId, Vec<u8>>,
     sending: &mut Option<ActiveSend>,
     recv_started: &mut HashMap<nbeep_core::XferId, u64>,
+    canceled: &mut std::collections::HashSet<nbeep_core::XferId>,
     proxy: &winit::event_loop::EventLoopProxy<AppEvent>,
     send_rate: nbeep_core::RateLimit,
     meter: &mut nbeep_core::RateMeter,
@@ -1216,6 +1225,9 @@ fn xfer_step(
             fail(format!("상대가 거절: {why:?}{extra}"));
         }
         Ok(XferMsg::Chunk { id, offset, data }) => {
+            if canceled.contains(&id) {
+                return Ok(()); // 취소분의 잔류 청크 — 오류 아님(08-18)
+            }
             recv_started.entry(id).or_insert_with(xfer_now_ms); // 평균 속도 기준점
             match inbox.chunk(&id, offset, &data) {
                 Ok(()) => {
@@ -1231,6 +1243,7 @@ fn xfer_step(
                 Err(e) => fail(format!("수신 오류: {e} — 폐기")),
             }
         }
+        Ok(XferMsg::Done { id }) if canceled.contains(&id) => {} // 취소분 꼬리(08-18)
         Ok(XferMsg::Done { id }) => match inbox.done(&id) {
             Ok(got) => {
                 match crate::gate::quarantine_received(&got, peer, crate::gate::CH_GUI, seal_secret)
@@ -1280,6 +1293,7 @@ fn xfer_step(
             inbox.drop_xfer(&id);
             outgoing.remove(&id);
             recv_started.remove(&id);
+            canceled.insert(id); // 대칭 — 이후 잔류 프레임 조용히 폐기(08-18)
             if sending.as_ref().is_some_and(|st| st.id == id) {
                 *sending = None; // 상대(수신측)가 진행 중 취소 — 펌프 즉시 중단(08-16)
             }
@@ -8563,6 +8577,19 @@ impl ApplicationHandler<AppEvent> for App {
                 total,
                 sending,
             } => {
+                // ★ 취소 경합 가드(08-18 실기) — 취소가 배너를 지운 **뒤에** 액터가
+                //   이미 큐에 실어 둔 지각 진행 이벤트가 도착해 배너를 되살렸다
+                //   (이후 이벤트가 없어 "수신 25%"에 영구 고착). 활성 전송이
+                //   등록돼 있을 때만 반영한다(등록 = 합류점 send_xfer_decision /
+                //   XferAccepted · 해제 = 취소·완료·실패·Closed — 축이 하나다).
+                let active = if sending {
+                    self.active_send.contains_key(&peer)
+                } else {
+                    self.active_recv.contains_key(&peer)
+                };
+                if !active {
+                    return;
+                }
                 let prev = self.xfer_progress.get(&peer).copied();
                 let xp = nbeep_ui::XferProgress {
                     done_bytes: got,
