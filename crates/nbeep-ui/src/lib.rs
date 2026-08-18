@@ -135,8 +135,8 @@ pub use about::{AboutInfo, AboutWidget};
 pub use addr_prompt::AddrPromptWidget;
 pub use alert::AlertWidget;
 pub use chat_view::{
-    fmt_hm, update_xfer_ack, update_xfer_in, ChatBody, ChatLine, ChatViewWidget, WallTime,
-    XferLine, XferLineState,
+    fmt_hm, reactivate_xfer_in, update_xfer_ack, update_xfer_in, ChatBody, ChatLine,
+    ChatViewWidget, WallTime, XferLine, XferLineState,
 };
 pub use controls::{
     BorderSpec, Button, ButtonMode, Checkbox, Choose, ChoosePicker, Combo, ComboControl, ComboItem,

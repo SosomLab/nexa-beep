@@ -505,7 +505,7 @@ fn spawn_session_actor(
     proxy: winit::event_loop::EventLoopProxy<AppEvent>,
     send_rate: nbeep_core::RateLimit,
     seal_secret: [u8; 32],
-) {
+) -> std::thread::JoinHandle<()> {
     use nbeep_core::mux::StreamId;
     use nbeep_core::{XferInbox, XferMsg};
     let peer = session.peer();
@@ -921,7 +921,7 @@ fn spawn_session_actor(
         for p in inbox.take_partials() {
             crate::part::save_partial(crate::gate::CH_GUI, &seal_secret, peer, &p);
         }
-    });
+    })
 }
 
 /// 평균 속도 라벨(08-16 — 완료 항목 "평균 N/s"). 0은 표기 생략용 빈 문자열.
@@ -1667,6 +1667,10 @@ struct App {
     profile_view: Option<nbeep_ui::ProfileWidget>,
     /// 상대 프로필(M3-17 — 세션 경유 수신 · 목록·제목 표시 우선).
     peer_profiles: HashMap<PeerId, PeerProfile>,
+    /// 세션 액터 join 핸들(M4-10a · 08-18) — **정상 종료 시 부분 수신물 보존을
+    /// 기다린다**: main 리턴 = 전 스레드 즉사라, 기다리지 않으면 수신자 쪽 종료
+    /// 경로에서 `.part`가 안 남는다(발신자 쪽 끊김만 보존되던 반쪽).
+    actor_joins: Vec<std::thread::JoinHandle<()>>,
     /// 상태 로거(M3-22 · `log.enabled` hot-swap) — None = 끔.
     statuslog: Option<crate::statuslog::StatusLog>,
     /// 이어받기로 수락한 수신의 원본 sha(M4-10) — 완료·취소 때 `.part` 정리.
@@ -2739,7 +2743,27 @@ impl App {
     fn push_xfer_line(&mut self, peer: PeerId, mine: bool, name: &str, size: u64) {
         // 파일명은 원격 제공 값일 수 있다 — 스레드 표시 전 무해화(RLO 등).
         let (at_ms, wall) = now_stamp();
-        let line = ChatLine::xfer(mine, nbeep_core::sanitize_message(name), size, at_ms, wall);
+        let safe = nbeep_core::sanitize_message(name);
+        // ★ 재활성화 우선(M4-10c · 08-18 실기) — 끊김 후 재-Offer는 같은 전송의
+        //   연속이다: 미종결 동일 항목이 있으면 **항목 하나로 유지**(승인 대기로
+        //   되돌림). 종전엔 새 항목이 추가되고, 진행률 갱신(미종결 첫 항목 대상)이
+        //   옛 항목에 붙어 두 항목이 서로 어긋났다.
+        let mut inv = Invalidations::default();
+        let re_store = self.conversations.get_mut(&peer).is_some_and(|conv| {
+            nbeep_ui::reactivate_xfer_in(&mut conv.lines, mine, safe.as_str(), size)
+        });
+        let re_view = self
+            .chats
+            .get_mut(&peer)
+            .is_some_and(|chat| chat.reactivate_xfer(mine, safe.as_str(), size, &mut inv));
+        if re_store || re_view {
+            if !mine {
+                self.note_incoming(peer);
+            }
+            self.redraw_conversation(peer);
+            return;
+        }
+        let line = ChatLine::xfer(mine, safe, size, at_ms, wall);
         if let Some(conv) = self.conversations.get_mut(&peer) {
             conv.lines.push(line.clone());
         }
@@ -3590,13 +3614,14 @@ impl App {
     fn install_conversation(&mut self, session: LiveSession) {
         let peer = session.peer();
         let (out_tx, out_rx) = std::sync::mpsc::channel();
-        spawn_session_actor(
+        let join = spawn_session_actor(
             session,
             out_rx,
             self.proxy.clone(),
             self.send_rate,
             self.identity.wrap_secret(),
         );
+        self.actor_joins.push(join);
         // 프로필 자동 프리페치(M3-17 · ADR-0008) — 세션이 섰으니 요청 1회.
         // 상대가 전부 비공개면 빈 응답이 온다(그래도 요청은 무해).
         let _ = out_tx.send(SessionCmd::Control(vec![
@@ -8843,6 +8868,23 @@ impl ApplicationHandler<AppEvent> for App {
                     self.approval,
                     self.now_ms(),
                 );
+                // ★ 이전 승인 연장(M4-10c · 08-18 사용자 요청) — `.part`는 **수락된**
+                //   수신에서만 남는다(take_partials가 accepted만 회수). 즉 매치 =
+                //   "이 파일은 이미 승인했었다"의 증거 → 승인 창을 다시 묻지 않고
+                //   이어받는다. 차단·미검증(Deny)은 그대로 거절(우회 아님).
+                if !matches!(verdict, OfferVerdict::Deny(_)) {
+                    if let Some(prefix) = self.load_resume(peer, &sha256, size) {
+                        let pct = prefix.len() as u64 * 100 / size.max(1);
+                        self.send_xfer_decision(peer, id, true, RejectWhy::Declined, Some(prefix));
+                        self.set_status(format!("이어받기 — {name} {pct}%부터 (이전 승인 연장)"));
+                        self.push_xfer_line(peer, false, &name, size); // 재활성화 우선
+                        self.redraw_conversation(peer);
+                        if let Some(mid) = self.main_id {
+                            self.request_redraw(mid);
+                        }
+                        return;
+                    }
+                }
                 match verdict {
                     OfferVerdict::Accept => {
                         let resume = self.load_resume(peer, &sha256, size);
@@ -9709,6 +9751,14 @@ impl ApplicationHandler<AppEvent> for App {
     }
 
     fn exiting(&mut self, _el: &ActiveEventLoop) {
+        // 부분 수신물 보존(M4-10a — 수신자 정상 종료 경로): 대화 채널을 끊으면
+        // 액터가 Disconnected를 보고 부분물을 봉인 보존한 뒤 끝난다 — 그 완주를
+        // 기다린다(액터 감지 지연 ≤ 수신 폴 100ms · 죽은 핸들 join은 즉시).
+        // 강제 종료(kill)는 어쩔 수 없다 — 그 경우 발신자 재-Offer는 0부터.
+        self.conversations.clear();
+        for j in self.actor_joins.drain(..) {
+            let _ = j.join();
+        }
         // 상태 로그 flush(M3-22 — 종료 훅: 마지막 줄까지 디스크에).
         if let Some(l) = self.statuslog.take() {
             l.stop();
@@ -11109,6 +11159,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         peer_profile_fp: HashMap::new(),
         resumed_recv: HashMap::new(),
         statuslog: None,
+        actor_joins: Vec::new(),
         wire_gen: 0,
         wire_pending: false,
         wire_pending_ms: 0,

@@ -244,6 +244,31 @@ pub fn update_xfer_in(lines: &mut [ChatLine], mine: bool, state: XferLineState) 
     false
 }
 
+/// 같은 파일의 **미종결 전송 항목 재활성화**(M4-10c · 08-18 — 재-Offer는 같은
+/// 전송의 연속이라 스레드에 항목을 **하나로 유지**한다): 방향·이름·크기가 같고
+/// 상태가 미종결(Waiting/Active)인 항목을 `Waiting`(승인 대기)으로 되돌린다.
+/// 있었으면 `true`(호출자는 새 항목을 추가하지 않는다).
+pub fn reactivate_xfer_in(lines: &mut [ChatLine], mine: bool, name: &str, size: u64) -> bool {
+    for line in lines.iter_mut().rev() {
+        if line.mine != mine {
+            continue;
+        }
+        if let ChatBody::Xfer(x) = &mut line.body {
+            if x.name.as_str() == name
+                && x.size == size
+                && matches!(
+                    x.state,
+                    XferLineState::Waiting | XferLineState::Active { .. }
+                )
+            {
+                x.state = XferLineState::Waiting;
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// `lines`에서 **가장 오래된 확인 대기 항목**(`AwaitingAck` · 방향 일치)을 종결 상태로
 /// 닫는다(M4-9 — 수신 ack `Received`→완료 · `Failed`→실패). 갱신했으면 `true`.
 pub fn update_xfer_ack(lines: &mut [ChatLine], mine: bool, terminal: XferLineState) -> bool {
@@ -534,6 +559,22 @@ impl ChatViewWidget {
         self.lines.push(line);
         self.scroll = 0; // 새 메시지 = 최신으로 스냅(표준 채팅 동작)
         inv.push(self.bounds);
+    }
+
+    /// 같은 파일 미종결 항목 재활성화(M4-10c — [`reactivate_xfer_in`]의 위젯판).
+    pub fn reactivate_xfer(
+        &mut self,
+        mine: bool,
+        name: &str,
+        size: u64,
+        inv: &mut Invalidations,
+    ) -> bool {
+        let hit = reactivate_xfer_in(&mut self.lines, mine, name, size);
+        if hit {
+            self.scroll = 0; // 되살아난 항목이 보이게 최신으로
+            inv.push(self.bounds);
+        }
+        hit
     }
 
     /// 가장 오래된 미종결 전송 항목(방향 일치)의 상태를 갱신한다([`update_xfer_in`]).
