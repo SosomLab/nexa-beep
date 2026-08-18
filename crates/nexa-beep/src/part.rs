@@ -18,6 +18,18 @@
 use nbeep_core::{xfer::PartialXfer, PeerId};
 use std::path::PathBuf;
 
+/// 재개 후보 **조회 키**(08-18 지연 해시 개정) — Offer의 sha가 0(지연)이라
+/// 전체 해시로 부분물을 찾을 수 없다. 키 = sha256(name ‖ size ‖ sender):
+/// 결정적 식별자일 뿐이고, **진위는 발신측 prefix 해시 대조**(M4-10b)가
+/// 가른다(어긋나면 0부터 — 키 충돌·사칭이 손상으로 이어질 수 없다).
+pub(crate) fn resume_key(name: &str, size: u64, sender: PeerId) -> [u8; 32] {
+    let mut buf = Vec::with_capacity(name.len() + 8 + 32);
+    buf.extend_from_slice(name.as_bytes());
+    buf.extend_from_slice(&size.to_le_bytes());
+    buf.extend_from_slice(sender.as_bytes());
+    nbeep_crypto::sha256(&buf)
+}
+
 /// 봉인 도메인(도메인 분리 — 다른 파일 종류와 바꿔치기 차단).
 const SEAL_PART: &[u8] = b"xfer-part-v1";
 /// 내부 배치 버전.
@@ -58,7 +70,8 @@ pub(crate) fn save_partial(channel: &str, secret: &[u8; 32], sender: PeerId, p: 
     if std::fs::create_dir_all(&dir).is_err() {
         return;
     }
-    let _ = std::fs::write(dir.join(format!("{}.part", hex(&p.sha256))), sealed);
+    let key = resume_key(&String::from_utf8_lossy(&p.name), p.size, sender);
+    let _ = std::fs::write(dir.join(format!("{}.part", hex(&key))), sealed);
 }
 
 /// 재개 후보 조회 — 같은 sha의 부분물이 있고 **선언 크기가 같으며** 아직
@@ -170,21 +183,18 @@ mod tests {
         let secret = [9u8; 32];
         let sender = PeerId::from_bytes([2u8; 32]);
         save_partial(&ch, &secret, sender, &part(5, 100, 40));
+        let key = resume_key("f.bin", 100, sender);
         assert_eq!(
-            load_partial(&ch, &secret, &[5u8; 32], 100).as_deref(),
+            load_partial(&ch, &secret, &key, 100).as_deref(),
             Some(vec![0xAB; 40].as_slice()),
-            "같은 sha+size = 보존 바이트"
+            "같은 (이름·크기·발신자) 키 = 보존 바이트"
         );
-        // 다른 크기 선언 = 같은 파일이 아니다 — 폐기되고 다음 조회도 없음.
+        // 다른 크기 선언 = 다른 키 = 미스(같은 키에 다른 size 내부 불일치도 폐기).
         save_partial(&ch, &secret, sender, &part(6, 100, 40));
-        assert!(load_partial(&ch, &secret, &[6u8; 32], 200).is_none());
-        assert!(
-            load_partial(&ch, &secret, &[6u8; 32], 100).is_none(),
-            "불일치 발견 시점에 폐기됐어야 한다"
-        );
+        assert!(load_partial(&ch, &secret, &resume_key("f.bin", 200, sender), 200).is_none());
         // 다른 신원(secret) = 개봉 불가(fail-closed) — 파일도 폐기.
         save_partial(&ch, &secret, sender, &part(7, 100, 40));
-        assert!(load_partial(&ch, &[1u8; 32], &[7u8; 32], 100).is_none());
+        assert!(load_partial(&ch, &[1u8; 32], &key, 100).is_none());
         let _ = std::fs::remove_dir_all(crate::gate::quarantine_root(&ch));
     }
 
@@ -193,14 +203,11 @@ mod tests {
     fn remove_partial_deletes() {
         let ch = format!("t-partrm-{}", std::process::id());
         let secret = [9u8; 32];
-        save_partial(
-            &ch,
-            &secret,
-            PeerId::from_bytes([2u8; 32]),
-            &part(8, 50, 10),
-        );
-        remove_partial(&ch, &[8u8; 32]);
-        assert!(load_partial(&ch, &secret, &[8u8; 32], 50).is_none());
+        let sender = PeerId::from_bytes([2u8; 32]);
+        save_partial(&ch, &secret, sender, &part(8, 50, 10));
+        let key = resume_key("f.bin", 50, sender);
+        remove_partial(&ch, &key);
+        assert!(load_partial(&ch, &secret, &key, 50).is_none());
         let _ = std::fs::remove_dir_all(crate::gate::quarantine_root(&ch));
     }
 }

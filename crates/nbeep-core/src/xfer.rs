@@ -120,10 +120,14 @@ pub enum XferMsg {
         /// 데이터(≤ [`MAX_CHUNK`]).
         data: Vec<u8>,
     },
-    /// 발신 완료 선언.
+    /// 발신 완료 선언 — **최종 해시 동봉**(08-18 지연 해시: Offer의 sha가 0이면
+    /// 여기 실린 해시가 선언이다. 발신이 전송하며 증분 계산 — 오퍼 전 전체
+    /// 해시(1.5GB ≈ 2~3초)가 사라져 수신 확인 창이 즉시 뜬다).
     Done {
         /// 전송 id.
         id: XferId,
+        /// 원본 전체 SHA-256(0 = 구버전/기송신 Offer 선언 사용).
+        sha256: [u8; 32],
     },
     /// 취소(양쪽 어디서든).
     Cancel {
@@ -235,9 +239,10 @@ impl XferMsg {
                 out.extend_from_slice(&offset.to_le_bytes());
                 out.extend_from_slice(data);
             }
-            Self::Done { id } => {
+            Self::Done { id, sha256 } => {
                 out.push(K_DONE);
                 out.extend_from_slice(id);
+                out.extend_from_slice(sha256); // 구버전 수신자는 꼬리 무시(전방 호환)
             }
             Self::Cancel { id } => {
                 out.push(K_CANCEL);
@@ -332,7 +337,13 @@ impl XferMsg {
                 }
                 Self::Chunk { id, offset, data }
             }
-            K_DONE => Self::Done { id },
+            K_DONE => {
+                let mut sha256 = [0u8; 32];
+                if rest.len() >= 32 {
+                    sha256.copy_from_slice(&rest[..32]);
+                }
+                Self::Done { id, sha256 }
+            }
             K_CANCEL => Self::Cancel { id },
             K_RECEIVED => Self::Received { id },
             K_FAILED => Self::Failed { id },
@@ -686,7 +697,10 @@ mod tests {
                 offset: 0,
                 data: vec![1, 2, 3],
             },
-            XferMsg::Done { id: xid(1) },
+            XferMsg::Done {
+                id: xid(1),
+                sha256: [5u8; 32],
+            },
             XferMsg::Cancel { id: xid(1) },
             XferMsg::Received { id: xid(1) },
             XferMsg::Failed { id: xid(1) },

@@ -133,6 +133,8 @@ enum AppEvent {
     XferFailed { peer: PeerId, why: String },
     /// 상대가 **수락**했다 — 대기 창을 닫고 스트리밍이 시작된다.
     XferAccepted { peer: PeerId },
+    /// 격리함 스캔 완료(08-18 — 워커 · gen 불일치 = 낡은 결과 폐기).
+    QuarantineScanned { gen: u64, rows: Vec<QRowRaw> },
     /// 상대의 수신 파일 상한 공지 도착(08-18 — 해시 전 차단의 근거).
     PeerRecvCap { peer: PeerId, cap: u64 },
     /// 해시 진행(08-18 — 대용량 준비가 "무반응"으로 보이지 않게 · pct 0~100).
@@ -347,6 +349,18 @@ impl std::fmt::Debug for InboundSession {
 
 /// 확대 미리보기 상태(08-16) — 격리물 경로가 키. 디코드는 워커(imgdec 격리 ·
 /// 16MiB 미리보기 상한(08-16 상향) — 초과·손상은 Failed 안내).
+/// 격리함 스캔 원시 행(08-18 — 워커 산출물 · 표시 가공은 메인이).
+#[derive(Clone, Debug)]
+struct QRowRaw {
+    path: String,
+    name: String,
+    size: u64,
+    risk: nbeep_core::RiskLevel,
+    mismatch: bool,
+    sender: PeerId,
+    received_at: u64,
+}
+
 struct ImageViewState {
     qpath: String,
     img: ImgLoad,
@@ -469,6 +483,12 @@ struct ActiveSend {
     id: nbeep_core::XferId,
     /// 열린 원본 파일(08-18 스트리밍) — 청크는 오프셋에서 직접 읽는다(메모리 O(청크)).
     file: std::fs::File,
+    /// 전송하며 쌓는 전체 해시(08-18 지연 선언) — Done에 동봉된다.
+    hasher: nbeep_crypto::Sha256Stream,
+    /// 원본 경로·시작 시점 mtime(08-18 — **전송 중 원본 변경 가드**): 지연
+    /// 선언은 "읽힌 그대로"의 해시라, 도중에 파일이 바뀌면 찢어진 내용이
+    /// '무결'로 통과할 수 있다. Done 직전 mtime이 다르면 중단한다.
+    src: (std::path::PathBuf, Option<std::time::SystemTime>),
     /// 다음 보낼 오프셋(bytes).
     next: u64,
     total: u64,
@@ -767,6 +787,7 @@ fn spawn_session_actor(
                                 break;
                             }
                         }
+                        st.hasher.update(&data); // 지연 선언 해시(순차 보장)
                         let chunk = XferMsg::Chunk {
                             id: st.id,
                             offset: off,
@@ -800,9 +821,22 @@ fn spawn_session_actor(
                         let dur = xfer_now_ms().saturating_sub(st.started_ms).max(1);
                         // 재개면 이번 세션에 보낸 분량 기준(M4-10b — total로 나누면 과대).
                         let avg_bps = st.total.saturating_sub(st.from).saturating_mul(1000) / dur;
-                        sending = None;
+                        let st_own = sending.take().expect("done 판정 직후");
+                        // 전송 중 원본 변경 가드 — 바뀌었으면 찢어진 파일이다(중단).
+                        let mtime_now = std::fs::metadata(&st_own.src.0)
+                            .ok()
+                            .and_then(|m| m.modified().ok());
+                        if mtime_now != st_own.src.1 {
+                            let _ = session.send(StreamId::File, &XferMsg::Cancel { id }.encode());
+                            let _ = proxy.send_event(AppEvent::XferFailed {
+                                peer,
+                                why: "전송 중 원본이 변경되어 중단했습니다".into(),
+                            });
+                            continue;
+                        }
+                        let sha256 = st_own.hasher.finalize(); // 지연 선언(08-18)
                         if session
-                            .send(StreamId::File, &XferMsg::Done { id }.encode())
+                            .send(StreamId::File, &XferMsg::Done { id, sha256 }.encode())
                             .is_err()
                         {
                             let _ = proxy.send_event(AppEvent::Closed { peer });
@@ -1347,15 +1381,30 @@ fn xfer_step(
                 };
                 // ★ 재개(M4-10b) — 요청 오프셋의 내 원본 프리픽스 해시가 상대의
                 //   보존분 해시와 **일치할 때만** 그 지점부터. 불일치·범위 초과 =
-                //   처음부터(fail-closed — 조용히 이어붙여 손상 파일을 만들지 않는다).
+                //   처음부터(fail-closed). 같은 패스에서 **전체 해시 시딩**도 한다
+                //   (지연 선언 — 검증 해시와 계속 해시가 같은 프리픽스를 읽는다).
+                let mut hasher = nbeep_crypto::Sha256Stream::new();
                 let start = if resume_offset > 0 && resume_offset < total {
-                    use std::io::Seek as _;
-                    let ok = file.rewind().is_ok()
-                        && nbeep_crypto::sha256_reader(&mut file, resume_offset)
-                            .is_some_and(|(h, n)| n == resume_offset && h == prefix_sha);
-                    if ok {
+                    use std::io::{Read as _, Seek as _};
+                    let mut verify = nbeep_crypto::Sha256Stream::new();
+                    let mut left = resume_offset;
+                    let mut buf = vec![0u8; 1024 * 1024];
+                    let mut ok = file.rewind().is_ok();
+                    while ok && left > 0 {
+                        let want = buf.len().min(usize::try_from(left).unwrap_or(buf.len()));
+                        match file.read(&mut buf[..want]) {
+                            Ok(0) | Err(_) => ok = false,
+                            Ok(n) => {
+                                verify.update(&buf[..n]);
+                                hasher.update(&buf[..n]);
+                                left -= n as u64;
+                            }
+                        }
+                    }
+                    if ok && left == 0 && verify.finalize() == prefix_sha {
                         resume_offset
                     } else {
+                        hasher = nbeep_crypto::Sha256Stream::new(); // 0부터 = 새 해시
                         0
                     }
                 } else {
@@ -1366,9 +1415,14 @@ fn xfer_step(
                 //   틱이 조금씩 보낸다(그전엔 이 블로킹 루프 동안 취소 명령도 상대
                 //   Cancel도 못 봤다 — 취소 UX의 구조적 선행).
                 let local = send_rate.target_bps(meter);
+                let mtime0 = std::fs::metadata(&path)
+                    .ok()
+                    .and_then(|m| m.modified().ok());
                 *sending = Some(ActiveSend {
                     id,
                     file,
+                    hasher,
+                    src: (path, mtime0),
                     next: start,
                     from: start,
                     total,
@@ -1415,9 +1469,19 @@ fn xfer_step(
                 Err(e) => fail(format!("수신 오류: {e} — 폐기")),
             }
         }
-        Ok(XferMsg::Done { id }) if canceled.contains(&id) => {} // 취소분 꼬리(08-18)
-        Ok(XferMsg::Done { id }) => match inbox.done(&id) {
-            Ok(got) => {
+        Ok(XferMsg::Done { id, .. }) if canceled.contains(&id) => {} // 취소분 꼬리(08-18)
+        Ok(XferMsg::Done { id, sha256 }) => match inbox.done(&id) {
+            Ok(mut got) => {
+                // 지연 선언(08-18) — Offer가 0이었으면 Done 동봉 해시가 선언이다.
+                // 둘 다 0 = 선언 부재(fail-closed — 검증 없는 수신물은 없다).
+                if got.declared_sha256 == [0u8; 32] {
+                    if sha256 == [0u8; 32] {
+                        let _ = session.send(StreamId::File, &XferMsg::Failed { id }.encode());
+                        fail("무결성 선언 부재 — 폐기".into());
+                        return Ok(());
+                    }
+                    got.declared_sha256 = sha256;
+                }
                 match crate::gate::quarantine_received(&got, peer, crate::gate::CH_GUI, seal_secret)
                 {
                     Ok(q) => {
@@ -1825,6 +1889,10 @@ struct App {
     pending_offers: HashMap<PeerId, VecDeque<PendingOffer>>,
     /// 상대별 발신 대기 파일 큐(다중 드롭 — 한 번에 하나씩 협상한다).
     send_queue: HashMap<PeerId, VecDeque<std::path::PathBuf>>,
+    /// 격리함 스캔 세대·원시 캐시(08-18 — 대용량 개봉을 메인에서 몰아내고,
+    /// 썸네일 도착 재렌더는 캐시로 · RL-15ⓑ 전량 재스캔 제거).
+    qscan_gen: u64,
+    qrows_raw: Vec<QRowRaw>,
     /// 상대가 공지한 수신 파일 상한(08-18) — (상한, 수신 시각 ms). 송신 직전
     /// 신선도(3초) 안이면 질의 생략, 아니면 CapRequest 후 응답·타임아웃에 진행.
     peer_recv_cap: HashMap<PeerId, (u64, u64)>,
@@ -2458,15 +2526,51 @@ impl App {
             }
         }
         self.current_send.insert(peer, path.clone()); // 끊김 대비(M4-10c)
-                                                      // ★ 스트리밍 발신(08-18 — "Unlimited에서 10GB도 무정지"): 전량 fs::read를
-                                                      //   버리고 ① 전체 해시는 **워커 스레드**에서 스트리밍으로(메인 무정지)
-                                                      //   ② 청크는 액터가 파일에서 직접 읽는다(메모리 O(청크)).
-                                                      // 준비 표시(08-18 실기 — 10GB 해시가 수십 초라 "무반응"으로 보였다):
-                                                      // 스레드 항목을 먼저 세우고 상태바로 준비 중임을 알린다.
-                                                      // ★ 상대 수신 상한 확인(08-18 사용자 요청 — "송신 처리 전에 수신 제한
-                                                      //   정보를 확인"): 파일 크기는 메타데이터로 이미 아니(읽기 0), 상한이
-                                                      //   신선(3초 이내 공지)하면 즉시 대조, 아니면 질의를 보내고 응답(또는
-                                                      //   2초 타임아웃 = 구버전 상대)에 이어서 진행한다.
+                                                      // ★ 지연 해시(08-18 — "수신 확인이 2~3초 늦게 뜬다"): 오퍼 전 전체 해시를
+                                                      //   없앤다. Offer sha=0(선언 유예) · 발신이 전송하며 증분 계산해 Done에
+                                                      //   동봉 · 수신은 완료 시 그 값과 대조(무결성 검증 지점 불변 — FR-X-6).
+        let name = path
+            .file_name()
+            .map_or_else(|| "file".to_string(), |n| n.to_string_lossy().into_owned());
+        let mut xid = [0u8; 16];
+        xid.copy_from_slice(&nbeep_crypto::Identity::generate().peer_id().as_bytes()[..16]);
+        let sent = self.conversations.get(&peer).is_some_and(|c| {
+            c.out_tx
+                .send(SessionCmd::OfferFile {
+                    id: xid,
+                    name: name.clone(),
+                    sha: [0u8; 32],
+                    path,
+                    size: fsize,
+                })
+                .is_ok()
+        });
+        if !sent {
+            self.set_status(nbeep_core::t(nbeep_core::Msg::StSessionDropSend));
+            self.send_queue.remove(&peer);
+            self.send_batch.remove(&peer);
+            return;
+        }
+        self.awaiting_accept.insert(peer, xid);
+        self.set_status(nbeep_core::tf(
+            nbeep_core::Msg::StfFileOffer,
+            &[&name, &human_size(fsize)],
+        ));
+        self.push_xfer_line(peer, true, &name, fsize);
+        self.open_send_wait(peer, &name);
+    }
+
+    #[allow(dead_code)]
+    fn dead_prehash_removed(&mut self, peer: PeerId, path: std::path::PathBuf, fsize: u64) {
+        // ★ 스트리밍 발신(08-18 — "Unlimited에서 10GB도 무정지"): 전량 fs::read를
+        //   버리고 ① 전체 해시는 **워커 스레드**에서 스트리밍으로(메인 무정지)
+        //   ② 청크는 액터가 파일에서 직접 읽는다(메모리 O(청크)).
+        // 준비 표시(08-18 실기 — 10GB 해시가 수십 초라 "무반응"으로 보였다):
+        // 스레드 항목을 먼저 세우고 상태바로 준비 중임을 알린다.
+        // ★ 상대 수신 상한 확인(08-18 사용자 요청 — "송신 처리 전에 수신 제한
+        //   정보를 확인"): 파일 크기는 메타데이터로 이미 아니(읽기 0), 상한이
+        //   신선(3초 이내 공지)하면 즉시 대조, 아니면 질의를 보내고 응답(또는
+        //   2초 타임아웃 = 구버전 상대)에 이어서 진행한다.
         let now = self.now_ms();
         let fresh = self
             .peer_recv_cap
@@ -3960,52 +4064,89 @@ impl App {
     /// 격리함 행 적재 — `.beepq`를 읽어 메타를 표시용으로 옮긴다(호스트가 IO 담당).
     /// 썸네일은 **캐시만 본다**(&mut = 미보유분 워커 요청·선점 기록) — 그전엔 행마다
     /// imgdec 자식 프로세스를 동기로 돌려 이미지 N개면 열기가 N배 얼었다(08-13).
+    /// 격리함 재스캔을 **워커로** 요청(08-18 — 실기: 1.5GB 항목 하나에 창이
+    /// "응답 없음": 종전엔 메인이 항목마다 전량 읽기+개봉+이중 읽기+lazy 재봉인
+    /// 쓰기까지 했다). 완료 = `QuarantineScanned`(gen 대조 · 원시 캐시 갱신).
+    fn spawn_quarantine_scan(&mut self) {
+        self.qscan_gen = self.qscan_gen.wrapping_add(1);
+        let gen = self.qscan_gen;
+        let secret = self.identity.wrap_secret();
+        let proxy = self.proxy.clone();
+        std::thread::spawn(move || {
+            use nbeep_safe::{Beepq, QuarantineDir};
+            let rows = (|| -> Vec<QRowRaw> {
+                let Ok(dir) =
+                    QuarantineDir::open(crate::gate::quarantine_root(crate::gate::CH_GUI))
+                else {
+                    return Vec::new();
+                };
+                let Ok(paths) = dir.list() else {
+                    return Vec::new();
+                };
+                paths
+                    .into_iter()
+                    .filter_map(|p| {
+                        // 한 번만 읽는다(종전 이중 읽기 제거) — 개봉·이관도 여기.
+                        let raw = std::fs::read(&p).ok()?;
+                        let sealed_already = nbeep_store::sealed::is_sealed(&raw);
+                        let bytes = if sealed_already {
+                            nbeep_store::sealed::open(crate::gate::SEAL_QUARANTINE, &secret, &raw)?
+                        } else {
+                            raw
+                        };
+                        if !sealed_already {
+                            // 구본(평문) lazy 이관 — 워커라 커도 무해.
+                            if let Ok(sealed) = nbeep_store::sealed::seal(
+                                crate::gate::SEAL_QUARANTINE,
+                                &secret,
+                                &bytes,
+                            ) {
+                                let _ = std::fs::write(&p, sealed);
+                            }
+                        }
+                        let bq = Beepq::open(&bytes).ok()?;
+                        let mismatch = bq.meta.detected_kind != "unknown"
+                            && !bq.meta.declared_ext.is_empty()
+                            && !bq.meta.detected_kind.contains(&bq.meta.declared_ext);
+                        Some(QRowRaw {
+                            path: p.to_string_lossy().into_owned(),
+                            name: String::from_utf8_lossy(&bq.meta.orig_name).into_owned(),
+                            size: bq.original_size,
+                            risk: bq.meta.risk,
+                            mismatch,
+                            sender: bq.meta.sender,
+                            received_at: bq.meta.received_at,
+                        })
+                    })
+                    .collect()
+            })();
+            let _ = proxy.send_event(AppEvent::QuarantineScanned { gen, rows });
+        });
+    }
+
+    /// 원시 캐시 → 표시 행(값싼 가공만 — 이름 조회·시각 라벨·썸네일 캐시).
     fn quarantine_rows(&mut self) -> Vec<nbeep_ui::QRow> {
         use nbeep_core::TrustStore as _;
-        use nbeep_safe::{Beepq, QuarantineDir};
-        let Ok(dir) = QuarantineDir::open(crate::gate::quarantine_root(crate::gate::CH_GUI)) else {
-            return Vec::new();
-        };
-        let Ok(paths) = dir.list() else {
-            return Vec::new();
-        };
         let secret = self.identity.wrap_secret();
-        paths
-            .into_iter()
-            .filter_map(|p| {
-                let bytes = crate::gate::read_beepq_bytes(&p, &secret)?;
-                // 구본(평문) 이관 — 여기서 lazy 재봉인(다음 열람부턴 봉인본).
-                // 실패는 조용히 두지 않는다(다음 로드가 재시도).
-                if !nbeep_store::sealed::is_sealed(&std::fs::read(&p).ok()?) {
-                    if let Ok(sealed) =
-                        nbeep_store::sealed::seal(crate::gate::SEAL_QUARANTINE, &secret, &bytes)
-                    {
-                        let _ = std::fs::write(&p, sealed);
-                    }
-                }
-                let bq = Beepq::open(&bytes).ok()?;
-                // 표시용 불일치 경고 — 저장 시점 판정을 다시 계산하지 않고
-                // 메타(선언 확장자 vs 매직 형식)만 대조한다.
-                let mismatch = bq.meta.detected_kind != "unknown"
-                    && !bq.meta.declared_ext.is_empty()
-                    && !bq.meta.detected_kind.contains(&bq.meta.declared_ext);
-                // 출처 — 보낸 사람(목록에 있으면 이름, 없으면 지문)과 수신 시각.
+        let raws = self.qrows_raw.clone();
+        raws.into_iter()
+            .map(|r| {
                 let from = self
                     .table
                     .list()
                     .into_iter()
-                    .find(|e| e.peer == bq.meta.sender)
+                    .find(|e| e.peer == r.sender)
                     .map_or_else(
-                        || bq.meta.sender.short(),
-                        |e| format!("{} ({})", e.name.as_str(), bq.meta.sender.short()),
+                        || r.sender.short(),
+                        |e| format!("{} ({})", e.name.as_str(), r.sender.short()),
                     );
-                let age = unix_now().saturating_sub(bq.meta.received_at);
+                let age = unix_now().saturating_sub(r.received_at);
                 let when = if age >= 86_400 {
                     nbeep_core::tf(nbeep_core::Msg::AgoDays, &[&(age / 86_400).to_string()])
                 } else {
-                    nbeep_plat::clock::local_hms(bq.meta.received_at).hms()
+                    nbeep_plat::clock::local_hms(r.received_at).hms()
                 };
-                let path_s = p.to_string_lossy().into_owned();
+                let path_s = r.path.clone();
                 // 이미지 미리보기(M4-5ⓑ) — 캐시 조회. 미보유면 `None` 선점 기록 후
                 // 워커 요청(중복 요청·실패 재시도 방지 겸용) → `Decoded(QThumb)`가
                 // 캐시를 채우고 행을 다시 그린다(팝인). 이미지가 아니면 조용히 없음.
@@ -4028,17 +4169,17 @@ impl App {
                         None
                     }
                 };
-                Some(nbeep_ui::QRow {
-                    name: String::from_utf8_lossy(&bq.meta.orig_name).into_owned(),
-                    risk: bq.meta.risk,
-                    mismatch,
-                    size: bq.original_size,
-                    trust: self.trust.level(bq.meta.sender),
+                nbeep_ui::QRow {
+                    name: r.name,
+                    risk: r.risk,
+                    mismatch: r.mismatch,
+                    size: r.size,
+                    trust: self.trust.level(r.sender),
                     from,
                     when,
                     thumb,
                     path: path_s,
-                })
+                }
             })
             .collect()
     }
@@ -4077,10 +4218,13 @@ impl App {
                 scale,
             },
         );
+        // 캐시로 즉시 열고(빈 캐시면 빈 목록) 워커 스캔이 채운다(08-18 —
+        // 대용량 항목 개봉이 메인을 얼리던 것 · 완료 = QuarantineScanned).
         let rows = self.quarantine_rows();
         self.quarantine_view = Some(nbeep_ui::QuarantineWidget::new(rows));
         self.layout_window(id);
         self.request_redraw(id);
+        self.spawn_quarantine_scan();
     }
 
     /// 격리함 결정 실행 — 승인 = 실체화(해시 재검증·OS 표식), 삭제 = `.beepq` 제거.
@@ -4171,6 +4315,11 @@ impl App {
                 });
             }
         }
+        // 액션이 디스크를 바꿨다 — 사라진 경로만 캐시에서 즉시 걷어내고
+        // (값싼 exists 검사) 진실은 워커 재스캔이 맞춘다.
+        self.qrows_raw
+            .retain(|r| std::path::Path::new(&r.path).is_file());
+        self.spawn_quarantine_scan();
         let rows = self.quarantine_rows();
         let msg = self.status.clone();
         if let Some(v) = &mut self.quarantine_view {
@@ -9081,6 +9230,7 @@ impl ApplicationHandler<AppEvent> for App {
                 size,
                 sha256,
             } => {
+                let _ = sha256; // 지연 해시(08-18) — Offer 선언은 0, 검증은 Done에서
                 use nbeep_core::{
                     judge_offer, DenyReason, OfferVerdict, RejectWhy, TrustStore as _,
                 };
@@ -9097,8 +9247,9 @@ impl ApplicationHandler<AppEvent> for App {
                 //   수신에서만 남는다(take_partials가 accepted만 회수). 즉 매치 =
                 //   "이 파일은 이미 승인했었다"의 증거 → 승인 창을 다시 묻지 않고
                 //   이어받는다. 차단·미검증(Deny)은 그대로 거절(우회 아님).
+                let rkey = crate::part::resume_key(&name, size, peer); // 지연 해시 — 키 기반
                 if !matches!(verdict, OfferVerdict::Deny(_)) {
-                    if let Some(prefix) = self.load_resume(peer, &sha256, size) {
+                    if let Some(prefix) = self.load_resume(peer, &rkey, size) {
                         let pct = prefix.len() as u64 * 100 / size.max(1);
                         self.send_xfer_decision(peer, id, true, RejectWhy::Declined, Some(prefix));
                         self.set_status(nbeep_core::tf(
@@ -9115,7 +9266,7 @@ impl ApplicationHandler<AppEvent> for App {
                 }
                 match verdict {
                     OfferVerdict::Accept => {
-                        let resume = self.load_resume(peer, &sha256, size);
+                        let resume = self.load_resume(peer, &rkey, size);
                         self.send_xfer_decision(peer, id, true, RejectWhy::Declined, resume);
                         self.set_status(nbeep_core::tf(
                             nbeep_core::Msg::StfAutoAcceptRecv,
@@ -9142,7 +9293,7 @@ impl ApplicationHandler<AppEvent> for App {
                         // 스레드에 수신 항목(승인 대기) — 거절하면 이 항목이 실패로 남는다.
                         self.push_xfer_line(peer, false, &name, size);
                         let q = self.pending_offers.entry(peer).or_default();
-                        q.push_back((id, name.clone(), size, sha256));
+                        q.push_back((id, name.clone(), size, rkey));
                         let n = q.len();
                         // 승인 화면을 띄운다(이미 떠 있으면 그대로 — 큐에서 차례로 처리).
                         if !self.approve_view.contains_key(&peer) {
@@ -9286,6 +9437,26 @@ impl ApplicationHandler<AppEvent> for App {
                 self.set_xfer_line(peer, true, nbeep_ui::XferLineState::Active { done: 0 });
                 self.set_status(nbeep_core::t(nbeep_core::Msg::StPeerAccepted));
                 self.redraw_conversation(peer);
+            }
+            AppEvent::QuarantineScanned { gen, rows } => {
+                if gen != self.qscan_gen {
+                    return; // 낡은 스캔 — 그 사이 재요청됨
+                }
+                self.qrows_raw = rows;
+                let rows = self.quarantine_rows();
+                let mut inv = Invalidations::default();
+                if let Some(qv) = &mut self.quarantine_view {
+                    qv.set_rows(rows, &mut inv);
+                }
+                if let Some((qid, _)) = self
+                    .windows
+                    .iter()
+                    .find(|(_, e)| e.role == Role::Quarantine)
+                {
+                    let qid = *qid;
+                    self.layout_window(qid);
+                    self.request_redraw(qid);
+                }
             }
             AppEvent::PeerRecvCap { peer, cap } => {
                 // 상한 공지·질의 응답(08-18) — 캐시 갱신 후, 질의를 기다리던
@@ -11414,6 +11585,8 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         face_mono: None,
         pending_offers: HashMap::new(),
         send_queue: HashMap::new(),
+        qscan_gen: 0,
+        qrows_raw: Vec::new(),
         peer_recv_cap: HashMap::new(),
         cap_req_deadline: HashMap::new(),
         preparing_send: std::collections::HashSet::new(),

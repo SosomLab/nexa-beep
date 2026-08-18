@@ -610,7 +610,14 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
                             }
                             batch.0 += 1;
                             batch.2 += total;
-                            let _ = mux.send(StreamId::File, &XferMsg::Done { id }.encode());
+                            let _ = mux.send(
+                                StreamId::File,
+                                &XferMsg::Done {
+                                    id,
+                                    sha256: [0u8; 32], // CLI는 Offer에 실선언(구경로)
+                                }
+                                .encode(),
+                            );
                             // ★ 전송 끝 ≠ 완료(M4-9) — 상대의 Received 확인 전까지는 확인 대기.
                             println!(
                                 "[파일] 전달됨 {} / {} ({}/{}) — 상대 확인 대기",
@@ -645,7 +652,7 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
                             }
                         }
                     }
-                    Ok(XferMsg::Done { id }) => match inbox.done(&id) {
+                    Ok(XferMsg::Done { id, .. }) => match inbox.done(&id) {
                         Ok(got) => {
                             pending_in = None;
                             let ok = receive_into_quarantine(&got, peer);
