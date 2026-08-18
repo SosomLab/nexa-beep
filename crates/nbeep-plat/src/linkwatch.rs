@@ -102,7 +102,22 @@ mod imp {
                 let mut buf = [0u8; 4096];
                 loop {
                     let n = libc::read(fd, buf.as_mut_ptr().cast(), buf.len());
-                    if n <= 0 || tx.send(()).is_err() {
+                    if n <= 0 {
+                        libc::close(fd);
+                        return;
+                    }
+                    // 타입 필터(RL-4 · 08-18) — mac PF_ROUTE 필터와 **플랫폼 대칭**.
+                    // 무파싱 감시는 자기 행동(재조인 등)을 다시 듣는다(08-16 mac
+                    // 1초 루프 실증). nlmsghdr.nlmsg_type(offset 4)만 보고 내용은
+                    // 여전히 읽지 않는다(봉투 원리) — 링크 상태·주소 변화만 통과.
+                    let relevant = n as usize >= 6 && {
+                        let t = u16::from_ne_bytes([buf[4], buf[5]]);
+                        t == libc::RTM_NEWLINK
+                            || t == libc::RTM_DELLINK
+                            || t == libc::RTM_NEWADDR
+                            || t == libc::RTM_DELADDR
+                    };
+                    if relevant && tx.send(()).is_err() {
                         libc::close(fd);
                         return;
                     }

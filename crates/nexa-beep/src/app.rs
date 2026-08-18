@@ -1583,12 +1583,19 @@ struct App {
     profile_view: Option<nbeep_ui::ProfileWidget>,
     /// 상대 프로필(M3-17 — 세션 경유 수신 · 목록·제목 표시 우선).
     peer_profiles: HashMap<PeerId, PeerProfile>,
+    /// 마지막으로 **적용한** 프로필 수신 내용의 지문(RL-1 · 08-18) — 동일 내용
+    /// 재수신이면 하류 전부(사진 재봉인·imgdec 자식·trust 재암호화·목록 재조립)를
+    /// 건너뛴다. 08-16 수정은 트리거 빈도만 낮췄고, 비용 측은 이 한 겹이 막는다.
+    peer_profile_fp: HashMap<PeerId, u64>,
     /// 와이어 축소본 세대(08-16) — `image_path`가 바뀔 때마다 +1. 워커 완료
     /// 이벤트가 이 값과 다르면 낡은 세대(그 사이 사진이 또 바뀜) — 조용히 폐기.
     wire_gen: u64,
     /// 축소본 워커가 도는 중 — 이 동안 [`Self::push_profile`]을 보류한다(2단계
     /// 깜빡임 방지 · 08-16 실기: 상대가 "옛 내장 그림 → 실사진" 순서로 봤다).
     wire_pending: bool,
+    /// [`Self::wire_pending`]이 선 시각(RL-11 watchdog 기준점 — 15초 무응답이면
+    /// 래치를 풀고 사진 없이 전파한다 · 유실 = 전파 영구 침묵 방지).
+    wire_pending_ms: u64,
     /// 내장 12간지 아바타(키 → 그림 · 08-14) — 기동 시 1회 해석(NBAV1 fail-soft).
     builtin_avatars: HashMap<String, Rc<nbeep_ui::IconImage>>,
     /// 내 사진(imgdec 디코드 완료본 · 08-14) — 툴바 프로필 버튼·프로필 프리뷰 공용.
@@ -2542,6 +2549,23 @@ impl App {
         sent
     }
 
+    /// 진행률 반영의 **청크 주기판**(RL-6 · 08-18) — 대화 위젯(배너·진행 바)은
+    /// 즉시, **목록 재조립은 주기 스로틀**에 태운다. 종전엔 32KiB 청크마다
+    /// `refresh_rows` 직행 = 발견 경로가 일부러 건 `ui.list_refresh_ms`(1500ms)
+    /// 스로틀 우회(100MB 파일 = 3,200회 전 피어 순회+2중 정렬 — 최대 CPU 낭비).
+    /// dirty만 세우면 주기 도래 시 발견 폴이 한 번에 반영한다(같은 깔때기).
+    fn apply_xfer_view_throttled(&mut self, peer: PeerId) {
+        let xp = self.xfer_progress.get(&peer).copied();
+        let mut inv = Invalidations::default();
+        if let Some(chat) = self.chats.get_mut(&peer) {
+            chat.set_xfer(xp, &mut inv);
+        }
+        self.rows_dirty = true;
+        if self.now_ms().saturating_sub(self.last_rows_ms) >= self.list_refresh_ms {
+            self.refresh_rows(&mut inv);
+        }
+    }
+
     /// 진행률을 위젯에 반영(목록 행 + 열려 있는 대화창).
     fn apply_xfer_view(&mut self, peer: PeerId) {
         let xp = self.xfer_progress.get(&peer).copied();
@@ -2748,23 +2772,59 @@ impl App {
                 DiscoveryEvent::Appeared(hint) => {
                     // 최근 접속 관측(08-15 — 아는 상대만 · 60초 스로틀 영속).
                     self.trust.note_seen(hint.peer, unix_now_ms());
-                    self.table
-                        .observe(hint.peer, hint.name, nbeep_core::SourceId(0), now);
+                    // 무변화 관측(생존 비컨)은 재조립 사유가 아니다(RL-16ⓑ ·
+                    // 08-18) — observe의 None을 버리고 무조건 dirty를 세우면
+                    // 상대가 광고하는 한 1.5초마다 목록 재조립·재도색이 영구다.
+                    if self
+                        .table
+                        .observe(hint.peer, hint.name, nbeep_core::SourceId(0), now)
+                        .is_some()
+                    {
+                        changed = true;
+                    }
                 }
                 DiscoveryEvent::Vanished(peer) => {
-                    self.table.goodbye(peer, nbeep_core::SourceId(0));
+                    if self.table.goodbye(peer, nbeep_core::SourceId(0)).is_some() {
+                        changed = true;
+                    }
                 }
             }
+        }
+        // 무응답 만료(RL-5 · 08-18) — 정의만 있고 배선이 없어 goodbye 없이 죽은
+        // 상대가 영원히 "발견됨"이었다(→ `ConnectFailed`의 reachable 영구 참 =
+        // 무의미 재연결 사다리 반복). 60초(비컨 800ms의 75배) 무관측 = 이탈.
+        // 항목 수 = LAN 피어 수라 5Hz 순회는 실질 0비용.
+        for ev in self.table.sweep(now) {
             changed = true;
+            let nbeep_core::PeerEvent::Departed(p, _) = ev else {
+                continue;
+            };
+            // 아는 상대(핀·대화·수동 주소)는 **오프라인 행으로 강등해 유지** —
+            // 발견에서 빠졌다고 목록에서 증발하면 "비발견 상대 목록 유지"(08-13
+            // 사용자 확정)가 깨진다. 모르는 상대(스쳐간 발견)만 행이 사라진다.
+            use nbeep_core::TrustStore as _;
+            let known = self.trust.level(p) != nbeep_core::TrustLevel::Unverified
+                || self.conversations.contains_key(&p)
+                || self.manual_addrs.contains_key(&p);
+            if known {
+                let name = self
+                    .peer_profiles
+                    .get(&p)
+                    .and_then(|pr| pr.name.clone())
+                    .unwrap_or_else(|| nbeep_core::default_display_name(None, &p));
+                self.extra_peers.entry(p).or_insert(name);
+            }
         }
         if changed {
             // 즉시 재조립하지 않는다(08-14 사용자 실기 — 800ms 비컨마다 목록이
             // 재조립되며 스크롤이 튀었다). 주기 도래 시 아래에서 한 번에 반영.
             self.rows_dirty = true;
         }
-        if self.rows_dirty
-            && self.now_ms().saturating_sub(self.last_rows_ms) >= self.list_refresh_ms
-        {
+        // 60초 심장박동(RL-16ⓑ의 짝) — 무변화 생략으로 dirty가 안 서도 상대
+        // 시각 라벨("방금/N분")은 분 단위로 늙는다. 느린 강제 재조립 한 번이
+        // 라벨을 신선하게 유지한다(비용 = 분당 1회 — 종전 1.5초마다의 1/40).
+        let since = self.now_ms().saturating_sub(self.last_rows_ms);
+        if (self.rows_dirty && since >= self.list_refresh_ms) || since >= 60_000 {
             let mut inv = Invalidations::default();
             self.refresh_rows(&mut inv);
             if let Some(id) = self.main_id {
@@ -3980,7 +4040,11 @@ impl App {
             if let Some(entry) = nbeep_ui::settings::registry().iter().find(|e| {
                 e.key == k && !matches!(e.kind, nbeep_ui::settings::SettingKind::Action { .. })
             }) {
-                changes.push((entry.key, v));
+                // 동일값 생략(RL-2ⓒ) — do_reset_settings의 필터와 대칭. 없으면
+                // 무변경 복원 1회가 프로필 9벌 push·전 화면 재적용을 냈다.
+                if self.settings.get(entry.key) != v {
+                    changes.push((entry.key, v));
+                }
             } else {
                 self.conf.keep_unknown(k, v);
                 unknown += 1;
@@ -5320,6 +5384,7 @@ impl App {
             return; // 워커가 이미 도는 중(중복 스폰 금지 — 13 §12-1)
         }
         self.wire_pending = true;
+        self.wire_pending_ms = self.now_ms(); // watchdog 기준점(RL-11)
         let gen = self.wire_gen;
         let proxy = self.proxy.clone();
         std::thread::spawn(move || {
@@ -5672,6 +5737,9 @@ impl App {
         if !changes.is_empty() {
             self.conf_mark();
         }
+        // 프로필 push 배치(RL-2ⓑ · 08-18) — 키 단위로 밀면 적용 1회에 N벌
+        // (Full 키 포함 시 256KiB 사진 N회). 루프에서 유형만 모아 끝에 1회.
+        let mut profile_push: Option<ProfileScope> = None;
         for (key, value) in changes {
             // 행위 항목(값 아님 · M2-5a) — 저장에 태우지 않고 피커를 연다(el은
             // about_to_wait에 있다 — pending_approve_window와 같은 패턴).
@@ -6002,8 +6070,15 @@ impl App {
             // 지워진다(철회 대칭). 키별 arm에 재전송을 두지 않는 이유 = 빠뜨린 키가
             // 곧 전파 안 되는 키가 되는 구조였다(이메일 공유 실기 구멍의 원인).
             if let Some(scope) = profile_push_scope(key) {
-                self.push_profile(scope);
+                // Full이 하나라도 있으면 Full(사진 동반) — Info는 그에 포함된다.
+                profile_push = Some(match (profile_push, scope) {
+                    (Some(ProfileScope::Full), _) | (_, ProfileScope::Full) => ProfileScope::Full,
+                    _ => ProfileScope::Info,
+                });
             }
+        }
+        if let Some(scope) = profile_push {
+            self.push_profile(scope); // 배치 1회(RL-2ⓑ)
         }
         if let Some(id) = self.main_id {
             self.request_redraw(id);
@@ -8601,7 +8676,7 @@ impl ApplicationHandler<AppEvent> for App {
                 self.xfer_progress.insert(peer, xp);
                 // 스레드 항목 진행률 — 방향 일치(발신=mine)·현재 파일 누적 바이트.
                 self.set_xfer_line(peer, sending, nbeep_ui::XferLineState::Active { done: got });
-                self.apply_xfer_view(peer);
+                self.apply_xfer_view_throttled(peer); // 목록 재조립은 주기(RL-6)
                 self.redraw_conversation(peer);
                 if let Some(mid) = self.main_id {
                     self.request_redraw(mid);
@@ -8791,6 +8866,9 @@ impl ApplicationHandler<AppEvent> for App {
             AppEvent::Closed { peer } => {
                 self.active_send.remove(&peer);
                 self.active_recv.remove(&peer);
+                // ack 대기 정리(RL-14ⓐ · 08-18) — 상대가 떠났으면 수신 확인은
+                // 영영 안 온다. 남기면 종료 가드가 영구 "확인 대기 N건"이 된다.
+                self.awaiting_ack.remove(&peer);
                 // 세션 채널은 지우되 **스레드는 대피**(DR-26 — 08-13 실기: 끊김·재연결마다
                 // 받았던 메시지가 통째로 사라졌다). 재수립 시 install이 되찾아 간다.
                 if let Some(c) = self.conversations.remove(&peer) {
@@ -8945,6 +9023,35 @@ impl ApplicationHandler<AppEvent> for App {
                 image_keep,
                 bio,
             } => {
+                // ★ RL-1 멱등 가드(08-18) — 같은 내용 재수신은 여기서 끝낸다.
+                //   상대의 재접속·생사 프로브 응답(Full)이 올 때마다 사진 재봉인 +
+                //   imgdec 자식 프로세스 + trust.seg 전체 재암호화 + 목록 재조립이
+                //   전부 다시 돌았다(원조 08-16 증상의 비용 측). 지문은 수신 원문
+                //   기준(적용 결과가 아니라) — 검증·정규화 이전이라 판정이 값싸다.
+                let fp = {
+                    use std::hash::{Hash as _, Hasher as _};
+                    let mut h = std::collections::hash_map::DefaultHasher::new();
+                    (
+                        &name,
+                        &email,
+                        &phone,
+                        &image,
+                        &avatar_key,
+                        &border,
+                        image_keep,
+                        &bio,
+                    )
+                        .hash(&mut h);
+                    h.finish()
+                };
+                if self.peer_profile_fp.get(&peer) == Some(&fp) {
+                    // 수신 사실만 기록(카드의 "N시간 전 수신" — 메모리만·디스크 0).
+                    if let Some(p) = self.peer_profiles.get_mut(&peer) {
+                        p.received_ms = unix_now_ms();
+                    }
+                    return;
+                }
+                self.peer_profile_fp.insert(peer, fp);
                 // 이름은 무해화(DisplayName) 통과분만 채택 · 이력은 신뢰 저장소에도 남긴다.
                 let display = name.and_then(|n| nbeep_core::DisplayName::parse(&n).ok());
                 if let Some(n) = &display {
@@ -9563,6 +9670,20 @@ impl ApplicationHandler<AppEvent> for App {
         // 스크롤바 자동 숨김 틱 — **시각을 넘긴다**(호출 횟수가 아니라 벽시계로 재야
         // 이벤트가 몰리는 드래그 중에도 설정한 시간만큼 보인다 · 08-10).
         let bar_now = self.now_ms();
+        // wire_pending watchdog(RL-11 · 08-18) — 해제가 워커 완료 이벤트 **단일
+        // 경로**라, 유실(워커 패닉·프록시 사망 — 둘 다 무음)이면 이후 모든
+        // push_profile이 조용히 return = 프로필 전파 영구 침묵(M3-21 증상의
+        // 재발 자리). imgdec는 3s kill이라 15s면 정상 경로가 절대 안 걸린다.
+        if self.wire_pending && bar_now.saturating_sub(self.wire_pending_ms) > 15_000 {
+            self.wire_pending = false;
+            // 사진 없이라도 보류분을 내보낸다(텍스트·내장 키는 닿아야 한다 —
+            // WireAvatar 실패 가지와 같은 의미론 · 조용한 생략 금지).
+            self.push_profile(ProfileScope::Full);
+            self.status = "⚠ 사진 축소 응답 없음(15초) — 사진 없이 프로필을 전파했습니다".into();
+            if let Some(id) = self.main_id {
+                self.request_redraw(id);
+            }
+        }
         if let Some(sv) = &mut self.settings_view {
             if sv.tick(bar_now) {
                 if let Some((sid, _)) = self.windows.iter().find(|(_, e)| e.role == Role::Settings)
@@ -9581,6 +9702,29 @@ impl ApplicationHandler<AppEvent> for App {
                 .collect();
             for p in peers {
                 self.redraw_conversation(p);
+            }
+        }
+        // 그룹 대화 스크롤바 페이드 틱(RL-14ⓑ · 08-18) — 1:1(chats)만 틱을 받아
+        // 그룹 방은 자동 숨김이 발화하지 않았다(과다가 아니라 **미실행** 결함).
+        {
+            let gids: Vec<nbeep_core::group::GroupId> = self
+                .gchats
+                .iter_mut()
+                .filter_map(|(g, c)| c.tick(bar_now).then_some(*g))
+                .collect();
+            for g in gids {
+                if let Some((wid, _)) = self
+                    .windows
+                    .iter()
+                    .find(|(_, e)| e.role == Role::GroupChat(g))
+                {
+                    let wid = *wid;
+                    self.request_redraw(wid);
+                } else if self.single_open_group == Some(g) {
+                    if let Some(mid) = self.main_id {
+                        self.request_redraw(mid);
+                    }
+                }
             }
         }
         // 프로필 최근 이미지 툴팁 틱(08-14 — 3초 호버 = 파일명 표시).
@@ -10674,8 +10818,10 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         picker_view: None,
         profile_view: None,
         peer_profiles: HashMap::new(),
+        peer_profile_fp: HashMap::new(),
         wire_gen: 0,
         wire_pending: false,
+        wire_pending_ms: 0,
         builtin_avatars: nbeep_ui::avatar_assets::builtins()
             .into_iter()
             .map(|b| (b.key, Rc::new(b.image)))

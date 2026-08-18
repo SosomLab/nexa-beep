@@ -290,6 +290,9 @@ impl ProfileWidget {
         let Some(val) = self.swatch_values().get(i).cloned() else {
             return;
         };
+        if self.image_path.is_empty() && self.avatar_choice == val {
+            return; // 이미 선택된 스와치 재클릭 = 무변경 — push 없음(RL-2ⓐ)
+        }
         self.avatar_choice = val.clone();
         self.avatar = None; // 사진 미리보기 해제(호스트도 image_path "" 반영)
         if !self.image_path.is_empty() {
@@ -732,7 +735,22 @@ impl Widget for ProfileWidget {
                 } else {
                     v
                 };
-                self.changes.push((key, out));
+                // 무변경 Enter = push 없음(RL-2ⓐ · harvest_texts와 같은 판정 —
+                // 여기만 비교가 없어 Enter 연타가 재공지를 냈다).
+                let orig = match key {
+                    "profile.display_name" => self.orig_name.as_str(),
+                    "profile.email" => self.orig_email.as_str(),
+                    _ => self.orig_phone.as_str(),
+                };
+                let last = self
+                    .changes
+                    .iter()
+                    .rev()
+                    .find(|(k, _)| *k == key)
+                    .map_or(orig, |(_, v)| v.as_str());
+                if out != last {
+                    self.changes.push((key, out));
+                }
             }
             let _ = tbx.take_changed();
         }
@@ -1108,7 +1126,9 @@ mod tests {
         assert!(w.take_changes().is_empty(), "1회성");
     }
 
-    /// 표시 이름 Enter 확정 — 빈 값은 "auto"로 정규화.
+    /// 표시 이름 Enter 확정 — 빈 값은 "auto"로 정규화하되, **무변경 Enter는
+    /// push하지 않는다**(RL-2ⓐ 08-18 — 원값이 이미 auto인데 빈 필드에서 Enter
+    /// 연타 = 재공지 낭비였다).
     #[test]
     fn empty_name_commits_auto() {
         let (mut w, mut inv) = widget();
@@ -1121,8 +1141,60 @@ mod tests {
             &mut inv,
         );
         click_apply(&mut w, &mut inv);
+        assert!(
+            w.take_changes().is_empty(),
+            "원값 auto + 빈 필드 Enter = 무변경 — push 없음(RL-2ⓐ)"
+        );
+        // 원값이 실명("kim")인 위젯 — 필드를 비우고 확정하면 "auto"로 정규화되고,
+        // 이는 원값과 다르므로 **변경으로 보고**된다(정규화 축은 그대로 산다).
+        let mut w = ProfileWidget::new(&ProfileValues {
+            display_name: "kim".into(),
+            ..ProfileValues::default()
+        });
+        w.set_bounds(Rect::new(0, 0, 440, 430), &mut inv);
+        let n = w.name.bounds();
+        w.on_event(
+            &InputEvent::MouseDown {
+                x: n.x + 4,
+                y: n.y + 4,
+                shift: false,
+                primary: false,
+            },
+            &mut inv,
+        );
+        w.on_event(
+            &InputEvent::Key {
+                key: Key::End,
+                shift: false,
+                primary: false,
+            },
+            &mut inv,
+        );
+        for _ in 0..3 {
+            // Backspace는 Char('\u{8}')로 온다(event.rs 규약).
+            w.on_event(
+                &InputEvent::Char {
+                    c: '\u{8}',
+                    now_ms: 0,
+                },
+                &mut inv,
+            );
+        }
+        w.on_event(
+            &InputEvent::Key {
+                key: Key::Enter,
+                shift: false,
+                primary: false,
+            },
+            &mut inv,
+        );
+        click_apply(&mut w, &mut inv);
         let ch = w.take_changes();
-        assert_eq!(ch, vec![("profile.display_name", "auto".to_string())]);
+        assert_eq!(
+            ch.last(),
+            Some(&("profile.display_name", "auto".to_string())),
+            "빈 값 확정 = auto 정규화(원값과 다르므로 보고)"
+        );
     }
 
     /// 08-14 실기 — Choose… 클릭 후 이름 필드를 편집하고 Enter를 치면 **버튼이
@@ -1165,6 +1237,8 @@ mod tests {
             "텍스트박스 클릭 후 버튼 포커스 잔존(포커스 링·Enter 이중 처리의 원인)"
         );
         // Enter = 이름 확정만 — 버튼 클릭(피커 재요청)이 되면 안 된다.
+        // 실제 변경을 만들고 확정한다(RL-2ⓐ — 무변경 Enter는 push가 없다).
+        w.on_event(&InputEvent::Char { c: 'k', now_ms: 0 }, &mut inv);
         w.on_event(
             &InputEvent::Key {
                 key: Key::Enter,

@@ -19,6 +19,11 @@ const MAX_FRAME: usize = 65_535;
 #[derive(Debug)]
 pub struct TcpLink {
     stream: TcpStream,
+    /// 호출자가 건 수신 타임아웃(RL-12 · 08-18) — 본문 읽기의 블로킹 복원 뒤
+    /// **이 값으로 되건다**. 종전엔 고정 200ms로 되걸어, 액터의 1ms(08-16 전송
+    /// 페이싱)가 첫 프레임 수신 즉시 무효화됐다(액터는 값 동일로 오인해 재설정
+    /// 안 함 = 영구 200ms 고착 — 성능 회귀).
+    recv_timeout: Option<Duration>,
 }
 
 impl TcpLink {
@@ -46,14 +51,18 @@ impl TcpLink {
         //   정지 — 전송 86%/80% 동결 실측). 30초면 정상 배압은 절대 안 걸리고,
         //   진짜 교착만 Err → Closed → 백오프 재연결로 **자기 치유**된다.
         stream.set_write_timeout(Some(Duration::from_secs(30)))?;
-        Ok(Self { stream })
+        Ok(Self {
+            stream,
+            recv_timeout: None,
+        })
     }
 
     /// 수신 펌프 모드 — `timeout`마다 [`LinkError::TimedOut`]으로 돌아온다(송신 폴링과 교대).
     ///
     /// # Errors
     /// 소켓 옵션 설정 실패 시 `io::Error`.
-    pub fn set_poll_mode(&self, timeout: Duration) -> std::io::Result<()> {
+    pub fn set_poll_mode(&mut self, timeout: Duration) -> std::io::Result<()> {
+        self.recv_timeout = Some(timeout); // recv 복원 원천과 동기(RL-12)
         self.stream.set_read_timeout(Some(timeout))
     }
 }
@@ -77,6 +86,7 @@ impl Link for TcpLink {
     }
 
     fn set_recv_timeout(&mut self, dur: Option<Duration>) -> Result<(), LinkError> {
+        self.recv_timeout = dur; // recv 본문 복원의 원천(RL-12)
         self.stream
             .set_read_timeout(dur)
             .map_err(|_| LinkError::Closed)
@@ -105,11 +115,9 @@ impl Link for TcpLink {
             .stream
             .read_exact(&mut buf)
             .map_err(|_| LinkError::Closed);
-        // 폴링 모드였다면 복원은 호출자가 set_poll_mode로 다시 건다 — 여기선 단순화를 위해
-        // 본문 읽기 후 타임아웃 해제 상태를 유지하지 않도록 짧게 되건다.
-        let _ = self
-            .stream
-            .set_read_timeout(Some(Duration::from_millis(200)));
+        // 호출자가 건 타임아웃으로 복원(RL-12) — 고정 200ms로 되걸면 액터의
+        // 1ms 페이싱 설정이 첫 프레임 수신 즉시 무효화된다(영구 200ms 고착).
+        let _ = self.stream.set_read_timeout(self.recv_timeout);
         r?;
         Ok(buf)
     }
@@ -136,6 +144,31 @@ mod tests {
         a.send(b"framed hello").unwrap();
         assert_eq!(a.recv().unwrap(), b"framed hello");
         a.send(&vec![7u8; 60_000]).unwrap();
+        t.join().unwrap();
+    }
+
+    /// RL-12(08-18) — 본문 읽기 후 복원이 **호출자 타임아웃**이어야 한다.
+    /// 고정 200ms로 되걸면 액터의 짧은 페이싱 설정(1ms)이 첫 프레임 수신
+    /// 즉시 무효화된다(값 동일 오인으로 재설정도 안 됨 = 영구 고착).
+    #[test]
+    fn recv_restores_caller_timeout_not_fixed_200ms() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let t = std::thread::spawn(move || {
+            let (s, _) = listener.accept().unwrap();
+            let mut link = TcpLink::new(s).unwrap();
+            link.send(b"hi").unwrap();
+            std::thread::sleep(Duration::from_millis(400)); // 판정 동안 연결 유지
+        });
+        let mut a = TcpLink::new(TcpStream::connect(addr).unwrap()).unwrap();
+        a.set_recv_timeout(Some(Duration::from_millis(20))).unwrap();
+        assert_eq!(a.recv().unwrap(), b"hi");
+        let t0 = std::time::Instant::now();
+        assert_eq!(a.recv().err(), Some(LinkError::TimedOut));
+        assert!(
+            t0.elapsed() < Duration::from_millis(150),
+            "20ms 설정이 200ms 고정 복원으로 덮이면 실패"
+        );
         t.join().unwrap();
     }
 
