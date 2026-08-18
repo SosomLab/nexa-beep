@@ -35,7 +35,7 @@ pub struct OfferInfo {
     /// 빈 값 = 표시 없음). 실기에서 "자동인데 왜 묻지?"가 버그로 오인됐다.
     pub downgrade_note: String,
     /// 이어받기 보존율(M4-10c · 0~100) — Some이면 승인이 2택이 된다:
-    /// [이어받기 N%](기본) · [처음부터]. None = 종전 단일 승인.
+    /// `[이어받기 N%]`(기본) · `[처음부터]`. None = 종전 단일 승인.
     pub resume_pct: Option<u8>,
 }
 

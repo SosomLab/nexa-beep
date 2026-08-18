@@ -7,7 +7,7 @@
 //!
 //! 형식: `"NBSE"` ‖ ver(1) ‖ salt(16) ‖ nonce(12) ‖ ct(+tag16)
 //! 키: SHA-256("nexa-beep/adr-0005/sealed-v1" ‖ domain ‖ salt ‖ wrap_secret)
-//! (wrap_secret = 신원 키 파생 [`Identity::wrap_secret`] — D-18 §3 확정 계층.)
+//! (wrap_secret = 신원 키 파생 `Identity::wrap_secret` — D-18 §3 확정 계층.)
 //!
 //! 실패는 전부 **None/Err = fail-closed** — 손상·바꿔치기·다른 신원의 파일은
 //! 평문인 척 통과하지 않는다. 구본(봉인 전 평문) 판정은 [`is_sealed`]가 맡고,

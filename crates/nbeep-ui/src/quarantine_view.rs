@@ -103,6 +103,8 @@ pub struct QuarantineWidget {
     bounds: Rect,
     scale: f32,
     rows: Vec<QRow>,
+    /// 워커 스캔 진행 중(08-18) — 빈 목록의 "불러오는 중…" 표기.
+    loading: bool,
     sel: usize,
     /// 🔴 실행형 2단계 확인 중(고지 → 재확인).
     confirming: bool,
@@ -130,6 +132,7 @@ impl QuarantineWidget {
             bounds: Rect::default(),
             scale: 1.0,
             rows,
+            loading: false,
             sel: 0,
             confirming: false,
             confirming_clear: false,
@@ -160,13 +163,22 @@ impl QuarantineWidget {
         self.done.insert(path.into());
     }
 
-    /// 행 갱신(승인·삭제 후 호스트가 다시 채운다).
+    /// 행 갱신(승인·삭제 후 호스트가 다시 채운다). 스캔 결과 도착 = 로딩 종료.
     pub fn set_rows(&mut self, rows: Vec<QRow>, inv: &mut Invalidations) {
         self.sel = self.sel.min(rows.len().saturating_sub(1));
         self.rows = rows;
+        self.loading = false;
         self.confirming = false;
         self.confirming_clear = false;
         inv.push(self.bounds);
+    }
+
+    /// 스캔 진행 표시(08-18 — 워커 스캔 동안 빈 목록이 오류로 보이지 않게).
+    pub fn set_loading(&mut self, on: bool, inv: &mut Invalidations) {
+        if self.loading != on {
+            self.loading = on;
+            inv.push(self.bounds);
+        }
     }
 
     /// 배율 지정.
@@ -352,7 +364,11 @@ impl Widget for QuarantineWidget {
         ctx.fill_rect(b, theme.panel_bg);
         if self.rows.is_empty() {
             ctx.select_font(FontSlot::Base, false);
-            let msg = t(Msg::QEmpty);
+            let msg = if self.loading {
+                t(Msg::QLoading)
+            } else {
+                t(Msg::QEmpty)
+            };
             let w = ctx.text_width(msg);
             ctx.text(
                 b.x + (b.w - w) / 2,

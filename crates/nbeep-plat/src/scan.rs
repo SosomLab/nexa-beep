@@ -10,7 +10,7 @@
 
 use nbeep_core::{FileScanner, NoScanner, ScanOutcome};
 
-/// 이 OS의 기본 검사기. 지금은 3-OS 전부 [`NoScanner`](`Unavailable`) — Windows
+/// 이 OS의 기본 검사기. 지금은 3-OS 전부 `NoScanner` — Windows
 /// AMSI 어댑터가 들어오면 여기서만 갈린다(호출부 무변경 · DR-21 이음새).
 #[must_use]
 pub fn platform_scanner() -> Box<dyn FileScanner> {

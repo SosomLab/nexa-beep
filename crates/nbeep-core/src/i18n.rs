@@ -487,6 +487,8 @@ pub enum Msg {
     XferTooBigLocal,
     /// 스레드 실패줄 짧은 사유 — `{}` = 상한.
     XferTooBigWhy,
+    /// 격리함 첫 스캔 로딩(08-18 — 대용량 개봉이 수 초라 빈 목록이 오류로 보였다).
+    QLoading,
     /// 상대 수신 상한 차단(스레드 사유) — `{}` = 상한.
     XferPeerCapBlock,
     /// 상대 수신 상한 차단(상태바) — `{}` 파일명 · `{}` 상한.
@@ -862,6 +864,12 @@ impl Msg {
                 " (상대 수신 상한 {})",
                 "（对方接收上限 {}）",
                 "（相手の受信上限 {}）",
+            ],
+            Msg::QLoading => [
+                "Scanning quarantine…",
+                "격리함을 불러오는 중…",
+                "正在扫描隔离区…",
+                "隔離ボックスを読み込み中…",
             ],
             Msg::XferTooBigWhy => [
                 "over cap {}",

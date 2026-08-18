@@ -4221,7 +4221,10 @@ impl App {
         // 캐시로 즉시 열고(빈 캐시면 빈 목록) 워커 스캔이 채운다(08-18 —
         // 대용량 항목 개봉이 메인을 얼리던 것 · 완료 = QuarantineScanned).
         let rows = self.quarantine_rows();
-        self.quarantine_view = Some(nbeep_ui::QuarantineWidget::new(rows));
+        let mut qv = nbeep_ui::QuarantineWidget::new(rows);
+        let mut inv = Invalidations::default();
+        qv.set_loading(true, &mut inv); // 스캔 완료(QuarantineScanned)가 끈다
+        self.quarantine_view = Some(qv);
         self.layout_window(id);
         self.request_redraw(id);
         self.spawn_quarantine_scan();
