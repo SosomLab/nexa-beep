@@ -5216,8 +5216,8 @@ impl App {
         // 시스템 폰트 열거(M3-3 확장) 후 연결한다 — 지금은 크기만 렌더에 반영.
         let slot = |region: &str, base: f32| -> nbeep_ui::SlotFont {
             let raw = settings.get(&format!("font.{region}.size"));
-            // 숫자 = **절대 논리 px**(08-18 사용자 요청 — 직접 입력) · 프리셋은
-            // 종전 상대 해석. 범위는 판독성 하한~레이아웃 상한으로 클램프.
+            // 숫자 = **절대 논리 px**(08-18 — 프리셋도 값이 px다). 구 코드(s/m/l/xl)는
+            // 부팅 이관이 숫자로 바꾸지만, 이관 전 경로 대비 관용 해석을 남긴다.
             let size = if let Ok(px) = raw.parse::<f32>() {
                 px.clamp(8.0, 48.0)
             } else {
@@ -10888,6 +10888,28 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
     for (k, v) in doc.pairs {
         if !settings.set_by_name(&k, &v) {
             conf.keep_unknown(k, v);
+        }
+    }
+    // 폰트 크기 구 코드 이관(08-18 — 프리셋 절대화): 저장된 s/m/l/xl을 **그 슬롯의
+    // 종전 실크기 px**로 바꾼다(모양 불변 이관 — 상태바 "Normal"이 13px였다면
+    // 13으로 남아 새 라벨 "작게(13px)"와 표기가 비로소 일치한다).
+    for (region, base) in [
+        ("base", 16i32),
+        ("peerlist", 16),
+        ("message", 18),
+        ("status", 13),
+    ] {
+        let key = format!("font.{region}.size");
+        let old = settings.get(&key).to_string();
+        let px = match old.as_str() {
+            "s" => Some(base - 2),
+            "m" => Some(base),
+            "l" => Some(base + 3),
+            "xl" => Some(base + 7),
+            _ => None, // 이미 숫자(신) 또는 빈 값
+        };
+        if let Some(px) = px {
+            settings.set_by_name(&key, &px.to_string());
         }
     }
     // CLI 플래그는 이 세션만 이긴다 — 저장값을 덮어쓰되 dirty를 세우지 않는다

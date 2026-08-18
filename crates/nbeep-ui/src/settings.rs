@@ -37,7 +37,25 @@ const SIZE_OPTS: &[(&str, Msg)] = &[
 ];
 
 /// 크기 기본값 — 순서와 무관하게 '보통' 고정.
-const SIZE_DEFAULT: &str = "m";
+/// 폰트 크기 프리셋(08-18 — **절대 px가 값이자 라벨**): 같은 "Normal"이 슬롯마다
+/// 다른 크기를 뜻하던 혼선을 없앤다(상태바 13px가 Normal로 표기되던 것).
+/// 값이 숫자라 커스텀 입력과 같은 축 — 소비 측은 숫자 = 절대 논리 px 하나만 안다.
+const FONT_SIZE_OPTS: &[(&str, Msg)] = &[
+    ("13", Msg::FontSizeSmall),
+    ("16", Msg::FontSizeNormal),
+    ("18", Msg::FontSizeLarge),
+    ("22", Msg::FontSizeXl),
+];
+
+/// 슬롯별 크기 기본(px) — 종전 상대 프리셋의 실크기를 그대로 계승(모양 불변).
+#[must_use]
+pub fn font_size_default(size_key: &str) -> &'static str {
+    match size_key {
+        "font.status.size" => "13",
+        "font.message.size" => "18",
+        _ => "16", // base·peerlist
+    }
+}
 
 /// [`SIZE_OPTS`]의 `Radio` kind용 정적 참조(컨트롤 크기 항목 재사용).
 const SIZE_OPTS_STATIC: &[(&str, Msg)] = SIZE_OPTS;
@@ -178,7 +196,7 @@ impl Entry {
                 size_key,
             } => vec![
                 (family_key, String::new()), // 빈 문자열 = 시스템 기본 글꼴
-                (size_key, SIZE_DEFAULT.to_string()),
+                (size_key, font_size_default(size_key).to_string()),
             ],
             // 행위 항목은 값이 없다 — 영속·검증 대상에서 자연히 빠진다.
             SettingKind::Action { .. } => vec![],
@@ -1613,15 +1631,19 @@ impl SettingsWidget {
                     let mut family = TextBox::new(ph)
                         .with_text(self.values.get(family_key).map_or("", String::as_str));
                     family.set_scale(self.scale);
-                    let items: Vec<ComboItem> = SIZE_OPTS
+                    let items: Vec<ComboItem> = FONT_SIZE_OPTS
                         .iter()
                         .map(|(v, m)| ComboItem::new(*v, tr(lang, *m)))
                         .collect();
                     let mut size = Combo::new(items, 0);
-                    // 숫자 직접 입력(08-18 사용자 요청) — 프리셋(s/m/l/xl) 외에
-                    // 논리 px를 그대로 넣는다(해석·클램프는 소비 측 fonts_from_settings).
+                    // 숫자 직접 입력(08-18 사용자 요청) — 프리셋도 절대 px 값이라
+                    // 같은 축이다(해석·클램프는 소비 측 fonts_from_settings).
                     size.set_custom_entry(tr(lang, Msg::CustomInput), "px");
-                    size.select_value(self.values.get(size_key).map_or("m", String::as_str));
+                    size.select_value(
+                        self.values
+                            .get(size_key)
+                            .map_or_else(|| font_size_default(size_key), String::as_str),
+                    );
                     size.set_scale(self.scale);
                     RowCtl::Font { family, size }
                 }
@@ -1980,9 +2002,13 @@ impl SettingsWidget {
                         size_key,
                     } = e.kind
                     {
-                        if let Some(v) = family.take_changed() {
+                        // 글꼴명은 **확정 시점만** 보고(08-18 사용자 요청 — 글자마다
+                        // 리로드 낭비 · Face 행과 같은 규약). 포커스 아웃 확정은
+                        // 위젯 on_event의 blur 수확이 같은 경로로 밀어 넣는다.
+                        if let Some(v) = family.take_committed() {
                             got.push((family_key, v));
                         }
+                        let _ = family.take_changed(); // 중간 변경은 버린다
                         if let Some(v) = size.take_changed() {
                             got.push((size_key, v));
                         }
@@ -2042,6 +2068,35 @@ impl Widget for SettingsWidget {
     }
 
     fn on_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
+        // ── 글꼴명 blur 확정(08-18 사용자 요청 "Enter 또는 포커스 아웃에 반영") —
+        //    포커스된 글꼴명 밖을 클릭하면 미확정 텍스트를 그 자리에서 확정 보고한다
+        //    (Enter의 take_committed와 같은 경로 · Esc는 취소라 여기 안 온다).
+        if let &InputEvent::MouseDown { x, y, .. } = ev {
+            let mut got: Vec<(&'static str, String)> = Vec::new();
+            for r in &mut self.rows {
+                let e = &registry()[r.idx];
+                let (family, key) = match (&mut r.ctl, e.kind) {
+                    (RowCtl::Font { family, .. }, SettingKind::FontSection { family_key, .. }) => {
+                        (family, family_key)
+                    }
+                    (RowCtl::Face(family), _) => (family, e.key),
+                    _ => continue,
+                };
+                if family.is_focused() && !family.bounds().contains(crate::Point { x, y }) {
+                    let v = family.text().trim().to_string();
+                    if self.values.get(key).map(String::as_str) != Some(v.as_str()) {
+                        got.push((key, v));
+                    }
+                }
+            }
+            if !got.is_empty() {
+                for (k, v) in &got {
+                    self.values.insert(k, v.clone());
+                }
+                self.changes.extend(got);
+                inv.push(self.bounds);
+            }
+        }
         // ── 모달 캡처: 열린 콤보가 있으면 그 콤보만 이벤트를 받는다(전파 차단) ──
         if let Some(c) = self.open_combo_mut() {
             c.on_event(ev, inv);
@@ -2051,14 +2106,59 @@ impl Widget for SettingsWidget {
         }
 
         // ── 인라인 편집(직접 입력) 모달 캡처 — 편집 중 콤보가 모든 입력을 받는다 ──
+        // FontSection의 크기 콤보도 포함(08-18 실기 — 빠져 있어 커스텀 px 입력이
+        // 검색란으로 샜다: 캐럿은 콤보에, 글자는 검색에 가는 어긋남).
         if let Some(c) = self.rows.iter_mut().find_map(|r| match &mut r.ctl {
             RowCtl::Combo(c) if c.is_editing() => Some(c),
+            RowCtl::Font { size, .. } if size.is_editing() => Some(size),
             _ => None,
         }) {
             c.on_event(ev, inv);
             self.drain_changes(inv);
             inv.push(self.bounds);
             return;
+        }
+
+        // ── 포커스된 글꼴명 텍스트박스 — **편집 이벤트 일반 라우팅**(08-18 사용자
+        //    지적: 드래그 선택·우클릭 메뉴·전체 선택이 공통 기능인데 컨테이너의
+        //    키 화이트리스트가 끊었다 — 기능은 TextBox에 이미 있다).
+        //    우클릭 편집 메뉴가 열려 있으면 그 박스가 **모달로 전부** 받고,
+        //    아니면 Move/Up(드래그 추적)·안쪽 우클릭·SelectAll을 흘린다.
+        //    Char·Enter·이동 키는 기존 arm 그대로.
+        {
+            let mut handled = false;
+            if let Some(f) = self.rows.iter_mut().find_map(|r| match &mut r.ctl {
+                RowCtl::Font { family, .. } if family.popup_open() || family.is_focused() => {
+                    Some(family)
+                }
+                RowCtl::Face(family) if family.popup_open() || family.is_focused() => Some(family),
+                _ => None,
+            }) {
+                if f.popup_open() {
+                    f.on_event(ev, inv);
+                    handled = true;
+                } else {
+                    match *ev {
+                        InputEvent::MouseMove { .. } | InputEvent::MouseUp { .. } => {
+                            f.on_event(ev, inv); // 드래그 선택 추적(비캡처 — 아래로도 흐른다)
+                        }
+                        InputEvent::RightDown { x, y } if f.bounds().contains(Point { x, y }) => {
+                            f.on_event(ev, inv); // 편집 메뉴 열기
+                            handled = true;
+                        }
+                        InputEvent::SelectAll => {
+                            f.on_event(ev, inv);
+                            handled = true;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            if handled {
+                self.drain_changes(inv);
+                inv.push(self.bounds);
+                return;
+            }
         }
 
         // ── 사이드바 스플리터 드래그(폭 조절) ──
@@ -2777,7 +2877,7 @@ mod tests {
         assert_eq!(s.get("ui.typeahead_special"), "on");
         assert_eq!(s.get("chat.window_mode"), "single");
         assert_eq!(s.get("ui.language"), "en");
-        assert_eq!(s.get("font.base.size"), "m");
+        assert_eq!(s.get("font.base.size"), "16"); // 절대 px 프리셋(08-18)
     }
 
     #[test]
@@ -2837,6 +2937,9 @@ mod tests {
         for c in "Arial".chars() {
             w.on_event(&ch(c), &mut inv);
         }
+        // 글자마다 보고하지 않는다(08-18 — Enter/블러 확정만 · 글자마다 리로드 낭비).
+        assert!(w.take_changes().is_empty(), "중간 타이핑 = 무보고");
+        w.on_event(&key(Key::Enter), &mut inv);
         let changes = w.take_changes();
         assert!(
             changes

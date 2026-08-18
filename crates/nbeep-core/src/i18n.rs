@@ -192,6 +192,11 @@ pub enum Msg {
     LogViewDesc,
     /// "로그 보기" 행위 동사.
     ActOpen,
+    /// 폰트 크기 프리셋(절대 px 명시 — 08-18: 같은 Normal이 슬롯마다 달랐다).
+    FontSizeSmall,
+    FontSizeNormal,
+    FontSizeLarge,
+    FontSizeXl,
     /// 로그 보존 기본 라벨(7일).
     LogRetainDefault,
     /// 로그 총량 기본 라벨(20MB).
@@ -1232,6 +1237,15 @@ impl Msg {
                 "今日のログを既定のアプリで開きます（無ければフォルダ）。",
             ],
             Msg::ActOpen => ["Open", "열기", "打开", "開く"],
+            Msg::FontSizeSmall => ["Small (13px)", "작게 (13px)", "小 (13px)", "小 (13px)"],
+            Msg::FontSizeNormal => ["Normal (16px)", "보통 (16px)", "中 (16px)", "中 (16px)"],
+            Msg::FontSizeLarge => ["Large (18px)", "크게 (18px)", "大 (18px)", "大 (18px)"],
+            Msg::FontSizeXl => [
+                "Extra Large (22px)",
+                "아주 크게 (22px)",
+                "特大 (22px)",
+                "特大 (22px)",
+            ],
             Msg::LogRetainDefault => ["Default (7)", "기본(7일)", "默认(7天)", "既定(7日)"],
             Msg::LogCapDefault => ["Default (20)", "기본(20MB)", "默认(20MB)", "既定(20MB)"],
             Msg::OfferFreshBtn => ["From start", "처음부터", "重新开始", "最初から"],
