@@ -1438,8 +1438,8 @@ impl Widget for ChatViewWidget {
                 &l.body,
                 ChatBody::Xfer(x) if matches!(x.state, XferLineState::Active { .. })
             ) {
-                // 텍스트~막대 여유 = 일반 줄간격 한 줄(사용자 확정 08-18).
-                self.s(4) + line_h
+                // 텍스트~막대 여유 = 줄간격의 2/5(사용자 확정 08-18 — 한 줄은 과했다).
+                self.s(4) + line_h * 2 / 5
             } else {
                 0
             };
