@@ -7,6 +7,8 @@
 
 ## 2026-08-18
 
+- ★**재개 실기 3보완 + i18n·폰트**(main): 승인 우회(.part = 이전 승인 증거)·수신자 종료 보존(액터 join)·스레드 항목 단일화(재활성화 — 진행률 어긋남 해소) · 전송 라벨 8종+2 i18n · 폰트 크기 숫자 입력 + Base UI 얼굴 미배선 수정. 691 green. 상세 [journal/2026-08-18.md](journal/2026-08-18.md).
+
 - ★**M3-22 상태바 로깅 구현**(main): set_status 깔때기(113곳 이관)·statuslog.rs(bounded 큐+전용 스레드·드롭 계상·2s flush)·beep-YYYYMMDD.log 회전·설정 4항목(고급›로그 · 기본 off)·로그 보기 Action(`open_path` 3-OS 신설). 691 green. 상세 [journal/2026-08-18.md](journal/2026-08-18.md).
 
 - ★**M4-10c 완결 + 서버 설정 잠금**(main): 발신 능동 재-Offer 1회(Closed 기억→재성립 재제안)·수신 2택 UI(이어받기 N%/처음부터)·Unmanaged 모드 = 서버 3행 잠금(깔때기 합류). M4-10 잔여 = 실기만. 689 green. 상세 [journal/2026-08-18.md](journal/2026-08-18.md).
