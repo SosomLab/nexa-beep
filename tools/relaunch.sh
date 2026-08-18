@@ -113,10 +113,14 @@ echo "   기본 = $ROOT/target/release  ·  A·B = $MULTI/{A,B}"
 say "④ 기동 (셸에서 분리)"
 if [ "$IS_WIN" = 1 ]; then
   # Windows — Start-Process(분리 기동 · 로그 리다이렉트는 미지원: 이벤트 관찰은
-  # 앱 상태바/실기로). 경로는 pwsh가 해석하도록 백슬래시 변환 없이 그대로.
-  pw "Start-Process -FilePath '$ROOT/target/release/nexa-beep.exe' -ArgumentList '--window','--live'" >/dev/null
-  pw "Start-Process -FilePath '$MULTI/A/nexa-beep.exe' -ArgumentList '--window','--live'" >/dev/null
-  pw "Start-Process -FilePath '$MULTI/B/nexa-beep.exe' -ArgumentList '--window','--live'" >/dev/null
+  # 앱 상태바/실기로). ★ 경로는 반드시 cygpath -w로 변환한다(08-18 실기 —
+  # PowerShell은 POSIX 경로 '/d/…'를 못 열고, pw()가 stderr를 버려 조용히
+  # 실패했다: ④ 창 0개의 진범).
+  WROOT=$(cygpath -w "$ROOT")
+  WMULTI=$(cygpath -w "$MULTI")
+  pw "Start-Process -FilePath '$WROOT\\target\\release\\nexa-beep.exe' -ArgumentList '--window','--live'" >/dev/null
+  pw "Start-Process -FilePath '$WMULTI\\A\\nexa-beep.exe' -ArgumentList '--window','--live'" >/dev/null
+  pw "Start-Process -FilePath '$WMULTI\\B\\nexa-beep.exe' -ArgumentList '--window','--live'" >/dev/null
 else
   nohup ./target/release/nexa-beep --window --live > /tmp/beep-base.log 2>&1 &
   disown
