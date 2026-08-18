@@ -7082,7 +7082,10 @@ impl App {
                 n += 1;
             }
             if n > 0 {
-                self.set_status(format!("중단 전송 재제안 — {n}건 (이어받기 협상)"));
+                self.set_status(nbeep_core::tf(
+                    nbeep_core::Msg::XferReofferN,
+                    &[&n.to_string()],
+                ));
                 self.pump_send_queue(peer);
             }
         }
@@ -8876,7 +8879,10 @@ impl ApplicationHandler<AppEvent> for App {
                     if let Some(prefix) = self.load_resume(peer, &sha256, size) {
                         let pct = prefix.len() as u64 * 100 / size.max(1);
                         self.send_xfer_decision(peer, id, true, RejectWhy::Declined, Some(prefix));
-                        self.set_status(format!("이어받기 — {name} {pct}%부터 (이전 승인 연장)"));
+                        self.set_status(nbeep_core::tf(
+                            nbeep_core::Msg::XferResumeFrom,
+                            &[&name, &pct.to_string()],
+                        ));
                         self.push_xfer_line(peer, false, &name, size); // 재활성화 우선
                         self.redraw_conversation(peer);
                         if let Some(mid) = self.main_id {

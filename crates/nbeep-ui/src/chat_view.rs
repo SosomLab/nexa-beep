@@ -990,9 +990,15 @@ impl ChatViewWidget {
         match &l.body {
             ChatBody::Text(t) => t.as_str().to_string(),
             ChatBody::Xfer(x) => {
-                let dir = if l.mine { "전송" } else { "수신" };
+                // 라벨 전수 i18n(08-18 — 스레드에 영구히 남는 문구라 우선 대상).
+                use nbeep_core::{t, Msg};
+                let dir = if l.mine {
+                    t(Msg::XferDirSend)
+                } else {
+                    t(Msg::XferDirRecv)
+                };
                 let state = match &x.state {
-                    XferLineState::Waiting => "승인 대기".to_string(),
+                    XferLineState::Waiting => t(Msg::XferWaiting).to_string(),
                     XferLineState::Active { done } => {
                         let pct = if x.size > 0 {
                             (*done as f64 / x.size as f64 * 100.0).round() as u32
@@ -1001,13 +1007,16 @@ impl ChatViewWidget {
                         };
                         format!("{dir} {pct}% · {}", human_bytes(*done))
                     }
-                    XferLineState::AwaitingAck => "전달됨 · 확인 대기".to_string(),
-                    XferLineState::Done { note } if note.is_empty() => "완료".to_string(),
-                    XferLineState::Done { note } => format!("완료 — {note}"),
-                    XferLineState::Failed { why } => format!("실패 — {why}"),
+                    XferLineState::AwaitingAck => t(Msg::XferAwaitAck).to_string(),
+                    XferLineState::Done { note } if note.is_empty() => {
+                        t(Msg::XferDoneLbl).to_string()
+                    }
+                    XferLineState::Done { note } => format!("{} — {note}", t(Msg::XferDoneLbl)),
+                    XferLineState::Failed { why } => format!("{} — {why}", t(Msg::XferFailLbl)),
                 };
                 format!(
-                    "[파일] {} ({}) · {state}",
+                    "{} {} ({}) · {state}",
+                    t(Msg::XferFileTag),
                     x.name.as_str(),
                     human_bytes(x.size)
                 )
