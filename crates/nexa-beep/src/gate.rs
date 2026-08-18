@@ -113,6 +113,107 @@ pub(crate) fn read_beepq_bytes(path: &std::path::Path, secret: &[u8; 32]) -> Opt
     Some(bytes) // 구본 관용 — 매직 우연 충돌은 위 open 실패로 드러난다
 }
 
+/// 격리물 메타 **사이드카** 도메인(08-18 — 목록 즉시 표시 · 페이로드와 분리 봉인).
+pub(crate) const SEAL_QMETA: &[u8] = b"quarantine-meta-v1";
+
+/// 격리 목록에 필요한 최소 메타(08-18) — 페이로드(수백 MB)를 읽지 않고 목록을
+/// 그리려고 수신 시 작은 사이드카 `{path}.meta`에 **봉인**해 함께 쓴다. 스캔은
+/// 이것만 읽어 즉시 목록을 만든다(무결성·미리보기는 별도 백그라운드).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct QMeta {
+    pub name: String,
+    pub size: u64,
+    pub risk: RiskLevel,
+    pub mismatch: bool,
+    pub sender: PeerId,
+    pub received_at: u64,
+}
+
+fn risk_to_u8(r: RiskLevel) -> u8 {
+    match r {
+        RiskLevel::Executable => 3,
+        RiskLevel::ActiveDocument => 2,
+        RiskLevel::Archive => 1,
+        RiskLevel::Data => 0,
+    }
+}
+fn risk_from_u8(u: u8) -> RiskLevel {
+    match u {
+        3 => RiskLevel::Executable,
+        2 => RiskLevel::ActiveDocument,
+        1 => RiskLevel::Archive,
+        _ => RiskLevel::Data,
+    }
+}
+
+impl QMeta {
+    /// `[ver 1 ‖ risk 1 ‖ mismatch 1 ‖ sender 32 ‖ size u64 BE ‖ received_at u64 BE ‖ name_len u16 BE ‖ name]`.
+    fn encode(&self) -> Vec<u8> {
+        let nb = self.name.as_bytes();
+        let nlen = u16::try_from(nb.len()).unwrap_or(u16::MAX);
+        let mut out = Vec::with_capacity(53 + nb.len());
+        out.push(1);
+        out.push(risk_to_u8(self.risk));
+        out.push(u8::from(self.mismatch));
+        out.extend_from_slice(self.sender.as_bytes());
+        out.extend_from_slice(&self.size.to_be_bytes());
+        out.extend_from_slice(&self.received_at.to_be_bytes());
+        out.extend_from_slice(&nlen.to_be_bytes());
+        out.extend_from_slice(&nb[..usize::from(nlen)]);
+        out
+    }
+    /// 손상·미지 버전은 `None`(스캔이 full-open 폴백 · fail-closed).
+    fn decode(b: &[u8]) -> Option<Self> {
+        if b.first().copied()? != 1 {
+            return None;
+        }
+        let risk = risk_from_u8(*b.get(1)?);
+        let mismatch = *b.get(2)? != 0;
+        let sender = PeerId::from_bytes(<[u8; 32]>::try_from(b.get(3..35)?).ok()?);
+        let size = u64::from_be_bytes(<[u8; 8]>::try_from(b.get(35..43)?).ok()?);
+        let received_at = u64::from_be_bytes(<[u8; 8]>::try_from(b.get(43..51)?).ok()?);
+        let nlen = usize::from(u16::from_be_bytes(
+            <[u8; 2]>::try_from(b.get(51..53)?).ok()?,
+        ));
+        let name = String::from_utf8_lossy(b.get(53..53 + nlen)?).into_owned();
+        Some(Self {
+            name,
+            size,
+            risk,
+            mismatch,
+            sender,
+            received_at,
+        })
+    }
+}
+
+/// 사이드카 경로 = 페이로드 경로 + `.meta`(`{hex}.beepq` → `{hex}.beepq.meta`).
+/// 확장자가 `beepq`가 아니라 `QuarantineDir::list()`가 항목으로 세지 않는다.
+pub(crate) fn qmeta_path(beepq: &std::path::Path) -> PathBuf {
+    let mut s = beepq.as_os_str().to_os_string();
+    s.push(".meta");
+    PathBuf::from(s)
+}
+
+/// 사이드카 쓰기(봉인) — 실패는 조용히(목록은 full-open 폴백으로 뜬다).
+pub(crate) fn write_qmeta(beepq: &std::path::Path, m: &QMeta, secret: &[u8; 32]) {
+    if let Ok(sealed) = nbeep_store::sealed::seal(SEAL_QMETA, secret, &m.encode()) {
+        let _ = std::fs::write(qmeta_path(beepq), sealed);
+    }
+}
+
+/// 사이드카 읽기(개봉·디코드) — 없거나 손상이면 `None`(스캔이 full-open 폴백).
+pub(crate) fn read_qmeta(beepq: &std::path::Path, secret: &[u8; 32]) -> Option<QMeta> {
+    let raw = std::fs::read(qmeta_path(beepq)).ok()?;
+    let bytes = nbeep_store::sealed::open(SEAL_QMETA, secret, &raw)?;
+    QMeta::decode(&bytes)
+}
+
+/// 사이드카 삭제(거절 시 페이로드와 함께 · 반쪽 잔존 방지).
+pub(crate) fn remove_qmeta(beepq: &std::path::Path) {
+    let _ = std::fs::remove_file(qmeta_path(beepq));
+}
+
 pub(crate) fn quarantine_received(
     got: &Received,
     sender: PeerId,
@@ -160,6 +261,21 @@ pub(crate) fn quarantine_received(
         .and_then(|q| q.save(&actual, &sealed))
         .map_err(GateError::Store)?;
 
+    // ★ 메타 사이드카(08-18) — 페이로드 저장 **뒤**에 쓴다(반쪽 상태 방지: 사이드카만
+    //   있고 페이로드 없는 일이 없게). 스캔이 이것만 읽어 512MB도 즉시 목록에 올린다.
+    write_qmeta(
+        &path,
+        &QMeta {
+            name: name.clone(),
+            size: got.bytes.len() as u64,
+            risk: v.risk,
+            mismatch: v.mismatch,
+            sender,
+            received_at: now,
+        },
+        seal_secret,
+    );
+
     Ok(Quarantined {
         name,
         risk: v.risk,
@@ -177,3 +293,55 @@ pub(crate) const PII_KEYS: &[&str] = &["profile.email", "profile.phone"];
 
 /// 대화 기록 봉투 도메인(ADR-0005 §4 · M2-5b — 저장 암호화 A 단일).
 pub(crate) const SEAL_HISTORY: &[u8] = b"history-v1";
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+
+    fn sample() -> QMeta {
+        QMeta {
+            name: "가나다 이력서.hwp".into(),
+            size: 512 * 1024 * 1024, // 512MiB — 사이드카는 페이로드 크기와 무관
+            risk: RiskLevel::ActiveDocument,
+            mismatch: true,
+            sender: PeerId::from_bytes([7u8; 32]),
+            received_at: 1_723_000_000,
+        }
+    }
+
+    /// 인코드→디코드 왕복 · 미지 버전/손상은 None(fail-closed).
+    #[test]
+    fn qmeta_encode_decode_round_trips() {
+        let m = sample();
+        assert_eq!(QMeta::decode(&m.encode()).unwrap(), m);
+        assert!(QMeta::decode(&[]).is_none(), "빈 = None");
+        assert!(QMeta::decode(&[9]).is_none(), "미지 버전 = None");
+        assert!(QMeta::decode(&m.encode()[..10]).is_none(), "잘림 = None");
+    }
+
+    /// ★ 사이드카 봉인/개봉 왕복 · **다른 신원 secret은 개봉 실패**(도메인 분리 ·
+    /// fail-closed) · 없거나 삭제되면 None(스캔 full-open 폴백 근거).
+    #[test]
+    fn sidecar_seal_open_round_trips_and_fails_closed() {
+        let m = sample();
+        let secret = [9u8; 32];
+        let dir = std::env::temp_dir().join(format!("nbeep-qmeta-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let beepq = dir.join("abcd1234.beepq");
+        std::fs::write(&beepq, b"dummy-payload").unwrap();
+
+        write_qmeta(&beepq, &m, &secret);
+        assert!(qmeta_path(&beepq).exists(), "사이드카가 생겼다");
+        assert_eq!(read_qmeta(&beepq, &secret).unwrap(), m, "왕복 보존");
+        assert!(
+            read_qmeta(&beepq, &[1u8; 32]).is_none(),
+            "다른 신원 = 개봉 실패(fail-closed)"
+        );
+
+        remove_qmeta(&beepq);
+        assert!(!qmeta_path(&beepq).exists(), "삭제됨");
+        assert!(read_qmeta(&beepq, &secret).is_none(), "없으면 None");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

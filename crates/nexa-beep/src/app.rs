@@ -135,6 +135,9 @@ enum AppEvent {
     XferAccepted { peer: PeerId },
     /// 격리함 스캔 완료(08-18 — 워커 · gen 불일치 = 낡은 결과 폐기).
     QuarantineScanned { gen: u64, rows: Vec<QRowRaw> },
+    /// 격리물 무결성 검증 완료(08-18 — 전체 개봉·해시 확인 성공 · gen 대조).
+    /// 도착 = 그 행 `verified=true` → Approve 활성. `ok=false`는 손상(승인 불가 유지).
+    QVerified { gen: u64, path: String, ok: bool },
     /// 상대의 수신 파일 상한 공지 도착(08-18 — 해시 전 차단의 근거).
     PeerRecvCap { peer: PeerId, cap: u64 },
     /// 해시 진행(08-18 — 대용량 준비가 "무반응"으로 보이지 않게 · pct 0~100).
@@ -359,6 +362,9 @@ struct QRowRaw {
     mismatch: bool,
     sender: PeerId,
     received_at: u64,
+    /// 무결성 검증 완료(08-18) — 사이드카로 즉시 목록에 뜨지만 **전체 개봉·해시
+    /// 확인**은 백그라운드다. false면 승인(Approve) 비활성(`QVerified`가 켠다).
+    verified: bool,
 }
 
 struct ImageViewState {
@@ -4086,7 +4092,22 @@ impl App {
                 paths
                     .into_iter()
                     .filter_map(|p| {
-                        // 한 번만 읽는다(종전 이중 읽기 제거) — 개봉·이관도 여기.
+                        // ★ 사이드카 우선(08-18) — 있으면 페이로드(512MB)를 **안 읽는다**.
+                        //   목록이 즉시 뜬다. 무결성 검증은 별도 백그라운드(verified=false).
+                        if let Some(m) = crate::gate::read_qmeta(&p, &secret) {
+                            return Some(QRowRaw {
+                                path: p.to_string_lossy().into_owned(),
+                                name: m.name,
+                                size: m.size,
+                                risk: m.risk,
+                                mismatch: m.mismatch,
+                                sender: m.sender,
+                                received_at: m.received_at,
+                                verified: false,
+                            });
+                        }
+                        // 폴백 — 사이드카 없는 구본: 한 번 읽어 메타를 얻고(개봉·이관)
+                        //   **lazy 사이드카 생성**(다음 스캔부터 즉시). 이 경로만 전체 읽기.
                         let raw = std::fs::read(&p).ok()?;
                         let sealed_already = nbeep_store::sealed::is_sealed(&raw);
                         let bytes = if sealed_already {
@@ -4095,7 +4116,6 @@ impl App {
                             raw
                         };
                         if !sealed_already {
-                            // 구본(평문) lazy 이관 — 워커라 커도 무해.
                             if let Ok(sealed) = nbeep_store::sealed::seal(
                                 crate::gate::SEAL_QUARANTINE,
                                 &secret,
@@ -4108,19 +4128,56 @@ impl App {
                         let mismatch = bq.meta.detected_kind != "unknown"
                             && !bq.meta.declared_ext.is_empty()
                             && !bq.meta.detected_kind.contains(&bq.meta.declared_ext);
+                        let name = String::from_utf8_lossy(&bq.meta.orig_name).into_owned();
+                        crate::gate::write_qmeta(
+                            &p,
+                            &crate::gate::QMeta {
+                                name: name.clone(),
+                                size: bq.original_size,
+                                risk: bq.meta.risk,
+                                mismatch,
+                                sender: bq.meta.sender,
+                                received_at: bq.meta.received_at,
+                            },
+                            &secret,
+                        );
                         Some(QRowRaw {
                             path: p.to_string_lossy().into_owned(),
-                            name: String::from_utf8_lossy(&bq.meta.orig_name).into_owned(),
+                            name,
                             size: bq.original_size,
                             risk: bq.meta.risk,
                             mismatch,
                             sender: bq.meta.sender,
                             received_at: bq.meta.received_at,
+                            verified: false,
                         })
                     })
                     .collect()
             })();
             let _ = proxy.send_event(AppEvent::QuarantineScanned { gen, rows });
+        });
+    }
+
+    /// 격리물 무결성 검증(08-18 · 백그라운드) — 목록이 뜬 뒤 행마다 **전체 개봉 +
+    /// AEAD 태그 + Beepq 파싱**을 확인해 `QVerified`로 그 행 Approve를 활성화한다.
+    /// **작은 파일 먼저**(1 워커 순차 — 스레드 폭주 없이 512MB가 소형을 막지 않게).
+    /// 손상·미완(태그 실패)은 `ok=false` → 승인 차단 유지(fail-closed).
+    fn spawn_quarantine_verify(&mut self, gen: u64) {
+        let secret = self.identity.wrap_secret();
+        let proxy = self.proxy.clone();
+        let mut items: Vec<(u64, String)> = self
+            .qrows_raw
+            .iter()
+            .map(|r| (r.size, r.path.clone()))
+            .collect();
+        items.sort_by_key(|(s, _)| *s); // 작은 것부터 = 즉시 활성
+        std::thread::spawn(move || {
+            for (_, path) in items {
+                let ok = crate::gate::read_beepq_bytes(std::path::Path::new(&path), &secret)
+                    .and_then(|b| nbeep_safe::Beepq::open(&b).ok())
+                    .is_some();
+                let _ = proxy.send_event(AppEvent::QVerified { gen, path, ok });
+            }
         });
     }
 
@@ -4179,6 +4236,7 @@ impl App {
                     when,
                     thumb,
                     path: path_s,
+                    ready: r.verified,
                 }
             })
             .collect()
@@ -4287,6 +4345,7 @@ impl App {
                 });
             }
             nbeep_ui::QAction::Reject(path) => {
+                crate::gate::remove_qmeta(std::path::Path::new(&path)); // 사이드카 동반 삭제
                 self.set_status(match std::fs::remove_file(&path) {
                     Ok(()) => "격리물을 삭제했습니다".into(),
                     Err(e) => {
@@ -4303,6 +4362,7 @@ impl App {
                 {
                     if let Ok(paths) = dir.list() {
                         for p in paths {
+                            crate::gate::remove_qmeta(&p); // 사이드카 동반 삭제
                             match std::fs::remove_file(&p) {
                                 Ok(()) => n += 1,
                                 Err(_) => failed += 1,
@@ -9380,6 +9440,11 @@ impl ApplicationHandler<AppEvent> for App {
                 }
                 self.recv_meter.note_peak(avg_bps);
                 self.refresh_approval_ui();
+                // ★ 격리함이 열려 있으면 새 격리물을 즉시 반영(08-18 — 열어둔 채
+                //   수신하면 재열기 전까지 안 뜨던 것. 스캔은 사이드카라 값싸다).
+                if self.windows.values().any(|e| e.role == Role::Quarantine) {
+                    self.spawn_quarantine_scan();
+                }
                 // 격리 보관까지 끝난 상태 — **실체화는 승인 후 별도**(FR-S-9).
                 self.set_status(format!(
                     "파일 격리 완료: {name} · 위험 {risk:?}{} — 승인 전까지 실행 불가",
@@ -9458,6 +9523,30 @@ impl ApplicationHandler<AppEvent> for App {
                 {
                     let qid = *qid;
                     self.layout_window(qid);
+                    self.request_redraw(qid);
+                }
+                // ★ 무결성 검증 백그라운드(08-18) — 목록은 이미 떴다. 행마다 전체
+                //   개봉·해시 확인을 워커로 → `QVerified`가 그 행 Approve를 활성화.
+                self.spawn_quarantine_verify(gen);
+            }
+            AppEvent::QVerified { gen, path, ok } => {
+                if gen != self.qscan_gen {
+                    return; // 낡은 스캔 — 다음 스캔이 다시 검증한다
+                }
+                if let Some(r) = self.qrows_raw.iter_mut().find(|r| r.path == path) {
+                    r.verified = ok; // 손상(ok=false)은 미검증 유지 → 승인 차단
+                }
+                let rows = self.quarantine_rows();
+                let mut inv = Invalidations::default();
+                if let Some(qv) = &mut self.quarantine_view {
+                    qv.set_rows(rows, &mut inv);
+                }
+                if let Some((qid, _)) = self
+                    .windows
+                    .iter()
+                    .find(|(_, e)| e.role == Role::Quarantine)
+                {
+                    let qid = *qid;
                     self.request_redraw(qid);
                 }
             }

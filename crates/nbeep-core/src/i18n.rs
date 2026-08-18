@@ -162,6 +162,8 @@ pub enum Msg {
     QClear,
     QClearConfirm,
     QDoneTag,
+    /// 격리물 무결성 검증 중(08-18 — 승인은 검증 후).
+    QVerifying,
     RiskExec,
     RiskActive,
     RiskArchive,
@@ -1278,6 +1280,7 @@ impl Msg {
             Msg::QApprove => ["Approve", "승인", "批准", "承認"],
             Msg::QReject => ["Delete", "삭제", "删除", "削除"],
             Msg::QClear => ["Clear All", "비우기", "清空", "空にする"],
+            Msg::QVerifying => ["Verifying… (approval available after verification)", "검증 중… (승인은 검증 후)", "校验中…（校验后可批准）", "検証中…（承認は検証後）"],
             Msg::QClearConfirm => [
                 "Press again to delete ALL quarantined files",
                 "다시 누르면 격리된 파일을 전부 삭제합니다",

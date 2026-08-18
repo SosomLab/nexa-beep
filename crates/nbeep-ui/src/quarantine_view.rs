@@ -49,6 +49,9 @@ pub struct QRow {
     /// 이미지 미리보기(M4-5ⓑ — imgdec 격리 디코드 · 호스트가 채운다 · 없으면 없음).
     /// **실체화 전 격리물의 픽셀을 본체가 만들지 않는다** — 디코드는 격리 프로세스 몫.
     pub thumb: Option<std::rc::Rc<crate::theme::IconImage>>,
+    /// 무결성 검증 완료(08-18) — false면 **승인(Approve) 비활성**(검증 중). 목록은
+    /// 사이드카로 즉시 뜨지만 전체 개봉·태그 확인이 끝나야 실체화를 허용한다.
+    pub ready: bool,
 }
 
 /// 사용자 결정 — 호스트가 실행한다.
@@ -223,8 +226,18 @@ impl QuarantineWidget {
         self.rows.get(self.sel)
     }
 
+    /// 선택 행이 무결성 검증을 마쳤는가(08-18) — 미검증이면 승인 불가.
+    fn selected_ready(&self) -> bool {
+        self.selected().is_some_and(|r| r.ready)
+    }
+
     /// 승인 누름 — 🔴 실행형은 **2단계**(첫 누름 = 고지, 두 번째 = 확정).
     fn press_approve(&mut self, inv: &mut Invalidations) {
+        // 08-18: 검증이 끝나지 않은 행은 승인 불가(버튼도 안 그려지지만 Enter·묵은
+        // 클릭 방어). 검증 후 QVerified가 ready를 켜면 그때 승인된다.
+        if !self.selected_ready() {
+            return;
+        }
         let Some(row) = self.selected() else { return };
         let two_step = matches!(row.risk, RiskLevel::Executable);
         if two_step && !self.confirming {
@@ -495,12 +508,16 @@ impl Widget for QuarantineWidget {
         ctx.fill_rect(Rect::new(bar.x, bar.y, bar.w, 1), theme.border);
         ctx.select_font(FontSlot::Status, false);
         let sh = ctx.text_height();
+        let ready = self.selected_ready();
         let (msg, color) = if self.confirming_clear {
             (t(Msg::QClearConfirm).to_string(), theme.danger)
         } else if self.confirming {
             (t(Msg::QConfirmExec).to_string(), theme.danger)
         } else if let Some((m, err)) = &self.message {
             (m.clone(), if *err { theme.danger } else { theme.ok })
+        } else if self.selected().is_some() && !ready {
+            // 검증 중(08-18) — 승인 버튼은 그리지 않는다(검증 후 활성).
+            (t(Msg::QVerifying).to_string(), theme.text_dim)
         } else {
             self.selected()
                 .map_or((String::new(), theme.text_dim), |r| {
@@ -513,7 +530,10 @@ impl Widget for QuarantineWidget {
         let note_w = (self.approve.bounds().x - self.s(10) - note_x).max(0);
         let note_rect = Rect::new(note_x, bar.y, note_w, bar.h);
         ctx.text(note_x, bar.y + (bar.h - sh) / 2, note_rect, &msg, color);
-        self.approve.paint(ctx, theme);
+        // 승인 버튼은 **검증 완료 행에만** 그린다(08-18 — 미검증은 승인 불가).
+        if ready {
+            self.approve.paint(ctx, theme);
+        }
         self.reject.paint(ctx, theme);
         self.clear.paint(ctx, theme);
     }
@@ -534,6 +554,7 @@ mod tests {
             when: "12:34:56".into(),
             path: format!("/q/{name}.beepq"),
             thumb: None,
+            ready: true, // 기존 테스트 기본 = 검증 완료(승인 가능)
         }
     }
 
@@ -580,6 +601,28 @@ mod tests {
             w.take_action(),
             Some(QAction::Approve("/q/a.txt.beepq".into())),
             "🟢 = 1클릭"
+        );
+    }
+
+    /// ★ 미검증(ready=false) 행은 **승인 불가**(08-18) — 목록엔 떠도 검증 전엔 저장
+    /// 막는다. 검증 완료(ready=true)로 바뀌면 승인된다.
+    #[test]
+    fn unverified_row_blocks_approve_until_ready() {
+        let mut r = row("big.iso", RiskLevel::Data);
+        r.ready = false; // 검증 중(사이드카로 목록엔 떴다)
+        let (mut w, mut inv) = widget(vec![r]);
+        assert!(!w.selected_ready(), "선택 행 미검증");
+        press_approve(&mut w, &mut inv);
+        assert!(w.take_action().is_none(), "미검증 = 승인 불가");
+        // QVerified 도착 = 검증 완료로 교체 → 이제 승인된다.
+        let mut ready = row("big.iso", RiskLevel::Data);
+        ready.ready = true;
+        w.set_rows(vec![ready], &mut inv);
+        press_approve(&mut w, &mut inv);
+        assert_eq!(
+            w.take_action(),
+            Some(QAction::Approve("/q/big.iso.beepq".into())),
+            "검증 후 = 승인 가능"
         );
     }
 
