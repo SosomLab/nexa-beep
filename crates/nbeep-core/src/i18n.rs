@@ -786,10 +786,10 @@ impl Msg {
                 "送信ファイル上限",
             ],
             Msg::XferSendMaxDesc => [
-                "Checked before reading — larger files are skipped. Unlimited risks long freezes on huge files (v1 assembles in memory)",
-                "읽기 전에 검사해 초과 파일은 거릅니다. 무제한은 초대용량에서 긴 멈춤 위험(v1은 메모리 조립)",
-                "读取前检查，超限文件将被跳过。无限制在超大文件时可能长时间卡顿（v1 内存组装）",
-                "読み込み前に検査し、超過ファイルは除外。無制限は超大容量で長い停止の恐れ（v1はメモリ組立）",
+                "Checked before sending — larger files are skipped. Sending streams from disk, so Unlimited is safe",
+                "보내기 전에 검사해 초과 파일은 거릅니다. 발신은 디스크 스트리밍이라 무제한도 안전합니다",
+                "发送前检查，超限文件将被跳过。发送为磁盘流式，无限制也安全",
+                "送信前に検査し、超過ファイルは除外。送信はディスクストリーミングのため無制限でも安全",
             ],
             Msg::XferRecvMax => [
                 "Max receive file size",
@@ -804,12 +804,7 @@ impl Msg {
                 "超過する提案は自動拒否（上限は送信側へ通知）",
             ],
             Msg::Cap100MiB => ["100 MiB", "100 MiB", "100 MiB", "100 MiB"],
-            Msg::Cap256MiB => [
-                "256 MiB (default)",
-                "256 MiB(기본)",
-                "256 MiB(默认)",
-                "256 MiB(既定)",
-            ],
+            Msg::Cap256MiB => ["256 MiB", "256 MiB", "256 MiB", "256 MiB"],
             Msg::Cap512MiB => ["512 MiB", "512 MiB", "512 MiB", "512 MiB"],
             Msg::Cap1GiB => ["1 GiB", "1 GiB", "1 GiB", "1 GiB"],
             Msg::CapUnlimited => ["Unlimited", "무제한", "无限制", "無制限"],

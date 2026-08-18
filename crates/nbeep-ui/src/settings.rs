@@ -90,6 +90,8 @@ const TOGGLE_DEFAULT_OFF: &[&str] = &[
 /// 미등록 키의 기본은 첫 옵션(기존 규약).
 const RADIO_DEFAULTS: &[(&str, &str)] = &[
     ("ui.toolbar_size", "32"),
+    ("xfer.send_max_mb", "unlimited"), // 발신 = 무제한 기본(08-18 — 스트리밍이라 안전)
+    ("xfer.recv_max_mb", "512"),       // 수신 = 512MiB 기본(메모리 조립 방어선)
     ("ui.typeahead_timeout", "2000"),
     ("ui.scrollbar_hide", "2000"),
     ("ui.tooltip_ms", "2000"),
@@ -694,16 +696,14 @@ pub fn registry() -> &'static [Entry] {
             sub: None,
             label: Msg::XferSendMax,
             desc: Msg::XferSendMaxDesc,
-            kind: SettingKind::RadioInput(
-                &[
-                    ("256", Msg::Cap256MiB),
-                    ("100", Msg::Cap100MiB),
-                    ("512", Msg::Cap512MiB),
-                    ("1024", Msg::Cap1GiB),
-                    ("unlimited", Msg::CapUnlimited),
-                ],
-                "MiB",
-            ),
+            // 커스텀 제외(사용자 확정 08-18) — 발신은 스트리밍이라 프리셋으로 충분.
+            kind: SettingKind::Radio(&[
+                ("100", Msg::Cap100MiB),
+                ("256", Msg::Cap256MiB),
+                ("512", Msg::Cap512MiB),
+                ("1024", Msg::Cap1GiB),
+                ("unlimited", Msg::CapUnlimited),
+            ]),
             key: "xfer.send_max_mb",
         },
         Entry {
@@ -713,8 +713,8 @@ pub fn registry() -> &'static [Entry] {
             desc: Msg::XferRecvMaxDesc,
             kind: SettingKind::RadioInput(
                 &[
-                    ("256", Msg::Cap256MiB),
                     ("100", Msg::Cap100MiB),
+                    ("256", Msg::Cap256MiB),
                     ("512", Msg::Cap512MiB),
                     ("1024", Msg::Cap1GiB),
                     ("unlimited", Msg::CapUnlimited),
