@@ -7,6 +7,8 @@
 
 ## 2026-08-18
 
+- ★**송신 전 수신 상한 확인 + 해시 가시화 + 전송 i18n**(main): CapAdvert/Request(태그 11/12)로 해시 전 즉시 차단 · 준비 % 표시·취소 · tf {0}→{} 교정(템플릿 노출) · T-macxfer(mac 대량 전송 필수 실기) 등재. 692 green. 상세 [journal/2026-08-18.md](journal/2026-08-18.md).
+
 - ★**발신 스트리밍 + 파일 상한 2종**(main): 10.7GB DnD 동결 → OfferFile(path,size)·해시 워커 스트리밍·액터 파일 직접 읽기·상한 설정(send/recv·무제한·hot-swap). 수신 스풀 = M4-12 후속. 691 green. 상세 [journal/2026-08-18.md](journal/2026-08-18.md).
 
 - ★**폰트 설정 일습**(main): 절대 px 프리셋(+구 코드 부팅 이관)·숫자 입력·Enter/블러 확정·Base UI 얼굴 미배선 수정·설정 위젯 편집 라우팅 일반화(드래그·우클릭 메뉴·Ctrl+A — 화이트리스트 → 포커스 캡처). 691 green. 상세 [journal/2026-08-18.md](journal/2026-08-18.md).
