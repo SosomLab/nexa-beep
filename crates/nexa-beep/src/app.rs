@@ -2847,12 +2847,18 @@ impl App {
             &auto_rate_note(self.recv_rate, &self.recv_meter, false),
             &mut inv,
         );
-        if remain.is_some() {
-            sv.set_disabled(&[], &mut inv);
-        } else {
+        // ★ 잠금은 **여기 한 곳에서 전량 계산**한다 — set_disabled가 전체 교체라
+        //   다른 지점에서 부분만 넣으면 1초 주기인 이 깔때기가 도로 지운다.
+        let mut locked: Vec<&'static str> = Vec::new();
+        if remain.is_none() {
             // 기간 자동이 아니면 기간 설정은 쓰이지 않는다 — 잠근다.
-            sv.set_disabled(&["xfer.approval_window"], &mut inv);
+            locked.push("xfer.approval_window");
         }
+        if self.settings.get("net.server.mode") != "managed" {
+            // Unmanaged(LAN) = 서버 접속 정보가 쓰이지 않는다(08-18 사용자 요청).
+            locked.extend(["net.server.address", "net.server.port", "net.server.type"]);
+        }
+        sv.set_disabled(&locked, &mut inv);
     }
 
     /// `peer` 대화가 보이는 창을 다시 그린다(Separate = 그 창, Single = 주 창이 이 대화일 때).
@@ -6169,6 +6175,9 @@ impl App {
                         }
                     }
                 }
+                // 서버 모드(08-18) — Unmanaged면 주소·포트·타입을 잠근다(계산은
+                // refresh_approval_ui 깔때기 한 곳 — set_disabled 전체 교체 규약).
+                "net.server.mode" => self.refresh_approval_ui(),
                 "ui.typeahead_space" => self.list.set_typeahead_space(value == "on"),
                 "ui.typeahead_special" => self.list.set_typeahead_special(value == "on"),
                 k if k.starts_with("font.") => {

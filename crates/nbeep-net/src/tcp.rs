@@ -163,11 +163,17 @@ mod tests {
         let mut a = TcpLink::new(TcpStream::connect(addr).unwrap()).unwrap();
         a.set_recv_timeout(Some(Duration::from_millis(20))).unwrap();
         assert_eq!(a.recv().unwrap(), b"hi");
-        let t0 = std::time::Instant::now();
-        assert_eq!(a.recv().err(), Some(LinkError::TimedOut));
+        // min-of-3(08-18) — 부하 중 1회 측정은 스케줄러 지연이 낀다(병렬 빌드
+        // 중 플레이크 실측). 셋 중 최솟값이면 진짜 타임아웃 값이 드러난다.
+        let mut best = Duration::MAX;
+        for _ in 0..3 {
+            let t0 = std::time::Instant::now();
+            assert_eq!(a.recv().err(), Some(LinkError::TimedOut));
+            best = best.min(t0.elapsed());
+        }
         assert!(
-            t0.elapsed() < Duration::from_millis(150),
-            "20ms 설정이 200ms 고정 복원으로 덮이면 실패"
+            best < Duration::from_millis(150),
+            "20ms 설정이 200ms 고정 복원으로 덮이면 실패(최속 {best:?})"
         );
         t.join().unwrap();
     }
