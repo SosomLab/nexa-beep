@@ -1725,6 +1725,9 @@ struct App {
     /// 다음 루프에서 만들 승인 창.
     pending_approve_window: Option<PeerId>,
     /// 슬롯별 얼굴(설정 글꼴명으로 로드 · 없으면 기본 폰트).
+    /// ★ base 슬롯(08-18 실기) — 종전엔 아예 미배선이라 Base UI 글꼴명이
+    /// 조용히 무시됐다(FontSet.base가 항상 내장 기본).
+    face_base: Option<nbeep_gfx::Font>,
     face_peerlist: Option<nbeep_gfx::Font>,
     face_message: Option<nbeep_gfx::Font>,
     face_status: Option<nbeep_gfx::Font>,
@@ -2845,6 +2848,7 @@ impl App {
             let (bytes, idx) = nbeep_plat::font::find_font_by_family(name)?;
             nbeep_gfx::Font::from_static(bytes, idx).ok()
         };
+        self.face_base = load(self.settings.get("font.base.family"));
         self.face_peerlist = load(self.settings.get("font.peerlist.family"));
         self.face_message = load(self.settings.get("font.message.family"));
         self.face_status = load(self.settings.get("font.status.family"));
@@ -5211,11 +5215,18 @@ impl App {
         // 글꼴명(font.{region}.family)은 SettingsState에 저장되지만, 실제 패밀리 로드는
         // 시스템 폰트 열거(M3-3 확장) 후 연결한다 — 지금은 크기만 렌더에 반영.
         let slot = |region: &str, base: f32| -> nbeep_ui::SlotFont {
-            let size = match settings.get(&format!("font.{region}.size")) {
-                "s" => base - 2.0,
-                "l" => base + 3.0,
-                "xl" => base + 7.0,
-                _ => base, // "m"·미설정 = 기본
+            let raw = settings.get(&format!("font.{region}.size"));
+            // 숫자 = **절대 논리 px**(08-18 사용자 요청 — 직접 입력) · 프리셋은
+            // 종전 상대 해석. 범위는 판독성 하한~레이아웃 상한으로 클램프.
+            let size = if let Ok(px) = raw.parse::<f32>() {
+                px.clamp(8.0, 48.0)
+            } else {
+                match raw {
+                    "s" => base - 2.0,
+                    "l" => base + 3.0,
+                    "xl" => base + 7.0,
+                    _ => base, // "m"·미설정 = 기본
+                }
             };
             nbeep_ui::SlotFont {
                 size,
@@ -8487,7 +8498,7 @@ impl App {
         // 슬롯 얼굴을 **필드에서 직접** 빌린다 — 헬퍼 메서드로 감싸면 self 전체를 빌려
         // 아래 windows 가변 차용과 충돌한다(필드 단위 분할 차용을 쓰기 위한 형태).
         let fonts = nbeep_ui::FontSet {
-            base: &self.font,
+            base: self.face_base.as_ref().unwrap_or(&self.font),
             peerlist: self.face_peerlist.as_ref(),
             message: self.face_message.as_ref(),
             status: self.face_status.as_ref(),
@@ -11073,6 +11084,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         wait_timeout_sec: 60,
         approve_view: HashMap::new(),
         pending_approve_window: None,
+        face_base: None,
         face_peerlist: None,
         face_message: None,
         face_status: None,

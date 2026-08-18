@@ -1618,6 +1618,9 @@ impl SettingsWidget {
                         .map(|(v, m)| ComboItem::new(*v, tr(lang, *m)))
                         .collect();
                     let mut size = Combo::new(items, 0);
+                    // 숫자 직접 입력(08-18 사용자 요청) — 프리셋(s/m/l/xl) 외에
+                    // 논리 px를 그대로 넣는다(해석·클램프는 소비 측 fonts_from_settings).
+                    size.set_custom_entry(tr(lang, Msg::CustomInput), "px");
                     size.select_value(self.values.get(size_key).map_or("m", String::as_str));
                     size.set_scale(self.scale);
                     RowCtl::Font { family, size }
