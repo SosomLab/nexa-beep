@@ -330,6 +330,9 @@ impl std::fmt::Debug for InboundSession {
 struct ImageViewState {
     qpath: String,
     img: ImgLoad,
+    /// 이 미리보기를 **연 창**(08-18) — 창 소유자와 같아야 한다. Windows는
+    /// 생성 후 소유자를 못 바꾸므로, 진원이 다르면 창을 새로 만든다.
+    owner: WindowId,
 }
 
 enum ImgLoad {
@@ -1994,7 +1997,23 @@ impl App {
         attrs: winit::window::WindowAttributes,
         at_cursor: bool,
     ) -> winit::window::WindowAttributes {
-        let Some(e) = self.main_id.and_then(|m| self.windows.get(&m)) else {
+        self.modal_attrs_from(None, attrs, at_cursor)
+    }
+
+    /// [`Self::modal_attrs`]의 진원 창 지정판(08-18 실기) — 소유자·커서 기준을
+    /// **연 창**으로 잡는다. 격리함에서 연 미리보기가 메인 소유면 메인이 격리함
+    /// 위로 부상하고, 닫아도 격리함으로 안 돌아온다(소유 관계 = 부상·복귀 축).
+    /// `anchor`가 없거나 죽었으면 종전대로 메인.
+    fn modal_attrs_from(
+        &self,
+        anchor: Option<WindowId>,
+        attrs: winit::window::WindowAttributes,
+        at_cursor: bool,
+    ) -> winit::window::WindowAttributes {
+        let Some(e) = anchor
+            .and_then(|a| self.windows.get(&a))
+            .or_else(|| self.main_id.and_then(|m| self.windows.get(&m)))
+        else {
             return attrs;
         };
         let mut attrs = attrs;
@@ -4733,29 +4752,57 @@ impl App {
 
     /// 확대 미리보기 열기(08-16 · M4-5 잔여) — 단일 창(peer_info 패턴): 이미
     /// 열려 있으면 내용 교체·포커스. 디코드는 워커(imgdec 격리 · 1024px 상한).
-    fn open_image_view(&mut self, el: &ActiveEventLoop, qpath: String, title: String) {
+    fn open_image_view(
+        &mut self,
+        el: &ActiveEventLoop,
+        src: WindowId,
+        qpath: String,
+        title: String,
+    ) {
+        // 진원이 바뀌면 창을 버리고 새로 만든다(08-18 — 소유자 불변 제약).
+        let owner_ok = self.image_view.as_ref().is_some_and(|v| v.owner == src);
+        if !owner_ok {
+            if let Some((wid, _)) = self.windows.iter().find(|(_, e)| e.role == Role::ImageView) {
+                let wid = *wid;
+                self.windows.remove(&wid);
+            }
+        }
         let same = self
             .image_view
             .as_ref()
             .is_some_and(|v| v.qpath == qpath && !matches!(v.img, ImgLoad::Failed));
-        if same {
+        if same && owner_ok {
             // 같은 이미지가 이미 열려 있다 — 재디코드 없이 창만 앞으로.
             if let Some((_, e)) = self.windows.iter().find(|(_, e)| e.role == Role::ImageView) {
                 e.window.focus_window();
             }
             return;
         }
+        let keep_img = if same {
+            // 같은 이미지·다른 진원 — 디코드 결과는 재사용하고 창만 다시 만든다.
+            self.image_view.take().map(|v| v.img)
+        } else {
+            None
+        };
         self.image_view = Some(ImageViewState {
             qpath: qpath.clone(),
-            img: ImgLoad::Loading,
+            img: keep_img.unwrap_or(ImgLoad::Loading),
+            owner: src,
         });
-        let qp = qpath.clone();
-        let secret = self.identity.wrap_secret();
-        spawn_decode(
-            self.proxy.clone(),
-            DecodeTarget::FullImage(qpath),
-            move || crate::imgdec::thumb_raw_from_beepq(std::path::Path::new(&qp), 1024, &secret),
-        );
+        if matches!(
+            self.image_view.as_ref().map(|v| &v.img),
+            Some(ImgLoad::Loading)
+        ) {
+            let qp = qpath.clone();
+            let secret = self.identity.wrap_secret();
+            spawn_decode(
+                self.proxy.clone(),
+                DecodeTarget::FullImage(qpath),
+                move || {
+                    crate::imgdec::thumb_raw_from_beepq(std::path::Path::new(&qp), 1024, &secret)
+                },
+            );
+        }
         if let Some((wid, _)) = self.windows.iter().find(|(_, e)| e.role == Role::ImageView) {
             let wid = *wid;
             if let Some(e) = self.windows.get_mut(&wid) {
@@ -4770,7 +4817,9 @@ impl App {
             .with_title(nbeep_core::tf(nbeep_core::Msg::WinPreview, &[&title]))
             .with_inner_size(winit::dpi::LogicalSize::new(640.0, 560.0))
             .with_window_icon(self.icon.clone());
-        let attrs = self.modal_attrs(attrs, true); // 커서 자리 + 메인 소유(카드 규약)
+        // 커서 자리 + **연 창 소유**(08-18 — 격리함에서 열면 격리함 소유:
+        // 메인이 위로 튀지 않고, 닫으면 격리함으로 복귀).
+        let attrs = self.modal_attrs_from(Some(src), attrs, true);
         let window = Rc::new(el.create_window(attrs).unwrap());
         let scale = window.scale_factor() as f32;
         let context = softbuffer::Context::new(window.clone()).unwrap();
@@ -7398,7 +7447,7 @@ impl App {
                 .file_stem()
                 .map(|s| s.to_string_lossy().into_owned())
                 .unwrap_or_else(|| "이미지".into());
-            self.open_image_view(el, qp, title);
+            self.open_image_view(el, id, qp, title);
         }
         // 풍선 우클릭 복사(08-10) — 위젯은 OS를 모르므로 여기서 클립보드에 쓴다.
         if let Some(t) = self
@@ -8007,7 +8056,7 @@ impl App {
                         .file_stem()
                         .map(|t| t.to_string_lossy().into_owned())
                         .unwrap_or_else(|| "격리물".into());
-                    self.open_image_view(el, qp, title);
+                    self.open_image_view(el, id, qp, title);
                 }
                 if let Some(a) = act {
                     self.run_quarantine_action(a, id);
