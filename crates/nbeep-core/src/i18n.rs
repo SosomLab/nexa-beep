@@ -180,6 +180,22 @@ pub enum Msg {
     OfferCancel,
     /// 이어받기 버튼(M4-10c — {0} = 보존율 %).
     OfferResumeBtn,
+    /// 로그 하위 섹션(M3-22 — 고급 하위).
+    SubLog,
+    LogEnabled,
+    LogEnabledDesc,
+    LogRetain,
+    LogRetainDesc,
+    LogMaxTotal,
+    LogMaxTotalDesc,
+    LogView,
+    LogViewDesc,
+    /// "로그 보기" 행위 동사.
+    ActOpen,
+    /// 로그 보존 기본 라벨(7일).
+    LogRetainDefault,
+    /// 로그 총량 기본 라벨(20MB).
+    LogCapDefault,
     /// 처음부터 버튼(M4-10c — 보존분을 버리고 새로 받기).
     OfferFreshBtn,
     OfferQuarantineNote,
@@ -1145,6 +1161,38 @@ impl Msg {
             Msg::OfferAutoBtn => ["Auto-accept", "자동 승인", "自动接受", "自動承認"],
             Msg::OfferCancel => ["Cancel", "취소", "取消", "キャンセル"],
             Msg::OfferResumeBtn => ["Resume {0}%", "이어받기 {0}%", "续传 {0}%", "再開 {0}%"],
+            Msg::SubLog => ["Log", "로그", "日志", "ログ"],
+            Msg::LogEnabled => ["Status logging", "상태 로그 기록", "状态日志", "ステータスログ"],
+            Msg::LogEnabledDesc => [
+                "Write status bar messages to data/logs (diagnostics). Off = no disk writes.",
+                "상태바 메시지를 data/logs 파일로 남깁니다(진단용). 끄면 디스크 쓰기가 없습니다.",
+                "将状态栏消息写入 data/logs（诊断用）。关闭 = 不写磁盘。",
+                "ステータスバーの内容を data/logs に記録します（診断用）。オフ = 書き込みなし。",
+            ],
+            Msg::LogRetain => ["Log retention (days)", "로그 보존 일수", "日志保留天数", "ログ保持日数"],
+            Msg::LogRetainDesc => [
+                "Older daily files are deleted.",
+                "지난 날짜 파일은 삭제됩니다.",
+                "超过天数的文件将被删除。",
+                "期限を過ぎたファイルは削除されます。",
+            ],
+            Msg::LogMaxTotal => ["Log size cap (MB)", "로그 총량 상한 (MB)", "日志总量上限 (MB)", "ログ合計上限 (MB)"],
+            Msg::LogMaxTotalDesc => [
+                "Oldest files are removed first when over the cap.",
+                "상한을 넘으면 오래된 파일부터 지웁니다.",
+                "超出上限时先删除最旧的文件。",
+                "上限を超えると古いファイルから削除します。",
+            ],
+            Msg::LogView => ["View log", "로그 보기", "查看日志", "ログを見る"],
+            Msg::LogViewDesc => [
+                "Open today's log with the default .log app (folder if absent).",
+                "오늘 로그를 .log 기본 프로그램으로 엽니다(없으면 폴더).",
+                "用默认程序打开今天的日志（无则打开文件夹）。",
+                "今日のログを既定のアプリで開きます（無ければフォルダ）。",
+            ],
+            Msg::ActOpen => ["Open", "열기", "打开", "開く"],
+            Msg::LogRetainDefault => ["Default (7)", "기본(7일)", "默认(7天)", "既定(7日)"],
+            Msg::LogCapDefault => ["Default (20)", "기본(20MB)", "默认(20MB)", "既定(20MB)"],
             Msg::OfferFreshBtn => ["From start", "처음부터", "重新开始", "最初から"],
             Msg::OfferQuarantineNote => [
                 "Approving only quarantines it — a separate approval is needed to materialize",

@@ -7,6 +7,8 @@
 
 ## 2026-08-18
 
+- ★**M3-22 상태바 로깅 구현**(main): set_status 깔때기(113곳 이관)·statuslog.rs(bounded 큐+전용 스레드·드롭 계상·2s flush)·beep-YYYYMMDD.log 회전·설정 4항목(고급›로그 · 기본 off)·로그 보기 Action(`open_path` 3-OS 신설). 691 green. 상세 [journal/2026-08-18.md](journal/2026-08-18.md).
+
 - ★**M4-10c 완결 + 서버 설정 잠금**(main): 발신 능동 재-Offer 1회(Closed 기억→재성립 재제안)·수신 2택 UI(이어받기 N%/처음부터)·Unmanaged 모드 = 서버 3행 잠금(깔때기 합류). M4-10 잔여 = 실기만. 689 green. 상세 [journal/2026-08-18.md](journal/2026-08-18.md).
 
 - ★**M4-10a+b 전송 재개 구현**(main · D-31 확정 당일): 부분물 봉인 보존(`part.rs` — parts/{sha}.part·72h/1GiB sweep)·Accept 재개 꼬리(하위 호환 바이트 동일)·중복 프리픽스 관용·발신 prefix 해시 대조 중간 송신·수락 3경로 자동 이어받기. 잔여 = M4-10c(능동 재-Offer·2택 UI)+실기. 688 green. 상세 [journal/2026-08-18.md](journal/2026-08-18.md).

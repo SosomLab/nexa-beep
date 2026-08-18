@@ -53,6 +53,38 @@ pub fn hide_gui_console() {
     }
 }
 
+/// 파일·폴더를 **OS 기본 연결 프로그램**으로 연다(M3-22 "로그 보기" — `.log`는
+/// 기본 편집기·폴더는 탐색기). 성공 = 스폰 성공(열림 보장까지는 아님 — fail-soft).
+/// Windows `cmd /c start`(연결 프로그램 해석은 셸 몫) · mac `open` · Linux `xdg-open`.
+#[must_use]
+pub fn open_path(path: &std::path::Path) -> bool {
+    #[cfg(windows)]
+    {
+        // start의 첫 인자는 창 제목 자리 — 빈 제목을 줘야 경로가 제목으로 안 삼켜진다.
+        std::process::Command::new("cmd")
+            .args(["/c", "start", ""])
+            .arg(path)
+            .spawn()
+            .is_ok()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open").arg(path).spawn().is_ok()
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(path)
+            .spawn()
+            .is_ok()
+    }
+    #[cfg(not(any(windows, unix)))]
+    {
+        let _ = path;
+        false
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

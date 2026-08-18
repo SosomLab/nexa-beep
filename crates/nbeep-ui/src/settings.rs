@@ -68,6 +68,7 @@ const HIDDEN_KEYS: &[&str] = &[
 // 권고했으나 사용자가 공통 off로 확정했다. 켜는 것은 설정 고급에서 옵트인.
 const TOGGLE_DEFAULT_OFF: &[&str] = &[
     "ui.close_to_tray", // 닫기 = 트레이(M3-2d — 기본 off · 사용자 확정)
+    "log.enabled",      // 상태 로그(M3-22 — 기본 off · 사용자 확정 08-18)
     "notify.preview",   // 알림 본문 표시(M3-8 — 기본 끔: 화면 공유·녹화 안전)
     "profile.share.basic",
     "profile.share.email",
@@ -975,6 +976,39 @@ pub fn registry() -> &'static [Entry] {
                 verb: Msg::ActReset,
             },
             key: "settings.reset",
+        },
+        // ── 고급 › 로그(M3-22 · 08-18 — `log.enabled` 기본 off 사용자 확정) ──
+        Entry {
+            cat: Msg::CatAdvanced,
+            sub: Some(Msg::SubLog),
+            label: Msg::LogEnabled,
+            desc: Msg::LogEnabledDesc,
+            kind: SettingKind::Toggle,
+            key: "log.enabled",
+        },
+        Entry {
+            cat: Msg::CatAdvanced,
+            sub: Some(Msg::SubLog),
+            label: Msg::LogRetain,
+            desc: Msg::LogRetainDesc,
+            kind: SettingKind::RadioInput(&[("7", Msg::LogRetainDefault)], ""),
+            key: "log.retain_days",
+        },
+        Entry {
+            cat: Msg::CatAdvanced,
+            sub: Some(Msg::SubLog),
+            label: Msg::LogMaxTotal,
+            desc: Msg::LogMaxTotalDesc,
+            kind: SettingKind::RadioInput(&[("20", Msg::LogCapDefault)], ""),
+            key: "log.max_total_mb",
+        },
+        Entry {
+            cat: Msg::CatAdvanced,
+            sub: Some(Msg::SubLog),
+            label: Msg::LogView,
+            desc: Msg::LogViewDesc,
+            kind: SettingKind::Action { verb: Msg::ActOpen },
+            key: "log.view",
         },
     ]
 }
