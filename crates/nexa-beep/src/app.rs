@@ -133,6 +133,13 @@ enum AppEvent {
     XferFailed { peer: PeerId, why: String },
     /// 상대가 **수락**했다 — 대기 창을 닫고 스트리밍이 시작된다.
     XferAccepted { peer: PeerId },
+    /// 발신 준비 완료(08-18 스트리밍 — 해시 워커 복귀 · None = 읽기 실패).
+    SendHashed {
+        peer: PeerId,
+        path: std::path::PathBuf,
+        size: u64,
+        sha: Option<[u8; 32]>,
+    },
     /// 발신 1건 **전송 끝(청크+Done 발신)** — 큐의 다음 파일로 넘어가되, UI는 아직 "완료"가
     /// 아니라 **확인 대기**다(수신 ack `XferAcked`가 와야 완료 · M4-9).
     XferSendDone {
@@ -246,7 +253,9 @@ enum SessionCmd {
         id: nbeep_core::XferId,
         name: String,
         sha: [u8; 32],
-        bytes: Vec<u8>,
+        /// 원본 경로(08-18 발신 스트리밍 — 바이트를 들고 다니지 않는다).
+        path: std::path::PathBuf,
+        size: u64,
     },
     /// 수신 제안 수락/거절(사용자 결정 — 자동 경로 없음).
     AcceptXfer {
@@ -257,6 +266,8 @@ enum SessionCmd {
         /// Accept에 재개 오프셋+프리픽스 해시를 실어 발신측 검증을 요청한다.
         resume: Option<Vec<u8>>,
     },
+    /// 수신 파일 상한 변경(08-18 — `xfer.recv_max_mb` hot-swap · u64::MAX = 무제한).
+    SetRecvMax(u64),
     /// 발신 취소(타임아웃·사용자) — 상대에게 Cancel 통지.
     CancelXfer(nbeep_core::XferId),
     RejectXfer {
@@ -452,7 +463,8 @@ type PendingOffer = (nbeep_core::XferId, String, u64, [u8; 32]);
 
 struct ActiveSend {
     id: nbeep_core::XferId,
-    data: Vec<u8>,
+    /// 열린 원본 파일(08-18 스트리밍) — 청크는 오프셋에서 직접 읽는다(메모리 O(청크)).
+    file: std::fs::File,
     /// 다음 보낼 오프셋(bytes).
     next: u64,
     total: u64,
@@ -505,6 +517,7 @@ fn spawn_session_actor(
     proxy: winit::event_loop::EventLoopProxy<AppEvent>,
     send_rate: nbeep_core::RateLimit,
     seal_secret: [u8; 32],
+    recv_max: u64,
 ) -> std::thread::JoinHandle<()> {
     use nbeep_core::mux::StreamId;
     use nbeep_core::{XferInbox, XferMsg};
@@ -514,8 +527,10 @@ fn spawn_session_actor(
     std::thread::spawn(move || {
         // 파일 상태는 액터가 소유한다 — GUI 스레드는 이벤트만 받는다(대용량 조립이
         // 메인 스레드를 막지 않게).
-        let mut inbox = XferInbox::new();
-        let mut outgoing: HashMap<nbeep_core::XferId, Vec<u8>> = HashMap::new();
+        let mut inbox = XferInbox::with_max_file(recv_max); // 수신 상한 = 설정(08-18)
+                                                            // (경로, 크기) — 발신 스트리밍(08-18): 수락 시 파일을 열어 청크 단위로
+                                                            // 직접 읽는다(10.7GB ISO DnD가 fs::read 전량 조립으로 앱을 얼렸다).
+        let mut outgoing: HashMap<nbeep_core::XferId, (std::path::PathBuf, u64)> = HashMap::new();
         // 수신 시작 시각(xid별 · 08-16) — 평균 수신 속도 표기용(첫 청크 기준).
         let mut recv_started: HashMap<nbeep_core::XferId, u64> = HashMap::new();
         // 취소된 전송(08-18 실기) — 취소 후에도 와이어에 남은 청크·Done이 몇 개
@@ -564,15 +579,16 @@ fn spawn_session_actor(
                             id,
                             name,
                             sha,
-                            bytes,
+                            path,
+                            size,
                         } => {
                             let offer = XferMsg::Offer {
                                 id,
-                                size: bytes.len() as u64,
+                                size,
                                 sha256: sha,
                                 name: name.into_bytes(),
                             };
-                            outgoing.insert(id, bytes);
+                            outgoing.insert(id, (path, size));
                             session.send(StreamId::File, &offer.encode())
                         }
                         SessionCmd::AcceptXfer {
@@ -617,6 +633,10 @@ fn spawn_session_actor(
                                     .encode(),
                                 )
                             }
+                        }
+                        SessionCmd::SetRecvMax(v) => {
+                            inbox.set_max_file(v);
+                            Ok(())
                         }
                         SessionCmd::CancelXfer(id) => {
                             outgoing.remove(&id);
@@ -669,6 +689,7 @@ fn spawn_session_actor(
                 }
                 if let Some(st) = sending.as_mut() {
                     let mut done = false;
+                    let mut read_fail = false;
                     for _ in 0..4 {
                         if st.next >= st.total {
                             done = true;
@@ -723,11 +744,22 @@ fn spawn_session_actor(
                                 std::thread::sleep(std::time::Duration::from_millis(wait));
                             }
                         }
-                        #[allow(clippy::cast_possible_truncation)]
+                        // 파일에서 직접 읽기(08-18 스트리밍) — 실패 = 전송 중단
+                        // (원본이 이동·삭제된 경우 — 조용한 부분 전송 금지).
+                        let mut data = vec![0u8; usize::try_from(n).unwrap_or(0)];
+                        {
+                            use std::io::{Read as _, Seek as _};
+                            if st.file.seek(std::io::SeekFrom::Start(off)).is_err()
+                                || st.file.read_exact(&mut data).is_err()
+                            {
+                                read_fail = true;
+                                break;
+                            }
+                        }
                         let chunk = XferMsg::Chunk {
                             id: st.id,
                             offset: off,
-                            data: st.data[off as usize..end as usize].to_vec(),
+                            data,
                         };
                         if session.send(StreamId::File, &chunk.encode()).is_err() {
                             let _ = proxy.send_event(AppEvent::Closed { peer });
@@ -741,6 +773,16 @@ fn spawn_session_actor(
                             total: st.total,
                             sending: true,
                         });
+                    }
+                    if read_fail {
+                        let id = st.id;
+                        sending = None;
+                        let _ = session.send(StreamId::File, &XferMsg::Cancel { id }.encode());
+                        let _ = proxy.send_event(AppEvent::XferFailed {
+                            peer,
+                            why: "원본 파일을 읽을 수 없어 전송을 중단했습니다".into(),
+                        });
+                        continue;
                     }
                     if done {
                         let id = st.id;
@@ -1187,6 +1229,16 @@ fn auto_rate_note(
     }
 }
 
+/// 파일 크기 상한 설정 해석(08-18) — MiB 숫자 · "unlimited" = None(무제한) ·
+/// 미지/파싱 실패 = 기본 256MiB. 커스텀은 1MiB~1TiB로 클램프.
+fn cap_from_setting(v: &str) -> Option<u64> {
+    if v == "unlimited" {
+        return None;
+    }
+    let mb = v.parse::<u64>().unwrap_or(256).clamp(1, 1024 * 1024);
+    Some(mb * 1024 * 1024)
+}
+
 fn rate_label(bps: u64) -> String {
     if bps == 0 {
         return "무제한".into();
@@ -1211,7 +1263,7 @@ fn xfer_step(
     peer: PeerId,
     session: &mut LiveSession,
     inbox: &mut nbeep_core::XferInbox,
-    outgoing: &mut HashMap<nbeep_core::XferId, Vec<u8>>,
+    outgoing: &mut HashMap<nbeep_core::XferId, (std::path::PathBuf, u64)>,
     sending: &mut Option<ActiveSend>,
     recv_started: &mut HashMap<nbeep_core::XferId, u64>,
     canceled: &mut std::collections::HashSet<nbeep_core::XferId>,
@@ -1263,15 +1315,22 @@ fn xfer_step(
             resume_offset,
             prefix_sha,
         }) => {
-            if let Some(data) = outgoing.remove(&id) {
+            if let Some((path, total)) = outgoing.remove(&id) {
                 let _ = proxy.send_event(AppEvent::XferAccepted { peer });
-                let total = data.len() as u64;
+                // 스트리밍 발신(08-18) — 파일을 메모리에 올리지 않는다.
+                let Ok(mut file) = std::fs::File::open(&path) else {
+                    fail(format!("파일 열기 실패: {}", path.display()));
+                    return Ok(());
+                };
                 // ★ 재개(M4-10b) — 요청 오프셋의 내 원본 프리픽스 해시가 상대의
                 //   보존분 해시와 **일치할 때만** 그 지점부터. 불일치·범위 초과 =
                 //   처음부터(fail-closed — 조용히 이어붙여 손상 파일을 만들지 않는다).
                 let start = if resume_offset > 0 && resume_offset < total {
-                    let cut = usize::try_from(resume_offset).unwrap_or(0);
-                    if cut > 0 && nbeep_crypto::sha256(&data[..cut]) == prefix_sha {
+                    use std::io::Seek as _;
+                    let ok = file.rewind().is_ok()
+                        && nbeep_crypto::sha256_reader(&mut file, resume_offset)
+                            .is_some_and(|(h, n)| n == resume_offset && h == prefix_sha);
+                    if ok {
                         resume_offset
                     } else {
                         0
@@ -1286,7 +1345,7 @@ fn xfer_step(
                 let local = send_rate.target_bps(meter);
                 *sending = Some(ActiveSend {
                     id,
-                    data,
+                    file,
                     next: start,
                     from: start,
                     total,
@@ -1737,6 +1796,8 @@ struct App {
     pending_offers: HashMap<PeerId, VecDeque<PendingOffer>>,
     /// 상대별 발신 대기 파일 큐(다중 드롭 — 한 번에 하나씩 협상한다).
     send_queue: HashMap<PeerId, VecDeque<std::path::PathBuf>>,
+    /// 해시 워커가 도는 발신(08-18 스트리밍) — 도는 동안 펌프 중복 진입 금지.
+    preparing_send: std::collections::HashSet<PeerId>,
     /// 협상·전송 중인 발신 파일의 경로(M4-10c) — 세션이 끊기면 재-Offer 원료.
     current_send: HashMap<PeerId, std::path::PathBuf>,
     /// 끊김으로 중단된 발신(M4-10c) — 세션 재성립 시 **능동 재-Offer 1회**.
@@ -2324,58 +2385,64 @@ impl App {
 
     /// 큐에서 다음 파일을 꺼내 오퍼를 보낸다(협상 중이면 대기).
     fn pump_send_queue(&mut self, peer: PeerId) {
-        if self.awaiting_accept.contains_key(&peer) {
-            return; // 앞 파일 협상 중
+        if self.awaiting_accept.contains_key(&peer) || self.preparing_send.contains(&peer) {
+            return; // 앞 파일 협상·해시 준비 중
         }
         let Some(path) = self.send_queue.get_mut(&peer).and_then(VecDeque::pop_front) else {
             // 큐가 비었다 — 배치 종료.
             self.send_batch.remove(&peer);
             return;
         };
-        let bytes = match std::fs::read(&path) {
-            Ok(b) => b,
-            Err(e) => {
+        // ★ 크기 사전 검사(08-18 실기 — 10.7GB ISO DnD가 앱을 얼렸다): 설정 상한
+        //   (`xfer.send_max_mb` · 무제한 가능)을 **읽기 전에** 검사한다. 수신측
+        //   상한 협상(Reject·TooLarge)과는 별개의 발신측 관문.
+        let fsize = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        let cap = cap_from_setting(self.settings.get("xfer.send_max_mb"));
+        if let Some(cap) = cap {
+            if fsize > cap {
+                let name = path
+                    .file_name()
+                    .map_or_else(|| "file".to_string(), |n| n.to_string_lossy().into_owned());
+                self.push_xfer_line(peer, true, &name, fsize);
+                self.set_xfer_line(
+                    peer,
+                    true,
+                    nbeep_ui::XferLineState::Failed {
+                        why: nbeep_core::tf(
+                            nbeep_core::Msg::XferTooBigLocal,
+                            &["", &human_size(cap)],
+                        )
+                        .trim_start()
+                        .trim_start_matches("— ")
+                        .to_string(),
+                    },
+                );
                 self.set_status(nbeep_core::tf(
-                    nbeep_core::Msg::StfFileReadFail,
-                    &[&e.to_string()],
+                    nbeep_core::Msg::XferTooBigLocal,
+                    &[&name, &human_size(cap)],
                 ));
-                self.pump_send_queue(peer);
+                self.redraw_conversation(peer);
+                self.pump_send_queue(peer); // 다음 파일(배치 계속)
                 return;
             }
-        };
-        self.current_send.insert(peer, path.clone()); // 끊김 대비(M4-10c)
-        let name = path
-            .file_name()
-            .map_or_else(|| "file".to_string(), |n| n.to_string_lossy().into_owned());
-        // 전송 id — 새 키의 앞 16B(세션 내 유일하면 충분한 간이 난수).
-        let mut xid = [0u8; 16];
-        xid.copy_from_slice(&nbeep_crypto::Identity::generate().peer_id().as_bytes()[..16]);
-        let sha = nbeep_crypto::sha256(&bytes);
-        let size = bytes.len() as u64;
-        let sent = self.conversations.get(&peer).is_some_and(|c| {
-            c.out_tx
-                .send(SessionCmd::OfferFile {
-                    id: xid,
-                    name: name.clone(),
-                    sha,
-                    bytes,
-                })
-                .is_ok()
-        });
-        if !sent {
-            self.set_status(nbeep_core::t(nbeep_core::Msg::StSessionDropSend));
-            self.send_queue.remove(&peer);
-            self.send_batch.remove(&peer);
-            return;
         }
-        self.awaiting_accept.insert(peer, xid);
-        self.set_status(nbeep_core::tf(
-            nbeep_core::Msg::StfFileOffer,
-            &[&name, &human_size(size)],
-        ));
-        // 스레드에 송신 항목 추가(승인 대기 → 진행 → 완료가 이 항목 위에서 갱신된다).
-        self.push_xfer_line(peer, true, &name, size);
-        self.open_send_wait(peer, &name);
+        self.current_send.insert(peer, path.clone()); // 끊김 대비(M4-10c)
+                                                      // ★ 스트리밍 발신(08-18 — "Unlimited에서 10GB도 무정지"): 전량 fs::read를
+                                                      //   버리고 ① 전체 해시는 **워커 스레드**에서 스트리밍으로(메인 무정지)
+                                                      //   ② 청크는 액터가 파일에서 직접 읽는다(메모리 O(청크)).
+        self.preparing_send.insert(peer);
+        let proxy = self.proxy.clone();
+        std::thread::spawn(move || {
+            let sha = std::fs::File::open(&path)
+                .ok()
+                .and_then(|mut f| nbeep_crypto::sha256_reader(&mut f, u64::MAX).map(|(h, _)| h));
+            let _ = proxy.send_event(AppEvent::SendHashed {
+                peer,
+                path,
+                size: fsize,
+                sha,
+            });
+        });
     }
 
     /// 발신 대기 창 — **60초 타임아웃 버튼**이 자동으로 눌려 창을 닫고 전송을 취소한다.
@@ -3624,6 +3691,7 @@ impl App {
             self.proxy.clone(),
             self.send_rate,
             self.identity.wrap_secret(),
+            cap_from_setting(self.settings.get("xfer.recv_max_mb")).unwrap_or(u64::MAX),
         );
         self.actor_joins.push(join);
         // 프로필 자동 프리페치(M3-17 · ADR-0008) — 세션이 섰으니 요청 1회.
@@ -6304,6 +6372,13 @@ impl App {
                 // 서버 모드(08-18) — Unmanaged면 주소·포트·타입을 잠근다(계산은
                 // refresh_approval_ui 깔때기 한 곳 — set_disabled 전체 교체 규약).
                 "net.server.mode" => self.refresh_approval_ui(),
+                // 수신 파일 상한(08-18) — 연결된 전 세션 hot-swap(새 오퍼부터 적용).
+                "xfer.recv_max_mb" => {
+                    let cap = cap_from_setting(&value).unwrap_or(u64::MAX);
+                    for conv in self.conversations.values() {
+                        let _ = conv.out_tx.send(SessionCmd::SetRecvMax(cap));
+                    }
+                }
                 // 로그 설정(M3-22) — 켜기/끄기·보존·상한 전부 hot-swap(재시작 없음).
                 "log.enabled" | "log.retain_days" | "log.max_total_mb" => {
                     self.refresh_statuslog();
@@ -7786,6 +7861,7 @@ impl App {
             self.send_queue.remove(&peer);
             self.send_batch.remove(&peer);
             self.current_send.remove(&peer); // 취소 = 의사 표시(M4-10c)
+            self.preparing_send.remove(&peer);
             self.resend_offers.remove(&peer);
         } else if let Some(sha) = self.resumed_recv.remove(&peer) {
             // 수동 취소 = 의사 표시 — 보존 부분물도 함께 폐기(재개 제안 금지 · M4-10).
@@ -9077,6 +9153,59 @@ impl ApplicationHandler<AppEvent> for App {
                 self.set_status(nbeep_core::t(nbeep_core::Msg::StPeerAccepted));
                 self.redraw_conversation(peer);
             }
+            AppEvent::SendHashed {
+                peer,
+                path,
+                size,
+                sha,
+            } => {
+                self.preparing_send.remove(&peer);
+                let Some(sha) = sha else {
+                    self.set_status(nbeep_core::tf(
+                        nbeep_core::Msg::StfFileReadFail,
+                        &[&path.display().to_string()],
+                    ));
+                    self.current_send.remove(&peer);
+                    self.pump_send_queue(peer);
+                    return;
+                };
+                if !self.conversations.contains_key(&peer) {
+                    // 해시 도는 사이 세션이 끊겼다 — Closed가 current_send를
+                    // resend_offers로 옮겼으니 재성립 때 다시 온다. 조용히 종료.
+                    return;
+                }
+                let name = path
+                    .file_name()
+                    .map_or_else(|| "file".to_string(), |n| n.to_string_lossy().into_owned());
+                // 전송 id — 새 키의 앞 16B(세션 내 유일하면 충분한 간이 난수).
+                let mut xid = [0u8; 16];
+                xid.copy_from_slice(&nbeep_crypto::Identity::generate().peer_id().as_bytes()[..16]);
+                let sent = self.conversations.get(&peer).is_some_and(|c| {
+                    c.out_tx
+                        .send(SessionCmd::OfferFile {
+                            id: xid,
+                            name: name.clone(),
+                            sha,
+                            path,
+                            size,
+                        })
+                        .is_ok()
+                });
+                if !sent {
+                    self.set_status(nbeep_core::t(nbeep_core::Msg::StSessionDropSend));
+                    self.send_queue.remove(&peer);
+                    self.send_batch.remove(&peer);
+                    return;
+                }
+                self.awaiting_accept.insert(peer, xid);
+                self.set_status(nbeep_core::tf(
+                    nbeep_core::Msg::StfFileOffer,
+                    &[&name, &human_size(size)],
+                ));
+                // 스레드에 송신 항목 추가(승인 대기 → 진행 → 완료가 이 항목 위에서 갱신).
+                self.push_xfer_line(peer, true, &name, size);
+                self.open_send_wait(peer, &name);
+            }
             AppEvent::XferSendDone {
                 peer,
                 avg_bps,
@@ -9194,8 +9323,9 @@ impl ApplicationHandler<AppEvent> for App {
                 // ack 대기 정리(RL-14ⓐ · 08-18) — 상대가 떠났으면 수신 확인은
                 // 영영 안 온다. 남기면 종료 가드가 영구 "확인 대기 N건"이 된다.
                 self.awaiting_ack.remove(&peer);
-                // 중단 발신 기억(M4-10c) — 진행 중이던 파일 + 남은 큐. 세션이
-                // 되살아나면 능동 재-Offer 1회(수신측 .part 매치 = 이어받기).
+                self.preparing_send.remove(&peer); // 해시 워커 결과는 도착 시 무시된다
+                                                   // 중단 발신 기억(M4-10c) — 진행 중이던 파일 + 남은 큐. 세션이
+                                                   // 되살아나면 능동 재-Offer 1회(수신측 .part 매치 = 이어받기).
                 {
                     let mut interrupted: VecDeque<std::path::PathBuf> = VecDeque::new();
                     if let Some(p) = self.current_send.remove(&peer) {
@@ -11107,6 +11237,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         face_mono: None,
         pending_offers: HashMap::new(),
         send_queue: HashMap::new(),
+        preparing_send: std::collections::HashSet::new(),
         current_send: HashMap::new(),
         resend_offers: HashMap::new(),
         send_batch: HashMap::new(),

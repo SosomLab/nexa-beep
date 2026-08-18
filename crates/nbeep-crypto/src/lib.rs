@@ -31,3 +31,25 @@ pub fn sha256(data: &[u8]) -> [u8; 32] {
     h.update(data);
     h.finalize().into()
 }
+
+/// 리더의 **앞 `limit` 바이트**를 스트리밍 해시(M4 발신 스트리밍 · 08-18) —
+/// 대용량 파일을 메모리에 올리지 않고 전체 해시(limit = u64::MAX)나 재개
+/// 프리픽스 해시를 구한다. 1MiB 버퍼 단위 · 읽기 오류 = None(fail-closed).
+pub fn sha256_reader(r: &mut dyn std::io::Read, limit: u64) -> Option<([u8; 32], u64)> {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    let mut buf = vec![0u8; 1024 * 1024];
+    let mut left = limit;
+    let mut total = 0u64;
+    while left > 0 {
+        let want = buf.len().min(usize::try_from(left).unwrap_or(buf.len()));
+        let n = r.read(&mut buf[..want]).ok()?;
+        if n == 0 {
+            break; // EOF
+        }
+        h.update(&buf[..n]);
+        total += n as u64;
+        left -= n as u64;
+    }
+    Some((h.finalize().into(), total))
+}

@@ -687,6 +687,42 @@ pub fn registry() -> &'static [Entry] {
             ),
             key: "xfer.recv_rate",
         },
+        // 파일 크기 상한(08-18 사용자 요청 — 발신/수신 각각 · 송수신 전 점검).
+        // 값 = MiB 숫자 · "unlimited" = 무제한 · 커스텀 = 직접 입력(MiB).
+        Entry {
+            cat: Msg::CatFiles,
+            sub: None,
+            label: Msg::XferSendMax,
+            desc: Msg::XferSendMaxDesc,
+            kind: SettingKind::RadioInput(
+                &[
+                    ("256", Msg::Cap256MiB),
+                    ("100", Msg::Cap100MiB),
+                    ("512", Msg::Cap512MiB),
+                    ("1024", Msg::Cap1GiB),
+                    ("unlimited", Msg::CapUnlimited),
+                ],
+                "MiB",
+            ),
+            key: "xfer.send_max_mb",
+        },
+        Entry {
+            cat: Msg::CatFiles,
+            sub: None,
+            label: Msg::XferRecvMax,
+            desc: Msg::XferRecvMaxDesc,
+            kind: SettingKind::RadioInput(
+                &[
+                    ("256", Msg::Cap256MiB),
+                    ("100", Msg::Cap100MiB),
+                    ("512", Msg::Cap512MiB),
+                    ("1024", Msg::Cap1GiB),
+                    ("unlimited", Msg::CapUnlimited),
+                ],
+                "MiB",
+            ),
+            key: "xfer.recv_max_mb",
+        },
         Entry {
             cat: Msg::CatFiles,
             sub: None,
