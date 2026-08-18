@@ -5215,17 +5215,18 @@ impl App {
         // 글꼴명(font.{region}.family)은 SettingsState에 저장되지만, 실제 패밀리 로드는
         // 시스템 폰트 열거(M3-3 확장) 후 연결한다 — 지금은 크기만 렌더에 반영.
         let slot = |region: &str, base: f32| -> nbeep_ui::SlotFont {
+            let _ = base; // 절대화(08-18 2차) — 슬롯 상대 기준 폐지(전 슬롯 Normal 16)
             let raw = settings.get(&format!("font.{region}.size"));
-            // 숫자 = **절대 논리 px**(08-18 — 프리셋도 값이 px다). 구 코드(s/m/l/xl)는
-            // 부팅 이관이 숫자로 바꾸지만, 이관 전 경로 대비 관용 해석을 남긴다.
+            // 숫자 = **절대 논리 px**. 구 코드(s/m/l/xl)는 부팅 이관이 바꾸지만
+            // 이관 전 경로 대비 관용 해석을 남긴다(같은 표).
             let size = if let Ok(px) = raw.parse::<f32>() {
                 px.clamp(8.0, 48.0)
             } else {
                 match raw {
-                    "s" => base - 2.0,
-                    "l" => base + 3.0,
-                    "xl" => base + 7.0,
-                    _ => base, // "m"·미설정 = 기본
+                    "s" => 14.0,
+                    "l" => 18.0,
+                    "xl" => 22.0,
+                    _ => 16.0, // "m"·미설정 = Normal
                 }
             };
             nbeep_ui::SlotFont {
@@ -10890,26 +10891,19 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
             conf.keep_unknown(k, v);
         }
     }
-    // 폰트 크기 구 코드 이관(08-18 — 프리셋 절대화): 저장된 s/m/l/xl을 **그 슬롯의
-    // 종전 실크기 px**로 바꾼다(모양 불변 이관 — 상태바 "Normal"이 13px였다면
-    // 13으로 남아 새 라벨 "작게(13px)"와 표기가 비로소 일치한다).
-    for (region, base) in [
-        ("base", 16i32),
-        ("peerlist", 16),
-        ("message", 18),
-        ("status", 13),
-    ] {
+    // 폰트 크기 구 코드 이관(08-18 2차 — 절대 프리셋·전 슬롯 공통):
+    // s→14 · m→16 · l→18 · xl→22 (사용자 확정 — 기본은 모두 Normal 16).
+    for region in ["base", "peerlist", "message", "status"] {
         let key = format!("font.{region}.size");
-        let old = settings.get(&key).to_string();
-        let px = match old.as_str() {
-            "s" => Some(base - 2),
-            "m" => Some(base),
-            "l" => Some(base + 3),
-            "xl" => Some(base + 7),
+        let px = match settings.get(&key) {
+            "s" => Some("14"),
+            "m" => Some("16"),
+            "l" => Some("18"),
+            "xl" => Some("22"),
             _ => None, // 이미 숫자(신) 또는 빈 값
         };
         if let Some(px) = px {
-            settings.set_by_name(&key, &px.to_string());
+            settings.set_by_name(&key, px);
         }
     }
     // CLI 플래그는 이 세션만 이긴다 — 저장값을 덮어쓰되 dirty를 세우지 않는다

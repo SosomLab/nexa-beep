@@ -37,25 +37,18 @@ const SIZE_OPTS: &[(&str, Msg)] = &[
 ];
 
 /// 크기 기본값 — 순서와 무관하게 '보통' 고정.
-/// 폰트 크기 프리셋(08-18 — **절대 px가 값이자 라벨**): 같은 "Normal"이 슬롯마다
-/// 다른 크기를 뜻하던 혼선을 없앤다(상태바 13px가 Normal로 표기되던 것).
-/// 값이 숫자라 커스텀 입력과 같은 축 — 소비 측은 숫자 = 절대 논리 px 하나만 안다.
+/// 폰트 크기 프리셋(08-18 2차 확정 — **값은 절대 px · 라벨은 이름만**):
+/// 크기 안내는 Base UI 설명문이 진다("Normal (16px)" 병기는 원복).
+/// 기본은 **전 슬롯 Normal(16px)** · Small = 14px(사용자 확정).
 const FONT_SIZE_OPTS: &[(&str, Msg)] = &[
-    ("13", Msg::FontSizeSmall),
-    ("16", Msg::FontSizeNormal),
-    ("18", Msg::FontSizeLarge),
-    ("22", Msg::FontSizeXl),
+    ("14", Msg::SizeSmall),
+    ("16", Msg::SizeNormal),
+    ("18", Msg::SizeLarge),
+    ("22", Msg::SizeXLarge),
 ];
 
-/// 슬롯별 크기 기본(px) — 종전 상대 프리셋의 실크기를 그대로 계승(모양 불변).
-#[must_use]
-pub fn font_size_default(size_key: &str) -> &'static str {
-    match size_key {
-        "font.status.size" => "13",
-        "font.message.size" => "18",
-        _ => "16", // base·peerlist
-    }
-}
+/// 폰트 크기 기본(px) — 전 슬롯 공통 Normal(사용자 확정 08-18).
+const FONT_SIZE_DEFAULT: &str = "16";
 
 /// [`SIZE_OPTS`]의 `Radio` kind용 정적 참조(컨트롤 크기 항목 재사용).
 const SIZE_OPTS_STATIC: &[(&str, Msg)] = SIZE_OPTS;
@@ -196,7 +189,7 @@ impl Entry {
                 size_key,
             } => vec![
                 (family_key, String::new()), // 빈 문자열 = 시스템 기본 글꼴
-                (size_key, font_size_default(size_key).to_string()),
+                (size_key, FONT_SIZE_DEFAULT.to_string()),
             ],
             // 행위 항목은 값이 없다 — 영속·검증 대상에서 자연히 빠진다.
             SettingKind::Action { .. } => vec![],
@@ -1642,7 +1635,7 @@ impl SettingsWidget {
                     size.select_value(
                         self.values
                             .get(size_key)
-                            .map_or_else(|| font_size_default(size_key), String::as_str),
+                            .map_or(FONT_SIZE_DEFAULT, String::as_str),
                     );
                     size.set_scale(self.scale);
                     RowCtl::Font { family, size }

@@ -192,11 +192,8 @@ pub enum Msg {
     LogViewDesc,
     /// "로그 보기" 행위 동사.
     ActOpen,
-    /// 폰트 크기 프리셋(절대 px 명시 — 08-18: 같은 Normal이 슬롯마다 달랐다).
-    FontSizeSmall,
-    FontSizeNormal,
-    FontSizeLarge,
-    FontSizeXl,
+    /// 폰트 크기 XL 라벨(값은 절대 px — 크기 안내는 Base UI 설명문에).
+    SizeXLarge,
     /// 로그 보존 기본 라벨(7일).
     LogRetainDefault,
     /// 로그 총량 기본 라벨(20MB).
@@ -1237,15 +1234,7 @@ impl Msg {
                 "今日のログを既定のアプリで開きます（無ければフォルダ）。",
             ],
             Msg::ActOpen => ["Open", "열기", "打开", "開く"],
-            Msg::FontSizeSmall => ["Small (13px)", "작게 (13px)", "小 (13px)", "小 (13px)"],
-            Msg::FontSizeNormal => ["Normal (16px)", "보통 (16px)", "中 (16px)", "中 (16px)"],
-            Msg::FontSizeLarge => ["Large (18px)", "크게 (18px)", "大 (18px)", "大 (18px)"],
-            Msg::FontSizeXl => [
-                "Extra Large (22px)",
-                "아주 크게 (22px)",
-                "特大 (22px)",
-                "特大 (22px)",
-            ],
+            Msg::SizeXLarge => ["Extra Large", "아주 크게", "特大", "特大"],
             Msg::LogRetainDefault => ["Default (7)", "기본(7일)", "默认(7天)", "既定(7日)"],
             Msg::LogCapDefault => ["Default (20)", "기본(20MB)", "默认(20MB)", "既定(20MB)"],
             Msg::OfferFreshBtn => ["From start", "처음부터", "重新开始", "最初から"],
@@ -1327,10 +1316,10 @@ impl Msg {
             Msg::LangJapanese => ["日本語", "日本語", "日本語", "日本語"],
             Msg::FontBase => ["Base UI", "기본 UI", "基本界面", "基本UI"],
             Msg::FontBaseDesc => [
-                "Font for buttons, headers, settings and other base UI",
-                "버튼·헤더·설정 등 기본 UI 영역의 글꼴",
-                "按钮、标题、设置等基本界面的字体",
-                "ボタン・見出し・設定など基本UIのフォント",
+                "Font for buttons, headers, settings and other base UI. Sizes: Small 14px · Normal 16px · Large 18px · Extra Large 22px",
+                "버튼·헤더·설정 등 기본 UI 영역의 글꼴. 크기: 작게 14px · 보통 16px · 크게 18px · 아주 크게 22px",
+                "按钮、标题、设置等基本界面的字体。大小：小 14px · 标准 16px · 大 18px · 特大 22px",
+                "ボタン・見出し・設定など基本UIのフォント。サイズ：小 14px · 標準 16px · 大 18px · 特大 22px",
             ],
             Msg::FontPeerList => ["Peer list", "사용자 목록", "用户列表", "ユーザー一覧"],
             Msg::FontPeerListDesc => [
