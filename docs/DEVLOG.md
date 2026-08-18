@@ -7,6 +7,8 @@
 
 ## 2026-08-18
 
+- ★**M4-10c 완결 + 서버 설정 잠금**(main): 발신 능동 재-Offer 1회(Closed 기억→재성립 재제안)·수신 2택 UI(이어받기 N%/처음부터)·Unmanaged 모드 = 서버 3행 잠금(깔때기 합류). M4-10 잔여 = 실기만. 689 green. 상세 [journal/2026-08-18.md](journal/2026-08-18.md).
+
 - ★**M4-10a+b 전송 재개 구현**(main · D-31 확정 당일): 부분물 봉인 보존(`part.rs` — parts/{sha}.part·72h/1GiB sweep)·Accept 재개 꼬리(하위 호환 바이트 동일)·중복 프리픽스 관용·발신 prefix 해시 대조 중간 송신·수락 3경로 자동 이어받기. 잔여 = M4-10c(능동 재-Offer·2택 UI)+실기. 688 green. 상세 [journal/2026-08-18.md](journal/2026-08-18.md).
 
 - ★**결정 4건 확정 + RL 일괄 9건**(main): D-30(ADR-0014 채택)·D-31(전송 재개 승인+착수)·log.enabled off·D-24 별도 세션. RL-1·2·4·5·6·11·12·14·16ⓑ 구현(수신 지문·push 배치·netlink 필터·sweep+오프라인 강등·전송 목록 스로틀·wire watchdog·recv 타임아웃 복원·ack 정리+그룹 틱·무변화 생략+60s 심장박동). 683 green. 상세 [journal/2026-08-18.md](journal/2026-08-18.md).
