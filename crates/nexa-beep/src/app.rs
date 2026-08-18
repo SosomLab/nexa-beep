@@ -1728,6 +1728,11 @@ struct App {
     pending_offers: HashMap<PeerId, VecDeque<PendingOffer>>,
     /// 상대별 발신 대기 파일 큐(다중 드롭 — 한 번에 하나씩 협상한다).
     send_queue: HashMap<PeerId, VecDeque<std::path::PathBuf>>,
+    /// 협상·전송 중인 발신 파일의 경로(M4-10c) — 세션이 끊기면 재-Offer 원료.
+    current_send: HashMap<PeerId, std::path::PathBuf>,
+    /// 끊김으로 중단된 발신(M4-10c) — 세션 재성립 시 **능동 재-Offer 1회**.
+    /// 같은 파일 재-Offer = 수신측 `.part` 매치 = 이어받기 성립.
+    resend_offers: HashMap<PeerId, VecDeque<std::path::PathBuf>>,
     /// 상대별 배치 집계 (보낸 파일 수, 총 파일 수, 보낸 바이트, 총 바이트).
     send_batch: HashMap<PeerId, (u32, u32, u64, u64)>,
     /// 발신 협상 대기 중인가(수락 전) — 큐 진행 판단.
@@ -2325,6 +2330,7 @@ impl App {
                 return;
             }
         };
+        self.current_send.insert(peer, path.clone()); // 끊김 대비(M4-10c)
         let name = path
             .file_name()
             .map_or_else(|| "file".to_string(), |n| n.to_string_lossy().into_owned());
@@ -2472,7 +2478,7 @@ impl App {
     /// 대기열 맨 앞 제안으로 승인 화면 내용을 만든다(없으면 `None`).
     fn front_offer_info(&self, peer: PeerId) -> Option<nbeep_ui::OfferInfo> {
         let q = self.pending_offers.get(&peer)?;
-        let (_, name, size, _) = q.front()?;
+        let (_, name, size, sha) = q.front()?;
         let sender = self
             .table
             .list()
@@ -2501,6 +2507,10 @@ impl App {
         } else {
             String::new()
         };
+        // 이어받기 후보(M4-10c) — 보존율을 승인 창 2택으로 보여 준다.
+        let secret = self.identity.wrap_secret();
+        let resume_pct = crate::part::partial_len(crate::gate::CH_GUI, &secret, sha, *size)
+            .map(|got| u8::try_from(got * 100 / (*size).max(1)).unwrap_or(99));
         Some(nbeep_ui::OfferInfo {
             sender,
             when: nbeep_plat::clock::local_hms(unix_now()).hms(),
@@ -2508,6 +2518,7 @@ impl App {
             size: *size,
             queued: q.len(),
             downgrade_note,
+            resume_pct,
         })
     }
 
@@ -2561,6 +2572,12 @@ impl App {
             return;
         };
         match choice {
+            OfferChoice::ApproveFresh => {
+                // 처음부터(M4-10c) — 보존분은 의사 표시로 폐기하고 새로 받는다.
+                crate::part::remove_partial(crate::gate::CH_GUI, &sha);
+                self.send_xfer_decision(peer, xid, true, nbeep_core::RejectWhy::Declined, None);
+                self.status = nbeep_core::tf(nbeep_core::Msg::StfAcceptRecv, &[&name]);
+            }
             OfferChoice::Approve => {
                 let resume = self.load_resume(peer, &sha, size);
                 let resumed = resume.as_ref().map(Vec::len);
@@ -6948,6 +6965,26 @@ impl App {
                 let _ = conv.out_tx.send(SessionCmd::Group(frames));
             }
         }
+        // 중단 발신 재-Offer(M4-10c · 1회) — 같은 파일을 다시 제안하면 수신측
+        // `.part`가 매치돼 "이어받기 N%" 2택이 뜬다. 큐 합류 = 기존 배치 문법.
+        if let Some(files) = self.resend_offers.remove(&peer) {
+            let mut n = 0u32;
+            for path in files {
+                if !path.is_file() {
+                    continue; // 그 사이 지워진 원본 — 조용히 제외
+                }
+                let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                self.send_queue.entry(peer).or_default().push_back(path);
+                let b = self.send_batch.entry(peer).or_insert((0, 0, 0, 0));
+                b.1 += 1;
+                b.3 += size;
+                n += 1;
+            }
+            if n > 0 {
+                self.status = format!("중단 전송 재제안 — {n}건 (이어받기 협상)");
+                self.pump_send_queue(peer);
+            }
+        }
         // 대기 파일(그룹 팬아웃 — 08-13): 세션이 성립했으니 일반 오퍼 큐로 합류.
         if let Some(files) = self.pending_group_files.remove(&peer) {
             for (_gid, path) in files {
@@ -7623,6 +7660,8 @@ impl App {
         if mine {
             self.send_queue.remove(&peer);
             self.send_batch.remove(&peer);
+            self.current_send.remove(&peer); // 취소 = 의사 표시(M4-10c)
+            self.resend_offers.remove(&peer);
         } else if let Some(sha) = self.resumed_recv.remove(&peer) {
             // 수동 취소 = 의사 표시 — 보존 부분물도 함께 폐기(재개 제안 금지 · M4-10).
             crate::part::remove_partial(crate::gate::CH_GUI, &sha);
@@ -8898,6 +8937,7 @@ impl ApplicationHandler<AppEvent> for App {
                 self.active_send.remove(&peer); // 다 보냈다 — 취소 대상 아님(08-16)
                                                 // Auto 설정 행 표시용 집계(08-16) — 세션 peak가 0일 수 있다
                                                 // (프로브 크기 미만의 작은 파일 — 창이 한 번도 안 닫힘). 평균이 하한.
+                self.current_send.remove(&peer); // 완주 — 재-Offer 원료 아님(M4-10c)
                 self.send_meter.note_peak(peak_bps.max(avg_bps));
                 self.refresh_approval_ui();
                 self.send_avg.insert(peer, avg_bps); // ack 도착 시 완료 문구에(08-16)
@@ -8983,6 +9023,7 @@ impl ApplicationHandler<AppEvent> for App {
                 self.active_send.remove(&peer);
                 self.active_recv.remove(&peer);
                 self.resumed_recv.remove(&peer); // .part는 남긴다 — 실패가 곧 재개 사유
+                self.current_send.remove(&peer); // 거절·취소·오류 = 의사/종결 — 재-Offer 없음
                                                  // 방향 판정 — 발신이 걸려 있으면 발신 실패, 아니면 수신 실패.
                 let mine =
                     self.awaiting_accept.contains_key(&peer) || self.send_batch.contains_key(&peer);
@@ -9005,6 +9046,20 @@ impl ApplicationHandler<AppEvent> for App {
                 // ack 대기 정리(RL-14ⓐ · 08-18) — 상대가 떠났으면 수신 확인은
                 // 영영 안 온다. 남기면 종료 가드가 영구 "확인 대기 N건"이 된다.
                 self.awaiting_ack.remove(&peer);
+                // 중단 발신 기억(M4-10c) — 진행 중이던 파일 + 남은 큐. 세션이
+                // 되살아나면 능동 재-Offer 1회(수신측 .part 매치 = 이어받기).
+                {
+                    let mut interrupted: VecDeque<std::path::PathBuf> = VecDeque::new();
+                    if let Some(p) = self.current_send.remove(&peer) {
+                        interrupted.push_back(p);
+                    }
+                    if let Some(q) = self.send_queue.remove(&peer) {
+                        interrupted.extend(q);
+                    }
+                    if !interrupted.is_empty() {
+                        self.resend_offers.insert(peer, interrupted);
+                    }
+                }
                 // 세션 채널은 지우되 **스레드는 대피**(DR-26 — 08-13 실기: 끊김·재연결마다
                 // 받았던 메시지가 통째로 사라졌다). 재수립 시 install이 되찾아 간다.
                 if let Some(c) = self.conversations.remove(&peer) {
@@ -10873,6 +10928,8 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         face_mono: None,
         pending_offers: HashMap::new(),
         send_queue: HashMap::new(),
+        current_send: HashMap::new(),
+        resend_offers: HashMap::new(),
         send_batch: HashMap::new(),
         awaiting_accept: HashMap::new(),
         active_send: HashMap::new(),

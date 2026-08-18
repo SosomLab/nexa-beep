@@ -178,6 +178,10 @@ pub enum Msg {
     OfferSize,
     OfferAutoBtn,
     OfferCancel,
+    /// 이어받기 버튼(M4-10c — {0} = 보존율 %).
+    OfferResumeBtn,
+    /// 처음부터 버튼(M4-10c — 보존분을 버리고 새로 받기).
+    OfferFreshBtn,
     OfferQuarantineNote,
     // ── 설정: 공통 ──
     SearchPlaceholder,
@@ -1140,6 +1144,8 @@ impl Msg {
             Msg::OfferSize => ["Size", "크기", "大小", "サイズ"],
             Msg::OfferAutoBtn => ["Auto-accept", "자동 승인", "自动接受", "自動承認"],
             Msg::OfferCancel => ["Cancel", "취소", "取消", "キャンセル"],
+            Msg::OfferResumeBtn => ["Resume {0}%", "이어받기 {0}%", "续传 {0}%", "再開 {0}%"],
+            Msg::OfferFreshBtn => ["From start", "처음부터", "重新开始", "最初から"],
             Msg::OfferQuarantineNote => [
                 "Approving only quarantines it — a separate approval is needed to materialize",
                 "승인해도 격리함에 보관됩니다 — 실행 가능한 파일이 되려면 별도 승인이 필요합니다",

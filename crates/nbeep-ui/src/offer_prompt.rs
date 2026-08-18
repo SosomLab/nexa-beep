@@ -16,7 +16,7 @@ use crate::event::InputEvent;
 use crate::geom::Rect;
 use crate::theme::Theme;
 use crate::widget::{Invalidations, Widget};
-use nbeep_core::{t, Msg};
+use nbeep_core::{t, tf, Msg};
 
 /// 화면에 띄울 제안 정보(호스트가 채운다).
 #[derive(Clone, Debug)]
@@ -34,13 +34,18 @@ pub struct OfferInfo {
     /// 자동 승인 강등 안내(08-16 — 자동 승인 중인데 이 창이 뜬 이유를 설명:
     /// 빈 값 = 표시 없음). 실기에서 "자동인데 왜 묻지?"가 버그로 오인됐다.
     pub downgrade_note: String,
+    /// 이어받기 보존율(M4-10c · 0~100) — Some이면 승인이 2택이 된다:
+    /// [이어받기 N%](기본) · [처음부터]. None = 종전 단일 승인.
+    pub resume_pct: Option<u8>,
 }
 
 /// 사용자 결정.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OfferChoice {
-    /// 이 건만 수락.
+    /// 이 건만 수락(보존분이 있으면 **이어받기** — 기본).
     Approve,
+    /// 보존분을 버리고 **처음부터** 수락(M4-10c — 이어받기 2택의 다른 쪽).
+    ApproveFresh,
     /// 거절(취소 버튼·타임아웃) — 타임아웃이면 `by_timeout = true`.
     Cancel {
         /// 시간이 다 되어 자동으로 닫혔는가.
@@ -72,6 +77,8 @@ pub struct OfferPromptWidget {
     window: Combo,
     auto_btn: Button,
     approve: Button,
+    /// 처음부터(M4-10c) — 이어받기가 가능할 때만 화면에 존재한다.
+    fresh: Option<Button>,
     cancel: TimeoutButton,
     choice: Option<OfferChoice>,
 }
@@ -84,13 +91,23 @@ impl OfferPromptWidget {
             .iter()
             .map(|(v, l)| ComboItem::new(*v, *l))
             .collect();
+        let approve = if let Some(pct) = info.resume_pct {
+            Button::new(tf(Msg::OfferResumeBtn, &[&pct.to_string()]))
+        } else {
+            Button::new(t(Msg::QApprove))
+        };
+        let fresh = info
+            .resume_pct
+            .is_some()
+            .then(|| Button::new(t(Msg::OfferFreshBtn)));
         Self {
             bounds: Rect::default(),
             scale: 1.0,
             info,
             window: Combo::new(items, 0),
             auto_btn: Button::new(t(Msg::OfferAutoBtn)),
-            approve: Button::new(t(Msg::QApprove)),
+            approve,
+            fresh,
             cancel: TimeoutButton::new(t(Msg::OfferCancel), timeout_secs.saturating_mul(1000)),
             choice: None,
         }
@@ -118,6 +135,9 @@ impl OfferPromptWidget {
         self.window.set_scale(self.scale);
         self.auto_btn.set_scale(self.scale);
         self.approve.set_scale(self.scale);
+        if let Some(f) = &mut self.fresh {
+            f.set_scale(self.scale);
+        }
         self.cancel.set_scale(self.scale);
         inv.push(self.bounds);
     }
@@ -146,10 +166,23 @@ impl Widget for OfferPromptWidget {
         let by = bounds.bottom() - bh - pad;
         self.cancel
             .set_bounds(Rect::new(bounds.right() - bw - pad, by, bw, bh), inv);
-        self.approve.set_bounds(
-            Rect::new(bounds.right() - bw * 2 - pad - self.s(8), by, bw, bh),
-            inv,
-        );
+        // 이어받기 2택(M4-10c): [이어받기 N%][처음부터][취소] — 오른쪽 정렬 유지.
+        let (g8, g16) = (self.s(8), self.s(16));
+        if let Some(f) = &mut self.fresh {
+            f.set_bounds(
+                Rect::new(bounds.right() - bw * 2 - pad - g8, by, bw, bh),
+                inv,
+            );
+            self.approve.set_bounds(
+                Rect::new(bounds.right() - bw * 3 - pad - g16, by, bw, bh),
+                inv,
+            );
+        } else {
+            self.approve.set_bounds(
+                Rect::new(bounds.right() - bw * 2 - pad - self.s(8), by, bw, bh),
+                inv,
+            );
+        }
         // 그 위 줄: [기간 콤보] [자동 승인] — 왼쪽 정렬.
         let ay = by - bh - self.s(12);
         self.window
@@ -171,10 +204,15 @@ impl Widget for OfferPromptWidget {
         self.window.on_event(ev, inv);
         self.auto_btn.on_event(ev, inv);
         self.approve.on_event(ev, inv);
+        if let Some(f) = &mut self.fresh {
+            f.on_event(ev, inv);
+        }
         self.cancel.on_event(ev, inv);
 
         if self.approve.take_clicked() {
             self.choice = Some(OfferChoice::Approve);
+        } else if self.fresh.as_mut().is_some_and(Button::take_clicked) {
+            self.choice = Some(OfferChoice::ApproveFresh);
         } else if self.auto_btn.take_clicked() {
             // 콤보 값 → 설정과 같은 코드로 되돌려 준다.
             let v = self.window.selected_value();
@@ -250,6 +288,9 @@ impl Widget for OfferPromptWidget {
         self.window.paint(ctx, theme);
         self.auto_btn.paint(ctx, theme);
         self.approve.paint(ctx, theme);
+        if let Some(f) = &self.fresh {
+            f.paint(ctx, theme);
+        }
         self.cancel.paint(ctx, theme);
         // 열린 드롭다운은 맨 위에.
         if self.window.is_open() {
@@ -270,6 +311,7 @@ mod tests {
             size: 1024 * 1024,
             queued: 1,
             downgrade_note: String::new(),
+            resume_pct: None,
         }
     }
 
@@ -344,6 +386,30 @@ mod tests {
         let r2 = w2.auto_btn.bounds();
         click(&mut w2, r2, &mut inv2);
         assert_eq!(w2.take_choice(), Some(OfferChoice::AutoFor("6h")));
+    }
+
+    /// M4-10c — 보존분이 있으면 [이어받기 N%]·[처음부터] 2택. 각 버튼이 제
+    /// 선택을 보고하고, 보존분이 없으면 처음부터 버튼 자체가 없다.
+    #[test]
+    fn resume_two_choice_buttons_report() {
+        let mut i = info();
+        i.resume_pct = Some(37);
+        let mut w = OfferPromptWidget::new(i, 60);
+        let mut inv = Invalidations::default();
+        w.set_bounds(Rect::new(0, 0, 420, 280), &mut inv);
+        w.start(0);
+        let r = w.approve.bounds();
+        click(&mut w, r, &mut inv);
+        assert_eq!(
+            w.take_choice(),
+            Some(OfferChoice::Approve),
+            "기본 = 이어받기"
+        );
+        let rf = w.fresh.as_ref().unwrap().bounds();
+        click(&mut w, rf, &mut inv);
+        assert_eq!(w.take_choice(), Some(OfferChoice::ApproveFresh));
+        let (w2, _) = prompt();
+        assert!(w2.fresh.is_none(), "보존분 없음 = 단일 승인");
     }
 
     #[test]

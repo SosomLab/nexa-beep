@@ -94,6 +94,17 @@ pub(crate) fn load_partial(
     parsed
 }
 
+/// 보존 바이트 수만(M4-10c — 승인 창 "이어받기 N%" 표시용). 검증 규칙은
+/// [`load_partial`]과 동일(전체 개봉 — 승인 창 열림 빈도라 비용 무해).
+pub(crate) fn partial_len(
+    channel: &str,
+    secret: &[u8; 32],
+    sha: &[u8; 32],
+    size: u64,
+) -> Option<u64> {
+    load_partial(channel, secret, sha, size).map(|b| b.len() as u64)
+}
+
 /// 부분물 제거 — 완료(승격)·사용자 취소(의사 표시 — 재개 제안 금지) 시.
 pub(crate) fn remove_partial(channel: &str, sha: &[u8; 32]) {
     let _ = std::fs::remove_file(parts_dir(channel).join(format!("{}.part", hex(sha))));
