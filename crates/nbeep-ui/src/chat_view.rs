@@ -204,6 +204,11 @@ pub enum XferLineState {
         /// 지금까지 오간 바이트.
         done: u64,
     },
+    /// 일시정지(M4-2e · 08-19 — 멈춘 지점 바이트 · 재개하면 Active로 복귀).
+    Paused {
+        /// 멈춘 지점까지 오간 바이트.
+        done: u64,
+    },
     /// **발신 후 수신 종단 확인 대기**(M4-9) — 청크·Done을 다 보냈지만 상대의 `Received`
     /// ack가 아직 안 왔다. "보냈다"≠"닿았다"라 아직 완료가 아니다([`update_xfer_ack`] 대상).
     AwaitingAck,
@@ -234,7 +239,9 @@ pub fn update_xfer_in(lines: &mut [ChatLine], mine: bool, state: XferLineState) 
         if let ChatBody::Xfer(x) = &mut line.body {
             if matches!(
                 x.state,
-                XferLineState::Waiting | XferLineState::Active { .. }
+                XferLineState::Waiting
+                    | XferLineState::Active { .. }
+                    | XferLineState::Paused { .. }
             ) {
                 x.state = state;
                 return true;
@@ -258,7 +265,9 @@ pub fn reactivate_xfer_in(lines: &mut [ChatLine], mine: bool, name: &str, size: 
                 && x.size == size
                 && matches!(
                     x.state,
-                    XferLineState::Waiting | XferLineState::Active { .. }
+                    XferLineState::Waiting
+                        | XferLineState::Active { .. }
+                        | XferLineState::Paused { .. }
                 )
             {
                 x.state = XferLineState::Waiting;
@@ -1006,6 +1015,14 @@ impl ChatViewWidget {
                             0
                         };
                         format!("{dir} {pct}% · {}", human_bytes(*done))
+                    }
+                    XferLineState::Paused { done } => {
+                        let pct = if x.size > 0 {
+                            (*done as f64 / x.size as f64 * 100.0).round() as u32
+                        } else {
+                            0
+                        };
+                        format!("{} {pct}% · {}", t(Msg::XferStPaused), human_bytes(*done))
                     }
                     XferLineState::AwaitingAck => t(Msg::XferAwaitAck).to_string(),
                     XferLineState::Done { note } if note.is_empty() => {
