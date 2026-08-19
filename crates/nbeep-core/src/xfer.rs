@@ -391,6 +391,99 @@ pub fn is_cap_request(bytes: &[u8]) -> bool {
     bytes == [CAP_REQ_TAG]
 }
 
+/// 배치 목록(manifest) 태그(M4-2e · 08-19) — 발신자가 **요청 단위 승인**을 위해
+/// 배치의 전체 파일 목록(이름·크기·제외 여부)을 첫 오퍼 전에 알린다. 수신측은
+/// 목록 전체를 한 승인 창에 보이고, 승인 1회로 이후 오퍼를 **이름+크기 대조 후**
+/// 자동 수락한다(불일치 = 수동 폴백 · fail-closed). 구버전은 미지 Control 태그
+/// 무시 = 파일 단위 승인으로 자연 강등(전방 호환 — File 스트림과 달리 Control
+/// 미지 태그는 조용히 버려진다).
+pub const MANIFEST_TAG: u8 = 13;
+/// manifest 항목 상한 — 비정상 대량 목록 방어(한 배치가 이걸 넘을 일은 없다).
+pub const MANIFEST_MAX: usize = 4096;
+
+/// 배치 목록 인코딩 — `MANIFEST_TAG ‖ count(2 LE) ‖ [name_len(2 LE) ‖ name ‖
+/// size(8 LE) ‖ excluded(1)]…`. `excluded` = 용량 초과 등으로 **전송하지 않지만
+/// 목록에는 보이는** 파일(사용자 확정 — "제외 상태로 목록에 보이도록").
+#[must_use]
+pub fn encode_batch_manifest(entries: &[(String, u64, bool)]) -> Vec<u8> {
+    let n = entries.len().min(MANIFEST_MAX);
+    let mut out = Vec::with_capacity(3 + n * 32);
+    out.push(MANIFEST_TAG);
+    out.extend_from_slice(&(u16::try_from(n).unwrap_or(u16::MAX)).to_le_bytes());
+    for (name, size, excluded) in &entries[..n] {
+        let nb = name.as_bytes();
+        let nlen = u16::try_from(nb.len()).unwrap_or(u16::MAX);
+        out.extend_from_slice(&nlen.to_le_bytes());
+        out.extend_from_slice(&nb[..usize::from(nlen)]);
+        out.extend_from_slice(&size.to_le_bytes());
+        out.push(u8::from(*excluded));
+    }
+    out
+}
+
+/// 배치 목록 해석 — 태그 불일치·손상·상한 초과 = None(다른 Control 프레임/폐기).
+#[must_use]
+pub fn decode_batch_manifest(bytes: &[u8]) -> Option<Vec<(String, u64, bool)>> {
+    if bytes.first() != Some(&MANIFEST_TAG) {
+        return None;
+    }
+    let count = usize::from(u16::from_le_bytes(bytes.get(1..3)?.try_into().ok()?));
+    if count > MANIFEST_MAX {
+        return None;
+    }
+    let mut out = Vec::with_capacity(count);
+    let mut p = 3usize;
+    for _ in 0..count {
+        let nlen = usize::from(u16::from_le_bytes(bytes.get(p..p + 2)?.try_into().ok()?));
+        p += 2;
+        let name = String::from_utf8_lossy(bytes.get(p..p + nlen)?).into_owned();
+        p += nlen;
+        let size = u64::from_le_bytes(bytes.get(p..p + 8)?.try_into().ok()?);
+        p += 8;
+        let excluded = *bytes.get(p)? != 0;
+        p += 1;
+        out.push((name, size, excluded));
+    }
+    if p != bytes.len() {
+        return None; // 꼬리 쓰레기 = 손상(fail-closed)
+    }
+    Some(out)
+}
+
+/// 수신측 **일시정지 요청** 태그(M4-2e · 08-19) — 수신자가 진행 중 전송을 멈춰
+/// 달라고 발신자에게 요청한다(발신 액터의 `paused_xid` 게이트 재사용 · 세션
+/// 유지). ★ **Control 스트림인 이유**: File 스트림은 미지 kind가 디코드 오류로
+/// 전송 실패를 만들지만(`xfer_step` fail — 구버전에 유해), Control 미지 태그는
+/// 조용히 무시된다 — 구버전 발신자 상대로는 자연 무시(전방 호환).
+pub const PAUSE_REQ_TAG: u8 = 14;
+/// 수신측 **재개 요청** 태그(M4-2e) — [`PAUSE_REQ_TAG`]의 짝.
+pub const RESUME_REQ_TAG: u8 = 15;
+
+/// 일시정지/재개 요청 인코딩 — `TAG ‖ xid(16)`.
+#[must_use]
+pub fn encode_pause_req(id: XferId, pause: bool) -> Vec<u8> {
+    let mut out = Vec::with_capacity(17);
+    out.push(if pause { PAUSE_REQ_TAG } else { RESUME_REQ_TAG });
+    out.extend_from_slice(&id);
+    out
+}
+
+/// 일시정지/재개 요청 해석 — `Some((xid, pause))`. 태그·길이 불일치 = None.
+#[must_use]
+pub fn decode_pause_req(bytes: &[u8]) -> Option<(XferId, bool)> {
+    if bytes.len() != 17 {
+        return None;
+    }
+    let pause = match bytes[0] {
+        PAUSE_REQ_TAG => true,
+        RESUME_REQ_TAG => false,
+        _ => return None,
+    };
+    let mut id = [0u8; 16];
+    id.copy_from_slice(&bytes[1..17]);
+    Some((id, pause))
+}
+
 /// 발신 청커 — 원본을 [`MAX_CHUNK`] 단위 [`XferMsg::Chunk`]로 자른다.
 #[must_use]
 pub fn chunks_of(id: XferId, original: &[u8]) -> Vec<XferMsg> {
@@ -670,6 +763,49 @@ mod tests {
         let mut w = encode_cap_advert(7);
         w[0] = 12;
         assert_eq!(decode_cap_advert(&w), None, "다른 태그 = 남의 프레임");
+    }
+
+    /// ★ M4-2e(08-19) — 배치 manifest 왕복(이름·크기·제외 보존) + 손상 거부.
+    #[test]
+    fn batch_manifest_roundtrip() {
+        let entries = vec![
+            ("사진 모음.zip".to_string(), 12_345_678u64, false),
+            ("VMware-Fusion-25H2.dmg".to_string(), 4_512_000_000u64, true), // 용량 초과 = 제외
+            ("메모.txt".to_string(), 42u64, false),
+        ];
+        let enc = encode_batch_manifest(&entries);
+        assert_eq!(enc[0], MANIFEST_TAG);
+        assert_eq!(decode_batch_manifest(&enc).unwrap(), entries);
+        // 손상: 잘림 = None · 꼬리 쓰레기 = None · 다른 태그 = None.
+        assert_eq!(decode_batch_manifest(&enc[..enc.len() - 1]), None);
+        let mut tail = enc.clone();
+        tail.push(0);
+        assert_eq!(decode_batch_manifest(&tail), None);
+        let mut w = enc;
+        w[0] = CAP_TAG;
+        assert_eq!(decode_batch_manifest(&w), None);
+        // 빈 배치도 유효(0건 — 발신 전 취소 시 목록 철회 신호로 쓸 수 있다).
+        assert_eq!(
+            decode_batch_manifest(&encode_batch_manifest(&[])),
+            Some(vec![])
+        );
+    }
+
+    /// ★ M4-2e(08-19) — 수신측 일시정지/재개 요청 왕복 + 불일치 거부.
+    #[test]
+    fn pause_req_roundtrip() {
+        assert_eq!(
+            decode_pause_req(&encode_pause_req(xid(7), true)),
+            Some((xid(7), true))
+        );
+        assert_eq!(
+            decode_pause_req(&encode_pause_req(xid(9), false)),
+            Some((xid(9), false))
+        );
+        assert_eq!(decode_pause_req(&[PAUSE_REQ_TAG; 5]), None, "길이 불일치");
+        let mut w = encode_pause_req(xid(1), true);
+        w[0] = CAP_TAG;
+        assert_eq!(decode_pause_req(&w), None, "다른 태그 = 남의 프레임");
     }
 
     #[test]
