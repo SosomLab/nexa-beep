@@ -11148,7 +11148,12 @@ impl ApplicationHandler<AppEvent> for App {
                     ))
                     .with_inner_size(winit::dpi::LogicalSize::new(440.0, 300.0))
                     .with_resizable(false)
+                    // ★ 최상위(사용자 확정 08-19) — 수신 승인은 타임아웃이 걸린
+                    //   **행동 요구** 창이라 다른 창에 묻히면 자동 거절로 흘러간다.
+                    //   AlwaysOnTop 금지 표준(08-14)의 명시 예외(경고 모달과 같은 축).
+                    .with_window_level(winit::window::WindowLevel::AlwaysOnTop)
                     .with_window_icon(self.icon.clone());
+                let attrs = self.modal_attrs(attrs, false); // 메인 소유(창 묶음 부상)
                 if let Ok(window) = el.create_window(attrs) {
                     let window = Rc::new(window);
                     let scale = window.scale_factor() as f32;
