@@ -7,6 +7,8 @@
 
 ## 2026-08-19
 
+- ★**전송 배치 패널 P1+P2 구현**(main · `f559b4a` · M4-2d): 발신 대기·진행 창을 배치 패널로 재설계 — 헤더(개수+총량) + 스크롤 목록(파일명 word-wrap·용량·상태·트랜스포트 아이콘) · 상단=전체 취소/일시정지·행=그 파일만 · 창은 배치 끝까지 유지. 취소(전체/파일별) · 큐 일시정지(pump pass·순서 보존) · P2 활성 pause/resume(`SessionCmd::PauseXfer/ResumeXfer`+액터 `paused_xid` pump gate · 세션 유지·와이어 무변경). 상태 전이 다이어그램 [37 §6]. 703 green · 잔여 GUI 실기. 상세 [journal/2026-08-19.md](journal/2026-08-19.md).
+
 - ★**전송 제어 아이콘 4종 구움 + M4-2d 설계 확정**(main): 카세트 테이프식 트랜스포트(`xfer-play`·`xfer-pause`·`xfer-stop`·`xfer-cancel` · 자체 작도 96×96 알파 · 16px 판독 실측 · `icons::xfer` 배선 · [10 §4]) — 사용자 확정 "일반 버튼 대신 아이콘 · 상단=전체 취소/일시중지 · 목록 행별=그 파일만". M4-2d 아키텍처 (A) 순차 유지+배치 나열 · 단계 P1(무프로토콜 UI) / P2(활성 pause/resume = M4-10 재개 위에). 자산·상수 선반입 · UI 배선 후속. nbeep-ui green. 상세 [journal/2026-08-19.md](journal/2026-08-19.md).
 
 - ★**격리함 빈 목록 진단 → 신원 폴더 durable 이전 · `--whoami`**(main · `cdda26d`): 격리물 미표시 = 그 `.beepq`가 **이전 신원 키에 sealed**라 현재 키로 0/8 개봉 실패(설계상 정상). 근본 = data 폴더가 `/tmp`에 있어 macOS `com.apple.tmp_cleaner`(매일 자정·3일 미접근)가 `identity.key` 삭제 → 새 신원 생성(지문 변경). 조치 = `--whoami`(실제 로드 신원 읽기 전용 출력) · relaunch 기본 `$HOME/.nexa-beep-multi`(durable · 기존 /tmp 1회 이관) · 문서 반영(26·33·SKILL). 상세 [journal/2026-08-19.md](journal/2026-08-19.md).

@@ -79,3 +79,54 @@ M4-10의 "동기(sync)"를 **폴더 동기화로 확장하지 않는다**. 그�
 2. **M4-10b** Accept 확장 2필드 + 발신 prefix 검증·중간 송신(회귀: 불일치 = 0부터).
 3. **M4-10c** 재-Offer 1회 + 수신 2택 UI("이어받기 N%").
 4. **M4-10d** (D-31-3 승인 시) 그룹 팬아웃 재개.
+
+## 6. 발신 전송 제어 상태 전이 (M4-2d · ✅ 구현 08-19)
+
+발신 배치 패널([`Role::Sending`] · 개수·총량·스크롤 목록·파일별 트랜스포트
+아이콘)의 **한 파일**이 갖는 상태와, 사용자·프로토콜이 일으키는 전이다(사용자
+확정 08-19). 배치는 **한 파일씩 순차 오퍼**라, 한 순간 실제 승인/전송 대상은
+하나뿐이고 나머지는 큐에서 대기한다.
+
+- **상단 아이콘 = 배치 전체**(전체 취소·전체 일시정지/재개).
+- **행 아이콘 = 그 파일만**(취소·일시정지·재개).
+- **일시정지 아이콘**은 상태에 따라 뜻이 갈린다:
+  - *대기(Waiting) 파일 일시정지* = 큐에서 **건너뛴다**(pass) → 앞 전송이 끝나면
+    정지 안 된 **다음 파일**이 전송된다. 재개하면 다시 전송 대상이 된다.
+  - *전송 중(Active) 파일 일시정지* = 세션을 **유지한 채** 청크 펌프만 멈춘다
+    (P2 · 와이어 무통지 — 수신측은 다음 청크를 기다린다). 재시작하면 이어서
+    보낸다(재협상 없음).
+
+```mermaid
+stateDiagram-v2
+    [*] --> Waiting : 드롭/오퍼(큐 적재)
+    Waiting --> Active : 상대 승인(Accept)
+    Waiting --> PausedQueued : 일시정지(대기)
+    Waiting --> Canceled : 취소
+
+    PausedQueued --> Waiting : 재개(다시 대기열로)
+    PausedQueued --> Canceled : 취소
+    note right of PausedQueued
+        건너뛴다(pass) —
+        앞 전송이 끝나면
+        다음 파일이 전송
+    end note
+
+    Active --> PausedActive : 중지(펌프 정지·세션 유지)
+    Active --> Canceled : 취소
+    Active --> Done : 전송 완료(→ 확인 대기/ack)
+
+    PausedActive --> Active : 재시작(이어 전송)
+    PausedActive --> Canceled : 중지 후 취소
+
+    Canceled --> [*]
+    Done --> [*]
+```
+
+**구현 매핑** — 큐 정지 = `send_paused` 집합 + `pump_send_queue`가 정지 파일을
+pass하고 순서 보존해 되돌린다. 활성 정지/재개 = `SessionCmd::PauseXfer/ResumeXfer`
+→ 액터 `paused_xid` pump gate(세션 유지 · 와이어 무변경). 파일별 취소 =
+`cancel_one_send`(대기는 큐 제거, 현재 파일은 Cancel 통지 후 다음으로) · 전체 취소 =
+`cancel_send`(큐·배치 비움·창 닫기). 창은 **배치가 끝날 때만** 닫힌다
+(`refresh_send_batch` — `XferAccepted`에서 닫지 않는다). 아이콘 자산 = [10 §4].
+'중지'는 여기서 **취소(STOP/CANCEL 아이콘)** 로 매핑한다(테이프 정지처럼 그 전송을
+끝낸다) — "멈췄다 잇기"는 일시정지(PAUSE)/재개(PLAY)다.
