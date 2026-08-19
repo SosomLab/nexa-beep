@@ -117,6 +117,8 @@ enum AppEvent {
         sha256: [u8; 32],
     },
     /// 전송 진행률(수신·발신 공용) — 상태바 표시용.
+    /// 상대의 **전체 취소** 통지(M4-2e · Control 16) — 로컬 전체취소 루틴 실행.
+    XferCancelAllNotice { peer: PeerId },
     /// 발신측 정지/재개 **통지**(M4-2e — 수신 화면 동기 · Control 14/15 재사용).
     XferPeerPauseNotice {
         peer: PeerId,
@@ -1092,6 +1094,14 @@ fn spawn_session_actor(
                         if let Some(entries) = nbeep_core::xfer::decode_batch_manifest(&bytes) {
                             let _ = proxy.send_event(AppEvent::XferManifest { peer, entries });
                         }
+                    }
+                    // 전체 취소 전파(M4-2e · 태그 16) — 상대가 Cancel all: 내 발신
+                    // 펌프·보관 정지분을 즉시 중단하고 앱이 로컬 전체취소를 돌린다.
+                    StreamId::Control if nbeep_core::xfer::is_cancel_all(&bytes) => {
+                        sending = None;
+                        parked.clear();
+                        pause_wanted.clear();
+                        let _ = proxy.send_event(AppEvent::XferCancelAllNotice { peer });
                     }
                     // 수신측 일시정지/재개 요청(M4-2e · 태그 14/15) — 발신 펌프 게이트.
                     StreamId::Control if nbeep_core::xfer::decode_pause_req(&bytes).is_some() => {
@@ -3379,6 +3389,7 @@ impl App {
 
     /// 발신 취소(타임아웃·사용자) — 상대에게 Cancel을 보내고 큐를 비운다.
     fn cancel_send(&mut self, peer: PeerId, by_timeout: bool) {
+        self.send_cancel_all_notice(peer); // 상대도 자기 쪽 전체취소 루틴(M4-2e)
         if let Some(xid) = self.awaiting_accept.remove(&peer) {
             if let Some(c) = self.conversations.get(&peer) {
                 let _ = c.out_tx.send(SessionCmd::CancelXfer(xid));
@@ -3759,6 +3770,46 @@ impl App {
     }
 
     /// 전송 종료 — 진행률 정리 + 목록 갱신.
+    /// **로컬 전체취소 루틴**(M4-2e — 진행 상태 관리의 단일 기준): 발신·수신
+    /// 양 역할의 배치 상태를 전부 마감한다. 와이어 통지는 하지 않는다(호출자
+    /// 몫 — 내가 누른 취소는 통지 후 이걸 부르고, 상대 통지 수신은 이것만).
+    fn apply_local_cancel_all(&mut self, peer: PeerId) {
+        // 발신 역할 정리.
+        self.awaiting_accept.remove(&peer);
+        self.active_send.remove(&peer);
+        self.preparing_send.remove(&peer);
+        self.current_send.remove(&peer);
+        self.send_queue.remove(&peer);
+        self.send_batch.remove(&peer);
+        self.send_excluded.remove(&peer);
+        self.send_paused.remove(&peer);
+        self.paused_sends.remove(&peer); // 상대가 이미 취소 — 개별 통지 불요
+        self.resend_offers.remove(&peer);
+        self.fail_pending_xfer_lines(peer, true);
+        // 수신 역할 정리.
+        self.active_recv.remove(&peer);
+        self.recv_xids.remove(&peer);
+        self.recv_paused.remove(&peer);
+        self.clear_batch_approval(peer);
+        if let Some(sha) = self.resumed_recv.remove(&peer) {
+            crate::part::remove_partial(crate::gate::CH_GUI, &sha);
+        }
+        self.fail_pending_xfer_lines(peer, false);
+        // 공통 마감.
+        self.close_send_wait(peer);
+        self.clear_xfer(peer);
+        self.refresh_send_batch(peer);
+    }
+
+    /// 전체 취소 와이어 통지(M4-2e · Control 16) — 상대도 자기 쪽 루틴을 돌린다.
+    fn send_cancel_all_notice(&mut self, peer: PeerId) {
+        if let Some(c) = self.conversations.get(&peer) {
+            let _ = c.out_tx.send(SessionCmd::Control(vec![
+                nbeep_core::xfer::encode_cancel_all(),
+            ]));
+        }
+    }
+
     /// 미종결 전송 라인 일괄 종결(M4-2e — 전체취소 공용): FIFO(대기·활성)는
     /// 반복 갱신으로, Paused(FIFO가 건너뜀)는 직접 순회로 Failed 처리한다.
     fn fail_pending_xfer_lines(&mut self, peer: PeerId, mine: bool) {
@@ -9144,6 +9195,7 @@ impl App {
                 || self.batch_approved.contains_key(&peer)
                 || self.recv_xids.get(&peer).is_some_and(|l| !l.is_empty());
             if has_recv_state {
+                self.send_cancel_all_notice(peer); // 상대도 자기 쪽 루틴(M4-2e)
                 if let Some(list) = self.recv_xids.remove(&peer) {
                     if let Some(c) = self.conversations.get(&peer) {
                         for (_, rxid) in list {
@@ -9170,6 +9222,7 @@ impl App {
             .conversations
             .get(&peer)
             .is_some_and(|c| c.out_tx.send(SessionCmd::CancelXfer(xid)).is_ok());
+        self.send_cancel_all_notice(peer); // 상대도 자기 쪽 전체취소 루틴(M4-2e)
         if mine {
             // ★ 전체취소(08-19 사용자 확정 — 배너 버튼): 활성뿐 아니라 **보관
             //   정지분·정지 표식·남은 라인**까지 배치 전체를 마감한다(종전엔
@@ -10846,6 +10899,13 @@ impl ApplicationHandler<AppEvent> for App {
                     self.clear_xfer(peer);
                 }
                 self.redraw_conversation(peer);
+            }
+            AppEvent::XferCancelAllNotice { peer } => {
+                // 상대의 전체 취소 — **내 쪽 전체취소 루틴을 그대로 실행**(사용자
+                // 확정 08-19: 상태 공유 후 각자 함수 호출). 와이어 재전파는 안
+                // 한다(에코 루프 방지 — 발신자가 이미 자기 쪽을 정리했다).
+                self.apply_local_cancel_all(peer);
+                self.set_status(nbeep_core::t(nbeep_core::Msg::XferPeerCanceledAll).to_string());
             }
             AppEvent::XferPeerPauseNotice { peer, name, paused } => {
                 {

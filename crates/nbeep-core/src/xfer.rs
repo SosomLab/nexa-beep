@@ -459,6 +459,24 @@ pub const PAUSE_REQ_TAG: u8 = 14;
 /// 수신측 **재개 요청** 태그(M4-2e) — [`PAUSE_REQ_TAG`]의 짝.
 pub const RESUME_REQ_TAG: u8 = 15;
 
+/// **전체 취소** 태그(M4-2e · 08-19) — 한쪽의 Cancel all을 상대에게 전파해
+/// **양쪽이 각자 로컬 전체취소 루틴을 실행**한다(사용자 확정 — per-xid Cancel만으로는
+/// 큐·정지·배너 등 배치 상태가 상대쪽에 남았다). 구버전은 미지 태그 무시 —
+/// per-xid Cancel(동시 발신)이 활성 전송만이라도 정리한다(자연 강등).
+pub const CANCEL_ALL_TAG: u8 = 16;
+
+/// 전체 취소 인코딩 — 본문 없음.
+#[must_use]
+pub fn encode_cancel_all() -> Vec<u8> {
+    vec![CANCEL_ALL_TAG]
+}
+
+/// 전체 취소인가.
+#[must_use]
+pub fn is_cancel_all(bytes: &[u8]) -> bool {
+    bytes == [CANCEL_ALL_TAG]
+}
+
 /// 일시정지/재개 요청 인코딩 — `TAG ‖ xid(16)`.
 #[must_use]
 pub fn encode_pause_req(id: XferId, pause: bool) -> Vec<u8> {
@@ -789,6 +807,14 @@ mod tests {
             decode_batch_manifest(&encode_batch_manifest(&[])),
             Some(vec![])
         );
+    }
+
+    /// ★ M4-2e(08-19) — 전체 취소 프레임 왕복.
+    #[test]
+    fn cancel_all_roundtrip() {
+        assert!(is_cancel_all(&encode_cancel_all()));
+        assert!(!is_cancel_all(&[CANCEL_ALL_TAG, 0]), "꼬리 = 남의 프레임");
+        assert!(!is_cancel_all(&[CAP_TAG]));
     }
 
     /// ★ M4-2e(08-19) — 수신측 일시정지/재개 요청 왕복 + 불일치 거부.
