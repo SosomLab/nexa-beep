@@ -117,6 +117,15 @@ enum AppEvent {
         sha256: [u8; 32],
     },
     /// 전송 진행률(수신·발신 공용) — 상태바 표시용.
+    /// 정지 확정(M4-2e — 액터가 실제로 보관 슬롯에 넣은 순간 · 단일 진실).
+    /// 앱은 이때만 라인 Paused·큐 이동·다음 파일 펌프를 수행한다(수락 경합 제거).
+    XferPaused {
+        peer: PeerId,
+        id: nbeep_core::XferId,
+        name: String,
+        size: u64,
+        done: u64,
+    },
     /// 정지 보관분 재개(M4-2e ⓐ) — 액터가 보관 슬롯에서 활성으로 되돌렸다.
     XferResumed {
         peer: PeerId,
@@ -743,6 +752,18 @@ fn spawn_session_actor(
                             // 수락 전이면 의사만 기억(Accept 즉시 보관).
                             if sending.as_ref().is_some_and(|st| st.id == id) {
                                 if let Some(st) = sending.take() {
+                                    let _ = proxy.send_event(AppEvent::XferPaused {
+                                        peer,
+                                        id: st.id,
+                                        name: st
+                                            .src
+                                            .0
+                                            .file_name()
+                                            .map(|n| n.to_string_lossy().into_owned())
+                                            .unwrap_or_default(),
+                                        size: st.total,
+                                        done: st.next,
+                                    });
                                     parked.push((st, false));
                                 }
                             } else {
@@ -815,6 +836,18 @@ fn spawn_session_actor(
                 {
                     if let Some(st) = sending.take() {
                         pause_wanted.remove(&st.id);
+                        let _ = proxy.send_event(AppEvent::XferPaused {
+                            peer,
+                            id: st.id,
+                            name: st
+                                .src
+                                .0
+                                .file_name()
+                                .map(|n| n.to_string_lossy().into_owned())
+                                .unwrap_or_default(),
+                            size: st.total,
+                            done: st.next,
+                        });
                         parked.push((st, false));
                     }
                 }
@@ -1044,6 +1077,18 @@ fn spawn_session_actor(
                             if pause {
                                 if sending.as_ref().is_some_and(|st| st.id == id) {
                                     if let Some(st) = sending.take() {
+                                        let _ = proxy.send_event(AppEvent::XferPaused {
+                                            peer,
+                                            id: st.id,
+                                            name: st
+                                                .src
+                                                .0
+                                                .file_name()
+                                                .map(|n| n.to_string_lossy().into_owned())
+                                                .unwrap_or_default(),
+                                            size: st.total,
+                                            done: st.next,
+                                        });
                                         parked.push((st, false));
                                     }
                                 } else {
@@ -9013,12 +9058,75 @@ impl App {
             .get(&peer)
             .is_some_and(|c| c.out_tx.send(SessionCmd::CancelXfer(xid)).is_ok());
         if mine {
+            // ★ 전체취소(08-19 사용자 확정 — 배너 버튼): 활성뿐 아니라 **보관
+            //   정지분·정지 표식·남은 라인**까지 배치 전체를 마감한다(종전엔
+            //   paused_sends가 남아 개별 취소처럼 보였다).
+            let paused_names: Vec<(String, u64)> = self
+                .paused_sends
+                .get(&peer)
+                .map(|l| l.iter().map(|(n, sz, _, _)| (n.clone(), *sz)).collect())
+                .unwrap_or_default();
+            if let Some(list) = self.paused_sends.remove(&peer) {
+                if let Some(c) = self.conversations.get(&peer) {
+                    for (_, _, _, pxid) in list {
+                        let _ = c.out_tx.send(SessionCmd::CancelXfer(pxid));
+                    }
+                }
+            }
+            self.send_paused.remove(&peer);
             self.send_queue.remove(&peer);
             self.send_batch.remove(&peer);
             self.send_excluded.remove(&peer); // 배치 종료 = 제외 목록도 마감(M4-2e)
             self.current_send.remove(&peer); // 취소 = 의사 표시(M4-10c)
             self.preparing_send.remove(&peer);
             self.resend_offers.remove(&peer);
+            // 남은 미종결 발신 라인 일괄 종결(대기·정지 라인 영구 잔존 방지).
+            let why = nbeep_core::t(nbeep_core::Msg::XferCanceled).to_string();
+            while self.conversations.get_mut(&peer).is_some_and(|conv| {
+                nbeep_ui::update_xfer_in(
+                    &mut conv.lines,
+                    true,
+                    nbeep_ui::XferLineState::Failed { why: why.clone() },
+                )
+            }) {}
+            // Paused 라인 잔여 종결(FIFO는 Paused를 건너뛴다).
+            if let Some(conv) = self.conversations.get_mut(&peer) {
+                for line in conv.lines.iter_mut() {
+                    if line.mine {
+                        if let nbeep_ui::ChatBody::Xfer(x) = &mut line.body {
+                            if matches!(
+                                x.state,
+                                nbeep_ui::XferLineState::Paused { .. }
+                                    | nbeep_ui::XferLineState::Waiting
+                                    | nbeep_ui::XferLineState::Active { .. }
+                            ) {
+                                x.state = nbeep_ui::XferLineState::Failed { why: why.clone() };
+                            }
+                        }
+                    }
+                }
+            }
+            {
+                let mut inv = Invalidations::default();
+                if let Some(chat) = self.chats.get_mut(&peer) {
+                    while chat.update_xfer_line(
+                        true,
+                        nbeep_ui::XferLineState::Failed { why: why.clone() },
+                        &mut inv,
+                    ) {}
+                    // 뷰의 Paused 라인(FIFO가 건너뜀) — 이름 대상으로 종결.
+                    for (n, sz) in &paused_names {
+                        chat.set_xfer_named(
+                            true,
+                            n,
+                            *sz,
+                            nbeep_ui::XferLineState::Failed { why: why.clone() },
+                            &mut inv,
+                        );
+                    }
+                }
+            }
+            self.record_history(peer);
         } else if let Some(sha) = self.resumed_recv.remove(&peer) {
             // 수동 취소 = 의사 표시 — 보존 부분물도 함께 폐기(재개 제안 금지 · M4-10).
             crate::part::remove_partial(crate::gate::CH_GUI, &sha);
@@ -9058,23 +9166,9 @@ impl App {
                     .and_then(|p| p.file_name())
                     .is_some_and(|n| n.to_string_lossy() == ctl.name);
                 if is_current && self.active_send.contains_key(&peer) {
-                    self.pause_active_send(peer, true); // 액터 = parked 슬롯으로
-                    let done = done_now(self, true);
-                    // 앱 그림자 보관(ⓐ) — 슬롯을 비워 **다음 파일이 이어서 나간다**
-                    // (사용자 확정: 큰 파일을 정지하면 다음이 전송·완료돼야 한다).
-                    if let (Some(xid), Some(path)) = (
-                        self.active_send.remove(&peer),
-                        self.current_send.remove(&peer),
-                    ) {
-                        self.paused_sends.entry(peer).or_default().push((
-                            ctl.name.clone(),
-                            ctl.size,
-                            path,
-                            xid,
-                        ));
-                    }
-                    self.set_xfer_line_named(peer, true, &ctl.name, ctl.size, St::Paused { done });
-                    self.pump_send_queue(peer); // 다음 파일 진행(ⓐ)
+                    // 액터에 정지 요청만 — 라인·큐 동기화는 **XferPaused 이벤트**가
+                    // 단일 지점에서 수행한다(수락 경합으로 상태가 어긋나던 실기).
+                    self.pause_active_send(peer, true);
                 } else if let Some(path) = self.batch_paths(peer).into_iter().find(|p| {
                     p.file_name()
                         .is_some_and(|n| n.to_string_lossy() == ctl.name)
@@ -10577,6 +10671,44 @@ impl ApplicationHandler<AppEvent> for App {
                     );
                 }
                 self.clear_xfer(peer);
+                self.redraw_conversation(peer);
+            }
+            AppEvent::XferPaused {
+                peer,
+                id,
+                name,
+                size,
+                done,
+            } => {
+                // 정지 확정(액터 단일 진실) — 라인·큐·슬롯을 여기서만 동기화한다
+                // (수락 직전 정지의 경합으로 라인이 Active로 남아 ▶가 안 뜨던 실기).
+                if let Some(path) = self.current_send.get(&peer).cloned() {
+                    let matches = path
+                        .file_name()
+                        .is_some_and(|n| n.to_string_lossy() == name);
+                    if matches {
+                        self.current_send.remove(&peer);
+                        self.active_send.remove(&peer);
+                        if let Some(set) = self.send_paused.get_mut(&peer) {
+                            set.remove(&path); // 큐 정지 표식은 보관 이동으로 승격
+                        }
+                        self.paused_sends.entry(peer).or_default().push((
+                            name.clone(),
+                            size,
+                            path,
+                            id,
+                        ));
+                    }
+                }
+                self.set_xfer_line_named(
+                    peer,
+                    true,
+                    &name,
+                    size,
+                    nbeep_ui::XferLineState::Paused { done },
+                );
+                self.pump_send_queue(peer); // 다음 파일 진행(ⓐ)
+                self.refresh_send_batch(peer);
                 self.redraw_conversation(peer);
             }
             AppEvent::XferResumed {

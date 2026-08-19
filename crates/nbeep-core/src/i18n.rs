@@ -483,6 +483,8 @@ pub enum Msg {
     XferDoneLbl,
     XferFailLbl,
     XferPeerCanceled,
+    /// 진행 배너 전체취소 버튼(M4-2e · 08-19).
+    XferCancelAll,
     /// 발신 원본 읽기 실패로 중단(M4-2e i18n 08-19).
     XferSrcReadFail,
     /// 전송 중 원본 변경 감지로 중단(무결성 가드).
@@ -817,6 +819,7 @@ impl Msg {
             Msg::XferFailLbl => ["Failed", "실패", "失败", "失敗"],
             Msg::XferSrcReadFail => ["Stopped — cannot read source file", "원본 파일을 읽을 수 없어 전송을 중단했습니다", "已中止 — 无法读取源文件", "中断 — 元ファイルを読めません"],
             Msg::XferSrcChanged => ["Stopped — source changed during transfer", "전송 중 원본이 변경되어 중단했습니다", "已中止 — 传输中源文件被修改", "中断 — 転送中に元ファイルが変更"],
+            Msg::XferCancelAll => ["Cancel all", "전체취소", "全部取消", "全て取消"],
             Msg::XferPeerCanceled => [
                 "Peer canceled",
                 "상대가 취소",

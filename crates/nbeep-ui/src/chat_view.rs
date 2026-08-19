@@ -1624,7 +1624,36 @@ impl Widget for ChatViewWidget {
                 };
                 let thumb_pad = if xthumb.is_some() { self.s(24) } else { 0 };
                 let widest = b.lines.iter().map(|s| ctx.text_width(s)).max().unwrap_or(0);
-                let bw = widest + pad_h * 2 + thumb_pad;
+                // 라인별 제어 아이콘(M4-2e) — **풍선 안 맨 끝** 배치(사용자 확정
+                // 08-19: 풍선 폭을 아이콘만큼 늘려 내부 우측 끝에 — 위치 고정).
+                let line_acts: &[XferCtlAct] = match &l.body {
+                    ChatBody::Xfer(x) => match (l.mine, &x.state) {
+                        (true, XferLineState::Waiting | XferLineState::Active { .. }) => {
+                            &[XferCtlAct::Pause, XferCtlAct::Cancel]
+                        }
+                        (true, XferLineState::Paused { .. }) => {
+                            &[XferCtlAct::Resume, XferCtlAct::Cancel]
+                        }
+                        (false, XferLineState::Active { .. }) => {
+                            &[XferCtlAct::Pause, XferCtlAct::Cancel]
+                        }
+                        (false, XferLineState::Paused { .. }) => {
+                            &[XferCtlAct::Resume, XferCtlAct::Cancel]
+                        }
+                        _ => &[],
+                    },
+                    ChatBody::Text(_) => &[],
+                };
+                let ctl_d = self.s(16);
+                let ctl_gap = self.s(8);
+                let ctl_total = if line_acts.is_empty() {
+                    0
+                } else {
+                    line_acts.len() as i32 * ctl_d
+                        + (line_acts.len() as i32 - 1) * ctl_gap
+                        + ctl_gap // 텍스트와의 간격
+                };
+                let bw = widest + pad_h * 2 + thumb_pad + ctl_total;
                 let bx = if l.mine {
                     vp.right() - inset - bw
                 } else {
@@ -1660,33 +1689,18 @@ impl Widget for ChatViewWidget {
                                                                   // ── 라인별 트랜스포트 아이콘(M4-2e · 08-19 — "각 항목 옆 제어 버튼") ──
                                                                   // 발신 풍선(우측 정렬) 왼쪽 / 수신 풍선(좌측 정렬) 오른쪽에 붙인다.
                 if let ChatBody::Xfer(x) = &l.body {
-                    let acts: &[XferCtlAct] = match (l.mine, &x.state) {
-                        (true, XferLineState::Waiting | XferLineState::Active { .. }) => {
-                            &[XferCtlAct::Pause, XferCtlAct::Cancel]
-                        }
-                        (true, XferLineState::Paused { .. }) => {
-                            &[XferCtlAct::Resume, XferCtlAct::Cancel]
-                        }
-                        (false, XferLineState::Active { .. }) => {
-                            &[XferCtlAct::Pause, XferCtlAct::Cancel]
-                        }
-                        (false, XferLineState::Paused { .. }) => {
-                            &[XferCtlAct::Resume, XferCtlAct::Cancel]
-                        }
-                        _ => &[],
-                    };
+                    let acts = line_acts;
                     if !acts.is_empty() {
-                        let d = self.s(16);
-                        let gap = self.s(8);
+                        let d = ctl_d;
+                        let gap = ctl_gap;
                         let cy = by0 + (bub_h - d) / 2;
-                        let total = acts.len() as i32 * d + (acts.len() as i32 - 1) * gap;
-                        // 시간 라벨(분 경계 마지막 풍선 옆)과 겹치지 않게 라벨
-                        // 지대(≈"15:29" 폭)를 비켜 배치한다(실기 08-19 — 겹침).
-                        let time_zone = self.s(46);
+                        let icons_w = ctl_total - ctl_gap; // 텍스트 간격 제외 실폭
+                                                           // ★ 풍선 안 맨 끝(사용자 확정 08-19) — 발신 = 우측 끝 ·
+                                                           //   수신 = 좌측 끝(미러). 풍선 폭은 위에서 늘려 두었다.
                         let mut ixx = if l.mine {
-                            bub.x - gap - total - time_zone
+                            bub.right() - pad_h - icons_w
                         } else {
-                            bub.right() + gap + self.s(6) + time_zone
+                            bub.x + pad_h
                         };
                         for act in acts {
                             let alpha: &'static [u8] = match act {
@@ -1694,12 +1708,7 @@ impl Widget for ChatViewWidget {
                                 XferCtlAct::Resume => crate::icons::xfer::PLAY_ALPHA,
                                 XferCtlAct::Cancel => crate::icons::xfer::CANCEL_ALPHA,
                             };
-                            let img = crate::IconImage::from_alpha_tinted(
-                                96,
-                                96,
-                                alpha,
-                                theme.text_dim.rgb(),
-                            );
+                            let img = crate::IconImage::from_alpha_tinted(96, 96, alpha, fg.rgb());
                             let r = Rect::new(ixx, cy, d, d);
                             ctx.image_scaled(r, &img, vp);
                             let pad = self.s(3); // 16px는 좁다 — 히트 3px 확장
@@ -1727,11 +1736,13 @@ impl Widget for ChatViewWidget {
                         self.thumb_hits.borrow_mut().push((hr, qp.clone()));
                     }
                 }
+                // 수신 풍선은 아이콘이 왼쪽 끝(미러) — 텍스트를 그만큼 민다.
+                let text_shift = if l.mine { 0 } else { ctl_total };
                 for (si, s) in b.lines.iter().enumerate() {
                     let ly = by0 + pad_v + si as i32 * line_h;
                     let clip = Rect::new(bub.x, ly, bub.w, line_h);
                     ctx.text(
-                        bub.x + pad_h + thumb_pad,
+                        bub.x + pad_h + thumb_pad + text_shift,
                         ly + (line_h - th) / 2,
                         clip,
                         s,
@@ -1834,9 +1845,14 @@ impl Widget for ChatViewWidget {
             ctx.select_font(FontSlot::Status, false);
             let sh = ctx.text_height();
             let pct = (xp.ratio() * 100.0).round() as u32;
+            // 배치 합산 표기(사용자 확정 08-19): 방향 N% · 누적/총합 (순서/개수).
             let label = format!(
-                "{} {pct}% · {} / {} ({}/{} 파일)",
-                if xp.sending { "전송" } else { "수신" },
+                "{} {pct}% · {} / {} ({}/{})",
+                if xp.sending {
+                    nbeep_core::t(nbeep_core::Msg::XferDirSend)
+                } else {
+                    nbeep_core::t(nbeep_core::Msg::XferDirRecv)
+                },
                 human_bytes(xp.done_bytes),
                 human_bytes(xp.total_bytes),
                 xp.done_files,
@@ -1853,7 +1869,8 @@ impl Widget for ChatViewWidget {
             // 수락 순간 취소 경로가 사라졌다). 히트 영역은 페인트가 기록한다.
             // 모양은 Button 컨트롤 문법 그대로(field_bg+border · 눌림 = sel_bg) +
             // **위험색 라벨**(실기 08-16: 배경과 같은 회색이라 버튼인 줄 몰랐다).
-            let cw = self.s(44);
+            let cancel_lbl = nbeep_core::t(nbeep_core::Msg::XferCancelAll); // 전체취소
+            let cw = ctx.text_width(cancel_lbl) + self.s(20);
             let cx = row.right() - cw - self.s(10);
             let crect = Rect::new(cx, row.y + self.s(2), cw, row.h - self.s(4));
             let bg = if self.xfer_cancel_pressed {
@@ -1863,12 +1880,12 @@ impl Widget for ChatViewWidget {
             };
             ctx.fill_round_rect(crect, self.s(3), bg);
             ctx.stroke_round_rect(crect, self.s(3), theme.border, 1.0);
-            let ctw = ctx.text_width("취소");
+            let ctw = ctx.text_width(cancel_lbl);
             ctx.text(
                 cx + (cw - ctw) / 2,
                 row.y + (row.h - sh) / 2,
                 row,
-                "취소",
+                cancel_lbl,
                 theme.danger,
             );
             self.xfer_cancel_hit.set(Some(crect));
