@@ -2815,12 +2815,22 @@ impl App {
             let status = if is_paused(path) {
                 SendStatus::Paused
             } else if self.active_send.contains_key(&peer) {
-                let pct = self.xfer_progress.get(&peer).map_or(0, |p| {
-                    u8::try_from(p.done_bytes.saturating_mul(100) / p.total_bytes.max(1))
-                        .unwrap_or(100)
-                        .min(100)
-                });
+                // ★ 발신 진행률만(08-19) — 같은 상대와 동시 수신 중이면
+                //   xfer_progress가 수신 값으로 덮여 pct가 오염된다.
+                let pct = self
+                    .xfer_progress
+                    .get(&peer)
+                    .filter(|p| p.sending)
+                    .map_or(0, |p| {
+                        u8::try_from(p.done_bytes.saturating_mul(100) / p.total_bytes.max(1))
+                            .unwrap_or(100)
+                            .min(100)
+                    });
                 SendStatus::Active { pct }
+            } else if self.awaiting_accept.contains_key(&peer) {
+                // 현재 파일 구분(08-19 — 설계의 "현재 ▶"): 오퍼가 나가 상대
+                // 화면에 떠 있는 파일 = "승인 대기" · 큐 파일 = "대기".
+                SendStatus::Offered
             } else {
                 SendStatus::Waiting
             };
@@ -9964,6 +9974,17 @@ impl ApplicationHandler<AppEvent> for App {
                 // 배치가 끝날 때만 닫힌다(refresh_send_batch).
                 self.awaiting_accept.remove(&peer);
                 self.send_wait.remove(&peer); // 승인 타임아웃 해제
+                                              // ★ 승인 대기 중 일시정지한 파일(08-19) — 오퍼는 이미 나가 있어
+                                              //   수락되면 액터 펌프가 돌기 시작한다. 정지 의사를 액터에 지금
+                                              //   전달해 0%에서 멈춘 채 두고, 재개 아이콘으로 잇게 한다(안
+                                              //   보내면 패널은 "일시정지"인데 실제로는 전송되는 모순).
+                let paused_now = self
+                    .current_send
+                    .get(&peer)
+                    .is_some_and(|p| self.send_paused.get(&peer).is_some_and(|s| s.contains(p)));
+                if paused_now {
+                    self.pause_active_send(peer, true);
+                }
                 self.refresh_send_batch(peer);
                 self.set_xfer_line(peer, true, nbeep_ui::XferLineState::Active { done: 0 });
                 self.set_status(nbeep_core::t(nbeep_core::Msg::StPeerAccepted));

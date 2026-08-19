@@ -22,8 +22,11 @@ use nbeep_core::{t, tf, Msg};
 /// 한 파일의 전송 상태(목록 행) — 아이콘 제어 조합을 정한다.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SendStatus {
-    /// 대기(큐 or 상대 승인 대기).
+    /// 큐 대기(아직 오퍼 전 — 앞 파일이 끝나면 차례가 온다).
     Waiting,
+    /// **현재 파일** — 오퍼를 보내고 상대 승인 대기(08-19 — 설계의 "현재 ▶" 구분:
+    /// 큐 대기와 라벨이 갈려야 어느 파일이 상대 화면에 떠 있는지 보인다).
+    Offered,
     /// 전송 중(백분율).
     Active { pct: u8 },
     /// 일시정지(활성 멈춤 or 큐 보류).
@@ -77,6 +80,7 @@ fn human(bytes: u64) -> String {
 fn status_label(status: SendStatus, theme: &Theme) -> (String, Color) {
     match status {
         SendStatus::Waiting => (t(Msg::XferStWaiting).into(), theme.text_dim),
+        SendStatus::Offered => (t(Msg::XferStOffered).into(), theme.accent),
         SendStatus::Active { pct } => (format!("{} {pct}%", t(Msg::XferStActive)), theme.accent),
         SendStatus::Paused => (t(Msg::XferStPaused).into(), theme.warn),
         SendStatus::Done => (t(Msg::XferStDone).into(), theme.ok),
@@ -203,10 +207,12 @@ impl SendBatchWidget {
             crate::icons::xfer::CANCEL_ALPHA,
         ));
         // 그 왼쪽 = 전체 일시정지/재개(상태에 따라).
-        let any_pausable = self
-            .rows
-            .iter()
-            .any(|r| matches!(r.status, SendStatus::Waiting | SendStatus::Active { .. }));
+        let any_pausable = self.rows.iter().any(|r| {
+            matches!(
+                r.status,
+                SendStatus::Waiting | SendStatus::Offered | SendStatus::Active { .. }
+            )
+        });
         let any_paused = self
             .rows
             .iter()
@@ -237,7 +243,7 @@ impl SendBatchWidget {
         let x_pp = x_cancel - gap - icon;
         let mut out = Vec::new();
         match self.rows[i].status {
-            SendStatus::Waiting | SendStatus::Active { .. } => {
+            SendStatus::Waiting | SendStatus::Offered | SendStatus::Active { .. } => {
                 out.push((
                     Rect::new(x_pp, cy, icon, icon),
                     SendAction::Pause(i),
@@ -501,6 +507,22 @@ mod tests {
         assert!(acts.contains(&SendAction::Resume(2)));
         assert!(acts.contains(&SendAction::Cancel(2)));
         assert!(!acts.contains(&SendAction::Pause(2)));
+    }
+
+    /// Offered(승인 대기 — 현재 파일)도 일시정지·취소 제어를 갖는다(08-19).
+    #[test]
+    fn offered_row_offers_pause_and_cancel() {
+        let mut r = rows();
+        r[1].status = SendStatus::Offered;
+        let w = SendBatchWidget::new(r);
+        let rr = Rect::new(0, 0, 400, 60);
+        let acts: Vec<SendAction> = w
+            .row_controls(1, rr)
+            .into_iter()
+            .map(|(_, a, _)| a)
+            .collect();
+        assert!(acts.contains(&SendAction::Pause(1)));
+        assert!(acts.contains(&SendAction::Cancel(1)));
     }
 
     #[test]

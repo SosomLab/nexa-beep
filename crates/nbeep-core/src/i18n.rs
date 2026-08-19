@@ -742,6 +742,8 @@ pub enum Msg {
     XferBatchSummary,
     /// 전송 상태 라벨(M4-2d · 08-19) — 목록 행.
     XferStWaiting,
+    /// 현재 파일 — 오퍼 발신·상대 승인 대기(M4-2d · 08-19).
+    XferStOffered,
     XferStActive,
     XferStPaused,
     XferStDone,
@@ -1123,6 +1125,7 @@ impl Msg {
             Msg::XferWaitApproval => ["Waiting for the other side to accept…", "상대의 승인을 기다리는 중…", "正在等待对方接受…", "相手の承認を待っています…"],
             Msg::XferBatchSummary => ["{} files · {} total", "{}개 파일 · 총 {}", "{} 个文件 · 共 {}", "{} ファイル · 合計 {}"],
             Msg::XferStWaiting => ["Waiting", "대기", "等待", "待機"],
+            Msg::XferStOffered => ["Awaiting approval", "승인 대기", "等待批准", "承認待ち"],
             Msg::XferStActive => ["Sending", "전송 중", "传输中", "転送中"],
             Msg::XferStPaused => ["Paused", "일시정지", "已暂停", "一時停止"],
             Msg::XferStDone => ["Done", "완료", "完成", "完了"],

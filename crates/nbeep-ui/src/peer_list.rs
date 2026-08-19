@@ -1282,10 +1282,10 @@ impl Widget for PeerListWidget {
                                 self.activated = Some(a);
                             }
                             self.last_click = None; // 트리플클릭 중복 활성화 방지
-                            // ★ 드래그 후보 해제(08-19 실기 — 더블클릭이 대화창을
-                            //   열면 포커스가 넘어가 MouseUp이 목록에 안 온다.
-                            //   무장된 채 남으면 ESC 복귀 후 MouseMove가 드래그
-                            //   범위 선택을 계속한다 — "끌지 않았는데 끌린다").
+                                                    // ★ 드래그 후보 해제(08-19 실기 — 더블클릭이 대화창을
+                                                    //   열면 포커스가 넘어가 MouseUp이 목록에 안 온다.
+                                                    //   무장된 채 남으면 ESC 복귀 후 MouseMove가 드래그
+                                                    //   범위 선택을 계속한다 — "끌지 않았는데 끌린다").
                             self.drag_from = None;
                             return;
                         }
