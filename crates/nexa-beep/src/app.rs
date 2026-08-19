@@ -1095,6 +1095,17 @@ fn spawn_session_actor(
                             let _ = proxy.send_event(AppEvent::XferManifest { peer, entries });
                         }
                     }
+                    // 큐 단계 정지 통지(M4-2e ①ⓐ · 태그 17) — 발신측이 오퍼 전
+                    // 파일을 멈췄다/이었다: 이름 기반 통지 → 수신 라인 동기화.
+                    StreamId::Control if nbeep_core::xfer::decode_qpause(&bytes).is_some() => {
+                        if let Some((name, paused)) = nbeep_core::xfer::decode_qpause(&bytes) {
+                            let _ = proxy.send_event(AppEvent::XferPeerPauseNotice {
+                                peer,
+                                name,
+                                paused,
+                            });
+                        }
+                    }
                     // 전체 취소 전파(M4-2e · 태그 16) — 상대가 Cancel all: 내 발신
                     // 펌프·보관 정지분을 즉시 중단하고 앱이 로컬 전체취소를 돌린다.
                     StreamId::Control if nbeep_core::xfer::is_cancel_all(&bytes) => {
@@ -2274,6 +2285,9 @@ struct App {
     recv_batch: HashMap<PeerId, (u32, u32, u64, u64)>,
     /// 수신 배치 파일 크기 장부(manifest 비제외분 — 완료 시 크기 가산용).
     recv_batch_sizes: HashMap<PeerId, Vec<(String, u64)>>,
+    /// 정지 잔존의 최근 상태 변화 시각(M4-2e ⓓ) — 10분 넘게 그대로면 양쪽 자동
+    /// 전체 취소(cancel → CANCEL_ALL 전파). 활동(진행·완료·정지/재개)마다 갱신.
+    xfer_pause_since: HashMap<PeerId, u64>,
     /// 일시정지로 **보관 중인 발신**(M4-2e ⓐ · 상대별) — (이름, 크기, 경로, xid).
     /// 액터 parked 슬롯의 앱측 그림자: 다음 파일 펌프·재개 요청·취소·Closed
     /// 재-Offer 원료가 여기서 나온다.
@@ -3774,6 +3788,19 @@ impl App {
     }
 
     /// 전송 종료 — 진행률 정리 + 목록 갱신.
+    /// 정지 방치 타이머 갱신(M4-2e ⓓ) — 정지 항목이 있으면 "최근 상태 변화
+    /// 시각"을 지금으로, 없으면 타이머 해제. 전송 상태가 바뀌는 지점마다 부른다.
+    fn note_xfer_state_change(&mut self, peer: PeerId) {
+        let has_pause = self.paused_sends.contains_key(&peer)
+            || self.send_paused.get(&peer).is_some_and(|s| !s.is_empty())
+            || self.recv_paused.contains_key(&peer);
+        if has_pause {
+            self.xfer_pause_since.insert(peer, self.now_ms());
+        } else {
+            self.xfer_pause_since.remove(&peer);
+        }
+    }
+
     /// **로컬 전체취소 루틴**(M4-2e — 진행 상태 관리의 단일 기준): 발신·수신
     /// 양 역할의 배치 상태를 전부 마감한다. 와이어 통지는 하지 않는다(호출자
     /// 몫 — 내가 누른 취소는 통지 후 이걸 부르고, 상대 통지 수신은 이것만).
@@ -3796,6 +3823,7 @@ impl App {
         self.recv_paused.remove(&peer);
         self.recv_batch.remove(&peer);
         self.recv_batch_sizes.remove(&peer);
+        self.xfer_pause_since.remove(&peer);
         self.clear_batch_approval(peer);
         if let Some(sha) = self.resumed_recv.remove(&peer) {
             crate::part::remove_partial(crate::gate::CH_GUI, &sha);
@@ -3808,6 +3836,17 @@ impl App {
     }
 
     /// 전체 취소 와이어 통지(M4-2e · Control 16) — 상대도 자기 쪽 루틴을 돌린다.
+    /// 큐 단계(오퍼 전) 정지/재개를 수신측에 통지(M4-2e ①ⓐ — 이름 기반 태그 17).
+    fn send_qpause_notice(&mut self, peer: PeerId, name: &str, pause: bool) {
+        if let Some(c) = self.conversations.get(&peer) {
+            let _ = c
+                .out_tx
+                .send(SessionCmd::Control(vec![nbeep_core::xfer::encode_qpause(
+                    name, pause,
+                )]));
+        }
+    }
+
     fn send_cancel_all_notice(&mut self, peer: PeerId) {
         if let Some(c) = self.conversations.get(&peer) {
             let _ = c.out_tx.send(SessionCmd::Control(vec![
@@ -9362,6 +9401,7 @@ impl App {
                         .is_some_and(|n| n.to_string_lossy() == ctl.name)
                 }) {
                     self.send_paused.entry(peer).or_default().insert(path);
+                    self.send_qpause_notice(peer, &ctl.name, true); // ①ⓐ 수신 동기화
                     self.set_xfer_line_named(
                         peer,
                         true,
@@ -9369,6 +9409,7 @@ impl App {
                         ctl.size,
                         St::Paused { done: 0 },
                     );
+                    self.note_xfer_state_change(peer); // ⓓ 타이머
                 }
             }
             (true, A::Resume) => {
@@ -9402,8 +9443,10 @@ impl App {
                     let done = done_now(self, true);
                     self.set_xfer_line_named(peer, true, &ctl.name, ctl.size, St::Active { done });
                 } else {
+                    self.send_qpause_notice(peer, &ctl.name, false); // ①ⓐ 수신 동기화
                     self.set_xfer_line_named(peer, true, &ctl.name, ctl.size, St::Waiting);
                     self.pump_send_queue(peer);
+                    self.note_xfer_state_change(peer); // ⓓ 타이머
                 }
             }
             (true, A::Cancel) => {
@@ -10780,6 +10823,7 @@ impl ApplicationHandler<AppEvent> for App {
                     }
                 };
                 self.xfer_progress.insert(peer, xp);
+                self.note_xfer_state_change(peer);
                 // 스레드 항목 진행률 — **이름 대상**(M4-2e: 지연 이벤트가 다음
                 // 라인을 오염시키지 않게) · 이름 없으면 종전 FIFO(구 경로).
                 if name.is_empty() {
@@ -10980,6 +11024,7 @@ impl ApplicationHandler<AppEvent> for App {
                     nbeep_ui::XferLineState::Active { done: u64::MAX }
                 };
                 self.set_xfer_line_named(peer, false, &name, 0, st);
+                self.note_xfer_state_change(peer);
                 self.redraw_conversation(peer);
             }
             AppEvent::XferPaused {
@@ -11018,6 +11063,7 @@ impl ApplicationHandler<AppEvent> for App {
                 );
                 self.pump_send_queue(peer); // 다음 파일 진행(ⓐ)
                 self.refresh_send_batch(peer);
+                self.note_xfer_state_change(peer);
                 self.redraw_conversation(peer);
             }
             AppEvent::XferResumed {
@@ -11045,6 +11091,7 @@ impl ApplicationHandler<AppEvent> for App {
                     size,
                     nbeep_ui::XferLineState::Active { done },
                 );
+                self.note_xfer_state_change(peer);
                 self.redraw_conversation(peer);
             }
             AppEvent::XferAccepted { peer } => {
@@ -11959,6 +12006,23 @@ impl ApplicationHandler<AppEvent> for App {
         // 설정 영속 tick(FR-P-9) — 조용 1s OR 상한 10s 충족 시 스냅샷 1회 저장.
         if self.conf.sched.tick(Instant::now()) {
             self.conf_save(false);
+        }
+        // 정지 방치 자동 취소(M4-2e ⓓ · 사용자 확정 08-19) — 최종 상태 변화
+        // 이후 10분 넘게 정지가 그대로면 **양쪽 모두 전체 취소**(cancel 경로가
+        // CANCEL_ALL을 전파 → 상대도 자기 로컬 루틴 실행). 받은 파일은 유지.
+        {
+            let now = self.now_ms();
+            let stale: Vec<PeerId> = self
+                .xfer_pause_since
+                .iter()
+                .filter(|(_, &t)| now.saturating_sub(t) > 600_000)
+                .map(|(p, _)| *p)
+                .collect();
+            for peer in stale {
+                self.xfer_pause_since.remove(&peer);
+                self.set_status(nbeep_core::t(nbeep_core::Msg::XferStaleAutoCancel).to_string());
+                self.cancel_active_xfer(peer);
+            }
         }
         // 타입어헤드 유효시간 경과 → 버퍼 초기화·HUD 자동 숨김(마지막 입력 후 N초).
         {
@@ -13405,6 +13469,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         recv_paused: HashMap::new(),
         recv_batch: HashMap::new(),
         recv_batch_sizes: HashMap::new(),
+        xfer_pause_since: HashMap::new(),
         recv_manifest: HashMap::new(),
         batch_approved: HashMap::new(),
         pending_send_window: None,

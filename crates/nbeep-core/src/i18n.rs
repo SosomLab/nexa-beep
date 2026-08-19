@@ -487,6 +487,8 @@ pub enum Msg {
     XferCancelAll,
     /// 상대가 전체 취소(M4-2e · 08-19).
     XferPeerCanceledAll,
+    /// 10분 정지 방치 자동 전체 취소(M4-2e ⓓ · 08-19).
+    XferStaleAutoCancel,
     /// 발신 원본 읽기 실패로 중단(M4-2e i18n 08-19).
     XferSrcReadFail,
     /// 전송 중 원본 변경 감지로 중단(무결성 가드).
@@ -823,6 +825,7 @@ impl Msg {
             Msg::XferSrcChanged => ["Stopped — source changed during transfer", "전송 중 원본이 변경되어 중단했습니다", "已中止 — 传输中源文件被修改", "中断 — 転送中に元ファイルが変更"],
             Msg::XferCancelAll => ["Cancel all", "전체취소", "全部取消", "全て取消"],
             Msg::XferPeerCanceledAll => ["Peer canceled all", "상대가 전체 취소", "对方已全部取消", "相手が全てキャンセル"],
+            Msg::XferStaleAutoCancel => ["Paused over 10 min — canceled all", "10분 이상 일시중지 방치 — 전체 취소", "暂停超过10分钟 — 已全部取消", "10分以上一時停止 — 全て取消"],
             Msg::XferPeerCanceled => [
                 "Peer canceled",
                 "상대가 취소",

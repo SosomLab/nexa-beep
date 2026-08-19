@@ -477,6 +477,38 @@ pub fn is_cancel_all(bytes: &[u8]) -> bool {
     bytes == [CANCEL_ALL_TAG]
 }
 
+/// **큐 단계 정지 통지** 태그(M4-2e ①ⓐ · 08-19) — 발신→수신. 아직 오퍼 전이라
+/// xid가 없어 **이름 기반**으로 알린다: 수신 화면도 그 파일이 정지/대기임을
+/// 보이게(안 보내면 수신측은 "승인 대기"로 오인). 구버전 = 미지 태그 무시.
+pub const QPAUSE_TAG: u8 = 17;
+
+/// 큐 단계 정지/재개 통지 인코딩 — `TAG ‖ pause(1) ‖ name_len(2LE) ‖ name`.
+#[must_use]
+pub fn encode_qpause(name: &str, pause: bool) -> Vec<u8> {
+    let nb = name.as_bytes();
+    let nlen = u16::try_from(nb.len()).unwrap_or(u16::MAX) as usize;
+    let mut out = Vec::with_capacity(4 + nlen);
+    out.push(QPAUSE_TAG);
+    out.push(u8::from(pause));
+    out.extend_from_slice(&u16::try_from(nlen).unwrap_or(u16::MAX).to_le_bytes());
+    out.extend_from_slice(&nb[..nlen]);
+    out
+}
+
+/// 큐 단계 정지/재개 통지 해석 — `Some((name, pause))`. 형식 불일치 = None.
+#[must_use]
+pub fn decode_qpause(bytes: &[u8]) -> Option<(String, bool)> {
+    if bytes.len() < 4 || bytes[0] != QPAUSE_TAG || bytes[1] > 1 {
+        return None;
+    }
+    let nlen = u16::from_le_bytes([bytes[2], bytes[3]]) as usize;
+    if bytes.len() != 4 + nlen {
+        return None;
+    }
+    let name = core::str::from_utf8(&bytes[4..]).ok()?.to_owned();
+    Some((name, bytes[1] == 1))
+}
+
 /// 일시정지/재개 요청 인코딩 — `TAG ‖ xid(16)`.
 #[must_use]
 pub fn encode_pause_req(id: XferId, pause: bool) -> Vec<u8> {
@@ -814,6 +846,24 @@ mod tests {
     fn cancel_all_roundtrip() {
         assert!(is_cancel_all(&encode_cancel_all()));
         assert!(!is_cancel_all(&[CANCEL_ALL_TAG, 0]), "꼬리 = 남의 프레임");
+    }
+
+    #[test]
+    fn qpause_roundtrip() {
+        let b = encode_qpause("한글 파일.bin", true);
+        assert_eq!(decode_qpause(&b), Some(("한글 파일.bin".into(), true)));
+        let b2 = encode_qpause("a", false);
+        assert_eq!(decode_qpause(&b2), Some(("a".into(), false)));
+        assert_eq!(
+            decode_qpause(&[QPAUSE_TAG, 1, 5, 0, b'x']),
+            None,
+            "길이 불일치"
+        );
+        assert_eq!(
+            decode_qpause(&[QPAUSE_TAG, 2, 1, 0, b'x']),
+            None,
+            "pause 비트 오염"
+        );
         assert!(!is_cancel_all(&[CAP_TAG]));
     }
 
