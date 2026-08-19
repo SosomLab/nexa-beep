@@ -8877,6 +8877,126 @@ impl App {
         self.redraw_conversation(peer);
     }
 
+    /// 라인별 트랜스포트 제어 실행(M4-2e) — 채팅창 안 항목 옆 아이콘을 큐·액터·
+    /// 와이어로 옮긴다. 발신 = 로컬 큐/액터 게이트 · 수신 = 와이어 PauseReq/
+    /// ResumeReq(구버전 발신자는 무시 = 자연 강등).
+    fn handle_xfer_ctl(&mut self, peer: PeerId, ctl: nbeep_ui::XferCtl) {
+        use nbeep_ui::{XferCtlAct as A, XferLineState as St};
+        let done_now = |app: &Self, sending: bool| -> u64 {
+            app.xfer_progress
+                .get(&peer)
+                .filter(|p| p.sending == sending)
+                .map_or(0, |p| p.done_bytes)
+        };
+        match (ctl.mine, ctl.act) {
+            (true, A::Pause) => {
+                let is_current = self
+                    .current_send
+                    .get(&peer)
+                    .and_then(|p| p.file_name())
+                    .is_some_and(|n| n.to_string_lossy() == ctl.name);
+                if is_current && self.active_send.contains_key(&peer) {
+                    self.pause_active_send(peer, true);
+                    let done = done_now(self, true);
+                    self.set_xfer_line_named(peer, true, &ctl.name, ctl.size, St::Paused { done });
+                } else if let Some(path) = self.batch_paths(peer).into_iter().find(|p| {
+                    p.file_name()
+                        .is_some_and(|n| n.to_string_lossy() == ctl.name)
+                }) {
+                    self.send_paused.entry(peer).or_default().insert(path);
+                    self.set_xfer_line_named(
+                        peer,
+                        true,
+                        &ctl.name,
+                        ctl.size,
+                        St::Paused { done: 0 },
+                    );
+                }
+            }
+            (true, A::Resume) => {
+                let is_current = self
+                    .current_send
+                    .get(&peer)
+                    .and_then(|p| p.file_name())
+                    .is_some_and(|n| n.to_string_lossy() == ctl.name);
+                if let Some(set) = self.send_paused.get_mut(&peer) {
+                    set.retain(|p| {
+                        !p.file_name()
+                            .is_some_and(|n| n.to_string_lossy() == ctl.name)
+                    });
+                }
+                if is_current {
+                    self.pause_active_send(peer, false);
+                    let done = done_now(self, true);
+                    self.set_xfer_line_named(peer, true, &ctl.name, ctl.size, St::Active { done });
+                } else {
+                    self.set_xfer_line_named(peer, true, &ctl.name, ctl.size, St::Waiting);
+                    self.pump_send_queue(peer);
+                }
+            }
+            (true, A::Cancel) => {
+                if let Some(i) = self.batch_paths(peer).iter().position(|p| {
+                    p.file_name()
+                        .is_some_and(|n| n.to_string_lossy() == ctl.name)
+                }) {
+                    self.cancel_one_send(peer, i);
+                    self.set_xfer_line_named(
+                        peer,
+                        true,
+                        &ctl.name,
+                        ctl.size,
+                        St::Failed {
+                            why: nbeep_core::t(nbeep_core::Msg::XferCanceled).into(),
+                        },
+                    );
+                }
+            }
+            (false, A::Pause) => {
+                if let Some(xid) = self.active_recv.get(&peer).copied() {
+                    if let Some(c) = self.conversations.get(&peer) {
+                        let _ = c.out_tx.send(SessionCmd::Control(vec![
+                            nbeep_core::xfer::encode_pause_req(xid, true),
+                        ]));
+                    }
+                    let done = done_now(self, false);
+                    self.set_xfer_line_named(peer, false, &ctl.name, ctl.size, St::Paused { done });
+                }
+            }
+            (false, A::Resume) => {
+                if let Some(xid) = self.active_recv.get(&peer).copied() {
+                    if let Some(c) = self.conversations.get(&peer) {
+                        let _ = c.out_tx.send(SessionCmd::Control(vec![
+                            nbeep_core::xfer::encode_pause_req(xid, false),
+                        ]));
+                    }
+                    let done = done_now(self, false);
+                    self.set_xfer_line_named(peer, false, &ctl.name, ctl.size, St::Active { done });
+                }
+            }
+            (false, A::Cancel) => self.cancel_active_xfer(peer),
+        }
+        self.refresh_send_batch(peer);
+        self.redraw_conversation(peer);
+    }
+
+    /// 이름 대상 라인 상태 갱신(M4-2e) — conv 저장분과 뷰 양쪽.
+    fn set_xfer_line_named(
+        &mut self,
+        peer: PeerId,
+        mine: bool,
+        name: &str,
+        size: u64,
+        state: nbeep_ui::XferLineState,
+    ) {
+        if let Some(conv) = self.conversations.get_mut(&peer) {
+            nbeep_ui::update_xfer_named(&mut conv.lines, mine, name, size, state.clone());
+        }
+        let mut inv = Invalidations::default();
+        if let Some(chat) = self.chats.get_mut(&peer) {
+            chat.set_xfer_named(mine, name, size, state, &mut inv);
+        }
+    }
+
     /// 대화 뷰에서 나온 발신·복귀를 처리한다. `peer` = 그 뷰의 상대.
     fn drain_chat_effects(&mut self, el: &ActiveEventLoop, peer: PeerId, id: WindowId) {
         let mut inv = Invalidations::default();
@@ -8887,6 +9007,14 @@ impl App {
             .is_some_and(ChatViewWidget::take_xfer_cancel)
         {
             self.cancel_active_xfer(peer);
+        }
+        // 라인별 트랜스포트 제어(M4-2e) — 항목 옆 ⏸▶✕ 아이콘.
+        if let Some(ctl) = self
+            .chats
+            .get_mut(&peer)
+            .and_then(ChatViewWidget::take_xfer_ctl)
+        {
+            self.handle_xfer_ctl(peer, ctl);
         }
         // 인라인 썸네일 클릭 = 확대 미리보기(08-16 · M4-5 잔여) — 파일명은 그
         // 항목의 무해화 통과분을 쓴다(경로 basename은 격리 해시 이름이라 무의미).

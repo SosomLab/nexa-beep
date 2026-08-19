@@ -194,6 +194,30 @@ pub struct XferLine {
     pub state: XferLineState,
 }
 
+/// 라인별 트랜스포트 제어 요청(M4-2e) — 채팅창 안 전송 항목 옆 아이콘.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct XferCtl {
+    /// 발신 항목인가(false = 수신 항목 — 정지는 와이어 PauseReq).
+    pub mine: bool,
+    /// 파일명(라인 식별 — 이름+크기 대조).
+    pub name: String,
+    /// 크기(라인 식별).
+    pub size: u64,
+    /// 동작.
+    pub act: XferCtlAct,
+}
+
+/// 제어 동작 3종.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum XferCtlAct {
+    /// 일시정지.
+    Pause,
+    /// 재개.
+    Resume,
+    /// 취소.
+    Cancel,
+}
+
 /// 파일 전송 항목의 상태 — `Waiting`/`Active`만 [`update_xfer_in`] 갱신 대상.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum XferLineState {
@@ -443,6 +467,10 @@ pub struct ChatViewWidget {
     xfer_cancel_hit: std::cell::Cell<Option<Rect>>,
     /// 취소 클릭 요청(1회성 — 호스트가 CancelXfer로 라우팅).
     xfer_cancel_req: bool,
+    /// 라인별 제어 아이콘 히트(M4-2e — 페인트가 남기고 MouseUp이 판정).
+    xfer_ctl_hits: std::cell::RefCell<Vec<(Rect, XferCtl)>>,
+    /// 라인별 제어 요청(1회성).
+    xfer_ctl_req: Option<XferCtl>,
     /// 취소 버튼 눌림 상태(Button 컨트롤과 같은 문법 — MouseDown 누름 표시,
     /// MouseUp이 영역 안이면 발화 · 08-16 실기: "클릭 효과가 안 느껴진다").
     xfer_cancel_pressed: bool,
@@ -493,6 +521,8 @@ impl ChatViewWidget {
             copy_out: None,
             xfer_cancel_hit: std::cell::Cell::new(None),
             xfer_cancel_req: false,
+            xfer_ctl_hits: std::cell::RefCell::new(Vec::new()),
+            xfer_ctl_req: None,
             xfer_cancel_pressed: false,
             thumb_hits: std::cell::RefCell::new(Vec::new()),
             open_image: None,
@@ -517,6 +547,27 @@ impl ChatViewWidget {
     /// 진행 배너 "취소" 클릭(1회성 · 08-16) — 호스트가 CancelXfer로 라우팅한다.
     pub fn take_xfer_cancel(&mut self) -> bool {
         std::mem::take(&mut self.xfer_cancel_req)
+    }
+
+    /// 라인별 트랜스포트 제어 회수(M4-2e · 1회성) — 호스트가 큐/액터로 옮긴다.
+    pub fn take_xfer_ctl(&mut self) -> Option<XferCtl> {
+        self.xfer_ctl_req.take()
+    }
+
+    /// 이름 대상 전송 라인 상태 갱신(M4-2e — 일시정지/재개가 특정 파일을 겨냥).
+    pub fn set_xfer_named(
+        &mut self,
+        mine: bool,
+        name: &str,
+        size: u64,
+        state: XferLineState,
+        inv: &mut Invalidations,
+    ) -> bool {
+        let hit = update_xfer_named(&mut self.lines, mine, name, size, state);
+        if hit {
+            inv.push(self.bounds);
+        }
+        hit
     }
 
     /// 썸네일 클릭 = 확대 미리보기 요청(1회성 · 08-16) — 격리물 경로를 돌려준다.
@@ -1396,6 +1447,18 @@ impl Widget for ChatViewWidget {
             }
             InputEvent::MouseUp { x, y } => {
                 self.dragging = false;
+                // 라인별 트랜스포트 아이콘(M4-2e) — 페인트가 남긴 히트로 판정.
+                let ctl = self
+                    .xfer_ctl_hits
+                    .borrow()
+                    .iter()
+                    .find(|(r, _)| r.contains(Point { x, y }))
+                    .map(|(_, c)| c.clone());
+                if let Some(c) = ctl {
+                    self.xfer_ctl_req = Some(c);
+                    inv.push(self.bounds);
+                    return;
+                }
                 // 취소 버튼 발화(08-16) — 눌린 채 영역 안에서 뗐을 때만(표준 버튼).
                 if self.xfer_cancel_pressed {
                     self.xfer_cancel_pressed = false;
@@ -1513,6 +1576,7 @@ impl Widget for ChatViewWidget {
         // 2패스 — 그리기(top-down · 콘텐츠가 뷰포트보다 작으면 하단 정렬).
         self.hit_rects.borrow_mut().clear();
         self.thumb_hits.borrow_mut().clear();
+        self.xfer_ctl_hits.borrow_mut().clear();
         let mut y = if content >= vp.h {
             vp.y - (content - vp.h - scroll)
         } else {
@@ -1592,6 +1656,62 @@ impl Widget for ChatViewWidget {
                     );
                 }
                 self.hit_rects.borrow_mut().push((bub, b.entry)); // 우클릭 복사 히트
+                                                                  // ── 라인별 트랜스포트 아이콘(M4-2e · 08-19 — "각 항목 옆 제어 버튼") ──
+                                                                  // 발신 풍선(우측 정렬) 왼쪽 / 수신 풍선(좌측 정렬) 오른쪽에 붙인다.
+                if let ChatBody::Xfer(x) = &l.body {
+                    let acts: &[XferCtlAct] = match (l.mine, &x.state) {
+                        (true, XferLineState::Waiting | XferLineState::Active { .. }) => {
+                            &[XferCtlAct::Pause, XferCtlAct::Cancel]
+                        }
+                        (true, XferLineState::Paused { .. }) => {
+                            &[XferCtlAct::Resume, XferCtlAct::Cancel]
+                        }
+                        (false, XferLineState::Active { .. }) => {
+                            &[XferCtlAct::Pause, XferCtlAct::Cancel]
+                        }
+                        (false, XferLineState::Paused { .. }) => {
+                            &[XferCtlAct::Resume, XferCtlAct::Cancel]
+                        }
+                        _ => &[],
+                    };
+                    if !acts.is_empty() {
+                        let d = self.s(16);
+                        let gap = self.s(8);
+                        let cy = by0 + (bub_h - d) / 2;
+                        let total = acts.len() as i32 * d + (acts.len() as i32 - 1) * gap;
+                        let mut ixx = if l.mine {
+                            bub.x - gap - total
+                        } else {
+                            bub.right() + gap + self.s(6)
+                        };
+                        for act in acts {
+                            let alpha: &'static [u8] = match act {
+                                XferCtlAct::Pause => crate::icons::xfer::PAUSE_ALPHA,
+                                XferCtlAct::Resume => crate::icons::xfer::PLAY_ALPHA,
+                                XferCtlAct::Cancel => crate::icons::xfer::CANCEL_ALPHA,
+                            };
+                            let img = crate::IconImage::from_alpha_tinted(
+                                96,
+                                96,
+                                alpha,
+                                theme.text_dim.rgb(),
+                            );
+                            let r = Rect::new(ixx, cy, d, d);
+                            ctx.image_scaled(r, &img, vp);
+                            let pad = self.s(3); // 16px는 좁다 — 히트 3px 확장
+                            self.xfer_ctl_hits.borrow_mut().push((
+                                Rect::new(r.x - pad, r.y - pad, d + pad * 2, d + pad * 2),
+                                XferCtl {
+                                    mine: l.mine,
+                                    name: x.name.as_str().to_string(),
+                                    size: x.size,
+                                    act: *act,
+                                },
+                            ));
+                            ixx += d + gap;
+                        }
+                    }
+                }
                 if let Some(img) = &xthumb {
                     let d = self.s(18);
                     let ir = Rect::new(bub.x + pad_h, by0 + pad_v + (line_h - d) / 2, d, d);
