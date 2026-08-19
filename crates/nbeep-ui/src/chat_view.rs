@@ -569,6 +569,26 @@ impl ChatViewWidget {
         self.xfer_ctl_req.take()
     }
 
+    /// Paused 라인 일괄 종결(M4-2e 전체취소 — FIFO 갱신이 Paused를 건너뛰므로 별도).
+    pub fn fail_paused_lines(&mut self, mine: bool, why: &str, inv: &mut Invalidations) {
+        let mut any = false;
+        for line in self.lines.iter_mut() {
+            if line.mine == mine {
+                if let ChatBody::Xfer(x) = &mut line.body {
+                    if matches!(x.state, XferLineState::Paused { .. }) {
+                        x.state = XferLineState::Failed {
+                            why: why.to_string(),
+                        };
+                        any = true;
+                    }
+                }
+            }
+        }
+        if any {
+            inv.push(self.bounds);
+        }
+    }
+
     /// 이름 대상 전송 라인 상태 갱신(M4-2e — 일시정지/재개가 특정 파일을 겨냥).
     pub fn set_xfer_named(
         &mut self,

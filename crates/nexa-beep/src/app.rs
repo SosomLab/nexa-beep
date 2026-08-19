@@ -2258,6 +2258,8 @@ struct App {
     batch_approved: HashMap<PeerId, Vec<(String, u64)>>,
     /// 수신 전송의 이름→xid(M4-2e — 수신측 ⏸▶✕가 1슬롯(active_recv)에 안 갇히게).
     recv_xids: HashMap<PeerId, Vec<(String, nbeep_core::XferId)>>,
+    /// 발신측이 정지시킨 수신 파일 이름(M4-2e — 수신 배너 유지·전체취소 포함 판단).
+    recv_paused: HashMap<PeerId, std::collections::HashSet<String>>,
     /// 일시정지로 **보관 중인 발신**(M4-2e ⓐ · 상대별) — (이름, 크기, 경로, xid).
     /// 액터 parked 슬롯의 앱측 그림자: 다음 파일 펌프·재개 요청·취소·Closed
     /// 재-Offer 원료가 여기서 나온다.
@@ -3404,6 +3406,8 @@ impl App {
         self.send_queue.remove(&peer);
         self.send_batch.remove(&peer);
         self.send_excluded.remove(&peer); // 배치 종료 = 제외 목록도 마감(M4-2e)
+        self.send_paused.remove(&peer);
+        self.fail_pending_xfer_lines(peer, true); // 대기·정지 라인 일괄 종결(M4-2e)
         self.close_send_wait(peer);
         self.clear_xfer(peer);
         self.set_status(if by_timeout {
@@ -3755,6 +3759,41 @@ impl App {
     }
 
     /// 전송 종료 — 진행률 정리 + 목록 갱신.
+    /// 미종결 전송 라인 일괄 종결(M4-2e — 전체취소 공용): FIFO(대기·활성)는
+    /// 반복 갱신으로, Paused(FIFO가 건너뜀)는 직접 순회로 Failed 처리한다.
+    fn fail_pending_xfer_lines(&mut self, peer: PeerId, mine: bool) {
+        let why = nbeep_core::t(nbeep_core::Msg::XferCanceled).to_string();
+        while self.conversations.get_mut(&peer).is_some_and(|conv| {
+            nbeep_ui::update_xfer_in(
+                &mut conv.lines,
+                mine,
+                nbeep_ui::XferLineState::Failed { why: why.clone() },
+            )
+        }) {}
+        if let Some(conv) = self.conversations.get_mut(&peer) {
+            for line in conv.lines.iter_mut() {
+                if line.mine == mine {
+                    if let nbeep_ui::ChatBody::Xfer(x) = &mut line.body {
+                        if matches!(x.state, nbeep_ui::XferLineState::Paused { .. }) {
+                            x.state = nbeep_ui::XferLineState::Failed { why: why.clone() };
+                        }
+                    }
+                }
+            }
+        }
+        let mut inv = Invalidations::default();
+        if let Some(chat) = self.chats.get_mut(&peer) {
+            while chat.update_xfer_line(
+                mine,
+                nbeep_ui::XferLineState::Failed { why: why.clone() },
+                &mut inv,
+            ) {}
+            chat.fail_paused_lines(mine, &why, &mut inv);
+        }
+        self.record_history(peer);
+        self.redraw_conversation(peer);
+    }
+
     fn clear_xfer(&mut self, peer: PeerId) {
         self.xfer_progress.remove(&peer);
         self.apply_xfer_view(peer);
@@ -9099,6 +9138,26 @@ impl App {
                 self.cancel_send(peer, false); // 배치 전체 취소(정지분 CancelXfer 포함)
                 return;
             }
+            // ★ 수신측 전체취소(08-19 실기 — "No active transfer" 거부): 활성이
+            //   없어도 정지·자동수락 잔여가 있으면 수신 배치를 마감한다.
+            let has_recv_state = self.recv_paused.contains_key(&peer)
+                || self.batch_approved.contains_key(&peer)
+                || self.recv_xids.get(&peer).is_some_and(|l| !l.is_empty());
+            if has_recv_state {
+                if let Some(list) = self.recv_xids.remove(&peer) {
+                    if let Some(c) = self.conversations.get(&peer) {
+                        for (_, rxid) in list {
+                            let _ = c.out_tx.send(SessionCmd::CancelXfer(rxid));
+                        }
+                    }
+                }
+                self.recv_paused.remove(&peer);
+                self.clear_batch_approval(peer);
+                self.fail_pending_xfer_lines(peer, false);
+                self.clear_xfer(peer);
+                self.set_status(nbeep_core::t(nbeep_core::Msg::XferCanceled).to_string());
+                return;
+            }
             // 실패도 말한다(08-10 교훈 — 조용한 무반응은 디버깅 불가). 배너 잔존
             // 등으로 활성 xid가 없으면 왜 안 되는지 상태바로 알린다.
             self.set_status(nbeep_core::t(nbeep_core::Msg::StNoActiveXfer));
@@ -9181,9 +9240,25 @@ impl App {
                 }
             }
             self.record_history(peer);
-        } else if let Some(sha) = self.resumed_recv.remove(&peer) {
-            // 수동 취소 = 의사 표시 — 보존 부분물도 함께 폐기(재개 제안 금지 · M4-10).
-            crate::part::remove_partial(crate::gate::CH_GUI, &sha);
+        } else {
+            // ★ 수신 전체취소(M4-2e — 송신과 대칭): 활성 외 장부 잔여 xid도 Cancel
+            //   통지하고 자동수락 잔여·정지 표식·미종결 라인을 일괄 마감한다.
+            if let Some(list) = self.recv_xids.remove(&peer) {
+                if let Some(c) = self.conversations.get(&peer) {
+                    for (_, rxid) in list {
+                        if rxid != xid {
+                            let _ = c.out_tx.send(SessionCmd::CancelXfer(rxid));
+                        }
+                    }
+                }
+            }
+            self.recv_paused.remove(&peer);
+            self.clear_batch_approval(peer);
+            self.fail_pending_xfer_lines(peer, false);
+            if let Some(sha) = self.resumed_recv.remove(&peer) {
+                // 수동 취소 = 의사 표시 — 보존 부분물도 함께 폐기(재개 제안 금지 · M4-10).
+                crate::part::remove_partial(crate::gate::CH_GUI, &sha);
+            }
         }
         self.set_xfer_line(
             peer,
@@ -10751,10 +10826,39 @@ impl ApplicationHandler<AppEvent> for App {
                         },
                     );
                 }
-                self.clear_xfer(peer);
+                // 수신 장부 정리(M4-2e) — 이 파일은 끝났다.
+                if let Some(l) = self.recv_xids.get_mut(&peer) {
+                    l.retain(|(n, _)| n != &name);
+                }
+                if let Some(setp) = self.recv_paused.get_mut(&peer) {
+                    setp.remove(&name);
+                    if setp.is_empty() {
+                        self.recv_paused.remove(&peer);
+                    }
+                }
+                // ★ 수신 배너 유지(사용자 확정 08-19 — 송신측과 대칭): 자동수락
+                //   잔여(batch_approved)나 정지 파일이 남아 있으면 진행상태·
+                //   전체취소를 지우지 않는다. 전부 끝났을 때만 마감.
+                let recv_left = self.batch_approved.contains_key(&peer)
+                    || self.recv_paused.contains_key(&peer)
+                    || self.active_recv.contains_key(&peer);
+                if !recv_left {
+                    self.clear_xfer(peer);
+                }
                 self.redraw_conversation(peer);
             }
             AppEvent::XferPeerPauseNotice { peer, name, paused } => {
+                {
+                    let set = self.recv_paused.entry(peer).or_default();
+                    if paused {
+                        set.insert(name.clone());
+                    } else {
+                        set.remove(&name);
+                    }
+                    if set.is_empty() {
+                        self.recv_paused.remove(&peer);
+                    }
+                }
                 // 발신측이 멈췄다/이었다 — 내 수신 라인을 같은 상태로(done 승계 =
                 // u64::MAX 센티널 · ▶는 ResumeReq, ⏸는 PauseReq로 원격 제어).
                 let st = if paused {
@@ -13185,6 +13289,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         send_excluded: HashMap::new(),
         paused_sends: HashMap::new(),
         recv_xids: HashMap::new(),
+        recv_paused: HashMap::new(),
         recv_manifest: HashMap::new(),
         batch_approved: HashMap::new(),
         pending_send_window: None,
