@@ -201,6 +201,23 @@ impl Entry {
     }
 }
 
+/// 입력 검증 규칙(08-20 — 확정 시 즉시 검사): `Ok` = 적용 · `Err(경고 Msg)` =
+/// 호스트가 경고를 띄우고 컨트롤은 **직전 확정값으로 원복**([`Control::last_value`]).
+/// 새 규칙은 여기 한 곳에만 추가한다(검증·경고·원복 배선은 공용).
+fn validate(key: &str, value: &str) -> Result<(), Msg> {
+    match key {
+        // 정지 방치 자동 취소 — 1~10분 범위(사용자 확정 08-20).
+        "xfer.auto_cancel_min" => {
+            if value.parse::<u64>().is_ok_and(|v| (1..=10).contains(&v)) {
+                Ok(())
+            } else {
+                Err(Msg::ValMinutesRange)
+            }
+        }
+        _ => Ok(()),
+    }
+}
+
 /// 설정 레지스트리 — **실존 설정만**. 렌더·검색·기본값이 전부 여기서 나온다.
 #[must_use]
 pub fn registry() -> &'static [Entry] {
@@ -1335,6 +1352,8 @@ pub struct SettingsWidget {
     /// 현재 값 스냅숏(컨트롤 초기화·보고 근거).
     values: HashMap<&'static str, String>,
     changes: Vec<(&'static str, String)>,
+    /// 검증 실패 경고(08-20 — 확정 즉시 · 호스트가 모달/상태줄로 표출).
+    warnings: Vec<Msg>,
     back: bool,
     /// 우측 패널 세로 스크롤 오프셋(물리 px).
     scroll: i32,
@@ -1376,6 +1395,7 @@ impl SettingsWidget {
             rows: Vec::new(),
             values,
             changes: Vec::new(),
+            warnings: Vec::new(),
             back: false,
             scroll: 0,
             content_h: 0,
@@ -1468,6 +1488,11 @@ impl SettingsWidget {
     /// 변경된 (키, 새 값) 목록을 꺼낸다(즉시 적용 — 호스트가 반영).
     pub fn take_changes(&mut self) -> Vec<(&'static str, String)> {
         std::mem::take(&mut self.changes)
+    }
+
+    /// 검증 실패 경고를 꺼낸다(1회성 — 확정 시 즉시 발생 · 원복은 이미 끝난 뒤).
+    pub fn take_warnings(&mut self) -> Vec<Msg> {
+        std::mem::take(&mut self.warnings)
     }
 
     /// Esc 닫기 요청(1회성).
@@ -1617,7 +1642,9 @@ impl SettingsWidget {
                     if let SettingKind::RadioInput(_, suffix) = e.kind {
                         c.set_custom_entry(tr(lang, Msg::CustomInput), suffix);
                     }
-                    c.select_value(self.values.get(e.key).map_or("", String::as_str));
+                    let cur = self.values.get(e.key).map_or("", String::as_str);
+                    c.select_value(cur);
+                    c.note_value(cur); // 직전 확정값 시드(08-20 — 검증 원복 기준점)
                     c.set_scale(self.scale);
                     RowCtl::Combo(c)
                 }
@@ -2008,12 +2035,29 @@ impl SettingsWidget {
     /// 자식 컨트롤 변경분을 회수해 values/changes에 반영.
     fn drain_changes(&mut self, inv: &mut Invalidations) {
         let mut got = Vec::new();
+        let mut warn: Vec<Msg> = Vec::new();
         for row in &mut self.rows {
             let e = &registry()[row.idx];
             match &mut row.ctl {
                 RowCtl::Combo(c) => {
                     if let Some(v) = c.take_changed() {
-                        got.push((e.key, v));
+                        // 검증(08-20) — 실패 = 경고 + **직전 확정값 원복**(ControlBase
+                        // last_value 상속 · rebuild가 현재값을 시드, 성공 확정마다 갱신).
+                        match validate(e.key, &v) {
+                            Ok(()) => {
+                                c.note_value(v.clone());
+                                got.push((e.key, v));
+                            }
+                            Err(msg) => {
+                                let prev = c
+                                    .last_value()
+                                    .map(str::to_owned)
+                                    .or_else(|| self.values.get(e.key).cloned())
+                                    .unwrap_or_default();
+                                c.select_value(&prev);
+                                warn.push(msg);
+                            }
+                        }
                     }
                 }
                 RowCtl::Pos(g) => {
@@ -2071,6 +2115,10 @@ impl SettingsWidget {
             }
             self.changes.extend(got);
             inv.push(self.bounds);
+        }
+        if !warn.is_empty() {
+            self.warnings.extend(warn);
+            inv.push(self.bounds); // 원복된 표시를 즉시 갱신
         }
     }
 
@@ -2703,6 +2751,34 @@ mod tests {
             shift: false,
             primary: false,
         }
+    }
+
+    /// 08-20 — 확정 시 검증 규칙: 자동 취소 분은 1~10만 유효(경계 포함),
+    /// 그 밖(0·11·비숫자·빈 값)은 경고 Msg. 미등록 키는 무조건 통과.
+    #[test]
+    fn validate_auto_cancel_range() {
+        for ok in ["1", "2", "5", "10"] {
+            assert!(validate("xfer.auto_cancel_min", ok).is_ok(), "{ok}");
+        }
+        for bad in ["0", "11", "60", "abc", "", "-1", "2.5"] {
+            assert!(validate("xfer.auto_cancel_min", bad).is_err(), "{bad}");
+        }
+        assert!(
+            validate("xfer.timeout_sec", "999999").is_ok(),
+            "미등록 키 = 통과"
+        );
+    }
+
+    /// 08-20 — ControlBase 직전값 상속: note_value가 기록하고 last_value로 읽는다
+    /// (검증 실패 원복의 기준점 — 전 컨트롤 공통).
+    #[test]
+    fn control_last_value_inherited() {
+        let mut c = Combo::new(vec![ComboItem::new("a", "A")], 0);
+        assert_eq!(c.last_value(), None, "확정 이력 없음");
+        c.note_value("a");
+        assert_eq!(c.last_value(), Some("a"));
+        c.note_value("b");
+        assert_eq!(c.last_value(), Some("b"), "최신 확정만 유지");
     }
 
     /// ADR-0011 T-7 — 파일에서 온 값의 관용 검증: 무효 값은 거부가 아니라

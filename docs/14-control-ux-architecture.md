@@ -595,3 +595,31 @@ tools/mkicons.sh badge badge-check badge-x badge-alert badge-plus badge-question
 ---
 
 > 관련: [ADR-0001](07-adr-0001-stack.md) · [13 코드 설계 표준](13-code-design-standards.md)(`ActionKind`·인터셉터) · [12 차용 자산](12-asset-reuse.md)(`nexa-gui` 이식 · `ctl` 시각 규약) · [05](05-requirements.md) FR-U-*
+
+## 14. 직전값(last_value) · 확정 검증 원복 규약 (08-20 사용자 확정)
+
+**요구** — 설정 Custom 입력이 유효 범위를 벗어나면 **확정 즉시 경고**를 띄우고
+**마지막 유효값(직전값)으로 원복**한다. 개별 컨트롤마다 심지 않고 **추상/상속
+관계로 일괄 적용**한다.
+
+### 14-1. 구조 — ControlBase 상속 한 줄
+
+| 층 | 자리 | 내용 |
+| --- | --- | --- |
+| **Abstract** | `nbeep-ctl` `ControlBase.last_value: Option<String>` | **전 컨트롤 공통** 직전 확정값(문자열 표현 — 설정 레지스트리 직렬화 규약과 동일) |
+| **기본 메서드** | `Control::note_value(v)` / `Control::last_value()` | 컨트롤은 아무것도 구현하지 않는다 — `base()/base_mut()`만 있으면 상속 |
+| **검증 깔때기** | `nbeep-ui settings.rs::validate(key, value)` | 규칙은 **여기 한 곳**에만 추가(현재: `xfer.auto_cancel_min` = 1~10분) |
+| **원복·경고 배선** | `drain_changes`(설정) · 호스트 Alert 모달 | 실패 = 컨트롤 `select_value(직전값)` 원복 + `take_warnings()` → 경고 모달 |
+
+### 14-2. 규약 4줄
+
+1. **직전값 = 마지막으로 유효했던 확정값.** 편집 중간값은 기록하지 않는다 —
+   `note_value`는 커밋 경로에서만 부른다.
+2. **시드 = 뷰 구축 시 현재값.** 첫 확정이 실패해도 되돌아갈 곳이 있다.
+3. **검증은 커밋 깔때기 한 곳.** 컨트롤은 규칙을 모른다(도메인 무의존 불변식 —
+   [13 §2-4](13-code-design-standards.md)) · 규칙 추가 = `validate()` match 한 줄.
+4. **실패 = 조용한 원복 + 시끄러운 경고.** 값은 위젯이 즉시 되돌리고(화면과
+   실제가 어긋나는 순간이 없다), 이유는 호스트가 모달로 말한다.
+
+**갤러리 데모** — 컨트롤 갤러리 Combo(Custom… 입력)가 같은 규약(1~10만 유효)을
+시연한다. 첫 적용 = 설정 "일시중지 자동 취소 시간"(1·2·5·10분 + Custom · 기본 2분).

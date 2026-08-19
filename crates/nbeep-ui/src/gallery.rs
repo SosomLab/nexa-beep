@@ -152,8 +152,15 @@ impl GalleryWidget {
         )]);
 
         let mut combo = Combo::new(combo_items, 0);
-        combo.set_help("New tab opens in this location by default.");
+        combo.set_help(
+            "New tab opens in this location by default.\n\
+             Custom input demos last-value revert: only 1-10 is accepted.",
+        );
         combo.set_show_help(true);
+        // 직전값·검증 원복 데모(08-20 — ControlBase last_value 상속): Custom 숫자
+        // 1~10만 유효, 벗어나면 마지막 유효값으로 되돌아간다(설정 화면과 같은 규약).
+        combo.set_custom_entry("Custom…", "min");
+        combo.note_value("home");
 
         // 행 앞 이미지가 들어간 트리/그리드 모델(우측 버전용) — 브랜딩 이미지 사용.
         let ti = |_rgb: (u8, u8, u8)| brand.clone();
@@ -642,6 +649,16 @@ impl Widget for GalleryWidget {
         self.radio.on_event(ev, inv);
         self.textbox.on_event(ev, inv);
         self.combo.on_event(ev, inv);
+        if let Some(v) = self.combo.take_changed() {
+            // 검증 원복 데모(08-20): 목록 값 또는 1~10 숫자만 확정 — 실패 = 직전값.
+            let ok = matches!(v.as_str(), "home" | "recents" | "desktop")
+                || v.parse::<u64>().is_ok_and(|n| (1..=10).contains(&n));
+            if ok {
+                self.combo.note_value(v);
+            } else if let Some(prev) = self.combo.last_value().map(str::to_owned) {
+                self.combo.select_value(&prev);
+            }
+        }
         self.ext.on_event(ev, inv);
         self.tree.on_event(ev, inv);
         self.tree_img.on_event(ev, inv);

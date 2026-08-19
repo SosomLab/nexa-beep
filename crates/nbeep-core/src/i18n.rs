@@ -138,6 +138,9 @@ pub enum Msg {
     Min2,
     Min5,
     Min10,
+    /// 설정 입력 검증 실패 경고(08-20 — 직전값 원복 고지).
+    ValOutOfRangeTitle,
+    ValMinutesRange,
     Sec30,
     Sec60,
     Sec120,
@@ -1268,6 +1271,13 @@ impl Msg {
             Msg::Min2 => ["2m", "2분", "2分钟", "2分"],
             Msg::Min5 => ["5m", "5분", "5分钟", "5分"],
             Msg::Min10 => ["10m", "10분", "10分钟", "10分"],
+            Msg::ValOutOfRangeTitle => ["Invalid value", "잘못된 값", "无效值", "無効な値"],
+            Msg::ValMinutesRange => [
+                "Enter 1-10 minutes. Reverted to the previous value.",
+                "1~10분 사이로 입력하세요. 직전 값으로 되돌렸습니다.",
+                "请输入1~10分钟。已恢复为上一个值。",
+                "1〜10分で入力してください。直前の値に戻しました。",
+            ],
             Msg::Sec30 => ["30s", "30초", "30秒", "30秒"],
             Msg::Sec60 => ["60s", "60초", "60秒", "60秒"],
             Msg::Sec120 => ["2m", "2분", "2分钟", "2分"],

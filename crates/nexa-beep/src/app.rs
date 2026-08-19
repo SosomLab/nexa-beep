@@ -9728,9 +9728,17 @@ impl App {
                 if let Some(sv) = &mut self.settings_view {
                     sv.on_event(&ev, &mut inv);
                     let changes = sv.take_changes();
+                    let warnings = sv.take_warnings();
                     let close = sv.take_back();
                     if !changes.is_empty() {
                         self.apply_settings(changes);
+                    }
+                    // 검증 실패(08-20) — 확정 즉시 경고 모달(원복은 위젯이 끝냈다).
+                    for w in warnings {
+                        self.pending_alert = Some((
+                            nbeep_core::t(nbeep_core::Msg::ValOutOfRangeTitle).to_string(),
+                            nbeep_core::t(w).to_string(),
+                        ));
                     }
                     if close {
                         self.settings_view = None;

@@ -220,6 +220,12 @@ pub struct ControlBase {
     pub halign: HAlign,
     /// 콘텐츠 세로 정렬(전 컨트롤 상속).
     pub valign: VAlign,
+    /// **직전 확정값**(전 컨트롤 공통 · 08-20 — 검증 실패 시 원복용).
+    /// 값을 새로 확정하기 직전에 [`Control::note_value`]로 기록하고, 검증에
+    /// 실패하면 [`Control::last_value`]로 되돌린다. 문자열 표현으로 통일한다
+    /// (컨트롤마다 값 타입이 달라도 확정값은 전부 직렬화 가능 — 설정 레지스트리
+    /// 규약과 동일).
+    pub last_value: Option<String>,
 }
 
 impl Default for ControlBase {
@@ -234,6 +240,7 @@ impl Default for ControlBase {
             help_open: false,
             halign: HAlign::default(),
             valign: VAlign::default(),
+            last_value: None,
         }
     }
 }
@@ -322,6 +329,18 @@ pub trait Control: crate::widget::Widget {
     fn toggle_help(&mut self) {
         let b = self.base_mut();
         b.help_open = !b.help_open;
+    }
+
+    /// 직전 확정값 기록(전 컨트롤 공통 · 08-20) — **새 값을 확정하기 직전에**
+    /// 현재 값을 넘겨 직전값을 남긴다. 검증 실패 원복([`Control::last_value`])의
+    /// 짝이며, 호스트의 커밋 경로가 부른다(컨트롤 내부 편집 중간값은 기록하지
+    /// 않는다 — 직전값 = 마지막으로 **유효했던** 확정값).
+    fn note_value(&mut self, v: impl Into<String>) {
+        self.base_mut().last_value = Some(v.into());
+    }
+    /// 직전 확정값(검증 실패 시 원복 대상). 확정 이력이 없으면 None.
+    fn last_value(&self) -> Option<&str> {
+        self.base().last_value.as_deref()
     }
 
     /// 강조색(창 활성 = accent · 비활성 = 무채) — 컨트롤 공통 색 규칙.
