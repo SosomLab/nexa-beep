@@ -1282,6 +1282,11 @@ impl Widget for PeerListWidget {
                                 self.activated = Some(a);
                             }
                             self.last_click = None; // 트리플클릭 중복 활성화 방지
+                            // ★ 드래그 후보 해제(08-19 실기 — 더블클릭이 대화창을
+                            //   열면 포커스가 넘어가 MouseUp이 목록에 안 온다.
+                            //   무장된 채 남으면 ESC 복귀 후 MouseMove가 드래그
+                            //   범위 선택을 계속한다 — "끌지 않았는데 끌린다").
+                            self.drag_from = None;
                             return;
                         }
                     }
@@ -1969,6 +1974,38 @@ mod tests {
         w.typeahead_tick(2_000, &mut inv);
         w.on_event(&down(y2), &mut inv);
         assert_eq!(w.take_activated(), None, "간격 초과 = 활성화 없음");
+    }
+
+    /// ★ 더블클릭 활성화 후 유령 드래그 금지(08-19 실기) — 대화창이 열리며
+    /// 포커스가 넘어가 MouseUp이 목록에 안 와도, MouseMove가 드래그 범위
+    /// 선택을 시작하면 안 된다("끌지 않았는데 끌린다").
+    #[test]
+    fn double_click_disarms_drag_candidate() {
+        let (mut w, mut inv) = widget(&[(1, "alice"), (2, "bob"), (3, "carol")]);
+        w.typeahead_tick(1_000, &mut inv);
+        let down = |y| InputEvent::MouseDown {
+            x: 10,
+            y,
+            shift: false,
+            primary: false,
+        };
+        let y1 = 5;
+        w.on_event(&down(y1), &mut inv);
+        w.on_event(&down(y1), &mut inv); // 더블클릭 = 활성화(대화창 열림 가정)
+        assert!(w.take_activated().is_some());
+        // MouseUp 없이(포커스 이탈) 복귀 후 마우스를 아래로 — 범위 선택 금지.
+        w.on_event(
+            &InputEvent::MouseMove {
+                x: 10,
+                y: ROW_H * 2 + 5,
+            },
+            &mut inv,
+        );
+        assert!(
+            w.selected_peers().len() <= 1,
+            "유령 드래그 범위 선택 금지: {:?}",
+            w.selected_peers()
+        );
     }
 
     #[test]
