@@ -6504,9 +6504,18 @@ impl App {
             }) else {
                 continue;
             };
-            let lines = decode_history(&bytes);
+            let mut lines = decode_history(&bytes);
             if lines.is_empty() {
                 continue;
+            }
+            // 1:1 수신 줄 발신자 라벨 소급(08-19 사용자 요청 — 수신 풍선 위 이름).
+            // 1:1은 수신 발신자가 항상 그 상대라 라벨 없는 옛 기록에도 안전하게
+            // 붙일 수 있다(그룹은 줄별 발신자를 몰라 소급 불가 — tag 3 저장분만).
+            let title = self.peer_title(peer);
+            for l in &mut lines {
+                if !l.mine && l.from.is_none() {
+                    l.from = Some(title.clone());
+                }
             }
             self.parked_lines.insert(peer, lines);
             if self.live {
@@ -9654,7 +9663,9 @@ impl ApplicationHandler<AppEvent> for App {
                 self.trust.note_chat(peer, unix_now_ms()); // 최근 대화(08-15)
                 let notify_body = self.notify_body(text.as_str()); // move 전에 뜬다
                 let (at_ms, wall) = now_stamp();
-                let line = ChatLine::text(false, text, at_ms, wall);
+                // 발신자 표시 이름(08-19 사용자 요청 — 1:1도 수신 풍선 위에 이름).
+                let from = self.peer_title(peer);
+                let line = ChatLine::text(false, text, at_ms, wall).with_from(from);
                 if let Some(conv) = self.conversations.get_mut(&peer) {
                     conv.lines.push(line.clone());
                 }
