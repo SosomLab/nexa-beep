@@ -13,5 +13,22 @@ pub mod groupfile;
 pub mod sealed;
 pub mod trustfile;
 
+/// 잠긴 세그먼트의 보관 이름(08-19) — `<원본>.locked`, 이미 있으면 `-1`·`-2`…
+/// (덮어쓰기 금지 — 보관은 삭제가 아니다). 100개 넘으면 None(비정상 — 현행 유지).
+pub(crate) fn archive_name(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    let base = path.as_os_str().to_string_lossy().into_owned();
+    for n in 0..100 {
+        let cand = if n == 0 {
+            std::path::PathBuf::from(format!("{base}.locked"))
+        } else {
+            std::path::PathBuf::from(format!("{base}.locked-{n}"))
+        };
+        if !cand.exists() {
+            return Some(cand);
+        }
+    }
+    None
+}
+
 pub use groupfile::{FileGroupStore, GroupLoad, MineState, SharedGroup};
 pub use trustfile::{FileTrustStore, TrustLoad};

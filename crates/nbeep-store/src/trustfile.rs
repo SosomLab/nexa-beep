@@ -54,6 +54,9 @@ pub enum TrustLoad {
     Loaded(usize),
     /// ★ 손상·키 불일치 — **신뢰 목록 잠김**(fail-closed · 파일 보존 · 영속 중단).
     Locked,
+    /// ★ 잠긴 옛 세그먼트를 `<이름>.locked`로 **보관 이동**하고 새로 시작(08-19 —
+    /// 잠긴 채 메모리 전용으로 돌면 이번 세션 핀이 조용히 증발한다. 삭제 아님).
+    Archived,
 }
 
 /// 파일 기반 TOFU 저장 — [`MemoryTrustStore`]를 감싸 **변경 즉시** 암호화 저장한다.
@@ -77,6 +80,26 @@ pub struct FileTrustStore {
 }
 
 impl FileTrustStore {
+    /// **부팅용** — 열되, 현 신원으로 못 여는 세그먼트는 `<이름>.locked(-N)`로
+    /// **옆으로 보관**(삭제 아님)하고 새 저장소로 시작한다(그룹판과 같은 문법 —
+    /// [`crate::FileGroupStore::open_or_archive`] 주석 참조). ⚠ **임시 신원 부팅
+    /// (키 파일 손상)에는 쓰지 말 것** — 진짜 주인의 세그먼트를 밀어내면 안 된다.
+    #[must_use]
+    pub fn open_or_archive(path: PathBuf, wrap_secret: [u8; 32]) -> (Self, TrustLoad) {
+        let (store, load) = Self::open(path.clone(), wrap_secret);
+        if load != TrustLoad::Locked {
+            return (store, load);
+        }
+        let Some(arch) = crate::archive_name(&path) else {
+            return (store, load); // 보관 이름 소진 — 현행 유지(보존 우선)
+        };
+        if std::fs::rename(&path, &arch).is_err() {
+            return (store, load); // 못 옮기면 현행 유지(보존 우선)
+        }
+        let (fresh, _) = Self::open(path, wrap_secret);
+        (fresh, TrustLoad::Archived)
+    }
+
     /// 세그먼트를 열거나 새로 준비한다. 잠김이어도 저장소는 동작한다(메모리 전용).
     #[must_use]
     pub fn open(path: PathBuf, wrap_secret: [u8; 32]) -> (Self, TrustLoad) {

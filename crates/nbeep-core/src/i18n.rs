@@ -648,6 +648,9 @@ pub enum Msg {
     HintGallery,
     HintTrustLocked,
     HintGroupLocked,
+    /// 잠긴 세그먼트를 보관 이동하고 새로 시작(08-19 — 신원 교체 뒤 자가 복구).
+    HintTrustArchived,
+    HintGroupArchived,
     /// 프로필 수신 상태(08-17 i18n) — `{0}` = 상대 이름, `{1}` = 받은 항목 목록.
     ProfileReceived,
     /// 받은 항목 이름(프로필 수신 요약 · `·` 로 이어 붙인다).
@@ -1048,6 +1051,8 @@ impl Msg {
             Msg::HintGallery => ["⌘/Ctrl+G = control gallery", "⌘/Ctrl+G = 컨트롤 갤러리", "⌘/Ctrl+G = 控件库", "⌘/Ctrl+G = コントロールギャラリー"],
             Msg::HintTrustLocked => ["⚠ trust list locked (file damaged — all treated unverified)", "⚠ 신뢰 목록 잠김(파일 손상 — 전부 미검증 취급)", "⚠ 信任列表已锁定(文件损坏 — 全部视为未验证)", "⚠ 信頼リストロック(ファイル破損 — 全て未検証扱い)"],
             Msg::HintGroupLocked => ["⚠ group list locked (file damaged — this run is temporary)", "⚠ 그룹 목록 잠김(파일 손상 — 이번 실행은 임시)", "⚠ 群组列表已锁定(文件损坏 — 本次运行为临时)", "⚠ グループリストロック(ファイル破損 — 今回の実行は一時的)"],
+            Msg::HintTrustArchived => ["⚠ old trust list (other identity) set aside — starting fresh", "⚠ 옛 신뢰 목록(다른 신원)을 보관하고 새로 시작", "⚠ 旧信任列表(其他身份)已存档 — 重新开始", "⚠ 旧信頼リスト(別の識別)を保管し新規開始"],
+            Msg::HintGroupArchived => ["⚠ old group list (other identity) set aside — starting fresh", "⚠ 옛 그룹 목록(다른 신원)을 보관하고 새로 시작", "⚠ 旧群组列表(其他身份)已存档 — 重新开始", "⚠ 旧グループリスト(別の識別)を保管し新規開始"],
             Msg::ProfileReceived => ["Profile received ({}) — {}", "프로필 수신({}) — {}", "已接收资料({}) — {}", "プロフィール受信({}) — {}"],
             Msg::ItemName => ["name", "이름", "姓名", "名前"],
             Msg::ItemEmail => ["email", "이메일", "邮箱", "メール"],

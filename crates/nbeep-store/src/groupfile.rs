@@ -94,6 +94,9 @@ pub enum GroupLoad {
     Loaded(usize),
     /// ★ 손상·키 불일치 — **그룹 목록 잠김**(fail-closed · 파일 보존 · 영속 중단).
     Locked,
+    /// ★ 잠긴 옛 세그먼트를 `<이름>.locked`로 **보관 이동**하고 새로 시작(08-19 —
+    /// 잠긴 채 메모리 전용으로 돌면 이번 세션 그룹이 조용히 증발한다. 삭제 아님).
+    Archived,
 }
 
 /// 파일 기반 그룹 저장 — [`GroupStore`]를 감싸 **변경 즉시** 암호화 저장한다.
@@ -116,6 +119,27 @@ pub struct FileGroupStore {
 }
 
 impl FileGroupStore {
+    /// **부팅용** — 열되, 현 신원으로 못 여는 세그먼트는 `<이름>.locked(-N)`로
+    /// **옆으로 보관**(삭제 아님)하고 새 저장소로 시작한다(08-19 실기 — tmp
+    /// 청소가 옛 신원을 지운 뒤 옛 세그먼트가 영구 잠김 → 매 세션 그룹이 조용히
+    /// 증발했다). ⚠ **임시 신원 부팅(키 파일 손상)에는 쓰지 말 것** — 진짜 주인의
+    /// 세그먼트를 밀어내면 안 된다(그땐 [`Self::open`] = 보존·메모리 전용).
+    #[must_use]
+    pub fn open_or_archive(path: PathBuf, wrap_secret: [u8; 32]) -> (Self, GroupLoad) {
+        let (store, load) = Self::open(path.clone(), wrap_secret);
+        if load != GroupLoad::Locked {
+            return (store, load);
+        }
+        let Some(arch) = crate::archive_name(&path) else {
+            return (store, load); // 보관 이름 소진 — 현행 유지(보존 우선)
+        };
+        if std::fs::rename(&path, &arch).is_err() {
+            return (store, load); // 못 옮기면 현행 유지(보존 우선)
+        }
+        let (fresh, _) = Self::open(path, wrap_secret);
+        (fresh, GroupLoad::Archived)
+    }
+
     /// 세그먼트를 열거나 새로 준비한다. 잠김이어도 저장소는 동작한다(메모리 전용).
     #[must_use]
     pub fn open(path: PathBuf, wrap_secret: [u8; 32]) -> (Self, GroupLoad) {
@@ -704,6 +728,36 @@ mod tests {
         assert_ne!(g2, lid);
         assert!(gs.remove_shared(uid));
         assert!(gs.shared_by_uid(uid).is_none());
+    }
+
+    /// ★ 잠긴 세그먼트 보관 이동(08-19) — 다른 신원 키의 파일을 `<이름>.locked`로
+    /// 밀어두고 새로 시작하며, **새 저장소는 영속**한다(종전 잠김 = 메모리 전용으로
+    /// 재시작마다 그룹이 증발하던 것). 원본은 보존(삭제 아님).
+    #[test]
+    fn locked_segment_is_archived_and_fresh_store_persists() {
+        let path = tmp("archive");
+        let old_key = [1u8; 32];
+        let new_key = [2u8; 32];
+        {
+            let (mut gs, _) = FileGroupStore::open(path.clone(), old_key);
+            let _ = gs.create(name("옛신원방"));
+        }
+        // 종전 open = 잠김(보존·메모리 전용).
+        let (_, load) = FileGroupStore::open(path.clone(), new_key);
+        assert_eq!(load, GroupLoad::Locked);
+        // open_or_archive = 보관 이동 + 새 시작.
+        let (mut gs, load) = FileGroupStore::open_or_archive(path.clone(), new_key);
+        assert_eq!(load, GroupLoad::Archived);
+        let arch = PathBuf::from(format!("{}.locked", path.display()));
+        assert!(arch.exists(), "원본은 .locked로 보존");
+        // 새 저장소가 실제로 영속하는가 — 쓰고 재오픈.
+        let _g = gs.create(name("새신원방"));
+        let (gs2, load2) = FileGroupStore::open(path.clone(), new_key);
+        assert_eq!(load2, GroupLoad::Loaded(1), "새 키로 영속 재개");
+        assert_eq!(gs2.list().len(), 1);
+        // 정상 파일에 open_or_archive = 그대로 로드(보관 없음).
+        let (_, load3) = FileGroupStore::open_or_archive(path, new_key);
+        assert_eq!(load3, GroupLoad::Loaded(1));
     }
 
     /// 코덱 왕복 + 꼬리 쓰레기 거부.

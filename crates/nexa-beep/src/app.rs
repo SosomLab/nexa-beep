@@ -746,10 +746,12 @@ fn spawn_session_actor(
                 // (취소 지연 상한 = 청크 4개 + 페이싱 대기 · 대역 협상은 Pacer 그대로).
                 // 일시정지(M4-2d P2) 중이면 펌프를 돌리지 않는다(유휴 폴로 낮춰
                 // busy-spin 방지 — 재개 명령은 위 명령 루프가 받는다).
-                let is_paused = sending
-                    .as_ref()
-                    .is_some_and(|st| paused_xid == Some(st.id));
-                let want_to: u64 = if sending.is_some() && !is_paused { 1 } else { 100 };
+                let is_paused = sending.as_ref().is_some_and(|st| paused_xid == Some(st.id));
+                let want_to: u64 = if sending.is_some() && !is_paused {
+                    1
+                } else {
+                    100
+                };
                 if want_to != recv_to_ms {
                     recv_to_ms = want_to;
                     session.set_recv_timeout(Some(std::time::Duration::from_millis(want_to)));
@@ -5323,9 +5325,7 @@ impl App {
         let accepted = self.group_accepts.get(&uid).cloned().unwrap_or_default();
         let pending: Vec<PeerId> = members
             .into_iter()
-            .filter(|m| {
-                *m != me && !accepted.contains(m) && !self.conversations.contains_key(m)
-            })
+            .filter(|m| *m != me && !accepted.contains(m) && !self.conversations.contains_key(m))
             .collect();
         for m in pending {
             self.reconnect.remove(&m); // 백오프 리셋 = 즉시 재시도
@@ -10891,8 +10891,10 @@ impl ApplicationHandler<AppEvent> for App {
                 }
             }
             for peer in redraw {
-                if let Some((wid, _)) =
-                    self.windows.iter().find(|(_, e)| e.role == Role::Sending(peer))
+                if let Some((wid, _)) = self
+                    .windows
+                    .iter()
+                    .find(|(_, e)| e.role == Role::Sending(peer))
                 {
                     let wid = *wid;
                     self.request_redraw(wid);
@@ -11812,24 +11814,35 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
     let dir = data_dir();
     // 신원 영속(M2-5a) — 재시작해도 같은 PeerId. 키 파일 손상 시 **덮어쓰지 않고**
     // 임시 신원으로 강등(fail-closed — 조용히 새 키를 만들면 상대 핀에서 남이 된다).
-    let (identity, id_note) =
+    let (identity, id_note, id_persistent) =
         match nbeep_crypto::keyfile::load_or_generate(&dir.join("identity.key")) {
-            Ok((id, created)) => (id, created.then_some("새 신원 키 생성")),
+            Ok((id, created)) => (id, created.then_some("새 신원 키 생성"), true),
             Err(e) => {
                 eprintln!("신원 키 파일 사용 불가({e}) — 이번 실행은 임시 신원");
                 (
                     nbeep_crypto::Identity::generate(),
                     Some("⚠ 신원 키 파일 손상 — 임시 신원(재시작하면 바뀜)"),
+                    false, // 임시 신원 — 세그먼트 보관 이동 금지(진짜 주인 보호)
                 )
             }
         };
     let identity = std::sync::Arc::new(identity);
-    // 핀 세그먼트(M2-5a · R-17 해소) — 래핑 원료 = 기기 신원 키(ADR-0005 §3 기본 A).
-    let (trust, trust_load) =
-        nbeep_store::FileTrustStore::open(dir.join("trust.seg"), identity.wrap_secret());
-    // 그룹 세그먼트(M5-1 · FR-G-1 재시작 유지) — 같은 래핑 원료·같은 fail-closed.
-    let (groups, group_load) =
-        nbeep_store::FileGroupStore::open(dir.join("groups.seg"), identity.wrap_secret());
+    // 핀·그룹 세그먼트(M2-5a·M5-1) — 래핑 원료 = 기기 신원 키(ADR-0005 §3 기본 A).
+    // ★ 정상 신원 부팅은 open_or_archive(08-19): 현 신원으로 못 여는 잠긴 세그먼트를
+    //   `<이름>.locked`로 **보관 이동**하고 새로 시작한다. 종전엔 잠긴 채 메모리
+    //   전용으로 돌아 이번 세션의 핀·그룹이 재시작마다 조용히 증발했다(실기 —
+    //   tmp 청소로 옛 신원이 사라진 뒤 옛 세그먼트가 영구 잠김). 임시 신원 부팅은
+    //   종전대로 보존·메모리 전용(진짜 주인의 세그먼트를 밀어내면 안 된다).
+    let (trust, trust_load) = if id_persistent {
+        nbeep_store::FileTrustStore::open_or_archive(dir.join("trust.seg"), identity.wrap_secret())
+    } else {
+        nbeep_store::FileTrustStore::open(dir.join("trust.seg"), identity.wrap_secret())
+    };
+    let (groups, group_load) = if id_persistent {
+        nbeep_store::FileGroupStore::open_or_archive(dir.join("groups.seg"), identity.wrap_secret())
+    } else {
+        nbeep_store::FileGroupStore::open(dir.join("groups.seg"), identity.wrap_secret())
+    };
     use nbeep_net::Transport as _;
 
     // 이벤트 루프·프록시 먼저 — 인바운드 수락 펌프가 프록시를 필요로 한다(M2-7).
@@ -12000,12 +12013,18 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         nbeep_store::TrustLoad::Locked => {
             format!(" · {}", nbeep_core::t(nbeep_core::Msg::HintTrustLocked))
         }
+        nbeep_store::TrustLoad::Archived => {
+            format!(" · {}", nbeep_core::t(nbeep_core::Msg::HintTrustArchived))
+        }
         nbeep_store::TrustLoad::Loaded(_) | nbeep_store::TrustLoad::Fresh => String::new(),
     };
     // 그룹 저장 상태 고지(M5-1) — 같은 fail-closed 규약.
     let group_hint = match group_load {
         nbeep_store::GroupLoad::Locked => {
             format!(" · {}", nbeep_core::t(nbeep_core::Msg::HintGroupLocked))
+        }
+        nbeep_store::GroupLoad::Archived => {
+            format!(" · {}", nbeep_core::t(nbeep_core::Msg::HintGroupArchived))
         }
         nbeep_store::GroupLoad::Loaded(_) | nbeep_store::GroupLoad::Fresh => String::new(),
     };

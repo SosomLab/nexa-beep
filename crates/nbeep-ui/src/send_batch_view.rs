@@ -197,7 +197,11 @@ impl SendBatchWidget {
         let mut out = Vec::new();
         // 오른쪽 끝 = 전체 취소.
         let cancel = Rect::new(b.right() - pad - icon, cy, icon, icon);
-        out.push((cancel, SendAction::CancelAll, crate::icons::xfer::CANCEL_ALPHA));
+        out.push((
+            cancel,
+            SendAction::CancelAll,
+            crate::icons::xfer::CANCEL_ALPHA,
+        ));
         // 그 왼쪽 = 전체 일시정지/재개(상태에 따라).
         let any_pausable = self
             .rows
@@ -379,10 +383,7 @@ impl Widget for SendBatchWidget {
                     y: self.cursor.1,
                 });
                 if row_hover {
-                    ctx.fill_rect(
-                        Rect::new(vp.x, row_rect.y, vp.w, row_h),
-                        theme.panel_bg_alt,
-                    );
+                    ctx.fill_rect(Rect::new(vp.x, row_rect.y, vp.w, row_h), theme.panel_bg_alt);
                 }
                 // 파일명(word-wrap).
                 ctx.select_font(FontSlot::Base, false);
@@ -492,7 +493,11 @@ mod tests {
     fn paused_row_offers_resume_not_pause() {
         let w = SendBatchWidget::new(rows());
         let rr = Rect::new(0, 0, 400, 60);
-        let acts: Vec<SendAction> = w.row_controls(2, rr).into_iter().map(|(_, a, _)| a).collect();
+        let acts: Vec<SendAction> = w
+            .row_controls(2, rr)
+            .into_iter()
+            .map(|(_, a, _)| a)
+            .collect();
         assert!(acts.contains(&SendAction::Resume(2)));
         assert!(acts.contains(&SendAction::Cancel(2)));
         assert!(!acts.contains(&SendAction::Pause(2)));
@@ -502,7 +507,11 @@ mod tests {
     fn active_row_offers_pause_and_cancel() {
         let w = SendBatchWidget::new(rows());
         let rr = Rect::new(0, 0, 400, 60);
-        let acts: Vec<SendAction> = w.row_controls(0, rr).into_iter().map(|(_, a, _)| a).collect();
+        let acts: Vec<SendAction> = w
+            .row_controls(0, rr)
+            .into_iter()
+            .map(|(_, a, _)| a)
+            .collect();
         assert!(acts.contains(&SendAction::Pause(0)));
         assert!(acts.contains(&SendAction::Cancel(0)));
     }
