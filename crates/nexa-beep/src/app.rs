@@ -2003,6 +2003,10 @@ struct App {
     /// 일시정지된 발신 파일(M4-2d · 상대별 경로 집합) — 큐 펌프가 건너뛴다(대기
     /// 파일 pass) · 활성 전송은 P2에서 액터 pump gate로 확장.
     send_paused: HashMap<PeerId, std::collections::HashSet<std::path::PathBuf>>,
+    /// 이번 배치에서 **용량 초과로 제외**된 파일(M4-2e · 상대별 이름·크기) —
+    /// 전송하지 않지만 목록(스레드 라인·manifest)에는 보인다(사용자 확정 08-19
+    /// "파일 단위 검사 · 제외 상태로 목록에"). 배치 종료 때 함께 비운다.
+    send_excluded: HashMap<PeerId, Vec<(String, u64)>>,
     /// 다음 루프에서 만들 발신 대기 창(창 생성은 ActiveEventLoop가 필요하다).
     pending_send_window: Option<PeerId>,
     /// 보내기 속도 상한(설정 `xfer.send_rate`).
@@ -2455,6 +2459,32 @@ impl App {
             }
         }
         let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+        let name = path
+            .file_name()
+            .map_or_else(|| "file".to_string(), |n| n.to_string_lossy().into_owned());
+        // ★ 파일 단위 용량 검사(M4-2e · 사용자 확정 08-19) — 발신 상한과 **상대
+        //   수신 상한**(CapAdvert 기억값) 중 낮은 쪽을 넘는 파일은 **전송 제외**:
+        //   큐에 넣지 않고, 스레드 라인에는 "전송 제외" 상태로 남긴다(배치는 계속).
+        let send_cap = cap_from_setting(self.settings.get("xfer.send_max_mb"));
+        let peer_cap = self
+            .peer_recv_cap
+            .get(&peer)
+            .map(|&(c, _)| c)
+            .filter(|c| *c < u64::MAX);
+        let eff_cap = match (send_cap, peer_cap) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        if eff_cap.is_some_and(|cap| size > cap) {
+            self.push_excluded_line(peer, &name, size);
+            self.send_manifest(peer); // 목록 변화 즉시 공지(수신측 목록에도 제외 표시)
+            self.request_redraw(id);
+            return;
+        }
+        // 스레드 라인 = **드롭 즉시**(M4-2e — 종전엔 오퍼 시점에만 라인이라 큐
+        // 파일이 대화창에 안 보였다. push_xfer_line은 재활성 가드가 있어 오퍼
+        // 시점의 재호출과 중복되지 않는다).
+        self.push_xfer_line(peer, true, &name, size);
         self.send_queue
             .entry(peer)
             .or_default()
@@ -2475,6 +2505,7 @@ impl App {
             ],
         ));
         self.pump_send_queue(peer);
+        self.send_manifest(peer); // 배치 목록 공지(M4-2e — 요청 단위 승인 원료)
         self.refresh_send_batch(peer); // 대기 중 더 드롭한 파일도 패널에 반영(M4-2d)
         self.request_redraw(id);
     }
@@ -2602,6 +2633,7 @@ impl App {
             let has_paused = self.send_queue.get(&peer).is_some_and(|q| !q.is_empty());
             if !has_paused {
                 self.send_batch.remove(&peer);
+                self.send_excluded.remove(&peer); // 배치 종료 = 제외 목록도 마감(M4-2e)
             }
             self.refresh_send_batch(peer); // 창 닫기(종료) 또는 상태 갱신(전부 정지)
             return;
@@ -2657,6 +2689,7 @@ impl App {
             self.set_status(nbeep_core::t(nbeep_core::Msg::StSessionDropSend));
             self.send_queue.remove(&peer);
             self.send_batch.remove(&peer);
+            self.send_excluded.remove(&peer); // 배치 종료 = 제외 목록도 마감(M4-2e)
             return;
         }
         self.awaiting_accept.insert(peer, xid);
@@ -2934,6 +2967,67 @@ impl App {
         self.refresh_send_batch(peer);
     }
 
+    /// 전송 제외 라인(M4-2e) — 큐에 넣지 않고 스레드에 "전송 제외" 종결 라인으로
+    /// 남긴다(사용자 확정: 초과 파일도 목록에 보이게 · 배치는 계속). manifest에도
+    /// excluded로 실려 수신측 목록에 같은 상태가 보인다.
+    fn push_excluded_line(&mut self, peer: PeerId, name: &str, size: u64) {
+        let (at_ms, wall) = now_stamp();
+        let safe = nbeep_core::sanitize_message(name);
+        let mut line = ChatLine::xfer(true, safe, size, at_ms, wall);
+        if let nbeep_ui::ChatBody::Xfer(x) = &mut line.body {
+            x.state = nbeep_ui::XferLineState::Failed {
+                why: nbeep_core::t(nbeep_core::Msg::XferExcluded).into(),
+            };
+        }
+        if let Some(conv) = self.conversations.get_mut(&peer) {
+            conv.lines.push(line.clone());
+        }
+        let mut inv = Invalidations::default();
+        if let Some(chat) = self.chats.get_mut(&peer) {
+            chat.push_line(line, &mut inv);
+        }
+        self.record_history(peer);
+        self.send_excluded
+            .entry(peer)
+            .or_default()
+            .push((name.to_string(), size));
+        self.set_status(format!(
+            "{name} — {}",
+            nbeep_core::t(nbeep_core::Msg::XferExcluded)
+        ));
+        self.redraw_conversation(peer);
+    }
+
+    /// 배치 목록(manifest) 발신(M4-2e) — 현재+큐+제외 전 파일을 Control 프레임으로
+    /// 알린다(수신측 요청 단위 승인·목록 표시의 원료). 세션 없으면 조용히 생략 —
+    /// 구버전 수신자는 미지 태그 무시(전방 호환 · 파일 단위 승인으로 강등).
+    fn send_manifest(&mut self, peer: PeerId) {
+        let name_of = |p: &std::path::Path| {
+            p.file_name()
+                .map_or_else(|| "file".to_string(), |n| n.to_string_lossy().into_owned())
+        };
+        let size_of = |p: &std::path::Path| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+        let mut entries: Vec<(String, u64, bool)> = Vec::new();
+        if let Some(p) = self.current_send.get(&peer) {
+            entries.push((name_of(p), size_of(p), false));
+        }
+        if let Some(q) = self.send_queue.get(&peer) {
+            for p in q {
+                entries.push((name_of(p), size_of(p), false));
+            }
+        }
+        if let Some(ex) = self.send_excluded.get(&peer) {
+            for (n, s) in ex {
+                entries.push((n.clone(), *s, true));
+            }
+        }
+        if let Some(conv) = self.conversations.get(&peer) {
+            let _ = conv.out_tx.send(SessionCmd::Control(vec![
+                nbeep_core::xfer::encode_batch_manifest(&entries),
+            ]));
+        }
+    }
+
     /// 배치의 모든 파일 경로(현재 + 큐).
     fn batch_paths(&self, peer: PeerId) -> Vec<std::path::PathBuf> {
         let mut v = Vec::new();
@@ -3029,6 +3123,7 @@ impl App {
         );
         self.send_queue.remove(&peer);
         self.send_batch.remove(&peer);
+        self.send_excluded.remove(&peer); // 배치 종료 = 제외 목록도 마감(M4-2e)
         self.close_send_wait(peer);
         self.clear_xfer(peer);
         self.set_status(if by_timeout {
@@ -8651,6 +8746,7 @@ impl App {
             self.current_send.remove(&peer);
             self.send_queue.remove(&peer);
             self.send_batch.remove(&peer);
+            self.send_excluded.remove(&peer); // 배치 종료 = 제외 목록도 마감(M4-2e)
             self.set_xfer_line(
                 peer,
                 true,
@@ -8683,6 +8779,7 @@ impl App {
         if mine {
             self.send_queue.remove(&peer);
             self.send_batch.remove(&peer);
+            self.send_excluded.remove(&peer); // 배치 종료 = 제외 목록도 마감(M4-2e)
             self.current_send.remove(&peer); // 취소 = 의사 표시(M4-10c)
             self.preparing_send.remove(&peer);
             self.resend_offers.remove(&peer);
@@ -10098,6 +10195,7 @@ impl ApplicationHandler<AppEvent> for App {
                     self.set_status(nbeep_core::t(nbeep_core::Msg::StSessionDropSend));
                     self.send_queue.remove(&peer);
                     self.send_batch.remove(&peer);
+                    self.send_excluded.remove(&peer); // 배치 종료 = 제외 목록도 마감(M4-2e)
                     return;
                 }
                 self.awaiting_accept.insert(peer, xid);
@@ -10153,6 +10251,7 @@ impl ApplicationHandler<AppEvent> for App {
                     self.pump_send_queue(peer);
                 } else {
                     self.send_batch.remove(&peer);
+                    self.send_excluded.remove(&peer); // 배치 종료 = 제외 목록도 마감(M4-2e)
                     self.clear_xfer(peer);
                 }
                 self.refresh_send_batch(peer); // 배치 패널 갱신·종료(M4-2d)
@@ -10218,6 +10317,7 @@ impl ApplicationHandler<AppEvent> for App {
                 self.close_send_wait(peer);
                 self.send_queue.remove(&peer);
                 self.send_batch.remove(&peer);
+                self.send_excluded.remove(&peer); // 배치 종료 = 제외 목록도 마감(M4-2e)
                 self.clear_xfer(peer);
                 self.redraw_conversation(peer);
             }
@@ -12270,6 +12370,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         send_wait: HashMap::new(),
         send_batch_view: HashMap::new(),
         send_paused: HashMap::new(),
+        send_excluded: HashMap::new(),
         pending_send_window: None,
         send_rate: nbeep_core::RateLimit::Auto,
         recv_rate: nbeep_core::RateLimit::Auto,

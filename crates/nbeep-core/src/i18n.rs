@@ -746,6 +746,8 @@ pub enum Msg {
     XferStOffered,
     XferStActive,
     XferStPaused,
+    /// 파일 단위 용량 검사에서 제외된 파일(M4-2e · 08-19) — 전송 안 하지만 목록엔 남는다.
+    XferExcluded,
     XferStDone,
     XferStFailed,
     StfAutoAcceptRecv,
@@ -1128,6 +1130,7 @@ impl Msg {
             Msg::XferStOffered => ["Awaiting approval", "승인 대기", "等待批准", "承認待ち"],
             Msg::XferStActive => ["Sending", "전송 중", "传输中", "転送中"],
             Msg::XferStPaused => ["Paused", "일시정지", "已暂停", "一時停止"],
+            Msg::XferExcluded => ["Excluded — over size limit", "전송 제외 — 용량 초과", "已排除 — 超出大小限制", "除外 — サイズ上限超過"],
             Msg::XferStDone => ["Done", "완료", "完成", "完了"],
             Msg::XferStFailed => ["Failed", "실패", "失败", "失敗"],
             Msg::StfAutoAcceptRecv => ["Auto-accepted: {} ({}) receiving", "자동 수락: {} ({}) 수신 시작", "自动接受：{}（{}）开始接收", "自動受信: {} ({}) 受信開始"],
