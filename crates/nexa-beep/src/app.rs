@@ -6366,6 +6366,85 @@ impl App {
         }
     }
 
+    /// 그룹 대화 기록 영속(08-19 — M3-23의 `g-*.seg` 축 · 사용자 실기 "재시작하면
+    /// 기록이 사라진다"). 1:1 [`Self::record_history`]와 같은 문법: 같은 봉인 도메인
+    /// (`SEAL_HISTORY`) · 원자적 쓰기 · 파일명 = `g-{uid.short()}.seg`(uid = 전역
+    /// 진실 — 로컬 gid는 표시용 키라 파일명에 쓰지 않는다).
+    fn record_group_history(&mut self, gid: nbeep_core::group::GroupId) {
+        let Some(uid) = self.groups.shared_by_id(gid).map(|s| s.roster.uid) else {
+            return; // 로컬(동보) 그룹 — 공유 방만 영속(스레드도 공유 방에만 있다)
+        };
+        let dir = self.data_dir.join("history");
+        let path = dir.join(format!("g-{}.seg", uid.short()));
+        let plain = self
+            .group_threads
+            .get(&gid)
+            .map(|l| encode_history(l))
+            .unwrap_or_default();
+        if plain.is_empty() {
+            let _ = std::fs::remove_file(&path);
+            return;
+        }
+        let Ok(env) = nbeep_store::sealed::seal(
+            crate::gate::SEAL_HISTORY,
+            &self.identity.wrap_secret(),
+            &plain,
+        ) else {
+            self.set_status(nbeep_core::t(nbeep_core::Msg::StHistorySealFail));
+            return;
+        };
+        if std::fs::create_dir_all(&dir).is_ok() {
+            let tmp = path.with_extension(format!("tmp.{}", std::process::id()));
+            if std::fs::write(&tmp, &env).is_ok() {
+                let _ = std::fs::rename(&tmp, &path);
+            }
+        }
+    }
+
+    /// 부팅 그룹 기록 복원(08-19) — 공유 그룹의 `g-{uid}.seg`를 개봉해
+    /// `group_threads`에 넣는다(방 열면 바로 보인다). **소속 없는 고아 세그먼트는
+    /// 정리**한다(탈퇴·해산 뒤 남은 파일 — 방이 없으면 열 수도 없다).
+    fn restore_group_history(&mut self) {
+        let dir = self.data_dir.join("history");
+        let secret = self.identity.wrap_secret();
+        // uid.short() → local_id 매핑(공유 그룹 전수 — Invited도 복원해 두면 수락
+        // 직후 바로 보인다).
+        let by_short: HashMap<String, nbeep_core::group::GroupId> = self
+            .groups
+            .shared_list()
+            .iter()
+            .map(|s| (s.roster.uid.short(), s.local_id))
+            .collect();
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            return;
+        };
+        for e in rd.flatten() {
+            let path = e.path();
+            if path.extension().and_then(|x| x.to_str()) != Some("seg") {
+                continue;
+            }
+            let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            let Some(short) = stem.strip_prefix("g-") else {
+                continue; // 1:1 기록 — restore_history 몫
+            };
+            let Some(&gid) = by_short.get(short) else {
+                let _ = std::fs::remove_file(&path); // 고아(탈퇴·해산 잔재) 정리
+                continue;
+            };
+            let Some(bytes) = std::fs::read(&path).ok().and_then(|raw| {
+                nbeep_store::sealed::open(crate::gate::SEAL_HISTORY, &secret, &raw)
+            }) else {
+                continue; // 개봉 실패(다른 신원 봉인) — fail-closed(보존·미표시)
+            };
+            let lines = decode_history(&bytes);
+            if !lines.is_empty() {
+                self.group_threads.insert(gid, lines);
+            }
+        }
+    }
+
     /// 부팅 대화 기록 복원(M2-5b) — 개봉해 parked_lines에(대화창 열면 뜨고,
     /// 재연결하면 install_conversation이 이어받는다). 차단 상대·개봉 실패는 건너뜀.
     fn restore_history(&mut self) {
@@ -7254,6 +7333,15 @@ impl App {
 
     /// 그룹 뷰·스레드 정리(해산·탈퇴·제외 공용).
     fn close_group_views(&mut self, gid: nbeep_core::group::GroupId) {
+        // 기록 세그먼트도 정리(08-19 — 방이 없으면 열 수 없다). uid를 못 찾는
+        // 호출 순서(저장소 선삭제)는 부팅 복원의 고아 정리가 처리한다.
+        if let Some(uid) = self.groups.shared_by_id(gid).map(|s| s.roster.uid) {
+            let _ = std::fs::remove_file(
+                self.data_dir
+                    .join("history")
+                    .join(format!("g-{}.seg", uid.short())),
+            );
+        }
         self.gchats.remove(&gid);
         self.group_threads.remove(&gid);
         self.gunread.remove(&gid);
@@ -7698,6 +7786,7 @@ impl App {
                 .entry(gid)
                 .or_default()
                 .push(line.clone());
+            self.record_group_history(gid); // 그룹 기록 영속(08-19)
             if let Some(chat) = self.gchats.get_mut(&gid) {
                 chat.push_line(line, &mut inv);
             }
@@ -7763,6 +7852,7 @@ impl App {
             .entry(gid)
             .or_default()
             .push(line.clone());
+        self.record_group_history(gid); // 그룹 기록 영속(08-19)
         if let Some(chat) = self.gchats.get_mut(&gid) {
             chat.push_line(line, inv);
         }
@@ -8189,6 +8279,7 @@ impl App {
                     .entry(gid)
                     .or_default()
                     .push(line.clone());
+                self.record_group_history(gid); // 그룹 기록 영속(08-19)
                 let mut inv = Invalidations::default();
                 if let Some(chat) = self.gchats.get_mut(&gid) {
                     chat.push_line(line, &mut inv);
@@ -12225,6 +12316,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
     app.promote_local_groups(); // 구버전 로컬(동보) 그룹 → 그룹 대화(G4 마이그레이션)
     app.load_pii_sidecar(); // 연락처(PII) 봉인 사이드카 — cfg 구본보다 우선(08-17)
     app.restore_history(); // 대화 기록 복원(M2-5b · parked_lines에 · 대화창 열면 뜬다)
+    app.restore_group_history(); // 그룹 기록 복원(08-19 · g-{uid}.seg → group_threads)
     app.restore_cached_profiles(); // 핀 상대의 캐시 프로필·목록 행 복원(08-14)
     app.ensure_wire_avatar(); // 상한 초과 사진의 와이어 축소본 보장(08-16 — 기존 사용자 자기 치유)
     crate::part::sweep_partials(crate::gate::CH_GUI); // 부분물 수명 정리(M4-10a — 72h·1GiB)
