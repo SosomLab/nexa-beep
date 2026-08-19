@@ -2811,9 +2811,10 @@ impl App {
             self.request_redraw(id);
             return;
         }
-        // ★ 요청당 파일 수 상한(M4-2e 규격 · 08-20 2차 확정) — **제외 포함
+        // ★ 요청당 파일 수 상한(M4-2e 규격 · 08-20 3차 확정) — **제외 포함
         //   합산**이 기준: 시도한 전체(전송분 b.1 + 제외분)가 상한이면 이후
-        //   드롭은 제외 편입. 상한 = 설정 `xfer.batch_max`(1~5 · 기본 5).
+        //   드롭은 **보내지 않고 안내 모달만**(닫기 버튼 하나 — 사용자 확정:
+        //   목록·manifest에 남기지 않는다). 상한 = `xfer.batch_max`(1~5 · 기본 5).
         {
             let max = self
                 .settings
@@ -2824,12 +2825,10 @@ impl App {
             let attempted = self.send_batch.get(&peer).map_or(0, |b| b.1 as usize)
                 + self.send_excluded.get(&peer).map_or(0, Vec::len);
             if attempted >= max {
-                self.push_excluded_line(peer, true, &name, size);
-                self.set_status(nbeep_core::tf(
-                    nbeep_core::Msg::StfBatchLimit,
-                    &[&max.to_string(), &name],
+                self.pending_alert = Some((
+                    nbeep_core::t(nbeep_core::Msg::WarnBatchLimitTitle).to_string(),
+                    nbeep_core::tf(nbeep_core::Msg::WarnBatchLimitBody, &[&max.to_string()]),
                 ));
-                self.send_manifest(peer);
                 self.request_redraw(id);
                 return;
             }

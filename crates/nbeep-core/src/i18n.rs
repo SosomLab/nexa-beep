@@ -199,8 +199,10 @@ pub enum Msg {
     OfferCount,
     /// 승인 창 제외 목록 라벨(08-20 — 상한 초과 등으로 배치에서 빠진 파일).
     OfferExcluded,
-    /// 요청당 파일 수 상한 초과 안내 — `{}` 상한 · `{}` 제외 파일명.
-    StfBatchLimit,
+    /// 요청당 파일 수 상한 초과 모달(08-20 3차 — 닫기 버튼만).
+    WarnBatchLimitTitle,
+    /// 본문 — `{}` = 현재 설정 상한.
+    WarnBatchLimitBody,
     /// 폴더 드롭 제외 안내 — `{}` = 폴더명.
     StfFolderExcluded,
     /// 최대 송신 개수 설정(08-20).
@@ -1481,11 +1483,17 @@ impl Msg {
             Msg::Cnt3 => ["3", "3개", "3个", "3件"],
             Msg::Cnt4 => ["4", "4개", "4个", "4件"],
             Msg::Cnt5 => ["5 (default)", "5개(기본)", "5个(默认)", "5件(既定)"],
-            Msg::StfBatchLimit => [
-                "Max {} files per request — {} excluded",
-                "요청당 최대 {}개 — {} 제외됨",
-                "每次请求最多 {} 个 — {} 已排除",
-                "1リクエスト最大 {}件 — {} を除外",
+            Msg::WarnBatchLimitTitle => [
+                "Too many files",
+                "파일 개수 초과",
+                "文件数量超限",
+                "ファイル数の上限超過",
+            ],
+            Msg::WarnBatchLimitBody => [
+                "Files beyond the limit were not sent.\n\nCurrent limit: {} per request. You can set up to 5 in File settings (\"Max files per request\").",
+                "개수 제한을 넘는 파일은 전송되지 않았습니다.\n\n현재 설정값: 요청당 {}개. 파일 설정의 '요청당 최대 파일 수'에서 최대 5개까지 지정할 수 있습니다.",
+                "超出限制的文件未发送。\n\n当前设置：每次请求 {} 个。可在文件设置的\"每次请求最大文件数\"中最多指定 5 个。",
+                "上限を超えたファイルは送信されませんでした。\n\n現在の設定: 1リクエスト {}件。ファイル設定の「1リクエスト最大ファイル数」で最大5件まで指定できます。",
             ],
             Msg::OfferResumeBtn => ["Resume {}%", "이어받기 {}%", "续传 {}%", "再開 {}%"],
             Msg::SubLog => ["Log", "로그", "日志", "ログ"],
