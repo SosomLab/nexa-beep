@@ -945,7 +945,7 @@ fn spawn_session_actor(
                         let _ = session.send(StreamId::File, &XferMsg::Cancel { id }.encode());
                         let _ = proxy.send_event(AppEvent::XferFailed {
                             peer,
-                            why: "원본 파일을 읽을 수 없어 전송을 중단했습니다".into(),
+                            why: nbeep_core::t(nbeep_core::Msg::XferSrcReadFail).into(),
                         });
                         continue;
                     }
@@ -963,7 +963,7 @@ fn spawn_session_actor(
                             let _ = session.send(StreamId::File, &XferMsg::Cancel { id }.encode());
                             let _ = proxy.send_event(AppEvent::XferFailed {
                                 peer,
-                                why: "전송 중 원본이 변경되어 중단했습니다".into(),
+                                why: nbeep_core::t(nbeep_core::Msg::XferSrcChanged).into(),
                             });
                             continue;
                         }
@@ -1765,7 +1765,7 @@ fn xfer_step(
             if sending.as_ref().is_some_and(|st| st.id == id) {
                 *sending = None; // 상대(수신측)가 진행 중 취소 — 펌프 즉시 중단(08-16)
             }
-            fail("상대가 취소".into());
+            fail(nbeep_core::t(nbeep_core::Msg::XferPeerCanceled).into());
         }
         Err(e) => fail(format!("와이어 오류: {e}")),
     }
