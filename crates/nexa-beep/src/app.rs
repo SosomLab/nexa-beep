@@ -1908,8 +1908,6 @@ enum Role {
     PeerInfo(PeerId),
     /// 격리함 — 수신 파일 승인·삭제(M4-3 · [docs/11] §7 등급별 마찰).
     Quarantine,
-    /// 발신 대기 — 상대 승인을 기다리는 창(타임아웃 후 자동 취소).
-    Sending(PeerId),
     /// 수신 승인 — 제안 정보를 보여 주고 결정을 받는 창(타임아웃 = 취소).
     Approve(PeerId),
     /// 주소 직접 입력 모달(DR-19 · M3-16 — `⌘/Ctrl+K`·툴바 +).
@@ -2267,7 +2265,6 @@ struct App {
     /// 창을 배치 패널로 바꿨다. 이건 순수 타이머로 남아 승인 무응답 시 취소한다).
     send_wait: HashMap<PeerId, nbeep_ui::TimeoutButton>,
     /// 발신 배치 패널(M4-2d · 상대별) — 개수·총량·스크롤 목록·파일별 아이콘 제어.
-    send_batch_view: HashMap<PeerId, nbeep_ui::SendBatchWidget>,
     /// 일시정지된 발신 파일(M4-2d · 상대별 경로 집합) — 큐 펌프가 건너뛴다(대기
     /// 파일 pass) · 활성 전송은 P2에서 액터 pump gate로 확장.
     send_paused: HashMap<PeerId, std::collections::HashSet<std::path::PathBuf>>,
@@ -2297,7 +2294,6 @@ struct App {
     /// "파일 단위 검사 · 제외 상태로 목록에"). 배치 종료 때 함께 비운다.
     send_excluded: HashMap<PeerId, Vec<(String, u64)>>,
     /// 다음 루프에서 만들 발신 대기 창(창 생성은 ActiveEventLoop가 필요하다).
-    pending_send_window: Option<PeerId>,
     /// 보내기 속도 상한(설정 `xfer.send_rate`).
     send_rate: nbeep_core::RateLimit,
     /// 받기 속도 상한(설정 `xfer.recv_rate`) — Accept로 상대에게 공지된다.
@@ -3105,166 +3101,25 @@ impl App {
         self.refresh_send_batch(peer);
     }
 
-    /// 발신 대기 강제 종료 — 타이머·패널·창을 모두 정리한다(취소·실패·배치 종료).
+    /// 발신 대기 강제 종료 — 승인 타임아웃 타이머·정지 표식을 정리한다
+    /// (취소·실패·배치 종료 · 별도 창은 M4-2e에서 제거 — 인챗 라인이 화면).
     fn close_send_wait(&mut self, peer: PeerId) {
         self.send_wait.remove(&peer);
-        self.send_batch_view.remove(&peer);
         self.send_paused.remove(&peer);
-        if let Some((wid, _)) = self
-            .windows
-            .iter()
-            .find(|(_, e)| e.role == Role::Sending(peer))
-        {
-            let wid = *wid;
-            self.windows.remove(&wid);
-        }
     }
 
-    /// 배치 패널의 행 목록을 현재 큐 상태로 조립한다(M4-2d) — 현재 오퍼/전송 파일 +
-    /// 대기 큐. 상태는 활성(진행률)·대기·일시정지로 매핑한다.
-    fn build_send_rows(&self, peer: PeerId) -> Vec<nbeep_ui::SendFileRow> {
-        use nbeep_ui::{SendFileRow, SendStatus};
-        let paused = self.send_paused.get(&peer);
-        let is_paused = |p: &std::path::Path| paused.is_some_and(|s| s.contains(p));
-        let name_of = |p: &std::path::Path| {
-            p.file_name()
-                .map_or_else(|| "file".to_string(), |n| n.to_string_lossy().into_owned())
-        };
-        let size_of = |p: &std::path::Path| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
-        let mut rows = Vec::new();
-        // 현재 오퍼/전송 파일(있으면 목록 맨 위).
-        if let Some(path) = self.current_send.get(&peer) {
-            let status = if is_paused(path) {
-                SendStatus::Paused
-            } else if self.active_send.contains_key(&peer) {
-                // ★ 발신 진행률만(08-19) — 같은 상대와 동시 수신 중이면
-                //   xfer_progress가 수신 값으로 덮여 pct가 오염된다.
-                let pct = self
-                    .xfer_progress
-                    .get(&peer)
-                    .filter(|p| p.sending)
-                    .map_or(0, |p| {
-                        u8::try_from(p.done_bytes.saturating_mul(100) / p.total_bytes.max(1))
-                            .unwrap_or(100)
-                            .min(100)
-                    });
-                SendStatus::Active { pct }
-            } else if self.awaiting_accept.contains_key(&peer) {
-                // 현재 파일 구분(08-19 — 설계의 "현재 ▶"): 오퍼가 나가 상대
-                // 화면에 떠 있는 파일 = "승인 대기" · 큐 파일 = "대기".
-                SendStatus::Offered
-            } else {
-                SendStatus::Waiting
-            };
-            rows.push(SendFileRow {
-                name: name_of(path),
-                size: size_of(path),
-                status,
-            });
-        }
-        // 대기 큐(아직 오퍼 안 한 파일).
-        if let Some(q) = self.send_queue.get(&peer) {
-            for path in q {
-                rows.push(SendFileRow {
-                    name: name_of(path),
-                    size: size_of(path),
-                    status: if is_paused(path) {
-                        SendStatus::Paused
-                    } else {
-                        SendStatus::Waiting
-                    },
-                });
-            }
-        }
-        // 보관 정지분(ⓐ) — 슬롯 밖에서 재개를 기다리는 활성 정지.
-        if let Some(list) = self.paused_sends.get(&peer) {
-            for (name, size, _, _) in list {
-                rows.push(SendFileRow {
-                    name: name.clone(),
-                    size: *size,
-                    status: SendStatus::Paused,
-                });
-            }
-        }
-        rows
-    }
-
-    /// 배치 패널을 재조립한다 — 배치가 끝났으면 창을 닫고, 아니면 패널을 갱신·생성한다.
+    /// 발신 배치 상태 정리(M4-2e — 별도 창 제거 후 정리 판단만 남았다):
+    /// 배치가 전부 끝났으면 타이머·정지 표식을 정리한다. 진행 표시는 인챗 라인.
     fn refresh_send_batch(&mut self, peer: PeerId) {
-        let rows = self.build_send_rows(peer);
-        let busy = self.awaiting_accept.contains_key(&peer)
+        let busy = self.current_send.contains_key(&peer)
+            || self.awaiting_accept.contains_key(&peer)
             || self.active_send.contains_key(&peer)
             || self.preparing_send.contains(&peer)
             || self.paused_sends.contains_key(&peer) // 정지만 남아도 배치 유지(ⓑ)
             || self.send_queue.get(&peer).is_some_and(|q| !q.is_empty());
-        if rows.is_empty() && !busy {
-            self.close_send_wait(peer); // 배치 종료 → 창 닫기
-            return;
+        if !busy {
+            self.close_send_wait(peer); // 배치 종료 → 타이머·표식 정리
         }
-        let mut inv = Invalidations::default();
-        if let Some(w) = self.send_batch_view.get_mut(&peer) {
-            w.set_rows(rows, &mut inv);
-        } else {
-            self.send_batch_view
-                .insert(peer, nbeep_ui::SendBatchWidget::new(rows));
-            self.pending_send_window = Some(peer); // 창은 about_to_wait에서 생성
-        }
-        if let Some((wid, _)) = self
-            .windows
-            .iter()
-            .find(|(_, e)| e.role == Role::Sending(peer))
-        {
-            self.request_redraw(*wid);
-        }
-    }
-
-    /// 배치 패널 아이콘 제어 → 큐/전송 조작(M4-2d). 상단=전체, 행=그 파일만.
-    fn send_batch_action(&mut self, peer: PeerId, action: nbeep_ui::SendAction) {
-        use nbeep_ui::SendAction;
-        match action {
-            SendAction::CancelAll => {
-                self.cancel_send(peer, false); // 배치 전체 취소 + 창 닫기
-                return;
-            }
-            SendAction::PauseAll => {
-                let paths = self.batch_paths(peer);
-                let set = self.send_paused.entry(peer).or_default();
-                for p in paths {
-                    set.insert(p);
-                }
-                // 활성 전송도 멈춘다(P2 — 액터 pump gate).
-                self.pause_active_send(peer, true);
-            }
-            SendAction::ResumeAll => {
-                self.send_paused.remove(&peer);
-                self.pause_active_send(peer, false);
-                self.pump_send_queue(peer);
-            }
-            SendAction::Cancel(i) => self.cancel_one_send(peer, i),
-            SendAction::Pause(i) => {
-                if let Some(path) = self.nth_batch_path(peer, i) {
-                    let active_current = self.current_send.get(&peer) == Some(&path)
-                        && self.active_send.contains_key(&peer);
-                    self.send_paused.entry(peer).or_default().insert(path);
-                    if active_current {
-                        self.pause_active_send(peer, true); // P2
-                    }
-                }
-            }
-            SendAction::Resume(i) => {
-                if let Some(path) = self.nth_batch_path(peer, i) {
-                    if let Some(set) = self.send_paused.get_mut(&peer) {
-                        set.remove(&path);
-                    }
-                    let resume_current = self.current_send.get(&peer) == Some(&path);
-                    if resume_current {
-                        self.pause_active_send(peer, false); // P2
-                    }
-                    self.pump_send_queue(peer);
-                }
-            }
-        }
-        self.refresh_send_batch(peer);
     }
 
     /// 전송 제외 라인(M4-2e) — 큐에 넣지 않고 스레드에 "전송 제외" 종결 라인으로
@@ -5675,12 +5530,7 @@ impl App {
         let chat_wins: Vec<WindowId> = self
             .windows
             .iter()
-            .filter(|(_, e)| {
-                matches!(
-                    e.role,
-                    Role::Chat(_) | Role::Sending(_) | Role::GroupChat(_)
-                )
-            })
+            .filter(|(_, e)| matches!(e.role, Role::Chat(_) | Role::GroupChat(_)))
             .map(|(id, _)| *id)
             .collect();
         for wid in chat_wins {
@@ -9188,12 +9038,6 @@ impl App {
                     pv.set_bounds(Rect::new(0, 0, w, h), &mut inv);
                 }
             }
-            Role::Sending(peer) => {
-                if let Some(v) = self.send_batch_view.get_mut(&peer) {
-                    v.set_scale(scale, &mut inv);
-                    v.set_bounds(Rect::new(0, 0, w, h), &mut inv);
-                }
-            }
         }
     }
 
@@ -10184,16 +10028,6 @@ impl App {
                     self.run_offer_choice(peer, c);
                 }
             }
-            Role::Sending(peer) => {
-                let mut act = None;
-                if let Some(v) = self.send_batch_view.get_mut(&peer) {
-                    v.on_event(&ev, &mut inv);
-                    act = v.take_action();
-                }
-                if let Some(a) = act {
-                    self.send_batch_action(peer, a);
-                }
-            }
             Role::Quarantine => {
                 let (mut act, mut preview) = (None, None);
                 if let Some(qv) = &mut self.quarantine_view {
@@ -10444,12 +10278,6 @@ impl App {
             Role::Approve(peer) => {
                 if let Some(pv) = self.approve_view.get(&peer) {
                     pv.paint(&mut ctx, &theme);
-                }
-            }
-            Role::Sending(peer) => {
-                ctx.fill_rect(Rect::new(0, 0, 10_000, 10_000), theme.panel_bg);
-                if let Some(v) = self.send_batch_view.get(&peer) {
-                    v.paint(&mut ctx, &theme);
                 }
             }
         }
@@ -12164,40 +11992,6 @@ impl ApplicationHandler<AppEvent> for App {
                 self.run_offer_choice(peer, c);
             }
         }
-        // 발신 대기 창 생성(창 생성은 여기서만 — ActiveEventLoop가 필요하다).
-        if let Some(peer) = self.pending_send_window.take() {
-            if !self.windows.values().any(|e| e.role == Role::Sending(peer)) {
-                let attrs = Window::default_attributes()
-                    .with_title(format!(
-                        "Nexa Beep — {}",
-                        nbeep_core::t(nbeep_core::Msg::WinTransferWait)
-                    ))
-                    .with_inner_size(winit::dpi::LogicalSize::new(420.0, 360.0))
-                    .with_resizable(true) // 파일 많으면 늘려 볼 수 있게(내부는 스크롤 · M4-2d)
-                    .with_window_icon(self.icon.clone());
-                if let Ok(window) = el.create_window(attrs) {
-                    let window = Rc::new(window);
-                    let scale = window.scale_factor() as f32;
-                    if let Ok(context) = softbuffer::Context::new(window.clone()) {
-                        if let Ok(surface) = SbSurface::new(&context, window.clone()) {
-                            let id = window.id();
-                            self.windows.insert(
-                                id,
-                                WinEntry {
-                                    role: Role::Sending(peer),
-                                    window,
-                                    surface,
-                                    cursor: (0, 0),
-                                    scale,
-                                },
-                            );
-                            self.layout_window(id);
-                            self.request_redraw(id);
-                        }
-                    }
-                }
-            }
-        }
         // 발신 대기 타임아웃 — 60초가 지나면 **버튼이 스스로 눌려** 전송을 취소한다.
         {
             let now = self.now_ms();
@@ -12211,40 +12005,9 @@ impl ApplicationHandler<AppEvent> for App {
                     fired.push(*peer);
                 }
             }
-            for peer in redraw {
-                if let Some((wid, _)) = self
-                    .windows
-                    .iter()
-                    .find(|(_, e)| e.role == Role::Sending(peer))
-                {
-                    let wid = *wid;
-                    self.request_redraw(wid);
-                }
-            }
+            let _ = redraw; // 별도 발신 창 제거(M4-2e) — 진행 표시는 인챗 라인.
             for peer in fired {
                 self.cancel_send(peer, true);
-            }
-        }
-        // 배치 패널 스크롤바 자동 숨김 틱(M4-2d).
-        {
-            let now = self.now_ms();
-            let mut redraw: Vec<PeerId> = Vec::new();
-            for (peer, v) in &mut self.send_batch_view {
-                let mut inv = Invalidations::default();
-                v.tick(now, &mut inv);
-                if !inv.is_empty() {
-                    redraw.push(*peer);
-                }
-            }
-            for peer in redraw {
-                if let Some((wid, _)) = self
-                    .windows
-                    .iter()
-                    .find(|(_, e)| e.role == Role::Sending(peer))
-                {
-                    let wid = *wid;
-                    self.request_redraw(wid);
-                }
             }
         }
         // 기간 자동 승인 — 만료 확인 + **1초마다 남은 시간 갱신**(사용자 확정 08-09).
@@ -12443,7 +12206,6 @@ impl ApplicationHandler<AppEvent> for App {
                         Role::PeerInfo(_) => self.peer_info_view = None,
                         Role::ImageView => self.image_view = None,
                         Role::Quarantine => self.quarantine_view = None,
-                        Role::Sending(peer) => self.cancel_send(peer, false),
                         Role::Approve(peer) => {
                             // 창을 닫으면 거절로 본다(응답하지 않은 제안을 남기지 않는다).
                             self.run_offer_choice(
@@ -13461,7 +13223,6 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         awaiting_ack: HashMap::new(),
         close_armed: false,
         send_wait: HashMap::new(),
-        send_batch_view: HashMap::new(),
         send_paused: HashMap::new(),
         send_excluded: HashMap::new(),
         paused_sends: HashMap::new(),
@@ -13472,7 +13233,6 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         xfer_pause_since: HashMap::new(),
         recv_manifest: HashMap::new(),
         batch_approved: HashMap::new(),
-        pending_send_window: None,
         send_rate: nbeep_core::RateLimit::Auto,
         recv_rate: nbeep_core::RateLimit::Auto,
         send_meter: nbeep_core::RateMeter::default(),

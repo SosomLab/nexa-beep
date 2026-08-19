@@ -145,7 +145,6 @@ pub mod peer_list;
 pub mod profile;
 pub mod prompt;
 pub mod quarantine_view;
-pub mod send_batch_view;
 pub mod settings;
 pub mod typeahead;
 
@@ -180,7 +179,6 @@ pub use profile::{ProfileValues, ProfileWidget};
 pub use prompt::TextPromptWidget;
 pub use quarantine_view::{QAction, QRow, QuarantineWidget};
 pub use raster::{FontSet, RasterCtx};
-pub use send_batch_view::{SendAction, SendBatchWidget, SendFileRow, SendStatus};
 pub use settings::{registry, Entry, SettingKind, SettingsState, SettingsWidget};
 pub use theme::{Color, FontPrefs, IconImage, SlotFont, Theme};
 pub use typeahead::{Query, TypeAhead, TYPEAHEAD_TIMEOUT_MS};
