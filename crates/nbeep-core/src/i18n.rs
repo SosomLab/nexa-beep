@@ -729,6 +729,16 @@ pub enum Msg {
     ActOk,
     /// 전송 취소 버튼(08-18 i18n · `{0}` = 파일명).
     XferCancelBtn,
+    /// 전송 배치 대기 안내(M4-2d · 08-19).
+    XferWaitApproval,
+    /// 전송 배치 요약 — `{0}` = 파일 개수 · `{1}` = 총 용량(M4-2d · 08-19).
+    XferBatchSummary,
+    /// 전송 상태 라벨(M4-2d · 08-19) — 목록 행.
+    XferStWaiting,
+    XferStActive,
+    XferStPaused,
+    XferStDone,
+    XferStFailed,
     StfAutoAcceptRecv,
     StfFileRejected,
     StfDeliveredWait,
@@ -1094,6 +1104,13 @@ impl Msg {
             Msg::SuggestVerify => ["This peer isn't fingerprint-verified yet. Type /fingerprint to see the key fingerprint, compare it over another channel (phone/in person), then /verify.", "이 상대는 아직 지문 대조 전입니다. /fingerprint 로 키 지문을 확인하고, 전화·대면 등 다른 채널로 맞춰 본 뒤 /verify 를 입력하세요.", "对方尚未完成指纹核对。用 /fingerprint 查看密钥指纹，通过电话/当面等其他渠道核对后输入 /verify。", "この相手はまだ指紋照合前です。/fingerprint で鍵指紋を確認し、電話・対面など別の経路で照合してから /verify を入力してください。"],
             Msg::ActOk => ["OK", "확인", "确定", "OK"],
             Msg::XferCancelBtn => ["Cancel transfer — {}", "전송 취소 — {}", "取消传输 — {}", "転送キャンセル — {}"],
+            Msg::XferWaitApproval => ["Waiting for the other side to accept…", "상대의 승인을 기다리는 중…", "正在等待对方接受…", "相手の承認を待っています…"],
+            Msg::XferBatchSummary => ["{} files · {} total", "{}개 파일 · 총 {}", "{} 个文件 · 共 {}", "{} ファイル · 合計 {}"],
+            Msg::XferStWaiting => ["Waiting", "대기", "等待", "待機"],
+            Msg::XferStActive => ["Sending", "전송 중", "传输中", "転送中"],
+            Msg::XferStPaused => ["Paused", "일시정지", "已暂停", "一時停止"],
+            Msg::XferStDone => ["Done", "완료", "完成", "完了"],
+            Msg::XferStFailed => ["Failed", "실패", "失败", "失敗"],
             Msg::StfAutoAcceptRecv => ["Auto-accepted: {} ({}) receiving", "자동 수락: {} ({}) 수신 시작", "自动接受：{}（{}）开始接收", "自動受信: {} ({}) 受信開始"],
             Msg::StfFileRejected => ["File rejected ({}): {}", "파일 거부({}): {}", "文件已拒绝（{}）：{}", "ファイル拒否({}): {}"],
             Msg::StfDeliveredWait => ["Delivered {}/{} — awaiting peer confirmation", "전달됨 {}/{} — 상대 확인 대기", "已送达 {}/{} — 等待对方确认", "配信済み {}/{} — 相手の確認待ち"],

@@ -279,6 +279,11 @@ enum SessionCmd {
     SetRecvMax(u64),
     /// 발신 취소(타임아웃·사용자) — 상대에게 Cancel 통지.
     CancelXfer(nbeep_core::XferId),
+    /// 활성 발신 일시정지(M4-2d P2) — 세션 유지한 채 청크 펌프만 멈춘다(와이어
+    /// 무변경 · 수신측은 다음 청크를 기다린다). 재개까지 이 전송은 진척 없다.
+    PauseXfer(nbeep_core::XferId),
+    /// 활성 발신 재개(M4-2d P2) — 멈춘 펌프를 다시 돌린다.
+    ResumeXfer(nbeep_core::XferId),
     RejectXfer {
         id: nbeep_core::XferId,
         why: nbeep_core::RejectWhy,
@@ -580,6 +585,10 @@ fn spawn_session_actor(
         //   블로킹 루프가 전량을 쏟아, 펌프가 도는 동안 명령(취소)도 수신(상대
         //   취소)도 못 봤다. 상태로 들고 틱마다 조금씩 보내며 교대한다.
         let mut sending: Option<ActiveSend> = None;
+        // 일시정지된 발신 xid(M4-2d P2) — 이 xid가 활성이면 청크 펌프를 멈춘다
+        // (세션은 유지 · 와이어 무변경 · 수신측은 다음 청크를 기다린다). xid로 묶어
+        // 새 전송(다른 xid)은 멈춘 채로 시작하지 않는다.
+        let mut paused_xid: Option<nbeep_core::XferId> = None;
         // 수신 폴 타임아웃(ms) — 유휴 100ms / **전송 중 1ms**. 틱당 4청크 뒤
         // 100ms를 꽉 채워 기다리면 처리량이 128KiB/100ms ≈ 1.3MB/s로 조인다
         // (08-16 실기 — localhost 11.6MiB가 9초. 재개형 펌프 도입의 회귀).
@@ -682,7 +691,23 @@ fn spawn_session_actor(
                             if sending.as_ref().is_some_and(|st| st.id == id) {
                                 sending = None; // 진행 중 발신 취소 — 펌프 즉시 중단
                             }
+                            if paused_xid == Some(id) {
+                                paused_xid = None; // 취소된 전송의 정지 플래그 정리
+                            }
                             session.send(StreamId::File, &XferMsg::Cancel { id }.encode())
+                        }
+                        SessionCmd::PauseXfer(id) => {
+                            // 활성 발신이면 정지(다음 청크부터 멈춘다) — 와이어 무통지.
+                            if sending.as_ref().is_some_and(|st| st.id == id) {
+                                paused_xid = Some(id);
+                            }
+                            Ok(())
+                        }
+                        SessionCmd::ResumeXfer(id) => {
+                            if paused_xid == Some(id) {
+                                paused_xid = None;
+                            }
+                            Ok(())
                         }
                         SessionCmd::RejectXfer { id, why } => {
                             inbox.drop_xfer(&id);
@@ -719,12 +744,17 @@ fn spawn_session_actor(
                 }
                 // 발신 펌프 틱 — 한 틱 최대 4청크(128KiB) 보내고 명령·수신과 교대한다
                 // (취소 지연 상한 = 청크 4개 + 페이싱 대기 · 대역 협상은 Pacer 그대로).
-                let want_to: u64 = if sending.is_some() { 1 } else { 100 };
+                // 일시정지(M4-2d P2) 중이면 펌프를 돌리지 않는다(유휴 폴로 낮춰
+                // busy-spin 방지 — 재개 명령은 위 명령 루프가 받는다).
+                let is_paused = sending
+                    .as_ref()
+                    .is_some_and(|st| paused_xid == Some(st.id));
+                let want_to: u64 = if sending.is_some() && !is_paused { 1 } else { 100 };
                 if want_to != recv_to_ms {
                     recv_to_ms = want_to;
                     session.set_recv_timeout(Some(std::time::Duration::from_millis(want_to)));
                 }
-                if let Some(st) = sending.as_mut() {
+                if let Some(st) = sending.as_mut().filter(|_| !is_paused) {
                     let mut done = false;
                     let mut read_fail = false;
                     for _ in 0..4 {
@@ -1933,8 +1963,14 @@ struct App {
     awaiting_ack: HashMap<PeerId, u32>,
     /// 종료 가드 — 미확인 전송이 있을 때 첫 닫기는 경고만, 두 번째로 확정(파괴적 확인 문법).
     close_armed: bool,
-    /// 발신 대기 창의 타임아웃 버튼(상대별).
+    /// 발신 대기 창의 **승인 타임아웃 타이머**(상대별 · 렌더 안 함 — M4-2d는
+    /// 창을 배치 패널로 바꿨다. 이건 순수 타이머로 남아 승인 무응답 시 취소한다).
     send_wait: HashMap<PeerId, nbeep_ui::TimeoutButton>,
+    /// 발신 배치 패널(M4-2d · 상대별) — 개수·총량·스크롤 목록·파일별 아이콘 제어.
+    send_batch_view: HashMap<PeerId, nbeep_ui::SendBatchWidget>,
+    /// 일시정지된 발신 파일(M4-2d · 상대별 경로 집합) — 큐 펌프가 건너뛴다(대기
+    /// 파일 pass) · 활성 전송은 P2에서 액터 pump gate로 확장.
+    send_paused: HashMap<PeerId, std::collections::HashSet<std::path::PathBuf>>,
     /// 다음 루프에서 만들 발신 대기 창(창 생성은 ActiveEventLoop가 필요하다).
     pending_send_window: Option<PeerId>,
     /// 보내기 속도 상한(설정 `xfer.send_rate`).
@@ -2401,6 +2437,7 @@ impl App {
             ],
         ));
         self.pump_send_queue(peer);
+        self.refresh_send_batch(peer); // 대기 중 더 드롭한 파일도 패널에 반영(M4-2d)
         self.request_redraw(id);
     }
 
@@ -2499,9 +2536,36 @@ impl App {
         if self.awaiting_accept.contains_key(&peer) || self.preparing_send.contains(&peer) {
             return; // 앞 파일 협상·해시 준비 중
         }
-        let Some(path) = self.send_queue.get_mut(&peer).and_then(VecDeque::pop_front) else {
-            // 큐가 비었다 — 배치 종료.
-            self.send_batch.remove(&peer);
+        // 일시정지된 대기 파일은 건너뛴다(M4-2d — "앞 전송이 끝나면 pass 후 다음
+        // 파일"): 앞에서부터 꺼내 정지 파일은 모아 두고, 첫 비정지 파일을 고른다.
+        // 고른 뒤 정지 파일을 **원래 순서로 큐 앞에 되돌려** 재개 때 자리를 지킨다.
+        let picked = {
+            let mut skipped: Vec<std::path::PathBuf> = Vec::new();
+            let chosen = loop {
+                let Some(p) = self.send_queue.get_mut(&peer).and_then(VecDeque::pop_front) else {
+                    break None;
+                };
+                if self.send_paused.get(&peer).is_some_and(|s| s.contains(&p)) {
+                    skipped.push(p);
+                } else {
+                    break Some(p);
+                }
+            };
+            if !skipped.is_empty() {
+                let q = self.send_queue.entry(peer).or_default();
+                for p in skipped.into_iter().rev() {
+                    q.push_front(p);
+                }
+            }
+            chosen
+        };
+        let Some(path) = picked else {
+            // 보낼 게 없다 — 큐가 완전히 비었으면 배치 종료, 전부 일시정지면 유지.
+            let has_paused = self.send_queue.get(&peer).is_some_and(|q| !q.is_empty());
+            if !has_paused {
+                self.send_batch.remove(&peer);
+            }
+            self.refresh_send_batch(peer); // 창 닫기(종료) 또는 상태 갱신(전부 정지)
             return;
         };
         // ★ 크기 사전 검사(08-18 실기 — 10.7GB ISO DnD가 앱을 얼렸다): 설정 상한
@@ -2671,21 +2735,21 @@ impl App {
         });
     }
 
-    /// 발신 대기 창 — **60초 타임아웃 버튼**이 자동으로 눌려 창을 닫고 전송을 취소한다.
-    fn open_send_wait(&mut self, peer: PeerId, name: &str) {
+    /// 발신 대기 시작(한 파일 오퍼마다) — **승인 타임아웃 타이머**를 (재)무장하고,
+    /// 배치 패널을 갱신한다(M4-2d). 타이머는 렌더하지 않는다(패널이 화면을 갖는다).
+    fn open_send_wait(&mut self, peer: PeerId, _name: &str) {
         let ms = self.wait_timeout_sec.saturating_mul(1000);
-        let mut tb = nbeep_ui::TimeoutButton::new(
-            nbeep_core::tf(nbeep_core::Msg::XferCancelBtn, &[name]),
-            ms,
-        );
+        let mut tb = nbeep_ui::TimeoutButton::new(String::new(), ms);
         tb.start(self.now_ms());
         self.send_wait.insert(peer, tb);
-        self.pending_send_window = Some(peer); // 다음 about_to_wait에서 창을 만든다
+        self.refresh_send_batch(peer);
     }
 
-    /// 발신 대기 종료 — 창을 닫고 상태를 정리한다.
+    /// 발신 대기 강제 종료 — 타이머·패널·창을 모두 정리한다(취소·실패·배치 종료).
     fn close_send_wait(&mut self, peer: PeerId) {
         self.send_wait.remove(&peer);
+        self.send_batch_view.remove(&peer);
+        self.send_paused.remove(&peer);
         if let Some((wid, _)) = self
             .windows
             .iter()
@@ -2693,6 +2757,207 @@ impl App {
         {
             let wid = *wid;
             self.windows.remove(&wid);
+        }
+    }
+
+    /// 배치 패널의 행 목록을 현재 큐 상태로 조립한다(M4-2d) — 현재 오퍼/전송 파일 +
+    /// 대기 큐. 상태는 활성(진행률)·대기·일시정지로 매핑한다.
+    fn build_send_rows(&self, peer: PeerId) -> Vec<nbeep_ui::SendFileRow> {
+        use nbeep_ui::{SendFileRow, SendStatus};
+        let paused = self.send_paused.get(&peer);
+        let is_paused = |p: &std::path::Path| paused.is_some_and(|s| s.contains(p));
+        let name_of = |p: &std::path::Path| {
+            p.file_name()
+                .map_or_else(|| "file".to_string(), |n| n.to_string_lossy().into_owned())
+        };
+        let size_of = |p: &std::path::Path| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+        let mut rows = Vec::new();
+        // 현재 오퍼/전송 파일(있으면 목록 맨 위).
+        if let Some(path) = self.current_send.get(&peer) {
+            let status = if is_paused(path) {
+                SendStatus::Paused
+            } else if self.active_send.contains_key(&peer) {
+                let pct = self.xfer_progress.get(&peer).map_or(0, |p| {
+                    u8::try_from(p.done_bytes.saturating_mul(100) / p.total_bytes.max(1))
+                        .unwrap_or(100)
+                        .min(100)
+                });
+                SendStatus::Active { pct }
+            } else {
+                SendStatus::Waiting
+            };
+            rows.push(SendFileRow {
+                name: name_of(path),
+                size: size_of(path),
+                status,
+            });
+        }
+        // 대기 큐(아직 오퍼 안 한 파일).
+        if let Some(q) = self.send_queue.get(&peer) {
+            for path in q {
+                rows.push(SendFileRow {
+                    name: name_of(path),
+                    size: size_of(path),
+                    status: if is_paused(path) {
+                        SendStatus::Paused
+                    } else {
+                        SendStatus::Waiting
+                    },
+                });
+            }
+        }
+        rows
+    }
+
+    /// 배치 패널을 재조립한다 — 배치가 끝났으면 창을 닫고, 아니면 패널을 갱신·생성한다.
+    fn refresh_send_batch(&mut self, peer: PeerId) {
+        let rows = self.build_send_rows(peer);
+        let busy = self.awaiting_accept.contains_key(&peer)
+            || self.active_send.contains_key(&peer)
+            || self.preparing_send.contains(&peer)
+            || self.send_queue.get(&peer).is_some_and(|q| !q.is_empty());
+        if rows.is_empty() && !busy {
+            self.close_send_wait(peer); // 배치 종료 → 창 닫기
+            return;
+        }
+        let mut inv = Invalidations::default();
+        if let Some(w) = self.send_batch_view.get_mut(&peer) {
+            w.set_rows(rows, &mut inv);
+        } else {
+            self.send_batch_view
+                .insert(peer, nbeep_ui::SendBatchWidget::new(rows));
+            self.pending_send_window = Some(peer); // 창은 about_to_wait에서 생성
+        }
+        if let Some((wid, _)) = self
+            .windows
+            .iter()
+            .find(|(_, e)| e.role == Role::Sending(peer))
+        {
+            self.request_redraw(*wid);
+        }
+    }
+
+    /// 배치 패널 아이콘 제어 → 큐/전송 조작(M4-2d). 상단=전체, 행=그 파일만.
+    fn send_batch_action(&mut self, peer: PeerId, action: nbeep_ui::SendAction) {
+        use nbeep_ui::SendAction;
+        match action {
+            SendAction::CancelAll => {
+                self.cancel_send(peer, false); // 배치 전체 취소 + 창 닫기
+                return;
+            }
+            SendAction::PauseAll => {
+                let paths = self.batch_paths(peer);
+                let set = self.send_paused.entry(peer).or_default();
+                for p in paths {
+                    set.insert(p);
+                }
+                // 활성 전송도 멈춘다(P2 — 액터 pump gate).
+                self.pause_active_send(peer, true);
+            }
+            SendAction::ResumeAll => {
+                self.send_paused.remove(&peer);
+                self.pause_active_send(peer, false);
+                self.pump_send_queue(peer);
+            }
+            SendAction::Cancel(i) => self.cancel_one_send(peer, i),
+            SendAction::Pause(i) => {
+                if let Some(path) = self.nth_batch_path(peer, i) {
+                    let active_current = self.current_send.get(&peer) == Some(&path)
+                        && self.active_send.contains_key(&peer);
+                    self.send_paused.entry(peer).or_default().insert(path);
+                    if active_current {
+                        self.pause_active_send(peer, true); // P2
+                    }
+                }
+            }
+            SendAction::Resume(i) => {
+                if let Some(path) = self.nth_batch_path(peer, i) {
+                    if let Some(set) = self.send_paused.get_mut(&peer) {
+                        set.remove(&path);
+                    }
+                    let resume_current = self.current_send.get(&peer) == Some(&path);
+                    if resume_current {
+                        self.pause_active_send(peer, false); // P2
+                    }
+                    self.pump_send_queue(peer);
+                }
+            }
+        }
+        self.refresh_send_batch(peer);
+    }
+
+    /// 배치의 모든 파일 경로(현재 + 큐).
+    fn batch_paths(&self, peer: PeerId) -> Vec<std::path::PathBuf> {
+        let mut v = Vec::new();
+        if let Some(p) = self.current_send.get(&peer) {
+            v.push(p.clone());
+        }
+        if let Some(q) = self.send_queue.get(&peer) {
+            v.extend(q.iter().cloned());
+        }
+        v
+    }
+
+    /// 목록 i번째 파일 경로(0 = 현재 파일 · 있으면).
+    fn nth_batch_path(&self, peer: PeerId, i: usize) -> Option<std::path::PathBuf> {
+        self.batch_paths(peer).into_iter().nth(i)
+    }
+
+    /// 그 파일만 취소(M4-2d 행 취소) — 대기 파일은 큐에서 제거, 현재 파일은
+    /// Cancel 통지 후 다음 파일로 넘어간다(배치 전체를 비우지 않는다).
+    fn cancel_one_send(&mut self, peer: PeerId, i: usize) {
+        let Some(path) = self.nth_batch_path(peer, i) else {
+            return;
+        };
+        let is_current = self.current_send.get(&peer) == Some(&path);
+        if is_current {
+            // 현재 파일만 취소 — xid Cancel 통지 + 상태 해제 후 다음으로.
+            if let Some(xid) = self
+                .awaiting_accept
+                .remove(&peer)
+                .or_else(|| self.active_send.remove(&peer))
+            {
+                if let Some(c) = self.conversations.get(&peer) {
+                    let _ = c.out_tx.send(SessionCmd::CancelXfer(xid));
+                }
+            }
+            self.current_send.remove(&peer);
+            self.preparing_send.remove(&peer);
+            if let Some(set) = self.send_paused.get_mut(&peer) {
+                set.remove(&path);
+            }
+            self.set_xfer_line(
+                peer,
+                true,
+                nbeep_ui::XferLineState::Failed {
+                    why: nbeep_core::t(nbeep_core::Msg::XferCanceled).into(),
+                },
+            );
+            self.pump_send_queue(peer); // 다음 파일(배치 계속)
+        } else {
+            // 대기 파일 — 큐에서만 제거.
+            if let Some(q) = self.send_queue.get_mut(&peer) {
+                if let Some(pos) = q.iter().position(|p| p == &path) {
+                    q.remove(pos);
+                }
+            }
+            if let Some(set) = self.send_paused.get_mut(&peer) {
+                set.remove(&path);
+            }
+        }
+    }
+
+    /// 활성 전송 일시정지/재개(P2 — 액터 pump gate). 세션은 유지한 채 청크 펌프만
+    /// 멈췄다 잇는다(와이어 무변경 — 수신측은 그저 다음 청크를 기다린다).
+    fn pause_active_send(&mut self, peer: PeerId, pause: bool) {
+        if let Some(xid) = self.active_send.get(&peer).copied() {
+            if let Some(c) = self.conversations.get(&peer) {
+                let _ = c.out_tx.send(if pause {
+                    SessionCmd::PauseXfer(xid)
+                } else {
+                    SessionCmd::ResumeXfer(xid)
+                });
+            }
         }
     }
 
@@ -8151,14 +8416,9 @@ impl App {
                 }
             }
             Role::Sending(peer) => {
-                if let Some(tb) = self.send_wait.get_mut(&peer) {
-                    tb.set_scale(scale);
-                    let bw = (200.0 * scale) as i32;
-                    let bh = (30.0 * scale) as i32;
-                    tb.set_bounds(
-                        Rect::new((w - bw) / 2, h - bh - (16.0 * scale) as i32, bw, bh),
-                        &mut inv,
-                    );
+                if let Some(v) = self.send_batch_view.get_mut(&peer) {
+                    v.set_scale(scale, &mut inv);
+                    v.set_bounds(Rect::new(0, 0, w, h), &mut inv);
                 }
             }
         }
@@ -8835,14 +9095,13 @@ impl App {
                 }
             }
             Role::Sending(peer) => {
-                let mut fired = None;
-                if let Some(tb) = self.send_wait.get_mut(&peer) {
-                    tb.on_event(&ev, &mut inv);
-                    fired = tb.take_fired();
+                let mut act = None;
+                if let Some(v) = self.send_batch_view.get_mut(&peer) {
+                    v.on_event(&ev, &mut inv);
+                    act = v.take_action();
                 }
-                if fired.is_some() {
-                    // 클릭이든 만료든 결과는 같다 — 전송 취소 + 창 닫기(사용자 확정).
-                    self.cancel_send(peer, false);
+                if let Some(a) = act {
+                    self.send_batch_action(peer, a);
                 }
             }
             Role::Quarantine => {
@@ -9099,19 +9358,8 @@ impl App {
             }
             Role::Sending(peer) => {
                 ctx.fill_rect(Rect::new(0, 0, 10_000, 10_000), theme.panel_bg);
-                ctx.select_font(nbeep_ui::FontSlot::Base, false);
-                let msg = "상대의 승인을 기다리는 중…";
-                let tw = ctx.text_width(msg);
-                let ww = i32::try_from(size.width).unwrap_or(0);
-                ctx.text(
-                    (ww - tw) / 2,
-                    (40.0 * entry.scale) as i32,
-                    Rect::new(0, 0, ww, 10_000),
-                    msg,
-                    theme.text,
-                );
-                if let Some(tb) = self.send_wait.get(&peer) {
-                    tb.paint(&mut ctx, &theme);
+                if let Some(v) = self.send_batch_view.get(&peer) {
+                    v.paint(&mut ctx, &theme);
                 }
             }
         }
@@ -9418,6 +9666,9 @@ impl ApplicationHandler<AppEvent> for App {
                 self.xfer_progress.insert(peer, xp);
                 // 스레드 항목 진행률 — 방향 일치(발신=mine)·현재 파일 누적 바이트.
                 self.set_xfer_line(peer, sending, nbeep_ui::XferLineState::Active { done: got });
+                if sending {
+                    self.refresh_send_batch(peer); // 배치 패널 활성 행 진행률(M4-2d)
+                }
                 self.apply_xfer_view_throttled(peer); // 목록 재조립은 주기(RL-6)
                 self.redraw_conversation(peer);
                 if let Some(mid) = self.main_id {
@@ -9499,9 +9750,12 @@ impl ApplicationHandler<AppEvent> for App {
                 if let Some(xid) = self.awaiting_accept.get(&peer).copied() {
                     self.active_send.insert(peer, xid);
                 }
-                // 협상 성립 — 대기 창을 닫고 스트리밍 진행률로 넘어간다.
+                // 협상 성립(M4-2d) — 창은 닫지 않는다. 승인 타임아웃만 끄고(더는
+                // 승인 대기 아님) 배치 패널을 갱신한다(이 파일 = 전송 중). 창은
+                // 배치가 끝날 때만 닫힌다(refresh_send_batch).
                 self.awaiting_accept.remove(&peer);
-                self.close_send_wait(peer);
+                self.send_wait.remove(&peer); // 승인 타임아웃 해제
+                self.refresh_send_batch(peer);
                 self.set_xfer_line(peer, true, nbeep_ui::XferLineState::Active { done: 0 });
                 self.set_status(nbeep_core::t(nbeep_core::Msg::StPeerAccepted));
                 self.redraw_conversation(peer);
@@ -9671,6 +9925,7 @@ impl ApplicationHandler<AppEvent> for App {
                     self.send_batch.remove(&peer);
                     self.clear_xfer(peer);
                 }
+                self.refresh_send_batch(peer); // 배치 패널 갱신·종료(M4-2d)
                 self.redraw_conversation(peer);
             }
             AppEvent::XferAcked { peer, ok } => {
@@ -10494,8 +10749,8 @@ impl ApplicationHandler<AppEvent> for App {
                         "Nexa Beep — {}",
                         nbeep_core::t(nbeep_core::Msg::WinTransferWait)
                     ))
-                    .with_inner_size(winit::dpi::LogicalSize::new(360.0, 130.0))
-                    .with_resizable(false)
+                    .with_inner_size(winit::dpi::LogicalSize::new(420.0, 360.0))
+                    .with_resizable(true) // 파일 많으면 늘려 볼 수 있게(내부는 스크롤 · M4-2d)
                     .with_window_icon(self.icon.clone());
                 if let Ok(window) = el.create_window(attrs) {
                     let window = Rc::new(window);
@@ -10545,6 +10800,26 @@ impl ApplicationHandler<AppEvent> for App {
             }
             for peer in fired {
                 self.cancel_send(peer, true);
+            }
+        }
+        // 배치 패널 스크롤바 자동 숨김 틱(M4-2d).
+        {
+            let now = self.now_ms();
+            let mut redraw: Vec<PeerId> = Vec::new();
+            for (peer, v) in &mut self.send_batch_view {
+                let mut inv = Invalidations::default();
+                v.tick(now, &mut inv);
+                if !inv.is_empty() {
+                    redraw.push(*peer);
+                }
+            }
+            for peer in redraw {
+                if let Some((wid, _)) =
+                    self.windows.iter().find(|(_, e)| e.role == Role::Sending(peer))
+                {
+                    let wid = *wid;
+                    self.request_redraw(wid);
+                }
             }
         }
         // 기간 자동 승인 — 만료 확인 + **1초마다 남은 시간 갱신**(사용자 확정 08-09).
@@ -11743,6 +12018,8 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         awaiting_ack: HashMap::new(),
         close_armed: false,
         send_wait: HashMap::new(),
+        send_batch_view: HashMap::new(),
+        send_paused: HashMap::new(),
         pending_send_window: None,
         send_rate: nbeep_core::RateLimit::Auto,
         recv_rate: nbeep_core::RateLimit::Auto,
