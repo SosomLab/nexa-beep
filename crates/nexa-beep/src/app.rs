@@ -12124,6 +12124,34 @@ impl ApplicationHandler<AppEvent> for App {
                     .with_window_level(winit::window::WindowLevel::AlwaysOnTop)
                     .with_window_icon(self.icon.clone());
                 let attrs = self.modal_attrs(attrs, false); // 메인 소유(창 묶음 부상)
+                                                            // ★ 대화창 기준 중앙(08-20 사용자 확정) — 그 대화가 보이는 창
+                                                            //   (분리 모드 = 해당 Chat 창 · 단일 = 메인)의 한가운데에 띄운다.
+                let attrs = {
+                    let anchor = self
+                        .windows
+                        .iter()
+                        .find(|(_, e)| e.role == Role::Chat(peer))
+                        .map(|(_, e)| &e.window)
+                        .or_else(|| {
+                            self.main_id
+                                .and_then(|m| self.windows.get(&m))
+                                .map(|e| &e.window)
+                        });
+                    if let Some(w) = anchor {
+                        if let (Ok(pos), size) = (w.outer_position(), w.inner_size()) {
+                            let sf = w.scale_factor();
+                            let (aw, ah) =
+                                ((440.0 * sf).round() as i32, (400.0 * sf).round() as i32);
+                            let cx = pos.x + (i32::try_from(size.width).unwrap_or(0) - aw) / 2;
+                            let cy = pos.y + (i32::try_from(size.height).unwrap_or(0) - ah) / 2;
+                            attrs.with_position(winit::dpi::PhysicalPosition::new(cx, cy))
+                        } else {
+                            attrs
+                        }
+                    } else {
+                        attrs
+                    }
+                };
                 if let Ok(window) = el.create_window(attrs) {
                     let window = Rc::new(window);
                     let scale = window.scale_factor() as f32;
