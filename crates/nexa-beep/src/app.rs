@@ -2256,6 +2256,8 @@ struct App {
     /// 요청 단위 승인 잔여(M4-2e) — 승인 1회 후 이후 오퍼를 **이름+크기 대조**로
     /// 자동 수락(불일치 = 수동 폴백 · fail-closed). 소진·거절·종료 때 비운다.
     batch_approved: HashMap<PeerId, Vec<(String, u64)>>,
+    /// 수신 전송의 이름→xid(M4-2e — 수신측 ⏸▶✕가 1슬롯(active_recv)에 안 갇히게).
+    recv_xids: HashMap<PeerId, Vec<(String, nbeep_core::XferId)>>,
     /// 일시정지로 **보관 중인 발신**(M4-2e ⓐ · 상대별) — (이름, 크기, 경로, xid).
     /// 액터 parked 슬롯의 앱측 그림자: 다음 파일 펌프·재개 요청·취소·Closed
     /// 재-Offer 원료가 여기서 나온다.
@@ -9088,6 +9090,15 @@ impl App {
             None => (self.active_recv.remove(&peer), false),
         };
         let Some(xid) = xid else {
+            // ★ 활성이 없어도 **일시중지·큐가 남아 있으면 전체 취소는 성립**한다
+            //   (08-19 Windows 실기 ⑤ — Paused만 남은 상태에서 "No active"로 거부).
+            let has_send_state = self.paused_sends.contains_key(&peer)
+                || self.send_batch.contains_key(&peer)
+                || self.send_queue.get(&peer).is_some_and(|q| !q.is_empty());
+            if has_send_state {
+                self.cancel_send(peer, false); // 배치 전체 취소(정지분 CancelXfer 포함)
+                return;
+            }
             // 실패도 말한다(08-10 교훈 — 조용한 무반응은 디버깅 불가). 배너 잔존
             // 등으로 활성 xid가 없으면 왜 안 되는지 상태바로 알린다.
             self.set_status(nbeep_core::t(nbeep_core::Msg::StNoActiveXfer));
@@ -9306,7 +9317,11 @@ impl App {
                 }
             }
             (false, A::Pause) => {
-                if let Some(xid) = self.active_recv.get(&peer).copied() {
+                let xid_by_name = self
+                    .recv_xids
+                    .get(&peer)
+                    .and_then(|l| l.iter().find(|(n, _)| n == &ctl.name).map(|(_, x)| *x));
+                if let Some(xid) = xid_by_name.or_else(|| self.active_recv.get(&peer).copied()) {
                     if let Some(c) = self.conversations.get(&peer) {
                         let _ = c.out_tx.send(SessionCmd::Control(vec![
                             nbeep_core::xfer::encode_pause_req(xid, true),
@@ -9317,7 +9332,11 @@ impl App {
                 }
             }
             (false, A::Resume) => {
-                if let Some(xid) = self.active_recv.get(&peer).copied() {
+                let xid_by_name = self
+                    .recv_xids
+                    .get(&peer)
+                    .and_then(|l| l.iter().find(|(n, _)| n == &ctl.name).map(|(_, x)| *x));
+                if let Some(xid) = xid_by_name.or_else(|| self.active_recv.get(&peer).copied()) {
                     if let Some(c) = self.conversations.get(&peer) {
                         let _ = c.out_tx.send(SessionCmd::Control(vec![
                             nbeep_core::xfer::encode_pause_req(xid, false),
@@ -10441,6 +10460,16 @@ impl ApplicationHandler<AppEvent> for App {
                 use nbeep_core::{
                     judge_offer, DenyReason, OfferVerdict, RejectWhy, TrustStore as _,
                 };
+                // 수신 xid 장부(M4-2e ⑥) — 이름으로 ⏸▶✕ 대상 xid를 찾는다
+                // (active_recv 1슬롯은 배치에서 최신 파일로 덮인다).
+                {
+                    let list = self.recv_xids.entry(peer).or_default();
+                    list.retain(|(n, _)| n != &name);
+                    list.push((name.clone(), id));
+                    if list.len() > 32 {
+                        list.remove(0);
+                    }
+                }
                 // ★ 판정은 **여기 한 곳**에서만 — 신뢰·왕래 장부·설정이 전부 여기 있다.
                 // 액터는 중계만 하므로 정책이 두 벌로 갈라지지 않는다.
                 self.tick_approval();
@@ -13155,6 +13184,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         send_paused: HashMap::new(),
         send_excluded: HashMap::new(),
         paused_sends: HashMap::new(),
+        recv_xids: HashMap::new(),
         recv_manifest: HashMap::new(),
         batch_approved: HashMap::new(),
         pending_send_window: None,
