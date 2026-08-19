@@ -1194,10 +1194,21 @@ fn encode_history(lines: &[ChatLine]) -> Vec<u8> {
     for l in &keep[start..] {
         match &l.body {
             ChatBody::Text(t) => {
-                out.push(1u8);
-                out.push(u8::from(l.mine));
-                out.extend_from_slice(&l.at_ms.to_le_bytes());
-                put_str(&mut out, t.as_str());
+                // 발신자 라벨이 있으면 tag 3(그룹 수신 풍선 · 08-19 — 복원 후에도
+                // "누가 보냈나"가 남아야 한다). 없으면 종전 tag 1 그대로 —
+                // 1:1 세그먼트는 바이트 불변(전방 호환 · 구판은 미지 tag에서 멈춘다).
+                if let Some(from) = &l.from {
+                    out.push(3u8);
+                    out.push(u8::from(l.mine));
+                    out.extend_from_slice(&l.at_ms.to_le_bytes());
+                    put_str(&mut out, from.as_str());
+                    put_str(&mut out, t.as_str());
+                } else {
+                    out.push(1u8);
+                    out.push(u8::from(l.mine));
+                    out.extend_from_slice(&l.at_ms.to_le_bytes());
+                    put_str(&mut out, t.as_str());
+                }
             }
             ChatBody::Xfer(x) => {
                 let (term, msg) = match &x.state {
@@ -1248,6 +1259,25 @@ fn decode_history(bytes: &[u8]) -> Vec<ChatLine> {
                     at_ms,
                     wall_from_ms(at_ms),
                 ));
+                i = next;
+            }
+            3 => {
+                // 발신자 라벨 동반 텍스트(그룹 수신 풍선 · 08-19).
+                let Some((from, p1)) = read_str(bytes, i + 10) else {
+                    break;
+                };
+                let Some((text, next)) = read_str(bytes, p1) else {
+                    break;
+                };
+                out.push(
+                    ChatLine::text(
+                        mine,
+                        nbeep_core::sanitize_message(&text),
+                        at_ms,
+                        wall_from_ms(at_ms),
+                    )
+                    .with_from(nbeep_core::sanitize_message(&from).as_str()),
+                );
                 i = next;
             }
             2 => {
@@ -12517,6 +12547,31 @@ mod tests {
             panic!("텍스트")
         };
         assert_eq!(t0.as_str(), "안녕 hello");
+    }
+
+    /// ★ 08-19 — 그룹 수신 풍선의 **발신자 라벨(from)** 왕복(tag 3). 라벨 없는
+    /// 줄은 종전 tag 1 그대로(1:1 세그먼트 바이트 불변 — 전방 호환).
+    #[test]
+    fn history_roundtrips_group_from_label() {
+        use super::{decode_history, encode_history, wall_from_ms, ChatLine};
+        let w = wall_from_ms(1_700_000_000_000);
+        let lines = vec![
+            ChatLine::text(false, nbeep_core::sanitize_message("ㅎ22222"), 1000, w)
+                .with_from("호랭이2"),
+            ChatLine::text(true, nbeep_core::sanitize_message("내 말"), 2000, w),
+        ];
+        let back = decode_history(&encode_history(&lines));
+        assert_eq!(back.len(), 2);
+        assert_eq!(back[0].from.as_deref(), Some("호랭이2"), "발신자 라벨 보존");
+        assert_eq!(back[1].from, None, "라벨 없는 줄은 그대로");
+        // 라벨 없는 줄만 있는 인코딩 = 종전과 같은 tag 1 시작(전방 호환 근거).
+        let plain = encode_history(&[ChatLine::text(
+            true,
+            nbeep_core::sanitize_message("x"),
+            1,
+            w,
+        )]);
+        assert_eq!(plain[0], 1u8);
     }
 
     /// M2-5b — 종결 전송(Done/Failed)은 기록되고, 진행 중(Active/Waiting)은 제외.
