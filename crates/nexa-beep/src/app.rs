@@ -3328,7 +3328,11 @@ impl App {
         self.send_batch.remove(&peer);
         self.send_excluded.remove(&peer); // 배치 종료 = 제외 목록도 마감(M4-2e)
         self.send_paused.remove(&peer);
-        self.fail_pending_xfer_lines(peer, true); // 대기·정지 라인 일괄 종결(M4-2e)
+        self.fail_pending_xfer_lines(
+            peer,
+            true,
+            nbeep_core::t(nbeep_core::Msg::XferCanceled).to_string(),
+        ); // 대기·정지 라인 일괄 종결(M4-2e)
         self.close_send_wait(peer);
         self.clear_xfer(peer);
         self.set_status(if by_timeout {
@@ -3370,8 +3374,16 @@ impl App {
         if accept && ok {
             self.arm_batch_approval(peer, &name, size); // 요청 단위 승인(M4-2e)
         } else if !accept {
-            // 거절 = 요청(배치) 전체 결정(M4-2e · 08-20) — 잔여 오퍼 자동 거절.
+            // 거절 = 요청(배치) 전체 결정(M4-2e · 08-20) — 잔여 라인 즉시 종결 포함.
             self.arm_batch_decline(peer, &name, size);
+            self.fail_pending_xfer_lines(
+                peer,
+                false,
+                nbeep_core::t(nbeep_core::Msg::XferDeclined).to_string(),
+            );
+            self.recv_batch.remove(&peer);
+            self.recv_batch_sizes.remove(&peer);
+            self.clear_xfer(peer);
         }
         if let Some(got) = resumed {
             self.set_status(format!(
@@ -3578,8 +3590,18 @@ impl App {
             }
             OfferChoice::Cancel { by_timeout } => {
                 self.send_xfer_decision(peer, xid, false, nbeep_core::RejectWhy::Declined, None);
-                // 거절 = 요청(배치) 전체 결정(M4-2e · 08-20) — 잔여 오퍼 자동 거절.
+                // 거절 = 요청(배치) 전체 결정(M4-2e · 08-20) — 잔여 오퍼 자동 거절
+                // 무장(경합 안전망) + **잔여 수신 라인 즉시 종결**(발신자가 남은
+                // 파일을 다시 오퍼하지 않으므로 라인을 지금 닫아야 한다).
                 self.arm_batch_decline(peer, &name, size);
+                self.fail_pending_xfer_lines(
+                    peer,
+                    false,
+                    nbeep_core::t(nbeep_core::Msg::XferDeclined).to_string(),
+                );
+                self.recv_batch.remove(&peer);
+                self.recv_batch_sizes.remove(&peer);
+                self.clear_xfer(peer);
                 self.set_xfer_line(
                     peer,
                     false,
@@ -3732,7 +3754,11 @@ impl App {
         self.send_paused.remove(&peer);
         self.paused_sends.remove(&peer); // 상대가 이미 취소 — 개별 통지 불요
         self.resend_offers.remove(&peer);
-        self.fail_pending_xfer_lines(peer, true);
+        self.fail_pending_xfer_lines(
+            peer,
+            true,
+            nbeep_core::t(nbeep_core::Msg::XferCanceled).to_string(),
+        );
         // 수신 역할 정리.
         self.active_recv.remove(&peer);
         self.recv_xids.remove(&peer);
@@ -3744,7 +3770,11 @@ impl App {
         if let Some(sha) = self.resumed_recv.remove(&peer) {
             crate::part::remove_partial(crate::gate::CH_GUI, &sha);
         }
-        self.fail_pending_xfer_lines(peer, false);
+        self.fail_pending_xfer_lines(
+            peer,
+            false,
+            nbeep_core::t(nbeep_core::Msg::XferCanceled).to_string(),
+        );
         // 공통 마감.
         self.close_send_wait(peer);
         self.clear_xfer(peer);
@@ -3773,8 +3803,7 @@ impl App {
 
     /// 미종결 전송 라인 일괄 종결(M4-2e — 전체취소 공용): FIFO(대기·활성)는
     /// 반복 갱신으로, Paused(FIFO가 건너뜀)는 직접 순회로 Failed 처리한다.
-    fn fail_pending_xfer_lines(&mut self, peer: PeerId, mine: bool) {
-        let why = nbeep_core::t(nbeep_core::Msg::XferCanceled).to_string();
+    fn fail_pending_xfer_lines(&mut self, peer: PeerId, mine: bool, why: String) {
         while self.conversations.get_mut(&peer).is_some_and(|conv| {
             nbeep_ui::update_xfer_in(
                 &mut conv.lines,
@@ -9163,7 +9192,11 @@ impl App {
                 }
                 self.recv_paused.remove(&peer);
                 self.clear_batch_approval(peer);
-                self.fail_pending_xfer_lines(peer, false);
+                self.fail_pending_xfer_lines(
+                    peer,
+                    false,
+                    nbeep_core::t(nbeep_core::Msg::XferCanceled).to_string(),
+                );
                 self.clear_xfer(peer);
                 self.set_status(nbeep_core::t(nbeep_core::Msg::XferCanceled).to_string());
                 return;
@@ -9265,7 +9298,11 @@ impl App {
             }
             self.recv_paused.remove(&peer);
             self.clear_batch_approval(peer);
-            self.fail_pending_xfer_lines(peer, false);
+            self.fail_pending_xfer_lines(
+                peer,
+                false,
+                nbeep_core::t(nbeep_core::Msg::XferCanceled).to_string(),
+            );
             if let Some(sha) = self.resumed_recv.remove(&peer) {
                 // 수동 취소 = 의사 표시 — 보존 부분물도 함께 폐기(재개 제안 금지 · M4-10).
                 crate::part::remove_partial(crate::gate::CH_GUI, &sha);
@@ -11313,6 +11350,12 @@ impl ApplicationHandler<AppEvent> for App {
                 self.send_queue.remove(&peer);
                 self.send_batch.remove(&peer);
                 self.send_excluded.remove(&peer); // 배치 종료 = 제외 목록도 마감(M4-2e)
+                if mine {
+                    // ★ 요청 단위 종결(08-20 실기 — "둘 다 Declined"): 큐를 비우면서
+                    //   잔여 대기·정지 **라인**을 같은 사유로 닫는다. 종전엔 큐만
+                    //   버려 남은 파일 라인이 "승인 대기"로 영구 잔존했다(3.hsh).
+                    self.fail_pending_xfer_lines(peer, true, why);
+                }
                 self.clear_xfer(peer);
                 self.redraw_conversation(peer);
             }
