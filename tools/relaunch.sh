@@ -18,7 +18,13 @@ set -uo pipefail
 
 cd "$(dirname "$0")/.."
 ROOT=$(pwd)
-MULTI=${BEEP_MULTI:-/tmp/beep-multi}
+# ★ 기본 위치는 **durable**이어야 한다(08-19 진단) — 종전 /tmp/beep-multi는
+#   macOS `com.apple.tmp_cleaner`(매일 자정, /private/tmp의 3일 미접근 항목 삭제)에
+#   identity.key가 조용히 지워져 재기동마다 새 신원이 생겼다. 새 신원은 옛
+#   격리물·핀을 못 연다(sealed는 기기 신원 키에 묶임 · fail-closed). 홈 아래 숨김
+#   폴더로 옮긴다. 기존 /tmp 신원은 아래에서 1회 이관해 잃지 않는다.
+MULTI=${BEEP_MULTI:-$HOME/.nexa-beep-multi}
+LEGACY_MULTI=/tmp/beep-multi
 FRESH=0 BUILD=1 GATE=0
 for a in "$@"; do
   case "$a" in
@@ -100,6 +106,13 @@ fi
 # 신원은 '실행 파일 옆 data/'에 붙는다(포터블 규칙 DR-4) — 폴더가 곧 신원이다.
 say "③ 신원 3개 준비 ($([ "$FRESH" = 1 ] && echo '새 신원' || echo '기존 신원 유지'))"
 [ "$FRESH" = "1" ] && rm -rf "$MULTI"
+# 1회 이관 — 종전 /tmp/beep-multi 신원을 durable 위치로 옮겨 지문을 보존한다.
+# 목적지가 아직 없을 때만(경합·재이관 방지). --fresh면 새로 시작하므로 건너뛴다.
+if [ "$FRESH" != "1" ] && [ "$MULTI" != "$LEGACY_MULTI" ] && [ -d "$LEGACY_MULTI" ] && [ ! -d "$MULTI" ]; then
+  if mv "$LEGACY_MULTI" "$MULTI" 2>/dev/null; then
+    echo "   이관: $LEGACY_MULTI → $MULTI (기존 신원 보존 · /tmp 청소 회피)"
+  fi
+fi
 for d in A B; do
   mkdir -p "$MULTI/$d"
   cp -f "target/release/nexa-beep$EXE" "target/release/nbeep-imgdec$EXE" "$MULTI/$d/" # imgdec 동거 필수
@@ -136,6 +149,23 @@ else
   RUNNING=$(pgrep -f "nexa-beep --window" 2>/dev/null | wc -l | tr -d ' ')
 fi
 echo "   창 ${RUNNING:-0}개"
+
+# ── ④-b 신원 표 ───────────────────────────────────────────────────────────
+# 각 실행 파일이 '실제로 로드한' 신원을 읽기 전용으로 찍는다(--whoami는 키를
+# 생성하지 않는다). 재기동마다 지문이 유지되는지 여기서 눈으로 확인한다 —
+# 지문이 바뀌면 격리물·핀이 옛 신원에 묶여 조용히 사라진다(08-19 진단).
+if [ "$IS_WIN" != 1 ]; then
+  say "④-b 신원 (지문 · 이름 · 실행경로)"
+  for pair in "기본:./target/release/nexa-beep" "A:$MULTI/A/nexa-beep" "B:$MULTI/B/nexa-beep"; do
+    label=${pair%%:*}
+    exe=${pair#*:}
+    line=$("$exe" --whoami 2>/dev/null)
+    fp=$(echo "$line" | sed -n 's/^fingerprint = \([0-9a-f]*\).*/\1/p')
+    nm=$(echo "$line" | sed -n 's/^name        = //p')
+    ex=$(echo "$line" | sed -n 's/^exe         = //p')
+    printf '   %-4s %s  %-12s %s\n' "$label" "${fp:---------}" "${nm:-?}" "$ex"
+  done
+fi
 
 # ── ⑤ 발견 확인 ───────────────────────────────────────────────────────────
 # 셋이 서로 보이는지까지 봐야 "기동됐다"고 말할 수 있다(창만 떠도 발견이 막힐 수 있다).

@@ -11394,6 +11394,54 @@ pub(crate) fn data_dir() -> std::path::PathBuf {
     std::env::temp_dir().join("nexa-beep")
 }
 
+/// `--whoami`(진단) — 이 실행 파일이 **실제로 로드할** 신원을 **읽기 전용**으로 찍는다.
+/// 지문·표시 이름·실행 파일 경로·데이터 경로. **키를 생성하지 않는다**(재기동마다
+/// 신원이 바뀌는지 추적하려면 진단 자체가 새 키를 만들면 안 된다 — fail-closed 관찰).
+pub(crate) fn print_whoami() {
+    let exe = std::env::current_exe()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| "?".into());
+    let dir = data_dir();
+    let key_path = dir.join("identity.key");
+    // 읽기 전용 — 없거나 손상이면 그대로 보고(생성 금지).
+    let (fp, key_state) = match std::fs::read(&key_path) {
+        Ok(b) if b.len() == 68 && &b[..4] == b"NBK1" => {
+            let mut k = [0u8; 64];
+            k.copy_from_slice(&b[4..]);
+            let id = nbeep_crypto::Identity::from_key_bytes(&k);
+            (id.peer_id().short(), "로드됨")
+        }
+        Ok(_) => ("--------".into(), "⚠ 손상(길이/매직)"),
+        Err(_) => ("--------".into(), "⚠ 없음(다음 기동에 새로 생성됨)"),
+    };
+    // 표시 이름 — 부팅과 같은 규칙(settings.cfg의 profile.display_name · auto면 호스트/지문).
+    let name = {
+        let mut settings = SettingsState::with_defaults();
+        let (mut conf, doc) = nexa_conf::Store::open(dir.join("settings.cfg"), 1_000, 10_000);
+        for (k, v) in doc.pairs {
+            if !settings.set_by_name(&k, &v) {
+                conf.keep_unknown(k, v);
+            }
+        }
+        // 지문 폴백을 위해 peer가 필요 — 로드 실패 시 0으로(이름만 폴백 라벨).
+        let peer = match std::fs::read(&key_path) {
+            Ok(b) if b.len() == 68 && &b[..4] == b"NBK1" => {
+                let mut k = [0u8; 64];
+                k.copy_from_slice(&b[4..]);
+                nbeep_crypto::Identity::from_key_bytes(&k).peer_id()
+            }
+            _ => nbeep_core::PeerId::from_bytes([0u8; 32]),
+        };
+        effective_display_name(&settings, &peer)
+            .as_str()
+            .to_string()
+    };
+    println!("fingerprint = {fp}  ({key_state})");
+    println!("name        = {name}");
+    println!("exe         = {exe}");
+    println!("data        = {}", dir.display());
+}
+
 pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
     // 컨트롤 내장 문자열 = 앱 i18n 연결(08-14 라이브러리화 — 컨트롤은 t()를 모른다.
     // 공급자가 t()를 부르므로 언어 전환도 자동 반영된다).

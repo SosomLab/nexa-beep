@@ -42,6 +42,10 @@ fn main() {
         println!("nexa-beep {}", env!("CARGO_PKG_VERSION"));
         return;
     }
+    if args.iter().any(|a| a == "--whoami") {
+        app::print_whoami();
+        return;
+    }
     if let Some(pos) = args.iter().position(|a| a == "--quarantine-demo") {
         let Some(path) = args.get(pos + 1) else {
             eprintln!("--quarantine-demo <파일> 필요");
