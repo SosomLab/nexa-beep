@@ -131,6 +131,13 @@ pub enum Msg {
     /// 전송 대기 시간(승인/응답 자동 취소).
     XferTimeout,
     XferTimeoutDesc,
+    /// 정지 방치 자동 취소 시간 설정(M4-2e ⓓ · 08-20).
+    XferAutoCancel,
+    XferAutoCancelDesc,
+    Min1,
+    Min2,
+    Min5,
+    Min10,
     Sec30,
     Sec60,
     Sec120,
@@ -489,6 +496,8 @@ pub enum Msg {
     XferPeerCanceledAll,
     /// 10분 정지 방치 자동 전체 취소(M4-2e ⓓ · 08-19).
     XferStaleAutoCancel,
+    /// 자동 취소 카운트다운 표시("{} 후 자동 취소" — M4-2e ⓓ · 08-20).
+    XferAutoCancelIn,
     /// 발신 원본 읽기 실패로 중단(M4-2e i18n 08-19).
     XferSrcReadFail,
     /// 전송 중 원본 변경 감지로 중단(무결성 가드).
@@ -826,6 +835,7 @@ impl Msg {
             Msg::XferCancelAll => ["Cancel all", "전체취소", "全部取消", "全て取消"],
             Msg::XferPeerCanceledAll => ["Peer canceled all", "상대가 전체 취소", "对方已全部取消", "相手が全てキャンセル"],
             Msg::XferStaleAutoCancel => ["Paused over 10 min — canceled all", "10분 이상 일시중지 방치 — 전체 취소", "暂停超过10分钟 — 已全部取消", "10分以上一時停止 — 全て取消"],
+            Msg::XferAutoCancelIn => ["auto-cancel in {}", "{} 후 자동 취소", "{} 后自动取消", "{} 後に自動取消"],
             Msg::XferPeerCanceled => [
                 "Peer canceled",
                 "상대가 취소",
@@ -1242,6 +1252,22 @@ impl Msg {
                 "批准窗口与响应等待超过此时间后自动取消",
                 "承認ウィンドウと応答待ちはこの時間で自動キャンセル",
             ],
+            Msg::XferAutoCancel => [
+                "Paused auto-cancel",
+                "일시중지 자동 취소 시간",
+                "暂停自动取消时间",
+                "一時停止の自動取消時間",
+            ],
+            Msg::XferAutoCancelDesc => [
+                "Cancel the whole batch on both sides if paused transfers sit untouched this long",
+                "일시중지 전송이 이 시간 동안 방치되면 양쪽 모두 전체 취소됩니다",
+                "暂停的传输闲置超过此时间后双方全部取消",
+                "一時停止の転送がこの時間放置されると両側で全て取消",
+            ],
+            Msg::Min1 => ["1m", "1분", "1分钟", "1分"],
+            Msg::Min2 => ["2m", "2분", "2分钟", "2分"],
+            Msg::Min5 => ["5m", "5분", "5分钟", "5分"],
+            Msg::Min10 => ["10m", "10분", "10分钟", "10分"],
             Msg::Sec30 => ["30s", "30초", "30秒", "30秒"],
             Msg::Sec60 => ["60s", "60초", "60秒", "60秒"],
             Msg::Sec120 => ["2m", "2분", "2分钟", "2分"],

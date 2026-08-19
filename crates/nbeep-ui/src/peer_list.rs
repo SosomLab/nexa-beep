@@ -141,6 +141,9 @@ pub struct XferProgress {
     pub total_files: u32,
     /// 보내는 중인가(false = 받는 중) — 막대 색을 가른다.
     pub sending: bool,
+    /// 10분 정지 방치 자동 취소까지 남은 ms(M4-2e ⓓ — 정지만 남아 카운트다운이
+    /// 실제 진행 중일 때만 Some · 배너 우측에 "N:SS 후 자동 취소"로 표시).
+    pub auto_cancel_ms: Option<u64>,
 }
 
 impl XferProgress {

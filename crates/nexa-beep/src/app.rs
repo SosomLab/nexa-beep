@@ -2282,9 +2282,12 @@ struct App {
     recv_batch: HashMap<PeerId, (u32, u32, u64, u64)>,
     /// 수신 배치 파일 크기 장부(manifest 비제외분 — 완료 시 크기 가산용).
     recv_batch_sizes: HashMap<PeerId, Vec<(String, u64)>>,
-    /// 정지 잔존의 최근 상태 변화 시각(M4-2e ⓓ) — 10분 넘게 그대로면 양쪽 자동
+    /// 정지 잔존의 최근 상태 변화 시각(M4-2e ⓓ) — 한도 넘게 그대로면 양쪽 자동
     /// 전체 취소(cancel → CANCEL_ALL 전파). 활동(진행·완료·정지/재개)마다 갱신.
     xfer_pause_since: HashMap<PeerId, u64>,
+    /// 정지 방치 자동 취소 한도 ms(설정 `xfer.auto_cancel_min` · 기본 2분 —
+    /// 사용자 확정 08-20 · 유효 범위 1~10분).
+    auto_cancel_limit_ms: u64,
     /// 일시정지로 **보관 중인 발신**(M4-2e ⓐ · 상대별) — (이름, 크기, 경로, xid).
     /// 액터 parked 슬롯의 앱측 그림자: 다음 파일 펌프·재개 요청·취소·Closed
     /// 재-Offer 원료가 여기서 나온다.
@@ -7149,6 +7152,9 @@ impl App {
         if let Ok(v) = self.settings.get("xfer.timeout_sec").parse::<u64>() {
             self.wait_timeout_sec = v.clamp(5, 3600);
         }
+        if let Ok(v) = self.settings.get("xfer.auto_cancel_min").parse::<u64>() {
+            self.auto_cancel_limit_ms = v.clamp(1, 10) * 60_000;
+        }
         // 트레이 상주(M3-2a · Windows — 비지원 OS는 None): 아이콘 = 내 아바타 ·
         // 이벤트는 프록시로 메인에 복귀(좌클릭/열기·종료).
         if self.tray.is_none() {
@@ -7398,6 +7404,11 @@ impl App {
                 "xfer.timeout_sec" => {
                     if let Ok(v) = value.parse::<u64>() {
                         self.wait_timeout_sec = v.clamp(5, 3600);
+                    }
+                }
+                "xfer.auto_cancel_min" => {
+                    if let Ok(v) = value.parse::<u64>() {
+                        self.auto_cancel_limit_ms = v.clamp(1, 10) * 60_000;
                     }
                 }
                 "xfer.approval_window" => {
@@ -10640,6 +10651,7 @@ impl ApplicationHandler<AppEvent> for App {
                         done_files: (done_f + 1).min(total_f.max(1)),
                         total_files: total_f.max(1),
                         sending,
+                        auto_cancel_ms: None, // 진행 중 = 카운트다운 아님(ⓓ 틱이 채움)
                     }
                 } else {
                     nbeep_ui::XferProgress {
@@ -10648,6 +10660,7 @@ impl ApplicationHandler<AppEvent> for App {
                         done_files: prev.map_or(1, |p| p.done_files.max(1)),
                         total_files: prev.map_or(1, |p| p.total_files.max(1)),
                         sending,
+                        auto_cancel_ms: None,
                     }
                 };
                 self.xfer_progress.insert(peer, xp);
@@ -11113,6 +11126,7 @@ impl ApplicationHandler<AppEvent> for App {
                             done_files: done_f,
                             total_files: total_f,
                             sending: true,
+                            auto_cancel_ms: None,
                         },
                     );
                     self.apply_xfer_view(peer);
@@ -11835,21 +11849,50 @@ impl ApplicationHandler<AppEvent> for App {
         if self.conf.sched.tick(Instant::now()) {
             self.conf_save(false);
         }
-        // 정지 방치 자동 취소(M4-2e ⓓ · 사용자 확정 08-19) — 최종 상태 변화
-        // 이후 10분 넘게 정지가 그대로면 **양쪽 모두 전체 취소**(cancel 경로가
-        // CANCEL_ALL을 전파 → 상대도 자기 로컬 루틴 실행). 받은 파일은 유지.
+        // 정지 방치 자동 취소(M4-2e ⓓ · 사용자 확정 08-19 — 한도는 설정
+        // `xfer.auto_cancel_min` · 기본 2분) — 최종 상태 변화 이후 한도 넘게
+        // 정지가 그대로면 **양쪽 모두 전체 취소**(cancel 경로가 CANCEL_ALL을
+        // 전파 → 상대도 자기 로컬 루틴 실행). 받은 파일은 유지.
         {
             let now = self.now_ms();
+            let limit = self.auto_cancel_limit_ms;
             let stale: Vec<PeerId> = self
                 .xfer_pause_since
                 .iter()
-                .filter(|(_, &t)| now.saturating_sub(t) > 600_000)
+                .filter(|(_, &t)| now.saturating_sub(t) > limit)
                 .map(|(p, _)| *p)
                 .collect();
             for peer in stale {
                 self.xfer_pause_since.remove(&peer);
                 self.set_status(nbeep_core::t(nbeep_core::Msg::XferStaleAutoCancel).to_string());
                 self.cancel_active_xfer(peer);
+            }
+            // 배너 카운트다운(사용자 확정 08-20 — 배너 우측 텍스트): 정지만 남아
+            // 카운트다운이 실제 진행 중일 때만 남은 시간을 싣고, 초가 바뀔 때만
+            // 다시 그린다(1초 틱 — 활성 전송 중엔 진행 이벤트가 타이머를 계속
+            // 리셋하므로 표시하지 않는다).
+            let peers: Vec<PeerId> = self.xfer_progress.keys().copied().collect();
+            for peer in peers {
+                let counting =
+                    !self.active_send.contains_key(&peer) && !self.active_recv.contains_key(&peer);
+                let desired = self
+                    .xfer_pause_since
+                    .get(&peer)
+                    .filter(|_| counting)
+                    .map(|&t| limit.saturating_sub(now.saturating_sub(t)));
+                let Some(xp) = self.xfer_progress.get_mut(&peer) else {
+                    continue;
+                };
+                let changed = match (xp.auto_cancel_ms, desired) {
+                    (None, None) => false,
+                    (Some(a), Some(b)) => a / 1000 != b / 1000,
+                    _ => true,
+                };
+                if changed {
+                    xp.auto_cancel_ms = desired;
+                    self.apply_xfer_view(peer);
+                    self.redraw_conversation(peer);
+                }
             }
         }
         // 타입어헤드 유효시간 경과 → 버퍼 초기화·HUD 자동 숨김(마지막 입력 후 N초).
@@ -13231,6 +13274,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         recv_batch: HashMap::new(),
         recv_batch_sizes: HashMap::new(),
         xfer_pause_since: HashMap::new(),
+        auto_cancel_limit_ms: 120_000,
         recv_manifest: HashMap::new(),
         batch_approved: HashMap::new(),
         send_rate: nbeep_core::RateLimit::Auto,
