@@ -2042,6 +2042,12 @@ struct App {
     pending_group_files: HashMap<PeerId, Vec<(nbeep_core::group::GroupId, std::path::PathBuf)>>,
     /// 미연결 구성원에게 이어 보낼 그룹 제어 프레임(초대·명부 — M5-1g).
     pending_invites: HashMap<PeerId, Vec<Vec<u8>>>,
+    /// 내가 소유한 방에서 **수락을 확인한 구성원**(uid → 수락자 집합 · 08-19).
+    /// 초대는 세션 미성립·네트워크 churn으로 첫 전달이 실패할 수 있다(소유자가
+    /// 대화하면 세션 성립 → `flush_group_sends` resync가 재전달). 이 집합으로
+    /// 구성원 목록에 **"초대 대기"** 를 표시해 미수락(=미전달 포함)을 눈에 보이게
+    /// 한다. 재시작으로 비워져도 재초대 수신 측이 Accept를 재통지해 자가 치유한다.
+    group_accepts: HashMap<nbeep_core::GroupUid, std::collections::HashSet<PeerId>>,
     /// 방 미확인 메시지 수(M5-1g — 그룹판 unread).
     gunread: HashMap<nbeep_core::group::GroupId, u32>,
     /// 열린 선택 모달의 문맥(초대 수락/거절 등) — Role::Alert 결과 라우팅.
@@ -5219,6 +5225,10 @@ impl App {
         // 판정·같은 팔레트**(08-15 사용자 확정 "아바타 옆 점과 색을 맞춰줘").
         let mut members: Vec<PeerId> = s.roster.members.clone();
         members.sort_by_key(|m| *m != s.roster.owner);
+        // 내가 소유자면 미수락 구성원에 "초대 대기"를 붙인다(08-19 — 첫 전달 실패를
+        // 눈에 보이게). 수락은 `group_accepts`가 기록(재초대 시 자가 치유).
+        let owner_view = s.roster.owner == me;
+        let accepted = self.group_accepts.get(&s.roster.uid);
         let lines: Vec<(LinkState, String)> = members
             .iter()
             .map(|m| {
@@ -5245,6 +5255,14 @@ impl App {
                 }
                 if *m == s.roster.owner {
                     descs.push(nbeep_core::t(nbeep_core::Msg::MemberOwner));
+                }
+                // 소유자 시점 · 나·소유자 아닌 구성원이 아직 수락 안 했으면 초대 대기.
+                if owner_view
+                    && *m != me
+                    && *m != s.roster.owner
+                    && !accepted.is_some_and(|a| a.contains(m))
+                {
+                    descs.push(nbeep_core::t(nbeep_core::Msg::MemberPending));
                 }
                 if !descs.is_empty() {
                     line.push_str(" · ");
@@ -5281,6 +5299,30 @@ impl App {
     /// 내용은 열리는 순간 계산한다(그 사이 상태 변화 반영 — "확인할 때"의 상태).
     fn open_group_members(&mut self, gid: nbeep_core::group::GroupId) {
         self.pending_members = Some(gid);
+        self.nudge_pending_members(gid); // "누가 들어왔나" 확인 = 미전달 재시도 계기
+    }
+
+    /// 미수락 구성원에게 재연결을 시도한다(08-19) — 소유자만. 세션이 성립하면
+    /// [`Self::flush_group_sends`]의 resync가 초대를 재전달한다(첫 전달이 세션
+    /// 미성립·네트워크 churn으로 실패한 경우의 명시적 복구 계기 · 저churn = 사용자가
+    /// 구성원 목록을 열 때만). 이미 연결된·수락한 구성원은 건드리지 않는다.
+    fn nudge_pending_members(&mut self, gid: nbeep_core::group::GroupId) {
+        let me = self.identity.peer_id();
+        let (uid, members) = match self.groups.shared_by_id(gid) {
+            Some(s) if s.roster.owner == me => (s.roster.uid, s.roster.members.clone()),
+            _ => return, // 소유자만 재전달 주체(ADR §4 — 명부 단일 진실)
+        };
+        let accepted = self.group_accepts.get(&uid).cloned().unwrap_or_default();
+        let pending: Vec<PeerId> = members
+            .into_iter()
+            .filter(|m| {
+                *m != me && !accepted.contains(m) && !self.conversations.contains_key(m)
+            })
+            .collect();
+        for m in pending {
+            self.reconnect.remove(&m); // 백오프 리셋 = 즉시 재시도
+            self.start_connect(m, true); // 자동(창 안 열음) · ConnectLatch가 중복 거른다
+        }
     }
 
     /// 구성원 목록 모달 실제 열기(08-15) — 알림 모달 창 재사용 + 상태 목록 모드.
@@ -8001,6 +8043,11 @@ impl App {
                             self.connect_group_members(uid);
                             self.refresh_and_redraw();
                         }
+                        // ★ 수락 재통지(08-19 자가 치유) — 이미 수락한 방의 재초대(resync)에
+                        //   Accept를 되보낸다. 소유자가 재시작으로 수락 기록을 잃어도
+                        //   구성원 목록에서 나를 "초대 대기"로 오인하지 않게 한다(멱등).
+                        let ack = nbeep_core::SGroupMsg::Accept { uid }.encode();
+                        self.send_group_frames(peer, vec![ack]);
                         return; // 같은 버전 재송 = 조용히 무시(멱등)
                     }
                 }
@@ -8031,8 +8078,10 @@ impl App {
                 if self
                     .groups
                     .shared_by_uid(uid)
-                    .is_some_and(|s| s.roster.owner == me)
+                    .is_some_and(|s| s.roster.owner == me && s.roster.has_member(peer))
                 {
+                    // 수락 기록 — 구성원 목록의 "초대 대기"를 지운다(08-19).
+                    self.group_accepts.entry(uid).or_default().insert(peer);
                     self.status =
                         format!("{} 님이 그룹 초대를 수락했습니다", self.peer_title(peer));
                     self.refresh_and_redraw();
@@ -11959,6 +12008,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         pending_group_sends: HashMap::new(),
         pending_group_files: HashMap::new(),
         pending_invites: HashMap::new(),
+        group_accepts: HashMap::new(),
         gunread: HashMap::new(),
         alert_ctx: None,
         pending_members: None,
