@@ -190,6 +190,10 @@ for d in A B; do cp target/release/{nexa-beep,nbeep-imgdec} $S/$d/; done   # img
 순으로 고른다([app.rs](../crates/nexa-beep/src/app.rs)). 폴더를 나누면 ①에서 갈리므로
 **신원 키·핀·그룹·설정이 통째로 분리**된다.
 
+> ⚠️ **③(임시 폴더)은 제품에도 남아 있는 같은 함정이다** — ①②가 모두 쓰기 불가면 앱이 스스로
+> 임시 폴더를 고르는데, 그 자리는 위 경고대로 `identity.key`가 지워지는 곳이다(신원이 조용히
+> 바뀐다). 실기 폴더만 옮겨서는 절반만 막은 것 → 정정 대상 **[TODO M5-4e](TODO.md)**.
+
 | 파일 | 무엇 |
 |---|---|
 | `data/identity.key` | 신원(= `PeerId`) — 이게 갈려서 서로 남이 된다 |

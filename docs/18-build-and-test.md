@@ -18,6 +18,13 @@
 **기본은 신원 보존**이고, 마지막에 **상호 발견까지 확인**한 뒤에야 성공으로 친다
 (창만 떠도 발견이 막히면 아무것도 못 한다). 3신원의 근거는 [33 §2](33-group-chat-test-guide.md).
 
+> ⚠️ **A·B 신원 폴더 = `$HOME/.nexa-beep-multi`**(durable · `BEEP_MULTI`로 덮어쓰기 가능 ·
+> Windows는 `%USERPROFILE%\.nexa-beep-multi`). **`/tmp`·`%TEMP%` 금지** — macOS
+> `com.apple.tmp_cleaner`(매일 자정 · 3일 미접근 삭제)가 `identity.key`를 지워 **재기동마다
+> 새 신원**이 생기고, 이전 키에 sealed된 격리물·핀을 못 연다(08-19 진단 · [26 §3-4](26-run-and-manual-test.md)).
+> 그 실행 파일이 **실제로 로드할** 신원 확인 = **`nexa-beep --whoami`**(지문·이름·exe·data 경로 ·
+> 읽기 전용 = 키를 만들지 않는다). 스크립트가 기존 `/tmp/beep-multi`를 1회 자동 이관한다.
+
 ## 1. 명령 (SSOT) — Rust 워크스페이스([07](07-adr-0001-stack.md))
 
 > 로컬·CI 동일. `rust-toolchain.toml`이 stable·컴포넌트(rustfmt/clippy)·4타깃을 자동 고정한다.

@@ -271,4 +271,4 @@ flowchart TD
 
 ---
 
-> ~~다음 단계~~ → **구현 완료(08-11 · M3-15)**: ⓐ `SettingsState`(레지스트리 값 맵)에 저장을 태웠다 — `known_pairs()`(키 정렬 스냅샷)·`set_by_name()`(관용 검증 — 무효 값은 무시=기본값 유지) ⓑ `SaveScheduler`는 `nexa-conf` 자체 구현(재사용 크레이트라 nbeep-core `Debouncer`를 물 수 없다 — 같은 개념) ⓒ 종료 flush는 winit `exiting` 훅 ⓓ 부팅 반영 `apply_boot_settings`(테마·타입어헤드·툴바·전송 정책 — ★ **`timed` 승인은 복원하지 않고 manual로 정규화**: 시작 시각 없이 되살리면 재시작마다 기간이 연장된다) ⓔ 경로 = 실행 파일 옆 `data/` 쓰기 가능(포터블) → 사용자 폴더 → 임시 폴더. 실측: 부팅 왕복에서 전체 스냅샷 35키 · 미지 키 보존 · 손상 파일 정상 기동.
+> ~~다음 단계~~ → **구현 완료(08-11 · M3-15)**: ⓐ `SettingsState`(레지스트리 값 맵)에 저장을 태웠다 — `known_pairs()`(키 정렬 스냅샷)·`set_by_name()`(관용 검증 — 무효 값은 무시=기본값 유지) ⓑ `SaveScheduler`는 `nexa-conf` 자체 구현(재사용 크레이트라 nbeep-core `Debouncer`를 물 수 없다 — 같은 개념) ⓒ 종료 flush는 winit `exiting` 훅 ⓓ 부팅 반영 `apply_boot_settings`(테마·타입어헤드·툴바·전송 정책 — ★ **`timed` 승인은 복원하지 않고 manual로 정규화**: 시작 시각 없이 되살리면 재시작마다 기간이 연장된다) ⓔ 경로 = 실행 파일 옆 `data/` 쓰기 가능(포터블) → 사용자 폴더 → 임시 폴더(⚠️ **08-19 — 마지막 칸은 안전하지 않다**: macOS `tmp_cleaner`가 그 아래 `identity.key`를 지워 신원이 조용히 바뀐다 → [TODO M5-4e](TODO.md)). 실측: 부팅 왕복에서 전체 스냅샷 35키 · 미지 키 보존 · 손상 파일 정상 기동.
