@@ -3407,11 +3407,32 @@ impl App {
         let secret = self.identity.wrap_secret();
         let resume_pct = crate::part::partial_len(crate::gate::CH_GUI, &secret, sha, *size)
             .map(|got| u8::try_from(got * 100 / (*size).max(1)).unwrap_or(99));
+        // ★ 요청 단위 승인(M4-2e · 08-20 사용자 확정 재요청) — 창의 파일명·크기를
+        //   **첫 파일이 아니라 요청 전체**로: manifest(비제외분)가 원료다.
+        //   파일명 = ", " 구분 순수 파일명 목록(위젯이 폭 실측 줄바꿈) ·
+        //   크기 = 총합 · 파일 수 줄 추가. manifest 미도착(구버전 발신)이면 단건.
+        let (bname, bsize, bcount) = self
+            .recv_manifest
+            .get(&peer)
+            .map(|m| {
+                let inc: Vec<&(String, u64, bool)> = m.iter().filter(|e| !e.2).collect();
+                (
+                    inc.iter()
+                        .map(|e| e.0.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    inc.iter().map(|e| e.1).sum::<u64>(),
+                    inc.len(),
+                )
+            })
+            .filter(|(_, _, n)| *n >= 1)
+            .unwrap_or_else(|| (name.clone(), *size, 1));
         Some(nbeep_ui::OfferInfo {
             sender,
             when: nbeep_plat::clock::local_hms(unix_now()).hms(),
-            name: name.clone(),
-            size: *size,
+            name: bname,
+            size: bsize,
+            count: bcount,
             queued: q.len(),
             downgrade_note,
             resume_pct,
@@ -11985,7 +12006,7 @@ impl ApplicationHandler<AppEvent> for App {
                         "Nexa Beep — {}",
                         nbeep_core::t(nbeep_core::Msg::WinFileRequest)
                     ))
-                    .with_inner_size(winit::dpi::LogicalSize::new(440.0, 300.0))
+                    .with_inner_size(winit::dpi::LogicalSize::new(440.0, 360.0))
                     .with_resizable(false)
                     // ★ 최상위(사용자 확정 08-19) — 수신 승인은 타임아웃이 걸린
                     //   **행동 요구** 창이라 다른 창에 묻히면 자동 거절로 흘러간다.

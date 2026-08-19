@@ -27,8 +27,10 @@ pub struct OfferInfo {
     pub when: String,
     /// 파일 이름(원본 그대로 — 실체화 시 정규화된다).
     pub name: String,
-    /// 크기(바이트).
+    /// 크기(바이트) — **요청 전체 총합**(M4-2e 요청 단위 승인 · 08-20).
     pub size: u64,
+    /// 요청의 파일 수(1 = 단건 — 목록·총합은 manifest가 원료).
+    pub count: usize,
     /// 같은 상대에게서 대기 중인 제안 수(1이면 표시하지 않는다).
     pub queued: usize,
     /// 자동 승인 강등 안내(08-16 — 자동 승인 중인데 이 창이 뜬 이유를 설명:
@@ -250,6 +252,7 @@ impl Widget for OfferPromptWidget {
         let rows = [
             (t(Msg::OfferSender), self.info.sender.clone()),
             (t(Msg::OfferWhen), self.info.when.clone()),
+            (t(Msg::OfferCount), self.info.count.to_string()),
             (t(Msg::OfferName), self.info.name.clone()),
             (t(Msg::OfferSize), human(self.info.size)),
         ];
@@ -258,7 +261,35 @@ impl Widget for OfferPromptWidget {
             let sh = ctx.text_height();
             ctx.text(b.x + pad, y, b, k, theme.text_dim);
             ctx.select_font(FontSlot::Base, false);
-            ctx.text(b.x + pad + label_w, y - self.s(2), b, &v, theme.text);
+            // 파일명 줄은 목록(", " 구분)이 길 수 있다 — 폭 실측 줄바꿈, 최대
+            // 3줄 + 말줄임(요청 단위 승인 · 08-20). 다른 행은 종전 한 줄.
+            let vw = b.w - pad * 2 - label_w;
+            let mut lines: Vec<String> = Vec::new();
+            let mut cur = String::new();
+            for piece in v.split_inclusive(", ") {
+                let cand = format!("{cur}{piece}");
+                if !cur.is_empty() && ctx.text_width(&cand) > vw {
+                    lines.push(std::mem::take(&mut cur));
+                    cur = piece.to_string();
+                } else {
+                    cur = cand;
+                }
+            }
+            if !cur.is_empty() {
+                lines.push(cur);
+            }
+            if lines.len() > 3 {
+                lines.truncate(3);
+                if let Some(last) = lines.last_mut() {
+                    last.push('…');
+                }
+            }
+            for (li, line) in lines.iter().enumerate() {
+                ctx.text(b.x + pad + label_w, y - self.s(2), b, line, theme.text);
+                if li + 1 < lines.len() {
+                    y += sh + self.s(2);
+                }
+            }
             y += sh + self.s(10);
         }
 
@@ -311,6 +342,7 @@ mod tests {
             name: "보고서.pdf".into(),
             size: 1024 * 1024,
             queued: 1,
+            count: 1,
             downgrade_note: String::new(),
             resume_pct: None,
         }
