@@ -32,11 +32,20 @@ description: 실행 중인 nexa-beep을 전부 종료하고 재빌드한 뒤 3�
 
 ## 결과 보고
 
-실행 후 사용자에게 **발견된 3신원의 지문·이름**을 그대로 보여준다. 창이 떴다는 것만으로는
-부족하다 — 발견이 막히면 아무것도 못 한다.
+실행 후 사용자에게 **3신원의 지문·표시 이름·실행 경로**를 그대로 보여준다(스크립트 ④-b
+`--whoami` 표 + ⑤ 발견). 창이 떴다는 것만으로는 부족하다 — 발견이 막히면 아무것도 못 한다.
+**지문이 지난 재기동과 다르면 알린다** — 신원이 바뀐 것이고, 옛 격리물·핀이 조용히 사라진다.
 
 실패(창 3개 미만 또는 발견 3명 미만)면 스크립트가 exit 1과 함께 로그 경로를 알려준다:
-`/tmp/beep-base.log` · `/tmp/beep-multi/{A,B}/out.log`.
+`/tmp/beep-base.log` · `$HOME/.nexa-beep-multi/{A,B}/out.log`.
+
+## ★ 신원 폴더는 `/tmp`에 두지 않는다
+
+A·B 신원 폴더 기본값 = **`$HOME/.nexa-beep-multi`**(durable · `BEEP_MULTI`로 덮어쓰기 가능).
+종전 `/tmp/beep-multi`는 macOS `com.apple.tmp_cleaner`(매일 자정 · 3일 미접근 삭제)가
+`identity.key`를 지워 **재기동마다 새 신원**이 생겼고, 새 신원은 옛 격리물·핀을 못 열었다
+(sealed = 기기 신원 키에 묶임 · fail-closed). 스크립트가 기존 `/tmp/beep-multi`를 durable
+위치로 **1회 자동 이관**한다(지문 보존). 로그(`/tmp/beep-base.log`)만 일회성이라 /tmp에 둔다.
 
 ## 배경
 
@@ -45,3 +54,4 @@ description: 실행 중인 nexa-beep을 전부 종료하고 재빌드한 뒤 3�
 - 3명인 이유 = 그룹은 **3명 이상**이어야 1:1과 구분된다 —
   [33 §2](../../../docs/33-group-chat-test-guide.md).
 - `nbeep-imgdec`를 함께 복사하는 이유 = 없으면 **경고 없이** 아바타·이미지만 죽는다.
+- 각 실행 파일의 실제 신원 확인 = **`nexa-beep --whoami`**(지문·이름·exe·data · 읽기 전용).

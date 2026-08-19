@@ -101,11 +101,17 @@ cd <저장소 루트>
 ./target/release/nexa-beep --window --live &
 
 # ② ③ 추가 신원 2개 — 같은 exe, 폴더만 분리
-S=/tmp/beep-multi; rm -rf $S; mkdir -p $S/A $S/B
+# ★ /tmp 금지 — macOS tmp_cleaner가 identity.key를 지워 신원이 바뀐다(아래 경고).
+S=$HOME/.nexa-beep-multi; mkdir -p $S/A $S/B
 for d in A B; do cp target/release/nexa-beep target/release/nbeep-imgdec $S/$d/; done
 "$S/A/nexa-beep" --window --live &
 "$S/B/nexa-beep" --window --live &
 ```
+
+> ⚠️ **신원 폴더를 `/tmp`(= `/private/tmp`)에 두면 안 된다**(08-19 진단). macOS
+> `com.apple.tmp_cleaner`(매일 자정 · 3일 미접근 삭제)가 `identity.key`를 지워 다음 기동에
+> **새 신원**이 생기고(지문 변경), 이전 신원에 sealed된 격리물·핀을 못 열게 된다(크립토
+> 셰레딩). 홈 아래 durable 폴더를 쓴다. 지문 확인 = `nexa-beep --whoami`(읽기 전용).
 
 #### Windows (PowerShell)
 
@@ -116,8 +122,8 @@ Set-Location <저장소 루트>
 Start-Process .\target\release\nexa-beep.exe -ArgumentList '--window','--live'
 
 # ② ③ 추가 신원 2개 — 같은 exe, 폴더만 분리
-$S = "$env:TEMP\beep-multi"
-Remove-Item $S -Recurse -Force -ErrorAction SilentlyContinue
+# ★ %TEMP% 대신 홈 아래 durable 폴더(Storage Sense가 임시 폴더를 비울 수 있다).
+$S = "$env:USERPROFILE\.nexa-beep-multi"
 'A','B' | ForEach-Object {
     New-Item "$S\$_" -ItemType Directory -Force | Out-Null
     Copy-Item .\target\release\nexa-beep.exe,.\target\release\nbeep-imgdec.exe "$S\$_"
@@ -164,14 +170,14 @@ peer=d2cf5814 name=beep-d2cf5814      ← B
 **정리**
 
 ```bash
-# macOS · Linux
-pkill -f nexa-beep; rm -rf /tmp/beep-multi
+# macOS · Linux (rm은 A·B 신원을 버린다 — 다음 테스트를 새 신원으로 시작할 때만)
+pkill -f nexa-beep; rm -rf $HOME/.nexa-beep-multi
 ```
 
 ```powershell
 # Windows
 Get-Process nexa-beep -ErrorAction SilentlyContinue | Stop-Process
-Remove-Item "$env:TEMP\beep-multi" -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item "$env:USERPROFILE\.nexa-beep-multi" -Recurse -Force -ErrorAction SilentlyContinue
 ```
 
 ⚠️ 기본 신원을 초기화하려면 `target/release/data/`(Windows는 `target\release\data\`)를 지운다 —

@@ -5,6 +5,10 @@
 
 ---
 
+## 2026-08-19
+
+- ★**격리함 빈 목록 진단 → 신원 폴더 durable 이전 · `--whoami`**(main · `cdda26d`): 격리물 미표시 = 그 `.beepq`가 **이전 신원 키에 sealed**라 현재 키로 0/8 개봉 실패(설계상 정상). 근본 = data 폴더가 `/tmp`에 있어 macOS `com.apple.tmp_cleaner`(매일 자정·3일 미접근)가 `identity.key` 삭제 → 새 신원 생성(지문 변경). 조치 = `--whoami`(실제 로드 신원 읽기 전용 출력) · relaunch 기본 `$HOME/.nexa-beep-multi`(durable · 기존 /tmp 1회 이관) · 문서 반영(26·33·SKILL). 상세 [journal/2026-08-19.md](journal/2026-08-19.md).
+
 ## 2026-08-18
 
 - ★**격리함 점진 로딩 — 목록 즉시·행별 검증 게이트**(main · `b66edfc`): 512MiB 파일이 목록에 안 뜨던 것(스캔이 항목마다 페이로드 전체 개봉) → **메타 사이드카**(`{hex}.beepq.meta` 봉인 · `SEAL_QMETA` · 스캔은 봉투만 읽어 즉시 목록 · full-open 폴백) + **행별 백그라운드 검증**(`QRow.ready`·크기 오름차순·`QVerified`) + **미검증 승인 차단** + 수신 재스캔 훅. 자동 검증 3종(사이드카 왕복·다른 신원 fail-closed·ready 게이트). 698 green. 상세 [journal/2026-08-18.md](journal/2026-08-18.md).

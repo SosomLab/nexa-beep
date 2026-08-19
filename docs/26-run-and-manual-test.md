@@ -166,12 +166,21 @@ GUI에서는 `⌘/Ctrl+K` → 주소 입력 → Enter. **GUI는 포트를 생략
 **같은 실행 파일을 폴더만 나눠 복사하면 각자 다른 신원이 된다.**
 
 ```bash
-S=/tmp/beep-multi; rm -rf $S; mkdir -p $S/A $S/B
+S=$HOME/.nexa-beep-multi; mkdir -p $S/A $S/B          # ★ /tmp 금지(아래 경고)
 for d in A B; do cp target/release/{nexa-beep,nbeep-imgdec} $S/$d/; done   # imgdec 동거(§1-3)
 
 ( cd $S/A && ./nexa-beep --window --live ) &      # 신원 A
 ( cd $S/B && ./nexa-beep --window --live ) &      # 신원 B
 ```
+
+> ⚠️ **data 폴더를 `/tmp`(= `/private/tmp`) 아래에 두지 말 것**(08-19 실기 진단). macOS
+> `com.apple.tmp_cleaner`(`/usr/libexec/tmp_cleaner` · **매일 자정 · 3일 미접근 항목 삭제**)가
+> `identity.key`를 조용히 지워, 다음 기동에 **새 신원이 생성**된다(지문이 바뀐다). 그러면
+> 이전 신원 키에 sealed된 **격리물·핀을 현재 키로 못 연다**(도메인 분리·fail-closed = 크립토
+> 셰레딩 → 격리함이 빈 목록으로 보인다). **홈 아래 durable 폴더**(`$HOME/.nexa-beep-multi`)를
+> 쓴다. 각 실행 파일이 실제 로드할 신원은 **`nexa-beep --whoami`**(지문·이름·exe·data 경로 ·
+> 읽기 전용 = 키 생성 안 함)로 확인한다. `relaunch.sh`는 이 durable 경로가 기본이며 기존
+> `/tmp/beep-multi`를 1회 자동 이관한다.
 
 두 창이 뜨고 **서로를 발견해 목록에 잡는다**(같은 호스트 = 멀티캐스트 루프백 · §3-2와 같은 원리).
 
