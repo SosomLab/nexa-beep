@@ -10436,7 +10436,12 @@ impl ApplicationHandler<AppEvent> for App {
                 } else {
                     self.active_recv.contains_key(&peer)
                 };
-                if !active {
+                // ★ 이름 있는 이벤트는 가드를 우회한다(M4-2e — active_recv/send는
+                //   상대당 1슬롯이라, 정지→다음 파일 완료가 슬롯을 지우면 재개된
+                //   파일의 진행률이 여기서 버려져 표시가 얼었다(실기 08-19).
+                //   이름 대상 갱신은 종결 라인을 건드리지 않으므로 이 가드가 막던
+                //   "취소 후 지각 이벤트의 배너 부활"이 애초에 불가능하다).
+                if !active && name.is_empty() {
                     return;
                 }
                 let prev = self.xfer_progress.get(&peer).copied();
