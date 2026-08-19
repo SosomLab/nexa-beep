@@ -10938,8 +10938,13 @@ impl ApplicationHandler<AppEvent> for App {
                     ));
                 }
                 let more = self.send_queue.get(&peer).is_some_and(|q| !q.is_empty());
+                let paused_left = self.paused_sends.contains_key(&peer);
                 if more {
                     self.pump_send_queue(peer);
+                } else if paused_left {
+                    // ★ 일시중지 잔여(사용자 확정 08-19) — 미완 항목이 남아 있으면
+                    //   상태 배너(진행·전체취소)와 배치를 **유지**한다(ⓑ 대기 상태).
+                    //   진행률 이벤트는 멈추므로 마지막 값에서 정지 표시로 남는다.
                 } else {
                     self.send_batch.remove(&peer);
                     self.send_excluded.remove(&peer); // 배치 종료 = 제외 목록도 마감(M4-2e)
