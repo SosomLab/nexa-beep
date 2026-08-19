@@ -138,6 +138,10 @@ pub enum Msg {
     Min2,
     Min5,
     Min10,
+    /// 전송 취소 상태줄(08-20 다국어 — 하드코딩 한국어 정리).
+    StXferCanceled,
+    /// 타임아웃 취소 상태줄("{}초 동안 응답이 없어 전송을 취소했습니다").
+    StfXferTimeoutCanceled,
     /// 설정 입력 검증 실패 경고(08-20 — 직전값 원복 고지).
     ValOutOfRangeTitle,
     ValMinutesRange,
@@ -1118,7 +1122,7 @@ impl Msg {
             Msg::MenuGroupPolicyToMembers => ["Allow member invites", "구성원 초대 허용으로 전환", "切换为允许成员邀请", "メンバー招待許可に切替"],
             Msg::MenuGroupDisband => ["Disband group", "그룹 해산", "解散群组", "グループ解散"],
             Msg::MenuGroupLeave => ["Leave group", "그룹 나가기", "退出群组", "グループを退出"],
-            Msg::AddrTitle => ["Connect directly by address (DR-19)", "주소로 직접 연결 (DR-19)", "按地址直接连接 (DR-19)", "アドレスで直接接続 (DR-19)"],
+            Msg::AddrTitle => ["Connect directly by address", "주소로 직접 연결", "按地址直接连接", "アドレスで直接接続"],
             Msg::AddrPlaceholder => ["host or host:port · [v6]:port", "host 또는 host:port · [v6]:port", "host 或 host:port · [v6]:port", "host または host:port · [v6]:port"],
             Msg::AddrConnect => ["Connect", "연결", "连接", "接続"],
             Msg::AddrExample => ["e.g. 10.0.0.5 (port omitted → {}) · 10.0.0.5:{} · [fe80::1]:{}", "예: 10.0.0.5 (포트 생략 시 {}) · 10.0.0.5:{} · [fe80::1]:{}", "例: 10.0.0.5 (省略端口 → {}) · 10.0.0.5:{} · [fe80::1]:{}", "例: 10.0.0.5 (ポート省略 → {}) · 10.0.0.5:{} · [fe80::1]:{}"],
@@ -1271,6 +1275,18 @@ impl Msg {
             Msg::Min2 => ["2m", "2분", "2分钟", "2分"],
             Msg::Min5 => ["5m", "5분", "5分钟", "5分"],
             Msg::Min10 => ["10m", "10분", "10分钟", "10分"],
+            Msg::StXferCanceled => [
+                "Transfer canceled",
+                "전송을 취소했습니다",
+                "已取消传输",
+                "転送をキャンセルしました",
+            ],
+            Msg::StfXferTimeoutCanceled => [
+                "No response for {}s — transfer canceled",
+                "{}초 동안 응답이 없어 전송을 취소했습니다",
+                "{}秒无响应 — 已取消传输",
+                "{}秒応答なし — 転送をキャンセル",
+            ],
             Msg::ValOutOfRangeTitle => ["Invalid value", "잘못된 값", "无效值", "無効な値"],
             Msg::ValMinutesRange => [
                 "Enter 1-10 minutes. Reverted to the previous value.",

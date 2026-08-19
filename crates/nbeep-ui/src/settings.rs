@@ -1966,6 +1966,9 @@ impl SettingsWidget {
                         ),
                         inv,
                     );
+                    // 창 하한 전달(08-20) — 아래 끝 행의 팝업이 잘리지 않게
+                    // 시작 위치를 위로 옮긴다(콤보가 스스로 계산).
+                    c.set_viewport_bottom(self.bounds.bottom());
                 }
                 RowCtl::Check(c) => {
                     c.set_bounds(
@@ -1985,6 +1988,7 @@ impl SettingsWidget {
                         Rect::new(rx + pad + family_w + gap10, fy, size_w, ctl_h),
                         inv,
                     );
+                    size.set_viewport_bottom(self.bounds.bottom()); // 08-20 잘림 방지
                 }
                 RowCtl::Face(family) => {
                     // 크기 콤보가 없다 — 얼굴만 지정하고 크기는 Base UI를 따른다.

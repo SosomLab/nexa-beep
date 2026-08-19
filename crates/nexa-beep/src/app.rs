@@ -3298,12 +3298,12 @@ impl App {
         self.close_send_wait(peer);
         self.clear_xfer(peer);
         self.set_status(if by_timeout {
-            format!(
-                "{}초 동안 응답이 없어 전송을 취소했습니다",
-                self.wait_timeout_sec
+            nbeep_core::tf(
+                nbeep_core::Msg::StfXferTimeoutCanceled,
+                &[&self.wait_timeout_sec.to_string()],
             )
         } else {
-            "전송을 취소했습니다".into()
+            nbeep_core::t(nbeep_core::Msg::StXferCanceled).to_string()
         });
         if let Some(mid) = self.main_id {
             self.request_redraw(mid);

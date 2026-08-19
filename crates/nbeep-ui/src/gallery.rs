@@ -388,6 +388,9 @@ impl GalleryWidget {
         y = place(&mut self.textbox, x, y, w, ctrl_h, label_h, gap, inv);
         y = place(&mut self.combo, x, y, w, ctrl_h, label_h, gap, inv);
         y = place(&mut self.ext, x, y, w, ctrl_h, label_h, gap, inv);
+        // 팝업 잘림 방지(08-20) — 창 하한 전달(설정 화면과 같은 규약).
+        self.combo.set_viewport_bottom(self.bounds.bottom());
+        self.ext.set_viewport_bottom(self.bounds.bottom());
         // 트리 쌍(좌: 기본 · 우: 행 이미지) — 같은 y에 나란히.
         let tcolw = self.s(210);
         let ty = y + label_h;

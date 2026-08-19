@@ -1917,24 +1917,26 @@ impl Widget for ChatViewWidget {
                 theme.danger,
             );
             self.xfer_cancel_hit.set(Some(crect));
-            let bar_w = self.s(90);
-            let bar_h = self.s(5);
-            let bx = cx - bar_w - self.s(10);
-            // 자동 취소 카운트다운(M4-2e ⓓ — 정지만 남았을 때만 Some): 막대
-            // 왼쪽에 "N:SS 후 자동 취소" · 마지막 1분 = 경고색(사용자 확정 08-20).
+            // 자동 취소 카운트다운(M4-2e ⓓ — 정지만 남았을 때만 Some): **전체취소
+            // 버튼 바로 위**(헤더 줄 · 버튼 오른끝 정렬 — 사용자 확정 08-20 2차) ·
+            // "N:SS 후 자동 취소" · 마지막 1분 = 경고색.
             if let Some(ms) = xp.auto_cancel_ms {
                 let secs = ms / 1000;
                 let clock = format!("{}:{:02}", secs / 60, secs % 60);
                 let label = nbeep_core::t(nbeep_core::Msg::XferAutoCancelIn).replace("{}", &clock);
                 let tw = ctx.text_width(&label);
-                let tx = bx - tw - self.s(10);
+                let tx = cx + cw - tw;
+                let ty = head.y + (head.h - sh) / 2;
                 let color = if ms < 60_000 {
                     theme.warn
                 } else {
                     theme.text_dim
                 };
-                ctx.text(tx, row.y + (row.h - sh) / 2, row, &label, color);
+                ctx.text(tx, ty, head, &label, color);
             }
+            let bar_w = self.s(90);
+            let bar_h = self.s(5);
+            let bx = cx - bar_w - self.s(10);
             let by = row.y + (row.h - bar_h) / 2;
             ctx.fill_round_rect(
                 Rect::new(bx, by, bar_w, bar_h),

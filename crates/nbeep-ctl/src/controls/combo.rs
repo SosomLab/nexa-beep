@@ -116,6 +116,9 @@ pub struct ComboCore {
     /// 드롭다운 후버(키보드/마우스 하이라이트).
     hover: usize,
     changed: bool,
+    /// 팝업이 넘지 못하는 **뷰포트 하한 y**(08-20 — 창 아래 끝에서 목록이
+    /// 잘려 선택 불가). None = 종전대로 아래로만. 호스트가 창/위젯 경계를 준다.
+    viewport_bottom: Option<i32>,
 }
 
 impl ComboCore {
@@ -127,6 +130,7 @@ impl ComboCore {
             open: false,
             hover: selected,
             changed: false,
+            viewport_bottom: None,
         }
     }
 }
@@ -254,7 +258,16 @@ pub trait ComboControl: Control {
         if extra > 0 {
             h += self.s(SEP_H) + extra * self.s(ROW_H);
         }
-        Rect::new(b.x, b.bottom() + self.s(2), b.w, h)
+        let mut y = b.bottom() + self.s(2);
+        // 뷰포트 하한(08-20) — 아래로 펴면 잘리는 자리는 **시작 위치를 위로
+        // 이동**해 전체 목록이 보이게 한다(끝자리 = 위로 펼침과 동치). 위로도
+        // 모자라면 0에서 멈춘다(잘려도 상단부터 — 히트는 popup_rect 단일 원천).
+        if let Some(limit) = self.core().viewport_bottom {
+            if y + h > limit {
+                y = (limit - h).min(b.y - self.s(2) - h).max(0);
+            }
+        }
+        Rect::new(b.x, y, b.w, h)
     }
     /// (x,y) → 드롭다운 히트(항목/확장).
     fn popup_hit(&self, x: i32, y: i32) -> Option<PopupHit> {
@@ -282,6 +295,12 @@ pub trait ComboControl: Control {
             }
         }
         None
+    }
+
+    /// 팝업 뷰포트 하한 지정(08-20) — 호스트 창/위젯의 아래 경계 y. 이 밑으로
+    /// 팝업이 내려가면 시작 위치를 위로 옮겨 **전체 목록이 항상 보인다**.
+    fn set_viewport_bottom(&mut self, limit: i32) {
+        self.core_mut().viewport_bottom = Some(limit);
     }
 
     /// 확장 항목(Choose… 등) 선택 처리 — 재정의(기본은 그냥 닫기).

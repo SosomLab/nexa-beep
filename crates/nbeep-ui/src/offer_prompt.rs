@@ -187,6 +187,7 @@ impl Widget for OfferPromptWidget {
         let ay = by - bh - self.s(12);
         self.window
             .set_bounds(Rect::new(bounds.x + pad, ay, self.s(110), bh), inv);
+        self.window.set_viewport_bottom(bounds.bottom()); // 팝업 잘림 방지(08-20)
         self.auto_btn.set_bounds(
             Rect::new(bounds.x + pad + self.s(118), ay, self.s(104), bh),
             inv,
