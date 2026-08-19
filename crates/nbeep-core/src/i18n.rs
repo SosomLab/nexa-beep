@@ -201,6 +201,16 @@ pub enum Msg {
     OfferExcluded,
     /// 요청당 파일 수 상한 초과 안내 — `{}` 상한 · `{}` 제외 파일명.
     StfBatchLimit,
+    /// 폴더 드롭 제외 안내 — `{}` = 폴더명.
+    StfFolderExcluded,
+    /// 최대 송신 개수 설정(08-20).
+    XferBatchMax,
+    XferBatchMaxDesc,
+    Cnt1,
+    Cnt2,
+    Cnt3,
+    Cnt4,
+    Cnt5,
     OfferResumeBtn,
     /// 로그 하위 섹션(M3-22 — 고급 하위).
     SubLog,
@@ -1448,6 +1458,29 @@ impl Msg {
             Msg::OfferCancel => ["Cancel", "취소", "取消", "キャンセル"],
             Msg::OfferCount => ["Files", "파일 수", "文件数", "ファイル数"],
             Msg::OfferExcluded => ["Excluded", "제외됨", "已排除", "除外"],
+            Msg::StfFolderExcluded => [
+                "Folders cannot be sent — {} excluded",
+                "폴더는 전송할 수 없습니다 — {} 제외됨",
+                "无法发送文件夹 — {} 已排除",
+                "フォルダは送信できません — {} を除外",
+            ],
+            Msg::XferBatchMax => [
+                "Max files per request",
+                "요청당 최대 파일 수",
+                "每次请求最大文件数",
+                "1リクエスト最大ファイル数",
+            ],
+            Msg::XferBatchMaxDesc => [
+                "Counts everything attempted, including excluded items. Files over the size cap and folders are excluded automatically",
+                "제외 대상을 포함해 시도한 전체를 셉니다. 용량 제한을 넘는 파일과 폴더는 자동으로 제외됩니다",
+                "计入所有尝试项（含被排除项）。超过容量上限的文件和文件夹会被自动排除",
+                "除外分を含む試行全体を数えます。容量上限超過のファイルとフォルダは自動的に除外されます",
+            ],
+            Msg::Cnt1 => ["1", "1개", "1个", "1件"],
+            Msg::Cnt2 => ["2", "2개", "2个", "2件"],
+            Msg::Cnt3 => ["3", "3개", "3个", "3件"],
+            Msg::Cnt4 => ["4", "4개", "4个", "4件"],
+            Msg::Cnt5 => ["5 (default)", "5개(기본)", "5个(默认)", "5件(既定)"],
             Msg::StfBatchLimit => [
                 "Max {} files per request — {} excluded",
                 "요청당 최대 {}개 — {} 제외됨",

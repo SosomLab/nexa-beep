@@ -91,6 +91,7 @@ const TOGGLE_DEFAULT_OFF: &[&str] = &[
 const RADIO_DEFAULTS: &[(&str, &str)] = &[
     ("ui.toolbar_size", "32"),
     ("xfer.send_max_mb", "unlimited"), // 발신 = 무제한 기본(08-18 — 스트리밍이라 안전)
+    ("xfer.batch_max", "5"),           // 요청당 최대 파일 수 = 5 기본(08-20 확정)
     ("xfer.recv_max_mb", "512"),       // 수신 = 512MiB 기본(메모리 조립 방어선)
     // 정지 방치 자동 취소 — 기본 2분(사용자 확정 08-20 · 표시 순서는 1·2·5·10).
     ("xfer.auto_cancel_min", "2"),
@@ -741,6 +742,21 @@ pub fn registry() -> &'static [Entry] {
                 "MiB",
             ),
             key: "xfer.recv_max_mb",
+        },
+        // 요청당 최대 파일 수(M4-2e · 08-20) — 제외 포함 합산 기준 · 기본 5.
+        Entry {
+            cat: Msg::CatFiles,
+            sub: None,
+            label: Msg::XferBatchMax,
+            desc: Msg::XferBatchMaxDesc,
+            kind: SettingKind::Radio(&[
+                ("1", Msg::Cnt1),
+                ("2", Msg::Cnt2),
+                ("3", Msg::Cnt3),
+                ("4", Msg::Cnt4),
+                ("5", Msg::Cnt5),
+            ]),
+            key: "xfer.batch_max",
         },
         Entry {
             cat: Msg::CatFiles,

@@ -1616,11 +1616,6 @@ fn cap_from_setting(v: &str) -> Option<u64> {
     Some(mb * 1024 * 1024)
 }
 
-/// 한 요청(배치)당 발신 파일 수 상한(M4-2e 확정 규격 "최대 5개 기준" ·
-/// 08-20 실기 — 6개째가 승인까지 갔다). 초과 파일 = 제외 목록 편입(용량
-/// 초과와 같은 문법 — 목록에는 보이되 전송하지 않는다).
-const BATCH_MAX_FILES: usize = 5;
-
 /// 요청 단위 결정의 **잔여 목록**(M4-2e · 08-20) — manifest 비제외분에서 방금
 /// 결정(승인/거절)한 파일 하나(이름+크기 · 첫 일치만)를 뺀 나머지. 승인·거절이
 /// 같은 함수를 쓴다 — 두 축이 어긋나면 "승인은 배치, 거절은 단건"이 재발한다.
@@ -2789,6 +2784,14 @@ impl App {
         let name = path
             .file_name()
             .map_or_else(|| "file".to_string(), |n| n.to_string_lossy().into_owned());
+        // ★ 폴더 전송 불가(08-20 확정) — 제외 대상으로 목록에 남긴다(상한 합산 포함).
+        if path.is_dir() {
+            self.push_excluded_line(peer, true, &name, 0);
+            self.set_status(nbeep_core::tf(nbeep_core::Msg::StfFolderExcluded, &[&name]));
+            self.send_manifest(peer);
+            self.request_redraw(id);
+            return;
+        }
         // ★ 파일 단위 용량 검사(M4-2e · 사용자 확정 08-19) — 발신 상한과 **상대
         //   수신 상한**(CapAdvert 기억값) 중 낮은 쪽을 넘는 파일은 **전송 제외**:
         //   큐에 넣지 않고, 스레드 라인에는 "전송 제외" 상태로 남긴다(배치는 계속).
@@ -2808,17 +2811,23 @@ impl App {
             self.request_redraw(id);
             return;
         }
-        // ★ 요청당 파일 수 상한(M4-2e 규격 "최대 5개" · 08-20 강제) — 진행·대기
-        //   중인 비제외 배치 항목이 상한이면 이후 파일은 **제외**로 편입(용량
-        //   초과와 같은 축 — 수신 승인 창 '제외됨' 행에도 자동 표기).
+        // ★ 요청당 파일 수 상한(M4-2e 규격 · 08-20 2차 확정) — **제외 포함
+        //   합산**이 기준: 시도한 전체(전송분 b.1 + 제외분)가 상한이면 이후
+        //   드롭은 제외 편입. 상한 = 설정 `xfer.batch_max`(1~5 · 기본 5).
         {
-            let in_flight = usize::from(self.current_send.contains_key(&peer))
-                + self.send_queue.get(&peer).map_or(0, VecDeque::len);
-            if in_flight >= BATCH_MAX_FILES {
+            let max = self
+                .settings
+                .get("xfer.batch_max")
+                .parse::<usize>()
+                .unwrap_or(5)
+                .clamp(1, 5);
+            let attempted = self.send_batch.get(&peer).map_or(0, |b| b.1 as usize)
+                + self.send_excluded.get(&peer).map_or(0, Vec::len);
+            if attempted >= max {
                 self.push_excluded_line(peer, true, &name, size);
                 self.set_status(nbeep_core::tf(
                     nbeep_core::Msg::StfBatchLimit,
-                    &[&BATCH_MAX_FILES.to_string(), &name],
+                    &[&max.to_string(), &name],
                 ));
                 self.send_manifest(peer);
                 self.request_redraw(id);
