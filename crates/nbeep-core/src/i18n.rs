@@ -199,6 +199,8 @@ pub enum Msg {
     OfferCount,
     /// 승인 창 제외 목록 라벨(08-20 — 상한 초과 등으로 배치에서 빠진 파일).
     OfferExcluded,
+    /// 요청당 파일 수 상한 초과 안내 — `{}` 상한 · `{}` 제외 파일명.
+    StfBatchLimit,
     OfferResumeBtn,
     /// 로그 하위 섹션(M3-22 — 고급 하위).
     SubLog,
@@ -1446,6 +1448,12 @@ impl Msg {
             Msg::OfferCancel => ["Cancel", "취소", "取消", "キャンセル"],
             Msg::OfferCount => ["Files", "파일 수", "文件数", "ファイル数"],
             Msg::OfferExcluded => ["Excluded", "제외됨", "已排除", "除外"],
+            Msg::StfBatchLimit => [
+                "Max {} files per request — {} excluded",
+                "요청당 최대 {}개 — {} 제외됨",
+                "每次请求最多 {} 个 — {} 已排除",
+                "1リクエスト最大 {}件 — {} を除外",
+            ],
             Msg::OfferResumeBtn => ["Resume {}%", "이어받기 {}%", "续传 {}%", "再開 {}%"],
             Msg::SubLog => ["Log", "로그", "日志", "ログ"],
             Msg::LogEnabled => ["Status logging", "상태 로그 기록", "状态日志", "ステータスログ"],
