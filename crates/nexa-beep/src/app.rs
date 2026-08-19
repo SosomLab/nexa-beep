@@ -3717,16 +3717,24 @@ impl App {
             .collect();
         self.list.set_rows(rows, inv);
         // 그룹 섹션(M5-1g) — **공유 그룹만** 노출(동보 그룹은 숨김 · 사용자 확정 08-13).
-        // Invited(수락 전)는 행 미표시 — 초대는 카드로만(G-4).
+        // ★ Invited(수락 전)도 표시한다(08-19 개정 — 종전엔 숨겨 재시작 후 초대
+        //   카드가 사라지면 수락할 길이 없었다). "초대됨" 표식 + 클릭 = 수락 모달.
         let me = self.identity.peer_id();
         let grows: Vec<nbeep_ui::GroupRow> = self
             .groups
             .shared_list()
             .iter()
-            .filter(|s| s.mine != nbeep_store::MineState::Invited)
             .map(|s| nbeep_ui::GroupRow {
                 id: s.local_id,
-                name: s.roster.name.as_str().to_string(),
+                name: if s.mine == nbeep_store::MineState::Invited {
+                    format!(
+                        "{} · {}",
+                        s.roster.name.as_str(),
+                        nbeep_core::t(nbeep_core::Msg::GroupInvitedTag)
+                    )
+                } else {
+                    s.roster.name.as_str().to_string()
+                },
                 members: u32::try_from(s.roster.members.len()).unwrap_or(u32::MAX),
                 online: u32::try_from(
                     s.roster
@@ -7493,6 +7501,26 @@ impl App {
         let Some(s) = self.groups.shared_by_id(gid) else {
             return;
         };
+        // 초대받은(미수락) 방 클릭 = 대화가 아니라 **수락/거절 모달**(08-19 —
+        // 재시작 후 초대 카드가 사라져도 목록에서 언제든 수락할 수 있게).
+        if s.mine == nbeep_store::MineState::Invited {
+            let uid = s.roster.uid;
+            let owner = s.roster.owner;
+            let name = s.roster.name.as_str().to_string();
+            let n = s.roster.members.len();
+            let from = self.peer_title(owner);
+            self.open_choice(
+                el,
+                "그룹 대화 초대",
+                &format!(
+                    "{from} 님이 '{name}' 그룹(구성원 {n}명)에 초대했습니다.\n수락하면 방이 목록에 생기고 구성원과 함께 대화합니다."
+                ),
+                "수락",
+                "거절",
+                AlertCtx::GroupInvite { uid, owner },
+            );
+            return;
+        }
         let title = format!(
             "{} (그룹 {}명)",
             s.roster.name.as_str(),

@@ -661,6 +661,8 @@ pub enum Msg {
     MemberOwner,
     /// 구성원 목록 — 아직 수락 안 한(초대 대기) 구성원(M5-1 · 08-19).
     MemberPending,
+    /// 초대받았지만 아직 수락 안 한 그룹 행 표식(클릭 = 수락 · M5-1 · 08-19).
+    GroupInvitedTag,
     /// 설정 Files 페이지 속도 노트(08-17 i18n).
     RateSendFloor, // `{0}` = 하한
     RateSendMeasured,  // `{0}` = 실측 최고, `{1}` = 자동 목표
@@ -1055,6 +1057,12 @@ impl Msg {
             Msg::MemberSelf => ["me", "나", "我", "自分"],
             Msg::MemberOwner => ["owner", "소유자", "所有者", "オーナー"],
             Msg::MemberPending => ["invite pending", "초대 대기", "邀请待处理", "招待待ち"],
+            Msg::GroupInvitedTag => [
+                "invited · click to accept",
+                "초대됨 · 클릭하여 수락",
+                "已邀请 · 点击接受",
+                "招待済み · クリックで承認",
+            ],
             Msg::RateSendFloor => ["Before measurement — starts at floor {}", "실측 전 — 하한 {}에서 시작", "测量前 — 从下限 {} 开始", "実測前 — 下限 {} から開始"],
             Msg::RateSendMeasured => ["Measured peak {} → auto target {}", "실측 최고 {} → 자동 목표 {}", "实测峰值 {} → 自动目标 {}", "実測ピーク {} → 自動目標 {}"],
             Msg::RateRecvUnclaimed => ["Before measurement · no cap claimed — sender yields to half its own measurement", "실측 전 · 상한 무주장 — 발신자가 자기 실측의 절반으로 양보", "测量前 · 不主张上限 — 发送方让步至自身实测的一半", "実測前 · 上限を主張せず — 送信者が自身の実測の半分に譲る"],
