@@ -237,12 +237,45 @@ pub fn update_xfer_in(lines: &mut [ChatLine], mine: bool, state: XferLineState) 
             continue;
         }
         if let ChatBody::Xfer(x) = &mut line.body {
+            // ★ Paused는 건너뛴다(M4-2e ⓐ — 정지 파일을 지나쳐 **다음 파일**이
+            //   진행되므로, FIFO 갱신이 정지 라인에 진행률을 붙이면 안 된다.
+            //   정지 라인은 이름 대상 갱신(update_xfer_named)만 만진다).
             if matches!(
                 x.state,
-                XferLineState::Waiting
-                    | XferLineState::Active { .. }
-                    | XferLineState::Paused { .. }
+                XferLineState::Waiting | XferLineState::Active { .. }
             ) {
+                x.state = state;
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// **이름 대상** 상태 갱신(M4-2e) — 방향·이름·크기가 같은 **미종결** 항목의
+/// 상태를 바꾼다(일시정지/재개처럼 특정 파일을 겨냥할 때 — FIFO 갱신과 달리
+/// Paused도 대상이다: 정지 해제가 이 경로다). 갱신했으면 `true`.
+pub fn update_xfer_named(
+    lines: &mut [ChatLine],
+    mine: bool,
+    name: &str,
+    size: u64,
+    state: XferLineState,
+) -> bool {
+    for line in lines.iter_mut().rev() {
+        if line.mine != mine {
+            continue;
+        }
+        if let ChatBody::Xfer(x) = &mut line.body {
+            if x.name.as_str() == name
+                && x.size == size
+                && matches!(
+                    x.state,
+                    XferLineState::Waiting
+                        | XferLineState::Active { .. }
+                        | XferLineState::Paused { .. }
+                )
+            {
                 x.state = state;
                 return true;
             }
