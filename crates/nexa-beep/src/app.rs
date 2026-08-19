@@ -1616,6 +1616,37 @@ fn cap_from_setting(v: &str) -> Option<u64> {
     Some(mb * 1024 * 1024)
 }
 
+/// 요청 단위 결정의 **잔여 목록**(M4-2e · 08-20) — manifest 비제외분에서 방금
+/// 결정(승인/거절)한 파일 하나(이름+크기 · 첫 일치만)를 뺀 나머지. 승인·거절이
+/// 같은 함수를 쓴다 — 두 축이 어긋나면 "승인은 배치, 거절은 단건"이 재발한다.
+fn batch_remainder(man: Vec<(String, u64, bool)>, name: &str, size: u64) -> Vec<(String, u64)> {
+    let mut seen_self = false;
+    man.into_iter()
+        .filter(|(n, s, excluded)| {
+            if *excluded {
+                return false;
+            }
+            if !seen_self && n == name && *s == size {
+                seen_self = true; // 지금 결정한 파일 자신은 제외(1회만)
+                return false;
+            }
+            true
+        })
+        .map(|(n, s, _)| (n, s))
+        .collect()
+}
+
+/// 요청 단위 결정 소비(M4-2e) — 잔여 목록에서 이름+크기 일치 항목 하나를 꺼낸다.
+/// `Some(비었는가)` = 이 오퍼는 그 결정의 잔여분 · `None` = 수동 폴백(fail-closed).
+fn batch_take(rem: &mut Vec<(String, u64)>, name: &str, size: u64) -> Option<bool> {
+    rem.iter()
+        .position(|(n, s)| n == name && *s == size)
+        .map(|pos| {
+            rem.remove(pos);
+            rem.is_empty()
+        })
+}
+
 fn rate_label(bps: u64) -> String {
     if bps == 0 {
         return "무제한".into();
@@ -2274,6 +2305,9 @@ struct App {
     /// 요청 단위 승인 잔여(M4-2e) — 승인 1회 후 이후 오퍼를 **이름+크기 대조**로
     /// 자동 수락(불일치 = 수동 폴백 · fail-closed). 소진·거절·종료 때 비운다.
     batch_approved: HashMap<PeerId, Vec<(String, u64)>>,
+    /// 요청 단위 **거절** 잔여(M4-2e · 08-20 — 승인의 대칭): 거절 1회 후 같은
+    /// 배치의 이후 오퍼는 재확인 없이 자동 거절·라인 종결(2파일 실기 구멍).
+    batch_declined: HashMap<PeerId, Vec<(String, u64)>>,
     /// 수신 전송의 이름→xid(M4-2e — 수신측 ⏸▶✕가 1슬롯(active_recv)에 안 갇히게).
     recv_xids: HashMap<PeerId, Vec<(String, nbeep_core::XferId)>>,
     /// 발신측이 정지시킨 수신 파일 이름(M4-2e — 수신 배너 유지·전체취소 포함 판단).
@@ -3336,7 +3370,8 @@ impl App {
         if accept && ok {
             self.arm_batch_approval(peer, &name, size); // 요청 단위 승인(M4-2e)
         } else if !accept {
-            self.clear_batch_approval(peer); // 거절 = 요청(배치) 전체 마감(M4-2e)
+            // 거절 = 요청(배치) 전체 결정(M4-2e · 08-20) — 잔여 오퍼 자동 거절.
+            self.arm_batch_decline(peer, &name, size);
         }
         if let Some(got) = resumed {
             self.set_status(format!(
@@ -3485,23 +3520,23 @@ impl App {
         let Some(man) = self.recv_manifest.remove(&peer) else {
             return;
         };
-        let mut seen_self = false;
-        let rem: Vec<(String, u64)> = man
-            .into_iter()
-            .filter(|(n, s, excluded)| {
-                if *excluded {
-                    return false;
-                }
-                if !seen_self && n == name && *s == size {
-                    seen_self = true; // 지금 승인한 파일 자신은 제외(1회만)
-                    return false;
-                }
-                true
-            })
-            .map(|(n, s, _)| (n, s))
-            .collect();
+        let rem = batch_remainder(man, name, size);
         if !rem.is_empty() {
             self.batch_approved.insert(peer, rem);
+        }
+    }
+
+    /// 요청 단위 **거절** 무장(M4-2e · 08-20 — 승인의 대칭): 프롬프트 거절/타임아웃
+    /// 1회가 배치 전체를 마감한다 — 잔여 파일의 오퍼가 오는 대로 자동 거절되고
+    /// 대기 라인도 그때 종결된다(2.sna·3.hsh 실기: 파일마다 다시 묻던 구멍).
+    fn arm_batch_decline(&mut self, peer: PeerId, name: &str, size: u64) {
+        self.batch_approved.remove(&peer); // 결정 교체 — 두 장부 동시 무장 금지
+        let Some(man) = self.recv_manifest.remove(&peer) else {
+            return;
+        };
+        let rem = batch_remainder(man, name, size);
+        if !rem.is_empty() {
+            self.batch_declined.insert(peer, rem);
         }
     }
 
@@ -3509,6 +3544,7 @@ impl App {
     fn clear_batch_approval(&mut self, peer: PeerId) {
         self.recv_manifest.remove(&peer);
         self.batch_approved.remove(&peer);
+        self.batch_declined.remove(&peer);
     }
 
     fn run_offer_choice(&mut self, peer: PeerId, choice: nbeep_ui::OfferChoice) {
@@ -3542,7 +3578,8 @@ impl App {
             }
             OfferChoice::Cancel { by_timeout } => {
                 self.send_xfer_decision(peer, xid, false, nbeep_core::RejectWhy::Declined, None);
-                self.clear_batch_approval(peer); // 거절 = 요청(배치) 전체 마감(M4-2e)
+                // 거절 = 요청(배치) 전체 결정(M4-2e · 08-20) — 잔여 오퍼 자동 거절.
+                self.arm_batch_decline(peer, &name, size);
                 self.set_xfer_line(
                     peer,
                     false,
@@ -10556,17 +10593,38 @@ impl ApplicationHandler<AppEvent> for App {
                         self.push_xfer_line(peer, false, &name, size);
                     }
                     OfferVerdict::Ask => {
+                        // ★ 요청 단위 **거절** 잔여(M4-2e · 08-20 — 승인의 대칭):
+                        //   프롬프트에서 이미 거절한 배치의 파일이면 재확인 없이
+                        //   자동 거절 + 대기 라인 종결(2파일 실기: 파일마다 재질문 구멍).
+                        let declined_hit = self
+                            .batch_declined
+                            .get_mut(&peer)
+                            .and_then(|rem| batch_take(rem, &name, size));
+                        if let Some(emptied) = declined_hit {
+                            if emptied {
+                                self.batch_declined.remove(&peer);
+                            }
+                            self.send_xfer_decision(peer, id, false, RejectWhy::Declined, None);
+                            self.set_xfer_line(
+                                peer,
+                                false,
+                                nbeep_ui::XferLineState::Failed {
+                                    why: nbeep_core::t(nbeep_core::Msg::XferDeclined).into(),
+                                },
+                            );
+                            self.redraw_conversation(peer);
+                            if let Some(mid) = self.main_id {
+                                self.request_redraw(mid);
+                            }
+                            return;
+                        }
                         // ★ 요청 단위 승인(M4-2e · 사용자 확정) — 앞서 승인한 배치의
                         //   잔여 파일이면 재확인 없이 자동 수락. **manifest의 이름+
                         //   크기와 일치할 때만**(불일치 = 아래 수동 폴백 · fail-closed).
-                        let batch_hit = self.batch_approved.get_mut(&peer).and_then(|rem| {
-                            rem.iter()
-                                .position(|(n, s)| n == &name && *s == size)
-                                .map(|pos| {
-                                    rem.remove(pos);
-                                    rem.is_empty()
-                                })
-                        });
+                        let batch_hit = self
+                            .batch_approved
+                            .get_mut(&peer)
+                            .and_then(|rem| batch_take(rem, &name, size));
                         if let Some(emptied) = batch_hit {
                             if emptied {
                                 self.batch_approved.remove(&peer);
@@ -10721,6 +10779,9 @@ impl ApplicationHandler<AppEvent> for App {
                 }
             }
             AppEvent::XferManifest { peer, entries } => {
+                // 새 요청 도착(M4-2e · 08-20) — 이전 요청의 거절 장부는 낡았다
+                // (같은 파일을 다시 보내는 건 새 의사 — 다시 묻는 게 맞다).
+                self.batch_declined.remove(&peer);
                 // 배치 목록 도착(M4-2e) — 스레드에 전 파일 라인을 세운다: 제외는
                 // 종결 라인, 나머지는 대기 라인(오퍼 도착이 재활성). ★ 발신자가
                 // 드롭마다 재송하므로 **이전 manifest와의 차분만** 라인으로 추가
@@ -13306,6 +13367,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         auto_cancel_limit_ms: 120_000,
         recv_manifest: HashMap::new(),
         batch_approved: HashMap::new(),
+        batch_declined: HashMap::new(),
         send_rate: nbeep_core::RateLimit::Auto,
         recv_rate: nbeep_core::RateLimit::Auto,
         send_meter: nbeep_core::RateMeter::default(),
@@ -13423,6 +13485,45 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
 
 #[cfg(test)]
 mod tests {
+    /// M4-2e 요청 단위 결정(08-20 사용자 시나리오 자동화) — 2.sna+3.hsh 배치.
+    /// 거절 1회 = 배치 전체 거절, 승인 1회 = 배치 전체 승인이 **같은 헬퍼**로
+    /// 성립함을 박제한다(승인은 배치·거절은 단건이던 실기 구멍의 회귀).
+    #[test]
+    fn request_level_decision_covers_whole_batch() {
+        let manifest = vec![
+            ("2.sna".to_string(), 491_900_000u64, false),
+            ("3.hsh".to_string(), 58_000_000u64, false),
+            ("skip.tmp".to_string(), 10u64, true), // 제외 파일은 결정 대상 아님
+        ];
+        // ① 거절 시나리오: 프롬프트(첫 파일 2.sna)에서 거절 → 잔여 = [3.hsh].
+        let mut declined = super::batch_remainder(manifest.clone(), "2.sna", 491_900_000);
+        assert_eq!(declined, vec![("3.hsh".to_string(), 58_000_000)]);
+        //    3.hsh 오퍼 도착 = 자동 거절 소비 · 배치 비움(추가 프롬프트 없음).
+        assert_eq!(
+            super::batch_take(&mut declined, "3.hsh", 58_000_000),
+            Some(true),
+            "두 번째 파일은 재질문 없이 자동 거절"
+        );
+        //    낯선 파일(불일치)은 수동 폴백 — fail-closed.
+        assert_eq!(super::batch_take(&mut declined, "3.hsh", 58_000_000), None);
+        // ② 승인 시나리오: 같은 헬퍼 — 승인 1회로 잔여 자동 수락.
+        let mut approved = super::batch_remainder(manifest, "2.sna", 491_900_000);
+        assert_eq!(
+            super::batch_take(&mut approved, "3.hsh", 58_000_000),
+            Some(true),
+            "두 번째 파일은 재질문 없이 자동 승인"
+        );
+        // ③ 같은 이름 2회 요청 — 항목 수만큼만 소비된다(초과분 = 수동).
+        let dup = vec![
+            ("a.bin".to_string(), 5u64, false),
+            ("a.bin".to_string(), 5u64, false),
+        ];
+        let mut rem = super::batch_remainder(dup, "a.bin", 5);
+        assert_eq!(rem.len(), 1, "결정한 자신은 1회만 제외");
+        assert_eq!(super::batch_take(&mut rem, "a.bin", 5), Some(true));
+        assert_eq!(super::batch_take(&mut rem, "a.bin", 5), None);
+    }
+
     use super::ConnectLatch;
     use nbeep_core::PeerId;
 
