@@ -2270,6 +2270,10 @@ struct App {
     recv_xids: HashMap<PeerId, Vec<(String, nbeep_core::XferId)>>,
     /// 발신측이 정지시킨 수신 파일 이름(M4-2e — 수신 배너 유지·전체취소 포함 판단).
     recv_paused: HashMap<PeerId, std::collections::HashSet<String>>,
+    /// 수신 배치 집계(M4-2e — 배너 합산 표기): (완료 수, 총 수, 완료 바이트, 총 바이트).
+    recv_batch: HashMap<PeerId, (u32, u32, u64, u64)>,
+    /// 수신 배치 파일 크기 장부(manifest 비제외분 — 완료 시 크기 가산용).
+    recv_batch_sizes: HashMap<PeerId, Vec<(String, u64)>>,
     /// 일시정지로 **보관 중인 발신**(M4-2e ⓐ · 상대별) — (이름, 크기, 경로, xid).
     /// 액터 parked 슬롯의 앱측 그림자: 다음 파일 펌프·재개 요청·취소·Closed
     /// 재-Offer 원료가 여기서 나온다.
@@ -3790,6 +3794,8 @@ impl App {
         self.active_recv.remove(&peer);
         self.recv_xids.remove(&peer);
         self.recv_paused.remove(&peer);
+        self.recv_batch.remove(&peer);
+        self.recv_batch_sizes.remove(&peer);
         self.clear_batch_approval(peer);
         if let Some(sha) = self.resumed_recv.remove(&peer) {
             crate::part::remove_partial(crate::gate::CH_GUI, &sha);
@@ -10748,12 +10754,30 @@ impl ApplicationHandler<AppEvent> for App {
                     return;
                 }
                 let prev = self.xfer_progress.get(&peer).copied();
-                let xp = nbeep_ui::XferProgress {
-                    done_bytes: got,
-                    total_bytes: total,
-                    done_files: prev.map_or(0, |p| p.done_files),
-                    total_files: prev.map_or(1, |p| p.total_files.max(1)),
-                    sending,
+                // ★ 배너 = **배치 합산**(사용자 확정 08-19 2차): 완료 누적 + 현재
+                //   진행 / 배치 총량 · (현재 순서/전체 개수). 발신 = send_batch ·
+                //   수신 = recv_batch(manifest 합산). 배치 없으면 현재 파일 값.
+                let batch = if sending {
+                    self.send_batch.get(&peer).copied()
+                } else {
+                    self.recv_batch.get(&peer).copied()
+                };
+                let xp = if let Some((done_f, total_f, done_b, total_b)) = batch {
+                    nbeep_ui::XferProgress {
+                        done_bytes: done_b.saturating_add(got),
+                        total_bytes: total_b.max(done_b.saturating_add(total)),
+                        done_files: (done_f + 1).min(total_f.max(1)),
+                        total_files: total_f.max(1),
+                        sending,
+                    }
+                } else {
+                    nbeep_ui::XferProgress {
+                        done_bytes: got,
+                        total_bytes: total,
+                        done_files: prev.map_or(1, |p| p.done_files.max(1)),
+                        total_files: prev.map_or(1, |p| p.total_files.max(1)),
+                        sending,
+                    }
                 };
                 self.xfer_progress.insert(peer, xp);
                 // 스레드 항목 진행률 — **이름 대상**(M4-2e: 지연 이벤트가 다음
@@ -10807,6 +10831,23 @@ impl ApplicationHandler<AppEvent> for App {
                     } else {
                         self.push_xfer_line(peer, false, name, *size);
                     }
+                }
+                // 수신 배치 집계(M4-2e — 배너 합산): 총 수·총 바이트는 manifest
+                // 비제외분 재계산(드롭 추가 재송 = 총량 성장) · 완료분은 보존.
+                {
+                    let sizes: Vec<(String, u64)> = entries
+                        .iter()
+                        .filter(|(_, _, ex)| !ex)
+                        .map(|(n, s2, _)| (n.clone(), *s2))
+                        .collect();
+                    let (count, sum) = (
+                        u32::try_from(sizes.len()).unwrap_or(u32::MAX),
+                        sizes.iter().map(|(_, s2)| *s2).sum::<u64>(),
+                    );
+                    let e = self.recv_batch.entry(peer).or_insert((0, 0, 0, 0));
+                    e.1 = count.max(e.0);
+                    e.3 = sum.max(e.2);
+                    self.recv_batch_sizes.insert(peer, sizes);
                 }
                 self.recv_manifest.insert(peer, entries);
                 self.redraw_conversation(peer);
@@ -10889,6 +10930,16 @@ impl ApplicationHandler<AppEvent> for App {
                         self.recv_paused.remove(&peer);
                     }
                 }
+                // 수신 배치 완료 가산(M4-2e 배너 합산) — 크기는 manifest 장부에서.
+                if let Some(sizes) = self.recv_batch_sizes.get_mut(&peer) {
+                    if let Some(pos) = sizes.iter().position(|(n, _)| n == &name) {
+                        let (_, fsize) = sizes.remove(pos);
+                        if let Some(e) = self.recv_batch.get_mut(&peer) {
+                            e.0 += 1;
+                            e.2 = e.2.saturating_add(fsize);
+                        }
+                    }
+                }
                 // ★ 수신 배너 유지(사용자 확정 08-19 — 송신측과 대칭): 자동수락
                 //   잔여(batch_approved)나 정지 파일이 남아 있으면 진행상태·
                 //   전체취소를 지우지 않는다. 전부 끝났을 때만 마감.
@@ -10897,6 +10948,8 @@ impl ApplicationHandler<AppEvent> for App {
                     || self.active_recv.contains_key(&peer);
                 if !recv_left {
                     self.clear_xfer(peer);
+                    self.recv_batch.remove(&peer);
+                    self.recv_batch_sizes.remove(&peer);
                 }
                 self.redraw_conversation(peer);
             }
@@ -11173,9 +11226,9 @@ impl ApplicationHandler<AppEvent> for App {
                 // 배치 집계 갱신 후 다음 파일로.
                 if let Some(b) = self.send_batch.get_mut(&peer) {
                     b.0 += 1;
-                    if let Some(xp) = self.xfer_progress.get(&peer) {
-                        b.2 = b.2.saturating_add(xp.total_bytes);
-                    }
+                    // 완료 누적 = **그 파일 크기**(이벤트 동봉 — 종전 xp.total은
+                    // 배치 합산 표기 도입 후 배치 총량이라 이중 가산됐다).
+                    b.2 = b.2.saturating_add(size);
                     let (done_f, total_f, done_b, total_b) = *b;
                     self.xfer_progress.insert(
                         peer,
@@ -13350,6 +13403,8 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         paused_sends: HashMap::new(),
         recv_xids: HashMap::new(),
         recv_paused: HashMap::new(),
+        recv_batch: HashMap::new(),
+        recv_batch_sizes: HashMap::new(),
         recv_manifest: HashMap::new(),
         batch_approved: HashMap::new(),
         pending_send_window: None,
