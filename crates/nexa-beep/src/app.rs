@@ -3458,28 +3458,34 @@ impl App {
         //   **첫 파일이 아니라 요청 전체**로: manifest(비제외분)가 원료다.
         //   파일명 = ", " 구분 순수 파일명 목록(위젯이 폭 실측 줄바꿈) ·
         //   크기 = 총합 · 파일 수 줄 추가. manifest 미도착(구버전 발신)이면 단건.
-        let (bname, bsize, bcount) = self
+        // 파일 수 = **시도 전체(제외 포함)** · 제외 목록 별도 행(08-20 확정 —
+        // 상한 초과로 빠진 파일도 요청의 일부로 식별돼야 한다). 크기 총합은
+        // 실제 전송분(비제외)만 — 안 오는 바이트를 합치면 거짓말이다.
+        let (bname, bsize, bcount, bexcluded) = self
             .recv_manifest
             .get(&peer)
             .map(|m| {
                 let inc: Vec<&(String, u64, bool)> = m.iter().filter(|e| !e.2).collect();
+                let exc: Vec<&str> = m.iter().filter(|e| e.2).map(|e| e.0.as_str()).collect();
                 (
                     inc.iter()
                         .map(|e| e.0.as_str())
                         .collect::<Vec<_>>()
                         .join(", "),
                     inc.iter().map(|e| e.1).sum::<u64>(),
-                    inc.len(),
+                    m.len(),
+                    exc.join(", "),
                 )
             })
-            .filter(|(_, _, n)| *n >= 1)
-            .unwrap_or_else(|| (name.clone(), *size, 1));
+            .filter(|(_, _, n, _)| *n >= 1)
+            .unwrap_or_else(|| (name.clone(), *size, 1, String::new()));
         Some(nbeep_ui::OfferInfo {
             sender,
             when: nbeep_plat::clock::local_hms(unix_now()).hms(),
             name: bname,
             size: bsize,
             count: bcount,
+            excluded: bexcluded,
             queued: q.len(),
             downgrade_note,
             resume_pct,
@@ -12110,7 +12116,7 @@ impl ApplicationHandler<AppEvent> for App {
                         "Nexa Beep — {}",
                         nbeep_core::t(nbeep_core::Msg::WinFileRequest)
                     ))
-                    .with_inner_size(winit::dpi::LogicalSize::new(440.0, 360.0))
+                    .with_inner_size(winit::dpi::LogicalSize::new(440.0, 400.0))
                     .with_resizable(false)
                     // ★ 최상위(사용자 확정 08-19) — 수신 승인은 타임아웃이 걸린
                     //   **행동 요구** 창이라 다른 창에 묻히면 자동 거절로 흘러간다.

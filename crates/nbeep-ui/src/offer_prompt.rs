@@ -29,8 +29,10 @@ pub struct OfferInfo {
     pub name: String,
     /// 크기(바이트) — **요청 전체 총합**(M4-2e 요청 단위 승인 · 08-20).
     pub size: u64,
-    /// 요청의 파일 수(1 = 단건 — 목록·총합은 manifest가 원료).
+    /// 요청의 파일 수 — **시도한 전체**(제외 포함 · 08-20 사용자 확정).
     pub count: usize,
+    /// 제외된 파일명 목록(", " 구분 · 빈 = 행 생략) — 상한 초과 등 전송 제외분.
+    pub excluded: String,
     /// 같은 상대에게서 대기 중인 제안 수(1이면 표시하지 않는다).
     pub queued: usize,
     /// 자동 승인 강등 안내(08-16 — 자동 승인 중인데 이 창이 뜬 이유를 설명:
@@ -249,13 +251,17 @@ impl Widget for OfferPromptWidget {
         // 정보 4종 — 라벨/값 2열.
         let mut y = b.y + pad + th + self.s(12);
         let label_w = self.s(88);
-        let rows = [
+        let mut rows = vec![
             (t(Msg::OfferSender), self.info.sender.clone()),
             (t(Msg::OfferWhen), self.info.when.clone()),
             (t(Msg::OfferCount), self.info.count.to_string()),
             (t(Msg::OfferName), self.info.name.clone()),
-            (t(Msg::OfferSize), human(self.info.size)),
         ];
+        if !self.info.excluded.is_empty() {
+            // 제외분 식별(08-20) — 시도 전체를 알 수 있게 목록으로 한 줄.
+            rows.push((t(Msg::OfferExcluded), self.info.excluded.clone()));
+        }
+        rows.push((t(Msg::OfferSize), human(self.info.size)));
         for (k, v) in rows {
             ctx.select_font(FontSlot::Status, false);
             let sh = ctx.text_height();
@@ -343,6 +349,7 @@ mod tests {
             size: 1024 * 1024,
             queued: 1,
             count: 1,
+            excluded: String::new(),
             downgrade_note: String::new(),
             resume_pct: None,
         }

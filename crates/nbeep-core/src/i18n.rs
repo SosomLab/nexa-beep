@@ -197,6 +197,8 @@ pub enum Msg {
     /// 이어받기 버튼(M4-10c — {0} = 보존율 %).
     /// 승인 창 파일 수 라벨(M4-2e 요청 단위 승인 — 08-20).
     OfferCount,
+    /// 승인 창 제외 목록 라벨(08-20 — 상한 초과 등으로 배치에서 빠진 파일).
+    OfferExcluded,
     OfferResumeBtn,
     /// 로그 하위 섹션(M3-22 — 고급 하위).
     SubLog,
@@ -1443,6 +1445,7 @@ impl Msg {
             Msg::OfferAutoBtn => ["Auto-accept", "자동 승인", "自动接受", "自動承認"],
             Msg::OfferCancel => ["Cancel", "취소", "取消", "キャンセル"],
             Msg::OfferCount => ["Files", "파일 수", "文件数", "ファイル数"],
+            Msg::OfferExcluded => ["Excluded", "제외됨", "已排除", "除外"],
             Msg::OfferResumeBtn => ["Resume {}%", "이어받기 {}%", "续传 {}%", "再開 {}%"],
             Msg::SubLog => ["Log", "로그", "日志", "ログ"],
             Msg::LogEnabled => ["Status logging", "상태 로그 기록", "状态日志", "ステータスログ"],
