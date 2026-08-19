@@ -102,6 +102,11 @@ enum AppEvent {
     /// L1 링크 변화(M1-2 · **디바운스 후**) — Wi-Fi 전환·케이블·절전 복귀.
     /// 전송에 재발견을 시키고 상태바에 알린다(변화 자체는 OS 구독 스레드가 관측).
     LinkChanged,
+    /// 배치 목록 도착(M4-2e · Control 13) — 요청 단위 승인·수신 목록의 원료.
+    XferManifest {
+        peer: PeerId,
+        entries: Vec<(String, u64, bool)>,
+    },
     /// 파일 수신 제안 도착 — 사용자가 수락/거절할 때까지 데이터는 오지 않는다(FR-X-3).
     XferOffer {
         peer: PeerId,
@@ -927,6 +932,26 @@ fn spawn_session_actor(
                             StreamId::Control,
                             &nbeep_core::xfer::encode_cap_advert(inbox.max_file()),
                         );
+                    }
+                    // 배치 목록(M4-2e · 태그 13) — 요청 단위 승인·수신 목록의 원료.
+                    StreamId::Control
+                        if nbeep_core::xfer::decode_batch_manifest(&bytes).is_some() =>
+                    {
+                        if let Some(entries) = nbeep_core::xfer::decode_batch_manifest(&bytes) {
+                            let _ = proxy.send_event(AppEvent::XferManifest { peer, entries });
+                        }
+                    }
+                    // 수신측 일시정지/재개 요청(M4-2e · 태그 14/15) — 발신 펌프 게이트.
+                    StreamId::Control if nbeep_core::xfer::decode_pause_req(&bytes).is_some() => {
+                        if let Some((id, pause)) = nbeep_core::xfer::decode_pause_req(&bytes) {
+                            if pause {
+                                if sending.as_ref().is_some_and(|st| st.id == id) {
+                                    paused_xid = Some(id);
+                                }
+                            } else if paused_xid == Some(id) {
+                                paused_xid = None;
+                            }
+                        }
                     }
                     StreamId::Control if nbeep_core::ChatAck::decode(&bytes).is_some() => {
                         // 수신 확인(N-2) — 태그로 프로필과 구분. 도착만 메인에 올린다.
@@ -2003,6 +2028,12 @@ struct App {
     /// 일시정지된 발신 파일(M4-2d · 상대별 경로 집합) — 큐 펌프가 건너뛴다(대기
     /// 파일 pass) · 활성 전송은 P2에서 액터 pump gate로 확장.
     send_paused: HashMap<PeerId, std::collections::HashSet<std::path::PathBuf>>,
+    /// 수신 대기 배치 목록(M4-2e · 상대별 manifest) — 요청 단위 승인의 원료.
+    /// 첫 오퍼 승인 시 남은 항목이 `batch_approved`로 넘어간다.
+    recv_manifest: HashMap<PeerId, Vec<(String, u64, bool)>>,
+    /// 요청 단위 승인 잔여(M4-2e) — 승인 1회 후 이후 오퍼를 **이름+크기 대조**로
+    /// 자동 수락(불일치 = 수동 폴백 · fail-closed). 소진·거절·종료 때 비운다.
+    batch_approved: HashMap<PeerId, Vec<(String, u64)>>,
     /// 이번 배치에서 **용량 초과로 제외**된 파일(M4-2e · 상대별 이름·크기) —
     /// 전송하지 않지만 목록(스레드 라인·manifest)에는 보인다(사용자 확정 08-19
     /// "파일 단위 검사 · 제외 상태로 목록에"). 배치 종료 때 함께 비운다.
@@ -2476,7 +2507,7 @@ impl App {
             (a, b) => a.or(b),
         };
         if eff_cap.is_some_and(|cap| size > cap) {
-            self.push_excluded_line(peer, &name, size);
+            self.push_excluded_line(peer, true, &name, size);
             self.send_manifest(peer); // 목록 변화 즉시 공지(수신측 목록에도 제외 표시)
             self.request_redraw(id);
             return;
@@ -2970,10 +3001,10 @@ impl App {
     /// 전송 제외 라인(M4-2e) — 큐에 넣지 않고 스레드에 "전송 제외" 종결 라인으로
     /// 남긴다(사용자 확정: 초과 파일도 목록에 보이게 · 배치는 계속). manifest에도
     /// excluded로 실려 수신측 목록에 같은 상태가 보인다.
-    fn push_excluded_line(&mut self, peer: PeerId, name: &str, size: u64) {
+    fn push_excluded_line(&mut self, peer: PeerId, mine: bool, name: &str, size: u64) {
         let (at_ms, wall) = now_stamp();
         let safe = nbeep_core::sanitize_message(name);
-        let mut line = ChatLine::xfer(true, safe, size, at_ms, wall);
+        let mut line = ChatLine::xfer(mine, safe, size, at_ms, wall);
         if let nbeep_ui::ChatBody::Xfer(x) = &mut line.body {
             x.state = nbeep_ui::XferLineState::Failed {
                 why: nbeep_core::t(nbeep_core::Msg::XferExcluded).into(),
@@ -2987,10 +3018,12 @@ impl App {
             chat.push_line(line, &mut inv);
         }
         self.record_history(peer);
-        self.send_excluded
-            .entry(peer)
-            .or_default()
-            .push((name.to_string(), size));
+        if mine {
+            self.send_excluded
+                .entry(peer)
+                .or_default()
+                .push((name.to_string(), size));
+        }
         self.set_status(format!(
             "{name} — {}",
             nbeep_core::t(nbeep_core::Msg::XferExcluded)
@@ -3162,6 +3195,11 @@ impl App {
         let resumed = resume.as_ref().map(Vec::len);
         let ok =
             self.send_xfer_decision(peer, xid, accept, nbeep_core::RejectWhy::Declined, resume);
+        if accept && ok {
+            self.arm_batch_approval(peer, &name, size); // 요청 단위 승인(M4-2e)
+        } else if !accept {
+            self.clear_batch_approval(peer); // 거절 = 요청(배치) 전체 마감(M4-2e)
+        }
         if let Some(got) = resumed {
             self.set_status(format!(
                 "이어받기 — {name} {}%부터",
@@ -3281,6 +3319,39 @@ impl App {
     }
 
     /// 승인 화면의 결정을 실행한다.
+    /// 요청 단위 승인 무장(M4-2e) — 사용자가 배치의 한 파일을 승인하면, 대기
+    /// manifest의 **나머지 비제외 항목**을 자동 수락 목록으로 옮긴다(이후 오퍼는
+    /// 이름+크기 대조로 무확인 수락 · 불일치 = 수동 폴백 fail-closed).
+    fn arm_batch_approval(&mut self, peer: PeerId, name: &str, size: u64) {
+        let Some(man) = self.recv_manifest.remove(&peer) else {
+            return;
+        };
+        let mut seen_self = false;
+        let rem: Vec<(String, u64)> = man
+            .into_iter()
+            .filter(|(n, s, excluded)| {
+                if *excluded {
+                    return false;
+                }
+                if !seen_self && n == name && *s == size {
+                    seen_self = true; // 지금 승인한 파일 자신은 제외(1회만)
+                    return false;
+                }
+                true
+            })
+            .map(|(n, s, _)| (n, s))
+            .collect();
+        if !rem.is_empty() {
+            self.batch_approved.insert(peer, rem);
+        }
+    }
+
+    /// 요청 단위 승인 해제(M4-2e) — 거절·종료 시 배치 전체 마감.
+    fn clear_batch_approval(&mut self, peer: PeerId) {
+        self.recv_manifest.remove(&peer);
+        self.batch_approved.remove(&peer);
+    }
+
     fn run_offer_choice(&mut self, peer: PeerId, choice: nbeep_ui::OfferChoice) {
         use nbeep_ui::OfferChoice;
         let front = self
@@ -3296,12 +3367,14 @@ impl App {
                 // 처음부터(M4-10c) — 보존분은 의사 표시로 폐기하고 새로 받는다.
                 crate::part::remove_partial(crate::gate::CH_GUI, &sha);
                 self.send_xfer_decision(peer, xid, true, nbeep_core::RejectWhy::Declined, None);
+                self.arm_batch_approval(peer, &name, size); // 요청 단위 승인(M4-2e)
                 self.set_status(nbeep_core::tf(nbeep_core::Msg::StfAcceptRecv, &[&name]));
             }
             OfferChoice::Approve => {
                 let resume = self.load_resume(peer, &sha, size);
                 let resumed = resume.as_ref().map(Vec::len);
                 self.send_xfer_decision(peer, xid, true, nbeep_core::RejectWhy::Declined, resume);
+                self.arm_batch_approval(peer, &name, size); // 요청 단위 승인(M4-2e)
                 self.set_status(if let Some(got) = resumed {
                     format!("이어받기 — {name} {}%부터", got as u64 * 100 / size.max(1))
                 } else {
@@ -3310,6 +3383,7 @@ impl App {
             }
             OfferChoice::Cancel { by_timeout } => {
                 self.send_xfer_decision(peer, xid, false, nbeep_core::RejectWhy::Declined, None);
+                self.clear_batch_approval(peer); // 거절 = 요청(배치) 전체 마감(M4-2e)
                 self.set_xfer_line(
                     peer,
                     false,
@@ -9902,6 +9976,30 @@ impl ApplicationHandler<AppEvent> for App {
                         self.push_xfer_line(peer, false, &name, size);
                     }
                     OfferVerdict::Ask => {
+                        // ★ 요청 단위 승인(M4-2e · 사용자 확정) — 앞서 승인한 배치의
+                        //   잔여 파일이면 재확인 없이 자동 수락. **manifest의 이름+
+                        //   크기와 일치할 때만**(불일치 = 아래 수동 폴백 · fail-closed).
+                        let batch_hit = self.batch_approved.get_mut(&peer).and_then(|rem| {
+                            rem.iter()
+                                .position(|(n, s)| n == &name && *s == size)
+                                .map(|pos| {
+                                    rem.remove(pos);
+                                    rem.is_empty()
+                                })
+                        });
+                        if let Some(emptied) = batch_hit {
+                            if emptied {
+                                self.batch_approved.remove(&peer);
+                            }
+                            let resume = self.load_resume(peer, &rkey, size);
+                            self.send_xfer_decision(peer, id, true, RejectWhy::Declined, resume);
+                            self.push_xfer_line(peer, false, &name, size);
+                            self.redraw_conversation(peer);
+                            if let Some(mid) = self.main_id {
+                                self.request_redraw(mid);
+                            }
+                            return;
+                        }
                         // OS 알림(M3-8) — **파일명은 싣지 않는다**(FR-S-41 금지 목록).
                         {
                             use nbeep_core::TrustStore as _;
@@ -9990,6 +10088,35 @@ impl ApplicationHandler<AppEvent> for App {
                 if let Some(mid) = self.main_id {
                     self.request_redraw(mid);
                 }
+            }
+            AppEvent::XferManifest { peer, entries } => {
+                // 배치 목록 도착(M4-2e) — 스레드에 전 파일 라인을 세운다: 제외는
+                // 종결 라인, 나머지는 대기 라인(오퍼 도착이 재활성). ★ 발신자가
+                // 드롭마다 재송하므로 **이전 manifest와의 차분만** 라인으로 추가
+                // (제외 라인은 종결이라 재활성 가드가 없다 — 그대로 밀면 중복).
+                let old = self.recv_manifest.get(&peer).cloned().unwrap_or_default();
+                let mut consumed = vec![false; old.len()];
+                for e in &entries {
+                    let dup = old.iter().enumerate().any(|(i, o)| {
+                        if !consumed[i] && o == e {
+                            consumed[i] = true;
+                            true
+                        } else {
+                            false
+                        }
+                    });
+                    if dup {
+                        continue;
+                    }
+                    let (name, size, excluded) = e;
+                    if *excluded {
+                        self.push_excluded_line(peer, false, name, *size);
+                    } else {
+                        self.push_xfer_line(peer, false, name, *size);
+                    }
+                }
+                self.recv_manifest.insert(peer, entries);
+                self.redraw_conversation(peer);
             }
             AppEvent::XferDone {
                 peer,
@@ -10324,8 +10451,9 @@ impl ApplicationHandler<AppEvent> for App {
             AppEvent::Closed { peer } => {
                 self.active_send.remove(&peer);
                 self.active_recv.remove(&peer);
-                // ack 대기 정리(RL-14ⓐ · 08-18) — 상대가 떠났으면 수신 확인은
-                // 영영 안 온다. 남기면 종료 가드가 영구 "확인 대기 N건"이 된다.
+                self.clear_batch_approval(peer); // 세션 종료 = 요청 승인 잔여 마감(M4-2e)
+                                                 // ack 대기 정리(RL-14ⓐ · 08-18) — 상대가 떠났으면 수신 확인은
+                                                 // 영영 안 온다. 남기면 종료 가드가 영구 "확인 대기 N건"이 된다.
                 self.awaiting_ack.remove(&peer);
                 self.preparing_send.remove(&peer); // 해시 워커 결과는 도착 시 무시된다
                 self.cap_req_deadline.remove(&peer);
@@ -12371,6 +12499,8 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         send_batch_view: HashMap::new(),
         send_paused: HashMap::new(),
         send_excluded: HashMap::new(),
+        recv_manifest: HashMap::new(),
+        batch_approved: HashMap::new(),
         pending_send_window: None,
         send_rate: nbeep_core::RateLimit::Auto,
         recv_rate: nbeep_core::RateLimit::Auto,
