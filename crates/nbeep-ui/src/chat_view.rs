@@ -292,12 +292,13 @@ pub fn update_xfer_named(
         }
         if let ChatBody::Xfer(x) = &mut line.body {
             if x.name.as_str() == name
-                && x.size == size
+                && (size == 0 || x.size == size) // 0 = 크기 무관(수신 완료 이벤트)
                 && matches!(
                     x.state,
                     XferLineState::Waiting
                         | XferLineState::Active { .. }
                         | XferLineState::Paused { .. }
+                        | XferLineState::AwaitingAck // 종단 ack의 파일 단위 종결
                 )
             {
                 x.state = state;
@@ -1679,10 +1680,13 @@ impl Widget for ChatViewWidget {
                         let gap = self.s(8);
                         let cy = by0 + (bub_h - d) / 2;
                         let total = acts.len() as i32 * d + (acts.len() as i32 - 1) * gap;
+                        // 시간 라벨(분 경계 마지막 풍선 옆)과 겹치지 않게 라벨
+                        // 지대(≈"15:29" 폭)를 비켜 배치한다(실기 08-19 — 겹침).
+                        let time_zone = self.s(46);
                         let mut ixx = if l.mine {
-                            bub.x - gap - total
+                            bub.x - gap - total - time_zone
                         } else {
-                            bub.right() + gap + self.s(6)
+                            bub.right() + gap + self.s(6) + time_zone
                         };
                         for act in acts {
                             let alpha: &'static [u8] = match act {
