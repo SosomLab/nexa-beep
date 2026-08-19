@@ -301,7 +301,21 @@ pub fn update_xfer_named(
                         | XferLineState::AwaitingAck // 종단 ack의 파일 단위 종결
                 )
             {
-                x.state = state;
+                // done = u64::MAX 센티널 — 이전 진행 바이트 승계(통지에는 바이트가
+                // 없다: 발신측 정지/재개 통지가 % 표시를 0으로 되돌리지 않게).
+                let prev_done = match x.state {
+                    XferLineState::Active { done } | XferLineState::Paused { done } => done,
+                    _ => 0,
+                };
+                x.state = match state {
+                    XferLineState::Paused { done: u64::MAX } => {
+                        XferLineState::Paused { done: prev_done }
+                    }
+                    XferLineState::Active { done: u64::MAX } => {
+                        XferLineState::Active { done: prev_done }
+                    }
+                    other => other,
+                };
                 return true;
             }
         }
@@ -1695,13 +1709,9 @@ impl Widget for ChatViewWidget {
                         let gap = ctl_gap;
                         let cy = by0 + (bub_h - d) / 2;
                         let icons_w = ctl_total - ctl_gap; // 텍스트 간격 제외 실폭
-                                                           // ★ 풍선 안 맨 끝(사용자 확정 08-19) — 발신 = 우측 끝 ·
-                                                           //   수신 = 좌측 끝(미러). 풍선 폭은 위에서 늘려 두었다.
-                        let mut ixx = if l.mine {
-                            bub.right() - pad_h - icons_w
-                        } else {
-                            bub.x + pad_h
-                        };
+                                                           // ★ 풍선 안 **우측 끝 — 양방향 동일**(사용자 확정 08-19
+                                                           //   최종: 송·수신 구조 통일). 풍선 폭은 위에서 늘려 두었다.
+                        let mut ixx = bub.right() - pad_h - icons_w;
                         for act in acts {
                             let alpha: &'static [u8] = match act {
                                 XferCtlAct::Pause => crate::icons::xfer::PAUSE_ALPHA,
@@ -1736,13 +1746,11 @@ impl Widget for ChatViewWidget {
                         self.thumb_hits.borrow_mut().push((hr, qp.clone()));
                     }
                 }
-                // 수신 풍선은 아이콘이 왼쪽 끝(미러) — 텍스트를 그만큼 민다.
-                let text_shift = if l.mine { 0 } else { ctl_total };
                 for (si, s) in b.lines.iter().enumerate() {
                     let ly = by0 + pad_v + si as i32 * line_h;
                     let clip = Rect::new(bub.x, ly, bub.w, line_h);
                     ctx.text(
-                        bub.x + pad_h + thumb_pad + text_shift,
+                        bub.x + pad_h + thumb_pad,
                         ly + (line_h - th) / 2,
                         clip,
                         s,

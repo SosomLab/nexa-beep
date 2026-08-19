@@ -117,6 +117,12 @@ enum AppEvent {
         sha256: [u8; 32],
     },
     /// 전송 진행률(수신·발신 공용) — 상태바 표시용.
+    /// 발신측 정지/재개 **통지**(M4-2e — 수신 화면 동기 · Control 14/15 재사용).
+    XferPeerPauseNotice {
+        peer: PeerId,
+        name: String,
+        paused: bool,
+    },
     /// 정지 확정(M4-2e — 액터가 실제로 보관 슬롯에 넣은 순간 · 단일 진실).
     /// 앱은 이때만 라인 Paused·큐 이동·다음 파일 펌프를 수행한다(수락 경합 제거).
     XferPaused {
@@ -764,6 +770,10 @@ fn spawn_session_actor(
                                         size: st.total,
                                         done: st.next,
                                     });
+                                    let _ = session.send(
+                                        StreamId::Control,
+                                        &nbeep_core::xfer::encode_pause_req(st.id, true),
+                                    );
                                     parked.push((st, false));
                                 }
                             } else {
@@ -788,6 +798,10 @@ fn spawn_session_actor(
                                         size: st.total,
                                         done: st.next,
                                     });
+                                    let _ = session.send(
+                                        StreamId::Control,
+                                        &nbeep_core::xfer::encode_pause_req(st.id, false),
+                                    );
                                     sending = Some(st);
                                 } else {
                                     parked[pos].1 = true; // 활성 종료 후 이어감
@@ -848,6 +862,10 @@ fn spawn_session_actor(
                             size: st.total,
                             done: st.next,
                         });
+                        let _ = session.send(
+                            StreamId::Control,
+                            &nbeep_core::xfer::encode_pause_req(st.id, true),
+                        );
                         parked.push((st, false));
                     }
                 }
@@ -867,6 +885,10 @@ fn spawn_session_actor(
                             size: st.total,
                             done: st.next,
                         });
+                        let _ = session.send(
+                            StreamId::Control,
+                            &nbeep_core::xfer::encode_pause_req(st.id, false),
+                        );
                         sending = Some(st);
                     }
                 }
@@ -1074,7 +1096,15 @@ fn spawn_session_actor(
                     // 수신측 일시정지/재개 요청(M4-2e · 태그 14/15) — 발신 펌프 게이트.
                     StreamId::Control if nbeep_core::xfer::decode_pause_req(&bytes).is_some() => {
                         if let Some((id, pause)) = nbeep_core::xfer::decode_pause_req(&bytes) {
-                            if pause {
+                            // ★ 내가 그 파일의 **수신자**면 = 발신측 상태 통지
+                            //   (M4-2e — 수신 화면도 정지/재개가 보여야 한다).
+                            if let Some(name) = recv_names.get(&id).cloned() {
+                                let _ = proxy.send_event(AppEvent::XferPeerPauseNotice {
+                                    peer,
+                                    name,
+                                    paused: pause,
+                                });
+                            } else if pause {
                                 if sending.as_ref().is_some_and(|st| st.id == id) {
                                     if let Some(st) = sending.take() {
                                         let _ = proxy.send_event(AppEvent::XferPaused {
@@ -1089,6 +1119,10 @@ fn spawn_session_actor(
                                             size: st.total,
                                             done: st.next,
                                         });
+                                        let _ = session.send(
+                                            StreamId::Control,
+                                            &nbeep_core::xfer::encode_pause_req(st.id, true),
+                                        );
                                         parked.push((st, false));
                                     }
                                 } else {
@@ -1111,6 +1145,10 @@ fn spawn_session_actor(
                                             size: st.total,
                                             done: st.next,
                                         });
+                                        let _ = session.send(
+                                            StreamId::Control,
+                                            &nbeep_core::xfer::encode_pause_req(st.id, false),
+                                        );
                                         sending = Some(st);
                                     } else {
                                         parked[pos].1 = true;
@@ -5564,7 +5602,10 @@ impl App {
                 .unwrap_or(2000),
             avatar: {
                 // 내 사진 미리보기(M4-5) — 격리 디코드는 워커로(창 열림이 1~2초 얼지
-                // 않게 · 08-13). 도착하면 `Decoded(MyAvatar)`가 채운다(그전엔 이니셜).
+                // 않게 · 08-13). ★ 초기값 = **툴바용 캐시(my_avatar)**(08-19 실기 —
+                // None으로 열면 기본 아바타가 먼저 보였다가 사진으로 바뀌는 깜빡임).
+                // 256px 정본은 도착 시 `Decoded(MyAvatar)`가 갈아끼운다(같은 사진이라
+                // 선명해질 뿐 화면 전환으로 보이지 않는다).
                 let p = self.settings.get("profile.image_path").to_string();
                 if !p.is_empty() {
                     spawn_decode(self.proxy.clone(), DecodeTarget::MyAvatar, move || {
@@ -5572,8 +5613,10 @@ impl App {
                             .ok()
                             .and_then(|b| crate::imgdec::avatar_raw_from_bytes(&b, 256))
                     });
+                    self.my_avatar.clone()
+                } else {
+                    None
                 }
-                None
             },
             recent: {
                 // 최근 프로필 이미지(08-14) — 탭 구분 목록. 썸네일은 워커 디코드로
@@ -10530,12 +10573,21 @@ impl ApplicationHandler<AppEvent> for App {
                 } else {
                     self.active_recv.contains_key(&peer)
                 };
-                // ★ 이름 있는 이벤트는 가드를 우회한다(M4-2e — active_recv/send는
-                //   상대당 1슬롯이라, 정지→다음 파일 완료가 슬롯을 지우면 재개된
-                //   파일의 진행률이 여기서 버려져 표시가 얼었다(실기 08-19).
-                //   이름 대상 갱신은 종결 라인을 건드리지 않으므로 이 가드가 막던
-                //   "취소 후 지각 이벤트의 배너 부활"이 애초에 불가능하다).
-                if !active && name.is_empty() {
+                // ★ 이름 있는 이벤트는 **라인 갱신만** 가드를 우회한다(M4-2e —
+                //   1슬롯 가드가 재개된 파일의 진행 표시를 얼렸던 실기). 단
+                //   **배너(xfer_progress)는 활성일 때만** 갱신 — 지각 이벤트가
+                //   전체취소 뒤 배너를 되살리던 회귀(실기 08-19 2차) 차단.
+                if !active {
+                    if !name.is_empty() {
+                        self.set_xfer_line_named(
+                            peer,
+                            sending,
+                            &name,
+                            total,
+                            nbeep_ui::XferLineState::Active { done: got },
+                        );
+                        self.redraw_conversation(peer);
+                    }
                     return;
                 }
                 let prev = self.xfer_progress.get(&peer).copied();
@@ -10671,6 +10723,17 @@ impl ApplicationHandler<AppEvent> for App {
                     );
                 }
                 self.clear_xfer(peer);
+                self.redraw_conversation(peer);
+            }
+            AppEvent::XferPeerPauseNotice { peer, name, paused } => {
+                // 발신측이 멈췄다/이었다 — 내 수신 라인을 같은 상태로(done 승계 =
+                // u64::MAX 센티널 · ▶는 ResumeReq, ⏸는 PauseReq로 원격 제어).
+                let st = if paused {
+                    nbeep_ui::XferLineState::Paused { done: u64::MAX }
+                } else {
+                    nbeep_ui::XferLineState::Active { done: u64::MAX }
+                };
+                self.set_xfer_line_named(peer, false, &name, 0, st);
                 self.redraw_conversation(peer);
             }
             AppEvent::XferPaused {
