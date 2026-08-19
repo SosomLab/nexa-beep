@@ -50,6 +50,23 @@ pub mod icons {
         pub const SIZE: u32 = 96;
     }
 
+    /// 전송 제어 아이콘 4종 — 대기·진행 창의 **카세트 테이프식 트랜스포트**
+    /// (사용자 확정 08-19 · M4-2d). 일반 버튼 대신 아이콘으로 제어를 표현한다.
+    /// 자체 작도(채움 도형 · 원본 `assets/icons-src/xfer-*.svg` · 16px 판독 실측).
+    /// 대응: `진행/재개=PLAY` · `일시중지=PAUSE` · `중지=STOP` · `취소=CANCEL`.
+    pub mod xfer {
+        /// 진행/재개(오른쪽 삼각형) 96×96 알파 마스크.
+        pub const PLAY_ALPHA: &[u8] = include_bytes!("../assets/icon-xfer-play-96.alpha");
+        /// 일시중지(두 세로 막대) 96×96 알파 마스크.
+        pub const PAUSE_ALPHA: &[u8] = include_bytes!("../assets/icon-xfer-pause-96.alpha");
+        /// 중지(둥근 사각형) 96×96 알파 마스크.
+        pub const STOP_ALPHA: &[u8] = include_bytes!("../assets/icon-xfer-stop-96.alpha");
+        /// 취소(×) 96×96 알파 마스크.
+        pub const CANCEL_ALPHA: &[u8] = include_bytes!("../assets/icon-xfer-cancel-96.alpha");
+        /// 변 크기(px) — 네 자산 공통.
+        pub const SIZE: u32 = 96;
+    }
+
     /// 연결 상태 아이콘 4종 — **큰 자리 전용**(≥20px · [docs/14 §12-7]).
     ///
     /// 원본 = **Lucide**(ISC · 사용자 확정 08-14 — 한 세트로 통일) ·
