@@ -655,9 +655,23 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
                             }
                         }
                     }
-                    Ok(XferMsg::Done { id, .. }) => match inbox.done(&id) {
-                        Ok(got) => {
+                    Ok(XferMsg::Done { id, sha256 }) => match inbox.done(&id) {
+                        Ok(mut got) => {
                             pending_in = None;
+                            // 지연 선언(08-18) — Offer가 0(스트리밍 발신 = GUI)이면 Done
+                            // 동봉 해시가 선언이다. ★ 이 보정이 GUI 수신(app.rs)에만 있고
+                            // 여기 CLI에 빠져, **GUI→CLI 파일이 전부 SHA-256 불일치로
+                            // 폐기**됐다(08-20 실기 — *배선 = 곧 빠뜨린 호출부* 재발).
+                            // 둘 다 0 = 선언 부재(fail-closed — 검증 없는 수신물은 없다).
+                            if got.declared_sha256 == [0u8; 32] {
+                                if sha256 == [0u8; 32] {
+                                    println!("[파일] 무결성 선언 부재 — 폐기");
+                                    let _ =
+                                        mux.send(StreamId::File, &XferMsg::Failed { id }.encode());
+                                    continue;
+                                }
+                                got.declared_sha256 = sha256;
+                            }
                             let ok = receive_into_quarantine(&got, peer);
                             // ★ 종단 확인(M4-9) — 격리 성패를 발신자에게 되돌린다.
                             let ack = if ok {
