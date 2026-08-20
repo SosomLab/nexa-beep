@@ -683,6 +683,13 @@ impl ChatViewWidget {
     }
 
     /// 스레드에 줄 추가(수신·발신 확정분 — 이미 무해화된 타입만 받는다).
+    /// 스레드 비우기(M3-23 대화함 삭제 — 열린 창 즉시 반영). 입력 상태는 유지.
+    pub fn clear_lines(&mut self, inv: &mut Invalidations) {
+        self.lines.clear();
+        self.scroll = 0;
+        inv.push(self.bounds);
+    }
+
     pub fn push_line(&mut self, line: ChatLine, inv: &mut Invalidations) {
         self.lines.push(line);
         self.scroll = 0; // 새 메시지 = 최신으로 스냅(표준 채팅 동작)

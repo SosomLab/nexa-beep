@@ -1954,6 +1954,8 @@ enum Role {
     PeerInfo(PeerId),
     /// 격리함 — 수신 파일 승인·삭제(M4-3 · [docs/11] §7 등급별 마찰).
     Quarantine,
+    /// 대화함 — 대화 기록 관리(M3-23 · 목록/열기/삭제/백업/복원).
+    Convbox,
     /// 수신 승인 — 제안 정보를 보여 주고 결정을 받는 창(타임아웃 = 취소).
     Approve(PeerId),
     /// 주소 직접 입력 모달(DR-19 · M3-16 — `⌘/Ctrl+K`·툴바 +).
@@ -2072,6 +2074,11 @@ enum PickerPurpose {
     SettingsBackupDir,
     /// 설정 **백업 파일** 선택(복원 · 08-15) — 폴더 탐색 + .cfg 파일.
     SettingsRestoreFile,
+    /// 대화 기록 **백업 폴더** 선택(M3-23) — 폴더 탐색 + "여기에 저장".
+    HistoryBackupDir,
+    /// 대화 기록 **복원 위치** 선택(M3-23) — 폴더 탐색 + "이 폴더에서 복원"
+    /// (개별 .seg 파일 클릭 = 그 파일만 복원).
+    HistoryRestoreDir,
 }
 
 /// 대화창 입력을 명령으로 가른 결과(08-15).
@@ -2246,6 +2253,8 @@ struct App {
     /// 여기 모았다가 about_to_wait에서 **요청 단위로 선판정**한다.
     pending_drops: Vec<(WindowId, std::path::PathBuf)>,
     quarantine_view: Option<nbeep_ui::QuarantineWidget>,
+    /// 대화함 뷰(M3-23 — 열려 있을 때만 Some).
+    convbox_view: Option<nbeep_ui::ConvboxWidget>,
     /// 상대별 진행 중 전송(목록 막대·대화창 진척 줄 공용).
     xfer_progress: HashMap<PeerId, nbeep_ui::XferProgress>,
     /// 상대별 대화 왕래 장부 — 파일 전송 자격(상호 확인)의 근거.
@@ -2527,6 +2536,11 @@ impl App {
                 }
                 Some(Role::NamePrompt) => {
                     if let Some(v) = self.name_prompt.as_mut() {
+                        v.set_preedit(&text, &mut inv);
+                    }
+                }
+                Some(Role::Convbox) => {
+                    if let Some(v) = self.convbox_view.as_mut() {
                         v.set_preedit(&text, &mut inv);
                     }
                 }
@@ -4568,6 +4582,7 @@ impl App {
             Role::Profile => self.profile_view.as_ref()?.clipboard_copy(),
             Role::Settings => self.settings_view.as_ref()?.clipboard_copy(),
             Role::NamePrompt => self.name_prompt.as_ref()?.clipboard_copy(),
+            Role::Convbox => self.convbox_view.as_ref()?.clipboard_copy(),
             Role::Gallery => self.gallery_view.as_ref()?.clipboard_copy(),
             _ => None,
         }
@@ -4595,6 +4610,7 @@ impl App {
             Role::Profile => self.profile_view.as_mut()?.clipboard_cut(&mut inv),
             Role::Settings => self.settings_view.as_mut()?.clipboard_cut(&mut inv),
             Role::NamePrompt => self.name_prompt.as_mut()?.clipboard_cut(&mut inv),
+            Role::Convbox => self.convbox_view.as_mut()?.clipboard_cut(&mut inv),
             Role::Gallery => self.gallery_view.as_mut()?.clipboard_cut(&mut inv),
             _ => None,
         }
@@ -4618,6 +4634,11 @@ impl App {
         match self.windows.get(&id).map(|e| e.role) {
             Some(Role::NamePrompt) => {
                 if let Some(v) = self.name_prompt.as_mut() {
+                    v.clipboard_paste(text, &mut inv);
+                }
+            }
+            Some(Role::Convbox) => {
+                if let Some(v) = self.convbox_view.as_mut() {
                     v.clipboard_paste(text, &mut inv);
                 }
             }
@@ -5183,6 +5204,428 @@ impl App {
     }
 
     /// 격리함 창(메뉴 → 격리함) — 승인 = 실체화, 삭제 = `.beepq` 제거.
+    /// 대화함 열기(M3-23 · 사용자 확정 08-20) — 툴바 서랍 아이콘. 단일 창.
+    fn open_convbox(&mut self, el: &ActiveEventLoop) {
+        if let Some((cid, _)) = self.windows.iter().find(|(_, e)| e.role == Role::Convbox) {
+            if let Some(e) = self.windows.get(cid) {
+                e.window.focus_window();
+            }
+            return;
+        }
+        let attrs = Window::default_attributes()
+            .with_title(format!(
+                "Nexa Beep — {}",
+                nbeep_core::t(nbeep_core::Msg::ConvboxTitle)
+            ))
+            .with_inner_size(winit::dpi::LogicalSize::new(560.0, 460.0))
+            .with_window_icon(self.icon.clone());
+        let window = Rc::new(el.create_window(attrs).unwrap());
+        window.set_ime_allowed(true); // 이름 필터 = 한글 입력 대상
+        let scale = window.scale_factor() as f32;
+        let context = softbuffer::Context::new(window.clone()).unwrap();
+        let surface = SbSurface::new(&context, window.clone()).unwrap();
+        let id = window.id();
+        self.windows.insert(
+            id,
+            WinEntry {
+                role: Role::Convbox,
+                window,
+                surface,
+                cursor: (0, 0),
+                scale,
+            },
+        );
+        let rows = self.build_convbox_rows();
+        self.convbox_view = Some(nbeep_ui::ConvboxWidget::new(rows));
+        self.layout_window(id);
+        self.request_redraw(id);
+    }
+
+    /// 대화함 행 구성 — `data/history/*.seg` 스캔 → 핀/그룹 매핑(등재 사양 ①).
+    /// 미리보기·시각은 메모리 스레드가 우선, 없으면 세그 개봉(작은 파일 — 값싸다).
+    /// 개봉도 실패(다른 신원 봉인)하면 크기만 보인다(fail-closed 표시).
+    fn build_convbox_rows(&self) -> Vec<nbeep_ui::CRow> {
+        let dir = self.data_dir.join("history");
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            return Vec::new();
+        };
+        let recs = self.trust.export();
+        let secret = self.identity.wrap_secret();
+        let mut rows: Vec<(u64, nbeep_ui::CRow)> = Vec::new();
+        for e in rd.flatten() {
+            let path = e.path();
+            if path.extension().and_then(|x| x.to_str()) != Some("seg") {
+                continue;
+            }
+            let Some(stem) = path.file_stem().and_then(|s| s.to_str()).map(String::from) else {
+                continue;
+            };
+            let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            // 메모리 스레드 우선(부팅 복원분·활성 대화) — 없으면 세그 개봉.
+            struct Src<'a> {
+                is_group: bool,
+                name: String,
+                avatar: Option<std::rc::Rc<nbeep_ui::theme::IconImage>>,
+                border: Option<(u8, u8, u8)>,
+                seed: Vec<u8>,
+                lines: Option<&'a [ChatLine]>,
+            }
+            let decoded: Option<Vec<ChatLine>>;
+            let src: Src = if let Some(gshort) = stem.strip_prefix("g-") {
+                let sg = self
+                    .groups
+                    .shared_list()
+                    .iter()
+                    .find(|s| s.roster.uid.short() == gshort);
+                let (name, seed, mem) = sg.map_or_else(
+                    || (gshort.to_string(), stem.as_bytes().to_vec(), None),
+                    |s| {
+                        (
+                            s.roster.name.as_str().to_string(),
+                            s.roster.uid.0.to_vec(),
+                            self.group_threads.get(&s.local_id).map(Vec::as_slice),
+                        )
+                    },
+                );
+                Src {
+                    is_group: true,
+                    name,
+                    avatar: None,
+                    border: None,
+                    seed,
+                    lines: mem,
+                }
+            } else {
+                let peer = recs.iter().find(|r| r.peer.short() == stem).map(|r| r.peer);
+                let (name, seed) = peer.map_or_else(
+                    || (stem.clone(), stem.as_bytes().to_vec()),
+                    |p| (self.peer_title(p), p.as_bytes().to_vec()),
+                );
+                let (avatar, border) = peer
+                    .and_then(|p| self.peer_profiles.get(&p))
+                    .map_or((None, None), |pr| (pr.avatar.clone(), pr.border));
+                let mem = peer.and_then(|p| {
+                    self.conversations
+                        .get(&p)
+                        .map(|c| c.lines.as_slice())
+                        .or_else(|| self.parked_lines.get(&p).map(Vec::as_slice))
+                });
+                Src {
+                    is_group: false,
+                    name,
+                    avatar,
+                    border,
+                    seed,
+                    lines: mem,
+                }
+            };
+            let lines = if src.lines.is_some() {
+                src.lines
+            } else {
+                decoded = std::fs::read(&path)
+                    .ok()
+                    .and_then(|raw| {
+                        nbeep_store::sealed::open(crate::gate::SEAL_HISTORY, &secret, &raw)
+                    })
+                    .map(|b| decode_history(&b));
+                decoded.as_deref()
+            };
+            let (preview, when, at_ms) = lines.and_then(|l| l.last()).map_or_else(
+                || (String::new(), String::new(), 0),
+                |l| {
+                    let pv = match &l.body {
+                        nbeep_ui::ChatBody::Text(t) => {
+                            t.as_str().lines().next().unwrap_or("").to_string()
+                        }
+                        nbeep_ui::ChatBody::Xfer(x) => {
+                            format!(
+                                "[{}] {}",
+                                nbeep_core::t(nbeep_core::Msg::WordFile),
+                                x.name.as_str()
+                            )
+                        }
+                    };
+                    let w = l.wall;
+                    (
+                        pv,
+                        format!("{:02}-{:02} {:02}:{:02}", w.mo, w.d, w.h, w.m),
+                        l.at_ms,
+                    )
+                },
+            );
+            rows.push((
+                at_ms,
+                nbeep_ui::CRow {
+                    key: stem,
+                    is_group: src.is_group,
+                    name: src.name,
+                    when,
+                    preview,
+                    size,
+                    avatar: src.avatar,
+                    border: src.border,
+                    seed: src.seed,
+                },
+            ));
+        }
+        rows.sort_by_key(|r| std::cmp::Reverse(r.0)); // 최신이 위
+        rows.into_iter().map(|(_, r)| r).collect()
+    }
+
+    /// 대화함 목록 재구성 + 재도색(삭제·복원 뒤).
+    fn refresh_convbox(&mut self) {
+        let rows = self.build_convbox_rows();
+        let mut inv = Invalidations::default();
+        if let Some(cv) = &mut self.convbox_view {
+            cv.set_rows(rows, &mut inv);
+        }
+        if let Some((cid, _)) = self.windows.iter().find(|(_, e)| e.role == Role::Convbox) {
+            let cid = *cid;
+            self.request_redraw(cid);
+        }
+    }
+
+    /// 대화함 행 하나 삭제 — sealed 파일 삭제 + **메모리 스레드 비움**(parked/
+    /// conv/group_threads) + 열린 대화창·목록 즉시 반영(등재 사양 ②).
+    fn convbox_delete_one(&mut self, key: &str) {
+        let path = self.data_dir.join("history").join(format!("{key}.seg"));
+        let _ = std::fs::remove_file(&path);
+        let mut inv = Invalidations::default();
+        if let Some(gshort) = key.strip_prefix("g-") {
+            if let Some(gid) = self
+                .groups
+                .shared_list()
+                .iter()
+                .find(|s| s.roster.uid.short() == gshort)
+                .map(|s| s.local_id)
+            {
+                self.group_threads.remove(&gid);
+                if let Some(c) = self.gchats.get_mut(&gid) {
+                    c.clear_lines(&mut inv);
+                }
+                if let Some((wid, _)) = self
+                    .windows
+                    .iter()
+                    .find(|(_, e)| e.role == Role::GroupChat(gid))
+                {
+                    let wid = *wid;
+                    self.request_redraw(wid);
+                }
+            }
+        } else if let Some(peer) = self
+            .trust
+            .export()
+            .iter()
+            .find(|r| r.peer.short() == key)
+            .map(|r| r.peer)
+        {
+            self.parked_lines.remove(&peer);
+            if let Some(conv) = self.conversations.get_mut(&peer) {
+                conv.lines.clear();
+            }
+            if let Some(c) = self.chats.get_mut(&peer) {
+                c.clear_lines(&mut inv);
+            }
+            self.redraw_conversation(peer);
+        }
+    }
+
+    /// 대화함 행위 실행 — 열기/삭제/전체 삭제/백업/복원(위젯은 의도만 안다).
+    fn run_convbox_action(&mut self, act: nbeep_ui::CvAction, id: WindowId, el: &ActiveEventLoop) {
+        match act {
+            nbeep_ui::CvAction::Open(key) => {
+                // 행 클릭 = 그 대화 열기(목록 클릭과 동일 경로 · 사용자 확정 08-20).
+                if let Some(gshort) = key.strip_prefix("g-") {
+                    if let Some(gid) = self
+                        .groups
+                        .shared_list()
+                        .iter()
+                        .find(|s| s.roster.uid.short() == gshort)
+                        .map(|s| s.local_id)
+                    {
+                        self.open_group_thread(gid, el);
+                    }
+                } else if let Some(peer) = self
+                    .trust
+                    .export()
+                    .iter()
+                    .find(|r| r.peer.short() == key)
+                    .map(|r| r.peer)
+                {
+                    self.activate(peer, el);
+                }
+            }
+            nbeep_ui::CvAction::Delete(key) => {
+                self.convbox_delete_one(&key);
+                self.set_status(nbeep_core::tf(nbeep_core::Msg::StfCvDeleted, &[&key]));
+                self.refresh_convbox();
+            }
+            nbeep_ui::CvAction::DeleteAll => {
+                let keys: Vec<String> = self
+                    .build_convbox_rows()
+                    .into_iter()
+                    .map(|r| r.key)
+                    .collect();
+                for k in keys {
+                    self.convbox_delete_one(&k);
+                }
+                self.set_status(nbeep_core::t(nbeep_core::Msg::StCvCleared).to_string());
+                self.refresh_convbox();
+            }
+            nbeep_ui::CvAction::Backup => {
+                if self.build_convbox_rows().is_empty() {
+                    let mut inv = Invalidations::default();
+                    if let Some(cv) = &mut self.convbox_view {
+                        cv.set_message(nbeep_core::t(nbeep_core::Msg::StCvNone), &mut inv);
+                    }
+                    self.request_redraw(id);
+                } else {
+                    self.pending_picker = Some(PickerPurpose::HistoryBackupDir);
+                }
+            }
+            nbeep_ui::CvAction::Restore => {
+                self.pending_picker = Some(PickerPurpose::HistoryRestoreDir);
+            }
+        }
+    }
+
+    /// 대화 기록 전체 백업(M3-23 · 사용자 확정 = **sealed 그대로 · 전체만**) —
+    /// 대상지에 하위 폴더를 만들고 `*.seg`를 복사한다(기록 암호화 철학 유지 —
+    /// 복원은 같은 신원에서만 열린다).
+    fn do_backup_history(&mut self, dir: &std::path::Path) -> String {
+        let src = self.data_dir.join("history");
+        let dst = dir.join(self.picker_save_name(PickerPurpose::HistoryBackupDir));
+        if std::fs::create_dir_all(&dst).is_err() {
+            return nbeep_core::t(nbeep_core::Msg::StHistorySealFail).to_string();
+        }
+        let mut n = 0usize;
+        if let Ok(rd) = std::fs::read_dir(&src) {
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.extension().and_then(|x| x.to_str()) == Some("seg")
+                    && std::fs::copy(&p, dst.join(e.file_name())).is_ok()
+                {
+                    n += 1;
+                }
+            }
+        }
+        if n == 0 {
+            return nbeep_core::t(nbeep_core::Msg::StCvNone).to_string();
+        }
+        let m = nbeep_core::tf(
+            nbeep_core::Msg::StfCvBackupDone,
+            &[&n.to_string(), &dst.display().to_string()],
+        );
+        let mut inv = Invalidations::default();
+        if let Some(cv) = &mut self.convbox_view {
+            cv.set_message(m.clone(), &mut inv);
+        }
+        self.refresh_convbox();
+        m
+    }
+
+    /// 대화 기록 복원 — 폴더의 `*.seg` 전부(사용자 확정: **중복 = 덮어쓰기 ·
+    /// 없으면 추가 · 기존 유지**). 파일 반입 후 메모리 스레드에 즉시 반영.
+    fn do_restore_history_dir(&mut self, dir: &std::path::Path) -> String {
+        let files: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
+            .map(|rd| {
+                rd.flatten()
+                    .map(|e| e.path())
+                    .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("seg"))
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.do_restore_history_files(&files)
+    }
+
+    /// 복원 실행(파일 목록판 — 폴더 복원·개별 파일 클릭 공용).
+    fn do_restore_history_files(&mut self, files: &[std::path::PathBuf]) -> String {
+        if files.is_empty() {
+            return nbeep_core::t(nbeep_core::Msg::StCvNone).to_string();
+        }
+        let dst_dir = self.data_dir.join("history");
+        let _ = std::fs::create_dir_all(&dst_dir);
+        let mut n = 0usize;
+        let mut restored: Vec<String> = Vec::new();
+        for p in files {
+            let Some(name) = p.file_name() else { continue };
+            if std::fs::copy(p, dst_dir.join(name)).is_ok() {
+                n += 1;
+                if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+                    restored.push(stem.to_string());
+                }
+            }
+        }
+        self.apply_restored_history(&restored);
+        let m = nbeep_core::tf(nbeep_core::Msg::StfCvRestoreDone, &[&n.to_string()]);
+        let mut inv = Invalidations::default();
+        if let Some(cv) = &mut self.convbox_view {
+            cv.set_message(m.clone(), &mut inv);
+        }
+        self.refresh_convbox();
+        m
+    }
+
+    /// 복원 파일을 메모리 스레드에 반영 — 복원이 이긴다(덮어쓰기 의미론을
+    /// 메모리에도 · 안 그러면 활성 대화의 다음 record_history가 복원본을 되덮는다).
+    fn apply_restored_history(&mut self, stems: &[String]) {
+        let dir = self.data_dir.join("history");
+        let secret = self.identity.wrap_secret();
+        let recs = self.trust.export();
+        let mut inv = Invalidations::default();
+        for stem in stems {
+            let path = dir.join(format!("{stem}.seg"));
+            let Some(lines) = std::fs::read(&path)
+                .ok()
+                .and_then(|raw| nbeep_store::sealed::open(crate::gate::SEAL_HISTORY, &secret, &raw))
+                .map(|b| decode_history(&b))
+            else {
+                continue; // 다른 신원 봉인 — fail-closed(파일은 반입돼 있음)
+            };
+            if let Some(gshort) = stem.strip_prefix("g-") {
+                if let Some(gid) = self
+                    .groups
+                    .shared_list()
+                    .iter()
+                    .find(|s| s.roster.uid.short() == gshort)
+                    .map(|s| s.local_id)
+                {
+                    if let Some(c) = self.gchats.get_mut(&gid) {
+                        c.clear_lines(&mut inv);
+                        for l in &lines {
+                            c.push_line(l.clone(), &mut inv);
+                        }
+                    }
+                    self.group_threads.insert(gid, lines);
+                    if let Some((wid, _)) = self
+                        .windows
+                        .iter()
+                        .find(|(_, e)| e.role == Role::GroupChat(gid))
+                    {
+                        let wid = *wid;
+                        self.request_redraw(wid);
+                    }
+                }
+            } else if let Some(peer) = recs
+                .iter()
+                .find(|r| r.peer.short() == stem.as_str())
+                .map(|r| r.peer)
+            {
+                if let Some(conv) = self.conversations.get_mut(&peer) {
+                    conv.lines = lines.clone();
+                }
+                if let Some(c) = self.chats.get_mut(&peer) {
+                    c.clear_lines(&mut inv);
+                    for l in &lines {
+                        c.push_line(l.clone(), &mut inv);
+                    }
+                }
+                self.parked_lines.insert(peer, lines);
+                self.redraw_conversation(peer);
+            }
+        }
+    }
+
     fn open_quarantine(&mut self, el: &ActiveEventLoop) {
         if let Some((qid, _)) = self
             .windows
@@ -5391,6 +5834,10 @@ impl App {
             PickerPurpose::SettingsBackupDir => {
                 format!("nexa-beep-settings-{}.cfg", self.identity.peer_id().short())
             }
+            PickerPurpose::HistoryBackupDir => {
+                // 백업은 하위 폴더로 묶는다(파일 여러 개 — 대상지 오염 방지).
+                format!("nexa-beep-history-{}", self.identity.peer_id().short())
+            }
             _ => self.default_backup_name(),
         }
     }
@@ -5405,9 +5852,18 @@ impl App {
         let mut entries: Vec<(String, PickEntry)> = Vec::new();
         if matches!(
             purpose,
-            PickerPurpose::BackupDir | PickerPurpose::SettingsBackupDir
+            PickerPurpose::BackupDir
+                | PickerPurpose::SettingsBackupDir
+                | PickerPurpose::HistoryBackupDir
         ) {
             entries.push((format!("[여기에 저장] {save_name}"), PickEntry::SaveHere));
+        }
+        if purpose == PickerPurpose::HistoryRestoreDir {
+            // 폴더 단위 복원(중복 = 덮어쓰기 · 사용자 확정) — 개별 파일 클릭도 허용.
+            entries.push((
+                nbeep_core::t(nbeep_core::Msg::PickRestoreHere).to_string(),
+                PickEntry::SaveHere,
+            ));
         }
         if let Some(parent) = dir.parent().filter(|p| !p.as_os_str().is_empty()) {
             let _ = parent;
@@ -5428,6 +5884,9 @@ impl App {
                             PickerPurpose::RestoreKey => true,
                             PickerPurpose::SettingsRestoreFile => {
                                 name.to_ascii_lowercase().ends_with(".cfg")
+                            }
+                            PickerPurpose::HistoryRestoreDir => {
+                                name.to_ascii_lowercase().ends_with(".seg")
                             }
                             PickerPurpose::ProfileImage => {
                                 let lower = name.to_ascii_lowercase();
@@ -5472,6 +5931,12 @@ impl App {
             }
             PickerPurpose::SettingsRestoreFile => {
                 nbeep_core::tf(nbeep_core::Msg::TitlePickSettingsBackup, &[&dir_s])
+            }
+            PickerPurpose::HistoryBackupDir => {
+                nbeep_core::tf(nbeep_core::Msg::TitlePickCvBackupDir, &[&dir_s])
+            }
+            PickerPurpose::HistoryRestoreDir => {
+                nbeep_core::tf(nbeep_core::Msg::TitlePickCvRestoreDir, &[&dir_s])
             }
             PickerPurpose::GallerySample => String::new(),
         };
@@ -9263,6 +9728,12 @@ impl App {
                     qv.set_bounds(Rect::new(0, 0, w, h), &mut inv);
                 }
             }
+            Role::Convbox => {
+                if let Some(cv) = &mut self.convbox_view {
+                    cv.set_scale(scale, &mut inv);
+                    cv.set_bounds(Rect::new(0, 0, w, h), &mut inv);
+                }
+            }
             Role::Approve(peer) => {
                 if let Some(pv) = self.approve_view.get_mut(&peer) {
                     pv.set_scale(scale, &mut inv);
@@ -9869,6 +10340,7 @@ impl App {
                         match a.as_str() {
                             "settings" => self.open_settings(el),
                             "quarantine" => self.open_quarantine(el),
+                            "convbox" => self.open_convbox(el),
                             "gallery" => self.open_gallery(el),
                             "about" => self.open_about(el),
                             // 명시적 종료(사용자 요청 08-15 — 메뉴에 종료가 없어
@@ -9890,6 +10362,7 @@ impl App {
                             // 직접 등록(DR-19 수동 엔드포인트) — 별도 모달 창(M3-16).
                             "add" => self.open_add_endpoint(el),
                             "quarantine" => self.open_quarantine(el),
+                            "convbox" => self.open_convbox(el),
                             "profile" => self.open_profile(el),
                             "gallery" => self.open_gallery(el),
                             _ => {}
@@ -10038,6 +10511,12 @@ impl App {
                                             PickerPurpose::SettingsBackupDir => {
                                                 self.do_backup_settings(&dir)
                                             }
+                                            PickerPurpose::HistoryBackupDir => {
+                                                self.do_backup_history(&dir)
+                                            }
+                                            PickerPurpose::HistoryRestoreDir => {
+                                                self.do_restore_history_dir(&dir)
+                                            }
                                             _ => self.do_backup_identity(&dir),
                                         };
                                         self.set_status(m);
@@ -10087,6 +10566,10 @@ impl App {
                                             }
                                             PickerPurpose::SettingsRestoreFile => {
                                                 let m = self.do_restore_settings(&p);
+                                                self.set_status(m);
+                                            }
+                                            PickerPurpose::HistoryRestoreDir => {
+                                                let m = self.do_restore_history_files(&[p]);
                                                 self.set_status(m);
                                             }
                                             _ => {
@@ -10300,6 +10783,20 @@ impl App {
                     self.run_quarantine_action(a, id);
                 }
             }
+            Role::Convbox => {
+                let mut act = None;
+                if let Some(cv) = &mut self.convbox_view {
+                    cv.on_event(&ev, &mut inv);
+                    act = cv.take_action();
+                    if cv.take_back() {
+                        self.convbox_view = None;
+                        self.windows.remove(&id);
+                    }
+                }
+                if let Some(a) = act {
+                    self.run_convbox_action(a, id, el);
+                }
+            }
         }
         if !inv.is_empty() {
             self.request_redraw(id);
@@ -10314,6 +10811,7 @@ impl App {
         let action = match self.windows.get(&id).map(|e| e.role) {
             Some(Role::Profile) => self.profile_view.as_mut().and_then(|v| v.take_edit_ctx()),
             Some(Role::NamePrompt) => self.name_prompt.as_mut().and_then(|v| v.take_edit_ctx()),
+            Some(Role::Convbox) => self.convbox_view.as_mut().and_then(|v| v.take_edit_ctx()),
             Some(Role::AddEndpoint) => self.addr_view.as_mut().and_then(|v| v.take_edit_ctx()),
             Some(Role::Settings) => self.settings_view.as_mut().and_then(|v| v.take_edit_ctx()),
             Some(Role::Gallery) => self.gallery_view.as_mut().and_then(|v| v.take_edit_ctx()),
@@ -10521,6 +11019,11 @@ impl App {
             Role::Quarantine => {
                 if let Some(qv) = &self.quarantine_view {
                     qv.paint(&mut ctx, &theme);
+                }
+            }
+            Role::Convbox => {
+                if let Some(cv) = &self.convbox_view {
+                    cv.paint(&mut ctx, &theme);
                 }
             }
             Role::Approve(peer) => {
@@ -12550,6 +13053,7 @@ impl ApplicationHandler<AppEvent> for App {
                         Role::PeerInfo(_) => self.peer_info_view = None,
                         Role::ImageView => self.image_view = None,
                         Role::Quarantine => self.quarantine_view = None,
+                        Role::Convbox => self.convbox_view = None,
                         Role::Approve(peer) => {
                             // 창을 닫으면 거절로 본다(응답하지 않은 제안을 남기지 않는다).
                             self.run_offer_choice(
@@ -12750,6 +13254,11 @@ impl ApplicationHandler<AppEvent> for App {
                             }
                             Some(Role::NamePrompt) => {
                                 if let Some(v) = self.name_prompt.as_mut() {
+                                    v.set_clipboard_has_text(has_clip);
+                                }
+                            }
+                            Some(Role::Convbox) => {
+                                if let Some(v) = self.convbox_view.as_mut() {
                                     v.set_clipboard_has_text(has_clip);
                                 }
                             }
@@ -13543,6 +14052,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         pending_alert: None,
         pending_drops: Vec::new(),
         quarantine_view: None,
+        convbox_view: None,
         xfer_progress: HashMap::new(),
         ledger: nbeep_core::ExchangeLedger::new(),
         approval: nbeep_core::ApprovalPolicy::default(),
@@ -13617,6 +14127,15 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
                     w: nbeep_ui::icons::SHIELD_SIZE,
                     h: nbeep_ui::icons::SHIELD_SIZE,
                     alpha: nbeep_ui::icons::SHIELD_ALPHA,
+                },
+            ),
+            // 대화함(M3-23) — 격리함과 동일 레벨(서랍 아이콘 · 사용자 확정 08-17).
+            ToolItem::new(
+                "convbox",
+                ToolIcon::Mask {
+                    w: nbeep_ui::icons::DRAWER_SIZE,
+                    h: nbeep_ui::icons::DRAWER_SIZE,
+                    alpha: nbeep_ui::icons::DRAWER_ALPHA,
                 },
             ),
             // 프로필 버튼 = **내 얼굴 미니**(08-14 사용자 요청 — 우측 끝 배치).

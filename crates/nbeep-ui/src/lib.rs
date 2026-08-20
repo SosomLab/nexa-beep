@@ -30,6 +30,10 @@ pub mod icons {
     pub const SHIELD_ALPHA: &[u8] = include_bytes!("../assets/icon-shield-96.alpha");
     /// 변 크기(px).
     pub const SHIELD_SIZE: u32 = 96;
+    /// 대화함(서랍 — Material inventory_2 참고 자체 작도 · M3-23) 96×96 알파 마스크.
+    pub const DRAWER_ALPHA: &[u8] = include_bytes!("../assets/icon-drawer-96.alpha");
+    /// 변 크기(px).
+    pub const DRAWER_SIZE: u32 = 96;
     /// 프로필(사람 실루엣 — 머리 원 + 어깨) 96×96 알파 마스크(M3-17 화면 진입).
     pub const PERSON_ALPHA: &[u8] = include_bytes!("../assets/icon-person-96.alpha");
     /// 변 크기(px).
@@ -137,6 +141,7 @@ pub mod addr_prompt;
 pub mod alert;
 pub mod avatar_assets;
 pub mod chat_view;
+pub mod convbox_view;
 pub mod gallery;
 pub mod hangul;
 pub mod offer_prompt;
@@ -164,6 +169,7 @@ pub use controls::{
     FiredBy, HAlign, IconDropItem, IconDropdown, MenuBar, MenuDef, MenuEntry, TimeoutButton,
     ToolIcon, ToolItem, Toolbar, VAlign,
 };
+pub use convbox_view::{CRow, ConvboxWidget, CvAction};
 pub use draw::{DrawCtx, FontSlot};
 pub use edit::{EditKey, EditState};
 pub use event::{InputEvent, Key, WheelAccum, WHEEL_DELTA};
