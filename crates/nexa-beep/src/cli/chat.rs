@@ -252,10 +252,11 @@ fn wait_with_quit_or<T>(
 
 /// 수립된 세션 위 **인터랙티브 대화 루프** — stdin 라인 = 전송, 수신은 실시간 출력, Ctrl+D 종료.
 /// serve/connect/live가 공용(세션 출처만 다르고 대화는 같다).
+/// 반환 = **내가 끝냈는가**(/quit·EOF·Ctrl+C — chat-live 재연결 차단의 근거 · 08-20).
 fn run_interactive<L: nbeep_core::Link + 'static>(
     mut session: nbeep_crypto::NoiseSession<L>,
     me: PeerId,
-) {
+) -> bool {
     use nbeep_core::mux::{MuxSession, StreamId};
     use nbeep_core::{
         chunks_of, ChatMessage, MessageBody, Sequencer, Session as _, XferInbox, XferMsg,
@@ -995,6 +996,10 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
     // 정리(Drop → 복원)를 지난다.
     let shutdown = nbeep_plat::shutdown::install();
     let raw = nbeep_plat::term::RawTerm::enter_polling();
+    // 종료 사유(08-20) — **내가 끝냈는가**(/quit·EOF·Ctrl+C) vs 상대/세션이 끝났는가.
+    // chat-live의 재연결 차단은 "내가 끝낸 상대"에게만 건다(상대가 끝낸 경우까지
+    // 차단하면 상대의 정상 재연결·명시 연결도 거부된다).
+    let mut local_quit = false;
     if raw.is_raw() {
         use nbeep_plat::term::{parse_key, TermKey};
         use std::io::{Read as _, Write as _};
@@ -1006,6 +1011,7 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
         'outer: loop {
             if shutdown.requested() {
                 println!("\r[종료] 중단합니다.");
+                local_quit = true;
                 break;
             }
             if !alive.load(std::sync::atomic::Ordering::Relaxed) {
@@ -1021,7 +1027,10 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
             while let Some((key, used)) = parse_key(&pending) {
                 pending.drain(..used);
                 match key {
-                    TermKey::Eof => break 'outer,
+                    TermKey::Eof => {
+                        local_quit = true;
+                        break 'outer;
+                    }
                     TermKey::Enter => {
                         // ★ 대체 수단: 줄 끝 `\`도 줄바꿈으로 친다 — Shift+Enter를
                         //   보고하지 않는 터미널(macOS Terminal.app 등)에서도 여러 줄을 쓴다.
@@ -1036,6 +1045,7 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
                         print!("\r\n");
                         let _ = std::io::stdout().flush();
                         if !handle_line(sent) {
+                            local_quit = true;
                             break 'outer;
                         }
                     }
@@ -1069,6 +1079,7 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
         loop {
             if shutdown.requested() {
                 println!("[종료] 중단합니다.");
+                local_quit = true;
                 break;
             }
             if !alive.load(std::sync::atomic::Ordering::Relaxed) {
@@ -1077,11 +1088,15 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
             match rx.recv_timeout(std::time::Duration::from_millis(100)) {
                 Ok(line) => {
                     if !handle_line(line) {
+                        local_quit = true;
                         break;
                     }
                 }
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break, // EOF
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    local_quit = true; // EOF = 내 쪽 종료 의사
+                    break;
+                }
             }
         }
     }
@@ -1089,6 +1104,7 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
     drop(out_tx);
     let _ = net.join();
     println!("[끝]");
+    local_quit
 }
 
 /// 사람이 읽는 크기 표기(진행률).
@@ -1141,6 +1157,7 @@ fn receive_into_quarantine(got: &nbeep_core::Received, sender: PeerId) -> bool {
 pub(crate) fn chat_live(name: &str, port: u16) {
     // 대화형 — chat_interactive와 같은 콘솔 독점 규약(08-20).
     let _ = nbeep_plat::launch::own_console_for_interactive();
+    use nbeep_core::Session as _; // session.peer() — 재연결 차단 판정
     use nbeep_net::Transport as _;
     let identity = nbeep_crypto::Identity::generate();
     let mut instance = [0u8; 16];
@@ -1185,6 +1202,13 @@ pub(crate) fn chat_live(name: &str, port: u16) {
     const HELP_LIVE: &str =
         "[대기] /peers = 발견 목록 · /connect <번호|host[:port]> = 연결 · /quit = 종료";
     println!("{HELP_LIVE}");
+    // ── 재연결 차단(08-20 사용자 실기 — "/quit 후 직전 상대로 자동 연결됨") ──
+    // 원인 = 상대(GUI)의 자동 재연결 백오프: 내가 /quit하면 상대는 끊김으로 보고
+    // 다시 걸어오고, 대기는 인바운드를 무조건 수락해 대화가 저절로 열렸다.
+    // 규칙: **대화를 끝낸 상대는 명시적 /connect 전까지 자동 수락하지 않는다**
+    // (다른 상대의 인바운드 = GUI 목록 클릭 UX는 그대로).
+    let mut no_auto: std::collections::HashSet<nbeep_core::PeerId> =
+        std::collections::HashSet::new();
     // ★ 대기는 **되풀이한다**(08-13). 예전에는 핸드셰이크가 한 번 실패하면 그대로 프로세스가
     //   끝났다 — 즉 **떠돌이 TCP 연결 하나로 단말이 죽는다.** 포트 스캐너·헬스체크·`nc -z`
     //   한 번이면 충분했다(실측: `nc -z 127.0.0.1 43211` → `[실패] 핸드셰이크: 세션 링크가
@@ -1261,12 +1285,36 @@ pub(crate) fn chat_live(name: &str, port: u16) {
         match got {
             // 인바운드 실패는 **그 연결만** 버린다(신원 미상 — 누구였는지도 적지 않는다).
             LiveLink::In(link) => match nbeep_crypto::NoiseSession::accept(link, &identity) {
-                Ok(session) => run_interactive(session, identity.peer_id()),
+                Ok(session) => {
+                    let p = session.peer();
+                    if no_auto.contains(&p) {
+                        // 세션은 여기서 드롭된다(상대 쪽 백오프는 상대 규약 몫).
+                        let name = peers
+                            .borrow()
+                            .iter()
+                            .find(|(id, _)| *id == p)
+                            .map(|(_, n)| n.clone())
+                            .unwrap_or_else(|| p.short());
+                        println!(
+                            "[무시] {name}의 재연결 — 대화를 끝낸 상대는 자동으로 열지 않는다(/connect 로만)"
+                        );
+                        continue;
+                    }
+                    if run_interactive(session, identity.peer_id()) {
+                        no_auto.insert(p); // **내가** 끝낸 상대 — 다음은 명시적으로만
+                    }
+                }
                 Err(e) => eprintln!("[무시] 핸드셰이크 실패 — 계속 기다립니다: {e}"),
             },
             // 아웃바운드(내가 걸었음) = initiate — 이후 대화 루프는 동일.
             LiveLink::Out(link) => match nbeep_crypto::NoiseSession::initiate(link, &identity) {
-                Ok(session) => run_interactive(session, identity.peer_id()),
+                Ok(session) => {
+                    let p = session.peer();
+                    no_auto.remove(&p); // 명시적 연결 = 차단 해제
+                    if run_interactive(session, identity.peer_id()) {
+                        no_auto.insert(p);
+                    }
+                }
                 Err(e) => eprintln!("[실패] 핸드셰이크: {e} — 대기로 돌아갑니다"),
             },
         }
