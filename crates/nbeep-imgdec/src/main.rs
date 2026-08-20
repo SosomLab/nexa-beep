@@ -51,15 +51,25 @@ fn run() -> i32 {
     // 출력 = PNG 재인코딩(08-16 · 프로필 와이어 축소본): 원본이 아무리 커도 축소
     // 결과를 PNG로 되뱉는다 — 본체는 인코더도 링크하지 않는다(png는 여기만).
     let encode_png = args.iter().any(|a| a == "--encode-png");
+    // 원시 RGBA → PNG(③ 08-20 클립보드 이미지): 입력 = `w u32 LE ‖ h u32 LE ‖ RGBA`.
+    // 파서가 아예 안 돌므로(신뢰 데이터 = 본체가 방금 만든 픽셀) 디코드 상한과
+    // 무관하지만, 할당 상한(픽셀 16.7M = RGBA 64MiB)은 동일하게 지킨다.
+    let encode_raw = args.iter().any(|a| a == "--encode-raw");
 
     // 입력 — 상한 초과는 손상 취급(더 읽지 않고 실패). 16MiB는 디코드·인코드
     // 공통(08-16 상향 — 종전 디코드 1MiB는 폰 사진에서 미리보기를 침묵시켰다).
+    // 원시 모드는 픽셀 상한만큼 크다(4K 스크린샷 RGBA ≈ 33MiB).
+    let src_cap = if encode_raw {
+        PIXELS_MAX as usize * 4 + 8
+    } else {
+        SRC_MAX
+    };
     let mut src = Vec::with_capacity(64 * 1024);
     let n = std::io::stdin()
         .lock()
-        .take(SRC_MAX as u64 + 1)
+        .take(src_cap as u64 + 1)
         .read_to_end(&mut src);
-    if n.is_err() || src.is_empty() || src.len() > SRC_MAX {
+    if n.is_err() || src.is_empty() || src.len() > src_cap {
         eprintln!("imgdec: 입력 없음/상한 초과");
         return 2;
     }
@@ -73,6 +83,28 @@ fn run() -> i32 {
             eprintln!("imgdec: lockdown 실패({why}) — fail-closed");
             return 4;
         }
+    }
+
+    if encode_raw {
+        // 헤더 + 정확한 길이 검증(fail-closed) 후 전체 크기 그대로 PNG.
+        if src.len() < 8 {
+            return 2;
+        }
+        let w = u32::from_le_bytes(src[0..4].try_into().unwrap_or([0; 4]));
+        let h = u32::from_le_bytes(src[4..8].try_into().unwrap_or([0; 4]));
+        if !size_ok(w, h) || src.len() != 8 + (w as usize) * (h as usize) * 4 {
+            eprintln!("imgdec: raw 크기 불일치");
+            return 2;
+        }
+        let Some(buf) = encode_png_rgba(w, h, &src[8..]) else {
+            return 3;
+        };
+        let mut out = std::io::stdout().lock();
+        return if out.write_all(&buf).is_ok() && out.flush().is_ok() {
+            0
+        } else {
+            3
+        };
     }
 
     let decoded = if src.starts_with(&[0x89, b'P', b'N', b'G']) {

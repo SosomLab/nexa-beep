@@ -17,12 +17,114 @@ pub fn set_text(text: &str) -> bool {
     imp::set_text(text)
 }
 
+/// 클립보드 **이미지**(③ 08-20 — 사용자 확정 3-OS).
+/// `Png` = 그대로 쓸 수 있는 바이트(mac/Linux — 도구가 PNG로 준다) ·
+/// `Rgba` = 원시 픽셀(Windows CF_DIB — PNG 인코딩은 본체가 **imgdec 워커**로 ·
+/// R-5 "본체는 이미지 인코더도 링크하지 않는다").
+#[derive(Debug)]
+pub enum ClipImage {
+    /// PNG 원본 바이트.
+    Png(Vec<u8>),
+    /// 원시 RGBA(top-down · straight alpha).
+    Rgba {
+        /// 폭(px).
+        w: u32,
+        /// 높이(px).
+        h: u32,
+        /// `w*h*4` 바이트.
+        data: Vec<u8>,
+    },
+}
+
+/// 클립보드의 이미지를 읽는다 — 없거나 미지원 형식·잠금 실패면 `None`.
+#[must_use]
+pub fn get_image() -> Option<ClipImage> {
+    imp::get_image()
+}
+
+/// CF_DIB(BITMAPINFO) → RGBA(top-down) 변환 — **순수 함수**(전 OS 테스트).
+/// 지원 = 24/32bpp × BI_RGB(0)·BI_BITFIELDS(3 · 표준 BGRA 마스크)만, 그 외
+/// (팔레트·RLE·비표준 마스크)는 None(fail-soft). 알파는 255 고정 — 스크린샷
+/// DIB의 알파 채널은 관행상 0이라 신뢰할 수 없다(실측 기반 보수).
+#[cfg(any(windows, test))]
+fn dib_to_rgba(dib: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
+    fn r_u32(b: &[u8], o: usize) -> Option<u32> {
+        Some(u32::from_le_bytes(b.get(o..o + 4)?.try_into().ok()?))
+    }
+    fn r_i32(b: &[u8], o: usize) -> Option<i32> {
+        Some(i32::from_le_bytes(b.get(o..o + 4)?.try_into().ok()?))
+    }
+    fn r_u16(b: &[u8], o: usize) -> Option<u16> {
+        Some(u16::from_le_bytes(b.get(o..o + 2)?.try_into().ok()?))
+    }
+    let bi_size = r_u32(dib, 0)? as usize;
+    if bi_size < 40 || dib.len() < bi_size {
+        return None;
+    }
+    let width = r_i32(dib, 4)?;
+    let height_raw = r_i32(dib, 8)?;
+    let bit_count = r_u16(dib, 14)?;
+    let compression = r_u32(dib, 16)?;
+    if width <= 0 || height_raw == 0 {
+        return None;
+    }
+    let w = width as u32;
+    let top_down = height_raw < 0;
+    let h = height_raw.unsigned_abs();
+    // imgdec와 같은 상한(변 8192 · 픽셀 16.7M) — 할당 폭탄 방어.
+    if w > 8192 || h > 8192 || u64::from(w) * u64::from(h) > 16_777_216 {
+        return None;
+    }
+    let bytes_pp = match (bit_count, compression) {
+        (32, 0) => 4,
+        (32, 3) => {
+            // 마스크는 헤더 40바이트 뒤(BITMAPINFOHEADER) 또는 V4/V5 헤더 안 —
+            // 어느 쪽이든 시작에서 40..52. 표준 BGRA 배치만 받는다.
+            let (r, g, b) = (r_u32(dib, 40)?, r_u32(dib, 44)?, r_u32(dib, 48)?);
+            if (r, g, b) != (0x00FF_0000, 0x0000_FF00, 0x0000_00FF) {
+                return None;
+            }
+            4
+        }
+        (24, 0) => 3,
+        _ => return None,
+    };
+    let masks_extra = if bi_size == 40 && compression == 3 {
+        12
+    } else {
+        0
+    };
+    let offset = bi_size + masks_extra;
+    let stride = (w as usize * bytes_pp).div_ceil(4) * 4;
+    let need = offset.checked_add(stride.checked_mul(h as usize)?)?;
+    if dib.len() < need {
+        return None;
+    }
+    let mut rgba = Vec::with_capacity(w as usize * h as usize * 4);
+    for row_i in 0..h as usize {
+        // DIB 기본은 bottom-up(양수 높이) — top-down으로 뒤집어 담는다.
+        let src_row = if top_down {
+            row_i
+        } else {
+            h as usize - 1 - row_i
+        };
+        let row = &dib[offset + src_row * stride..];
+        for x in 0..w as usize {
+            let px = &row[x * bytes_pp..];
+            // DIB 픽셀은 BGR(A) 순서.
+            rgba.extend_from_slice(&[px[2], px[1], px[0], 255]);
+        }
+    }
+    Some((w, h, rgba))
+}
+
 #[cfg(target_os = "windows")]
 mod imp {
     use core::ffi::c_void;
 
     type Handle = *mut c_void;
     const CF_UNICODETEXT: u32 = 13;
+    const CF_DIB: u32 = 8;
     const GMEM_MOVEABLE: u32 = 0x0002;
 
     #[link(name = "user32")]
@@ -39,6 +141,36 @@ mod imp {
         fn GlobalLock(mem: Handle) -> *mut c_void;
         fn GlobalUnlock(mem: Handle) -> i32;
         fn GlobalFree(mem: Handle) -> Handle;
+        fn GlobalSize(mem: Handle) -> usize;
+    }
+
+    /// 클립보드 이미지(③ 08-20) — CF_DIB를 통째로 복사해 락 밖에서 파싱한다
+    /// (스크린샷·그림판 복사 등은 OS가 CF_DIB를 합성해 준다).
+    pub(super) fn get_image() -> Option<super::ClipImage> {
+        // SAFETY: get_text와 같은 규약 — Open 성공 시 반드시 Close, 데이터 핸들은
+        // 시스템 소유(해제 금지), Lock/Unlock 짝. 버퍼는 락 안에서 복사만 한다.
+        let dib: Vec<u8> = unsafe {
+            if OpenClipboard(core::ptr::null_mut()) == 0 {
+                return None;
+            }
+            let h = GetClipboardData(CF_DIB);
+            let out = if h.is_null() {
+                None
+            } else {
+                let p = GlobalLock(h).cast::<u8>();
+                if p.is_null() {
+                    None
+                } else {
+                    let n = GlobalSize(h);
+                    let v = core::slice::from_raw_parts(p, n).to_vec();
+                    GlobalUnlock(h);
+                    Some(v)
+                }
+            };
+            CloseClipboard();
+            out?
+        };
+        super::dib_to_rgba(&dib).map(|(w, h, data)| super::ClipImage::Rgba { w, h, data })
     }
 
     pub(super) fn get_text() -> Option<String> {
@@ -98,6 +230,23 @@ mod imp {
             }
             CloseClipboard();
             ok
+        }
+    }
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod img_tests {
+    /// 실측 보조(--nocapture) — 클립보드에 이미지가 있으면 크기를 찍는다.
+    /// 없는 환경(CI)도 정상이라 존재는 단언하지 않는다.
+    #[test]
+    fn get_image_observable() {
+        match super::get_image() {
+            Some(super::ClipImage::Rgba { w, h, data }) => {
+                assert_eq!(data.len(), (w * h * 4) as usize);
+                println!("클립보드 이미지 = {w}x{h} RGBA");
+            }
+            Some(super::ClipImage::Png(b)) => println!("클립보드 PNG {}B", b.len()),
+            None => println!("(클립보드 이미지 없음 — 건너뜀)"),
         }
     }
 }
@@ -175,6 +324,120 @@ mod imp {
     #[cfg(not(target_os = "macos"))]
     pub(super) fn set_text(text: &str) -> bool {
         write_to("wl-copy", &[], text) || write_to("xclip", &["-selection", "clipboard"], text)
+    }
+
+    /// 명령의 표준 출력을 바이트로 받는다(이미지 — 텍스트 read_from의 바이트판).
+    fn read_bytes_from(cmd: &str, args: &[&str]) -> Option<Vec<u8>> {
+        let out = Command::new(cmd)
+            .args(args)
+            .stderr(Stdio::null())
+            .output()
+            .ok()?;
+        (out.status.success() && !out.stdout.is_empty()).then_some(out.stdout)
+    }
+
+    /// 클립보드 이미지(③ 08-20) — mac = AppleScript로 PNG를 임시 파일에 쓰게 한다
+    /// (`pngpaste` 무의존 — pbcopy 선례의 "시스템 기본 도구"). Linux = wl-paste →
+    /// xclip 사다리(텍스트 어댑터와 동일). 결과는 PNG 서명 확인 후에만 준다.
+    #[cfg(target_os = "macos")]
+    pub(super) fn get_image() -> Option<super::ClipImage> {
+        let tmp = std::env::temp_dir().join(format!("nbeep-clip-{}.png", std::process::id()));
+        let path = tmp.to_string_lossy().into_owned();
+        let ok = Command::new("osascript")
+            .args([
+                "-e",
+                "set d to the clipboard as \u{ab}class PNGf\u{bb}",
+                "-e",
+                &format!("set f to open for access POSIX file \"{path}\" with write permission"),
+                "-e",
+                "set eof f to 0",
+                "-e",
+                "write d to f",
+                "-e",
+                "close access f",
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success());
+        let out = if ok { std::fs::read(&tmp).ok() } else { None };
+        let _ = std::fs::remove_file(&tmp); // 임시물은 즉시 정리(DR-4 임시 폴더 규약)
+        out.filter(|b| b.starts_with(&[0x89, b'P', b'N', b'G']))
+            .map(super::ClipImage::Png)
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    pub(super) fn get_image() -> Option<super::ClipImage> {
+        for (cmd, args) in [
+            ("wl-paste", &["--type", "image/png"][..]),
+            (
+                "xclip",
+                &["-selection", "clipboard", "-t", "image/png", "-o"][..],
+            ),
+        ] {
+            if let Some(out) = read_bytes_from(cmd, args) {
+                if out.starts_with(&[0x89, b'P', b'N', b'G']) {
+                    return Some(super::ClipImage::Png(out));
+                }
+            }
+        }
+        None
+    }
+}
+
+#[cfg(test)]
+mod dib_tests {
+    use super::dib_to_rgba;
+
+    /// 32bpp BI_RGB 2x2 bottom-up — BGR(A)→RGBA 변환 + 행 뒤집기.
+    #[test]
+    fn dib_32bpp_bottom_up() {
+        let mut d = vec![0u8; 40];
+        d[0] = 40;
+        d[4..8].copy_from_slice(&2i32.to_le_bytes());
+        d[8..12].copy_from_slice(&2i32.to_le_bytes());
+        d[14..16].copy_from_slice(&32u16.to_le_bytes());
+        // 픽셀(BGRA · bottom-up): 아래 행 = [파랑, 초록] · 위 행 = [빨강, 흰].
+        d.extend_from_slice(&[255, 0, 0, 0, 0, 255, 0, 0]);
+        d.extend_from_slice(&[0, 0, 255, 0, 255, 255, 255, 0]);
+        let (w, h, rgba) = dib_to_rgba(&d).expect("파싱");
+        assert_eq!((w, h), (2, 2));
+        // top-down 결과 첫 행 = 위 행(빨강·흰) — 알파는 255 고정.
+        assert_eq!(&rgba[0..8], &[255, 0, 0, 255, 255, 255, 255, 255]);
+        assert_eq!(&rgba[8..16], &[0, 0, 255, 255, 0, 255, 0, 255]);
+    }
+
+    /// 24bpp — stride 4바이트 정렬 패딩 + top-down(음수 높이).
+    #[test]
+    fn dib_24bpp_stride_and_top_down() {
+        let mut d = vec![0u8; 40];
+        d[0] = 40;
+        d[4..8].copy_from_slice(&1i32.to_le_bytes());
+        d[8..12].copy_from_slice(&(-2i32).to_le_bytes());
+        d[14..16].copy_from_slice(&24u16.to_le_bytes());
+        d.extend_from_slice(&[10, 20, 30, 0]); // BGR + 패딩 1
+        d.extend_from_slice(&[40, 50, 60, 0]);
+        let (w, h, rgba) = dib_to_rgba(&d).expect("파싱");
+        assert_eq!((w, h), (1, 2));
+        assert_eq!(&rgba[..], &[30, 20, 10, 255, 60, 50, 40, 255]);
+    }
+
+    /// 미지원(팔레트)·손상·상한 초과 = None(fail-soft).
+    #[test]
+    fn dib_rejects_unsupported() {
+        assert!(dib_to_rgba(&[0u8; 10]).is_none(), "헤더 미달");
+        let mut pal = vec![0u8; 40];
+        pal[0] = 40;
+        pal[4..8].copy_from_slice(&2i32.to_le_bytes());
+        pal[8..12].copy_from_slice(&2i32.to_le_bytes());
+        pal[14..16].copy_from_slice(&8u16.to_le_bytes());
+        assert!(dib_to_rgba(&pal).is_none(), "팔레트 미지원");
+        let mut big = vec![0u8; 40];
+        big[0] = 40;
+        big[4..8].copy_from_slice(&9000i32.to_le_bytes());
+        big[8..12].copy_from_slice(&2i32.to_le_bytes());
+        big[14..16].copy_from_slice(&32u16.to_le_bytes());
+        assert!(dib_to_rgba(&big).is_none(), "변 상한 8192");
     }
 }
 

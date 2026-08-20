@@ -82,6 +82,12 @@ enum AppEvent {
         seq: u64,
         sender: PeerId,
     },
+    /// 클립보드 이미지 준비 완료(③ 08-20) — 워커가 읽기+PNG 인코딩을 마쳤다.
+    /// `png = None` = 클립보드에 이미지 없음/변환 실패(상태바 고지).
+    ClipImage {
+        win: winit::window::WindowId,
+        png: Option<Vec<u8>>,
+    },
     /// 세션 종료(상대 이탈·오류).
     Closed { peer: PeerId },
     /// **인바운드** — 남이 나에게 연결해 핸드셰이크가 끝난 세션(아직 TOFU 미판정).
@@ -2869,6 +2875,29 @@ impl App {
     /// 한 번의 드롭 묶음을 요청 단위로 선판정(08-20 4차 확정) — 기존 배치
     /// 시도분(제외 포함)과 이번 드롭 수의 합이 상한을 넘으면 **한 파일도
     /// 시도하지 않고** 안내 모달만 띄운다(부분 전송 금지).
+    /// 클립보드 **이미지** 붙여넣기 시도(③ 08-20 사용자 확정 3-OS) — 텍스트가 없을
+    /// 때의 폴백. 대화(1:1·그룹) 창에서만 발화한다. 읽기+PNG 인코딩(Windows DIB →
+    /// imgdec 워커)은 **별도 스레드** — imgdec 스폰 1~2초가 UI를 얼리지 않게
+    /// (디코드 워커화와 같은 이유 · 08-13). 완료는 [`AppEvent::ClipImage`]로 복귀.
+    /// 반환 = 시도했는가(대화 창이 아니면 false — 호출자가 종전 안내).
+    fn try_clipboard_image_paste(&mut self, id: WindowId) -> bool {
+        if self.chat_peer_for(id).is_none() && self.group_chat_for(id).is_none() {
+            return false;
+        }
+        let proxy = self.proxy.clone();
+        std::thread::spawn(move || {
+            let png = match nbeep_plat::clipboard::get_image() {
+                Some(nbeep_plat::clipboard::ClipImage::Png(b)) => Some(b),
+                Some(nbeep_plat::clipboard::ClipImage::Rgba { w, h, data }) => {
+                    crate::imgdec::encode_raw_isolated(w, h, &data)
+                }
+                None => None,
+            };
+            let _ = proxy.send_event(AppEvent::ClipImage { win: id, png });
+        });
+        true
+    }
+
     fn offer_dropped(&mut self, drops: Vec<(WindowId, std::path::PathBuf)>) {
         let mut by_win: Vec<(WindowId, Vec<std::path::PathBuf>)> = Vec::new();
         for (id, p) in drops {
@@ -9116,7 +9145,8 @@ impl App {
                 if let Some(c) = self.gchats.get_mut(&gid) {
                     c.paste(&t, &mut inv);
                 }
-            } else {
+            } else if !self.try_clipboard_image_paste(id) {
+                // 텍스트도 이미지도 없다(③ 08-20 — 이미지는 파일 전송으로 폴백).
                 self.set_status(nbeep_core::t(nbeep_core::Msg::StPasteFail));
                 if let Some(mid) = self.main_id {
                     self.request_redraw(mid);
@@ -10431,7 +10461,8 @@ impl App {
                 if let Some(c) = self.chats.get_mut(&peer) {
                     c.paste(&t, &mut inv);
                 }
-            } else {
+            } else if !self.try_clipboard_image_paste(id) {
+                // 텍스트도 이미지도 없다(③ 08-20 — 이미지는 파일 전송으로 폴백).
                 self.set_status(nbeep_core::t(nbeep_core::Msg::StPasteFail));
                 if let Some(mid) = self.main_id {
                     self.request_redraw(mid);
@@ -11387,6 +11418,30 @@ impl ApplicationHandler<AppEvent> for App {
                     eprintln!("[ime] raw={c:?}");
                 }
                 self.ime.observe_raw(c, now);
+            }
+            // 클립보드 이미지 준비 완료(③ 08-20) — data/clipboard/에 PNG로 저장 후
+            // 기존 파일 전송 경로(offer_file — 1:1·그룹·상한·승인 전부 공용)에 태운다.
+            AppEvent::ClipImage { win, png } => {
+                let Some(png) = png else {
+                    self.set_status(nbeep_core::t(nbeep_core::Msg::StClipImageNone));
+                    if let Some(mid) = self.main_id {
+                        self.request_redraw(mid);
+                    }
+                    return;
+                };
+                let dir = self.data_dir.join("clipboard");
+                let _ = std::fs::create_dir_all(&dir);
+                let (at_ms, _) = now_stamp();
+                let path = dir.join(format!("clip-{at_ms}.png"));
+                if std::fs::write(&path, &png).is_ok() {
+                    self.offer_file(win, &path);
+                } else {
+                    self.set_status(nbeep_core::t(nbeep_core::Msg::StClipImageNone));
+                }
+                self.request_redraw(win);
+                if let Some(mid) = self.main_id {
+                    self.request_redraw(mid);
+                }
             }
             AppEvent::Recv {
                 peer,
@@ -13760,6 +13815,10 @@ impl ApplicationHandler<AppEvent> for App {
                                     if let Some(t) = nbeep_plat::clipboard::get_text() {
                                         self.clipboard_paste_for(id, &t);
                                         self.request_redraw(id);
+                                    } else {
+                                        // 텍스트 없음 → 클립보드 **이미지**면 파일
+                                        // 전송으로(③ 08-20 — 대화 창에서만 발화).
+                                        let _ = self.try_clipboard_image_paste(id);
                                     }
                                     return;
                                 }

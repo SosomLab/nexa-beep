@@ -81,6 +81,53 @@ pub(crate) fn decode_isolated(bytes: &[u8], max_side: u32) -> Option<(u32, u32, 
     (out.len() == 12 + need).then(|| (w, h, out[12..].to_vec()))
 }
 
+/// 원시 RGBA → **원본 크기 PNG**(③ 08-20 클립보드 이미지 — Windows CF_DIB 픽셀의
+/// 인코딩도 imgdec 몫 · R-5 "본체는 인코더도 링크하지 않는다"). 입력은 본체가 방금
+/// 클립보드에서 만든 픽셀(신뢰 데이터)이지만 상한(픽셀 16.7M)은 자식이 재검한다.
+/// 인코드 대기 상한은 별도 10초 — 4K RGBA(33MiB)의 PNG 압축은 3초를 넘을 수 있다.
+pub(crate) fn encode_raw_isolated(w: u32, h: u32, rgba: &[u8]) -> Option<Vec<u8>> {
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?;
+    let child_path = dir.join(if cfg!(windows) {
+        "nbeep-imgdec.exe"
+    } else {
+        "nbeep-imgdec"
+    });
+    if !child_path.exists() {
+        return None;
+    }
+    let mut child = worker_command(&child_path)
+        .args(["--encode-raw"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    {
+        let mut si = child.stdin.take()?;
+        si.write_all(&w.to_le_bytes()).ok()?;
+        si.write_all(&h.to_le_bytes()).ok()?;
+        si.write_all(rgba).ok()?;
+    }
+    let mut stdout = child.stdout.take()?;
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut out = Vec::new();
+        let ok = stdout.read_to_end(&mut out).is_ok();
+        let _ = tx.send(ok.then_some(out));
+    });
+    let out = match rx.recv_timeout(std::time::Duration::from_secs(10)) {
+        Ok(Some(out)) => out,
+        _ => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return None;
+        }
+    };
+    let status = child.wait().ok()?;
+    (status.success() && out.starts_with(&[0x89, b'P', b'N', b'G'])).then_some(out)
+}
+
 /// 원본 사진 → **와이어용 축소 PNG**(08-16 · 프로필 사진 상한 대응).
 ///
 /// 원본이 `PROFILE_IMAGE_MAX`(256KiB)를 넘으면 이 축소본(`me.wire.png`)이 대신
