@@ -146,9 +146,9 @@ docker run --rm -v "$PWD":/src -w /src -e CARGO_TARGET_DIR=/src/.docker-target \
 4. ② 종료 = `/quit` · `Ctrl+D` · `Ctrl+C`
 
 같은 호스트라 멀티캐스트 루프백으로 발견된다. 안 뜨면 3-3으로.
-⚠️ **Windows에서 인터랙티브 CLI(②)는 Git Bash에서** — 08-20 windows 서브시스템 전환
-뒤로 cmd/pwsh는 GUI 앱을 기다리지 않아 프롬프트와 대화 입력이 섞인다(bash는 대기 ·
-cmd라면 `cmd /c start /wait …`) → [§7 유의](#7-배포본-실기-검증-windows).
+ℹ️ **Windows에서 ②를 cmd/PowerShell로 부르면 새 콘솔 창이 열려 거기서 대화한다**
+(08-20 — 그 셸들은 GUI 앱을 기다리지 않아 프롬프트와 입력이 섞이므로 앱이 자기
+콘솔을 새로 연다). Git Bash·파이프는 그 자리 그대로 → [§7 유의](#7-배포본-실기-검증-windows).
 
 ### 3-3. IP로 직접 — 발견이 막힌 곳
 
@@ -402,8 +402,9 @@ winget validate --manifest manifests\winget\manifests\s\SosomLab\NexaBeep\<버�
 > `FreeConsole`로도 빈 터미널 창이 남던 실기 · main.rs `windows_subsystem` + `attach_parent_console`).
 > 검증 시 유의: **PowerShell은 GUI 앱을 기다리지 않아 `--version > 파일`이 비어 나온다** —
 > 파이프(`| Out-String`)·`cmd /c "… > 파일"`·bash 리다이렉트는 전부 정상(실측 08-20).
-> 인터랙티브 CLI(`--chat-live` 등)는 `cmd /c start /wait …` 또는 Git Bash에서(bash는
-> 서브시스템 무관하게 자식을 기다린다).
+> 인터랙티브 CLI(`--chat-live`·`--chat-serve`·`--chat-connect`)를 cmd/pwsh에서 부르면
+> **자기 콘솔 창을 새로 열어 계속한다**(입력 경합 차단 — 08-20 실기 후속). Git Bash·
+> 파이프/스크립트는 그 자리 그대로(bash는 서브시스템 무관하게 자식을 기다린다).
 
 **실측(v0.1.2 · win x64)** — 체크섬 3/3 · MotW 전파 정상 · 설치/업그레이드/제거 통과 · PATH 미등록(설계) ·
 winget validate 통과 · 해시 일치.

@@ -52,6 +52,9 @@ pub(crate) enum ChatRole {
 /// (`-it`)과 맥 GUI/터미널이 사람 대 사람으로 양방향 대화한다. 세션 스택은 GUI와 동일
 /// (Noise→TOFU→다중화) — 프레젠테이션만 stdin/stdout.
 pub(crate) fn chat_interactive(role: ChatRole) {
+    // 대화형 = 콘솔 입력을 독점해야 한다(08-20 windows 서브시스템 전환 — cmd/pwsh는
+    // GUI 앱을 안 기다려 셸과 입력 경합). 필요 시 자기 콘솔 창으로 옮긴다.
+    let _ = nbeep_plat::launch::own_console_for_interactive();
     let identity = nbeep_crypto::Identity::generate();
 
     // 역할별로 Link 하나를 얻는다(서버=accept, 클라=connect). 이후 경로는 100% 같다.
@@ -897,6 +900,8 @@ fn receive_into_quarantine(got: &nbeep_core::Received, sender: PeerId) -> bool {
 /// 목록에 뜬다) + 첫 인바운드(GUI가 클릭해 연결) 수락 → 인터랙티브 대화. 실행 중인 `--window --live`
 /// GUI를 터미널에서 붙어 테스트하는 용도.
 pub(crate) fn chat_live(name: &str, port: u16) {
+    // 대화형 — chat_interactive와 같은 콘솔 독점 규약(08-20).
+    let _ = nbeep_plat::launch::own_console_for_interactive();
     use nbeep_net::Transport as _;
     let identity = nbeep_crypto::Identity::generate();
     let mut instance = [0u8; 16];

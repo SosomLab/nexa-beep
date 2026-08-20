@@ -21,9 +21,10 @@
 //   Terminal)에서 무력하다 — ConPTY 세션 창이 detach가 아니라 **루트 프로세스 종료**에
 //   묶여, 빈 터미널 창이 앱 옆에 상주했다. 서브시스템 전환으로 콘솔 창은 아예 안 생기고,
 //   터미널 실행의 CLI 출력은 main 첫 줄 `attach_parent_console()`이 보전한다.
-//   ⚠ 터미널 CLI의 셸 대기 관례가 바뀐다: cmd·pwsh는 GUI 앱을 기다리지 않으므로
-//   인터랙티브 도구(--chat-live 등)는 `cmd /c start /wait` 또는 Git Bash에서(bash는
-//   서브시스템 무관하게 자식을 기다린다). 파이프·리다이렉트 캡처는 핸들 보전으로 동작.
+//   ⚠ 터미널 CLI의 셸 대기 관례가 바뀐다: cmd·pwsh는 GUI 앱을 기다리지 않아 셸과
+//   입력 경합이 생기므로, 대화형 도구(--chat-live 등)는 그런 셸에서 **자기 콘솔 창을
+//   새로 열어** 계속한다(launch::own_console_for_interactive — 08-20 실기 후속).
+//   Git Bash(대기함)·파이프/리다이렉트(캡처·스크립트)는 그 자리 그대로 동작.
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod app;
