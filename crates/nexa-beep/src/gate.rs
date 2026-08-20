@@ -294,6 +294,9 @@ pub(crate) const PII_KEYS: &[&str] = &["profile.email", "profile.phone"];
 /// 대화 기록 봉투 도메인(ADR-0005 §4 · M2-5b — 저장 암호화 A 단일).
 pub(crate) const SEAL_HISTORY: &[u8] = b"history-v1";
 
+/// 오프라인 대기(발신자 보관) 봉투 도메인(M4-6 · 08-20 — 재시작 유지 사용자 확정).
+pub(crate) const SEAL_PENDING: &[u8] = b"pending-v1";
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]

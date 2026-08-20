@@ -115,6 +115,9 @@ pub struct ChatLine {
     /// 읽음(상대가 대화창에서 봄 · 자동). 전달과 독립 — 설정 조합에 따라 전달
     /// 없이 읽음만 뜰 수도 있다.
     pub read: bool,
+    /// **오프라인 대기**(M4-6 · 08-20) — 세션이 없어 발신자 측에 보관 중.
+    /// 상대가 나타나 전달되면 false로 풀리고 seq가 붙는다([`ChatViewWidget::resolve_queued`]).
+    pub queued: bool,
 }
 
 impl ChatLine {
@@ -130,6 +133,7 @@ impl ChatLine {
             seq: 0,
             delivered: false,
             read: false,
+            queued: false,
         }
     }
 
@@ -137,6 +141,13 @@ impl ChatLine {
     #[must_use]
     pub fn with_seq(mut self, seq: u64) -> Self {
         self.seq = seq;
+        self
+    }
+
+    /// 오프라인 대기 표시를 붙인다(M4-6 — 세션 없는 발신 · 빌더).
+    #[must_use]
+    pub fn with_queued(mut self, queued: bool) -> Self {
+        self.queued = queued;
         self
     }
 
@@ -165,6 +176,7 @@ impl ChatLine {
             seq: 0,
             delivered: false,
             read: false,
+            queued: false,
         }
     }
 }
@@ -642,6 +654,21 @@ impl ChatViewWidget {
                 return;
             }
         }
+    }
+
+    /// 오프라인 대기 해소(M4-6 · 08-20) — `at_ms`가 일치하는 첫 대기 줄을
+    /// "전송됨"으로 풀고 발신 seq를 붙인다(이후 ack가 이 seq로 상태를 갱신).
+    /// 반환 = 풀었는가(대응 줄이 없으면 false — 뷰가 닫혔다 열린 경우 무해).
+    pub fn resolve_queued(&mut self, at_ms: u64, seq: u64, inv: &mut Invalidations) -> bool {
+        for l in &mut self.lines {
+            if l.mine && l.queued && l.at_ms == at_ms {
+                l.queued = false;
+                l.seq = seq;
+                inv.push(self.bounds);
+                return true;
+            }
+        }
+        false
     }
 
     /// N-2 — 읽음 up-to: seq 이하 내 메시지 전부 읽음(대화창 열면 보이는 것
@@ -1832,6 +1859,20 @@ impl Widget for ChatViewWidget {
                     // ★ 전달/읽음 마크(N-2 · 내 메시지만) — 시각 왼쪽. 색맹 안전
                     //   이중 부호화(M3-19 교훈): **점 개수(모양) + 색**. 전달 = 점
                     //   1개(dim) · 읽음 = 점 2개(강조색) · 미전달·미읽음 = 없음(깔끔).
+                    //   **대기(M4-6 · 08-20) = 가로 막대**(M3-19의 "막대 = 보류" 문법 —
+                    //   점과 모양이 갈려 색맹에서도 구분된다).
+                    if l.mine && l.queued && !l.delivered && !l.read {
+                        let d = self.s(4).max(2);
+                        let bar_w = d * 2;
+                        let bar_h = (d / 2).max(1);
+                        let dx = lx - self.s(5) - bar_w;
+                        let dy = bub.bottom() - sh - self.s(2) + (sh - bar_h) / 2;
+                        ctx.fill_round_rect(
+                            Rect::new(dx, dy, bar_w, bar_h),
+                            bar_h / 2,
+                            theme.text_dim,
+                        );
+                    }
                     if l.mine && l.seq != 0 && (l.delivered || l.read) {
                         let d = self.s(4).max(2); // 점 지름
                         let gap = self.s(2).max(1);
@@ -2123,6 +2164,27 @@ impl ChatViewWidget {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// M4-6(08-20) — 대기 풍선 해소: at_ms로 되찾아 queued 해제 + seq 부여.
+    /// 대응 없는 at_ms는 false(뷰 재생성 뒤 무해).
+    #[test]
+    fn resolve_queued_lifts_flag_and_assigns_seq() {
+        let mut w = ChatViewWidget::new("상대".into());
+        let mut inv = Invalidations::default();
+        let t = nbeep_core::sanitize_message("대기줄");
+        w.push_line(
+            ChatLine::text(true, t, 1000, WallTime::default()).with_queued(true),
+            &mut inv,
+        );
+        assert!(w.resolve_queued(1000, 7, &mut inv));
+        let l = w.lines.last().expect("줄");
+        assert!(!l.queued);
+        assert_eq!(l.seq, 7);
+        assert!(
+            !w.resolve_queued(9999, 8, &mut inv),
+            "대응 없는 시각 = false"
+        );
+    }
 
     fn at(i: u64) -> (u64, WallTime) {
         // 분 단위로 증가하는 가짜 시각(2026-08-10 12:00 + i분).

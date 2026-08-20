@@ -1567,11 +1567,61 @@ fn decode_history(bytes: &[u8]) -> Vec<ChatLine> {
                     seq: 0,
                     delivered: false,
                     read: false,
+                    queued: false,
                 });
                 i = next;
             }
             _ => break, // 미지 tag — 여기까지(전방 확장은 append라 안전)
         }
+    }
+    out
+}
+
+/// 1:1 오프라인 대기 항목(M4-6 · 08-20) — flush 시 fresh seq로 실제 발신된다.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PendingDirect {
+    /// 본문(무해화 전 원문 — 발신 경로가 원문을 보내고, 표시는 SafeText로).
+    text: String,
+    /// 입력 시각(밀리초) — 대기 풍선과의 대응 키(resolve_queued).
+    at_ms: u64,
+    /// 등급(0 Normal · 1 Notice · 2 Urgent — ④ 공지 실패분 편입 대비).
+    importance: u8,
+}
+
+/// 상대별 대기 상한(NFR-B-6 — 상한 없는 큐 금지) · 초과 = 오래된 것부터 정리.
+const PENDING_DIRECT_MAX: usize = 200;
+
+/// 대기 큐 직렬화 — `imp(1) ‖ at_ms(8 LE) ‖ len(4 LE) ‖ utf8` 반복.
+/// (wall은 저장하지 않는다 — 복원 시 `wall_from_ms`가 재계산 · history와 동일 원리.)
+fn encode_pending(q: &[PendingDirect]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for m in q {
+        out.push(m.importance);
+        out.extend_from_slice(&m.at_ms.to_le_bytes());
+        let b = m.text.as_bytes();
+        out.extend_from_slice(&(u32::try_from(b.len()).unwrap_or(0)).to_le_bytes());
+        out.extend_from_slice(&b[..b.len().min(u32::MAX as usize)]);
+    }
+    out
+}
+
+/// 대기 큐 해석 — 손상은 그 지점까지(fail-soft · 앞선 항목은 살린다).
+fn decode_pending(bytes: &[u8]) -> Vec<PendingDirect> {
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    while i + 13 <= bytes.len() {
+        let importance = bytes[i].min(2);
+        let at_ms = u64::from_le_bytes(bytes[i + 1..i + 9].try_into().unwrap_or([0; 8]));
+        let n = u32::from_le_bytes(bytes[i + 9..i + 13].try_into().unwrap_or([0; 4])) as usize;
+        let Some(end) = (i + 13).checked_add(n).filter(|e| *e <= bytes.len()) else {
+            break;
+        };
+        out.push(PendingDirect {
+            text: String::from_utf8_lossy(&bytes[i + 13..end]).into_owned(),
+            at_ms,
+            importance,
+        });
+        i = end;
     }
     out
 }
@@ -2428,6 +2478,12 @@ struct App {
     /// 이름 입력 모달 뷰(열려 있을 때만 Some) + 용도.
     name_prompt: Option<nbeep_ui::TextPromptWidget>,
     name_prompt_for: Option<NamePurpose>,
+    /// ★ 1:1 **오프라인 대기 큐**(M4-6 · C-3 · 08-20 사용자 확정 — **재시작 유지**):
+    /// 세션이 없을 때의 발신을 상대별로 보관했다가 성립 합류점에서 flush한다.
+    /// 영속 = `data/pending/{short}.seg`(SEAL_PENDING · 원자적 쓰기) · 상한 =
+    /// [`PENDING_DIRECT_MAX`](오래된 것부터 정리). ⚠ 전달은 **내 PC가 켜져 있고
+    /// 상대가 나타날 때**만(Q-25-2 — 한계는 상태바 문구로 명시).
+    pending_direct: HashMap<PeerId, Vec<PendingDirect>>,
     /// 그룹 발신 중 미연결 구성원에게 이어 보낼 본문(성립 시 flush — 사용자 확정
     /// "자동 연결 시도 후 전송" · 보관 주체 = 송신자). 백오프 소진 시 실패 라인으로 종결.
     pending_group_sends: HashMap<PeerId, Vec<(nbeep_core::group::GroupId, String)>>,
@@ -4235,6 +4291,17 @@ impl App {
                         .is_some()
                     {
                         changed = true;
+                    }
+                    // ★ 오프라인 대기 상대가 나타났다(M4-6) — 즉시 연결 후보로.
+                    //   observe의 무변화 스로틀(RL-16ⓑ)과 무관하게 여기서 건다:
+                    //   대기분이 있는데 세션이 없으면 백오프를 "지금"으로 당긴다
+                    //   (실제 시도는 reconnect 틱이 — 중복 시도는 ConnectLatch가 막는다).
+                    if self.pending_direct.contains_key(&hint.peer)
+                        && !self.conversations.contains_key(&hint.peer)
+                    {
+                        // or_insert — 진행 중 표식(u64::MAX)·기존 백오프를 덮지 않는다
+                        // (Appeared는 비컨마다 온다 — 덮으면 1.5초마다 재시도 폭주).
+                        self.reconnect.entry(hint.peer).or_insert((0, 0));
                     }
                 }
                 DiscoveryEvent::Vanished(peer) => {
@@ -7503,6 +7570,156 @@ impl App {
         }
     }
 
+    /// 1:1 오프라인 대기 큐 영속(M4-6 · 08-20 — 재시작 유지 사용자 확정).
+    /// history와 같은 문법: SEAL_PENDING 봉인 · 원자적 쓰기 · 빈 큐 = 파일 제거.
+    fn save_pending(&mut self, peer: PeerId) {
+        let dir = self.data_dir.join("pending");
+        let path = dir.join(format!("{}.seg", peer.short()));
+        let plain = self
+            .pending_direct
+            .get(&peer)
+            .map(|q| encode_pending(q))
+            .unwrap_or_default();
+        if plain.is_empty() {
+            let _ = std::fs::remove_file(&path);
+            return;
+        }
+        let Ok(env) = nbeep_store::sealed::seal(
+            crate::gate::SEAL_PENDING,
+            &self.identity.wrap_secret(),
+            &plain,
+        ) else {
+            return; // 봉인 실패 — 평문 저장은 하지 않는다(다음 변경에서 재시도)
+        };
+        if std::fs::create_dir_all(&dir).is_ok() {
+            let tmp = path.with_extension(format!("tmp.{}", std::process::id()));
+            if std::fs::write(&tmp, &env).is_ok() {
+                let _ = std::fs::rename(&tmp, &path);
+            }
+        }
+    }
+
+    /// 부팅 시 대기 큐 복원(M4-6) — restore_history와 같은 지문 매핑(핀 상대만).
+    /// 복원분은 대기 풍선으로도 살아난다(`parked_lines`에 queued 줄 append).
+    fn restore_pending(&mut self) {
+        let dir = self.data_dir.join("pending");
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            return;
+        };
+        let recs = self.trust.export();
+        let secret = self.identity.wrap_secret();
+        for ent in rd.flatten() {
+            let path = ent.path();
+            if path.extension().and_then(|x| x.to_str()) != Some("seg") {
+                continue;
+            }
+            let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            let Some(peer) = recs
+                .iter()
+                .find(|r| !r.blocked && r.peer.short() == stem)
+                .map(|r| r.peer)
+            else {
+                continue; // 핀 없는/차단된 상대 — 매핑 불가(파일은 남긴다 · fail-soft)
+            };
+            let Some(plain) = std::fs::read(&path).ok().and_then(|raw| {
+                nbeep_store::sealed::open(crate::gate::SEAL_PENDING, &secret, &raw)
+            }) else {
+                continue; // 다른 신원의 봉투 — 열 수 없다(fail-closed)
+            };
+            let q = decode_pending(&plain);
+            if q.is_empty() {
+                continue;
+            }
+            // 대기 풍선 복원 — 기록(parked)에 이어 붙인다(대기분은 항상 최신이다).
+            let parked = self.parked_lines.entry(peer).or_default();
+            for m in &q {
+                parked.push(
+                    ChatLine::text(
+                        true,
+                        nbeep_core::sanitize_message(&m.text),
+                        m.at_ms,
+                        wall_from_ms(m.at_ms),
+                    )
+                    .with_queued(true),
+                );
+            }
+            self.pending_direct.insert(peer, q);
+            // 상대가 보이면 자동 전달 — 백오프를 즉시 후보로 걸어 둔다(발견 시 재시도).
+            self.reconnect.entry(peer).or_insert((0, 0));
+        }
+    }
+
+    /// 1:1 대기 flush(M4-6) — 세션 성립 합류점에서 호출(그룹 flush와 같은 자리).
+    /// fresh seq로 실제 발신하고, 열린 뷰의 대기 풍선을 "전송됨"으로 푼다.
+    fn flush_direct_sends(&mut self, peer: PeerId) {
+        let Some(q) = self.pending_direct.remove(&peer) else {
+            return;
+        };
+        if q.is_empty() {
+            return;
+        }
+        let mut sent = 0usize;
+        let mut inv = Invalidations::default();
+        for m in &q {
+            let seq = self.seq.issue();
+            let msg = nbeep_core::ChatMessage {
+                sender_device: self.identity.peer_id(),
+                seq,
+                body: nbeep_core::MessageBody::Text(m.text.clone()),
+                importance: match m.importance {
+                    2 => nbeep_core::Importance::Urgent,
+                    1 => nbeep_core::Importance::Notice,
+                    _ => nbeep_core::Importance::Normal,
+                },
+            };
+            let Some(conv) = self.conversations.get_mut(&peer) else {
+                break;
+            };
+            if conv.out_tx.send(SessionCmd::Chat(msg.encode())).is_err() {
+                break; // 세션이 곧바로 죽음 — 남은 것은 아래에서 도로 대기
+            }
+            // conv.lines의 대기 줄을 확정으로(뷰가 닫혔다 열려도 기록이 맞도록).
+            if let Some(l) = conv
+                .lines
+                .iter_mut()
+                .find(|l| l.mine && l.queued && l.at_ms == m.at_ms)
+            {
+                l.queued = false;
+                l.seq = seq;
+            } else {
+                conv.lines.push(
+                    ChatLine::text(
+                        true,
+                        nbeep_core::sanitize_message(&m.text),
+                        m.at_ms,
+                        wall_from_ms(m.at_ms),
+                    )
+                    .with_seq(seq),
+                );
+            }
+            if let Some(chat) = self.chats.get_mut(&peer) {
+                chat.resolve_queued(m.at_ms, seq, &mut inv);
+            }
+            self.ledger.note_sent(peer);
+            sent += 1;
+        }
+        // 못 보낸 잔여(세션 급사)는 도로 대기 — 유실 금지.
+        if sent < q.len() {
+            self.pending_direct.insert(peer, q[sent..].to_vec());
+        }
+        self.save_pending(peer);
+        if sent > 0 {
+            self.record_history(peer);
+            self.set_status(nbeep_core::tf(
+                nbeep_core::Msg::StfQueuedFlushed,
+                &[&sent.to_string()],
+            ));
+            self.redraw_conversation(peer);
+        }
+    }
+
     /// 그룹 대화 기록 영속(08-19 — M3-23의 `g-*.seg` 축 · 사용자 실기 "재시작하면
     /// 기록이 사라진다"). 1:1 [`Self::record_history`]와 같은 문법: 같은 봉인 도메인
     /// (`SEAL_HISTORY`) · 원자적 쓰기 · 파일명 = `g-{uid.short()}.seg`(uid = 전역
@@ -10236,34 +10453,65 @@ impl App {
             }
         };
         if let Some(text) = outgoing {
-            let msg = nbeep_core::ChatMessage {
-                sender_device: self.identity.peer_id(),
-                seq: self.seq.issue(),
-                body: nbeep_core::MessageBody::Text(text.as_str().to_string()),
-                importance: nbeep_core::Importance::Normal,
-            };
             let (at_ms, wall) = now_stamp();
-            if let Some(chat) = self.chats.get_mut(&peer) {
-                chat.push_line(
-                    ChatLine::text(true, text.clone(), at_ms, wall).with_seq(msg.seq),
-                    &mut inv,
-                );
-            }
-            // 왕래 장부 — 파일 전송 자격(상호 확인)의 근거(사용자 확정 08-09).
-            self.ledger.note_sent(peer);
             self.trust.note_chat(peer, unix_now_ms()); // 최근 대화(08-15 — 발신도)
-            if let Some(conv) = self.conversations.get_mut(&peer) {
-                conv.lines
-                    .push(ChatLine::text(true, text, at_ms, wall).with_seq(msg.seq));
-                // 액터에 발신 요청 — 수신은 비동기로 AppEvent::Recv로 돌아온다(M2-7).
-                if conv.out_tx.send(SessionCmd::Chat(msg.encode())).is_err() {
-                    self.set_status(nbeep_core::t(nbeep_core::Msg::StSessionEnded));
-                } else {
-                    self.status =
-                        nbeep_core::tf(nbeep_core::Msg::StfSentSeq, &[&msg.seq.to_string()]);
+            if self.conversations.contains_key(&peer) {
+                let msg = nbeep_core::ChatMessage {
+                    sender_device: self.identity.peer_id(),
+                    seq: self.seq.issue(),
+                    body: nbeep_core::MessageBody::Text(text.as_str().to_string()),
+                    importance: nbeep_core::Importance::Normal,
+                };
+                if let Some(chat) = self.chats.get_mut(&peer) {
+                    chat.push_line(
+                        ChatLine::text(true, text.clone(), at_ms, wall).with_seq(msg.seq),
+                        &mut inv,
+                    );
                 }
+                // 왕래 장부 — 파일 전송 자격(상호 확인)의 근거(사용자 확정 08-09).
+                self.ledger.note_sent(peer);
+                if let Some(conv) = self.conversations.get_mut(&peer) {
+                    conv.lines
+                        .push(ChatLine::text(true, text, at_ms, wall).with_seq(msg.seq));
+                    // 액터에 발신 요청 — 수신은 비동기로 AppEvent::Recv로 돌아온다(M2-7).
+                    if conv.out_tx.send(SessionCmd::Chat(msg.encode())).is_err() {
+                        self.set_status(nbeep_core::t(nbeep_core::Msg::StSessionEnded));
+                    } else {
+                        self.status =
+                            nbeep_core::tf(nbeep_core::Msg::StfSentSeq, &[&msg.seq.to_string()]);
+                    }
+                }
+                self.record_history(peer); // 대화 기록 영속(M2-5b · 빌림 밖)
+            } else {
+                // ★ 세션 없음 = **오프라인 대기**(M4-6 · 08-20 사용자 확정 — 재시작
+                //   유지). 종전엔 풍선만 남고 전송·기록 모두 **조용히 유실**됐다.
+                //   보관 후 상대가 나타나면 자동 전달(한계 = 내 PC가 켜져 있어야 —
+                //   Q-25-2 · 상태바 문구로 명시). 발신 의사 = 즉시 연결 시도.
+                let q = self.pending_direct.entry(peer).or_default();
+                q.push(PendingDirect {
+                    text: text.as_str().to_string(),
+                    at_ms,
+                    importance: 0,
+                });
+                if q.len() > PENDING_DIRECT_MAX {
+                    let drop_n = q.len() - PENDING_DIRECT_MAX;
+                    q.drain(..drop_n);
+                }
+                let total = q.len();
+                if let Some(chat) = self.chats.get_mut(&peer) {
+                    chat.push_line(
+                        ChatLine::text(true, text, at_ms, wall).with_queued(true),
+                        &mut inv,
+                    );
+                }
+                self.save_pending(peer);
+                self.set_status(nbeep_core::tf(
+                    nbeep_core::Msg::StfQueuedSaved,
+                    &[&total.to_string()],
+                ));
+                self.reconnect.remove(&peer); // 발신 의사 = 백오프 처음부터(그룹 규약)
+                self.start_connect(peer, true);
             }
-            self.record_history(peer); // 대화 기록 영속(M2-5b · 빌림 밖)
             self.request_redraw(id);
             if let Some(mid) = self.main_id {
                 self.request_redraw(mid); // 상태바 갱신
@@ -12142,6 +12390,7 @@ impl ApplicationHandler<AppEvent> for App {
                 }
                 // 대기 중이던 그룹 본문 이어 보내기(M5-1 — "자동 연결 시도 후 전송").
                 self.flush_group_sends(peer);
+                self.flush_direct_sends(peer); // 1:1 오프라인 대기(M4-6)도 같은 합류점
                 if let Some(mid) = self.main_id {
                     self.request_redraw(mid);
                 }
@@ -12442,6 +12691,7 @@ impl ApplicationHandler<AppEvent> for App {
                 // ★ 재동기는 인바운드에서도(G4) — "접속하면 발신자가 밀어준다"의
                 // 세션 성립에는 상대가 나에게 걸어온 경우도 포함된다(종전엔 Outbound만).
                 self.flush_group_sends(peer);
+                self.flush_direct_sends(peer); // 1:1 오프라인 대기(M4-6)
                 self.set_status(nbeep_core::tf(nbeep_core::Msg::StfConnectedOpen, &[&title]));
                 if let Some(mid) = self.main_id {
                     self.request_redraw(mid);
@@ -14052,6 +14302,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         gchats: HashMap::new(),
         name_prompt: None,
         name_prompt_for: None,
+        pending_direct: HashMap::new(),
         pending_group_sends: HashMap::new(),
         pending_group_files: HashMap::new(),
         pending_invites: HashMap::new(),
@@ -14245,6 +14496,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
     app.promote_local_groups(); // 구버전 로컬(동보) 그룹 → 그룹 대화(G4 마이그레이션)
     app.load_pii_sidecar(); // 연락처(PII) 봉인 사이드카 — cfg 구본보다 우선(08-17)
     app.restore_history(); // 대화 기록 복원(M2-5b · parked_lines에 · 대화창 열면 뜬다)
+    app.restore_pending(); // 1:1 오프라인 대기 복원(M4-6 — 대기 풍선+자동 전달 후보)
     app.restore_group_history(); // 그룹 기록 복원(08-19 · g-{uid}.seg → group_threads)
     app.restore_cached_profiles(); // 핀 상대의 캐시 프로필·목록 행 복원(08-14)
     app.ensure_wire_avatar(); // 상한 초과 사진의 와이어 축소본 보장(08-16 — 기존 사용자 자기 치유)
@@ -14454,6 +14706,29 @@ mod tests {
 
     /// 자동 재연결 백오프(ⓑ 08-13) — 단계별 지연이 늘고, 다 쓰면 **중단**한다
     /// (상시 관찰이 아니라 복구 시도 — 포트 스캔처럼 보이면 안 된다).
+    #[test]
+    fn pending_direct_codec_roundtrips_and_survives_corruption() {
+        use super::{decode_pending, encode_pending, PendingDirect};
+        let q = vec![
+            PendingDirect {
+                text: "안녕 offline".into(),
+                at_ms: 1_755_600_000_123,
+                importance: 0,
+            },
+            PendingDirect {
+                text: "공지야".into(),
+                at_ms: 1_755_600_001_000,
+                importance: 1,
+            },
+        ];
+        let enc = encode_pending(&q);
+        assert_eq!(decode_pending(&enc), q, "왕복 비트 동일");
+        // 꼬리 손상 = 앞선 항목은 살린다(fail-soft — history 디코더와 같은 결).
+        let cut = &enc[..enc.len() - 3];
+        assert_eq!(decode_pending(cut), q[..1].to_vec());
+        assert!(decode_pending(&[]).is_empty());
+    }
+
     #[test]
     fn reconnect_backoff_grows_then_stops() {
         use super::reconnect_delay;

@@ -675,6 +675,10 @@ pub enum Msg {
     StfPortApplied,
     StfRestartFail,
     StfAutostartFail,
+    /// 오프라인 대기 저장(M4-6 · 08-20) — 한계(내 PC가 켜져 있어야) 명시.
+    StfQueuedSaved,
+    /// 오프라인 대기 전달 완료.
+    StfQueuedFlushed,
     StfInvitesSent,
     StfGroupSaveFail,
     StfGroupPendingSent,
@@ -1103,6 +1107,8 @@ impl Msg {
             Msg::StfPortApplied => ["Listen port = {} — applied now (re-announce)", "수신 포트 = {} — 즉시 적용(재공지)", "监听端口 = {} — 立即生效（重新通告）", "受信ポート = {} — 即時適用（再通知）"],
             Msg::StfRestartFail => ["Transport restart failed: {} — keeping current port", "전송 재시작 실패: {} — 기존 포트 유지", "传输重启失败：{} — 保留原端口", "転送再起動失敗: {} — 既存ポート維持"],
             Msg::StfAutostartFail => ["⚠ Autostart registration failed: {} (setting kept — will retry on next boot/toggle)", "⚠ 자동 실행 등록 실패: {} (설정은 유지 — 다음 부팅·토글에서 재시도)", "⚠ 自动启动注册失败：{}（设置保留 — 下次启动/切换时重试）", "⚠ 自動起動の登録に失敗: {}（設定は維持 — 次回起動・切替時に再試行）"],
+            Msg::StfQueuedSaved => ["Queued for delivery ({} waiting) — sent automatically when the peer appears while this PC is on", "전송 대기 저장({}건) — 내 PC가 켜져 있고 상대가 나타나면 자동 전달됩니다", "已加入待发队列（{}条）— 本机开机且对方出现时自动发送", "送信待ちに保存（{}件）— このPCが起動中で相手が現れたら自動送信"],
+            Msg::StfQueuedFlushed => ["Delivered {} queued message(s)", "대기 메시지 {}건 전달됨", "已送达 {} 条待发消息", "待機メッセージ{}件を配信"],
             Msg::StfInvitesSent => ["Sent {} invitations (awaiting acceptance)", "{}명 초대 발송(수락 대기)", "已发送 {} 个邀请（等待接受）", "{}名に招待送信（承認待ち）"],
             Msg::StfGroupSaveFail => ["{} · ⚠ Group save failed (will retry on next change)", "{} · ⚠ 그룹 저장 실패(다음 변경에서 재시도)", "{} · ⚠ 群组保存失败（下次更改时重试）", "{} · ⚠ グループ保存失敗（次の変更で再試行）"],
             Msg::StfGroupPendingSent => ["Group pending messages delivered: {}", "그룹 대기분 전달됨: {}", "群组待发消息已送达：{}", "グループ保留分を配信: {}"],
