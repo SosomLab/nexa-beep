@@ -42,15 +42,16 @@ M-1 설계 ──► M0 기반 ──► M1 발견 ──► M2 대화 ──►
 | [0002](08-adr-0002-discovery-transport.md) 디스커버리/전송/암호 | 자체 UDP·TCP·Noise_XX·TOFU | ✅ Accepted |
 | [0007](20-adr-0007-multi-device-identity.md) 다중 기기 신원 | UserId 1:M PeerId·주 기기+복구 시드 | ✅ Accepted(구현 v2) |
 | [0003](09-adr-0003-transport-abstraction.md) 전송 추상화 | 4계층 경계·InMemory | ✅ Accepted(구현으로 비준) |
-| [0004](11-adr-0004-quarantine.md) 수신 무해화 | `.beepq`·등급·상태기계 | 📐 **Proposed — 확정 대기** |
+| [0004](11-adr-0004-quarantine.md) 수신 무해화 | `.beepq`·등급·상태기계 | ✅ **Accepted**(08-17 · D-12 — 도메인은 M4-1로 선구현돼 있었다) |
 | [0005](17-adr-0005-history-at-rest.md) 기록 저장 암호화 | 블라인드 인덱스·크립토 셰레딩 | 📐 **부분 확정** — §3 키 관리 ✅(08-11 · M2-5a 구현) / **§4~ 확정 대기**(M2-5b 선행) |
 | [0006](19-adr-0006-manual-endpoint.md) 수동 엔드포인트 | `Locator::Manual`·원격 신뢰등급 | 📐 **Proposed — 확정 대기** |
 | [0008](22-adr-0008-profile-disclosure.md) 프로필 옵트인 노출 | 브로드캐스트 미포함·세션 경유 프리페치 | ✅ Accepted |
 | [0009](23-adr-0009-shared-folders.md) 공유 폴더 | 가상경로·pull·fail-closed | ✅ Accepted |
-| [0010](24-adr-0010-message-priority-notification.md) 등급·알림·수신확인·수신자 릴레이 | 등급=요청 / 강도=수신자 판정 · 릴레이 팬아웃 | 📐 **Proposed — 확정 대기**(D-23) |
+| [0010](24-adr-0010-message-priority-notification.md) 등급·알림·수신확인·수신자 릴레이 | 등급=요청 / 강도=수신자 판정 · 릴레이 팬아웃 | ✅ **Accepted**(08-17 · D-23 — 핵심 5판단 승인) |
 | [0011](28-adr-0011-settings-persistence.md) 설정 직렬화·영속 | Entry 레지스트리=저장 스키마 · coalescing 저장 · 미지 키 보존 | ✅ **Accepted**(08-11 · D-25 — `crates/nexa-conf` 구현) |
-| [0012](31-adr-0012-shared-group-chat.md) 공유 그룹 채팅 | 소유자 roster 서명 · 초대 수락제 · pairwise 팬아웃 | 📐 **Proposed — 확정 대기**(D-28) |
+| [0012](31-adr-0012-shared-group-chat.md) 공유 그룹 채팅 | 소유자 roster 서명 · 초대 수락제 · pairwise 팬아웃 | ✅ **Accepted**(08-13 · D-28 — G1~G4 구현) |
 | [0013](32-adr-0013-server-modes.md) 서버 모드(릴레이·컨텐츠·관리) | 서버가 **아는 것**의 3단계 · S-0~S-3 불변식 · **§5 그룹 결합**(P-9~P-11 선행 제약) | 📐 **Proposed — 확정 대기**(D-29) · **방향성만**(구현은 별도 저장소·v1 이후 — DR-9) |
+| [0014](35-adr-0014-native-file-dialog.md) 파일 선택 다이얼로그 | DR-6 경계 획정 · `FileDialogPort` · OS 네임스페이스는 OS 것 | ✅ **Accepted**(08-18 · D-30 — Win/mac 시스템 다이얼로그 · Linux 자체 피커 유지) |
 
 ---
 
