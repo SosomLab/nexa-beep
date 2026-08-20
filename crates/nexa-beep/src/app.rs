@@ -1716,7 +1716,10 @@ fn xfer_step(
                     session
                         .send(StreamId::File, &msg.encode())
                         .map_err(|_| ())?;
-                    fail(format!("수신 거부: {e}"));
+                    fail(nbeep_core::tf(
+                        nbeep_core::Msg::XfRecvRefused,
+                        &[&e.to_string()],
+                    ));
                 }
             }
         }
@@ -1730,7 +1733,10 @@ fn xfer_step(
                 let _ = proxy.send_event(AppEvent::XferAccepted { peer });
                 // 스트리밍 발신(08-18) — 파일을 메모리에 올리지 않는다.
                 let Ok(mut file) = std::fs::File::open(&path) else {
-                    fail(format!("파일 열기 실패: {}", path.display()));
+                    fail(nbeep_core::tf(
+                        nbeep_core::Msg::XfOpenFailed,
+                        &[&path.display().to_string()],
+                    ));
                     return Ok(());
                 };
                 // ★ 재개(M4-10b) — 요청 오프셋의 내 원본 프리픽스 해시가 상대의
@@ -1821,7 +1827,10 @@ fn xfer_step(
                         });
                     }
                 }
-                Err(e) => fail(format!("수신 오류: {e} — 폐기")),
+                Err(e) => fail(nbeep_core::tf(
+                    nbeep_core::Msg::XfRecvError,
+                    &[&e.to_string()],
+                )),
             }
         }
         Ok(XferMsg::Done { id, .. }) if canceled.contains(&id) => {} // 취소분 꼬리(08-18)
@@ -1870,7 +1879,10 @@ fn xfer_step(
             }
             Err(e) => {
                 let _ = session.send(StreamId::File, &XferMsg::Failed { id }.encode());
-                fail(format!("완료 실패: {e} — 폐기"));
+                fail(nbeep_core::tf(
+                    nbeep_core::Msg::XfDoneFailed,
+                    &[&e.to_string()],
+                ));
             }
         },
         // ★ 발신측이 받는 종단 확인(M4-9) — 확인 대기 항목을 완료/실패로 닫는다.
@@ -1902,7 +1914,10 @@ fn xfer_step(
             }
             fail(nbeep_core::t(nbeep_core::Msg::XferPeerCanceled).into());
         }
-        Err(e) => fail(format!("와이어 오류: {e}")),
+        Err(e) => fail(nbeep_core::tf(
+            nbeep_core::Msg::XfWireError,
+            &[&e.to_string()],
+        )),
     }
     Ok(())
 }
@@ -2107,7 +2122,10 @@ struct FilePicker {
 
 impl nbeep_ui::ChoosePicker for FilePicker {
     fn title(&self) -> String {
-        format!("파일 선택 — {}", self.dir.display())
+        nbeep_core::tf(
+            nbeep_core::Msg::TitleFilePick,
+            &[&self.dir.display().to_string()],
+        )
     }
     fn items(&self) -> Vec<nbeep_ui::ComboItem> {
         // 투명 배경 이미지 아이콘(파일 · 공유 Rc).
@@ -2996,9 +3014,9 @@ impl App {
                 &mut inv,
             );
         }
-        self.set_status(format!(
-            "그룹 파일 전송 — 오퍼 {offered} · 연결 대기 {}",
-            waiting.len()
+        self.set_status(nbeep_core::tf(
+            nbeep_core::Msg::StfGroupFileOffer,
+            &[&offered.to_string(), &waiting.len().to_string()],
         ));
         self.request_redraw(id);
     }
@@ -3482,9 +3500,9 @@ impl App {
             self.clear_xfer(peer);
         }
         if let Some(got) = resumed {
-            self.set_status(format!(
-                "이어받기 — {name} {}%부터",
-                got as u64 * 100 / size.max(1)
+            self.set_status(nbeep_core::tf(
+                nbeep_core::Msg::StfResumeFrom,
+                &[&name, &(got as u64 * 100 / size.max(1)).to_string()],
             ));
         }
         if !accept {
@@ -3499,12 +3517,12 @@ impl App {
         let left = self.pending_offers.get(&peer).map_or(0, VecDeque::len);
         self.set_status(if ok {
             let head = if accept {
-                format!("수락 — {name} 수신 시작")
+                nbeep_core::tf(nbeep_core::Msg::StfAcceptStart, &[&name])
             } else {
-                format!("거절 — {name}")
+                nbeep_core::tf(nbeep_core::Msg::StfDeclineName, &[&name])
             };
             if left > 0 {
-                format!("{head} · 대기 중인 제안 {left}건 더 있음")
+                nbeep_core::tf(nbeep_core::Msg::StfMoreOffers, &[&head, &left.to_string()])
             } else {
                 head
             }
@@ -3685,7 +3703,10 @@ impl App {
                 self.send_xfer_decision(peer, xid, true, nbeep_core::RejectWhy::Declined, resume);
                 self.arm_batch_approval(peer, &name, size); // 요청 단위 승인(M4-2e)
                 self.set_status(if let Some(got) = resumed {
-                    format!("이어받기 — {name} {}%부터", got as u64 * 100 / size.max(1))
+                    nbeep_core::tf(
+                        nbeep_core::Msg::StfResumeFrom,
+                        &[&name, &(got as u64 * 100 / size.max(1)).to_string()],
+                    )
                 } else {
                     nbeep_core::tf(nbeep_core::Msg::StfAcceptRecv, &[&name])
                 });
@@ -3716,12 +3737,12 @@ impl App {
                     },
                 );
                 self.set_status(if by_timeout {
-                    format!(
-                        "{}초 동안 응답이 없어 거절했습니다 — {name}",
-                        self.wait_timeout_sec
+                    nbeep_core::tf(
+                        nbeep_core::Msg::StfTimeoutDeclined,
+                        &[&self.wait_timeout_sec.to_string(), &name],
                     )
                 } else {
-                    format!("거절 — {name}")
+                    nbeep_core::tf(nbeep_core::Msg::StfDeclineName, &[&name])
                 });
             }
             OfferChoice::AutoFor(code) => {
@@ -5427,18 +5448,30 @@ impl App {
         dirs.sort_by(|a, b| a.0.cmp(&b.0));
         files.sort_by(|a, b| a.0.cmp(&b.0));
         for (name, p) in dirs {
-            entries.push((format!("[폴더] {name}"), PickEntry::Dir(p)));
+            entries.push((
+                nbeep_core::tf(nbeep_core::Msg::PickDirPrefix, &[&name]),
+                PickEntry::Dir(p),
+            ));
         }
         for (name, p) in files {
             entries.push((name, PickEntry::File(p)));
         }
+        let dir_s = dir.display().to_string();
         let title = match purpose {
-            PickerPurpose::BackupDir => format!("백업 폴더 선택 — {}", dir.display()),
-            PickerPurpose::RestoreKey => format!("백업 파일 선택 — {}", dir.display()),
-            PickerPurpose::ProfileImage => format!("프로필 이미지 선택 — {}", dir.display()),
-            PickerPurpose::SettingsBackupDir => format!("설정 백업 폴더 — {}", dir.display()),
+            PickerPurpose::BackupDir => {
+                nbeep_core::tf(nbeep_core::Msg::TitlePickBackupDir, &[&dir_s])
+            }
+            PickerPurpose::RestoreKey => {
+                nbeep_core::tf(nbeep_core::Msg::TitlePickBackup, &[&dir_s])
+            }
+            PickerPurpose::ProfileImage => {
+                nbeep_core::tf(nbeep_core::Msg::TitlePickProfileImage, &[&dir_s])
+            }
+            PickerPurpose::SettingsBackupDir => {
+                nbeep_core::tf(nbeep_core::Msg::TitlePickSettingsBackupDir, &[&dir_s])
+            }
             PickerPurpose::SettingsRestoreFile => {
-                format!("설정 백업 파일 선택 — {}", dir.display())
+                nbeep_core::tf(nbeep_core::Msg::TitlePickSettingsBackup, &[&dir_s])
             }
             PickerPurpose::GallerySample => String::new(),
         };
@@ -6258,9 +6291,7 @@ impl App {
         self.unread.remove(&peer);
         self.last_read.remove(&peer);
         self.table.forget(peer); // 발견 테이블에서도 즉시(다시 비컨하면 새로 뜬다)
-        self.set_status(format!(
-            "{title} — 목록에서 삭제(핀·캐시 정리 · 다시 만나면 새로 뜹니다)"
-        ));
+        self.set_status(nbeep_core::tf(nbeep_core::Msg::StfPeerRemoved, &[&title]));
         self.refresh_and_redraw();
     }
 
@@ -7444,7 +7475,7 @@ impl App {
                     if target.exists() && nbeep_plat::launch::open_path(&target) {
                         self.set_status(nbeep_core::t(nbeep_core::Msg::LogView).to_string());
                     } else {
-                        self.set_status("로그 없음 — '상태 로그 기록'을 켜면 쌓입니다");
+                        self.set_status(nbeep_core::t(nbeep_core::Msg::StNoLogs));
                     }
                     continue;
                 }
@@ -13150,7 +13181,11 @@ fn session_port_from(settings: &SettingsState) -> u16 {
 }
 
 /// 데이터 디렉터리(FR-P-3 · DR-4) — 실행 파일 옆 `data/` 쓰기 가능(포터블)
-/// → 사용자 설정 폴더 → 임시 폴더(최후 폴백 — 저장은 되지만 재부팅에 진다).
+/// → 사용자 설정 폴더 → **홈의 숨김 폴더**(최후 폴백 · M5-4e 08-20 확정).
+/// ⚠️ 폴백 종점을 임시 폴더에 두지 않는다(DR-4 개정 08-19) — macOS
+/// `tmp_cleaner`가 `identity.key`를 지워 **신원이 조용히 바뀌고**, 이전 키에
+/// sealed된 격리물·핀을 영구히 못 연다(실기 사고). 홈조차 없는 극단에서만
+/// 임시 폴더가 남는데, 그땐 신원 영속 자체가 성립하지 않는 환경이다.
 /// 설정(`settings.cfg`)·신원 키(`identity.key`)·핀 세그먼트(`trust.seg`)가 전부
 /// 여기 산다. 경로는 여기서 정해 **인자로 넘긴다**(소비 크레이트는 경로 비소유).
 pub(crate) fn data_dir() -> std::path::PathBuf {
@@ -13166,6 +13201,10 @@ pub(crate) fn data_dir() -> std::path::PathBuf {
         if nexa_conf::dir_writable(&dir) {
             return dir;
         }
+    }
+    let home_key = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+    if let Some(h) = std::env::var_os(home_key) {
+        return std::path::PathBuf::from(h).join(".nexa-beep");
     }
     std::env::temp_dir().join("nexa-beep")
 }
