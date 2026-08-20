@@ -15,13 +15,19 @@ const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 /// windows 서브시스템(08-20)이라 콘솔이 없는데, 그 상태에서 콘솔 서브시스템 자식을
 /// 그냥 스폰하면 **디코드마다 콘솔 창이 번쩍인다**(파이프 stdio와는 별개 축).
 fn worker_command(path: &std::path::Path) -> Command {
-    let mut c = Command::new(path);
+    // ⚠ 갈래를 통짜로 나눈다 — 공용 `let mut` + cfg 블록은 비-Windows에서
+    // unused_mut(-D warnings CI 실패 — 08-20 v0.2.0 1차 릴리스가 이걸로 죽었다).
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt as _;
+        let mut c = Command::new(path);
         c.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        c
     }
-    c
+    #[cfg(not(windows))]
+    {
+        Command::new(path)
+    }
 }
 
 /// 격리 디코드 — 성공 시 (w, h, RGBA). 실패 사유는 구분하지 않는다(전부 "없음").
