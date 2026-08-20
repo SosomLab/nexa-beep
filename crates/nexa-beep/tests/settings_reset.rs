@@ -34,6 +34,8 @@ fn confirmed_defaults_hold() {
     let d = SettingsState::with_defaults();
     // M3-2d 사용자 확정(08-15) — 3-OS 공통 기본 꺼짐(mac 차등 아님).
     assert_eq!(d.get("ui.close_to_tray"), "off");
+    // 시스템 시작 시 자동 실행(08-20 사용자 확정) — 3-OS 공통 **기본 켬**(옵트아웃).
+    assert_eq!(d.get("app.autostart"), "on");
     // 프로필 공개 = 기본 비노출(DR-22 옵트인).
     for k in [
         "profile.share.basic",

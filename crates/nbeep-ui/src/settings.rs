@@ -1039,6 +1039,17 @@ pub fn registry() -> &'static [Entry] {
         },
         // ── 고급 — **가장 밑 배치**(08-15 사용자 확정 · 첫 등장 순서 = 사이드바 순서라
         //    close_to_tray를 여기로 내렸다) · 스위치 먼저, 행위(백업·복원·초기화) 마지막 ──
+        // 시스템 시작 시 자동 실행(08-20 사용자 확정 — **기본 on** · 끄기는 옵트아웃).
+        // OS별 사용자 수준 등록(T0 무권한)은 nbeep-plat::autostart, 부팅 재동기화는
+        // apply_boot_settings(포터블 경로 이동 대응 · DR-4).
+        Entry {
+            cat: Msg::CatAdvanced,
+            sub: None,
+            label: Msg::AutoStart,
+            desc: Msg::AutoStartDesc,
+            kind: SettingKind::Toggle,
+            key: "app.autostart",
+        },
         Entry {
             cat: Msg::CatAdvanced,
             sub: None,

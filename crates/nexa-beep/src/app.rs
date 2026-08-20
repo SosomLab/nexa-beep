@@ -32,6 +32,9 @@ fn build_menus() -> Vec<MenuDef> {
             vec![
                 MenuEntry::Item(ComboItem::new("settings", t(Msg::SettingsTitle))),
                 MenuEntry::Item(ComboItem::new("quarantine", t(Msg::QuarantineTitle))),
+                // 대화함(M3-23 · 08-20 사용자 요청) — take_picked 팔은 이미 있었고
+                // 항목만 없었다(진입점 = 툴바뿐이던 것을 메뉴에도).
+                MenuEntry::Item(ComboItem::new("convbox", t(Msg::ConvboxTitle))),
                 MenuEntry::Item(ComboItem::new("gallery", t(Msg::MenuGallery))),
                 // 종료(08-15 사용자 요청) — close_to_tray가 켜지면 X로는 못 끝낸다.
                 MenuEntry::Separator,
@@ -7840,6 +7843,16 @@ impl App {
         if let Ok(v) = self.settings.get("xfer.auto_cancel_min").parse::<u64>() {
             self.auto_cancel_limit_ms = v.clamp(1, 10) * 60_000;
         }
+        // 시스템 시작 시 자동 실행(08-20 · 기본 on) — **부팅마다 재동기화**: 포터블
+        // (DR-4)은 실행 파일 위치가 옮겨질 수 있어 등록 경로가 낡는다. 켜져 있으면
+        // 현재 경로로 재등록, 꺼져 있으면 등록 제거(수기 잔재 치유 · 멱등).
+        // 실패 = 상태바 고지(기능은 계속 — 설정값 유지로 다음 기회에 재시도).
+        if let Err(e) = nbeep_plat::autostart::apply(self.settings.get("app.autostart") != "off") {
+            self.set_status(nbeep_core::tf(
+                nbeep_core::Msg::StfAutostartFail,
+                &[&e.to_string()],
+            ));
+        }
         // 트레이 상주(M3-2a · Windows — 비지원 OS는 None): 아이콘 = 내 아바타 ·
         // 이벤트는 프록시로 메인에 복귀(좌클릭/열기·종료).
         if self.tray.is_none() {
@@ -8255,6 +8268,23 @@ impl App {
                 // 로그 설정(M3-22) — 켜기/끄기·보존·상한 전부 hot-swap(재시작 없음).
                 "log.enabled" | "log.retain_days" | "log.max_total_mb" => {
                     self.refresh_statuslog();
+                }
+                // 시스템 시작 시 자동 실행(08-20 — 기본 on) — 토글 즉시 OS 등록/해제.
+                // 실패를 조용히 넘기지 않는다(상태바 고지) — 설정값은 유지되므로
+                // 다음 부팅 재동기화·재토글에서 재시도된다.
+                "app.autostart" => {
+                    let on = value == "on";
+                    match nbeep_plat::autostart::apply(on) {
+                        Ok(()) => self.set_status(nbeep_core::t(if on {
+                            nbeep_core::Msg::StAutostartOn
+                        } else {
+                            nbeep_core::Msg::StAutostartOff
+                        })),
+                        Err(e) => self.set_status(nbeep_core::tf(
+                            nbeep_core::Msg::StfAutostartFail,
+                            &[&e.to_string()],
+                        )),
+                    }
                 }
                 "ui.typeahead_space" => self.list.set_typeahead_space(value == "on"),
                 "ui.typeahead_special" => self.list.set_typeahead_special(value == "on"),

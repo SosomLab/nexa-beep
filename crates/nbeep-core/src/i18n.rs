@@ -287,6 +287,10 @@ pub enum Msg {
     // ── 설정: 모양 ──
     Theme,
     ThemeDesc,
+    /// 시스템 시작 시 자동 실행(08-20 — 기본 on · OS별 사용자 수준 등록).
+    AutoStart,
+    /// 자동 실행 설명.
+    AutoStartDesc,
     /// 닫기 버튼 = 트레이 상주(M3-2 · 08-15).
     CloseToTray,
     /// 닫기 = 트레이 설명.
@@ -624,6 +628,8 @@ pub enum Msg {
     StHistorySealFail,
     StAutoRestart,
     StImeApplied,
+    StAutostartOn,
+    StAutostartOff,
     StAvatarChanged,
     StFontApplied,
     StGroupNeedSelect,
@@ -668,6 +674,7 @@ pub enum Msg {
     StfPortListening,
     StfPortApplied,
     StfRestartFail,
+    StfAutostartFail,
     StfInvitesSent,
     StfGroupSaveFail,
     StfGroupPendingSent,
@@ -1049,6 +1056,8 @@ impl Msg {
             Msg::StHistorySealFail => ["⚠ Conversation history sealing failed — not saved", "⚠ 대화 기록 봉인 실패 — 저장하지 않음", "⚠ 对话记录封装失败 — 未保存", "⚠ 会話履歴の封印に失敗 — 保存しません"],
             Msg::StAutoRestart => ["Restarted the auto-accept period", "자동 수락 기간을 다시 시작했습니다", "已重新开始自动接收时段", "自動受信期間を再開しました"],
             Msg::StImeApplied => ["Korean input (IME) settings applied", "한글 입력(IME) 기준값 적용", "已应用韩语输入（IME）设置", "韓国語入力（IME）設定を適用"],
+            Msg::StAutostartOn => ["Start at login: on — registered with the OS", "시스템 시작 시 자동 실행: 켬 — OS에 등록했습니다", "登录时自动启动：开 — 已注册到系统", "ログイン時自動起動: オン — OSに登録しました"],
+            Msg::StAutostartOff => ["Start at login: off — removed the OS registration", "시스템 시작 시 자동 실행: 끔 — OS 등록을 제거했습니다", "登录时自动启动：关 — 已移除系统注册", "ログイン時自動起動: オフ — OS登録を解除しました"],
             Msg::StAvatarChanged => ["Avatar changed — propagated to connected peers", "아바타 변경 — 연결된 상대에게 반영", "头像已更改 — 已同步给已连接的对方", "アバター変更 — 接続中の相手に反映"],
             Msg::StFontApplied => ["Font settings applied", "글꼴 설정 적용됨", "已应用字体设置", "フォント設定を適用しました"],
             Msg::StGroupNeedSelect => ["To make a group, ⌘/Ctrl-click to select peers first", "그룹을 만들려면 ⌘/Ctrl+클릭으로 상대를 먼저 선택하세요", "创建群组请先用 ⌘/Ctrl+点击选择对方", "グループ作成は ⌘/Ctrl+クリックで先に相手を選択"],
@@ -1093,6 +1102,7 @@ impl Msg {
             Msg::StfPortListening => ["Listen port = {} (already listening on it)", "수신 포트 = {} (이미 이 포트로 듣는 중)", "监听端口 = {}（已在监听）", "受信ポート = {}（すでにこのポートで待受中）"],
             Msg::StfPortApplied => ["Listen port = {} — applied now (re-announce)", "수신 포트 = {} — 즉시 적용(재공지)", "监听端口 = {} — 立即生效（重新通告）", "受信ポート = {} — 即時適用（再通知）"],
             Msg::StfRestartFail => ["Transport restart failed: {} — keeping current port", "전송 재시작 실패: {} — 기존 포트 유지", "传输重启失败：{} — 保留原端口", "転送再起動失敗: {} — 既存ポート維持"],
+            Msg::StfAutostartFail => ["⚠ Autostart registration failed: {} (setting kept — will retry on next boot/toggle)", "⚠ 자동 실행 등록 실패: {} (설정은 유지 — 다음 부팅·토글에서 재시도)", "⚠ 自动启动注册失败：{}（设置保留 — 下次启动/切换时重试）", "⚠ 自動起動の登録に失敗: {}（設定は維持 — 次回起動・切替時に再試行）"],
             Msg::StfInvitesSent => ["Sent {} invitations (awaiting acceptance)", "{}명 초대 발송(수락 대기)", "已发送 {} 个邀请（等待接受）", "{}名に招待送信（承認待ち）"],
             Msg::StfGroupSaveFail => ["{} · ⚠ Group save failed (will retry on next change)", "{} · ⚠ 그룹 저장 실패(다음 변경에서 재시도)", "{} · ⚠ 群组保存失败（下次更改时重试）", "{} · ⚠ グループ保存失敗（次の変更で再試行）"],
             Msg::StfGroupPendingSent => ["Group pending messages delivered: {}", "그룹 대기분 전달됨: {}", "群组待发消息已送达：{}", "グループ保留分を配信: {}"],
@@ -1813,6 +1823,18 @@ impl Msg {
                 "전체 창의 밝기 팔레트 — 즉시 적용됩니다",
                 "整体明暗配色 — 立即生效",
                 "全体の明暗パレット — 即時適用",
+            ],
+            Msg::AutoStart => [
+                "Start at login",
+                "시스템 시작 시 자동 실행",
+                "登录时自动启动",
+                "ログイン時に自動起動",
+            ],
+            Msg::AutoStartDesc => [
+                "Launch Nexa Beep automatically when you sign in to the OS (Windows Run registry · macOS LaunchAgent · Linux autostart — no admin rights needed)",
+                "OS 로그인 시 Nexa Beep을 자동으로 실행합니다 (Windows 레지스트리 Run · macOS LaunchAgent · Linux autostart — 관리자 권한 불요)",
+                "登录系统时自动启动 Nexa Beep（Windows 注册表 Run · macOS LaunchAgent · Linux autostart — 无需管理员权限）",
+                "OSログイン時に Nexa Beep を自動起動します（Windows レジストリ Run · macOS LaunchAgent · Linux autostart — 管理者権限不要）",
             ],
             Msg::CloseToTray => [
                 "Close button minimizes to tray",
