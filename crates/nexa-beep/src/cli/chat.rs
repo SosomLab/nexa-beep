@@ -7,8 +7,9 @@
 use nbeep_core::PeerId;
 
 /// 대화 중 쓸 수 있는 명령 안내 — **한 곳에서만 적는다**(안내와 구현이 갈리면 거짓말이 된다).
-const HELP_COMMANDS: &str = "[명령] /quit(/exit) = 종료 · /send <파일> = 파일 전송 · \
-/accept · /reject · /help · Ctrl+D = 종료";
+const HELP_COMMANDS: &str =
+    "[명령] /quit(/exit) = 종료 · /send <파일…> = 파일 전송(공백 구분 다중 · 요청당 최대 5) · \
+/accept = 요청 전체 수락 · /reject = 요청 전체 거절 · /help · Ctrl+D = 종료";
 
 /// 상대를 기다리는 동안 쓸 수 있는 것 — 이때는 전송할 상대가 없으니 종료만 가능하다.
 const HELP_WAITING: &str =
@@ -245,12 +246,12 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
     /// stdin 스레드 → 네트 스레드 명령.
     enum Cmd {
         Chat(Vec<u8>),
-        /// 파일 오퍼(발신) — id·이름·선언 해시·원본.
-        Offer {
-            id: nbeep_core::XferId,
-            name: String,
-            sha: [u8; 32],
-            bytes: Vec<u8>,
+        /// 파일 오퍼(발신) — **요청(배치) 단위**(08-20 · GUI M4-2e 미러): 첫 오퍼
+        /// 전에 배치 목록(manifest 태그 13)을 공지하고 파일별 Offer를 잇따라
+        /// 보낸다. 단일 파일도 요청 1개다(GUI 발신과 같은 모양).
+        /// 항목 = (id, 이름, 선언 해시, 원본).
+        OfferBatch {
+            files: Vec<(nbeep_core::XferId, String, [u8; 32], Vec<u8>)>,
         },
         Accept,
         Reject,
@@ -313,10 +314,22 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
             "[파일] 수신 상한 {}MiB (수신측 설정 — --xfer-limit-mib)",
             inbox.max_file() / (1024 * 1024)
         );
-        // 발신 대기(수락을 기다리는 원본) · 수신 대기(수락/거절을 기다리는 오퍼 id).
+        // 발신 대기(수락을 기다리는 원본) · 수신 대기(수락/거절을 기다리는 오퍼들 —
+        // 요청 단위 발신은 오퍼가 한꺼번에 오므로 단일 슬롯이 아니라 목록이다).
         let mut outgoing: std::collections::HashMap<nbeep_core::XferId, Vec<u8>> =
             std::collections::HashMap::new();
-        let mut pending_in: Option<nbeep_core::XferId> = None;
+        let mut pending_ins: Vec<(nbeep_core::XferId, String, u64)> = Vec::new();
+        // ── 요청 단위 승인(08-20 · GUI M4-2e 미러 — 와이어 = manifest 태그 13) ──
+        // req_files = 남은 전송 예정 목록(이름·크기 — 제외분은 애초에 안 담는다 ·
+        // 오퍼는 **이름+크기 대조** 후에만 자동 처리 = fail-closed). 승인/거절은
+        // 요청 전체에 1회. 구버전 발신(무 manifest)은 파일 단위로 자연 폴백.
+        let mut req_files: Vec<(String, u64)> = Vec::new();
+        let mut req_open = false;
+        let mut req_approved = false;
+        let mut req_declined = false;
+        // 수락 후 Done 전인 수신 개수 — 요청 종결 판정에 필요(목록 소진만 보면
+        // 마지막 파일이 아직 오는 중인데 "수신 완료"가 먼저 찍힌다 · 실측 08-20).
+        let mut active_recv = 0usize;
         // ── 프로필(M3-17 · 검증 도구) — 테스트 프로필로 응답하고, 상대 프로필도 1회 요청 ──
         // 이름 = "★{표시이름}"(GUI 목록에서 발견 이름과 한눈에 구분되게) · 이미지 = 70KiB
         // 의사 바이트(청크 3개 — 조립 경로 실측용 · 픽셀 아님).
@@ -340,12 +353,7 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
                             return;
                         }
                     }
-                    Ok(Cmd::Offer {
-                        id,
-                        name,
-                        sha,
-                        bytes,
-                    }) => {
+                    Ok(Cmd::OfferBatch { files }) => {
                         // 발신 자격 사전 점검 — 상대가 어차피 거절할 것을 미리 알린다.
                         if let Err(r) = nbeep_core::check_send_eligibility(
                             nbeep_core::TrustLevel::Pinned,
@@ -354,53 +362,110 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
                             println!("[파일] 보낼 수 없음 — {}", r.message());
                             continue;
                         }
-                        batch.1 += 1;
-                        batch.3 += bytes.len() as u64;
-                        let offer = XferMsg::Offer {
-                            id,
-                            size: bytes.len() as u64,
-                            sha256: sha,
-                            name: name.into_bytes(),
-                        };
-                        outgoing.insert(id, bytes);
-                        if mux.send(StreamId::File, &offer.encode()).is_err() {
+                        // 요청 단위(08-20) — **첫 오퍼 전에** 배치 목록(manifest)을
+                        // 공지한다. GUI 수신자는 이걸로 승인 창 하나에 목록·총합을
+                        // 보이고 승인 1회로 전체를 받는다. 구 수신자는 미지 Control
+                        // 태그를 버리고 파일 단위로 강등(전방 호환).
+                        let entries: Vec<(String, u64, bool)> = files
+                            .iter()
+                            .map(|(_, n, _, b)| (n.clone(), b.len() as u64, false))
+                            .collect();
+                        if mux
+                            .send(
+                                StreamId::Control,
+                                &nbeep_core::xfer::encode_batch_manifest(&entries),
+                            )
+                            .is_err()
+                        {
                             println!("[종료] 세션 끊김");
                             return;
                         }
-                        println!("[파일] 오퍼 전송 — 상대 수락 대기");
+                        let n = files.len();
+                        let tot: u64 = entries.iter().map(|e| e.1).sum();
+                        for (id, name, sha, bytes) in files {
+                            batch.1 += 1;
+                            batch.3 += bytes.len() as u64;
+                            let offer = XferMsg::Offer {
+                                id,
+                                size: bytes.len() as u64,
+                                sha256: sha,
+                                name: name.into_bytes(),
+                            };
+                            outgoing.insert(id, bytes);
+                            if mux.send(StreamId::File, &offer.encode()).is_err() {
+                                println!("[종료] 세션 끊김");
+                                return;
+                            }
+                        }
+                        println!(
+                            "[파일] 요청 전송 — {n}개 · 총 {} · 상대 승인 대기",
+                            human(tot)
+                        );
                     }
                     Ok(Cmd::Accept) => {
-                        if let Some(id) = pending_in {
-                            if inbox.accept(&id).is_ok() {
-                                let _ = mux.send(
-                                    StreamId::File,
-                                    &XferMsg::Accept {
-                                        id,
-                                        rate_cap: recv_cap,
-                                        resume_offset: 0, // CLI는 재개 미지원(M4-10)
-                                        prefix_sha: [0u8; 32],
-                                    }
-                                    .encode(),
-                                );
-                                println!("[파일] 수락 — 수신 시작");
-                            }
-                        } else {
+                        if pending_ins.is_empty() {
                             println!("[파일] 대기 중인 오퍼가 없다");
+                        } else {
+                            // 요청 단위(08-20) — 승인 1회 = 대기분 전부 수락 + 이후
+                            // 도착분 자동 수락 무장(목록 대조 통과분만 — fail-closed).
+                            for (id, nm, sz) in pending_ins.drain(..) {
+                                if inbox.accept(&id).is_ok() {
+                                    active_recv += 1;
+                                    let _ = mux.send(
+                                        StreamId::File,
+                                        &XferMsg::Accept {
+                                            id,
+                                            rate_cap: recv_cap,
+                                            resume_offset: 0, // CLI는 재개 미지원(M4-10)
+                                            prefix_sha: [0u8; 32],
+                                        }
+                                        .encode(),
+                                    );
+                                    println!("[파일] 수락 — 수신 시작: {nm}");
+                                }
+                                // 목록 소진 — 같은 이름·크기 재오퍼가 무한 자동 수락되지 않게.
+                                if let Some(i) =
+                                    req_files.iter().position(|(rn, rs)| *rn == nm && *rs == sz)
+                                {
+                                    req_files.remove(i);
+                                }
+                            }
+                            if req_open && !req_approved {
+                                req_approved = true;
+                                if !req_files.is_empty() {
+                                    println!(
+                                        "[파일] 요청 전체 승인 — 남은 {}개는 자동 수락",
+                                        req_files.len()
+                                    );
+                                }
+                            }
                         }
                     }
                     Ok(Cmd::Reject) => {
-                        if let Some(id) = pending_in.take() {
-                            inbox.drop_xfer(&id);
-                            let _ = mux.send(
-                                StreamId::File,
-                                &XferMsg::Reject {
-                                    id,
-                                    why: nbeep_core::RejectWhy::Declined,
-                                    limit: 0,
-                                }
-                                .encode(),
-                            );
-                            println!("[파일] 거절");
+                        if pending_ins.is_empty() {
+                            println!("[파일] 대기 중인 오퍼가 없다");
+                        } else {
+                            // 거절 1회 = 요청 전체(08-20 확정 미러) — 대기분 전부 거절.
+                            // 발신자는 첫 Reject(Declined)로 배치를 접으므로 잔여는
+                            // 실제로 안 오고, 거절 무장은 경합 안전망이다.
+                            for (id, nm, _) in pending_ins.drain(..) {
+                                inbox.drop_xfer(&id);
+                                let _ = mux.send(
+                                    StreamId::File,
+                                    &XferMsg::Reject {
+                                        id,
+                                        why: nbeep_core::RejectWhy::Declined,
+                                        limit: 0,
+                                    }
+                                    .encode(),
+                                );
+                                println!("[파일] 거절: {nm}");
+                            }
+                            if req_open {
+                                req_declined = true;
+                                req_files.clear();
+                                println!("[파일] 요청 전체 거절");
+                            }
                         }
                     }
                     Err(std::sync::mpsc::TryRecvError::Empty) => break,
@@ -446,6 +511,45 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
                     Some(other) => println!("[그룹] 제어 수신 — {other:?}"),
                     None => {}
                 },
+                // 배치 목록(M4-2e · 태그 13) — 요청 단위 승인의 원료(GUI 미러 · 08-20).
+                StreamId::Control if nbeep_core::xfer::decode_batch_manifest(&bytes).is_some() => {
+                    if let Some(entries) = nbeep_core::xfer::decode_batch_manifest(&bytes) {
+                        let send: Vec<(String, u64)> = entries
+                            .iter()
+                            .filter(|e| !e.2)
+                            .map(|e| (e.0.clone(), e.1))
+                            .collect();
+                        let tot: u64 = send.iter().map(|e| e.1).sum();
+                        let n_ex = entries.len() - send.len();
+                        println!(
+                            "[파일] 요청 {}개 · 총 {}{} — /accept = 요청 전체 수락 · /reject = 전체 거절",
+                            send.len(),
+                            human(tot),
+                            if n_ex > 0 {
+                                format!(" · 제외 {n_ex}개")
+                            } else {
+                                String::new()
+                            }
+                        );
+                        for (i, (nm, sz, ex)) in entries.iter().enumerate() {
+                            println!(
+                                "  {}. {} ({}){}",
+                                i + 1,
+                                nm,
+                                human(*sz),
+                                if *ex {
+                                    " — 제외(전송 안 함)"
+                                } else {
+                                    ""
+                                }
+                            );
+                        }
+                        req_files = send;
+                        req_open = true;
+                        req_approved = false;
+                        req_declined = false;
+                    }
+                }
                 StreamId::Control => match nbeep_core::ProfileMsg::decode(&bytes) {
                     Some(nbeep_core::ProfileMsg::Request) => {
                         println!("[프로필] 상대가 요청 — 테스트 프로필 응답(★{my_name})");
@@ -532,15 +636,33 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
                         }
                         match inbox.offer(&m) {
                             Ok(()) => {
-                                pending_in = Some(id);
-                                println!(
-                                    "[파일] 오퍼: {} ({size}B) — /accept 또는 /reject",
-                                    String::from_utf8_lossy(&name)
-                                );
-                                if matches!(verdict, nbeep_core::OfferVerdict::Accept)
-                                    && inbox.accept(&id).is_ok()
+                                let nm = String::from_utf8_lossy(&name).into_owned();
+                                // 요청 목록 대조(이름+크기 — 불일치는 수동 폴백 · fail-closed).
+                                let in_req = req_files
+                                    .iter()
+                                    .position(|(rn, rs)| *rn == nm && *rs == size);
+                                if req_declined && in_req.is_some() {
+                                    // 거절 무장(경합 안전망 — 정상 경로는 발신자가 접는다).
+                                    inbox.drop_xfer(&id);
+                                    let _ = mux.send(
+                                        StreamId::File,
+                                        &XferMsg::Reject {
+                                            id,
+                                            why: nbeep_core::RejectWhy::Declined,
+                                            limit: 0,
+                                        }
+                                        .encode(),
+                                    );
+                                    println!("[파일] 자동 거절(요청 거절분) — {nm}");
+                                } else if (req_approved && in_req.is_some())
+                                    || matches!(verdict, nbeep_core::OfferVerdict::Accept)
                                 {
-                                    {
+                                    // 요청 승인분(목록 대조 통과) 또는 정책 자동 수락.
+                                    if let Some(i) = in_req {
+                                        req_files.remove(i);
+                                    }
+                                    if inbox.accept(&id).is_ok() {
+                                        active_recv += 1;
                                         let _ = mux.send(
                                             StreamId::File,
                                             &XferMsg::Accept {
@@ -551,7 +673,22 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
                                             }
                                             .encode(),
                                         );
-                                        println!("[파일] 자동 수락 — 수신 시작");
+                                        println!("[파일] 자동 수락 — 수신 시작: {nm}");
+                                    }
+                                } else {
+                                    pending_ins.push((id, nm.clone(), size));
+                                    if req_open && in_req.is_some() {
+                                        // 목록은 이미 보였다 — 첫 오퍼에서 한 줄만.
+                                        if pending_ins.len() == 1 {
+                                            println!(
+                                                "[파일] 도착: {nm} — /accept = 요청 전체 수락 · /reject = 전체 거절"
+                                            );
+                                        }
+                                    } else {
+                                        // 무 manifest(구버전·단발) 또는 목록 불일치 = 파일 단위.
+                                        println!(
+                                            "[파일] 오퍼: {nm} ({size}B) — /accept 또는 /reject"
+                                        );
                                     }
                                 }
                             }
@@ -651,13 +788,14 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
                             }
                             Err(e) => {
                                 println!("[파일] 수신 오류: {e} — 폐기");
-                                pending_in = None;
+                                pending_ins.retain(|p| p.0 != id);
                             }
                         }
                     }
                     Ok(XferMsg::Done { id, sha256 }) => match inbox.done(&id) {
                         Ok(mut got) => {
-                            pending_in = None;
+                            pending_ins.retain(|p| p.0 != id);
+                            active_recv = active_recv.saturating_sub(1);
                             // 지연 선언(08-18) — Offer가 0(스트리밍 발신 = GUI)이면 Done
                             // 동봉 해시가 선언이다. ★ 이 보정이 GUI 수신(app.rs)에만 있고
                             // 여기 CLI에 빠져, **GUI→CLI 파일이 전부 SHA-256 불일치로
@@ -680,8 +818,21 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
                                 XferMsg::Failed { id }
                             };
                             let _ = mux.send(StreamId::File, &ack.encode());
+                            // 요청 종결(08-20) — 목록·대기가 다 비면 배치를 닫는다
+                            // (다음 요청의 manifest가 다시 연다).
+                            if req_open
+                                && req_files.is_empty()
+                                && pending_ins.is_empty()
+                                && active_recv == 0
+                            {
+                                req_open = false;
+                                req_approved = false;
+                                req_declined = false;
+                                println!("[파일] 요청 수신 완료");
+                            }
                         }
                         Err(e) => {
+                            active_recv = active_recv.saturating_sub(1);
                             println!("[파일] 완료 실패: {e} — 폐기");
                             let _ = mux.send(StreamId::File, &XferMsg::Failed { id }.encode());
                         }
@@ -695,7 +846,13 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
                     }
                     Ok(XferMsg::Cancel { id }) => {
                         inbox.drop_xfer(&id);
-                        pending_in = None;
+                        pending_ins.retain(|p| p.0 != id);
+                        // 상대 취소 = 배치 협상도 접는다(잔여 자동 수락 무장 해제 — 안전측).
+                        req_open = false;
+                        req_files.clear();
+                        req_approved = false;
+                        req_declined = false;
+                        active_recv = active_recv.saturating_sub(1);
                         println!("[파일] 상대가 취소");
                     }
                     Err(e) => println!("[파일] 와이어 오류: {e}"),
@@ -709,30 +866,51 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
         if line.trim().is_empty() {
             return true;
         }
-        if let Some(path) = line.strip_prefix("/send ") {
-            match std::fs::read(path.trim()) {
-                Ok(bytes) => {
-                    let sha = nbeep_crypto::sha256(&bytes);
-                    // 전송 id — 새 키의 앞 16B(프로세스 내 유일 · 간이 난수).
-                    let mut id = [0u8; 16];
-                    id.copy_from_slice(
-                        &nbeep_crypto::Identity::generate().peer_id().as_bytes()[..16],
-                    );
-                    let name = std::path::Path::new(path.trim())
-                        .file_name()
-                        .map_or_else(|| "file".to_string(), |n| n.to_string_lossy().into_owned());
-                    return out_tx
-                        .send(Cmd::Offer {
-                            id,
-                            name,
-                            sha,
-                            bytes,
-                        })
-                        .is_ok();
-                }
-                Err(e) => println!("[파일] 읽기 실패: {e}"),
+        if let Some(rest) = line.strip_prefix("/send ") {
+            let rest = rest.trim();
+            // 다중 파일(08-20 · 요청 단위) — **한 줄 전체가 실재 파일이면 1개**(공백
+            // 경로 기존 규약 보존), 아니면 공백 구분 다중으로 해석한다.
+            let paths: Vec<String> = if std::path::Path::new(rest).is_file() {
+                vec![rest.to_string()]
+            } else {
+                rest.split_whitespace().map(String::from).collect()
+            };
+            // 요청당 상한 5(GUI `xfer.batch_max` 기본값 미러) — 초과 = **시도 0건 + 안내**.
+            if paths.len() > 5 {
+                println!(
+                    "[파일] 요청당 최대 5개 — {}개는 나눠 보내세요 (시도 안 함)",
+                    paths.len()
+                );
+                return true;
             }
-            return true;
+            let mut files = Vec::new();
+            for p in &paths {
+                match std::fs::read(p) {
+                    Ok(bytes) => {
+                        let sha = nbeep_crypto::sha256(&bytes);
+                        // 전송 id — 새 키의 앞 16B(프로세스 내 유일 · 간이 난수).
+                        let mut id = [0u8; 16];
+                        id.copy_from_slice(
+                            &nbeep_crypto::Identity::generate().peer_id().as_bytes()[..16],
+                        );
+                        let name = std::path::Path::new(p).file_name().map_or_else(
+                            || "file".to_string(),
+                            |n| n.to_string_lossy().into_owned(),
+                        );
+                        files.push((id, name, sha, bytes));
+                    }
+                    // 하나라도 못 읽으면 요청 전체 취소(시도 0건 — 반쪽 요청 방지).
+                    Err(e) => {
+                        println!("[파일] 읽기 실패: {p} — {e} (요청 취소 · 시도 안 함)");
+                        return true;
+                    }
+                }
+            }
+            if files.is_empty() {
+                println!("[파일] 보낼 파일이 없다 — /send <파일…>");
+                return true;
+            }
+            return out_tx.send(Cmd::OfferBatch { files }).is_ok();
         }
         // ★ 명시적 종료 — Ctrl+D를 모르는 사람도, 그 키가 막힌 터미널에서도 나갈 수 있어야 한다.
         //   `false`를 돌려주면 두 입력 경로(raw·파이프)가 **같은 정리 절차**로 빠져나간다.
