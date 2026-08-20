@@ -252,7 +252,7 @@ fn wait_with_quit_or<T>(
 
 /// 수립된 세션 위 **인터랙티브 대화 루프** — stdin 라인 = 전송, 수신은 실시간 출력, Ctrl+D 종료.
 /// serve/connect/live가 공용(세션 출처만 다르고 대화는 같다).
-/// 반환 = **내가 끝냈는가**(/quit·EOF·Ctrl+C — chat-live 재연결 차단의 근거 · 08-20).
+/// 반환 = **내가 끝냈는가**(/quit·EOF·Ctrl+C — 종료 사유가 필요한 호출자용 · 08-20).
 fn run_interactive<L: nbeep_core::Link + 'static>(
     mut session: nbeep_crypto::NoiseSession<L>,
     me: PeerId,
@@ -1157,9 +1157,9 @@ fn receive_into_quarantine(got: &nbeep_core::Received, sender: PeerId) -> bool {
 pub(crate) fn chat_live(name: &str, port: u16) {
     // 대화형 — chat_interactive와 같은 콘솔 독점 규약(08-20).
     let _ = nbeep_plat::launch::own_console_for_interactive();
-    use nbeep_core::Session as _; // session.peer() — 재연결 차단 판정
+    use nbeep_core::Session as _; // session.peer() — 수신 전용 채널·활성 대화 판정
     use nbeep_net::Transport as _;
-    let identity = nbeep_crypto::Identity::generate();
+    let identity = std::sync::Arc::new(nbeep_crypto::Identity::generate());
     let mut instance = [0u8; 16];
     instance.copy_from_slice(&nbeep_crypto::Identity::generate().peer_id().as_bytes()[..16]);
     let display = nbeep_core::DisplayName::parse(name)
@@ -1188,42 +1188,41 @@ pub(crate) fn chat_live(name: &str, port: u16) {
         transport.tcp_port()
     );
     let incoming = transport.incoming();
-    // ── 발견 조회·능동 연결(08-20 사용자 요청 — "CLI에서 다른 PC 조회·IP 추가") ──
-    // 대기 중 발견 이벤트를 흘려 받아 번호 목록을 만들고, `/peers` = 조회 ·
-    // `/connect <번호|host[:port]>` = 아웃바운드(수동 IP는 DR-19 — GUI ⌘K와 같은
-    // 정규화 · M1-14 단일 코어). 인바운드(GUI가 목록에서 클릭)는 종전 그대로.
+    // ── 구조(08-20 사용자 확정 — "수신은 전 채널·상호 채팅은 1명"):
+    //    **인바운드는 전부 수락해 수신 전용 채널로 유지**한다 — 메시지는 화면에
+    //    표시(+수신확인 되쏘기)하되 대화 상대로 삼지 않는다. **상호 채팅은
+    //    명시적 /connect 상대 1명**과만(입력·파일은 그쪽으로만 간다).
+    //    ★ 그전 [무시]-거절 방식은 상대 GUI의 재연결 백오프가 실패로 보고
+    //    **무한 재시도**해 로그가 홍수났다(실기 스크린샷) — 세션을 세워 두면
+    //    상대도 재시도를 멈춘다. 수락은 전담 스레드(대화 중에도 받는다).
+    let passives: PassiveMap =
+        std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+    {
+        let identity = std::sync::Arc::clone(&identity);
+        let passives = std::sync::Arc::clone(&passives);
+        let my_name = name.to_string();
+        std::thread::spawn(move || {
+            while let Ok(link) = incoming.recv() {
+                match nbeep_crypto::NoiseSession::accept(link, &identity) {
+                    Ok(session) => spawn_passive(session, &passives, &my_name),
+                    // 떠돌이 연결(스캐너·nc)은 그 연결만 버린다(08-13 규약 유지).
+                    Err(e) => eprintln!("\r[무시] 핸드셰이크 실패: {e}"),
+                }
+            }
+        });
+    }
     let discovery = transport.discovery();
     let peers = std::cell::RefCell::new(Vec::<(nbeep_core::PeerId, String)>::new());
-    /// 대기의 결과 — 방향만 다르고(In = accept · Out = initiate) 이후 대화는 같다.
-    enum LiveLink {
-        In(Box<dyn nbeep_core::Link>),
-        Out(Box<dyn nbeep_core::Link>),
-    }
-    const HELP_LIVE: &str =
-        "[대기] /peers = 발견 목록 · /connect <번호|host[:port]> = 연결 · /quit = 종료";
+    const HELP_LIVE: &str = "[대기] /peers = 발견 목록 · /connect <번호|host[:port]> = 대화 상대 지정(1:1) · /quit = 종료 — 그 외 상대의 메시지는 수신 전용으로 표시";
     println!("{HELP_LIVE}");
-    // ── 재연결 차단(08-20 사용자 실기 — "/quit 후 직전 상대로 자동 연결됨") ──
-    // 원인 = 상대(GUI)의 자동 재연결 백오프: 내가 /quit하면 상대는 끊김으로 보고
-    // 다시 걸어오고, 대기는 인바운드를 무조건 수락해 대화가 저절로 열렸다.
-    // 규칙: **대화를 끝낸 상대는 명시적 /connect 전까지 자동 수락하지 않는다**
-    // (다른 상대의 인바운드 = GUI 목록 클릭 UX는 그대로).
-    let mut no_auto: std::collections::HashSet<nbeep_core::PeerId> =
-        std::collections::HashSet::new();
-    // ★ 대기는 **되풀이한다**(08-13). 예전에는 핸드셰이크가 한 번 실패하면 그대로 프로세스가
-    //   끝났다 — 즉 **떠돌이 TCP 연결 하나로 단말이 죽는다.** 포트 스캐너·헬스체크·`nc -z`
-    //   한 번이면 충분했다(실측: `nc -z 127.0.0.1 43211` → `[실패] 핸드셰이크: 세션 링크가
-    //   닫힘` → 컨테이너 종료). 광고를 계속 띄우는 단말이 아무나 건드리면 죽는 건 말이 안 된다.
-    //   대화가 끝난 뒤에도 마찬가지로 대기로 돌아간다 — 상대가 나갔다고 내가 종료할 이유는 없다.
     loop {
-        // 타임아웃·끊김은 `.ok()`로 흘린다 — 종료 조건은 wait_with_quit_or가 본다.
         let got = wait_with_quit_or(
             || {
                 // 발견 이벤트 드레인 — 등장 즉시 알린다(번호 = /connect 대상).
+                // 인바운드 수락은 전담 스레드 몫이라 여기선 발견만 본다(페이싱은
+                // wait 루프의 stdin 100ms 타임아웃이 이미 담당).
                 drain_discovery(&discovery, &peers, true);
-                incoming
-                    .recv_timeout(std::time::Duration::from_millis(100))
-                    .ok()
-                    .map(LiveLink::In)
+                None
             },
             |line| {
                 if matches!(line, "/peers" | "/list") {
@@ -1246,10 +1245,13 @@ pub(crate) fn chat_live(name: &str, port: u16) {
                             println!("\r[연결] {n}번은 목록에 없다 — /peers로 확인");
                             return None;
                         };
+                        // 같은 상대의 수신 전용 채널은 먼저 내린다(이중 세션 방지 —
+                        // 상대 GUI는 dedup으로 새 세션을 받아들인다).
+                        stop_passive(&passives, id);
                         return match transport.connect(id) {
                             Ok(l) => {
                                 println!("\r[연결] {name} ({}) 로 연결", id.short());
-                                Some(LiveLink::Out(l))
+                                Some(l)
                             }
                             Err(e) => {
                                 println!("\r[연결] 실패({name}): {e:?}");
@@ -1267,7 +1269,7 @@ pub(crate) fn chat_live(name: &str, port: u16) {
                     return match transport.add_endpoint(&addr) {
                         Ok(l) => {
                             println!("\r[연결] {addr} 로 연결");
-                            Some(LiveLink::Out(l))
+                            Some(l)
                         }
                         Err(e) => {
                             println!("\r[연결] 실패({addr}): {e:?}");
@@ -1279,50 +1281,162 @@ pub(crate) fn chat_live(name: &str, port: u16) {
                 None
             },
         );
-        let Some(got) = got else {
+        let Some(link) = got else {
             return; // 사용자가 /quit·Ctrl+D — 이때만 끝난다
         };
-        match got {
-            // 인바운드 실패는 **그 연결만** 버린다(신원 미상 — 누구였는지도 적지 않는다).
-            LiveLink::In(link) => match nbeep_crypto::NoiseSession::accept(link, &identity) {
-                Ok(session) => {
-                    let p = session.peer();
-                    if no_auto.contains(&p) {
-                        // 세션은 여기서 드롭된다(상대 쪽 백오프는 상대 규약 몫).
-                        let name = peers
-                            .borrow()
-                            .iter()
-                            .find(|(id, _)| *id == p)
-                            .map(|(_, n)| n.clone())
-                            .unwrap_or_else(|| p.short());
-                        println!(
-                            "[무시] {name}의 재연결 — 대화를 끝낸 상대는 자동으로 열지 않는다(/connect 로만)"
-                        );
-                        continue;
-                    }
-                    if run_interactive(session, identity.peer_id()) {
-                        no_auto.insert(p); // **내가** 끝낸 상대 — 다음은 명시적으로만
-                    }
-                }
-                Err(e) => eprintln!("[무시] 핸드셰이크 실패 — 계속 기다립니다: {e}"),
-            },
-            // 아웃바운드(내가 걸었음) = initiate — 이후 대화 루프는 동일.
-            LiveLink::Out(link) => match nbeep_crypto::NoiseSession::initiate(link, &identity) {
-                Ok(session) => {
-                    let p = session.peer();
-                    no_auto.remove(&p); // 명시적 연결 = 차단 해제
-                    if run_interactive(session, identity.peer_id()) {
-                        no_auto.insert(p);
-                    }
-                }
-                Err(e) => eprintln!("[실패] 핸드셰이크: {e} — 대기로 돌아갑니다"),
-            },
+        // 아웃바운드(명시적 /connect)만 **상호 채팅**으로 들어간다.
+        match nbeep_crypto::NoiseSession::initiate(link, &identity) {
+            Ok(session) => {
+                // 주소 연결은 상대가 여기서 확정된다 — 수신 전용 채널이 있었다면
+                // 지금 내린다(번호 연결은 위에서 선처리 · 멱등).
+                let p = session.peer();
+                stop_passive(&passives, p);
+                run_interactive(session, identity.peer_id());
+            }
+            Err(e) => eprintln!("[실패] 핸드셰이크: {e} — 대기로 돌아갑니다"),
         }
         // 대화 종료(/quit·상대 이탈) = **목록 복귀**(08-20 사용자 요청) — 대화 중
-        // 쌓인 발견 이벤트를 조용히 비우고 현재 목록을 바로 보여 준다.
+        // 쌓인 발견 이벤트를 조용히 비우고 현재 목록을 바로 보여 준다. 이후 상대
+        // GUI가 다시 걸어오면 **수신 전용 채널**로 붙는다(대화가 저절로 안 열린다).
         drain_discovery(&discovery, &peers, false);
         print_peer_list(&peers);
-        println!("[대기] 다시 상대를 기다립니다 — /peers·/connect·/quit");
+        println!("[대기] 다시 상대를 기다립니다 — /peers·/connect·/quit (그 외 상대 메시지 = 수신 전용 표시)");
+    }
+}
+
+/// 수신 전용 채널 장부 — 상대별 정지 플래그(교체·명시 승격 시 내린다).
+type PassiveMap = std::sync::Arc<
+    std::sync::Mutex<
+        std::collections::HashMap<
+            nbeep_core::PeerId,
+            std::sync::Arc<std::sync::atomic::AtomicBool>,
+        >,
+    >,
+>;
+
+/// **수신 전용 채널 액터**(08-20 구조) — 세션을 세워 두고 ① 채팅 텍스트는 화면에
+/// 표시 + 수신확인(N-2) 되쏘기 ② 파일 오퍼는 정중히 거절(무해화·승인 UI는 활성
+/// 대화에 묶여 있다) ③ 프로필 요청엔 이름만 응답. **입력은 절대 이쪽으로 가지
+/// 않는다**(상호 채팅 = 명시적 /connect 상대 1명 — 사용자 확정).
+fn spawn_passive(
+    mut session: nbeep_crypto::NoiseSession<Box<dyn nbeep_core::Link>>,
+    passives: &PassiveMap,
+    my_name: &str,
+) {
+    use nbeep_core::mux::{MuxSession, StreamId};
+    use nbeep_core::Session as _;
+    let peer = session.peer();
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    // 같은 상대의 이전 채널은 교체(상대가 새로 걸어온 것 — 옛 것을 내린다).
+    if let Some(old) = passives
+        .lock()
+        .expect("수신 채널 장부 잠금")
+        .insert(peer, std::sync::Arc::clone(&stop))
+    {
+        old.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    let passives = std::sync::Arc::clone(passives);
+    let my_name = my_name.to_string();
+    session.set_recv_timeout(Some(std::time::Duration::from_millis(100)));
+    std::thread::spawn(move || {
+        println!(
+            "\r[연결됨] {} — 수신 전용(메시지는 표시 · 대화 상대 지정 = /connect)",
+            peer.short()
+        );
+        let mut mux = MuxSession::new(session);
+        loop {
+            if stop.load(std::sync::atomic::Ordering::Relaxed) {
+                break; // 명시 승격·교체 — 세션을 내린다
+            }
+            let (stream, bytes) = match mux.recv_any() {
+                Ok(v) => v,
+                Err(nbeep_core::SessionError::TimedOut) => continue,
+                Err(_) => {
+                    println!("\r[끊김] {} (수신 전용)", peer.short());
+                    break;
+                }
+            };
+            match stream {
+                StreamId::Chat => {
+                    if let Ok(m) = nbeep_core::ChatMessage::decode(&bytes, peer) {
+                        // 수신확인(N-2) — 표시 즉시 전달/읽음(활성 대화와 같은 규약).
+                        for kind in [nbeep_core::AckKind::Delivered, nbeep_core::AckKind::Read] {
+                            let _ = mux.send(
+                                StreamId::Control,
+                                &nbeep_core::ChatAck {
+                                    target_seq: m.seq,
+                                    kind,
+                                }
+                                .encode(),
+                            );
+                        }
+                        if let nbeep_core::MessageBody::Text(t) = m.body {
+                            let safe = nbeep_core::sanitize_message(&t);
+                            println!("\r{}(수신 전용)> {}", peer.short(), safe.as_str());
+                        }
+                    }
+                }
+                StreamId::File => {
+                    if let Ok(nbeep_core::XferMsg::Offer { id, name, .. }) =
+                        nbeep_core::XferMsg::decode(&bytes)
+                    {
+                        let _ = mux.send(
+                            StreamId::File,
+                            &nbeep_core::XferMsg::Reject {
+                                id,
+                                why: nbeep_core::RejectWhy::Declined,
+                                limit: 0,
+                            }
+                            .encode(),
+                        );
+                        println!(
+                            "\r[파일] {}의 '{}' 전송 요청 거절 — 수신 전용 연결(/connect로 대화 상대 지정 후 다시)",
+                            peer.short(),
+                            String::from_utf8_lossy(&name)
+                        );
+                    }
+                }
+                StreamId::Control => {
+                    // 프로필 프리페치 — 이름만 응답(상대 목록 표기용 · 이미지 없음).
+                    if let Some(nbeep_core::ProfileMsg::Request) =
+                        nbeep_core::ProfileMsg::decode(&bytes)
+                    {
+                        let _ = mux.send(
+                            StreamId::Control,
+                            &nbeep_core::ProfileMsg::Info {
+                                name: Some(format!("★{my_name}")),
+                                email: None,
+                                phone: None,
+                                image_len: 0,
+                                avatar: None,
+                                border: None,
+                                image_keep: false,
+                                bio: None,
+                            }
+                            .encode(),
+                        );
+                    }
+                }
+                _ => {} // 그룹 등 — 수신 전용 채널에선 조용히 버린다
+            }
+        }
+        // 장부 정리 — 교체됐다면(내 플래그가 아니면) 새 항목은 남긴다.
+        let mut m = passives.lock().expect("수신 채널 장부 잠금");
+        if m.get(&peer)
+            .is_some_and(|f| std::sync::Arc::ptr_eq(f, &stop))
+        {
+            m.remove(&peer);
+        }
+    });
+}
+
+/// 수신 전용 채널을 내린다(명시 /connect 승격 전 — 같은 상대 이중 세션 방지).
+/// 액터의 100ms 폴 주기만큼 잠깐 기다려 세션이 실제로 닫히게 한다.
+fn stop_passive(passives: &PassiveMap, peer: nbeep_core::PeerId) {
+    let flag = passives.lock().expect("수신 채널 장부 잠금").remove(&peer);
+    if let Some(flag) = flag {
+        flag.store(true, std::sync::atomic::Ordering::Relaxed);
+        std::thread::sleep(std::time::Duration::from_millis(150));
     }
 }
 
