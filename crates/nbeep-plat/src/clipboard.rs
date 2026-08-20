@@ -327,6 +327,8 @@ mod imp {
     }
 
     /// 명령의 표준 출력을 바이트로 받는다(이미지 — 텍스트 read_from의 바이트판).
+    /// Linux 전용(mac 이미지는 osascript 경로) — cfg가 없으면 mac에서 dead fn.
+    #[cfg(not(target_os = "macos"))]
     fn read_bytes_from(cmd: &str, args: &[&str]) -> Option<Vec<u8>> {
         let out = Command::new(cmd)
             .args(args)
