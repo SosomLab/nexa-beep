@@ -146,6 +146,9 @@ docker run --rm -v "$PWD":/src -w /src -e CARGO_TARGET_DIR=/src/.docker-target \
 4. ② 종료 = `/quit` · `Ctrl+D` · `Ctrl+C`
 
 같은 호스트라 멀티캐스트 루프백으로 발견된다. 안 뜨면 3-3으로.
+⚠️ **Windows에서 인터랙티브 CLI(②)는 Git Bash에서** — 08-20 windows 서브시스템 전환
+뒤로 cmd/pwsh는 GUI 앱을 기다리지 않아 프롬프트와 대화 입력이 섞인다(bash는 대기 ·
+cmd라면 `cmd /c start /wait …`) → [§7 유의](#7-배포본-실기-검증-windows).
 
 ### 3-3. IP로 직접 — 발견이 막힌 곳
 
