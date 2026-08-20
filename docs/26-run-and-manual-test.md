@@ -146,6 +146,8 @@ docker run --rm -v "$PWD":/src -w /src -e CARGO_TARGET_DIR=/src/.docker-target \
 4. ② 종료 = `/quit` · `Ctrl+D` · `Ctrl+C`
 
 같은 호스트라 멀티캐스트 루프백으로 발견된다. 안 뜨면 3-3으로.
+②는 대기 중 **`/peers` = 발견 목록 · `/connect <번호|host[:port]>` = 골라서 대화 시작**
+(08-20 — 번호는 발견 상대·주소는 DR-19 수동 등록과 같은 정규화 · 성립하면 즉시 대화 루프).
 ℹ️ **Windows에서 ②를 cmd/PowerShell로 부르면 새 콘솔 창이 열려 거기서 대화한다**
 (08-20 — 그 셸들은 GUI 앱을 기다리지 않아 프롬프트와 입력이 섞이므로 앱이 자기
 콘솔을 새로 연다). Git Bash·파이프는 그 자리 그대로 → [§7 유의](#7-배포본-실기-검증-windows).

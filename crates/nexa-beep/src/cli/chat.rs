@@ -131,7 +131,21 @@ pub(crate) fn chat_interactive(role: ChatRole) {
 ///
 /// `poll`은 100ms마다 불리며 `Some(T)`를 주면 기다림이 끝난 것이다.
 /// 사용자가 종료를 원하면 `None`을 돌려준다(호출 측은 조용히 반환 — 정리는 `Drop`).
-fn wait_with_quit<T>(mut poll: impl FnMut() -> Option<T>) -> Option<T> {
+fn wait_with_quit<T>(poll: impl FnMut() -> Option<T>) -> Option<T> {
+    wait_with_quit_or(poll, |_| {
+        println!("\r{HELP_WAITING}");
+        None
+    })
+}
+
+/// [`wait_with_quit`] + **줄 명령 훅**(08-20 — chat-live 대기 중 `/peers`·`/connect`):
+/// `/quit` 계열은 여기서 끝내고(None), 그 외 비어 있지 않은 줄은 `on_line`에 넘긴다.
+/// `on_line`이 `Some(v)`를 주면 기다림이 그 값으로 끝난다(아웃바운드 연결 성립 등) ·
+/// `None` = 안내/실패를 스스로 찍고 계속 대기.
+fn wait_with_quit_or<T>(
+    mut poll: impl FnMut() -> Option<T>,
+    mut on_line: impl FnMut(&str) -> Option<T>,
+) -> Option<T> {
     use nbeep_plat::term::{parse_key, TermKey};
     use std::io::Read as _;
 
@@ -176,7 +190,9 @@ fn wait_with_quit<T>(mut poll: impl FnMut() -> Option<T>) -> Option<T> {
                         return None;
                     }
                     if !typed.trim().is_empty() {
-                        println!("{HELP_WAITING}");
+                        if let Some(v) = on_line(typed.trim()) {
+                            return Some(v);
+                        }
                     }
                 }
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
@@ -212,7 +228,9 @@ fn wait_with_quit<T>(mut poll: impl FnMut() -> Option<T>) -> Option<T> {
                         return None;
                     }
                     if !typed.trim().is_empty() {
-                        println!("\r{HELP_WAITING}");
+                        if let Some(v) = on_line(typed.trim()) {
+                            return Some(v);
+                        }
                     }
                 }
                 TermKey::Backspace => {
@@ -1153,25 +1171,137 @@ pub(crate) fn chat_live(name: &str, port: u16) {
         transport.tcp_port()
     );
     let incoming = transport.incoming();
+    // ── 발견 조회·능동 연결(08-20 사용자 요청 — "CLI에서 다른 PC 조회·IP 추가") ──
+    // 대기 중 발견 이벤트를 흘려 받아 번호 목록을 만들고, `/peers` = 조회 ·
+    // `/connect <번호|host[:port]>` = 아웃바운드(수동 IP는 DR-19 — GUI ⌘K와 같은
+    // 정규화 · M1-14 단일 코어). 인바운드(GUI가 목록에서 클릭)는 종전 그대로.
+    let discovery = transport.discovery();
+    let peers = std::cell::RefCell::new(Vec::<(nbeep_core::PeerId, String)>::new());
+    /// 대기의 결과 — 방향만 다르고(In = accept · Out = initiate) 이후 대화는 같다.
+    enum LiveLink {
+        In(Box<dyn nbeep_core::Link>),
+        Out(Box<dyn nbeep_core::Link>),
+    }
+    const HELP_LIVE: &str =
+        "[대기] /peers = 발견 목록 · /connect <번호|host[:port]> = 연결 · /quit = 종료";
+    println!("{HELP_LIVE}");
     // ★ 대기는 **되풀이한다**(08-13). 예전에는 핸드셰이크가 한 번 실패하면 그대로 프로세스가
     //   끝났다 — 즉 **떠돌이 TCP 연결 하나로 단말이 죽는다.** 포트 스캐너·헬스체크·`nc -z`
     //   한 번이면 충분했다(실측: `nc -z 127.0.0.1 43211` → `[실패] 핸드셰이크: 세션 링크가
     //   닫힘` → 컨테이너 종료). 광고를 계속 띄우는 단말이 아무나 건드리면 죽는 건 말이 안 된다.
     //   대화가 끝난 뒤에도 마찬가지로 대기로 돌아간다 — 상대가 나갔다고 내가 종료할 이유는 없다.
     loop {
-        // 타임아웃·끊김은 `.ok()`로 흘린다 — 종료 조건은 `wait_with_quit`이 본다.
-        let Some(link) = wait_with_quit(|| {
-            incoming
-                .recv_timeout(std::time::Duration::from_millis(100))
-                .ok()
-        }) else {
+        // 타임아웃·끊김은 `.ok()`로 흘린다 — 종료 조건은 wait_with_quit_or가 본다.
+        let got = wait_with_quit_or(
+            || {
+                // 발견 이벤트 드레인 — 등장 즉시 알린다(번호 = /connect 대상).
+                while let Ok(ev) = discovery.try_recv() {
+                    match ev {
+                        nbeep_net::DiscoveryEvent::Appeared(h) => {
+                            let mut p = peers.borrow_mut();
+                            if !p.iter().any(|(id, _)| *id == h.peer) {
+                                p.push((h.peer, h.name.as_str().to_string()));
+                                println!(
+                                    "\r[발견] {}. {} ({}) — `/connect {}` 로 연결",
+                                    p.len(),
+                                    h.name.as_str(),
+                                    h.peer.short(),
+                                    p.len()
+                                );
+                            }
+                        }
+                        nbeep_net::DiscoveryEvent::Vanished(id) => {
+                            let mut p = peers.borrow_mut();
+                            if let Some(i) = p.iter().position(|(pid, _)| *pid == id) {
+                                let (_, name) = p.remove(i);
+                                println!("\r[이탈] {name} — 번호가 당겨졌다(/peers로 재확인)");
+                            }
+                        }
+                    }
+                }
+                incoming
+                    .recv_timeout(std::time::Duration::from_millis(100))
+                    .ok()
+                    .map(LiveLink::In)
+            },
+            |line| {
+                if matches!(line, "/peers" | "/list") {
+                    let p = peers.borrow();
+                    if p.is_empty() {
+                        println!(
+                            "\r[목록] 발견된 상대 없음 — 같은 LAN의 실행 중 단말(GUI·chat-live)이 뜬다"
+                        );
+                    } else {
+                        for (i, (id, name)) in p.iter().enumerate() {
+                            println!("\r[목록] {}. {} ({})", i + 1, name, id.short());
+                        }
+                    }
+                    return None;
+                }
+                if let Some(t) = line.strip_prefix("/connect") {
+                    let t = t.trim();
+                    if t.is_empty() {
+                        println!(
+                            "\r[연결] 사용법: /connect <번호|host[:port]> (번호 = /peers 목록)"
+                        );
+                        return None;
+                    }
+                    // 번호 = 발견 상대(경로는 전송이 안다 — live_echo와 같은 connect) ·
+                    // 그 외 = 수동 엔드포인트(DR-19 · 발견이 닿지 않는 다른 서브넷).
+                    if let Ok(n) = t.parse::<usize>() {
+                        let target = peers.borrow().get(n.wrapping_sub(1)).cloned();
+                        let Some((id, name)) = target else {
+                            println!("\r[연결] {n}번은 목록에 없다 — /peers로 확인");
+                            return None;
+                        };
+                        return match transport.connect(id) {
+                            Ok(l) => {
+                                println!("\r[연결] {name} ({}) 로 연결", id.short());
+                                Some(LiveLink::Out(l))
+                            }
+                            Err(e) => {
+                                println!("\r[연결] 실패({name}): {e:?}");
+                                None
+                            }
+                        };
+                    }
+                    let Some(addr) = nbeep_core::endpoint::normalize_endpoint(
+                        t,
+                        nbeep_net::DEFAULT_SESSION_PORT,
+                    ) else {
+                        println!("\r[연결] 주소 형식 오류: {t} (예: 10.0.0.5 · [fe80::1]:47200)");
+                        return None;
+                    };
+                    return match transport.add_endpoint(&addr) {
+                        Ok(l) => {
+                            println!("\r[연결] {addr} 로 연결");
+                            Some(LiveLink::Out(l))
+                        }
+                        Err(e) => {
+                            println!("\r[연결] 실패({addr}): {e:?}");
+                            None
+                        }
+                    };
+                }
+                println!("\r{HELP_LIVE}");
+                None
+            },
+        );
+        let Some(got) = got else {
             return; // 사용자가 /quit·Ctrl+D — 이때만 끝난다
         };
-        match nbeep_crypto::NoiseSession::accept(link, &identity) {
-            Ok(session) => run_interactive(session, identity.peer_id()),
-            // 실패는 **그 연결만** 버린다. 신원이 안 밝혀졌으니 누구였는지도 적지 않는다.
-            Err(e) => eprintln!("[무시] 핸드셰이크 실패 — 계속 기다립니다: {e}"),
+        match got {
+            // 인바운드 실패는 **그 연결만** 버린다(신원 미상 — 누구였는지도 적지 않는다).
+            LiveLink::In(link) => match nbeep_crypto::NoiseSession::accept(link, &identity) {
+                Ok(session) => run_interactive(session, identity.peer_id()),
+                Err(e) => eprintln!("[무시] 핸드셰이크 실패 — 계속 기다립니다: {e}"),
+            },
+            // 아웃바운드(내가 걸었음) = initiate — 이후 대화 루프는 동일.
+            LiveLink::Out(link) => match nbeep_crypto::NoiseSession::initiate(link, &identity) {
+                Ok(session) => run_interactive(session, identity.peer_id()),
+                Err(e) => eprintln!("[실패] 핸드셰이크: {e} — 대기로 돌아갑니다"),
+            },
         }
-        println!("[대기] 다시 상대를 기다립니다 — /quit + Enter 또는 Ctrl+D = 종료");
+        println!("[대기] 다시 상대를 기다립니다 — {HELP_LIVE}");
     }
 }
