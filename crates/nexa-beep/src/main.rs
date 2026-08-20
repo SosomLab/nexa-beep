@@ -16,6 +16,15 @@
 
 // 조립 지점 바이너리 — 창 초기화 경로의 unwrap 허용(docs/13 §9 — 복구 불가 구성 오류).
 #![allow(clippy::unwrap_used)]
+// ★ Windows = **windows 서브시스템**(08-20 사용자 실기 — 실행할 때마다 터미널 창이 뜬다):
+//   콘솔 서브시스템 + FreeConsole 휴리스틱(M5-4d)은 Windows 11 기본 터미널(Windows
+//   Terminal)에서 무력하다 — ConPTY 세션 창이 detach가 아니라 **루트 프로세스 종료**에
+//   묶여, 빈 터미널 창이 앱 옆에 상주했다. 서브시스템 전환으로 콘솔 창은 아예 안 생기고,
+//   터미널 실행의 CLI 출력은 main 첫 줄 `attach_parent_console()`이 보전한다.
+//   ⚠ 터미널 CLI의 셸 대기 관례가 바뀐다: cmd·pwsh는 GUI 앱을 기다리지 않으므로
+//   인터랙티브 도구(--chat-live 등)는 `cmd /c start /wait` 또는 Git Bash에서(bash는
+//   서브시스템 무관하게 자식을 기다린다). 파이프·리다이렉트 캡처는 핸들 보전으로 동작.
+#![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod app;
 mod cli;
@@ -31,6 +40,10 @@ use cli::probe::{discover_probe, live_echo};
 use cli::quarantine::quarantine_demo;
 
 fn main() {
+    // 어떤 출력보다 먼저 — 터미널에서 불렸으면 부모 콘솔에 붙어 CLI 출력을 보전한다
+    // (windows 서브시스템 전환의 짝 · 리다이렉트 핸들은 함수가 되살린다). GUI 실행
+    // (더블클릭·자동 실행 M3-25)은 부모 콘솔이 없어 no-op = 콘솔 창 0.
+    nbeep_plat::launch::attach_parent_console();
     let args: Vec<String> = std::env::args().collect();
     // 도움말·버전 — 어느 모드보다 먼저(배포 검증 절차 26 §7-2가 `--version`을 쓴다.
     // 그전엔 무인자 스캐폴드가 버전을 겸했는데, 무인자 = 창이 되면서 명시 처리로 분리).
@@ -171,9 +184,9 @@ fn main() {
     }
     // ★ **무인자 기본 = 창 모드 + 실물 발견**(사용자 확정 08-13 — DR-1 "실행 = 참여").
     //   그전엔 무인자 = 스캐폴드 출력이라 GUI 셸 실행(더블클릭·바로가기)만 휴리스틱으로
-    //   창을 띄웠는데(M5-4d), 이제 어디서 부르든 무인자면 창이다. 휴리스틱은 **콘솔
-    //   분리에만** 남는다 — 탐색기가 새로 할당한 콘솔은 떼고, 터미널 실행은 콘솔을
-    //   유지한다(로그 관찰 용도 · macOS `.app`은 콘솔 자체가 없어 해당 없음).
+    //   창을 띄웠는데(M5-4d), 이제 어디서 부르든 무인자면 창이다. 콘솔 분리 휴리스틱
+    //   (from_gui_shell/FreeConsole)은 08-20 windows 서브시스템 전환으로 폐기 —
+    //   콘솔은 애초에 안 생기고, 터미널 실행은 attach_parent_console이 잇는다.
     // ★ 창을 열 수 있는 자리인가 — **열기 전에 묻는다**(사용자 요청 08-13).
     //   못 여는 자리에서 열면 프로세스가 그냥 죽는다(컨테이너 실기: `Exited (134)` +
     //   "시스템 UI 폰트 없음"). SSH·원격 PowerShell·서비스 세션도 같은 자리다.
@@ -181,10 +194,6 @@ fn main() {
     if let Err(why) = nbeep_plat::gui::probe() {
         eprintln!("{}", why.message());
         std::process::exit(3);
-    }
-    let no_real_args = !open_window && !separate && !live && port.is_none();
-    if no_real_args && nbeep_plat::launch::from_gui_shell() {
-        nbeep_plat::launch::hide_gui_console();
     }
     let mode = if separate {
         app::WindowMode::Separate

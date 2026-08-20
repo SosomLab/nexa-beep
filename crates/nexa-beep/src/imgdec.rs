@@ -11,6 +11,19 @@ use std::process::{Command, Stdio};
 /// 자식 응답 대기 상한 — 초과는 손상·폭탄 취급(kill).
 const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 
+/// 워커 스폰 공통 준비 — Windows는 **콘솔 창 없이**(CREATE_NO_WINDOW). 본체가
+/// windows 서브시스템(08-20)이라 콘솔이 없는데, 그 상태에서 콘솔 서브시스템 자식을
+/// 그냥 스폰하면 **디코드마다 콘솔 창이 번쩍인다**(파이프 stdio와는 별개 축).
+fn worker_command(path: &std::path::Path) -> Command {
+    let mut c = Command::new(path);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt as _;
+        c.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    c
+}
+
 /// 격리 디코드 — 성공 시 (w, h, RGBA). 실패 사유는 구분하지 않는다(전부 "없음").
 pub(crate) fn decode_isolated(bytes: &[u8], max_side: u32) -> Option<(u32, u32, Vec<u8>)> {
     let exe = std::env::current_exe().ok()?;
@@ -23,7 +36,7 @@ pub(crate) fn decode_isolated(bytes: &[u8], max_side: u32) -> Option<(u32, u32, 
     if !child_path.exists() {
         return None; // 동봉 안 됨(포장 잔여) — 조용히 이니셜 폴백
     }
-    let mut child = Command::new(child_path)
+    let mut child = worker_command(&child_path)
         .args(["--max-side", &max_side.to_string()])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -79,7 +92,7 @@ pub(crate) fn wire_png_from_bytes(bytes: &[u8], max_side: u32) -> Option<Vec<u8>
     if !child_path.exists() {
         return None;
     }
-    let mut child = Command::new(child_path)
+    let mut child = worker_command(&child_path)
         .args(["--max-side", &max_side.to_string(), "--encode-png"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

@@ -1,54 +1,54 @@
-//! 실행 출처 판정 — **GUI(탐색기/Dock)에서 인자 없이 열렸는가**(M5-4d · 배포 실기 08-11).
+//! 실행 환경 이음 — **부모 콘솔 연결**(CLI 출력 보전) · 기본 프로그램 열기.
 //!
-//! 콘솔 서브시스템 바이너리를 배포하면, 사용자가 탐색기에서 더블클릭할 때 인자가 없어
-//! 스캐폴드 안내만 찍고 끝난다 — 눈에는 "콘솔이 번쩍이고 사라짐"으로 보인다(첫 배포에서
-//! 손에 쥔 경험이 이것). macOS는 `.app/Contents/MacOS/` 경로로 번들 실행을 알아채 창 모드로
-//! 돌렸는데(main.rs), 그 판정이 macOS 전용이라 Windows엔 대응이 없었다. 이 모듈이 그 대칭을
-//! 채운다: **Windows에서 "탐색기가 새로 띄운 콘솔"** 을 감지한다.
+//! ★ 08-20 전환: 바이너리가 Windows에서 **windows 서브시스템**이 됐다(main.rs
+//! `windows_subsystem`). 종전엔 콘솔 서브시스템 + `FreeConsole` 휴리스틱(M5-4d ·
+//! `from_gui_shell`/`hide_gui_console`)으로 탐색기 실행의 콘솔을 뗐는데, **Windows 11
+//! 기본 터미널(Windows Terminal)은 ConPTY 세션 창이 루트 프로세스 종료까지 남아**
+//! detach로는 창이 닫히지 않는다(실기 08-20 — 빈 터미널 창이 앱 옆에 상주). 서브시스템
+//! 전환으로 콘솔 창은 **아예 생기지 않고**, 터미널 실행의 CLI 출력은
+//! [`attach_parent_console`]이 부모 콘솔에 붙어 보전한다.
 
-/// GUI 셸(탐색기 등)이 **새 콘솔을 할당해** 이 프로세스를 띄웠는가.
+/// **부모 콘솔에 붙는다**(Windows · GUI 서브시스템의 CLI 보전) — 터미널(cmd·pwsh·bash)에서
+/// 불렸으면 그 콘솔로 stdout/stderr/stdin이 이어져 `--help`·검증 도구 출력이 그대로
+/// 보인다. 탐색기 더블클릭·자동 실행(M3-25)처럼 부모 콘솔이 없으면 no-op — 창만 뜬다.
 ///
-/// Windows에서만 참이 될 수 있다. 판정은 [`GetConsoleProcessList`](https://learn.microsoft.com/windows/console/getconsoleprocesslist)
-/// 휴리스틱(Raymond Chen) — 붙어 있는 프로세스가 **자기 하나뿐**(반환 1)이면 탐색기가 이 앱을
-/// 위해 콘솔을 새로 만든 것이고, 기존 터미널(cmd·pwsh)에서 부른 경우는 셸까지 2개 이상이다.
-/// macOS/Linux는 항상 `false`(각자의 판정은 호출자 몫 — 예: macOS 번들 경로).
-#[must_use]
-pub fn from_gui_shell() -> bool {
-    imp()
-}
-
-#[cfg(windows)]
-fn imp() -> bool {
-    #[link(name = "kernel32")]
-    extern "system" {
-        fn GetConsoleProcessList(list: *mut u32, count: u32) -> u32;
-    }
-    let mut buf = [0u32; 2];
-    // SAFETY: 출력 버퍼(길이 2)와 그 길이를 넘긴다 — 커널이 최대 count개만 채우고 총계를
-    // 반환한다. 핸들·소유권 없음. 콘솔이 없으면 0(그 경우 GUI 판정도 아니다).
-    let n = unsafe { GetConsoleProcessList(buf.as_mut_ptr(), buf.len() as u32) };
-    n == 1
-}
-
-#[cfg(not(windows))]
-fn imp() -> bool {
-    false
-}
-
-/// GUI 실행 시 **탐색기가 붙여 준 콘솔 창을 닫는다**(Windows). 우리는 콘솔 서브시스템
-/// 바이너리라, 창 모드로 가더라도 그 콘솔이 GUI 창 옆에 남는다 — 여기서 떼어낸다.
-/// 붙어 있는 프로세스가 자기뿐일 때(=[`from_gui_shell`] 참) 호출해야 안전하다:
-/// `FreeConsole`이 마지막 detach가 되어 콘솔 창이 사라진다. 비-Windows는 no-op.
-pub fn hide_gui_console() {
+/// ⚠ 규약 둘: ① **첫 출력 전에 호출**(Rust std가 표준 핸들을 처음 사용할 때 잡는다)
+/// ② AttachConsole은 **표준 핸들 셋을 콘솔로 덮으므로**, 리다이렉트(`> 파일`·파이프)로
+/// 물려받은 유효 핸들은 붙기 전에 떠 뒀다가 되살린다 — 안 그러면 `--version > f`나
+/// 테스트 하네스 캡처가 콘솔로 새 나간다. 비-Windows는 no-op(콘솔 개념이 없다).
+pub fn attach_parent_console() {
     #[cfg(windows)]
     {
         #[link(name = "kernel32")]
         extern "system" {
-            fn FreeConsole() -> i32;
+            fn AttachConsole(pid: u32) -> i32;
+            fn GetStdHandle(which: u32) -> isize;
+            fn SetStdHandle(which: u32, handle: isize) -> i32;
         }
-        // SAFETY: 인자 없는 콘솔 detach. 실패해도(콘솔 없음 등) 부작용 없다.
-        unsafe {
-            FreeConsole();
+        const ATTACH_PARENT_PROCESS: u32 = u32::MAX; // (DWORD)-1
+        const STD_INPUT_HANDLE: u32 = -10i32 as u32;
+        const STD_OUTPUT_HANDLE: u32 = -11i32 as u32;
+        const STD_ERROR_HANDLE: u32 = -12i32 as u32;
+        const INVALID_HANDLE: isize = -1;
+        let keep = |which: u32| {
+            // SAFETY: 표준 핸들 조회 — 소유권·부작용 없음.
+            let h = unsafe { GetStdHandle(which) };
+            (h != 0 && h != INVALID_HANDLE).then_some(h)
+        };
+        let held = [
+            (STD_INPUT_HANDLE, keep(STD_INPUT_HANDLE)),
+            (STD_OUTPUT_HANDLE, keep(STD_OUTPUT_HANDLE)),
+            (STD_ERROR_HANDLE, keep(STD_ERROR_HANDLE)),
+        ];
+        // SAFETY: 부모 콘솔이 없으면 실패(반환 0)하고 부작용도 없다.
+        if unsafe { AttachConsole(ATTACH_PARENT_PROCESS) } == 0 {
+            return;
+        }
+        for (which, h) in held {
+            if let Some(h) = h {
+                // SAFETY: 이 프로세스가 물려받은(여전히 유효한) 핸들을 되돌린다.
+                unsafe { SetStdHandle(which, h) };
+            }
         }
     }
 }
@@ -60,10 +60,15 @@ pub fn hide_gui_console() {
 pub fn open_path(path: &std::path::Path) -> bool {
     #[cfg(windows)]
     {
+        use std::os::windows::process::CommandExt as _;
         // start의 첫 인자는 창 제목 자리 — 빈 제목을 줘야 경로가 제목으로 안 삼켜진다.
+        // CREATE_NO_WINDOW: 본체가 windows 서브시스템(08-20)이라 콘솔이 없고, 그 상태로
+        // 콘솔 앱 cmd를 그냥 스폰하면 콘솔 창이 번쩍인다. 열리는 대상(편집기·탐색기)의
+        // 창은 별개 프로세스라 영향 없다.
         std::process::Command::new("cmd")
             .args(["/c", "start", ""])
             .arg(path)
+            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
             .spawn()
             .is_ok()
     }
@@ -90,11 +95,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn returns_bool_without_panic() {
-        // 테스트 하네스는 콘솔/파이프가 다양하다 — 값이 아니라 **패닉 없이 판정**됨을 본다.
-        let _ = from_gui_shell();
-        // 비-Windows는 계약상 항상 false.
-        #[cfg(not(windows))]
-        assert!(!from_gui_shell());
+    fn attach_is_safe_everywhere() {
+        // 테스트 하네스는 콘솔/파이프가 다양하다 — 어떤 환경에서든 **패닉 없이**
+        // 지나가고, 캡처된 stdout이 콘솔로 새지 않아야 한다(핸들 보전 규약).
+        attach_parent_console();
+        println!("still-captured"); // 하네스 캡처가 살아 있으면 이 줄은 콘솔에 안 샌다
     }
 }
