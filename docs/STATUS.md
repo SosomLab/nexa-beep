@@ -3,7 +3,9 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
-> **갱신: 2026-08-20 5차 (KST · Windows)** — ★ **v0.1.8 공개**(`443e92f`+태그 · release.yml success 4m33s · **자산 14종** · **brew 탭 자동 갱신 ✓**(kiros33/homebrew-tap "nexa-beep 0.1.8") · winget/choco = 보류 변수 그대로 — 사용자 "brew까지만"). 탑재 = v0.1.7 이후 08-16~20 누적: 발신 스트리밍·지연 해시·송수신 상한+송신 전 확인·**전송 재개**·**인챗 전송 제어**·**요청 단위 승인/상한**·**대화함(M3-23)**·그룹 영속·지문 검증·평문 3면 봉인·i18n 전면·durable 경로. 711 green.
+> **갱신: 2026-08-20 6차 (KST · Windows)** — ★ **시스템 시작 시 자동 실행(M3-25) + 대화함 풀다운 메뉴**(`5b0c9ef`): `nbeep-plat::autostart` 신설 — 3-OS **사용자 수준 등록(T0 무권한)**(Windows HKCU Run = advapi32 직접 링크·의존 0 · macOS `~/Library/LaunchAgents` RunAtLoad · Linux XDG `~/.config/autostart`) · **기본 on**(사용자 확정 — 옵트아웃) · 설정 고급 트레이 항목 위 Toggle(`app.autostart`) · **부팅마다 재동기화**(포터블 경로 이동 대응 — on = 현재 exe 재등록·off = 제거 멱등 치유) · 토글 즉시 적용+실패 상태바 고지. **Windows 실측 ✓**(격리 포터블 인스턴스 — on 부팅 등록·off 부팅 제거·원상 복구). 대화함(M3-23 후속) = 풀다운 메뉴 항목 추가(팔은 있었고 항목만 없었다). **715 green** · clippy 0. 잔여 = mac·Linux 자동 실행 실기. [journal/2026-08-20.md](journal/2026-08-20.md).
+
+> **직전(08-20 5차 · Windows)** — ★ **v0.1.8 공개**(`443e92f`+태그 · release.yml success 4m33s · **자산 14종** · **brew 탭 자동 갱신 ✓**(kiros33/homebrew-tap "nexa-beep 0.1.8") · winget/choco = 보류 변수 그대로 — 사용자 "brew까지만"). 탑재 = v0.1.7 이후 08-16~20 누적: 발신 스트리밍·지연 해시·송수신 상한+송신 전 확인·**전송 재개**·**인챗 전송 제어**·**요청 단위 승인/상한**·**대화함(M3-23)**·그룹 영속·지문 검증·평문 3면 봉인·i18n 전면·durable 경로. 711 green.
 
 > **직전(08-20 4차 · Windows)** — ★ **대화함(M3-23) 기본 기능 전체 구현**: 결정 수집(AskUserQuestion — 백업 = **sealed 그대로·전체만** · 행 = 아바타·이름·시각+**마지막 메시지 1줄·크기·이름 필터·클릭 = 대화 열기** · retention 비채택) → `ConvboxWidget`(격리함 문법 · 2단계 삭제 2종 · 회귀 6종) + **서랍 아이콘 자체 작도**(파이썬 SDF — rsvg 불요 · 16px 판독 실측) + Role::Convbox 일습(툴바·프리에딧/클립보드 7곳) + **삭제 = 파일+메모리 동시**(`clear_lines` — 열린 창 즉시 반영) + 피커 2목적(폴더 백업 `nexa-beep-history-{지문}` · 폴더/개별 복원 — **중복 덮어쓰기·복원이 이긴다**). **711 green** · clippy 0 · rustdoc 0. ★**실기 10항 확인 ✓**(아이콘·목록·미리보기·크기·필터·클릭 열기·방별 삭제·백업·복원) — 잔여 육안 = 전체 삭제·삭제 시 열린 창 반영·그룹 행. [journal/2026-08-20.md](journal/2026-08-20.md).
 

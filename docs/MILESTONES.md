@@ -61,6 +61,7 @@
 | **대화** | **수신자 릴레이** — 내 규칙으로 내 채널에 · 봉투만 · 다중 어댑터 팬아웃 | DR-25 · [24 §6](24-adr-0010-message-priority-notification.md) | 📐 설계(🔴 확정 대기 · M3-10 · **SP-2 종속**) |
 | 셸 | **설정 화면(VS Code 방식)** — Entry 레지스트리 · 검색 · 즉시 적용 · **2단 계층 + 고정 밴드**(08-11) | DR-24 · [14 §10](14-control-ux-architecture.md) | ✅ (M3-11 화면 + **M3-15 영속 완료**(08-11 · D-25 확정) — `crates/nexa-conf`(재사용 · nbeep 의존 0) · 미지 키 보존 · quiet 1s OR max 10s 저장 · 원자적 쓰기 · 부팅 반영 · 종료 flush) |
 | 셸 | **대화 창 모델** — 상태-뷰 분리 · 상대별 별도 창 옵션 | DR-26 · [14 §11](14-control-ux-architecture.md) | ✅ (M3-12 — 대화 상태는 뷰와 분리·상대별 유지(뷰를 닫아도 대화는 산다) · `chat.window_mode` 설정 연동(단일 창 / 별도 창)) |
+| 셸 | **시스템 시작 시 자동 실행** — 3-OS 사용자 수준 등록(T0 무권한) · 기본 on(옵트아웃) · 부팅 재동기화(포터블 경로 이동 대응) | 사용자 확정 08-20 | ✅ (M3-25 · `5b0c9ef` — Win HKCU Run(advapi32 직접·의존 0)·mac LaunchAgent·Linux XDG autostart · 설정 고급 `app.autostart` · Windows 실측 ✓ · 잔여 = mac·Linux 실기) |
 
 ### 2차 이후
 
