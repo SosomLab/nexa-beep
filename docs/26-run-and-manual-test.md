@@ -395,6 +395,13 @@ Start-Process "$env:LOCALAPPDATA\Programs\NexaBeep\uninstall.exe" /S -Wait
 winget validate --manifest manifests\winget\manifests\s\SosomLab\NexaBeep\<버전>
 ```
 
+> ★ **08-20 — Windows exe는 windows 서브시스템**(콘솔 창 근절 — Windows Terminal에선
+> `FreeConsole`로도 빈 터미널 창이 남던 실기 · main.rs `windows_subsystem` + `attach_parent_console`).
+> 검증 시 유의: **PowerShell은 GUI 앱을 기다리지 않아 `--version > 파일`이 비어 나온다** —
+> 파이프(`| Out-String`)·`cmd /c "… > 파일"`·bash 리다이렉트는 전부 정상(실측 08-20).
+> 인터랙티브 CLI(`--chat-live` 등)는 `cmd /c start /wait …` 또는 Git Bash에서(bash는
+> 서브시스템 무관하게 자식을 기다린다).
+
 **실측(v0.1.2 · win x64)** — 체크섬 3/3 · MotW 전파 정상 · 설치/업그레이드/제거 통과 · PATH 미등록(설계) ·
 winget validate 통과 · 해시 일치.
 🔴 **결함 1건**: 포터블 exe가 콘솔 서브시스템 + 인자 없음이라 **더블클릭 시 콘솔 번쩍 후 종료**

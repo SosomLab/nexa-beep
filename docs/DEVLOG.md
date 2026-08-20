@@ -7,6 +7,7 @@
 
 ## 2026-08-20
 
+- **(Win) 콘솔 창 근절**(`5d992c6`) — windows 서브시스템 전환(WT에선 FreeConsole로도 빈 터미널 창이 상주 — ConPTY는 루트 프로세스 종료에 묶임) + `attach_parent_console`(터미널 CLI 출력 보전 · 리다이렉트 핸들 복원) + 콘솔 자식 CREATE_NO_WINDOW(imgdec·open_path). PS `>` quirk는 26 §7 명기. 715 green.
 - **(Win) 시스템 시작 시 자동 실행 M3-25**(`5b0c9ef`) — 3-OS 사용자 수준 등록(Win HKCU Run advapi32 직접 · mac LaunchAgent · Linux XDG autostart) · **기본 on** · 부팅 재동기화(포터블 경로 이동 대응) · 설정 고급 트레이 위 Toggle · 대화함 풀다운 메뉴 항목 추가. Win 실측(등록/제거) · 715 green.
 - ★ **v0.1.8 공개**(`443e92f`+태그) — 자산 14종·brew 탭 자동 갱신 ✓·winget/choco 보류 유지. 탑재 = 08-16~20 누적(전송 축 완성·인챗 제어·요청 단위 승인·대화함·그룹 영속·봉인·지문 검증).
 - **(Win) 대화함 M3-23 기본 기능 전체 구현** — 결정 수집(sealed 백업·전체만·미리보기/크기/필터/클릭 열기·retention 비채택) → ConvboxWidget(회귀 6종)+서랍 아이콘 자체 작도+Role 일습+백업/복원 피커(중복 덮어쓰기·메모리 즉시 반영). 711 green.
