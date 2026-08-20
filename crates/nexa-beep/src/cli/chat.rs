@@ -487,6 +487,21 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
                 StreamId::Chat => {
                     if let Ok(m) = ChatMessage::decode(&bytes, peer) {
                         ledger.note_recv(peer); // 왕래 장부(상호 확인 근거)
+                                                // 수신확인(N-2 · 08-20 사용자 실기 "CLI 상대는 마크가 안 뜬다") —
+                                                // **전달**은 파싱 직후 자동(GUI와 동일), **읽음**은 터미널 특성상
+                                                // 출력 즉시가 곧 "봄"이라 함께 되쏜다(창 가시성에 해당하는 구분
+                                                // 시점이 없다 — 08-20 검토 확정). 검증 도구라 프라이버시 게이트
+                                                // 없이 항상 발신(제품 규칙의 게이트는 수신자 설정 축 — GUI 몫).
+                        for kind in [nbeep_core::AckKind::Delivered, nbeep_core::AckKind::Read] {
+                            let _ = mux.send(
+                                StreamId::Control,
+                                &nbeep_core::ChatAck {
+                                    target_seq: m.seq,
+                                    kind,
+                                }
+                                .encode(),
+                            );
+                        }
                         if let MessageBody::Text(t) = m.body {
                             let safe = nbeep_core::sanitize_message(&t);
                             println!("{}> {}", peer.short(), safe.as_str());
@@ -511,6 +526,20 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
                     Some(other) => println!("[그룹] 제어 수신 — {other:?}"),
                     None => {}
                 },
+                // 수신확인 도착(N-2 · 태그 10) — 상대(GUI)가 내 메시지를 받았다/봤다.
+                // 그전엔 ProfileMsg 디코드 실패로 **조용히 버려져** CLI에선 안 보였다.
+                StreamId::Control if nbeep_core::ChatAck::decode(&bytes).is_some() => {
+                    if let Some(a) = nbeep_core::ChatAck::decode(&bytes) {
+                        println!(
+                            "[확인] {} — 내 메시지 seq={}",
+                            match a.kind {
+                                nbeep_core::AckKind::Delivered => "전달됨",
+                                nbeep_core::AckKind::Read => "읽음",
+                            },
+                            a.target_seq
+                        );
+                    }
+                }
                 // 배치 목록(M4-2e · 태그 13) — 요청 단위 승인의 원료(GUI 미러 · 08-20).
                 StreamId::Control if nbeep_core::xfer::decode_batch_manifest(&bytes).is_some() => {
                     if let Some(entries) = nbeep_core::xfer::decode_batch_manifest(&bytes) {
