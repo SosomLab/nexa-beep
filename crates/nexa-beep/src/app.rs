@@ -2222,6 +2222,9 @@ struct App {
     /// 열어야 할 경고(제목, 본문) — 이벤트 루프 참조가 없는 지점에서 요청되면
     /// `about_to_wait`가 연다(pending_picker와 같은 패턴).
     pending_alert: Option<(String, String)>,
+    /// DnD 수집 버퍼(08-20 4차) — winit은 파일당 이벤트라 한 번의 드롭을
+    /// 여기 모았다가 about_to_wait에서 **요청 단위로 선판정**한다.
+    pending_drops: Vec<(WindowId, std::path::PathBuf)>,
     quarantine_view: Option<nbeep_ui::QuarantineWidget>,
     /// 상대별 진행 중 전송(목록 막대·대화창 진척 줄 공용).
     xfer_progress: HashMap<PeerId, nbeep_ui::XferProgress>,
@@ -2739,6 +2742,47 @@ impl App {
 
     /// 드롭된 파일을 **큐에 넣는다**(다중 드롭 = 여러 번 호출된다 · winit는 파일마다
     /// 이벤트를 준다). 협상은 한 번에 하나씩 — 승인도 파일마다 받아야 하기 때문이다.
+    /// 요청당 파일 수 상한(설정 `xfer.batch_max` · 1~5 · 기본 5).
+    fn batch_max(&self) -> usize {
+        self.settings
+            .get("xfer.batch_max")
+            .parse::<usize>()
+            .unwrap_or(5)
+            .clamp(1, 5)
+    }
+
+    /// 한 번의 드롭 묶음을 요청 단위로 선판정(08-20 4차 확정) — 기존 배치
+    /// 시도분(제외 포함)과 이번 드롭 수의 합이 상한을 넘으면 **한 파일도
+    /// 시도하지 않고** 안내 모달만 띄운다(부분 전송 금지).
+    fn offer_dropped(&mut self, drops: Vec<(WindowId, std::path::PathBuf)>) {
+        let mut by_win: Vec<(WindowId, Vec<std::path::PathBuf>)> = Vec::new();
+        for (id, p) in drops {
+            if let Some(e) = by_win.iter_mut().find(|(w, _)| *w == id) {
+                e.1.push(p);
+            } else {
+                by_win.push((id, vec![p]));
+            }
+        }
+        let max = self.batch_max();
+        for (id, paths) in by_win {
+            let attempted = self.chat_peer_for(id).map_or(0, |peer| {
+                self.send_batch.get(&peer).map_or(0, |b| b.1 as usize)
+                    + self.send_excluded.get(&peer).map_or(0, Vec::len)
+            });
+            if attempted + paths.len() > max {
+                self.pending_alert = Some((
+                    nbeep_core::t(nbeep_core::Msg::WarnBatchLimitTitle).to_string(),
+                    nbeep_core::tf(nbeep_core::Msg::WarnBatchLimitBody, &[&max.to_string()]),
+                ));
+                self.request_redraw(id);
+                continue;
+            }
+            for p in paths {
+                self.offer_file(id, &p);
+            }
+        }
+    }
+
     fn offer_file(&mut self, id: WindowId, path: &std::path::Path) {
         // 그룹 방 — 명부 팬아웃. 대화 여부와 무관하게 시도 가능, 게이트는 수신자
         // 승인이다(사용자 확정 08-13).
@@ -2816,12 +2860,7 @@ impl App {
         //   드롭은 **보내지 않고 안내 모달만**(닫기 버튼 하나 — 사용자 확정:
         //   목록·manifest에 남기지 않는다). 상한 = `xfer.batch_max`(1~5 · 기본 5).
         {
-            let max = self
-                .settings
-                .get("xfer.batch_max")
-                .parse::<usize>()
-                .unwrap_or(5)
-                .clamp(1, 5);
+            let max = self.batch_max();
             let attempted = self.send_batch.get(&peer).map_or(0, |b| b.1 as usize)
                 + self.send_excluded.get(&peer).map_or(0, Vec::len);
             if attempted >= max {
@@ -12094,6 +12133,12 @@ impl ApplicationHandler<AppEvent> for App {
         if let Some(purpose) = self.pending_picker.take() {
             self.open_picker(el, purpose);
         }
+        // DnD 묶음 처리(08-20 4차) — 상한 초과면 **전송 시도 자체를 하지 않는다**
+        // (부분 전송 금지 — 사용자 확정 "2개 설정이면 2개 초과 = 진행 중지").
+        if !self.pending_drops.is_empty() {
+            let drops = std::mem::take(&mut self.pending_drops);
+            self.offer_dropped(drops);
+        }
         // 경고 모달 열기(08-13 — 이벤트 루프 참조가 없는 지점의 요청을 여기서 처리).
         if let Some((title, message)) = self.pending_alert.take() {
             self.open_alert(el, &title, &message);
@@ -12563,8 +12608,9 @@ impl ApplicationHandler<AppEvent> for App {
                 self.apply_ime(outs, el);
             }
             WindowEvent::DroppedFile(path) => {
-                // 드래그앤드롭 = 파일 전송 시작(FR-X-1). 대화가 열린 창에서만 의미가 있다.
-                self.offer_file(id, &path);
+                // 드래그앤드롭 = 파일 전송 시작(FR-X-1). 파일당 이벤트로 오므로
+                // 여기서는 모으기만 — 묶음 판정·시도는 about_to_wait(08-20 4차).
+                self.pending_drops.push((id, path));
             }
             WindowEvent::CursorMoved { position, .. } => {
                 if let Some(e) = self.windows.get_mut(&id) {
@@ -13428,6 +13474,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         about_view: None,
         alert_view: None,
         pending_alert: None,
+        pending_drops: Vec::new(),
         quarantine_view: None,
         xfer_progress: HashMap::new(),
         ledger: nbeep_core::ExchangeLedger::new(),
