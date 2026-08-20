@@ -2219,9 +2219,11 @@ struct App {
     about_view: Option<AboutWidget>,
     /// 경고 모달 뷰(열려 있을 때만 Some).
     alert_view: Option<nbeep_ui::AlertWidget>,
-    /// 열어야 할 경고(제목, 본문) — 이벤트 루프 참조가 없는 지점에서 요청되면
-    /// `about_to_wait`가 연다(pending_picker와 같은 패턴).
-    pending_alert: Option<(String, String)>,
+    /// 열어야 할 경고(제목, 본문, 진원 창) — 이벤트 루프 참조가 없는 지점에서
+    /// 요청되면 `about_to_wait`가 연다(pending_picker와 같은 패턴). 진원 창이
+    /// 소유·위치 기준(08-20 — 메인 소유면 경고가 뜰 때 메인 묶음이 대화창
+    /// 위로 부상하던 실기).
+    pending_alert: Option<(String, String, Option<WindowId>)>,
     /// DnD 수집 버퍼(08-20 4차) — winit은 파일당 이벤트라 한 번의 드롭을
     /// 여기 모았다가 about_to_wait에서 **요청 단위로 선판정**한다.
     pending_drops: Vec<(WindowId, std::path::PathBuf)>,
@@ -2581,8 +2583,15 @@ impl App {
     }
 
     /// 경고 모달을 연다(08-13) — 이미 열려 있으면 내용만 바꾸고 앞으로 가져온다.
-    /// 항상 위(AlwaysOnTop) — 상태바 한 줄로는 지나치는 실패를 눈앞에 세우는 것이 목적.
-    fn open_alert(&mut self, el: &ActiveEventLoop, title: &str, message: &str) {
+    /// 소유·위치 기준 = **진원 창**(08-20 — 종전 메인 소유는 경고가 뜰 때 메인
+    /// 묶음이 대화창 위로 부상 · 위치도 진원 창 중앙 부근이라야 시선이 잇닿는다).
+    fn open_alert(
+        &mut self,
+        el: &ActiveEventLoop,
+        title: &str,
+        message: &str,
+        anchor: Option<WindowId>,
+    ) {
         // 본문 줄 수에 맞춰 높이 산정(08-14 — 그룹 구성원 목록처럼 여러 줄 본문이
         // 고정 170에서 잘리던 것). 워드랩 줄은 근사에서 빠지지만 명시 줄바꿈이 기준.
         let lines = message.lines().count().max(1) as f64;
@@ -2602,7 +2611,7 @@ impl App {
             self.request_redraw(aid);
             return;
         }
-        let attrs = Window::default_attributes()
+        let mut attrs = Window::default_attributes()
             .with_title(format!(
                 "Nexa Beep — {}",
                 nbeep_core::t(nbeep_core::Msg::WinAlert)
@@ -2610,7 +2619,22 @@ impl App {
             .with_inner_size(winit::dpi::LogicalSize::new(400.0, win_h))
             .with_resizable(false)
             .with_window_icon(self.icon.clone());
-        let attrs = self.modal_attrs(attrs, false); // 메인 소유(08-15 — 창 묶음 부상)
+        // 진원 창 중앙 부근에 배치(승인 창과 같은 문법 — 08-20).
+        if let Some(e) = anchor
+            .and_then(|a| self.windows.get(&a))
+            .or_else(|| self.main_id.and_then(|m| self.windows.get(&m)))
+        {
+            if let Ok(pos) = e.window.outer_position() {
+                let sz = e.window.inner_size();
+                let sf = e.window.scale_factor();
+                let (mw, mh) = ((400.0 * sf) as i32, (win_h * sf) as i32);
+                attrs = attrs.with_position(winit::dpi::PhysicalPosition::new(
+                    pos.x + (sz.width as i32 - mw) / 2,
+                    pos.y + (sz.height as i32 - mh) / 2,
+                ));
+            }
+        }
+        let attrs = self.modal_attrs_from(anchor, attrs, false); // 진원 창 소유(부상·복귀 축)
         let window = Rc::new(el.create_window(attrs).unwrap());
         let scale = window.scale_factor() as f32;
         let context = softbuffer::Context::new(window.clone()).unwrap();
@@ -2773,6 +2797,7 @@ impl App {
                 self.pending_alert = Some((
                     nbeep_core::t(nbeep_core::Msg::WarnBatchLimitTitle).to_string(),
                     nbeep_core::tf(nbeep_core::Msg::WarnBatchLimitBody, &[&max.to_string()]),
+                    Some(id),
                 ));
                 self.request_redraw(id);
                 continue;
@@ -2818,6 +2843,7 @@ impl App {
                     self.pending_alert = Some((
                         "파일을 보낼 수 없습니다".into(),
                         format!("{}{how}", reason.message()),
+                        Some(id),
                     ));
                     self.request_redraw(id);
                     return;
@@ -2867,6 +2893,7 @@ impl App {
                 self.pending_alert = Some((
                     nbeep_core::t(nbeep_core::Msg::WarnBatchLimitTitle).to_string(),
                     nbeep_core::tf(nbeep_core::Msg::WarnBatchLimitBody, &[&max.to_string()]),
+                    Some(id),
                 ));
                 self.request_redraw(id);
                 return;
@@ -9908,6 +9935,7 @@ impl App {
                         self.pending_alert = Some((
                             nbeep_core::t(nbeep_core::Msg::ValOutOfRangeTitle).to_string(),
                             nbeep_core::t(w).to_string(),
+                            Some(id),
                         ));
                     }
                     if close {
@@ -12140,8 +12168,8 @@ impl ApplicationHandler<AppEvent> for App {
             self.offer_dropped(drops);
         }
         // 경고 모달 열기(08-13 — 이벤트 루프 참조가 없는 지점의 요청을 여기서 처리).
-        if let Some((title, message)) = self.pending_alert.take() {
-            self.open_alert(el, &title, &message);
+        if let Some((title, message, anchor)) = self.pending_alert.take() {
+            self.open_alert(el, &title, &message, anchor);
         }
         // 구성원 모달(08-15) — 열리는 순간의 상태로 계산(pending_alert와 같은 문법).
         if let Some(gid) = self.pending_members.take() {
