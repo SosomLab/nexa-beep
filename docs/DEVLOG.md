@@ -7,6 +7,7 @@
 
 ## 2026-08-20
 
+- **(Win) GUI→CLI 파일 수신 전멸 수정**(`83e6893`) — 지연 해시(08-18) Done 꼬리 보정이 GUI에만 있고 CLI는 `..`로 버려 전량 SHA 불일치 폐기(08-18부터 잠복). GUI와 동일 보정+fail-closed · CLI↔CLI 왕복 스모크 무회귀 실측. GUI→CLI 재검 = 실기.
 - ★ **v0.2.0 공개**(`cc9cfc9`+태그, 재발사 `7418d49`) — 마이너 승격(자동 실행+서브시스템 전환). 자산 14종·brew 추종 ✓. ⚠ 1차 태그 CI 사망으로 **main red 2건 발견·해소**(비-Win unused_mut `7418d49` · fmt 미준수 `7f3b5de` — 로컬 게이트에 fmt·반대편 타깃 check 추가 교훈).
 - **(Win) 대화형 CLI 입력 경합 해소**(`2ae9f2a`) — pwsh `--chat-live`가 셸과 콘솔 입력을 나눠 읽던 것(서브시스템 전환 후속 실기) → `own_console_for_interactive`: cmd/pwsh 부모(Toolhelp 판별)+콘솔 stdin이면 자기 콘솔 창으로 분리 · bash/파이프는 그대로. 717 green.
 - **(Win) 콘솔 창 근절**(`5d992c6`) — windows 서브시스템 전환(WT에선 FreeConsole로도 빈 터미널 창이 상주 — ConPTY는 루트 프로세스 종료에 묶임) + `attach_parent_console`(터미널 CLI 출력 보전 · 리다이렉트 핸들 복원) + 콘솔 자식 CREATE_NO_WINDOW(imgdec·open_path). PS `>` quirk는 26 §7 명기. 715 green.
