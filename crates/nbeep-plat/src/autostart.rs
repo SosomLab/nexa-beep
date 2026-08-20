@@ -128,7 +128,7 @@ mod reg {
         let data = wide(cmd);
         with_run_key(|hkey| {
             let bytes = data.len() * 2; // UTF-16 단위 → 바이트(널 포함)
-            // SAFETY: REG_SZ 데이터로 널 종료 wide 버퍼와 그 바이트 길이를 넘긴다.
+                                        // SAFETY: REG_SZ 데이터로 널 종료 wide 버퍼와 그 바이트 길이를 넘긴다.
             unsafe {
                 RegSetValueExW(
                     hkey,
@@ -305,6 +305,9 @@ mod tests {
 
     #[test]
     fn xml_escape_passes_plain_paths_through() {
-        assert_eq!(xml_escape("/usr/local/bin/nexa-beep"), "/usr/local/bin/nexa-beep");
+        assert_eq!(
+            xml_escape("/usr/local/bin/nexa-beep"),
+            "/usr/local/bin/nexa-beep"
+        );
     }
 }
