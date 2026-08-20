@@ -1195,30 +1195,7 @@ pub(crate) fn chat_live(name: &str, port: u16) {
         let got = wait_with_quit_or(
             || {
                 // 발견 이벤트 드레인 — 등장 즉시 알린다(번호 = /connect 대상).
-                while let Ok(ev) = discovery.try_recv() {
-                    match ev {
-                        nbeep_net::DiscoveryEvent::Appeared(h) => {
-                            let mut p = peers.borrow_mut();
-                            if !p.iter().any(|(id, _)| *id == h.peer) {
-                                p.push((h.peer, h.name.as_str().to_string()));
-                                println!(
-                                    "\r[발견] {}. {} ({}) — `/connect {}` 로 연결",
-                                    p.len(),
-                                    h.name.as_str(),
-                                    h.peer.short(),
-                                    p.len()
-                                );
-                            }
-                        }
-                        nbeep_net::DiscoveryEvent::Vanished(id) => {
-                            let mut p = peers.borrow_mut();
-                            if let Some(i) = p.iter().position(|(pid, _)| *pid == id) {
-                                let (_, name) = p.remove(i);
-                                println!("\r[이탈] {name} — 번호가 당겨졌다(/peers로 재확인)");
-                            }
-                        }
-                    }
-                }
+                drain_discovery(&discovery, &peers, true);
                 incoming
                     .recv_timeout(std::time::Duration::from_millis(100))
                     .ok()
@@ -1226,16 +1203,7 @@ pub(crate) fn chat_live(name: &str, port: u16) {
             },
             |line| {
                 if matches!(line, "/peers" | "/list") {
-                    let p = peers.borrow();
-                    if p.is_empty() {
-                        println!(
-                            "\r[목록] 발견된 상대 없음 — 같은 LAN의 실행 중 단말(GUI·chat-live)이 뜬다"
-                        );
-                    } else {
-                        for (i, (id, name)) in p.iter().enumerate() {
-                            println!("\r[목록] {}. {} ({})", i + 1, name, id.short());
-                        }
-                    }
+                    print_peer_list(&peers);
                     return None;
                 }
                 if let Some(t) = line.strip_prefix("/connect") {
@@ -1302,6 +1270,59 @@ pub(crate) fn chat_live(name: &str, port: u16) {
                 Err(e) => eprintln!("[실패] 핸드셰이크: {e} — 대기로 돌아갑니다"),
             },
         }
-        println!("[대기] 다시 상대를 기다립니다 — {HELP_LIVE}");
+        // 대화 종료(/quit·상대 이탈) = **목록 복귀**(08-20 사용자 요청) — 대화 중
+        // 쌓인 발견 이벤트를 조용히 비우고 현재 목록을 바로 보여 준다.
+        drain_discovery(&discovery, &peers, false);
+        print_peer_list(&peers);
+        println!("[대기] 다시 상대를 기다립니다 — /peers·/connect·/quit");
+    }
+}
+
+/// 발견 이벤트를 비워 목록을 갱신한다 — `announce`면 등장/이탈을 즉시 알리고
+/// (대기 중), 아니면 조용히 갱신만 한다(대화에서 돌아온 직후 일괄 표시용).
+fn drain_discovery(
+    rx: &std::sync::mpsc::Receiver<nbeep_net::DiscoveryEvent>,
+    peers: &std::cell::RefCell<Vec<(PeerId, String)>>,
+    announce: bool,
+) {
+    while let Ok(ev) = rx.try_recv() {
+        match ev {
+            nbeep_net::DiscoveryEvent::Appeared(h) => {
+                let mut p = peers.borrow_mut();
+                if !p.iter().any(|(id, _)| *id == h.peer) {
+                    p.push((h.peer, h.name.as_str().to_string()));
+                    if announce {
+                        println!(
+                            "\r[발견] {}. {} ({}) — `/connect {}` 로 연결",
+                            p.len(),
+                            h.name.as_str(),
+                            h.peer.short(),
+                            p.len()
+                        );
+                    }
+                }
+            }
+            nbeep_net::DiscoveryEvent::Vanished(id) => {
+                let mut p = peers.borrow_mut();
+                if let Some(i) = p.iter().position(|(pid, _)| *pid == id) {
+                    let (_, name) = p.remove(i);
+                    if announce {
+                        println!("\r[이탈] {name} — 번호가 당겨졌다(/peers로 재확인)");
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// 현재 발견 목록 출력(`/peers` · 대화 복귀 직후 공용).
+fn print_peer_list(peers: &std::cell::RefCell<Vec<(PeerId, String)>>) {
+    let p = peers.borrow();
+    if p.is_empty() {
+        println!("\r[목록] 발견된 상대 없음 — 같은 LAN의 실행 중 단말(GUI·chat-live)이 뜬다");
+    } else {
+        for (i, (id, name)) in p.iter().enumerate() {
+            println!("\r[목록] {}. {} ({})", i + 1, name, id.short());
+        }
     }
 }
