@@ -5,6 +5,10 @@
 
 ---
 
+## 2026-08-21
+
+- **(Win) 클라이언트 공백 3종 연속 구현**(`221bde6`·`a0f4633`·`5fcab51` — 결정 4건 질문 후 무중단 순차): ★**오프라인 큐 M4-6**(세션 없는 발신 = 조용한 유실이었음 → 보관·영속(SEAL_PENDING)·성립 시 flush·대기 막대 마크·한계 명시) · ★**클립보드 이미지 3-OS**(Ctrl+V = PNG 파일 전송 — Win CF_DIB 파서+imgdec --encode-raw·mac AppleScript·Linux wl/xclip · 실물 왕복 비트 동일 실측) · ★**등급+공지**(배지 1회 적용+/notice·/urgent · 풍선 등급 링 · Urgent = 전면 알림 · 공지 = 발견 전체 Notice 팬아웃+미연결 큐 편입). 725 green · 실기 절차 = 26 §3-4.
+
 ## 2026-08-20
 
 - **(Win) WNET-1 ✅ — S4 유니캐스트 3-OS 대칭**(`84093df`) — Windows 이웃 테이블 = iphlpapi GetIpNetTable2 직접 링크(배치 컴파일 타임 단언 88B) · 지향 브로드캐스트(.255) 잡음은 MAC ff 필터(실측 3건) · **크로스 검증 = Get-NetNeighbor와 17개 정확 일치**. 718 green. 잔여 = E-3 차단 망 왕복 실기(S-3 판정).
