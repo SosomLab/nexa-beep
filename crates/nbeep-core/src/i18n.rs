@@ -812,6 +812,21 @@ pub enum Msg {
     CmdHelpTrust,
     CmdHelpFingerprint,
     CmdHelpClose,
+    /// 등급 명령 안내(④ 08-20).
+    CmdHelpNotice,
+    CmdHelpUrgent,
+    /// 등급 명령 빈 본문 사용법.
+    StfGradeUsage,
+    /// 긴급 선택됨(배지 순환 마찰 1단계).
+    StUrgentArmed,
+    /// 그룹 방 등급 미지원 안내.
+    StGradeGroupUnsupported,
+    /// 공지 발송 요약(즉시/대기).
+    StfBroadcastSent,
+    /// 메뉴 — 공지 보내기.
+    MenuBroadcast,
+    /// 공지 입력 창 제목.
+    BroadcastTitle,
     CmdHelpNote,
     /// `/fingerprint` 출력(08-18) — `{0}` = 내 지문, `{1}` = 상대 이름, `{2}` = 상대 지문.
     CmdFingerprint,
@@ -1220,6 +1235,14 @@ impl Msg {
             Msg::CmdHelpUnverify => ["  /unverify   cancel verification", "  /unverify        인증 취소", "  /unverify   取消验证", "  /unverify   認証取り消し"],
             Msg::CmdHelpTrust => ["  /trust      show this peer's trust status", "  /trust           이 상대의 신뢰 상태 보기", "  /trust      查看对方的信任状态", "  /trust      相手の信頼状態を見る"],
             Msg::CmdHelpClose => ["  /close      close the chat window", "  /close           대화창 닫기", "  /close      关闭对话窗口", "  /close      会話ウィンドウを閉じる"],
+            Msg::CmdHelpNotice => ["  /notice <text>  send as Notice grade", "  /notice <내용>   알림 등급으로 전송(강도는 수신자 정책)", "  /notice <内容>  以提醒等级发送", "  /notice <内容>  通知グレードで送信"],
+            Msg::CmdHelpUrgent => ["  /urgent <text>  send as Urgent grade (receiver may demote)", "  /urgent <내용>   긴급 등급으로 전송(수신측 정책·신뢰에 따라 강등)", "  /urgent <内容>  以紧急等级发送（接收方可降级）", "  /urgent <内容>  緊急グレードで送信（受信側で降格あり）"],
+            Msg::StfGradeUsage => ["Usage: {} <text> (one line)", "사용법: {} <내용> (한 줄)", "用法：{} <内容>（单行）", "使い方: {} <内容>（1行）"],
+            Msg::StUrgentArmed => ["Urgent armed for the next send — requests a strong alert on the peer (their policy decides)", "긴급 선택됨 — 다음 전송 1회에 적용 · 상대에게 강한 알림을 요청합니다(수신자 정책이 최종 결정)", "已选紧急 — 仅应用于下一次发送 · 请求对方强提醒（由接收方策略决定）", "緊急を選択 — 次の送信1回に適用 · 相手に強い通知を要求（受信側ポリシーが決定）"],
+            Msg::StGradeGroupUnsupported => ["Grades are 1:1 only for now — use Menu ▸ Send notice for broadcast", "등급은 아직 1:1 전용 — 전체 공지는 메뉴 ▸ 공지 보내기", "等级暂仅支持1:1 — 群发请用菜单▸发送公告", "グレードは1:1のみ — 一斉通知はメニュー▸お知らせ送信"],
+            Msg::StfBroadcastSent => ["Notice sent — {} now · {} queued (delivered when they appear)", "공지 발송 — 즉시 {} · 대기 {} (상대가 나타나면 자동 전달)", "公告已发 — 立即 {} · 排队 {}（对方出现时送达）", "お知らせ送信 — 即時 {} · 待機 {}（相手が現れたら配信）"],
+            Msg::MenuBroadcast => ["Send notice…", "공지 보내기…", "发送公告…", "お知らせ送信…"],
+            Msg::BroadcastTitle => ["Send notice to everyone discovered (Notice grade)", "공지 보내기 — 발견된 전체에게(알림 등급)", "向所有已发现的对象发送公告（提醒等级）", "発見中の全員へお知らせ（通知グレード）"],
             Msg::CmdHelpNote => ["  ※ Input starting with / is never sent", "  ※ /로 시작하는 입력은 어떤 경우에도 전송되지 않습니다", "  ※ 以 / 开头的输入绝不会被发送", "  ※ / で始まる入力は決して送信されません"],
             Msg::CmdUnknown => ["Unknown command /{} — see /help (not sent)", "모르는 명령 /{} — /help 로 목록을 봅니다(보내지 않았습니다)", "未知命令 /{} — 请见 /help(未发送)", "不明なコマンド /{} — /help を参照(送信していません)"],
             Msg::CmdTrustGroup => ["No single peer in a group room — check each in the members modal", "그룹 방에는 단일 상대가 없습니다 — 구성원 모달에서 각자 확인합니다", "群组房间没有单一对象 — 请在成员窗口逐一确认", "グループ部屋には単一の相手がいません — メンバー画面で各自確認"],

@@ -35,6 +35,8 @@ fn build_menus() -> Vec<MenuDef> {
                 // 대화함(M3-23 · 08-20 사용자 요청) — take_picked 팔은 이미 있었고
                 // 항목만 없었다(진입점 = 툴바뿐이던 것을 메뉴에도).
                 MenuEntry::Item(ComboItem::new("convbox", t(Msg::ConvboxTitle))),
+                // 공지 보내기(④ 08-20 · FR-M-6) — 발견된 전체에게 Notice 팬아웃.
+                MenuEntry::Item(ComboItem::new("broadcast", t(Msg::MenuBroadcast))),
                 MenuEntry::Item(ComboItem::new("gallery", t(Msg::MenuGallery))),
                 // 종료(08-15 사용자 요청) — close_to_tray가 켜지면 X로는 못 끝낸다.
                 MenuEntry::Separator,
@@ -81,6 +83,9 @@ enum AppEvent {
         text: nbeep_core::SafeText,
         seq: u64,
         sender: PeerId,
+        /// 발신자 요청 등급(④ · docs/24 — 0 일반 · 1 알림 · 2 긴급). 강도 판정은
+        /// 수신측(여기) 몫 — 미검증은 종전 무음 게이트가 그대로 이긴다.
+        importance: u8,
     },
     /// 클립보드 이미지 준비 완료(③ 08-20) — 워커가 읽기+PNG 인코딩을 마쳤다.
     /// `png = None` = 클립보드에 이미지 없음/변환 실패(상태바 고지).
@@ -1069,12 +1074,18 @@ fn spawn_session_actor(
                     // 대화 수신.
                     StreamId::Chat => {
                         if let Ok(m) = nbeep_core::ChatMessage::decode(&bytes, peer) {
+                            let importance = match m.importance {
+                                nbeep_core::Importance::Urgent => 2,
+                                nbeep_core::Importance::Notice => 1,
+                                nbeep_core::Importance::Normal => 0,
+                            };
                             if let nbeep_core::MessageBody::Text(t) = m.body {
                                 let ev = AppEvent::Recv {
                                     peer,
                                     text: nbeep_core::sanitize_message(&t),
                                     seq: m.seq,
                                     sender: m.sender_device,
+                                    importance,
                                 };
                                 if proxy.send_event(ev).is_err() {
                                     return; // 이벤트 루프 종료
@@ -1574,6 +1585,7 @@ fn decode_history(bytes: &[u8]) -> Vec<ChatLine> {
                     delivered: false,
                     read: false,
                     queued: false,
+                    importance: 0,
                 });
                 i = next;
             }
@@ -2051,6 +2063,10 @@ enum NamePurpose {
     CreateGroup(Vec<PeerId>),
     /// 기존 그룹 개명.
     RenameGroup(nbeep_core::group::GroupId),
+    /// 공지 보내기(④ 08-20 · FR-M-6) — 입력 = 공지 본문(발견된 전체에게
+    /// **Notice 등급** 팬아웃 · Urgent 공지는 만들지 않는다 — docs/24 "팬아웃
+    /// Urgent 1단계 강등"의 정신을 발신에서 지킨다).
+    Broadcast,
 }
 
 /// 에코 봇 — 버스에 실물 신원으로 참여해 수신 세션을 받고, Chat 메시지를 에코한다.
@@ -2144,6 +2160,8 @@ enum PickerPurpose {
 enum CmdOutcome {
     /// 보낼 것이 남았다(명령이 아니었다 — 첫 글자가 `/`가 아닌 입력 · 08-16 규칙).
     Send(Option<nbeep_core::SafeText>),
+    /// 등급 명령(④ — /notice·/urgent)의 본문을 보낸다(0 일반 · 1 알림 · 2 긴급).
+    SendGraded(nbeep_core::SafeText, u8),
     /// 명령으로 처리했다 — **상대에게 보내지 않는다**.
     Handled,
 }
@@ -6193,12 +6211,14 @@ impl App {
         title: &str,
         body: &str,
         silent: bool,
+        force: bool,
         target: NotifyTarget,
     ) {
         if self.settings.get("notify.enabled") != "on" {
             return;
         }
-        if self.windows.values().any(|e| e.window.has_focus()) {
+        // ④ Urgent(force) = 앱이 앞에 있어도 알림("지금 당장"의 요청 — docs/24).
+        if !force && self.windows.values().any(|e| e.window.has_focus()) {
             return;
         }
         let now = self.now_ms();
@@ -6719,6 +6739,38 @@ impl App {
             }
             Parsed::Command(cmd) => {
                 match cmd {
+                    // 등급 명령(④ 08-20) — 본문을 그 등급으로 보낸다. 빈 본문·
+                    // 멀티라인 = 사용법 안내(비전송 — 뒷줄이 몰래 사라지지 않게).
+                    ChatCommand::Notice(body) | ChatCommand::Urgent(body)
+                        if peer.is_none()
+                            || body.trim().is_empty()
+                            || text.as_str().contains('\n') =>
+                    {
+                        if peer.is_none() {
+                            self.set_status(nbeep_core::t(
+                                nbeep_core::Msg::StGradeGroupUnsupported,
+                            ));
+                        } else {
+                            let name = if matches!(
+                                parse(text.as_str()),
+                                Parsed::Command(ChatCommand::Urgent(_))
+                            ) {
+                                "/urgent"
+                            } else {
+                                "/notice"
+                            };
+                            self.set_status(nbeep_core::tf(
+                                nbeep_core::Msg::StfGradeUsage,
+                                &[name],
+                            ));
+                        }
+                    }
+                    ChatCommand::Notice(body) => {
+                        return CmdOutcome::SendGraded(nbeep_core::sanitize_message(&body), 1);
+                    }
+                    ChatCommand::Urgent(body) => {
+                        return CmdOutcome::SendGraded(nbeep_core::sanitize_message(&body), 2);
+                    }
                     ChatCommand::Help => {
                         self.push_chat_notice(peer, &nbeep_core::command::help_text());
                     }
@@ -8842,7 +8894,12 @@ impl App {
                 scale,
             },
         );
-        self.name_prompt = Some(nbeep_ui::TextPromptWidget::new(title, "그룹 이름", initial));
+        let ph = if matches!(self.name_prompt_for, Some(NamePurpose::Broadcast)) {
+            "공지 내용" // ④ — 이름이 아니라 본문 입력
+        } else {
+            "그룹 이름"
+        };
+        self.name_prompt = Some(nbeep_ui::TextPromptWidget::new(title, ph, initial));
         self.layout_window(id);
         self.request_redraw(id);
     }
@@ -8850,6 +8907,14 @@ impl App {
     /// 이름 모달 제출 적용(M5-1g) — 무해화(DisplayName)는 여기서.
     /// 생성 = **공유 그룹**(ADR-0012): roster v1 서명석(세션 인증) + 전 구성원 초대 발송.
     fn apply_name_prompt(&mut self, name: &str) {
+        // 공지(④ 08-20)는 이름이 아니라 **본문** — DisplayName 제약(길이·문자)을
+        // 태우지 않고 메시지 무해화만 거친다(send_broadcast 안에서).
+        if matches!(self.name_prompt_for, Some(NamePurpose::Broadcast)) {
+            self.name_prompt_for = None;
+            self.send_broadcast(name);
+            self.refresh_and_redraw();
+            return;
+        }
         let Ok(dn) = nbeep_core::DisplayName::parse(name) else {
             self.set_status(nbeep_core::t(nbeep_core::Msg::StGroupBadName));
             return;
@@ -8891,6 +8956,8 @@ impl App {
                 ));
             }
             Some(NamePurpose::RenameGroup(gid)) => self.rename_shared(gid, dn),
+            // 공지는 위에서 조기 처리(본문 = DisplayName 제약 밖) — 방어적 무동작.
+            Some(NamePurpose::Broadcast) => {}
             None => {}
         }
         if self.groups.write_failed() {
@@ -8898,6 +8965,87 @@ impl App {
                 nbeep_core::tf(nbeep_core::Msg::StfGroupSaveFail, &[&self.status.clone()]);
         }
         self.refresh_and_redraw();
+    }
+
+    /// 공지 발송(④ 08-20 · FR-M-6 — 사용자 확정 "발견된 전체"): 목록의 모든
+    /// 상대에게 **Notice 등급** 1:1 팬아웃. 연결된 상대 = 즉시, 미연결 = 오프라인
+    /// 대기(M4-6) 편입 + 자동 연결(그룹 팬아웃 규약). Urgent 공지는 만들지 않는다
+    /// (docs/24 — 팬아웃 Urgent는 수신측 1단계 강등 · 발신에서부터 그 정신을 지킨다).
+    fn send_broadcast(&mut self, body: &str) {
+        let text = nbeep_core::sanitize_message(body);
+        if text.as_str().trim().is_empty() {
+            return;
+        }
+        // 대상 = 발견 목록 + 비발견 유지 상대(refresh_rows와 같은 병합 · 나 제외).
+        let me = self.identity.peer_id();
+        let mut targets: Vec<PeerId> = self.table.list().into_iter().map(|e| e.peer).collect();
+        for &peer in self.extra_peers.keys() {
+            if !targets.contains(&peer) {
+                targets.push(peer);
+            }
+        }
+        targets.retain(|p| *p != me);
+        let mut now_n = 0usize;
+        let mut queued_n = 0usize;
+        let mut inv = Invalidations::default();
+        for peer in targets {
+            let (at_ms, wall) = now_stamp();
+            if self.conversations.contains_key(&peer) {
+                let msg = nbeep_core::ChatMessage {
+                    sender_device: me,
+                    seq: self.seq.issue(),
+                    body: nbeep_core::MessageBody::Text(text.as_str().to_string()),
+                    importance: nbeep_core::Importance::Notice,
+                };
+                if let Some(chat) = self.chats.get_mut(&peer) {
+                    chat.push_line(
+                        ChatLine::text(true, text.clone(), at_ms, wall)
+                            .with_seq(msg.seq)
+                            .with_importance(1),
+                        &mut inv,
+                    );
+                }
+                self.ledger.note_sent(peer);
+                if let Some(conv) = self.conversations.get_mut(&peer) {
+                    conv.lines.push(
+                        ChatLine::text(true, text.clone(), at_ms, wall)
+                            .with_seq(msg.seq)
+                            .with_importance(1),
+                    );
+                    let _ = conv.out_tx.send(SessionCmd::Chat(msg.encode()));
+                }
+                self.record_history(peer);
+                now_n += 1;
+            } else {
+                // 미연결 = 오프라인 대기 편입(M4-6 — 상대가 나타나면 자동 전달).
+                let q = self.pending_direct.entry(peer).or_default();
+                q.push(PendingDirect {
+                    text: text.as_str().to_string(),
+                    at_ms,
+                    importance: 1,
+                });
+                if q.len() > PENDING_DIRECT_MAX {
+                    let drop_n = q.len() - PENDING_DIRECT_MAX;
+                    q.drain(..drop_n);
+                }
+                if let Some(chat) = self.chats.get_mut(&peer) {
+                    chat.push_line(
+                        ChatLine::text(true, text.clone(), at_ms, wall)
+                            .with_queued(true)
+                            .with_importance(1),
+                        &mut inv,
+                    );
+                }
+                self.save_pending(peer);
+                self.reconnect.remove(&peer);
+                self.start_connect(peer, true);
+                queued_n += 1;
+            }
+        }
+        self.set_status(nbeep_core::tf(
+            nbeep_core::Msg::StfBroadcastSent,
+            &[&now_n.to_string(), &queued_n.to_string()],
+        ));
     }
 
     /// 그룹 제어 프레임 발송 — 세션 있으면 즉시, 없으면 대기 + 자동 연결(M5-1g).
@@ -9181,6 +9329,9 @@ impl App {
         // 명령 가름(08-15) — 그룹 방도 같은 문법. 단일 상대가 필요한 명령은 거절된다.
         let outgoing = match self.run_chat_command(outgoing.as_ref(), None) {
             CmdOutcome::Send(t) => t,
+            // 방에서는 등급 미지원(그룹 와이어에 자리 없음 · ④) — run_chat_command가
+            // peer=None에서 안내 후 Handled를 주므로 여기는 방어적 평문 폴백.
+            CmdOutcome::SendGraded(t, _) => Some(t),
             CmdOutcome::Handled => {
                 self.request_redraw(id);
                 return;
@@ -9722,6 +9873,7 @@ impl App {
                         &room,
                         &body,
                         silent,
+                        false,
                         NotifyTarget::Group(gid),
                     );
                 }
@@ -10470,20 +10622,44 @@ impl App {
             }
             self.request_redraw(id);
         }
+        // 등급 배지가 긴급으로 순환됨(④) — 마찰 1단계 = 상태바 경고.
+        if self
+            .chats
+            .get_mut(&peer)
+            .is_some_and(ChatViewWidget::take_grade_notice)
+        {
+            self.set_status(nbeep_core::t(nbeep_core::Msg::StUrgentArmed));
+            if let Some(mid) = self.main_id {
+                self.request_redraw(mid);
+            }
+        }
         let outgoing = self
             .chats
             .get_mut(&peer)
             .and_then(ChatViewWidget::take_outgoing);
         // ★ 명령 가름(08-15) — 입력이 `/…`면 **보내지 않고** 로컬에서 실행한다.
         //   판정은 `core::command` 한 곳(1:1·그룹·CLI 공용 문법).
-        let outgoing = match self.run_chat_command(outgoing.as_ref(), Some(peer)) {
-            CmdOutcome::Send(t) => t,
+        let (outgoing, cmd_grade) = match self.run_chat_command(outgoing.as_ref(), Some(peer)) {
+            CmdOutcome::Send(t) => (t, None),
+            CmdOutcome::SendGraded(t, g) => (Some(t), Some(g)),
             CmdOutcome::Handled => {
                 self.request_redraw(id);
                 return;
             }
         };
         if let Some(text) = outgoing {
+            // 등급(④ 08-20) — 명령(/notice·/urgent)이 우선, 아니면 입력줄 배지
+            // 선택(1회 적용 후 일반 복귀 — Urgent 마찰 원칙 · docs/24 §3-1).
+            let grade = cmd_grade.unwrap_or_else(|| {
+                self.chats
+                    .get_mut(&peer)
+                    .map_or(0, ChatViewWidget::take_grade)
+            });
+            let importance = match grade {
+                2 => nbeep_core::Importance::Urgent,
+                1 => nbeep_core::Importance::Notice,
+                _ => nbeep_core::Importance::Normal,
+            };
             let (at_ms, wall) = now_stamp();
             self.trust.note_chat(peer, unix_now_ms()); // 최근 대화(08-15 — 발신도)
             if self.conversations.contains_key(&peer) {
@@ -10491,19 +10667,24 @@ impl App {
                     sender_device: self.identity.peer_id(),
                     seq: self.seq.issue(),
                     body: nbeep_core::MessageBody::Text(text.as_str().to_string()),
-                    importance: nbeep_core::Importance::Normal,
+                    importance,
                 };
                 if let Some(chat) = self.chats.get_mut(&peer) {
                     chat.push_line(
-                        ChatLine::text(true, text.clone(), at_ms, wall).with_seq(msg.seq),
+                        ChatLine::text(true, text.clone(), at_ms, wall)
+                            .with_seq(msg.seq)
+                            .with_importance(grade),
                         &mut inv,
                     );
                 }
                 // 왕래 장부 — 파일 전송 자격(상호 확인)의 근거(사용자 확정 08-09).
                 self.ledger.note_sent(peer);
                 if let Some(conv) = self.conversations.get_mut(&peer) {
-                    conv.lines
-                        .push(ChatLine::text(true, text, at_ms, wall).with_seq(msg.seq));
+                    conv.lines.push(
+                        ChatLine::text(true, text, at_ms, wall)
+                            .with_seq(msg.seq)
+                            .with_importance(grade),
+                    );
                     // 액터에 발신 요청 — 수신은 비동기로 AppEvent::Recv로 돌아온다(M2-7).
                     if conv.out_tx.send(SessionCmd::Chat(msg.encode())).is_err() {
                         self.set_status(nbeep_core::t(nbeep_core::Msg::StSessionEnded));
@@ -10522,7 +10703,7 @@ impl App {
                 q.push(PendingDirect {
                     text: text.as_str().to_string(),
                     at_ms,
-                    importance: 0,
+                    importance: grade,
                 });
                 if q.len() > PENDING_DIRECT_MAX {
                     let drop_n = q.len() - PENDING_DIRECT_MAX;
@@ -10531,7 +10712,9 @@ impl App {
                 let total = q.len();
                 if let Some(chat) = self.chats.get_mut(&peer) {
                     chat.push_line(
-                        ChatLine::text(true, text, at_ms, wall).with_queued(true),
+                        ChatLine::text(true, text, at_ms, wall)
+                            .with_queued(true)
+                            .with_importance(grade),
                         &mut inv,
                     );
                 }
@@ -10650,6 +10833,13 @@ impl App {
                             "settings" => self.open_settings(el),
                             "quarantine" => self.open_quarantine(el),
                             "convbox" => self.open_convbox(el),
+                            // 공지(④) — 본문 입력 프롬프트(발견된 전체 · Notice).
+                            "broadcast" => self.open_name_prompt(
+                                el,
+                                NamePurpose::Broadcast,
+                                nbeep_core::t(nbeep_core::Msg::BroadcastTitle),
+                                "",
+                            ),
                             "gallery" => self.open_gallery(el),
                             "about" => self.open_about(el),
                             // 명시적 종료(사용자 요청 08-15 — 메뉴에 종료가 없어
@@ -11448,6 +11638,7 @@ impl ApplicationHandler<AppEvent> for App {
                 text,
                 seq,
                 sender,
+                importance,
             } => {
                 if !self.dedup.accept(sender, seq) {
                     return; // 중복(다중 경로 — FR-M-9)
@@ -11460,7 +11651,9 @@ impl ApplicationHandler<AppEvent> for App {
                 let (at_ms, wall) = now_stamp();
                 // 발신자 표시 이름(08-19 사용자 요청 — 1:1도 수신 풍선 위에 이름).
                 let from = self.peer_title(peer);
-                let line = ChatLine::text(false, text, at_ms, wall).with_from(from);
+                let line = ChatLine::text(false, text, at_ms, wall)
+                    .with_from(from)
+                    .with_importance(importance); // ④ 등급 링(발신자의 요청 표시)
                 if let Some(conv) = self.conversations.get_mut(&peer) {
                     conv.lines.push(line.clone());
                 }
@@ -11491,14 +11684,19 @@ impl ApplicationHandler<AppEvent> for App {
                 // 읽음/안읽음 계상(③) — 뷰가 닫혀 있으면 배지·제목으로 알린다.
                 self.note_incoming(peer);
                 // OS 알림(M3-8) — 앱이 뒤에 있을 때만 · 미검증 = 무음(DR-25).
+                // ④ 등급 강도(docs/24 §3-3 근사): **미검증 = 자동 강등(종전 무음
+                // 게이트가 이긴다)** · 검증·핀 상대의 Urgent = **앱이 앞에 있어도**
+                // 알림(force — "지금 당장"의 요청). Notice는 종전 배경 알림 그대로.
                 use nbeep_core::TrustStore as _;
                 let silent = self.trust.level(peer) == nbeep_core::TrustLevel::Unverified;
                 let title = self.peer_title(peer);
+                let force = importance >= 2 && !silent;
                 self.notify_user(
                     &format!("p:{}", peer.short()),
                     &title,
                     &notify_body,
                     silent,
+                    force,
                     NotifyTarget::Peer(peer),
                 );
                 // 이 대화가 보이는 창을 다시 그린다.
@@ -11657,6 +11855,7 @@ impl ApplicationHandler<AppEvent> for App {
                                 &title,
                                 &body,
                                 silent,
+                                false,
                                 NotifyTarget::Peer(peer),
                             );
                         }

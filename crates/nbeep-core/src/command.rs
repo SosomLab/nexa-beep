@@ -41,6 +41,12 @@ pub enum ChatCommand {
     Fingerprint,
     /// 대화창 닫기.
     Close,
+    /// **알림 등급 전송**(④ · docs/24 §3-1) — 본문을 `Notice`로 보낸다.
+    /// 수신 강도는 수신자 정책이 정한다(발신자는 "요청"만 — 두 축 분리).
+    Notice(String),
+    /// **긴급 등급 전송** — 본문을 `Urgent`로 보낸다(수신측 정책·신뢰 게이트에
+    /// 따라 강등될 수 있다 — 미검증 상대는 소리를 얻지 못한다).
+    Urgent(String),
 }
 
 impl ChatCommand {
@@ -54,6 +60,8 @@ impl ChatCommand {
             Self::Trust => "/trust",
             Self::Fingerprint => "/fingerprint",
             Self::Close => "/close",
+            Self::Notice(_) => "/notice",
+            Self::Urgent(_) => "/urgent",
         }
     }
 }
@@ -123,6 +131,18 @@ pub fn parse(input: &str) -> Parsed {
             return Parsed::Command(cmd.clone());
         }
     }
+    // 인자 동반 명령(④ 08-20 — 등급 발신). 본문 = 첫 줄의 이름 뒤 전부(빈 본문은
+    // 호스트가 사용법 안내 — fail-closed 규칙 3과 같은 결로 조용히 보내지 않는다).
+    let body = first_line[1..]
+        .split_whitespace()
+        .skip(1)
+        .collect::<Vec<_>>()
+        .join(" ");
+    match word.as_str() {
+        "notice" | "알림" => return Parsed::Command(ChatCommand::Notice(body)),
+        "urgent" | "긴급" => return Parsed::Command(ChatCommand::Urgent(body)),
+        _ => {}
+    }
     Parsed::Unknown(word)
 }
 
@@ -137,6 +157,8 @@ pub fn help_text() -> String {
         t(Msg::CmdHelpVerify),
         t(Msg::CmdHelpUnverify),
         t(Msg::CmdHelpTrust),
+        t(Msg::CmdHelpNotice),
+        t(Msg::CmdHelpUrgent),
         t(Msg::CmdHelpClose),
         t(Msg::CmdHelpNote),
     ]
@@ -254,6 +276,25 @@ mod tests {
     #[test]
     fn trailing_args_still_dispatch() {
         assert_eq!(parse("/verify 지금"), Parsed::Command(ChatCommand::Verify));
+    }
+
+    /// ④ 등급 명령 — 본문 동반 · 빈 본문도 명령으로(호스트가 사용법 안내).
+    #[test]
+    fn grade_commands_carry_body() {
+        assert_eq!(
+            parse("/notice 서버 점검 10분 뒤"),
+            Parsed::Command(ChatCommand::Notice("서버 점검 10분 뒤".into()))
+        );
+        assert_eq!(
+            parse("/긴급 지금 회의실로"),
+            Parsed::Command(ChatCommand::Urgent("지금 회의실로".into()))
+        );
+        assert_eq!(
+            parse("/urgent"),
+            Parsed::Command(ChatCommand::Urgent(String::new())),
+            "빈 본문 = 사용법 안내 대상(비전송)"
+        );
+        assert!(!matches!(parse("/notice 안녕"), Parsed::Text(_)));
     }
 
     /// 안내에 모든 명령의 대표 철자가 들어 있다(문구와 구현이 갈리면 그게 거짓말이다).

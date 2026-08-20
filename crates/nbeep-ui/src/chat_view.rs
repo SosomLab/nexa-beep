@@ -118,6 +118,9 @@ pub struct ChatLine {
     /// **오프라인 대기**(M4-6 · 08-20) — 세션이 없어 발신자 측에 보관 중.
     /// 상대가 나타나 전달되면 false로 풀리고 seq가 붙는다([`ChatViewWidget::resolve_queued`]).
     pub queued: bool,
+    /// 등급(④ 08-20 · docs/24 — 0 일반 · 1 알림 · 2 긴급). 풍선 외곽 링으로 표시.
+    /// 발신자의 **요청**일 뿐 수신 강도는 수신자 정책이 정한다(재시작 후 비영속).
+    pub importance: u8,
 }
 
 impl ChatLine {
@@ -134,6 +137,7 @@ impl ChatLine {
             delivered: false,
             read: false,
             queued: false,
+            importance: 0,
         }
     }
 
@@ -148,6 +152,13 @@ impl ChatLine {
     #[must_use]
     pub fn with_queued(mut self, queued: bool) -> Self {
         self.queued = queued;
+        self
+    }
+
+    /// 등급을 붙인다(④ — 0 일반 · 1 알림 · 2 긴급 · 빌더).
+    #[must_use]
+    pub fn with_importance(mut self, importance: u8) -> Self {
+        self.importance = importance.min(2);
         self
     }
 
@@ -177,6 +188,7 @@ impl ChatLine {
             delivered: false,
             read: false,
             queued: false,
+            importance: 0,
         }
     }
 }
@@ -457,6 +469,12 @@ pub struct ChatViewWidget {
     /// 상대 표시 이름(헤더).
     title: String,
     lines: Vec<ChatLine>,
+    /// 다음 전송의 등급(④ 08-20 — 0 일반 · 1 알림 · 2 긴급). 입력줄 오른쪽 배지
+    /// 클릭으로 순환하며, **전송 1회 적용 후 일반으로 복귀**(Urgent 마찰 원칙 —
+    /// docs/24 §3-1). 명령(/notice·/urgent)은 이 값과 무관하게 그 줄에만 적용.
+    grade_sel: u8,
+    /// 긴급으로 순환해 들어온 직후 1회 — 호스트가 상태바 경고(마찰 1단계)를 띄운다.
+    grade_notice: bool,
     input: crate::edit::EditState,
     /// IME 조합 중 텍스트(확정 전 — 밑줄 표시. 확정은 input에 삽입).
     scale: f32,
@@ -528,6 +546,8 @@ impl ChatViewWidget {
             bounds: Rect::default(),
             title,
             lines: Vec::new(),
+            grade_sel: 0,
+            grade_notice: false,
             input: crate::edit::EditState::new(),
             scale: 1.0,
             outgoing: None,
@@ -957,6 +977,29 @@ impl ChatViewWidget {
     /// 입력 텍스트의 줄 수(빈 텍스트 = 1).
     fn input_line_count(&self) -> usize {
         self.input.text().split('\n').count().max(1)
+    }
+
+    /// 등급 배지 rect(④ — 입력줄 오른쪽 하단 고정 · 클릭 = 순환).
+    fn grade_badge_rect(&self) -> Rect {
+        let input = self.input_bar();
+        let w = self.s(36);
+        let h = self.s(18);
+        Rect::new(
+            input.right() - w - self.s(6),
+            input.bottom() - h - self.s(INPUT_PAD_V),
+            w,
+            h,
+        )
+    }
+
+    /// 다음 전송의 등급을 가져간다(1회 적용 후 일반 복귀 — Urgent 마찰 원칙).
+    pub fn take_grade(&mut self) -> u8 {
+        core::mem::take(&mut self.grade_sel)
+    }
+
+    /// 긴급으로 방금 순환해 들어왔는가(1회성) — 호스트가 상태바 경고를 띄운다.
+    pub fn take_grade_notice(&mut self) -> bool {
+        core::mem::take(&mut self.grade_notice)
     }
 
     /// 입력창 rect — 줄 수에 따라 위로 자란다(표시 상한 [`INPUT_MAX_LINES`]).
@@ -1457,6 +1500,15 @@ impl Widget for ChatViewWidget {
                 }
             }
             InputEvent::MouseDown { x, y, shift, .. } => {
+                // 등급 배지(④ 08-20) — 입력줄 오른쪽 칩 클릭 = 일반→알림→긴급 순환.
+                if self.grade_badge_rect().contains(Point { x, y }) {
+                    self.grade_sel = (self.grade_sel + 1) % 3;
+                    if self.grade_sel == 2 {
+                        self.grade_notice = true; // 마찰 1단계 — 호스트가 경고 문구
+                    }
+                    inv.push(self.input_bar());
+                    return;
+                }
                 // 진행 배너 "취소"(08-16) — 히트는 페인트가 기록한 사각형 기준.
                 // 표준 버튼 의미론: 누름은 표시만, 발화는 MouseUp이 영역 안일 때.
                 if let Some(r) = self.xfer_cancel_hit.get() {
@@ -1735,6 +1787,22 @@ impl Widget for ChatViewWidget {
                     // 수신 풍선 — 다크는 패널보다 밝게, 라이트는 어둡게(대비 확보 · 08-10).
                     (theme.bubble_peer, theme.text)
                 };
+                // 등급 링(④ 08-20 · docs/24) — 알림 = 강조색 · 긴급 = 경고색 외곽.
+                // 색+형태(링) 이중 부호화 — 풍선보다 s(2) 큰 외곽을 먼저 칠한다.
+                if l.importance > 0 {
+                    let ring = if l.importance >= 2 {
+                        theme.danger
+                    } else {
+                        theme.warn
+                    };
+                    let outer = Rect::new(
+                        bub.x - self.s(2),
+                        bub.y - self.s(2),
+                        bub.w + self.s(4),
+                        bub.h + self.s(4),
+                    );
+                    ctx.fill_round_rect(outer, self.s(10), ring);
+                }
                 ctx.fill_round_rect(bub, self.s(9), bg);
                 // 꼬리 — 발신은 오른쪽, 수신은 왼쪽을 가리켜 방향을 구별(사용자 요청 08-10).
                 let tail_y = by0 + self.s(6);
@@ -2145,6 +2213,29 @@ impl Widget for ChatViewWidget {
                     self.scale,
                 );
             }
+        }
+        // ── 등급 배지(④ 08-20 · docs/24 §3-1) — 입력줄 오른쪽 칩. 클릭 = 일반→
+        //    알림→긴급 순환 · 다음 전송 1회에 적용. 칩은 불투명(긴 입력이 아래로
+        //    흐르면 칩이 가린다 — 입력은 가로 스크롤이라 잘리지 않는다).
+        {
+            let b = self.grade_badge_rect();
+            let (label, col) = match self.grade_sel {
+                2 => ("긴급", theme.danger),
+                1 => ("알림", theme.accent),
+                _ => ("일반", theme.text_dim),
+            };
+            ctx.fill_round_rect(b, self.s(6), col); // 외곽 링(등급색)
+            let innr = Rect::new(
+                b.x + self.s(1),
+                b.y + self.s(1),
+                b.w - self.s(2),
+                b.h - self.s(2),
+            );
+            ctx.fill_round_rect(innr, self.s(5), theme.chrome_bg);
+            ctx.select_font(FontSlot::Status, false);
+            let tw = ctx.text_width(label);
+            let th = ctx.text_height();
+            ctx.text(b.x + (b.w - tw) / 2, b.y + (b.h - th) / 2, b, label, col);
         }
         // ── 컨텍스트 메뉴는 **맨 마지막** — 팝업은 무엇보다 위에 떠야 한다 ──
         self.ctx_menu.paint(ctx, theme);
