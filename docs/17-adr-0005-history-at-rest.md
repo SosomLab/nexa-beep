@@ -184,6 +184,17 @@ segment {
 > 설정 PII · 프로필 이미지 캐시)을 같은 키 계층으로 먼저 봉인했다.
 > 코드 = [`nbeep-store/src/sealed.rs`](../crates/nbeep-store/src/sealed.rs) ·
 > M2-5b 기록 세그먼트도 이 봉투 문법을 그대로 이어 쓰면 된다.
+>
+> ★ **08-21 전수 실측 감사 ✓**(실기 GUI 데이터 2신원 — 파일 매직 + strings 평문
+> 탐색): 대화 기록 1:1/그룹(`history/*.seg`·`g-*.seg`) · 오프라인 대기
+> (`pending/*.seg`) · 격리물+사이드카(`.beepq`/`.beepq.meta` — 64MiB 실파일 포함) ·
+> PII 사이드카(`profile.sec`) · 상대 사진 캐시(`profiles/*.img`) = **전부 NBSE
+> 암호문**, 핀·이름 이력(`trust.seg` NBTS)·그룹 roster(`groups.seg` NBGS)도 암호문 ·
+> **가독 평문 흔적 0**. 평문으로 남는 것(의도된 경계) = 설정값(`settings.cfg` —
+> PII는 사이드카 분리) · `identity.key`(계층의 루트 — 자기 자신으로 봉인 불가) ·
+> `profiles/*.meta`(내장 아바타 키+보더색 2줄 — 비PII) · 로그(상태 문구·계수만 —
+> 봉투 원리). 관찰 = **본인 축 평문 3종**(내 사진 축소본·custom 사본·클립보드
+> 스테이징)은 수신 위협 모델 밖 — 처리 검토 = TODO SEAL-2.
 
 #### 봉투 형식 (파일 바이트 배치)
 
