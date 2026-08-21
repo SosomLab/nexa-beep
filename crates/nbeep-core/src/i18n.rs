@@ -285,6 +285,12 @@ pub enum Msg {
     StfNetmonWarn,
     /// 공지 발신 빈도 제한(08-21 — 3초 1회) 안내.
     StBroadcastRateLimit,
+    /// 검사 사실 표기 3종(FR-S-15 · NFR-S-5 — "안전" 단정 금지 · 08-22).
+    ScanNotDone,
+    ScanClean,
+    ScanDetected,
+    /// 상태바 — 수신물 검사 탐지 경고(파일명).
+    StfScanDetected,
     /// 등급 배지 라벨(④ docs/24 — 입력줄 칩 · 08-21 i18n 승격).
     GradeNormal,
     GradeNotice,
@@ -1865,6 +1871,25 @@ impl Msg {
                 "공지는 3초에 1번만 보낼 수 있습니다 — 잠시 후 다시 시도하세요(보내지 않았습니다)",
                 "公告限每3秒发送1次 — 请稍后再试（未发送）",
                 "お知らせは3秒に1回までです — 少し待って再試行してください（送信していません）",
+            ],
+            Msg::ScanNotDone => ["Not scanned", "검사 안 됨", "未检查", "未検査"],
+            Msg::ScanClean => [
+                "Scanned (no detection)",
+                "검사됨(탐지 없음)",
+                "已检查（未检出）",
+                "検査済み（検出なし）",
+            ],
+            Msg::ScanDetected => [
+                "Scanned (DETECTED)",
+                "검사됨(탐지)",
+                "已检查（检出威胁）",
+                "検査済み（検出あり）",
+            ],
+            Msg::StfScanDetected => [
+                "⚠ Threat detected in received file: {} — kept quarantined (do not approve)",
+                "⚠ 수신 파일에서 위협 탐지: {} — 격리 유지(승인하지 마세요)",
+                "⚠ 接收文件检出威胁：{} — 保持隔离（请勿批准）",
+                "⚠ 受信ファイルで脅威を検出: {} — 隔離を維持（承認しないでください）",
             ],
             Msg::GradeNormal => ["Normal", "일반", "普通", "通常"],
             Msg::GradeNotice => ["Notice", "알림", "提醒", "通知"],

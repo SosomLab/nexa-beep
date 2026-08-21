@@ -177,6 +177,8 @@ enum AppEvent {
         mismatch: bool,
         /// `.beepq` 경로 — 이미지면 썸네일(imgdec 격리 디코드 · M4-5ⓑ) 시도용.
         qpath: String,
+        /// 검사 결과(FR-S-15 · 08-22) — `Detected`면 수신 즉시 상태바 경고.
+        scan: nbeep_core::ScanOutcome,
     },
     /// 전송 실패·거절 — 사유 문장(표시 전용).
     XferFailed { peer: PeerId, why: String },
@@ -430,6 +432,8 @@ struct QRowRaw {
     mismatch: bool,
     sender: PeerId,
     received_at: u64,
+    /// 검사 결과(FR-S-15 · 08-22) — 목록 사실 표기(검사됨/탐지/안 됨).
+    scan: nbeep_core::ScanOutcome,
     /// 무결성 검증 완료(08-18) — 사이드카로 즉시 목록에 뜨지만 **전체 개봉·해시
     /// 확인**은 백그라운드다. false면 승인(Approve) 비활성(`QVerified`가 켠다).
     verified: bool,
@@ -1949,6 +1953,7 @@ fn xfer_step(
                             mismatch: q.mismatch,
                             qpath: q.path.to_string_lossy().into_owned(),
                             avg_bps,
+                            scan: q.scan,
                         });
                     }
                     Err(e) => {
@@ -5268,6 +5273,7 @@ impl App {
                                 mismatch: m.mismatch,
                                 sender: m.sender,
                                 received_at: m.received_at,
+                                scan: m.scan,
                                 verified: false,
                             });
                         }
@@ -5303,6 +5309,7 @@ impl App {
                                 mismatch,
                                 sender: bq.meta.sender,
                                 received_at: bq.meta.received_at,
+                                scan: bq.meta.scan,
                             },
                             &secret,
                         );
@@ -5314,6 +5321,7 @@ impl App {
                             mismatch,
                             sender: bq.meta.sender,
                             received_at: bq.meta.received_at,
+                            scan: bq.meta.scan,
                             verified: false,
                         })
                     })
@@ -5402,6 +5410,7 @@ impl App {
                     thumb,
                     path: path_s,
                     ready: r.verified,
+                    scan: r.scan,
                 }
             })
             .collect()
@@ -12214,6 +12223,7 @@ impl ApplicationHandler<AppEvent> for App {
                 mismatch,
                 qpath,
                 avg_bps,
+                scan,
             } => {
                 self.active_recv.remove(&peer); // 수신 완결 — 취소 대상 아님(08-16)
                                                 // 수신은 액터에 계측기가 없다 — 평균이 유일한 실측(보수적 하한).
@@ -12229,14 +12239,20 @@ impl ApplicationHandler<AppEvent> for App {
                     self.spawn_quarantine_scan();
                 }
                 // 격리 보관까지 끝난 상태 — **실체화는 승인 후 별도**(FR-S-9).
-                self.set_status(format!(
-                    "파일 격리 완료: {name} · 위험 {risk:?}{} — 승인 전까지 실행 불가",
-                    if mismatch {
-                        " · ⚠️ 형식 불일치"
-                    } else {
-                        ""
-                    }
-                ));
+                // ★ 검사 탐지(FR-S-15 · 08-22) = 즉시 상태바 경고(격리함을 안 열어도
+                //   안다). 표기는 사실뿐 — "안전" 단정 금지(NFR-S-5).
+                if scan == nbeep_core::ScanOutcome::Detected {
+                    self.set_status(nbeep_core::tf(nbeep_core::Msg::StfScanDetected, &[&name]));
+                } else {
+                    self.set_status(format!(
+                        "파일 격리 완료: {name} · 위험 {risk:?}{} — 승인 전까지 실행 불가",
+                        if mismatch {
+                            " · ⚠️ 형식 불일치"
+                        } else {
+                            ""
+                        }
+                    ));
+                }
                 self.set_xfer_line_named_or_fifo(
                     peer,
                     false,

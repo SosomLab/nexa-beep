@@ -75,6 +75,8 @@ pub(crate) struct Quarantined {
     pub mismatch: bool,
     /// `.beepq` 경로.
     pub path: PathBuf,
+    /// 검사 결과(FR-S-15 · 08-22 — 수신 직후 상태 고지·기록의 근거).
+    pub scan: nbeep_core::ScanOutcome,
 }
 
 /// 격리 실패 사유 — 어느 쪽이든 **수신물은 남기지 않는다**.
@@ -127,6 +129,9 @@ pub(crate) struct QMeta {
     pub mismatch: bool,
     pub sender: PeerId,
     pub received_at: u64,
+    /// 검사 결과(FR-S-15 · 08-22) — 목록이 사실 3종(검사됨/탐지/안 됨)을 표시할
+    /// 근거. 와이어는 **꼬리 1바이트**(구 사이드카 = 꼬리 없음 → `Unavailable`).
+    pub scan: nbeep_core::ScanOutcome,
 }
 
 fn risk_to_u8(r: RiskLevel) -> u8 {
@@ -146,12 +151,28 @@ fn risk_from_u8(u: u8) -> RiskLevel {
     }
 }
 
+fn scan_to_u8(s: nbeep_core::ScanOutcome) -> u8 {
+    match s {
+        nbeep_core::ScanOutcome::Unavailable => 0,
+        nbeep_core::ScanOutcome::Clean => 1,
+        nbeep_core::ScanOutcome::Detected => 2,
+    }
+}
+fn scan_from_u8(u: u8) -> nbeep_core::ScanOutcome {
+    match u {
+        1 => nbeep_core::ScanOutcome::Clean,
+        2 => nbeep_core::ScanOutcome::Detected,
+        _ => nbeep_core::ScanOutcome::Unavailable, // 미지 값 = "검사 안 됨"(정직)
+    }
+}
+
 impl QMeta {
-    /// `[ver 1 ‖ risk 1 ‖ mismatch 1 ‖ sender 32 ‖ size u64 BE ‖ received_at u64 BE ‖ name_len u16 BE ‖ name]`.
+    /// `[ver 1 ‖ risk 1 ‖ mismatch 1 ‖ sender 32 ‖ size u64 BE ‖ received_at u64 BE ‖ name_len u16 BE ‖ name ‖ scan 1(꼬리 · 08-22)]`.
+    /// 꼬리는 전방 호환 — 구 파일(꼬리 없음)은 `Unavailable`로 읽힌다.
     fn encode(&self) -> Vec<u8> {
         let nb = self.name.as_bytes();
         let nlen = u16::try_from(nb.len()).unwrap_or(u16::MAX);
-        let mut out = Vec::with_capacity(53 + nb.len());
+        let mut out = Vec::with_capacity(54 + nb.len());
         out.push(1);
         out.push(risk_to_u8(self.risk));
         out.push(u8::from(self.mismatch));
@@ -160,6 +181,7 @@ impl QMeta {
         out.extend_from_slice(&self.received_at.to_be_bytes());
         out.extend_from_slice(&nlen.to_be_bytes());
         out.extend_from_slice(&nb[..usize::from(nlen)]);
+        out.push(scan_to_u8(self.scan));
         out
     }
     /// 손상·미지 버전은 `None`(스캔이 full-open 폴백 · fail-closed).
@@ -176,6 +198,8 @@ impl QMeta {
             <[u8; 2]>::try_from(b.get(51..53)?).ok()?,
         ));
         let name = String::from_utf8_lossy(b.get(53..53 + nlen)?).into_owned();
+        // 검사 꼬리(08-22) — 구 사이드카는 꼬리가 없다 = Unavailable(검사 안 됨).
+        let scan = scan_from_u8(b.get(53 + nlen).copied().unwrap_or(0));
         Some(Self {
             name,
             size,
@@ -183,6 +207,7 @@ impl QMeta {
             mismatch,
             sender,
             received_at,
+            scan,
         })
     }
 }
@@ -246,7 +271,8 @@ pub(crate) fn quarantine_received(
         received_at: now,
         expires_at: now + 7 * 24 * 3600,
         // 검사(§6 · ADR-0004) — 디스크 기록 전 버퍼 단계. 포트 뒤라(DR-21)
-        // Windows AMSI가 들어와도 이 줄은 안 바뀐다. 지금은 3-OS Unavailable.
+        // 08-22 Windows AMSI 실물이 들어왔지만 이 줄은 안 바뀌었다(이음새 증명).
+        // mac/Linux는 Unavailable 고정(정직한 "검사 안 됨").
         scan: nbeep_plat::scan::scan(&name, &got.bytes),
         xfer: String::new(),
     };
@@ -272,6 +298,7 @@ pub(crate) fn quarantine_received(
             mismatch: v.mismatch,
             sender,
             received_at: now,
+            scan: meta.scan, // 검사 결과 동봉(08-22 — 목록 표시 근거)
         },
         seal_secret,
     );
@@ -281,6 +308,7 @@ pub(crate) fn quarantine_received(
         risk: v.risk,
         mismatch: v.mismatch,
         path,
+        scan: meta.scan,
     })
 }
 
@@ -310,7 +338,19 @@ mod tests {
             mismatch: true,
             sender: PeerId::from_bytes([7u8; 32]),
             received_at: 1_723_000_000,
+            scan: nbeep_core::ScanOutcome::Detected, // 꼬리 왕복도 회귀에 태운다
         }
+    }
+
+    /// 검사 꼬리 전방 호환(08-22) — 구 사이드카(꼬리 없음)는 `Unavailable`.
+    #[test]
+    fn qmeta_without_scan_tail_reads_unavailable() {
+        let m = sample();
+        let mut old = m.encode();
+        old.pop(); // 구버전 바이트 = 꼬리 제거
+        let d = QMeta::decode(&old).unwrap();
+        assert_eq!(d.scan, nbeep_core::ScanOutcome::Unavailable);
+        assert_eq!(d.name, m.name, "본체 필드는 그대로");
     }
 
     /// 인코드→디코드 왕복 · 미지 버전/손상은 None(fail-closed).
