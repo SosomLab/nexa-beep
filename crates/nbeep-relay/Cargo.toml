@@ -1,0 +1,20 @@
+# nbeep-relay — 릴레이 와이어·클라이언트 어댑터(X-1·X-2b · docs/32 §12-6·§13).
+# 서버(nexa-beepd)와 클라이언트가 **이 크레이트 하나로 같은 와이어**를 쓴다(Q-32-13 —
+# 어긋남을 컴파일 시점에 잡는다). 방향은 relay → {core, net, crypto} 단방향.
+[package]
+name = "nbeep-relay"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+nbeep-core.workspace = true
+nbeep-net.workspace = true
+nbeep-crypto.workspace = true
+sha2.workspace = true # RID 유도(snow가 이미 끄는 의존 — 트리 증가 0)

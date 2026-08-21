@@ -36,7 +36,7 @@ mod keytable;
 mod part;
 mod statuslog;
 
-use cli::chat::{chat_interactive, chat_live, ChatRole};
+use cli::chat::{chat_connect_via, chat_interactive, chat_live, ChatRole};
 use cli::manual::{connect_manual, serve_manual};
 use cli::probe::{discover_probe, live_echo};
 use cli::quarantine::quarantine_demo;
@@ -127,14 +127,33 @@ fn main() {
         chat_interactive(ChatRole::Connect(addr));
         return;
     }
+    // 값 받는 옵션 조회 헬퍼 — 위치 무관.
+    let opt_value = |name: &str| -> Option<String> {
+        args.iter()
+            .position(|a| a == name)
+            .and_then(|i| args.get(i + 1))
+            .cloned()
+    };
+    if let Some(pos) = args.iter().position(|a| a == "--chat-connect-via") {
+        // 서버 랑데부 단말(X-2c · [32 §13]) — 상대 지문(64hex)으로 붙는다(주소 불필요).
+        let Some(peer) = args.get(pos + 1) else {
+            eprintln!("--chat-connect-via <상대 지문 64hex> 필요 (+ --server <host[:port]>)");
+            return;
+        };
+        chat_connect_via(
+            peer,
+            opt_value("--server").as_deref(),
+            opt_value("--identity").as_deref(),
+        );
+        return;
+    }
     if let Some(pos) = args.iter().position(|a| a == "--chat-live") {
         // 포트 지정(08-13) — 창 모드 `--port`와 같은 규약. 생략·0이면 임의 포트.
-        let port = args
-            .iter()
-            .position(|a| a == "--port")
-            .and_then(|i| args.get(i + 1))
+        let port = opt_value("--port")
             .and_then(|v| v.parse().ok())
             .unwrap_or(0);
+        let server = opt_value("--server");
+        let identity = opt_value("--identity");
         // 이름은 위치 인자다. ⚠️ `--chat-live --port 43211 테스트단말`처럼 **옵션이 먼저 와도**
         // 이름을 찾아야 한다(08-13 사용자 지적) — 옵션과 그 값을 건너뛰고 첫 일반 토큰을 쓴다.
         let name = {
@@ -143,7 +162,7 @@ fn main() {
             while let Some(a) = it.next() {
                 if a.starts_with("--") {
                     // 값을 받는 옵션이면 그 값까지 건너뛴다.
-                    if a == "--port" {
+                    if matches!(a.as_str(), "--port" | "--server" | "--identity") {
                         it.next();
                     }
                     continue;
@@ -153,7 +172,7 @@ fn main() {
             }
             found.unwrap_or_else(|| "터미널".into())
         };
-        chat_live(&name, port);
+        chat_live(&name, port, server.as_deref(), identity.as_deref());
         return;
     }
     let open_window = args.iter().any(|a| a == "--window");
@@ -266,9 +285,15 @@ Nexa Beep {v} — 제로 컨피그 로컬 네트워크 메신저 (\"실행 = 참
 
 터미널 검증 도구(인터랙티브):
   --chat-live [이름] [--port <N>]   CLI 단말 — 발견 광고 + 조회·능동 연결(08-20 일습).
-                                    수신은 전 채널(인바운드 = 수신 전용 표시) ·
-                                    상호 채팅은 /connect 상대 1명(1:1)
-      대기 중 명령: /peers = 발견 번호 목록 · /connect <번호|host[:port]> = 대화 시작 · /quit
+             [--server <주소>]      수신은 전 채널(인바운드 = 수신 전용 표시) ·
+             [--identity <파일>]    상호 채팅은 /connect 상대 1명(1:1)
+      대기 중 명령: /peers = 발견 번호 목록 · /connect <번호|host[:port]|64hex지문> = 대화 시작 · /quit
+      --server = 릴레이 서버 등록(기본 포트 47300 · 첫 접속 = 서버 키 핀) — 인바운드 랑데부
+                 수신 + /connect <지문>으로 서버 경유 대화(홀펀칭→릴레이 자동 사다리).
+                 서버 사용 시 신원은 영속(기본 data/identity.key — --identity 로 분리)
+  --chat-connect-via <지문> --server <주소> [--identity <파일>]
+                                    서버 랑데부로 상대(64hex 지문)에게 직접 붙는 단말 —
+                                    주소 불필요 · 상대도 같은 서버에 등록돼 있어야 한다
   --chat-serve [port]               고정 포트로 기다리는 대화 단말(기본 47200)
   --chat-connect <host[:port]>      주소로 직접 붙는 대화 단말(발견 없이 · 포트 생략 = 47200)
       대화 중 명령: 한 줄 = 전송 · /send <파일…>(공백 구분 다중 · 요청당 최대 5) ·

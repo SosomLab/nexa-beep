@@ -1,0 +1,189 @@
+# release-server — 릴레이 서버(nexa-beepd) 배포. **클라이언트와 완전 분리**(W-4).
+#
+# - 태그가 다르다: 클라 `v*` / 서버 `beepd-v*` — 배포 주기가 서로 다르다.
+# - 채널이 다르다: 서버는 설치본·패키지 매니저 없음 — **실행 파일 아카이브만**
+#   (서버 운영자는 압축을 풀어 서비스로 등록한다 · systemd/서비스 예시는 릴리스 노트).
+# - 예산 게이트(DR-5)는 클라이언트만 잰다(W-2) — 서버는 크기 **보고만** 한다.
+name: release-server
+
+on:
+  push:
+    tags: ["beepd-v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "서버 릴리스 태그(예: beepd-v0.3.0) — 없으면 커밋 SHA로 초안"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  meta:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+    steps:
+      - id: v
+        shell: bash
+        run: |
+          set -euo pipefail
+          input_tag="${{ inputs.tag }}"
+          if [ -n "${GITHUB_REF_NAME:-}" ] && [[ "$GITHUB_REF" == refs/tags/beepd-v* ]]; then
+            tag="$GITHUB_REF_NAME"
+          elif [ -n "$input_tag" ]; then
+            tag="$input_tag"
+          else
+            tag="beepd-v0.0.0-dev.${GITHUB_SHA::7}"
+          fi
+          version="${tag#beepd-v}"
+          echo "tag=$tag"         >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "서버 릴리스 $tag (버전 $version)"
+
+  package:
+    needs: meta
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 서버의 주 무대는 Linux다. Windows/macOS도 내지만(사내 PC를 릴레이로 쓰는
+          # 시나리오) 컨테이너·서비스 문서는 Linux 기준으로 쓴다.
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            slug: linux-x64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            slug: linux-arm64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            slug: windows-x64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            slug: macos-arm64
+    runs-on: ${{ matrix.os }}
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+      TARGET: ${{ matrix.target }}
+      SLUG: ${{ matrix.slug }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-server-${{ matrix.target }}
+
+      - name: 타깃 추가
+        run: rustup target add ${{ matrix.target }}
+
+      - name: 릴리스 빌드(서버만 — W-1 클라 미포함)
+        run: cargo build --release -p nexa-beepd --target ${{ matrix.target }}
+
+      - name: 크기 보고(게이트 아님 — W-2)
+        shell: bash
+        run: |
+          set -euo pipefail
+          bin="target/$TARGET/release/nexa-beepd"
+          [ "${{ runner.os }}" = "Windows" ] && bin="$bin.exe"
+          size=$(wc -c < "$bin")
+          printf '%s: %d bytes (%.2f MB)\n' "$TARGET" "$size" "$(awk "BEGIN{print $size/1048576}")"
+
+      - name: 아카이브 구성
+        shell: bash
+        run: |
+          set -euo pipefail
+          name="nexa-beepd-$VERSION-$SLUG"
+          mkdir -p "dist/$name" out
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp "target/$TARGET/release/nexa-beepd.exe" "dist/$name/"
+          else
+            cp "target/$TARGET/release/nexa-beepd" "dist/$name/"
+            chmod +x "dist/$name/nexa-beepd"
+          fi
+          cp README.md LICENSE.md "dist/$name/"
+          cd dist
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            powershell -NoProfile -Command "Compress-Archive -Path '$name' -DestinationPath '../out/$name.zip' -Force"
+          else
+            tar -czf "../out/$name.tar.gz" "$name"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: beepd-${{ matrix.slug }}
+          path: out/*
+          if-no-files-found: error
+
+  publish:
+    needs: [meta, package]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: staged
+          pattern: beepd-*
+          merge-multiple: true
+
+      - name: SHA256SUMS
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd staged
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: 릴리스 노트
+        shell: bash
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          cat > notes.md <<EOF
+          # nexa-beepd $VERSION — 릴레이 서버 (MVP)
+
+          Nexa Beep의 **릴레이 서버**다(클라이언트와 별도 배포 — 클라 릴리스는 \`v*\` 태그).
+
+          서버가 하는 일 = 프레즌스(회전 RID) · 랑데부/홀펀칭 관측 · **blind 릴레이**.
+          서버는 대화 내용을 볼 수 없고(종단 E2E — 서버는 암호문만 나른다) 아무것도
+          저장하지 않는다(버퍼가 아니라 파이프).
+
+          ## 실행
+
+          \`\`\`bash
+          ./nexa-beepd --port 47300            # 기본 포트 — TCP 제어/중계 + UDP 관측(같은 번호)
+          ./nexa-beepd --help                  # 전체 옵션(--bind·--key·--rate·--verbose)
+          \`\`\`
+
+          - 첫 실행에서 서버 신원 키(\`beepd.key\`)를 만들고 **서버 신원(핀)** 을 출력한다 —
+            클라이언트가 첫 접속에서 이 키를 핀(TOFU)하며, 키가 바뀌면 시끄럽게 경고한다.
+          - 방화벽: **TCP·UDP 같은 포트 번호** 인바운드를 열어야 한다(기본 47300).
+          - \`--rate\`로 연결당 릴레이 예산을 제한한다(기본 1 MiB/s · 0 = 무제한).
+
+          받은 파일 검증: \`SHA256SUMS.txt\`.
+          라이선스: PolyForm Noncommercial 1.0.0 (비상업적 사용).
+          EOF
+          cat notes.md
+
+      - name: 게시
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.meta.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(--title "nexa-beepd ${TAG#beepd-v}" --notes-file notes.md --target "$GITHUB_SHA")
+          # 태그 push = 바로 공개 · 수동 실행 = 초안(실수 방지 — 클라 release.yml과 동일 규약).
+          if [ "${{ github.ref_type }}" != "tag" ]; then
+            args+=(--draft)
+          fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" staged/* --clobber
+          else
+            gh release create "$TAG" staged/* "${args[@]}"
+          fi

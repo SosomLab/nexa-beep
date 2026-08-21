@@ -20,3 +20,6 @@ desktop.ini
 /data/
 *.log
 /.docker-target
+
+# 서버 신원 키(로컬 실행 잔재 — 배포·커밋 금지)
+/beepd.key
