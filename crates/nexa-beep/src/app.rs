@@ -8964,7 +8964,7 @@ impl App {
             self.windows.remove(&pid);
         }
         self.name_prompt_for = Some(purpose);
-        let attrs = Window::default_attributes()
+        let mut attrs = Window::default_attributes()
             .with_title(format!(
                 "Nexa Beep — {}",
                 nbeep_core::t(nbeep_core::Msg::WinGroup)
@@ -8972,6 +8972,19 @@ impl App {
             .with_inner_size(winit::dpi::LogicalSize::new(360.0, 150.0))
             .with_resizable(false)
             .with_window_icon(self.icon.clone());
+        // 메인(목록) 창 중앙 부근에 배치(08-21 사용자 요청 — OS 기본 위치는 목록과
+        // 멀리 떨어져 뜬다 · 경고 모달과 같은 문법 08-20).
+        if let Some(e) = self.main_id.and_then(|m| self.windows.get(&m)) {
+            if let Ok(pos) = e.window.outer_position() {
+                let sz = e.window.inner_size();
+                let sf = e.window.scale_factor();
+                let (mw, mh) = ((360.0 * sf) as i32, (150.0 * sf) as i32);
+                attrs = attrs.with_position(winit::dpi::PhysicalPosition::new(
+                    pos.x + (sz.width as i32 - mw) / 2,
+                    pos.y + (sz.height as i32 - mh) / 2,
+                ));
+            }
+        }
         let attrs = self.modal_attrs(attrs, false); // 메인 소유(08-15 — 창 묶음 부상)
         let window = Rc::new(el.create_window(attrs).unwrap());
         window.set_ime_allowed(true); // 그룹 이름 한글 입력
@@ -10984,7 +10997,14 @@ impl App {
                             _ => {}
                         }
                     }
+                    // ★ 잔향 활성화 폐기(08-21 2차) — 프롬프트 모달이 열려 있는 동안
+                    //   목록 활성화는 정의상 존재할 수 없고(모달 캡처), 닫힌 직후
+                    //   가드 창 안의 활성화는 제출 Enter의 잔향이다. 이벤트 차단
+                    //   (stray_enter)이 순서 경합으로 놓친 것까지 여기서 최종 차단.
+                    let stray_act =
+                        self.name_prompt.is_some() || self.now_ms() < self.enter_guard_until_ms;
                     match self.list.take_activated() {
+                        Some(_) if stray_act => {}
                         Some(nbeep_ui::Activated::Peer(peer)) => self.activate(peer, el),
                         Some(nbeep_ui::Activated::Group(gid)) => self.open_group_thread(gid, el),
                         None => {}
@@ -11030,6 +11050,13 @@ impl App {
                     p.on_event(&ev, &mut inv);
                     let submit = p.take_submit();
                     let cancel = p.take_cancel();
+                    if submit.is_some() || cancel {
+                        // ★ 스트레이 Enter 가드를 **닫는 시점에도** 세운다(08-21 2차 —
+                        //   Focused(true)만으로는 잔향 Enter가 포커스 이벤트보다 먼저
+                        //   메인에 도달하는 순서에서 가드가 늦는다). 두 지점 중 먼저
+                        //   오는 쪽이 창을 연다.
+                        self.enter_guard_until_ms = self.now_ms() + ENTER_GUARD_MS;
+                    }
                     if let Some(name) = submit {
                         self.apply_name_prompt(&name);
                         self.name_prompt = None;
