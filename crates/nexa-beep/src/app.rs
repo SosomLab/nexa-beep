@@ -14446,6 +14446,41 @@ fn session_port_from(settings: &SettingsState) -> u16 {
 /// 임시 폴더가 남는데, 그땐 신원 영속 자체가 성립하지 않는 환경이다.
 /// 설정(`settings.cfg`)·신원 키(`identity.key`)·핀 세그먼트(`trust.seg`)가 전부
 /// 여기 산다. 경로는 여기서 정해 **인자로 넘긴다**(소비 크레이트는 경로 비소유).
+/// 클립보드 스테이징 정리(SEAL-2 ③ · 08-22) — `data/clipboard/clip-*.png`는 보낸
+/// 클립보드 이미지의 스테이징 사본이라 전송 뒤에도 남는다(스트리밍이 파일에서
+/// 읽는 구조상 즉시 삭제 불가). 부팅마다 24h 지난 것을 지운다(part sweep 문법).
+/// 사진 사본·와이어 축소본(①②)은 **의도된 경계로 확정** — 원본이 사용자 평문
+/// 파일이라 사본 봉인은 보호 이득이 없다([17 §4-a] 관찰 종결).
+pub(crate) fn sweep_clipboard_staging(dir: &std::path::Path) {
+    const RETAIN_SECS: u64 = 24 * 3600;
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let now = std::time::SystemTime::now();
+    for e in rd.flatten() {
+        let p = e.path();
+        let named_clip = p
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.starts_with("clip-") && n.ends_with(".png"));
+        if !named_clip {
+            continue;
+        }
+        let expired = e
+            .metadata()
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .is_some_and(|t| {
+                now.duration_since(t)
+                    .map(|d| d.as_secs() > RETAIN_SECS)
+                    .unwrap_or(false)
+            });
+        if expired {
+            let _ = std::fs::remove_file(&p);
+        }
+    }
+}
+
 pub(crate) fn data_dir() -> std::path::PathBuf {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
@@ -14975,6 +15010,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
     app.restore_cached_profiles(); // 핀 상대의 캐시 프로필·목록 행 복원(08-14)
     app.ensure_wire_avatar(); // 상한 초과 사진의 와이어 축소본 보장(08-16 — 기존 사용자 자기 치유)
     crate::part::sweep_partials(crate::gate::CH_GUI); // 부분물 수명 정리(M4-10a — 72h·1GiB)
+    sweep_clipboard_staging(&app.data_dir.join("clipboard")); // 스테이징 정리(SEAL-2 — 24h)
     app.refresh_statuslog(); // 상태 로그(M3-22 — log.enabled면 여기서 기동)
     app.refresh_netmon(); // 네트워크 점검(08-21 — netmon.enabled면 여기서 기동)
     event_loop.run_app(&mut app).unwrap();
@@ -14982,6 +15018,21 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
 
 #[cfg(test)]
 mod tests {
+    /// SEAL-2 ③(08-22) — 스테이징 정리는 `clip-*.png`만 본다(신선분·타 파일 보존).
+    /// 만료 삭제 축은 mtime 주입 수단이 없어 여기선 필터 계약만 박제한다.
+    #[test]
+    fn clipboard_sweep_touches_only_clip_pngs() {
+        let dir = std::env::temp_dir().join(format!("nb-clipsweep-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("clip-123.png"), b"png").unwrap(); // 신선 — 남는다
+        std::fs::write(dir.join("keep.txt"), b"x").unwrap(); // 이름 불일치 — 남는다
+        super::sweep_clipboard_staging(&dir);
+        assert!(dir.join("clip-123.png").exists(), "신선분 보존");
+        assert!(dir.join("keep.txt").exists(), "타 파일 무접촉");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// M4-2e 요청 단위 결정(08-20 사용자 시나리오 자동화) — 2.sna+3.hsh 배치.
     /// 거절 1회 = 배치 전체 거절, 승인 1회 = 배치 전체 승인이 **같은 헬퍼**로
     /// 성립함을 박제한다(승인은 배치·거절은 단건이던 실기 구멍의 회귀).
