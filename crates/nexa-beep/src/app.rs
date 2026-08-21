@@ -15212,15 +15212,25 @@ pub(crate) fn print_whoami() {
     let dir = data_dir();
     let key_path = dir.join("identity.key");
     // 읽기 전용 — 없거나 손상이면 그대로 보고(생성 금지).
-    let (fp, key_state) = match std::fs::read(&key_path) {
+    // 전체 64hex도 함께 — 서버 랑데부(`--chat-connect-via`·주소 모달 지문 입력)의
+    // 대상 값이라 짧은 표기만으로는 쓸 수 없다(X-2b/2c · 08-22).
+    let (fp, fp_full, key_state) = match std::fs::read(&key_path) {
         Ok(b) if b.len() == 68 && &b[..4] == b"NBK1" => {
             let mut k = [0u8; 64];
             k.copy_from_slice(&b[4..]);
             let id = nbeep_crypto::Identity::from_key_bytes(&k);
-            (id.peer_id().short(), "로드됨")
+            (
+                id.peer_id().short(),
+                nbeep_relay::peer_hex(&id.peer_id()),
+                "로드됨",
+            )
         }
-        Ok(_) => ("--------".into(), "⚠ 손상(길이/매직)"),
-        Err(_) => ("--------".into(), "⚠ 없음(다음 기동에 새로 생성됨)"),
+        Ok(_) => ("--------".into(), String::new(), "⚠ 손상(길이/매직)"),
+        Err(_) => (
+            "--------".into(),
+            String::new(),
+            "⚠ 없음(다음 기동에 새로 생성됨)",
+        ),
     };
     // 표시 이름 — 부팅과 같은 규칙(settings.cfg의 profile.display_name · auto면 호스트/지문).
     let name = {
@@ -15245,6 +15255,9 @@ pub(crate) fn print_whoami() {
             .to_string()
     };
     println!("fingerprint = {fp}  ({key_state})");
+    if !fp_full.is_empty() {
+        println!("full        = {fp_full}");
+    }
     println!("name        = {name}");
     println!("exe         = {exe}");
     println!("data        = {}", dir.display());
