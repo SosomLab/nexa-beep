@@ -487,7 +487,13 @@ mod lockdown {
         struct ImageLoadPolicy {
             flags: u32, // bit0 = NoRemoteImages · bit1 = NoLowMandatoryLabelImages
         }
-        // ProcessDynamicCodePolicy = 2 · ProcessImageLoadPolicy = 10.
+        #[repr(C)]
+        #[derive(Default)]
+        struct SystemCallDisablePolicy {
+            flags: u32, // bit0 = DisallowWin32kSystemCalls(win32k 락아웃)
+        }
+        // ProcessDynamicCodePolicy = 2 · ProcessSystemCallDisablePolicy = 4 ·
+        // ProcessImageLoadPolicy = 10.
         unsafe extern "system" {
             fn SetProcessMitigationPolicy(
                 policy: i32,
@@ -514,7 +520,24 @@ mod lockdown {
         if ok1 == 0 && ok2 == 0 {
             return Err("SetProcessMitigationPolicy 실패".into());
         }
-        Ok("windows-mitigation(dynamic-code·image-load)")
+        // ★ win32k 락아웃(08-22 강화 — "실기 검증 후 강화" 예고분): 이 프로세스는
+        //   콘솔 I/O(condrv)와 순수 연산뿐이라 win32k 시스템 콜이 필요 없다.
+        //   파서가 뚫려도 GUI 계열 커널 표면(폰트·GDI 취약점 역사)이 통째로 닫힌다.
+        //   콘솔 창 없는 부모(CREATE_NO_WINDOW 스폰)에서도 성립. 베스트 에포트 —
+        //   실패해도 기본 2종은 이미 섰다(모드 문자열로 실측 가시화).
+        let sc = SystemCallDisablePolicy { flags: 1 };
+        let ok3 = unsafe {
+            SetProcessMitigationPolicy(
+                4,
+                std::ptr::addr_of!(sc).cast(),
+                core::mem::size_of::<SystemCallDisablePolicy>(),
+            )
+        };
+        Ok(if ok3 != 0 {
+            "windows-mitigation(dynamic-code·image-load·win32k-lockout)"
+        } else {
+            "windows-mitigation(dynamic-code·image-load)"
+        })
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
