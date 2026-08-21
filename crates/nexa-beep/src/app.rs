@@ -8225,16 +8225,26 @@ impl App {
 
     fn apply_boot_settings(&mut self) {
         use nbeep_core::{ApprovalPolicy, BasicApproval};
-        // 기본 아바타(08-14) — 미설정이면 **내 키 지문으로 12간지 하나를 안정 배정해
-        // 저장**한다. 실행마다 랜덤이면 상대 화면에서 내 얼굴이 요동친다(사칭처럼
-        // 보인다 — core::avatar). 저장하므로 사용자가 바꾸면 그대로 유지된다.
+        // 기본 아바타 — 미설정이면 **12간지 중 무작위 배정 후 저장**(사용자 확정
+        // 08-22 — 종전 키 지문 안정 배정에서 변경). 첫 부팅 1회 CSPRNG로 뽑아
+        // **저장하므로 이후 실행에서 요동치지 않는다**(상대 화면 얼굴 안정 —
+        // 08-14의 우려는 "저장 없는 매 실행 랜덤"에 대한 것이었다). 보더 색도
+        // 같은 무작위 시드에서 유도(아바타와 한 몸의 첫인상).
         if self.settings.get("profile.avatar").is_empty() {
-            let v = nbeep_core::avatar::default_for_seed(self.identity.peer_id().as_bytes())
-                .to_setting();
+            // CSPRNG 32B — 그룹 uid·데이터 키와 같은 관례(Identity = getrandom 유래).
+            let rnd = *nbeep_crypto::Identity::generate().peer_id().as_bytes();
+            let v = nbeep_core::avatar::default_for_seed(&rnd).to_setting();
             self.settings.set("profile.avatar", v);
+            if self.settings.get("profile.avatar_border").is_empty() {
+                let rgb = nbeep_core::avatar::default_border_for_seed(&rnd);
+                self.settings.set(
+                    "profile.avatar_border",
+                    nbeep_core::avatar::border_to_setting(rgb),
+                );
+            }
             self.conf_mark();
         }
-        // 기본 보더 색(08-14) — r/g/b 각각을 키 지문 시드에서 유도해 저장(같은 이유).
+        // 보더만 비어 있는 구설정(아바타는 있음) — 종전대로 지문 유도 유지.
         if self.settings.get("profile.avatar_border").is_empty() {
             let rgb =
                 nbeep_core::avatar::default_border_for_seed(self.identity.peer_id().as_bytes());
