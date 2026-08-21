@@ -374,6 +374,11 @@ const RECONNECT_BACKOFF_MS: [u64; 4] = [5_000, 15_000, 60_000, 300_000];
 /// 네이티브"). 위상 감지는 ~5Hz 틱이라 ±200ms 지터가 있지만 점멸 인지엔 충분하다.
 const CARET_BLINK_MS: u64 = 530;
 
+/// 포커스 복귀 직후 목록 Enter를 무시하는 창(ms · 08-21) — 모달을 Enter로 제출하면
+/// 창 파괴 직후 잔향·키 반복 Enter가 메인에 도달해 캐럿 행 대화가 열렸다(공지 실기).
+/// 사람이 포커스 전환 후 이 안에 의도적으로 Enter를 치는 것은 사실상 불가능한 길이.
+const ENTER_GUARD_MS: u64 = 300;
+
 /// 이 단계의 대기 시간 — 단계를 다 썼으면 `None`(중단).
 fn reconnect_delay(stage: u8) -> Option<u64> {
     RECONNECT_BACKOFF_MS.get(stage as usize).copied()
@@ -2306,6 +2311,9 @@ struct App {
     netmon_last_sec: u64,
     /// 마지막 공지(브로드캐스트) 발신 시각(ms) — 3초 1회 제한(08-21 사용자 확정).
     last_broadcast_ms: u64,
+    /// 이 시각 전까지 메인 목록의 Enter 활성화를 무시(08-21 — 모달 Enter 제출
+    /// 잔향이 캐럿 행 대화를 열던 것 · `ENTER_GUARD_MS`).
+    enter_guard_until_ms: u64,
     /// 이어받기로 수락한 수신의 원본 sha(M4-10) — 완료·취소 때 `.part` 정리.
     resumed_recv: HashMap<PeerId, [u8; 32]>,
     /// 마지막으로 **적용한** 프로필 수신 내용의 지문(RL-1 · 08-18) — 동일 내용
@@ -10919,7 +10927,16 @@ impl App {
                         self.menu.on_event(&ev, &mut inv);
                         self.toolbar.on_event(&ev, &mut inv);
                         self.sort_drop.on_event(&ev, &mut inv);
-                        if !self.menu.is_open() && !self.sort_drop.is_open() {
+                        // ★ 스트레이 Enter 가드(08-21 — Focused(true) 참조): 모달
+                        //   제출 Enter의 잔향이 목록 캐럿 행을 활성화하지 않게.
+                        let stray_enter = matches!(
+                            ev,
+                            nbeep_ui::InputEvent::Key {
+                                key: nbeep_ui::Key::Enter,
+                                ..
+                            }
+                        ) && self.now_ms() < self.enter_guard_until_ms;
+                        if !self.menu.is_open() && !self.sort_drop.is_open() && !stray_enter {
                             self.list.on_event(&ev, &mut inv);
                         }
                     }
@@ -13759,6 +13776,14 @@ impl ApplicationHandler<AppEvent> for App {
                 // 캐럿 깜빡임 — 포커스 창 추적 + 기준점 리셋(받자마자 밝게 시작).
                 self.os_focused = Some(id);
                 self.blink_anchor_ms = self.now_ms();
+                // ★ 스트레이 Enter 가드(08-21 실기 — "공지 후 대화창 진입"): 모달
+                //   (공지 프롬프트 등)을 Enter로 제출하면 창 파괴 직후 메인이 포커스를
+                //   돌려받는데, 같은 keypress의 잔향·키 반복 Enter가 메인 목록에
+                //   도달해 **캐럿 행이 활성화**됐다(기준을 모르겠던 "1명" = 캐럿).
+                //   포커스 복귀 직후 짧은 창 동안 목록행 Enter만 무시한다.
+                if self.main_id == Some(id) {
+                    self.enter_guard_until_ms = self.now_ms() + ENTER_GUARD_MS;
+                }
                 self.request_redraw(id);
                 // 앱 모달이 열려 있는데 **우리 앱의 다른 창**이 활성화되면 모달을 다시
                 // 앞으로(표준 모달). 다른 프로그램의 활성화에는 관여하지 않는다
@@ -14836,6 +14861,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         netmon_prev: nbeep_net::netmon::NetSnapshot::default(),
         netmon_last_sec: 0,
         last_broadcast_ms: 0,
+        enter_guard_until_ms: 0,
         actor_joins: Vec::new(),
         wire_gen: 0,
         wire_pending: false,
