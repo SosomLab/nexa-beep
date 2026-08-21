@@ -2284,6 +2284,51 @@ fn spawn_inbound_accept(
     });
 }
 
+/// 릴레이 인바운드 수락 루프(X-2b ②) — 서버 랑데부로 걸어온 상대를 사다리
+/// ([`nbeep_relay::accept_via`] — 펀치 병행 · 첫 프레임 링크 추종)로 성립시키고,
+/// LAN 인바운드와 **같은 깔때기**([`AppEvent::Inbound`] — TOFU 판정·원격 요청 대기
+/// FR-S-25·중복 세션 가드)에 합류시킨다. 경로 등급도 사다리 결과(`via.path` —
+/// 성립 소켓 실주소)가 이미 들고 온다(§5-1-5).
+///
+/// 수명 = 클라이언트 `Arc`: App이 내려놓으면(해제·재접속) Weak 승격 실패로 끝난다.
+fn spawn_relay_accept(
+    client: &std::sync::Arc<nbeep_relay::RelayClient>,
+    identity: std::sync::Arc<nbeep_crypto::Identity>,
+    proxy: winit::event_loop::EventLoopProxy<AppEvent>,
+) {
+    let weak = std::sync::Arc::downgrade(client);
+    std::thread::spawn(move || loop {
+        let Some(client) = weak.upgrade() else {
+            break; // App이 접속을 내려놓았다 — 이 루프의 소임 끝
+        };
+        let Some(inc) = client.accept_incoming(std::time::Duration::from_secs(1)) else {
+            continue; // 타임아웃(1s) — Weak를 다시 보고 돈다
+        };
+        // 성립(펀치→릴레이 · 최대 12s)은 인바운드별 스레드 — 동시 인바운드가 서로를
+        // 기다리지 않는다(LAN spawn_inbound_accept가 세션별 스레드를 쓰는 이유와 동일).
+        let identity = std::sync::Arc::clone(&identity);
+        let proxy = proxy.clone();
+        std::thread::spawn(move || {
+            // 실패는 조용히 — 상대가 보는 것은 Closed뿐(ADR-0006 §2 규칙 4 · LAN
+            // 인바운드 핸드셰이크 실패와 같은 결).
+            if let Ok(via) = nbeep_relay::accept_via(
+                &client,
+                inc,
+                &identity,
+                true,
+                std::time::Duration::from_secs(12),
+            ) {
+                let _ = proxy.send_event(AppEvent::Inbound {
+                    session: Box::new(InboundSession {
+                        session: via.session,
+                        path: via.path,
+                    }),
+                });
+            }
+        });
+    });
+}
+
 /// 파일 선택 창의 용도(M2-5a 백업·복원 확장) — 같은 Role::Picker 창을 용도별로 쓴다.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PickerPurpose {
@@ -13348,7 +13393,14 @@ impl ApplicationHandler<AppEvent> for App {
                             ));
                         }
                         self.relay_backoff = (0, 0);
-                        self.relay = Some(std::sync::Arc::new(at.client));
+                        let client = std::sync::Arc::new(at.client);
+                        // 인바운드 수락 루프(X-2b ②) — 수명은 이 Arc에 묶인다.
+                        spawn_relay_accept(
+                            &client,
+                            std::sync::Arc::clone(&self.identity),
+                            self.proxy.clone(),
+                        );
+                        self.relay = Some(client);
                     }
                     Err(ServerAttachFail::PinMismatch) => {
                         // ★ 신원이 바뀌면 시끄럽게(DR-28) — 모달 + 자동 재시도 정지.
