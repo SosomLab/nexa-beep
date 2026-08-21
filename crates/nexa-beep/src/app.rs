@@ -4690,6 +4690,7 @@ impl App {
         // 목록 행 점을 즉시 "연결 중"(강조색)으로(M2-8 잔여).
         let mut inv = Invalidations::default();
         self.refresh_rows(&mut inv);
+        self.refresh_chat_link(peer); // 헤더 아이콘 = 연결 중(M3-20)
         let transport = std::sync::Arc::clone(&self.transport);
         let identity = std::sync::Arc::clone(&self.identity);
         let proxy = self.proxy.clone();
@@ -5126,10 +5127,36 @@ impl App {
     }
 
     /// 대화 뷰 생성(스레드 복원 — 상태-뷰 분리).
+    /// 이 상대의 세션 연결 상태(M3-20 — 헤더 아이콘의 단일 산출점).
+    /// 우선순위 = 살아 있는 세션 > 연결 시도 중 > 끊김 관측 > 유휴.
+    fn peer_link_state(&self, peer: PeerId) -> nbeep_ui::LinkState {
+        if self.conversations.contains_key(&peer) {
+            nbeep_ui::LinkState::Active
+        } else if self.connecting.contains(peer) {
+            nbeep_ui::LinkState::Connecting
+        } else if self.closed_peers.contains(&peer) {
+            nbeep_ui::LinkState::Lost
+        } else {
+            nbeep_ui::LinkState::Idle
+        }
+    }
+
+    /// 열린 1:1 대화 뷰의 헤더 연결 아이콘 갱신(M3-20) — 세션 이벤트 합류점들이
+    /// 부른다(성립·끊김·시도·실패). 뷰가 없으면 no-op.
+    fn refresh_chat_link(&mut self, peer: PeerId) {
+        let link = self.peer_link_state(peer);
+        let mut inv = Invalidations::default();
+        if let Some(chat) = self.chats.get_mut(&peer) {
+            chat.set_link(link, &mut inv);
+            self.redraw_conversation(peer);
+        }
+    }
+
     fn build_chat_view(&self, peer: PeerId) -> ChatViewWidget {
         let mut chat = ChatViewWidget::new(self.peer_title(peer));
         let mut inv = Invalidations::default();
-        // 시각 표시 형식(설정 — 08-10).
+        chat.set_link(self.peer_link_state(peer), &mut inv); // 헤더 아이콘 초기값(M3-20)
+                                                             // 시각 표시 형식(설정 — 08-10).
         chat.set_time_format(
             self.settings.get("chat.time_24h") != "off",
             self.settings.get("chat.date_format") == "short",
@@ -12778,6 +12805,7 @@ impl ApplicationHandler<AppEvent> for App {
                     self.reconnect.insert(peer, (0, due));
                 }
                 self.set_status(nbeep_core::t(nbeep_core::Msg::StSessionEndedPeer));
+                self.refresh_chat_link(peer); // 헤더 아이콘 = 끊김(M3-20 — 제거 뒤라야 Lost)
                 let mut inv = Invalidations::default();
                 self.refresh_rows(&mut inv);
                 if let Some(id) = self.main_id {
@@ -12843,14 +12871,16 @@ impl ApplicationHandler<AppEvent> for App {
                 // 대기 중이던 그룹 본문 이어 보내기(M5-1 — "자동 연결 시도 후 전송").
                 self.flush_group_sends(peer);
                 self.flush_direct_sends(peer); // 1:1 오프라인 대기(M4-6)도 같은 합류점
+                self.refresh_chat_link(peer); // 헤더 아이콘 = 연결됨(M3-20)
                 if let Some(mid) = self.main_id {
                     self.request_redraw(mid);
                 }
             }
             AppEvent::ConnectFailed { peer, why } => {
                 self.connecting.finish(Some(peer), None);
-                // 닿지 않은 상대 = 목록 점 빨강(08-13 실기 — 실패 후 회색으로 남으면
-                // "종료된 상대"라는 사실이 표시되지 않았다).
+                self.refresh_chat_link(peer); // 헤더 아이콘 = 끊김/유휴(M3-20)
+                                              // 닿지 않은 상대 = 목록 점 빨강(08-13 실기 — 실패 후 회색으로 남으면
+                                              // "종료된 상대"라는 사실이 표시되지 않았다).
                 self.closed_peers.insert(peer);
                 // 자동 재연결 백오프 진행(ⓑ) — 다음 단계 등록, 다 썼으면 중단 고지.
                 // 수단(발견 중이거나 수동 주소)이 없는 상대는 등록하지 않는다 —
@@ -13144,6 +13174,7 @@ impl ApplicationHandler<AppEvent> for App {
                 // 세션 성립에는 상대가 나에게 걸어온 경우도 포함된다(종전엔 Outbound만).
                 self.flush_group_sends(peer);
                 self.flush_direct_sends(peer); // 1:1 오프라인 대기(M4-6)
+                self.refresh_chat_link(peer); // 헤더 아이콘 = 연결됨(M3-20 — 인바운드도)
                 self.set_status(nbeep_core::tf(nbeep_core::Msg::StfConnectedOpen, &[&title]));
                 if let Some(mid) = self.main_id {
                     self.request_redraw(mid);

@@ -479,6 +479,17 @@ pub struct ChatViewWidget {
     /// 갱신하고 rect·히트 판정이 쓴다(자당 근사는 메뉴를 잘랐던 전례 — 실측).
     /// 0 = 아직 미실측(기본 폭 폴백). paint는 &self라 Cell.
     grade_badge_w: core::cell::Cell<i32>,
+    /// 세션 연결 상태(M3-20 · 2층 — 헤더 20px 아이콘 · [docs/14 §12-7]).
+    /// 호스트가 세션 이벤트마다 [`Self::set_link`]로 넣는다.
+    link: crate::peer_list::LinkState,
+    /// 틴트된 아이콘 캐시(상태·색 키 — 96px 마스크 틴트를 매 프레임 안 하게).
+    link_icon: core::cell::RefCell<
+        Option<(
+            crate::peer_list::LinkState,
+            u32,
+            std::rc::Rc<crate::theme::IconImage>,
+        )>,
+    >,
     input: crate::edit::EditState,
     /// IME 조합 중 텍스트(확정 전 — 밑줄 표시. 확정은 input에 삽입).
     scale: f32,
@@ -553,6 +564,8 @@ impl ChatViewWidget {
             grade_sel: 0,
             grade_notice: false,
             grade_badge_w: core::cell::Cell::new(0),
+            link: crate::peer_list::LinkState::Idle,
+            link_icon: core::cell::RefCell::new(None),
             input: crate::edit::EditState::new(),
             scale: 1.0,
             outgoing: None,
@@ -997,6 +1010,49 @@ impl ChatViewWidget {
             w,
             h,
         )
+    }
+
+    /// 세션 연결 상태 주입(M3-20 — 호스트가 성립·끊김·연결 중 이벤트마다).
+    /// 변화 시 헤더만 재도색.
+    pub fn set_link(&mut self, link: crate::peer_list::LinkState, inv: &mut Invalidations) {
+        if self.link != link {
+            self.link = link;
+            inv.push(Rect::new(
+                self.bounds.x,
+                self.bounds.y,
+                self.bounds.w,
+                self.s(34),
+            ));
+        }
+    }
+
+    /// 상태별 알파 마스크를 상태색으로 틴트한 아이콘(캐시 — 상태·색 키).
+    fn link_icon_tinted(&self, theme: &Theme) -> std::rc::Rc<crate::theme::IconImage> {
+        use crate::peer_list::{link_color, LinkState};
+        let color = link_color(theme, self.link);
+        if let Some((l, c, img)) = self.link_icon.borrow().as_ref() {
+            if *l == self.link && *c == color.0 {
+                return std::rc::Rc::clone(img);
+            }
+        }
+        let alpha: &[u8] = match self.link {
+            LinkState::Idle => crate::icons::link::PLUG_ALPHA,
+            LinkState::Connecting => crate::icons::link::PLUG_ZAP_ALPHA,
+            LinkState::Active => crate::icons::link::CABLE_ALPHA,
+            LinkState::Lost => crate::icons::link::UNPLUG_ALPHA,
+        };
+        let (r, g, b) = color.rgb();
+        let mut rgba = Vec::with_capacity(alpha.len() * 4);
+        for &a in alpha {
+            rgba.extend_from_slice(&[r, g, b, a]);
+        }
+        let img = std::rc::Rc::new(crate::theme::IconImage::from_rgba(
+            crate::icons::link::SIZE,
+            crate::icons::link::SIZE,
+            rgba,
+        ));
+        *self.link_icon.borrow_mut() = Some((self.link, color.0, std::rc::Rc::clone(&img)));
+        img
     }
 
     /// 다음 전송의 등급을 가져간다(1회 적용 후 일반 복귀 — Urgent 마찰 원칙).
@@ -1976,9 +2032,20 @@ impl Widget for ChatViewWidget {
         // ── 헤더(맨 위 레이어 — 스크롤된 풍선을 덮는다 · 그룹 참여자 목록/타이틀 자리) ──
         let head_h = self.s(34);
         let head = Rect::new(self.bounds.x, self.bounds.y, self.bounds.w, head_h);
+        // 연결 상태 아이콘(M3-20 · 2층 — 플러그 가족 20px · 상태색 틴트 · 목록
+        // 11px 파냄 배지(M3-19)와 자리·문법이 다르다 — [docs/14 §12-7]).
+        let icon_d = self.s(20);
+        let icon = Rect::new(
+            head.x + self.s(10),
+            head.y + (head_h - icon_d) / 2,
+            icon_d,
+            icon_d,
+        );
+        ctx.fill_rect(icon, theme.chrome_bg); // 헤더는 텍스트만 불투명이라 배킹 필요
+        ctx.image_scaled(icon, &self.link_icon_tinted(theme), head);
         ctx.select_font(FontSlot::Base, false);
         ctx.text_opaque(
-            head.x + self.s(12),
+            icon.right() + self.s(8),
             head.y + self.s(7),
             head,
             &self.title,
