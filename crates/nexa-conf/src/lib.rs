@@ -254,14 +254,22 @@ impl Store {
 
 // -------------------------------------------------------------- 경로 (FR-P-3)
 
-/// 디렉터리 쓰기 가능 검사 — PID 접미 프로브 파일 생성→삭제(포터블 판정).
+/// 디렉터리 쓰기 가능 검사 — 프로브 파일 생성→삭제(포터블 판정).
 /// 디렉터리가 없으면 만들어 본다(만들 수 없으면 쓰기 불가).
+///
+/// 프로브 이름은 **PID + 프로세스 내 시퀀스**로 호출마다 유일하다 — PID만
+/// 쓰면 같은 프로세스의 두 스레드가 한 파일을 공유해, Windows에서 한쪽의
+/// remove가 만든 delete-pending 순간에 다른 쪽 create가 ACCESS_DENIED로
+/// 실패한다(false 오판 = `data_dir()`가 순간 폴백 루트로 튐 — 08-21 CI
+/// part 테스트 실측).
 #[must_use]
 pub fn dir_writable(dir: &Path) -> bool {
     if fs::create_dir_all(dir).is_err() {
         return false;
     }
-    let probe = dir.join(format!(".probe.{}", std::process::id()));
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let probe = dir.join(format!(".probe.{}.{seq}", std::process::id()));
     match fs::File::create(&probe) {
         Ok(_) => {
             let _ = fs::remove_file(&probe);
@@ -442,6 +450,26 @@ mod tests {
     fn dir_writable_probe() {
         let d = tmpdir("probe");
         assert!(dir_writable(&d));
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    /// ★ 같은 프로세스의 병렬 호출이 서로를 false로 오판하면 안 된다 —
+    /// PID 단일 프로브 시절 Windows delete-pending 경합의 회귀 박제
+    /// (08-21 CI part 테스트가 이 경합으로 저장·조회 루트가 갈라져 실패).
+    #[test]
+    fn dir_writable_concurrent_calls_never_false() {
+        let d = tmpdir("probe-mt");
+        let _ = fs::create_dir_all(&d);
+        let mut handles = Vec::new();
+        for _ in 0..8 {
+            let dir = d.clone();
+            handles.push(std::thread::spawn(move || {
+                (0..50).all(|_| dir_writable(&dir))
+            }));
+        }
+        for h in handles {
+            assert!(h.join().unwrap(), "쓰기 가능한 폴더는 경합 중에도 true");
+        }
         let _ = fs::remove_dir_all(&d);
     }
 }
