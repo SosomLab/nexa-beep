@@ -383,6 +383,10 @@ pub struct PeerListWidget {
     wheel: WheelAccum,
     typeahead: TypeAhead,
     activated: Option<Activated>,
+    /// 대기 중(또는 방금 꺼낸) 활성화가 **키보드(Enter) 유래**인가(08-21) —
+    /// 스트레이 Enter 드레인의 판정 재료. 마우스 더블클릭은 잔향일 수 없다
+    /// (잔향의 정체가 모달 제출 Enter의 키 반복이므로) — 드레인 대상 밖.
+    activated_by_key: bool,
     /// 타입어헤드 HUD 위치(설정).
     hud_pos: HudPos,
     /// 타입어헤드에 공백 포함(설정 · 기본 true).
@@ -447,6 +451,7 @@ impl PeerListWidget {
             wheel: WheelAccum::default(),
             typeahead: TypeAhead::new(TYPEAHEAD_TIMEOUT_MS),
             activated: None,
+            activated_by_key: false,
             hud_pos: HudPos::default(),
             ta_space: true,
             ta_special: true,
@@ -728,6 +733,13 @@ impl PeerListWidget {
     /// Enter/더블클릭으로 활성화된 대상(상대·그룹)을 꺼낸다(1회성 — 루프 소유자가 연다).
     pub fn take_activated(&mut self) -> Option<Activated> {
         self.activated.take()
+    }
+
+    /// 마지막 활성화의 유래 — true = 키보드(Enter). `take_activated` 뒤에 읽어도
+    /// 유효하다(같은 활성화의 짝 — 다음 활성화가 다시 쓴다).
+    #[must_use]
+    pub fn activation_by_key(&self) -> bool {
+        self.activated_by_key
     }
 
     /// 이 인덱스의 활성화 대상.
@@ -1137,6 +1149,7 @@ impl Widget for PeerListWidget {
                     Key::Enter => {
                         if let Some(a) = self.activated_at(self.caret) {
                             self.activated = Some(a);
+                            self.activated_by_key = true;
                         }
                     }
                     Key::Escape => {
@@ -1283,6 +1296,7 @@ impl Widget for PeerListWidget {
                         if li == i && now.saturating_sub(lt) <= 500 {
                             if let Some(a) = self.activated_at(i) {
                                 self.activated = Some(a);
+                                self.activated_by_key = false; // 마우스 — 드레인 대상 밖
                             }
                             self.last_click = None; // 트리플클릭 중복 활성화 방지
                                                     // ★ 드래그 후보 해제(08-19 실기 — 더블클릭이 대화창을
@@ -1970,6 +1984,8 @@ mod tests {
             Some(Activated::Peer(pid(2))),
             "더블클릭 = 활성화"
         );
+        // 유래 = 마우스(08-21 3차) — 스트레이 Enter 드레인이 삼키면 안 되는 쪽.
+        assert!(!w.activation_by_key(), "더블클릭 = 마우스 유래");
         // 트리플클릭이 또 활성화하지 않는다(활성화 직후 해제 — 이 클릭은 다시 무장).
         w.on_event(&down(y2), &mut inv);
         assert_eq!(w.take_activated(), None);
@@ -2019,6 +2035,9 @@ mod tests {
         w.on_event(&key(Key::Enter), &mut inv);
         assert_eq!(w.take_activated(), Some(Activated::Peer(pid(2))));
         assert_eq!(w.take_activated(), None, "1회성");
+        // 유래 표식(08-21 3차) — Enter = 키보드(잔향 드레인 대상) · 호스트가
+        // 마우스 더블클릭(false)과 갈라 비활성 창 더블클릭을 살린다.
+        assert!(w.activation_by_key(), "Enter 활성화 = 키보드 유래");
     }
 
     #[test]

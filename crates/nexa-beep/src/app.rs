@@ -11279,8 +11279,13 @@ impl App {
                     //   목록 활성화는 정의상 존재할 수 없고(모달 캡처), 닫힌 직후
                     //   가드 창 안의 활성화는 제출 Enter의 잔향이다. 이벤트 차단
                     //   (stray_enter)이 순서 경합으로 놓친 것까지 여기서 최종 차단.
-                    let stray_act =
-                        self.name_prompt.is_some() || self.now_ms() < self.enter_guard_until_ms;
+                    //   단 **키보드(Enter) 유래만**(08-21 3차 실기 — 잔향의 정체가
+                    //   키 반복이므로 마우스 더블클릭은 잔향일 수 없다. 종전 무차별
+                    //   드레인은 비활성 창 더블클릭까지 삼켰다: 첫 클릭 = 활성화 =
+                    //   Focused 가드 무장 → 둘째 클릭의 활성화가 300ms 안 = 폐기).
+                    let stray_act = self.name_prompt.is_some()
+                        || (self.list.activation_by_key()
+                            && self.now_ms() < self.enter_guard_until_ms);
                     match self.list.take_activated() {
                         Some(_) if stray_act => {}
                         Some(nbeep_ui::Activated::Peer(peer)) => self.activate(peer, el),
