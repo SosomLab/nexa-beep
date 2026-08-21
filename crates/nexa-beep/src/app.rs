@@ -15308,8 +15308,11 @@ mod tests {
     #[test]
     fn sync_folder_hint_matches_known_providers_only() {
         use std::path::Path;
+        // 전 OS 공통 단언은 `/` 구분자로 — Windows Path도 `/`를 갈라 읽는다.
+        // (백슬래시는 유닉스에서 구분자가 아니라 경로 전체가 한 구성요소가 되고,
+        //  등호 매처(google drive)가 못 본다 — CI 첫 노출이 잡은 OS 가정 · 08-21.)
         assert_eq!(
-            super::sync_folder_hint(Path::new(r"C:\Users\u\OneDrive\문서\data")),
+            super::sync_folder_hint(Path::new("/Users/u/OneDrive/문서/data")),
             Some("OneDrive")
         );
         assert_eq!(
@@ -15317,7 +15320,7 @@ mod tests {
             Some("Dropbox")
         );
         assert_eq!(
-            super::sync_folder_hint(Path::new(r"D:\Google Drive\beep")),
+            super::sync_folder_hint(Path::new("/Users/u/Google Drive/beep")),
             Some("Google Drive")
         );
         assert_eq!(
@@ -15327,10 +15330,27 @@ mod tests {
             Some("iCloud")
         );
         assert_eq!(
-            super::sync_folder_hint(Path::new(r"D:\Projects\nexa-beep\data")),
+            super::sync_folder_hint(Path::new("/home/u/projects/nexa-beep/data")),
             None,
             "일반 경로 오탐 금지"
         );
+        // Windows 백슬래시 경로는 Windows에서만 구성요소로 갈라진다.
+        #[cfg(windows)]
+        {
+            assert_eq!(
+                super::sync_folder_hint(Path::new(r"C:\Users\u\OneDrive\문서\data")),
+                Some("OneDrive")
+            );
+            assert_eq!(
+                super::sync_folder_hint(Path::new(r"D:\Google Drive\beep")),
+                Some("Google Drive")
+            );
+            assert_eq!(
+                super::sync_folder_hint(Path::new(r"D:\Projects\nexa-beep\data")),
+                None,
+                "일반 경로 오탐 금지(Win)"
+            );
+        }
     }
 
     /// SEAL-2 ③(08-21) — 스테이징 정리는 `clip-*.png`만 본다(신선분·타 파일 보존).
