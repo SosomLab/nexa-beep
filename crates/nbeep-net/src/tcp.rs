@@ -123,6 +123,12 @@ impl Link for TcpLink {
         crate::netmon::on_sess_rx(4 + buf.len() as u64); // 계측은 횟수·바이트만(netmon)
         Ok(buf)
     }
+
+    /// 실소켓 상대 IP — 경로 등급(PathClass) 판정 전용(ADR-0006 §5-1-5 "성립한
+    /// 세션이 정한다"). 광고·호스트명이 아니라 커널이 보는 상대 주소다.
+    fn remote_ip(&self) -> Option<std::net::IpAddr> {
+        self.stream.peer_addr().ok().map(|a| a.ip())
+    }
 }
 
 #[cfg(test)]

@@ -413,6 +413,9 @@ impl ConnectLatch {
 /// 인바운드 세션 봉투 — `AppEvent`가 Debug라야 해서 수동 Debug.
 struct InboundSession {
     session: nbeep_crypto::NoiseSession<Box<dyn nbeep_core::Link>>,
+    /// 이 세션이 성립한 **경로 등급**(M5-3c · DR-28) — 핸드셰이크 직전 실소켓
+    /// 주소로 판정해 세션과 동행한다(광고가 아니라 성립한 세션이 정한다 — §5-1-5).
+    path: nbeep_core::PathClass,
 }
 impl std::fmt::Debug for InboundSession {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -552,6 +555,8 @@ struct Conversation {
     /// 액터에 보낼 명령(대화 바이트·파일 제어). 드롭 = 액터 종료 신호.
     out_tx: std::sync::mpsc::Sender<SessionCmd>,
     lines: Vec<ChatLine>,
+    /// 이 세션이 성립한 경로 등급(M5-3c · DR-28) — 파일 정책은 신뢰 × 경로의 곱.
+    path: nbeep_core::PathClass,
 }
 
 /// 진행 중 발신 상태(08-16 · 재개형 펌프) — Accept가 등록하고 액터 루프 틱이
@@ -2140,12 +2145,17 @@ fn spawn_inbound_accept(
             let identity = std::sync::Arc::clone(&identity);
             let proxy = proxy.clone();
             std::thread::spawn(move || {
+                // 경로 등급은 핸드셰이크 **전** 실소켓 주소로 판정(M5-3c) — 세션이
+                // 링크를 삼키기 전 마지막 관측 지점이다. 소켓 아님(None) = Local.
+                let path = link
+                    .remote_ip()
+                    .map_or(nbeep_core::PathClass::Local, nbeep_core::class_of_ip);
                 // 핸드셰이크(블로킹) — 실패(자기 키 복제 U-P2 포함)면 조용히 버린다.
                 let Ok(session) = nbeep_crypto::NoiseSession::accept(link, &identity) else {
                     return;
                 };
                 let _ = proxy.send_event(AppEvent::Inbound {
-                    session: Box::new(InboundSession { session }),
+                    session: Box::new(InboundSession { session, path }),
                 });
             });
         }
@@ -3019,6 +3029,18 @@ impl App {
                     return;
                 }
             }
+        }
+        // ★ 원격 × 미대조 = 파일 발신 금지(M5-3b · §5-1-3 FR-S-24) — 인터넷 경유
+        //   상대는 지문(SAS) 대조 전엔 파일을 보내지 않는다. 메시지는 허용(등급 곱).
+        if self.remote_file_blocked(peer) {
+            self.status = nbeep_core::t(nbeep_core::Msg::StRemoteFileBlocked).to_string();
+            self.pending_alert = Some((
+                nbeep_core::t(nbeep_core::Msg::AlertCannotSendFile).to_string(),
+                nbeep_core::t(nbeep_core::Msg::RemoteFileNeedVerify).to_string(),
+                Some(id),
+            ));
+            self.request_redraw(id);
+            return;
         }
         let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
         let name = path
@@ -4709,11 +4731,17 @@ impl App {
                 },
             };
             let r = conn.and_then(|link| {
-                nbeep_crypto::NoiseSession::initiate(link, &identity).map_err(|e| e.to_string())
+                // 경로 등급 = 성립 소켓의 실주소(M5-3c) — 수동 폴백이면 공인망일 수 있다.
+                let path = link
+                    .remote_ip()
+                    .map_or(nbeep_core::PathClass::Local, nbeep_core::class_of_ip);
+                nbeep_crypto::NoiseSession::initiate(link, &identity)
+                    .map(|s| (s, path))
+                    .map_err(|e| e.to_string())
             });
             let _ = match r {
-                Ok(session) => proxy.send_event(AppEvent::Outbound {
-                    session: Box::new(InboundSession { session }),
+                Ok((session, path)) => proxy.send_event(AppEvent::Outbound {
+                    session: Box::new(InboundSession { session, path }),
                     via_addr: None, // 수동 주소는 이미 기억돼 있다(성공 시 갱신 불요)
                     intent: Some(peer), // ★ 래치는 **넣은 키로** 뺀다
                     auto,
@@ -4741,11 +4769,17 @@ impl App {
                 .add_endpoint(&addr)
                 .map_err(|e| format!("{e:?}"))
                 .and_then(|link| {
-                    nbeep_crypto::NoiseSession::initiate(link, &identity).map_err(|e| e.to_string())
+                    // 수동 등록 = 원격일 확률이 높은 경로 — 등급은 실주소가 정한다(M5-3c).
+                    let path = link
+                        .remote_ip()
+                        .map_or(nbeep_core::PathClass::Local, nbeep_core::class_of_ip);
+                    nbeep_crypto::NoiseSession::initiate(link, &identity)
+                        .map(|s| (s, path))
+                        .map_err(|e| e.to_string())
                 });
             let _ = match r {
-                Ok(session) => proxy.send_event(AppEvent::Outbound {
-                    session: Box::new(InboundSession { session }),
+                Ok((session, path)) => proxy.send_event(AppEvent::Outbound {
+                    session: Box::new(InboundSession { session, path }),
                     via_addr: Some(addr), // 성공한 수동 주소 — 재연결용 기억(④)
                     intent: None,         // 수동 등록은 래치를 쓰지 않는다
                     auto: false,          // 사용자가 직접 입력한 연결
@@ -5084,7 +5118,7 @@ impl App {
     }
 
     /// 수립된 세션을 액터로 옮기고 대화 상태를 등록한다(아웃바운드·인바운드 공용).
-    fn install_conversation(&mut self, session: LiveSession) {
+    fn install_conversation(&mut self, session: LiveSession, path: nbeep_core::PathClass) {
         let peer = session.peer();
         let (out_tx, out_rx) = std::sync::mpsc::channel();
         let join = spawn_session_actor(
@@ -5108,8 +5142,19 @@ impl App {
             .remove(&peer)
             .or_else(|| self.conversations.remove(&peer).map(|c| c.lines))
             .unwrap_or_default();
-        self.conversations
-            .insert(peer, Conversation { out_tx, lines });
+        self.conversations.insert(
+            peer,
+            Conversation {
+                out_tx,
+                lines,
+                path,
+            },
+        );
+        // ★ 원격 경로 고지(M5-3b — 조용히, 그러나 보이게): 인터넷 경유 세션은 스레드에
+        //   1줄 남긴다. 지문 대조 전엔 파일이 막히는 이유가 여기서 설명된다(§5-1-3).
+        if path == nbeep_core::PathClass::Remote {
+            self.push_peer_note(peer, nbeep_core::t(nbeep_core::Msg::NoticeRemotePath));
+        }
         // 최근 접속(08-15) — 세션 성립도 접속 관측이다(발견 없는 수동 등록 포함).
         self.trust.note_seen(peer, unix_now_ms());
         // ★ 새 세션 = 새 seq 공간(08-13 실기 — 상대가 재시작·재대화로 seq를 처음부터
@@ -5127,6 +5172,22 @@ impl App {
         }
         let mut inv = Invalidations::default();
         self.refresh_rows(&mut inv);
+    }
+
+    /// 이 상대의 **경로 등급**(M5-3c) — 살아 있는 세션의 성립 경로. 세션이 없으면
+    /// Local(기본값) — 파일 정책 판정은 어차피 세션이 있어야 도달한다.
+    fn peer_path(&self, peer: PeerId) -> nbeep_core::PathClass {
+        self.conversations
+            .get(&peer)
+            .map_or(nbeep_core::PathClass::Local, |c| c.path)
+    }
+
+    /// 원격 × 미대조 = 파일 금지(M5-3b · ADR-0006 §5-1-3 — FR-S-24). 정책 판정
+    /// **단일 지점** — 발신·수신 게이트가 같은 함수를 부른다(두 벌 금지). 곱 행렬
+    /// 자체는 core([`nbeep_core::file_allowed`])에 있고 여기는 재료만 모은다.
+    fn remote_file_blocked(&self, peer: PeerId) -> bool {
+        use nbeep_core::TrustStore as _;
+        !nbeep_core::file_allowed(self.peer_path(peer), self.trust.level(peer))
     }
 
     /// 대화 뷰 생성(스레드 복원 — 상태-뷰 분리).
@@ -12011,6 +12072,17 @@ impl ApplicationHandler<AppEvent> for App {
                         list.remove(0);
                     }
                 }
+                // ★ 원격 × 미대조 = 수신도 차단(M5-3b — 발신 게이트의 대칭 · 같은
+                //   판정 함수). 승인 창까지 안 가고 즉시 거절 — 원격 미대조 상대의
+                //   파일 제안은 사용자에게 물을 일 자체가 아니다(§5-1-3 fail-closed).
+                if self.remote_file_blocked(peer) {
+                    self.send_xfer_decision(peer, id, false, RejectWhy::Declined, None);
+                    self.set_status(nbeep_core::t(nbeep_core::Msg::StRemoteFileBlocked));
+                    if let Some(mid) = self.main_id {
+                        self.request_redraw(mid);
+                    }
+                    return;
+                }
                 // ★ 판정은 **여기 한 곳**에서만 — 신뢰·왕래 장부·설정이 전부 여기 있다.
                 // 액터는 중계만 하므로 정책이 두 벌로 갈라지지 않는다.
                 self.tick_approval();
@@ -12856,8 +12928,20 @@ impl ApplicationHandler<AppEvent> for App {
             } => {
                 // 워커가 만든 아웃바운드 세션(M2-8) — TOFU 판정은 여기(메인 · TrustStore 소유).
                 use nbeep_core::Session as _;
-                let peer = session.session.peer();
+                let InboundSession { session, path } = *session;
+                let peer = session.peer();
                 self.connecting.finish(intent, Some(peer));
+                // ★ P-3(M5-3c · R-20) — 클릭한 상대와 **다른 키**가 성립했다면 그 수동
+                //   주소는 이제 그 사람의 경로가 아니다. 즉시 무효화(다음 클릭이 낡은
+                //   주소로 남에게 붙는 것을 막는다 — "경로 등급은 성립한 세션이 정한다").
+                if let Some(want) = intent {
+                    if want != peer && self.manual_addrs.remove(&want).is_some() {
+                        self.set_status(nbeep_core::tf(
+                            nbeep_core::Msg::StfPathInvalidated,
+                            &[&self.peer_title(want)],
+                        ));
+                    }
+                }
                 self.reconnect.remove(&peer); // 성립 = 자동 재연결 스케줄 해제(ⓑ)
                                               // 대기 중이던 그룹 본문이 있으면 성립 직후 이어 보낸다(M5-1 — 자동 연결 후 전송).
                                               // install보다 뒤여야 하지만 install은 아래 분기에서 일어난다 — flush는 그 뒤.
@@ -12866,22 +12950,21 @@ impl ApplicationHandler<AppEvent> for App {
                     self.manual_addrs.insert(peer, addr);
                 }
                 if !self.conversations.contains_key(&peer) {
-                    let est =
-                        match nbeep_core::TrustedSession::wrap(session.session, &mut self.trust) {
-                            Ok(est) => est,
-                            Err(e) => {
-                                self.set_status(nbeep_core::tf(
-                                    nbeep_core::Msg::StfTrustReject,
-                                    &[&e.to_string()],
-                                ));
-                                if let Some(mid) = self.main_id {
-                                    self.request_redraw(mid);
-                                }
-                                return;
+                    let est = match nbeep_core::TrustedSession::wrap(session, &mut self.trust) {
+                        Ok(est) => est,
+                        Err(e) => {
+                            self.set_status(nbeep_core::tf(
+                                nbeep_core::Msg::StfTrustReject,
+                                &[&e.to_string()],
+                            ));
+                            if let Some(mid) = self.main_id {
+                                self.request_redraw(mid);
                             }
-                        };
+                            return;
+                        }
+                    };
                     let decision = est.decision;
-                    self.install_conversation(nbeep_core::MuxSession::new(est.session));
+                    self.install_conversation(nbeep_core::MuxSession::new(est.session), path);
                     if auto {
                         // **조용한 연결**(자동 재연결 ⓑ · 프로필 pull 08-14) — 창을
                         // 열지 않는다(② 자동 열림 금지와 같은 규칙 · 카드와 대화 분리).
@@ -13190,16 +13273,31 @@ impl ApplicationHandler<AppEvent> for App {
             }
             AppEvent::Inbound { session } => {
                 use nbeep_core::Session as _;
-                let peer = session.session.peer();
+                let InboundSession { session, path } = *session;
+                let peer = session.peer();
                 if self.conversations.contains_key(&peer) {
                     return; // 이미 이 상대와 대화 중(아웃바운드 세션 존재) — 중복 인바운드 무시
                 }
+                // ★ 원격 인바운드 × 미등록 = 수락하지 않는다(M5-3b · ADR-0006 §6 —
+                //   FR-S-25의 fail-closed 절반). LAN 밖에서 걸어온 모르는 키를 TOFU로
+                //   자동 등록하면 공인망 스캐너가 목록에 스스로를 심는다. 아는 상대
+                //   (핀·대조)의 원격 인바운드는 통과 — 요청 대기 UX는 후속 슬라이스.
+                if path == nbeep_core::PathClass::Remote {
+                    use nbeep_core::TrustStore as _;
+                    if self.trust.level(peer) == nbeep_core::TrustLevel::Unverified {
+                        self.set_status(nbeep_core::t(nbeep_core::Msg::StRemoteInboundDropped));
+                        if let Some(mid) = self.main_id {
+                            self.request_redraw(mid);
+                        }
+                        return; // 세션 드롭 — 등록도 대화도 없다
+                    }
+                }
                 // TOFU 판정(메인 스레드 — TrustStore가 여기 있다) → 다중화 → 대화 등록.
-                let est = match nbeep_core::TrustedSession::wrap(session.session, &mut self.trust) {
+                let est = match nbeep_core::TrustedSession::wrap(session, &mut self.trust) {
                     Ok(est) => est,
                     Err(_) => return, // 차단 상대 등 — fail-closed
                 };
-                self.install_conversation(nbeep_core::MuxSession::new(est.session));
+                self.install_conversation(nbeep_core::MuxSession::new(est.session), path);
                 let title = self.peer_title(peer);
                 let mut inv = Invalidations::default();
                 self.refresh_rows(&mut inv);

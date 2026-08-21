@@ -25,6 +25,7 @@ pub mod link;
 pub mod linkwatch;
 pub mod mux;
 pub mod name;
+pub mod path;
 pub mod peers;
 pub mod pipeline;
 pub mod ports;
@@ -55,6 +56,7 @@ pub use link::{Link, LinkError};
 pub use linkwatch::{Debouncer, LinkEvent};
 pub use mux::{MuxSession, StreamId};
 pub use name::{default_display_name, neutral_from_host, DisplayName, NameError};
+pub use path::{class_of_ip, file_allowed, PathClass};
 pub use peers::{DepartReason, PeerEntry, PeerEvent, PeerTable, SourceId};
 pub use pipeline::{ActionCtx, ActionId, Interceptor, Pipeline, Reject};
 pub use ports::{

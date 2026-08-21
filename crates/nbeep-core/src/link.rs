@@ -43,6 +43,13 @@ pub trait Link: Send {
     fn set_recv_timeout(&mut self, _dur: Option<core::time::Duration>) -> Result<(), LinkError> {
         Ok(())
     }
+
+    /// 실소켓 상대 IP — **경로 등급([`crate::path::PathClass`]) 판정 전용**(ADR-0006 §5-1-5:
+    /// 등급은 광고가 아니라 성립한 세션의 실주소가 정한다). 소켓이 아닌 링크(인메모리·fake)는
+    /// `None` = 로컬 취급. 표시·라우팅 등 다른 용도로 쓰지 않는다(주소는 전송 계층 내부 사정).
+    fn remote_ip(&self) -> Option<std::net::IpAddr> {
+        None
+    }
 }
 
 impl Link for Box<dyn Link> {
@@ -57,5 +64,8 @@ impl Link for Box<dyn Link> {
     }
     fn set_recv_timeout(&mut self, dur: Option<core::time::Duration>) -> Result<(), LinkError> {
         (**self).set_recv_timeout(dur)
+    }
+    fn remote_ip(&self) -> Option<std::net::IpAddr> {
+        (**self).remote_ip()
     }
 }
