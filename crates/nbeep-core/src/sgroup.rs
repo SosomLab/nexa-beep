@@ -197,6 +197,13 @@ const K_ROSTER: u8 = 4;
 const K_MSG: u8 = 5;
 const K_LEAVE: u8 = 6;
 const K_SUGGEST: u8 = 7;
+/// ★ **예약**(Q-32-7 확정 08-21 — 코드 자리만): P-9 콘텐츠 키 봉투 본문.
+/// `[uid 32 ‖ seq 8 ‖ blob_id 32(=H(암호문) · P-12) ‖ key_env_len u16 ‖ 키 봉투 ‖ 암호문]`
+/// 형태로 **콘텐츠 키 1회 암호화 + 수신자별 키 봉투**를 나른다. 구현은 서버
+/// 축(X-1/X-3) 착수 때 — kind 프레이밍이라 추가 시 와이어 변경이 없고, 구버전은
+/// 미지 kind를 조용히 폐기한다(전방 호환). 이 번호를 다른 용도로 쓰지 말 것.
+#[allow(dead_code)]
+const K_CMSG_RESERVED: u8 = 8;
 
 impl SGroupMsg {
     /// 와이어 인코딩(kind 1B + 본문).
