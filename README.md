@@ -22,38 +22,44 @@
 | 모드 | 설명 | 상태 |
 |---|---|---|
 | **로컬 직접**(기본) | LAN 자동 발견 + P2P 직접 연결. 서버 없음 | v1 범위 |
-| **릴레이 경유**(선택) | 특정 서버를 추가하면 IP·로컬에 매이지 않고 일반 메신저처럼 통신. 서버는 봉투만 보고 내용은 못 읽는다 | 설계에 반영 · 구현은 v1 이후 (서버는 별도 프로젝트 `nexa-beepd`) |
+| **릴레이 경유**(선택) | 특정 서버를 추가하면 IP·로컬에 매이지 않고 일반 메신저처럼 통신. 서버는 봉투만 보고 내용은 못 읽는다 | **개발 중** — 서버 MVP `nexa-beepd`(같은 저장소 · `beepd-v*` 별도 배포) + UDP 홀펀칭→릴레이 폴백 사다리 + CLI 접속까지 구현 · GUI 배선·실 NAT 실증 잔여 |
 
-## 현재 상태 (2026-08-20 · **v0.2.0 공개**)
+## 현재 상태 (2026-08-22 · **v0.2.2 공개 — 배포 3채널 완성 · UDP+릴레이 서버 축 개통**)
 
-**설계는 거의 끝났고(문서 38종·ADR 15종), 코드는 M1~M5가 병렬로 진행 중이며, 배포는 먼저 완주했다.**
+**설계는 사실상 끝났고**(문서 41종 · ADR 14종 = ✅13/📐1), **코드는 M1~M5가 병렬로 진행 중**이며,
+**배포는 3채널(Releases · Homebrew · winget/Chocolatey)까지 완주**했다.
 
 | 항목 | 상태 |
 | --- | --- |
-| **되는 것** | 실행하면 같은 LAN의 상대가 자동으로 뜨고(UDP 발견) → 고르면 **Noise_XX 암호화 세션** → 대화 · **파일 송수신**(무해화 게이트 + 종단 ack · **10GB급 스트리밍 발신** · **끊겨도 이어받기** · 대화창 안 ⏸▶✕ 제어 · 요청 단위 승인 · 송수신 용량 상한) · **공유 그룹 채팅**(한 방 대화·초대 수락제·기록 영속·파일 팬아웃) · 프로필 교환(아바타·변경 전파) · 알림·트레이 상주 · **시스템 시작 시 자동 실행**(기본 on·옵트아웃) · 설정/신원/신뢰 핀/대화 기록 영속(전부 암호화) |
-| **배포** | **v0.2.0** — Windows(x64·ARM64) · macOS(x64·ARM64) · Linux(x64) **5타깃 × 2채널**(설치본·포터블) · Homebrew 탭 · 태그 push = 자동 공개 → [Releases](https://github.com/SosomLab/nexa-beep/releases) |
-| **테스트** | 워크스페이스 **717 green** · clippy 경고 0 · CI 4잡(lint / test 3-OS / cross-build / 예산 게이트) |
-| **예산** | 산출물 **약 1.7MB**/게이트 10MB ✅ · 유휴 RSS — Windows 관측 **17.1MB**(≤30MB 안쪽) · **mac 85.7MB 재실측 잔여** |
-| **실증** | **2-PC 실기**(Win↔Mac — 메시지·파일·프로필 왕복 · **교차 대용량 전송·이어받기**) · **3-신원 그룹 실기**(한 PC 3인스턴스) |
-| **다음 관문** | 🔴 사용자 확정 대기 — v1.0 기능 커트라인(D-24) · 기록 저장 암호화 잔여(ADR-0005 §4~) · UDP 세션 전송(Q-32-15 — 홀펀칭 선행) |
+| **되는 것** | 실행하면 같은 LAN의 상대가 자동으로 뜨고(UDP 발견 S1~S4) → 고르면 **Noise_XX 암호화 세션** → 대화 · **파일 송수신**(무해화 4단계 게이트 + 종단 ack · 10GB급 스트리밍 · **끊겨도 이어받기** · 풍선 안 ⏸▶✕ · 요청 단위 승인) · **공유 그룹 채팅**(한 방 대화·초대 수락제·기록 영속·파일 팬아웃) · 프로필 교환(아바타·변경 전파) · 알림·트레이 상주 · **시작 시 자동 실행**(기본 on·옵트아웃) · **CLI 단말**(`--chat-live` — 발견 조회·능동 연결·수신 전용 채널) · 설정/신원/신뢰 핀/대화 기록 **전부 암호화 영속** |
+| **배포** | **v0.2.2** — Windows(x64·ARM64) · macOS(x64·ARM64) · Linux(x64) **5타깃 × 2채널**(설치본·포터블 · 자산 14종) · **Homebrew** 자동 추종 · **winget·Chocolatey 첫 게시**(중앙 검수 대기) · 태그 push = 전 채널 자동 → [Releases](https://github.com/SosomLab/nexa-beep/releases) |
+| **테스트** | 워크스페이스 **777 green** · clippy 경고 0 · CI 4잡(lint / test 3-OS / cross-build / 예산 게이트) |
+| **예산** | 산출물 **약 1.7MB**/게이트 10MB ✅ · 유휴 실점유 **Windows 17.1MB · macOS 18~20MB**(`phys_footprint`) — **3-OS 전부 ≤30MB ✅**(R-8 해소 · mac `ps` RSS는 reclaimable 허수라 판정에 쓰지 않는다) |
+| **보안** | 저장 축 **평문 0 실측 감사**(기록·격리물·PII·프로필 캐시 전부 `NBSE` 봉인) · **크립토 셰레딩**(대화 삭제 = 데이터 키 폐기) · **AMSI 실물 검사**(Windows) · **경로 2축 정책**(신원 신뢰는 키에 · 경로 등급은 통로에 — 인터넷 경유는 대조 전 파일 차단) |
+| **실증** | **2-PC 실기**(Win↔Mac — 메시지·파일·프로필 왕복 · 교차 대용량 전송·이어받기) · **3-신원 그룹 실기** · **10분 자동 네트워크 계측**(과다 송수신 0 — [39 점검 기록부](docs/39-netmon-records.md)) |
+| **서버 축**(진행 중) | **UDP + 릴레이 서버 개통**(08-21~22) — 자작 경량 ARQ `UdpLink` · 릴레이 서버 MVP `nexa-beepd`(blind 파이프 · 외부 의존 0 · 0.35MB) · 랑데부→**홀펀칭**→릴레이 폴백 사다리 · CLI `--server` 접속(서버 핀 TOFU) — 종단 Noise는 코드 무변경 관통 · **잔여 = GUI 배선 · 실 NAT 홀펀칭 실증** |
 
 - 예산 목표: 유휴 RSS **≤30MB** · 산출물 **≤10MB**/타깃 · **런타임 의존 0** · 24시간 상주 누수 0 ([05 NFR-B](docs/05-requirements.md)).
-- 한 장 현황 → [docs/STATUS.md](docs/STATUS.md) · 기능별 → [docs/MILESTONES.md](docs/MILESTONES.md)
+- 한 장 현황 → [docs/STATUS.md](docs/STATUS.md) · 기능별 → [docs/MILESTONES.md](docs/MILESTONES.md) · **못 막는 것** → [docs/40 알려진 한계](docs/40-known-limitations.md)
 
 ## 설치
 
 모든 채널은 태그 릴리스에서 나온다. 자세한 안내는 **[위키 Install](https://github.com/SosomLab/nexa-beep/wiki/Install)**.
 
 ```sh
-# macOS — Homebrew
-brew tap kiros33/tap && brew install --cask nexa-beep
+# macOS — Homebrew (권장: Cask가 격리 표식을 떼 준다)
+brew install --cask kiros33/tap/nexa-beep
+
+# Windows — winget 또는 Chocolatey (첫 게시 · 중앙 검수 통과 후 동작)
+winget install SosomLab.NexaBeep
+choco  install nexa-beep
 
 # Linux — deb 또는 포터블
 sudo dpkg -i nexa-beep-*-linux-x64.deb
 ```
 
-Windows는 설치본(`*-setup.exe` — 사용자 단위·무권한) 또는 포터블 zip을 풀고 `nexa-beep.exe`를 더블클릭한다.
-릴리스마다 `SHA256SUMS.txt`가 함께 올라간다.
+패키지 관리자를 쓰지 않으면 설치본(`*-setup.exe` — 사용자 단위·무권한) 또는 포터블 zip을 풀고
+`nexa-beep.exe`를 더블클릭한다. 릴리스마다 `SHA256SUMS.txt`가 함께 올라간다.
 
 > ⚠️ 아직 **코드 서명·공증 전**이다. macOS Cask는 설치 시 격리 표식을 제거하며(임시방편), Windows는 SmartScreen 경고가 날 수 있다.
 
@@ -70,6 +76,6 @@ Windows는 설치본(`*-setup.exe` — 사용자 단위·무권한) 또는 포�
 | --- | --- |
 | 조직 | **SosomLab** — <https://sosomlab.com> |
 | 개발자 | Sangyong Bae — kiros33@gmail.com |
-| 관련 저장소 | [`nexa-dir2`](https://github.com/SosomLab/nexa-dir2)(문서·컨트롤 표준 차용) · `nexa-beepd`(릴레이 서버 — 예정) |
+| 관련 저장소 | [`nexa-dir2`](https://github.com/SosomLab/nexa-dir2)(문서·컨트롤 표준 차용) · `nexa-beepd`(릴레이 서버 — [crates/nexa-beepd](crates/nexa-beepd) · 같은 저장소 `beepd-v*` 별도 배포) |
 
 **PolyForm Noncommercial 1.0.0** ([LICENSE.md](LICENSE.md) · 한글 [LICENSE.ko.md](LICENSE.ko.md)) — 개인·비상업 무료, 상업 사용은 유료 라이선스(문의 kiros33@sosomlab.com).
