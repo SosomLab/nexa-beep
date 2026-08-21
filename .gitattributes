@@ -1,0 +1,4 @@
+# 셸 스크립트는 어느 OS에서 체크아웃해도 LF — Windows autocrlf가 CRLF로 바꾸면
+# 리눅스 bash가 `\r: command not found`로 죽는다(beepd-cloud 킷이 Windows에서
+# vm-setup.sh를 scp로 올리는 경로가 정확히 이 지뢰를 밟는다).
+*.sh text eol=lf

@@ -62,7 +62,9 @@ if (-not $exists) {
 # ④ 업로드 + 셋업(빌드·상주) — 수 분 소요(e2-small 기준)
 Write-Host '[4/5] 업로드 + VM 셋업(rust 설치·빌드·systemd 상주 — 수 분)'
 gcloud compute scp beepd-src.tar.gz tools/beepd-cloud/vm-setup.sh "${Name}:/tmp/" @common
-gcloud compute ssh $Name @common --command 'sudo bash /tmp/vm-setup.sh'
+# CR 제거 후 실행 — Windows 체크아웃이 CRLF로 바꿔 놨어도 bash가 죽지 않게
+# (.gitattributes *.sh eol=lf가 1차 방어 · 이 줄은 과거 체크아웃 대비 2차 방어).
+gcloud compute ssh $Name @common --command 'sudo bash -c "tr -d \"\r\" < /tmp/vm-setup.sh > /tmp/setup.lf.sh && bash /tmp/setup.lf.sh"'
 
 # ⑤ 결과 안내
 $ip = gcloud compute instances describe $Name @common --format 'value(networkInterfaces[0].accessConfigs[0].natIP)'
