@@ -571,6 +571,9 @@ enum Cmd {
     },
     /// 클라이언트 종료 — 액터가 세션을 내려놓는다(서버가 TCP 종료로 정리).
     Shutdown,
+    /// 생존 확인용 no-op([`RelayClient::is_alive`]) — 액터가 죽었으면 채널 send가
+    /// 실패한다는 사실만 쓴다(액터는 아무 것도 하지 않는다).
+    Nop,
 }
 
 enum ChEvent {
@@ -702,6 +705,13 @@ impl RelayClient {
         }
     }
 
+    /// 액터(서버 제어 세션) 생존 여부 — 서버 세션이 죽으면 액터가 종료해 명령 채널이
+    /// 닫힌다는 사실을 쓴다. 재접속 판단용(GUI 서버 틱 · 폴링 부담 0).
+    #[must_use]
+    pub fn is_alive(&self) -> bool {
+        self.cmd_tx.send(Cmd::Nop).is_ok()
+    }
+
     /// 인바운드 하나를 꺼낸다(서버 IP 배선 포함 — 경로 등급 판정용). 상대가 서버
     /// 랑데부로 나를 열면 여기로 온다. **지연 수락** — 소비자가 [`RelayIncoming::accept`]
     /// (또는 [`accept_via`])를 불러야 서버가 중계를 시작한다.
@@ -788,6 +798,7 @@ fn actor(
                     dead = true;
                     break;
                 }
+                Cmd::Nop => {} // 생존 확인 — send 성공 자체가 답이다
             }
         }
         if dead {
@@ -1376,6 +1387,77 @@ pub mod pinfile {
             let _ = std::fs::remove_file(&p);
         }
     }
+}
+
+// ── 접속 단일 정책 (CLI·GUI 공용 — 두 벌 금지) ────────────────────
+
+/// 서버 주소 해석 — 반환 = (핀 키로 쓸 정규 문자열, 소켓 주소).
+/// IP 리터럴은 정규화([docs/19] M1-14 공유 · 포트 생략 = [`DEFAULT_RELAY_PORT`]),
+/// 호스트명은 DNS로 해석한다(DR-19의 DDNS 경로).
+#[must_use]
+pub fn resolve_server(raw: &str) -> Option<(String, SocketAddr)> {
+    if let Some(n) = nbeep_core::endpoint::normalize_endpoint(raw, DEFAULT_RELAY_PORT) {
+        if let Ok(sa) = n.parse::<SocketAddr>() {
+            return Some((n, sa));
+        }
+    }
+    let with_port = if raw.contains(':') {
+        raw.to_string()
+    } else {
+        format!("{raw}:{DEFAULT_RELAY_PORT}")
+    };
+    use std::net::ToSocketAddrs as _;
+    let sa = with_port.to_socket_addrs().ok()?.next()?;
+    Some((with_port, sa))
+}
+
+/// [`attach`] 성공 — 접속·등록 완료된 클라이언트 + 핀 이력.
+#[derive(Debug)]
+pub struct Attached {
+    /// 접속·RID 등록까지 끝난 클라이언트.
+    pub client: RelayClient,
+    /// 핀 키로 쓴 정규 주소 문자열(상태 표시·재시도용).
+    pub addr: String,
+    /// 첫 접속(TOFU) — 지금 본 서버 키를 핀했다.
+    pub first_pin: bool,
+    /// 핀 저장 실패(IO) — 접속은 유효하나 다음 접속이 다시 첫 접속으로 보인다.
+    pub pin_write_failed: bool,
+}
+
+/// [`attach`] 실패 사유.
+#[derive(Debug)]
+pub enum AttachError {
+    /// 주소 해석 실패(형식 오류·DNS 실패).
+    Resolve,
+    /// 접속·핸드셰이크·등록 실패 — 핀 불일치([`RelayError::PinMismatch`])는
+    /// **시끄럽게**(DR-28 "신원이 바뀌면 시끄럽게" · 조용한 재핀 없음).
+    Relay(RelayError),
+}
+
+/// 릴레이 서버 접속 **단일 정책**(docs/32 §2-4·§13-2 — CLI·GUI가 같은 함수를 쓴다):
+/// 주소 해석 → 접속·Noise → **핀 검증**(첫 접속 = TOFU 저장 · 불일치 = 중단) → RID 등록.
+/// 출력·재시도는 호출자 몫(CLI = 즉시 출력 · GUI = 상태바+백오프).
+///
+/// # Errors
+/// 해석 실패 = [`AttachError::Resolve`] · 그 외 = [`AttachError::Relay`].
+pub fn attach(
+    raw: &str,
+    id: &Identity,
+    pin_path: &std::path::Path,
+) -> Result<Attached, AttachError> {
+    let (addr, sa) = resolve_server(raw).ok_or(AttachError::Resolve)?;
+    let expected = pinfile::lookup(pin_path, &addr);
+    let client = RelayClient::connect(sa, id, &rids_around(&id.peer_id()), expected)
+        .map_err(AttachError::Relay)?;
+    let first_pin = expected.is_none();
+    let pin_write_failed =
+        first_pin && pinfile::store(pin_path, &addr, &client.server_peer()).is_err();
+    Ok(Attached {
+        client,
+        addr,
+        first_pin,
+        pin_write_failed,
+    })
 }
 
 #[cfg(test)]

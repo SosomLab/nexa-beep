@@ -1477,65 +1477,42 @@ fn via_msg(e: nbeep_relay::ViaError) -> &'static str {
 }
 
 /// 서버 주소 해석 — GUI 모달과 같은 정규화 우선, 실패 시 호스트명(DDNS) DNS 해석.
-/// 반환 = (핀 키로 쓸 정규 문자열, 소켓 주소).
-fn resolve_server(raw: &str) -> Option<(String, std::net::SocketAddr)> {
-    if let Some(n) = nbeep_core::endpoint::normalize_endpoint(raw, nbeep_relay::DEFAULT_RELAY_PORT)
-    {
-        if let Ok(sa) = n.parse::<std::net::SocketAddr>() {
-            return Some((n, sa));
-        }
-    }
-    // 호스트명 — 포트 생략이면 기본 포트를 붙여 DNS로 해석한다(DR-19의 DDNS 경로).
-    let with_port = if raw.contains(':') {
-        raw.to_string()
-    } else {
-        format!("{raw}:{}", nbeep_relay::DEFAULT_RELAY_PORT)
-    };
-    use std::net::ToSocketAddrs as _;
-    let sa = with_port.to_socket_addrs().ok()?.next()?;
-    Some((with_port, sa))
-}
-
-/// 릴레이 서버 접속 + **핀 규약**([32 §2-4] — TOFU · 불일치 = 시끄럽게) + RID 등록.
-/// 실패는 `None` — 호출자는 LAN만으로 계속한다(S-2 fail-open to LAN).
+/// 릴레이 서버 접속 — 정책은 [`nbeep_relay::attach`] **한 벌**(핀 TOFU·불일치 중단 ·
+/// GUI와 공유), 여기는 CLI 출력만. 실패는 `None` — 호출자는 LAN만으로 계속한다(S-2).
 fn attach_server(raw: &str, identity: &nbeep_crypto::Identity) -> Option<nbeep_relay::RelayClient> {
-    let Some((addr_str, sa)) = resolve_server(raw) else {
-        eprintln!("[서버] 주소 해석 실패: {raw} (예: relay.example.com · 10.0.0.5:47300)");
-        return None;
-    };
     let pin_path = crate::app::data_dir().join("server.pin");
-    let expected = nbeep_relay::pinfile::lookup(&pin_path, &addr_str);
-    match nbeep_relay::RelayClient::connect(
-        sa,
-        identity,
-        &nbeep_relay::rids_around(&identity.peer_id()),
-        expected,
-    ) {
-        Ok(client) => {
-            if expected.is_none() {
-                // 첫 접속 = TOFU — 지금 본 키를 핀한다(이후 불일치는 아래 경로로 시끄럽게).
-                if let Err(e) =
-                    nbeep_relay::pinfile::store(&pin_path, &addr_str, &client.server_peer())
-                {
-                    eprintln!("[서버] ⚠ 핀 저장 실패({e}) — 다음 접속에서 다시 첫 접속으로 보인다");
-                }
+    match nbeep_relay::attach(raw, identity, &pin_path) {
+        Ok(at) => {
+            if at.pin_write_failed {
+                eprintln!("[서버] ⚠ 핀 저장 실패 — 다음 접속에서 다시 첫 접속으로 보인다");
+            }
+            if at.first_pin {
                 println!(
                     "[서버] 첫 접속 — 서버 키를 핀했다: {}",
-                    nbeep_relay::peer_hex(&client.server_peer())
+                    nbeep_relay::peer_hex(&at.client.server_peer())
                 );
             } else {
-                println!("[서버] 핀 일치({})", client.server_peer().short());
+                println!("[서버] 핀 일치({})", at.client.server_peer().short());
             }
-            let obs = client
+            let obs = at
+                .client
                 .register_info()
                 .observed_tcp
                 .map_or("미상".to_string(), |a| a.to_string());
             println!(
-                "[서버] {addr_str} 등록 완료 — 서버가 본 내 주소 {obs} · 상대는 `--chat-connect-via <내 지문> --server {addr_str}` 로 나를 찾는다"
+                "[서버] {} 등록 완료 — 서버가 본 내 주소 {obs} · 상대는 `--chat-connect-via <내 지문> --server {}` 로 나를 찾는다",
+                at.addr, at.addr
             );
-            Some(client)
+            Some(at.client)
         }
-        Err(nbeep_relay::RelayError::PinMismatch { expected, got }) => {
+        Err(nbeep_relay::AttachError::Resolve) => {
+            eprintln!("[서버] 주소 해석 실패: {raw} (예: relay.example.com · 10.0.0.5:47300)");
+            None
+        }
+        Err(nbeep_relay::AttachError::Relay(nbeep_relay::RelayError::PinMismatch {
+            expected,
+            got,
+        })) => {
             // ★ 신원이 바뀌면 시끄럽게(DR-28) — 조용한 재핀은 없다.
             eprintln!(
                 "[서버] ★★ 서버 키가 핀과 다르다 — 접속 중단(사칭·서버 재설치 가능성)\n\
@@ -1547,7 +1524,7 @@ fn attach_server(raw: &str, identity: &nbeep_crypto::Identity) -> Option<nbeep_r
             );
             None
         }
-        Err(e) => {
+        Err(nbeep_relay::AttachError::Relay(e)) => {
             eprintln!("[서버] 접속 실패: {e:?} — LAN만으로 계속한다");
             None
         }

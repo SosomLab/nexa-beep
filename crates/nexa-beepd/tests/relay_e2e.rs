@@ -13,13 +13,14 @@ use std::net::{IpAddr, SocketAddr, UdpSocket};
 use std::time::Duration;
 
 fn test_server(rate_bps: u64) -> nexa_beepd::Handle {
+    // 폴더 유일화 = pid + **프로세스 내 원자 카운터** — 시각(subsec_nanos)은 병렬
+    // 테스트 스레드가 같은 값을 볼 수 있어 유일하지 않다(08-21 dir_writable 프로브
+    // 경합과 같은 유형 · 실측: 테스트 8개 병렬에서 AlreadyExists 충돌).
+    static SEQ: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     let dir = std::env::temp_dir().join(format!(
         "beepd-test-{}-{}",
         std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .subsec_nanos()
+        SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
     std::fs::create_dir_all(&dir).unwrap();
     spawn(&Config {
@@ -263,4 +264,69 @@ fn peer_disconnect_closes_channel() {
         }
     }
     server.shutdown();
+}
+
+/// 접속 단일 정책([`nbeep_relay::attach`] — X-2b · CLI·GUI 공용)의 핀 TOFU 수명:
+/// 첫 접속 = 핀 저장 → 재접속 = 핀 일치 → 핀 변조 = **PinMismatch로 중단**(조용한
+/// 재핀 없음 — DR-28). `is_alive`는 서버 생존/종료를 그대로 비춘다.
+#[test]
+fn attach_pin_tofu_and_liveness() {
+    let server = test_server(0);
+    let raw = format!("127.0.0.1:{}", server.tcp_addr.port());
+    let dir = std::env::temp_dir().join(format!(
+        "nb-attach-{}-{}",
+        std::process::id(),
+        server.tcp_addr.port()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let pin = dir.join("server.pin");
+    let _ = std::fs::remove_file(&pin);
+
+    let id = Identity::generate();
+    // ① 첫 접속 — TOFU 핀 저장.
+    let at1 = nbeep_relay::attach(&raw, &id, &pin).unwrap();
+    assert!(at1.first_pin, "핀 파일이 없으니 첫 접속");
+    assert!(!at1.pin_write_failed);
+    assert_eq!(at1.client.server_peer(), server.server_peer);
+    assert!(at1.client.is_alive(), "접속 직후 액터 생존");
+    assert_eq!(
+        nbeep_relay::pinfile::lookup(&pin, &at1.addr),
+        Some(server.server_peer),
+        "저장된 핀 = 서버 실키"
+    );
+    drop(at1);
+
+    // ② 재접속 — 핀 일치(첫 접속 아님).
+    let at2 = nbeep_relay::attach(&raw, &id, &pin).unwrap();
+    assert!(!at2.first_pin, "핀이 있으니 대조 경로");
+    let addr = at2.addr.clone();
+    drop(at2);
+
+    // ③ 핀 변조(다른 키) — 접속 중단(시끄럽게 · 재핀은 사람의 결정).
+    let wrong = Identity::generate().peer_id();
+    nbeep_relay::pinfile::store(&pin, &addr, &wrong).unwrap();
+    match nbeep_relay::attach(&raw, &id, &pin) {
+        Err(nbeep_relay::AttachError::Relay(nbeep_relay::RelayError::PinMismatch {
+            expected,
+            got,
+        })) => {
+            assert_eq!(expected, wrong);
+            assert_eq!(got, server.server_peer);
+        }
+        other => panic!("핀 불일치가 통과했다: {other:?}"),
+    }
+
+    // ④ 서버 종료 → 액터 사망 → is_alive = false (GUI 재접속 틱의 판정 근거).
+    nbeep_relay::pinfile::store(&pin, &addr, &server.server_peer).unwrap();
+    let at3 = nbeep_relay::attach(&raw, &id, &pin).unwrap();
+    server.shutdown();
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while at3.client.is_alive() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "서버 종료 후에도 액터가 살아 있다"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let _ = std::fs::remove_file(&pin);
 }
