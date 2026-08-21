@@ -118,6 +118,13 @@ enum AppEvent {
     /// L1 링크 변화(M1-2 · **디바운스 후**) — Wi-Fi 전환·케이블·절전 복귀.
     /// 전송에 재발견을 시키고 상태바에 알린다(변화 자체는 OS 구독 스레드가 관측).
     LinkChanged,
+    /// 격리 아카이브 내용 목록(M4-4 ⓐ · 08-21) — 워커가 개봉·파싱을 마친 본문.
+    /// (대형 격리물 개봉이 UI를 얼리지 않게 — 격리함 워커 스캔과 같은 이유.)
+    ArchiveList {
+        title: String,
+        body: String,
+        anchor: WindowId,
+    },
     /// 배치 목록 도착(M4-2e · Control 13) — 요청 단위 승인·수신 목록의 원료.
     XferManifest {
         peer: PeerId,
@@ -1761,6 +1768,63 @@ fn human_size(bytes: u64) -> String {
         b if b >= K => format!("{:.1}KiB", b as f64 / K as f64),
         b => format!("{b}B"),
     }
+}
+
+/// 격리 아카이브 내용 목록 본문(M4-4 ⓐ · 08-21) — **해제 없이** 중앙 디렉터리
+/// 목록만 그린다. 정책 판정 한 줄 동반(위반·판정 불가 = ⚠ 사유 — 통과 표기는
+/// 하지 않는다: "통과 = 안전"이 아니다 NFR-S-5).
+fn archive_listing_body(bytes: &[u8]) -> String {
+    use nbeep_safe::zip::{inspect_zip, parse_zip_entries, ZipInspect};
+    let entries = match parse_zip_entries(bytes) {
+        Err(why) => {
+            return format!(
+                "{}: {why}",
+                nbeep_core::t(nbeep_core::Msg::ArchiveUnreadable)
+            )
+        }
+        Ok(e) => e,
+    };
+    let files = entries.iter().filter(|e| !e.is_dir).count();
+    let total: u64 = entries.iter().map(|e| e.uncompressed).sum();
+    let mut out = nbeep_core::tf(
+        nbeep_core::Msg::ArchiveSummary,
+        &[&files.to_string(), &human_size(total)],
+    );
+    match inspect_zip(bytes, &nbeep_safe::ArchivePolicy::default()) {
+        ZipInspect::Ok(_) => {}
+        ZipInspect::Reject(why) => {
+            out.push('\n');
+            out.push_str(&format!("! {why}"));
+        }
+        ZipInspect::Malformed(why) => {
+            out.push('\n');
+            out.push_str(&format!("! {why}"));
+        }
+    }
+    out.push('\n');
+    const MAX_LIST: usize = 12; // 경고 모달 높이 상한 안쪽(110+22/줄 clamp 460)
+    for e in entries.iter().take(MAX_LIST) {
+        out.push('\n');
+        if e.is_dir {
+            out.push_str(&e.name);
+        } else if e.is_link {
+            out.push_str(&format!(
+                "{} {}",
+                e.name,
+                nbeep_core::t(nbeep_core::Msg::ArchiveLinkTag)
+            ));
+        } else {
+            out.push_str(&format!("{} — {}", e.name, human_size(e.uncompressed)));
+        }
+    }
+    if entries.len() > MAX_LIST {
+        out.push('\n');
+        out.push_str(&nbeep_core::tf(
+            nbeep_core::Msg::ArchiveMore,
+            &[&(entries.len() - MAX_LIST).to_string()],
+        ));
+    }
+    out
 }
 
 /// 파일 스트림 한 프레임 처리(액터 스레드) — 오류 = 세션 종료 신호.
@@ -5253,9 +5317,11 @@ impl App {
     /// 부른다(성립·끊김·시도·실패). 뷰가 없으면 no-op.
     fn refresh_chat_link(&mut self, peer: PeerId) {
         let link = self.peer_link_state(peer);
+        let remote = self.peer_path(peer) == nbeep_core::PathClass::Remote;
         let mut inv = Invalidations::default();
         if let Some(chat) = self.chats.get_mut(&peer) {
             chat.set_link(link, &mut inv);
+            chat.set_remote(remote, &mut inv); // 인터넷 경유 상시 배지(M5-3c)
             self.redraw_conversation(peer);
         }
     }
@@ -5264,7 +5330,11 @@ impl App {
         let mut chat = ChatViewWidget::new(self.peer_title(peer));
         let mut inv = Invalidations::default();
         chat.set_link(self.peer_link_state(peer), &mut inv); // 헤더 아이콘 초기값(M3-20)
-                                                             // 시각 표시 형식(설정 — 08-10).
+        chat.set_remote(
+            self.peer_path(peer) == nbeep_core::PathClass::Remote,
+            &mut inv,
+        ); // 인터넷 경유 상시 배지 초기값(M5-3c)
+           // 시각 표시 형식(설정 — 08-10).
         chat.set_time_format(
             self.settings.get("chat.time_24h") != "off",
             self.settings.get("chat.date_format") == "short",
@@ -11622,13 +11692,39 @@ impl App {
                     }
                 }
                 if let Some(qp) = preview {
-                    // 선택 행 재클릭 = 확대 미리보기(08-16 — 진입점 ② · 격리
-                    // 상태 그대로 · 스레드 썸네일과 같은 뷰어).
-                    let title = std::path::Path::new(&qp)
-                        .file_stem()
-                        .map(|t| t.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| "격리물".into());
-                    self.open_image_view(el, id, qp, title);
+                    let secret = self.identity.wrap_secret();
+                    let meta = crate::gate::read_qmeta(std::path::Path::new(&qp), &secret);
+                    if meta.as_ref().map(|m| m.risk) == Some(nbeep_core::RiskLevel::Archive) {
+                        // 아카이브 재클릭 = **내용 목록**(M4-4 ⓐ — 해제 없는 중앙
+                        // 디렉터리 목록 · 이미지의 확대 미리보기와 같은 진입점).
+                        // 개봉(수백 MB 가능)은 워커 — 완료가 ArchiveList로 돌아온다.
+                        let title = meta.map_or_else(|| "archive".into(), |m| m.name);
+                        let proxy = self.proxy.clone();
+                        std::thread::spawn(move || {
+                            let body =
+                                crate::gate::read_beepq_bytes(std::path::Path::new(&qp), &secret)
+                                    .map_or_else(
+                                        || {
+                                            nbeep_core::t(nbeep_core::Msg::ArchiveUnreadable)
+                                                .to_string()
+                                        },
+                                        |b| archive_listing_body(&b),
+                                    );
+                            let _ = proxy.send_event(AppEvent::ArchiveList {
+                                title,
+                                body,
+                                anchor: id,
+                            });
+                        });
+                    } else {
+                        // 선택 행 재클릭 = 확대 미리보기(08-16 — 진입점 ② · 격리
+                        // 상태 그대로 · 스레드 썸네일과 같은 뷰어).
+                        let title = std::path::Path::new(&qp)
+                            .file_stem()
+                            .map(|t| t.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| "격리물".into());
+                        self.open_image_view(el, id, qp, title);
+                    }
                 }
                 if let Some(a) = act {
                     self.run_quarantine_action(a, id);
@@ -13329,6 +13425,15 @@ impl ApplicationHandler<AppEvent> for App {
                 if let Some(mid) = self.main_id {
                     self.request_redraw(mid);
                 }
+            }
+            AppEvent::ArchiveList {
+                title,
+                body,
+                anchor,
+            } => {
+                // 격리 아카이브 내용 목록(M4-4 ⓐ) — 워커 완료분을 경고 모달로.
+                // 격리함 창이 그 사이 닫혔으면 open_alert가 메인 소유로 폴백한다.
+                self.open_alert(el, &title, &body, Some(anchor));
             }
             AppEvent::Inbound { session } => {
                 use nbeep_core::Session as _;

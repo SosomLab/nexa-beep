@@ -490,6 +490,11 @@ pub struct ChatViewWidget {
             std::rc::Rc<crate::theme::IconImage>,
         )>,
     >,
+    /// 이 세션이 인터넷 경유인가(M5-3c · DR-28 §2 규칙 5 "원격 연결임을 항상
+    /// 표시") — 호스트가 성립 경로로 넣는다. true = 헤더에 지구본+라벨 상시.
+    remote: bool,
+    /// 지구본 틴트 캐시(색 키 — link_icon과 같은 문법).
+    remote_icon: core::cell::RefCell<Option<(u32, std::rc::Rc<crate::theme::IconImage>)>>,
     input: crate::edit::EditState,
     /// IME 조합 중 텍스트(확정 전 — 밑줄 표시. 확정은 input에 삽입).
     scale: f32,
@@ -566,6 +571,8 @@ impl ChatViewWidget {
             grade_badge_w: core::cell::Cell::new(0),
             link: crate::peer_list::LinkState::Idle,
             link_icon: core::cell::RefCell::new(None),
+            remote: false,
+            remote_icon: core::cell::RefCell::new(None),
             input: crate::edit::EditState::new(),
             scale: 1.0,
             outgoing: None,
@@ -1024,6 +1031,42 @@ impl ChatViewWidget {
                 self.s(34),
             ));
         }
+    }
+
+    /// 원격 경로 표시 주입(M5-3c — 호스트가 세션 성립 경로로). 변화 시 헤더 재도색.
+    pub fn set_remote(&mut self, remote: bool, inv: &mut Invalidations) {
+        if self.remote != remote {
+            self.remote = remote;
+            inv.push(Rect::new(
+                self.bounds.x,
+                self.bounds.y,
+                self.bounds.w,
+                self.s(34),
+            ));
+        }
+    }
+
+    /// 지구본(경로 = 인터넷 경유) 틴트 아이콘 — warn색 · 캐시(색 키).
+    fn remote_icon_tinted(&self, theme: &Theme) -> std::rc::Rc<crate::theme::IconImage> {
+        let color = theme.warn;
+        if let Some((c, img)) = self.remote_icon.borrow().as_ref() {
+            if *c == color.0 {
+                return std::rc::Rc::clone(img);
+            }
+        }
+        let alpha: &[u8] = crate::icons::path::GLOBE_ALPHA;
+        let (r, g, b) = color.rgb();
+        let mut rgba = Vec::with_capacity(alpha.len() * 4);
+        for &a in alpha {
+            rgba.extend_from_slice(&[r, g, b, a]);
+        }
+        let img = std::rc::Rc::new(crate::theme::IconImage::from_rgba(
+            crate::icons::path::SIZE,
+            crate::icons::path::SIZE,
+            rgba,
+        ));
+        *self.remote_icon.borrow_mut() = Some((color.0, std::rc::Rc::clone(&img)));
+        img
     }
 
     /// 상태별 알파 마스크를 상태색으로 틴트한 아이콘(캐시 — 상태·색 키).
@@ -2052,6 +2095,29 @@ impl Widget for ChatViewWidget {
             theme.text,
             theme.chrome_bg,
         );
+        // 원격 경로 상시 배지(M5-3c · §2 규칙 5) — 제목 오른쪽에 지구본+라벨.
+        // 정상(Local)은 안 그린다(기본 상태는 조용히 — [docs/14 §13]).
+        if self.remote {
+            let tw = ctx.text_width(&self.title);
+            let gd = self.s(16);
+            let globe = Rect::new(
+                icon.right() + self.s(8) + tw + self.s(10),
+                head.y + (head_h - gd) / 2,
+                gd,
+                gd,
+            );
+            ctx.image_scaled(globe, &self.remote_icon_tinted(theme), head);
+            ctx.select_font(FontSlot::Status, false);
+            ctx.text_opaque(
+                globe.right() + self.s(4),
+                head.y + self.s(9),
+                head,
+                nbeep_core::t(nbeep_core::Msg::PathRemoteLabel),
+                theme.warn,
+                theme.chrome_bg,
+            );
+            ctx.select_font(FontSlot::Base, false);
+        }
 
         // 전송 진척 줄 — 헤더 바로 아래(배치 합계 — 항목별 진행은 스레드 풍선에).
         if self.xfer.is_none() {
@@ -2398,6 +2464,23 @@ mod tests {
             },
             inv,
         );
+    }
+
+    /// M5-3c(08-21) — 원격 배지: 변화만 헤더를 무효화하고(멱등), 켠 상태의
+    /// 페인트가 성립한다(지구본 틴트 경로 관통).
+    #[test]
+    fn remote_badge_invalidates_header_once_and_paints() {
+        let (mut w, _) = widget();
+        let mut inv = Invalidations::default();
+        w.set_remote(true, &mut inv);
+        assert!(!inv.is_empty(), "켜짐 = 헤더 무효화");
+        let mut inv2 = Invalidations::default();
+        w.set_remote(true, &mut inv2);
+        assert!(inv2.is_empty(), "같은 값 재주입 = 무효화 없음(멱등)");
+        paint_once(&w); // 지구본 틴트·라벨 경로가 패닉 없이 관통
+        let mut inv3 = Invalidations::default();
+        w.set_remote(false, &mut inv3);
+        assert!(!inv3.is_empty(), "꺼짐 = 헤더 무효화");
     }
 
     #[test]
