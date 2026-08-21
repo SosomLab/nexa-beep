@@ -7,6 +7,7 @@
 
 ## 2026-08-22
 
+- **(Win) 클라우드 단발 실측 킷 `tools/beepd-cloud`**: 실 NAT 홀펀칭 실기의 발판 — GCP VM 생성→소스 빌드→systemd 상주→철거까지 스크립트 1개(`deploy-gcp.ps1`+`vm-setup.sh`) · 체크리스트 6항. 판정 기록 = **Cloud Run 불가**(원시 TCP·UDP 미지원·다중 인스턴스), **상시 유지 비채택**(IPv4 유료 — 단발 세션 수백 원 · 상시는 Oracle Always Free로) · 구문 파스·tarball 드라이런 ✓(실 실행 = gcloud 인증 자리에서).
 - **(Win) ★사다리+CLI Managed — 서버 축 2차**(`6597fd7`·`bbc665a` — 브랜치 계속): **X-UDP-e 원격 사다리 ✅**(`connect_via`/`accept_via` — 펀치→릴레이 자동 폴백·첫 프레임 링크 추종·**지연 수락**(프로브가 수락보다 먼저 = 관측 순서 보장)·WrongPeer fail-closed) · **X-2c P0~P2 ✅**(`--identity` 영속·`--chat-live --server`(핀 TOFU·불일치 = 중단)·`--chat-connect-via <64hex>`·`/connect <지문>` — run_interactive 무변경 합류) · ★**3프로세스 실물 스모크 = UDP 직결 성립 + 메시지·확인·프로필 전 스택 무변경**(서버 로그 = 봉투만) · 절차 = [26 §3-7]. **777 green**(+3) · 잔여 = X-2b GUI 배선·실 NAT 실기.
 
 ## 2026-08-21

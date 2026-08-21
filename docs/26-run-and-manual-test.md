@@ -348,7 +348,9 @@ nexa-beep --chat-connect-via <상대 지문 64hex> --server 127.0.0.1:47300
 - 확인 포인트: ②에 `[릴레이] 인바운드 성립(…)` + 수신 전용 표시 · ③에 경로 1줄 ·
   서버 `--verbose`엔 봉투만(conn#·rid 앞 4B·ch# — 이름·내용·키 없음).
 - 실 NAT(공유기 2대) 통과율·Symmetric 폴백은 실기 항목 — 루프백/LAN 검증과
-  별개로 실측해야 한다(추정 금지).
+  별개로 실측해야 한다(추정 금지). ★ **공인 IP 서버는 [tools/beepd-cloud](../tools/beepd-cloud/README.md)**
+  (GCP 단발 세션 킷 — VM 생성→빌드→상주→철거 · 체크리스트 6항 동봉 · Cloud Run은
+  TCP/UDP 미지원이라 불가).
 
 ### 3-4b. ★ 여러 신원을 한 PC에서 동시에 — **폴더를 나눈다**
 
