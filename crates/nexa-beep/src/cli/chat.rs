@@ -1148,6 +1148,9 @@ fn receive_into_quarantine(got: &nbeep_core::Received, sender: PeerId) -> bool {
                 },
                 q.path.display()
             );
+            if let Some(why) = &q.archive_viol {
+                println!("       ⚠ 아카이브 위반: {why} (해제 금지 권고)");
+            }
             println!("       (실체화는 승인 후 --quarantine-demo 참조 — 자동 실체화 없음)");
             true
         }

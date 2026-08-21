@@ -55,6 +55,8 @@ pub struct QRow {
     /// 검사 결과(FR-S-15 · 08-22) — 사실 3종 표기: 검사됨(탐지 없음)/검사됨(탐지)/
     /// 검사 안 됨. **"검사 통과 = 안전"이라 표기하지 않는다**(NFR-S-5).
     pub scan: nbeep_core::ScanOutcome,
+    /// 아카이브 정책 위반(M4-4 · 08-22 — Zip Slip·폭탄·판정 불가 · 위험색 라벨).
+    pub archive_viol: bool,
 }
 
 /// 사용자 결정 — 호스트가 실행한다.
@@ -499,6 +501,13 @@ impl Widget for QuarantineWidget {
                     ),
                 };
                 ctx.text(x, chip.y + (chip.h - sh) / 2, r, &sl, sc);
+                x += ctx.text_width(&sl) + self.s(10);
+            }
+            if row.archive_viol {
+                // 아카이브 정책 위반(M4-4) — Zip Slip·폭탄·판정 불가. 해제는 원래
+                // 없지만 승인 전에 알아야 한다(위험색).
+                let a = format!("! {}", nbeep_core::t(nbeep_core::Msg::ArchiveViol));
+                ctx.text(x, chip.y + (chip.h - sh) / 2, r, &a, theme.danger);
             }
             // 출처 — 보낸 사람 · 수신 시각(우측 정렬 · 사용자 요청 08-10).
             let origin = match (row.from.is_empty(), row.when.is_empty()) {
@@ -574,6 +583,7 @@ mod tests {
             thumb: None,
             ready: true, // 기존 테스트 기본 = 검증 완료(승인 가능)
             scan: nbeep_core::ScanOutcome::Unavailable,
+            archive_viol: false,
         }
     }
 

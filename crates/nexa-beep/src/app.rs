@@ -434,6 +434,8 @@ struct QRowRaw {
     received_at: u64,
     /// 검사 결과(FR-S-15 · 08-22) — 목록 사실 표기(검사됨/탐지/안 됨).
     scan: nbeep_core::ScanOutcome,
+    /// 아카이브 정책 위반(M4-4 · 08-22 — zip Slip·폭탄·판정 불가 · 위험색 라벨).
+    archive_viol: bool,
     /// 무결성 검증 완료(08-18) — 사이드카로 즉시 목록에 뜨지만 **전체 개봉·해시
     /// 확인**은 백그라운드다. false면 승인(Approve) 비활성(`QVerified`가 켠다).
     verified: bool,
@@ -5274,6 +5276,7 @@ impl App {
                                 sender: m.sender,
                                 received_at: m.received_at,
                                 scan: m.scan,
+                                archive_viol: m.archive_viol,
                                 verified: false,
                             });
                         }
@@ -5310,6 +5313,9 @@ impl App {
                                 sender: bq.meta.sender,
                                 received_at: bq.meta.received_at,
                                 scan: bq.meta.scan,
+                                // 구본(08-22 이전 수신) = 아카이브 미점검으로 정직 표기
+                                // (재계산은 prefix+body 재조립 = 대용량 이중 복사라 비채택).
+                                archive_viol: false,
                             },
                             &secret,
                         );
@@ -5322,6 +5328,7 @@ impl App {
                             sender: bq.meta.sender,
                             received_at: bq.meta.received_at,
                             scan: bq.meta.scan,
+                            archive_viol: false,
                             verified: false,
                         })
                     })
@@ -5411,6 +5418,7 @@ impl App {
                     path: path_s,
                     ready: r.verified,
                     scan: r.scan,
+                    archive_viol: r.archive_viol,
                 }
             })
             .collect()

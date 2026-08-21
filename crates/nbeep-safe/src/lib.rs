@@ -11,6 +11,7 @@ pub mod risk;
 pub mod sanitize;
 pub mod state;
 pub mod store;
+pub mod zip;
 
 pub use archive::{
     check_archive, check_entry, safe_entry_path, ArchivePolicy, ArchiveReject, EntryDesc,
@@ -22,3 +23,4 @@ pub use state::{friction_raised, step, InvalidTransition, QEvent, QState};
 pub use store::{
     HashPort, MarkOutcome, MarkPort, MaterializeError, Materialized, NoopMark, QuarantineDir,
 };
+pub use zip::{inspect_zip, looks_like_zip, parse_zip_entries, ZipInspect};

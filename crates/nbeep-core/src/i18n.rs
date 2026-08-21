@@ -291,6 +291,8 @@ pub enum Msg {
     ScanDetected,
     /// 상태바 — 수신물 검사 탐지 경고(파일명).
     StfScanDetected,
+    /// 격리함 — 아카이브 정책 위반 라벨(M4-4 · Zip Slip·폭탄·판정 불가).
+    ArchiveViol,
     /// 등급 배지 라벨(④ docs/24 — 입력줄 칩 · 08-21 i18n 승격).
     GradeNormal,
     GradeNotice,
@@ -1890,6 +1892,12 @@ impl Msg {
                 "⚠ 수신 파일에서 위협 탐지: {} — 격리 유지(승인하지 마세요)",
                 "⚠ 接收文件检出威胁：{} — 保持隔离（请勿批准）",
                 "⚠ 受信ファイルで脅威を検出: {} — 隔離を維持（承認しないでください）",
+            ],
+            Msg::ArchiveViol => [
+                "Archive policy violation",
+                "아카이브 위반",
+                "压缩包策略违规",
+                "アーカイブ規則違反",
             ],
             Msg::GradeNormal => ["Normal", "일반", "普通", "通常"],
             Msg::GradeNotice => ["Notice", "알림", "提醒", "通知"],
