@@ -115,6 +115,12 @@ enum AppEvent {
     },
     /// 아웃바운드 연결 실패(M2-8) — 죽은 상대를 클릭해도 UI는 살아 있고 이것만 온다.
     ConnectFailed { peer: PeerId, why: String },
+    /// Managed 서버 접속 워커 결과(X-2b) — `gen`이 현재와 다르면 낡은 결과(폐기 —
+    /// 그 사이 설정이 바뀌었다 · 틱이 새 목표로 다시 시도한다).
+    ServerAttach {
+        gen: u64,
+        outcome: Result<Box<nbeep_relay::Attached>, ServerAttachFail>,
+    },
     /// L1 링크 변화(M1-2 · **디바운스 후**) — Wi-Fi 전환·케이블·절전 복귀.
     /// 전송에 재발견을 시키고 상태바에 알린다(변화 자체는 OS 구독 스레드가 관측).
     LinkChanged,
@@ -389,6 +395,48 @@ const CARET_BLINK_MS: u64 = 530;
 const ENTER_GUARD_MS: u64 = 300;
 
 /// 이 단계의 대기 시간 — 단계를 다 썼으면 `None`(중단).
+/// 서버 접속 실패 분류(X-2b) — 표시·백오프 판단용.
+#[derive(Debug)]
+enum ServerAttachFail {
+    /// 주소 해석 실패(오타·DNS 일시 장애) — 백오프 재시도(DNS는 돌아올 수 있다).
+    Resolve,
+    /// ★ 핀 불일치 — **자동 재시도 없음**(재핀은 사람의 결정 · DR-28).
+    PinMismatch,
+    /// 접속·핸드셰이크 등 일시 실패 — 백오프 재시도.
+    Other(String),
+}
+
+/// Managed 서버 목표(설정 SSOT · X-2b) — None = Unmanaged/주소 없음(S-0 그대로).
+/// 주소에 `:`가 있으면 그대로 쓰고(포트 명시·IPv6는 `[..]:port` 표기), 없으면 설정
+/// 포트를 붙인다. 해석·기본 포트 보정은 `nbeep_relay::resolve_server` 몫.
+fn server_target(mode: &str, address: &str, port: &str) -> Option<String> {
+    if mode != "managed" {
+        return None;
+    }
+    let addr = address.trim();
+    if addr.is_empty() {
+        return None;
+    }
+    let port = port.trim();
+    if addr.contains(':') || port.is_empty() {
+        Some(addr.to_string())
+    } else {
+        Some(format!("{addr}:{port}"))
+    }
+}
+
+/// 서버 재접속 백오프(X-2b) — 복구 시도이지 감시가 아니다(13 §12-1). **300s 상한 반복**
+/// — 상대 재연결 ⓑ와 달리 중단하지 않는다: 서버는 사용자가 명시 등록한 인프라라
+/// 돌아오면 다시 붙어 있어야 하고, 5분 1회는 무의미 트래픽이 아니다.
+fn server_retry_delay(stage: u8) -> u64 {
+    match stage {
+        0 => 5_000,
+        1 => 15_000,
+        2 => 60_000,
+        _ => 300_000,
+    }
+}
+
 fn reconnect_delay(stage: u8) -> Option<u64> {
     RECONNECT_BACKOFF_MS.get(stage as usize).copied()
 }
@@ -2349,6 +2397,17 @@ struct App {
     transport: std::sync::Arc<dyn nbeep_net::Transport + Send + Sync>,
     /// 연결 수립 중인 상대(M2-8 — 중복 클릭 가드).
     connecting: ConnectLatch,
+    /// Managed 릴레이 서버 접속(X-2b · ADR-0013 §12-1) — 원천은 설정(`net.server.*`).
+    /// Drop = 수락 스레드·클라 액터 정리(Weak 승격 실패). None = Unmanaged/미접속.
+    relay: Option<std::sync::Arc<nbeep_relay::RelayClient>>,
+    /// 서버 접속 워커 가동 중(중복 시도 가드 — 13 §12-1).
+    relay_connecting: bool,
+    /// 서버 재접속 백오프 — (단계, 다음 시도 at_ms). 핀 불일치 = `u64::MAX`(수동만).
+    relay_backoff: (u8, u64),
+    /// 설정 세대(늦은 성공 가드) — `net.server.*` 변경마다 +1 · 워커 결과 gen과 대조.
+    relay_gen: u64,
+    /// 다음 서버 생존 점검 시각(ms) — `is_alive` 폴링 페이싱(2s).
+    relay_check_at: u64,
     discovery: std::sync::mpsc::Receiver<nbeep_net::DiscoveryEvent>,
     table: nbeep_core::PeerTable,
     /// TOFU 신뢰 저장 — 파일 영속(M2-5a · 변경 즉시 암호화 저장 · R-17 해소).
@@ -4774,6 +4833,76 @@ impl App {
     /// `auto` = **조용한 연결**: 성립해도 대화 뷰를 열지 않는다(자동 재연결 ⓑ ·
     /// 프로필 pull 08-14 — 카드와 대화는 분리). `false` = 사용자가 대화를 열려는
     /// 연결(성립 시 `activate`가 뷰를 연다).
+    /// Managed 서버 접속 틱(X-2b) — `about_to_wait`에서 2초 페이스로 돈다.
+    /// 목표(설정) 대비 현 상태를 수렴시키는 **단일 경로**: 붙기·재접속은 여기,
+    /// 목표 변경은 [`Self::server_settings_changed`]가 상태를 지워 여기로 모은다.
+    /// (13 §12-1 — 중복 가드 `relay_connecting` · 종료 조건 = Unmanaged · 실패
+    ///  복귀 = 백오프 · 수동 우선 = 설정 변경 즉시 · 포커스 안 뺏음 = 상태바만.)
+    fn server_tick(&mut self) {
+        if !self.live {
+            return; // 데모 전송(InMemory) — 서버 축 없음
+        }
+        let now = self.now_ms();
+        if now < self.relay_check_at {
+            return;
+        }
+        self.relay_check_at = now + 2_000;
+        let want = server_target(
+            self.settings.get("net.server.mode"),
+            self.settings.get("net.server.address"),
+            self.settings.get("net.server.port"),
+        );
+        let Some(raw) = want else {
+            if self.relay.take().is_some() {
+                self.set_status(nbeep_core::t(nbeep_core::Msg::StServerDetached));
+            }
+            return;
+        };
+        if self.relay_connecting {
+            return;
+        }
+        if let Some(c) = &self.relay {
+            if c.is_alive() {
+                return; // 붙어 있고 살아 있다 — 할 일 없음
+            }
+            // 서버 세션 사망 관측 — 내려놓고 첫 단계부터 재시도(백오프는 실패가 올린다).
+            self.relay = None;
+            self.relay_backoff = (0, now);
+            self.set_status(nbeep_core::t(nbeep_core::Msg::StServerLost));
+        }
+        if now < self.relay_backoff.1 {
+            return;
+        }
+        self.relay_connecting = true;
+        let gen = self.relay_gen;
+        let identity = std::sync::Arc::clone(&self.identity);
+        let pin = self.data_dir.join("server.pin");
+        let proxy = self.proxy.clone();
+        // 접속·Noise·DNS는 워커에서(수 초 블로킹 — UI 불가침). 결과는 이벤트로.
+        std::thread::spawn(move || {
+            let outcome = match nbeep_relay::attach(&raw, &identity, &pin) {
+                Ok(at) => Ok(Box::new(at)),
+                Err(nbeep_relay::AttachError::Resolve) => Err(ServerAttachFail::Resolve),
+                Err(nbeep_relay::AttachError::Relay(nbeep_relay::RelayError::PinMismatch {
+                    ..
+                })) => Err(ServerAttachFail::PinMismatch),
+                Err(nbeep_relay::AttachError::Relay(e)) => {
+                    Err(ServerAttachFail::Other(format!("{e:?}")))
+                }
+            };
+            let _ = proxy.send_event(AppEvent::ServerAttach { gen, outcome });
+        });
+    }
+
+    /// `net.server.*` 변경(설정 hot-swap) — 현 접속을 내려놓고 다음 틱이 새 목표로
+    /// 붙는다(핀 불일치 정지도 여기서 풀린다 — "설정을 다시 저장하면 재접속").
+    fn server_settings_changed(&mut self) {
+        self.relay_gen = self.relay_gen.wrapping_add(1);
+        self.relay = None;
+        self.relay_backoff = (0, 0);
+        self.relay_check_at = 0;
+    }
+
     fn start_connect(&mut self, peer: PeerId, auto: bool) {
         if !self.connecting.begin(peer) {
             if !auto {
@@ -8898,7 +9027,12 @@ impl App {
                 }
                 // 서버 모드(08-18) — Unmanaged면 주소·포트·타입을 잠근다(계산은
                 // refresh_approval_ui 깔때기 한 곳 — set_disabled 전체 교체 규약).
-                "net.server.mode" => self.refresh_approval_ui(),
+                // Managed 배선(X-2b) — 접속을 내려놓고 서버 틱이 새 목표로 수렴한다.
+                "net.server.mode" => {
+                    self.refresh_approval_ui();
+                    self.server_settings_changed();
+                }
+                "net.server.address" | "net.server.port" => self.server_settings_changed(),
                 // 수신 파일 상한(08-18) — 연결된 전 세션 hot-swap(새 오퍼부터 적용).
                 "xfer.recv_max_mb" => {
                     let cap = cap_from_setting(&value).unwrap_or(u64::MAX);
@@ -13193,6 +13327,70 @@ impl ApplicationHandler<AppEvent> for App {
                     self.request_redraw(mid);
                 }
             }
+            AppEvent::ServerAttach { gen, outcome } => {
+                self.relay_connecting = false;
+                if gen != self.relay_gen {
+                    return; // 낡은 결과(그 사이 설정 변경) — 틱이 새 목표로 다시 시도
+                }
+                match outcome {
+                    Ok(at) => {
+                        if at.pin_write_failed {
+                            self.set_status(nbeep_core::t(nbeep_core::Msg::StServerPinWriteFail));
+                        } else if at.first_pin {
+                            self.set_status(nbeep_core::tf(
+                                nbeep_core::Msg::StfServerFirstPin,
+                                &[&at.addr],
+                            ));
+                        } else {
+                            self.set_status(nbeep_core::tf(
+                                nbeep_core::Msg::StfServerAttached,
+                                &[&at.addr],
+                            ));
+                        }
+                        self.relay_backoff = (0, 0);
+                        self.relay = Some(std::sync::Arc::new(at.client));
+                    }
+                    Err(ServerAttachFail::PinMismatch) => {
+                        // ★ 신원이 바뀌면 시끄럽게(DR-28) — 모달 + 자동 재시도 정지.
+                        //   재개 = 사람이 핀 줄을 지우고 서버 설정을 다시 저장
+                        //   (server_settings_changed가 backoff를 푼다).
+                        self.relay_backoff = (0, u64::MAX);
+                        let pin = self.data_dir.join("server.pin");
+                        let body = nbeep_core::tf(
+                            nbeep_core::Msg::StfServerPinMismatch,
+                            &[
+                                self.settings.get("net.server.address"),
+                                &pin.display().to_string(),
+                            ],
+                        );
+                        self.open_alert(
+                            el,
+                            nbeep_core::t(nbeep_core::Msg::AlertServerPinTitle),
+                            &body,
+                            None,
+                        );
+                    }
+                    Err(fail) => {
+                        let stage = self.relay_backoff.0;
+                        let delay = server_retry_delay(stage);
+                        self.relay_backoff = (stage.saturating_add(1), self.now_ms() + delay);
+                        let why = match fail {
+                            ServerAttachFail::Resolve => {
+                                nbeep_core::t(nbeep_core::Msg::StServerResolveFail).to_string()
+                            }
+                            ServerAttachFail::Other(w) => w,
+                            ServerAttachFail::PinMismatch => String::new(), // 위 갈래가 소진
+                        };
+                        self.set_status(nbeep_core::tf(
+                            nbeep_core::Msg::StfServerRetry,
+                            &[&why, &(delay / 1000).to_string()],
+                        ));
+                    }
+                }
+                if let Some(mid) = self.main_id {
+                    self.request_redraw(mid);
+                }
+            }
             AppEvent::SGroup { peer, msg } => {
                 self.handle_sgroup(peer, msg, el);
             }
@@ -13679,7 +13877,8 @@ impl ApplicationHandler<AppEvent> for App {
             return;
         }
         self.poll_discovery();
-        // 설정 영속 tick(FR-P-9) — 조용 1s OR 상한 10s 충족 시 스냅샷 1회 저장.
+        self.server_tick(); // Managed 서버 접속 수렴(X-2b — 2s 페이스 내부 가드)
+                            // 설정 영속 tick(FR-P-9) — 조용 1s OR 상한 10s 충족 시 스냅샷 1회 저장.
         if self.conf.sched.tick(Instant::now()) {
             self.conf_save(false);
         }
@@ -15180,6 +15379,11 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         seq: nbeep_core::Sequencer::new(),
         transport,
         connecting: ConnectLatch::default(),
+        relay: None,
+        relay_connecting: false,
+        relay_backoff: (0, 0),
+        relay_gen: 0,
+        relay_check_at: 0,
         discovery,
         table: nbeep_core::PeerTable::new(60_000),
         trust,
@@ -15708,6 +15912,44 @@ mod tests {
         assert_eq!(reconnect_delay(2), Some(60_000));
         assert_eq!(reconnect_delay(3), Some(300_000));
         assert_eq!(reconnect_delay(4), None, "상한 도달 = 중단(수동 재개만)");
+    }
+
+    /// X-2b — Managed 서버 목표 유도(설정 SSOT · 값 편집은 설정 화면이 이미 관용).
+    #[test]
+    fn server_target_from_settings() {
+        use super::server_target;
+        assert_eq!(server_target("unmanaged", "1.2.3.4", "47300"), None);
+        assert_eq!(
+            server_target("managed", "  ", "47300"),
+            None,
+            "주소 없음 = 미접속"
+        );
+        assert_eq!(
+            server_target("managed", " relay.example ", "47301"),
+            Some("relay.example:47301".into())
+        );
+        assert_eq!(
+            server_target("managed", "relay.example", ""),
+            Some("relay.example".into()),
+            "포트 생략 = 해석 단계 기본 포트(47300)"
+        );
+        assert_eq!(
+            server_target("managed", "10.0.0.5:47300", "47999"),
+            Some("10.0.0.5:47300".into()),
+            "주소에 명시한 포트가 설정 포트를 이긴다"
+        );
+    }
+
+    /// X-2b — 서버 백오프는 300s 상한 **반복**(상대 재연결 ⓑ와 달리 중단 없음:
+    /// 서버는 명시 등록한 인프라라 돌아오면 다시 붙어 있어야 한다).
+    #[test]
+    fn server_retry_ladder_caps_and_repeats() {
+        use super::server_retry_delay;
+        assert_eq!(server_retry_delay(0), 5_000);
+        assert_eq!(server_retry_delay(1), 15_000);
+        assert_eq!(server_retry_delay(2), 60_000);
+        assert_eq!(server_retry_delay(3), 300_000);
+        assert_eq!(server_retry_delay(200), 300_000, "상한 반복 — 중단 없음");
     }
 
     /// M2-5b — 대화 기록 왕복(텍스트·방향·시각 보존 · Xfer 줄은 제외).
