@@ -2318,6 +2318,9 @@ struct App {
     netmon_last_sec: u64,
     /// 마지막 공지(브로드캐스트) 발신 시각(ms) — 3초 1회 제한(08-21 사용자 확정).
     last_broadcast_ms: u64,
+    /// 대화별 데이터 키 테이블(크립토 셰레딩 · D-18 §7 · 08-22) — 기록 봉인 키의
+    /// 단일 원천. 삭제 = 키 폐기([`crate::keytable::KeyTable::destroy`]).
+    datakeys: crate::keytable::KeyTable,
     /// 이 시각 전까지 메인 목록의 Enter 활성화를 무시(08-21 — 모달 Enter 제출
     /// 잔향이 캐럿 행 대화를 열던 것 · `ENTER_GUARD_MS`).
     enter_guard_until_ms: u64,
@@ -3683,6 +3686,7 @@ impl App {
 
     /// 대기열 맨 앞 제안으로 승인 화면 내용을 만든다(없으면 `None`).
     fn front_offer_info(&self, peer: PeerId) -> Option<nbeep_ui::OfferInfo> {
+        let secret = self.identity.wrap_secret();
         let q = self.pending_offers.get(&peer)?;
         let (_, name, size, sha) = q.front()?;
         let sender = self
@@ -3714,7 +3718,6 @@ impl App {
             String::new()
         };
         // 이어받기 후보(M4-10c) — 보존율을 승인 창 2택으로 보여 준다.
-        let secret = self.identity.wrap_secret();
         let resume_pct = crate::part::partial_len(crate::gate::CH_GUI, &secret, sha, *size)
             .map(|got| u8::try_from(got * 100 / (*size).max(1)).unwrap_or(99));
         // ★ 요청 단위 승인(M4-2e · 08-20 사용자 확정 재요청) — 창의 파일명·크기를
@@ -5275,8 +5278,8 @@ impl App {
     fn spawn_quarantine_scan(&mut self) {
         self.qscan_gen = self.qscan_gen.wrapping_add(1);
         let gen = self.qscan_gen;
-        let secret = self.identity.wrap_secret();
         let proxy = self.proxy.clone();
+        let secret = self.identity.wrap_secret();
         std::thread::spawn(move || {
             use nbeep_safe::{Beepq, QuarantineDir};
             let rows = (|| -> Vec<QRowRaw> {
@@ -5370,7 +5373,6 @@ impl App {
     /// **작은 파일 먼저**(1 워커 순차 — 스레드 폭주 없이 512MB가 소형을 막지 않게).
     /// 손상·미완(태그 실패)은 `ok=false` → 승인 차단 유지(fail-closed).
     fn spawn_quarantine_verify(&mut self, gen: u64) {
-        let secret = self.identity.wrap_secret();
         let proxy = self.proxy.clone();
         let mut items: Vec<(u64, String)> = self
             .qrows_raw
@@ -5378,6 +5380,7 @@ impl App {
             .map(|r| (r.size, r.path.clone()))
             .collect();
         items.sort_by_key(|(s, _)| *s); // 작은 것부터 = 즉시 활성
+        let secret = self.identity.wrap_secret();
         std::thread::spawn(move || {
             for (_, path) in items {
                 let ok = crate::gate::read_beepq_bytes(std::path::Path::new(&path), &secret)
@@ -5498,7 +5501,6 @@ impl App {
             return Vec::new();
         };
         let recs = self.trust.export();
-        let secret = self.identity.wrap_secret();
         let mut rows: Vec<(u64, nbeep_ui::CRow)> = Vec::new();
         for e in rd.flatten() {
             let path = e.path();
@@ -5572,9 +5574,7 @@ impl App {
             } else {
                 decoded = std::fs::read(&path)
                     .ok()
-                    .and_then(|raw| {
-                        nbeep_store::sealed::open(crate::gate::SEAL_HISTORY, &secret, &raw)
-                    })
+                    .and_then(|raw| self.history_open_bytes(&stem, &raw))
                     .map(|b| decode_history(&b));
                 decoded.as_deref()
             };
@@ -5638,6 +5638,10 @@ impl App {
     fn convbox_delete_one(&mut self, key: &str) {
         let path = self.data_dir.join("history").join(format!("{key}.seg"));
         let _ = std::fs::remove_file(&path);
+        // ★ 셰레딩(D-18 §7 · 08-22) — 파일 삭제 + **키 폐기**: 디스크 잔존
+        //   바이트가 있어도(웨어 레벨링·백업 사본) 복호 불가가 된다.
+        //   (백업해 둔 기록은 백업의 keys.seg가 키를 지녀 복원 시 되살아난다.)
+        self.datakeys.destroy(key);
         let mut inv = Invalidations::default();
         if let Some(gshort) = key.strip_prefix("g-") {
             if let Some(gid) = self
@@ -5760,6 +5764,9 @@ impl App {
         if n == 0 {
             return nbeep_core::t(nbeep_core::Msg::StCvNone).to_string();
         }
+        // ★ 키 동반(셰레딩 의미론 · 08-22) — 데이터 키 테이블을 백업에 포함해야
+        //   복원이 세그를 열 수 있다(없으면 08-22 이후 세그는 복원 불가).
+        let _ = std::fs::copy(self.data_dir.join("keys.seg"), dst.join("keys.seg"));
         let m = nbeep_core::tf(
             nbeep_core::Msg::StfCvBackupDone,
             &[&n.to_string(), &dst.display().to_string()],
@@ -5804,6 +5811,15 @@ impl App {
                 }
             }
         }
+        // ★ 백업 키 병합(셰레딩 짝 · 08-22) — 복원 원천 폴더의 keys.seg를 합쳐야
+        //   그 키로 봉인된 세그가 열린다(같은 stem = 백업 키가 이긴다 · 복원 우선).
+        {
+            let mut dirs: Vec<&std::path::Path> = files.iter().filter_map(|p| p.parent()).collect();
+            dirs.dedup();
+            for d in dirs {
+                let _ = self.datakeys.merge_from(&d.join("keys.seg"));
+            }
+        }
         self.apply_restored_history(&restored);
         let m = nbeep_core::tf(nbeep_core::Msg::StfCvRestoreDone, &[&n.to_string()]);
         let mut inv = Invalidations::default();
@@ -5818,14 +5834,13 @@ impl App {
     /// 메모리에도 · 안 그러면 활성 대화의 다음 record_history가 복원본을 되덮는다).
     fn apply_restored_history(&mut self, stems: &[String]) {
         let dir = self.data_dir.join("history");
-        let secret = self.identity.wrap_secret();
         let recs = self.trust.export();
         let mut inv = Invalidations::default();
         for stem in stems {
             let path = dir.join(format!("{stem}.seg"));
             let Some(lines) = std::fs::read(&path)
                 .ok()
-                .and_then(|raw| nbeep_store::sealed::open(crate::gate::SEAL_HISTORY, &secret, &raw))
+                .and_then(|raw| self.history_open_bytes(stem, &raw))
                 .map(|b| decode_history(&b))
             else {
                 continue; // 다른 신원 봉인 — fail-closed(파일은 반입돼 있음)
@@ -7753,24 +7768,36 @@ impl App {
         });
     }
 
-    /// 대화 기록 봉인 저장(M2-5b) — sealed(history-v1 · A 단일 키) → 원자적
-    /// `data/history/{short}.seg`. 빈 스레드 = 파일 삭제. 봉인 실패 = 저장 포기.
+    /// 기록 세그먼트 개봉(&self — 셰레딩 · 08-22): **데이터 키 우선**, 실패 시
+    /// 레거시(신원 키 파생 — 08-22 이전 세그). 마이그레이션은 쓰기 경로가 자연히
+    /// 한다(record가 항상 데이터 키로 재봉인 — 메시지 하나만 오가면 승격).
+    fn history_open_bytes(&self, stem: &str, raw: &[u8]) -> Option<Vec<u8>> {
+        if let Some(k) = self.datakeys.get(stem) {
+            if let Some(p) = nbeep_store::sealed::open(crate::gate::SEAL_HISTORY, &k, raw) {
+                return Some(p);
+            }
+        }
+        nbeep_store::sealed::open(crate::gate::SEAL_HISTORY, &self.identity.wrap_secret(), raw)
+    }
+
+    /// 대화 기록 봉인 저장(M2-5b) — sealed(history-v1 · **대화별 데이터 키** —
+    /// 셰레딩 D-18 §7 08-22) → 원자적 `data/history/{short}.seg`.
+    /// 빈 스레드 = 파일 삭제 **+ 키 폐기**(지우기 = 셰레딩). 봉인 실패 = 저장 포기.
     fn record_history(&mut self, peer: PeerId) {
         let Some(conv) = self.conversations.get(&peer) else {
             return;
         };
         let dir = self.data_dir.join("history");
-        let path = dir.join(format!("{}.seg", peer.short()));
+        let stem = peer.short();
+        let path = dir.join(format!("{stem}.seg"));
         let plain = encode_history(&conv.lines);
         if plain.is_empty() {
             let _ = std::fs::remove_file(&path);
+            self.datakeys.destroy(&stem);
             return;
         }
-        let Ok(env) = nbeep_store::sealed::seal(
-            crate::gate::SEAL_HISTORY,
-            &self.identity.wrap_secret(),
-            &plain,
-        ) else {
+        let key = self.datakeys.get_or_create(&stem);
+        let Ok(env) = nbeep_store::sealed::seal(crate::gate::SEAL_HISTORY, &key, &plain) else {
             self.set_status(nbeep_core::t(nbeep_core::Msg::StHistorySealFail));
             return;
         };
@@ -7814,12 +7841,12 @@ impl App {
     /// 부팅 시 대기 큐 복원(M4-6) — restore_history와 같은 지문 매핑(핀 상대만).
     /// 복원분은 대기 풍선으로도 살아난다(`parked_lines`에 queued 줄 append).
     fn restore_pending(&mut self) {
+        let secret = self.identity.wrap_secret();
         let dir = self.data_dir.join("pending");
         let Ok(rd) = std::fs::read_dir(&dir) else {
             return;
         };
         let recs = self.trust.export();
-        let secret = self.identity.wrap_secret();
         for ent in rd.flatten() {
             let path = ent.path();
             if path.extension().and_then(|x| x.to_str()) != Some("seg") {
@@ -7942,7 +7969,8 @@ impl App {
             return; // 로컬(동보) 그룹 — 공유 방만 영속(스레드도 공유 방에만 있다)
         };
         let dir = self.data_dir.join("history");
-        let path = dir.join(format!("g-{}.seg", uid.short()));
+        let stem = format!("g-{}", uid.short());
+        let path = dir.join(format!("{stem}.seg"));
         let plain = self
             .group_threads
             .get(&gid)
@@ -7950,13 +7978,11 @@ impl App {
             .unwrap_or_default();
         if plain.is_empty() {
             let _ = std::fs::remove_file(&path);
+            self.datakeys.destroy(&stem); // 지우기 = 셰레딩(1:1과 동일 규약)
             return;
         }
-        let Ok(env) = nbeep_store::sealed::seal(
-            crate::gate::SEAL_HISTORY,
-            &self.identity.wrap_secret(),
-            &plain,
-        ) else {
+        let key = self.datakeys.get_or_create(&stem);
+        let Ok(env) = nbeep_store::sealed::seal(crate::gate::SEAL_HISTORY, &key, &plain) else {
             self.set_status(nbeep_core::t(nbeep_core::Msg::StHistorySealFail));
             return;
         };
@@ -7973,7 +7999,6 @@ impl App {
     /// 정리**한다(탈퇴·해산 뒤 남은 파일 — 방이 없으면 열 수도 없다).
     fn restore_group_history(&mut self) {
         let dir = self.data_dir.join("history");
-        let secret = self.identity.wrap_secret();
         // uid.short() → local_id 매핑(공유 그룹 전수 — Invited도 복원해 두면 수락
         // 직후 바로 보인다).
         let by_short: HashMap<String, nbeep_core::group::GroupId> = self
@@ -8000,9 +8025,10 @@ impl App {
                 let _ = std::fs::remove_file(&path); // 고아(탈퇴·해산 잔재) 정리
                 continue;
             };
-            let Some(bytes) = std::fs::read(&path).ok().and_then(|raw| {
-                nbeep_store::sealed::open(crate::gate::SEAL_HISTORY, &secret, &raw)
-            }) else {
+            let Some(bytes) = std::fs::read(&path)
+                .ok()
+                .and_then(|raw| self.history_open_bytes(stem, &raw))
+            else {
                 continue; // 개봉 실패(다른 신원 봉인) — fail-closed(보존·미표시)
             };
             let lines = decode_history(&bytes);
@@ -8020,7 +8046,6 @@ impl App {
             return;
         };
         let recs = self.trust.export();
-        let secret = self.identity.wrap_secret();
         for e in rd.flatten() {
             let path = e.path();
             if path.extension().and_then(|x| x.to_str()) != Some("seg") {
@@ -8036,9 +8061,10 @@ impl App {
             else {
                 continue; // 핀 없는/차단된 기록 — 매핑 불가 or 제외
             };
-            let Some(bytes) = std::fs::read(&path).ok().and_then(|raw| {
-                nbeep_store::sealed::open(crate::gate::SEAL_HISTORY, &secret, &raw)
-            }) else {
+            let Some(bytes) = std::fs::read(&path)
+                .ok()
+                .and_then(|raw| self.history_open_bytes(short, &raw))
+            else {
                 continue;
             };
             let mut lines = decode_history(&bytes);
@@ -15043,6 +15069,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         netmon_last_sec: 0,
         last_broadcast_ms: 0,
         enter_guard_until_ms: 0,
+        datakeys: crate::keytable::KeyTable::empty(),
         actor_joins: Vec::new(),
         wire_gen: 0,
         wire_pending: false,
@@ -15077,6 +15104,9 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
     app.apply_boot_settings(); // 영속 설정 → 파생 런타임 상태(테마·정책 등 · M3-15)
     app.promote_local_groups(); // 구버전 로컬(동보) 그룹 → 그룹 대화(G4 마이그레이션)
     app.load_pii_sidecar(); // 연락처(PII) 봉인 사이드카 — cfg 구본보다 우선(08-17)
+                            // 데이터 키 테이블(셰레딩 · D-18 §7) — 기록 복원보다 먼저(개봉 키의 원천).
+    app.datakeys =
+        crate::keytable::KeyTable::load(app.data_dir.join("keys.seg"), app.identity.wrap_secret());
     app.restore_history(); // 대화 기록 복원(M2-5b · parked_lines에 · 대화창 열면 뜬다)
     app.restore_pending(); // 1:1 오프라인 대기 복원(M4-6 — 대기 풍선+자동 전달 후보)
     app.restore_group_history(); // 그룹 기록 복원(08-19 · g-{uid}.seg → group_threads)

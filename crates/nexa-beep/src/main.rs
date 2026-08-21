@@ -32,6 +32,7 @@ mod cli;
 mod gate;
 mod ime_gate;
 mod imgdec;
+mod keytable;
 mod part;
 mod statuslog;
 
