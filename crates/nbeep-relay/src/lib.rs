@@ -69,6 +69,29 @@ pub fn current_epoch_day() -> u64 {
         .map_or(0, |d| d.as_secs() / 86_400)
 }
 
+/// 64자리 hex 지문 → `PeerId`(= X25519 공개키 32B). RID 유도·랑데부 대상 지정에 쓴다
+/// (짧은 지문 8자리로는 키를 복원할 수 없어 **전체 hex**가 교환 단위다).
+#[must_use]
+pub fn parse_peer_hex(s: &str) -> Option<PeerId> {
+    let s = s.trim();
+    if s.len() != 64 || !s.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    let mut out = [0u8; 32];
+    for (i, chunk) in s.as_bytes().chunks(2).enumerate() {
+        let hi = (chunk[0] as char).to_digit(16)?;
+        let lo = (chunk[1] as char).to_digit(16)?;
+        out[i] = ((hi << 4) | lo) as u8;
+    }
+    Some(PeerId::from_bytes(out))
+}
+
+/// `PeerId` → 64자리 hex(교환·표시용 — [`parse_peer_hex`]의 역).
+#[must_use]
+pub fn peer_hex(p: &PeerId) -> String {
+    p.as_bytes().iter().map(|b| format!("{b:02x}")).collect()
+}
+
 /// 시계 오차 흡수 등록 세트 — 어제·오늘·내일. 상대가 어느 쪽 "오늘"이어도 겹친다.
 #[must_use]
 pub fn rids_around(peer: &PeerId) -> [Rid; 3] {
@@ -518,6 +541,15 @@ pub struct RelayIncoming {
     pub peer_udp: Option<SocketAddr>,
 }
 
+impl RelayIncoming {
+    /// 채널 수락 — **이때부터** 서버가 중계한다(지연 수락). 홀펀칭을 쓰려면 수락
+    /// **전에** UDP 프로브를 마쳐야 상대의 OpenResult에 내 관측 엔드포인트가 실린다
+    /// ([`accept_via`]가 이 순서를 지킨다). 수락 없이 drop = 서버가 열기 거절로 정리.
+    pub fn accept(&self) {
+        let _ = self.link.cmd_tx.send(Cmd::AcceptCh { ch: self.link.ch });
+    }
+}
+
 type OpenResp = SyncSender<Result<(RelayLink, Option<SocketAddr>), u8>>;
 
 enum Cmd {
@@ -530,6 +562,11 @@ enum Cmd {
         frame: Vec<u8>,
     },
     CloseCh {
+        ch: u32,
+    },
+    /// 인바운드 채널 수락 통지 — [`RelayIncoming::accept`]가 보낸다(지연 수락:
+    /// 수락 **전에** UDP 프로브를 마쳐야 서버가 내 관측 엔드포인트를 OpenResult에 싣는다).
+    AcceptCh {
         ch: u32,
     },
     /// 클라이언트 종료 — 액터가 세션을 내려놓는다(서버가 TCP 종료로 정리).
@@ -546,7 +583,8 @@ enum ChEvent {
 #[derive(Debug)]
 pub struct RelayClient {
     cmd_tx: Sender<Cmd>,
-    incoming_rx: Receiver<RelayIncoming>,
+    /// 인바운드 큐 — Mutex는 스레드 공유용(Receiver가 !Sync · 수락 스레드가 Arc로 든다).
+    incoming_rx: std::sync::Mutex<Receiver<RelayIncoming>>,
     server_peer: PeerId,
     server_addr: SocketAddr,
     reg: RegisterInfo,
@@ -619,7 +657,7 @@ impl RelayClient {
             .map_err(RelayError::Io)?;
         Ok(Self {
             cmd_tx,
-            incoming_rx,
+            incoming_rx: std::sync::Mutex::new(incoming_rx),
             server_peer,
             server_addr: server,
             reg,
@@ -664,17 +702,13 @@ impl RelayClient {
         }
     }
 
-    /// 인바운드 채널 수신단 — 상대가 나를 열면 여기로 온다(릴레이 층은 자동 수락 —
-    /// 진짜 게이트는 그 위의 종단 Noise + 앱 신뢰 정책이다).
-    #[must_use]
-    pub fn incoming(&self) -> &Receiver<RelayIncoming> {
-        &self.incoming_rx
-    }
-
-    /// 인바운드 하나를 꺼내며 서버 IP를 배선(경로 등급 판정용).
+    /// 인바운드 하나를 꺼낸다(서버 IP 배선 포함 — 경로 등급 판정용). 상대가 서버
+    /// 랑데부로 나를 열면 여기로 온다. **지연 수락** — 소비자가 [`RelayIncoming::accept`]
+    /// (또는 [`accept_via`])를 불러야 서버가 중계를 시작한다.
     #[must_use]
     pub fn accept_incoming(&self, timeout: Duration) -> Option<RelayIncoming> {
-        match self.incoming_rx.recv_timeout(timeout) {
+        let rx = self.incoming_rx.lock().ok()?;
+        match rx.recv_timeout(timeout) {
             Ok(mut inc) => {
                 inc.link.set_server_ip(self.server_addr.ip());
                 Some(inc)
@@ -744,6 +778,12 @@ fn actor(
                     chans.remove(&ch);
                     let _ = session.send(&C2s::CloseCh { ch }.encode());
                 }
+                Cmd::AcceptCh { ch } => {
+                    if session.send(&C2s::Accept { ch }.encode()).is_err() {
+                        dead = true;
+                        break;
+                    }
+                }
                 Cmd::Shutdown => {
                     dead = true;
                     break;
@@ -772,11 +812,12 @@ fn actor(
                     }
                 }
                 Some(S2c::Incoming { ch, src, peer_udp }) => {
+                    // ★ 여기서 Accept를 **보내지 않는다**(지연 수락) — 소비자가
+                    // [`RelayIncoming::accept`]를 불러야 서버가 중계를 시작한다.
+                    // 수락 전에 UDP 프로브를 마치면 서버의 OpenResult가 내 신선한
+                    // 관측 엔드포인트를 상대에게 싣는다(홀펀칭 재료의 순서 보장).
                     let (tx, rx) = std::sync::mpsc::channel();
                     chans.insert(ch, tx);
-                    if session.send(&C2s::Accept { ch }.encode()).is_err() {
-                        break;
-                    }
                     let link = RelayLink::new(ch, cmd_tx.clone(), rx);
                     if incoming_tx
                         .send(RelayIncoming {
@@ -930,6 +971,410 @@ impl Link for RelayLink {
 impl Drop for RelayLink {
     fn drop(&mut self) {
         let _ = self.cmd_tx.send(Cmd::CloseCh { ch: self.ch });
+    }
+}
+
+// ── 경로 사다리(X-UDP-e — 원격 구간) ────────────────────────────
+//
+// S-1 사다리의 원격 구간: **홀펀칭 UDP 직결 → 실패 시 릴레이 폴백**. LAN 직접은
+// 발견(LocalDirect)이 담당하고, 여기는 "서버 랑데부로 닿는 상대"만 다룬다.
+// 각 단이 독립 핸드셰이크라 한 단의 불발이 다음 단을 오염시키지 않는다(fail-open
+// to next rung · 데이터는 언제나 종단 암호문 = fail-closed on data).
+
+/// 펀치 동시 열기 창 — 양쪽이 랑데부 직후 시작하므로 왕복 몇 번이면 충분하다.
+const PUNCH_WINDOW: Duration = Duration::from_secs(3);
+/// 종단 핸드셰이크 대기(UDP 단 — 실패 시 릴레이로 내려간다).
+const HS_TIMEOUT_UDP: Duration = Duration::from_secs(5);
+/// 종단 핸드셰이크 대기(릴레이 단 — 마지막 단이라 넉넉히).
+const HS_TIMEOUT_RELAY: Duration = Duration::from_secs(10);
+
+/// 사다리의 어느 단으로 성립했나(표시·계측용 — 정책은 [`nbeep_core::PathClass`]가 담당).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PathTaken {
+    /// 홀펀칭 UDP 직결(서버는 경로에서 빠졌다).
+    Udp,
+    /// 릴레이 폴백(서버가 종단 암호문을 나른다).
+    Relay,
+}
+
+/// [`connect_via`]/[`accept_via`] 결과 — 인증된 종단 세션 + 경로 정보.
+pub struct ViaSession {
+    /// 성립한 종단 Noise 세션(상대 키 인증됨).
+    pub session: NoiseSession<Box<dyn Link>>,
+    /// 탄 사다리 단.
+    pub taken: PathTaken,
+    /// 경로 등급 재료(성립 소켓 실주소 판정 — ADR-0006 §5-1-5).
+    pub path: nbeep_core::PathClass,
+}
+
+impl core::fmt::Debug for ViaSession {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ViaSession")
+            .field("taken", &self.taken)
+            .field("path", &self.path)
+            .finish_non_exhaustive()
+    }
+}
+
+/// 사다리 성립 실패.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ViaError {
+    /// 어느 에폭 RID로도 대상 없음(상대가 그 서버에 없다).
+    NotFound,
+    /// 서버 상한·거절.
+    Limit,
+    /// 서버 세션 죽음·시간 초과.
+    Dead,
+    /// 종단 핸드셰이크 실패(모든 단에서).
+    Handshake,
+    /// 인증된 상대가 기대한 키와 다르다 — **연결을 쓰지 않는다**(fail-closed).
+    WrongPeer,
+}
+
+/// 신선한 펀치 소켓 — 바인드 + 서버 관측 프로브(NAT 매핑 개방 + 서버가 내 공인
+/// 엔드포인트를 기록). **시도마다 새로 만든다** — 관측은 (로컬 포트, 목적지) 매핑에
+/// 붙으므로 오래된 소켓의 관측은 신뢰할 수 없고, 소켓 공유는 recv 경합을 만든다.
+fn fresh_probed_sock(client: &RelayClient) -> std::io::Result<UdpSocket> {
+    let server = client.server_addr();
+    let bind: SocketAddr = if server.is_ipv4() {
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0)
+    } else {
+        SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0)
+    };
+    let sock = UdpSocket::bind(bind)?;
+    let server_udp = SocketAddr::new(server.ip(), client.register_info().udp_port);
+    probe_udp(
+        &sock,
+        server_udp,
+        client.register_info().udp_token,
+        Duration::from_secs(2),
+    )?;
+    Ok(sock)
+}
+
+/// 먼저 뽑아 둔 프레임 하나를 되돌려주는 링크 래퍼 — 수락 측이 "어느 링크로 첫
+/// 프레임이 오나"를 보고 단을 고른 뒤, 그 프레임을 핸드셰이크에 되살린다.
+#[derive(Debug)]
+struct PrefixedLink<L: Link> {
+    first: Option<Vec<u8>>,
+    inner: L,
+}
+
+impl<L: Link> Link for PrefixedLink<L> {
+    fn peer(&self) -> PeerId {
+        self.inner.peer()
+    }
+    fn send(&mut self, frame: &[u8]) -> Result<(), LinkError> {
+        self.inner.send(frame)
+    }
+    fn recv(&mut self) -> Result<Vec<u8>, LinkError> {
+        if let Some(f) = self.first.take() {
+            return Ok(f);
+        }
+        self.inner.recv()
+    }
+    fn set_recv_timeout(&mut self, dur: Option<Duration>) -> Result<(), LinkError> {
+        self.inner.set_recv_timeout(dur)
+    }
+    fn remote_ip(&self) -> Option<IpAddr> {
+        self.inner.remote_ip()
+    }
+}
+
+fn class_of_link(link: &dyn Link, fallback: nbeep_core::PathClass) -> nbeep_core::PathClass {
+    link.remote_ip().map_or(fallback, nbeep_core::class_of_ip)
+}
+
+/// **여는 쪽 사다리** — `dst`(상대 공개키)로 서버 랑데부 → 홀펀칭 시도 → 릴레이 폴백.
+/// 에폭 RID는 오늘→어제→내일 순으로 시도한다(시계 오차 흡수).
+///
+/// 성립한 세션의 `peer()`가 `dst`와 다르면 [`ViaError::WrongPeer`] — RID는 힌트일 뿐,
+/// **근거는 언제나 암호학적 증거**(핸드셰이크가 확정한 키)다.
+///
+/// # Errors
+/// 대상 없음·상한·서버 죽음·핸드셰이크 실패·상대 불일치 시 [`ViaError`].
+pub fn connect_via(
+    client: &RelayClient,
+    id: &Identity,
+    dst: &PeerId,
+    punch: bool,
+    open_timeout: Duration,
+) -> Result<ViaSession, ViaError> {
+    let day = current_epoch_day();
+    let rids = [
+        rid_for(dst, day),
+        rid_for(dst, day.saturating_sub(1)),
+        rid_for(dst, day + 1),
+    ];
+    // 프로브가 Open보다 **먼저** — 서버가 내 관측 엔드포인트를 상대의 Incoming에 싣는다.
+    let sock = if punch {
+        fresh_probed_sock(client).ok() // 실패 = 펀치 없이 릴레이만(사다리 한 단 생략)
+    } else {
+        None
+    };
+    for rid in rids {
+        let (mut relay, peer_udp) = match client.open(rid, open_timeout) {
+            Ok(v) => v,
+            Err(1) => continue, // 이 에폭 RID는 미등록 — 다음 에폭
+            Err(2) => return Err(ViaError::Limit),
+            Err(_) => return Err(ViaError::Dead),
+        };
+        // 1단: 홀펀칭 UDP — 성립 + 종단 핸드셰이크까지 돼야 이 단을 탄 것이다.
+        if let (Some(s), Some(ep)) = (&sock, peer_udp) {
+            if let Ok(sc) = s.try_clone() {
+                if let Ok(mut udp) = nbeep_net::UdpLink::punch(sc, ep, PUNCH_WINDOW) {
+                    let _ = udp.set_recv_timeout(Some(HS_TIMEOUT_UDP));
+                    let path = class_of_link(&udp, nbeep_core::PathClass::Remote);
+                    let boxed: Box<dyn Link> = Box::new(udp);
+                    if let Ok(session) = NoiseSession::initiate(boxed, id) {
+                        return finish_via(session, PathTaken::Udp, path, dst);
+                    }
+                    // 상대가 UDP를 듣지 않았다(창 어긋남) — 릴레이 단으로 내려간다.
+                }
+            }
+        }
+        // 2단: 릴레이 폴백 — 서버 미상은 Remote 취급(fail-closed 방향).
+        let _ = relay.set_recv_timeout(Some(HS_TIMEOUT_RELAY));
+        let path = class_of_link(&relay, nbeep_core::PathClass::Remote);
+        let boxed: Box<dyn Link> = Box::new(relay);
+        return match NoiseSession::initiate(boxed, id) {
+            Ok(session) => finish_via(session, PathTaken::Relay, path, dst),
+            Err(_) => Err(ViaError::Handshake),
+        };
+    }
+    Err(ViaError::NotFound)
+}
+
+fn finish_via(
+    mut session: NoiseSession<Box<dyn Link>>,
+    taken: PathTaken,
+    path: nbeep_core::PathClass,
+    dst: &PeerId,
+) -> Result<ViaSession, ViaError> {
+    use nbeep_core::Session as _;
+    if session.peer() != *dst {
+        return Err(ViaError::WrongPeer); // RID 충돌·오지정 — 인증된 키가 근거다
+    }
+    session.set_recv_timeout(None); // 핸드셰이크용 타임아웃 원복(소비자가 다시 건다)
+    Ok(ViaSession {
+        session,
+        taken,
+        path,
+    })
+}
+
+/// **받는 쪽 사다리** — 인바운드 랑데부에 프로브→수락 순서를 지키고, 펀치를 병행하며
+/// **첫 프레임이 온 링크**로 종단 수락을 잇는다(여는 쪽이 어느 단을 골랐든 따라간다).
+///
+/// # Errors
+/// `deadline` 내 어느 링크로도 첫 프레임이 없거나 핸드셰이크 실패 시 [`ViaError`].
+pub fn accept_via(
+    client: &RelayClient,
+    inc: RelayIncoming,
+    id: &Identity,
+    punch: bool,
+    deadline: Duration,
+) -> Result<ViaSession, ViaError> {
+    let RelayIncoming {
+        mut link, peer_udp, ..
+    } = inc;
+    // 프로브(수락 **전**) → 수락 → 펀치 병행. 여는 쪽 펀치는 OpenResult(수락 후) 뒤에
+    // 시작하므로, 이 순서면 내 관측이 반드시 실려 간다.
+    let punch_rx = match (punch, peer_udp) {
+        (true, Some(ep)) => fresh_probed_sock(client).ok().map(|sock| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let _ = tx.send(nbeep_net::UdpLink::punch(sock, ep, PUNCH_WINDOW));
+            });
+            rx
+        }),
+        _ => None,
+    };
+    inc_accept(&link);
+    let _ = link.set_recv_timeout(Some(Duration::from_millis(100)));
+    let start = std::time::Instant::now();
+    let mut udp: Option<nbeep_net::UdpLink> = None;
+    let mut punch_pending = punch_rx.is_some();
+    let mut relay_alive = true;
+    loop {
+        if let Some(rx) = &punch_rx {
+            if punch_pending {
+                if let Ok(res) = rx.try_recv() {
+                    punch_pending = false;
+                    if let Ok(mut u) = res {
+                        let _ = u.set_recv_timeout(Some(Duration::from_millis(100)));
+                        udp = Some(u);
+                    }
+                }
+            }
+        }
+        // UDP 쪽 첫 프레임 — 여는 쪽이 UDP 단을 골랐다.
+        let mut udp_first: Option<Vec<u8>> = None;
+        if let Some(u) = udp.as_mut() {
+            match u.recv() {
+                Ok(f) => udp_first = Some(f),
+                Err(LinkError::TimedOut) => {}
+                Err(LinkError::Closed) => udp = None,
+            }
+        }
+        if let Some(first) = udp_first {
+            let u = udp.take().expect("프레임을 준 링크");
+            let path = class_of_link(&u, nbeep_core::PathClass::Remote);
+            return accept_on(
+                PrefixedLink {
+                    first: Some(first),
+                    inner: u,
+                },
+                id,
+                PathTaken::Udp,
+                path,
+            );
+        }
+        // 릴레이 쪽 첫 프레임 — 여는 쪽이 릴레이 단을 골랐다(또는 펀치 실패).
+        if relay_alive {
+            match link.recv() {
+                Ok(first) => {
+                    let path = class_of_link(&link, nbeep_core::PathClass::Remote);
+                    return accept_on(
+                        PrefixedLink {
+                            first: Some(first),
+                            inner: link,
+                        },
+                        id,
+                        PathTaken::Relay,
+                        path,
+                    );
+                }
+                Err(LinkError::TimedOut) => {}
+                Err(LinkError::Closed) => relay_alive = false,
+            }
+        }
+        if start.elapsed() >= deadline || (!relay_alive && udp.is_none() && !punch_pending) {
+            return Err(ViaError::Dead);
+        }
+    }
+}
+
+/// 수락 통지(내부 — [`RelayIncoming::accept`]와 동일 경로).
+fn inc_accept(link: &RelayLink) {
+    let _ = link.cmd_tx.send(Cmd::AcceptCh { ch: link.ch });
+}
+
+fn accept_on<L: Link + 'static>(
+    mut link: PrefixedLink<L>,
+    id: &Identity,
+    taken: PathTaken,
+    path: nbeep_core::PathClass,
+) -> Result<ViaSession, ViaError> {
+    use nbeep_core::Session as _;
+    let _ = link.set_recv_timeout(Some(HS_TIMEOUT_UDP));
+    let boxed: Box<dyn Link> = Box::new(link);
+    match NoiseSession::accept(boxed, id) {
+        Ok(mut session) => {
+            session.set_recv_timeout(None);
+            Ok(ViaSession {
+                session,
+                taken,
+                path,
+            })
+        }
+        Err(_) => Err(ViaError::Handshake),
+    }
+}
+
+// ── 서버 핀 파일 ────────────────────────────────────────────────
+
+/// 서버 TOFU 핀의 영속([docs/32 §2-4·§13-3]) — 주소별 서버 공개키를 기억한다.
+/// 형식 = 텍스트 한 줄 `v1 <주소> <64hex>` (읽기 쉬움 · 잘못된 줄은 없는 셈 친다 —
+/// 핀 부재는 "첫 접속"으로 흐를 뿐 조용한 수락이 아니다: 불일치는 언제나 시끄럽다).
+pub mod pinfile {
+    use super::PeerId;
+    use std::path::Path;
+
+    /// `addr`에 핀된 서버 키.
+    #[must_use]
+    pub fn lookup(path: &Path, addr: &str) -> Option<PeerId> {
+        let text = std::fs::read_to_string(path).ok()?;
+        for line in text.lines() {
+            let mut it = line.split_whitespace();
+            if it.next() != Some("v1") {
+                continue;
+            }
+            let (Some(a), Some(hex)) = (it.next(), it.next()) else {
+                continue;
+            };
+            if a == addr {
+                return super::parse_peer_hex(hex);
+            }
+        }
+        None
+    }
+
+    /// `addr`의 핀 저장(기존 항목 교체) — temp 쓰기 후 rename(원자적).
+    ///
+    /// # Errors
+    /// IO 실패 시 `io::Error`.
+    pub fn store(path: &Path, addr: &str, peer: &PeerId) -> std::io::Result<()> {
+        let mut lines: Vec<String> = std::fs::read_to_string(path)
+            .map(|t| {
+                t.lines()
+                    .filter(|l| {
+                        let mut it = l.split_whitespace();
+                        !(it.next() == Some("v1") && it.next() == Some(addr))
+                    })
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let hex = super::peer_hex(peer);
+        lines.push(format!("v1 {addr} {hex}"));
+        if let Some(dir) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+            std::fs::create_dir_all(dir)?;
+        }
+        let tmp = path.with_extension(format!("tmp.{}", std::process::id()));
+        std::fs::write(&tmp, lines.join("\n") + "\n")?;
+        if let Err(e) = std::fs::rename(&tmp, path) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(e);
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn store_lookup_replace_roundtrip() {
+            let dir = std::env::temp_dir().join(format!("nb-pin-{}", std::process::id()));
+            let _ = std::fs::create_dir_all(&dir);
+            let p = dir.join("server.pin");
+            let _ = std::fs::remove_file(&p);
+            let k1 = PeerId::from_bytes([1u8; 32]);
+            let k2 = PeerId::from_bytes([2u8; 32]);
+            assert_eq!(lookup(&p, "10.0.0.1:47300"), None, "핀 없음 = 첫 접속");
+            store(&p, "10.0.0.1:47300", &k1).unwrap();
+            store(&p, "relay.example:47300", &k2).unwrap();
+            assert_eq!(lookup(&p, "10.0.0.1:47300"), Some(k1));
+            assert_eq!(lookup(&p, "relay.example:47300"), Some(k2));
+            store(&p, "10.0.0.1:47300", &k2).unwrap(); // 교체(재핀은 사용자 결정 후)
+            assert_eq!(lookup(&p, "10.0.0.1:47300"), Some(k2));
+            let _ = std::fs::remove_file(&p);
+        }
+
+        #[test]
+        fn corrupt_lines_are_skipped() {
+            let dir = std::env::temp_dir().join(format!("nb-pin-c-{}", std::process::id()));
+            let _ = std::fs::create_dir_all(&dir);
+            let p = dir.join("server.pin");
+            std::fs::write(&p, "garbage\nv1 a.b:1 zz\nv1 x:1 ").unwrap();
+            assert_eq!(
+                lookup(&p, "a.b:1"),
+                None,
+                "손상 줄 = 핀 부재(불일치 조용 수락 아님)"
+            );
+            let _ = std::fs::remove_file(&p);
+        }
     }
 }
 

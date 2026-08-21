@@ -74,6 +74,7 @@ fn e2e_noise_through_relay() {
         rids_around(&peer_a).contains(&inc.src),
         "src RID = A의 회전 RID"
     );
+    inc.accept(); // 지연 수락 — 이때부터 서버가 중계한다
     let mut sess = NoiseSession::accept(inc.link, &idb).unwrap();
     assert_eq!(sess.peer(), peer_a, "인증된 상대 = A의 실제 키");
     let m1 = sess.recv().unwrap();
@@ -137,13 +138,57 @@ fn udp_observation_echoes_mapping() {
     server.shutdown();
 }
 
-/// X-UDP-c 배관 — 관측 엔드포인트 교환 → **동시 열기 펀치**(루프백) → 그 UDP 링크 위
-/// 종단 Noise. 실 NAT 통과는 실기 항목(E-3류 — 추정 금지·실측 필수).
+/// X-UDP-e 사다리 1단 — [`connect_via`]/[`accept_via`]가 프로브→랑데부→**동시 펀치**를
+/// 조율해 UDP 직결로 성립하고, 그 위에서 종단 Noise가 돈다(루프백).
+/// 실 NAT 통과는 실기 항목(E-3류 — 추정 금지·실측 필수).
 #[test]
-fn hole_punch_plumbing_on_loopback() {
+fn ladder_takes_udp_on_loopback() {
     let server = test_server(0);
     let addr = server.tcp_addr;
-    let server_udp = SocketAddr::new(addr.ip(), server.udp_port);
+
+    let ida = Identity::generate();
+    let idb = Identity::generate();
+    let peer_a = ida.peer_id();
+    let peer_b = idb.peer_id();
+
+    let ca = RelayClient::connect(addr, &ida, &rids_around(&peer_a), None).unwrap();
+    let cb = RelayClient::connect(addr, &idb, &rids_around(&peer_b), None).unwrap();
+
+    let a_side = std::thread::spawn(move || {
+        let mut via =
+            nbeep_relay::connect_via(&ca, &ida, &peer_b, true, Duration::from_secs(10)).unwrap();
+        assert_eq!(
+            via.taken,
+            nbeep_relay::PathTaken::Udp,
+            "루프백 펀치 = UDP 단"
+        );
+        assert_eq!(via.session.peer(), peer_b, "인증된 상대 = B의 실키");
+        via.session.send(b"punched!").unwrap();
+        assert_eq!(via.session.recv().unwrap(), b"ack");
+        ca
+    });
+
+    let inc = cb.accept_incoming(Duration::from_secs(10)).unwrap();
+    let mut via = nbeep_relay::accept_via(&cb, inc, &idb, true, Duration::from_secs(15)).unwrap();
+    assert_eq!(
+        via.taken,
+        nbeep_relay::PathTaken::Udp,
+        "첫 프레임이 UDP로 왔다"
+    );
+    assert_eq!(via.session.peer(), peer_a);
+    assert_eq!(via.session.recv().unwrap(), b"punched!");
+    via.session.send(b"ack").unwrap();
+
+    let _ca = a_side.join().unwrap();
+    server.shutdown();
+}
+
+/// X-UDP-e 사다리 2단 — 받는 쪽이 펀치를 안 하면(관측 없음 = peer_udp None) 여는 쪽은
+/// 조용히 **릴레이 단으로 내려간다**. 실패가 아니라 사다리의 정상 경로다.
+#[test]
+fn ladder_falls_back_to_relay() {
+    let server = test_server(0);
+    let addr = server.tcp_addr;
 
     let ida = Identity::generate();
     let idb = Identity::generate();
@@ -152,42 +197,25 @@ fn hole_punch_plumbing_on_loopback() {
     let ca = RelayClient::connect(addr, &ida, &rids_around(&ida.peer_id()), None).unwrap();
     let cb = RelayClient::connect(addr, &idb, &rids_around(&peer_b), None).unwrap();
 
-    // 양쪽 다 UDP 프로브로 매핑을 서버에 관측시킨다(펀치에 쓸 소켓 그대로).
-    let sock_a = UdpSocket::bind("127.0.0.1:0").unwrap();
-    let sock_b = UdpSocket::bind("127.0.0.1:0").unwrap();
-    probe_udp(
-        &sock_a,
-        server_udp,
-        ca.register_info().udp_token,
-        Duration::from_secs(5),
-    )
-    .unwrap();
-    probe_udp(
-        &sock_b,
-        server_udp,
-        cb.register_info().udp_token,
-        Duration::from_secs(5),
-    )
-    .unwrap();
-
-    let dst = rid_for(&peer_b, nbeep_relay::current_epoch_day());
     let a_side = std::thread::spawn(move || {
-        let (_relay_link, peer_udp) = ca.open(dst, Duration::from_secs(10)).unwrap();
-        let peer_udp = peer_udp.expect("B의 관측 UDP 엔드포인트");
-        // 서버가 알려 준 상대 관측 주소로 동시 열기 — 같은 소켓(관측된 포트)이어야 한다.
-        let link = nbeep_net::UdpLink::punch(sock_a, peer_udp, Duration::from_secs(5)).unwrap();
-        let mut sess = NoiseSession::initiate(link, &ida).unwrap();
-        sess.send(b"punched!").unwrap();
-        assert_eq!(sess.recv().unwrap(), b"ack");
+        let mut via =
+            nbeep_relay::connect_via(&ca, &ida, &peer_b, true, Duration::from_secs(10)).unwrap();
+        assert_eq!(
+            via.taken,
+            nbeep_relay::PathTaken::Relay,
+            "상대 관측 없음 = 펀치 생략 = 릴레이"
+        );
+        via.session.send(b"over relay rung").unwrap();
         ca
     });
 
     let inc = cb.accept_incoming(Duration::from_secs(10)).unwrap();
-    let peer_udp = inc.peer_udp.expect("A의 관측 UDP 엔드포인트");
-    let link = nbeep_net::UdpLink::punch(sock_b, peer_udp, Duration::from_secs(5)).unwrap();
-    let mut sess = NoiseSession::accept(link, &idb).unwrap();
-    assert_eq!(sess.recv().unwrap(), b"punched!");
-    sess.send(b"ack").unwrap();
+    assert!(inc.peer_udp.is_some(), "여는 쪽은 프로브했다(관측 있음)");
+    // 받는 쪽은 펀치 없이(punch=false) — 프로브를 안 하므로 여는 쪽 OpenResult엔
+    // 내 관측이 없고, 여는 쪽 사다리는 릴레이 단을 탄다.
+    let mut via = nbeep_relay::accept_via(&cb, inc, &idb, false, Duration::from_secs(15)).unwrap();
+    assert_eq!(via.taken, nbeep_relay::PathTaken::Relay);
+    assert_eq!(via.session.recv().unwrap(), b"over relay rung");
 
     let _ca = a_side.join().unwrap();
     server.shutdown();
@@ -209,6 +237,7 @@ fn peer_disconnect_closes_channel() {
         // B가 수락하도록 인바운드를 소비하는 스레드.
         let t = std::thread::spawn(move || {
             let inc = cb.accept_incoming(Duration::from_secs(10)).unwrap();
+            inc.accept(); // 지연 수락 — 여는 쪽 open()이 이걸 기다린다
             (cb, inc)
         });
         let opened = ca.open(dst, Duration::from_secs(10)).unwrap();

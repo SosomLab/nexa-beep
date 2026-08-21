@@ -606,6 +606,25 @@ fn conn_thread(stream: TcpStream, peer_addr: SocketAddr, shared: &Arc<Shared>, i
                 }
             }
             C2s::CloseCh { ch } => {
+                // 수락 전에 받는 쪽이 닫았다(지연 수락 drop) — 여는 쪽이 open 타임아웃까지
+                // 기다리지 않게 **열기 거절(2)** 로 즉시 알린다.
+                let refused = shared.chans.lock().ok().and_then(|c| {
+                    c.get(&ch).and_then(|chan| {
+                        (!chan.accepted && chan.b == conn_id).then_some((chan.a, chan.token))
+                    })
+                });
+                if let Some((opener, token)) = refused {
+                    let _ = enqueue(
+                        shared,
+                        opener,
+                        S2c::OpenResult {
+                            token,
+                            status: 2,
+                            ch: 0,
+                            peer_udp: None,
+                        },
+                    );
+                }
                 close_channel(shared, ch, Some(conn_id));
             }
             C2s::Ping => {
