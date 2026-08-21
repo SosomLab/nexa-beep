@@ -7,6 +7,7 @@
 
 ## 2026-08-21
 
+- **(Win) ★v0.2.1 공개 + netmon 계측 모드**(`33a0260`·`d363473`): 릴리스 = 자산 14종·**brew 자동 추종 ✓**(cask 0.2.1 — 기능 3종+CLI 축+WNET-1+안정성 2건 탑재) · ★**netmon**(사용자 요청 — 과도 송수신 관측): 카운터 상시(이음새 4곳 · 횟수·바이트만 = 봉투 원리)/기록 옵트인(`netmon.enabled` 기본 off · 주기 델타 1줄 `netmon-*.log` · 과다 = warn 태그+상태바 경고 · StatusLog prefix 재사용) · 설계 [06 §7-1]·절차 [26 §3-5]. 730 green.
 - **(Win) CI red → 잠복 결함 2건 종결 — ★T-flake 정체 규명**(`ea96094`·`35a6160`): ① `dir_writable` PID 프로브 공유 경합(Windows delete-pending 순간 false 오판 → `data_dir()` 폴백 튐 = CI part 테스트 사망 원인 · 시퀀스 접미 유일화) ② **클립보드 `OpenClipboard(NULL)` 거짓 성공 → EmptyClipboard가 상대 GlobalLock 중 HGLOBAL 해제 = use-after-free**(nbeep-plat 힙 오염 중도 사망 = T-flake "29개 모자람"의 정체 · 제품 실버그 — 메시지 전용 창 HWND+뮤텍스+GlobalSize 상한 · cargo 루프 4/20→0/70 실측). 726 green · 폴더 전송 C-2 제외 재확정(사용자 08-21).
 - **(Win) 클라이언트 공백 3종 연속 구현**(`221bde6`·`a0f4633`·`5fcab51` — 결정 4건 질문 후 무중단 순차): ★**오프라인 큐 M4-6**(세션 없는 발신 = 조용한 유실이었음 → 보관·영속(SEAL_PENDING)·성립 시 flush·대기 막대 마크·한계 명시) · ★**클립보드 이미지 3-OS**(Ctrl+V = PNG 파일 전송 — Win CF_DIB 파서+imgdec --encode-raw·mac AppleScript·Linux wl/xclip · 실물 왕복 비트 동일 실측) · ★**등급+공지**(배지 1회 적용+/notice·/urgent · 풍선 등급 링 · Urgent = 전면 알림 · 공지 = 발견 전체 Notice 팬아웃+미연결 큐 편입). 725 green · 실기 절차 = 26 §3-4.
 
