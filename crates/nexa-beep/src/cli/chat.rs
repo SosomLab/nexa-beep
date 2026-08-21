@@ -104,6 +104,10 @@ pub(crate) fn chat_interactive(role: ChatRole) {
         }
     };
 
+    // 경로 등급(M5-3b) — 핸드셰이크 전 실소켓 주소로 판정(GUI와 같은 규칙).
+    let path = link
+        .remote_ip()
+        .map_or(nbeep_core::PathClass::Local, nbeep_core::class_of_ip);
     // 핸드셰이크(서버=accept·클라=initiate) → 신원 확정.
     let session = match &role {
         ChatRole::Serve(_) => nbeep_crypto::NoiseSession::accept(link, &identity),
@@ -119,7 +123,7 @@ pub(crate) fn chat_interactive(role: ChatRole) {
             return;
         }
     };
-    run_interactive(session, identity.peer_id());
+    run_interactive(session, identity.peer_id(), path);
 }
 
 /// 상대를 기다리는 동안 **stdin도 함께 본다** — `/quit`·Ctrl+D로 나갈 수 있게.
@@ -256,6 +260,7 @@ fn wait_with_quit_or<T>(
 fn run_interactive<L: nbeep_core::Link + 'static>(
     mut session: nbeep_crypto::NoiseSession<L>,
     me: PeerId,
+    path: nbeep_core::PathClass,
 ) -> bool {
     use nbeep_core::mux::{MuxSession, StreamId};
     use nbeep_core::{
@@ -278,6 +283,12 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
 
     let peer = session.peer();
     println!("[대화 시작] 상대={} · 한 줄 = 전송", peer.short());
+    // 원격 경로 고지(M5-3b) — CLI는 SAS 대조 축이 없어 신뢰 상한이 Pinned:
+    // §5-1-3 곱에 따라 인터넷 경유면 파일이 양방향 차단된다(메시지는 허용).
+    let remote_files_blocked = !nbeep_core::file_allowed(path, nbeep_core::TrustLevel::Pinned);
+    if remote_files_blocked {
+        println!("[경로] 인터넷 경유 — 이 채널에서는 파일을 주고받을 수 없습니다(지문 대조 불가)");
+    }
     println!("{HELP_COMMANDS}");
     // 수신 스레드: 세션 소유·recv 폴·도착 출력(액터 — 한 세션 1스레드). 송신은 채널 교대.
     session.set_recv_timeout(Some(std::time::Duration::from_millis(100)));
@@ -661,6 +672,21 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
                 StreamId::File => match XferMsg::decode(&bytes) {
                     Ok(XferMsg::Offer { id, size, name, .. }) => {
                         let m = XferMsg::decode(&bytes).expect("방금 성공한 디코드");
+                        // ★ 원격 경로 게이트(M5-3b — GUI와 같은 곱 행렬 file_allowed):
+                        //   인터넷 경유면 판정 이전에 즉시 거절(fail-closed).
+                        if remote_files_blocked {
+                            let _ = mux.send(
+                                StreamId::File,
+                                &XferMsg::Reject {
+                                    id,
+                                    why: nbeep_core::RejectWhy::Unverified,
+                                    limit: 0,
+                                }
+                                .encode(),
+                            );
+                            println!("[파일] 수신 거부 — 인터넷 경유(지문 대조 불가 채널)");
+                            continue;
+                        }
                         // ★ 자격 판정 먼저 — 상호 확인 없는 상대는 무조건 거부(사용자 규칙).
                         let now = std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
@@ -916,6 +942,11 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
             return true;
         }
         if let Some(rest) = line.strip_prefix("/send ") {
+            // ★ 원격 경로 발신 게이트(M5-3b — 수신 거절의 대칭): 시도 0건 + 안내.
+            if remote_files_blocked {
+                println!("[파일] 발신 불가 — 인터넷 경유(지문 대조 불가 채널 · 메시지는 가능)");
+                return true;
+            }
             let rest = rest.trim();
             // 다중 파일(08-20 · 요청 단위) — **한 줄 전체가 실재 파일이면 1개**(공백
             // 경로 기존 규약 보존), 아니면 공백 구분 다중으로 해석한다.
@@ -1295,13 +1326,17 @@ pub(crate) fn chat_live(name: &str, port: u16) {
             return; // 사용자가 /quit·Ctrl+D — 이때만 끝난다
         };
         // 아웃바운드(명시적 /connect)만 **상호 채팅**으로 들어간다.
+        // 경로 등급(M5-3b) — 성립 소켓 실주소 판정(수동 IP = 원격일 수 있다).
+        let path = link
+            .remote_ip()
+            .map_or(nbeep_core::PathClass::Local, nbeep_core::class_of_ip);
         match nbeep_crypto::NoiseSession::initiate(link, &identity) {
             Ok(session) => {
                 // 주소 연결은 상대가 여기서 확정된다 — 수신 전용 채널이 있었다면
                 // 지금 내린다(번호 연결은 위에서 선처리 · 멱등).
                 let p = session.peer();
                 stop_passive(&passives, p);
-                run_interactive(session, identity.peer_id());
+                run_interactive(session, identity.peer_id(), path);
             }
             Err(e) => eprintln!("[실패] 핸드셰이크: {e} — 대기로 돌아갑니다"),
         }
