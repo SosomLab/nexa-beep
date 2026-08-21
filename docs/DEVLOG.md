@@ -5,6 +5,10 @@
 
 ---
 
+## 2026-08-22
+
+- **(Win) ★사다리+CLI Managed — 서버 축 2차**(`6597fd7`·`bbc665a` — 브랜치 계속): **X-UDP-e 원격 사다리 ✅**(`connect_via`/`accept_via` — 펀치→릴레이 자동 폴백·첫 프레임 링크 추종·**지연 수락**(프로브가 수락보다 먼저 = 관측 순서 보장)·WrongPeer fail-closed) · **X-2c P0~P2 ✅**(`--identity` 영속·`--chat-live --server`(핀 TOFU·불일치 = 중단)·`--chat-connect-via <64hex>`·`/connect <지문>` — run_interactive 무변경 합류) · ★**3프로세스 실물 스모크 = UDP 직결 성립 + 메시지·확인·프로필 전 스택 무변경**(서버 로그 = 봉투만) · 절차 = [26 §3-7]. **777 green**(+3) · 잔여 = X-2b GUI 배선·실 NAT 실기.
+
 ## 2026-08-21
 
 - **(Win) ★UDP+릴레이 서버 축 개통**(브랜치 `feat/udp-relay-server` 4커밋 — 검증 후 병합 대기): **X-UDP-a 확정 ⓐ 자작 ARQ** · **X-UDP-b UdpLink ✅**(sans-io ArqCore+셸 · 손실·재정렬·중복 결정적 회귀 10종) · **X-1 `nexa-beepd` MVP ✅**(별도 bin — 회전 RID 프레즌스·랑데부 관측·blind 릴레이(Accept 후만·토큰 버킷)·서버 핀 · 저장 0·외부 의존 0·0.35MB) · `nbeep-relay` 공유 크레이트(RelayClient/RelayLink — **종단 Noise 코드 무변경 관통 = DR-21**) · **루프백 홀펀칭 배관**(관측 교환→동시 punch→UdpLink 위 Noise) · 배포 2축 분리(`beepd-v*` 태그 · release-server.yml) · **Q-32-15·Q-32-13 확정 처리**(DR-9 개정 — 한 저장소+배포 분리). **774 green**(+24) · 잔여 = X-UDP-e 사다리·GUI/CLI Managed 배선·실 NAT 실기.

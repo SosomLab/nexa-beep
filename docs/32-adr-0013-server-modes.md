@@ -1202,7 +1202,13 @@ Content·Registered는 MVP 밖(각각 오프라인 저장·명부/인증이 큰 
 
 ---
 
-## 13. CLI(터미널 단말)의 Managed 접속 설계 (08-20 · 구현 = 서버 X-1 이후)
+## 13. CLI(터미널 단말)의 Managed 접속 설계 (08-20 · ★P0~P2 구현 08-22)
+
+> ★ **구현됨(08-22 · X-2c)** — P0(`--identity` 영속) · P1(`--chat-live --server` 핀+
+> 프레즌스 · `--chat-connect-via`) · P2(사다리에 UDP 펀치 — `nbeep_relay::connect_via`).
+> §13-2의 `--chat-connect-via` 인자는 **지문 64hex**로 확정(RID는 유도값이라 지문이
+> 교환 단위). 잔여 = P3 `--enroll`(모드 ③) · `net.server.*` 설정 연동(X-2b와 함께).
+> 실기 절차 = [26 §3-7](26-run-and-manual-test.md).
 
 > **요청(사용자 08-20)** — 검증 도구를 넘어 "실제 CLI 상태에서" Managed 서버를 경유해
 > 쓸 수 있게. **설계만 지금** 적고, 구현은 `nexa-beepd`(X-1) 완료 후 착수한다(X-2c).
