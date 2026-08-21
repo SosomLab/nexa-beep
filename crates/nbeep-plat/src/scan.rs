@@ -1,6 +1,6 @@
 //! 파일 검사 어댑터(M4 §6 · FR-S-15) — [`nbeep_core::FileScanner`] 포트의 OS별 구현.
 //!
-//! - **Windows**: **AMSI 실물**(08-22 — `amsi.dll` 동적 로드 + `AmsiScanBuffer` 직접 ·
+//! - **Windows**: **AMSI 실물**(08-21 — `amsi.dll` 동적 로드 + `AmsiScanBuffer` 직접 ·
 //!   의존 0). 시스템에 등록된 백신 제공자(기본 = Microsoft Defender)가 버퍼를
 //!   판정한다. 로드·초기화·호출 실패는 전부 `Unavailable` 폴백(fail-soft — 검사
 //!   불능이 실체화를 열지는 않는다: 상태기계가 마찰을 올린다 · [docs/11] §6).

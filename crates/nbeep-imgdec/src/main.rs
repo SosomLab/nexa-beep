@@ -520,7 +520,7 @@ mod lockdown {
         if ok1 == 0 && ok2 == 0 {
             return Err("SetProcessMitigationPolicy 실패".into());
         }
-        // ★ win32k 락아웃(08-22 강화 — "실기 검증 후 강화" 예고분): 이 프로세스는
+        // ★ win32k 락아웃(08-21 강화 — "실기 검증 후 강화" 예고분): 이 프로세스는
         //   콘솔 I/O(condrv)와 순수 연산뿐이라 win32k 시스템 콜이 필요 없다.
         //   파서가 뚫려도 GUI 계열 커널 표면(폰트·GDI 취약점 역사)이 통째로 닫힌다.
         //   콘솔 창 없는 부모(CREATE_NO_WINDOW 스폰)에서도 성립. 베스트 에포트 —

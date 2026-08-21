@@ -177,7 +177,7 @@ enum AppEvent {
         mismatch: bool,
         /// `.beepq` 경로 — 이미지면 썸네일(imgdec 격리 디코드 · M4-5ⓑ) 시도용.
         qpath: String,
-        /// 검사 결과(FR-S-15 · 08-22) — `Detected`면 수신 즉시 상태바 경고.
+        /// 검사 결과(FR-S-15 · 08-21) — `Detected`면 수신 즉시 상태바 경고.
         scan: nbeep_core::ScanOutcome,
     },
     /// 전송 실패·거절 — 사유 문장(표시 전용).
@@ -435,9 +435,9 @@ struct QRowRaw {
     mismatch: bool,
     sender: PeerId,
     received_at: u64,
-    /// 검사 결과(FR-S-15 · 08-22) — 목록 사실 표기(검사됨/탐지/안 됨).
+    /// 검사 결과(FR-S-15 · 08-21) — 목록 사실 표기(검사됨/탐지/안 됨).
     scan: nbeep_core::ScanOutcome,
-    /// 아카이브 정책 위반(M4-4 · 08-22 — zip Slip·폭탄·판정 불가 · 위험색 라벨).
+    /// 아카이브 정책 위반(M4-4 · 08-21 — zip Slip·폭탄·판정 불가 · 위험색 라벨).
     archive_viol: bool,
     /// 무결성 검증 완료(08-18) — 사이드카로 즉시 목록에 뜨지만 **전체 개봉·해시
     /// 확인**은 백그라운드다. false면 승인(Approve) 비활성(`QVerified`가 켠다).
@@ -2328,7 +2328,7 @@ struct App {
     netmon_last_sec: u64,
     /// 마지막 공지(브로드캐스트) 발신 시각(ms) — 3초 1회 제한(08-21 사용자 확정).
     last_broadcast_ms: u64,
-    /// 대화별 데이터 키 테이블(크립토 셰레딩 · D-18 §7 · 08-22) — 기록 봉인 키의
+    /// 대화별 데이터 키 테이블(크립토 셰레딩 · D-18 §7 · 08-21) — 기록 봉인 키의
     /// 단일 원천. 삭제 = 키 폐기([`crate::keytable::KeyTable::destroy`]).
     datakeys: crate::keytable::KeyTable,
     /// 이 시각 전까지 메인 목록의 Enter 활성화를 무시(08-21 — 모달 Enter 제출
@@ -5404,7 +5404,7 @@ impl App {
                                 sender: bq.meta.sender,
                                 received_at: bq.meta.received_at,
                                 scan: bq.meta.scan,
-                                // 구본(08-22 이전 수신) = 아카이브 미점검으로 정직 표기
+                                // 구본(08-21 이전 수신) = 아카이브 미점검으로 정직 표기
                                 // (재계산은 prefix+body 재조립 = 대용량 이중 복사라 비채택).
                                 archive_viol: false,
                             },
@@ -5699,7 +5699,7 @@ impl App {
     fn convbox_delete_one(&mut self, key: &str) {
         let path = self.data_dir.join("history").join(format!("{key}.seg"));
         let _ = std::fs::remove_file(&path);
-        // ★ 셰레딩(D-18 §7 · 08-22) — 파일 삭제 + **키 폐기**: 디스크 잔존
+        // ★ 셰레딩(D-18 §7 · 08-21) — 파일 삭제 + **키 폐기**: 디스크 잔존
         //   바이트가 있어도(웨어 레벨링·백업 사본) 복호 불가가 된다.
         //   (백업해 둔 기록은 백업의 keys.seg가 키를 지녀 복원 시 되살아난다.)
         self.datakeys.destroy(key);
@@ -5825,8 +5825,8 @@ impl App {
         if n == 0 {
             return nbeep_core::t(nbeep_core::Msg::StCvNone).to_string();
         }
-        // ★ 키 동반(셰레딩 의미론 · 08-22) — 데이터 키 테이블을 백업에 포함해야
-        //   복원이 세그를 열 수 있다(없으면 08-22 이후 세그는 복원 불가).
+        // ★ 키 동반(셰레딩 의미론 · 08-21) — 데이터 키 테이블을 백업에 포함해야
+        //   복원이 세그를 열 수 있다(없으면 08-21 이후 세그는 복원 불가).
         let _ = std::fs::copy(self.data_dir.join("keys.seg"), dst.join("keys.seg"));
         let m = nbeep_core::tf(
             nbeep_core::Msg::StfCvBackupDone,
@@ -5872,7 +5872,7 @@ impl App {
                 }
             }
         }
-        // ★ 백업 키 병합(셰레딩 짝 · 08-22) — 복원 원천 폴더의 keys.seg를 합쳐야
+        // ★ 백업 키 병합(셰레딩 짝 · 08-21) — 복원 원천 폴더의 keys.seg를 합쳐야
         //   그 키로 봉인된 세그가 열린다(같은 stem = 백업 키가 이긴다 · 복원 우선).
         {
             let mut dirs: Vec<&std::path::Path> = files.iter().filter_map(|p| p.parent()).collect();
@@ -7829,8 +7829,8 @@ impl App {
         });
     }
 
-    /// 기록 세그먼트 개봉(&self — 셰레딩 · 08-22): **데이터 키 우선**, 실패 시
-    /// 레거시(신원 키 파생 — 08-22 이전 세그). 마이그레이션은 쓰기 경로가 자연히
+    /// 기록 세그먼트 개봉(&self — 셰레딩 · 08-21): **데이터 키 우선**, 실패 시
+    /// 레거시(신원 키 파생 — 08-21 이전 세그). 마이그레이션은 쓰기 경로가 자연히
     /// 한다(record가 항상 데이터 키로 재봉인 — 메시지 하나만 오가면 승격).
     fn history_open_bytes(&self, stem: &str, raw: &[u8]) -> Option<Vec<u8>> {
         if let Some(k) = self.datakeys.get(stem) {
@@ -7842,7 +7842,7 @@ impl App {
     }
 
     /// 대화 기록 봉인 저장(M2-5b) — sealed(history-v1 · **대화별 데이터 키** —
-    /// 셰레딩 D-18 §7 08-22) → 원자적 `data/history/{short}.seg`.
+    /// 셰레딩 D-18 §7 08-21) → 원자적 `data/history/{short}.seg`.
     /// 빈 스레드 = 파일 삭제 **+ 키 폐기**(지우기 = 셰레딩). 봉인 실패 = 저장 포기.
     fn record_history(&mut self, peer: PeerId) {
         let Some(conv) = self.conversations.get(&peer) else {
@@ -8287,7 +8287,7 @@ impl App {
     fn apply_boot_settings(&mut self) {
         use nbeep_core::{ApprovalPolicy, BasicApproval};
         // 기본 아바타 — 미설정이면 **12간지 중 무작위 배정 후 저장**(사용자 확정
-        // 08-22 — 종전 키 지문 안정 배정에서 변경). 첫 부팅 1회 CSPRNG로 뽑아
+        // 08-21 — 종전 키 지문 안정 배정에서 변경). 첫 부팅 1회 CSPRNG로 뽑아
         // **저장하므로 이후 실행에서 요동치지 않는다**(상대 화면 얼굴 안정 —
         // 08-14의 우려는 "저장 없는 매 실행 랜덤"에 대한 것이었다). 보더 색도
         // 같은 무작위 시드에서 유도(아바타와 한 몸의 첫인상).
@@ -12382,7 +12382,7 @@ impl ApplicationHandler<AppEvent> for App {
                     self.spawn_quarantine_scan();
                 }
                 // 격리 보관까지 끝난 상태 — **실체화는 승인 후 별도**(FR-S-9).
-                // ★ 검사 탐지(FR-S-15 · 08-22) = 즉시 상태바 경고(격리함을 안 열어도
+                // ★ 검사 탐지(FR-S-15 · 08-21) = 즉시 상태바 경고(격리함을 안 열어도
                 //   안다). 표기는 사실뿐 — "안전" 단정 금지(NFR-S-5).
                 if scan == nbeep_core::ScanOutcome::Detected {
                     self.set_status(nbeep_core::tf(nbeep_core::Msg::StfScanDetected, &[&name]));
@@ -14611,7 +14611,7 @@ fn session_port_from(settings: &SettingsState) -> u16 {
 /// 임시 폴더가 남는데, 그땐 신원 영속 자체가 성립하지 않는 환경이다.
 /// 설정(`settings.cfg`)·신원 키(`identity.key`)·핀 세그먼트(`trust.seg`)가 전부
 /// 여기 산다. 경로는 여기서 정해 **인자로 넘긴다**(소비 크레이트는 경로 비소유).
-/// 동기화 폴더 감지(M2-5b · [17 §6] · 08-22) — 데이터 폴더가 클라우드 동기화
+/// 동기화 폴더 감지(M2-5b · [17 §6] · 08-21) — 데이터 폴더가 클라우드 동기화
 /// 폴더 안이면 제공자 이름을 돌려준다. 봉인이라 **내용 유출은 아니지만**, 동기화
 /// 충돌·구버전 복원(지운 대화가 되살아남)·다중 기기 동시 실행이 세그먼트를
 /// 조용히 망가뜨릴 수 있어 **경고만** 한다(막지 않는다 — DR-1 제로 컨피그).
@@ -14653,7 +14653,7 @@ pub(crate) fn sync_folder_hint(path: &std::path::Path) -> Option<&'static str> {
     None
 }
 
-/// 클립보드 스테이징 정리(SEAL-2 ③ · 08-22) — `data/clipboard/clip-*.png`는 보낸
+/// 클립보드 스테이징 정리(SEAL-2 ③ · 08-21) — `data/clipboard/clip-*.png`는 보낸
 /// 클립보드 이미지의 스테이징 사본이라 전송 뒤에도 남는다(스트리밍이 파일에서
 /// 읽는 구조상 즉시 삭제 불가). 부팅마다 24h 지난 것을 지운다(part sweep 문법).
 /// 사진 사본·와이어 축소본(①②)은 **의도된 경계로 확정** — 원본이 사용자 평문
@@ -15236,7 +15236,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
 
 #[cfg(test)]
 mod tests {
-    /// M2-5b(08-22) — 동기화 폴더 판정: 구성요소 이름 기반(대소문자 무시) ·
+    /// M2-5b(08-21) — 동기화 폴더 판정: 구성요소 이름 기반(대소문자 무시) ·
     /// 일반 경로는 None. env 축(Windows OneDrive 접두)은 환경 의존이라 제외.
     #[test]
     fn sync_folder_hint_matches_known_providers_only() {
@@ -15266,7 +15266,7 @@ mod tests {
         );
     }
 
-    /// SEAL-2 ③(08-22) — 스테이징 정리는 `clip-*.png`만 본다(신선분·타 파일 보존).
+    /// SEAL-2 ③(08-21) — 스테이징 정리는 `clip-*.png`만 본다(신선분·타 파일 보존).
     /// 만료 삭제 축은 mtime 주입 수단이 없어 여기선 필터 계약만 박제한다.
     #[test]
     fn clipboard_sweep_touches_only_clip_pngs() {

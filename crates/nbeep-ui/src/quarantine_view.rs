@@ -52,10 +52,10 @@ pub struct QRow {
     /// 무결성 검증 완료(08-18) — false면 **승인(Approve) 비활성**(검증 중). 목록은
     /// 사이드카로 즉시 뜨지만 전체 개봉·태그 확인이 끝나야 실체화를 허용한다.
     pub ready: bool,
-    /// 검사 결과(FR-S-15 · 08-22) — 사실 3종 표기: 검사됨(탐지 없음)/검사됨(탐지)/
+    /// 검사 결과(FR-S-15 · 08-21) — 사실 3종 표기: 검사됨(탐지 없음)/검사됨(탐지)/
     /// 검사 안 됨. **"검사 통과 = 안전"이라 표기하지 않는다**(NFR-S-5).
     pub scan: nbeep_core::ScanOutcome,
-    /// 아카이브 정책 위반(M4-4 · 08-22 — Zip Slip·폭탄·판정 불가 · 위험색 라벨).
+    /// 아카이브 정책 위반(M4-4 · 08-21 — Zip Slip·폭탄·판정 불가 · 위험색 라벨).
     pub archive_viol: bool,
 }
 
@@ -483,7 +483,7 @@ impl Widget for QuarantineWidget {
                 ctx.text(x, chip.y + (chip.h - sh) / 2, r, &m, theme.danger);
                 x += ctx.text_width(&m) + self.s(10);
             }
-            // 검사 사실 표기(FR-S-15 · 08-22) — 탐지 = 위험색 강조 · 그 외는 흐리게
+            // 검사 사실 표기(FR-S-15 · 08-21) — 탐지 = 위험색 강조 · 그 외는 흐리게
             // (사실 3종만 · "안전" 단정 금지 — NFR-S-5).
             {
                 let (sl, sc) = match row.scan {

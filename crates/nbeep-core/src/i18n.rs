@@ -285,7 +285,7 @@ pub enum Msg {
     StfNetmonWarn,
     /// 공지 발신 빈도 제한(08-21 — 3초 1회) 안내.
     StBroadcastRateLimit,
-    /// 검사 사실 표기 3종(FR-S-15 · NFR-S-5 — "안전" 단정 금지 · 08-22).
+    /// 검사 사실 표기 3종(FR-S-15 · NFR-S-5 — "안전" 단정 금지 · 08-21).
     ScanNotDone,
     ScanClean,
     ScanDetected,

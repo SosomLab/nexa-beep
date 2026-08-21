@@ -75,9 +75,9 @@ pub(crate) struct Quarantined {
     pub mismatch: bool,
     /// `.beepq` 경로.
     pub path: PathBuf,
-    /// 검사 결과(FR-S-15 · 08-22 — 수신 직후 상태 고지·기록의 근거).
+    /// 검사 결과(FR-S-15 · 08-21 — 수신 직후 상태 고지·기록의 근거).
     pub scan: nbeep_core::ScanOutcome,
-    /// 아카이브 정책 위반·판정 불가 사유(M4-4 · 08-22 — zip 한정 · None = 통과
+    /// 아카이브 정책 위반·판정 불가 사유(M4-4 · 08-21 — zip 한정 · None = 통과
     /// 또는 아카이브 아님). **해제는 애초에 없다** — 표시·마찰의 근거일 뿐.
     pub archive_viol: Option<String>,
 }
@@ -132,10 +132,10 @@ pub(crate) struct QMeta {
     pub mismatch: bool,
     pub sender: PeerId,
     pub received_at: u64,
-    /// 검사 결과(FR-S-15 · 08-22) — 목록이 사실 3종(검사됨/탐지/안 됨)을 표시할
+    /// 검사 결과(FR-S-15 · 08-21) — 목록이 사실 3종(검사됨/탐지/안 됨)을 표시할
     /// 근거. 와이어는 **꼬리 1바이트**(구 사이드카 = 꼬리 없음 → `Unavailable`).
     pub scan: nbeep_core::ScanOutcome,
-    /// 아카이브 정책 위반(M4-4 · 08-22) — 꼬리 둘째 바이트 bit0(구 파일 = false).
+    /// 아카이브 정책 위반(M4-4 · 08-21) — 꼬리 둘째 바이트 bit0(구 파일 = false).
     pub archive_viol: bool,
 }
 
@@ -172,7 +172,7 @@ fn scan_from_u8(u: u8) -> nbeep_core::ScanOutcome {
 }
 
 impl QMeta {
-    /// `[ver 1 ‖ risk 1 ‖ mismatch 1 ‖ sender 32 ‖ size u64 BE ‖ received_at u64 BE ‖ name_len u16 BE ‖ name ‖ scan 1(꼬리 · 08-22)]`.
+    /// `[ver 1 ‖ risk 1 ‖ mismatch 1 ‖ sender 32 ‖ size u64 BE ‖ received_at u64 BE ‖ name_len u16 BE ‖ name ‖ scan 1(꼬리 · 08-21)]`.
     /// 꼬리는 전방 호환 — 구 파일(꼬리 없음)은 `Unavailable`로 읽힌다.
     fn encode(&self) -> Vec<u8> {
         let nb = self.name.as_bytes();
@@ -204,7 +204,7 @@ impl QMeta {
             <[u8; 2]>::try_from(b.get(51..53)?).ok()?,
         ));
         let name = String::from_utf8_lossy(b.get(53..53 + nlen)?).into_owned();
-        // 검사 꼬리(08-22) — 구 사이드카는 꼬리가 없다 = Unavailable(검사 안 됨).
+        // 검사 꼬리(08-21) — 구 사이드카는 꼬리가 없다 = Unavailable(검사 안 됨).
         let scan = scan_from_u8(b.get(53 + nlen).copied().unwrap_or(0));
         let archive_viol = b.get(54 + nlen).copied().unwrap_or(0) & 1 != 0;
         Some(Self {
@@ -265,7 +265,7 @@ pub(crate) fn quarantine_received(
     let name = String::from_utf8_lossy(&got.name).into_owned();
     let v = classify(&name, &got.bytes);
 
-    // ②-b 아카이브 점검(M4-4 · 08-22 — zip 한정): **해제 없이** 중앙 디렉터리만
+    // ②-b 아카이브 점검(M4-4 · 08-21 — zip 한정): **해제 없이** 중앙 디렉터리만
     // 읽어 Zip Slip·폭탄·링크를 판정. 위반·판정 불가 = 사유를 남겨 표시·마찰
     // (격리 자체는 그대로 — 자동 해제가 애초에 없어 위험은 실체화 이후 문제다).
     let archive_viol = if v.risk == RiskLevel::Archive && nbeep_safe::looks_like_zip(&got.bytes) {
@@ -292,7 +292,7 @@ pub(crate) fn quarantine_received(
         received_at: now,
         expires_at: now + 7 * 24 * 3600,
         // 검사(§6 · ADR-0004) — 디스크 기록 전 버퍼 단계. 포트 뒤라(DR-21)
-        // 08-22 Windows AMSI 실물이 들어왔지만 이 줄은 안 바뀌었다(이음새 증명).
+        // 08-21 Windows AMSI 실물이 들어왔지만 이 줄은 안 바뀌었다(이음새 증명).
         // mac/Linux는 Unavailable 고정(정직한 "검사 안 됨").
         scan: nbeep_plat::scan::scan(&name, &got.bytes),
         xfer: String::new(),
@@ -319,7 +319,7 @@ pub(crate) fn quarantine_received(
             mismatch: v.mismatch,
             sender,
             received_at: now,
-            scan: meta.scan, // 검사 결과 동봉(08-22 — 목록 표시 근거)
+            scan: meta.scan, // 검사 결과 동봉(08-21 — 목록 표시 근거)
             archive_viol: archive_viol.is_some(),
         },
         seal_secret,
@@ -366,7 +366,7 @@ mod tests {
         }
     }
 
-    /// 검사 꼬리 전방 호환(08-22) — 구 사이드카(꼬리 없음)는 `Unavailable`+무위반.
+    /// 검사 꼬리 전방 호환(08-21) — 구 사이드카(꼬리 없음)는 `Unavailable`+무위반.
     #[test]
     fn qmeta_without_scan_tail_reads_unavailable() {
         let m = sample();

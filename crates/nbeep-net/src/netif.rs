@@ -11,7 +11,7 @@
 //! (완전할 수 없다 — 새 접두사는 실측으로 추가).
 //!
 //! Unix = `getifaddrs`(libc — 이미 링크되는 시스템 라이브러리 바인딩 · 런타임 의존 0).
-//! Windows = **`GetAdaptersAddresses` 직접**(08-22 M1-9 — iphlpapi 직접 링크 ·
+//! Windows = **`GetAdaptersAddresses` 직접**(08-21 M1-9 — iphlpapi 직접 링크 ·
 //! WNET-1의 이웃 테이블과 같은 문법: repr(C) 부분 선언 + `offset_of` 컴파일 타임
 //! 단언 · 실패 = 빈 목록 폴백 = 종전 기본 경로 발신 그대로).
 
@@ -70,7 +70,7 @@ pub fn is_virtual_name(name: &str) -> bool {
         "gif",
         "stf",
         "anpi",
-        // Windows 친화 이름(08-22 M1-9 — GetAdaptersAddresses FriendlyName 기준).
+        // Windows 친화 이름(08-21 M1-9 — GetAdaptersAddresses FriendlyName 기준).
         "vethernet", // Hyper-V/WSL 가상 스위치
         "openvpn",
         "wireguard",
@@ -140,7 +140,7 @@ pub fn list_v4() -> Vec<NetIf> {
     out
 }
 
-/// Windows — `GetAdaptersAddresses`(iphlpapi 직접 · 08-22 M1-9). 시스템이 채운
+/// Windows — `GetAdaptersAddresses`(iphlpapi 직접 · 08-21 M1-9). 시스템이 채운
 /// 연결 리스트를 읽기만 하며, 어느 단계든 실패 = 빈 목록(종전 폴백과 동일).
 #[cfg(windows)]
 #[must_use]
@@ -334,7 +334,7 @@ mod tests {
         assert_eq!(NetIf { mask: None, ..i }.subnet_broadcast(), None);
     }
 
-    /// Windows 실 호스트 열거 스모크(08-22 M1-9) — 루프백 어댑터가 보이고,
+    /// Windows 실 호스트 열거 스모크(08-21 M1-9) — 루프백 어댑터가 보이고,
     /// 자격 목록엔 루프백이 없다. 자격 인터페이스는 실측 출력(--nocapture).
     #[cfg(windows)]
     #[test]
