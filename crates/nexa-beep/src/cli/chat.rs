@@ -1192,15 +1192,55 @@ fn receive_into_quarantine(got: &nbeep_core::Received, sender: PeerId) -> bool {
     }
 }
 
+/// 성립 경로 — LAN 링크(핸드셰이크 전) 또는 서버 랑데부 사다리(핸드셰이크 완료).
+enum LiveConn {
+    /// LAN 발견·수동 주소 — 링크만 성립, 핸드셰이크는 호출자 몫(기존 경로).
+    Lan(Box<dyn nbeep_core::Link>),
+    /// 서버 랑데부([32 §13] — 펀치→릴레이 사다리) — 인증된 세션까지 성립.
+    Via(nbeep_relay::ViaSession),
+}
+
 /// **발견 가능한 인터랙티브 클라이언트**(`--chat-live [이름]`) — LocalDirect로 **발견 광고**(GUI
 /// 목록에 뜬다) + 첫 인바운드(GUI가 클릭해 연결) 수락 → 인터랙티브 대화. 실행 중인 `--window --live`
 /// GUI를 터미널에서 붙어 테스트하는 용도.
-pub(crate) fn chat_live(name: &str, port: u16) {
+///
+/// `server`(X-2c P1 · [32 §13]) — 릴레이 서버에 프레즌스 등록: 인바운드 랑데부는 수신
+/// 전용 채널로 받고, `/connect <64hex 지문>`으로 서버 경유 대화를 연다(펀치→릴레이 사다리).
+/// `identity_path`(P0) — 신원 영속. **서버를 쓰면 영속 신원이 강제**된다(RID·핀이 키에
+/// 묶인다 — 매 실행 새 키면 상대가 나를 영영 못 찾는다).
+pub(crate) fn chat_live(name: &str, port: u16, server: Option<&str>, identity_path: Option<&str>) {
     // 대화형 — chat_interactive와 같은 콘솔 독점 규약(08-20).
     let _ = nbeep_plat::launch::own_console_for_interactive();
     use nbeep_core::Session as _; // session.peer() — 수신 전용 채널·활성 대화 판정
     use nbeep_net::Transport as _;
-    let identity = std::sync::Arc::new(nbeep_crypto::Identity::generate());
+    // 신원: 서버 사용·명시 지정 = 영속(keyfile — 기본 data/identity.key = GUI와 같은 노드
+    // DR-18) · 그 외 = 임시(기존 동작 불변 — 3-신원 실기의 격리 유지).
+    let identity = if server.is_some() || identity_path.is_some() {
+        let path = identity_path.map_or_else(
+            || crate::app::data_dir().join("identity.key"),
+            std::path::PathBuf::from,
+        );
+        match nbeep_crypto::keyfile::load_or_generate(&path) {
+            Ok((id, created)) => {
+                println!(
+                    "[신원] {}{} — 내 지문(상대의 `--chat-connect-via` 값):\n[신원] {}",
+                    path.display(),
+                    if created { " (새로 생성)" } else { "" },
+                    nbeep_relay::peer_hex(&id.peer_id())
+                );
+                if identity_path.is_none() {
+                    println!("[신원] ⚠ GUI와 같은 신원 — 동시 실행 시 복제 경고가 뜰 수 있다(--identity 로 분리 가능)");
+                }
+                std::sync::Arc::new(id)
+            }
+            Err(e) => {
+                eprintln!("[실패] 신원 키 로드({}): {e}", path.display());
+                return;
+            }
+        }
+    } else {
+        std::sync::Arc::new(nbeep_crypto::Identity::generate())
+    };
     let mut instance = [0u8; 16];
     instance.copy_from_slice(&nbeep_crypto::Identity::generate().peer_id().as_bytes()[..16]);
     let display = nbeep_core::DisplayName::parse(name)
@@ -1252,9 +1292,41 @@ pub(crate) fn chat_live(name: &str, port: u16) {
             }
         });
     }
+    // ── 릴레이 서버 접속(X-2c P1) — 실패해도 LAN은 그대로 돈다(S-2 fail-open to LAN).
+    let relay_client: Option<std::sync::Arc<nbeep_relay::RelayClient>> =
+        server.and_then(|raw| attach_server(raw, &identity).map(std::sync::Arc::new));
+    if let Some(client) = &relay_client {
+        // 서버 인바운드 랑데부 = LAN 인바운드와 같은 **수신 전용 채널**로 합류
+        // (사다리 수락 accept_via — 상대가 펀치를 골랐으면 UDP, 아니면 릴레이).
+        let client = std::sync::Arc::clone(client);
+        let identity = std::sync::Arc::clone(&identity);
+        let passives = std::sync::Arc::clone(&passives);
+        let my_name = name.to_string();
+        std::thread::spawn(move || loop {
+            let Some(inc) = client.accept_incoming(std::time::Duration::from_secs(1)) else {
+                continue;
+            };
+            match nbeep_relay::accept_via(
+                &client,
+                inc,
+                &identity,
+                true,
+                std::time::Duration::from_secs(12),
+            ) {
+                Ok(via) => {
+                    println!(
+                        "\r[릴레이] 인바운드 성립({}) — 수신 전용(대화 = /connect <지문>)",
+                        taken_label(via.taken)
+                    );
+                    spawn_passive(via.session, &passives, &my_name);
+                }
+                Err(e) => eprintln!("\r[릴레이] 인바운드 성립 실패: {}", via_msg(e)),
+            }
+        });
+    }
     let discovery = transport.discovery();
     let peers = std::cell::RefCell::new(Vec::<(nbeep_core::PeerId, String)>::new());
-    const HELP_LIVE: &str = "[대기] /peers = 발견 목록 · /connect <번호|host[:port]> = 대화 상대 지정(1:1) · /quit = 종료 — 그 외 상대의 메시지는 수신 전용으로 표시";
+    const HELP_LIVE: &str = "[대기] /peers = 발견 목록 · /connect <번호|host[:port]|64hex지문> = 대화 상대 지정(1:1 · 지문 = 서버 랑데부) · /quit = 종료 — 그 외 상대의 메시지는 수신 전용으로 표시";
     println!("{HELP_LIVE}");
     loop {
         let got = wait_with_quit_or(
@@ -1274,9 +1346,31 @@ pub(crate) fn chat_live(name: &str, port: u16) {
                     let t = t.trim();
                     if t.is_empty() {
                         println!(
-                            "\r[연결] 사용법: /connect <번호|host[:port]> (번호 = /peers 목록)"
+                            "\r[연결] 사용법: /connect <번호|host[:port]|64hex지문> (번호 = /peers · 지문 = 서버 랑데부)"
                         );
                         return None;
+                    }
+                    // 64hex 지문 = 서버 랑데부(X-2c — 펀치→릴레이 사다리 · [32 §13-3]).
+                    if let Some(peer) = nbeep_relay::parse_peer_hex(t) {
+                        let Some(client) = relay_client.as_ref() else {
+                            println!("\r[연결] 지문 연결은 --server 로 서버에 붙었을 때만 가능");
+                            return None;
+                        };
+                        stop_passive(&passives, peer);
+                        println!("\r[연결] 서버 랑데부로 {} 시도(펀치→릴레이)…", peer.short());
+                        return match nbeep_relay::connect_via(
+                            client,
+                            &identity,
+                            &peer,
+                            true,
+                            std::time::Duration::from_secs(10),
+                        ) {
+                            Ok(via) => Some(LiveConn::Via(via)),
+                            Err(e) => {
+                                println!("\r[연결] 실패: {}", via_msg(e));
+                                None
+                            }
+                        };
                     }
                     // 번호 = 발견 상대(경로는 전송이 안다 — live_echo와 같은 connect) ·
                     // 그 외 = 수동 엔드포인트(DR-19 · 발견이 닿지 않는 다른 서브넷).
@@ -1292,7 +1386,7 @@ pub(crate) fn chat_live(name: &str, port: u16) {
                         return match transport.connect(id) {
                             Ok(l) => {
                                 println!("\r[연결] {name} ({}) 로 연결", id.short());
-                                Some(l)
+                                Some(LiveConn::Lan(l))
                             }
                             Err(e) => {
                                 println!("\r[연결] 실패({name}): {e:?}");
@@ -1310,7 +1404,7 @@ pub(crate) fn chat_live(name: &str, port: u16) {
                     return match transport.add_endpoint(&addr) {
                         Ok(l) => {
                             println!("\r[연결] {addr} 로 연결");
-                            Some(l)
+                            Some(LiveConn::Lan(l))
                         }
                         Err(e) => {
                             println!("\r[연결] 실패({addr}): {e:?}");
@@ -1322,23 +1416,35 @@ pub(crate) fn chat_live(name: &str, port: u16) {
                 None
             },
         );
-        let Some(link) = got else {
+        let Some(conn) = got else {
             return; // 사용자가 /quit·Ctrl+D — 이때만 끝난다
         };
         // 아웃바운드(명시적 /connect)만 **상호 채팅**으로 들어간다.
-        // 경로 등급(M5-3b) — 성립 소켓 실주소 판정(수동 IP = 원격일 수 있다).
-        let path = link
-            .remote_ip()
-            .map_or(nbeep_core::PathClass::Local, nbeep_core::class_of_ip);
-        match nbeep_crypto::NoiseSession::initiate(link, &identity) {
-            Ok(session) => {
-                // 주소 연결은 상대가 여기서 확정된다 — 수신 전용 채널이 있었다면
-                // 지금 내린다(번호 연결은 위에서 선처리 · 멱등).
-                let p = session.peer();
-                stop_passive(&passives, p);
-                run_interactive(session, identity.peer_id(), path);
+        match conn {
+            LiveConn::Lan(link) => {
+                // 경로 등급(M5-3b) — 성립 소켓 실주소 판정(수동 IP = 원격일 수 있다).
+                let path = link
+                    .remote_ip()
+                    .map_or(nbeep_core::PathClass::Local, nbeep_core::class_of_ip);
+                match nbeep_crypto::NoiseSession::initiate(link, &identity) {
+                    Ok(session) => {
+                        // 주소 연결은 상대가 여기서 확정된다 — 수신 전용 채널이 있었다면
+                        // 지금 내린다(번호 연결은 위에서 선처리 · 멱등).
+                        let p = session.peer();
+                        stop_passive(&passives, p);
+                        run_interactive(session, identity.peer_id(), path);
+                    }
+                    Err(e) => eprintln!("[실패] 핸드셰이크: {e} — 대기로 돌아갑니다"),
+                }
             }
-            Err(e) => eprintln!("[실패] 핸드셰이크: {e} — 대기로 돌아갑니다"),
+            LiveConn::Via(via) => {
+                // 사다리는 인증까지 끝났다 — 경로만 알리고 바로 대화(파일 게이트는
+                // run_interactive의 path 곱 판정이 담당 — 원격 = 파일 차단 유지).
+                println!("[연결] 성립 — 경로: {}", taken_label(via.taken));
+                let p = via.session.peer();
+                stop_passive(&passives, p);
+                run_interactive(via.session, identity.peer_id(), via.path);
+            }
         }
         // 대화 종료(/quit·상대 이탈) = **목록 복귀**(08-20 사용자 요청) — 대화 중
         // 쌓인 발견 이벤트를 조용히 비우고 현재 목록을 바로 보여 준다. 이후 상대
@@ -1346,6 +1452,158 @@ pub(crate) fn chat_live(name: &str, port: u16) {
         drain_discovery(&discovery, &peers, false);
         print_peer_list(&peers);
         println!("[대기] 다시 상대를 기다립니다 — /peers·/connect·/quit (그 외 상대 메시지 = 수신 전용 표시)");
+    }
+}
+
+/// 사다리 단 표시 라벨.
+fn taken_label(t: nbeep_relay::PathTaken) -> &'static str {
+    match t {
+        nbeep_relay::PathTaken::Udp => "UDP 직결(홀펀칭 — 서버는 경로에서 빠짐)",
+        nbeep_relay::PathTaken::Relay => "릴레이 경유(서버가 암호문만 나름)",
+    }
+}
+
+/// 사다리 실패 사유 — 사람이 읽는 한 줄.
+fn via_msg(e: nbeep_relay::ViaError) -> &'static str {
+    match e {
+        nbeep_relay::ViaError::NotFound => "상대가 이 서버에 없다(지문 오타·상대 미접속·다른 서버)",
+        nbeep_relay::ViaError::Limit => "서버가 거절했다(채널 상한·상대가 닫음)",
+        nbeep_relay::ViaError::Dead => "서버 응답 없음(세션 끊김·시간 초과)",
+        nbeep_relay::ViaError::Handshake => "종단 핸드셰이크 실패",
+        nbeep_relay::ViaError::WrongPeer => {
+            "인증된 상대가 지정한 지문과 다르다 — 연결 폐기(fail-closed)"
+        }
+    }
+}
+
+/// 서버 주소 해석 — GUI 모달과 같은 정규화 우선, 실패 시 호스트명(DDNS) DNS 해석.
+/// 반환 = (핀 키로 쓸 정규 문자열, 소켓 주소).
+fn resolve_server(raw: &str) -> Option<(String, std::net::SocketAddr)> {
+    if let Some(n) = nbeep_core::endpoint::normalize_endpoint(raw, nbeep_relay::DEFAULT_RELAY_PORT)
+    {
+        if let Ok(sa) = n.parse::<std::net::SocketAddr>() {
+            return Some((n, sa));
+        }
+    }
+    // 호스트명 — 포트 생략이면 기본 포트를 붙여 DNS로 해석한다(DR-19의 DDNS 경로).
+    let with_port = if raw.contains(':') {
+        raw.to_string()
+    } else {
+        format!("{raw}:{}", nbeep_relay::DEFAULT_RELAY_PORT)
+    };
+    use std::net::ToSocketAddrs as _;
+    let sa = with_port.to_socket_addrs().ok()?.next()?;
+    Some((with_port, sa))
+}
+
+/// 릴레이 서버 접속 + **핀 규약**([32 §2-4] — TOFU · 불일치 = 시끄럽게) + RID 등록.
+/// 실패는 `None` — 호출자는 LAN만으로 계속한다(S-2 fail-open to LAN).
+fn attach_server(raw: &str, identity: &nbeep_crypto::Identity) -> Option<nbeep_relay::RelayClient> {
+    let Some((addr_str, sa)) = resolve_server(raw) else {
+        eprintln!("[서버] 주소 해석 실패: {raw} (예: relay.example.com · 10.0.0.5:47300)");
+        return None;
+    };
+    let pin_path = crate::app::data_dir().join("server.pin");
+    let expected = nbeep_relay::pinfile::lookup(&pin_path, &addr_str);
+    match nbeep_relay::RelayClient::connect(
+        sa,
+        identity,
+        &nbeep_relay::rids_around(&identity.peer_id()),
+        expected,
+    ) {
+        Ok(client) => {
+            if expected.is_none() {
+                // 첫 접속 = TOFU — 지금 본 키를 핀한다(이후 불일치는 아래 경로로 시끄럽게).
+                if let Err(e) =
+                    nbeep_relay::pinfile::store(&pin_path, &addr_str, &client.server_peer())
+                {
+                    eprintln!("[서버] ⚠ 핀 저장 실패({e}) — 다음 접속에서 다시 첫 접속으로 보인다");
+                }
+                println!(
+                    "[서버] 첫 접속 — 서버 키를 핀했다: {}",
+                    nbeep_relay::peer_hex(&client.server_peer())
+                );
+            } else {
+                println!("[서버] 핀 일치({})", client.server_peer().short());
+            }
+            let obs = client
+                .register_info()
+                .observed_tcp
+                .map_or("미상".to_string(), |a| a.to_string());
+            println!(
+                "[서버] {addr_str} 등록 완료 — 서버가 본 내 주소 {obs} · 상대는 `--chat-connect-via <내 지문> --server {addr_str}` 로 나를 찾는다"
+            );
+            Some(client)
+        }
+        Err(nbeep_relay::RelayError::PinMismatch { expected, got }) => {
+            // ★ 신원이 바뀌면 시끄럽게(DR-28) — 조용한 재핀은 없다.
+            eprintln!(
+                "[서버] ★★ 서버 키가 핀과 다르다 — 접속 중단(사칭·서버 재설치 가능성)\n\
+                 [서버]   핀됨: {}\n[서버]   제시: {}\n\
+                 [서버]   서버 교체가 맞다면 {} 에서 해당 줄을 지우고 다시 접속한다(재핀은 사람의 결정)",
+                nbeep_relay::peer_hex(&expected),
+                nbeep_relay::peer_hex(&got),
+                pin_path.display()
+            );
+            None
+        }
+        Err(e) => {
+            eprintln!("[서버] 접속 실패: {e:?} — LAN만으로 계속한다");
+            None
+        }
+    }
+}
+
+/// `--chat-connect-via <지문> --server <주소>` — 서버 랑데부로 상대에게 직접 붙는 단말
+/// (X-2c P1 · [32 §13-3] 흐름 그대로: 핀 → 랑데부 → 사다리(펀치→릴레이) → 종단 Noise).
+pub(crate) fn chat_connect_via(peer_hex: &str, server: Option<&str>, identity_path: Option<&str>) {
+    let _ = nbeep_plat::launch::own_console_for_interactive();
+    let Some(peer) = nbeep_relay::parse_peer_hex(peer_hex) else {
+        eprintln!(
+            "지문 형식 오류: 64자리 hex가 필요하다 — 상대 단말이 `--server`로 시작할 때 찍는 \"내 지문\" 값"
+        );
+        return;
+    };
+    let Some(server_raw) = server else {
+        eprintln!("--server <host[:port]> 필요 (릴레이 서버 주소 · 기본 포트 47300)");
+        return;
+    };
+    // 신원 = 영속 강제(P0) — 랑데부·핀·상대의 내 지문 인식이 전부 키에 묶인다.
+    let path = identity_path.map_or_else(
+        || crate::app::data_dir().join("identity.key"),
+        std::path::PathBuf::from,
+    );
+    let identity = match nbeep_crypto::keyfile::load_or_generate(&path) {
+        Ok((id, created)) => {
+            println!(
+                "[신원] {}{} — 내 지문: {}",
+                path.display(),
+                if created { " (새로 생성)" } else { "" },
+                nbeep_relay::peer_hex(&id.peer_id())
+            );
+            id
+        }
+        Err(e) => {
+            eprintln!("[실패] 신원 키 로드({}): {e}", path.display());
+            return;
+        }
+    };
+    let Some(client) = attach_server(server_raw, &identity) else {
+        return; // 사유는 attach_server가 이미 알렸다
+    };
+    println!("[연결] 서버 랑데부로 {} 시도(펀치→릴레이)…", peer.short());
+    match nbeep_relay::connect_via(
+        &client,
+        &identity,
+        &peer,
+        true,
+        std::time::Duration::from_secs(15),
+    ) {
+        Ok(via) => {
+            println!("[연결] 성립 — 경로: {}", taken_label(via.taken));
+            run_interactive(via.session, identity.peer_id(), via.path);
+        }
+        Err(e) => eprintln!("[실패] {}", via_msg(e)),
     }
 }
 

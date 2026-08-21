@@ -1277,6 +1277,7 @@ dependencies = [
  "nbeep-gfx",
  "nbeep-net",
  "nbeep-plat",
+ "nbeep-relay",
  "nbeep-safe",
  "nbeep-store",
  "nbeep-ui",

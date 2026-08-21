@@ -29,5 +29,6 @@ nbeep-gfx.workspace = true
 nbeep-ui.workspace = true
 nbeep-plat.workspace = true
 nexa-conf.workspace = true # 설정 영속(M3-15 · ADR-0011)
+nbeep-relay.workspace = true # 릴레이 서버 랑데부·사다리(X-2b/2c — 서버와 같은 와이어)
 winit = "0.30"
 softbuffer = "0.4"
