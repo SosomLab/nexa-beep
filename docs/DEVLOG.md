@@ -7,6 +7,7 @@
 
 ## 2026-08-21
 
+- **(Win) 공지 후 대화창 진입 수정**(`da846e5` — 실기): 목록 Enter = 캐럿 행 활성화 × 프롬프트 Enter 제출의 잔향·키 반복이 포커스 복귀한 메인 목록에 도달하던 것 → **Focused(true) 300ms 스트레이 Enter 가드**(모달 전종 공통 · 마우스 무영향). 731 green.
 - **(Win) 10분 모니터링 실측 + 공지 제동 + 차단 4축 설계**(`28ee019`·`8da3bce`·docs): ★**netmon 2-인스턴스 자동 시나리오**(NEXA_NETMON 스위치 신설 — 발견 3.7pps·메시지 85B·64MiB 전송 오버헤드 0.25%·/quit 후 재연결 0 · **전 구간 경고 0 = 과다 송수신 없음** · 기준선 = 26 §3-5) · ★**공지 발신 3초 1회 제한+받지 않기 설정**(와이어 공지 표식 bit2 전방 호환 · 그림자 무시 · 검증 = 26 §3-6) · ★**[38] 수신 제한 4축 설계 확정**(사용자 4문항 — 그림자·accept 즉시·자동 임시·기간부+정확 일치 · M5-3 1차 · BL-1~5 등재 · 개발은 요청 시). 731 green.
 - **(Win) ★v0.2.1 공개 + netmon 계측 모드**(`33a0260`·`d363473`): 릴리스 = 자산 14종·**brew 자동 추종 ✓**(cask 0.2.1 — 기능 3종+CLI 축+WNET-1+안정성 2건 탑재) · ★**netmon**(사용자 요청 — 과도 송수신 관측): 카운터 상시(이음새 4곳 · 횟수·바이트만 = 봉투 원리)/기록 옵트인(`netmon.enabled` 기본 off · 주기 델타 1줄 `netmon-*.log` · 과다 = warn 태그+상태바 경고 · StatusLog prefix 재사용) · 설계 [06 §7-1]·절차 [26 §3-5]. 730 green.
 - **(Win) CI red → 잠복 결함 2건 종결 — ★T-flake 정체 규명**(`ea96094`·`35a6160`): ① `dir_writable` PID 프로브 공유 경합(Windows delete-pending 순간 false 오판 → `data_dir()` 폴백 튐 = CI part 테스트 사망 원인 · 시퀀스 접미 유일화) ② **클립보드 `OpenClipboard(NULL)` 거짓 성공 → EmptyClipboard가 상대 GlobalLock 중 HGLOBAL 해제 = use-after-free**(nbeep-plat 힙 오염 중도 사망 = T-flake "29개 모자람"의 정체 · 제품 실버그 — 메시지 전용 창 HWND+뮤텍스+GlobalSize 상한 · cargo 루프 4/20→0/70 실측). 726 green · 폴더 전송 C-2 제외 재확정(사용자 08-21).
