@@ -36,12 +36,19 @@ pub(crate) struct StatusLog {
 
 impl StatusLog {
     /// 기동 — 디렉터리 준비 실패 시 None(fail-soft · 상태바로 알림은 호출자 몫).
-    pub(crate) fn start(dir: PathBuf, retain_days: u64, max_total_mb: u64) -> Option<Self> {
+    /// `prefix` = 파일명 머리(`beep`·`netmon` — 같은 폴더를 나눠 쓰되 정리는
+    /// 자기 프리픽스만 건드린다).
+    pub(crate) fn start(
+        dir: PathBuf,
+        prefix: &'static str,
+        retain_days: u64,
+        max_total_mb: u64,
+    ) -> Option<Self> {
         std::fs::create_dir_all(&dir).ok()?;
         let (tx, rx) = sync_channel::<Cmd>(QUEUE_CAP);
         let join = std::thread::Builder::new()
             .name("statuslog".into())
-            .spawn(move || run(&dir, retain_days, max_total_mb, &rx))
+            .spawn(move || run(&dir, prefix, retain_days, max_total_mb, &rx))
             .ok()?;
         Some(Self {
             tx,
@@ -86,19 +93,25 @@ fn unix_now() -> u64 {
         .map_or(0, |d| d.as_secs())
 }
 
-fn file_for(dir: &std::path::Path, ymd: (u32, u32, u32)) -> PathBuf {
-    dir.join(format!("beep-{:04}{:02}{:02}.log", ymd.0, ymd.1, ymd.2))
+fn file_for(dir: &std::path::Path, prefix: &str, ymd: (u32, u32, u32)) -> PathBuf {
+    dir.join(format!("{prefix}-{:04}{:02}{:02}.log", ymd.0, ymd.1, ymd.2))
 }
 
 /// 로거 스레드 본체 — 열기·회전·flush·드롭 계상 전부 여기(메인 무영향).
-fn run(dir: &std::path::Path, retain_days: u64, max_total_mb: u64, rx: &Receiver<Cmd>) {
-    sweep(dir, retain_days, max_total_mb);
+fn run(
+    dir: &std::path::Path,
+    prefix: &str,
+    retain_days: u64,
+    max_total_mb: u64,
+    rx: &Receiver<Cmd>,
+) {
+    sweep(dir, prefix, retain_days, max_total_mb);
     let mut day = today(unix_now());
     let open = |ymd: (u32, u32, u32)| {
         std::fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open(file_for(dir, ymd))
+            .open(file_for(dir, prefix, ymd))
             .ok()
             .map(std::io::BufWriter::new)
     };
@@ -115,7 +128,7 @@ fn run(dir: &std::path::Path, retain_days: u64, max_total_mb: u64, rx: &Receiver
             if let Some(o) = &mut out {
                 let _ = o.flush();
             }
-            sweep(dir, retain_days, max_total_mb);
+            sweep(dir, prefix, retain_days, max_total_mb);
             day = ymd;
             out = open(day);
         }
@@ -158,16 +171,25 @@ fn run(dir: &std::path::Path, retain_days: u64, max_total_mb: u64, rx: &Receiver
 }
 
 /// 보존 정리 — `retain_days` 지난 파일 삭제 + 총량 `max_total_mb` 초과 시
-/// 오래된 것부터(part.rs sweep과 같은 문법).
-fn sweep(dir: &std::path::Path, retain_days: u64, max_total_mb: u64) {
+/// 오래된 것부터(part.rs sweep과 같은 문법). **자기 프리픽스만** — 같은 폴더의
+/// 다른 로그(beep/netmon)를 서로 지우지 않는다.
+fn sweep(dir: &std::path::Path, prefix: &str, retain_days: u64, max_total_mb: u64) {
     let Ok(rd) = std::fs::read_dir(dir) else {
         return;
     };
     let now = std::time::SystemTime::now();
     let mut kept: Vec<(std::time::SystemTime, u64, PathBuf)> = Vec::new();
+    let head = format!("{prefix}-");
     for e in rd.flatten() {
         let path = e.path();
         if path.extension().is_none_or(|x| x != "log") {
+            continue;
+        }
+        if !path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.starts_with(&head))
+        {
             continue;
         }
         let Ok(md) = e.metadata() else { continue };
@@ -205,11 +227,11 @@ mod tests {
     fn writes_lines_to_dated_file() {
         let dir = std::env::temp_dir().join(format!("nb-slog-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let log = StatusLog::start(dir.clone(), 7, 20).expect("기동");
+        let log = StatusLog::start(dir.clone(), "beep", 7, 20).expect("기동");
         log.log("hello 상태");
         log.log("second");
         log.stop(); // flush 보장
-        let f = file_for(&dir, today(unix_now()));
+        let f = file_for(&dir, "beep", today(unix_now()));
         let text = std::fs::read_to_string(&f).expect("파일");
         assert!(text.contains("hello 상태") && text.contains("second"));
         assert!(text.starts_with('['), "시각 스탬프");
@@ -221,7 +243,7 @@ mod tests {
     fn log_never_blocks_when_queue_full() {
         let dir = std::env::temp_dir().join(format!("nb-slog2-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let log = StatusLog::start(dir.clone(), 7, 20).expect("기동");
+        let log = StatusLog::start(dir.clone(), "beep", 7, 20).expect("기동");
         let t0 = std::time::Instant::now();
         for i in 0..10_000 {
             log.log(&format!("burst {i}"));

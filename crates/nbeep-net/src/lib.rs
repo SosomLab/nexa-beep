@@ -18,6 +18,7 @@
 pub mod local;
 pub mod neigh;
 pub mod netif;
+pub mod netmon;
 pub mod tcp;
 pub mod transport;
 pub mod udp;

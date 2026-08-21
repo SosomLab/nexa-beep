@@ -81,9 +81,9 @@ impl PeerAddrs {
 /// 후보를 순서대로 시도해 첫 성공 스트림을 돌려준다.
 fn connect_first(order: &[SocketAddr], timeout: Duration) -> Option<(TcpStream, SocketAddr)> {
     order.iter().find_map(|&addr| {
-        TcpStream::connect_timeout(&addr, timeout)
-            .ok()
-            .map(|s| (s, addr))
+        let got = TcpStream::connect_timeout(&addr, timeout).ok();
+        crate::netmon::on_conn_out(got.is_some()); // 시도/성립 계수(횟수만)
+        got.map(|s| (s, addr))
     })
 }
 
@@ -200,6 +200,7 @@ impl LocalDirect {
         std::thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(stream) = stream else { continue };
+                crate::netmon::on_conn_in(); // 인바운드 수락 계수(횟수만)
                 let Ok(link) = TcpLink::new(stream) else {
                     continue;
                 };

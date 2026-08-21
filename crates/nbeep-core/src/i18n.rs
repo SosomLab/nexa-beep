@@ -273,6 +273,16 @@ pub enum Msg {
     LogRetainDefault,
     /// 로그 총량 기본 라벨(20MB).
     LogCapDefault,
+    /// 네트워크 점검 하위 섹션(netmon · 08-21 — 고급 하위 · 옵트인 계측 기록).
+    SubNetmon,
+    NetmonEnabled,
+    NetmonEnabledDesc,
+    NetmonInterval,
+    NetmonIntervalDesc,
+    /// 점검 주기 기본 라벨(10초).
+    NetmonIntervalDefault,
+    /// 상태바 — netmon 과다 경고(경고 태그 목록).
+    StfNetmonWarn,
     /// 처음부터 버튼(M4-10c — 보존분을 버리고 새로 받기).
     OfferFreshBtn,
     OfferQuarantineNote,
@@ -1806,6 +1816,42 @@ impl Msg {
             Msg::SizeXLarge => ["Extra Large", "아주 크게", "特大", "特大"],
             Msg::LogRetainDefault => ["Default (7)", "기본(7일)", "默认(7天)", "既定(7日)"],
             Msg::LogCapDefault => ["Default (20)", "기본(20MB)", "默认(20MB)", "既定(20MB)"],
+            Msg::SubNetmon => ["Network check", "네트워크 점검", "网络检查", "ネットワーク点検"],
+            Msg::NetmonEnabled => [
+                "Traffic monitoring log",
+                "트래픽 계측 기록",
+                "流量监测日志",
+                "トラフィック計測ログ",
+            ],
+            Msg::NetmonEnabledDesc => [
+                "Record packet/byte counts per interval to data/logs/netmon-*.log to spot \
+                 excessive traffic (counts only — no addresses or content). Off = no writes.",
+                "주기마다 패킷·바이트 수를 data/logs/netmon-*.log에 남겨 과도한 송수신을 \
+                 찾습니다(횟수만 — 주소·내용 없음). 끄면 기록하지 않습니다.",
+                "按周期将数据包/字节计数写入 data/logs/netmon-*.log 以发现异常流量（仅计数——\
+                 无地址与内容）。关闭 = 不记录。",
+                "周期ごとにパケット/バイト数を data/logs/netmon-*.log に記録し過剰な送受信を\
+                 見つけます（回数のみ — アドレス・内容なし）。オフ = 記録なし。",
+            ],
+            Msg::NetmonInterval => [
+                "Check interval (sec)",
+                "점검 주기 (초)",
+                "检查周期（秒）",
+                "点検間隔（秒）",
+            ],
+            Msg::NetmonIntervalDesc => [
+                "One summary line is written per interval.",
+                "주기마다 요약 한 줄이 기록됩니다.",
+                "每个周期写入一行摘要。",
+                "間隔ごとに要約1行を記録します。",
+            ],
+            Msg::NetmonIntervalDefault => ["Default (10)", "기본(10초)", "默认(10秒)", "既定(10秒)"],
+            Msg::StfNetmonWarn => [
+                "⚠ Network check: excessive traffic ({}) — see netmon log",
+                "⚠ 네트워크 점검: 과다 트래픽({}) — netmon 로그 확인",
+                "⚠ 网络检查：流量异常（{}）— 请查看 netmon 日志",
+                "⚠ ネットワーク点検: 過剰トラフィック（{}）— netmon ログ参照",
+            ],
             Msg::OfferFreshBtn => ["From start", "처음부터", "重新开始", "最初から"],
             Msg::OfferQuarantineNote => [
                 "Approving only quarantines it — a separate approval is needed to materialize",

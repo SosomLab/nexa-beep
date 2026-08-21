@@ -251,6 +251,7 @@ impl UdpDiscovery {
     fn send_all(v4: &UdpSocket, v6: Option<&UdpSocket>, bytes: &[u8]) {
         // 기본 경로 발신(종전 동작) — 인터페이스 열거가 비는 환경(Windows 폴백 등)의
         // 안전망. 멀티캐스트 IF를 바꾼 뒤에도 마지막에 기본으로 되돌린다.
+        let mut sent: u64 = 2; // netmon — 발신 데이터그램 계수(횟수만 · 봉투 원리)
         let _ = v4.send_to(bytes, Self::dest());
         let _ = v4.send_to(bytes, Self::broadcast_dest());
         // ★ 인터페이스별 명시 발신(M1-9 · FR-D-7) — 기본 경로가 없는 링크로컬 직결
@@ -260,17 +261,21 @@ impl UdpDiscovery {
         for i in crate::netif::eligible_v4() {
             if sref.set_multicast_if_v4(&i.v4).is_ok() {
                 let _ = v4.send_to(bytes, Self::dest());
+                sent += 1;
             }
             // S3 지향 브로드캐스트 — 서브넷 브로드캐스트는 IF 지정과 무관하게
             // 목적지 주소로 경로가 정해진다(255.255.255.255와 달리 링크가 특정된다).
             if let Some(b) = i.subnet_broadcast() {
                 let _ = v4.send_to(bytes, SocketAddr::from((b, DISCOVERY_PORT)));
+                sent += 1;
             }
         }
         let _ = sref.set_multicast_if_v4(&Ipv4Addr::UNSPECIFIED);
         if let Some(v6) = v6 {
             let _ = v6.send_to(bytes, Self::dest_v6());
+            sent += 1;
         }
+        crate::netmon::on_disco_tx(sent);
     }
 
     fn spawn_announcer(
@@ -331,6 +336,7 @@ impl UdpDiscovery {
             S4_MAX,
         ) {
             let _ = sock.send_to(bytes, SocketAddr::from((n, DISCOVERY_PORT)));
+            crate::netmon::on_disco_tx(1);
         }
     }
 
@@ -376,9 +382,11 @@ impl UdpDiscovery {
                 }
                 match sock.recv_from(&mut buf) {
                     Ok((n, from)) => {
+                        crate::netmon::on_disco_rx();
                         if let Decoded::Packet(packet) = Packet::decode(&buf[..n]) {
                             // 자기 패킷 필터 — 주소가 아니라 키 기준(docs/08 §5).
                             if packet.peer == me {
+                                crate::netmon::on_disco_rx_self();
                                 continue;
                             }
                             if packet.kind == PacketKind::Hello {
@@ -390,6 +398,7 @@ impl UdpDiscovery {
                                     p.kind = PacketKind::Announce;
                                     p.seq = seq.fetch_add(1, Ordering::Relaxed);
                                     let _ = rs.send_to(&p.encode(), from);
+                                    crate::netmon::on_disco_tx(1);
                                 }
                             }
                             if tx.send(Observation { packet, from }).is_err() {

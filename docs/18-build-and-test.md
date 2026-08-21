@@ -21,7 +21,7 @@
 > ⚠️ **A·B 신원 폴더 = `$HOME/.nexa-beep-multi`**(durable · `BEEP_MULTI`로 덮어쓰기 가능 ·
 > Windows는 `%USERPROFILE%\.nexa-beep-multi`). **`/tmp`·`%TEMP%` 금지** — macOS
 > `com.apple.tmp_cleaner`(매일 자정 · 3일 미접근 삭제)가 `identity.key`를 지워 **재기동마다
-> 새 신원**이 생기고, 이전 키에 sealed된 격리물·핀을 못 연다(08-19 진단 · [26 §3-4](26-run-and-manual-test.md)).
+> 새 신원**이 생기고, 이전 키에 sealed된 격리물·핀을 못 연다(08-19 진단 · [26 §3-4b](26-run-and-manual-test.md)).
 > 그 실행 파일이 **실제로 로드할** 신원 확인 = **`nexa-beep --whoami`**(지문·이름·exe·data 경로 ·
 > 읽기 전용 = 키를 만들지 않는다). 스크립트가 기존 `/tmp/beep-multi`를 1회 자동 이관한다.
 

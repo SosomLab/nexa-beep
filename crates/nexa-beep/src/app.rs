@@ -2292,6 +2292,12 @@ struct App {
     actor_joins: Vec<std::thread::JoinHandle<()>>,
     /// 상태 로거(M3-22 · `log.enabled` hot-swap) — None = 끔.
     statuslog: Option<crate::statuslog::StatusLog>,
+    /// 네트워크 점검 로거(netmon · 08-21 — `netmon.enabled` 옵트인) — None = 끔.
+    netmon_log: Option<crate::statuslog::StatusLog>,
+    /// netmon 직전 스냅숏(델타의 기준점).
+    netmon_prev: nbeep_net::netmon::NetSnapshot,
+    /// netmon 마지막 기록 시각(unix 초).
+    netmon_last_sec: u64,
     /// 이어받기로 수락한 수신의 원본 sha(M4-10) — 완료·취소 때 `.part` 정리.
     resumed_recv: HashMap<PeerId, [u8; 32]>,
     /// 마지막으로 **적용한** 프로필 수신 내용의 지문(RL-1 · 08-18) — 동일 내용
@@ -4226,10 +4232,75 @@ impl App {
             let days = self.settings.get("log.retain_days").parse().unwrap_or(7);
             let mb = self.settings.get("log.max_total_mb").parse().unwrap_or(20);
             self.statuslog =
-                crate::statuslog::StatusLog::start(self.data_dir.join("logs"), days, mb);
+                crate::statuslog::StatusLog::start(self.data_dir.join("logs"), "beep", days, mb);
             if self.statuslog.is_none() {
                 self.set_status("⚠ 로그 폴더를 만들 수 없어 기록을 켜지 못했습니다");
             }
+        }
+    }
+
+    /// 네트워크 점검 로거 재기동(netmon · 08-21) — `netmon.enabled` hot-swap.
+    /// 켜지면 그 시점 누적을 기준점으로 삼아 **켠 이후의 델타**만 기록한다.
+    /// 보존·총량은 로그 설정을 공유한다(같은 진단 폴더 · 프리픽스만 다르다).
+    fn refresh_netmon(&mut self) {
+        if let Some(l) = self.netmon_log.take() {
+            l.stop(); // flush 후 정지
+        }
+        if self.settings.get("netmon.enabled") == "on" {
+            let days = self.settings.get("log.retain_days").parse().unwrap_or(7);
+            let mb = self.settings.get("log.max_total_mb").parse().unwrap_or(20);
+            self.netmon_log =
+                crate::statuslog::StatusLog::start(self.data_dir.join("logs"), "netmon", days, mb);
+            match &self.netmon_log {
+                Some(l) => {
+                    self.netmon_prev = nbeep_net::netmon::snapshot();
+                    self.netmon_last_sec = unix_now();
+                    l.log(&format!(
+                        "netmon start interval_s={}",
+                        self.netmon_interval_s()
+                    ));
+                }
+                None => {
+                    self.set_status("⚠ 로그 폴더를 만들 수 없어 네트워크 점검을 켜지 못했습니다");
+                }
+            }
+        }
+    }
+
+    /// netmon 점검 주기(초) — 설정값(하한 2·상한 3600 · 파싱 실패 = 10).
+    fn netmon_interval_s(&self) -> u64 {
+        self.settings
+            .get("netmon.interval_s")
+            .parse::<u64>()
+            .map_or(10, |v| v.clamp(2, 3600))
+    }
+
+    /// netmon 주기 틱 — 켜져 있고 주기가 찼으면 요약 한 줄 기록 + 과다 경고는
+    /// 상태바에도 띄운다(로그를 안 열어도 폭주를 알 수 있게).
+    fn tick_netmon(&mut self) {
+        if self.netmon_log.is_none() {
+            return;
+        }
+        let now = unix_now();
+        let interval = self.netmon_interval_s();
+        if now.saturating_sub(self.netmon_last_sec) < interval {
+            return;
+        }
+        let cur = nbeep_net::netmon::snapshot();
+        let dt_ms = now
+            .saturating_sub(self.netmon_last_sec)
+            .saturating_mul(1000);
+        let (line, warns) = nbeep_net::netmon::report_line(&self.netmon_prev, &cur, dt_ms);
+        if let Some(l) = &self.netmon_log {
+            l.log(&line);
+        }
+        self.netmon_prev = cur;
+        self.netmon_last_sec = now;
+        if !warns.is_empty() {
+            self.set_status(nbeep_core::tf(
+                nbeep_core::Msg::StfNetmonWarn,
+                &[&warns.join(",")],
+            ));
         }
     }
 
@@ -8564,9 +8635,16 @@ impl App {
                     }
                 }
                 // 로그 설정(M3-22) — 켜기/끄기·보존·상한 전부 hot-swap(재시작 없음).
+                // 보존·상한은 netmon도 공유하므로 함께 재기동한다.
                 "log.enabled" | "log.retain_days" | "log.max_total_mb" => {
                     self.refresh_statuslog();
+                    if self.netmon_log.is_some() {
+                        self.refresh_netmon();
+                    }
                 }
+                // 네트워크 점검(netmon · 08-21) — 옵트인 켜기/끄기 hot-swap.
+                // 주기는 다음 틱부터 자연 반영(재기동 불요).
+                "netmon.enabled" => self.refresh_netmon(),
                 // 시스템 시작 시 자동 실행(08-20 — 기본 on) — 토글 즉시 OS 등록/해제.
                 // 실패를 조용히 넘기지 않는다(상태바 고지) — 설정값은 유지되므로
                 // 다음 부팅 재동기화·재토글에서 재시도된다.
@@ -13134,6 +13212,9 @@ impl ApplicationHandler<AppEvent> for App {
         if let Some(l) = self.statuslog.take() {
             l.stop();
         }
+        if let Some(l) = self.netmon_log.take() {
+            l.stop(); // 네트워크 점검 로그도 같은 규약(08-21)
+        }
         // 종료 강제 flush(S-1) — 디바운스가 마지막 변경을 삼키면 안 된다.
         // 주기 경로와 같은 스냅샷·직렬화를 쓴다(S-2 — conf_save 하나뿐).
         if self.conf.sched.flush_now() {
@@ -13416,6 +13497,8 @@ impl ApplicationHandler<AppEvent> for App {
                 }
             }
         }
+        // 네트워크 점검 주기 기록(netmon · 08-21 — 켜져 있을 때만 한 줄).
+        self.tick_netmon();
         // 스크롤바 자동 숨김 틱 — **시각을 넘긴다**(호출 횟수가 아니라 벽시계로 재야
         // 이벤트가 몰리는 드래그 중에도 설정한 시간만큼 보인다 · 08-10).
         let bar_now = self.now_ms();
@@ -14719,6 +14802,9 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         peer_profile_fp: HashMap::new(),
         resumed_recv: HashMap::new(),
         statuslog: None,
+        netmon_log: None,
+        netmon_prev: nbeep_net::netmon::NetSnapshot::default(),
+        netmon_last_sec: 0,
         actor_joins: Vec::new(),
         wire_gen: 0,
         wire_pending: false,
@@ -14760,6 +14846,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
     app.ensure_wire_avatar(); // 상한 초과 사진의 와이어 축소본 보장(08-16 — 기존 사용자 자기 치유)
     crate::part::sweep_partials(crate::gate::CH_GUI); // 부분물 수명 정리(M4-10a — 72h·1GiB)
     app.refresh_statuslog(); // 상태 로그(M3-22 — log.enabled면 여기서 기동)
+    app.refresh_netmon(); // 네트워크 점검(08-21 — netmon.enabled면 여기서 기동)
     event_loop.run_app(&mut app).unwrap();
 }
 

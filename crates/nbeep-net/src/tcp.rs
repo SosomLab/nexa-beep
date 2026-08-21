@@ -82,6 +82,7 @@ impl Link for TcpLink {
         let mut buf = Vec::with_capacity(4 + frame.len());
         buf.extend_from_slice(&len.to_be_bytes());
         buf.extend_from_slice(frame);
+        crate::netmon::on_sess_tx(buf.len() as u64); // 계측은 횟수·바이트만(netmon)
         self.stream.write_all(&buf).map_err(|_| LinkError::Closed)
     }
 
@@ -119,6 +120,7 @@ impl Link for TcpLink {
         // 1ms 페이싱 설정이 첫 프레임 수신 즉시 무효화된다(영구 200ms 고착).
         let _ = self.stream.set_read_timeout(self.recv_timeout);
         r?;
+        crate::netmon::on_sess_rx(4 + buf.len() as u64); // 계측은 횟수·바이트만(netmon)
         Ok(buf)
     }
 }

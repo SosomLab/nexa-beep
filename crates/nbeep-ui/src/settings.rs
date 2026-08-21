@@ -80,6 +80,7 @@ const HIDDEN_KEYS: &[&str] = &[
 const TOGGLE_DEFAULT_OFF: &[&str] = &[
     "ui.close_to_tray", // 닫기 = 트레이(M3-2d — 기본 off · 사용자 확정)
     "log.enabled",      // 상태 로그(M3-22 — 기본 off · 사용자 확정 08-18)
+    "netmon.enabled",   // 네트워크 점검 기록(08-21 — 기본 off · 의도적으로 켤 때만)
     "notify.preview",   // 알림 본문 표시(M3-8 — 기본 끔: 화면 공유·녹화 안전)
     "profile.share.basic",
     "profile.share.email",
@@ -1120,6 +1121,23 @@ pub fn registry() -> &'static [Entry] {
             desc: Msg::LogViewDesc,
             kind: SettingKind::Action { verb: Msg::ActOpen },
             key: "log.view",
+        },
+        // ── 고급 › 네트워크 점검(netmon · 08-21 — 옵트인 계측 기록 · 기본 off) ──
+        Entry {
+            cat: Msg::CatAdvanced,
+            sub: Some(Msg::SubNetmon),
+            label: Msg::NetmonEnabled,
+            desc: Msg::NetmonEnabledDesc,
+            kind: SettingKind::Toggle,
+            key: "netmon.enabled",
+        },
+        Entry {
+            cat: Msg::CatAdvanced,
+            sub: Some(Msg::SubNetmon),
+            label: Msg::NetmonInterval,
+            desc: Msg::NetmonIntervalDesc,
+            kind: SettingKind::RadioInput(&[("10", Msg::NetmonIntervalDefault)], ""),
+            key: "netmon.interval_s",
         },
     ]
 }
