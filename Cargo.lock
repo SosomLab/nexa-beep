@@ -1203,6 +1203,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "nbeep-relay"
+version = "0.2.2"
+dependencies = [
+ "nbeep-core",
+ "nbeep-crypto",
+ "nbeep-net",
+ "sha2",
+]
+
+[[package]]
 name = "nbeep-safe"
 version = "0.2.2"
 dependencies = [
@@ -1273,6 +1283,16 @@ dependencies = [
  "nexa-conf",
  "softbuffer",
  "winit",
+]
+
+[[package]]
+name = "nexa-beepd"
+version = "0.2.2"
+dependencies = [
+ "nbeep-core",
+ "nbeep-crypto",
+ "nbeep-net",
+ "nbeep-relay",
 ]
 
 [[package]]

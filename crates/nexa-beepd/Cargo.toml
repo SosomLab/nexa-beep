@@ -1,0 +1,25 @@
+# nexa-beepd — 릴레이 서버 MVP(X-1 · docs/32 §12-6). **별도 실행 파일 · 별도 배포**
+# (W-4 — 태그 beepd-v* · release-server.yml). 클라이언트 의존 그래프에 절대 들어가지
+# 않는다(W-1 — 방향은 beepd → {relay, crypto, net, core} 단방향 · 역참조 금지).
+# 서버 전용 외부 의존 0 — DR-12(퍼미시브 온리)·경량 유지.
+[package]
+name = "nexa-beepd"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+nbeep-core.workspace = true
+nbeep-net.workspace = true
+nbeep-crypto.workspace = true
+nbeep-relay.workspace = true
+
+[[bin]]
+name = "nexa-beepd"
+path = "src/main.rs"
