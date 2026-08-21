@@ -78,10 +78,11 @@ const HIDDEN_KEYS: &[&str] = &[
 // 기본 꺼짐 — X = 종료(예측 가능성 우선). mac 관례 차등(빨간 버튼 = 유지)을
 // 권고했으나 사용자가 공통 off로 확정했다. 켜는 것은 설정 고급에서 옵트인.
 const TOGGLE_DEFAULT_OFF: &[&str] = &[
-    "ui.close_to_tray", // 닫기 = 트레이(M3-2d — 기본 off · 사용자 확정)
-    "log.enabled",      // 상태 로그(M3-22 — 기본 off · 사용자 확정 08-18)
-    "netmon.enabled",   // 네트워크 점검 기록(08-21 — 기본 off · 의도적으로 켤 때만)
-    "notify.preview",   // 알림 본문 표시(M3-8 — 기본 끔: 화면 공유·녹화 안전)
+    "ui.close_to_tray",      // 닫기 = 트레이(M3-2d — 기본 off · 사용자 확정)
+    "log.enabled",           // 상태 로그(M3-22 — 기본 off · 사용자 확정 08-18)
+    "netmon.enabled",        // 네트워크 점검 기록(08-21 — 기본 off · 의도적으로 켤 때만)
+    "notify.preview",        // 알림 본문 표시(M3-8 — 기본 끔: 화면 공유·녹화 안전)
+    "notify.broadcast_mute", // 공지 받지 않기(08-21 — 기본 끔 = 공지 받음)
     "profile.share.basic",
     "profile.share.email",
     "profile.share.phone",
@@ -347,6 +348,15 @@ pub fn registry() -> &'static [Entry] {
             desc: Msg::NotifyPreviewDesc,
             kind: SettingKind::Toggle,
             key: "notify.preview",
+        },
+        // 공지(브로드캐스트) 받지 않기(08-21 사용자 확정 — 옵트아웃 · 기본 받음).
+        Entry {
+            cat: Msg::CatConversation,
+            sub: None,
+            label: Msg::NotifyBroadcastMute,
+            desc: Msg::NotifyBroadcastMuteDesc,
+            kind: SettingKind::Toggle,
+            key: "notify.broadcast_mute",
         },
         Entry {
             cat: Msg::CatAppearance,

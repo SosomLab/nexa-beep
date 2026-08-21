@@ -523,7 +523,8 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
                         }
                         if let MessageBody::Text(t) = m.body {
                             let safe = nbeep_core::sanitize_message(&t);
-                            println!("{}> {}", peer.short(), safe.as_str());
+                            let tag = if m.broadcast { "[공지] " } else { "" };
+                            println!("{}> {tag}{}", peer.short(), safe.as_str());
                         }
                     }
                 }
@@ -981,6 +982,7 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
             seq: seq.issue(),
             body: MessageBody::Text(line),
             importance: nbeep_core::Importance::Normal,
+            broadcast: false,
         };
         out_tx.send(Cmd::Chat(msg.encode())).is_ok()
     };
@@ -1372,7 +1374,8 @@ fn spawn_passive(
                         }
                         if let nbeep_core::MessageBody::Text(t) = m.body {
                             let safe = nbeep_core::sanitize_message(&t);
-                            println!("\r{}(수신 전용)> {}", peer.short(), safe.as_str());
+                            let tag = if m.broadcast { "[공지] " } else { "" };
+                            println!("\r{}(수신 전용)> {tag}{}", peer.short(), safe.as_str());
                         }
                     }
                 }

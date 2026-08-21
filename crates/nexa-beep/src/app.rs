@@ -86,6 +86,8 @@ enum AppEvent {
         /// 발신자 요청 등급(④ · docs/24 — 0 일반 · 1 알림 · 2 긴급). 강도 판정은
         /// 수신측(여기) 몫 — 미검증은 종전 무음 게이트가 그대로 이긴다.
         importance: u8,
+        /// 공지(브로드캐스트) 팬아웃 표식(08-21) — "받지 않기" 설정의 판정 근거.
+        broadcast: bool,
     },
     /// 클립보드 이미지 준비 완료(③ 08-20) — 워커가 읽기+PNG 인코딩을 마쳤다.
     /// `png = None` = 클립보드에 이미지 없음/변환 실패(상태바 고지).
@@ -1086,6 +1088,7 @@ fn spawn_session_actor(
                                     seq: m.seq,
                                     sender: m.sender_device,
                                     importance,
+                                    broadcast: m.broadcast,
                                 };
                                 if proxy.send_event(ev).is_err() {
                                     return; // 이벤트 루프 종료
@@ -1602,7 +1605,9 @@ struct PendingDirect {
     text: String,
     /// 입력 시각(밀리초) — 대기 풍선과의 대응 키(resolve_queued).
     at_ms: u64,
-    /// 등급(0 Normal · 1 Notice · 2 Urgent — ④ 공지 실패분 편입 대비).
+    /// 등급(하위 2비트: 0 Normal · 1 Notice · 2 Urgent) + **bit2(`0x4`) = 공지
+    /// 표식**(08-21 — 대기 편입된 공지가 flush 때도 공지로 발신되도록 · 저장
+    /// 포맷 불변: 구 데이터의 0/1/2는 그대로 읽힌다).
     importance: u8,
 }
 
@@ -2099,6 +2104,7 @@ fn spawn_echo_bot(bus: &std::sync::Arc<nbeep_net::inmem::InMemoryBus>, name: &st
                     seq: seq.issue(),
                     body: MessageBody::Text(format!("에코: {text}")),
                     importance: nbeep_core::Importance::Normal,
+                    broadcast: false,
                 };
                 if mux.send(StreamId::Chat, &reply.encode()).is_err() {
                     break;
@@ -2298,6 +2304,8 @@ struct App {
     netmon_prev: nbeep_net::netmon::NetSnapshot,
     /// netmon 마지막 기록 시각(unix 초).
     netmon_last_sec: u64,
+    /// 마지막 공지(브로드캐스트) 발신 시각(ms) — 3초 1회 제한(08-21 사용자 확정).
+    last_broadcast_ms: u64,
     /// 이어받기로 수락한 수신의 원본 sha(M4-10) — 완료·취소 때 `.part` 정리.
     resumed_recv: HashMap<PeerId, [u8; 32]>,
     /// 마지막으로 **적용한** 프로필 수신 내용의 지문(RL-1 · 08-18) — 동일 내용
@@ -7820,11 +7828,12 @@ impl App {
                 sender_device: self.identity.peer_id(),
                 seq,
                 body: nbeep_core::MessageBody::Text(m.text.clone()),
-                importance: match m.importance {
+                importance: match m.importance & 0x3 {
                     2 => nbeep_core::Importance::Urgent,
                     1 => nbeep_core::Importance::Notice,
                     _ => nbeep_core::Importance::Normal,
                 },
+                broadcast: m.importance & 0x4 != 0, // 대기 편입 공지 표식(08-21)
             };
             let Some(conv) = self.conversations.get_mut(&peer) else {
                 break;
@@ -9054,6 +9063,17 @@ impl App {
         if text.as_str().trim().is_empty() {
             return;
         }
+        // ★ 발신 빈도 제한(08-21 사용자 확정 — 3초에 1번): 공지는 발견 전체에게
+        //   1:1 팬아웃이라, 연타 한 번이 N명 × 세션/큐 비용이 된다. 막을 때는
+        //   조용히 버리지 않고 상태바로 이유를 말한다(조용한 생략 금지).
+        const BROADCAST_MIN_GAP_MS: u64 = 3_000;
+        let now = self.now_ms();
+        let since = now.saturating_sub(self.last_broadcast_ms);
+        if self.last_broadcast_ms != 0 && since < BROADCAST_MIN_GAP_MS {
+            self.set_status(nbeep_core::t(nbeep_core::Msg::StBroadcastRateLimit));
+            return;
+        }
+        self.last_broadcast_ms = now;
         // 대상 = 발견 목록 + 비발견 유지 상대(refresh_rows와 같은 병합 · 나 제외).
         let me = self.identity.peer_id();
         let mut targets: Vec<PeerId> = self.table.list().into_iter().map(|e| e.peer).collect();
@@ -9074,6 +9094,7 @@ impl App {
                     seq: self.seq.issue(),
                     body: nbeep_core::MessageBody::Text(text.as_str().to_string()),
                     importance: nbeep_core::Importance::Notice,
+                    broadcast: true, // 공지 표식(08-21 — 수신측 "받지 않기"의 근거)
                 };
                 if let Some(chat) = self.chats.get_mut(&peer) {
                     chat.push_line(
@@ -9100,7 +9121,7 @@ impl App {
                 q.push(PendingDirect {
                     text: text.as_str().to_string(),
                     at_ms,
-                    importance: 1,
+                    importance: 1 | 0x4, // Notice + 공지 표식(08-21)
                 });
                 if q.len() > PENDING_DIRECT_MAX {
                     let drop_n = q.len() - PENDING_DIRECT_MAX;
@@ -10746,6 +10767,7 @@ impl App {
                     seq: self.seq.issue(),
                     body: nbeep_core::MessageBody::Text(text.as_str().to_string()),
                     importance,
+                    broadcast: false,
                 };
                 if let Some(chat) = self.chats.get_mut(&peer) {
                     chat.push_line(
@@ -11717,9 +11739,17 @@ impl ApplicationHandler<AppEvent> for App {
                 seq,
                 sender,
                 importance,
+                broadcast,
             } => {
                 if !self.dedup.accept(sender, seq) {
                     return; // 중복(다중 경로 — FR-M-9)
+                }
+                // ★ 공지 받지 않기(08-21 사용자 확정 — 옵트아웃): 공지 표식이 선
+                //   메시지는 표시·알림·기록·전달 ack 전부 없이 버린다 — 발신자
+                //   쪽에서는 오프라인·미검증 수신자와 구분되지 않는다(그림자 무시 ·
+                //   설정 hot-swap · 무시 설정 전에 도착한 공지는 그대로 남는다).
+                if broadcast && self.settings.get("notify.broadcast_mute") == "on" {
+                    return;
                 }
                 let cur = self.last_recv_seq.entry(peer).or_insert(0);
                 *cur = (*cur).max(seq); // 읽음 ack 대상(N-2 up-to)
@@ -14805,6 +14835,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         netmon_log: None,
         netmon_prev: nbeep_net::netmon::NetSnapshot::default(),
         netmon_last_sec: 0,
+        last_broadcast_ms: 0,
         actor_joins: Vec::new(),
         wire_gen: 0,
         wire_pending: false,

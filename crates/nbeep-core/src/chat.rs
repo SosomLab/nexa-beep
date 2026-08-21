@@ -85,8 +85,13 @@ pub struct ChatMessage {
     pub seq: u64,
     /// 본문.
     pub body: MessageBody,
-    /// 발신자 등급(N-1 · 기본 Normal). 와이어 = kind 상위 니블.
+    /// 발신자 등급(N-1 · 기본 Normal). 와이어 = kind 상위 니블의 하위 2비트.
     pub importance: Importance,
+    /// **공지(브로드캐스트) 팬아웃 표식**(08-21) — 발견 전체 공지로 발송된 메시지.
+    /// 수신자가 "공지 받지 않기" 설정으로 걸러낼 근거. 와이어 = 상위 니블 bit2
+    /// (`0x4`) — 구버전 수신자는 미지 니블 값을 Normal로 읽어 일반 메시지로
+    /// 표시한다(전방 호환 · 등급 링만 잃는다).
+    pub broadcast: bool,
 }
 
 /// 봉투 해석 오류.
@@ -115,7 +120,9 @@ impl ChatMessage {
         };
         // 등급은 kind 상위 니블(N-1) — Normal(0)이면 종전 바이트와 동일(하위 호환).
         // kind는 하위 니블만(0~15 · 상위는 등급 전용) — 니블 도입의 대가.
-        let kind = (kind & 0x0F) | (self.importance.to_nibble() << 4);
+        // 상위 니블 배치(08-21): bit0-1 = 등급(0~2) · bit2 = 공지 표식 · bit3 = 예약.
+        let hi = self.importance.to_nibble() | if self.broadcast { 0x4 } else { 0 };
+        let kind = (kind & 0x0F) | (hi << 4);
         let mut out = Vec::with_capacity(HEADER + text.len());
         out.push(WIRE_VER);
         out.extend_from_slice(self.sender_device.as_bytes());
@@ -150,7 +157,9 @@ impl ChatMessage {
         let seq = u64::from_be_bytes(seq_bytes);
         let raw = bytes[HEADER - 1];
         let kind = raw & 0x0F; // 하위 니블 = 메시지 종류
-        let importance = Importance::from_nibble(raw >> 4); // 상위 니블 = 등급(N-1)
+        let hi = raw >> 4; // 상위 니블: bit0-1 = 등급(N-1) · bit2 = 공지 표식(08-21)
+        let importance = Importance::from_nibble(hi & 0x3);
+        let broadcast = hi & 0x4 != 0;
         let body = match kind {
             KIND_TEXT => MessageBody::Text(
                 String::from_utf8(bytes[HEADER..].to_vec()).map_err(|_| WireError::Utf8)?,
@@ -162,6 +171,7 @@ impl ChatMessage {
             seq,
             body,
             importance,
+            broadcast,
         })
     }
 }
@@ -292,6 +302,7 @@ mod tests {
             seq: 1,
             body: MessageBody::Text("hi".into()),
             importance: Importance::Normal,
+            broadcast: false,
         };
         let urgent = ChatMessage {
             importance: Importance::Urgent,
@@ -311,13 +322,31 @@ mod tests {
             ChatMessage::decode(&nb, peer).unwrap().importance,
             Importance::Normal
         );
-        // 미지 등급 니블(예: 9)은 Normal로 강등(전방 호환).
+        // 미지 등급(2비트 값 3)·예약 비트(bit3)는 Normal로 강등(전방 호환) —
+        // 예약 비트가 서 있어도 등급 비트는 살아 읽힌다(마스킹 규약 08-21).
         let mut weird = nb;
-        weird[HEADER - 1] = (9 << 4) | (weird[HEADER - 1] & 0x0F);
-        assert_eq!(
-            ChatMessage::decode(&weird, peer).unwrap().importance,
-            Importance::Normal
-        );
+        weird[HEADER - 1] = (0b1011 << 4) | (weird[HEADER - 1] & 0x0F); // bit3 + 등급 3
+        let w = ChatMessage::decode(&weird, peer).unwrap();
+        assert_eq!(w.importance, Importance::Normal);
+        assert!(!w.broadcast, "예약 비트는 공지 표식이 아니다");
+    }
+
+    /// 공지(브로드캐스트) 표식 = 상위 니블 bit2(08-21) — 등급과 독립 왕복.
+    #[test]
+    fn broadcast_flag_rides_bit2_and_roundtrips() {
+        let peer = PeerId::from_bytes([7u8; PeerId::LEN]);
+        let m = ChatMessage {
+            sender_device: peer,
+            seq: 9,
+            body: MessageBody::Text("공지".into()),
+            importance: Importance::Notice,
+            broadcast: true,
+        };
+        let b = m.encode();
+        assert_eq!(b[HEADER - 1] >> 4, 0x4 | 1, "Notice+공지 = 니블 5");
+        let d = ChatMessage::decode(&b, peer).unwrap();
+        assert!(d.broadcast);
+        assert_eq!(d.importance, Importance::Notice);
     }
 
     fn pid(b: u8) -> PeerId {
@@ -332,6 +361,7 @@ mod tests {
             seq,
             body: MessageBody::Text(text.into()),
             importance: Importance::Normal,
+            broadcast: false,
         }
     }
 

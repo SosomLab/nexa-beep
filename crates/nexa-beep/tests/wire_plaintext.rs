@@ -133,6 +133,7 @@ fn session_wire_carries_no_plaintext() {
         sender_device: id_a.peer_id(),
         body: MessageBody::Text(MARK_CHAT.to_string()),
         importance: nbeep_core::Importance::Normal,
+        broadcast: false,
     };
     mux.send(StreamId::Chat, &chat.encode()).expect("chat 송신");
     let info = ProfileMsg::Info {

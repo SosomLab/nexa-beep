@@ -283,6 +283,11 @@ pub enum Msg {
     NetmonIntervalDefault,
     /// 상태바 — netmon 과다 경고(경고 태그 목록).
     StfNetmonWarn,
+    /// 공지 발신 빈도 제한(08-21 — 3초 1회) 안내.
+    StBroadcastRateLimit,
+    /// 설정 — 공지(브로드캐스트) 받지 않기 토글.
+    NotifyBroadcastMute,
+    NotifyBroadcastMuteDesc,
     /// 처음부터 버튼(M4-10c — 보존분을 버리고 새로 받기).
     OfferFreshBtn,
     OfferQuarantineNote,
@@ -1252,7 +1257,7 @@ impl Msg {
             Msg::StGradeGroupUnsupported => ["Grades are 1:1 only for now — use Menu ▸ Send notice for broadcast", "등급은 아직 1:1 전용 — 전체 공지는 메뉴 ▸ 공지 보내기", "等级暂仅支持1:1 — 群发请用菜单▸发送公告", "グレードは1:1のみ — 一斉通知はメニュー▸お知らせ送信"],
             Msg::StfBroadcastSent => ["Notice sent — {} now · {} queued (delivered when they appear)", "공지 발송 — 즉시 {} · 대기 {} (상대가 나타나면 자동 전달)", "公告已发 — 立即 {} · 排队 {}（对方出现时送达）", "お知らせ送信 — 即時 {} · 待機 {}（相手が現れたら配信）"],
             Msg::MenuBroadcast => ["Send notice…", "공지 보내기…", "发送公告…", "お知らせ送信…"],
-            Msg::BroadcastTitle => ["Send notice to everyone discovered (Notice grade)", "공지 보내기 — 발견된 전체에게(알림 등급)", "向所有已发现的对象发送公告（提醒等级）", "発見中の全員へお知らせ（通知グレード）"],
+            Msg::BroadcastTitle => ["Send notice to everyone discovered (Notice grade · once per 3s)", "공지 보내기 — 발견된 전체에게(알림 등급 · 3초에 1번)", "向所有已发现的对象发送公告（提醒等级 · 每3秒1次）", "発見中の全員へお知らせ（通知グレード · 3秒に1回）"],
             Msg::CmdHelpNote => ["  ※ Input starting with / is never sent", "  ※ /로 시작하는 입력은 어떤 경우에도 전송되지 않습니다", "  ※ 以 / 开头的输入绝不会被发送", "  ※ / で始まる入力は決して送信されません"],
             Msg::CmdUnknown => ["Unknown command /{} — see /help (not sent)", "모르는 명령 /{} — /help 로 목록을 봅니다(보내지 않았습니다)", "未知命令 /{} — 请见 /help(未发送)", "不明なコマンド /{} — /help を参照(送信していません)"],
             Msg::CmdTrustGroup => ["No single peer in a group room — check each in the members modal", "그룹 방에는 단일 상대가 없습니다 — 구성원 모달에서 각자 확인합니다", "群组房间没有单一对象 — 请在成员窗口逐一确认", "グループ部屋には単一の相手がいません — メンバー画面で各自確認"],
@@ -1846,6 +1851,26 @@ impl Msg {
                 "間隔ごとに要約1行を記録します。",
             ],
             Msg::NetmonIntervalDefault => ["Default (10)", "기본(10초)", "默认(10秒)", "既定(10秒)"],
+            Msg::StBroadcastRateLimit => [
+                "Notices are limited to once per 3 seconds — try again shortly (not sent)",
+                "공지는 3초에 1번만 보낼 수 있습니다 — 잠시 후 다시 시도하세요(보내지 않았습니다)",
+                "公告限每3秒发送1次 — 请稍后再试（未发送）",
+                "お知らせは3秒に1回までです — 少し待って再試行してください（送信していません）",
+            ],
+            Msg::NotifyBroadcastMute => [
+                "Ignore broadcasts",
+                "공지(브로드캐스트) 받지 않기",
+                "忽略广播公告",
+                "お知らせ（ブロードキャスト）を受け取らない",
+            ],
+            Msg::NotifyBroadcastMuteDesc => [
+                "Silently discard notices sent to everyone discovered — no display, \
+                 notification, or history. The sender is not told.",
+                "발견 전체에게 뿌려진 공지를 조용히 버립니다 — 표시·알림·기록 없음. \
+                 발신자에게는 알리지 않습니다.",
+                "静默丢弃发给所有人的公告 — 不显示、不通知、不记录。发送方不会得知。",
+                "全員宛のお知らせを静かに破棄します — 表示・通知・記録なし。送信者には知らせません。",
+            ],
             Msg::StfNetmonWarn => [
                 "⚠ Network check: excessive traffic ({}) — see netmon log",
                 "⚠ 네트워크 점검: 과다 트래픽({}) — netmon 로그 확인",

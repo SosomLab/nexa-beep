@@ -49,6 +49,7 @@ pub(crate) fn serve_manual(port: u16) {
                         seq: seq.issue(),
                         body: MessageBody::Text(format!("에코: {t}")),
                         importance: nbeep_core::Importance::Normal,
+                        broadcast: false,
                     };
                     if mux.send(StreamId::Chat, &reply.encode()).is_err() {
                         break;
@@ -106,6 +107,7 @@ pub(crate) fn connect_manual(addr: &str) {
         seq: seq.issue(),
         body: MessageBody::Text("안녕! 수동 연결이야".into()),
         importance: nbeep_core::Importance::Normal,
+        broadcast: false,
     };
     if mux.send(StreamId::Chat, &msg.encode()).is_ok() {
         if let Ok(bytes) = mux.recv(StreamId::Chat) {
