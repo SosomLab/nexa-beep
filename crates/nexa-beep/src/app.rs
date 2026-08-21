@@ -14446,6 +14446,48 @@ fn session_port_from(settings: &SettingsState) -> u16 {
 /// 임시 폴더가 남는데, 그땐 신원 영속 자체가 성립하지 않는 환경이다.
 /// 설정(`settings.cfg`)·신원 키(`identity.key`)·핀 세그먼트(`trust.seg`)가 전부
 /// 여기 산다. 경로는 여기서 정해 **인자로 넘긴다**(소비 크레이트는 경로 비소유).
+/// 동기화 폴더 감지(M2-5b · [17 §6] · 08-22) — 데이터 폴더가 클라우드 동기화
+/// 폴더 안이면 제공자 이름을 돌려준다. 봉인이라 **내용 유출은 아니지만**, 동기화
+/// 충돌·구버전 복원(지운 대화가 되살아남)·다중 기기 동시 실행이 세그먼트를
+/// 조용히 망가뜨릴 수 있어 **경고만** 한다(막지 않는다 — DR-1 제로 컨피그).
+/// 판정 = 경로 구성요소 이름(대소문자 무시) + Windows `OneDrive` env 접두.
+pub(crate) fn sync_folder_hint(path: &std::path::Path) -> Option<&'static str> {
+    let comp_is = |c: &str| -> Option<&'static str> {
+        let l = c.to_ascii_lowercase();
+        if l.contains("onedrive") {
+            Some("OneDrive")
+        } else if l.contains("dropbox") {
+            Some("Dropbox")
+        } else if l == "google drive" || l == "googledrive" || l == "my drive" {
+            Some("Google Drive")
+        } else if l.contains("icloud") || l == "com~apple~clouddocs" {
+            Some("iCloud")
+        } else if l.contains("nextcloud") {
+            Some("Nextcloud")
+        } else {
+            None
+        }
+    };
+    for c in path.components() {
+        if let std::path::Component::Normal(os) = c {
+            if let Some(p) = os.to_str().and_then(comp_is) {
+                return Some(p);
+            }
+        }
+    }
+    // Windows — OneDrive는 사용자가 폴더명을 바꿀 수 있어 env 접두로도 본다.
+    #[cfg(windows)]
+    for key in ["OneDrive", "OneDriveConsumer", "OneDriveCommercial"] {
+        if let Some(root) = std::env::var_os(key) {
+            let root = std::path::PathBuf::from(root);
+            if !root.as_os_str().is_empty() && path.starts_with(&root) {
+                return Some("OneDrive");
+            }
+        }
+    }
+    None
+}
+
 /// 클립보드 스테이징 정리(SEAL-2 ③ · 08-22) — `data/clipboard/clip-*.png`는 보낸
 /// 클립보드 이미지의 스테이징 사본이라 전송 뒤에도 남는다(스트리밍이 파일에서
 /// 읽는 구조상 즉시 삭제 불가). 부팅마다 24h 지난 것을 지운다(part sweep 문법).
@@ -15011,6 +15053,13 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
     app.ensure_wire_avatar(); // 상한 초과 사진의 와이어 축소본 보장(08-16 — 기존 사용자 자기 치유)
     crate::part::sweep_partials(crate::gate::CH_GUI); // 부분물 수명 정리(M4-10a — 72h·1GiB)
     sweep_clipboard_staging(&app.data_dir.join("clipboard")); // 스테이징 정리(SEAL-2 — 24h)
+                                                              // 동기화 폴더 경고(M2-5b · 17 §6) — 부팅 1회 고지(막지 않는다).
+    if let Some(provider) = sync_folder_hint(&app.data_dir) {
+        app.set_status(nbeep_core::tf(
+            nbeep_core::Msg::StfSyncFolderWarn,
+            &[provider],
+        ));
+    }
     app.refresh_statuslog(); // 상태 로그(M3-22 — log.enabled면 여기서 기동)
     app.refresh_netmon(); // 네트워크 점검(08-21 — netmon.enabled면 여기서 기동)
     event_loop.run_app(&mut app).unwrap();
@@ -15018,6 +15067,36 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
 
 #[cfg(test)]
 mod tests {
+    /// M2-5b(08-22) — 동기화 폴더 판정: 구성요소 이름 기반(대소문자 무시) ·
+    /// 일반 경로는 None. env 축(Windows OneDrive 접두)은 환경 의존이라 제외.
+    #[test]
+    fn sync_folder_hint_matches_known_providers_only() {
+        use std::path::Path;
+        assert_eq!(
+            super::sync_folder_hint(Path::new(r"C:\Users\u\OneDrive\문서\data")),
+            Some("OneDrive")
+        );
+        assert_eq!(
+            super::sync_folder_hint(Path::new("/Users/u/Dropbox/beep/data")),
+            Some("Dropbox")
+        );
+        assert_eq!(
+            super::sync_folder_hint(Path::new(r"D:\Google Drive\beep")),
+            Some("Google Drive")
+        );
+        assert_eq!(
+            super::sync_folder_hint(Path::new(
+                "/Users/u/Library/Mobile Documents/com~apple~CloudDocs/x"
+            )),
+            Some("iCloud")
+        );
+        assert_eq!(
+            super::sync_folder_hint(Path::new(r"D:\Projects\nexa-beep\data")),
+            None,
+            "일반 경로 오탐 금지"
+        );
+    }
+
     /// SEAL-2 ③(08-22) — 스테이징 정리는 `clip-*.png`만 본다(신선분·타 파일 보존).
     /// 만료 삭제 축은 mtime 주입 수단이 없어 여기선 필터 계약만 박제한다.
     #[test]

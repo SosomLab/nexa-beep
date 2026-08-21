@@ -293,6 +293,8 @@ pub enum Msg {
     StfScanDetected,
     /// 격리함 — 아카이브 정책 위반 라벨(M4-4 · Zip Slip·폭탄·판정 불가).
     ArchiveViol,
+    /// 상태바 — 데이터 폴더가 클라우드 동기화 폴더 안(M2-5b · 17 §6 경고).
+    StfSyncFolderWarn,
     /// 등급 배지 라벨(④ docs/24 — 입력줄 칩 · 08-21 i18n 승격).
     GradeNormal,
     GradeNotice,
@@ -1892,6 +1894,12 @@ impl Msg {
                 "⚠ 수신 파일에서 위협 탐지: {} — 격리 유지(승인하지 마세요)",
                 "⚠ 接收文件检出威胁：{} — 保持隔离（请勿批准）",
                 "⚠ 受信ファイルで脅威を検出: {} — 隔離を維持（承認しないでください）",
+            ],
+            Msg::StfSyncFolderWarn => [
+                "⚠ Data folder is inside a {} sync folder — sync conflicts may corrupt or resurrect history",
+                "⚠ 데이터 폴더가 {} 동기화 폴더 안에 있습니다 — 동기화 충돌로 기록이 깨지거나 지운 대화가 되살아날 수 있습니다",
+                "⚠ 数据文件夹位于 {} 同步文件夹内 — 同步冲突可能损坏或复活记录",
+                "⚠ データフォルダが {} 同期フォルダ内にあります — 同期競合で記録が壊れたり復活したりする恐れ",
             ],
             Msg::ArchiveViol => [
                 "Archive policy violation",
