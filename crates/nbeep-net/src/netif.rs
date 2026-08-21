@@ -11,8 +11,9 @@
 //! (완전할 수 없다 — 새 접두사는 실측으로 추가).
 //!
 //! Unix = `getifaddrs`(libc — 이미 링크되는 시스템 라이브러리 바인딩 · 런타임 의존 0).
-//! Windows = **빈 목록 폴백**(기존 기본 경로 발신 유지 — `GetAdaptersAddresses` 어댑터는
-//! Windows 실기 세션 몫 · TODO WNET-1). 목록이 비면 호출측은 종전 동작 그대로다.
+//! Windows = **`GetAdaptersAddresses` 직접**(08-22 M1-9 — iphlpapi 직접 링크 ·
+//! WNET-1의 이웃 테이블과 같은 문법: repr(C) 부분 선언 + `offset_of` 컴파일 타임
+//! 단언 · 실패 = 빈 목록 폴백 = 종전 기본 경로 발신 그대로).
 
 use std::net::Ipv4Addr;
 
@@ -69,6 +70,14 @@ pub fn is_virtual_name(name: &str) -> bool {
         "gif",
         "stf",
         "anpi",
+        // Windows 친화 이름(08-22 M1-9 — GetAdaptersAddresses FriendlyName 기준).
+        "vethernet", // Hyper-V/WSL 가상 스위치
+        "openvpn",
+        "wireguard",
+        "wintun",
+        "nordlynx",
+        "zerotier",
+        "hamachi",
     ];
     let lower = name.to_ascii_lowercase();
     PREFIXES.iter().any(|p| lower.starts_with(p))
@@ -131,8 +140,158 @@ pub fn list_v4() -> Vec<NetIf> {
     out
 }
 
-/// Windows — 빈 목록 폴백(호출측은 기본 경로 발신 유지 · WNET-1에서 어댑터 추가).
-#[cfg(not(unix))]
+/// Windows — `GetAdaptersAddresses`(iphlpapi 직접 · 08-22 M1-9). 시스템이 채운
+/// 연결 리스트를 읽기만 하며, 어느 단계든 실패 = 빈 목록(종전 폴백과 동일).
+#[cfg(windows)]
+#[must_use]
+pub fn list_v4() -> Vec<NetIf> {
+    use core::ffi::c_void;
+
+    // IP_ADAPTER_ADDRESSES_LH — **읽는 필드까지만** 부분 선언(x64 배치).
+    // 시스템이 할당한 버퍼를 포인터로 읽을 뿐 우리가 만들지 않으므로, 선언한
+    // 오프셋이 실제와 일치하면 된다(offset_of 단언 — 추정 금지를 빌드가 지킨다).
+    #[repr(C)]
+    struct Adapter {
+        length: u32,
+        if_index: u32,
+        next: *mut Adapter,
+        adapter_name: *mut i8,
+        first_unicast: *mut Unicast,
+        first_anycast: *mut c_void,
+        first_multicast: *mut c_void,
+        first_dns: *mut c_void,
+        dns_suffix: *mut u16,
+        description: *mut u16,
+        friendly_name: *mut u16,
+        physical_address: [u8; 8],
+        physical_address_length: u32,
+        flags: u32,
+        mtu: u32,
+        if_type: u32,
+        oper_status: u32,
+    }
+    const _: () = {
+        assert!(core::mem::offset_of!(Adapter, next) == 8);
+        assert!(core::mem::offset_of!(Adapter, first_unicast) == 24);
+        assert!(core::mem::offset_of!(Adapter, friendly_name) == 72);
+        assert!(core::mem::offset_of!(Adapter, if_type) == 100);
+        assert!(core::mem::offset_of!(Adapter, oper_status) == 104);
+    };
+
+    // IP_ADAPTER_UNICAST_ADDRESS_LH — 역시 부분 선언.
+    #[repr(C)]
+    struct Unicast {
+        length: u32,
+        flags: u32,
+        next: *mut Unicast,
+        lp_sockaddr: *mut SockaddrIn,
+        sockaddr_len: i32,
+        _pad: i32,
+        prefix_origin: u32,
+        suffix_origin: u32,
+        dad_state: u32,
+        valid_lifetime: u32,
+        preferred_lifetime: u32,
+        lease_lifetime: u32,
+        on_link_prefix_length: u8,
+    }
+    const _: () = {
+        assert!(core::mem::offset_of!(Unicast, next) == 8);
+        assert!(core::mem::offset_of!(Unicast, lp_sockaddr) == 16);
+        assert!(core::mem::offset_of!(Unicast, on_link_prefix_length) == 56);
+    };
+
+    #[repr(C)]
+    struct SockaddrIn {
+        family: u16,
+        port: u16,
+        addr: [u8; 4],
+        zero: [u8; 8],
+    }
+
+    #[link(name = "iphlpapi")]
+    extern "system" {
+        fn GetAdaptersAddresses(
+            family: u32,
+            flags: u32,
+            reserved: *mut c_void,
+            adapter_addresses: *mut Adapter,
+            size_pointer: *mut u32,
+        ) -> u32;
+    }
+
+    const AF_INET: u32 = 2;
+    // ANYCAST·MULTICAST·DNS 서버 목록 생략(우리는 유니캐스트 주소만 본다).
+    const GAA_FLAGS: u32 = 0x0002 | 0x0004 | 0x0008;
+    const ERROR_BUFFER_OVERFLOW: u32 = 111;
+    const IF_TYPE_SOFTWARE_LOOPBACK: u32 = 24;
+    const IF_OPER_STATUS_UP: u32 = 1;
+
+    let mut out = Vec::new();
+    // 크기 질의 → 할당 → 재호출(성장 재시도 2회 — 그 사이 어댑터가 늘 수 있다).
+    let mut size: u32 = 16 * 1024;
+    for _ in 0..3 {
+        let mut buf = vec![0u8; size as usize];
+        // SAFETY: 문서화된 호출 규약 — buf를 시스템이 채우고, 성공 시에만 연결
+        // 리스트를 읽는다(널 검사 · AF_INET만 · 버퍼 수명 안에서만 접근).
+        let rc = unsafe {
+            GetAdaptersAddresses(
+                AF_INET,
+                GAA_FLAGS,
+                std::ptr::null_mut(),
+                buf.as_mut_ptr().cast::<Adapter>(),
+                &mut size,
+            )
+        };
+        if rc == ERROR_BUFFER_OVERFLOW {
+            continue; // size가 필요치로 갱신됨 — 재할당
+        }
+        if rc != 0 {
+            return out; // 실패 = 빈 목록 폴백(종전 동작)
+        }
+        unsafe {
+            let mut a = buf.as_ptr().cast::<Adapter>();
+            while !a.is_null() {
+                let ad = &*a;
+                let name = if ad.friendly_name.is_null() {
+                    String::new()
+                } else {
+                    let mut len = 0usize;
+                    while *ad.friendly_name.add(len) != 0 {
+                        len += 1;
+                    }
+                    String::from_utf16_lossy(core::slice::from_raw_parts(ad.friendly_name, len))
+                };
+                let up = ad.oper_status == IF_OPER_STATUS_UP;
+                let loopback = ad.if_type == IF_TYPE_SOFTWARE_LOOPBACK;
+                let mut u = ad.first_unicast;
+                while !u.is_null() {
+                    let un = &*u;
+                    if !un.lp_sockaddr.is_null() && (*un.lp_sockaddr).family == AF_INET as u16 {
+                        let v4 = Ipv4Addr::from((*un.lp_sockaddr).addr);
+                        let plen = u32::from(un.on_link_prefix_length);
+                        let mask = (plen > 0 && plen <= 32)
+                            .then(|| Ipv4Addr::from(u32::MAX << (32 - plen)));
+                        out.push(NetIf {
+                            name: name.clone(),
+                            v4,
+                            mask,
+                            up,
+                            loopback,
+                        });
+                    }
+                    u = un.next;
+                }
+                a = ad.next;
+            }
+        }
+        return out;
+    }
+    out
+}
+
+/// 그 외 OS — 빈 목록 폴백(호출측은 기본 경로 발신 유지).
+#[cfg(not(any(unix, windows)))]
 #[must_use]
 pub fn list_v4() -> Vec<NetIf> {
     Vec::new()
@@ -173,6 +332,29 @@ mod tests {
             Some(Ipv4Addr::new(169, 254, 255, 255))
         );
         assert_eq!(NetIf { mask: None, ..i }.subnet_broadcast(), None);
+    }
+
+    /// Windows 실 호스트 열거 스모크(08-22 M1-9) — 루프백 어댑터가 보이고,
+    /// 자격 목록엔 루프백이 없다. 자격 인터페이스는 실측 출력(--nocapture).
+    #[cfg(windows)]
+    #[test]
+    fn windows_enumeration_sees_loopback_and_eligible() {
+        let all = list_v4();
+        assert!(
+            all.iter().any(|i| i.loopback && i.v4.is_loopback()),
+            "루프백 127.x가 보여야 한다: {all:?}"
+        );
+        let el = eligible_v4();
+        assert!(el.iter().all(|i| !i.loopback && i.up));
+        for i in &el {
+            println!(
+                "자격 IF: {} {}/{:?} bcast={:?}",
+                i.name,
+                i.v4,
+                i.mask,
+                i.subnet_broadcast()
+            );
+        }
     }
 
     /// 실 호스트 열거 스모크 — unix에선 루프백이 반드시 있다(형식·플래그 파싱 검증).
