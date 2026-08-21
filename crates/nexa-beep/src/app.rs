@@ -8963,22 +8963,30 @@ impl App {
             let pid = *pid;
             self.windows.remove(&pid);
         }
+        // 창 제목·플레이스홀더 = 용도별 i18n(08-21 승격 — 공지인데 "Group" 제목,
+        // "공지 내용" 한글 고정이던 것).
+        let broadcast = matches!(purpose, NamePurpose::Broadcast);
         self.name_prompt_for = Some(purpose);
         let mut attrs = Window::default_attributes()
             .with_title(format!(
                 "Nexa Beep — {}",
-                nbeep_core::t(nbeep_core::Msg::WinGroup)
+                nbeep_core::t(if broadcast {
+                    nbeep_core::Msg::WinBroadcast
+                } else {
+                    nbeep_core::Msg::WinGroup
+                })
             ))
-            .with_inner_size(winit::dpi::LogicalSize::new(360.0, 150.0))
+            .with_inner_size(winit::dpi::LogicalSize::new(420.0, 150.0))
             .with_resizable(false)
             .with_window_icon(self.icon.clone());
         // 메인(목록) 창 중앙 부근에 배치(08-21 사용자 요청 — OS 기본 위치는 목록과
-        // 멀리 떨어져 뜬다 · 경고 모달과 같은 문법 08-20).
+        // 멀리 떨어져 뜬다 · 경고 모달과 같은 문법 08-20). 높이는 첫 paint의 제목
+        // word-wrap 실측으로 재조정된다(desired_height — 잘림 방지).
         if let Some(e) = self.main_id.and_then(|m| self.windows.get(&m)) {
             if let Ok(pos) = e.window.outer_position() {
                 let sz = e.window.inner_size();
                 let sf = e.window.scale_factor();
-                let (mw, mh) = ((360.0 * sf) as i32, (150.0 * sf) as i32);
+                let (mw, mh) = ((420.0 * sf) as i32, (150.0 * sf) as i32);
                 attrs = attrs.with_position(winit::dpi::PhysicalPosition::new(
                     pos.x + (sz.width as i32 - mw) / 2,
                     pos.y + (sz.height as i32 - mh) / 2,
@@ -9002,11 +9010,11 @@ impl App {
                 scale,
             },
         );
-        let ph = if matches!(self.name_prompt_for, Some(NamePurpose::Broadcast)) {
-            "공지 내용" // ④ — 이름이 아니라 본문 입력
+        let ph = nbeep_core::t(if broadcast {
+            nbeep_core::Msg::PhBroadcastBody // ④ — 이름이 아니라 본문 입력
         } else {
-            "그룹 이름"
-        };
+            nbeep_core::Msg::PhGroupName
+        });
         self.name_prompt = Some(nbeep_ui::TextPromptWidget::new(title, ph, initial));
         self.layout_window(id);
         self.request_redraw(id);
@@ -11617,6 +11625,20 @@ impl App {
             Role::NamePrompt => {
                 if let Some(p) = &self.name_prompt {
                     p.paint(&mut ctx, &theme);
+                    // 제목 word-wrap 실측 높이에 창을 맞춘다(08-21 — 긴 제목 잘림).
+                    // paint가 실측을 남기므로 첫 프레임 뒤 1회 커진다(±2px 무시 ·
+                    // Resized 이벤트가 재레이아웃을 몰고 온다). entry.window는
+                    // ctx가 빌린 surface와 다른 필드라 동시 접근 가능.
+                    let want = p.desired_height();
+                    #[allow(clippy::cast_possible_wrap, clippy::cast_sign_loss)]
+                    if want > 0 && (want - size.height as i32).abs() > 2 {
+                        let _ = entry
+                            .window
+                            .request_inner_size(winit::dpi::PhysicalSize::new(
+                                size.width,
+                                want.max(1) as u32,
+                            ));
+                    }
                 }
             }
             Role::Settings => {

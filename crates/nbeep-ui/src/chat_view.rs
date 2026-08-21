@@ -475,6 +475,10 @@ pub struct ChatViewWidget {
     grade_sel: u8,
     /// 긴급으로 순환해 들어온 직후 1회 — 호스트가 상태바 경고(마찰 1단계)를 띄운다.
     grade_notice: bool,
+    /// 등급 배지 실측 폭(px · 08-21 i18n 승격 후속) — paint가 라벨 실측으로
+    /// 갱신하고 rect·히트 판정이 쓴다(자당 근사는 메뉴를 잘랐던 전례 — 실측).
+    /// 0 = 아직 미실측(기본 폭 폴백). paint는 &self라 Cell.
+    grade_badge_w: core::cell::Cell<i32>,
     input: crate::edit::EditState,
     /// IME 조합 중 텍스트(확정 전 — 밑줄 표시. 확정은 input에 삽입).
     scale: f32,
@@ -548,6 +552,7 @@ impl ChatViewWidget {
             lines: Vec::new(),
             grade_sel: 0,
             grade_notice: false,
+            grade_badge_w: core::cell::Cell::new(0),
             input: crate::edit::EditState::new(),
             scale: 1.0,
             outgoing: None,
@@ -980,9 +985,11 @@ impl ChatViewWidget {
     }
 
     /// 등급 배지 rect(④ — 입력줄 오른쪽 하단 고정 · 클릭 = 순환).
+    /// 폭 = 마지막 paint의 라벨 실측(언어별 길이 대응 — "Normal"이 고정 36px을
+    /// 넘쳐 잘리던 것) · 미실측 시 기본 36.
     fn grade_badge_rect(&self) -> Rect {
         let input = self.input_bar();
-        let w = self.s(36);
+        let w = self.grade_badge_w.get().max(self.s(36));
         let h = self.s(18);
         Rect::new(
             input.right() - w - self.s(6),
@@ -2218,12 +2225,16 @@ impl Widget for ChatViewWidget {
         //    알림→긴급 순환 · 다음 전송 1회에 적용. 칩은 불투명(긴 입력이 아래로
         //    흐르면 칩이 가린다 — 입력은 가로 스크롤이라 잘리지 않는다).
         {
-            let b = self.grade_badge_rect();
+            // 라벨 = i18n(08-21 승격 — 한글 하드코딩이던 것 · 언어 전환 즉시 반영).
             let (label, col) = match self.grade_sel {
-                2 => ("긴급", theme.danger),
-                1 => ("알림", theme.accent),
-                _ => ("일반", theme.text_dim),
+                2 => (nbeep_core::t(nbeep_core::Msg::GradeUrgent), theme.danger),
+                1 => (nbeep_core::t(nbeep_core::Msg::GradeNotice), theme.accent),
+                _ => (nbeep_core::t(nbeep_core::Msg::GradeNormal), theme.text_dim),
             };
+            // 폭 실측 갱신 — 다음 rect·히트 판정부터 반영(언어 전환 1프레임 지연 무해).
+            ctx.select_font(FontSlot::Status, false);
+            self.grade_badge_w.set(ctx.text_width(label) + self.s(14));
+            let b = self.grade_badge_rect();
             ctx.fill_round_rect(b, self.s(6), col); // 외곽 링(등급색)
             let innr = Rect::new(
                 b.x + self.s(1),

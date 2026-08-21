@@ -285,6 +285,15 @@ pub enum Msg {
     StfNetmonWarn,
     /// 공지 발신 빈도 제한(08-21 — 3초 1회) 안내.
     StBroadcastRateLimit,
+    /// 등급 배지 라벨(④ docs/24 — 입력줄 칩 · 08-21 i18n 승격).
+    GradeNormal,
+    GradeNotice,
+    GradeUrgent,
+    /// 공지 프롬프트 — 창 제목·본문 플레이스홀더(08-21 i18n 승격).
+    WinBroadcast,
+    PhBroadcastBody,
+    /// 그룹 이름 프롬프트 플레이스홀더.
+    PhGroupName,
     /// 설정 — 공지(브로드캐스트) 받지 않기 토글.
     NotifyBroadcastMute,
     NotifyBroadcastMuteDesc,
@@ -1857,6 +1866,12 @@ impl Msg {
                 "公告限每3秒发送1次 — 请稍后再试（未发送）",
                 "お知らせは3秒に1回までです — 少し待って再試行してください（送信していません）",
             ],
+            Msg::GradeNormal => ["Normal", "일반", "普通", "通常"],
+            Msg::GradeNotice => ["Notice", "알림", "提醒", "通知"],
+            Msg::GradeUrgent => ["Urgent", "긴급", "紧急", "緊急"],
+            Msg::WinBroadcast => ["Notice", "공지", "公告", "お知らせ"],
+            Msg::PhBroadcastBody => ["Notice body", "공지 내용", "公告内容", "お知らせ内容"],
+            Msg::PhGroupName => ["Group name", "그룹 이름", "群组名称", "グループ名"],
             Msg::NotifyBroadcastMute => [
                 "Ignore broadcasts",
                 "공지(브로드캐스트) 받지 않기",

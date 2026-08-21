@@ -23,6 +23,12 @@ pub struct TextPromptWidget {
     cancel: Button,
     submit: Option<String>,
     canceled: bool,
+    /// 제목 블록 실측 높이(px · 08-21) — paint가 word-wrap 실측으로 갱신하고
+    /// relayout이 입력줄 y에 반영한다(제목이 창 폭에 잘리던 것 — 자당 근사 대신
+    /// 실측 · paint는 `&self`라 Cell). 0 = 미실측(종전 한 줄 가정).
+    title_h: std::cell::Cell<i32>,
+    /// 내용 전체에 필요한 창 높이(px) — 호스트가 읽어 창 크기를 맞춘다.
+    want_h: std::cell::Cell<i32>,
 }
 
 impl TextPromptWidget {
@@ -40,7 +46,16 @@ impl TextPromptWidget {
             cancel: Button::new(nbeep_core::t(nbeep_core::Msg::OfferCancel)),
             submit: None,
             canceled: false,
+            title_h: std::cell::Cell::new(0),
+            want_h: std::cell::Cell::new(0),
         }
+    }
+
+    /// 내용 전체에 필요한 창 높이(px · 0 = 아직 미실측) — 호스트가 첫 paint 뒤
+    /// 창 높이를 이 값으로 맞춘다(제목 word-wrap 줄 수 반영 · 08-21).
+    #[must_use]
+    pub fn desired_height(&self) -> i32 {
+        self.want_h.get()
     }
 
     /// 제출된 텍스트(1회성 · 공백 트림 — 빈 값은 제출되지 않는다).
@@ -101,8 +116,10 @@ impl TextPromptWidget {
         let b = self.bounds;
         let pad = self.s(16);
         let field_h = self.s(30);
+        // 입력줄 y = 제목 블록 아래(실측 title_h — 미실측이면 종전 한 줄 가정 44).
+        let input_y = self.s(14) + self.title_h.get().max(self.s(22)) + self.s(8);
         self.input.set_bounds(
-            Rect::new(b.x + pad, b.y + self.s(44), b.w - pad * 2, field_h),
+            Rect::new(b.x + pad, b.y + input_y, b.w - pad * 2, field_h),
             inv,
         );
         let (bw, bh) = (self.s(88), self.s(28));
@@ -175,13 +192,61 @@ impl Widget for TextPromptWidget {
         let b = self.bounds;
         ctx.fill_rect(b, theme.panel_bg);
         ctx.select_font(FontSlot::Base, true);
-        ctx.text(
-            b.x + self.s(16),
-            b.y + self.s(14),
-            b,
-            &self.title,
-            theme.text,
-        );
+        // 제목 word-wrap(08-21 — 긴 제목이 창 폭에 잘리던 것): 실측 폭으로 단어
+        // 단위 접기 · 공백 없는 긴 조각(CJK)은 글자 단위 폴백. 실측 결과를
+        // title_h/want_h에 남겨 다음 relayout·호스트 창 크기 조정이 쓴다.
+        let max_w = b.w - self.s(32);
+        let line_h = ctx.text_height() + self.s(4);
+        let mut y = b.y + self.s(14);
+        let mut lines = 0;
+        let mut cur = String::new();
+        let mut words: Vec<String> = Vec::new();
+        for w in self.title.split(' ') {
+            if w.is_empty() {
+                continue;
+            }
+            // 한 단어가 폭을 넘으면 글자 단위로 쪼갠다(무공백 CJK 대비).
+            if ctx.text_width(w) > max_w {
+                let mut piece = String::new();
+                for c in w.chars() {
+                    piece.push(c);
+                    if ctx.text_width(&piece) > max_w {
+                        let last = piece.pop().unwrap_or(c);
+                        words.push(piece.clone());
+                        piece = last.to_string();
+                    }
+                }
+                if !piece.is_empty() {
+                    words.push(piece);
+                }
+            } else {
+                words.push(w.to_string());
+            }
+        }
+        for w in words {
+            let cand = if cur.is_empty() {
+                w.clone()
+            } else {
+                format!("{cur} {w}")
+            };
+            if !cur.is_empty() && ctx.text_width(&cand) > max_w {
+                ctx.text(b.x + self.s(16), y, b, &cur, theme.text);
+                y += line_h;
+                lines += 1;
+                cur = w;
+            } else {
+                cur = cand;
+            }
+        }
+        if !cur.is_empty() {
+            ctx.text(b.x + self.s(16), y, b, &cur, theme.text);
+            lines += 1;
+        }
+        let th = lines.max(1) * line_h;
+        self.title_h.set(th);
+        // 필요 창 높이 = 제목 + 입력줄 + 버튼 줄 + 패딩(레이아웃 상수와 동일 셈).
+        self.want_h
+            .set(self.s(14) + th + self.s(8) + self.s(30) + self.s(12) + self.s(28) + self.s(16));
         ctx.select_font(FontSlot::Base, false);
         self.input.paint(ctx, theme);
         self.ok.paint(ctx, theme);
