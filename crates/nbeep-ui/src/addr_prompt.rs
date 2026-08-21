@@ -146,13 +146,26 @@ impl AddrPromptWidget {
 
     fn try_submit(&mut self, inv: &mut Invalidations) {
         let text = self.input.text();
-        // ★ 포트를 생략했으면 여기서 기본 포트가 붙는다 — 호스트는 완성된 주소만 본다.
-        // 형식이 틀리면 `None`이라 제출되지 않는다(검증과 정규화가 한 함수 = 판정이 갈리지 않는다).
-        if let Some(addr) = normalize_endpoint(&text, self.default_port) {
+        let t = text.trim();
+        // 64자리 hex = 키 지문(서버 랑데부 대상 · X-2b) — 주소가 아니므로 포트를
+        // 붙이지 않고 소문자 정규화만 해서 그대로 낸다(최종 해석은 호스트의
+        // parse_peer_hex — 여기 판정은 어휘 수준·CLI /connect와 같은 규칙).
+        if is_fingerprint(t) {
+            self.submit = Some(t.to_ascii_lowercase());
+        } else if let Some(addr) = normalize_endpoint(&text, self.default_port) {
+            // ★ 포트를 생략했으면 여기서 기본 포트가 붙는다 — 호스트는 완성된 주소만 본다.
+            // 형식이 틀리면 `None`이라 제출되지 않는다(검증과 정규화가 한 함수 = 판정이 갈리지 않는다).
             self.submit = Some(addr);
         }
         inv.push(self.bounds);
     }
+}
+
+/// 64자리 hex = 키 지문(서버 랑데부 대상 · X-2b) — 어휘 수준 판정(제출·힌트 색
+/// 공용). 최종 해석은 호스트(parse_peer_hex) 몫이라 여기 오판은 연결 실패로 끝난다.
+fn is_fingerprint(s: &str) -> bool {
+    let t = s.trim();
+    t.len() == 64 && t.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 /// 연결/취소 라벨 — i18n 표에 별도 키를 두기보다 대화·공통에 이미 있는 어휘를 쓴다.
@@ -238,7 +251,7 @@ impl Widget for AddrPromptWidget {
                 ),
                 theme.text_dim,
             )
-        } else if valid_endpoint(&text) {
+        } else if is_fingerprint(&text) || valid_endpoint(&text) {
             (
                 nbeep_core::t(nbeep_core::Msg::AddrEnterConnect).to_string(),
                 theme.ok,
@@ -425,5 +438,33 @@ mod tests {
             &mut inv,
         );
         assert!(w.take_cancel());
+    }
+
+    /// X-2b — 64자리 hex 지문은 주소가 아니다: 포트를 붙이지 않고 소문자로 그대로
+    /// 제출한다(서버 랑데부 대상 · CLI /connect <지문>과 같은 어휘 규칙).
+    #[test]
+    fn fingerprint_submits_raw_without_port() {
+        let (mut w, mut inv) = widget();
+        for c in "aB3F".repeat(16).chars() {
+            ch(&mut w, c, &mut inv);
+        }
+        enter(&mut w, &mut inv);
+        assert_eq!(
+            w.take_submit().unwrap(),
+            "ab3f".repeat(16),
+            "지문 = 소문자 정규화 · 포트 미부착"
+        );
+        // 63자리(한 글자 모자람)는 호스트명으로 해석돼 기본 포트가 붙는다 — 지문 아님.
+        let (mut w2, mut inv2) = widget();
+        for c in "ab".repeat(31).chars() {
+            ch(&mut w2, c, &mut inv2);
+        }
+        ch(&mut w2, 'c', &mut inv2);
+        enter(&mut w2, &mut inv2);
+        let got = w2.take_submit().unwrap();
+        assert!(
+            got.ends_with(&format!(":{DEFAULT_PORT}")),
+            "지문이 아니면 주소 경로: {got}"
+        );
     }
 }

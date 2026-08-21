@@ -4973,6 +4973,9 @@ impl App {
         // 비발견 상대(수동 등록 이력)는 발견 주소록이 비어 connect가 실패한다 —
         // 성공했던 수동 주소로 폴백(08-13 실기: 대화창 닫은 뒤 재연결이 이 경로).
         let manual = self.manual_addrs.get(&peer).cloned();
+        // 서버 사다리 폴백 재료(X-2b ③) — LAN·수동 주소가 모두 닿지 않을 때만 쓴다
+        // (S-1 LAN 우선 · docs/32 §0 경로 사다리).
+        let relay = self.relay.clone();
         std::thread::spawn(move || {
             let conn = match transport.connect(peer) {
                 Ok(link) => Ok(link),
@@ -4981,15 +4984,32 @@ impl App {
                     None => Err(format!("{e:?}")),
                 },
             };
-            let r = conn.and_then(|link| {
-                // 경로 등급 = 성립 소켓의 실주소(M5-3c) — 수동 폴백이면 공인망일 수 있다.
-                let path = link
-                    .remote_ip()
-                    .map_or(nbeep_core::PathClass::Local, nbeep_core::class_of_ip);
-                nbeep_crypto::NoiseSession::initiate(link, &identity)
-                    .map(|s| (s, path))
-                    .map_err(|e| e.to_string())
-            });
+            let r = match conn {
+                Ok(link) => {
+                    // 경로 등급 = 성립 소켓의 실주소(M5-3c) — 수동 폴백이면 공인망일 수 있다.
+                    let path = link
+                        .remote_ip()
+                        .map_or(nbeep_core::PathClass::Local, nbeep_core::class_of_ip);
+                    nbeep_crypto::NoiseSession::initiate(link, &identity)
+                        .map(|s| (s, path))
+                        .map_err(|e| e.to_string())
+                }
+                // ★ 서버 사다리(X-2b ③ — 펀치→릴레이): 발견·수동이 다 실패한 상대를
+                //   Managed 서버 랑데부로 시도. 성립 세션은 상대 키 인증 완료 상태고
+                //   경로 등급도 사다리 결과(성립 실주소)가 들고 온다(§5-1-5).
+                Err(why) => match relay.filter(|c| c.is_alive()) {
+                    Some(client) => nbeep_relay::connect_via(
+                        &client,
+                        &identity,
+                        &peer,
+                        true,
+                        std::time::Duration::from_secs(10),
+                    )
+                    .map(|via| (via.session, via.path))
+                    .map_err(|e| format!("{why} · 서버 사다리 {e:?}")),
+                    None => Err(why),
+                },
+            };
             let _ = match r {
                 Ok((session, path)) => proxy.send_event(AppEvent::Outbound {
                     session: Box::new(InboundSession { session, path }),
@@ -5009,6 +5029,49 @@ impl App {
     fn commit_manual_add(&mut self, addr: String, _el: &ActiveEventLoop) {
         let addr = addr.trim().to_string();
         if addr.is_empty() {
+            return;
+        }
+        // 64자리 지문 = 서버 랑데부 대상(X-2b ③ — CLI `/connect <지문>` 미러):
+        // 주소가 아니라 **키**로 상대를 찾는다(사다리 = 펀치→릴레이 · WrongPeer =
+        // 암호학적 근거 fail-closed). Managed 서버가 붙어 있어야 성립한다.
+        if let Some(peer) = nbeep_relay::parse_peer_hex(&addr) {
+            let Some(client) = self.relay.clone().filter(|c| c.is_alive()) else {
+                self.set_status(nbeep_core::t(nbeep_core::Msg::StFingerprintNeedsServer));
+                if let Some(mid) = self.main_id {
+                    self.request_redraw(mid);
+                }
+                return;
+            };
+            self.set_status(nbeep_core::tf(nbeep_core::Msg::StfConnecting, &[&addr]));
+            let identity = std::sync::Arc::clone(&self.identity);
+            let proxy = self.proxy.clone();
+            std::thread::spawn(move || {
+                let r = nbeep_relay::connect_via(
+                    &client,
+                    &identity,
+                    &peer,
+                    true,
+                    std::time::Duration::from_secs(10),
+                );
+                let _ = match r {
+                    Ok(via) => proxy.send_event(AppEvent::Outbound {
+                        session: Box::new(InboundSession {
+                            session: via.session,
+                            path: via.path,
+                        }),
+                        via_addr: None, // 주소가 아니라 키로 찾았다 — 재연결도 사다리
+                        intent: None,   // 수동 등록과 같은 결(래치 없음)
+                        auto: false,
+                    }),
+                    Err(e) => proxy.send_event(AppEvent::AddFailed {
+                        addr,
+                        why: format!("{e:?}"),
+                    }),
+                };
+            });
+            if let Some(mid) = self.main_id {
+                self.request_redraw(mid);
+            }
             return;
         }
         self.set_status(nbeep_core::tf(nbeep_core::Msg::StfConnecting, &[&addr]));
@@ -13343,8 +13406,11 @@ impl ApplicationHandler<AppEvent> for App {
                 // 자동 재연결 백오프 진행(ⓑ) — 다음 단계 등록, 다 썼으면 중단 고지.
                 // 수단(발견 중이거나 수동 주소)이 없는 상대는 등록하지 않는다 —
                 // 어차피 같은 이유로 실패만 반복한다(무의미 트래픽 금지).
-                let reachable =
-                    self.manual_addrs.contains_key(&peer) || self.table.get(peer).is_some();
+                // 서버 사다리(X-2b ③)도 수단이다 — 발견·수동 주소가 없어도 Managed
+                // 서버가 붙어 있으면 재시도할 근거가 있다(NotFound는 백오프가 흡수).
+                let reachable = self.manual_addrs.contains_key(&peer)
+                    || self.table.get(peer).is_some()
+                    || self.relay.is_some();
                 let stage = self.reconnect.get(&peer).map_or(0, |(s, _)| s + 1);
                 match reconnect_delay(stage).filter(|_| reachable) {
                     Some(delay) => {
