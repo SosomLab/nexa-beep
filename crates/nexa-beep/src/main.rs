@@ -45,6 +45,7 @@ fn main() {
     // (windows 서브시스템 전환의 짝 · 리다이렉트 핸들은 함수가 되살린다). GUI 실행
     // (더블클릭·자동 실행 M3-25)은 부모 콘솔이 없어 no-op = 콘솔 창 0.
     nbeep_plat::launch::attach_parent_console();
+    spawn_netmon_env();
     let args: Vec<String> = std::env::args().collect();
     // 도움말·버전 — 어느 모드보다 먼저(배포 검증 절차 26 §7-2가 `--version`을 쓴다.
     // 그전엔 무인자 스캐폴드가 버전을 겸했는데, 무인자 = 창이 되면서 명시 처리로 분리).
@@ -204,6 +205,43 @@ fn main() {
     // 데모(에코 봇)는 `--window`/`--separate-windows`를 **명시**한 경우만(개발 도구) —
     // 그 외 창 진입(무인자·--port·--live)은 전부 실물 발견이다.
     app::run(mode, live || (!open_window && !separate), port);
+}
+
+/// 진단용 netmon 기록(NETMON-1 ⓐ · 08-21) — `NEXA_NETMON=<파일 경로>`면 어느 모드든
+/// (GUI·CLI 검증 도구) 주기(`NEXA_NETMON_SEC` 기본 5초)마다 계측 델타 한 줄을 그 파일에
+/// 덧붙인다. `NEXA_IME_TRACE` 선례의 환경변수 진단 스위치 — 설정(`netmon.enabled`)과
+/// 별개 채널이라 CLI 자동 실기·스크립트 수집에 쓴다. 미설정 = 완전 no-op.
+fn spawn_netmon_env() {
+    let Ok(path) = std::env::var("NEXA_NETMON") else {
+        return;
+    };
+    if path.trim().is_empty() {
+        return;
+    }
+    let sec: u64 = std::env::var("NEXA_NETMON_SEC")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .map_or(5, |v: u64| v.clamp(1, 3600));
+    std::thread::spawn(move || {
+        use std::io::Write as _;
+        let mut prev = nbeep_net::netmon::snapshot();
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(sec));
+            let cur = nbeep_net::netmon::snapshot();
+            let (line, _) = nbeep_net::netmon::report_line(&prev, &cur, sec * 1000);
+            prev = cur;
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs());
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)
+            {
+                let _ = writeln!(f, "[{ts}] {line}");
+            }
+        }
+    });
 }
 
 /// `--help`/`-h` — 모드·옵션 안내(사용자 요청 08-13).
