@@ -181,6 +181,15 @@ impl Entry {
                 .map(|(_, v)| *v)
                 .or_else(|| opts.first().map(|(v, _)| *v))
                 .map(|v| (self.key, v.to_string()))
+                // ★ 옵션 없는 자유 입력형(RadioInput(&[], _) — net.server.address)도
+                //   **빈 기본값으로 키를 등록**한다. 키가 values 맵에 없으면
+                //   set_by_name이 "미지 키"로 흘려 — 화면에서 입력·저장한 값이
+                //   재시작 때마다 조용히 증발했다(08-22 X-2b 배선이 발각 · 08-14
+                //   "저장은 되는데 로드가 무시" 영속 구멍과 같은 유형).
+                .or_else(|| {
+                    matches!(self.kind, SettingKind::RadioInput(..))
+                        .then(|| (self.key, String::new()))
+                })
                 .into_iter()
                 .collect(),
             SettingKind::Toggle => {
@@ -3290,5 +3299,31 @@ mod tests {
         assert!(!w.take_back());
         w.on_event(&key(Key::Escape), &mut inv);
         assert!(w.take_back());
+    }
+
+    /// 옵션 없는 자유 입력형(RadioInput(&[], _))의 영속 왕복 — 키가 기본값으로
+    /// 등록돼 있어야 set_by_name(파일 로드)이 "아는 키"로 적용한다. 종전엔 키
+    /// 부재로 미지 키 취급 = 화면에서 넣은 서버 주소가 재시작마다 증발(08-22 발각).
+    #[test]
+    fn free_input_setting_survives_reload() {
+        let mut st = SettingsState::with_defaults();
+        assert_eq!(
+            st.get("net.server.address"),
+            "",
+            "키가 빈 기본값으로 등록된다"
+        );
+        assert!(
+            st.set_by_name("net.server.address", "relay.example.com"),
+            "아는 키로 인식(미지 키 강등 금지)"
+        );
+        assert_eq!(st.get("net.server.address"), "relay.example.com");
+        // 빈 값은 무시(기본값 유지 — ADR-0011 §4-3 관용 검증).
+        assert!(st.set_by_name("net.server.address", ""));
+        assert_eq!(st.get("net.server.address"), "relay.example.com");
+        // 저장 스냅샷에도 항상 실린다(known_pairs — 로드와 저장의 키 집합 일치).
+        assert!(st
+            .known_pairs()
+            .iter()
+            .any(|(k, v)| *k == "net.server.address" && *v == "relay.example.com"));
     }
 }
