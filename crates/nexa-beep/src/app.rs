@@ -410,6 +410,13 @@ impl ConnectLatch {
     }
 }
 
+/// 요청 대기 슬롯의 원격 세션(M5-3b · §6) — (상대, 핸드셰이크 완료 세션, 경로 등급).
+type PendingRemote = (
+    PeerId,
+    nbeep_crypto::NoiseSession<Box<dyn nbeep_core::Link>>,
+    nbeep_core::PathClass,
+);
+
 /// 인바운드 세션 봉투 — `AppEvent`가 Debug라야 해서 수동 Debug.
 struct InboundSession {
     session: nbeep_crypto::NoiseSession<Box<dyn nbeep_core::Link>>,
@@ -2076,6 +2083,9 @@ enum AlertCtx {
         gid: nbeep_core::group::GroupId,
         peer: PeerId,
     },
+    /// 원격 인바운드 요청 대기(M5-3b · ADR-0006 §6 — FR-S-25) — 긍정 = 수락·등록.
+    /// 세션 실물은 `pending_remote` 슬롯에 있다(AlertCtx는 Clone이라 못 담는다).
+    RemoteInbound { peer: PeerId },
 }
 
 /// 이름 입력 모달의 용도(M5-1) — 제출된 이름을 어디에 쓸지.
@@ -2567,6 +2577,9 @@ struct App {
     gunread: HashMap<nbeep_core::group::GroupId, u32>,
     /// 열린 선택 모달의 문맥(초대 수락/거절 등) — Role::Alert 결과 라우팅.
     alert_ctx: Option<AlertCtx>,
+    /// 요청 대기 중인 원격 인바운드 세션(M5-3b · §6) — 슬롯 1개(모달 1개 규칙).
+    /// 점유 중 추가 원격 인바운드는 드롭(fail-closed). 거절·불일치 = 드롭 = 소켓 닫힘.
+    pending_remote: Option<PendingRemote>,
     /// 구성원 모달 열기 대기(08-15 — el은 about_to_wait에 있다 · 내용은 열 때 계산).
     pending_members: Option<nbeep_core::group::GroupId>,
     /// 상대 카드 열기 대기(`/verify` — el은 about_to_wait에 있다 · pending_members와 같은 문법).
@@ -5118,6 +5131,37 @@ impl App {
     }
 
     /// 수립된 세션을 액터로 옮기고 대화 상태를 등록한다(아웃바운드·인바운드 공용).
+    /// 인바운드 세션 수락 합류점(§6 · M5-3b) — 즉시 수락(LAN·아는 상대)과 요청 대기
+    /// 승인 둘 다 여기로 온다: TOFU 판정 → 다중화 → 대화 등록 → 대기 발신 flush.
+    fn accept_inbound(
+        &mut self,
+        session: nbeep_crypto::NoiseSession<Box<dyn nbeep_core::Link>>,
+        path: nbeep_core::PathClass,
+    ) {
+        use nbeep_core::Session as _;
+        let peer = session.peer();
+        let est = match nbeep_core::TrustedSession::wrap(session, &mut self.trust) {
+            Ok(est) => est,
+            Err(_) => return, // 차단 상대 등 — fail-closed
+        };
+        self.install_conversation(nbeep_core::MuxSession::new(est.session), path);
+        let title = self.peer_title(peer);
+        let mut inv = Invalidations::default();
+        self.refresh_rows(&mut inv);
+        // ② 자동 열림 금지(사용자 확정 08-13) — 인바운드는 창을 뺏지 않는다.
+        // 목록에 행이 뜨고(비발견 상대는 extra_peers ④), 메시지가 오면
+        // 배지·제목 카운트(③)로 알린다. 여는 것은 언제나 사용자.
+        // ★ 재동기는 인바운드에서도(G4) — "접속하면 발신자가 밀어준다"의
+        // 세션 성립에는 상대가 나에게 걸어온 경우도 포함된다(종전엔 Outbound만).
+        self.flush_group_sends(peer);
+        self.flush_direct_sends(peer); // 1:1 오프라인 대기(M4-6)
+        self.refresh_chat_link(peer); // 헤더 아이콘 = 연결됨(M3-20 — 인바운드도)
+        self.set_status(nbeep_core::tf(nbeep_core::Msg::StfConnectedOpen, &[&title]));
+        if let Some(mid) = self.main_id {
+            self.request_redraw(mid);
+        }
+    }
+
     fn install_conversation(&mut self, session: LiveSession, path: nbeep_core::PathClass) {
         let peer = session.peer();
         let (out_tx, out_rx) = std::sync::mpsc::channel();
@@ -9908,6 +9952,21 @@ impl App {
     /// 선택 모달 결과 적용(M5-1g) — 초대 수락 = 방 합류 + 소유자에 통지.
     fn apply_alert_choice(&mut self, yes: bool, ctx: AlertCtx, el: &ActiveEventLoop) {
         match ctx {
+            AlertCtx::RemoteInbound { peer } => {
+                // 요청 대기 판정(§6 · M5-3b) — 세션 실물은 pending 슬롯에 살아 있다.
+                // 거절·키 불일치 = 드롭 = 소켓 닫힘(상대는 Closed만 관측 — 정보 최소).
+                if let Some((p, session, path)) = self.pending_remote.take() {
+                    if yes && p == peer {
+                        self.accept_inbound(session, path);
+                    } else {
+                        drop(session);
+                        self.set_status(nbeep_core::t(nbeep_core::Msg::StRemoteInboundDropped));
+                        if let Some(mid) = self.main_id {
+                            self.request_redraw(mid);
+                        }
+                    }
+                }
+            }
             AlertCtx::GroupKick { gid, peer } => {
                 if yes {
                     // 기존 제외 경로 재사용(소유자 검증·마지막 명부 배포 포함 — G4).
@@ -13278,41 +13337,36 @@ impl ApplicationHandler<AppEvent> for App {
                 if self.conversations.contains_key(&peer) {
                     return; // 이미 이 상대와 대화 중(아웃바운드 세션 존재) — 중복 인바운드 무시
                 }
-                // ★ 원격 인바운드 × 미등록 = 수락하지 않는다(M5-3b · ADR-0006 §6 —
-                //   FR-S-25의 fail-closed 절반). LAN 밖에서 걸어온 모르는 키를 TOFU로
-                //   자동 등록하면 공인망 스캐너가 목록에 스스로를 심는다. 아는 상대
-                //   (핀·대조)의 원격 인바운드는 통과 — 요청 대기 UX는 후속 슬라이스.
+                // ★ 원격 인바운드 × 미등록 = 요청 대기(M5-3b · ADR-0006 §6 — FR-S-25).
+                //   LAN 밖에서 걸어온 모르는 키를 TOFU로 자동 등록하면 공인망 스캐너가
+                //   목록에 스스로를 심는다 — 등록은 사람이 결정한다. 아는 상대(핀·대조)의
+                //   원격 인바운드는 즉시 통과.
                 if path == nbeep_core::PathClass::Remote {
                     use nbeep_core::TrustStore as _;
                     if self.trust.level(peer) == nbeep_core::TrustLevel::Unverified {
-                        self.set_status(nbeep_core::t(nbeep_core::Msg::StRemoteInboundDropped));
-                        if let Some(mid) = self.main_id {
-                            self.request_redraw(mid);
+                        // 대기 슬롯 1개(모달 1개 규칙) — 점유 중 추가 원격 인바운드는
+                        // 드롭(fail-closed · 정보 최소 — 침묵 폐기, 상대는 Closed만 관측).
+                        if self.pending_remote.is_some() {
+                            self.set_status(nbeep_core::t(nbeep_core::Msg::StRemoteInboundDropped));
+                            if let Some(mid) = self.main_id {
+                                self.request_redraw(mid);
+                            }
+                            return;
                         }
-                        return; // 세션 드롭 — 등록도 대화도 없다
+                        let title = self.peer_title(peer);
+                        self.pending_remote = Some((peer, session, path));
+                        self.open_choice(
+                            el,
+                            nbeep_core::t(nbeep_core::Msg::AlertRemoteReqTitle),
+                            &nbeep_core::tf(nbeep_core::Msg::StfRemoteReqBody, &[&title]),
+                            nbeep_core::t(nbeep_core::Msg::BtnAccept),
+                            nbeep_core::t(nbeep_core::Msg::BtnDecline),
+                            AlertCtx::RemoteInbound { peer },
+                        );
+                        return;
                     }
                 }
-                // TOFU 판정(메인 스레드 — TrustStore가 여기 있다) → 다중화 → 대화 등록.
-                let est = match nbeep_core::TrustedSession::wrap(session, &mut self.trust) {
-                    Ok(est) => est,
-                    Err(_) => return, // 차단 상대 등 — fail-closed
-                };
-                self.install_conversation(nbeep_core::MuxSession::new(est.session), path);
-                let title = self.peer_title(peer);
-                let mut inv = Invalidations::default();
-                self.refresh_rows(&mut inv);
-                // ② 자동 열림 금지(사용자 확정 08-13) — 인바운드는 창을 뺏지 않는다.
-                // 목록에 행이 뜨고(비발견 상대는 extra_peers ④), 메시지가 오면
-                // 배지·제목 카운트(③)로 알린다. 여는 것은 언제나 사용자.
-                // ★ 재동기는 인바운드에서도(G4) — "접속하면 발신자가 밀어준다"의
-                // 세션 성립에는 상대가 나에게 걸어온 경우도 포함된다(종전엔 Outbound만).
-                self.flush_group_sends(peer);
-                self.flush_direct_sends(peer); // 1:1 오프라인 대기(M4-6)
-                self.refresh_chat_link(peer); // 헤더 아이콘 = 연결됨(M3-20 — 인바운드도)
-                self.set_status(nbeep_core::tf(nbeep_core::Msg::StfConnectedOpen, &[&title]));
-                if let Some(mid) = self.main_id {
-                    self.request_redraw(mid);
-                }
+                self.accept_inbound(session, path);
             }
             AppEvent::Tray(ev) => match ev {
                 // 트레이(M3-2a) — 좌클릭/"열기" = 메인 복원 · "종료" = 명시적 종료.
@@ -13949,7 +14003,19 @@ impl ApplicationHandler<AppEvent> for App {
                         Role::Gallery => self.gallery_view = None,
                         Role::Picker => self.picker_view = None,
                         Role::About => self.about_view = None,
-                        Role::Alert => self.alert_view = None,
+                        Role::Alert => {
+                            self.alert_view = None;
+                            // 선택 없이 닫음(X) — 원격 요청 대기(§6)면 거절과 동치:
+                            // 세션을 드롭해 슬롯을 비운다(응답 없는 대기를 남기지 않는다).
+                            if matches!(self.alert_ctx, Some(AlertCtx::RemoteInbound { .. })) {
+                                self.alert_ctx = None;
+                                if self.pending_remote.take().is_some() {
+                                    self.set_status(nbeep_core::t(
+                                        nbeep_core::Msg::StRemoteInboundDropped,
+                                    ));
+                                }
+                            }
+                        }
                         Role::AddEndpoint => self.addr_view = None,
                         Role::Profile => self.profile_view = None,
                         Role::PeerInfo(_) => self.peer_info_view = None,
@@ -15020,6 +15086,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         group_accepts: HashMap::new(),
         gunread: HashMap::new(),
         alert_ctx: None,
+        pending_remote: None,
         pending_members: None,
         pending_peer_info: None,
         verify_hinted: std::collections::HashSet::new(),
