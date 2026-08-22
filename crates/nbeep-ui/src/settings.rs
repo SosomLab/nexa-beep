@@ -1480,6 +1480,9 @@ pub enum NoteTone {
     Ok,
     /// 경고 상태 — warn색 옅은 배경 + warn색 글자.
     Warn,
+    /// 자동 판정 정보(08-22 — 서버 타입 판정·관측값처럼 **시스템이 정한 값**을
+    /// 눈에 띄게) — accent색 옅은 배경 + 본문색 글자.
+    Info,
 }
 
 impl SettingsWidget {
@@ -2533,9 +2536,13 @@ impl Widget for SettingsWidget {
                         RowCtl::Act(b) => b.set_focused(b.bounds().contains(p)),
                     }
                 }
-                // 사이드바 트리 — 선택 변경 감지 → 카테고리 전환(검색 해제).
+                // 사이드바 트리 — ★트리 영역 안의 클릭만 전달한다(08-22 실기: 우측
+                // 노트 줄 클릭이 같은 y의 트리 행을 하이라이트 — 카테고리 전환만
+                // bounds로 막고 내부 상태는 무방비였다).
                 let before = self.tree.selected_row();
-                self.tree.on_event(ev, inv);
+                if self.tree.bounds().contains(p) {
+                    self.tree.on_event(ev, inv);
+                }
                 let after = self.tree.selected_row();
                 if self.tree.bounds().contains(p) && after != before
                     || (self.tree.bounds().contains(p) && !self.query.is_empty())
@@ -2835,6 +2842,15 @@ impl Widget for SettingsWidget {
                         0.14,
                     );
                     theme.warn
+                }
+                NoteTone::Info => {
+                    ctx.fill_round_rect_alpha(
+                        Rect::new(r.x + self.s(PAD) - self.s(6), r.y, r.w - self.s(PAD), r.h),
+                        self.s(5),
+                        theme.accent,
+                        0.10,
+                    );
+                    theme.text
                 }
             };
             ctx.text(r.x + self.s(PAD), r.y + (r.h - th) / 2, r, note, color);

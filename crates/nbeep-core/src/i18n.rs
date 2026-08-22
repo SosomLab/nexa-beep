@@ -701,6 +701,7 @@ pub enum Msg {
     BtnAccept,
     BtnDecline,
     PathRemoteLabel,
+    PathServerLabel,
     // ── Managed 서버 접속(X-2b · ADR-0013 §12-1) — 상태·핀 경고 ──
     StfServerAttached,
     StfServerFirstPin,
@@ -733,6 +734,8 @@ pub enum Msg {
     StNoteSrvPinStop,
     StNoteSrvIdle,
     StNoteSrvPrevVerified,
+    StNoteSrvNeedTest,
+    StfNoteSrvTestFailed,
     StfNoteSrvPort,
     StNoteSrvTypeRelay,
     // ── 격리 아카이브 내용 목록(M4-4 ⓐ) — 해제 없는 중앙 디렉터리 목록 ──
@@ -1200,6 +1203,7 @@ impl Msg {
             Msg::BtnAccept => ["Accept", "수락", "接受", "受諾"],
             Msg::BtnDecline => ["Decline", "거절", "拒绝", "拒否"],
             Msg::PathRemoteLabel => ["via internet", "인터넷 경유", "经由互联网", "インターネット経由"],
+            Msg::PathServerLabel => ["via server", "서버 경유", "经由服务器", "サーバー経由"],
             Msg::StfServerAttached => ["Server registered — {}", "서버 등록 완료 — {}", "服务器注册完成 — {}", "サーバー登録完了 — {}"],
             Msg::StfServerFirstPin => ["First contact with server {} — its key is now pinned", "서버 {} 첫 접속 — 서버 키를 핀했습니다", "首次连接服务器 {} — 已固定其密钥", "サーバー {} 初回接続 — キーをピン留めしました"],
             Msg::StServerPinWriteFail => ["Warning: server pin could not be saved — the next connect will look like first contact", "경고: 서버 핀 저장 실패 — 다음 접속이 다시 첫 접속으로 보입니다", "警告：服务器密钥固定保存失败 — 下次连接将再次视为首次连接", "警告: サーバーピンの保存に失敗 — 次回接続は初回接続として扱われます"],
@@ -1230,6 +1234,8 @@ impl Msg {
             Msg::StNoteSrvPinStop => ["■ Stopped: server key mismatch — clear the pin line, then re-save server settings", "■ 정지: 서버 키 불일치 — 핀 줄 정리 후 서버 설정을 다시 저장하면 재시도", "■ 已停止：服务器密钥不匹配 — 清理固定行后重新保存服务器设置", "■ 停止: サーバーキー不一致 — ピン行を整理しサーバー設定を保存し直すと再試行"],
             Msg::StNoteSrvIdle => ["○ Not connected", "○ 미접속", "○ 未连接", "○ 未接続"],
             Msg::StNoteSrvPrevVerified => [" · previously verified (reconnect pending)", " · 이전 검증됨(재접속 대기)", " · 此前已验证（等待重连）", " · 以前に検証済み（再接続待ち）"],
+            Msg::StNoteSrvNeedTest => ["Not verified — press [Test]; the server is used only after a successful test", "미검증 — [테스트]를 눌러 성공해야 서버를 사용합니다", "未验证 — 按 [测试]，测试成功后才会使用服务器", "未検証 — [テスト] を押し、成功して初めてサーバーを使用します"],
+            Msg::StfNoteSrvTestFailed => ["⚠ Server connection failed: {} — the server is NOT in use (check the values, then Test again)", "⚠ 서버 연결 실패: {} — 서버를 사용하지 않습니다(값 확인 후 다시 테스트)", "⚠ 服务器连接失败：{} — 未使用服务器（请检查设置后重新测试）", "⚠ サーバー接続失敗: {} — サーバーは使用されません（値を確認して再テスト）"],
             Msg::StfNoteSrvPort => ["TCP {} connected · UDP observe {} · server sees me as {}", "TCP {} 연결 · UDP 관측 {} · 서버가 본 내 주소 {}", "TCP {} 已连接 · UDP 观测 {} · 服务器所见我的地址 {}", "TCP {} 接続 · UDP 観測 {} · サーバーから見た自分 {}"],
             Msg::StNoteSrvTypeRelay => ["Relay (auto — provided by server: rendezvous + hole-punch + relay fallback)", "Relay (auto — 서버 제공: 랑데부+홀펀칭+릴레이 폴백)", "Relay（auto — 服务器提供：会合+打洞+中继回退）", "Relay（auto — サーバー提供：ランデブー+ホールパンチ+リレー フォールバック）"],
             Msg::StfServerPinMismatch => ["The server '{}' presented a key different from the pinned one — connection aborted (possible impersonation or server reinstall).\n\nIf the server was really replaced, delete its line in:\n{}\nand change any server setting to reconnect. Re-pinning is a human decision — it will not retry automatically.", "서버 '{}'가 핀과 다른 키를 제시했습니다 — 접속을 중단합니다(사칭·서버 재설치 가능성).\n\n서버 교체가 맞다면 아래 파일에서 해당 줄을 지운 뒤,\n{}\n서버 설정을 다시 저장하면 재접속합니다. 재핀은 사람의 결정입니다 — 자동으로 재시도하지 않습니다.", "服务器 '{}' 提供的密钥与已固定的不一致 — 已中止连接（可能是冒充或服务器重装）。\n\n如果确实更换了服务器，请在下列文件中删除对应行：\n{}\n然后重新保存服务器设置以重连。重新固定由人决定 — 不会自动重试。", "サーバー '{}' がピン留めと異なるキーを提示しました — 接続を中止します（なりすまし・サーバー再設置の可能性）。\n\n本当にサーバーを入れ替えた場合は、次のファイルから該当行を削除し、\n{}\nサーバー設定を保存し直すと再接続します。再ピン留めは人の決定です — 自動では再試行しません。"],

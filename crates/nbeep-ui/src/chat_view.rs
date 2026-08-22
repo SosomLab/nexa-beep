@@ -94,6 +94,28 @@ fn fmt_date_pill(w: WallTime, short: bool) -> String {
     }
 }
 
+/// 헤더(대화 상대 정보 줄) 높이(논리 px) — 08-22 사용자 확정: **툴바 높이와 동일**
+/// (아이콘 32 + 패딩 8×2 = 48 · 상대 아바타를 프로필 버튼 크기로 싣기 위해).
+/// OS 타이틀바와의 시각 구분은 전용 배경 + 하단 1px 경계선.
+const HEAD_H: i32 = 48;
+
+/// 대화 헤더의 경로 배지(08-22 사용자 확정 — 원격을 둘로 분리):
+/// **서버 경유**(Managed 랑데부 — 아는 상대의 정상 원격 경로 · accent) vs
+/// **인터넷 직결**(IP/도메인 수동 — 경고색 유지). 파일 게이트 정책(PathClass)은
+/// 표시와 무관하게 동일하다(§5-1-3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PathBadge {
+    /// 로컬(정상) — 그리지 않는다(기본 상태는 조용히 · [docs/14 §13]).
+    None,
+    /// Managed 서버 경유(펀치/릴레이) — waypoints 아이콘 · accent색 "서버 경유".
+    Server,
+    /// IP/도메인 직접 연결(공인망) — 지구본 · warn색 "인터넷 경유".
+    Internet,
+}
+
+/// 경로 배지 틴트 아이콘 캐시 항목 — ((배지 종류, 색), 이미지).
+type BadgeIconCache = ((u8, u32), std::rc::Rc<crate::theme::IconImage>);
+
 /// 스레드 한 줄.
 #[derive(Clone, Debug)]
 pub struct ChatLine {
@@ -491,10 +513,16 @@ pub struct ChatViewWidget {
         )>,
     >,
     /// 이 세션이 인터넷 경유인가(M5-3c · DR-28 §2 규칙 5 "원격 연결임을 항상
-    /// 표시") — 호스트가 성립 경로로 넣는다. true = 헤더에 지구본+라벨 상시.
-    remote: bool,
+    /// 표시") — 호스트가 성립 경로로 넣는다(None = 로컬 = 표시 없음).
+    path_badge: PathBadge,
+    /// 상대 아바타(08-22 — 헤더에 상대 얼굴 · 목록 행과 같은 시각 문법 · 32px).
+    peer_avatar: Option<std::rc::Rc<crate::theme::IconImage>>,
+    /// 상대 시드(키 바이트 — 이니셜 원 색). 비면 아바타 미표시(그룹 방).
+    peer_seed: Vec<u8>,
+    /// 상대 아바타 보더 색(공개분).
+    peer_border: Option<(u8, u8, u8)>,
     /// 지구본 틴트 캐시(색 키 — link_icon과 같은 문법).
-    remote_icon: core::cell::RefCell<Option<(u32, std::rc::Rc<crate::theme::IconImage>)>>,
+    remote_icon: core::cell::RefCell<Option<BadgeIconCache>>,
     input: crate::edit::EditState,
     /// IME 조합 중 텍스트(확정 전 — 밑줄 표시. 확정은 input에 삽입).
     scale: f32,
@@ -571,7 +599,10 @@ impl ChatViewWidget {
             grade_badge_w: core::cell::Cell::new(0),
             link: crate::peer_list::LinkState::Idle,
             link_icon: core::cell::RefCell::new(None),
-            remote: false,
+            path_badge: PathBadge::None,
+            peer_avatar: None,
+            peer_seed: Vec::new(),
+            peer_border: None,
             remote_icon: core::cell::RefCell::new(None),
             input: crate::edit::EditState::new(),
             scale: 1.0,
@@ -1028,33 +1059,68 @@ impl ChatViewWidget {
                 self.bounds.x,
                 self.bounds.y,
                 self.bounds.w,
-                self.s(34),
+                self.s(HEAD_H),
             ));
         }
     }
 
-    /// 원격 경로 표시 주입(M5-3c — 호스트가 세션 성립 경로로). 변화 시 헤더 재도색.
-    pub fn set_remote(&mut self, remote: bool, inv: &mut Invalidations) {
-        if self.remote != remote {
-            self.remote = remote;
+    /// 경로 배지 주입(M5-3c 개정 08-22 — 서버 경유/인터넷 직결 분리). 변화 시 헤더 재도색.
+    pub fn set_path_badge(&mut self, badge: PathBadge, inv: &mut Invalidations) {
+        if self.path_badge != badge {
+            self.path_badge = badge;
             inv.push(Rect::new(
                 self.bounds.x,
                 self.bounds.y,
                 self.bounds.w,
-                self.s(34),
+                self.s(HEAD_H),
             ));
         }
     }
 
-    /// 지구본(경로 = 인터넷 경유) 틴트 아이콘 — warn색 · 캐시(색 키).
+    /// 상대 얼굴 주입(08-22 — 헤더 아바타): 목록 행과 같은 재료(사진/내장 이미지 ·
+    /// 시드 · 보더). 그룹 방은 부르지 않는다(시드 빈 채 = 미표시).
+    pub fn set_peer_face(
+        &mut self,
+        avatar: Option<std::rc::Rc<crate::theme::IconImage>>,
+        seed: Vec<u8>,
+        border: Option<(u8, u8, u8)>,
+        inv: &mut Invalidations,
+    ) {
+        let same_img = match (&self.peer_avatar, &avatar) {
+            (None, None) => true,
+            (Some(a), Some(b)) => std::rc::Rc::ptr_eq(a, b),
+            _ => false,
+        };
+        if same_img && self.peer_seed == seed && self.peer_border == border {
+            return;
+        }
+        self.peer_avatar = avatar;
+        self.peer_seed = seed;
+        self.peer_border = border;
+        inv.push(Rect::new(
+            self.bounds.x,
+            self.bounds.y,
+            self.bounds.w,
+            self.s(HEAD_H),
+        ));
+    }
+
+    /// 경로 배지 틴트 아이콘(08-22) — Server = waypoints·accent / Internet =
+    /// 지구본·warn. 캐시 키 = (배지, 색).
     fn remote_icon_tinted(&self, theme: &Theme) -> std::rc::Rc<crate::theme::IconImage> {
-        let color = theme.warn;
+        let server = self.path_badge == PathBadge::Server;
+        let color = if server { theme.accent } else { theme.warn };
+        let key = (u8::from(server), color.0);
         if let Some((c, img)) = self.remote_icon.borrow().as_ref() {
-            if *c == color.0 {
+            if *c == key {
                 return std::rc::Rc::clone(img);
             }
         }
-        let alpha: &[u8] = crate::icons::path::GLOBE_ALPHA;
+        let alpha: &[u8] = if server {
+            crate::icons::path::WAYPOINTS_ALPHA
+        } else {
+            crate::icons::path::GLOBE_ALPHA
+        };
         let (r, g, b) = color.rgb();
         let mut rgba = Vec::with_capacity(alpha.len() * 4);
         for &a in alpha {
@@ -1065,7 +1131,7 @@ impl ChatViewWidget {
             crate::icons::path::SIZE,
             rgba,
         ));
-        *self.remote_icon.borrow_mut() = Some((color.0, std::rc::Rc::clone(&img)));
+        *self.remote_icon.borrow_mut() = Some((key, std::rc::Rc::clone(&img)));
         img
     }
 
@@ -1247,7 +1313,7 @@ impl ChatViewWidget {
 
     /// 스레드 뷰포트(헤더·진척 줄·입력창 제외).
     fn thread_viewport(&self) -> Rect {
-        let head_h = self.s(34);
+        let head_h = self.s(HEAD_H);
         let xfer_h = if self.xfer.is_some() { self.s(22) } else { 0 };
         let input = self.input_bar();
         let top = self.bounds.y + head_h + xfer_h;
@@ -1421,7 +1487,7 @@ impl Widget for ChatViewWidget {
         // 헤더(타이틀 줄) 클릭(08-14) — 그룹 방 구성원 목록의 트리거. 헤더는
         // 다른 히트 대상이 없어 여기서 소비해도 잃는 동작이 없다.
         if let InputEvent::MouseDown { y, .. } = *ev {
-            if y >= self.bounds.y && y < self.bounds.y + self.s(34) {
+            if y >= self.bounds.y && y < self.bounds.y + self.s(HEAD_H) {
                 self.header_click = true;
                 return;
             }
@@ -2073,8 +2139,15 @@ impl Widget for ChatViewWidget {
             .paint(ctx, theme, vp, vp.w, content, 0, top_off, self.scale);
 
         // ── 헤더(맨 위 레이어 — 스크롤된 풍선을 덮는다 · 그룹 참여자 목록/타이틀 자리) ──
-        let head_h = self.s(34);
+        let head_h = self.s(HEAD_H);
         let head = Rect::new(self.bounds.x, self.bounds.y, self.bounds.w, head_h);
+        // ★ 헤더 전용 배경 + 하단 경계선(08-22 사용자 확정 — OS 타이틀바와 시각
+        //   구분: 옅은 패널색 면 + 1px 경계 · 높이도 34→38).
+        ctx.fill_rect(head, theme.panel_bg_alt);
+        ctx.fill_rect(
+            Rect::new(head.x, head.bottom() - 1, head.w, 1),
+            theme.border,
+        );
         // 연결 상태 아이콘(M3-20 · 2층 — 플러그 가족 20px · 상태색 틴트 · 목록
         // 11px 파냄 배지(M3-19)와 자리·문법이 다르다 — [docs/14 §12-7]).
         let icon_d = self.s(20);
@@ -2084,37 +2157,72 @@ impl Widget for ChatViewWidget {
             icon_d,
             icon_d,
         );
-        ctx.fill_rect(icon, theme.chrome_bg); // 헤더는 텍스트만 불투명이라 배킹 필요
         ctx.image_scaled(icon, &self.link_icon_tinted(theme), head);
+        // 상대 아바타(08-22 — 프로필 버튼 크기 32px · 목록 행과 같은 시각 문법).
+        let title_x = if self.peer_seed.is_empty() {
+            icon.right() + self.s(8)
+        } else {
+            let av_d = self.s(32);
+            let av = Rect::new(
+                icon.right() + self.s(8),
+                head.y + (head_h - av_d) / 2,
+                av_d,
+                av_d,
+            );
+            if let Some(img) = &self.peer_avatar {
+                ctx.fill_ellipse(av, crate::avatar::avatar_color(&self.peer_seed));
+                ctx.image_scaled(av, img, head);
+            } else {
+                crate::avatar::draw_avatar(ctx, av, &self.title, &self.peer_seed, 6.0);
+            }
+            if let Some((br, bg, bb)) = self.peer_border {
+                let c = crate::theme::Color(
+                    (u32::from(br) << 16) | (u32::from(bg) << 8) | u32::from(bb),
+                );
+                ctx.stroke_ellipse(av, c, self.s(2).max(2) as f32);
+            }
+            av.right() + self.s(8)
+        };
         ctx.select_font(FontSlot::Base, false);
+        let title_h = ctx.text_height();
         ctx.text_opaque(
-            icon.right() + self.s(8),
-            head.y + self.s(7),
+            title_x,
+            head.y + (head_h - title_h) / 2,
             head,
             &self.title,
             theme.text,
-            theme.chrome_bg,
+            theme.panel_bg_alt,
         );
-        // 원격 경로 상시 배지(M5-3c · §2 규칙 5) — 제목 오른쪽에 지구본+라벨.
+        // 경로 배지(M5-3c · 08-22 분리) — 제목 오른쪽: **서버 경유** = waypoints·
+        // accent(아는 상대의 정상 원격 경로) / **인터넷 직결** = 지구본·warn.
         // 정상(Local)은 안 그린다(기본 상태는 조용히 — [docs/14 §13]).
-        if self.remote {
+        if self.path_badge != PathBadge::None {
+            let (label, color) = if self.path_badge == PathBadge::Server {
+                (
+                    nbeep_core::t(nbeep_core::Msg::PathServerLabel),
+                    theme.accent,
+                )
+            } else {
+                (nbeep_core::t(nbeep_core::Msg::PathRemoteLabel), theme.warn)
+            };
             let tw = ctx.text_width(&self.title);
             let gd = self.s(16);
             let globe = Rect::new(
-                icon.right() + self.s(8) + tw + self.s(10),
+                title_x + tw + self.s(10),
                 head.y + (head_h - gd) / 2,
                 gd,
                 gd,
             );
             ctx.image_scaled(globe, &self.remote_icon_tinted(theme), head);
             ctx.select_font(FontSlot::Status, false);
+            let lh = ctx.text_height();
             ctx.text_opaque(
                 globe.right() + self.s(4),
-                head.y + self.s(9),
+                head.y + (head_h - lh) / 2,
                 head,
-                nbeep_core::t(nbeep_core::Msg::PathRemoteLabel),
-                theme.warn,
-                theme.chrome_bg,
+                label,
+                color,
+                theme.panel_bg_alt,
             );
             ctx.select_font(FontSlot::Base, false);
         }
@@ -2472,15 +2580,19 @@ mod tests {
     fn remote_badge_invalidates_header_once_and_paints() {
         let (mut w, _) = widget();
         let mut inv = Invalidations::default();
-        w.set_remote(true, &mut inv);
+        w.set_path_badge(PathBadge::Internet, &mut inv);
         assert!(!inv.is_empty(), "켜짐 = 헤더 무효화");
         let mut inv2 = Invalidations::default();
-        w.set_remote(true, &mut inv2);
+        w.set_path_badge(PathBadge::Internet, &mut inv2);
         assert!(inv2.is_empty(), "같은 값 재주입 = 무효화 없음(멱등)");
         paint_once(&w); // 지구본 틴트·라벨 경로가 패닉 없이 관통
         let mut inv3 = Invalidations::default();
-        w.set_remote(false, &mut inv3);
-        assert!(!inv3.is_empty(), "꺼짐 = 헤더 무효화");
+        w.set_path_badge(PathBadge::Server, &mut inv3);
+        assert!(!inv3.is_empty(), "서버 경유로 전환 = 헤더 무효화");
+        paint_once(&w); // waypoints 틴트·accent 라벨 경로 관통(08-22 분리)
+        let mut inv4 = Invalidations::default();
+        w.set_path_badge(PathBadge::None, &mut inv4);
+        assert!(!inv4.is_empty(), "꺼짐 = 헤더 무효화");
     }
 
     #[test]

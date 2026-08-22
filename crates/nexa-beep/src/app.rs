@@ -425,6 +425,16 @@ fn server_target(mode: &str, address: &str, port: &str) -> Option<String> {
     }
 }
 
+/// 현재 목표가 검증 마커(server.verified)의 값과 같은가 — ★**검증 게이트**
+/// (08-22 사용자 확정: Managed로 바꿔도 자동 접속하지 않는다 — **Test 성공 = 사용
+/// 승인**이고, 검증된 값만 부팅·재접속을 자동 유지한다). 포트 생략 표기 관용 포함.
+fn server_target_verified(marker: &str, raw: &str) -> bool {
+    marker
+        .split_whitespace()
+        .next()
+        .is_some_and(|a| a == raw || a.strip_suffix(":47300") == Some(raw))
+}
+
 /// 서버 재접속 백오프(X-2b) — 복구 시도이지 감시가 아니다(13 §12-1). **300s 상한 반복**
 /// — 상대 재연결 ⓑ와 달리 중단하지 않는다: 서버는 사용자가 명시 등록한 인프라라
 /// 돌아오면 다시 붙어 있어야 하고, 5분 1회는 무의미 트래픽이 아니다.
@@ -435,6 +445,42 @@ fn server_retry_delay(stage: u8) -> u64 {
         2 => 60_000,
         _ => 300_000,
     }
+}
+
+/// 내 아바타 캐시 인코딩(08-22) — [len:u32][src][mtime:u64][w:u32][h:u32][rgba].
+fn encode_me_avatar_cache(src: &str, mtime: u64, w: u32, h: u32, rgba: &[u8]) -> Vec<u8> {
+    let mut o = Vec::with_capacity(24 + src.len() + rgba.len());
+    o.extend_from_slice(&(src.len() as u32).to_be_bytes());
+    o.extend_from_slice(src.as_bytes());
+    o.extend_from_slice(&mtime.to_be_bytes());
+    o.extend_from_slice(&w.to_be_bytes());
+    o.extend_from_slice(&h.to_be_bytes());
+    o.extend_from_slice(rgba);
+    o
+}
+
+/// 내 아바타 캐시 디코딩 — 형식 불일치·크기 모순은 None(fail-soft: 재디코드).
+fn decode_me_avatar_cache(b: &[u8]) -> Option<(String, u64, u32, u32, Vec<u8>)> {
+    let n = u32::from_be_bytes(b.get(0..4)?.try_into().ok()?) as usize;
+    let src = String::from_utf8(b.get(4..4 + n)?.to_vec()).ok()?;
+    let rest = b.get(4 + n..)?;
+    let mtime = u64::from_be_bytes(rest.get(0..8)?.try_into().ok()?);
+    let w = u32::from_be_bytes(rest.get(8..12)?.try_into().ok()?);
+    let h = u32::from_be_bytes(rest.get(12..16)?.try_into().ok()?);
+    let rgba = rest.get(16..)?.to_vec();
+    if rgba.len() != (w as usize) * (h as usize) * 4 || w == 0 || h == 0 || w > 512 || h > 512 {
+        return None;
+    }
+    Some((src, mtime, w, h, rgba))
+}
+
+/// 파일 mtime(ms · 없으면 0) — 캐시 유효성 판정 재료.
+fn file_mtime_ms(p: &str) -> u64 {
+    std::fs::metadata(p)
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(0))
 }
 
 fn reconnect_delay(stage: u8) -> Option<u64> {
@@ -465,11 +511,12 @@ impl ConnectLatch {
     }
 }
 
-/// 요청 대기 슬롯의 원격 세션(M5-3b · §6) — (상대, 핸드셰이크 완료 세션, 경로 등급).
+/// 요청 대기 슬롯의 원격 세션(M5-3b · §6) — (상대, 세션, 경로 등급, 서버 경유 여부).
 type PendingRemote = (
     PeerId,
     nbeep_crypto::NoiseSession<Box<dyn nbeep_core::Link>>,
     nbeep_core::PathClass,
+    bool,
 );
 
 /// 인바운드 세션 봉투 — `AppEvent`가 Debug라야 해서 수동 Debug.
@@ -478,6 +525,8 @@ struct InboundSession {
     /// 이 세션이 성립한 **경로 등급**(M5-3c · DR-28) — 핸드셰이크 직전 실소켓
     /// 주소로 판정해 세션과 동행한다(광고가 아니라 성립한 세션이 정한다 — §5-1-5).
     path: nbeep_core::PathClass,
+    /// Managed 서버 경유 성립인가(08-22 — 헤더 배지 분리 · 표시 전용).
+    via_server: bool,
 }
 impl std::fmt::Debug for InboundSession {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -619,6 +668,9 @@ struct Conversation {
     lines: Vec<ChatLine>,
     /// 이 세션이 성립한 경로 등급(M5-3c · DR-28) — 파일 정책은 신뢰 × 경로의 곱.
     path: nbeep_core::PathClass,
+    /// Managed 서버 경유로 성립했는가(08-22 — 헤더 배지 분리: 서버 경유 vs 인터넷
+    /// 직결. **표시 전용** — 파일 게이트 정책은 path(PathClass)만 본다).
+    via_server: bool,
 }
 
 /// 진행 중 발신 상태(08-16 · 재개형 펌프) — Accept가 등록하고 액터 루프 틱이
@@ -2277,7 +2329,11 @@ fn spawn_inbound_accept(
                     return;
                 };
                 let _ = proxy.send_event(AppEvent::Inbound {
-                    session: Box::new(InboundSession { session, path }),
+                    session: Box::new(InboundSession {
+                        session,
+                        path,
+                        via_server: false, // LAN/직결 인바운드
+                    }),
                 });
             });
         }
@@ -2322,6 +2378,7 @@ fn spawn_relay_accept(
                     session: Box::new(InboundSession {
                         session: via.session,
                         path: via.path,
+                        via_server: true, // 서버 랑데부 성립(X-2b)
                     }),
                 });
             }
@@ -2458,6 +2515,9 @@ struct App {
     relay_test: bool,
     /// 마지막 서버 접속 실패 사유(08-22 — 설정 화면 상태 노트 표시용).
     relay_last_err: Option<String>,
+    /// ★ 테스트 실패 상태(08-22 사용자 확정 — 경고 배경 노트 + 서버 미사용).
+    /// Some(사유) 동안 자동 접속이 서지 않는다. 해제 = 설정 변경 또는 다음 테스트.
+    relay_test_failed: Option<String>,
     /// 같은 서버의 **공개**(Announce) 사용자(X-2e roster) — 목록에 서버 상대 행으로
     /// 병합된다. 서버가 존재(키)만 나르므로 이름은 지문 유도, 프로필은 성립 후 P2P.
     server_peers: std::collections::HashSet<PeerId>,
@@ -4593,10 +4653,21 @@ impl App {
             &auto_rate_note(self.recv_rate, &self.recv_meter, false),
             &mut inv,
         );
-        // 서버 행 노트 — 테스트(접속 상태 · 검증됨 = ok 배경)·포트(관측·공인 주소)·타입.
+        // 서버 행 노트 — 테스트(검증 = ok / 실패 = warn 배경) · 포트/타입은 **자동
+        // 판정 값**이라 Info(accent 옅은 배경)로 눈에 띄게(08-22 사용자 확정).
         sv.set_row_note_toned("net.server.test", &srv_state, srv_tone, &mut inv);
-        sv.set_row_note("net.server.port", &srv_port, &mut inv);
-        sv.set_row_note("net.server.type", &srv_type, &mut inv);
+        sv.set_row_note_toned(
+            "net.server.port",
+            &srv_port,
+            nbeep_ui::NoteTone::Info,
+            &mut inv,
+        );
+        sv.set_row_note_toned(
+            "net.server.type",
+            &srv_type,
+            nbeep_ui::NoteTone::Info,
+            &mut inv,
+        );
         // ★ 잠금은 **여기 한 곳에서 전량 계산**한다 — set_disabled가 전체 교체라
         //   다른 지점에서 부분만 넣으면 1초 주기인 이 깔때기가 도로 지운다.
         let mut locked: Vec<&'static str> = Vec::new();
@@ -4937,6 +5008,13 @@ impl App {
             }
             return;
         };
+        // ★ 검증 게이트(08-22): 미검증 값(변경 직후 포함)은 자동 접속하지 않는다 —
+        //   Test(relay_test)만이 이 게이트를 지나 1회 시도하고, 성공이 마커를 갱신해
+        //   이후의 자동 유지(부팅·재접속)를 연다. 테스트 실패 상태도 사용 중지.
+        let verified = server_target_verified(self.settings.get("server.verified"), &raw);
+        if (!verified || self.relay_test_failed.is_some()) && !self.relay_test {
+            return;
+        }
         if self.relay_connecting {
             return;
         }
@@ -5004,6 +5082,7 @@ impl App {
         self.relay_backoff = (0, 0);
         self.relay_check_at = 0;
         self.relay_last_err = None;
+        self.relay_test_failed = None; // 값이 바뀌면 실패 상태도 새 판(재테스트 대상)
         self.clear_server_peers();
     }
 
@@ -5043,8 +5122,8 @@ impl App {
                 return;
             }
         }
-        self.relay_test = true;
-        self.server_settings_changed(); // 즉시 재수렴(단일 경로 — 백오프·정지도 풀린다)
+        self.server_settings_changed(); // 즉시 재수렴 준비(단일 경로 — 실패 상태도 푼다)
+        self.relay_test = true; // ★ settings_changed 뒤에 — 게이트 통과권은 테스트만 갖는다
         self.set_status(nbeep_core::tf(nbeep_core::Msg::StfServerTesting, &[&raw]));
         self.refresh_approval_ui(); // 설정 창 노트 = "접속 중…" 즉시(무반응처럼 안 보이게)
     }
@@ -5090,23 +5169,45 @@ impl App {
                 );
             }
         }
-        // 미접속 상태들 — 현재 목표가 과거 검증값과 같으면 "이전 검증됨"을 덧붙인다
-        // (마커 주소는 정규화돼 있어 포트 생략 입력과도 대조한다).
-        let marker = self.settings.get("server.verified");
-        let prev = marker
-            .split_whitespace()
-            .next()
-            .is_some_and(|a| a == raw || a.strip_suffix(":47300") == Some(raw.as_str()));
-        let suffix = if prev {
-            t(Msg::StNoteSrvPrevVerified)
-        } else {
-            ""
-        };
-        let state = if self.relay_backoff.1 == u64::MAX {
-            t(Msg::StNoteSrvPinStop).to_string()
-        } else if self.relay_connecting {
-            tf(Msg::StfNoteSrvConnecting, &[&raw])
-        } else {
+        // 미접속 상태들 — 우선순위: 테스트 실패(경고) > 핀 정지(경고) > 접속 중 >
+        // 미검증(테스트 안내) > 재시도/유휴(검증된 값 — "이전 검증됨" 꼬리).
+        if let Some(why) = &self.relay_test_failed {
+            // ★ 08-22 사용자 확정 — 실패는 안정적인 초록이 아니라 **경고 배경**으로,
+            //   그리고 서버는 사용 중지 상태임을 문구로 못 박는다.
+            return (
+                tf(Msg::StfNoteSrvTestFailed, &[why]),
+                NoteTone::Warn,
+                none(),
+                none(),
+            );
+        }
+        if self.relay_backoff.1 == u64::MAX {
+            return (
+                t(Msg::StNoteSrvPinStop).to_string(),
+                NoteTone::Warn, // 핀 불일치도 경고 배경(같은 결)
+                none(),
+                none(),
+            );
+        }
+        if self.relay_connecting {
+            return (
+                tf(Msg::StfNoteSrvConnecting, &[&raw]),
+                NoteTone::Plain,
+                none(),
+                none(),
+            );
+        }
+        let verified = server_target_verified(self.settings.get("server.verified"), &raw);
+        if !verified {
+            // ★ 검증 게이트(08-22) — 값 변경/최초 = 자동 접속 없음 · 테스트 안내.
+            return (
+                t(Msg::StNoteSrvNeedTest).to_string(),
+                NoteTone::Plain,
+                none(),
+                none(),
+            );
+        }
+        let state = {
             let now = self.now_ms();
             if self.relay_backoff.1 > now {
                 let secs = (self.relay_backoff.1 - now).div_ceil(1000);
@@ -5116,6 +5217,7 @@ impl App {
                 t(Msg::StNoteSrvIdle).to_string()
             }
         };
+        let suffix = t(Msg::StNoteSrvPrevVerified); // 검증된 값의 미접속 = 재접속 대기
         (format!("{state}{suffix}"), NoteTone::Plain, none(), none())
     }
 
@@ -5178,7 +5280,7 @@ impl App {
                         .remote_ip()
                         .map_or(nbeep_core::PathClass::Local, nbeep_core::class_of_ip);
                     nbeep_crypto::NoiseSession::initiate(link, &identity)
-                        .map(|s| (s, path))
+                        .map(|s| (s, path, false))
                         .map_err(|e| e.to_string())
                 }
                 // ★ 서버 사다리(X-2b ③ — 펀치→릴레이): 발견·수동이 다 실패한 상대를
@@ -5192,14 +5294,18 @@ impl App {
                         true,
                         std::time::Duration::from_secs(10),
                     )
-                    .map(|via| (via.session, via.path))
+                    .map(|via| (via.session, via.path, true))
                     .map_err(|e| format!("{why} · 서버 사다리 {e:?}")),
                     None => Err(why),
                 },
             };
             let _ = match r {
-                Ok((session, path)) => proxy.send_event(AppEvent::Outbound {
-                    session: Box::new(InboundSession { session, path }),
+                Ok((session, path, via_server)) => proxy.send_event(AppEvent::Outbound {
+                    session: Box::new(InboundSession {
+                        session,
+                        path,
+                        via_server,
+                    }),
                     via_addr: None, // 수동 주소는 이미 기억돼 있다(성공 시 갱신 불요)
                     intent: Some(peer), // ★ 래치는 **넣은 키로** 뺀다
                     auto,
@@ -5245,6 +5351,7 @@ impl App {
                         session: Box::new(InboundSession {
                             session: via.session,
                             path: via.path,
+                            via_server: true, // 지문 = 서버 랑데부
                         }),
                         via_addr: None, // 주소가 아니라 키로 찾았다 — 재연결도 사다리
                         intent: None,   // 수동 등록과 같은 결(래치 없음)
@@ -5280,7 +5387,11 @@ impl App {
                 });
             let _ = match r {
                 Ok((session, path)) => proxy.send_event(AppEvent::Outbound {
-                    session: Box::new(InboundSession { session, path }),
+                    session: Box::new(InboundSession {
+                        session,
+                        path,
+                        via_server: false, // IP/도메인 직접 연결
+                    }),
                     via_addr: Some(addr), // 성공한 수동 주소 — 재연결용 기억(④)
                     intent: None,         // 수동 등록은 래치를 쓰지 않는다
                     auto: false,          // 사용자가 직접 입력한 연결
@@ -5416,14 +5527,19 @@ impl App {
         }
     }
 
-    /// 이 상대의 대화 뷰가 **지금 화면에 있는가**(③ — 읽음/안읽음 판정의 기준).
-    fn chat_visible(&self, peer: PeerId) -> bool {
+    /// 이 상대의 대화 뷰가 **활성(OS 포커스) 창에** 보이는가 — 읽음 확인의 기준
+    /// (08-22 사용자 확정: 창이 뒤에 있으면 보여도 읽은 게 아니다 · 활성화 순간
+    /// 읽음 확정). 표시 여부(`chat_visible`)와 의도적으로 분리.
+    fn chat_active(&self, peer: PeerId) -> bool {
         match self.mode {
-            WindowMode::Single => self.single_open == Some(peer),
-            WindowMode::Separate => self
-                .windows
-                .values()
-                .any(|e| matches!(e.role, Role::Chat(p) if p == peer)),
+            WindowMode::Single => {
+                self.single_open == Some(peer)
+                    && self.main_id.is_some()
+                    && self.os_focused == self.main_id
+            }
+            WindowMode::Separate => self.windows.iter().any(|(id, e)| {
+                matches!(e.role, Role::Chat(p) if p == peer) && self.os_focused == Some(*id)
+            }),
         }
     }
 
@@ -5470,10 +5586,12 @@ impl App {
     }
 
     fn note_incoming(&mut self, peer: PeerId) {
-        if self.chat_visible(peer) {
+        if self.chat_active(peer) {
+            // 활성 창에 보이는 중 도착 = 즉시 읽음(N-2). ★비활성 창은 여기 오지
+            // 않는다(08-22 사용자 확정) — 배지로 쌓였다가 Focused(true)가 확정한다.
             let (_, wall) = now_stamp();
             self.last_read.insert(peer, wall);
-            self.send_read_ack(peer); // 보이는 중 도착 = 즉시 읽음(N-2)
+            self.send_read_ack(peer);
             return;
         }
         let n = {
@@ -5625,6 +5743,7 @@ impl App {
         &mut self,
         session: nbeep_crypto::NoiseSession<Box<dyn nbeep_core::Link>>,
         path: nbeep_core::PathClass,
+        via_server: bool,
     ) {
         use nbeep_core::Session as _;
         let peer = session.peer();
@@ -5632,7 +5751,7 @@ impl App {
             Ok(est) => est,
             Err(_) => return, // 차단 상대 등 — fail-closed
         };
-        self.install_conversation(nbeep_core::MuxSession::new(est.session), path);
+        self.install_conversation(nbeep_core::MuxSession::new(est.session), path, via_server);
         let title = self.peer_title(peer);
         let mut inv = Invalidations::default();
         self.refresh_rows(&mut inv);
@@ -5650,7 +5769,12 @@ impl App {
         }
     }
 
-    fn install_conversation(&mut self, session: LiveSession, path: nbeep_core::PathClass) {
+    fn install_conversation(
+        &mut self,
+        session: LiveSession,
+        path: nbeep_core::PathClass,
+        via_server: bool,
+    ) {
         let peer = session.peer();
         let (out_tx, out_rx) = std::sync::mpsc::channel();
         let join = spawn_session_actor(
@@ -5680,6 +5804,7 @@ impl App {
                 out_tx,
                 lines,
                 path,
+                via_server,
             },
         );
         // ★ 원격 경로 고지(M5-3b — 조용히, 그러나 보이게): 인터넷 경유 세션은 스레드에
@@ -5741,12 +5866,30 @@ impl App {
     /// 부른다(성립·끊김·시도·실패). 뷰가 없으면 no-op.
     fn refresh_chat_link(&mut self, peer: PeerId) {
         let link = self.peer_link_state(peer);
-        let remote = self.peer_path(peer) == nbeep_core::PathClass::Remote;
+        let badge = self.peer_path_badge(peer);
+        let avatar = self.peer_profiles.get(&peer).and_then(|p| p.avatar.clone());
+        let border = self.peer_profiles.get(&peer).and_then(|p| p.border);
         let mut inv = Invalidations::default();
         if let Some(chat) = self.chats.get_mut(&peer) {
             chat.set_link(link, &mut inv);
-            chat.set_remote(remote, &mut inv); // 인터넷 경유 상시 배지(M5-3c)
+            chat.set_path_badge(badge, &mut inv); // 경로 배지(서버 경유/인터넷 — 08-22 분리)
+            chat.set_peer_face(avatar, peer.as_bytes().to_vec(), border, &mut inv); // 헤더 아바타
             self.redraw_conversation(peer);
+        }
+    }
+
+    /// 헤더 경로 배지(08-22 — 원격을 둘로 분리): 서버 경유(Managed 랑데부) vs
+    /// 인터넷 직결(IP/도메인 수동). **표시 전용** — 파일 게이트는 PathClass만 본다.
+    fn peer_path_badge(&self, peer: PeerId) -> nbeep_ui::PathBadge {
+        match self.conversations.get(&peer) {
+            Some(c) if c.path == nbeep_core::PathClass::Remote => {
+                if c.via_server {
+                    nbeep_ui::PathBadge::Server
+                } else {
+                    nbeep_ui::PathBadge::Internet
+                }
+            }
+            _ => nbeep_ui::PathBadge::None,
         }
     }
 
@@ -5754,10 +5897,13 @@ impl App {
         let mut chat = ChatViewWidget::new(self.peer_title(peer));
         let mut inv = Invalidations::default();
         chat.set_link(self.peer_link_state(peer), &mut inv); // 헤더 아이콘 초기값(M3-20)
-        chat.set_remote(
-            self.peer_path(peer) == nbeep_core::PathClass::Remote,
+        chat.set_path_badge(self.peer_path_badge(peer), &mut inv); // 경로 배지 초기값(08-22 분리)
+        chat.set_peer_face(
+            self.peer_profiles.get(&peer).and_then(|p| p.avatar.clone()),
+            peer.as_bytes().to_vec(),
+            self.peer_profiles.get(&peer).and_then(|p| p.border),
             &mut inv,
-        ); // 인터넷 경유 상시 배지 초기값(M5-3c)
+        ); // 헤더 상대 아바타(08-22 — 프로필 버튼 크기)
            // 시각 표시 형식(설정 — 08-10).
         chat.set_time_format(
             self.settings.get("chat.time_24h") != "off",
@@ -8928,17 +9074,69 @@ impl App {
                 let _ = proxy.send_event(AppEvent::Tray(ev));
             });
         }
-        // 툴바 프로필 버튼 = 내 얼굴(08-14) — 부팅 반영 + 사진이 있으면 워커 디코드
-        // (도착 시 Decoded(MyAvatar)가 버튼을 갱신한다).
+        // 툴바 프로필 버튼 = 내 얼굴(08-14) — ★부팅 깜빡임 제거(08-22 사용자 보고
+        // "내장 아바타가 먼저 보였다가 사진으로 바뀐다"): 지난 디코드의 봉인 캐시를
+        // **동기 복원**해 첫 프레임부터 사진이 뜬다(imgdec 불요 — RGBA 원시라 파서
+        // 없음·R-5 불변). 캐시 미스/원본 변경 때만 종전 비동기 디코드(그때만 1회
+        // 폴백 표시 — 사진이 실제로 바뀐 경우라 정당한 전환이다).
+        let hit = self.load_me_avatar_cache();
         self.refresh_toolbar_avatar();
         let p = self.settings.get("profile.image_path").to_string();
-        if !p.is_empty() {
-            spawn_decode(self.proxy.clone(), DecodeTarget::MyAvatar, move || {
-                std::fs::read(&p)
-                    .ok()
-                    .and_then(|b| crate::imgdec::avatar_raw_from_bytes(&b, 256))
-            });
+        if !p.is_empty() && !hit {
+            self.spawn_my_avatar_decode(p);
         }
+    }
+
+    /// 내 아바타 디코드 캐시 경로(08-22 — `profiles/me.avatar.raw` · NBSE 봉인).
+    fn me_avatar_cache_path(&self) -> std::path::PathBuf {
+        self.data_dir.join("profiles").join("me.avatar.raw")
+    }
+
+    /// 부팅 동기 복원(08-22) — 캐시가 현재 원본(경로+mtime)과 일치할 때만 적용.
+    /// 반환 = 적용됐는가(참이면 비동기 재디코드 불필요).
+    fn load_me_avatar_cache(&mut self) -> bool {
+        let src = self.settings.get("profile.image_path").to_string();
+        if src.is_empty() {
+            return false;
+        }
+        let Ok(raw) = std::fs::read(self.me_avatar_cache_path()) else {
+            return false;
+        };
+        let secret = self.identity.wrap_secret();
+        let Some(bytes) = nbeep_store::sealed::open(crate::gate::SEAL_PROFILE_CACHE, &secret, &raw)
+        else {
+            return false; // 열리지 않는 캐시(신원 교체 등) — 재디코드가 다시 굽는다
+        };
+        let Some((cached_src, mtime, w, h, rgba)) = decode_me_avatar_cache(&bytes) else {
+            return false;
+        };
+        if cached_src != src || mtime != file_mtime_ms(&src) {
+            return false; // 원본이 바뀌었다 — 캐시 무효(재디코드가 갱신)
+        }
+        self.my_avatar = Some(std::rc::Rc::new(nbeep_ui::IconImage::from_rgba(w, h, rgba)));
+        true
+    }
+
+    /// 내 사진 비동기 디코드(08-22 — 부팅·설정 변경 공용 단일 지점): 성공 시 워커가
+    /// **캐시까지 갱신**해 다음 부팅의 동기 복원 재료를 남긴다(실패 = 무해 — 다음
+    /// 부팅이 한 번 깜빡일 뿐).
+    fn spawn_my_avatar_decode(&self, src: String) {
+        let cache = self.me_avatar_cache_path();
+        let secret = self.identity.wrap_secret();
+        spawn_decode(self.proxy.clone(), DecodeTarget::MyAvatar, move || {
+            let bytes = std::fs::read(&src).ok()?;
+            let (w, h, rgba) = crate::imgdec::avatar_raw_from_bytes(&bytes, 256)?;
+            let enc = encode_me_avatar_cache(&src, file_mtime_ms(&src), w, h, &rgba);
+            if let Ok(env) =
+                nbeep_store::sealed::seal(crate::gate::SEAL_PROFILE_CACHE, &secret, &enc)
+            {
+                if let Some(dir) = cache.parent() {
+                    let _ = std::fs::create_dir_all(dir);
+                }
+                let _ = std::fs::write(&cache, env);
+            }
+            Some((w, h, rgba))
+        });
     }
 
     /// 실물 전송 재시작(신원 복원 핫 로딩 · 수신 포트 변경) — `LocalDirect`를 새로 띄워
@@ -9266,13 +9464,11 @@ impl App {
                     let _ = std::fs::remove_file(self.wire_avatar_path());
                     if value.is_empty() {
                         self.my_avatar = None;
+                        // 부팅 캐시도 철회(08-22) — 남기면 다음 부팅이 옛 사진을 복원한다.
+                        let _ = std::fs::remove_file(self.me_avatar_cache_path());
                     } else {
-                        let jp = value.clone();
-                        spawn_decode(self.proxy.clone(), DecodeTarget::MyAvatar, move || {
-                            std::fs::read(&jp)
-                                .ok()
-                                .and_then(|b| crate::imgdec::avatar_raw_from_bytes(&b, 256))
-                        });
+                        // 디코드+캐시 갱신 단일 지점(08-22 — 부팅 경로와 같은 함수).
+                        self.spawn_my_avatar_decode(value.clone());
                         // 상한 초과 원본이면 워커가 축소본을 굽고 완료 시 Full 재전파.
                         self.ensure_wire_avatar();
                     }
@@ -10471,9 +10667,9 @@ impl App {
             AlertCtx::RemoteInbound { peer } => {
                 // 요청 대기 판정(§6 · M5-3b) — 세션 실물은 pending 슬롯에 살아 있다.
                 // 거절·키 불일치 = 드롭 = 소켓 닫힘(상대는 Closed만 관측 — 정보 최소).
-                if let Some((p, session, path)) = self.pending_remote.take() {
+                if let Some((p, session, path, via_server)) = self.pending_remote.take() {
                     if yes && p == peer {
-                        self.accept_inbound(session, path);
+                        self.accept_inbound(session, path, via_server);
                     } else {
                         drop(session);
                         self.set_status(nbeep_core::t(nbeep_core::Msg::StRemoteInboundDropped));
@@ -13547,7 +13743,11 @@ impl ApplicationHandler<AppEvent> for App {
             } => {
                 // 워커가 만든 아웃바운드 세션(M2-8) — TOFU 판정은 여기(메인 · TrustStore 소유).
                 use nbeep_core::Session as _;
-                let InboundSession { session, path } = *session;
+                let InboundSession {
+                    session,
+                    path,
+                    via_server,
+                } = *session;
                 let peer = session.peer();
                 self.connecting.finish(intent, Some(peer));
                 // ★ P-3(M5-3c · R-20) — 클릭한 상대와 **다른 키**가 성립했다면 그 수동
@@ -13583,7 +13783,11 @@ impl ApplicationHandler<AppEvent> for App {
                         }
                     };
                     let decision = est.decision;
-                    self.install_conversation(nbeep_core::MuxSession::new(est.session), path);
+                    self.install_conversation(
+                        nbeep_core::MuxSession::new(est.session),
+                        path,
+                        via_server,
+                    );
                     if auto {
                         // **조용한 연결**(자동 재연결 ⓑ · 프로필 pull 08-14) — 창을
                         // 열지 않는다(② 자동 열림 금지와 같은 규칙 · 카드와 대화 분리).
@@ -13678,6 +13882,7 @@ impl ApplicationHandler<AppEvent> for App {
                         // 검증 마커(08-22) — 성공한 등록이 곧 검증. 테스트로 온
                         // 결과면 문구도 테스트 성공으로 덮는다(둘 다 같은 마커).
                         self.relay_last_err = None;
+                        self.relay_test_failed = None;
                         let pin = nbeep_relay::peer_hex(&at.client.server_peer());
                         self.mark_server_verified(&at.addr, &pin);
                         if std::mem::take(&mut self.relay_test) {
@@ -13722,9 +13927,6 @@ impl ApplicationHandler<AppEvent> for App {
                         );
                     }
                     Err(fail) => {
-                        let stage = self.relay_backoff.0;
-                        let delay = server_retry_delay(stage);
-                        self.relay_backoff = (stage.saturating_add(1), self.now_ms() + delay);
                         let why = match fail {
                             ServerAttachFail::Resolve => {
                                 nbeep_core::t(nbeep_core::Msg::StServerResolveFail).to_string()
@@ -13734,12 +13936,19 @@ impl ApplicationHandler<AppEvent> for App {
                         };
                         self.relay_last_err = Some(why.clone()); // 설정 상태 노트 재료
                         if std::mem::take(&mut self.relay_test) {
-                            // 테스트로 온 실패 — 명시 실패 문구(백오프 재시도는 그대로).
+                            // ★ 테스트 실패(08-22 사용자 확정) — 경고 배경 노트 +
+                            //   **서버 미사용**(자동 재시도 없음 · 게이트가 막는다).
+                            //   재개 = 값 고치고 다시 테스트(또는 검증된 값으로 복귀).
+                            self.relay_test_failed = Some(why.clone());
                             self.set_status(nbeep_core::tf(
                                 nbeep_core::Msg::StfServerTestFail,
                                 &[&why],
                             ));
                         } else {
+                            // 검증된 서버의 일시 장애 — 자동 유지 관리(백오프 재시도).
+                            let stage = self.relay_backoff.0;
+                            let delay = server_retry_delay(stage);
+                            self.relay_backoff = (stage.saturating_add(1), self.now_ms() + delay);
                             self.set_status(nbeep_core::tf(
                                 nbeep_core::Msg::StfServerRetry,
                                 &[&why, &(delay / 1000).to_string()],
@@ -14001,7 +14210,11 @@ impl ApplicationHandler<AppEvent> for App {
             }
             AppEvent::Inbound { session } => {
                 use nbeep_core::Session as _;
-                let InboundSession { session, path } = *session;
+                let InboundSession {
+                    session,
+                    path,
+                    via_server,
+                } = *session;
                 let peer = session.peer();
                 if self.conversations.contains_key(&peer) {
                     return; // 이미 이 상대와 대화 중(아웃바운드 세션 존재) — 중복 인바운드 무시
@@ -14023,7 +14236,7 @@ impl ApplicationHandler<AppEvent> for App {
                             return;
                         }
                         let title = self.peer_title(peer);
-                        self.pending_remote = Some((peer, session, path));
+                        self.pending_remote = Some((peer, session, path, via_server));
                         self.open_choice(
                             el,
                             nbeep_core::t(nbeep_core::Msg::AlertRemoteReqTitle),
@@ -14035,7 +14248,7 @@ impl ApplicationHandler<AppEvent> for App {
                         return;
                     }
                 }
-                self.accept_inbound(session, path);
+                self.accept_inbound(session, path, via_server);
             }
             AppEvent::Tray(ev) => match ev {
                 // 트레이(M3-2a) — 좌클릭/"열기" = 메인 복원 · "종료" = 명시적 종료.
@@ -14108,6 +14321,7 @@ impl ApplicationHandler<AppEvent> for App {
                         self.refresh_rows(&mut inv);
                         // 카드가 열려 있으면 새 얼굴로(M3-21 — pull 응답의 늦은 디코드).
                         self.refresh_peer_info_card(peer);
+                        self.refresh_chat_link(peer); // 열린 대화 헤더 아바타도(08-22)
                         if let Some(mid) = self.main_id {
                             self.request_redraw(mid);
                         }
@@ -14757,6 +14971,22 @@ impl ApplicationHandler<AppEvent> for App {
                 //   포커스 복귀 직후 짧은 창 동안 목록행 Enter만 무시한다.
                 if self.main_id == Some(id) {
                     self.enter_guard_until_ms = self.now_ms() + ENTER_GUARD_MS;
+                }
+                // ★ 읽음 확인 = 활성화 시(08-22 사용자 확정) — 이 창이 보여 주던
+                //   대화의 비활성 중 도착분(배지)을 지금 읽음으로 확정·회신한다.
+                let focused_peer = match self.mode {
+                    WindowMode::Single if self.main_id == Some(id) => self.single_open,
+                    WindowMode::Separate => self.windows.get(&id).and_then(|e| match e.role {
+                        Role::Chat(p) => Some(p),
+                        _ => None,
+                    }),
+                    _ => None,
+                };
+                if let Some(p) = focused_peer {
+                    if self.unread.contains_key(&p) {
+                        self.mark_read(p);
+                        self.send_read_ack(p);
+                    }
                 }
                 self.request_redraw(id);
                 // 앱 모달이 열려 있는데 **우리 앱의 다른 창**이 활성화되면 모달을 다시
@@ -15760,6 +15990,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         relay_check_at: 0,
         relay_test: false,
         relay_last_err: None,
+        relay_test_failed: None,
         server_peers: std::collections::HashSet::new(),
         discovery,
         table: nbeep_core::PeerTable::new(60_000),
@@ -16289,6 +16520,25 @@ mod tests {
         assert_eq!(reconnect_delay(2), Some(60_000));
         assert_eq!(reconnect_delay(3), Some(300_000));
         assert_eq!(reconnect_delay(4), None, "상한 도달 = 중단(수동 재개만)");
+    }
+
+    /// 내 아바타 부팅 캐시(08-22) — 왕복 + 손상·크기 모순 방어(fail-soft = 재디코드).
+    #[test]
+    fn me_avatar_cache_roundtrip_and_guards() {
+        use super::{decode_me_avatar_cache, encode_me_avatar_cache};
+        let rgba = vec![7u8; 4 * 4 * 4];
+        let enc = encode_me_avatar_cache("/a/b 사진.png", 123, 4, 4, &rgba);
+        assert_eq!(
+            decode_me_avatar_cache(&enc),
+            Some(("/a/b 사진.png".into(), 123, 4, 4, rgba))
+        );
+        assert!(
+            decode_me_avatar_cache(&enc[..enc.len() - 1]).is_none(),
+            "픽셀 수 모순 = 무효"
+        );
+        assert!(decode_me_avatar_cache(&[]).is_none());
+        let huge = encode_me_avatar_cache("x", 0, 600, 600, &vec![0u8; 600 * 600 * 4]);
+        assert!(decode_me_avatar_cache(&huge).is_none(), "512 초과 = 무효");
     }
 
     /// X-2b — Managed 서버 목표 유도(설정 SSOT · 값 편집은 설정 화면이 이미 관용).
