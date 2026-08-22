@@ -2549,6 +2549,10 @@ struct App {
     server_cards: HashMap<PeerId, (String, String, String)>,
     /// 목록 필터 바(08-22 사용자 확정 — 툴바 아래 칩 3그룹 · 설정 영속).
     filter_bar: nbeep_ui::FilterBarWidget,
+    /// LAN 프로필 동기용 조용한 연결의 상대별 최근 시도 시각(08-23 — 60초 스로틀:
+    /// Appeared 변화 관측에만 반응하지만, 거절·즉시 끊김 상대에게 재등장마다
+    /// 붙는 폭주를 막는다).
+    lan_sync_at: HashMap<PeerId, u64>,
     discovery: std::sync::mpsc::Receiver<nbeep_net::DiscoveryEvent>,
     table: nbeep_core::PeerTable,
     /// TOFU 신뢰 저장 — 파일 영속(M2-5a · 변경 즉시 암호화 저장 · R-17 해소).
@@ -4768,6 +4772,20 @@ impl App {
                         .is_some()
                     {
                         changed = true;
+                        // ★ LAN 프로필 즉시 동기(08-23 사용자 확정 — 서버 경유
+                        //   없이 로컬로): 상대가 나타나면 **조용한 세션**을 걸어
+                        //   프리페치·변경 push가 흐르게 한다(프로필 = 세션 경유
+                        //   DR-22 불변 — 연결이 곧 채널). observe Some(변화 관측)
+                        //   에만 반응 = 비컨마다 아님 · 60초 스로틀 = 거절 상대
+                        //   재등장 폭주 방지 · 중복은 connecting 가드가 막는다.
+                        if !self.conversations.contains_key(&hint.peer) {
+                            let now_ms = self.now_ms();
+                            let last = self.lan_sync_at.get(&hint.peer).copied().unwrap_or(0);
+                            if now_ms.saturating_sub(last) >= 60_000 {
+                                self.lan_sync_at.insert(hint.peer, now_ms);
+                                self.start_connect(hint.peer, true);
+                            }
+                        }
                     }
                     // ★ 오프라인 대기 상대가 나타났다(M4-6) — 즉시 연결 후보로.
                     //   observe의 무변화 스로틀(RL-16ⓑ)과 무관하게 여기서 건다:
@@ -16346,6 +16364,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         roster_pending: std::collections::VecDeque::new(),
         roster_known: std::collections::HashSet::new(),
         roster_capped: false,
+        lan_sync_at: HashMap::new(),
         server_cards: HashMap::new(),
         filter_bar: nbeep_ui::FilterBarWidget::new(),
         discovery,
