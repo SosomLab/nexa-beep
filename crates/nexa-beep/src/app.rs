@@ -5009,6 +5009,7 @@ impl App {
         let Some(raw) = want else {
             if self.relay.take().is_some() {
                 self.set_status(nbeep_core::t(nbeep_core::Msg::StServerDetached));
+                self.refresh_toolbar_server();
             }
             return;
         };
@@ -5052,6 +5053,7 @@ impl App {
             self.relay = None;
             self.relay_backoff = (0, now);
             self.clear_server_peers();
+            self.refresh_toolbar_server();
             self.set_status(nbeep_core::t(nbeep_core::Msg::StServerLost));
         }
         if now < self.relay_backoff.1 {
@@ -5099,6 +5101,17 @@ impl App {
         self.relay_last_err = None;
         self.relay_test_failed = None; // 값이 바뀌면 실패 상태도 새 판(재테스트 대상)
         self.clear_server_peers();
+        self.refresh_toolbar_server();
+    }
+
+    /// 툴바 서버 접속 표시(08-22) — 접속 성립/해제 지점들이 부른다.
+    fn refresh_toolbar_server(&mut self) {
+        let on = self.relay.is_some();
+        let mut inv = Invalidations::default();
+        self.toolbar.set_item_visible("server", on, &mut inv);
+        if let Some(mid) = self.main_id {
+            self.request_redraw(mid);
+        }
     }
 
     /// 서버 공개 목록 비우기(X-2e) — 접속 해제·재접속·공개 off 공용.
@@ -5891,6 +5904,24 @@ impl App {
             chat.set_path_badge(badge, &mut inv); // 경로 배지(서버 경유/인터넷 — 08-22 분리)
             chat.set_peer_face(avatar, peer.as_bytes().to_vec(), border, &mut inv); // 헤더 아바타
             self.redraw_conversation(peer);
+        }
+    }
+
+    /// 열린 대화 뷰·별도 창 제목을 현재 표시 이름으로(08-22 사용자 보고 — 목록은
+    /// 새 이름인데 대화창 헤더·OS 타이틀이 옛 이름에 머물던 구멍). 프로필 수신이 부른다.
+    fn refresh_chat_title(&mut self, peer: PeerId) {
+        let title = self.peer_title(peer);
+        let mut inv = Invalidations::default();
+        if let Some(chat) = self.chats.get_mut(&peer) {
+            chat.set_title(title.clone(), &mut inv);
+            self.redraw_conversation(peer);
+        }
+        if let Some((_, e)) = self
+            .windows
+            .iter()
+            .find(|(_, e)| e.role == Role::Chat(peer))
+        {
+            e.window.set_title(&format!("Nexa Beep — {title}"));
         }
     }
 
@@ -11931,6 +11962,8 @@ impl App {
                             "quarantine" => self.open_quarantine(el),
                             "convbox" => self.open_convbox(el),
                             "profile" => self.open_profile(el),
+                            // 서버 표시 클릭 = 설정(서버 값·상태 확인 자리로).
+                            "server" => self.open_settings(el),
                             "gallery" => self.open_gallery(el),
                             _ => {}
                         }
@@ -13923,6 +13956,7 @@ impl ApplicationHandler<AppEvent> for App {
                             client.set_announce(true);
                         }
                         self.relay = Some(client);
+                        self.refresh_toolbar_server();
                     }
                     Err(ServerAttachFail::PinMismatch) => {
                         // ★ 신원이 바뀌면 시끄럽게(DR-28) — 모달 + 자동 재시도 정지.
@@ -14170,6 +14204,8 @@ impl ApplicationHandler<AppEvent> for App {
                 self.refresh_rows(&mut inv);
                 // 열려 있는 카드 즉시 갱신(M3-21 pull/push 도착 반영).
                 self.refresh_peer_info_card(peer);
+                self.refresh_chat_title(peer); // 대화창 헤더·창 제목도 새 이름(08-22)
+                self.refresh_chat_link(peer); // 헤더 아바타도 수신분으로
                 if let Some(mid) = self.main_id {
                     self.request_redraw(mid);
                 }
@@ -16139,6 +16175,18 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
                     alpha: nbeep_ui::icons::DRAWER_ALPHA,
                 },
             ),
+            // Managed 서버 접속 표시(08-22 사용자 확정 — 대화 헤더 "서버 경유"
+            // 배지와 같은 waypoints · 프로필 왼쪽 · **접속 중일 때만** 보인다).
+            ToolItem::new(
+                "server",
+                ToolIcon::Mask {
+                    w: nbeep_ui::icons::path::SIZE,
+                    h: nbeep_ui::icons::path::SIZE,
+                    alpha: nbeep_ui::icons::path::WAYPOINTS_ALPHA,
+                },
+            )
+            .align_right()
+            .hidden(),
             // 프로필 버튼 = **내 얼굴 미니**(08-14 사용자 요청 — 우측 끝 배치).
             // 실제 아이콘은 부팅 직후 refresh_toolbar_avatar가 설정값으로 채운다.
             ToolItem::new(

@@ -55,6 +55,8 @@ pub struct ToolItem {
     pub icon: ToolIcon,
     /// `true`면 툴바 **오른쪽 끝**부터 배치(08-14 — 프로필 버튼).
     pub right: bool,
+    /// 표시 여부(08-22 — 상태 표시 항목용): `false`면 자리도 차지하지 않는다.
+    pub visible: bool,
 }
 
 impl ToolItem {
@@ -64,6 +66,7 @@ impl ToolItem {
             id: id.into(),
             icon,
             right: false,
+            visible: true,
         }
     }
 
@@ -71,6 +74,13 @@ impl ToolItem {
     #[must_use]
     pub fn align_right(mut self) -> Self {
         self.right = true;
+        self
+    }
+
+    /// 시작부터 숨김(체이닝 · 08-22) — 호스트가 [`Toolbar::set_item_visible`]로 켠다.
+    #[must_use]
+    pub fn hidden(mut self) -> Self {
+        self.visible = false;
         self
     }
 }
@@ -155,7 +165,10 @@ impl Toolbar {
         if self.items[i].right {
             // 오른쪽 끝부터 — 내 뒤의 right 항목 수만큼 왼쪽으로 밀린다.
             #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-            let after = self.items[i + 1..].iter().filter(|it| it.right).count() as i32;
+            let after = self.items[i + 1..]
+                .iter()
+                .filter(|it| it.right && it.visible)
+                .count() as i32;
             Rect::new(
                 b.right() - self.s(6) - slot - (slot + gap) * after,
                 y,
@@ -164,7 +177,10 @@ impl Toolbar {
             )
         } else {
             #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-            let before = self.items[..i].iter().filter(|it| !it.right).count() as i32;
+            let before = self.items[..i]
+                .iter()
+                .filter(|it| !it.right && it.visible)
+                .count() as i32;
             Rect::new(b.x + self.s(6) + (slot + gap) * before, y, slot, slot)
         }
     }
@@ -173,11 +189,11 @@ impl Toolbar {
     /// 컨트롤(정렬 드롭다운 등)을 이어 붙일 때의 기준선.
     #[must_use]
     pub fn left_items_end(&self) -> i32 {
-        let n = self.items.iter().filter(|it| !it.right).count();
-        if n == 0 {
+        let last = self.items.iter().rposition(|it| !it.right && it.visible);
+        let Some(last) = last else {
             return self.base.bounds.x + self.s(6);
-        }
-        self.slot_rect(n - 1).right()
+        };
+        self.slot_rect(last).right()
     }
 
     /// 좌측 슬롯 한 변(물리 px) — 이어 붙일 컨트롤의 크기 맞춤용.
@@ -197,8 +213,19 @@ impl Toolbar {
         }
     }
 
+    /// 항목 표시/숨김(08-22 — 서버 접속 표시 등 상태 항목). 미지 id는 무시.
+    pub fn set_item_visible(&mut self, id: &str, visible: bool, inv: &mut Invalidations) {
+        if let Some(i) = self.items.iter().position(|it| it.id == id) {
+            if self.items[i].visible != visible {
+                self.items[i].visible = visible;
+                inv.push(self.base.bounds);
+            }
+        }
+    }
+
     fn item_at(&self, x: i32, y: i32) -> Option<usize> {
-        (0..self.items.len()).find(|&i| self.slot_rect(i).contains(Point { x, y }))
+        (0..self.items.len())
+            .find(|&i| self.items[i].visible && self.slot_rect(i).contains(Point { x, y }))
     }
 
     /// 마스크 항목의 틴트 이미지(캐시) — 색이 바뀌면(테마·hover) 다시 만든다.
@@ -276,6 +303,9 @@ impl Widget for Toolbar {
         ctx.fill_rect(b, theme.chrome_bg);
         ctx.fill_rect(Rect::new(b.x, b.bottom() - 1, b.w, 1), theme.border);
         for (i, it) in self.items.iter().enumerate() {
+            if !it.visible {
+                continue;
+            }
             let slot = self.slot_rect(i);
             let is_pressed = self.pressed == Some(i);
             let is_hover = self.hover == Some(i);

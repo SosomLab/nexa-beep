@@ -1064,6 +1064,20 @@ impl ChatViewWidget {
         }
     }
 
+    /// 제목(상대 표시 이름) 교체(08-22 — 프로필 수신 연동: 목록만 새 이름이고
+    /// 대화창은 옛 이름에 머물던 구멍). 변화 시 헤더 재도색.
+    pub fn set_title(&mut self, title: String, inv: &mut Invalidations) {
+        if self.title != title {
+            self.title = title;
+            inv.push(Rect::new(
+                self.bounds.x,
+                self.bounds.y,
+                self.bounds.w,
+                self.s(HEAD_H),
+            ));
+        }
+    }
+
     /// 경로 배지 주입(M5-3c 개정 08-22 — 서버 경유/인터넷 직결 분리). 변화 시 헤더 재도색.
     pub fn set_path_badge(&mut self, badge: PathBadge, inv: &mut Invalidations) {
         if self.path_badge != badge {
