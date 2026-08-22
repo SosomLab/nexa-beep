@@ -409,6 +409,12 @@ enum ServerAttachFail {
 /// Managed 서버 목표(설정 SSOT · X-2b) — None = Unmanaged/주소 없음(S-0 그대로).
 /// 주소에 `:`가 있으면 그대로 쓰고(포트 명시·IPv6는 `[..]:port` 표기), 없으면 설정
 /// 포트를 붙인다. 해석·기본 포트 보정은 `nbeep_relay::resolve_server` 몫.
+/// roster lazy 편입 — 한 틱(2s)에 목록으로 옮기는 최대 수(08-22 사용자 확정:
+/// "한 번에 전부"는 메인 루프를 흔든다 — 배치로 나눠 다음 틱이 이어받는다).
+const ROSTER_BATCH: usize = 256;
+/// roster 보관 상한(악의·폭주 서버 방어) — 초과분은 버리고 상태바 1회 고지.
+const ROSTER_MAX: usize = 4096;
+
 fn server_target(mode: &str, address: &str, port: &str) -> Option<String> {
     if mode != "managed" {
         return None;
@@ -2525,6 +2531,15 @@ struct App {
     /// 같은 서버의 **공개**(Announce) 사용자(X-2e roster) — 목록에 서버 상대 행으로
     /// 병합된다. 서버가 존재(키)만 나르므로 이름은 지문 유도, 프로필은 성립 후 P2P.
     server_peers: std::collections::HashSet<PeerId>,
+    /// roster 대기 큐(08-22 lazy — 한 틱에 [`ROSTER_BATCH`]개만 목록 편입: 폭주
+    /// 스냅숏이 메인 루프 한 번에 다 실리지 않게. 수신 자체는 relay 액터 스레드).
+    roster_pending: std::collections::VecDeque<PeerId>,
+    /// 서버가 알린 생존 명부(대기+표시 합집합) — Down 판정·중복 편입 방지.
+    roster_known: std::collections::HashSet<PeerId>,
+    /// roster 상한 절단 1회 고지 플래그(조용한 절단 금지 — [13 §12-1] 결).
+    roster_capped: bool,
+    /// 목록 필터 바(08-22 사용자 확정 — 툴바 아래 칩 3그룹 · 설정 영속).
+    filter_bar: nbeep_ui::FilterBarWidget,
     discovery: std::sync::mpsc::Receiver<nbeep_net::DiscoveryEvent>,
     table: nbeep_core::PeerTable,
     /// TOFU 신뢰 저장 — 파일 영속(M2-5a · 변경 즉시 암호화 저장 · R-17 해소).
@@ -2940,7 +2955,8 @@ impl App {
         }
         let menu_h = (30.0 * scale).round() as i32;
         let tb_h = (self.toolbar.preferred_height() as f32 * scale).round() as i32;
-        menu_h + tb_h
+        let fb_h = (nbeep_ui::FILTER_H as f32 * scale).round() as i32; // 필터 바(08-22)
+        menu_h + tb_h + fb_h
     }
 
     /// About 창을 연다(메뉴 → About).
@@ -4836,6 +4852,49 @@ impl App {
                 });
             }
         }
+        // ── 목록 필터(08-22 사용자 확정 — 칩 3그룹 AND · 영속 `list.filter.*`) ──
+        let fval = |v: &str| {
+            if v.is_empty() {
+                "all".to_string()
+            } else {
+                v.to_string()
+            }
+        };
+        let fpath = fval(self.settings.get("list.filter.path"));
+        let fpres = fval(self.settings.get("list.filter.presence"));
+        let ftrust = fval(self.settings.get("list.filter.trust"));
+        entries.retain(|e| {
+            let lvl = self.trust.level(e.peer);
+            // ★ 왕래 기준 승격(확정안) — roster로만 아는(왕래 전무·미발견) 상대는
+            //   그룹1 'Server'를 골랐을 때만 나타난다. 핀·인증·세션이 생기면 전체로.
+            let roster_only = self.server_peers.contains(&e.peer)
+                && self.table.get(e.peer).is_none()
+                && !self.conversations.contains_key(&e.peer)
+                && lvl == nbeep_core::TrustLevel::Unverified;
+            if roster_only && fpath != "server" {
+                return false;
+            }
+            if fpath == "group" {
+                return false; // 그룹 칩 = 그룹 행만
+            }
+            if fpath != "all" && self.peer_filter_path(e.peer) != fpath {
+                return false;
+            }
+            let online =
+                self.conversations.contains_key(&e.peer) || self.table.get(e.peer).is_some();
+            match fpres.as_str() {
+                "online" if !online => return false,
+                "offline" if online => return false,
+                _ => {}
+            }
+            match ftrust.as_str() {
+                "verified" if lvl != nbeep_core::TrustLevel::FingerprintVerified => return false,
+                "pinned" if lvl != nbeep_core::TrustLevel::Pinned => return false,
+                "new" if lvl != nbeep_core::TrustLevel::Unverified => return false,
+                _ => {}
+            }
+            true
+        });
         // 정렬(08-15 사용자 확정) — 고정(★) 구획이 먼저, 각 구획은 설정 모드
         // (`ui.list_sort` — 최근 접속/최근 대화/접속 우선/이름)의 속성 사슬로.
         let mode = self.settings.get("ui.list_sort").to_string();
@@ -4960,6 +5019,11 @@ impl App {
             })
             .collect();
         let mut grows = grows;
+        // 필터(08-22) — 그룹 행은 경로 칩 '전체'/'그룹'에서만(상태·신뢰 칩은
+        // 상대 축이라 그룹에 적용하지 않는다).
+        if !(fpath == "all" || fpath == "group") {
+            grows.clear();
+        }
         // 그룹도 고정 먼저(08-15) — 각 구획은 이름순.
         grows.sort_by(|a, b| (!a.fav, &a.name).cmp(&(!b.fav, &b.name)));
         self.list.set_groups(grows, inv);
@@ -5033,22 +5097,48 @@ impl App {
         }
         if let Some(c) = &self.relay {
             if c.is_alive() {
-                // roster 델타 소비(X-2e) — 공개 사용자 등장/이탈을 목록에 반영.
-                let evs = c.poll_roster();
-                if !evs.is_empty() {
-                    let my = self.identity.peer_id();
-                    for ev in evs {
-                        match ev {
-                            nbeep_relay::RosterEvent::Up(p) => {
-                                if p != my {
-                                    self.server_peers.insert(p);
+                // roster 델타 소비(X-2e · ★08-22 lazy 개정) — 수신은 relay 액터
+                // 스레드가 이미 하고, 여기서는 **한 틱에 ROSTER_BATCH개만** 목록에
+                // 편입한다(폭주 스냅숏이 메인 루프 한 번에 다 실리지 않게 — 남은
+                // 것은 대기 큐가 들고 다음 틱이 이어받는다).
+                let my = self.identity.peer_id();
+                let mut touched = false;
+                for ev in c.poll_roster() {
+                    match ev {
+                        nbeep_relay::RosterEvent::Up(p) => {
+                            if p != my && !self.roster_known.contains(&p) {
+                                if self.roster_known.len() >= ROSTER_MAX {
+                                    if !self.roster_capped {
+                                        self.roster_capped = true;
+                                        self.set_status(nbeep_core::tf(
+                                            nbeep_core::Msg::StfRosterCapped,
+                                            &[&ROSTER_MAX.to_string()],
+                                        ));
+                                    }
+                                } else {
+                                    self.roster_known.insert(p);
+                                    self.roster_pending.push_back(p);
                                 }
                             }
-                            nbeep_relay::RosterEvent::Down(p) => {
-                                self.server_peers.remove(&p);
-                            }
+                        }
+                        nbeep_relay::RosterEvent::Down(p) => {
+                            self.roster_known.remove(&p);
+                            touched |= self.server_peers.remove(&p);
                         }
                     }
+                }
+                let mut moved = 0;
+                while moved < ROSTER_BATCH {
+                    let Some(p) = self.roster_pending.pop_front() else {
+                        break;
+                    };
+                    // 대기 중 Down으로 빠진 상대는 건너뛴다(known이 진실).
+                    if self.roster_known.contains(&p) && self.server_peers.insert(p) {
+                        touched = true;
+                        moved += 1;
+                    }
+                }
+                if touched {
                     let mut inv = Invalidations::default();
                     self.refresh_rows(&mut inv);
                     if let Some(mid) = self.main_id {
@@ -5130,6 +5220,9 @@ impl App {
 
     /// 서버 공개 목록 비우기(X-2e) — 접속 해제·재접속·공개 off 공용.
     fn clear_server_peers(&mut self) {
+        self.roster_pending.clear();
+        self.roster_known.clear();
+        self.roster_capped = false;
         if !self.server_peers.is_empty() {
             self.server_peers.clear();
             let mut inv = Invalidations::default();
@@ -5880,6 +5973,37 @@ impl App {
         self.conversations
             .get(&peer)
             .map_or(nbeep_core::PathClass::Local, |c| c.path)
+    }
+
+    /// 목록 필터의 경로 분류(08-22) — 성립 세션 > 발견(LAN) > roster(서버) >
+    /// 수동 주소(IP 등급 · 도메인/공인/파싱 불가 = 인터넷) > 기타(로컬 취급).
+    fn peer_filter_path(&self, peer: PeerId) -> &'static str {
+        if let Some(c) = self.conversations.get(&peer) {
+            return if c.path == nbeep_core::PathClass::Local {
+                "local"
+            } else if c.via_server {
+                "server"
+            } else {
+                "internet"
+            };
+        }
+        if self.table.get(peer).is_some() {
+            return "local";
+        }
+        if self.server_peers.contains(&peer) {
+            return "server";
+        }
+        if let Some(addr) = self.manual_addrs.get(&peer) {
+            let ip = addr
+                .rsplit_once(':')
+                .and_then(|(h, _)| h.trim_matches(['[', ']']).parse::<std::net::IpAddr>().ok())
+                .or_else(|| addr.parse().ok());
+            return match ip {
+                Some(ip) if nbeep_core::class_of_ip(ip) == nbeep_core::PathClass::Local => "local",
+                _ => "internet",
+            };
+        }
+        "local"
     }
 
     /// 원격 × 미대조 = 파일 **발신** 금지(M5-3b · §5-1-3 — ★08-22 개정: 수신은
@@ -9144,6 +9268,16 @@ impl App {
         // 폴백 표시 — 사진이 실제로 바뀐 경우라 정당한 전환이다).
         let hit = self.load_me_avatar_cache();
         self.refresh_toolbar_avatar();
+        // 목록 필터 복원(08-22 — "" = 전체).
+        {
+            let (fp, fs, ft) = (
+                self.settings.get("list.filter.path").to_string(),
+                self.settings.get("list.filter.presence").to_string(),
+                self.settings.get("list.filter.trust").to_string(),
+            );
+            let mut finv = Invalidations::default();
+            self.filter_bar.set_selection(&fp, &fs, &ft, &mut finv);
+        }
         let p = self.settings.get("profile.image_path").to_string();
         if !p.is_empty() && !hit {
             self.spawn_my_avatar_decode(p);
@@ -11163,20 +11297,26 @@ impl App {
                 let chrome = self.chrome_h(scale);
                 if chrome > 0 {
                     let menu_h = (30.0 * scale).round() as i32;
+                    let fb_h = (nbeep_ui::FILTER_H as f32 * scale).round() as i32;
+                    let tb_h = chrome - menu_h - fb_h;
                     self.menu.set_scale(scale);
                     self.menu.set_bounds(Rect::new(0, 0, w, menu_h), &mut inv);
                     self.toolbar.set_scale(scale);
                     self.toolbar
-                        .set_bounds(Rect::new(0, menu_h, w, chrome - menu_h), &mut inv);
+                        .set_bounds(Rect::new(0, menu_h, w, tb_h), &mut inv);
                     // 정렬 드롭다운(08-15) — 좌측 아이콘들 끝에 이어 붙는 한 칸.
                     let slot = self.toolbar.slot_px();
                     let gap = (4.0 * scale).round() as i32;
-                    let ty = menu_h + ((chrome - menu_h) - slot) / 2;
+                    let ty = menu_h + (tb_h - slot) / 2;
                     self.sort_drop.set_scale(scale);
                     self.sort_drop.set_bounds(
                         Rect::new(self.toolbar.left_items_end() + gap, ty, slot, slot),
                         &mut inv,
                     );
+                    // 필터 바(08-22) — 툴바 바로 아래 납작 칩 줄.
+                    self.filter_bar.set_scale(scale, &mut inv);
+                    self.filter_bar
+                        .set_bounds(Rect::new(0, menu_h + tb_h, w, fb_h), &mut inv);
                 }
                 self.list.set_scale(scale, &mut inv);
                 self.list
@@ -11925,6 +12065,13 @@ impl App {
                         self.menu.on_event(&ev, &mut inv);
                         self.toolbar.on_event(&ev, &mut inv);
                         self.sort_drop.on_event(&ev, &mut inv);
+                        self.filter_bar.on_event(&ev, &mut inv);
+                        if let Some((fkey, fval)) = self.filter_bar.take_changed() {
+                            // 필터는 즉시 적용 + 영속(08-22 — 재시작 유지).
+                            self.settings.set(fkey, fval.to_string());
+                            self.conf_mark();
+                            self.refresh_rows(&mut inv);
+                        }
                         // ★ 스트레이 Enter 가드(08-21 — Focused(true) 참조): 모달
                         //   제출 Enter의 잔향이 목록 캐럿 행을 활성화하지 않게.
                         let stray_enter = matches!(
@@ -12606,6 +12753,7 @@ impl App {
                     self.list.paint(&mut ctx, &theme);
                     // 상단 크롬(툴바 → 메뉴 순 — 메뉴 팝업이 최상위).
                     self.toolbar.paint(&mut ctx, &theme);
+                    self.filter_bar.paint(&mut ctx, &theme); // 목록 필터 바(08-22)
                     self.sort_drop.paint(&mut ctx, &theme); // 정렬 드롭다운 버튼(08-15)
                     self.menu.paint(&mut ctx, &theme);
                 }
@@ -16067,6 +16215,10 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         relay_last_err: None,
         relay_test_failed: None,
         server_peers: std::collections::HashSet::new(),
+        roster_pending: std::collections::VecDeque::new(),
+        roster_known: std::collections::HashSet::new(),
+        roster_capped: false,
+        filter_bar: nbeep_ui::FilterBarWidget::new(),
         discovery,
         table: nbeep_core::PeerTable::new(60_000),
         trust,

@@ -66,6 +66,11 @@ const HIDDEN_KEYS: &[&str] = &[
     // 최근 프로필 이미지(08-14 — 탭 구분 목록). ★ 여기 없으면 저장은 되는데
     // **부팅 로드에서 미지 키로 무시**돼 재시작마다 목록이 증발한다(실기로 잡음).
     "profile.image_recent",
+    // 목록 필터 바(08-22) — 툴바 아래 칩 3그룹의 선택 영속("" = 전체).
+    // ★ 키 등록과 값 저장은 쌍 — 여기 없으면 재시작 로드가 미지 키로 흘린다.
+    "list.filter.path",
+    "list.filter.presence",
+    "list.filter.trust",
     // 창 위치·크기 기억(08-14) — Moved/Resized가 쓰고 기동이 읽는다.
     "ui.win_x",
     "ui.win_y",

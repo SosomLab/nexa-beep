@@ -704,6 +704,28 @@ pub enum Msg {
     PathServerLabel,
     /// 경로 배지 — 로컬(같은 망 · 승인 창 식별용).
     PathLocalLabel,
+    /// 목록 필터 칩(08-22) — 전체.
+    FltAll,
+    /// 필터 칩 — 로컬(LAN).
+    FltLocal,
+    /// 필터 칩 — 서버(roster).
+    FltServer,
+    /// 필터 칩 — 인터넷(수동 원격).
+    FltInternet,
+    /// 필터 칩 — 그룹.
+    FltGroup,
+    /// 필터 칩 — 온라인.
+    FltOnline,
+    /// 필터 칩 — 오프라인.
+    FltOffline,
+    /// 필터 칩 — 인증(지문 대조 완료).
+    FltVerified,
+    /// 필터 칩 — 핀(왕래 기록).
+    FltPinned,
+    /// 필터 칩 — 신규(왕래 전무).
+    FltNew,
+    /// 서버 공개 목록이 내부 상한에서 절단되었음(08-22 lazy roster — 조용한 절단 금지).
+    StfRosterCapped,
     /// 설정: 원격 경로 파일 발신 허용(08-22 — 기본 끄기 · 발신만).
     RemoteFilesOpt,
     /// 위 설정 설명.
@@ -1215,6 +1237,17 @@ impl Msg {
             Msg::PathRemoteLabel => ["via internet", "인터넷 경유", "经由互联网", "インターネット経由"],
             Msg::PathServerLabel => ["via server", "서버 경유", "经由服务器", "サーバー経由"],
             Msg::PathLocalLabel => ["via local", "로컬(같은 망)", "本地(同一网络)", "ローカル(同一LAN)"],
+            Msg::FltAll => ["All", "전체", "全部", "すべて"],
+            Msg::FltLocal => ["Local", "로컬", "本地", "ローカル"],
+            Msg::FltServer => ["Server", "서버", "服务器", "サーバー"],
+            Msg::FltInternet => ["Internet", "인터넷", "互联网", "ネット"],
+            Msg::FltGroup => ["Group", "그룹", "群组", "グループ"],
+            Msg::FltOnline => ["Online", "온라인", "在线", "オンライン"],
+            Msg::FltOffline => ["Offline", "오프라인", "离线", "オフライン"],
+            Msg::FltVerified => ["Verified", "인증", "已验证", "検証済み"],
+            Msg::FltPinned => ["Pinned", "핀", "已固定", "ピン"],
+            Msg::FltNew => ["New", "신규", "新", "新規"],
+            Msg::StfRosterCapped => ["Server user list truncated at {} (safety cap)", "서버 공개 목록이 상한 {}에서 절단되었습니다(안전 상한)", "服务器用户列表在 {} 处截断（安全上限）", "サーバー公開リストは上限 {} で打ち切りました（安全上限）"],
             Msg::RemoteFilesOpt => ["Files on remote paths", "원격 경로 파일 전송", "远程路径文件传输", "リモート経路のファイル送信"],
             Msg::RemoteFilesOptDesc => ["Allow SENDING files in via-server / via-internet chats (default off). Receiving is never restricted — every incoming request still asks you, with the path clearly shown.", "서버 경유·인터넷 직결 대화에서 파일 발신을 허용합니다(기본 끄기). 수신은 제한하지 않습니다 — 요청마다 경로가 표시된 승인 창에서 직접 결정합니다.", "允许在经由服务器/互联网的对话中发送文件（默认关闭）。接收不受限 — 每个请求都会弹出标明路径的确认窗口。", "サーバー経由/インターネット経由の会話でのファイル送信を許可（既定オフ）。受信は制限せず、経路が明示された承認画面で毎回判断します。"],
             Msg::RemoteFileServerOff => ["This chat goes via server — file sending is off. Turn on Settings › Server › 'Files on remote paths' to send.", "서버 경유 대화라 파일 전송이 꺼져 있습니다. 설정 › Server › '원격 경로 파일 전송'을 켜면 보낼 수 있습니다.", "此对话经由服务器 — 文件发送已关闭。在 设置 › Server › '远程路径文件传输' 中开启即可发送。", "この会話はサーバー経由のためファイル送信はオフです。設定 › Server › 'リモート経路のファイル送信' をオンにすると送信できます。"],
