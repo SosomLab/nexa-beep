@@ -330,3 +330,60 @@ fn attach_pin_tofu_and_liveness() {
     }
     let _ = std::fs::remove_file(&pin);
 }
+
+/// X-2e roster — 옵트인·상호성·스냅숏·델타·이탈 방송.
+#[test]
+fn roster_announce_snapshot_deltas_and_reciprocity() {
+    use nbeep_relay::RosterEvent;
+    fn wait_events(c: &RelayClient, n: usize) -> Vec<RosterEvent> {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let mut got = Vec::new();
+        while got.len() < n && std::time::Instant::now() < deadline {
+            got.extend(c.poll_roster());
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        got
+    }
+    let server = test_server(0);
+    let ida = Identity::generate();
+    let idb = Identity::generate();
+    let idc = Identity::generate();
+    let (pa, pb) = (ida.peer_id(), idb.peer_id());
+
+    let ca = RelayClient::connect(server.tcp_addr, &ida, &rids_around(&pa), None).unwrap();
+    ca.set_announce(true); // 혼자 — 스냅숏 없음
+    let cb = RelayClient::connect(server.tcp_addr, &idb, &rids_around(&pb), None).unwrap();
+    cb.set_announce(true);
+    // B 입장 스냅숏 = A · A 델타 = B 등장.
+    assert_eq!(
+        wait_events(&cb, 1),
+        vec![RosterEvent::Up(pa)],
+        "입장 스냅숏"
+    );
+    assert_eq!(wait_events(&ca, 1), vec![RosterEvent::Up(pb)], "등장 델타");
+
+    // C = 공개 안 켬 — 아무것도 받지 못한다(상호성 — 잠복 수확 방지).
+    let cc =
+        RelayClient::connect(server.tcp_addr, &idc, &rids_around(&idc.peer_id()), None).unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(cc.poll_roster().is_empty(), "비공개 = 목록도 못 받는다");
+
+    // B 공개 해제 → A에 이탈 델타.
+    cb.set_announce(false);
+    assert_eq!(
+        wait_events(&ca, 1),
+        vec![RosterEvent::Down(pb)],
+        "해제 = 이탈"
+    );
+    // B 재공개 후 연결 자체를 내리면 → 종료 정리가 이탈을 방송한다.
+    cb.set_announce(true);
+    assert_eq!(wait_events(&ca, 1), vec![RosterEvent::Up(pb)]);
+    drop(cb);
+    assert_eq!(
+        wait_events(&ca, 1),
+        vec![RosterEvent::Down(pb)],
+        "연결 종료 = 이탈 방송"
+    );
+    drop(cc);
+    server.shutdown();
+}

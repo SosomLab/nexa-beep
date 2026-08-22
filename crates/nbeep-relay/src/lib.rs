@@ -144,6 +144,13 @@ pub enum C2s {
     },
     /// 생존 신호(서버 유휴 정리 방지).
     Ping,
+    /// ★ 프레즌스 공개 여부(X-2e roster · 08-22 — [docs/32 §12-7] 옵트인):
+    /// `true` = 같은 서버의 공개 사용자 목록에 나(공개키)를 싣고, 그 목록을 받는다.
+    /// `false` = 내린다. 서버는 **켠 연결만** 메모리에 보관·배포한다(저장 0 불변).
+    Announce {
+        /// 목록에 실을지 여부.
+        listed: bool,
+    },
 }
 
 /// 서버 → 클라이언트.
@@ -194,6 +201,17 @@ pub enum S2c {
     },
     /// [`C2s::Ping`] 응답.
     Pong,
+    /// ★ 공개 사용자 등장(X-2e roster) — 입장 스냅숏 + 이후 델타. 존재(공개키)만
+    /// 싣는다 — 이름·프로필은 성립 후 종단(P2P)이 나른다(DR-22 불변).
+    PeerUp {
+        /// 등장한 사용자 공개키.
+        peer: PeerId,
+    },
+    /// 공개 사용자 이탈(연결 종료·공개 해제).
+    PeerDown {
+        /// 이탈한 사용자 공개키.
+        peer: PeerId,
+    },
 }
 
 /// 연결당 등록 가능한 RID 상한(에폭 3 + 여유).
@@ -205,12 +223,15 @@ const K_ACCEPT: u8 = 0x03;
 const K_DATA: u8 = 0x04;
 const K_CLOSECH: u8 = 0x05;
 const K_PING: u8 = 0x06;
+const K_ANNOUNCE: u8 = 0x07;
 const K_REGISTER_OK: u8 = 0x81;
 const K_OPEN_RESULT: u8 = 0x82;
 const K_INCOMING: u8 = 0x83;
 const K_S_DATA: u8 = 0x84;
 const K_CH_CLOSED: u8 = 0x85;
 const K_PONG: u8 = 0x86;
+const K_PEER_UP: u8 = 0x87;
+const K_PEER_DOWN: u8 = 0x88;
 
 fn put_endpoint(out: &mut Vec<u8>, ep: Option<SocketAddr>) {
     match ep {
@@ -288,6 +309,10 @@ impl C2s {
                 o.extend_from_slice(&ch.to_be_bytes());
             }
             Self::Ping => o.push(K_PING),
+            Self::Announce { listed } => {
+                o.push(K_ANNOUNCE);
+                o.push(u8::from(*listed));
+            }
         }
         o
     }
@@ -335,6 +360,9 @@ impl C2s {
                 ch: u32::from_be_bytes([*b.get(1)?, *b.get(2)?, *b.get(3)?, *b.get(4)?]),
             }),
             K_PING => Some(Self::Ping),
+            K_ANNOUNCE => Some(Self::Announce {
+                listed: *b.get(1)? != 0,
+            }),
             _ => None,
         }
     }
@@ -385,6 +413,14 @@ impl S2c {
                 o.extend_from_slice(&ch.to_be_bytes());
             }
             Self::Pong => o.push(K_PONG),
+            Self::PeerUp { peer } => {
+                o.push(K_PEER_UP);
+                o.extend_from_slice(peer.as_bytes());
+            }
+            Self::PeerDown { peer } => {
+                o.push(K_PEER_DOWN);
+                o.extend_from_slice(peer.as_bytes());
+            }
         }
         o
     }
@@ -446,6 +482,19 @@ impl S2c {
                 ch: u32::from_be_bytes([*b.get(1)?, *b.get(2)?, *b.get(3)?, *b.get(4)?]),
             }),
             K_PONG => Some(Self::Pong),
+            K_PEER_UP | K_PEER_DOWN => {
+                if b.len() < 33 {
+                    return None;
+                }
+                let mut k = [0u8; 32];
+                k.copy_from_slice(&b[1..33]);
+                let peer = PeerId::from_bytes(k);
+                Some(if b[0] == K_PEER_UP {
+                    Self::PeerUp { peer }
+                } else {
+                    Self::PeerDown { peer }
+                })
+            }
             _ => None,
         }
     }
@@ -574,11 +623,25 @@ enum Cmd {
     /// 생존 확인용 no-op([`RelayClient::is_alive`]) — 액터가 죽었으면 채널 send가
     /// 실패한다는 사실만 쓴다(액터는 아무 것도 하지 않는다).
     Nop,
+    /// 프레즌스 공개 지정([`RelayClient::set_announce`] — X-2e roster).
+    Announce {
+        listed: bool,
+    },
 }
 
 enum ChEvent {
     Data { fin: bool, bytes: Vec<u8> },
     Closed,
+}
+
+/// roster 델타(X-2e — [`RelayClient::poll_roster`]) — 같은 서버 **공개** 사용자의
+/// 등장/이탈. 서버는 존재(공개키)만 나른다.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RosterEvent {
+    /// 공개 사용자 등장(입장 스냅숏 포함).
+    Up(PeerId),
+    /// 공개 사용자 이탈(연결 종료·공개 해제).
+    Down(PeerId),
 }
 
 /// 릴레이 서버에 붙은 클라이언트 — 제어 세션(서버와의 Noise)을 액터 스레드가 소유하고,
@@ -588,6 +651,8 @@ pub struct RelayClient {
     cmd_tx: Sender<Cmd>,
     /// 인바운드 큐 — Mutex는 스레드 공유용(Receiver가 !Sync · 수락 스레드가 Arc로 든다).
     incoming_rx: std::sync::Mutex<Receiver<RelayIncoming>>,
+    /// roster 델타 큐(X-2e) — 호스트가 [`RelayClient::poll_roster`]로 드레인.
+    roster_rx: std::sync::Mutex<Receiver<RosterEvent>>,
     server_peer: PeerId,
     server_addr: SocketAddr,
     reg: RegisterInfo,
@@ -653,14 +718,16 @@ impl RelayClient {
         };
         let (cmd_tx, cmd_rx) = std::sync::mpsc::channel::<Cmd>();
         let (incoming_tx, incoming_rx) = std::sync::mpsc::channel::<RelayIncoming>();
+        let (roster_tx, roster_rx) = std::sync::mpsc::channel::<RosterEvent>();
         let actor_cmd = cmd_tx.clone();
         std::thread::Builder::new()
             .name("relay-client".into())
-            .spawn(move || actor(session, &cmd_rx, &actor_cmd, &incoming_tx))
+            .spawn(move || actor(session, &cmd_rx, &actor_cmd, &incoming_tx, &roster_tx))
             .map_err(RelayError::Io)?;
         Ok(Self {
             cmd_tx,
             incoming_rx: std::sync::Mutex::new(incoming_rx),
+            roster_rx: std::sync::Mutex::new(roster_rx),
             server_peer,
             server_addr: server,
             reg,
@@ -712,6 +779,24 @@ impl RelayClient {
         self.cmd_tx.send(Cmd::Nop).is_ok()
     }
 
+    /// 프레즌스 공개 지정(X-2e roster · 옵트인 — [docs/32 §12-7]). `true` = 같은
+    /// 서버의 공개 목록에 실리고 그 목록의 델타를 받기 시작한다(입장 스냅숏 포함).
+    pub fn set_announce(&self, listed: bool) {
+        let _ = self.cmd_tx.send(Cmd::Announce { listed });
+    }
+
+    /// 쌓인 roster 델타를 전부 꺼낸다(논블로킹 — 호스트 틱이 주기 드레인).
+    #[must_use]
+    pub fn poll_roster(&self) -> Vec<RosterEvent> {
+        let mut out = Vec::new();
+        if let Ok(rx) = self.roster_rx.lock() {
+            while let Ok(ev) = rx.try_recv() {
+                out.push(ev);
+            }
+        }
+        out
+    }
+
     /// 인바운드 하나를 꺼낸다(서버 IP 배선 포함 — 경로 등급 판정용). 상대가 서버
     /// 랑데부로 나를 열면 여기로 온다. **지연 수락** — 소비자가 [`RelayIncoming::accept`]
     /// (또는 [`accept_via`])를 불러야 서버가 중계를 시작한다.
@@ -742,6 +827,7 @@ fn actor(
     cmd_rx: &Receiver<Cmd>,
     cmd_tx: &Sender<Cmd>,
     incoming_tx: &Sender<RelayIncoming>,
+    roster_tx: &Sender<RosterEvent>,
 ) {
     session.set_recv_timeout(Some(Duration::from_millis(15)));
     let mut chans: HashMap<u32, Sender<ChEvent>> = HashMap::new();
@@ -799,6 +885,12 @@ fn actor(
                     break;
                 }
                 Cmd::Nop => {} // 생존 확인 — send 성공 자체가 답이다
+                Cmd::Announce { listed } => {
+                    if session.send(&C2s::Announce { listed }.encode()).is_err() {
+                        dead = true;
+                        break;
+                    }
+                }
             }
         }
         if dead {
@@ -865,6 +957,12 @@ fn actor(
                     if let Some(tx) = chans.remove(&ch) {
                         let _ = tx.send(ChEvent::Closed);
                     }
+                }
+                Some(S2c::PeerUp { peer }) => {
+                    let _ = roster_tx.send(RosterEvent::Up(peer));
+                }
+                Some(S2c::PeerDown { peer }) => {
+                    let _ = roster_tx.send(RosterEvent::Down(peer));
                 }
                 Some(S2c::RegisterOk { .. } | S2c::Pong) | None => {}
             },

@@ -126,6 +126,9 @@ struct Shared {
     chans: Mutex<HashMap<u32, Chan>>,
     /// UDP 프로브 토큰 → 연결.
     tokens: Mutex<HashMap<u64, ConnId>>,
+    /// ★ 프레즌스 공개 목록(X-2e roster · 옵트인 — [docs/32 §12-7]): **Announce를
+    /// 켠 연결만** 공개키를 담는다(메모리만 · 저장 0 불변 · 연결 종료 = 즉시 제거).
+    listed: Mutex<HashMap<ConnId, PeerId>>,
     next_ch: AtomicU32,
     next_conn: AtomicU64,
     udp_port: u16,
@@ -187,6 +190,7 @@ pub fn spawn(cfg: &Config) -> std::io::Result<Handle> {
         conns: Mutex::new(HashMap::new()),
         chans: Mutex::new(HashMap::new()),
         tokens: Mutex::new(HashMap::new()),
+        listed: Mutex::new(HashMap::new()),
         next_ch: AtomicU32::new(1),
         next_conn: AtomicU64::new(1),
         udp_port,
@@ -366,6 +370,9 @@ fn conn_thread(stream: TcpStream, peer_addr: SocketAddr, shared: &Arc<Shared>, i
         Ok(s) => s,
         Err(_) => return, // 핸드셰이크 실패·비프로토콜 접속 — 조용히 끊는다
     };
+    // 상호 인증(Noise_XX)이라 클라 공개키는 여기서 이미 보인다 — 그러나 **담는 것은
+    // Announce를 켠 경우뿐**(§2-3 비기록 원칙 · roster는 옵트인 예외 — §12-7).
+    let client_peer = session.peer();
     session.set_recv_timeout(Some(Duration::from_millis(15)));
 
     let conn_id = shared.next_conn.fetch_add(1, Ordering::SeqCst);
@@ -632,6 +639,48 @@ fn conn_thread(stream: TcpStream, peer_addr: SocketAddr, shared: &Arc<Shared>, i
                     break;
                 }
             }
+            C2s::Announce { listed } => {
+                // ★ roster(X-2e) — 켠 연결만 담고, 공개 사용자끼리만 서로 보인다
+                //   (상호성: 안 실리면 안 보인다 — 잠복 수확 방지).
+                if listed {
+                    let others: Vec<(ConnId, PeerId)> = {
+                        let mut map = match shared.listed.lock() {
+                            Ok(m) => m,
+                            Err(_) => break,
+                        };
+                        if map.insert(conn_id, client_peer).is_some() {
+                            continue; // 이미 공개 — 중복 방송 없음(멱등)
+                        }
+                        map.iter()
+                            .filter(|(id, _)| **id != conn_id)
+                            .map(|(id, p)| (*id, *p))
+                            .collect()
+                    };
+                    // 입장 스냅숏(기존 공개 사용자 → 나) + 등장 방송(나 → 그들).
+                    let mut dead = false;
+                    for (cid, p) in others {
+                        if session.send(&S2c::PeerUp { peer: p }.encode()).is_err() {
+                            dead = true;
+                            break;
+                        }
+                        let _ = enqueue(shared, cid, S2c::PeerUp { peer: client_peer });
+                    }
+                    shared.log(&format!("conn#{conn_id} 공개 on"));
+                    if dead {
+                        break;
+                    }
+                } else {
+                    let removed = shared
+                        .listed
+                        .lock()
+                        .ok()
+                        .and_then(|mut m| m.remove(&conn_id));
+                    if removed.is_some() {
+                        broadcast_peer_down(shared, conn_id, client_peer);
+                        shared.log(&format!("conn#{conn_id} 공개 off"));
+                    }
+                }
+            }
         }
     }
 
@@ -658,6 +707,28 @@ fn conn_thread(stream: TcpStream, peer_addr: SocketAddr, shared: &Arc<Shared>, i
     }
     if let Ok(mut conns) = shared.conns.lock() {
         conns.remove(&conn_id);
+    }
+    // 공개 목록에서도 회수 + 남은 공개 사용자에게 이탈 방송(X-2e).
+    let was_listed = shared
+        .listed
+        .lock()
+        .ok()
+        .and_then(|mut m| m.remove(&conn_id))
+        .is_some();
+    if was_listed {
+        broadcast_peer_down(shared, conn_id, client_peer);
+    }
+}
+
+/// 남은 공개 사용자 전원에게 `peer` 이탈을 알린다(본인 제외).
+fn broadcast_peer_down(shared: &Arc<Shared>, except: ConnId, peer: PeerId) {
+    let targets: Vec<ConnId> = shared
+        .listed
+        .lock()
+        .map(|m| m.keys().filter(|id| **id != except).copied().collect())
+        .unwrap_or_default();
+    for cid in targets {
+        let _ = enqueue(shared, cid, S2c::PeerDown { peer });
     }
 }
 
