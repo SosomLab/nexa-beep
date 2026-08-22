@@ -5100,6 +5100,12 @@ impl App {
         self.relay_check_at = 0;
         self.relay_last_err = None;
         self.relay_test_failed = None; // 값이 바뀌면 실패 상태도 새 판(재테스트 대상)
+                                       // ★ 08-22 사용자 확정 3차 — **어떤 값 변경도** 자동 접속을 열지 않는다:
+                                       //   검증 마커와 일치하는 값으로 복귀해도(실패 후 포트 47300 재선택 실기)
+                                       //   Test 성공만이 보류를 푼다. 부팅·접속 중 재시도는 여기를 안 지난다.
+        if self.settings.get("net.server.mode") == "managed" {
+            self.relay_hold = true;
+        }
         self.clear_server_peers();
         self.refresh_toolbar_server();
     }
