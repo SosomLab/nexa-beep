@@ -4,7 +4,7 @@
 //!   그룹3 신뢰: 전체·인증·핀·신규. 각 그룹 **단일 선택**(라디오), 셋은 AND 결합.
 //! - **전부 아이콘**(08-23 사용자 확정 — 높이도 16→[`FILTER_H`]=32 · 텍스트 없음):
 //!   기존 자산 재사용(house/waypoints/globe · id 배지 RGBA) + 자산 없는 칩은
-//!   원시 도형 작도(그룹=두 사람 · 온라인=찬 점 · 오프라인=빈 링
+//!   원시 도형 작도(온라인=찬 점 · 오프라인=빈 링
 //!   — 목록 연결점과 같은 시각 문법). **자산 증가 0**.
 //! - hover = **툴팁**(그룹 이름 · 칩 이름 — 팝업 레이어 [`Self::paint_tooltip`]).
 //! - 선택은 설정 키(`list.filter.*`)로 영속 — 호스트가 [`Self::set_selection`]으로
@@ -31,8 +31,6 @@ enum ChipArt {
     /// 그대로 두면 비선택 인증(파랑)이 선택 accent와 같은 색으로 오인된다 —
     /// 다른 아이콘과 동일하게 비선택 = 회색).
     Rgba(&'static [u8]),
-    /// 그룹 = 두 사람(머리 원 + 어깨).
-    Heads,
     /// 온라인 = 찬 점(목록 연결점과 같은 문법).
     DotFilled,
     /// 오프라인 = 빈 링.
@@ -68,7 +66,12 @@ const GROUPS: [(&str, Msg, &[Chip]); 3] = [
                 Msg::FltInternet,
                 ChipArt::Mask(crate::icons::path::GLOBE_ALPHA),
             ),
-            ("group", Msg::FltGroup, ChipArt::Heads),
+            (
+                "group",
+                Msg::FltGroup,
+                // Material `group`(08-23 사용자 지정 SVG — 원시 도형 폐기).
+                ChipArt::Mask(crate::icons::path::GROUP_ALPHA),
+            ),
         ],
     ),
     (
@@ -357,23 +360,6 @@ impl Widget for FilterBarWidget {
                     ChipArt::Rgba(bytes) => {
                         let img = self.tinted_rgba(flat, bytes, color);
                         ctx.image_scaled(icon, &img, chip);
-                    }
-                    ChipArt::Heads => {
-                        // 그룹 = 두 사람 — icon_d 상자를 채우도록 비례(정규화 08-23).
-                        let hd = (icon_d * 2) / 5;
-                        let bw = (icon_d * 2) / 3;
-                        let draw_person = |ctx: &mut dyn DrawCtx, ox: i32| {
-                            ctx.fill_ellipse(
-                                Rect::new(icon.x + ox + (bw - hd) / 2, icon.y, hd, hd),
-                                color,
-                            );
-                            ctx.fill_ellipse(
-                                Rect::new(icon.x + ox, icon.y + hd + 1, bw, icon_d - hd - 1),
-                                color,
-                            );
-                        };
-                        draw_person(ctx, icon_d - bw); // 뒤(오른쪽)
-                        draw_person(ctx, 0); // 앞(왼쪽)
                     }
                     ChipArt::DotFilled => {
                         let d = icon_d - self.s(2); // 정규화 — 같은 표시 영역

@@ -126,6 +126,8 @@ pub mod icons {
         /// 로컬 네트워크(허브 위계 — Material Symbols `lan` · 08-23 사용자 지정):
         /// 필터 바 '로컬' 칩 전용(house는 목록 배지 자리 유지).
         pub const LAN_ALPHA: &[u8] = include_bytes!("../assets/icon-lan-96.alpha");
+        /// 그룹(두 사람 — Material Symbols `group` · 08-23 사용자 지정): 필터 바 '그룹' 칩.
+        pub const GROUP_ALPHA: &[u8] = include_bytes!("../assets/icon-group-96.alpha");
         /// 전체(겹층 + 체크 — 08-23 사용자 제공 SVG): 필터 바 '전체' 칩 3곳 공용.
         pub const ALL_ALPHA: &[u8] = include_bytes!("../assets/icon-all-96.alpha");
         /// 인터넷 경유 = `Manual`(위협 모델이 다르다는 신호).
