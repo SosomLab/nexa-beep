@@ -5078,7 +5078,12 @@ impl App {
     /// 붙는다(핀 불일치 정지도 여기서 풀린다 — "설정을 다시 저장하면 재접속").
     fn server_settings_changed(&mut self) {
         self.relay_gen = self.relay_gen.wrapping_add(1);
-        self.relay = None;
+        // ★ 살아 있던 접속을 지금 내려놓았으면 상태바도 즉시 해제로(08-22 실기 —
+        //   Unmanaged 전환 후에도 마지막 "Server verified" 문구가 남아 연결 중처럼
+        //   보였다. drop = Shutdown 전파라 실제 연결은 끊긴 상태였다).
+        if self.relay.take().is_some() {
+            self.set_status(nbeep_core::t(nbeep_core::Msg::StServerDetached));
+        }
         self.relay_backoff = (0, 0);
         self.relay_check_at = 0;
         self.relay_last_err = None;

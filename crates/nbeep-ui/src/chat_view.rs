@@ -2141,9 +2141,12 @@ impl Widget for ChatViewWidget {
         // ── 헤더(맨 위 레이어 — 스크롤된 풍선을 덮는다 · 그룹 참여자 목록/타이틀 자리) ──
         let head_h = self.s(HEAD_H);
         let head = Rect::new(self.bounds.x, self.bounds.y, self.bounds.w, head_h);
-        // ★ 헤더 전용 배경 + 하단 경계선(08-22 사용자 확정 — OS 타이틀바와 시각
-        //   구분: 옅은 패널색 면 + 1px 경계 · 높이도 34→38).
-        ctx.fill_rect(head, theme.panel_bg_alt);
+        // ★ 헤더 전용 배경 + 하단 경계선(08-22 사용자 확정 — OS 타이틀바·본문과
+        //   시각 구분: 크롬색 면 + 1px 경계 · 높이 = 툴바와 동일 48).
+        //   글자는 전부 블렌딩 `text()`로 얹는다 — `text_opaque`는 clip 전체를
+        //   배경으로 되칠해서 먼저 그린 아이콘·아바타·제목을 지운다(08-22 실기:
+        //   헤더에 "via server"만 남던 원인 — 마지막 호출만 살아남았다).
+        ctx.fill_rect(head, theme.chrome_bg);
         ctx.fill_rect(
             Rect::new(head.x, head.bottom() - 1, head.w, 1),
             theme.border,
@@ -2185,13 +2188,12 @@ impl Widget for ChatViewWidget {
         };
         ctx.select_font(FontSlot::Base, false);
         let title_h = ctx.text_height();
-        ctx.text_opaque(
+        ctx.text(
             title_x,
             head.y + (head_h - title_h) / 2,
             head,
             &self.title,
             theme.text,
-            theme.panel_bg_alt,
         );
         // 경로 배지(M5-3c · 08-22 분리) — 제목 오른쪽: **서버 경유** = waypoints·
         // accent(아는 상대의 정상 원격 경로) / **인터넷 직결** = 지구본·warn.
@@ -2216,13 +2218,12 @@ impl Widget for ChatViewWidget {
             ctx.image_scaled(globe, &self.remote_icon_tinted(theme), head);
             ctx.select_font(FontSlot::Status, false);
             let lh = ctx.text_height();
-            ctx.text_opaque(
+            ctx.text(
                 globe.right() + self.s(4),
                 head.y + (head_h - lh) / 2,
                 head,
                 label,
                 color,
-                theme.panel_bg_alt,
             );
             ctx.select_font(FontSlot::Base, false);
         }
