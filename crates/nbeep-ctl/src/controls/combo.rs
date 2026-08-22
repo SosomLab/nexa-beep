@@ -457,8 +457,11 @@ pub struct Combo {
     custom_value: Option<String>,
     /// 인라인 편집 중.
     editing: bool,
-    /// 편집 버퍼(숫자 전용).
+    /// 편집 버퍼(기본 숫자 전용 · [`Combo::set_custom_text`]로 텍스트 허용).
     buf: String,
+    /// 직접 입력이 **텍스트 모드**인가(08-22 — 서버 주소처럼 도메인·IP를 받는 행).
+    /// false(기본) = 종전 숫자 전용(포트·ms·MiB — 비트 호환).
+    custom_text: bool,
 }
 
 impl Combo {
@@ -473,6 +476,7 @@ impl Combo {
             custom_value: None,
             editing: false,
             buf: String::new(),
+            custom_text: false,
         }
     }
     /// 선택된 값.
@@ -494,6 +498,12 @@ impl Combo {
     pub fn set_custom_entry(&mut self, label: impl Into<String>, suffix: impl Into<String>) {
         self.custom_label = Some(label.into());
         self.custom_suffix = suffix.into();
+    }
+    /// 직접 입력을 **텍스트 모드**로 — 도메인·IP처럼 숫자가 아닌 값을 받는 행
+    /// (08-22 실기: 서버 주소가 숫자 전용 필터에 막혀 도메인을 못 넣었다).
+    /// 공백 없는 ASCII 인쇄 문자만 허용(호스트명·IP·`[v6]` 표기 전부 이 안이다).
+    pub fn set_custom_text(&mut self, yes: bool) {
+        self.custom_text = yes;
     }
     /// 인라인 편집 중인가(호스트 라우팅 근거 — 편집은 모달).
     #[must_use]
@@ -559,9 +569,16 @@ impl ComboControl for Combo {
         }
     }
     fn on_extra(&mut self, _j: usize, inv: &mut Invalidations) {
-        // "직접 입력…" — 박스를 인라인 편집으로 전환(현재 값의 숫자만 남겨 시작).
+        // "직접 입력…" — 박스를 인라인 편집으로 전환(현재 값에서 허용 문자만 남겨 시작).
         self.core.open = false;
-        self.buf = self.value().chars().filter(char::is_ascii_digit).collect();
+        self.buf = if self.custom_text {
+            self.value()
+                .chars()
+                .filter(|c| c.is_ascii_graphic())
+                .collect()
+        } else {
+            self.value().chars().filter(char::is_ascii_digit).collect()
+        };
         self.editing = true;
         inv.push(self.base.bounds);
     }
@@ -587,13 +604,19 @@ impl Widget for Combo {
         inv.push(bounds);
     }
     fn on_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
-        // 인라인 편집 중 = 모달 — 숫자만 받고 Enter/바깥 클릭 확정 · Esc 취소.
+        // 인라인 편집 중 = 모달 — 허용 문자만 받고 Enter/바깥 클릭 확정 · Esc 취소.
+        // 텍스트 모드(서버 주소 등) = 공백 없는 ASCII 인쇄 문자 · 253자(호스트명 상한).
         if self.editing {
             match *ev {
                 InputEvent::Char { c, .. } => {
+                    let ok = if self.custom_text {
+                        c.is_ascii_graphic() && self.buf.len() < 253
+                    } else {
+                        c.is_ascii_digit() && self.buf.len() < 6
+                    };
                     if c == '\u{8}' {
                         self.buf.pop();
-                    } else if c.is_ascii_digit() && self.buf.len() < 6 {
+                    } else if ok {
                         self.buf.push(c);
                     }
                     inv.push(self.base.bounds);
@@ -1054,6 +1077,33 @@ mod tests {
             c.take_changed().as_deref(),
             Some("3500"),
             "비숫자 시작값은 비워진다"
+        );
+    }
+
+    /// 텍스트 모드(08-22 — 서버 주소): 도메인·IP의 글자·점·하이픈이 들어가고,
+    /// 공백은 거른다. 숫자 전용 모드는 위 테스트가 불변을 지킨다.
+    #[test]
+    fn custom_text_mode_accepts_domain_chars() {
+        let mut c = Combo::new(items(), 0);
+        c.set_custom_entry("직접 입력…", "");
+        c.set_custom_text(true);
+        let mut inv = Invalidations::default();
+        c.set_bounds(Rect::new(0, 0, 160, 26), &mut inv);
+        c.on_event(&click(10, 10), &mut inv);
+        let pop = c.popup_rect();
+        c.on_event(&click(pop.x + 10, pop.bottom() - 8), &mut inv);
+        assert!(c.is_editing());
+        for _ in 0..4 {
+            c.on_event(&ch('\u{8}'), &mut inv); // 시드("home" — 현재 값에서 시작) 제거
+        }
+        for d in "relay.example-1.com :47300".chars() {
+            c.on_event(&ch(d), &mut inv);
+        }
+        c.on_event(&key(Key::Enter), &mut inv);
+        assert_eq!(
+            c.take_changed().as_deref(),
+            Some("relay.example-1.com:47300"),
+            "글자·점·하이픈·콜론 허용 · 공백만 탈락 · 시드 = 현재 값"
         );
     }
 

@@ -71,7 +71,14 @@ const HIDDEN_KEYS: &[&str] = &[
     "ui.win_y",
     "ui.win_w",
     "ui.win_h",
+    // 서버 연결 검증 마커(08-22 — "주소 핀64hex unix초"). Test 버튼·자동 등록 성공이
+    // 갱신하고, 재시작 후에도 "이미 검증된 서버"를 알 수 있게 영속한다.
+    "server.verified",
 ];
+
+/// 직접 입력이 **텍스트**인 RadioInput 키(08-22) — 기본은 숫자 전용(포트·ms·MiB).
+/// 서버 주소는 도메인·IP를 받아야 해서 숫자 필터가 입력 자체를 막았다(실기).
+const FREE_TEXT_KEYS: &[&str] = &["net.server.address"];
 
 /// 기본 off 토글 — 프로필 공개(DR-22 **기본 전부 비노출** · 옵트인). 미등록 토글은 on.
 // ★ M3-2d ① 확정(08-15 **사용자 확정 = 3-OS 공통 off**): `ui.close_to_tray`
@@ -852,7 +859,10 @@ pub fn registry() -> &'static [Entry] {
             sub: None,
             label: Msg::ServerPort,
             desc: Msg::ServerPortDesc,
-            kind: SettingKind::RadioInput(&[("47300", Msg::PortDefault)], ""),
+            // ⚠ 라벨은 실값을 그대로 보여 준다(08-22 실기 — Msg::PortDefault를 공유하면
+            // 세션 포트의 "기본(47200)" 문구가 그대로 떠서, 저장값 47300이 47200으로
+            // **잘못 보였다**. 라벨과 값이 갈릴 수 있는 자리엔 값 자체를 라벨로).
+            kind: SettingKind::RadioInput(&[("47300", Msg::Port47300)], ""),
             key: "net.server.port",
         },
         // 서버 타입 — 기본 auto(서버 제공). Managed에서만 직접 선택(제약은 네트워킹
@@ -869,6 +879,19 @@ pub fn registry() -> &'static [Entry] {
                 ("registered", Msg::ServerTypeRegistered),
             ]),
             key: "net.server.type",
+        },
+        // 연결 테스트(08-22 사용자 요청) — 지금 설정값으로 서버에 실제 붙어 본다.
+        // 성공 = 검증 마커(server.verified — HIDDEN_KEYS) 영속: 자동 등록 성공도
+        // 같은 마커를 갱신하므로, 한 번 검증된 서버는 다시 누를 필요가 없다.
+        Entry {
+            cat: Msg::CatServer,
+            sub: None,
+            label: Msg::ServerTest,
+            desc: Msg::ServerTestDesc,
+            kind: SettingKind::Action {
+                verb: Msg::ServerTestVerb,
+            },
+            key: "net.server.test",
         },
         // 그룹(M5-1 · ADR-0012) — 재동기 보관 주체 = 송신자(사용자 확정 08-13).
         // 발신자가 구성원별로 미전달 그룹 메시지를 몇 개까지 보관할지(초과 = 오래된 것
@@ -1705,6 +1728,8 @@ impl SettingsWidget {
                     let mut c = Combo::new(items, 0);
                     if let SettingKind::RadioInput(_, suffix) = e.kind {
                         c.set_custom_entry(tr(lang, Msg::CustomInput), suffix);
+                        // 텍스트 값 행(서버 주소 — 도메인·IP)은 숫자 필터를 푼다(08-22).
+                        c.set_custom_text(FREE_TEXT_KEYS.contains(&e.key));
                     }
                     let cur = self.values.get(e.key).map_or("", String::as_str);
                     c.select_value(cur);

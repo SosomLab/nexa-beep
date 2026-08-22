@@ -2453,6 +2453,9 @@ struct App {
     relay_gen: u64,
     /// 다음 서버 생존 점검 시각(ms) — `is_alive` 폴링 페이싱(2s).
     relay_check_at: u64,
+    /// 연결 테스트 진행 중(08-22 — 설정 › 서버 › 테스트 버튼) — 다음 ServerAttach
+    /// 결과를 "테스트 성공/실패" 문구로 보고한다(접속 경로 자체는 평소와 동일).
+    relay_test: bool,
     discovery: std::sync::mpsc::Receiver<nbeep_net::DiscoveryEvent>,
     table: nbeep_core::PeerTable,
     /// TOFU 신뢰 저장 — 파일 영속(M2-5a · 변경 즉시 암호화 저장 · R-17 해소).
@@ -4590,7 +4593,12 @@ impl App {
         }
         if self.settings.get("net.server.mode") != "managed" {
             // Unmanaged(LAN) = 서버 접속 정보가 쓰이지 않는다(08-18 사용자 요청).
-            locked.extend(["net.server.address", "net.server.port", "net.server.type"]);
+            locked.extend([
+                "net.server.address",
+                "net.server.port",
+                "net.server.type",
+                "net.server.test", // 테스트도 Managed에서만(08-22)
+            ]);
         }
         sv.set_disabled(&locked, &mut inv);
     }
@@ -4946,6 +4954,51 @@ impl App {
         self.relay = None;
         self.relay_backoff = (0, 0);
         self.relay_check_at = 0;
+    }
+
+    /// 연결 테스트(08-22 사용자 요청 — 설정 › 서버 › 테스트): 지금 설정값으로 서버에
+    /// 실제 붙어 등록까지 확인한다. 이미 살아 있는 접속이 있으면 즉시 성공(재연결
+    /// 없음 — "다시 누를 필요 없음"의 즉답 절반), 아니면 접속을 내려놓고 즉시
+    /// 재수렴시켜 그 결과를 테스트 문구로 보고한다(경로는 server_tick 한 벌).
+    fn server_test(&mut self) {
+        let Some(raw) = server_target(
+            self.settings.get("net.server.mode"),
+            self.settings.get("net.server.address"),
+            self.settings.get("net.server.port"),
+        ) else {
+            self.set_status(nbeep_core::t(nbeep_core::Msg::StServerTestNeedManaged));
+            return;
+        };
+        if let Some(c) = &self.relay {
+            if c.is_alive() {
+                let pin = nbeep_relay::peer_hex(&c.server_peer());
+                self.mark_server_verified(&raw, &pin);
+                self.set_status(nbeep_core::tf(
+                    nbeep_core::Msg::StfServerTestOk,
+                    &[&raw, &pin[..8]],
+                ));
+                return;
+            }
+        }
+        self.relay_test = true;
+        self.server_settings_changed(); // 즉시 재수렴(단일 경로 — 백오프·정지도 풀린다)
+        self.set_status(nbeep_core::tf(nbeep_core::Msg::StfServerTesting, &[&raw]));
+    }
+
+    /// 서버 검증 마커 영속(08-22 — `server.verified` = "주소 핀64hex unix초").
+    /// 자동 등록 성공도 갱신한다 — **성공한 등록이 곧 검증**이라, 한 번 검증된
+    /// 서버는 테스트 버튼을 다시 누를 필요가 없다. 주소·키가 같으면 재기록하지
+    /// 않는다(시각만 바뀌는 저장 churn 방지).
+    fn mark_server_verified(&mut self, addr: &str, pin_hex: &str) {
+        let cur = self.settings.get("server.verified");
+        if cur.split_whitespace().take(2).eq([addr, pin_hex]) {
+            return;
+        }
+        self.settings.set(
+            "server.verified",
+            format!("{addr} {pin_hex} {}", unix_now_ms() / 1000),
+        );
+        self.conf_mark();
     }
 
     fn start_connect(&mut self, peer: PeerId, auto: bool) {
@@ -9132,6 +9185,11 @@ impl App {
                             }
                         }
                     }
+                }
+                // 연결 테스트(08-22) — 행위 항목: 값 저장 없이 즉시 검증 절차.
+                "net.server.test" => {
+                    self.server_test();
+                    continue;
                 }
                 // 서버 모드(08-18) — Unmanaged면 주소·포트·타입을 잠근다(계산은
                 // refresh_approval_ui 깔때기 한 곳 — set_disabled 전체 교체 규약).
@@ -13458,6 +13516,16 @@ impl ApplicationHandler<AppEvent> for App {
                                 &[&at.addr],
                             ));
                         }
+                        // 검증 마커(08-22) — 성공한 등록이 곧 검증. 테스트로 온
+                        // 결과면 문구도 테스트 성공으로 덮는다(둘 다 같은 마커).
+                        let pin = nbeep_relay::peer_hex(&at.client.server_peer());
+                        self.mark_server_verified(&at.addr, &pin);
+                        if std::mem::take(&mut self.relay_test) {
+                            self.set_status(nbeep_core::tf(
+                                nbeep_core::Msg::StfServerTestOk,
+                                &[&at.addr, &pin[..8]],
+                            ));
+                        }
                         self.relay_backoff = (0, 0);
                         let client = std::sync::Arc::new(at.client);
                         // 인바운드 수락 루프(X-2b ②) — 수명은 이 Arc에 묶인다.
@@ -13472,6 +13540,7 @@ impl ApplicationHandler<AppEvent> for App {
                         // ★ 신원이 바뀌면 시끄럽게(DR-28) — 모달 + 자동 재시도 정지.
                         //   재개 = 사람이 핀 줄을 지우고 서버 설정을 다시 저장
                         //   (server_settings_changed가 backoff를 푼다).
+                        self.relay_test = false; // 테스트 문구보다 모달이 진실을 말한다
                         self.relay_backoff = (0, u64::MAX);
                         let pin = self.data_dir.join("server.pin");
                         let body = nbeep_core::tf(
@@ -13499,10 +13568,18 @@ impl ApplicationHandler<AppEvent> for App {
                             ServerAttachFail::Other(w) => w,
                             ServerAttachFail::PinMismatch => String::new(), // 위 갈래가 소진
                         };
-                        self.set_status(nbeep_core::tf(
-                            nbeep_core::Msg::StfServerRetry,
-                            &[&why, &(delay / 1000).to_string()],
-                        ));
+                        if std::mem::take(&mut self.relay_test) {
+                            // 테스트로 온 실패 — 명시 실패 문구(백오프 재시도는 그대로).
+                            self.set_status(nbeep_core::tf(
+                                nbeep_core::Msg::StfServerTestFail,
+                                &[&why],
+                            ));
+                        } else {
+                            self.set_status(nbeep_core::tf(
+                                nbeep_core::Msg::StfServerRetry,
+                                &[&why, &(delay / 1000).to_string()],
+                            ));
+                        }
                     }
                 }
                 if let Some(mid) = self.main_id {
@@ -15515,6 +15592,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         relay_backoff: (0, 0),
         relay_gen: 0,
         relay_check_at: 0,
+        relay_test: false,
         discovery,
         table: nbeep_core::PeerTable::new(60_000),
         trust,
