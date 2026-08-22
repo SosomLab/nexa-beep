@@ -7,6 +7,7 @@
 
 ## 2026-08-22
 
+- **(mac) ★v0.2.3 + beepd-v0.2.3 동시 공개**(`dcc58f7`+태그 2): 클라 = 서버 접속(GUI Managed·CLI)·지문 연결·설정 영속 수정(자산 14종 · brew 자동 추종 ✓) · ★서버 첫 릴리스(release-server.yml 첫 가동 — **Linux musl 정적 CI 검증 통과** · 자산 4종) · winget/choco = 스위치 false로 제외 확인(잡 로그 실증). 게이트 선행 = 781 green·교차 check 0.
 - **(mac) ★X-2b GUI Managed 배선 완결 + musl 정적 전환 + 채널 판정**(커밋 7 · `bd1ae07`~`c9a7cdb`): 접속 정책 공용화(`nbeep_relay::attach`+`is_alive` — CLI·GUI 한 벌)·`server_tick`(설정 SSOT 수렴·백오프 300s 상한 반복·핀 불일치 = 모달+정지)·인바운드 accept_via → 기존 Inbound 깔때기(새 정책 0)·아웃바운드 3단 사다리+**주소 모달 64자리 지문 연결** · ★스모크 발각 2건 수정(**자유 입력형 설정 재시작 증발**(키 미등록 영속 구멍·08-17 잠복)·--whoami 전체 지문) · ★**로컬 3프로세스 실측 = 설정만으로 접속→핀→홀펀칭 직결→GUI 메시지 도달** · **musl 정적 전환**(x64 static-pie 651KB · `.cargo/config.toml` 한 곳 · beepd-cloud = 바이너리 업로드 기본) · **winget/choco 승인 대기 판정 → 스위치 false**(이번 릴리스 제외). **781 green**.
 - **(Win) ★`feat/udp-relay-server` main 병합·push**(`4562bff` --no-ff · 9커밋 · 사용자 확정): UDP+릴레이 서버 축 전체(X-UDP-a~e·X-1 MVP·X-2c CLI·배포 분리·클라우드 킷) — 최종 게이트 fmt+전체 테스트 green 후 병합 · 브랜치 삭제·이력은 [BRANCHES](BRANCHES.md). 잔여 = X-2b GUI 배선·실 NAT 실기(beepd-cloud 킷으로)·X-2c P3.
 - **(Win) 클라우드 단발 실측 킷 `tools/beepd-cloud`**: 실 NAT 홀펀칭 실기의 발판 — GCP VM 생성→소스 빌드→systemd 상주→철거까지 스크립트 1개(`deploy-gcp.ps1`+`vm-setup.sh`) · 체크리스트 6항. 판정 기록 = **Cloud Run 불가**(원시 TCP·UDP 미지원·다중 인스턴스), **상시 유지 비채택**(IPv4 유료 — 단발 세션 수백 원 · 상시는 Oracle Always Free로) · 구문 파스·tarball 드라이런 ✓(실 실행 = gcloud 인증 자리에서).
