@@ -307,7 +307,7 @@ impl Widget for FilterBarWidget {
         let side = b.h - self.s(6) - 1; // 칩 정사각(위 3 · 아래 3+경계선)
         let icon_d = self.s(14); // 아이콘 실크기(칩 안 중앙 — 08-23 75% 축소)
         let mut x = b.x + self.s(8);
-        for (gi, (_, _, group)) in GROUPS.iter().enumerate() {
+        for (gi, (_, gmsg, group)) in GROUPS.iter().enumerate() {
             if gi > 0 {
                 // 그룹 구분 — 세로 1px 실선.
                 let dx = x + self.s(4);
@@ -316,6 +316,15 @@ impl Widget for FilterBarWidget {
                     theme.border,
                 );
                 x = dx + self.s(5);
+            }
+            // 그룹 이름(08-23 사용자 확정 — Location/Status/Trust 소형 텍스트를
+            // 그룹 칩 앞에).
+            {
+                ctx.select_font(FontSlot::Status, false);
+                let gname = t(*gmsg);
+                let gh = ctx.text_height();
+                ctx.text(x, b.y + (b.h - 1 - gh) / 2, b, gname, theme.text_dim);
+                x += ctx.text_width(gname) + self.s(6);
             }
             for (ci, (_, _, art)) in group.iter().enumerate() {
                 let chip = Rect::new(x, b.y + self.s(3), side, side);
@@ -350,16 +359,16 @@ impl Widget for FilterBarWidget {
                         ctx.image_scaled(icon, &img, chip);
                     }
                     ChipArt::Heads => {
-                        // 그룹 = 두 사람(머리 원 + 어깨 타원 · 뒤 사람 반 겹침).
-                        let hd = self.s(5);
-                        let bw = self.s(8);
+                        // 그룹 = 두 사람 — icon_d 상자를 채우도록 비례(정규화 08-23).
+                        let hd = (icon_d * 2) / 5;
+                        let bw = (icon_d * 2) / 3;
                         let draw_person = |ctx: &mut dyn DrawCtx, ox: i32| {
                             ctx.fill_ellipse(
                                 Rect::new(icon.x + ox + (bw - hd) / 2, icon.y, hd, hd),
                                 color,
                             );
                             ctx.fill_ellipse(
-                                Rect::new(icon.x + ox, icon.y + hd + self.s(1), bw, self.s(7)),
+                                Rect::new(icon.x + ox, icon.y + hd + 1, bw, icon_d - hd - 1),
                                 color,
                             );
                         };
@@ -367,14 +376,14 @@ impl Widget for FilterBarWidget {
                         draw_person(ctx, 0); // 앞(왼쪽)
                     }
                     ChipArt::DotFilled => {
-                        let d = self.s(9);
+                        let d = icon_d - self.s(2); // 정규화 — 같은 표시 영역
                         ctx.fill_ellipse(
                             Rect::new(icon.x + (icon_d - d) / 2, icon.y + (icon_d - d) / 2, d, d),
                             color,
                         );
                     }
                     ChipArt::DotRing => {
-                        let d = self.s(9);
+                        let d = icon_d - self.s(2); // 정규화 — 같은 표시 영역
                         ctx.stroke_ellipse(
                             Rect::new(icon.x + (icon_d - d) / 2, icon.y + (icon_d - d) / 2, d, d),
                             color,
@@ -383,7 +392,7 @@ impl Widget for FilterBarWidget {
                     }
                 }
                 chips.push((gi, ci, chip));
-                x = chip.right() + self.s(4);
+                x = chip.right(); // 같은 그룹 = 밀착(08-23 확정 — 세그먼트 문법)
             }
         }
         // 폰트 상태 복원(다음 위젯 대비).
