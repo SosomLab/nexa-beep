@@ -33,6 +33,17 @@ sudo /opt/beepd/nexa-beepd --port 47300      # 첫 실행 = 키 생성 + "서버
 - **릴리스 채널**: 클라이언트(`v*`)와 **완전 분리**된 `beepd-v*` 태그
   ([release-server.yml](../.github/workflows/release-server.yml) — W-4).
   → https://github.com/SosomLab/nexa-beep/releases (릴리스명 `nexa-beepd N.N.N`)
+- **패키지 매니저**(beepd-v0.2.5부터 — [publish-beepd-packages.yml](../.github/workflows/publish-beepd-packages.yml) ·
+  클라 채널과 스위치까지 분리):
+
+  ```bash
+  brew install kiros33/tap/nexa-beepd     # macOS(Apple Silicon)·Linux — 탭이라 즉시
+  winget install SosomLab.NexaBeepd       # Windows — 중앙 검수 통과 후
+  choco  install nexa-beepd               # Windows — 중앙 검수 통과 후
+  ```
+
+  brew는 내 탭이라 릴리스와 함께 자동 갱신되고, winget/choco는 첫 제출 검수를
+  거쳐야 노출된다. 어느 채널이든 실체는 같은 릴리스 자산(sha256 자동 대조).
 - **자산 4종 + `SHA256SUMS.txt`**:
 
 | 자산 | 대상 | 비고 |
@@ -365,6 +376,8 @@ beepd 자체는 수 MB지만, **1GB급 무료 VM은 기본 이미지 상태가 �
 systemctl is-active beepd && sudo journalctl -u beepd --since -1h   # 상태·최근 로그
 sudo systemctl restart beepd                                        # 재시작(저장 0 — 안전)
 # 업데이트: 새 자산 받기 → 검증 → 교체 → 재시작 (키는 그대로)
+# ★ 교체 전 해시 대조(08-22 절차) — 같으면 "이미 최신"을 1초에 판정한다
+sha256sum nexa-beepd /opt/beepd/nexa-beepd
 sudo install -m 0755 nexa-beepd /opt/beepd/nexa-beepd && sudo systemctl restart beepd
 # 철거: systemctl disable --now beepd → /opt/beepd 삭제 (beepd.key 백업 먼저!)
 ```
