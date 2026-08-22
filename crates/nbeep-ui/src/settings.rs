@@ -95,6 +95,10 @@ const TOGGLE_DEFAULT_OFF: &[&str] = &[
     "netmon.enabled",        // 네트워크 점검 기록(08-21 — 기본 off · 의도적으로 켤 때만)
     "notify.preview",        // 알림 본문 표시(M3-8 — 기본 끔: 화면 공유·녹화 안전)
     "notify.broadcast_mute", // 공지 받지 않기(08-21 — 기본 끔 = 공지 받음)
+    // 원격 파일 발신 옵트인 2종(08-23 분리 — **기본 끄기** · 사용자 확정. ⚠08-23
+    // 실기 발각: 여기 없으면 Toggle 기본 on이라 켜진 채 나갔다).
+    "xfer.remote_files_server",
+    "xfer.remote_files_internet",
     "profile.share.basic",
     "profile.share.email",
     "profile.share.phone",
@@ -2002,7 +2006,7 @@ impl SettingsWidget {
     /// 보였다).
     fn note_h(&self, idx: usize) -> i32 {
         if self.notes.contains_key(registry()[idx].key) {
-            self.s(NOTE_H + 8)
+            self.s(NOTE_H + 16) // 아래 여백 16(08-23 2차 — 8은 여전히 붙어 보였다)
         } else {
             0
         }
