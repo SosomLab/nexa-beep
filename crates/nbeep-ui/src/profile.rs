@@ -81,8 +81,11 @@ pub struct ProfileWidget {
     /// 전체 64hex(M3-26 — 복사 버튼 재료).
     fingerprint_full: String,
     /// 지문 복사 버튼 2종(M3-26 · 우측 상단) — 전체 64hex / 짧은 8자리.
-    copy_full: Button,
-    copy_short: Button,
+    /// 지문 복사 미니 버튼 rect 2종(M3-26 개정 08-22 — 복사 아이콘+숫자 · 최소 크기).
+    copy_full_r: Rect,
+    copy_short_r: Rect,
+    /// 호버 중인 복사 버튼(0 = 64 · 1 = 8) — 시각 피드백.
+    copy_hover: Option<u8>,
     /// 복사 요청(1회성 — OS 클립보드 쓰기는 호스트 몫).
     copy_req: Option<String>,
     avatar: Option<std::rc::Rc<crate::theme::IconImage>>,
@@ -188,8 +191,9 @@ impl ProfileWidget {
             seed: v.seed.clone(),
             fingerprint: v.fingerprint.clone(),
             fingerprint_full: v.fingerprint_full.clone(),
-            copy_full: Button::new(t(Msg::CopyFpFull)),
-            copy_short: Button::new(t(Msg::CopyFpShort)),
+            copy_full_r: Rect::default(),
+            copy_short_r: Rect::default(),
+            copy_hover: None,
             copy_req: None,
             avatar: v.avatar.clone(),
             avatar_choice: v.avatar_choice.clone(),
@@ -394,6 +398,40 @@ impl ProfileWidget {
         self.bio.paste(text, inv);
     }
 
+    /// 지문 복사 미니 버튼 하나(M3-26 개정) — 구글 content_copy 스타일 글리프
+    /// (겹친 두 사각형) + 숫자 라벨. 호버 = 옅은 accent 배경.
+    fn draw_copy_btn(&self, ctx: &mut dyn DrawCtx, theme: &Theme, r: Rect, label: &str, hov: bool) {
+        if r.w == 0 {
+            return;
+        }
+        if hov {
+            ctx.fill_round_rect_alpha(r, self.s(4), theme.accent, 0.12);
+        }
+        ctx.stroke_round_rect(r, self.s(4), theme.border, 1.0);
+        // 복사 글리프 — 뒷장(오른쪽 위) + 앞장(왼쪽 아래 · 바탕으로 뒷장 선을 가린다).
+        let g = self.s(8);
+        let off = self.s(3);
+        let gx = r.x + self.s(5);
+        let gy = r.y + (r.h - g - off) / 2;
+        ctx.stroke_round_rect(
+            Rect::new(gx + off, gy, g, g),
+            self.s(2),
+            theme.text_dim,
+            1.0,
+        );
+        ctx.fill_round_rect(Rect::new(gx, gy + off, g, g), self.s(2), theme.panel_bg);
+        ctx.stroke_round_rect(Rect::new(gx, gy + off, g, g), self.s(2), theme.text, 1.0);
+        ctx.select_font(FontSlot::Status, false);
+        let th = ctx.text_height();
+        ctx.text(
+            gx + g + off + self.s(3),
+            r.y + (r.h - th) / 2,
+            r,
+            label,
+            theme.text,
+        );
+    }
+
     /// 지문 복사 요청(1회성 · M3-26) — 호스트가 OS 클립보드에 쓴다.
     pub fn take_copy_fp(&mut self) -> Option<String> {
         self.copy_req.take()
@@ -494,8 +532,6 @@ impl ProfileWidget {
         self.recent_car.set_scale(self.scale);
         self.border.set_scale(self.scale);
         self.choose_img.set_scale(self.scale);
-        self.copy_full.set_scale(self.scale);
-        self.copy_short.set_scale(self.scale);
         self.apply_btn.set_scale(self.scale);
         self.cancel_btn.set_scale(self.scale);
         self.sw_basic.set_scale(self.scale);
@@ -515,23 +551,15 @@ impl ProfileWidget {
         let pad = self.s(16);
         let field_h = self.s(28);
         let bw = self.s(80);
-        // 지문 복사 2종(M3-26 · 08-22 — 우측 상단 지문 표기 바로 아래):
-        // [전체 64][짧은 8] 우측 정렬 — 서버 랑데부 시대의 첫 연결 재료를 한 클릭에.
-        let cw_full = self.s(112);
-        let cw_short = self.s(92);
-        let ch = self.s(22);
-        let cy = b.y + self.s(32);
-        self.copy_short
-            .set_bounds(Rect::new(b.right() - pad - cw_short, cy, cw_short, ch), inv);
-        self.copy_full.set_bounds(
-            Rect::new(
-                b.right() - pad - cw_short - self.s(6) - cw_full,
-                cy,
-                cw_full,
-                ch,
-            ),
-            inv,
-        );
+        // 지문 복사 미니 버튼 2종(M3-26 개정 08-22 사용자 확정 — 구글 복사 아이콘
+        // 스타일: 겹친 두 사각형 글리프 + 숫자만 · 최소 크기 · 우측 정렬 [64][8]).
+        // y = 지문 텍스트(s16 + 글자높이) 아래 **+3px**(사용자 지정 여백).
+        let ch = self.s(18);
+        let cw_full = self.s(42);
+        let cw_short = self.s(34);
+        let cy = b.y + self.s(35);
+        self.copy_short_r = Rect::new(b.right() - pad - cw_short, cy, cw_short, ch);
+        self.copy_full_r = Rect::new(self.copy_short_r.x - self.s(6) - cw_full, cy, cw_full, ch);
         // 아바타 스와치 캐러셀(08-14 — 32px 아이템 · 넘치면 좌/우 이동 버튼).
         self.swatches.set_bounds(
             Rect::new(b.x + pad, b.y + self.s(164), b.w - pad * 2, self.s(36)),
@@ -741,16 +769,41 @@ impl Widget for ProfileWidget {
             self.pick_image = true;
             return;
         }
-        // 지문 복사(M3-26) — 클립보드 쓰기는 호스트가 한다(위젯은 I/O를 모른다).
-        self.copy_full.on_event(ev, inv);
-        if self.copy_full.take_clicked() {
-            self.copy_req = Some(self.fingerprint_full.clone());
-            return;
-        }
-        self.copy_short.on_event(ev, inv);
-        if self.copy_short.take_clicked() {
-            self.copy_req = Some(self.fingerprint.clone());
-            return;
+        // 지문 복사 미니 버튼(M3-26) — 아이콘 버튼이라 수제 히트테스트(호버·클릭).
+        // 클립보드 쓰기는 호스트가 한다(위젯은 I/O를 모른다).
+        match *ev {
+            InputEvent::MouseMove { x, y } => {
+                let pt = Point { x, y };
+                let h = if self.copy_full_r.contains(pt) {
+                    Some(0)
+                } else if self.copy_short_r.contains(pt) {
+                    Some(1)
+                } else {
+                    None
+                };
+                if h != self.copy_hover {
+                    self.copy_hover = h;
+                    inv.push(self.copy_full_r);
+                    inv.push(self.copy_short_r);
+                }
+            }
+            InputEvent::MouseDown {
+                x,
+                y,
+                primary: true,
+                ..
+            } => {
+                let pt = Point { x, y };
+                if self.copy_full_r.contains(pt) {
+                    self.copy_req = Some(self.fingerprint_full.clone());
+                    return;
+                }
+                if self.copy_short_r.contains(pt) {
+                    self.copy_req = Some(self.fingerprint.clone());
+                    return;
+                }
+            }
+            _ => {}
         }
         for (sw, key) in [
             (&mut self.sw_basic, "profile.share.basic"),
@@ -1010,8 +1063,20 @@ impl Widget for ProfileWidget {
         self.phone.paint(ctx, theme);
         self.bio.paint(ctx, theme);
         self.choose_img.paint(ctx, theme);
-        self.copy_full.paint(ctx, theme);
-        self.copy_short.paint(ctx, theme);
+        self.draw_copy_btn(
+            ctx,
+            theme,
+            self.copy_full_r,
+            "64",
+            self.copy_hover == Some(0),
+        );
+        self.draw_copy_btn(
+            ctx,
+            theme,
+            self.copy_short_r,
+            "8",
+            self.copy_hover == Some(1),
+        );
         // 적용/취소(M3-18) + 미저장 경고줄(Esc 2단계 — 격리함 confirming 문법).
         self.apply_btn.paint(ctx, theme);
         self.cancel_btn.paint(ctx, theme);
