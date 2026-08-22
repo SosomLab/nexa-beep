@@ -12,6 +12,10 @@
 #   tools/relaunch.sh --fresh    # A·B 신원을 새로 만든다(핀·그룹 초기화)
 #   tools/relaunch.sh --gate     # 빌드 대신 전체 게이트(fmt·clippy·test·rustdoc)
 #   tools/relaunch.sh --no-build # 빌드 건너뛰고 재기동만
+#   tools/relaunch.sh --daemon   # 로컬 릴레이 서버(nexa-beepd)도 함께 재기동
+#                                #   (포트 47399 — 공식 서버 47300과 안 겹침 ·
+#                                #    각 신원은 설정 › Server에서 127.0.0.1:47399
+#                                #    + Test 1회로 붙인다 — 검증 게이트 08-22)
 #
 # 참고: docs/33 §2(신원 3개) · docs/26 §3-4(원리 — data/는 실행 파일을 따라간다)
 set -uo pipefail
@@ -25,12 +29,14 @@ ROOT=$(pwd)
 #   폴더로 옮긴다. 기존 /tmp 신원은 아래에서 1회 이관해 잃지 않는다.
 MULTI=${BEEP_MULTI:-$HOME/.nexa-beep-multi}
 LEGACY_MULTI=/tmp/beep-multi
-FRESH=0 BUILD=1 GATE=0
+FRESH=0 BUILD=1 GATE=0 DAEMON=0
+DPORT=${BEEPD_PORT:-47399}
 for a in "$@"; do
   case "$a" in
     --fresh) FRESH=1 ;;
     --no-build) BUILD=0 ;;
     --gate) GATE=1 ;;
+    --daemon) DAEMON=1 ;;
     -h | --help) sed -n '2,20p' "$0"; exit 0 ;;
     *) echo "알 수 없는 인자: $a (--help)"; exit 2 ;;
   esac
@@ -44,25 +50,38 @@ say() { printf '\n\033[1m▶ %s\033[0m\n' "$1"; }
 IS_WIN=0; EXE=""
 case "${OSTYPE:-}" in msys* | cygwin*) IS_WIN=1; EXE=".exe" ;; esac
 pw() { powershell.exe -NoProfile -Command "$1" 2>/dev/null | tr -d '\r'; }
+# ⚠ 패턴은 **경계 일치**여야 한다(08-22 발각 — 'nexa-beep' 부분 일치는
+#   `nexa-beepd`(로컬 릴레이 데몬)까지 죽이고 잔존 카운트에도 세어, 데몬을 띄워
+#   둔 실기에서 ①이 서버를 조용히 끊거나 '남은 1개'로 오탈락시켰다).
+#   Get-Process 이름 일치는 원래 정확(nexa-beep ≠ nexa-beepd)이라 Windows는 무변.
+APP_RE='nexa-beep(\.exe)?( |$)'
 kill_all() {
   if [ "$IS_WIN" = 1 ]; then
     pw "Get-Process nexa-beep -ErrorAction SilentlyContinue | Stop-Process -Force" >/dev/null
   else
-    pkill ${1:-} -f "nexa-beep" 2>/dev/null
+    pkill ${1:-} -f "$APP_RE" 2>/dev/null
   fi
 }
 count_procs() {
   if [ "$IS_WIN" = 1 ]; then
     pw "(Get-Process nexa-beep -ErrorAction SilentlyContinue | Measure-Object).Count" | tr -d ' '
   else
-    pgrep -f "nexa-beep" 2>/dev/null | wc -l | tr -d ' '
+    pgrep -f "$APP_RE" 2>/dev/null | wc -l | tr -d ' '
+  fi
+}
+kill_daemon() {
+  if [ "$IS_WIN" = 1 ]; then
+    pw "Get-Process nexa-beepd -ErrorAction SilentlyContinue | Stop-Process -Force" >/dev/null
+  else
+    pkill -f 'nexa-beepd(\.exe)?( |$)' 2>/dev/null
   fi
 }
 
 # ── ① 종료 ────────────────────────────────────────────────────────────────
-say "① 실행 중인 nexa-beep 종료"
+say "① 실행 중인 nexa-beep 종료$([ "$DAEMON" = 1 ] && echo ' (+로컬 beepd)')"
 BEFORE=$(count_procs)
 kill_all
+[ "$DAEMON" = 1 ] && kill_daemon
 sleep 2
 # 2차 — 안 죽은 것(끊긴 세션의 프로브 잔재 등)은 강제 종료한다. 하나라도 남으면
 # 포트·발견이 겹쳐 다음 단계 판정이 흐려진다(08-14: 고아 프로브 1개가 가드를 막았다).
@@ -84,12 +103,15 @@ if [ "$GATE" = "1" ]; then
   cargo doc --workspace --no-deps -q 2>&1 | grep -E "^(error|warning)" && { echo "   ❌ rustdoc"; exit 1; }
   echo "   게이트 통과 ✅"
 elif [ "$BUILD" = "1" ]; then
-  say "② 릴리스 빌드 (nexa-beep + nbeep-imgdec)"
+  say "② 릴리스 빌드 (nexa-beep + nbeep-imgdec$([ "$DAEMON" = 1 ] && echo ' + nexa-beepd'))"
   # ★ rc를 직접 검사한다(T-relaunch · 08-16) — 종전 `… | tail -1`은 실패를
   #   삼켰고(set -e 부재) ⑤의 산출물 검사는 **구 바이너리**로 통과해, 빌드가
   #   깨졌는데 "성공"을 두 번 오보했다(08-13 os error 5 · 08-16 E0432).
   BUILD_LOG=$(mktemp)
-  if ! cargo build --release -p nexa-beep -p nbeep-imgdec > "$BUILD_LOG" 2>&1; then
+  PKGS="-p nexa-beep -p nbeep-imgdec"
+  [ "$DAEMON" = 1 ] && PKGS="$PKGS -p nexa-beepd"
+  # shellcheck disable=SC2086
+  if ! cargo build --release $PKGS > "$BUILD_LOG" 2>&1; then
     echo "   ❌ 빌드 실패 — 마지막 20줄:"
     tail -20 "$BUILD_LOG" | sed 's/^/   /'
     rm -f "$BUILD_LOG"
@@ -123,6 +145,31 @@ echo "   기본 = $ROOT/target/release  ·  A·B = $MULTI/{A,B}"
 # ★ nohup + disown 으로 **셸에서 떼어낸다**. 그냥 `&`로 띄우면 이 스크립트를 부른
 #   셸의 프로세스 그룹에 남아, 그 셸이 종료·중단될 때 창이 같이 죽는다(08-14 실측 —
 #   크래시 로그 없이 조용히 사라져 원인 찾는 데 시간을 썼다).
+# ── ③-b 로컬 릴레이 데몬(--daemon · 08-22 서버 축 실기) ─────────────────
+# 공식 서버(beepd.sosomlab.com:47300)를 시험 트래픽으로 오염시키지 않으려면
+# 로컬 데몬이 맞다. 클라보다 **먼저** 띄운다 — Managed 저장분(검증 게이트 통과
+# 이력)이 있으면 부팅 자동 접속이 첫 틱에 붙는다. 키/핀은 $MULTI/beepd/에 영속
+# (재기동해도 핀 불변 — 지우면 전 신원이 PinMismatch로 시끄럽다).
+if [ "$DAEMON" = 1 ]; then
+  say "③-b 로컬 beepd 기동 (포트 $DPORT)"
+  mkdir -p "$MULTI/beepd"
+  if [ "$IS_WIN" = 1 ]; then
+    WROOT_D=$(cygpath -w "$ROOT")
+    WKEY=$(cygpath -w "$MULTI/beepd/beepd.key")
+    pw "Start-Process -FilePath '$WROOT_D\\target\\release\\nexa-beepd.exe' -ArgumentList '--port','$DPORT','--key','$WKEY'" >/dev/null
+  else
+    nohup ./target/release/nexa-beepd --port "$DPORT" --key "$MULTI/beepd/beepd.key" \
+      > "$MULTI/beepd/out.log" 2>&1 &
+    disown
+  fi
+  sleep 1
+  if [ "$IS_WIN" != 1 ]; then
+    PIN=$(grep -oE '[0-9a-f]{64}' "$MULTI/beepd/out.log" | head -1)
+    echo "   주소 = 127.0.0.1:$DPORT · 핀 = ${PIN:-(로그에서 미검출 — $MULTI/beepd/out.log)}"
+    echo "   각 신원: 설정 › Server → Managed · 127.0.0.1 · $DPORT → [Test] 1회"
+  fi
+fi
+
 say "④ 기동 (셸에서 분리)"
 if [ "$IS_WIN" = 1 ]; then
   # Windows — Start-Process(분리 기동 · 로그 리다이렉트는 미지원: 이벤트 관찰은
@@ -175,7 +222,7 @@ SEEN=$("./target/release/nexa-beep$EXE" --discover-probe 8 2>&1 |
 echo "$SEEN" | sed 's/^/   /'
 N=$(echo "$SEEN" | grep -c "peer=" || true)
 if [ "$RUNNING" = "3" ] && [ "$N" -ge 3 ]; then
-  printf '\n\033[32m✅ 3신원 기동·상호 발견 완료\033[0m — 정리: pkill -f nexa-beep\n'
+  printf '\n\033[32m✅ 3신원 기동·상호 발견 완료\033[0m — 정리: pkill -f "nexa-beep( |$)"%s\n' "$([ "$DAEMON" = 1 ] && echo ' · 데몬: pkill -f nexa-beepd')"
 else
   printf '\n\033[33m⚠️ 창 %s개 · 발견 %s명\033[0m — 로그: /tmp/beep-base.log · %s/{A,B}/out.log\n' "$RUNNING" "$N" "$MULTI"
   exit 1
