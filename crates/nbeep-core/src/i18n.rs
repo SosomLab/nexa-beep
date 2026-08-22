@@ -724,12 +724,24 @@ pub enum Msg {
     FltPinned,
     /// 필터 칩 — 신규(왕래 전무).
     FltNew,
+    /// 툴바 서버 표시 툴팁 — 연결됨·클릭 = 설정.
+    TipServerOn,
+    /// 필터 그룹 이름 — 경로(툴팁용).
+    FltGrpPath,
+    /// 필터 그룹 이름 — 상태.
+    FltGrpPresence,
+    /// 필터 그룹 이름 — 신뢰.
+    FltGrpTrust,
     /// 서버 공개 목록이 내부 상한에서 절단되었음(08-22 lazy roster — 조용한 절단 금지).
     StfRosterCapped,
-    /// 설정: 원격 경로 파일 발신 허용(08-22 — 기본 끄기 · 발신만).
-    RemoteFilesOpt,
+    /// 설정: via server 상대 파일 발신 허용(08-23 분리 — 기본 끄기).
+    RemoteFilesServerOpt,
     /// 위 설정 설명.
-    RemoteFilesOptDesc,
+    RemoteFilesServerOptDesc,
+    /// 설정: via internet 상대 파일 발신 허용(08-23 분리 — 기본 끄기).
+    RemoteFilesInternetOpt,
+    /// 위 설정 설명.
+    RemoteFilesInternetOptDesc,
     /// 파일 발신 차단 안내 — 서버 경유(옵션 안내 포함 · 08-22).
     RemoteFileServerOff,
     /// 파일 발신 차단 안내 — 인터넷 직결(지문 대조 우선 안내).
@@ -1247,11 +1259,17 @@ impl Msg {
             Msg::FltVerified => ["Verified", "인증", "已验证", "検証済み"],
             Msg::FltPinned => ["Pinned", "핀", "已固定", "ピン"],
             Msg::FltNew => ["New", "신규", "新", "新規"],
+            Msg::TipServerOn => ["Connected to relay server — click for settings", "릴레이 서버 연결됨 — 클릭 = 서버 설정", "已连接中继服务器 — 点击打开设置", "リレーサーバー接続中 — クリックで設定"],
+            Msg::FltGrpPath => ["Path filter", "경로 필터", "路径筛选", "経路フィルター"],
+            Msg::FltGrpPresence => ["Status filter", "상태 필터", "状态筛选", "状態フィルター"],
+            Msg::FltGrpTrust => ["Trust filter", "신뢰 필터", "信任筛选", "信頼フィルター"],
             Msg::StfRosterCapped => ["Server user list truncated at {} (safety cap)", "서버 공개 목록이 상한 {}에서 절단되었습니다(안전 상한)", "服务器用户列表在 {} 处截断（安全上限）", "サーバー公開リストは上限 {} で打ち切りました（安全上限）"],
-            Msg::RemoteFilesOpt => ["Files on remote paths", "원격 경로 파일 전송", "远程路径文件传输", "リモート経路のファイル送信"],
-            Msg::RemoteFilesOptDesc => ["Allow SENDING files in via-server / via-internet chats (default off). Receiving is never restricted — every incoming request still asks you, with the path clearly shown.", "서버 경유·인터넷 직결 대화에서 파일 발신을 허용합니다(기본 끄기). 수신은 제한하지 않습니다 — 요청마다 경로가 표시된 승인 창에서 직접 결정합니다.", "允许在经由服务器/互联网的对话中发送文件（默认关闭）。接收不受限 — 每个请求都会弹出标明路径的确认窗口。", "サーバー経由/インターネット経由の会話でのファイル送信を許可（既定オフ）。受信は制限せず、経路が明示された承認画面で毎回判断します。"],
-            Msg::RemoteFileServerOff => ["This chat goes via server — file sending is off. Turn on Settings › Server › 'Files on remote paths' to send.", "서버 경유 대화라 파일 전송이 꺼져 있습니다. 설정 › Server › '원격 경로 파일 전송'을 켜면 보낼 수 있습니다.", "此对话经由服务器 — 文件发送已关闭。在 设置 › Server › '远程路径文件传输' 中开启即可发送。", "この会話はサーバー経由のためファイル送信はオフです。設定 › Server › 'リモート経路のファイル送信' をオンにすると送信できます。"],
-            Msg::RemoteFileInternetOff => ["This chat goes over the internet — files stay blocked until fingerprints are verified (/fingerprint → /verify). You can also enable Settings › Server › 'Files on remote paths'.", "인터넷 직결 대화라 파일 전송이 차단되어 있습니다 — /fingerprint로 지문을 확인하고 다른 채널로 대조한 뒤 /verify 하면 열립니다. 설정 › Server › '원격 경로 파일 전송'으로도 켤 수 있습니다.", "此对话直连互联网 — 文件在指纹核对（/verify）前保持封锁。也可在 设置 › Server › '远程路径文件传输' 中开启。", "この会話はインターネット直結のため、指紋照合（/verify）までファイルは遮断されます。設定 › Server › 'リモート経路のファイル送信' でも有効化できます。"],
+            Msg::RemoteFilesServerOpt => ["Send files to via-server peers", "via server 상대에게 파일 전송", "向经由服务器的对象发送文件", "サーバー経由の相手へファイル送信"],
+            Msg::RemoteFilesServerOptDesc => ["Allow SENDING files in via-server chats (default off). Receiving is never restricted — every incoming request asks you, with the path shown.", "서버 경유 대화에서 파일 발신을 허용합니다(기본 끄기). 수신은 제한하지 않습니다 — 요청마다 경로가 표시된 승인 창에서 결정합니다.", "允许在经由服务器的对话中发送文件（默认关闭）。接收不受限 — 每个请求都会弹出标明路径的确认窗口。", "サーバー経由の会話でのファイル送信を許可（既定オフ）。受信は制限しません。"],
+            Msg::RemoteFilesInternetOpt => ["Send files to via-internet peers", "via internet 상대에게 파일 전송", "向经由互联网的对象发送文件", "ネット直結の相手へファイル送信"],
+            Msg::RemoteFilesInternetOptDesc => ["Allow SENDING files in via-internet (direct IP/domain) chats (default off). Fingerprint verification (/verify) also unlocks sending. Receiving is never restricted.", "인터넷 직결(IP/도메인) 대화에서 파일 발신을 허용합니다(기본 끄기). 지문 대조(/verify)로도 열립니다. 수신은 제한하지 않습니다.", "允许在互联网直连对话中发送文件（默认关闭）。指纹核对（/verify）也可解锁。接收不受限。", "ネット直結の会話でのファイル送信を許可（既定オフ）。指紋照合（/verify）でも解錠。受信は制限しません。"],
+            Msg::RemoteFileServerOff => ["This chat goes via server — file sending is off. Turn on Settings › Server › 'Send files to via-server peers'.", "서버 경유 대화라 파일 전송이 꺼져 있습니다. 설정 › Server › 'via server 상대에게 파일 전송'을 켜면 보낼 수 있습니다.", "此对话经由服务器 — 文件发送已关闭。请开启 设置 › Server › '向经由服务器的对象发送文件'。", "この会話はサーバー経由のためファイル送信はオフです。設定 › Server › 'サーバー経由の相手へファイル送信' をオンにしてください。"],
+            Msg::RemoteFileInternetOff => ["This chat goes over the internet — files stay blocked until fingerprints are verified (/fingerprint → /verify). You can also enable Settings › Server › 'Send files to via-internet peers'.", "인터넷 직결 대화라 파일 전송이 차단되어 있습니다 — /fingerprint로 지문을 확인하고 다른 채널로 대조한 뒤 /verify 하면 열립니다. 설정 › Server › 'via internet 상대에게 파일 전송'으로도 켤 수 있습니다.", "此对话直连互联网 — 文件在指纹核对（/verify）前保持封锁。也可开启 设置 › Server › '向经由互联网的对象发送文件'。", "この会話はインターネット直結のため、指紋照合（/verify）までファイルは遮断されます。設定 › Server › 'ネット直結の相手へファイル送信' でも有効化できます。"],
             Msg::StfServerAttached => ["Server registered — {}", "서버 등록 완료 — {}", "服务器注册完成 — {}", "サーバー登録完了 — {}"],
             Msg::StfServerFirstPin => ["First contact with server {} — its key is now pinned", "서버 {} 첫 접속 — 서버 키를 핀했습니다", "首次连接服务器 {} — 已固定其密钥", "サーバー {} 初回接続 — キーをピン留めしました"],
             Msg::StServerPinWriteFail => ["Warning: server pin could not be saved — the next connect will look like first contact", "경고: 서버 핀 저장 실패 — 다음 접속이 다시 첫 접속으로 보입니다", "警告：服务器密钥固定保存失败 — 下次连接将再次视为首次连接", "警告: サーバーピンの保存に失敗 — 次回接続は初回接続として扱われます"],

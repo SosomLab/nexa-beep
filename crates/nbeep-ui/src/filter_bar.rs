@@ -1,53 +1,106 @@
-//! **목록 필터 바**(08-22 사용자 확정) — 툴바 아래 납작한 칩 3그룹.
+//! **목록 필터 바**(08-22 사용자 확정 · 08-23 아이콘 개편) — 툴바 아래 아이콘 칩 3그룹.
 //!
 //! - 그룹1 경로: 전체·로컬·서버·인터넷·그룹 / 그룹2 상태: 전체·온라인·오프라인 /
 //!   그룹3 신뢰: 전체·인증·핀·신규. 각 그룹 **단일 선택**(라디오), 셋은 AND 결합.
-//! - 높이는 툴바의 1/3 수준([`FILTER_H`] = 16 논리 px — 사용자 확정).
+//! - **전부 아이콘**(08-23 사용자 확정 — 높이도 16→[`FILTER_H`]=32 · 텍스트 없음):
+//!   기존 자산 재사용(house/waypoints/globe · id 배지 RGBA) + 자산 없는 칩은
+//!   원시 도형 작도(전체=점 4개 격자 · 그룹=두 사람 · 온라인=찬 점 · 오프라인=빈 링
+//!   — 목록 연결점과 같은 시각 문법). **자산 증가 0**.
+//! - hover = **툴팁**(그룹 이름 · 칩 이름 — 팝업 레이어 [`Self::paint_tooltip`]).
 //! - 선택은 설정 키(`list.filter.*`)로 영속 — 호스트가 [`Self::set_selection`]으로
 //!   복원하고 [`Self::take_changed`]로 변경을 받아 저장·재조립한다.
-//! - 칩 좌표는 페인트가 실측(글꼴 폭)으로 깔고 캐시에 남긴다 — 히트는 그 캐시
-//!   (프로필 복사 버튼과 같은 문법).
+//! - 칩 좌표는 페인트가 깔고 캐시에 남긴다 — 히트는 그 캐시(복사 버튼 문법).
 
 use crate::draw::{DrawCtx, FontSlot};
 use crate::event::InputEvent;
 use crate::geom::{Point, Rect};
-use crate::theme::Theme;
+use crate::theme::{IconImage, Theme};
 use crate::widget::{Invalidations, Widget};
 use nbeep_core::{t, Msg};
+use std::rc::Rc;
 
-/// 바 높이(논리 px) — 툴바(48)의 1/3(사용자 확정).
-pub const FILTER_H: i32 = 16;
+/// 바 높이(논리 px) — 08-23 사용자 확정(아이콘 구성 · 종전 16의 2배).
+pub const FILTER_H: i32 = 32;
 
-/// 그룹 정의 — (설정 키, 칩들[(저장 값, 라벨)]).
-const GROUPS: [(&str, &[(&str, Msg)]); 3] = [
+/// 칩 그림 — 자산이 있으면 자산, 없으면 원시 도형 작도.
+#[derive(Clone, Copy, Debug)]
+enum ChipArt {
+    /// 96×96 알파 마스크(상태색 틴트 — 선택 = accent · 평시 = 흐림).
+    Mask(&'static [u8]),
+    /// 96×96 컬러 RGBA(자기 색 그대로 — id 배지 가족).
+    Rgba(&'static [u8]),
+    /// 전체 = 점 4개 격자(2×2 — "모든 항목").
+    Dots,
+    /// 그룹 = 두 사람(머리 원 + 어깨).
+    Heads,
+    /// 온라인 = 찬 점(목록 연결점과 같은 문법).
+    DotFilled,
+    /// 오프라인 = 빈 링.
+    DotRing,
+}
+
+/// 칩 하나 — (저장 값, 이름, 그림).
+type Chip = (&'static str, Msg, ChipArt);
+/// 그룹 정의 — (설정 키, 그룹 이름, 칩들).
+const GROUPS: [(&str, Msg, &[Chip]); 3] = [
     (
         "list.filter.path",
+        Msg::FltGrpPath,
         &[
-            ("all", Msg::FltAll),
-            ("local", Msg::FltLocal),
-            ("server", Msg::FltServer),
-            ("internet", Msg::FltInternet),
-            ("group", Msg::FltGroup),
+            ("all", Msg::FltAll, ChipArt::Dots),
+            (
+                "local",
+                Msg::FltLocal,
+                ChipArt::Mask(crate::icons::path::HOUSE_ALPHA),
+            ),
+            (
+                "server",
+                Msg::FltServer,
+                ChipArt::Mask(crate::icons::path::WAYPOINTS_ALPHA),
+            ),
+            (
+                "internet",
+                Msg::FltInternet,
+                ChipArt::Mask(crate::icons::path::GLOBE_ALPHA),
+            ),
+            ("group", Msg::FltGroup, ChipArt::Heads),
         ],
     ),
     (
         "list.filter.presence",
+        Msg::FltGrpPresence,
         &[
-            ("all", Msg::FltAll),
-            ("online", Msg::FltOnline),
-            ("offline", Msg::FltOffline),
+            ("all", Msg::FltAll, ChipArt::Dots),
+            ("online", Msg::FltOnline, ChipArt::DotFilled),
+            ("offline", Msg::FltOffline, ChipArt::DotRing),
         ],
     ),
     (
         "list.filter.trust",
+        Msg::FltGrpTrust,
         &[
-            ("all", Msg::FltAll),
-            ("verified", Msg::FltVerified),
-            ("pinned", Msg::FltPinned),
-            ("new", Msg::FltNew),
+            ("all", Msg::FltAll, ChipArt::Dots),
+            (
+                "verified",
+                Msg::FltVerified,
+                ChipArt::Rgba(crate::icons::id::VERIFIED_RGBA),
+            ),
+            (
+                "pinned",
+                Msg::FltPinned,
+                ChipArt::Rgba(crate::icons::id::PINNED_RGBA),
+            ),
+            (
+                "new",
+                Msg::FltNew,
+                ChipArt::Rgba(crate::icons::id::FIRSTCONTACT_RGBA),
+            ),
         ],
     ),
 ];
+
+/// 자산 변 크기(전 자산 공통 96).
+const ART_SIDE: u32 = 96;
 
 /// 필터 바 위젯.
 #[derive(Debug, Default)]
@@ -58,6 +111,10 @@ pub struct FilterBarWidget {
     sel: [usize; 3],
     /// 페인트가 깐 칩 좌표 캐시 — (그룹, 칩, 사각형).
     chips: core::cell::RefCell<Vec<(usize, usize, Rect)>>,
+    /// 틴트 캐시(마스크) — (평면 인덱스, 색) → 이미지.
+    tint: core::cell::RefCell<std::collections::HashMap<(usize, u32), Rc<IconImage>>>,
+    /// RGBA 캐시 — 평면 인덱스 → 이미지(색 불변이라 1회).
+    rgba: core::cell::RefCell<std::collections::HashMap<usize, Rc<IconImage>>>,
     hover: Option<(usize, usize)>,
     /// 변경 보고(1회성) — (설정 키, 저장 값).
     changed: Option<(&'static str, &'static str)>,
@@ -83,9 +140,9 @@ impl FilterBarWidget {
     ) {
         for (gi, want) in [path, presence, trust].iter().enumerate() {
             self.sel[gi] = GROUPS[gi]
-                .1
+                .2
                 .iter()
-                .position(|(v, _)| v == want)
+                .position(|(v, _, _)| v == want)
                 .unwrap_or(0);
         }
         inv.push(self.bounds);
@@ -102,8 +159,71 @@ impl FilterBarWidget {
         self.changed.take()
     }
 
+    /// hover 칩의 툴팁(08-23) — **팝업 레이어**에서 부른다(아래 목록 위에 얹힘).
+    pub fn paint_tooltip(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
+        if let Some((gi, ci)) = self.hover {
+            let (_, gmsg, group) = GROUPS[gi];
+            if let Some((_, label, _)) = group.get(ci) {
+                let anchor = self
+                    .chips
+                    .borrow()
+                    .iter()
+                    .find(|(g, c, _)| (*g, *c) == (gi, ci))
+                    .map(|(_, _, r)| *r);
+                if let Some(anchor) = anchor {
+                    let text = format!("{} · {}", t(gmsg), t(*label));
+                    crate::draw::draw_tooltip(
+                        ctx,
+                        theme,
+                        anchor,
+                        self.bounds.right(),
+                        &text,
+                        self.scale,
+                    );
+                }
+            }
+        }
+    }
+
     fn s(&self, v: i32) -> i32 {
         (v as f32 * self.scale).round() as i32
+    }
+
+    /// 마스크 틴트(캐시) — flat = 그룹×16+칩.
+    fn tinted(
+        &self,
+        flat: usize,
+        alpha: &'static [u8],
+        color: crate::theme::Color,
+    ) -> Rc<IconImage> {
+        let key = (flat, color.0);
+        if let Some(img) = self.tint.borrow().get(&key) {
+            return Rc::clone(img);
+        }
+        let (r, g, b) = color.rgb();
+        let mut rgba = Vec::with_capacity(alpha.len() * 4);
+        for &a in alpha {
+            rgba.extend_from_slice(&[r, g, b, a]);
+        }
+        let img = Rc::new(IconImage::from_rgba(ART_SIDE, ART_SIDE, rgba));
+        self.tint.borrow_mut().insert(key, Rc::clone(&img));
+        img
+    }
+
+    /// 컬러 RGBA(캐시 1회).
+    fn colored(&self, flat: usize, bytes: &'static [u8]) -> Rc<IconImage> {
+        if let Some(img) = self.rgba.borrow().get(&flat) {
+            return Rc::clone(img);
+        }
+        let img = Rc::new(IconImage::from_rgba(ART_SIDE, ART_SIDE, bytes.to_vec()));
+        self.rgba.borrow_mut().insert(flat, Rc::clone(&img));
+        img
+    }
+
+    /// hover 무효화 띠 — 툴팁이 바 아래로 나간다(재도색 범위 포함).
+    fn hover_band(&self) -> Rect {
+        let b = self.bounds;
+        Rect::new(b.x, b.y, b.w, b.h + self.s(34))
     }
 }
 
@@ -129,7 +249,7 @@ impl Widget for FilterBarWidget {
                     .map(|(g, c, _)| (*g, *c));
                 if hit != self.hover {
                     self.hover = hit;
-                    inv.push(self.bounds);
+                    inv.push(self.hover_band());
                 }
             }
             InputEvent::MouseDown { x, y, .. } => {
@@ -143,7 +263,7 @@ impl Widget for FilterBarWidget {
                 if let Some((gi, ci)) = hit {
                     if self.sel[gi] != ci {
                         self.sel[gi] = ci;
-                        let (key, chips) = GROUPS[gi];
+                        let (key, _, chips) = GROUPS[gi];
                         self.changed = Some((key, chips[ci].0));
                         inv.push(self.bounds);
                     }
@@ -160,31 +280,29 @@ impl Widget for FilterBarWidget {
         }
         ctx.fill_rect(b, theme.chrome_bg);
         ctx.fill_rect(Rect::new(b.x, b.bottom() - 1, b.w, 1), theme.border);
-        ctx.select_font(FontSlot::Status, false);
-        let lh = ctx.text_height();
         let mut chips = self.chips.borrow_mut();
         chips.clear();
+        let side = b.h - self.s(6) - 1; // 칩 정사각(위 3 · 아래 3+경계선)
+        let icon_d = self.s(18); // 아이콘 실크기(칩 안 중앙)
         let mut x = b.x + self.s(8);
-        for (gi, (_, group)) in GROUPS.iter().enumerate() {
+        for (gi, (_, _, group)) in GROUPS.iter().enumerate() {
             if gi > 0 {
                 // 그룹 구분 — 세로 1px 실선.
-                let dx = x + self.s(5);
+                let dx = x + self.s(4);
                 ctx.fill_rect(
-                    Rect::new(dx, b.y + self.s(3), 1, b.h - self.s(6) - 1),
+                    Rect::new(dx, b.y + self.s(6), 1, b.h - self.s(12) - 1),
                     theme.border,
                 );
-                x = dx + self.s(6);
+                x = dx + self.s(5);
             }
-            for (ci, (_, label)) in group.iter().enumerate() {
-                let text = t(*label);
-                let tw = ctx.text_width(text);
-                let chip = Rect::new(x, b.y + 1, tw + self.s(12), b.h - 3);
+            for (ci, (_, _, art)) in group.iter().enumerate() {
+                let chip = Rect::new(x, b.y + self.s(3), side, side);
                 let selected = self.sel[gi] == ci;
                 let hovered = self.hover == Some((gi, ci));
                 if selected {
-                    ctx.fill_round_rect_alpha(chip, self.s(4), theme.accent, 0.18);
+                    ctx.fill_round_rect_alpha(chip, self.s(6), theme.accent, 0.18);
                 } else if hovered {
-                    ctx.fill_round_rect_alpha(chip, self.s(4), theme.text, 0.08);
+                    ctx.fill_round_rect_alpha(chip, self.s(6), theme.text, 0.08);
                 }
                 let color = if selected {
                     theme.accent
@@ -193,17 +311,72 @@ impl Widget for FilterBarWidget {
                 } else {
                     theme.text_dim
                 };
-                ctx.text(
-                    chip.x + self.s(6),
-                    chip.y + (chip.h - lh) / 2,
-                    b,
-                    text,
-                    color,
+                let icon = Rect::new(
+                    chip.x + (chip.w - icon_d) / 2,
+                    chip.y + (chip.h - icon_d) / 2,
+                    icon_d,
+                    icon_d,
                 );
+                let flat = gi * 16 + ci;
+                match art {
+                    ChipArt::Mask(alpha) => {
+                        let img = self.tinted(flat, alpha, color);
+                        ctx.image_scaled(icon, &img, chip);
+                    }
+                    ChipArt::Rgba(bytes) => {
+                        let img = self.colored(flat, bytes);
+                        ctx.image_scaled(icon, &img, chip);
+                    }
+                    ChipArt::Dots => {
+                        // 전체 = 2×2 점 격자.
+                        let d = self.s(6);
+                        let gap = (icon_d - d * 2).max(2);
+                        for (ix, iy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                            ctx.fill_ellipse(
+                                Rect::new(icon.x + ix * (d + gap), icon.y + iy * (d + gap), d, d),
+                                color,
+                            );
+                        }
+                    }
+                    ChipArt::Heads => {
+                        // 그룹 = 두 사람(머리 원 + 어깨 타원 · 뒤 사람 반 겹침).
+                        let hd = self.s(7);
+                        let bw = self.s(11);
+                        let draw_person = |ctx: &mut dyn DrawCtx, ox: i32| {
+                            ctx.fill_ellipse(
+                                Rect::new(icon.x + ox + (bw - hd) / 2, icon.y, hd, hd),
+                                color,
+                            );
+                            ctx.fill_ellipse(
+                                Rect::new(icon.x + ox, icon.y + hd + self.s(1), bw, self.s(9)),
+                                color,
+                            );
+                        };
+                        draw_person(ctx, icon_d - bw); // 뒤(오른쪽)
+                        draw_person(ctx, 0); // 앞(왼쪽)
+                    }
+                    ChipArt::DotFilled => {
+                        let d = self.s(12);
+                        ctx.fill_ellipse(
+                            Rect::new(icon.x + (icon_d - d) / 2, icon.y + (icon_d - d) / 2, d, d),
+                            color,
+                        );
+                    }
+                    ChipArt::DotRing => {
+                        let d = self.s(12);
+                        ctx.stroke_ellipse(
+                            Rect::new(icon.x + (icon_d - d) / 2, icon.y + (icon_d - d) / 2, d, d),
+                            color,
+                            (self.s(2).max(2)) as f32,
+                        );
+                    }
+                }
                 chips.push((gi, ci, chip));
                 x = chip.right() + self.s(4);
             }
         }
+        // 폰트 상태 복원(다음 위젯 대비).
+        ctx.select_font(FontSlot::Base, false);
     }
 }
 
@@ -212,7 +385,7 @@ mod tests {
     use super::*;
     use crate::theme::Color;
 
-    /// 최소 목업 — 폭 = 문자수×8(칩 좌표 캐시를 깔기 위한 것뿐).
+    /// 최소 목업 — 칩 좌표 캐시를 깔기 위한 것뿐.
     struct FlatCtx;
     impl DrawCtx for FlatCtx {
         fn fill_rect(&mut self, _r: Rect, _c: Color) {}
@@ -226,7 +399,7 @@ mod tests {
     fn bar() -> (FilterBarWidget, Invalidations) {
         let mut w = FilterBarWidget::new();
         let mut inv = Invalidations::default();
-        w.set_bounds(Rect::new(0, 0, 800, 16), &mut inv);
+        w.set_bounds(Rect::new(0, 0, 800, FILTER_H), &mut inv);
         (w, inv)
     }
 

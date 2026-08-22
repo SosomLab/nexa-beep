@@ -152,6 +152,32 @@ pub trait DrawCtx {
     }
 }
 
+/// 공용 툴팁(08-23 — 툴바·필터 바): `anchor` 아래 6px에 역상 캡슐(어두운 바탕 +
+/// 밝은 글자 — 다크/라이트 공용)로 `text`를 그린다. `clamp_w` 오른쪽을 넘지 않게
+/// 왼쪽으로 민다. 호출자는 **팝업 레이어**(다른 위젯 위)에서 불러야 한다.
+pub fn draw_tooltip(
+    ctx: &mut dyn DrawCtx,
+    theme: &crate::theme::Theme,
+    anchor: Rect,
+    clamp_w: i32,
+    text: &str,
+    scale: f32,
+) {
+    if text.is_empty() {
+        return;
+    }
+    let s = |v: i32| (v as f32 * scale).round() as i32;
+    ctx.select_font(FontSlot::Status, false);
+    let tw = ctx.text_width(text);
+    let th = ctx.text_height();
+    let w = tw + s(12);
+    let h = th + s(8);
+    let x = (anchor.x + (anchor.w - w) / 2).clamp(s(4), (clamp_w - w - s(4)).max(s(4)));
+    let r = Rect::new(x, anchor.bottom() + s(6), w, h);
+    ctx.fill_round_rect_alpha(r, s(4), theme.text, 0.92);
+    ctx.text(r.x + s(6), r.y + s(4), r, text, theme.panel_bg);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -70,6 +70,8 @@ pub struct ToolItem {
     pub right: bool,
     /// 표시 여부(08-22 — 상태 표시 항목용): `false`면 자리도 차지하지 않는다.
     pub visible: bool,
+    /// 툴팁 텍스트(08-23 — hover 시 아래 캡슐 · 빈 = 없음).
+    pub tip: String,
 }
 
 impl ToolItem {
@@ -80,6 +82,7 @@ impl ToolItem {
             icon,
             right: false,
             visible: true,
+            tip: String::new(),
         }
     }
 
@@ -94,6 +97,13 @@ impl ToolItem {
     #[must_use]
     pub fn hidden(mut self) -> Self {
         self.visible = false;
+        self
+    }
+
+    /// 툴팁 텍스트(체이닝 · 08-23).
+    #[must_use]
+    pub fn tip(mut self, text: impl Into<String>) -> Self {
+        self.tip = text.into();
         self
     }
 }
@@ -252,6 +262,23 @@ impl Toolbar {
         }
     }
 
+    /// hover 항목의 툴팁을 그린다(08-23) — **팝업 레이어**에서 부른다(다른
+    /// 크롬(필터 바 등)이 바 아래 띠를 덮으므로 paint 안에서 그리면 가려진다).
+    pub fn paint_tooltip(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
+        if let Some(i) = self.hover {
+            if self.items[i].visible && !self.items[i].tip.is_empty() {
+                crate::draw::draw_tooltip(
+                    ctx,
+                    theme,
+                    self.slot_rect(i),
+                    self.base.bounds.right(),
+                    &self.items[i].tip,
+                    self.base.scale,
+                );
+            }
+        }
+    }
+
     fn item_at(&self, x: i32, y: i32) -> Option<usize> {
         (0..self.items.len())
             .find(|&i| self.items[i].visible && self.slot_rect(i).contains(Point { x, y }))
@@ -320,7 +347,9 @@ impl Widget for Toolbar {
                 let over = self.item_at(x, y);
                 if over != self.hover {
                     self.hover = over;
-                    inv.push(self.base.bounds);
+                    // 툴팁이 바 아래로 나간다(08-23) — 그 띠까지 재도색.
+                    let b = self.base.bounds;
+                    inv.push(Rect::new(b.x, b.y, b.w, b.h + self.s(40)));
                 }
             }
             _ => {}

@@ -6093,7 +6093,14 @@ impl App {
     /// (기본 끄기)가 발신 옵트인으로 들어간다.
     fn remote_file_blocked(&self, peer: PeerId) -> bool {
         use nbeep_core::TrustStore as _;
-        let opt_in = self.settings.get("xfer.remote_files") == "on";
+        // 경로별 옵트인(08-23 분리 — 사용자 확정): 서버 경유/인터넷 직결이 각자
+        // 스위치를 갖는다(기본 둘 다 끄기).
+        let via_server = self.conversations.get(&peer).is_some_and(|c| c.via_server);
+        let opt_in = if via_server {
+            self.settings.get("xfer.remote_files_server") == "on"
+        } else {
+            self.settings.get("xfer.remote_files_internet") == "on"
+        };
         !nbeep_core::file_allowed(self.peer_path(peer), self.trust.level(peer), opt_in)
     }
 
@@ -12876,6 +12883,9 @@ impl App {
                 } else {
                     self.list.paint_popup(&mut ctx, &theme);
                     self.sort_drop.paint_popup(&mut ctx, &theme); // 정렬 팝업(맨 위)
+                                                                  // 툴팁(08-23) — 크롬 위 팝업 레이어(필터 바·목록 위에 얹힘).
+                    self.toolbar.paint_tooltip(&mut ctx, &theme);
+                    self.filter_bar.paint_tooltip(&mut ctx, &theme);
                 }
             }
             Role::Chat(peer) => {
@@ -16405,7 +16415,8 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
                     h: nbeep_ui::icons::REFRESH_SIZE,
                     alpha: nbeep_ui::icons::REFRESH_ALPHA,
                 },
-            ),
+            )
+            .tip(nbeep_core::t(nbeep_core::Msg::RefreshList)),
             ToolItem::new(
                 "add",
                 ToolIcon::Mask {
@@ -16413,7 +16424,8 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
                     h: nbeep_ui::icons::ADD_SIZE,
                     alpha: nbeep_ui::icons::ADD_ALPHA,
                 },
-            ),
+            )
+            .tip(nbeep_core::t(nbeep_core::Msg::AddrTitle)),
             ToolItem::new(
                 "quarantine",
                 ToolIcon::Mask {
@@ -16421,7 +16433,8 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
                     h: nbeep_ui::icons::SHIELD_SIZE,
                     alpha: nbeep_ui::icons::SHIELD_ALPHA,
                 },
-            ),
+            )
+            .tip(nbeep_core::t(nbeep_core::Msg::QuarantineTitle)),
             // 대화함(M3-23) — 격리함과 동일 레벨(서랍 아이콘 · 사용자 확정 08-17).
             ToolItem::new(
                 "convbox",
@@ -16430,7 +16443,8 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
                     h: nbeep_ui::icons::DRAWER_SIZE,
                     alpha: nbeep_ui::icons::DRAWER_ALPHA,
                 },
-            ),
+            )
+            .tip(nbeep_core::t(nbeep_core::Msg::ConvboxTitle)),
             // Managed 서버 접속 표시(08-22 사용자 확정 — 대화 헤더 "서버 경유"
             // 배지와 같은 waypoints · 프로필 왼쪽 · **접속 중일 때만** 보인다).
             ToolItem::new(
@@ -16444,7 +16458,8 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
                 },
             )
             .align_right()
-            .hidden(),
+            .hidden()
+            .tip(nbeep_core::t(nbeep_core::Msg::TipServerOn)),
             // 프로필 버튼 = **내 얼굴 미니**(08-14 사용자 요청 — 우측 끝 배치).
             // 실제 아이콘은 부팅 직후 refresh_toolbar_avatar가 설정값으로 채운다.
             ToolItem::new(
@@ -16456,7 +16471,8 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
                     border: None,
                 },
             )
-            .align_right(),
+            .align_right()
+            .tip(nbeep_core::t(nbeep_core::Msg::ProfileTitle)),
             // 컨트롤 갤러리는 툴바에서 뺐다(사용자 요청 08-10) — 메뉴(보기 ▸ 컨트롤 갤러리)와
             // ⌘/Ctrl+G로 열 수 있으니, 상시 노출할 임시 검수용 항목은 툴바를 차지할 이유가 없다.
         ]),
