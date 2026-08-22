@@ -379,6 +379,7 @@ beepd 자체는 수 MB지만, **1GB급 무료 VM은 기본 이미지 상태가 �
 systemctl is-active beepd && sudo journalctl -u beepd --since -1h   # 상태·최근 로그
 sudo systemctl restart beepd                                        # 재시작(저장 0 — 안전)
 # 업데이트: 새 자산 받기 → 검증 → 교체 → 재시작 (키는 그대로)
+#   개발 머신에서 직접 빌드해 올리는 전체 시퀀스(scp 포함)는 §9-0 참조.
 # ★ 교체 전 해시 대조(08-22 절차) — 같으면 "이미 최신"을 1초에 판정한다
 sha256sum nexa-beepd /opt/beepd/nexa-beepd
 sudo install -m 0755 nexa-beepd /opt/beepd/nexa-beepd && sudo systemctl restart beepd
