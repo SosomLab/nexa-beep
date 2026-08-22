@@ -185,7 +185,7 @@ pub use profile::{ProfileValues, ProfileWidget};
 pub use prompt::TextPromptWidget;
 pub use quarantine_view::{QAction, QRow, QuarantineWidget};
 pub use raster::{FontSet, RasterCtx};
-pub use settings::{registry, Entry, SettingKind, SettingsState, SettingsWidget};
+pub use settings::{registry, Entry, NoteTone, SettingKind, SettingsState, SettingsWidget};
 pub use theme::{Color, FontPrefs, IconImage, SlotFont, Theme};
 pub use typeahead::{Query, TypeAhead, TYPEAHEAD_TIMEOUT_MS};
 pub use widget::{Invalidations, Widget};

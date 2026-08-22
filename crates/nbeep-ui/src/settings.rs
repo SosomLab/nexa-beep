@@ -851,7 +851,10 @@ pub fn registry() -> &'static [Entry] {
             sub: None,
             label: Msg::ServerAddress,
             desc: Msg::ServerAddressDesc,
-            kind: SettingKind::RadioInput(&[], ""),
+            // ★ 기본 서버 = SosomLab 공식 릴레이(08-22 사용자 등록 — DNS 실측 확인).
+            //   첫 옵션 = 기본값 규약이라 Managed로 켜면 바로 이 서버로 붙는다.
+            //   라벨 = 실값(08-22 ② 교훈 — 라벨과 값이 갈릴 자리엔 값을 라벨로).
+            kind: SettingKind::RadioInput(&[("beepd.sosomlab.com", Msg::ServerAddrDefault)], ""),
             key: "net.server.address",
         },
         Entry {
@@ -1455,7 +1458,18 @@ pub struct SettingsWidget {
     /// 비활성 설정 키(호스트가 지정) — 흐리게 그리고 입력을 받지 않는다.
     disabled: std::collections::HashSet<&'static str>,
     /// 특정 설정 행 **바로 아래**에 붙는 한 줄 정보(자리 고정 — 호스트가 채운다).
-    notes: HashMap<&'static str, String>,
+    notes: HashMap<&'static str, (String, NoteTone)>,
+}
+
+/// 행 노트의 시각 톤(08-22 — "검증됨"이 눈에 띄어야 한다는 사용자 요청).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NoteTone {
+    /// 일반 정보(종전 동작 — 흐린 글자·배경 없음).
+    Plain,
+    /// 긍정 상태(검증 완료 등) — ok색 옅은 배경 + ok색 글자.
+    Ok,
+    /// 경고 상태 — warn색 옅은 배경 + warn색 글자.
+    Warn,
 }
 
 impl SettingsWidget {
@@ -1503,8 +1517,13 @@ impl SettingsWidget {
         if let Some(t) = self.search.copy_selection() {
             return Some(t);
         }
+        // 콤보 직접 입력(08-22 — TextBox 위임)도 같은 텍스트 입력이다.
         self.rows.iter().find_map(|r| match &r.ctl {
-            RowCtl::Font { family, .. } | RowCtl::Face(family) => family.copy_selection(),
+            RowCtl::Font { family, size } => family
+                .copy_selection()
+                .or_else(|| size.editing_input_ref().and_then(TextBox::copy_selection)),
+            RowCtl::Face(family) => family.copy_selection(),
+            RowCtl::Combo(c) => c.editing_input_ref().and_then(TextBox::copy_selection),
             _ => None,
         })
     }
@@ -1516,7 +1535,11 @@ impl SettingsWidget {
             return Some(t);
         }
         self.rows.iter_mut().find_map(|r| match &mut r.ctl {
-            RowCtl::Font { family, .. } | RowCtl::Face(family) => family.cut_selection(inv),
+            RowCtl::Font { family, size } => family
+                .cut_selection(inv)
+                .or_else(|| size.editing_input().and_then(|tb| tb.cut_selection(inv))),
+            RowCtl::Face(family) => family.cut_selection(inv),
+            RowCtl::Combo(c) => c.editing_input().and_then(|tb| tb.cut_selection(inv)),
             _ => None,
         })
     }
@@ -1526,8 +1549,20 @@ impl SettingsWidget {
         self.search.paste(text, inv);
         self.sync_query(inv);
         for r in &mut self.rows {
-            if let RowCtl::Font { family, .. } | RowCtl::Face(family) = &mut r.ctl {
-                family.paste(text, inv);
+            match &mut r.ctl {
+                RowCtl::Font { family, size } => {
+                    family.paste(text, inv);
+                    if let Some(tb) = size.editing_input() {
+                        tb.paste(text, inv);
+                    }
+                }
+                RowCtl::Face(family) => family.paste(text, inv),
+                RowCtl::Combo(c) => {
+                    if let Some(tb) = c.editing_input() {
+                        tb.paste(text, inv);
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -1538,7 +1573,11 @@ impl SettingsWidget {
             return Some(a);
         }
         self.rows.iter_mut().find_map(|r| match &mut r.ctl {
-            RowCtl::Font { family, .. } | RowCtl::Face(family) => family.take_edit_ctx(),
+            RowCtl::Font { family, size } => family
+                .take_edit_ctx()
+                .or_else(|| size.editing_input().and_then(|tb| tb.take_edit_ctx())),
+            RowCtl::Face(family) => family.take_edit_ctx(),
+            RowCtl::Combo(c) => c.editing_input().and_then(|tb| tb.take_edit_ctx()),
             _ => None,
         })
     }
@@ -1547,8 +1586,20 @@ impl SettingsWidget {
     pub fn set_clipboard_has_text(&mut self, yes: bool) {
         self.search.set_clipboard_has_text(yes);
         for r in &mut self.rows {
-            if let RowCtl::Font { family, .. } | RowCtl::Face(family) = &mut r.ctl {
-                family.set_clipboard_has_text(yes);
+            match &mut r.ctl {
+                RowCtl::Font { family, size } => {
+                    family.set_clipboard_has_text(yes);
+                    if let Some(tb) = size.editing_input() {
+                        tb.set_clipboard_has_text(yes);
+                    }
+                }
+                RowCtl::Face(family) => family.set_clipboard_has_text(yes),
+                RowCtl::Combo(c) => {
+                    if let Some(tb) = c.editing_input() {
+                        tb.set_clipboard_has_text(yes);
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -1867,14 +1918,27 @@ impl SettingsWidget {
     /// 설정 행 아래 한 줄 정보 지정 — **자리가 고정**된다(빈 문자열 = 제거).
     /// 값이 바뀔 때만 재배치·무효화하므로 1초 갱신에도 낭비가 없다.
     pub fn set_row_note(&mut self, key: &'static str, text: &str, inv: &mut Invalidations) {
+        self.set_row_note_toned(key, text, NoteTone::Plain, inv);
+    }
+
+    /// 톤 있는 행 노트(08-22) — Ok/Warn은 옅은 배경으로 눈에 띈다(검증 상태 표시).
+    pub fn set_row_note_toned(
+        &mut self,
+        key: &'static str,
+        text: &str,
+        tone: NoteTone,
+        inv: &mut Invalidations,
+    ) {
         let had = self.notes.contains_key(key);
-        if self.notes.get(key).map(String::as_str) == Some(text) || (text.is_empty() && !had) {
+        if self.notes.get(key).map(|(t, tn)| (t.as_str(), *tn)) == Some((text, tone))
+            || (text.is_empty() && !had)
+        {
             return;
         }
         if text.is_empty() {
             self.notes.remove(key);
         } else {
-            self.notes.insert(key, text.to_string());
+            self.notes.insert(key, (text.to_string(), tone));
         }
         if had != self.notes.contains_key(key) {
             self.layout(inv); // 줄이 생기거나 사라지면 행 높이가 달라진다
@@ -2726,7 +2790,7 @@ impl Widget for SettingsWidget {
         //   같은 폰트**로 그린다(고정폭은 산문에 부적절 · 사용자 요청 08-18).
         for row in &self.rows {
             let key = registry()[row.idx].key;
-            let Some(note) = self.notes.get(key) else {
+            let Some((note, tone)) = self.notes.get(key) else {
                 continue;
             };
             let mono = key == "xfer.approval_window"; // 자동 수락 카운트다운만
@@ -2741,20 +2805,38 @@ impl Widget for SettingsWidget {
             let nh = self.s(NOTE_H);
             let r = Rect::new(row.rect.x, row.rect.bottom() - nh, row.rect.w, nh);
             let th = ctx.text_height();
-            ctx.text(
-                r.x + self.s(PAD),
-                r.y + (r.h - th) / 2,
-                r,
-                note,
-                theme.text_dim,
-            );
+            // 톤 있는 노트(08-22) — 옅은 배경 + 톤색 글자(검증됨이 한눈에 보이게).
+            let color = match tone {
+                NoteTone::Plain => theme.text_dim,
+                NoteTone::Ok => {
+                    ctx.fill_round_rect_alpha(
+                        Rect::new(r.x + self.s(PAD) - self.s(6), r.y, r.w - self.s(PAD), r.h),
+                        self.s(5),
+                        theme.ok,
+                        0.14,
+                    );
+                    theme.ok
+                }
+                NoteTone::Warn => {
+                    ctx.fill_round_rect_alpha(
+                        Rect::new(r.x + self.s(PAD) - self.s(6), r.y, r.w - self.s(PAD), r.h),
+                        self.s(5),
+                        theme.warn,
+                        0.14,
+                    );
+                    theme.warn
+                }
+            };
+            ctx.text(r.x + self.s(PAD), r.y + (r.h - th) / 2, r, note, color);
         }
 
         // 열린 콤보 드롭다운은 맨 위에 다시 그린다(아래 행에 가리지 않게).
         for row in &self.rows {
             match &row.ctl {
-                RowCtl::Combo(c) if c.is_open() => c.paint(ctx, theme),
-                RowCtl::Font { size, .. } if size.is_open() => size.paint(ctx, theme),
+                RowCtl::Combo(c) if c.is_open() || c.editing_popup_open() => c.paint(ctx, theme),
+                RowCtl::Font { size, .. } if size.is_open() || size.editing_popup_open() => {
+                    size.paint(ctx, theme);
+                }
                 _ => {}
             }
         }
@@ -3334,8 +3416,8 @@ mod tests {
         let mut st = SettingsState::with_defaults();
         assert_eq!(
             st.get("net.server.address"),
-            "",
-            "키가 빈 기본값으로 등록된다"
+            "beepd.sosomlab.com",
+            "기본 서버 = SosomLab 공식 릴레이(08-22 — 첫 옵션 = 기본값)"
         );
         assert!(
             st.set_by_name("net.server.address", "relay.example.com"),

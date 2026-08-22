@@ -2456,6 +2456,8 @@ struct App {
     /// 연결 테스트 진행 중(08-22 — 설정 › 서버 › 테스트 버튼) — 다음 ServerAttach
     /// 결과를 "테스트 성공/실패" 문구로 보고한다(접속 경로 자체는 평소와 동일).
     relay_test: bool,
+    /// 마지막 서버 접속 실패 사유(08-22 — 설정 화면 상태 노트 표시용).
+    relay_last_err: Option<String>,
     discovery: std::sync::mpsc::Receiver<nbeep_net::DiscoveryEvent>,
     table: nbeep_core::PeerTable,
     /// TOFU 신뢰 저장 — 파일 영속(M2-5a · 변경 즉시 암호화 저장 · R-17 해소).
@@ -4541,6 +4543,10 @@ impl App {
         let now = self.now_ms();
         let remain = self.approval.remaining_ms(now);
         let started = self.approval_started_unix;
+        // 서버 상태 노트 3종(08-22 사용자 보고 "Test를 눌러도 반응이 없어 보인다" —
+        // 피드백이 메인 창 상태바로만 가서 설정 창에선 무반응처럼 보였다). 이 깔때기는
+        // 설정 창이 열려 있는 동안 주기 호출되므로 재시도 카운트다운도 같이 산다.
+        let (srv_state, srv_tone, srv_port, srv_type) = self.server_note_texts();
         let Some(sv) = &mut self.settings_view else {
             return;
         };
@@ -4584,6 +4590,10 @@ impl App {
             &auto_rate_note(self.recv_rate, &self.recv_meter, false),
             &mut inv,
         );
+        // 서버 행 노트 — 테스트(접속 상태 · 검증됨 = ok 배경)·포트(관측·공인 주소)·타입.
+        sv.set_row_note_toned("net.server.test", &srv_state, srv_tone, &mut inv);
+        sv.set_row_note("net.server.port", &srv_port, &mut inv);
+        sv.set_row_note("net.server.type", &srv_type, &mut inv);
         // ★ 잠금은 **여기 한 곳에서 전량 계산**한다 — set_disabled가 전체 교체라
         //   다른 지점에서 부분만 넣으면 1초 주기인 이 깔때기가 도로 지운다.
         let mut locked: Vec<&'static str> = Vec::new();
@@ -4954,6 +4964,7 @@ impl App {
         self.relay = None;
         self.relay_backoff = (0, 0);
         self.relay_check_at = 0;
+        self.relay_last_err = None;
     }
 
     /// 연결 테스트(08-22 사용자 요청 — 설정 › 서버 › 테스트): 지금 설정값으로 서버에
@@ -4983,6 +4994,77 @@ impl App {
         self.relay_test = true;
         self.server_settings_changed(); // 즉시 재수렴(단일 경로 — 백오프·정지도 풀린다)
         self.set_status(nbeep_core::tf(nbeep_core::Msg::StfServerTesting, &[&raw]));
+        self.refresh_approval_ui(); // 설정 창 노트 = "접속 중…" 즉시(무반응처럼 안 보이게)
+    }
+
+    /// 설정 › 서버 상태 노트 3종(08-22 사용자 요청) — (접속 상태, 상태 톤, 포트, 타입).
+    /// 빈 문자열 = 그 행 노트 제거. 판정 재료는 server_tick과 같은 필드(표시 전용 파생).
+    ///
+    /// ★ 검증의 소속(사용자 질문 08-22 확정): **검증은 값(주소·포트)에 붙는다** —
+    /// 주소를 바꾸면 그 값에 대한 검증이 아니므로 "검증됨" 표시가 내려가고(값 원복
+    /// 없음 — 설정 즉시 적용 원칙), 자동 재접속이 성공하는 순간 새 값으로 자동
+    /// 재검증된다(성공한 등록 = 검증). 옛 값으로 되돌리면 마커가 그대로라 즉시 복원.
+    fn server_note_texts(&self) -> (String, nbeep_ui::NoteTone, String, String) {
+        use nbeep_core::{t, tf, Msg};
+        use nbeep_ui::NoteTone;
+        let none = String::new;
+        let Some(raw) = server_target(
+            self.settings.get("net.server.mode"),
+            self.settings.get("net.server.address"),
+            self.settings.get("net.server.port"),
+        ) else {
+            return (
+                t(Msg::StNoteSrvOff).to_string(),
+                NoteTone::Plain,
+                none(),
+                none(),
+            );
+        };
+        if let Some(c) = &self.relay {
+            if c.is_alive() {
+                let ri = c.register_info();
+                let obs = ri
+                    .observed_tcp
+                    .map_or_else(|| "?".to_string(), |a| a.to_string());
+                let pin = nbeep_relay::peer_hex(&c.server_peer());
+                return (
+                    tf(Msg::StfNoteSrvOk, &[&raw, &pin[..8]]),
+                    NoteTone::Ok, // ★ 검증됨 = ok색 배경(눈에 띄게 — 사용자 요청)
+                    tf(
+                        Msg::StfNoteSrvPort,
+                        &[&c.server_addr().to_string(), &ri.udp_port.to_string(), &obs],
+                    ),
+                    t(Msg::StNoteSrvTypeRelay).to_string(),
+                );
+            }
+        }
+        // 미접속 상태들 — 현재 목표가 과거 검증값과 같으면 "이전 검증됨"을 덧붙인다
+        // (마커 주소는 정규화돼 있어 포트 생략 입력과도 대조한다).
+        let marker = self.settings.get("server.verified");
+        let prev = marker
+            .split_whitespace()
+            .next()
+            .is_some_and(|a| a == raw || a.strip_suffix(":47300") == Some(raw.as_str()));
+        let suffix = if prev {
+            t(Msg::StNoteSrvPrevVerified)
+        } else {
+            ""
+        };
+        let state = if self.relay_backoff.1 == u64::MAX {
+            t(Msg::StNoteSrvPinStop).to_string()
+        } else if self.relay_connecting {
+            tf(Msg::StfNoteSrvConnecting, &[&raw])
+        } else {
+            let now = self.now_ms();
+            if self.relay_backoff.1 > now {
+                let secs = (self.relay_backoff.1 - now).div_ceil(1000);
+                let why = self.relay_last_err.clone().unwrap_or_default();
+                tf(Msg::StfNoteSrvRetry, &[&secs.to_string(), &why])
+            } else {
+                t(Msg::StNoteSrvIdle).to_string()
+            }
+        };
+        (format!("{state}{suffix}"), NoteTone::Plain, none(), none())
     }
 
     /// 서버 검증 마커 영속(08-22 — `server.verified` = "주소 핀64hex unix초").
@@ -13518,6 +13600,7 @@ impl ApplicationHandler<AppEvent> for App {
                         }
                         // 검증 마커(08-22) — 성공한 등록이 곧 검증. 테스트로 온
                         // 결과면 문구도 테스트 성공으로 덮는다(둘 다 같은 마커).
+                        self.relay_last_err = None;
                         let pin = nbeep_relay::peer_hex(&at.client.server_peer());
                         self.mark_server_verified(&at.addr, &pin);
                         if std::mem::take(&mut self.relay_test) {
@@ -13568,6 +13651,7 @@ impl ApplicationHandler<AppEvent> for App {
                             ServerAttachFail::Other(w) => w,
                             ServerAttachFail::PinMismatch => String::new(), // 위 갈래가 소진
                         };
+                        self.relay_last_err = Some(why.clone()); // 설정 상태 노트 재료
                         if std::mem::take(&mut self.relay_test) {
                             // 테스트로 온 실패 — 명시 실패 문구(백오프 재시도는 그대로).
                             self.set_status(nbeep_core::tf(
@@ -13582,6 +13666,7 @@ impl ApplicationHandler<AppEvent> for App {
                         }
                     }
                 }
+                self.refresh_approval_ui(); // 설정 창 서버 상태 노트 즉시 반영(08-22)
                 if let Some(mid) = self.main_id {
                     self.request_redraw(mid);
                 }
@@ -15593,6 +15678,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         relay_gen: 0,
         relay_check_at: 0,
         relay_test: false,
+        relay_last_err: None,
         discovery,
         table: nbeep_core::PeerTable::new(60_000),
         trust,
