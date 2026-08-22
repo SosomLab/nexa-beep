@@ -7435,10 +7435,11 @@ impl App {
             .iter()
             .filter(|e| !matches!(e.kind, nbeep_ui::settings::SettingKind::Action { .. }))
             .flat_map(nbeep_ui::settings::Entry::default_values)
-            // ★ 프로필 정보 제외(08-23 사용자 확정) — 표시 이름·공유 토글은 설정이
-            //   아니라 **사용자 데이터**다(숨김 프로필 키(사진·이메일 등)는 원래
-            //   제외였고, registry 소속 profile.*까지 함께 지킨다).
-            .filter(|(k, _)| !k.starts_with("profile."))
+            // ★ 프로필 구분(08-23 사용자 확정 2차) — **정보는 지키고 공개는
+            //   되돌린다**: 표시 이름(+숨김 키의 이메일·전화·소개·사진)은 사용자
+            //   데이터라 제외, 공유 토글 3종(share.basic/email/phone)은 설정이라
+            //   초기화 대상(기본 = 전부 비공개 · DR-22 옵트인 방향 = fail-closed).
+            .filter(|(k, _)| *k != "profile.display_name")
             .filter(|(k, d)| self.settings.get(k) != d)
             .collect();
         let n = changes.len();
@@ -14905,7 +14906,7 @@ impl ApplicationHandler<AppEvent> for App {
             self.open_choice(
                 el,
                 "설정 초기화",
-                "표시되는 설정 전부와 목록 필터·창 크기를 기본값으로 되돌립니다. 계속할까요?\n(신원·핀·그룹·프로필 정보·창 위치는 유지됩니다)",
+                "표시되는 설정 전부와 목록 필터·창 크기를 기본값으로 되돌립니다. 계속할까요?\n(신원·핀·그룹·프로필 정보·창 위치는 유지 · 프로필 공개 토글은 비공개로 복귀)",
                 "초기화",
                 "취소",
                 AlertCtx::SettingsReset,
