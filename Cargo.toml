@@ -22,7 +22,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.3"
+version = "0.2.4"
 edition = "2021"
 rust-version = "1.82"          # MSRV 잠정(ADR-0001 §8) — M0 진행 중 확정
 license = "LicenseRef-PolyForm-Noncommercial-1.0.0"
