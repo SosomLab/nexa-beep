@@ -46,6 +46,11 @@ pub struct TextBox {
     edit_ctx: Option<EditCtxAction>,
     /// 붙여넣기 항목 활성 근거(호스트가 우클릭 시점에 1회 주입 — 대화 입력과 동일).
     clip_has_text: bool,
+    /// 허용 문자 필터(08-22 공용 — Combo 직접 입력 위임의 재료): Some(f)면 f가
+    /// 거짓인 문자를 **타이핑·붙여넣기 모두**에서 버린다(경로가 달라도 규칙은 하나).
+    char_filter: Option<fn(char) -> bool>,
+    /// 최대 문자 수(0 = 무제한 · 기본) — 타이핑·붙여넣기 공통 상한.
+    max_chars: usize,
     /// 멀티라인(소개글) 모드(08-17) — Enter가 확정 대신 개행, 세로 여러 줄 렌더.
     /// 단일 라인 경로는 이 플래그가 꺼져 있어 종전 그대로다.
     multiline: bool,
@@ -107,6 +112,8 @@ impl TextBox {
             ctx_menu: super::EditMenu::new(),
             edit_ctx: None,
             clip_has_text: true,
+            char_filter: None,
+            max_chars: 0,
             multiline: false,
             vscroll: std::cell::Cell::new(0),
             mhscroll: std::cell::Cell::new(0),
@@ -121,6 +128,31 @@ impl TextBox {
     /// `true` = 다시 그려야 한다.
     pub fn tick(&mut self, now_ms: u64) -> bool {
         self.ml_bars.tick(now_ms)
+    }
+
+    /// 허용 문자 필터 지정(08-22) — 타이핑·붙여넣기 공통. None = 전부 허용(기본).
+    pub fn set_char_filter(&mut self, f: Option<fn(char) -> bool>) {
+        self.char_filter = f;
+    }
+
+    /// 최대 문자 수 지정(08-22) — 0 = 무제한(기본). 타이핑·붙여넣기 공통 상한.
+    pub fn set_max_chars(&mut self, n: usize) {
+        self.max_chars = n;
+    }
+
+    /// 이 문자를 받는가(필터 판정 — 한 곳).
+    fn accepts(&self, c: char) -> bool {
+        self.char_filter.is_none_or(|f| f(c))
+    }
+
+    /// 남은 자리 수(상한 없음 = usize::MAX).
+    fn room(&self) -> usize {
+        if self.max_chars == 0 {
+            usize::MAX
+        } else {
+            self.max_chars
+                .saturating_sub(self.edit.text().chars().count())
+        }
     }
 
     /// 멀티라인(소개글) 모드로 만든다(체이닝 · 08-17) — Enter = 개행. 보이는 줄
@@ -394,6 +426,15 @@ impl TextBox {
             }
             out
         };
+        // 필터·상한은 붙여넣기에도 동일 적용(08-22 — 경로가 달라도 규칙은 하나).
+        let mut cleaned = cleaned;
+        if let Some(f) = self.char_filter {
+            cleaned.retain(f);
+        }
+        let room = self.room();
+        if cleaned.chars().count() > room {
+            cleaned = cleaned.chars().take(room).collect();
+        }
         if cleaned.is_empty() {
             return;
         }
@@ -792,7 +833,7 @@ impl Widget for TextBox {
                 self.ml_user_scrolled = false; // 타이핑 = 캐럿 이동 → 캐럿 추종 재개
                 if c == '\u{8}' {
                     self.edit.backspace();
-                } else if !c.is_control() {
+                } else if !c.is_control() && self.accepts(c) && self.room() > 0 {
                     self.edit.insert(c);
                 }
                 self.changed = true;

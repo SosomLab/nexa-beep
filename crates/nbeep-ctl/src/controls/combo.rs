@@ -15,7 +15,7 @@
 
 use super::{
     draw_check_mark, draw_chevron_down, draw_updown_chevrons, image_fit_contain, Control,
-    ControlBase, ScrollBars,
+    ControlBase, ScrollBars, TextBox,
 };
 use crate::draw::{DrawCtx, FontSlot};
 use crate::edit::EditState;
@@ -455,10 +455,11 @@ pub struct Combo {
     custom_suffix: String,
     /// 목록에 없는 커스텀 값(직접 입력 결과 · 원시 문자열).
     custom_value: Option<String>,
-    /// 인라인 편집 중.
-    editing: bool,
-    /// 편집 버퍼(기본 숫자 전용 · [`Combo::set_custom_text`]로 텍스트 허용).
-    buf: String,
+    /// 인라인 편집기(직접 입력 중 = Some) — ★**TextBox 위임**(08-22 사용자 요청:
+    /// 선택·드래그·클립보드·우클릭 메뉴를 컨트롤마다 다시 만들지 않는다 — 텍스트
+    /// 편집의 단일 구현은 TextBox 하나 · "상속 = 조합+위임" 규약). 문자 규칙은
+    /// TextBox의 공용 필터([`TextBox::set_char_filter`])로 건다.
+    editor: Option<Box<TextBox>>,
     /// 직접 입력이 **텍스트 모드**인가(08-22 — 서버 주소처럼 도메인·IP를 받는 행).
     /// false(기본) = 종전 숫자 전용(포트·ms·MiB — 비트 호환).
     custom_text: bool,
@@ -474,8 +475,7 @@ impl Combo {
             custom_label: None,
             custom_suffix: String::new(),
             custom_value: None,
-            editing: false,
-            buf: String::new(),
+            editor: None,
             custom_text: false,
         }
     }
@@ -508,13 +508,30 @@ impl Combo {
     /// 인라인 편집 중인가(호스트 라우팅 근거 — 편집은 모달).
     #[must_use]
     pub fn is_editing(&self) -> bool {
-        self.editing
+        self.editor.is_some()
     }
-    /// 편집 확정 — 버퍼가 비지 않으면 값 보고(목록과 일치하면 그 항목 선택으로 환원).
+    /// 편집 중인 내장 TextBox(호스트의 클립보드·IME·우클릭 메뉴 라우팅 지점 —
+    /// TextBox의 기존 호스트 계약을 그대로 쓴다).
+    pub fn editing_input(&mut self) -> Option<&mut TextBox> {
+        self.editor.as_deref_mut()
+    }
+    /// 편집 중인 내장 TextBox(읽기 — 복사 등).
+    #[must_use]
+    pub fn editing_input_ref(&self) -> Option<&TextBox> {
+        self.editor.as_deref()
+    }
+    /// 편집기 우클릭 메뉴가 열려 있는가(호스트 z순서 — 최상위 재페인트 근거).
+    #[must_use]
+    pub fn editing_popup_open(&self) -> bool {
+        self.editor.as_deref().is_some_and(TextBox::popup_open)
+    }
+    /// 편집 확정 — 값이 비지 않으면 보고(목록과 일치하면 그 항목 선택으로 환원).
     fn commit_edit(&mut self, inv: &mut Invalidations) {
-        self.editing = false;
-        if !self.buf.is_empty() {
-            let v = std::mem::take(&mut self.buf);
+        let Some(tb) = self.editor.take() else {
+            return;
+        };
+        let v = tb.text().trim().to_string();
+        if !v.is_empty() {
             if let Some(i) = self.core.items.iter().position(|it| it.value == v) {
                 self.core.selected = i;
                 self.custom_value = None;
@@ -569,9 +586,10 @@ impl ComboControl for Combo {
         }
     }
     fn on_extra(&mut self, _j: usize, inv: &mut Invalidations) {
-        // "직접 입력…" — 박스를 인라인 편집으로 전환(현재 값에서 허용 문자만 남겨 시작).
+        // "직접 입력…" — 내장 TextBox로 전환(현재 값에서 허용 문자만 남겨 시작).
+        // 선택·드래그·클립보드·우클릭 메뉴는 TextBox 것이 그대로 산다(08-22 위임).
         self.core.open = false;
-        self.buf = if self.custom_text {
+        let seed: String = if self.custom_text {
             self.value()
                 .chars()
                 .filter(|c| c.is_ascii_graphic())
@@ -579,7 +597,18 @@ impl ComboControl for Combo {
         } else {
             self.value().chars().filter(char::is_ascii_digit).collect()
         };
-        self.editing = true;
+        let mut tb = TextBox::new("").with_text(&seed);
+        if self.custom_text {
+            tb.set_char_filter(Some(|c: char| c.is_ascii_graphic()));
+            tb.set_max_chars(253); // 호스트명 상한
+        } else {
+            tb.set_char_filter(Some(|c: char| c.is_ascii_digit()));
+            tb.set_max_chars(6);
+        }
+        tb.set_scale(self.base.scale);
+        tb.set_focused(true);
+        tb.set_bounds(self.base.bounds, inv);
+        self.editor = Some(Box::new(tb));
         inv.push(self.base.bounds);
     }
     fn checked_index(&self) -> Option<usize> {
@@ -604,64 +633,41 @@ impl Widget for Combo {
         inv.push(bounds);
     }
     fn on_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
-        // 인라인 편집 중 = 모달 — 허용 문자만 받고 Enter/바깥 클릭 확정 · Esc 취소.
-        // 텍스트 모드(서버 주소 등) = 공백 없는 ASCII 인쇄 문자 · 253자(호스트명 상한).
-        if self.editing {
+        // 인라인 편집 중 = 모달 — 편집 자체(문자·선택·드래그·붙여넣기)는 내장
+        // TextBox가 전담하고, 여기는 **모달 경계만** 본다: Esc = 취소 · 바깥 클릭 =
+        // 확정 · Enter 확정 회수. (우클릭 메뉴가 열려 있으면 그 메뉴 몫.)
+        if let Some(tb) = &mut self.editor {
             match *ev {
-                InputEvent::Char { c, .. } => {
-                    let ok = if self.custom_text {
-                        c.is_ascii_graphic() && self.buf.len() < 253
-                    } else {
-                        c.is_ascii_digit() && self.buf.len() < 6
-                    };
-                    if c == '\u{8}' {
-                        self.buf.pop();
-                    } else if ok {
-                        self.buf.push(c);
-                    }
+                InputEvent::Key {
+                    key: Key::Escape, ..
+                } if !tb.popup_open() => {
+                    self.editor = None;
                     inv.push(self.base.bounds);
+                    return;
                 }
-                InputEvent::Key { key, .. } => match key {
-                    Key::Enter => self.commit_edit(inv),
-                    Key::Escape => {
-                        self.editing = false;
-                        self.buf.clear();
-                        inv.push(self.base.bounds);
-                    }
-                    _ => {}
-                },
                 InputEvent::MouseDown { x, y, .. }
-                    if !self.base.bounds.contains(Point { x, y }) =>
+                    if !self.base.bounds.contains(Point { x, y }) && !tb.popup_open() =>
                 {
                     self.commit_edit(inv); // 바깥 클릭 = 확정
+                    return;
                 }
                 _ => {}
+            }
+            tb.on_event(ev, inv);
+            if tb.take_committed().is_some() {
+                self.commit_edit(inv); // Enter = 확정(값은 편집기에서 읽는다)
             }
             return;
         }
         combo_event(self, ev, inv);
     }
     fn paint(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
-        if self.editing {
-            // 편집 모드 — 버퍼 + 캐럿 + accent 테두리(입력 가능 상태 식별).
-            self.paint_combo(ctx, theme, &self.buf);
-            let b = self.base.bounds;
-            ctx.select_font(FontSlot::Base, false);
-            let tw = ctx.text_width(&self.buf);
-            let th = ctx.text_height();
-            if ctx.caret_on() {
-                // 깜빡임 위상은 호스트 주입(08-13).
-                ctx.fill_rect(
-                    Rect::new(
-                        b.x + self.s(10) + tw + 1,
-                        b.y + (b.h - th) / 2,
-                        self.s(1).max(1),
-                        th,
-                    ),
-                    theme.text,
-                );
-            }
-            ctx.stroke_round_rect(b, self.s(6), self.accent_now(theme), 1.0);
+        if let Some(tb) = &self.editor {
+            // 편집 모드 — 내장 TextBox가 그린다(캐럿·선택 반전·스크롤 전부 위임).
+            // accent 테두리로 "입력 가능" 상태를 식별시키는 것만 콤보 몫.
+            tb.paint(ctx, theme);
+            ctx.stroke_round_rect(self.base.bounds, self.s(6), self.accent_now(theme), 1.0);
+            tb.paint_popup(ctx, theme); // 우클릭 편집 메뉴 — 최상위
             return;
         }
         let text = self.custom_value.as_ref().map_or_else(
