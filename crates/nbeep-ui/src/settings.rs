@@ -883,6 +883,16 @@ pub fn registry() -> &'static [Entry] {
             ]),
             key: "net.server.type",
         },
+        // 프레즌스 공개(X-2e roster · 08-22 확정 ⓐ 기본 on) — 같은 서버 공개
+        // 사용자 목록에 나를 싣고 그 목록을 받는다(존재만 — 이름·프로필은 P2P).
+        Entry {
+            cat: Msg::CatServer,
+            sub: None,
+            label: Msg::ServerAnnounce,
+            desc: Msg::ServerAnnounceDesc,
+            kind: SettingKind::Toggle,
+            key: "net.server.announce",
+        },
         // 연결 테스트(08-22 사용자 요청) — 지금 설정값으로 서버에 실제 붙어 본다.
         // 성공 = 검증 마커(server.verified — HIDDEN_KEYS) 영속: 자동 등록 성공도
         // 같은 마커를 갱신하므로, 한 번 검증된 서버는 다시 누를 필요가 없다.

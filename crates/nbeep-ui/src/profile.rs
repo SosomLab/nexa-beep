@@ -42,6 +42,8 @@ pub struct ProfileValues {
     pub seed: Vec<u8>,
     /// 내 키 지문 짧은 표기(08-17 — 상대 카드의 "키 지문"과 같은 값 · 대조 기준).
     pub fingerprint: String,
+    /// 내 전체 키 지문 64hex(M3-26 · 08-22) — 서버 랑데부의 대상 값(복사 버튼 재료).
+    pub fingerprint_full: String,
     /// 내 사진(M4-5 — 호스트가 imgdec로 디코드·원형 마스크해 넘긴다). 없으면 이니셜.
     pub avatar: Option<std::rc::Rc<crate::theme::IconImage>>,
     /// 아바타 선택 원문(`profile.avatar` — [`AvatarChoice`] 직렬). 사진(`image_path`)이
@@ -76,6 +78,13 @@ pub struct ProfileWidget {
     resolved_name: String,
     seed: Vec<u8>,
     fingerprint: String,
+    /// 전체 64hex(M3-26 — 복사 버튼 재료).
+    fingerprint_full: String,
+    /// 지문 복사 버튼 2종(M3-26 · 우측 상단) — 전체 64hex / 짧은 8자리.
+    copy_full: Button,
+    copy_short: Button,
+    /// 복사 요청(1회성 — OS 클립보드 쓰기는 호스트 몫).
+    copy_req: Option<String>,
     avatar: Option<std::rc::Rc<crate::theme::IconImage>>,
     /// 아바타 선택 원문(스와치 클릭으로 바뀐다 · 사진이 있으면 사진 우선).
     avatar_choice: String,
@@ -178,6 +187,10 @@ impl ProfileWidget {
             resolved_name: v.resolved_name.clone(),
             seed: v.seed.clone(),
             fingerprint: v.fingerprint.clone(),
+            fingerprint_full: v.fingerprint_full.clone(),
+            copy_full: Button::new(t(Msg::CopyFpFull)),
+            copy_short: Button::new(t(Msg::CopyFpShort)),
+            copy_req: None,
             avatar: v.avatar.clone(),
             avatar_choice: v.avatar_choice.clone(),
             border: ColorPicker::new(&v.avatar_border),
@@ -381,6 +394,11 @@ impl ProfileWidget {
         self.bio.paste(text, inv);
     }
 
+    /// 지문 복사 요청(1회성 · M3-26) — 호스트가 OS 클립보드에 쓴다.
+    pub fn take_copy_fp(&mut self) -> Option<String> {
+        self.copy_req.take()
+    }
+
     pub fn take_pick_image(&mut self) -> bool {
         std::mem::take(&mut self.pick_image)
     }
@@ -476,6 +494,8 @@ impl ProfileWidget {
         self.recent_car.set_scale(self.scale);
         self.border.set_scale(self.scale);
         self.choose_img.set_scale(self.scale);
+        self.copy_full.set_scale(self.scale);
+        self.copy_short.set_scale(self.scale);
         self.apply_btn.set_scale(self.scale);
         self.cancel_btn.set_scale(self.scale);
         self.sw_basic.set_scale(self.scale);
@@ -495,6 +515,23 @@ impl ProfileWidget {
         let pad = self.s(16);
         let field_h = self.s(28);
         let bw = self.s(80);
+        // 지문 복사 2종(M3-26 · 08-22 — 우측 상단 지문 표기 바로 아래):
+        // [전체 64][짧은 8] 우측 정렬 — 서버 랑데부 시대의 첫 연결 재료를 한 클릭에.
+        let cw_full = self.s(112);
+        let cw_short = self.s(92);
+        let ch = self.s(22);
+        let cy = b.y + self.s(32);
+        self.copy_short
+            .set_bounds(Rect::new(b.right() - pad - cw_short, cy, cw_short, ch), inv);
+        self.copy_full.set_bounds(
+            Rect::new(
+                b.right() - pad - cw_short - self.s(6) - cw_full,
+                cy,
+                cw_full,
+                ch,
+            ),
+            inv,
+        );
         // 아바타 스와치 캐러셀(08-14 — 32px 아이템 · 넘치면 좌/우 이동 버튼).
         self.swatches.set_bounds(
             Rect::new(b.x + pad, b.y + self.s(164), b.w - pad * 2, self.s(36)),
@@ -702,6 +739,17 @@ impl Widget for ProfileWidget {
         self.choose_img.on_event(ev, inv);
         if self.choose_img.take_clicked() {
             self.pick_image = true;
+            return;
+        }
+        // 지문 복사(M3-26) — 클립보드 쓰기는 호스트가 한다(위젯은 I/O를 모른다).
+        self.copy_full.on_event(ev, inv);
+        if self.copy_full.take_clicked() {
+            self.copy_req = Some(self.fingerprint_full.clone());
+            return;
+        }
+        self.copy_short.on_event(ev, inv);
+        if self.copy_short.take_clicked() {
+            self.copy_req = Some(self.fingerprint.clone());
             return;
         }
         for (sw, key) in [
@@ -962,6 +1010,8 @@ impl Widget for ProfileWidget {
         self.phone.paint(ctx, theme);
         self.bio.paint(ctx, theme);
         self.choose_img.paint(ctx, theme);
+        self.copy_full.paint(ctx, theme);
+        self.copy_short.paint(ctx, theme);
         // 적용/취소(M3-18) + 미저장 경고줄(Esc 2단계 — 격리함 confirming 문법).
         self.apply_btn.paint(ctx, theme);
         self.cancel_btn.paint(ctx, theme);

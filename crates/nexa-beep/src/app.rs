@@ -2458,6 +2458,9 @@ struct App {
     relay_test: bool,
     /// 마지막 서버 접속 실패 사유(08-22 — 설정 화면 상태 노트 표시용).
     relay_last_err: Option<String>,
+    /// 같은 서버의 **공개**(Announce) 사용자(X-2e roster) — 목록에 서버 상대 행으로
+    /// 병합된다. 서버가 존재(키)만 나르므로 이름은 지문 유도, 프로필은 성립 후 P2P.
+    server_peers: std::collections::HashSet<PeerId>,
     discovery: std::sync::mpsc::Receiver<nbeep_net::DiscoveryEvent>,
     table: nbeep_core::PeerTable,
     /// TOFU 신뢰 저장 — 파일 영속(M2-5a · 변경 즉시 암호화 저장 · R-17 해소).
@@ -4607,7 +4610,8 @@ impl App {
                 "net.server.address",
                 "net.server.port",
                 "net.server.type",
-                "net.server.test", // 테스트도 Managed에서만(08-22)
+                "net.server.announce", // 공개도 Managed에서만(X-2e)
+                "net.server.test",     // 테스트도 Managed에서만(08-22)
             ]);
         }
         sv.set_disabled(&locked, &mut inv);
@@ -4734,6 +4738,18 @@ impl App {
                     peer,
                     name: name.clone(),
                     paths: 0, // 발견 경로 없음 — 세션·수동 주소로만 닿는 상대
+                });
+            }
+        }
+        // 같은 서버의 공개 사용자(X-2e roster) — LAN ∪ 서버(32 §12-5). 존재만
+        // 아는 상태라 이름 = 지문 유도(성립하면 프로필 프리페치가 채운다). 이미
+        // 발견/기존 상대면 그 행이 이긴다(중복 금지).
+        for &peer in &self.server_peers {
+            if self.table.get(peer).is_none() && !self.extra_peers.contains_key(&peer) {
+                entries.push(nbeep_core::PeerEntry {
+                    peer,
+                    name: nbeep_core::default_display_name(None, &peer),
+                    paths: 0, // 경로 = 서버(클릭 시 사다리 — start_connect가 안다)
                 });
             }
         }
@@ -4926,11 +4942,34 @@ impl App {
         }
         if let Some(c) = &self.relay {
             if c.is_alive() {
-                return; // 붙어 있고 살아 있다 — 할 일 없음
+                // roster 델타 소비(X-2e) — 공개 사용자 등장/이탈을 목록에 반영.
+                let evs = c.poll_roster();
+                if !evs.is_empty() {
+                    let my = self.identity.peer_id();
+                    for ev in evs {
+                        match ev {
+                            nbeep_relay::RosterEvent::Up(p) => {
+                                if p != my {
+                                    self.server_peers.insert(p);
+                                }
+                            }
+                            nbeep_relay::RosterEvent::Down(p) => {
+                                self.server_peers.remove(&p);
+                            }
+                        }
+                    }
+                    let mut inv = Invalidations::default();
+                    self.refresh_rows(&mut inv);
+                    if let Some(mid) = self.main_id {
+                        self.request_redraw(mid);
+                    }
+                }
+                return; // 붙어 있고 살아 있다
             }
             // 서버 세션 사망 관측 — 내려놓고 첫 단계부터 재시도(백오프는 실패가 올린다).
             self.relay = None;
             self.relay_backoff = (0, now);
+            self.clear_server_peers();
             self.set_status(nbeep_core::t(nbeep_core::Msg::StServerLost));
         }
         if now < self.relay_backoff.1 {
@@ -4965,6 +5004,19 @@ impl App {
         self.relay_backoff = (0, 0);
         self.relay_check_at = 0;
         self.relay_last_err = None;
+        self.clear_server_peers();
+    }
+
+    /// 서버 공개 목록 비우기(X-2e) — 접속 해제·재접속·공개 off 공용.
+    fn clear_server_peers(&mut self) {
+        if !self.server_peers.is_empty() {
+            self.server_peers.clear();
+            let mut inv = Invalidations::default();
+            self.refresh_rows(&mut inv);
+            if let Some(mid) = self.main_id {
+                self.request_redraw(mid);
+            }
+        }
     }
 
     /// 연결 테스트(08-22 사용자 요청 — 설정 › 서버 › 테스트): 지금 설정값으로 서버에
@@ -7081,6 +7133,8 @@ impl App {
             // 내 키 지문(08-17 사용자 요청 — 상대가 내 카드에서 보는 "키 지문"과
             // 같은 값을 나도 볼 수 있게. 대조의 기준점).
             fingerprint: self.identity.peer_id().short(),
+            // 전체 64hex(M3-26 · 08-22) — 서버 랑데부(⌘/Ctrl+K)의 대상 값.
+            fingerprint_full: nbeep_relay::peer_hex(&self.identity.peer_id()),
             avatar_choice: self.settings.get("profile.avatar").to_string(),
             avatar_border: self.settings.get("profile.avatar_border").to_string(),
             // 툴팁 대기(ms · 08-14) — 무효는 위젯이 기본 2000으로 본다(관용 파싱).
@@ -9281,6 +9335,16 @@ impl App {
                     self.server_settings_changed();
                 }
                 "net.server.address" | "net.server.port" => self.server_settings_changed(),
+                // 프레즌스 공개 hot-swap(X-2e) — 재접속 없이 즉시 반영.
+                "net.server.announce" => {
+                    let on = value == "on";
+                    if let Some(c) = &self.relay {
+                        c.set_announce(on);
+                    }
+                    if !on {
+                        self.clear_server_peers();
+                    }
+                }
                 // 수신 파일 상한(08-18) — 연결된 전 세션 hot-swap(새 오퍼부터 적용).
                 "xfer.recv_max_mb" => {
                     let cap = cap_from_setting(&value).unwrap_or(u64::MAX);
@@ -12025,11 +12089,24 @@ impl App {
             }
             Role::Profile => {
                 let (mut changes, mut pick, mut closed) = (Vec::new(), false, false);
+                let mut copy_fp = None;
                 if let Some(pv) = &mut self.profile_view {
                     pv.on_event(&ev, &mut inv);
                     changes = pv.take_changes();
                     pick = pv.take_pick_image();
                     closed = pv.take_closed();
+                    copy_fp = pv.take_copy_fp();
+                }
+                // 지문 복사(M3-26) — 위젯은 I/O를 모른다 · 클립보드 쓰기는 여기.
+                if let Some(fp) = copy_fp {
+                    self.set_status(if nbeep_plat::clipboard::set_text(&fp) {
+                        nbeep_core::t(nbeep_core::Msg::StFpCopied).to_string()
+                    } else {
+                        "복사 실패 — 클립보드를 열 수 없습니다".to_string()
+                    });
+                    if let Some(mid) = self.main_id {
+                        self.request_redraw(mid);
+                    }
                 }
                 if !changes.is_empty() {
                     // 관리 복사 관문(08-16) — 위젯발 image_path(캐러셀의 옛 원본
@@ -13617,6 +13694,10 @@ impl ApplicationHandler<AppEvent> for App {
                             std::sync::Arc::clone(&self.identity),
                             self.proxy.clone(),
                         );
+                        // 프레즌스 공개(X-2e — 기본 on · 설정 hot-swap은 별도 arm).
+                        if self.settings.get("net.server.announce") != "off" {
+                            client.set_announce(true);
+                        }
                         self.relay = Some(client);
                     }
                     Err(ServerAttachFail::PinMismatch) => {
@@ -15679,6 +15760,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         relay_check_at: 0,
         relay_test: false,
         relay_last_err: None,
+        server_peers: std::collections::HashSet::new(),
         discovery,
         table: nbeep_core::PeerTable::new(60_000),
         trust,
