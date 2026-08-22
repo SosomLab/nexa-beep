@@ -2513,6 +2513,10 @@ struct App {
     /// 연결 테스트 진행 중(08-22 — 설정 › 서버 › 테스트 버튼) — 다음 ServerAttach
     /// 결과를 "테스트 성공/실패" 문구로 보고한다(접속 경로 자체는 평소와 동일).
     relay_test: bool,
+    /// Managed 전환 보류(08-22 사용자 확정 2차) — 실행 중 모드를 Managed로 바꾼
+    /// 직후는 **값이 검증돼 있어도** 자동 접속하지 않는다(Test가 풀 때까지).
+    /// 부팅은 해당 없음(모드 변경 이벤트가 아니다 — 검증값이면 자동 유지).
+    relay_hold: bool,
     /// 마지막 서버 접속 실패 사유(08-22 — 설정 화면 상태 노트 표시용).
     relay_last_err: Option<String>,
     /// ★ 테스트 실패 상태(08-22 사용자 확정 — 경고 배경 노트 + 서버 미사용).
@@ -5012,7 +5016,7 @@ impl App {
         //   Test(relay_test)만이 이 게이트를 지나 1회 시도하고, 성공이 마커를 갱신해
         //   이후의 자동 유지(부팅·재접속)를 연다. 테스트 실패 상태도 사용 중지.
         let verified = server_target_verified(self.settings.get("server.verified"), &raw);
-        if (!verified || self.relay_test_failed.is_some()) && !self.relay_test {
+        if (!verified || self.relay_test_failed.is_some() || self.relay_hold) && !self.relay_test {
             return;
         }
         if self.relay_connecting {
@@ -5203,8 +5207,9 @@ impl App {
             );
         }
         let verified = server_target_verified(self.settings.get("server.verified"), &raw);
-        if !verified {
-            // ★ 검증 게이트(08-22) — 값 변경/최초 = 자동 접속 없음 · 테스트 안내.
+        if !verified || self.relay_hold {
+            // ★ 검증 게이트(08-22) — 값 변경/최초/Managed 전환 보류 = 자동 접속
+            //   없음 · 테스트 안내.
             return (
                 t(Msg::StNoteSrvNeedTest).to_string(),
                 NoteTone::Plain,
@@ -9534,6 +9539,8 @@ impl App {
                 "net.server.mode" => {
                     self.refresh_approval_ui();
                     self.server_settings_changed();
+                    // ★ Managed 전환 = 보류(08-22 2차) — 검증값이어도 Test까지 대기.
+                    self.relay_hold = value == "managed";
                 }
                 "net.server.address" | "net.server.port" => self.server_settings_changed(),
                 // 프레즌스 공개 hot-swap(X-2e) — 재접속 없이 즉시 반영.
@@ -13888,6 +13895,7 @@ impl ApplicationHandler<AppEvent> for App {
                         // 결과면 문구도 테스트 성공으로 덮는다(둘 다 같은 마커).
                         self.relay_last_err = None;
                         self.relay_test_failed = None;
+                        self.relay_hold = false; // 성공한 등록 = 보류 해제
                         let pin = nbeep_relay::peer_hex(&at.client.server_peer());
                         self.mark_server_verified(&at.addr, &pin);
                         if std::mem::take(&mut self.relay_test) {
@@ -15994,6 +16002,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         relay_gen: 0,
         relay_check_at: 0,
         relay_test: false,
+        relay_hold: false,
         relay_last_err: None,
         relay_test_failed: None,
         server_peers: std::collections::HashSet::new(),
