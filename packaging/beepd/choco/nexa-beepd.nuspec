@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
+  <metadata>
+    <id>nexa-beepd</id>
+    <version>@VERSION@</version>
+    <packageSourceUrl>https://github.com/SosomLab/nexa-beep/tree/main/packaging/beepd/choco</packageSourceUrl>
+    <owners>SosomLab</owners>
+    <title>nexa-beepd (Relay Server)</title>
+    <authors>Sangyong Bae</authors>
+    <projectUrl>https://github.com/SosomLab/nexa-beep</projectUrl>
+    <iconUrl>https://raw.githubusercontent.com/SosomLab/nexa-beep/main/packaging/branding/nexa-beep-256.png</iconUrl>
+    <licenseUrl>https://github.com/SosomLab/nexa-beep/blob/main/LICENSE.md</licenseUrl>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <projectSourceUrl>https://github.com/SosomLab/nexa-beep</projectSourceUrl>
+    <bugTrackerUrl>https://github.com/SosomLab/nexa-beep/issues</bugTrackerUrl>
+    <docsUrl>https://github.com/SosomLab/nexa-beep/blob/main/docs/41-beepd-ops-guide.md</docsUrl>
+    <releaseNotes>https://github.com/SosomLab/nexa-beep/releases/tag/beepd-v@VERSION@</releaseNotes>
+    <tags>relay server messenger p2p rendezvous</tags>
+    <summary>Nexa Beep 릴레이 서버(랑데부·홀펀칭·릴레이 폴백)</summary>
+    <description>
+Nexa Beep 메신저의 릴레이 서버입니다. 프레즌스(회전 RID)·랑데부/홀펀칭 관측·
+blind 릴레이만 수행합니다 — 대화 내용은 종단 암호화라 서버가 볼 수 없고,
+아무것도 저장하지 않습니다(버퍼가 아니라 파이프).
+
+- 단일 실행 파일 · 런타임 의존 0
+- 방화벽: TCP·UDP 같은 포트(기본 47300)를 함께 개방
+- 첫 실행이 서버 신원 키(beepd.key)를 만들고 클라이언트가 핀할 값을 출력
+- 운영 가이드: docs/41-beepd-ops-guide.md · 원리: docs/42-relay-rendezvous-walkthrough.md
+
+라이선스: PolyForm Noncommercial 1.0.0 (비상업적 사용).
+    </description>
+  </metadata>
+  <files>
+    <file src="tools\**" target="tools" />
+  </files>
+</package>

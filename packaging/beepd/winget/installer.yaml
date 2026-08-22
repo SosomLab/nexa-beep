@@ -1,0 +1,19 @@
+PackageIdentifier: SosomLab.NexaBeepd
+PackageVersion: "@VERSION@"
+MinimumOSVersion: 10.0.0.0
+# zip 안에 실행 파일 하나 — winget이 풀어서 shim만 만든다(서버도 포터블 규약).
+InstallerType: zip
+NestedInstallerType: portable
+Commands:
+  - nexa-beepd
+UpgradeBehavior: install
+ReleaseDate: "@DATE@"
+Installers:
+  - Architecture: x64
+    InstallerUrl: https://github.com/SosomLab/nexa-beep/releases/download/beepd-v@VERSION@/nexa-beepd-@VERSION@-windows-x64.zip
+    InstallerSha256: @SHA_BEEPD_WIN_X64@
+    NestedInstallerFiles:
+      - RelativeFilePath: nexa-beepd-@VERSION@-windows-x64\nexa-beepd.exe
+        PortableCommandAlias: nexa-beepd
+ManifestType: installer
+ManifestVersion: 1.6.0

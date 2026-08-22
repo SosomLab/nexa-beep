@@ -1,0 +1,170 @@
+# publish-beepd-packages — 릴레이 서버(nexa-beepd)의 패키지 매니저 배포
+#
+# 클라이언트 채널과 **완전 분리**(사용자 확정 08-22 — "서버 배포는 진행, 클라는
+# 검수 대기라 제외"): 스위치도 별도 변수를 쓴다.
+#
+# | 채널 | 스위치 | 시크릿 |
+# |---|---|---|
+# | Homebrew(내 탭 — 검수 없음) | 없음(클라와 같은 정책 — TAP_TOKEN 유무만) | TAP_TOKEN |
+# | winget | `BEEPD_WINGET_PUBLISH=true` | WINGET_TOKEN(클라와 공유) |
+# | Chocolatey | `BEEPD_CHOCO_PUSH=true` | CHOCO_API_KEY(클라와 공유) |
+#
+# release-server.yml이 `beepd-v*` 태그에서 workflow_call로 부르고, 손으로도
+# workflow_dispatch로 돌릴 수 있다(첫 게시·재제출).
+name: publish-beepd-packages
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "서버 릴리스 태그(예: beepd-v0.2.5)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  # ── Homebrew(탭 저장소 — 검수 없음 · 자동) ──
+  homebrew:
+    runs-on: macos-latest
+    env:
+      TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: 릴리스 자산 내려받기
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          set -euo pipefail
+          mkdir -p assets
+          gh release download "${{ inputs.tag }}" --dir assets --pattern 'nexa-beepd-*'
+          ls -lh assets
+      - name: 매니페스트 생성 + 검증
+        env: { TAG: "${{ inputs.tag }}" }
+        run: |
+          set -euo pipefail
+          ./packaging/render-manifests-beepd.sh "${TAG#beepd-v}" assets out
+          ruby -c out/homebrew/Formula/nexa-beepd.rb
+          brew style out/homebrew/Formula/nexa-beepd.rb || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: homebrew-${{ inputs.tag }}
+          path: out/homebrew/**
+      - name: 탭에 반영
+        env: { TAG: "${{ inputs.tag }}" }
+        run: |
+          set -euo pipefail
+          if [ -z "${TAP_TOKEN:-}" ]; then
+            echo "::warning::시크릿 TAP_TOKEN이 없어 탭에 push하지 않았다."
+            echo "아티팩트 homebrew-${TAG}를 받아 kiros33/homebrew-tap의 Formula/nexa-beepd.rb로 커밋하면 된다."
+            exit 0
+          fi
+          git clone --depth 1 "https://x-access-token:${TAP_TOKEN}@github.com/kiros33/homebrew-tap.git" tap
+          mkdir -p tap/Formula
+          cp out/homebrew/Formula/nexa-beepd.rb tap/Formula/
+          cd tap
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/nexa-beepd.rb
+          if git diff --cached --quiet; then
+            echo "변경 없음 — 이미 ${TAG#beepd-v}가 반영되어 있다."
+            exit 0
+          fi
+          git commit -m "nexa-beepd ${TAG#beepd-v}"
+          git push
+          echo "탭 반영 완료 — brew install kiros33/tap/nexa-beepd"
+
+  # ── Chocolatey(중앙 저장소 · 검수 있음) ──
+  chocolatey:
+    runs-on: windows-latest
+    env:
+      CHOCO_API_KEY: ${{ secrets.CHOCO_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: 릴리스 자산 내려받기
+        shell: bash
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          set -euo pipefail
+          mkdir -p assets
+          gh release download "${{ inputs.tag }}" --dir assets --pattern 'nexa-beepd-*'
+      - name: 매니페스트 생성 + pack
+        shell: bash
+        env: { TAG: "${{ inputs.tag }}" }
+        run: |
+          set -euo pipefail
+          v="${TAG#beepd-v}"
+          ./packaging/render-manifests-beepd.sh "$v" assets out
+          mkdir -p out/choco/nupkg
+          choco pack "out/choco/nexa-beepd/nexa-beepd.nuspec" --version "$v" --outputdirectory out/choco/nupkg
+          ls -l out/choco/nupkg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chocolatey-${{ inputs.tag }}
+          path: out/choco/**
+      - name: choco push(BEEPD_CHOCO_PUSH + CHOCO_API_KEY 있을 때만)
+        if: vars.BEEPD_CHOCO_PUSH == 'true' && env.CHOCO_API_KEY != ''
+        shell: bash
+        env: { TAG: "${{ inputs.tag }}" }
+        run: |
+          set -euo pipefail
+          v="${TAG#beepd-v}"
+          choco push "out/choco/nupkg/nexa-beepd.$v.nupkg" \
+            --source https://push.chocolatey.org/ --api-key "$CHOCO_API_KEY"
+          echo "제출 완료 — 커뮤니티 저장소는 검수를 거쳐야 노출된다(즉시 아님)."
+      - name: 건너뛴 이유 안내
+        if: vars.BEEPD_CHOCO_PUSH != 'true' || env.CHOCO_API_KEY == ''
+        shell: bash
+        run: |
+          echo "::notice::choco push하지 않았다(BEEPD_CHOCO_PUSH='${{ vars.BEEPD_CHOCO_PUSH }}')."
+
+  # ── winget(중앙 저장소 · PR + 자동 검증) ──
+  winget:
+    runs-on: windows-latest
+    env:
+      WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: 릴리스 자산 내려받기
+        shell: bash
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          set -euo pipefail
+          mkdir -p assets
+          gh release download "${{ inputs.tag }}" --dir assets --pattern 'nexa-beepd-*'
+      - name: 매니페스트 생성 + 검증
+        shell: bash
+        env: { TAG: "${{ inputs.tag }}" }
+        run: |
+          set -euo pipefail
+          ./packaging/render-manifests-beepd.sh "${TAG#beepd-v}" assets out
+          find out/winget -name '*.installer.yaml' -exec dirname {} \; | sort -u > dirs.txt
+          [ -s dirs.txt ] || { echo "::error::winget 매니페스트를 찾지 못했다"; exit 1; }
+          while read -r d; do
+            echo "== $d"; winget validate --manifest "$d" || exit 1
+          done < dirs.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: winget-${{ inputs.tag }}
+          path: out/winget/**
+      - name: winget-pkgs PR(BEEPD_WINGET_PUBLISH + WINGET_TOKEN 있을 때만)
+        if: vars.BEEPD_WINGET_PUBLISH == 'true' && env.WINGET_TOKEN != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl.exe -L -o wingetcreate.exe https://aka.ms/wingetcreate/latest
+          find out/winget -name '*.installer.yaml' -exec dirname {} \; | sort -u > dirs.txt
+          while read -r d; do
+            ./wingetcreate.exe submit --token "$WINGET_TOKEN" "$d"
+          done < dirs.txt
+          echo "PR 생성 — microsoft/winget-pkgs 자동 검증·리뷰 후 노출된다."
+      - name: 건너뛴 이유 안내
+        if: vars.BEEPD_WINGET_PUBLISH != 'true' || env.WINGET_TOKEN == ''
+        shell: bash
+        run: |
+          echo "::notice::winget PR을 만들지 않았다(BEEPD_WINGET_PUBLISH='${{ vars.BEEPD_WINGET_PUBLISH }}')."

@@ -211,3 +211,13 @@ jobs:
           else
             gh release create "$TAG" staged/* "${args[@]}"
           fi
+
+  # ── 패키지 매니저 배포(08-22 — brew 자동 · winget/choco는 BEEPD_* 스위치) ──
+  # 클라이언트 채널(publish-windows-packages)과 완전 분리 — 스위치도 별도 변수.
+  packages:
+    needs: [meta, publish]
+    if: startsWith(needs.meta.outputs.tag, 'beepd-v') && github.ref_type == 'tag'
+    uses: ./.github/workflows/publish-beepd-packages.yml
+    secrets: inherit
+    with:
+      tag: ${{ needs.meta.outputs.tag }}

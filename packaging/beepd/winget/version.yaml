@@ -1,0 +1,6 @@
+# winget 매니페스트 — nexa-beepd(릴레이 서버 · 포터블). @자리@는 워크플로가 치환.
+PackageIdentifier: SosomLab.NexaBeepd
+PackageVersion: "@VERSION@"
+DefaultLocale: ko-KR
+ManifestType: version
+ManifestVersion: 1.6.0
