@@ -1,12 +1,19 @@
 # 41. beepd 설치·운영 가이드 — 릴레이 서버를 세우고 상주시키는 법
 
 > **성격**: 운영 문서(실측 기반 — 2026-08-22 OCI 무료 티어 VM 첫 상시 배치에서 검증).
+> **범위**: **Linux · Windows · macOS 3-OS**. 주 무대는 Linux(클라우드 상주)지만 사내 PC를
+> 릴레이로 쓰는 경우가 있어 OS별 경로·상주 등록·방화벽·키 권한을 각각 적는다.
+> Linux는 OCI 실배치 실측, macOS는 이 저장소 맥에서 기동 실측(08-22), Windows는 절차 기준.
 > 서버가 "무엇을 하는가/못 보는가"는 [32 ADR-0013](32-adr-0013-server-modes.md),
 > 클라이언트 접속·검증 절차는 [26 §3-7](26-run-and-manual-test.md), 단발 실측 킷은
 > [tools/beepd-cloud](../tools/beepd-cloud/README.md).
 > ⚠️ **실서버의 주소·핀은 공개 문서에 적지 않는다**(스팸 표면) — 이 문서는 절차만.
 
 ## 0. 한 장 요약
+
+**Linux 상주가 기본**이고(클라우드), Windows·macOS는 사내 PC를 릴레이로 쓸 때다 —
+경로는 [§2-1](#2-1-windows--macos-경로), 상주 등록은 [§4-2 Windows](#4-2-windows--작업-스케줄러)·
+[§4-3 macOS](#4-3-macos--launchd-상주), 한눈 대응표는 [§9-1](#9-1-os별-대응표--같은-일을-어디서-하나).
 
 ```bash
 # Linux x64 기준 — 릴리스 자산은 musl 정적이라 어느 배포판이든 이 네 줄이 전부다
@@ -16,8 +23,8 @@ sudo install -m 0755 nexa-beepd-0.2.3-linux-x64/nexa-beepd /opt/beepd/nexa-beepd
 sudo /opt/beepd/nexa-beepd --port 47300      # 첫 실행 = 키 생성 + "서버 신원(핀)" 출력
 ```
 
-상주는 [§4 systemd](#4-시스템-등록-systemd-상주), 방화벽은 [§5](#5-방화벽--이중이다),
-1GB급 무료 VM이면 [§7 저메모리 체크리스트](#7-저메모리-vm-체크리스트-1gb-무료-티어-실측)가 **필수**다.
+상주는 [§4-1 systemd](#4-1-linux--systemd), 방화벽은 [§5](#5-방화벽--이중이다),
+1GB급 무료 VM이면 [§7 저메모리 체크리스트](#7-저메모리-vm-체크리스트-1gb-무료-티어--실측)가 **필수**다.
 
 ## 1. 배포 형태 — 무엇을 받는가
 
@@ -30,8 +37,8 @@ sudo /opt/beepd/nexa-beepd --port 47300      # 첫 실행 = 키 생성 + "서버
 |---|---|---|
 | `nexa-beepd-*-linux-x64.tar.gz` | Linux x86_64 | ★ **musl 정적**(static-pie · 실측 651KB) — glibc·배포판 무관, scratch 컨테이너 가능 |
 | `nexa-beepd-*-linux-arm64.tar.gz` | Linux aarch64 | ★ musl 정적 — OCI Ampere A1·라즈베리파이류 |
-| `nexa-beepd-*-windows-x64.zip` | Windows | 사내 PC를 릴레이로 쓰는 시나리오 |
-| `nexa-beepd-*-macos-arm64.tar.gz` | macOS | 〃 |
+| `nexa-beepd-*-windows-x64.zip` | Windows x64 | **콘솔 앱**(클라이언트와 달리 `windows_subsystem` 미지정 — 창이 아니라 콘솔에 뜬다) · 별도 런타임 설치 불요 |
+| `nexa-beepd-*-macos-arm64.tar.gz` | macOS **Apple Silicon 전용** | ⚠️ **Intel Mac 자산은 없다** — arm64 바이너리는 Intel에서 실행되지 않는다(Rosetta는 반대 방향 변환). Intel은 [§4-3](#4-3-macos--launchd-상주)의 소스 빌드 |
 
 - 아카이브 내용물 = `nexa-beepd`(단일 실행 파일) + `README.md` + `LICENSE.md`.
   **외부 의존 0** — 설치할 런타임·라이브러리가 없다(DR-5의 서버판).
@@ -56,6 +63,29 @@ sudo chown -R beepd:beepd /opt/beepd
   읽고 쓸 일이 키 하나뿐이다(T0 원칙의 서버판).
 - 업데이트 = 새 자산으로 실행 파일만 교체(`install` 덮어쓰기) 후 재시작.
   **`beepd.key`는 절대 지우지 않는다**([§6]).
+
+### 2-1. Windows · macOS 경로
+
+| OS | 실행 파일 | 키 | 왜 이 자리인가 |
+|---|---|---|---|
+| **Windows** | `C:\Program Files\beepd\nexa-beepd.exe` | `C:\ProgramData\beepd\beepd.key` | Program Files는 실행 계정이 쓸 수 없다 — **키는 반드시 쓰기 가능한 머신 공용 경로**로 뺀다(`--key`로 지정). 안 나누면 첫 기동이 키 생성에 실패한다 |
+| **macOS** | `/usr/local/beepd/nexa-beepd` | `/usr/local/beepd/beepd.key` | `/usr/local`은 관리자 소유라 SIP 보호 밖이다 → Linux와 같은 "실행 파일 옆" 규약을 그대로 쓴다 |
+
+```powershell
+# Windows (관리자 PowerShell)
+New-Item -ItemType Directory -Force "C:\Program Files\beepd", "C:\ProgramData\beepd" | Out-Null
+Expand-Archive .\nexa-beepd-0.2.3-windows-x64.zip -DestinationPath $env:TEMP\beepd -Force
+Copy-Item $env:TEMP\beepd\*\nexa-beepd.exe "C:\Program Files\beepd\"
+```
+
+```bash
+# macOS (Apple Silicon — 릴리스 자산)
+sudo mkdir -p /usr/local/beepd
+tar -xzf nexa-beepd-0.2.3-macos-arm64.tar.gz
+sudo install -m 0755 nexa-beepd-0.2.3-macos-arm64/nexa-beepd /usr/local/beepd/nexa-beepd
+# ⚠️ 브라우저로 받았다면 격리 표식을 뗀다(무서명 배포 — curl로 받으면 붙지 않는다)
+sudo xattr -dr com.apple.quarantine /usr/local/beepd/nexa-beepd
+```
 
 ## 3. 실행 — 옵션과 첫 기동
 
@@ -86,7 +116,31 @@ nexa-beepd v0.2.3 가동
 - 서버는 **아무것도 저장하지 않는다** — 재시작해도 잃는 것은 진행 중이던 채널뿐이고,
   클라이언트가 백오프로 재접속한다.
 
-## 4. 시스템 등록 — systemd 상주
+### 3-1. OS별 첫 기동
+
+```powershell
+# Windows (관리자 PowerShell) — 콘솔에 그대로 뜬다. Ctrl+C로 중단
+& "C:\Program Files\beepd\nexa-beepd.exe" --port 47300 --key "C:\ProgramData\beepd\beepd.key" --verbose
+```
+
+```bash
+# macOS — 실측 08-22(이 저장소 맥에서 기동 확인)
+sudo /usr/local/beepd/nexa-beepd --port 47300 --key /usr/local/beepd/beepd.key --verbose
+```
+
+**macOS 실측(08-22 · 네이티브 빌드)** — 기동 즉시 `TCP *:47300 (LISTEN)` + `UDP *:47300`
+둘 다 잡히고, 키가 없으면 생성 후 핀을 출력한다. **상주 RSS 0.9MB**(`ps -o rss=`) ·
+바이너리 508KB. 서버가 가볍다는 주장은 Linux만의 이야기가 아니다.
+
+> ⚠️ **`--bind` 기본값 `0.0.0.0`은 IPv4만 듣는다**(3-OS 공통 · 실측에서 `lsof`가 IPv4
+> 소켓만 보여 준다). IPv6로도 받으려면 **`--bind ::`** 로 띄운다 — IPv6 전용 VM
+> (예: 외부 IPv4가 없는 GCP 인스턴스)에서는 이걸 빠뜨리면 아무도 못 붙는다.
+
+## 4. 시스템 등록 — OS별 상주
+
+서버의 주 무대는 Linux지만([32 §12-6]), 사내 PC를 릴레이로 쓰는 시나리오가 있어 3-OS 모두 적는다.
+
+### 4-1. Linux — systemd
 
 `/etc/systemd/system/beepd.service` (08-22 OCI 실전 유닛 그대로):
 
@@ -117,9 +171,79 @@ sudo journalctl -u beepd -f              # 로그(핀 값은 여기 첫 블록�
 - **`MemoryMax=128M`** — 서버 실측 상주가 수 MB라 여유가 크지만, 저메모리 VM에서
   서버가 폭주해도 **시스템 전체를 굶기지 못하게** 상한을 박는다([§7]의 교훈).
 - `Restart=on-failure` + "저장 0" 조합이라 재시작이 언제나 안전하다.
-- **Windows**: 서비스 등록 없이 작업 스케줄러(로그온 시 실행)나 수동 실행으로 충분
-  (사내 PC 릴레이 시나리오). **macOS**: launchd plist(`KeepAlive`) — 둘 다 옵션·기본
-  경로는 수동 실행이다(서버의 주 무대는 Linux — [32 §12-6]).
+### 4-2. Windows — 작업 스케줄러
+
+⚠️ **`sc.exe create`로 직접 서비스 등록하면 안 된다.** `nexa-beepd`는 **평범한 콘솔
+앱**이라 서비스 제어 관리자(SCM)에 응답하지 않는다 — 등록해도 시작 시
+**오류 1053**(서비스가 제때 응답하지 않았습니다)로 죽는다. 서비스로 만들려면 별도
+래퍼(NSSM·WinSW 등 외부 도구)가 필요하고, 그건 이 문서의 범위 밖이다.
+
+**추가 설치물 없이 되는 방법 = 작업 스케줄러**(시스템 시작 시 · 로그온 불요):
+
+```powershell
+# 관리자 PowerShell — 부팅 시 자동 시작 + 창 없이 상주
+$exe = "C:\Program Files\beepd\nexa-beepd.exe"
+$arg = '--port 47300 --key "C:\ProgramData\beepd\beepd.key" --verbose'
+$act = New-ScheduledTaskAction -Execute $exe -Argument $arg
+$trg = New-ScheduledTaskTrigger -AtStartup
+$prn = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+$set = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+       -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit 0
+Register-ScheduledTask -TaskName beepd -Action $act -Trigger $trg -Principal $prn -Settings $set
+
+Start-ScheduledTask -TaskName beepd
+Get-ScheduledTask -TaskName beepd | Get-ScheduledTaskInfo    # LastTaskResult 0 = 정상
+```
+
+- `-UserId "SYSTEM"`이면 **로그온하지 않아도** 뜨고 콘솔 창이 보이지 않는다.
+  일반 계정으로 돌리려면 47300이 비특권 포트라 권한 승격이 필요 없다(Linux의 비루트 원칙과 같다).
+- ★ **첫 핀 값을 봐야 한다** — SYSTEM으로 돌리면 콘솔 출력이 어디에도 남지 않는다.
+  **최초 1회는 수동으로 포그라운드 실행**([§3-1](#3-1-os별-첫-기동))해 핀을 받아 적고,
+  그다음에 작업을 등록한다. 또는 `--verbose` 출력을 파일로 돌린다
+  (`cmd /c ""C:\Program Files\beepd\nexa-beepd.exe" … >> C:\ProgramData\beepd\beepd.log 2>&1"`).
+- 제거 = `Unregister-ScheduledTask -TaskName beepd -Confirm:$false`.
+
+### 4-3. macOS — launchd 상주
+
+`/Library/LaunchDaemons/com.sosomlab.beepd.plist`(**LaunchDaemon** = 부팅 시 · 로그온 불요.
+LaunchAgent는 로그인 세션에 묶이므로 서버에는 쓰지 않는다):
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key>            <string>com.sosomlab.beepd</string>
+  <key>ProgramArguments</key> <array>
+    <string>/usr/local/beepd/nexa-beepd</string>
+    <string>--port</string><string>47300</string>
+    <string>--key</string> <string>/usr/local/beepd/beepd.key</string>
+    <string>--verbose</string>
+  </array>
+  <key>RunAtLoad</key>        <true/>
+  <key>KeepAlive</key>        <true/>
+  <key>WorkingDirectory</key> <string>/usr/local/beepd</string>
+  <key>StandardOutPath</key>  <string>/usr/local/beepd/beepd.log</string>
+  <key>StandardErrorPath</key><string>/usr/local/beepd/beepd.log</string>
+</dict></plist>
+```
+
+```bash
+sudo chown root:wheel /Library/LaunchDaemons/com.sosomlab.beepd.plist
+sudo chmod 0644      /Library/LaunchDaemons/com.sosomlab.beepd.plist
+sudo launchctl bootstrap system /Library/LaunchDaemons/com.sosomlab.beepd.plist   # 등록+기동
+sudo launchctl print system/com.sosomlab.beepd | head -20                          # 상태
+sudo launchctl bootout  system/com.sosomlab.beepd                                  # 해제
+```
+
+- **핀 값은 `beepd.log` 첫 블록**에 있다(`StandardOutPath` — systemd의 journalctl 자리).
+- `KeepAlive`가 systemd의 `Restart=on-failure`에 해당한다. 서버는 저장이 없어 재시작이 언제나 안전하다.
+- **Intel Mac**은 릴리스 자산이 없다 → 소스에서 빌드한다(외부 의존 0이라 툴체인만 있으면 된다):
+  ```bash
+  cargo build --release -p nexa-beepd   # → target/release/nexa-beepd (실측 508KB · macOS x86_64)
+  ```
+- `launchctl load -w`는 구식 문법이다(동작은 하지만 `bootstrap`/`bootout`을 쓴다).
+- 무서명 배포라 **브라우저로 받은 파일은 격리 표식** 때문에 실행이 막힌다 →
+  [§2-1](#2-1-windows--macos-경로)의 `xattr -dr com.apple.quarantine`.
 
 ## 5. 방화벽 — **이중**이다
 
@@ -129,7 +253,7 @@ UDP를 빼먹으면 관측·홀펀칭이 조용히 죽고 릴레이 폴백만 �
 | 겹 | 어디서 | 예 |
 |---|---|---|
 | ① 클라우드 방화벽 | OCI 보안 목록 / GCP 방화벽 규칙 / AWS SG | TCP 47300 + **UDP 47300** ingress |
-| ② OS 방화벽 | Oracle Linux/RHEL = firewalld · Ubuntu = ufw(기본 무장 해제) | 아래 명령 |
+| ② OS 방화벽 | Linux: RHEL 계열 = firewalld · Ubuntu = ufw(기본 무장 해제) · **Windows: Defender 방화벽**(기본 차단) · **macOS: 응용 프로그램 방화벽**(기본 off인 경우가 많다) | 아래 명령 |
 
 ```bash
 # Oracle Linux / RHEL 계열 (firewalld) — 08-22 OCI 실측
@@ -139,6 +263,24 @@ sudo firewall-cmd --reload && sudo firewall-cmd --list-ports
 # Ubuntu (ufw를 쓰는 경우)
 sudo ufw allow 47300/tcp && sudo ufw allow 47300/udp
 ```
+
+```powershell
+# Windows (관리자 PowerShell) — TCP·UDP 두 줄 다 필요하다
+New-NetFirewallRule -DisplayName "beepd 47300 TCP" -Direction Inbound -Protocol TCP -LocalPort 47300 -Action Allow
+New-NetFirewallRule -DisplayName "beepd 47300 UDP" -Direction Inbound -Protocol UDP -LocalPort 47300 -Action Allow
+Get-NetFirewallRule -DisplayName "beepd*" | Format-Table DisplayName, Enabled, Direction
+```
+
+```bash
+# macOS — 응용 프로그램 방화벽은 포트가 아니라 **앱 단위**다
+sudo /usr/libexec/ApplicationFirewall/socketfilterfw --getglobalstate      # 꺼져 있으면 할 일 없음
+sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add /usr/local/beepd/nexa-beepd
+sudo /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp /usr/local/beepd/nexa-beepd
+```
+
+> **macOS 주의** — 켜져 있으면 무서명 바이너리가 첫 인바운드에서 **"수신 연결을 허용하시겠습니까"
+> 대화상자**를 띄운다. 헤드리스·원격 관리 중이면 그 창을 아무도 못 눌러 조용히 막힌 것처럼 보인다.
+> 위 `--add`/`--unblockapp`를 **미리** 넣어 둔다. 포트 단위로 통제하려면 ALF가 아니라 `pf`를 쓴다.
 
 > ⚠️ **클라우드 보안 목록만 열고 끝났다고 믿지 말 것** — Oracle Linux 이미지는
 > firewalld가 기본 가동이라 ①만 열면 패킷이 OS에서 죽는다(08-22 실측 경로).
@@ -154,9 +296,17 @@ sudo ufw allow 47300/tcp && sudo ufw allow 47300/udp
     `data/server.pin`에서 옛 줄을 지우고 재핀해야 한다(사람의 결정 — 자동화 없음).
   - 키가 **유출되면** = 서버 사칭 가능(단, 대화 내용은 종단 E2E라 여전히 못 본다 —
     S-3) → 의도적으로 키를 교체하고 사용자들에게 새 핀을 공지한다.
-- 파일 권한: `chown beepd:beepd` + 기본 0600(서버가 생성 시). 백업본도 600으로.
+- 파일 권한(OS별):
+
+| OS | 키 경로 | 권한 조치 |
+|---|---|---|
+| Linux | `/opt/beepd/beepd.key` | `chown beepd:beepd` + 기본 0600(서버가 생성 시). 백업본도 600 |
+| Windows | `C:\ProgramData\beepd\beepd.key` | 상속 끊고 실행 계정만 남긴다 — `icacls "C:\ProgramData\beepd\beepd.key" /inheritance:r /grant:r "SYSTEM:(R,W)" "Administrators:(R,W)"` (기본 ProgramData ACL은 **인증된 사용자 전원 읽기**라 그대로 두면 안 된다) |
+| macOS | `/usr/local/beepd/beepd.key` | `sudo chown root:wheel … && sudo chmod 600 …`(LaunchDaemon이 root로 돌 때) |
 
 ## 7. 저메모리 VM 체크리스트 (1GB 무료 티어 — 실측)
+
+> **이 절은 Linux 클라우드 VM 한정이다** — Windows·macOS 상주(사내 PC)에는 해당 없다.
 
 beepd 자체는 수 MB지만, **1GB급 무료 VM은 기본 이미지 상태가 이미 OOM 경계선**이다.
 08-22 OCI E2.1.Micro(Oracle Linux)에서 SSH 행까지 간 실사례에서 나온 처방:
@@ -199,7 +349,23 @@ sudo install -m 0755 nexa-beepd /opt/beepd/nexa-beepd && sudo systemctl restart 
 # 철거: systemctl disable --now beepd → /opt/beepd 삭제 (beepd.key 백업 먼저!)
 ```
 
+### 9-1. OS별 대응표 — 같은 일을 어디서 하나
+
+| 하는 일 | Linux(systemd) | Windows(작업 스케줄러) | macOS(launchd) |
+|---|---|---|---|
+| 상태 | `systemctl is-active beepd` | `Get-ScheduledTaskInfo -TaskName beepd` | `sudo launchctl print system/com.sosomlab.beepd` |
+| 시작·중지 | `systemctl start/stop beepd` | `Start-ScheduledTask` / `Stop-ScheduledTask -TaskName beepd` | `sudo launchctl kickstart -k system/com.sosomlab.beepd` / `bootout` |
+| 로그(핀 포함) | `journalctl -u beepd` | 리다이렉트한 `C:\ProgramData\beepd\beepd.log` | `/usr/local/beepd/beepd.log`(`StandardOutPath`) |
+| 자동 시작 등록/해제 | `systemctl enable/disable --now beepd` | `Register-` / `Unregister-ScheduledTask` | `launchctl bootstrap` / `bootout system` |
+| 업데이트 | 파일 교체 → `systemctl restart` | **작업 중지 → exe 교체 → 시작**(실행 중이면 파일 잠김) | 파일 교체 → `launchctl kickstart -k` |
+| 메모리 상한 | 유닛 `MemoryMax=128M` | (작업 스케줄러엔 없음 — 필요하면 작업 개체/WSRM) | (launchd엔 직접 대응 없음 — `ulimit`/래퍼) |
+
+> ★ **Windows 업데이트 시 파일 잠김** — 실행 중인 exe는 덮어쓸 수 없다. `Stop-ScheduledTask`
+> 먼저다(Linux/macOS는 실행 중 교체가 되지만, 재시작 전까지 옛 코드가 돈다는 점은 같다).
+
 - 로그는 **봉투만** 담는다(`--verbose`여도 conn#·RID 앞 4B·ch#·바이트 수) —
   로그 유출이 대화 유출이 되지 않는다(S-3). 그래도 로그 보존 정책은 짧게.
+- **Windows·macOS 상주는 로그 로테이션이 없다**(systemd journal과 달리 파일에 무한 append) —
+  `--verbose`로 오래 돌릴 거면 주기적으로 잘라 낸다.
 - `--rate`는 연결당 상한이다 — 공개망에 열어 두는 서버라면 기본 1 MiB/s 유지 권장
   (무단 사용자가 있어도 파이프 비용이 상한된다). 신뢰 사용자만이라면 `0`도 무방.
