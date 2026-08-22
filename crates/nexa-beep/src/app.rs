@@ -4901,8 +4901,11 @@ impl App {
             if fpath != "all" && self.peer_filter_path(e.peer) != fpath {
                 return false;
             }
-            let online =
-                self.conversations.contains_key(&e.peer) || self.table.get(e.peer).is_some();
+            // 온라인 = 지금 닿는 상대(08-23 확장): 세션 ∨ LAN 발견 ∨ **서버 roster
+            // 생존**(PeerUp/PeerDown이 실시간 — 목록에 있다 = 서버 접속 중).
+            let online = self.conversations.contains_key(&e.peer)
+                || self.table.get(e.peer).is_some()
+                || self.server_peers.contains(&e.peer);
             match fpres.as_str() {
                 "online" if !online => return false,
                 "offline" if online => return false,
@@ -5005,10 +5008,15 @@ impl App {
                 let conflict = self.trust.name_conflict(entry.peer, &entry.name).is_some();
                 // 최근 접속 상대 시각(08-17 — 삭제 메뉴가 시각만 표시).
                 let last_seen_label = ago_label(self.trust.meta(entry.peer).0);
+                // 프레즌스(08-23 — 점 색 축): 필터 판정과 같은 정의.
+                let online = self.table.get(entry.peer).is_some()
+                    || self.server_peers.contains(&entry.peer)
+                    || self.conversations.contains_key(&entry.peer);
                 PeerRow {
                     entry,
                     trust,
                     link,
+                    online,
                     xfer,
                     profile_name,
                     bio,

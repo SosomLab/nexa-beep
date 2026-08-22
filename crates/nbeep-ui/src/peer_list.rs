@@ -100,6 +100,9 @@ pub struct PeerRow {
     pub trust: TrustLevel,
     /// 세션 링크 상태(상태 점 — 사용자 요청 08-09: 끊어진 대상 식별).
     pub link: LinkState,
+    /// 프레즌스(08-23 — **지금 닿는 상대인가**: LAN 발견 생존 ∨ 서버 roster 생존).
+    /// 점 부호화 2축의 색 축 — 세션 없어도(Idle 실루엣) 온라인이면 초록.
+    pub online: bool,
     /// 진행 중 파일 전송(있으면 이름 **바로 아래**에 진행 막대 · 사용자 요청 08-09).
     pub xfer: Option<XferProgress>,
     /// 프로필에 등록된 표시 이름(M3-17). 08-17 사용자 확정 — **굵은 1줄 = 표시
@@ -284,18 +287,26 @@ pub fn link_color(theme: &Theme, link: LinkState) -> Color {
 /// `Active`=꽉 찬 원 · `Lost`=가로 막대. 기하는 지름 `D` **비율 고정**(구멍 0.53D ·
 /// 막대 0.56×0.19D · 갭 90°)이라 배율 무관. `shape=false`(`ui.link_badge_shape` off)면
 /// 종전 채운 원. 자산·의존 0 — 전부 수식 렌더다.
+/// `online` = 프레즌스 색 축(08-23 사용자 확정 — roster·LAN 생존 상대가 세션이
+/// 없다고 회색이면 "온라인 아님"으로 읽힌다): **색 = 지금 닿는가 · 실루엣 =
+/// 세션 유무**. Idle인데 온라인이면 초록 빈 링.
 pub fn draw_link_badge(
     ctx: &mut dyn DrawCtx,
     dot: Rect,
     theme: &Theme,
     link: LinkState,
+    online: bool,
     shape: bool,
     spin_step: u8,
 ) {
     // 배경색 테두리 — 아바타와 분리(현행 유지 · 파냄도 같은 면으로 뚫는다).
     let back = Rect::new(dot.x - 1, dot.y - 1, dot.w + 2, dot.h + 2);
     ctx.fill_ellipse(back, theme.panel_bg);
-    let color = link_color(theme, link);
+    let color = if link == LinkState::Idle && online {
+        theme.ok // 온라인(닿는 상대) — 세션 없음은 실루엣(빈 링)이 말한다
+    } else {
+        link_color(theme, link)
+    };
     if !shape {
         ctx.fill_ellipse(dot, color);
         return;
@@ -1522,6 +1533,7 @@ impl Widget for PeerListWidget {
                 dot,
                 theme,
                 row.link,
+                row.online,
                 self.badge_shape,
                 self.spin_step.get(),
             );
@@ -1754,6 +1766,7 @@ mod tests {
             },
             trust,
             link: LinkState::Idle,
+            online: false,
             xfer: None,
             profile_name: None,
             bio: None,

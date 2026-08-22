@@ -20,7 +20,7 @@ fn render(link: LinkState, shape: bool, spin: u8, dot: Rect) -> Vec<u32> {
     {
         let mut s = Surface::new(&mut buf, 32, 32);
         let mut ctx = nbeep_ui::RasterCtx::new(&mut s, &f);
-        draw_link_badge(&mut ctx, dot, &th, link, shape, spin);
+        draw_link_badge(&mut ctx, dot, &th, link, false, shape, spin);
     }
     buf
 }

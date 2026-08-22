@@ -243,7 +243,15 @@ impl Widget for AlertWidget {
                 }
                 let dot = Rect::new(b.x + pad, y + (ctx.text_height() - dot_d) / 2, dot_d, dot_d);
                 // 목록 배지와 같은 실루엣 문법(M3-19) — 회전은 없다(모달은 정적 스냅샷).
-                crate::peer_list::draw_link_badge(ctx, dot, theme, *link, self.badge_shape, 0);
+                crate::peer_list::draw_link_badge(
+                    ctx,
+                    dot,
+                    theme,
+                    *link,
+                    false,
+                    self.badge_shape,
+                    0,
+                );
                 ctx.text(dot.right() + self.s(8), y, b, text, theme.text);
                 y += lh;
             }
