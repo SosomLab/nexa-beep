@@ -305,7 +305,7 @@ impl Widget for FilterBarWidget {
         let mut chips = self.chips.borrow_mut();
         chips.clear();
         let side = b.h - self.s(6) - 1; // 칩 정사각(위 3 · 아래 3+경계선)
-        let icon_d = self.s(14); // 아이콘 실크기(칩 안 중앙 — 08-23 75% 축소)
+        let icon_d = self.s(16); // 아이콘 실크기(칩 안 중앙 — 08-23 확정 16)
         let mut x = b.x + self.s(8);
         for (gi, (_, gmsg, group)) in GROUPS.iter().enumerate() {
             if gi > 0 {
