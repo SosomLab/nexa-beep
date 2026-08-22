@@ -7,6 +7,7 @@
 
 ## 2026-08-22
 
+- **(mac) ★OCI 무료 티어 릴레이 서버 상시 배치 + 공인망 왕복 실측**: E2.1.Micro(1GB OL)의 SSH 행을 콘솔 히스토리로 진단(dnf-makecache OOM·WLP·**crashkernel이 RAM 절반 예약**) → mask·플러그인 API 비활성·crashkernel 제거(498→945MB)·스왑 2G → **beepd-v0.2.3 musl 정적 수 초 설치**(빌드 도구 0)·firewalld 이중 개방·systemd(MemoryMax) → 왕복 실측 = 등록·핀→랑데부→**릴레이 폴백**→전달·읽음 확인(헤어핀 펀치 실패 = 예상 갈래) · 맥 앱 0.2.3 업그레이드 · 주소·핀은 공개 문서 미기재. 잔여 = 맥↔회사 Win 다른 NAT 펀치(사용자 실기).
 - **(mac) ★v0.2.3 + beepd-v0.2.3 동시 공개**(`dcc58f7`+태그 2): 클라 = 서버 접속(GUI Managed·CLI)·지문 연결·설정 영속 수정(자산 14종 · brew 자동 추종 ✓) · ★서버 첫 릴리스(release-server.yml 첫 가동 — **Linux musl 정적 CI 검증 통과** · 자산 4종) · winget/choco = 스위치 false로 제외 확인(잡 로그 실증). 게이트 선행 = 781 green·교차 check 0.
 - **(mac) ★X-2b GUI Managed 배선 완결 + musl 정적 전환 + 채널 판정**(커밋 7 · `bd1ae07`~`c9a7cdb`): 접속 정책 공용화(`nbeep_relay::attach`+`is_alive` — CLI·GUI 한 벌)·`server_tick`(설정 SSOT 수렴·백오프 300s 상한 반복·핀 불일치 = 모달+정지)·인바운드 accept_via → 기존 Inbound 깔때기(새 정책 0)·아웃바운드 3단 사다리+**주소 모달 64자리 지문 연결** · ★스모크 발각 2건 수정(**자유 입력형 설정 재시작 증발**(키 미등록 영속 구멍·08-17 잠복)·--whoami 전체 지문) · ★**로컬 3프로세스 실측 = 설정만으로 접속→핀→홀펀칭 직결→GUI 메시지 도달** · **musl 정적 전환**(x64 static-pie 651KB · `.cargo/config.toml` 한 곳 · beepd-cloud = 바이너리 업로드 기본) · **winget/choco 승인 대기 판정 → 스위치 false**(이번 릴리스 제외). **781 green**.
 - **(Win) ★`feat/udp-relay-server` main 병합·push**(`4562bff` --no-ff · 9커밋 · 사용자 확정): UDP+릴레이 서버 축 전체(X-UDP-a~e·X-1 MVP·X-2c CLI·배포 분리·클라우드 킷) — 최종 게이트 fmt+전체 테스트 green 후 병합 · 브랜치 삭제·이력은 [BRANCHES](BRANCHES.md). 잔여 = X-2b GUI 배선·실 NAT 실기(beepd-cloud 킷으로)·X-2c P3.
