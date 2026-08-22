@@ -174,9 +174,11 @@ impl FilterBarWidget {
     }
 
     /// hover 칩의 툴팁(08-23) — **팝업 레이어**에서 부른다(아래 목록 위에 얹힘).
+    /// 형식 = 칩 이름만(그룹 접두 없음 — 08-23 사용자 확정: 그룹 이름은 바에
+    /// 이미 보인다).
     pub fn paint_tooltip(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
         if let Some((gi, ci)) = self.hover {
-            let (_, gmsg, group) = GROUPS[gi];
+            let (_, _, group) = GROUPS[gi];
             if let Some((_, label, _)) = group.get(ci) {
                 let anchor = self
                     .chips
@@ -185,13 +187,12 @@ impl FilterBarWidget {
                     .find(|(g, c, _)| (*g, *c) == (gi, ci))
                     .map(|(_, _, r)| *r);
                 if let Some(anchor) = anchor {
-                    let text = format!("{} · {}", t(gmsg), t(*label));
                     crate::draw::draw_tooltip(
                         ctx,
                         theme,
                         anchor,
                         self.bounds.right(),
-                        &text,
+                        t(*label),
                         self.scale,
                     );
                 }
