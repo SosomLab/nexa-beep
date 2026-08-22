@@ -385,6 +385,45 @@ sudo install -m 0755 nexa-beepd /opt/beepd/nexa-beepd && sudo systemctl restart 
 # 철거: systemctl disable --now beepd → /opt/beepd 삭제 (beepd.key 백업 먼저!)
 ```
 
+### 9-0. OCI 재배포 절차 — 개발 머신에서 원버튼 시퀀스 (08-23 상세화)
+
+공식 기본 서버([§8-1](#8-1-공식-기본-서버))에 새 코드를 올리는 **전체 절차**다.
+저장 0(파이프)이라 재시작은 안전하고, 키를 안 건드리는 한 **핀은 불변**이다 —
+클라이언트는 백오프로 수 초 안에 자동 재접속한다(08-22 실측 2회: 재시작 직후
+양쪽 클라 재등록·"공개 on" 로그).
+
+```bash
+# ① 빌드 — mac/Linux 어디서든 musl 정적 교차(rust-lld · .cargo/config.toml이 지정).
+#   서버 VM에는 빌드 도구가 없고 1GB라 빌드 불가 — 바이너리 업로드가 규약이다.
+cargo build --release -p nexa-beepd --target x86_64-unknown-linux-musl
+file target/x86_64-unknown-linux-musl/release/nexa-beepd   # "static-pie" 확인
+
+# ② 해시 대조 — 같으면 "이미 최신"(재시작 불요 · 여기서 끝).
+shasum -a 256 target/x86_64-unknown-linux-musl/release/nexa-beepd
+ssh <서버> "sha256sum /opt/beepd/nexa-beepd"
+
+# ③ 업로드 → 원자적 교체 → 재시작 → 검증 (한 세션에)
+scp target/x86_64-unknown-linux-musl/release/nexa-beepd <서버>:/tmp/nexa-beepd.new
+ssh <서버> 'sudo install -o beepd -g beepd -m 755 /tmp/nexa-beepd.new /opt/beepd/nexa-beepd \
+  && rm /tmp/nexa-beepd.new \
+  && sudo systemctl restart beepd && sleep 2 \
+  && systemctl is-active beepd && /opt/beepd/nexa-beepd --version \
+  && sha256sum /opt/beepd/nexa-beepd'
+
+# ④ 사후 확인 — 클라 자동 재접속(핀 보존 증거)까지 보면 완료.
+ssh <서버> 'sudo journalctl -u beepd -n 10 --no-pager'   # "등록 rid=…", "공개 on"
+```
+
+- **건드리면 안 되는 것** = `/opt/beepd/beepd.key`(서버 신원 — [§6](#6-서버-신원-키--핀의-원천)).
+  교체 대상은 실행 파일 하나뿐이다. 키가 바뀌면 전 클라이언트가 `PinMismatch`로
+  시끄럽게 멈춘다(설계 — 조용한 재핀 없음).
+- **와이어 하위 호환이 전제**다 — 서버를 먼저 올려도 구클라가 깨지지 않는 변경만
+  롤링으로 배포한다(예: 08-22 공개 카드 = 신규 kind + v2 연결에만 응답). 깨지는
+  변경은 정식 `beepd-v*` 릴리스 + 클라 동시 배포로.
+- 정식 태그 릴리스(`beepd-v*` — 자산·brew/winget/choco)는 별개다: 운영 서버
+  롤링은 실기 검증용 선행이고, 태그는 클라이언트 릴리스와 짝지어 낸다.
+- 서버 접속 정보(IP·SSH 키)는 공개 문서 미기재 원칙([머리말]) — 운영자 로컬 기록에.
+
 ### 9-1. OS별 대응표 — 같은 일을 어디서 하나
 
 | 하는 일 | Linux(systemd) | Windows(작업 스케줄러) | macOS(launchd) |
