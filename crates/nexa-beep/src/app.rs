@@ -5070,9 +5070,15 @@ impl App {
                 Err(nbeep_relay::AttachError::Relay(nbeep_relay::RelayError::PinMismatch {
                     ..
                 })) => Err(ServerAttachFail::PinMismatch),
-                Err(nbeep_relay::AttachError::Relay(e)) => {
-                    Err(ServerAttachFail::Other(format!("{e:?}")))
-                }
+                // 사유는 함축으로(08-22 사용자 확정 — Debug 포장 제거: Io는
+                // OS 문구("connection timed out")만, 나머지는 한 단어).
+                Err(nbeep_relay::AttachError::Relay(e)) => Err(ServerAttachFail::Other(match e {
+                    nbeep_relay::RelayError::Io(io) => io.to_string(),
+                    nbeep_relay::RelayError::Handshake => "handshake failed".to_string(),
+                    nbeep_relay::RelayError::Protocol => "protocol error".to_string(),
+                    // 핀 불일치는 위 갈래가 소진 — 방어적 문구만.
+                    nbeep_relay::RelayError::PinMismatch { .. } => "pin mismatch".to_string(),
+                })),
             };
             let _ = proxy.send_event(AppEvent::ServerAttach { gen, outcome });
         });
