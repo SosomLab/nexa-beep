@@ -32,6 +32,19 @@ pub enum ToolIcon {
         /// `w*h` 길이의 1채널 커버리지.
         alpha: &'static [u8],
     },
+    /// 상태 표시 마스크(08-22 — 서버 접속 표시): **항상 accent 틴트** ·
+    /// 슬롯을 채우지 않고 **고정 표시 크기**(논리 px)로 중앙 배치 — 다른 자리
+    /// (대화 헤더 배지)와 같은 크기·색으로 맞출 때 쓴다.
+    StatusMask {
+        /// 폭(px).
+        w: u32,
+        /// 높이(px).
+        h: u32,
+        /// `w*h` 길이의 1채널 커버리지.
+        alpha: &'static [u8],
+        /// 표시 한 변(논리 px).
+        size: i32,
+    },
     /// **내 프로필 미니 아바타**(08-14 사용자 요청 — 프로필 버튼이 곧 내 얼굴).
     /// 사진·내장 그림·이니셜·빈 원 + 보더 링(소형 2px)을 아바타 문법 그대로 그린다.
     Avatar {
@@ -328,6 +341,18 @@ impl Widget for Toolbar {
                 ToolIcon::Image(img) => {
                     let fit = image_fit_contain(icon_area, img.w as i32, img.h as i32);
                     ctx.image_scaled(fit, img, slot);
+                }
+                ToolIcon::StatusMask { w, h, alpha, size } => {
+                    // 상태 표시 = 항상 accent · 고정 크기 중앙 배치(hover 무변).
+                    let img = self.tinted(i, *w, *h, alpha, theme.accent);
+                    let d = self.s(*size);
+                    let dst = Rect::new(
+                        icon_area.x + (icon_area.w - d) / 2,
+                        icon_area.y + (icon_area.h - d) / 2,
+                        d,
+                        d,
+                    );
+                    ctx.image_scaled(dst, &img, slot);
                 }
                 ToolIcon::Mask { w, h, alpha } => {
                     // SVG 유래 = 테마 기준색 · hover/pressed = 선색 변경(accent).

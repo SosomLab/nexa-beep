@@ -16179,10 +16179,12 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
             // 배지와 같은 waypoints · 프로필 왼쪽 · **접속 중일 때만** 보인다).
             ToolItem::new(
                 "server",
-                ToolIcon::Mask {
+                // 대화 헤더 배지와 같은 크기(16)·색(accent) — 사용자 확정 08-22.
+                ToolIcon::StatusMask {
                     w: nbeep_ui::icons::path::SIZE,
                     h: nbeep_ui::icons::path::SIZE,
                     alpha: nbeep_ui::icons::path::WAYPOINTS_ALPHA,
+                    size: 16,
                 },
             )
             .align_right()
