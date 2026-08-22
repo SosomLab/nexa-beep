@@ -459,7 +459,7 @@ fn server_retry_delay(stage: u8) -> u64 {
     }
 }
 
-/// 내 아바타 캐시 인코딩(08-22) — [len:u32][src][mtime:u64][w:u32][h:u32][rgba].
+/// 내 아바타 캐시 인코딩(08-22) — `[len:u32][src][mtime:u64][w:u32][h:u32][rgba]`.
 fn encode_me_avatar_cache(src: &str, mtime: u64, w: u32, h: u32, rgba: &[u8]) -> Vec<u8> {
     let mut o = Vec::with_capacity(24 + src.len() + rgba.len());
     o.extend_from_slice(&(src.len() as u32).to_be_bytes());

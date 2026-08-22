@@ -6,9 +6,9 @@
 //!   기존 자산 재사용(house/waypoints/globe · id 배지 RGBA) + 자산 없는 칩은
 //!   원시 도형 작도(온라인=찬 점 · 오프라인=빈 링
 //!   — 목록 연결점과 같은 시각 문법). **자산 증가 0**.
-//! - hover = **툴팁**(그룹 이름 · 칩 이름 — 팝업 레이어 [`Self::paint_tooltip`]).
-//! - 선택은 설정 키(`list.filter.*`)로 영속 — 호스트가 [`Self::set_selection`]으로
-//!   복원하고 [`Self::take_changed`]로 변경을 받아 저장·재조립한다.
+//! - hover = **툴팁**(그룹 이름 · 칩 이름 — 팝업 레이어 `paint_tooltip`).
+//! - 선택은 설정 키(`list.filter.*`)로 영속 — 호스트가 `set_selection`으로
+//!   복원하고 `take_changed`로 변경을 받아 저장·재조립한다.
 //! - 칩 좌표는 페인트가 깔고 캐시에 남긴다 — 히트는 그 캐시(복사 버튼 문법).
 
 use crate::draw::{DrawCtx, FontSlot};
