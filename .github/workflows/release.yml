@@ -378,8 +378,13 @@ jobs:
             (릴레이 서버는 봉투만 흘려보내는 파이프라 아무것도 보관하지 않는다 — 보관형 서버 모드는 v1 이후).
           - **존재 자체는 같은 LAN에 평문 방송**된다(키·표시 이름·포트 — 내용은 없다).
           - **"검사됨(탐지 없음)"은 안전 보증이 아니다** — 파일 검사는 Windows(AMSI)만이고, 격리·승인 마찰이 본체다.
-          - GUI는 아직 **로컬 직접 전송만** — 릴레이·홀펀칭(\`nexa-beepd\` — 같은 저장소·\`beepd-v*\` 별도 배포)은
-            CLI \`--server\` 접속부터 붙는 중이며, GUI 배선·실 NAT 실증 전이다.
+          - 릴레이·홀펀칭은 **서버 등록(설정 › 서버)** 후에 동작하며, 인터넷 경유
+            채널은 지문 대조 전 파일이 차단된다.
+
+          > 🛰 **릴레이 서버(\`nexa-beepd\`)는 이 릴리스에 없다** — 별도 릴리스
+          > [\`beepd-v*\` 태그](https://github.com/SosomLab/nexa-beep/releases?q=beepd&expanded=true)에서
+          > 받는다(Linux는 musl 정적). 설치·운영 =
+          > [docs/41](https://github.com/SosomLab/nexa-beep/blob/main/docs/41-beepd-ops-guide.md).
 
           라이선스: PolyForm Noncommercial 1.0.0 (비상업적 사용).
           EOF
