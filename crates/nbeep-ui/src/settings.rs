@@ -1637,6 +1637,19 @@ impl SettingsWidget {
     }
 
     /// 변경된 (키, 새 값) 목록을 꺼낸다(즉시 적용 — 호스트가 반영).
+    /// 지정 카테고리로 직행(08-22 — 툴바 서버 표시 클릭 = 서버 설정 바로가기).
+    /// 검색은 지우고 스크롤은 맨 위로. 미지 카테고리는 무시.
+    pub fn select_category(&mut self, cat: Msg, inv: &mut Invalidations) {
+        if let Some(ci) = Self::cats().iter().position(|(c, _)| *c == cat) {
+            self.selected_cat = ci;
+            self.selected_sub = None;
+            self.query.clear();
+            self.search.set_text("");
+            self.scroll = 0;
+            self.rebuild(inv);
+        }
+    }
+
     pub fn take_changes(&mut self) -> Vec<(&'static str, String)> {
         std::mem::take(&mut self.changes)
     }

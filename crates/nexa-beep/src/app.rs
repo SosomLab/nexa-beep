@@ -11968,8 +11968,19 @@ impl App {
                             "quarantine" => self.open_quarantine(el),
                             "convbox" => self.open_convbox(el),
                             "profile" => self.open_profile(el),
-                            // 서버 표시 클릭 = 설정(서버 값·상태 확인 자리로).
-                            "server" => self.open_settings(el),
+                            // 서버 표시 클릭 = 설정 › 서버로 **직행**(08-22 사용자 확정).
+                            "server" => {
+                                self.open_settings(el);
+                                if let Some(sv) = &mut self.settings_view {
+                                    let mut sinv = Invalidations::default();
+                                    sv.select_category(nbeep_core::Msg::CatServer, &mut sinv);
+                                }
+                                if let Some((id, _)) =
+                                    self.windows.iter().find(|(_, e)| e.role == Role::Settings)
+                                {
+                                    self.request_redraw(*id);
+                                }
+                            }
                             "gallery" => self.open_gallery(el),
                             _ => {}
                         }

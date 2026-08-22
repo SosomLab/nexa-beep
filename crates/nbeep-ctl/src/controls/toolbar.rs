@@ -170,31 +170,47 @@ impl Toolbar {
         self.s(self.icon_px + SLOT_PAD * 2)
     }
 
+    /// 항목 슬롯 폭 — 상태 표시([`ToolIcon::StatusMask`])는 **아이콘 폭 그대로**
+    /// (08-22 사용자 확정 "여백 0" — 이웃 버튼에 밀착), 나머지는 공통 슬롯.
+    fn item_w(&self, i: usize) -> i32 {
+        match &self.items[i].icon {
+            ToolIcon::StatusMask { size, .. } => self.s(*size),
+            _ => self.slot(),
+        }
+    }
+
+    /// 항목 앞 간격 — 상태 표시는 0(밀착), 나머지는 4.
+    fn gap_before(&self, i: usize) -> i32 {
+        match &self.items[i].icon {
+            ToolIcon::StatusMask { .. } => 0,
+            _ => self.s(4),
+        }
+    }
+
     fn slot_rect(&self, i: usize) -> Rect {
         let b = self.base.bounds;
         let slot = self.slot();
-        let gap = self.s(4);
         let y = b.y + (b.h - slot) / 2;
         if self.items[i].right {
-            // 오른쪽 끝부터 — 내 뒤의 right 항목 수만큼 왼쪽으로 밀린다.
-            #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-            let after = self.items[i + 1..]
-                .iter()
-                .filter(|it| it.right && it.visible)
-                .count() as i32;
-            Rect::new(
-                b.right() - self.s(6) - slot - (slot + gap) * after,
-                y,
-                slot,
-                slot,
-            )
+            // 오른쪽 끝부터 — 뒤(오른쪽)의 보이는 right 항목 폭+간격만큼 밀린다.
+            let mut x = b.right() - self.s(6);
+            for j in ((i + 1)..self.items.len()).rev() {
+                let it = &self.items[j];
+                if it.right && it.visible {
+                    x -= self.item_w(j) + self.gap_before(j);
+                }
+            }
+            x -= self.item_w(i);
+            Rect::new(x, y, self.item_w(i), slot)
         } else {
-            #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-            let before = self.items[..i]
-                .iter()
-                .filter(|it| !it.right && it.visible)
-                .count() as i32;
-            Rect::new(b.x + self.s(6) + (slot + gap) * before, y, slot, slot)
+            let mut x = b.x + self.s(6);
+            for j in 0..i {
+                let it = &self.items[j];
+                if !it.right && it.visible {
+                    x += self.item_w(j) + self.gap_before(j);
+                }
+            }
+            Rect::new(x, y, self.item_w(i), slot)
         }
     }
 
@@ -343,15 +359,11 @@ impl Widget for Toolbar {
                     ctx.image_scaled(fit, img, slot);
                 }
                 ToolIcon::StatusMask { w, h, alpha, size } => {
-                    // 상태 표시 = 항상 accent · 고정 크기 중앙 배치(hover 무변).
+                    // 상태 표시 = 항상 accent · 슬롯 폭 = 아이콘 폭(밀착 배치라
+                    // 여백이 없다) · 세로만 중앙(hover 무변).
                     let img = self.tinted(i, *w, *h, alpha, theme.accent);
                     let d = self.s(*size);
-                    let dst = Rect::new(
-                        icon_area.x + (icon_area.w - d) / 2,
-                        icon_area.y + (icon_area.h - d) / 2,
-                        d,
-                        d,
-                    );
+                    let dst = Rect::new(slot.x, slot.y + (slot.h - d) / 2, d, d);
                     ctx.image_scaled(dst, &img, slot);
                 }
                 ToolIcon::Mask { w, h, alpha } => {
