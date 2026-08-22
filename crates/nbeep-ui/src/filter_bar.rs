@@ -4,7 +4,7 @@
 //!   그룹3 신뢰: 전체·인증·핀·신규. 각 그룹 **단일 선택**(라디오), 셋은 AND 결합.
 //! - **전부 아이콘**(08-23 사용자 확정 — 높이도 16→[`FILTER_H`]=32 · 텍스트 없음):
 //!   기존 자산 재사용(house/waypoints/globe · id 배지 RGBA) + 자산 없는 칩은
-//!   원시 도형 작도(전체=점 4개 격자 · 그룹=두 사람 · 온라인=찬 점 · 오프라인=빈 링
+//!   원시 도형 작도(그룹=두 사람 · 온라인=찬 점 · 오프라인=빈 링
 //!   — 목록 연결점과 같은 시각 문법). **자산 증가 0**.
 //! - hover = **툴팁**(그룹 이름 · 칩 이름 — 팝업 레이어 [`Self::paint_tooltip`]).
 //! - 선택은 설정 키(`list.filter.*`)로 영속 — 호스트가 [`Self::set_selection`]으로
@@ -19,8 +19,8 @@ use crate::widget::{Invalidations, Widget};
 use nbeep_core::{t, Msg};
 use std::rc::Rc;
 
-/// 바 높이(논리 px) — 08-23 사용자 확정(아이콘 구성 · 종전 16의 2배).
-pub const FILTER_H: i32 = 32;
+/// 바 높이(논리 px) — 08-23 사용자 확정 2차(아이콘 75% 축소에 맞춰 32→26).
+pub const FILTER_H: i32 = 26;
 
 /// 칩 그림 — 자산이 있으면 자산, 없으면 원시 도형 작도.
 #[derive(Clone, Copy, Debug)]
@@ -31,8 +31,6 @@ enum ChipArt {
     /// 그대로 두면 비선택 인증(파랑)이 선택 accent와 같은 색으로 오인된다 —
     /// 다른 아이콘과 동일하게 비선택 = 회색).
     Rgba(&'static [u8]),
-    /// 전체 = 점 4개 격자(2×2 — "모든 항목").
-    Dots,
     /// 그룹 = 두 사람(머리 원 + 어깨).
     Heads,
     /// 온라인 = 찬 점(목록 연결점과 같은 문법).
@@ -49,7 +47,11 @@ const GROUPS: [(&str, Msg, &[Chip]); 3] = [
         "list.filter.path",
         Msg::FltGrpPath,
         &[
-            ("all", Msg::FltAll, ChipArt::Dots),
+            (
+                "all",
+                Msg::FltAll,
+                ChipArt::Mask(crate::icons::path::ALL_ALPHA),
+            ),
             (
                 "local",
                 Msg::FltLocal,
@@ -73,7 +75,11 @@ const GROUPS: [(&str, Msg, &[Chip]); 3] = [
         "list.filter.presence",
         Msg::FltGrpPresence,
         &[
-            ("all", Msg::FltAll, ChipArt::Dots),
+            (
+                "all",
+                Msg::FltAll,
+                ChipArt::Mask(crate::icons::path::ALL_ALPHA),
+            ),
             ("online", Msg::FltOnline, ChipArt::DotFilled),
             ("offline", Msg::FltOffline, ChipArt::DotRing),
         ],
@@ -82,7 +88,11 @@ const GROUPS: [(&str, Msg, &[Chip]); 3] = [
         "list.filter.trust",
         Msg::FltGrpTrust,
         &[
-            ("all", Msg::FltAll, ChipArt::Dots),
+            (
+                "all",
+                Msg::FltAll,
+                ChipArt::Mask(crate::icons::path::ALL_ALPHA),
+            ),
             (
                 "verified",
                 Msg::FltVerified,
@@ -295,7 +305,7 @@ impl Widget for FilterBarWidget {
         let mut chips = self.chips.borrow_mut();
         chips.clear();
         let side = b.h - self.s(6) - 1; // 칩 정사각(위 3 · 아래 3+경계선)
-        let icon_d = self.s(18); // 아이콘 실크기(칩 안 중앙)
+        let icon_d = self.s(14); // 아이콘 실크기(칩 안 중앙 — 08-23 75% 축소)
         let mut x = b.x + self.s(8);
         for (gi, (_, _, group)) in GROUPS.iter().enumerate() {
             if gi > 0 {
@@ -339,28 +349,17 @@ impl Widget for FilterBarWidget {
                         let img = self.tinted_rgba(flat, bytes, color);
                         ctx.image_scaled(icon, &img, chip);
                     }
-                    ChipArt::Dots => {
-                        // 전체 = 2×2 점 격자.
-                        let d = self.s(6);
-                        let gap = (icon_d - d * 2).max(2);
-                        for (ix, iy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
-                            ctx.fill_ellipse(
-                                Rect::new(icon.x + ix * (d + gap), icon.y + iy * (d + gap), d, d),
-                                color,
-                            );
-                        }
-                    }
                     ChipArt::Heads => {
                         // 그룹 = 두 사람(머리 원 + 어깨 타원 · 뒤 사람 반 겹침).
-                        let hd = self.s(7);
-                        let bw = self.s(11);
+                        let hd = self.s(5);
+                        let bw = self.s(8);
                         let draw_person = |ctx: &mut dyn DrawCtx, ox: i32| {
                             ctx.fill_ellipse(
                                 Rect::new(icon.x + ox + (bw - hd) / 2, icon.y, hd, hd),
                                 color,
                             );
                             ctx.fill_ellipse(
-                                Rect::new(icon.x + ox, icon.y + hd + self.s(1), bw, self.s(9)),
+                                Rect::new(icon.x + ox, icon.y + hd + self.s(1), bw, self.s(7)),
                                 color,
                             );
                         };
@@ -368,14 +367,14 @@ impl Widget for FilterBarWidget {
                         draw_person(ctx, 0); // 앞(왼쪽)
                     }
                     ChipArt::DotFilled => {
-                        let d = self.s(12);
+                        let d = self.s(9);
                         ctx.fill_ellipse(
                             Rect::new(icon.x + (icon_d - d) / 2, icon.y + (icon_d - d) / 2, d, d),
                             color,
                         );
                     }
                     ChipArt::DotRing => {
-                        let d = self.s(12);
+                        let d = self.s(9);
                         ctx.stroke_ellipse(
                             Rect::new(icon.x + (icon_d - d) / 2, icon.y + (icon_d - d) / 2, d, d),
                             color,
