@@ -363,14 +363,16 @@ impl Widget for FilterBarWidget {
                         ctx.image_scaled(icon, &img, chip);
                     }
                     ChipArt::DotFilled => {
-                        let d = icon_d - self.s(2); // 정규화 — 같은 표시 영역
+                        // 정규화 크기의 95%(08-23 사용자 확정 — 찬 면적이라 커 보임).
+                        let d = ((icon_d - self.s(2)) * 95) / 100;
                         ctx.fill_ellipse(
                             Rect::new(icon.x + (icon_d - d) / 2, icon.y + (icon_d - d) / 2, d, d),
                             color,
                         );
                     }
                     ChipArt::DotRing => {
-                        let d = icon_d - self.s(2); // 정규화 — 같은 표시 영역
+                        // 정규화 크기의 95%(08-23 — DotFilled와 동일 비율).
+                        let d = ((icon_d - self.s(2)) * 95) / 100;
                         ctx.stroke_ellipse(
                             Rect::new(icon.x + (icon_d - d) / 2, icon.y + (icon_d - d) / 2, d, d),
                             color,
