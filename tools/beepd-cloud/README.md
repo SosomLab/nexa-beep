@@ -18,8 +18,9 @@ Cloud Run은 HTTP(S)/WebSocket/gRPC 전용이라 **원시 TCP 프레이밍이 �
 winget install Google.CloudSDK
 gcloud init                                  # 로그인 + 프로젝트 선택
 
-# 1) 저장소 루트에서 — VM 생성→소스 업로드→빌드→상주→핀 출력까지 한 번에
+# 1) 저장소 루트에서 — musl 정적 교차 빌드→VM 생성→바이너리 업로드→상주→핀 출력까지 한 번에
 .\tools\beepd-cloud\deploy-gcp.ps1           # 기본: 서울 e2-small(세션 몇 시간 = 수백 원 미만)
+#   (교차 빌드가 안 되는 환경이면 -FromSource — 종전 VM 소스 빌드 폴백)
 
 # 2) 실측 (docs/26 §3-7 그대로 · 주소만 공인 IP)
 nexa-beep --chat-live 이름 --server <IP>:47300
@@ -42,10 +43,12 @@ nexa-beep --chat-connect-via <상대지문> --server <IP>:47300   # ★ 다른 �
 
 ## 파일
 
-- [`deploy-gcp.ps1`](deploy-gcp.ps1) — PC 쪽: 방화벽(tcp/udp 47300)·VM·업로드·철거(`-Teardown`)
-- [`vm-setup.sh`](vm-setup.sh) — VM 쪽: 스왑(1GB VM)·rustup 최소·`-p nexa-beepd` 빌드·systemd 상주
+- [`deploy-gcp.ps1`](deploy-gcp.ps1) — PC 쪽: musl 정적 교차 빌드·방화벽(tcp/udp 47300)·VM·업로드·철거(`-Teardown`)
+- [`vm-setup.sh`](vm-setup.sh) — VM 쪽: 바이너리 설치·systemd 상주(`-FromSource` 폴백 = 스왑·rustup·소스 빌드)
 
-> 소스 빌드인 이유: 이 저장소의 리눅스 산출물은 CI(release-server.yml · `beepd-v*` 태그)가
-> 굽는데, 검증 전 브랜치는 push 전이라 **VM에서 소스 빌드**가 가장 곧은 길이다(tarball =
-> `git archive HEAD` — 커밋된 것만 · Cargo.lock 포함 재현 빌드). 병합·태그 후에는 릴리스
-> 자산을 받아 올리는 쪽이 빠르다.
+> ★ **기본 = musl 정적 바이너리**(08-22 전환): beepd는 외부 의존 0(순수 Rust)이라
+> Windows/mac 어디서든 `rustup target add x86_64-unknown-linux-musl` + `rust-lld`로
+> C 툴체인 없이 교차 빌드된다(실측 651KB · static-pie). VM에는 빌드 도구가 아예
+> 필요 없고 glibc 버전과도 무관하다. release-server.yml의 Linux 자산도 같은 musl
+> 정적이라, 태그(`beepd-v*`) 이후에는 릴리스 자산을 받아 올려도 같은 물건이다.
+> `-FromSource`는 교차 빌드가 막힌 환경의 폴백(종전 경로 · VM에서 rustup+빌드).

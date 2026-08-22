@@ -1,0 +1,11 @@
+# 작업공간 공통 cargo 설정 — 규칙은 여기 **한 곳**에만 둔다(고칠 곳을 한 곳으로).
+
+# musl 정적 타깃(서버 `nexa-beepd` 배포 — 08-22 전환)은 rust-lld로 링크한다.
+# beepd는 외부 의존 0(순수 Rust)이라 C 툴체인·musl-gcc 없이 어느 호스트(mac/Win/Linux)
+# 에서도 교차 링크된다(mac 실측: x64 static-pie 651KB · arm64 static).
+# release-server.yml·tools/beepd-cloud가 이 설정에 의존한다 — RUSTFLAGS 중복 지정 금지.
+[target.x86_64-unknown-linux-musl]
+linker = "rust-lld"
+
+[target.aarch64-unknown-linux-musl]
+linker = "rust-lld"

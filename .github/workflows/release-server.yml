@@ -55,11 +55,16 @@ jobs:
         include:
           # 서버의 주 무대는 Linux다. Windows/macOS도 내지만(사내 PC를 릴레이로 쓰는
           # 시나리오) 컨테이너·서비스 문서는 Linux 기준으로 쓴다.
+          # ★ Linux = **musl 정적**(08-22 사용자 확정) — glibc 버전 무관하게 아무
+          #   배포판·컨테이너(scratch 포함)에 바이너리 하나로 얹는다. beepd는 외부
+          #   의존 0(순수 Rust)이라 C 툴체인 없이 rust-lld로 링크된다(mac 교차
+          #   실측: x64 static-pie 651KB · arm64 static). 두 타깃 다 ubuntu-latest
+          #   한 러너에서 교차 빌드한다(정적이라 실행 검증도 로컬 x64로 충분).
           - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
+            target: x86_64-unknown-linux-musl
             slug: linux-x64
-          - os: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
             slug: linux-arm64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
@@ -82,7 +87,24 @@ jobs:
         run: rustup target add ${{ matrix.target }}
 
       - name: 릴리스 빌드(서버만 — W-1 클라 미포함)
+        # musl 타깃의 rust-lld 링커는 .cargo/config.toml이 정한다(규칙 한 곳).
         run: cargo build --release -p nexa-beepd --target ${{ matrix.target }}
+
+      - name: 정적 링크 검증(musl 한정 — 동적이면 여기서 죽는다)
+        if: contains(matrix.target, 'musl')
+        shell: bash
+        run: |
+          set -euo pipefail
+          info=$(file "target/$TARGET/release/nexa-beepd")
+          echo "$info"
+          case "$info" in
+            *static*) ;; # static-pie linked / statically linked 둘 다 정적
+            *) echo "::error::musl인데 정적이 아니다 — $info"; exit 1 ;;
+          esac
+          # x64는 러너에서 즉시 실행 검증까지(정적이니 러너 glibc와 무관).
+          if [ "$TARGET" = "x86_64-unknown-linux-musl" ]; then
+            "target/$TARGET/release/nexa-beepd" --version
+          fi
 
       - name: 크기 보고(게이트 아님 — W-2)
         shell: bash
@@ -164,6 +186,8 @@ jobs:
             클라이언트가 첫 접속에서 이 키를 핀(TOFU)하며, 키가 바뀌면 시끄럽게 경고한다.
           - 방화벽: **TCP·UDP 같은 포트 번호** 인바운드를 열어야 한다(기본 47300).
           - \`--rate\`로 연결당 릴레이 예산을 제한한다(기본 1 MiB/s · 0 = 무제한).
+          - Linux 아카이브는 **musl 정적 링크**다 — 배포판·glibc 버전 무관하게 바이너리
+            하나로 돌고, scratch 컨테이너에도 그대로 얹힌다.
 
           받은 파일 검증: \`SHA256SUMS.txt\`.
           라이선스: PolyForm Noncommercial 1.0.0 (비상업적 사용).
