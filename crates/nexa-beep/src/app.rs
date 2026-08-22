@@ -409,6 +409,12 @@ enum ServerAttachFail {
 /// Managed 서버 목표(설정 SSOT · X-2b) — None = Unmanaged/주소 없음(S-0 그대로).
 /// 주소에 `:`가 있으면 그대로 쓰고(포트 명시·IPv6는 `[..]:port` 표기), 없으면 설정
 /// 포트를 붙인다. 해석·기본 포트 보정은 `nbeep_relay::resolve_server` 몫.
+/// 메인 창 최소 크기(논리 px · 08-23 사용자 확정 — 실기 스크린샷 기준):
+/// 더 못 줄이고, 첫 실행·설정 초기화가 이 크기로 돌아온다.
+const MAIN_MIN_W: f64 = 474.0;
+/// 메인 창 최소 높이(논리 px).
+const MAIN_MIN_H: f64 = 689.0;
+
 /// roster lazy 편입 — 한 틱(2s)에 목록으로 옮기는 최대 수(08-22 사용자 확정:
 /// "한 번에 전부"는 메인 루프를 흔든다 — 배치로 나눠 다음 틱이 이어받는다).
 const ROSTER_BATCH: usize = 256;
@@ -7433,7 +7439,29 @@ impl App {
             .collect();
         let n = changes.len();
         self.apply_settings(changes);
-        format!("설정 초기화 완료 — {n}개 항목을 기본값으로")
+        // ★ 숨김 확장분(08-23 사용자 확정) — 화면 밖 상태도 기본으로:
+        //   목록 필터(전체) + **창 크기**(최소 크기로 즉시 복귀 · 다음 실행도 최소).
+        for k in [
+            "list.filter.path",
+            "list.filter.presence",
+            "list.filter.trust",
+            "ui.win_w",
+            "ui.win_h",
+        ] {
+            self.settings.set_by_name(k, "");
+        }
+        {
+            let mut inv = Invalidations::default();
+            self.filter_bar.set_selection("", "", "", &mut inv);
+            self.refresh_rows(&mut inv);
+        }
+        if let Some(e) = self.main_id.and_then(|id| self.windows.get(&id)) {
+            let _ = e
+                .window
+                .request_inner_size(winit::dpi::LogicalSize::new(MAIN_MIN_W, MAIN_MIN_H));
+        }
+        self.conf_mark();
+        format!("설정 초기화 완료 — {n}개 항목을 기본값으로(필터·창 크기 포함)")
     }
 
     /// 신원 키 백업(M2-5a · 사용자 요청 08-11) — 현재 폴더로 복사. 기본 이름에 지문이
@@ -12986,21 +13014,16 @@ impl ApplicationHandler<AppEvent> for App {
         // 매번 재배치하던 것. 신원(data/)별로 저장되니 인스턴스마다 자기 자리를
         // 기억한다). 값이 없거나 무효면 기본값 — ADR-0011 관용 파싱 원칙 그대로.
         let geo = |k: &str| self.settings.get(k).parse::<i32>().ok();
-        // ★ 최소 크기(08-23 사용자 확정 — 실기 스크린샷 기준 474×689): 더 작게는
-        //   못 줄이고, 저장값 복원도 이 아래로는 올려 잡는다. 첫 실행(저장값
-        //   없음) = 최소 크기 그대로 연다.
-        const MIN_W: f64 = 474.0;
-        const MIN_H: f64 = 689.0;
         let (ww, wh) = match (geo("ui.win_w"), geo("ui.win_h")) {
             (Some(w), Some(h)) if (200..=8000).contains(&w) && (150..=8000).contains(&h) => {
-                (f64::from(w).max(MIN_W), f64::from(h).max(MIN_H))
+                (f64::from(w).max(MAIN_MIN_W), f64::from(h).max(MAIN_MIN_H))
             }
-            _ => (MIN_W, MIN_H), // 첫 실행 = 최소 크기(사용자 확정 08-23)
+            _ => (MAIN_MIN_W, MAIN_MIN_H), // 첫 실행 = 최소 크기(사용자 확정 08-23)
         };
         let mut attrs = Window::default_attributes()
             .with_title("Nexa Beep")
             .with_inner_size(winit::dpi::LogicalSize::new(ww, wh))
-            .with_min_inner_size(winit::dpi::LogicalSize::new(MIN_W, MIN_H))
+            .with_min_inner_size(winit::dpi::LogicalSize::new(MAIN_MIN_W, MAIN_MIN_H))
             .with_window_icon(self.icon.clone());
         if let (Some(x), Some(y)) = (geo("ui.win_x"), geo("ui.win_y")) {
             // 화면 밖 좌표 방어는 OS 몫이 크지만, 음수 심연(-32000 최소화 잔재)은 거른다.
@@ -14878,7 +14901,7 @@ impl ApplicationHandler<AppEvent> for App {
             self.open_choice(
                 el,
                 "설정 초기화",
-                "표시되는 설정 전부를 기본값으로 되돌립니다. 계속할까요?\n(신원·핀·그룹·창 위치 등 숨김 상태는 유지됩니다)",
+                "표시되는 설정 전부와 목록 필터·창 크기를 기본값으로 되돌립니다. 계속할까요?\n(신원·핀·그룹·프로필·창 위치는 유지됩니다)",
                 "초기화",
                 "취소",
                 AlertCtx::SettingsReset,
