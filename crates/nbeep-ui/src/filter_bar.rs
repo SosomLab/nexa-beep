@@ -19,8 +19,9 @@ use crate::widget::{Invalidations, Widget};
 use nbeep_core::{t, Msg};
 use std::rc::Rc;
 
-/// 바 높이(논리 px) — 08-23 사용자 확정 2차(아이콘 75% 축소에 맞춰 32→26).
-pub const FILTER_H: i32 = 26;
+/// 바 높이(논리 px) — 08-23 3차: 아이콘 20 확정에 맞춰 26→30(칩 정사각이
+/// 아이콘 + 여유 2를 담아야 한다 — 26이면 칩 19 < 아이콘 20으로 넘친다).
+pub const FILTER_H: i32 = 30;
 
 /// 칩 그림 — 자산이 있으면 자산, 없으면 원시 도형 작도.
 #[derive(Clone, Copy, Debug)]
@@ -309,7 +310,7 @@ impl Widget for FilterBarWidget {
         let mut chips = self.chips.borrow_mut();
         chips.clear();
         let side = b.h - self.s(6) - 1; // 칩 정사각(위 3 · 아래 3+경계선)
-        let icon_d = self.s(16); // 아이콘 실크기(칩 안 중앙 — 08-23 확정 16)
+        let icon_d = self.s(20); // 아이콘 실크기(칩 안 중앙 — 08-23 확정 20)
         let mut x = b.x + self.s(8);
         for (gi, (_, gmsg, group)) in GROUPS.iter().enumerate() {
             if gi > 0 {
