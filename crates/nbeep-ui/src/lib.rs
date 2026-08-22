@@ -123,6 +123,9 @@ pub mod icons {
     pub mod path {
         /// 같은 집(망) 안 = `Local`.
         pub const HOUSE_ALPHA: &[u8] = include_bytes!("../assets/icon-house-96.alpha");
+        /// 로컬 네트워크(허브 위계 — Material Symbols `lan` · 08-23 사용자 지정):
+        /// 필터 바 '로컬' 칩 전용(house는 목록 배지 자리 유지).
+        pub const LAN_ALPHA: &[u8] = include_bytes!("../assets/icon-lan-96.alpha");
         /// 인터넷 경유 = `Manual`(위협 모델이 다르다는 신호).
         pub const GLOBE_ALPHA: &[u8] = include_bytes!("../assets/icon-globe-96.alpha");
         /// 경유점 = `Relay`(v2).

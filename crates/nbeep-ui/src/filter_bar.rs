@@ -27,7 +27,9 @@ pub const FILTER_H: i32 = 32;
 enum ChipArt {
     /// 96×96 알파 마스크(상태색 틴트 — 선택 = accent · 평시 = 흐림).
     Mask(&'static [u8]),
-    /// 96×96 컬러 RGBA(자기 색 그대로 — id 배지 가족).
+    /// 96×96 컬러 RGBA — **알파만 취해** 상태색 틴트(08-23 사용자 확정: 원색
+    /// 그대로 두면 비선택 인증(파랑)이 선택 accent와 같은 색으로 오인된다 —
+    /// 다른 아이콘과 동일하게 비선택 = 회색).
     Rgba(&'static [u8]),
     /// 전체 = 점 4개 격자(2×2 — "모든 항목").
     Dots,
@@ -51,7 +53,8 @@ const GROUPS: [(&str, Msg, &[Chip]); 3] = [
             (
                 "local",
                 Msg::FltLocal,
-                ChipArt::Mask(crate::icons::path::HOUSE_ALPHA),
+                // Material `lan`(허브 위계 — 08-23 사용자 지정 SVG를 구움).
+                ChipArt::Mask(crate::icons::path::LAN_ALPHA),
             ),
             (
                 "server",
@@ -113,8 +116,6 @@ pub struct FilterBarWidget {
     chips: core::cell::RefCell<Vec<(usize, usize, Rect)>>,
     /// 틴트 캐시(마스크) — (평면 인덱스, 색) → 이미지.
     tint: core::cell::RefCell<std::collections::HashMap<(usize, u32), Rc<IconImage>>>,
-    /// RGBA 캐시 — 평면 인덱스 → 이미지(색 불변이라 1회).
-    rgba: core::cell::RefCell<std::collections::HashMap<usize, Rc<IconImage>>>,
     hover: Option<(usize, usize)>,
     /// 변경 보고(1회성) — (설정 키, 저장 값).
     changed: Option<(&'static str, &'static str)>,
@@ -210,13 +211,24 @@ impl FilterBarWidget {
         img
     }
 
-    /// 컬러 RGBA(캐시 1회).
-    fn colored(&self, flat: usize, bytes: &'static [u8]) -> Rc<IconImage> {
-        if let Some(img) = self.rgba.borrow().get(&flat) {
+    /// 컬러 RGBA의 **알파 채널만** 취해 상태색으로 틴트(캐시 — 마스크와 같은 결).
+    fn tinted_rgba(
+        &self,
+        flat: usize,
+        bytes: &'static [u8],
+        color: crate::theme::Color,
+    ) -> Rc<IconImage> {
+        let key = (flat, color.0);
+        if let Some(img) = self.tint.borrow().get(&key) {
             return Rc::clone(img);
         }
-        let img = Rc::new(IconImage::from_rgba(ART_SIDE, ART_SIDE, bytes.to_vec()));
-        self.rgba.borrow_mut().insert(flat, Rc::clone(&img));
+        let (r, g, b) = color.rgb();
+        let mut rgba = Vec::with_capacity(bytes.len());
+        for px in bytes.chunks_exact(4) {
+            rgba.extend_from_slice(&[r, g, b, px[3]]);
+        }
+        let img = Rc::new(IconImage::from_rgba(ART_SIDE, ART_SIDE, rgba));
+        self.tint.borrow_mut().insert(key, Rc::clone(&img));
         img
     }
 
@@ -324,7 +336,7 @@ impl Widget for FilterBarWidget {
                         ctx.image_scaled(icon, &img, chip);
                     }
                     ChipArt::Rgba(bytes) => {
-                        let img = self.colored(flat, bytes);
+                        let img = self.tinted_rgba(flat, bytes, color);
                         ctx.image_scaled(icon, &img, chip);
                     }
                     ChipArt::Dots => {
