@@ -12986,15 +12986,21 @@ impl ApplicationHandler<AppEvent> for App {
         // 매번 재배치하던 것. 신원(data/)별로 저장되니 인스턴스마다 자기 자리를
         // 기억한다). 값이 없거나 무효면 기본값 — ADR-0011 관용 파싱 원칙 그대로.
         let geo = |k: &str| self.settings.get(k).parse::<i32>().ok();
+        // ★ 최소 크기(08-23 사용자 확정 — 실기 스크린샷 기준 474×689): 더 작게는
+        //   못 줄이고, 저장값 복원도 이 아래로는 올려 잡는다. 첫 실행(저장값
+        //   없음) = 최소 크기 그대로 연다.
+        const MIN_W: f64 = 474.0;
+        const MIN_H: f64 = 689.0;
         let (ww, wh) = match (geo("ui.win_w"), geo("ui.win_h")) {
             (Some(w), Some(h)) if (200..=8000).contains(&w) && (150..=8000).contains(&h) => {
-                (f64::from(w), f64::from(h))
+                (f64::from(w).max(MIN_W), f64::from(h).max(MIN_H))
             }
-            _ => (460.0, 640.0), // 기본 크기(사용자 확정 08-09)
+            _ => (MIN_W, MIN_H), // 첫 실행 = 최소 크기(사용자 확정 08-23)
         };
         let mut attrs = Window::default_attributes()
             .with_title("Nexa Beep")
             .with_inner_size(winit::dpi::LogicalSize::new(ww, wh))
+            .with_min_inner_size(winit::dpi::LogicalSize::new(MIN_W, MIN_H))
             .with_window_icon(self.icon.clone());
         if let (Some(x), Some(y)) = (geo("ui.win_x"), geo("ui.win_y")) {
             // 화면 밖 좌표 방어는 OS 몫이 크지만, 음수 심연(-32000 최소화 잔재)은 거른다.
