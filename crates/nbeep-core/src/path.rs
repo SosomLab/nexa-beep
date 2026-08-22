@@ -49,8 +49,12 @@ pub fn class_of_ip(ip: IpAddr) -> PathClass {
 /// **지문(SAS) 대조 완료만** 허용 — TOFU 핀은 원격에서 "그 주소의 누군가"일 뿐이라
 /// 부족하다(ADR-0006: LAN 밖은 위협 모델이 다르다). 메시지는 이 게이트와 무관.
 #[must_use]
-pub fn file_allowed(path: PathClass, trust: crate::TrustLevel) -> bool {
-    path == PathClass::Local || trust == crate::TrustLevel::FingerprintVerified
+/// `remote_opt_in` = 설정 `xfer.remote_files`(08-22 사용자 확정 — 기본 끄기):
+/// 원격 경로 **발신** 옵트인. 켜면 지문 대조 전에도 발신이 열린다. ⚠ 이 함수는
+/// 08-22 개정 후 **발신 게이트 전용** — 수신은 차단하지 않고 항상 승인 창이
+/// 경로를 표시하며 사람이 결정한다(제한은 발신자 쪽에만).
+pub fn file_allowed(path: PathClass, trust: crate::TrustLevel, remote_opt_in: bool) -> bool {
+    path == PathClass::Local || trust == crate::TrustLevel::FingerprintVerified || remote_opt_in
 }
 
 #[cfg(test)]
@@ -63,14 +67,24 @@ mod tests {
     fn file_matrix_remote_requires_verified() {
         use crate::TrustLevel as T;
         for t in [T::Unverified, T::Pinned, T::FingerprintVerified] {
-            assert!(file_allowed(PathClass::Local, t), "Local은 신뢰 무관 통과");
+            assert!(
+                file_allowed(PathClass::Local, t, false),
+                "Local은 신뢰 무관 통과"
+            );
         }
-        assert!(!file_allowed(PathClass::Remote, T::Unverified));
+        assert!(!file_allowed(PathClass::Remote, T::Unverified, false));
         assert!(
-            !file_allowed(PathClass::Remote, T::Pinned),
+            !file_allowed(PathClass::Remote, T::Pinned, false),
             "핀만으로는 부족"
         );
-        assert!(file_allowed(PathClass::Remote, T::FingerprintVerified));
+        assert!(file_allowed(
+            PathClass::Remote,
+            T::FingerprintVerified,
+            false
+        ));
+        // 08-22 — 발신 옵트인은 원격도 연다(수신은 이 함수를 더는 안 탄다).
+        assert!(file_allowed(PathClass::Remote, T::Pinned, true));
+        assert!(file_allowed(PathClass::Remote, T::Unverified, true));
     }
 
     #[test]

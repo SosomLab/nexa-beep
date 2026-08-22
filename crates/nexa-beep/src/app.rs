@@ -3286,10 +3286,17 @@ impl App {
         // ★ 원격 × 미대조 = 파일 발신 금지(M5-3b · §5-1-3 FR-S-24) — 인터넷 경유
         //   상대는 지문(SAS) 대조 전엔 파일을 보내지 않는다. 메시지는 허용(등급 곱).
         if self.remote_file_blocked(peer) {
+            // ★ 경우 분리(08-22 사용자 확정) — 서버 경유는 설정 옵션 안내를,
+            //   인터넷 직결은 지문 대조 우선 안내를(둘 다 옵션으로도 열린다).
+            let body = if self.conversations.get(&peer).is_some_and(|c| c.via_server) {
+                nbeep_core::t(nbeep_core::Msg::RemoteFileServerOff)
+            } else {
+                nbeep_core::t(nbeep_core::Msg::RemoteFileInternetOff)
+            };
             self.status = nbeep_core::t(nbeep_core::Msg::StRemoteFileBlocked).to_string();
             self.pending_alert = Some((
                 nbeep_core::t(nbeep_core::Msg::AlertCannotSendFile).to_string(),
-                nbeep_core::t(nbeep_core::Msg::RemoteFileNeedVerify).to_string(),
+                body.to_string(),
                 Some(id),
             ));
             self.request_redraw(id);
@@ -4030,6 +4037,7 @@ impl App {
             queued: q.len(),
             downgrade_note,
             resume_pct,
+            path: self.peer_path_badge(peer), // 경로 식별 필(08-22)
         })
     }
 
@@ -5874,12 +5882,14 @@ impl App {
             .map_or(nbeep_core::PathClass::Local, |c| c.path)
     }
 
-    /// 원격 × 미대조 = 파일 금지(M5-3b · ADR-0006 §5-1-3 — FR-S-24). 정책 판정
-    /// **단일 지점** — 발신·수신 게이트가 같은 함수를 부른다(두 벌 금지). 곱 행렬
-    /// 자체는 core([`nbeep_core::file_allowed`])에 있고 여기는 재료만 모은다.
+    /// 원격 × 미대조 = 파일 **발신** 금지(M5-3b · §5-1-3 — ★08-22 개정: 수신은
+    /// 이 게이트를 타지 않는다 — 승인 창이 경로를 표시하고 사람이 결정). 곱 행렬
+    /// 자체는 core([`nbeep_core::file_allowed`])에 있고, 설정 `xfer.remote_files`
+    /// (기본 끄기)가 발신 옵트인으로 들어간다.
     fn remote_file_blocked(&self, peer: PeerId) -> bool {
         use nbeep_core::TrustStore as _;
-        !nbeep_core::file_allowed(self.peer_path(peer), self.trust.level(peer))
+        let opt_in = self.settings.get("xfer.remote_files") == "on";
+        !nbeep_core::file_allowed(self.peer_path(peer), self.trust.level(peer), opt_in)
     }
 
     /// 대화 뷰 생성(스레드 복원 — 상태-뷰 분리).
@@ -12955,17 +12965,9 @@ impl ApplicationHandler<AppEvent> for App {
                         list.remove(0);
                     }
                 }
-                // ★ 원격 × 미대조 = 수신도 차단(M5-3b — 발신 게이트의 대칭 · 같은
-                //   판정 함수). 승인 창까지 안 가고 즉시 거절 — 원격 미대조 상대의
-                //   파일 제안은 사용자에게 물을 일 자체가 아니다(§5-1-3 fail-closed).
-                if self.remote_file_blocked(peer) {
-                    self.send_xfer_decision(peer, id, false, RejectWhy::Declined, None);
-                    self.set_status(nbeep_core::t(nbeep_core::Msg::StRemoteFileBlocked));
-                    if let Some(mid) = self.main_id {
-                        self.request_redraw(mid);
-                    }
-                    return;
-                }
+                // ★ 08-22 개정(사용자 확정) — 수신은 **차단하지 않는다**: 제한은
+                //   발신자 쪽 옵션뿐이고, 수신은 승인 창이 경로(로컬/서버/인터넷)를
+                //   또렷이 표시하고 사람이 수락 여부를 결정한다(무해화 게이트 불변).
                 // ★ 판정은 **여기 한 곳**에서만 — 신뢰·왕래 장부·설정이 전부 여기 있다.
                 // 액터는 중계만 하므로 정책이 두 벌로 갈라지지 않는다.
                 self.tick_approval();
@@ -14663,7 +14665,7 @@ impl ApplicationHandler<AppEvent> for App {
                         "Nexa Beep — {}",
                         nbeep_core::t(nbeep_core::Msg::WinFileRequest)
                     ))
-                    .with_inner_size(winit::dpi::LogicalSize::new(440.0, 400.0))
+                    .with_inner_size(winit::dpi::LogicalSize::new(440.0, 432.0))
                     .with_resizable(false)
                     // ★ 최상위(사용자 확정 08-19) — 수신 승인은 타임아웃이 걸린
                     //   **행동 요구** 창이라 다른 창에 묻히면 자동 거절로 흘러간다.
@@ -14688,7 +14690,7 @@ impl ApplicationHandler<AppEvent> for App {
                         if let (Ok(pos), size) = (w.outer_position(), w.inner_size()) {
                             let sf = w.scale_factor();
                             let (aw, ah) =
-                                ((440.0 * sf).round() as i32, (400.0 * sf).round() as i32);
+                                ((440.0 * sf).round() as i32, (432.0 * sf).round() as i32);
                             let cx = pos.x + (i32::try_from(size.width).unwrap_or(0) - aw) / 2;
                             let cy = pos.y + (i32::try_from(size.height).unwrap_or(0) - ah) / 2;
                             attrs.with_position(winit::dpi::PhysicalPosition::new(cx, cy))

@@ -702,6 +702,16 @@ pub enum Msg {
     BtnDecline,
     PathRemoteLabel,
     PathServerLabel,
+    /// 경로 배지 — 로컬(같은 망 · 승인 창 식별용).
+    PathLocalLabel,
+    /// 설정: 원격 경로 파일 발신 허용(08-22 — 기본 끄기 · 발신만).
+    RemoteFilesOpt,
+    /// 위 설정 설명.
+    RemoteFilesOptDesc,
+    /// 파일 발신 차단 안내 — 서버 경유(옵션 안내 포함 · 08-22).
+    RemoteFileServerOff,
+    /// 파일 발신 차단 안내 — 인터넷 직결(지문 대조 우선 안내).
+    RemoteFileInternetOff,
     // ── Managed 서버 접속(X-2b · ADR-0013 §12-1) — 상태·핀 경고 ──
     StfServerAttached,
     StfServerFirstPin,
@@ -1204,6 +1214,11 @@ impl Msg {
             Msg::BtnDecline => ["Decline", "거절", "拒绝", "拒否"],
             Msg::PathRemoteLabel => ["via internet", "인터넷 경유", "经由互联网", "インターネット経由"],
             Msg::PathServerLabel => ["via server", "서버 경유", "经由服务器", "サーバー経由"],
+            Msg::PathLocalLabel => ["via local", "로컬(같은 망)", "本地(同一网络)", "ローカル(同一LAN)"],
+            Msg::RemoteFilesOpt => ["Files on remote paths", "원격 경로 파일 전송", "远程路径文件传输", "リモート経路のファイル送信"],
+            Msg::RemoteFilesOptDesc => ["Allow SENDING files in via-server / via-internet chats (default off). Receiving is never restricted — every incoming request still asks you, with the path clearly shown.", "서버 경유·인터넷 직결 대화에서 파일 발신을 허용합니다(기본 끄기). 수신은 제한하지 않습니다 — 요청마다 경로가 표시된 승인 창에서 직접 결정합니다.", "允许在经由服务器/互联网的对话中发送文件（默认关闭）。接收不受限 — 每个请求都会弹出标明路径的确认窗口。", "サーバー経由/インターネット経由の会話でのファイル送信を許可（既定オフ）。受信は制限せず、経路が明示された承認画面で毎回判断します。"],
+            Msg::RemoteFileServerOff => ["This chat goes via server — file sending is off. Turn on Settings › Server › 'Files on remote paths' to send.", "서버 경유 대화라 파일 전송이 꺼져 있습니다. 설정 › Server › '원격 경로 파일 전송'을 켜면 보낼 수 있습니다.", "此对话经由服务器 — 文件发送已关闭。在 设置 › Server › '远程路径文件传输' 中开启即可发送。", "この会話はサーバー経由のためファイル送信はオフです。設定 › Server › 'リモート経路のファイル送信' をオンにすると送信できます。"],
+            Msg::RemoteFileInternetOff => ["This chat goes over the internet — files stay blocked until fingerprints are verified (/fingerprint → /verify). You can also enable Settings › Server › 'Files on remote paths'.", "인터넷 직결 대화라 파일 전송이 차단되어 있습니다 — /fingerprint로 지문을 확인하고 다른 채널로 대조한 뒤 /verify 하면 열립니다. 설정 › Server › '원격 경로 파일 전송'으로도 켤 수 있습니다.", "此对话直连互联网 — 文件在指纹核对（/verify）前保持封锁。也可在 设置 › Server › '远程路径文件传输' 中开启。", "この会話はインターネット直結のため、指紋照合（/verify）までファイルは遮断されます。設定 › Server › 'リモート経路のファイル送信' でも有効化できます。"],
             Msg::StfServerAttached => ["Server registered — {}", "서버 등록 완료 — {}", "服务器注册完成 — {}", "サーバー登録完了 — {}"],
             Msg::StfServerFirstPin => ["First contact with server {} — its key is now pinned", "서버 {} 첫 접속 — 서버 키를 핀했습니다", "首次连接服务器 {} — 已固定其密钥", "サーバー {} 初回接続 — キーをピン留めしました"],
             Msg::StServerPinWriteFail => ["Warning: server pin could not be saved — the next connect will look like first contact", "경고: 서버 핀 저장 실패 — 다음 접속이 다시 첫 접속으로 보입니다", "警告：服务器密钥固定保存失败 — 下次连接将再次视为首次连接", "警告: サーバーピンの保存に失敗 — 次回接続は初回接続として扱われます"],

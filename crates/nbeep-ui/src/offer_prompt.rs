@@ -41,6 +41,9 @@ pub struct OfferInfo {
     /// 이어받기 보존율(M4-10c · 0~100) — Some이면 승인이 2택이 된다:
     /// `[이어받기 N%]`(기본) · `[처음부터]`. None = 종전 단일 승인.
     pub resume_pct: Option<u8>,
+    /// 성립 경로(08-22 사용자 확정 — 수신은 제한 없이 묻되 **경로를 또렷하게**):
+    /// `None`=로컬 / `Server`=서버 경유 / `Internet`=인터넷 직결. 제목 아래 색 필.
+    pub path: crate::chat_view::PathBadge,
 }
 
 /// 사용자 결정.
@@ -248,8 +251,27 @@ impl Widget for OfferPromptWidget {
         };
         ctx.text(b.x + pad, b.y + pad, b, &title, theme.text);
 
+        // ★ 경로 식별 필(08-22) — 로컬 = ok(초록) / 서버 경유 = accent / 인터넷 =
+        //   warn. 색+라벨 이중이라 색각·저대비에서도 읽힌다. 승인 판단의 첫 재료라
+        //   제목 바로 아래, 배경 필로 눈에 띄게.
+        let mut y = b.y + pad + th + self.s(10);
+        {
+            use crate::chat_view::PathBadge;
+            let (plabel, pcolor) = match self.info.path {
+                PathBadge::None => (t(Msg::PathLocalLabel), theme.ok),
+                PathBadge::Server => (t(Msg::PathServerLabel), theme.accent),
+                PathBadge::Internet => (t(Msg::PathRemoteLabel), theme.warn),
+            };
+            ctx.select_font(FontSlot::Base, true);
+            let lh = ctx.text_height();
+            let tw = ctx.text_width(plabel);
+            let pill = Rect::new(b.x + pad, y, tw + self.s(20), lh + self.s(8));
+            ctx.fill_round_rect_alpha(pill, self.s(6), pcolor, 0.15);
+            ctx.text(pill.x + self.s(10), pill.y + self.s(4), b, plabel, pcolor);
+            y = pill.bottom() + self.s(10);
+        }
+
         // 정보 4종 — 라벨/값 2열.
-        let mut y = b.y + pad + th + self.s(12);
         let label_w = self.s(88);
         let mut rows = vec![
             (t(Msg::OfferSender), self.info.sender.clone()),
@@ -352,6 +374,7 @@ mod tests {
             excluded: String::new(),
             downgrade_note: String::new(),
             resume_pct: None,
+            path: crate::chat_view::PathBadge::None,
         }
     }
 

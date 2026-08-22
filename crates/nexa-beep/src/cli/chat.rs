@@ -283,11 +283,13 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
 
     let peer = session.peer();
     println!("[대화 시작] 상대={} · 한 줄 = 전송", peer.short());
-    // 원격 경로 고지(M5-3b) — CLI는 SAS 대조 축이 없어 신뢰 상한이 Pinned:
-    // §5-1-3 곱에 따라 인터넷 경유면 파일이 양방향 차단된다(메시지는 허용).
-    let remote_files_blocked = !nbeep_core::file_allowed(path, nbeep_core::TrustLevel::Pinned);
+    // 원격 경로 고지(M5-3b · ★08-22 개정) — CLI는 SAS 대조 축이 없어 신뢰 상한이
+    // Pinned: 원격이면 파일 **발신**만 차단(옵트인 설정은 GUI 전용이라 CLI는 항상
+    // fail-closed). 수신은 개정대로 차단하지 않는다 — 경로를 표시하고 판정에 맡긴다.
+    let remote_files_blocked =
+        !nbeep_core::file_allowed(path, nbeep_core::TrustLevel::Pinned, false);
     if remote_files_blocked {
-        println!("[경로] 인터넷 경유 — 이 채널에서는 파일을 주고받을 수 없습니다(지문 대조 불가)");
+        println!("[경로] 인터넷 경유 — 파일 발신은 차단됩니다(수신은 요청마다 승인으로 결정)");
     }
     println!("{HELP_COMMANDS}");
     // 수신 스레드: 세션 소유·recv 폴·도착 출력(액터 — 한 세션 1스레드). 송신은 채널 교대.
@@ -672,20 +674,12 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
                 StreamId::File => match XferMsg::decode(&bytes) {
                     Ok(XferMsg::Offer { id, size, name, .. }) => {
                         let m = XferMsg::decode(&bytes).expect("방금 성공한 디코드");
-                        // ★ 원격 경로 게이트(M5-3b — GUI와 같은 곱 행렬 file_allowed):
-                        //   인터넷 경유면 판정 이전에 즉시 거절(fail-closed).
+                        // ★ 08-22 개정 — 수신은 차단하지 않는다(제한은 발신자 쪽):
+                        //   경로만 또렷이 고지하고 아래 판정·승인 흐름에 맡긴다.
                         if remote_files_blocked {
-                            let _ = mux.send(
-                                StreamId::File,
-                                &XferMsg::Reject {
-                                    id,
-                                    why: nbeep_core::RejectWhy::Unverified,
-                                    limit: 0,
-                                }
-                                .encode(),
+                            println!(
+                                "[파일] 인터넷 경유 요청 — 경로를 확인하고 수락 여부를 결정하세요"
                             );
-                            println!("[파일] 수신 거부 — 인터넷 경유(지문 대조 불가 채널)");
-                            continue;
                         }
                         // ★ 자격 판정 먼저 — 상호 확인 없는 상대는 무조건 거부(사용자 규칙).
                         let now = std::time::SystemTime::now()

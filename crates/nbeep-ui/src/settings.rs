@@ -906,6 +906,18 @@ pub fn registry() -> &'static [Entry] {
             },
             key: "net.server.test",
         },
+        // 원격 경로 파일 발신(08-22 사용자 확정 — Server 맨 아래 · 기본 끄기):
+        // 서버 경유·인터넷 직결 대화의 **발신**만 게이트한다. 수신은 제한 없음 —
+        // 승인 창이 경로(로컬/서버/인터넷)를 표시하고 사람이 결정한다.
+        // ⚠ Managed 잠금 목록에 넣지 않는다 — 인터넷 직결(수동 IP)은 Unmanaged에서도 있다.
+        Entry {
+            cat: Msg::CatServer,
+            sub: None,
+            label: Msg::RemoteFilesOpt,
+            desc: Msg::RemoteFilesOptDesc,
+            kind: SettingKind::Toggle,
+            key: "xfer.remote_files",
+        },
         // 그룹(M5-1 · ADR-0012) — 재동기 보관 주체 = 송신자(사용자 확정 08-13).
         // 발신자가 구성원별로 미전달 그룹 메시지를 몇 개까지 보관할지(초과 = 오래된 것
         // 폐기 — 큐 상한 필수 NFR-B-6). 소비처(app)가 관용 파싱한다.
