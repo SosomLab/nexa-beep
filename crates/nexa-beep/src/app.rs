@@ -2538,6 +2538,9 @@ struct App {
     roster_known: std::collections::HashSet<PeerId>,
     /// roster 상한 절단 1회 고지 플래그(조용한 절단 금지 — [13 §12-1] 결).
     roster_capped: bool,
+    /// 서버 공개 카드(08-22 — PeerUp 동봉 · 이름/이메일/소개): **서버 중계 표시
+    /// 전용**(미확인) — 성립 후 종단 프로필이 오면 그쪽이 이긴다(peer_profiles 우선).
+    server_cards: HashMap<PeerId, (String, String, String)>,
     /// 목록 필터 바(08-22 사용자 확정 — 툴바 아래 칩 3그룹 · 설정 영속).
     filter_bar: nbeep_ui::FilterBarWidget,
     discovery: std::sync::mpsc::Receiver<nbeep_net::DiscoveryEvent>,
@@ -4925,12 +4928,31 @@ impl App {
                     .peer_profiles
                     .get(&entry.peer)
                     .and_then(|p| p.name.as_ref())
-                    .map(|n| n.as_str().to_string());
+                    .map(|n| n.as_str().to_string())
+                    // 서버 공개 카드 폴백(08-22 — roster 상대의 공개 정보 즉시 표시 ·
+                    // 종단 프로필이 오면 위가 이긴다).
+                    .or_else(|| {
+                        self.server_cards
+                            .get(&entry.peer)
+                            .filter(|c| !c.0.is_empty())
+                            .map(|c| c.0.clone())
+                    });
                 // 소개글(08-17) — 목록 2번째 줄(줄바꿈은 위젯이 접는다).
                 let bio = self
                     .peer_profiles
                     .get(&entry.peer)
-                    .and_then(|p| p.bio.clone());
+                    .and_then(|p| p.bio.clone())
+                    .or_else(|| {
+                        // 카드 폴백 — 소개가 없으면 공개 이메일이라도(식별 재료).
+                        self.server_cards.get(&entry.peer).and_then(|c| {
+                            let v = if c.2.is_empty() { &c.1 } else { &c.2 };
+                            (!v.is_empty()).then(|| {
+                                nbeep_core::DisplayName::parse(v)
+                                    .map(|d| d.as_str().to_string())
+                                    .unwrap_or_else(|_| v.clone())
+                            })
+                        })
+                    });
                 let avatar = self
                     .peer_profiles
                     .get(&entry.peer)
@@ -5105,8 +5127,27 @@ impl App {
                 let mut touched = false;
                 for ev in c.poll_roster() {
                     match ev {
-                        nbeep_relay::RosterEvent::Up(p) => {
-                            if p != my && !self.roster_known.contains(&p) {
+                        nbeep_relay::RosterEvent::Up(p, card) => {
+                            if p == my {
+                                continue;
+                            }
+                            // 공개 카드(08-22) — 이름은 표시 이름 정제(DisplayName)
+                            // 통과분만, 이메일·소개는 제어 문자 제거(서버 중계 =
+                            // 미검증 입력 · fail-closed). 갱신도 이 이벤트로 온다.
+                            if let Some((n, e, b)) = nbeep_relay::decode_card(&card) {
+                                let clean = |s: &str| -> String {
+                                    s.chars().filter(|c| !c.is_control()).take(200).collect()
+                                };
+                                let name = nbeep_core::DisplayName::parse(&n)
+                                    .map(|d| d.as_str().to_string())
+                                    .unwrap_or_default();
+                                let val = (name, clean(&e), clean(&b));
+                                if self.server_cards.get(&p) != Some(&val) {
+                                    self.server_cards.insert(p, val);
+                                    touched |= self.server_peers.contains(&p);
+                                }
+                            }
+                            if !self.roster_known.contains(&p) {
                                 if self.roster_known.len() >= ROSTER_MAX {
                                     if !self.roster_capped {
                                         self.roster_capped = true;
@@ -5123,6 +5164,7 @@ impl App {
                         }
                         nbeep_relay::RosterEvent::Down(p) => {
                             self.roster_known.remove(&p);
+                            self.server_cards.remove(&p);
                             touched |= self.server_peers.remove(&p);
                         }
                     }
@@ -5208,6 +5250,44 @@ impl App {
         self.refresh_toolbar_server();
     }
 
+    /// 내 공개 카드(08-22 — roster에 실을 옵트인 항목만): 공유 토글이 켠 항목만
+    /// 담는다(이름·이메일 = 기존 프로필 공개 축과 같은 스위치 · DR-22 결).
+    fn my_roster_card(&self) -> Vec<u8> {
+        let on = |k: &str| self.settings.get(k) == "on";
+        let name = if on("profile.share.basic") {
+            effective_display_name(&self.settings, &self.identity.peer_id())
+                .as_str()
+                .to_string()
+        } else {
+            String::new()
+        };
+        let bio = if on("profile.share.basic") {
+            self.settings.get("profile.bio").to_string()
+        } else {
+            String::new()
+        };
+        let email = if on("profile.share.email") {
+            self.settings.get("profile.email").to_string()
+        } else {
+            String::new()
+        };
+        if name.is_empty() && email.is_empty() && bio.is_empty() {
+            return Vec::new();
+        }
+        nbeep_relay::encode_card(&name, &email, &bio)
+    }
+
+    /// 공개 카드 재공지(08-22) — 프로필·공유 토글 변경 합류점이 부른다(서버가
+    /// 카드 차이를 보고 v2 수신자에게만 재방송 · 멱등이라 부담 없음).
+    fn refresh_server_card(&mut self) {
+        if self.settings.get("net.server.announce") != "off" {
+            let card = self.my_roster_card();
+            if let Some(c) = &self.relay {
+                c.set_announce(true, card);
+            }
+        }
+    }
+
     /// 툴바 서버 접속 표시(08-22) — 접속 성립/해제 지점들이 부른다.
     fn refresh_toolbar_server(&mut self) {
         let on = self.relay.is_some();
@@ -5223,6 +5303,7 @@ impl App {
         self.roster_pending.clear();
         self.roster_known.clear();
         self.roster_capped = false;
+        self.server_cards.clear();
         if !self.server_peers.is_empty() {
             self.server_peers.clear();
             let mut inv = Invalidations::default();
@@ -9734,7 +9815,7 @@ impl App {
                 "net.server.announce" => {
                     let on = value == "on";
                     if let Some(c) = &self.relay {
-                        c.set_announce(on);
+                        c.set_announce(on, self.my_roster_card());
                     }
                     if !on {
                         self.clear_server_peers();
@@ -9801,6 +9882,9 @@ impl App {
             }
         }
         if let Some(scope) = profile_push {
+            // 서버 공개 카드도 같은 합류점에서 재공지(08-22 — 프로필·공유 토글
+            // 변경 = 카드 내용 변경 후보 · 서버가 차이를 보고 v2에만 재방송).
+            self.refresh_server_card();
             self.push_profile(scope); // 배치 1회(RL-2ⓑ)
         }
         if let Some(id) = self.main_id {
@@ -14120,7 +14204,7 @@ impl ApplicationHandler<AppEvent> for App {
                         );
                         // 프레즌스 공개(X-2e — 기본 on · 설정 hot-swap은 별도 arm).
                         if self.settings.get("net.server.announce") != "off" {
-                            client.set_announce(true);
+                            client.set_announce(true, self.my_roster_card());
                         }
                         self.relay = Some(client);
                         self.refresh_toolbar_server();
@@ -16218,6 +16302,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         roster_pending: std::collections::VecDeque::new(),
         roster_known: std::collections::HashSet::new(),
         roster_capped: false,
+        server_cards: HashMap::new(),
         filter_bar: nbeep_ui::FilterBarWidget::new(),
         discovery,
         table: nbeep_core::PeerTable::new(60_000),

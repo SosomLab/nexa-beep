@@ -151,6 +151,16 @@ pub enum C2s {
         /// 목록에 실을지 여부.
         listed: bool,
     },
+    /// ★ 공개 + **공개 카드**(08-22 — 사용자 확정 "공개 정보 즉시 표시"): 본인이
+    /// 공개로 둔 항목(이름·이메일·소개)만 담은 소형 카드를 함께 싣는다. 서버는
+    /// 내용 해석 없이 크기만 재고 그대로 되뿌린다(상한 [`CARD_MAX`]). 구서버는
+    /// 미지 kind로 버리므로 클라는 [`C2s::Announce`]를 **뒤따라** 보낸다(폴백).
+    AnnounceCard {
+        /// 목록에 실을지 여부.
+        listed: bool,
+        /// 공개 카드 바이트([`encode_card`] — 빈 값 = 카드 없음·v2 표식만).
+        card: Vec<u8>,
+    },
 }
 
 /// 서버 → 클라이언트.
@@ -212,6 +222,72 @@ pub enum S2c {
         /// 이탈한 사용자 공개키.
         peer: PeerId,
     },
+    /// ★ 등장 + 공개 카드(08-22) — [`C2s::AnnounceCard`]를 보낸(v2) 연결에만
+    /// 온다. 카드가 바뀐 재공지도 같은 kind로(수신은 upsert).
+    PeerUpCard {
+        /// 등장한 사용자 공개키.
+        peer: PeerId,
+        /// 공개 카드 바이트(빈 값 = 카드 없음).
+        card: Vec<u8>,
+    },
+}
+
+/// 공개 카드 총 바이트 상한(서버·클라 공통 — 초과 = 카드 없는 것으로 취급).
+pub const CARD_MAX: usize = 1024;
+
+/// 공개 카드 인코딩(v1) — `[1][이름 u8][..][이메일 u8][..][소개 u16][..]`.
+/// 각 필드는 UTF-8 그대로(빈 값 허용) · 총합이 [`CARD_MAX`]를 넘으면 소개부터 자른다.
+#[must_use]
+pub fn encode_card(name: &str, email: &str, bio: &str) -> Vec<u8> {
+    fn cut(s: &str, max: usize) -> &str {
+        // UTF-8 경계 보존 절단.
+        if s.len() <= max {
+            return s;
+        }
+        let mut end = max;
+        while end > 0 && !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        &s[..end]
+    }
+    let name = cut(name, 255);
+    let email = cut(email, 255);
+    let bio = cut(
+        bio,
+        CARD_MAX
+            .saturating_sub(6 + name.len() + email.len())
+            .min(u16::MAX as usize),
+    );
+    let mut o = Vec::with_capacity(6 + name.len() + email.len() + bio.len());
+    o.push(1);
+    o.push(name.len() as u8);
+    o.extend_from_slice(name.as_bytes());
+    o.push(email.len() as u8);
+    o.extend_from_slice(email.as_bytes());
+    o.extend_from_slice(&(bio.len() as u16).to_be_bytes());
+    o.extend_from_slice(bio.as_bytes());
+    o
+}
+
+/// 공개 카드 디코딩 — 형식·UTF-8 오류·상한 초과는 `None`(fail-closed).
+#[must_use]
+pub fn decode_card(b: &[u8]) -> Option<(String, String, String)> {
+    if b.is_empty() || b.len() > CARD_MAX || b[0] != 1 {
+        return None;
+    }
+    let mut i = 1usize;
+    let nlen = *b.get(i)? as usize;
+    i += 1;
+    let name = std::str::from_utf8(b.get(i..i + nlen)?).ok()?;
+    i += nlen;
+    let elen = *b.get(i)? as usize;
+    i += 1;
+    let email = std::str::from_utf8(b.get(i..i + elen)?).ok()?;
+    i += elen;
+    let blen = u16::from_be_bytes([*b.get(i)?, *b.get(i + 1)?]) as usize;
+    i += 2;
+    let bio = std::str::from_utf8(b.get(i..i + blen)?).ok()?;
+    Some((name.to_string(), email.to_string(), bio.to_string()))
 }
 
 /// 연결당 등록 가능한 RID 상한(에폭 3 + 여유).
@@ -224,6 +300,7 @@ const K_DATA: u8 = 0x04;
 const K_CLOSECH: u8 = 0x05;
 const K_PING: u8 = 0x06;
 const K_ANNOUNCE: u8 = 0x07;
+const K_ANNOUNCE_CARD: u8 = 0x09;
 const K_REGISTER_OK: u8 = 0x81;
 const K_OPEN_RESULT: u8 = 0x82;
 const K_INCOMING: u8 = 0x83;
@@ -232,6 +309,7 @@ const K_CH_CLOSED: u8 = 0x85;
 const K_PONG: u8 = 0x86;
 const K_PEER_UP: u8 = 0x87;
 const K_PEER_DOWN: u8 = 0x88;
+const K_PEER_UP_CARD: u8 = 0x89;
 
 fn put_endpoint(out: &mut Vec<u8>, ep: Option<SocketAddr>) {
     match ep {
@@ -313,6 +391,11 @@ impl C2s {
                 o.push(K_ANNOUNCE);
                 o.push(u8::from(*listed));
             }
+            Self::AnnounceCard { listed, card } => {
+                o.push(K_ANNOUNCE_CARD);
+                o.push(u8::from(*listed));
+                o.extend_from_slice(card);
+            }
         }
         o
     }
@@ -362,6 +445,10 @@ impl C2s {
             K_PING => Some(Self::Ping),
             K_ANNOUNCE => Some(Self::Announce {
                 listed: *b.get(1)? != 0,
+            }),
+            K_ANNOUNCE_CARD => Some(Self::AnnounceCard {
+                listed: *b.get(1)? != 0,
+                card: b.get(2..)?.to_vec(),
             }),
             _ => None,
         }
@@ -420,6 +507,11 @@ impl S2c {
             Self::PeerDown { peer } => {
                 o.push(K_PEER_DOWN);
                 o.extend_from_slice(peer.as_bytes());
+            }
+            Self::PeerUpCard { peer, card } => {
+                o.push(K_PEER_UP_CARD);
+                o.extend_from_slice(peer.as_bytes());
+                o.extend_from_slice(card);
             }
         }
         o
@@ -493,6 +585,17 @@ impl S2c {
                     Self::PeerUp { peer }
                 } else {
                     Self::PeerDown { peer }
+                })
+            }
+            K_PEER_UP_CARD => {
+                if b.len() < 33 {
+                    return None;
+                }
+                let mut k = [0u8; 32];
+                k.copy_from_slice(&b[1..33]);
+                Some(Self::PeerUpCard {
+                    peer: PeerId::from_bytes(k),
+                    card: b[33..].to_vec(),
                 })
             }
             _ => None,
@@ -626,6 +729,7 @@ enum Cmd {
     /// 프레즌스 공개 지정([`RelayClient::set_announce`] — X-2e roster).
     Announce {
         listed: bool,
+        card: Vec<u8>,
     },
 }
 
@@ -636,10 +740,11 @@ enum ChEvent {
 
 /// roster 델타(X-2e — [`RelayClient::poll_roster`]) — 같은 서버 **공개** 사용자의
 /// 등장/이탈. 서버는 존재(공개키)만 나른다.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RosterEvent {
-    /// 공개 사용자 등장(입장 스냅숏 포함).
-    Up(PeerId),
+    /// 공개 사용자 등장(입장 스냅숏 포함) — 둘째 항 = 공개 카드 바이트
+    /// (08-22 · 빈 값 = 없음 · 해석은 [`decode_card`] — 카드 갱신도 이 이벤트).
+    Up(PeerId, Vec<u8>),
     /// 공개 사용자 이탈(연결 종료·공개 해제).
     Down(PeerId),
 }
@@ -781,8 +886,8 @@ impl RelayClient {
 
     /// 프레즌스 공개 지정(X-2e roster · 옵트인 — [docs/32 §12-7]). `true` = 같은
     /// 서버의 공개 목록에 실리고 그 목록의 델타를 받기 시작한다(입장 스냅숏 포함).
-    pub fn set_announce(&self, listed: bool) {
-        let _ = self.cmd_tx.send(Cmd::Announce { listed });
+    pub fn set_announce(&self, listed: bool, card: Vec<u8>) {
+        let _ = self.cmd_tx.send(Cmd::Announce { listed, card });
     }
 
     /// 쌓인 roster 델타를 전부 꺼낸다(논블로킹 — 호스트 틱이 주기 드레인).
@@ -885,8 +990,14 @@ fn actor(
                     break;
                 }
                 Cmd::Nop => {} // 생존 확인 — send 성공 자체가 답이다
-                Cmd::Announce { listed } => {
-                    if session.send(&C2s::Announce { listed }.encode()).is_err() {
+                Cmd::Announce { listed, card } => {
+                    // v2(카드) 먼저 — 신서버는 이걸로 싣고 뒤의 v1은 멱등 no-op,
+                    // 구서버는 미지 kind로 버리고 v1로 싣는다(전방 호환 폴백).
+                    if session
+                        .send(&C2s::AnnounceCard { listed, card }.encode())
+                        .is_err()
+                        || session.send(&C2s::Announce { listed }.encode()).is_err()
+                    {
                         dead = true;
                         break;
                     }
@@ -959,7 +1070,10 @@ fn actor(
                     }
                 }
                 Some(S2c::PeerUp { peer }) => {
-                    let _ = roster_tx.send(RosterEvent::Up(peer));
+                    let _ = roster_tx.send(RosterEvent::Up(peer, Vec::new()));
+                }
+                Some(S2c::PeerUpCard { peer, card }) => {
+                    let _ = roster_tx.send(RosterEvent::Up(peer, card));
                 }
                 Some(S2c::PeerDown { peer }) => {
                     let _ = roster_tx.send(RosterEvent::Down(peer));

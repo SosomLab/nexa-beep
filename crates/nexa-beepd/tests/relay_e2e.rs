@@ -351,16 +351,20 @@ fn roster_announce_snapshot_deltas_and_reciprocity() {
     let (pa, pb) = (ida.peer_id(), idb.peer_id());
 
     let ca = RelayClient::connect(server.tcp_addr, &ida, &rids_around(&pa), None).unwrap();
-    ca.set_announce(true); // 혼자 — 스냅숏 없음
+    ca.set_announce(true, Vec::new()); // 혼자 — 스냅숏 없음
     let cb = RelayClient::connect(server.tcp_addr, &idb, &rids_around(&pb), None).unwrap();
-    cb.set_announce(true);
+    cb.set_announce(true, Vec::new());
     // B 입장 스냅숏 = A · A 델타 = B 등장.
     assert_eq!(
         wait_events(&cb, 1),
-        vec![RosterEvent::Up(pa)],
+        vec![RosterEvent::Up(pa, Vec::new())],
         "입장 스냅숏"
     );
-    assert_eq!(wait_events(&ca, 1), vec![RosterEvent::Up(pb)], "등장 델타");
+    assert_eq!(
+        wait_events(&ca, 1),
+        vec![RosterEvent::Up(pb, Vec::new())],
+        "등장 델타"
+    );
 
     // C = 공개 안 켬 — 아무것도 받지 못한다(상호성 — 잠복 수확 방지).
     let cc =
@@ -369,15 +373,15 @@ fn roster_announce_snapshot_deltas_and_reciprocity() {
     assert!(cc.poll_roster().is_empty(), "비공개 = 목록도 못 받는다");
 
     // B 공개 해제 → A에 이탈 델타.
-    cb.set_announce(false);
+    cb.set_announce(false, Vec::new());
     assert_eq!(
         wait_events(&ca, 1),
         vec![RosterEvent::Down(pb)],
         "해제 = 이탈"
     );
     // B 재공개 후 연결 자체를 내리면 → 종료 정리가 이탈을 방송한다.
-    cb.set_announce(true);
-    assert_eq!(wait_events(&ca, 1), vec![RosterEvent::Up(pb)]);
+    cb.set_announce(true, Vec::new());
+    assert_eq!(wait_events(&ca, 1), vec![RosterEvent::Up(pb, Vec::new())]);
     drop(cb);
     assert_eq!(
         wait_events(&ca, 1),
@@ -385,5 +389,64 @@ fn roster_announce_snapshot_deltas_and_reciprocity() {
         "연결 종료 = 이탈 방송"
     );
     drop(cc);
+    server.shutdown();
+}
+
+/// X-2e 카드(08-22) — 공개 카드가 스냅숏·델타·갱신 세 경로로 전달되고,
+/// 상한 초과 카드는 빈 카드로 강등된다(서버는 내용을 해석하지 않는다).
+#[test]
+fn roster_card_delivery_and_cap() {
+    use nbeep_relay::RosterEvent;
+    fn wait_events(c: &RelayClient, n: usize) -> Vec<RosterEvent> {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let mut got = Vec::new();
+        while got.len() < n && std::time::Instant::now() < deadline {
+            got.extend(c.poll_roster());
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        got
+    }
+    let server = test_server(0);
+    let ida = Identity::generate();
+    let idb = Identity::generate();
+    let (pa, pb) = (ida.peer_id(), idb.peer_id());
+    let card_a = nbeep_relay::encode_card("Alice", "a@x.com", "hello");
+
+    let ca = RelayClient::connect(server.tcp_addr, &ida, &rids_around(&pa), None).unwrap();
+    ca.set_announce(true, card_a.clone());
+    let cb = RelayClient::connect(server.tcp_addr, &idb, &rids_around(&pb), None).unwrap();
+    cb.set_announce(true, Vec::new());
+    // 입장 스냅숏 = A의 카드 동봉 · A 쪽 델타 = B(카드 없음).
+    assert_eq!(
+        wait_events(&cb, 1),
+        vec![RosterEvent::Up(pa, card_a.clone())],
+        "스냅숏에 카드 동봉"
+    );
+    assert_eq!(wait_events(&ca, 1), vec![RosterEvent::Up(pb, Vec::new())]);
+    // 카드 갱신 — 같은 listed 재공지가 v2 수신자에게 재방송된다.
+    let card_a2 = nbeep_relay::encode_card("Alice2", "", "");
+    ca.set_announce(true, card_a2.clone());
+    assert_eq!(
+        wait_events(&cb, 1),
+        vec![RosterEvent::Up(pa, card_a2)],
+        "카드 갱신 재방송"
+    );
+    // 상한 초과 = 빈 카드 강등(항목은 유지).
+    let idc = Identity::generate();
+    let cc =
+        RelayClient::connect(server.tcp_addr, &idc, &rids_around(&idc.peer_id()), None).unwrap();
+    cc.set_announce(true, vec![1u8; nbeep_relay::CARD_MAX + 1]);
+    let got = wait_events(&ca, 1);
+    assert_eq!(
+        got,
+        vec![RosterEvent::Up(idc.peer_id(), Vec::new())],
+        "초과 = 빈 카드"
+    );
+    // 디코더 왕복.
+    assert_eq!(
+        nbeep_relay::decode_card(&card_a),
+        Some(("Alice".into(), "a@x.com".into(), "hello".into()))
+    );
+    drop((ca, cb, cc));
     server.shutdown();
 }

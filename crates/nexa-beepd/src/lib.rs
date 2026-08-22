@@ -118,6 +118,9 @@ struct Chan {
     accepted: bool,
 }
 
+/// 공개 목록 항목 — (공개키, 공개 카드 바이트, v2 = AnnounceCard를 보낸 연결).
+type ListedEntry = (PeerId, Vec<u8>, bool);
+
 #[derive(Debug)]
 struct Shared {
     stop: AtomicBool,
@@ -128,7 +131,9 @@ struct Shared {
     tokens: Mutex<HashMap<u64, ConnId>>,
     /// ★ 프레즌스 공개 목록(X-2e roster · 옵트인 — [docs/32 §12-7]): **Announce를
     /// 켠 연결만** 공개키를 담는다(메모리만 · 저장 0 불변 · 연결 종료 = 즉시 제거).
-    listed: Mutex<HashMap<ConnId, PeerId>>,
+    /// 카드는 **내용 해석 없이** 크기만 재고 되뿌린다(봉투 원리 — 상한
+    /// [`nbeep_relay::CARD_MAX`] 초과 = 빈 카드 취급).
+    listed: Mutex<HashMap<ConnId, ListedEntry>>,
     next_ch: AtomicU32,
     next_conn: AtomicU64,
     udp_port: u16,
@@ -639,46 +644,120 @@ fn conn_thread(stream: TcpStream, peer_addr: SocketAddr, shared: &Arc<Shared>, i
                     break;
                 }
             }
-            C2s::Announce { listed } => {
-                // ★ roster(X-2e) — 켠 연결만 담고, 공개 사용자끼리만 서로 보인다
-                //   (상호성: 안 실리면 안 보인다 — 잠복 수확 방지).
-                if listed {
-                    let others: Vec<(ConnId, PeerId)> = {
-                        let mut map = match shared.listed.lock() {
-                            Ok(m) => m,
-                            Err(_) => break,
+            C2s::Announce { listed } | C2s::AnnounceCard { listed, .. } if !listed => {
+                let removed = shared
+                    .listed
+                    .lock()
+                    .ok()
+                    .and_then(|mut m| m.remove(&conn_id));
+                if removed.is_some() {
+                    broadcast_peer_down(shared, conn_id, client_peer);
+                    shared.log(&format!("conn#{conn_id} 공개 off"));
+                }
+            }
+            ann @ (C2s::Announce { .. } | C2s::AnnounceCard { .. }) => {
+                // ★ roster(X-2e · 08-22 카드 확장) — 켠 연결만 담고, 공개끼리만
+                //   서로 보인다(상호성). AnnounceCard = v2(카드 수신 가능) 표식 +
+                //   공개 카드(크기만 검사 — 초과 = 빈 카드). v1 Announce는 카드가
+                //   이미 있으면 보존한다(클라가 v2→v1 순서로 둘 다 보내는 폴백).
+                let (v2, card) = match ann {
+                    C2s::AnnounceCard { card, .. } => {
+                        let c = if card.len() > nbeep_relay::CARD_MAX {
+                            Vec::new()
+                        } else {
+                            card
                         };
-                        if map.insert(conn_id, client_peer).is_some() {
-                            continue; // 이미 공개 — 중복 방송 없음(멱등)
-                        }
-                        map.iter()
-                            .filter(|(id, _)| **id != conn_id)
-                            .map(|(id, p)| (*id, *p))
-                            .collect()
+                        (true, Some(c))
+                    }
+                    _ => (false, None),
+                };
+                enum Change {
+                    New,
+                    CardChanged,
+                    None,
+                }
+                let (change, others) = {
+                    let mut map = match shared.listed.lock() {
+                        Ok(m) => m,
+                        Err(_) => break,
                     };
-                    // 입장 스냅숏(기존 공개 사용자 → 나) + 등장 방송(나 → 그들).
-                    let mut dead = false;
-                    for (cid, p) in others {
-                        if session.send(&S2c::PeerUp { peer: p }.encode()).is_err() {
-                            dead = true;
-                            break;
+                    let change = match map.entry(conn_id) {
+                        std::collections::hash_map::Entry::Vacant(v) => {
+                            v.insert((client_peer, card.clone().unwrap_or_default(), v2));
+                            Change::New
                         }
-                        let _ = enqueue(shared, cid, S2c::PeerUp { peer: client_peer });
-                    }
-                    shared.log(&format!("conn#{conn_id} 공개 on"));
-                    if dead {
-                        break;
-                    }
-                } else {
-                    let removed = shared
+                        std::collections::hash_map::Entry::Occupied(mut o) => {
+                            let e = o.get_mut();
+                            e.2 |= v2;
+                            match card {
+                                Some(c) if c != e.1 => {
+                                    e.1 = c;
+                                    Change::CardChanged
+                                }
+                                _ => Change::None, // 멱등 재공지 — 방송 없음
+                            }
+                        }
+                    };
+                    let others: Vec<(ConnId, PeerId, Vec<u8>, bool)> = map
+                        .iter()
+                        .filter(|(id, _)| **id != conn_id)
+                        .map(|(id, (p, c, their_v2))| (*id, *p, c.clone(), *their_v2))
+                        .collect();
+                    (change, others)
+                };
+                let my_card = |shared: &Arc<Shared>| {
+                    shared
                         .listed
                         .lock()
                         .ok()
-                        .and_then(|mut m| m.remove(&conn_id));
-                    if removed.is_some() {
-                        broadcast_peer_down(shared, conn_id, client_peer);
-                        shared.log(&format!("conn#{conn_id} 공개 off"));
+                        .and_then(|m| m.get(&conn_id).map(|(_, c, _)| c.clone()))
+                        .unwrap_or_default()
+                };
+                // 수신자별 인코딩 — v2 = 카드 동봉 · v1 = 존재만(구클라 호환).
+                let up_for = |their_v2: bool, peer: PeerId, card: Vec<u8>| {
+                    if their_v2 {
+                        S2c::PeerUpCard { peer, card }
+                    } else {
+                        S2c::PeerUp { peer }
                     }
+                };
+                match change {
+                    Change::New => {
+                        // 입장 스냅숏(기존 공개 → 나) + 등장 방송(나 → 그들).
+                        let mine = my_card(shared);
+                        let mut dead = false;
+                        for (cid, p, c, their_v2) in others {
+                            let snap = up_for(v2, p, c);
+                            if session.send(&snap.encode()).is_err() {
+                                dead = true;
+                                break;
+                            }
+                            let _ =
+                                enqueue(shared, cid, up_for(their_v2, client_peer, mine.clone()));
+                        }
+                        shared.log(&format!("conn#{conn_id} 공개 on"));
+                        if dead {
+                            break;
+                        }
+                    }
+                    Change::CardChanged => {
+                        // 카드 갱신 재방송 — v2 수신자에게만(v1은 쓸 수 없다).
+                        let mine = my_card(shared);
+                        for (cid, _, _, their_v2) in others {
+                            if their_v2 {
+                                let _ = enqueue(
+                                    shared,
+                                    cid,
+                                    S2c::PeerUpCard {
+                                        peer: client_peer,
+                                        card: mine.clone(),
+                                    },
+                                );
+                            }
+                        }
+                        shared.log(&format!("conn#{conn_id} 카드 갱신({}B)", mine.len()));
+                    }
+                    Change::None => {}
                 }
             }
         }
