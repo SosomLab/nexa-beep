@@ -23,6 +23,9 @@ use nbeep_core::{t, tf, Msg};
 pub struct OfferInfo {
     /// 보낸 사람(표시 이름 + 지문 앞자리 등 — 호스트가 만든 문자열).
     pub sender: String,
+    /// 이 파일이 속한 공유 그룹 이름(M5-1h · 08-23 — 그룹 팬아웃 표식이 있을 때만.
+    /// 빈 값 = 1:1 = 행 생략). 승인 판단 재료: "어느 방에서 온 파일인가".
+    pub group: String,
     /// 받은 시각(지역 시각 문자열).
     pub when: String,
     /// 파일 이름(원본 그대로 — 실체화 시 정규화된다).
@@ -279,6 +282,10 @@ impl Widget for OfferPromptWidget {
             (t(Msg::OfferCount), self.info.count.to_string()),
             (t(Msg::OfferName), self.info.name.clone()),
         ];
+        if !self.info.group.is_empty() {
+            // 그룹 팬아웃(M5-1h) — 어느 방의 파일인지 발신자 바로 아래에.
+            rows.insert(1, (t(Msg::OfferGroupRow), self.info.group.clone()));
+        }
         if !self.info.excluded.is_empty() {
             // 제외분 식별(08-20) — 시도 전체를 알 수 있게 목록으로 한 줄.
             rows.push((t(Msg::OfferExcluded), self.info.excluded.clone()));
@@ -366,6 +373,7 @@ mod tests {
     fn info() -> OfferInfo {
         OfferInfo {
             sender: "김철수 (a1b2c3d4)".into(),
+            group: String::new(),
             when: "22:14:03".into(),
             name: "보고서.pdf".into(),
             size: 1024 * 1024,
