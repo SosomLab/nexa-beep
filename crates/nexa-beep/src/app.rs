@@ -203,7 +203,15 @@ enum AppEvent {
         scan: nbeep_core::ScanOutcome,
     },
     /// 전송 실패·거절 — 사유 문장(표시 전용).
-    XferFailed { peer: PeerId, why: String },
+    /// `name`이 비면 **배치 전체 실패**(종전 동작 — 거절·와이어 오류). `name`이
+    /// 있으면 **그 파일만** 종결(M5-1h · 08-24 — 상대의 개별 Cancel이 배치를
+    /// 쓰러뜨리지 않게). `mine`은 name이 있을 때만 의미(액터가 장부로 판정).
+    XferFailed {
+        peer: PeerId,
+        why: String,
+        name: String,
+        mine: bool,
+    },
     /// 상대가 **수락**했다 — 대기 창을 닫고 스트리밍이 시작된다.
     XferAccepted { peer: PeerId },
     /// 격리함 스캔 완료(08-18 — 워커 · gen 불일치 = 낡은 결과 폐기).
@@ -1223,6 +1231,8 @@ fn spawn_session_actor(
                         let _ = proxy.send_event(AppEvent::XferFailed {
                             peer,
                             why: nbeep_core::t(nbeep_core::Msg::XferSrcReadFail).into(),
+                            name: String::new(),
+                            mine: false,
                         });
                         continue;
                     }
@@ -1241,6 +1251,8 @@ fn spawn_session_actor(
                             let _ = proxy.send_event(AppEvent::XferFailed {
                                 peer,
                                 why: nbeep_core::t(nbeep_core::Msg::XferSrcChanged).into(),
+                                name: String::new(),
+                                mine: false,
                             });
                             continue;
                         }
@@ -1527,6 +1539,8 @@ fn spawn_session_actor(
                             &mut inbox,
                             &mut outgoing,
                             &mut sending,
+                            &mut parked,
+                            &mut pause_wanted,
                             &mut recv_started,
                             &mut recv_names,
                             &mut sent_names,
@@ -2023,6 +2037,8 @@ fn xfer_step(
     inbox: &mut nbeep_core::XferInbox,
     outgoing: &mut HashMap<nbeep_core::XferId, (std::path::PathBuf, u64)>,
     sending: &mut Option<ActiveSend>,
+    parked: &mut Vec<(ActiveSend, bool)>,
+    pause_wanted: &mut std::collections::HashSet<nbeep_core::XferId>,
     recv_started: &mut HashMap<nbeep_core::XferId, u64>,
     recv_names: &mut HashMap<nbeep_core::XferId, String>,
     sent_names: &mut HashMap<nbeep_core::XferId, (String, u64)>,
@@ -2035,7 +2051,12 @@ fn xfer_step(
     use nbeep_core::mux::StreamId;
     use nbeep_core::XferMsg;
     let fail = |why: String| {
-        let _ = proxy.send_event(AppEvent::XferFailed { peer, why });
+        let _ = proxy.send_event(AppEvent::XferFailed {
+            peer,
+            why,
+            name: String::new(), // 빈 이름 = 배치 전체 실패(종전 동작)
+            mine: false,
+        });
     };
     match XferMsg::decode(bytes) {
         Ok(XferMsg::Offer {
@@ -2263,7 +2284,27 @@ fn xfer_step(
             if sending.as_ref().is_some_and(|st| st.id == id) {
                 *sending = None; // 상대(수신측)가 진행 중 취소 — 펌프 즉시 중단(08-16)
             }
-            fail(nbeep_core::t(nbeep_core::Msg::XferPeerCanceled).into());
+            parked.retain(|(st, _)| st.id != id); // 보관 정지분 취소(정지 중 취소)
+            pause_wanted.remove(&id);
+            // ★ 파일 단위 종결(M5-1h · 08-24 실기) — 이름을 알면 **그 라인만**
+            //   닫는다: 종전 fail()은 배치 전체 실패라, 한 파일의 개별 취소가
+            //   같은 배치의 나머지 파일까지 쓰러뜨렸다("두 번째 파일도 취소").
+            let named = sent_names
+                .remove(&id)
+                .map(|(n, _)| (n, true))
+                .or_else(|| recv_names.remove(&id).map(|n| (n, false)));
+            match named {
+                Some((name, mine)) => {
+                    let _ = proxy.send_event(AppEvent::XferFailed {
+                        peer,
+                        why: nbeep_core::t(nbeep_core::Msg::XferPeerCanceled).into(),
+                        name,
+                        mine,
+                    });
+                }
+                // 미지 xid — 판정 불가: 종전대로 배치 실패(fail-closed).
+                None => fail(nbeep_core::t(nbeep_core::Msg::XferPeerCanceled).into()),
+            }
         }
         Err(e) => fail(nbeep_core::tf(
             nbeep_core::Msg::XfWireError,
@@ -4579,6 +4620,7 @@ impl App {
         if let Some(chat) = self.chats.get_mut(&peer) {
             chat.set_xfer(xp, &mut inv);
         }
+        self.refresh_group_banners_for(peer); // 그룹 수신 배너 동기(M5-1h)
         self.rows_dirty = true;
         if self.now_ms().saturating_sub(self.last_rows_ms) >= self.list_refresh_ms {
             self.refresh_rows(&mut inv);
@@ -4592,6 +4634,7 @@ impl App {
         if let Some(chat) = self.chats.get_mut(&peer) {
             chat.set_xfer(xp, &mut inv);
         }
+        self.refresh_group_banners_for(peer); // 그룹 수신 배너 동기(M5-1h)
         self.refresh_rows(&mut inv);
     }
 
@@ -11015,6 +11058,29 @@ impl App {
             }
             self.request_redraw(id);
         }
+        // 수신 합산 배너의 "전체취소"(M5-1h · 08-24 사용자 확정 — 수신자는 전체
+        // 진척·전체취소가 필요하다): 이 방에 걸린 발신자별로 1:1과 같은 전체취소
+        // 루틴을 돌린다(정책 두 벌 금지 — cancel_active_xfer 재사용).
+        if self
+            .gchats
+            .get_mut(&gid)
+            .is_some_and(ChatViewWidget::take_xfer_cancel)
+        {
+            let peers: Vec<PeerId> = self
+                .recv_group_live
+                .get(&gid)
+                .map(|v| {
+                    let mut ps: Vec<PeerId> = v.iter().map(|(p, _, _)| *p).collect();
+                    ps.dedup();
+                    ps
+                })
+                .unwrap_or_default();
+            for p in peers {
+                self.cancel_active_xfer(p);
+            }
+            self.refresh_group_recv_banner(gid);
+            self.request_redraw(id);
+        }
         // 인라인 썸네일 클릭 = 확대 미리보기(M5-1h — 1:1 drain_chat_effects와 동형).
         if let Some(qp) = self
             .gchats
@@ -11593,18 +11659,17 @@ impl App {
         let (gname, gsize) = (gx.name.clone(), gx.size);
         let state = if all_terminal {
             gx.closed = true;
-            // 종결 요약 — 발생한 축만("완료 2 · 실패 1 · 제외 1").
-            let mut parts: Vec<String> = Vec::new();
-            for (i, msg) in [
-                (0usize, Msg::XferAggDone),
-                (4, Msg::XferAggFailed),
-                (5, Msg::XferAggExcluded),
-            ] {
-                if c[i] > 0 {
-                    parts.push(format!("{} {}", t(msg), c[i]));
-                }
-            }
-            let summary = parts.join(" · ");
+            // 종결 요약(08-24 사용자 확정) — **각 상태별 카운트 상시**:
+            // "완료 n · 취소 n · 미전송 n"(0이어도 보인다 — 명수 대차가 한눈에).
+            let summary = format!(
+                "{} {} · {} {} · {} {}",
+                t(Msg::XferAggDone),
+                c[0],
+                t(Msg::XferAggCanceled),
+                c[4],
+                t(Msg::XferAggUnsent),
+                c[5],
+            );
             if c[0] > 0 {
                 nbeep_ui::XferLineState::Done { note: summary }
             } else {
@@ -11667,6 +11732,97 @@ impl App {
         }
     }
 
+    /// 수신 파일 1개의 장부 정리(M5-1h · 08-24 — 개별 취소의 공용 절반): xid 장부·
+    /// 정지 표식·배치 집계·자동 수락 잔여에서 그 파일만 뺀다(배치는 계속).
+    fn drop_recv_file(&mut self, peer: PeerId, name: &str) {
+        // 활성 슬롯은 **그 파일일 때만** 비운다 — 다른 파일 수신 중이면 남겨야
+        // 진행 배너가 얼지 않는다(취소 경합 가드가 active를 본다 · 08-18).
+        let xid = self
+            .recv_xids
+            .get(&peer)
+            .and_then(|l| l.iter().find(|(n, _)| n == name).map(|(_, x)| *x));
+        if xid.is_some() && self.active_recv.get(&peer).copied() == xid {
+            self.active_recv.remove(&peer);
+        }
+        if let Some(l) = self.recv_xids.get_mut(&peer) {
+            l.retain(|(n, _)| n != name);
+        }
+        if let Some(setp) = self.recv_paused.get_mut(&peer) {
+            setp.remove(name);
+            if setp.is_empty() {
+                self.recv_paused.remove(&peer);
+            }
+        }
+        // 배너 총량 수축 — 안 올 바이트를 분모에 남기면 100%가 영영 안 된다.
+        if let Some(sizes) = self.recv_batch_sizes.get_mut(&peer) {
+            if let Some(pos) = sizes.iter().position(|(n, _)| n == name) {
+                let (_, fsize) = sizes.remove(pos);
+                if let Some(e) = self.recv_batch.get_mut(&peer) {
+                    e.1 = e.1.saturating_sub(1);
+                    e.3 = e.3.saturating_sub(fsize);
+                }
+            }
+        }
+        // 자동 수락 잔여에서 제거 — 안 올(또는 취소한) 파일을 기다리지 않게.
+        if let Some(rem) = self.batch_approved.get_mut(&peer) {
+            rem.retain(|(n, _)| n != name);
+            if rem.is_empty() {
+                self.batch_approved.remove(&peer);
+            }
+        }
+    }
+
+    /// 그룹 수신 합산 배너 재계산(M5-1h · 08-24 사용자 확정 — **수신자만**: 발신
+    /// 풍선은 카운터가 전부지만 수신자는 전체 진척·전체취소가 필요하다). 이 방에
+    /// 걸린 발신자들의 **수신 방향** 진행을 합산해 그룹 뷰 헤더 아래에 단다.
+    fn refresh_group_recv_banner(&mut self, gid: nbeep_core::group::GroupId) {
+        let peers: Vec<PeerId> = self
+            .recv_group_live
+            .get(&gid)
+            .map(|v| {
+                let mut ps: Vec<PeerId> = v.iter().map(|(p, _, _)| *p).collect();
+                ps.dedup();
+                ps
+            })
+            .unwrap_or_default();
+        let mut agg: Option<nbeep_ui::XferProgress> = None;
+        for p in peers {
+            let Some(xp) = self.xfer_progress.get(&p).filter(|x| !x.sending) else {
+                continue;
+            };
+            let a = agg.get_or_insert(nbeep_ui::XferProgress {
+                done_bytes: 0,
+                total_bytes: 0,
+                done_files: 0,
+                total_files: 0,
+                sending: false,
+                auto_cancel_ms: None,
+            });
+            a.done_bytes = a.done_bytes.saturating_add(xp.done_bytes);
+            a.total_bytes = a.total_bytes.saturating_add(xp.total_bytes);
+            a.done_files = a.done_files.saturating_add(xp.done_files);
+            a.total_files = a.total_files.saturating_add(xp.total_files);
+        }
+        let mut inv = Invalidations::default();
+        if let Some(chat) = self.gchats.get_mut(&gid) {
+            chat.set_xfer(agg, &mut inv);
+        }
+        self.redraw_group(gid);
+    }
+
+    /// 이 상대가 걸린 방들의 수신 배너 일괄 재계산(진행·종결·취소 합류점).
+    fn refresh_group_banners_for(&mut self, peer: PeerId) {
+        let gids: Vec<nbeep_core::group::GroupId> = self
+            .recv_group_live
+            .iter()
+            .filter(|(_, v)| v.iter().any(|(p, _, _)| *p == peer))
+            .map(|(g, _)| *g)
+            .collect();
+        for gid in gids {
+            self.refresh_group_recv_banner(gid);
+        }
+    }
+
     /// 그룹 풍선 ✕ = **전송 제외**(M5-1h · 사용자 확정 08-23) — 1:N에서 일시정지는
     /// 송신자가 제어하기 어렵다: 제어는 제외 하나. 구성원별 처분 = 대기 = 철회 ·
     /// 진행·정지 = Cancel(수신측은 "사용자 취소" 실패 처리) · 완료 = 불변.
@@ -11687,6 +11843,7 @@ impl App {
             if st.terminal() {
                 continue; // 완료·실패분은 제어 대상이 아니다(사용자 확정).
             }
+            let mut was_current = false;
             if let Some(pos) = self.paused_sends.get(&m).and_then(|l| {
                 l.iter()
                     .position(|(n, s, _, _)| n == name && (size == 0 || *s == size))
@@ -11703,6 +11860,7 @@ impl App {
                 }
             } else if self.current_send.get(&m) == Some(&path) {
                 // 오퍼 중·전송 중 — Cancel 통지 후 그 상대의 다음 파일로(배치 계속).
+                was_current = true;
                 if let Some(xid) = self
                     .awaiting_accept
                     .remove(&m)
@@ -11732,7 +11890,12 @@ impl App {
                 }
             }
             self.gx_note(gid, m, name, size, GxState::Excluded);
-            self.pump_send_queue(m); // 현재 파일이었다면 다음 파일 진행
+            // ★ 펌프는 **현재 파일을 끊었을 때만**(08-24 실기 — 대기분 제외 후의
+            //   무조건 펌프가 활성 전송 중에 다음 오퍼를 겹쳐 배치를 오염시켰다:
+            //   current_send 덮임 = 이후 이벤트 오배달 = 멀쩡한 파일까지 실패).
+            if was_current {
+                self.pump_send_queue(m);
+            }
             self.refresh_send_batch(m);
         }
         self.set_status(format!(
@@ -12690,7 +12853,47 @@ impl App {
                     self.set_xfer_line_named(peer, false, &ctl.name, ctl.size, St::Active { done });
                 }
             }
-            (false, A::Cancel) => self.cancel_active_xfer(peer),
+            (false, A::Cancel) => {
+                // ★ 개별 파일 취소(M5-1h · 08-24 사용자 확정 — "항목 ✕ = 그
+                //   파일만"): 종전 cancel_active_xfer는 배치 전체 취소였다.
+                let xid = self
+                    .recv_xids
+                    .get(&peer)
+                    .and_then(|l| l.iter().find(|(n, _)| n == &ctl.name).map(|(_, x)| *x));
+                if let Some(xid) = xid {
+                    // 오퍼 이후 — 와이어 Cancel(발신측도 그 파일만 닫고 다음으로).
+                    if let Some(c) = self.conversations.get(&peer) {
+                        let _ = c.out_tx.send(SessionCmd::CancelXfer(xid));
+                    }
+                } else {
+                    // 오퍼 전(발신측 큐 단계) — 도착 시 자동 거절 무장(이름+크기).
+                    self.batch_declined
+                        .entry(peer)
+                        .or_default()
+                        .push((ctl.name.clone(), ctl.size));
+                }
+                self.drop_recv_file(peer, &ctl.name);
+                // 승인 대기 중이던 오퍼면 큐에서도 뺀다(카드가 그 파일을 또 묻지 않게).
+                let had_offer = self.pending_offers.get_mut(&peer).is_some_and(|q| {
+                    let before = q.len();
+                    q.retain(|(_, n, s, _)| !(n == &ctl.name && *s == ctl.size));
+                    q.len() != before
+                });
+                if had_offer {
+                    self.refresh_approve_view(peer);
+                }
+                self.set_xfer_line_named(
+                    peer,
+                    false,
+                    &ctl.name,
+                    ctl.size,
+                    St::Failed {
+                        why: nbeep_core::t(nbeep_core::Msg::XferCanceled).into(),
+                    },
+                );
+                self.note_xfer_state_change(peer);
+                self.refresh_group_banners_for(peer);
+            }
         }
         self.refresh_send_batch(peer);
         self.redraw_conversation(peer);
@@ -14860,7 +15063,66 @@ impl ApplicationHandler<AppEvent> for App {
                     self.request_redraw(mid);
                 }
             }
-            AppEvent::XferFailed { peer, why } => {
+            AppEvent::XferFailed {
+                peer,
+                why,
+                name,
+                mine,
+            } => {
+                // ★ 파일 단위 종결(M5-1h · 08-24 실기 — "✕ 하나가 배치 전체를
+                //   쓰러뜨렸다"): 이름이 있으면 **그 파일만** 닫고 배치는 계속.
+                if !name.is_empty() {
+                    if mine {
+                        // 발신 파일의 개별 취소(상대 수신자가 그 파일만 ✕).
+                        let is_current = self
+                            .current_send
+                            .get(&peer)
+                            .and_then(|p| p.file_name())
+                            .is_some_and(|n| n.to_string_lossy() == name);
+                        if is_current {
+                            self.current_send.remove(&peer);
+                            self.active_send.remove(&peer);
+                            self.awaiting_accept.remove(&peer);
+                            self.preparing_send.remove(&peer);
+                        }
+                        if let Some(list) = self.paused_sends.get_mut(&peer) {
+                            list.retain(|(n2, ..)| n2 != &name);
+                            if list.is_empty() {
+                                self.paused_sends.remove(&peer);
+                            }
+                        }
+                        if let Some(set) = self.send_paused.get_mut(&peer) {
+                            set.retain(|p| {
+                                !p.file_name().is_some_and(|n| n.to_string_lossy() == name)
+                            });
+                        }
+                        self.set_xfer_line_named(
+                            peer,
+                            true,
+                            &name,
+                            0,
+                            nbeep_ui::XferLineState::Failed { why: why.clone() },
+                        );
+                        if is_current {
+                            self.pump_send_queue(peer); // 다음 파일(배치 계속)
+                        }
+                        self.refresh_send_batch(peer);
+                    } else {
+                        // 수신 파일의 개별 취소(발신자가 그 파일만 제외/취소).
+                        self.drop_recv_file(peer, &name);
+                        self.set_xfer_line_named_or_fifo(
+                            peer,
+                            false,
+                            &name,
+                            nbeep_ui::XferLineState::Failed { why: why.clone() },
+                        );
+                        self.refresh_group_banners_for(peer);
+                    }
+                    self.note_xfer_state_change(peer);
+                    self.set_status(nbeep_core::tf(nbeep_core::Msg::StfFileWhy, &[&why]));
+                    self.redraw_conversation(peer);
+                    return;
+                }
                 self.active_send.remove(&peer);
                 self.active_recv.remove(&peer);
                 self.resumed_recv.remove(&peer); // .part는 남긴다 — 실패가 곧 재개 사유
@@ -15864,15 +16126,28 @@ impl ApplicationHandler<AppEvent> for App {
                     //   AlwaysOnTop 금지 표준(08-14)의 명시 예외(경고 모달과 같은 축).
                     .with_window_level(winit::window::WindowLevel::AlwaysOnTop)
                     .with_window_icon(self.icon.clone());
-                let attrs = self.modal_attrs(attrs, false); // 메인 소유(창 묶음 부상)
-                                                            // ★ 대화창 기준 중앙(08-20 사용자 확정) — 그 대화가 보이는 창
-                                                            //   (분리 모드 = 해당 Chat 창 · 단일 = 메인)의 한가운데에 띄운다.
-                let attrs = {
-                    let anchor = self
-                        .windows
+                // ★ 소유·중앙 기준 = **그 대화가 보이는 창**(08-24 실기 — 종전
+                //   메인 소유는 승인 후 목록창이 부상해 대화 맥락이 사라졌다):
+                //   그룹발 오퍼 = 그 방 창 · 1:1 = 그 상대 창 · 없으면 메인.
+                let anchor_id: Option<WindowId> = {
+                    let ggid = self
+                        .pending_offers
+                        .get(&peer)
+                        .and_then(|q| q.front())
+                        .and_then(|(_, n, s, _)| self.recv_group_gid(peer, n, *s));
+                    self.windows
                         .iter()
-                        .find(|(_, e)| e.role == Role::Chat(peer))
-                        .map(|(_, e)| &e.window)
+                        .find(|(_, e)| match ggid {
+                            Some(g) => e.role == Role::GroupChat(g),
+                            None => e.role == Role::Chat(peer),
+                        })
+                        .map(|(i, _)| *i)
+                };
+                let attrs = self.modal_attrs_from(anchor_id, attrs, false); // 대화창 소유(부상·복귀 축)
+                let attrs = {
+                    let anchor = anchor_id
+                        .and_then(|a| self.windows.get(&a))
+                        .map(|e| &e.window)
                         .or_else(|| {
                             self.main_id
                                 .and_then(|m| self.windows.get(&m))

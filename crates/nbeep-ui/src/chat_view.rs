@@ -1443,10 +1443,10 @@ impl ChatViewWidget {
                             parts.push(format!("{} {paused}", t(Msg::XferAggPaused)));
                         }
                         if *failed > 0 {
-                            parts.push(format!("{} {failed}", t(Msg::XferAggFailed)));
+                            parts.push(format!("{} {failed}", t(Msg::XferAggCanceled)));
                         }
                         if *excluded > 0 {
-                            parts.push(format!("{} {excluded}", t(Msg::XferAggExcluded)));
+                            parts.push(format!("{} {excluded}", t(Msg::XferAggUnsent)));
                         }
                         parts.join(" · ")
                     }

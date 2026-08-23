@@ -996,13 +996,14 @@ pub enum Msg {
     XferStDone,
     XferStFailed,
     /// 그룹 팬아웃 풍선의 **머릿수 카운터** 라벨(M5-1h · 08-23) — 발신 풍선은
-    /// 개별 진행률 대신 "완료 n · 진행 n · 대기 n"만 보인다(사용자 확정).
+    /// 개별 진행률 대신 "완료 n · 진행 n · 대기 n"만 보인다(사용자 확정). 종결
+    /// 요약 어휘는 08-24 확정 = **완료·취소·미전송**(각 상태별 카운트 상시).
     XferAggDone,
     XferAggActive,
     XferAggWaiting,
     XferAggPaused,
-    XferAggFailed,
-    XferAggExcluded,
+    XferAggCanceled,
+    XferAggUnsent,
     /// 승인 카드의 그룹 행(M5-1h) — 이 파일이 어느 방의 팬아웃인지.
     OfferGroupRow,
     StfAutoAcceptRecv,
@@ -1485,8 +1486,8 @@ impl Msg {
             Msg::XferAggActive => ["Sending", "진행", "进行", "進行"],
             Msg::XferAggWaiting => ["Waiting", "대기", "等待", "待機"],
             Msg::XferAggPaused => ["Paused", "정지", "暂停", "停止"],
-            Msg::XferAggFailed => ["Failed", "실패", "失败", "失敗"],
-            Msg::XferAggExcluded => ["Excluded", "제외", "排除", "除外"],
+            Msg::XferAggCanceled => ["Canceled", "취소", "取消", "キャンセル"],
+            Msg::XferAggUnsent => ["Unsent", "미전송", "未发送", "未送信"],
             Msg::OfferGroupRow => ["Group", "그룹", "群组", "グループ"],
             Msg::StfAutoAcceptRecv => ["Auto-accepted: {} ({}) receiving", "자동 수락: {} ({}) 수신 시작", "自动接受：{}（{}）开始接收", "自動受信: {} ({}) 受信開始"],
             Msg::StfFileRejected => ["File rejected ({}): {}", "파일 거부({}): {}", "文件已拒绝（{}）：{}", "ファイル拒否({}): {}"],
