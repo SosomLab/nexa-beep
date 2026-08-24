@@ -7,6 +7,8 @@
 
 ## 2026-08-24
 
+- **(mac) ★v0.2.9 릴리스**: M5-4f 교체형 설치 자리 정정 탑재 · winget 검수 잔존 → brew·Releases만 · 완주 실측 = run success·자산 14종·brew tap 0.2.9 추종 ✓.
+
 - **(mac) ★교체형 설치 자리 데이터 소실 정정(M5-4f)**: brew 0.2.6→0.2.8 업그레이드에 신원·설정 소실 보고 → 원인 = `.app` 번들·brew keg가 사용자 소유라 `data_dir()` ①포터블로 오판, `brew upgrade`가 번들째 교체 → `nexa_conf::is_replaced_on_upgrade`(순수 판정)로 ① 건너뛰기 + 옛 `data/` 1회 이관 · Linux .deb 안전·Win NSIS 보존 확인 · 가짜 번들 `--whoami` 실측. [journal](journal/2026-08-24.md).
 
 - **(Win) ★v0.2.8 릴리스**: 자동 실행 외부 삭제 존중(`cd15ff6`) 탑재 · winget/choco 재점검 = 검수 잔존 → brew·Releases만(18 §5 규칙 2회차) · 완주 실측 = run success·자산 14종·brew 0.2.8 추종 ✓.
