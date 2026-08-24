@@ -3,7 +3,9 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
-> **갱신: 2026-08-24 8차 (KST · Windows)** — ★ **v0.2.7 릴리스 완주 실측**: release run success · Release **공개**·**자산 14종 전량**(5타깃×2채널+매니페스트+SHA256SUMS) · **brew 0.2.7 추종 ✓** · publish-windows-packages = 매니페스트 아티팩트만(스위치 false — 규칙 의도대로 제출 없음). 후속 = 회사 Win v0.2.7 설치·구버전 혼재 폴백 실기(v0.2.6 클라 = 1:1 자연 강등 육안 기회)·2-PC 실기. [journal/2026-08-24.md](journal/2026-08-24.md).
+> **갱신: 2026-08-24 9차 (KST · Windows)** — **자동 실행 외부 삭제 존중**(`cd15ff6` · M3-25 후속): "토글 켰는데 레지스트리에 없다" 보고 → 실측 = 설치본 재시작 시 정상 등록(로직 결함 아님 — 값이 외부에서 지워진 상태) → **사용자 확정 = 존중**: OS 관측 `is_registered()` + 마커 `app.autostart_reg`(HIDDEN_KEYS — 첫 실행·구버전 업그레이드와 삭제를 구분)로 부팅 판정(`boot_sync` 순수 함수 · 회귀 6항) — 외부 삭제 = 재등록하지 않고 `app.autostart=off` 강하 + 상태바 고지(4개 국어). **Win 실기 ✓**(첫 실행 등록 → 값 삭제 후 재실행 = 재등록 없음·off 동기) · 3-OS check · **791 green**(+1). [journal/2026-08-24.md](journal/2026-08-24.md).
+
+> **직전(08-24 8차 · Windows)** — ★ **v0.2.7 릴리스 완주 실측**: release run success · Release **공개**·**자산 14종 전량**(5타깃×2채널+매니페스트+SHA256SUMS) · **brew 0.2.7 추종 ✓** · publish-windows-packages = 매니페스트 아티팩트만(스위치 false — 규칙 의도대로 제출 없음). 후속 = 회사 Win v0.2.7 설치·구버전 혼재 폴백 실기(v0.2.6 클라 = 1:1 자연 강등 육안 기회)·2-PC 실기. [journal/2026-08-24.md](journal/2026-08-24.md).
 
 > **직전(08-24 7차 · Windows)** — ★ **v0.2.7 릴리스 + winget/choco 운용 규칙**(`ef16bd0`·`d8ae925`): 탑재 = M5-1h 그룹창 파일 송수신 통합 일습 · **배포 규칙 신설(사용자 확정)** = 릴리스 전 직전 제출 검수 점검 — 완료(winget PR MERGED·choco 피드 등재)면 스위치 ON 포함 · 대기면 false 제외([18 §5](18-build-and-test.md)·[packaging/README](../packaging/README.md)) · **점검 실측** = winget 2건 OPEN·choco 피드 미등재 → 검수 잔존 = **v0.2.7 brew·Releases만**. 로컬 게이트 fmt ✓·clippy 0·790 green. [journal/2026-08-24.md](journal/2026-08-24.md).
 
