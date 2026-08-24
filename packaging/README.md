@@ -76,6 +76,12 @@ winget과 Chocolatey는 **중앙 저장소 검수**를 거치고, 한번 올라�
 | winget | `WINGET_PUBLISH=true` | `WINGET_TOKEN` |
 | Chocolatey | `CHOCO_PUSH=true` | `CHOCO_API_KEY` |
 
+★ **스위치 운용 규칙(사용자 확정 08-24)** — 릴리스 전에 **직전 제출의 검수
+상태를 점검**하고, **완료(winget PR MERGED · choco 공개 피드 등재)면 켜서
+포함, 대기 중이면 false 유지로 제외**한다. 첫 검수(v0.2.2) 통과 전 새 버전
+제출 금지 — 검수 중 새 제출은 큐를 엉키게 한다. 점검 명령은
+[docs/18 §5](../docs/18-build-and-test.md#5-배포--githubworkflowsreleaseyml).
+
 **Homebrew에는 이 스위치가 없다.** 검수가 없는 내 탭이고 되돌리기도 커밋 하나여서,
 릴리스와 함께 따라가는 편이 사용자에게 일관된다. `TAP_TOKEN`이 없으면 파일만 만들어
 아티팩트로 올리고 **왜 안 나갔는지 말한다**(조용히 성공한 척하지 않는다).

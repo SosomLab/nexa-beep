@@ -173,10 +173,21 @@ docker run --rm -it --init -p 47200:47200 \
 ```bash
 # 1) main이 green인지 먼저 확인한다 — red 상태로 태그를 밀지 않는다.
 gh run list --branch main --workflow ci --limit 1
-# 2) 버전을 올린다(워크스페이스 단일 버전).
+# 2) ★ winget/choco 이전 제출 상태 점검(규칙 · 사용자 확정 08-24 —
+#    **직전 제출이 검수 통과 전이면 새 버전 제출 금지**: 검수 중 새 제출은
+#    큐를 엉키게 하고 반려 사유가 된다):
+gh pr view 421961 --repo microsoft/winget-pkgs --json state   # MERGED = 검수 완료
+gh pr view 421967 --repo microsoft/winget-pkgs --json state   # (Portable)
+curl -s "https://community.chocolatey.org/api/v2/Packages()?%24filter=Id%20eq%20%27nexa-beep%27"
+#    → 피드에 항목이 있으면 모더레이션 통과(대기 중 패키지는 피드에서 숨겨진다).
+#    둘 다 완료 → 스위치 켜서 이번 태그에 포함:
+#      gh variable set WINGET_PUBLISH -b true && gh variable set CHOCO_PUSH -b true
+#    대기 중 → false 유지 = 이번 릴리스에서 제외(brew·Releases만 나간다).
+#    통과가 확인된 뒤의 릴리스부터 켠다 — 이후는 태그 하나로 전 채널.
+# 3) 버전을 올린다(워크스페이스 단일 버전).
 #    태그와 Cargo 버전이 어긋나면 brew formula의 test가 잡는다.
 $EDITOR Cargo.toml       # [workspace.package] version
-# 3) 태그를 밀면 끝 — 빌드·릴리스 공개·brew 탭 반영이 자동으로 이어진다.
+# 4) 태그를 밀면 끝 — 빌드·릴리스 공개·brew 탭 반영이 자동으로 이어진다.
 git tag -a v0.1.2 -m "..." && git push origin v0.1.2
 ```
 
