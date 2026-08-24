@@ -7,6 +7,8 @@
 
 ## 2026-08-24
 
+- **(mac) ★교체형 설치 자리 데이터 소실 정정(M5-4f)**: brew 0.2.6→0.2.8 업그레이드에 신원·설정 소실 보고 → 원인 = `.app` 번들·brew keg가 사용자 소유라 `data_dir()` ①포터블로 오판, `brew upgrade`가 번들째 교체 → `nexa_conf::is_replaced_on_upgrade`(순수 판정)로 ① 건너뛰기 + 옛 `data/` 1회 이관 · Linux .deb 안전·Win NSIS 보존 확인 · 가짜 번들 `--whoami` 실측. [journal](journal/2026-08-24.md).
+
 - **(Win) ★v0.2.8 릴리스**: 자동 실행 외부 삭제 존중(`cd15ff6`) 탑재 · winget/choco 재점검 = 검수 잔존 → brew·Releases만(18 §5 규칙 2회차) · 완주 실측 = run success·자산 14종·brew 0.2.8 추종 ✓.
 
 - **(Win) 자동 실행 외부 삭제 존중(M3-25 후속)**: "토글 켰는데 레지스트리에 없다" 보고 → 실측 = 재시작 시 정상 등록(외부 삭제 후 상태였음) → 사용자 확정 = 존중: OS 관측(`is_registered`)+마커(`app.autostart_reg`)로 외부 삭제를 첫 실행과 구분, 재등록 대신 설정 off 강하+고지. Win 실기 ✓ · 791 green.

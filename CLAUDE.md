@@ -23,7 +23,7 @@
 | DR-1 | **제로 컨피그가 정체성** — "실행 = 참여". 사전 등록·계정·서버 설정을 요구하는 설계는 채택하지 않는다 |
 | DR-2 | 문서·git 규약은 `nexa-dir2` [docs/16](docs/16-doc-git-conventions.md) **전면 차용** |
 | DR-3 | **크로스플랫폼 4타깃** — Windows(x64·**ARM64**)·macOS·Linux. 기능 차등 없음 |
-| DR-4 | **설치본 + 포터블 2채널** — 포터블은 압축 해제 즉시 실행, 영속물은 실행 파일 옆(폴백 있음). ⚠️ **폴백 종점을 임시 폴더로 두지 않는다**(08-19 실기 — macOS `tmp_cleaner`가 `/tmp` 아래 `identity.key`를 지워 신원이 조용히 바뀌고, 이전 키에 sealed된 격리물·핀을 영구히 못 연다). 3신원 실기 폴더 = **`$HOME/.nexa-beep-multi`** |
+| DR-4 | **설치본 + 포터블 2채널** — 포터블은 압축 해제 즉시 실행, 영속물은 실행 파일 옆(폴백 있음). ⚠️ **폴백 종점을 임시 폴더로 두지 않는다**(08-19 실기 — macOS `tmp_cleaner`가 `/tmp` 아래 `identity.key`를 지워 신원이 조용히 바뀌고, 이전 키에 sealed된 격리물·핀을 영구히 못 연다). 3신원 실기 폴더 = **`$HOME/.nexa-beep-multi`**. ⚠️ **"실행 파일 옆 쓰기 가능"만으로 포터블 판정 금지**(08-24 실기 — mac `.app` 번들·brew keg는 사용자 소유라 쓰기가 되지만 `brew upgrade`가 폴더째 교체해 신원·설정 소실 → `nexa_conf::is_replaced_on_upgrade`로 제외 · Win NSIS는 `data/` 보존 설계) |
 | DR-5 | **예산 게이트** — 유휴 RSS **≤30MB** · 산출물 **≤10MB/타깃** · **런타임 의존 0** · 24h 누수 RSS ≤2MB·핸들 증가 0. 초과 시 main 병합 금지 ([05 NFR-B](docs/05-requirements.md)) |
 | DR-6 | **모든 렌더링 자체 구현 커스텀 컨트롤** — 플랫폼 간 동일 UI. OS 위젯·UI 프레임워크(Qt/Avalonia/Flutter/WebView) **금지** |
 | DR-7 | **단말 간 E2E 암호화 필수** — 전송 경로 무관. 릴레이 서버도 평문 접근 불가. 키 인증(TOFU/지문)은 ADR-0002 |

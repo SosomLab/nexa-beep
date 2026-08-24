@@ -393,9 +393,16 @@ for d in A B; do cp target/release/{nexa-beep,nbeep-imgdec} $S/$d/; done   # img
 
 **왜 갈리나 — 포터블 규칙의 부수 효과(DR-4)**
 
-`data_dir()`는 **① `실행파일 옆/data`가 쓰기 가능하면 거기** → ② 사용자 설정 디렉터리 → ③ 임시 폴더
+`data_dir()`는 **① `실행파일 옆/data`가 쓰기 가능하면 거기** → ② 사용자 설정 디렉터리 → ③ `~/.nexa-beep`
 순으로 고른다([app.rs](../crates/nexa-beep/src/app.rs)). 폴더를 나누면 ①에서 갈리므로
 **신원 키·핀·그룹·설정이 통째로 분리**된다.
+
+> ★ **①의 예외(08-24)** — 실행 파일이 **업그레이드 때 폴더째 교체되는 자리**(macOS `.app` 번들 ·
+> Homebrew keg `Cellar/…` · `/usr`·`/opt`)에 있으면 ①을 건너뛰고 ②로 간다
+> (`nexa_conf::is_replaced_on_upgrade`). 그 자리는 사용자 소유라 쓰기가 **되는데도** `brew upgrade`가
+> 번들을 갈아 끼우며 안의 `identity.key`·설정을 지운다(실기 — cask 0.2.6→0.2.8 지문 소실).
+> 옛 번들에 `data/`가 남아 있으면 ②로 1회 이관한다. Windows 설치본(`%LOCALAPPDATA%\Programs`)은
+> NSIS가 `data/`를 보존하도록 짜여 있어 ① 그대로(포터블 규약 유지).
 
 > ⚠️ **③(임시 폴더)은 제품에도 남아 있는 같은 함정이다** — ①②가 모두 쓰기 불가면 앱이 스스로
 > 임시 폴더를 고르는데, 그 자리는 위 경고대로 `identity.key`가 지워지는 곳이다(신원이 조용히
