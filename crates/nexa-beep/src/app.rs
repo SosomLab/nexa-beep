@@ -4679,7 +4679,8 @@ impl App {
         self.recv_batch.remove(&peer);
         self.recv_batch_sizes.remove(&peer);
         self.xfer_pause_since.remove(&peer);
-        self.clear_batch_approval(peer);
+        // 상대의 전체취소와 경합한 지각 오퍼도 다시 묻지 않는다(요청 단위 원칙).
+        self.decline_remaining_request(peer);
         if let Some(sha) = self.resumed_recv.remove(&peer) {
             crate::part::remove_partial(crate::gate::CH_GUI, &sha);
         }
@@ -12517,6 +12518,51 @@ impl App {
         }
     }
 
+    /// 요청(배치) 잔여를 통째로 거절 무장(M4-2e 원칙 · 08-24 실기 — "전체취소
+    /// 후 다음 파일 승인을 다시 묻는다"): 승인/거절은 파일 단위가 아니라 **요청
+    /// 단위**다. 전체취소 시점에 ① 이미 도착해 승인 대기 중이던 오퍼는 지금
+    /// 거절하고 ② manifest·자동 수락 잔여는 **자동 거절 장부**로 옮긴다 —
+    /// 취소 통지와 경합해 뒤늦게 도착하는 같은 요청의 오퍼가 카드를 재노출하지
+    /// 않게(다시 묻는 것은 발신자가 **새 요청**(새 manifest)을 보낼 때만).
+    fn decline_remaining_request(&mut self, peer: PeerId) {
+        if let Some(q) = self.pending_offers.remove(&peer) {
+            for (xid, name, size, _) in q {
+                self.send_xfer_decision(peer, xid, false, nbeep_core::RejectWhy::Declined, None);
+                self.set_xfer_line_named(
+                    peer,
+                    false,
+                    &name,
+                    size,
+                    nbeep_ui::XferLineState::Failed {
+                        why: nbeep_core::t(nbeep_core::Msg::XferCanceled).into(),
+                    },
+                );
+            }
+        }
+        self.close_approve(peer);
+        let mut rem: Vec<(String, u64)> = self
+            .recv_manifest
+            .get(&peer)
+            .map(|m| {
+                m.iter()
+                    .filter(|e| !e.2)
+                    .map(|e| (e.0.clone(), e.1))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if let Some(a) = self.batch_approved.get(&peer) {
+            for it in a {
+                if !rem.contains(it) {
+                    rem.push(it.clone());
+                }
+            }
+        }
+        self.clear_batch_approval(peer); // 승인 장부 마감 — 거절 장부는 아래서 재무장
+        if !rem.is_empty() {
+            self.batch_declined.insert(peer, rem);
+        }
+    }
+
     /// 진행 중 전송 취소(08-16 — 배너 "취소" 버튼) — 방향 불문 그 상대의 활성
     /// 전송 하나를 끊는다. 발신 배치가 걸려 있으면 대기 큐도 함께 비운다(취소는
     /// "이 작업 그만"이지 "이 파일만 건너뛰기"가 아니다).
@@ -12569,7 +12615,7 @@ impl App {
                     }
                 }
                 self.recv_paused.remove(&peer);
-                self.clear_batch_approval(peer);
+                self.decline_remaining_request(peer); // 요청 단위 마감(카드 재노출 금지)
                 self.fail_pending_xfer_lines(
                     peer,
                     false,
@@ -12675,7 +12721,7 @@ impl App {
                 }
             }
             self.recv_paused.remove(&peer);
-            self.clear_batch_approval(peer);
+            self.decline_remaining_request(peer); // 요청 단위 마감(카드 재노출 금지)
             self.fail_pending_xfer_lines(
                 peer,
                 false,
