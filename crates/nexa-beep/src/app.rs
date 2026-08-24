@@ -5392,7 +5392,18 @@ impl App {
                     LinkState::Idle
                 };
                 // 진행 중 전송이 있으면 이름 아래 막대로 보인다(슬라이스 4에서 채운다).
-                let xfer = self.xfer_progress.get(&entry.peer).copied();
+                // ★ 그룹발(M5-1h · 실기 08-24 4차)은 **그룹 행 몫** — 개별 행에서는
+                //   숨긴다(그룹 수신 진행이 상대 행 막대로 보이던 것).
+                let xfer = self.xfer_progress.get(&entry.peer).copied().filter(|xp| {
+                    if xp.sending {
+                        !self.group_send_tags.contains_key(&entry.peer)
+                    } else {
+                        !self
+                            .recv_group_live
+                            .values()
+                            .any(|v| v.iter().any(|(p, _, _)| *p == entry.peer))
+                    }
+                });
                 // 읽지 않은 메시지 배지(③) — 개수 + 마지막 확인 시각(있을 때만).
                 let unread = self.unread.get(&entry.peer).copied().unwrap_or(0);
                 let last_read = (unread > 0)
@@ -5465,6 +5476,7 @@ impl App {
                 fav: s.pinned,
                 owned: s.roster.owner == me,
                 member_invite: s.roster.member_invite,
+                xfer: self.group_row_xfer(s.local_id),
             })
             .collect();
         let mut grows = grows;
@@ -11497,6 +11509,49 @@ impl App {
                 v.remove(0);
             }
         }
+    }
+
+    /// 그룹 행 진행 막대 원료(M5-1h · 08-24) — 이 방에 걸린 그룹발 전송의 진행
+    /// 합산(수신 = recv_group_live의 발신자들 · 발신 = group_send_tags에 이 방이
+    /// 걸린 구성원들). 개별 행에서는 같은 진행을 숨긴다(refresh_rows — 그룹발은
+    /// 그룹 축으로).
+    fn group_row_xfer(&self, gid: nbeep_core::group::GroupId) -> Option<nbeep_ui::XferProgress> {
+        let mut agg: Option<nbeep_ui::XferProgress> = None;
+        let fold = |xp: &nbeep_ui::XferProgress, agg: &mut Option<nbeep_ui::XferProgress>| {
+            let a = agg.get_or_insert(nbeep_ui::XferProgress {
+                done_bytes: 0,
+                total_bytes: 0,
+                done_files: 0,
+                total_files: 0,
+                sending: xp.sending,
+                auto_cancel_ms: None,
+            });
+            a.done_bytes = a.done_bytes.saturating_add(xp.done_bytes);
+            a.total_bytes = a.total_bytes.saturating_add(xp.total_bytes);
+            a.done_files = a.done_files.saturating_add(xp.done_files);
+            a.total_files = a.total_files.saturating_add(xp.total_files);
+            a.sending |= xp.sending;
+        };
+        if let Some(v) = self.recv_group_live.get(&gid) {
+            let mut seen: Vec<PeerId> = Vec::new();
+            for (p, _, _) in v {
+                if seen.contains(p) {
+                    continue;
+                }
+                seen.push(*p);
+                if let Some(xp) = self.xfer_progress.get(p).filter(|x| !x.sending) {
+                    fold(xp, &mut agg);
+                }
+            }
+        }
+        for (p, tags) in &self.group_send_tags {
+            if tags.iter().any(|(_, g)| *g == gid) {
+                if let Some(xp) = self.xfer_progress.get(p).filter(|x| x.sending) {
+                    fold(xp, &mut agg);
+                }
+            }
+        }
+        agg
     }
 
     /// 그룹 수신 표식 소비(M5-1h · 실기 08-24 4차) — 그 파일 라인이 **종결되면
