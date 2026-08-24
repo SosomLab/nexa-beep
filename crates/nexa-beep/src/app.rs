@@ -11803,6 +11803,11 @@ impl App {
             a.total_bytes = a.total_bytes.saturating_add(xp.total_bytes);
             a.done_files = a.done_files.saturating_add(xp.done_files);
             a.total_files = a.total_files.saturating_add(xp.total_files);
+            // 자동 취소 카운트다운(M4-2e ⓓ) — 구성원별 타이머 중 가장 임박한 값.
+            a.auto_cancel_ms = match (a.auto_cancel_ms, xp.auto_cancel_ms) {
+                (Some(x), Some(y)) => Some(x.min(y)),
+                (x, y) => x.or(y),
+            };
         }
         let mut inv = Invalidations::default();
         if let Some(chat) = self.gchats.get_mut(&gid) {
@@ -16055,8 +16060,20 @@ impl ApplicationHandler<AppEvent> for App {
             // 리셋하므로 표시하지 않는다).
             let peers: Vec<PeerId> = self.xfer_progress.keys().copied().collect();
             for peer in peers {
-                let counting =
-                    !self.active_send.contains_key(&peer) && !self.active_recv.contains_key(&peer);
+                // 수신은 정지 중에도 active_recv 슬롯이 남는다(해제 축 = 완료·취소
+                // 뿐 — 발신의 XferPaused는 active_send를 뺀다). 정지 집합에 든
+                // 활성 수신은 "진행 중"이 아니므로 카운트다운을 가리지 않는다.
+                let recv_running = self.active_recv.get(&peer).is_some_and(|xid| {
+                    let name = self
+                        .recv_xids
+                        .get(&peer)
+                        .and_then(|l| l.iter().find(|(_, x)| x == xid).map(|(n, _)| n.as_str()));
+                    match name {
+                        Some(n) => !self.recv_paused.get(&peer).is_some_and(|s| s.contains(n)),
+                        None => true, // 이름 미상 = 종전대로 활성 취급(fail-safe)
+                    }
+                });
+                let counting = !self.active_send.contains_key(&peer) && !recv_running;
                 let desired = self
                     .xfer_pause_since
                     .get(&peer)

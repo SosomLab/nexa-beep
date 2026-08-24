@@ -99,6 +99,9 @@ fn fmt_date_pill(w: WallTime, short: bool) -> String {
 /// OS 타이틀바와의 시각 구분은 전용 배경 + 하단 1px 경계선.
 const HEAD_H: i32 = 48;
 
+/// 전송 진척 줄 높이 — 상하 2px씩 여유(22→26 · 사용자 확정 08-24).
+const XFER_ROW_H: i32 = 26;
+
 /// 대화 헤더의 경로 배지(08-22 사용자 확정 — 원격을 둘로 분리):
 /// **서버 경유**(Managed 랑데부 — 아는 상대의 정상 원격 경로 · accent) vs
 /// **인터넷 직결**(IP/도메인 수동 — 경고색 유지). 파일 게이트 정책(PathClass)은
@@ -1347,7 +1350,11 @@ impl ChatViewWidget {
     /// 스레드 뷰포트(헤더·진척 줄·입력창 제외).
     fn thread_viewport(&self) -> Rect {
         let head_h = self.s(HEAD_H);
-        let xfer_h = if self.xfer.is_some() { self.s(22) } else { 0 };
+        let xfer_h = if self.xfer.is_some() {
+            self.s(XFER_ROW_H)
+        } else {
+            0
+        };
         let input = self.input_bar();
         let top = self.bounds.y + head_h + xfer_h;
         Rect::new(
@@ -2294,7 +2301,7 @@ impl Widget for ChatViewWidget {
             self.xfer_cancel_hit.set(None);
         }
         if let Some(xp) = self.xfer {
-            let row = Rect::new(head.x, head.bottom(), head.w, self.s(22));
+            let row = Rect::new(head.x, head.bottom(), head.w, self.s(XFER_ROW_H));
             ctx.fill_rect(row, theme.chrome_bg);
             ctx.select_font(FontSlot::Status, false);
             let sh = ctx.text_height();
