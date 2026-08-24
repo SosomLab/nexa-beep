@@ -31,6 +31,37 @@ pub fn apply(enabled: bool) -> io::Result<()> {
     }
 }
 
+/// 자동 실행 등록이 OS에 **실재하는지** 관측한다(설정값과 무관) — 사용자는
+/// 레지스트리 편집기·정리 도구로 앱 밖에서 등록을 지울 수 있고, 그 의사는
+/// 존중해야 한다(무조건 재등록 = 사용자와 앱의 줄다리기). 미지 타깃은 false.
+pub fn is_registered() -> bool {
+    os_registered()
+}
+
+/// 부팅 동기화 판정(순수) — 설정값·"등록해 둔 적 있음" 마커·OS 관측의 곱.
+/// 외부 삭제 존중은 **마커가 있을 때만**: 첫 실행·마커 없는 구버전 업그레이드는
+/// 등록 부재가 삭제가 아니라 "아직"이므로 재등록이 맞다.
+#[derive(Debug, PartialEq, Eq)]
+pub enum BootSync {
+    /// 켬 — 현재 경로로 (재)등록한다(포터블 이동 재동기화 포함).
+    Register,
+    /// 끔 — 등록을 걷어낸다(멱등).
+    Unregister,
+    /// 켬인데 등록해 둔 것이 밖에서 사라졌다 — 재등록하지 않는다.
+    /// 호출자는 설정을 끔으로 내려 화면과 실제를 일치시킨다.
+    RespectRemoval,
+}
+
+pub fn boot_sync(want_on: bool, was_registered: bool, os_registered: bool) -> BootSync {
+    if !want_on {
+        BootSync::Unregister
+    } else if was_registered && !os_registered {
+        BootSync::RespectRemoval
+    } else {
+        BootSync::Register
+    }
+}
+
 // ── Windows — HKCU\…\Run 값(레지스트리 · 재부팅 불요·즉시 유효) ──────────────
 
 #[cfg(windows)]
@@ -43,6 +74,11 @@ fn register(exe: &Path) -> io::Result<()> {
 #[cfg(windows)]
 fn unregister() -> io::Result<()> {
     reg::delete_run_value(APP_NAME)
+}
+
+#[cfg(windows)]
+fn os_registered() -> bool {
+    reg::has_run_value(APP_NAME)
 }
 
 #[cfg(windows)]
@@ -74,11 +110,27 @@ mod reg {
             data_len: u32,
         ) -> i32;
         fn RegDeleteValueW(hkey: isize, value_name: *const u16) -> i32;
+        fn RegOpenKeyExW(
+            hkey: isize,
+            sub_key: *const u16,
+            options: u32,
+            sam_desired: u32,
+            result: *mut isize,
+        ) -> i32;
+        fn RegQueryValueExW(
+            hkey: isize,
+            value_name: *const u16,
+            reserved: *mut u32,
+            value_type: *mut u32,
+            data: *mut u8,
+            data_len: *mut u32,
+        ) -> i32;
         fn RegCloseKey(hkey: isize) -> i32;
     }
 
     // 핸들 상수는 부호 확장된 포인터 값(winreg.h) — u32 → i32 → isize 순으로 굳힌다.
     const HKEY_CURRENT_USER: isize = 0x8000_0001u32 as i32 as isize;
+    const KEY_QUERY_VALUE: u32 = 0x0001;
     const KEY_SET_VALUE: u32 = 0x0002;
     const REG_SZ: u32 = 1;
     const ERROR_SUCCESS: i32 = 0;
@@ -147,6 +199,41 @@ mod reg {
         // SAFETY: 유효한 키 핸들과 널 종료 값 이름.
         with_run_key(|hkey| unsafe { RegDeleteValueW(hkey, name_w.as_ptr()) })
     }
+
+    /// 값 **존재 관측**(읽기 전용 — 데이터는 안 받는다: lpData·lpcbData 둘 다
+    /// NULL이면 존재 시 ERROR_SUCCESS만 돌아온다). 키·값 부재·오류 = false.
+    pub(super) fn has_run_value(name: &str) -> bool {
+        let sub = wide(RUN_KEY);
+        let name_w = wide(name);
+        let mut hkey: isize = 0;
+        // SAFETY: 유효한 널 종료 wide 문자열과 출력 핸들 포인터. 성공 시 아래에서 닫는다.
+        let rc = unsafe {
+            RegOpenKeyExW(
+                HKEY_CURRENT_USER,
+                sub.as_ptr(),
+                0,
+                KEY_QUERY_VALUE,
+                &mut hkey,
+            )
+        };
+        if rc != ERROR_SUCCESS {
+            return false;
+        }
+        // SAFETY: 열린 키 핸들 + 널 종료 값 이름 · 출력은 전부 NULL(존재 판정만).
+        let rc = unsafe {
+            RegQueryValueExW(
+                hkey,
+                name_w.as_ptr(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        // SAFETY: 위에서 성공적으로 연 핸들.
+        unsafe { RegCloseKey(hkey) };
+        rc == ERROR_SUCCESS
+    }
 }
 
 // ── macOS — ~/Library/LaunchAgents plist(RunAtLoad · 무권한) ─────────────────
@@ -163,6 +250,11 @@ fn register(exe: &Path) -> io::Result<()> {
 #[cfg(target_os = "macos")]
 fn unregister() -> io::Result<()> {
     remove_if_exists(&mac_plist_path()?)
+}
+
+#[cfg(target_os = "macos")]
+fn os_registered() -> bool {
+    mac_plist_path().map(|p| p.is_file()).unwrap_or(false)
 }
 
 #[cfg(target_os = "macos")]
@@ -216,6 +308,11 @@ fn register(exe: &Path) -> io::Result<()> {
 #[cfg(all(unix, not(target_os = "macos")))]
 fn unregister() -> io::Result<()> {
     remove_if_exists(&linux_desktop_path()?)
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn os_registered() -> bool {
+    linux_desktop_path().map(|p| p.is_file()).unwrap_or(false)
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
@@ -275,6 +372,11 @@ fn unregister() -> io::Result<()> {
     Ok(())
 }
 
+#[cfg(not(any(windows, unix)))]
+fn os_registered() -> bool {
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -309,5 +411,21 @@ mod tests {
             xml_escape("/usr/local/bin/nexa-beep"),
             "/usr/local/bin/nexa-beep"
         );
+    }
+
+    // 부팅 동기화 판정 — 외부 삭제 존중은 "등록해 둔 적 있음"일 때만.
+    #[test]
+    fn boot_sync_respects_external_removal_only_after_prior_registration() {
+        // 끔 = 언제나 걷어내기(관측·마커 무관).
+        assert_eq!(boot_sync(false, true, true), BootSync::Unregister);
+        assert_eq!(boot_sync(false, false, false), BootSync::Unregister);
+        // 켬 + 등록 실재 = 경로 재동기화 재등록(포터블 이동).
+        assert_eq!(boot_sync(true, true, true), BootSync::Register);
+        // 켬 + 마커 없음 + 등록 없음 = 첫 실행·구버전 업그레이드 → 등록.
+        assert_eq!(boot_sync(true, false, false), BootSync::Register);
+        // 켬 + 마커 있음 + 등록 없음 = 사용자가 밖에서 지웠다 → 존중.
+        assert_eq!(boot_sync(true, true, false), BootSync::RespectRemoval);
+        // 켬 + 마커 없음 + 등록 실재(수기 등록) = 경로 최신화 재등록.
+        assert_eq!(boot_sync(true, false, true), BootSync::Register);
     }
 }

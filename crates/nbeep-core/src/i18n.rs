@@ -664,6 +664,8 @@ pub enum Msg {
     StImeApplied,
     StAutostartOn,
     StAutostartOff,
+    /// 자동 실행 등록이 앱 밖에서 제거됨(08-24) — 재등록 대신 설정을 끔으로 동기.
+    StAutostartGone,
     StAvatarChanged,
     StFontApplied,
     StGroupNeedSelect,
@@ -1222,6 +1224,7 @@ impl Msg {
             Msg::StImeApplied => ["Korean input (IME) settings applied", "한글 입력(IME) 기준값 적용", "已应用韩语输入（IME）设置", "韓国語入力（IME）設定を適用"],
             Msg::StAutostartOn => ["Start at login: on — registered with the OS", "시스템 시작 시 자동 실행: 켬 — OS에 등록했습니다", "登录时自动启动：开 — 已注册到系统", "ログイン時自動起動: オン — OSに登録しました"],
             Msg::StAutostartOff => ["Start at login: off — removed the OS registration", "시스템 시작 시 자동 실행: 끔 — OS 등록을 제거했습니다", "登录时自动启动：关 — 已移除系统注册", "ログイン時自動起動: オフ — OS登録を解除しました"],
+            Msg::StAutostartGone => ["Start at login: the OS registration was removed outside the app — setting turned off (re-enable in Settings)", "시스템 시작 시 자동 실행: OS 등록이 앱 밖에서 제거되어 설정을 끔으로 바꿨습니다(설정에서 다시 켤 수 있음)", "登录时自动启动：系统注册已在应用外被移除 — 设置已改为关（可在设置中重新开启）", "ログイン時自動起動: OS登録がアプリ外で削除されたため設定をオフにしました（設定で再度オンにできます）"],
             Msg::StAvatarChanged => ["Avatar changed — propagated to connected peers", "아바타 변경 — 연결된 상대에게 반영", "头像已更改 — 已同步给已连接的对方", "アバター変更 — 接続中の相手に反映"],
             Msg::StFontApplied => ["Font settings applied", "글꼴 설정 적용됨", "已应用字体设置", "フォント設定を適用しました"],
             Msg::StGroupNeedSelect => ["To make a group, ⌘/Ctrl-click to select peers first", "그룹을 만들려면 ⌘/Ctrl+클릭으로 상대를 먼저 선택하세요", "创建群组请先用 ⌘/Ctrl+点击选择对方", "グループ作成は ⌘/Ctrl+クリックで先に相手を選択"],

@@ -9800,12 +9800,36 @@ impl App {
         // 시스템 시작 시 자동 실행(08-20 · 기본 on) — **부팅마다 재동기화**: 포터블
         // (DR-4)은 실행 파일 위치가 옮겨질 수 있어 등록 경로가 낡는다. 켜져 있으면
         // 현재 경로로 재등록, 꺼져 있으면 등록 제거(수기 잔재 치유 · 멱등).
+        // ★ 외부 삭제 존중(08-24 사용자 확정) — 등록해 둔 것(마커)이 OS에서
+        // 사라졌으면 사용자가 밖(레지스트리 편집기 등)에서 지운 것: 재등록하지
+        // 않고 설정을 끔으로 내려 토글 표시와 실제를 일치시킨다.
         // 실패 = 상태바 고지(기능은 계속 — 설정값 유지로 다음 기회에 재시도).
-        if let Err(e) = nbeep_plat::autostart::apply(self.settings.get("app.autostart") != "off") {
-            self.set_status(nbeep_core::tf(
-                nbeep_core::Msg::StfAutostartFail,
-                &[&e.to_string()],
-            ));
+        {
+            use nbeep_plat::autostart::{self, BootSync};
+            let want_on = self.settings.get("app.autostart") != "off";
+            let was_reg = self.settings.get("app.autostart_reg") == "on";
+            match autostart::boot_sync(want_on, was_reg, autostart::is_registered()) {
+                BootSync::RespectRemoval => {
+                    self.settings.set("app.autostart", "off".to_string());
+                    self.settings.set("app.autostart_reg", "off".to_string());
+                    self.conf_mark();
+                    self.set_status(nbeep_core::t(nbeep_core::Msg::StAutostartGone));
+                }
+                sync => match autostart::apply(matches!(sync, BootSync::Register)) {
+                    Ok(()) => {
+                        // 마커 = 외부 삭제 감지의 기준점 — 성공한 상태만 기록.
+                        let marker = if want_on { "on" } else { "off" };
+                        if self.settings.get("app.autostart_reg") != marker {
+                            self.settings.set("app.autostart_reg", marker.to_string());
+                            self.conf_mark();
+                        }
+                    }
+                    Err(e) => self.set_status(nbeep_core::tf(
+                        nbeep_core::Msg::StfAutostartFail,
+                        &[&e.to_string()],
+                    )),
+                },
+            }
         }
         // 트레이 상주(M3-2a · Windows — 비지원 OS는 None): 아이콘 = 내 아바타 ·
         // 이벤트는 프록시로 메인에 복귀(좌클릭/열기·종료).
@@ -10318,11 +10342,15 @@ impl App {
                 "app.autostart" => {
                     let on = value == "on";
                     match nbeep_plat::autostart::apply(on) {
-                        Ok(()) => self.set_status(nbeep_core::t(if on {
-                            nbeep_core::Msg::StAutostartOn
-                        } else {
-                            nbeep_core::Msg::StAutostartOff
-                        })),
+                        Ok(()) => {
+                            // 마커 = "등록해 둔 적 있음"(외부 삭제 감지 기준점 · 08-24).
+                            self.settings.set("app.autostart_reg", value.clone());
+                            self.set_status(nbeep_core::t(if on {
+                                nbeep_core::Msg::StAutostartOn
+                            } else {
+                                nbeep_core::Msg::StAutostartOff
+                            }))
+                        }
                         Err(e) => self.set_status(nbeep_core::tf(
                             nbeep_core::Msg::StfAutostartFail,
                             &[&e.to_string()],
