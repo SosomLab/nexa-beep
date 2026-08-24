@@ -534,6 +534,44 @@ pub fn decode_pause_req(bytes: &[u8]) -> Option<(XferId, bool)> {
     Some((id, pause))
 }
 
+/// **그룹 전송 표식** 태그(M5-1h · 08-23) — 발신자가 "이 (이름, 크기) 파일은 공유
+/// 그룹 `uid`의 팬아웃"임을 manifest·오퍼보다 **먼저** 알린다. 수신측은 이 표식으로
+/// 승인 카드·수신 풍선을 그 그룹 방에 배치한다(전송 자체는 1:1 File 스트림 그대로 —
+/// 프로토콜·게이트 무변경). 이름 기반인 이유 = manifest(태그 13)·qpause(태그 17)와
+/// 같은 문법: 오퍼 전(xid 발급 전)에도 배치 전체를 표식할 수 있다.
+/// 구버전 수신자는 미지 Control 태그 무시 = 종전 1:1 창 수신(자연 강등 · 전방 호환).
+pub const GROUP_HINT_TAG: u8 = 18;
+
+/// 그룹 전송 표식 인코딩 — `TAG ‖ uid(32) ‖ size(8 LE) ‖ name_len(2 LE) ‖ name`.
+#[must_use]
+pub fn encode_group_hint(uid: &[u8; 32], name: &str, size: u64) -> Vec<u8> {
+    let nb = name.as_bytes();
+    let nlen = usize::from(u16::try_from(nb.len()).unwrap_or(u16::MAX));
+    let mut out = Vec::with_capacity(43 + nlen);
+    out.push(GROUP_HINT_TAG);
+    out.extend_from_slice(uid);
+    out.extend_from_slice(&size.to_le_bytes());
+    out.extend_from_slice(&u16::try_from(nlen).unwrap_or(u16::MAX).to_le_bytes());
+    out.extend_from_slice(&nb[..nlen]);
+    out
+}
+
+/// 그룹 전송 표식 해석 — `Some((uid, name, size))`. 형식 불일치 = None(다른 프레임).
+#[must_use]
+pub fn decode_group_hint(bytes: &[u8]) -> Option<([u8; 32], String, u64)> {
+    if bytes.len() < 43 || bytes[0] != GROUP_HINT_TAG {
+        return None;
+    }
+    let uid: [u8; 32] = bytes[1..33].try_into().ok()?;
+    let size = u64::from_le_bytes(bytes[33..41].try_into().ok()?);
+    let nlen = usize::from(u16::from_le_bytes([bytes[41], bytes[42]]));
+    if bytes.len() != 43 + nlen {
+        return None; // 길이 불일치 = 손상(fail-closed)
+    }
+    let name = core::str::from_utf8(&bytes[43..]).ok()?.to_owned();
+    Some((uid, name, size))
+}
+
 /// 발신 청커 — 원본을 [`MAX_CHUNK`] 단위 [`XferMsg::Chunk`]로 자른다.
 #[must_use]
 pub fn chunks_of(id: XferId, original: &[u8]) -> Vec<XferMsg> {
@@ -865,6 +903,27 @@ mod tests {
             "pause 비트 오염"
         );
         assert!(!is_cancel_all(&[CAP_TAG]));
+    }
+
+    /// ★ M5-1h(08-23) — 그룹 전송 표식 왕복 + 손상 거부(전방 호환 태그).
+    #[test]
+    fn group_hint_roundtrip() {
+        let uid = [7u8; 32];
+        let b = encode_group_hint(&uid, "발표자료.pdf", 1_048_576);
+        assert_eq!(
+            decode_group_hint(&b),
+            Some((uid, "발표자료.pdf".into(), 1_048_576))
+        );
+        // 빈 이름도 형식은 유효(호출부가 걸러도 와이어는 fail-closed 판정만).
+        let b2 = encode_group_hint(&uid, "", 0);
+        assert_eq!(decode_group_hint(&b2), Some((uid, String::new(), 0)));
+        let mut w = encode_group_hint(&uid, "x", 1);
+        w[0] = CAP_TAG;
+        assert_eq!(decode_group_hint(&w), None, "다른 태그 = 남의 프레임");
+        let mut t = encode_group_hint(&uid, "x", 1);
+        t.push(0);
+        assert_eq!(decode_group_hint(&t), None, "꼬리 쓰레기 = 손상");
+        assert_eq!(decode_group_hint(&[GROUP_HINT_TAG; 10]), None, "잘림");
     }
 
     /// ★ M4-2e(08-19) — 수신측 일시정지/재개 요청 왕복 + 불일치 거부.

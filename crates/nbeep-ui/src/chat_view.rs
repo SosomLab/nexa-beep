@@ -99,6 +99,9 @@ fn fmt_date_pill(w: WallTime, short: bool) -> String {
 /// OS 타이틀바와의 시각 구분은 전용 배경 + 하단 1px 경계선.
 const HEAD_H: i32 = 48;
 
+/// 전송 진척 줄 높이 — 상하 2px씩 여유(22→26 · 사용자 확정 08-24).
+const XFER_ROW_H: i32 = 26;
+
 /// 대화 헤더의 경로 배지(08-22 사용자 확정 — 원격을 둘로 분리):
 /// **서버 경유**(Managed 랑데부 — 아는 상대의 정상 원격 경로 · accent) vs
 /// **인터넷 직결**(IP/도메인 수동 — 경고색 유지). 파일 게이트 정책(PathClass)은
@@ -279,6 +282,24 @@ pub enum XferLineState {
         /// 멈춘 지점까지 오간 바이트.
         done: u64,
     },
+    /// **그룹 팬아웃 집계**(M5-1h · 08-23) — 발신 풍선 하나가 구성원별 상태를
+    /// 접어 머릿수 카운터로 보인다(개별 진행률 없음 — 사용자 확정: 송신측은
+    /// 완료/진행/대기 수만 구별한다). 제어는 ✕(전송 제외) 하나뿐이며, 전 구성원
+    /// 종결 시 호스트가 Done/Failed 요약으로 바꾼다(그때만 기록 영속 대상).
+    GroupAgg {
+        /// 완료(수신 확인까지 끝난 구성원).
+        done: u32,
+        /// 진행(수락 후 전송·확인 대기 중).
+        active: u32,
+        /// 대기(연결·승인·재연결 대기).
+        waiting: u32,
+        /// 정지(수신측 일시정지 — 0이면 표시 생략).
+        paused: u32,
+        /// 실패(거절·취소·연결 실패 — 0이면 표시 생략).
+        failed: u32,
+        /// 제외(발신 게이트·사용자 제외 — 0이면 표시 생략).
+        excluded: u32,
+    },
     /// **발신 후 수신 종단 확인 대기**(M4-9) — 청크·Done을 다 보냈지만 상대의 `Received`
     /// ack가 아직 안 왔다. "보냈다"≠"닿았다"라 아직 완료가 아니다([`update_xfer_ack`] 대상).
     AwaitingAck,
@@ -345,6 +366,7 @@ pub fn update_xfer_named(
                         | XferLineState::Active { .. }
                         | XferLineState::Paused { .. }
                         | XferLineState::AwaitingAck // 종단 ack의 파일 단위 종결
+                        | XferLineState::GroupAgg { .. } // 그룹 집계 풍선(M5-1h)
                 )
             {
                 // done = u64::MAX 센티널 — 이전 진행 바이트 승계(통지에는 바이트가
@@ -1328,7 +1350,11 @@ impl ChatViewWidget {
     /// 스레드 뷰포트(헤더·진척 줄·입력창 제외).
     fn thread_viewport(&self) -> Rect {
         let head_h = self.s(HEAD_H);
-        let xfer_h = if self.xfer.is_some() { self.s(22) } else { 0 };
+        let xfer_h = if self.xfer.is_some() {
+            self.s(XFER_ROW_H)
+        } else {
+            0
+        };
         let input = self.input_bar();
         let top = self.bounds.y + head_h + xfer_h;
         Rect::new(
@@ -1405,6 +1431,31 @@ impl ChatViewWidget {
                             0
                         };
                         format!("{} {pct}% · {}", t(Msg::XferStPaused), human_bytes(*done))
+                    }
+                    XferLineState::GroupAgg {
+                        done,
+                        active,
+                        waiting,
+                        paused,
+                        failed,
+                        excluded,
+                    } => {
+                        // 머릿수 카운터(M5-1h) — 기본 3축은 항상, 예외 축은 발생 시만.
+                        let mut parts = vec![
+                            format!("{} {done}", t(Msg::XferAggDone)),
+                            format!("{} {active}", t(Msg::XferAggActive)),
+                            format!("{} {waiting}", t(Msg::XferAggWaiting)),
+                        ];
+                        if *paused > 0 {
+                            parts.push(format!("{} {paused}", t(Msg::XferAggPaused)));
+                        }
+                        if *failed > 0 {
+                            parts.push(format!("{} {failed}", t(Msg::XferAggCanceled)));
+                        }
+                        if *excluded > 0 {
+                            parts.push(format!("{} {excluded}", t(Msg::XferAggUnsent)));
+                        }
+                        parts.join(" · ")
                     }
                     XferLineState::AwaitingAck => t(Msg::XferAwaitAck).to_string(),
                     XferLineState::Done { note } if note.is_empty() => {
@@ -1934,6 +1985,9 @@ impl Widget for ChatViewWidget {
                 // 08-19: 풍선 폭을 아이콘만큼 늘려 내부 우측 끝에 — 위치 고정).
                 let line_acts: &[XferCtlAct] = match &l.body {
                     ChatBody::Xfer(x) => match (l.mine, &x.state) {
+                        // 그룹 집계(M5-1h) — 제어는 ✕(전송 제외) 하나뿐(1:N에서
+                        // 일시정지는 송신자가 제어하기 어렵다 — 사용자 확정 08-23).
+                        (true, XferLineState::GroupAgg { .. }) => &[XferCtlAct::Cancel],
                         (true, XferLineState::Waiting | XferLineState::Active { .. }) => {
                             &[XferCtlAct::Pause, XferCtlAct::Cancel]
                         }
@@ -2247,7 +2301,7 @@ impl Widget for ChatViewWidget {
             self.xfer_cancel_hit.set(None);
         }
         if let Some(xp) = self.xfer {
-            let row = Rect::new(head.x, head.bottom(), head.w, self.s(22));
+            let row = Rect::new(head.x, head.bottom(), head.w, self.s(XFER_ROW_H));
             ctx.fill_rect(row, theme.chrome_bg);
             ctx.select_font(FontSlot::Status, false);
             let sh = ctx.text_height();
@@ -2279,7 +2333,9 @@ impl Widget for ChatViewWidget {
             let cancel_lbl = nbeep_core::t(nbeep_core::Msg::XferCancelAll); // 전체취소
             let cw = ctx.text_width(cancel_lbl) + self.s(20);
             let cx = row.right() - cw - self.s(10);
-            let crect = Rect::new(cx, row.y + self.s(2), cw, row.h - self.s(4));
+            // 버튼은 행 확장(22→26)을 따라 키우지 않는다 — 행만 커지고 버튼이
+            // 같이 크면 위아래 여백이 그대로라 확장한 의미가 없다(실기 08-24 4차).
+            let crect = Rect::new(cx, row.y + self.s(4), cw, row.h - self.s(8));
             let bg = if self.xfer_cancel_pressed {
                 theme.sel_bg
             } else {
@@ -2522,6 +2578,65 @@ impl ChatViewWidget {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ★ M5-1h(08-23) — 그룹 집계 풍선: 이름 대상 갱신이 GroupAgg 상태도 잡고,
+    /// FIFO 갱신(update_xfer_in)은 집계 풍선을 건드리지 않는다(1:1 이벤트 오염 차단).
+    #[test]
+    fn group_agg_named_update_and_fifo_isolation() {
+        let agg = |done: u32, active: u32| XferLineState::GroupAgg {
+            done,
+            active,
+            waiting: 0,
+            paused: 0,
+            failed: 0,
+            excluded: 0,
+        };
+        let mut lines = vec![ChatLine::xfer(
+            true,
+            nbeep_core::sanitize_message("발표.pdf"),
+            100,
+            1,
+            WallTime::default(),
+        )];
+        if let ChatBody::Xfer(x) = &mut lines[0].body {
+            x.state = agg(0, 2);
+        }
+        // FIFO 갱신은 집계 풍선을 지나친다(Waiting/Active만 대상).
+        assert!(!update_xfer_in(
+            &mut lines,
+            true,
+            XferLineState::Active { done: 5 }
+        ));
+        // 이름 대상 갱신은 집계 풍선을 잡는다 — 카운터 교체.
+        assert!(update_xfer_named(
+            &mut lines,
+            true,
+            "발표.pdf",
+            100,
+            agg(1, 1)
+        ));
+        if let ChatBody::Xfer(x) = &lines[0].body {
+            assert_eq!(x.state, agg(1, 1));
+        }
+        // 종결 요약으로 전환(전 구성원 종결 시) — named 갱신 경로 동일.
+        assert!(update_xfer_named(
+            &mut lines,
+            true,
+            "발표.pdf",
+            100,
+            XferLineState::Done {
+                note: "완료 2".into()
+            }
+        ));
+        // 종결 뒤에는 named 갱신도 더는 잡지 않는다(지각 이벤트 무해).
+        assert!(!update_xfer_named(
+            &mut lines,
+            true,
+            "발표.pdf",
+            100,
+            agg(9, 9)
+        ));
+    }
 
     /// M4-6(08-20) — 대기 풍선 해소: at_ms로 되찾아 queued 해제 + seq 부여.
     /// 대응 없는 at_ms는 false(뷰 재생성 뒤 무해).

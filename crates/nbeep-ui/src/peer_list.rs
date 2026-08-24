@@ -58,6 +58,9 @@ pub struct GroupRow {
     pub owned: bool,
     /// 이 방의 구성원 초대 허용 정책(메뉴 라벨·비소유자 초대 가능 여부).
     pub member_invite: bool,
+    /// 그룹발 전송 진행 합산(M5-1h · 08-24) — 그룹발은 개별 행이 아니라 그룹
+    /// 행에 막대로 보인다(발신 카운터·수신 배너와 같은 구도).
+    pub xfer: Option<XferProgress>,
 }
 
 /// Enter/더블클릭 활성화 결과 — 그룹 행이 생기며 상대가 둘로 갈렸다.
@@ -1484,6 +1487,22 @@ impl Widget for PeerListWidget {
                         theme.text,
                     );
                 }
+                // 그룹발 전송 진행 막대(M5-1h) — 피어 행과 같은 문법(하단 막대).
+                if let Some(xp) = g.xfer {
+                    let bar_h = self.s(4);
+                    let bar_y = r.bottom() - self.s(8);
+                    let bar_w = (r.right() - name_x - self.s(120)).max(self.s(40));
+                    let track = Rect::new(name_x, bar_y, bar_w, bar_h);
+                    ctx.fill_round_rect(track, bar_h / 2, theme.panel_bg_alt);
+                    let fill_w = (bar_w as f32 * xp.ratio()).round() as i32;
+                    if fill_w > 0 {
+                        ctx.fill_round_rect(
+                            Rect::new(name_x, bar_y, fill_w, bar_h),
+                            bar_h / 2,
+                            if xp.sending { theme.accent } else { theme.ok },
+                        );
+                    }
+                }
                 ctx.select_font(FontSlot::PeerList, false);
                 ctx.fill_rect(Rect::new(r.x, r.bottom() - 1, r.w, 1), theme.border);
                 continue;
@@ -1824,6 +1843,7 @@ mod tests {
                 fav: false,
                 owned: true,
                 member_invite: false,
+                xfer: None,
             }],
             &mut inv,
         );
