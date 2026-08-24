@@ -3,7 +3,9 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
-> **갱신: 2026-08-24 7차 (KST · Windows)** — ★ **v0.2.7 릴리스 + winget/choco 운용 규칙**(`ef16bd0`·`d8ae925`): 탑재 = M5-1h 그룹창 파일 송수신 통합 일습 · **배포 규칙 신설(사용자 확정)** = 릴리스 전 직전 제출 검수 점검 — 완료(winget PR MERGED·choco 피드 등재)면 스위치 ON 포함 · 대기면 false 제외([18 §5](18-build-and-test.md)·[packaging/README](../packaging/README.md)) · **점검 실측** = winget 2건 OPEN·choco 피드 미등재 → 검수 잔존 = **v0.2.7 brew·Releases만**. 로컬 게이트 fmt ✓·clippy 0·790 green. [journal/2026-08-24.md](journal/2026-08-24.md).
+> **갱신: 2026-08-24 8차 (KST · Windows)** — ★ **v0.2.7 릴리스 완주 실측**: release run success · Release **공개**·**자산 14종 전량**(5타깃×2채널+매니페스트+SHA256SUMS) · **brew 0.2.7 추종 ✓** · publish-windows-packages = 매니페스트 아티팩트만(스위치 false — 규칙 의도대로 제출 없음). 후속 = 회사 Win v0.2.7 설치·구버전 혼재 폴백 실기(v0.2.6 클라 = 1:1 자연 강등 육안 기회)·2-PC 실기. [journal/2026-08-24.md](journal/2026-08-24.md).
+
+> **직전(08-24 7차 · Windows)** — ★ **v0.2.7 릴리스 + winget/choco 운용 규칙**(`ef16bd0`·`d8ae925`): 탑재 = M5-1h 그룹창 파일 송수신 통합 일습 · **배포 규칙 신설(사용자 확정)** = 릴리스 전 직전 제출 검수 점검 — 완료(winget PR MERGED·choco 피드 등재)면 스위치 ON 포함 · 대기면 false 제외([18 §5](18-build-and-test.md)·[packaging/README](../packaging/README.md)) · **점검 실측** = winget 2건 OPEN·choco 피드 미등재 → 검수 잔존 = **v0.2.7 brew·Releases만**. 로컬 게이트 fmt ✓·clippy 0·790 green. [journal/2026-08-24.md](journal/2026-08-24.md).
 
 > **직전(08-24 6차 · Windows)** — ★ **M5-1h 실기 확인 완료 · `feat/group-file-xfer` 13커밋 main 병합**(사용자 최종 확인 "그룹 전송과 오류수정이 된 것 같아"): 그룹창 파일 송수신 개편 전체 성립 — 발신 카운터·수신 그룹 스레드·개별 ✕·수신 합산 배너·승인 창 소유·종결 요약 3축·요청 단위 마감·**정지 방치 자동 취소 일습**(카운트다운 표시·2분 발화·배너 정리)·**표식 종결 소비**(그룹 후 같은 파일 1:1 정상 라우팅)·목록 그룹 행 막대. **790 green**. 후속 잔여 = 구버전 혼재 폴백·2-PC 실기(33 §T-7). [journal/2026-08-24.md](journal/2026-08-24.md).
 

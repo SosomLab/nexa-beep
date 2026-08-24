@@ -7,7 +7,7 @@
 
 ## 2026-08-24
 
-- **(Win) ★v0.2.7 릴리스 + 배포 규칙**: M5-1h 그룹창 송수신 통합 탑재 · winget/choco 운용 규칙 신설(직전 검수 완료 = 포함 · 대기 = 제외 — 실측 = winget 2건 OPEN·choco 피드 미등재 → v0.2.7은 brew·Releases만) · 790 green.
+- **(Win) ★v0.2.7 릴리스 + 배포 규칙**: M5-1h 그룹창 송수신 통합 탑재 · winget/choco 운용 규칙 신설(직전 검수 완료 = 포함 · 대기 = 제외 — 실측 = winget 2건 OPEN·choco 피드 미등재 → v0.2.7은 brew·Releases만) · 790 green · ★**완주 실측**: release success·자산 14종·brew 추종 ✓·winpkg = 매니페스트만(규칙 의도대로).
 
 - **(Win) ★M5-1h 완결 — 실기 확인·main 병합**: 그룹창 파일 송수신 개편(1~4차 누적 13커밋) 사용자 실기 최종 확인 후 `feat/group-file-xfer` → main. 후속 = 구버전 혼재 폴백·2-PC 실기.
 
