@@ -4038,6 +4038,7 @@ impl App {
         if !mine {
             if let Some(gid) = self.recv_group_gid(peer, name, size) {
                 self.recv_group_register(gid, peer, name, size);
+                self.consume_recv_group_hint(peer, name, size); // 즉시 종결 = 표식 소비
                 let from = self.peer_title(peer);
                 self.push_group_xfer_line(
                     gid,
@@ -4785,6 +4786,13 @@ impl App {
                 nbeep_ui::XferLineState::Waiting,
             );
             return;
+        } else {
+            // 1:1 판정 — 같은 (상대, 이름)의 낡은 그룹 라우팅 장부를 철회한다.
+            // 남기면 이 전송의 진행·종결 이벤트(recv_group_live_gid 머리 분기)가
+            // 이전 그룹 전송의 라인으로 샌다(실기 08-24 4차).
+            for v in self.recv_group_live.values_mut() {
+                v.retain(|(p, n, _)| !(*p == peer && n == name));
+            }
         }
         // 파일명은 원격 제공 값일 수 있다 — 스레드 표시 전 무해화(RLO 등).
         let (at_ms, wall) = now_stamp();
@@ -11491,6 +11499,20 @@ impl App {
         }
     }
 
+    /// 그룹 수신 표식 소비(M5-1h · 실기 08-24 4차) — 그 파일 라인이 **종결되면
+    /// 표식도 걷는다**. 남겨 두면 이후 같은 (이름, 크기)의 1:1 전송이
+    /// `recv_group_gid`에 걸려 그룹 스레드로 오라우팅된다(실기: 개별창 발신이
+    /// 수신측 그룹창에 표시). 발신자는 오퍼 직전마다 멱등 재공지하므로(1차 설계)
+    /// 소비해도 다음 그룹 전송은 새 표식으로 정상 라우팅된다.
+    fn consume_recv_group_hint(&mut self, peer: PeerId, name: &str, size: u64) {
+        if let Some(l) = self.recv_group_hints.get_mut(&peer) {
+            l.retain(|(n, s, _)| !(n == name && (size == 0 || *s == size)));
+            if l.is_empty() {
+                self.recv_group_hints.remove(&peer);
+            }
+        }
+    }
+
     /// 이 방이 보이는 창 전부 재도(push_group_note의 꼬리와 동일 대상).
     fn redraw_group(&mut self, gid: nbeep_core::group::GroupId) {
         if self.single_open_group == Some(gid) {
@@ -11719,7 +11741,17 @@ impl App {
                     .collect::<Vec<_>>()
             })
             .collect();
+        // 걸린 방을 **지우기 전에** 붙잡아 둔다 — 정리 후 배너 재계산이 이 목록을
+        // 못 찾으면 합산 배너·타이머가 잔존한다(실기 08-24 4차: 자동 취소 발화 후
+        // "Receiving 0%·Cancel all·0:00"이 그대로 남던 것).
+        let mut gids: Vec<nbeep_core::group::GroupId> = Vec::new();
+        for (gid, _, _) in &targets {
+            if !gids.contains(gid) {
+                gids.push(*gid);
+            }
+        }
         for (gid, name, size) in targets {
+            self.consume_recv_group_hint(peer, &name, size); // 종결 = 표식 소비
             self.set_group_xfer_line(
                 gid,
                 false,
@@ -11730,6 +11762,9 @@ impl App {
         }
         for v in self.recv_group_live.values_mut() {
             v.retain(|(p, _, _)| *p != peer);
+        }
+        for gid in gids {
+            self.refresh_group_recv_banner(gid);
         }
     }
 
@@ -12626,6 +12661,8 @@ impl App {
                     false,
                     nbeep_core::t(nbeep_core::Msg::XferCanceled).to_string(),
                 );
+                // 그룹 수신 라인·배너도 마감(M5-1h — 활성 분기와 대칭).
+                self.fail_group_recv_lines(peer, nbeep_core::t(nbeep_core::Msg::XferCanceled));
                 self.clear_xfer(peer);
                 self.set_status(nbeep_core::t(nbeep_core::Msg::XferCanceled).to_string());
                 return;
@@ -12966,6 +13003,13 @@ impl App {
                 return;
             }
         } else if let Some(gid) = self.recv_group_live_gid(peer, name, 0) {
+            // 종결 = 표식 소비(1:1 오라우팅 방지 — consume_recv_group_hint 주석).
+            if matches!(
+                state,
+                nbeep_ui::XferLineState::Done { .. } | nbeep_ui::XferLineState::Failed { .. }
+            ) {
+                self.consume_recv_group_hint(peer, name, 0);
+            }
             self.set_group_xfer_line(gid, false, name, 0, state);
             return;
         }
@@ -13003,6 +13047,13 @@ impl App {
                 return;
             }
         } else if let Some(gid) = self.recv_group_live_gid(peer, name, size) {
+            // 종결 = 표식 소비(1:1 오라우팅 방지 — consume_recv_group_hint 주석).
+            if matches!(
+                state,
+                nbeep_ui::XferLineState::Done { .. } | nbeep_ui::XferLineState::Failed { .. }
+            ) {
+                self.consume_recv_group_hint(peer, name, size);
+            }
             self.set_group_xfer_line(gid, false, name, size, state);
             return;
         }

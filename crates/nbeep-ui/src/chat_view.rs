@@ -2333,7 +2333,9 @@ impl Widget for ChatViewWidget {
             let cancel_lbl = nbeep_core::t(nbeep_core::Msg::XferCancelAll); // 전체취소
             let cw = ctx.text_width(cancel_lbl) + self.s(20);
             let cx = row.right() - cw - self.s(10);
-            let crect = Rect::new(cx, row.y + self.s(2), cw, row.h - self.s(4));
+            // 버튼은 행 확장(22→26)을 따라 키우지 않는다 — 행만 커지고 버튼이
+            // 같이 크면 위아래 여백이 그대로라 확장한 의미가 없다(실기 08-24 4차).
+            let crect = Rect::new(cx, row.y + self.s(4), cw, row.h - self.s(8));
             let bg = if self.xfer_cancel_pressed {
                 theme.sel_bg
             } else {
