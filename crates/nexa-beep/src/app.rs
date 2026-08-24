@@ -17392,17 +17392,37 @@ pub(crate) fn sweep_clipboard_staging(dir: &std::path::Path) {
     }
 }
 
+/// 데이터 폴더 — ① 실행 파일 옆 `data/`(포터블 · DR-4) → ② 사용자 설정 폴더 →
+/// ③ `~/.nexa-beep`(임시 폴더 금지 · M5-4e).
+///
+/// ★ ①은 **업그레이드 때 폴더째 교체되는 설치 자리**(macOS `.app` 번들 · Homebrew
+/// keg · `/usr`·`/opt`)에서는 건너뛴다([`nexa_conf::is_replaced_on_upgrade`]) —
+/// 그 자리는 사용자 소유라 쓰기가 되는데도 `brew upgrade`가 번들을 갈아 끼우며
+/// 안의 신원 키·핀·설정을 지운다(실측 08-24 — mac cask 0.2.6→0.2.8 지문 소실 ·
+/// Windows는 NSIS가 `data/`를 보존하도록 짜여 있어 종전대로). 그 자리에 옛 버전이
+/// 남긴 `data/`가 아직 있으면 ②로 **1회 이관**(②에 신원이 없을 때만 · 이름 바꾸기 =
+/// 원자적 · 실패 = 그대로 두고 ②에서 새로 시작).
 pub(crate) fn data_dir() -> std::path::PathBuf {
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let data = dir.join("data");
-            if nexa_conf::dir_writable(&data) {
-                return data;
+    let adjacent = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|d| (d.to_path_buf(), d.join("data"))));
+    let replaced = adjacent
+        .as_ref()
+        .is_some_and(|(dir, _)| nexa_conf::is_replaced_on_upgrade(dir));
+    if !replaced {
+        if let Some((_, data)) = &adjacent {
+            if nexa_conf::dir_writable(data) {
+                return data.clone();
             }
         }
     }
     if let Some(dir) = nexa_conf::user_config_dir("nexa-beep") {
         if nexa_conf::dir_writable(&dir) {
+            if replaced {
+                if let Some((_, data)) = &adjacent {
+                    migrate_replaced_data(data, &dir);
+                }
+            }
             return dir;
         }
     }
@@ -17411,6 +17431,26 @@ pub(crate) fn data_dir() -> std::path::PathBuf {
         return std::path::PathBuf::from(h).join(".nexa-beep");
     }
     std::env::temp_dir().join("nexa-beep")
+}
+
+/// 교체형 설치 자리의 옛 `data/`를 사용자 설정 폴더로 1회 이관(08-24). 조건 =
+/// 원본에 `identity.key`가 있고 대상에는 없다(대상에 이미 신원이 있으면 그쪽이
+/// 진짜 — 덮어쓰지 않는다). 대상 폴더는 `dir_writable`이 방금 만들었으므로 비어
+/// 있을 때만 걷어내고 rename — 같은 볼륨이라 원자적, 실패(볼륨 다름·잠김)면 조용히
+/// 포기한다(다음 기동에 다시 시도 · 원본 훼손 0).
+fn migrate_replaced_data(src: &std::path::Path, dst: &std::path::Path) {
+    if !src.join("identity.key").is_file() || dst.join("identity.key").exists() {
+        return;
+    }
+    let dst_empty = std::fs::read_dir(dst)
+        .map(|mut r| r.next().is_none())
+        .unwrap_or(false);
+    if !dst_empty {
+        return;
+    }
+    if std::fs::remove_dir(dst).is_ok() {
+        let _ = std::fs::rename(src, dst);
+    }
 }
 
 /// `--whoami`(진단) — 이 실행 파일이 **실제로 로드할** 신원을 **읽기 전용**으로 찍는다.
@@ -17993,6 +18033,38 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
 
 #[cfg(test)]
 mod tests {
+    /// 08-24 — 교체형 설치 자리의 옛 `data/` 1회 이관: 신원이 있고 대상이 비어 있을
+    /// 때만 옮기고, 대상에 신원이 있으면 손대지 않는다(덮어쓰기 0).
+    #[test]
+    fn migrate_replaced_data_moves_once_and_never_overwrites() {
+        let base = std::env::temp_dir().join(format!("nb-migrate-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let src = base.join("Contents/MacOS/data");
+        let dst = base.join("AppSupport/nexa-beep");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("identity.key"), b"NBK1x").unwrap();
+        std::fs::write(src.join("settings.cfg"), b"k=v").unwrap();
+        // 대상은 dir_writable이 막 만든 빈 폴더 — 옮겨진다.
+        assert!(nexa_conf::dir_writable(&dst));
+        super::migrate_replaced_data(&src, &dst);
+        assert!(!src.exists(), "원본은 이름 바꾸기로 사라진다");
+        assert_eq!(std::fs::read(dst.join("settings.cfg")).unwrap(), b"k=v");
+        // 대상에 신원이 이미 있으면 원본이 다시 나타나도 손대지 않는다.
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("identity.key"), b"NBK1y").unwrap();
+        super::migrate_replaced_data(&src, &dst);
+        assert!(src.join("identity.key").is_file());
+        assert_eq!(std::fs::read(dst.join("identity.key")).unwrap(), b"NBK1x");
+        // 원본에 신원이 없으면(빈 data) 아무것도 안 한다.
+        let dst2 = base.join("AppSupport2/nexa-beep");
+        let src2 = base.join("Contents2/MacOS/data");
+        std::fs::create_dir_all(&src2).unwrap();
+        assert!(nexa_conf::dir_writable(&dst2));
+        super::migrate_replaced_data(&src2, &dst2);
+        assert!(dst2.is_dir() && src2.is_dir());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     /// M2-5b(08-21) — 동기화 폴더 판정: 구성요소 이름 기반(대소문자 무시) ·
     /// 일반 경로는 None. env 축(Windows OneDrive 접두)은 환경 의존이라 제외.
     #[test]

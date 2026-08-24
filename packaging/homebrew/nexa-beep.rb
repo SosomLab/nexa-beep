@@ -52,9 +52,11 @@ cask "nexa-beep" do
     이 앱은 같은 로컬 네트워크의 사용자를 찾기 위해 첫 실행 시 네트워크 접근 권한을 요청합니다.
   EOS
 
-  # ⚠️ 앱이 아직 스스로 저장하는 것이 없다(설정 영속 M3-15 대기).
-  #    아래는 **macOS가 앱마다 자동으로 만드는** 경로다 — 실제로 생기는 것만 적는다.
+  # 앱 데이터(신원 키·핀·설정·기록)는 **번들 밖** `~/Library/Application Support/nexa-beep`에
+  # 둔다(08-24 — 번들 안에 두면 `brew upgrade`가 번들째 지우며 신원이 사라진다).
+  # zap은 사용자가 "흔적까지" 지우겠다고 할 때만 도니, 신원 폴더를 여기 적는 것이 맞다.
   zap trash: [
+    "~/Library/Application Support/nexa-beep",
     "~/Library/Preferences/io.github.sosomlab.nexa-beep.plist",
     "~/Library/Saved Application State/io.github.sosomlab.nexa-beep.savedState",
   ]

@@ -305,6 +305,44 @@ pub fn user_config_dir(app: &str) -> Option<PathBuf> {
     }
 }
 
+/// 실행 파일 위치가 **업그레이드 때 폴더째 교체되는 관리형 설치 자리**인가(08-24).
+///
+/// `data_dir()`의 포터블 판정("실행 파일 옆이 쓰기 가능하면 거기")은 이런 자리에서
+/// 어긋난다 — macOS `.app` 번들과 Homebrew keg(`Cellar/…`)는 사용자 소유라 쓰기가
+/// **되지만**, `brew upgrade`가 디렉터리를 통째로 갈아 끼우면서 그 안의 `data/`
+/// (신원 키·핀·설정)가 함께 사라진다(실측 08-24 — mac cask 0.2.6→0.2.8 신원·설정
+/// 소실). 여기 해당하면 실행 파일 옆은 건너뛰고 사용자 설정 폴더로 간다.
+///
+/// 판정은 **경로 구성요소만** 본다(파일 시스템 접근 0 · 순수). Windows 설치본
+/// (`%LOCALAPPDATA%\Programs\NexaBeep`)은 NSIS가 `data/`를 보존하도록 짜여 있어
+/// 여기 넣지 않는다(포터블 규약 그대로 유지).
+#[must_use]
+pub fn is_replaced_on_upgrade(exe_dir: &Path) -> bool {
+    use std::path::Component;
+    let comps: Vec<String> = exe_dir
+        .components()
+        .filter_map(|c| match c {
+            Component::Normal(n) => Some(n.to_string_lossy().into_owned()),
+            _ => None,
+        })
+        .collect();
+    // macOS 앱 번들 — `…/Foo.app/Contents/MacOS` (사용자가 어디에 두었든).
+    let bundle = comps
+        .windows(2)
+        .any(|w| w[0].ends_with(".app") && w[1] == "Contents");
+    // Homebrew keg(mac·Linuxbrew) — `…/Cellar/<formula>/<ver>/bin`, opt 링크 포함.
+    let keg = comps
+        .iter()
+        .any(|c| c == "Cellar" || c == "homebrew" || c == "linuxbrew");
+    // 시스템 프리픽스 — 패키지 관리자가 소유·교체한다(대개 root라 쓰기도 안 되지만
+    // 사용자 소유 `/opt/...`·`/usr/local/...`도 같은 성질).
+    let sys_prefix = matches!(
+        comps.first().map(String::as_str),
+        Some("usr" | "opt" | "snap" | "nix")
+    ) && exe_dir.has_root();
+    bundle || keg || sys_prefix
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
@@ -444,6 +482,38 @@ mod tests {
         let text = serialize(&[("path", p)], &[]);
         let doc = parse(&text);
         assert_eq!(doc.pairs, vec![("path".to_string(), p.to_string())]);
+    }
+
+    /// 08-24 — 업그레이드 때 폴더째 교체되는 설치 자리 판정(순수 · 경로만).
+    #[test]
+    fn replaced_on_upgrade_matches_bundle_keg_and_system_prefix() {
+        let yes = [
+            "/Applications/Nexa Beep.app/Contents/MacOS",
+            "/Users/u/Applications/Nexa Beep.app/Contents/MacOS",
+            "/opt/homebrew/Cellar/nexa-beep-portable/0.2.8/bin",
+            "/opt/homebrew/bin",
+            "/usr/local/Cellar/nexa-beep-portable/0.2.8/bin",
+            "/home/linuxbrew/.linuxbrew/Cellar/nexa-beep-portable/0.2.8/bin",
+            "/usr/bin",
+            "/usr/local/bin",
+            "/opt/nexa-beep",
+        ];
+        for p in yes {
+            assert!(is_replaced_on_upgrade(Path::new(p)), "{p}");
+        }
+        let no = [
+            "/Users/u/Downloads/nexa-beep-0.2.8-macos-arm64-portable",
+            "/Users/u/.nexa-beep-multi/a",
+            "/home/u/bin",
+            "/home/u/opt/tools",
+            "/Users/u/Projects/nexa-beep/target/release",
+            "C:\\Users\\u\\AppData\\Local\\Programs\\NexaBeep",
+            "D:\\portable\\nexa-beep",
+            "usr/bin",
+        ];
+        for p in no {
+            assert!(!is_replaced_on_upgrade(Path::new(p)), "{p}");
+        }
     }
 
     #[test]
