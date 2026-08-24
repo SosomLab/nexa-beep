@@ -3,7 +3,9 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
-> **갱신: 2026-08-24 9차 (KST · Windows)** — **자동 실행 외부 삭제 존중**(`cd15ff6` · M3-25 후속): "토글 켰는데 레지스트리에 없다" 보고 → 실측 = 설치본 재시작 시 정상 등록(로직 결함 아님 — 값이 외부에서 지워진 상태) → **사용자 확정 = 존중**: OS 관측 `is_registered()` + 마커 `app.autostart_reg`(HIDDEN_KEYS — 첫 실행·구버전 업그레이드와 삭제를 구분)로 부팅 판정(`boot_sync` 순수 함수 · 회귀 6항) — 외부 삭제 = 재등록하지 않고 `app.autostart=off` 강하 + 상태바 고지(4개 국어). **Win 실기 ✓**(첫 실행 등록 → 값 삭제 후 재실행 = 재등록 없음·off 동기) · 3-OS check · **791 green**(+1). [journal/2026-08-24.md](journal/2026-08-24.md).
+> **갱신: 2026-08-24 10차 (KST · Windows)** — ★ **v0.2.8 릴리스**(`c443931`+태그 — 탑재 = 9차 자동 실행 외부 삭제 존중): 선행 점검 = main CI green + **winget/choco 재점검**(PR 2건 OPEN·choco 피드 미등재 = 검수 잔존 → 스위치 false 유지 · [18 §5](18-build-and-test.md) 규칙 2회차) · 로컬 게이트 = fmt·clippy 0·791 green·교차 check 3타깃 · **완주 실측** = run `32690232949` 전 job success · Release **공개**·**자산 14종 전량** · **brew cask+formula 0.2.8 추종 ✓** · winget/choco 스킵 문법 확인. 후속 = 회사 Win v0.2.8 설치·2-PC 실기. [journal/2026-08-24.md](journal/2026-08-24.md).
+
+> **직전(08-24 9차 · Windows)** — **자동 실행 외부 삭제 존중**(`cd15ff6` · M3-25 후속): "토글 켰는데 레지스트리에 없다" 보고 → 실측 = 설치본 재시작 시 정상 등록(로직 결함 아님 — 값이 외부에서 지워진 상태) → **사용자 확정 = 존중**: OS 관측 `is_registered()` + 마커 `app.autostart_reg`(HIDDEN_KEYS — 첫 실행·구버전 업그레이드와 삭제를 구분)로 부팅 판정(`boot_sync` 순수 함수 · 회귀 6항) — 외부 삭제 = 재등록하지 않고 `app.autostart=off` 강하 + 상태바 고지(4개 국어). **Win 실기 ✓**(첫 실행 등록 → 값 삭제 후 재실행 = 재등록 없음·off 동기) · 3-OS check · **791 green**(+1). [journal/2026-08-24.md](journal/2026-08-24.md).
 
 > **직전(08-24 8차 · Windows)** — ★ **v0.2.7 릴리스 완주 실측**: release run success · Release **공개**·**자산 14종 전량**(5타깃×2채널+매니페스트+SHA256SUMS) · **brew 0.2.7 추종 ✓** · publish-windows-packages = 매니페스트 아티팩트만(스위치 false — 규칙 의도대로 제출 없음). 후속 = 회사 Win v0.2.7 설치·구버전 혼재 폴백 실기(v0.2.6 클라 = 1:1 자연 강등 육안 기회)·2-PC 실기. [journal/2026-08-24.md](journal/2026-08-24.md).
 
