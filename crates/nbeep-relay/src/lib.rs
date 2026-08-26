@@ -49,6 +49,13 @@ pub const RELAY_CHUNK: usize = 32 * 1024;
 
 /// RID 유도 — 에폭은 UTC 일 번호. 내 공개키를 **이미 아는** 사람만 같은 값을 계산할 수
 /// 있다(릴레이는 새로운 만남을 주선하지 않는다 — [docs/32 §2-3]).
+///
+/// ⚠️ **`"nbeep-rid-v1"` 은 앱 식별자다**([docs/44](../../../docs/44-nexa-clip-liaison.md)).
+/// 자매 프로젝트 `nexa-clip`이 **같은 릴레이 서버를 쓰면서** `"nclip-rid-v1"` 을 쓴다 —
+/// 도메인 문자열이 다르기 때문에 두 앱 사용자가 **서로를 찾지 않는다**(앱 격리).
+/// 이 값을 바꾸면 격리가 깨지거나 앱 내부에서 서로를 못 찾게 되므로, 변경이 필요하면
+/// **양쪽을 같은 시점에** 고쳐야 한다. (서버는 RID를 계산하지 않으므로 서버 재배포는 불필요 —
+/// [docs/44 §5](../../../docs/44-nexa-clip-liaison.md).)
 #[must_use]
 pub fn rid_for(peer: &PeerId, epoch_day: u64) -> Rid {
     let mut h = Sha256::new();
