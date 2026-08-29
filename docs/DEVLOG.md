@@ -7,6 +7,7 @@
 
 ## 2026-08-29
 
+- **(Linux) ★사용자 실기 전부 ✓ + 추가 검토**: v0.2.12 4건(트레이 즉시 전면·테마 추종·Dock 아이콘·X 닫기 실물)·트레이 숨김/Open/Quit 정상 · ★**Linux↔mac·Win 통신 OK = 2-PC 실증 3-OS 전 조합** · 실측 = **Linux 유휴 RSS 17.5MB(R-8 3-OS 완성)**·seccomp 2/2·ignored 멀티캐스트는 따로 실행 · 발견 = **클립보드 도구 부재(L-1 🔴)**·xattr(L-2)·알림 클릭(L-3)·포털 피커(L-4) TODO 등재. [journal](journal/2026-08-29.md).
 - **(Linux) ★v0.2.12 릴리스**(`ffd893f`+태그 — 탑재 = 트레이 열기 진짜 포커스 `0a3d679`): run `33255013819` 전 job success · 자산 14종 · .deb 대조 ✓ · winget OPEN → 스위치 false(6회차). [journal](journal/2026-08-29.md).
 - **(Linux) ★트레이 열기 = 진짜 포커스**(v0.2.11 실기 — "앱이 준비되었습니다" 알림 강등): GNOME appindicator 확장이 클릭 전 넘기는 **`ProvideXdgActivationToken`** 수신 + `nbeep-plat::wlactivate`(winit wl_display 차용 → `xdg_activation.activate(token, surface)` · 같은 판 의존 · lock 신규 0) · D-Bus 재현 3경로 프로토콜 실측 ✓. [journal](journal/2026-08-29.md).
 - **(Linux) ★v0.2.11 릴리스**(`02a66b7`+태그 — 탑재 = Linux 실기 5건 `14dd351`): run `33245089153` 전 job success · 자산 14종 · .deb 대조 ✓ · winget OPEN → 스위치 false(5회차). 부수 = 4차 커밋 fmt 누락 정정 `bf6cb26`(게이트와 커밋을 한 체인에 섞지 말 것). [journal](journal/2026-08-29.md).

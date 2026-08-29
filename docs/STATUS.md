@@ -3,7 +3,9 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
-> **갱신: 2026-08-29 7차 (KST · Linux)** — ★ **v0.2.12 릴리스**(`ffd893f`+태그 — 탑재 = 6차 트레이 "열기" 진짜 포커스): main CI green(`0a3d679`) · winget OPEN → 스위치 false(**6회차**) · run `33255013819` 전 job success · 자산 14종 · **.deb 대조 ✓**(0.2.12). 후속 = 사용자 재설치 실기(트레이 Open → 창 즉시 전면 · 4차 항목 육안). [journal/2026-08-29.md](journal/2026-08-29.md).
+> **갱신: 2026-08-29 8차 (KST · Linux)** — ★ **사용자 실기 전부 ✓**(v0.2.12): 트레이 열기 즉시 전면·테마 시스템 추종·Dock 아이콘·**X 닫기 실물 모드 정상**(4차 무반응 = 데모 잔재 종결)·트레이 숨김/Open/Quit ✓ · ★**Linux ↔ mac·Windows PC 통신 OK** — 2-PC 실증 **3-OS 전 조합**. **추가 검토 실측**(코드 무변경): **Linux 유휴 RSS 17.5MB**(R-8 3-OS 완성: Win 17.1·mac 18~20·Linux 17.5) · seccomp 락다운 2/2 · ignored 멀티캐스트 2건 = 단독 ✅·동시 실행은 포트 경합(따로 실행 규칙) · CJK 폰트 ✓. **발견 → TODO §L 등재**: 🔴 **L-1 클립보드 도구 부재**(`wl-copy/wl-paste/xclip` GNOME 기본에 없음 → Ctrl+C/V·이미지 전송 실패 · 처방 = Wayland 프로토콜 직접+X11 폴백) · L-2 격리 xattr · L-3 알림 D-Bus 직접(클릭 복귀) · L-4 포털 FileChooser 검토. 잔여 실기 = X11 세션·KDE·24h 누수·자동 실행 재부팅. [journal/2026-08-29.md](journal/2026-08-29.md).
+
+> **직전(2026-08-29 7차 · Linux)** — ★ **v0.2.12 릴리스**(`ffd893f`+태그 — 탑재 = 6차 트레이 "열기" 진짜 포커스): main CI green(`0a3d679`) · winget OPEN → 스위치 false(**6회차**) · run `33255013819` 전 job success · 자산 14종 · **.deb 대조 ✓**(0.2.12). 후속 = 사용자 재설치 실기(트레이 Open → 창 즉시 전면 · 4차 항목 육안). [journal/2026-08-29.md](journal/2026-08-29.md).
 
 > **직전(2026-08-29 6차 · Linux)** — ★ **트레이 "열기" = 진짜 포커스**(v0.2.11 사용자 실기: Open → "앱이 준비되었습니다" 알림만 · 클릭해야 열림 = 4차 예상한 Wayland 강등): 돌파구 = GNOME appindicator 확장 실코드가 **좌클릭·메뉴 항목 모두 `ProvideXdgActivationToken(s)`를 먼저 부른다**(셸 발급 토큰 = 컴포지터 신뢰) → SNI 메서드 수신(1회용) + **`nbeep-plat::wlactivate` 신설**(winit에 외부 토큰 API 없음 → winit wl_display 차용 `from_foreign_display` · 별도 큐 · `xdg_activation_v1.activate(token, wl_surface)` 1회 · 의존 = winit/sctk **같은 판**(lock 신규 0 · +11KB)) · 폴백 = 종전 주의 요청. **실측**(WAYLAND_DEBUG·D-Bus 재현) = 토큰+Activate·토큰+메뉴 열기 → `activate("토큰", wl_surface#27)` ✓ · 무토큰 → 자체 토큰 폴백 ✓ · 에러 0. 진짜 포커스는 셸 토큰이라 사용자 실기로 확정 → **v0.2.12**. 791 green·교차 0. [journal/2026-08-29.md](journal/2026-08-29.md).
 

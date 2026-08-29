@@ -395,3 +395,15 @@ M-1 설계 ──► M0 기반 ──► M1 발견 ──► M2 대화 ──►
 > **깨끗 확인**(재점검 불요 — 근거는 journal): `ConnectLatch`(양 경로 finish) · 재연결 펌프 `due=MAX` 래치 · `SaveScheduler` 코어(6질문 전부 통과) · `recv_any` · 그룹 roster 엄격 부등호 멱등 · HELLO 비유도 응답 · `wire_gen` 세대 판정 · 스크롤바 페이드 · 트레이 3-백엔드(폴링 0) · 설정 위젯 역반영(루프 구조적 불가) · 그룹 파일 팬아웃 대기(상한+양방향 종결) · 격리함 썸네일 요청 래치.
 
 ---
+
+## L. Linux 잔여(08-29 검토 · 실기 후 등재)
+
+| # | 항목 | 우선 | 상태 |
+|---|---|---|---|
+| **L-1** | 🔴 **클립보드 자체 구현** — 현재 `wl-copy/wl-paste`→`xclip` 스폰인데 GNOME 기본 설치에 **셋 다 없음**(Ubuntu 25 실측) → Ctrl+C/V·클립보드 이미지 전송 실패. 처방 = Wayland `wl_data_device`(winit과 같은 판 wayland-client — wlactivate 선례 · lock 신규 0) + X11 폴백 · 도구 스폰 폐지(DR-5 정신) | P0 | 미착수 |
+| **L-2** | 격리 표식 xattr(`user.xdg.origin.url`) — `quarantine.rs` ⏸ 슬라이스 · mac `setxattr` 코드 재사용 · 미지원 FS는 명시 | P1 | 미착수(M4-3 잔여) |
+| **L-3** | 알림 = `org.freedesktop.Notifications` D-Bus 직접(zbus) — `notify-send` 스폰 폐지 · `ActionInvoked`로 **클릭 → 대화 열기**(Win/mac 동등) · 전면화는 wlactivate 재사용(토큰은 알림 데몬이 `activation-token` 힌트로 줌 — GNOME 지원) | P1 | 미착수 |
+| **L-4** | 파일 선택 = xdg-desktop-portal `FileChooser` 병행 옵션(ADR-0014 "Linux 자체 피커 유지" 재검토 — 포털은 GNOME/KDE 공통·샌드박스 친화) | P2 | 🔴 결정 |
+| **L-5** | 실기 잔여 — X11 세션(`set_visible/focus_window` 실동작 경로) · KDE Plasma(토큰 미제공 → 주의 요청 폴백) · 24h 누수(기준선 17.5MB/29fd) · 자동 실행 재부팅 | — | 실기 대기 |
+| **L-6** | 실 멀티캐스트 ignored 2건은 **따로 실행**(동시 실행 = 포트 공유 경합 flaky) — 18·26 절차 명기 | P2 | 문서 |
+
