@@ -7,6 +7,7 @@
 
 ## 2026-08-29
 
+- **(Linux) ★v0.2.12 릴리스**(`ffd893f`+태그 — 탑재 = 트레이 열기 진짜 포커스 `0a3d679`): run `33255013819` 전 job success · 자산 14종 · .deb 대조 ✓ · winget OPEN → 스위치 false(6회차). [journal](journal/2026-08-29.md).
 - **(Linux) ★트레이 열기 = 진짜 포커스**(v0.2.11 실기 — "앱이 준비되었습니다" 알림 강등): GNOME appindicator 확장이 클릭 전 넘기는 **`ProvideXdgActivationToken`** 수신 + `nbeep-plat::wlactivate`(winit wl_display 차용 → `xdg_activation.activate(token, surface)` · 같은 판 의존 · lock 신규 0) · D-Bus 재현 3경로 프로토콜 실측 ✓. [journal](journal/2026-08-29.md).
 - **(Linux) ★v0.2.11 릴리스**(`02a66b7`+태그 — 탑재 = Linux 실기 5건 `14dd351`): run `33245089153` 전 job success · 자산 14종 · .deb 대조 ✓ · winget OPEN → 스위치 false(5회차). 부수 = 4차 커밋 fmt 누락 정정 `bf6cb26`(게이트와 커밋을 한 체인에 섞지 말 것). [journal](journal/2026-08-29.md).
 - **(Linux) ★Linux 실기 5건 점검**(사용자 보고 · GNOME 50 Wayland): **`ui.theme` 시스템 추종 기본**(`nbeep_plat::theme` 3-OS — Linux 포털 신호 실측 ✓) · 창 **`app_id=nexa-beep`**(Dock 톱니바퀴 "알 수 없음" 해소 · `set_app_id` 실측) · 트레이 열기 = Wayland 한계(되살리기 불가 → `xdg_activation` 주의 요청 · [40 §6]) · 종료 액터 join 2s 상한(강제 종료 창 원인) · Quit D-Bus 재현 0.5s ✓. 792 green. [journal](journal/2026-08-29.md).
