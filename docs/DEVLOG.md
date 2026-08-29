@@ -7,6 +7,7 @@
 
 ## 2026-08-29
 
+- **(Linux) ★v0.2.10 릴리스**(`1c61c4a`+태그 — 탑재 = Linux .desktop 런처 데모 결함 정정 `30535ec`): winget PR 2건 OPEN → 스위치 false(4회차) · run `33241620689` 전 job success · 자산 14종 · **.deb 추출 대조 `Exec=nexa-beep` ✓** · brew 0.2.10 추종 ✓. [journal](journal/2026-08-29.md).
 - **(Linux) ★설치본 .deb 런처 = InMemory 데모 결함 수정**(사용자 보고 — 앱 메뉴 실행 시 가짜 에코 봇 7명·실물 0): `.desktop`의 `Exec=nexa-beep --window`가 08-13 "무인자 = 창+실물" 확정 때 갱신 안 됨(`--window` 단독 = 데모) · brew 포터블 caveats도 동일 → 둘 다 무인자. Win NSIS·mac·choco·winget 정상. 로컬 오버라이드로 `99fb676e` 실물 광고 실측 ✓ · **v0.2.10에 탑재 필요**. [journal](journal/2026-08-29.md).
 - **(Linux) ★리눅스 환경 첫 관통** — 코드 무변경으로 4게이트 전량(**790 green · 2 ignored = 실 멀티캐스트 D-8a** · mac 792와 정합) + `relaunch.sh` 3신원 기동·상호 발견 ✓(`de829962`·`4a7325f3`·`3f493eef`). 발각 1 = 사용자 터미널 `cargo` 부재(rustup 직후 rc 미로드)로 재기동 ② 즉사 → **`relaunch.sh` cargo PATH 폴백**(rc 무의존 · `~/.cargo/bin` 자가 탐지). Linux 고유 축(SNI 트레이·XDG autostart·wl/xclip) 실기 잔여. [journal](journal/2026-08-29.md).
 
