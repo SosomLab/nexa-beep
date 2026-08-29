@@ -7,6 +7,7 @@
 
 ## 2026-08-29
 
+- **(Linux) ★클립보드 자체 구현 L-1**(`eb7429b` — "이미지 붙여넣기 = Windows만" 실측 → 도구 스폰 폐지): `nbeep-plat::linuxclip` = Wayland 상주 워커(winit wl_display 차용 · ext_data_control 우선·wl_data_device 폴백·두 번째 wl_keyboard로 시리얼) + X11 셀렉션(x11rb · INCR) · 의존 신규 0 · 배포판 무관(프로토콜 층). GNOME 50 실측 = selection/offer 수신 ✓ · Ctrl+V 실기 잔여. 796 green. [journal](journal/2026-08-29.md).
 - **(Linux) ★v0.2.13 릴리스**(`1ce2f1f`+태그 — 탑재 = 자동 실행 인스턴스별 슬롯 `313344b`): CI `33257614715`·release `33257752772` 전 job success · 자산 14종 · .deb `--version` 0.2.13 · brew 0.2.13 추종 ✓ · winget OPEN → 7회차 제외. + **`tools/install-local.sh`**(`828313a` — 릴리스 빌드를 설치본 자리에 덮어쓰고 설치본처럼 실행 · 3-OS · 스킬 · 18 §0-2). [journal](journal/2026-08-29.md).
 - **(Linux) ★자동 실행 인스턴스별 슬롯**(`313344b` — 재부팅 실기: on인데 안 뜨고 설정 off로 초기화): 원인 = OS 슬롯 1개(3-OS 전부 이름 고정)를 여러 인스턴스(설치본 on · 개발 빌드 off)가 줄다리기 → 개발 빌드가 설치본 등록 삭제 → 부재를 외부 삭제로 오판해 설정 강하. 처방 = 이름에 **실행 파일 경로 해시**(`instance_tag`) · 옛 고정 이름은 내 경로일 때만 이관. Linux 실측 3단계 ✓ · 794 green. [journal](journal/2026-08-29.md).
 - **(Linux) ★사용자 실기 전부 ✓ + 추가 검토**: v0.2.12 4건(트레이 즉시 전면·테마 추종·Dock 아이콘·X 닫기 실물)·트레이 숨김/Open/Quit 정상 · ★**Linux↔mac·Win 통신 OK = 2-PC 실증 3-OS 전 조합** · 실측 = **Linux 유휴 RSS 17.5MB(R-8 3-OS 완성)**·seccomp 2/2·ignored 멀티캐스트는 따로 실행 · 발견 = **클립보드 도구 부재(L-1 🔴)**·xattr(L-2)·알림 클릭(L-3)·포털 피커(L-4) TODO 등재. [journal](journal/2026-08-29.md).
