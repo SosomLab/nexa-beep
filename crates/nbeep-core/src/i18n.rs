@@ -329,6 +329,10 @@ pub enum Msg {
     CloseToTray,
     /// 닫기 = 트레이 설명.
     CloseToTrayDesc,
+    /// 트레이로 닫을 때 작업표시줄/Dock에서 숨김(08-30 · 기본 on).
+    TrayHideTaskbar,
+    /// 위 설명.
+    TrayHideTaskbarDesc,
     /// 트레이 메뉴 — 열기.
     TrayOpen,
     /// 트레이 메뉴 — 종료.
@@ -2195,10 +2199,22 @@ impl Msg {
                 "閉じるボタンでトレイに常駐",
             ],
             Msg::CloseToTrayDesc => [
-                "Keep running in the system tray when the main window is closed. Right-click the tray icon to quit. (Windows)",
-                "메인 창을 닫아도 시스템 트레이에 남아 계속 실행됩니다. 종료는 트레이 아이콘 우클릭 메뉴에서. (Windows)",
-                "关闭主窗口后仍驻留在系统托盘。右键托盘图标可退出。(Windows)",
-                "メインウィンドウを閉じてもトレイに常駐します。終了はトレイの右クリックから。(Windows)",
+                "Keep running in the system tray when the main window is closed. Quit from the tray icon menu.",
+                "메인 창을 닫아도 시스템 트레이에 남아 계속 실행됩니다. 종료는 트레이 아이콘 메뉴에서.",
+                "关闭主窗口后仍驻留在系统托盘。从托盘图标菜单退出。",
+                "メインウィンドウを閉じてもトレイに常駐します。終了はトレイアイコンのメニューから。",
+            ],
+            Msg::TrayHideTaskbar => [
+                "Hide from taskbar/Dock while in tray",
+                "트레이에 있는 동안 작업표시줄/Dock에서 숨김",
+                "驻留托盘时从任务栏/Dock 隐藏",
+                "トレイ常駐中はタスクバー/Dock から隠す",
+            ],
+            Msg::TrayHideTaskbarDesc => [
+                "On: closing to tray removes the window from the taskbar/Dock (only the tray icon remains). Off: it is minimized and stays listed.",
+                "켬: 트레이로 닫으면 창이 작업표시줄/Dock에서 사라집니다(트레이 아이콘만 남음). 끔: 최소화되어 목록에 남습니다.",
+                "开：收到托盘时窗口从任务栏/Dock 消失（仅保留托盘图标）。关：最小化并保留在列表中。",
+                "オン: トレイに閉じるとタスクバー/Dock から消えます（トレイアイコンのみ）。オフ: 最小化して一覧に残ります。",
             ],
             Msg::TrayOpen => ["Open", "열기", "打开", "開く"],
             Msg::TrayQuit => ["Quit", "종료", "退出", "終了"],

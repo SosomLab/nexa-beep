@@ -5590,15 +5590,80 @@ impl App {
         }
     }
 
+    /// 메인 창 생성 — 부팅(`resumed`) 1회 + ★ **Linux 트레이 복귀**(08-30): Wayland는
+    /// 창을 숨길 수 없어(`set_visible` no-op) `close_to_tray`의 X가 창을 **파괴**한다
+    /// (= 언맵 → Dock·작업표시줄에서 사라진다). 트레이 "열기"가 여기로 다시 만든다.
+    /// UI 상태(목록·대화·메뉴)는 `App`에 있고 `WinEntry`는 창·서피스뿐이라 재생성이 싸다.
+    fn create_main_window(&mut self, el: &ActiveEventLoop) {
+        // 마지막 종료 위치·크기 복원(08-14 사용자 확정 — 다중 인스턴스 실기에서
+        // 매번 재배치하던 것. 신원(data/)별로 저장되니 인스턴스마다 자기 자리를
+        // 기억한다). 값이 없거나 무효면 기본값 — ADR-0011 관용 파싱 원칙 그대로.
+        let geo = |k: &str| self.settings.get(k).parse::<i32>().ok();
+        let (ww, wh) = match (geo("ui.win_w"), geo("ui.win_h")) {
+            (Some(w), Some(h)) if (200..=8000).contains(&w) && (150..=8000).contains(&h) => {
+                (f64::from(w).max(MAIN_MIN_W), f64::from(h).max(MAIN_MIN_H))
+            }
+            _ => (MAIN_MIN_W, MAIN_MIN_H), // 첫 실행 = 최소 크기(사용자 확정 08-23)
+        };
+        let mut attrs = self
+            .win_attrs()
+            .with_title("Nexa Beep")
+            .with_inner_size(winit::dpi::LogicalSize::new(ww, wh))
+            .with_min_inner_size(winit::dpi::LogicalSize::new(MAIN_MIN_W, MAIN_MIN_H))
+            .with_window_icon(self.icon.clone());
+        if let (Some(x), Some(y)) = (geo("ui.win_x"), geo("ui.win_y")) {
+            // 화면 밖 좌표 방어는 OS 몫이 크지만, 음수 심연(-32000 최소화 잔재)은 거른다.
+            if (-4000..=16000).contains(&x) && (-4000..=16000).contains(&y) {
+                attrs = attrs
+                    .with_position(winit::dpi::LogicalPosition::new(f64::from(x), f64::from(y)));
+            }
+        }
+        let window = Rc::new(el.create_window(attrs).unwrap());
+        #[cfg(target_os = "linux")]
+        linux_clipboard_init(&window); // 클립보드 워커(L-1) — 메인 창의 wl_display로 1회
+        window.set_theme(self.window_theme()); // 장식 테마(Linux CSD = 실효값 명시)
+                                               // 목록(타입어헤드) = IME **끔** — raw 자모를 앱이 직접 조합(hangul::Composer ·
+                                               // OS 조합 세션 경합 제거). 대화 진입 시 켠다(set_main_ime).
+        window.set_ime_allowed(false);
+        let scale = window.scale_factor() as f32;
+        let context = softbuffer::Context::new(window.clone()).unwrap();
+        let surface = SbSurface::new(&context, window.clone()).unwrap();
+        let id = window.id();
+        self.windows.insert(
+            id,
+            WinEntry {
+                role: Role::Main,
+                window,
+                surface,
+                cursor: (0, 0),
+                scale,
+            },
+        );
+        self.main_id = Some(id);
+        self.layout_window(id);
+        // 첫 그리기 전에 목록을 한 번 조립한다 — 부팅 복원(캐시 프로필·핀 행)이
+        // 발견 이벤트 없이도 바로 보이게(08-14 · 그전엔 첫 ANNOUNCE까지 빈 목록).
+        let mut inv = Invalidations::default();
+        self.refresh_rows(&mut inv);
+        self.request_redraw(id);
+    }
+
     /// 메인 창 앞으로(트레이 열기·알림 클릭). Wayland는 `set_visible`/`focus_window`가
     /// no-op이고 클라이언트가 창을 되살릴 수 없다(xdg-shell 한계) — 최소화 해제 시도 +
     /// **주의 요청**(xdg_activation · Dock 아이콘 강조)으로 사용자가 한 번 눌러 복귀한다.
-    fn raise_main(&self) {
+    fn raise_main(&mut self, el: &ActiveEventLoop) {
+        // Linux 트레이 복귀 — X로 파괴된 메인 창을 다시 만든다(위 CloseRequested 참조).
+        if self.main_id.is_none() {
+            self.create_main_window(el);
+        }
+        #[cfg(not(target_os = "linux"))]
+        let _ = el;
+        nbeep_plat::dock::set_dock_visible(true); // mac Accessory → Regular(다른 OS no-op)
         if let Some(e) = self.main_id.and_then(|m| self.windows.get(&m)) {
             e.window.set_visible(true);
+            e.window.set_minimized(false); // tray_hide_taskbar off = 최소화였다
             #[cfg(target_os = "linux")]
             {
-                e.window.set_minimized(false);
                 // ① 셸이 준 정식 토큰(GNOME appindicator `ProvideXdgActivationToken`)이
                 //    있으면 xdg_activation.activate → **진짜 포커스**(08-29 실기: 앱 자체
                 //    토큰은 "앱이 준비되었습니다" 알림으로 강등됐다).
@@ -14390,56 +14455,7 @@ impl ApplicationHandler<AppEvent> for App {
         if self.main_id.is_some() {
             return;
         }
-        // 마지막 종료 위치·크기 복원(08-14 사용자 확정 — 다중 인스턴스 실기에서
-        // 매번 재배치하던 것. 신원(data/)별로 저장되니 인스턴스마다 자기 자리를
-        // 기억한다). 값이 없거나 무효면 기본값 — ADR-0011 관용 파싱 원칙 그대로.
-        let geo = |k: &str| self.settings.get(k).parse::<i32>().ok();
-        let (ww, wh) = match (geo("ui.win_w"), geo("ui.win_h")) {
-            (Some(w), Some(h)) if (200..=8000).contains(&w) && (150..=8000).contains(&h) => {
-                (f64::from(w).max(MAIN_MIN_W), f64::from(h).max(MAIN_MIN_H))
-            }
-            _ => (MAIN_MIN_W, MAIN_MIN_H), // 첫 실행 = 최소 크기(사용자 확정 08-23)
-        };
-        let mut attrs = self
-            .win_attrs()
-            .with_title("Nexa Beep")
-            .with_inner_size(winit::dpi::LogicalSize::new(ww, wh))
-            .with_min_inner_size(winit::dpi::LogicalSize::new(MAIN_MIN_W, MAIN_MIN_H))
-            .with_window_icon(self.icon.clone());
-        if let (Some(x), Some(y)) = (geo("ui.win_x"), geo("ui.win_y")) {
-            // 화면 밖 좌표 방어는 OS 몫이 크지만, 음수 심연(-32000 최소화 잔재)은 거른다.
-            if (-4000..=16000).contains(&x) && (-4000..=16000).contains(&y) {
-                attrs = attrs
-                    .with_position(winit::dpi::LogicalPosition::new(f64::from(x), f64::from(y)));
-            }
-        }
-        let window = Rc::new(el.create_window(attrs).unwrap());
-        #[cfg(target_os = "linux")]
-        linux_clipboard_init(&window); // 클립보드 워커(L-1) — 메인 창의 wl_display로 1회
-        window.set_theme(self.window_theme()); // 장식 테마(Linux CSD = 실효값 명시)
-                                               // 목록(타입어헤드) = IME **끔** — raw 자모를 앱이 직접 조합(hangul::Composer ·
-                                               // OS 조합 세션 경합 제거). 대화 진입 시 켠다(set_main_ime).
-        window.set_ime_allowed(false);
-        let scale = window.scale_factor() as f32;
-        let context = softbuffer::Context::new(window.clone()).unwrap();
-        let surface = SbSurface::new(&context, window.clone()).unwrap();
-        let id = window.id();
-        self.windows.insert(
-            id,
-            WinEntry {
-                role: Role::Main,
-                window,
-                surface,
-                cursor: (0, 0),
-                scale,
-            },
-        );
-        self.main_id = Some(id);
-        self.layout_window(id);
-        // 첫 그리기 전에 목록을 한 번 조립한다 — 부팅 복원(캐시 프로필·핀 행)이
-        // 발견 이벤트 없이도 바로 보이게(08-14 · 그전엔 첫 ANNOUNCE까지 빈 목록).
-        let mut inv = Invalidations::default();
-        self.refresh_rows(&mut inv);
+        self.create_main_window(el);
         // keytap 설치(G1 · H-26 — mac 한정): winit이 삼키는 "조합 직후 첫 1byte"를
         // 로컬 모니터로 관측해 보충한다. 단일 설치(resumed는 main_id 가드로 1회).
         #[cfg(target_os = "macos")]
@@ -14450,7 +14466,6 @@ impl ApplicationHandler<AppEvent> for App {
             }));
         }
     }
-
     fn user_event(&mut self, el: &ActiveEventLoop, event: AppEvent) {
         // 세션 액터 → GUI(M2-7). 수신 메시지를 해당 대화 스레드에 실시간 반영한다.
         match event {
@@ -16079,13 +16094,13 @@ impl ApplicationHandler<AppEvent> for App {
             AppEvent::SystemTheme(dark) => self.on_system_theme(dark),
             AppEvent::Tray(ev) => match ev {
                 // 트레이(M3-2a) — 좌클릭/"열기" = 메인 복원 · "종료" = 명시적 종료.
-                nbeep_plat::tray::TrayEvent::Open => self.raise_main(),
+                nbeep_plat::tray::TrayEvent::Open => self.raise_main(el),
                 // 알림 클릭(08-15 사용자 요청) — 메인 표시 + **해당 대화까지**:
                 // 단일 모드 = 메인 안에서 그 대화로 전환 · 분리 모드 = 그 대화 창을
                 // 열어 마지막 스레드 표시 — 둘 다 기존 "대화 열기" 경로(activate/
                 // open_group_thread)가 모드 분기까지 그대로 맡는다(새 규칙 0).
                 nbeep_plat::tray::TrayEvent::OpenTarget(tok) => {
-                    self.raise_main();
+                    self.raise_main(el);
                     match self.notify_targets.get(&tok).copied() {
                         Some(NotifyTarget::Peer(p)) => self.activate(p, el),
                         Some(NotifyTarget::Group(g)) => self.open_group_thread(g, el),
@@ -16744,10 +16759,25 @@ impl ApplicationHandler<AppEvent> for App {
                     // 트레이 상주(M3-2a · 사용자 확정 08-15) — 스위치 on이면 종료 대신
                     // 숨김(전송·세션은 계속 돈다 · 복귀 = 트레이 좌클릭/열기).
                     if self.settings.get("ui.close_to_tray") == "on" && self.tray.is_some() {
-                        if let Some(e) = self.windows.get(&id) {
-                            e.window.set_visible(false);
-                            // Wayland는 숨김이 불가(no-op) — 최소화로 대신한다(08-29).
+                        // ★ `ui.tray_hide_taskbar`(08-30 사용자 확정 · 3-OS · 기본 on):
+                        //   on = 작업표시줄/Dock에서 **사라진다** — Linux는 창 파괴(Wayland는
+                        //   숨김 no-op · 파괴 = 언맵 · 트레이 "열기"가 `create_main_window`로
+                        //   재생성 · 상태는 App에 있다) · Windows = 숨김(버튼 소멸) · mac =
+                        //   숨김 + Dock 아이콘 제거(activation policy Accessory).
+                        //   off = 최소화(목록에 남는다).
+                        if self.settings.get("ui.tray_hide_taskbar") == "on" {
                             #[cfg(target_os = "linux")]
+                            {
+                                self.windows.remove(&id);
+                                self.main_id = None;
+                                self.close_armed = false;
+                            }
+                            #[cfg(not(target_os = "linux"))]
+                            if let Some(e) = self.windows.get(&id) {
+                                e.window.set_visible(false);
+                                nbeep_plat::dock::set_dock_visible(false);
+                            }
+                        } else if let Some(e) = self.windows.get(&id) {
                             e.window.set_minimized(true);
                         }
                         return;

@@ -59,6 +59,9 @@ objc2-app-kit = { version = "0.2", features = [
     "NSCell",
     # 클립보드 자체 구현(08-30 L-1 mac — pbcopy/pbpaste/osascript 스폰 폐지).
     "NSPasteboard",
+    # Dock 아이콘 제거(08-30 ui.tray_hide_taskbar — activation policy Accessory).
+    "NSApplication",
+    "NSRunningApplication",
 ] }
 objc2-foundation = { version = "0.2", features = ["NSString", "NSGeometry", "NSThread", "NSBundle", "NSError", "NSDictionary", "NSObject", "NSData"] }
 block2 = "0.5"

@@ -1152,6 +1152,16 @@ pub fn registry() -> &'static [Entry] {
             kind: SettingKind::Toggle,
             key: "ui.close_to_tray",
         },
+        // 08-30 사용자 확정 — 3-OS 공통 · **기본 on(숨김)**. Linux = 창 파괴(Wayland는
+        // 숨김 불가) · Windows = 숨김 · mac = 숨김 + Dock 아이콘 제거(Accessory 정책).
+        Entry {
+            cat: Msg::CatAdvanced,
+            sub: None,
+            label: Msg::TrayHideTaskbar,
+            desc: Msg::TrayHideTaskbarDesc,
+            kind: SettingKind::Toggle,
+            key: "ui.tray_hide_taskbar",
+        },
         Entry {
             cat: Msg::CatAdvanced,
             sub: None,
