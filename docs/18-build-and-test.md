@@ -25,6 +25,27 @@
 > 그 실행 파일이 **실제로 로드할** 신원 확인 = **`nexa-beep --whoami`**(지문·이름·exe·data 경로 ·
 > 읽기 전용 = 키를 만들지 않는다). 스크립트가 기존 `/tmp/beep-multi`를 1회 자동 이관한다.
 
+## 0-2. 설치본 자리 덮어쓰기 — `tools/install-local.sh` (08-29)
+
+"고쳤는데 설치본에 언제 들어가나"를 매번 릴리스로 풀면 실기 1회에 10분이 든다. 설치 경로·런처·
+**자동 실행 등록·트레이·재부팅**은 설치 자리에서만 재현되므로, 산출물을 **그 자리에 얹어**
+새 버전을 설치한 것처럼 돌린다(relaunch = 개발 빌드 3신원 · install-local = 설치본 1개).
+
+```bash
+./tools/install-local.sh             # ① 종료 ② 릴리스 빌드 ③ 설치 자리 덮어쓰기 ④ 설치본 실행 ⑤ md5·프로세스 확인
+./tools/install-local.sh --no-build  # 직전 산출물 그대로
+./tools/install-local.sh --no-run    # 복사까지만
+```
+
+| OS | 설치 자리(포장 SSOT와 동일) | 권한 |
+|---|---|---|
+| Linux .deb | `/usr/bin/{nexa-beep,nbeep-imgdec}` | root → sudo 1회 |
+| macOS brew cask | `/Applications/Nexa Beep.app/Contents/MacOS/…` | 사용자 · ad-hoc 재서명+quarantine 제거 |
+| Windows NSIS | `%LOCALAPPDATA%\Programs\NexaBeep\…exe` | 사용자 |
+
+버전 문자열·패키지 관리자 등록은 바뀌지 않는다(실기 전용) — 다음 정식 설치가 덮어쓴다.
+포장 경로가 바뀌면 이 스크립트의 `DEST`도 같은 커밋에서 고친다.
+
 ## 1. 명령 (SSOT) — Rust 워크스페이스([07](07-adr-0001-stack.md))
 
 > 로컬·CI 동일. `rust-toolchain.toml`이 stable·컴포넌트(rustfmt/clippy)·4타깃을 자동 고정한다.
