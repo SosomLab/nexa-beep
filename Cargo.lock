@@ -1137,18 +1137,18 @@ dependencies = [
 
 [[package]]
 name = "mkavatars"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "png",
 ]
 
 [[package]]
 name = "nbeep-core"
-version = "0.2.12"
+version = "0.2.13"
 
 [[package]]
 name = "nbeep-crypto"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "nbeep-core",
  "sha2",
@@ -1157,21 +1157,21 @@ dependencies = [
 
 [[package]]
 name = "nbeep-ctl"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "nbeep-gfx",
 ]
 
 [[package]]
 name = "nbeep-gfx"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "ab_glyph",
 ]
 
 [[package]]
 name = "nbeep-imgdec"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "jpeg-decoder",
  "libc",
@@ -1180,7 +1180,7 @@ dependencies = [
 
 [[package]]
 name = "nbeep-net"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "libc",
  "nbeep-core",
@@ -1189,7 +1189,7 @@ dependencies = [
 
 [[package]]
 name = "nbeep-plat"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "block2",
  "libc",
@@ -1207,7 +1207,7 @@ dependencies = [
 
 [[package]]
 name = "nbeep-relay"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "nbeep-core",
  "nbeep-crypto",
@@ -1217,14 +1217,14 @@ dependencies = [
 
 [[package]]
 name = "nbeep-safe"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "nbeep-core",
 ]
 
 [[package]]
 name = "nbeep-store"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "chacha20poly1305",
  "getrandom 0.2.17",
@@ -1234,7 +1234,7 @@ dependencies = [
 
 [[package]]
 name = "nbeep-ui"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "nbeep-core",
  "nbeep-ctl",
@@ -1273,7 +1273,7 @@ dependencies = [
 
 [[package]]
 name = "nexa-beep"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "nbeep-core",
  "nbeep-crypto",
@@ -1291,7 +1291,7 @@ dependencies = [
 
 [[package]]
 name = "nexa-beepd"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "nbeep-core",
  "nbeep-crypto",
@@ -1301,7 +1301,7 @@ dependencies = [
 
 [[package]]
 name = "nexa-conf"
-version = "0.2.12"
+version = "0.2.13"
 
 [[package]]
 name = "num_enum"
