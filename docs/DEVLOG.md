@@ -5,6 +5,10 @@
 
 ---
 
+## 2026-08-30
+
+- **(mac) ★클립보드 자체 구현 mac 판 = L-1 3-OS 완결**(`nbeep-plat::macclip` — `NSPasteboard` objc2 직접 · pbcopy/pbpaste/osascript 스폰·임시 파일 폐지 · 같은 판 의존·lock 신규 0 · PNG 직접+TIFF 재포장 · **동시 접근 SIGABRT 실측 → 뮤텍스+autoreleasepool**) · 실측 텍스트·PNG 75B·TIFF 왕복 ✓ · **자동 실행 mac 슬롯 검증**(디렉터리 주입형+임시 폴더 실물 plist 회귀 2종 · 잔여물 0 확인) · `install-local.sh` mac 결함(md5 대조가 codesign 뒤 → 항상 실패) 정정·설치본 반영 ✓ · rustdoc `crate::linuxclip` 깨진 링크 정정. **799 green**. [journal](journal/2026-08-30.md).
+
 ## 2026-08-29
 
 - **(Linux) ★클립보드 자체 구현 L-1**(`eb7429b` — "이미지 붙여넣기 = Windows만" 실측 → 도구 스폰 폐지): `nbeep-plat::linuxclip` = Wayland 상주 워커(winit wl_display 차용 · ext_data_control 우선·wl_data_device 폴백·두 번째 wl_keyboard로 시리얼) + X11 셀렉션(x11rb · INCR) · 의존 신규 0 · 배포판 무관(프로토콜 층). GNOME 50 실측 = selection/offer 수신 ✓ · Ctrl+V 실기 잔여. 796 green. [journal](journal/2026-08-29.md).

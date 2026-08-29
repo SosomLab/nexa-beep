@@ -373,6 +373,7 @@ nexa-beep --chat-connect-via <상대 지문 64hex> --server 127.0.0.1:47300
 | 트레이 열기 | 트레이 좌클릭 / 메뉴 "열기" | 창 즉시 전면(GNOME appindicator 확장 = 셸 토큰) · 토큰 없는 데스크톱 = "앱이 준비되었습니다" 알림 → 클릭 복귀([40 §6]) |
 | 트레이 종료 | 메뉴 "종료" | ≤1s 종료(대화 중이면 액터 정리 ≤2s) · 강제 종료 창 없음 |
 | 시스템 테마 | 설정 › 테마 = 시스템 → GNOME 설정에서 다크/라이트 전환 | 즉시 반영(포털 `SettingChanged`) |
+| 시스템 테마(mac) | 테마 = 시스템 → 시스템 설정 › 화면 모드 전환(또는 `osascript -e 'tell app "System Events" to tell appearance preferences to set dark mode to not dark mode'`) | 즉시 반영(winit `ThemeChanged`) · 다크/라이트 고정이면 무반응이 정상 |
 | 자동 실행 | `cat ~/.config/autostart/nexa-beep.desktop` | `Exec="/usr/bin/nexa-beep"` |
 
 D-Bus 재현(사람 없이): `gdbus call --session --dest org.kde.StatusNotifierWatcher --object-path /StatusNotifierWatcher --method org.freedesktop.DBus.Properties.Get org.kde.StatusNotifierWatcher RegisteredStatusNotifierItems`로 버스 이름을 얻고
