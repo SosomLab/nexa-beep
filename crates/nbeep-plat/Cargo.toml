@@ -57,8 +57,10 @@ objc2-app-kit = { version = "0.2", features = [
     "NSImageRep",
     "NSBitmapImageRep",
     "NSCell",
+    # 클립보드 자체 구현(08-30 L-1 mac — pbcopy/pbpaste/osascript 스폰 폐지).
+    "NSPasteboard",
 ] }
-objc2-foundation = { version = "0.2", features = ["NSString", "NSGeometry", "NSThread", "NSBundle", "NSError", "NSDictionary", "NSObject"] }
+objc2-foundation = { version = "0.2", features = ["NSString", "NSGeometry", "NSThread", "NSBundle", "NSError", "NSDictionary", "NSObject", "NSData"] }
 block2 = "0.5"
 # 정식 macOS 알림(M3-8b · 08-15 사용자 확정 "정식 알림") — 번들(.app) 실행에서
 # UNUserNotificationCenter + 클릭 delegate. keytap·트레이와 같은 objc2 0.5/0.2 판

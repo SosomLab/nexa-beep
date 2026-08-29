@@ -27,3 +27,6 @@ pub mod wlactivate;
 /// Linux 클립보드 자체 구현(08-29 L-1 — Wayland data-control/data_device · X11 셀렉션).
 #[cfg(target_os = "linux")]
 pub mod linuxclip;
+/// macOS 클립보드 자체 구현(08-30 L-1 mac 판 — NSPasteboard 직접).
+#[cfg(target_os = "macos")]
+pub(crate) mod macclip;

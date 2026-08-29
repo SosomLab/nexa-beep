@@ -26,6 +26,10 @@ pub unsafe fn activate(
     imp::activate(display, surface, token)
 }
 
+/// 비-Linux 스텁 — 항상 false(호출부가 폴백).
+///
+/// # Safety
+/// 포인터를 읽지 않는다(스텁) — 계약은 Linux 판과 동일하게 유지한다(호출부 cfg 분기 방지).
 #[cfg(not(target_os = "linux"))]
 pub unsafe fn activate(
     _display: *mut core::ffi::c_void,

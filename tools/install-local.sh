@@ -90,14 +90,17 @@ else
   echo "   설치 자리가 root 소유 — sudo 1회(비밀번호 입력)"
   copy_in sudo || { echo "   ❌ 복사 실패(sudo)"; exit 1; }
 fi
+# ★ md5 대조는 **재서명 전에**(08-30 mac 실측 — ad-hoc codesign이 바이너리에 서명을 박아
+#   넣어 산출물과 md5가 달라진다 · 서명 뒤 대조는 mac에서 항상 실패).
+AFTER=$(sum "$DEST/nexa-beep$EXE")
+echo "   nexa-beep: $BEFORE → $AFTER $([ "$BEFORE" = "$AFTER" ] && echo '(동일 — 산출물이 바뀌지 않았다)' || echo '✓ 교체')"
+[ "$AFTER" = "$(sum "$SRC/nexa-beep$EXE")" ] || { echo "   ❌ 설치 자리와 산출물이 다르다"; exit 1; }
 # mac: 번들 안 실행 파일을 바꾸면 코드 서명이 어긋난다(ad-hoc 재서명 · 격리 속성 제거).
 if [ "$OS" = mac ]; then
   codesign --force --deep --sign - "/Applications/Nexa Beep.app" 2>/dev/null || echo "   ⚠ codesign 실패(무시 가능 · 실행이 막히면 xattr -dr com.apple.quarantine)"
   xattr -dr com.apple.quarantine "/Applications/Nexa Beep.app" 2>/dev/null || true
+  echo "   codesign: $(codesign -dv "/Applications/Nexa Beep.app" 2>&1 | grep -o 'Signature=.*' || echo '?')"
 fi
-AFTER=$(sum "$DEST/nexa-beep$EXE")
-echo "   nexa-beep: $BEFORE → $AFTER $([ "$BEFORE" = "$AFTER" ] && echo '(동일 — 산출물이 바뀌지 않았다)' || echo '✓ 교체')"
-[ "$AFTER" = "$(sum "$SRC/nexa-beep$EXE")" ] || { echo "   ❌ 설치 자리와 산출물이 다르다"; exit 1; }
 echo "   버전: $("$DEST/nexa-beep$EXE" --version 2>/dev/null)"
 
 # ── ④ 설치본처럼 실행(런처 경로 = 무인자) ────────────────────────────────

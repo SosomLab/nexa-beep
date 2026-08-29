@@ -5,8 +5,10 @@
 //! 런타임 의존 0 유지). macOS(NSPasteboard)·Linux(X11/Wayland)는 objc·디스플레이
 //! 서버 연동이 필요해 **의도된 보류**(M3-1b OS 동작 어댑터) — 미지원 환경은
 //! 조용히 실패하는 대신 `None`/`false`로 정직하게 알린다.
-//! ★ Linux는 08-29부터 **자체 구현**([`crate::linuxclip`] — Wayland data-control/data_device ·
+//! ★ Linux는 08-29부터 **자체 구현**(`linuxclip` — Wayland data-control/data_device ·
 //! X11 셀렉션 · 앱이 `linuxclip::init_wayland`로 winit의 wl_display를 넘긴다) · 도구 스폰은 폴백.
+//! ★ macOS는 08-30부터 **자체 구현**(`macclip` — `NSPasteboard` objc2 직접 · 도구 스폰 0).
+//! 이로써 **3-OS 전부 자체 경로**(Windows Win32 · mac AppKit · Linux Wayland/X11).
 
 /// 클립보드의 텍스트를 읽는다. 미지원 OS·비텍스트·잠금 실패면 `None`.
 #[must_use]
@@ -360,15 +362,19 @@ mod tests {
 
 #[cfg(not(target_os = "windows"))]
 mod imp {
-    //! macOS·Linux — **OS 기본 도구**를 파이프로 쓴다(외부 크레이트 0 · DR-5).
-    //! macOS `pbcopy`/`pbpaste` · Linux는 Wayland(`wl-copy`/`wl-paste`)를 먼저 보고
-    //! X11(`xclip`)로 폴백한다. 도구가 없으면 실패를 그대로 보고한다(조용히 성공한 척
-    //! 하지 않는다 — 복사가 안 됐는데 됐다고 하면 사용자가 붙여넣기에서 잃는다).
+    //! 비-Windows — macOS는 `macclip`(NSPasteboard 직접 · 08-30) · Linux는
+    //! `linuxclip`(Wayland/X11 직접 · 08-29)이 1차이고, **OS 기본 도구** 파이프
+    //! (`wl-copy`/`wl-paste`·`xclip`)는 자체 경로가 없는 환경의 폴백이다. 도구가 없으면
+    //! 실패를 그대로 보고한다(조용히 성공한 척 하지 않는다 — 복사가 안 됐는데 됐다고
+    //! 하면 사용자가 붙여넣기에서 잃는다).
 
+    #[cfg(not(target_os = "macos"))]
     use std::io::Write as _;
+    #[cfg(not(target_os = "macos"))]
     use std::process::{Command, Stdio};
 
     /// 명령을 실행해 표준 출력을 문자열로 받는다.
+    #[cfg(not(target_os = "macos"))]
     fn read_from(cmd: &str, args: &[&str]) -> Option<String> {
         let out = Command::new(cmd)
             .args(args)
@@ -381,6 +387,7 @@ mod imp {
     }
 
     /// 명령에 표준 입력으로 텍스트를 밀어 넣는다.
+    #[cfg(not(target_os = "macos"))]
     fn write_to(cmd: &str, args: &[&str], text: &str) -> bool {
         let Ok(mut child) = Command::new(cmd)
             .args(args)
@@ -400,13 +407,14 @@ mod imp {
         wrote && child.wait().is_ok_and(|s| s.success())
     }
 
+    // macOS(08-30 L-1 mac 판) — NSPasteboard 직접(`macclip`) · 스폰 0.
     #[cfg(target_os = "macos")]
     pub(super) fn get_text() -> Option<String> {
-        read_from("pbpaste", &[])
+        crate::macclip::get_text()
     }
     #[cfg(target_os = "macos")]
     pub(super) fn set_text(text: &str) -> bool {
-        write_to("pbcopy", &[], text)
+        crate::macclip::set_text(text)
     }
 
     // Linux(08-29 L-1) — **자체 경로 우선**(`linuxclip` · Wayland/X11 직접) · 도구 스폰은
@@ -442,34 +450,12 @@ mod imp {
         (out.status.success() && !out.stdout.is_empty()).then_some(out.stdout)
     }
 
-    /// 클립보드 이미지(③ 08-20) — mac = AppleScript로 PNG를 임시 파일에 쓰게 한다
-    /// (`pngpaste` 무의존 — pbcopy 선례의 "시스템 기본 도구"). Linux = wl-paste →
-    /// xclip 사다리(텍스트 어댑터와 동일). 결과는 PNG 서명 확인 후에만 준다.
+    /// 클립보드 이미지(③ 08-20) — mac = `NSPasteboard` PNG 직접(TIFF만 있으면
+    /// AppKit 재포장 · 08-30 osascript 임시 파일 경로 폐지). Linux = 자체 경로 →
+    /// wl-paste → xclip 사다리. 결과는 PNG 서명 확인 후에만 준다.
     #[cfg(target_os = "macos")]
     pub(super) fn get_image() -> Option<super::ClipImage> {
-        let tmp = std::env::temp_dir().join(format!("nbeep-clip-{}.png", std::process::id()));
-        let path = tmp.to_string_lossy().into_owned();
-        let ok = Command::new("osascript")
-            .args([
-                "-e",
-                "set d to the clipboard as \u{ab}class PNGf\u{bb}",
-                "-e",
-                &format!("set f to open for access POSIX file \"{path}\" with write permission"),
-                "-e",
-                "set eof f to 0",
-                "-e",
-                "write d to f",
-                "-e",
-                "close access f",
-            ])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .is_ok_and(|s| s.success());
-        let out = if ok { std::fs::read(&tmp).ok() } else { None };
-        let _ = std::fs::remove_file(&tmp); // 임시물은 즉시 정리(DR-4 임시 폴더 규약)
-        out.filter(|b| b.starts_with(&[0x89, b'P', b'N', b'G']))
-            .map(super::ClipImage::Png)
+        crate::macclip::get_image_png().map(super::ClipImage::Png)
     }
 
     #[cfg(not(target_os = "macos"))]

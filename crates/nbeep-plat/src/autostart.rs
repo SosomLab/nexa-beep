@@ -348,25 +348,43 @@ mod reg {
 
 #[cfg(target_os = "macos")]
 fn register(exe: &Path) -> io::Result<()> {
-    let label = mac_label(exe);
-    let f = mac_plist_path(&label)?;
-    if let Some(dir) = f.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    std::fs::write(&f, plist_content(&label, &exe.display().to_string()))?;
-    remove_legacy_if_mine(&mac_plist_path(MAC_LABEL)?, plist_exe, exe)
+    register_in(&launch_agents_dir()?, exe)
 }
 
 #[cfg(target_os = "macos")]
 fn unregister(exe: &Path) -> io::Result<()> {
-    remove_if_exists(&mac_plist_path(&mac_label(exe))?)?;
-    remove_legacy_if_mine(&mac_plist_path(MAC_LABEL)?, plist_exe, exe)
+    unregister_in(&launch_agents_dir()?, exe)
 }
 
 #[cfg(target_os = "macos")]
 fn os_registered(exe: &Path) -> bool {
-    mac_plist_path(&mac_label(exe)).is_ok_and(|p| p.is_file())
-        || mac_plist_path(MAC_LABEL).is_ok_and(|p| legacy_is_mine(&p, plist_exe, exe))
+    launch_agents_dir().is_ok_and(|d| os_registered_in(&d, exe))
+}
+
+// 디렉터리 주입형(08-30) — 실제 홈은 위 세 래퍼만 만진다. 테스트는 임시 폴더로
+// **실물 파일 시나리오**(옛 고정 이름 이관·남의 것 보존·해제)를 검증한다.
+
+#[cfg(target_os = "macos")]
+fn register_in(dir: &Path, exe: &Path) -> io::Result<()> {
+    let label = mac_label(exe);
+    std::fs::create_dir_all(dir)?;
+    std::fs::write(
+        plist_path_in(dir, &label),
+        plist_content(&label, &exe.display().to_string()),
+    )?;
+    remove_legacy_if_mine(&plist_path_in(dir, MAC_LABEL), plist_exe, exe)
+}
+
+#[cfg(target_os = "macos")]
+fn unregister_in(dir: &Path, exe: &Path) -> io::Result<()> {
+    remove_if_exists(&plist_path_in(dir, &mac_label(exe)))?;
+    remove_legacy_if_mine(&plist_path_in(dir, MAC_LABEL), plist_exe, exe)
+}
+
+#[cfg(target_os = "macos")]
+fn os_registered_in(dir: &Path, exe: &Path) -> bool {
+    plist_path_in(dir, &mac_label(exe)).is_file()
+        || legacy_is_mine(&plist_path_in(dir, MAC_LABEL), plist_exe, exe)
 }
 
 #[cfg(any(target_os = "macos", test))]
@@ -375,12 +393,15 @@ fn mac_label(exe: &Path) -> String {
 }
 
 #[cfg(target_os = "macos")]
-fn mac_plist_path(label: &str) -> io::Result<std::path::PathBuf> {
+fn launch_agents_dir() -> io::Result<std::path::PathBuf> {
     let home = crate::paths::home_dir()
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no home directory"))?;
-    Ok(home
-        .join("Library/LaunchAgents")
-        .join(format!("{label}.plist")))
+    Ok(home.join("Library/LaunchAgents"))
+}
+
+#[cfg(target_os = "macos")]
+fn plist_path_in(dir: &Path, label: &str) -> std::path::PathBuf {
+    dir.join(format!("{label}.plist"))
 }
 
 /// plist 본문 → ProgramArguments 첫 문자열(우리가 쓴 형식만 — 다른 형식은 None).
@@ -647,5 +668,80 @@ mod tests {
         assert_eq!(boot_sync(true, true, false), BootSync::RespectRemoval);
         // 켬 + 마커 없음 + 등록 실재(수기 등록) = 경로 최신화 재등록.
         assert_eq!(boot_sync(true, false, true), BootSync::Register);
+    }
+}
+
+/// macOS 슬롯 이관 — **임시 폴더에 실물 plist**로 검증(홈은 건드리지 않는다).
+#[cfg(all(test, target_os = "macos"))]
+mod mac_slot_tests {
+    use super::*;
+
+    fn tmp(name: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("nbeep-autostart-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        d
+    }
+
+    /// 옛 고정 이름(`com.sosomlab.nexa-beep.plist`)이 **내 경로**를 가리키면 on 때
+    /// 새 슬롯으로 이관(옛 것 삭제) · off 때 내 슬롯만 삭제 · 재관측 = 미등록.
+    #[test]
+    fn legacy_mine_migrates_to_slot_then_unregisters() {
+        let d = tmp("mine");
+        let exe = Path::new("/Applications/Nexa Beep.app/Contents/MacOS/nexa-beep");
+        std::fs::create_dir_all(&d).unwrap();
+        let legacy = plist_path_in(&d, MAC_LABEL);
+        std::fs::write(
+            &legacy,
+            plist_content(MAC_LABEL, &exe.display().to_string()),
+        )
+        .unwrap();
+        assert!(
+            os_registered_in(&d, exe),
+            "옛 이름이 내 경로면 등록된 것으로 관측"
+        );
+
+        register_in(&d, exe).unwrap();
+        let slot = plist_path_in(&d, &mac_label(exe));
+        assert!(slot.is_file(), "새 슬롯 생성: {}", slot.display());
+        assert!(!legacy.exists(), "옛 고정 이름은 이관(삭제)");
+        let body = std::fs::read_to_string(&slot).unwrap();
+        assert_eq!(plist_exe(&body).as_deref(), Some(exe.to_str().unwrap()));
+        assert!(
+            body.contains(&format!("<string>{}</string>", mac_label(exe))),
+            "Label = 슬롯 라벨"
+        );
+        assert!(os_registered_in(&d, exe));
+
+        unregister_in(&d, exe).unwrap();
+        assert!(!slot.exists(), "off = 내 슬롯 삭제");
+        assert!(!os_registered_in(&d, exe));
+        unregister_in(&d, exe).unwrap(); // 멱등
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// 옛 고정 이름이 **남의 경로**(다른 설치·개발 빌드)면 on/off 어느 쪽도 보존한다 —
+    /// 08-29 Linux 도미노(개발 빌드 off가 설치본 등록을 지움)의 mac 판 재발 방지.
+    #[test]
+    fn legacy_of_other_instance_is_preserved() {
+        let d = tmp("other");
+        let mine = Path::new("/Users/u/proj/target/release/nexa-beep");
+        let other = "/Applications/Nexa Beep.app/Contents/MacOS/nexa-beep";
+        std::fs::create_dir_all(&d).unwrap();
+        let legacy = plist_path_in(&d, MAC_LABEL);
+        std::fs::write(&legacy, plist_content(MAC_LABEL, other)).unwrap();
+        assert!(!os_registered_in(&d, mine), "남의 등록은 내 등록이 아니다");
+
+        register_in(&d, mine).unwrap();
+        assert!(legacy.is_file(), "on: 남의 옛 등록 보존");
+        assert!(plist_path_in(&d, &mac_label(mine)).is_file());
+        unregister_in(&d, mine).unwrap();
+        assert!(legacy.is_file(), "off: 남의 옛 등록 보존");
+        assert!(!plist_path_in(&d, &mac_label(mine)).exists());
+        assert_ne!(
+            mac_label(mine),
+            mac_label(Path::new(other)),
+            "슬롯은 경로마다 다르다"
+        );
+        let _ = std::fs::remove_dir_all(&d);
     }
 }
