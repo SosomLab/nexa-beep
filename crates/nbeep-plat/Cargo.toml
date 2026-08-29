@@ -29,6 +29,9 @@ zbus = "5"
 wayland-client = "0.31"
 wayland-backend = { version = "0.3", features = ["client_system", "dlopen"] }
 wayland-protocols = { version = "0.32", features = ["client", "staging"] }
+# Linux 클립보드 자체 구현(08-29 L-1 — 도구 스폰 폐지): X11 셀렉션은 x11rb 순수 Rust
+# 연결(RustConnection · libxcb 불요) — winit과 같은 판 0.13(lock 동일 항목 · 트리 중복 0).
+x11rb = { version = "0.13", default-features = false }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

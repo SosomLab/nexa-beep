@@ -23,3 +23,7 @@ pub mod term;
 pub mod theme;
 pub mod tray;
 pub mod wlactivate;
+
+/// Linux 클립보드 자체 구현(08-29 L-1 — Wayland data-control/data_device · X11 셀렉션).
+#[cfg(target_os = "linux")]
+pub mod linuxclip;

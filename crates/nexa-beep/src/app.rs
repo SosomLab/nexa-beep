@@ -34,6 +34,19 @@ fn wayland_activate(w: &Window, token: &str) -> bool {
     }
 }
 
+/// Linux 클립보드 워커 기동(08-29 L-1) — 창 하나가 생기면 그 창의 `wl_display`로 1회(멱등).
+/// X11 세션은 핸들이 Wayland가 아니라 no-op(X11 경로는 자기 연결을 쓴다).
+#[cfg(target_os = "linux")]
+fn linux_clipboard_init(w: &Window) {
+    use winit::raw_window_handle::{HasDisplayHandle as _, RawDisplayHandle};
+    if let Ok(d) = w.display_handle() {
+        if let RawDisplayHandle::Wayland(d) = d.as_raw() {
+            // SAFETY: winit이 연 살아 있는 wl_display — 이벤트 루프(앱) 수명과 같다.
+            unsafe { nbeep_plat::linuxclip::init_wayland(d.display.as_ptr()) }
+        }
+    }
+}
+
 /// 창 속성 기본 — **앱 식별자**를 실어 만든다(08-29 Linux 실기): Wayland `app_id`/X11
 /// `WM_CLASS` = `nexa-beep` = `.desktop` 파일 이름(`StartupWMClass`). 없으면 GNOME Dock이
 /// 창을 어느 앱인지 못 맞춰 **톱니바퀴 + "알 수 없음"**으로 뜬다. 모든 창(메인·대화·모달)이
@@ -14401,6 +14414,8 @@ impl ApplicationHandler<AppEvent> for App {
             }
         }
         let window = Rc::new(el.create_window(attrs).unwrap());
+        #[cfg(target_os = "linux")]
+        linux_clipboard_init(&window); // 클립보드 워커(L-1) — 메인 창의 wl_display로 1회
         window.set_theme(self.window_theme()); // 장식 테마(Linux CSD = 실효값 명시)
                                                // 목록(타입어헤드) = IME **끔** — raw 자모를 앱이 직접 조합(hangul::Composer ·
                                                // OS 조합 세션 경합 제거). 대화 진입 시 켠다(set_main_ime).

@@ -5,6 +5,8 @@
 //! 런타임 의존 0 유지). macOS(NSPasteboard)·Linux(X11/Wayland)는 objc·디스플레이
 //! 서버 연동이 필요해 **의도된 보류**(M3-1b OS 동작 어댑터) — 미지원 환경은
 //! 조용히 실패하는 대신 `None`/`false`로 정직하게 알린다.
+//! ★ Linux는 08-29부터 **자체 구현**([`crate::linuxclip`] — Wayland data-control/data_device ·
+//! X11 셀렉션 · 앱이 `linuxclip::init_wayland`로 winit의 wl_display를 넘긴다) · 도구 스폰은 폴백.
 
 /// 클립보드의 텍스트를 읽는다. 미지원 OS·비텍스트·잠금 실패면 `None`.
 #[must_use]
@@ -407,13 +409,24 @@ mod imp {
         write_to("pbcopy", &[], text)
     }
 
+    // Linux(08-29 L-1) — **자체 경로 우선**(`linuxclip` · Wayland/X11 직접) · 도구 스폰은
+    // 자체 경로가 없을 때만(비-Linux unix 등). 도구가 없으면 종전엔 전부 죽었다.
     #[cfg(not(target_os = "macos"))]
     pub(super) fn get_text() -> Option<String> {
+        #[cfg(target_os = "linux")]
+        if crate::linuxclip::native_available() {
+            return crate::linuxclip::get(crate::linuxclip::TEXT_MIMES)
+                .map(|b| String::from_utf8_lossy(&b).into_owned());
+        }
         read_from("wl-paste", &["--no-newline"])
             .or_else(|| read_from("xclip", &["-selection", "clipboard", "-o"]))
     }
     #[cfg(not(target_os = "macos"))]
     pub(super) fn set_text(text: &str) -> bool {
+        #[cfg(target_os = "linux")]
+        if crate::linuxclip::native_available() {
+            return crate::linuxclip::set(crate::linuxclip::text_items(text));
+        }
         write_to("wl-copy", &[], text) || write_to("xclip", &["-selection", "clipboard"], text)
     }
 
@@ -461,6 +474,12 @@ mod imp {
 
     #[cfg(not(target_os = "macos"))]
     pub(super) fn get_image() -> Option<super::ClipImage> {
+        #[cfg(target_os = "linux")]
+        if crate::linuxclip::native_available() {
+            return crate::linuxclip::get(crate::linuxclip::IMAGE_MIMES)
+                .filter(|b| b.starts_with(&[0x89, b'P', b'N', b'G']))
+                .map(super::ClipImage::Png);
+        }
         for (cmd, args) in [
             ("wl-paste", &["--type", "image/png"][..]),
             (
