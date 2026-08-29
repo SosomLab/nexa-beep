@@ -7,6 +7,7 @@
 
 ## 2026-08-29
 
+- **(Linux) ★자동 실행 인스턴스별 슬롯**(`313344b` — 재부팅 실기: on인데 안 뜨고 설정 off로 초기화): 원인 = OS 슬롯 1개(3-OS 전부 이름 고정)를 여러 인스턴스(설치본 on · 개발 빌드 off)가 줄다리기 → 개발 빌드가 설치본 등록 삭제 → 부재를 외부 삭제로 오판해 설정 강하. 처방 = 이름에 **실행 파일 경로 해시**(`instance_tag`) · 옛 고정 이름은 내 경로일 때만 이관. Linux 실측 3단계 ✓ · 794 green. [journal](journal/2026-08-29.md).
 - **(Linux) ★사용자 실기 전부 ✓ + 추가 검토**: v0.2.12 4건(트레이 즉시 전면·테마 추종·Dock 아이콘·X 닫기 실물)·트레이 숨김/Open/Quit 정상 · ★**Linux↔mac·Win 통신 OK = 2-PC 실증 3-OS 전 조합** · 실측 = **Linux 유휴 RSS 17.5MB(R-8 3-OS 완성)**·seccomp 2/2·ignored 멀티캐스트는 따로 실행 · 발견 = **클립보드 도구 부재(L-1 🔴)**·xattr(L-2)·알림 클릭(L-3)·포털 피커(L-4) TODO 등재. [journal](journal/2026-08-29.md).
 - **(Linux) ★v0.2.12 릴리스**(`ffd893f`+태그 — 탑재 = 트레이 열기 진짜 포커스 `0a3d679`): run `33255013819` 전 job success · 자산 14종 · .deb 대조 ✓ · winget OPEN → 스위치 false(6회차). [journal](journal/2026-08-29.md).
 - **(Linux) ★트레이 열기 = 진짜 포커스**(v0.2.11 실기 — "앱이 준비되었습니다" 알림 강등): GNOME appindicator 확장이 클릭 전 넘기는 **`ProvideXdgActivationToken`** 수신 + `nbeep-plat::wlactivate`(winit wl_display 차용 → `xdg_activation.activate(token, surface)` · 같은 판 의존 · lock 신규 0) · D-Bus 재현 3경로 프로토콜 실측 ✓. [journal](journal/2026-08-29.md).
