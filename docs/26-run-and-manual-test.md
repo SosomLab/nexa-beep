@@ -364,6 +364,20 @@ nexa-beep --chat-connect-via <상대 지문 64hex> --server 127.0.0.1:47300
    (펀치→릴레이)로 연결한다. 내 지문은 `nexa-beep --whoami`의 `full =` 줄.
    발견·수동 주소가 다 실패한 아는 상대도 자동으로 서버 사다리를 탄다.
 
+### 3-8. Linux 데스크톱(GNOME Wayland) 설치본 실기 — 08-29 항목
+
+| 확인 | 절차 | 기대 |
+|---|---|---|
+| 런처 = 실물 | 앱 그리드에서 실행 → `pgrep -af nexa-beep` | `/usr/bin/nexa-beep`(인자 없음). `--window`가 붙어 있으면 InMemory 데모(에코 봇 7명) — v0.2.10 미만 .deb |
+| 창 식별 | 최소화 → Dock | Nexa Beep 아이콘(톱니바퀴 "알 수 없음"이면 app_id 부재 — v0.2.11 미만) |
+| 트레이 열기 | 트레이 좌클릭 / 메뉴 "열기" | 창 즉시 전면(GNOME appindicator 확장 = 셸 토큰) · 토큰 없는 데스크톱 = "앱이 준비되었습니다" 알림 → 클릭 복귀([40 §6]) |
+| 트레이 종료 | 메뉴 "종료" | ≤1s 종료(대화 중이면 액터 정리 ≤2s) · 강제 종료 창 없음 |
+| 시스템 테마 | 설정 › 테마 = 시스템 → GNOME 설정에서 다크/라이트 전환 | 즉시 반영(포털 `SettingChanged`) |
+| 자동 실행 | `cat ~/.config/autostart/nexa-beep.desktop` | `Exec="/usr/bin/nexa-beep"` |
+
+D-Bus 재현(사람 없이): `gdbus call --session --dest org.kde.StatusNotifierWatcher --object-path /StatusNotifierWatcher --method org.freedesktop.DBus.Properties.Get org.kde.StatusNotifierWatcher RegisteredStatusNotifierItems`로 버스 이름을 얻고
+`… --object-path /MenuBar --method com.canonical.dbusmenu.Event 4 clicked '<0>' 0`(종료) · `/StatusNotifierItem …Activate 0 0`(열기) · `WAYLAND_DEBUG=1`로 `set_app_id`·`xdg_activation_v1.activate` 송신 확인.
+
 ### 3-4b. ★ 여러 신원을 한 PC에서 동시에 — **폴더를 나눈다**
 
 > 그룹(3인 이상) 실기는 전용 안내서가 있다 → **[33 그룹 채팅 테스트](33-group-chat-test-guide.md)**.
