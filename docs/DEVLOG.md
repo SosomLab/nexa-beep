@@ -7,6 +7,8 @@
 
 ## 2026-08-30
 
+- **(mac) ★`ui.tray_hide_taskbar` 3-OS**(사용자 요청 — Linux 닫아도 Dock에 남음): 고급 Toggle 기본 on · on = Linux 창 파괴(Wayland 언맵 · `create_main_window` 재생성) · Win 숨김 · mac 숨김+Dock 아이콘 제거(`nbeep-plat::dock` Accessory) · off = 최소화 · i18n 4개 국어. 3-OS 게이트 0 · 실기 잔여 · v0.2.15 탑재 예정. [journal](journal/2026-08-30.md).
+- **(mac) ★v0.2.14 릴리스**(`67e61ba` — 클립보드 3-OS 자체 구현 탑재 · 자산 14종 · brew 0.2.14 ✓ · winget = 수동 리뷰 큐·choco = 모더레이션 → 8회차 제외). [journal](journal/2026-08-30.md).
 - **(mac) ★클립보드 자체 구현 mac 판 = L-1 3-OS 완결**(`nbeep-plat::macclip` — `NSPasteboard` objc2 직접 · pbcopy/pbpaste/osascript 스폰·임시 파일 폐지 · 같은 판 의존·lock 신규 0 · PNG 직접+TIFF 재포장 · **동시 접근 SIGABRT 실측 → 뮤텍스+autoreleasepool**) · 실측 텍스트·PNG 75B·TIFF 왕복 ✓ · **자동 실행 mac 슬롯 검증**(디렉터리 주입형+임시 폴더 실물 plist 회귀 2종 · 잔여물 0 확인) · `install-local.sh` mac 결함(md5 대조가 codesign 뒤 → 항상 실패) 정정·설치본 반영 ✓ · rustdoc `crate::linuxclip` 깨진 링크 정정. **799 green**. [journal](journal/2026-08-30.md).
 
 ## 2026-08-29
