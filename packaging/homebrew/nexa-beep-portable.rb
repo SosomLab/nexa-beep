@@ -44,8 +44,8 @@ class NexaBeepPortable < Formula
 
   def caveats
     <<~EOS
-      GUI 앱으로 쓰려면 창 모드로 실행하세요:
-        nexa-beep --window
+      GUI 앱으로 쓰려면 인자 없이 실행하세요(창 + 실물 발견):
+        nexa-beep
 
       macOS Dock 아이콘·앱 번들이 필요하면 설치본(Cask)을 쓰세요:
         brew install --cask kiros33/tap/nexa-beep
