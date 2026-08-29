@@ -244,7 +244,11 @@ mod tests {
             let _ = tx.send(d);
         });
         std::thread::sleep(std::time::Duration::from_millis(300));
-        let flip = if orig.contains("prefer-dark") { "'default'" } else { "'prefer-dark'" };
+        let flip = if orig.contains("prefer-dark") {
+            "'default'"
+        } else {
+            "'prefer-dark'"
+        };
         set(flip);
         let got = rx.recv_timeout(std::time::Duration::from_secs(3));
         set(&orig);
