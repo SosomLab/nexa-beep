@@ -1199,6 +1199,9 @@ dependencies = [
  "objc2-app-kit",
  "objc2-foundation 0.2.2",
  "objc2-user-notifications",
+ "wayland-backend",
+ "wayland-client",
+ "wayland-protocols",
  "zbus",
 ]
 

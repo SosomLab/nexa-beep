@@ -21,6 +21,14 @@ nbeep-core.workspace = true
 # 원장: docs/10 §3. Linux 타깃 한정 — 다른 OS 산출물 크기 불변.
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = "5"
+# Wayland 정식 활성화(08-29 · 트레이 "열기"가 창을 앞으로 못 가져오던 것) — GNOME
+# appindicator 확장이 넘기는 xdg_activation 토큰으로 `activate(token, surface)`를
+# 직접 부른다(winit에 외부 토큰 API 없음). **winit/sctk와 같은 판**(0.31/0.3/0.32 —
+# Cargo.lock 동일 항목 · 의존 트리 중복 0 · 산출물 증가 0). client_system+dlopen은
+# sctk가 이미 켠 기능(런타임 의존 0 유지 — libwayland는 dlopen).
+wayland-client = "0.31"
+wayland-backend = { version = "0.3", features = ["client_system", "dlopen"] }
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

@@ -13,6 +13,27 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key as WKey, NamedKey};
 use winit::window::{Window, WindowId};
 
+/// Wayland 정식 활성화(08-29) — winit 창의 raw 핸들(wl_display·wl_surface)로
+/// `nbeep_plat::wlactivate::activate`. X11·핸들 부재 = false.
+#[cfg(target_os = "linux")]
+fn wayland_activate(w: &Window, token: &str) -> bool {
+    use winit::raw_window_handle::{
+        HasDisplayHandle as _, HasWindowHandle as _, RawDisplayHandle, RawWindowHandle,
+    };
+    let (Ok(d), Ok(s)) = (w.display_handle(), w.window_handle()) else {
+        return false;
+    };
+    match (d.as_raw(), s.as_raw()) {
+        (RawDisplayHandle::Wayland(d), RawWindowHandle::Wayland(s)) => {
+            // SAFETY: 살아 있는 winit 창의 핸들 · 메인(이벤트 루프) 스레드에서 호출.
+            unsafe {
+                nbeep_plat::wlactivate::activate(d.display.as_ptr(), s.surface.as_ptr(), token)
+            }
+        }
+        _ => false,
+    }
+}
+
 /// 창 속성 기본 — **앱 식별자**를 실어 만든다(08-29 Linux 실기): Wayland `app_id`/X11
 /// `WM_CLASS` = `nexa-beep` = `.desktop` 파일 이름(`StartupWMClass`). 없으면 GNOME Dock이
 /// 창을 어느 앱인지 못 맞춰 **톱니바퀴 + "알 수 없음"**으로 뜬다. 모든 창(메인·대화·모달)이
@@ -5565,8 +5586,16 @@ impl App {
             #[cfg(target_os = "linux")]
             {
                 e.window.set_minimized(false);
-                e.window
-                    .request_user_attention(Some(winit::window::UserAttentionType::Critical));
+                // ① 셸이 준 정식 토큰(GNOME appindicator `ProvideXdgActivationToken`)이
+                //    있으면 xdg_activation.activate → **진짜 포커스**(08-29 실기: 앱 자체
+                //    토큰은 "앱이 준비되었습니다" 알림으로 강등됐다).
+                // ② 없거나 X11/실패 = 종전 주의 요청(Dock 강조 → 클릭 복귀).
+                let activated = nbeep_plat::tray::take_activation_token()
+                    .is_some_and(|tok| wayland_activate(&e.window, &tok));
+                if !activated {
+                    e.window
+                        .request_user_attention(Some(winit::window::UserAttentionType::Critical));
+                }
             }
             e.window.focus_window();
         }

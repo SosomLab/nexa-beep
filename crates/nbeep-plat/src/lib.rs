@@ -22,3 +22,4 @@ pub mod shutdown;
 pub mod term;
 pub mod theme;
 pub mod tray;
+pub mod wlactivate;

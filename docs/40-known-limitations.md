@@ -52,7 +52,7 @@
 | --- | --- | --- |
 | 무서명 배포 | 코드 서명 전(⏸ 인증서)이라 SmartScreen/Gatekeeper 경고가 뜬다 — mac은 brew Cask 정식 설치 경로 권장 | [TODO M5-4a] |
 | 검사·강등의 OS 격차 | 파일 검사 = Windows만(AMSI) · imgdec 강등 깊이 = mac(Seatbelt) ≥ Linux(seccomp) ≥ Win(완화 정책+win32k) | [11 §6] · imgdec |
-| **Linux Wayland 창 제어** | 클라이언트가 자기 창을 **숨기거나 되살릴 수 없다**(xdg-shell — `set_visible`/`focus_window`/최소화 해제 전부 no-op). 트레이 "열기"·알림 클릭은 **주의 요청**(xdg_activation)까지만 — Dock 아이콘이 강조되고 사용자가 한 번 눌러 복귀 · `ui.close_to_tray` on의 X = 숨김 대신 **최소화**. X11·Windows·mac은 즉시 복귀 | [journal/2026-08-29](journal/2026-08-29.md) · winit Wayland 백엔드 |
+| **Linux Wayland 창 제어** | 클라이언트가 자기 창을 **숨기거나 되살릴 수 없다**(xdg-shell — `set_visible`/`focus_window`/최소화 해제 전부 no-op). 트레이 "열기"·알림 클릭 = **GNOME(appindicator 확장)은 셸이 준 정식 토큰으로 진짜 포커스**(`ProvideXdgActivationToken` → `xdg_activation.activate`) · 토큰을 안 주는 데스크톱은 **주의 요청**까지(Dock 강조 → 사용자가 한 번 눌러 복귀) · `ui.close_to_tray` on의 X = 숨김 대신 **최소화**. X11·Windows·mac은 즉시 복귀 | [journal/2026-08-29](journal/2026-08-29.md) · winit Wayland 백엔드 |
 | 한글 입력 | IME 경합은 실측 기반 게이트로 다스렸지만(H-1~27) 새 OS·IME 조합에서 재발할 수 있다 — `NEXA_IME_TRACE`로 수집 후 보고 | [34] |
 
 > **원칙 재확인** — 표기는 사실만: "검사됨(탐지 없음) / 검사됨(탐지) / 검사 안 됨",

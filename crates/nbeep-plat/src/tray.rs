@@ -22,6 +22,19 @@
 //! macOS = **메뉴바 NSStatusItem**(아래 `mac` — M3-2b · AppKit 메인 스레드 강제).
 
 /// 트레이에서 온 사용자 행동.
+/// Wayland 활성화 토큰(Linux SNI — `ProvideXdgActivationToken`으로 셸이 준 것) — 다음
+/// Open 처리에서 **한 번** 꺼내 쓴다(토큰은 1회용). 다른 OS·미제공 = None.
+pub fn take_activation_token() -> Option<String> {
+    #[cfg(target_os = "linux")]
+    {
+        sni::take_token()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TrayEvent {
     /// 창 열기/복원(좌클릭 · 메뉴 "열기").
@@ -283,6 +296,12 @@ mod sni {
     static STATE: OnceLock<Mutex<TrayContent>> = OnceLock::new();
     static ON_EVENT: OnceLock<Box<dyn Fn(TrayEvent) + Send + Sync>> = OnceLock::new();
     static CONN: OnceLock<Connection> = OnceLock::new();
+    /// 셸이 넘긴 xdg_activation 토큰(1회용 · Open 직전에 도착).
+    static TOKEN: Mutex<Option<String>> = Mutex::new(None);
+
+    pub(super) fn take_token() -> Option<String> {
+        TOKEN.lock().ok().and_then(|mut g| g.take())
+    }
     /// dbusmenu 레이아웃 리비전(갱신마다 증가 — 호스트가 재조회).
     static MENU_REV: AtomicU32 = AtomicU32::new(1);
 
@@ -404,6 +423,13 @@ mod sni {
         }
         fn activate(&self, _x: i32, _y: i32) {
             emit(TrayEvent::Open);
+        }
+        /// GNOME appindicator 확장이 클릭 직전에 넘기는 정식 활성화 토큰(08-29) —
+        /// 좌클릭·메뉴 항목 모두 선행 호출. 저장만 하고 Open 처리에서 소비한다.
+        fn provide_xdg_activation_token(&self, token: String) {
+            if let Ok(mut g) = TOKEN.lock() {
+                *g = Some(token);
+            }
         }
         fn secondary_activate(&self, _x: i32, _y: i32) {
             emit(TrayEvent::Open);
