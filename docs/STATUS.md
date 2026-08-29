@@ -3,7 +3,9 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
-> **갱신: 2026-08-26 1차 (KST · Windows)** — ★ **[44 nexa-clip 연계](44-nexa-clip-liaison.md) 수용**(외부 작업분 3파일 검증·동기 — 코드 변경 = `rid_for` 주석 7줄뿐 · 자매 프로젝트가 `nexa-beepd`·`nbeep-relay` 그대로 재사용):
+> **갱신: 2026-08-29 1차 (KST · Linux)** — ★ **리눅스 환경 첫 관통**(코드 무변경 · 툴링 1건 수정): ① **게이트 전량** — build ✓·fmt ✓·clippy 0·**790 green · 2 ignored**(`udp::tests` 실 멀티캐스트 D-8a — mac 792와의 차 = 정확히 이 2건 · 회귀 0) ② **3신원 기동·상호 발견 ✓**(`relaunch.sh` 신원 보존 · 릴리스 빌드 3m05s 콜드 · 지문 `de829962`·`4a7325f3`·`3f493eef` — 이 PC 첫 기준값) ③ ★**발각 = 사용자 터미널 `cargo: 명령을 찾을 수 없음`**(rustup 당일 설치 · `~/.zshrc`에 env 로드 부재)로 재기동 ②에서 즉사 → 처방 = zshrc 1줄(로컬) + **`tools/relaunch.sh` cargo PATH 폴백**(`command -v` 실패 시 `~/.cargo/bin` 자가 탐지 — 사용자 rc에 의존하지 않는다 · 빈 PATH 실측 ✓). 잔여 = Linux 고유 축 실기(**SNI 트레이 M3-2 🚧·XDG autostart M3-25·wl/xclip 클립보드**) · ignored 2건 `--ignored`. [journal/2026-08-29.md](journal/2026-08-29.md).
+
+> **직전(2026-08-26 1차 · Windows)** — ★ **[44 nexa-clip 연계](44-nexa-clip-liaison.md) 수용**(외부 작업분 3파일 검증·동기 — 코드 변경 = `rid_for` 주석 7줄뿐 · 자매 프로젝트가 `nexa-beepd`·`nbeep-relay` 그대로 재사용):
 > ① **RID 도메인 문자열 `"nbeep-rid-v1"` = 앱 식별자** — clip은 `"nclip-rid-v1"`(같은 서버에서 두 앱 사용자가 서로를 찾지 않는 격리 · 변경하려면 **양쪽 동시** — 주석으로 박제). ★서버는 RID를 계산하지 않아(**44 §5-1** 실코드 확인) **서버 재배포 불필요** — 클라 변경만.
 > ② ★**clip 발견 공유 = glare(양쪽 동시 `Open`) 타이브레이크 부재**(beep에도 그대로 — 채널 이중 성립 가능 · clip 채택안 = PeerId 사전순 작은 쪽 initiator·서버 중재는 봉투 원리 위반이라 배제) → **TODO X-11 등재**(채택 검토).
 > ③ ★**prologue 실측 답신** — 44 §1-2 질문에 grep 실측: **beep은 Noise prologue 미사용(0건)**. clip 단독 채택(`"nexa-clip/1"`)으로도 교차 격리는 성립(불일치 = 핸드셰이크 실패) · beep 채택은 **와이어 비호환 변경**이라 X-11과 묶어 검토(한다면 major 경계에서만).

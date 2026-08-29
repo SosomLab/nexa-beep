@@ -20,6 +20,12 @@
 # 참고: docs/33 §2(신원 3개) · docs/26 §3-4(원리 — data/는 실행 파일을 따라간다)
 set -uo pipefail
 
+# cargo가 PATH에 없어도(새 PC · rustup 직후 셸 미재시작) rustup 기본 위치를 스스로 찾는다.
+# 08-29 실기: `cargo: 명령을 찾을 수 없음`으로 ②에서 즉사 — 사용자 rc에 의존하지 않는다.
+if ! command -v cargo >/dev/null 2>&1 && [ -x "$HOME/.cargo/bin/cargo" ]; then
+  export PATH="$HOME/.cargo/bin:$PATH"
+fi
+
 cd "$(dirname "$0")/.."
 ROOT=$(pwd)
 # ★ 기본 위치는 **durable**이어야 한다(08-19 진단) — 종전 /tmp/beep-multi는

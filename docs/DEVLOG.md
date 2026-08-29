@@ -5,6 +5,10 @@
 
 ---
 
+## 2026-08-29
+
+- **(Linux) ★리눅스 환경 첫 관통** — 코드 무변경으로 4게이트 전량(**790 green · 2 ignored = 실 멀티캐스트 D-8a** · mac 792와 정합) + `relaunch.sh` 3신원 기동·상호 발견 ✓(`de829962`·`4a7325f3`·`3f493eef`). 발각 1 = 사용자 터미널 `cargo` 부재(rustup 직후 rc 미로드)로 재기동 ② 즉사 → **`relaunch.sh` cargo PATH 폴백**(rc 무의존 · `~/.cargo/bin` 자가 탐지). Linux 고유 축(SNI 트레이·XDG autostart·wl/xclip) 실기 잔여. [journal](journal/2026-08-29.md).
+
 ## 2026-08-26
 
 - **(Win) ★[44] nexa-clip 연계 규약 수용**(외부 작업분 검증·동기 — 코드 변경 = `rid_for` 주석 7줄뿐): 자매 프로젝트 `nexa-clip`이 `nexa-beepd`·`nbeep-relay`를 그대로 재사용 → **RID 도메인 문자열 `"nbeep-rid-v1"` = 앱 식별자**(clip은 `"nclip-rid-v1"` — 같은 서버에서 앱 격리 · 서버는 RID를 계산하지 않아 **재배포 불필요**) · ★clip 발견 공유 = **glare(동시 Open) 타이브레이크 부재**(PeerId 사전순 제안 → **X-11 등재**) · ★prologue 실측 답 = **beep 미사용(grep 0건)** — clip 단독 채택으로도 교차 격리는 성립·beep 채택은 와이어 비호환이라 X-11과 묶어 검토. 게이트 전량 · **793 green**(Win — mac 792와의 차 = OS 조건부 스위트). [journal](journal/2026-08-26.md).
