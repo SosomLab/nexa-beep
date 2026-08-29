@@ -20,4 +20,5 @@ pub mod quarantine;
 pub mod scan;
 pub mod shutdown;
 pub mod term;
+pub mod theme;
 pub mod tray;

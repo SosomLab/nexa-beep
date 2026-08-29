@@ -392,7 +392,12 @@ pub fn registry() -> &'static [Entry] {
             sub: None,
             label: Msg::Theme,
             desc: Msg::ThemeDesc,
-            kind: SettingKind::Radio(&[("dark", Msg::ThemeDark), ("light", Msg::ThemeLight)]),
+            // 시스템 추종이 기본(08-29 사용자 확정 · 첫 옵션 = 기본값).
+            kind: SettingKind::Radio(&[
+                ("system", Msg::ThemeSystem),
+                ("dark", Msg::ThemeDark),
+                ("light", Msg::ThemeLight),
+            ]),
             key: "ui.theme",
         },
         // ── 테마 주요 색(08-10 · 사용자 요청) — 다크/라이트 각각. 즉시 적용(영속은 M3-15). ──
@@ -3273,7 +3278,8 @@ mod tests {
         };
         let item_h = 26; // combo ROW_H(scale 1)
         w.on_event(&click(pop.x + 30, pop.y + 4 + item_h + 5), &mut inv);
-        assert_eq!(w.take_changes(), vec![("ui.theme", "light".to_string())]);
+        // 옵션 = [system, dark, light] — 둘째 항목 = dark(08-29 시스템 추가).
+        assert_eq!(w.take_changes(), vec![("ui.theme", "dark".to_string())]);
     }
 
     #[test]

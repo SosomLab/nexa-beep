@@ -13,6 +13,21 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key as WKey, NamedKey};
 use winit::window::{Window, WindowId};
 
+/// 창 속성 기본 — **앱 식별자**를 실어 만든다(08-29 Linux 실기): Wayland `app_id`/X11
+/// `WM_CLASS` = `nexa-beep` = `.desktop` 파일 이름(`StartupWMClass`). 없으면 GNOME Dock이
+/// 창을 어느 앱인지 못 맞춰 **톱니바퀴 + "알 수 없음"**으로 뜬다. 모든 창(메인·대화·모달)이
+/// 같은 식별자를 쓰므로 한 곳에서 만든다.
+fn base_attrs() -> winit::window::WindowAttributes {
+    #[allow(unused_mut)]
+    let mut a = Window::default_attributes();
+    #[cfg(target_os = "linux")]
+    {
+        use winit::platform::wayland::WindowAttributesExtWayland as _;
+        a = a.with_name("nexa-beep", "nexa-beep");
+    }
+    a
+}
+
 use nbeep_core::PeerId;
 use nbeep_ui::{
     AboutInfo, AboutWidget, ChatLine, ChatViewWidget, ComboItem, Control as _, DrawCtx,
@@ -295,6 +310,8 @@ enum AppEvent {
     },
     /// 트레이 사용자 행동(M3-2a — 트레이 스레드 → 메인. 좌클릭/메뉴 열기·종료).
     Tray(nbeep_plat::tray::TrayEvent),
+    /// 시스템 테마 변경(Linux 포털 신호 — `ui.theme = system`).
+    SystemTheme(Option<bool>),
     /// 프로필 사진 **와이어 축소본** 생성 완료(워커 → 메인 · 08-16). 바이트가
     /// 오면 메인이 세대 일치를 확인하고 `me.wire.png`를 쓴 뒤 Full push로
     /// 실사진을 전파한다(보류했던 push가 여기서 한 번에 나간다 — 2단계 깜빡임
@@ -2833,6 +2850,8 @@ struct App {
     awaiting_ack: HashMap<PeerId, u32>,
     /// 종료 가드 — 미확인 전송이 있을 때 첫 닫기는 경고만, 두 번째로 확정(파괴적 확인 문법).
     close_armed: bool,
+    /// OS 테마 판정(`ui.theme = system`용 · None = 모름). 부팅 1회 조회 + 변경 이벤트로 갱신.
+    system_dark: Option<bool>,
     /// 발신 대기 창의 **승인 타임아웃 타이머**(상대별 · 렌더 안 함 — M4-2d는
     /// 창을 배치 패널로 바꿨다. 이건 순수 타이머로 남아 승인 무응답 시 취소한다).
     send_wait: HashMap<PeerId, nbeep_ui::TimeoutButton>,
@@ -3102,7 +3121,8 @@ impl App {
             }
             return;
         }
-        let attrs = Window::default_attributes()
+        let attrs = self
+            .win_attrs()
             .with_title("Nexa Beep — About")
             .with_inner_size(winit::dpi::LogicalSize::new(420.0, 520.0))
             .with_resizable(false) // 모달 대화상자 — 크기 고정
@@ -3172,7 +3192,8 @@ impl App {
             self.request_redraw(aid);
             return;
         }
-        let mut attrs = Window::default_attributes()
+        let mut attrs = self
+            .win_attrs()
             .with_title(format!(
                 "Nexa Beep — {}",
                 nbeep_core::t(nbeep_core::Msg::WinAlert)
@@ -5490,10 +5511,71 @@ impl App {
         self.list.set_groups(grows, inv);
     }
 
+    /// 창 속성 기본(식별자 + 장식 테마) — 모든 창 생성이 이걸 쓴다.
+    fn win_attrs(&self) -> winit::window::WindowAttributes {
+        base_attrs().with_theme(self.window_theme())
+    }
+
+    /// 실효 밝기 — `ui.theme`: `light`/`dark`는 그대로, `system`(기본)은 OS 판정
+    /// (`system_dark` · 모르면 다크 = 종전 기본 유지).
+    fn effective_light(&self) -> bool {
+        match self.settings.get("ui.theme") {
+            "light" => true,
+            "dark" => false,
+            // 모르면 라이트 — GNOME `default`(무선호) = 라이트 · Win/mac은 항상 판정이 있다.
+            _ => !self.system_dark.unwrap_or(false),
+        }
+    }
+
+    /// 창 장식(타이틀바) 테마 — Linux(Wayland CSD)는 OS 판정이 없어 **실효값을 항상
+    /// 명시**하고, Windows/mac은 `system`이면 `None`(OS 추종 + `ThemeChanged` 수신 유지).
+    fn window_theme(&self) -> Option<winit::window::Theme> {
+        let t = if self.effective_light() {
+            winit::window::Theme::Light
+        } else {
+            winit::window::Theme::Dark
+        };
+        if cfg!(target_os = "linux") || self.settings.get("ui.theme") != "system" {
+            Some(t)
+        } else {
+            None
+        }
+    }
+
+    /// 시스템 테마 판정 갱신(포털 신호·winit ThemeChanged) — `system` 모드일 때만 다시 그린다.
+    fn on_system_theme(&mut self, dark: Option<bool>) {
+        if self.system_dark == dark {
+            return;
+        }
+        self.system_dark = dark;
+        if self.settings.get("ui.theme") == "system" {
+            self.rebuild_theme();
+            for e in self.windows.values() {
+                e.window.request_redraw();
+            }
+        }
+    }
+
+    /// 메인 창 앞으로(트레이 열기·알림 클릭). Wayland는 `set_visible`/`focus_window`가
+    /// no-op이고 클라이언트가 창을 되살릴 수 없다(xdg-shell 한계) — 최소화 해제 시도 +
+    /// **주의 요청**(xdg_activation · Dock 아이콘 강조)으로 사용자가 한 번 눌러 복귀한다.
+    fn raise_main(&self) {
+        if let Some(e) = self.main_id.and_then(|m| self.windows.get(&m)) {
+            e.window.set_visible(true);
+            #[cfg(target_os = "linux")]
+            {
+                e.window.set_minimized(false);
+                e.window
+                    .request_user_attention(Some(winit::window::UserAttentionType::Critical));
+            }
+            e.window.focus_window();
+        }
+    }
+
     /// 팔레트 + 사용자 색 오버라이드(설정 `theme.{dark|light}.*`)로 테마 재구성(08-10).
     /// 다크/라이트 **각각** 자기 오버라이드를 갖는다 — 전환해도 상대 테마 색은 안 섞인다.
     fn rebuild_theme(&mut self) {
-        let light = self.settings.get("ui.theme") == "light";
+        let light = self.effective_light();
         let mut t = if light { Theme::light() } else { Theme::dark() };
         let prefix = if light { "theme.light" } else { "theme.dark" };
         let ov = |settings: &SettingsState, field: &mut nbeep_ui::Color, key: &str| {
@@ -5508,6 +5590,10 @@ impl App {
         ov(&self.settings, &mut t.panel_bg, "panel_bg");
         ov(&self.settings, &mut t.text, "text");
         self.theme = t;
+        let wt = self.window_theme();
+        for e in self.windows.values() {
+            e.window.set_theme(wt);
+        }
     }
 
     /// 연결 수립을 **워커 스레드**로 시작한다(M2-8 — 사용자 실기 08-10 "응답 없음").
@@ -6652,7 +6738,8 @@ impl App {
         }
         let title = format!("Nexa Beep — {}", self.peer_title(peer));
         // 대화 창은 모달이 아니다 — 메인에 종속시키지 않는다(자유로운 독립 창).
-        let attrs = Window::default_attributes()
+        let attrs = self
+            .win_attrs()
             .with_title(title)
             .with_window_icon(self.icon.clone());
         let window = Rc::new(el.create_window(attrs).unwrap());
@@ -6689,7 +6776,8 @@ impl App {
             }
             return;
         }
-        let attrs = Window::default_attributes()
+        let attrs = self
+            .win_attrs()
             .with_title(format!(
                 "Nexa Beep — {}",
                 nbeep_core::t(nbeep_core::Msg::SettingsTitle)
@@ -6922,7 +7010,8 @@ impl App {
             }
             return;
         }
-        let attrs = Window::default_attributes()
+        let attrs = self
+            .win_attrs()
             .with_title(format!(
                 "Nexa Beep — {}",
                 nbeep_core::t(nbeep_core::Msg::ConvboxTitle)
@@ -7359,7 +7448,8 @@ impl App {
             }
             return;
         }
-        let attrs = Window::default_attributes()
+        let attrs = self
+            .win_attrs()
             .with_title(format!(
                 "Nexa Beep — {}",
                 nbeep_core::t(nbeep_core::Msg::QuarantineTitle)
@@ -7511,7 +7601,8 @@ impl App {
             }
             return;
         }
-        let attrs = Window::default_attributes()
+        let attrs = self
+            .win_attrs()
             .with_title("Nexa Beep — 컨트롤 갤러리 (임시)")
             .with_window_icon(self.icon.clone());
         let window = Rc::new(el.create_window(attrs).unwrap());
@@ -7716,7 +7807,8 @@ impl App {
             tree.set_focused(true);
         }
 
-        let attrs = Window::default_attributes()
+        let attrs = self
+            .win_attrs()
             .with_title(title)
             .with_window_icon(self.icon.clone());
         let attrs = self.modal_attrs(attrs, false); // 메인 소유(08-15 — 창 묶음 부상)
@@ -8075,7 +8167,8 @@ impl App {
                 list
             },
         };
-        let attrs = Window::default_attributes()
+        let attrs = self
+            .win_attrs()
             .with_title(format!(
                 "Nexa Beep — {}",
                 nbeep_core::t(nbeep_core::Msg::ProfileTitle)
@@ -8260,7 +8353,8 @@ impl App {
             self.request_redraw(aid);
             return;
         }
-        let attrs = Window::default_attributes()
+        let attrs = self
+            .win_attrs()
             .with_title(format!(
                 "Nexa Beep — {}",
                 nbeep_core::t(nbeep_core::Msg::WinMembers)
@@ -8638,7 +8732,8 @@ impl App {
             self.request_redraw(wid);
             return;
         }
-        let attrs = Window::default_attributes()
+        let attrs = self
+            .win_attrs()
             .with_title(format!(
                 "Nexa Beep — {}",
                 nbeep_core::t(nbeep_core::Msg::WinPeerProfile)
@@ -8742,7 +8837,8 @@ impl App {
             self.request_redraw(wid);
             return;
         }
-        let attrs = Window::default_attributes()
+        let attrs = self
+            .win_attrs()
             .with_title(nbeep_core::tf(nbeep_core::Msg::WinPreview, &[&title]))
             .with_inner_size(winit::dpi::LogicalSize::new(640.0, 560.0))
             .with_window_icon(self.icon.clone());
@@ -8788,7 +8884,8 @@ impl App {
             }
             return;
         }
-        let attrs = Window::default_attributes()
+        let attrs = self
+            .win_attrs()
             .with_title(format!(
                 "Nexa Beep — {}",
                 nbeep_core::t(nbeep_core::Msg::WinConnectAddr)
@@ -9743,6 +9840,13 @@ impl App {
             self.conf_mark();
         }
         self.rebuild_theme(); // ui.theme + theme.* 색 오버라이드
+        {
+            // 시스템 테마 변경 감시(Linux 포털 신호 · 다른 OS = no-op → ThemeChanged).
+            let proxy = self.proxy.clone();
+            nbeep_plat::theme::watch(move |dark| {
+                let _ = proxy.send_event(AppEvent::SystemTheme(dark));
+            });
+        }
         if let Ok(ms) = self.settings.get("ui.typeahead_timeout").parse::<u64>() {
             self.list.set_typeahead_timeout(ms);
         }
@@ -10655,7 +10759,8 @@ impl App {
         // "공지 내용" 한글 고정이던 것).
         let broadcast = matches!(purpose, NamePurpose::Broadcast);
         self.name_prompt_for = Some(purpose);
-        let mut attrs = Window::default_attributes()
+        let mut attrs = self
+            .win_attrs()
             .with_title(format!(
                 "Nexa Beep — {}",
                 nbeep_core::t(if broadcast {
@@ -11045,7 +11150,8 @@ impl App {
                     return;
                 }
                 self.gchats.insert(gid, chat);
-                let attrs = Window::default_attributes()
+                let attrs = self
+                    .win_attrs()
                     .with_title(format!("Nexa Beep — {title}"))
                     .with_inner_size(winit::dpi::LogicalSize::new(520.0, 560.0))
                     .with_window_icon(self.icon.clone());
@@ -12055,7 +12161,8 @@ impl App {
             self.windows.remove(&aid);
         }
         self.alert_ctx = Some(ctx);
-        let attrs = Window::default_attributes()
+        let attrs = self
+            .win_attrs()
             .with_title(format!(
                 "Nexa Beep — {}",
                 nbeep_core::t(nbeep_core::Msg::WinConfirm)
@@ -14251,7 +14358,8 @@ impl ApplicationHandler<AppEvent> for App {
             }
             _ => (MAIN_MIN_W, MAIN_MIN_H), // 첫 실행 = 최소 크기(사용자 확정 08-23)
         };
-        let mut attrs = Window::default_attributes()
+        let mut attrs = self
+            .win_attrs()
             .with_title("Nexa Beep")
             .with_inner_size(winit::dpi::LogicalSize::new(ww, wh))
             .with_min_inner_size(winit::dpi::LogicalSize::new(MAIN_MIN_W, MAIN_MIN_H))
@@ -14264,8 +14372,9 @@ impl ApplicationHandler<AppEvent> for App {
             }
         }
         let window = Rc::new(el.create_window(attrs).unwrap());
-        // 목록(타입어헤드) = IME **끔** — raw 자모를 앱이 직접 조합(hangul::Composer ·
-        // OS 조합 세션 경합 제거). 대화 진입 시 켠다(set_main_ime).
+        window.set_theme(self.window_theme()); // 장식 테마(Linux CSD = 실효값 명시)
+                                               // 목록(타입어헤드) = IME **끔** — raw 자모를 앱이 직접 조합(hangul::Composer ·
+                                               // OS 조합 세션 경합 제거). 대화 진입 시 켠다(set_main_ime).
         window.set_ime_allowed(false);
         let scale = window.scale_factor() as f32;
         let context = softbuffer::Context::new(window.clone()).unwrap();
@@ -15923,23 +16032,16 @@ impl ApplicationHandler<AppEvent> for App {
                 }
                 self.accept_inbound(session, path, via_server);
             }
+            AppEvent::SystemTheme(dark) => self.on_system_theme(dark),
             AppEvent::Tray(ev) => match ev {
                 // 트레이(M3-2a) — 좌클릭/"열기" = 메인 복원 · "종료" = 명시적 종료.
-                nbeep_plat::tray::TrayEvent::Open => {
-                    if let Some(e) = self.main_id.and_then(|m| self.windows.get(&m)) {
-                        e.window.set_visible(true);
-                        e.window.focus_window();
-                    }
-                }
+                nbeep_plat::tray::TrayEvent::Open => self.raise_main(),
                 // 알림 클릭(08-15 사용자 요청) — 메인 표시 + **해당 대화까지**:
                 // 단일 모드 = 메인 안에서 그 대화로 전환 · 분리 모드 = 그 대화 창을
                 // 열어 마지막 스레드 표시 — 둘 다 기존 "대화 열기" 경로(activate/
                 // open_group_thread)가 모드 분기까지 그대로 맡는다(새 규칙 0).
                 nbeep_plat::tray::TrayEvent::OpenTarget(tok) => {
-                    if let Some(e) = self.main_id.and_then(|m| self.windows.get(&m)) {
-                        e.window.set_visible(true);
-                        e.window.focus_window();
-                    }
+                    self.raise_main();
                     match self.notify_targets.get(&tok).copied() {
                         Some(NotifyTarget::Peer(p)) => self.activate(p, el),
                         Some(NotifyTarget::Group(g)) => self.open_group_thread(g, el),
@@ -16140,8 +16242,18 @@ impl ApplicationHandler<AppEvent> for App {
         // 기다린다(액터 감지 지연 ≤ 수신 폴 100ms · 죽은 핸들 join은 즉시).
         // 강제 종료(kill)는 어쩔 수 없다 — 그 경우 발신자 재-Offer는 0부터.
         self.conversations.clear();
-        for j in self.actor_joins.drain(..) {
-            let _ = j.join();
+        // ★ 상한부 대기(08-29 Linux 실기 — "종료가 안 되거나 강제 종료가 뜬다"): 액터가
+        //   TCP 쓰기(타임아웃 30s)나 상대 무응답에 잡혀 있으면 join이 그만큼 메인을
+        //   막고, 그 사이 창이 응답을 못 해 OS가 강제 종료를 묻는다(GNOME 5s). 정상
+        //   경로(≤100ms 폴)는 그대로 완주시키고, 총 2s를 넘기면 남은 액터는 두고 나간다
+        //   (프로세스 종료가 스레드를 거둔다 · 부분물 보존은 그 액터만 못 한다).
+        let deadline = Instant::now() + std::time::Duration::from_millis(2000);
+        let mut joins = std::mem::take(&mut self.actor_joins);
+        while !joins.is_empty() && Instant::now() < deadline {
+            joins.retain(|j| !j.is_finished());
+            if !joins.is_empty() {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
         }
         // 상태 로그 flush(M3-22 — 종료 훅: 마지막 줄까지 디스크에).
         if let Some(l) = self.statuslog.take() {
@@ -16311,7 +16423,8 @@ impl ApplicationHandler<AppEvent> for App {
                 let mut pv = nbeep_ui::OfferPromptWidget::new(info, self.wait_timeout_sec);
                 pv.start(self.now_ms());
                 self.approve_view.insert(peer, pv);
-                let attrs = Window::default_attributes()
+                let attrs = self
+                    .win_attrs()
                     .with_title(format!(
                         "Nexa Beep — {}",
                         nbeep_core::t(nbeep_core::Msg::WinFileRequest)
@@ -16589,6 +16702,9 @@ impl ApplicationHandler<AppEvent> for App {
                     if self.settings.get("ui.close_to_tray") == "on" && self.tray.is_some() {
                         if let Some(e) = self.windows.get(&id) {
                             e.window.set_visible(false);
+                            // Wayland는 숨김이 불가(no-op) — 최소화로 대신한다(08-29).
+                            #[cfg(target_os = "linux")]
+                            e.window.set_minimized(true);
                         }
                         return;
                     }
@@ -16654,6 +16770,10 @@ impl ApplicationHandler<AppEvent> for App {
                         Role::Main => {}
                     }
                 }
+            }
+            WindowEvent::ThemeChanged(t) => {
+                // Windows/mac OS 테마 전환(winit) — `system` 모드면 즉시 반영.
+                self.on_system_theme(Some(t == winit::window::Theme::Dark));
             }
             WindowEvent::Resized(size) => {
                 // 주 창 크기 기억(08-14 — 마지막 종료 위치·크기 복원). 저장은
@@ -17855,6 +17975,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         send_avg: HashMap::new(),
         awaiting_ack: HashMap::new(),
         close_armed: false,
+        system_dark: nbeep_plat::theme::system_prefers_dark(),
         send_wait: HashMap::new(),
         send_paused: HashMap::new(),
         send_excluded: HashMap::new(),

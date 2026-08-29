@@ -333,6 +333,7 @@ pub enum Msg {
     TrayOpen,
     /// 트레이 메뉴 — 종료.
     TrayQuit,
+    ThemeSystem,
     ThemeDark,
     ThemeLight,
     Language,
@@ -2170,10 +2171,10 @@ impl Msg {
             ],
             Msg::Theme => ["Theme", "테마", "主题", "テーマ"],
             Msg::ThemeDesc => [
-                "Overall brightness palette — applies immediately",
-                "전체 창의 밝기 팔레트 — 즉시 적용됩니다",
-                "整体明暗配色 — 立即生效",
-                "全体の明暗パレット — 即時適用",
+                "Overall brightness palette — System follows the OS setting · applies immediately",
+                "전체 창의 밝기 팔레트 — 시스템은 OS 설정을 따릅니다 · 즉시 적용",
+                "整体明暗配色 — 跟随系统 = 随 OS 设置 · 立即生效",
+                "全体の明暗パレット — システムは OS 設定に追従 · 即時適用",
             ],
             Msg::AutoStart => [
                 "Start at login",
@@ -2201,6 +2202,7 @@ impl Msg {
             ],
             Msg::TrayOpen => ["Open", "열기", "打开", "開く"],
             Msg::TrayQuit => ["Quit", "종료", "退出", "終了"],
+            Msg::ThemeSystem => ["System", "시스템", "跟随系统", "システム"],
             Msg::ThemeDark => ["Dark", "다크", "深色", "ダーク"],
             Msg::ThemeLight => ["Light", "라이트", "浅色", "ライト"],
             Msg::Language => ["Language", "언어", "语言", "言語"],
