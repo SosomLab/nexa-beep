@@ -7,6 +7,7 @@
 
 ## 2026-08-29
 
+- **(Linux) ★v0.2.11 릴리스**(`02a66b7`+태그 — 탑재 = Linux 실기 5건 `14dd351`): run `33245089153` 전 job success · 자산 14종 · .deb 대조 ✓ · winget OPEN → 스위치 false(5회차). 부수 = 4차 커밋 fmt 누락 정정 `bf6cb26`(게이트와 커밋을 한 체인에 섞지 말 것). [journal](journal/2026-08-29.md).
 - **(Linux) ★Linux 실기 5건 점검**(사용자 보고 · GNOME 50 Wayland): **`ui.theme` 시스템 추종 기본**(`nbeep_plat::theme` 3-OS — Linux 포털 신호 실측 ✓) · 창 **`app_id=nexa-beep`**(Dock 톱니바퀴 "알 수 없음" 해소 · `set_app_id` 실측) · 트레이 열기 = Wayland 한계(되살리기 불가 → `xdg_activation` 주의 요청 · [40 §6]) · 종료 액터 join 2s 상한(강제 종료 창 원인) · Quit D-Bus 재현 0.5s ✓. 792 green. [journal](journal/2026-08-29.md).
 - **(Linux) ★v0.2.10 릴리스**(`1c61c4a`+태그 — 탑재 = Linux .desktop 런처 데모 결함 정정 `30535ec`): winget PR 2건 OPEN → 스위치 false(4회차) · run `33241620689` 전 job success · 자산 14종 · **.deb 추출 대조 `Exec=nexa-beep` ✓** · brew 0.2.10 추종 ✓. [journal](journal/2026-08-29.md).
 - **(Linux) ★설치본 .deb 런처 = InMemory 데모 결함 수정**(사용자 보고 — 앱 메뉴 실행 시 가짜 에코 봇 7명·실물 0): `.desktop`의 `Exec=nexa-beep --window`가 08-13 "무인자 = 창+실물" 확정 때 갱신 안 됨(`--window` 단독 = 데모) · brew 포터블 caveats도 동일 → 둘 다 무인자. Win NSIS·mac·choco·winget 정상. 로컬 오버라이드로 `99fb676e` 실물 광고 실측 ✓ · **v0.2.10에 탑재 필요**. [journal](journal/2026-08-29.md).
