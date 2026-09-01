@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 
 # 서버(포터블 규약) — zip을 패키지 폴더에 풀고 shim만 만든다. arm64 자산이 없어
 # x64 zip 하나를 양쪽 슬롯에 준다(choco 규약상 둘 다 필요).

@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 
 # 포터블 — zip을 패키지 폴더에 풀고 shim만 만든다(DR-4: 설치 흔적 없음).
 # 아키텍처별 zip을 각각 주면 choco가 OS에 맞는 것을 고른다.

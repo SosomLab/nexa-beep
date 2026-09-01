@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 
 # 사용자 단위 NSIS 설치본(installer.nsi) — 권한 상승 없이 /S 무인 설치가 통과한다.
 $packageArgs = @{

@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 
 # 설치본이 남긴 제거 정보를 그대로 쓴다(HKCU — 사용자 단위 설치라 여기 있다).
 $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\NexaBeep'
