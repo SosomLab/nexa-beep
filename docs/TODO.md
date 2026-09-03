@@ -405,7 +405,7 @@ M-1 설계 ──► M0 기반 ──► M1 발견 ──► M2 대화 ──►
 | **L-2** | 격리 표식 xattr(`user.xdg.origin.url`) — `quarantine.rs` ⏸ 슬라이스 · mac `setxattr` 코드 재사용 · 미지원 FS는 명시 | P1 | 미착수(M4-3 잔여) |
 | **L-3** | 알림 = `org.freedesktop.Notifications` D-Bus 직접(zbus) — `notify-send` 스폰 폐지 · `ActionInvoked`로 **클릭 → 대화 열기**(Win/mac 동등) · 전면화는 wlactivate 재사용(토큰은 알림 데몬이 `activation-token` 힌트로 줌 — GNOME 지원) | P1 | 미착수 |
 | **L-4** | 파일 선택 = xdg-desktop-portal `FileChooser` 병행 옵션(ADR-0014 "Linux 자체 피커 유지" 재검토 — 포털은 GNOME/KDE 공통·샌드박스 친화) | P2 | 🔴 결정 |
-| **L-6** | **트레이 상주 시 Dock 잔존**(08-30 사용자 — 닫아도 좌측 Dock에 표시) → `ui.tray_hide_taskbar`(3-OS · 기본 on · Linux 창 파괴+`create_main_window` 재생성 · mac Dock 아이콘 제거 · Win 숨김 · off = 최소화) | P1 | ✅ 구현(08-30) · **실기 잔여 3-OS**(Linux Dock 소멸·트레이 열기 재생성 / mac Dock 아이콘 / Win 작업표시줄 버튼) · v0.2.15 탑재 |
 | **L-5** | 실기 잔여 — X11 세션(`set_visible/focus_window` 실동작 경로) · KDE Plasma(토큰 미제공 → 주의 요청 폴백) · 24h 누수(기준선 17.5MB/29fd) · 자동 실행 재부팅 | — | 실기 대기 |
 | **L-6** | 실 멀티캐스트 ignored 2건은 **따로 실행**(동시 실행 = 포트 공유 경합 flaky) — 18·26 절차 명기 | P2 | 문서 |
+| **L-7** | **트레이 상주 시 Dock 잔존**(08-30 사용자 — 닫아도 좌측 Dock에 표시) → `ui.tray_hide_taskbar`(3-OS · 기본 on · Linux 창 파괴+`create_main_window` 재생성 · mac Dock 아이콘 제거 · Win 숨김 · off = 최소화) | P1 | ✅ 구현(08-30) · **실기 잔여 3-OS**(Linux Dock 소멸·트레이 열기 재생성 / mac Dock 아이콘 / Win 작업표시줄 버튼) · v0.2.15 탑재 |
 
