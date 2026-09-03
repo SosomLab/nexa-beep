@@ -198,10 +198,13 @@ gh run list --branch main --workflow ci --limit 1
 # 2) ★ winget/choco 이전 제출 상태 점검(규칙 · 사용자 확정 08-24 —
 #    **직전 제출이 검수 통과 전이면 새 버전 제출 금지**: 검수 중 새 제출은
 #    큐를 엉키게 하고 반려 사유가 된다):
-gh pr view 421961 --repo microsoft/winget-pkgs --json state   # MERGED = 검수 완료
-gh pr view 421967 --repo microsoft/winget-pkgs --json state   # (Portable)
+gh pr view 427125 --repo microsoft/winget-pkgs --json state   # MERGED = 검수 완료(v0.2.14 · 09-01 재제출)
+gh pr view 427126 --repo microsoft/winget-pkgs --json state   # (Portable)
+#    ※ 첫 제출 #421961/#421967(v0.2.2 · `Validation-Executable-Error` = 수동 리뷰)은 11일간 진척 없어
+#      09-01 사용자가 닫고 v0.2.14로 재제출 — 라벨 동일(수동 리뷰 큐 · 09-03 기준 OPEN).
 curl -s "https://community.chocolatey.org/api/v2/Packages()?%24filter=Id%20eq%20%27nexa-beep%27"
-#    → 피드에 항목이 있으면 모더레이션 통과(대기 중 패키지는 피드에서 숨겨진다).
+#    → 피드에 항목이 있으면 모더레이션 통과(대기 중 패키지는 피드에서 숨겨진다 — 09-03 실측 빈 응답).
+#      페이지 https://community.chocolatey.org/packages/nexa-beep 는 0.2.2 "Moderation" 표시(08-21 push분 잔존).
 #    둘 다 완료 → 스위치 켜서 이번 태그에 포함:
 #      gh variable set WINGET_PUBLISH -b true && gh variable set CHOCO_PUSH -b true
 #    대기 중 → false 유지 = 이번 릴리스에서 제외(brew·Releases만 나간다).

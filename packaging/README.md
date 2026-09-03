@@ -82,6 +82,8 @@ winget과 Chocolatey는 **중앙 저장소 검수**를 거치고, 한번 올라�
 제출 금지 — 검수 중 새 제출은 큐를 엉키게 한다. 점검 명령은
 [docs/18 §5](../docs/18-build-and-test.md#5-배포--githubworkflowsreleaseyml).
 
+**현황(09-03)** — winget: 첫 제출 #421961/#421967(v0.2.2)이 `Validation-Executable-Error`(수동 리뷰)로 11일 정체 → 09-01 닫고 **v0.2.14 #427125/#427126 재제출**(같은 라벨 · OPEN). beepd #422579 = `Validation-Completed` 모더레이터 승인 대기. Chocolatey: `nexa-beep`/`nexa-beep-portable` **0.2.2 모더레이션 잔존**(공개 피드 미등재). → 스위치는 계속 false(brew·Releases만).
+
 **Homebrew에는 이 스위치가 없다.** 검수가 없는 내 탭이고 되돌리기도 커밋 하나여서,
 릴리스와 함께 따라가는 편이 사용자에게 일관된다. `TAP_TOKEN`이 없으면 파일만 만들어
 아티팩트로 올리고 **왜 안 나갔는지 말한다**(조용히 성공한 척하지 않는다).
