@@ -620,6 +620,12 @@ fn reconnect_delay(stage: u8) -> Option<u64> {
     RECONNECT_BACKOFF_MS.get(stage as usize).copied()
 }
 
+/// 오프라인 행 유지 판정의 순수 규칙(09-03) — `App::keeps_offline_row`의 알맹이.
+/// 핀(`Unverified` 초과) ∨ 대화 이력 ∨ 수동 주소 중 하나면 남긴다.
+fn offline_row_kept(level: nbeep_core::TrustLevel, has_thread: bool, has_manual: bool) -> bool {
+    level != nbeep_core::TrustLevel::Unverified || has_thread || has_manual
+}
+
 impl ConnectLatch {
     /// 시도 시작 — 이미 진행 중이면 `false`(중복 클릭 가드).
     fn begin(&mut self, peer: PeerId) -> bool {
@@ -5210,6 +5216,8 @@ impl App {
         let now = nbeep_core::MonoInstant(
             u64::try_from(self.started.elapsed().as_nanos()).unwrap_or(u64::MAX),
         );
+        // 이탈(goodbye·만료) 모음 — 아래 한 곳에서 같은 강등 규칙을 적용한다.
+        let mut departed: Vec<nbeep_core::PeerEvent> = Vec::new();
         while let Ok(ev) = self.discovery.try_recv() {
             match ev {
                 DiscoveryEvent::Appeared(hint) => {
@@ -5250,8 +5258,11 @@ impl App {
                     }
                 }
                 DiscoveryEvent::Vanished(peer) => {
-                    if self.table.goodbye(peer, nbeep_core::SourceId(0)).is_some() {
+                    // goodbye 이탈도 만료 이탈과 **같은 강등 규칙**을 탄다(09-03 —
+                    // 종전엔 sweep 쪽만 시드해, 명시 goodbye는 부팅 시드에 기대고 있었다).
+                    if let Some(ev) = self.table.goodbye(peer, nbeep_core::SourceId(0)) {
                         changed = true;
+                        departed.push(ev);
                     }
                 }
             }
@@ -5262,17 +5273,17 @@ impl App {
         // 항목 수 = LAN 피어 수라 5Hz 순회는 실질 0비용.
         for ev in self.table.sweep(now) {
             changed = true;
+            departed.push(ev);
+        }
+        for ev in departed {
             let nbeep_core::PeerEvent::Departed(p, _) = ev else {
                 continue;
             };
             // 아는 상대(핀·대화·수동 주소)는 **오프라인 행으로 강등해 유지** —
             // 발견에서 빠졌다고 목록에서 증발하면 "비발견 상대 목록 유지"(08-13
             // 사용자 확정)가 깨진다. 모르는 상대(스쳐간 발견)만 행이 사라진다.
-            use nbeep_core::TrustStore as _;
-            let known = self.trust.level(p) != nbeep_core::TrustLevel::Unverified
-                || self.conversations.contains_key(&p)
-                || self.manual_addrs.contains_key(&p);
-            if known {
+            // 판정은 `keeps_offline_row` 한 곳(세션 종료 쪽과 같은 규칙 — 09-03).
+            if self.keeps_offline_row(p) {
                 let name = self
                     .peer_profiles
                     .get(&p)
@@ -5297,6 +5308,19 @@ impl App {
                 self.request_redraw(id);
             }
         }
+    }
+
+    /// 발견·세션이 모두 끊겨도 **오프라인 행으로 목록에 남길 상대**인가(09-03 —
+    /// 발견 이탈(goodbye·만료)과 세션 종료 두 경로의 **단일 판정**). 근거 = 핀(TOFU
+    /// 이상) · 대화 이력(살아 있는 스레드 또는 대피된 스레드) · 수동 주소. 셋 다
+    /// 없는 스쳐간 상대만 행이 사라진다("비발견 상대 목록 유지" 08-13 사용자 확정).
+    fn keeps_offline_row(&self, peer: PeerId) -> bool {
+        use nbeep_core::TrustStore as _;
+        offline_row_kept(
+            self.trust.level(peer),
+            self.conversations.contains_key(&peer) || self.parked_lines.contains_key(&peer),
+            self.manual_addrs.contains_key(&peer),
+        )
     }
 
     /// 목록 행 재구성 — 발견(PeerTable) + 신뢰(TrustStore)의 조립.
@@ -15547,22 +15571,33 @@ impl ApplicationHandler<AppEvent> for App {
                     }
                 }
                 self.closed_peers.insert(peer); // 목록 상태 점 = 끊김(빨강)
-                                                // 인바운드 전용 비발견 상대(수동 주소도, 발견 경로도 없음)는 세션이
-                                                // 끝나면 **다시 닿을 수단이 없다** — 목록에 유령으로 남기지 않는다(08-13).
-                                                // 수동 주소가 있으면 남긴다(빨강 · 클릭 = 그 주소로 재연결).
-                if !self.manual_addrs.contains_key(&peer) && self.table.get(peer).is_none() {
-                    self.extra_peers.remove(&peer);
-                    self.unread.remove(&peer);
-                    self.update_main_title();
-                    // 다시 닿을 수단이 없다 — 그룹발 미종결 몫도 실패로 닫는다(M5-1h).
-                    self.gx_mark_peer(peer, GxState::Failed);
-                } else {
+                                                // ★ 행 유지 판정과 재연결 판정을 분리(09-03 실기 — "접속이 안 돼도
+                                                //   이력이 있으면 목록에 떠야" 하는데 비어 보였다): 종전엔 "수동 주소도
+                                                //   발견 경로도 없음 = 행 제거"라, 상대가 goodbye 비컨을 먼저 보내고
+                                                //   TCP가 뒤에 닫히면 **핀·대화 이력이 있는 상대도** 목록에서 증발했다
+                                                //   (재시작하면 부팅 시드가 되살려 "재시작 후엔 뜬다"로 보인 것).
+                                                //   행 유지 = `keeps_offline_row`(핀·이력·수동 주소 — 발견 이탈 쪽과
+                                                //   같은 규칙) · 재연결 = 지금 닿을 수단(수동 주소·발견·서버 사다리 —
+                                                //   `ConnectFailed`와 같은 규칙). 인바운드 전용 스쳐간 상대(08-13)만
+                                                //   여전히 유령으로 남지 않는다.
+                let reachable = self.manual_addrs.contains_key(&peer)
+                    || self.table.get(peer).is_some()
+                    || self.relay.is_some();
+                if reachable {
                     // 재연결 수단이 있는 상대는 자동 재연결 시작(ⓑ) — 첫 시도 5초 후.
                     let due = self.now_ms() + RECONNECT_BACKOFF_MS[0];
                     self.reconnect.insert(peer, (0, due));
                     // 그룹발 미종결 몫 = 재-Offer 대기로 복귀(M5-1h — 표식 유지 ·
                     // 재성립 시 resend가 같은 풍선을 잇고, 소진되면 fail이 닫는다).
                     self.gx_mark_peer(peer, GxState::Waiting);
+                } else {
+                    // 다시 닿을 수단이 없다 — 그룹발 미종결 몫도 실패로 닫는다(M5-1h).
+                    self.gx_mark_peer(peer, GxState::Failed);
+                }
+                if self.table.get(peer).is_none() && !self.keeps_offline_row(peer) {
+                    self.extra_peers.remove(&peer);
+                    self.unread.remove(&peer);
+                    self.update_main_title();
                 }
                 self.set_status(nbeep_core::t(nbeep_core::Msg::StSessionEndedPeer));
                 self.refresh_chat_link(peer); // 헤더 아이콘 = 끊김(M3-20 — 제거 뒤라야 Lost)
@@ -18228,6 +18263,22 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
 
 #[cfg(test)]
 mod tests {
+    /// 09-03 실기 — 핀·이력이 있는 상대는 수동 주소·발견 경로가 없어도 오프라인 행으로
+    /// 남는다(종전 세션 종료 분기 = "수동 주소 ∧ 발견 없음 = 제거"라 goodbye가 먼저
+    /// 오면 증발). 스쳐간 상대(미검증·이력 0·수동 주소 0)만 사라진다.
+    #[test]
+    fn offline_row_kept_by_pin_or_history_or_manual_only() {
+        use nbeep_core::TrustLevel::{FingerprintVerified, Pinned, Unverified};
+        // 회귀 본체: 핀만 있어도(수동 주소 0 · 스레드 0) 남는다.
+        assert!(super::offline_row_kept(Pinned, false, false));
+        assert!(super::offline_row_kept(FingerprintVerified, false, false));
+        // 미검증이라도 이력·수동 주소가 있으면 남는다.
+        assert!(super::offline_row_kept(Unverified, true, false));
+        assert!(super::offline_row_kept(Unverified, false, true));
+        // 셋 다 없는 인바운드 전용 스쳐간 상대만 사라진다(08-13 유령 방지 유지).
+        assert!(!super::offline_row_kept(Unverified, false, false));
+    }
+
     /// 08-24 — 교체형 설치 자리의 옛 `data/` 1회 이관: 신원이 있고 대상이 비어 있을
     /// 때만 옮기고, 대상에 신원이 있으면 손대지 않는다(덮어쓰기 0).
     #[test]
