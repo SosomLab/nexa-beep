@@ -5,6 +5,10 @@
 
 ---
 
+## 2026-09-03
+
+- **(Win) ★목록 증발 결함 수정**(`528453c` — 실기 "접속 안 돼도 이력 있으면 떠야 하는데 비어 보임·재시작하면 복귀"): 원인 = `AppEvent::Closed`의 행 제거 조건이 "수동 주소 없음 ∧ 발견 없음"뿐이라 **핀·이력을 안 봄** — 상대 종료 시 goodbye가 먼저 오고 TCP 종료가 뒤따르면 핀 상대도 증발(순서 역이면 살아남아 간헐). 처방 = `keeps_offline_row` 단일 판정(핀 ∨ 스레드(대피분 포함) ∨ 수동 주소)을 발견 이탈(goodbye·만료)·세션 종료가 공유 · 재연결 판정은 `ConnectFailed`와 같은 규칙으로 분리 · 회귀 1종. 797 green(Win) · 실기 잔여. [journal](journal/2026-09-03.md).
+
 ## 2026-08-30
 
 - **(mac) ★`ui.tray_hide_taskbar` 3-OS**(사용자 요청 — Linux 닫아도 Dock에 남음): 고급 Toggle 기본 on · on = Linux 창 파괴(Wayland 언맵 · `create_main_window` 재생성) · Win 숨김 · mac 숨김+Dock 아이콘 제거(`nbeep-plat::dock` Accessory) · off = 최소화 · i18n 4개 국어. 3-OS 게이트 0 · 실기 잔여 · v0.2.15 탑재 예정. [journal](journal/2026-08-30.md).
