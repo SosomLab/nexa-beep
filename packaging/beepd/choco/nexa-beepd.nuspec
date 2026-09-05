@@ -8,7 +8,7 @@
     <title>nexa-beepd (Relay Server)</title>
     <authors>Sangyong Bae</authors>
     <projectUrl>https://github.com/SosomLab/nexa-beep</projectUrl>
-    <iconUrl>https://raw.githubusercontent.com/SosomLab/nexa-beep/main/packaging/branding/nexa-beep-256.png</iconUrl>
+    <iconUrl>https://cdn.jsdelivr.net/gh/SosomLab/nexa-beep@beepd-v@VERSION@/packaging/branding/nexa-beep-256.png</iconUrl>
     <licenseUrl>https://github.com/SosomLab/nexa-beep/blob/main/LICENSE.md</licenseUrl>
     <requireLicenseAcceptance>false</requireLicenseAcceptance>
     <projectSourceUrl>https://github.com/SosomLab/nexa-beep</projectSourceUrl>
