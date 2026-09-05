@@ -7,6 +7,7 @@
 
 ## 2026-09-05
 
+- **(mac) ★[45] 사용자 매뉴얼 신설 + 위키 User-Guide**(캡처 15장 — 목록·대화·⌘V 이미지 전송·수신 요청 창·그룹·오프라인 행·우클릭·프로필 카드·메뉴바·설정 5면 · 임시 신원 Alice/Bob · 창 ID 캡처 · 재현 절차 부록) · 위키 Home/Install/Features 현행화 push. [journal](journal/2026-09-05.md).
 - **(mac) ★실기 0600 스윕 ✓ + 로컬 갱신 스크립트 clip 동등화 + 채널 실측**: `install-local.sh` 개정(`--debug`·설치 자리 탐지·pkexec 폴백·`gio launch` 경로 기동·`--assets`·로그) + **`install-local.ps1` 신설**(Windows 네이티브 · HKCU InstallDir) → mac 설치본 갱신 43s · 기동 후 비밀 파일 **전부 600** 실측 · ★**choco 3종 = "Waiting for Maintainer"**(Requirement = `iconUrl` raw→jsDelivr 태그 핀 → nuspec 3종 수정 · 재제출은 사용자 결정) · winget v0.2.14 OPEN 코멘트 0 · brew 0.2.14 ✓. [journal](journal/2026-09-05.md).
 - **(mac) ★nexa-clip 전달문 32 처리 — 비밀 파일 0600 한 벌 + 설정 중복 줄 + 와이어 공유 고지**(`92c92ab`): A-1 `nexa-conf::write_atomic` 0600(+`Store::open` 기존 파일 죄기) · ★실측 확대 = `trust.seg`·`keys.seg`·`groups.seg`·`profile.sec`·`history/pending *.seg`·`server.pin`이 전부 nexa-conf 밖 별도 경로라 mac 644/Linux 664 → **`nbeep_store::privfile`**(0600 원자 쓰기·부팅 스윕) 7곳 배선 + `pinfile` 인라인 0600 · A-2 `serialize` known 우선 · B-3 `nbeep-relay` 머리말 고지 · B-1 = 08-26 기존 · B-2 glare = X-11 현황 박제(앱 가드 = 둘 다 드롭·비결정) · **[41 §3-2] beepd 연결 정리 기준 신설**(시간 명부 없음 · keepalive ≈25s가 유령 상한) · DEVLOG 모지바케 줄 제거 · **807 green**. [journal](journal/2026-09-05.md).
 
