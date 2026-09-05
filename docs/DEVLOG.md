@@ -5,10 +5,13 @@
 
 ---
 
+## 2026-09-05
+
+- **(mac) ★nexa-clip 전달문 32 처리 — 비밀 파일 0600 한 벌 + 설정 중복 줄 + 와이어 공유 고지**(`92c92ab`): A-1 `nexa-conf::write_atomic` 0600(+`Store::open` 기존 파일 죄기) · ★실측 확대 = `trust.seg`·`keys.seg`·`groups.seg`·`profile.sec`·`history/pending *.seg`·`server.pin`이 전부 nexa-conf 밖 별도 경로라 mac 644/Linux 664 → **`nbeep_store::privfile`**(0600 원자 쓰기·부팅 스윕) 7곳 배선 + `pinfile` 인라인 0600 · A-2 `serialize` known 우선 · B-3 `nbeep-relay` 머리말 고지 · B-1 = 08-26 기존 · B-2 glare = X-11 현황 박제(앱 가드 = 둘 다 드롭·비결정) · **[41 §3-2] beepd 연결 정리 기준 신설**(시간 명부 없음 · keepalive ≈25s가 유령 상한) · DEVLOG 모지바케 줄 제거 · **807 green**. [journal](journal/2026-09-05.md).
+
 ## 2026-09-03
 
 - **(Win) ★진행사항·문서·위키 현행화 + TODO 파손 복구**: `docs/TODO.md`가 08-30 mac `f4193a3` 치환 사고로 15.6MB 파손(글자 사이마다 문구 삽입) → `0896139` 복원+트레이 Dock 행(L-7)·mac 슬롯 ✓ 재적용+M3-28 등재 · 채널 실측 = winget 0.2.2 PR 09-01 닫힘 → **v0.2.14 #427125/#427126 OPEN**(수동 리뷰) · beepd #422579 승인 대기 · choco 0.2.2 모더레이션 → 스위치 false 유지(18 §5·packaging README 동기) · **위키 8면 v0.2.6→v0.2.14**(Release-Notes 0.2.7~0.2.14 · Features 전면) · MILESTONES·README·CLAUDE.md 09-03. [journal](journal/2026-09-03.md).
-- **(Win) âì§íì¬í­Â·ë¬¸ìÂ·ìí¤ ííí + TODO íì ë³µêµ¬**: `docs/TODO.md`ê° 08-30 mac `f4193a3` ì¹í ì¬ê³ ë¡ 15.6MB íì(ê¸ì ì¬ì´ë§ë¤ ë¬¸êµ¬ ì½ì) â `0896139` ë³µì+L-5Â·mac ì¬ë¡¯ â ì¬ì ì©+M3-28 ë±ì¬ Â· ì±ë ì¤ì¸¡ = winget 0.2.2 PR 09-01 ë«í â **v0.2.14 #427125/#427126 OPEN**(ìë ë¦¬ë·°) Â· beepd #422579 ì¹ì¸ ëê¸° Â· choco 0.2.2 ëª¨ëë ì´ì â ì¤ìì¹ false ì ì§(18 Â§5Â·packaging README ëê¸°) Â· **ìí¤ 8ë©´ v0.2.6âv0.2.14**(Release-Notes 0.2.7~0.2.14 Â· Features ì ë©´) Â· MILESTONESÂ·READMEÂ·CLAUDE.md 09-03. [journal](journal/2026-09-03.md).
 - **(Win) ★목록 증발 결함 수정**(`528453c` — 실기 "접속 안 돼도 이력 있으면 떠야 하는데 비어 보임·재시작하면 복귀"): 원인 = `AppEvent::Closed`의 행 제거 조건이 "수동 주소 없음 ∧ 발견 없음"뿐이라 **핀·이력을 안 봄** — 상대 종료 시 goodbye가 먼저 오고 TCP 종료가 뒤따르면 핀 상대도 증발(순서 역이면 살아남아 간헐). 처방 = `keeps_offline_row` 단일 판정(핀 ∨ 스레드(대피분 포함) ∨ 수동 주소)을 발견 이탈(goodbye·만료)·세션 종료가 공유 · 재연결 판정은 `ConnectFailed`와 같은 규칙으로 분리 · 회귀 1종. 797 green(Win) · 실기 잔여. [journal](journal/2026-09-03.md).
 
 ## 2026-08-30
