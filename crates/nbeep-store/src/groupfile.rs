@@ -423,7 +423,6 @@ impl FileGroupStore {
     }
 
     fn write_atomic(&self) -> io::Result<()> {
-        use std::io::Write as _;
         let mut out = Vec::with_capacity(256);
         out.extend_from_slice(&MAGIC);
         out.push(VER);
@@ -458,22 +457,8 @@ impl FileGroupStore {
             .map_err(|_| aead_err())?;
         out.extend_from_slice(&bnonce);
         out.extend_from_slice(&body);
-        if let Some(dir) = self.path.parent().filter(|p| !p.as_os_str().is_empty()) {
-            std::fs::create_dir_all(dir)?;
-        }
-        let tmp = self
-            .path
-            .with_extension(format!("tmp.{}", std::process::id()));
-        {
-            let mut f = std::fs::File::create(&tmp)?;
-            f.write_all(&out)?;
-            f.sync_all()?;
-        }
-        if let Err(e) = std::fs::rename(&tmp, &self.path) {
-            let _ = std::fs::remove_file(&tmp);
-            return Err(e);
-        }
-        Ok(())
+        // 소유자 전용(0600) 원자적 쓰기 — 한 벌(`privfile` · 09-05 clip A-1 계열).
+        crate::privfile::write_atomic(&self.path, &out)
     }
 }
 

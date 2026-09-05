@@ -124,15 +124,8 @@ impl KeyTable {
         let Ok(env) = nbeep_store::sealed::seal(SEAL_KEYTABLE, &self.wrap, &plain) else {
             return;
         };
-        if let Some(dir) = self.path.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
-        let tmp = self
-            .path
-            .with_extension(format!("tmp.{}", std::process::id()));
-        if std::fs::write(&tmp, &env).is_ok() {
-            let _ = std::fs::rename(&tmp, &self.path);
-        }
+        // 소유자 전용(0600) 원자적 쓰기(09-05 · clip A-1 계열 — 실측 664였다).
+        let _ = nbeep_store::privfile::write_atomic(&self.path, &env);
     }
 }
 

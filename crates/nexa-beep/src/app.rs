@@ -9353,7 +9353,8 @@ impl App {
             body.as_bytes(),
         ) {
             Ok(env) => {
-                if std::fs::write(&path, env).is_err() {
+                // 소유자 전용(0600)·원자적(09-05 — 종전 `fs::write` 직접 = 664 + 비원자).
+                if nbeep_store::privfile::write_atomic(&path, &env).is_err() {
                     self.set_status(nbeep_core::t(nbeep_core::Msg::StContactSaveFail));
                 }
             }
@@ -9517,12 +9518,8 @@ impl App {
             self.set_status(nbeep_core::t(nbeep_core::Msg::StHistorySealFail));
             return;
         };
-        if std::fs::create_dir_all(&dir).is_ok() {
-            let tmp = path.with_extension(format!("tmp.{}", std::process::id()));
-            if std::fs::write(&tmp, &env).is_ok() {
-                let _ = std::fs::rename(&tmp, &path);
-            }
-        }
+        // 소유자 전용(0600) 원자적 쓰기 — 한 벌(09-05 · clip A-1 계열 · 실측 664).
+        let _ = nbeep_store::privfile::write_atomic(&path, &env);
     }
 
     /// 1:1 오프라인 대기 큐 영속(M4-6 · 08-20 — 재시작 유지 사용자 확정).
@@ -9546,12 +9543,8 @@ impl App {
         ) else {
             return; // 봉인 실패 — 평문 저장은 하지 않는다(다음 변경에서 재시도)
         };
-        if std::fs::create_dir_all(&dir).is_ok() {
-            let tmp = path.with_extension(format!("tmp.{}", std::process::id()));
-            if std::fs::write(&tmp, &env).is_ok() {
-                let _ = std::fs::rename(&tmp, &path);
-            }
-        }
+        // 소유자 전용(0600) 원자적 쓰기 — 한 벌(09-05 · clip A-1 계열 · 실측 664).
+        let _ = nbeep_store::privfile::write_atomic(&path, &env);
     }
 
     /// 부팅 시 대기 큐 복원(M4-6) — restore_history와 같은 지문 매핑(핀 상대만).
@@ -9702,12 +9695,8 @@ impl App {
             self.set_status(nbeep_core::t(nbeep_core::Msg::StHistorySealFail));
             return;
         };
-        if std::fs::create_dir_all(&dir).is_ok() {
-            let tmp = path.with_extension(format!("tmp.{}", std::process::id()));
-            if std::fs::write(&tmp, &env).is_ok() {
-                let _ = std::fs::rename(&tmp, &path);
-            }
-        }
+        // 소유자 전용(0600) 원자적 쓰기 — 한 벌(09-05 · clip A-1 계열 · 실측 664).
+        let _ = nbeep_store::privfile::write_atomic(&path, &env);
     }
 
     /// 부팅 그룹 기록 복원(08-19) — 공유 그룹의 `g-{uid}.seg`를 개봉해
@@ -17759,6 +17748,8 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
     let (data, index) = nbeep_plat::font::system_ui_font().expect("시스템 UI 폰트 없음");
     let font = nbeep_gfx::Font::from_static(data, index).expect("폰트 파싱");
     let dir = data_dir();
+    // 0600 보장 이전 판이 남긴 664 비밀 파일을 부팅 1회 죈다(09-05 · idempotent · Win no-op).
+    nbeep_store::privfile::tighten_data_dir(&dir);
     // 신원 영속(M2-5a) — 재시작해도 같은 PeerId. 키 파일 손상 시 **덮어쓰지 않고**
     // 임시 신원으로 강등(fail-closed — 조용히 새 키를 만들면 상대 핀에서 남이 된다).
     let (identity, id_note, id_persistent) =

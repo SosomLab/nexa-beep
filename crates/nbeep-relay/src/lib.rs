@@ -3,6 +3,14 @@
 //! **서버(`nexa-beepd`)와 클라이언트가 이 크레이트 하나를 같이 쓴다** — 와이어 어긋남을
 //! 컴파일 시점에 잡는 한-저장소 구성의 본체다([docs/32 §9] · Q-32-13 확정 08-21).
 //!
+//! ⚠️ **이 크레이트는 자매 프로젝트 `nexa-clip`과 와이어를 공유한다**([docs/44 §7]).
+//! clip은 이 크레이트의 **사본**(`nclip-sync`)을 들고 같은 `nexa-beepd`에 붙는다 — CI 단독
+//! 빌드 때문에 path 의존을 못 써 사본을 택했다(clip 09-03). UI 계층 포크와 달리 와이어는
+//! 사본이 갈라지는 순간 **통신이 깨진다**. 그러므로 [`C2s`]/[`S2c`] 메시지·kind 번호·상수
+//! ([`DEFAULT_RELAY_PORT`]·[`MAX_FRAME`]·[`RELAY_CHUNK`]·[`OBS_MAGIC`]·[`MAX_RIDS`]·
+//! [`CARD_MAX`])·핸드셰이크 순서를 바꾸면 **같은 커밋에서 clip에 알린다**(docs/44 §7 절차).
+//! 공유 크레이트 승격(clip DR-18)은 별도 결정.
+//!
 //! ## 봉투 원리(S-3)
 //!
 //! 서버가 보는 것 = **회전 RID · 채널 번호 · 바이트 수 · 시각**이 전부다.
@@ -1562,7 +1570,21 @@ pub mod pinfile {
             std::fs::create_dir_all(dir)?;
         }
         let tmp = path.with_extension(format!("tmp.{}", std::process::id()));
-        std::fs::write(&tmp, lines.join("\n") + "\n")?;
+        {
+            // 소유자 전용(0600 · Unix) — 핀은 평문이라 **훼손이 곧 서버 바꿔치기**다(09-05 ·
+            // 실측 664 = 같은 그룹 계정이 쓸 수 있었다). rename이 temp 모드를 나른다.
+            use std::io::Write as _;
+            let mut opts = std::fs::OpenOptions::new();
+            opts.write(true).create(true).truncate(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt as _;
+                opts.mode(0o600);
+            }
+            let mut f = opts.open(&tmp)?;
+            f.write_all((lines.join("\n") + "\n").as_bytes())?;
+            f.sync_all()?;
+        }
         if let Err(e) = std::fs::rename(&tmp, path) {
             let _ = std::fs::remove_file(&tmp);
             return Err(e);
