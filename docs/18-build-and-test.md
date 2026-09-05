@@ -25,27 +25,39 @@
 > 그 실행 파일이 **실제로 로드할** 신원 확인 = **`nexa-beep --whoami`**(지문·이름·exe·data 경로 ·
 > 읽기 전용 = 키를 만들지 않는다). 스크립트가 기존 `/tmp/beep-multi`를 1회 자동 이관한다.
 
-## 0-2. 설치본 자리 덮어쓰기 — `tools/install-local.sh` (08-29)
+## 0-2. 설치본 자리 덮어쓰기 — `tools/install-local.sh` · `tools/install-local.ps1` (08-29 · 09-05 개정)
 
-"고쳤는데 설치본에 언제 들어가나"를 매번 릴리스로 풀면 실기 1회에 10분이 든다. 설치 경로·런처·
-**자동 실행 등록·트레이·재부팅**은 설치 자리에서만 재현되므로, 산출물을 **그 자리에 얹어**
-새 버전을 설치한 것처럼 돌린다(relaunch = 개발 빌드 3신원 · install-local = 설치본 1개).
+"고쳤는데 설치본에 언제 들어가나"를 매번 릴리스(태그·CI·다운로드·재설치)로 풀면 실기 1회에 10분이 든다.
+설치 경로·런처·**자동 실행 등록·트레이·재부팅·부팅 스윕**은 설치 자리에서만 재현되므로, 로컬에서 릴리스로
+컴파일한 산출물을 **그 자리에 얹어** 새 버전을 설치한 것처럼 돌린다(relaunch = 개발 빌드 3신원 · install-local = 설치본 1개).
+★ 09-05 개정 = nexa-clip `scripts/dev-install-{linux.sh,mac.sh,win.ps1}`과 기능 동등(프로필 선택 · 설치 자리 탐지 ·
+`--assets` · 런처 **경로** 명시 기동 · 설치본 stdout 로그 · sudo 불가 자리의 pkexec 폴백 · **Windows 네이티브 ps1**).
 
 ```bash
-./tools/install-local.sh             # ① 종료 ② 릴리스 빌드 ③ 설치 자리 덮어쓰기 ④ 설치본 실행 ⑤ md5·프로세스 확인
-./tools/install-local.sh --no-build  # 직전 산출물 그대로
-./tools/install-local.sh --no-run    # 복사까지만
+./tools/install-local.sh              # ① 종료 ② 릴리스 빌드 ③ 설치 자리 덮어쓰기 ④ 설치본 실행 ⑤ md5·프로세스·--whoami 확인
+./tools/install-local.sh --debug      # 디버그 프로필(진단 · 배포본과 최적화가 다르다)
+./tools/install-local.sh --no-build   # 직전 산출물 그대로
+./tools/install-local.sh --no-run     # 복사까지만
+./tools/install-local.sh --assets     # (Linux) .desktop·아이콘까지 — packaging/linux를 고쳤을 때
+NEXA_INSTALL_DIR=/opt/x ./tools/install-local.sh   # 비표준 설치 자리(Linux)
 ```
 
-| OS | 설치 자리(포장 SSOT와 동일) | 권한 |
-|---|---|---|
-| Linux .deb | `/usr/bin/{nexa-beep,nbeep-imgdec}` | root → sudo 1회 |
-| macOS brew cask | `/Applications/Nexa Beep.app/Contents/MacOS/…` | 사용자 · ad-hoc 재서명+quarantine 제거 |
-| Windows NSIS | `%LOCALAPPDATA%\Programs\NexaBeep\…exe` | 사용자 |
+```powershell
+pwsh tools/install-local.ps1                 # Windows 네이티브(Git Bash 불요) — 같은 ①~⑤
+pwsh tools/install-local.ps1 -Debug|-NoBuild|-NoRun
+$env:NEXA_INSTALL_DIR = 'D:\Apps\NexaBeep'   # 기본 = HKCU\Software\SosomLab\NexaBeep InstallDir → %LOCALAPPDATA%\Programs\NexaBeep
+```
 
-버전 문자열·패키지 관리자 등록은 바뀌지 않는다(실기 전용) — 다음 정식 설치가 덮어쓴다.
-포장 경로가 바뀌면 이 스크립트의 `DEST`도 같은 커밋에서 고친다.
-⚠ mac은 md5 대조를 **ad-hoc 재서명 전에** 한다(08-30 실측 — codesign이 바이너리에 서명을 박아 넣어 뒤에 재면 항상 불일치).
+| OS | 설치 자리(포장 SSOT와 동일) | 탐지 | 권한 | 기동 |
+|---|---|---|---|---|
+| Linux .deb | `/usr/bin/{nexa-beep,nbeep-imgdec}` | `NEXA_INSTALL_DIR` → `command -v nexa-beep`(readlink) → `/usr/bin` | root → `sudo` 1회 · **TTY 없으면 `pkexec`**(GUI 암호창) | **`gio launch /usr/share/applications/nexa-beep.desktop`**(경로 명시 — `gtk-launch <id>`는 사용자 런처가 가리면 개발 빌드가 뜬다) · stdout → `target/installed-nexa-beep.log` · `/proc/<pid>/exe`가 설치본인지 대조 |
+| macOS brew cask | `/Applications/Nexa Beep.app/Contents/MacOS/…` | 고정 | 사용자 · ad-hoc 재서명+quarantine 제거 | `open -a "Nexa Beep"` |
+| Windows NSIS | `%LOCALAPPDATA%\Programs\NexaBeep\…exe` | 환경변수 → HKCU `InstallDir` → 기본 | 사용자 | `Start-Process`(무인자) · 버전은 `Cargo.toml` |
+
+- 판정은 **md5 대조(③)·프로세스 수(⑤)·`--whoami`**(그 exe가 실제로 로드하는 신원·데이터 경로)로 한다 — "복사했다"가 "바뀌었다"는 아니다.
+- 개발 트리(`target/`)를 설치 자리로 오인하면 중단한다(자기 자신 덮어쓰기 방지). 버전 문자열·패키지 관리자 등록은 바뀌지 않는다(실기 전용) — 다음 정식 설치가 덮어쓴다. 포장 경로가 바뀌면 두 스크립트의 자리도 같은 커밋에서 고친다.
+- ⚠ mac은 md5 대조를 **ad-hoc 재서명 전에** 한다(08-30 실측 — codesign이 바이너리에 서명을 박아 넣어 뒤에 재면 항상 불일치).
+- 설치본 데이터는 개발 인스턴스와 **다르다**(Linux `~/.config/nexa-beep` · mac `~/Library/Application Support/nexa-beep` · Win `%APPDATA%`/exe 옆 — 업그레이드 교체 자리 판정 `nexa_conf::is_replaced_on_upgrade`). 실측 09-05(mac): 스크립트 완주 43s(증분 빌드) · 기동 후 데이터 폴더 비밀 파일 **전부 0600**(부팅 스윕 `privfile::tighten_data_dir` 실증).
 
 ## 1. 명령 (SSOT) — Rust 워크스페이스([07](07-adr-0001-stack.md))
 
@@ -204,7 +216,13 @@ gh pr view 427126 --repo microsoft/winget-pkgs --json state   # (Portable)
 #      09-01 사용자가 닫고 v0.2.14로 재제출 — 라벨 동일(수동 리뷰 큐 · 09-03 기준 OPEN).
 curl -s "https://community.chocolatey.org/api/v2/Packages()?%24filter=Id%20eq%20%27nexa-beep%27"
 #    → 피드에 항목이 있으면 모더레이션 통과(대기 중 패키지는 피드에서 숨겨진다 — 09-03 실측 빈 응답).
-#      페이지 https://community.chocolatey.org/packages/nexa-beep 는 0.2.2 "Moderation" 표시(08-21 push분 잔존).
+#      상태·검수자 코멘트는 **페이지**로만 보인다(UA 없는 요청은 403):
+curl -s -A Mozilla/5.0 https://community.chocolatey.org/packages/nexa-beep | sed 's/<[^>]*>/ /g' | grep -o -E '\((Waiting[^)]*|[^)]*moderation[^)]*)\)' | head -1
+#    ★ 09-05 실측 = nexa-beep·nexa-beep-portable(0.2.2)·nexa-beepd(0.2.5) 셋 다 **"Waiting for Maintainer to take corrective action"**
+#      — 검수자(virtualex · 09-02/09-04): 메커니즘은 문제없음 · **Requirement 1건 = `<iconUrl>`이 raw.githubusercontent.com**
+#      (허용 CDN 아님) → jsDelivr `https://cdn.jsdelivr.net/gh/SosomLab/nexa-beep@<태그>/packaging/branding/nexa-beep-256.png`
+#      로 바꾸고 **태그에 핀** · "같은 버전으로 재제출". 09-05 nuspec 3종 수정 완료(`@v@VERSION@` · beepd `@beepd-v@VERSION@`) —
+#      재제출(스위치 ON + 태그 또는 수동 push)은 사용자 결정.
 #    둘 다 완료 → 스위치 켜서 이번 태그에 포함:
 #      gh variable set WINGET_PUBLISH -b true && gh variable set CHOCO_PUSH -b true
 #    대기 중 → false 유지 = 이번 릴리스에서 제외(brew·Releases만 나간다).

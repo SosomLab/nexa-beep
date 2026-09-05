@@ -82,6 +82,7 @@ winget과 Chocolatey는 **중앙 저장소 검수**를 거치고, 한번 올라�
 제출 금지 — 검수 중 새 제출은 큐를 엉키게 한다. 점검 명령은
 [docs/18 §5](../docs/18-build-and-test.md#5-배포--githubworkflowsreleaseyml).
 
+**현황(09-05)** — ★ **choco 3종 = "Waiting for Maintainer to take corrective action"**(검수자 virtualex · beepd 09-02 · beep 2종 09-04): 메커니즘(설치/포터블 분리·체크섬·uninstall) 문제없음 · **Requirement = `iconUrl` raw.githubusercontent.com → jsDelivr + 태그 핀** · "같은 버전으로 재제출" → **09-05 nuspec 3종 수정 완료**(`cdn.jsdelivr.net/gh/SosomLab/nexa-beep@v@VERSION@/…` · beepd `@beepd-v@VERSION@` · CDN 200 확인) · 재제출은 사용자 결정(스위치 ON 필요). brew = 0.2.14(cask·portable)·beepd 0.2.5 추종 ✓. winget = 아래 09-03 그대로(v0.2.14 #427125/#427126 OPEN `Validation-Executable-Error` 코멘트 0 · beepd #422579 `Validation-Completed` 모더레이터 대기).
 **현황(09-03)** — winget: 첫 제출 #421961/#421967(v0.2.2)이 `Validation-Executable-Error`(수동 리뷰)로 11일 정체 → 09-01 닫고 **v0.2.14 #427125/#427126 재제출**(같은 라벨 · OPEN). beepd #422579 = `Validation-Completed` 모더레이터 승인 대기. Chocolatey: `nexa-beep`/`nexa-beep-portable` **0.2.2 모더레이션 잔존**(공개 피드 미등재). → 스위치는 계속 false(brew·Releases만).
 
 **Homebrew에는 이 스위치가 없다.** 검수가 없는 내 탭이고 되돌리기도 커밋 하나여서,
