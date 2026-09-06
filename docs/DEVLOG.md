@@ -7,6 +7,7 @@
 
 ## 2026-09-06
 
+- **(mac · `feat/userid-handle`) ★X-13 S0 구현**(3커밋 — `073e4b1` userkey 크립토 · `7f4a8b2` 설정 › 사용자 스위치/핸들/암호/인증+상태기계+워커+봉인 저장 · S0-c 비밀 행 마스킹+[생성][눈] clip 동일): 스위치 기본 off·켜면 기본값 자동 배정+자동 인증 · 필수 값 비면 기능·설정 잠금(빈 입력 KP 거부) · 값 변경 = 마커 해제·기능 중지 · 성공 = 봉인 보관(profile.sec·user.key 0600). 실기 ✓. 다음 = S1 XXpsk3. [journal](journal/2026-09-06.md).
 - **(mac · 브랜치 `feat/userid-handle`) ★[46 ADR-0015] UserId 사용자 관리 설계 📐**(Handle+Passphrase — clip 조사 대조: 만남은 같은 식·신뢰는 **Noise XXpsk3** 소속 증명 · 제약 해제 표 · sender copy+따라잡기 · 컨텐츠 모드 사용자 마스터 키 · 난이도 S0~S5 · 🔴 D-32 7문항 · V1-1 미반영 발견) → **[47 검토 보고서](47-adr-0015-review-userid-continuity.md)**(사용자 질문 선점·변경: 원안 `H(handle‖KP)` 기각 → **3층 = PeerId 앵커 · 무작위 UserKey(`UserId=H(pub)`) · 핸들+암호 = 문 열쇠** · Succession · 정직한 충돌 · D-32 9문항) → **[48 결정 상세·영향·흐름도](48-adr-0015-decisions-impact-flows.md)**(XX/XXpsk3 msg1 판별 실증 근거 · ed25519-dalek 2 트리 공유 · Mermaid 9 · 성능/보안 종합 · 질문 4). [journal](journal/2026-09-06.md).
 
 
