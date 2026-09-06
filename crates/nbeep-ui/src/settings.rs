@@ -100,7 +100,8 @@ const PW_REGEN_ALPHA: &[u8] = include_bytes!("../assets/icon-pw-regen-96.alpha")
 /// 자산 변 크기(px).
 const PW_EYE_SIDE: u32 = 96;
 /// 생성 버튼 무장 유지 시간(clip 09-03 사용자 — "2초 내에 다시 누르지 않으면 원복").
-const PW_ARM_WINDOW: std::time::Duration = std::time::Duration::from_secs(2);
+/// 생성 무장 창(09-06 사용자 요청 — 키 교체와 같은 5초 · 무장 중엔 행 노트에 남은 시간 안내).
+pub const PW_ARM_WINDOW: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// 비밀 행 버튼 자리(clip 09-03 사용자 확정 "두 버튼을 텍스트 우상단으로") — 상자 위 한 줄,
 /// 오른쪽 끝 정렬 [생성][눈] · 버튼 크기 = 상자 높이 · 간격 = 높이/8.
@@ -2134,6 +2135,33 @@ impl SettingsWidget {
     }
 
     /// 비활성 키 지정 — 조건부로만 쓰이는 설정을 흐리게 잠근다(예: 기간은 "기간 자동"일 때만).
+    /// 생성 무장 남은 시간(ms · 무장 아님 = None) — 호스트가 행 노트 카운트다운을 만든다(09-06).
+    #[must_use]
+    pub fn pw_arm_remaining_ms(&self) -> Option<u64> {
+        let t = self.pw_arm?;
+        let left = PW_ARM_WINDOW.checked_sub(t.elapsed())?;
+        Some(u64::try_from(left.as_millis()).unwrap_or(u64::MAX))
+    }
+
+    /// 행위 버튼 색조 지정(09-06 — 무장 중 빨강). 그 키가 행위 항목이 아니면 no-op.
+    pub fn set_action_tone(
+        &mut self,
+        key: &'static str,
+        tone: crate::controls::ButtonTone,
+        inv: &mut Invalidations,
+    ) {
+        for r in &mut self.rows {
+            if registry()[r.idx].key != key {
+                continue;
+            }
+            if let RowCtl::Act(b) = &mut r.ctl {
+                if b.set_tone(tone) {
+                    inv.push(self.bounds);
+                }
+            }
+        }
+    }
+
     pub fn set_disabled(&mut self, keys: &[&'static str], inv: &mut Invalidations) {
         let next: std::collections::HashSet<&'static str> = keys.iter().copied().collect();
         if next != self.disabled {
@@ -2218,7 +2246,7 @@ impl SettingsWidget {
     pub fn tick(&mut self, now_ms: u64) -> bool {
         // `||`는 단축 평가라 트리 바가 안 돌 수 있다 — 둘 다 재워야 한다.
         let mut dirty = self.bars.tick(now_ms) | self.tree.tick(now_ms);
-        // ★ 생성 무장 타이머 — 무장 중엔 계속 깨워 만료를 제때 잡는다(≤ 2초).
+        // ★ 생성 무장 타이머 — 무장 중엔 계속 깨워 만료를 제때 잡는다(≤ 5초).
         if let Some(t) = self.pw_arm {
             if t.elapsed() > PW_ARM_WINDOW {
                 self.pw_arm = None;
@@ -2780,7 +2808,7 @@ impl Widget for SettingsWidget {
                         }
                         if rr.contains(p) {
                             match self.pw_arm {
-                                // 2초 안 재클릭 = 생성 — 새 암호는 **반드시 보이게**(가림 해제).
+                                // 무장 창 안 재클릭 = 생성 — 새 암호는 **반드시 보이게**(가림 해제).
                                 Some(t) if t.elapsed() <= PW_ARM_WINDOW => {
                                     self.pw_arm = None;
                                     f.set_secret(false);
@@ -2869,6 +2897,27 @@ impl Widget for SettingsWidget {
                     }
                 }
                 self.drain_changes(inv);
+            }
+            // ★ 포커스된 실행 버튼(09-06) — Space/Enter = 클릭(종전엔 "기본 타이핑 = 검색"이
+            //   삼켜 키보드로는 행위 버튼을 누를 수 없었다 · 실기 자동화에서 발각).
+            InputEvent::Char { c: ' ', .. }
+            | InputEvent::Key {
+                key: Key::Enter, ..
+            } if self
+                .rows
+                .iter()
+                .any(|r| matches!(&r.ctl, RowCtl::Act(b) if b.is_focused())) =>
+            {
+                let locked: Vec<bool> = self.rows.iter().map(|r| self.is_locked(r.idx)).collect();
+                for (row, lock) in self.rows.iter_mut().zip(locked) {
+                    if let RowCtl::Act(b) = &mut row.ctl {
+                        if b.is_focused() && !lock {
+                            b.press();
+                        }
+                    }
+                }
+                self.drain_changes(inv);
+                inv.push(self.bounds);
             }
             InputEvent::Char { .. } => {
                 if self.any_family_focused() {

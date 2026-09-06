@@ -117,6 +117,32 @@ impl Button {
         self
     }
 
+    /// 색조 변경(런타임 · 09-06 — 무장 상태 표시 등). 바뀌었으면 `true`(호스트가 무효화).
+    pub fn set_tone(&mut self, tone: ButtonTone) -> bool {
+        if self.tone == tone {
+            return false;
+        }
+        self.tone = tone;
+        true
+    }
+
+    /// 현재 색조.
+    #[must_use]
+    pub fn tone(&self) -> ButtonTone {
+        self.tone
+    }
+
+    /// 키보드 활성화(09-06 — 컨테이너가 포커스된 버튼에 Space/Enter를 넘길 때) = 클릭 1회.
+    pub fn press(&mut self) {
+        self.clicked = true;
+    }
+
+    /// 포커스 여부(컨테이너의 키 라우팅용).
+    #[must_use]
+    pub fn is_focused(&self) -> bool {
+        self.base.focused
+    }
+
     /// 라벨 폰트 슬롯 지정(체이닝 · 08-17) — 카드 본문에 맞추려면 Status.
     #[must_use]
     pub fn with_font(mut self, font: FontSlot) -> Self {

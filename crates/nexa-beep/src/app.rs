@@ -519,6 +519,9 @@ struct GroupXfer {
     /// 전 구성원 종결 → 풍선을 Done/Failed 요약으로 바꾼 뒤 true(이후 불변).
     closed: bool,
 }
+/// 키 교체 무장 창(09-06 — 생성 아이콘과 같은 5초 · 두 번째 클릭이 이 안에 와야 실행).
+const ROTATE_ARM_MS: u64 = 5_000;
+
 /// 형제 힌트 유예(ADR-0015 S1) — 광고 뒤 힌트 한 장과 부팅 인증 워커를 기다리는 시간.
 /// 광고 주기 800ms의 약 2배(힌트 1장 유실 흡수) · 사용자 체감 = 조용한 연결이 1.5초 늦는다.
 const SIBLING_GRACE_MS: u64 = 1_500;
@@ -2888,8 +2891,10 @@ struct App {
     succ_seen: HashMap<[u8; 32], (u32, [u8; 32])>,
     /// 충돌한 옛 공개키(런타임 · 카드 경고).
     succ_conflicts: std::collections::HashSet<[u8; 32]>,
-    /// 키 교체 무장 시각(ms · 5초 안에 2회 클릭 = 실행).
+    /// 키 교체 무장 시각(ms · 0 = 무장 아님 · 5초 안에 2회 클릭 = 실행).
     rotate_armed_ms: u64,
+    /// 키 교체 결과 한 줄(행 노트 · 다음 무장까지 유지 · Ok 톤).
+    rotate_note: Option<String>,
     /// 마지막으로 발신한 LAN 힌트 태그의 에폭 일(자정 회전 감시).
     user_tag_day: u64,
     /// 다음 페어링 RID 탐색(릴레이 · 형제 없을 때 30s 간격) 시각(ms).
@@ -5306,6 +5311,14 @@ impl App {
         // 설정 창이 열려 있는 동안 주기 호출되므로 재시도 카운트다운도 같이 산다.
         let (srv_state, srv_tone, srv_port, srv_type) = self.server_note_texts();
         let (usr_note, usr_tone, usr_strength, usr_locks) = self.user_note_texts();
+        // 키 교체 무장 카운트다운(09-06) — 설정 창 행 노트 + 버튼 빨강(상태바만으론 안 보인다).
+        let rotate_left = (self.rotate_armed_ms > 0)
+            .then(|| ROTATE_ARM_MS.saturating_sub(now.saturating_sub(self.rotate_armed_ms)))
+            .filter(|left| *left > 0);
+        if rotate_left.is_none() {
+            self.rotate_armed_ms = 0; // 만료 = 무장 해제(다음 클릭은 다시 1회차)
+        }
+        let rotate_note = self.rotate_note.clone();
         let Some(sv) = &mut self.settings_view else {
             return;
         };
@@ -5383,7 +5396,54 @@ impl App {
         }
         // 사용자 섹션(ADR-0015) — 스위치 off = 입력란 전부 잠금 · 값 무효/진행 중 = 인증 버튼 잠금.
         sv.set_row_note_toned("user.test", &usr_note, usr_tone, &mut inv);
-        sv.set_row_note("user.passphrase", &usr_strength, &mut inv);
+        // 페어링 암호 행 — 생성 무장 중엔 카운트다운(Warn) · 아니면 강도.
+        match sv.pw_arm_remaining_ms() {
+            Some(ms) => sv.set_row_note_toned(
+                "user.passphrase",
+                &nbeep_core::tf(
+                    nbeep_core::Msg::StfNoteRegenArm,
+                    &[&ms.div_ceil(1000).to_string()],
+                ),
+                nbeep_ui::NoteTone::Warn,
+                &mut inv,
+            ),
+            None => sv.set_row_note("user.passphrase", &usr_strength, &mut inv),
+        }
+        // 키 교체 행 — 무장 중 = 카운트다운(Warn)+빨강 버튼 · 직후 = 결과(Ok) · 그 외 = 없음.
+        match (rotate_left, rotate_note) {
+            (Some(ms), _) => {
+                sv.set_row_note_toned(
+                    "user.rotate",
+                    &nbeep_core::tf(
+                        nbeep_core::Msg::StfNoteRotateArm,
+                        &[&ms.div_ceil(1000).to_string()],
+                    ),
+                    nbeep_ui::NoteTone::Warn,
+                    &mut inv,
+                );
+                sv.set_action_tone(
+                    "user.rotate",
+                    nbeep_ui::controls::ButtonTone::Danger,
+                    &mut inv,
+                );
+            }
+            (None, Some(done)) => {
+                sv.set_row_note_toned("user.rotate", &done, nbeep_ui::NoteTone::Ok, &mut inv);
+                sv.set_action_tone(
+                    "user.rotate",
+                    nbeep_ui::controls::ButtonTone::Default,
+                    &mut inv,
+                );
+            }
+            (None, None) => {
+                sv.set_row_note("user.rotate", "", &mut inv);
+                sv.set_action_tone(
+                    "user.rotate",
+                    nbeep_ui::controls::ButtonTone::Default,
+                    &mut inv,
+                );
+            }
+        }
         locked.extend(usr_locks);
         sv.set_disabled(&locked, &mut inv);
     }
@@ -6667,7 +6727,10 @@ impl App {
         self.trust.record_user(peer, doc.new_pub, &name, doc.ver);
         // 내 키의 후계를 형제가 제시했다 = 내 사용자도 바뀐다 — 문서를 내 것으로(전 기기 전파).
         let mine = self.user_rt.key.as_ref().map(|k| k.public());
-        if mine == Some(doc.old_pub) && self.siblings.contains(&peer) {
+        let me = self.identity.peer_id();
+        if mine == Some(doc.old_pub) && self.siblings.contains(&peer) && doc.devices.contains(&me) {
+            // 내 키의 후계이고 내가 목록에 있다 = 문서를 내 것으로(전 기기 전파). 폐기 목록에 든
+            // 기기는 제시자가 될 수 없으므로 들고 있지 않는다(새 키는 봉인본으로 받아 다시 결합).
             let _ = nbeep_store::privfile::write_atomic(&self.succ_path(), &doc.encode());
             self.succession = Some(doc.clone());
         }
@@ -6703,9 +6766,11 @@ impl App {
                 self.conversations.len()
             );
         }
-        if now.saturating_sub(self.rotate_armed_ms) > 5_000 {
+        if self.rotate_armed_ms == 0 || now.saturating_sub(self.rotate_armed_ms) > ROTATE_ARM_MS {
             self.rotate_armed_ms = now;
+            self.rotate_note = None;
             self.set_status(nbeep_core::t(nbeep_core::Msg::StUserRotateArm));
+            self.refresh_approval_ui(); // 행 노트·빨강 즉시(설정 창에서 바로 보이게 — 사용자 요청)
             return;
         }
         self.rotate_armed_ms = 0;
@@ -6774,15 +6839,20 @@ impl App {
         let live: Vec<PeerId> = self.conversations.keys().copied().collect();
         for p in live {
             self.send_succession(p);
+            // 살아 있는 형제(같은 암호 유지)는 새 비밀키 봉인본을 바로 받아 "후계가 이긴다"로
+            // 채택한다(09-06 실기 — 후계만 보내면 재접속까지 옛 키로 남았다).
+            self.send_user_key_blob(p);
             if let Some(c) = self.conversations.get_mut(&p) {
                 c.hello_ver = None; // 새 공개키로 다시
             }
             self.send_user_hello(p);
         }
-        self.set_status(nbeep_core::tf(
+        let done = nbeep_core::tf(
             nbeep_core::Msg::StfUserRotated,
             &[&old_id.short(), &new_id.short()],
-        ));
+        );
+        self.rotate_note = Some(done.clone());
+        self.set_status(done);
         self.refresh_approval_ui();
     }
 
@@ -6982,10 +7052,28 @@ impl App {
         self.user_rt.key_created = their_at;
         self.user_state = crate::userident::on_test_result(&Ok(new));
         self.set_status(format!(
-            "사용자 키 병합 — 오래된 기기의 키 채택(ID {} → {})",
+            "사용자 키 병합 — 키 채택(ID {} → {})",
             old.short(),
             new.short()
         ));
+        // 들고 있던 후계 문서에 내가 없으면(폐기된 채 새 키만 이어받음) 더는 제시하지 않는다.
+        let me = self.identity.peer_id();
+        if self
+            .succession
+            .as_ref()
+            .is_some_and(|d| !d.devices.contains(&me))
+        {
+            self.succession = None;
+            let _ = std::fs::remove_file(self.succ_path());
+        }
+        // 새 공개키로 서명 목록을 다시 낸다(상대 기록이 새 ID로 이어지도록).
+        let live: Vec<PeerId> = self.conversations.keys().copied().collect();
+        for p in live {
+            if let Some(c) = self.conversations.get_mut(&p) {
+                c.hello_ver = None;
+            }
+            self.send_user_hello(p);
+        }
         self.refresh_approval_ui();
     }
 
@@ -19255,6 +19343,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         succ_seen: HashMap::new(),
         succ_conflicts: std::collections::HashSet::new(),
         rotate_armed_ms: 0,
+        rotate_note: None,
         user_tag_day: 0,
         user_seek_at: 0,
         relay_hold: false,
