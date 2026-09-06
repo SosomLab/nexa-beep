@@ -193,11 +193,12 @@ PeerId        = 기기 정적 키(현행) — 핀·세션·후계 판정 근거
 
 | 태그 | 프레임 | 내용 |
 |:--:|---|---|
-| 4 | `UserHello { user_pub, name, devices: [PeerId], list_ver, sig }` | 세션 성립 직후 양방향(형제·타인 모두). **UserKey 서명** — 상대는 ①sig 검증 ②제시한 PeerId ∈ devices ③version 단조로 소속을 검증한다(ADR-0007 §4 절차 그대로 · A-1 방어) |
+| 4 ✅ | `UserHello { user_pub, name, devices: [PeerId], list_ver, sig }` | **구현 09-06(S2-e `2cbb58d`)** — 세션 성립 직후 양방향(형제·타인 모두). **UserKey 서명** — 상대는 ①sig 검증 ②제시한 PeerId ∈ devices ③version 단조로 소속을 검증한다(ADR-0007 §4 절차 그대로 · A-1 방어) |
 | 5 | `SyncRead` | §5-1 |
 | 6 | `SyncPull { thread, after_seq, max }` / 7 `SyncLines{…}` | §5-4 |
 | 8 | `Succession{…}` | §3-5 침해 대응 후계 증명서(UserHello에 동봉 가능) |
-| 9 | `UserKeyBlob{sealed}` | 형제 세션에서 UserKey 봉인본 동기(없는 쪽이 요청) |
+| 9 ✅ | `UserKeyBlob{sealed}` | **구현 09-06(S2-b `02dfca4`)** — 형제 세션에서 UserKey 봉인본 동기(양쪽이 보내고 "오래된 키가 이긴다" D-32-8로 수렴 · 요청 없음) |
+| 11 ✅ | `UserProof{proof}` | **신설 09-06(S1-e `a31a735`)** — 세션 내 형제 증명 `HMAC(PSK, "nbeep-user-proof-v1"‖핸드셰이크 해시‖역할)`: XX로 이미 선 세션(부팅 경합·나중에 기능 켬)을 재접속 없이 승격. 세션당 1회 · 힌트 후보에게만 · 실패 3회 상한 |
 
 > ★ **A-1(남의 기기를 내 사용자라 주장) 방어** — 목록은 **UserKey 서명**이 있어야 하고, 접는 것은 **그 기기 자신과의 세션(Noise 소유 증명) + 그 기기가 제시한 서명 목록에 자기가 있을 때**뿐이다. 남이 준 목록만으로 다른 기기를 편입하지 않는다. 공격자가 내 UserId를 주장하려면 UserKey(= 내 형제 세션 진입 + 봉인 해제)가 필요하다.
 
