@@ -87,7 +87,10 @@
 
 1. 이 CLAUDE.md + [docs/STATUS.md](docs/STATUS.md) → 2. [DEVLOG](docs/DEVLOG.md) 최상단 + 최신 journal → 3. 할 일 = [docs/TODO.md](docs/TODO.md) 순차.
 
-## 5. 다음 단계 (2026-09-06 · STATUS 09-06 9차 기준 — ADR-0015 UserId 사용자 관리 S0~S2 ✅ main 병합 · 2-PC 릴레이 결함 수정 · 다음 = S3)
+## 5. 다음 단계 (2026-09-07 · STATUS 09-07 1차 기준 — ADR-0015 S0~S2 ✅ · 2-PC 릴레이 결함 수정 · 글꼴 폴백 체인 · 다음 = S3)
+
+> **09-07 1차(mac · main)** — ★**글꼴 폴백 체인 = 두부 예방**(nexa-clip 09-01/09-04 이식 · Windows "□ Verified" 실기): `nbeep-gfx::Font` 얼굴 체인(글자 단위 첫 얼굴 · 기준선은 주 폰트 · 탭/제어 규칙) · `nbeep-plat::symbol_fallback_fonts()`(OS별 기호 본 · 컬러 이모지 제외) · 앱 `load_ui_font` 진단 1줄. **User 설정 ↔ 서버**: 사용자 인증은 서버 접속을 만들지 않고 **기존 Managed 등록에 페어링 RID 3개를 얹는다**(마커 유지 재등록) · Unmanaged는 LAN 힌트만으로 동작 · **Unmanaged+수동 IP는 형제 판정 불가**(결정 후보 TODO X-13).
+
 
 > **09-06 9차(mac · main)** — ★**2-PC 릴레이 실기 결함 2건 수정**(사용자 보고 Win↔Mac: 인증 뒤 서버 "미검증" · 같은 값인데 ID 다름): `user_apply_runtime`이 페어 RID 재등록을 `server_settings_changed`(=Test 전 보류)로 하던 것 → **`relay_reattach_soft`**(마커·보류 무변경 · ≤2s 재등록) · 페어 RID 랑데부가 기존 대화와 겹치면 키·UserHello를 기존 채널로. ⚠ **교훈 = 서버 경유 경로는 같은 PC 실기로 분리되지 않는다**(LAN 힌트가 항상 겹친다) — 2-PC 재실기 항목(TODO X-13).
 
