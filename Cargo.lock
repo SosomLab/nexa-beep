@@ -1325,6 +1325,7 @@ dependencies = [
 name = "nexa-beep"
 version = "0.2.14"
 dependencies = [
+ "getrandom 0.2.17",
  "nbeep-core",
  "nbeep-crypto",
  "nbeep-gfx",

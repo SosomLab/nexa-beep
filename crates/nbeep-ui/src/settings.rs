@@ -66,6 +66,8 @@ const HIDDEN_KEYS: &[&str] = &[
     // 최근 프로필 이미지(08-14 — 탭 구분 목록). ★ 여기 없으면 저장은 되는데
     // **부팅 로드에서 미지 키로 무시**돼 재시작마다 목록이 증발한다(실기로 잡음).
     "profile.image_recent",
+    // 사용자 인증 마커(ADR-0015 · 09-06) — 값(핸들·암호)에 붙는 검증 상태. 성공 = on.
+    "user.verified",
     // 목록 필터 바(08-22) — 툴바 아래 칩 3그룹의 선택 영속("" = 전체).
     // ★ 키 등록과 값 저장은 쌍 — 여기 없으면 재시작 로드가 미지 키로 흘린다.
     "list.filter.path",
@@ -98,6 +100,7 @@ const TOGGLE_DEFAULT_OFF: &[&str] = &[
     "log.enabled",           // 상태 로그(M3-22 — 기본 off · 사용자 확정 08-18)
     "netmon.enabled",        // 네트워크 점검 기록(08-21 — 기본 off · 의도적으로 켤 때만)
     "notify.preview",        // 알림 본문 표시(M3-8 — 기본 끔: 화면 공유·녹화 안전)
+    "user.enabled", // 다중 기기 신원(ADR-0015 — 기본 끔: 옵트인 오버레이 S-0 · 사용자 확정 09-06)
     "notify.broadcast_mute", // 공지 받지 않기(08-21 — 기본 끔 = 공지 받음)
     // 원격 파일 발신 옵트인 2종(08-23 분리 — **기본 끄기** · 사용자 확정. ⚠08-23
     // 실기 발각: 여기 없으면 Toggle 기본 on이라 켜진 채 나갔다).
@@ -943,6 +946,55 @@ pub fn registry() -> &'static [Entry] {
             desc: Msg::RemoteFilesInternetOptDesc,
             kind: SettingKind::Toggle,
             key: "xfer.remote_files_internet",
+        },
+        // ── 사용자(ADR-0015 · DR-29 · 09-06) — 다중 기기 신원 ──
+        // 스위치 off = 단독 노드(기본 · 입력란 잠금). on = 빈 칸 기본값 자동 채움 + 자동 인증.
+        // ★ 필수 값이 비거나 형식이 틀리면 **어디에도 등록되지 않는다**(빈 사용자로 묶임 방지).
+        Entry {
+            cat: Msg::CatUser,
+            sub: None,
+            label: Msg::UserEnabled,
+            desc: Msg::UserEnabledDesc,
+            kind: SettingKind::Toggle,
+            key: "user.enabled",
+        },
+        Entry {
+            cat: Msg::CatUser,
+            sub: None,
+            label: Msg::UserHandle,
+            desc: Msg::UserHandleDesc,
+            kind: SettingKind::RadioInput(&[], ""),
+            key: "user.handle",
+        },
+        // 암호는 PII_KEYS(앱) — settings.cfg가 아니라 봉인 사이드카 profile.sec에 영속.
+        Entry {
+            cat: Msg::CatUser,
+            sub: None,
+            label: Msg::UserPass,
+            desc: Msg::UserPassDesc,
+            kind: SettingKind::RadioInput(&[], ""),
+            key: "user.passphrase",
+        },
+        Entry {
+            cat: Msg::CatUser,
+            sub: None,
+            label: Msg::UserSuggest,
+            desc: Msg::UserSuggestDesc,
+            kind: SettingKind::Action {
+                verb: Msg::UserSuggestVerb,
+            },
+            key: "user.suggest",
+        },
+        // 인증 테스트 — 성공 = 마커(user.verified — HIDDEN_KEYS) 영속 · 값 변경 = 마커 해제.
+        Entry {
+            cat: Msg::CatUser,
+            sub: None,
+            label: Msg::UserTest,
+            desc: Msg::UserTestDesc,
+            kind: SettingKind::Action {
+                verb: Msg::UserTestVerb,
+            },
+            key: "user.test",
         },
         // 그룹(M5-1 · ADR-0012) — 재동기 보관 주체 = 송신자(사용자 확정 08-13).
         // 발신자가 구성원별로 미전달 그룹 메시지를 몇 개까지 보관할지(초과 = 오래된 것

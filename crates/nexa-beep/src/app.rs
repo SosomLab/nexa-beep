@@ -173,6 +173,11 @@ enum AppEvent {
     /// L1 링크 변화(M1-2 · **디바운스 후**) — Wi-Fi 전환·케이블·절전 복귀.
     /// 전송에 재발견을 시키고 상태바에 알린다(변화 자체는 OS 구독 스레드가 관측).
     LinkChanged,
+    /// 사용자 인증 워커 결과(ADR-0015 S0) — gen이 다르면 낡은 결과(값이 그 사이 바뀜).
+    UserTestDone {
+        gen: u64,
+        result: Result<Box<crate::userident::TestOk>, String>,
+    },
     /// 격리 아카이브 내용 목록(M4-4 ⓐ · 08-21) — 워커가 개봉·파싱을 마친 본문.
     /// (대형 격리물 개봉이 UI를 얼리지 않게 — 격리함 워커 스캔과 같은 이유.)
     ArchiveList {
@@ -2698,6 +2703,12 @@ struct App {
     /// 연결 테스트 진행 중(08-22 — 설정 › 서버 › 테스트 버튼) — 다음 ServerAttach
     /// 결과를 "테스트 성공/실패" 문구로 보고한다(접속 경로 자체는 평소와 동일).
     relay_test: bool,
+    /// 사용자 신원 상태(ADR-0015 · DR-29) — 설정 노트·기능 게이트의 단일 원천.
+    user_state: crate::userident::UserState,
+    /// 인증 성공 시에만 채워지는 런타임 재료(KP·UserKey) — 값이 바뀌면 통째로 비운다.
+    user_rt: crate::userident::UserRuntime,
+    /// 인증 워커 세대(낡은 결과 폐기).
+    user_gen: u64,
     /// Managed 전환 보류(08-22 사용자 확정 2차) — 실행 중 모드를 Managed로 바꾼
     /// 직후는 **값이 검증돼 있어도** 자동 접속하지 않는다(Test가 풀 때까지).
     /// 부팅은 해당 없음(모드 변경 이벤트가 아니다 — 검증값이면 자동 유지).
@@ -5109,6 +5120,7 @@ impl App {
         // 피드백이 메인 창 상태바로만 가서 설정 창에선 무반응처럼 보였다). 이 깔때기는
         // 설정 창이 열려 있는 동안 주기 호출되므로 재시도 카운트다운도 같이 산다.
         let (srv_state, srv_tone, srv_port, srv_type) = self.server_note_texts();
+        let (usr_note, usr_tone, usr_strength, usr_locks) = self.user_note_texts();
         let Some(sv) = &mut self.settings_view else {
             return;
         };
@@ -5184,6 +5196,10 @@ impl App {
                 "net.server.test",     // 테스트도 Managed에서만(08-22)
             ]);
         }
+        // 사용자 섹션(ADR-0015) — 스위치 off = 입력란 전부 잠금 · 값 무효/진행 중 = 인증 버튼 잠금.
+        sv.set_row_note_toned("user.test", &usr_note, usr_tone, &mut inv);
+        sv.set_row_note("user.passphrase", &usr_strength, &mut inv);
+        locked.extend(usr_locks);
         sv.set_disabled(&locked, &mut inv);
     }
 
@@ -5967,6 +5983,220 @@ impl App {
             if let Some(mid) = self.main_id {
                 self.request_redraw(mid);
             }
+        }
+    }
+
+    // ── 사용자 신원(ADR-0015 · DR-29 · X-13 S0) ─────────────────────────────
+
+    /// 프로그램이 바꾼 설정값을 열려 있는 설정 화면에 역반영(apply_settings의 쌍방 동기와 같은 결).
+    fn settings_view_set(&mut self, key: &'static str, value: &str) {
+        if let Some(sv) = &mut self.settings_view {
+            let mut sinv = Invalidations::default();
+            sv.set_value(key, value, &mut sinv);
+            if let Some(sid) = self
+                .windows
+                .iter()
+                .find(|(_, e)| e.role == Role::Settings)
+                .map(|(id, _)| *id)
+            {
+                self.request_redraw(sid);
+            }
+        }
+    }
+
+    /// 설정 › 사용자 노트·잠금(표시 전용 파생) — (인증 행 노트, 톤, 암호 강도 노트, 잠글 키).
+    fn user_note_texts(&self) -> (String, nbeep_ui::NoteTone, String, Vec<&'static str>) {
+        use crate::userident::{pass_grade, UserState, Validity};
+        use nbeep_core::{t, tf, Msg};
+        use nbeep_ui::NoteTone;
+        let enabled = self.settings.get("user.enabled") == "on";
+        if !enabled {
+            return (
+                t(Msg::StNoteUserOff).into(),
+                NoteTone::Plain,
+                String::new(),
+                vec![
+                    "user.handle",
+                    "user.passphrase",
+                    "user.suggest",
+                    "user.test",
+                ],
+            );
+        }
+        let pass = self.settings.get("user.passphrase");
+        let strength = if pass.is_empty() {
+            String::new()
+        } else {
+            let g = match pass_grade(pass) {
+                0 => Msg::UserStrengthWeak,
+                1 => Msg::UserStrengthNormal,
+                _ => Msg::UserStrengthStrong,
+            };
+            tf(Msg::StfNoteUserStrength, &[t(g)])
+        };
+        let mut locks: Vec<&'static str> = Vec::new();
+        if !self.user_state.can_test() {
+            locks.push("user.test");
+        }
+        let (note, tone) = match &self.user_state {
+            UserState::Unconfigured(Validity::Empty) => {
+                (t(Msg::StNoteUserEmpty).into(), NoteTone::Warn)
+            }
+            UserState::Unconfigured(Validity::BadHandle) => {
+                (t(Msg::StNoteUserBadHandle).into(), NoteTone::Warn)
+            }
+            UserState::Unconfigured(Validity::ShortPass | Validity::Ok) => {
+                (t(Msg::StNoteUserShortPass).into(), NoteTone::Warn)
+            }
+            UserState::Untested => (t(Msg::StNoteUserUntested).into(), NoteTone::Info),
+            UserState::Testing => (t(Msg::StNoteUserTesting).into(), NoteTone::Info),
+            UserState::Verified { user_id } => (
+                tf(
+                    Msg::StfNoteUserVerified,
+                    &[
+                        crate::userident::normalize_handle(self.settings.get("user.handle")),
+                        &user_id.short(),
+                    ],
+                ),
+                NoteTone::Ok,
+            ),
+            UserState::Failed(why) => (tf(Msg::StfNoteUserFailed, &[why]), NoteTone::Warn),
+        };
+        (note, tone, strength, locks)
+    }
+
+    /// 핸들·암호가 바뀌었다(키인·붙여넣기·생성 불문) — 검증 마커는 값에 붙으므로 내려가고,
+    /// 런타임 재료를 비워 인증 의존 기능이 즉시 멈춘다.
+    fn user_values_changed(&mut self) {
+        self.user_gen = self.user_gen.wrapping_add(1); // 진행 중 워커 결과 폐기
+        self.user_rt.clear();
+        if self.settings.get("user.verified") != "off" {
+            self.settings.set("user.verified", "off".to_string());
+            self.conf_mark();
+        }
+        self.user_state = if self.settings.get("user.enabled") == "on" {
+            crate::userident::on_values_changed(
+                self.settings.get("user.handle"),
+                self.settings.get("user.passphrase"),
+            )
+        } else {
+            crate::userident::UserState::Unconfigured(crate::userident::Validity::Empty)
+        };
+        self.refresh_approval_ui();
+    }
+
+    /// 스위치 — on: 빈 칸을 기본값(정제 표시 이름 · 무작위 12자)으로 채우고 바로 인증 ·
+    /// off: 재료를 비우고 입력란을 잠근다(단독 노드 — LAN·서버 대화는 그대로).
+    fn user_enabled_changed(&mut self, on: bool) {
+        if on {
+            if crate::userident::normalize_handle(self.settings.get("user.handle")).is_empty() {
+                let name = effective_display_name(&self.settings, &self.identity.peer_id());
+                let h = crate::userident::default_handle(
+                    name.as_str(),
+                    &self.identity.peer_id().short(),
+                );
+                self.settings.set("user.handle", h.clone());
+                self.settings_view_set("user.handle", &h);
+            }
+            if self.settings.get("user.passphrase").is_empty() {
+                let s = crate::userident::suggest_passphrase();
+                if !s.is_empty() {
+                    self.settings.set("user.passphrase", s.clone());
+                    self.settings_view_set("user.passphrase", &s);
+                }
+            }
+            self.conf_mark();
+            self.user_values_changed();
+            if self.user_state.can_test() {
+                self.user_test();
+            }
+        } else {
+            self.user_values_changed();
+        }
+    }
+
+    /// 인증 테스트(행위) — 워커에서 KP 파생(60k)·`user.key` 봉인 열기/생성. UI 무정지.
+    fn user_test(&mut self) {
+        if self.settings.get("user.enabled") != "on" || !self.user_state.can_test() {
+            self.set_status(nbeep_core::t(nbeep_core::Msg::StUserNeedBoth));
+            return;
+        }
+        let handle = self.settings.get("user.handle").to_string();
+        let pass = self.settings.get("user.passphrase").to_string();
+        self.user_gen = self.user_gen.wrapping_add(1);
+        let gen = self.user_gen;
+        self.user_state = crate::userident::UserState::Testing;
+        self.set_status(nbeep_core::tf(
+            nbeep_core::Msg::StfUserTesting,
+            &[crate::userident::normalize_handle(&handle)],
+        ));
+        self.refresh_approval_ui();
+        let path = self.data_dir.join("user.key");
+        let proxy = self.proxy.clone();
+        std::thread::spawn(move || {
+            let result =
+                crate::userident::derive_and_load(&handle, &pass, &path, crate::gate::SEAL_USERKEY)
+                    .map(Box::new);
+            let _ = proxy.send_event(AppEvent::UserTestDone { gen, result });
+        });
+    }
+
+    /// 워커 결과 — 성공 = 즉시 인증(마커 저장 · 재료 보유) · 실패 = 기능 전부 중지.
+    fn user_test_done(&mut self, gen: u64, result: Result<Box<crate::userident::TestOk>, String>) {
+        if gen != self.user_gen {
+            return; // 그 사이 값이 바뀜 — 낡은 결과
+        }
+        match result {
+            Ok(ok) => {
+                let user_id = ok.key.user_id();
+                let ok = *ok;
+                self.user_rt.material = Some(ok.material);
+                self.user_rt.key = Some(ok.key);
+                self.user_state = crate::userident::on_test_result(&Ok(user_id));
+                if ok.created {
+                    // 첫 기기 부트스트랩 — 새 사용자 키가 이 PC에 봉인 저장됐다(비밀은 표시 안 함).
+                    self.set_status(format!("user.key created (ID {})", user_id.short()));
+                }
+                if self.settings.get("user.verified") != "on" {
+                    self.settings.set("user.verified", "on".to_string());
+                    self.conf_mark();
+                }
+                self.set_status(nbeep_core::tf(
+                    nbeep_core::Msg::StfUserTestOk,
+                    &[
+                        crate::userident::normalize_handle(self.settings.get("user.handle")),
+                        &user_id.short(),
+                    ],
+                ));
+            }
+            Err(why) => {
+                self.user_rt.clear();
+                self.user_state = crate::userident::on_test_result(&Err(why.clone()));
+                if self.settings.get("user.verified") != "off" {
+                    self.settings.set("user.verified", "off".to_string());
+                    self.conf_mark();
+                }
+                self.set_status(nbeep_core::tf(nbeep_core::Msg::StfUserTestFail, &[&why]));
+            }
+        }
+        self.refresh_approval_ui();
+    }
+
+    /// 부팅 — 마커가 켜져 있고 값이 유효하면 재검증(워커)으로 재료를 되살린다.
+    fn user_boot(&mut self) {
+        if self.settings.get("user.enabled") != "on" {
+            self.user_state =
+                crate::userident::UserState::Unconfigured(crate::userident::Validity::Empty);
+            return;
+        }
+        self.user_state = crate::userident::on_boot(
+            self.settings.get("user.handle"),
+            self.settings.get("user.passphrase"),
+            self.settings.get("user.verified") == "on",
+        );
+        if self.user_state == crate::userident::UserState::Testing {
+            self.user_state = crate::userident::UserState::Untested; // user_test가 Testing으로
+            self.user_test();
         }
     }
 
@@ -9930,11 +10160,12 @@ impl App {
 
     fn apply_boot_settings(&mut self) {
         use nbeep_core::{ApprovalPolicy, BasicApproval};
-        // 기본 아바타 — 미설정이면 **12간지 중 무작위 배정 후 저장**(사용자 확정
-        // 08-21 — 종전 키 지문 안정 배정에서 변경). 첫 부팅 1회 CSPRNG로 뽑아
-        // **저장하므로 이후 실행에서 요동치지 않는다**(상대 화면 얼굴 안정 —
-        // 08-14의 우려는 "저장 없는 매 실행 랜덤"에 대한 것이었다). 보더 색도
-        // 같은 무작위 시드에서 유도(아바타와 한 몸의 첫인상).
+        self.user_boot(); // 사용자 신원(ADR-0015) — 마커·값에 따라 재검증
+                          // 기본 아바타 — 미설정이면 **12간지 중 무작위 배정 후 저장**(사용자 확정
+                          // 08-21 — 종전 키 지문 안정 배정에서 변경). 첫 부팅 1회 CSPRNG로 뽑아
+                          // **저장하므로 이후 실행에서 요동치지 않는다**(상대 화면 얼굴 안정 —
+                          // 08-14의 우려는 "저장 없는 매 실행 랜덤"에 대한 것이었다). 보더 색도
+                          // 같은 무작위 시드에서 유도(아바타와 한 몸의 첫인상).
         if self.settings.get("profile.avatar").is_empty() {
             // CSPRNG 32B — 그룹 uid·데이터 키와 같은 관례(Identity = getrandom 유래).
             let rnd = *nbeep_crypto::Identity::generate().peer_id().as_bytes();
@@ -10516,6 +10747,28 @@ impl App {
                             }
                         }
                     }
+                }
+                // 사용자 신원(ADR-0015 · 09-06) — 스위치/값/생성/인증.
+                "user.enabled" => {
+                    self.user_enabled_changed(value == "on");
+                    continue;
+                }
+                "user.handle" | "user.passphrase" => {
+                    self.user_values_changed();
+                    continue;
+                }
+                "user.suggest" => {
+                    let s = crate::userident::suggest_passphrase();
+                    if !s.is_empty() {
+                        self.settings.set("user.passphrase", s.clone());
+                        self.settings_view_set("user.passphrase", &s);
+                        self.user_values_changed();
+                    }
+                    continue;
+                }
+                "user.test" => {
+                    self.user_test();
+                    continue;
                 }
                 // 연결 테스트(08-22) — 행위 항목: 값 저장 없이 즉시 검증 절차.
                 "net.server.test" => {
@@ -15720,6 +15973,9 @@ impl ApplicationHandler<AppEvent> for App {
                     self.request_redraw(mid);
                 }
             }
+            AppEvent::UserTestDone { gen, result } => {
+                self.user_test_done(gen, result);
+            }
             AppEvent::ServerAttach { gen, outcome } => {
                 self.relay_connecting = false;
                 if gen != self.relay_gen {
@@ -17719,15 +17975,29 @@ pub(crate) fn print_whoami() {
             }
             _ => nbeep_core::PeerId::from_bytes([0u8; 32]),
         };
-        effective_display_name(&settings, &peer)
-            .as_str()
-            .to_string()
+        let user_line = if settings.get("user.enabled") == "on" {
+            format!(
+                "{} (verified={})",
+                crate::userident::normalize_handle(settings.get("user.handle")),
+                settings.get("user.verified")
+            )
+        } else {
+            "off (standalone node)".to_string()
+        };
+        (
+            effective_display_name(&settings, &peer)
+                .as_str()
+                .to_string(),
+            user_line,
+        )
     };
+    let (name, user_line) = name;
     println!("fingerprint = {fp}  ({key_state})");
     if !fp_full.is_empty() {
         println!("full        = {fp_full}");
     }
     println!("name        = {name}");
+    println!("user        = {user_line}"); // 암호는 봉인 사이드카 — 여기 없음(노출 금지)
     println!("exe         = {exe}");
     println!("data        = {}", dir.display());
 }
@@ -17987,6 +18257,9 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         relay_gen: 0,
         relay_check_at: 0,
         relay_test: false,
+        user_state: crate::userident::UserState::Unconfigured(crate::userident::Validity::Empty),
+        user_rt: crate::userident::UserRuntime::default(),
+        user_gen: 0,
         relay_hold: false,
         relay_last_err: None,
         relay_test_failed: None,

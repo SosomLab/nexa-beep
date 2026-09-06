@@ -340,7 +340,10 @@ pub(crate) const SEAL_PROFILE_CACHE: &[u8] = b"profile-cache-v1";
 
 /// PII 봉인 사이드카 도메인 + 대상 키(08-17 — 평문 3면 조치 ②).
 pub(crate) const SEAL_PII: &[u8] = b"pii-v1";
-pub(crate) const PII_KEYS: &[&str] = &["profile.email", "profile.phone"];
+pub(crate) const PII_KEYS: &[&str] = &["profile.email", "profile.phone", "user.passphrase"];
+
+/// 사용자 서명 키 `user.key` 봉투 도메인(ADR-0015 §3-6) — 열쇠 = K_wrap_user(핸들+암호 파생).
+pub(crate) const SEAL_USERKEY: &[u8] = b"user-key-v1";
 
 /// 대화 기록 봉투 도메인(ADR-0005 §4 · M2-5b — 저장 암호화 A 단일).
 pub(crate) const SEAL_HISTORY: &[u8] = b"history-v1";

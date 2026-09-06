@@ -118,18 +118,27 @@ impl Drop for KeyMaterial {
 impl KeyMaterial {
     /// `KP = PBKDF2-HMAC-SHA256(passphrase, "nbeep-user-kdf-v1" ‖ handle, 60k)`.
     /// 핸들은 **솔트에만** 들어간다 — 같은 핸들·다른 암호 = 다른 재료(충돌 소멸).
+    /// ★ **빈 핸들·빈 암호는 `None`** — 값이 없는 기기들이 "빈 사용자"로 묶여 인증 없이
+    /// 통하는 일을 구조적으로 막는다(사용자 우려 09-06). 호출자는 이 경우 어떤 재료도 만들지 않는다.
     #[must_use]
-    pub fn derive(handle: &str, passphrase: &str) -> Self {
+    pub fn derive(handle: &str, passphrase: &str) -> Option<Self> {
         Self::derive_iters(handle, passphrase, KDF_ITERS)
     }
 
     /// 반복 수 지정(테스트 · 벤치 전용 — 제품은 [`KDF_ITERS`]).
     #[must_use]
-    pub fn derive_iters(handle: &str, passphrase: &str, iters: u32) -> Self {
+    pub fn derive_iters(handle: &str, passphrase: &str, iters: u32) -> Option<Self> {
+        if handle.trim().is_empty() || passphrase.is_empty() {
+            return None;
+        }
         let mut salt = Vec::with_capacity(DOM_KDF.len() + handle.len());
         salt.extend_from_slice(DOM_KDF);
         salt.extend_from_slice(handle.as_bytes());
-        Self(pbkdf2_block1(passphrase.as_bytes(), &salt, iters.max(1)))
+        Some(Self(pbkdf2_block1(
+            passphrase.as_bytes(),
+            &salt,
+            iters.max(1),
+        )))
     }
 
     /// Noise `XXpsk3` 재료 — 형제 기기 세션의 소속 증명(ADR-0015 §3-3).
@@ -311,10 +320,22 @@ mod tests {
 
     #[test]
     fn material_is_deterministic_and_handle_salted() {
-        let a = KeyMaterial::derive_iters("kiros33", "correct horse", 50);
-        let b = KeyMaterial::derive_iters("kiros33", "correct horse", 50);
-        let c = KeyMaterial::derive_iters("someone", "correct horse", 50);
-        let d = KeyMaterial::derive_iters("kiros33", "other", 50);
+        let a = KeyMaterial::derive_iters("kiros33", "correct horse", 50).unwrap();
+        let b = KeyMaterial::derive_iters("kiros33", "correct horse", 50).unwrap();
+        let c = KeyMaterial::derive_iters("someone", "correct horse", 50).unwrap();
+        let d = KeyMaterial::derive_iters("kiros33", "other", 50).unwrap();
+        assert!(
+            KeyMaterial::derive_iters("", "x", 5).is_none(),
+            "빈 핸들 = 재료 없음"
+        );
+        assert!(
+            KeyMaterial::derive_iters("h", "", 5).is_none(),
+            "빈 암호 = 재료 없음"
+        );
+        assert!(
+            KeyMaterial::derive_iters("  ", "x", 5).is_none(),
+            "공백 핸들 = 재료 없음"
+        );
         assert_eq!(a.psk(), b.psk(), "같은 두 값 = 같은 재료");
         assert_ne!(
             a.psk(),
@@ -331,7 +352,7 @@ mod tests {
 
     #[test]
     fn rids_around_are_three_distinct_days() {
-        let m = KeyMaterial::derive_iters("h", "p", 10);
+        let m = KeyMaterial::derive_iters("h", "p", 10).unwrap();
         let r = m.rids_around();
         assert_ne!(r[0], r[1]);
         assert_ne!(r[1], r[2]);
@@ -377,8 +398,8 @@ mod tests {
         let k = UserKey::generate().unwrap();
         assert_eq!(k.user_id(), user_id_of(&k.public()));
         // 핸들·암호는 UserId에 관여하지 않는다(ADR-0015 3층 — 바꿔도 신원 불변).
-        let _m1 = KeyMaterial::derive_iters("a", "x", 5);
-        let _m2 = KeyMaterial::derive_iters("b", "y", 5);
+        let _m1 = KeyMaterial::derive_iters("a", "x", 5).unwrap();
+        let _m2 = KeyMaterial::derive_iters("b", "y", 5).unwrap();
         assert_eq!(k.user_id(), user_id_of(&k.public()));
     }
 }
