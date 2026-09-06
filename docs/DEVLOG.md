@@ -9,6 +9,7 @@
 
 - **(mac · 브랜치 `feat/userid-handle`) ★[46 ADR-0015] UserId 사용자 관리 설계 📐**(Handle+Passphrase — clip 조사 대조: 만남은 같은 식·신뢰는 **Noise XXpsk3** 소속 증명 · 제약 해제 표 · sender copy+따라잡기 · 컨텐츠 모드 사용자 마스터 키 · 난이도 S0~S5 · 🔴 D-32 7문항 · V1-1 미반영 발견) → **[47 검토 보고서](47-adr-0015-review-userid-continuity.md)**(사용자 질문 선점·변경: 원안 `H(handle‖KP)` 기각 → **3층 = PeerId 앵커 · 무작위 UserKey(`UserId=H(pub)`) · 핸들+암호 = 문 열쇠** · Succession · 정직한 충돌 · D-32 9문항) → **[48 결정 상세·영향·흐름도](48-adr-0015-decisions-impact-flows.md)**(XX/XXpsk3 msg1 판별 실증 근거 · ed25519-dalek 2 트리 공유 · Mermaid 9 · 성능/보안 종합 · 질문 4). [journal](journal/2026-09-06.md).
 
+
 ## 2026-09-05
 
 - **(mac) ★[45] 사용자 매뉴얼 신설 + 위키 User-Guide**(캡처 15장 — 목록·대화·⌘V 이미지 전송·수신 요청 창·그룹·오프라인 행·우클릭·프로필 카드·메뉴바·설정 5면 · 임시 신원 Alice/Bob · 창 ID 캡처 · 재현 절차 부록) · 위키 Home/Install/Features 현행화 push. [journal](journal/2026-09-05.md).
