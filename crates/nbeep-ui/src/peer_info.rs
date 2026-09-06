@@ -68,6 +68,10 @@ pub struct PeerInfo {
     pub verified: bool,
     /// 내 기기(ADR-0015 S2) — 대조 버튼 대신 보라 문구(승인·대조 불필요 · 세션 한정).
     pub own_device: bool,
+    /// 서명 UserHello로 확인한 사용자 한 줄("사용자: 핸들 (ID xxxx)" · 빈 = 모름) — S2-e.
+    pub user_label: String,
+    /// 같은 핸들을 다른 사용자 공개키가 쓴다(핸들 충돌 — ID로 구분하라는 덧말).
+    pub user_conflict: bool,
 }
 
 /// 상대 프로필 카드 위젯.
@@ -292,7 +296,17 @@ impl Widget for PeerInfoWidget {
             &format!("{}  ·  {}", t(Msg::FingerprintLabel), self.info.fingerprint),
             theme.text_dim,
         );
-        y += ctx.text_height() + self.s(14);
+        y += ctx.text_height() + self.s(6);
+        // 사용자(ADR-0015 S2-e) — 서명 기기 목록으로 확인한 핸들·UserId. 충돌이면 경고 덧말.
+        if !self.info.user_label.is_empty() {
+            ctx.text(x, y, b, &self.info.user_label, theme.text_dim);
+            y += ctx.text_height() + self.s(2);
+            if self.info.user_conflict {
+                ctx.text(x, y, b, t(Msg::CardUserConflict), theme.warn);
+                y += ctx.text_height() + self.s(2);
+            }
+        }
+        y += self.s(8);
         // ── 지문 대조(M3-6) — 08-17 사용자 확정: 60자리 SAS는 숨기고 위 키 지문만
         //    다른 채널로 대조. safety_number는 "대조 가능한 상대" 게이트로만 쓴다.
         if self.info.own_device {

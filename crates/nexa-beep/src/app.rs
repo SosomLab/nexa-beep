@@ -315,6 +315,11 @@ enum AppEvent {
     UserProof { peer: PeerId, proof: [u8; 32] },
     /// 형제가 보낸 사용자 키 봉인본(ADR-0015 S2 · 태그 9) — 열기·병합은 메인.
     UserKeyBlob { peer: PeerId, sealed: Vec<u8> },
+    /// 서명 기기 목록 도착(ADR-0015 S2-e · 태그 4) — 서명·소속 검증은 메인.
+    UserHello {
+        peer: PeerId,
+        hello: Box<nbeep_core::UserHello>,
+    },
     /// 수동 주소 연결 실패(DR-19 · M2-8 잔여 — 워커에서 돌아온다. 성공은 `Outbound`).
     AddFailed { addr: String, why: String },
     /// 공유 그룹 프레임 도착(M5-1g · ADR-0012) — 검증·적용은 메인(명부 단일 지점).
@@ -876,6 +881,8 @@ struct Conversation {
     proof_sent: bool,
     /// 상대 증명 대조 실패 횟수(세션당 상한 — 온라인 추측 차단).
     proof_fails: u8,
+    /// 이 세션에 보낸 내 `UserHello`의 목록 버전(바뀌면 재송신 · None = 아직).
+    hello_ver: Option<u32>,
 }
 
 /// 진행 중 발신 상태(08-16 · 재개형 펌프) — Accept가 등록하고 액터 루프 틱이
@@ -1550,6 +1557,20 @@ fn spawn_session_actor(
                                         parked[pos].1 = true;
                                     }
                                 }
+                            }
+                        }
+                    }
+                    StreamId::Control if nbeep_core::UserHello::decode(&bytes).is_some() => {
+                        // 서명 기기 목록(ADR-0015 S2-e) — 검증(서명·소속·버전)은 메인.
+                        if let Some(h) = nbeep_core::UserHello::decode(&bytes) {
+                            if proxy
+                                .send_event(AppEvent::UserHello {
+                                    peer,
+                                    hello: Box::new(h),
+                                })
+                                .is_err()
+                            {
+                                return;
                             }
                         }
                     }
@@ -5647,7 +5668,9 @@ impl App {
                 // 신뢰 배지 확장(M3-14) — 차단·이름 충돌은 도메인엔 있었는데
                 // 화면에 안 나오던 상태다(충돌 = v1 사칭 유일 가시 신호).
                 let blocked = self.trust.is_blocked(entry.peer);
-                let conflict = self.trust.name_conflict(entry.peer, &entry.name).is_some();
+                // 이름 충돌(표시 이름 · M3-14) ∨ 핸들 충돌(사용자 핸들 · ADR-0015 S2-e) — 같은 덧표식.
+                let conflict = self.trust.name_conflict(entry.peer, &entry.name).is_some()
+                    || self.trust.handle_conflict(entry.peer);
                 // 최근 접속 상대 시각(08-17 — 삭제 메뉴가 시각만 표시).
                 let last_seen_label = ago_label(self.trust.meta(entry.peer).0);
                 // 프레즌스(08-23 — 점 색 축): 필터 판정과 같은 정의.
@@ -6518,6 +6541,122 @@ impl App {
             ));
             // 키 동기는 대화 채널이 선 뒤(install_conversation / on_user_proof)에서 보낸다 —
             // 핸들러 머리에서는 아직 out_tx가 없다(09-06 실기: 보냄 0건).
+        }
+    }
+
+    /// 내 기기 집합(ADR-0015 S2-e) = 나 + **내 사용자 공개키를 서명 제시한 기기들**(trust.seg 기록 —
+    /// 남이 준 목록이 아니라 그 기기 자신의 세션에서 받은 것만 · A-1). 키 바이트 정렬.
+    fn my_devices(&self) -> Vec<PeerId> {
+        let me = self.identity.peer_id();
+        let mut v = match self.user_rt.key.as_ref() {
+            Some(k) => self.trust.devices_of_user(&k.public()),
+            None => Vec::new(),
+        };
+        if !v.contains(&me) {
+            v.push(me);
+        }
+        v.sort_unstable_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
+        v.truncate(nbeep_core::USER_HELLO_MAX_DEVICES);
+        v
+    }
+
+    /// 목록 버전(설정 `user.list_ver` · HIDDEN_KEYS 영속 · 단조).
+    fn user_list_ver(&self) -> u32 {
+        self.settings.get("user.list_ver").parse().unwrap_or(0)
+    }
+
+    /// 내 서명 기기 목록을 이 세션에(세션당 버전 1회 — 같은 버전은 재송신 안 함).
+    fn send_user_hello(&mut self, peer: PeerId) {
+        if !self.user_state.active() {
+            return;
+        }
+        let Some(key) = self.user_rt.key.as_ref() else {
+            return;
+        };
+        let ver = self.user_list_ver().max(1);
+        let name = crate::userident::normalize_handle(self.settings.get("user.handle")).to_string();
+        let devices = self.my_devices();
+        let user_pub = key.public();
+        let sig = key.sign(&nbeep_core::UserHello::signing_bytes(
+            &user_pub, &name, &devices, ver,
+        ));
+        let Some(conv) = self.conversations.get_mut(&peer) else {
+            return;
+        };
+        if conv.hello_ver == Some(ver) {
+            return;
+        }
+        conv.hello_ver = Some(ver);
+        let hello = nbeep_core::UserHello {
+            user_pub,
+            name,
+            devices,
+            list_ver: ver,
+            sig,
+        };
+        let _ = conv.out_tx.send(SessionCmd::Control(vec![hello.encode()]));
+        if self.user_trace {
+            eprintln!("[user] hello sent to {} ver={ver}", peer.short());
+        }
+    }
+
+    /// 기기 집합이 바뀌었다 — 버전 +1(영속) 후 살아 있는 전 세션에 재송신(변경 시 능동 재전송).
+    fn bump_user_list(&mut self) {
+        let next = self.user_list_ver().max(1) + 1;
+        self.settings.set("user.list_ver", next.to_string());
+        self.conf_mark();
+        let live: Vec<PeerId> = self.conversations.keys().copied().collect();
+        for p in live {
+            self.send_user_hello(p);
+        }
+    }
+
+    /// 서명 기기 목록 수신(S2-e) — ① 서명 ② 제시자 자신이 목록에 있다(A-1) ③ 버전 단조(저장소가
+    /// 판정). 통과 = trust.seg에 (공개키·핸들·버전) 기록 → 카드·핸들 충돌 표식. **내 사용자 키**를
+    /// 제시한 기기면 내 기기 집합이 바뀐 것 → 목록 버전 +1·재송신. 형제 승격은 여기서 하지 않는다
+    /// (PSK 세션·증명만이 형제다 — 키만 쥔 잃어버린 기기는 §3-5).
+    fn on_user_hello(&mut self, peer: PeerId, hello: &nbeep_core::UserHello) {
+        if !hello.devices.contains(&peer) {
+            if self.user_trace {
+                eprintln!(
+                    "[user] hello from {} rejected: presenter not listed",
+                    peer.short()
+                );
+            }
+            return;
+        }
+        if !nbeep_crypto::userkey::verify(&hello.user_pub, &hello.to_sign(), &hello.sig) {
+            if self.user_trace {
+                eprintln!("[user] hello from {} rejected: bad signature", peer.short());
+            }
+            return;
+        }
+        // ★ 되먹임 방지([13 §12-1] · 09-06 실기: 상대 버전이 오를 때마다 내 버전을 올려 재송신
+        //   → 양쪽이 1초에 수십 회 핑퐁): 내 목록 버전은 **내 기기 집합이 실제로 바뀔 때만** 올린다.
+        let before = self.my_devices();
+        let changed = self
+            .trust
+            .record_user(peer, hello.user_pub, &hello.name, hello.list_ver);
+        if self.user_trace {
+            eprintln!(
+                "[user] hello from {} ok name={} devices={} ver={} changed={changed}",
+                peer.short(),
+                hello.name,
+                hello.devices.len(),
+                hello.list_ver
+            );
+        }
+        if !changed {
+            return;
+        }
+        if self.my_devices() != before {
+            self.bump_user_list();
+        }
+        self.refresh_peer_info_card(peer);
+        let mut inv = Invalidations::default();
+        self.refresh_rows(&mut inv);
+        if let Some(id) = self.main_id {
+            self.request_redraw(id);
         }
     }
 
@@ -7443,6 +7582,7 @@ impl App {
                 binding,
                 proof_sent: false,
                 proof_fails: 0,
+                hello_ver: None,
             },
         );
         // ★ 형제 증명(ADR-0015 S1-e) — XX로 섰는데 힌트가 형제라 하면 세션 안에서 증명한다
@@ -7454,6 +7594,8 @@ impl App {
         } else {
             self.send_user_proof(peer, false);
         }
+        // 서명 기기 목록(S2-e) — 형제·타인 모두에게(공개 문서 · 세션마다 1회 · 버전 바뀌면 재송신).
+        self.send_user_hello(peer);
         // ★ 원격 경로 고지(M5-3b — 조용히, 그러나 보이게): 인터넷 경유 세션은 스레드에
         //   1줄 남긴다. 지문 대조 전엔 파일이 막히는 이유가 여기서 설명된다(§5-1-3).
         if path == nbeep_core::PathClass::Remote {
@@ -9322,6 +9464,16 @@ impl App {
                 self.trust.level(peer) == nbeep_core::TrustLevel::FingerprintVerified
             },
             own_device: self.siblings.contains(&peer),
+            user_label: self
+                .trust
+                .user_of(peer)
+                .map_or_else(String::new, |(p, n, _)| {
+                    nbeep_core::tf(
+                        nbeep_core::Msg::CardfUser,
+                        &[n, &nbeep_crypto::userkey::user_id_of(&p).short()],
+                    )
+                }),
+            user_conflict: self.trust.handle_conflict(peer),
         }
     }
 
@@ -15393,6 +15545,7 @@ impl ApplicationHandler<AppEvent> for App {
             }
             AppEvent::UserProof { peer, proof } => self.on_user_proof(peer, proof),
             AppEvent::UserKeyBlob { peer, sealed } => self.on_user_key_blob(peer, &sealed),
+            AppEvent::UserHello { peer, hello } => self.on_user_hello(peer, &hello),
             AppEvent::ChatAck {
                 peer,
                 target_seq,

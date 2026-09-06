@@ -37,6 +37,7 @@ pub mod session;
 pub mod sgroup;
 pub mod trust;
 pub mod trusted;
+pub mod userhello;
 pub mod userproof;
 pub mod usersync;
 pub mod xfer;
@@ -72,6 +73,7 @@ pub use session::{Session, SessionError};
 pub use sgroup::{GroupUid, Roster, SGroupMsg};
 pub use trust::{MemoryTrustStore, PinRecord, TrustDecision, TrustStore};
 pub use trusted::{Established, TrustedSession};
+pub use userhello::{UserHello, USER_HELLO_MAX_DEVICES, USER_HELLO_TAG};
 pub use userproof::{UserProof, USER_PROOF_TAG};
 pub use usersync::{UserKeyBlob, USER_KEY_BLOB_MAX, USER_KEY_BLOB_TAG};
 pub use xfer::{

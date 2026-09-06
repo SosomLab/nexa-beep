@@ -381,6 +381,9 @@ pub enum Msg {
     TrustOwnDevice,
     TrustOwnDeviceTip,
     CardOwnDevice,
+    /// 카드 "사용자: {핸들} ({UserId 앞자리})" · 핸들 충돌 덧말(ADR-0015 S2-e).
+    CardfUser,
+    CardUserConflict,
     // ── 창 제목 ──
     SettingsTitle,
     // ── 타입어헤드 설정 ──
@@ -2335,6 +2338,8 @@ impl Msg {
             Msg::TrustUnverified => ["Unverified", "미검증", "未验证", "未検証"],
             Msg::TrustOwnDevice => ["My device", "내 기기", "我的设备", "自分のデバイス"],
             Msg::TrustOwnDeviceTip => ["Verified by my user key — my other PC (no approval or fingerprint check)", "같은 사용자 키로 인증된 내 다른 PC — 승인·지문 대조 불필요", "由同一用户密钥验证的我的另一台电脑 — 无需批准或指纹核对", "同じユーザー鍵で認証された自分の別のPC — 承認・指紋照合は不要"],
+            Msg::CardfUser => ["User: {} (ID {})", "사용자: {} (ID {})", "用户：{}（ID {}）", "ユーザー: {}（ID {}）"],
+            Msg::CardUserConflict => ["⚠ another user uses this handle — tell them apart by ID", "⚠ 같은 핸들을 쓰는 다른 사용자가 있음 — ID로 구분", "⚠ 另一位用户使用相同的句柄 — 请按 ID 区分", "⚠ 同じハンドルを使う別のユーザーがいます — IDで区別"],
             Msg::CardOwnDevice => ["✓ My device — verified by my user key (pairing passphrase)", "✓ 내 기기 — 같은 사용자 키(페어링 암호)로 인증됨", "✓ 我的设备 — 已由同一用户密钥（配对口令）验证", "✓ 自分のデバイス — 同じユーザー鍵（ペアリング合言葉）で認証済み"],
             Msg::TrustPinned => ["Pinned", "핀 고정", "已固定", "ピン留め"],
             Msg::TrustVerified => ["Verified", "대조 완료", "已核对", "照合済み"],

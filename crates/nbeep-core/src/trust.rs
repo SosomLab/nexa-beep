@@ -38,6 +38,28 @@ struct Record {
     /// 최근 접속·대화 시각(unix ms · 0 = 기록 없음).
     last_seen: u64,
     last_chat: u64,
+    /// 이 기기가 서명 `UserHello`로 제시한 사용자 공개키(ADR-0015 S2-e · 검증 통과분만).
+    user_pub: Option<[u8; 32]>,
+    /// 그 사용자의 핸들(공개 라벨 · 빈 = 모름).
+    user_name: String,
+    /// 마지막으로 받은 기기 목록 버전(단조 — 낮은 버전은 무시).
+    list_ver: u32,
+}
+
+impl Record {
+    fn blank(level: TrustLevel) -> Self {
+        Self {
+            level,
+            blocked: false,
+            names: Vec::new(),
+            fav: false,
+            last_seen: 0,
+            last_chat: 0,
+            user_pub: None,
+            user_name: String::new(),
+            list_ver: 0,
+        }
+    }
 }
 
 /// 신뢰 저장 포트 — 파일 기반 구현은 `nbeep-store`(M2-5)가 이 트레이트로 제공한다.
@@ -81,6 +103,12 @@ pub struct PinRecord {
     pub last_seen: u64,
     /// 최근 대화 시각(unix ms · 0 = 기록 없음) — 메시지 송·수신.
     pub last_chat: u64,
+    /// 서명 `UserHello`로 확인한 사용자 공개키(ADR-0015 S2-e · v3 꼬리).
+    pub user_pub: Option<[u8; 32]>,
+    /// 그 사용자의 핸들(빈 = 모름).
+    pub user_name: String,
+    /// 받은 기기 목록 버전.
+    pub list_ver: u32,
 }
 
 /// 인메모리 TOFU 저장(순수 로직). 영속은 `nbeep-store`가 이걸 파일로 감싼다(M2-5).
@@ -98,17 +126,71 @@ impl MemoryTrustStore {
 
     /// 이 키로 본 표시 이름을 기록한다(중복 연속은 합침).
     pub fn record_name(&mut self, peer: PeerId, name: DisplayName) {
-        let rec = self.records.entry(peer).or_insert_with(|| Record {
-            level: TrustLevel::Unverified,
-            blocked: false,
-            names: Vec::new(),
-            fav: false,
-            last_seen: 0,
-            last_chat: 0,
-        });
+        let rec = self
+            .records
+            .entry(peer)
+            .or_insert_with(|| Record::blank(TrustLevel::Unverified));
         if rec.names.last() != Some(&name) {
             rec.names.push(name);
         }
+    }
+
+    /// 서명 검증을 **통과한** `UserHello`를 기록한다(ADR-0015 S2-e · 검증은 호출자 —
+    /// 여기는 저장 규칙만): 같은 공개키면 버전이 **높을 때만** 갱신(롤백 방지) · 다른
+    /// 공개키(사용자 교체·정직한 충돌 후보)는 그대로 덮되 버전은 새로 센다. 바뀌면 `true`.
+    /// 아는 상대만(세션이 섰던 키 — 기록이 없으면 만들지 않는다).
+    pub fn record_user(&mut self, peer: PeerId, user_pub: [u8; 32], name: &str, ver: u32) -> bool {
+        let Some(r) = self.records.get_mut(&peer) else {
+            return false;
+        };
+        if r.user_pub == Some(user_pub) && ver <= r.list_ver && r.user_name == name {
+            return false;
+        }
+        if r.user_pub == Some(user_pub) && ver < r.list_ver {
+            return false; // 같은 사용자의 낡은 목록 = 무시
+        }
+        r.user_pub = Some(user_pub);
+        r.user_name = name.to_string();
+        r.list_ver = ver;
+        true
+    }
+
+    /// 이 기기가 제시한 사용자(공개키 · 핸들 · 목록 버전).
+    #[must_use]
+    pub fn user_of(&self, peer: PeerId) -> Option<([u8; 32], &str, u32)> {
+        let r = self.records.get(&peer)?;
+        r.user_pub.map(|p| (p, r.user_name.as_str(), r.list_ver))
+    }
+
+    /// 이 사용자 공개키를 제시한 기기들(키 바이트 정렬 — 결정적).
+    #[must_use]
+    pub fn devices_of_user(&self, user_pub: &[u8; 32]) -> Vec<PeerId> {
+        let mut v: Vec<PeerId> = self
+            .records
+            .iter()
+            .filter(|(_, r)| r.user_pub.as_ref() == Some(user_pub))
+            .map(|(&p, _)| p)
+            .collect();
+        v.sort_unstable_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
+        v
+    }
+
+    /// **핸들 충돌** — 같은 핸들을 **다른 사용자 공개키**가 쓴다(ADR-0015 §3-5 "선점 없음"의
+    /// 가시화: 이름은 신원이 아니다 — UserId로 가른다). 빈 핸들은 충돌 아님.
+    #[must_use]
+    pub fn handle_conflict(&self, peer: PeerId) -> bool {
+        let Some(r) = self.records.get(&peer) else {
+            return false;
+        };
+        let (Some(my), name) = (r.user_pub, r.user_name.as_str()) else {
+            return false;
+        };
+        if name.is_empty() {
+            return false;
+        }
+        self.records
+            .iter()
+            .any(|(&o, x)| o != peer && x.user_name == name && x.user_pub.is_some_and(|p| p != my))
     }
 
     /// **이름 재사용 경고** — `name`이 **다른** 키에서 이미 관찰된 적이 있으면 그 키를 돌려준다.
@@ -200,6 +282,9 @@ impl MemoryTrustStore {
                 fav: r.fav,
                 last_seen: r.last_seen,
                 last_chat: r.last_chat,
+                user_pub: r.user_pub,
+                user_name: r.user_name.clone(),
+                list_ver: r.list_ver,
             })
             .collect();
         out.sort_unstable_by(|a, b| a.peer.as_bytes().cmp(b.peer.as_bytes()));
@@ -220,10 +305,64 @@ impl MemoryTrustStore {
                     fav: r.fav,
                     last_seen: r.last_seen,
                     last_chat: r.last_chat,
+                    user_pub: r.user_pub,
+                    user_name: r.user_name,
+                    list_ver: r.list_ver,
                 },
             );
         }
         store
+    }
+}
+
+#[cfg(test)]
+mod user_tests {
+    use super::*;
+
+    fn pid(b: u8) -> PeerId {
+        PeerId::from_bytes([b; 32])
+    }
+
+    /// 서명 기기 목록 기록 규칙(ADR-0015 S2-e) — 아는 상대만 · 같은 키는 버전 단조 ·
+    /// 핸들 충돌은 "같은 핸들·다른 공개키"만.
+    #[test]
+    fn record_user_monotone_and_handle_conflict() {
+        let mut st = MemoryTrustStore::new();
+        assert!(
+            !st.record_user(pid(1), [1; 32], "kiros33", 1),
+            "모르는 키 = 기록 안 함"
+        );
+        st.on_session(pid(1));
+        st.on_session(pid(2));
+        st.on_session(pid(3));
+        assert!(st.record_user(pid(1), [1; 32], "kiros33", 2));
+        assert!(
+            !st.record_user(pid(1), [1; 32], "kiros33", 1),
+            "낡은 버전 무시"
+        );
+        assert!(
+            !st.record_user(pid(1), [1; 32], "kiros33", 2),
+            "같은 것 = 무변경"
+        );
+        assert!(st.record_user(pid(1), [1; 32], "kiros33", 3));
+        assert_eq!(
+            st.user_of(pid(1)).map(|(_, n, v)| (n.to_string(), v)),
+            Some(("kiros33".into(), 3))
+        );
+        // 같은 사용자의 두 번째 기기.
+        assert!(st.record_user(pid(2), [1; 32], "kiros33", 3));
+        assert_eq!(st.devices_of_user(&[1; 32]), vec![pid(1), pid(2)]);
+        assert!(!st.handle_conflict(pid(1)), "같은 사용자 = 충돌 아님");
+        // 다른 사용자가 같은 핸들 → 양쪽 다 충돌 표시.
+        assert!(st.record_user(pid(3), [9; 32], "kiros33", 1));
+        assert!(st.handle_conflict(pid(1)));
+        assert!(st.handle_conflict(pid(3)));
+        // 사용자 교체(다른 공개키)는 덮는다 — 버전은 새로.
+        assert!(st.record_user(pid(3), [5; 32], "other", 1));
+        assert!(!st.handle_conflict(pid(1)));
+        // 스냅샷 왕복.
+        let back = MemoryTrustStore::from_records(st.export());
+        assert_eq!(back.user_of(pid(2)).map(|(p, _, _)| p), Some([1; 32]));
     }
 }
 
@@ -242,17 +381,7 @@ impl TrustStore for MemoryTrustStore {
             }
             return TrustDecision::Known(rec.level);
         }
-        self.records.insert(
-            peer,
-            Record {
-                level: TrustLevel::Pinned,
-                blocked: false,
-                names: Vec::new(),
-                fav: false,
-                last_seen: 0,
-                last_chat: 0,
-            },
-        );
+        self.records.insert(peer, Record::blank(TrustLevel::Pinned));
         TrustDecision::FirstContact
     }
 
@@ -263,14 +392,10 @@ impl TrustStore for MemoryTrustStore {
     }
 
     fn verify(&mut self, peer: PeerId) {
-        let rec = self.records.entry(peer).or_insert_with(|| Record {
-            level: TrustLevel::Unverified,
-            blocked: false,
-            names: Vec::new(),
-            fav: false,
-            last_seen: 0,
-            last_chat: 0,
-        });
+        let rec = self
+            .records
+            .entry(peer)
+            .or_insert_with(|| Record::blank(TrustLevel::Unverified));
         rec.level = TrustLevel::FingerprintVerified;
     }
 
@@ -287,14 +412,10 @@ impl TrustStore for MemoryTrustStore {
     }
 
     fn block(&mut self, peer: PeerId) {
-        let rec = self.records.entry(peer).or_insert_with(|| Record {
-            level: TrustLevel::Unverified,
-            blocked: false,
-            names: Vec::new(),
-            fav: false,
-            last_seen: 0,
-            last_chat: 0,
-        });
+        let rec = self
+            .records
+            .entry(peer)
+            .or_insert_with(|| Record::blank(TrustLevel::Unverified));
         rec.blocked = true;
     }
 
