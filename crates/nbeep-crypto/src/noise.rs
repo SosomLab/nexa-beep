@@ -142,6 +142,10 @@ pub struct NoiseSession<L: Link> {
     link: L,
     transport: TransportState,
     peer: PeerId,
+    /// 핸드셰이크 해시(Noise `h` 최종값) — 세션 뒤 증명(ADR-0015 형제 증명)의 채널 바인딩.
+    hh: [u8; 32],
+    /// 내가 개시자였는가(증명의 역할 바이트).
+    initiator: bool,
 }
 
 impl<L: Link> core::fmt::Debug for NoiseSession<L> {
@@ -177,10 +181,10 @@ impl<L: Link> NoiseSession<L> {
             .map_err(|_| SessionError::Handshake)?;
         link.send(&buf[..n])?;
 
-        Self::finish(link, hs, id)
+        Self::finish(link, hs, id, true)
     }
 
-    /// 개시자 측 **형제 기기** 핸드셰이크(XXpsk3 · ADR-0015 §3-3) — msg1 payload에 [`PSK_MARKER`]를
+    /// 개시자 측 **형제 기기** 핸드셰이크(XXpsk3 · ADR-0015 §3-3) — msg1 payload에 `PSK_MARKER`를
     /// 실어 응답자가 패턴을 가르게 한다. PSK가 다르면 응답자가 msg3에서 끊는다(이쪽은 그 뒤 첫
     /// 수신에서 `Closed`).
     ///
@@ -206,7 +210,7 @@ impl<L: Link> NoiseSession<L> {
             .map_err(|_| SessionError::Handshake)?;
         link.send(&buf[..n])?;
 
-        Self::finish(link, hs, id)
+        Self::finish(link, hs, id, true)
     }
 
     /// 수신자 측 핸드셰이크(`<- e` / `-> e,ee,s,es` / `<- s,se`) — XX 전용([`Self::accept_any`]의 PSK 없는 판).
@@ -249,7 +253,7 @@ impl<L: Link> NoiseSession<L> {
                     // PSK가 다르면 여기서 실패한다 — "같은 사용자가 아니다"는 정상 결과.
                     hs.read_message(&msg3, &mut buf)
                         .map_err(|_| SessionError::Handshake)?;
-                    return Self::finish(link, hs, id).map(|s| (s, true));
+                    return Self::finish(link, hs, id, false).map(|s| (s, true));
                 }
             }
         }
@@ -270,11 +274,22 @@ impl<L: Link> NoiseSession<L> {
         hs.read_message(&msg, &mut buf)
             .map_err(|_| SessionError::Handshake)?;
 
-        Self::finish(link, hs, id).map(|s| (s, false))
+        Self::finish(link, hs, id, false).map(|s| (s, false))
     }
 
-    fn finish(link: L, hs: HandshakeState, id: &Identity) -> Result<Self, SessionError> {
+    fn finish(
+        link: L,
+        hs: HandshakeState,
+        id: &Identity,
+        initiator: bool,
+    ) -> Result<Self, SessionError> {
         let peer = remote_peer(&hs)?;
+        let mut hh = [0u8; 32];
+        let h = hs.get_handshake_hash();
+        if h.len() != 32 {
+            return Err(SessionError::Handshake);
+        }
+        hh.copy_from_slice(h);
         if peer == id.peer_id() {
             // D-22 U-P2(사용자 확정 08-08): 상대가 내 신원과 같다 — 자기 연결이거나
             // 키 파일 복제다. 즉시 거부 + 경고 대상([docs/21 §5] I-7).
@@ -287,6 +302,8 @@ impl<L: Link> NoiseSession<L> {
             link,
             transport,
             peer,
+            hh,
+            initiator,
         })
     }
 }
@@ -294,6 +311,10 @@ impl<L: Link> NoiseSession<L> {
 impl<L: Link> Session for NoiseSession<L> {
     fn peer(&self) -> PeerId {
         self.peer
+    }
+
+    fn handshake_binding(&self) -> Option<([u8; 32], bool)> {
+        Some((self.hh, self.initiator))
     }
 
     fn trust(&self) -> TrustLevel {

@@ -120,6 +120,12 @@ impl<S: Session> MuxSession<S> {
         self.inner.peer()
     }
 
+    /// 핸드셰이크 바인딩(안쪽 세션 위임 — [`Session::handshake_binding`]).
+    #[must_use]
+    pub fn handshake_binding(&self) -> Option<([u8; 32], bool)> {
+        self.inner.handshake_binding()
+    }
+
     /// 신뢰 등급(안쪽 세션 위임).
     #[must_use]
     pub fn trust(&self) -> TrustLevel {

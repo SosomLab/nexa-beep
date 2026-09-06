@@ -78,4 +78,11 @@ pub trait Session: Send {
     /// 수신 폴 타임아웃 — `Some(d)`면 `recv`가 `d`마다 [`SessionError::TimedOut`]으로 돌아온다
     /// (비동기 수신 펌프가 송신과 교대 — M2-7). 기본 no-op(블로킹 유지).
     fn set_recv_timeout(&mut self, _dur: Option<core::time::Duration>) {}
+
+    /// 핸드셰이크 바인딩 — `(핸드셰이크 해시, 내가 개시자인가)`. 세션 뒤에 오가는
+    /// 증명(ADR-0015 형제 증명 — 세션 안에서 PSK 소유를 HMAC으로)을 **이 세션에 묶는**
+    /// 재료다. 해시가 없는 구현(테스트 더블·릴레이 원시)은 `None` = 증명 불가.
+    fn handshake_binding(&self) -> Option<([u8; 32], bool)> {
+        None
+    }
 }

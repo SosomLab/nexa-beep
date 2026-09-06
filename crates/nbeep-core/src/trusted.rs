@@ -76,6 +76,9 @@ impl<S: Session> Session for TrustedSession<S> {
     fn set_recv_timeout(&mut self, dur: Option<core::time::Duration>) {
         self.inner.set_recv_timeout(dur);
     }
+    fn handshake_binding(&self) -> Option<([u8; 32], bool)> {
+        self.inner.handshake_binding()
+    }
 }
 
 #[cfg(test)]

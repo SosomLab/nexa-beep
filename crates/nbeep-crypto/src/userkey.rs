@@ -29,6 +29,7 @@ const DOM_RID: &[u8] = b"nbeep-user-rid-v1";
 const DOM_LAN: &[u8] = b"nbeep-user-lan-v1";
 const DOM_WRAP: &[u8] = b"nbeep-user-wrap-v1";
 const DOM_ID: &[u8] = b"nbeep-user-id-v2";
+const DOM_PROOF: &[u8] = b"nbeep-user-proof-v1";
 
 /// 16바이트 태그(랑데부 RID · LAN 힌트) — `nbeep_relay::Rid`와 같은 모양.
 pub type Tag16 = [u8; 16];
@@ -194,6 +195,27 @@ impl KeyMaterial {
     }
 }
 
+// ---------------------------------------------------------------- 세션 내 증명
+
+/// 세션 내 형제 증명(ADR-0015 S1-e) — 이미 선 Noise 세션 안에서 PSK 소유를 증명한다:
+/// `HMAC(PSK, "nbeep-user-proof-v1" ‖ 핸드셰이크 해시 ‖ 역할)`. 해시가 세션마다 다르고
+/// 세션 암호문 안으로만 오가므로 재생·전달이 불가하고, 역할 바이트가 반사를 막는다.
+/// XX로 먼저 성립한 세션(부팅 경합·나중에 기능 켬)을 다시 걸지 않고 형제로 승격하는 통로.
+#[must_use]
+pub fn session_proof(psk: &[u8; 32], hh: &[u8; 32], initiator: bool) -> [u8; 32] {
+    let mut msg = Vec::with_capacity(DOM_PROOF.len() + 33);
+    msg.extend_from_slice(DOM_PROOF);
+    msg.extend_from_slice(hh);
+    msg.push(u8::from(initiator));
+    hmac_sha256(psk, &msg)
+}
+
+/// 상수 시간 비교(증명 대조 전용).
+#[must_use]
+pub fn proof_eq(a: &[u8; 32], b: &[u8; 32]) -> bool {
+    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
 // ---------------------------------------------------------------- ② 신원
 
 /// 사용자 장기 서명 키(Ed25519) — 첫 기기가 1회 생성해 형제 기기에 복제한다.
@@ -288,6 +310,23 @@ pub fn verify(public: &[u8; 32], msg: &[u8], sig: &[u8]) -> bool {
 mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
+    #[test]
+    fn session_proof_binds_role_hash_and_psk() {
+        let psk = [7u8; 32];
+        let hh = [9u8; 32];
+        let a = super::session_proof(&psk, &hh, true);
+        let b = super::session_proof(&psk, &hh, false);
+        assert!(!super::proof_eq(&a, &b), "역할이 다르면 다르다(반사 방지)");
+        assert!(super::proof_eq(&a, &super::session_proof(&psk, &hh, true)));
+        assert!(!super::proof_eq(
+            &a,
+            &super::session_proof(&[8u8; 32], &hh, true)
+        ));
+        assert!(!super::proof_eq(
+            &a,
+            &super::session_proof(&psk, &[1u8; 32], true)
+        ));
+    }
 
     fn hex(b: &[u8]) -> String {
         b.iter().map(|x| format!("{x:02x}")).collect()
