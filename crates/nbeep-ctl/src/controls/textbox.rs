@@ -25,6 +25,9 @@ pub struct TextBox {
     changed: bool,
     /// 값이 있으면 우측에 ×(지우기) 버튼 표시(클릭 = 초기화 · 사용자 요청 08-09).
     clearable: bool,
+    /// 비밀 표시 모드(09-06 · ADR-0015 페어링 암호) — 글자 대신 `•`를 같은 개수로 그린다.
+    /// 편집 상태·캐럿·선택은 그대로(1글자 = 1점이라 경계가 일치) · 조합 중 문자열은 표시하지 않는다.
+    secret: bool,
     /// 텍스트 시작 x(페인트가 기록 — 클릭 좌표를 글자 위치로 바꾸는 근거).
     text_x: std::cell::Cell<i32>,
     /// 각 문자 경계의 누적 폭(페인트가 실측해 기록 · 폰트를 모르는 이벤트 경로가 쓴다).
@@ -104,6 +107,7 @@ impl TextBox {
             committed: false,
             changed: false,
             clearable: false,
+            secret: false,
             text_x: std::cell::Cell::new(0),
             caret_xs: std::cell::RefCell::new(Vec::new()),
             dragging: false,
@@ -131,6 +135,27 @@ impl TextBox {
     }
 
     /// 허용 문자 필터 지정(08-22) — 타이핑·붙여넣기 공통. None = 전부 허용(기본).
+    /// 비밀 표시 모드 — 켜면 `•`로 가린다(값·복사·붙여넣기는 그대로 · 표시만).
+    pub fn set_secret(&mut self, yes: bool) {
+        self.secret = yes;
+    }
+
+    /// 비밀 표시 모드인가.
+    #[must_use]
+    pub fn secret(&self) -> bool {
+        self.secret
+    }
+
+    /// 화면에 그릴 문자열 — 비밀 모드면 같은 글자 수의 `•`(`display_text`는 조합 포함 표시값 · 별개).
+    fn masked_text(&self) -> String {
+        let t = self.edit.text();
+        if self.secret {
+            "•".repeat(t.chars().count())
+        } else {
+            t
+        }
+    }
+
     pub fn set_char_filter(&mut self, f: Option<fn(char) -> bool>) {
         self.char_filter = f;
     }
@@ -952,12 +977,13 @@ impl Widget for TextBox {
         // 텍스트/placeholder는 고정 시작점(tx)에서 그리되, 폭을 넘으면 **가로 스크롤**로
         // 캐럿을 따라간다(① 08-13 — 그전엔 긴 텍스트에서 캐럿이 화면 밖으로 사라졌다).
         ctx.select_font(FontSlot::Base, false);
-        let text = self.edit.text();
+        let text = self.masked_text();
         let chars: Vec<char> = text.chars().collect();
         let caret_i = self.edit.caret().min(chars.len());
         let before: String = chars[..caret_i].iter().collect();
         // 조합 중 문자열(preedit)은 캐럿 자리에 끼워 **표시만** 한다(편집 상태 불변).
-        let shown = if self.edit.preedit().is_empty() {
+        // 비밀 모드에선 조합 중 글자도 노출하지 않는다.
+        let shown = if self.edit.preedit().is_empty() || self.secret {
             text.clone()
         } else {
             let after: String = chars[caret_i..].iter().collect();

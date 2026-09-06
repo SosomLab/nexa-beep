@@ -10757,7 +10757,7 @@ impl App {
                     self.user_values_changed();
                     continue;
                 }
-                "user.suggest" => {
+                "user.passphrase.regen" => {
                     let s = crate::userident::suggest_passphrase();
                     if !s.is_empty() {
                         self.settings.set("user.passphrase", s.clone());
