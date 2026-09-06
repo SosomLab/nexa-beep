@@ -19767,12 +19767,16 @@ mod font_fallback_tests {
     #[test]
     fn ui_font_chain_covers_ui_symbols() {
         let f = super::load_ui_font(None).expect("시스템 UI 폰트");
-        for c in ['\u{2713}', '\u{26A0}', '\u{2192}', '\u{00B7}', '가', 'A'] {
+        for c in ['\u{2713}', '\u{26A0}', '\u{2192}', '\u{00B7}', 'A'] {
             assert!(
                 f.covers(c),
                 "글꼴 체인에 {c:?} 없음 (얼굴 {})",
                 f.face_count()
             );
+        }
+        // 한글은 CJK 본이 있는 자리에서만(ubuntu CI 러너 = DejaVu 라틴 폴백뿐 — plat 후보 주석과 같은 한계).
+        if nbeep_plat::font::system_ui_font_name().is_some_and(|n| n != "DejaVu Sans") {
+            assert!(f.covers('가'), "CJK 본이 있는데 한글이 없다");
         }
     }
 }
