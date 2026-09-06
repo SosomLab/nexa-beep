@@ -1056,6 +1056,18 @@ pub fn registry() -> &'static [Entry] {
             },
             key: "user.test",
         },
+        // 사용자 키 교체(ADR-0015 §3-5 · S2-f) — 기기 분실 대응. 인증 상태에서만 활성(호스트 잠금) ·
+        // 2회 클릭(5초 무장)으로 실행.
+        Entry {
+            cat: Msg::CatUser,
+            sub: None,
+            label: Msg::UserRotate,
+            desc: Msg::UserRotateDesc,
+            kind: SettingKind::Action {
+                verb: Msg::UserRotateVerb,
+            },
+            key: "user.rotate",
+        },
         // 그룹(M5-1 · ADR-0012) — 재동기 보관 주체 = 송신자(사용자 확정 08-13).
         // 발신자가 구성원별로 미전달 그룹 메시지를 몇 개까지 보관할지(초과 = 오래된 것
         // 폐기 — 큐 상한 필수 NFR-B-6). 소비처(app)가 관용 파싱한다.

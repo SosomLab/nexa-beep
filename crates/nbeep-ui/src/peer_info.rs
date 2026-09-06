@@ -72,6 +72,8 @@ pub struct PeerInfo {
     pub user_label: String,
     /// 같은 핸들을 다른 사용자 공개키가 쓴다(핸들 충돌 — ID로 구분하라는 덧말).
     pub user_conflict: bool,
+    /// 이 사용자의 키 후계가 충돌함(정직한 충돌 · D-32-9 — 자동 승자 없음).
+    pub succession_conflict: bool,
 }
 
 /// 상대 프로필 카드 위젯.
@@ -303,6 +305,10 @@ impl Widget for PeerInfoWidget {
             y += ctx.text_height() + self.s(2);
             if self.info.user_conflict {
                 ctx.text(x, y, b, t(Msg::CardUserConflict), theme.warn);
+                y += ctx.text_height() + self.s(2);
+            }
+            if self.info.succession_conflict {
+                ctx.text(x, y, b, t(Msg::CardSuccessionConflict), theme.danger);
                 y += ctx.text_height() + self.s(2);
             }
         }

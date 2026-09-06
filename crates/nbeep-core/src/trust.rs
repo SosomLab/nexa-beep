@@ -155,6 +155,20 @@ impl MemoryTrustStore {
         true
     }
 
+    /// 사용자 기록 폐기(후계 증명서의 `revoked` · ADR-0015 §3-5) — 옛 키를 쥔 채 남은 기기는
+    /// 더는 그 사용자가 아니다. 핀·이름·차단은 손대지 않는다(기기 신원은 그대로). 바뀌면 `true`.
+    pub fn revoke_user(&mut self, peer: PeerId) -> bool {
+        match self.records.get_mut(&peer) {
+            Some(r) if r.user_pub.is_some() => {
+                r.user_pub = None;
+                r.user_name.clear();
+                r.list_ver = 0;
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// 이 기기가 제시한 사용자(공개키 · 핸들 · 목록 버전).
     #[must_use]
     pub fn user_of(&self, peer: PeerId) -> Option<([u8; 32], &str, u32)> {
@@ -360,9 +374,15 @@ mod user_tests {
         // 사용자 교체(다른 공개키)는 덮는다 — 버전은 새로.
         assert!(st.record_user(pid(3), [5; 32], "other", 1));
         assert!(!st.handle_conflict(pid(1)));
+        // 폐기 = 사용자 기록만 지운다(핀은 유지).
+        assert!(st.revoke_user(pid(2)));
+        assert!(!st.revoke_user(pid(2)), "멱등");
+        assert_eq!(st.devices_of_user(&[1; 32]), vec![pid(1)]);
+        assert_eq!(st.level(pid(2)), TrustLevel::Pinned);
         // 스냅샷 왕복.
         let back = MemoryTrustStore::from_records(st.export());
-        assert_eq!(back.user_of(pid(2)).map(|(p, _, _)| p), Some([1; 32]));
+        assert_eq!(back.user_of(pid(1)).map(|(p, _, _)| p), Some([1; 32]));
+        assert!(back.user_of(pid(2)).is_none(), "폐기도 스냅샷을 탄다");
     }
 }
 

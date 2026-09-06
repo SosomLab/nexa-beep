@@ -217,6 +217,15 @@ impl FileTrustStore {
         changed
     }
 
+    /// [`MemoryTrustStore::revoke_user`] 위임 + 바뀌면 즉시 저장.
+    pub fn revoke_user(&mut self, peer: PeerId) -> bool {
+        let changed = self.inner.revoke_user(peer);
+        if changed {
+            self.persist();
+        }
+        changed
+    }
+
     /// [`MemoryTrustStore::user_of`] 위임.
     #[must_use]
     pub fn user_of(&self, peer: PeerId) -> Option<([u8; 32], &str, u32)> {

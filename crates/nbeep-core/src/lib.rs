@@ -75,7 +75,7 @@ pub use trust::{MemoryTrustStore, PinRecord, TrustDecision, TrustStore};
 pub use trusted::{Established, TrustedSession};
 pub use userhello::{UserHello, USER_HELLO_MAX_DEVICES, USER_HELLO_TAG};
 pub use userproof::{UserProof, USER_PROOF_TAG};
-pub use usersync::{UserKeyBlob, USER_KEY_BLOB_MAX, USER_KEY_BLOB_TAG};
+pub use usersync::{Succession, UserKeyBlob, SUCCESSION_TAG, USER_KEY_BLOB_MAX, USER_KEY_BLOB_TAG};
 pub use xfer::{
     chunks_of, Received, RejectWhy, XferError, XferId, XferInbox, XferMsg, MAX_CHUNK, MAX_FILE,
 };
