@@ -6158,6 +6158,19 @@ impl App {
 
     /// `net.server.*` 변경(설정 hot-swap) — 현 접속을 내려놓고 다음 틱이 새 목표로
     /// 붙는다(핀 불일치 정지도 여기서 풀린다 — "설정을 다시 저장하면 재접속").
+    /// 같은 서버에 **재등록만**(09-06) — 검증 마커·보류·실패 상태를 건드리지 않고 접속을 내려놓아
+    /// 다음 `server_tick`(≤2s)이 같은 값으로 다시 붙인다(등록 RID 집합 변경 = 페어링 RID).
+    fn relay_reattach_soft(&mut self) {
+        self.relay_gen = self.relay_gen.wrapping_add(1);
+        if self.relay.take().is_some() {
+            self.set_status(nbeep_core::t(nbeep_core::Msg::StServerDetached));
+        }
+        self.relay_backoff = (0, 0);
+        self.relay_check_at = 0;
+        self.clear_server_peers();
+        self.refresh_toolbar_server();
+    }
+
     fn server_settings_changed(&mut self) {
         self.relay_gen = self.relay_gen.wrapping_add(1);
         // ★ 살아 있던 접속을 지금 내려놓았으면 상태바도 즉시 해제로(08-22 실기 —
@@ -7154,9 +7167,12 @@ impl App {
             self.siblings.clear();
             self.sibling_hints.clear();
         }
-        // 릴레이 등록 RID 집합이 바뀐다(페어링 RID 추가/제거) — 재접속으로 재등록.
+        // 릴레이 등록 RID 집합이 바뀐다(페어링 RID 추가/제거) — **검증 마커·보류는 그대로 두고**
+        // 접속만 내려놓아 server_tick이 곧장 다시 붙게 한다(09-06 2-PC 실기: 종전
+        // `server_settings_changed`는 Test 성공 전까지 자동 접속을 막는 보류를 걸어, 사용자 인증
+        // 직후 서버가 "미검증"으로 떨어지고 페어 RID 등록도 안 돼 형제를 못 찾았다).
         if self.relay.is_some() {
-            self.server_settings_changed();
+            self.relay_reattach_soft();
         }
     }
 
@@ -17038,9 +17054,23 @@ impl ApplicationHandler<AppEvent> for App {
                             d => format!("Noise 세션 수립 — {d:?}"),
                         });
                     }
-                } else if !auto {
-                    // 그 사이 인바운드가 먼저 성립 — 이 세션은 버리고 그 대화를 연다.
-                    self.activate(peer, el);
+                } else {
+                    // 이미 대화 중 — 이 세션은 버린다. ★ 이 세션이 XXpsk3로 섰다면(페어 RID
+                    //   랑데부 — 서버 경유엔 LAN 힌트가 없어 이 경로가 유일한 형제 판정) 형제
+                    //   자격은 위 note_sibling이 올렸고, 키 동기·서명 목록은 **기존 대화 채널**로
+                    //   보낸다(09-06 2-PC 실기: 판정만 되고 키가 안 합쳐졌다).
+                    if via_psk {
+                        self.send_succession(peer);
+                        self.send_user_key_blob(peer);
+                        if let Some(c) = self.conversations.get_mut(&peer) {
+                            c.hello_ver = None;
+                        }
+                        self.send_user_hello(peer);
+                    }
+                    if !auto {
+                        // 그 사이 인바운드가 먼저 성립 — 그 대화를 연다.
+                        self.activate(peer, el);
+                    }
                 }
                 // 대기 중이던 그룹 본문 이어 보내기(M5-1 — "자동 연결 시도 후 전송").
                 self.flush_group_sends(peer);
@@ -17459,7 +17489,17 @@ impl ApplicationHandler<AppEvent> for App {
                 let peer = session.peer();
                 self.note_sibling(peer, via_psk);
                 if self.conversations.contains_key(&peer) {
-                    return; // 이미 이 상대와 대화 중(아웃바운드 세션 존재) — 중복 인바운드 무시
+                    // 이미 이 상대와 대화 중(아웃바운드 세션 존재) — 중복 인바운드 무시. 단 psk로
+                    // 섰으면(페어 RID 랑데부) 형제 동기는 기존 채널로(Outbound 쪽과 대칭 · 09-06).
+                    if via_psk {
+                        self.send_succession(peer);
+                        self.send_user_key_blob(peer);
+                        if let Some(c) = self.conversations.get_mut(&peer) {
+                            c.hello_ver = None;
+                        }
+                        self.send_user_hello(peer);
+                    }
+                    return;
                 }
                 // ★ 원격 인바운드 × 미등록 = 요청 대기(M5-3b · ADR-0006 §6 — FR-S-25).
                 //   LAN 밖에서 걸어온 모르는 키를 TOFU로 자동 등록하면 공인망 스캐너가
