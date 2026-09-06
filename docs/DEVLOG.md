@@ -7,6 +7,7 @@
 
 ## 2026-09-06
 
+- **(mac · `feat/userid-handle`) ★자동화 테스트 전체**(사용자 요청): 831 green · ignored 멀티캐스트 2/2(단독) · fmt/clippy/rustdoc ✓ · **4타깃 cross check ✓** · 릴리스 3.0/0.5/0.5MB · 프로브 상호 발견 · **3프로세스 릴레이 스모크 = 홀펀칭 직결+ack**(`--identity` 분리 필수) · **netmon 10분 warn 0**(dtx≈10pps = UserHint 2배 · [39 §3-2]) · footprint 21MB · 평문 스캔 0건·0600 · UI = 보라 배지·`/trust`·카드 ✓ · 키 교체 버튼은 합성 입력 한계(사용자 실클릭). [journal](journal/2026-09-06.md).
 - **(mac · `feat/userid-handle`) ★X-13 S2-f = S2 완료**(`7083df3` 후계 증명서 **Succession 태그 8** — 옛·새 키 이중 서명 · 설정 › 사용자 › "키 교체(기기 분실)" 5초 무장 2회 클릭 = 이 PC만 남기고 폐기·새 암호 재결합이 복구 · 수신 3단 검증 + **정직한 충돌**(같은 버전·다른 새 키 = 적용 안 함·카드 경고) · 키 병합 "후계가 이긴다" · `user.succ` 부팅 로드). 실기 = 화면 잠금으로 UI 클릭 후속. 다음 = S3 sender copy·스레드 UserId 접기. [journal](journal/2026-09-06.md).
 - **(mac · `feat/userid-handle`) ★X-13 S2-e**(`2cbb58d` 서명 기기 목록 **UserHello 태그 4** · trust.seg **v3** 사용자 기록(공개키·핸들·버전) · 검증 3단(제시자 ∈ 목록 A-1·서명·버전 단조) · 내 기기 집합 = 직접 제시한 기기만 · `user.list_ver` · 카드 사용자 줄·핸들 충돌 덧표식) — ★실기 발견 **핑퐁 되먹임**(상대 버전↑ = 내 버전↑ 재송신 · ver 1187) → 내 집합 변경 시만([13 §12-1]). 잔여 S2-f = Succession·정직한 충돌. [journal](journal/2026-09-06.md).
 - **(mac · `feat/userid-handle`) ★X-13 S2 b~d**(`02dfca4` 형제 간 **사용자 키 동기** UserKeyBlob 태그 9 · created_at 꼬리 · "오래된 키가 이긴다" — 실기 F가 E 키 채택·재기동 유지 / `23ba9f2` **신뢰 해제 단일 통로** `effective_trust` 12곳(승인·대조·원격 대기·무음 = 형제면 해제 · 저장 등급 무변경 = UserId 바꾼 PC는 별도 PC) + **"내 기기" 배지**(인증 실 모양 유지 · 보라 런타임 재색 · 카드 문구)). 잔여 = UserHello 서명 기기 목록·Succession·핸들 충돌. [journal](journal/2026-09-06.md).

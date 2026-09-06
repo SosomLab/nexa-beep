@@ -6696,6 +6696,13 @@ impl App {
             return;
         }
         let now = self.now_ms();
+        if self.user_trace {
+            eprintln!(
+                "[user] rotate press now={now} armed={} live={}",
+                self.rotate_armed_ms,
+                self.conversations.len()
+            );
+        }
         if now.saturating_sub(self.rotate_armed_ms) > 5_000 {
             self.rotate_armed_ms = now;
             self.set_status(nbeep_core::t(nbeep_core::Msg::StUserRotateArm));
