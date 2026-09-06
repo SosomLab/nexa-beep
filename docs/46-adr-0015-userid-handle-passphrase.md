@@ -1,6 +1,6 @@
-# 46 · ADR-0015 — UserId 기반 사용자 관리: Handle + Pairing passphrase (📐 Proposed · 🔴 D-32)
+# 46 · ADR-0015 — UserId 기반 사용자 관리: Handle + Pairing passphrase (✅ Accepted · D-32)
 
-> **상태: 📐 Proposed** · 작성 2026-09-06 · 브랜치 `feat/userid-handle` · 결정 대기 = **D-32**(§9)
+> **상태: ✅ Accepted** · 작성 2026-09-06 · **D-32 9문항 확정 09-06**(사용자 · 전부 권고안 — §9) · 3층 개정([47](47-adr-0015-review-userid-continuity.md)) 본문 반영 · 상세 영향·흐름도 = [48](48-adr-0015-decisions-impact-flows.md) · 브랜치 `feat/userid-handle` · 구현 = TODO X-13
 > **사용자 요청(09-06)**: *"nexa-clip처럼 Handle + Passphrase(아이디/패스워드 개념)로 여러 PeerId를 한 사용자로 묶는다. 두 값이 같으면 같은 사용자. 같은 사용자면 승인·Verify 없이 메시지·파일이 오간다. 메시지 동기화도 필요하다. 릴레이까지는 Peer 단위 그대로, 컨텐츠 모드 서버에서는 전 기기가 같은 대화 목록·같은 사용자로 동작하고 파일 업/다운로드가 일반 메신저처럼."*
 > **개정 대상**: [20 ADR-0007](20-adr-0007-multi-device-identity.md)(다중 기기 신원 — **폐기가 아니라 경량 1단계로 앞당김**) · [32 ADR-0013 §3-8](32-adr-0013-server-modes.md)(동기 저장소) · [17 ADR-0005 §3](17-adr-0005-history-at-rest.md)(래핑 키 — 재검토 조건 발동)
 > **자매 규약**: nexa-clip `docs/09`(DR-39) · `docs/07 §3`(RID 파생) · [44 nexa-clip 연계](44-nexa-clip-liaison.md)
@@ -12,7 +12,7 @@
 | 질문 | 답 |
 |---|---|
 | clip과 같은 방식인가 | **만남(랑데부)은 같은 식**(PBKDF2 · 핸들 솔트 · 일 에폭)을 그대로 쓴다. **신뢰는 다르게 만든다** — clip은 패스프레이즈를 "만남 지점 가리기"에만 쓰고 기기마다 사람이 승인한다(clip 09 §6-3 "타협 불가"). beep 요구는 **승인 없이**이므로 패스프레이즈를 **세션 인증에 결합**(Noise **XXpsk3** · PSK = KDF(passphrase, handle))해 *"같은 비밀을 아는 기기끼리만 핸드셰이크가 성립"* = **암호학적 소속 증명**으로 승격한다. 사람의 SAS 자리를 PSK가 대신한다 |
-| 기존 설계(ADR-0007)와의 관계 | ADR-0007은 **서명 키 + 서명된 기기 목록 + 주 기기 + 복구 시드**(무거운 정답). 이번 안은 **그 1단계(경량판)** — `UserId`를 **핸들+패스프레이즈에서 결정적으로 파생**하고, 기기 목록은 "PSK 성립 이력"으로 갈음. ADR-0007의 서명 체인은 **v2에 그대로 얹을 수 있게** 자리(`UserId` 32B · Control 프레임 태그)를 맞춘다 |
+| 기존 설계(ADR-0007)와의 관계 | ADR-0007은 **서명 키 + 서명된 기기 목록 + 주 기기 + 복구 시드**(무거운 정답). 이번 안은 **그 1단계(경량판)** — **3층**(① PeerId 앵커 ② **무작위 UserKey(전 기기 복제 · 암호로 봉인) → `UserId = H(pub)`** ③ 핸들+암호 = 문 열쇠). 서명된 기기 목록·version은 ADR-0007 그대로, **주 기기 전용·복구 시드만 v2로** 미룬다(폐기 경쟁 = 정직한 충돌 · [47 §3-3](47-adr-0015-review-userid-continuity.md)) |
 | 코드 현황과의 거리 | V1-2(팬아웃)·V1-3(sender_device·seq)·V1-4(래핑) = ✅ 실물. **V1-1(스레드·기록·차단 키 = UserId) = ❌ 미반영**(문서는 "반영"으로 오기 — 전부 `PeerId`). 신뢰 판정은 `trust.level(peer)` 12곳 직접 호출이지만 **`TrustStore::level` 한 곳**에서 대부분 흡수 가능 |
 | 릴레이 | **서버 무변경**. RID는 기기별 그대로 + **페어링 RID 3개 추가 등록**(clip 우회와 동일 · `MAX_RIDS 8` 안). 1 RID = 1 연결 제약은 그대로 살아 있으므로 "공유 URID"는 쓰지 않는다 |
 | 동기화 | **2단**. ① 서버 없이 = **sender copy 팬아웃 + 기기 간 따라잡기(catch-up)** — 같은 사용자 기기끼리는 신뢰되므로 세션 성립 시 `after_seq` 이후 기록을 세션 위로 건넨다(clip에는 없는 것 · 대화는 append-only라 충돌 없음) ② 컨텐츠 모드 = [32 §3-8](32-adr-0013-server-modes.md) 동기 저장소(서버는 암호문 blob·봉투·커서만) |
@@ -41,10 +41,10 @@
 
 | | **beep ADR-0007**(08-08 확정) | **clip DR-39**(09-03 · 구현 진행) | **이번 안(ADR-0015)** |
 |---|---|---|---|
-| UserId의 정체 | **장기 서명 키**(Ed25519류) | 타입 자리만(v1 = PeerId 1:1) | **핸들+패스프레이즈에서 파생한 32B**(§3-1) |
+| UserId의 정체 | **장기 서명 키**(Ed25519류) | 타입 자리만(v1 = PeerId 1:1) | **무작위 UserKey(Ed25519 · 전 기기 복제 · 암호로 봉인) → `H(pub)`**(§3-1 · 09-06 개정) |
 | "같은 사용자" 증명 | 서명된 DeviceList + Noise 소유 증명(양방향) | **없음** — 같은 RID에서 만난 뒤 **사람이 기기마다 승인**(6자리 코드 육안) | **Noise XXpsk3** — PSK를 모르면 핸드셰이크가 수학적으로 실패 |
 | 패스프레이즈의 역할 | (없음 — SAS 대조) | **만남 지점 파생만**("인증에 쓰지 않는다" 09 §6-2) | 만남 지점 파생 **+ 세션 PSK + 사용자 마스터 키 래핑**(§6) |
-| 폐기(도난 기기) | 주 기기가 더 높은 version으로 서명 | 미구현(설계 = 키 로테이션) | **패스프레이즈 변경 = 전 기기 재입력**(§3-5 — 정직한 한계) |
+| 폐기(도난 기기) | 주 기기가 더 높은 version으로 서명 | 미구현(설계 = 키 로테이션) | **UserKey 교체 + 후계 증명서** · 경쟁 = 정직한 충돌(§3-5) |
 | 승인 마찰 | 페어링 1회 SAS 필수 | 기기마다 1회 승인 | **0회**(사용자 요구) — 대신 패스프레이즈 강도가 전부다 |
 | 서버 변경 | 없음 | 없음(DP-1) | **릴레이까지 없음** · 컨텐츠 모드는 신규 |
 
@@ -71,17 +71,22 @@
 
 ## 3. 신원 설계 — R-1
 
-> ⚠️ **개정 예고(09-06 · [47 검토 보고서](47-adr-0015-review-userid-continuity.md))** — §3-1의 `UserId = H(handle ‖ KP)`는 **암호 변경이 신원을 파괴**하고 서버 이름공간을 못 지킨다(선점 P-3). **3층 구조**로 개정한다: ① PeerId 앵커 ② **무작위 UserKey(전 기기 복제 · 암호로 봉인) → `UserId = H(UserKey.pub)`** ③ 핸들+암호 = 문 열쇠(PSK·RID·래핑만). 변경은 **후계 증명서(Succession)**, 폐기 경쟁은 **정직한 충돌 표시**. 아래 §3-1·§3-5·§5-3·§6-4는 47 §4-3 개정 목록을 적용한 뒤 본문을 고친다(D-32-8·9 확정 후).
+> ✅ **개정 반영(09-06 · D-32-8·9 확정 · 근거 = [47 검토 보고서](47-adr-0015-review-userid-continuity.md))** — 원안 `UserId = H(handle ‖ KP)`는 암호 변경이 신원을 파괴하고 서버 이름공간을 못 지켜 **기각**. 아래는 **3층 구조**로 고친 본문이다. 흐름도는 [48 §3](48-adr-0015-decisions-impact-flows.md).
 
 ### 3-1. 파생식 (세 재료를 한 비밀에서 · 도메인 분리)
 
 ```text
-KP   = PBKDF2-HMAC-SHA256( passphrase, salt = "nbeep-user-kdf-v1" ‖ handle, iters = 60_000 )  → 32B  (기기 1회 · 캐시)
-UserId        = SHA-256( "nbeep-user-id-v1"  ‖ handle ‖ KP )                  → 32B   ← 결정적 · 모든 기기 동일 · 표시 = 지문 8자리
+③ 문 열쇠(핸들+암호에서 · 바꿔도 신원 불변)
+KP   = PBKDF2-HMAC-SHA256( passphrase, salt = "nbeep-user-kdf-v1" ‖ handle, iters = 60_000 )  → 32B  (기기 1회 · 메모리)
 PSK           = SHA-256( "nbeep-user-psk-v1" ‖ KP )                           → 32B   ← Noise XXpsk3 재료 (§3-3)
 RID_pair(day) = SHA-256( "nbeep-user-rid-v1" ‖ KP ‖ epoch_day )[..16]                  ← 랑데부 (§3-4 · 어제·오늘·내일 3개)
 LAN_tag(day)  = SHA-256( "nbeep-user-lan-v1" ‖ RID_pair(day) )[..16]                    ← 발견 패킷 힌트 (§3-4)
-K_wrap_user   = SHA-256( "nbeep-user-wrap-v1" ‖ KP )                          → 32B   ← 사용자 마스터 키 래핑 (§6-2 · 컨텐츠 모드에서만)
+K_wrap_user   = SHA-256( "nbeep-user-wrap-v1" ‖ KP )                          → 32B   ← UserKey·사용자 마스터 키 봉인 열쇠
+② 신원(무작위 · 불변)
+UserKey       = Ed25519 쌍 · 핸들·암호를 넣은 **첫 기기가 1회 생성** · 형제 기기에 PSK 세션으로 복제(봉인본 그대로) · 디스크 = user.key(sealed · 0600)
+UserId        = SHA-256( "nbeep-user-id-v2" ‖ UserKey.pub )                   → 32B   ← 남이 나를 가리키는 값 · 표시 = 지문 8자리
+① 앵커
+PeerId        = 기기 정적 키(현행) — 핀·세션·후계 판정 근거
 ```
 
 | 규칙 | 이유 |
@@ -89,9 +94,9 @@ K_wrap_user   = SHA-256( "nbeep-user-wrap-v1" ‖ KP )                          
 | **핸들은 솔트에만** 들어간다 | 같은 핸들·다른 암호 = 다른 사용자(clip R-c 충돌 소멸). 핸들은 라벨이지 신원이 아니다(FR-S-2) |
 | **PBKDF2 60k**(clip과 같은 값 · `sha2`만 사용 · 의존 신규 0) | 추측 1회 비용. 기기에서는 1회 계산 후 메모리 캐시(`KP`는 디스크에 두지 않는다 — §3-6) |
 | 도메인 문자열이 clip(`nclip-*`)과 **다르다** | 앱 격리([44 §1](44-nexa-clip-liaison.md)) — 같은 핸들·암호를 두 앱에 넣어도 서로 못 만난다. 브리지는 별도 옵트인 |
-| `UserId`는 `KP`에서만 나온다 | 핸들 변경 = 사용자 변경(정직하게 UI 고지). 암호 변경도 사용자 변경 — §3-5 |
+| `UserId`는 **UserKey에서만** 나온다 — 핸들·암호 무관 | 암호·핸들 변경이 신원을 안 바꾼다(재래핑/라벨) — §3-5 · 동시 부트스트랩(기기 둘이 각자 생성)은 `created_at` 빠른 쪽(같으면 pub 사전순)이 이기고 진 쪽이 후계 증명서로 병합 |
 
-> ⚠️ ADR-0007의 `UserId`(= 서명 공개키)와 **바이트 의미가 다르다.** 타입 `UserId`(32B 뉴타입 · `identity.rs:56`)는 그대로 쓰되, v2에서 서명 키를 얹을 때는 **파생 UserId를 `user_tag`로, 서명 공개키를 `user_pub`로** 두고 DeviceList가 둘을 함께 서명한다 — 마이그레이션 없이 확장된다.
+> ADR-0007의 `UserId`(= 서명 공개키)와 **같은 의미**가 됐다(`H(pub)`). 타입 `UserId`(32B 뉴타입 · `identity.rs:56`) 그대로. v2 주 기기 승격 때 바뀌는 것은 "누가 UserKey를 쥐는가"뿐이고 데이터 형식은 불변.
 
 ### 3-2. 같은 사용자 판정 = "두 값이 같다"의 암호학적 형태
 
@@ -100,7 +105,7 @@ K_wrap_user   = SHA-256( "nbeep-user-wrap-v1" ‖ KP )                          
 ```text
 ① 발견/랑데부   LAN_tag 또는 RID_pair가 같다        → "같은 사용자일지도"(미검증 힌트 · 발견 패킷은 힌트다 — 08 §2)
 ② 핸드셰이크    Noise_XXpsk3(PSK)                    → 성립 = 상대가 KP를 안다 = 같은 사용자 ★ 여기서만 판정
-③ 등재          상대 PeerId를 내 UserId의 기기로 기록  → 이후 trust.level = 소속 기기(§4)
+③ 등재          상대 PeerId를 내 UserId의 기기로 기록 · UserKey 봉인본 동기(없는 쪽이 받음) · 서명된 기기 목록 version+1  → 이후 trust.level = 소속 기기(§4)
 ```
 
 ### 3-3. Noise XXpsk3 — 왜 PSK이고, 왜 psk3인가
@@ -119,14 +124,16 @@ K_wrap_user   = SHA-256( "nbeep-user-wrap-v1" ‖ KP )                          
 | **LAN** | 발견 패킷 `name`·`flags` | 발견 패킷 **꼬리에 `LAN_tag` 16B**(구버전은 꼬리를 검사하지 않는 형식이어야 함 — 디코더 실측 필요 · 안 되면 `flags` bit + 별도 Control 프레임) | — |
 | glare | 없음(앱 가드 = 둘 다 드롭) | **PeerId 사전순 작은 쪽만 건다**(X-11 · clip 동일) — 같은 사용자 기기끼리는 재시도 소음이 곧 사용자 체감이라 여기서 먼저 적용 | — |
 
-### 3-5. 폐기·변경 — 정직한 한계
+### 3-5. 폐기·변경 — 후계 증명서와 정직한 충돌 (09-06 개정)
 
 | 상황 | 동작 |
 |---|---|
-| 기기 분실 | **패스프레이즈를 바꾼다** → `KP`가 바뀌어 새 UserId·PSK·RID가 된다 → 나머지 기기에 새 암호를 입력해야 다시 묶인다(ADR-0007의 "주 기기가 폐기 서명"만큼 우아하지 않다 — **경량판의 값**). 잃은 기기는 옛 암호로 옛 UserId에 혼자 남는다 |
-| 암호만 바꾸고 기록은 유지 | 기록·핀·그룹은 **기기 로컬**이라 그대로다(스레드 키가 UserId로 바뀌어도 §5-2의 매핑 표로 잇는다) |
-| 핸들 변경 | 사용자 변경과 같다 — UI에 *"다른 기기에도 같은 핸들·암호를 입력해야 다시 묶입니다"* |
-| v2(서명 체인) | 파생 UserId를 `user_tag`로 유지하고 그 위에 ADR-0007 서명·폐기·주 기기를 얹는다. **지금 자리를 남기는 것**: `UserId` 32B 필드 · Control 태그 4~9 예약(§5-3) |
+| 암호 변경 | **UserId 불변.** UserKey·마스터 키를 새 KP로 **재래핑**(재암호화 없음) · PSK·RID 갱신 · 형제는 새 암호 입력 시 재결합. 상대는 아무것도 모른다 |
+| 핸들 변경 | 라벨만 — `UserHello{name}` 갱신 |
+| 기기 분실(침해 대응) | **UserKey 교체** → `Succession{old_pub, new_pub, devices, revoked:[잃은 기기], ver+1, sig_old, sig_new}` → 다음 세션에서 상대에게 제시 → 상대는 ①`sig_old` ∈ 핀한 옛 UserId ②제시자 ∈ 핀된 PeerId ③version 단조 → 스레드·핀을 새 UserId로 접는다(대화 연속). **암호 변경과 다른 버튼**(암호만 바꾸면 잃은 기기의 UserKey는 남는다) |
+| 폐기 경쟁(잃은 기기도 옛 키로 서명 가능) | **자동 승자 없음** — 같은 version·다른 후계 = 충돌 표시(목록·카드 배지 · 스레드 시스템 라인) · 스레드는 옛 UserId에 머묾 · 사용자가 다른 채널로 확인 후 선택(D-32-9). 완화 = 시간 우위 + 암호 변경으로 잃은 기기의 형제 세션 차단 |
+| 전 기기+암호 소실 | 신원 재생성. 상대에게는 PeerId 앵커로 *"이 기기는 예전 X였다 — 병합할까"* 를 **사용자 확인**으로 제안(자동 병합 금지) |
+| v2(주 기기 전용) | UserKey를 주 기기만 쥐고 나머지는 서명된 인증서 → 경쟁 소멸 · 데이터 형식 불변 |
 
 ### 3-6. 저장 — 비밀은 어디에
 
@@ -135,7 +142,8 @@ K_wrap_user   = SHA-256( "nbeep-user-wrap-v1" ‖ KP )                          
 | `user.handle` | `settings.cfg` | 평문(공개 라벨) |
 | `user.passphrase` | **`profile.sec` 봉인 사이드카**(PII_KEYS와 같은 경로 · 09-05부터 0600) | ✅ **평문 금지** — clip은 `settings.cfg` 평문(clip 4-2)이라 그쪽에 회신 항목으로 알린다 |
 | `KP` | 메모리만 | 부팅 시 재계산(60k ≈ 수십 ms) |
-| 기기 목록(PSK 성립 이력) | `trust.seg` 레코드 확장(`user: Option<UserId>` + `paired_at`) | 봉인 · 기존 마이그레이션 = 필드 부재 → None |
+| `user.key`(UserKey 봉인본) | `data/user.key` — `nbeep_store::sealed` 도메인 `user-key-v1` · 열쇠 = K_wrap_user · **privfile 0600** | 형제 세션으로 봉인본 그대로 복제 |
+| 기기 목록·소속 | `trust.seg` 레코드 확장(`user_pub` · `list_ver` · `seen_max_ver` · `paired_at`) + `pending_succession[]` | 봉인 · 기존 마이그레이션 = 필드 부재 → None |
 
 ---
 
@@ -185,12 +193,13 @@ K_wrap_user   = SHA-256( "nbeep-user-wrap-v1" ‖ KP )                          
 
 | 태그 | 프레임 | 내용 |
 |:--:|---|---|
-| 4 | `UserHello { user_id, devices: [PeerId], list_ver }` | PSK 세션 성립 직후 양방향. 다른 사용자와의 세션에서도 **내 UserId + 기기 목록**을 보낸다(서명 없음 — 이 목록은 *팬아웃 대상 힌트*일 뿐이며, **실제 소속은 그 기기와의 PSK 세션이 아니라 상대가 그 기기와 성립한 세션에서 상대가 제시한 UserId로 재확인**된다 · A-1 방어) |
+| 4 | `UserHello { user_pub, name, devices: [PeerId], list_ver, sig }` | 세션 성립 직후 양방향(형제·타인 모두). **UserKey 서명** — 상대는 ①sig 검증 ②제시한 PeerId ∈ devices ③version 단조로 소속을 검증한다(ADR-0007 §4 절차 그대로 · A-1 방어) |
 | 5 | `SyncRead` | §5-1 |
 | 6 | `SyncPull { thread, after_seq, max }` / 7 `SyncLines{…}` | §5-4 |
-| 8~9 | 예약(v2 DeviceList 서명) | ADR-0007 |
+| 8 | `Succession{…}` | §3-5 침해 대응 후계 증명서(UserHello에 동봉 가능) |
+| 9 | `UserKeyBlob{sealed}` | 형제 세션에서 UserKey 봉인본 동기(없는 쪽이 요청) |
 
-> ★ **A-1(남의 기기를 내 사용자라 주장) 방어** — 상대는 내가 보낸 기기 목록을 **믿지 않는다**. 그 목록의 기기 X와 세션이 성립했을 때 X가 제시한 UserId가 같은지로만 접는다. 소속 증명은 여전히 PSK 세션(같은 사용자 사이)에만 있고, 제3자에게는 *"이 PeerId들이 같은 UserId를 주장한다"* 수준이다. 공격자가 내 UserId를 주장하려면 내 PSK 세션에 들어와야 하는데 그것이 불가능하다.
+> ★ **A-1(남의 기기를 내 사용자라 주장) 방어** — 목록은 **UserKey 서명**이 있어야 하고, 접는 것은 **그 기기 자신과의 세션(Noise 소유 증명) + 그 기기가 제시한 서명 목록에 자기가 있을 때**뿐이다. 남이 준 목록만으로 다른 기기를 편입하지 않는다. 공격자가 내 UserId를 주장하려면 UserKey(= 내 형제 세션 진입 + 봉인 해제)가 필요하다.
 
 ### 5-4. 따라잡기(catch-up) — 오프라인 기기가 놓친 것
 
@@ -247,7 +256,7 @@ K_thread, K_content = 무작위 · Wrap(K_user_master)로 봉투 ① · 상대 �
 
 ### 6-4. 서버 변경(신규 · beepd `Content` 타입)
 
-`C2s` 신설: `PutBlob{ns, id, bytes}` · `GetBlob{ns, id}` · `ListIndex{ns}` · `PutCursor/GetCursor` · 쿼터/TTL(L1 90일 기본 · [32 §3-9-3]). 인증 = 세션 정적 키 + **UserId 가명(HMAC(server_salt, UserId))** — 서버는 UserId 원본도 모른다. 상세 와이어는 착수 시 [32 §12-6] MVP 방식으로 별도 문서.
+`C2s` 신설: `PutBlob{ns, id, bytes}` · `GetBlob{ns, id}` · `ListIndex{ns}` · `PutCursor/GetCursor` · 쿼터/TTL(L1 90일 기본 · [32 §3-9-3]). 인증 = 세션 정적 키 + **UserKey 서명 챌린지**(nonce ← 서버 · 응답 = Sign(UserKey, nonce) — 이름공간 선점·오염 차단 · 47 P-3) + 가명 `HMAC(server_salt, UserId)` — 서버는 UserId 원본을 저장하지 않는다. 상세 와이어는 착수 시 [32 §12-6] MVP 방식으로 별도 문서.
 
 ---
 
@@ -255,9 +264,9 @@ K_thread, K_content = 무작위 · Wrap(K_user_master)로 봉투 ① · 상대 �
 
 | # | 슬라이스 | 내용 | 난이도 | 크기 | 의존 | 위험 |
 |:--:|---|---|:--:|:--:|---|---|
-| **S0** | 신원 파생·설정 | `nbeep-crypto::userkey`(PBKDF2·파생 5종 · 벡터 테스트) · 설정 `user.handle`/`user.passphrase`(봉인 사이드카 · 강도 표시 · 재생성) · `--whoami`에 UserId | **하** | 1일 | — | 없음(순수) |
+| **S0** | 신원 파생·UserKey·설정 | `nbeep-crypto::userkey`(PBKDF2·파생 5종 · **Ed25519 생성/서명/검증 = `ed25519-dalek 2`** · 벡터 테스트) · `user.key` 봉인 · 설정 `user.handle`/`user.passphrase`(봉인 사이드카 · 강도 표시 · 재생성) · `--whoami`에 UserId | **하~중** | 2일 | — | 의존 +1(트리 공유 실측 T-2) |
 | **S1** | PSK 세션 | `NoiseSession::initiate_psk/accept_psk`(XXpsk3) · 발견 꼬리 `LAN_tag` · 릴레이 `RID_pair` 3개 등록·Open · 실패 백오프 · **일반 XX 폴백** · 인바운드 accept가 두 패턴을 받는 방법(★ 첫 메시지로 판별 불가 → **힌트 기반 선택 + 실패 시 재시도** 실측 필요) | **중** | 2~3일 | S0 | 인바운드 패턴 판별 · 발견 패킷 꼬리 호환 실측 |
-| **S2** | 신뢰 해제 + 기기 목록 | `trust.seg` 레코드 `user` 필드 · `TrustStore::level/on_session` 소속 분기 · `judge_offer`·`file_allowed`·FR-S-25·`suggest_verify` 5곳 · "내 기기" 배지 · 차단 = UserId | **중** | 2일 | S1 | 12곳 회귀 — `trust.level` 흡수로 축소 |
+| **S2** | 신뢰 해제 + 서명 기기 목록 + 후계 | `trust.seg` 레코드(`user_pub`·`list_ver`·`seen_max`) · `UserHello` 서명 검증 · `Succession`·충돌 표시 · UserKey 봉인본 동기 · `TrustStore::level/on_session` 소속 분기 · `judge_offer`·`file_allowed`·FR-S-25·`suggest_verify` 5곳 · "내 기기" 배지 · 차단 = UserId | **중** | 3일 | S1 | 12곳 회귀 — `trust.level` 흡수로 축소 · 충돌 UX |
 | **S3** | UserHello + sender copy + 스레드 접기 | Control 태그 4 · 팬아웃 집합 확장 · sender copy 표시 규칙 · 뷰 계층 ThreadKey=UserId · 그룹 `sender_device`(P-10) | **중~상** | 3일 | S2 | app.rs 대화 상태(2730~) 전반 · 그룹 와이어 kind 신설 |
 | **S4** | 따라잡기 + 읽음 동기 + 저장 병합 | `SyncPull/SyncLines/SyncRead` · `history/u-*.seg` · 매핑 표 · 상한·예산 | **중** | 2~3일 | S3 | 봉인 키 계층 무변경 확인 · 대량 기록 성능 |
 | **S5** | 컨텐츠 모드 | beepd `Content` 타입 와이어 5종 · 클라 pull/push · 사용자 마스터 키 · 봉투 ① · 파일 1회 업로드(P-9 kind 8) · 보관함 온라인(X-3) · 쿼터/TTL | **대** | 2주+ | S4 · beepd 배포 | 서버 저장·인증·쿼터 · S-3 감사 · 실 NAT 실기 |
@@ -275,21 +284,19 @@ K_thread, K_content = 무작위 · Wrap(K_user_master)로 봉투 ① · 상대 �
 
 ---
 
-## 9. 🔴 결정 대기 — D-32 (권고안 = 굵게)
+## 9. ✅ D-32 확정 (2026-09-06 · 사용자 · 전부 권고안)
 
-| # | 질문 | 선택지 |
+| # | 질문 | 확정 |
 |:--:|---|---|
-| D-32-1 | 소속 증명 방식 | **ⓐ Noise XXpsk3(PSK = KDF(passphrase))** / ⓑ clip식(만남만 · 승인 유지 — 요구 R-2와 충돌) / ⓒ ADR-0007 원안(서명 체인 · 크기 대) |
-| D-32-2 | `UserId` 파생 | **ⓐ SHA-256(핸들 ‖ KP)** — 두 값이 같으면 같은 사용자 / ⓑ 핸들만(충돌·열거 — 기각) |
-| D-32-3 | 제약 해제 범위 | **ⓐ §4 표 전부(격리·무해화만 유지)** / ⓑ 파일 승인은 남긴다 |
-| D-32-4 | 동기화 1차 범위 | **ⓐ S3+S4(sender copy + 따라잡기 200줄)** / ⓑ sender copy만 |
-| D-32-5 | 컨텐츠 모드 착수 | ⓐ S4 뒤 바로 / **ⓑ S0~S4 실기 후 별도 결정**(beepd 배포·쿼터 설계 동반) |
-| D-32-6 | 패스프레이즈 저장 | **ⓐ `profile.sec` 봉인 사이드카** / ⓑ `settings.cfg` 평문(clip 동일) |
-| D-32-7 | 강도 정책 | **ⓐ 표시+경고(자동 추천 12자)** / ⓑ 최소 길이 강제 |
-| **D-32-8** | UserId의 원천([47](47-adr-0015-review-userid-continuity.md) §6) | **ⓐ 무작위 UserKey(전 기기 복제 · 암호로 봉인) = H(pub)** / ⓑ H(handle‖KP)(변경 취약 · 기각 권고) / ⓒ 주 기기 전용(v2) |
-| **D-32-9** | 폐기 경쟁 처리([47](47-adr-0015-review-userid-continuity.md) §3-3) | **ⓐ 정직한 충돌 표시 + 사람이 선택** / ⓑ 높은 version 승리(공격자 유리 · 기각) |
-
----
+| D-32-1 | 소속 증명 | **Noise XXpsk3(PSK = KDF(passphrase)) + UserKey 서명 기기 목록**(PSK = 형제 사이 · 서명 = 제3자에게) |
+| D-32-2 | (47로 대체) | — |
+| D-32-3 | 제약 해제 범위 | **사람 판정 전부 해제**(TOFU·SAS·파일 승인·미왕래 강등·원격 대기·원격 파일 차단·알림) · **격리·무해화·기기별 실체화 유지**(DR-13) · 차단 = UserId |
+| D-32-4 | 동기화 1차 | **sender copy + 따라잡기(스레드당 200줄 · 세션당 1MiB · 설정) + 읽음 동기** |
+| D-32-5 | 컨텐츠 모드 | **S0~S4 실기 후 별도 결정**(S5 = 별도 마일스톤) |
+| D-32-6 | 패스프레이즈 저장 | **`profile.sec` 봉인 사이드카**(0600 · 평문 금지) |
+| D-32-7 | 강도 정책 | **표시 + 경고 · 자동 추천 12자**(강제 없음) |
+| D-32-8 | UserId 원천 | **무작위 UserKey · 전 기기 복제 · K_wrap_user 봉인 · `UserId = H(pub)`** |
+| D-32-9 | 폐기 경쟁 | **정직한 충돌 표시 + 사람이 선택**(자동 승자 없음) · v2 주 기기 승격 경로 유지 |
 
 ## 10. 결과(Consequences)
 
