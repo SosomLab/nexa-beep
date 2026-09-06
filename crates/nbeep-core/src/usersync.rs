@@ -180,9 +180,70 @@ impl UserKeyBlob {
     }
 }
 
+/// 후계 **사슬** 파일 코덱(09-06 — 연속 교체 대비): `[len u16 BE ‖ doc]*`. 오래된 것이 앞.
+/// 상한 [`SUCC_CHAIN_MAX`](넘치면 앞을 버린다 — 그보다 오래된 상대는 사슬이 안 닿아 새 사용자로 본다).
+pub const SUCC_CHAIN_MAX: usize = 8;
+
+/// 사슬 직렬화.
+#[must_use]
+pub fn encode_chain(chain: &[Succession]) -> Vec<u8> {
+    let mut out = Vec::new();
+    let start = chain.len().saturating_sub(SUCC_CHAIN_MAX);
+    for d in &chain[start..] {
+        let b = d.encode();
+        #[allow(clippy::cast_possible_truncation)]
+        out.extend_from_slice(&(b.len() as u16).to_be_bytes());
+        out.extend_from_slice(&b);
+    }
+    out
+}
+
+/// 사슬 해석 — 구본(문서 한 장 그대로)도 받는다. 손상 = `None`.
+#[must_use]
+pub fn decode_chain(bytes: &[u8]) -> Option<Vec<Succession>> {
+    if let Some(one) = Succession::decode(bytes) {
+        return Some(vec![one]);
+    }
+    let mut out = Vec::new();
+    let mut p = 0usize;
+    while p < bytes.len() {
+        let n = usize::from(u16::from_be_bytes([*bytes.get(p)?, *bytes.get(p + 1)?]));
+        p += 2;
+        out.push(Succession::decode(bytes.get(p..p + n)?)?);
+        p += n;
+    }
+    (!out.is_empty()).then_some(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chain_roundtrip_legacy_and_cap() {
+        let mk = |o: u8, n: u8, v: u32| Succession {
+            old_pub: [o; 32],
+            new_pub: [n; 32],
+            devices: vec![pid(1)],
+            revoked: vec![],
+            ver: v,
+            sig_old: [0; 64],
+            sig_new: [0; 64],
+        };
+        let chain = vec![mk(1, 2, 1), mk(2, 3, 2)];
+        assert_eq!(decode_chain(&encode_chain(&chain)), Some(chain.clone()));
+        // 구본 = 문서 한 장 그대로.
+        assert_eq!(
+            decode_chain(&chain[0].encode()),
+            Some(vec![chain[0].clone()])
+        );
+        assert!(decode_chain(&[1, 2, 3]).is_none());
+        // 상한 — 앞(오래된 것)을 버린다.
+        let long: Vec<Succession> = (0..10).map(|i| mk(i, i + 1, u32::from(i))).collect();
+        let back = decode_chain(&encode_chain(&long)).unwrap();
+        assert_eq!(back.len(), SUCC_CHAIN_MAX);
+        assert_eq!(back[0].old_pub, [2; 32]);
+    }
 
     fn pid(b: u8) -> PeerId {
         PeerId::from_bytes([b; 32])

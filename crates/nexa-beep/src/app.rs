@@ -521,6 +521,8 @@ struct GroupXfer {
 }
 /// 키 교체 무장 창(09-06 — 생성 아이콘과 같은 5초 · 두 번째 클릭이 이 안에 와야 실행).
 const ROTATE_ARM_MS: u64 = 5_000;
+/// 키 교체 뒤 잠금(09-06 — 실수 연타 방지 · 사슬은 보관하므로 안전 장치일 뿐).
+const ROTATE_COOLDOWN_MS: u64 = 10_000;
 
 /// 형제 힌트 유예(ADR-0015 S1) — 광고 뒤 힌트 한 장과 부팅 인증 워커를 기다리는 시간.
 /// 광고 주기 800ms의 약 2배(힌트 1장 유실 흡수) · 사용자 체감 = 조용한 연결이 1.5초 늦는다.
@@ -2883,8 +2885,11 @@ struct App {
     /// 사용자 신원 트레이스(`NEXA_USER_TRACE=1`) — 힌트·psk 선택·형제 성립을 stderr에
     /// 남긴다(`NEXA_IME_TRACE` 선례 · 봉투만: 지문 앞자리와 참/거짓뿐).
     user_trace: bool,
-    /// 내 후계 증명서(ADR-0015 §3-5 · S2-f) — 키 교체 뒤 `data/user.succ`에 두고 세션마다 제시.
-    succession: Option<nbeep_core::Succession>,
+    /// 내 후계 증명서 **사슬**(ADR-0015 §3-5 · S2-f · 09-06 연속 교체 대비) — 오래된 것이 앞 ·
+    /// `data/user.succ`에 두고 세션마다 전부 제시(꺼져 있던 상대도 자기 기록에서 닿는 지점부터 잇는다).
+    succession: Vec<nbeep_core::Succession>,
+    /// 마지막 교체 실행 시각(ms · 0 = 없음) — 잠금 창.
+    rotate_done_ms: u64,
     /// 적용한 후계(옛 공개키 → 새 공개키 · 런타임) — 키 봉인본 병합에서 "후계가 이긴다".
     successors: HashMap<[u8; 32], [u8; 32]>,
     /// 본 후계(옛 공개키 → (버전, 새 공개키)) — 같은 버전·다른 새 키 = 정직한 충돌(D-32-9).
@@ -6291,8 +6296,11 @@ impl App {
         if !self.user_state.can_test() {
             locks.push("user.test");
         }
-        if !self.user_state.active() {
-            locks.push("user.rotate"); // 키 교체는 인증된 키가 있어야 서명할 수 있다
+        if !self.user_state.active()
+            || (self.rotate_done_ms > 0
+                && self.now_ms().saturating_sub(self.rotate_done_ms) < ROTATE_COOLDOWN_MS)
+        {
+            locks.push("user.rotate"); // 인증된 키가 있어야 서명 · 실행 직후 10초 잠금(연타 방지)
         }
         let (note, tone) = match &self.user_state {
             UserState::Unconfigured(Validity::Empty) => {
@@ -6645,9 +6653,15 @@ impl App {
 
     /// 내 후계 증명서를 이 세션에(세션당 1회) — 있을 때만.
     fn send_succession(&mut self, peer: PeerId) {
-        let Some(doc) = self.succession.clone() else {
+        if self.succession.is_empty() {
             return;
-        };
+        }
+        let frames: Vec<Vec<u8>> = self
+            .succession
+            .iter()
+            .map(nbeep_core::Succession::encode)
+            .collect();
+        let last_ver = self.succession.last().map_or(0, |d| d.ver);
         let Some(conv) = self.conversations.get_mut(&peer) else {
             return;
         };
@@ -6655,10 +6669,34 @@ impl App {
             return;
         }
         conv.succ_sent = true;
-        let _ = conv.out_tx.send(SessionCmd::Control(vec![doc.encode()]));
+        let n = frames.len();
+        let _ = conv.out_tx.send(SessionCmd::Control(frames));
         if self.user_trace {
-            eprintln!("[user] succession sent to {} ver={}", peer.short(), doc.ver);
+            eprintln!(
+                "[user] succession chain({n}) sent to {} ver={last_ver}",
+                peer.short()
+            );
         }
+    }
+
+    /// 내 사슬에 문서 추가(중복 = 무시) + 파일 저장(상한 초과 = 오래된 것부터 버림).
+    fn push_my_succession(&mut self, doc: nbeep_core::Succession) {
+        if self
+            .succession
+            .iter()
+            .any(|d| d.old_pub == doc.old_pub && d.new_pub == doc.new_pub)
+        {
+            return;
+        }
+        self.succession.push(doc);
+        if self.succession.len() > nbeep_core::SUCC_CHAIN_MAX {
+            let drop = self.succession.len() - nbeep_core::SUCC_CHAIN_MAX;
+            self.succession.drain(..drop);
+        }
+        let _ = nbeep_store::privfile::write_atomic(
+            &self.succ_path(),
+            &nbeep_core::encode_chain(&self.succession),
+        );
     }
 
     /// 후계 증명서 수신(ADR-0015 §3-5 · D-32-9) — ①제시자 ∈ devices ∧ ∉ revoked ②옛·새 키 두 서명
@@ -6728,11 +6766,13 @@ impl App {
         // 내 키의 후계를 형제가 제시했다 = 내 사용자도 바뀐다 — 문서를 내 것으로(전 기기 전파).
         let mine = self.user_rt.key.as_ref().map(|k| k.public());
         let me = self.identity.peer_id();
-        if mine == Some(doc.old_pub) && self.siblings.contains(&peer) && doc.devices.contains(&me) {
-            // 내 키의 후계이고 내가 목록에 있다 = 문서를 내 것으로(전 기기 전파). 폐기 목록에 든
-            // 기기는 제시자가 될 수 없으므로 들고 있지 않는다(새 키는 봉인본으로 받아 다시 결합).
-            let _ = nbeep_store::privfile::write_atomic(&self.succ_path(), &doc.encode());
-            self.succession = Some(doc.clone());
+        // 내 키(또는 내 사슬 위의 키)의 후계이고 내가 목록에 있다 = 사슬에 잇는다(전 기기 전파).
+        // 폐기 목록에 든 기기는 제시자가 될 수 없으므로 들고 있지 않는다(새 키는 봉인본으로).
+        let on_my_chain = mine.is_some_and(|m| {
+            m == doc.old_pub || crate::userident::succ_reaches(&self.successors, &m, &doc.old_pub)
+        });
+        if on_my_chain && self.siblings.contains(&peer) && doc.devices.contains(&me) {
+            self.push_my_succession(doc.clone());
         }
         if self.user_trace {
             eprintln!(
@@ -6765,6 +6805,9 @@ impl App {
                 self.rotate_armed_ms,
                 self.conversations.len()
             );
+        }
+        if self.rotate_done_ms > 0 && now.saturating_sub(self.rotate_done_ms) < ROTATE_COOLDOWN_MS {
+            return; // 잠금 창(연타 방지) — 버튼도 잠겨 있다
         }
         if self.rotate_armed_ms == 0 || now.saturating_sub(self.rotate_armed_ms) > ROTATE_ARM_MS {
             self.rotate_armed_ms = now;
@@ -6822,7 +6865,6 @@ impl App {
             self.set_status(format!("user.key 저장 실패: {e}"));
             return;
         }
-        let _ = nbeep_store::privfile::write_atomic(&self.succ_path(), &doc.encode());
         let old_id = old.user_id();
         let new_id = new.user_id();
         self.user_rt.key = Some(new);
@@ -6830,7 +6872,8 @@ impl App {
         self.user_state = crate::userident::on_test_result(&Ok(new_id));
         self.successors.insert(doc.old_pub, doc.new_pub);
         self.succ_seen.insert(doc.old_pub, (ver, doc.new_pub));
-        self.succession = Some(doc);
+        self.push_my_succession(doc);
+        self.rotate_done_ms = now;
         for p in revoked {
             self.trust.revoke_user(p);
         }
@@ -7022,8 +7065,11 @@ impl App {
         };
         let their_at = at.unwrap_or(u64::MAX); // 시각 없는 구본 = 가장 새것으로 취급
                                                // ★ 후계가 시각을 이긴다(S2-f): 상대 키가 내 키의 후계면 채택, 내 키가 상대의 후계면 유지.
-        let succ_of_mine = self.successors.get(&mine.public()) == Some(&theirs.public());
-        let i_am_succ = self.successors.get(&theirs.public()) == Some(&mine.public());
+                                               // 추이 판정(A→B→C 사슬 — 한 단계만 보면 A를 쥔 기기가 C를 A로 되돌린다 · 09-06).
+        let succ_of_mine =
+            crate::userident::succ_reaches(&self.successors, &mine.public(), &theirs.public());
+        let i_am_succ =
+            crate::userident::succ_reaches(&self.successors, &theirs.public(), &mine.public());
         let adopt = succ_of_mine
             || (!i_am_succ
                 && crate::userident::adopt_theirs(
@@ -7058,13 +7104,17 @@ impl App {
         ));
         // 들고 있던 후계 문서에 내가 없으면(폐기된 채 새 키만 이어받음) 더는 제시하지 않는다.
         let me = self.identity.peer_id();
-        if self
-            .succession
-            .as_ref()
-            .is_some_and(|d| !d.devices.contains(&me))
-        {
-            self.succession = None;
-            let _ = std::fs::remove_file(self.succ_path());
+        let before = self.succession.len();
+        self.succession.retain(|d| d.devices.contains(&me));
+        if self.succession.len() != before {
+            if self.succession.is_empty() {
+                let _ = std::fs::remove_file(self.succ_path());
+            } else {
+                let _ = nbeep_store::privfile::write_atomic(
+                    &self.succ_path(),
+                    &nbeep_core::encode_chain(&self.succession),
+                );
+            }
         }
         // 새 공개키로 서명 목록을 다시 낸다(상대 기록이 새 ID로 이어지도록).
         let live: Vec<PeerId> = self.conversations.keys().copied().collect();
@@ -7167,8 +7217,9 @@ impl App {
         // 내 후계 증명서(공개 문서 · 있으면 세션마다 제시).
         self.succession = std::fs::read(self.succ_path())
             .ok()
-            .and_then(|b| nbeep_core::Succession::decode(&b));
-        if let Some(d) = &self.succession {
+            .and_then(|b| nbeep_core::decode_chain(&b))
+            .unwrap_or_default();
+        for d in &self.succession {
             self.successors.insert(d.old_pub, d.new_pub);
             self.succ_seen.insert(d.old_pub, (d.ver, d.new_pub));
         }
@@ -19338,7 +19389,8 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         siblings: std::collections::HashSet::new(),
         psk_shared: std::sync::Arc::clone(&psk_shared),
         user_trace: std::env::var_os("NEXA_USER_TRACE").is_some(),
-        succession: None,
+        succession: Vec::new(),
+        rotate_done_ms: 0,
         successors: HashMap::new(),
         succ_seen: HashMap::new(),
         succ_conflicts: std::collections::HashSet::new(),

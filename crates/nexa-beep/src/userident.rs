@@ -279,6 +279,27 @@ pub(crate) fn adopt_theirs(mine: (u64, [u8; 32]), theirs: (u64, [u8; 32])) -> bo
     theirs.0 < mine.0 || (theirs.0 == mine.0 && theirs.1 < mine.1)
 }
 
+/// 후계 사슬 추이 판정(순수 · 09-06 — 연속 교체 대비): `from`에서 `successors`를 따라가 `to`에
+/// 닿는가. 한 단계만 보면 A→B→C 뒤 A를 쥔 기기와 만났을 때 "오래된 키" 규칙이 C를 A로 되돌린다.
+/// 순환·상한 16단계에서 멈춘다.
+#[must_use]
+pub(crate) fn succ_reaches(
+    successors: &std::collections::HashMap<[u8; 32], [u8; 32]>,
+    from: &[u8; 32],
+    to: &[u8; 32],
+) -> bool {
+    let mut cur = *from;
+    for _ in 0..16 {
+        match successors.get(&cur) {
+            Some(next) if next == to => return true,
+            Some(next) if *next == cur => return false,
+            Some(next) => cur = *next,
+            None => return false,
+        }
+    }
+    false
+}
+
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -435,6 +456,19 @@ mod tests {
             .all(|c| c == '-' || "abcdefghjkmnpqrstuvwxyz23456789".contains(c)));
         assert_ne!(s, suggest_passphrase(), "난수");
         assert_eq!(validate("kiros33", &s), Validity::Ok);
+    }
+
+    #[test]
+    fn succ_reaches_is_transitive_and_bounded() {
+        let mut m = std::collections::HashMap::new();
+        m.insert([1u8; 32], [2u8; 32]);
+        m.insert([2u8; 32], [3u8; 32]);
+        assert!(succ_reaches(&m, &[1; 32], &[2; 32]));
+        assert!(succ_reaches(&m, &[1; 32], &[3; 32]), "두 단계");
+        assert!(!succ_reaches(&m, &[3; 32], &[1; 32]), "역방향 아님");
+        assert!(!succ_reaches(&m, &[9; 32], &[1; 32]));
+        m.insert([3u8; 32], [1u8; 32]); // 순환
+        assert!(!succ_reaches(&m, &[1; 32], &[7; 32]), "순환에서 멈춘다");
     }
 
     #[test]
