@@ -51,7 +51,7 @@ M-1 설계 ──► M0 기반 ──► M1 발견 ──► M2 대화 ──►
 | [0011](28-adr-0011-settings-persistence.md) 설정 직렬화·영속 | Entry 레지스트리=저장 스키마 · coalescing 저장 · 미지 키 보존 | ✅ **Accepted**(08-11 · D-25 — `crates/nexa-conf` 구현) |
 | [0012](31-adr-0012-shared-group-chat.md) 공유 그룹 채팅 | 소유자 roster 서명 · 초대 수락제 · pairwise 팬아웃 | ✅ **Accepted**(08-13 · D-28 — G1~G4 구현) |
 | [0013](32-adr-0013-server-modes.md) 서버 모드(릴레이·컨텐츠·관리) | 서버가 **아는 것**의 3단계 · S-0~S-3 불변식 · **§5 그룹 결합**(P-9~P-11 선행 제약) | 📐 **Proposed — 확정 대기**(D-29) · **방향성만**(구현은 별도 저장소·v1 이후 — DR-9) |
-| [0015](46-adr-0015-userid-handle-passphrase.md) UserId 사용자 관리(Handle+Passphrase) | 파생 UserId · **XXpsk3 소속 증명** · 승인/verify 0회 · sender copy·따라잡기 · 컨텐츠 모드 입력 | 📐 **Proposed**(09-06 · 🔴 **D-32** 7문항 — 브랜치 `feat/userid-handle`) |
+| [0015](46-adr-0015-userid-handle-passphrase.md) UserId 사용자 관리(Handle+Passphrase) | 파생 UserId · **XXpsk3 소속 증명** · 승인/verify 0회 · sender copy·따라잡기 · 컨텐츠 모드 입력 | 📐 **Proposed**(09-06 · 🔴 **D-32** 9문항 — 검토 보고 [47](47-adr-0015-review-userid-continuity.md): UserId = H(무작위 UserKey.pub) 3층 개정 · 브랜치 `feat/userid-handle`) |
 | [0014](35-adr-0014-native-file-dialog.md) 파일 선택 다이얼로그 | DR-6 경계 획정 · `FileDialogPort` · OS 네임스페이스는 OS 것 | ✅ **Accepted**(08-18 · D-30 — Win/mac 시스템 다이얼로그 · Linux 자체 피커 유지) |
 
 ---
@@ -310,7 +310,7 @@ M-1 설계 ──► M0 기반 ──► M1 발견 ──► M2 대화 ──►
 | **X-2e** | ★ **같은 서버 사용자 자동 목록 표시(roster)** — 검토 완료([32 §12-7](32-adr-0013-server-modes.md) · 08-22 사용자 질문): §12-5 확정("LAN ∪ 같은 서버 사용자")의 실물화 · **Announce 옵트인**(§2-3 비기록 원칙과 화해 — 켠 연결만 서버가 PeerId 보관·배포, 저장 0 불변) · 와이어 `Announce`/`PeerUp`/`PeerDown`(전방 호환) · 클라 = 서버 상대 행(지문 이름 · 클릭 = 사다리 · 프로필은 성립 후 P2P) · 서버 재배포 필요(beepd-v0.2.5) | P2 | 중 | ~~X-1 · Q-32-16~~ ✅ | ✅ (08-22 — **Q-32-16 확정 ⓐ 기본 on**(사용자 "지금 구현") · 와이어 3종+서버 listed 맵+RelayClient poll_roster+GUI 목록 병합·설정 토글·hot-swap · e2e(스냅숏·델타·상호성·이탈) · ★**실서버 프로브 = 상호 표시 검증 ✓**(beepd-v0.2.5 OCI 배포) · 잔여 = 양쪽 GUI 새 빌드 실기 · ★08-22 후속 = **공개 카드 확장 ✅**(AnnounceCard/PeerUpCard v2 — 옵트인 이름·이메일·소개 즉시 표시 · 서버 봉투 중계·전방 호환) + **lazy 편입**(틱당 256·상한 4096) + **왕래 기준 승격**(필터 바 — roster-only는 Server 칩에서만)) |
 | X-6 | **다중 기기 신원 구현**(DR-20 · [20](20-adr-0007-multi-device-identity.md)) — 기기 목록 서명·검증 · 페어링 SAS · 폐기/롤백 방지 · sender copy · 기기 관리 화면 · **주 기기 + 복구 시드** — FR-D-14·FR-M-8·FR-S-28~40 | P1 | 대 | D-20 · D-21 | ⏸ |
 | X-7 | **E2E 백업·기기 이전**([17 §8](17-adr-0005-history-at-rest.md)) — 새 기기가 **과거 기록**을 보게 하는 별개 설계(X-6로 안 풀림) | P2 | 대 | X-6 | ⏸ |
-| **X-13** | **UserId 사용자 관리 구현**([46 ADR-0015](46-adr-0015-userid-handle-passphrase.md) · 🔴 D-32 확정 후) — S0 파생·설정(하·1일) → S1 XXpsk3 세션+힌트+폴백(중·2~3일) → S2 신뢰 해제·기기 목록·"내 기기" 배지(중·2일) → S3 UserHello·sender copy·스레드 접기(중~상·3일) → S4 따라잡기·읽음 동기·저장 병합(중·2~3일) → **S5 컨텐츠 모드**(대·2주+ · beepd Content 와이어) · 브랜치 `feat/userid-handle` · X-6 서명 체인은 이 위에 v2로 | P1 | 대 | D-32 | 📐 (설계 09-06 · 개발 대기) |
+| **X-13** | **UserId 사용자 관리 구현**([46 ADR-0015](46-adr-0015-userid-handle-passphrase.md) · 🔴 D-32 확정 후) — S0 파생·설정(하·1일) → S1 XXpsk3 세션+힌트+폴백(중·2~3일) → S2 신뢰 해제·기기 목록·"내 기기" 배지(중·2일) → S3 UserHello·sender copy·스레드 접기(중~상·3일) → S4 따라잡기·읽음 동기·저장 병합(중·2~3일) → **S5 컨텐츠 모드**(대·2주+ · beepd Content 와이어) · 브랜치 `feat/userid-handle` · X-6 서명 체인은 이 위에 v2로 | P1 | 대 | D-32(9문항 · [47](47-adr-0015-review-userid-continuity.md) 3층 개정 반영) | 📐 (설계 09-06 · 개발 대기) |
 | X-8 | S5 서브넷 스캔 폴백 · 서브넷 너머 발견(FR-D-10) — 사용자 동의 UX | P2 | 중 | M1-8 | ⏸ |
 | X-9 | QR·초대 링크 노드 등록([19 §8](19-adr-0006-manual-endpoint.md)) | P2 | 중 | M5-3b | ⏸ |
 | X-10 | 진짜 그룹 채팅(FR-G-5) · 화면 캡처·주석 전송(FR-M-7) · 접근성(FR-U-8, R-9) · 전송 재개(FR-X-7) · 자동 업데이트(FR-P-6) · mDNS 광고 · 모바일 | P2 | 대 | v1 | ⏸ |

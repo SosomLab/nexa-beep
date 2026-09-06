@@ -7,7 +7,7 @@
 
 ## 2026-09-06
 
-- **(mac · 브랜치 `feat/userid-handle`) ★[46 ADR-0015] UserId 사용자 관리 설계 📐**(Handle+Passphrase — clip 조사 대조: 만남은 같은 식·신뢰는 **Noise XXpsk3** 소속 증명 · 제약 해제 표 · sender copy+따라잡기 · 컨텐츠 모드 사용자 마스터 키 · 난이도 S0~S5 · 🔴 D-32 7문항 · V1-1 미반영 발견). [journal](journal/2026-09-06.md).
+- **(mac · 브랜치 `feat/userid-handle`) ★[46 ADR-0015] UserId 사용자 관리 설계 📐**(Handle+Passphrase — clip 조사 대조: 만남은 같은 식·신뢰는 **Noise XXpsk3** 소속 증명 · 제약 해제 표 · sender copy+따라잡기 · 컨텐츠 모드 사용자 마스터 키 · 난이도 S0~S5 · 🔴 D-32 7문항 · V1-1 미반영 발견) → **[47 검토 보고서](47-adr-0015-review-userid-continuity.md)**(사용자 질문 선점·변경: 원안 `H(handle‖KP)` 기각 → **3층 = PeerId 앵커 · 무작위 UserKey(`UserId=H(pub)`) · 핸들+암호 = 문 열쇠** · Succession · 정직한 충돌 · D-32 9문항). [journal](journal/2026-09-06.md).
 
 ## 2026-09-05
 
