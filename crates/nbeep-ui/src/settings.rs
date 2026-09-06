@@ -1415,6 +1415,10 @@ const ENTRY_H: i32 = 52;
 const FONT_SECTION_H: i32 = 88;
 /// 설정 행에 붙는 정보 줄 높이(논리 px).
 const NOTE_H: i32 = 22;
+/// 행 노트 **아래** 여백 — 노트가 다음 행이 아니라 제 행에 붙어 보이게(09-06 사용자 지적 ·
+/// nexa-clip 09-03 반영과 동일: 예약만 하고 노트를 행 바닥에 그려 여백이 **위**로 가 있었다 —
+/// 서버 섹션 "테스트" 노트가 아래 설정과 더 가까워 어느 설정의 말인지 헷갈렸다).
+const NOTE_GAP_B: i32 = 16;
 /// 설명 워드랩 줄 높이(논리 px — Status 폰트 한 줄 + 행간).
 const DESC_LINE_H: i32 = 16;
 /// 위치 그리드 행 높이(3×3 미니 화면 93 + 여백).
@@ -2025,7 +2029,7 @@ impl SettingsWidget {
     /// 보였다).
     fn note_h(&self, idx: usize) -> i32 {
         if self.notes.contains_key(registry()[idx].key) {
-            self.s(NOTE_H + 16) // 아래 여백 16(08-23 2차 — 8은 여전히 붙어 보였다)
+            self.s(NOTE_H + NOTE_GAP_B) // 아래 여백(08-23 2차 — 8은 여전히 붙어 보였다)
         } else {
             0
         }
@@ -2883,7 +2887,13 @@ impl Widget for SettingsWidget {
                 false,
             );
             let nh = self.s(NOTE_H);
-            let r = Rect::new(row.rect.x, row.rect.bottom() - nh, row.rect.w, nh);
+            // 노트는 예약 슬롯의 **위쪽**에 — 아래 여백(NOTE_GAP_B)이 다음 행과 끊는다(09-06).
+            let r = Rect::new(
+                row.rect.x,
+                row.rect.bottom() - self.s(NOTE_GAP_B) - nh,
+                row.rect.w,
+                nh,
+            );
             let th = ctx.text_height();
             // 톤 있는 노트(08-22) — 옅은 배경 + 톤색 글자(검증됨이 한눈에 보이게).
             let color = match tone {
