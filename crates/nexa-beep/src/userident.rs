@@ -206,9 +206,10 @@ pub(crate) struct UserRuntime {
 }
 
 impl UserRuntime {
+    /// 값 변경·실패 = 인증 의존 재료(KP)만 비운다. **UserKey는 쥐고 있는다** — 다음 인증이 새 암호로
+    /// 재래핑할 근거(암호 변경 ≠ 신원 변경). 키를 버리는 것은 "신원에서 분리"뿐.
     pub(crate) fn clear(&mut self) {
         self.material = None;
-        self.key = None;
     }
 }
 
@@ -221,8 +222,12 @@ pub(crate) struct TestOk {
     pub(crate) created: bool,
 }
 
-/// 워커 본체 — KP 파생(60k · 수십 ms) → `user.key` 봉인 파일 열기/생성.
-/// 실패 = 이 기기에 **다른 암호로 만든** 사용자 키가 이미 있다(봉인 해제 실패)거나 IO.
+/// 워커 본체 — KP 파생(60k · 수십 ms) → `user.key` 봉인 파일 열기/생성/재래핑.
+/// - 열림 = 같은 두 값(재기동 · 재인증).
+/// - 안 열리는데 **쥔 키(`held`)가 있다** = 암호·핸들 변경 → 새 열쇠로 **재래핑**(재암호화 없음 ·
+///   UserId 불변 — ADR-0015 3층 · 47 §3-1).
+/// - 안 열리고 쥔 키도 없다 = 재기동 뒤 다른 암호 → **fail-closed**(이 기기 키를 열 수 없다).
+/// - 파일 없음 = 쥔 키를 봉인하거나(있으면) 새로 만든다(첫 기기 부트스트랩).
 ///
 /// # Errors
 /// 사용자에게 보일 한 줄 사유(비밀 없음).
@@ -231,34 +236,52 @@ pub(crate) fn derive_and_load(
     pass: &str,
     key_path: &Path,
     seal_domain: &[u8],
+    held: Option<&UserKey>,
 ) -> Result<TestOk, String> {
     let material = KeyMaterial::derive(normalize_handle(handle), pass)
         .ok_or_else(|| "핸들과 페어링 암호가 모두 필요합니다".to_string())?;
     let wrap = material.wrap_key();
+    let seal_to_file = |key: &UserKey| -> Result<(), String> {
+        let env = nbeep_store::sealed::seal(seal_domain, &wrap, &key.to_bytes())
+            .map_err(|e| format!("user.key 봉인 실패: {e}"))?;
+        debug_assert!(env.len() > USERKEY_LEN);
+        nbeep_store::privfile::write_atomic(key_path, &env)
+            .map_err(|e| format!("user.key 저장 실패: {e}"))
+    };
     match std::fs::read(key_path) {
         Ok(bytes) => {
-            let plain = nbeep_store::sealed::open(seal_domain, &wrap, &bytes).ok_or_else(|| {
-                "user.key: 이 기기의 사용자 키가 다른 암호로 봉인되어 있습니다".to_string()
-            })?;
-            let key = UserKey::from_bytes(&plain)
-                .ok_or_else(|| "user.key: 손상된 사용자 키(덮어쓰지 않음)".to_string())?;
-            Ok(TestOk {
-                material,
-                key,
-                created: false,
-            })
+            if let Some(plain) = nbeep_store::sealed::open(seal_domain, &wrap, &bytes) {
+                let key = UserKey::from_bytes(&plain)
+                    .ok_or_else(|| "user.key: 손상된 사용자 키(덮어쓰지 않음)".to_string())?;
+                return Ok(TestOk {
+                    material,
+                    key,
+                    created: false,
+                });
+            }
+            if let Some(k) = held {
+                seal_to_file(k)?;
+                return Ok(TestOk {
+                    material,
+                    key: k.clone(),
+                    created: false,
+                });
+            }
+            Err("user.key: 이 기기의 사용자 키가 다른 암호로 봉인되어 있습니다".to_string())
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            let key = UserKey::generate().map_err(|e| format!("난수원 실패: {e}"))?;
-            let env = nbeep_store::sealed::seal(seal_domain, &wrap, &key.to_bytes())
-                .map_err(|e| format!("user.key 봉인 실패: {e}"))?;
-            nbeep_store::privfile::write_atomic(key_path, &env)
-                .map_err(|e| format!("user.key 저장 실패: {e}"))?;
-            debug_assert!(env.len() > USERKEY_LEN);
+            let (key, created) = match held {
+                Some(k) => (k.clone(), false),
+                None => (
+                    UserKey::generate().map_err(|e| format!("난수원 실패: {e}"))?,
+                    true,
+                ),
+            };
+            seal_to_file(&key)?;
             Ok(TestOk {
                 material,
                 key,
-                created: true,
+                created,
             })
         }
         Err(e) => Err(format!("user.key 읽기 실패: {e}")),
@@ -342,9 +365,9 @@ mod tests {
         std::fs::create_dir_all(&d).unwrap();
         let p = d.join("user.key");
         let dom = b"user-key-test";
-        let t1 = derive_and_load("kiros33", "abcd-efgh-jkmn", &p, dom).unwrap();
+        let t1 = derive_and_load("kiros33", "abcd-efgh-jkmn", &p, dom, None).unwrap();
         assert!(t1.created);
-        let t2 = derive_and_load("kiros33", "abcd-efgh-jkmn", &p, dom).unwrap();
+        let t2 = derive_and_load("kiros33", "abcd-efgh-jkmn", &p, dom, None).unwrap();
         assert!(!t2.created);
         assert_eq!(
             t1.key.user_id(),
@@ -353,11 +376,25 @@ mod tests {
         );
         assert_eq!(t1.material.psk(), t2.material.psk());
         assert!(
-            derive_and_load("kiros33", "", &p, dom).is_err(),
+            derive_and_load("kiros33", "", &p, dom, None).is_err(),
             "빈 암호 = 거부"
         );
-        let err = derive_and_load("kiros33", "other-pass-9999", &p, dom).unwrap_err();
+        let err = derive_and_load("kiros33", "other-pass-9999", &p, dom, None).unwrap_err();
         assert!(err.contains("다른 암호"), "{err}");
+        // ★ 쥔 키가 있으면 새 암호로 재래핑 — UserId 불변(암호 변경 ≠ 신원 변경).
+        let t3 = derive_and_load("kiros33", "other-pass-9999", &p, dom, Some(&t1.key)).unwrap();
+        assert_eq!(t3.key.user_id(), t1.key.user_id());
+        assert!(!t3.created);
+        let t4 = derive_and_load("kiros33", "other-pass-9999", &p, dom, None).unwrap();
+        assert_eq!(
+            t4.key.user_id(),
+            t1.key.user_id(),
+            "재래핑 뒤엔 새 암호로 열린다"
+        );
+        assert!(
+            derive_and_load("kiros33", "abcd-efgh-jkmn", &p, dom, None).is_err(),
+            "옛 암호는 더는 못 연다"
+        );
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;

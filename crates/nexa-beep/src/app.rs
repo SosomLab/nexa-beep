@@ -311,6 +311,8 @@ enum AppEvent {
         target_seq: u64,
         kind: nbeep_core::AckKind,
     },
+    /// 세션 내 형제 증명 도착(ADR-0015 S1-e) — 대조는 메인(재료·바인딩이 거기 있다).
+    UserProof { peer: PeerId, proof: [u8; 32] },
     /// 수동 주소 연결 실패(DR-19 · M2-8 잔여 — 워커에서 돌아온다. 성공은 `Outbound`).
     AddFailed { addr: String, why: String },
     /// 공유 그룹 프레임 도착(M5-1g · ADR-0012) — 검증·적용은 메인(명부 단일 지점).
@@ -505,6 +507,9 @@ struct GroupXfer {
     /// 전 구성원 종결 → 풍선을 Done/Failed 요약으로 바꾼 뒤 true(이후 불변).
     closed: bool,
 }
+/// 형제 힌트 유예(ADR-0015 S1) — 광고 뒤 힌트 한 장과 부팅 인증 워커를 기다리는 시간.
+/// 광고 주기 800ms의 약 2배(힌트 1장 유실 흡수) · 사용자 체감 = 조용한 연결이 1.5초 늦는다.
+const SIBLING_GRACE_MS: u64 = 1_500;
 
 /// 자동 재연결 백오프 간격(ms · 사용자 확정 08-13 ⓑ) — 복구 시도이지 감시가 아니다.
 /// 상한(마지막 항) 시도까지 실패하면 **중단**한다(포트 스캔처럼 보이지 않게 · 수동
@@ -671,6 +676,54 @@ struct InboundSession {
     path: nbeep_core::PathClass,
     /// Managed 서버 경유 성립인가(08-22 — 헤더 배지 분리 · 표시 전용).
     via_server: bool,
+    /// ★ XXpsk3로 성립했는가(ADR-0015 §3-3) — 상대가 내 KP를 안다 = **같은 사용자의 기기**.
+    via_psk: bool,
+}
+
+/// 인바운드 수락 스레드와 공유하는 내 PSK(ADR-0015) — `Some` = 사용자 인증됨(XXpsk3 수락) ·
+/// `None` = XX만. 값이 바뀌면 앱이 갱신하고 다음 핸드셰이크부터 적용된다.
+type SharedPsk = std::sync::Arc<std::sync::Mutex<Option<[u8; 32]>>>;
+
+/// PSK 실패 백오프(ADR-0015 §3-3 · 온라인 추측 억제) — IP별 (실패 수, 첫 실패 시각).
+type PskBackoff =
+    std::sync::Arc<std::sync::Mutex<HashMap<std::net::IpAddr, (u32, std::time::Instant)>>>;
+
+/// 이 IP에 지금 psk 수락을 허용하는가 — 60초 안 5회 실패 = 10분 동안 XX만.
+fn psk_backoff_allow(map: &PskBackoff, ip: Option<std::net::IpAddr>) -> bool {
+    let Some(ip) = ip else {
+        return true;
+    };
+    let mut g = match map.lock() {
+        Ok(g) => g,
+        Err(e) => e.into_inner(),
+    };
+    match g.get(&ip) {
+        Some((n, t0)) if *n >= 5 => {
+            if t0.elapsed() >= std::time::Duration::from_secs(600) {
+                g.remove(&ip);
+                true
+            } else {
+                false
+            }
+        }
+        _ => true,
+    }
+}
+
+/// psk 핸드셰이크 실패 기록.
+fn psk_backoff_fail(map: &PskBackoff, ip: Option<std::net::IpAddr>) {
+    let Some(ip) = ip else {
+        return;
+    };
+    let mut g = match map.lock() {
+        Ok(g) => g,
+        Err(e) => e.into_inner(),
+    };
+    let e = g.entry(ip).or_insert((0, std::time::Instant::now()));
+    if e.1.elapsed() >= std::time::Duration::from_secs(60) && e.0 < 5 {
+        *e = (0, std::time::Instant::now());
+    }
+    e.0 += 1;
 }
 impl std::fmt::Debug for InboundSession {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -815,6 +868,12 @@ struct Conversation {
     /// Managed 서버 경유로 성립했는가(08-22 — 헤더 배지 분리: 서버 경유 vs 인터넷
     /// 직결. **표시 전용** — 파일 게이트 정책은 path(PathClass)만 본다).
     via_server: bool,
+    /// 핸드셰이크 바인딩 `(해시, 내가 개시자)` — 세션 내 형제 증명(ADR-0015 S1-e)의 재료.
+    binding: Option<([u8; 32], bool)>,
+    /// 이 세션에서 내 증명을 이미 보냈는가(세션당 1회 — 반복 금지 [13 §12-1]).
+    proof_sent: bool,
+    /// 상대 증명 대조 실패 횟수(세션당 상한 — 온라인 추측 차단).
+    proof_fails: u8,
 }
 
 /// 진행 중 발신 상태(08-16 · 재개형 펌프) — Accept가 등록하고 액터 루프 틱이
@@ -1489,6 +1548,20 @@ fn spawn_session_actor(
                                         parked[pos].1 = true;
                                     }
                                 }
+                            }
+                        }
+                    }
+                    StreamId::Control if nbeep_core::UserProof::decode(&bytes).is_some() => {
+                        // 형제 증명(ADR-0015 S1-e) — 태그 11 · 대조는 메인.
+                        if let Some(p) = nbeep_core::UserProof::decode(&bytes) {
+                            if proxy
+                                .send_event(AppEvent::UserProof {
+                                    peer,
+                                    proof: p.proof,
+                                })
+                                .is_err()
+                            {
+                                return;
                             }
                         }
                     }
@@ -2503,26 +2576,48 @@ fn spawn_inbound_accept(
     incoming: std::sync::mpsc::Receiver<Box<dyn nbeep_core::Link>>,
     identity: std::sync::Arc<nbeep_crypto::Identity>,
     proxy: winit::event_loop::EventLoopProxy<AppEvent>,
+    psk: SharedPsk,
 ) {
     std::thread::spawn(move || {
+        let backoff: PskBackoff = PskBackoff::default();
         while let Ok(link) = incoming.recv() {
             let identity = std::sync::Arc::clone(&identity);
             let proxy = proxy.clone();
+            let psk = std::sync::Arc::clone(&psk);
+            let backoff = std::sync::Arc::clone(&backoff);
             std::thread::spawn(move || {
                 // 경로 등급은 핸드셰이크 **전** 실소켓 주소로 판정(M5-3c) — 세션이
                 // 링크를 삼키기 전 마지막 관측 지점이다. 소켓 아님(None) = Local.
-                let path = link
-                    .remote_ip()
-                    .map_or(nbeep_core::PathClass::Local, nbeep_core::class_of_ip);
-                // 핸드셰이크(블로킹) — 실패(자기 키 복제 U-P2 포함)면 조용히 버린다.
-                let Ok(session) = nbeep_crypto::NoiseSession::accept(link, &identity) else {
-                    return;
+                let ip = link.remote_ip();
+                let path = ip.map_or(nbeep_core::PathClass::Local, nbeep_core::class_of_ip);
+                // ★ 형제 기기 수락(ADR-0015 §3-3) — 내 PSK가 있으면 XX/XXpsk3를 첫 메시지로
+                //   가른다. 이 IP가 psk 실패를 반복했으면(온라인 추측) XX만 받는다.
+                let psk_now = if psk_backoff_allow(&backoff, ip) {
+                    match psk.lock() {
+                        Ok(g) => *g,
+                        Err(e) => *e.into_inner(),
+                    }
+                } else {
+                    None
                 };
+                // 핸드셰이크(블로킹) — 실패(자기 키 복제 U-P2 포함)면 조용히 버린다.
+                let (session, via_psk) =
+                    match nbeep_crypto::NoiseSession::accept_any(link, &identity, psk_now.as_ref())
+                    {
+                        Ok(v) => v,
+                        Err(_) => {
+                            if psk_now.is_some() {
+                                psk_backoff_fail(&backoff, ip);
+                            }
+                            return;
+                        }
+                    };
                 let _ = proxy.send_event(AppEvent::Inbound {
                     session: Box::new(InboundSession {
                         session,
                         path,
                         via_server: false, // LAN/직결 인바운드
+                        via_psk,
                     }),
                 });
             });
@@ -2541,6 +2636,7 @@ fn spawn_relay_accept(
     client: &std::sync::Arc<nbeep_relay::RelayClient>,
     identity: std::sync::Arc<nbeep_crypto::Identity>,
     proxy: winit::event_loop::EventLoopProxy<AppEvent>,
+    psk: SharedPsk,
 ) {
     let weak = std::sync::Arc::downgrade(client);
     std::thread::spawn(move || loop {
@@ -2554,6 +2650,10 @@ fn spawn_relay_accept(
         // 기다리지 않는다(LAN spawn_inbound_accept가 세션별 스레드를 쓰는 이유와 동일).
         let identity = std::sync::Arc::clone(&identity);
         let proxy = proxy.clone();
+        let psk_now = match psk.lock() {
+            Ok(g) => *g,
+            Err(e) => *e.into_inner(),
+        };
         std::thread::spawn(move || {
             // 실패는 조용히 — 상대가 보는 것은 Closed뿐(ADR-0006 §2 규칙 4 · LAN
             // 인바운드 핸드셰이크 실패와 같은 결).
@@ -2563,12 +2663,14 @@ fn spawn_relay_accept(
                 &identity,
                 true,
                 std::time::Duration::from_secs(12),
+                psk_now.as_ref(), // 형제 기기(XXpsk3)도 같은 사다리로 받는다(ADR-0015)
             ) {
                 let _ = proxy.send_event(AppEvent::Inbound {
                     session: Box::new(InboundSession {
                         session: via.session,
                         path: via.path,
                         via_server: true, // 서버 랑데부 성립(X-2b)
+                        via_psk: via.via_psk,
                     }),
                 });
             }
@@ -2709,6 +2811,21 @@ struct App {
     user_rt: crate::userident::UserRuntime,
     /// 인증 워커 세대(낡은 결과 폐기).
     user_gen: u64,
+    /// 형제 후보 힌트(ADR-0015 §3-4) — 상대가 광고한 LAN_tag와 관측 시각(**원문 보관** —
+    /// 일치 판정은 조회 시점에 내 재료로 한다: 부팅 직후 PBKDF2 워커가 끝나기 전에
+    /// 도착한 힌트를 버리면 첫 연결이 XX로 굳는다 · 09-06 실기). 만료 = 발견과 같은 60s.
+    sibling_hints: HashMap<PeerId, ([u8; 16], std::time::Instant)>,
+    /// XXpsk3로 성립한 형제 기기(런타임 · 세션마다 재확인 — S2에서 trust.seg 레코드로).
+    siblings: std::collections::HashSet<PeerId>,
+    /// 인바운드 수락 스레드와 공유하는 내 PSK(ADR-0015).
+    psk_shared: SharedPsk,
+    /// 사용자 신원 트레이스(`NEXA_USER_TRACE=1`) — 힌트·psk 선택·형제 성립을 stderr에
+    /// 남긴다(`NEXA_IME_TRACE` 선례 · 봉투만: 지문 앞자리와 참/거짓뿐).
+    user_trace: bool,
+    /// 마지막으로 발신한 LAN 힌트 태그의 에폭 일(자정 회전 감시).
+    user_tag_day: u64,
+    /// 다음 페어링 RID 탐색(릴레이 · 형제 없을 때 30s 간격) 시각(ms).
+    user_seek_at: u64,
     /// Managed 전환 보류(08-22 사용자 확정 2차) — 실행 중 모드를 Managed로 바꾼
     /// 직후는 **값이 검증돼 있어도** 자동 접속하지 않는다(Test가 풀 때까지).
     /// 부팅은 해당 없음(모드 변경 이벤트가 아니다 — 검증값이면 자동 유지).
@@ -5236,6 +5353,8 @@ impl App {
         let mut departed: Vec<nbeep_core::PeerEvent> = Vec::new();
         while let Ok(ev) = self.discovery.try_recv() {
             match ev {
+                // ★ 사용자 힌트(ADR-0015 §3-4) — 내 태그와 같으면 형제 후보(미검증 · 판정은 XXpsk3).
+                DiscoveryEvent::UserHint { peer, tag } => self.on_user_hint(peer, tag),
                 DiscoveryEvent::Appeared(hint) => {
                     // 최근 접속 관측(08-15 — 아는 상대만 · 60초 스로틀 영속).
                     self.trust.note_seen(hint.peer, unix_now_ms());
@@ -5258,7 +5377,7 @@ impl App {
                         //   실패 시 백오프로 스스로 다시 건다. or_insert = 진행
                         //   중 표식·기존 백오프 불침투(M4-6과 같은 문법).
                         if !self.conversations.contains_key(&hint.peer) {
-                            self.reconnect.entry(hint.peer).or_insert((0, 0));
+                            self.seed_reconnect(hint.peer);
                         }
                     }
                     // ★ 오프라인 대기 상대가 나타났다(M4-6) — 즉시 연결 후보로.
@@ -5270,7 +5389,7 @@ impl App {
                     {
                         // or_insert — 진행 중 표식(u64::MAX)·기존 백오프를 덮지 않는다
                         // (Appeared는 비컨마다 온다 — 덮으면 1.5초마다 재시도 폭주).
-                        self.reconnect.entry(hint.peer).or_insert((0, 0));
+                        self.seed_reconnect(hint.peer);
                     }
                 }
                 DiscoveryEvent::Vanished(peer) => {
@@ -5876,9 +5995,11 @@ impl App {
         let identity = std::sync::Arc::clone(&self.identity);
         let pin = self.data_dir.join("server.pin");
         let proxy = self.proxy.clone();
+        // ★ 사용자 페어링 RID 3개(ADR-0015 §3-4) — 기기별 RID와 나란히 등록(서버 무변경).
+        let extra = self.user_pair_rids();
         // 접속·Noise·DNS는 워커에서(수 초 블로킹 — UI 불가침). 결과는 이벤트로.
         std::thread::spawn(move || {
-            let outcome = match nbeep_relay::attach(&raw, &identity, &pin) {
+            let outcome = match nbeep_relay::attach(&raw, &identity, &pin, &extra) {
                 Ok(at) => Ok(Box::new(at)),
                 Err(nbeep_relay::AttachError::Resolve) => Err(ServerAttachFail::Resolve),
                 Err(nbeep_relay::AttachError::Relay(nbeep_relay::RelayError::PinMismatch {
@@ -6082,6 +6203,7 @@ impl App {
         } else {
             crate::userident::UserState::Unconfigured(crate::userident::Validity::Empty)
         };
+        self.user_apply_runtime(); // 인증 의존 기능 즉시 중지(PSK·태그·형제 집합)
         self.refresh_approval_ui();
     }
 
@@ -6133,10 +6255,16 @@ impl App {
         self.refresh_approval_ui();
         let path = self.data_dir.join("user.key");
         let proxy = self.proxy.clone();
+        let held = self.user_rt.key.clone(); // 암호·핸들 변경 = 재래핑 근거(신원 불변)
         std::thread::spawn(move || {
-            let result =
-                crate::userident::derive_and_load(&handle, &pass, &path, crate::gate::SEAL_USERKEY)
-                    .map(Box::new);
+            let result = crate::userident::derive_and_load(
+                &handle,
+                &pass,
+                &path,
+                crate::gate::SEAL_USERKEY,
+                held.as_ref(),
+            )
+            .map(Box::new);
             let _ = proxy.send_event(AppEvent::UserTestDone { gen, result });
         });
     }
@@ -6168,6 +6296,7 @@ impl App {
                         &user_id.short(),
                     ],
                 ));
+                self.user_apply_runtime();
             }
             Err(why) => {
                 self.user_rt.clear();
@@ -6177,9 +6306,261 @@ impl App {
                     self.conf_mark();
                 }
                 self.set_status(nbeep_core::tf(nbeep_core::Msg::StfUserTestFail, &[&why]));
+                self.user_apply_runtime();
             }
         }
         self.refresh_approval_ui();
+    }
+
+    /// 사용자 힌트 관측 — 내 LAN_tag(어제·오늘·내일)와 같으면 형제 후보로 기억한다.
+    /// 다르면 무시(남의 사용자 · 정보 없음). 기능이 꺼져 있으면 아무것도 하지 않는다.
+    fn on_user_hint(&mut self, peer: PeerId, tag: [u8; 16]) {
+        if self.settings.get("user.enabled") != "on" {
+            return; // 기능 꺼짐 = 보관도 하지 않는다(발견과 무관한 상대 상태를 들고 있지 않는다)
+        }
+        self.sibling_hints
+            .insert(peer, (tag, std::time::Instant::now()));
+        if self.user_trace {
+            eprintln!(
+                "[user] hint from {} match={}",
+                peer.short(),
+                self.is_sibling_candidate(peer)
+            );
+        }
+        // 이미 XX로 선 세션이 있으면 세션 안에서 증명해 승격한다(재접속 없음 · 1회).
+        if !self.siblings.contains(&peer) && self.conversations.contains_key(&peer) {
+            self.send_user_proof(peer, false);
+        }
+    }
+
+    /// 세션 내 형제 증명 송신(세션당 1회) — `force`가 아니면 힌트 후보에게만(증명값은
+    /// 태그와 같은 노출 등급 — 후보 아닌 상대에게 내 KP 파생물을 더 주지 않는다).
+    fn send_user_proof(&mut self, peer: PeerId, force: bool) {
+        if !force && !self.is_sibling_candidate(peer) {
+            return;
+        }
+        let Some(psk) = self.user_rt.material.as_ref().map(|m| m.psk()) else {
+            return;
+        };
+        if !self.user_state.active() {
+            return;
+        }
+        let Some(conv) = self.conversations.get_mut(&peer) else {
+            return;
+        };
+        if conv.proof_sent {
+            return;
+        }
+        let Some((hh, initiator)) = conv.binding else {
+            return;
+        };
+        let proof = nbeep_crypto::userkey::session_proof(&psk, &hh, initiator);
+        conv.proof_sent = true;
+        let _ = conv.out_tx.send(SessionCmd::Control(vec![
+            nbeep_core::UserProof { proof }.encode()
+        ]));
+        if self.user_trace {
+            eprintln!("[user] proof sent to {} force={force}", peer.short());
+        }
+    }
+
+    /// 상대 증명 대조 — 내 PSK로 같은 세션·반대 역할의 값을 재계산해 상수 시간 비교.
+    /// 맞으면 형제 확정(+내 증명 회신) · 틀리면 세션당 3회까지만 무시하고 그 뒤는 폐기.
+    fn on_user_proof(&mut self, peer: PeerId, proof: [u8; 32]) {
+        let psk = self.user_rt.material.as_ref().map(|m| m.psk());
+        let Some(conv) = self.conversations.get_mut(&peer) else {
+            return;
+        };
+        let ok = match (psk, conv.binding, self.user_state.active()) {
+            (Some(psk), Some((hh, initiator)), true) if conv.proof_fails < 3 => {
+                let want = nbeep_crypto::userkey::session_proof(&psk, &hh, !initiator);
+                nbeep_crypto::userkey::proof_eq(&want, &proof)
+            }
+            _ => false,
+        };
+        if !ok {
+            conv.proof_fails = conv.proof_fails.saturating_add(1);
+            if self.user_trace {
+                eprintln!("[user] proof from {} rejected", peer.short());
+            }
+            return;
+        }
+        if self.user_trace {
+            eprintln!("[user] proof from {} verified", peer.short());
+        }
+        self.note_sibling(peer, true);
+        self.send_user_proof(peer, true); // 회신(이미 보냈으면 no-op)
+        let title = self.peer_title(peer);
+        self.set_status(nbeep_core::tf(self.connected_msg(peer), &[&title]));
+        let mut inv = Invalidations::default();
+        self.refresh_rows(&mut inv);
+        if let Some(id) = self.main_id {
+            self.request_redraw(id);
+        }
+    }
+
+    /// 형제 후보인가 — 이미 psk 성립했거나, 60s 안의 힌트가 **내 재료의 어제·오늘·내일
+    /// 태그**와 일치(재료가 아직 없으면 false — 판정은 매 조회 신선하다).
+    fn is_sibling_candidate(&self, peer: PeerId) -> bool {
+        if self.siblings.contains(&peer) {
+            return true;
+        }
+        let Some(m) = self.user_rt.material.as_ref() else {
+            return false;
+        };
+        self.sibling_hints.get(&peer).is_some_and(|(tag, t)| {
+            t.elapsed() < std::time::Duration::from_secs(60) && m.lan_tags_around().contains(tag)
+        })
+    }
+
+    /// 자동 연결(발견발 조용한 세션)을 **힌트 유예** 뒤에 걸 것인가 — 내 신원이 켜져
+    /// 있고(인증 중 또는 인증됨) 이 상대가 아직 형제로 판정되지 않았으면 참. 광고
+    /// 직후의 힌트 한 장(≈1ms 뒤)과 부팅 PBKDF2 워커(~100ms)를 기다리지 않으면 첫
+    /// 세션이 XX로 성립해 형제 판정을 놓친다(09-06 실기 — 재연결 때까지 "연결됨").
+    fn sibling_grace(&self, peer: PeerId) -> bool {
+        match &self.user_state {
+            crate::userident::UserState::Testing => true,
+            st if st.active() => !self.is_sibling_candidate(peer),
+            _ => false,
+        }
+    }
+
+    /// 발견발 재연결 사다리 시드(단일 지점) — 유예가 필요하면 첫 시도를 `SIBLING_GRACE_MS`
+    /// 뒤로(그 사이 힌트가 오면 psk_for가 XXpsk3를 고른다). or_insert = 진행 중 표식·
+    /// 기존 백오프 불침투(종전 문법 그대로).
+    fn seed_reconnect(&mut self, peer: PeerId) {
+        let due = if self.sibling_grace(peer) {
+            self.now_ms() + SIBLING_GRACE_MS
+        } else {
+            0
+        };
+        self.reconnect.entry(peer).or_insert((0, due));
+    }
+
+    /// 이 상대에게 XXpsk3로 열 것인가 — 인증 상태 ∧ 형제 후보일 때만 PSK.
+    fn psk_for(&self, peer: PeerId) -> Option<[u8; 32]> {
+        if !self.user_state.active() || !self.is_sibling_candidate(peer) {
+            return None;
+        }
+        self.user_rt.material.as_ref().map(|m| m.psk())
+    }
+
+    /// 릴레이에 함께 등록할 페어링 RID(어제·오늘·내일) — 미인증이면 빈 목록.
+    fn user_pair_rids(&self) -> Vec<nbeep_relay::Rid> {
+        if !self.user_state.active() {
+            return Vec::new();
+        }
+        self.user_rt
+            .material
+            .as_ref()
+            .map(|m| m.rids_around().to_vec())
+            .unwrap_or_default()
+    }
+
+    /// 세션 성립 상태 문구 — 내 기기(XXpsk3 형제)면 별도 문구(S1 실기 확인 지점 ·
+    /// 같은 핸들러 안에서 `note_sibling`의 문구가 최종 문구에 덮이던 것).
+    fn connected_msg(&self, peer: PeerId) -> nbeep_core::Msg {
+        if self.siblings.contains(&peer) {
+            nbeep_core::Msg::StfConnectedOwnOpen
+        } else {
+            nbeep_core::Msg::StfConnectedOpen
+        }
+    }
+
+    /// 세션 성립 시 형제 판정 반영 — psk로 성립했으면 형제 집합에 넣고 알린다.
+    /// psk가 아니면 **빼지 않는다**(같은 상대의 다른 경로가 XX일 수 있다 · 종료 시 제거).
+    fn note_sibling(&mut self, peer: PeerId, via_psk: bool) {
+        if self.user_trace {
+            eprintln!("[user] session {} via_psk={via_psk}", peer.short());
+        }
+        if via_psk && self.siblings.insert(peer) {
+            self.set_status(format!("내 기기 연결됨 — {}", self.peer_title(peer)));
+        }
+    }
+
+    /// 인증 상태 → 런타임 반영(단일 지점): 공유 PSK · LAN 힌트 태그 · 형제 집합 · 릴레이 재등록.
+    fn user_apply_runtime(&mut self) {
+        let active = self.user_state.active();
+        let (psk, tag) = match (active, self.user_rt.material.as_ref()) {
+            (true, Some(m)) => {
+                let day = nbeep_crypto::userkey::current_epoch_day();
+                self.user_tag_day = day;
+                (Some(m.psk()), Some(m.lan_tag(day)))
+            }
+            _ => (None, None),
+        };
+        if let Ok(mut g) = self.psk_shared.lock() {
+            *g = psk;
+        }
+        self.transport.set_user_tag(tag);
+        if active {
+            // 이미 선 세션 중 힌트 후보 = 세션 안에서 증명(기능을 나중에 켠 경우).
+            let live: Vec<PeerId> = self.conversations.keys().copied().collect();
+            for p in live {
+                if !self.siblings.contains(&p) {
+                    self.send_user_proof(p, false);
+                }
+            }
+        } else {
+            self.siblings.clear();
+            self.sibling_hints.clear();
+        }
+        // 릴레이 등록 RID 집합이 바뀐다(페어링 RID 추가/제거) — 재접속으로 재등록.
+        if self.relay.is_some() {
+            self.server_settings_changed();
+        }
+    }
+
+    /// 사용자 층 주기 처리(2s 페이스 — server_tick 뒤) — 자정 태그 회전 · 형제 없을 때
+    /// 릴레이 페어링 RID 탐색(30s · 아무 형제와도 세션이 없을 때만 — clip 규칙).
+    fn user_tick(&mut self) {
+        if !self.user_state.active() {
+            return;
+        }
+        let day = nbeep_crypto::userkey::current_epoch_day();
+        if day != self.user_tag_day {
+            if let Some(m) = self.user_rt.material.as_ref() {
+                self.transport.set_user_tag(Some(m.lan_tag(day)));
+            }
+            self.user_tag_day = day;
+        }
+        let now = self.now_ms();
+        if now < self.user_seek_at || !self.siblings.is_empty() {
+            return;
+        }
+        let Some(client) = self.relay.clone().filter(|c| c.is_alive()) else {
+            return;
+        };
+        let Some(m) = self.user_rt.material.as_ref() else {
+            return;
+        };
+        self.user_seek_at = now + 30_000;
+        let rids = m.rids_around().to_vec();
+        let psk = m.psk();
+        let identity = std::sync::Arc::clone(&self.identity);
+        let proxy = self.proxy.clone();
+        std::thread::spawn(move || {
+            if let Ok(via) = nbeep_relay::connect_via_rids_first(
+                &client,
+                &identity,
+                &rids,
+                true,
+                std::time::Duration::from_secs(10),
+                &psk,
+            ) {
+                let _ = proxy.send_event(AppEvent::Outbound {
+                    session: Box::new(InboundSession {
+                        session: via.session,
+                        path: via.path,
+                        via_server: true,
+                        via_psk: via.via_psk,
+                    }),
+                    via_addr: None,
+                    intent: None,
+                    auto: true, // 자동 성립 — 창을 열지 않는다
+                });
+            }
+        });
     }
 
     /// 부팅 — 마커가 켜져 있고 값이 유효하면 재검증(워커)으로 재료를 되살린다.
@@ -6368,23 +6749,44 @@ impl App {
         // 서버 사다리 폴백 재료(X-2b ③) — LAN·수동 주소가 모두 닿지 않을 때만 쓴다
         // (S-1 LAN 우선 · docs/32 §0 경로 사다리).
         let relay = self.relay.clone();
+        // ★ 형제 후보(ADR-0015 §3-4 힌트·기성립)면 XXpsk3로 연다 — 실패하면 XX로 1회 폴백
+        //   (힌트가 틀렸거나 상대 기능 꺼짐 = 정상 결과 · 세션 사용 불가는 없다).
+        let psk_opt = self.psk_for(peer);
+        if self.user_trace {
+            eprintln!("[user] connect {} psk={}", peer.short(), psk_opt.is_some());
+        }
         std::thread::spawn(move || {
-            let conn = match transport.connect(peer) {
+            let dial = || match transport.connect(peer) {
                 Ok(link) => Ok(link),
                 Err(e) => match &manual {
                     Some(addr) => transport.add_endpoint(addr).map_err(|e2| format!("{e2:?}")),
                     None => Err(format!("{e:?}")),
                 },
             };
+            let conn = dial();
             let r = match conn {
                 Ok(link) => {
                     // 경로 등급 = 성립 소켓의 실주소(M5-3c) — 수동 폴백이면 공인망일 수 있다.
                     let path = link
                         .remote_ip()
                         .map_or(nbeep_core::PathClass::Local, nbeep_core::class_of_ip);
-                    nbeep_crypto::NoiseSession::initiate(link, &identity)
-                        .map(|s| (s, path, false))
-                        .map_err(|e| e.to_string())
+                    let hs = match psk_opt.as_ref() {
+                        Some(k) => nbeep_crypto::NoiseSession::initiate_psk(link, &identity, k)
+                            .map(|s| (s, true)),
+                        None => nbeep_crypto::NoiseSession::initiate(link, &identity)
+                            .map(|s| (s, false)),
+                    };
+                    match hs {
+                        Ok((s, vp)) => Ok((s, path, false, vp)),
+                        // psk 폴백 — 새 링크로 XX 1회(힌트 오판·상대 기능 꺼짐).
+                        Err(_) if psk_opt.is_some() => match dial() {
+                            Ok(link) => nbeep_crypto::NoiseSession::initiate(link, &identity)
+                                .map(|s| (s, path, false, false))
+                                .map_err(|e| e.to_string()),
+                            Err(e) => Err(e),
+                        },
+                        Err(e) => Err(e.to_string()),
+                    }
                 }
                 // ★ 서버 사다리(X-2b ③ — 펀치→릴레이): 발견·수동이 다 실패한 상대를
                 //   Managed 서버 랑데부로 시도. 성립 세션은 상대 키 인증 완료 상태고
@@ -6396,18 +6798,20 @@ impl App {
                         &peer,
                         true,
                         std::time::Duration::from_secs(10),
+                        psk_opt.as_ref(),
                     )
-                    .map(|via| (via.session, via.path, true))
+                    .map(|via| (via.session, via.path, true, via.via_psk))
                     .map_err(|e| format!("{why} · 서버 사다리 {e:?}")),
                     None => Err(why),
                 },
             };
             let _ = match r {
-                Ok((session, path, via_server)) => proxy.send_event(AppEvent::Outbound {
+                Ok((session, path, via_server, via_psk)) => proxy.send_event(AppEvent::Outbound {
                     session: Box::new(InboundSession {
                         session,
                         path,
                         via_server,
+                        via_psk,
                     }),
                     via_addr: None, // 수동 주소는 이미 기억돼 있다(성공 시 갱신 불요)
                     intent: Some(peer), // ★ 래치는 **넣은 키로** 뺀다
@@ -6448,6 +6852,7 @@ impl App {
                     &peer,
                     true,
                     std::time::Duration::from_secs(10),
+                    None,
                 );
                 let _ = match r {
                     Ok(via) => proxy.send_event(AppEvent::Outbound {
@@ -6455,6 +6860,7 @@ impl App {
                             session: via.session,
                             path: via.path,
                             via_server: true, // 지문 = 서버 랑데부
+                            via_psk: via.via_psk,
                         }),
                         via_addr: None, // 주소가 아니라 키로 찾았다 — 재연결도 사다리
                         intent: None,   // 수동 등록과 같은 결(래치 없음)
@@ -6494,6 +6900,7 @@ impl App {
                         session,
                         path,
                         via_server: false, // IP/도메인 직접 연결
+                        via_psk: false,    // 수동 주소는 XX(형제 판정은 힌트·랑데부 경로에서)
                     }),
                     via_addr: Some(addr), // 성공한 수동 주소 — 재연결용 기억(④)
                     intent: None,         // 수동 등록은 래치를 쓰지 않는다
@@ -6866,7 +7273,7 @@ impl App {
         self.flush_group_sends(peer);
         self.flush_direct_sends(peer); // 1:1 오프라인 대기(M4-6)
         self.refresh_chat_link(peer); // 헤더 아이콘 = 연결됨(M3-20 — 인바운드도)
-        self.set_status(nbeep_core::tf(nbeep_core::Msg::StfConnectedOpen, &[&title]));
+        self.set_status(nbeep_core::tf(self.connected_msg(peer), &[&title]));
         if let Some(mid) = self.main_id {
             self.request_redraw(mid);
         }
@@ -6879,6 +7286,7 @@ impl App {
         via_server: bool,
     ) {
         let peer = session.peer();
+        let binding = session.handshake_binding();
         let (out_tx, out_rx) = std::sync::mpsc::channel();
         let join = spawn_session_actor(
             session,
@@ -6908,8 +7316,16 @@ impl App {
                 lines,
                 path,
                 via_server,
+                binding,
+                proof_sent: false,
+                proof_fails: 0,
             },
         );
+        // ★ 형제 증명(ADR-0015 S1-e) — XX로 섰는데 힌트가 형제라 하면 세션 안에서 증명한다
+        //   (XXpsk3로 이미 섰으면 불필요). 재료가 없거나 후보가 아니면 조용히 건너뛴다.
+        if !self.siblings.contains(&peer) {
+            self.send_user_proof(peer, false);
+        }
         // ★ 원격 경로 고지(M5-3b — 조용히, 그러나 보이게): 인터넷 경유 세션은 스레드에
         //   1줄 남긴다. 지문 대조 전엔 파일이 막히는 이유가 여기서 설명된다(§5-1-3).
         if path == nbeep_core::PathClass::Remote {
@@ -10160,12 +10576,11 @@ impl App {
 
     fn apply_boot_settings(&mut self) {
         use nbeep_core::{ApprovalPolicy, BasicApproval};
-        self.user_boot(); // 사용자 신원(ADR-0015) — 마커·값에 따라 재검증
-                          // 기본 아바타 — 미설정이면 **12간지 중 무작위 배정 후 저장**(사용자 확정
-                          // 08-21 — 종전 키 지문 안정 배정에서 변경). 첫 부팅 1회 CSPRNG로 뽑아
-                          // **저장하므로 이후 실행에서 요동치지 않는다**(상대 화면 얼굴 안정 —
-                          // 08-14의 우려는 "저장 없는 매 실행 랜덤"에 대한 것이었다). 보더 색도
-                          // 같은 무작위 시드에서 유도(아바타와 한 몸의 첫인상).
+        // 기본 아바타 — 미설정이면 **12간지 중 무작위 배정 후 저장**(사용자 확정
+        // 08-21 — 종전 키 지문 안정 배정에서 변경). 첫 부팅 1회 CSPRNG로 뽑아
+        // **저장하므로 이후 실행에서 요동치지 않는다**(상대 화면 얼굴 안정 —
+        // 08-14의 우려는 "저장 없는 매 실행 랜덤"에 대한 것이었다). 보더 색도
+        // 같은 무작위 시드에서 유도(아바타와 한 몸의 첫인상).
         if self.settings.get("profile.avatar").is_empty() {
             // CSPRNG 32B — 그룹 uid·데이터 키와 같은 관례(Identity = getrandom 유래).
             let rnd = *nbeep_crypto::Identity::generate().peer_id().as_bytes();
@@ -10394,6 +10809,7 @@ impl App {
             local.incoming(),
             std::sync::Arc::clone(&self.identity),
             self.proxy.clone(),
+            std::sync::Arc::clone(&self.psk_shared),
         );
         self.transport = std::sync::Arc::new(local);
         self.table = nbeep_core::PeerTable::new(60_000);
@@ -14846,6 +15262,7 @@ impl ApplicationHandler<AppEvent> for App {
                 // 이 대화가 보이는 창을 다시 그린다.
                 self.redraw_conversation(peer);
             }
+            AppEvent::UserProof { peer, proof } => self.on_user_proof(peer, proof),
             AppEvent::ChatAck {
                 peer,
                 target_seq,
@@ -15775,6 +16192,7 @@ impl ApplicationHandler<AppEvent> for App {
                 self.redraw_conversation(peer);
             }
             AppEvent::Closed { peer } => {
+                self.siblings.remove(&peer); // 형제 자격은 세션 수명(ADR-0015 — 다음 세션이 재판정)
                 self.active_send.remove(&peer);
                 self.active_recv.remove(&peer);
                 self.clear_batch_approval(peer); // 세션 종료 = 요청 승인 잔여 마감(M4-2e)
@@ -15861,8 +16279,10 @@ impl ApplicationHandler<AppEvent> for App {
                     session,
                     path,
                     via_server,
+                    via_psk,
                 } = *session;
                 let peer = session.peer();
+                self.note_sibling(peer, via_psk);
                 self.connecting.finish(intent, Some(peer));
                 // ★ P-3(M5-3c · R-20) — 클릭한 상대와 **다른 키**가 성립했다면 그 수동
                 //   주소는 이제 그 사람의 경로가 아니다. 즉시 무효화(다음 클릭이 낡은
@@ -15906,7 +16326,7 @@ impl ApplicationHandler<AppEvent> for App {
                         // **조용한 연결**(자동 재연결 ⓑ · 프로필 pull 08-14) — 창을
                         // 열지 않는다(② 자동 열림 금지와 같은 규칙 · 카드와 대화 분리).
                         self.set_status(nbeep_core::tf(
-                            nbeep_core::Msg::StfConnectedOpen,
+                            self.connected_msg(peer),
                             &[&self.peer_title(peer)],
                         ));
                         let mut inv = Invalidations::default();
@@ -16016,6 +16436,7 @@ impl ApplicationHandler<AppEvent> for App {
                             &client,
                             std::sync::Arc::clone(&self.identity),
                             self.proxy.clone(),
+                            std::sync::Arc::clone(&self.psk_shared),
                         );
                         // 프레즌스 공개(X-2e — 기본 on · 설정 hot-swap은 별도 arm).
                         if self.settings.get("net.server.announce") != "off" {
@@ -16335,8 +16756,10 @@ impl ApplicationHandler<AppEvent> for App {
                     session,
                     path,
                     via_server,
+                    via_psk,
                 } = *session;
                 let peer = session.peer();
+                self.note_sibling(peer, via_psk);
                 if self.conversations.contains_key(&peer) {
                     return; // 이미 이 상대와 대화 중(아웃바운드 세션 존재) — 중복 인바운드 무시
                 }
@@ -16617,7 +17040,8 @@ impl ApplicationHandler<AppEvent> for App {
         }
         self.poll_discovery();
         self.server_tick(); // Managed 서버 접속 수렴(X-2b — 2s 페이스 내부 가드)
-                            // 설정 영속 tick(FR-P-9) — 조용 1s OR 상한 10s 충족 시 스냅샷 1회 저장.
+        self.user_tick(); // 사용자 층(ADR-0015) — 힌트 태그 자정 회전 · 페어링 RID 탐색
+                          // 설정 영속 tick(FR-P-9) — 조용 1s OR 상한 10s 충족 시 스냅샷 1회 저장.
         if self.conf.sched.tick(Instant::now()) {
             self.conf_save(false);
         }
@@ -18018,6 +18442,8 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
     let (data, index) = nbeep_plat::font::system_ui_font().expect("시스템 UI 폰트 없음");
     let font = nbeep_gfx::Font::from_static(data, index).expect("폰트 파싱");
     let dir = data_dir();
+    // 인바운드 수락 스레드와 공유하는 PSK(ADR-0015) — App과 acceptor가 같은 셀을 본다.
+    let psk_shared: SharedPsk = SharedPsk::default();
     // 0600 보장 이전 판이 남긴 664 비밀 파일을 부팅 1회 죈다(09-05 · idempotent · Win no-op).
     nbeep_store::privfile::tighten_data_dir(&dir);
     // 신원 영속(M2-5a) — 재시작해도 같은 PeerId. 키 파일 손상 시 **덮어쓰지 않고**
@@ -18144,6 +18570,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
                 local.incoming(),
                 std::sync::Arc::clone(&identity),
                 proxy.clone(),
+                std::sync::Arc::clone(&psk_shared),
             );
             // L1 링크 구독(M1-2 · FR-D-5) — OS raw 이벤트(폭주)를 디바운스로 접어
             // LinkChanged 1회로. quiet 1000ms는 잠정(D-8b 실측 후 확정 — [08 §8]).
@@ -18260,6 +18687,12 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         user_state: crate::userident::UserState::Unconfigured(crate::userident::Validity::Empty),
         user_rt: crate::userident::UserRuntime::default(),
         user_gen: 0,
+        sibling_hints: HashMap::new(),
+        siblings: std::collections::HashSet::new(),
+        psk_shared: std::sync::Arc::clone(&psk_shared),
+        user_trace: std::env::var_os("NEXA_USER_TRACE").is_some(),
+        user_tag_day: 0,
+        user_seek_at: 0,
         relay_hold: false,
         relay_last_err: None,
         relay_test_failed: None,
@@ -18503,7 +18936,10 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
     app.apply_boot_settings(); // 영속 설정 → 파생 런타임 상태(테마·정책 등 · M3-15)
     app.promote_local_groups(); // 구버전 로컬(동보) 그룹 → 그룹 대화(G4 마이그레이션)
     app.load_pii_sidecar(); // 연락처(PII) 봉인 사이드카 — cfg 구본보다 우선(08-17)
-                            // 데이터 키 테이블(셰레딩 · D-18 §7) — 기록 복원보다 먼저(개봉 키의 원천).
+                            // ★ 사용자 신원(ADR-0015)은 **사이드카 뒤** — 페어링 암호가 profile.sec에 있다(09-06 실기:
+                            //   apply_boot_settings 안에서 부르면 암호가 비어 "둘 다 필요"로 잠겼다).
+    app.user_boot();
+    // 데이터 키 테이블(셰레딩 · D-18 §7) — 기록 복원보다 먼저(개봉 키의 원천).
     app.datakeys =
         crate::keytable::KeyTable::load(app.data_dir.join("keys.seg"), app.identity.wrap_secret());
     app.restore_history(); // 대화 기록 복원(M2-5b · parked_lines에 · 대화창 열면 뜬다)

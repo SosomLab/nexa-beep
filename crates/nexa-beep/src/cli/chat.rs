@@ -1191,7 +1191,7 @@ enum LiveConn {
     /// LAN 발견·수동 주소 — 링크만 성립, 핸드셰이크는 호출자 몫(기존 경로).
     Lan(Box<dyn nbeep_core::Link>),
     /// 서버 랑데부([32 §13] — 펀치→릴레이 사다리) — 인증된 세션까지 성립.
-    Via(nbeep_relay::ViaSession),
+    Via(Box<nbeep_relay::ViaSession>),
 }
 
 /// **발견 가능한 인터랙티브 클라이언트**(`--chat-live [이름]`) — LocalDirect로 **발견 광고**(GUI
@@ -1306,6 +1306,7 @@ pub(crate) fn chat_live(name: &str, port: u16, server: Option<&str>, identity_pa
                 &identity,
                 true,
                 std::time::Duration::from_secs(12),
+                None, // CLI 단말은 사용자 층 없음(XX만)
             ) {
                 Ok(via) => {
                     println!(
@@ -1358,8 +1359,9 @@ pub(crate) fn chat_live(name: &str, port: u16, server: Option<&str>, identity_pa
                             &peer,
                             true,
                             std::time::Duration::from_secs(10),
+                            None,
                         ) {
-                            Ok(via) => Some(LiveConn::Via(via)),
+                            Ok(via) => Some(LiveConn::Via(Box::new(via))),
                             Err(e) => {
                                 println!("\r[연결] 실패: {}", via_msg(e));
                                 None
@@ -1475,7 +1477,7 @@ fn via_msg(e: nbeep_relay::ViaError) -> &'static str {
 /// GUI와 공유), 여기는 CLI 출력만. 실패는 `None` — 호출자는 LAN만으로 계속한다(S-2).
 fn attach_server(raw: &str, identity: &nbeep_crypto::Identity) -> Option<nbeep_relay::RelayClient> {
     let pin_path = crate::app::data_dir().join("server.pin");
-    match nbeep_relay::attach(raw, identity, &pin_path) {
+    match nbeep_relay::attach(raw, identity, &pin_path, &[]) {
         Ok(at) => {
             if at.pin_write_failed {
                 eprintln!("[서버] ⚠ 핀 저장 실패 — 다음 접속에서 다시 첫 접속으로 보인다");
@@ -1569,6 +1571,7 @@ pub(crate) fn chat_connect_via(peer_hex: &str, server: Option<&str>, identity_pa
         &peer,
         true,
         std::time::Duration::from_secs(15),
+        None,
     ) {
         Ok(via) => {
             println!("[연결] 성립 — 경로: {}", taken_label(via.taken));
@@ -1724,6 +1727,7 @@ fn drain_discovery(
 ) {
     while let Ok(ev) = rx.try_recv() {
         match ev {
+            nbeep_net::DiscoveryEvent::UserHint { .. } => {} // CLI 단말은 사용자 층 없음
             nbeep_net::DiscoveryEvent::Appeared(h) => {
                 let mut p = peers.borrow_mut();
                 if !p.iter().any(|(id, _)| *id == h.peer) {

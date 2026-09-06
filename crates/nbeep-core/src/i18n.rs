@@ -1046,6 +1046,8 @@ pub enum Msg {
     StfFileWhy,
     StfTrustReject,
     StfConnectedOpen,
+    /// 내 기기(같은 UserKey · XXpsk3 성립) 연결 — `{}` = 표시 이름(ADR-0015 S1).
+    StfConnectedOwnOpen,
     StfManualConnFail,
     // ── 그룹 (M5-1 · ADR-0012) ──
     /// 카테고리: 그룹.
@@ -1556,6 +1558,7 @@ impl Msg {
             Msg::StfFileWhy => ["File: {}", "파일: {}", "文件：{}", "ファイル: {}"],
             Msg::StfTrustReject => ["Trust decision rejected: {}", "신뢰 판정 거부: {}", "信任判定被拒：{}", "信頼判定拒否: {}"],
             Msg::StfConnectedOpen => ["Connected: {} — open from the list", "연결됨: {} — 목록에서 열기", "已连接：{} — 从列表打开", "接続済み: {} — リストから開く"],
+            Msg::StfConnectedOwnOpen => ["My device connected (verified): {} — open from the list", "내 기기 연결됨(인증): {} — 목록에서 열기", "我的设备已连接（已验证）：{} — 从列表打开", "自分のデバイスが接続（認証済み）: {} — リストから開く"],
             Msg::StfManualConnFail => ["Manual connection failed ({}): {}", "수동 연결 실패({}): {}", "手动连接失败（{}）：{}", "手動接続失敗({}): {}"],
             Msg::CatAppearance => ["Appearance", "모양", "外观", "外観"],
             Msg::CatFont => ["Font", "글꼴", "字体", "フォント"],

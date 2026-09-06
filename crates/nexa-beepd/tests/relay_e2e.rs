@@ -157,7 +157,8 @@ fn ladder_takes_udp_on_loopback() {
 
     let a_side = std::thread::spawn(move || {
         let mut via =
-            nbeep_relay::connect_via(&ca, &ida, &peer_b, true, Duration::from_secs(10)).unwrap();
+            nbeep_relay::connect_via(&ca, &ida, &peer_b, true, Duration::from_secs(10), None)
+                .unwrap();
         assert_eq!(
             via.taken,
             nbeep_relay::PathTaken::Udp,
@@ -170,7 +171,8 @@ fn ladder_takes_udp_on_loopback() {
     });
 
     let inc = cb.accept_incoming(Duration::from_secs(10)).unwrap();
-    let mut via = nbeep_relay::accept_via(&cb, inc, &idb, true, Duration::from_secs(15)).unwrap();
+    let mut via =
+        nbeep_relay::accept_via(&cb, inc, &idb, true, Duration::from_secs(15), None).unwrap();
     assert_eq!(
         via.taken,
         nbeep_relay::PathTaken::Udp,
@@ -200,7 +202,8 @@ fn ladder_falls_back_to_relay() {
 
     let a_side = std::thread::spawn(move || {
         let mut via =
-            nbeep_relay::connect_via(&ca, &ida, &peer_b, true, Duration::from_secs(10)).unwrap();
+            nbeep_relay::connect_via(&ca, &ida, &peer_b, true, Duration::from_secs(10), None)
+                .unwrap();
         assert_eq!(
             via.taken,
             nbeep_relay::PathTaken::Relay,
@@ -214,7 +217,8 @@ fn ladder_falls_back_to_relay() {
     assert!(inc.peer_udp.is_some(), "여는 쪽은 프로브했다(관측 있음)");
     // 받는 쪽은 펀치 없이(punch=false) — 프로브를 안 하므로 여는 쪽 OpenResult엔
     // 내 관측이 없고, 여는 쪽 사다리는 릴레이 단을 탄다.
-    let mut via = nbeep_relay::accept_via(&cb, inc, &idb, false, Duration::from_secs(15)).unwrap();
+    let mut via =
+        nbeep_relay::accept_via(&cb, inc, &idb, false, Duration::from_secs(15), None).unwrap();
     assert_eq!(via.taken, nbeep_relay::PathTaken::Relay);
     assert_eq!(via.session.recv().unwrap(), b"over relay rung");
 
@@ -284,7 +288,7 @@ fn attach_pin_tofu_and_liveness() {
 
     let id = Identity::generate();
     // ① 첫 접속 — TOFU 핀 저장.
-    let at1 = nbeep_relay::attach(&raw, &id, &pin).unwrap();
+    let at1 = nbeep_relay::attach(&raw, &id, &pin, &[]).unwrap();
     assert!(at1.first_pin, "핀 파일이 없으니 첫 접속");
     assert!(!at1.pin_write_failed);
     assert_eq!(at1.client.server_peer(), server.server_peer);
@@ -297,7 +301,7 @@ fn attach_pin_tofu_and_liveness() {
     drop(at1);
 
     // ② 재접속 — 핀 일치(첫 접속 아님).
-    let at2 = nbeep_relay::attach(&raw, &id, &pin).unwrap();
+    let at2 = nbeep_relay::attach(&raw, &id, &pin, &[]).unwrap();
     assert!(!at2.first_pin, "핀이 있으니 대조 경로");
     let addr = at2.addr.clone();
     drop(at2);
@@ -305,7 +309,7 @@ fn attach_pin_tofu_and_liveness() {
     // ③ 핀 변조(다른 키) — 접속 중단(시끄럽게 · 재핀은 사람의 결정).
     let wrong = Identity::generate().peer_id();
     nbeep_relay::pinfile::store(&pin, &addr, &wrong).unwrap();
-    match nbeep_relay::attach(&raw, &id, &pin) {
+    match nbeep_relay::attach(&raw, &id, &pin, &[]) {
         Err(nbeep_relay::AttachError::Relay(nbeep_relay::RelayError::PinMismatch {
             expected,
             got,
@@ -318,7 +322,7 @@ fn attach_pin_tofu_and_liveness() {
 
     // ④ 서버 종료 → 액터 사망 → is_alive = false (GUI 재접속 틱의 판정 근거).
     nbeep_relay::pinfile::store(&pin, &addr, &server.server_peer).unwrap();
-    let at3 = nbeep_relay::attach(&raw, &id, &pin).unwrap();
+    let at3 = nbeep_relay::attach(&raw, &id, &pin, &[]).unwrap();
     server.shutdown();
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     while at3.client.is_alive() {
