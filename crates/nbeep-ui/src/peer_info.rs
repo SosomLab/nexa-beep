@@ -66,6 +66,8 @@ pub struct PeerInfo {
     pub safety_number: String,
     /// 이미 지문 대조 완료(`FingerprintVerified`) — true면 버튼 대신 완료 표시.
     pub verified: bool,
+    /// 내 기기(ADR-0015 S2) — 대조 버튼 대신 보라 문구(승인·대조 불필요 · 세션 한정).
+    pub own_device: bool,
 }
 
 /// 상대 프로필 카드 위젯.
@@ -173,7 +175,9 @@ impl Widget for PeerInfoWidget {
             self.closed = true;
         }
         // 대조 버튼(M3-6) — 검증 전엔 "대조 완료", 검증 후엔 "인증 취소"(상호 배타).
-        if self.info.verified {
+        // 내 기기는 둘 다 없다(PSK가 대조다 — ADR-0015 §4).
+        if self.info.own_device {
+        } else if self.info.verified {
             self.unverify.on_event(ev, inv);
             if self.unverify.take_clicked() {
                 self.unverify_req = true;
@@ -291,7 +295,19 @@ impl Widget for PeerInfoWidget {
         y += ctx.text_height() + self.s(14);
         // ── 지문 대조(M3-6) — 08-17 사용자 확정: 60자리 SAS는 숨기고 위 키 지문만
         //    다른 채널로 대조. safety_number는 "대조 가능한 상대" 게이트로만 쓴다.
-        if !self.info.safety_number.is_empty() {
+        if self.info.own_device {
+            // 내 기기(ADR-0015 S2) — 대조 안내·버튼 대신 보라 한 줄(색 = 목록 배지와 동일).
+            ctx.select_font(FontSlot::Status, false);
+            let vt = t(Msg::CardOwnDevice);
+            let tw = ctx.text_width(vt);
+            ctx.text(
+                b.x + (b.w - tw) / 2,
+                y + self.s(6),
+                b,
+                vt,
+                crate::peer_list::OWN_DEVICE_COLOR,
+            );
+        } else if !self.info.safety_number.is_empty() {
             ctx.select_font(FontSlot::Status, false);
             ctx.text(x, y, b, t(Msg::CardVerifyPrompt), theme.text);
             y += ctx.text_height() + self.s(6);

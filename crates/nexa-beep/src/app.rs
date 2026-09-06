@@ -3619,10 +3619,10 @@ impl App {
         // 사전 점검 — 핀 미고정·차단은 여전히 막는다. **상호 미왕래는 경고 후 진행**
         // (08-13 확정: 수신측이 수동 승인으로 강등해 받으므로 발신을 막을 이유가 없다).
         {
-            use nbeep_core::TrustStore as _;
-            if let Err(reason) =
-                nbeep_core::check_send_eligibility(self.trust.level(peer), self.ledger.get(peer))
-            {
+            if let Err(reason) = nbeep_core::check_send_eligibility(
+                self.effective_trust(peer),
+                self.ledger.get(peer),
+            ) {
                 if matches!(reason, nbeep_core::DenyReason::NoMutualConversation) {
                     self.push_peer_note(peer, nbeep_core::t(nbeep_core::Msg::NoticeFirstContact));
                 } else {
@@ -3836,10 +3836,10 @@ impl App {
             // ③ 핀 미고정·차단 = 그 구성원만 제외(1:1은 모달 차단 — 그룹은 카운터).
             //   상호 미왕래는 1:1과 동일하게 경고 후 진행(수신측 수동 승인 강등).
             {
-                use nbeep_core::TrustStore as _;
-                if let Err(reason) =
-                    nbeep_core::check_send_eligibility(self.trust.level(*m), self.ledger.get(*m))
-                {
+                if let Err(reason) = nbeep_core::check_send_eligibility(
+                    self.effective_trust(*m),
+                    self.ledger.get(*m),
+                ) {
                     if matches!(reason, nbeep_core::DenyReason::NoMutualConversation) {
                         first_contact.push(self.peer_title(*m));
                     } else {
@@ -5516,7 +5516,7 @@ impl App {
         let fpres = fval(self.settings.get("list.filter.presence"));
         let ftrust = fval(self.settings.get("list.filter.trust"));
         entries.retain(|e| {
-            let lvl = self.trust.level(e.peer);
+            let lvl = self.effective_trust(e.peer);
             // ★ 왕래 기준 승격(확정안) — roster로만 아는(왕래 전무·미발견) 상대는
             //   그룹1 'Server'를 골랐을 때만 나타난다. 핀·인증·세션이 생기면 전체로.
             let roster_only = self.server_peers.contains(&e.peer)
@@ -5654,6 +5654,7 @@ impl App {
                 let online = self.table.get(entry.peer).is_some()
                     || self.server_peers.contains(&entry.peer)
                     || self.conversations.contains_key(&entry.peer);
+                let own_device = self.siblings.contains(&entry.peer);
                 PeerRow {
                     entry,
                     trust,
@@ -5669,6 +5670,7 @@ impl App {
                     fav,
                     blocked,
                     conflict,
+                    own_device,
                     last_seen_label,
                 }
             })
@@ -6479,6 +6481,19 @@ impl App {
             .unwrap_or_default()
     }
 
+    /// ★ 신뢰 판정 단일 통로(ADR-0015 §4 · S2-c) — **내 기기(형제)는 `FingerprintVerified`로
+    /// 본다**: 저장 등급은 손대지 않고(핀은 TOFU 그대로 · 세션이 끝나면 원래 등급 — "UserId를
+    /// 바꾼 PC는 별도 PC"가 캐시 없이 성립) 판정 지점만 여기로 모은다. 풀리는 것은 "사람을
+    /// 믿느냐"(승인·대조·원격 대기·무음)뿐 — 격리·무해화는 무변경(DR-13).
+    fn effective_trust(&self, peer: PeerId) -> nbeep_core::TrustLevel {
+        use nbeep_core::TrustStore as _;
+        if self.siblings.contains(&peer) {
+            nbeep_core::TrustLevel::FingerprintVerified
+        } else {
+            self.trust.level(peer)
+        }
+    }
+
     /// 세션 성립 상태 문구 — 내 기기(XXpsk3 형제)면 별도 문구(S1 실기 확인 지점 ·
     /// 같은 핸들러 안에서 `note_sibling`의 문구가 최종 문구에 덮이던 것).
     fn connected_msg(&self, peer: PeerId) -> nbeep_core::Msg {
@@ -7183,11 +7198,10 @@ impl App {
     /// 읽음 확인 되쏘기(N-2 · 수신자가 대화창에서 봤을 때). `chat.send_read`(기본
     /// on · 수신자 제어) AND 검증 상대일 때만(프라이버시 게이트 · 전달과 **독립**).
     fn send_read_ack(&self, peer: PeerId) {
-        use nbeep_core::TrustStore as _;
         if self.settings.get("chat.send_read") != "on" {
             return;
         }
-        if self.trust.level(peer) == nbeep_core::TrustLevel::Unverified {
+        if self.effective_trust(peer) == nbeep_core::TrustLevel::Unverified {
             return;
         }
         let Some(&seq) = self.last_recv_seq.get(&peer) else {
@@ -7508,7 +7522,6 @@ impl App {
     /// 자체는 core([`nbeep_core::file_allowed`])에 있고, 설정 `xfer.remote_files`
     /// (기본 끄기)가 발신 옵트인으로 들어간다.
     fn remote_file_blocked(&self, peer: PeerId) -> bool {
-        use nbeep_core::TrustStore as _;
         // 경로별 옵트인(08-23 분리 — 사용자 확정): 서버 경유/인터넷 직결이 각자
         // 스위치를 갖는다(기본 둘 다 끄기).
         let via_server = self.conversations.get(&peer).is_some_and(|c| c.via_server);
@@ -7517,7 +7530,7 @@ impl App {
         } else {
             self.settings.get("xfer.remote_files_internet") == "on"
         };
-        !nbeep_core::file_allowed(self.peer_path(peer), self.trust.level(peer), opt_in)
+        !nbeep_core::file_allowed(self.peer_path(peer), self.effective_trust(peer), opt_in)
     }
 
     /// 대화 뷰 생성(스레드 복원 — 상태-뷰 분리).
@@ -7831,7 +7844,6 @@ impl App {
 
     /// 원시 캐시 → 표시 행(값싼 가공만 — 이름 조회·시각 라벨·썸네일 캐시).
     fn quarantine_rows(&mut self) -> Vec<nbeep_ui::QRow> {
-        use nbeep_core::TrustStore as _;
         let secret = self.identity.wrap_secret();
         let raws = self.qrows_raw.clone();
         raws.into_iter()
@@ -7879,7 +7891,7 @@ impl App {
                     risk: r.risk,
                     mismatch: r.mismatch,
                     size: r.size,
-                    trust: self.trust.level(r.sender),
+                    trust: self.effective_trust(r.sender),
                     from,
                     when,
                     thumb,
@@ -9309,6 +9321,7 @@ impl App {
                 use nbeep_core::TrustStore as _;
                 self.trust.level(peer) == nbeep_core::TrustLevel::FingerprintVerified
             },
+            own_device: self.siblings.contains(&peer),
         }
     }
 
@@ -9399,10 +9412,15 @@ impl App {
                             |p| {
                                 use nbeep_core::TrustStore as _;
                                 let lv = self.trust.level(p);
-                                nbeep_core::tf(
+                                let mut line = nbeep_core::tf(
                                     nbeep_core::Msg::CmdTrustStatus,
                                     &[&self.peer_title(p), trust_label(lv)],
-                                )
+                                );
+                                if self.siblings.contains(&p) {
+                                    line.push_str(" · ");
+                                    line.push_str(nbeep_core::t(nbeep_core::Msg::TrustOwnDevice));
+                                }
+                                line
                             },
                         );
                         self.push_chat_notice(peer, &line);
@@ -13338,8 +13356,7 @@ impl App {
                 }
                 // OS 알림(M3-8) — 방 이름 제목 · 발신자 미검증 = 무음(DR-25).
                 {
-                    use nbeep_core::TrustStore as _;
-                    let silent = self.trust.level(peer) == nbeep_core::TrustLevel::Unverified;
+                    let silent = self.effective_trust(peer) == nbeep_core::TrustLevel::Unverified;
                     let body = self.notify_body(&text);
                     self.notify_user(
                         &format!("g:{gid:?}"),
@@ -13502,8 +13519,8 @@ impl App {
     /// 숫자를 맞춘 뒤 버튼을 눌러야 한다(이 통로 안의 문답으로 승격하면 중간자가 그
     /// 문답을 대신할 수 있다 — SAS가 막으려는 바로 그것).
     fn suggest_verify(&mut self, peer: PeerId) {
-        use nbeep_core::TrustStore as _;
-        if self.trust.level(peer) != nbeep_core::TrustLevel::Pinned {
+        // 내 기기는 권유 자체가 없다(ADR-0015 §4 — PSK가 대조다).
+        if self.effective_trust(peer) != nbeep_core::TrustLevel::Pinned {
             return;
         }
         if !self.verify_hinted.insert(peer) {
@@ -15338,9 +15355,8 @@ impl ApplicationHandler<AppEvent> for App {
                                            //   흘린다 — 알림 신뢰 게이트와 같은 결). 사람 확인(Acknowledged)은
                                            //   수동 버튼(M3-9). 액터가 아니라 여기서 — 설정이 단일 원천(hot-swap).
                 {
-                    use nbeep_core::TrustStore as _;
                     let on = self.settings.get("chat.send_delivered") == "on";
-                    let verified = self.trust.level(peer) != nbeep_core::TrustLevel::Unverified;
+                    let verified = self.effective_trust(peer) != nbeep_core::TrustLevel::Unverified;
                     if on && verified {
                         if let Some(conv) = self.conversations.get(&peer) {
                             let ack = nbeep_core::ChatAck {
@@ -15361,8 +15377,7 @@ impl ApplicationHandler<AppEvent> for App {
                 // ④ 등급 강도(docs/24 §3-3 근사): **미검증 = 자동 강등(종전 무음
                 // 게이트가 이긴다)** · 검증·핀 상대의 Urgent = **앱이 앞에 있어도**
                 // 알림(force — "지금 당장"의 요청). Notice는 종전 배경 알림 그대로.
-                use nbeep_core::TrustStore as _;
-                let silent = self.trust.level(peer) == nbeep_core::TrustLevel::Unverified;
+                let silent = self.effective_trust(peer) == nbeep_core::TrustLevel::Unverified;
                 let title = self.peer_title(peer);
                 let force = importance >= 2 && !silent;
                 self.notify_user(
@@ -15420,9 +15435,7 @@ impl ApplicationHandler<AppEvent> for App {
                 sha256,
             } => {
                 let _ = sha256; // 지연 해시(08-18) — Offer 선언은 0, 검증은 Done에서
-                use nbeep_core::{
-                    judge_offer, DenyReason, OfferVerdict, RejectWhy, TrustStore as _,
-                };
+                use nbeep_core::{judge_offer, DenyReason, OfferVerdict, RejectWhy};
                 // 수신 xid 장부(M4-2e ⑥) — 이름으로 ⏸▶✕ 대상 xid를 찾는다
                 // (active_recv 1슬롯은 배치에서 최신 파일로 덮인다).
                 {
@@ -15439,12 +15452,18 @@ impl ApplicationHandler<AppEvent> for App {
                 // ★ 판정은 **여기 한 곳**에서만 — 신뢰·왕래 장부·설정이 전부 여기 있다.
                 // 액터는 중계만 하므로 정책이 두 벌로 갈라지지 않는다.
                 self.tick_approval();
-                let verdict = judge_offer(
-                    self.trust.level(peer),
-                    self.ledger.get(peer),
-                    self.approval,
-                    self.now_ms(),
-                );
+                // ★ 내 기기(ADR-0015 §4 · S2-c) = 승인 자동(미왕래 강등도 면제 — "같은 사용자면
+                //   전부 푼다"). 격리·무해화·실체화 게이트는 그대로다(DR-13).
+                let verdict = if self.siblings.contains(&peer) {
+                    OfferVerdict::Accept
+                } else {
+                    judge_offer(
+                        self.effective_trust(peer),
+                        self.ledger.get(peer),
+                        self.approval,
+                        self.now_ms(),
+                    )
+                };
                 // ★ 이전 승인 연장(M4-10c · 08-18 사용자 요청) — `.part`는 **수락된**
                 //   수신에서만 남는다(take_partials가 accepted만 회수). 즉 매치 =
                 //   "이 파일은 이미 승인했었다"의 증거 → 승인 창을 다시 묻지 않고
@@ -15527,9 +15546,8 @@ impl ApplicationHandler<AppEvent> for App {
                         }
                         // OS 알림(M3-8) — **파일명은 싣지 않는다**(FR-S-41 금지 목록).
                         {
-                            use nbeep_core::TrustStore as _;
                             let silent =
-                                self.trust.level(peer) == nbeep_core::TrustLevel::Unverified;
+                                self.effective_trust(peer) == nbeep_core::TrustLevel::Unverified;
                             // 그룹 팬아웃(M5-1h) — 알림도 그 방으로(제목 = 방 이름 ·
                             // 클릭 = 그룹 대화 · G::Msg 알림과 같은 문법).
                             let g = self.recv_group_gid(peer, &name, size).and_then(|gid| {
@@ -16883,8 +16901,8 @@ impl ApplicationHandler<AppEvent> for App {
                 //   목록에 스스로를 심는다 — 등록은 사람이 결정한다. 아는 상대(핀·대조)의
                 //   원격 인바운드는 즉시 통과.
                 if path == nbeep_core::PathClass::Remote {
-                    use nbeep_core::TrustStore as _;
-                    if self.trust.level(peer) == nbeep_core::TrustLevel::Unverified {
+                    // 내 기기(형제)는 원격이어도 요청 대기 없이 통과(ADR-0015 §4).
+                    if self.effective_trust(peer) == nbeep_core::TrustLevel::Unverified {
                         // 대기 슬롯 1개(모달 1개 규칙) — 점유 중 추가 원격 인바운드는
                         // 드롭(fail-closed · 정보 최소 — 침묵 폐기, 상대는 Closed만 관측).
                         if self.pending_remote.is_some() {

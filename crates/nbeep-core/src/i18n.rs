@@ -377,6 +377,10 @@ pub enum Msg {
     TrustVerifiedTip,
     TrustBlockedTip,
     TrustConflictTip,
+    /// 내 기기(ADR-0015 S2 — 같은 사용자 키로 인증된 형제 PC) 배지 라벨·툴팁·카드 문구.
+    TrustOwnDevice,
+    TrustOwnDeviceTip,
+    CardOwnDevice,
     // ── 창 제목 ──
     SettingsTitle,
     // ── 타입어헤드 설정 ──
@@ -2329,6 +2333,9 @@ impl Msg {
                 "メッセージ入力…（Enter 送信 · Shift+Enter 改行 · Esc 一覧）",
             ],
             Msg::TrustUnverified => ["Unverified", "미검증", "未验证", "未検証"],
+            Msg::TrustOwnDevice => ["My device", "내 기기", "我的设备", "自分のデバイス"],
+            Msg::TrustOwnDeviceTip => ["Verified by my user key — my other PC (no approval or fingerprint check)", "같은 사용자 키로 인증된 내 다른 PC — 승인·지문 대조 불필요", "由同一用户密钥验证的我的另一台电脑 — 无需批准或指纹核对", "同じユーザー鍵で認証された自分の別のPC — 承認・指紋照合は不要"],
+            Msg::CardOwnDevice => ["✓ My device — verified by my user key (pairing passphrase)", "✓ 내 기기 — 같은 사용자 키(페어링 암호)로 인증됨", "✓ 我的设备 — 已由同一用户密钥（配对口令）验证", "✓ 自分のデバイス — 同じユーザー鍵（ペアリング合言葉）で認証済み"],
             Msg::TrustPinned => ["Pinned", "핀 고정", "已固定", "ピン留め"],
             Msg::TrustVerified => ["Verified", "대조 완료", "已核对", "照合済み"],
             Msg::TrustBlocked => ["Blocked", "차단됨", "已屏蔽", "ブロック済み"],
