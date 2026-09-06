@@ -69,6 +69,7 @@
 | 영역 | 기능 | 상태 |
 | --- | --- | --- |
 | 전송 | **릴레이 서버 모드**(DR-8 ②) — `crates/nexa-beepd`(★DR-9 개정 08-21 = 같은 저장소·배포 분리 `beepd-v*`) | 🚧 (★**08-21 X-1 MVP ✅** — 프레즌스(회전 RID)·랑데부 관측·blind 릴레이·서버 핀 + X-UDP-a/b `UdpLink`·루프백 펀칭 배관 · e2e 6종 · 잔여 = 경로 사다리 X-UDP-e·GUI/CLI Managed 배선·실 NAT 실기) |
+| **신원** | ★ **UserId 사용자 관리(ADR-0015 · DR-29 — 핸들+페어링 암호 · 3층: PeerId 앵커/무작위 UserKey/문 열쇠)** — 같은 값의 내 PC들을 **승인·대조 0회**로 묶는다: Noise XXpsk3 + 세션 내 증명 · 키 봉인본 동기(오래된 키 승 · 후계 우선) · 서명 기기 목록 UserHello · 후계 증명서(기기 분실 키 교체 · 사슬 · 정직한 충돌) · "내 기기" 보라 배지 · 신뢰 해제 12곳 → [46](46-adr-0015-userid-handle-passphrase.md)·[47](47-adr-0015-review-userid-continuity.md)·[48](48-adr-0015-decisions-impact-flows.md) | 🚧 (**09-06 S0~S2 ✅** — 크립토·설정·XXpsk3·UserHint·릴레이 페어 RID·키 동기·신뢰 해제·배지·UserHello·Succession · 실기 = 2-인스턴스 형제 성립·키 병합·교체·사슬 ✓ · 잔여 = S3 sender copy·스레드 UserId 접기 → S4 따라잡기 → S5 컨텐츠 모드) |
 | **신원** | **다중 기기 신원**(DR-20) — 여러 PC를 한 사용자로 묶어 **메시지·파일을 같이 수신**. 서명된 기기 목록 · 페어링 SAS · 폐기/롤백 방지 · sender copy · **주 기기 + 복구 시드** · **기기 관리 화면** → [20 ADR-0007](20-adr-0007-multi-device-identity.md) | 📐 설계 (✅ Accepted) |
 | 신원 | **E2E 백업·기기 이전** — 새 기기가 **과거 기록**을 보게 하는 별개 설계. 다중 기기 팬아웃으로는 풀리지 않는다 | ⏸ 포스트 v1 |
 | 발견 | 서브넷/라우터 너머 연결 | ☐ |
