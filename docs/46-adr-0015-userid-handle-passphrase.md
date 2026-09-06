@@ -265,9 +265,9 @@ K_thread, K_content = 무작위 · Wrap(K_user_master)로 봉투 ① · 상대 �
 
 | # | 슬라이스 | 내용 | 난이도 | 크기 | 의존 | 위험 |
 |:--:|---|---|:--:|:--:|---|---|
-| **S0** | 신원 파생·UserKey·설정 | `nbeep-crypto::userkey`(PBKDF2·파생 5종 · **Ed25519 생성/서명/검증 = `ed25519-dalek 2`** · 벡터 테스트) · `user.key` 봉인 · 설정 `user.handle`/`user.passphrase`(봉인 사이드카 · 강도 표시 · 재생성) · `--whoami`에 UserId | **하~중** | 2일 | — | 의존 +1(트리 공유 실측 T-2) |
-| **S1** | PSK 세션 | `NoiseSession::initiate_psk/accept_psk`(XXpsk3) · 발견 꼬리 `LAN_tag` · 릴레이 `RID_pair` 3개 등록·Open · 실패 백오프 · **일반 XX 폴백** · 인바운드 accept가 두 패턴을 받는 방법(★ 첫 메시지로 판별 불가 → **힌트 기반 선택 + 실패 시 재시도** 실측 필요) | **중** | 2~3일 | S0 | 인바운드 패턴 판별 · 발견 패킷 꼬리 호환 실측 |
-| **S2** | 신뢰 해제 + 서명 기기 목록 + 후계 | `trust.seg` 레코드(`user_pub`·`list_ver`·`seen_max`) · `UserHello` 서명 검증 · `Succession`·충돌 표시 · UserKey 봉인본 동기 · `TrustStore::level/on_session` 소속 분기 · `judge_offer`·`file_allowed`·FR-S-25·`suggest_verify` 5곳 · "내 기기" 배지 · 차단 = UserId | **중** | 3일 | S1 | 12곳 회귀 — `trust.level` 흡수로 축소 · 충돌 UX |
+| **S0 ✅ 09-06** | 신원 파생·UserKey·설정 | `nbeep-crypto::userkey`(PBKDF2·파생 5종 · **Ed25519 생성/서명/검증 = `ed25519-dalek 2`** · 벡터 테스트) · `user.key` 봉인 · 설정 `user.handle`/`user.passphrase`(봉인 사이드카 · 강도 표시 · 재생성) · `--whoami`에 UserId | **하~중** | 2일 | — | 의존 +1(트리 공유 실측 T-2) |
+| **S1 ✅ 09-06** | PSK 세션 | `NoiseSession::initiate_psk/accept_psk`(XXpsk3) · 발견 꼬리 `LAN_tag` · 릴레이 `RID_pair` 3개 등록·Open · 실패 백오프 · **일반 XX 폴백** · 인바운드 accept가 두 패턴을 받는 방법(★ 첫 메시지로 판별 불가 → **힌트 기반 선택 + 실패 시 재시도** 실측 필요) | **중** | 2~3일 | S0 | 인바운드 패턴 판별 · 발견 패킷 꼬리 호환 실측 |
+| **S2 ✅ 09-06** | 신뢰 해제 + 서명 기기 목록 + 후계 | `trust.seg` 레코드(`user_pub`·`list_ver`·`seen_max`) · `UserHello` 서명 검증 · `Succession`·충돌 표시 · UserKey 봉인본 동기 · `TrustStore::level/on_session` 소속 분기 · `judge_offer`·`file_allowed`·FR-S-25·`suggest_verify` 5곳 · "내 기기" 배지 · 차단 = UserId | **중** | 3일 | S1 | 12곳 회귀 — `trust.level` 흡수로 축소 · 충돌 UX |
 | **S3** | UserHello + sender copy + 스레드 접기 | Control 태그 4 · 팬아웃 집합 확장 · sender copy 표시 규칙 · 뷰 계층 ThreadKey=UserId · 그룹 `sender_device`(P-10) | **중~상** | 3일 | S2 | app.rs 대화 상태(2730~) 전반 · 그룹 와이어 kind 신설 |
 | **S4** | 따라잡기 + 읽음 동기 + 저장 병합 | `SyncPull/SyncLines/SyncRead` · `history/u-*.seg` · 매핑 표 · 상한·예산 | **중** | 2~3일 | S3 | 봉인 키 계층 무변경 확인 · 대량 기록 성능 |
 | **S5** | 컨텐츠 모드 | beepd `Content` 타입 와이어 5종 · 클라 pull/push · 사용자 마스터 키 · 봉투 ① · 파일 1회 업로드(P-9 kind 8) · 보관함 온라인(X-3) · 쿼터/TTL | **대** | 2주+ | S4 · beepd 배포 | 서버 저장·인증·쿼터 · S-3 감사 · 실 NAT 실기 |
