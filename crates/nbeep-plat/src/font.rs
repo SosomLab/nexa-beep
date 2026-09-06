@@ -99,6 +99,78 @@ const FONT_DIRS: &[&str] = &[
     "/usr/local/share/fonts",
 ];
 
+/// ★ 기호·이모지 폴백 후보(09-07 · nexa-clip 09-04 이식 "각 OS별 Fallback 체인") — 주 글꼴·시스템
+/// 본에 없는 ✓·화살표·수학 기호·이모지를 받는다. **앞이 우선**(기호 전용 본을 먼저, 이모지 본은 마지막 —
+/// 이모지 본이 일반 기호까지 이모지풍으로 바꾸지 않게).
+///
+/// ⚠️ 정직한 한계: 래스터라이저(ab_glyph)는 TrueType **윤곽**만 그린다. Segoe UI Emoji는 흑백 윤곽을
+/// 함께 담고 있어 Windows는 흑백 이모지가 나오지만, Apple Color Emoji(sbix)·Noto Color Emoji(CBDT)는
+/// 비트맵뿐이라 넣지 않는다(넣으면 빈칸 — 두부보다 못하다). 컬러 이모지는 별도 과제.
+#[cfg(target_os = "macos")]
+const SYMBOL_CANDIDATES: &[(&str, u32, &str)] = &[
+    (
+        "/System/Library/Fonts/Apple Symbols.ttf",
+        0,
+        "Apple Symbols",
+    ),
+    (
+        "/System/Library/Fonts/Supplemental/Apple Symbols.ttf",
+        0,
+        "Apple Symbols",
+    ),
+    (
+        "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+        0,
+        "Arial Unicode MS",
+    ), // 광범위 커버리지(있는 기기만)
+];
+
+#[cfg(target_os = "windows")]
+const SYMBOL_CANDIDATES: &[(&str, u32, &str)] = &[
+    ("C:\\Windows\\Fonts\\seguisym.ttf", 0, "Segoe UI Symbol"),
+    ("C:\\Windows\\Fonts\\seguiemj.ttf", 0, "Segoe UI Emoji"), // 흑백 윤곽 이모지
+];
+
+#[cfg(target_os = "linux")]
+const SYMBOL_CANDIDATES: &[(&str, u32, &str)] = &[
+    (
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        0,
+        "DejaVu Sans",
+    ), // ✓·화살표·수학 대부분
+    (
+        "/usr/share/fonts/truetype/noto/NotoSansSymbols2-Regular.ttf",
+        0,
+        "Noto Sans Symbols2",
+    ),
+    (
+        "/usr/share/fonts/truetype/noto/NotoSansSymbols-Regular.ttf",
+        0,
+        "Noto Sans Symbols",
+    ),
+    (
+        "/usr/share/fonts/opentype/noto/NotoSansSymbols2-Regular.ttf",
+        0,
+        "Noto Sans Symbols2",
+    ),
+];
+
+/// ★ 기호·이모지 폴백 본들(존재하는 것만 · 후보 순서 유지 · 같은 이름은 첫 것만).
+/// 호출 측(앱의 UI 글꼴 로드)이 주 글꼴 뒤에 순서대로 붙인다.
+#[must_use]
+pub fn symbol_fallback_fonts() -> Vec<(&'static [u8], u32, &'static str)> {
+    let mut out: Vec<(&'static [u8], u32, &'static str)> = Vec::new();
+    for (path, idx, name) in SYMBOL_CANDIDATES {
+        if out.iter().any(|(_, _, n)| n == name) {
+            continue;
+        }
+        if let Some(data) = map_font(Path::new(path)) {
+            out.push((data, *idx, name));
+        }
+    }
+    out
+}
+
 /// 비교용 정규화 — 공백·하이픈·언더바를 지우고 소문자로("D2 Coding" == "d2coding").
 fn norm(s: &str) -> String {
     s.chars()
@@ -240,6 +312,15 @@ mod tests {
         assert_eq!(norm("D2 Coding"), "d2coding");
         assert_eq!(norm("Liberation-Mono"), "liberationmono");
         assert_eq!(norm("  Menlo  "), "menlo");
+    }
+
+    /// 기호 폴백 본 — 지원 3-OS 어디서든 최소 하나는 있다(✓ 커버리지는 앱 쪽 `load_ui_font` 회귀가 본다).
+    #[test]
+    fn symbol_fallback_fonts_exist_on_supported_targets() {
+        assert!(
+            !symbol_fallback_fonts().is_empty(),
+            "기호 폴백 본 0 — 후보 경로 점검"
+        );
     }
 
     #[test]

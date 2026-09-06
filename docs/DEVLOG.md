@@ -5,6 +5,10 @@
 
 ---
 
+## 2026-09-07
+
+- **(mac · main) ★글꼴 폴백 체인 = 두부 예방**(사용자 요청 · nexa-clip 09-01/09-04 이식 — Windows "□ Verified" 실기): `nbeep-gfx::Font` 얼굴 체인(글자 단위 첫 얼굴 · 기준선 주 폰트 · 탭/제어 규칙) · `nbeep-plat::symbol_fallback_fonts`(mac Apple Symbols·Arial Unicode / Win Segoe UI Symbol·Emoji / Linux DejaVu·Noto Symbols) · 앱 `load_ui_font` 체인+진단 1줄 · 회귀(✓·⚠·→) · 835 green. [journal](journal/2026-09-07.md).
+
 ## 2026-09-06
 
 - **(mac · main) ★2-PC 릴레이 실기 결함 2건 수정**(사용자 보고 Win↔Mac: 인증 뒤 서버 "미검증" · 같은 값인데 ID 다름) — `user_apply_runtime`이 `server_settings_changed`(=Test 전 보류)를 불러 페어 RID 등록이 안 됐던 것 → `relay_reattach_soft`(마커·보류 무변경 재등록) · 페어 RID 랑데부가 기존 대화와 겹치면 키·UserHello를 기존 채널로. 로컬 beepd 실기 = 외 5개 등록·보류 없음 ✓ · 2-PC 재실기 요청. [journal](journal/2026-09-06.md).

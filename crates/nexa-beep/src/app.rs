@@ -1781,6 +1781,53 @@ fn speed_label(bps: u64) -> String {
 }
 
 /// 현재 Unix 밀리초(목록 속성 — 최근 접속·대화 기록 · 08-15).
+/// UI 글꼴 로드(09-07 · nexa-clip 09-04 이식 — "두부 예방"): 주 글꼴(`family` = 사용자 지정 · None =
+/// 시스템 UI 본) 뒤에 **시스템 UI 본 → OS별 기호·이모지 본**을 순서대로 잇는다. 글자 단위 폴백이라
+/// 기준선·줄 높이는 주 글꼴이 계속 정한다. 실기 09-06 Windows: 맑은 고딕에 ✓(U+2713)가 없어
+/// "□ Verified"로 그려졌다 — Segoe UI Symbol이 받는다.
+fn load_ui_font(family: Option<&str>) -> Option<nbeep_gfx::Font> {
+    let sys = nbeep_plat::font::system_ui_font();
+    let mut font = match family.map(str::trim).filter(|f| !f.is_empty()) {
+        Some(fam) => match nbeep_plat::font::find_font_by_family(fam) {
+            Some((d, i)) => {
+                let mut f = nbeep_gfx::Font::from_static(d, i).ok()?;
+                if let Some((sd, si)) = sys {
+                    let _ = f.push_fallback(sd, si);
+                }
+                f
+            }
+            None => {
+                eprintln!("⚠ 글꼴 '{fam}'을(를) 못 찾았습니다 — 시스템 기본으로");
+                let (d, i) = sys?;
+                nbeep_gfx::Font::from_static(d, i).ok()?
+            }
+        },
+        None => {
+            let (d, i) = sys?;
+            nbeep_gfx::Font::from_static(d, i).ok()?
+        }
+    };
+    let mut names = Vec::new();
+    for (data, idx, name) in nbeep_plat::font::symbol_fallback_fonts() {
+        if font.push_fallback(data, idx).is_ok() {
+            names.push(name);
+        }
+    }
+    // 진단 1줄 — 실기에서 두부가 보이면 이 줄로 어느 본이 빠졌는지 안다(봉투만: 글꼴 이름).
+    if names.is_empty() {
+        eprintln!("글꼴 폴백: 기호 본 없음 — 주 글꼴에 없는 기호는 □로 보입니다");
+    } else {
+        eprintln!(
+            "글꼴 폴백: {} · ✓={} ⚠={} 🎉={}",
+            names.join(" → "),
+            font.covers('\u{2713}'),
+            font.covers('\u{26A0}'),
+            font.covers('\u{1F389}')
+        );
+    }
+    Some(font)
+}
+
 fn unix_now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -5193,6 +5240,8 @@ impl App {
     }
 
     /// 설정의 글꼴명으로 슬롯 얼굴을 다시 로드한다(빈 값 = 기본 폰트 사용).
+    /// 슬롯 얼굴(목록·메시지·상태·고정폭)은 체인 없이 1벌 — 없는 글자는 래스터가 기본 얼굴로
+    /// 폴백하고(08-10), 기본 얼굴은 시스템·기호 체인을 품고 있다(09-07).
     fn reload_faces(&mut self) {
         let load = |name: &str| -> Option<nbeep_gfx::Font> {
             if name.trim().is_empty() {
@@ -5201,7 +5250,13 @@ impl App {
             let (bytes, idx) = nbeep_plat::font::find_font_by_family(name)?;
             nbeep_gfx::Font::from_static(bytes, idx).ok()
         };
-        self.face_base = load(self.settings.get("font.base.family"));
+        // 기본 얼굴을 사용자 글꼴로 바꾸면 그 뒤에 시스템 본+기호 체인을 통째로 붙인다(두부 예방).
+        self.face_base = {
+            let name = self.settings.get("font.base.family").trim().to_string();
+            (!name.is_empty())
+                .then(|| load_ui_font(Some(&name)))
+                .flatten()
+        };
         self.face_peerlist = load(self.settings.get("font.peerlist.family"));
         self.face_message = load(self.settings.get("font.message.family"));
         self.face_status = load(self.settings.get("font.status.family"));
@@ -19177,8 +19232,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
             CtlMsg::CtxPaste => Msg::CtxPaste,
         })
     });
-    let (data, index) = nbeep_plat::font::system_ui_font().expect("시스템 UI 폰트 없음");
-    let font = nbeep_gfx::Font::from_static(data, index).expect("폰트 파싱");
+    let font = load_ui_font(None).expect("시스템 UI 폰트 없음");
     let dir = data_dir();
     // 인바운드 수락 스레드와 공유하는 PSK(ADR-0015) — App과 acceptor가 같은 셀을 본다.
     let psk_shared: SharedPsk = SharedPsk::default();
@@ -19704,6 +19758,23 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
     app.refresh_statuslog(); // 상태 로그(M3-22 — log.enabled면 여기서 기동)
     app.refresh_netmon(); // 네트워크 점검(08-21 — netmon.enabled면 여기서 기동)
     event_loop.run_app(&mut app).unwrap();
+}
+
+#[cfg(test)]
+mod font_fallback_tests {
+    /// 두부 예방(09-07): 시스템 UI 글꼴 체인이 UI가 쓰는 기호(✓ U+2713 · ⚠ U+26A0 · → U+2192 · · U+00B7)를
+    /// 덮는다 — 3-OS CI에서 각자의 폴백 본으로 실측(Windows 맑은 고딕 단독은 ✓가 없다).
+    #[test]
+    fn ui_font_chain_covers_ui_symbols() {
+        let f = super::load_ui_font(None).expect("시스템 UI 폰트");
+        for c in ['\u{2713}', '\u{26A0}', '\u{2192}', '\u{00B7}', '가', 'A'] {
+            assert!(
+                f.covers(c),
+                "글꼴 체인에 {c:?} 없음 (얼굴 {})",
+                f.face_count()
+            );
+        }
+    }
 }
 
 #[cfg(test)]
