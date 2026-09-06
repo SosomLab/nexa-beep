@@ -26,7 +26,7 @@
 
 ## 현재 상태 (2026-09-05 · **v0.2.14 공개 — 비밀 파일 0600 한 벌·nexa-clip 전달문 처리(09-05) · 목록 증발 결함 수정(09-03) · Linux 첫 실기 완주(.deb 런처·시스템 테마·트레이 포커스·자동 실행 인스턴스별 슬롯) · 클립보드 3-OS 자체 구현**)
 
-**설계는 사실상 끝났고**(문서 45종 · ADR 14종 = ✅13/📐1), **코드는 M1~M5가 병렬로 진행 중**이며,
+**설계는 사실상 끝났고**(문서 46종 · ADR 14종 = ✅13/📐1), **코드는 M1~M5가 병렬로 진행 중**이며,
 **배포는 3채널(Releases · Homebrew · winget/Chocolatey)까지 완주**했다.
 
 | 항목 | 상태 |
@@ -67,7 +67,7 @@ sudo dpkg -i nexa-beep-*-linux-x64.deb
 
 바로가기: [현황 STATUS](docs/STATUS.md) · [진행 DEVLOG](docs/DEVLOG.md) · [기능·마일스톤](docs/MILESTONES.md) · [종단 동작 설명서 30](docs/30-end-to-end-walkthrough.md) · [경쟁 조사 03](docs/03-competitive-landscape.md) · [결정 기록 10](docs/10-decision-record.md) · [이식 메모리](CLAUDE.md)
 
-요약·안내는 **[위키](https://github.com/SosomLab/nexa-beep/wiki)**(Install · Features · Architecture · Security · Development · Release Notes).
+사용법은 **[45 사용자 매뉴얼](docs/45-user-manual.md)**(화면 캡처 15장 · 위키 [User-Guide](https://github.com/SosomLab/nexa-beep/wiki/User-Guide) 거울). 요약·안내는 **[위키](https://github.com/SosomLab/nexa-beep/wiki)**(User-Guide · Install · Features · Architecture · Security · Development · Release Notes).
 단일 진실 원천(SSOT)은 언제나 저장소 `docs/`다.
 
 ## 프로젝트 정보 / 라이선스
