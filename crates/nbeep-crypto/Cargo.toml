@@ -18,6 +18,10 @@ testkit = ["nbeep-core/testkit"]
 sha2.workspace = true
 nbeep-core.workspace = true
 snow = "0.9.6"
+# ADR-0015(DR-29) 사용자 서명 키 — BSD-3 · curve25519-dalek 4를 snow와 공유(트리 증가 = 이 크레이트 1개 · 3.x는 dalek 5라 중복 트리 → 2.x 핀).
+ed25519-dalek = "2"
+# UserKey 시드 난수 — snow가 이미 끄는 의존(트리 증가 0).
+getrandom = "0.2"
 
 [dev-dependencies]
 # 세션 테스트가 core testkit의 duplex 링크 fake를 쓴다.

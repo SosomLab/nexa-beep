@@ -12,6 +12,7 @@
 pub mod keyfile;
 pub mod noise;
 pub mod sas;
+pub mod userkey;
 
 /// 세션 스텁(암호화 없음) — 릴레이 미포함(feature `testkit` 또는 테스트 빌드).
 #[cfg(any(test, feature = "testkit"))]
