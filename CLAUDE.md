@@ -87,7 +87,10 @@
 
 1. 이 CLAUDE.md + [docs/STATUS.md](docs/STATUS.md) → 2. [DEVLOG](docs/DEVLOG.md) 최상단 + 최신 journal → 3. 할 일 = [docs/TODO.md](docs/TODO.md) 순차.
 
-## 5. 다음 단계 (2026-09-06 · STATUS 09-06 8차 기준 — ADR-0015 UserId 사용자 관리 S0~S2 ✅ main 병합 · 다음 = S3)
+## 5. 다음 단계 (2026-09-06 · STATUS 09-06 9차 기준 — ADR-0015 UserId 사용자 관리 S0~S2 ✅ main 병합 · 2-PC 릴레이 결함 수정 · 다음 = S3)
+
+> **09-06 9차(mac · main)** — ★**2-PC 릴레이 실기 결함 2건 수정**(사용자 보고 Win↔Mac: 인증 뒤 서버 "미검증" · 같은 값인데 ID 다름): `user_apply_runtime`이 페어 RID 재등록을 `server_settings_changed`(=Test 전 보류)로 하던 것 → **`relay_reattach_soft`**(마커·보류 무변경 · ≤2s 재등록) · 페어 RID 랑데부가 기존 대화와 겹치면 키·UserHello를 기존 채널로. ⚠ **교훈 = 서버 경유 경로는 같은 PC 실기로 분리되지 않는다**(LAN 힌트가 항상 겹친다) — 2-PC 재실기 항목(TODO X-13).
+
 
 > **09-06 구현 요약(mac · `feat/userid-handle` → main)** — ★**X-13 S0~S2 완료(코드 12커밋 + 기록)**: **S0** `nbeep-crypto::userkey`(PBKDF2 60k → PSK·RID·LAN_tag·K_wrap · UserKey Ed25519 · `UserId=H(pub)`) · 설정 › 사용자(스위치 기본 off · 켜면 기본값 자동 배정+자동 인증 · 값 변경 = 마커 해제·기능 중지 · 봉인 보관 · 비밀 행 마스킹+[생성][눈]) · **S1** Noise **XXpsk3**(msg1 판별 · 왕복 0) · 발견 `UserHint`(LAN_tag · 핸들·암호 비방송) · 릴레이 페어 RID 3개+psk 랑데부 · 힌트 원문 보관+1.5s 유예 · ★**세션 내 형제 증명**(`HMAC(PSK, hh‖역할)` 태그 11 — XX로 선 세션을 재접속 없이 승격) · **S2** 키 봉인본 동기(태그 9 · `created_at` · 오래된 키 승 · **후계가 시각을 이긴다 — 추이**) · `effective_trust` 단일 통로 12곳(형제 = FingerprintVerified · 저장 등급 무변경 = UserId 바꾼 PC는 별도 PC) · **"내 기기" 보라 배지**(인증 실 모양 유지 · 런타임 재색) · `UserHello` 태그 4(trust.seg v3 · A-1 제시자 ∈ 목록) · **Succession** 태그 8(기기 분실 키 교체 · 5초 무장 2회 클릭 · 빨강+행 노트 · 실행 뒤 10초 잠금 · **사슬** 보관·전부 제시 · 정직한 충돌). 교훈 = **UserHello 핑퐁 되먹임**(상대 버전↑ = 내 버전↑ → 초당 수십 회 · 내 집합 변경 시만으로 정정 · [13 §12-1]) · 설정 위젯 "기본 타이핑 = 검색"이 행위 버튼 키 입력을 삼킴 → Space/Enter 활성화. 자동화 전체(831~833 green · ignored 2/2 · 4타깃 check · 릴레이 스모크 홀펀칭 · netmon 10분 warn 0 = UserHint 2배 · footprint 21MB · 평문 스캔 0). **다음 = S3**(sender copy · 스레드 키 UserId 접기 · 그룹 `sender_device`) · 실기 잔여 = 형제 파일 승인 0회(DnD)·연속 2회 교체 뒤 옛 키 형제 재결합(실클릭).
 
