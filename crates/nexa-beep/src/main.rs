@@ -35,6 +35,7 @@ mod imgdec;
 mod keytable;
 mod part;
 mod statuslog;
+mod userident;
 
 use cli::chat::{chat_connect_via, chat_interactive, chat_live, ChatRole};
 use cli::manual::{connect_manual, serve_manual};

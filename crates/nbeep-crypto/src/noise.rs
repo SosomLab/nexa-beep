@@ -15,6 +15,14 @@ use snow::{Builder, HandshakeState, TransportState};
 
 /// Noise 프로토콜 파라미터([docs/08] — X25519 / ChaCha20-Poly1305 / BLAKE2s).
 const PARAMS: &str = "Noise_XX_25519_ChaChaPoly_BLAKE2s";
+/// 형제 기기 세션(ADR-0015 §3-3 · DR-29) — `psk3` = 세 번째 메시지 뒤에 PSK를 섞는다.
+/// 정적 키 교환·`PeerId` 확정은 XX와 같고, PSK가 다르면 msg3 복호에서 실패한다(= 같은
+/// 사용자가 아니다). PSK는 임시 DH 뒤에 섞이므로 도청 기록만으로 추측을 검증할 수 없다(온라인 추측만).
+const PARAMS_PSK: &str = "Noise_XXpsk3_25519_ChaChaPoly_BLAKE2s";
+/// psk 개시자의 msg1 payload 마커 — psk 패턴은 `e` 뒤 `MixKey(e.pub)`가 있어 msg1 payload가
+/// **e.pub에서 파생된 키로 AEAD 봉인**된다(비밀 없이 누구나 열지만 **태그**가 붙는다). 응답자는
+/// 이 태그·마커로 XX/XXpsk3를 **추가 왕복 없이** 가른다([docs/48 §3-2] · F-2).
+const PSK_MARKER: &[u8] = b"NBPSK1";
 
 /// Noise 메시지 상한(프레임워크 제약). 페이로드는 태그(16B)만큼 작아야 한다.
 const NOISE_MAX: usize = 65535;
@@ -115,6 +123,14 @@ fn builder(id: &Identity) -> Result<Builder<'_>, SessionError> {
     Ok(Builder::new(params).local_private_key(&id.private))
 }
 
+/// XXpsk3 빌더 — PSK 위치 3.
+fn builder_psk<'a>(id: &'a Identity, psk: &'a [u8; 32]) -> Result<Builder<'a>, SessionError> {
+    let params = PARAMS_PSK.parse().map_err(|_| SessionError::Handshake)?;
+    Ok(Builder::new(params)
+        .local_private_key(&id.private)
+        .psk(3, psk))
+}
+
 fn remote_peer(hs: &HandshakeState) -> Result<PeerId, SessionError> {
     let remote = hs.get_remote_static().ok_or(SessionError::Handshake)?;
     let bytes: [u8; PeerId::LEN] = remote.try_into().map_err(|_| SessionError::Handshake)?;
@@ -126,6 +142,10 @@ pub struct NoiseSession<L: Link> {
     link: L,
     transport: TransportState,
     peer: PeerId,
+    /// 핸드셰이크 해시(Noise `h` 최종값) — 세션 뒤 증명(ADR-0015 형제 증명)의 채널 바인딩.
+    hh: [u8; 32],
+    /// 내가 개시자였는가(증명의 역할 바이트).
+    initiator: bool,
 }
 
 impl<L: Link> core::fmt::Debug for NoiseSession<L> {
@@ -161,21 +181,88 @@ impl<L: Link> NoiseSession<L> {
             .map_err(|_| SessionError::Handshake)?;
         link.send(&buf[..n])?;
 
-        Self::finish(link, hs, id)
+        Self::finish(link, hs, id, true)
     }
 
-    /// 수신자 측 핸드셰이크(`<- e` / `-> e,ee,s,es` / `<- s,se`).
+    /// 개시자 측 **형제 기기** 핸드셰이크(XXpsk3 · ADR-0015 §3-3) — msg1 payload에 `PSK_MARKER`를
+    /// 실어 응답자가 패턴을 가르게 한다. PSK가 다르면 응답자가 msg3에서 끊는다(이쪽은 그 뒤 첫
+    /// 수신에서 `Closed`).
     ///
     /// # Errors
     /// 링크 종료·프로토콜 실패 시 [`SessionError`].
-    pub fn accept(mut link: L, id: &Identity) -> Result<Self, SessionError> {
-        let mut hs = builder(id)?
-            .build_responder()
+    pub fn initiate_psk(mut link: L, id: &Identity, psk: &[u8; 32]) -> Result<Self, SessionError> {
+        let mut hs = builder_psk(id, psk)?
+            .build_initiator()
             .map_err(|_| SessionError::Handshake)?;
         let mut buf = vec![0u8; NOISE_MAX];
 
+        let n = hs
+            .write_message(PSK_MARKER, &mut buf)
+            .map_err(|_| SessionError::Handshake)?;
+        link.send(&buf[..n])?;
+
         let msg = link.recv()?;
         hs.read_message(&msg, &mut buf)
+            .map_err(|_| SessionError::Handshake)?;
+
+        let n = hs
+            .write_message(&[], &mut buf)
+            .map_err(|_| SessionError::Handshake)?;
+        link.send(&buf[..n])?;
+
+        Self::finish(link, hs, id, true)
+    }
+
+    /// 수신자 측 핸드셰이크(`<- e` / `-> e,ee,s,es` / `<- s,se`) — XX 전용([`Self::accept_any`]의 PSK 없는 판).
+    ///
+    /// # Errors
+    /// 링크 종료·프로토콜 실패 시 [`SessionError`].
+    pub fn accept(link: L, id: &Identity) -> Result<Self, SessionError> {
+        Self::accept_any(link, id, None).map(|(s, _)| s)
+    }
+
+    /// 수신자 측 — **XX와 XXpsk3를 첫 메시지로 가른다**(추가 왕복 0). 돌려주는 `bool` = psk 세션이었는가
+    /// (= 상대가 내 KP를 안다 = **같은 사용자**). `psk`가 `None`이면 XX만 받는다(사용자 기능 꺼짐).
+    ///
+    /// 판별: XXpsk3 응답자 상태로 msg1을 먼저 파싱한다 — psk 패턴은 `e` 뒤 `MixKey(e.pub)`가 있어
+    /// payload에 AEAD 태그가 붙는다. 태그가 맞고 payload가 마커면 psk 경로, 아니면 XX 상태로 재파싱.
+    /// 비용 = 해시 2회 + AEAD 1회(DH 없음). psk 상태는 파싱 실패 시 버리고 새로 만든다(상태 독립).
+    ///
+    /// # Errors
+    /// 링크 종료·프로토콜 실패(PSK 불일치 포함 — msg3 복호 실패) 시 [`SessionError`].
+    pub fn accept_any(
+        mut link: L,
+        id: &Identity,
+        psk: Option<&[u8; 32]>,
+    ) -> Result<(Self, bool), SessionError> {
+        let mut buf = vec![0u8; NOISE_MAX];
+        let msg1 = link.recv()?;
+
+        // ① psk 경로 시도(내 KP가 있을 때만).
+        if let Some(psk) = psk {
+            let mut hs = builder_psk(id, psk)?
+                .build_responder()
+                .map_err(|_| SessionError::Handshake)?;
+            if let Ok(n) = hs.read_message(&msg1, &mut buf) {
+                if &buf[..n] == PSK_MARKER {
+                    let n = hs
+                        .write_message(&[], &mut buf)
+                        .map_err(|_| SessionError::Handshake)?;
+                    link.send(&buf[..n])?;
+                    let msg3 = link.recv()?;
+                    // PSK가 다르면 여기서 실패한다 — "같은 사용자가 아니다"는 정상 결과.
+                    hs.read_message(&msg3, &mut buf)
+                        .map_err(|_| SessionError::Handshake)?;
+                    return Self::finish(link, hs, id, false).map(|s| (s, true));
+                }
+            }
+        }
+
+        // ② XX 경로(현행).
+        let mut hs = builder(id)?
+            .build_responder()
+            .map_err(|_| SessionError::Handshake)?;
+        hs.read_message(&msg1, &mut buf)
             .map_err(|_| SessionError::Handshake)?;
 
         let n = hs
@@ -187,11 +274,22 @@ impl<L: Link> NoiseSession<L> {
         hs.read_message(&msg, &mut buf)
             .map_err(|_| SessionError::Handshake)?;
 
-        Self::finish(link, hs, id)
+        Self::finish(link, hs, id, false).map(|s| (s, false))
     }
 
-    fn finish(link: L, hs: HandshakeState, id: &Identity) -> Result<Self, SessionError> {
+    fn finish(
+        link: L,
+        hs: HandshakeState,
+        id: &Identity,
+        initiator: bool,
+    ) -> Result<Self, SessionError> {
         let peer = remote_peer(&hs)?;
+        let mut hh = [0u8; 32];
+        let h = hs.get_handshake_hash();
+        if h.len() != 32 {
+            return Err(SessionError::Handshake);
+        }
+        hh.copy_from_slice(h);
         if peer == id.peer_id() {
             // D-22 U-P2(사용자 확정 08-08): 상대가 내 신원과 같다 — 자기 연결이거나
             // 키 파일 복제다. 즉시 거부 + 경고 대상([docs/21 §5] I-7).
@@ -204,6 +302,8 @@ impl<L: Link> NoiseSession<L> {
             link,
             transport,
             peer,
+            hh,
+            initiator,
         })
     }
 }
@@ -211,6 +311,10 @@ impl<L: Link> NoiseSession<L> {
 impl<L: Link> Session for NoiseSession<L> {
     fn peer(&self) -> PeerId {
         self.peer
+    }
+
+    fn handshake_binding(&self) -> Option<([u8; 32], bool)> {
+        Some((self.hh, self.initiator))
     }
 
     fn trust(&self) -> TrustLevel {
@@ -698,5 +802,85 @@ mod group_fanout {
         let got_c = ChatMessage::decode(&hc.join().unwrap(), me.peer_id()).unwrap();
         assert_eq!(got_b.body, MessageBody::Text("팀 전체 공지".into()));
         assert_eq!(got_c, got_b, "전 구성원 동일 메시지");
+    }
+}
+
+#[cfg(test)]
+mod psk_tests {
+    //! ADR-0015 §3-3 · docs/48 T-1 — XX/XXpsk3 판별·불일치·폴백(소켓 없이 duplex fake).
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+    use nbeep_core::testkit::duplex;
+
+    fn ids() -> (Identity, Identity) {
+        (Identity::generate(), Identity::generate())
+    }
+
+    /// 같은 PSK = 성립 · 응답자가 psk 세션임을 안다 · 데이터 왕복.
+    #[test]
+    fn psk_both_sides_establish_and_flag() {
+        let (a, b) = ids();
+        let (la, lb) = duplex(a.peer_id(), b.peer_id());
+        let psk = [7u8; 32];
+        let bp = b.peer_id();
+        let t = std::thread::spawn(move || NoiseSession::accept_any(lb, &b, Some(&psk)));
+        let mut sa = NoiseSession::initiate_psk(la, &a, &psk).unwrap();
+        let (mut sb, via_psk) = t.join().unwrap().unwrap();
+        assert!(via_psk, "psk 경로 판별");
+        assert_eq!(sa.peer(), bp);
+        assert_eq!(sb.peer(), a.peer_id());
+        sa.send(b"hi").unwrap();
+        assert_eq!(sb.recv().unwrap(), b"hi");
+    }
+
+    /// XX 개시자 → psk를 가진 응답자: 태그 실패 → XX 폴백 · psk 아님 표시.
+    #[test]
+    fn xx_initiator_falls_back_on_psk_responder() {
+        let (a, b) = ids();
+        let (la, lb) = duplex(a.peer_id(), b.peer_id());
+        let psk = [9u8; 32];
+        let t = std::thread::spawn(move || NoiseSession::accept_any(lb, &b, Some(&psk)));
+        let mut sa = NoiseSession::initiate(la, &a).unwrap();
+        let (mut sb, via_psk) = t.join().unwrap().unwrap();
+        assert!(!via_psk, "XX 폴백");
+        sa.send(b"plain").unwrap();
+        assert_eq!(sb.recv().unwrap(), b"plain");
+    }
+
+    /// PSK 불일치 = 응답자가 msg3에서 실패(같은 사용자가 아니다) — 개시자는 세션을 못 쓴다.
+    #[test]
+    fn psk_mismatch_fails_at_responder() {
+        let (a, b) = ids();
+        let (la, lb) = duplex(a.peer_id(), b.peer_id());
+        let t = std::thread::spawn(move || NoiseSession::accept_any(lb, &b, Some(&[1u8; 32])));
+        let sa = NoiseSession::initiate_psk(la, &a, &[2u8; 32]);
+        let rb = t.join().unwrap();
+        assert!(rb.is_err(), "응답자 = 실패(PSK 다름)");
+        // 개시자는 msg3까지 보내고 transport로 들어갈 수 있으나 상대가 끊어 첫 수신이 실패한다.
+        if let Ok(mut sa) = sa {
+            assert!(sa.recv().is_err());
+        }
+    }
+
+    /// psk 개시자 → PSK 없는 응답자(사용자 기능 꺼짐): 응답자는 XX로 파싱 → 개시자 msg2 복호 실패.
+    #[test]
+    fn psk_initiator_vs_plain_responder_fails() {
+        let (a, b) = ids();
+        let (la, lb) = duplex(a.peer_id(), b.peer_id());
+        let t = std::thread::spawn(move || NoiseSession::accept_any(lb, &b, None));
+        let sa = NoiseSession::initiate_psk(la, &a, &[3u8; 32]);
+        let _ = t.join().unwrap();
+        assert!(sa.is_err(), "개시자는 msg2에서 실패(패턴 다름)");
+    }
+
+    /// 빈 psk(None) 응답자 = 현행 XX와 동일 경로.
+    #[test]
+    fn accept_without_psk_is_plain_xx() {
+        let (a, b) = ids();
+        let (la, lb) = duplex(a.peer_id(), b.peer_id());
+        let t = std::thread::spawn(move || NoiseSession::accept_any(lb, &b, None));
+        let _sa = NoiseSession::initiate(la, &a).unwrap();
+        let (_sb, via) = t.join().unwrap().unwrap();
+        assert!(!via);
     }
 }

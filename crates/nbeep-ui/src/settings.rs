@@ -66,6 +66,10 @@ const HIDDEN_KEYS: &[&str] = &[
     // 최근 프로필 이미지(08-14 — 탭 구분 목록). ★ 여기 없으면 저장은 되는데
     // **부팅 로드에서 미지 키로 무시**돼 재시작마다 목록이 증발한다(실기로 잡음).
     "profile.image_recent",
+    // 사용자 인증 마커(ADR-0015 · 09-06) — 값(핸들·암호)에 붙는 검증 상태. 성공 = on.
+    "user.verified",
+    // 서명 기기 목록 버전(ADR-0015 S2-e) — 내 기기 집합이 바뀔 때마다 +1(롤백 방지 · 단조).
+    "user.list_ver",
     // 목록 필터 바(08-22) — 툴바 아래 칩 3그룹의 선택 영속("" = 전체).
     // ★ 키 등록과 값 저장은 쌍 — 여기 없으면 재시작 로드가 미지 키로 흘린다.
     "list.filter.path",
@@ -89,6 +93,58 @@ const HIDDEN_KEYS: &[&str] = &[
 /// 서버 주소는 도메인·IP를 받아야 해서 숫자 필터가 입력 자체를 막았다(실기).
 const FREE_TEXT_KEYS: &[&str] = &["net.server.address"];
 
+/// ★ 암호 미리보기 아이콘(Material `password visibility` 96² 알파 — nexa-clip 09-03 자산 공유).
+const PW_EYE_ALPHA: &[u8] = include_bytes!("../assets/icon-pw-eye-96.alpha");
+/// ★ 암호 생성 아이콘(Material `flip_camera_android` 96² 알파 — clip 동일).
+const PW_REGEN_ALPHA: &[u8] = include_bytes!("../assets/icon-pw-regen-96.alpha");
+/// 자산 변 크기(px).
+const PW_EYE_SIDE: u32 = 96;
+/// 생성 버튼 무장 유지 시간(clip 09-03 사용자 — "2초 내에 다시 누르지 않으면 원복").
+/// 생성 무장 창(09-06 사용자 요청 — 키 교체와 같은 5초 · 무장 중엔 행 노트에 남은 시간 안내).
+pub const PW_ARM_WINDOW: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// 비밀 행 버튼 자리(clip 09-03 사용자 확정 "두 버튼을 텍스트 우상단으로") — 상자 위 한 줄,
+/// 오른쪽 끝 정렬 [생성][눈] · 버튼 크기 = 상자 높이 · 간격 = 높이/8.
+fn pw_btn_rects(b: Rect) -> (Rect, Rect) {
+    let eye = Rect::new(b.right() - b.h, b.y - b.h / 8 - b.h, b.h, b.h);
+    let regen = Rect::new(eye.x - b.h / 8 - b.h, eye.y, b.h, b.h);
+    (eye, regen)
+}
+
+/// 96² 알파 자산을 잉크색으로 틴트해 캐시에 담는다(색이 같으면 재사용).
+fn tint_icon(
+    cell: &std::cell::RefCell<Option<(u32, crate::theme::IconImage)>>,
+    alpha: &[u8],
+    ink: u32,
+) {
+    let mut cache = cell.borrow_mut();
+    let stale = !matches!(cache.as_ref(), Some((c, _)) if *c == ink);
+    if stale {
+        let (r, g, b) = ((ink >> 16) as u8, (ink >> 8) as u8, ink as u8);
+        let mut rgba = Vec::with_capacity(alpha.len() * 4);
+        for &a in alpha {
+            rgba.extend_from_slice(&[r, g, b, a]);
+        }
+        *cache = Some((
+            ink,
+            crate::theme::IconImage::from_rgba(PW_EYE_SIDE, PW_EYE_SIDE, rgba),
+        ));
+    }
+}
+
+/// 틴트된 아이콘을 버튼 자리에 그린다(안쪽 여백 = 높이/8).
+fn draw_pw_icon(
+    cell: &std::cell::RefCell<Option<(u32, crate::theme::IconImage)>>,
+    r: Rect,
+    ctx: &mut dyn DrawCtx,
+) {
+    if let Some((_, img)) = cell.borrow().as_ref() {
+        let ins = r.h / 8;
+        let dst = Rect::new(r.x + ins, r.y + ins, r.w - ins * 2, r.h - ins * 2);
+        ctx.image_scaled(dst, img, r);
+    }
+}
+
 /// 기본 off 토글 — 프로필 공개(DR-22 **기본 전부 비노출** · 옵트인). 미등록 토글은 on.
 // ★ M3-2d ① 확정(08-15 **사용자 확정 = 3-OS 공통 off**): `ui.close_to_tray`
 // 기본 꺼짐 — X = 종료(예측 가능성 우선). mac 관례 차등(빨간 버튼 = 유지)을
@@ -98,6 +154,7 @@ const TOGGLE_DEFAULT_OFF: &[&str] = &[
     "log.enabled",           // 상태 로그(M3-22 — 기본 off · 사용자 확정 08-18)
     "netmon.enabled",        // 네트워크 점검 기록(08-21 — 기본 off · 의도적으로 켤 때만)
     "notify.preview",        // 알림 본문 표시(M3-8 — 기본 끔: 화면 공유·녹화 안전)
+    "user.enabled", // 다중 기기 신원(ADR-0015 — 기본 끔: 옵트인 오버레이 S-0 · 사용자 확정 09-06)
     "notify.broadcast_mute", // 공지 받지 않기(08-21 — 기본 끔 = 공지 받음)
     // 원격 파일 발신 옵트인 2종(08-23 분리 — **기본 끄기** · 사용자 확정. ⚠08-23
     // 실기 발각: 여기 없으면 Toggle 기본 on이라 켜진 채 나갔다).
@@ -145,6 +202,14 @@ pub enum SettingKind {
     RadioInput(&'static [(&'static str, Msg)], &'static str),
     /// 3×3 위치 그리드 — 미니 화면(4:3) 셀로 직관 선택([`PositionPicker`]).
     PositionGrid,
+    /// 자유 텍스트 한 줄 — [`TextBox`] 행(clip 09-03 이식). `secret` = 비밀 행: 기본 `•` 가림 ·
+    /// 상자 위 오른쪽에 \[생성\]\[눈\] 아이콘 버튼(생성은 2초 무장 후 2차 클릭 · 생성 시 자동 표시).
+    Text {
+        /// placeholder.
+        hint: Msg,
+        /// 비밀 행인가.
+        secret: bool,
+    },
     /// 글꼴 **얼굴만** — 크기는 Base UI를 따른다(고정폭 슬롯).
     FontFace {
         /// 글꼴명 값 키.
@@ -212,6 +277,8 @@ impl Entry {
                 })
                 .into_iter()
                 .collect(),
+            // 자유 텍스트도 **빈 기본값으로 키를 등록**한다(RadioInput 자유 입력과 같은 이유).
+            SettingKind::Text { .. } => vec![(self.key, String::new())],
             SettingKind::Toggle => {
                 // 프로필 공개는 **기본 비노출**(DR-22 — 옵트인). 그 외 토글은 기본 on.
                 let on = !TOGGLE_DEFAULT_OFF.contains(&self.key);
@@ -944,6 +1011,64 @@ pub fn registry() -> &'static [Entry] {
             kind: SettingKind::Toggle,
             key: "xfer.remote_files_internet",
         },
+        // ── 사용자(ADR-0015 · DR-29 · 09-06) — 다중 기기 신원 ──
+        // 스위치 off = 단독 노드(기본 · 입력란 잠금). on = 빈 칸 기본값 자동 채움 + 자동 인증.
+        // ★ 필수 값이 비거나 형식이 틀리면 **어디에도 등록되지 않는다**(빈 사용자로 묶임 방지).
+        Entry {
+            cat: Msg::CatUser,
+            sub: None,
+            label: Msg::UserEnabled,
+            desc: Msg::UserEnabledDesc,
+            kind: SettingKind::Toggle,
+            key: "user.enabled",
+        },
+        Entry {
+            cat: Msg::CatUser,
+            sub: None,
+            label: Msg::UserHandle,
+            desc: Msg::UserHandleDesc,
+            kind: SettingKind::Text {
+                hint: Msg::UserHandle,
+                secret: false,
+            },
+            key: "user.handle",
+        },
+        // 암호는 PII_KEYS(앱) — settings.cfg가 아니라 봉인 사이드카 profile.sec에 영속.
+        Entry {
+            cat: Msg::CatUser,
+            sub: None,
+            label: Msg::UserPass,
+            desc: Msg::UserPassDesc,
+            // 비밀 행 — 상자 위 [생성][눈] 버튼(clip 동일). 생성 = 가짜 키 `user.passphrase.regen` = run.
+            kind: SettingKind::Text {
+                hint: Msg::UserPass,
+                secret: true,
+            },
+            key: "user.passphrase",
+        },
+        // 인증 테스트 — 성공 = 마커(user.verified — HIDDEN_KEYS) 영속 · 값 변경 = 마커 해제.
+        Entry {
+            cat: Msg::CatUser,
+            sub: None,
+            label: Msg::UserTest,
+            desc: Msg::UserTestDesc,
+            kind: SettingKind::Action {
+                verb: Msg::UserTestVerb,
+            },
+            key: "user.test",
+        },
+        // 사용자 키 교체(ADR-0015 §3-5 · S2-f) — 기기 분실 대응. 인증 상태에서만 활성(호스트 잠금) ·
+        // 2회 클릭(5초 무장)으로 실행.
+        Entry {
+            cat: Msg::CatUser,
+            sub: None,
+            label: Msg::UserRotate,
+            desc: Msg::UserRotateDesc,
+            kind: SettingKind::Action {
+                verb: Msg::UserRotateVerb,
+            },
+            key: "user.rotate",
+        },
         // 그룹(M5-1 · ADR-0012) — 재동기 보관 주체 = 송신자(사용자 확정 08-13).
         // 발신자가 구성원별로 미전달 그룹 메시지를 몇 개까지 보관할지(초과 = 오래된 것
         // 폐기 — 큐 상한 필수 NFR-B-6). 소비처(app)가 관용 파싱한다.
@@ -1317,6 +1442,8 @@ impl SettingsState {
             SettingKind::Radio(opts) => opts.iter().any(|(v, _)| *v == value),
             // 직접 입력 허용 — 빈 값만 거른다(빈 문자열은 기본값 의미가 아니다).
             SettingKind::RadioInput(..) => !value.is_empty(),
+            // 자유 텍스트(핸들·암호) — 빈 값도 유효(미설정 상태 그 자체). 형식 검증은 앱(userident).
+            SettingKind::Text { .. } => true,
             SettingKind::Toggle => value == "on" || value == "off",
             SettingKind::Color { .. } => crate::theme::color_from_hex(value).is_some(),
             // 위치 코드·글꼴명(빈 값 = 시스템 기본)·크기 코드는 소비처가 관용 파싱한다.
@@ -1476,6 +1603,8 @@ struct RowUi {
     desc_lines: i32,
     /// 설명 워드랩 가용 폭(물리 px — 컨트롤 왼쪽까지). 레이아웃·페인트가 같은 값을 쓴다.
     desc_avail: i32,
+    /// ★ 비밀 행 — 상자 위 버튼 줄만큼 제목·설명·상자를 아래로 내린다(clip 09-03).
+    top_inset: i32,
 }
 
 /// 설정 위젯 — 커스텀 컨트롤 컴포지션.
@@ -1521,6 +1650,12 @@ pub struct SettingsWidget {
     disabled: std::collections::HashSet<&'static str>,
     /// 특정 설정 행 **바로 아래**에 붙는 한 줄 정보(자리 고정 — 호스트가 채운다).
     notes: HashMap<&'static str, (String, NoteTone)>,
+    /// 암호 눈 아이콘 틴트 캐시(색 키).
+    pw_eye: std::cell::RefCell<Option<(u32, crate::theme::IconImage)>>,
+    /// 암호 생성 아이콘 틴트 캐시(색 키).
+    pw_regen: std::cell::RefCell<Option<(u32, crate::theme::IconImage)>>,
+    /// 생성 2단 확인 — 첫 클릭 = 무장(빨강) · 2초 안 재클릭 = 생성 · 지나면 원복.
+    pw_arm: Option<std::time::Instant>,
 }
 
 /// 행 노트의 시각 톤(08-22 — "검증됨"이 눈에 띄어야 한다는 사용자 요청).
@@ -1570,6 +1705,9 @@ impl SettingsWidget {
             split_drag: false,
             disabled: std::collections::HashSet::new(),
             notes: HashMap::new(),
+            pw_eye: std::cell::RefCell::new(None),
+            pw_regen: std::cell::RefCell::new(None),
+            pw_arm: None,
         };
         let mut inv = Invalidations::default();
         w.rebuild(&mut inv);
@@ -1883,6 +2021,13 @@ impl SettingsWidget {
                     family.set_scale(self.scale);
                     RowCtl::Face(family)
                 }
+                SettingKind::Text { hint, secret } => {
+                    let mut t = TextBox::new(tr(lang, hint))
+                        .with_text(self.values.get(e.key).map_or("", String::as_str));
+                    t.set_scale(self.scale);
+                    t.set_secret(secret); // 기본 가림 — 눈 버튼으로 본다.
+                    RowCtl::Face(t)
+                }
                 SettingKind::PositionGrid => {
                     let mut p = PositionPicker::new();
                     p.select_value(self.values.get(e.key).map_or("bl", String::as_str));
@@ -1961,6 +2106,7 @@ impl SettingsWidget {
                 head_h: 0,
                 desc_lines: 1,
                 desc_avail: 0,
+                top_inset: 0,
             });
         }
         self.layout(inv);
@@ -1978,6 +2124,10 @@ impl SettingsWidget {
                 RowCtl::Combo(c) => c.select_value(value),
                 // 토글도 역반영(08-15 — 쌍방 동기화: 다른 경로가 켠/끈 것을 표시).
                 RowCtl::Check(c) => c.set_on(value == "on"),
+                // 자유 텍스트 행(암호 생성 등 프로그램 변경)도 역반영.
+                RowCtl::Face(t) if matches!(registry()[row.idx].kind, SettingKind::Text { .. }) => {
+                    t.set_text(value);
+                }
                 _ => {}
             }
         }
@@ -1985,6 +2135,33 @@ impl SettingsWidget {
     }
 
     /// 비활성 키 지정 — 조건부로만 쓰이는 설정을 흐리게 잠근다(예: 기간은 "기간 자동"일 때만).
+    /// 생성 무장 남은 시간(ms · 무장 아님 = None) — 호스트가 행 노트 카운트다운을 만든다(09-06).
+    #[must_use]
+    pub fn pw_arm_remaining_ms(&self) -> Option<u64> {
+        let t = self.pw_arm?;
+        let left = PW_ARM_WINDOW.checked_sub(t.elapsed())?;
+        Some(u64::try_from(left.as_millis()).unwrap_or(u64::MAX))
+    }
+
+    /// 행위 버튼 색조 지정(09-06 — 무장 중 빨강). 그 키가 행위 항목이 아니면 no-op.
+    pub fn set_action_tone(
+        &mut self,
+        key: &'static str,
+        tone: crate::controls::ButtonTone,
+        inv: &mut Invalidations,
+    ) {
+        for r in &mut self.rows {
+            if registry()[r.idx].key != key {
+                continue;
+            }
+            if let RowCtl::Act(b) = &mut r.ctl {
+                if b.set_tone(tone) {
+                    inv.push(self.bounds);
+                }
+            }
+        }
+    }
+
     pub fn set_disabled(&mut self, keys: &[&'static str], inv: &mut Invalidations) {
         let next: std::collections::HashSet<&'static str> = keys.iter().copied().collect();
         if next != self.disabled {
@@ -2068,7 +2245,15 @@ impl SettingsWidget {
     /// 스크롤바 자동숨김 틱 — 표시가 바뀌면 `true`(재그리기). `now_ms`는 호스트 시계.
     pub fn tick(&mut self, now_ms: u64) -> bool {
         // `||`는 단축 평가라 트리 바가 안 돌 수 있다 — 둘 다 재워야 한다.
-        self.bars.tick(now_ms) | self.tree.tick(now_ms)
+        let mut dirty = self.bars.tick(now_ms) | self.tree.tick(now_ms);
+        // ★ 생성 무장 타이머 — 무장 중엔 계속 깨워 만료를 제때 잡는다(≤ 5초).
+        if let Some(t) = self.pw_arm {
+            if t.elapsed() > PW_ARM_WINDOW {
+                self.pw_arm = None;
+            }
+            dirty = true;
+        }
+        dirty
     }
 
     /// 이 좌표에서 좌우 리사이즈 커서를 보여야 하는가 — 스플리터 hover/드래그
@@ -2129,11 +2314,14 @@ impl SettingsWidget {
                 let base = match e.kind {
                     SettingKind::FontSection { .. } => h_font,
                     SettingKind::PositionGrid => h_pos,
+                    // ★ 비밀 행 — 상자 위 버튼 줄(ctl_h + 간격)만큼 더 높다.
+                    SettingKind::Text { secret: true, .. } => h_entry + ctl_h + ctl_h / 8,
                     _ => h_entry,
                 };
                 let ctl_w = match &row.ctl {
                     RowCtl::Combo(_) | RowCtl::Act(_) => combo_w,
                     RowCtl::Check(_) => check_w,
+                    RowCtl::Face(_) if matches!(e.kind, SettingKind::Text { .. }) => combo_w,
                     RowCtl::Face(_) => family_w,
                     RowCtl::Pos(p) => p.preferred_size().0,
                     RowCtl::Color(c) => c.preferred_width().min(rw - pad * 2),
@@ -2165,6 +2353,7 @@ impl SettingsWidget {
             let ctl_w = match &row.ctl {
                 RowCtl::Combo(_) | RowCtl::Act(_) => combo_w,
                 RowCtl::Check(_) => check_w,
+                RowCtl::Face(_) if matches!(e.kind, SettingKind::Text { .. }) => combo_w,
                 RowCtl::Face(_) => family_w,
                 RowCtl::Pos(p) => p.preferred_size().0,
                 RowCtl::Color(c) => c.preferred_width().min(rw - pad * 2),
@@ -2181,13 +2370,22 @@ impl SettingsWidget {
             let h = match e.kind {
                 SettingKind::FontSection { .. } => h_font,
                 SettingKind::PositionGrid => h_pos,
+                SettingKind::Text { secret: true, .. } => h_entry + ctl_h + ctl_h / 8,
                 _ => h_entry,
             } + (row.desc_lines - 1) * desc_line_h
                 + note_hs[ri];
             // 하위 섹션 제목 자리를 행 **위에** 비워 둔다.
             row.head_h = if row.head.is_some() { head_h } else { 0 };
+            // ★ 비밀 행: 버튼 줄이 **제목 위**에 — 제목·설명·상자가 그만큼 내려간다(clip 09-03).
+            row.top_inset = if matches!(e.kind, SettingKind::Text { secret: true, .. }) {
+                ctl_h + ctl_h / 8
+            } else {
+                0
+            };
             top += row.head_h;
             row.rect = Rect::new(rx, top, rw, h);
+            let text_row = matches!(e.kind, SettingKind::Text { .. });
+            let top_inset = row.top_inset;
             match &mut row.ctl {
                 RowCtl::Combo(c) => {
                     c.set_bounds(
@@ -2222,6 +2420,18 @@ impl SettingsWidget {
                         inv,
                     );
                     size.set_viewport_bottom(self.bounds.bottom()); // 08-20 잘림 방지
+                }
+                RowCtl::Face(family) if text_row => {
+                    // 자유 텍스트 행 — 콤보 폭 · 비밀 행은 버튼 줄 아래 영역의 중앙.
+                    family.set_bounds(
+                        Rect::new(
+                            rx + rw - combo_w - pad,
+                            top + top_inset + (h - top_inset - ctl_h) / 2,
+                            combo_w,
+                            ctl_h,
+                        ),
+                        inv,
+                    );
                 }
                 RowCtl::Face(family) => {
                     // 크기 콤보가 없다 — 얼굴만 지정하고 크기는 Base UI를 따른다.
@@ -2581,6 +2791,39 @@ impl Widget for SettingsWidget {
                         return;
                     }
                 }
+                // ★ 비밀 행 버튼(clip 09-03 이식) — 눈 = 가림 토글 · 생성 = 2초 무장 후 2차 클릭.
+                for r in &mut self.rows {
+                    let e = &registry()[r.idx];
+                    if self.disabled.contains(e.key) {
+                        continue;
+                    }
+                    if let (RowCtl::Face(f), SettingKind::Text { secret: true, .. }) =
+                        (&mut r.ctl, e.kind)
+                    {
+                        let (er, rr) = pw_btn_rects(f.bounds());
+                        if er.contains(p) {
+                            f.set_secret(!f.secret());
+                            inv.push(self.bounds);
+                            return;
+                        }
+                        if rr.contains(p) {
+                            match self.pw_arm {
+                                // 무장 창 안 재클릭 = 생성 — 새 암호는 **반드시 보이게**(가림 해제).
+                                Some(t) if t.elapsed() <= PW_ARM_WINDOW => {
+                                    self.pw_arm = None;
+                                    f.set_secret(false);
+                                    // 값 생성은 호스트 몫 — 가짜 키로 요청만 올린다(user.test = run 문법).
+                                    self.changes
+                                        .push(("user.passphrase.regen", "run".to_string()));
+                                }
+                                // 첫 클릭 = 무장(빨강) — 실수 클릭으로 암호가 바뀌지 않게.
+                                _ => self.pw_arm = Some(std::time::Instant::now()),
+                            }
+                            inv.push(self.bounds);
+                            return;
+                        }
+                    }
+                }
                 // ★ 포커스는 **매 클릭마다 전 컨트롤에 다시 계산**한다. 콤보는 자기 클릭에
                 // 스스로 포커스를 켜지만 남의 포커스를 끄지는 못해서, 이걸 빼먹으면
                 // 눌러 본 콤보마다 파란 테두리가 남는다(카테고리를 나갔다 오면 재생성돼
@@ -2654,6 +2897,27 @@ impl Widget for SettingsWidget {
                     }
                 }
                 self.drain_changes(inv);
+            }
+            // ★ 포커스된 실행 버튼(09-06) — Space/Enter = 클릭(종전엔 "기본 타이핑 = 검색"이
+            //   삼켜 키보드로는 행위 버튼을 누를 수 없었다 · 실기 자동화에서 발각).
+            InputEvent::Char { c: ' ', .. }
+            | InputEvent::Key {
+                key: Key::Enter, ..
+            } if self
+                .rows
+                .iter()
+                .any(|r| matches!(&r.ctl, RowCtl::Act(b) if b.is_focused())) =>
+            {
+                let locked: Vec<bool> = self.rows.iter().map(|r| self.is_locked(r.idx)).collect();
+                for (row, lock) in self.rows.iter_mut().zip(locked) {
+                    if let RowCtl::Act(b) = &mut row.ctl {
+                        if b.is_focused() && !lock {
+                            b.press();
+                        }
+                    }
+                }
+                self.drain_changes(inv);
+                inv.push(self.bounds);
             }
             InputEvent::Char { .. } => {
                 if self.any_family_focused() {
@@ -2794,6 +3058,7 @@ impl Widget for SettingsWidget {
         for row in &self.rows {
             let e = &registry()[row.idx];
             let r = row.rect;
+            let ry = r.y + row.top_inset; // 비밀 행은 버튼 줄만큼 아래에서 시작
             match &row.ctl {
                 RowCtl::Combo(_)
                 | RowCtl::Check(_)
@@ -2804,7 +3069,7 @@ impl Widget for SettingsWidget {
                     ctx.select_font(FontSlot::Base, false);
                     ctx.text(
                         r.x + self.s(PAD),
-                        r.y + self.s(6),
+                        ry + self.s(6),
                         r,
                         tr(lang, e.label),
                         theme.text,
@@ -2821,7 +3086,7 @@ impl Widget for SettingsWidget {
                     for (i, line) in lines.iter().enumerate() {
                         #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
                         let dy = self.s(30) + i as i32 * self.s(DESC_LINE_H);
-                        ctx.text(r.x + self.s(PAD), r.y + dy, r, line, theme.text_dim);
+                        ctx.text(r.x + self.s(PAD), ry + dy, r, line, theme.text_dim);
                     }
                 }
                 RowCtl::Font { .. } => {
@@ -2853,7 +3118,27 @@ impl Widget for SettingsWidget {
                 RowCtl::Check(c) => c.paint(ctx, theme),
                 RowCtl::Act(b) => b.paint(ctx, theme),
                 RowCtl::Pos(g) => g.paint(ctx, theme),
-                RowCtl::Face(f) => f.paint(ctx, theme),
+                RowCtl::Face(f) => {
+                    f.paint(ctx, theme);
+                    // ★ 비밀 행 버튼 — 눈: 보임 = accent · 가림 = 흐림 / 생성: 평소 흐림 · 무장 = 빨강.
+                    if matches!(e.kind, SettingKind::Text { secret: true, .. }) {
+                        let (er, rr) = pw_btn_rects(f.bounds());
+                        let ink = if f.secret() {
+                            theme.text_dim
+                        } else {
+                            theme.accent
+                        };
+                        tint_icon(&self.pw_eye, PW_EYE_ALPHA, ink.0);
+                        draw_pw_icon(&self.pw_eye, er, ctx);
+                        let rink = if self.pw_arm.is_some() {
+                            theme.danger
+                        } else {
+                            theme.text_dim
+                        };
+                        tint_icon(&self.pw_regen, PW_REGEN_ALPHA, rink.0);
+                        draw_pw_icon(&self.pw_regen, rr, ctx);
+                    }
+                }
                 RowCtl::Color(c) => c.paint(ctx, theme),
                 RowCtl::Font { family, size } => {
                     family.paint(ctx, theme);

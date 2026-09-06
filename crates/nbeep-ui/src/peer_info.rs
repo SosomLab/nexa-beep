@@ -66,6 +66,14 @@ pub struct PeerInfo {
     pub safety_number: String,
     /// 이미 지문 대조 완료(`FingerprintVerified`) — true면 버튼 대신 완료 표시.
     pub verified: bool,
+    /// 내 기기(ADR-0015 S2) — 대조 버튼 대신 보라 문구(승인·대조 불필요 · 세션 한정).
+    pub own_device: bool,
+    /// 서명 UserHello로 확인한 사용자 한 줄("사용자: 핸들 (ID xxxx)" · 빈 = 모름) — S2-e.
+    pub user_label: String,
+    /// 같은 핸들을 다른 사용자 공개키가 쓴다(핸들 충돌 — ID로 구분하라는 덧말).
+    pub user_conflict: bool,
+    /// 이 사용자의 키 후계가 충돌함(정직한 충돌 · D-32-9 — 자동 승자 없음).
+    pub succession_conflict: bool,
 }
 
 /// 상대 프로필 카드 위젯.
@@ -173,7 +181,9 @@ impl Widget for PeerInfoWidget {
             self.closed = true;
         }
         // 대조 버튼(M3-6) — 검증 전엔 "대조 완료", 검증 후엔 "인증 취소"(상호 배타).
-        if self.info.verified {
+        // 내 기기는 둘 다 없다(PSK가 대조다 — ADR-0015 §4).
+        if self.info.own_device {
+        } else if self.info.verified {
             self.unverify.on_event(ev, inv);
             if self.unverify.take_clicked() {
                 self.unverify_req = true;
@@ -288,10 +298,36 @@ impl Widget for PeerInfoWidget {
             &format!("{}  ·  {}", t(Msg::FingerprintLabel), self.info.fingerprint),
             theme.text_dim,
         );
-        y += ctx.text_height() + self.s(14);
+        y += ctx.text_height() + self.s(6);
+        // 사용자(ADR-0015 S2-e) — 서명 기기 목록으로 확인한 핸들·UserId. 충돌이면 경고 덧말.
+        if !self.info.user_label.is_empty() {
+            ctx.text(x, y, b, &self.info.user_label, theme.text_dim);
+            y += ctx.text_height() + self.s(2);
+            if self.info.user_conflict {
+                ctx.text(x, y, b, t(Msg::CardUserConflict), theme.warn);
+                y += ctx.text_height() + self.s(2);
+            }
+            if self.info.succession_conflict {
+                ctx.text(x, y, b, t(Msg::CardSuccessionConflict), theme.danger);
+                y += ctx.text_height() + self.s(2);
+            }
+        }
+        y += self.s(8);
         // ── 지문 대조(M3-6) — 08-17 사용자 확정: 60자리 SAS는 숨기고 위 키 지문만
         //    다른 채널로 대조. safety_number는 "대조 가능한 상대" 게이트로만 쓴다.
-        if !self.info.safety_number.is_empty() {
+        if self.info.own_device {
+            // 내 기기(ADR-0015 S2) — 대조 안내·버튼 대신 보라 한 줄(색 = 목록 배지와 동일).
+            ctx.select_font(FontSlot::Status, false);
+            let vt = t(Msg::CardOwnDevice);
+            let tw = ctx.text_width(vt);
+            ctx.text(
+                b.x + (b.w - tw) / 2,
+                y + self.s(6),
+                b,
+                vt,
+                crate::peer_list::OWN_DEVICE_COLOR,
+            );
+        } else if !self.info.safety_number.is_empty() {
             ctx.select_font(FontSlot::Status, false);
             ctx.text(x, y, b, t(Msg::CardVerifyPrompt), theme.text);
             y += ctx.text_height() + self.s(6);

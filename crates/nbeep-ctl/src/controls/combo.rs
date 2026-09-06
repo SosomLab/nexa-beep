@@ -463,6 +463,8 @@ pub struct Combo {
     /// 직접 입력이 **텍스트 모드**인가(08-22 — 서버 주소처럼 도메인·IP를 받는 행).
     /// false(기본) = 종전 숫자 전용(포트·ms·MiB — 비트 호환).
     custom_text: bool,
+    /// 비밀 표시(09-06) — 커스텀 값·편집기를 `•`로 가린다(값 자체는 그대로).
+    secret: bool,
 }
 
 impl Combo {
@@ -477,6 +479,7 @@ impl Combo {
             custom_value: None,
             editor: None,
             custom_text: false,
+            secret: false,
         }
     }
     /// 선택된 값.
@@ -504,6 +507,13 @@ impl Combo {
     /// 공백 없는 ASCII 인쇄 문자만 허용(호스트명·IP·`[v6]` 표기 전부 이 안이다).
     pub fn set_custom_text(&mut self, yes: bool) {
         self.custom_text = yes;
+    }
+    /// 비밀 표시 모드 — 커스텀 값 표시·인라인 편집기를 `•`로 가린다(09-06 · 페어링 암호).
+    pub fn set_secret(&mut self, yes: bool) {
+        self.secret = yes;
+        if let Some(tb) = &mut self.editor {
+            tb.set_secret(yes);
+        }
     }
     /// 인라인 편집 중인가(호스트 라우팅 근거 — 편집은 모달).
     #[must_use]
@@ -605,6 +615,7 @@ impl ComboControl for Combo {
             tb.set_char_filter(Some(|c: char| c.is_ascii_digit()));
             tb.set_max_chars(6);
         }
+        tb.set_secret(self.secret);
         tb.set_scale(self.base.scale);
         tb.set_focused(true);
         tb.set_bounds(self.base.bounds, inv);
@@ -678,7 +689,13 @@ impl Widget for Combo {
                     .map_or("", |it| it.label.as_str())
                     .to_string()
             },
-            |v| format!("{v}{}", self.custom_suffix),
+            |v| {
+                if self.secret {
+                    format!("{}{}", "•".repeat(v.chars().count()), self.custom_suffix)
+                } else {
+                    format!("{v}{}", self.custom_suffix)
+                }
+            },
         );
         self.paint_combo(ctx, theme, &text);
     }

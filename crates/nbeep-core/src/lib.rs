@@ -37,6 +37,9 @@ pub mod session;
 pub mod sgroup;
 pub mod trust;
 pub mod trusted;
+pub mod userhello;
+pub mod userproof;
+pub mod usersync;
 pub mod xfer;
 pub mod xfer_policy;
 
@@ -70,6 +73,12 @@ pub use session::{Session, SessionError};
 pub use sgroup::{GroupUid, Roster, SGroupMsg};
 pub use trust::{MemoryTrustStore, PinRecord, TrustDecision, TrustStore};
 pub use trusted::{Established, TrustedSession};
+pub use userhello::{UserHello, USER_HELLO_MAX_DEVICES, USER_HELLO_TAG};
+pub use userproof::{UserProof, USER_PROOF_TAG};
+pub use usersync::{
+    decode_chain, encode_chain, Succession, UserKeyBlob, SUCCESSION_TAG, SUCC_CHAIN_MAX,
+    USER_KEY_BLOB_MAX, USER_KEY_BLOB_TAG,
+};
 pub use xfer::{
     chunks_of, Received, RejectWhy, XferError, XferId, XferInbox, XferMsg, MAX_CHUNK, MAX_FILE,
 };

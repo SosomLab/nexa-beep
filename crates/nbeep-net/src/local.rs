@@ -172,6 +172,17 @@ impl LocalDirect {
                                 return;
                             }
                         }
+                        // ★ 사용자 힌트(ADR-0015) — 이름 자리의 hex 32자 = LAN_tag. 손상은 버린다.
+                        PacketKind::UserHint => {
+                            if let Some(tag) = hex16(o.packet.name.as_str()) {
+                                if disc_tx
+                                    .send(DiscoveryEvent::UserHint { peer, tag })
+                                    .is_err()
+                                {
+                                    return;
+                                }
+                            }
+                        }
                         _ => {
                             let dest = SocketAddr::new(o.from.ip(), o.packet.tcp_port);
                             addrs
@@ -305,6 +316,25 @@ impl Transport for LocalDirect {
         // 즉시 재공지(M1-10) — 상대는 PeerTable Renamed로 목록이 갱신된다.
         self.disc.set_name(name);
     }
+
+    fn set_user_tag(&self, tag: Option<[u8; 16]>) {
+        self.disc.set_user_tag(tag);
+    }
+}
+
+/// hex 32자 → 16B(힌트 태그). 길이·문자 오류 = None.
+fn hex16(s: &str) -> Option<[u8; 16]> {
+    let b = s.as_bytes();
+    if b.len() != 32 {
+        return None;
+    }
+    let mut out = [0u8; 16];
+    for (i, o) in out.iter_mut().enumerate() {
+        let hi = (b[i * 2] as char).to_digit(16)?;
+        let lo = (b[i * 2 + 1] as char).to_digit(16)?;
+        *o = u8::try_from(hi * 16 + lo).ok()?;
+    }
+    Some(out)
 }
 
 #[cfg(test)]

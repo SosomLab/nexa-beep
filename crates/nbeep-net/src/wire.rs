@@ -37,6 +37,10 @@ pub enum PacketKind {
     Probe = 3,
     /// 명시적 이탈.
     Goodbye = 4,
+    /// ★ 사용자 힌트(ADR-0015 §3-4 · 09-06) — `name` 자리에 **LAN_tag 16B의 hex(32자)** 를 싣는다.
+    /// 같은 핸들·암호(KP)를 가진 기기만 같은 태그를 내므로 "형제일지도"의 **미검증 힌트**다
+    /// (판정은 XXpsk3 핸드셰이크). 구버전은 미지 종류로 조용히 버린다(전방 호환 — F-4).
+    UserHint = 5,
 }
 
 impl PacketKind {
@@ -46,6 +50,7 @@ impl PacketKind {
             2 => Some(PacketKind::Announce),
             3 => Some(PacketKind::Probe),
             4 => Some(PacketKind::Goodbye),
+            5 => Some(PacketKind::UserHint),
             _ => None,
         }
     }

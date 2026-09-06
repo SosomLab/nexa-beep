@@ -173,6 +173,11 @@ enum AppEvent {
     /// L1 링크 변화(M1-2 · **디바운스 후**) — Wi-Fi 전환·케이블·절전 복귀.
     /// 전송에 재발견을 시키고 상태바에 알린다(변화 자체는 OS 구독 스레드가 관측).
     LinkChanged,
+    /// 사용자 인증 워커 결과(ADR-0015 S0) — gen이 다르면 낡은 결과(값이 그 사이 바뀜).
+    UserTestDone {
+        gen: u64,
+        result: Result<Box<crate::userident::TestOk>, String>,
+    },
     /// 격리 아카이브 내용 목록(M4-4 ⓐ · 08-21) — 워커가 개봉·파싱을 마친 본문.
     /// (대형 격리물 개봉이 UI를 얼리지 않게 — 격리함 워커 스캔과 같은 이유.)
     ArchiveList {
@@ -305,6 +310,20 @@ enum AppEvent {
         peer: PeerId,
         target_seq: u64,
         kind: nbeep_core::AckKind,
+    },
+    /// 세션 내 형제 증명 도착(ADR-0015 S1-e) — 대조는 메인(재료·바인딩이 거기 있다).
+    UserProof { peer: PeerId, proof: [u8; 32] },
+    /// 형제가 보낸 사용자 키 봉인본(ADR-0015 S2 · 태그 9) — 열기·병합은 메인.
+    UserKeyBlob { peer: PeerId, sealed: Vec<u8> },
+    /// 서명 기기 목록 도착(ADR-0015 S2-e · 태그 4) — 서명·소속 검증은 메인.
+    UserHello {
+        peer: PeerId,
+        hello: Box<nbeep_core::UserHello>,
+    },
+    /// 후계 증명서 도착(ADR-0015 §3-5 · 태그 8) — 두 서명·소속·버전 검증은 메인.
+    Succession {
+        peer: PeerId,
+        doc: Box<nbeep_core::Succession>,
     },
     /// 수동 주소 연결 실패(DR-19 · M2-8 잔여 — 워커에서 돌아온다. 성공은 `Outbound`).
     AddFailed { addr: String, why: String },
@@ -500,6 +519,14 @@ struct GroupXfer {
     /// 전 구성원 종결 → 풍선을 Done/Failed 요약으로 바꾼 뒤 true(이후 불변).
     closed: bool,
 }
+/// 키 교체 무장 창(09-06 — 생성 아이콘과 같은 5초 · 두 번째 클릭이 이 안에 와야 실행).
+const ROTATE_ARM_MS: u64 = 5_000;
+/// 키 교체 뒤 잠금(09-06 — 실수 연타 방지 · 사슬은 보관하므로 안전 장치일 뿐).
+const ROTATE_COOLDOWN_MS: u64 = 10_000;
+
+/// 형제 힌트 유예(ADR-0015 S1) — 광고 뒤 힌트 한 장과 부팅 인증 워커를 기다리는 시간.
+/// 광고 주기 800ms의 약 2배(힌트 1장 유실 흡수) · 사용자 체감 = 조용한 연결이 1.5초 늦는다.
+const SIBLING_GRACE_MS: u64 = 1_500;
 
 /// 자동 재연결 백오프 간격(ms · 사용자 확정 08-13 ⓑ) — 복구 시도이지 감시가 아니다.
 /// 상한(마지막 항) 시도까지 실패하면 **중단**한다(포트 스캔처럼 보이지 않게 · 수동
@@ -666,6 +693,54 @@ struct InboundSession {
     path: nbeep_core::PathClass,
     /// Managed 서버 경유 성립인가(08-22 — 헤더 배지 분리 · 표시 전용).
     via_server: bool,
+    /// ★ XXpsk3로 성립했는가(ADR-0015 §3-3) — 상대가 내 KP를 안다 = **같은 사용자의 기기**.
+    via_psk: bool,
+}
+
+/// 인바운드 수락 스레드와 공유하는 내 PSK(ADR-0015) — `Some` = 사용자 인증됨(XXpsk3 수락) ·
+/// `None` = XX만. 값이 바뀌면 앱이 갱신하고 다음 핸드셰이크부터 적용된다.
+type SharedPsk = std::sync::Arc<std::sync::Mutex<Option<[u8; 32]>>>;
+
+/// PSK 실패 백오프(ADR-0015 §3-3 · 온라인 추측 억제) — IP별 (실패 수, 첫 실패 시각).
+type PskBackoff =
+    std::sync::Arc<std::sync::Mutex<HashMap<std::net::IpAddr, (u32, std::time::Instant)>>>;
+
+/// 이 IP에 지금 psk 수락을 허용하는가 — 60초 안 5회 실패 = 10분 동안 XX만.
+fn psk_backoff_allow(map: &PskBackoff, ip: Option<std::net::IpAddr>) -> bool {
+    let Some(ip) = ip else {
+        return true;
+    };
+    let mut g = match map.lock() {
+        Ok(g) => g,
+        Err(e) => e.into_inner(),
+    };
+    match g.get(&ip) {
+        Some((n, t0)) if *n >= 5 => {
+            if t0.elapsed() >= std::time::Duration::from_secs(600) {
+                g.remove(&ip);
+                true
+            } else {
+                false
+            }
+        }
+        _ => true,
+    }
+}
+
+/// psk 핸드셰이크 실패 기록.
+fn psk_backoff_fail(map: &PskBackoff, ip: Option<std::net::IpAddr>) {
+    let Some(ip) = ip else {
+        return;
+    };
+    let mut g = match map.lock() {
+        Ok(g) => g,
+        Err(e) => e.into_inner(),
+    };
+    let e = g.entry(ip).or_insert((0, std::time::Instant::now()));
+    if e.1.elapsed() >= std::time::Duration::from_secs(60) && e.0 < 5 {
+        *e = (0, std::time::Instant::now());
+    }
+    e.0 += 1;
 }
 impl std::fmt::Debug for InboundSession {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -810,6 +885,16 @@ struct Conversation {
     /// Managed 서버 경유로 성립했는가(08-22 — 헤더 배지 분리: 서버 경유 vs 인터넷
     /// 직결. **표시 전용** — 파일 게이트 정책은 path(PathClass)만 본다).
     via_server: bool,
+    /// 핸드셰이크 바인딩 `(해시, 내가 개시자)` — 세션 내 형제 증명(ADR-0015 S1-e)의 재료.
+    binding: Option<([u8; 32], bool)>,
+    /// 이 세션에서 내 증명을 이미 보냈는가(세션당 1회 — 반복 금지 [13 §12-1]).
+    proof_sent: bool,
+    /// 상대 증명 대조 실패 횟수(세션당 상한 — 온라인 추측 차단).
+    proof_fails: u8,
+    /// 이 세션에 보낸 내 `UserHello`의 목록 버전(바뀌면 재송신 · None = 아직).
+    hello_ver: Option<u32>,
+    /// 이 세션에 내 후계 증명서를 보냈는가(세션당 1회).
+    succ_sent: bool,
 }
 
 /// 진행 중 발신 상태(08-16 · 재개형 펌프) — Accept가 등록하고 액터 루프 틱이
@@ -1484,6 +1569,62 @@ fn spawn_session_actor(
                                         parked[pos].1 = true;
                                     }
                                 }
+                            }
+                        }
+                    }
+                    StreamId::Control if nbeep_core::Succession::decode(&bytes).is_some() => {
+                        // 후계 증명서(ADR-0015 §3-5) — 검증은 메인.
+                        if let Some(d) = nbeep_core::Succession::decode(&bytes) {
+                            if proxy
+                                .send_event(AppEvent::Succession {
+                                    peer,
+                                    doc: Box::new(d),
+                                })
+                                .is_err()
+                            {
+                                return;
+                            }
+                        }
+                    }
+                    StreamId::Control if nbeep_core::UserHello::decode(&bytes).is_some() => {
+                        // 서명 기기 목록(ADR-0015 S2-e) — 검증(서명·소속·버전)은 메인.
+                        if let Some(h) = nbeep_core::UserHello::decode(&bytes) {
+                            if proxy
+                                .send_event(AppEvent::UserHello {
+                                    peer,
+                                    hello: Box::new(h),
+                                })
+                                .is_err()
+                            {
+                                return;
+                            }
+                        }
+                    }
+                    StreamId::Control if nbeep_core::UserKeyBlob::decode(&bytes).is_some() => {
+                        // 사용자 키 봉인본(ADR-0015 S2) — 형제 세션에서만 유효 · 판정은 메인.
+                        if let Some(b) = nbeep_core::UserKeyBlob::decode(&bytes) {
+                            if proxy
+                                .send_event(AppEvent::UserKeyBlob {
+                                    peer,
+                                    sealed: b.sealed,
+                                })
+                                .is_err()
+                            {
+                                return;
+                            }
+                        }
+                    }
+                    StreamId::Control if nbeep_core::UserProof::decode(&bytes).is_some() => {
+                        // 형제 증명(ADR-0015 S1-e) — 태그 11 · 대조는 메인.
+                        if let Some(p) = nbeep_core::UserProof::decode(&bytes) {
+                            if proxy
+                                .send_event(AppEvent::UserProof {
+                                    peer,
+                                    proof: p.proof,
+                                })
+                                .is_err()
+                            {
+                                return;
                             }
                         }
                     }
@@ -2498,26 +2639,48 @@ fn spawn_inbound_accept(
     incoming: std::sync::mpsc::Receiver<Box<dyn nbeep_core::Link>>,
     identity: std::sync::Arc<nbeep_crypto::Identity>,
     proxy: winit::event_loop::EventLoopProxy<AppEvent>,
+    psk: SharedPsk,
 ) {
     std::thread::spawn(move || {
+        let backoff: PskBackoff = PskBackoff::default();
         while let Ok(link) = incoming.recv() {
             let identity = std::sync::Arc::clone(&identity);
             let proxy = proxy.clone();
+            let psk = std::sync::Arc::clone(&psk);
+            let backoff = std::sync::Arc::clone(&backoff);
             std::thread::spawn(move || {
                 // 경로 등급은 핸드셰이크 **전** 실소켓 주소로 판정(M5-3c) — 세션이
                 // 링크를 삼키기 전 마지막 관측 지점이다. 소켓 아님(None) = Local.
-                let path = link
-                    .remote_ip()
-                    .map_or(nbeep_core::PathClass::Local, nbeep_core::class_of_ip);
-                // 핸드셰이크(블로킹) — 실패(자기 키 복제 U-P2 포함)면 조용히 버린다.
-                let Ok(session) = nbeep_crypto::NoiseSession::accept(link, &identity) else {
-                    return;
+                let ip = link.remote_ip();
+                let path = ip.map_or(nbeep_core::PathClass::Local, nbeep_core::class_of_ip);
+                // ★ 형제 기기 수락(ADR-0015 §3-3) — 내 PSK가 있으면 XX/XXpsk3를 첫 메시지로
+                //   가른다. 이 IP가 psk 실패를 반복했으면(온라인 추측) XX만 받는다.
+                let psk_now = if psk_backoff_allow(&backoff, ip) {
+                    match psk.lock() {
+                        Ok(g) => *g,
+                        Err(e) => *e.into_inner(),
+                    }
+                } else {
+                    None
                 };
+                // 핸드셰이크(블로킹) — 실패(자기 키 복제 U-P2 포함)면 조용히 버린다.
+                let (session, via_psk) =
+                    match nbeep_crypto::NoiseSession::accept_any(link, &identity, psk_now.as_ref())
+                    {
+                        Ok(v) => v,
+                        Err(_) => {
+                            if psk_now.is_some() {
+                                psk_backoff_fail(&backoff, ip);
+                            }
+                            return;
+                        }
+                    };
                 let _ = proxy.send_event(AppEvent::Inbound {
                     session: Box::new(InboundSession {
                         session,
                         path,
                         via_server: false, // LAN/직결 인바운드
+                        via_psk,
                     }),
                 });
             });
@@ -2536,6 +2699,7 @@ fn spawn_relay_accept(
     client: &std::sync::Arc<nbeep_relay::RelayClient>,
     identity: std::sync::Arc<nbeep_crypto::Identity>,
     proxy: winit::event_loop::EventLoopProxy<AppEvent>,
+    psk: SharedPsk,
 ) {
     let weak = std::sync::Arc::downgrade(client);
     std::thread::spawn(move || loop {
@@ -2549,6 +2713,10 @@ fn spawn_relay_accept(
         // 기다리지 않는다(LAN spawn_inbound_accept가 세션별 스레드를 쓰는 이유와 동일).
         let identity = std::sync::Arc::clone(&identity);
         let proxy = proxy.clone();
+        let psk_now = match psk.lock() {
+            Ok(g) => *g,
+            Err(e) => *e.into_inner(),
+        };
         std::thread::spawn(move || {
             // 실패는 조용히 — 상대가 보는 것은 Closed뿐(ADR-0006 §2 규칙 4 · LAN
             // 인바운드 핸드셰이크 실패와 같은 결).
@@ -2558,12 +2726,14 @@ fn spawn_relay_accept(
                 &identity,
                 true,
                 std::time::Duration::from_secs(12),
+                psk_now.as_ref(), // 형제 기기(XXpsk3)도 같은 사다리로 받는다(ADR-0015)
             ) {
                 let _ = proxy.send_event(AppEvent::Inbound {
                     session: Box::new(InboundSession {
                         session: via.session,
                         path: via.path,
                         via_server: true, // 서버 랑데부 성립(X-2b)
+                        via_psk: via.via_psk,
                     }),
                 });
             }
@@ -2698,6 +2868,42 @@ struct App {
     /// 연결 테스트 진행 중(08-22 — 설정 › 서버 › 테스트 버튼) — 다음 ServerAttach
     /// 결과를 "테스트 성공/실패" 문구로 보고한다(접속 경로 자체는 평소와 동일).
     relay_test: bool,
+    /// 사용자 신원 상태(ADR-0015 · DR-29) — 설정 노트·기능 게이트의 단일 원천.
+    user_state: crate::userident::UserState,
+    /// 인증 성공 시에만 채워지는 런타임 재료(KP·UserKey) — 값이 바뀌면 통째로 비운다.
+    user_rt: crate::userident::UserRuntime,
+    /// 인증 워커 세대(낡은 결과 폐기).
+    user_gen: u64,
+    /// 형제 후보 힌트(ADR-0015 §3-4) — 상대가 광고한 LAN_tag와 관측 시각(**원문 보관** —
+    /// 일치 판정은 조회 시점에 내 재료로 한다: 부팅 직후 PBKDF2 워커가 끝나기 전에
+    /// 도착한 힌트를 버리면 첫 연결이 XX로 굳는다 · 09-06 실기). 만료 = 발견과 같은 60s.
+    sibling_hints: HashMap<PeerId, ([u8; 16], std::time::Instant)>,
+    /// XXpsk3로 성립한 형제 기기(런타임 · 세션마다 재확인 — S2에서 trust.seg 레코드로).
+    siblings: std::collections::HashSet<PeerId>,
+    /// 인바운드 수락 스레드와 공유하는 내 PSK(ADR-0015).
+    psk_shared: SharedPsk,
+    /// 사용자 신원 트레이스(`NEXA_USER_TRACE=1`) — 힌트·psk 선택·형제 성립을 stderr에
+    /// 남긴다(`NEXA_IME_TRACE` 선례 · 봉투만: 지문 앞자리와 참/거짓뿐).
+    user_trace: bool,
+    /// 내 후계 증명서 **사슬**(ADR-0015 §3-5 · S2-f · 09-06 연속 교체 대비) — 오래된 것이 앞 ·
+    /// `data/user.succ`에 두고 세션마다 전부 제시(꺼져 있던 상대도 자기 기록에서 닿는 지점부터 잇는다).
+    succession: Vec<nbeep_core::Succession>,
+    /// 마지막 교체 실행 시각(ms · 0 = 없음) — 잠금 창.
+    rotate_done_ms: u64,
+    /// 적용한 후계(옛 공개키 → 새 공개키 · 런타임) — 키 봉인본 병합에서 "후계가 이긴다".
+    successors: HashMap<[u8; 32], [u8; 32]>,
+    /// 본 후계(옛 공개키 → (버전, 새 공개키)) — 같은 버전·다른 새 키 = 정직한 충돌(D-32-9).
+    succ_seen: HashMap<[u8; 32], (u32, [u8; 32])>,
+    /// 충돌한 옛 공개키(런타임 · 카드 경고).
+    succ_conflicts: std::collections::HashSet<[u8; 32]>,
+    /// 키 교체 무장 시각(ms · 0 = 무장 아님 · 5초 안에 2회 클릭 = 실행).
+    rotate_armed_ms: u64,
+    /// 키 교체 결과 한 줄(행 노트 · 다음 무장까지 유지 · Ok 톤).
+    rotate_note: Option<String>,
+    /// 마지막으로 발신한 LAN 힌트 태그의 에폭 일(자정 회전 감시).
+    user_tag_day: u64,
+    /// 다음 페어링 RID 탐색(릴레이 · 형제 없을 때 30s 간격) 시각(ms).
+    user_seek_at: u64,
     /// Managed 전환 보류(08-22 사용자 확정 2차) — 실행 중 모드를 Managed로 바꾼
     /// 직후는 **값이 검증돼 있어도** 자동 접속하지 않는다(Test가 풀 때까지).
     /// 부팅은 해당 없음(모드 변경 이벤트가 아니다 — 검증값이면 자동 유지).
@@ -3475,10 +3681,10 @@ impl App {
         // 사전 점검 — 핀 미고정·차단은 여전히 막는다. **상호 미왕래는 경고 후 진행**
         // (08-13 확정: 수신측이 수동 승인으로 강등해 받으므로 발신을 막을 이유가 없다).
         {
-            use nbeep_core::TrustStore as _;
-            if let Err(reason) =
-                nbeep_core::check_send_eligibility(self.trust.level(peer), self.ledger.get(peer))
-            {
+            if let Err(reason) = nbeep_core::check_send_eligibility(
+                self.effective_trust(peer),
+                self.ledger.get(peer),
+            ) {
                 if matches!(reason, nbeep_core::DenyReason::NoMutualConversation) {
                     self.push_peer_note(peer, nbeep_core::t(nbeep_core::Msg::NoticeFirstContact));
                 } else {
@@ -3692,10 +3898,10 @@ impl App {
             // ③ 핀 미고정·차단 = 그 구성원만 제외(1:1은 모달 차단 — 그룹은 카운터).
             //   상호 미왕래는 1:1과 동일하게 경고 후 진행(수신측 수동 승인 강등).
             {
-                use nbeep_core::TrustStore as _;
-                if let Err(reason) =
-                    nbeep_core::check_send_eligibility(self.trust.level(*m), self.ledger.get(*m))
-                {
+                if let Err(reason) = nbeep_core::check_send_eligibility(
+                    self.effective_trust(*m),
+                    self.ledger.get(*m),
+                ) {
                     if matches!(reason, nbeep_core::DenyReason::NoMutualConversation) {
                         first_contact.push(self.peer_title(*m));
                     } else {
@@ -5109,6 +5315,15 @@ impl App {
         // 피드백이 메인 창 상태바로만 가서 설정 창에선 무반응처럼 보였다). 이 깔때기는
         // 설정 창이 열려 있는 동안 주기 호출되므로 재시도 카운트다운도 같이 산다.
         let (srv_state, srv_tone, srv_port, srv_type) = self.server_note_texts();
+        let (usr_note, usr_tone, usr_strength, usr_locks) = self.user_note_texts();
+        // 키 교체 무장 카운트다운(09-06) — 설정 창 행 노트 + 버튼 빨강(상태바만으론 안 보인다).
+        let rotate_left = (self.rotate_armed_ms > 0)
+            .then(|| ROTATE_ARM_MS.saturating_sub(now.saturating_sub(self.rotate_armed_ms)))
+            .filter(|left| *left > 0);
+        if rotate_left.is_none() {
+            self.rotate_armed_ms = 0; // 만료 = 무장 해제(다음 클릭은 다시 1회차)
+        }
+        let rotate_note = self.rotate_note.clone();
         let Some(sv) = &mut self.settings_view else {
             return;
         };
@@ -5184,6 +5399,57 @@ impl App {
                 "net.server.test",     // 테스트도 Managed에서만(08-22)
             ]);
         }
+        // 사용자 섹션(ADR-0015) — 스위치 off = 입력란 전부 잠금 · 값 무효/진행 중 = 인증 버튼 잠금.
+        sv.set_row_note_toned("user.test", &usr_note, usr_tone, &mut inv);
+        // 페어링 암호 행 — 생성 무장 중엔 카운트다운(Warn) · 아니면 강도.
+        match sv.pw_arm_remaining_ms() {
+            Some(ms) => sv.set_row_note_toned(
+                "user.passphrase",
+                &nbeep_core::tf(
+                    nbeep_core::Msg::StfNoteRegenArm,
+                    &[&ms.div_ceil(1000).to_string()],
+                ),
+                nbeep_ui::NoteTone::Warn,
+                &mut inv,
+            ),
+            None => sv.set_row_note("user.passphrase", &usr_strength, &mut inv),
+        }
+        // 키 교체 행 — 무장 중 = 카운트다운(Warn)+빨강 버튼 · 직후 = 결과(Ok) · 그 외 = 없음.
+        match (rotate_left, rotate_note) {
+            (Some(ms), _) => {
+                sv.set_row_note_toned(
+                    "user.rotate",
+                    &nbeep_core::tf(
+                        nbeep_core::Msg::StfNoteRotateArm,
+                        &[&ms.div_ceil(1000).to_string()],
+                    ),
+                    nbeep_ui::NoteTone::Warn,
+                    &mut inv,
+                );
+                sv.set_action_tone(
+                    "user.rotate",
+                    nbeep_ui::controls::ButtonTone::Danger,
+                    &mut inv,
+                );
+            }
+            (None, Some(done)) => {
+                sv.set_row_note_toned("user.rotate", &done, nbeep_ui::NoteTone::Ok, &mut inv);
+                sv.set_action_tone(
+                    "user.rotate",
+                    nbeep_ui::controls::ButtonTone::Default,
+                    &mut inv,
+                );
+            }
+            (None, None) => {
+                sv.set_row_note("user.rotate", "", &mut inv);
+                sv.set_action_tone(
+                    "user.rotate",
+                    nbeep_ui::controls::ButtonTone::Default,
+                    &mut inv,
+                );
+            }
+        }
+        locked.extend(usr_locks);
         sv.set_disabled(&locked, &mut inv);
     }
 
@@ -5220,6 +5486,8 @@ impl App {
         let mut departed: Vec<nbeep_core::PeerEvent> = Vec::new();
         while let Ok(ev) = self.discovery.try_recv() {
             match ev {
+                // ★ 사용자 힌트(ADR-0015 §3-4) — 내 태그와 같으면 형제 후보(미검증 · 판정은 XXpsk3).
+                DiscoveryEvent::UserHint { peer, tag } => self.on_user_hint(peer, tag),
                 DiscoveryEvent::Appeared(hint) => {
                     // 최근 접속 관측(08-15 — 아는 상대만 · 60초 스로틀 영속).
                     self.trust.note_seen(hint.peer, unix_now_ms());
@@ -5242,7 +5510,7 @@ impl App {
                         //   실패 시 백오프로 스스로 다시 건다. or_insert = 진행
                         //   중 표식·기존 백오프 불침투(M4-6과 같은 문법).
                         if !self.conversations.contains_key(&hint.peer) {
-                            self.reconnect.entry(hint.peer).or_insert((0, 0));
+                            self.seed_reconnect(hint.peer);
                         }
                     }
                     // ★ 오프라인 대기 상대가 나타났다(M4-6) — 즉시 연결 후보로.
@@ -5254,7 +5522,7 @@ impl App {
                     {
                         // or_insert — 진행 중 표식(u64::MAX)·기존 백오프를 덮지 않는다
                         // (Appeared는 비컨마다 온다 — 덮으면 1.5초마다 재시도 폭주).
-                        self.reconnect.entry(hint.peer).or_insert((0, 0));
+                        self.seed_reconnect(hint.peer);
                     }
                 }
                 DiscoveryEvent::Vanished(peer) => {
@@ -5365,7 +5633,7 @@ impl App {
         let fpres = fval(self.settings.get("list.filter.presence"));
         let ftrust = fval(self.settings.get("list.filter.trust"));
         entries.retain(|e| {
-            let lvl = self.trust.level(e.peer);
+            let lvl = self.effective_trust(e.peer);
             // ★ 왕래 기준 승격(확정안) — roster로만 아는(왕래 전무·미발견) 상대는
             //   그룹1 'Server'를 골랐을 때만 나타난다. 핀·인증·세션이 생기면 전체로.
             let roster_only = self.server_peers.contains(&e.peer)
@@ -5496,13 +5764,16 @@ impl App {
                 // 신뢰 배지 확장(M3-14) — 차단·이름 충돌은 도메인엔 있었는데
                 // 화면에 안 나오던 상태다(충돌 = v1 사칭 유일 가시 신호).
                 let blocked = self.trust.is_blocked(entry.peer);
-                let conflict = self.trust.name_conflict(entry.peer, &entry.name).is_some();
+                // 이름 충돌(표시 이름 · M3-14) ∨ 핸들 충돌(사용자 핸들 · ADR-0015 S2-e) — 같은 덧표식.
+                let conflict = self.trust.name_conflict(entry.peer, &entry.name).is_some()
+                    || self.trust.handle_conflict(entry.peer);
                 // 최근 접속 상대 시각(08-17 — 삭제 메뉴가 시각만 표시).
                 let last_seen_label = ago_label(self.trust.meta(entry.peer).0);
                 // 프레즌스(08-23 — 점 색 축): 필터 판정과 같은 정의.
                 let online = self.table.get(entry.peer).is_some()
                     || self.server_peers.contains(&entry.peer)
                     || self.conversations.contains_key(&entry.peer);
+                let own_device = self.siblings.contains(&entry.peer);
                 PeerRow {
                     entry,
                     trust,
@@ -5518,6 +5789,7 @@ impl App {
                     fav,
                     blocked,
                     conflict,
+                    own_device,
                     last_seen_label,
                 }
             })
@@ -5860,9 +6132,11 @@ impl App {
         let identity = std::sync::Arc::clone(&self.identity);
         let pin = self.data_dir.join("server.pin");
         let proxy = self.proxy.clone();
+        // ★ 사용자 페어링 RID 3개(ADR-0015 §3-4) — 기기별 RID와 나란히 등록(서버 무변경).
+        let extra = self.user_pair_rids();
         // 접속·Noise·DNS는 워커에서(수 초 블로킹 — UI 불가침). 결과는 이벤트로.
         std::thread::spawn(move || {
-            let outcome = match nbeep_relay::attach(&raw, &identity, &pin) {
+            let outcome = match nbeep_relay::attach(&raw, &identity, &pin, &extra) {
                 Ok(at) => Ok(Box::new(at)),
                 Err(nbeep_relay::AttachError::Resolve) => Err(ServerAttachFail::Resolve),
                 Err(nbeep_relay::AttachError::Relay(nbeep_relay::RelayError::PinMismatch {
@@ -5967,6 +6241,1001 @@ impl App {
             if let Some(mid) = self.main_id {
                 self.request_redraw(mid);
             }
+        }
+    }
+
+    // ── 사용자 신원(ADR-0015 · DR-29 · X-13 S0) ─────────────────────────────
+
+    /// 프로그램이 바꾼 설정값을 열려 있는 설정 화면에 역반영(apply_settings의 쌍방 동기와 같은 결).
+    fn settings_view_set(&mut self, key: &'static str, value: &str) {
+        if let Some(sv) = &mut self.settings_view {
+            let mut sinv = Invalidations::default();
+            sv.set_value(key, value, &mut sinv);
+            if let Some(sid) = self
+                .windows
+                .iter()
+                .find(|(_, e)| e.role == Role::Settings)
+                .map(|(id, _)| *id)
+            {
+                self.request_redraw(sid);
+            }
+        }
+    }
+
+    /// 설정 › 사용자 노트·잠금(표시 전용 파생) — (인증 행 노트, 톤, 암호 강도 노트, 잠글 키).
+    fn user_note_texts(&self) -> (String, nbeep_ui::NoteTone, String, Vec<&'static str>) {
+        use crate::userident::{pass_grade, UserState, Validity};
+        use nbeep_core::{t, tf, Msg};
+        use nbeep_ui::NoteTone;
+        let enabled = self.settings.get("user.enabled") == "on";
+        if !enabled {
+            return (
+                t(Msg::StNoteUserOff).into(),
+                NoteTone::Plain,
+                String::new(),
+                vec![
+                    "user.handle",
+                    "user.passphrase",
+                    "user.suggest",
+                    "user.test",
+                ],
+            );
+        }
+        let pass = self.settings.get("user.passphrase");
+        let strength = if pass.is_empty() {
+            String::new()
+        } else {
+            let g = match pass_grade(pass) {
+                0 => Msg::UserStrengthWeak,
+                1 => Msg::UserStrengthNormal,
+                _ => Msg::UserStrengthStrong,
+            };
+            tf(Msg::StfNoteUserStrength, &[t(g)])
+        };
+        let mut locks: Vec<&'static str> = Vec::new();
+        if !self.user_state.can_test() {
+            locks.push("user.test");
+        }
+        if !self.user_state.active()
+            || (self.rotate_done_ms > 0
+                && self.now_ms().saturating_sub(self.rotate_done_ms) < ROTATE_COOLDOWN_MS)
+        {
+            locks.push("user.rotate"); // 인증된 키가 있어야 서명 · 실행 직후 10초 잠금(연타 방지)
+        }
+        let (note, tone) = match &self.user_state {
+            UserState::Unconfigured(Validity::Empty) => {
+                (t(Msg::StNoteUserEmpty).into(), NoteTone::Warn)
+            }
+            UserState::Unconfigured(Validity::BadHandle) => {
+                (t(Msg::StNoteUserBadHandle).into(), NoteTone::Warn)
+            }
+            UserState::Unconfigured(Validity::ShortPass | Validity::Ok) => {
+                (t(Msg::StNoteUserShortPass).into(), NoteTone::Warn)
+            }
+            UserState::Untested => (t(Msg::StNoteUserUntested).into(), NoteTone::Info),
+            UserState::Testing => (t(Msg::StNoteUserTesting).into(), NoteTone::Info),
+            UserState::Verified { user_id } => (
+                tf(
+                    Msg::StfNoteUserVerified,
+                    &[
+                        crate::userident::normalize_handle(self.settings.get("user.handle")),
+                        &user_id.short(),
+                    ],
+                ),
+                NoteTone::Ok,
+            ),
+            UserState::Failed(why) => (tf(Msg::StfNoteUserFailed, &[why]), NoteTone::Warn),
+        };
+        (note, tone, strength, locks)
+    }
+
+    /// 핸들·암호가 바뀌었다(키인·붙여넣기·생성 불문) — 검증 마커는 값에 붙으므로 내려가고,
+    /// 런타임 재료를 비워 인증 의존 기능이 즉시 멈춘다.
+    fn user_values_changed(&mut self) {
+        self.user_gen = self.user_gen.wrapping_add(1); // 진행 중 워커 결과 폐기
+        self.user_rt.clear();
+        if self.settings.get("user.verified") != "off" {
+            self.settings.set("user.verified", "off".to_string());
+            self.conf_mark();
+        }
+        self.user_state = if self.settings.get("user.enabled") == "on" {
+            crate::userident::on_values_changed(
+                self.settings.get("user.handle"),
+                self.settings.get("user.passphrase"),
+            )
+        } else {
+            crate::userident::UserState::Unconfigured(crate::userident::Validity::Empty)
+        };
+        self.user_apply_runtime(); // 인증 의존 기능 즉시 중지(PSK·태그·형제 집합)
+        self.refresh_approval_ui();
+    }
+
+    /// 스위치 — on: 빈 칸을 기본값(정제 표시 이름 · 무작위 12자)으로 채우고 바로 인증 ·
+    /// off: 재료를 비우고 입력란을 잠근다(단독 노드 — LAN·서버 대화는 그대로).
+    fn user_enabled_changed(&mut self, on: bool) {
+        if on {
+            if crate::userident::normalize_handle(self.settings.get("user.handle")).is_empty() {
+                let name = effective_display_name(&self.settings, &self.identity.peer_id());
+                let h = crate::userident::default_handle(
+                    name.as_str(),
+                    &self.identity.peer_id().short(),
+                );
+                self.settings.set("user.handle", h.clone());
+                self.settings_view_set("user.handle", &h);
+            }
+            if self.settings.get("user.passphrase").is_empty() {
+                let s = crate::userident::suggest_passphrase();
+                if !s.is_empty() {
+                    self.settings.set("user.passphrase", s.clone());
+                    self.settings_view_set("user.passphrase", &s);
+                }
+            }
+            self.conf_mark();
+            self.user_values_changed();
+            if self.user_state.can_test() {
+                self.user_test();
+            }
+        } else {
+            self.user_values_changed();
+        }
+    }
+
+    /// 인증 테스트(행위) — 워커에서 KP 파생(60k)·`user.key` 봉인 열기/생성. UI 무정지.
+    fn user_test(&mut self) {
+        if self.settings.get("user.enabled") != "on" || !self.user_state.can_test() {
+            self.set_status(nbeep_core::t(nbeep_core::Msg::StUserNeedBoth));
+            return;
+        }
+        let handle = self.settings.get("user.handle").to_string();
+        let pass = self.settings.get("user.passphrase").to_string();
+        self.user_gen = self.user_gen.wrapping_add(1);
+        let gen = self.user_gen;
+        self.user_state = crate::userident::UserState::Testing;
+        self.set_status(nbeep_core::tf(
+            nbeep_core::Msg::StfUserTesting,
+            &[crate::userident::normalize_handle(&handle)],
+        ));
+        self.refresh_approval_ui();
+        let path = self.data_dir.join("user.key");
+        let proxy = self.proxy.clone();
+        let held = self
+            .user_rt
+            .key
+            .clone()
+            .map(|k| (k, self.user_rt.key_created)); // 암호·핸들 변경 = 재래핑 근거(신원 불변)
+        std::thread::spawn(move || {
+            let result = crate::userident::derive_and_load(
+                &handle,
+                &pass,
+                &path,
+                crate::gate::SEAL_USERKEY,
+                held.as_ref().map(|(k, at)| (k, *at)),
+            )
+            .map(Box::new);
+            let _ = proxy.send_event(AppEvent::UserTestDone { gen, result });
+        });
+    }
+
+    /// 워커 결과 — 성공 = 즉시 인증(마커 저장 · 재료 보유) · 실패 = 기능 전부 중지.
+    fn user_test_done(&mut self, gen: u64, result: Result<Box<crate::userident::TestOk>, String>) {
+        if gen != self.user_gen {
+            return; // 그 사이 값이 바뀜 — 낡은 결과
+        }
+        match result {
+            Ok(ok) => {
+                let user_id = ok.key.user_id();
+                let ok = *ok;
+                self.user_rt.material = Some(ok.material);
+                self.user_rt.key = Some(ok.key);
+                self.user_rt.key_created = ok.created_at;
+                self.user_state = crate::userident::on_test_result(&Ok(user_id));
+                if ok.created {
+                    // 첫 기기 부트스트랩 — 새 사용자 키가 이 PC에 봉인 저장됐다(비밀은 표시 안 함).
+                    self.set_status(format!("user.key created (ID {})", user_id.short()));
+                }
+                if self.settings.get("user.verified") != "on" {
+                    self.settings.set("user.verified", "on".to_string());
+                    self.conf_mark();
+                }
+                self.set_status(nbeep_core::tf(
+                    nbeep_core::Msg::StfUserTestOk,
+                    &[
+                        crate::userident::normalize_handle(self.settings.get("user.handle")),
+                        &user_id.short(),
+                    ],
+                ));
+                self.user_apply_runtime();
+            }
+            Err(why) => {
+                self.user_rt.clear();
+                self.user_state = crate::userident::on_test_result(&Err(why.clone()));
+                if self.settings.get("user.verified") != "off" {
+                    self.settings.set("user.verified", "off".to_string());
+                    self.conf_mark();
+                }
+                self.set_status(nbeep_core::tf(nbeep_core::Msg::StfUserTestFail, &[&why]));
+                self.user_apply_runtime();
+            }
+        }
+        self.refresh_approval_ui();
+    }
+
+    /// 사용자 힌트 관측 — 내 LAN_tag(어제·오늘·내일)와 같으면 형제 후보로 기억한다.
+    /// 다르면 무시(남의 사용자 · 정보 없음). 기능이 꺼져 있으면 아무것도 하지 않는다.
+    fn on_user_hint(&mut self, peer: PeerId, tag: [u8; 16]) {
+        if self.settings.get("user.enabled") != "on" {
+            return; // 기능 꺼짐 = 보관도 하지 않는다(발견과 무관한 상대 상태를 들고 있지 않는다)
+        }
+        self.sibling_hints
+            .insert(peer, (tag, std::time::Instant::now()));
+        if self.user_trace {
+            eprintln!(
+                "[user] hint from {} match={}",
+                peer.short(),
+                self.is_sibling_candidate(peer)
+            );
+        }
+        // 이미 XX로 선 세션이 있으면 세션 안에서 증명해 승격한다(재접속 없음 · 1회).
+        if !self.siblings.contains(&peer) && self.conversations.contains_key(&peer) {
+            self.send_user_proof(peer, false);
+        }
+    }
+
+    /// 세션 내 형제 증명 송신(세션당 1회) — `force`가 아니면 힌트 후보에게만(증명값은
+    /// 태그와 같은 노출 등급 — 후보 아닌 상대에게 내 KP 파생물을 더 주지 않는다).
+    fn send_user_proof(&mut self, peer: PeerId, force: bool) {
+        if !force && !self.is_sibling_candidate(peer) {
+            return;
+        }
+        let Some(psk) = self.user_rt.material.as_ref().map(|m| m.psk()) else {
+            return;
+        };
+        if !self.user_state.active() {
+            return;
+        }
+        let Some(conv) = self.conversations.get_mut(&peer) else {
+            return;
+        };
+        if conv.proof_sent {
+            return;
+        }
+        let Some((hh, initiator)) = conv.binding else {
+            return;
+        };
+        let proof = nbeep_crypto::userkey::session_proof(&psk, &hh, initiator);
+        conv.proof_sent = true;
+        let _ = conv.out_tx.send(SessionCmd::Control(vec![
+            nbeep_core::UserProof { proof }.encode()
+        ]));
+        if self.user_trace {
+            eprintln!("[user] proof sent to {} force={force}", peer.short());
+        }
+    }
+
+    /// 상대 증명 대조 — 내 PSK로 같은 세션·반대 역할의 값을 재계산해 상수 시간 비교.
+    /// 맞으면 형제 확정(+내 증명 회신) · 틀리면 세션당 3회까지만 무시하고 그 뒤는 폐기.
+    fn on_user_proof(&mut self, peer: PeerId, proof: [u8; 32]) {
+        let psk = self.user_rt.material.as_ref().map(|m| m.psk());
+        let Some(conv) = self.conversations.get_mut(&peer) else {
+            return;
+        };
+        let ok = match (psk, conv.binding, self.user_state.active()) {
+            (Some(psk), Some((hh, initiator)), true) if conv.proof_fails < 3 => {
+                let want = nbeep_crypto::userkey::session_proof(&psk, &hh, !initiator);
+                nbeep_crypto::userkey::proof_eq(&want, &proof)
+            }
+            _ => false,
+        };
+        if !ok {
+            conv.proof_fails = conv.proof_fails.saturating_add(1);
+            if self.user_trace {
+                eprintln!("[user] proof from {} rejected", peer.short());
+            }
+            return;
+        }
+        if self.user_trace {
+            eprintln!("[user] proof from {} verified", peer.short());
+        }
+        self.note_sibling(peer, true);
+        self.send_user_proof(peer, true); // 회신(이미 보냈으면 no-op)
+        self.send_user_key_blob(peer); // 승격 경로도 키 동기(D-32-8)
+        let title = self.peer_title(peer);
+        self.set_status(nbeep_core::tf(self.connected_msg(peer), &[&title]));
+        let mut inv = Invalidations::default();
+        self.refresh_rows(&mut inv);
+        if let Some(id) = self.main_id {
+            self.request_redraw(id);
+        }
+    }
+
+    /// 형제 후보인가 — 이미 psk 성립했거나, 60s 안의 힌트가 **내 재료의 어제·오늘·내일
+    /// 태그**와 일치(재료가 아직 없으면 false — 판정은 매 조회 신선하다).
+    fn is_sibling_candidate(&self, peer: PeerId) -> bool {
+        if self.siblings.contains(&peer) {
+            return true;
+        }
+        let Some(m) = self.user_rt.material.as_ref() else {
+            return false;
+        };
+        self.sibling_hints.get(&peer).is_some_and(|(tag, t)| {
+            t.elapsed() < std::time::Duration::from_secs(60) && m.lan_tags_around().contains(tag)
+        })
+    }
+
+    /// 자동 연결(발견발 조용한 세션)을 **힌트 유예** 뒤에 걸 것인가 — 내 신원이 켜져
+    /// 있고(인증 중 또는 인증됨) 이 상대가 아직 형제로 판정되지 않았으면 참. 광고
+    /// 직후의 힌트 한 장(≈1ms 뒤)과 부팅 PBKDF2 워커(~100ms)를 기다리지 않으면 첫
+    /// 세션이 XX로 성립해 형제 판정을 놓친다(09-06 실기 — 재연결 때까지 "연결됨").
+    fn sibling_grace(&self, peer: PeerId) -> bool {
+        match &self.user_state {
+            crate::userident::UserState::Testing => true,
+            st if st.active() => !self.is_sibling_candidate(peer),
+            _ => false,
+        }
+    }
+
+    /// 발견발 재연결 사다리 시드(단일 지점) — 유예가 필요하면 첫 시도를 `SIBLING_GRACE_MS`
+    /// 뒤로(그 사이 힌트가 오면 psk_for가 XXpsk3를 고른다). or_insert = 진행 중 표식·
+    /// 기존 백오프 불침투(종전 문법 그대로).
+    fn seed_reconnect(&mut self, peer: PeerId) {
+        let due = if self.sibling_grace(peer) {
+            self.now_ms() + SIBLING_GRACE_MS
+        } else {
+            0
+        };
+        self.reconnect.entry(peer).or_insert((0, due));
+    }
+
+    /// 이 상대에게 XXpsk3로 열 것인가 — 인증 상태 ∧ 형제 후보일 때만 PSK.
+    fn psk_for(&self, peer: PeerId) -> Option<[u8; 32]> {
+        if !self.user_state.active() || !self.is_sibling_candidate(peer) {
+            return None;
+        }
+        self.user_rt.material.as_ref().map(|m| m.psk())
+    }
+
+    /// 릴레이에 함께 등록할 페어링 RID(어제·오늘·내일) — 미인증이면 빈 목록.
+    fn user_pair_rids(&self) -> Vec<nbeep_relay::Rid> {
+        if !self.user_state.active() {
+            return Vec::new();
+        }
+        self.user_rt
+            .material
+            .as_ref()
+            .map(|m| m.rids_around().to_vec())
+            .unwrap_or_default()
+    }
+
+    /// ★ 신뢰 판정 단일 통로(ADR-0015 §4 · S2-c) — **내 기기(형제)는 `FingerprintVerified`로
+    /// 본다**: 저장 등급은 손대지 않고(핀은 TOFU 그대로 · 세션이 끝나면 원래 등급 — "UserId를
+    /// 바꾼 PC는 별도 PC"가 캐시 없이 성립) 판정 지점만 여기로 모은다. 풀리는 것은 "사람을
+    /// 믿느냐"(승인·대조·원격 대기·무음)뿐 — 격리·무해화는 무변경(DR-13).
+    fn effective_trust(&self, peer: PeerId) -> nbeep_core::TrustLevel {
+        use nbeep_core::TrustStore as _;
+        if self.siblings.contains(&peer) {
+            nbeep_core::TrustLevel::FingerprintVerified
+        } else {
+            self.trust.level(peer)
+        }
+    }
+
+    /// 세션 성립 상태 문구 — 내 기기(XXpsk3 형제)면 별도 문구(S1 실기 확인 지점 ·
+    /// 같은 핸들러 안에서 `note_sibling`의 문구가 최종 문구에 덮이던 것).
+    fn connected_msg(&self, peer: PeerId) -> nbeep_core::Msg {
+        if self.siblings.contains(&peer) {
+            nbeep_core::Msg::StfConnectedOwnOpen
+        } else {
+            nbeep_core::Msg::StfConnectedOpen
+        }
+    }
+
+    /// 세션 성립 시 형제 판정 반영 — psk로 성립했으면 형제 집합에 넣고 알린다.
+    /// psk가 아니면 **빼지 않는다**(같은 상대의 다른 경로가 XX일 수 있다 · 종료 시 제거).
+    fn note_sibling(&mut self, peer: PeerId, via_psk: bool) {
+        if self.user_trace {
+            eprintln!("[user] session {} via_psk={via_psk}", peer.short());
+        }
+        if via_psk && self.siblings.insert(peer) {
+            let title = self.peer_title(peer);
+            self.set_status(nbeep_core::tf(
+                nbeep_core::Msg::StfConnectedOwnOpen,
+                &[&title],
+            ));
+            // 키 동기는 대화 채널이 선 뒤(install_conversation / on_user_proof)에서 보낸다 —
+            // 핸들러 머리에서는 아직 out_tx가 없다(09-06 실기: 보냄 0건).
+        }
+    }
+
+    /// 후계 증명서 파일(공개 문서 — 봉인 불필요).
+    fn succ_path(&self) -> std::path::PathBuf {
+        self.data_dir.join("user.succ")
+    }
+
+    /// 내 후계 증명서를 이 세션에(세션당 1회) — 있을 때만.
+    fn send_succession(&mut self, peer: PeerId) {
+        if self.succession.is_empty() {
+            return;
+        }
+        let frames: Vec<Vec<u8>> = self
+            .succession
+            .iter()
+            .map(nbeep_core::Succession::encode)
+            .collect();
+        let last_ver = self.succession.last().map_or(0, |d| d.ver);
+        let Some(conv) = self.conversations.get_mut(&peer) else {
+            return;
+        };
+        if conv.succ_sent {
+            return;
+        }
+        conv.succ_sent = true;
+        let n = frames.len();
+        let _ = conv.out_tx.send(SessionCmd::Control(frames));
+        if self.user_trace {
+            eprintln!(
+                "[user] succession chain({n}) sent to {} ver={last_ver}",
+                peer.short()
+            );
+        }
+    }
+
+    /// 내 사슬에 문서 추가(중복 = 무시) + 파일 저장(상한 초과 = 오래된 것부터 버림).
+    fn push_my_succession(&mut self, doc: nbeep_core::Succession) {
+        if self
+            .succession
+            .iter()
+            .any(|d| d.old_pub == doc.old_pub && d.new_pub == doc.new_pub)
+        {
+            return;
+        }
+        self.succession.push(doc);
+        if self.succession.len() > nbeep_core::SUCC_CHAIN_MAX {
+            let drop = self.succession.len() - nbeep_core::SUCC_CHAIN_MAX;
+            self.succession.drain(..drop);
+        }
+        let _ = nbeep_store::privfile::write_atomic(
+            &self.succ_path(),
+            &nbeep_core::encode_chain(&self.succession),
+        );
+    }
+
+    /// 후계 증명서 수신(ADR-0015 §3-5 · D-32-9) — ①제시자 ∈ devices ∧ ∉ revoked ②옛·새 키 두 서명
+    /// ③버전: 같은 옛 키에 더 낮은 버전 = 무시 · **같은 버전·다른 새 키 = 정직한 충돌**(적용 안 함 ·
+    /// 카드 경고 · 사용자가 다른 채널로 확인). 통과 = 옛 공개키를 제시했던 기기 기록을 새 공개키로
+    /// 접고(revoked는 사용자 기록 폐기) · 옛 키가 **내 키**고 제시자가 형제면 문서를 내 것으로 삼는다
+    /// (새 비밀키는 뒤따르는 봉인본이 "후계가 이긴다"로 채택).
+    fn on_succession(&mut self, peer: PeerId, doc: &nbeep_core::Succession) {
+        if !doc.devices.contains(&peer) || doc.revoked.contains(&peer) {
+            if self.user_trace {
+                eprintln!(
+                    "[user] succession from {} rejected: presenter",
+                    peer.short()
+                );
+            }
+            return;
+        }
+        let msg = doc.to_sign();
+        if !nbeep_crypto::userkey::verify(&doc.old_pub, &msg, &doc.sig_old)
+            || !nbeep_crypto::userkey::verify(&doc.new_pub, &msg, &doc.sig_new)
+        {
+            if self.user_trace {
+                eprintln!(
+                    "[user] succession from {} rejected: signature",
+                    peer.short()
+                );
+            }
+            return;
+        }
+        match self.succ_seen.get(&doc.old_pub) {
+            Some((v, np)) if *v > doc.ver => return, // 낡은 후계
+            Some((v, np)) if *v == doc.ver && *np != doc.new_pub => {
+                // 정직한 충돌 — 자동 승자 없음(D-32-9).
+                self.succ_conflicts.insert(doc.old_pub);
+                if self.user_trace {
+                    eprintln!("[user] succession CONFLICT for old key (ver {v})");
+                }
+                self.set_status(nbeep_core::t(nbeep_core::Msg::CardSuccessionConflict));
+                self.refresh_peer_info_card(peer);
+                return;
+            }
+            _ => {}
+        }
+        self.succ_seen.insert(doc.old_pub, (doc.ver, doc.new_pub));
+        self.successors.insert(doc.old_pub, doc.new_pub);
+        // 옛 공개키를 제시했던 기기들 → 새 공개키로 접기(revoked는 폐기).
+        let olds = self.trust.devices_of_user(&doc.old_pub);
+        for p in olds {
+            if doc.revoked.contains(&p) {
+                self.trust.revoke_user(p);
+            } else {
+                let name = self
+                    .trust
+                    .user_of(p)
+                    .map(|(_, n, _)| n.to_string())
+                    .unwrap_or_default();
+                self.trust.record_user(p, doc.new_pub, &name, doc.ver);
+            }
+        }
+        // 제시자 자신도 새 사용자(UserHello가 곧 오지만 먼저 접어 둔다).
+        let name = self
+            .trust
+            .user_of(peer)
+            .map(|(_, n, _)| n.to_string())
+            .unwrap_or_default();
+        self.trust.record_user(peer, doc.new_pub, &name, doc.ver);
+        // 내 키의 후계를 형제가 제시했다 = 내 사용자도 바뀐다 — 문서를 내 것으로(전 기기 전파).
+        let mine = self.user_rt.key.as_ref().map(|k| k.public());
+        let me = self.identity.peer_id();
+        // 내 키(또는 내 사슬 위의 키)의 후계이고 내가 목록에 있다 = 사슬에 잇는다(전 기기 전파).
+        // 폐기 목록에 든 기기는 제시자가 될 수 없으므로 들고 있지 않는다(새 키는 봉인본으로).
+        let on_my_chain = mine.is_some_and(|m| {
+            m == doc.old_pub || crate::userident::succ_reaches(&self.successors, &m, &doc.old_pub)
+        });
+        if on_my_chain && self.siblings.contains(&peer) && doc.devices.contains(&me) {
+            self.push_my_succession(doc.clone());
+        }
+        if self.user_trace {
+            eprintln!(
+                "[user] succession from {} applied ver={} revoked={}",
+                peer.short(),
+                doc.ver,
+                doc.revoked.len()
+            );
+        }
+        self.refresh_peer_info_card(peer);
+        let mut inv = Invalidations::default();
+        self.refresh_rows(&mut inv);
+        if let Some(id) = self.main_id {
+            self.request_redraw(id);
+        }
+    }
+
+    /// 사용자 키 교체(설정 › 사용자 › 교체 · 2회 클릭) — 새 키 생성 → 옛·새 키가 후계를 서명 →
+    /// 이 PC만 남기고 다른 기기 전부 폐기(새 암호로 재결합이 복구 경로) → 파일·런타임 교체 →
+    /// 살아 있는 전 세션에 후계·새 UserHello.
+    fn user_rotate(&mut self) {
+        if !self.user_state.active() {
+            self.set_status(nbeep_core::t(nbeep_core::Msg::StNoteUserUntested));
+            return;
+        }
+        let now = self.now_ms();
+        if self.user_trace {
+            eprintln!(
+                "[user] rotate press now={now} armed={} live={}",
+                self.rotate_armed_ms,
+                self.conversations.len()
+            );
+        }
+        if self.rotate_done_ms > 0 && now.saturating_sub(self.rotate_done_ms) < ROTATE_COOLDOWN_MS {
+            return; // 잠금 창(연타 방지) — 버튼도 잠겨 있다
+        }
+        if self.rotate_armed_ms == 0 || now.saturating_sub(self.rotate_armed_ms) > ROTATE_ARM_MS {
+            self.rotate_armed_ms = now;
+            self.rotate_note = None;
+            self.set_status(nbeep_core::t(nbeep_core::Msg::StUserRotateArm));
+            self.refresh_approval_ui(); // 행 노트·빨강 즉시(설정 창에서 바로 보이게 — 사용자 요청)
+            return;
+        }
+        self.rotate_armed_ms = 0;
+        let (Some(m), Some(old)) = (self.user_rt.material.as_ref(), self.user_rt.key.clone())
+        else {
+            return;
+        };
+        let Ok(new) = nbeep_crypto::userkey::UserKey::generate() else {
+            self.set_status("난수원 실패 — 키 교체 중단");
+            return;
+        };
+        let me = self.identity.peer_id();
+        let devices = vec![me];
+        let revoked: Vec<PeerId> = self.my_devices().into_iter().filter(|p| *p != me).collect();
+        let ver = self.user_list_ver().max(1) + 1;
+        let msg = nbeep_core::Succession::signing_bytes(
+            &old.public(),
+            &new.public(),
+            &devices,
+            &revoked,
+            ver,
+        );
+        let doc = nbeep_core::Succession {
+            old_pub: old.public(),
+            new_pub: new.public(),
+            devices,
+            revoked: revoked.clone(),
+            ver,
+            sig_old: old.sign(&msg),
+            sig_new: new.sign(&msg),
+        };
+        // 파일 먼저(실패 = 아무것도 바뀌지 않는다).
+        let created_at = unix_now_ms();
+        let sealed = match crate::userident::seal_key(
+            crate::gate::SEAL_USERKEY,
+            &m.wrap_key(),
+            &new,
+            created_at,
+        ) {
+            Ok(b) => b,
+            Err(e) => {
+                self.set_status(e);
+                return;
+            }
+        };
+        if let Err(e) =
+            nbeep_store::privfile::write_atomic(&self.data_dir.join("user.key"), &sealed)
+        {
+            self.set_status(format!("user.key 저장 실패: {e}"));
+            return;
+        }
+        let old_id = old.user_id();
+        let new_id = new.user_id();
+        self.user_rt.key = Some(new);
+        self.user_rt.key_created = created_at;
+        self.user_state = crate::userident::on_test_result(&Ok(new_id));
+        self.successors.insert(doc.old_pub, doc.new_pub);
+        self.succ_seen.insert(doc.old_pub, (ver, doc.new_pub));
+        self.push_my_succession(doc);
+        self.rotate_done_ms = now;
+        for p in revoked {
+            self.trust.revoke_user(p);
+        }
+        self.settings.set("user.list_ver", ver.to_string());
+        self.conf_mark();
+        let live: Vec<PeerId> = self.conversations.keys().copied().collect();
+        for p in live {
+            self.send_succession(p);
+            // 살아 있는 형제(같은 암호 유지)는 새 비밀키 봉인본을 바로 받아 "후계가 이긴다"로
+            // 채택한다(09-06 실기 — 후계만 보내면 재접속까지 옛 키로 남았다).
+            self.send_user_key_blob(p);
+            if let Some(c) = self.conversations.get_mut(&p) {
+                c.hello_ver = None; // 새 공개키로 다시
+            }
+            self.send_user_hello(p);
+        }
+        let done = nbeep_core::tf(
+            nbeep_core::Msg::StfUserRotated,
+            &[&old_id.short(), &new_id.short()],
+        );
+        self.rotate_note = Some(done.clone());
+        self.set_status(done);
+        self.refresh_approval_ui();
+    }
+
+    /// 내 기기 집합(ADR-0015 S2-e) = 나 + **내 사용자 공개키를 서명 제시한 기기들**(trust.seg 기록 —
+    /// 남이 준 목록이 아니라 그 기기 자신의 세션에서 받은 것만 · A-1). 키 바이트 정렬.
+    fn my_devices(&self) -> Vec<PeerId> {
+        let me = self.identity.peer_id();
+        let mut v = match self.user_rt.key.as_ref() {
+            Some(k) => self.trust.devices_of_user(&k.public()),
+            None => Vec::new(),
+        };
+        if !v.contains(&me) {
+            v.push(me);
+        }
+        v.sort_unstable_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
+        v.truncate(nbeep_core::USER_HELLO_MAX_DEVICES);
+        v
+    }
+
+    /// 목록 버전(설정 `user.list_ver` · HIDDEN_KEYS 영속 · 단조).
+    fn user_list_ver(&self) -> u32 {
+        self.settings.get("user.list_ver").parse().unwrap_or(0)
+    }
+
+    /// 내 서명 기기 목록을 이 세션에(세션당 버전 1회 — 같은 버전은 재송신 안 함).
+    fn send_user_hello(&mut self, peer: PeerId) {
+        if !self.user_state.active() {
+            return;
+        }
+        let Some(key) = self.user_rt.key.as_ref() else {
+            return;
+        };
+        let ver = self.user_list_ver().max(1);
+        let name = crate::userident::normalize_handle(self.settings.get("user.handle")).to_string();
+        let devices = self.my_devices();
+        let user_pub = key.public();
+        let sig = key.sign(&nbeep_core::UserHello::signing_bytes(
+            &user_pub, &name, &devices, ver,
+        ));
+        let Some(conv) = self.conversations.get_mut(&peer) else {
+            return;
+        };
+        if conv.hello_ver == Some(ver) {
+            return;
+        }
+        conv.hello_ver = Some(ver);
+        let hello = nbeep_core::UserHello {
+            user_pub,
+            name,
+            devices,
+            list_ver: ver,
+            sig,
+        };
+        let _ = conv.out_tx.send(SessionCmd::Control(vec![hello.encode()]));
+        if self.user_trace {
+            eprintln!("[user] hello sent to {} ver={ver}", peer.short());
+        }
+    }
+
+    /// 기기 집합이 바뀌었다 — 버전 +1(영속) 후 살아 있는 전 세션에 재송신(변경 시 능동 재전송).
+    fn bump_user_list(&mut self) {
+        let next = self.user_list_ver().max(1) + 1;
+        self.settings.set("user.list_ver", next.to_string());
+        self.conf_mark();
+        let live: Vec<PeerId> = self.conversations.keys().copied().collect();
+        for p in live {
+            self.send_user_hello(p);
+        }
+    }
+
+    /// 서명 기기 목록 수신(S2-e) — ① 서명 ② 제시자 자신이 목록에 있다(A-1) ③ 버전 단조(저장소가
+    /// 판정). 통과 = trust.seg에 (공개키·핸들·버전) 기록 → 카드·핸들 충돌 표식. **내 사용자 키**를
+    /// 제시한 기기면 내 기기 집합이 바뀐 것 → 목록 버전 +1·재송신. 형제 승격은 여기서 하지 않는다
+    /// (PSK 세션·증명만이 형제다 — 키만 쥔 잃어버린 기기는 §3-5).
+    fn on_user_hello(&mut self, peer: PeerId, hello: &nbeep_core::UserHello) {
+        if !hello.devices.contains(&peer) {
+            if self.user_trace {
+                eprintln!(
+                    "[user] hello from {} rejected: presenter not listed",
+                    peer.short()
+                );
+            }
+            return;
+        }
+        if !nbeep_crypto::userkey::verify(&hello.user_pub, &hello.to_sign(), &hello.sig) {
+            if self.user_trace {
+                eprintln!("[user] hello from {} rejected: bad signature", peer.short());
+            }
+            return;
+        }
+        // ★ 되먹임 방지([13 §12-1] · 09-06 실기: 상대 버전이 오를 때마다 내 버전을 올려 재송신
+        //   → 양쪽이 1초에 수십 회 핑퐁): 내 목록 버전은 **내 기기 집합이 실제로 바뀔 때만** 올린다.
+        let before = self.my_devices();
+        let changed = self
+            .trust
+            .record_user(peer, hello.user_pub, &hello.name, hello.list_ver);
+        if self.user_trace {
+            eprintln!(
+                "[user] hello from {} ok name={} devices={} ver={} changed={changed}",
+                peer.short(),
+                hello.name,
+                hello.devices.len(),
+                hello.list_ver
+            );
+        }
+        if !changed {
+            return;
+        }
+        if self.my_devices() != before {
+            self.bump_user_list();
+        }
+        self.refresh_peer_info_card(peer);
+        let mut inv = Invalidations::default();
+        self.refresh_rows(&mut inv);
+        if let Some(id) = self.main_id {
+            self.request_redraw(id);
+        }
+    }
+
+    /// 내 `user.key` 봉인본을 형제에게(파일과 같은 도메인·열쇠 = 받는 쪽이 그대로 파일로 쓴다).
+    fn send_user_key_blob(&mut self, peer: PeerId) {
+        if !self.siblings.contains(&peer) || !self.user_state.active() {
+            return;
+        }
+        let (Some(m), Some(k)) = (self.user_rt.material.as_ref(), self.user_rt.key.as_ref()) else {
+            return;
+        };
+        let Ok(sealed) = crate::userident::seal_key(
+            crate::gate::SEAL_USERKEY,
+            &m.wrap_key(),
+            k,
+            self.user_rt.key_created,
+        ) else {
+            return;
+        };
+        if let Some(conv) = self.conversations.get(&peer) {
+            let _ = conv
+                .out_tx
+                .send(SessionCmd::Control(vec![nbeep_core::UserKeyBlob {
+                    sealed,
+                }
+                .encode()]));
+            if self.user_trace {
+                eprintln!("[user] keyblob sent to {}", peer.short());
+            }
+        }
+    }
+
+    /// 형제의 봉인본 — **형제 세션에서 온 것만**(fail-closed) 내 열쇠로 열어 병합 규칙 적용.
+    /// 채택 = 파일 교체(0600 원자적) · 런타임 키 교체 · UserId 변경 고지. 내 키가 이기면 무시
+    /// (상대가 내 봉인본으로 채택한다).
+    fn on_user_key_blob(&mut self, peer: PeerId, sealed: &[u8]) {
+        if !self.siblings.contains(&peer) || !self.user_state.active() {
+            return;
+        }
+        let (Some(m), Some(mine)) = (self.user_rt.material.as_ref(), self.user_rt.key.as_ref())
+        else {
+            return;
+        };
+        let Some((theirs, at)) =
+            crate::userident::open_key(crate::gate::SEAL_USERKEY, &m.wrap_key(), sealed)
+        else {
+            if self.user_trace {
+                eprintln!("[user] keyblob from {} unreadable", peer.short());
+            }
+            return;
+        };
+        let their_at = at.unwrap_or(u64::MAX); // 시각 없는 구본 = 가장 새것으로 취급
+                                               // ★ 후계가 시각을 이긴다(S2-f): 상대 키가 내 키의 후계면 채택, 내 키가 상대의 후계면 유지.
+                                               // 추이 판정(A→B→C 사슬 — 한 단계만 보면 A를 쥔 기기가 C를 A로 되돌린다 · 09-06).
+        let succ_of_mine =
+            crate::userident::succ_reaches(&self.successors, &mine.public(), &theirs.public());
+        let i_am_succ =
+            crate::userident::succ_reaches(&self.successors, &theirs.public(), &mine.public());
+        let adopt = succ_of_mine
+            || (!i_am_succ
+                && crate::userident::adopt_theirs(
+                    (self.user_rt.key_created, mine.public()),
+                    (their_at, theirs.public()),
+                ));
+        if self.user_trace {
+            eprintln!(
+                "[user] keyblob from {} adopt={adopt} (mine {} theirs {})",
+                peer.short(),
+                mine.user_id().short(),
+                theirs.user_id().short()
+            );
+        }
+        if !adopt {
+            return;
+        }
+        let path = self.data_dir.join("user.key");
+        if let Err(e) = nbeep_store::privfile::write_atomic(&path, sealed) {
+            self.set_status(format!("user.key 병합 저장 실패: {e}"));
+            return;
+        }
+        let old = mine.user_id();
+        let new = theirs.user_id();
+        self.user_rt.key = Some(theirs);
+        self.user_rt.key_created = their_at;
+        self.user_state = crate::userident::on_test_result(&Ok(new));
+        self.set_status(format!(
+            "사용자 키 병합 — 키 채택(ID {} → {})",
+            old.short(),
+            new.short()
+        ));
+        // 들고 있던 후계 문서에 내가 없으면(폐기된 채 새 키만 이어받음) 더는 제시하지 않는다.
+        let me = self.identity.peer_id();
+        let before = self.succession.len();
+        self.succession.retain(|d| d.devices.contains(&me));
+        if self.succession.len() != before {
+            if self.succession.is_empty() {
+                let _ = std::fs::remove_file(self.succ_path());
+            } else {
+                let _ = nbeep_store::privfile::write_atomic(
+                    &self.succ_path(),
+                    &nbeep_core::encode_chain(&self.succession),
+                );
+            }
+        }
+        // 새 공개키로 서명 목록을 다시 낸다(상대 기록이 새 ID로 이어지도록).
+        let live: Vec<PeerId> = self.conversations.keys().copied().collect();
+        for p in live {
+            if let Some(c) = self.conversations.get_mut(&p) {
+                c.hello_ver = None;
+            }
+            self.send_user_hello(p);
+        }
+        self.refresh_approval_ui();
+    }
+
+    /// 인증 상태 → 런타임 반영(단일 지점): 공유 PSK · LAN 힌트 태그 · 형제 집합 · 릴레이 재등록.
+    fn user_apply_runtime(&mut self) {
+        let active = self.user_state.active();
+        let (psk, tag) = match (active, self.user_rt.material.as_ref()) {
+            (true, Some(m)) => {
+                let day = nbeep_crypto::userkey::current_epoch_day();
+                self.user_tag_day = day;
+                (Some(m.psk()), Some(m.lan_tag(day)))
+            }
+            _ => (None, None),
+        };
+        if let Ok(mut g) = self.psk_shared.lock() {
+            *g = psk;
+        }
+        self.transport.set_user_tag(tag);
+        if active {
+            // 이미 선 세션 중 힌트 후보 = 세션 안에서 증명(기능을 나중에 켠 경우).
+            let live: Vec<PeerId> = self.conversations.keys().copied().collect();
+            for p in live {
+                if !self.siblings.contains(&p) {
+                    self.send_user_proof(p, false);
+                }
+            }
+        } else {
+            self.siblings.clear();
+            self.sibling_hints.clear();
+        }
+        // 릴레이 등록 RID 집합이 바뀐다(페어링 RID 추가/제거) — 재접속으로 재등록.
+        if self.relay.is_some() {
+            self.server_settings_changed();
+        }
+    }
+
+    /// 사용자 층 주기 처리(2s 페이스 — server_tick 뒤) — 자정 태그 회전 · 형제 없을 때
+    /// 릴레이 페어링 RID 탐색(30s · 아무 형제와도 세션이 없을 때만 — clip 규칙).
+    fn user_tick(&mut self) {
+        if !self.user_state.active() {
+            return;
+        }
+        let day = nbeep_crypto::userkey::current_epoch_day();
+        if day != self.user_tag_day {
+            if let Some(m) = self.user_rt.material.as_ref() {
+                self.transport.set_user_tag(Some(m.lan_tag(day)));
+            }
+            self.user_tag_day = day;
+        }
+        let now = self.now_ms();
+        if now < self.user_seek_at || !self.siblings.is_empty() {
+            return;
+        }
+        let Some(client) = self.relay.clone().filter(|c| c.is_alive()) else {
+            return;
+        };
+        let Some(m) = self.user_rt.material.as_ref() else {
+            return;
+        };
+        self.user_seek_at = now + 30_000;
+        let rids = m.rids_around().to_vec();
+        let psk = m.psk();
+        let identity = std::sync::Arc::clone(&self.identity);
+        let proxy = self.proxy.clone();
+        std::thread::spawn(move || {
+            if let Ok(via) = nbeep_relay::connect_via_rids_first(
+                &client,
+                &identity,
+                &rids,
+                true,
+                std::time::Duration::from_secs(10),
+                &psk,
+            ) {
+                let _ = proxy.send_event(AppEvent::Outbound {
+                    session: Box::new(InboundSession {
+                        session: via.session,
+                        path: via.path,
+                        via_server: true,
+                        via_psk: via.via_psk,
+                    }),
+                    via_addr: None,
+                    intent: None,
+                    auto: true, // 자동 성립 — 창을 열지 않는다
+                });
+            }
+        });
+    }
+
+    /// 부팅 — 마커가 켜져 있고 값이 유효하면 재검증(워커)으로 재료를 되살린다.
+    fn user_boot(&mut self) {
+        // 내 후계 증명서(공개 문서 · 있으면 세션마다 제시).
+        self.succession = std::fs::read(self.succ_path())
+            .ok()
+            .and_then(|b| nbeep_core::decode_chain(&b))
+            .unwrap_or_default();
+        for d in &self.succession {
+            self.successors.insert(d.old_pub, d.new_pub);
+            self.succ_seen.insert(d.old_pub, (d.ver, d.new_pub));
+        }
+        if self.settings.get("user.enabled") != "on" {
+            self.user_state =
+                crate::userident::UserState::Unconfigured(crate::userident::Validity::Empty);
+            return;
+        }
+        self.user_state = crate::userident::on_boot(
+            self.settings.get("user.handle"),
+            self.settings.get("user.passphrase"),
+            self.settings.get("user.verified") == "on",
+        );
+        if self.user_state == crate::userident::UserState::Testing {
+            self.user_state = crate::userident::UserState::Untested; // user_test가 Testing으로
+            self.user_test();
         }
     }
 
@@ -6138,23 +7407,44 @@ impl App {
         // 서버 사다리 폴백 재료(X-2b ③) — LAN·수동 주소가 모두 닿지 않을 때만 쓴다
         // (S-1 LAN 우선 · docs/32 §0 경로 사다리).
         let relay = self.relay.clone();
+        // ★ 형제 후보(ADR-0015 §3-4 힌트·기성립)면 XXpsk3로 연다 — 실패하면 XX로 1회 폴백
+        //   (힌트가 틀렸거나 상대 기능 꺼짐 = 정상 결과 · 세션 사용 불가는 없다).
+        let psk_opt = self.psk_for(peer);
+        if self.user_trace {
+            eprintln!("[user] connect {} psk={}", peer.short(), psk_opt.is_some());
+        }
         std::thread::spawn(move || {
-            let conn = match transport.connect(peer) {
+            let dial = || match transport.connect(peer) {
                 Ok(link) => Ok(link),
                 Err(e) => match &manual {
                     Some(addr) => transport.add_endpoint(addr).map_err(|e2| format!("{e2:?}")),
                     None => Err(format!("{e:?}")),
                 },
             };
+            let conn = dial();
             let r = match conn {
                 Ok(link) => {
                     // 경로 등급 = 성립 소켓의 실주소(M5-3c) — 수동 폴백이면 공인망일 수 있다.
                     let path = link
                         .remote_ip()
                         .map_or(nbeep_core::PathClass::Local, nbeep_core::class_of_ip);
-                    nbeep_crypto::NoiseSession::initiate(link, &identity)
-                        .map(|s| (s, path, false))
-                        .map_err(|e| e.to_string())
+                    let hs = match psk_opt.as_ref() {
+                        Some(k) => nbeep_crypto::NoiseSession::initiate_psk(link, &identity, k)
+                            .map(|s| (s, true)),
+                        None => nbeep_crypto::NoiseSession::initiate(link, &identity)
+                            .map(|s| (s, false)),
+                    };
+                    match hs {
+                        Ok((s, vp)) => Ok((s, path, false, vp)),
+                        // psk 폴백 — 새 링크로 XX 1회(힌트 오판·상대 기능 꺼짐).
+                        Err(_) if psk_opt.is_some() => match dial() {
+                            Ok(link) => nbeep_crypto::NoiseSession::initiate(link, &identity)
+                                .map(|s| (s, path, false, false))
+                                .map_err(|e| e.to_string()),
+                            Err(e) => Err(e),
+                        },
+                        Err(e) => Err(e.to_string()),
+                    }
                 }
                 // ★ 서버 사다리(X-2b ③ — 펀치→릴레이): 발견·수동이 다 실패한 상대를
                 //   Managed 서버 랑데부로 시도. 성립 세션은 상대 키 인증 완료 상태고
@@ -6166,18 +7456,20 @@ impl App {
                         &peer,
                         true,
                         std::time::Duration::from_secs(10),
+                        psk_opt.as_ref(),
                     )
-                    .map(|via| (via.session, via.path, true))
+                    .map(|via| (via.session, via.path, true, via.via_psk))
                     .map_err(|e| format!("{why} · 서버 사다리 {e:?}")),
                     None => Err(why),
                 },
             };
             let _ = match r {
-                Ok((session, path, via_server)) => proxy.send_event(AppEvent::Outbound {
+                Ok((session, path, via_server, via_psk)) => proxy.send_event(AppEvent::Outbound {
                     session: Box::new(InboundSession {
                         session,
                         path,
                         via_server,
+                        via_psk,
                     }),
                     via_addr: None, // 수동 주소는 이미 기억돼 있다(성공 시 갱신 불요)
                     intent: Some(peer), // ★ 래치는 **넣은 키로** 뺀다
@@ -6218,6 +7510,7 @@ impl App {
                     &peer,
                     true,
                     std::time::Duration::from_secs(10),
+                    None,
                 );
                 let _ = match r {
                     Ok(via) => proxy.send_event(AppEvent::Outbound {
@@ -6225,6 +7518,7 @@ impl App {
                             session: via.session,
                             path: via.path,
                             via_server: true, // 지문 = 서버 랑데부
+                            via_psk: via.via_psk,
                         }),
                         via_addr: None, // 주소가 아니라 키로 찾았다 — 재연결도 사다리
                         intent: None,   // 수동 등록과 같은 결(래치 없음)
@@ -6264,6 +7558,7 @@ impl App {
                         session,
                         path,
                         via_server: false, // IP/도메인 직접 연결
+                        via_psk: false,    // 수동 주소는 XX(형제 판정은 힌트·랑데부 경로에서)
                     }),
                     via_addr: Some(addr), // 성공한 수동 주소 — 재연결용 기억(④)
                     intent: None,         // 수동 등록은 래치를 쓰지 않는다
@@ -6436,11 +7731,10 @@ impl App {
     /// 읽음 확인 되쏘기(N-2 · 수신자가 대화창에서 봤을 때). `chat.send_read`(기본
     /// on · 수신자 제어) AND 검증 상대일 때만(프라이버시 게이트 · 전달과 **독립**).
     fn send_read_ack(&self, peer: PeerId) {
-        use nbeep_core::TrustStore as _;
         if self.settings.get("chat.send_read") != "on" {
             return;
         }
-        if self.trust.level(peer) == nbeep_core::TrustLevel::Unverified {
+        if self.effective_trust(peer) == nbeep_core::TrustLevel::Unverified {
             return;
         }
         let Some(&seq) = self.last_recv_seq.get(&peer) else {
@@ -6636,7 +7930,7 @@ impl App {
         self.flush_group_sends(peer);
         self.flush_direct_sends(peer); // 1:1 오프라인 대기(M4-6)
         self.refresh_chat_link(peer); // 헤더 아이콘 = 연결됨(M3-20 — 인바운드도)
-        self.set_status(nbeep_core::tf(nbeep_core::Msg::StfConnectedOpen, &[&title]));
+        self.set_status(nbeep_core::tf(self.connected_msg(peer), &[&title]));
         if let Some(mid) = self.main_id {
             self.request_redraw(mid);
         }
@@ -6649,6 +7943,7 @@ impl App {
         via_server: bool,
     ) {
         let peer = session.peer();
+        let binding = session.handshake_binding();
         let (out_tx, out_rx) = std::sync::mpsc::channel();
         let join = spawn_session_actor(
             session,
@@ -6678,8 +7973,27 @@ impl App {
                 lines,
                 path,
                 via_server,
+                binding,
+                proof_sent: false,
+                proof_fails: 0,
+                hello_ver: None,
+                succ_sent: false,
             },
         );
+        // 후계 증명서(S2-f) — 키 봉인본보다 **먼저**(형제가 "후계가 이긴다" 규칙으로 새 키를 채택하려면
+        // 봉인본 도착 전에 후계를 알아야 한다 · 같은 스트림 = 순서 보장).
+        self.send_succession(peer);
+        // ★ 형제 증명(ADR-0015 S1-e) — XX로 섰는데 힌트가 형제라 하면 세션 안에서 증명한다
+        //   (XXpsk3로 이미 섰으면 불필요). 재료가 없거나 후보가 아니면 조용히 건너뛴다.
+        if self.siblings.contains(&peer) {
+            // ★ 사용자 키 동기(ADR-0015 S2 · D-32-8 전 기기 복제): 형제 확정 + 채널 성립 즉시 내
+            //   봉인본을 보낸다. 양쪽이 보내고 각자 "오래된 키" 규칙으로 수렴한다(왕복 1회).
+            self.send_user_key_blob(peer);
+        } else {
+            self.send_user_proof(peer, false);
+        }
+        // 서명 기기 목록(S2-e) — 형제·타인 모두에게(공개 문서 · 세션마다 1회 · 버전 바뀌면 재송신).
+        self.send_user_hello(peer);
         // ★ 원격 경로 고지(M5-3b — 조용히, 그러나 보이게): 인터넷 경유 세션은 스레드에
         //   1줄 남긴다. 지문 대조 전엔 파일이 막히는 이유가 여기서 설명된다(§5-1-3).
         if path == nbeep_core::PathClass::Remote {
@@ -6748,7 +8062,6 @@ impl App {
     /// 자체는 core([`nbeep_core::file_allowed`])에 있고, 설정 `xfer.remote_files`
     /// (기본 끄기)가 발신 옵트인으로 들어간다.
     fn remote_file_blocked(&self, peer: PeerId) -> bool {
-        use nbeep_core::TrustStore as _;
         // 경로별 옵트인(08-23 분리 — 사용자 확정): 서버 경유/인터넷 직결이 각자
         // 스위치를 갖는다(기본 둘 다 끄기).
         let via_server = self.conversations.get(&peer).is_some_and(|c| c.via_server);
@@ -6757,7 +8070,7 @@ impl App {
         } else {
             self.settings.get("xfer.remote_files_internet") == "on"
         };
-        !nbeep_core::file_allowed(self.peer_path(peer), self.trust.level(peer), opt_in)
+        !nbeep_core::file_allowed(self.peer_path(peer), self.effective_trust(peer), opt_in)
     }
 
     /// 대화 뷰 생성(스레드 복원 — 상태-뷰 분리).
@@ -7071,7 +8384,6 @@ impl App {
 
     /// 원시 캐시 → 표시 행(값싼 가공만 — 이름 조회·시각 라벨·썸네일 캐시).
     fn quarantine_rows(&mut self) -> Vec<nbeep_ui::QRow> {
-        use nbeep_core::TrustStore as _;
         let secret = self.identity.wrap_secret();
         let raws = self.qrows_raw.clone();
         raws.into_iter()
@@ -7119,7 +8431,7 @@ impl App {
                     risk: r.risk,
                     mismatch: r.mismatch,
                     size: r.size,
-                    trust: self.trust.level(r.sender),
+                    trust: self.effective_trust(r.sender),
                     from,
                     when,
                     thumb,
@@ -8549,6 +9861,26 @@ impl App {
                 use nbeep_core::TrustStore as _;
                 self.trust.level(peer) == nbeep_core::TrustLevel::FingerprintVerified
             },
+            own_device: self.siblings.contains(&peer),
+            user_label: self
+                .trust
+                .user_of(peer)
+                .map_or_else(String::new, |(p, n, _)| {
+                    nbeep_core::tf(
+                        nbeep_core::Msg::CardfUser,
+                        &[n, &nbeep_crypto::userkey::user_id_of(&p).short()],
+                    )
+                }),
+            user_conflict: self.trust.handle_conflict(peer),
+            succession_conflict: self
+                .trust
+                .user_of(peer)
+                .is_some_and(|(p, _, _)| self.succ_conflicts.contains(&p))
+                || self.succ_conflicts.iter().any(|old| {
+                    self.successors
+                        .get(old)
+                        .is_some_and(|n| self.trust.user_of(peer).is_some_and(|(p, _, _)| p == *n))
+                }),
         }
     }
 
@@ -8639,10 +9971,15 @@ impl App {
                             |p| {
                                 use nbeep_core::TrustStore as _;
                                 let lv = self.trust.level(p);
-                                nbeep_core::tf(
+                                let mut line = nbeep_core::tf(
                                     nbeep_core::Msg::CmdTrustStatus,
                                     &[&self.peer_title(p), trust_label(lv)],
-                                )
+                                );
+                                if self.siblings.contains(&p) {
+                                    line.push_str(" · ");
+                                    line.push_str(nbeep_core::t(nbeep_core::Msg::TrustOwnDevice));
+                                }
+                                line
                             },
                         );
                         self.push_chat_notice(peer, &line);
@@ -10163,6 +11500,7 @@ impl App {
             local.incoming(),
             std::sync::Arc::clone(&self.identity),
             self.proxy.clone(),
+            std::sync::Arc::clone(&self.psk_shared),
         );
         self.transport = std::sync::Arc::new(local);
         self.table = nbeep_core::PeerTable::new(60_000);
@@ -10516,6 +11854,32 @@ impl App {
                             }
                         }
                     }
+                }
+                // 사용자 신원(ADR-0015 · 09-06) — 스위치/값/생성/인증.
+                "user.enabled" => {
+                    self.user_enabled_changed(value == "on");
+                    continue;
+                }
+                "user.handle" | "user.passphrase" => {
+                    self.user_values_changed();
+                    continue;
+                }
+                "user.passphrase.regen" => {
+                    let s = crate::userident::suggest_passphrase();
+                    if !s.is_empty() {
+                        self.settings.set("user.passphrase", s.clone());
+                        self.settings_view_set("user.passphrase", &s);
+                        self.user_values_changed();
+                    }
+                    continue;
+                }
+                "user.test" => {
+                    self.user_test();
+                    continue;
+                }
+                "user.rotate" => {
+                    self.user_rotate();
+                    continue;
                 }
                 // 연결 테스트(08-22) — 행위 항목: 값 저장 없이 즉시 검증 절차.
                 "net.server.test" => {
@@ -12555,8 +13919,7 @@ impl App {
                 }
                 // OS 알림(M3-8) — 방 이름 제목 · 발신자 미검증 = 무음(DR-25).
                 {
-                    use nbeep_core::TrustStore as _;
-                    let silent = self.trust.level(peer) == nbeep_core::TrustLevel::Unverified;
+                    let silent = self.effective_trust(peer) == nbeep_core::TrustLevel::Unverified;
                     let body = self.notify_body(&text);
                     self.notify_user(
                         &format!("g:{gid:?}"),
@@ -12719,8 +14082,8 @@ impl App {
     /// 숫자를 맞춘 뒤 버튼을 눌러야 한다(이 통로 안의 문답으로 승격하면 중간자가 그
     /// 문답을 대신할 수 있다 — SAS가 막으려는 바로 그것).
     fn suggest_verify(&mut self, peer: PeerId) {
-        use nbeep_core::TrustStore as _;
-        if self.trust.level(peer) != nbeep_core::TrustLevel::Pinned {
+        // 내 기기는 권유 자체가 없다(ADR-0015 §4 — PSK가 대조다).
+        if self.effective_trust(peer) != nbeep_core::TrustLevel::Pinned {
             return;
         }
         if !self.verify_hinted.insert(peer) {
@@ -14555,9 +15918,8 @@ impl ApplicationHandler<AppEvent> for App {
                                            //   흘린다 — 알림 신뢰 게이트와 같은 결). 사람 확인(Acknowledged)은
                                            //   수동 버튼(M3-9). 액터가 아니라 여기서 — 설정이 단일 원천(hot-swap).
                 {
-                    use nbeep_core::TrustStore as _;
                     let on = self.settings.get("chat.send_delivered") == "on";
-                    let verified = self.trust.level(peer) != nbeep_core::TrustLevel::Unverified;
+                    let verified = self.effective_trust(peer) != nbeep_core::TrustLevel::Unverified;
                     if on && verified {
                         if let Some(conv) = self.conversations.get(&peer) {
                             let ack = nbeep_core::ChatAck {
@@ -14578,8 +15940,7 @@ impl ApplicationHandler<AppEvent> for App {
                 // ④ 등급 강도(docs/24 §3-3 근사): **미검증 = 자동 강등(종전 무음
                 // 게이트가 이긴다)** · 검증·핀 상대의 Urgent = **앱이 앞에 있어도**
                 // 알림(force — "지금 당장"의 요청). Notice는 종전 배경 알림 그대로.
-                use nbeep_core::TrustStore as _;
-                let silent = self.trust.level(peer) == nbeep_core::TrustLevel::Unverified;
+                let silent = self.effective_trust(peer) == nbeep_core::TrustLevel::Unverified;
                 let title = self.peer_title(peer);
                 let force = importance >= 2 && !silent;
                 self.notify_user(
@@ -14593,6 +15954,10 @@ impl ApplicationHandler<AppEvent> for App {
                 // 이 대화가 보이는 창을 다시 그린다.
                 self.redraw_conversation(peer);
             }
+            AppEvent::UserProof { peer, proof } => self.on_user_proof(peer, proof),
+            AppEvent::UserKeyBlob { peer, sealed } => self.on_user_key_blob(peer, &sealed),
+            AppEvent::UserHello { peer, hello } => self.on_user_hello(peer, &hello),
+            AppEvent::Succession { peer, doc } => self.on_succession(peer, &doc),
             AppEvent::ChatAck {
                 peer,
                 target_seq,
@@ -14635,9 +16000,7 @@ impl ApplicationHandler<AppEvent> for App {
                 sha256,
             } => {
                 let _ = sha256; // 지연 해시(08-18) — Offer 선언은 0, 검증은 Done에서
-                use nbeep_core::{
-                    judge_offer, DenyReason, OfferVerdict, RejectWhy, TrustStore as _,
-                };
+                use nbeep_core::{judge_offer, DenyReason, OfferVerdict, RejectWhy};
                 // 수신 xid 장부(M4-2e ⑥) — 이름으로 ⏸▶✕ 대상 xid를 찾는다
                 // (active_recv 1슬롯은 배치에서 최신 파일로 덮인다).
                 {
@@ -14654,12 +16017,18 @@ impl ApplicationHandler<AppEvent> for App {
                 // ★ 판정은 **여기 한 곳**에서만 — 신뢰·왕래 장부·설정이 전부 여기 있다.
                 // 액터는 중계만 하므로 정책이 두 벌로 갈라지지 않는다.
                 self.tick_approval();
-                let verdict = judge_offer(
-                    self.trust.level(peer),
-                    self.ledger.get(peer),
-                    self.approval,
-                    self.now_ms(),
-                );
+                // ★ 내 기기(ADR-0015 §4 · S2-c) = 승인 자동(미왕래 강등도 면제 — "같은 사용자면
+                //   전부 푼다"). 격리·무해화·실체화 게이트는 그대로다(DR-13).
+                let verdict = if self.siblings.contains(&peer) {
+                    OfferVerdict::Accept
+                } else {
+                    judge_offer(
+                        self.effective_trust(peer),
+                        self.ledger.get(peer),
+                        self.approval,
+                        self.now_ms(),
+                    )
+                };
                 // ★ 이전 승인 연장(M4-10c · 08-18 사용자 요청) — `.part`는 **수락된**
                 //   수신에서만 남는다(take_partials가 accepted만 회수). 즉 매치 =
                 //   "이 파일은 이미 승인했었다"의 증거 → 승인 창을 다시 묻지 않고
@@ -14742,9 +16111,8 @@ impl ApplicationHandler<AppEvent> for App {
                         }
                         // OS 알림(M3-8) — **파일명은 싣지 않는다**(FR-S-41 금지 목록).
                         {
-                            use nbeep_core::TrustStore as _;
                             let silent =
-                                self.trust.level(peer) == nbeep_core::TrustLevel::Unverified;
+                                self.effective_trust(peer) == nbeep_core::TrustLevel::Unverified;
                             // 그룹 팬아웃(M5-1h) — 알림도 그 방으로(제목 = 방 이름 ·
                             // 클릭 = 그룹 대화 · G::Msg 알림과 같은 문법).
                             let g = self.recv_group_gid(peer, &name, size).and_then(|gid| {
@@ -15522,6 +16890,7 @@ impl ApplicationHandler<AppEvent> for App {
                 self.redraw_conversation(peer);
             }
             AppEvent::Closed { peer } => {
+                self.siblings.remove(&peer); // 형제 자격은 세션 수명(ADR-0015 — 다음 세션이 재판정)
                 self.active_send.remove(&peer);
                 self.active_recv.remove(&peer);
                 self.clear_batch_approval(peer); // 세션 종료 = 요청 승인 잔여 마감(M4-2e)
@@ -15608,8 +16977,10 @@ impl ApplicationHandler<AppEvent> for App {
                     session,
                     path,
                     via_server,
+                    via_psk,
                 } = *session;
                 let peer = session.peer();
+                self.note_sibling(peer, via_psk);
                 self.connecting.finish(intent, Some(peer));
                 // ★ P-3(M5-3c · R-20) — 클릭한 상대와 **다른 키**가 성립했다면 그 수동
                 //   주소는 이제 그 사람의 경로가 아니다. 즉시 무효화(다음 클릭이 낡은
@@ -15653,7 +17024,7 @@ impl ApplicationHandler<AppEvent> for App {
                         // **조용한 연결**(자동 재연결 ⓑ · 프로필 pull 08-14) — 창을
                         // 열지 않는다(② 자동 열림 금지와 같은 규칙 · 카드와 대화 분리).
                         self.set_status(nbeep_core::tf(
-                            nbeep_core::Msg::StfConnectedOpen,
+                            self.connected_msg(peer),
                             &[&self.peer_title(peer)],
                         ));
                         let mut inv = Invalidations::default();
@@ -15720,6 +17091,9 @@ impl ApplicationHandler<AppEvent> for App {
                     self.request_redraw(mid);
                 }
             }
+            AppEvent::UserTestDone { gen, result } => {
+                self.user_test_done(gen, result);
+            }
             AppEvent::ServerAttach { gen, outcome } => {
                 self.relay_connecting = false;
                 if gen != self.relay_gen {
@@ -15760,6 +17134,7 @@ impl ApplicationHandler<AppEvent> for App {
                             &client,
                             std::sync::Arc::clone(&self.identity),
                             self.proxy.clone(),
+                            std::sync::Arc::clone(&self.psk_shared),
                         );
                         // 프레즌스 공개(X-2e — 기본 on · 설정 hot-swap은 별도 arm).
                         if self.settings.get("net.server.announce") != "off" {
@@ -16079,8 +17454,10 @@ impl ApplicationHandler<AppEvent> for App {
                     session,
                     path,
                     via_server,
+                    via_psk,
                 } = *session;
                 let peer = session.peer();
+                self.note_sibling(peer, via_psk);
                 if self.conversations.contains_key(&peer) {
                     return; // 이미 이 상대와 대화 중(아웃바운드 세션 존재) — 중복 인바운드 무시
                 }
@@ -16089,8 +17466,8 @@ impl ApplicationHandler<AppEvent> for App {
                 //   목록에 스스로를 심는다 — 등록은 사람이 결정한다. 아는 상대(핀·대조)의
                 //   원격 인바운드는 즉시 통과.
                 if path == nbeep_core::PathClass::Remote {
-                    use nbeep_core::TrustStore as _;
-                    if self.trust.level(peer) == nbeep_core::TrustLevel::Unverified {
+                    // 내 기기(형제)는 원격이어도 요청 대기 없이 통과(ADR-0015 §4).
+                    if self.effective_trust(peer) == nbeep_core::TrustLevel::Unverified {
                         // 대기 슬롯 1개(모달 1개 규칙) — 점유 중 추가 원격 인바운드는
                         // 드롭(fail-closed · 정보 최소 — 침묵 폐기, 상대는 Closed만 관측).
                         if self.pending_remote.is_some() {
@@ -16361,7 +17738,8 @@ impl ApplicationHandler<AppEvent> for App {
         }
         self.poll_discovery();
         self.server_tick(); // Managed 서버 접속 수렴(X-2b — 2s 페이스 내부 가드)
-                            // 설정 영속 tick(FR-P-9) — 조용 1s OR 상한 10s 충족 시 스냅샷 1회 저장.
+        self.user_tick(); // 사용자 층(ADR-0015) — 힌트 태그 자정 회전 · 페어링 RID 탐색
+                          // 설정 영속 tick(FR-P-9) — 조용 1s OR 상한 10s 충족 시 스냅샷 1회 저장.
         if self.conf.sched.tick(Instant::now()) {
             self.conf_save(false);
         }
@@ -17719,15 +19097,29 @@ pub(crate) fn print_whoami() {
             }
             _ => nbeep_core::PeerId::from_bytes([0u8; 32]),
         };
-        effective_display_name(&settings, &peer)
-            .as_str()
-            .to_string()
+        let user_line = if settings.get("user.enabled") == "on" {
+            format!(
+                "{} (verified={})",
+                crate::userident::normalize_handle(settings.get("user.handle")),
+                settings.get("user.verified")
+            )
+        } else {
+            "off (standalone node)".to_string()
+        };
+        (
+            effective_display_name(&settings, &peer)
+                .as_str()
+                .to_string(),
+            user_line,
+        )
     };
+    let (name, user_line) = name;
     println!("fingerprint = {fp}  ({key_state})");
     if !fp_full.is_empty() {
         println!("full        = {fp_full}");
     }
     println!("name        = {name}");
+    println!("user        = {user_line}"); // 암호는 봉인 사이드카 — 여기 없음(노출 금지)
     println!("exe         = {exe}");
     println!("data        = {}", dir.display());
 }
@@ -17748,6 +19140,8 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
     let (data, index) = nbeep_plat::font::system_ui_font().expect("시스템 UI 폰트 없음");
     let font = nbeep_gfx::Font::from_static(data, index).expect("폰트 파싱");
     let dir = data_dir();
+    // 인바운드 수락 스레드와 공유하는 PSK(ADR-0015) — App과 acceptor가 같은 셀을 본다.
+    let psk_shared: SharedPsk = SharedPsk::default();
     // 0600 보장 이전 판이 남긴 664 비밀 파일을 부팅 1회 죈다(09-05 · idempotent · Win no-op).
     nbeep_store::privfile::tighten_data_dir(&dir);
     // 신원 영속(M2-5a) — 재시작해도 같은 PeerId. 키 파일 손상 시 **덮어쓰지 않고**
@@ -17874,6 +19268,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
                 local.incoming(),
                 std::sync::Arc::clone(&identity),
                 proxy.clone(),
+                std::sync::Arc::clone(&psk_shared),
             );
             // L1 링크 구독(M1-2 · FR-D-5) — OS raw 이벤트(폭주)를 디바운스로 접어
             // LinkChanged 1회로. quiet 1000ms는 잠정(D-8b 실측 후 확정 — [08 §8]).
@@ -17987,6 +19382,22 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         relay_gen: 0,
         relay_check_at: 0,
         relay_test: false,
+        user_state: crate::userident::UserState::Unconfigured(crate::userident::Validity::Empty),
+        user_rt: crate::userident::UserRuntime::default(),
+        user_gen: 0,
+        sibling_hints: HashMap::new(),
+        siblings: std::collections::HashSet::new(),
+        psk_shared: std::sync::Arc::clone(&psk_shared),
+        user_trace: std::env::var_os("NEXA_USER_TRACE").is_some(),
+        succession: Vec::new(),
+        rotate_done_ms: 0,
+        successors: HashMap::new(),
+        succ_seen: HashMap::new(),
+        succ_conflicts: std::collections::HashSet::new(),
+        rotate_armed_ms: 0,
+        rotate_note: None,
+        user_tag_day: 0,
+        user_seek_at: 0,
         relay_hold: false,
         relay_last_err: None,
         relay_test_failed: None,
@@ -18230,7 +19641,10 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
     app.apply_boot_settings(); // 영속 설정 → 파생 런타임 상태(테마·정책 등 · M3-15)
     app.promote_local_groups(); // 구버전 로컬(동보) 그룹 → 그룹 대화(G4 마이그레이션)
     app.load_pii_sidecar(); // 연락처(PII) 봉인 사이드카 — cfg 구본보다 우선(08-17)
-                            // 데이터 키 테이블(셰레딩 · D-18 §7) — 기록 복원보다 먼저(개봉 키의 원천).
+                            // ★ 사용자 신원(ADR-0015)은 **사이드카 뒤** — 페어링 암호가 profile.sec에 있다(09-06 실기:
+                            //   apply_boot_settings 안에서 부르면 암호가 비어 "둘 다 필요"로 잠겼다).
+    app.user_boot();
+    // 데이터 키 테이블(셰레딩 · D-18 §7) — 기록 복원보다 먼저(개봉 키의 원천).
     app.datakeys =
         crate::keytable::KeyTable::load(app.data_dir.join("keys.seg"), app.identity.wrap_secret());
     app.restore_history(); // 대화 기록 복원(M2-5b · parked_lines에 · 대화창 열면 뜬다)

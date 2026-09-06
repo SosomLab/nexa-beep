@@ -1243,6 +1243,8 @@ pub struct ViaSession {
     pub taken: PathTaken,
     /// 경로 등급 재료(성립 소켓 실주소 판정 — ADR-0006 §5-1-5).
     pub path: nbeep_core::PathClass,
+    /// ★ XXpsk3로 성립했는가(ADR-0015 · 상대가 같은 KP를 안다 = 같은 사용자).
+    pub via_psk: bool,
 }
 
 impl core::fmt::Debug for ViaSession {
@@ -1337,6 +1339,7 @@ pub fn connect_via(
     dst: &PeerId,
     punch: bool,
     open_timeout: Duration,
+    psk: Option<&[u8; 32]>,
 ) -> Result<ViaSession, ViaError> {
     let day = current_epoch_day();
     let rids = [
@@ -1344,6 +1347,46 @@ pub fn connect_via(
         rid_for(dst, day.saturating_sub(1)),
         rid_for(dst, day + 1),
     ];
+    connect_via_rids(client, id, &rids, punch, open_timeout, psk, Some(dst))
+}
+
+/// ★ **첫 만남**(ADR-0015 §3-4) — 상대 `PeerId`를 모르는 채 사용자 페어링 RID(`RID_pair` 3개)로
+/// 연다. 키 대조 대신 **PSK 성립**이 근거다(형제 기기 = 같은 KP). 세션의 `peer()`가 상대 신원.
+///
+/// # Errors
+/// [`connect_via`]와 같다.
+pub fn connect_via_rids_first(
+    client: &RelayClient,
+    id: &Identity,
+    rids: &[Rid],
+    punch: bool,
+    open_timeout: Duration,
+    psk: &[u8; 32],
+) -> Result<ViaSession, ViaError> {
+    connect_via_rids(client, id, rids, punch, open_timeout, Some(psk), None)
+}
+
+/// 종단 개시 — psk가 있으면 XXpsk3(형제), 없으면 XX.
+fn hs_initiate(
+    boxed: Box<dyn Link>,
+    id: &Identity,
+    psk: Option<&[u8; 32]>,
+) -> Result<NoiseSession<Box<dyn Link>>, nbeep_core::session::SessionError> {
+    match psk {
+        Some(k) => NoiseSession::initiate_psk(boxed, id, k),
+        None => NoiseSession::initiate(boxed, id),
+    }
+}
+
+fn connect_via_rids(
+    client: &RelayClient,
+    id: &Identity,
+    rids: &[Rid],
+    punch: bool,
+    open_timeout: Duration,
+    psk: Option<&[u8; 32]>,
+    expect: Option<&PeerId>,
+) -> Result<ViaSession, ViaError> {
     // 프로브가 Open보다 **먼저** — 서버가 내 관측 엔드포인트를 상대의 Incoming에 싣는다.
     let sock = if punch {
         fresh_probed_sock(client).ok() // 실패 = 펀치 없이 릴레이만(사다리 한 단 생략)
@@ -1351,7 +1394,7 @@ pub fn connect_via(
         None
     };
     for rid in rids {
-        let (mut relay, peer_udp) = match client.open(rid, open_timeout) {
+        let (mut relay, peer_udp) = match client.open(*rid, open_timeout) {
             Ok(v) => v,
             Err(1) => continue, // 이 에폭 RID는 미등록 — 다음 에폭
             Err(2) => return Err(ViaError::Limit),
@@ -1364,8 +1407,8 @@ pub fn connect_via(
                     let _ = udp.set_recv_timeout(Some(HS_TIMEOUT_UDP));
                     let path = class_of_link(&udp, nbeep_core::PathClass::Remote);
                     let boxed: Box<dyn Link> = Box::new(udp);
-                    if let Ok(session) = NoiseSession::initiate(boxed, id) {
-                        return finish_via(session, PathTaken::Udp, path, dst);
+                    if let Ok(session) = hs_initiate(boxed, id, psk) {
+                        return finish_via(session, PathTaken::Udp, path, expect, psk.is_some());
                     }
                     // 상대가 UDP를 듣지 않았다(창 어긋남) — 릴레이 단으로 내려간다.
                 }
@@ -1375,8 +1418,8 @@ pub fn connect_via(
         let _ = relay.set_recv_timeout(Some(HS_TIMEOUT_RELAY));
         let path = class_of_link(&relay, nbeep_core::PathClass::Remote);
         let boxed: Box<dyn Link> = Box::new(relay);
-        return match NoiseSession::initiate(boxed, id) {
-            Ok(session) => finish_via(session, PathTaken::Relay, path, dst),
+        return match hs_initiate(boxed, id, psk) {
+            Ok(session) => finish_via(session, PathTaken::Relay, path, expect, psk.is_some()),
             Err(_) => Err(ViaError::Handshake),
         };
     }
@@ -1387,17 +1430,21 @@ fn finish_via(
     mut session: NoiseSession<Box<dyn Link>>,
     taken: PathTaken,
     path: nbeep_core::PathClass,
-    dst: &PeerId,
+    expect: Option<&PeerId>,
+    via_psk: bool,
 ) -> Result<ViaSession, ViaError> {
     use nbeep_core::Session as _;
-    if session.peer() != *dst {
-        return Err(ViaError::WrongPeer); // RID 충돌·오지정 — 인증된 키가 근거다
+    if let Some(dst) = expect {
+        if session.peer() != *dst {
+            return Err(ViaError::WrongPeer); // RID 충돌·오지정 — 인증된 키가 근거다
+        }
     }
     session.set_recv_timeout(None); // 핸드셰이크용 타임아웃 원복(소비자가 다시 건다)
     Ok(ViaSession {
         session,
         taken,
         path,
+        via_psk,
     })
 }
 
@@ -1412,6 +1459,7 @@ pub fn accept_via(
     id: &Identity,
     punch: bool,
     deadline: Duration,
+    psk: Option<&[u8; 32]>,
 ) -> Result<ViaSession, ViaError> {
     let RelayIncoming {
         mut link, peer_udp, ..
@@ -1466,6 +1514,7 @@ pub fn accept_via(
                 id,
                 PathTaken::Udp,
                 path,
+                psk,
             );
         }
         // 릴레이 쪽 첫 프레임 — 여는 쪽이 릴레이 단을 골랐다(또는 펀치 실패).
@@ -1481,6 +1530,7 @@ pub fn accept_via(
                         id,
                         PathTaken::Relay,
                         path,
+                        psk,
                     );
                 }
                 Err(LinkError::TimedOut) => {}
@@ -1503,17 +1553,20 @@ fn accept_on<L: Link + 'static>(
     id: &Identity,
     taken: PathTaken,
     path: nbeep_core::PathClass,
+    psk: Option<&[u8; 32]>,
 ) -> Result<ViaSession, ViaError> {
     use nbeep_core::Session as _;
     let _ = link.set_recv_timeout(Some(HS_TIMEOUT_UDP));
     let boxed: Box<dyn Link> = Box::new(link);
-    match NoiseSession::accept(boxed, id) {
-        Ok(mut session) => {
+    // XX/XXpsk3는 첫 메시지로 가른다(ADR-0015 §3-3 · 왕복 0).
+    match NoiseSession::accept_any(boxed, id, psk) {
+        Ok((mut session, via_psk)) => {
             session.set_recv_timeout(None);
             Ok(ViaSession {
                 session,
                 taken,
                 path,
+                via_psk,
             })
         }
         Err(_) => Err(ViaError::Handshake),
@@ -1685,11 +1738,14 @@ pub fn attach(
     raw: &str,
     id: &Identity,
     pin_path: &std::path::Path,
+    extra_rids: &[Rid],
 ) -> Result<Attached, AttachError> {
     let (addr, sa) = resolve_server(raw).ok_or(AttachError::Resolve)?;
     let expected = pinfile::lookup(pin_path, &addr);
-    let client = RelayClient::connect(sa, id, &rids_around(&id.peer_id()), expected)
-        .map_err(AttachError::Relay)?;
+    // ★ 기기별 RID 3 + 추가(사용자 페어링 RID_pair 3 · ADR-0015 §3-4) — MAX_RIDS 8 안에서 서버 무변경.
+    let mut rids: Vec<Rid> = rids_around(&id.peer_id()).to_vec();
+    rids.extend(extra_rids.iter().copied().take(MAX_RIDS - 3));
+    let client = RelayClient::connect(sa, id, &rids, expected).map_err(AttachError::Relay)?;
     let first_pin = expected.is_none();
     let pin_write_failed =
         first_pin && pinfile::store(pin_path, &addr, &client.server_peer()).is_err();

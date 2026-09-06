@@ -47,6 +47,9 @@ pub enum DiscoveryEvent {
     Appeared(PeerHint),
     /// 상대가 목록에서 사라짐(goodbye·타임아웃).
     Vanished(PeerId),
+    /// ★ 사용자 힌트(ADR-0015) — 상대가 낸 LAN_tag. 내 태그 셋과 같으면 "형제 후보"(미검증 ·
+    /// 판정은 XXpsk3). 태그가 다르면 무시.
+    UserHint { peer: PeerId, tag: [u8; 16] },
 }
 
 /// `connect` 실패.
@@ -102,4 +105,8 @@ pub trait Transport: Send + Sync {
     /// 표시 이름 교체(M1-10 · FR-S-50) — 발견 광고가 있는 전송은 **즉시 재공지**해
     /// 상대 목록이 갱신되게 한다. 기본 = 아무 것도 안 함(발견 없는 전송·데모).
     fn set_display_name(&self, _name: DisplayName) {}
+
+    /// ★ 사용자 힌트 태그 발신(ADR-0015 §3-4) — `Some` = 광고마다 `UserHint` 패킷을 같이 낸다 ·
+    /// `None` = 내지 않는다(사용자 기능 꺼짐·미인증). 기본 no-op(인메모리 등).
+    fn set_user_tag(&self, _tag: Option<[u8; 16]>) {}
 }

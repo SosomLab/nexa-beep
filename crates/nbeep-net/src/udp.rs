@@ -60,6 +60,8 @@ pub struct UdpDiscovery {
     /// 재공지)이 여기를 갱신하면 다음 주기부터 새 이름으로 나간다.
     template: Arc<std::sync::Mutex<Packet>>,
     seq: Arc<AtomicU32>,
+    /// ★ 사용자 힌트 태그(ADR-0015) — `Some`이면 광고마다 `UserHint` 패킷을 덧붙인다.
+    user_tag: Arc<std::sync::Mutex<Option<[u8; 16]>>>,
     /// 수신 강등(M1-13ⓔ) — 발견 포트를 다른 프로세스가 배타 점유해 **듣지 못한다**.
     /// 발신은 임의 포트라 정상(상대 목록에 나는 뜬다) — 호스트가 상태바에 고지한다.
     recv_degraded: bool,
@@ -129,6 +131,8 @@ impl UdpDiscovery {
         }));
         let stop = Arc::new(AtomicBool::new(false));
         let seq = Arc::new(AtomicU32::new(0));
+        let user_tag: Arc<std::sync::Mutex<Option<[u8; 16]>>> =
+            Arc::new(std::sync::Mutex::new(None));
         let (tx, events) = channel::<Observation>();
 
         let recv_join = recv.as_ref().and_then(|r| r.try_clone().ok());
@@ -156,6 +160,7 @@ impl UdpDiscovery {
             announce_ms,
             Arc::clone(&stop),
             Arc::clone(&seq),
+            Arc::clone(&user_tag),
         );
 
         Ok(Self {
@@ -164,6 +169,7 @@ impl UdpDiscovery {
             send_sock,
             template,
             seq,
+            user_tag,
             recv_degraded,
             recv_join,
         })
@@ -285,6 +291,7 @@ impl UdpDiscovery {
         announce_ms: u32,
         stop: Arc<AtomicBool>,
         seq: Arc<AtomicU32>,
+        user_tag: Arc<std::sync::Mutex<Option<[u8; 16]>>>,
     ) {
         std::thread::spawn(move || {
             // 스냅샷 발신 — 잠금은 복사 순간만(소켓 I/O 중 잠금 유지 금지).
@@ -313,6 +320,18 @@ impl UdpDiscovery {
                 if waited >= Duration::from_millis(u64::from(announce_ms)) {
                     waited = Duration::ZERO;
                     Self::send_all(&sock, v6.as_ref(), &snapshot(PacketKind::Announce).encode());
+                    // ★ 사용자 힌트(ADR-0015 §3-4) — 태그가 있으면 광고마다 한 장 더(≈70B).
+                    let tag = match user_tag.lock() {
+                        Ok(g) => *g,
+                        Err(e) => *e.into_inner(),
+                    };
+                    if let Some(tag) = tag {
+                        Self::send_all(
+                            &sock,
+                            v6.as_ref(),
+                            &Self::hint_packet(snapshot(PacketKind::UserHint), tag).encode(),
+                        );
+                    }
                     cycles = cycles.wrapping_add(1);
                     // S4 주기 라운드 — 광고 틱 재사용(새 타이머 0 · [13 §12-1]):
                     // 16주기(기본 800ms면 ≈12.8초)마다 이웃 테이블을 다시 읽어 프로브.
@@ -343,6 +362,35 @@ impl UdpDiscovery {
     /// 표시 이름 교체 + **즉시 재공지**(M1-10 · 사용자 확정 08-11) — 상대 목록은
     /// `PeerTable::observe`의 `Renamed` 경로로 갱신된다. 즉시 발신은 v4(멀티캐스트+
     /// 브로드캐스트)로 하고, v6은 다음 주기 광고에 실린다(GOODBYE와 같은 정책).
+    /// 힌트 패킷 — `name` 자리에 태그 hex(32자).
+    fn hint_packet(mut p: Packet, tag: [u8; 16]) -> Packet {
+        let hex: String = tag.iter().map(|b| format!("{b:02x}")).collect();
+        p.kind = PacketKind::UserHint;
+        if let Ok(n) = DisplayName::parse(&hex) {
+            p.name = n;
+        }
+        p
+    }
+
+    /// ★ 사용자 힌트 태그 설정(ADR-0015) — `Some`이면 즉시 1회 송출 + 이후 광고마다 동행.
+    pub fn set_user_tag(&self, tag: Option<[u8; 16]>) {
+        {
+            let mut g = match self.user_tag.lock() {
+                Ok(g) => g,
+                Err(e) => e.into_inner(),
+            };
+            *g = tag;
+        }
+        if let Some(tag) = tag {
+            let mut p = match self.template.lock() {
+                Ok(g) => g.clone(),
+                Err(e) => e.into_inner().clone(),
+            };
+            p.seq = self.seq.fetch_add(1, Ordering::Relaxed);
+            Self::send_all(&self.send_sock, None, &Self::hint_packet(p, tag).encode());
+        }
+    }
+
     pub fn set_name(&self, name: DisplayName) {
         let announce = {
             let mut t = match self.template.lock() {

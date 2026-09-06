@@ -128,6 +128,9 @@ pub struct PeerRow {
     /// 같은 표시 이름을 **다른 키**가 쓴다(M3-14 — v1에서 사칭을 드러내는 유일한
     /// 가시 신호 · 등급 아이콘 옆 `badge-alert` 덧붙는 표식).
     pub conflict: bool,
+    /// **내 기기**(ADR-0015 S2 — 같은 사용자 키로 인증된 형제 PC · 이 세션 한정). 인증 실
+    /// 배지의 **모양은 그대로, 색만 보라**(사용자 확정 09-06 "구조·이미지 유지 · 색으로 식별").
+    pub own_device: bool,
     /// 최근 접속 상대 시각 라벨(08-17 — 삭제 메뉴가 "언제 마지막 봤는지" 시각만
     /// 보여준다 · "마지막 접속" 문구 없이. 빈 값 = 기록 없음. 벽시계 상대 시각은
     /// 호스트만 계산해 여기 라벨로 싣는다).
@@ -239,16 +242,61 @@ pub fn badge(trust: TrustLevel, theme: &Theme) -> (&'static str, Color) {
 /// 신뢰 아이콘 틴트 캐시 슬롯(M3-14) — ((마스크 ptr, 색), 96px 틴트 이미지).
 type TrustTintSlot = ((usize, u32), std::rc::Rc<crate::theme::IconImage>);
 
+/// 내 기기 색(ADR-0015 S2) — 인증 파랑·정상 초록·경고 호박·위험 빨강 어느 것과도 겹치지 않는
+/// 보라. 라이트/다크 공통(자산 색과 같은 규약 — 테마 토큰이 아니라 의미 색).
+pub const OWN_DEVICE_COLOR: Color = Color(0x008B_5CF6);
+
+/// 내 기기 배지 RGBA — 인증 실(`VERIFIED_RGBA`)의 **유채색 화소만** 보라로 바꾼 사본(흰 체크·
+/// 투명은 그대로 = 모양 유지). 첫 사용 시 1회 계산해 프로세스 수명 동안 쥔다(자산 추가 0).
+#[must_use]
+pub fn own_device_rgba() -> &'static [u8] {
+    static OWN: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+    OWN.get_or_init(|| recolor_chroma(crate::icons::id::VERIFIED_RGBA, OWN_DEVICE_COLOR))
+        .as_slice()
+}
+
+/// 유채색(채도 있는) 화소를 `target` 색으로 — 밝기 비율은 보존(음영 유지) · 무채색·투명 불변.
+fn recolor_chroma(rgba: &[u8], target: Color) -> Vec<u8> {
+    let (tr, tg, tb) = (
+        (target.0 >> 16) & 0xFF,
+        (target.0 >> 8) & 0xFF,
+        target.0 & 0xFF,
+    );
+    let mut out = rgba.to_vec();
+    for px in out.chunks_exact_mut(4) {
+        let (r, g, b, a) = (px[0], px[1], px[2], px[3]);
+        if a == 0 {
+            continue;
+        }
+        let max = r.max(g).max(b);
+        let min = r.min(g).min(b);
+        if max.saturating_sub(min) < 40 {
+            continue; // 흰 체크·회색 테두리 = 그대로
+        }
+        let k = u32::from(max);
+        #[allow(clippy::cast_possible_truncation)]
+        {
+            px[0] = (tr * k / 255) as u8;
+            px[1] = (tg * k / 255) as u8;
+            px[2] = (tb * k / 255) as u8;
+        }
+    }
+    out
+}
+
 /// 신뢰 배지 아이콘 선택(M3-14b · Material Symbols 컬러 — 08-15 개편).
 /// 반환 = (컬러 RGBA, 등급명, 툴팁 한 줄) · **`None` = 그리지 않는다**.
 ///
 /// `Blocked`가 등급을 **덮고**(fail-closed의 가시화), `Pinned`(정상 기본값)는
 /// **목록에서 숨긴다** — 1차의 "흐린 빈 배지"가 실기에서 의미 없는 유령 원으로
 /// 읽혔다(사용자 확정 08-15: 문제 상태만 표시 · 색은 자산에 구워져 있다).
+///
+/// `own` = 내 기기(ADR-0015 S2) — 차단이 아니면 등급을 덮는다(인증 실 모양 · 보라).
 #[must_use]
 pub fn trust_icon(
     trust: TrustLevel,
     blocked: bool,
+    own: bool,
 ) -> Option<(&'static [u8], &'static str, &'static str)> {
     use nbeep_core::{t, Msg};
     if blocked {
@@ -256,6 +304,13 @@ pub fn trust_icon(
             crate::icons::id::BLOCKED_RGBA,
             t(Msg::TrustBlocked),
             t(Msg::TrustBlockedTip),
+        ));
+    }
+    if own {
+        return Some((
+            own_device_rgba(),
+            t(Msg::TrustOwnDevice),
+            t(Msg::TrustOwnDeviceTip),
         ));
     }
     match trust {
@@ -1376,8 +1431,9 @@ impl Widget for PeerListWidget {
                             return Some((i, true));
                         }
                     }
-                    (trust_icon(row.trust, row.blocked).is_some() && tir.contains(p))
-                        .then_some((i, false))
+                    (trust_icon(row.trust, row.blocked, row.own_device).is_some()
+                        && tir.contains(p))
+                    .then_some((i, false))
                 });
                 if tip != self.trust_tip {
                     self.trust_tip = tip;
@@ -1627,7 +1683,7 @@ impl Widget for PeerListWidget {
             // 등급명·설명은 hover 툴팁(아이콘만으로 등급명을 다 나르지 못한다).
             ctx.select_font(FontSlot::PeerList, false);
             let (tir, cir) = self.trust_icon_rects(r, row.conflict);
-            let shown = trust_icon(row.trust, row.blocked);
+            let shown = trust_icon(row.trust, row.blocked, row.own_device);
             if let Some((rgba, _label, _tip)) = shown {
                 let img = self.trust_image(rgba);
                 ctx.image_scaled(tir, &img, r);
@@ -1698,7 +1754,7 @@ impl Widget for PeerListWidget {
                         nbeep_core::t(nbeep_core::Msg::TrustConflictTip),
                     ))
                 } else {
-                    trust_icon(row.trust, row.blocked).map(|(_, l, t)| (l, t))
+                    trust_icon(row.trust, row.blocked, row.own_device).map(|(_, l, t)| (l, t))
                 };
                 if let Some((label, tip)) = lt {
                     ctx.select_font(FontSlot::Status, false);
@@ -1796,6 +1852,7 @@ mod tests {
             fav: false,
             blocked: false,
             conflict: false,
+            own_device: false,
             last_seen_label: String::new(),
         }
     }
@@ -2285,17 +2342,37 @@ mod tests {
     /// (1차의 흐린 빈 배지가 유령 원으로 읽힌 실기 — 문제 상태만 표시).
     #[test]
     fn trust_icon_mapping_and_blocked_override() {
-        let (m, _, _) = trust_icon(TrustLevel::Unverified, false).expect("미검증은 표시");
+        let (m, _, _) = trust_icon(TrustLevel::Unverified, false, false).expect("미검증은 표시");
         assert_eq!(m, crate::icons::id::UNVERIFIED_RGBA);
         assert!(
-            trust_icon(TrustLevel::Pinned, false).is_none(),
+            trust_icon(TrustLevel::Pinned, false, false).is_none(),
             "정상 기본값은 그리지 않는다"
         );
-        let (m, _, _) = trust_icon(TrustLevel::FingerprintVerified, false).expect("표시");
+        let (m, _, _) = trust_icon(TrustLevel::FingerprintVerified, false, false).expect("표시");
         assert_eq!(m, crate::icons::id::VERIFIED_RGBA);
-        // 차단은 등급이 아니라 fail-closed 상태 — 어떤 등급이든 덮는다(Pinned조차).
-        let (m, _, _) = trust_icon(TrustLevel::Pinned, true).expect("차단은 항상 표시");
+        // 차단은 등급이 아니라 fail-closed 상태 — 어떤 등급이든 덮는다(Pinned조차 · 내 기기조차).
+        let (m, _, _) = trust_icon(TrustLevel::Pinned, true, false).expect("차단은 항상 표시");
         assert_eq!(m, crate::icons::id::BLOCKED_RGBA);
+        let (m, _, _) = trust_icon(TrustLevel::Pinned, true, true).expect("차단 우선");
+        assert_eq!(m, crate::icons::id::BLOCKED_RGBA);
+        // 내 기기(ADR-0015 S2) — Pinned를 덮고 인증 실 **모양**에 보라 색(유채색 화소만 교체).
+        let (m, label, _) = trust_icon(TrustLevel::Pinned, false, true).expect("내 기기 표시");
+        assert_eq!(m.len(), crate::icons::id::VERIFIED_RGBA.len());
+        assert_eq!(label, nbeep_core::t(nbeep_core::Msg::TrustOwnDevice));
+        let base = crate::icons::id::VERIFIED_RGBA;
+        // 인증 실 자산은 체크가 **투명 컷아웃**이라 무채색 화소가 0이다 — 모양(알파)은 전부
+        // 그대로고, 불투명 화소는 전부 유채색이라 전부 보라로 바뀐다(밝기 비율 보존).
+        let (mut same_alpha, mut changed, mut opaque) = (true, 0usize, 0usize);
+        for (o, n) in base.chunks_exact(4).zip(m.chunks_exact(4)) {
+            same_alpha &= o[3] == n[3];
+            if o[3] > 0 {
+                opaque += 1;
+                changed += usize::from(o != n);
+                assert!(n[2] > n[1] && n[0] > n[1], "보라 = R·B가 G보다 크다: {n:?}");
+            }
+        }
+        assert!(same_alpha, "알파(모양) 불변");
+        assert_eq!(changed, opaque, "불투명(유채색) 화소는 전부 바뀐다");
         // 자산 계약 — 96×96 RGBA 원시 바이트.
         let want = (crate::icons::id::SIZE * crate::icons::id::SIZE * 4) as usize;
         for a in [

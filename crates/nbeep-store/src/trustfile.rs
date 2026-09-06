@@ -35,7 +35,7 @@ use std::path::PathBuf;
 const MAGIC: [u8; 4] = *b"NBTS";
 /// v2(08-15) = v1 + 레코드 꼬리(목록 고정 fav · 최근 접속/대화 unix ms).
 /// v1 파일도 읽는다(꼬리 없음 = 기본값 — 전방·후방 관용, groupfile v2와 같은 문법).
-const VER: u8 = 2;
+const VER: u8 = 3;
 const VER_V1: u8 = 1;
 const SALT_LEN: usize = 16;
 const NONCE_LEN: usize = 12;
@@ -206,6 +206,42 @@ impl FileTrustStore {
     #[must_use]
     pub fn names(&self, peer: PeerId) -> &[DisplayName] {
         self.inner.names(peer)
+    }
+
+    /// [`MemoryTrustStore::record_user`] 위임 + 바뀌면 즉시 저장(ADR-0015 S2-e).
+    pub fn record_user(&mut self, peer: PeerId, user_pub: [u8; 32], name: &str, ver: u32) -> bool {
+        let changed = self.inner.record_user(peer, user_pub, name, ver);
+        if changed {
+            self.persist();
+        }
+        changed
+    }
+
+    /// [`MemoryTrustStore::revoke_user`] 위임 + 바뀌면 즉시 저장.
+    pub fn revoke_user(&mut self, peer: PeerId) -> bool {
+        let changed = self.inner.revoke_user(peer);
+        if changed {
+            self.persist();
+        }
+        changed
+    }
+
+    /// [`MemoryTrustStore::user_of`] 위임.
+    #[must_use]
+    pub fn user_of(&self, peer: PeerId) -> Option<([u8; 32], &str, u32)> {
+        self.inner.user_of(peer)
+    }
+
+    /// [`MemoryTrustStore::devices_of_user`] 위임.
+    #[must_use]
+    pub fn devices_of_user(&self, user_pub: &[u8; 32]) -> Vec<PeerId> {
+        self.inner.devices_of_user(user_pub)
+    }
+
+    /// [`MemoryTrustStore::handle_conflict`] 위임.
+    #[must_use]
+    pub fn handle_conflict(&self, peer: PeerId) -> bool {
+        self.inner.handle_conflict(peer)
     }
 
     /// [`MemoryTrustStore::set_fav`] 위임 + 즉시 저장(목록 고정 — 08-15).
@@ -428,6 +464,19 @@ fn encode_records(records: &[PinRecord]) -> Vec<u8> {
         out.push(u8::from(r.fav));
         out.extend_from_slice(&r.last_seen.to_be_bytes());
         out.extend_from_slice(&r.last_chat.to_be_bytes());
+        // v3 꼬리(09-06 · ADR-0015 S2-e) — 서명 UserHello로 확인한 사용자(공개키·핸들·버전).
+        match r.user_pub {
+            Some(p) => {
+                out.push(1);
+                out.extend_from_slice(&p);
+            }
+            None => out.push(0),
+        }
+        let name = &r.user_name.as_bytes()[..r.user_name.len().min(32)];
+        #[allow(clippy::cast_possible_truncation)]
+        out.push(name.len() as u8);
+        out.extend_from_slice(name);
+        out.extend_from_slice(&r.list_ver.to_be_bytes());
     }
     out
 }
@@ -466,6 +515,21 @@ fn decode_records(ver: u8, bytes: &[u8]) -> Option<Vec<PinRecord>> {
         } else {
             (false, 0, 0)
         };
+        // v3 꼬리(09-06) — v1·v2 파일은 "사용자 모름"으로 관용.
+        let (user_pub, user_name, list_ver) = if ver >= 3 {
+            let has = take(&mut p, 1)?[0];
+            let user_pub = match has {
+                0 => None,
+                1 => Some(<[u8; 32]>::try_from(take(&mut p, 32)?).ok()?),
+                _ => return None,
+            };
+            let nl = usize::from(take(&mut p, 1)?[0]);
+            let name = std::str::from_utf8(take(&mut p, nl)?).ok()?.to_string();
+            let ver = u32::from_be_bytes(take(&mut p, 4)?.try_into().ok()?);
+            (user_pub, name, ver)
+        } else {
+            (None, String::new(), 0)
+        };
         out.push(PinRecord {
             peer,
             level,
@@ -474,6 +538,9 @@ fn decode_records(ver: u8, bytes: &[u8]) -> Option<Vec<PinRecord>> {
             fav,
             last_seen,
             last_chat,
+            user_pub,
+            user_name,
+            list_ver,
         });
     }
     (p == bytes.len()).then_some(out)
@@ -623,6 +690,9 @@ mod tests {
                 fav: false,
                 last_seen: 0,
                 last_chat: 0,
+                user_pub: None,
+                user_name: String::new(),
+                list_ver: 0,
             },
             PinRecord {
                 peer: pid(2),
@@ -635,6 +705,9 @@ mod tests {
                 fav: true,
                 last_seen: 1_723_000_000_000,
                 last_chat: 42,
+                user_pub: Some([0xAB; 32]),
+                user_name: "kiros33".into(),
+                list_ver: 7,
             },
         ];
         let enc = encode_records(&records);
