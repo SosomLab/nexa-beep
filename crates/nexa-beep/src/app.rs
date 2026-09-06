@@ -313,6 +313,8 @@ enum AppEvent {
     },
     /// 세션 내 형제 증명 도착(ADR-0015 S1-e) — 대조는 메인(재료·바인딩이 거기 있다).
     UserProof { peer: PeerId, proof: [u8; 32] },
+    /// 형제가 보낸 사용자 키 봉인본(ADR-0015 S2 · 태그 9) — 열기·병합은 메인.
+    UserKeyBlob { peer: PeerId, sealed: Vec<u8> },
     /// 수동 주소 연결 실패(DR-19 · M2-8 잔여 — 워커에서 돌아온다. 성공은 `Outbound`).
     AddFailed { addr: String, why: String },
     /// 공유 그룹 프레임 도착(M5-1g · ADR-0012) — 검증·적용은 메인(명부 단일 지점).
@@ -1548,6 +1550,20 @@ fn spawn_session_actor(
                                         parked[pos].1 = true;
                                     }
                                 }
+                            }
+                        }
+                    }
+                    StreamId::Control if nbeep_core::UserKeyBlob::decode(&bytes).is_some() => {
+                        // 사용자 키 봉인본(ADR-0015 S2) — 형제 세션에서만 유효 · 판정은 메인.
+                        if let Some(b) = nbeep_core::UserKeyBlob::decode(&bytes) {
+                            if proxy
+                                .send_event(AppEvent::UserKeyBlob {
+                                    peer,
+                                    sealed: b.sealed,
+                                })
+                                .is_err()
+                            {
+                                return;
                             }
                         }
                     }
@@ -6255,14 +6271,18 @@ impl App {
         self.refresh_approval_ui();
         let path = self.data_dir.join("user.key");
         let proxy = self.proxy.clone();
-        let held = self.user_rt.key.clone(); // 암호·핸들 변경 = 재래핑 근거(신원 불변)
+        let held = self
+            .user_rt
+            .key
+            .clone()
+            .map(|k| (k, self.user_rt.key_created)); // 암호·핸들 변경 = 재래핑 근거(신원 불변)
         std::thread::spawn(move || {
             let result = crate::userident::derive_and_load(
                 &handle,
                 &pass,
                 &path,
                 crate::gate::SEAL_USERKEY,
-                held.as_ref(),
+                held.as_ref().map(|(k, at)| (k, *at)),
             )
             .map(Box::new);
             let _ = proxy.send_event(AppEvent::UserTestDone { gen, result });
@@ -6280,6 +6300,7 @@ impl App {
                 let ok = *ok;
                 self.user_rt.material = Some(ok.material);
                 self.user_rt.key = Some(ok.key);
+                self.user_rt.key_created = ok.created_at;
                 self.user_state = crate::userident::on_test_result(&Ok(user_id));
                 if ok.created {
                     // 첫 기기 부트스트랩 — 새 사용자 키가 이 PC에 봉인 저장됐다(비밀은 표시 안 함).
@@ -6390,6 +6411,7 @@ impl App {
         }
         self.note_sibling(peer, true);
         self.send_user_proof(peer, true); // 회신(이미 보냈으면 no-op)
+        self.send_user_key_blob(peer); // 승격 경로도 키 동기(D-32-8)
         let title = self.peer_title(peer);
         self.set_status(nbeep_core::tf(self.connected_msg(peer), &[&title]));
         let mut inv = Invalidations::default();
@@ -6474,8 +6496,96 @@ impl App {
             eprintln!("[user] session {} via_psk={via_psk}", peer.short());
         }
         if via_psk && self.siblings.insert(peer) {
-            self.set_status(format!("내 기기 연결됨 — {}", self.peer_title(peer)));
+            let title = self.peer_title(peer);
+            self.set_status(nbeep_core::tf(
+                nbeep_core::Msg::StfConnectedOwnOpen,
+                &[&title],
+            ));
+            // 키 동기는 대화 채널이 선 뒤(install_conversation / on_user_proof)에서 보낸다 —
+            // 핸들러 머리에서는 아직 out_tx가 없다(09-06 실기: 보냄 0건).
         }
+    }
+
+    /// 내 `user.key` 봉인본을 형제에게(파일과 같은 도메인·열쇠 = 받는 쪽이 그대로 파일로 쓴다).
+    fn send_user_key_blob(&mut self, peer: PeerId) {
+        if !self.siblings.contains(&peer) || !self.user_state.active() {
+            return;
+        }
+        let (Some(m), Some(k)) = (self.user_rt.material.as_ref(), self.user_rt.key.as_ref()) else {
+            return;
+        };
+        let Ok(sealed) = crate::userident::seal_key(
+            crate::gate::SEAL_USERKEY,
+            &m.wrap_key(),
+            k,
+            self.user_rt.key_created,
+        ) else {
+            return;
+        };
+        if let Some(conv) = self.conversations.get(&peer) {
+            let _ = conv
+                .out_tx
+                .send(SessionCmd::Control(vec![nbeep_core::UserKeyBlob {
+                    sealed,
+                }
+                .encode()]));
+            if self.user_trace {
+                eprintln!("[user] keyblob sent to {}", peer.short());
+            }
+        }
+    }
+
+    /// 형제의 봉인본 — **형제 세션에서 온 것만**(fail-closed) 내 열쇠로 열어 병합 규칙 적용.
+    /// 채택 = 파일 교체(0600 원자적) · 런타임 키 교체 · UserId 변경 고지. 내 키가 이기면 무시
+    /// (상대가 내 봉인본으로 채택한다).
+    fn on_user_key_blob(&mut self, peer: PeerId, sealed: &[u8]) {
+        if !self.siblings.contains(&peer) || !self.user_state.active() {
+            return;
+        }
+        let (Some(m), Some(mine)) = (self.user_rt.material.as_ref(), self.user_rt.key.as_ref())
+        else {
+            return;
+        };
+        let Some((theirs, at)) =
+            crate::userident::open_key(crate::gate::SEAL_USERKEY, &m.wrap_key(), sealed)
+        else {
+            if self.user_trace {
+                eprintln!("[user] keyblob from {} unreadable", peer.short());
+            }
+            return;
+        };
+        let their_at = at.unwrap_or(u64::MAX); // 시각 없는 구본 = 가장 새것으로 취급
+        let adopt = crate::userident::adopt_theirs(
+            (self.user_rt.key_created, mine.public()),
+            (their_at, theirs.public()),
+        );
+        if self.user_trace {
+            eprintln!(
+                "[user] keyblob from {} adopt={adopt} (mine {} theirs {})",
+                peer.short(),
+                mine.user_id().short(),
+                theirs.user_id().short()
+            );
+        }
+        if !adopt {
+            return;
+        }
+        let path = self.data_dir.join("user.key");
+        if let Err(e) = nbeep_store::privfile::write_atomic(&path, sealed) {
+            self.set_status(format!("user.key 병합 저장 실패: {e}"));
+            return;
+        }
+        let old = mine.user_id();
+        let new = theirs.user_id();
+        self.user_rt.key = Some(theirs);
+        self.user_rt.key_created = their_at;
+        self.user_state = crate::userident::on_test_result(&Ok(new));
+        self.set_status(format!(
+            "사용자 키 병합 — 오래된 기기의 키 채택(ID {} → {})",
+            old.short(),
+            new.short()
+        ));
+        self.refresh_approval_ui();
     }
 
     /// 인증 상태 → 런타임 반영(단일 지점): 공유 PSK · LAN 힌트 태그 · 형제 집합 · 릴레이 재등록.
@@ -7323,7 +7433,11 @@ impl App {
         );
         // ★ 형제 증명(ADR-0015 S1-e) — XX로 섰는데 힌트가 형제라 하면 세션 안에서 증명한다
         //   (XXpsk3로 이미 섰으면 불필요). 재료가 없거나 후보가 아니면 조용히 건너뛴다.
-        if !self.siblings.contains(&peer) {
+        if self.siblings.contains(&peer) {
+            // ★ 사용자 키 동기(ADR-0015 S2 · D-32-8 전 기기 복제): 형제 확정 + 채널 성립 즉시 내
+            //   봉인본을 보낸다. 양쪽이 보내고 각자 "오래된 키" 규칙으로 수렴한다(왕복 1회).
+            self.send_user_key_blob(peer);
+        } else {
             self.send_user_proof(peer, false);
         }
         // ★ 원격 경로 고지(M5-3b — 조용히, 그러나 보이게): 인터넷 경유 세션은 스레드에
@@ -15263,6 +15377,7 @@ impl ApplicationHandler<AppEvent> for App {
                 self.redraw_conversation(peer);
             }
             AppEvent::UserProof { peer, proof } => self.on_user_proof(peer, proof),
+            AppEvent::UserKeyBlob { peer, sealed } => self.on_user_key_blob(peer, &sealed),
             AppEvent::ChatAck {
                 peer,
                 target_seq,

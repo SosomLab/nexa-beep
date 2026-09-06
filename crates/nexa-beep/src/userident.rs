@@ -203,6 +203,8 @@ pub(crate) fn on_test_result(result: &Result<UserId, String>) -> UserState {
 pub(crate) struct UserRuntime {
     pub(crate) material: Option<KeyMaterial>,
     pub(crate) key: Option<UserKey>,
+    /// 쥔 키의 생성 시각(unix ms) — 형제 병합의 승자 기준(D-32-8 · 오래된 쪽).
+    pub(crate) key_created: u64,
 }
 
 impl UserRuntime {
@@ -220,6 +222,67 @@ pub(crate) struct TestOk {
     pub(crate) key: UserKey,
     /// 이번에 `user.key`를 새로 만들었는가(첫 기기 부트스트랩).
     pub(crate) created: bool,
+    /// 키 생성 시각(unix ms · 봉인 페이로드 꼬리 8B — 구본 64B는 지금 시각으로 승격).
+    pub(crate) created_at: u64,
+}
+
+/// 봉인 페이로드 = `[UserKey 64][created_at u64 BE]`(구본 = 64B만 → `None` 시각).
+pub(crate) fn key_payload(key: &UserKey, created_at: u64) -> Vec<u8> {
+    let mut v = Vec::with_capacity(USERKEY_LEN + 8);
+    v.extend_from_slice(&key.to_bytes());
+    v.extend_from_slice(&created_at.to_be_bytes());
+    v
+}
+
+/// 페이로드 해석 — 64B(구본 · 시각 없음) 또는 72B. 그 외 = 손상.
+pub(crate) fn parse_key_payload(plain: &[u8]) -> Option<(UserKey, Option<u64>)> {
+    match plain.len() {
+        USERKEY_LEN => UserKey::from_bytes(plain).map(|k| (k, None)),
+        n if n == USERKEY_LEN + 8 => {
+            let key = UserKey::from_bytes(&plain[..USERKEY_LEN])?;
+            let mut t = [0u8; 8];
+            t.copy_from_slice(&plain[USERKEY_LEN..]);
+            Some((key, Some(u64::from_be_bytes(t))))
+        }
+        _ => None,
+    }
+}
+
+/// 봉인본 생성(파일·와이어 공용 — 같은 도메인·같은 열쇠라 형제가 파일로 그대로 쓸 수 있다).
+pub(crate) fn seal_key(
+    seal_domain: &[u8],
+    wrap: &[u8; 32],
+    key: &UserKey,
+    created_at: u64,
+) -> Result<Vec<u8>, String> {
+    nbeep_store::sealed::seal(seal_domain, wrap, &key_payload(key, created_at))
+        .map_err(|e| format!("user.key 봉인 실패: {e}"))
+}
+
+/// 봉인본 열기(파일·와이어 공용).
+pub(crate) fn open_key(
+    seal_domain: &[u8],
+    wrap: &[u8; 32],
+    sealed: &[u8],
+) -> Option<(UserKey, Option<u64>)> {
+    let plain = nbeep_store::sealed::open(seal_domain, wrap, sealed)?;
+    parse_key_payload(&plain)
+}
+
+/// 형제 병합 규칙(D-32-8 · 순수): **오래된 키가 이긴다** · 같은 시각이면 공개키 사전순 작은 쪽.
+/// 참 = 상대 키를 채택한다. 같은 키면 거짓(할 일 없음).
+#[must_use]
+pub(crate) fn adopt_theirs(mine: (u64, [u8; 32]), theirs: (u64, [u8; 32])) -> bool {
+    if mine.1 == theirs.1 {
+        return false;
+    }
+    theirs.0 < mine.0 || (theirs.0 == mine.0 && theirs.1 < mine.1)
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
 }
 
 /// 워커 본체 — KP 파생(60k · 수십 ms) → `user.key` 봉인 파일 열기/생성/재래핑.
@@ -236,52 +299,68 @@ pub(crate) fn derive_and_load(
     pass: &str,
     key_path: &Path,
     seal_domain: &[u8],
-    held: Option<&UserKey>,
+    held: Option<(&UserKey, u64)>,
 ) -> Result<TestOk, String> {
     let material = KeyMaterial::derive(normalize_handle(handle), pass)
         .ok_or_else(|| "핸들과 페어링 암호가 모두 필요합니다".to_string())?;
     let wrap = material.wrap_key();
-    let seal_to_file = |key: &UserKey| -> Result<(), String> {
-        let env = nbeep_store::sealed::seal(seal_domain, &wrap, &key.to_bytes())
-            .map_err(|e| format!("user.key 봉인 실패: {e}"))?;
+    let seal_to_file = |key: &UserKey, created_at: u64| -> Result<(), String> {
+        let env = seal_key(seal_domain, &wrap, key, created_at)?;
         debug_assert!(env.len() > USERKEY_LEN);
         nbeep_store::privfile::write_atomic(key_path, &env)
             .map_err(|e| format!("user.key 저장 실패: {e}"))
     };
+    let (held_key, held_at) = match held {
+        Some((k, at)) => (Some(k), at),
+        None => (None, 0),
+    };
     match std::fs::read(key_path) {
         Ok(bytes) => {
-            if let Some(plain) = nbeep_store::sealed::open(seal_domain, &wrap, &bytes) {
-                let key = UserKey::from_bytes(&plain)
+            if nbeep_store::sealed::open(seal_domain, &wrap, &bytes).is_some() {
+                let (key, at) = open_key(seal_domain, &wrap, &bytes)
                     .ok_or_else(|| "user.key: 손상된 사용자 키(덮어쓰지 않음)".to_string())?;
+                let created_at = match at {
+                    Some(t) => t,
+                    None => {
+                        // 구본(시각 없음) — 지금 시각으로 승격해 다시 봉인(자기 치유 1회).
+                        let t = now_ms();
+                        seal_to_file(&key, t)?;
+                        t
+                    }
+                };
                 return Ok(TestOk {
                     material,
                     key,
                     created: false,
+                    created_at,
                 });
             }
-            if let Some(k) = held {
-                seal_to_file(k)?;
+            if let Some(k) = held_key {
+                seal_to_file(k, held_at)?;
                 return Ok(TestOk {
                     material,
                     key: k.clone(),
                     created: false,
+                    created_at: held_at,
                 });
             }
             Err("user.key: 이 기기의 사용자 키가 다른 암호로 봉인되어 있습니다".to_string())
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            let (key, created) = match held {
-                Some(k) => (k.clone(), false),
+            let (key, created, created_at) = match held_key {
+                Some(k) => (k.clone(), false, held_at),
                 None => (
                     UserKey::generate().map_err(|e| format!("난수원 실패: {e}"))?,
                     true,
+                    now_ms(),
                 ),
             };
-            seal_to_file(&key)?;
+            seal_to_file(&key, created_at)?;
             Ok(TestOk {
                 material,
                 key,
                 created,
+                created_at,
             })
         }
         Err(e) => Err(format!("user.key 읽기 실패: {e}")),
@@ -359,6 +438,36 @@ mod tests {
     }
 
     #[test]
+    fn key_payload_legacy_and_merge_rule() {
+        let k = UserKey::generate().unwrap();
+        let (k2, at) = parse_key_payload(&key_payload(&k, 1234)).unwrap();
+        assert_eq!(k2.user_id(), k.user_id());
+        assert_eq!(at, Some(1234));
+        let (k3, at3) = parse_key_payload(&k.to_bytes()).unwrap();
+        assert_eq!(k3.user_id(), k.user_id());
+        assert_eq!(at3, None, "구본 64B = 시각 없음");
+        assert!(parse_key_payload(&[0u8; 70]).is_none());
+        // 봉인 왕복(파일·와이어 공용).
+        let wrap = [5u8; 32];
+        let sealed = seal_key(b"t", &wrap, &k, 77).unwrap();
+        let (k4, at4) = open_key(b"t", &wrap, &sealed).unwrap();
+        assert_eq!(k4.user_id(), k.user_id());
+        assert_eq!(at4, Some(77));
+        assert!(
+            open_key(b"t", &[6u8; 32], &sealed).is_none(),
+            "다른 열쇠 = 안 열림"
+        );
+        // 병합 규칙 — 오래된 키 승 · 동시각은 공개키 사전순 · 같은 키는 no-op.
+        let a = [1u8; 32];
+        let b = [2u8; 32];
+        assert!(adopt_theirs((200, a), (100, b)));
+        assert!(!adopt_theirs((100, a), (200, b)));
+        assert!(adopt_theirs((100, b), (100, a)));
+        assert!(!adopt_theirs((100, a), (100, b)));
+        assert!(!adopt_theirs((100, a), (50, a)), "같은 키 = 할 일 없음");
+    }
+
+    #[test]
     fn derive_and_load_creates_then_reopens_and_rejects_other_pass() {
         let d = std::env::temp_dir().join(format!("nb-userident-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
@@ -382,9 +491,18 @@ mod tests {
         let err = derive_and_load("kiros33", "other-pass-9999", &p, dom, None).unwrap_err();
         assert!(err.contains("다른 암호"), "{err}");
         // ★ 쥔 키가 있으면 새 암호로 재래핑 — UserId 불변(암호 변경 ≠ 신원 변경).
-        let t3 = derive_and_load("kiros33", "other-pass-9999", &p, dom, Some(&t1.key)).unwrap();
+        let t3 = derive_and_load(
+            "kiros33",
+            "other-pass-9999",
+            &p,
+            dom,
+            Some((&t1.key, t1.created_at)),
+        )
+        .unwrap();
         assert_eq!(t3.key.user_id(), t1.key.user_id());
         assert!(!t3.created);
+        assert_eq!(t3.created_at, t1.created_at, "재래핑은 생성 시각을 보존");
+        assert!(t1.created_at > 0, "첫 생성 = 지금 시각");
         let t4 = derive_and_load("kiros33", "other-pass-9999", &p, dom, None).unwrap();
         assert_eq!(
             t4.key.user_id(),
