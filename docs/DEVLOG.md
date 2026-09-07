@@ -7,6 +7,7 @@
 
 ## 2026-09-07
 
+- **(Win · main) ff 4회 수신·Windows 실측** — `0141ac5`(ADR-0015 S0~S2) 트리 **826 green**(fmt ✓ · 0 failed · 2 ignored) · 이후 `4c6b81e`·`f9ea7f2` 영향 크레이트 통과(nexa-beep 60 · gfx 7 · plat 67 · 기호 본 seguisym/seguiemj 실재) · `install-local.ps1` 첫 Windows 완주 3회(md5 `89424dda`→`564bb9d7`→`19653e78`→`527cc84c` · 신원·`user=super` 유지) · **v0.2.15 GitHub 실측**(run success · 자산 14종) · 관찰 = Win 기호 본 경로 `C:\Windows\Fonts` 리터럴. 잔여 = 2-PC 서버 경유 형제 실기. [journal](journal/2026-09-07.md).
 - **(mac · main) ★v0.2.15 릴리스**(`d89f91f`+태그 — run 34043100329 전 job success · 자산 14종 · **brew 0.2.15 추종 ✓** · winget = v0.2.14 PR OPEN → 9회차 제외 · choco = 3종 "Waiting for Maintainer" → 제외) · 탑재 = ADR-0015 S0~S2·릴레이 수정·글꼴 폴백·목록 증발·0600 · **문서·위키 최신화**(45 매뉴얼 7-1 다중 기기 신원 절 · 위키 5면 · README·CLAUDE.md). [journal](journal/2026-09-07.md).
 - **(mac · main) ★글꼴 폴백 체인 = 두부 예방**(사용자 요청 · nexa-clip 09-01/09-04 이식 — Windows "□ Verified" 실기): `nbeep-gfx::Font` 얼굴 체인(글자 단위 첫 얼굴 · 기준선 주 폰트 · 탭/제어 규칙) · `nbeep-plat::symbol_fallback_fonts`(mac Apple Symbols·Arial Unicode / Win Segoe UI Symbol·Emoji / Linux DejaVu·Noto Symbols) · 앱 `load_ui_font` 체인+진단 1줄 · 회귀(✓·⚠·→) · 835 green. [journal](journal/2026-09-07.md).
 
