@@ -87,7 +87,9 @@
 
 1. 이 CLAUDE.md + [docs/STATUS.md](docs/STATUS.md) → 2. [DEVLOG](docs/DEVLOG.md) 최상단 + 최신 journal → 3. 할 일 = [docs/TODO.md](docs/TODO.md) 순차.
 
-## 5. 다음 단계 (2026-09-07 · STATUS 09-07 1차 기준 — ADR-0015 S0~S2 ✅ · 2-PC 릴레이 결함 수정 · 글꼴 폴백 체인 · 다음 = S3)
+## 5. 다음 단계 (2026-09-07 · STATUS 09-07 4차 기준 — 메인 창 한눈 식별 · v0.2.15 · ADR-0015 S0~S2 ✅ · 다음 = S3)
+
+> **09-07 3~4차(Win · main)** — ★**메인 창 한눈 식별**(`eac6c94` · 사용자 요청 "Local인지 Relay/Contents 서버인지 · UserId(Handle) 설정됐는지"): "인증됨"이 로컬 판정뿐이라 **다른 기기와 실제로 묶였는지·지금 경로가 무엇인지**가 메인 창에 없던 공백 → **순수 판정 한 벌**(`ServerLink` Local/Held/Reconnecting/Connected(kind) · `UserLevel` Off→Blocked→Local→Seeking→Paired · `UserHint` 서버 필요/미검증·**암호 불일치 의심**(`trust.handle_used_by_other`)·병합 중)을 **세 자리가 공유** — 툴바 연결 아이콘 항상 표시(LAN = 집 흐림 · 서버 = 경유점 accent/흐림 + 종류·주소 툴팁) · 아바타 링(인증 보라·문제 호박 + 툴팁) · 상태바 칩 2개(`relay ✓`·`kiros33 · 1대`) + 설정 노트 꼬리 + `--whoami` 오프라인 판정(profile.sec→KP→user.key→trust.seg). 갱신 단일 지점 `refresh_user_glance`. Win 실기 캡처 ✓ · 게이트 ✓. ★**Windows 실측 3차** = mac 4뭉치(45커밋) ff · `0141ac5` 트리 **826 green** · `install-local.ps1` 첫 Windows 완주 · **v0.2.15**(`d89f91f` — release run success · 자산 14종 · brew ✓ · winget/choco 제외 9회차) GitHub 실측. 잔여 = 2-PC 형제 실기(`2대`·Paired·불일치 호박 링) · S3.
 
 > **09-07 1차(mac · main)** — ★**글꼴 폴백 체인 = 두부 예방**(nexa-clip 09-01/09-04 이식 · Windows "□ Verified" 실기): `nbeep-gfx::Font` 얼굴 체인(글자 단위 첫 얼굴 · 기준선은 주 폰트 · 탭/제어 규칙) · `nbeep-plat::symbol_fallback_fonts()`(OS별 기호 본 · 컬러 이모지 제외) · 앱 `load_ui_font` 진단 1줄. **User 설정 ↔ 서버**: 사용자 인증은 서버 접속을 만들지 않고 **기존 Managed 등록에 페어링 RID 3개를 얹는다**(마커 유지 재등록) · Unmanaged는 LAN 힌트만으로 동작 · **Unmanaged+수동 IP는 형제 판정 불가**(결정 후보 TODO X-13).
 
