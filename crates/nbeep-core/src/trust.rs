@@ -207,6 +207,18 @@ impl MemoryTrustStore {
             .any(|(&o, x)| o != peer && x.user_name == name && x.user_pub.is_some_and(|p| p != my))
     }
 
+    /// **내 핸들을 다른 사용자 키가 쓰는가**(09-07 한눈 진단) — `name`을 `my_pub`이 아닌 공개키로
+    /// 제시한 기기가 하나라도 있으면 참. 같은 핸들·다른 암호로 켠 내 다른 PC가 이렇게 보인다
+    /// (암호가 다르면 KP가 달라 형제 판정이 안 되고 각자 키를 만든다). 빈 핸들은 거짓.
+    #[must_use]
+    pub fn handle_used_by_other(&self, name: &str, my_pub: &[u8; 32]) -> bool {
+        !name.is_empty()
+            && self
+                .records
+                .values()
+                .any(|r| r.user_name == name && r.user_pub.is_some_and(|p| p != *my_pub))
+    }
+
     /// **이름 재사용 경고** — `name`이 **다른** 키에서 이미 관찰된 적이 있으면 그 키를 돌려준다.
     ///
     /// 이름은 신원이 아니므로(같은 이름 ≠ 같은 사람), 같은 이름이 다른 키로 나타나면 UI가
@@ -371,9 +383,17 @@ mod user_tests {
         assert!(st.record_user(pid(3), [9; 32], "kiros33", 1));
         assert!(st.handle_conflict(pid(1)));
         assert!(st.handle_conflict(pid(3)));
+        // 내 관점(09-07 한눈 진단): 내 핸들을 다른 키가 쓴다 = 암호 불일치 의심.
+        assert!(st.handle_used_by_other("kiros33", &[1; 32]));
+        assert!(st.handle_used_by_other("kiros33", &[9; 32]), "대칭");
+        assert!(!st.handle_used_by_other("", &[1; 32]), "빈 핸들 = 거짓");
         // 사용자 교체(다른 공개키)는 덮는다 — 버전은 새로.
         assert!(st.record_user(pid(3), [5; 32], "other", 1));
         assert!(!st.handle_conflict(pid(1)));
+        assert!(
+            !st.handle_used_by_other("kiros33", &[1; 32]),
+            "충돌 해소 = 거짓"
+        );
         // 폐기 = 사용자 기록만 지운다(핀은 유지).
         assert!(st.revoke_user(pid(2)));
         assert!(!st.revoke_user(pid(2)), "멱등");

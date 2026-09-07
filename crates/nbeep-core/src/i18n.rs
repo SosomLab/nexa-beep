@@ -740,6 +740,50 @@ pub enum Msg {
     FltNew,
     /// 툴바 서버 표시 툴팁 — 연결됨·클릭 = 설정.
     TipServerOn,
+    /// 툴바 경로 툴팁 — Unmanaged(LAN만).
+    TipServerLocal,
+    /// 툴바 경로 툴팁 — Managed이나 미검증·보류(서버 안 씀).
+    TipServerHeld,
+    /// 툴바 경로 툴팁 — 검증된 서버 재접속 대기 `{주소}`.
+    TipfServerReconnect,
+    /// 툴바 경로 툴팁 — `{종류}` 서버 연결됨 `{주소}`.
+    TipfServerConnected,
+    /// 서버 종류 명사 — 릴레이.
+    ServerKindRelay,
+    /// 서버 종류 명사 — 컨텐츠.
+    ServerKindContent,
+    /// 서버 종류 명사 — 등록형.
+    ServerKindRegistered,
+    /// 상태바 경로 칩 — LAN만.
+    ChipLan,
+    /// 상태바 경로 칩 — 서버 보류(미검증).
+    ChipServerHeld,
+    /// 상태바 경로 칩 — `{종류}` 재접속 대기.
+    ChipfServerReconnect,
+    /// 상태바 경로 칩 — `{종류}` 연결됨.
+    ChipfServerOn,
+    /// 상태바 사용자 칩 — 단독 노드(사용자 꺼짐).
+    ChipUserOff,
+    /// 상태바 사용자 칩 — 사용자 미인증(값 문제·실패).
+    ChipUserBlocked,
+    /// 상태바 사용자 칩 — `{핸들}` · 기기 `{N}`.
+    ChipfUser,
+    /// 아바타 툴팁 — 단독 노드.
+    TipUserOff,
+    /// 아바타 툴팁 — 사용자 미인증(설정 › 사용자 확인).
+    TipUserBlocked,
+    /// 아바타 툴팁 — 사용자 `{핸들}` · ID `{id}` · 내 기기 `{N}`대(`{M}` 접속 중).
+    TipfUserVerified,
+    /// 진단 꼬리 — 서버 없음(다른 망은 못 만남).
+    HintServerNeeded,
+    /// 진단 꼬리 — 서버 미검증·미접속.
+    HintServerHeld,
+    /// 진단 꼬리 — 같은 핸들·다른 키(상대 PC 암호 확인).
+    HintPassMismatch,
+    /// 진단 꼬리 — ID 합치는 중.
+    HintMerging,
+    /// 설정 노트 꼬리 — 내 기기 `{N}`대(`{M}` 접속 중).
+    StfNoteUserDevices,
     /// 필터 그룹 이름 — 경로(툴팁용).
     FltGrpPath,
     /// 필터 그룹 이름 — 상태.
@@ -1325,6 +1369,28 @@ impl Msg {
             Msg::FltPinned => ["Pinned", "핀", "已固定", "ピン"],
             Msg::FltNew => ["New", "신규", "新", "新規"],
             Msg::TipServerOn => ["Connected to relay server — click for settings", "릴레이 서버 연결됨 — 클릭 = 서버 설정", "已连接中继服务器 — 点击打开设置", "リレーサーバー接続中 — クリックで設定"],
+            Msg::TipServerLocal => ["LAN only — no server (click for server settings)", "로컬(LAN)만 · 서버 없음 — 클릭 = 서버 설정", "仅局域网 · 无服务器 — 点击打开服务器设置", "LAN のみ · サーバーなし — クリックでサーバー設定"],
+            Msg::TipServerHeld => ["Server configured but not verified — press [Test] in Settings › Server", "서버 설정됨 · 미검증 — 설정 › 서버에서 [테스트]", "已配置服务器但未验证 — 在 设置 › 服务器 按 [测试]", "サーバー設定済み · 未検証 — 設定 › サーバーで [テスト]"],
+            Msg::TipfServerReconnect => ["Server verified · reconnecting — {} (click for settings)", "서버 검증됨 · 재접속 대기 — {} (클릭 = 서버 설정)", "服务器已验证 · 等待重连 — {}（点击打开设置）", "サーバー検証済み · 再接続待ち — {}（クリックで設定）"],
+            Msg::TipfServerConnected => ["Connected to {} server — {} (click for settings)", "{} 서버 연결됨 — {} (클릭 = 서버 설정)", "已连接{}服务器 — {}（点击打开设置）", "{}サーバー接続中 — {}（クリックで設定）"],
+            Msg::ServerKindRelay => ["relay", "릴레이", "中继", "リレー"],
+            Msg::ServerKindContent => ["content", "컨텐츠", "内容", "コンテンツ"],
+            Msg::ServerKindRegistered => ["registered", "등록형", "注册制", "登録制"],
+            Msg::ChipLan => ["LAN", "LAN", "LAN", "LAN"],
+            Msg::ChipServerHeld => ["Server: not verified", "서버: 미검증", "服务器：未验证", "サーバー: 未検証"],
+            Msg::ChipfServerReconnect => ["{}: reconnecting", "{}: 재접속 대기", "{}：等待重连", "{}: 再接続待ち"],
+            Msg::ChipfServerOn => ["{} ✓", "{} ✓", "{} ✓", "{} ✓"],
+            Msg::ChipUserOff => ["Solo", "단독", "单机", "単独"],
+            Msg::ChipUserBlocked => ["User: not verified", "사용자: 미인증", "用户：未验证", "ユーザー: 未認証"],
+            Msg::ChipfUser => ["{} · {} dev", "{} · {}대", "{} · {}台", "{} · {}台"],
+            Msg::TipUserOff => ["Standalone node — multi-device identity is off (click = my profile)", "단독 노드 — 다중 기기 신원 꺼짐 (클릭 = 내 프로필)", "独立节点 — 多设备身份已关闭（点击 = 我的资料）", "単独ノード — 複数デバイス ID はオフ（クリック = マイプロフィール）"],
+            Msg::TipUserBlocked => ["User identity not verified — check Settings › User (click = my profile)", "사용자 신원 미인증 — 설정 › 사용자 확인 (클릭 = 내 프로필)", "用户身份未验证 — 检查 设置 › 用户（点击 = 我的资料）", "ユーザー ID 未認証 — 設定 › ユーザーを確認（クリック = マイプロフィール）"],
+            Msg::TipfUserVerified => ["User {} · ID {} · my devices {} ({} online)", "사용자 {} · ID {} · 내 기기 {}대({} 접속 중)", "用户 {} · ID {} · 我的设备 {} 台（{} 在线）", "ユーザー {} · ID {} · 自分のデバイス {} 台（{} 接続中）"],
+            Msg::HintServerNeeded => [" · other networks need a server", " · 다른 망의 기기는 서버가 필요", " · 其他网络的设备需要服务器", " · 他ネットワークの端末にはサーバーが必要"],
+            Msg::HintServerHeld => [" · server not verified — other networks unreachable", " · 서버 미검증 — 다른 망의 기기와 못 만남", " · 服务器未验证 — 无法联系其他网络的设备", " · サーバー未検証 — 他ネットワークの端末に届かない"],
+            Msg::HintPassMismatch => [" · ⚠ same handle seen with a different key — check the passphrase on the other PC", " · ⚠ 같은 핸들·다른 키 감지 — 상대 PC의 페어링 암호 확인", " · ⚠ 检测到相同句柄但不同密钥 — 检查另一台电脑的配对口令", " · ⚠ 同じハンドル・別キーを検出 — 相手 PC のペアリング合言葉を確認"],
+            Msg::HintMerging => [" · merging IDs…", " · ID 합치는 중…", " · 正在合并 ID…", " · ID を統合中…"],
+            Msg::StfNoteUserDevices => [" · my devices {} ({} online)", " · 내 기기 {}대({} 접속 중)", " · 我的设备 {} 台（{} 在线）", " · 自分のデバイス {} 台（{} 接続中）"],
             Msg::FltGrpPath => ["Via", "Via", "Via", "Via"],
             Msg::FltGrpPresence => ["On", "On", "On", "On"],
             Msg::FltGrpTrust => ["Who", "Who", "Who", "Who"],

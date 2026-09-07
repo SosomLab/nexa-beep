@@ -244,6 +244,12 @@ impl FileTrustStore {
         self.inner.handle_conflict(peer)
     }
 
+    /// [`MemoryTrustStore::handle_used_by_other`] 위임.
+    #[must_use]
+    pub fn handle_used_by_other(&self, name: &str, my_pub: &[u8; 32]) -> bool {
+        self.inner.handle_used_by_other(name, my_pub)
+    }
+
     /// [`MemoryTrustStore::set_fav`] 위임 + 즉시 저장(목록 고정 — 08-15).
     pub fn set_fav(&mut self, peer: PeerId, fav: bool) {
         if self.inner.set_fav(peer, fav) {

@@ -2932,6 +2932,9 @@ struct App {
     /// 사용자 신원 트레이스(`NEXA_USER_TRACE=1`) — 힌트·psk 선택·형제 성립을 stderr에
     /// 남긴다(`NEXA_IME_TRACE` 선례 · 봉투만: 지문 앞자리와 참/거짓뿐).
     user_trace: bool,
+    /// 메인 창 한눈 상태(09-07 — 툴바 아바타 링·툴팁·상태바 칩이 읽는 캐시 · 갱신 =
+    /// `refresh_user_glance` 단일 지점).
+    user_glance: crate::userident::UserGlance,
     /// 내 후계 증명서 **사슬**(ADR-0015 §3-5 · S2-f · 09-06 연속 교체 대비) — 오래된 것이 앞 ·
     /// `data/user.succ`에 두고 세션마다 전부 제시(꺼져 있던 상대도 자기 기록에서 닿는 지점부터 잇는다).
     succession: Vec<nbeep_core::Succession>,
@@ -6288,11 +6291,216 @@ impl App {
 
     /// 툴바 서버 접속 표시(08-22) — 접속 성립/해제 지점들이 부른다.
     fn refresh_toolbar_server(&mut self) {
-        let on = self.relay.is_some();
+        use crate::userident::ServerLink;
+        use nbeep_core::{t, tf, Msg};
+        let link = self.server_link();
+        // 아이콘 = 통로의 모양·열림: LAN만 = 집(흐림) · 서버 = 경유점(열림 accent · 닫힘 흐림).
+        let (alpha, dim) = match link {
+            ServerLink::Local => (nbeep_ui::icons::path::HOUSE_ALPHA, true),
+            ServerLink::Held | ServerLink::Reconnecting => {
+                (nbeep_ui::icons::path::WAYPOINTS_ALPHA, true)
+            }
+            ServerLink::Connected(_) => (nbeep_ui::icons::path::WAYPOINTS_ALPHA, false),
+        };
+        let tip = match link {
+            ServerLink::Local => t(Msg::TipServerLocal).to_string(),
+            ServerLink::Held => t(Msg::TipServerHeld).to_string(),
+            ServerLink::Reconnecting => tf(Msg::TipfServerReconnect, &[&self.server_raw_target()]),
+            ServerLink::Connected(kind) => tf(
+                Msg::TipfServerConnected,
+                &[t(Self::server_kind_msg(kind)), &self.server_raw_target()],
+            ),
+        };
         let mut inv = Invalidations::default();
-        self.toolbar.set_item_visible("server", on, &mut inv);
-        if let Some(mid) = self.main_id {
+        self.toolbar.set_item_icon(
+            "server",
+            ToolIcon::StatusMask {
+                w: nbeep_ui::icons::path::SIZE,
+                h: nbeep_ui::icons::path::SIZE,
+                alpha,
+                size: 16,
+                dim,
+            },
+            &mut inv,
+        );
+        self.toolbar.set_item_tip("server", &tip);
+        self.toolbar.set_item_visible("server", true, &mut inv);
+        // 경로가 바뀌면 사용자 진단(서버 필요/미검증)도 바뀐다 — 같은 깔때기로.
+        self.refresh_user_glance();
+    }
+
+    /// 서버 경로 상태(09-07 한눈 판정 — 우선순위는 `server_note_texts`와 동일).
+    fn server_link(&self) -> crate::userident::ServerLink {
+        use crate::userident::{ServerKind, ServerLink};
+        let Some(raw) = server_target(
+            self.settings.get("net.server.mode"),
+            self.settings.get("net.server.address"),
+            self.settings.get("net.server.port"),
+        ) else {
+            return ServerLink::Local;
+        };
+        if self.relay.as_ref().is_some_and(|c| c.is_alive()) {
+            return ServerLink::Connected(ServerKind::from_setting(
+                self.settings.get("net.server.type"),
+            ));
+        }
+        let verified = server_target_verified(self.settings.get("server.verified"), &raw);
+        if self.relay_test_failed.is_some()
+            || self.relay_backoff.1 == u64::MAX
+            || !verified
+            || self.relay_hold
+        {
+            return ServerLink::Held;
+        }
+        ServerLink::Reconnecting
+    }
+
+    /// 설정의 서버 목표 문자열(표시용 · Unmanaged = 빈).
+    fn server_raw_target(&self) -> String {
+        server_target(
+            self.settings.get("net.server.mode"),
+            self.settings.get("net.server.address"),
+            self.settings.get("net.server.port"),
+        )
+        .unwrap_or_default()
+    }
+
+    fn server_kind_msg(kind: crate::userident::ServerKind) -> nbeep_core::Msg {
+        use crate::userident::ServerKind;
+        match kind {
+            ServerKind::Relay => nbeep_core::Msg::ServerKindRelay,
+            ServerKind::Content => nbeep_core::Msg::ServerKindContent,
+            ServerKind::Registered => nbeep_core::Msg::ServerKindRegistered,
+        }
+    }
+
+    /// 상태바 경로 칩 문구(09-07).
+    fn path_chip_text(&self) -> String {
+        use crate::userident::ServerLink;
+        use nbeep_core::{t, tf, Msg};
+        match self.server_link() {
+            ServerLink::Local => t(Msg::ChipLan).to_string(),
+            ServerLink::Held => t(Msg::ChipServerHeld).to_string(),
+            ServerLink::Reconnecting => tf(
+                Msg::ChipfServerReconnect,
+                &[t(Self::server_kind_msg(
+                    crate::userident::ServerKind::from_setting(
+                        self.settings.get("net.server.type"),
+                    ),
+                ))],
+            ),
+            ServerLink::Connected(kind) => {
+                tf(Msg::ChipfServerOn, &[t(Self::server_kind_msg(kind))])
+            }
+        }
+    }
+
+    /// 한눈 상태 재계산(09-07 단일 지점) — 상태 변화 지점(인증·형제 성립/종료·기기 목록·키
+    /// 병합·서버 경로)마다 부른다. 아바타 링·툴팁·상태바 칩이 이 캐시를 읽는다.
+    fn refresh_user_glance(&mut self) {
+        use crate::userident::{user_hints, user_level, UserGlance, UserLevel};
+        let enabled = self.settings.get("user.enabled") == "on";
+        let server = self.server_link();
+        let siblings_online = self.siblings.len();
+        let devices_known = if self.user_state.active() {
+            self.my_devices().len()
+        } else {
+            1
+        };
+        let level = user_level(
+            enabled,
+            &self.user_state,
+            server,
+            siblings_online,
+            devices_known,
+        );
+        let handle =
+            crate::userident::normalize_handle(self.settings.get("user.handle")).to_string();
+        let (id_short, handle_conflict, merging) = match self.user_rt.key.as_ref() {
+            Some(k) if level >= UserLevel::Local => {
+                let my_pub = k.public();
+                let conflict = self.trust.handle_used_by_other(&handle, &my_pub);
+                // 형제 세션은 섰는데 상대가 제시한 공개키가 아직 내 것과 다르다 = 봉인본 채택 전.
+                let merging = self.siblings.iter().any(|p| {
+                    self.trust
+                        .user_of(*p)
+                        .is_some_and(|(pk, _, _)| pk != my_pub)
+                });
+                (k.user_id().short(), conflict, merging)
+            }
+            _ => (String::new(), false, false),
+        };
+        let hints = user_hints(level, server, handle_conflict, merging);
+        let next = UserGlance {
+            level,
+            hints,
+            handle,
+            id_short,
+            devices_known,
+            siblings_online,
+        };
+        let changed = next.level != self.user_glance.level
+            || next.hints != self.user_glance.hints
+            || next.devices_known != self.user_glance.devices_known
+            || next.siblings_online != self.user_glance.siblings_online
+            || next.id_short != self.user_glance.id_short
+            || next.handle != self.user_glance.handle;
+        self.user_glance = next;
+        if changed {
+            self.refresh_toolbar_avatar(); // 링·툴팁 + 메인 창 재도색(상태바 칩 포함)
+        } else if let Some(mid) = self.main_id {
             self.request_redraw(mid);
+        }
+    }
+
+    /// 아바타 링 색·툴팁(09-07) — 한눈 상태에서 파생.
+    fn user_glance_ring_and_tip(&self) -> (Option<nbeep_ui::Color>, String) {
+        use crate::userident::{UserHint, UserLevel};
+        use nbeep_core::{t, tf, Msg};
+        let g = &self.user_glance;
+        match g.level {
+            UserLevel::Off => (None, t(Msg::TipUserOff).to_string()),
+            UserLevel::Blocked => (
+                Some(nbeep_ui::Color(0x00F5_9E0B)), // 호박(경고) — 설정에서 손볼 것이 있다
+                t(Msg::TipUserBlocked).to_string(),
+            ),
+            UserLevel::Local | UserLevel::Seeking | UserLevel::Paired => {
+                let mut tip = tf(
+                    Msg::TipfUserVerified,
+                    &[
+                        &g.handle,
+                        &g.id_short,
+                        &g.devices_known.to_string(),
+                        &g.siblings_online.to_string(),
+                    ],
+                );
+                for h in &g.hints {
+                    tip.push_str(t(match h {
+                        UserHint::ServerNeeded => Msg::HintServerNeeded,
+                        UserHint::ServerHeld => Msg::HintServerHeld,
+                        UserHint::PassMismatch => Msg::HintPassMismatch,
+                        UserHint::Merging => Msg::HintMerging,
+                    }));
+                }
+                let ring = if g.hints.contains(&UserHint::PassMismatch) {
+                    nbeep_ui::Color(0x00F5_9E0B) // 암호 불일치 의심 = 경고색으로 튄다
+                } else {
+                    nbeep_ui::peer_list::OWN_DEVICE_COLOR // "내 기기" 보라와 같은 색
+                };
+                (Some(ring), tip)
+            }
+        }
+    }
+
+    /// 상태바 사용자 칩 문구(09-07).
+    fn user_chip_text(&self) -> String {
+        use crate::userident::UserLevel;
+        use nbeep_core::{t, tf, Msg};
+        let g = &self.user_glance;
+        match g.level {
+            UserLevel::Off => t(Msg::ChipUserOff).to_string(),
+            UserLevel::Blocked => t(Msg::ChipUserBlocked).to_string(),
+            _ => tf(Msg::ChipfUser, &[&g.handle, &g.devices_known.to_string()]),
         }
     }
 
@@ -6382,16 +6590,38 @@ impl App {
             }
             UserState::Untested => (t(Msg::StNoteUserUntested).into(), NoteTone::Info),
             UserState::Testing => (t(Msg::StNoteUserTesting).into(), NoteTone::Info),
-            UserState::Verified { user_id } => (
-                tf(
+            UserState::Verified { user_id } => {
+                // 한눈 상태 꼬리(09-07) — 로컬 인증 뒤 "다른 기기와 실제로 묶였는가"를 같은 줄에.
+                let g = &self.user_glance;
+                let mut s = tf(
                     Msg::StfNoteUserVerified,
                     &[
                         crate::userident::normalize_handle(self.settings.get("user.handle")),
                         &user_id.short(),
                     ],
-                ),
-                NoteTone::Ok,
-            ),
+                );
+                s.push_str(&tf(
+                    Msg::StfNoteUserDevices,
+                    &[
+                        &g.devices_known.max(1).to_string(),
+                        &g.siblings_online.to_string(),
+                    ],
+                ));
+                for h in &g.hints {
+                    s.push_str(t(match h {
+                        crate::userident::UserHint::ServerNeeded => Msg::HintServerNeeded,
+                        crate::userident::UserHint::ServerHeld => Msg::HintServerHeld,
+                        crate::userident::UserHint::PassMismatch => Msg::HintPassMismatch,
+                        crate::userident::UserHint::Merging => Msg::HintMerging,
+                    }));
+                }
+                let tone = if g.hints.contains(&crate::userident::UserHint::PassMismatch) {
+                    NoteTone::Warn
+                } else {
+                    NoteTone::Ok
+                };
+                (s, tone)
+            }
             UserState::Failed(why) => (tf(Msg::StfNoteUserFailed, &[why]), NoteTone::Warn),
         };
         (note, tone, strength, locks)
@@ -6709,8 +6939,9 @@ impl App {
                 nbeep_core::Msg::StfConnectedOwnOpen,
                 &[&title],
             ));
-            // 키 동기는 대화 채널이 선 뒤(install_conversation / on_user_proof)에서 보낸다 —
-            // 핸들러 머리에서는 아직 out_tx가 없다(09-06 실기: 보냄 0건).
+            self.refresh_user_glance(); // 형제 성립 = 한눈 상태 Paired(09-07)
+                                        // 키 동기는 대화 채널이 선 뒤(install_conversation / on_user_proof)에서 보낸다 —
+                                        // 핸들러 머리에서는 아직 out_tx가 없다(09-06 실기: 보냄 0건).
         }
     }
 
@@ -7075,6 +7306,7 @@ impl App {
         if self.my_devices() != before {
             self.bump_user_list();
         }
+        self.refresh_user_glance(); // 기기 수·핸들 충돌·병합 상태(09-07)
         self.refresh_peer_info_card(peer);
         let mut inv = Invalidations::default();
         self.refresh_rows(&mut inv);
@@ -7192,6 +7424,7 @@ impl App {
             }
             self.send_user_hello(p);
         }
+        self.refresh_user_glance(); // ID가 바뀌었다(09-07 — 아바타 툴팁·칩)
         self.refresh_approval_ui();
     }
 
@@ -7229,6 +7462,7 @@ impl App {
         if self.relay.is_some() {
             self.relay_reattach_soft();
         }
+        self.refresh_user_glance(); // 한눈 상태(09-07) — 인증 전이의 단일 반영 지점
     }
 
     /// 사용자 층 주기 처리(2s 페이스 — server_tick 뒤) — 자정 태그 회전 · 형제 없을 때
@@ -10675,6 +10909,7 @@ impl App {
         let border = parse_border(self.settings.get("profile.avatar_border")).map(|(r, g, b)| {
             nbeep_ui::Color((u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b))
         });
+        let (ring, tip) = self.user_glance_ring_and_tip(); // 신원 링·툴팁(09-07)
         let mut inv = Invalidations::default();
         self.toolbar.set_item_icon(
             "profile",
@@ -10683,9 +10918,11 @@ impl App {
                 initials,
                 seed: self.identity.peer_id().as_bytes().to_vec(),
                 border,
+                ring,
             },
             &mut inv,
         );
+        self.toolbar.set_item_tip("profile", &tip);
         self.refresh_tray(); // 트레이 아이콘·툴팁도 같은 깔때기로(M3-2a)
         if let Some(mid) = self.main_id {
             self.request_redraw(mid);
@@ -11967,6 +12204,8 @@ impl App {
                     self.relay_hold = value == "managed";
                 }
                 "net.server.address" | "net.server.port" => self.server_settings_changed(),
+                // 서버 종류(표시만 — 협상 축 미구현): 툴팁·칩 문구가 값을 따라간다(09-07).
+                "net.server.type" => self.refresh_toolbar_server(),
                 // 프레즌스 공개 hot-swap(X-2e) — 재접속 없이 즉시 반영.
                 "net.server.announce" => {
                     let on = value == "on";
@@ -15692,6 +15931,10 @@ impl App {
             && (self.now_ms().saturating_sub(self.blink_anchor_ms) / CARET_BLINK_MS) % 2 == 0;
         // 슬롯 얼굴을 **필드에서 직접** 빌린다 — 헬퍼 메서드로 감싸면 self 전체를 빌려
         // 아래 windows 가변 차용과 충돌한다(필드 단위 분할 차용을 쓰기 위한 형태).
+        // 상태바 칩 재료(09-07) — 아래 windows 가변 차용 전에 계산해 둔다(self 메서드 호출 불가 구간).
+        let chip_link = self.server_link();
+        let chip_path_text = self.path_chip_text();
+        let chip_user_text = self.user_chip_text();
         let fonts = nbeep_ui::FontSet {
             base: self.face_base.as_ref().unwrap_or(&self.font),
             peerlist: self.face_peerlist.as_ref(),
@@ -15778,14 +16021,70 @@ impl App {
                 let dy = (bar_h - (14.0 * entry.scale) as i32) / 2;
                 // 우측: 실제 수신 포트(DR-19 — 발견이 안 닿는 상대에게 알려줄 값이라 상시 표시).
                 let mut status_clip = bar;
+                let mut right = bar.right() - pad;
                 if let Some(p) = self.listen_port {
                     let label = format!("{}{p}", nbeep_core::t(nbeep_core::Msg::PortLabel));
                     let lw = ctx.text_width(&label);
-                    let lx = bar.right() - pad - lw;
+                    let lx = right - lw;
                     ctx.text_opaque(lx, bar.y + dy, bar, &label, theme.text_dim, theme.chrome_bg);
-                    // 상태 문구가 포트 표시를 덮지 않게 클립을 좁힌다.
-                    status_clip.w = (lx - pad - bar.x).max(0);
+                    right = lx - pad;
                 }
+                // ★ 한눈 칩 2개(09-07 사용자 요청 — 로컬인지 서버인지 · 사용자(핸들) 설정 여부를
+                //   메인 창에서 바로): 포트 왼쪽에 [사용자] [경로] 순(오른쪽부터 배치). 칩 = 둥근
+                //   배경 + 짧은 문구 · 색 = 통로 열림/인증 = accent 옅게, 아니면 흐림. 상세는
+                //   툴바 아이콘·아바타 툴팁이 맡는다.
+                {
+                    use crate::userident::{ServerLink, UserLevel};
+                    let chip_pad = (6.0 * entry.scale).round() as i32;
+                    let chip_h = bar_h - (4.0 * entry.scale).round() as i32 * 2;
+                    let chip_y = bar.y + (bar_h - chip_h) / 2;
+                    let draw_chip = |ctx: &mut dyn nbeep_ui::DrawCtx,
+                                     right: &mut i32,
+                                     text: &str,
+                                     lit: bool,
+                                     warn: bool| {
+                        let tw = ctx.text_width(text);
+                        let cw = tw + chip_pad * 2;
+                        let cx = *right - cw;
+                        let rect = Rect::new(cx, chip_y, cw, chip_h);
+                        let bg = if warn {
+                            theme.warn
+                        } else if lit {
+                            theme.accent
+                        } else {
+                            theme.text_dim
+                        };
+                        ctx.fill_round_rect_alpha(rect, chip_h / 2, bg, 0.18);
+                        let fg = if lit || warn {
+                            theme.text
+                        } else {
+                            theme.text_dim
+                        };
+                        ctx.text(cx + chip_pad, bar.y + dy, rect, text, fg);
+                        *right = cx - pad;
+                    };
+                    let g = &self.user_glance;
+                    let user_warn = g
+                        .hints
+                        .iter()
+                        .any(|h| matches!(h, crate::userident::UserHint::PassMismatch));
+                    draw_chip(
+                        &mut ctx,
+                        &mut right,
+                        &chip_user_text,
+                        g.level >= UserLevel::Local,
+                        user_warn || g.level == UserLevel::Blocked,
+                    );
+                    draw_chip(
+                        &mut ctx,
+                        &mut right,
+                        &chip_path_text,
+                        matches!(chip_link, ServerLink::Connected(_)),
+                        matches!(chip_link, ServerLink::Held),
+                    );
+                }
+                // 상태 문구가 칩·포트 표시를 덮지 않게 클립을 좁힌다.
+                status_clip.w = (right - bar.x).max(0);
                 ctx.text_opaque(
                     bar.x + pad,
                     bar.y + dy,
@@ -16961,7 +17260,10 @@ impl ApplicationHandler<AppEvent> for App {
                 self.redraw_conversation(peer);
             }
             AppEvent::Closed { peer } => {
-                self.siblings.remove(&peer); // 형제 자격은 세션 수명(ADR-0015 — 다음 세션이 재판정)
+                if self.siblings.remove(&peer) {
+                    // 형제 자격은 세션 수명(ADR-0015 — 다음 세션이 재판정) · 한눈 상태 갱신(09-07)
+                    self.refresh_user_glance();
+                }
                 self.active_send.remove(&peer);
                 self.active_recv.remove(&peer);
                 self.clear_batch_approval(peer); // 세션 종료 = 요청 승인 잔여 마감(M4-2e)
@@ -19147,6 +19449,62 @@ fn migrate_replaced_data(src: &std::path::Path, dst: &std::path::Path) {
 /// `--whoami`(진단) — 이 실행 파일이 **실제로 로드할** 신원을 **읽기 전용**으로 찍는다.
 /// 지문·표시 이름·실행 파일 경로·데이터 경로. **키를 생성하지 않는다**(재기동마다
 /// 신원이 바뀌는지 추적하려면 진단 자체가 새 키를 만들면 안 된다 — fail-closed 관찰).
+/// `--whoami`의 사용자 상세(오프라인 · 09-07) — 봉인 사슬을 읽기 전용으로 따라간다. 어느
+/// 고리든 못 열면 `None`(사유는 노출하지 않는다 — 비밀 파일 상태를 CLI로 탐침하지 못하게).
+/// ⚠ KP 파생 60k = release 수십 ms · debug 수 초.
+fn whoami_user_detail(
+    dir: &std::path::Path,
+    key_path: &std::path::Path,
+    handle: &str,
+) -> Option<String> {
+    let b = std::fs::read(key_path).ok()?;
+    if b.len() != 68 || &b[..4] != b"NBK1" {
+        return None;
+    }
+    let mut k = [0u8; 64];
+    k.copy_from_slice(&b[4..]);
+    let id = nbeep_crypto::Identity::from_key_bytes(&k);
+    let wrap = id.wrap_secret();
+    // 페어링 암호 = PII 사이드카(봉인) — 평문은 어디에도 없다.
+    let raw = std::fs::read(dir.join("profile.sec")).ok()?;
+    let body = nbeep_store::sealed::open(crate::gate::SEAL_PII, &wrap, &raw)?;
+    let text = String::from_utf8(body).ok()?;
+    let pass = text
+        .lines()
+        .filter_map(|l| l.split_once('\t'))
+        .find(|(k, _)| *k == "user.passphrase")
+        .map(|(_, v)| v.to_string())?;
+    let m = nbeep_crypto::userkey::KeyMaterial::derive(handle, &pass)?;
+    let sealed = std::fs::read(dir.join("user.key")).ok()?;
+    let (key, created_at) =
+        crate::userident::open_key(crate::gate::SEAL_USERKEY, &m.wrap_key(), &sealed)?;
+    let my_pub = key.public();
+    let (trust, _) = nbeep_store::FileTrustStore::open(dir.join("trust.seg"), wrap);
+    let mut devices = trust.devices_of_user(&my_pub);
+    let me = id.peer_id();
+    if !devices.contains(&me) {
+        devices.push(me);
+    }
+    let conflict = trust.handle_used_by_other(handle, &my_pub);
+    let created = created_at.map_or_else(
+        || "?".to_string(),
+        |ms| {
+            let lt = nbeep_plat::clock::local_time(ms / 1000);
+            format!("{:04}-{:02}-{:02}", lt.y, lt.mo, lt.d)
+        },
+    );
+    Some(format!(
+        " · ID {} · key {created} · devices {}{}",
+        key.user_id().short(),
+        devices.len(),
+        if conflict {
+            " · WARNING: same handle seen with a different user key (check the passphrase on the other PC)"
+        } else {
+            ""
+        }
+    ))
+}
+
 pub(crate) fn print_whoami() {
     let exe = std::env::current_exe()
         .map(|p| p.display().to_string())
@@ -19193,28 +19551,55 @@ pub(crate) fn print_whoami() {
             _ => nbeep_core::PeerId::from_bytes([0u8; 32]),
         };
         let user_line = if settings.get("user.enabled") == "on" {
+            let handle = crate::userident::normalize_handle(settings.get("user.handle"));
+            // ★ 오프라인 판정(09-07 한눈 식별의 CLI 판): identity.key → profile.sec(암호) → KP →
+            //   user.key(공개키) → trust.seg(내 공개키를 제시한 기기 수·핸들 충돌). 실행 중인
+            //   인스턴스와 무관한 **저장 상태**만 말한다(접속·형제 세션은 창의 칩이 안다).
+            let detail = whoami_user_detail(&dir, &key_path, handle);
             format!(
-                "{} (verified={})",
-                crate::userident::normalize_handle(settings.get("user.handle")),
-                settings.get("user.verified")
+                "{handle} (verified={}{})",
+                settings.get("user.verified"),
+                detail.unwrap_or_else(|| " · key: not openable offline".into())
             )
         } else {
             "off (standalone node)".to_string()
+        };
+        // 서버 경로(저장 상태): Unmanaged = LAN만 / Managed = 종류·주소·검증 마커 일치 여부.
+        let server_line = match server_target(
+            settings.get("net.server.mode"),
+            settings.get("net.server.address"),
+            settings.get("net.server.port"),
+        ) {
+            None => "unmanaged (LAN only)".to_string(),
+            Some(raw) => {
+                let verified = server_target_verified(settings.get("server.verified"), &raw);
+                format!(
+                    "managed {} {raw} ({})",
+                    settings.get("net.server.type"),
+                    if verified {
+                        "verified — auto-connect on boot"
+                    } else {
+                        "not verified — held until [Test]"
+                    }
+                )
+            }
         };
         (
             effective_display_name(&settings, &peer)
                 .as_str()
                 .to_string(),
             user_line,
+            server_line,
         )
     };
-    let (name, user_line) = name;
+    let (name, user_line, server_line) = name;
     println!("fingerprint = {fp}  ({key_state})");
     if !fp_full.is_empty() {
         println!("full        = {fp_full}");
     }
     println!("name        = {name}");
     println!("user        = {user_line}"); // 암호는 봉인 사이드카 — 여기 없음(노출 금지)
+    println!("server      = {server_line}");
     println!("exe         = {exe}");
     println!("data        = {}", dir.display());
 }
@@ -19481,6 +19866,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         user_gen: 0,
         sibling_hints: HashMap::new(),
         siblings: std::collections::HashSet::new(),
+        user_glance: crate::userident::UserGlance::default(),
         psk_shared: std::sync::Arc::clone(&psk_shared),
         user_trace: std::env::var_os("NEXA_USER_TRACE").is_some(),
         succession: Vec::new(),
@@ -19647,10 +20033,13 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
                     h: nbeep_ui::icons::path::SIZE,
                     alpha: nbeep_ui::icons::path::WAYPOINTS_ALPHA,
                     size: 16,
+                    dim: false,
                 },
             )
             .align_right()
             .hidden()
+            // 09-07부터 **항상 표시**(LAN만 = 집 아이콘 흐림 · 서버 = 경유점 accent/흐림) —
+            // 아이콘·툴팁은 부팅 직후 refresh_toolbar_server가 상태로 채운다.
             .tip(nbeep_core::t(nbeep_core::Msg::TipServerOn)),
             // 프로필 버튼 = **내 얼굴 미니**(08-14 사용자 요청 — 우측 끝 배치).
             // 실제 아이콘은 부팅 직후 refresh_toolbar_avatar가 설정값으로 채운다.
@@ -19661,6 +20050,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
                     initials: String::new(),
                     seed: Vec::new(),
                     border: None,
+                    ring: None,
                 },
             )
             .align_right()
@@ -19738,7 +20128,8 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
                             // ★ 사용자 신원(ADR-0015)은 **사이드카 뒤** — 페어링 암호가 profile.sec에 있다(09-06 실기:
                             //   apply_boot_settings 안에서 부르면 암호가 비어 "둘 다 필요"로 잠겼다).
     app.user_boot();
-    // 데이터 키 테이블(셰레딩 · D-18 §7) — 기록 복원보다 먼저(개봉 키의 원천).
+    app.refresh_toolbar_server(); // 경로 아이콘·툴팁 초기값(09-07 — LAN만도 표시한다)
+                                  // 데이터 키 테이블(셰레딩 · D-18 §7) — 기록 복원보다 먼저(개봉 키의 원천).
     app.datakeys =
         crate::keytable::KeyTable::load(app.data_dir.join("keys.seg"), app.identity.wrap_secret());
     app.restore_history(); // 대화 기록 복원(M2-5b · parked_lines에 · 대화창 열면 뜬다)

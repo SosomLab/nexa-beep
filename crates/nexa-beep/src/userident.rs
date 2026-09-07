@@ -306,6 +306,153 @@ fn now_ms() -> u64 {
         .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
 }
 
+// ---------------------------------------------------------------- 메인 창 한눈 판정(09-07)
+//
+// "지금 이 PC가 어떤 상태인가"를 **한 판정 함수**가 정하고, 툴바 연결 아이콘·아바타 링·
+// 상태바 칩·설정 노트·`--whoami`가 전부 같은 값을 읽는다(사용자 요청 09-07 — 로컬인지
+// 서버에 붙었는지·사용자(핸들)가 설정됐는지를 메인 창에서 바로 식별). 종전 "인증됨"은
+// 이 PC 안의 로컬 판정(KP + `user.key`)뿐이라 **다른 기기와 실제로 묶였는지**를 몰랐다
+// (2-PC 실기 "같은 값인데 ID가 다름"이 그 공백).
+
+/// 서버 종류(설정 `net.server.type` — auto = 서버 제공 · **현행 실물은 릴레이뿐**이라 타입
+/// 협상 축이 열릴 때까지 auto는 릴레이로 표기한다).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ServerKind {
+    Relay,
+    Content,
+    Registered,
+}
+
+impl ServerKind {
+    #[must_use]
+    pub(crate) fn from_setting(v: &str) -> Self {
+        match v {
+            "content" => Self::Content,
+            "registered" => Self::Registered,
+            _ => Self::Relay,
+        }
+    }
+}
+
+/// 서버 경로 상태(표시 전용 파생 · 우선순위 = `server_note_texts`와 같다).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ServerLink {
+    /// Unmanaged — LAN만(서버 없음).
+    Local,
+    /// Managed이나 미검증·보류·테스트 실패·핀 정지 — 서버를 쓰지 않는다.
+    Held,
+    /// Managed·검증됨 · 접속 중이거나 재접속 대기.
+    Reconnecting,
+    /// 등록까지 성립(살아 있는 접속).
+    Connected(ServerKind),
+}
+
+impl ServerLink {
+    /// 다른 망의 기기와 만날 통로가 열려 있는가.
+    #[must_use]
+    pub(crate) fn open(self) -> bool {
+        matches!(self, Self::Connected(_))
+    }
+}
+
+/// 사용자 신원 단계 — 낮은 것부터.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub(crate) enum UserLevel {
+    /// 스위치 꺼짐 = 단독 노드.
+    #[default]
+    Off,
+    /// 값 없음·형식·실패·검증 전 — 사용자 기능 중지.
+    Blocked,
+    /// 로컬 인증 ✓ · 기기 = 나 하나 · 서버 통로 없음(LAN 힌트만).
+    Local,
+    /// 로컬 인증 ✓ · 서버 통로 열림 · 아직 형제 0 — 다른 기기를 찾는 중.
+    Seeking,
+    /// 형제 기기 ≥1(접속 중이거나 `trust.seg`에 내 공개키를 제시한 기록).
+    Paired,
+}
+
+/// 단계에 덧붙는 진단 — "왜 아직인가 / 무엇을 확인하나".
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum UserHint {
+    /// 서버가 없어 다른 망의 기기와는 못 만난다(Unmanaged).
+    ServerNeeded,
+    /// 서버가 설정돼 있으나 검증·접속이 안 돼 다른 망의 기기와 못 만난다.
+    ServerHeld,
+    /// 같은 핸들을 **다른 사용자 키**로 제시한 상대가 있다 — 상대 PC의 암호가 다를 가능성
+    /// (2-PC 실기 "같은 값인데 ID가 다름"의 대표 증상).
+    PassMismatch,
+    /// 형제 세션은 섰는데 상대 공개키가 아직 내 것과 다르다(봉인본 채택 전).
+    Merging,
+}
+
+/// 단계 판정(순수).
+#[must_use]
+pub(crate) fn user_level(
+    enabled: bool,
+    state: &UserState,
+    server: ServerLink,
+    siblings_online: usize,
+    devices_known: usize,
+) -> UserLevel {
+    if !enabled {
+        return UserLevel::Off;
+    }
+    if !state.active() {
+        return UserLevel::Blocked;
+    }
+    if siblings_online > 0 || devices_known > 1 {
+        return UserLevel::Paired;
+    }
+    if server.open() {
+        UserLevel::Seeking
+    } else {
+        UserLevel::Local
+    }
+}
+
+/// 진단 판정(순수) — 인증된 단계에서만 낸다(Off·Blocked는 노트가 사유를 이미 말한다).
+#[must_use]
+pub(crate) fn user_hints(
+    level: UserLevel,
+    server: ServerLink,
+    handle_conflict: bool,
+    merging: bool,
+) -> Vec<UserHint> {
+    let mut v = Vec::new();
+    if level < UserLevel::Local {
+        return v;
+    }
+    if level != UserLevel::Paired {
+        match server {
+            ServerLink::Local => v.push(UserHint::ServerNeeded),
+            ServerLink::Held | ServerLink::Reconnecting => v.push(UserHint::ServerHeld),
+            ServerLink::Connected(_) => {}
+        }
+    }
+    if handle_conflict {
+        v.push(UserHint::PassMismatch);
+    }
+    if merging && level == UserLevel::Paired {
+        v.push(UserHint::Merging);
+    }
+    v
+}
+
+/// 메인 창이 읽는 한눈 상태(앱이 상태 변화 지점마다 다시 계산해 캐시 — 페인트는 읽기만).
+#[derive(Clone, Debug, Default)]
+pub(crate) struct UserGlance {
+    pub(crate) level: UserLevel,
+    pub(crate) hints: Vec<UserHint>,
+    /// 핸들(표시용 · 빈 = 없음).
+    pub(crate) handle: String,
+    /// UserId 짧은 표기(인증 전 = 빈).
+    pub(crate) id_short: String,
+    /// 내 기기 수(나 포함 · `trust.seg` 기록 기준).
+    pub(crate) devices_known: usize,
+    /// 지금 세션이 선 형제 수.
+    pub(crate) siblings_online: usize,
+}
+
 /// 워커 본체 — KP 파생(60k · 수십 ms) → `user.key` 봉인 파일 열기/생성/재래핑.
 /// - 열림 = 같은 두 값(재기동 · 재인증).
 /// - 안 열리는데 **쥔 키(`held`)가 있다** = 암호·핸들 변경 → 새 열쇠로 **재래핑**(재암호화 없음 ·
@@ -456,6 +603,75 @@ mod tests {
             .all(|c| c == '-' || "abcdefghjkmnpqrstuvwxyz23456789".contains(c)));
         assert_ne!(s, suggest_passphrase(), "난수");
         assert_eq!(validate("kiros33", &s), Validity::Ok);
+    }
+
+    /// 한눈 판정 사다리(09-07) — 단계 전이와 진단이 입력에 따라 결정적으로 갈린다.
+    #[test]
+    fn glance_ladder_and_hints() {
+        let ok = on_test_result(&Ok(UserId::from_bytes([7u8; 32])));
+        let relay = ServerLink::Connected(ServerKind::Relay);
+        assert_eq!(
+            user_level(false, &ok, relay, 3, 3),
+            UserLevel::Off,
+            "꺼짐이 최우선"
+        );
+        assert_eq!(
+            user_level(true, &UserState::Untested, relay, 0, 1),
+            UserLevel::Blocked
+        );
+        assert_eq!(
+            user_level(true, &UserState::Failed("x".into()), relay, 0, 1),
+            UserLevel::Blocked
+        );
+        assert_eq!(
+            user_level(true, &ok, ServerLink::Local, 0, 1),
+            UserLevel::Local
+        );
+        assert_eq!(
+            user_level(true, &ok, ServerLink::Held, 0, 1),
+            UserLevel::Local,
+            "보류 = 통로 없음"
+        );
+        assert_eq!(user_level(true, &ok, relay, 0, 1), UserLevel::Seeking);
+        assert_eq!(
+            user_level(true, &ok, relay, 1, 1),
+            UserLevel::Paired,
+            "세션이 섰으면 형제"
+        );
+        assert_eq!(
+            user_level(true, &ok, ServerLink::Local, 0, 2),
+            UserLevel::Paired,
+            "오프라인이어도 trust.seg 기록이 있으면 형제"
+        );
+        assert!(UserLevel::Local < UserLevel::Seeking && UserLevel::Seeking < UserLevel::Paired);
+
+        assert!(
+            user_hints(UserLevel::Blocked, ServerLink::Local, true, true).is_empty(),
+            "인증 전엔 진단 없음"
+        );
+        assert_eq!(
+            user_hints(UserLevel::Local, ServerLink::Local, false, false),
+            vec![UserHint::ServerNeeded]
+        );
+        assert_eq!(
+            user_hints(UserLevel::Local, ServerLink::Held, true, false),
+            vec![UserHint::ServerHeld, UserHint::PassMismatch]
+        );
+        assert_eq!(
+            user_hints(UserLevel::Seeking, relay, false, false),
+            vec![],
+            "통로 열림 = 경로 진단 없음"
+        );
+        assert_eq!(
+            user_hints(UserLevel::Paired, ServerLink::Local, false, true),
+            vec![UserHint::Merging],
+            "형제가 있으면 서버 진단은 접고 병합 대기만"
+        );
+        assert_eq!(ServerKind::from_setting("auto"), ServerKind::Relay);
+        assert_eq!(ServerKind::from_setting("content"), ServerKind::Content);
+        assert!(
+            ServerLink::Connected(ServerKind::Content).open() && !ServerLink::Reconnecting.open()
+        );
     }
 
     #[test]
