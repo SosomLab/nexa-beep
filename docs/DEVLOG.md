@@ -5,6 +5,10 @@
 
 ---
 
+## 2026-09-10
+
+- **(Win · main) ★보안 프로그램 탐지 가능성 검토 + mac 이웃 테이블 `arp -an` 스폰 폐지**(사용자 요청 "네트워크 기능이 보안 프로그램에 탐지되는가"): 코드 전수 조사 = 스캔·원시 소켓·HTTP·텔레메트리 0 · 재연결 4회 후 중단 · **조합이 문제**(무서명+HKCU Run+고정 리스너+고정 호스트 아웃바운드+AMSI 동적 로드 = RAT 모양) → 답은 **서명(M5-4a)** · 순위 8건(AMSI `LoadLibraryW`+`transmute` 모양 · 자동 실행+리스너 · mac `arp -an` 스폰(EDR exec 소음 · T1016/T1018) · S4 64발 버스트 · 지향 브로드캐스트 · 릴레이 비TLS 47300 · Toolhelp · 홀펀칭). **구현 = mac `neighbors_v4_impl`을 `sysctl(NET_RT_FLAGS, RTF_LLINFO)` 직접 읽기로**(프로세스 0 · 순수 파서 `parse_rt_llinfo` + 합성 덤프 회귀 3종 · libc 배치 컴파일 타임 단언 · **MAC ff 제외 = 종전 파서가 못 거르던 .255 HELLO 해소**) · **S4 페이싱은 보류로 정정**(IDS sweep 판정은 창 안 호스트 수를 세므로 분산은 효과 불확실 · 실측 먼저). nbeep-net **53 green** · 4타깃 clippy -D warnings 0 · **R-22 신설**(TODO 9-2) · [40 §6] 행. ⏸ mac 실기 잔여. [journal](journal/2026-09-10.md).
+
 ## 2026-09-07
 
 - **(Win · main) 메모리 사용 검토**(사용자 질문 "23MB는 많아 보인다"): `QueryWorkingSet` 전수 분류 = **프라이빗 5.0MB / 공유 18.6MB**(런타임 DLL 6.8 · 기타 DLL 4.5 · 셸·COM·IME 2.8 · exe 2.0 · DWM 1.8 · **폰트 mmap 0.2**(seguiemj 12.4MB 파일 → 48KB 상주)) → 앱 몫 ≈ 5.6MB(24%). 동적 증가 점검 = **상대 아바타 256px 무제한 상주(핀 100명 = 25MB)**·**격리함 썸네일 캐시 무제한** 2건이 실질 · 나머지는 상한 있음. 후보 MEM-1~5 등재(요청 시) · **Win 유휴 판정 = 프라이빗 WS**로 지표 확정(05 NFR-B-1 주석). [journal](journal/2026-09-07.md).
