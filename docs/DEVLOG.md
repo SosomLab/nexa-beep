@@ -5,6 +5,10 @@
 
 ---
 
+## 2026-09-17
+
+- **(Win · main) winget·choco 진행 점검 → choco 영문화 재제출 3종 + ★Windows 런타임 의존 실측(NFR-B-5 위반 발견)**(사용자 요청 "winget, choco 진행상태 점검"): ★**winget 첫 실게시 확인** = `SosomLab.NexaBeep.Portable` 0.2.14 [#427126](https://github.com/microsoft/winget-pkgs/pull/427126) **09-11 병합·publish 성공**(인덱스 실재) · 설치본 #427125 OPEN 16일(`Validation-Executable-Error`) · beepd #422579 OPEN 26일(`Validation-Completed` 승인 대기). ★**choco 검수 요구 2건 중 1건을 09-05 기록이 놓치고 있었다** — `iconUrl`(고침) 외에 **"description 등을 영어로"** 가 있었다 → `1518c99` nuspec 3종 + `chocolateyinstall/uninstall.ps1` 6종 **주석·출력 전부 영문화**(동작 무변경 · BOM/CRLF 보존) → 재제출: beepd 0.2.5 ✓ · 클라 **v0.2.15 새 버전 = 403 Forbidden** → **v0.2.2 같은 버전 재push ✓**(교훈 = **미승인 버전이 걸려 있으면 그 패키지에 새 버전을 못 민다 · 걸린 버전부터 푼다**) → **3종 전부 "Maintainer updated, waiting for Reviewer"** · 스위치 원복. ★**`Validation-Executable-Error` 정체 규명** = 검증기 환경 문제로 읽었던 판단을 **실측으로 뒤집었다**: 릴리스 자산 임포트 테이블에 **`vcruntime140.dll`**(VC++ 재배포 · 인박스 아님)이 있다(`nexa-beep`·`nbeep-imgdec`·`nexa-beepd` 전부 · `crt-static` 미설정 = MSVC 기본 동적 CRT · musl 정적 전환은 Linux 타깃에만) → winget 자동 검증은 **참 양성**이고, **이미 게시된 포터블도 VCRedist 없는 PC에서는 실행 불가** · **[05 NFR-B-5] "외부 런타임 의존 0" 위반**(적혀 있던 임포트 화이트리스트 CI 검사가 미구현이라 여기까지 왔다) → **M5-4g 등재**(ⓐ `+crt-static` 권고 / ⓑ VCRedist 의존 선언 · CI 검사 동반) · winget 승인 촉진 코멘트는 **보류**(판단 전 게시 촉구 금지). [journal](journal/2026-09-17.md).
+
 ## 2026-09-10
 
 - **(Win · main) ★보안 프로그램 탐지 가능성 검토 + mac 이웃 테이블 `arp -an` 스폰 폐지**(사용자 요청 "네트워크 기능이 보안 프로그램에 탐지되는가"): 코드 전수 조사 = 스캔·원시 소켓·HTTP·텔레메트리 0 · 재연결 4회 후 중단 · **조합이 문제**(무서명+HKCU Run+고정 리스너+고정 호스트 아웃바운드+AMSI 동적 로드 = RAT 모양) → 답은 **서명(M5-4a)** · 순위 8건(AMSI `LoadLibraryW`+`transmute` 모양 · 자동 실행+리스너 · mac `arp -an` 스폰(EDR exec 소음 · T1016/T1018) · S4 64발 버스트 · 지향 브로드캐스트 · 릴레이 비TLS 47300 · Toolhelp · 홀펀칭). **구현 = mac `neighbors_v4_impl`을 `sysctl(NET_RT_FLAGS, RTF_LLINFO)` 직접 읽기로**(프로세스 0 · 순수 파서 `parse_rt_llinfo` + 합성 덤프 회귀 3종 · libc 배치 컴파일 타임 단언 · **MAC ff 제외 = 종전 파서가 못 거르던 .255 HELLO 해소**) · **S4 페이싱은 보류로 정정**(IDS sweep 판정은 창 안 호스트 수를 세므로 분산은 효과 불확실 · 실측 먼저). nbeep-net **53 green** · 4타깃 clippy -D warnings 0 · **R-22 신설**(TODO 9-2) · [40 §6] 행. ⏸ mac 실기 잔여. [journal](journal/2026-09-10.md).

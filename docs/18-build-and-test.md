@@ -223,6 +223,20 @@ curl -s -A Mozilla/5.0 https://community.chocolatey.org/packages/nexa-beep | sed
 #      (허용 CDN 아님) → jsDelivr `https://cdn.jsdelivr.net/gh/SosomLab/nexa-beep@<태그>/packaging/branding/nexa-beep-256.png`
 #      로 바꾸고 **태그에 핀** · "같은 버전으로 재제출". 09-05 nuspec 3종 수정 완료(`@v@VERSION@` · beepd `@beepd-v@VERSION@`) —
 #      재제출(스위치 ON + 태그 또는 수동 push)은 사용자 결정.
+#    ★ 09-17 실측·조치 = ① winget **포터블 #427126 MERGED(09-11 · publish 성공)** = 첫 실게시 ·
+#      설치본 #427125는 여전히 OPEN(`Validation-Executable-Error` = **참 양성**: 우리 exe가
+#      `vcruntime140.dll`에 동적 링크 — TODO **M5-4g**. 고치기 전에는 재검증해도 같은 결과다)
+#      ② choco = **검수 요구가 2건이었다**(`iconUrl` 외 **"description 등을 영어로"**) → 영문화
+#      (`1518c99`) 후 재제출 → 3종 전부 **"(Maintainer updated, waiting for Reviewer)"**.
+#      ③ ★**같은 버전으로 재제출한다** — 미승인 버전이 걸려 있으면 그 패키지에 **새 버전 push는
+#      403 Forbidden**이다(실측: beepd 0.2.5 재push ✓ / 클라 v0.2.15 403 → v0.2.2 재push ✓).
+#      수동 재제출 절차:
+#        gh variable set CHOCO_PUSH -b true
+#        gh workflow run publish-windows-packages.yml -f tag=<걸려 있는 버전 태그>
+#        gh workflow run publish-beepd-packages.yml   -f tag=beepd-v<버전>   # beepd
+#        gh variable set CHOCO_PUSH -b false          # 끝나면 원복
+#      ※ beepd 워크플로는 winget job도 함께 도니, #422579가 열려 있는 동안은
+#        `BEEPD_WINGET_PUBLISH=false`로 잠시 내려 중복 PR을 막는다(끝나면 원복).
 #    둘 다 완료 → 스위치 켜서 이번 태그에 포함:
 #      gh variable set WINGET_PUBLISH -b true && gh variable set CHOCO_PUSH -b true
 #    대기 중 → false 유지 = 이번 릴리스에서 제외(brew·Releases만 나간다).
