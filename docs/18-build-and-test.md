@@ -224,8 +224,10 @@ curl -s -A Mozilla/5.0 https://community.chocolatey.org/packages/nexa-beep | sed
 #      로 바꾸고 **태그에 핀** · "같은 버전으로 재제출". 09-05 nuspec 3종 수정 완료(`@v@VERSION@` · beepd `@beepd-v@VERSION@`) —
 #      재제출(스위치 ON + 태그 또는 수동 push)은 사용자 결정.
 #    ★ 09-17 실측·조치 = ① winget **포터블 #427126 MERGED(09-11 · publish 성공)** = 첫 실게시 ·
-#      설치본 #427125는 여전히 OPEN(`Validation-Executable-Error` = **참 양성**: 우리 exe가
-#      `vcruntime140.dll`에 동적 링크 — TODO **M5-4g**. 고치기 전에는 재검증해도 같은 결과다)
+#      설치본 #427125의 `Validation-Executable-Error`는 **참 양성**이었다(우리 exe가
+#      `vcruntime140.dll`에 동적 링크) → **M5-4g로 수정**(`+crt-static` · 임포트 게이트) 후
+#      **#427125·#422579를 닫고 0.2.16/0.2.6으로 재제출**(#436462·#436463·#436461 · 09-17 2차).
+#      ※ 낡은 제출을 **닫는 것**도 "검수 종료"다 — 고칠 수 없는 제출을 큐에 두지 않는다.
 #      ② choco = **검수 요구가 2건이었다**(`iconUrl` 외 **"description 등을 영어로"**) → 영문화
 #      (`1518c99`) 후 재제출 → 3종 전부 **"(Maintainer updated, waiting for Reviewer)"**.
 #      ③ ★**같은 버전으로 재제출한다** — 미승인 버전이 걸려 있으면 그 패키지에 **새 버전 push는
