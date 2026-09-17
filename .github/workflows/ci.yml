@@ -40,12 +40,23 @@ jobs:
           - os: ubuntu-latest    # x86_64-unknown-linux-gnu
           - os: macos-latest     # aarch64-apple-darwin (네이티브)
           - os: windows-latest   # x86_64-pc-windows-msvc
+            # ★ MSVC 정적 CRT(NFR-B-5 · M5-4g) — `RUSTFLAGS` 환경변수가 설정돼 있으면
+            #   cargo는 .cargo/config.toml의 `target.*.rustflags`를 **통째로 버린다**
+            #   (둘을 합치지 않는다). 그래서 여기서 직접 얹는다. 빠뜨리면 산출물이 다시
+            #   `vcruntime140.dll`에 의존하고, 그건 아래 임포트 게이트가 잡는다.
+            rustflags: -D warnings -C target-feature=+crt-static
     runs-on: ${{ matrix.os }}
+    env:
+      RUSTFLAGS: ${{ matrix.rustflags || '-D warnings' }}
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
       - name: build
         run: cargo build --workspace
+      # ★ NFR-B-5 실측 게이트 — 임포트 테이블은 빌드 프로파일과 무관해 debug로 충분하다.
+      - name: 임포트 화이트리스트(NFR-B-5 · Windows x64)
+        if: runner.os == 'Windows'
+        run: pwsh -NoProfile -File tools/check-imports.ps1 target/debug/nexa-beep.exe target/debug/nbeep-imgdec.exe target/debug/nexa-beepd.exe
       - name: test
         run: cargo test --workspace --features nbeep-core/testkit,nbeep-net/testkit,nbeep-crypto/testkit
       # ★ 안전 회귀 게이트([docs/18] 안전 송수신 · TODO §9 SEC-1) — 위 test에 이미
@@ -63,6 +74,11 @@ jobs:
           - os: windows-latest
             target: aarch64-pc-windows-msvc   # Win ARM(실행 불가 → build만)
             bin: nexa-beep.exe
+            # ★ MSVC 정적 CRT(NFR-B-5 · M5-4g) — `RUSTFLAGS` 환경변수가 설정돼 있으면
+            #   cargo는 .cargo/config.toml의 `target.*.rustflags`를 **통째로 버린다**
+            #   (둘을 합치지 않는다). 그래서 여기서 직접 얹는다. 빠뜨리면 산출물이 다시
+            #   `vcruntime140.dll`에 의존하고, 그건 아래 임포트 게이트가 잡는다.
+            rustflags: -D warnings -C target-feature=+crt-static
           - os: macos-latest
             target: x86_64-apple-darwin       # Intel mac(러너가 arm64 → build만)
             bin: nexa-beep
@@ -81,6 +97,9 @@ jobs:
           size=$(wc -c < "$path")
           printf '%s: %d bytes (%.2f MB)\n' "${{ matrix.target }}" "$size" "$(awk "BEGIN{print $size/1048576}")"
           [ "$size" -le $((10*1024*1024)) ] || { echo "::error::${{ matrix.target }} > 10MB(NFR-B-3)"; exit 1; }
+      - name: 임포트 화이트리스트(NFR-B-5 · ${{ matrix.target }})
+        if: runner.os == 'Windows'
+        run: pwsh -NoProfile -File tools/check-imports.ps1 target/${{ matrix.target }}/release/${{ matrix.bin }}
 
   # ── 예산 게이트: 산출물 크기 (NFR-B-3 ≤ 10MB) ────────────────
   budget:
@@ -107,5 +126,8 @@ jobs:
           done
           exit $fail
       # 4타깃 크기: linux=이 잡, mac/win(ARM·Intel)=cross-build 잡. Win x64=test 잡 빌드.
-      # TODO(SP-1 실기·M1+): 임포트 화이트리스트(NFR-B-5) · 유휴 RSS(macOS=phys_footprint) ·
-      #   24h 누수(NFR-B-6) 게이트 — 실물 창·상주 루프 도착 후 추가.
+      # ★ 임포트 화이트리스트(NFR-B-5)는 **구현됐다** — Windows 잡의 `tools/check-imports.ps1`
+      #   (09-17 M5-4g · 미구현인 채로 `vcruntime140.dll` 의존이 릴리스 15번을 지나갔다).
+      #   mac/Linux 판(otool -L·ldd 대조)은 후속.
+      # TODO(SP-1 실기·M1+): 유휴 RSS(macOS=phys_footprint) · 24h 누수(NFR-B-6) 게이트
+      #   — 실물 창·상주 루프 도착 후 추가.

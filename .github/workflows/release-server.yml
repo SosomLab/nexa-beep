@@ -69,6 +69,9 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             slug: windows-x64
+            # ★ MSVC 정적 CRT(NFR-B-5 · M5-4g) — `RUSTFLAGS` 환경변수가 있으면 cargo는
+            #   .cargo/config.toml의 `target.*.rustflags`를 통째로 버린다. 여기서 직접 얹는다.
+            rustflags: -D warnings -C target-feature=+crt-static
           - os: macos-latest
             target: aarch64-apple-darwin
             slug: macos-arm64
@@ -77,6 +80,7 @@ jobs:
       VERSION: ${{ needs.meta.outputs.version }}
       TARGET: ${{ matrix.target }}
       SLUG: ${{ matrix.slug }}
+      RUSTFLAGS: ${{ matrix.rustflags || '-D warnings' }}
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
@@ -89,6 +93,11 @@ jobs:
       - name: 릴리스 빌드(서버만 — W-1 클라 미포함)
         # musl 타깃의 rust-lld 링커는 .cargo/config.toml이 정한다(규칙 한 곳).
         run: cargo build --release -p nexa-beepd --target ${{ matrix.target }}
+
+      # Windows판 정적 검증 = 임포트 화이트리스트(NFR-B-5 · 09-17 M5-4g).
+      - name: 임포트 화이트리스트(NFR-B-5 · Windows)
+        if: runner.os == 'Windows'
+        run: pwsh -NoProfile -File tools/check-imports.ps1 target/$env:TARGET/release/nexa-beepd.exe
 
       - name: 정적 링크 검증(musl 한정 — 동적이면 여기서 죽는다)
         if: contains(matrix.target, 'musl')

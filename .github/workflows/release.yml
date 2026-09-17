@@ -82,9 +82,15 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             slug: windows-x64
+            # ★ MSVC 정적 CRT(NFR-B-5 · M5-4g) — `RUSTFLAGS` 환경변수가 있으면 cargo는
+            #   .cargo/config.toml의 `target.*.rustflags`를 통째로 버린다. 여기서 직접 얹는다.
+            rustflags: -D warnings -C target-feature=+crt-static
           - os: windows-latest
             target: aarch64-pc-windows-msvc
             slug: windows-arm64
+            # ★ MSVC 정적 CRT(NFR-B-5 · M5-4g) — `RUSTFLAGS` 환경변수가 있으면 cargo는
+            #   .cargo/config.toml의 `target.*.rustflags`를 통째로 버린다. 여기서 직접 얹는다.
+            rustflags: -D warnings -C target-feature=+crt-static
           - os: macos-latest
             target: aarch64-apple-darwin
             slug: macos-arm64
@@ -99,6 +105,7 @@ jobs:
       VERSION: ${{ needs.meta.outputs.version }}
       TARGET: ${{ matrix.target }}
       SLUG: ${{ matrix.slug }}
+      RUSTFLAGS: ${{ matrix.rustflags || '-D warnings' }}
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
@@ -115,6 +122,12 @@ jobs:
 
       # 예산 게이트를 릴리스 산출물에도 건다 — CI에서 통과한 것과 **같은 바이너리**여야
       # 한다(NFR-B-3 ≤10MB). 여기서 넘치면 배포를 멈추는 게 맞다.
+      # ★ NFR-B-5 실측 게이트 — 재배포 런타임(`vcruntime140.dll` 등)에 의존하는 산출물은
+      #   깨끗한 Windows에서 실행되지 않는다. **포장 전에** 막는다(09-17 M5-4g).
+      - name: 임포트 화이트리스트(NFR-B-5 · Windows)
+        if: runner.os == 'Windows'
+        run: pwsh -NoProfile -File tools/check-imports.ps1 target/$env:TARGET/release/nexa-beep.exe target/$env:TARGET/release/nbeep-imgdec.exe
+
       - name: 크기 게이트(≤10MB · NFR-B-3)
         shell: bash
         run: |

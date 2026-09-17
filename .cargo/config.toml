@@ -9,3 +9,19 @@ linker = "rust-lld"
 
 [target.aarch64-unknown-linux-musl]
 linker = "rust-lld"
+
+# ★ Windows(MSVC) 정적 CRT — **NFR-B-5 "외부 런타임 의존 0"**(09-17 M5-4g).
+# 기본값(동적 CRT)으로 링크하면 산출물이 `vcruntime140.dll`(VC++ 2015+ 재배포)에
+# 의존한다. 그건 **OS 인박스가 아니어서** 깨끗한 Windows에서 실행되지 않는다
+# (실측: winget 자동 검증 `STATUS_DLL_NOT_FOUND` 0xC0000135 · 09-17 저널).
+# UCRT(`api-ms-win-crt-*`)는 Win10+ 인박스라 남아도 된다.
+#
+# ⚠️ **`RUSTFLAGS` 환경변수가 설정돼 있으면 이 항목은 통째로 무시된다**(cargo는
+# 둘을 합치지 않고 env를 이긴다). 그래서 CI·릴리스 워크플로는 Windows 타깃에서
+# `RUSTFLAGS`에 같은 플래그를 **직접** 넣는다. 잊어도 조용히 깨지지 않도록
+# **`tools/check-imports.ps1`(임포트 화이트리스트)** 가 게이트에서 실측으로 막는다.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
