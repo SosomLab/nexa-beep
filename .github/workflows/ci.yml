@@ -83,6 +83,8 @@ jobs:
             target: x86_64-apple-darwin       # Intel mac(러너가 arm64 → build만)
             bin: nexa-beep
     runs-on: ${{ matrix.os }}
+    env:
+      RUSTFLAGS: ${{ matrix.rustflags || '-D warnings' }}
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
