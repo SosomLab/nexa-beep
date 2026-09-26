@@ -87,7 +87,9 @@
 
 1. 이 CLAUDE.md + [docs/STATUS.md](docs/STATUS.md) → 2. [DEVLOG](docs/DEVLOG.md) 최상단 + 최신 journal → 3. 할 일 = [docs/TODO.md](docs/TODO.md) 순차.
 
-## 5. 다음 단계 (2026-09-26 · STATUS 09-26 2차 기준 — ★[49 점검 체계] 신설(NFR-B 8항목 미측정 발견 → INS-3/5/6 우선) · choco `<copyright>` 재제출(waiting for Reviewer) · winget 포터블 0.2.16 게시 ✓·설치본/beepd 대기 · 다음 = S3 또는 INS)
+## 5. 다음 단계 (2026-09-26 · STATUS 09-26 3차 기준 — ★형제 자격·보라 배지 소실 수정 `8dedd1b`(실기 잔여 2-PC) · [49 점검 체계] 신설 · choco `<copyright>` 재제출 · winget 포터블 0.2.16 게시 ✓ · 다음 = S3 또는 INS)
+
+> **09-26 3차(Win · main)** — ★**장시간 연결 뒤 형제(내 기기) 자격·보라 배지 소실 수정**(`8dedd1b` · 사용자 실기): `siblings`는 세션 수명 → 세션이 끊긴 뒤 재성립의 XXpsk3/세션 내 증명이 **60s 안 LAN 힌트에만** 걸려 서버 경유는 XX로만 복귀 · 증명 회신 no-op(비대칭) · 재탐색 `siblings.is_empty()`만 · 행 배지≠툴바 링 → **후보 = 서명 기기 목록 포함**(trust.seg A-1) · **회신 1회**(`proof_replied`) · **재탐색 = 형제 세션 없는 아는 기기** · **배지 = 형제 ∨ 서명 목록**(`effective_trust` 세션 기준 불변). 순수 규칙 3종+회귀 · 4타깃 check · **833 green**. 실기 잔여 = 2-PC 절전 복귀·서버 재접속 뒤 배지 유지(`NEXA_USER_TRACE=1`). 교훈 = **세션 수명 상태에는 지속 근거의 짝을 둔다**.
 
 > **09-26 2차(Win · main)** — ★**[49 점검 체계](docs/49-inspection-framework.md) 신설**(사용자 요청 — 메신저 일반+고유 점검 체계화·분석 기법·주기·OS별): 원칙 5 · **13축 A~N** · 항목 약 100(ID·명령·판정 G/O·주기·OS·자동화) · 주기 C/T/W/R/Q · **OS별 인박스 도구 표** · 분석 기법 12 · **INS-1~9**(TODO §11) · 0회차 인벤토리 → ★**05 NFR-B 12항목 중 8항목(콜드 스타트·활성 RSS·24h 누수·유휴 CPU·발견 P95·왕복 P95·유선 처리량·UI 반응)이 측정 수단 없이 게이트로만 존재** = NFR-B-5 유형 → 처방 INS-3(부팅 트레이스)·INS-5(3-OS 상주 샘플러)·INS-6(CLI 왕복 P95). 새 수치 없음 · 기존 SSOT 연결. 문서 50종.
 
