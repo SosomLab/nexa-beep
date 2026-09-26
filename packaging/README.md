@@ -82,6 +82,8 @@ winget과 Chocolatey는 **중앙 저장소 검수**를 거치고, 한번 올라�
 제출 금지 — 검수 중 새 제출은 큐를 엉키게 한다. 점검 명령은
 [docs/18 §5](../docs/18-build-and-test.md#5-배포--githubworkflowsreleaseyml).
 
+**현황(09-26 2차)** — ★ **v0.2.17 공개**(`7dcd17f` — 형제 배지 수정 탑재 · 자산 14종 · brew 0.2.17 ✓ · **winget/choco 제외** = 설치본 #436462·beepd #436461 OPEN · choco 3종 검수 대기 → 스위치 false 유지 · 서버 무변경 beepd-v0.2.6). 통과 후 = 같은 워크플로로 0.2.17/0.2.6 제출.
+
 **현황(09-26)** — ★ **choco 검수 Requirement 3번째 = nuspec `<copyright>`**(09-21 사람 검수 · 영문화·포터블 분리·checksum 전부 인정) → 3종에 `<copyright>Copyright (c) 2026 SosomLab - Nexa Beep</copyright>` 추가(`5bdc419`) → **같은 버전 재제출**(v0.2.2 · beepd-v0.2.5 · 스위치 임시 ON → 원복) → **3종 "Maintainer updated, waiting for Reviewer"**. winget = **포터블 0.2.16 #436463 09-17 MERGED**(두 번째 실게시) · #436462·#436461 `Validation-Completed` 모더레이터 대기(정적 CRT 뒤 실행 오류 재발 없음). 통과 후 = 0.2.16/0.2.6 push.
 
 **현황(09-17 2차)** — ★ **`vcruntime140.dll` 의존 제거(M5-4g ⓐ)** → **v0.2.16 · beepd-v0.2.6** 공개(brew 추종 ✓ · 게시물 받아 `tools/check-imports.ps1` 재검증 = 3종 전부 인박스). **winget** = 낡은 #427125·#422579를 사유와 함께 **닫고** **#436462(설치본 0.2.16)·#436463(포터블 0.2.16)·#436461(beepd 0.2.6)** 재제출 · `WINGET_PUBLISH` 원복. **choco** = 0.2.2/0.2.5가 reviewer 큐라 **제외**(새 버전 push = 403) · `BEEPD_CHOCO_PUSH`도 false로 내렸다(태그 하나에 자동으로 나가 403 나는 것 방지) — 통과 후 0.2.16/0.2.6. 새 산출물은 **정적 CRT**라 VCRedist 없이 실행된다.
