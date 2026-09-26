@@ -232,6 +232,9 @@ curl -s -A Mozilla/5.0 https://community.chocolatey.org/packages/nexa-beep | sed
 #      (`1518c99`) 후 재제출 → 3종 전부 **"(Maintainer updated, waiting for Reviewer)"**.
 #      ③ ★**같은 버전으로 재제출한다** — 미승인 버전이 걸려 있으면 그 패키지에 **새 버전 push는
 #      403 Forbidden**이다(실측: beepd 0.2.5 재push ✓ / 클라 v0.2.15 403 → v0.2.2 재push ✓).
+#      ★ 09-26 = 사람 검수(09-21)가 **Requirement 3번째 = nuspec `<copyright>` 부재**를 남겼다(자동 3단은 09-17에
+#      통과 · 사람 리뷰는 며칠 뒤 따로 온다 → 점검 시 페이지 `Reviewed:` 날짜를 본다) → 3종 `<copyright>` 추가 후
+#      아래 절차 그대로 재제출(두 번째 실행 · 그대로 재현) → "Maintainer updated, waiting for Reviewer".
 #      수동 재제출 절차:
 #        gh variable set CHOCO_PUSH -b true
 #        gh workflow run publish-windows-packages.yml -f tag=<걸려 있는 버전 태그>

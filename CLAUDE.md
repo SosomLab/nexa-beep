@@ -87,7 +87,9 @@
 
 1. 이 CLAUDE.md + [docs/STATUS.md](docs/STATUS.md) → 2. [DEVLOG](docs/DEVLOG.md) 최상단 + 최신 journal → 3. 할 일 = [docs/TODO.md](docs/TODO.md) 순차.
 
-## 5. 다음 단계 (2026-09-17 · STATUS 09-17 2차 기준 — ★Windows 정적 CRT·임포트 게이트(M5-4g ✅ · NFR-B-5 원복) · v0.2.16·beepd-v0.2.6 · winget 3건 재제출 · choco 영문화 재제출 검수 대기 · 다음 = S3)
+## 5. 다음 단계 (2026-09-26 · STATUS 09-26 1차 기준 — ★choco `<copyright>` Requirement 반영·같은 버전 재제출(waiting for Reviewer) · winget 포터블 0.2.16 게시 ✓·설치본/beepd 모더레이터 대기 · 다음 = S3)
+
+> **09-26 1차(Win · main)** — ★**저장소 최신화 + winget/choco 점검 + Chocolatey Requirement 반영**: fetch = 신규 0. **winget 포터블 0.2.16 #436463 09-17 MERGED(두 번째 실게시)** · #436462·#436461 OPEN `Validation-Completed`(★정적 CRT 뒤 `Validation-Executable-Error` 재발 없음) · **choco 3종 09-21 사람 검수 → Requirement 1건 = nuspec `<copyright>` 부재** → `5bdc419` 3종 추가 → 같은 버전 재제출(스위치 임시 · `BEEPD_WINGET_PUBLISH=false`로 중복 PR 방지 · 원복) → **3종 "Maintainer updated, waiting for Reviewer"**. 코드 변경 없음. 이후 = choco 통과 → 0.2.16/0.2.6 push · winget 촉진 코멘트 10-01 전 보류. 교훈 = **자동 3단 통과 뒤 사람 리뷰가 며칠 뒤 따로 온다 — 점검 시 `Reviewed:` 날짜**.
 
 > **09-17 2차(Win · main)** — ★**M5-4g ⓐ = Windows 정적 CRT**(사용자 확정): `.cargo/config.toml` MSVC 2타깃 **`+crt-static`** → `vcruntime140.dll`·`api-ms-win-crt-*` **소멸**(임포트 15종 전부 인박스 · 2.79→2.90MB) + ★**`tools/check-imports.ps1`** = [05 NFR-B-5]가 요구하던 **검증 수단 구현**(PE 직접 파싱 · dumpbin·VS 의존 0 · ci/release/release-server 배선 · 새 DLL은 일부러 실패 = 사람 검토 강제 · 양방향 실증). ⚠★**함정 = `RUSTFLAGS` 환경변수가 `target.*.rustflags`를 통째로 버린다**(합치지 않는다 — config만 고치면 **로컬은 정적·CI는 동적**) → 워크플로 매트릭스에 직접 얹음 · **그 함정이 당일 재현**(cross-build 잡 env 누락 → ARM64 다시 동적 → **새 게이트가 첫 실행에서 검출** · `366bcc1`). **릴리스 = v0.2.16 · beepd-v0.2.6**(brew 둘 다 추종 ✓ · **게시물 받아 게이트 재검증** 3종 인박스) · **winget** 낡은 #427125·#422579 **사유와 함께 닫고** #436462·#436463·#436461 재제출 · **choco 제외**(reviewer 큐 = 새 버전 403 · `BEEPD_CHOCO_PUSH`도 false). 게이트 = fmt·clippy 4타깃·**832 green**·임포트 ✓. ⚠ 교훈 = **불변식은 검증이 붙어야 지켜진다**(NFR-B-5는 검사 방법까지 적혀 있었지만 미구현이라 15번의 릴리스를 지나갔다) · **환경변수가 설정 파일을 이기는 곳은 반드시 실측 게이트를 둔다**. 잔여 = mac/Linux 임포트 검사(otool·ldd) · winget 3건 검수 · choco 통과 후 새 버전.
 
