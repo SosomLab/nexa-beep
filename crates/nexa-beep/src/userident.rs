@@ -11,7 +11,7 @@
 //! - 성공 시 재료는 **노출되지 않게 보관** — 암호는 `profile.sec` 봉인 사이드카(PII_KEYS),
 //!   UserKey는 `user.key`(K_wrap_user 봉인 · 0600) · 로그·상태바에는 핸들과 UserId 지문만.
 
-use nbeep_core::UserId;
+use nbeep_core::{PeerId, UserId};
 use nbeep_crypto::userkey::{KeyMaterial, UserKey, USERKEY_LEN};
 use std::path::Path;
 
@@ -438,6 +438,43 @@ pub(crate) fn user_hints(
     v
 }
 
+/// ★ 형제 후보 판정(순수 · 09-26 실기 "장시간 뒤 보라 배지 소실"): **살아 있는 형제** ∨
+/// **60s 안의 힌트 일치** ∨ **서명 기기 목록의 기기**(`trust.seg` — 그 기기 자신의 세션에서 내
+/// 사용자 공개키를 서명 제시한 것 · A-1). 셋째가 없으면 세션이 한 번 끊긴 뒤(keepalive·절전·
+/// 서버 재접속) 힌트가 없는 경로(서버 경유)에서는 XX로만 재성립해 형제 자격이 돌아오지 않았다.
+#[must_use]
+pub(crate) fn sibling_candidate(live: bool, hint_fresh: bool, known_device: bool) -> bool {
+    live || hint_fresh || known_device
+}
+
+/// 세션 내 증명 송신 게이트(순수) — 세션당 1회가 원칙이되, **상대 증명을 대조한 뒤의 회신**은
+/// 이미 보냈어도 **한 번 더**(`force` · `replied`로 1회 상한). 종전엔 회신이 no-op이라 "내가
+/// 먼저 보낸 증명을 상대가 아직 미인증이라 버린" 세션은 한쪽만 형제로 남았다(비대칭).
+#[must_use]
+pub(crate) fn proof_send_allowed(sent: bool, replied: bool, force: bool) -> bool {
+    !sent || (force && !replied)
+}
+
+/// 릴레이 페어링 RID 탐색이 필요한가(순수) — **서명 목록의 내 기기 중 형제 세션이 없는 것**이
+/// 하나라도 있으면(목록이 나뿐이면 종전 규칙 = 형제가 하나도 없을 때). 종전 `siblings.is_empty()`
+/// 는 기기 3대에서 하나가 XX로 재성립하면 영영 재탐색하지 않았다.
+#[must_use]
+pub(crate) fn seek_siblings_wanted(
+    known: &[PeerId],
+    me: PeerId,
+    siblings: &std::collections::HashSet<PeerId>,
+) -> bool {
+    let others = known.iter().filter(|p| **p != me);
+    let mut any = false;
+    for p in others {
+        any = true;
+        if !siblings.contains(p) {
+            return true;
+        }
+    }
+    !any && siblings.is_empty()
+}
+
 /// 메인 창이 읽는 한눈 상태(앱이 상태 변화 지점마다 다시 계산해 캐시 — 페인트는 읽기만).
 #[derive(Clone, Debug, Default)]
 pub(crate) struct UserGlance {
@@ -539,6 +576,44 @@ pub(crate) fn derive_and_load(
 mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
+
+    /// 09-26 실기 — 장시간 뒤 형제 자격 소실 3경로의 순수 판정.
+    #[test]
+    fn sibling_recovery_rules() {
+        // 후보 = 살아 있는 형제 ∨ 신선 힌트 ∨ 서명 기기 목록.
+        assert!(!sibling_candidate(false, false, false));
+        assert!(
+            sibling_candidate(false, false, true),
+            "힌트 없는 경로(서버 경유)도 아는 기기면 후보"
+        );
+        assert!(sibling_candidate(false, true, false));
+        assert!(sibling_candidate(true, false, false));
+        // 증명 송신 = 1회 + 회신 1회.
+        assert!(proof_send_allowed(false, false, false));
+        assert!(!proof_send_allowed(true, false, false), "세션당 1회");
+        assert!(
+            proof_send_allowed(true, false, true),
+            "회신은 이미 보냈어도 한 번 더"
+        );
+        assert!(!proof_send_allowed(true, true, true), "회신도 1회 상한");
+        // 페어링 RID 탐색 = 형제 세션 없는 아는 기기가 있을 때.
+        let me = PeerId::from_bytes([1u8; 32]);
+        let b = PeerId::from_bytes([2u8; 32]);
+        let c = PeerId::from_bytes([3u8; 32]);
+        let mut sib = std::collections::HashSet::new();
+        assert!(
+            seek_siblings_wanted(&[me], me, &sib),
+            "목록이 나뿐 · 형제 0 = 종전 규칙"
+        );
+        sib.insert(b);
+        assert!(!seek_siblings_wanted(&[me], me, &sib));
+        assert!(
+            seek_siblings_wanted(&[me, b, c], me, &sib),
+            "C가 XX로 재성립 = 재탐색"
+        );
+        sib.insert(c);
+        assert!(!seek_siblings_wanted(&[me, b, c], me, &sib));
+    }
 
     #[test]
     fn handle_rules() {

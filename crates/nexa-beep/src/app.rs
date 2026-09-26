@@ -889,6 +889,8 @@ struct Conversation {
     binding: Option<([u8; 32], bool)>,
     /// 이 세션에서 내 증명을 이미 보냈는가(세션당 1회 — 반복 금지 [13 §12-1]).
     proof_sent: bool,
+    /// 상대 증명 대조 뒤 **회신으로 한 번 더** 보냈는가(09-26 — 비대칭 형제 방지 · 1회 상한).
+    proof_replied: bool,
     /// 상대 증명 대조 실패 횟수(세션당 상한 — 온라인 추측 차단).
     proof_fails: u8,
     /// 이 세션에 보낸 내 `UserHello`의 목록 버전(바뀌면 재송신 · None = 아직).
@@ -5746,6 +5748,13 @@ impl App {
                 .then_with(|| a.name.as_str().cmp(b.name.as_str()))
                 .then(a.peer.cmp(&b.peer))
         });
+        // "내 기기" 배지 근거 = 살아 있는 형제 ∨ 서명 기기 목록(09-26) — 목록은 행마다 다시 만들지
+        // 않고 한 번만(피어 500 목록 = NFR-B-12).
+        let known_devices: std::collections::HashSet<PeerId> = if self.user_state.active() {
+            self.my_devices().into_iter().collect()
+        } else {
+            std::collections::HashSet::new()
+        };
         let rows = entries
             .into_iter()
             .map(|entry| {
@@ -5831,7 +5840,8 @@ impl App {
                 let online = self.table.get(entry.peer).is_some()
                     || self.server_peers.contains(&entry.peer)
                     || self.conversations.contains_key(&entry.peer);
-                let own_device = self.siblings.contains(&entry.peer);
+                let own_device =
+                    self.siblings.contains(&entry.peer) || known_devices.contains(&entry.peer); // = is_own_device (09-26)
                 PeerRow {
                     entry,
                     trust,
@@ -6794,13 +6804,16 @@ impl App {
         let Some(conv) = self.conversations.get_mut(&peer) else {
             return;
         };
-        if conv.proof_sent {
+        if !crate::userident::proof_send_allowed(conv.proof_sent, conv.proof_replied, force) {
             return;
         }
         let Some((hh, initiator)) = conv.binding else {
             return;
         };
         let proof = nbeep_crypto::userkey::session_proof(&psk, &hh, initiator);
+        if conv.proof_sent {
+            conv.proof_replied = true; // 회신 재송신(09-26) — 1회 상한
+        }
         conv.proof_sent = true;
         let _ = conv.out_tx.send(SessionCmd::Control(vec![
             nbeep_core::UserProof { proof }.encode()
@@ -6817,12 +6830,20 @@ impl App {
         let Some(conv) = self.conversations.get_mut(&peer) else {
             return;
         };
-        let ok = match (psk, conv.binding, self.user_state.active()) {
-            (Some(psk), Some((hh, initiator)), true) if conv.proof_fails < 3 => {
-                let want = nbeep_crypto::userkey::session_proof(&psk, &hh, !initiator);
-                nbeep_crypto::userkey::proof_eq(&want, &proof)
+        // ★ 내 쪽 미준비(부팅 PBKDF2 중·기능 꺼짐·바인딩 없음)는 **대조 실패로 세지 않는다**(09-26 —
+        //   상한 3회를 상대 잘못이 아닌 내 타이밍이 소진했다). 상대는 세션당 1회만 보내므로, 내가
+        //   준비된 뒤 `user_apply_runtime`이 내 증명을 보내면 상대가 대조·회신(재송신 1회)한다.
+        let Some((psk, (hh, initiator))) =
+            psk.zip(conv.binding).filter(|_| self.user_state.active())
+        else {
+            if self.user_trace {
+                eprintln!("[user] proof from {} deferred (not ready)", peer.short());
             }
-            _ => false,
+            return;
+        };
+        let ok = conv.proof_fails < 3 && {
+            let want = nbeep_crypto::userkey::session_proof(&psk, &hh, !initiator);
+            nbeep_crypto::userkey::proof_eq(&want, &proof)
         };
         if !ok {
             conv.proof_fails = conv.proof_fails.saturating_add(1);
@@ -6847,17 +6868,32 @@ impl App {
     }
 
     /// 형제 후보인가 — 이미 psk 성립했거나, 60s 안의 힌트가 **내 재료의 어제·오늘·내일
-    /// 태그**와 일치(재료가 아직 없으면 false — 판정은 매 조회 신선하다).
+    /// 태그**와 일치하거나, ★**서명 기기 목록의 내 기기**(09-26 — 세션이 끊긴 뒤 힌트 없는
+    /// 경로(서버 경유·절전 복귀)에서도 XXpsk3/세션 내 증명으로 형제 자격이 돌아오게).
+    /// 재료가 아직 없으면 false — 판정은 매 조회 신선하다. 순수 규칙 = `userident::sibling_candidate`.
     fn is_sibling_candidate(&self, peer: PeerId) -> bool {
-        if self.siblings.contains(&peer) {
-            return true;
-        }
+        let live = self.siblings.contains(&peer);
         let Some(m) = self.user_rt.material.as_ref() else {
-            return false;
+            return live;
         };
-        self.sibling_hints.get(&peer).is_some_and(|(tag, t)| {
+        let hint_fresh = self.sibling_hints.get(&peer).is_some_and(|(tag, t)| {
             t.elapsed() < std::time::Duration::from_secs(60) && m.lan_tags_around().contains(tag)
-        })
+        });
+        let known = !live && !hint_fresh && self.is_known_device(peer);
+        crate::userident::sibling_candidate(live, hint_fresh, known)
+    }
+
+    /// 서명 기기 목록(`trust.seg`)에 있는 내 기기인가 — 그 기기 자신의 세션에서 내 사용자
+    /// 공개키를 서명 제시한 기록(A-1). 세션과 무관한 **지속 근거**.
+    fn is_known_device(&self, peer: PeerId) -> bool {
+        peer != self.identity.peer_id() && self.my_devices().contains(&peer)
+    }
+
+    /// 목록·카드의 "내 기기" 배지 근거(09-26) — 살아 있는 형제 ∨ 서명 기기 목록. 종전엔 살아
+    /// 있는 형제만이라 세션이 한 번 끊기면 배지가 즉시 사라졌다(툴바 링은 목록 기준이라 남아
+    /// 두 자리가 어긋났다). **신뢰 판정(`effective_trust`)은 그대로 세션 기준** — 표시만 넓힌다.
+    fn is_own_device(&self, peer: PeerId) -> bool {
+        self.siblings.contains(&peer) || (self.user_state.active() && self.is_known_device(peer))
     }
 
     /// 자동 연결(발견발 조용한 세션)을 **힌트 유예** 뒤에 걸 것인가 — 내 신원이 켜져
@@ -7479,7 +7515,16 @@ impl App {
             self.user_tag_day = day;
         }
         let now = self.now_ms();
-        if now < self.user_seek_at || !self.siblings.is_empty() {
+        if now < self.user_seek_at {
+            return;
+        }
+        // ★ 09-26: 형제가 하나라도 있으면 멈추던 것 → **아는 기기 중 형제 세션이 없는 것**이 있으면
+        //   탐색(기기 3대에서 하나가 XX로 재성립한 채 남던 구멍). 순수 규칙 = `seek_siblings_wanted`.
+        if !crate::userident::seek_siblings_wanted(
+            &self.my_devices(),
+            self.identity.peer_id(),
+            &self.siblings,
+        ) {
             return;
         }
         let Some(client) = self.relay.clone().filter(|c| c.is_alive()) else {
@@ -8280,6 +8325,7 @@ impl App {
                 via_server,
                 binding,
                 proof_sent: false,
+                proof_replied: false,
                 proof_fails: 0,
                 hello_ver: None,
                 succ_sent: false,
@@ -10166,7 +10212,7 @@ impl App {
                 use nbeep_core::TrustStore as _;
                 self.trust.level(peer) == nbeep_core::TrustLevel::FingerprintVerified
             },
-            own_device: self.siblings.contains(&peer),
+            own_device: self.is_own_device(peer),
             user_label: self
                 .trust
                 .user_of(peer)
@@ -17260,6 +17306,14 @@ impl ApplicationHandler<AppEvent> for App {
                 self.redraw_conversation(peer);
             }
             AppEvent::Closed { peer } => {
+                if self.user_trace {
+                    eprintln!(
+                        "[user] closed {} sibling={} known={}",
+                        peer.short(),
+                        self.siblings.contains(&peer),
+                        self.is_known_device(peer)
+                    );
+                }
                 if self.siblings.remove(&peer) {
                     // 형제 자격은 세션 수명(ADR-0015 — 다음 세션이 재판정) · 한눈 상태 갱신(09-07)
                     self.refresh_user_glance();
