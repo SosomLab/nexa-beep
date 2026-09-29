@@ -3,6 +3,8 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
+> **갱신: 2026-09-29 2차 (KST · Win · main)** — **winget 포터블 0.2.17 단독 제출 [#443211](https://github.com/microsoft/winget-pkgs/pull/443211)**(사용자 요청): 포터블은 이미 게시(0.2.16)였음 · 워크플로는 설치본도 함께 내므로 OPEN #436462 중복을 피해 아티팩트 매니페스트를 수동 제출 · 해시 일치 · `ReleaseDate` 실제 공개일로 정정. [journal](journal/2026-09-29.md).
+
 > **갱신: 2026-09-29 1차 (KST · Win · main)** — ★**Chocolatey 첫 승인 확인 → 최신 빌드 push**(사용자 요청 "choco에 마지막 빌드 배포"): 09-28 moderator 승인 = nexa-beep·portable 0.2.2 · nexa-beepd 0.2.5(⚠ 정적 CRT 이전 빌드) → 태그 재사용 dispatch로 **0.2.17 ×2 · beepd 0.2.6 pushed ✓**(모더레이션 대기) · 새 태그 불필요(v0.2.17 이후 문서만) · winget #436462·#436461 OPEN 유지(중복 PR 방지 스위치 임시 off → 원복). [journal](journal/2026-09-29.md).
 
 > **갱신: 2026-09-26 4차 (KST · Win · main)** — ★**v0.2.17 공개**(`7dcd17f`+태그 · 사용자 요청 "새 버전으로 릴리즈"): 탑재 = `8dedd1b` 형제(내 기기) 자격·보라 배지 소실 수정 + `5bdc419` choco nuspec `<copyright>` · 18 §5 절차(main green → 채널 점검 → 버전 범프 → 태그) · **release run 36249633985 전 job success · 자산 14종 · brew cask·formula 0.2.17 ✓ · winget/choco = `::notice` 제외**(설치본 #436462·beepd #436461 OPEN · choco 3종 검수 대기 → `WINGET_PUBLISH`·`CHOCO_PUSH` false 유지) · 서버 무변경(beepd-v0.2.6). 이 PC 설치본 = 같은 트리 빌드(23:40 · md5 `59d8b255`). 위키 Home·Install·Release-Notes 0.2.17. 잔여 = mac ff+`install-local.sh` → **2-PC 절전 복귀/서버 재접속 뒤 배지 유지 실기** · 채널 승인 시 스위치 ON. [journal/2026-09-26.md](journal/2026-09-26.md).

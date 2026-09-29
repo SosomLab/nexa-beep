@@ -7,6 +7,7 @@
 
 ## 2026-09-29
 
+- **(Win · main) winget 포터블 0.2.17 단독 제출**([#443211](https://github.com/microsoft/winget-pkgs/pull/443211)): 포터블은 이미 게시(0.2.16) · 설치본 #436462 중복 방지로 워크플로 대신 아티팩트 매니페스트 수동 `wingetcreate submit` · 해시 = SHA256SUMS 일치 · `ReleaseDate` 09-29→09-26 정정. [journal](journal/2026-09-29.md).
 - **(Win · main) ★Chocolatey 첫 승인(09-28 · 0.2.2/0.2.5) 확인 → 최신 빌드 3종 push**(사용자 요청): 새 태그 불필요(v0.2.17 이후 문서만 · 서버 무변경) 판정 → 기존 태그 `workflow_dispatch` 재제출 = `nexa-beep`·`nexa-beep-portable` **0.2.17** · `nexa-beepd` **0.2.6** pushed ✓(승인본 0.2.2는 vcruntime140 의존이라 시급) · beepd winget 중복 PR 방지 위해 스위치 임시 off · 스위치 전부 원복. [journal](journal/2026-09-29.md).
 
 ## 2026-09-26

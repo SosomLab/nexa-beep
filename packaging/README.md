@@ -82,6 +82,8 @@ winget과 Chocolatey는 **중앙 저장소 검수**를 거치고, 한번 올라�
 제출 금지 — 검수 중 새 제출은 큐를 엉키게 한다. 점검 명령은
 [docs/18 §5](../docs/18-build-and-test.md#5-배포--githubworkflowsreleaseyml).
 
+**현황(09-29 2차)** — winget **포터블 0.2.17 단독 제출 [#443211](https://github.com/microsoft/winget-pkgs/pull/443211)**(워크플로는 설치본도 함께 내므로 수동 `wingetcreate submit` · `ReleaseDate`는 재사용 dispatch가 렌더 시각을 찍으니 실제 공개일로 고쳐 낸다).
+
 **현황(09-29)** — ★ **Chocolatey 첫 승인**(09-28 moderator virtualex — nexa-beep·nexa-beep-portable 0.2.2 · nexa-beepd 0.2.5 · 정적 CRT 이전 빌드) → 같은 날 태그 재사용 `workflow_dispatch`로 **0.2.17 ×2 · beepd 0.2.6 push ✓**(run 36547669932·36547675976 · 모더레이션 대기) · beepd winget 중복 PR 방지 = `BEEPD_WINGET_PUBLISH` 임시 false · 스위치 전부 원복. winget 설치본 #436462·beepd #436461 OPEN 유지.
 
 **현황(09-26 2차)** — ★ **v0.2.17 공개**(`7dcd17f` — 형제 배지 수정 탑재 · 자산 14종 · brew 0.2.17 ✓ · **winget/choco 제외** = 설치본 #436462·beepd #436461 OPEN · choco 3종 검수 대기 → 스위치 false 유지 · 서버 무변경 beepd-v0.2.6). 통과 후 = 같은 워크플로로 0.2.17/0.2.6 제출.
