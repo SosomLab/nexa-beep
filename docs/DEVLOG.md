@@ -5,6 +5,10 @@
 
 ---
 
+## 2026-09-29
+
+- **(Win · main) ★Chocolatey 첫 승인(09-28 · 0.2.2/0.2.5) 확인 → 최신 빌드 3종 push**(사용자 요청): 새 태그 불필요(v0.2.17 이후 문서만 · 서버 무변경) 판정 → 기존 태그 `workflow_dispatch` 재제출 = `nexa-beep`·`nexa-beep-portable` **0.2.17** · `nexa-beepd` **0.2.6** pushed ✓(승인본 0.2.2는 vcruntime140 의존이라 시급) · beepd winget 중복 PR 방지 위해 스위치 임시 off · 스위치 전부 원복. [journal](journal/2026-09-29.md).
+
 ## 2026-09-26
 
 - **(Win · main) ★v0.2.17 공개**(`7dcd17f`+태그 · 사용자 요청): 탑재 = `8dedd1b` 형제 자격·보라 배지 소실 수정 + `5bdc419` choco `<copyright>` · release run 전 job success · **자산 14종 · brew 0.2.17 추종 ✓ · winget/choco 제외**(검수 종료 전 = 18 §5 규칙 · 스위치 false 유지) · 서버 무변경(beepd-v0.2.6). 위키 Home·Install·Release-Notes 현행화. [journal](journal/2026-09-26.md).
