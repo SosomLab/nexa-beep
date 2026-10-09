@@ -7556,7 +7556,7 @@ impl App {
         Some(done)
     }
 
-    /// 기기 하나 폐기(10-09 내 기기 목록 [폐기]) = `issue_succession(내 기기 − 그 기기, [그 기기])`. 자기 자신은 못 뺀다.
+    /// 기기 하나 폐기(10-09 내 기기 목록 \[폐기\]) = `issue_succession(내 기기 − 그 기기, [그 기기])`. 자기 자신은 못 뺀다.
     fn user_revoke_device(&mut self, peer: PeerId) {
         let now = unix_now_ms();
         let me = self.identity.peer_id();
