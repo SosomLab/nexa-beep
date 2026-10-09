@@ -99,10 +99,15 @@ pub fn own_console_for_interactive() -> bool {
             "ℹ 대화형 모드 — 새 콘솔 창에서 계속합니다 ({parent}는 GUI 앱을 기다리지 \
              않아 입력이 섞입니다 · Git Bash는 이 창에서 그대로 동작)"
         );
-        let title: Vec<u16> = "Nexa Beep — 터미널 대화"
-            .encode_utf16()
-            .chain([0])
-            .collect();
+        // 디버그 빌드는 "(Debug)"(사용자 10-10 · 창 제목 규칙 — app.rs `APP_TITLE`와 같은 규칙).
+        let title: Vec<u16> = if cfg!(debug_assertions) {
+            "Nexa Beep (Debug) — 터미널 대화"
+        } else {
+            "Nexa Beep — 터미널 대화"
+        }
+        .encode_utf16()
+        .chain([0])
+        .collect();
         // SAFETY: 콘솔 detach 후 새 콘솔 할당 — 실패해도(극히 드묾) 부작용은
         // "콘솔 없음"이며, 이후 읽기 실패로 모드가 스스로 끝난다(fail-soft).
         unsafe {

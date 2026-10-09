@@ -51,6 +51,14 @@ fn linux_clipboard_init(w: &Window) {
 /// `WM_CLASS` = `nexa-beep` = `.desktop` 파일 이름(`StartupWMClass`). 없으면 GNOME Dock이
 /// 창을 어느 앱인지 못 맞춰 **톱니바퀴 + "알 수 없음"**으로 뜬다. 모든 창(메인·대화·모달)이
 /// 같은 식별자를 쓰므로 한 곳에서 만든다.
+/// 창 제목의 앱 이름 — **디버그 빌드는 "(Debug)"를 붙인다**(사용자 10-10 · nexa-dir3 10-06 규칙 이식 · 설치본과 debug 앱을
+/// 제목으로 구분). 보조 창은 "{APP_TITLE} — 제목". 트레이 툴팁·알림·About의 제품명은 그대로(창 제목만).
+pub(crate) const APP_TITLE: &str = if cfg!(debug_assertions) {
+    "Nexa Beep (Debug)"
+} else {
+    "Nexa Beep"
+};
+
 fn base_attrs() -> winit::window::WindowAttributes {
     #[allow(unused_mut)]
     let mut a = Window::default_attributes();
@@ -3461,7 +3469,7 @@ impl App {
         let attrs = self
             .win_attrs()
             .with_title(format!(
-                "Nexa Beep — {}",
+                "{APP_TITLE} — {}",
                 nbeep_core::t(nbeep_core::Msg::LicTitle)
             ))
             .with_inner_size(winit::dpi::LogicalSize::new(640.0, 520.0))
@@ -3685,7 +3693,7 @@ impl App {
         }
         let attrs = self
             .win_attrs()
-            .with_title("Nexa Beep — About")
+            .with_title(format!("{APP_TITLE} — About"))
             .with_inner_size(winit::dpi::LogicalSize::new(420.0, 520.0))
             .with_resizable(false) // 모달 대화상자 — 크기 고정
             .with_window_icon(self.icon.clone());
@@ -3757,7 +3765,7 @@ impl App {
         let mut attrs = self
             .win_attrs()
             .with_title(format!(
-                "Nexa Beep — {}",
+                "{APP_TITLE} — {}",
                 nbeep_core::t(nbeep_core::Msg::WinAlert)
             ))
             .with_inner_size(winit::dpi::LogicalSize::new(400.0, win_h))
@@ -6272,7 +6280,7 @@ impl App {
         };
         let mut attrs = self
             .win_attrs()
-            .with_title("Nexa Beep")
+            .with_title(APP_TITLE)
             .with_inner_size(winit::dpi::LogicalSize::new(ww, wh))
             .with_min_inner_size(winit::dpi::LogicalSize::new(MAIN_MIN_W, MAIN_MIN_H))
             .with_window_icon(self.icon.clone());
@@ -7792,7 +7800,7 @@ impl App {
         let attrs = self
             .win_attrs()
             .with_title(format!(
-                "Nexa Beep — {}",
+                "{APP_TITLE} — {}",
                 nbeep_core::t(nbeep_core::Msg::DevTitle)
             ))
             .with_inner_size(winit::dpi::LogicalSize::new(600.0, 320.0))
@@ -9180,11 +9188,11 @@ impl App {
         let total: u32 = self.unread.values().sum::<u32>() + self.gunread.values().sum::<u32>();
         if total > 0 {
             e.window.set_title(&format!(
-                "Nexa Beep — {}",
+                "{APP_TITLE} — {}",
                 nbeep_core::tf(nbeep_core::Msg::WinNewMessages, &[&total.to_string()])
             ));
         } else {
-            e.window.set_title("Nexa Beep");
+            e.window.set_title(APP_TITLE);
         }
     }
 
@@ -9526,7 +9534,7 @@ impl App {
             .iter()
             .find(|(_, e)| e.role == Role::Chat(peer))
         {
-            e.window.set_title(&format!("Nexa Beep — {title}"));
+            e.window.set_title(&format!("{APP_TITLE} — {title}"));
         }
     }
 
@@ -9602,7 +9610,7 @@ impl App {
             }
             return;
         }
-        let title = format!("Nexa Beep — {}", self.peer_title(peer));
+        let title = format!("{APP_TITLE} — {}", self.peer_title(peer));
         // 대화 창은 모달이 아니다 — 메인에 종속시키지 않는다(자유로운 독립 창).
         let attrs = self
             .win_attrs()
@@ -9656,7 +9664,7 @@ impl App {
         let mut attrs = self
             .win_attrs()
             .with_title(format!(
-                "Nexa Beep — {}",
+                "{APP_TITLE} — {}",
                 nbeep_core::t(nbeep_core::Msg::SettingsTitle)
             ))
             .with_inner_size(winit::dpi::LogicalSize::new(pw, ph))
@@ -9906,7 +9914,7 @@ impl App {
         let attrs = self
             .win_attrs()
             .with_title(format!(
-                "Nexa Beep — {}",
+                "{APP_TITLE} — {}",
                 nbeep_core::t(nbeep_core::Msg::ConvboxTitle)
             ))
             .with_inner_size(winit::dpi::LogicalSize::new(560.0, 460.0))
@@ -10332,7 +10340,7 @@ impl App {
         let attrs = self
             .win_attrs()
             .with_title(format!(
-                "Nexa Beep — {}",
+                "{APP_TITLE} — {}",
                 nbeep_core::t(nbeep_core::Msg::QuarantineTitle)
             ))
             .with_inner_size(winit::dpi::LogicalSize::new(620.0, 420.0))
@@ -10484,7 +10492,7 @@ impl App {
         }
         let attrs = self
             .win_attrs()
-            .with_title("Nexa Beep — 컨트롤 갤러리 (임시)")
+            .with_title(format!("{APP_TITLE} — 컨트롤 갤러리 (임시)"))
             .with_window_icon(self.icon.clone());
         let window = Rc::new(el.create_window(attrs).unwrap());
         window.set_ime_allowed(true);
@@ -10633,7 +10641,7 @@ impl App {
         let title = nbeep_core::tf(title_msg, &[&picker.current_dir().display().to_string()]);
         let attrs = self
             .win_attrs()
-            .with_title(format!("Nexa Beep — {title}"))
+            .with_title(format!("{APP_TITLE} — {title}"))
             .with_inner_size(winit::dpi::LogicalSize::new(900.0, 580.0))
             .with_min_inner_size(winit::dpi::LogicalSize::new(640.0, 420.0))
             .with_resizable(true)
@@ -11058,7 +11066,7 @@ impl App {
         let attrs = self
             .win_attrs()
             .with_title(format!(
-                "Nexa Beep — {}",
+                "{APP_TITLE} — {}",
                 nbeep_core::t(nbeep_core::Msg::ProfileTitle)
             ))
             // 창 높이 770 — bio 고정 3줄 + 토글·안내·버튼이 다 들어간다(08-18 확정 ·
@@ -11244,7 +11252,7 @@ impl App {
         let attrs = self
             .win_attrs()
             .with_title(format!(
-                "Nexa Beep — {}",
+                "{APP_TITLE} — {}",
                 nbeep_core::t(nbeep_core::Msg::WinMembers)
             ))
             .with_inner_size(winit::dpi::LogicalSize::new(400.0, win_h))
@@ -11648,7 +11656,7 @@ impl App {
         let attrs = self
             .win_attrs()
             .with_title(format!(
-                "Nexa Beep — {}",
+                "{APP_TITLE} — {}",
                 nbeep_core::t(nbeep_core::Msg::WinPeerProfile)
             ))
             // 높이 500(M3-6 — 안전 번호 2줄+버튼이 380에선 지문·안내와 겹쳤다 · 실기).
@@ -11800,7 +11808,7 @@ impl App {
         let attrs = self
             .win_attrs()
             .with_title(format!(
-                "Nexa Beep — {}",
+                "{APP_TITLE} — {}",
                 nbeep_core::t(nbeep_core::Msg::WinConnectAddr)
             ))
             .with_inner_size(winit::dpi::LogicalSize::new(420.0, 150.0)) // 높이는 힌트 wrap 실측으로 재조정(10-09)
@@ -13815,7 +13823,7 @@ impl App {
         let mut attrs = self
             .win_attrs()
             .with_title(format!(
-                "Nexa Beep — {}",
+                "{APP_TITLE} — {}",
                 nbeep_core::t(if broadcast {
                     nbeep_core::Msg::WinBroadcast
                 } else {
@@ -14205,7 +14213,7 @@ impl App {
                 self.gchats.insert(gid, chat);
                 let attrs = self
                     .win_attrs()
-                    .with_title(format!("Nexa Beep — {title}"))
+                    .with_title(format!("{APP_TITLE} — {title}"))
                     .with_inner_size(winit::dpi::LogicalSize::new(520.0, 560.0))
                     .with_window_icon(self.icon.clone());
                 let window = Rc::new(el.create_window(attrs).unwrap());
@@ -15219,7 +15227,7 @@ impl App {
         let attrs = self
             .win_attrs()
             .with_title(format!(
-                "Nexa Beep — {}",
+                "{APP_TITLE} — {}",
                 nbeep_core::t(nbeep_core::Msg::WinConfirm)
             ))
             .with_inner_size(winit::dpi::LogicalSize::new(400.0, 170.0))
@@ -19524,7 +19532,7 @@ impl ApplicationHandler<AppEvent> for App {
                 let attrs = self
                     .win_attrs()
                     .with_title(format!(
-                        "Nexa Beep — {}",
+                        "{APP_TITLE} — {}",
                         nbeep_core::t(nbeep_core::Msg::WinFileRequest)
                     ))
                     .with_inner_size(winit::dpi::LogicalSize::new(440.0, 432.0))
@@ -21655,6 +21663,16 @@ mod font_fallback_tests {
 
 #[cfg(test)]
 mod tests {
+    /// 창 제목(사용자 10-10 · dir3 10-06 규칙): 디버그 빌드만 "(Debug)" 꼬리 · 릴리스는 "Nexa Beep".
+    #[test]
+    fn app_title_marks_debug_builds() {
+        assert_eq!(
+            super::APP_TITLE.ends_with("(Debug)"),
+            cfg!(debug_assertions)
+        );
+        assert!(super::APP_TITLE.starts_with("Nexa Beep"));
+    }
+
     /// 10-10 S3 설치본 실기 — 굳은 Debug 라벨 판정 · 안내 문구는 전 언어에서 알아본다.
     #[test]
     fn debug_label_and_local_notice_detection() {
