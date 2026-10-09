@@ -7,6 +7,7 @@
 
 ## 2026-10-09
 
+- **(Linux · main) 툴바 툴팁 언어 고정 수정(nexa-ui 190차 set_tip) + ★내 기기 목록 창(기기별 폐기 = Succession 부분 집합 · issue_succession 공용화)**. [journal 11차](journal/2026-10-09.md)
 - **(Linux · main) Linux 실기 2건** — 트레이 설정… 창이 메인 뒤에 깔림(활성화 토큰 → 설정 창) · 목록 타입어헤드 한글 불가(Windows 경로를 Linux에도 · 27 §8). [journal 10차](journal/2026-10-09.md)
 - **(Linux · main) ★apt/dnf 채널 합류** — pkg.sosomlab.com에 nexa-beep 등록(0.3.0 등재) + release.yml 갱신 신호 잡 · "apt install이 옛 버전" 원인 3겹(등록 누락·apt 조용한 성공·설치 자리 덮어쓰기) → 재발 방지 3장치(미등록 점검·등록 확인·install-local .deb 재포장). [journal 9차](journal/2026-10-09.md)
 - **(Linux · main) ★v0.3.0 공개**(설정 개편·nexa-ui·라이선스·파일 대화상자·rpm·트레이 배지·설정… 메뉴 · 자산 15 · brew ✓ · choco 0.3.0 ×2 자동 제출 성공 · winget 제외 · 1차 CI rustdoc 실패 → 게이트 행 추가) + 설정 "시스템 (한국어)" 라벨. [journal 8차](journal/2026-10-09.md)
