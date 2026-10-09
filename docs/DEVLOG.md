@@ -7,6 +7,7 @@
 
 ## 2026-10-10
 
+- **(mac · main) ★v0.4.0 공개** — minor · release run 전 job success · 자산 15 · brew + apt/dnf · winget/choco 제외(검수 중) · 탑재 = 성능 1차(29→≈8ms) · X-13 S3 · PeerId 라벨 · 창 Retina · (Debug) 제목. [journal mac 4차](journal/2026-10-10.md)
 - **(mac · main) 디버그 빌드 창 제목 "Nexa Beep (Debug)"**(`dcae62c` — `APP_TITLE` · 창 제목 25곳 통일 · nexa-dir3 규칙 이식) · 성능 빌드 설치본 반영 ✓. [journal mac 3차](journal/2026-10-10.md)
 - **(mac · main) ★성능 검토 1차** — 실측 seam(`NEXA_PAINT_TRACE`·입력 주입) → 프레임 29→≈8ms(줄바꿈 캐시 · mac IOSurface present · 캐럿 틱 정밀화 RL-9 ✅ · 휠 DPI) · 유휴 25MB(DR-5 ✓) · 형제 고지 생략 · nexa-ui 193·194차 push · [51](51-performance-review-2026-10-10.md). [journal mac 2차](journal/2026-10-10.md)
 - **(mac · main) ★내 기기 목록 창 Retina 절반 높이 수정**(`111a4e6` — fit이 layout 전이라 위젯 스케일 1.0 값을 창 스케일로 또 나눔 · 라이선스 창 동형) · gate.sh rustup PATH 우선(Homebrew rust 가림) · `NEXA_SCRIPT license·about` · **macOS 점검 ✓**(기기·라이선스·설정·정보 창 캡처 4 · 발견 · footprint 20MB · 3.5MB). [journal mac 1차](journal/2026-10-10.md)
