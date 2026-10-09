@@ -1931,6 +1931,10 @@ pub struct SettingsWidget {
     btn_close: Button,
     /// 읽기 전용 정보 행 본문(`SettingKind::Info` — 호스트 `set_info`).
     infos: HashMap<&'static str, String>,
+    /// 콤보 옵션 **표시 라벨 덮어쓰기**((키, 값) → 라벨 · 10-09 사용자 "시스템 옆에 (설정값)" — nexa-dir3
+    /// `system_state_labels` 선례): `ui.theme`/`ui.language`의 `system` 항목을 "시스템 (다크)"·"시스템 (한국어)"처럼
+    /// **지금 OS가 무엇으로 풀리는지**와 함께 보인다. 판정은 호스트(`set_option_label`) · 위젯은 OS를 모른다.
+    option_labels: HashMap<(&'static str, &'static str), String>,
     /// 검색 이력(최근이 앞 · `prefs.search` 탭 구분 · 최대 [`HISTORY_MAX`]) · ↑/↓ 탐색 위치.
     history: Vec<String>,
     hist_pos: Option<usize>,
@@ -2013,6 +2017,7 @@ impl SettingsWidget {
             btn_file: Button::new(tr(lang, Msg::BtnOpenSettingsFile)),
             btn_close: Button::new(tr(lang, Msg::BtnClose)),
             infos: HashMap::new(),
+            option_labels: HashMap::new(),
             history,
             hist_pos: None,
             rows: Vec::new(),
@@ -2184,6 +2189,24 @@ impl SettingsWidget {
             }
         }
         inv.push(self.bounds);
+    }
+
+    /// 콤보 옵션 하나의 표시 라벨을 바꾼다(호스트 — OS 판정값 동반 표기 · 10-09). 같은 값이면 no-op ·
+    /// 바뀌면 보이는 행을 다시 짓는다(콤보 라벨은 생성 시 고정 — 선택값은 `values`가 지켜 유지된다).
+    pub fn set_option_label(
+        &mut self,
+        key: &'static str,
+        value: &'static str,
+        text: &str,
+        inv: &mut Invalidations,
+    ) {
+        if self.option_labels.get(&(key, value)).map(String::as_str) == Some(text) {
+            return;
+        }
+        self.option_labels.insert((key, value), text.to_string());
+        if self.rows.iter().any(|r| registry()[r.idx].key == key) {
+            self.rebuild(inv);
+        }
     }
 
     /// 현재 선택(시험·호스트 진단용).
@@ -2417,7 +2440,13 @@ impl SettingsWidget {
                 SettingKind::Radio(opts) | SettingKind::RadioInput(opts, _) => {
                     let items: Vec<ComboItem> = opts
                         .iter()
-                        .map(|(v, m)| ComboItem::new(*v, tr(lang, *m)))
+                        .map(|(v, m)| {
+                            let label = self
+                                .option_labels
+                                .get(&(e.key, *v))
+                                .map_or_else(|| tr(lang, *m).to_string(), Clone::clone);
+                            ComboItem::new(*v, label)
+                        })
                         .collect();
                     let mut c = Combo::new(items, 0);
                     if let SettingKind::RadioInput(_, suffix) = e.kind {

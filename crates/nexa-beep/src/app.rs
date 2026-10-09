@@ -3515,6 +3515,42 @@ impl App {
         }
     }
 
+    /// 설정 테마·언어 콤보의 `system` 항목 라벨 = **"시스템 (지금 OS 값)"**(10-09 사용자 "시스템 옆에 (설정값)" ·
+    /// nexa-dir3 메뉴 선례): 테마 = OS 다크/라이트(판정 불가면 접미 없음) · 언어 = `system`이 풀리는 언어 이름.
+    /// 설정 창을 열 때 · OS 테마 전이 · 언어 변경 뒤에 부른다(판정은 여기 · 위젯은 표기만).
+    fn refresh_system_option_labels(&mut self) {
+        use nbeep_core::{t, Lang, Msg};
+        let Some(sv) = &mut self.settings_view else {
+            return;
+        };
+        let sys = t(Msg::ThemeSystem);
+        let theme_label = match self.system_dark {
+            Some(true) => format!("{sys} ({})", t(Msg::ThemeDark)),
+            Some(false) => format!("{sys} ({})", t(Msg::ThemeLight)),
+            None => sys.to_string(),
+        };
+        let lang_now = match resolve_lang("system") {
+            Lang::En => Msg::LangEnglish,
+            Lang::Ko => Msg::LangKorean,
+            Lang::Zh => Msg::LangChinese,
+            Lang::Ja => Msg::LangJapanese,
+        };
+        let lang_label = format!("{sys} ({})", t(lang_now));
+        let mut inv = Invalidations::default();
+        sv.set_option_label("ui.theme", "system", &theme_label, &mut inv);
+        sv.set_option_label("ui.language", "system", &lang_label, &mut inv);
+        if !inv.is_empty() {
+            if let Some(sid) = self
+                .windows
+                .iter()
+                .find(|(_, e)| e.role == Role::Settings)
+                .map(|(id, _)| *id)
+            {
+                self.request_redraw(sid);
+            }
+        }
+    }
+
     /// 설정 › 고급 › 라이선스 **정보 카드** 4행(읽기 전용 · `SettingKind::Info`)을 판정기 상태로 채운다 —
     /// 설정 창을 열 때와 라이선스가 설치/제거됐을 때.
     fn refresh_license_info(&mut self) {
@@ -6101,6 +6137,7 @@ impl App {
             return;
         }
         self.system_dark = dark;
+        self.refresh_system_option_labels(); // 설정 창이 열려 있으면 "시스템 (다크/라이트)" 갱신
         if self.settings.get("ui.theme") == "system" {
             self.rebuild_theme();
             for e in self.windows.values() {
@@ -8799,6 +8836,7 @@ impl App {
         self.settings_view = Some(sv);
         self.refresh_approval_ui(); // 잠금·하단 정보 초기 반영
         self.refresh_license_info(); // 고급 › 라이선스 정보 카드(P4 ⑤)
+        self.refresh_system_option_labels(); // "시스템 (다크)"·"시스템 (한국어)"(10-09)
         self.layout_window(id);
         self.request_redraw(id);
     }
@@ -12248,6 +12286,7 @@ impl App {
                     // 정렬 드롭다운 라벨도 생성 시 고정 — 값 유지한 채 재구성(08-15).
                     let keep = self.sort_drop.value().to_string();
                     self.sort_drop = nbeep_ui::IconDropdown::new(Self::sort_drop_items(), &keep);
+                    self.refresh_system_option_labels(); // 접미 언어 이름도 새 언어로
                     if let Some(mid) = self.main_id {
                         self.layout_window(mid);
                     }
