@@ -19387,11 +19387,14 @@ impl ApplicationHandler<AppEvent> for App {
                 }
                 let (_, outs) = self.ime.leak_intercept(key_in, self.primary_down);
                 self.apply_ime(outs, el);
-                // 한/영 키(Windows · 목록 전용 — [docs/27 §8]): 목록 창은 IME를 끊어
+                // 한/영 키(Windows·Linux · 목록 전용 — [docs/27 §8]): 목록 창은 IME를 끊어
                 // OS 전환이 무력하므로 앱이 모드를 토글한다. VK_HANGUL은 키보드 드라이버
                 // 수준이라 IME 없이도 온다(winit: 논리 HangulMode · 물리 Lang1 — 둘 다 받는다).
+                // ★ Linux도 같은 구조(10-09 실기 "목록 타입어헤드 한글 안 됨"): US 레이아웃 + ibus/fcitx 조합이라
+                //   IME를 끊으면 라틴만 온다 → XKB Hangul 키(HangulMode)·evdev KEY_HANGEUL(Lang1)로 토글.
+                //   mac만 레이아웃이 자모를 내보내므로 이 경로가 필요 없다.
                 // IME 켠 창(대화 등)은 OS IME 몫 — 상태를 건드리지 않고 문자 취급도 안 한다.
-                if cfg!(windows)
+                if cfg!(any(windows, target_os = "linux"))
                     && (event.logical_key == WKey::Named(NamedKey::HangulMode)
                         || event.physical_key
                             == winit::keyboard::PhysicalKey::Code(winit::keyboard::KeyCode::Lang1))
@@ -19608,10 +19611,10 @@ impl ApplicationHandler<AppEvent> for App {
                             // ★ 모든 문자는 게이트 경유(배달 증거 봉인) — "가나다12233"
                             // 이중 입력의 진범이 이 직접 route 우회였다(증거 부재 →
                             // raw 대조가 정상 배달분을 소비된 키로 오판·재주입).
-                            // Windows 한글 모드(한/영 키 토글): IME가 없어 라틴이 온다 —
+                            // Windows·Linux 한글 모드(한/영 키 토글): IME가 없어 라틴이 온다 —
                             // 두벌식 자모로 번역해 넣는다(대문자 = 시프트 반영·[docs/27 §8]).
                             // 숫자·기호는 None → 원문 그대로(한글 모드에서도 통과).
-                            let c = if cfg!(windows)
+                            let c = if cfg!(any(windows, target_os = "linux"))
                                 && list_mode
                                 && self.hangul_mode
                                 && !self.primary_down

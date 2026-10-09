@@ -164,7 +164,11 @@ hangul.rs — 두벌식 오토마타(§4)
   상태바 고지뿐**이다. 대화창(IME on)의 한/영은 OS 몫 — 앱 상태와 독립(경계는 §6-4 그대로).
 - CapsLock으로 들어온 대문자도 시프트로 간주한다(Windows IME는 CapsLock 시 영문 강제라
   실사용 충돌 없음 — 단순화 선택).
-- macOS/Linux에서 이 경로는 비활성(`cfg!(windows)`) — 맥은 기존 자모 직접 수신 그대로.
+- macOS에서 이 경로는 비활성 — 맥은 기존 자모 직접 수신 그대로. ★**Linux는 Windows와 같은 구조**(10-09 사용자 실기
+  "목록 타입어헤드에 한글 입력이 안 됨": US 레이아웃 + ibus/fcitx 조합 → IME를 끊으면 라틴만 온다)라 **10-09부터 같은 경로를
+  켰다**(`cfg!(any(windows, target_os = "linux"))` — XKB `Hangul` 키심 = winit `HangulMode` · evdev `KEY_HANGEUL` = 물리 `Lang1` ·
+  Alt_R을 한/영으로 쓰는 xkb 옵션(`korean:ralt_hangul`)도 Hangul 키심이라 통과). 목록 모드에서 한/영 키를 누르면 상태바가
+  "입력: 한글 (한/영 키로 전환)"을 고지한다 — OS IME 표시등은 이 창에서 의미가 없다(Windows와 동일).
 
 > **교훈 한 줄**: 소유권이 밖(OS)에 있는 상태를 안(앱)에서 보정하는 시도는 5번 모두 부분 성공에
 > 그쳤다. 상태의 소유권을 앱으로 옮기자 문제 자체가 소멸했다 — Windows에선 **한/영 모드까지**
