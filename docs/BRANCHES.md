@@ -8,6 +8,10 @@
 
 | 브랜치 | 생성 | 병합(커밋) | 삭제 | 커밋수 | 작업 요약 | 상세 |
 | --- | --- | --- | --- | --- | --- | --- |
+| `feat/tray-badges` | 2026-10-09 | 2026-10-09 (ff) | 2026-10-09 | 12 | ★ M3-2e 트레이 배지 · 타입어헤드 결함·sql 설정 · 설정 preedit · 카드 레이아웃 · 위치 드롭다운 · P3 nexa-dlg(cherry-pick) · 라이선스 정보 카드 · docs/45(cherry-pick) · 701 green |
+| `feat/file-dialog-p3`(협업 worktree) | 2026-10-09 | 2026-10-09 (cherry-pick 77d863c·62974c6) | 2026-10-09 | 2 | docs/50 P3 — nexa-dlg 파일 대화상자 · 용도 9 · ADR-0014 정정 |
+| `feat/license-p4`(협업 worktree) | 2026-10-09 | 2026-10-09 (cherry-pick 6f91364·61daef9) | 2026-10-09 | 2 | docs/50 P4 ①② — nbeep-license · LicenseWidget |
+| `docs/manual-p5`(협업 worktree) | 2026-10-09 | 2026-10-09 (cherry-pick 3ba3bf5) | 2026-10-09 | 1 | docs/45 설정·대화상자·라이선스 절 초안 |
 | `feat/settings-overhaul-p2` | 2026-10-09 | 2026-10-09 (ff) | 2026-10-09 | 2 | ★ docs/50 P2 — 설정 체계 개편(그룹 트리·고급·카드 초기화·DEPENDS·자모 검색·언어 system) · 675 green |
 | `feat/nexa-ui-migration` | 2026-10-09 | 2026-10-09 (ff) | 2026-10-09 | 3 | ★ docs/50 P1-c — nexa-ui 의존 전환(nbeep-gfx·nbeep-ctl·nexa-conf·plat/font 삭제 → `../nexa-ui` path) · CI 형제 체크아웃 · 665 green · 릴리스 6.03MB |
 | `feat/userid-handle` | 2026-09-06 | 2026-09-06 (1cfb9ff --no-ff) | 2026-09-06 | 28 | **★ ADR-0015 UserId 사용자 관리 S0~S2**(핸들+페어링 암호 · 3층 = PeerId 앵커/무작위 UserKey/문 열쇠 · D-32 9문항 확정) — S0 `nbeep-crypto::userkey`(PBKDF2·PSK·RID·LAN_tag·UserKey Ed25519)+설정 › 사용자(스위치·자동 인증·봉인 보관·비밀 행) · S1 Noise **XXpsk3**·발견 `UserHint`·릴레이 페어 RID·**세션 내 형제 증명**(태그 11) · S2 키 봉인본 동기(태그 9 · 오래된 키 승·후계 우선 추이)·`effective_trust` 12곳·**"내 기기" 보라 배지**·`UserHello`(태그 4 · trust.seg v3)·**Succession**(태그 8 · 키 교체 · 사슬 · 정직한 충돌 · 5초 무장·10초 잠금) · 자동화 테스트 전체(833 green·4타깃·릴레이 스모크·netmon) · 교훈 = UserHello 핑퐁 되먹임·설정 위젯 키 삼킴 | [journal/2026-09-06](journal/2026-09-06.md) |
