@@ -1946,6 +1946,24 @@ const HISTORY_MAX: usize = 2000;
 /// 대화 기록 직렬화(M2-5b · 봉인 전 평문) — 텍스트 줄만(파일 기록은 후속 · 런타임
 /// 필드가 붙어 직렬화 대상 아님). 레코드 = tag(1) ‖ mine(1) ‖ at_ms(8 LE) ‖
 /// len(4 LE) ‖ utf8. tag로 전방 확장.
+/// 이름 폴백이 Debug 포맷이던 시절(~10-10)에 굳은 발신자 라벨인가 — `PeerId(…)`.
+/// 표시 이름은 정제를 거쳐 괄호·말줄임으로 시작할 수 없다(DisplayName 규칙).
+fn is_debug_peer_label(s: &str) -> bool {
+    s.starts_with("PeerId(")
+}
+
+/// 앱이 대화방에 스스로 넣는 고정 안내 문구인가(전 언어) — 기록 복원 때 발신자 라벨을 지운다.
+fn is_local_notice(text: &str) -> bool {
+    use nbeep_core::{tr, Lang, Msg};
+    [
+        Msg::NoticeRemotePath,
+        Msg::NoticeFirstContact,
+        Msg::SuggestVerify,
+    ]
+    .into_iter()
+    .any(|m| Lang::ALL.into_iter().any(|l| tr(l, m) == text))
+}
+
 fn encode_history(lines: &[ChatLine]) -> Vec<u8> {
     use nbeep_ui::{ChatBody, XferLineState as St};
     // 보관 대상 = 텍스트 전부 + **종결 전송(Done/Failed)**. 진행 중 전송은 재시작
@@ -8922,9 +8940,14 @@ impl App {
             return e.name.as_str().to_string();
         }
         // 비발견 상대(④) — 성립 시 스냅샷한 이름.
-        self.extra_peers
-            .get(&peer)
-            .map_or_else(|| format!("{peer:?}"), |n| n.as_str().to_string())
+        self.extra_peers.get(&peer).map_or_else(
+            || {
+                nbeep_core::default_display_name(None, &peer)
+                    .as_str()
+                    .to_string()
+            },
+            |n| n.as_str().to_string(),
+        )
     }
 
     /// 그 창의 포커스된 텍스트 컨트롤에서 선택을 복사한다(① 08-13 — 창 역할로 라우팅).
@@ -11254,10 +11277,10 @@ impl App {
     fn build_peer_info(&self, peer: PeerId) -> nbeep_ui::PeerInfo {
         let p = self.peer_profiles.get(&peer);
         nbeep_ui::PeerInfo {
-            name: self
-                .table
-                .get(peer)
-                .map_or_else(|| format!("{peer:?}"), |e| e.name.as_str().to_string()),
+            name: self.table.get(peer).map_or_else(
+                || self.peer_title(peer), // 비발견(서버·수동) = 프로필/스냅샷/지문 라벨
+                |e| e.name.as_str().to_string(),
+            ),
             profile_name: p
                 .and_then(|p| p.name.as_ref())
                 .map(|n| n.as_str().to_string())
@@ -12620,14 +12643,19 @@ impl App {
             if lines.is_empty() {
                 continue;
             }
-            // 1:1 수신 줄 발신자 라벨 소급(08-19 사용자 요청 — 수신 풍선 위 이름).
-            // 1:1은 수신 발신자가 항상 그 상대라 라벨 없는 옛 기록에도 안전하게
-            // 붙일 수 있다(그룹은 줄별 발신자를 몰라 소급 불가 — tag 3 저장분만).
+            // ★ 발신자 라벨(10-10 S3 실기 정정): 08-19 이후 수신 줄은 **저장 때 라벨을 싣는다**
+            //   (tag 3). 라벨 없는 상대 줄 = 로컬 안내(원격 경로·첫 왕래·지문 권유·명령 결과)
+            //   이거나 08-19 이전 수신 — 종전 소급 라벨은 안내 줄에까지 붙었고, 부팅 초기 이름을
+            //   몰라 Debug 포맷(`PeerId(…)`)으로 굳었다. → 소급 폐지 · 굳은 Debug 라벨은 안내
+            //   문구면 지우고, 아니면 지금 이름으로 바꾼다.
             let title = self.peer_title(peer);
             for l in &mut lines {
-                if !l.mine && l.from.is_none() {
-                    l.from = Some(title.clone());
+                if l.mine || !l.from.as_deref().is_some_and(is_debug_peer_label) {
+                    continue;
                 }
+                let notice =
+                    matches!(&l.body, nbeep_ui::ChatBody::Text(t) if is_local_notice(t.as_str()));
+                l.from = if notice { None } else { Some(title.clone()) };
             }
             self.parked_lines.insert(peer, lines);
             if self.live {
@@ -21491,10 +21519,11 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
                                   // 데이터 키 테이블(셰레딩 · D-18 §7) — 기록 복원보다 먼저(개봉 키의 원천).
     app.datakeys =
         crate::keytable::KeyTable::load(app.data_dir.join("keys.seg"), app.identity.wrap_secret());
+    // 프로필 캐시가 기록보다 먼저(10-10 S3 실기 — 기록 복원이 이름을 모르는 채 라벨을 굳히던 것).
+    app.restore_cached_profiles(); // 핀 상대의 캐시 프로필·목록 행 복원(08-14)
     app.restore_history(); // 대화 기록 복원(M2-5b · parked_lines에 · 대화창 열면 뜬다)
     app.restore_pending(); // 1:1 오프라인 대기 복원(M4-6 — 대기 풍선+자동 전달 후보)
     app.restore_group_history(); // 그룹 기록 복원(08-19 · g-{uid}.seg → group_threads)
-    app.restore_cached_profiles(); // 핀 상대의 캐시 프로필·목록 행 복원(08-14)
     app.ensure_wire_avatar(); // 상한 초과 사진의 와이어 축소본 보장(08-16 — 기존 사용자 자기 치유)
     crate::part::sweep_partials(crate::gate::CH_GUI); // 부분물 수명 정리(M4-10a — 72h·1GiB)
     sweep_clipboard_staging(&app.data_dir.join("clipboard")); // 스테이징 정리(SEAL-2 — 24h)
@@ -21607,6 +21636,20 @@ mod font_fallback_tests {
 
 #[cfg(test)]
 mod tests {
+    /// 10-10 S3 설치본 실기 — 굳은 Debug 라벨 판정 · 안내 문구는 전 언어에서 알아본다.
+    #[test]
+    fn debug_label_and_local_notice_detection() {
+        use nbeep_core::{tr, Lang, Msg};
+        assert!(super::is_debug_peer_label("PeerId(5016194e…)"));
+        assert!(!super::is_debug_peer_label("sybae0057@win"));
+        assert!(!super::is_debug_peer_label("beep-5016194e"));
+        for l in Lang::ALL {
+            assert!(super::is_local_notice(tr(l, Msg::NoticeRemotePath)));
+            assert!(super::is_local_notice(tr(l, Msg::SuggestVerify)));
+        }
+        assert!(!super::is_local_notice("안녕하세요"));
+    }
+
     /// 09-03 실기 — 핀·이력이 있는 상대는 수동 주소·발견 경로가 없어도 오프라인 행으로
     /// 남는다(종전 세션 종료 분기 = "수동 주소 ∧ 발견 없음 = 제거"라 goodbye가 먼저
     /// 오면 증발). 스쳐간 상대(미검증·이력 0·수동 주소 0)만 사라진다.
