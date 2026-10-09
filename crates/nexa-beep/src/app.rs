@@ -9747,7 +9747,7 @@ impl App {
     }
 
     /// 파일 선택 **대화상자**(nexa-dlg FilePicker · 3-OS 동일 자체 그리기 · docs/50 P3 · ADR-0014 정정).
-    /// 확정 = [`Self::finish_picker`] · 취소(Esc·[취소]·닫기) = 아무것도 하지 않는다.
+    /// 확정 = [`Self::finish_picker`] · 취소(Esc·\[취소\]·닫기) = 아무것도 하지 않는다.
     fn open_picker(&mut self, el: &ActiveEventLoop, purpose: PickerPurpose) {
         if let Some((pid, _)) = self.windows.iter().find(|(_, e)| e.role == Role::Picker) {
             if let Some(e) = self.windows.get(pid) {

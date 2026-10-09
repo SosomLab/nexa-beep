@@ -1148,11 +1148,11 @@ pub enum Msg {
     PrefsAdvancedHidden,
     /// "기본값: {}".
     LblDefaultValue,
-    /// 카드 [초기화].
+    /// 카드 \[초기화\].
     BtnReset,
     /// 하단 [설정 파일 열기…].
     BtnOpenSettingsFile,
-    /// 하단 [닫기].
+    /// 하단 \[닫기\].
     BtnClose,
     /// 키 복사 버튼 툴팁.
     PrefsCopyKey,

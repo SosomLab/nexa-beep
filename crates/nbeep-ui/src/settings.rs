@@ -298,7 +298,7 @@ const PW_EYE_SIDE: u32 = 96;
 pub const PW_ARM_WINDOW: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// 비밀 행 버튼 자리(clip 09-03 사용자 확정 "두 버튼을 텍스트 우상단으로") — 상자 위 한 줄,
-/// 오른쪽 끝 정렬 [생성][눈] · 버튼 크기 = 상자 높이 · 간격 = 높이/8.
+/// 오른쪽 끝 정렬 \[생성\]\[눈\] · 버튼 크기 = 상자 높이 · 간격 = 높이/8.
 fn pw_btn_rects(b: Rect) -> (Rect, Rect) {
     // 10-09 카드 레이아웃: 컨트롤이 좌하단으로 가면서 버튼은 **상자 오른쪽** 같은 줄에([생성][눈] 순).
     let regen = Rect::new(b.right() + b.h / 8, b.y, b.h, b.h);
@@ -1815,7 +1815,7 @@ const SIDEBAR_W: i32 = 170;
 const BOTTOM_H: i32 = 44;
 /// 고급 숨김 배너(밴드 셋째 줄) 높이.
 const BANNER_H: i32 = 22;
-/// 카드 [초기화] 버튼 폭.
+/// 카드 \[초기화\] 버튼 폭.
 const RESET_W: i32 = 72;
 /// 검색 이력 보관 수.
 const HISTORY_MAX: usize = 20;
@@ -1898,7 +1898,7 @@ struct RowUi {
 pub enum TreeSel {
     /// `CATEGORY_TREE` 그룹 인덱스.
     Group(usize),
-    /// [`SettingsWidget::cats`] 인덱스(트리 순서의 카테고리).
+    /// `SettingsWidget::cats` 인덱스(트리 순서의 카테고리).
     Cat(usize),
 }
 
@@ -1925,7 +1925,7 @@ pub struct SettingsWidget {
     advanced: bool,
     /// 지금 보기에서 숨긴 고급 항목 수(밴드 배너).
     adv_hidden: usize,
-    /// 하단 줄 컨트롤 — 고급 스위치 · [설정 파일 열기…] · [닫기].
+    /// 하단 줄 컨트롤 — 고급 스위치 · [설정 파일 열기…] · \[닫기\].
     adv_switch: Switch,
     btn_file: Button,
     btn_close: Button,

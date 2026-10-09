@@ -459,7 +459,7 @@ mod tests {
         assert_eq!(w2.take_choice(), Some(OfferChoice::AutoFor("6h")));
     }
 
-    /// M4-10c — 보존분이 있으면 [이어받기 N%]·[처음부터] 2택. 각 버튼이 제
+    /// M4-10c — 보존분이 있으면 [이어받기 N%]·\[처음부터\] 2택. 각 버튼이 제
     /// 선택을 보고하고, 보존분이 없으면 처음부터 버튼 자체가 없다.
     #[test]
     fn resume_two_choice_buttons_report() {
