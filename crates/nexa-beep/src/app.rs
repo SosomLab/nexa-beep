@@ -4330,7 +4330,7 @@ impl App {
         }
         self.record_history(peer); // 대화 기록 영속(M2-5b)
         let mut inv = Invalidations::default();
-        if let Some(chat) = self.chats.get_mut(&peer) {
+        if let Some(chat) = self.chats.get_mut(&self.view_key(peer)) {
             chat.push_line(line, &mut inv);
         }
         self.redraw_conversation(peer);
@@ -4629,7 +4629,7 @@ impl App {
             conv.lines.push(line.clone());
         }
         let mut inv = Invalidations::default();
-        if let Some(chat) = self.chats.get_mut(&peer) {
+        if let Some(chat) = self.chats.get_mut(&self.view_key(peer)) {
             chat.push_line(line, &mut inv);
         }
         self.record_history(peer);
@@ -5182,7 +5182,7 @@ impl App {
     fn apply_xfer_view_throttled(&mut self, peer: PeerId) {
         let xp = self.xfer_progress.get(&peer).copied();
         let mut inv = Invalidations::default();
-        if let Some(chat) = self.chats.get_mut(&peer) {
+        if let Some(chat) = self.chats.get_mut(&self.view_key(peer)) {
             chat.set_xfer(xp, &mut inv);
         }
         self.refresh_group_banners_for(peer); // 그룹 수신 배너 동기(M5-1h)
@@ -5196,7 +5196,7 @@ impl App {
     fn apply_xfer_view(&mut self, peer: PeerId) {
         let xp = self.xfer_progress.get(&peer).copied();
         let mut inv = Invalidations::default();
-        if let Some(chat) = self.chats.get_mut(&peer) {
+        if let Some(chat) = self.chats.get_mut(&self.view_key(peer)) {
             chat.set_xfer(xp, &mut inv);
         }
         self.refresh_group_banners_for(peer); // 그룹 수신 배너 동기(M5-1h)
@@ -5307,7 +5307,7 @@ impl App {
             }
         }
         let mut inv = Invalidations::default();
-        if let Some(chat) = self.chats.get_mut(&peer) {
+        if let Some(chat) = self.chats.get_mut(&self.view_key(peer)) {
             while chat.update_xfer_line(
                 mine,
                 nbeep_ui::XferLineState::Failed { why: why.clone() },
@@ -5385,7 +5385,7 @@ impl App {
             conv.lines.push(line.clone());
         }
         let mut inv = Invalidations::default();
-        if let Some(chat) = self.chats.get_mut(&peer) {
+        if let Some(chat) = self.chats.get_mut(&self.view_key(peer)) {
             chat.push_line(line, &mut inv);
         }
         if !mine {
@@ -5457,7 +5457,7 @@ impl App {
         }
         self.record_history(peer); // 종단 ack로 종결 = 기록 영속(M2-5b)
         let mut inv = Invalidations::default();
-        if let Some(chat) = self.chats.get_mut(&peer) {
+        if let Some(chat) = self.chats.get_mut(&self.view_key(peer)) {
             chat.ack_xfer_line(true, terminal, &mut inv);
         }
         self.redraw_conversation(peer);
@@ -5760,6 +5760,7 @@ impl App {
 
     /// `peer` 대화가 보이는 창을 다시 그린다(Separate = 그 창, Single = 주 창이 이 대화일 때).
     fn redraw_conversation(&self, peer: PeerId) {
+        let peer = self.view_key(peer); // 스레드 접기(S3) — 뷰 키로
         match self.mode {
             WindowMode::Separate => {
                 if let Some((id, _)) = self
@@ -5926,6 +5927,34 @@ impl App {
                 });
             }
         }
+        // ── 스레드 접기(ADR-0015 S3 · docs/46 §5-2): 같은 사용자의 기기 N대 = 한 행. 행 대표 =
+        //   세션 중 > 발견 > 대표 키(온라인·경로 표시가 살아 있는 기기를 따른다 · 클릭은 activate가
+        //   뷰 키로 접는다). 묶음이 하나뿐인 상대(대부분)는 그대로 통과.
+        {
+            let listed: std::collections::HashSet<PeerId> =
+                entries.iter().map(|e| e.peer).collect();
+            let mut taken: std::collections::HashSet<PeerId> = std::collections::HashSet::new();
+            let mut keep: std::collections::HashSet<PeerId> = std::collections::HashSet::new();
+            for e in &entries {
+                let group = self.fold_group(e.peer);
+                if group.len() < 2 {
+                    keep.insert(e.peer);
+                    continue;
+                }
+                if !taken.insert(group[0]) {
+                    continue; // 이 묶음은 이미 대표를 골랐다
+                }
+                if let Some(rep) = crate::userident::row_representative(
+                    &group,
+                    |p| listed.contains(&p),
+                    |p| self.conversations.contains_key(&p),
+                    |p| self.table.get(p).is_some() || self.server_peers.contains(&p),
+                ) {
+                    keep.insert(rep);
+                }
+            }
+            entries.retain(|e| keep.contains(&e.peer));
+        }
         // ── 목록 필터(08-22 사용자 확정 — 칩 3그룹 AND · 영속 `list.filter.*`) ──
         let fval = |v: &str| {
             if v.is_empty() {
@@ -6064,10 +6093,11 @@ impl App {
                     }
                 });
                 // 읽지 않은 메시지 배지(③) — 개수 + 마지막 확인 시각(있을 때만).
-                let unread = self.unread.get(&entry.peer).copied().unwrap_or(0);
+                let vkey = self.view_key(entry.peer); // 접힌 행의 안읽음·확인 시각 = 뷰 키(S3)
+                let unread = self.unread.get(&vkey).copied().unwrap_or(0);
                 let last_read = (unread > 0)
                     .then(|| {
-                        self.last_read.get(&entry.peer).map(|w| {
+                        self.last_read.get(&vkey).map(|w| {
                             nbeep_ui::fmt_hm(*w, self.settings.get("chat.time_24h") != "off")
                         })
                     })
@@ -7815,6 +7845,86 @@ impl App {
         }
     }
 
+    /// 스레드 접기 묶음(ADR-0015 S3 · docs/46 §5-2) — `peer`와 같은 UserId로 서명 소속이
+    /// 확인된 **다른 사용자의** 기기들(정렬 · 첫 원소 = 대표 키). 내 사용자(형제)는 접지 않는다
+    /// ("내 기기"는 기기별 행이 의미다). 저장(conversations·parked·history)은 기기별 그대로이고,
+    /// **뷰·안읽음·대기 큐·목록 행만** 대표 키로 묶인다.
+    fn fold_group(&self, peer: PeerId) -> Vec<PeerId> {
+        if self.siblings.contains(&peer) {
+            return vec![peer];
+        }
+        let mine = self
+            .user_rt
+            .key
+            .as_ref()
+            .map(nbeep_crypto::userkey::UserKey::public);
+        let devs = match self.trust.user_of(peer) {
+            Some((user_pub, _, _)) if Some(user_pub) != mine => {
+                self.trust.devices_of_user(&user_pub)
+            }
+            _ => Vec::new(),
+        };
+        crate::userident::fold_members(peer, &devs)
+    }
+
+    /// 대화 뷰 키(대표 기기) — 멱등: `view_key(view_key(p)) == view_key(p)`.
+    fn view_key(&self, peer: PeerId) -> PeerId {
+        self.fold_group(peer)[0]
+    }
+
+    /// 대표 키가 바뀐 대화 상태를 새 키로 옮긴다(S3) — 서명 목록이 대화 창을 연 **뒤에** 오거나,
+    /// 더 작은 키의 기기가 합류하면 뷰 키가 바뀐다. 옮길 것 = 열린 뷰(단일 모드 표시·별도 창
+    /// 역할 포함) · 안읽음 · 마지막 확인 시각 · 대기 큐. 새 키에 이미 뷰가 있으면 옛 뷰는 둔다
+    /// (드문 경합 — 닫고 다시 열면 병합된다). 저장(기기별)은 옮길 것이 없다.
+    fn refold(&mut self) {
+        let stale: Vec<(PeerId, PeerId)> = self
+            .chats
+            .keys()
+            .chain(self.unread.keys())
+            .chain(self.pending_direct.keys())
+            .copied()
+            .filter_map(|k| {
+                let nk = self.view_key(k);
+                (nk != k).then_some((k, nk))
+            })
+            .collect();
+        for (k, nk) in stale {
+            if !self.chats.contains_key(&nk) && self.chats.remove(&k).is_some() {
+                let view = self.build_chat_view(nk);
+                self.chats.insert(nk, view);
+                if self.single_open == Some(k) {
+                    self.single_open = Some(nk);
+                }
+                for e in self.windows.values_mut() {
+                    if e.role == Role::Chat(k) {
+                        e.role = Role::Chat(nk);
+                    }
+                }
+            }
+            if let Some(n) = self.unread.remove(&k) {
+                *self.unread.entry(nk).or_insert(0) += n;
+            }
+            if let Some(w) = self.last_read.remove(&k) {
+                self.last_read.entry(nk).or_insert(w);
+            }
+            if let Some(q) = self.pending_direct.remove(&k) {
+                let dst = self.pending_direct.entry(nk).or_default();
+                dst.extend(q);
+                dst.sort_by_key(|m| m.at_ms);
+                self.save_pending(k);
+                self.save_pending(nk);
+            }
+        }
+    }
+
+    /// 이 대화(뷰 키)의 **세션이 살아 있는 기기들**(정렬) — 발신 팬아웃 대상.
+    fn live_devices(&self, peer: PeerId) -> Vec<PeerId> {
+        self.fold_group(peer)
+            .into_iter()
+            .filter(|d| self.conversations.contains_key(d))
+            .collect()
+    }
+
     /// 내 기기 집합(ADR-0015 S2-e) = 나 + **내 사용자 공개키를 서명 제시한 기기들**(trust.seg 기록 —
     /// 남이 준 목록이 아니라 그 기기 자신의 세션에서 받은 것만 · A-1). 키 바이트 정렬.
     fn my_devices(&self) -> Vec<PeerId> {
@@ -7959,7 +8069,7 @@ impl App {
         self.trust.note_chat(to, unix_now_ms());
         self.record_history(to);
         let mut inv = Invalidations::default();
-        if let Some(chat) = self.chats.get_mut(&to) {
+        if let Some(chat) = self.chats.get_mut(&self.view_key(to)) {
             chat.push_line(line, &mut inv);
         }
         if self.user_trace {
@@ -8011,6 +8121,7 @@ impl App {
             self.bump_user_list();
         }
         self.refresh_user_glance(); // 기기 수·핸들 충돌·병합 상태(09-07)
+        self.refold(); // 스레드 접기(S3) — 소속이 바뀌면 뷰 키도 바뀐다
         self.refresh_peer_info_card(peer);
         let mut inv = Invalidations::default();
         self.refresh_rows(&mut inv);
@@ -8738,6 +8849,7 @@ impl App {
     /// (08-22 사용자 확정: 창이 뒤에 있으면 보여도 읽은 게 아니다 · 활성화 순간
     /// 읽음 확정). 표시 여부(`chat_visible`)와 의도적으로 분리.
     fn chat_active(&self, peer: PeerId) -> bool {
+        let peer = self.view_key(peer); // 스레드 접기(S3) — 뷰 키로
         match self.mode {
             WindowMode::Single => {
                 self.single_open == Some(peer)
@@ -8753,6 +8865,7 @@ impl App {
     /// 읽음 처리(③) — 뷰를 열거나 닫는 순간, 그리고 뷰가 보이는 동안 호출된다.
     /// "마지막 확인한 시각"은 뷰가 화면에 있던 마지막 순간이다.
     fn mark_read(&mut self, peer: PeerId) {
+        let peer = self.view_key(peer); // 스레드 접기(S3) — 뷰 키로
         let (_, wall) = now_stamp();
         self.last_read.insert(peer, wall);
         if self.unread.remove(&peer).is_some() {
@@ -8773,25 +8886,30 @@ impl App {
         if self.settings.get("chat.send_read") != "on" {
             return;
         }
-        if self.effective_trust(peer) == nbeep_core::TrustLevel::Unverified {
-            return;
-        }
-        let Some(&seq) = self.last_recv_seq.get(&peer) else {
-            return;
-        };
-        if seq == 0 {
-            return;
-        }
-        if let Some(conv) = self.conversations.get(&peer) {
-            let ack = nbeep_core::ChatAck {
-                target_seq: seq,
-                kind: nbeep_core::AckKind::Read,
+        // 스레드 접기(S3): 접힌 대화를 봤다 = 그 사용자의 **각 기기**에서 받은 것까지 읽음
+        //   (seq 공간은 기기별 — 기기마다 자기 마지막 seq로 되쏜다).
+        for d in self.fold_group(peer) {
+            if self.effective_trust(d) == nbeep_core::TrustLevel::Unverified {
+                continue;
+            }
+            let Some(&seq) = self.last_recv_seq.get(&d) else {
+                continue;
             };
-            let _ = conv.out_tx.send(SessionCmd::Control(vec![ack.encode()]));
+            if seq == 0 {
+                continue;
+            }
+            if let Some(conv) = self.conversations.get(&d) {
+                let ack = nbeep_core::ChatAck {
+                    target_seq: seq,
+                    kind: nbeep_core::AckKind::Read,
+                };
+                let _ = conv.out_tx.send(SessionCmd::Control(vec![ack.encode()]));
+            }
         }
     }
 
     fn note_incoming(&mut self, peer: PeerId) {
+        let peer = self.view_key(peer); // 스레드 접기(S3) — 뷰 키로
         if self.chat_active(peer) {
             // 활성 창에 보이는 중 도착 = 즉시 읽음(N-2). ★비활성 창은 여기 오지
             // 않는다(08-22 사용자 확정) — 배지로 쌓였다가 Focused(true)가 확정한다.
@@ -9136,7 +9254,7 @@ impl App {
         let avatar = self.peer_profiles.get(&peer).and_then(|p| p.avatar.clone());
         let border = self.peer_profiles.get(&peer).and_then(|p| p.border);
         let mut inv = Invalidations::default();
-        if let Some(chat) = self.chats.get_mut(&peer) {
+        if let Some(chat) = self.chats.get_mut(&self.view_key(peer)) {
             chat.set_link(link, &mut inv);
             chat.set_path_badge(badge, &mut inv); // 경로 배지(서버 경유/인터넷 — 08-22 분리)
             chat.set_peer_face(avatar, peer.as_bytes().to_vec(), border, &mut inv); // 헤더 아바타
@@ -9149,7 +9267,7 @@ impl App {
     fn refresh_chat_title(&mut self, peer: PeerId) {
         let title = self.peer_title(peer);
         let mut inv = Invalidations::default();
-        if let Some(chat) = self.chats.get_mut(&peer) {
+        if let Some(chat) = self.chats.get_mut(&self.view_key(peer)) {
             chat.set_title(title.clone(), &mut inv);
             self.redraw_conversation(peer);
         }
@@ -9195,15 +9313,22 @@ impl App {
             &mut inv,
         );
         // 세션 있으면 conv, 없으면 대피/복원(parked) — 재시작 후 열어도 뜬다(M2-5b).
-        let lines = self
-            .conversations
-            .get(&peer)
-            .map(|c| &c.lines)
-            .or_else(|| self.parked_lines.get(&peer));
-        if let Some(lines) = lines {
-            for line in lines {
-                chat.push_line(line.clone(), &mut inv);
+        // ★ 스레드 접기(S3): 같은 사용자의 기기별 저장분을 **시각순 병합**(기기 안 순서 유지 —
+        //   안정 정렬). 접히지 않은 상대는 자기 하나라 종전과 같다.
+        let mut merged: Vec<ChatLine> = Vec::new();
+        for d in self.fold_group(peer) {
+            let lines = self
+                .conversations
+                .get(&d)
+                .map(|c| &c.lines)
+                .or_else(|| self.parked_lines.get(&d));
+            if let Some(lines) = lines {
+                merged.extend(lines.iter().cloned());
             }
+        }
+        merged.sort_by_key(|l| l.at_ms);
+        for line in merged {
+            chat.push_line(line, &mut inv);
         }
         chat
     }
@@ -9734,7 +9859,7 @@ impl App {
             if let Some(conv) = self.conversations.get_mut(&peer) {
                 conv.lines.clear();
             }
-            if let Some(c) = self.chats.get_mut(&peer) {
+            if let Some(c) = self.chats.get_mut(&self.view_key(peer)) {
                 c.clear_lines(&mut inv);
             }
             self.redraw_conversation(peer);
@@ -9924,7 +10049,7 @@ impl App {
                 if let Some(conv) = self.conversations.get_mut(&peer) {
                     conv.lines = lines.clone();
                 }
-                if let Some(c) = self.chats.get_mut(&peer) {
+                if let Some(c) = self.chats.get_mut(&self.view_key(peer)) {
                     c.clear_lines(&mut inv);
                     for l in &lines {
                         c.push_line(l.clone(), &mut inv);
@@ -12070,6 +12195,25 @@ impl App {
     /// 1:1 대기 flush(M4-6) — 세션 성립 합류점에서 호출(그룹 flush와 같은 자리).
     /// fresh seq로 실제 발신하고, 열린 뷰의 대기 풍선을 "전송됨"으로 푼다.
     fn flush_direct_sends(&mut self, peer: PeerId) {
+        // ★ 스레드 접기(S3): 접힌 대화의 대기 큐는 **뷰 키**에 쌓인다 — 그 사용자의 어느 기기가
+        //   서든 이 기기 세션으로 비운다(대표 기기가 꺼져 있어도 전달 · 큐는 한 번만 나간다).
+        let key = self.view_key(peer);
+        if key != peer {
+            if let Some(mut q) = self.pending_direct.remove(&key) {
+                // 기기 키로 쌓였던 것(접기 전)과 합친다 — 시각순.
+                if let Some(own) = self.pending_direct.remove(&peer) {
+                    q.extend(own);
+                    q.sort_by_key(|m| m.at_ms);
+                    self.save_pending(peer);
+                }
+                self.pending_direct.insert(peer, q);
+                self.save_pending(key);
+                // 대표 키의 보관 대화에 남은 대기 풍선은 이 기기 저장분에서 확정된다 — 중복 제거.
+                if let Some(parked) = self.parked_lines.get_mut(&key) {
+                    parked.retain(|l| !(l.mine && l.queued));
+                }
+            }
+        }
         let Some(q) = self.pending_direct.remove(&peer) else {
             return;
         };
@@ -12116,7 +12260,7 @@ impl App {
                     .with_seq(seq),
                 );
             }
-            if let Some(chat) = self.chats.get_mut(&peer) {
+            if let Some(chat) = self.chats.get_mut(&self.view_key(peer)) {
                 chat.resolve_queued(m.at_ms, seq, &mut inv);
             }
             self.send_sender_copies(peer, &msg); // S3 — 실제로 나간 순간에 형제에게도
@@ -13565,7 +13709,7 @@ impl App {
                     importance: nbeep_core::Importance::Notice,
                     broadcast: true, // 공지 표식(08-21 — 수신측 "받지 않기"의 근거)
                 };
-                if let Some(chat) = self.chats.get_mut(&peer) {
+                if let Some(chat) = self.chats.get_mut(&self.view_key(peer)) {
                     chat.push_line(
                         ChatLine::text(true, text.clone(), at_ms, wall)
                             .with_seq(msg.seq)
@@ -13596,7 +13740,7 @@ impl App {
                     let drop_n = q.len() - PENDING_DIRECT_MAX;
                     q.drain(..drop_n);
                 }
-                if let Some(chat) = self.chats.get_mut(&peer) {
+                if let Some(chat) = self.chats.get_mut(&self.view_key(peer)) {
                     chat.push_line(
                         ChatLine::text(true, text.clone(), at_ms, wall)
                             .with_queued(true)
@@ -15201,9 +15345,14 @@ impl App {
     /// 세션이 없으면 **워커로 연결을 시작하고 즉시 돌아온다**(M2-8 — UI 무정지).
     /// 성립하면 `AppEvent::Outbound`가 이 함수를 다시 부른다.
     fn activate(&mut self, peer: PeerId, el: &ActiveEventLoop) {
-        if !self.conversations.contains_key(&peer) {
-            self.reconnect.remove(&peer); // 수동 클릭 = 백오프 처음부터(ⓑ)
-            self.start_connect(peer, false);
+        // 스레드 접기(S3): 어느 기기로 들어와도 대표 키의 뷰 하나 · 살아 있는 기기가 하나라도
+        // 있으면 연다(대표 기기가 꺼져 있어도 다른 기기로 대화한다).
+        let peer = self.view_key(peer);
+        if self.live_devices(peer).is_empty() {
+            for d in self.fold_group(peer) {
+                self.reconnect.remove(&d); // 수동 클릭 = 백오프 처음부터(ⓑ)
+                self.start_connect(d, false);
+            }
             if let Some(mid) = self.main_id {
                 self.request_redraw(mid);
             }
@@ -15592,7 +15741,7 @@ impl App {
             }
             {
                 let mut inv = Invalidations::default();
-                if let Some(chat) = self.chats.get_mut(&peer) {
+                if let Some(chat) = self.chats.get_mut(&self.view_key(peer)) {
                     while chat.update_xfer_line(
                         true,
                         nbeep_ui::XferLineState::Failed { why: why.clone() },
@@ -15880,7 +16029,7 @@ impl App {
                 any |= nbeep_ui::update_xfer_named(&mut conv.lines, mine, name, 0, state.clone());
             }
             let mut inv = Invalidations::default();
-            if let Some(chat) = self.chats.get_mut(&peer) {
+            if let Some(chat) = self.chats.get_mut(&self.view_key(peer)) {
                 any |= chat.set_xfer_named(mine, name, 0, state.clone(), &mut inv);
             }
             any
@@ -15922,7 +16071,7 @@ impl App {
             nbeep_ui::update_xfer_named(&mut conv.lines, mine, name, size, state.clone());
         }
         let mut inv = Invalidations::default();
-        if let Some(chat) = self.chats.get_mut(&peer) {
+        if let Some(chat) = self.chats.get_mut(&self.view_key(peer)) {
             chat.set_xfer_named(mine, name, size, state, &mut inv);
         }
     }
@@ -16035,7 +16184,11 @@ impl App {
             };
             let (at_ms, wall) = now_stamp();
             self.trust.note_chat(peer, unix_now_ms()); // 최근 대화(08-15 — 발신도)
-            if self.conversations.contains_key(&peer) {
+                                                       // ★ 스레드 접기(S3 · docs/46 §5-1): 대상 = 이 사용자의 **세션이 살아 있는 기기 전부**
+                                                       //   (같은 메시지·같은 seq — 수신 기기마다 dedup은 기기별). 접히지 않은 상대는 자기 하나.
+                                                       //   줄은 첫 기기 저장분에 한 번만(뷰는 묶음 병합이라 한 번 보인다).
+            let live = self.live_devices(peer);
+            if let Some(&store) = live.first() {
                 let msg = nbeep_core::ChatMessage {
                     sender_device: self.identity.peer_id(),
                     seq: self.seq.issue(),
@@ -16051,24 +16204,31 @@ impl App {
                         &mut inv,
                     );
                 }
-                // 왕래 장부 — 파일 전송 자격(상호 확인)의 근거(사용자 확정 08-09).
-                self.ledger.note_sent(peer);
-                if let Some(conv) = self.conversations.get_mut(&peer) {
+                if let Some(conv) = self.conversations.get_mut(&store) {
                     conv.lines.push(
                         ChatLine::text(true, text, at_ms, wall)
                             .with_seq(msg.seq)
                             .with_importance(grade),
                     );
+                }
+                let bytes = msg.encode();
+                let mut sent_any = false;
+                for d in &live {
+                    // 왕래 장부 — 파일 전송 자격(상호 확인)의 근거(사용자 확정 08-09).
+                    self.ledger.note_sent(*d);
                     // 액터에 발신 요청 — 수신은 비동기로 AppEvent::Recv로 돌아온다(M2-7).
-                    if conv.out_tx.send(SessionCmd::Chat(msg.encode())).is_err() {
-                        self.set_status(nbeep_core::t(nbeep_core::Msg::StSessionEnded));
-                    } else {
-                        self.status =
-                            nbeep_core::tf(nbeep_core::Msg::StfSentSeq, &[&msg.seq.to_string()]);
-                        self.send_sender_copies(peer, &msg); // S3 — 내 다른 기기에도
+                    if let Some(conv) = self.conversations.get(d) {
+                        sent_any |= conv.out_tx.send(SessionCmd::Chat(bytes.clone())).is_ok();
                     }
                 }
-                self.record_history(peer); // 대화 기록 영속(M2-5b · 빌림 밖)
+                if sent_any {
+                    self.status =
+                        nbeep_core::tf(nbeep_core::Msg::StfSentSeq, &[&msg.seq.to_string()]);
+                    self.send_sender_copies(peer, &msg); // S3 — 내 다른 기기에도
+                } else {
+                    self.set_status(nbeep_core::t(nbeep_core::Msg::StSessionEnded));
+                }
+                self.record_history(store); // 대화 기록 영속(M2-5b · 빌림 밖)
             } else {
                 // ★ 세션 없음 = **오프라인 대기**(M4-6 · 08-20 사용자 확정 — 재시작
                 //   유지). 종전엔 풍선만 남고 전송·기록 모두 **조용히 유실**됐다.
@@ -16098,8 +16258,11 @@ impl App {
                     nbeep_core::Msg::StfQueuedSaved,
                     &[&total.to_string()],
                 ));
-                self.reconnect.remove(&peer); // 발신 의사 = 백오프 처음부터(그룹 규약)
-                self.start_connect(peer, true);
+                // 발신 의사 = 백오프 처음부터(그룹 규약) · 접힌 대화면 그 사용자의 기기 전부에(S3).
+                for d in self.fold_group(peer) {
+                    self.reconnect.remove(&d);
+                    self.start_connect(d, true);
+                }
             }
             self.request_redraw(id);
             if let Some(mid) = self.main_id {
@@ -17135,7 +17298,7 @@ impl ApplicationHandler<AppEvent> for App {
                     }
                 }
                 let mut inv = Invalidations::default();
-                if let Some(chat) = self.chats.get_mut(&peer) {
+                if let Some(chat) = self.chats.get_mut(&self.view_key(peer)) {
                     chat.push_line(line, &mut inv);
                 }
                 // 읽음/안읽음 계상(③) — 뷰가 닫혀 있으면 배지·제목으로 알린다.
@@ -17184,15 +17347,22 @@ impl ApplicationHandler<AppEvent> for App {
                     AckKind::Read => (false, true),
                 };
                 let mut inv = Invalidations::default();
-                if let Some(chat) = self.chats.get_mut(&peer) {
+                if let Some(chat) = self.chats.get_mut(&self.view_key(peer)) {
                     if read {
                         chat.mark_read_upto(target_seq, &mut inv);
                     } else {
                         chat.mark_ack(target_seq, deliv, false, &mut inv);
                     }
                 }
-                if let Some(conv) = self.conversations.get_mut(&peer) {
-                    for l in &mut conv.lines {
+                // 스레드 접기(S3): 내 줄은 묶음의 한 기기 저장분에만 있다 — 묶음 전체에서 찾는다.
+                //   ⚠ Read up-to는 기기별 seq 공간이 아니라 **내 발신 seq**(단일 시퀀서) 기준이라
+                //   어느 기기가 보낸 ack든 같은 줄을 가리킨다.
+                for d in self.fold_group(peer) {
+                    let lines = match self.conversations.get_mut(&d) {
+                        Some(c) => Some(&mut c.lines),
+                        None => self.parked_lines.get_mut(&d),
+                    };
+                    for l in lines.into_iter().flatten() {
                         if l.mine && l.seq != 0 {
                             if read && l.seq <= target_seq {
                                 l.read = true;
@@ -18857,7 +19027,7 @@ impl ApplicationHandler<AppEvent> for App {
                                     Some(qpath.clone()),
                                 );
                             }
-                            if let Some(chat) = self.chats.get_mut(&peer) {
+                            if let Some(chat) = self.chats.get_mut(&self.view_key(peer)) {
                                 let mut inv = Invalidations::default();
                                 hit |= chat.attach_xfer_thumb(
                                     false,

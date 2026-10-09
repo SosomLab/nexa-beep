@@ -596,6 +596,39 @@ pub(crate) fn derive_and_load(
     }
 }
 
+/// 스레드 접기 묶음(ADR-0015 S3 · docs/46 §5-2 뷰 계층) — `peer`가 서명 기기 목록으로 소속을
+/// 증명한 사용자의 기기들(각 기기 **자신의 세션**에서 받은 기록만 · A-1)을 키 바이트 정렬로.
+/// 첫 원소 = **대표 키**(대화 뷰·안읽음·대기 큐의 키 — 결정적이며 묶음 안 어느 기기에서 구해도
+/// 같다). 목록 밖 기기(소속 미확정)는 접지 않는다 = 자기 하나.
+#[must_use]
+pub(crate) fn fold_members(peer: PeerId, user_devices: &[PeerId]) -> Vec<PeerId> {
+    if !user_devices.contains(&peer) {
+        return vec![peer];
+    }
+    let mut v = user_devices.to_vec();
+    v.sort_unstable_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
+    v.dedup();
+    v
+}
+
+/// 접힌 행의 대표 기기 — 세션 중 > 발견(LAN·서버) > 대표 키 순. `listed`에 없는 기기는 고르지
+/// 않는다(목록 이름의 출처가 없다). 묶음이 비면 None.
+#[must_use]
+pub(crate) fn row_representative(
+    group: &[PeerId],
+    listed: impl Fn(PeerId) -> bool,
+    live: impl Fn(PeerId) -> bool,
+    discovered: impl Fn(PeerId) -> bool,
+) -> Option<PeerId> {
+    let cands: Vec<PeerId> = group.iter().copied().filter(|p| listed(*p)).collect();
+    cands
+        .iter()
+        .copied()
+        .find(|p| live(*p))
+        .or_else(|| cands.iter().copied().find(|p| discovered(*p)))
+        .or_else(|| cands.first().copied())
+}
+
 /// sender copy 대상(ADR-0015 S3) — 살아 있는 형제 중 대화 상대 `to`를 뺀 전부(키 바이트 정렬 —
 /// 결정적). 사용자 기능이 꺼졌거나 공지(형제도 원 수신자)면 빈 목록.
 #[must_use]
@@ -948,5 +981,43 @@ mod sender_copy_tests {
         assert!(!accept_copy(false, true, pid(9), me), "형제 아님");
         assert!(!accept_copy(true, false, pid(9), me), "기능 꺼짐");
         assert!(!accept_copy(true, true, me, me), "나에게 보낸 원본의 사본");
+    }
+
+    #[test]
+    fn fold_members_requires_listed_and_is_sorted() {
+        let devs = [pid(7), pid(3), pid(5)];
+        assert_eq!(fold_members(pid(5), &devs), vec![pid(3), pid(5), pid(7)]);
+        assert_eq!(
+            fold_members(pid(3), &devs)[0],
+            fold_members(pid(7), &devs)[0]
+        );
+        assert_eq!(
+            fold_members(pid(9), &devs),
+            vec![pid(9)],
+            "목록 밖 = 접지 않음"
+        );
+        assert_eq!(fold_members(pid(9), &[]), vec![pid(9)]);
+    }
+
+    #[test]
+    fn row_representative_prefers_live_then_discovered() {
+        let g = [pid(3), pid(5), pid(7)];
+        let all = |_: PeerId| true;
+        let none = |_: PeerId| false;
+        assert_eq!(
+            row_representative(&g, all, |p| p == pid(7), none),
+            Some(pid(7))
+        );
+        assert_eq!(
+            row_representative(&g, all, none, |p| p == pid(5)),
+            Some(pid(5))
+        );
+        assert_eq!(row_representative(&g, all, none, none), Some(pid(3)));
+        // 목록에 없는 기기는 살아 있어도 고르지 않는다.
+        assert_eq!(
+            row_representative(&g, |p| p != pid(7), |p| p == pid(7), none),
+            Some(pid(3))
+        );
+        assert_eq!(row_representative(&g, none, all, all), None);
     }
 }
