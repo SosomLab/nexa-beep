@@ -7,6 +7,7 @@
 
 ## 2026-10-09
 
+- **(Linux · main) ★v0.3.0 릴리스 착수**(설정 개편·nexa-ui·라이선스·파일 대화상자·rpm·트레이 배지 · choco 첫 자동 제출 · winget 제외) + 설정 "시스템 (한국어)" 라벨. [journal 8차](journal/2026-10-09.md)
 - **(Linux · main) 트레이 메뉴 "설정…"(3-OS · ⌘/Ctrl+, 표기 · Linux dbusmenu 실측)** + ⌘/Ctrl+, 기존 경로 재점검 + docs/45 설정 진입점 정정(협업). [journal 7차](journal/2026-10-09.md)
 - **(Linux · main) ★실기 피드백 연쇄 + P3·P4 완결**: 트레이 배지 M3-2e(clip DR-44 · M3-2d ② 번복) · 타입어헤드(표시 이름 매칭 · ↑ 감김 · nexa-sql 설정 = 마스터+DEPENDS·범위 검증) · 설정 검색 preedit · 설정 카드 레이아웃(sql 모양) · 위치 드롭다운 · P3 nexa-dlg 반영(협업 · 용도 9 · ADR-0014 정정) · 라이선스 정보 카드 · docs/45 초안(협업) · 701 green · 디스크 100% 사고 → target 정리. [journal](journal/2026-10-09.md)
 - **(Linux · main) ★P4 라이선스 main 반영**(협업 ①② cherry-pick + ③ 배선 `8a67200` — 도움말 ▸ 라이선스… · 행동 4종 · `--license` CLI · 695 green) · **3신원 재기동 ✓**(지문 불변 · 발견 3/3 — 이관 뒤 기능 불변) · 14 §10-3 · TODO M3-2e · P3 협업 착수. [journal](journal/2026-10-09.md)

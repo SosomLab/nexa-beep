@@ -88,7 +88,11 @@
 
 1. 이 CLAUDE.md + [docs/STATUS.md](docs/STATUS.md) → 2. [DEVLOG](docs/DEVLOG.md) 최상단 + 최신 journal → 3. 할 일 = [docs/TODO.md](docs/TODO.md) 순차.
 
-## 5. 다음 단계 (2026-10-09 · STATUS 10-09 5차 기준 — ★docs/50 P1~P4 완결 · 실기 피드백 연쇄(트레이 배지·타입어헤드·설정 preedit·카드 레이아웃·위치 드롭다운) · 701 green · **다음 = 사용자 실기(T-1~10 + 대화상자 ①~⑧) → P5 캡처·v0.3.0 후보 · push 순서 nexa-ui → nexa-license → beep**)
+## 5. 다음 단계 (2026-10-09 · STATUS 10-09 7차 기준 — ★**v0.3.0 릴리스**(설정 개편·nexa-ui·라이선스·파일 대화상자·rpm·트레이 배지 · choco 첫 자동 제출 · winget 제외) · 이후 = 사용자 실기 → 캡처(P5) → S3)
+
+> **10-09 7~8차(Linux · main)** — 트레이 메뉴 "설정…"(3-OS · ⌘/Ctrl+, 표기) · 설정 "시스템 (한국어)/(다크)" 라벨 · ★**v0.3.0**(18 §5: 채널 점검 = choco 0.2.17/0.2.6 승인 → `CHOCO_PUSH` true · winget #436462/#436461 OPEN → 제외 · push 순서 nexa-ui → nexa-license → beep → CI green → 태그 · 서버 무변경 beepd-v0.2.6).
+
+> **종전(10-09 5차 기준 — ★docs/50 P1~P4 완결 · 실기 피드백 연쇄(트레이 배지·타입어헤드·설정 preedit·카드 레이아웃·위치 드롭다운) · 701 green · **다음 = 사용자 실기(T-1~10 + 대화상자 ①~⑧) → P5 캡처·v0.3.0 후보 · push 순서 nexa-ui → nexa-license → beep**)
 
 > **10-09 5차(Linux · main)** — ★**P3·P4 완결 + 실기 피드백 연쇄**: 트레이 배지 M3-2e(서버 녹·LAN 파랑·전송 주황 · clip DR-44 · `refresh_tray_badges` 바뀔 때만 · M3-2d ② 번복) · 타입어헤드(`k` 미이동 = 표시 이름 미대조 → 표시∨발견 · ↑ 감김 · **nexa-sql 설정 반영** 마스터 `ui.typeahead`+DEPENDS 4 · 200~60000ms) · 설정 검색 preedit(ㅌ 즉시 필터) · **설정 카드 레이아웃**(제목/설명 좌상·키 우상·컨트롤+초기화 좌하·기본값 우하) · 위치 드롭다운 · **P3 nexa-dlg**(협업 cherry-pick · 용도 9 · ADR-0014 정정 · 백업 = 저장 대화상자·기록 복원 = .seg 다중) · 라이선스 정보 카드 · docs/45 초안(협업). ⚠ 디스크 100% 사고(cross-target 산출물 누적) → 전 프로젝트 target clean. **701 green · 2타깃 0**.
 
