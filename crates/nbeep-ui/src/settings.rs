@@ -213,6 +213,10 @@ pub const DEPENDS: &[(&str, &str, Dep)] = &[
     ("notify.preview", "notify.enabled", Dep::On),
     ("notify.broadcast_mute", "notify.enabled", Dep::On),
     ("ui.tray_hide_taskbar", "ui.close_to_tray", Dep::On),
+    ("ui.typeahead_timeout", "ui.typeahead", Dep::On),
+    ("ui.typeahead_pos", "ui.typeahead", Dep::On),
+    ("ui.typeahead_space", "ui.typeahead", Dep::On),
+    ("ui.typeahead_special", "ui.typeahead", Dep::On),
     ("user.handle", "user.enabled", Dep::On),
     ("user.passphrase", "user.enabled", Dep::On),
     ("user.test", "user.enabled", Dep::On),
@@ -504,6 +508,17 @@ fn validate(key: &str, value: &str) -> Result<(), Msg> {
                 Ok(())
             } else {
                 Err(Msg::ValMinutesRange)
+            }
+        }
+        // 타입어헤드 유효시간 — 200~60000ms(nexa-sql `explorer.typeahead_timeout_ms` Int 범위 차용 · 10-09).
+        "ui.typeahead_timeout" => {
+            if value
+                .parse::<u64>()
+                .is_ok_and(|v| (200..=60_000).contains(&v))
+            {
+                Ok(())
+            } else {
+                Err(Msg::ValTypeaheadRange)
             }
         }
         _ => Ok(()),
@@ -860,6 +875,16 @@ pub fn registry() -> &'static [Entry] {
             desc: Msg::LinkBadgeShapeDesc,
             kind: SettingKind::Toggle,
             key: "ui.link_badge_shape",
+        },
+        // 타입어헤드 마스터(10-09 · nexa-sql `explorer.typeahead` 차용) — 끄면 글자 입력이 목록 탐색에 안 쓰인다 ·
+        // 아래 4항목은 이 스위치에 종속(DEPENDS).
+        Entry {
+            cat: Msg::CatPeerList,
+            sub: Some(Msg::CatTypeahead),
+            label: Msg::TypeaheadEnable,
+            desc: Msg::TypeaheadEnableDesc,
+            kind: SettingKind::Toggle,
+            key: "ui.typeahead",
         },
         Entry {
             cat: Msg::CatPeerList,
@@ -2133,6 +2158,35 @@ impl SettingsWidget {
     #[must_use]
     pub fn selected(&self) -> TreeSel {
         self.selected
+    }
+
+    /// IME 조합 중 텍스트(10-09 사용자 실기 "검색에 ㅌ가 안 보인다" — nexa-sql은 보인다): 포커스된 글꼴명
+    /// 입력란이 있으면 거기로, 아니면 **검색창**으로(기본 타이핑 = 검색). 검색은 조합 중 글자까지 포함해
+    /// **즉시 필터링**(자모열 대조라 "ㅌ"도 테마를 찾는다).
+    pub fn set_preedit(&mut self, text: &str, inv: &mut Invalidations) {
+        if self.any_family_focused() {
+            for row in &mut self.rows {
+                match &mut row.ctl {
+                    RowCtl::Font { family, .. } if family.is_focused() => {
+                        family.set_preedit(text, inv);
+                    }
+                    RowCtl::Face(f) if f.is_focused() => f.set_preedit(text, inv),
+                    _ => {}
+                }
+            }
+            inv.push(self.bounds);
+            return;
+        }
+        if !text.is_empty() {
+            self.search.set_focused(true);
+        }
+        self.search.set_preedit(text, inv);
+        let q = self.search.display_text();
+        if q != self.query {
+            self.query = q;
+            self.rebuild(inv);
+        }
+        inv.push(self.bounds);
     }
 
     pub fn take_changes(&mut self) -> Vec<(&'static str, String)> {
@@ -4015,6 +4069,13 @@ mod tests {
             validate("xfer.timeout_sec", "999999").is_ok(),
             "미등록 키 = 통과"
         );
+        // 타입어헤드 유효시간 200~60000ms(nexa-sql 범위).
+        for ok in ["200", "2000", "60000"] {
+            assert!(validate("ui.typeahead_timeout", ok).is_ok(), "{ok}");
+        }
+        for bad in ["199", "60001", "0", "x", ""] {
+            assert!(validate("ui.typeahead_timeout", bad).is_err(), "{bad}");
+        }
     }
 
     /// 08-20 — ControlBase 직전값 상속: note_value가 기록하고 last_value로 읽는다
@@ -4472,7 +4533,7 @@ mod tests {
             "배너 줄만큼 밴드가 높다"
         );
         w.set_advanced(true, &mut inv);
-        assert_eq!(keys_of(&w).len(), 8, "타입어헤드 4 포함 전부");
+        assert_eq!(keys_of(&w).len(), 9, "타입어헤드 마스터+4 포함 전부");
         assert_eq!(w.adv_hidden, 0);
         // 하단 스위치 클릭으로도 토글되고 변경이 보고된다.
         let sb = w.adv_switch.bounds();

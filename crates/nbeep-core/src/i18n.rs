@@ -1171,6 +1171,11 @@ pub enum Msg {
     TrayLan,
     /// "전송 중".
     TrayXfer,
+    /// 타입어헤드 마스터 스위치(10-09).
+    TypeaheadEnable,
+    TypeaheadEnableDesc,
+    /// 검증 경고 — 타입어헤드 유효시간 범위.
+    ValTypeaheadRange,
     // ── P4 license(10-09 · docs/50 D-33-6·7 · nbeep-license · nbeep-ui license_win) ──
     /// 도움말 ▸ 라이선스… 메뉴 항목·창 제목 꼬리.
     LicMenu,
@@ -3230,6 +3235,19 @@ impl Msg {
             Msg::TrayServerOn => ["server connected", "서버 연결됨", "服务器已连接", "サーバー接続中"],
             Msg::TrayLan => ["LAN {}", "LAN {}", "LAN {}", "LAN {}"],
             Msg::TrayXfer => ["transferring", "전송 중", "传输中", "転送中"],
+            Msg::TypeaheadEnable => ["Type-ahead", "타입어헤드", "键入跳转", "タイプアヘッド"],
+            Msg::ValTypeaheadRange => [
+                "Type-ahead timeout must be 200–60000 ms",
+                "타입어헤드 유효시간은 200~60000ms 사이여야 합니다",
+                "键入跳转超时必须在 200–60000 毫秒之间",
+                "タイプアヘッドの有効時間は 200〜60000ms の範囲",
+            ],
+            Msg::TypeaheadEnableDesc => [
+                "Typing in the list jumps to the first name starting with the letters; ↑/↓ cycle the matches",
+                "목록에서 글자를 치면 그 글자로 시작하는 이름으로 점프합니다. ↑/↓는 매치 사이를 순환합니다",
+                "在列表中键入字母即跳到以其开头的名称；↑/↓ 在匹配项间循环",
+                "一覧で文字を打つとその文字で始まる名前へジャンプ。↑/↓で一致項目を巡回",
+            ],
             // ── P4 license(10-09 · docs/50) ──
             Msg::LicMenu => [
                 "License…",

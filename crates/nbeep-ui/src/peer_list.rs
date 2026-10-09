@@ -460,6 +460,8 @@ pub struct PeerListWidget {
     hud_pos: HudPos,
     /// 타입어헤드에 공백 포함(설정 · 기본 true).
     ta_space: bool,
+    /// 타입어헤드 마스터(`ui.typeahead` · 기본 on).
+    ta_enabled: bool,
     /// 타입어헤드에 특수문자 포함(설정 · 기본 true).
     ta_special: bool,
     /// 마지막으로 관측한 단조 시각(ms) — Key 이벤트엔 시각이 없어 힌트로 보관(↑↓ touch용).
@@ -523,6 +525,7 @@ impl PeerListWidget {
             activated_by_key: false,
             hud_pos: HudPos::default(),
             ta_space: true,
+            ta_enabled: true,
             ta_special: true,
             now_hint: 0,
             last_click: None,
@@ -691,6 +694,15 @@ impl PeerListWidget {
         inv.push(self.bounds);
     }
 
+    /// 타입어헤드 켜기/끄기(마스터 · `ui.typeahead` — nexa-sql `explorer.typeahead` 차용 10-09). 끄면
+    /// 글자 입력이 목록 탐색에 쓰이지 않고 버퍼도 비운다.
+    pub fn set_typeahead_enabled(&mut self, on: bool) {
+        self.ta_enabled = on;
+        if !on {
+            self.typeahead.clear();
+        }
+    }
+
     /// 타입어헤드에 공백 포함 여부.
     pub fn set_typeahead_space(&mut self, on: bool) {
         self.ta_space = on;
@@ -703,6 +715,9 @@ impl PeerListWidget {
 
     /// 이 문자가 타입어헤드에 반영되는가(설정 필터). 한/영/숫자는 항상 포함.
     fn ta_accepts(&self, c: char) -> bool {
+        if !self.ta_enabled {
+            return false;
+        }
         if c == ' ' {
             return self.ta_space;
         }
@@ -940,16 +955,22 @@ impl PeerListWidget {
             .find(|&i| self.row_matches(i, &p))
     }
 
+    /// 행 라벨 접두 매치 — **화면에 보이는 이름**(프로필 표시 이름이 있으면 그것 · 10-09 사용자 실기
+    /// "k를 눌렀는데 kiros33@mac으로 이동하지 않음" = 발견 이름 `beep-xxxx`만 대조하던 결함)과
+    /// 발견 이름 **둘 중 하나**라도 맞으면 매치.
     fn row_matches(&self, i: usize, lower_prefix: &str) -> bool {
         if let Some(g) = self.groups.get(i) {
             return g.name.to_lowercase().starts_with(lower_prefix);
         }
         self.peer_at(i).is_some_and(|r| {
-            r.entry
-                .name
-                .as_str()
-                .to_lowercase()
-                .starts_with(lower_prefix)
+            r.profile_name
+                .as_deref()
+                .is_some_and(|n| n.to_lowercase().starts_with(lower_prefix))
+                || r.entry
+                    .name
+                    .as_str()
+                    .to_lowercase()
+                    .starts_with(lower_prefix)
         })
     }
 }
@@ -1191,10 +1212,12 @@ impl Widget for PeerListWidget {
                         if p.is_empty() {
                             self.move_caret(self.caret + 1, inv);
                         } else {
-                            self.typeahead.touch(self.now_hint);
+                            self.typeahead.touch(self.now_hint); // 순환 중 타임아웃 기준 리셋
                             let n = self.total().max(1);
-                            if let Some(hit) = self.find_prefix(&p, (self.caret + 1) % n) {
-                                self.move_caret(hit, inv);
+                            match self.find_prefix(&p, (self.caret + 1) % n) {
+                                Some(hit) => self.move_caret(hit, inv),
+                                // 매치가 하나도 없는 접두면 보통 이동(목록이 굳어 보이지 않게 · 10-09).
+                                None => self.move_caret(self.caret + 1, inv),
                             }
                         }
                     }
@@ -1204,10 +1227,11 @@ impl Widget for PeerListWidget {
                             self.move_caret(self.caret.saturating_sub(1), inv);
                         } else {
                             self.typeahead.touch(self.now_hint);
-                            if let Some(hit) =
-                                self.find_prefix_rev(&p, self.caret.saturating_sub(1))
-                            {
-                                self.move_caret(hit, inv);
+                            // ↑도 감긴다(nexa-sql `ta_step` (p+n-1)%n — 0행에서 ↑ = 마지막 매치).
+                            let n = self.total().max(1);
+                            match self.find_prefix_rev(&p, (self.caret + n - 1) % n) {
+                                Some(hit) => self.move_caret(hit, inv),
+                                None => self.move_caret(self.caret.saturating_sub(1), inv),
                             }
                         }
                     }
@@ -2189,6 +2213,43 @@ mod tests {
             &mut inv,
         );
         assert_eq!(w.caret(), 2, "'bb' 누적 — 매치 없으면 유지(자동 순환 제거)");
+    }
+
+    /// 10-09 사용자 실기 — 프로필 표시 이름(굵은 1줄)으로도 점프한다("k" → kiros33@mac).
+    #[test]
+    fn typeahead_matches_profile_display_name() {
+        let (mut w, _) = widget(&[(1, "beep-3f49"), (2, "beep-de82"), (3, "beep-aaaa")]);
+        let mut inv = Invalidations::default();
+        let mut rows: Vec<PeerRow> = [(1u8, "beep-3f49"), (2, "beep-de82"), (3, "beep-aaaa")]
+            .iter()
+            .map(|&(b, n)| row(b, n, TrustLevel::Unverified))
+            .collect();
+        rows[2].profile_name = Some("kiros33@mac".to_string());
+        w.set_rows(rows, &mut inv);
+        w.on_event(&InputEvent::Char { c: 'k', now_ms: 0 }, &mut inv);
+        assert_eq!(w.caret(), 2, "표시 이름 접두 매치");
+        // "be" + ↓/↑ = beep 두 행 사이 순환(표시 이름 없는 행은 발견 이름으로).
+        w.on_event(&key(Key::Escape), &mut inv);
+        w.on_event(&InputEvent::Char { c: 'b', now_ms: 10 }, &mut inv);
+        w.on_event(&InputEvent::Char { c: 'e', now_ms: 20 }, &mut inv);
+        let first = w.caret();
+        assert_eq!(first, 0, "be = 첫 매치");
+        w.on_event(&key(Key::Down), &mut inv);
+        assert_eq!(w.caret(), 1, "↓ = 다음 be 매치");
+        // kiros33 행도 발견 이름 beep-aaaa로 매치한다(표시 이름 ∨ 발견 이름).
+        w.on_event(&key(Key::Down), &mut inv);
+        assert_eq!(w.caret(), 2);
+        w.on_event(&key(Key::Down), &mut inv);
+        assert_eq!(w.caret(), 0, "순환해 돌아온다");
+        // ↑도 감긴다(0행에서 ↑ = 마지막 매치 · nexa-sql 동작).
+        w.on_event(&key(Key::Up), &mut inv);
+        assert_eq!(w.caret(), 2, "↑ 감김");
+        // 마스터 끄기 = 글자가 탐색에 쓰이지 않는다.
+        w.set_typeahead_enabled(false);
+        w.on_event(&key(Key::Escape), &mut inv);
+        w.on_event(&key(Key::Home), &mut inv);
+        w.on_event(&InputEvent::Char { c: 'k', now_ms: 30 }, &mut inv);
+        assert_eq!(w.caret(), 0, "꺼짐 = 이동 없음");
     }
 
     #[test]

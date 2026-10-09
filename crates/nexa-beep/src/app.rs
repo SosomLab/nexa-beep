@@ -3394,6 +3394,17 @@ impl App {
                         v.set_preedit(&text, &mut inv);
                     }
                 }
+                // 설정 창(10-09 — 검색·글꼴명 입력의 한글 조합이 안 보이던 것) · 라이선스 창(P4).
+                Some(Role::Settings) => {
+                    if let Some(v) = self.settings_view.as_mut() {
+                        v.set_preedit(&text, &mut inv);
+                    }
+                }
+                Some(Role::License) => {
+                    if let Some(v) = self.license_view.as_mut() {
+                        v.set_preedit(&text, &mut inv);
+                    }
+                }
                 _ => {}
             }
         }
@@ -11909,6 +11920,8 @@ impl App {
         let pos = nbeep_ui::HudPos::from_code(self.settings.get("ui.typeahead_pos"));
         self.list.set_hud_pos(pos, &mut inv);
         self.list
+            .set_typeahead_enabled(self.settings.get("ui.typeahead") == "on");
+        self.list
             .set_typeahead_space(self.settings.get("ui.typeahead_space") == "on");
         self.list
             .set_typeahead_special(self.settings.get("ui.typeahead_special") == "on");
@@ -12552,6 +12565,7 @@ impl App {
                         )),
                     }
                 }
+                "ui.typeahead" => self.list.set_typeahead_enabled(value == "on"),
                 "ui.typeahead_space" => self.list.set_typeahead_space(value == "on"),
                 "ui.typeahead_special" => self.list.set_typeahead_special(value == "on"),
                 k if k.starts_with("font.") => {
