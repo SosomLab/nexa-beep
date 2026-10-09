@@ -7,6 +7,7 @@
 
 ## 2026-10-10
 
+- **(mac · main) ★성능 검토 1차** — 실측 seam(`NEXA_PAINT_TRACE`·입력 주입) → 프레임 29→≈8ms(줄바꿈 캐시 · mac IOSurface present · 캐럿 틱 정밀화 RL-9 ✅ · 휠 DPI) · 유휴 25MB(DR-5 ✓) · 형제 고지 생략 · nexa-ui 193·194차 push · [51](51-performance-review-2026-10-10.md). [journal mac 2차](journal/2026-10-10.md)
 - **(mac · main) ★내 기기 목록 창 Retina 절반 높이 수정**(`111a4e6` — fit이 layout 전이라 위젯 스케일 1.0 값을 창 스케일로 또 나눔 · 라이선스 창 동형) · gate.sh rustup PATH 우선(Homebrew rust 가림) · `NEXA_SCRIPT license·about` · **macOS 점검 ✓**(기기·라이선스·설정·정보 창 캡처 4 · 발견 · footprint 20MB · 3.5MB). [journal mac 1차](journal/2026-10-10.md)
 - **(mac · feat/userid-s3) ★X-13 S3 코드+실기** — sender copy(Control 태그 19 · 설계 빈칸 "사본에 수신자 없음" 메움) · 같은 UserId 스레드 접기(저장 기기별 · 뷰/안읽음/큐/행만 대표 키) · 기기 전부 팬아웃 · 그룹 P-10 해석기 선배포 · `NEXA_SCRIPT send=·dump` · 신원 4 실기 ✓. [journal S3차](journal/2026-10-10.md)
 

@@ -401,7 +401,8 @@ grep -E '^\[(win|script)\]' out.log
 
 | 항목 | 값 |
 |---|---|
-| `NEXA_SCRIPT` | `"<ms>:<action>[=<arg>];…"` · `activate=<표시 이름 부분>`(= 더블클릭/Enter와 같은 `activate` 경로 · 세션 없으면 연결만 — 열려면 한 번 더) · `send=<본문>`(열린 1:1 대화에 = 입력창 전송과 같은 `send_direct_text` · 10-10) · `dump`(아는 상대별 `[dump] peer 이름·대표 키·묶음 크기·세션` + 열린 대화의 병합 스레드 `[dump] thread mine·from·text` · 10-10 S3) · `settings` · `devices` · `license` · `about`(10-10 — mac 창 캡처 점검) · `quit` · 시각 오름차순 · 형식 오류 항목은 버림 · 없으면 비용 0 |
+| `NEXA_SCRIPT` | `"<ms>:<action>[=<arg>];…"` · `activate=<표시 이름 부분>`(= 더블클릭/Enter와 같은 `activate` 경로 · 세션 없으면 연결만 — 열려면 한 번 더) · `send=<본문>`(열린 1:1 대화에 = 입력창 전송과 같은 `send_direct_text` · 10-10) · `dump`(아는 상대별 `[dump] peer 이름·대표 키·묶음 크기·세션` + 열린 대화의 병합 스레드 `[dump] thread mine·from·text` · 10-10 S3) · `settings` · `devices` · `license` · `about`(10-10 — mac 창 캡처 점검) · **`wheel=<dy>` · `move=<x>,<y>` · `click=<x>,<y>` · `rclick=<x>,<y>`**(10-10 성능 실측 — 포커스 창에 실제 `route` 경로로 주입 · 물리 px · docs/51) · `quit` · 시각 오름차순 · 형식 오류 항목은 버림 · 없으면 비용 0 |
+| `NEXA_PAINT_TRACE` | 프레임마다 `[paint] 역할 WxH paint=ms present=ms`(stderr · OnceLock · 꺼지면 비용 0) — 성능 실측의 1차 계측(docs/51 §2) · `NEXA_MAC_PRESENT=softbuffer` = mac present 종전 경로 강제(A/B) |
 | `NEXA_WIN_TRACE` | 창별 `Focused`·`Occluded`·`Resized`·`CloseRequested`·`Destroyed`·`ActivationTokenDone` + 활성화 토큰 요청/적용 결과 · 역할(`Main`·`Chat`·`Settings`…) 표기 |
 | X11(XWayland)에서 입력 주입 | `env -u WAYLAND_DISPLAY ./nexa-beep --window --live` → `xdotool search --pid <pid>` · `mousemove --window <id> x y click 1` · `key --window <id> Return` · `import -window <id> shot.png`(ImageMagick) — **winit 0.30은 `WINIT_UNIX_BACKEND`를 읽지 않는다**(WAYLAND_DISPLAY 제거가 유일한 강제법) · X11 메인 창은 메뉴 막대가 있어 행 y가 Wayland와 다르다 |
 | ⚠ 주입 한계 | **사용자가 그 데스크톱을 쓰는 중이면 주입이 닿지 않는다** — X11 `getactivewindow`가 앱을 가리켜도 mutter의 실제 키보드 포커스는 사용자가 쓰는 Wayland 창에 있다(10-09 실측: 트레이스에 키 0건 · 사용자가 쉬는 사이엔 성공). 자동화는 **빈 데스크톱(또는 별도 세션)** 에서 돌린다 |
