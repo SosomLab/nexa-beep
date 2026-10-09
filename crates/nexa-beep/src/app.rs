@@ -6356,12 +6356,72 @@ impl App {
                         None => eprintln!("[script] activate: '{name}' 에 맞는 상대 없음"),
                     }
                 }
+                Some(("send", text)) => {
+                    // 열린 1:1 대화에 보낸다(S3 실기 10-10 — 입력창 전송과 같은 send_direct_text).
+                    match self
+                        .single_open
+                        .or_else(|| self.chats.keys().next().copied())
+                    {
+                        Some(p) => {
+                            let mut inv = Invalidations::default();
+                            self.send_direct_text(
+                                p,
+                                nbeep_core::sanitize_message(text),
+                                0,
+                                &mut inv,
+                            );
+                            self.redraw_conversation(p);
+                        }
+                        None => eprintln!("[script] send: 열린 대화 없음"),
+                    }
+                }
+                None if step == "dump" => self.script_dump(),
                 None if step == "settings" => self.open_settings(el),
                 None if step == "devices" => self.open_devices(el),
                 None if step == "license" => self.open_license(el),
                 None if step == "about" => self.open_about(el),
                 None if step == "quit" => el.exit(),
                 _ => eprintln!("[script] 모르는 단계: {step}"),
+            }
+        }
+    }
+
+    /// `NEXA_SCRIPT dump` — 아는 상대마다 (이름 · 대표 키 · 묶음 크기 · 세션) + 열린 대화의 병합 스레드를
+    /// stderr에 남긴다(S3 실기 판정 근거 — 본문은 테스트 신원의 테스트 문구뿐).
+    fn script_dump(&self) {
+        let mut seen: std::collections::HashSet<PeerId> = std::collections::HashSet::new();
+        let known = self
+            .table
+            .list()
+            .into_iter()
+            .map(|e| e.peer)
+            .chain(self.extra_peers.keys().copied());
+        for p in known {
+            if !seen.insert(p) {
+                continue;
+            }
+            let g = self.fold_group(p);
+            eprintln!(
+                "[dump] peer {} name={} key={} group={} live={}",
+                p.short(),
+                self.peer_title(p),
+                g[0].short(),
+                g.len(),
+                self.conversations.contains_key(&p)
+            );
+        }
+        let open: Vec<PeerId> = self.chats.keys().copied().collect();
+        for k in open {
+            for l in self.thread_lines(k) {
+                if let nbeep_ui::ChatBody::Text(t) = &l.body {
+                    eprintln!(
+                        "[dump] thread {} mine={} from={} text={}",
+                        k.short(),
+                        l.mine,
+                        l.from.as_deref().unwrap_or("-"),
+                        t.as_str()
+                    );
+                }
             }
         }
     }
@@ -7992,6 +8052,103 @@ impl App {
         }
     }
 
+    /// 1:1 텍스트 발신 본체 — 입력창 전송과 자동화 seam(`NEXA_SCRIPT send=`)이 같이 탄다(S3 실기 10-10).
+    /// 살아 있는 기기 전부 팬아웃 · sender copy · 기록 / 세션 0 = 대기 큐 + 연결 시도.
+    fn send_direct_text(
+        &mut self,
+        peer: PeerId,
+        text: nbeep_core::SafeText,
+        grade: u8,
+        inv: &mut Invalidations,
+    ) {
+        let importance = match grade {
+            2 => nbeep_core::Importance::Urgent,
+            1 => nbeep_core::Importance::Notice,
+            _ => nbeep_core::Importance::Normal,
+        };
+        let (at_ms, wall) = now_stamp();
+        self.trust.note_chat(peer, unix_now_ms()); // 최근 대화(08-15 — 발신도)
+                                                   // ★ 스레드 접기(S3 · docs/46 §5-1): 대상 = 이 사용자의 **세션이 살아 있는 기기 전부**
+                                                   //   (같은 메시지·같은 seq — 수신 기기마다 dedup은 기기별). 접히지 않은 상대는 자기 하나.
+                                                   //   줄은 첫 기기 저장분에 한 번만(뷰는 묶음 병합이라 한 번 보인다).
+        let live = self.live_devices(peer);
+        if let Some(&store) = live.first() {
+            let msg = nbeep_core::ChatMessage {
+                sender_device: self.identity.peer_id(),
+                seq: self.seq.issue(),
+                body: nbeep_core::MessageBody::Text(text.as_str().to_string()),
+                importance,
+                broadcast: false,
+            };
+            if let Some(chat) = self.chats.get_mut(&peer) {
+                chat.push_line(
+                    ChatLine::text(true, text.clone(), at_ms, wall)
+                        .with_seq(msg.seq)
+                        .with_importance(grade),
+                    inv,
+                );
+            }
+            if let Some(conv) = self.conversations.get_mut(&store) {
+                conv.lines.push(
+                    ChatLine::text(true, text, at_ms, wall)
+                        .with_seq(msg.seq)
+                        .with_importance(grade),
+                );
+            }
+            let bytes = msg.encode();
+            let mut sent_any = false;
+            for d in &live {
+                // 왕래 장부 — 파일 전송 자격(상호 확인)의 근거(사용자 확정 08-09).
+                self.ledger.note_sent(*d);
+                // 액터에 발신 요청 — 수신은 비동기로 AppEvent::Recv로 돌아온다(M2-7).
+                if let Some(conv) = self.conversations.get(d) {
+                    sent_any |= conv.out_tx.send(SessionCmd::Chat(bytes.clone())).is_ok();
+                }
+            }
+            if sent_any {
+                self.status = nbeep_core::tf(nbeep_core::Msg::StfSentSeq, &[&msg.seq.to_string()]);
+                self.send_sender_copies(peer, &msg); // S3 — 내 다른 기기에도
+            } else {
+                self.set_status(nbeep_core::t(nbeep_core::Msg::StSessionEnded));
+            }
+            self.record_history(store); // 대화 기록 영속(M2-5b · 빌림 밖)
+        } else {
+            // ★ 세션 없음 = **오프라인 대기**(M4-6 · 08-20 사용자 확정 — 재시작
+            //   유지). 종전엔 풍선만 남고 전송·기록 모두 **조용히 유실**됐다.
+            //   보관 후 상대가 나타나면 자동 전달(한계 = 내 PC가 켜져 있어야 —
+            //   Q-25-2 · 상태바 문구로 명시). 발신 의사 = 즉시 연결 시도.
+            let q = self.pending_direct.entry(peer).or_default();
+            q.push(PendingDirect {
+                text: text.as_str().to_string(),
+                at_ms,
+                importance: grade,
+            });
+            if q.len() > PENDING_DIRECT_MAX {
+                let drop_n = q.len() - PENDING_DIRECT_MAX;
+                q.drain(..drop_n);
+            }
+            let total = q.len();
+            if let Some(chat) = self.chats.get_mut(&peer) {
+                chat.push_line(
+                    ChatLine::text(true, text, at_ms, wall)
+                        .with_queued(true)
+                        .with_importance(grade),
+                    inv,
+                );
+            }
+            self.save_pending(peer);
+            self.set_status(nbeep_core::tf(
+                nbeep_core::Msg::StfQueuedSaved,
+                &[&total.to_string()],
+            ));
+            // 발신 의사 = 백오프 처음부터(그룹 규약) · 접힌 대화면 그 사용자의 기기 전부에(S3).
+            for d in self.fold_group(peer) {
+                self.reconnect.remove(&d);
+                self.start_connect(d, true);
+            }
+        }
+    }
+
     /// sender copy 발신(ADR-0015 S3 · [docs/46 §5-1]) — `to`에게 방금 보낸 1:1 메시지를
     /// **살아 있는 형제 전부**에 건넨다. 형제 세션(PSK·증명)만 대상이며 `to` 자신이 형제면
     /// 그 형제는 원본을 이미 받았으므로 뺀다. 공지(브로드캐스트)는 형제도 수신자라 복사하지 않는다.
@@ -9295,6 +9452,24 @@ impl App {
         }
     }
 
+    /// 접힌 대화 한 줄기 — 묶음 기기별 저장분(세션 conv ∨ 보관 parked)을 **시각순 안정 병합**
+    /// (기기 안 순서 유지). 접히지 않은 상대는 자기 저장분 그대로(S3).
+    fn thread_lines(&self, peer: PeerId) -> Vec<ChatLine> {
+        let mut merged: Vec<ChatLine> = Vec::new();
+        for d in self.fold_group(peer) {
+            let lines = self
+                .conversations
+                .get(&d)
+                .map(|c| &c.lines)
+                .or_else(|| self.parked_lines.get(&d));
+            if let Some(lines) = lines {
+                merged.extend(lines.iter().cloned());
+            }
+        }
+        merged.sort_by_key(|l| l.at_ms);
+        merged
+    }
+
     fn build_chat_view(&self, peer: PeerId) -> ChatViewWidget {
         let mut chat = ChatViewWidget::new(self.peer_title(peer));
         let mut inv = Invalidations::default();
@@ -9315,19 +9490,7 @@ impl App {
         // 세션 있으면 conv, 없으면 대피/복원(parked) — 재시작 후 열어도 뜬다(M2-5b).
         // ★ 스레드 접기(S3): 같은 사용자의 기기별 저장분을 **시각순 병합**(기기 안 순서 유지 —
         //   안정 정렬). 접히지 않은 상대는 자기 하나라 종전과 같다.
-        let mut merged: Vec<ChatLine> = Vec::new();
-        for d in self.fold_group(peer) {
-            let lines = self
-                .conversations
-                .get(&d)
-                .map(|c| &c.lines)
-                .or_else(|| self.parked_lines.get(&d));
-            if let Some(lines) = lines {
-                merged.extend(lines.iter().cloned());
-            }
-        }
-        merged.sort_by_key(|l| l.at_ms);
-        for line in merged {
+        for line in self.thread_lines(peer) {
             chat.push_line(line, &mut inv);
         }
         chat
@@ -16177,93 +16340,7 @@ impl App {
                     .get_mut(&peer)
                     .map_or(0, ChatViewWidget::take_grade)
             });
-            let importance = match grade {
-                2 => nbeep_core::Importance::Urgent,
-                1 => nbeep_core::Importance::Notice,
-                _ => nbeep_core::Importance::Normal,
-            };
-            let (at_ms, wall) = now_stamp();
-            self.trust.note_chat(peer, unix_now_ms()); // 최근 대화(08-15 — 발신도)
-                                                       // ★ 스레드 접기(S3 · docs/46 §5-1): 대상 = 이 사용자의 **세션이 살아 있는 기기 전부**
-                                                       //   (같은 메시지·같은 seq — 수신 기기마다 dedup은 기기별). 접히지 않은 상대는 자기 하나.
-                                                       //   줄은 첫 기기 저장분에 한 번만(뷰는 묶음 병합이라 한 번 보인다).
-            let live = self.live_devices(peer);
-            if let Some(&store) = live.first() {
-                let msg = nbeep_core::ChatMessage {
-                    sender_device: self.identity.peer_id(),
-                    seq: self.seq.issue(),
-                    body: nbeep_core::MessageBody::Text(text.as_str().to_string()),
-                    importance,
-                    broadcast: false,
-                };
-                if let Some(chat) = self.chats.get_mut(&peer) {
-                    chat.push_line(
-                        ChatLine::text(true, text.clone(), at_ms, wall)
-                            .with_seq(msg.seq)
-                            .with_importance(grade),
-                        &mut inv,
-                    );
-                }
-                if let Some(conv) = self.conversations.get_mut(&store) {
-                    conv.lines.push(
-                        ChatLine::text(true, text, at_ms, wall)
-                            .with_seq(msg.seq)
-                            .with_importance(grade),
-                    );
-                }
-                let bytes = msg.encode();
-                let mut sent_any = false;
-                for d in &live {
-                    // 왕래 장부 — 파일 전송 자격(상호 확인)의 근거(사용자 확정 08-09).
-                    self.ledger.note_sent(*d);
-                    // 액터에 발신 요청 — 수신은 비동기로 AppEvent::Recv로 돌아온다(M2-7).
-                    if let Some(conv) = self.conversations.get(d) {
-                        sent_any |= conv.out_tx.send(SessionCmd::Chat(bytes.clone())).is_ok();
-                    }
-                }
-                if sent_any {
-                    self.status =
-                        nbeep_core::tf(nbeep_core::Msg::StfSentSeq, &[&msg.seq.to_string()]);
-                    self.send_sender_copies(peer, &msg); // S3 — 내 다른 기기에도
-                } else {
-                    self.set_status(nbeep_core::t(nbeep_core::Msg::StSessionEnded));
-                }
-                self.record_history(store); // 대화 기록 영속(M2-5b · 빌림 밖)
-            } else {
-                // ★ 세션 없음 = **오프라인 대기**(M4-6 · 08-20 사용자 확정 — 재시작
-                //   유지). 종전엔 풍선만 남고 전송·기록 모두 **조용히 유실**됐다.
-                //   보관 후 상대가 나타나면 자동 전달(한계 = 내 PC가 켜져 있어야 —
-                //   Q-25-2 · 상태바 문구로 명시). 발신 의사 = 즉시 연결 시도.
-                let q = self.pending_direct.entry(peer).or_default();
-                q.push(PendingDirect {
-                    text: text.as_str().to_string(),
-                    at_ms,
-                    importance: grade,
-                });
-                if q.len() > PENDING_DIRECT_MAX {
-                    let drop_n = q.len() - PENDING_DIRECT_MAX;
-                    q.drain(..drop_n);
-                }
-                let total = q.len();
-                if let Some(chat) = self.chats.get_mut(&peer) {
-                    chat.push_line(
-                        ChatLine::text(true, text, at_ms, wall)
-                            .with_queued(true)
-                            .with_importance(grade),
-                        &mut inv,
-                    );
-                }
-                self.save_pending(peer);
-                self.set_status(nbeep_core::tf(
-                    nbeep_core::Msg::StfQueuedSaved,
-                    &[&total.to_string()],
-                ));
-                // 발신 의사 = 백오프 처음부터(그룹 규약) · 접힌 대화면 그 사용자의 기기 전부에(S3).
-                for d in self.fold_group(peer) {
-                    self.reconnect.remove(&d);
-                    self.start_connect(d, true);
-                }
-            }
+            self.send_direct_text(peer, text, grade, &mut inv);
             self.request_redraw(id);
             if let Some(mid) = self.main_id {
                 self.request_redraw(mid); // 상태바 갱신
