@@ -421,6 +421,7 @@ Conversation { peer, session(Noise+TOFU+mux), thread(lines), … }   ← 상태(
 
 - 설정 키 `chat.window_mode` — **설정 화면([§10])에서 언제든 변경**(사용자 확정). 변경은 새로 여는 대화부터 적용(열린 창은 유지 — 소급 강제 없음).
 - 알림(ADR-0010)과 결합: 토스트 클릭 → 해당 대화의 창 포커스(없으면 모드에 따라 생성/전환).
+- **창 제목 규칙**(10-10 사용자 요청 · nexa-dir3 10-06 `APP_TITLE` 규칙 이식 · `dcae62c`): 메인 = `APP_TITLE`, 보조 창(대화·설정·라이선스·기기 목록 등) = `"{APP_TITLE} — 제목"` 한 형식. **디버그 빌드는 `APP_TITLE = "Nexa Beep (Debug)"`**(`cfg!(debug_assertions)`) — 설치본과 개발 빌드를 동시에 띄워도 제목으로 가른다(Windows 콘솔 제목 포함). 트레이 툴팁·알림·About의 제품명은 창 제목이 아니라 그대로.
 
 ---
 
