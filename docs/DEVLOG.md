@@ -7,6 +7,7 @@
 
 ## 2026-10-09
 
+- **(Linux · main) ★설정 체계 개편 + nexa-ui/nexa-license 도입 — 계획 [50](50-settings-overhaul-nexa-ui-plan.md) 📐 → P1-c nexa-ui 의존 전환 ✅**(사용자 지시 · 협업 세션 병행): 조사 4축(nexa-ui 계보 = beep 직계 · nexa-license 앱 어댑터 패턴 · nexa-sql 설정 창 구조 · beep 현행 90키) → 결정 D-33-1~9(ADR-0014 정정 → nexa-dlg · `ui.language=system` · 라이선스 Feature 0·게이트 off) → **P1-c**: nbeep-gfx·nbeep-ctl·nexa-conf 사본·plat/font 삭제 → `../nexa-ui` path 의존(재노출 1줄+시그니처 6건 · ★nexa-ctl 전 컨트롤 MouseUp 확정 차이 흡수) · CI 6잡 형제 체크아웃 · 665 green · 4타깃 0 · 릴리스 6.03MB(+4.2%). 협업 = P1-a(nexa-ui 4커밋) · P1-b(nexa-license 1커밋). [journal](journal/2026-10-09.md)
 - **(Linux · main) ★Linux 배포 = nexa-sql `packaging/linux` 이식**(사용자 요청 "nexa-sql을 참고해서 리눅스 배포"): `packaging/lib.sh`+`linux/build-deb.sh`(로컬·CI 같은 스크립트 · hicolor 8크기+SVG · Debian copyright · postinst) + **`.rpm` 신설**(`build-rpm.sh`·spec · deb와 같은 스테이징) + release.yml **설치 스모크**(dpkg -i → --version → dpkg -r → 잔여 0) · ★**발견 = 공개 .deb `libc6 ≥2.31` 선언이 거짓**(실제 GLIBC_2.39 — ubuntu-latest 빌드 · 22.04/Debian 12 실행 불가) → 러너 **ubuntu-22.04 고정** + 하한 **objdump 실측 자동 기입**. 로컬 .deb 실측 ✓ · rpm은 CI 첫 검증 대기. 세션 규약 = 응답 한글 · 좌측 세션 병행(nexa-sql 규칙). [journal](journal/2026-10-09.md)
 - **(Linux · main) 저장소 최신화·채널 점검**: fetch 신규 0 · winget 포터블 0.2.17 #443211 **09-29 MERGED** · 설치본/beepd OPEN 22일 · **choco nexa-beep 0.2.17·nexa-beepd 0.2.6 09-29 승인**.
 

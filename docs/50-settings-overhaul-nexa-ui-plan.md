@@ -103,3 +103,5 @@
 | 일자 | 단계 | 내용 |
 |---|---|---|
 | 10-09 | P0 | 조사 4축 · 본 문서 · 분담 합의 |
+| 10-09 | P1-a·b ✅ | 협업: nexa-ui `tighten`·`locale::ui_language`·toolbar dim/ring(4커밋 main) · nexa-license 발급기 nexa-beep 분기(1커밋 main) — 미push |
+| 10-09 | P1-c ✅ | beep 의존 전환(`refactor(ui)`) — 665 green · 4타깃 0 · 릴리스 6.03MB(+4.2%) · CI 형제 체크아웃 · 발견 = nexa-ctl 전 컨트롤 MouseUp 확정 |
