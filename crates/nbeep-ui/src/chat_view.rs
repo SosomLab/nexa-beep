@@ -26,6 +26,7 @@ use crate::theme::Theme;
 use crate::widget::{Invalidations, Widget};
 use nbeep_core::safetext::{sanitize_message, SafeText};
 use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 
 /// 스레드 항목의 벽시계 시각(지역 · 분까지 — 표시용).
 ///
@@ -576,6 +577,10 @@ pub struct ChatViewWidget {
     input_bars: ScrollBars,
     /// paint가 캐시하는 풍선 히트 rect(→ 항목 인덱스) — 우클릭 복사용.
     hit_rects: RefCell<Vec<(Rect, usize)>>,
+    /// 줄바꿈 캐시(10-10 성능 — 사용자 "스크롤이 너무 느리다"): 줄 index → (본문·폭·글꼴 키 · 줄들 · 최대 폭).
+    /// 종전엔 **매 프레임 기록 전체**(최대 2000줄)를 글자 단위로 재측정·줄바꿈했다(mac 실측 paint 11~13ms/프레임 ·
+    /// 30줄 기준). 키가 같으면 재사용 · 다르면 그 줄만 다시 잰다. 글꼴 키 = (글자 높이, 표본 폭) — 크기·가족이 바뀌면 바뀐다.
+    wrap_cache: RefCell<Vec<Option<WrapEntry>>>,
     /// 우클릭 복사 요청(1회성) — 호스트가 OS 클립보드에 쓴다.
     copy_out: Option<String>,
     /// 진행 배너의 "취소" 히트 영역(페인트가 갱신 · 08-16 수락 후 취소 UX).
@@ -643,6 +648,7 @@ impl ChatViewWidget {
             thread_bars: ScrollBars::new(),
             input_bars: ScrollBars::new(),
             hit_rects: RefCell::new(Vec::new()),
+            wrap_cache: RefCell::new(Vec::new()),
             copy_out: None,
             xfer_cancel_hit: std::cell::Cell::new(None),
             xfer_cancel_req: false,
@@ -1477,39 +1483,69 @@ impl ChatViewWidget {
     }
 }
 
+/// 줄바꿈 캐시 항목 — [`ChatViewWidget::wrap_cache`].
+#[derive(Debug)]
+struct WrapEntry {
+    /// 잰 본문(`body_text`).
+    text: String,
+    /// 잰 최대 폭(px).
+    max_w: i32,
+    /// 글꼴 키(글자 높이 · 표본 폭) — 크기·가족·배율이 바뀌면 달라진다.
+    font_key: (i32, i32),
+    /// 줄들(2패스가 공유 — 프레임마다 복제하지 않는다).
+    lines: Rc<Vec<String>>,
+    /// 가장 넓은 줄 폭(풍선 폭 — 종전엔 보이는 블록마다 매 프레임 재측정).
+    widest: i32,
+}
+
 /// 그리기용 — 문자 단위 그리디 줄바꿈(공백 우선 분리 · 한 단어가 폭을 넘으면 문자에서 자른다).
+///
+/// 10-10: 글자마다 `text_width(&c.to_string())`(할당 + 측정)를 부르던 O(n) 호출 → **`text_prefix_widths` 한 번**(렌더러는
+/// 단일 패스 · 값 동일 계약)으로 폭을 얻고 인덱스 산술로 자른다. 결과는 종전과 같다(폭이 가산적일 때 — 자체 렌더러 그대로).
 fn wrap_text(ctx: &mut dyn DrawCtx, text: &str, max_w: i32) -> Vec<String> {
     let mut out = Vec::new();
+    let mut pw: Vec<i32> = Vec::new();
     for raw in text.split('\n') {
         if raw.is_empty() {
             out.push(String::new());
             continue;
         }
-        let mut line = String::new();
-        let mut line_w = 0;
-        let mut last_space: Option<(usize, i32)> = None; // (byte idx, width까지)
-        for c in raw.chars() {
-            let cw = ctx.text_width(&c.to_string());
-            if line_w + cw > max_w && !line.is_empty() {
-                if let Some((bi, _)) = last_space {
-                    // 공백에서 자른다 — 다음 줄은 공백 뒤부터.
-                    let rest = line.split_off(bi);
-                    out.push(std::mem::take(&mut line));
-                    line = rest.trim_start().to_string();
-                    line_w = ctx.text_width(&line);
-                    last_space = None;
-                } else {
-                    out.push(std::mem::take(&mut line));
-                    line_w = 0;
-                }
-            }
-            if c == ' ' {
-                last_space = Some((line.len(), line_w));
-            }
-            line.push(c);
-            line_w += cw;
+        let chars: Vec<char> = raw.chars().collect();
+        ctx.text_prefix_widths(raw, &mut pw);
+        if pw.len() != chars.len() + 1 {
+            // 계약 위반(길이 불일치) — 한 줄로 둔다(fail-soft · 잘려도 멈추지 않는다).
+            out.push(raw.to_string());
+            continue;
         }
-        out.push(line);
+        let mut start = 0usize;
+        let mut last_space: Option<usize> = None;
+        let mut i = 0usize;
+        while i < chars.len() {
+            let line_w = pw[i] - pw[start];
+            let cw = pw[i + 1] - pw[i];
+            if line_w + cw > max_w && i > start {
+                if let Some(sp) = last_space {
+                    // 공백에서 자른다 — 다음 줄은 공백 뒤부터(연속 공백은 건너뛴다).
+                    out.push(chars[start..sp].iter().collect());
+                    let mut ns = sp;
+                    while ns < chars.len() && chars[ns] == ' ' {
+                        ns += 1;
+                    }
+                    start = ns;
+                    last_space = None;
+                    i = ns;
+                    continue;
+                }
+                out.push(chars[start..i].iter().collect());
+                start = i;
+                continue;
+            }
+            if chars[i] == ' ' {
+                last_space = Some(i);
+            }
+            i += 1;
+        }
+        out.push(chars[start..].iter().collect());
     }
     if out.is_empty() {
         out.push(String::new());
@@ -1875,10 +1911,17 @@ impl Widget for ChatViewWidget {
             /// 수신 풍선 위 송신자 이름(단체 대화 — 같은 송신자 연속 묶음은 첫 풍선에만).
             name: Option<String>,
             entry: usize,
-            lines: Vec<String>,
+            lines: Rc<Vec<String>>,
+            widest: i32,
             h: i32,
         }
         let name_h = self.s(NAME_H);
+        // 줄바꿈 캐시 키(10-10) — 글꼴 표본 2회 측정으로 크기·가족·배율 변화를 잡는다.
+        let font_key = (th, ctx.text_width("가M"));
+        let mut wrap_cache = self.wrap_cache.borrow_mut();
+        if wrap_cache.len() != self.lines.len() {
+            wrap_cache.resize_with(self.lines.len(), || None);
+        }
         let mut blocks: Vec<Block> = Vec::with_capacity(self.lines.len());
         let mut content = 0;
         let mut prev: Option<WallTime> = None;
@@ -1904,7 +1947,31 @@ impl Widget for ChatViewWidget {
                     _ => None,
                 }
             };
-            let wrapped = wrap_text(ctx, &self.body_text(l), max_text_w);
+            // 줄바꿈 — 캐시 적중이면 측정 0(본문·폭·글꼴 키 동일). 텍스트 줄은 할당 없이 비교한다.
+            let hit = wrap_cache[i].as_ref().is_some_and(|e| {
+                e.max_w == max_text_w
+                    && e.font_key == font_key
+                    && match &l.body {
+                        ChatBody::Text(t) => t.as_str() == e.text,
+                        ChatBody::Xfer(_) => self.body_text(l) == e.text,
+                    }
+            });
+            if !hit {
+                let text = self.body_text(l);
+                let lines = Rc::new(wrap_text(ctx, &text, max_text_w));
+                let widest = lines.iter().map(|s| ctx.text_width(s)).max().unwrap_or(0);
+                wrap_cache[i] = Some(WrapEntry {
+                    text,
+                    max_w: max_text_w,
+                    font_key,
+                    lines,
+                    widest,
+                });
+            }
+            let (wrapped, widest) = wrap_cache[i]
+                .as_ref()
+                .map(|e| (Rc::clone(&e.lines), e.widest))
+                .unwrap_or_else(|| (Rc::new(vec![String::new()]), 0));
             // 진행 중 전송 풍선 = 하단 막대 자리 예약(08-18 실기 — 텍스트와 막대가
             // 붙어 보였다: 막대 높이 + 위 간격 6px을 풍선 높이에 더한다).
             let bar_extra = if matches!(
@@ -1926,10 +1993,12 @@ impl Widget for ChatViewWidget {
                 name,
                 entry: i,
                 lines: wrapped,
+                widest,
                 h,
             });
             prev = Some(l.wall);
         }
+        drop(wrap_cache);
         self.content_h.set(content);
         let scroll = self.scroll.clamp(0, (content - vp.h).max(0));
 
@@ -1982,9 +2051,9 @@ impl Widget for ChatViewWidget {
                     ChatBody::Text(_) => (None, None),
                 };
                 let thumb_pad = if xthumb.is_some() { self.s(24) } else { 0 };
-                let widest = b.lines.iter().map(|s| ctx.text_width(s)).max().unwrap_or(0);
-                // 라인별 제어 아이콘(M4-2e) — **풍선 안 맨 끝** 배치(사용자 확정
-                // 08-19: 풍선 폭을 아이콘만큼 늘려 내부 우측 끝에 — 위치 고정).
+                let widest = b.widest; // 캐시(10-10 — 종전 보이는 블록마다 매 프레임 재측정)
+                                       // 라인별 제어 아이콘(M4-2e) — **풍선 안 맨 끝** 배치(사용자 확정
+                                       // 08-19: 풍선 폭을 아이콘만큼 늘려 내부 우측 끝에 — 위치 고정).
                 let line_acts: &[XferCtlAct] = match &l.body {
                     ChatBody::Xfer(x) => match (l.mine, &x.state) {
                         // 그룹 집계(M5-1h) — 제어는 ✕(전송 제외) 하나뿐(1:N에서
