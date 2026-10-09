@@ -88,7 +88,11 @@
 
 1. 이 CLAUDE.md + [docs/STATUS.md](docs/STATUS.md) → 2. [DEVLOG](docs/DEVLOG.md) 최상단 + 최신 journal → 3. 할 일 = [docs/TODO.md](docs/TODO.md) 순차.
 
-## 5. 다음 단계 (2026-10-09 · STATUS 10-09 9차 기준 — ★**v0.3.0 공개 ✅ + apt/dnf 채널 합류**(설정 개편·nexa-ui·라이선스·파일 대화상자·rpm·트레이 배지 · choco 첫 자동 제출 · winget 제외) · 이후 = 사용자 실기 → 캡처(P5) → S3)
+## 5. 다음 단계 (2026-10-09 · STATUS 10-09 12차 기준 — ★**v0.3.1 공개 ✅**(Linux 실기 수정 7건 · 내 기기 목록 창 · 툴팁 언어 · apt 자동 갱신 첫 성공 · choco 제외) · 다음 = 사용자 실기(내 기기 폐기) · choco 0.3.0 승인 → 0.3.1 재제출 · X-13 S3 · 게이트는 **`./tools/gate.sh`** 한 줄)
+
+> **10-09 10~12차(Linux · main)** — Linux 실기 결함 연쇄: 트레이 설정 창·분리 대화 창이 **Wayland 포커스 가로채기 방지**로 메인 뒤에 깔림("멈춤"으로 보임 · 메인 `ep_poll` = 교착 아님) → 활성화 토큰(트레이 토큰·startup-notify `request_activation_token`)을 **새 창에** · ★**자동화 seam `NEXA_SCRIPT`·`NEXA_WIN_TRACE`**(26 §3-9 — Wayland는 입력 주입 불가라 앱이 스스로) · 목록 한글 타입어헤드 = Windows 경로를 Linux에도(+오른쪽 Alt·Shift+Space) · 힌트 wrap · 테마 "시스템 (라이트)" · **CSD 제목 tofu = crossfont 실측 기각**(RSS +18MB · DR-5) · ★**내 기기 목록 창**(기기별 폐기 = Succession 부분 집합 · `issue_succession` 공용화 · 5초 무장) · 툴팁 언어(nexa-ui 190차 `set_tip`) · ⚠ CI rustdoc 한글 대괄호로 2회 사망 → `tools/gate.sh`. 교훈 = **Wayland에서 새 창은 토큰 없이는 뒤에 둔다** · **같은 게이트를 두 번 빠뜨리면 명령을 하나로 만든다**.
+
+> **종전(10-09 9차 기준 — ★**v0.3.0 공개 ✅ + apt/dnf 채널 합류**(설정 개편·nexa-ui·라이선스·파일 대화상자·rpm·트레이 배지 · choco 첫 자동 제출 · winget 제외) · 이후 = 사용자 실기 → 캡처(P5) → S3)
 
 > **10-09 9차(Linux · main)** — ★**apt/dnf 채널 합류**: "`apt install nexa-beep`이 옛 버전" = 저장소 미등록(apt는 dpkg status 옛 버전을 "이미 최신"으로 조용히 종료) + `install-local.sh` 덮어쓰기(dpkg 0.2.16 ≠ 파일 0.2.17) → linux-repo `apps/nexa-beep.toml`(0.3.0 등재 ✓) + release.yml `linux-repo` 잡 · **재발 방지 3장치**(linux-repo publish 미등록 앱 점검 · beep 등록 확인 단계 · install-local Linux = .deb 재포장 → dpkg -i). 교훈 = **조용히 성공하는 실패는 양쪽(저장소·앱)에서 잡는다** · **설치 자리는 패키지 관리자를 통해서만 바꾼다**.
 
