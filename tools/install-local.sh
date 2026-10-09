@@ -142,11 +142,15 @@ if [ "$OS" = mac ]; then
   echo "   codesign: $(codesign -dv "/Applications/Nexa Beep.app" 2>&1 | grep -o 'Signature=.*' || echo '?')"
 fi
 if [ "$OS" = linux ] && [ "$ASSETS" = 1 ]; then
-  SHARE="$(dirname "$DEST")/share"   # /usr/bin → /usr/share (.deb 배치와 동일 — release.yml)
+  SHARE="$(dirname "$DEST")/share"   # /usr/bin → /usr/share (.deb 배치와 동일 — packaging/linux/build-deb.sh)
   if [ -d "$SHARE/applications" ]; then
     as_owner "$SHARE/applications" install -m 644 "$ROOT/packaging/linux/nexa-beep.desktop" "$SHARE/applications/nexa-beep.desktop"
-    ICON="$SHARE/icons/hicolor/256x256/apps"
-    as_owner "$SHARE/applications" install -D -m 644 "$ROOT/packaging/branding/nexa-beep-256.png" "$ICON/nexa-beep.png"
+    # hicolor 크기별 PNG + SVG — build-deb.sh와 같은 배치(packaging/branding/png · 10-09).
+    for n in 16 24 32 48 64 128 256 512; do
+      as_owner "$SHARE/applications" install -D -m 644 "$ROOT/packaging/branding/png/nexa-beep-$n.png" "$SHARE/icons/hicolor/${n}x${n}/apps/nexa-beep.png"
+    done
+    as_owner "$SHARE/applications" install -D -m 644 "$ROOT/packaging/branding/icon.svg" "$SHARE/icons/hicolor/scalable/apps/nexa-beep.svg"
+    as_owner "$SHARE/applications" gtk-update-icon-cache -q -t -f "$SHARE/icons/hicolor" 2>/dev/null || true
     as_owner "$SHARE/applications" update-desktop-database "$SHARE/applications" 2>/dev/null || true
     echo "   자산: .desktop · 아이콘 → $SHARE"
   else

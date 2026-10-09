@@ -2,10 +2,13 @@
 Type=Application
 Name=Nexa Beep
 GenericName=Local Network Messenger
-Comment=제로 컨피그 로컬 네트워크 메신저 — 같은 LAN의 사용자를 자동으로 찾습니다
+GenericName[ko]=로컬 네트워크 메신저
+Comment=Zero-config local network messenger — finds people on the same LAN automatically
+Comment[ko]=제로 컨피그 로컬 네트워크 메신저 — 같은 LAN의 사용자를 자동으로 찾습니다
 Exec=nexa-beep
 Icon=nexa-beep
 Terminal=false
 Categories=Network;InstantMessaging;
 Keywords=chat;messenger;lan;local;p2p;
+Keywords[ko]=채팅;메신저;랜;로컬;
 StartupWMClass=nexa-beep

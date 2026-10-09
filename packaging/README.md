@@ -14,12 +14,12 @@
 | `windows-arm64` | NSIS `.exe` (+`.zip`) | `.zip` |
 | `macos-arm64` | `.dmg` | `.tar.gz` |
 | `macos-x64` | `.dmg` | `.tar.gz` |
-| `linux-x64` | `.deb` | `.tar.gz` |
+| `linux-x64` | `.deb` · `.rpm` | `.tar.gz` |
 
 **압축 형식은 플랫폼 관례를 따른다**(사용자 확정 08-11). Windows는 zip이고,
 `setup.exe`에는 **zip 사본을 하나 더** 올린다 — 실행 파일 확장자를 막는 브라우저·사내
 프록시 때문이다. macOS/Linux 포터블은 `tar.gz`로, **실행 권한이 보존된다**(풀고 나서
-`chmod`할 필요가 없다). `.dmg`/`.deb`은 이미 배포 형식이라 덧씌우지 않는다.
+`chmod`할 필요가 없다). `.dmg`/`.deb`/`.rpm`은 이미 배포 형식이라 덧씌우지 않는다.
 
 무결성 확인용 `SHA256SUMS.txt`도 함께 올린다 — 서명이 없는 배포에서 사용자가 가진
 유일한 검증 수단이다.
@@ -147,6 +147,36 @@ choco는 `choco pack` 후 `choco push`. 손으로 하려면 아티팩트를 받�
 
 둘 다 **검수를 거쳐야 노출된다** — push했다고 바로 설치되지 않는다.
 
+## Linux 설치본 — `.deb` · `.rpm` (10-09 · nexa-sql `packaging/linux` 이식)
+
+포장 로직은 **스크립트 하나**가 로컬과 CI에서 똑같이 돈다 — 종전에는 release.yml 인라인에만
+있어 `packaging/linux/nexa-beep.desktop`을 고쳐도 CI가 다른 길을 갈 수 있었다(08-29 런처 결함).
+
+```bash
+packaging/linux/build-deb.sh                 # cargo build(release · x86_64) → FHS 스테이징 → .deb
+packaging/linux/build-rpm.sh                 # 같은 스테이징을 rpmbuild로 포장(deb/rpm 바이너리 동일 보증)
+NEXA_BIN_DIR=target/release packaging/linux/build-deb.sh --skip-build   # 이미 빌드한 산출물로 포장만
+# 산출 = target/packaging/linux/nexa-beep-<ver>-linux-x64.{deb,rpm}
+```
+
+| 자리 | 내용 |
+| --- | --- |
+| `/usr/bin/` | `nexa-beep` · `nbeep-imgdec` |
+| `/usr/share/applications/nexa-beep.desktop` | 런처(`Exec=nexa-beep` 무인자 = 실물 · 영/한 Comment) |
+| `/usr/share/icons/hicolor/<N>x<N>/apps/` | `branding/png/nexa-beep-<N>.png`(16·24·32·48·64·128·256·512) + `scalable/` SVG |
+| `/usr/share/doc/nexa-beep/` | LICENSE 2종 · README · Debian `copyright` |
+| `DEBIAN/postinst`·`postrm` / `%post`·`%postun` | 아이콘·데스크톱 캐시 갱신(도구 없으면 무시) |
+
+★ **glibc 하한은 선언하지 않고 실측한다** — `lib.sh glibc_floor`가 두 바이너리의 `objdump -T`
+심볼 버전 최댓값을 읽어 `Depends: libc6 (>= …)`에 쓴다. v0.2.17까지는 `>= 2.31`을 손으로
+적어 두고 실제로는 ubuntu-latest(24.04) 빌드가 **GLIBC_2.39**를 요구했다(10-09 공개 .deb 실측) —
+Ubuntu 22.04·Debian 12에서 설치는 되고 실행만 실패하는 상태였다. 러너를 **ubuntu-22.04로 고정**해
+하한을 2.35로 내렸고, 수치는 빌드마다 바이너리가 말한다.
+
+CI 스모크(release.yml) = `sudo dpkg -i` → `nexa-beep --version` → `desktop-file-validate` → 아이콘 실재 →
+`dpkg -r` → 잔여 0. rpm은 ubuntu 러너에 설치할 수 없어 `rpm -qpl`·`rpm -K`만 — **Fedora/RHEL 실기는 사람이
+한다**(`sudo dnf install ./…rpm` → 앱 그리드 실행 → `dnf remove`).
+
 ## 설치 위치와 권한
 
 Windows 설치본은 **사용자 단위**(`%LOCALAPPDATA%\Programs\NexaBeep` · HKCU)로 넣는다.
@@ -164,5 +194,5 @@ Windows 설치본은 **사용자 단위**(`%LOCALAPPDATA%\Programs\NexaBeep` · 
   **설치 방식만** 다르다.
 - **Linux는 x86_64만** — DR-3이 요구하는 것은 Linux이고 아키텍처는 명시가 없다.
   arm64는 크로스 링크(X11/Wayland) 부담이 있어 수요 확인 후 붙인다.
-- `nbeep-imgdec`는 넣지 않는다 — 본체가 아직 호출하지 않는다(M4-5 잔여).
-  쓰지 않는 바이너리를 배포에 넣으면 공격면만 늘어난다.
+- ~~`nbeep-imgdec`는 넣지 않는다~~ → **동봉한다**(M4-5 ✅ 08-13 — 본체가 이미지 디코드를
+  이 형제 프로세스에 위임한다 · 없으면 아바타·미리보기가 이니셜 폴백). 3-OS 전부 본체 옆.

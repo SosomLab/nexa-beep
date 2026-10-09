@@ -54,8 +54,9 @@ brew install --cask kiros33/tap/nexa-beep
 winget install SosomLab.NexaBeep
 choco  install nexa-beep
 
-# Linux — deb 또는 포터블
-sudo dpkg -i nexa-beep-*-linux-x64.deb
+# Linux — deb(Debian·Ubuntu 22.04+) · rpm(Fedora·RHEL) 또는 포터블
+sudo apt install ./nexa-beep-*-linux-x64.deb
+sudo dnf install ./nexa-beep-*-linux-x64.rpm
 ```
 
 패키지 관리자를 쓰지 않으면 설치본(`*-setup.exe` — 사용자 단위·무권한) 또는 포터블 zip을 풀고

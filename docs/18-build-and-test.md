@@ -205,6 +205,9 @@ docker run --rm -it --init -p 47200:47200 \
 > 여기서는 **개발자가 밟는 절차**만 적는다.
 
 ```bash
+# 0) (선택 · Linux) 설치본을 로컬에서 미리 포장해 본다 — CI와 **같은 스크립트**(10-09 · packaging/README "Linux 설치본")
+packaging/linux/build-deb.sh && packaging/linux/build-rpm.sh      # → target/packaging/linux/*.{deb,rpm}
+#    glibc 하한은 바이너리 실측으로 control에 들어간다(러너 = ubuntu-22.04 → 2.35). rpm 실기 = Fedora/RHEL PC.
 # 1) main이 green인지 먼저 확인한다 — red 상태로 태그를 밀지 않는다.
 gh run list --branch main --workflow ci --limit 1
 # 2) ★ winget/choco 이전 제출 상태 점검(규칙 · 사용자 확정 08-24 —

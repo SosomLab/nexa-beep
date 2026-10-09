@@ -5,7 +5,8 @@
 # **압축 형식은 플랫폼 관례를 따른다**(사용자 확정 08-11) — Windows는 zip
 # (포터블 zip + setup.exe의 zip 사본: 실행 파일 확장자를 막는 브라우저·사내 프록시 대비),
 # macOS/Linux는 포터블을 **tar.gz**로 낸다(실행 권한이 보존되고 그쪽 관례다).
-# `.dmg`/`.deb`은 이미 배포 형식이라 덧씌우지 않는다.
+# `.dmg`/`.deb`/`.rpm`은 이미 배포 형식이라 덧씌우지 않는다.
+# Linux 설치본은 `packaging/linux/build-{deb,rpm}.sh`(로컬·CI 같은 스크립트 · nexa-sql 이식 10-09)가 만든다.
 #
 # ⚠️ **서명하지 않는다**(v1) — 코드 서명 인증서가 없다. macOS Gatekeeper와
 # Windows SmartScreen이 경고를 띄우며, 릴리스 노트에 우회 방법을 **숨기지 않고** 적는다.
@@ -97,7 +98,11 @@ jobs:
           - os: macos-latest
             target: x86_64-apple-darwin
             slug: macos-x64
-          - os: ubuntu-latest
+          # ★ Linux는 **ubuntu-22.04 고정** — 산출물의 glibc 하한은 빌드 호스트가 정한다.
+          #   ubuntu-latest(24.04)로 만든 v0.2.17 .deb는 GLIBC_2.39를 요구해(10-09 objdump 실측)
+          #   Ubuntu 22.04·Debian 12에서 설치만 되고 실행이 안 됐다. 22.04 = glibc 2.35 하한.
+          #   control의 `Depends: libc6 (>= …)`는 build-deb.sh가 **바이너리에서 실측**해 적는다.
+          - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             slug: linux-x64
     runs-on: ${{ matrix.os }}
@@ -238,27 +243,46 @@ jobs:
           dmg="nexa-beep-$VERSION-$SLUG.dmg"
           hdiutil create -volname "Nexa Beep $VERSION" -srcfolder "$root" -ov -format UDZO "out/$dmg" >/dev/null
 
-      # ── 설치본: Linux = .deb ──
-      - name: Linux 설치본(.deb) + zip
+      # ── 설치본: Linux = .deb + .rpm — packaging/linux/build-*.sh (로컬·CI 같은 스크립트) ──
+      # 포장 로직을 여기 인라인으로 두지 않는다 — 08-29 `.desktop` 런처 결함(packaging/ 수정이 CI
+      # 인라인에 반영되지 않음)의 재발 방지. 의존 하한(glibc)은 스크립트가 바이너리에서 실측한다.
+      - name: Linux 포장 도구
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq dpkg-dev rpm desktop-file-utils
+      - name: Linux 설치본(.deb + .rpm)
         if: runner.os == 'Linux'
         shell: bash
         run: |
           set -euo pipefail
-          pkg="build/deb"
-          mkdir -p "$pkg/DEBIAN" "$pkg/usr/bin" \
-                   "$pkg/usr/share/applications" \
-                   "$pkg/usr/share/icons/hicolor/256x256/apps" \
-                   "$pkg/usr/share/doc/nexa-beep"
-          install -m 0755 "target/$TARGET/release/nexa-beep" "$pkg/usr/bin/nexa-beep"
-          install -m 0755 "target/$TARGET/release/nbeep-imgdec" "$pkg/usr/bin/nbeep-imgdec"
-          install -m 0644 packaging/linux/nexa-beep.desktop "$pkg/usr/share/applications/nexa-beep.desktop"
-          install -m 0644 packaging/branding/nexa-beep-256.png "$pkg/usr/share/icons/hicolor/256x256/apps/nexa-beep.png"
-          install -m 0644 README.md LICENSE.md "$pkg/usr/share/doc/nexa-beep/"
-          size_kb=$(du -sk "$pkg/usr" | cut -f1)
-          sed -e "s/@VERSION@/$VERSION/g" -e "s/@SIZE@/$size_kb/g" \
-              packaging/linux/control > "$pkg/DEBIAN/control"
-          deb="nexa-beep-${VERSION}-${SLUG}.deb"
-          dpkg-deb --build --root-owner-group "$pkg" "out/$deb" >/dev/null
+          export NEXA_VERSION="$VERSION"
+          packaging/linux/build-deb.sh --skip-build --target "$TARGET"
+          packaging/linux/build-rpm.sh --target "$TARGET"
+          cp target/packaging/linux/*.deb target/packaging/linux/*.rpm out/
+      # 스모크 = **실제로 설치해 본다**(nexa-sql release.yml 이식): 설치 → --version → 런처·아이콘 실재 →
+      # 제거 → 잔여 0. rpm은 ubuntu에 설치할 수 없어 목록·무결성만(Fedora/RHEL 실기는 사람 · docs/18 §5).
+      - name: Linux 스모크(dpkg -i → --version → dpkg -r → 잔여 0 · rpm 목록)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          deb=$(ls out/*.deb)
+          sudo dpkg -i "$deb"
+          nexa-beep --version | tee /dev/stderr | grep -q "^nexa-beep $VERSION\$"
+          test -x /usr/bin/nbeep-imgdec
+          desktop-file-validate /usr/share/applications/nexa-beep.desktop
+          test -f /usr/share/icons/hicolor/256x256/apps/nexa-beep.png
+          test -f /usr/share/icons/hicolor/scalable/apps/nexa-beep.svg
+          dpkg -s nexa-beep | grep -E '^(Version|Depends):'
+          sudo dpkg -r nexa-beep
+          # `! cmd`는 set -e를 타지 않는다 — 부정은 test 안에서.
+          test ! -e /usr/bin/nexa-beep; test ! -e /usr/bin/nbeep-imgdec
+          test ! -e /usr/share/applications/nexa-beep.desktop; test ! -e /usr/share/doc/nexa-beep
+          rpm=$(ls out/*.rpm)
+          rpm -qpl "$rpm" | grep -q '^/usr/bin/nexa-beep$'
+          rpm -qpl "$rpm" | grep -q '^/usr/bin/nbeep-imgdec$'
+          rpm -K --nosignature "$rpm"
 
       - name: 산출물 목록
         shell: bash
@@ -332,10 +356,15 @@ jobs:
           | Windows ARM64 | \`...windows-arm64-setup.exe\`(+`.zip`) | \`...windows-arm64-portable.zip\` |
           | macOS (Apple Silicon) | \`...macos-arm64.dmg\` | \`...macos-arm64-portable.tar.gz\` |
           | macOS (Intel) | \`...macos-x64.dmg\` | \`...macos-x64-portable.tar.gz\` |
-          | Linux x86_64 | \`...linux-x64.deb\` | \`...linux-x64-portable.tar.gz\` |
+          | Linux x86_64 (Debian·Ubuntu) | \`...linux-x64.deb\` | \`...linux-x64-portable.tar.gz\` |
+          | Linux x86_64 (Fedora·RHEL·openSUSE) | \`...linux-x64.rpm\` | (같은 tar.gz) |
 
           Windows 설치본은 **같은 파일의 \`.zip\`**도 함께 올려 두었다(실행 파일 확장자를
           막는 브라우저·사내 프록시 대비).
+
+          Linux 설치본은 \`sudo apt install ./nexa-beep-*-linux-x64.deb\` 또는
+          \`sudo dnf install ./nexa-beep-*-linux-x64.rpm\`(제거: \`apt remove nexa-beep\` / \`dnf remove nexa-beep\`).
+          glibc 하한은 패키지 의존성에 **실측값**으로 적혀 있다(Ubuntu 22.04 · Debian 12 이상).
 
           ## 패키지 관리자 (macOS)
 
