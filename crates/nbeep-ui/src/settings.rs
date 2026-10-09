@@ -221,6 +221,7 @@ pub const DEPENDS: &[(&str, &str, Dep)] = &[
     ("user.passphrase", "user.enabled", Dep::On),
     ("user.test", "user.enabled", Dep::On),
     ("user.rotate", "user.enabled", Dep::On),
+    ("user.devices", "user.enabled", Dep::On),
     ("net.server.address", "net.server.mode", Dep::Eq("managed")),
     ("net.server.port", "net.server.mode", Dep::Eq("managed")),
     ("net.server.type", "net.server.mode", Dep::Eq("managed")),
@@ -1282,6 +1283,17 @@ pub fn registry() -> &'static [Entry] {
         },
         // 사용자 키 교체(ADR-0015 §3-5 · S2-f) — 기기 분실 대응. 인증 상태에서만 활성(호스트 잠금) ·
         // 2회 클릭(5초 무장)으로 실행.
+        // 내 기기 목록(10-09) — 행위 항목: 창을 연다(호스트 `open_devices` · 기기별 폐기 = Succession 부분 집합).
+        Entry {
+            cat: Msg::CatUser,
+            sub: None,
+            label: Msg::UserDevices,
+            desc: Msg::UserDevicesDesc,
+            kind: SettingKind::Action {
+                verb: Msg::UserDevicesVerb,
+            },
+            key: "user.devices",
+        },
         Entry {
             cat: Msg::CatUser,
             sub: None,

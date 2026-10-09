@@ -2580,6 +2580,8 @@ enum Role {
     About,
     /// 라이선스 창(도움말 ▸ 라이선스… · docs/50 P4 — 상태표 · 요청 코드 · 파일 열기 · 제거).
     License,
+    /// 내 기기 목록(10-09 · ADR-0015 서명 기기 목록 + 기기별 폐기 = Succession 부분 집합).
+    Devices,
     /// 프로필 변경 화면(M3-17 — 이미지·이름·연락처 + 공개 토글).
     Profile,
     /// 상대 프로필 보기 카드(M3-17 — 목록 우클릭 ▸ 프로필 보기).
@@ -3014,6 +3016,12 @@ struct App {
     about_view: Option<AboutWidget>,
     /// 라이선스 창(P4) — 위젯 + 판정기(부팅 1회 `open_default` · 창 열 때 `refresh`).
     license_view: Option<nbeep_ui::LicenseWidget>,
+    /// 내 기기 목록 창(10-09).
+    devices_view: Option<nbeep_ui::DevicesWidget>,
+    /// 기기 폐기 무장(기기, 시각 ms) — 5초 안 두 번째 클릭에서 실행("사용자 키 교체"와 같은 안전장치).
+    revoke_armed: Option<(PeerId, u64)>,
+    /// 설정 행동 "내 기기 목록 열기…" → `about_to_wait`에서 창 생성(`apply_settings`에는 이벤트 루프 핸들이 없다).
+    want_devices_window: bool,
     licensing: nbeep_license::Licensing,
     /// 경고 모달 뷰(열려 있을 때만 Some).
     alert_view: Option<nbeep_ui::AlertWidget>,
@@ -3767,7 +3775,7 @@ impl App {
     /// 갖는다(알림 > 피커 > 이름/주소 프롬프트 > 프로필 > About). 모달이 떠 있는
     /// 동안 다른 앱 창은 입력 불가·클릭 시 모달이 앞으로 온다.
     fn modal_id(&self) -> Option<WindowId> {
-        let picks: [fn(Role) -> bool; 7] = [
+        let picks: [fn(Role) -> bool; 8] = [
             |r| matches!(r, Role::Alert),
             |r| matches!(r, Role::Picker),
             |r| matches!(r, Role::NamePrompt),
@@ -3775,6 +3783,7 @@ impl App {
             |r| matches!(r, Role::Profile),
             |r| matches!(r, Role::About),
             |r| matches!(r, Role::License),
+            |r| matches!(r, Role::Devices),
         ];
         for pick in picks {
             if let Some((wid, _)) = self.windows.iter().find(|(_, e)| pick(e.role)) {
@@ -6283,6 +6292,7 @@ impl App {
                     }
                 }
                 None if step == "settings" => self.open_settings(el),
+                None if step == "devices" => self.open_devices(el),
                 None if step == "quit" => el.exit(),
                 _ => eprintln!("[script] 모르는 단계: {step}"),
             }
@@ -7451,17 +7461,32 @@ impl App {
             return;
         }
         self.rotate_armed_ms = 0;
+        let me = self.identity.peer_id();
+        let revoked: Vec<PeerId> = self.my_devices().into_iter().filter(|p| *p != me).collect();
+        if let Some(done) = self.issue_succession(vec![me], revoked, now) {
+            self.rotate_note = Some(done.clone());
+            self.set_status(done);
+            self.refresh_approval_ui();
+        }
+    }
+
+    /// Succession 발행(ADR-0015 §3-5) — `devices`를 남기고 `revoked`를 폐기하는 **한 경로**: 전체 교체(`user_rotate` =
+    /// 나만 남김 · 기기 분실)와 기기 하나 폐기(`user_revoke_device` · 10-09 내 기기 목록)가 같은 코드를 탄다.
+    /// 성공 = 완료 문구 · 실패 = 상태바에 사유를 남기고 `None`(파일 먼저 — 실패하면 아무것도 바뀌지 않는다).
+    fn issue_succession(
+        &mut self,
+        devices: Vec<PeerId>,
+        revoked: Vec<PeerId>,
+        now: u64,
+    ) -> Option<String> {
         let (Some(m), Some(old)) = (self.user_rt.material.as_ref(), self.user_rt.key.clone())
         else {
-            return;
+            return None;
         };
         let Ok(new) = nbeep_crypto::userkey::UserKey::generate() else {
             self.set_status("난수원 실패 — 키 교체 중단");
-            return;
+            return None;
         };
-        let me = self.identity.peer_id();
-        let devices = vec![me];
-        let revoked: Vec<PeerId> = self.my_devices().into_iter().filter(|p| *p != me).collect();
         let ver = self.user_list_ver().max(1) + 1;
         let msg = nbeep_core::Succession::signing_bytes(
             &old.public(),
@@ -7490,14 +7515,14 @@ impl App {
             Ok(b) => b,
             Err(e) => {
                 self.set_status(e);
-                return;
+                return None;
             }
         };
         if let Err(e) =
             nbeep_store::privfile::write_atomic(&self.data_dir.join("user.key"), &sealed)
         {
             self.set_status(format!("user.key 저장 실패: {e}"));
-            return;
+            return None;
         }
         let old_id = old.user_id();
         let new_id = new.user_id();
@@ -7508,8 +7533,8 @@ impl App {
         self.succ_seen.insert(doc.old_pub, (ver, doc.new_pub));
         self.push_my_succession(doc);
         self.rotate_done_ms = now;
-        for p in revoked {
-            self.trust.revoke_user(p);
+        for p in &revoked {
+            self.trust.revoke_user(*p);
         }
         self.settings.set("user.list_ver", ver.to_string());
         self.conf_mark();
@@ -7528,9 +7553,220 @@ impl App {
             nbeep_core::Msg::StfUserRotated,
             &[&old_id.short(), &new_id.short()],
         );
-        self.rotate_note = Some(done.clone());
-        self.set_status(done);
-        self.refresh_approval_ui();
+        Some(done)
+    }
+
+    /// 기기 하나 폐기(10-09 내 기기 목록 [폐기]) = `issue_succession(내 기기 − 그 기기, [그 기기])`. 자기 자신은 못 뺀다.
+    fn user_revoke_device(&mut self, peer: PeerId) {
+        let now = unix_now_ms();
+        let me = self.identity.peer_id();
+        if peer == me {
+            return;
+        }
+        if self.rotate_done_ms > 0 && now.saturating_sub(self.rotate_done_ms) < ROTATE_COOLDOWN_MS {
+            return; // 직전 교체 뒤 잠금 창(연타 방지)
+        }
+        let devices: Vec<PeerId> = self
+            .my_devices()
+            .into_iter()
+            .filter(|p| *p != peer)
+            .collect();
+        if self.issue_succession(devices, vec![peer], now).is_some() {
+            let msg = nbeep_core::tf(nbeep_core::Msg::DevfRevoked, &[&peer.short()]);
+            self.set_status(msg.clone());
+            let mut inv = Invalidations::default();
+            if let Some(dv) = &mut self.devices_view {
+                dv.set_note(msg, false, &mut inv);
+            }
+            self.refresh_approval_ui();
+            self.refresh_user_glance();
+            self.refresh_devices_view();
+        }
+    }
+
+    /// 내 기기 목록 창 열기(설정 › 사용자 [열기…] · 라이선스 창과 같은 모달 문법).
+    fn open_devices(&mut self, el: &ActiveEventLoop) {
+        if let Some((did, _)) = self.windows.iter().find(|(_, e)| e.role == Role::Devices) {
+            if let Some(e) = self.windows.get(did) {
+                e.window.set_visible(true);
+                e.window.focus_window();
+            }
+            return;
+        }
+        let dv = nbeep_ui::DevicesWidget::new(self.devices_view_data());
+        let attrs = self
+            .win_attrs()
+            .with_title(format!(
+                "Nexa Beep — {}",
+                nbeep_core::t(nbeep_core::Msg::DevTitle)
+            ))
+            .with_inner_size(winit::dpi::LogicalSize::new(600.0, 320.0))
+            .with_min_inner_size(winit::dpi::LogicalSize::new(480.0, 240.0))
+            .with_resizable(true)
+            .with_window_icon(self.icon.clone());
+        let attrs = self.modal_attrs(attrs, false);
+        let window = Rc::new(el.create_window(attrs).unwrap());
+        window.set_ime_allowed(false);
+        let scale = window.scale_factor() as f32;
+        let context = softbuffer::Context::new(window.clone()).unwrap();
+        let surface = SbSurface::new(&context, window.clone()).unwrap();
+        let id = window.id();
+        self.windows.insert(
+            id,
+            WinEntry {
+                role: Role::Devices,
+                window,
+                surface,
+                cursor: (0, 0),
+                scale,
+            },
+        );
+        self.devices_view = Some(dv);
+        self.fit_devices_window(id);
+        self.layout_window(id);
+        self.request_redraw(id);
+        self.raise_new_window(id);
+    }
+
+    /// 창 높이를 위젯이 바라는 값으로(행 수 · 물리 px → 논리).
+    fn fit_devices_window(&mut self, id: WindowId) {
+        let Some(dv) = &self.devices_view else { return };
+        let Some(e) = self.windows.get(&id) else {
+            return;
+        };
+        let want = dv.desired_height();
+        if want > 0 {
+            let s = f64::from(e.scale.max(0.5));
+            let w = f64::from(e.window.inner_size().width) / s;
+            let _ = e
+                .window
+                .request_inner_size(winit::dpi::LogicalSize::new(w, f64::from(want) / s));
+        }
+    }
+
+    /// 내 기기 목록 보기 — 단일 원천은 `my_devices`(서명 목록) · 접속 = `siblings` · 마지막 접속 = trust.seg `last_seen`.
+    fn devices_view_data(&self) -> nbeep_ui::DevView {
+        use nbeep_core::{t, Msg};
+        let me = self.identity.peer_id();
+        let now = unix_now_ms();
+        let handle = self.settings.get("user.handle").to_string();
+        let user_id = self
+            .user_rt
+            .key
+            .as_ref()
+            .map_or_else(|| "-".to_string(), |k| k.user_id().short());
+        let rows = self
+            .my_devices()
+            .into_iter()
+            .map(|p| {
+                let is_me = p == me;
+                let online = is_me || self.siblings.contains(&p);
+                let (seen, _) = self.trust.meta(p);
+                let last_seen = if online {
+                    t(Msg::DevOnline).to_string()
+                } else if seen == 0 {
+                    t(Msg::DevNever).to_string()
+                } else {
+                    ago_text(now, seen)
+                };
+                let name = if is_me {
+                    effective_display_name(&self.settings, &me)
+                        .as_str()
+                        .to_string()
+                } else {
+                    self.peer_title(p)
+                };
+                nbeep_ui::DevRow {
+                    peer: p,
+                    name,
+                    id_short: p.short(),
+                    is_me,
+                    online,
+                    last_seen,
+                }
+            })
+            .collect();
+        nbeep_ui::DevView {
+            handle,
+            user_id,
+            rows,
+        }
+    }
+
+    /// 열린 내 기기 창 갱신(틱 · 형제 성립/종료 · 폐기 뒤) — 내용 같으면 위젯이 비용 0으로 무시.
+    fn refresh_devices_view(&mut self) {
+        let data = self.devices_view_data();
+        let mut inv = Invalidations::default();
+        let armed_expired = self
+            .revoke_armed
+            .is_some_and(|(_, t0)| unix_now_ms().saturating_sub(t0) > 5000);
+        let Some(dv) = &mut self.devices_view else {
+            return;
+        };
+        let before = dv.view().rows.len();
+        dv.set_view(data, &mut inv);
+        if armed_expired {
+            self.revoke_armed = None;
+            dv.clear_note(&mut inv);
+        }
+        let Some(did) = self
+            .windows
+            .iter()
+            .find(|(_, e)| e.role == Role::Devices)
+            .map(|(id, _)| *id)
+        else {
+            return;
+        };
+        if dv.view().rows.len() != before {
+            self.fit_devices_window(did);
+        }
+        if !inv.is_empty() {
+            self.request_redraw(did);
+        }
+    }
+
+    /// 내 기기 창 행동 — 닫기 · 폐기(첫 클릭 = 5초 무장 안내 · 두 번째 = 발행).
+    fn devices_action(&mut self, id: WindowId, a: nbeep_ui::DevAction, inv: &mut Invalidations) {
+        match a {
+            nbeep_ui::DevAction::Close => {
+                self.devices_view = None;
+                self.revoke_armed = None;
+                self.windows.remove(&id);
+            }
+            nbeep_ui::DevAction::Revoke(peer) => {
+                let now = unix_now_ms();
+                match self.revoke_armed {
+                    Some((p, t0)) if p == peer && now.saturating_sub(t0) <= 5000 => {
+                        self.revoke_armed = None;
+                        self.user_revoke_device(peer);
+                    }
+                    _ => {
+                        self.revoke_armed = Some((peer, now));
+                        if let Some(dv) = &mut self.devices_view {
+                            dv.set_note(nbeep_core::t(nbeep_core::Msg::DevRevokeArm), true, inv);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// 툴바 툴팁 재기입(언어 전환 · nexa-ui 190차 `set_tip`) — 생성 블록과 같은 id↔문구 쌍.
+    fn refresh_toolbar_tips(&mut self) {
+        use nbeep_core::{t, Msg};
+        for (id, m) in [
+            ("refresh", Msg::RefreshList),
+            ("add", Msg::AddrTitle),
+            ("quarantine", Msg::QuarantineTitle),
+            ("convbox", Msg::ConvboxTitle),
+            ("server", Msg::TipServerOn),
+            ("profile", Msg::ProfileTitle),
+        ] {
+            let _ = self.toolbar.set_tip(id, t(m)); // 같은 문구면 false — 무시
+        }
+        if let Some(mid) = self.main_id {
+            self.request_redraw(mid);
+        }
     }
 
     /// 내 기기 집합(ADR-0015 S2-e) = 나 + **내 사용자 공개키를 서명 제시한 기기들**(trust.seg 기록 —
@@ -12404,6 +12640,7 @@ impl App {
                     let keep = self.sort_drop.value().to_string();
                     self.sort_drop = nbeep_ui::IconDropdown::new(Self::sort_drop_items(), &keep);
                     self.refresh_system_option_labels(); // 접미 언어 이름도 새 언어로
+                    self.refresh_toolbar_tips(); // 툴팁은 생성 시 고정(10-09 "한국어 UI에 영어 툴팁" · nexa-ui 190차)
                     if let Some(mid) = self.main_id {
                         self.layout_window(mid);
                     }
@@ -12657,6 +12894,10 @@ impl App {
                 }
                 "user.rotate" => {
                     self.user_rotate();
+                    continue;
+                }
+                "user.devices" => {
+                    self.want_devices_window = true; // 창 생성은 about_to_wait(이벤트 루프 핸들)
                     continue;
                 }
                 // 연결 테스트(08-22) — 행위 항목: 값 저장 없이 즉시 검증 절차.
@@ -14974,6 +15215,12 @@ impl App {
                     lv.set_bounds(Rect::new(0, 0, w, h), &mut inv);
                 }
             }
+            Role::Devices => {
+                if let Some(dv) = &mut self.devices_view {
+                    dv.set_scale(scale, &mut inv);
+                    dv.set_bounds(Rect::new(0, 0, w, h), &mut inv);
+                }
+            }
             Role::Alert => {
                 if let Some(av) = &mut self.alert_view {
                     av.set_scale(scale, &mut inv);
@@ -16062,6 +16309,14 @@ impl App {
                     }
                 }
             }
+            Role::Devices => {
+                if let Some(dv) = &mut self.devices_view {
+                    dv.on_event(&ev, &mut inv);
+                    if let Some(a) = dv.take_action() {
+                        self.devices_action(id, a, &mut inv);
+                    }
+                }
+            }
             Role::Alert => {
                 let mut row = None;
                 let mut closed_choice = None;
@@ -16563,6 +16818,11 @@ impl App {
             Role::License => {
                 if let Some(lv) = &self.license_view {
                     lv.paint(&mut ctx, &theme);
+                }
+            }
+            Role::Devices => {
+                if let Some(dv) = &self.devices_view {
+                    dv.paint(&mut ctx, &theme);
                 }
             }
             Role::Alert => {
@@ -18576,7 +18836,13 @@ impl ApplicationHandler<AppEvent> for App {
         self.refresh_tray_badges(); // 트레이 LAN·전송 점(M3-2e — 바뀔 때만 갱신)
         self.user_tick(); // 사용자 층(ADR-0015) — 힌트 태그 자정 회전 · 페어링 RID 탐색
         self.script_tick(el); // 자동화 테스트 seam(NEXA_SCRIPT · 없으면 no-op)
-                              // 설정 영속 tick(FR-P-9) — 조용 1s OR 상한 10s 충족 시 스냅샷 1회 저장.
+        if std::mem::take(&mut self.want_devices_window) {
+            self.open_devices(el);
+        }
+        if self.devices_view.is_some() {
+            self.refresh_devices_view(); // 접속 상태·"N분 전"은 틱마다 · 같은 내용이면 비용 0
+        }
+        // 설정 영속 tick(FR-P-9) — 조용 1s OR 상한 10s 충족 시 스냅샷 1회 저장.
         if self.conf.sched.tick(Instant::now()) {
             self.conf_save(false);
         }
@@ -19086,6 +19352,7 @@ impl ApplicationHandler<AppEvent> for App {
                         Role::Picker => self.picker_view = None,
                         Role::About => self.about_view = None,
                         Role::License => self.license_view = None,
+                        Role::Devices => self.devices_view = None,
                         Role::Alert => {
                             self.alert_view = None;
                             // 선택 없이 닫음(X) — 원격 요청 대기(§6)면 거절과 동치:
@@ -19796,6 +20063,21 @@ impl ApplicationHandler<AppEvent> for App {
     }
 }
 
+/// "N분 전/시간 전/일 전" — 내 기기 목록의 마지막 접속(언어 i18n · 상대 시각이라 시간대 불요).
+fn ago_text(now_ms: u64, then_ms: u64) -> String {
+    use nbeep_core::{t, tf, Msg};
+    let d = now_ms.saturating_sub(then_ms) / 1000;
+    if d < 60 {
+        t(Msg::DevJustNow).to_string()
+    } else if d < 3600 {
+        tf(Msg::DevfAgoMin, &[&(d / 60).to_string()])
+    } else if d < 86_400 {
+        tf(Msg::DevfAgoHour, &[&(d / 3600).to_string()])
+    } else {
+        tf(Msg::DevfAgoDay, &[&(d / 86_400).to_string()])
+    }
+}
+
 /// `NEXA_SCRIPT` 파서 — `"8000:activate=kiros33@mac;15000:settings;20000:quit"` → 시각 오름차순 단계 목록(형식 오류 항목은 버린다).
 fn parse_script(raw: Option<&str>) -> Vec<(u64, String)> {
     let mut steps: Vec<(u64, String)> = raw
@@ -20495,6 +20777,9 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         gallery_view: None,
         about_view: None,
         license_view: None,
+        devices_view: None,
+        revoke_armed: None,
+        want_devices_window: false,
         licensing: nbeep_license::Licensing::open_default(&data_dir()),
         alert_view: None,
         pending_alert: None,

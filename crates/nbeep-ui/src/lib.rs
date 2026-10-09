@@ -151,6 +151,7 @@ pub mod alert;
 pub mod avatar_assets;
 pub mod chat_view;
 pub mod convbox_view;
+pub mod devices_win;
 pub mod filter_bar;
 pub mod gallery;
 pub mod jamo;
@@ -182,6 +183,7 @@ pub use controls::{
     ToolIcon, ToolItem, Toolbar, VAlign,
 };
 pub use convbox_view::{CRow, ConvboxWidget, CvAction};
+pub use devices_win::{DevAction, DevRow, DevView, DevicesWidget};
 pub use draw::{DrawCtx, FontSlot};
 pub use edit::{EditKey, EditState};
 pub use event::{InputEvent, Key, WheelAccum, WHEEL_DELTA};
