@@ -3531,11 +3531,14 @@ impl App {
             return;
         };
         let sys = t(Msg::ThemeSystem);
-        let theme_label = match self.system_dark {
-            Some(true) => format!("{sys} ({})", t(Msg::ThemeDark)),
-            Some(false) => format!("{sys} ({})", t(Msg::ThemeLight)),
-            None => sys.to_string(),
+        // OS 판정이 없으면(GNOME 포털 color-scheme 0 = 무선호) 실효 규칙과 같이 **라이트**로 본다(effective_light) —
+        // 10-09 사용자 "테마도 시스템 (값) 형태로": None이면 접미를 비우던 것을 고쳤다(언어는 항상 값이 있어 보였다).
+        let theme_now = if self.system_dark.unwrap_or(false) {
+            Msg::ThemeDark
+        } else {
+            Msg::ThemeLight
         };
+        let theme_label = format!("{sys} ({})", t(theme_now));
         let lang_now = match resolve_lang("system") {
             Lang::En => Msg::LangEnglish,
             Lang::Ko => Msg::LangKorean,
@@ -19504,20 +19507,34 @@ impl ApplicationHandler<AppEvent> for App {
                 //   IME를 끊으면 라틴만 온다 → XKB Hangul 키(HangulMode)·evdev KEY_HANGEUL(Lang1)로 토글.
                 //   mac만 레이아웃이 자모를 내보내므로 이 경로가 필요 없다.
                 // IME 켠 창(대화 등)은 OS IME 몫 — 상태를 건드리지 않고 문자 취급도 안 한다.
-                if cfg!(any(windows, target_os = "linux"))
-                    && (event.logical_key == WKey::Named(NamedKey::HangulMode)
-                        || event.physical_key
-                            == winit::keyboard::PhysicalKey::Code(winit::keyboard::KeyCode::Lang1))
-                {
+                // ★ Linux 대체 토글(10-09 실기 "목록창에서 한글 안됨" — VMware·GNOME 환경은 한/영 키가 Hangul 키심으로
+                //   안 오고 **오른쪽 Alt**로 오거나(호스트 키보드 매핑) ibus 관례 **Shift+Space**를 쓴다): 오른쪽 Alt 단독 ·
+                //   AltGr · Shift+Space도 목록 모드에서 토글로 받는다(Shift+Space는 목록에서 다른 뜻이 없다 · ⌘Space = 선택 토글과 별개).
+                let alt_right = matches!(
+                    event.logical_key,
+                    WKey::Named(NamedKey::Alt) | WKey::Named(NamedKey::AltGraph)
+                ) && event.location == winit::keyboard::KeyLocation::Right;
+                let shift_space =
+                    self.shift_down && event.logical_key == WKey::Named(NamedKey::Space);
+                let hangul_toggle = event.logical_key == WKey::Named(NamedKey::HangulMode)
+                    || event.physical_key
+                        == winit::keyboard::PhysicalKey::Code(winit::keyboard::KeyCode::Lang1)
+                    || (cfg!(target_os = "linux") && (alt_right || shift_space));
+                if cfg!(any(windows, target_os = "linux")) && hangul_toggle {
                     let list_mode = Some(id) == self.main_id
                         && self.single_open.is_none()
                         && self.single_open_group.is_none();
                     if list_mode {
                         self.hangul_mode = !self.hangul_mode;
-                        self.set_status(if self.hangul_mode {
-                            "입력: 한글 (한/영 키로 전환)".to_string()
+                        let keys = if cfg!(target_os = "linux") {
+                            "한/영 · 오른쪽 Alt · Shift+Space"
                         } else {
-                            "입력: English (한/영 키로 전환)".to_string()
+                            "한/영 키"
+                        };
+                        self.set_status(if self.hangul_mode {
+                            format!("입력: 한글 ({keys}로 전환)")
+                        } else {
+                            format!("입력: English ({keys}로 전환)")
                         });
                         self.request_redraw(id);
                     }
