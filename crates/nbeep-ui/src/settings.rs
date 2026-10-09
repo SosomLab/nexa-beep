@@ -300,8 +300,9 @@ pub const PW_ARM_WINDOW: std::time::Duration = std::time::Duration::from_secs(5)
 /// 비밀 행 버튼 자리(clip 09-03 사용자 확정 "두 버튼을 텍스트 우상단으로") — 상자 위 한 줄,
 /// 오른쪽 끝 정렬 [생성][눈] · 버튼 크기 = 상자 높이 · 간격 = 높이/8.
 fn pw_btn_rects(b: Rect) -> (Rect, Rect) {
-    let eye = Rect::new(b.right() - b.h, b.y - b.h / 8 - b.h, b.h, b.h);
-    let regen = Rect::new(eye.x - b.h / 8 - b.h, eye.y, b.h, b.h);
+    // 10-09 카드 레이아웃: 컨트롤이 좌하단으로 가면서 버튼은 **상자 오른쪽** 같은 줄에([생성][눈] 순).
+    let regen = Rect::new(b.right() + b.h / 8, b.y, b.h, b.h);
+    let eye = Rect::new(regen.right() + b.h / 8, b.y, b.h, b.h);
     (eye, regen)
 }
 
@@ -1785,18 +1786,15 @@ const RESET_W: i32 = 72;
 /// 검색 이력 보관 수.
 const HISTORY_MAX: usize = 20;
 const SEARCH_H: i32 = 30;
-const ENTRY_H: i32 = 52;
-const FONT_SECTION_H: i32 = 88;
+/// 카드(10-09 사용자 확정 — nexa-sql 설정 창 모양): 제목 줄 높이 · 안쪽 여백 · 카드 간격 · 자유 텍스트 상자 폭.
+const TITLE_H: i32 = 20;
+const CARD_PAD: i32 = 12;
+const CARD_GAP: i32 = 8;
+const TEXT_W: i32 = 260;
 /// 설정 행에 붙는 정보 줄 높이(논리 px).
 const NOTE_H: i32 = 22;
-/// 행 노트 **아래** 여백 — 노트가 다음 행이 아니라 제 행에 붙어 보이게(09-06 사용자 지적 ·
-/// nexa-clip 09-03 반영과 동일: 예약만 하고 노트를 행 바닥에 그려 여백이 **위**로 가 있었다 —
-/// 서버 섹션 "테스트" 노트가 아래 설정과 더 가까워 어느 설정의 말인지 헷갈렸다).
-const NOTE_GAP_B: i32 = 16;
 /// 설명 워드랩 줄 높이(논리 px — Status 폰트 한 줄 + 행간).
 const DESC_LINE_H: i32 = 16;
-/// 위치 그리드 행 높이(3×3 미니 화면 93 + 여백).
-const POS_ROW_H: i32 = 110;
 const CTL_H: i32 = 26;
 const COMBO_W: i32 = 170;
 const SIZE_W: i32 = 112;
@@ -1853,8 +1851,6 @@ struct RowUi {
     desc_lines: i32,
     /// 설명 워드랩 가용 폭(물리 px — 컨트롤 왼쪽까지). 레이아웃·페인트가 같은 값을 쓴다.
     desc_avail: i32,
-    /// ★ 비밀 행 — 상자 위 버튼 줄만큼 제목·설명·상자를 아래로 내린다(clip 09-03).
-    top_inset: i32,
     /// [초기화](10-09 · 값이 기본값과 다를 때만 보인다 · 값 키가 없는 행위/정보 행은 `None`).
     reset: Option<Button>,
     /// 키 이름+복사 글리프 자리(페인트가 실측해 채운다 · 클릭 = 키 복사 요청).
@@ -2505,7 +2501,6 @@ impl SettingsWidget {
                 head_h: 0,
                 desc_lines: 1,
                 desc_avail: 0,
-                top_inset: 0,
                 reset,
                 key_rect: std::cell::Cell::new(Rect::default()),
             });
@@ -2610,7 +2605,7 @@ impl SettingsWidget {
     /// 보였다).
     fn note_h(&self, idx: usize) -> i32 {
         if self.row_note(idx).is_some() {
-            self.s(NOTE_H + NOTE_GAP_B) // 아래 여백(08-23 2차 — 8은 여전히 붙어 보였다)
+            self.s(NOTE_H + 6) // 컨트롤 줄 아래 간격 6 + 노트(카드 안)
         } else {
             0
         }
@@ -2738,46 +2733,43 @@ impl SettingsWidget {
 
         let rx = b.x + sw; // 우측 패널 시작
         let rw = (b.w - sw).max(0);
-        // 차용 분리를 위해 치수 사전 계산.
-        let (ctl_h, pad) = (self.s(CTL_H), self.s(PAD));
-        let (h_font, h_entry, h_pos) = (self.s(FONT_SECTION_H), self.s(ENTRY_H), self.s(POS_ROW_H));
-        // 토글 폭 = Switch 트랙(20) × 컨트롤 크기 배율(ui.control_size).
+        // ── 카드 레이아웃(10-09 사용자 확정 · nexa-sql 모양) ──
+        //   ┌ 제목 ……………………………… 키 이름 ⧉ ┐
+        //   │ 설명(워드랩 1~3줄)                      │
+        //   │ [컨트롤] [초기화]           기본값: … │
+        //   └ (노트 — 호스트/종속 잠금)              ┘
+        let (ctl_h, pad, cpad, gap) = (
+            self.s(CTL_H),
+            self.s(PAD),
+            self.s(CARD_PAD),
+            self.s(CARD_GAP),
+        );
         let (combo_w, check_w) = (self.s(COMBO_W), self.s(crate::controls::ctl_size(20)));
-        let (family_w, size_w, gap10, dy32) =
-            (self.s(FAMILY_W), self.s(SIZE_W), self.s(10), self.s(32));
-        let note_hs: Vec<i32> = self.rows.iter().map(|r| self.note_h(r.idx)).collect();
+        let (family_w, size_w, gap10, text_w) =
+            (self.s(FAMILY_W), self.s(SIZE_W), self.s(10), self.s(TEXT_W));
         let lang = current_lang();
         let scale = self.scale;
         let desc_line_h = self.s(DESC_LINE_H);
-        let min_avail = self.s(60);
-        // 콘텐츠 총 높이 → 스크롤 클램프(행 추가/검색으로 줄어들면 위로 당긴다).
-        // ★ **설명 워드랩 예약분 포함**(08-15 실기 — 이걸 빼고 합산하면 IME처럼
-        // 2줄 설명이 많은 카테고리에서 총높이가 과소평가돼 **끝까지 스크롤이 안 됐다**.
-        // 아래 배치 루프와 같은 추정식을 써야 상한이 실제 끝과 일치한다).
+        let title_h = self.s(TITLE_H);
         let head_h = self.s(SUB_HEAD_H);
-        self.content_h = self
+        let reset_w = self.s(RESET_W);
+        let card_x = rx + pad;
+        let card_w = (rw - pad * 2).max(self.s(120));
+        let desc_avail = (card_w - cpad * 2).max(self.s(60));
+        let desc_gap = self.s(2);
+        let ctl_gap = self.s(8);
+        // 행별 치수를 **한 번** 계산해 총높이와 배치가 같은 값을 쓴다(08-15 상한 불일치 재발 방지).
+        struct Metric {
+            desc_lines: i32,
+            ctl_block: i32,
+            h: i32,
+        }
+        let metrics: Vec<Metric> = self
             .rows
             .iter()
-            .enumerate()
-            .map(|(ri, row)| {
+            .map(|row| {
                 let e = &registry()[row.idx];
-                let base = match e.kind {
-                    SettingKind::FontSection { .. } => h_font,
-                    SettingKind::PositionGrid => h_pos,
-                    // ★ 비밀 행 — 상자 위 버튼 줄(ctl_h + 간격)만큼 더 높다.
-                    SettingKind::Text { secret: true, .. } => h_entry + ctl_h + ctl_h / 8,
-                    _ => h_entry,
-                };
-                let ctl_w = match &row.ctl {
-                    RowCtl::Combo(_) | RowCtl::Act(_) | RowCtl::Info(_) => combo_w,
-                    RowCtl::Check(_) => check_w,
-                    RowCtl::Face(_) if matches!(e.kind, SettingKind::Text { .. }) => combo_w,
-                    RowCtl::Face(_) => family_w,
-                    RowCtl::Pos(p) => p.preferred_size().0,
-                    RowCtl::Color(c) => c.preferred_width().min(rw - pad * 2),
-                    RowCtl::Font { .. } => 0,
-                };
-                let desc_avail = (rw - pad * 2 - ctl_w - gap10).max(min_avail);
+                // 설명 줄 수 추정(ASCII 7·그 외 14 논리px — 실측은 페인트가 하고 여기는 **예약**).
                 let est_logical: i32 = tr(lang, e.desc)
                     .chars()
                     .map(|c| if c.is_ascii() { 7 } else { 14 })
@@ -2785,177 +2777,114 @@ impl SettingsWidget {
                 #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
                 let est_px = (est_logical as f32 * scale).round() as i32;
                 let desc_lines = ((est_px + desc_avail - 1) / desc_avail).clamp(1, 3);
-                base + (desc_lines - 1) * desc_line_h
-                    + note_hs[ri]
-                    + if row.head.is_some() { head_h } else { 0 }
+                let ctl_block = match &row.ctl {
+                    RowCtl::Pos(p) => p.preferred_size().1,
+                    _ => ctl_h,
+                };
+                let h = cpad
+                    + title_h
+                    + desc_gap
+                    + desc_lines * desc_line_h
+                    + ctl_gap
+                    + ctl_block
+                    + self.note_h(row.idx)
+                    + cpad;
+                Metric {
+                    desc_lines,
+                    ctl_block,
+                    h,
+                }
             })
+            .collect();
+        self.content_h = self
+            .rows
+            .iter()
+            .zip(&metrics)
+            .map(|(row, m)| m.h + gap + if row.head.is_some() { head_h } else { 0 })
             .sum();
         let vp_h = self.right_viewport().h;
         self.scroll = self.scroll.clamp(0, (self.content_h - vp_h).max(0));
-        // [초기화] 표시 여부 = 기본값과 다름 ∧ 잠기지 않음(10-09).
+        // [초기화] 표시 여부 = 기본값과 다름 ∧ 잠기지 않음.
         let show_reset: Vec<bool> = self
             .rows
             .iter()
             .map(|r| self.is_modified(r.idx) && !self.is_locked(r.idx))
             .collect();
-        let reset_w = self.s(RESET_W);
+        let vp_bottom = self.bounds.bottom() - self.bottom_h();
+        let min_color_w = self.s(80);
         // 내용은 **밴드 아래**에서 시작한다(밴드가 첫 행을 가리면 못 만진다).
         let mut top = b.y + self.crumb_h() - self.scroll;
         for (ri, row) in self.rows.iter_mut().enumerate() {
             let e = &registry()[row.idx];
-            // ── 설명 워드랩 예약(08-11 — 설명이 컨트롤을 침범하지 않게) ──
-            // 가용 폭 = 행 폭 − 좌우 여백 − 그 행 컨트롤 폭 − 간격. 줄 수는 문자 폭
-            // 추정(ASCII 7·그 외 14 논리px — 실측은 페인트가 하고, 여기는 **예약**이라
-            // 약간의 과대/과소는 여백/말줄임으로 흡수된다).
-            let ctl_w = match &row.ctl {
-                RowCtl::Combo(_) | RowCtl::Act(_) | RowCtl::Info(_) => combo_w,
-                RowCtl::Check(_) => check_w,
-                RowCtl::Face(_) if matches!(e.kind, SettingKind::Text { .. }) => combo_w,
-                RowCtl::Face(_) => family_w,
-                RowCtl::Pos(p) => p.preferred_size().0,
-                RowCtl::Color(c) => c.preferred_width().min(rw - pad * 2),
-                RowCtl::Font { .. } => 0, // 설명이 전폭을 쓴다(컨트롤이 아래 줄)
-            };
-            row.desc_avail = (rw - pad * 2 - ctl_w - gap10).max(min_avail);
-            let est_logical: i32 = tr(lang, e.desc)
-                .chars()
-                .map(|c| if c.is_ascii() { 7 } else { 14 })
-                .sum();
-            #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-            let est_px = (est_logical as f32 * scale).round() as i32;
-            row.desc_lines = ((est_px + row.desc_avail - 1) / row.desc_avail).clamp(1, 3);
-            let h = match e.kind {
-                SettingKind::FontSection { .. } => h_font,
-                SettingKind::PositionGrid => h_pos,
-                SettingKind::Text { secret: true, .. } => h_entry + ctl_h + ctl_h / 8,
-                _ => h_entry,
-            } + (row.desc_lines - 1) * desc_line_h
-                + note_hs[ri];
-            // 하위 섹션 제목 자리를 행 **위에** 비워 둔다.
+            let m = &metrics[ri];
+            row.desc_avail = desc_avail;
+            row.desc_lines = m.desc_lines;
             row.head_h = if row.head.is_some() { head_h } else { 0 };
-            // ★ 비밀 행: 버튼 줄이 **제목 위**에 — 제목·설명·상자가 그만큼 내려간다(clip 09-03).
-            row.top_inset = if matches!(e.kind, SettingKind::Text { secret: true, .. }) {
-                ctl_h + ctl_h / 8
-            } else {
-                0
-            };
             top += row.head_h;
-            row.rect = Rect::new(rx, top, rw, h);
+            row.rect = Rect::new(card_x, top, card_w, m.h);
+            // 컨트롤 줄 = 좌하단(제목·설명 아래).
+            let cy = top + cpad + title_h + desc_gap + m.desc_lines * desc_line_h + ctl_gap;
+            let cx = card_x + cpad;
+            let secret = matches!(e.kind, SettingKind::Text { secret: true, .. });
             let text_row = matches!(e.kind, SettingKind::Text { .. });
-            let top_inset = row.top_inset;
-            match &mut row.ctl {
+            let ctl_right = match &mut row.ctl {
                 RowCtl::Combo(c) => {
-                    c.set_bounds(
-                        Rect::new(
-                            rx + rw - combo_w - pad,
-                            top + (h - ctl_h) / 2,
-                            combo_w,
-                            ctl_h,
-                        ),
-                        inv,
-                    );
-                    // 창 하한 전달(08-20) — 아래 끝 행의 팝업이 잘리지 않게
-                    // 시작 위치를 위로 옮긴다(콤보가 스스로 계산).
-                    c.set_viewport_bottom(self.bounds.bottom());
+                    c.set_bounds(Rect::new(cx, cy, combo_w, ctl_h), inv);
+                    c.set_viewport_bottom(vp_bottom); // 아래 끝 행의 팝업이 잘리지 않게(08-20)
+                    cx + combo_w
                 }
                 RowCtl::Check(c) => {
-                    c.set_bounds(
-                        Rect::new(
-                            rx + rw - check_w - pad,
-                            top + (h - ctl_h) / 2,
-                            check_w,
-                            ctl_h,
-                        ),
-                        inv,
-                    );
+                    c.set_bounds(Rect::new(cx, cy, check_w, ctl_h), inv);
+                    cx + check_w
                 }
                 RowCtl::Font { family, size } => {
-                    let fy = top + dy32;
-                    family.set_bounds(Rect::new(rx + pad, fy, family_w, ctl_h), inv);
-                    size.set_bounds(
-                        Rect::new(rx + pad + family_w + gap10, fy, size_w, ctl_h),
-                        inv,
-                    );
-                    size.set_viewport_bottom(self.bounds.bottom()); // 08-20 잘림 방지
+                    family.set_bounds(Rect::new(cx, cy, family_w, ctl_h), inv);
+                    size.set_bounds(Rect::new(cx + family_w + gap10, cy, size_w, ctl_h), inv);
+                    size.set_viewport_bottom(vp_bottom);
+                    cx + family_w + gap10 + size_w
                 }
-                RowCtl::Face(family) if text_row => {
-                    // 자유 텍스트 행 — 콤보 폭 · 비밀 행은 버튼 줄 아래 영역의 중앙.
-                    family.set_bounds(
-                        Rect::new(
-                            rx + rw - combo_w - pad,
-                            top + top_inset + (h - top_inset - ctl_h) / 2,
-                            combo_w,
-                            ctl_h,
-                        ),
-                        inv,
-                    );
+                RowCtl::Face(f) if text_row => {
+                    f.set_bounds(Rect::new(cx, cy, text_w, ctl_h), inv);
+                    // 비밀 행은 상자 오른쪽에 [생성][눈] 두 칸(ctl_h 정사각 · 간격 ctl_h/8).
+                    cx + text_w + if secret { ctl_h / 8 * 2 + ctl_h * 2 } else { 0 }
                 }
-                RowCtl::Face(family) => {
-                    // 크기 콤보가 없다 — 얼굴만 지정하고 크기는 Base UI를 따른다.
-                    family.set_bounds(
-                        Rect::new(
-                            rx + rw - family_w - pad,
-                            top + (h - ctl_h) / 2,
-                            family_w,
-                            ctl_h,
-                        ),
-                        inv,
-                    );
+                RowCtl::Face(f) => {
+                    f.set_bounds(Rect::new(cx, cy, family_w, ctl_h), inv);
+                    cx + family_w
                 }
                 RowCtl::Pos(p) => {
-                    p.set_scale(self.scale);
+                    p.set_scale(scale);
                     let (pw, ph) = p.preferred_size();
-                    p.set_bounds(
-                        Rect::new(rx + rw - pw - pad, top + (h - ph) / 2, pw, ph),
-                        inv,
-                    );
+                    p.set_bounds(Rect::new(cx, cy, pw, ph), inv);
+                    cx + pw
                 }
                 RowCtl::Color(c) => {
-                    c.set_scale(self.scale);
-                    let cw = c.preferred_width().min(rw - pad * 2);
-                    c.set_bounds(
-                        Rect::new(rx + rw - cw - pad, top + (h - ctl_h) / 2, cw, ctl_h),
-                        inv,
-                    );
+                    c.set_scale(scale);
+                    let cw = c
+                        .preferred_width()
+                        .min((card_w - cpad * 2 - reset_w - gap10).max(min_color_w));
+                    c.set_bounds(Rect::new(cx, cy, cw, ctl_h), inv);
+                    cx + cw
                 }
                 RowCtl::Act(b) => {
-                    b.set_scale(self.scale);
-                    b.set_bounds(
-                        Rect::new(
-                            rx + rw - combo_w - pad,
-                            top + (h - ctl_h) / 2,
-                            combo_w,
-                            ctl_h,
-                        ),
-                        inv,
-                    );
+                    b.set_scale(scale);
+                    b.set_bounds(Rect::new(cx, cy, combo_w, ctl_h), inv);
+                    cx + combo_w
                 }
-                RowCtl::Info(_) => {} // 글만 — 페인트가 컨트롤 자리에 그린다
-            }
-            // [초기화] 자리 — 컨트롤 왼쪽(글꼴 영역은 컨트롤이 왼쪽이라 오른쪽 끝) · 안 보일 땐 빈 rect.
+                RowCtl::Info(_) => cx + text_w,
+            };
+            let _ = m.ctl_block;
+            // [초기화] — 컨트롤 오른쪽(값이 기본값과 다를 때만 · 잠기면 숨김).
             if let Some(btn) = &mut row.reset {
-                btn.set_scale(self.scale);
+                btn.set_scale(scale);
                 let rect = if show_reset[ri] {
-                    match &row.ctl {
-                        RowCtl::Font { .. } => {
-                            Rect::new(rx + rw - pad - reset_w, top + dy32, reset_w, ctl_h)
-                        }
-                        other => {
-                            let left = ctl_rect(other).map_or(rx + rw - pad, |r| r.x);
-                            Rect::new(
-                                left - gap10 - reset_w,
-                                top + (h - ctl_h) / 2,
-                                reset_w,
-                                ctl_h,
-                            )
-                        }
-                    }
+                    Rect::new(ctl_right + gap10, cy, reset_w, ctl_h)
                 } else {
                     Rect::default()
                 };
                 btn.set_bounds(rect, inv);
             }
-            top += h;
+            top += m.h + gap;
         }
         inv.push(self.bounds);
     }
@@ -3089,37 +3018,37 @@ impl SettingsWidget {
         }
     }
 
-    /// 제목 옆 **키 이름 + 복사 글리프**(10-09 · nexa-sql 차용 — 고급 키는 accent · 클릭 = 복사). 자리를 `key_rect`에 남긴다.
+    /// 카드 우상단 **키 이름 + 복사 글리프**(10-09 · nexa-sql 차용 — 고급 키는 accent · 클릭 = 복사) — `right`에서
+    /// 왼쪽으로 정렬. 자리를 `key_rect`에 남긴다.
     fn paint_key(
         &self,
         ctx: &mut dyn DrawCtx,
         theme: &Theme,
         row: &RowUi,
-        x: i32,
+        right: i32,
         y: i32,
         clip: Rect,
     ) {
         let key = registry()[row.idx].key;
-        ctx.select_font(FontSlot::Status, false);
         let color = if is_advanced(key) {
             theme.accent
         } else {
             theme.text_dim
         };
-        let kx = x + self.s(10);
-        let kw = ctx.text_width(key);
-        let th = ctx.text_height();
-        // 제목(Base)과 기준선을 맞추려 Status 글자를 제목 높이 안 세로 중앙에.
         ctx.select_font(FontSlot::Base, false);
         let bh = ctx.text_height();
         ctx.select_font(FontSlot::Status, false);
+        let th = ctx.text_height();
+        let glyph = "⧉";
+        let kw = ctx.text_width(key);
+        let gw = ctx.text_width(glyph);
+        let w = kw + self.s(4) + gw;
+        let kx = right - w;
         let ky = y + (bh - th) / 2;
         ctx.text(kx, ky, clip, key, color);
-        let glyph = "⧉";
-        let gw = ctx.text_width(glyph);
         ctx.text(kx + kw + self.s(4), ky, clip, glyph, color);
         row.key_rect
-            .set(Rect::new(kx, y, kw + self.s(4) + gw, bh).intersection(&clip));
+            .set(Rect::new(kx, y, w, bh).intersection(&clip));
     }
 
     fn any_family_focused(&self) -> bool {
@@ -3665,7 +3594,7 @@ impl Widget for SettingsWidget {
 
     fn paint(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
         let lang = current_lang();
-        ctx.fill_rect(self.bounds, theme.panel_bg);
+        ctx.fill_rect(self.bounds, theme.window_bg); // 카드(panel_bg)가 떠 보이는 바탕(10-09)
         let sw = self.s(self.sidebar_w);
 
         // 사이드바 배경 + 검색 + 트리 + 경계선.
@@ -3701,70 +3630,43 @@ impl Widget for SettingsWidget {
             );
         }
 
-        // 우측 행: 라벨/설명 + 컨트롤.
+        // 우측 카드(10-09): 바탕 → 제목·키 → 설명 → 컨트롤(+비밀 행 아이콘) → [초기화]·기본값 → 노트.
+        let cpad = self.s(CARD_PAD);
+        let title_h = self.s(TITLE_H);
+        let desc_gap = self.s(2);
+        let ctl_gap = self.s(8);
+        let desc_line_h = self.s(DESC_LINE_H);
+        let ctl_h = self.s(CTL_H);
         for row in &self.rows {
             let e = &registry()[row.idx];
             let r = row.rect;
-            let ry = r.y + row.top_inset; // 비밀 행은 버튼 줄만큼 아래에서 시작
-            match &row.ctl {
-                RowCtl::Combo(_)
-                | RowCtl::Check(_)
-                | RowCtl::Act(_)
-                | RowCtl::Pos(_)
-                | RowCtl::Face(_)
-                | RowCtl::Color(_)
-                | RowCtl::Info(_) => {
-                    ctx.select_font(FontSlot::Base, false);
-                    ctx.text(
-                        r.x + self.s(PAD),
-                        ry + self.s(6),
-                        r,
-                        tr(lang, e.label),
-                        theme.text,
-                    );
-                    let lw = ctx.text_width(tr(lang, e.label));
-                    self.paint_key(ctx, theme, row, r.x + self.s(PAD) + lw, ry + self.s(6), r);
-                    // 설명 — 컨트롤을 침범하지 않게 워드랩(08-11 사용자 지적).
-                    ctx.select_font(FontSlot::Status, false);
-                    #[allow(clippy::cast_sign_loss)]
-                    let lines = wrap_text(
-                        ctx,
-                        tr(lang, e.desc),
-                        row.desc_avail,
-                        row.desc_lines as usize,
-                    );
-                    for (i, line) in lines.iter().enumerate() {
-                        #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-                        let dy = self.s(30) + i as i32 * self.s(DESC_LINE_H);
-                        ctx.text(r.x + self.s(PAD), ry + dy, r, line, theme.text_dim);
-                    }
-                }
-                RowCtl::Font { .. } => {
-                    ctx.select_font(FontSlot::Base, true);
-                    ctx.text(
-                        r.x + self.s(PAD),
-                        r.y + self.s(6),
-                        r,
-                        tr(lang, e.label),
-                        theme.text,
-                    );
-                    let lw = ctx.text_width(tr(lang, e.label));
-                    self.paint_key(ctx, theme, row, r.x + self.s(PAD) + lw, r.y + self.s(6), r);
-                    ctx.select_font(FontSlot::Status, false);
-                    #[allow(clippy::cast_sign_loss)]
-                    let lines = wrap_text(
-                        ctx,
-                        tr(lang, e.desc),
-                        row.desc_avail,
-                        row.desc_lines as usize,
-                    );
-                    for (i, line) in lines.iter().enumerate() {
-                        #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-                        let dy = self.s(64) + i as i32 * self.s(DESC_LINE_H);
-                        ctx.text(r.x + self.s(PAD), r.y + dy, r, line, theme.text_dim);
-                    }
-                }
+            if r.bottom() <= vp_clip.y || r.y >= vp_clip.bottom() {
+                continue; // 화면 밖 카드
             }
+            ctx.fill_round_rect(r, self.s(6), theme.panel_bg);
+            let tx = r.x + cpad;
+            let ty = r.y + cpad;
+            // 제목(글꼴 영역은 굵게 — 종전 규약 유지).
+            ctx.select_font(FontSlot::Base, matches!(row.ctl, RowCtl::Font { .. }));
+            ctx.text(tx, ty, r, tr(lang, e.label), theme.text);
+            // 키 이름 + ⧉ — 우상단.
+            self.paint_key(ctx, theme, row, r.right() - cpad, ty, r);
+            // 설명 — 카드 폭 전체(컨트롤이 아래로 내려가 침범할 것이 없다).
+            ctx.select_font(FontSlot::Status, false);
+            #[allow(clippy::cast_sign_loss)]
+            let lines = wrap_text(
+                ctx,
+                tr(lang, e.desc),
+                row.desc_avail,
+                row.desc_lines as usize,
+            );
+            for (i, line) in lines.iter().enumerate() {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+                let dy = title_h + desc_gap + i as i32 * desc_line_h;
+                ctx.text(tx, ty + dy, r, line, theme.text_dim);
+            }
+            let cy = ty + title_h + desc_gap + row.desc_lines * desc_line_h + ctl_gap;
+            // 컨트롤.
             match &row.ctl {
                 RowCtl::Combo(c) => c.paint(ctx, theme),
                 RowCtl::Check(c) => c.paint(ctx, theme),
@@ -3797,126 +3699,85 @@ impl Widget for SettingsWidget {
                     size.paint(ctx, theme);
                 }
                 RowCtl::Info(text) => {
-                    // 읽기 전용 — 컨트롤 자리에 흐린 글(오른쪽 정렬 · 넘치면 왼쪽부터 잘린다).
+                    // 읽기 전용 — 컨트롤 자리에 흐린 글(왼쪽 정렬).
                     ctx.select_font(FontSlot::Status, false);
-                    let slot = Rect::new(
-                        r.right() - self.s(PAD) - self.s(COMBO_W),
-                        r.y,
-                        self.s(COMBO_W),
-                        r.h,
-                    );
                     let th = ctx.text_height();
-                    let tw = ctx.text_width(text).min(slot.w);
-                    ctx.text(
-                        slot.right() - tw,
-                        r.y + (r.h - th) / 2,
-                        slot,
-                        text,
-                        theme.text_dim,
-                    );
+                    let slot = Rect::new(tx, cy, r.w - cpad * 2, ctl_h);
+                    ctx.text(tx, cy + (ctl_h - th) / 2, slot, text, theme.text_dim);
                 }
             }
-            // [초기화] + "기본값: …"(10-09) — 기본값과 다른 행에만.
+            // [초기화](컨트롤 오른쪽 · 기본값과 다를 때만) + "기본값: …"(우하단 · 항상).
             if let Some(b) = &row.reset {
-                let br = b.bounds();
-                if br.w > 0 {
+                if b.bounds().w > 0 {
                     b.paint(ctx, theme);
-                    if let Some(def) = registry()[row.idx]
-                        .default_values()
-                        .into_iter()
-                        .map(|(_, d)| d)
-                        .find(|d| !d.is_empty())
-                    {
-                        ctx.select_font(FontSlot::Status, false);
-                        let txt = nbeep_core::tf(Msg::LblDefaultValue, &[&def]);
-                        let tw = ctx.text_width(&txt);
-                        let th = ctx.text_height();
-                        let avail = Rect::new(
-                            r.x + self.s(PAD),
-                            br.y,
-                            (br.x - self.s(8) - r.x - self.s(PAD)).max(0),
-                            br.h,
-                        );
-                        ctx.text(
-                            br.x - self.s(8) - tw,
-                            br.y + (br.h - th) / 2,
-                            avail,
-                            &txt,
-                            theme.text_dim,
-                        );
+                }
+            }
+            if let Some(def) = e
+                .default_values()
+                .into_iter()
+                .map(|(_, d)| d)
+                .find(|d| !d.is_empty())
+            {
+                ctx.select_font(FontSlot::Status, false);
+                let txt = nbeep_core::tf(Msg::LblDefaultValue, &[&def]);
+                let tw = ctx.text_width(&txt);
+                let th = ctx.text_height();
+                // [초기화]/컨트롤과 겹치면 생략(좁은 카드).
+                let left_edge = row.reset.as_ref().filter(|b| b.bounds().w > 0).map_or_else(
+                    || ctl_rect(&row.ctl).map_or(tx, |c| c.right()),
+                    |b| b.bounds().right(),
+                );
+                let dx = r.right() - cpad - tw;
+                if dx > left_edge + self.s(12) {
+                    ctx.text(dx, cy + (ctl_h - th) / 2, r, &txt, theme.text_dim);
+                }
+            }
+            // 노트(호스트 정보 또는 종속 잠금 안내) — 컨트롤 줄 아래 · 카드 안.
+            if let Some((note, tone)) = self.row_note(row.idx) {
+                let key = e.key;
+                let mono = key == "xfer.approval_window"; // 자동 수락 카운트다운만 고정폭
+                ctx.select_font(
+                    if mono {
+                        FontSlot::Mono
+                    } else {
+                        FontSlot::Status
+                    },
+                    false,
+                );
+                let nh = self.s(NOTE_H);
+                let ctl_block = match &row.ctl {
+                    RowCtl::Pos(p) => p.preferred_size().1,
+                    _ => ctl_h,
+                };
+                let nr = Rect::new(
+                    r.x + cpad - self.s(6),
+                    cy + ctl_block + self.s(6),
+                    r.w - cpad * 2 + self.s(12),
+                    nh,
+                );
+                let th = ctx.text_height();
+                let color = match tone {
+                    NoteTone::Plain => theme.text_dim,
+                    NoteTone::Ok => {
+                        ctx.fill_round_rect_alpha(nr, self.s(5), theme.ok, 0.14);
+                        theme.ok
                     }
-                }
+                    NoteTone::Warn => {
+                        ctx.fill_round_rect_alpha(nr, self.s(5), theme.warn, 0.14);
+                        theme.warn
+                    }
+                    NoteTone::Info => {
+                        ctx.fill_round_rect_alpha(nr, self.s(5), theme.accent, 0.10);
+                        theme.text
+                    }
+                };
+                ctx.text(nr.x + self.s(6), nr.y + (nr.h - th) / 2, nr, &note, color);
             }
-        }
-        // 잠긴 행은 위에 얇은 가림막을 덮어 "지금은 못 만진다"를 보여 준다.
-        for row in &self.rows {
+            // 잠긴 카드는 얇은 가림막(그 위 글은 흐려진다 — "지금은 못 만진다").
             if self.is_locked(row.idx) {
-                ctx.fill_round_rect_alpha(row.rect, 0, theme.panel_bg, 0.55);
+                ctx.fill_round_rect_alpha(r, self.s(6), theme.panel_bg, 0.55);
             }
         }
-
-        // 행에 붙은 정보 줄 — **행 바로 아래 고정 위치**.
-        // ★ 카운트다운(초 단위 갱신)만 고정폭: 숫자 폭이 변하면 1초마다 글자가
-        //   흔들린다(사용자 지적 08-09). 그 외 산문 노트(속도 설명 등)는 **설명과
-        //   같은 폰트**로 그린다(고정폭은 산문에 부적절 · 사용자 요청 08-18).
-        for row in &self.rows {
-            let key = registry()[row.idx].key;
-            let Some((note, tone)) = self.row_note(row.idx) else {
-                continue;
-            };
-            let (note, tone) = (&note, &tone);
-            let mono = key == "xfer.approval_window"; // 자동 수락 카운트다운만
-            ctx.select_font(
-                if mono {
-                    FontSlot::Mono
-                } else {
-                    FontSlot::Status
-                },
-                false,
-            );
-            let nh = self.s(NOTE_H);
-            // 노트는 예약 슬롯의 **위쪽**에 — 아래 여백(NOTE_GAP_B)이 다음 행과 끊는다(09-06).
-            let r = Rect::new(
-                row.rect.x,
-                row.rect.bottom() - self.s(NOTE_GAP_B) - nh,
-                row.rect.w,
-                nh,
-            );
-            let th = ctx.text_height();
-            // 톤 있는 노트(08-22) — 옅은 배경 + 톤색 글자(검증됨이 한눈에 보이게).
-            let color = match tone {
-                NoteTone::Plain => theme.text_dim,
-                NoteTone::Ok => {
-                    ctx.fill_round_rect_alpha(
-                        Rect::new(r.x + self.s(PAD) - self.s(6), r.y, r.w - self.s(PAD), r.h),
-                        self.s(5),
-                        theme.ok,
-                        0.14,
-                    );
-                    theme.ok
-                }
-                NoteTone::Warn => {
-                    ctx.fill_round_rect_alpha(
-                        Rect::new(r.x + self.s(PAD) - self.s(6), r.y, r.w - self.s(PAD), r.h),
-                        self.s(5),
-                        theme.warn,
-                        0.14,
-                    );
-                    theme.warn
-                }
-                NoteTone::Info => {
-                    ctx.fill_round_rect_alpha(
-                        Rect::new(r.x + self.s(PAD) - self.s(6), r.y, r.w - self.s(PAD), r.h),
-                        self.s(5),
-                        theme.accent,
-                        0.10,
-                    );
-                    theme.text
-                }
-            };
-            ctx.text(r.x + self.s(PAD), r.y + (r.h - th) / 2, r, note, color);
-        }
-
         // 열린 콤보 드롭다운은 맨 위에 다시 그린다(아래 행에 가리지 않게).
         for row in &self.rows {
             match &row.ctl {
