@@ -80,6 +80,11 @@
 
 ## 3. 커밋 규약
 
+> ★ **형제 저장소(nexa-ui · nexa-license · path 의존) 규칙(10-10 사용자 확정)** — 다른 PC가 같은 저장소를 동시에 쓰며 바꾸고 있을 수 있다.
+> ① **수정 전 최신화**(`git -C ../nexa-ui fetch && git -C ../nexa-ui pull --ff-only` — beep 작업 시작 때도 같이) ② ui·license 변경은
+> **기능 단위로 commit + push**(beep의 "push는 요청 시" 규칙의 예외 — 원격에 있어야 다른 PC·CI가 같은 코드를 본다)
+> ③ beep 소비자 커밋은 그 뒤에(형제 CONSUMER-CHANGES 행 번호를 본문에).
+
 - 형식: **`type(scope): 제목`** (Conventional Commits).
 - `type`: `feat` `fix` `refactor` `docs` `chore` `ci` `test` `release` `merge`.
 - `scope`: 모듈 규약을 프로젝트 시작 시 정해두고 재사용(예: `core/tree` `gui/list` `app/win` `db` `api` `pkg` `dist`).
