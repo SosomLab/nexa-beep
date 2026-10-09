@@ -81,6 +81,7 @@ $env:NEXA_INSTALL_DIR = 'D:\Apps\NexaBeep'   # 기본 = HKCU\Software\SosomLab\N
 | **테스트**(green 기준) | `cargo test --workspace --features nbeep-core/testkit,nbeep-net/testkit,nbeep-crypto/testkit` — **전부 통과 + 0 ignored 예상 밖 없음**(ignored = 실 멀티캐스트 2·포털 신호 1 — 실 멀티캐스트 2건은 **한 번에 하나씩** `--ignored <이름>`으로 · 동시 실행은 포트 공유 경합으로 flaky(08-29 Linux 실측)) |
 | 포맷 | `cargo fmt --all --check` (수정은 `--check` 없이) |
 | 린트 | `cargo clippy --workspace --all-targets --features nbeep-core/testkit,nbeep-net/testkit,nbeep-crypto/testkit -- -D warnings` |
+| ★**한 번에: `./tools/gate.sh`**(10-09 신설 — 아래 fmt·clippy·rustdoc·test·2타깃 check를 순서대로 · `--fast` = 테스트·크로스 생략) | 커밋 전 기본 명령 — 단계를 손으로 고르다 rustdoc을 두 번 빠뜨린 뒤 만들었다 |
 | **rustdoc 링크**(★10-09 추가 — CI lint 잡과 동일 · 릴리스 전 **필수**) | `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --features nbeep-core/testkit,nbeep-net/testkit,nbeep-crypto/testkit` — 한글 doc 주석의 `[닫기]` 같은 **공백 없는 대괄호**는 rustdoc이 링크로 읽어 CI를 깬다(v0.3.0 첫 CI 실패 원인) → `\[닫기\]`로 이스케이프 · 비공개 항목 링크는 백틱만 |
 | rustdoc 링크 | `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --features nbeep-core/testkit,nbeep-net/testkit,nbeep-crypto/testkit` |
 | 크로스 빌드 | `cargo build --workspace --target <TARGET>` (예: `aarch64-pc-windows-msvc`) |
