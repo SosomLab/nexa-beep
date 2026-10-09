@@ -3944,6 +3944,7 @@ impl App {
                     .map_or(0, |v| v.iter().filter(|x| !x.closed).count())
             } else {
                 self.chat_peer_for(id).map_or(0, |peer| {
+                    let peer = self.file_target(peer); // 접힌 대화 = 파일 대상 기기 기준(S3)
                     self.send_batch.get(&peer).map_or(0, |b| b.1 as usize)
                         + self.send_excluded.get(&peer).map_or(0, Vec::len)
                 })
@@ -3975,6 +3976,9 @@ impl App {
             self.request_redraw(id);
             return;
         };
+        // 스레드 접기(S3): 파일은 그 사용자의 **살아 있는 기기 하나**로(대표 기기가 꺼져 있어도
+        //   보낸다 · 전송 상태는 기기 키 · 전송 줄은 뷰 키로 접혀 보인다). 기기마다 보내기는 후속.
+        let peer = self.file_target(peer);
         // 사전 점검 — 핀 미고정·차단은 여전히 막는다. **상호 미왕래는 경고 후 진행**
         // (08-13 확정: 수신측이 수동 승인으로 강등해 받으므로 발신을 막을 이유가 없다).
         {
@@ -7977,6 +7981,12 @@ impl App {
         }
     }
 
+    /// 파일 전송 대상 기기(S3) — 이 대화의 살아 있는 첫 기기 · 없으면 뷰 키 그대로(종전 동작 =
+    /// 세션 없음 안내·연결 유도).
+    fn file_target(&self, peer: PeerId) -> PeerId {
+        self.live_devices(peer).first().copied().unwrap_or(peer)
+    }
+
     /// 이 대화(뷰 키)의 **세션이 살아 있는 기기들**(정렬) — 발신 팬아웃 대상.
     fn live_devices(&self, peer: PeerId) -> Vec<PeerId> {
         self.fold_group(peer)
@@ -9406,8 +9416,10 @@ impl App {
     /// 열린 1:1 대화 뷰의 헤더 연결 아이콘 갱신(M3-20) — 세션 이벤트 합류점들이
     /// 부른다(성립·끊김·시도·실패). 뷰가 없으면 no-op.
     fn refresh_chat_link(&mut self, peer: PeerId) {
-        let link = self.peer_link_state(peer);
-        let badge = self.peer_path_badge(peer);
+        // 접힌 대화(S3) = 헤더 연결·경로는 **살아 있는 기기** 기준(대표 기기가 꺼져도 대화 중이다).
+        let dev = self.file_target(self.view_key(peer));
+        let link = self.peer_link_state(dev);
+        let badge = self.peer_path_badge(dev);
         let avatar = self.peer_profiles.get(&peer).and_then(|p| p.avatar.clone());
         let border = self.peer_profiles.get(&peer).and_then(|p| p.border);
         let mut inv = Invalidations::default();
@@ -9473,8 +9485,9 @@ impl App {
     fn build_chat_view(&self, peer: PeerId) -> ChatViewWidget {
         let mut chat = ChatViewWidget::new(self.peer_title(peer));
         let mut inv = Invalidations::default();
-        chat.set_link(self.peer_link_state(peer), &mut inv); // 헤더 아이콘 초기값(M3-20)
-        chat.set_path_badge(self.peer_path_badge(peer), &mut inv); // 경로 배지 초기값(08-22 분리)
+        let dev = self.file_target(peer); // 접힌 대화 = 살아 있는 기기 기준(S3)
+        chat.set_link(self.peer_link_state(dev), &mut inv); // 헤더 아이콘 초기값(M3-20)
+        chat.set_path_badge(self.peer_path_badge(dev), &mut inv); // 경로 배지 초기값(08-22 분리)
         chat.set_peer_face(
             self.peer_profiles.get(&peer).and_then(|p| p.avatar.clone()),
             peer.as_bytes().to_vec(),
