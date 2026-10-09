@@ -2561,7 +2561,7 @@ struct WinEntry {
     scale: f32,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Role {
     /// 주 창 — 목록(단일 모드에서는 대화 전환도 이 창에서).
     Main,
@@ -3256,6 +3256,13 @@ struct App {
     /// IME 이벤트 트레이스(`NEXA_IME_TRACE=1`) — 조합 경합은 추정 금지·실측 필수라
     /// 이벤트 순서를 stderr로 남긴다(개인 입력이 찍히므로 opt-in 전용).
     ime_trace: bool,
+    /// 창 이벤트 트레이스(`NEXA_WIN_TRACE=1`) — Wayland 포커스·가시성 결함은 추정 금지·실측 필수(10-09 "더블클릭하니 멈춤").
+    win_trace: bool,
+    /// 새 창 활성화 대기(startup-notify 토큰 요청 → `ActivationTokenDone`) — (요청 일련번호, 대상 창). 일련번호는 Hash가 없어 Vec.
+    pending_activation: Vec<(winit::event_loop::AsyncRequestSerial, WindowId)>,
+    /// 자동화 테스트 seam(`NEXA_SCRIPT="ms:action[=arg];…"`) — Wayland는 밖에서 입력을 넣을 수 없어 앱이 스스로 한다. 없으면 비용 0.
+    script: Vec<(u64, String)>,
+    script_t0: std::time::Instant,
     /// 지금 OS 포커스를 가진 창 — 캐럿 깜빡임(포커스 창만 점멸)·비포커스 캐럿 소등.
     os_focused: Option<WindowId>,
     /// 캐럿 깜빡임 기준 시각(ms) — 입력(키·IME·클릭)마다 리셋해 타이핑 중엔 항상 밝다.
@@ -6211,6 +6218,74 @@ impl App {
         self.raise_main_with(el, true);
     }
 
+    fn wtrace(&self, msg: &str) {
+        if self.win_trace {
+            eprintln!("[win] {msg}");
+        }
+    }
+
+    /// 새로 만든 역할 창을 **사용자 눈앞에**(10-09 Linux 실기 "같은 계정 상대를 더블클릭했는데 멈춤" = 분리 대화 창이
+    /// 포커스 없이 메인 뒤에 생겨 아무 일도 없어 보였다): Wayland는 새 toplevel에 포커스를 주지 않는다(가로채기 방지)
+    /// → **포커스를 가진 창에서 startup-notify 토큰**(xdg_activation)을 요청하고 `ActivationTokenDone`에 그 토큰으로
+    /// 새 창을 활성화한다([`Self::window_event`]). X11·미지원·실패 = `focus_window`. 다른 OS = 즉시 포커스.
+    fn raise_new_window(&mut self, new_id: WindowId) {
+        #[cfg(target_os = "linux")]
+        {
+            use winit::platform::startup_notify::WindowExtStartupNotify as _;
+            let from = self.os_focused.or(self.main_id).filter(|w| *w != new_id);
+            if let Some(src) = from.and_then(|w| self.windows.get(&w)) {
+                match src.window.request_activation_token() {
+                    Ok(serial) => {
+                        self.pending_activation.push((serial, new_id));
+                        self.wtrace(&format!("activation token requested → {new_id:?}"));
+                        return;
+                    }
+                    Err(e) => self.wtrace(&format!("activation token unsupported: {e}")),
+                }
+            }
+        }
+        if let Some(e) = self.windows.get(&new_id) {
+            e.window.focus_window();
+        }
+    }
+
+    /// 자동화 테스트 seam(10-09 · `NEXA_SCRIPT`) — 형식 `"<ms>:<action>[=<arg>];…"` · action = `activate=<표시 이름 부분>`
+    /// (대화 열기 = 더블클릭/Enter와 같은 `activate` 경로) · `settings`(⌘/Ctrl+,) · `quit`. 결과는 `NEXA_WIN_TRACE`와 함께
+    /// stderr로 본다(docs/26 §3-8).
+    fn script_tick(&mut self, el: &ActiveEventLoop) {
+        if self.script.is_empty() {
+            return;
+        }
+        let elapsed = u64::try_from(self.script_t0.elapsed().as_millis()).unwrap_or(u64::MAX);
+        while self.script.first().is_some_and(|(at, _)| *at <= elapsed) {
+            let (_, step) = self.script.remove(0);
+            eprintln!("[script] {elapsed}ms {step}");
+            match step.split_once('=') {
+                Some(("activate", name)) => {
+                    let found = self
+                        .table
+                        .list()
+                        .into_iter()
+                        .map(|e| (e.peer, e.name.as_str().to_string()))
+                        .chain(
+                            self.extra_peers
+                                .iter()
+                                .map(|(p, n)| (*p, n.as_str().to_string())),
+                        )
+                        .find(|(p, n)| n.contains(name) || self.peer_title(*p).contains(name))
+                        .map(|(p, _)| p);
+                    match found {
+                        Some(p) => self.activate(p, el),
+                        None => eprintln!("[script] activate: '{name}' 에 맞는 상대 없음"),
+                    }
+                }
+                None if step == "settings" => self.open_settings(el),
+                None if step == "quit" => el.exit(),
+                _ => eprintln!("[script] 모르는 단계: {step}"),
+            }
+        }
+    }
+
     /// `activate` = 셸 활성화 토큰을 **메인 창에 쓸지**. 트레이 "설정…"(10-09 Linux 실기 "메인만 뜨고
     /// 설정 창은 숨어 있다")처럼 **다른 창이 포커스를 받아야** 할 때는 false로 두고, 그 창에
     /// [`Self::activate_role_window`]로 토큰을 넘긴다 — 토큰은 클릭당 하나라 먼저 쓰는 창이 가져간다.
@@ -8803,6 +8878,7 @@ impl App {
             self.request_redraw(mid);
         }
         self.request_redraw(id);
+        self.raise_new_window(id); // Wayland: 포커스 없는 새 창은 메인 뒤에 깔린다(10-09)
     }
 
     /// 설정 창을 연다(있으면 포커스) — `Cmd/Ctrl+,`.
@@ -8867,6 +8943,14 @@ impl App {
         self.refresh_approval_ui(); // 잠금·하단 정보 초기 반영
         self.refresh_license_info(); // 고급 › 라이선스 정보 카드(P4 ⑤)
         self.refresh_system_option_labels(); // "시스템 (다크)"·"시스템 (한국어)"(10-09)
+        if let Some(sid) = self
+            .windows
+            .iter()
+            .find(|(_, e)| e.role == Role::Settings)
+            .map(|(id, _)| *id)
+        {
+            self.raise_new_window(sid); // Wayland: 새 창 포커스(10-09)
+        }
         self.layout_window(id);
         self.request_redraw(id);
     }
@@ -18477,7 +18561,8 @@ impl ApplicationHandler<AppEvent> for App {
         self.server_tick(); // Managed 서버 접속 수렴(X-2b — 2s 페이스 내부 가드)
         self.refresh_tray_badges(); // 트레이 LAN·전송 점(M3-2e — 바뀔 때만 갱신)
         self.user_tick(); // 사용자 층(ADR-0015) — 힌트 태그 자정 회전 · 페어링 RID 탐색
-                          // 설정 영속 tick(FR-P-9) — 조용 1s OR 상한 10s 충족 시 스냅샷 1회 저장.
+        self.script_tick(el); // 자동화 테스트 seam(NEXA_SCRIPT · 없으면 no-op)
+                              // 설정 영속 tick(FR-P-9) — 조용 1s OR 상한 10s 충족 시 스냅샷 1회 저장.
         if self.conf.sched.tick(Instant::now()) {
             self.conf_save(false);
         }
@@ -18904,6 +18989,20 @@ impl ApplicationHandler<AppEvent> for App {
     }
 
     fn window_event(&mut self, el: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        if self.win_trace
+            && matches!(
+                event,
+                WindowEvent::Focused(_)
+                    | WindowEvent::Occluded(_)
+                    | WindowEvent::Resized(_)
+                    | WindowEvent::CloseRequested
+                    | WindowEvent::Destroyed
+                    | WindowEvent::ActivationTokenDone { .. }
+            )
+        {
+            let role = self.windows.get(&id).map(|e| e.role);
+            eprintln!("[win] {role:?} {event:?}");
+        }
         match event {
             WindowEvent::CloseRequested => {
                 // G2 — 창 닫기도 저장 트리거: 조합 중 음절을 먼저 확정 합류.
@@ -19631,10 +19730,57 @@ impl ApplicationHandler<AppEvent> for App {
                     }
                 }
             }
+            WindowEvent::ActivationTokenDone { serial, token } => {
+                // 새 창 활성화(raise_new_window) — 토큰은 요청한(포커스) 창으로 오고, 대상은 대기 목록이 기억한다.
+                if let Some(pos) = self
+                    .pending_activation
+                    .iter()
+                    .position(|(s, _)| *s == serial)
+                {
+                    let (_, target) = self.pending_activation.remove(pos);
+                    if let Some(e) = self.windows.get(&target) {
+                        let raw = token.into_raw();
+                        #[cfg(target_os = "linux")]
+                        let ok = wayland_activate(&e.window, &raw);
+                        #[cfg(not(target_os = "linux"))]
+                        let ok = {
+                            let _ = &raw;
+                            false
+                        };
+                        if !ok {
+                            e.window.focus_window();
+                        }
+                        self.wtrace(&format!(
+                            "activate {:?} via token → {}",
+                            e.role,
+                            if ok {
+                                "xdg_activation"
+                            } else {
+                                "focus_window 폴백"
+                            }
+                        ));
+                    }
+                }
+            }
             WindowEvent::RedrawRequested => self.redraw(id),
             _ => {}
         }
     }
+}
+
+/// `NEXA_SCRIPT` 파서 — `"8000:activate=kiros33@mac;15000:settings;20000:quit"` → 시각 오름차순 단계 목록(형식 오류 항목은 버린다).
+fn parse_script(raw: Option<&str>) -> Vec<(u64, String)> {
+    let mut steps: Vec<(u64, String)> = raw
+        .unwrap_or("")
+        .split(';')
+        .filter_map(|p| {
+            let (ms, act) = p.trim().split_once(':')?;
+            Some((ms.trim().parse().ok()?, act.trim().to_string()))
+        })
+        .filter(|(_, a)| !a.is_empty())
+        .collect();
+    steps.sort_by_key(|(ms, _)| *ms);
+    steps
 }
 
 /// 창을 띄우고 이벤트 루프를 돈다(주 창을 닫으면 종료).
@@ -20508,6 +20654,10 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         parked_lines: HashMap::new(),
         qthumbs: HashMap::new(),
         ime_trace: std::env::var_os("NEXA_IME_TRACE").is_some(),
+        win_trace: std::env::var_os("NEXA_WIN_TRACE").is_some(),
+        pending_activation: Vec::new(),
+        script: parse_script(std::env::var("NEXA_SCRIPT").ok().as_deref()),
+        script_t0: std::time::Instant::now(),
         os_focused: None,
         blink_anchor_ms: 0,
         blink_phase_seen: true,
