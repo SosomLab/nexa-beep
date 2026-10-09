@@ -363,6 +363,20 @@ mod tests {
         assert!(two.revoke[1].is_enabled());
     }
 
+    /// 호스트는 창 스케일을 위젯에 먼저 넣고 `desired_height`를 창 스케일로 나눈다(10-09 mac 절반 높이 결함).
+    #[test]
+    fn desired_height_scales_with_widget_scale() {
+        let mut w = DevicesWidget::new(DevView {
+            handle: "h".into(),
+            user_id: "u".into(),
+            rows: vec![row(1, true), row(2, false), row(3, false)],
+        });
+        let mut inv = Invalidations::default();
+        let h1 = w.desired_height();
+        w.set_scale(2.0, &mut inv);
+        assert_eq!(w.desired_height(), h1 * 2);
+    }
+
     #[test]
     fn same_view_is_noop() {
         let v = DevView {

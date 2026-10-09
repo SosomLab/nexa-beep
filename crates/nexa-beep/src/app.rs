@@ -3443,13 +3443,19 @@ impl App {
 
     /// 라이선스 창 높이를 위젯이 바라는 값으로(상태표 행 수가 바뀐다 · 물리 px → 논리).
     fn fit_license_window(&mut self, id: WindowId) {
-        let Some(lv) = &self.license_view else { return };
         let Some(e) = self.windows.get(&id) else {
             return;
         };
+        // 위젯 스케일을 창 스케일에 먼저 맞춘다(`fit_devices_window`와 같은 이유 — clamp 하한이 가리고 있었다).
+        let scale = e.scale.max(0.5);
+        let Some(lv) = &mut self.license_view else {
+            return;
+        };
+        let mut inv = Invalidations::default();
+        lv.set_scale(scale, &mut inv);
         let want = lv.desired_height();
         if want > 0 {
-            let s = f64::from(e.scale.max(0.5));
+            let s = f64::from(scale);
             let w = f64::from(e.window.inner_size().width) / s;
             let h = (f64::from(want) / s).clamp(360.0, 900.0);
             let _ = e
@@ -7629,14 +7635,23 @@ impl App {
     }
 
     /// 창 높이를 위젯이 바라는 값으로(행 수 · 물리 px → 논리).
+    ///
+    /// `desired_height`는 **위젯 스케일**로 잰 값이라 먼저 창 스케일을 위젯에 넣는다 — 창을 막 만든 직후는
+    /// `layout_window` 전이라 위젯이 1.0이고, 그 논리값을 다시 창 스케일로 나누면 Retina에서 절반 높이를 요청해
+    /// 최소 높이에 걸려 \[닫기\]가 행 위에 얹혔다(10-09 mac 실기 "시작 화면 깨짐" · Windows 100%는 나눗셈이 무해).
     fn fit_devices_window(&mut self, id: WindowId) {
-        let Some(dv) = &self.devices_view else { return };
         let Some(e) = self.windows.get(&id) else {
             return;
         };
+        let scale = e.scale.max(0.5);
+        let Some(dv) = &mut self.devices_view else {
+            return;
+        };
+        let mut inv = Invalidations::default();
+        dv.set_scale(scale, &mut inv);
         let want = dv.desired_height();
         if want > 0 {
-            let s = f64::from(e.scale.max(0.5));
+            let s = f64::from(scale);
             let w = f64::from(e.window.inner_size().width) / s;
             let _ = e
                 .window
