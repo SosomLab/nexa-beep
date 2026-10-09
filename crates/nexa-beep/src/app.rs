@@ -6380,6 +6380,42 @@ impl App {
                     }
                 }
                 None if step == "dump" => self.script_dump(),
+                // ★ 입력 주입(10-10 성능 실측 — macOS는 밖에서 입력을 넣기 어렵다): 포커스 창(없으면 메인)에
+                //   휠·이동·우클릭을 **실제 라우팅 경로**(`route`)로 넣는다. 좌표 = 물리 px.
+                Some(("wheel", dy)) => {
+                    if let (Some(id), Ok(dy)) = (self.script_target(), dy.trim().parse::<i32>()) {
+                        self.route(id, InputEvent::Wheel { delta: dy }, el);
+                    }
+                }
+                Some(("move", xy)) | Some(("rclick", xy)) | Some(("click", xy)) => {
+                    let kind = step.split_once('=').map(|(k, _)| k).unwrap_or("");
+                    let mut it = xy.split(',').map(|v| v.trim().parse::<i32>());
+                    if let (Some(id), Some(Ok(x)), Some(Ok(y))) =
+                        (self.script_target(), it.next(), it.next())
+                    {
+                        if let Some(e) = self.windows.get_mut(&id) {
+                            e.cursor = (x, y);
+                        }
+                        self.route(id, InputEvent::MouseMove { x, y }, el);
+                        match kind {
+                            "rclick" => self.route(id, InputEvent::RightDown { x, y }, el),
+                            "click" => {
+                                self.route(
+                                    id,
+                                    InputEvent::MouseDown {
+                                        x,
+                                        y,
+                                        shift: false,
+                                        primary: false,
+                                    },
+                                    el,
+                                );
+                                self.route(id, InputEvent::MouseUp { x, y }, el);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
                 None if step == "settings" => self.open_settings(el),
                 None if step == "devices" => self.open_devices(el),
                 None if step == "license" => self.open_license(el),
@@ -6428,6 +6464,13 @@ impl App {
                 }
             }
         }
+    }
+
+    /// 스크립트 입력 주입 대상 창 — OS 포커스 창, 없으면 메인.
+    fn script_target(&self) -> Option<WindowId> {
+        self.os_focused
+            .filter(|id| self.windows.contains_key(id))
+            .or(self.main_id)
     }
 
     /// `activate` = 셸 활성화 토큰을 **메인 창에 쓸지**. 트레이 "설정…"(10-09 Linux 실기 "메인만 뜨고
@@ -9321,8 +9364,20 @@ impl App {
         self.send_user_hello(peer);
         // ★ 원격 경로 고지(M5-3b — 조용히, 그러나 보이게): 인터넷 경유 세션은 스레드에
         //   1줄 남긴다. 지문 대조 전엔 파일이 막히는 이유가 여기서 설명된다(§5-1-3).
-        if path == nbeep_core::PathClass::Remote {
-            self.push_peer_note(peer, nbeep_core::t(nbeep_core::Msg::NoticeRemotePath));
+        //   ★ 같은 사용자(형제 기기)는 생략(10-10 사용자 요청) — 형제는 사람 판정(SAS·파일 승인)이
+        //   전부 해제돼(ADR-0015 §4) "지문 대조 전 파일 차단"이 성립하지 않는다. 판정은 살아 있는
+        //   형제 ∨ 서명 기기 목록(`is_sibling_candidate` · 세션 전 지속 근거). 같은 고지가 재접속마다
+        //   쌓이던 것도 **직전 줄과 같으면 생략**(날짜만 다른 연속 반복 = 소음).
+        if path == nbeep_core::PathClass::Remote && !self.is_sibling_candidate(peer) {
+            let note = nbeep_core::t(nbeep_core::Msg::NoticeRemotePath);
+            let repeated = self.conversations.get(&peer).is_some_and(|c| {
+                c.lines.last().is_some_and(|l| {
+                    !l.mine && matches!(&l.body, nbeep_ui::ChatBody::Text(t) if t.as_str() == note)
+                })
+            });
+            if !repeated {
+                self.push_peer_note(peer, note);
+            }
         }
         // 최근 접속(08-15) — 세션 성립도 접속 관측이다(발견 없는 수동 등록 포함).
         self.trust.note_seen(peer, unix_now_ms());
@@ -16991,6 +17046,9 @@ impl App {
     }
 
     fn redraw(&mut self, id: WindowId) {
+        // 페인트 계측 seam(10-10 `NEXA_PAINT_TRACE=1` — 사용자 "스크롤·우클릭 메뉴가 느리다" 실측용):
+        // 프레임마다 역할·물리 크기·페인트 ms·present ms 를 stderr 한 줄로. 없으면 비용 0(OnceLock 1회).
+        let t_frame = std::time::Instant::now();
         let theme = self.theme;
         let prefs = self.fonts;
         // 캐럿 깜빡임 위상(08-13 사용자 요청) — **OS 포커스 창에서만** 점멸(비포커스
@@ -17279,8 +17337,28 @@ impl App {
                 }
             }
         }
+        let t_paint = t_frame.elapsed();
+        let role_dbg = entry.role;
         buffer.present().unwrap();
+        if paint_trace_enabled() {
+            eprintln!(
+                "[paint] {:?} {}x{} paint={:.2}ms present={:.2}ms",
+                role_dbg,
+                size.width,
+                size.height,
+                t_paint.as_secs_f64() * 1000.0,
+                (t_frame.elapsed() - t_paint).as_secs_f64() * 1000.0
+            );
+        }
     }
+}
+
+/// `NEXA_PAINT_TRACE` 가 켜졌는가 — 1회 읽고 고정(프레임마다 env 조회 금지).
+fn paint_trace_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        std::env::var_os("NEXA_PAINT_TRACE").is_some_and(|v| !v.is_empty() && v != "0")
+    })
 }
 
 impl ApplicationHandler<AppEvent> for App {
