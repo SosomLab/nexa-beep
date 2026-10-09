@@ -404,6 +404,7 @@ grep -E '^\[(win|script)\]' out.log
 | `NEXA_SCRIPT` | `"<ms>:<action>[=<arg>];…"` · `activate=<표시 이름 부분>`(= 더블클릭/Enter와 같은 `activate` 경로) · `settings` · `quit` · 시각 오름차순 · 형식 오류 항목은 버림 · 없으면 비용 0 |
 | `NEXA_WIN_TRACE` | 창별 `Focused`·`Occluded`·`Resized`·`CloseRequested`·`Destroyed`·`ActivationTokenDone` + 활성화 토큰 요청/적용 결과 · 역할(`Main`·`Chat`·`Settings`…) 표기 |
 | X11(XWayland)에서 입력 주입 | `env -u WAYLAND_DISPLAY ./nexa-beep --window --live` → `xdotool search --pid <pid>` · `mousemove --window <id> x y click 1` · `key --window <id> Return` · `import -window <id> shot.png`(ImageMagick) — **winit 0.30은 `WINIT_UNIX_BACKEND`를 읽지 않는다**(WAYLAND_DISPLAY 제거가 유일한 강제법) · X11 메인 창은 메뉴 막대가 있어 행 y가 Wayland와 다르다 |
+| ⚠ 주입 한계 | **사용자가 그 데스크톱을 쓰는 중이면 주입이 닿지 않는다** — X11 `getactivewindow`가 앱을 가리켜도 mutter의 실제 키보드 포커스는 사용자가 쓰는 Wayland 창에 있다(10-09 실측: 트레이스에 키 0건 · 사용자가 쉬는 사이엔 성공). 자동화는 **빈 데스크톱(또는 별도 세션)** 에서 돌린다 |
 | 판정 | "멈춤"처럼 보여도 `/proc/<pid>/wchan`이 `ep_poll`이면 이벤트 루프는 살아 있다 — 창이 **안 보이는 것**(포커스·z순서)과 **교착**을 가른다 · 멈춘 프로세스의 `/proc/<pid>/fd`에서 `memfd:softbuffer` 수 = 창 수 × 버퍼 수(창이 생겼는지 간접 증거) |
 
 ### 3-4b. ★ 여러 신원을 한 PC에서 동시에 — **폴더를 나눈다**
