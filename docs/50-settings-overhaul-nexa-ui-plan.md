@@ -106,4 +106,7 @@
 | 10-09 | P1-a·b ✅ | 협업: nexa-ui `tighten`·`locale::ui_language`·toolbar dim/ring(4커밋 main) · nexa-license 발급기 nexa-beep 분기(1커밋 main) — 미push |
 | 10-09 | P1-c ✅ | beep 의존 전환(`refactor(ui)`) — 665 green · 4타깃 0 · 릴리스 6.03MB(+4.2%) · CI 형제 체크아웃 · 발견 = nexa-ctl 전 컨트롤 MouseUp 확정 |
 | 10-09 | P2 ✅ | 설정 체계 개편(`feat(settings)`) — 그룹 트리·고급 스위치·카드 초기화/키 복사·DEPENDS·자모 검색+이력·`ui.language=system`·창 기하 · 675 green · 4타깃 0 · 실기 T-1~3 잔여 |
-| 10-09 | P4 ①② ✅(협업) | worktree `feat/license-p4` — `crates/nbeep-license` · `license_win.rs` · i18n 37키 · 685 green · ③ app.rs 배선(이쪽) 대기 |
+| 10-09 | P4 ①② ✅(협업) | worktree `feat/license-p4` — `crates/nbeep-license` · `license_win.rs` · i18n 37키 · main cherry-pick `6f91364`·`61daef9` |
+| 10-09 | P4 ③ ✅ | `8a67200` 배선(메뉴·Role::License·행동 4종·피커 LicenseFile·CLI) · 695 green · 4타깃 0 · CLI 스모크 ✓ · 실기 T-7 잔여 |
+| 10-09 | T-9 ✓ | 3신원 재기동 — 지문 불변 · 상호 발견 3/3(이관 뒤 기능 불변) |
+| 10-09 | P3 🚧(협업) | worktree `feat/file-dialog-p3` — nexa-dlg 호스팅 · 용도 9(LicenseFile 포함) · docs/35 정정 |
