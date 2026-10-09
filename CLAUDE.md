@@ -81,13 +81,18 @@
 - 문서 번호(`NN-`)는 **불변**. 재번호 금지, 신규는 뒤에 append.
 - `.claude/settings.json`(권한)은 **덮어쓰기 금지, 병합만**.
 - **모델 방침(사용자 확정 08-08)**: **코드 구현·저수준 개발은 Fable로 진행**한다. `.claude/settings.json`의 `"model": "fable"` 로 세션 기본을 Fable에 고정했다(하네스는 세션 중 자동 전환하지 않는다). 분석·설계·문서 작업은 Opus로 충분하며, 그럴 때만 사용자가 `/model opus` 로 그 세션을 전환한다. **코드 관련 작업 중에는 모델을 바꾸지 않는다.**
+- **응답 언어 = 한글(사용자 확정 2026-10-09)**: 사용자에게 보이는 모든 응답은 **항상 한글**로 쓴다. 코드·식별자·명령·오류 원문은 그대로 두고 설명만 한글로 붙인다.
 - 빌드/테스트 SSOT = [docs/18](docs/18-build-and-test.md) — 절차 변경 시 같은 커밋에서 갱신.
 
 ## 4. 새 세션 오리엔테이션
 
 1. 이 CLAUDE.md + [docs/STATUS.md](docs/STATUS.md) → 2. [DEVLOG](docs/DEVLOG.md) 최상단 + 최신 journal → 3. 할 일 = [docs/TODO.md](docs/TODO.md) 순차.
 
-## 5. 다음 단계 (2026-09-29 · STATUS 09-29 1차 기준 — ★choco 첫 승인(09-28) → 최신 0.2.17/beepd 0.2.6 push · ★v0.2.17 공개(형제 배지 수정 탑재 · brew ✓ · winget/choco 제외) · [49 점검 체계] 신설 · choco `<copyright>` 재제출 · 다음 = 2-PC 실기 → S3 또는 INS)
+## 5. 다음 단계 (2026-10-09 · STATUS 10-09 1차 기준 — ★Linux 배포 nexa-sql 이식(deb 스크립트화·rpm 신설·CI 설치 스모크·★glibc 하한 실측 = 공개 .deb `≥2.31` 선언이 거짓(실제 2.39)이던 결함 수정 · 러너 22.04) · 다음 = push → release workflow_dispatch 초안으로 rpm·스모크 첫 실행 → v0.2.18 후보)
+
+> **10-09 1차(Linux · main)** — ★**Linux 배포 = nexa-sql `packaging/linux` 이식**(사용자 요청): `packaging/lib.sh`+`linux/build-deb.sh`(로컬·CI 같은 스크립트 · hicolor 8크기+SVG · copyright · postinst) + **`.rpm`**(`build-rpm.sh`+spec · 같은 스테이징) + release.yml **설치 스모크**(dpkg -i→--version→dpkg -r→잔여 0) · ★**발견** = 공개 v0.2.17 .deb가 `libc6 ≥2.31`을 선언하지만 바이너리는 **GLIBC_2.39** 요구(ubuntu-latest 빌드 → 22.04·Debian 12 실행 불가) → **러너 ubuntu-22.04 고정 + 하한 objdump 실측 자동 기입**(`glibc_floor` — "불변식은 검증이 붙어야" Linux 판). 로컬 .deb 실측 ✓ · rpm은 CI 첫 실행 대기(이 PC rpmbuild 없음). 세션 규약 = **응답 한글**(§3) · **좌측 협업 세션 병행**(nexa-sql 규칙 — push 전 fetch·원격 판 우선·내 파일만 add). 최신화 = fetch 0 · winget 포터블 0.2.17 MERGED · choco 0.2.17/0.2.6 승인.
+
+> **종전(09-29 기준)** — ★choco 첫 승인(09-28) → 최신 0.2.17/beepd 0.2.6 push · ★v0.2.17 공개(형제 배지 수정 탑재 · brew ✓ · winget/choco 제외) · [49 점검 체계] 신설 · choco `<copyright>` 재제출 · 다음 = 2-PC 실기 → S3 또는 INS)
 
 > **09-29 2차(Win · main)** — **winget 포터블 0.2.17 단독 제출 [#443211](https://github.com/microsoft/winget-pkgs/pull/443211)**(사용자 요청): 포터블은 이미 게시(0.2.16)였음 · 워크플로는 설치본도 함께 내므로(OPEN #436462 중복) 아티팩트 매니페스트를 수동 `wingetcreate submit` · 해시 = SHA256SUMS 일치 · ⚠ 태그 재사용 dispatch는 `ReleaseDate`를 렌더 시각으로 찍는다 → 실제 공개일(09-26)로 정정해 제출.
 

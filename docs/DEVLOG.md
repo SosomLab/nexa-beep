@@ -5,6 +5,11 @@
 
 ---
 
+## 2026-10-09
+
+- **(Linux · main) ★Linux 배포 = nexa-sql `packaging/linux` 이식**(사용자 요청 "nexa-sql을 참고해서 리눅스 배포"): `packaging/lib.sh`+`linux/build-deb.sh`(로컬·CI 같은 스크립트 · hicolor 8크기+SVG · Debian copyright · postinst) + **`.rpm` 신설**(`build-rpm.sh`·spec · deb와 같은 스테이징) + release.yml **설치 스모크**(dpkg -i → --version → dpkg -r → 잔여 0) · ★**발견 = 공개 .deb `libc6 ≥2.31` 선언이 거짓**(실제 GLIBC_2.39 — ubuntu-latest 빌드 · 22.04/Debian 12 실행 불가) → 러너 **ubuntu-22.04 고정** + 하한 **objdump 실측 자동 기입**. 로컬 .deb 실측 ✓ · rpm은 CI 첫 검증 대기. 세션 규약 = 응답 한글 · 좌측 세션 병행(nexa-sql 규칙). [journal](journal/2026-10-09.md)
+- **(Linux · main) 저장소 최신화·채널 점검**: fetch 신규 0 · winget 포터블 0.2.17 #443211 **09-29 MERGED** · 설치본/beepd OPEN 22일 · **choco nexa-beep 0.2.17·nexa-beepd 0.2.6 09-29 승인**.
+
 ## 2026-09-29
 
 - **(Win · main) winget 포터블 0.2.17 단독 제출**([#443211](https://github.com/microsoft/winget-pkgs/pull/443211)): 포터블은 이미 게시(0.2.16) · 설치본 #436462 중복 방지로 워크플로 대신 아티팩트 매니페스트 수동 `wingetcreate submit` · 해시 = SHA256SUMS 일치 · `ReleaseDate` 09-29→09-26 정정. [journal](journal/2026-09-29.md).

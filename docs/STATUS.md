@@ -3,6 +3,8 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
+> **갱신: 2026-10-09 1차 (KST · Linux · main)** — ★**Linux 배포 = nexa-sql `packaging/linux` 이식**(사용자 요청): 인라인 deb 단계 → **`packaging/lib.sh`+`linux/build-deb.sh`**(로컬·CI 동일 · hicolor 16~512+SVG · Debian `copyright` · postinst 캐시) + **`.rpm` 신설**(`build-rpm.sh`+spec · deb와 같은 스테이징 = 바이너리 동일) + release.yml **설치 스모크**(`dpkg -i`→`--version`→desktop-file-validate→`dpkg -r`→잔여 0 · rpm 목록/-K) · ★**발견 = 공개 v0.2.17 .deb의 `libc6 (>= 2.31)` 선언이 거짓**(objdump 실측 GLIBC_2.39 — ubuntu-latest 24.04 빌드 → Ubuntu 22.04·Debian 12 설치 후 실행 불가 · v0.2.2 이후 전부) → 러너 **ubuntu-22.04 고정**(2.35) + 하한 **빌드 시 바이너리 실측 자동 기입**(`glibc_floor`). 로컬 .deb 포장 실측 ✓(이 PC 2.43 = 실제 요구 일치) · rpm·22.04 스모크 = push 후 CI 첫 실행 대기. 최신화 = fetch 신규 0 · winget 포터블 0.2.17 #443211 09-29 MERGED · choco 0.2.17/0.2.6 09-29 승인. 세션 규약 신설 = **응답 한글** · **좌측 협업 세션 병행**(nexa-sql 규칙). [journal](journal/2026-10-09.md)
+
 > **갱신: 2026-09-29 2차 (KST · Win · main)** — **winget 포터블 0.2.17 단독 제출 [#443211](https://github.com/microsoft/winget-pkgs/pull/443211)**(사용자 요청): 포터블은 이미 게시(0.2.16)였음 · 워크플로는 설치본도 함께 내므로 OPEN #436462 중복을 피해 아티팩트 매니페스트를 수동 제출 · 해시 일치 · `ReleaseDate` 실제 공개일로 정정. [journal](journal/2026-09-29.md).
 
 > **갱신: 2026-09-29 1차 (KST · Win · main)** — ★**Chocolatey 첫 승인 확인 → 최신 빌드 push**(사용자 요청 "choco에 마지막 빌드 배포"): 09-28 moderator 승인 = nexa-beep·portable 0.2.2 · nexa-beepd 0.2.5(⚠ 정적 CRT 이전 빌드) → 태그 재사용 dispatch로 **0.2.17 ×2 · beepd 0.2.6 pushed ✓**(모더레이션 대기) · 새 태그 불필요(v0.2.17 이후 문서만) · winget #436462·#436461 OPEN 유지(중복 PR 방지 스위치 임시 off → 원복). [journal](journal/2026-09-29.md).
