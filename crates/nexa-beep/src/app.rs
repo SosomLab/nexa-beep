@@ -11140,6 +11140,7 @@ impl App {
             tooltip,
             name,
             open_label: t(Msg::TrayOpen).to_string(),
+            settings_label: t(Msg::TraySettings).to_string(),
             quit_label: t(Msg::TrayQuit).to_string(),
         }
     }
@@ -18165,6 +18166,12 @@ impl ApplicationHandler<AppEvent> for App {
                         Some(NotifyTarget::Group(g)) => self.open_group_thread(g, el),
                         None => {} // 재시작 등으로 맵이 비었다 — 메인 표시로 충분
                     }
+                }
+                // "설정"(10-09 사용자 요청) — 메인을 먼저 복원(숨김 상주 중이면 소유 창이 없다)하고
+                // ⌘/Ctrl+, 와 같은 경로로 연다(있으면 포커스).
+                nbeep_plat::tray::TrayEvent::Settings => {
+                    self.raise_main(el);
+                    self.open_settings(el);
                 }
                 nbeep_plat::tray::TrayEvent::Quit => el.exit(),
             },

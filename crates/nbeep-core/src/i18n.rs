@@ -337,6 +337,8 @@ pub enum Msg {
     TrayOpen,
     /// 트레이 메뉴 — 종료.
     TrayQuit,
+    /// 트레이 메뉴 "설정"(10-09).
+    TraySettings,
     ThemeSystem,
     ThemeDark,
     ThemeLight,
@@ -2591,6 +2593,7 @@ impl Msg {
             ],
             Msg::TrayOpen => ["Open", "열기", "打开", "開く"],
             Msg::TrayQuit => ["Quit", "종료", "退出", "終了"],
+            Msg::TraySettings => ["Settings…", "설정…", "设置…", "設定…"],
             Msg::ThemeSystem => ["System", "시스템", "跟随系统", "システム"],
             Msg::ThemeDark => ["Dark", "다크", "深色", "ダーク"],
             Msg::ThemeLight => ["Light", "라이트", "浅色", "ライト"],

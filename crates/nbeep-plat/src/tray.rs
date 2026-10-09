@@ -42,6 +42,8 @@ pub enum TrayEvent {
     /// **대상이 있는 열기**(M3-8 알림 클릭 — 08-15 사용자 요청 "대화창까지"):
     /// 값 = 호스트가 알림에 실어 보낸 불투명 토큰(호스트만 해석 — 봉투 원리).
     OpenTarget(String),
+    /// 설정 창 열기(메뉴 "설정" · 10-09 사용자 요청 — ⌘/Ctrl+, 와 같은 자리).
+    Settings,
     /// 앱 종료(메뉴 "종료").
     Quit,
 }
@@ -59,6 +61,8 @@ pub struct TrayContent {
     pub name: String,
     /// "열기" 라벨(i18n — 호스트 주입).
     pub open_label: String,
+    /// "설정" 라벨(i18n — 호스트 주입 · 단축키 표기는 OS별로 이 모듈이 붙인다).
+    pub settings_label: String,
     /// "종료" 라벨(i18n — 호스트 주입).
     pub quit_label: String,
 }
@@ -112,8 +116,8 @@ mod mac {
     use objc2::runtime::{AnyObject, NSObject};
     use objc2::{declare_class, msg_send_id, mutability, sel, ClassType, DeclaredClass};
     use objc2_app_kit::{
-        NSBitmapImageRep, NSImage, NSMenu, NSMenuItem, NSStatusBar, NSStatusItem,
-        NSVariableStatusItemLength,
+        NSBitmapImageRep, NSEventModifierFlags, NSImage, NSMenu, NSMenuItem, NSStatusBar,
+        NSStatusItem, NSVariableStatusItemLength,
     };
     use objc2_foundation::{MainThreadMarker, NSSize, NSString};
     use std::cell::RefCell;
@@ -126,6 +130,7 @@ mod mac {
         item: Retained<NSStatusItem>,
         header: Retained<NSMenuItem>,
         open: Retained<NSMenuItem>,
+        settings: Retained<NSMenuItem>,
         quit: Retained<NSMenuItem>,
         _target: Retained<Target>,
     }
@@ -154,6 +159,13 @@ mod mac {
             fn nbeep_tray_open(&self, _sender: Option<&AnyObject>) {
                 if let Some(f) = ON_EVENT.get() {
                     f(TrayEvent::Open);
+                }
+            }
+
+            #[method(nbeepTraySettings:)]
+            fn nbeep_tray_settings(&self, _sender: Option<&AnyObject>) {
+                if let Some(f) = ON_EVENT.get() {
+                    f(TrayEvent::Settings);
                 }
             }
 
@@ -210,6 +222,9 @@ mod mac {
                 .open
                 .setTitle(&NSString::from_str(&content.open_label));
             state
+                .settings
+                .setTitle(&NSString::from_str(&content.settings_label));
+            state
                 .quit
                 .setTitle(&NSString::from_str(&content.quit_label));
         }
@@ -237,6 +252,13 @@ mod mac {
             open.setAction(Some(sel!(nbeepTrayOpen:)));
             open.setTarget(Some(&target));
             menu.addItem(&open);
+            // 설정(10-09) — ⌘, 표기 = 앱 단축키와 같은 자리(실행은 앱이 받는다 · 메뉴 표기용).
+            let settings = NSMenuItem::new(mtm);
+            settings.setAction(Some(sel!(nbeepTraySettings:)));
+            settings.setTarget(Some(&target));
+            settings.setKeyEquivalent(&NSString::from_str(","));
+            settings.setKeyEquivalentModifierMask(NSEventModifierFlags::NSEventModifierFlagCommand);
+            menu.addItem(&settings);
             let quit = NSMenuItem::new(mtm);
             quit.setAction(Some(sel!(nbeepTrayQuit:)));
             quit.setTarget(Some(&target));
@@ -248,6 +270,7 @@ mod mac {
                 item,
                 header,
                 open,
+                settings,
                 quit,
                 _target: target,
             };
@@ -314,11 +337,12 @@ mod sni {
 
     const ITEM_PATH: &str = "/StatusNotifierItem";
     const MENU_PATH: &str = "/MenuBar";
-    /// 메뉴 항목 id — 1 = 이름 헤더(비활성) · 2 = 구분선 · 3 = 열기 · 4 = 종료.
+    /// 메뉴 항목 id — 1 = 이름 헤더(비활성) · 2 = 구분선 · 3 = 열기 · 4 = 종료 · 5 = 설정(10-09 · 열기와 종료 사이).
     const ID_HEADER: i32 = 1;
     const ID_SEP: i32 = 2;
     const ID_OPEN: i32 = 3;
     const ID_QUIT: i32 = 4;
+    const ID_SETTINGS: i32 = 5;
 
     fn emit(ev: TrayEvent) {
         if let Some(cb) = ON_EVENT.get() {
@@ -369,6 +393,14 @@ mod sni {
             }
             ID_SEP => put("type", ov("separator")),
             ID_OPEN => put("label", ov(c.open_label)),
+            ID_SETTINGS => {
+                put("label", ov(c.settings_label));
+                // dbusmenu 단축키 표기(`aas`) — 앱 단축키와 같은 Ctrl+, (표기용 · 실행은 앱).
+                put(
+                    "shortcut",
+                    ov(vec![vec!["Control".to_string(), "comma".to_string()]]),
+                );
+            }
             ID_QUIT => put("label", ov(c.quit_label)),
             _ => {}
         }
@@ -471,7 +503,7 @@ mod sni {
         ) -> zbus::fdo::Result<(u32, MenuNode)> {
             let rev = MENU_REV.load(Ordering::Relaxed);
             let children = if parent_id == 0 {
-                [ID_HEADER, ID_SEP, ID_OPEN, ID_QUIT]
+                [ID_HEADER, ID_SEP, ID_OPEN, ID_SETTINGS, ID_QUIT]
                     .into_iter()
                     .filter_map(item_value)
                     .collect()
@@ -495,11 +527,12 @@ mod sni {
             })
         }
 
-        /// 클릭 처리 — 열기/종료만 의미가 있다.
+        /// 클릭 처리 — 열기/설정/종료만 의미가 있다.
         fn event(&self, id: i32, event_id: String, _data: Value<'_>, _timestamp: u32) {
             if event_id == "clicked" {
                 match id {
                     ID_OPEN => emit(TrayEvent::Open),
+                    ID_SETTINGS => emit(TrayEvent::Settings),
                     ID_QUIT => emit(TrayEvent::Quit),
                     _ => {}
                 }
@@ -511,6 +544,7 @@ mod sni {
                 if event_id == "clicked" {
                     match id {
                         ID_OPEN => emit(TrayEvent::Open),
+                        ID_SETTINGS => emit(TrayEvent::Settings),
                         ID_QUIT => emit(TrayEvent::Quit),
                         _ => {}
                     }
@@ -742,6 +776,7 @@ mod win {
     const TPM_RIGHTBUTTON: u32 = 0x0002;
     const CMD_OPEN: usize = 1;
     const CMD_QUIT: usize = 2;
+    const CMD_SETTINGS: usize = 3;
 
     /// 공유 상태 — wndproc(정적 fn)과 핸들이 같은 내용을 본다. 트레이는 프로세스당
     /// 1개(앱 창 하나의 부속)라 전역이 곧 인스턴스다.
@@ -843,15 +878,22 @@ mod win {
         }
     }
 
-    /// 우클릭 메뉴 — 이름 헤더(비활성) · 열기 · 종료. 네이티브 TrackPopupMenu.
+    /// 우클릭 메뉴 — 이름 헤더(비활성) · 열기 · 설정(10-09) · 종료. 네이티브 TrackPopupMenu.
     fn show_menu(hwnd: Handle) {
         let Some(state) = STATE.get() else { return };
-        let (name, open_label, quit_label) = match state.lock() {
-            Ok(g) => (g.name.clone(), g.open_label.clone(), g.quit_label.clone()),
+        let (name, open_label, settings_label, quit_label) = match state.lock() {
+            Ok(g) => (
+                g.name.clone(),
+                g.open_label.clone(),
+                g.settings_label.clone(),
+                g.quit_label.clone(),
+            ),
             Err(_) => return,
         };
         let name_w = wide(&name);
         let open_w = wide(&open_label);
+        // `\t` 뒤 = 단축키 열(Win32 메뉴 관례) — 앱의 Ctrl+, 와 같은 표기(실행은 앱).
+        let settings_w = wide(&format!("{settings_label}\tCtrl+,"));
         let quit_w = wide(&quit_label);
         // SAFETY: 메뉴는 이 함수 안에서 만들고 파괴한다. SetForegroundWindow 선행은
         // TrackPopupMenu 관례(안 하면 바깥 클릭에 메뉴가 닫히지 않는다 — MSDN).
@@ -866,6 +908,7 @@ mod win {
                 AppendMenuW(menu, MF_SEPARATOR, 0, core::ptr::null());
             }
             AppendMenuW(menu, MF_STRING, CMD_OPEN, open_w.as_ptr());
+            AppendMenuW(menu, MF_STRING, CMD_SETTINGS, settings_w.as_ptr());
             AppendMenuW(menu, MF_STRING, CMD_QUIT, quit_w.as_ptr());
             let mut pt = Point { x: 0, y: 0 };
             GetCursorPos(&mut pt);
@@ -881,6 +924,7 @@ mod win {
             DestroyMenu(menu);
             match cmd as usize {
                 CMD_OPEN => emit(TrayEvent::Open),
+                CMD_SETTINGS => emit(TrayEvent::Settings),
                 CMD_QUIT => emit(TrayEvent::Quit),
                 _ => {}
             }
