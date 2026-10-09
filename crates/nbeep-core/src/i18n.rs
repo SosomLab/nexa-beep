@@ -854,7 +854,7 @@ pub enum Msg {
     UserRotateVerb,
     StUserRotateArm,
     StfUserRotated,
-    /// 내 기기 목록(10-09 — 설정 › 사용자 [열기…] · 창 · 기기별 폐기 = Succession 부분 집합).
+    /// 내 기기 목록(10-09 — 설정 › 사용자 \[열기…\] · 창 · 기기별 폐기 = Succession 부분 집합).
     UserDevices,
     UserDevicesDesc,
     UserDevicesVerb,
@@ -1171,7 +1171,7 @@ pub enum Msg {
     LblDefaultValue,
     /// 카드 \[초기화\].
     BtnReset,
-    /// 하단 [설정 파일 열기…].
+    /// 하단 \[설정 파일 열기…\].
     BtnOpenSettingsFile,
     /// 하단 \[닫기\].
     BtnClose,

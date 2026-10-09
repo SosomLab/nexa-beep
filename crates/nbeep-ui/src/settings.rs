@@ -1937,7 +1937,7 @@ pub struct SettingsWidget {
     advanced: bool,
     /// 지금 보기에서 숨긴 고급 항목 수(밴드 배너).
     adv_hidden: usize,
-    /// 하단 줄 컨트롤 — 고급 스위치 · [설정 파일 열기…] · \[닫기\].
+    /// 하단 줄 컨트롤 — 고급 스위치 · \[설정 파일 열기…\] · \[닫기\].
     adv_switch: Switch,
     btn_file: Button,
     btn_close: Button,
@@ -3965,7 +3965,7 @@ impl Widget for SettingsWidget {
     }
 }
 
-/// 행 컨트롤의 자리(글꼴 영역·정보 행은 `None`) — [초기화] 배치 기준.
+/// 행 컨트롤의 자리(글꼴 영역·정보 행은 `None`) — \[초기화\] 배치 기준.
 fn ctl_rect(ctl: &RowCtl) -> Option<Rect> {
     match ctl {
         RowCtl::Combo(c) => Some(c.bounds()),

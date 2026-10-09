@@ -1,14 +1,14 @@
 //! **라이선스 화면**(docs/50 P4 · D-33-7 · 도움말 ▸ 라이선스…) — 출처: nexa-sql `crates/nexa-sql/src/license_win.rs`.
 //!
 //! 위 = 상태 띠 + 표(파일 · ID · 사용자 · 종류/등급 · 기한 · 빌드일 · 기기 코드) · 가운데 = 요청 코드(이름 · 이메일 ·
-//! [요청 코드 복사] · 보낼 이메일은 링크 = 클릭하면 복사) · 아래 = [라이선스 파일 열기…] \[제거\] \[닫기\] + 결과 한 줄.
+//! \[요청 코드 복사\] · 보낼 이메일은 링크 = 클릭하면 복사) · 아래 = \[라이선스 파일 열기…\] \[제거\] \[닫기\] + 결과 한 줄.
 //!
 //! beep 관례(nbeep-ui)대로 **winit 없는 위젯**이다(sql 판은 창까지 소유) — 창 생성·`Role`·클립보드·파일 선택은 호스트 몫이고,
 //! 위젯은 [`LicenseWidget::take_action`] 1회성 행동만 낸다(`AddrPromptWidget`과 같은 꼴). 판정·설치의 단일 원천은 호스트의
 //! [`nbeep_license::Licensing`] — 위젯은 보기([`LicView`])만 받는다. 보기는 [`license_view`]가 만든다(호스트가 열 때·설치·제거 뒤 호출).
 //!
 //! 버튼 이름은 발급 메일 안내와 **글자까지 같아야** 한다(nexa-license `presets.rs` nexa-beep 분기 — 10-09 협업 합의):
-//! 도움말 ▸ 라이선스… · [라이선스 파일 열기…] · [요청 코드 복사] · 상태 줄 licensed.
+//! 도움말 ▸ 라이선스… · \[라이선스 파일 열기…\] · \[요청 코드 복사\] · 상태 줄 licensed.
 
 use std::cell::Cell;
 
@@ -42,7 +42,7 @@ pub struct LicView {
     pub tone: LicTone,
     /// (라벨, 값) 표.
     pub rows: Vec<(String, String)>,
-    /// 요청 코드 미리보기(기기 ID 없으면 `None` = [요청 코드 복사] 끔).
+    /// 요청 코드 미리보기(기기 ID 없으면 `None` = \[요청 코드 복사\] 끔).
     pub request: Option<String>,
     /// 요청 코드를 보내는 이메일(링크 · 클릭 = 복사).
     pub contact: String,

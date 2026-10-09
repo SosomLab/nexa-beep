@@ -7584,7 +7584,7 @@ impl App {
         }
     }
 
-    /// 내 기기 목록 창 열기(설정 › 사용자 [열기…] · 라이선스 창과 같은 모달 문법).
+    /// 내 기기 목록 창 열기(설정 › 사용자 \[열기…\] · 라이선스 창과 같은 모달 문법).
     fn open_devices(&mut self, el: &ActiveEventLoop) {
         if let Some((did, _)) = self.windows.iter().find(|(_, e)| e.role == Role::Devices) {
             if let Some(e) = self.windows.get(did) {
