@@ -50,7 +50,7 @@ $env:NEXA_INSTALL_DIR = 'D:\Apps\NexaBeep'   # 기본 = HKCU\Software\SosomLab\N
 
 | OS | 설치 자리(포장 SSOT와 동일) | 탐지 | 권한 | 기동 |
 |---|---|---|---|---|
-| Linux .deb | `/usr/bin/{nexa-beep,nbeep-imgdec}` | `NEXA_INSTALL_DIR` → `command -v nexa-beep`(readlink) → `/usr/bin` | root → `sudo` 1회 · **TTY 없으면 `pkexec`**(GUI 암호창) | **`gio launch /usr/share/applications/nexa-beep.desktop`**(경로 명시 — `gtk-launch <id>`는 사용자 런처가 가리면 개발 빌드가 뜬다) · stdout → `target/installed-nexa-beep.log` · `/proc/<pid>/exe`가 설치본인지 대조 |
+| Linux .deb | `/usr/bin/{nexa-beep,nbeep-imgdec}` | `NEXA_INSTALL_DIR` → `command -v nexa-beep`(readlink) → `/usr/bin` | root → `sudo` 1회 · **TTY 없으면 `pkexec`**(GUI 암호창) · ★**10-09: dpkg 소유 자리면 복사 대신 `.deb` 재포장 → `dpkg -i`**(기록·파일 일치 · `.desktop`·아이콘 포함 · 종전 복사는 `dpkg -V` 불일치 → 뒤의 `apt install`이 "이미 최신"으로 조용히 끝나는 사고의 원인) | **`gio launch /usr/share/applications/nexa-beep.desktop`**(경로 명시 — `gtk-launch <id>`는 사용자 런처가 가리면 개발 빌드가 뜬다) · stdout → `target/installed-nexa-beep.log` · `/proc/<pid>/exe`가 설치본인지 대조 |
 | macOS brew cask | `/Applications/Nexa Beep.app/Contents/MacOS/…` | 고정 | 사용자 · ad-hoc 재서명+quarantine 제거 | `open -a "Nexa Beep"` |
 | Windows NSIS | `%LOCALAPPDATA%\Programs\NexaBeep\…exe` | 환경변수 → HKCU `InstallDir` → 기본 | 사용자 | `Start-Process`(무인자) · 버전은 `Cargo.toml` |
 

@@ -503,6 +503,13 @@ jobs:
     runs-on: ubuntu-latest
     permissions: {}
     steps:
+      # ★ 등록 확인(10-09 사고 재발 방지): linux-repo에 등록 파일이 없으면 신호를 보내도 색인에 안 오르고,
+      #   사용자의 `apt install nexa-beep`은 옛 로컬 .deb 버전을 "이미 최신"으로 보고 조용히 끝난다 → 여기서 빨갛게.
+      - name: 등록 확인(linux-repo apps/nexa-beep.toml)
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' https://raw.githubusercontent.com/SosomLab/linux-repo/main/apps/nexa-beep.toml)
+          [ "$code" = 200 ] || { echo "::error::pkg.sosomlab.com에 nexa-beep이 등록되지 않았다(HTTP $code) — SosomLab/linux-repo apps/nexa-beep.toml 추가(docs/ADDING-AN-APP.md)"; exit 1; }
+          echo "등록 확인 ✓"
       - name: pkg.sosomlab.com 갱신 신호
         env:
           TOKEN: ${{ secrets.LINUX_REPO_DISPATCH_TOKEN }}

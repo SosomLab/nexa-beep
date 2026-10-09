@@ -23,7 +23,11 @@
 # 데이터: 설치본은 "업그레이드 때 교체되는 자리"(/usr·.app 번들)라 exe 옆이 아니라 사용자 폴더를 쓴다
 #   (Linux ~/.config/nexa-beep · mac ~/Library/Application Support/nexa-beep — nexa_conf::is_replaced_on_upgrade).
 #   개발 인스턴스(target/*/data · ~/.nexa-beep-multi)와 이력·설정·신원이 **다르다** → `--whoami`로 확인.
-# ⚠ 버전 문자열은 Cargo.toml 그대로다 — 패키지 관리자(dpkg/brew)의 등록 버전은 바뀌지 않고,
+# ★ Linux(10-09): 설치 자리가 dpkg 소유(`dpkg -S`)면 복사 대신 **`.deb`로 다시 포장해 `dpkg -i`** 한다 —
+#   파일만 덮어쓰면 dpkg 기록(옛 버전)과 실제 바이너리가 어긋나 `dpkg -V`로만 드러나고, 뒤에
+#   `apt install`이 "이미 최신"으로 조용히 끝나는 사고가 난다(10-09 실측 · linux-repo ADDING-AN-APP.md).
+#   .deb 경로는 .desktop·아이콘도 함께 가므로 `--assets`가 저절로 포함된다. 비 dpkg 자리(NEXA_INSTALL_DIR 등)는 종전 복사.
+# ⚠ 버전 문자열은 Cargo.toml 그대로다 — 패키지 관리자(brew)의 등록 버전은 바뀌지 않고,
 #   다음 정식 설치가 이 파일을 다시 덮어쓴다. 실기 전용이지 배포 대체가 아니다.
 set -u
 cd "$(dirname "$0")/.."
@@ -128,8 +132,24 @@ SRC="$ROOT/target/$PROFILE"   # 절대 경로 — pkexec 대비
 say "③ 설치 자리 덮어쓰기 → $DEST"
 sum() { if command -v md5sum >/dev/null 2>&1; then md5sum "$1" | cut -c1-12; else md5 -q "$1" | cut -c1-12; fi; }
 BEFORE=$(sum "$DEST/nexa-beep")
-# install(1) = 새 inode로 교체(실행 중 텍스트 잠금·"text file busy" 회피) + 권한 755.
-as_owner "$DEST" install -m 755 "$SRC/nexa-beep" "$SRC/nbeep-imgdec" "$DEST/" || { echo "   ❌ 복사 실패"; exit 1; }
+DPKG_OWNED=0
+if [ "$OS" = linux ] && command -v dpkg >/dev/null 2>&1 && dpkg -S "$DEST/nexa-beep" >/dev/null 2>&1; then DPKG_OWNED=1; fi
+if [ "$DPKG_OWNED" = 1 ]; then
+  # dpkg가 아는 자리 → .deb 재포장 + dpkg -i (기록과 파일이 같이 바뀐다 · 머리말 ★ 참조).
+  echo "   dpkg 소유 자리($(dpkg -S "$DEST/nexa-beep" | cut -d: -f1) $(dpkg-query -W -f='${Version}' nexa-beep 2>/dev/null)) → .deb 재포장 후 dpkg -i"
+  DEBLOG=$(mktemp)
+  if ! NEXA_BIN_DIR="$SRC" "$ROOT/packaging/linux/build-deb.sh" --skip-build > "$DEBLOG" 2>&1; then
+    echo "   ❌ .deb 포장 실패 — 마지막 15줄:"; tail -15 "$DEBLOG" | sed 's/^/   /'; rm -f "$DEBLOG"; exit 1
+  fi
+  DEB=$(sed -n 's/^DEB=//p' "$DEBLOG" | tail -1); rm -f "$DEBLOG"
+  [ -f "$DEB" ] || { echo "   ❌ .deb 산출물을 찾지 못했다"; exit 1; }
+  pick_elevator
+  "$ELEVATE" dpkg -i "$DEB" >/dev/null 2>&1 || { echo "   ❌ dpkg -i 실패: $DEB"; exit 1; }
+  echo "   dpkg: $(dpkg-query -W -f='${Package} ${Version}' nexa-beep) ✓ ($(basename "$DEB"))"
+else
+  # install(1) = 새 inode로 교체(실행 중 텍스트 잠금·"text file busy" 회피) + 권한 755.
+  as_owner "$DEST" install -m 755 "$SRC/nexa-beep" "$SRC/nbeep-imgdec" "$DEST/" || { echo "   ❌ 복사 실패"; exit 1; }
+fi
 # ★ md5 대조는 **재서명 전에**(08-30 mac 실측 — ad-hoc codesign이 바이너리에 서명을 박아
 #   넣어 산출물과 md5가 달라진다 · 서명 뒤 대조는 mac에서 항상 실패).
 AFTER=$(sum "$DEST/nexa-beep")
@@ -141,7 +161,7 @@ if [ "$OS" = mac ]; then
   xattr -dr com.apple.quarantine "/Applications/Nexa Beep.app" 2>/dev/null || true
   echo "   codesign: $(codesign -dv "/Applications/Nexa Beep.app" 2>&1 | grep -o 'Signature=.*' || echo '?')"
 fi
-if [ "$OS" = linux ] && [ "$ASSETS" = 1 ]; then
+if [ "$OS" = linux ] && [ "$ASSETS" = 1 ] && [ "$DPKG_OWNED" = 0 ]; then
   SHARE="$(dirname "$DEST")/share"   # /usr/bin → /usr/share (.deb 배치와 동일 — packaging/linux/build-deb.sh)
   if [ -d "$SHARE/applications" ]; then
     as_owner "$SHARE/applications" install -m 644 "$ROOT/packaging/linux/nexa-beep.desktop" "$SHARE/applications/nexa-beep.desktop"
