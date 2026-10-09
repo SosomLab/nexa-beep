@@ -1,0 +1,23 @@
+[package]
+name = "nbeep-license"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Nexa Beep 라이선스 앱 층 — nexa-license 위의 얇은 층: Product nexa-beep · LicenseState · 폴더(데이터 폴더/license → 기기 공용) · 설치/삭제 · 요청 코드 · Feature 0(D-33-6) (출처: nexa-dir3/crates/ndir-license ← nexa-sql/crates/nsql-license)"
+# 빌드일 NBEEP_BUILD_DATE(영구 라이선스 updates_until 판정 기준 = 시계가 아니라 빌드일).
+build = "build.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+# 검증 전용 — `issuer`(서명 생성)는 켜지 않는다(nexa-license Cargo.toml: 앱은 절대 켜지 않는다).
+nexa-license = { workspace = true, features = ["ed25519", "machine-id", "fs"] }
+
+[dev-dependencies]
+# 시험 전용 키쌍 생성·서명(발급 코드가 아니다 · #[cfg(test)]) — nexa-license verify 시험과 같은 판(트리에 이미 있음 · 증가 0).
+ed25519-dalek = { version = "2", default-features = false, features = ["std", "rand_core"] }
+rand_core = { version = "0.6", features = ["getrandom"] }

@@ -16,6 +16,7 @@ members = [
   "crates/nexa-beep",     # (bin) 진입·조립·생명주기
   "crates/nexa-beepd",    # (bin) 릴레이 서버 — 별도 실행 파일·별도 배포(W-1~W-4)
   "tools/mkavatars",      # (bin) 개발 도구 — 원본 PNG → 내장 아바타 자산. **배포물 아님**
+  "crates/nbeep-license", # 라이선스 앱 층(nexa-license 위 · Feature 0 · docs/50 P4)
 ]
 
 [workspace.package]
@@ -54,6 +55,9 @@ nexa-ctl = { path = "../nexa-ui/crates/nexa-ctl" }
 nexa-conf = { path = "../nexa-ui/crates/nexa-conf" }
 nexa-font = { path = "../nexa-ui/crates/nexa-font" }
 nexa-sys = { path = "../nexa-ui/crates/nexa-sys", default-features = false } # OS 신호(locale — `ui.language=system` · 10-09 P2)
+# ★ nexa-license(계열 공용 라이선스 라이브러리 · 10-09 docs/50 P4) — 형제 저장소 path 의존(`../nexa-license`).
+nexa-license = { path = "../nexa-license/crates/nexa-license" }
+nbeep-license = { path = "crates/nbeep-license" }
 nbeep-relay = { path = "crates/nbeep-relay" }
 sha2 = "0.10" # SHA-256(FR-X-6) — snow가 이미 끄는 의존(트리 증가 0)
 
