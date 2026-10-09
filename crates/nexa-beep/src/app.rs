@@ -6208,18 +6208,25 @@ impl App {
     /// no-op이고 클라이언트가 창을 되살릴 수 없다(xdg-shell 한계) — 최소화 해제 시도 +
     /// **주의 요청**(xdg_activation · Dock 아이콘 강조)으로 사용자가 한 번 눌러 복귀한다.
     fn raise_main(&mut self, el: &ActiveEventLoop) {
+        self.raise_main_with(el, true);
+    }
+
+    /// `activate` = 셸 활성화 토큰을 **메인 창에 쓸지**. 트레이 "설정…"(10-09 Linux 실기 "메인만 뜨고
+    /// 설정 창은 숨어 있다")처럼 **다른 창이 포커스를 받아야** 할 때는 false로 두고, 그 창에
+    /// [`Self::activate_role_window`]로 토큰을 넘긴다 — 토큰은 클릭당 하나라 먼저 쓰는 창이 가져간다.
+    fn raise_main_with(&mut self, el: &ActiveEventLoop, activate: bool) {
         // Linux 트레이 복귀 — X로 파괴된 메인 창을 다시 만든다(위 CloseRequested 참조).
         if self.main_id.is_none() {
             self.create_main_window(el);
         }
         #[cfg(not(target_os = "linux"))]
-        let _ = el;
+        let _ = (el, activate);
         nbeep_plat::dock::set_dock_visible(true); // mac Accessory → Regular(다른 OS no-op)
         if let Some(e) = self.main_id.and_then(|m| self.windows.get(&m)) {
             e.window.set_visible(true);
             e.window.set_minimized(false); // tray_hide_taskbar off = 최소화였다
             #[cfg(target_os = "linux")]
-            {
+            if activate {
                 // ① 셸이 준 정식 토큰(GNOME appindicator `ProvideXdgActivationToken`)이
                 //    있으면 xdg_activation.activate → **진짜 포커스**(08-29 실기: 앱 자체
                 //    토큰은 "앱이 준비되었습니다" 알림으로 강등됐다).
@@ -6233,6 +6240,27 @@ impl App {
             }
             e.window.focus_window();
         }
+    }
+
+    /// 역할 창 하나를 **앞으로**: 보이기·최소화 해제·(Linux) 셸 토큰으로 정식 활성화 · 포커스.
+    /// Wayland는 포커스 없는 앱이 새로 만든 창을 **뒤에 두고 "창이 준비되었습니다"만 띄우므로**(GNOME
+    /// 포커스 가로채기 방지) 트레이 클릭 토큰을 이 창에 써야 사용자 눈앞에 뜬다.
+    fn activate_role_window(&mut self, role: Role) {
+        let Some(e) = self.windows.values().find(|e| e.role == role) else {
+            return;
+        };
+        e.window.set_visible(true);
+        e.window.set_minimized(false);
+        #[cfg(target_os = "linux")]
+        {
+            let activated = nbeep_plat::tray::take_activation_token()
+                .is_some_and(|tok| wayland_activate(&e.window, &tok));
+            if !activated {
+                e.window
+                    .request_user_attention(Some(winit::window::UserAttentionType::Critical));
+            }
+        }
+        e.window.focus_window();
     }
 
     /// 팔레트 + 사용자 색 오버라이드(설정 `theme.{dark|light}.*`)로 테마 재구성(08-10).
@@ -8781,6 +8809,8 @@ impl App {
     fn open_settings(&mut self, el: &ActiveEventLoop) {
         if let Some((id, _)) = self.windows.iter().find(|(_, e)| e.role == Role::Settings) {
             if let Some(e) = self.windows.get(id) {
+                e.window.set_visible(true); // 숨김·최소화 상태였어도 앞으로(10-09)
+                e.window.set_minimized(false);
                 e.window.focus_window();
             }
             return;
@@ -18209,8 +18239,11 @@ impl ApplicationHandler<AppEvent> for App {
                 // "설정"(10-09 사용자 요청) — 메인을 먼저 복원(숨김 상주 중이면 소유 창이 없다)하고
                 // ⌘/Ctrl+, 와 같은 경로로 연다(있으면 포커스).
                 nbeep_plat::tray::TrayEvent::Settings => {
-                    self.raise_main(el);
+                    // 메인은 토큰 없이 복원(소유 창 확보) → 설정 창을 열고 **토큰은 설정 창에**(10-09 Linux 실기:
+                    // 메인이 토큰을 써 버리면 설정 창은 포커스 없이 메인 뒤에 깔려 "숨은" 것처럼 보였다).
+                    self.raise_main_with(el, false);
                     self.open_settings(el);
+                    self.activate_role_window(Role::Settings);
                 }
                 nbeep_plat::tray::TrayEvent::Quit => el.exit(),
             },
