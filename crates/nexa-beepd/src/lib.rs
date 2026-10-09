@@ -164,20 +164,37 @@ pub fn spawn(cfg: &Config) -> std::io::Result<Handle> {
         eprintln!("[beepd] 새 서버 신원 생성 — {}", cfg.key_path.display());
     }
 
-    // TCP·UDP를 같은 번호에 — port 0(테스트)이면 TCP가 정한 번호로 UDP를 몇 번 재시도.
+    // TCP·UDP를 같은 번호에 — port 0(테스트)이면 한쪽이 정한 번호로 다른 쪽을 몇 번 재시도.
+    // ★ 10-10 CI(windows-latest) 실측: TCP가 고른 임시 번호로 UDP bind가 **10회 연속** 10013(WSAEACCES) —
+    //   Windows는 TCP·UDP의 제외 포트 범위(Hyper-V 예약)가 **서로 달라** 한쪽이 고른 번호가 다른 쪽 제외 범위에
+    //   든다. 그래서 **TCP-먼저 / UDP-먼저를 교대**로(각자 OS가 자기 제외 범위를 피해 고른 번호를 상대에게 시도)
+    //   40회까지 돈다. 고정 포트(운영)는 종전처럼 1회 — 실패를 숨기지 않는다.
     let (listener, udp) = {
         let mut last_err = None;
         let mut pair = None;
-        for _ in 0..10 {
-            let l = TcpListener::bind((cfg.bind_ip, cfg.port))?;
-            let p = l.local_addr()?.port();
-            match UdpSocket::bind((cfg.bind_ip, p)) {
-                Ok(u) => {
-                    pair = Some((l, u));
-                    break;
+        let attempts = if cfg.port == 0 { 40 } else { 1 };
+        for i in 0..attempts {
+            if i % 2 == 0 {
+                let l = TcpListener::bind((cfg.bind_ip, cfg.port))?;
+                let p = l.local_addr()?.port();
+                match UdpSocket::bind((cfg.bind_ip, p)) {
+                    Ok(u) => {
+                        pair = Some((l, u));
+                        break;
+                    }
+                    Err(e) if cfg.port == 0 => last_err = Some(e), // 다른 임시 번호로 재시도
+                    Err(e) => return Err(e),
                 }
-                Err(e) if cfg.port == 0 => last_err = Some(e), // 다른 임시 번호로 재시도
-                Err(e) => return Err(e),
+            } else {
+                let u = UdpSocket::bind((cfg.bind_ip, 0))?;
+                let p = u.local_addr()?.port();
+                match TcpListener::bind((cfg.bind_ip, p)) {
+                    Ok(l) => {
+                        pair = Some((l, u));
+                        break;
+                    }
+                    Err(e) => last_err = Some(e),
+                }
             }
         }
         pair.ok_or_else(|| {
