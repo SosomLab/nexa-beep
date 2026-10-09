@@ -1590,6 +1590,39 @@ pub fn registry() -> &'static [Entry] {
             kind: SettingKind::RadioInput(&[("10", Msg::NetmonIntervalDefault)], ""),
             key: "netmon.interval_s",
         },
+        // ── 라이선스 정보(P4 ⑤ · 읽기 전용 · 호스트 set_info — 값은 영속되지 않는다) ──
+        Entry {
+            cat: Msg::CatAdvanced,
+            sub: Some(Msg::SubLicense),
+            label: Msg::LicInfoState,
+            desc: Msg::LicInfoStateDesc,
+            kind: SettingKind::Info,
+            key: "license.state",
+        },
+        Entry {
+            cat: Msg::CatAdvanced,
+            sub: Some(Msg::SubLicense),
+            label: Msg::LicInfoId,
+            desc: Msg::LicInfoIdDesc,
+            kind: SettingKind::Info,
+            key: "license.id",
+        },
+        Entry {
+            cat: Msg::CatAdvanced,
+            sub: Some(Msg::SubLicense),
+            label: Msg::LicInfoFile,
+            desc: Msg::LicInfoFileDesc,
+            kind: SettingKind::Info,
+            key: "license.file",
+        },
+        Entry {
+            cat: Msg::CatAdvanced,
+            sub: Some(Msg::SubLicense),
+            label: Msg::LicInfoMachine,
+            desc: Msg::LicInfoMachineDesc,
+            kind: SettingKind::Info,
+            key: "license.machine",
+        },
     ]
 }
 

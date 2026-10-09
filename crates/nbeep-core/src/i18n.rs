@@ -1176,6 +1176,16 @@ pub enum Msg {
     TypeaheadEnableDesc,
     /// 검증 경고 — 타입어헤드 유효시간 범위.
     ValTypeaheadRange,
+    /// 설정 › 고급 › 라이선스(정보 카드 4행 · P4 ⑤).
+    SubLicense,
+    LicInfoState,
+    LicInfoStateDesc,
+    LicInfoId,
+    LicInfoIdDesc,
+    LicInfoFile,
+    LicInfoFileDesc,
+    LicInfoMachine,
+    LicInfoMachineDesc,
     // ── P4 license(10-09 · docs/50 D-33-6·7 · nbeep-license · nbeep-ui license_win) ──
     /// 도움말 ▸ 라이선스… 메뉴 항목·창 제목 꼬리.
     LicMenu,
@@ -3325,6 +3335,35 @@ impl Msg {
             Msg::TrayLan => ["LAN {}", "LAN {}", "LAN {}", "LAN {}"],
             Msg::TrayXfer => ["transferring", "전송 중", "传输中", "転送中"],
             Msg::TypeaheadEnable => ["Type-ahead", "타입어헤드", "键入跳转", "タイプアヘッド"],
+            Msg::SubLicense => ["License", "라이선스", "许可证", "ライセンス"],
+            Msg::LicInfoState => ["License status", "라이선스 상태", "许可证状态", "ライセンス状態"],
+            Msg::LicInfoStateDesc => [
+                "free = no file (non-commercial use is free). Install or remove in Help ▸ License…",
+                "free = 파일 없음(비상업 사용 무료). 설치·제거는 도움말 ▸ 라이선스…",
+                "free = 无文件（非商业使用免费）。安装或移除请在 帮助 ▸ 许可证…",
+                "free = ファイルなし（非商用は無料）。インストール・削除は ヘルプ ▸ ライセンス…",
+            ],
+            Msg::LicInfoId => ["License ID", "라이선스 ID", "许可证 ID", "ライセンス ID"],
+            Msg::LicInfoIdDesc => [
+                "Identifier printed on the issued license (quote it when asking for support)",
+                "발급된 라이선스에 적힌 식별자(문의 시 알려 주세요)",
+                "签发许可证上的标识符（咨询时请提供）",
+                "発行ライセンスに記載の識別子（問い合わせ時にお知らせください）",
+            ],
+            Msg::LicInfoFile => ["License file", "라이선스 파일", "许可证文件", "ライセンスファイル"],
+            Msg::LicInfoFileDesc => [
+                "Where the installed file lives (user folder first, then machine-wide)",
+                "설치된 파일 위치(사용자 폴더 우선 · 다음 기기 공용 폴더)",
+                "已安装文件的位置（先用户目录，再本机公用目录）",
+                "インストール済みファイルの場所（ユーザー → 機器共通の順）",
+            ],
+            Msg::LicInfoMachine => ["Machine code", "기기 코드", "设备代码", "機器コード"],
+            Msg::LicInfoMachineDesc => [
+                "Stable code for this PC that a license is bound to (part of the request code)",
+                "이 PC를 가리키는 고정 코드(라이선스가 묶이는 대상 · 요청 코드에 포함)",
+                "绑定许可证的本机固定代码（包含在请求代码中）",
+                "ライセンスを紐付けるこのPCの固定コード（要求コードに含まれる）",
+            ],
             Msg::ValTypeaheadRange => [
                 "Type-ahead timeout must be 200–60000 ms",
                 "타입어헤드 유효시간은 200~60000ms 사이여야 합니다",

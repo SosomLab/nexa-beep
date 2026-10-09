@@ -3515,6 +3515,37 @@ impl App {
         }
     }
 
+    /// 설정 › 고급 › 라이선스 **정보 카드** 4행(읽기 전용 · `SettingKind::Info`)을 판정기 상태로 채운다 —
+    /// 설정 창을 열 때와 라이선스가 설치/제거됐을 때.
+    fn refresh_license_info(&mut self) {
+        let Some(sv) = &mut self.settings_view else {
+            return;
+        };
+        let state = self.licensing.state();
+        let (state_text, _) = nbeep_ui::license_win::state_text(state);
+        let id = state
+            .license()
+            .map_or_else(|| "-".to_string(), |l| l.id.clone());
+        let file = self
+            .licensing
+            .path()
+            .map_or_else(|| "-".to_string(), |p| p.display().to_string());
+        let machine = nbeep_license::Licensing::machine_code().unwrap_or_else(|| "-".to_string());
+        let mut inv = Invalidations::default();
+        sv.set_info("license.state", &state_text, &mut inv);
+        sv.set_info("license.id", &id, &mut inv);
+        sv.set_info("license.file", &file, &mut inv);
+        sv.set_info("license.machine", &machine, &mut inv);
+        if let Some(sid) = self
+            .windows
+            .iter()
+            .find(|(_, e)| e.role == Role::Settings)
+            .map(|(id, _)| *id)
+        {
+            self.request_redraw(sid);
+        }
+    }
+
     /// 판정기 상태를 창에 다시 싣고(노트 포함) 창 높이를 맞춘다.
     fn license_refresh_view(
         &mut self,
@@ -3531,6 +3562,7 @@ impl App {
         }
         self.fit_license_window(id);
         self.layout_window(id);
+        self.refresh_license_info(); // 설정 창이 열려 있으면 정보 카드도 함께
     }
 
     /// About 창을 연다(메뉴 → About).
@@ -8766,6 +8798,7 @@ impl App {
         }
         self.settings_view = Some(sv);
         self.refresh_approval_ui(); // 잠금·하단 정보 초기 반영
+        self.refresh_license_info(); // 고급 › 라이선스 정보 카드(P4 ⑤)
         self.layout_window(id);
         self.request_redraw(id);
     }
