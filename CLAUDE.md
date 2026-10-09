@@ -88,7 +88,11 @@
 
 1. 이 CLAUDE.md + [docs/STATUS.md](docs/STATUS.md) → 2. [DEVLOG](docs/DEVLOG.md) 최상단 + 최신 journal → 3. 할 일 = [docs/TODO.md](docs/TODO.md) 순차.
 
-## 5. 다음 단계 (2026-10-09 · STATUS 10-09 2차 기준 — ★설정 체계 개편+nexa-ui/nexa-license 도입 [docs/50] P1-c ✅(의존 전환 · 665 green) → **P2 설정 개편(이쪽) ∥ P4 라이선스(협업 세션)** · 형제 저장소 `../nexa-ui`·`../nexa-license` 필수(18 §1))
+## 5. 다음 단계 (2026-10-09 · STATUS 10-09 5차 기준 — ★docs/50 P1~P4 완결 · 실기 피드백 연쇄(트레이 배지·타입어헤드·설정 preedit·카드 레이아웃·위치 드롭다운) · 701 green · **다음 = 사용자 실기(T-1~10 + 대화상자 ①~⑧) → P5 캡처·v0.3.0 후보 · push 순서 nexa-ui → nexa-license → beep**)
+
+> **10-09 5차(Linux · main)** — ★**P3·P4 완결 + 실기 피드백 연쇄**: 트레이 배지 M3-2e(서버 녹·LAN 파랑·전송 주황 · clip DR-44 · `refresh_tray_badges` 바뀔 때만 · M3-2d ② 번복) · 타입어헤드(`k` 미이동 = 표시 이름 미대조 → 표시∨발견 · ↑ 감김 · **nexa-sql 설정 반영** 마스터 `ui.typeahead`+DEPENDS 4 · 200~60000ms) · 설정 검색 preedit(ㅌ 즉시 필터) · **설정 카드 레이아웃**(제목/설명 좌상·키 우상·컨트롤+초기화 좌하·기본값 우하) · 위치 드롭다운 · **P3 nexa-dlg**(협업 cherry-pick · 용도 9 · ADR-0014 정정 · 백업 = 저장 대화상자·기록 복원 = .seg 다중) · 라이선스 정보 카드 · docs/45 초안(협업). ⚠ 디스크 100% 사고(cross-target 산출물 누적) → 전 프로젝트 target clean. **701 green · 2타깃 0**.
+
+> **종전(10-09 2차 기준)** — ★설정 체계 개편+nexa-ui/nexa-license 도입 [docs/50] P1-c ✅(의존 전환 · 665 green) → **P2 설정 개편(이쪽) ∥ P4 라이선스(협업 세션)** · 형제 저장소 `../nexa-ui`·`../nexa-license` 필수(18 §1))
 
 > **10-09 2차(Linux · main)** — ★**[50 계획](docs/50-settings-overhaul-nexa-ui-plan.md) 📐 + P1-c nexa-ui 의존 전환 ✅**: 조사 4축(서브에이전트 3+협업 세션) → D-33-1~9(ADR-0014 정정→nexa-dlg · `ui.language=system`(nexa-sys locale) · 라이선스 Feature 0·게이트 off · nexa-conf tighten ui 선반영 · 검색 AND+자모 · 즉시 적용+카드 초기화) → **P1-c**: nbeep-gfx·nbeep-ctl·nexa-conf·plat/font 삭제 → `../nexa-ui/crates/*` path 의존(워크스페이스 11) · 접점 = `nbeep-ui/lib.rs` 재노출 1줄 + 시그니처 6건 · ★**nexa-ctl 컨트롤 전부 MouseUp 확정**(nbeep-ctl은 Button만) → 설정 MouseUp 라우팅·테스트 헬퍼 수정 · CI 6잡 형제 체크아웃(`working-directory: nexa-beep`) · **665 green · 4타깃 0 · 릴리스 6,026,560B(+4.2%)**. 협업(nexa-beep-78) = P1-a nexa-ui 4커밋(`tighten`·`locale`·toolbar dim/ring) · P1-b nexa-license 1커밋 — **push 순서 nexa-ui → nexa-license → beep**(미push). 교훈 = **같은 계보라도 "확정 시점" 같은 암묵 계약은 테스트가 잡는다**.
 

@@ -7,6 +7,7 @@
 
 ## 2026-10-09
 
+- **(Linux · main) ★실기 피드백 연쇄 + P3·P4 완결**: 트레이 배지 M3-2e(clip DR-44 · M3-2d ② 번복) · 타입어헤드(표시 이름 매칭 · ↑ 감김 · nexa-sql 설정 = 마스터+DEPENDS·범위 검증) · 설정 검색 preedit · 설정 카드 레이아웃(sql 모양) · 위치 드롭다운 · P3 nexa-dlg 반영(협업 · 용도 9 · ADR-0014 정정) · 라이선스 정보 카드 · docs/45 초안(협업) · 701 green · 디스크 100% 사고 → target 정리. [journal](journal/2026-10-09.md)
 - **(Linux · main) ★P4 라이선스 main 반영**(협업 ①② cherry-pick + ③ 배선 `8a67200` — 도움말 ▸ 라이선스… · 행동 4종 · `--license` CLI · 695 green) · **3신원 재기동 ✓**(지문 불변 · 발견 3/3 — 이관 뒤 기능 불변) · 14 §10-3 · TODO M3-2e · P3 협업 착수. [journal](journal/2026-10-09.md)
 - **(Linux · main) ★P2 설정 체계 개편 ✅**(docs/50 — nexa-sql 이식): 그룹 트리 6 · 재분류 26키 · 고급 스위치+배너(ADVANCED 27) · 카드 키/⧉/기본값/[초기화] · 종속 잠금(DEPENDS 17) · 자모 검색+이력 · 시스템 카테고리 · **`ui.language=system`**(nexa-sys locale) · 설정 창 기하 기억 · `Kind::Info` · 675 green · 4타깃 0. 협업 P4 ①②(nbeep-license·license_win) 완료 · 트레이 인디케이터 검토(결정 대기). [journal](journal/2026-10-09.md)
 - **(Linux · main) ★설정 체계 개편 + nexa-ui/nexa-license 도입 — 계획 [50](50-settings-overhaul-nexa-ui-plan.md) 📐 → P1-c nexa-ui 의존 전환 ✅**(사용자 지시 · 협업 세션 병행): 조사 4축(nexa-ui 계보 = beep 직계 · nexa-license 앱 어댑터 패턴 · nexa-sql 설정 창 구조 · beep 현행 90키) → 결정 D-33-1~9(ADR-0014 정정 → nexa-dlg · `ui.language=system` · 라이선스 Feature 0·게이트 off) → **P1-c**: nbeep-gfx·nbeep-ctl·nexa-conf 사본·plat/font 삭제 → `../nexa-ui` path 의존(재노출 1줄+시그니처 6건 · ★nexa-ctl 전 컨트롤 MouseUp 확정 차이 흡수) · CI 6잡 형제 체크아웃 · 665 green · 4타깃 0 · 릴리스 6.03MB(+4.2%). 협업 = P1-a(nexa-ui 4커밋) · P1-b(nexa-license 1커밋). [journal](journal/2026-10-09.md)

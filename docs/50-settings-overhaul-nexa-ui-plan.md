@@ -109,4 +109,7 @@
 | 10-09 | P4 ①② ✅(협업) | worktree `feat/license-p4` — `crates/nbeep-license` · `license_win.rs` · i18n 37키 · main cherry-pick `6f91364`·`61daef9` |
 | 10-09 | P4 ③ ✅ | `8a67200` 배선(메뉴·Role::License·행동 4종·피커 LicenseFile·CLI) · 695 green · 4타깃 0 · CLI 스모크 ✓ · 실기 T-7 잔여 |
 | 10-09 | T-9 ✓ | 3신원 재기동 — 지문 불변 · 상호 발견 3/3(이관 뒤 기능 불변) |
-| 10-09 | P3 🚧(협업) | worktree `feat/file-dialog-p3` — nexa-dlg 호스팅 · 용도 9(LicenseFile 포함) · docs/35 정정 |
+| 10-09 | P3 ✅(협업) | `77d863c`·`62974c6` cherry-pick — nexa-dlg 호스팅 · 용도 9 · docs/35 정정 · 동작 변화 4 · Ctrl/⌘+C 복사 배선(nexa-ui 188차) |
+| 10-09 | P4 ⑤ ✅ | 설정 › 고급 › 라이선스 정보 카드 4행(Kind::Info) |
+| 10-09 | 실기 피드백 | 타입어헤드(표시 이름·↑ 감김·sql 설정) · 설정 preedit · **카드 레이아웃(사용자 확정 sql 모양)** · 위치 드롭다운 · 트레이 배지 M3-2e |
+| 10-09 | P5 🚧 | docs/45 초안(협업 `3ba3bf5`) · 14 §10-3 · 위키 User-Guide 로컬 · 캡처 = 사용자 실기 뒤 |
