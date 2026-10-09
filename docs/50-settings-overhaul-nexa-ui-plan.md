@@ -22,7 +22,7 @@
 
 | # | 쟁점 | 결정 | 근거 |
 |---|---|---|---|
-| D-33-1 | 검색 | **beep 토큰 AND 유지 + sql 자모 분해 추가**(조합 중 글자도 매치) · 대상 = key+label+desc+cat **현재 언어 + 영어**(4개 국어 전수는 비용 대비 과다 → 영어 보조만) · 이력 = `prefs.search`(↑/↓) | DR-24 명문(AND) · sql의 장점만 흡수 |
+| D-33-1 | 검색 | **beep 토큰 AND 유지 + sql 자모 분해 추가**(조합 중 글자도 매치) · 대상 = key+그룹+cat+하위+label+desc **전 언어**(⚠ 구현 중 "현재+영어"로 좁혔다가 영어 UI의 한글 검색이 깨져 **전 언어로 복원** — 시험이 잡음) · 이력 = `prefs.search`(↑/↓) | DR-24 명문(AND) · sql의 장점만 흡수 |
 | D-33-2 | 적용 방식 | **즉시 적용 유지**(DR-24 §10 4) + **카드별 [초기화]**(기본값과 다를 때만) + 검증 실패 = 직전값 원복(14 §14) | sql과 동일 · M3-18 보류 의미론은 프로필에만 |
 | D-33-3 | 파일 다이얼로그 | **ADR-0014(D-30) 정정 → nexa-dlg `FilePicker` 3-OS 자체**(nexa-ui D-9 수용) · 호스팅 = sql `file_win.rs` 패턴(별도 winit+softbuffer 모달 창 · 메인 소유) · 용도 8 전부 이관 · `PickerLabels` 4개 국어 주입 | 사용자 지시 "새 다이얼로그 반영" · DR-6(전 렌더링 자체) 원복 · Linux 자체 피커는 이미 전제 |
 | D-33-4 | 언어 시스템 설정 | `ui.language` = **`system`(기본)/en/ko/zh/ja** — `system` = 부팅마다 OS 언어 추종(`nexa-sys::locale` 신설 · 미지원 언어 = en) · 변경 즉시 반영(재시작 없음) | `ui.theme`과 같은 어휘 · sql은 "system 값 없이 기본값만 OS"라 **명시 추종이 더 투명** |
@@ -105,3 +105,5 @@
 | 10-09 | P0 | 조사 4축 · 본 문서 · 분담 합의 |
 | 10-09 | P1-a·b ✅ | 협업: nexa-ui `tighten`·`locale::ui_language`·toolbar dim/ring(4커밋 main) · nexa-license 발급기 nexa-beep 분기(1커밋 main) — 미push |
 | 10-09 | P1-c ✅ | beep 의존 전환(`refactor(ui)`) — 665 green · 4타깃 0 · 릴리스 6.03MB(+4.2%) · CI 형제 체크아웃 · 발견 = nexa-ctl 전 컨트롤 MouseUp 확정 |
+| 10-09 | P2 ✅ | 설정 체계 개편(`feat(settings)`) — 그룹 트리·고급 스위치·카드 초기화/키 복사·DEPENDS·자모 검색+이력·`ui.language=system`·창 기하 · 675 green · 4타깃 0 · 실기 T-1~3 잔여 |
+| 10-09 | P4 ①② ✅(협업) | worktree `feat/license-p4` — `crates/nbeep-license` · `license_win.rs` · i18n 37키 · 685 green · ③ app.rs 배선(이쪽) 대기 |
