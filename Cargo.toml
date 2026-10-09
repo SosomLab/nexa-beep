@@ -9,12 +9,9 @@ members = [
   "crates/nbeep-crypto",  # Noise 세션·TOFU
   "crates/nbeep-safe",    # 수신 무해화(.beepq)
   "crates/nbeep-store",   # 영속·암호화 기록
-  "crates/nbeep-gfx",     # CPU 래스터라이저·텍스트 스택
-  "crates/nbeep-ctl",     # 커스텀 컨트롤 라이브러리(렌더 기반·컨트롤 — 앱 도메인 의존 0)
-  "crates/nbeep-ui",      # 앱 화면(위젯 — nbeep-ctl 위에)
+  "crates/nbeep-ui",      # 앱 화면(위젯 — nexa-ctl 위에 · ★10-09 nexa-ui 이관 — docs/50)
   "crates/nbeep-plat",    # 플랫폼 경계(창·입력·IME·격리표식)
   "crates/nbeep-imgdec",  # (bin) 이미지 격리 디코드 — 별도 프로세스
-  "crates/nexa-conf",     # 설정 직렬화·영속(ADR-0011 · 재사용 — nbeep 의존 0)
   "crates/nbeep-relay",   # 릴레이 와이어·클라이언트 어댑터(서버와 공유 — Q-32-13)
   "crates/nexa-beep",     # (bin) 진입·조립·생명주기
   "crates/nexa-beepd",    # (bin) 릴레이 서버 — 별도 실행 파일·별도 배포(W-1~W-4)
@@ -47,11 +44,15 @@ nbeep-net = { path = "crates/nbeep-net" }
 nbeep-crypto = { path = "crates/nbeep-crypto" }
 nbeep-safe = { path = "crates/nbeep-safe" }
 nbeep-store = { path = "crates/nbeep-store" }
-nbeep-gfx = { path = "crates/nbeep-gfx" }
-nbeep-ctl = { path = "crates/nbeep-ctl" }
 nbeep-ui = { path = "crates/nbeep-ui" }
 nbeep-plat = { path = "crates/nbeep-plat" }
-nexa-conf = { path = "crates/nexa-conf" }
+# ★ nexa-ui(계열 공용 UI 라이브러리 · 10-09 docs/50 P1-c) — **형제 저장소 path 의존**(nexa-sql·nexa-dir3와 같은 방식).
+#   clone 시 `../nexa-ui`를 나란히 둔다(docs/18 §1) · CI는 SosomLab/nexa-ui를 형제 경로로 체크아웃한다.
+#   계보: nexa-gfx ← nbeep-gfx · nexa-ctl ← nbeep-ctl · nexa-conf = beep 사본과 동일 본문(최신본은 ui에 올린다).
+nexa-gfx = { path = "../nexa-ui/crates/nexa-gfx" }
+nexa-ctl = { path = "../nexa-ui/crates/nexa-ctl" }
+nexa-conf = { path = "../nexa-ui/crates/nexa-conf" }
+nexa-font = { path = "../nexa-ui/crates/nexa-font" }
 nbeep-relay = { path = "crates/nbeep-relay" }
 sha2 = "0.10" # SHA-256(FR-X-6) — snow가 이미 끄는 의존(트리 증가 0)
 

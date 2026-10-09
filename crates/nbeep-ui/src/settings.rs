@@ -1567,6 +1567,7 @@ const CRUMB_SUB_H: i32 = 24;
 
 /// 우측 한 행 = 레지스트리 항목 + 실물 컨트롤.
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)] // 행마다 1개 · nexa-ctl TextBox가 커졌다(10-09) — Box는 접근 비용만 더한다
 enum RowCtl {
     Combo(Combo),
     /// on/off 토글 — mac(iOS) 스타일 [`Switch`](08-11 · 기존 Checkbox에서 교체).
@@ -2025,7 +2026,7 @@ impl SettingsWidget {
                     let mut t = TextBox::new(tr(lang, hint))
                         .with_text(self.values.get(e.key).map_or("", String::as_str));
                     t.set_scale(self.scale);
-                    t.set_secret(secret); // 기본 가림 — 눈 버튼으로 본다.
+                    t.set_masked(secret); // 기본 가림 — 눈 버튼으로 본다.
                     RowCtl::Face(t)
                 }
                 SettingKind::PositionGrid => {
@@ -2155,7 +2156,9 @@ impl SettingsWidget {
                 continue;
             }
             if let RowCtl::Act(b) = &mut r.ctl {
-                if b.set_tone(tone) {
+                // nexa-ctl `set_tone`은 반환값이 없다(10-09 이관) — 변경 여부는 여기서 비교.
+                if b.tone() != tone {
+                    b.set_tone(tone);
                     inv.push(self.bounds);
                 }
             }
@@ -2802,7 +2805,7 @@ impl Widget for SettingsWidget {
                     {
                         let (er, rr) = pw_btn_rects(f.bounds());
                         if er.contains(p) {
-                            f.set_secret(!f.secret());
+                            f.set_masked(!f.masked());
                             inv.push(self.bounds);
                             return;
                         }
@@ -2811,7 +2814,7 @@ impl Widget for SettingsWidget {
                                 // 무장 창 안 재클릭 = 생성 — 새 암호는 **반드시 보이게**(가림 해제).
                                 Some(t) if t.elapsed() <= PW_ARM_WINDOW => {
                                     self.pw_arm = None;
-                                    f.set_secret(false);
+                                    f.set_masked(false);
                                     // 값 생성은 호스트 몫 — 가짜 키로 요청만 올린다(user.test = run 문법).
                                     self.changes
                                         .push(("user.passphrase.regen", "run".to_string()));
@@ -2889,11 +2892,25 @@ impl Widget for SettingsWidget {
                 inv.push(self.bounds);
             }
             InputEvent::MouseUp { .. } => {
-                // 실행 버튼은 "안에서 떼야" 클릭이다(Button 계약) — MouseUp을 전달해야
-                // take_clicked가 성립한다(다른 컨트롤은 MouseDown에서 완결).
-                for row in &mut self.rows {
-                    if let RowCtl::Act(b) = &mut row.ctl {
-                        b.on_event(ev, inv);
+                // nexa-ctl 컨트롤은 **전부 "안에서 떼야" 확정**이다(Button·Switch·Combo·Carousel —
+                // 10-09 이관 · 종전 nbeep-ctl은 Button만 MouseUp이고 나머지는 MouseDown 완결이었다).
+                // 잠긴 행은 MouseDown과 같은 기준으로 건너뛴다(누름이 없었으니 뗌도 무효).
+                let locked: Vec<bool> = self.rows.iter().map(|r| self.is_locked(r.idx)).collect();
+                for (row, lock) in self.rows.iter_mut().zip(locked) {
+                    if lock {
+                        continue;
+                    }
+                    match &mut row.ctl {
+                        RowCtl::Combo(c) => c.on_event(ev, inv),
+                        RowCtl::Check(c) => c.on_event(ev, inv),
+                        RowCtl::Font { family, size } => {
+                            family.on_event(ev, inv);
+                            size.on_event(ev, inv);
+                        }
+                        RowCtl::Pos(g) => g.on_event(ev, inv),
+                        RowCtl::Face(f) => f.on_event(ev, inv),
+                        RowCtl::Color(c) => c.on_event(ev, inv),
+                        RowCtl::Act(b) => b.on_event(ev, inv),
                     }
                 }
                 self.drain_changes(inv);
@@ -2912,7 +2929,8 @@ impl Widget for SettingsWidget {
                 for (row, lock) in self.rows.iter_mut().zip(locked) {
                     if let RowCtl::Act(b) = &mut row.ctl {
                         if b.is_focused() && !lock {
-                            b.press();
+                            // nexa-ctl Button은 Enter/Space를 스스로 클릭으로 처리한다(`press()` 없음 · 10-09).
+                            b.on_event(ev, inv);
                         }
                     }
                 }
@@ -3123,7 +3141,7 @@ impl Widget for SettingsWidget {
                     // ★ 비밀 행 버튼 — 눈: 보임 = accent · 가림 = 흐림 / 생성: 평소 흐림 · 무장 = 빨강.
                     if matches!(e.kind, SettingKind::Text { secret: true, .. }) {
                         let (er, rr) = pw_btn_rects(f.bounds());
-                        let ink = if f.secret() {
+                        let ink = if f.masked() {
                             theme.text_dim
                         } else {
                             theme.accent
@@ -3299,6 +3317,8 @@ mod tests {
     use super::*;
 
     fn widget() -> (SettingsWidget, Invalidations) {
+        // 테스트는 연타 가드(nexa-ctl 기본 350ms · 2단계 확인 버튼이 같은 ms에 두 번 눌린다)를 끈다.
+        crate::controls::button::set_default_click_guard_ms(0);
         let mut w = SettingsWidget::new(&SettingsState::with_defaults());
         let mut inv = Invalidations::default();
         w.set_bounds(Rect::new(0, 0, 560, 560), &mut inv);
@@ -3396,13 +3416,17 @@ mod tests {
     fn ch(c: char) -> InputEvent {
         InputEvent::Char { c, now_ms: 0 }
     }
-    fn click(x: i32, y: i32) -> InputEvent {
-        InputEvent::MouseDown {
-            x,
-            y,
-            shift: false,
-            primary: false,
-        }
+    /// 클릭 = 누름+뗌 한 쌍(nexa-ctl 컨트롤은 **MouseUp에서 확정** · 10-09 이관 — 종전 nbeep-ctl은 MouseDown).
+    fn click(x: i32, y: i32) -> [InputEvent; 2] {
+        [
+            InputEvent::MouseDown {
+                x,
+                y,
+                shift: false,
+                primary: false,
+            },
+            InputEvent::MouseUp { x, y },
+        ]
     }
     /// 카테고리 강제 선택(테스트 헬퍼).
     fn select_cat(w: &mut SettingsWidget, cat: Msg) {
@@ -3531,7 +3555,9 @@ mod tests {
         w.layout(&mut inv);
         let before: Vec<Rect> = w.rows.iter().map(|r| r.rect).collect();
         let sw = w.s(w.sidebar_w);
-        w.on_event(&click(w.bounds.x + sw + 20, w.bounds.y + 4), &mut inv);
+        for e in click(w.bounds.x + sw + 20, w.bounds.y + 4) {
+            w.on_event(&e, &mut inv);
+        }
         let after: Vec<Rect> = w.rows.iter().map(|r| r.rect).collect();
         assert_eq!(before, after, "밴드 클릭이 뒤 행을 건드리면 안 된다");
         assert!(
@@ -3573,7 +3599,9 @@ mod tests {
             RowCtl::Combo(c) => c.bounds(),
             _ => panic!("첫 행은 콤보"),
         };
-        w.on_event(&click(cb.x + 5, cb.y + 5), &mut inv);
+        for e in click(cb.x + 5, cb.y + 5) {
+            w.on_event(&e, &mut inv);
+        }
         let pop = match &w.rows[0].ctl {
             RowCtl::Combo(c) => {
                 assert!(c.is_open(), "클릭 = 드롭다운 열림");
@@ -3582,7 +3610,9 @@ mod tests {
             _ => unreachable!(),
         };
         let item_h = 26; // combo ROW_H(scale 1)
-        w.on_event(&click(pop.x + 30, pop.y + 4 + item_h + 5), &mut inv);
+        for e in click(pop.x + 30, pop.y + 4 + item_h + 5) {
+            w.on_event(&e, &mut inv);
+        }
         // 옵션 = [system, dark, light] — 둘째 항목 = dark(08-29 시스템 추가).
         assert_eq!(w.take_changes(), vec![("ui.theme", "dark".to_string())]);
     }
@@ -3603,7 +3633,9 @@ mod tests {
             .expect("토글 행 존재");
         // 외양 카테고리의 첫 토글(레지스트리 순서 — 항목이 앞에 끼면 여기도 갱신).
         assert_eq!(registry()[w.rows[i].idx].key, "ui.link_badge_shape");
-        w.on_event(&click(cb.x + 3, cb.y + cb.h / 2), &mut inv);
+        for e in click(cb.x + 3, cb.y + cb.h / 2) {
+            w.on_event(&e, &mut inv);
+        }
         assert_eq!(
             w.take_changes(),
             vec![("ui.link_badge_shape", "off".to_string())]
@@ -3618,7 +3650,9 @@ mod tests {
             RowCtl::Font { family, .. } => family.bounds(),
             _ => panic!("글꼴 행"),
         };
-        w.on_event(&click(fb.x + 5, fb.y + 5), &mut inv);
+        for e in click(fb.x + 5, fb.y + 5) {
+            w.on_event(&e, &mut inv);
+        }
         for c in "Arial".chars() {
             w.on_event(&ch(c), &mut inv);
         }
@@ -3655,7 +3689,9 @@ mod tests {
             })
             .expect("Face 행 존재");
         let key_name = registry()[w.rows[i].idx].key;
-        w.on_event(&click(fb.x + 5, fb.y + 5), &mut inv);
+        for e in click(fb.x + 5, fb.y + 5) {
+            w.on_event(&e, &mut inv);
+        }
         for c in "D2".chars() {
             w.on_event(&ch(c), &mut inv);
         }
@@ -3699,7 +3735,9 @@ mod tests {
             .expect("모양 행");
         let tb = w.tree.bounds();
         #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-        w.on_event(&click(tb.x + 10, tb.y + 24 * row as i32 + 5), &mut inv);
+        for e in click(tb.x + 10, tb.y + 24 * row as i32 + 5) {
+            w.on_event(&e, &mut inv);
+        }
         assert_eq!(
             SettingsWidget::cats()[w.selected_cat].0,
             Msg::CatAppearance,
@@ -3781,7 +3819,9 @@ mod tests {
         assert!(!w.query.is_empty());
         // × 클릭 = 초기화 + 전체 복귀.
         let r = w.search.clear_rect();
-        w.on_event(&click(r.x + 3, r.y + 3), &mut inv);
+        for e in click(r.x + 3, r.y + 3) {
+            w.on_event(&e, &mut inv);
+        }
         assert!(w.query.is_empty(), "검색 해제");
     }
 

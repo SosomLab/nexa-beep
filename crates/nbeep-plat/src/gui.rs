@@ -183,7 +183,7 @@ pub fn observe() -> SessionFacts {
         display: var("DISPLAY").is_some() || var("WAYLAND_DISPLAY").is_some(),
         aqua: aqua_session(),
         window_station: window_station(),
-        ui_font: crate::font::system_ui_font().is_some(),
+        ui_font: nexa_font::system_ui_font().is_some(), // ★10-09 nexa-font(종전 crate::font)
     }
 }
 

@@ -3,10 +3,11 @@
 //! 조립 지점(bin)의 통합 테스트인 이유: `gfx`는 파일을 못 읽고(플랫폼 중립) `plat`은 gfx를
 //! 모른다 — 둘을 잇는 곳은 조립 지점뿐이다(docs/13 §2-2).
 
-use nbeep_gfx::{Color, Font, Surface};
+use nexa_gfx::{Color, Font, Surface};
 
 fn load_font() -> Font {
-    let (data, index) = nbeep_plat::font::system_ui_font().expect("시스템 UI 폰트");
+    let f = nexa_font::system_ui_font().expect("시스템 UI 폰트");
+    let (data, index) = (f.data, f.index);
     Font::from_static(data, index).expect("폰트 파싱")
 }
 

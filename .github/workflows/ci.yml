@@ -21,9 +21,26 @@ jobs:
   # ── 린트: fmt + clippy (한 곳에서) ──────────────────────────
   lint:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: nexa-beep
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: nexa-beep
+      # ★ 형제 저장소(10-09 docs/50 P1-c · nexa-sql과 같은 방식): nexa-ui(공용 UI · path 의존 `../nexa-ui`) ·
+      #   nexa-license(라이선스 · P4). 공개 저장소라 토큰 불요. rust-cache는 `workspaces`로 하위 폴더를 가리킨다.
+      - uses: actions/checkout@v4
+        with:
+          repository: SosomLab/nexa-ui
+          path: nexa-ui
+      - uses: actions/checkout@v4
+        with:
+          repository: SosomLab/nexa-license
+          path: nexa-license
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: nexa-beep
       - name: fmt
         run: cargo fmt --all --check
       - name: clippy (전체 · testkit)
@@ -48,9 +65,26 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       RUSTFLAGS: ${{ matrix.rustflags || '-D warnings' }}
+    defaults:
+      run:
+        working-directory: nexa-beep
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: nexa-beep
+      # ★ 형제 저장소(10-09 docs/50 P1-c · nexa-sql과 같은 방식): nexa-ui(공용 UI · path 의존 `../nexa-ui`) ·
+      #   nexa-license(라이선스 · P4). 공개 저장소라 토큰 불요. rust-cache는 `workspaces`로 하위 폴더를 가리킨다.
+      - uses: actions/checkout@v4
+        with:
+          repository: SosomLab/nexa-ui
+          path: nexa-ui
+      - uses: actions/checkout@v4
+        with:
+          repository: SosomLab/nexa-license
+          path: nexa-license
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: nexa-beep
       - name: build
         run: cargo build --workspace
       # ★ NFR-B-5 실측 게이트 — 임포트 테이블은 빌드 프로파일과 무관해 debug로 충분하다.
@@ -85,9 +119,26 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       RUSTFLAGS: ${{ matrix.rustflags || '-D warnings' }}
+    defaults:
+      run:
+        working-directory: nexa-beep
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: nexa-beep
+      # ★ 형제 저장소(10-09 docs/50 P1-c · nexa-sql과 같은 방식): nexa-ui(공용 UI · path 의존 `../nexa-ui`) ·
+      #   nexa-license(라이선스 · P4). 공개 저장소라 토큰 불요. rust-cache는 `workspaces`로 하위 폴더를 가리킨다.
+      - uses: actions/checkout@v4
+        with:
+          repository: SosomLab/nexa-ui
+          path: nexa-ui
+      - uses: actions/checkout@v4
+        with:
+          repository: SosomLab/nexa-license
+          path: nexa-license
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: nexa-beep
       - name: build (${{ matrix.target }})
         run: cargo build --workspace --target ${{ matrix.target }}
       - name: release size (${{ matrix.target }}, ≤10MB)
@@ -106,9 +157,26 @@ jobs:
   # ── 예산 게이트: 산출물 크기 (NFR-B-3 ≤ 10MB) ────────────────
   budget:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: nexa-beep
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: nexa-beep
+      # ★ 형제 저장소(10-09 docs/50 P1-c · nexa-sql과 같은 방식): nexa-ui(공용 UI · path 의존 `../nexa-ui`) ·
+      #   nexa-license(라이선스 · P4). 공개 저장소라 토큰 불요. rust-cache는 `workspaces`로 하위 폴더를 가리킨다.
+      - uses: actions/checkout@v4
+        with:
+          repository: SosomLab/nexa-ui
+          path: nexa-ui
+      - uses: actions/checkout@v4
+        with:
+          repository: SosomLab/nexa-license
+          path: nexa-license
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: nexa-beep
       - name: release build
         run: cargo build --release -p nexa-beep -p nbeep-imgdec
       - name: size gate (linux, ≤10MB/바이너리)

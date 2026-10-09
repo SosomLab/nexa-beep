@@ -62,6 +62,15 @@ $env:NEXA_INSTALL_DIR = 'D:\Apps\NexaBeep'   # 기본 = HKCU\Software\SosomLab\N
 ## 1. 명령 (SSOT) — Rust 워크스페이스([07](07-adr-0001-stack.md))
 
 > 로컬·CI 동일. `rust-toolchain.toml`이 stable·컴포넌트(rustfmt/clippy)·4타깃을 자동 고정한다.
+>
+> ★ **형제 저장소 필수(10-09 · [50](50-settings-overhaul-nexa-ui-plan.md) P1-c)** — UI 기반·설정 영속·글꼴은 계열 공용
+> **nexa-ui**를, 라이선스는 **nexa-license**를 **path 의존**(`../nexa-ui/crates/*` · `../nexa-license/crates/nexa-license`)으로 쓴다.
+> clone은 세 저장소를 **나란히** 둔다(nexa-sql·nexa-dir3와 같은 규약) · CI는 `SosomLab/nexa-ui`·`SosomLab/nexa-license`를 형제 경로로
+> 체크아웃하고 `working-directory: nexa-beep`에서 cargo를 돈다. 공개 API를 바꾸는 nexa-ui 변경은 **nexa-ui를 먼저 push**한다.
+>
+> ```bash
+> git clone git@github.com:SosomLab/nexa-ui.git && git clone git@github.com:SosomLab/nexa-license.git && git clone git@github.com:SosomLab/nexa-beep.git
+> ```
 
 | 목적 | 명령 |
 |---|---|

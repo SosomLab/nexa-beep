@@ -588,19 +588,25 @@ mod tests {
     }
 
     fn widget(rows: Vec<QRow>) -> (QuarantineWidget, Invalidations) {
+        // 테스트는 연타 가드(nexa-ctl 기본 350ms · 2단계 확인 버튼이 같은 ms에 두 번 눌린다)를 끈다.
+        crate::controls::button::set_default_click_guard_ms(0);
         let mut w = QuarantineWidget::new(rows);
         let mut inv = Invalidations::default();
         w.set_bounds(Rect::new(0, 0, 600, 400), &mut inv);
         (w, inv)
     }
 
-    fn click(x: i32, y: i32) -> InputEvent {
-        InputEvent::MouseDown {
-            x,
-            y,
-            shift: false,
-            primary: false,
-        }
+    /// 클릭 = 누름+뗌 한 쌍(nexa-ctl 컨트롤은 **MouseUp에서 확정** · 10-09 이관 — 종전 nbeep-ctl은 MouseDown).
+    fn click(x: i32, y: i32) -> [InputEvent; 2] {
+        [
+            InputEvent::MouseDown {
+                x,
+                y,
+                shift: false,
+                primary: false,
+            },
+            InputEvent::MouseUp { x, y },
+        ]
     }
     fn key(key: Key) -> InputEvent {
         InputEvent::Key {
@@ -612,7 +618,9 @@ mod tests {
     /// 승인 버튼을 실제로 누른다(눌림→뗌).
     fn press_approve(w: &mut QuarantineWidget, inv: &mut Invalidations) {
         let b = w.approve.bounds();
-        w.on_event(&click(b.x + 5, b.y + 5), inv);
+        for e in click(b.x + 5, b.y + 5) {
+            w.on_event(&e, inv);
+        }
         w.on_event(
             &InputEvent::MouseUp {
                 x: b.x + 5,
@@ -714,7 +722,9 @@ mod tests {
     fn reject_reports_selected_path() {
         let (mut w, mut inv) = widget(vec![row("a.txt", RiskLevel::Data)]);
         let b = w.reject.bounds();
-        w.on_event(&click(b.x + 5, b.y + 5), &mut inv);
+        for e in click(b.x + 5, b.y + 5) {
+            w.on_event(&e, &mut inv);
+        }
         w.on_event(
             &InputEvent::MouseUp {
                 x: b.x + 5,
@@ -738,7 +748,9 @@ mod tests {
     /// 비우기 버튼을 실제로 누른다(눌림→뗌).
     fn press_clear(w: &mut QuarantineWidget, inv: &mut Invalidations) {
         let b = w.clear.bounds();
-        w.on_event(&click(b.x + 5, b.y + 5), inv);
+        for e in click(b.x + 5, b.y + 5) {
+            w.on_event(&e, inv);
+        }
         w.on_event(
             &InputEvent::MouseUp {
                 x: b.x + 5,
@@ -792,7 +804,9 @@ mod tests {
         press_clear(&mut w, &mut inv);
         assert!(w.confirming_clear);
         let r = w.row_rect(1);
-        w.on_event(&click(r.x + 5, r.y + 5), &mut inv);
+        for e in click(r.x + 5, r.y + 5) {
+            w.on_event(&e, &mut inv);
+        }
         assert!(!w.confirming_clear, "행 조작 = 비우기 확인 취소");
     }
 }

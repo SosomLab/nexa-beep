@@ -1,7 +1,7 @@
 //! `nbeep-ui` — 화면 (컨트롤 · 레이아웃 · 3단계 이벤트).
 //!
 //! `WidgetBase` 컴포지션 + 트레이트 기본 메서드 전파([docs/14]). 시각=macOS 통일.
-//! [`nbeep_core`] 상태를 읽어 [`nbeep_gfx`]로 그린다. 플랫폼 API를 직접 부르지 않는다.
+//! [`nbeep_core`] 상태를 읽어 [`nexa_gfx`]로 그린다. 플랫폼 API를 직접 부르지 않는다.
 #![forbid(unsafe_op_in_unsafe_fn)]
 // 테스트 코드는 unwrap 허용(docs/13 §9 — 금지는 프로덕션 경로 한정).
 #![cfg_attr(test, allow(clippy::unwrap_used))]
@@ -139,9 +139,11 @@ pub mod icons {
     }
 }
 
-// UI 기반·컨트롤은 별도 라이브러리로 분리(08-14 — `nbeep-ctl` · DR-6/DR-21).
-// 기존 경로(`nbeep_ui::controls::…` 등)는 모듈 재수출로 그대로 유지된다(호환 불변).
-pub use nbeep_ctl::{avatar, controls, draw, edit, event, geom, raster, theme, widget};
+// UI 기반·컨트롤은 별도 라이브러리(08-14 `nbeep-ctl` 분리 → ★10-09 **`nexa-ctl`**(계열 공용 nexa-ui ·
+// docs/50 P1-c · nbeep-ctl의 직계 후손이라 계약 동일). 기존 경로(`nbeep_ui::controls::…` 등)는
+// 모듈 재수출로 그대로 유지된다(호환 불변). `hangul`도 nexa-ctl 모듈(본문 동일)로 — `typeahead`는
+// beep IME 경합 처리(preedit·stale)가 들어 있어 앱 쪽에 남긴다.
+pub use nexa_ctl::{avatar, controls, draw, edit, event, geom, hangul, raster, theme, widget};
 
 pub mod about;
 pub mod addr_prompt;
@@ -151,7 +153,6 @@ pub mod chat_view;
 pub mod convbox_view;
 pub mod filter_bar;
 pub mod gallery;
-pub mod hangul;
 pub mod offer_prompt;
 pub mod peer_info;
 pub mod peer_list;

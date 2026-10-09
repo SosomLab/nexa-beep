@@ -28,7 +28,7 @@ nexa-beep/                     (bin)  진입 · 조립 · 생명주기
 ├── nbeep-crypto   보안 세션     Noise_XX 핸드셰이크(snow) · AEAD · Identity(X25519=PeerId) · SAS 파생
 ├── nbeep-safe     수신 안전     .beepq 격리 컨테이너 · 위험 등급 · 검사 · 실체화
 ├── nbeep-store    영속          대화 기록 · 설정 · TOFU 핀 · 그룹 · 데이터 경로 결정
-├── nbeep-gfx      렌더 코어     CPU 래스터라이저 · 텍스트 스택 · 픽셀 버퍼
+├── (nexa-gfx)     렌더 코어     CPU 래스터라이저 · 텍스트 스택 · 픽셀 버퍼 — ★10-09 **nexa-ui 형제 저장소**(종전 nbeep-gfx · docs/50)
 ├── nbeep-ui       화면          컨트롤 · 레이아웃 · 화면 조립 (gfx 위, 플랫폼 중립)
 ├── nbeep-plat     플랫폼 경계   창 · 입력/IME · 폰트 열거+mmap · DPI · 트레이 · 알림 · **소리 포트** ·
 │                               OS 격리 표식 · 링크 상태 구독(L1) · AMSI
@@ -55,7 +55,7 @@ flowchart TD
     STORE["nbeep-store<br/>영속"]
     UI["nbeep-ui<br/>화면"]
     PLAT["nbeep-plat<br/>플랫폼 경계"]
-    GFX["nbeep-gfx<br/>렌더 코어 — 의존 0"]
+    GFX["nexa-gfx(nexa-ui)<br/>렌더 코어 — 의존 0"]
     CORE["<b>nbeep-core (허브)</b><br/>도메인 타입 + 포트 트레이트<br/>nbeep 의존 0"]
 
     BIN --> NET

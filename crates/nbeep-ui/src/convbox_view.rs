@@ -583,6 +583,8 @@ mod tests {
     }
 
     fn widget(rows: Vec<CRow>) -> (ConvboxWidget, Invalidations) {
+        // 테스트는 연타 가드(nexa-ctl 기본 350ms · 2단계 확인 버튼이 같은 ms에 두 번 눌린다)를 끈다.
+        crate::controls::button::set_default_click_guard_ms(0);
         let mut w = ConvboxWidget::new(rows);
         let mut inv = Invalidations::default();
         w.set_bounds(Rect::new(0, 0, 560, 420), &mut inv);

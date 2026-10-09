@@ -9,7 +9,7 @@ pub mod clipboard;
 pub mod clock;
 pub mod conventions;
 pub mod dock;
-pub mod font;
+// `font`(시스템 글꼴 발견)는 ★10-09 nexa-ui `nexa-font`로 이관(docs/50 P1-c · 같은 계보).
 pub mod gui;
 pub mod host;
 pub mod keytap;

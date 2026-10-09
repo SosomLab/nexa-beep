@@ -780,18 +780,24 @@ mod tests {
     use super::*;
 
     fn gallery() -> (GalleryWidget, Invalidations) {
+        // 테스트는 연타 가드(nexa-ctl 기본 350ms · 2단계 확인 버튼이 같은 ms에 두 번 눌린다)를 끈다.
+        crate::controls::button::set_default_click_guard_ms(0);
         let mut g = GalleryWidget::new();
         let mut inv = Invalidations::default();
         g.set_bounds(Rect::new(0, 0, 420, 900), &mut inv);
         (g, inv)
     }
-    fn click(x: i32, y: i32) -> InputEvent {
-        InputEvent::MouseDown {
-            x,
-            y,
-            shift: false,
-            primary: false,
-        }
+    /// 클릭 = 누름+뗌 한 쌍(nexa-ctl 컨트롤은 **MouseUp에서 확정** · 10-09 이관 — 종전 nbeep-ctl은 MouseDown).
+    fn click(x: i32, y: i32) -> [InputEvent; 2] {
+        [
+            InputEvent::MouseDown {
+                x,
+                y,
+                shift: false,
+                primary: false,
+            },
+            InputEvent::MouseUp { x, y },
+        ]
     }
 
     #[test]
@@ -809,7 +815,9 @@ mod tests {
         let (mut w, mut inv) = gallery();
         assert_eq!(w.car_items.len(), 12, "12간지 데모 아이템");
         let r = w.carousel.item_rect(1).expect("두 번째 아이템은 창 안");
-        w.on_event(&click(r.x + r.w / 2, r.y + r.h / 2), &mut inv);
+        for e in click(r.x + r.w / 2, r.y + r.h / 2) {
+            w.on_event(&e, &mut inv);
+        }
         assert_eq!(w.car_sel, 1, "클릭 = 선택 이동");
     }
 
@@ -817,7 +825,9 @@ mod tests {
     fn click_moves_focus_to_hit_control() {
         let (mut g, mut inv) = gallery();
         let tb = g.textbox.bounds();
-        g.on_event(&click(tb.x + 4, tb.y + 4), &mut inv);
+        for e in click(tb.x + 4, tb.y + 4) {
+            g.on_event(&e, &mut inv);
+        }
         assert!(g.textbox.is_focused(), "텍스트박스로 포커스 이동");
         assert!(!g.combo.is_focused());
     }
@@ -858,7 +868,9 @@ mod tests {
         let (mut g, mut inv) = gallery();
         let cb = g.cb_left.bounds();
         let before = g.cb_left.is_checked();
-        g.on_event(&click(cb.x + 4, cb.y + 4), &mut inv);
+        for e in click(cb.x + 4, cb.y + 4) {
+            g.on_event(&e, &mut inv);
+        }
         assert_ne!(g.cb_left.is_checked(), before, "갤러리 경유 토글");
     }
 }

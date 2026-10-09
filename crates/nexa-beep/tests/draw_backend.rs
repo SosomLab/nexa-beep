@@ -1,10 +1,11 @@
 //! RasterCtx(DrawCtx 백엔드) 통합 — 위젯 어휘가 실제 픽셀로 닫히는지(M3-1 슬라이스 1).
 
-use nbeep_gfx::{Font, Surface};
 use nbeep_ui::{Color, DrawCtx, RasterCtx, Rect};
+use nexa_gfx::{Font, Surface};
 
 fn font() -> Font {
-    let (data, index) = nbeep_plat::font::system_ui_font().expect("시스템 UI 폰트");
+    let f = nexa_font::system_ui_font().expect("시스템 UI 폰트");
+    let (data, index) = (f.data, f.index);
     Font::from_static(data, index).expect("폰트 파싱")
 }
 
@@ -18,7 +19,7 @@ fn round_rect_fills_center_and_rounds_corners() {
     let mut buf = vec![0u32; 40 * 40];
     {
         let mut s = Surface::new(&mut buf, 40, 40);
-        let mut ctx = RasterCtx::new(&mut s, &f);
+        let mut ctx = RasterCtx::new(&mut s, &f, 1.0);
         ctx.fill_round_rect(Rect::new(4, 4, 32, 32), 10, Color(0x00FF_FFFF));
     }
     assert_eq!(px(&buf, 40, 20, 20), 0x00FF_FFFF, "중앙 불투명");
@@ -32,7 +33,7 @@ fn stroke_leaves_interior_empty() {
     let mut buf = vec![0u32; 40 * 40];
     {
         let mut s = Surface::new(&mut buf, 40, 40);
-        let mut ctx = RasterCtx::new(&mut s, &f);
+        let mut ctx = RasterCtx::new(&mut s, &f, 1.0);
         ctx.stroke_round_rect(Rect::new(4, 4, 32, 32), 6, Color(0x00FF_FFFF), 2.0);
     }
     assert_eq!(px(&buf, 40, 20, 20), 0, "내부 비어 있음");
@@ -48,7 +49,7 @@ fn polyline_draws_check_mark() {
     let mut buf = vec![0u32; 30 * 30];
     {
         let mut s = Surface::new(&mut buf, 30, 30);
-        let mut ctx = RasterCtx::new(&mut s, &f);
+        let mut ctx = RasterCtx::new(&mut s, &f, 1.0);
         ctx.polyline(&[(5, 15), (12, 22), (25, 7)], Color(0x00FF_FFFF), 2.0);
     }
     let lit = buf.iter().filter(|&&p| p > 0).count();
@@ -62,7 +63,7 @@ fn text_opaque_clips_to_row_rect() {
     let mut buf = vec![0u32; 60 * 30];
     {
         let mut s = Surface::new(&mut buf, 60, 30);
-        let mut ctx = RasterCtx::new(&mut s, &f);
+        let mut ctx = RasterCtx::new(&mut s, &f, 1.0);
         // 행 rect는 (0,8)~(40,24) — 텍스트가 길어도 rect 밖은 배경 그대로.
         ctx.text_opaque(
             2,

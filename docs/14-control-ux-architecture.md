@@ -448,7 +448,7 @@ Conversation { peer, session(Noise+TOFU+mux), thread(lines), … }   ← 상태(
 | `Connecting` 갭 | **90° 부채꼴** | 바깥 호 ≈ 8.6px |
 | 파내는 색 | `theme.panel_bg` | *현행 점 뒤에 깔고 있는 그 색 그대로* |
 
-- **자산이 필요 없다.** 원 2개 · 둥근 사각 1개 · 부채꼴 1개 — [`avatar.rs`](../crates/nbeep-ctl/src/avatar.rs)가 이미 하는 "수식으로 그린다" 방식 그대로다. **산출물 증가 0 · 새 의존 0**(DR-5 예산 게이트 무영향 · DR-12 라이선스 무관).
+- **자산이 필요 없다.** 원 2개 · 둥근 사각 1개 · 부채꼴 1개 — `nexa-ctl/src/avatar.rs`(nexa-ui · 종전 nbeep-ctl)가 이미 하는 "수식으로 그린다" 방식 그대로다. **산출물 증가 0 · 새 의존 0**(DR-5 예산 게이트 무영향 · DR-12 라이선스 무관).
 - 배지 뒤 `panel_bg` 링(아바타와 분리하는 1px 여유)은 **현행 유지**.
 
 ### 12-4. 회전은 새 타이머를 만들지 않는다

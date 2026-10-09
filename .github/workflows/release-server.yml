@@ -81,10 +81,26 @@ jobs:
       TARGET: ${{ matrix.target }}
       SLUG: ${{ matrix.slug }}
       RUSTFLAGS: ${{ matrix.rustflags || '-D warnings' }}
+    defaults:
+      run:
+        working-directory: nexa-beep
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: nexa-beep
+      # ★ 형제 저장소(10-09 docs/50 P1-c · nexa-sql과 같은 방식): nexa-ui(공용 UI · path 의존 `../nexa-ui`) ·
+      #   nexa-license(라이선스 · P4). 공개 저장소라 토큰 불요. rust-cache는 `workspaces`로 하위 폴더를 가리킨다.
+      - uses: actions/checkout@v4
+        with:
+          repository: SosomLab/nexa-ui
+          path: nexa-ui
+      - uses: actions/checkout@v4
+        with:
+          repository: SosomLab/nexa-license
+          path: nexa-license
       - uses: Swatinem/rust-cache@v2
         with:
+          workspaces: nexa-beep
           key: release-server-${{ matrix.target }}
 
       - name: 타깃 추가
@@ -147,7 +163,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: beepd-${{ matrix.slug }}
-          path: out/*
+          path: nexa-beep/out/*
           if-no-files-found: error
 
   publish:

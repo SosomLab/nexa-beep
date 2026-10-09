@@ -957,6 +957,7 @@ impl ChatViewWidget {
                 has_sel: self.input.selected_text().is_some(),
                 has_text: !self.input.text().is_empty(),
                 clip_has_text: self.clip_has_text,
+                read_only: false,
             };
             self.ctx_menu
                 .open_at(x, y, self.scale, self.bounds, caps, Vec::new());
@@ -975,6 +976,7 @@ impl ChatViewWidget {
                 has_sel: false,
                 has_text: false,
                 clip_has_text: false,
+                read_only: false,
             };
             self.ctx_menu.open_at(
                 x,
@@ -2678,6 +2680,8 @@ mod tests {
     }
 
     fn widget() -> (ChatViewWidget, Invalidations) {
+        // 테스트는 연타 가드(nexa-ctl 기본 350ms · 2단계 확인 버튼이 같은 ms에 두 번 눌린다)를 끈다.
+        crate::controls::button::set_default_click_guard_ms(0);
         let mut w = ChatViewWidget::new("김철수".into());
         let mut inv = Invalidations::default();
         w.set_bounds(Rect::new(0, 0, 400, 300), &mut inv);
@@ -2702,6 +2706,8 @@ mod tests {
             },
             inv,
         );
+        // nexa-ctl 메뉴·버튼은 MouseUp에서 확정(10-09 이관).
+        w.on_event(&InputEvent::MouseUp { x, y }, inv);
     }
 
     /// M5-3c(08-21) — 원격 배지: 변화만 헤더를 무효화하고(멱등), 켠 상태의

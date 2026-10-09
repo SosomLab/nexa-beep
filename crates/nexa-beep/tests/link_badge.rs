@@ -4,11 +4,12 @@
 //! **실제 픽셀**로 단언한다. 기하가 지름 비율 고정이라 D=12·D=22 두 배율에서
 //! 같은 판정이 나와야 한다.
 
-use nbeep_gfx::{Font, Surface};
 use nbeep_ui::{draw_link_badge, LinkState, Rect, Theme};
+use nexa_gfx::{Font, Surface};
 
 fn font() -> Font {
-    let (data, index) = nbeep_plat::font::system_ui_font().expect("시스템 UI 폰트");
+    let f = nexa_font::system_ui_font().expect("시스템 UI 폰트");
+    let (data, index) = (f.data, f.index);
     Font::from_static(data, index).expect("폰트 파싱")
 }
 
@@ -19,7 +20,7 @@ fn render(link: LinkState, shape: bool, spin: u8, dot: Rect) -> Vec<u32> {
     let mut buf = vec![0u32; 32 * 32];
     {
         let mut s = Surface::new(&mut buf, 32, 32);
-        let mut ctx = nbeep_ui::RasterCtx::new(&mut s, &f);
+        let mut ctx = nbeep_ui::RasterCtx::new(&mut s, &f, 1.0);
         draw_link_badge(&mut ctx, dot, &th, link, false, shape, spin);
     }
     buf

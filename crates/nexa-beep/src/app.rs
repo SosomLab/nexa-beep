@@ -1787,47 +1787,23 @@ fn speed_label(bps: u64) -> String {
 /// 시스템 UI 본) 뒤에 **시스템 UI 본 → OS별 기호·이모지 본**을 순서대로 잇는다. 글자 단위 폴백이라
 /// 기준선·줄 높이는 주 글꼴이 계속 정한다. 실기 09-06 Windows: 맑은 고딕에 ✓(U+2713)가 없어
 /// "□ Verified"로 그려졌다 — Segoe UI Symbol이 받는다.
-fn load_ui_font(family: Option<&str>) -> Option<nbeep_gfx::Font> {
-    let sys = nbeep_plat::font::system_ui_font();
-    let mut font = match family.map(str::trim).filter(|f| !f.is_empty()) {
-        Some(fam) => match nbeep_plat::font::find_font_by_family(fam) {
-            Some((d, i)) => {
-                let mut f = nbeep_gfx::Font::from_static(d, i).ok()?;
-                if let Some((sd, si)) = sys {
-                    let _ = f.push_fallback(sd, si);
-                }
-                f
-            }
-            None => {
-                eprintln!("⚠ 글꼴 '{fam}'을(를) 못 찾았습니다 — 시스템 기본으로");
-                let (d, i) = sys?;
-                nbeep_gfx::Font::from_static(d, i).ok()?
-            }
-        },
-        None => {
-            let (d, i) = sys?;
-            nbeep_gfx::Font::from_static(d, i).ok()?
-        }
-    };
-    let mut names = Vec::new();
-    for (data, idx, name) in nbeep_plat::font::symbol_fallback_fonts() {
-        if font.push_fallback(data, idx).is_ok() {
-            names.push(name);
+fn load_ui_font(family: Option<&str>) -> Option<nexa_gfx::Font> {
+    // ★10-09 nexa-ui 이관(docs/50 P1-c): 체인 구성은 계열 공용 `nexa-font::ui_font`가 한다
+    //   (같은 순서 + macOS 라틴 = 시스템 UI 글꼴(SF) → 한글 SD Gothic Neo 폴백 · 고정폭 꼬리).
+    //   사용자 지정 글꼴을 못 찾으면 nexa-font가 시스템 본으로 조용히 내려가므로 안내는 여기서.
+    if let Some(fam) = family.map(str::trim).filter(|f| !f.is_empty()) {
+        if nexa_font::find_font_by_family(fam).is_none() {
+            eprintln!("⚠ 글꼴 '{fam}'을(를) 못 찾았습니다 — 시스템 기본으로");
         }
     }
+    let loaded = nexa_font::ui_font(family)?;
     // 진단 1줄 — 실기에서 두부가 보이면 이 줄로 어느 본이 빠졌는지 안다(봉투만: 글꼴 이름).
-    if names.is_empty() {
+    if loaded.chain.len() <= 1 {
         eprintln!("글꼴 폴백: 기호 본 없음 — 주 글꼴에 없는 기호는 □로 보입니다");
     } else {
-        eprintln!(
-            "글꼴 폴백: {} · ✓={} ⚠={} 🎉={}",
-            names.join(" → "),
-            font.covers('\u{2713}'),
-            font.covers('\u{26A0}'),
-            font.covers('\u{1F389}')
-        );
+        eprintln!("글꼴 체인: {}", loaded.chain.join(" → "));
     }
-    Some(font)
+    Some(loaded.font)
 }
 
 fn unix_now_ms() -> u64 {
@@ -2888,7 +2864,7 @@ struct App {
     mode: WindowMode,
     windows: HashMap<WindowId, WinEntry>,
     main_id: Option<WindowId>,
-    font: nbeep_gfx::Font,
+    font: nexa_gfx::Font,
     theme: Theme,
     list: PeerListWidget,
     /// 대화 뷰 — Separate 모드는 창당 1개, Single 모드는 주 창에 최대 1개.
@@ -3100,12 +3076,12 @@ struct App {
     /// 슬롯별 얼굴(설정 글꼴명으로 로드 · 없으면 기본 폰트).
     /// ★ base 슬롯(08-18 실기) — 종전엔 아예 미배선이라 Base UI 글꼴명이
     /// 조용히 무시됐다(FontSet.base가 항상 내장 기본).
-    face_base: Option<nbeep_gfx::Font>,
-    face_peerlist: Option<nbeep_gfx::Font>,
-    face_message: Option<nbeep_gfx::Font>,
-    face_status: Option<nbeep_gfx::Font>,
+    face_base: Option<nexa_gfx::Font>,
+    face_peerlist: Option<nexa_gfx::Font>,
+    face_message: Option<nexa_gfx::Font>,
+    face_status: Option<nexa_gfx::Font>,
     /// 고정폭 얼굴 — 지정 없으면 OS 기본.
-    face_mono: Option<nbeep_gfx::Font>,
+    face_mono: Option<nexa_gfx::Font>,
     /// 상대별 수락 대기 큐 — **오퍼 1건당 승인 1번**(2번 보내면 2번 물어본다).
     pending_offers: HashMap<PeerId, VecDeque<PendingOffer>>,
     /// 상대별 발신 대기 파일 큐(다중 드롭 — 한 번에 하나씩 협상한다).
@@ -5248,12 +5224,12 @@ impl App {
     /// 슬롯 얼굴(목록·메시지·상태·고정폭)은 체인 없이 1벌 — 없는 글자는 래스터가 기본 얼굴로
     /// 폴백하고(08-10), 기본 얼굴은 시스템·기호 체인을 품고 있다(09-07).
     fn reload_faces(&mut self) {
-        let load = |name: &str| -> Option<nbeep_gfx::Font> {
+        let load = |name: &str| -> Option<nexa_gfx::Font> {
             if name.trim().is_empty() {
                 return None;
             }
-            let (bytes, idx) = nbeep_plat::font::find_font_by_family(name)?;
-            nbeep_gfx::Font::from_static(bytes, idx).ok()
+            let (bytes, idx) = nexa_font::find_font_by_family(name)?;
+            nexa_gfx::Font::from_static(bytes, idx).ok()
         };
         // 기본 얼굴을 사용자 글꼴로 바꾸면 그 뒤에 시스템 본+기호 체인을 통째로 붙인다(두부 예방).
         self.face_base = {
@@ -5267,8 +5243,8 @@ impl App {
         self.face_status = load(self.settings.get("font.status.family"));
         // 고정폭: 지정이 있으면 그것, 없으면 **OS 기본 고정폭**(사용자 확정 08-09).
         self.face_mono = load(self.settings.get("font.mono.family")).or_else(|| {
-            let (bytes, idx) = nbeep_plat::font::system_mono_font()?;
-            nbeep_gfx::Font::from_static(bytes, idx).ok()
+            let m = nexa_font::system_mono_font()?;
+            nexa_gfx::Font::from_static(m.data, m.index).ok()
         });
     }
 
@@ -8599,8 +8575,8 @@ impl App {
             // "(시스템 기본)"이 무엇인지 식별(사용자 지적 08-10) — plat에서 이름 조회.
             let mut inv = Invalidations::default();
             sv.set_default_font_names(
-                nbeep_plat::font::system_ui_font_name().unwrap_or(""),
-                nbeep_plat::font::system_mono_font_name().unwrap_or(""),
+                nexa_font::system_ui_font().map_or("", |f| f.name),
+                nexa_font::system_mono_font().map_or("", |f| f.name),
                 &mut inv,
             );
         }
@@ -15964,6 +15940,8 @@ impl App {
                     self.clipboard_paste_for(id, &t);
                 }
             }
+            // nexa-ctl 확장 항목(`set_menu_extras` · 10-09 이관) — beep은 호스트 항목을 넣지 않는다.
+            nbeep_ui::controls::EditCtxAction::Custom(_) => {}
         }
         self.request_redraw(id);
     }
@@ -15997,12 +15975,10 @@ impl App {
         };
         entry.surface.resize(w, h).unwrap();
         let mut buffer = entry.surface.buffer_mut().unwrap();
-        let mut px =
-            nbeep_gfx::Surface::new(&mut buffer, size.width as usize, size.height as usize);
+        let mut px = nexa_gfx::Surface::new(&mut buffer, size.width as usize, size.height as usize);
         px.fill(theme.window_bg);
-        let mut ctx = RasterCtx::with_font_set(&mut px, fonts)
+        let mut ctx = RasterCtx::with_font_set(&mut px, fonts, entry.scale)
             .with_fonts(prefs)
-            .with_scale(entry.scale)
             .with_caret_on(caret_on);
         match entry.role {
             Role::ImageView => {
@@ -20216,11 +20192,11 @@ mod font_fallback_tests {
             assert!(
                 f.covers(c),
                 "글꼴 체인에 {c:?} 없음 (얼굴 {})",
-                f.face_count()
+                f.data_slices().len()
             );
         }
         // 한글은 CJK 본이 있는 자리에서만(ubuntu CI 러너 = DejaVu 라틴 폴백뿐 — plat 후보 주석과 같은 한계).
-        if nbeep_plat::font::system_ui_font_name().is_some_and(|n| n != "DejaVu Sans") {
+        if nexa_font::system_ui_font().is_some_and(|f| f.name != "DejaVu Sans") {
             assert!(f.covers('가'), "CJK 본이 있는데 한글이 없다");
         }
     }

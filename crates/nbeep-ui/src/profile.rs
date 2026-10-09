@@ -1155,6 +1155,13 @@ mod tests {
             },
             &mut inv,
         );
+        w.on_event(
+            &InputEvent::MouseUp {
+                x: r.x + 4,
+                y: r.y + 4,
+            },
+            &mut inv,
+        );
         for c in "a@b.c".chars() {
             w.on_event(&InputEvent::Char { c, now_ms: 0 }, &mut inv);
         }
@@ -1212,6 +1219,8 @@ mod tests {
     }
 
     fn widget() -> (ProfileWidget, Invalidations) {
+        // 테스트는 연타 가드(nexa-ctl 기본 350ms · 2단계 확인 버튼이 같은 ms에 두 번 눌린다)를 끈다.
+        crate::controls::button::set_default_click_guard_ms(0);
         let mut w = ProfileWidget::new(&ProfileValues {
             display_name: "auto".into(),
             ..ProfileValues::default()
@@ -1232,6 +1241,13 @@ mod tests {
                 y: r.y + 2,
                 shift: false,
                 primary: true,
+            },
+            &mut inv,
+        );
+        w.on_event(
+            &InputEvent::MouseUp {
+                x: r.x + 2,
+                y: r.y + 2,
             },
             &mut inv,
         );
@@ -1274,6 +1290,13 @@ mod tests {
                 y: n.y + 4,
                 shift: false,
                 primary: false,
+            },
+            &mut inv,
+        );
+        w.on_event(
+            &InputEvent::MouseUp {
+                x: n.x + 4,
+                y: n.y + 4,
             },
             &mut inv,
         );
@@ -1335,6 +1358,13 @@ mod tests {
             },
             &mut inv,
         );
+        w.on_event(
+            &InputEvent::MouseUp {
+                x: r.x + 2,
+                y: r.y + 2,
+            },
+            &mut inv,
+        );
         assert!(w.take_pick_image(), "버튼 클릭 = 피커 요청");
         // 이름 필드 클릭 — 버튼 포커스는 **해제**되어야 한다(배타).
         let n = w.name.bounds();
@@ -1344,6 +1374,13 @@ mod tests {
                 y: n.y + 2,
                 shift: false,
                 primary: false,
+            },
+            &mut inv,
+        );
+        w.on_event(
+            &InputEvent::MouseUp {
+                x: n.x + 2,
+                y: n.y + 2,
             },
             &mut inv,
         );
@@ -1396,6 +1433,13 @@ mod tests {
             },
             &mut inv,
         );
+        w.on_event(
+            &InputEvent::MouseUp {
+                x: r.x + 2,
+                y: r.y + 2,
+            },
+            &mut inv,
+        );
         click_apply(&mut w, &mut inv);
         let ch = w.take_changes();
         assert!(
@@ -1423,6 +1467,7 @@ mod tests {
             },
             &mut inv,
         );
+        w.on_event(&InputEvent::MouseUp { x: cx, y: cy }, &mut inv);
         w.on_event(&InputEvent::MouseUp { x: cx, y: cy }, &mut inv);
         assert!(w.take_pick_image(), "선택 요청");
         w.set_image_path("C:/pics/me.png", &mut inv);
@@ -1457,6 +1502,13 @@ mod tests {
             },
             &mut inv,
         );
+        w.on_event(
+            &InputEvent::MouseUp {
+                x: r.x + r.w / 2,
+                y: r.y + r.h / 2,
+            },
+            &mut inv,
+        );
         click_apply(&mut w, &mut inv);
         let ch = w.take_changes();
         assert!(
@@ -1479,6 +1531,13 @@ mod tests {
                 y: xr.y + xr.h / 2,
                 shift: false,
                 primary: false,
+            },
+            &mut inv,
+        );
+        w.on_event(
+            &InputEvent::MouseUp {
+                x: xr.x + xr.w / 2,
+                y: xr.y + xr.h / 2,
             },
             &mut inv,
         );
@@ -1516,6 +1575,13 @@ mod tests {
                 y: xr.y + xr.h / 2,
                 shift: false,
                 primary: false,
+            },
+            &mut inv,
+        );
+        w.on_event(
+            &InputEvent::MouseUp {
+                x: xr.x + xr.w / 2,
+                y: xr.y + xr.h / 2,
             },
             &mut inv,
         );
