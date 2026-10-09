@@ -17,3 +17,5 @@ nbeep-license.workspace = true
 # ★ 10-09 nexa-ui 이관(docs/50 P1-c) — 종전 nbeep-ctl·nbeep-gfx(같은 계보 · 삭제).
 nexa-ctl.workspace = true
 nexa-gfx.workspace = true
+# 파일 선택 대화상자(docs/50 P3) — `picker_win`이 라벨·필터를 주입한다.
+nexa-dlg.workspace = true

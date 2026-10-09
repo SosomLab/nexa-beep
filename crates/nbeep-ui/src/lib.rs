@@ -158,6 +158,7 @@ pub mod license_win;
 pub mod offer_prompt;
 pub mod peer_info;
 pub mod peer_list;
+pub mod picker_win;
 pub mod profile;
 pub mod prompt;
 pub mod quarantine_view;
@@ -193,6 +194,9 @@ pub use peer_info::{PeerInfo, PeerInfoWidget};
 pub use peer_list::{
     badge, draw_link_badge, link_color, Activated, GroupAction, GroupRow, HudPos, LinkState,
     PeerListWidget, PeerRow, RefreshScroll, XferProgress, ROW_H,
+};
+pub use picker_win::{
+    new_picker, picker_labels, FileFilter, FilePicker, PickFilter, PickerAction, PickerMode,
 };
 pub use profile::{ProfileValues, ProfileWidget};
 pub use prompt::TextPromptWidget;

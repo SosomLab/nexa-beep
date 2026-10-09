@@ -54,6 +54,7 @@ nexa-gfx = { path = "../nexa-ui/crates/nexa-gfx" }
 nexa-ctl = { path = "../nexa-ui/crates/nexa-ctl" }
 nexa-conf = { path = "../nexa-ui/crates/nexa-conf" }
 nexa-font = { path = "../nexa-ui/crates/nexa-font" }
+nexa-dlg = { path = "../nexa-ui/crates/nexa-dlg" } # 파일 선택 대화상자(3-OS 자체 · 10-09 docs/50 P3 · ADR-0014 정정)
 nexa-sys = { path = "../nexa-ui/crates/nexa-sys", default-features = false } # OS 신호(locale — `ui.language=system` · 10-09 P2)
 # ★ nexa-license(계열 공용 라이선스 라이브러리 · 10-09 docs/50 P4) — 형제 저장소 path 의존(`../nexa-license`).
 nexa-license = { path = "../nexa-license/crates/nexa-license" }

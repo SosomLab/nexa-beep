@@ -1251,6 +1251,95 @@ pub enum Msg {
     LicNoteAddrCopied,
     /// 결과: 입출력 실패 — `{}` = 오류.
     LicNoteError,
+    // ── P3 file dialog(10-09 · docs/50 · nexa-dlg FilePicker 라벨·필터 · nbeep-ui picker_win) ──
+    /// 파일 이름 라벨.
+    PkFileName,
+    /// 파일 형식 라벨.
+    PkFileType,
+    /// 확정 버튼(열기).
+    PkOkOpen,
+    /// 확정 버튼(저장).
+    PkOkSave,
+    /// 확정 버튼(폴더 고르기).
+    PkOkFolder,
+    /// 폴더 고르기의 이름 상자 라벨.
+    PkFolderName,
+    /// 취소.
+    PkCancel,
+    /// 새 폴더 버튼.
+    PkNewFolder,
+    /// 새 폴더 기본 이름.
+    PkNewFolderName,
+    /// 숨김 파일 표시.
+    PkShowHidden,
+    /// 점 파일 표시.
+    PkShowDot,
+    /// 열 제목: 이름.
+    PkColName,
+    /// 열 제목: 수정한 날짜.
+    PkColModified,
+    /// 열 제목: 크기.
+    PkColSize,
+    /// 열 제목: 종류.
+    PkColKind,
+    /// 종류 셀: 폴더.
+    PkKindFolder,
+    /// 종류 셀: 파일(`{EXT} File`의 뒷말).
+    PkKindFile,
+    /// 장소: 홈.
+    PkPlaceHome,
+    /// 장소: 바탕 화면.
+    PkPlaceDesktop,
+    /// 장소: 문서.
+    PkPlaceDocuments,
+    /// 장소: 다운로드.
+    PkPlaceDownloads,
+    /// 장소 그룹: 내 PC(드라이브 목록).
+    PkPlaceDrives,
+    /// 종류 셀: 드라이브.
+    PkKindDrive,
+    /// 장소 그룹: 최근.
+    PkPlaceRecent,
+    /// 경로 상자 안내.
+    PkPathHint,
+    /// 오류: 파일 없음.
+    PkErrNotFound,
+    /// 안내: 같은 이름 존재.
+    PkErrExists,
+    /// 덮어쓰기 확인 — `{0}` = 파일 이름.
+    PkOverwriteAsk,
+    /// 덮어쓰기 확인 버튼.
+    PkOverwriteYes,
+    /// 오류: 파일명 규칙.
+    PkErrBadName,
+    /// 오류: 폴더를 읽을 수 없음.
+    PkErrList,
+    /// 오류: 새 폴더 실패.
+    PkErrMkdir,
+    /// 우클릭: 열기.
+    PkMenuOpen,
+    /// 우클릭: 경로 복사.
+    PkMenuCopyPath,
+    /// 우클릭: 이름 복사.
+    PkMenuCopyName,
+    /// 우클릭: 새로 고침.
+    PkMenuRefresh,
+    /// 다중 선택 안내 — `{0}` = 파일 수 · `{1}` = 합계 크기.
+    PkMultiSelected,
+    /// 필터: 모든 파일.
+    PkFilterAll,
+    /// 필터: 폴더(폴더 고르기).
+    PkFilterFolders,
+    /// 필터: 신원 키.
+    PkFilterKey,
+    /// 필터: 설정 백업.
+    PkFilterSettings,
+    /// 필터: 이미지.
+    PkFilterImage,
+    /// 필터: 대화 기록 세그먼트.
+    PkFilterHistory,
+    /// 필터: 라이선스.
+    PkFilterLicense,
 }
 
 impl Msg {
@@ -3470,6 +3559,271 @@ impl Msg {
                 "실패 — {}",
                 "失败 — {}",
                 "失敗 — {}",
+            ],
+            // ── P3 file dialog(10-09 · docs/50) ──
+            Msg::PkFileName => [
+                "File name:",
+                "파일 이름:",
+                "文件名:",
+                "ファイル名:",
+            ],
+            Msg::PkFileType => [
+                "File type:",
+                "파일 형식:",
+                "文件类型:",
+                "ファイルの種類:",
+            ],
+            Msg::PkOkOpen => [
+                "Open",
+                "열기",
+                "打开",
+                "開く",
+            ],
+            Msg::PkOkSave => [
+                "Save",
+                "저장",
+                "保存",
+                "保存",
+            ],
+            Msg::PkOkFolder => [
+                "Select folder",
+                "폴더 선택",
+                "选择文件夹",
+                "フォルダーを選択",
+            ],
+            Msg::PkFolderName => [
+                "Folder:",
+                "폴더:",
+                "文件夹:",
+                "フォルダー:",
+            ],
+            Msg::PkCancel => [
+                "Cancel",
+                "취소",
+                "取消",
+                "キャンセル",
+            ],
+            Msg::PkNewFolder => [
+                "New folder",
+                "새 폴더",
+                "新建文件夹",
+                "新しいフォルダー",
+            ],
+            Msg::PkNewFolderName => [
+                "New folder",
+                "새 폴더",
+                "新建文件夹",
+                "新しいフォルダー",
+            ],
+            Msg::PkShowHidden => [
+                "Show hidden files",
+                "숨김 파일 표시",
+                "显示隐藏文件",
+                "隠しファイルを表示",
+            ],
+            Msg::PkShowDot => [
+                "Show dot files",
+                "점(.) 파일 표시",
+                "显示点文件",
+                "ドットファイルを表示",
+            ],
+            Msg::PkColName => [
+                "Name",
+                "이름",
+                "名称",
+                "名前",
+            ],
+            Msg::PkColModified => [
+                "Date modified",
+                "수정한 날짜",
+                "修改日期",
+                "更新日時",
+            ],
+            Msg::PkColSize => [
+                "Size",
+                "크기",
+                "大小",
+                "サイズ",
+            ],
+            Msg::PkColKind => [
+                "Type",
+                "종류",
+                "类型",
+                "種類",
+            ],
+            Msg::PkKindFolder => [
+                "Folder",
+                "폴더",
+                "文件夹",
+                "フォルダー",
+            ],
+            Msg::PkKindFile => [
+                "File",
+                "파일",
+                "文件",
+                "ファイル",
+            ],
+            Msg::PkPlaceHome => [
+                "Home",
+                "홈",
+                "主目录",
+                "ホーム",
+            ],
+            Msg::PkPlaceDesktop => [
+                "Desktop",
+                "바탕 화면",
+                "桌面",
+                "デスクトップ",
+            ],
+            Msg::PkPlaceDocuments => [
+                "Documents",
+                "문서",
+                "文档",
+                "ドキュメント",
+            ],
+            Msg::PkPlaceDownloads => [
+                "Downloads",
+                "다운로드",
+                "下载",
+                "ダウンロード",
+            ],
+            Msg::PkPlaceDrives => [
+                "This PC",
+                "내 PC",
+                "此电脑",
+                "PC",
+            ],
+            Msg::PkKindDrive => [
+                "Drive",
+                "드라이브",
+                "驱动器",
+                "ドライブ",
+            ],
+            Msg::PkPlaceRecent => [
+                "Recent",
+                "최근",
+                "最近",
+                "最近",
+            ],
+            Msg::PkPathHint => [
+                "Type a path",
+                "경로 입력",
+                "输入路径",
+                "パスを入力",
+            ],
+            Msg::PkErrNotFound => [
+                "File not found",
+                "파일이 없습니다",
+                "找不到文件",
+                "ファイルが見つかりません",
+            ],
+            Msg::PkErrExists => [
+                "A file with this name exists — press again to overwrite",
+                "같은 이름의 파일이 있습니다 — 한 번 더 누르면 덮어씁니다",
+                "已存在同名文件 — 再按一次将覆盖",
+                "同名のファイルがあります — もう一度押すと上書きします",
+            ],
+            Msg::PkOverwriteAsk => [
+                "\"{0}\" already exists. Replace it?",
+                "\"{0}\" 파일이 이미 있습니다. 바꿀까요?",
+                "\"{0}\" 已存在。要替换吗？",
+                "\"{0}\" は既に存在します。置き換えますか？",
+            ],
+            Msg::PkOverwriteYes => [
+                "Replace",
+                "바꾸기",
+                "替换",
+                "置き換え",
+            ],
+            Msg::PkErrBadName => [
+                "This name is not allowed",
+                "사용할 수 없는 이름입니다",
+                "不允许使用此名称",
+                "この名前は使用できません",
+            ],
+            Msg::PkErrList => [
+                "Cannot read this folder",
+                "폴더를 읽을 수 없습니다",
+                "无法读取此文件夹",
+                "このフォルダーを読み取れません",
+            ],
+            Msg::PkErrMkdir => [
+                "Cannot create the folder",
+                "폴더를 만들 수 없습니다",
+                "无法创建文件夹",
+                "フォルダーを作成できません",
+            ],
+            Msg::PkMenuOpen => [
+                "Open",
+                "열기",
+                "打开",
+                "開く",
+            ],
+            Msg::PkMenuCopyPath => [
+                "Copy path",
+                "경로 복사",
+                "复制路径",
+                "パスをコピー",
+            ],
+            Msg::PkMenuCopyName => [
+                "Copy name",
+                "이름 복사",
+                "复制名称",
+                "名前をコピー",
+            ],
+            Msg::PkMenuRefresh => [
+                "Refresh",
+                "새로 고침",
+                "刷新",
+                "最新の情報に更新",
+            ],
+            Msg::PkMultiSelected => [
+                "{0} files selected ({1})",
+                "파일 {0}개 선택({1})",
+                "已选择 {0} 个文件（{1}）",
+                "{0} 個のファイルを選択（{1}）",
+            ],
+            Msg::PkFilterAll => [
+                "All files (*.*)",
+                "모든 파일 (*.*)",
+                "所有文件 (*.*)",
+                "すべてのファイル (*.*)",
+            ],
+            Msg::PkFilterFolders => [
+                "Folders",
+                "폴더",
+                "文件夹",
+                "フォルダー",
+            ],
+            Msg::PkFilterKey => [
+                "Identity key (*.key)",
+                "신원 키 (*.key)",
+                "身份密钥 (*.key)",
+                "ID キー (*.key)",
+            ],
+            Msg::PkFilterSettings => [
+                "Settings backup (*.cfg)",
+                "설정 백업 (*.cfg)",
+                "设置备份 (*.cfg)",
+                "設定バックアップ (*.cfg)",
+            ],
+            Msg::PkFilterImage => [
+                "Images (*.png;*.jpg;…)",
+                "이미지 (*.png;*.jpg;…)",
+                "图像 (*.png;*.jpg;…)",
+                "画像 (*.png;*.jpg;…)",
+            ],
+            Msg::PkFilterHistory => [
+                "Chat history (*.seg)",
+                "대화 기록 (*.seg)",
+                "聊天记录 (*.seg)",
+                "会話履歴 (*.seg)",
+            ],
+            Msg::PkFilterLicense => [
+                "License (*.license)",
+                "라이선스 (*.license)",
+                "许可证 (*.license)",
+                "ライセンス (*.license)",
             ],
         }
     }

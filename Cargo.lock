@@ -1285,6 +1285,7 @@ dependencies = [
  "nbeep-core",
  "nbeep-license",
  "nexa-ctl",
+ "nexa-dlg",
  "nexa-gfx",
 ]
 
@@ -1362,12 +1363,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "nexa-dlg"
+version = "0.1.0"
+dependencies = [
+ "nexa-ctl",
+ "nexa-fs",
+]
+
+[[package]]
 name = "nexa-font"
 version = "0.1.0"
 dependencies = [
  "memmap2",
  "nexa-gfx",
 ]
+
+[[package]]
+name = "nexa-fs"
+version = "0.1.0"
 
 [[package]]
 name = "nexa-gfx"
