@@ -355,6 +355,30 @@ impl ServerLink {
     }
 }
 
+/// 트레이 아이콘 배지 3종(M3-2e · 10-09 사용자 확정 "nexa-clip처럼" — clip DR-44 규약 차용):
+/// 좌상 녹 = **서버 통로 열림**(릴레이/컨텐츠 등록 성립) · 좌하 파랑 = **LAN·직결 세션 ≥1** ·
+/// 우하 주황 = **파일 전송 중**. 셋은 서로 독립이다(서버 점을 "서버 ∨ LAN"으로 넓히면 온라인 여부를 잃는다).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub(crate) struct TrayBadges {
+    pub(crate) relay: bool,
+    pub(crate) lan: bool,
+    pub(crate) xfer: bool,
+}
+
+/// 배지 판정 — 서버 통로 열림 · 직결(서버 경유 아님) 세션 수 · 활성 전송 유무.
+#[must_use]
+pub(crate) fn tray_badges(
+    link: ServerLink,
+    direct_sessions: usize,
+    xfer_active: bool,
+) -> TrayBadges {
+    TrayBadges {
+        relay: link.open(),
+        lan: direct_sessions > 0,
+        xfer: xfer_active,
+    }
+}
+
 /// 사용자 신원 단계 — 낮은 것부터.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub(crate) enum UserLevel {
@@ -845,5 +869,24 @@ mod tests {
             assert_eq!(mode, 0o600);
         }
         let _ = std::fs::remove_dir_all(d);
+    }
+}
+
+#[cfg(test)]
+mod tray_badge_tests {
+    use super::*;
+
+    #[test]
+    fn badges_are_independent() {
+        let b = tray_badges(ServerLink::Local, 0, false);
+        assert_eq!(b, TrayBadges::default());
+        // LAN만 — 서버 점은 켜지지 않는다(clip DR-44 ②: 온라인 여부를 잃지 않는다).
+        let b = tray_badges(ServerLink::Local, 2, false);
+        assert!(b.lan && !b.relay && !b.xfer);
+        // 서버 접속 중(Reconnecting)·보류(Held)는 "열림"이 아니다.
+        assert!(!tray_badges(ServerLink::Reconnecting, 0, false).relay);
+        assert!(!tray_badges(ServerLink::Held, 0, false).relay);
+        let b = tray_badges(ServerLink::Connected(ServerKind::Relay), 0, true);
+        assert!(b.relay && !b.lan && b.xfer);
     }
 }

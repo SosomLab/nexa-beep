@@ -1164,6 +1164,13 @@ pub enum Msg {
     StKeyCopied,
     /// 피커 제목 "라이선스 파일 선택 — {}"(P4 · 자체 피커 · P3에서 nexa-dlg로).
     TitlePickLicense,
+    // ── M3-2e 트레이 배지 툴팁(10-09) ──
+    /// "서버 연결됨".
+    TrayServerOn,
+    /// "LAN {}" (직결 세션 수).
+    TrayLan,
+    /// "전송 중".
+    TrayXfer,
     // ── P4 license(10-09 · docs/50 D-33-6·7 · nbeep-license · nbeep-ui license_win) ──
     /// 도움말 ▸ 라이선스… 메뉴 항목·창 제목 꼬리.
     LicMenu,
@@ -3220,6 +3227,9 @@ impl Msg {
                 "选择许可证文件 — {}",
                 "ライセンスファイルを選択 — {}",
             ],
+            Msg::TrayServerOn => ["server connected", "서버 연결됨", "服务器已连接", "サーバー接続中"],
+            Msg::TrayLan => ["LAN {}", "LAN {}", "LAN {}", "LAN {}"],
+            Msg::TrayXfer => ["transferring", "전송 중", "传输中", "転送中"],
             // ── P4 license(10-09 · docs/50) ──
             Msg::LicMenu => [
                 "License…",

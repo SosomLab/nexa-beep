@@ -3130,6 +3130,8 @@ struct App {
     awaiting_accept: HashMap<PeerId, nbeep_core::XferId>,
     /// 진행 중(수락 후) 발신 — 취소 라우팅용(08-16 · 배너 "취소" → CancelXfer).
     active_send: HashMap<PeerId, nbeep_core::XferId>,
+    /// 트레이 배지 마지막 적용값(M3-2e) — 바뀔 때만 `TrayHandle::update`(clip `refresh_sync_indicator` 비교 방식).
+    tray_badges_last: Option<crate::userident::TrayBadges>,
     /// 진행 중(수락 후) 수신 — 위와 대칭.
     active_recv: HashMap<PeerId, nbeep_core::XferId>,
     /// 상대에게서 받은 마지막 메시지 seq(N-2 읽음 up-to · 읽음 ack 대상).
@@ -6487,6 +6489,7 @@ impl App {
         self.toolbar.set_item_visible("server", true, &mut inv);
         // 경로가 바뀌면 사용자 진단(서버 필요/미검증)도 바뀐다 — 같은 깔때기로.
         self.refresh_user_glance();
+        self.refresh_tray_badges(); // 서버 점(M3-2e)
     }
 
     /// 서버 경로 상태(09-07 한눈 판정 — 우선순위는 `server_note_texts`와 동일).
@@ -11090,13 +11093,70 @@ impl App {
         let name = effective_display_name(&self.settings, &self.identity.peer_id())
             .as_str()
             .to_string();
+        // ★ 연결 상태 배지(M3-2e · 10-09 — nexa-clip DR-44 차용): 아바타 위 귀퉁이 점 + 흰 테두리.
+        //   아바타 바탕(사진·12간지)은 색이 정해져 있지 않아 테두리 없이는 묻힌다(clip 10-05 실기).
+        let badges = self.tray_badges();
+        let mut rgba = self.my_avatar_rgba(32);
+        if badges.relay {
+            overlay_dot(&mut rgba, 32, Corner::TopLeft, DOT_RELAY);
+        }
+        if badges.lan {
+            overlay_dot(&mut rgba, 32, Corner::BottomLeft, DOT_LAN);
+        }
+        if badges.xfer {
+            overlay_dot(&mut rgba, 32, Corner::BottomRight, DOT_XFER);
+        }
+        let mut tooltip = format!("Nexa Beep — {name}");
+        if badges.relay {
+            tooltip.push_str(" · ");
+            tooltip.push_str(t(Msg::TrayServerOn));
+        }
+        let direct = self.direct_session_count();
+        if badges.lan {
+            tooltip.push_str(" · ");
+            tooltip.push_str(&nbeep_core::tf(Msg::TrayLan, &[&direct.to_string()]));
+        }
+        if badges.xfer {
+            tooltip.push_str(" · ");
+            tooltip.push_str(t(Msg::TrayXfer));
+        }
         nbeep_plat::tray::TrayContent {
-            rgba: self.my_avatar_rgba(32),
+            rgba,
             side: 32,
-            tooltip: format!("Nexa Beep — {name}"),
+            tooltip,
             name,
             open_label: t(Msg::TrayOpen).to_string(),
             quit_label: t(Msg::TrayQuit).to_string(),
+        }
+    }
+
+    /// 직결(서버 경유 아님) 세션 수 — LAN·수동 주소 직결 모두(표시 전용 · 트레이 LAN 점의 재료).
+    fn direct_session_count(&self) -> usize {
+        self.conversations
+            .values()
+            .filter(|c| !c.via_server)
+            .count()
+    }
+
+    /// 트레이 배지 판정(순수 `userident::tray_badges` 위) — 서버 통로 · 직결 세션 · 활성 전송.
+    fn tray_badges(&self) -> crate::userident::TrayBadges {
+        crate::userident::tray_badges(
+            self.server_link(),
+            self.direct_session_count(),
+            !self.active_send.is_empty() || !self.active_recv.is_empty(),
+        )
+    }
+
+    /// 배지가 **바뀌었을 때만** 트레이를 갱신한다(틱마다 불러도 비용 = bool 3개 비교 ·
+    /// 호출 자리 = about_to_wait 틱 + 서버 전이 + LinkChanged · 아바타/이름 변경은 refresh_toolbar_avatar가).
+    fn refresh_tray_badges(&mut self) {
+        if self.tray.is_none() {
+            return;
+        }
+        let now = self.tray_badges();
+        if self.tray_badges_last != Some(now) {
+            self.tray_badges_last = Some(now);
+            self.refresh_tray();
         }
     }
 
@@ -18054,9 +18114,10 @@ impl ApplicationHandler<AppEvent> for App {
                 // L1 재발견(M1-2) — 전송이 그룹 재조인 + 즉시 HELLO + S4로 반응.
                 // 목록은 상대 재공지(발견 이벤트)로 다시 찬다 — 여기서 지우지 않는다.
                 self.transport.link_changed();
-                // ★ M1-2b(부분 · 사용자 요청 "전환에도 상태 유지"): 재연결 **가속** —
-                // 유선↔무선 전환 뒤 백오프의 긴 대기를 기다리지 않는다.
-                // ⓐ 걸려 있는 재연결 스케줄 = 전부 0단·지금으로 리셋(다음 펌프서 즉시).
+                self.refresh_tray_badges(); // 링크 전환 = 트레이 점 즉시(M3-2e)
+                                            // ★ M1-2b(부분 · 사용자 요청 "전환에도 상태 유지"): 재연결 **가속** —
+                                            // 유선↔무선 전환 뒤 백오프의 긴 대기를 기다리지 않는다.
+                                            // ⓐ 걸려 있는 재연결 스케줄 = 전부 0단·지금으로 리셋(다음 펌프서 즉시).
                 let now = self.now_ms();
                 for e in self.reconnect.values_mut() {
                     *e = (0, now);
@@ -18403,6 +18464,7 @@ impl ApplicationHandler<AppEvent> for App {
         }
         self.poll_discovery();
         self.server_tick(); // Managed 서버 접속 수렴(X-2b — 2s 페이스 내부 가드)
+        self.refresh_tray_badges(); // 트레이 LAN·전송 점(M3-2e — 바뀔 때만 갱신)
         self.user_tick(); // 사용자 층(ADR-0015) — 힌트 태그 자정 회전 · 페어링 RID 탐색
                           // 설정 영속 tick(FR-P-9) — 조용 1s OR 상한 10s 충족 시 스냅샷 1회 저장.
         if self.conf.sched.tick(Instant::now()) {
@@ -20260,6 +20322,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         send_batch: HashMap::new(),
         awaiting_accept: HashMap::new(),
         active_send: HashMap::new(),
+        tray_badges_last: None,
         active_recv: HashMap::new(),
         last_recv_seq: HashMap::new(),
         image_view: None,
@@ -20450,6 +20513,80 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
     app.refresh_statuslog(); // 상태 로그(M3-22 — log.enabled면 여기서 기동)
     app.refresh_netmon(); // 네트워크 점검(08-21 — netmon.enabled면 여기서 기동)
     event_loop.run_app(&mut app).unwrap();
+}
+
+/// 트레이 배지 점 색(M3-2e · nexa-clip DR-44 ⑥과 같은 값 — 계열 공통 시각): 녹 = 서버 · 파랑 = LAN · 주황 = 전송.
+const DOT_RELAY: (u8, u8, u8) = (46, 204, 64);
+const DOT_LAN: (u8, u8, u8) = (0, 0, 255);
+const DOT_XFER: (u8, u8, u8) = (255, 160, 20);
+/// 점 테두리(흰색 2px) — 아바타 바탕과 무관하게 점이 보이게(clip 10-05 실기 처방).
+const DOT_RIM: (u8, u8, u8) = (255, 255, 255);
+
+/// 점을 놓을 귀퉁이.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Corner {
+    TopLeft,
+    BottomLeft,
+    BottomRight,
+}
+
+/// 정사각 RGBA(straight alpha) 위에 귀퉁이 점을 **덮어쓴다**(알파 255 · 반지름 = 변×7/32×0.9 · 최소 3.6 ·
+/// 흰 테두리 2px). nexa-clip `tray_cmd::overlay_dot` 이식(10-09). 상단 막대에서 16~22px로 줄어도 읽히는 크기.
+fn overlay_dot(rgba: &mut [u8], side: usize, at: Corner, body: (u8, u8, u8)) {
+    #[allow(clippy::cast_precision_loss)]
+    let s = side as f32;
+    let r = (s * 7.0 / 32.0 * 0.9).max(3.6);
+    let (cx, cy) = match at {
+        Corner::TopLeft => (r, r),
+        Corner::BottomLeft => (r, s - r),
+        Corner::BottomRight => (s - r, s - r),
+    };
+    let rim = 2.0_f32;
+    for y in 0..side {
+        for x in 0..side {
+            #[allow(clippy::cast_precision_loss)]
+            let (dx, dy) = (x as f32 + 0.5 - cx, y as f32 + 0.5 - cy);
+            let d = (dx * dx + dy * dy).sqrt();
+            if d > r {
+                continue;
+            }
+            let c = if d > r - rim { DOT_RIM } else { body };
+            let i = (y * side + x) * 4;
+            if i + 3 < rgba.len() {
+                rgba[i] = c.0;
+                rgba[i + 1] = c.1;
+                rgba[i + 2] = c.2;
+                rgba[i + 3] = 255;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tray_dot_tests {
+    use super::*;
+
+    fn px(rgba: &[u8], side: usize, x: usize, y: usize) -> (u8, u8, u8, u8) {
+        let i = (y * side + x) * 4;
+        (rgba[i], rgba[i + 1], rgba[i + 2], rgba[i + 3])
+    }
+
+    #[test]
+    fn dot_sits_in_its_corner_with_white_rim() {
+        let side = 32;
+        let mut rgba = vec![0u8; side * side * 4]; // 투명 바탕
+        overlay_dot(&mut rgba, side, Corner::BottomLeft, DOT_LAN);
+        // 중심(반지름 ≈ 6.3 → (6, 26) 근처)은 본색·불투명.
+        assert_eq!(px(&rgba, side, 6, 25), (0, 0, 255, 255));
+        // 가장자리(중심에서 r-1px 안쪽)는 흰 테두리.
+        assert_eq!(px(&rgba, side, 1, 25), (255, 255, 255, 255));
+        // 반대 귀퉁이는 손대지 않는다.
+        assert_eq!(px(&rgba, side, 30, 1), (0, 0, 0, 0));
+        // 다른 귀퉁이에 둘째 점을 더해도 첫 점은 그대로.
+        overlay_dot(&mut rgba, side, Corner::TopLeft, DOT_RELAY);
+        assert_eq!(px(&rgba, side, 6, 25), (0, 0, 255, 255));
+        assert_eq!(px(&rgba, side, 6, 6), (46, 204, 64, 255));
+    }
 }
 
 #[cfg(test)]
