@@ -270,6 +270,7 @@ git tag -a v0.1.2 -m "..." && git push origin v0.1.2
 |---|---|---|
 | 5타깃 포장 + GitHub Release **공개** | ✅ 태그 push | — |
 | Homebrew 탭 반영 | ✅ 릴리스 직후 | `TAP_TOKEN` 시크릿 유무 |
+| **Linux APT/dnf 저장소 `pkg.sosomlab.com`**(★10-09 · nexa-clip 이식) | ✅ 릴리스 직후 `linux-repo` 잡이 `SosomLab/linux-repo`에 `app-released` 신호 → 그쪽 publish가 서명 색인 재생성(패키지 파일은 GitHub Release로 302) · 신호 없어도 하루 1회 정기 실행 | `LINUX_REPO_DISPATCH_TOKEN` 시크릿 · 등록 파일 = linux-repo `apps/nexa-beep.toml`(deb/rpm 자산 이름 규칙 — **바꾸면 그쪽도 함께**) · 사용자 = `sudo apt install nexa-beep` / `sudo dnf install nexa-beep` |
 | winget · Chocolatey 제출 | 실행되나 **기본 꺼짐** | 저장소 변수 `WINGET_PUBLISH`/`CHOCO_PUSH` + 시크릿 |
 
 - 태그 없이 확인만 하려면 Actions ▸ **release** ▸ *Run workflow*(그 경로는 **초안**을 만든다).

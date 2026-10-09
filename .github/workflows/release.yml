@@ -491,3 +491,25 @@ jobs:
     with:
       tag: ${{ needs.meta.outputs.tag }}
     secrets: inherit
+
+  # ── Linux 패키지 저장소(pkg.sosomlab.com) 갱신 신호(10-09 · nexa-clip release.yml 이식) ────────
+  # `SosomLab/linux-repo`의 publish 워크플로가 이 신호(repository_dispatch · app-released)를 받아
+  # 방금 공개된 릴리스의 `.deb`/`.rpm`으로 서명된 APT/dnf 색인을 다시 만든다(linux-repo `docs/ADDING-AN-APP.md` §4 ·
+  # 등록 파일 = linux-repo `apps/nexa-beep.toml`). 신호를 놓쳐도 그쪽의 하루 한 번 정기 실행이 최신 릴리스를 잡는다.
+  # ⚠️ 스텝 `if:`에서는 `secrets`를 읽을 수 없다 — 토큰 유무는 셸에서 본다.
+  linux-repo:
+    needs: [meta, publish]
+    if: github.ref_type == 'tag' && needs.meta.outputs.prerelease != 'true'
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: pkg.sosomlab.com 갱신 신호
+        env:
+          TOKEN: ${{ secrets.LINUX_REPO_DISPATCH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "$TOKEN" ]; then echo "::notice::LINUX_REPO_DISPATCH_TOKEN 없음 — linux-repo 정기 실행이 반영"; exit 0; fi
+          curl -fsS -X POST https://api.github.com/repos/SosomLab/linux-repo/dispatches \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -d "{\"event_type\":\"app-released\",\"client_payload\":{\"app\":\"nexa-beep\",\"tag\":\"$GITHUB_REF_NAME\",\"repo\":\"$GITHUB_REPOSITORY\",\"run_url\":\"$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID\"}}"
