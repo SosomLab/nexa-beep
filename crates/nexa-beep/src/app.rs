@@ -2574,7 +2574,7 @@ enum Role {
     Settings,
     /// 컨트롤 갤러리(임시 검수 — `Cmd/Ctrl+G` 또는 하단 버튼).
     Gallery,
-    /// 파일 선택 모달 창(Choose… — ChoosePicker 어댑터 내용을 별도 창으로).
+    /// 파일 선택 대화상자(nexa-dlg FilePicker · docs/50 P3 — 백업·복원·프로필 사진·라이선스·갤러리).
     Picker,
     /// About 창(메뉴 → About — 브랜딩·링크).
     About,
@@ -2783,7 +2783,8 @@ fn spawn_relay_accept(
     });
 }
 
-/// 파일 선택 창의 용도(M2-5a 백업·복원 확장) — 같은 Role::Picker 창을 용도별로 쓴다.
+/// 파일 선택 대화상자의 용도(M2-5a 백업·복원 확장 · P3 nexa-dlg) — 같은 Role::Picker 창을 용도별로 쓴다.
+/// 용도 → 모드·필터·기본 이름은 [`App::picker_spec`] 한 곳.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PickerPurpose {
     /// 갤러리 Choose… 실증(기존 — HOME 평면 목록).
@@ -2824,58 +2825,6 @@ fn trust_label(lv: nbeep_core::TrustLevel) -> &'static str {
         L::Unverified => "미검증(핸드셰이크 전)",
         L::Pinned => "고정됨(TOFU — 첫 접촉 키 기억)",
         L::FingerprintVerified => "지문 대조 완료(사람이 확인)",
-    }
-}
-
-/// 탐색형 피커의 행 하나가 뜻하는 것(라벨 → 행위 매핑).
-#[derive(Clone, Debug)]
-enum PickEntry {
-    /// 상위 폴더로.
-    Up,
-    /// 하위 폴더 진입.
-    Dir(std::path::PathBuf),
-    /// 파일 선택(복원 대상).
-    File(std::path::PathBuf),
-    /// 현재 폴더에 저장(백업).
-    SaveHere,
-}
-
-/// 열린 피커의 상태 — 용도·현재 폴더·라벨→행위 매핑.
-#[derive(Debug)]
-struct PickerCtx {
-    purpose: PickerPurpose,
-    dir: std::path::PathBuf,
-    entries: Vec<(String, PickEntry)>,
-}
-
-/// 샘플 찾기 어댑터 — 한 폴더의 **단일 파일 선택기**(Adapter 패턴 실증).
-/// `nbeep_ui::ChoosePicker`를 구현한 어떤 화면도 Choose에 꽂을 수 있다(UI 계층은 I/O를 모른다).
-#[derive(Debug)]
-struct FilePicker {
-    dir: std::path::PathBuf,
-}
-
-impl nbeep_ui::ChoosePicker for FilePicker {
-    fn title(&self) -> String {
-        nbeep_core::tf(
-            nbeep_core::Msg::TitleFilePick,
-            &[&self.dir.display().to_string()],
-        )
-    }
-    fn items(&self) -> Vec<nbeep_ui::ComboItem> {
-        // 투명 배경 이미지 아이콘(파일 · 공유 Rc).
-        let icon = std::rc::Rc::new(nbeep_ui::IconImage::swatch(16, (0x8A, 0x91, 0x9C)));
-        let mut v = Vec::new();
-        if let Ok(rd) = std::fs::read_dir(&self.dir) {
-            for e in rd.flatten() {
-                if e.file_type().map(|t| t.is_file()).unwrap_or(false) {
-                    let name = e.file_name().to_string_lossy().into_owned();
-                    v.push(nbeep_ui::ComboItem::new(name.clone(), name).with_image(icon.clone()));
-                }
-            }
-        }
-        v.sort_by(|a, b| a.label.cmp(&b.label));
-        v
     }
 }
 
@@ -2997,10 +2946,12 @@ struct App {
     gallery_view: Option<GalleryWidget>,
     /// 앱 창 아이콘(브랜딩 · 전 창 공통). 지원 안 되면 None.
     icon: Option<winit::window::Icon>,
-    /// 파일 선택 모달 뷰(Choose… — 열려 있을 때만 Some).
-    picker_view: Option<nbeep_ui::TreeView>,
-    /// 피커 용도·탐색 상태(M2-5a 백업·복원 — None = 갤러리 실증 모드).
-    picker_ctx: Option<PickerCtx>,
+    /// 파일 선택 대화상자(nexa-dlg FilePicker · docs/50 P3 — 열려 있을 때만 Some).
+    picker_view: Option<nbeep_ui::FilePicker>,
+    /// 열린 대화상자의 용도(결과를 어디로 보낼지).
+    picker_purpose: Option<PickerPurpose>,
+    /// 마지막으로 머문 폴더(세션 기억 — 다음 대화상자의 시작점 · 없으면 홈).
+    picker_last_dir: Option<std::path::PathBuf>,
     /// 설정 화면에서 요청된 피커 열기(이벤트 루프 참조가 없는 지점 → about_to_wait에서 연다).
     pending_picker: Option<PickerPurpose>,
     /// 데이터 디렉터리(신원 키·핀 세그먼트·설정 — 백업·복원이 원본 위치로 쓴다).
@@ -3403,6 +3354,15 @@ impl App {
                 Some(Role::License) => {
                     if let Some(v) = self.license_view.as_mut() {
                         v.set_preedit(&text, &mut inv);
+                    }
+                }
+                Some(Role::Picker) => {
+                    if let Some(tb) = self
+                        .picker_view
+                        .as_mut()
+                        .and_then(nbeep_ui::FilePicker::focused_textbox)
+                    {
+                        tb.set_preedit(&text, &mut inv);
                     }
                 }
                 _ => {}
@@ -8155,6 +8115,11 @@ impl App {
             Role::NamePrompt => self.name_prompt.as_mut()?.clipboard_cut(&mut inv),
             Role::Convbox => self.convbox_view.as_mut()?.clipboard_cut(&mut inv),
             Role::Gallery => self.gallery_view.as_mut()?.clipboard_cut(&mut inv),
+            Role::Picker => self
+                .picker_view
+                .as_mut()?
+                .focused_textbox()?
+                .cut_selection(&mut inv),
             _ => None,
         }
     }
@@ -8203,6 +8168,16 @@ impl App {
             Some(Role::Gallery) => {
                 if let Some(v) = self.gallery_view.as_mut() {
                     v.clipboard_paste(text, &mut inv);
+                }
+            }
+            // 파일 대화상자(P3) — 포커스된 경로·이름 상자.
+            Some(Role::Picker) => {
+                if let Some(tb) = self
+                    .picker_view
+                    .as_mut()
+                    .and_then(nbeep_ui::FilePicker::focused_textbox)
+                {
+                    tb.paste(text, &mut inv);
                 }
             }
             _ => {}
@@ -9300,20 +9275,8 @@ impl App {
         m
     }
 
-    /// 대화 기록 복원 — 폴더의 `*.seg` 전부(사용자 확정: **중복 = 덮어쓰기 ·
-    /// 없으면 추가 · 기존 유지**). 파일 반입 후 메모리 스레드에 즉시 반영.
-    fn do_restore_history_dir(&mut self, dir: &std::path::Path) -> String {
-        let files: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
-            .map(|rd| {
-                rd.flatten()
-                    .map(|e| e.path())
-                    .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("seg"))
-                    .collect()
-            })
-            .unwrap_or_default();
-        self.do_restore_history_files(&files)
-    }
-
+    /// 대화 기록 복원(사용자 확정: **중복 = 덮어쓰기 · 없으면 추가 · 기존 유지**) — P3부터 대화상자의
+    /// `.seg` 다중 선택이 입구(폴더 전체 = 전체 선택 · 종전 "이 폴더에서 복원").
     /// 복원 실행(파일 목록판 — 폴더 복원·개별 파일 클릭 공용).
     fn do_restore_history_files(&mut self, files: &[std::path::PathBuf]) -> String {
         if files.is_empty() {
@@ -9628,120 +9591,86 @@ impl App {
         }
     }
 
-    /// 탐색형 피커 목록 구성 — (창 제목, 트리 행, 라벨→행위). 라벨 접두로 종류를
-    /// 구분한다(글리프 폴백만으로 충분한 문자 — 이모지 금지).
-    fn picker_listing(
+    /// 용도 → (모드, 필터, 저장 기본 이름, 다중 선택, 창 제목) — 용도별 차이는 여기 한 곳(P3).
+    /// 백업은 **저장 모드**(이름을 바꿀 수 있고 같은 이름이면 두 번 눌러 덮어쓴다) · 대화 기록 백업만 폴더
+    /// (하위 폴더를 만든다) · 대화 기록 복원 = `.seg` 다중 선택(폴더 전체 = 전체 선택 — 종전 "이 폴더에서 복원").
+    fn picker_spec(
+        &self,
         purpose: PickerPurpose,
-        dir: &std::path::Path,
-        save_name: &str,
-    ) -> (String, Vec<nbeep_ui::TreeNode>, Vec<(String, PickEntry)>) {
-        let mut entries: Vec<(String, PickEntry)> = Vec::new();
-        if matches!(
-            purpose,
-            PickerPurpose::BackupDir
-                | PickerPurpose::SettingsBackupDir
-                | PickerPurpose::HistoryBackupDir
-        ) {
-            entries.push((format!("[여기에 저장] {save_name}"), PickEntry::SaveHere));
+    ) -> (
+        nbeep_ui::PickerMode,
+        nbeep_ui::PickFilter,
+        String,
+        bool,
+        nbeep_core::Msg,
+    ) {
+        use nbeep_core::Msg;
+        use nbeep_ui::{PickFilter as F, PickerMode as M};
+        match purpose {
+            PickerPurpose::GallerySample => {
+                (M::Open, F::All, String::new(), false, Msg::TitleFilePick)
+            }
+            PickerPurpose::BackupDir => (
+                M::Save,
+                F::IdentityKey,
+                self.default_backup_name(),
+                false,
+                Msg::TitlePickBackupDir,
+            ),
+            PickerPurpose::RestoreKey => (
+                M::Open,
+                F::IdentityKey,
+                String::new(),
+                false,
+                Msg::TitlePickBackup,
+            ),
+            PickerPurpose::ProfileImage => (
+                M::Open,
+                F::Image,
+                String::new(),
+                false,
+                Msg::TitlePickProfileImage,
+            ),
+            PickerPurpose::SettingsBackupDir => (
+                M::Save,
+                F::Settings,
+                self.picker_save_name(purpose),
+                false,
+                Msg::TitlePickSettingsBackupDir,
+            ),
+            PickerPurpose::SettingsRestoreFile => (
+                M::Open,
+                F::Settings,
+                String::new(),
+                false,
+                Msg::TitlePickSettingsBackup,
+            ),
+            PickerPurpose::HistoryBackupDir => (
+                M::Folder,
+                F::Folders,
+                String::new(),
+                false,
+                Msg::TitlePickCvBackupDir,
+            ),
+            PickerPurpose::HistoryRestoreDir => (
+                M::Open,
+                F::History,
+                String::new(),
+                true,
+                Msg::TitlePickCvRestoreDir,
+            ),
+            PickerPurpose::LicenseFile => (
+                M::Open,
+                F::License,
+                String::new(),
+                false,
+                Msg::TitlePickLicense,
+            ),
         }
-        if purpose == PickerPurpose::HistoryRestoreDir {
-            // 폴더 단위 복원(중복 = 덮어쓰기 · 사용자 확정) — 개별 파일 클릭도 허용.
-            entries.push((
-                nbeep_core::t(nbeep_core::Msg::PickRestoreHere).to_string(),
-                PickEntry::SaveHere,
-            ));
-        }
-        if let Some(parent) = dir.parent().filter(|p| !p.as_os_str().is_empty()) {
-            let _ = parent;
-            entries.push(("[..] 상위 폴더".to_string(), PickEntry::Up));
-        }
-        let mut dirs: Vec<(String, std::path::PathBuf)> = Vec::new();
-        let mut files: Vec<(String, std::path::PathBuf)> = Vec::new();
-        if let Ok(rd) = std::fs::read_dir(dir) {
-            for e in rd.flatten() {
-                let name = e.file_name().to_string_lossy().into_owned();
-                if name.starts_with('.') {
-                    continue; // 숨김 항목 — 백업 대상지로 부적합
-                }
-                match e.file_type() {
-                    Ok(t) if t.is_dir() => dirs.push((name, e.path())),
-                    Ok(t) if t.is_file() => {
-                        let take = match purpose {
-                            PickerPurpose::RestoreKey => true,
-                            PickerPurpose::SettingsRestoreFile => {
-                                name.to_ascii_lowercase().ends_with(".cfg")
-                            }
-                            PickerPurpose::LicenseFile => {
-                                name.to_ascii_lowercase().ends_with(".license")
-                            }
-                            PickerPurpose::HistoryRestoreDir => {
-                                name.to_ascii_lowercase().ends_with(".seg")
-                            }
-                            PickerPurpose::ProfileImage => {
-                                let lower = name.to_ascii_lowercase();
-                                ["png", "jpg", "jpeg", "gif", "bmp", "webp", "ico"]
-                                    .iter()
-                                    .any(|ext| lower.ends_with(&format!(".{ext}")))
-                            }
-                            _ => false,
-                        };
-                        if take {
-                            files.push((name, e.path()));
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
-        dirs.sort_by(|a, b| a.0.cmp(&b.0));
-        files.sort_by(|a, b| a.0.cmp(&b.0));
-        for (name, p) in dirs {
-            entries.push((
-                nbeep_core::tf(nbeep_core::Msg::PickDirPrefix, &[&name]),
-                PickEntry::Dir(p),
-            ));
-        }
-        for (name, p) in files {
-            entries.push((name, PickEntry::File(p)));
-        }
-        let dir_s = dir.display().to_string();
-        let title = match purpose {
-            PickerPurpose::BackupDir => {
-                nbeep_core::tf(nbeep_core::Msg::TitlePickBackupDir, &[&dir_s])
-            }
-            PickerPurpose::RestoreKey => {
-                nbeep_core::tf(nbeep_core::Msg::TitlePickBackup, &[&dir_s])
-            }
-            PickerPurpose::ProfileImage => {
-                nbeep_core::tf(nbeep_core::Msg::TitlePickProfileImage, &[&dir_s])
-            }
-            PickerPurpose::SettingsBackupDir => {
-                nbeep_core::tf(nbeep_core::Msg::TitlePickSettingsBackupDir, &[&dir_s])
-            }
-            PickerPurpose::SettingsRestoreFile => {
-                nbeep_core::tf(nbeep_core::Msg::TitlePickSettingsBackup, &[&dir_s])
-            }
-            PickerPurpose::HistoryBackupDir => {
-                nbeep_core::tf(nbeep_core::Msg::TitlePickCvBackupDir, &[&dir_s])
-            }
-            PickerPurpose::HistoryRestoreDir => {
-                nbeep_core::tf(nbeep_core::Msg::TitlePickCvRestoreDir, &[&dir_s])
-            }
-            PickerPurpose::LicenseFile => {
-                nbeep_core::tf(nbeep_core::Msg::TitlePickLicense, &[&dir_s])
-            }
-            PickerPurpose::GallerySample => String::new(),
-        };
-        let roots = entries
-            .iter()
-            .map(|(label, _)| nbeep_ui::TreeNode::leaf(label.clone()))
-            .collect();
-        (title, roots, entries)
     }
 
-    /// 파일 선택 **모달 창**(Choose… · ChoosePicker 어댑터 내용을 별도 창으로 · 사용자 확정).
-    /// 항목 클릭 = 선택 확정(값 반영) 후 닫힘 · Esc/닫기 = 취소.
-    /// M2-5a: `purpose`에 따라 갤러리 실증(평면) / 백업·복원(폴더 탐색)으로 갈린다.
+    /// 파일 선택 **대화상자**(nexa-dlg FilePicker · 3-OS 동일 자체 그리기 · docs/50 P3 · ADR-0014 정정).
+    /// 확정 = [`Self::finish_picker`] · 취소(Esc·[취소]·닫기) = 아무것도 하지 않는다.
     fn open_picker(&mut self, el: &ActiveEventLoop, purpose: PickerPurpose) {
         if let Some((pid, _)) = self.windows.iter().find(|(_, e)| e.role == Role::Picker) {
             if let Some(e) = self.windows.get(pid) {
@@ -9749,46 +9678,20 @@ impl App {
             }
             return;
         }
-        let (title, roots) = if purpose == PickerPurpose::GallerySample {
-            // 어댑터: HOME 단일 파일 선택기(ChoosePicker 인터페이스 — 어떤 구현도 가능).
-            let picker = FilePicker {
-                dir: Self::home_dir(),
-            };
-            use nbeep_ui::ChoosePicker as _;
-            let title = picker.title();
-            let roots: Vec<nbeep_ui::TreeNode> = picker
-                .items()
-                .into_iter()
-                .map(|it| {
-                    let mut n = nbeep_ui::TreeNode::leaf(it.label);
-                    if let Some(img) = it.image {
-                        n = n.with_image(img);
-                    }
-                    n
-                })
-                .collect();
-            self.picker_ctx = None;
-            (title, roots)
-        } else {
-            let dir = Self::home_dir();
-            let (title, roots, entries) =
-                Self::picker_listing(purpose, &dir, &self.picker_save_name(purpose));
-            self.picker_ctx = Some(PickerCtx {
-                purpose,
-                dir,
-                entries,
-            });
-            (title, roots)
-        };
-        let mut tree = nbeep_ui::TreeView::new(nbeep_ui::TreeModel::new(roots));
-        {
-            use nbeep_ui::Control as _;
-            tree.set_focused(true);
-        }
-
+        let (mode, filter, name, multi, title_msg) = self.picker_spec(purpose);
+        let start = self
+            .picker_last_dir
+            .clone()
+            .filter(|d| d.is_dir())
+            .unwrap_or_else(Self::home_dir);
+        let picker = nbeep_ui::new_picker(mode, Some(&start), filter, &name, multi);
+        let title = nbeep_core::tf(title_msg, &[&picker.current_dir().display().to_string()]);
         let attrs = self
             .win_attrs()
-            .with_title(title)
+            .with_title(format!("Nexa Beep — {title}"))
+            .with_inner_size(winit::dpi::LogicalSize::new(900.0, 580.0))
+            .with_min_inner_size(winit::dpi::LogicalSize::new(640.0, 420.0))
+            .with_resizable(true)
             .with_window_icon(self.icon.clone());
         let attrs = self.modal_attrs(attrs, false); // 메인 소유(08-15 — 창 묶음 부상)
         let window = Rc::new(el.create_window(attrs).unwrap());
@@ -9806,38 +9709,105 @@ impl App {
                 scale,
             },
         );
-        self.picker_view = Some(tree);
+        self.picker_view = Some(picker);
+        self.picker_purpose = Some(purpose);
         self.layout_window(id);
         self.request_redraw(id);
     }
 
-    /// 탐색형 피커의 폴더 이동 후 재구성 — 트리·제목을 현재 폴더로 갱신.
-    fn repopulate_picker(&mut self, id: WindowId) {
-        let Some(ctx) = &self.picker_ctx else { return };
-        let (title, roots, entries) =
-            Self::picker_listing(ctx.purpose, &ctx.dir, &self.picker_save_name(ctx.purpose));
-        if let Some(ctx) = &mut self.picker_ctx {
-            ctx.entries = entries;
+    /// 대화상자 닫기 — 머문 폴더를 기억하고(다음 시작점) 창을 거둔다.
+    fn close_picker(&mut self, id: WindowId) {
+        if let Some(pv) = &self.picker_view {
+            self.picker_last_dir = Some(pv.current_dir().to_path_buf());
         }
-        let mut tree = nbeep_ui::TreeView::new(nbeep_ui::TreeModel::new(roots));
-        {
-            use nbeep_ui::Control as _;
-            tree.set_focused(true);
+        self.picker_view = None;
+        self.picker_purpose = None;
+        self.windows.remove(&id);
+        if let Some(mid) = self.main_id {
+            self.request_redraw(mid);
         }
-        self.picker_view = Some(tree);
-        if let Some(e) = self.windows.get(&id) {
-            e.window.set_title(&title);
-        }
-        self.layout_window(id);
-        self.request_redraw(id);
     }
 
-    /// 설정 백업(08-15 · 고급) — 대기 중 스냅샷까지 flush한 뒤 settings.cfg 복사.
-    fn do_backup_settings(&mut self, dir: &std::path::Path) -> String {
+    /// 확정 경로를 용도별 행위로(창은 먼저 닫는다 — 행위가 모달을 띄울 수 있다).
+    fn finish_picker(&mut self, id: WindowId, paths: Vec<std::path::PathBuf>) {
+        let purpose = self.picker_purpose;
+        self.close_picker(id);
+        let (Some(purpose), Some(p)) = (purpose, paths.first().cloned()) else {
+            return;
+        };
+        match purpose {
+            PickerPurpose::GallerySample => {
+                // 갤러리 실증 — Choose 값 = 고른 파일 이름.
+                let name = p
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                if let Some(gv) = &mut self.gallery_view {
+                    let mut ginv = Invalidations::default();
+                    gv.set_choose_value(&name, &mut ginv);
+                }
+                if let Some((gid, _)) = self.windows.iter().find(|(_, e)| e.role == Role::Gallery) {
+                    let gid = *gid;
+                    self.request_redraw(gid);
+                }
+            }
+            PickerPurpose::BackupDir => {
+                let m = self.do_backup_identity(&p);
+                self.set_status(m);
+            }
+            PickerPurpose::RestoreKey => {
+                let m = self.do_restore_identity(&p);
+                self.set_status(m);
+            }
+            PickerPurpose::ProfileImage => {
+                // 프로필 이미지 경로 반영(M3-17) — 위젯에 넣고 **위젯이 보고한 변경 전부**를
+                // 정식 깔때기(apply_settings)로 저장한다(08-14 실기: take_changes를 버리면
+                // 최근 목록이 영속되지 않았다). 관리 복사(08-16) — 사본 경로가 정본.
+                let path = self.manage_profile_image(&p.to_string_lossy());
+                let changes = if let Some(pv) = &mut self.profile_view {
+                    let mut pinv = Invalidations::default();
+                    pv.set_image_path(&path, &mut pinv);
+                    pv.take_changes()
+                } else {
+                    vec![("profile.image_path", path.clone())]
+                };
+                self.apply_settings(changes);
+                // M3-18 — 선택은 보류 편입: 적용을 눌러야 저장·전파된다(원자적 저장).
+                self.set_status(format!("프로필 이미지 = {path} — 적용 시 반영"));
+                if let Some((pid, _)) = self.windows.iter().find(|(_, e)| e.role == Role::Profile) {
+                    let pid = *pid;
+                    self.request_redraw(pid);
+                }
+            }
+            PickerPurpose::SettingsBackupDir => {
+                let m = self.do_backup_settings(&p);
+                self.set_status(m);
+            }
+            PickerPurpose::SettingsRestoreFile => {
+                let m = self.do_restore_settings(&p);
+                self.set_status(m);
+            }
+            PickerPurpose::HistoryBackupDir => {
+                let m = self.do_backup_history(&p);
+                self.set_status(m);
+            }
+            PickerPurpose::HistoryRestoreDir => {
+                let m = self.do_restore_history_files(&paths);
+                self.set_status(m);
+            }
+            PickerPurpose::LicenseFile => self.license_install(&p),
+        }
+        if let Some(mid) = self.main_id {
+            self.request_redraw(mid);
+        }
+    }
+
+    /// 설정 백업(08-15 · 고급) — 대기 중 스냅샷까지 flush한 뒤 settings.cfg를 **고른 저장 경로**로 복사
+    /// (P3 — 저장 대화상자가 이름·덮어쓰기 확인을 맡는다).
+    fn do_backup_settings(&mut self, dst: &std::path::Path) -> String {
         self.conf_save(false); // 스케줄 대기분 포함 최신본을 파일에
         let src = self.data_dir.join("settings.cfg");
-        let dst = dir.join(self.picker_save_name(PickerPurpose::SettingsBackupDir));
-        match std::fs::copy(&src, &dst) {
+        match std::fs::copy(&src, dst) {
             Ok(_) => format!("설정 백업 완료 — {}", dst.display()),
             Err(e) => format!("설정 백업 실패: {e}"),
         }
@@ -9975,16 +9945,10 @@ impl App {
 
     /// 신원 키 백업(M2-5a · 사용자 요청 08-11) — 현재 폴더로 복사. 기본 이름에 지문이
     /// 들어가고, 동명 파일이 있으면 덮어쓰지 않고 번호를 붙인다.
-    fn do_backup_identity(&mut self, dir: &std::path::Path) -> String {
+    fn do_backup_identity(&mut self, dst: &std::path::Path) -> String {
+        // P3: 저장 대화상자가 이름(기본 = 지문 포함)·덮어쓰기 2단 확인을 맡는다 — 고른 경로 그대로.
         let src = self.data_dir.join("identity.key");
-        let base = format!("nexa-beep-identity-{}", self.identity.peer_id().short());
-        let mut dst = dir.join(format!("{base}.key"));
-        let mut n = 2;
-        while dst.exists() {
-            dst = dir.join(format!("{base}-{n}.key"));
-            n += 1;
-        }
-        match std::fs::copy(&src, &dst) {
+        match std::fs::copy(&src, dst) {
             Ok(_) => format!("신원 키 백업됨 — {} (안전하게 보관하세요)", dst.display()),
             Err(e) => format!("백업 실패: {e}"),
         }
@@ -14797,6 +14761,7 @@ impl App {
             }
             Role::Picker => {
                 if let Some(pv) = &mut self.picker_view {
+                    use nbeep_ui::Control as _;
                     pv.set_scale(scale);
                     pv.set_bounds(Rect::new(0, 0, w, h), &mut inv);
                 }
@@ -15830,143 +15795,57 @@ impl App {
                 }
             }
             Role::Picker => {
-                if matches!(
+                // nexa-dlg FilePicker(P3) — Esc = 취소(열린 콤보·메뉴·경로 편집이 먼저 받는다).
+                let esc = matches!(
                     ev,
                     InputEvent::Key {
                         key: Key::Escape,
                         ..
                     }
-                ) {
-                    self.picker_view = None;
-                    self.picker_ctx = None;
-                    self.windows.remove(&id); // 취소
-                } else if let Some(pv) = &mut self.picker_view {
-                    pv.on_event(&ev, &mut inv);
-                    if matches!(ev, InputEvent::MouseDown { .. }) {
-                        if let Some(label) = pv.selected_label() {
-                            // ── 탐색형(백업·복원) — 라벨을 행위로 해석(M2-5a) ──
-                            if let Some(ctx) = &self.picker_ctx {
-                                let hit = ctx
-                                    .entries
-                                    .iter()
-                                    .find(|(l, _)| *l == label)
-                                    .map(|(_, e)| e.clone());
-                                match hit {
-                                    Some(PickEntry::Up) => {
-                                        if let Some(ctx) = &mut self.picker_ctx {
-                                            if let Some(p) = ctx.dir.parent() {
-                                                ctx.dir = p.to_path_buf();
-                                            }
-                                        }
-                                        self.repopulate_picker(id);
-                                    }
-                                    Some(PickEntry::Dir(p)) => {
-                                        if let Some(ctx) = &mut self.picker_ctx {
-                                            ctx.dir = p;
-                                        }
-                                        self.repopulate_picker(id);
-                                    }
-                                    Some(PickEntry::SaveHere) => {
-                                        let dir = ctx.dir.clone();
-                                        let m = match ctx.purpose {
-                                            PickerPurpose::SettingsBackupDir => {
-                                                self.do_backup_settings(&dir)
-                                            }
-                                            PickerPurpose::HistoryBackupDir => {
-                                                self.do_backup_history(&dir)
-                                            }
-                                            PickerPurpose::HistoryRestoreDir => {
-                                                self.do_restore_history_dir(&dir)
-                                            }
-                                            _ => self.do_backup_identity(&dir),
-                                        };
-                                        self.set_status(m);
-                                        self.picker_view = None;
-                                        self.picker_ctx = None;
-                                        self.windows.remove(&id);
-                                        if let Some(mid) = self.main_id {
-                                            self.request_redraw(mid);
-                                        }
-                                    }
-                                    Some(PickEntry::File(p)) => {
-                                        match ctx.purpose {
-                                            PickerPurpose::ProfileImage => {
-                                                // 프로필 이미지 경로 반영(M3-17) — 위젯에
-                                                // 넣고 **위젯이 보고한 변경 전부**를 정식
-                                                // 깔때기(apply_settings)로 저장한다.
-                                                // ★ 08-14 실기: 여기서 take_changes를
-                                                // 버려서 최근 목록(image_recent)이 영속되지
-                                                // 않았다(재시작 = 전부 증발). 디코드도
-                                                // apply_settings의 image_path 팔이 한다
-                                                // (수동 spawn과 이중이었다).
-                                                // 관리 복사(08-16) — 사본 경로가 정본.
-                                                let path =
-                                                    self.manage_profile_image(&p.to_string_lossy());
-                                                let changes =
-                                                    if let Some(pv) = &mut self.profile_view {
-                                                        let mut pinv = Invalidations::default();
-                                                        pv.set_image_path(&path, &mut pinv);
-                                                        pv.take_changes()
-                                                    } else {
-                                                        vec![("profile.image_path", path.clone())]
-                                                    };
-                                                self.apply_settings(changes);
-                                                // M3-18 — 선택은 보류 편입: 적용을
-                                                // 눌러야 저장·전파된다(원자적 저장).
-                                                self.set_status(format!(
-                                                    "프로필 이미지 = {path} — 적용 시 반영"
-                                                ));
-                                                if let Some((pid, _)) = self
-                                                    .windows
-                                                    .iter()
-                                                    .find(|(_, e)| e.role == Role::Profile)
-                                                {
-                                                    let pid = *pid;
-                                                    self.request_redraw(pid);
-                                                }
-                                            }
-                                            PickerPurpose::SettingsRestoreFile => {
-                                                let m = self.do_restore_settings(&p);
-                                                self.set_status(m);
-                                            }
-                                            PickerPurpose::HistoryRestoreDir => {
-                                                let m = self.do_restore_history_files(&[p]);
-                                                self.set_status(m);
-                                            }
-                                            PickerPurpose::LicenseFile => {
-                                                self.license_install(&p);
-                                            }
-                                            _ => {
-                                                let m = self.do_restore_identity(&p);
-                                                self.set_status(m);
-                                            }
-                                        }
-                                        self.picker_view = None;
-                                        self.picker_ctx = None;
-                                        self.windows.remove(&id);
-                                        if let Some(mid) = self.main_id {
-                                            self.request_redraw(mid);
-                                        }
-                                    }
-                                    None => {}
-                                }
-                                return;
-                            }
-                            // ── 갤러리 실증(기존) — Choose 값 반영 + 창 닫기 ──
-                            if let Some(gv) = &mut self.gallery_view {
-                                let mut ginv = Invalidations::default();
-                                gv.set_choose_value(&label, &mut ginv);
-                            }
-                            self.picker_view = None;
-                            self.windows.remove(&id);
-                            if let Some((gid, _)) =
-                                self.windows.iter().find(|(_, e)| e.role == Role::Gallery)
-                            {
-                                let gid = *gid;
-                                self.request_redraw(gid);
-                            }
-                            return;
-                        }
+                );
+                let Some(pv) = &mut self.picker_view else {
+                    return;
+                };
+                if esc && !pv.popup_open() {
+                    self.close_picker(id);
+                    return;
+                }
+                // 목록 헤더 경계 위 = ↔ 커서(열 폭 조절).
+                if let InputEvent::MouseMove { x, y } = ev {
+                    let over = pv.header_edge_hover(x, y);
+                    if let Some(e) = self.windows.get(&id) {
+                        e.window.set_cursor(if over {
+                            winit::window::CursorIcon::ColResize
+                        } else {
+                            winit::window::CursorIcon::Default
+                        });
+                    }
+                }
+                let Some(pv) = &mut self.picker_view else {
+                    return;
+                };
+                pv.on_event(&ev, &mut inv);
+                match pv.take_action() {
+                    // 행동 없음 = 보이는 변화(hover·선택·목록)만 — sql file_win처럼 매 입력 다시 그린다.
+                    nbeep_ui::PickerAction::None => inv.push(Rect::new(0, 0, 1, 1)),
+                    nbeep_ui::PickerAction::CopyText(text) => {
+                        self.set_status(if nbeep_plat::clipboard::set_text(&text) {
+                            nbeep_core::t(nbeep_core::Msg::LicNoteAddrCopied).to_string()
+                        } else {
+                            "⚠ 클립보드 쓰기 실패".to_string()
+                        });
+                    }
+                    nbeep_ui::PickerAction::Cancel => {
+                        self.close_picker(id);
+                        return;
+                    }
+                    nbeep_ui::PickerAction::Confirm(p) => {
+                        self.finish_picker(id, vec![p]);
+                        return;
+                    }
+                    nbeep_ui::PickerAction::ConfirmMany(v) => {
+                        self.finish_picker(id, v);
+                        return;
                     }
                 }
             }
@@ -18883,9 +18762,26 @@ impl ApplicationHandler<AppEvent> for App {
                 }
             }
         }
+        // 파일 대화상자 틱(P3 — 폴더 목록·아이콘 도착·hover 페이드·덮어쓰기 무장 게이지).
+        let mut wake_ms = 200;
+        if let Some(pv) = &mut self.picker_view {
+            if pv.tick(bar_now) {
+                if let Some((pid, _)) = self.windows.iter().find(|(_, e)| e.role == Role::Picker) {
+                    let pid = *pid;
+                    self.request_redraw(pid);
+                }
+            }
+            if self
+                .picker_view
+                .as_ref()
+                .is_some_and(nbeep_ui::FilePicker::animating)
+            {
+                wake_ms = 16; // 애니메이션·목록 적재 중만 ~60Hz(끝나면 유휴 5Hz로 복귀)
+            }
+        }
         // 유휴에도 ~5Hz로 깨어나 발견 갱신·종료 신호를 폴한다(입력 없을 때도 목록이 산다).
         el.set_control_flow(ControlFlow::wait_duration(
-            std::time::Duration::from_millis(200),
+            std::time::Duration::from_millis(wake_ms),
         ));
     }
 
@@ -20480,7 +20376,8 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         my_avatar: None,
         tray: None,
         peer_info_view: None,
-        picker_ctx: None,
+        picker_purpose: None,
+        picker_last_dir: None,
         pending_picker: None,
         data_dir: dir,
         live,
