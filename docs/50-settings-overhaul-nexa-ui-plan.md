@@ -113,5 +113,6 @@
 | 10-09 | P4 ⑤ ✅ | 설정 › 고급 › 라이선스 정보 카드 4행(Kind::Info) |
 | 10-09 | 실기 피드백 | 타입어헤드(표시 이름·↑ 감김·sql 설정) · 설정 preedit · **카드 레이아웃(사용자 확정 sql 모양)** · 위치 드롭다운 · 트레이 배지 M3-2e |
 | 10-09 | P5 🚧 | docs/45 초안(협업 `3ba3bf5`) · 14 §10-3 · 위키 User-Guide 로컬 · 캡처 = 사용자 실기 뒤 · 설정 진입점 3가지 · 트레이 설정… · "시스템 (값)" |
+| 10-10 | mac 점검 | 내 기기 목록 창 Retina 절반 높이 수정(`111a4e6`) · 스크립트 캡처 4(기기·라이선스·설정·정보) 정상 · **T-8 mac = 3.5MB · footprint 20MB** · T-9 발견 ✓ · 영어 UI = `AppleLanguages` en-KR(설계) · 잔여 T-5·T-6 mac 육안 |
 | 10-09 | ★**v0.3.1 ✅ 공개** | 패치 — Linux 실기 수정 7건(트레이 설정 창·분리 대화 창 활성화 토큰·한글 타입어헤드·힌트 wrap·테마 라벨) · 내 기기 목록 창 · 툴팁 언어(nexa-ui 190차) · apt 자동 갱신 첫 성공 · choco 제외(0.3.0 검수 중) · CI rustdoc 2회 → `tools/gate.sh` |
 | 10-09 | ★**v0.3.0 ✅ 공개** | 태그 `v0.3.0` · release run 37924847844 전 job success · 자산 15(rpm 첫 등장) · brew ✓ · choco 0.3.0 ×2 자동 제출(모더레이션 대기) · winget 제외 · 1차 CI rustdoc 실패 → 18 §1 게이트 행 · 위키 Release-Notes/Home/Install/User-Guide 0.3.0 |
