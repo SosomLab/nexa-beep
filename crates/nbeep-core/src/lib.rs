@@ -33,6 +33,7 @@ pub mod profile;
 pub mod rate;
 pub mod redact;
 pub mod safetext;
+pub mod sendercopy;
 pub mod session;
 pub mod sgroup;
 pub mod trust;
@@ -69,6 +70,7 @@ pub use ports::{
 pub use profile::{ProfileMsg, PROFILE_IMAGE_CHUNK, PROFILE_IMAGE_MAX};
 pub use rate::{negotiate, Pacer, RateLimit, RateMeter};
 pub use safetext::{find_links, sanitize_message, LinkSpan, SafeText};
+pub use sendercopy::{CopyError, SenderCopy, SENDER_COPY_TAG};
 pub use session::{Session, SessionError};
 pub use sgroup::{GroupUid, Roster, SGroupMsg};
 pub use trust::{MemoryTrustStore, PinRecord, TrustDecision, TrustStore};

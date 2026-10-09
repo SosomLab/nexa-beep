@@ -318,6 +318,16 @@ enum AppEvent {
     UserProof { peer: PeerId, proof: [u8; 32] },
     /// 형제가 보낸 사용자 키 봉인본(ADR-0015 S2 · 태그 9) — 열기·병합은 메인.
     UserKeyBlob { peer: PeerId, sealed: Vec<u8> },
+    /// 형제가 보낸 sender copy(ADR-0015 S3 · 태그 19) — `peer`(형제)가 `to`에게 보낸
+    /// 내 메시지. 형제 세션 판정·표시는 메인(알림·ack 없음).
+    SenderCopy {
+        peer: PeerId,
+        to: PeerId,
+        to_name: String,
+        text: nbeep_core::SafeText,
+        seq: u64,
+        importance: u8,
+    },
     /// 서명 기기 목록 도착(ADR-0015 S2-e · 태그 4) — 서명·소속 검증은 메인.
     UserHello {
         peer: PeerId,
@@ -1588,6 +1598,25 @@ fn spawn_session_actor(
                                 .is_err()
                             {
                                 return;
+                            }
+                        }
+                    }
+                    StreamId::Control if nbeep_core::SenderCopy::is_copy(&bytes) => {
+                        // sender copy(ADR-0015 S3 · 태그 19) — 형제가 남에게 보낸 내 메시지.
+                        // 발신자 검증(원 발신 = 세션 상대)은 여기서, 형제 세션 판정은 메인.
+                        if let Ok(c) = nbeep_core::SenderCopy::decode(&bytes, peer) {
+                            if let nbeep_core::MessageBody::Text(t) = c.msg.body {
+                                let ev = AppEvent::SenderCopy {
+                                    peer,
+                                    to: c.to,
+                                    to_name: c.to_name,
+                                    text: nbeep_core::sanitize_message(&t),
+                                    seq: c.msg.seq,
+                                    importance: c.msg.importance.to_nibble(),
+                                };
+                                if proxy.send_event(ev).is_err() {
+                                    return;
+                                }
                             }
                         }
                     }
@@ -7853,6 +7882,93 @@ impl App {
         }
     }
 
+    /// sender copy 발신(ADR-0015 S3 · [docs/46 §5-1]) — `to`에게 방금 보낸 1:1 메시지를
+    /// **살아 있는 형제 전부**에 건넨다. 형제 세션(PSK·증명)만 대상이며 `to` 자신이 형제면
+    /// 그 형제는 원본을 이미 받았으므로 뺀다. 공지(브로드캐스트)는 형제도 수신자라 복사하지 않는다.
+    fn send_sender_copies(&self, to: PeerId, msg: &nbeep_core::ChatMessage) {
+        let targets = crate::userident::copy_targets(
+            self.user_state.active(),
+            msg.broadcast,
+            &self.siblings,
+            to,
+        );
+        if targets.is_empty() {
+            return;
+        }
+        let frame = nbeep_core::SenderCopy {
+            to,
+            to_name: self.peer_title(to),
+            msg: msg.clone(),
+        }
+        .encode();
+        for sib in &targets {
+            if let Some(conv) = self.conversations.get(sib) {
+                let _ = conv.out_tx.send(SessionCmd::Control(vec![frame.clone()]));
+            }
+        }
+        if self.user_trace {
+            eprintln!(
+                "[user] copy to siblings={} for {} seq={}",
+                targets.len(),
+                to.short(),
+                msg.seq
+            );
+        }
+    }
+
+    /// sender copy 수신 — **형제 세션에서 온 것만**(fail-closed). `to`와의 대화방에 **내 말풍선**
+    /// 으로 넣는다: 알림·안읽음·Delivered ack 없음(내가 보낸 것이다 · §5-1). 세션이 없는 상대면
+    /// 보관 대화(parked)에 붙이고 목록 행을 만든다(이름 = 사본의 힌트 · 신뢰 근거 아님).
+    /// 한계: 핀 기록이 없는 상대의 기록은 재시작 때 매핑되지 않는다(S4 매핑 표 몫).
+    fn on_sender_copy(
+        &mut self,
+        peer: PeerId,
+        to: PeerId,
+        to_name: &str,
+        text: nbeep_core::SafeText,
+        seq: u64,
+        importance: u8,
+    ) {
+        let me = self.identity.peer_id();
+        if !crate::userident::accept_copy(
+            self.siblings.contains(&peer),
+            self.user_state.active(),
+            to,
+            me,
+        ) {
+            if self.user_trace {
+                eprintln!("[user] copy from {} dropped (not sibling)", peer.short());
+            }
+            return;
+        }
+        if !self.dedup.accept(peer, seq) {
+            return; // 같은 (발신 기기, seq) — 다중 경로 중복
+        }
+        let (at_ms, wall) = now_stamp();
+        let line = ChatLine::text(true, text, at_ms, wall).with_importance(importance & 0x3);
+        if let Some(conv) = self.conversations.get_mut(&to) {
+            conv.lines.push(line.clone());
+        } else {
+            self.parked_lines.entry(to).or_default().push(line.clone());
+            if self.table.get(to).is_none() && !self.extra_peers.contains_key(&to) {
+                let name = nbeep_core::DisplayName::parse(to_name)
+                    .unwrap_or_else(|_| nbeep_core::default_display_name(None, &to));
+                self.extra_peers.insert(to, name);
+            }
+        }
+        self.trust.note_chat(to, unix_now_ms());
+        self.record_history(to);
+        let mut inv = Invalidations::default();
+        if let Some(chat) = self.chats.get_mut(&to) {
+            chat.push_line(line, &mut inv);
+        }
+        if self.user_trace {
+            eprintln!("[user] copy from {} -> thread {}", peer.short(), to.short());
+        }
+        self.redraw_conversation(to);
+        self.refresh_and_redraw();
+    }
+
     /// 서명 기기 목록 수신(S2-e) — ① 서명 ② 제시자 자신이 목록에 있다(A-1) ③ 버전 단조(저장소가
     /// 판정). 통과 = trust.seg에 (공개키·핸들·버전) 기록 → 카드·핸들 충돌 표식. **내 사용자 키**를
     /// 제시한 기기면 내 기기 집합이 바뀐 것 → 목록 버전 +1·재송신. 형제 승격은 여기서 하지 않는다
@@ -11846,13 +11962,20 @@ impl App {
     /// 셰레딩 D-18 §7 08-21) → 원자적 `data/history/{short}.seg`.
     /// 빈 스레드 = 파일 삭제 **+ 키 폐기**(지우기 = 셰레딩). 봉인 실패 = 저장 포기.
     fn record_history(&mut self, peer: PeerId) {
-        let Some(conv) = self.conversations.get(&peer) else {
+        // 세션 없는 대화방(parked)도 저장한다(S3 sender copy — 형제가 대신 보낸 내 메시지는
+        // 세션이 없는 상대 앞으로도 온다). 단 **대기 풍선은 빼고**: 대기 큐는 pending/에
+        // 따로 영속되며 부팅 때 parked에 다시 붙는다 — 여기 섞으면 재시작마다 중복된다.
+        let plain = if let Some(conv) = self.conversations.get(&peer) {
+            encode_history(&conv.lines)
+        } else if let Some(parked) = self.parked_lines.get(&peer) {
+            let kept: Vec<ChatLine> = parked.iter().filter(|l| !l.queued).cloned().collect();
+            encode_history(&kept)
+        } else {
             return;
         };
         let dir = self.data_dir.join("history");
         let stem = peer.short();
         let path = dir.join(format!("{stem}.seg"));
-        let plain = encode_history(&conv.lines);
         if plain.is_empty() {
             let _ = std::fs::remove_file(&path);
             self.datakeys.destroy(&stem);
@@ -11996,6 +12119,7 @@ impl App {
             if let Some(chat) = self.chats.get_mut(&peer) {
                 chat.resolve_queued(m.at_ms, seq, &mut inv);
             }
+            self.send_sender_copies(peer, &msg); // S3 — 실제로 나간 순간에 형제에게도
             self.ledger.note_sent(peer);
             sent += 1;
         }
@@ -13881,6 +14005,7 @@ impl App {
                         uid,
                         seq: self.seq.issue(),
                         text: text.as_str().to_string(),
+                        sender: None, // P-10 kind 9 발신은 구버전 소진 후(해석기 선배포)
                     }
                     .encode();
                     if conv.out_tx.send(SessionCmd::Group(vec![frame])).is_ok() {
@@ -14051,6 +14176,7 @@ impl App {
                         uid,
                         seq: self.seq.issue(),
                         text: text.clone(),
+                        sender: None, // P-10 kind 9 발신은 구버전 소진 후(해석기 선배포)
                     }
                     .encode();
                     conv.out_tx.send(SessionCmd::Group(vec![frame])).is_ok()
@@ -14930,7 +15056,17 @@ impl App {
                     self.refresh_and_redraw();
                 }
             }
-            G::Msg { uid, seq, text } => {
+            G::Msg {
+                uid,
+                seq,
+                text,
+                sender,
+            } => {
+                // P-10(S3): 발신 기기를 밝힌 본문은 **직접 팬아웃에서 세션 상대와 같아야** 한다
+                //   (릴레이·컨텐츠 모드 전까지 재전달은 없다 — 1:1 `SenderMismatch`와 같은 결).
+                if sender.is_some_and(|d| d != peer) {
+                    return;
+                }
                 let Some(s) = self.groups.shared_by_uid(uid) else {
                     return; // 모르는 방(미수락·해산) — 버림(fail-closed)
                 };
@@ -15929,6 +16065,7 @@ impl App {
                     } else {
                         self.status =
                             nbeep_core::tf(nbeep_core::Msg::StfSentSeq, &[&msg.seq.to_string()]);
+                        self.send_sender_copies(peer, &msg); // S3 — 내 다른 기기에도
                     }
                 }
                 self.record_history(peer); // 대화 기록 영속(M2-5b · 빌림 밖)
@@ -17024,6 +17161,14 @@ impl ApplicationHandler<AppEvent> for App {
             AppEvent::UserProof { peer, proof } => self.on_user_proof(peer, proof),
             AppEvent::UserKeyBlob { peer, sealed } => self.on_user_key_blob(peer, &sealed),
             AppEvent::UserHello { peer, hello } => self.on_user_hello(peer, &hello),
+            AppEvent::SenderCopy {
+                peer,
+                to,
+                to_name,
+                text,
+                seq,
+                importance,
+            } => self.on_sender_copy(peer, to, &to_name, text, seq, importance),
             AppEvent::Succession { peer, doc } => self.on_succession(peer, &doc),
             AppEvent::ChatAck {
                 peer,

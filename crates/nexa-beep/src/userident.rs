@@ -596,6 +596,30 @@ pub(crate) fn derive_and_load(
     }
 }
 
+/// sender copy 대상(ADR-0015 S3) — 살아 있는 형제 중 대화 상대 `to`를 뺀 전부(키 바이트 정렬 —
+/// 결정적). 사용자 기능이 꺼졌거나 공지(형제도 원 수신자)면 빈 목록.
+#[must_use]
+pub(crate) fn copy_targets(
+    active: bool,
+    broadcast: bool,
+    siblings: &std::collections::HashSet<PeerId>,
+    to: PeerId,
+) -> Vec<PeerId> {
+    if !active || broadcast {
+        return Vec::new();
+    }
+    let mut v: Vec<PeerId> = siblings.iter().copied().filter(|p| *p != to).collect();
+    v.sort_unstable_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
+    v
+}
+
+/// sender copy 수신 허용(fail-closed) — 형제 세션에서 왔고 · 사용자 기능이 켜져 있고 ·
+/// 대화 상대가 나 자신이 아닐 것(내게 보낸 원본은 이미 직접 받았다).
+#[must_use]
+pub(crate) fn accept_copy(from_sibling: bool, active: bool, to: PeerId, me: PeerId) -> bool {
+    from_sibling && active && to != me
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
@@ -888,5 +912,41 @@ mod tray_badge_tests {
         assert!(!tray_badges(ServerLink::Held, 0, false).relay);
         let b = tray_badges(ServerLink::Connected(ServerKind::Relay), 0, true);
         assert!(b.relay && !b.lan && b.xfer);
+    }
+}
+
+#[cfg(test)]
+mod sender_copy_tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    fn pid(b: u8) -> PeerId {
+        PeerId::from_bytes([b; 32])
+    }
+
+    /// 형제 3대(A2·A3·C?) 중 대화 상대가 형제(A3)면 그 형제는 원본을 받았으므로 빠진다.
+    #[test]
+    fn copy_targets_excludes_recipient_and_respects_switches() {
+        let sibs: HashSet<PeerId> = [pid(3), pid(2)].into_iter().collect();
+        assert_eq!(
+            copy_targets(true, false, &sibs, pid(9)),
+            vec![pid(2), pid(3)]
+        );
+        assert_eq!(copy_targets(true, false, &sibs, pid(3)), vec![pid(2)]);
+        assert!(copy_targets(false, false, &sibs, pid(9)).is_empty());
+        assert!(
+            copy_targets(true, true, &sibs, pid(9)).is_empty(),
+            "공지는 복사 안 함"
+        );
+        assert!(copy_targets(true, false, &HashSet::new(), pid(9)).is_empty());
+    }
+
+    #[test]
+    fn accept_copy_is_fail_closed() {
+        let me = pid(1);
+        assert!(accept_copy(true, true, pid(9), me));
+        assert!(!accept_copy(false, true, pid(9), me), "형제 아님");
+        assert!(!accept_copy(true, false, pid(9), me), "기능 꺼짐");
+        assert!(!accept_copy(true, true, me, me), "나에게 보낸 원본의 사본");
     }
 }

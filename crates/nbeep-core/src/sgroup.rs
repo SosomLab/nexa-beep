@@ -173,6 +173,11 @@ pub enum SGroupMsg {
         seq: u64,
         /// 본문(수신측 표시 전 무해화).
         text: String,
+        /// **원 발신 기기**(P-10 · ADR-0015 S3 · V1-3) — `Some`이면 kind 9(`K_MSG_FROM`)로
+        /// 실린다. 직접 팬아웃에서는 세션 상대와 같아야 하며(수신측 검증), 릴레이·컨텐츠
+        /// 모드에서 "누가 보냈나"의 근거가 된다. **발신은 아직 `None`**(구버전 구성원은
+        /// 미지 kind를 버리므로 — 해석기를 한 버전 먼저 배포한다 · 10-09).
+        sender: Option<PeerId>,
     },
     /// 탈퇴 통지(구성원 → 소유자).
     Leave {
@@ -204,6 +209,8 @@ const K_SUGGEST: u8 = 7;
 /// 미지 kind를 조용히 폐기한다(전방 호환). 이 번호를 다른 용도로 쓰지 말 것.
 #[allow(dead_code)]
 const K_CMSG_RESERVED: u8 = 8;
+/// 발신 기기 동반 본문(P-10 · 10-09 S3) — `[uid 32 ‖ sender 32 ‖ seq 8 ‖ text]`.
+const K_MSG_FROM: u8 = 9;
 
 impl SGroupMsg {
     /// 와이어 인코딩(kind 1B + 본문).
@@ -230,9 +237,17 @@ impl SGroupMsg {
                 v.extend_from_slice(&roster.encode());
                 v
             }
-            SGroupMsg::Msg { uid, seq, text } => {
-                let mut v = vec![K_MSG];
+            SGroupMsg::Msg {
+                uid,
+                seq,
+                text,
+                sender,
+            } => {
+                let mut v = vec![if sender.is_some() { K_MSG_FROM } else { K_MSG }];
                 v.extend_from_slice(&uid.0);
+                if let Some(s) = sender {
+                    v.extend_from_slice(s.as_bytes());
+                }
                 v.extend_from_slice(&seq.to_be_bytes());
                 v.extend_from_slice(text.as_bytes());
                 v
@@ -283,7 +298,24 @@ impl SGroupMsg {
                 let uid = uid32(rest)?;
                 let seq = u64::from_be_bytes(rest.get(32..40)?.try_into().ok()?);
                 let text = std::str::from_utf8(rest.get(40..)?).ok()?.to_string();
-                Some(SGroupMsg::Msg { uid, seq, text })
+                Some(SGroupMsg::Msg {
+                    uid,
+                    seq,
+                    text,
+                    sender: None,
+                })
+            }
+            K_MSG_FROM => {
+                let uid = uid32(rest)?;
+                let sender = PeerId::from_bytes(rest.get(32..64)?.try_into().ok()?);
+                let seq = u64::from_be_bytes(rest.get(64..72)?.try_into().ok()?);
+                let text = std::str::from_utf8(rest.get(72..)?).ok()?.to_string();
+                Some(SGroupMsg::Msg {
+                    uid,
+                    seq,
+                    text,
+                    sender: Some(sender),
+                })
             }
             K_LEAVE => (rest.len() == 32).then(|| SGroupMsg::Leave {
                 uid: uid32(rest).unwrap_or(GroupUid([0; 32])),
@@ -389,6 +421,13 @@ mod tests {
                 uid: uid(4),
                 seq: 42,
                 text: "안녕 방!".into(),
+                sender: None,
+            },
+            SGroupMsg::Msg {
+                uid: uid(4),
+                seq: 43,
+                text: "발신 기기 동반".into(),
+                sender: Some(pid(8)),
             },
             SGroupMsg::Leave { uid: uid(6) },
             SGroupMsg::Suggest {
@@ -401,5 +440,29 @@ mod tests {
         // 미지 kind = None(전방 호환 — 조용히 버림).
         assert_eq!(SGroupMsg::decode(&[99, 1, 2, 3]), None);
         assert_eq!(SGroupMsg::decode(&[]), None);
+    }
+
+    /// P-10 — 발신 기기 없는 본문은 **종전 바이트 그대로**(kind 5 · 구버전 호환),
+    /// 있는 본문은 kind 9. 잘린 kind 9 = None.
+    #[test]
+    fn msg_sender_rides_new_kind_only_when_present() {
+        let plain = SGroupMsg::Msg {
+            uid: uid(1),
+            seq: 7,
+            text: "x".into(),
+            sender: None,
+        }
+        .encode();
+        assert_eq!(plain[0], K_MSG);
+        assert_eq!(plain.len(), 1 + 32 + 8 + 1);
+        let from = SGroupMsg::Msg {
+            uid: uid(1),
+            seq: 7,
+            text: "x".into(),
+            sender: Some(pid(2)),
+        }
+        .encode();
+        assert_eq!(from[0], K_MSG_FROM);
+        assert_eq!(SGroupMsg::decode(&from[..60]), None);
     }
 }
