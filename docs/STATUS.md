@@ -3,6 +3,8 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
+> **갱신: 2026-10-09 8차 (KST · Linux · main)** — ★**v0.3.0 공개**(`v0.3.0` 태그 · release run 37924847844 전 job success · **자산 15종(rpm 첫 등장)** · brew 0.3.0 ✓ · **Chocolatey 0.3.0 ×2 자동 제출 성공**(모더레이션 대기 · `CHOCO_PUSH` 상시 ON 전환) · winget 제외(#436462·#436461 OPEN) · 서버 beepd-v0.2.6 유지 · 위키 Release-Notes/Home/Install/User-Guide 0.3.0). 1차 CI 실패 = rustdoc 한글 대괄호 링크 오해 8곳 → 18 §1 rustdoc 게이트 행 추가. push = nexa-ui c34b4e4 · nexa-license a75b655 · beep · 위키. 다음 = **사용자 실기**(설정 단축키·트레이 설정…·"시스템 (값)" + T-1~10 + 대화상자 ①~⑧) → P5 캡처 → choco 승인 확인 → S3. [journal 8차](journal/2026-10-09.md)
+
 > **갱신: 2026-10-09 7차 (KST · Linux · main)** — ★**v0.3.0 릴리스 착수**(사용자 지시 · 18 §5): 버전 0.3.0(minor — 설정 개편·nexa-ui·라이선스·파일 대화상자·rpm·트레이 배지) · 채널 = brew + **Chocolatey 첫 자동 제출(`CHOCO_PUSH` true — 0.2.17/0.2.6 승인 확인)** · winget 제외(#436462·#436461 OPEN) · push 순서 nexa-ui → nexa-license → beep → 태그 · 서버 무변경. "시스템 (한국어)" 라벨(`5b53a65`). [journal 8차](journal/2026-10-09.md)
 
 > **갱신: 2026-10-09 6차 (KST · Linux · main)** — **트레이 메뉴 "설정…"**(3-OS · 열기와 종료 사이 · 단축키 표기 ⌘/Ctrl+, · 앱 = 메인 복원 + 설정 열기 · Linux dbusmenu 실측 ✓ · `b50a2e1`) · ⌘/Ctrl+, 는 기존 경로 재점검(변경 0) · docs/45 설정 진입점 정정(협업 — "툴바 아바타 › 설정"은 틀린 안내 → 메뉴·단축키·트레이 3가지). 701 green. 다음 = 사용자 실기(설정 단축키·트레이 설정 + T-1~10 + 대화상자 ①~⑧). [journal](journal/2026-10-09.md)
