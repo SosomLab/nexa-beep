@@ -12,6 +12,8 @@ workspace = true
 
 [dependencies]
 nbeep-core.workspace = true
+# 라이선스 화면의 보기 생성(`license_win::license_view` · docs/50 P4) — 판정 단일 원천은 nbeep-license.
+nbeep-license.workspace = true
 # ★ 10-09 nexa-ui 이관(docs/50 P1-c) — 종전 nbeep-ctl·nbeep-gfx(같은 계보 · 삭제).
 nexa-ctl.workspace = true
 nexa-gfx.workspace = true

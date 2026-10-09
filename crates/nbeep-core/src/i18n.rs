@@ -1162,6 +1162,81 @@ pub enum Msg {
     StSettingsFileOpened,
     /// 상태줄 "키를 복사했습니다: {}".
     StKeyCopied,
+    // ── P4 license(10-09 · docs/50 D-33-6·7 · nbeep-license · nbeep-ui license_win) ──
+    /// 도움말 ▸ 라이선스… 메뉴 항목·창 제목 꼬리.
+    LicMenu,
+    /// 라이선스 창 제목.
+    LicTitle,
+    /// 상태 줄: 파일 없음(무료 · 비상업).
+    LicStateFree,
+    /// 상태 줄: 정식 — `{}` = 등급(pro·org…).
+    LicStateLicensed,
+    /// 상태 줄: 무효 — `{}` = 사유(LicWhy*).
+    LicStateInvalid,
+    /// 상태 줄: 영구 라이선스의 업데이트 기한 뒤 빌드 — `{}` = updates_until.
+    LicStateOutdated,
+    /// 상태 줄: 만료 — `{}` = expires.
+    LicStateExpired,
+    /// 무효 사유: 서명.
+    LicWhySignature,
+    /// 무효 사유: 다른 제품.
+    LicWhyProduct,
+    /// 무효 사유: 다른 기기.
+    LicWhyMachine,
+    /// 무효 사유: 이 빌드에 검증 키 없음.
+    LicWhyNoRoot,
+    /// 무효 사유: 형식(읽을 수 없음·중복 키·손상).
+    LicWhyFormat,
+    /// 표 라벨: 파일.
+    LicRowFile,
+    /// 표 라벨: 라이선스 ID.
+    LicRowId,
+    /// 표 라벨: 사용자.
+    LicRowLicensee,
+    /// 표 라벨: 종류 / 등급.
+    LicRowTier,
+    /// 표 라벨: 유효 기한.
+    LicRowTerm,
+    /// 표 라벨: 업데이트 기한(영구 모델).
+    LicRowUpdates,
+    /// 표 라벨: 빌드일.
+    LicRowBuild,
+    /// 표 라벨: 기기 코드.
+    LicRowMachine,
+    /// 기한 없음.
+    LicTermForever,
+    /// 요청 코드 안내 — `{}` = 보낼 이메일(링크 · 클릭 = 복사).
+    LicReqTitle,
+    /// 요청 코드 메타: 이름(입력 안내).
+    LicReqName,
+    /// 요청 코드 메타: 이메일(입력 안내).
+    LicReqEmail,
+    /// 버튼: 요청 코드 복사(발급기 안내 문구와 일치 — nexa-license presets).
+    LicBtnCopyReq,
+    /// 버튼: 라이선스 파일 열기…(발급기 안내 문구와 일치).
+    LicBtnOpen,
+    /// 버튼: 제거.
+    LicBtnRemove,
+    /// 버튼: 닫기.
+    LicBtnClose,
+    /// 기기 ID 없음 — 요청 코드 불가.
+    LicNoMachine,
+    /// 창 아래 안내(D-33-6).
+    LicHint,
+    /// 결과: 설치 — `{}` = 라이선스 ID.
+    LicNoteInstalled,
+    /// 결과: 거부(쓰지 않음) — `{}` = 상태 사유.
+    LicNoteRejected,
+    /// 결과: 제거.
+    LicNoteRemoved,
+    /// 결과: 제거할 것 없음.
+    LicNoteNothing,
+    /// 결과: 요청 코드 복사.
+    LicNoteCopied,
+    /// 결과: 이메일 주소 복사.
+    LicNoteAddrCopied,
+    /// 결과: 입출력 실패 — `{}` = 오류.
+    LicNoteError,
 }
 
 impl Msg {
@@ -3137,6 +3212,229 @@ impl Msg {
                 "設定ファイルを開きました: {}",
             ],
             Msg::StKeyCopied => ["Copied key: {}", "키를 복사했습니다: {}", "已复制键名: {}", "キーをコピーしました: {}"],
+            // ── P4 license(10-09 · docs/50) ──
+            Msg::LicMenu => [
+                "License…",
+                "라이선스…",
+                "许可证…",
+                "ライセンス…",
+            ],
+            Msg::LicTitle => [
+                "License",
+                "라이선스",
+                "许可证",
+                "ライセンス",
+            ],
+            Msg::LicStateFree => [
+                "Free — non-commercial use",
+                "무료 — 비상업적 사용",
+                "免费 — 非商业用途",
+                "無料 — 非商用利用",
+            ],
+            Msg::LicStateLicensed => [
+                "Licensed — {}",
+                "정식 라이선스 — {}",
+                "已授权 — {}",
+                "ライセンス済み — {}",
+            ],
+            Msg::LicStateInvalid => [
+                "License file is not valid ({}) — running as Free",
+                "라이선스 파일이 유효하지 않습니다({}) — 무료로 동작합니다",
+                "许可证文件无效（{}）— 以免费模式运行",
+                "ライセンスファイルが無効です（{}）— 無料として動作します",
+            ],
+            Msg::LicStateOutdated => [
+                "This build is newer than the license covers (updates until {}) — earlier builds stay licensed",
+                "이 빌드는 라이선스 범위(업데이트 {}까지) 이후에 나왔습니다 — 그 전 버전은 계속 정식입니다",
+                "此版本晚于许可证覆盖范围（更新至 {}）— 之前的版本仍有效",
+                "このビルドはライセンス範囲（更新 {} まで）より新しいものです — それ以前の版は引き続き有効です",
+            ],
+            Msg::LicStateExpired => [
+                "License expired on {}",
+                "라이선스가 {}에 만료되었습니다",
+                "许可证已于 {} 过期",
+                "ライセンスは {} に期限切れになりました",
+            ],
+            Msg::LicWhySignature => [
+                "signature mismatch",
+                "서명 불일치",
+                "签名不匹配",
+                "署名不一致",
+            ],
+            Msg::LicWhyProduct => [
+                "issued for another product",
+                "다른 제품용",
+                "为其他产品签发",
+                "別製品用",
+            ],
+            Msg::LicWhyMachine => [
+                "issued for another PC",
+                "다른 PC용",
+                "为其他电脑签发",
+                "別のPC用",
+            ],
+            Msg::LicWhyNoRoot => [
+                "no verification key in this build",
+                "이 빌드에 검증 키 없음",
+                "此版本没有验证密钥",
+                "このビルドに検証キーがありません",
+            ],
+            Msg::LicWhyFormat => [
+                "unreadable file",
+                "읽을 수 없는 파일",
+                "无法读取的文件",
+                "読めないファイル",
+            ],
+            Msg::LicRowFile => [
+                "File",
+                "파일",
+                "文件",
+                "ファイル",
+            ],
+            Msg::LicRowId => [
+                "License ID",
+                "라이선스 ID",
+                "许可证 ID",
+                "ライセンス ID",
+            ],
+            Msg::LicRowLicensee => [
+                "Licensee",
+                "사용자",
+                "被许可人",
+                "ライセンシー",
+            ],
+            Msg::LicRowTier => [
+                "Type / tier",
+                "종류 / 등급",
+                "类型 / 等级",
+                "種類 / 等級",
+            ],
+            Msg::LicRowTerm => [
+                "Valid until",
+                "유효 기한",
+                "有效期至",
+                "有効期限",
+            ],
+            Msg::LicRowUpdates => [
+                "Updates until",
+                "업데이트 기한",
+                "更新期限",
+                "アップデート期限",
+            ],
+            Msg::LicRowBuild => [
+                "Build date",
+                "빌드일",
+                "构建日期",
+                "ビルド日",
+            ],
+            Msg::LicRowMachine => [
+                "Machine code",
+                "기기 코드",
+                "设备代码",
+                "マシンコード",
+            ],
+            Msg::LicTermForever => [
+                "No expiry",
+                "무기한",
+                "无限期",
+                "無期限",
+            ],
+            Msg::LicReqTitle => [
+                "To get a license, send the request code to {}",
+                "라이선스를 받으려면 요청 코드를 {} 로 보내 주세요",
+                "如需许可证，请将请求代码发送至 {}",
+                "ライセンスを受けるには、リクエストコードを {} へ送ってください",
+            ],
+            Msg::LicReqName => [
+                "Name",
+                "이름",
+                "姓名",
+                "名前",
+            ],
+            Msg::LicReqEmail => [
+                "Email",
+                "이메일",
+                "邮箱",
+                "メール",
+            ],
+            Msg::LicBtnCopyReq => [
+                "Copy request code",
+                "요청 코드 복사",
+                "复制请求代码",
+                "リクエストコードをコピー",
+            ],
+            Msg::LicBtnOpen => [
+                "Open license file…",
+                "라이선스 파일 열기…",
+                "打开许可证文件…",
+                "ライセンスファイルを開く…",
+            ],
+            Msg::LicBtnRemove => [
+                "Remove",
+                "제거",
+                "移除",
+                "削除",
+            ],
+            Msg::LicBtnClose => [
+                "Close",
+                "닫기",
+                "关闭",
+                "閉じる",
+            ],
+            Msg::LicNoMachine => [
+                "This PC's machine ID is unavailable — a request code cannot be made",
+                "이 PC의 기기 ID를 얻을 수 없어 요청 코드를 만들 수 없습니다",
+                "无法获取此电脑的设备 ID — 无法生成请求代码",
+                "このPCのマシンIDを取得できないため、リクエストコードを作れません",
+            ],
+            Msg::LicHint => [
+                "Free for non-commercial use. Commercial use requires a license.",
+                "비상업적 사용은 무료입니다. 상업적 사용에는 라이선스가 필요합니다.",
+                "非商业用途免费。商业用途需要许可证。",
+                "非商用利用は無料です。商用利用にはライセンスが必要です。",
+            ],
+            Msg::LicNoteInstalled => [
+                "Installed — {}",
+                "설치했습니다 — {}",
+                "已安装 — {}",
+                "インストールしました — {}",
+            ],
+            Msg::LicNoteRejected => [
+                "Not installed — {}",
+                "설치하지 않았습니다 — {}",
+                "未安装 — {}",
+                "インストールしませんでした — {}",
+            ],
+            Msg::LicNoteRemoved => [
+                "License removed",
+                "라이선스를 제거했습니다",
+                "已移除许可证",
+                "ライセンスを削除しました",
+            ],
+            Msg::LicNoteNothing => [
+                "No license to remove",
+                "제거할 라이선스가 없습니다",
+                "没有可移除的许可证",
+                "削除するライセンスはありません",
+            ],
+            Msg::LicNoteCopied => [
+                "Request code copied",
+                "요청 코드를 복사했습니다",
+                "已复制请求代码",
+                "リクエストコードをコピーしました",
+            ],
+            Msg::LicNoteAddrCopied => [
+                "Address copied",
+                "주소를 복사했습니다",
+                "已复制地址",
+                "アドレスをコピーしました",
+            ],
+            Msg::LicNoteError => [
+                "Failed — {}",
+                "실패 — {}",
+                "失败 — {}",
+                "失敗 — {}",
+            ],
         }
     }
 }
