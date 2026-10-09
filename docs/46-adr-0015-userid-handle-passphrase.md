@@ -177,6 +177,7 @@ PeerId        = 기기 정적 키(현행) — 핀·세션·후계 판정 근거
 
 | 항목 | 규칙 |
 |---|---|
+| ★ 와이어 정정(10-10 S3) | "같은 `ChatMessage`"로는 형제가 **어느 대화 것인지 모른다**(봉투에 수신자가 없다 — 그대로면 발신 기기와의 대화로 오인). → Control 태그 **19 `SenderCopy{ to: PeerId, to_name(힌트 ≤64B), msg: ChatMessage }`**. 안쪽 메시지는 `ChatMessage::decode` 발신자 검증(원 발신 = 세션 상대) 그대로 · 형제 세션이 아니면 폐기 · 대상 kind(1=PeerId)는 UserId 대상 확장 자리 |
 | 상대가 보낸 메시지 | 상대는 **내 기기 전부**에 팬아웃한다(내 기기 목록은 §5-3 교환으로 안다). 꺼진 기기는 못 받는다 → §5-4 따라잡기 |
 | 읽음 상태 | 내 기기 간 Control 프레임 `SyncRead{thread, upto_seq}` — 상대에게는 여전히 "읽음"을 보내지 않는다(DR-25) |
 | 그룹 | 그룹 메시지에 `sender_device` 추가(P-10 · 와이어 kind 신설 = 전방 호환) 후 같은 규칙 |
@@ -198,6 +199,7 @@ PeerId        = 기기 정적 키(현행) — 핀·세션·후계 판정 근거
 | 5 | `SyncRead` | §5-1 |
 | 6 | `SyncPull { thread, after_seq, max }` / 7 `SyncLines{…}` | §5-4 |
 | 8 | `Succession{…}` | §3-5 침해 대응 후계 증명서(UserHello에 동봉 가능) |
+| 19 ✅ | `SenderCopy{ to, to_name, msg }` | **구현 10-10(S3-a `3ab980d`)** — §5-1 sender copy(태그 5~7은 동기 예약 · 9~18은 사용 중이라 다음 빈 번호). ⚠ 태그 11은 수신 상한 공지(9B)와 형제 증명(33B)이 **길이로만** 갈린다 — 새 태그는 겹치지 않게 |
 | 9 ✅ | `UserKeyBlob{sealed}` | **구현 09-06(S2-b `02dfca4`)** — 형제 세션에서 UserKey 봉인본 동기(양쪽이 보내고 "오래된 키가 이긴다" D-32-8로 수렴 · 요청 없음) |
 | 11 ✅ | `UserProof{proof}` | **신설 09-06(S1-e `a31a735`)** — 세션 내 형제 증명 `HMAC(PSK, "nbeep-user-proof-v1"‖핸드셰이크 해시‖역할)`: XX로 이미 선 세션(부팅 경합·나중에 기능 켬)을 재접속 없이 승격. 세션당 1회 · 힌트 후보에게만 · 실패 3회 상한 · ⚠**정정 09-26(`8dedd1b`)**: 후보 = 힌트 ∪ **서명 기기 목록의 내 기기**(세션이 끊긴 뒤 힌트 없는 경로에서도 복귀) · 대조 성공 후 **회신은 1회 더** · 내 쪽 미준비로 온 증명은 실패로 세지 않음 |
 
@@ -269,7 +271,7 @@ K_thread, K_content = 무작위 · Wrap(K_user_master)로 봉투 ① · 상대 �
 | **S0 ✅ 09-06** | 신원 파생·UserKey·설정 | `nbeep-crypto::userkey`(PBKDF2·파생 5종 · **Ed25519 생성/서명/검증 = `ed25519-dalek 2`** · 벡터 테스트) · `user.key` 봉인 · 설정 `user.handle`/`user.passphrase`(봉인 사이드카 · 강도 표시 · 재생성) · `--whoami`에 UserId | **하~중** | 2일 | — | 의존 +1(트리 공유 실측 T-2) |
 | **S1 ✅ 09-06** | PSK 세션 | `NoiseSession::initiate_psk/accept_psk`(XXpsk3) · 발견 꼬리 `LAN_tag` · 릴레이 `RID_pair` 3개 등록·Open · 실패 백오프 · **일반 XX 폴백** · 인바운드 accept가 두 패턴을 받는 방법(★ 첫 메시지로 판별 불가 → **힌트 기반 선택 + 실패 시 재시도** 실측 필요) | **중** | 2~3일 | S0 | 인바운드 패턴 판별 · 발견 패킷 꼬리 호환 실측 |
 | **S2 ✅ 09-06** | 신뢰 해제 + 서명 기기 목록 + 후계 | `trust.seg` 레코드(`user_pub`·`list_ver`·`seen_max`) · `UserHello` 서명 검증 · `Succession`·충돌 표시 · UserKey 봉인본 동기 · `TrustStore::level/on_session` 소속 분기 · `judge_offer`·`file_allowed`·FR-S-25·`suggest_verify` 5곳 · "내 기기" 배지 · 차단 = UserId | **중** | 3일 | S1 | 12곳 회귀 — `trust.level` 흡수로 축소 · 충돌 UX |
-| **S3** | UserHello + sender copy + 스레드 접기 | Control 태그 4 · 팬아웃 집합 확장 · sender copy 표시 규칙 · 뷰 계층 ThreadKey=UserId · 그룹 `sender_device`(P-10) | **중~상** | 3일 | S2 | app.rs 대화 상태(2730~) 전반 · 그룹 와이어 kind 신설 |
+| **S3** | UserHello + sender copy + 스레드 접기 | Control 태그 4 · 팬아웃 집합 확장 · sender copy 표시 규칙 · 뷰 계층 ThreadKey=UserId · 그룹 `sender_device`(P-10) | **중~상** | 3일 | S2 | app.rs 대화 상태(2730~) 전반 · 그룹 와이어 kind 신설 · 🚧 **10-10 코드 ✅**(`3ab980d` sender copy 태그 19 + P-10 해석기 선배포 · `ccbe284` 뷰 계층 접기 = 저장 기기별 유지·뷰/안읽음/대기 큐/행만 대표 키(서명 기기 목록 정렬 첫 원소) · 기기 전부 팬아웃 · refold) · 잔여 = 실기 · 파일 오퍼·헤더 배지 대표 기기 기준 · 기기 수 라벨 · P-10 kind 9 **발신** 전환(구버전 소진 후) |
 | **S4** | 따라잡기 + 읽음 동기 + 저장 병합 | `SyncPull/SyncLines/SyncRead` · `history/u-*.seg` · 매핑 표 · 상한·예산 | **중** | 2~3일 | S3 | 봉인 키 계층 무변경 확인 · 대량 기록 성능 |
 | **S5** | 컨텐츠 모드 | beepd `Content` 타입 와이어 5종 · 클라 pull/push · 사용자 마스터 키 · 봉투 ① · 파일 1회 업로드(P-9 kind 8) · 보관함 온라인(X-3) · 쿼터/TTL | **대** | 2주+ | S4 · beepd 배포 | 서버 저장·인증·쿼터 · S-3 감사 · 실 NAT 실기 |
 

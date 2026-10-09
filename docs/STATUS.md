@@ -3,6 +3,8 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
+> **갱신: 2026-10-10 S3차 (KST · mac · feat/userid-s3 worktree — 협업 세션 main 병행)** — ★**X-13 S3 코드 ✅ + 실기 ✓**: sender copy = Control **태그 19 `SenderCopy{to,to_name,msg}`**(46 §5-1의 "같은 ChatMessage"는 수신자가 없어 형제가 대화를 못 가린다 → 정정) · 같은 UserId **스레드 접기**(뷰 계층 — 저장은 기기별 유지 · 뷰·안읽음·대기 큐·목록 행만 대표 키 = 서명 기기 목록 정렬 첫 원소 · refold) · 접힌 대화 발신 = **살아 있는 기기 전부** · 그룹 P-10 kind 9 **해석기만 선배포** · `NEXA_SCRIPT send=·dump`. 실기 = 신원 4(X 2·Y 2): 양방향 팬아웃·sender copy·접기 전부 기대값. **715 green**. 다음 = main 병합(협업 세션과 rebase 조율) → 2-PC 실기 · S4 따라잡기. [journal](journal/2026-10-10.md)
+
 > **갱신: 2026-10-09 12차 (KST · Linux · main)** — ★**v0.3.1 공개**(패치: Linux 실기 수정 7건 + 내 기기 목록 창 + 툴팁 언어 + apt 채널 자동 신호 · release run 전 job success · 자산 15 · brew 0.3.1 ✓ · **apt 색인 0.3.1 = linux-repo 잡 첫 자동 갱신 ✓** · choco 제외(0.3.0 검수 중) · winget 제외 · 위키 push) · CI 2회 rustdoc 실패 → `tools/gate.sh` 신설(로컬 게이트 일괄). 다음 = 사용자 `apt install` 적용 · 내 기기 목록 실기(다른 기기 폐기) · choco 승인 확인 → 0.3.1 재제출. [journal 12차](journal/2026-10-09.md)
 
 > **갱신: 2026-10-09 11차 (KST · Linux · main)** — **툴바 툴팁 언어 고정 수정**(nexa-ui 190차 `Toolbar::set_tip` + `refresh_toolbar_tips`) · ★**"내 기기 목록" 창**(설정 › 사용자 [열기…] · 기기 이름·지문·상태·마지막 접속 · 행별 **[폐기] = Succession 부분 집합**(`issue_succession` 공용화 · 5초 무장) · 틱 갱신 비용 0 · i18n 20키). 실기 = 사용자. [journal 11차](journal/2026-10-09.md)

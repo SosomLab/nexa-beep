@@ -5,6 +5,10 @@
 
 ---
 
+## 2026-10-10
+
+- **(mac · feat/userid-s3) ★X-13 S3 코드+실기** — sender copy(Control 태그 19 · 설계 빈칸 "사본에 수신자 없음" 메움) · 같은 UserId 스레드 접기(저장 기기별 · 뷰/안읽음/큐/행만 대표 키) · 기기 전부 팬아웃 · 그룹 P-10 해석기 선배포 · `NEXA_SCRIPT send=·dump` · 신원 4 실기 ✓. [journal S3차](journal/2026-10-10.md)
+
 ## 2026-10-09
 
 - **(Linux · main) ★v0.3.1 공개** — Linux 실기 수정 7건 · 내 기기 목록 창 · 툴팁 언어 · apt 저장소 첫 자동 갱신 ✓ · brew ✓ · choco 제외(0.3.0 검수 중) · `tools/gate.sh` 신설. [journal 12차](journal/2026-10-09.md)
