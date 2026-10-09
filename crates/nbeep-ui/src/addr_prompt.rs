@@ -37,6 +37,8 @@ pub struct AddrPromptWidget {
     canceled: bool,
     /// 포트 생략 시 붙일 기본 포트 — 설정 `net.session_port`(듣는 포트와 같은 값 · ⓐ).
     default_port: u16,
+    /// 내용 전체에 필요한 창 높이(px · 0 = 미실측) — 힌트 word-wrap 줄 수 반영(10-09 사용자 "설명이 잘려 보인다").
+    want_h: std::cell::Cell<i32>,
 }
 
 impl Default for AddrPromptWidget {
@@ -61,7 +63,15 @@ impl AddrPromptWidget {
             submit: None,
             canceled: false,
             default_port,
+            want_h: std::cell::Cell::new(0),
         }
+    }
+
+    /// 내용 전체에 필요한 창 높이(px · 0 = 아직 미실측) — 호스트가 첫 paint 뒤 창 높이를 맞춘다
+    /// (경고 모달 `desired_height` 문법 · 힌트가 2~3줄로 접히면 그만큼 자란다).
+    #[must_use]
+    pub fn desired_height(&self) -> i32 {
+        self.want_h.get()
     }
 
     /// 확정된 유효 주소(1회성) — 호스트가 `add_endpoint`에 넘긴다.
@@ -262,7 +272,22 @@ impl Widget for AddrPromptWidget {
                 theme.danger,
             )
         };
-        ctx.text(b.x + self.s(16), b.y + self.s(80), b, &hint, color);
+        // ★ 힌트는 word-wrap(10-09 사용자 "설명이 잘려 보이지 않도록"): 한국어 예시 문장이 한 줄 폭을 넘어
+        //   오른쪽이 잘렸다. 최대 4줄 · 줄 수를 실측해 want_h에 남기면 호스트가 창 높이를 맞춘다.
+        let line_h = self.s(18);
+        let lines = crate::settings::wrap_text(ctx, &hint, b.w - self.s(32), 4);
+        for (i, line) in lines.iter().enumerate() {
+            ctx.text(
+                b.x + self.s(16),
+                b.y + self.s(80) + line_h * i as i32,
+                b,
+                line,
+                color,
+            );
+        }
+        let n = i32::try_from(lines.len().max(1)).unwrap_or(1);
+        self.want_h
+            .set(self.s(80) + line_h * n + self.s(12) + self.s(28) + self.s(16));
         self.connect.paint(ctx, theme);
         self.cancel.paint(ctx, theme);
         self.input.paint_popup(ctx, theme); // 우클릭 메뉴 — 힌트·버튼 위로(최상위)

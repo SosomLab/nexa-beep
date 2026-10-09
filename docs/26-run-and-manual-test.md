@@ -380,6 +380,32 @@ nexa-beep --chat-connect-via <상대 지문 64hex> --server 127.0.0.1:47300
 D-Bus 재현(사람 없이): `gdbus call --session --dest org.kde.StatusNotifierWatcher --object-path /StatusNotifierWatcher --method org.freedesktop.DBus.Properties.Get org.kde.StatusNotifierWatcher RegisteredStatusNotifierItems`로 버스 이름을 얻고
 `… --object-path /MenuBar --method com.canonical.dbusmenu.Event 4 clicked '<0>' 0`(종료) · `/StatusNotifierItem …Activate 0 0`(열기) · `WAYLAND_DEBUG=1`로 `set_app_id`·`xdg_activation_v1.activate` 송신 확인.
 
+### 3-9. ★ 자동화 테스트 seam — `NEXA_SCRIPT` · `NEXA_WIN_TRACE` (10-09)
+
+> Wayland(GNOME)는 밖에서 입력을 넣을 수 없다(xdotool·ydotool은 XWayland 창이나 `/dev/uinput` 권한이 있어야). 그래서
+> **앱이 스스로 단계를 밟고**(`NEXA_SCRIPT`) **창 이벤트를 stderr에 남긴다**(`NEXA_WIN_TRACE`). 포커스·가시성 결함은
+> 추정 금지·실측 필수 — 10-09 "같은 계정 상대를 더블클릭했는데 멈춤"이 **분리 대화 창이 메인 뒤에 깔린 것**임을 이걸로 확정했다.
+
+```bash
+# 신원 B(분리 창 모드)를 Wayland에서 띄우고 10초 뒤 kiros33@mac 대화 열기 → 18초 뒤 설정 → 26초 뒤 종료
+cd ~/.nexa-beep-multi/B && NEXA_WIN_TRACE=1 \
+  NEXA_SCRIPT="10000:activate=kiros33@mac;18000:settings;26000:quit" ./nexa-beep --window --live 2> out.log
+grep -E '^\[(win|script)\]' out.log
+#   [script] 10013ms activate=kiros33@mac
+#   [win] activation token requested → WindowId(…)          ← 포커스 창(메인)에서 startup-notify 토큰 요청
+#   [win] Some(Chat(PeerId(…))) Resized(…)                  ← 새 창 생성
+#   [win] Some(Main) ActivationTokenDone { … }              ← 토큰 도착
+#   [win] activate Chat(…) via token → xdg_activation       ← 새 창에 토큰 적용
+#   [win] Some(Main) Focused(false) · Some(Chat(…)) Focused(true)   ← ★ 새 창이 실제로 포커스를 받았다
+```
+
+| 항목 | 값 |
+|---|---|
+| `NEXA_SCRIPT` | `"<ms>:<action>[=<arg>];…"` · `activate=<표시 이름 부분>`(= 더블클릭/Enter와 같은 `activate` 경로) · `settings` · `quit` · 시각 오름차순 · 형식 오류 항목은 버림 · 없으면 비용 0 |
+| `NEXA_WIN_TRACE` | 창별 `Focused`·`Occluded`·`Resized`·`CloseRequested`·`Destroyed`·`ActivationTokenDone` + 활성화 토큰 요청/적용 결과 · 역할(`Main`·`Chat`·`Settings`…) 표기 |
+| X11(XWayland)에서 입력 주입 | `env -u WAYLAND_DISPLAY ./nexa-beep --window --live` → `xdotool search --pid <pid>` · `mousemove --window <id> x y click 1` · `key --window <id> Return` · `import -window <id> shot.png`(ImageMagick) — **winit 0.30은 `WINIT_UNIX_BACKEND`를 읽지 않는다**(WAYLAND_DISPLAY 제거가 유일한 강제법) · X11 메인 창은 메뉴 막대가 있어 행 y가 Wayland와 다르다 |
+| 판정 | "멈춤"처럼 보여도 `/proc/<pid>/wchan`이 `ep_poll`이면 이벤트 루프는 살아 있다 — 창이 **안 보이는 것**(포커스·z순서)과 **교착**을 가른다 · 멈춘 프로세스의 `/proc/<pid>/fd`에서 `memfd:softbuffer` 수 = 창 수 × 버퍼 수(창이 생겼는지 간접 증거) |
+
 ### 3-4b. ★ 여러 신원을 한 PC에서 동시에 — **폴더를 나눈다**
 
 > 그룹(3인 이상) 실기는 전용 안내서가 있다 → **[33 그룹 채팅 테스트](33-group-chat-test-guide.md)**.

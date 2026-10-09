@@ -11049,7 +11049,7 @@ impl App {
                 "Nexa Beep — {}",
                 nbeep_core::t(nbeep_core::Msg::WinConnectAddr)
             ))
-            .with_inner_size(winit::dpi::LogicalSize::new(380.0, 150.0))
+            .with_inner_size(winit::dpi::LogicalSize::new(420.0, 150.0)) // 높이는 힌트 wrap 실측으로 재조정(10-09)
             .with_resizable(false)
             // 앱 모달(08-14 표준 재정리) — 앱 창 입력은 모달이 흡수하되, 다른 앱은
             // 자유롭게 위로 온다(AlwaysOnTop 금지 — OS 창 전환 관례).
@@ -16570,6 +16570,17 @@ impl App {
             Role::AddEndpoint => {
                 if let Some(av) = &self.addr_view {
                     av.paint(&mut ctx, &theme);
+                    // 힌트 word-wrap 실측 높이에 창을 맞춘다(10-09 · 경고 모달과 같은 문법 — 첫 프레임 뒤 1회).
+                    let want = av.desired_height();
+                    #[allow(clippy::cast_possible_wrap, clippy::cast_sign_loss)]
+                    if want > 0 && (want - size.height as i32).abs() > 2 {
+                        let _ = entry
+                            .window
+                            .request_inner_size(winit::dpi::PhysicalSize::new(
+                                size.width,
+                                want.max(1) as u32,
+                            ));
+                    }
                 }
             }
             Role::Profile => {
