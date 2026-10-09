@@ -17,7 +17,7 @@
 //! M2-5(Repository 포트). i18n: 라벨은 [`Msg`] 키, 검색은 **전 언어 매치**.
 
 use crate::controls::{
-    Button, ColorPicker, Combo, ComboControl, ComboItem, Control, LabelSide, PositionPicker,
+    Button, ColorPicker, Combo, ComboControl, ComboItem, Control, LabelSide, PositionDropdown,
     ScrollBars, Switch, TextBox, TreeControl, TreeModel, TreeNode, TreeView,
 };
 use crate::draw::{DrawCtx, FontSlot};
@@ -395,7 +395,8 @@ pub enum SettingKind {
     Radio(&'static [(&'static str, Msg)]),
     /// 택일 + **직접 입력** — 후보에 없는 값을 인라인 편집으로 넣는다(값, 표시 접미).
     RadioInput(&'static [(&'static str, Msg)], &'static str),
-    /// 3×3 위치 그리드 — 미니 화면(4:3) 셀로 직관 선택([`PositionPicker`]).
+    /// 3×3 위치 — **이미지 드롭다운**([`PositionDropdown`] · 선택 타일 + ▾ · 팝업 = 그리드 · 10-09 사용자 "콤보 방식으로"
+    /// = nexa-sql 설정과 동일). 값 = 위치 코드(`bl` 등).
     PositionGrid,
     /// 자유 텍스트 한 줄 — [`TextBox`] 행(clip 09-03 이식). `secret` = 비밀 행: 기본 `•` 가림 ·
     /// 상자 위 오른쪽에 \[생성\]\[눈\] 아이콘 버튼(생성은 2초 무장 후 2차 클릭 · 생성 시 자동 표시).
@@ -1791,6 +1792,8 @@ const TITLE_H: i32 = 20;
 const CARD_PAD: i32 = 12;
 const CARD_GAP: i32 = 8;
 const TEXT_W: i32 = 260;
+/// 위치 드롭다운 폭(nexa-sql 64).
+const POS_W: i32 = 64;
 /// 설정 행에 붙는 정보 줄 높이(논리 px).
 const NOTE_H: i32 = 22;
 /// 설명 워드랩 줄 높이(논리 px — Status 폰트 한 줄 + 행간).
@@ -1823,8 +1826,8 @@ enum RowCtl {
         family: TextBox,
         size: Combo,
     },
-    /// 3×3 위치 그리드.
-    Pos(PositionPicker),
+    /// 3×3 위치 드롭다운(10-09 · 종전 인라인 PositionPicker).
+    Pos(PositionDropdown),
     /// 글꼴 **얼굴만**(고정폭 — 크기는 Base UI를 따른다).
     Face(TextBox),
     /// 색상(스와치 + hex + 프리셋 · 08-10).
@@ -2420,8 +2423,8 @@ impl SettingsWidget {
                     RowCtl::Face(t)
                 }
                 SettingKind::PositionGrid => {
-                    let mut p = PositionPicker::new();
-                    p.select_value(self.values.get(e.key).map_or("bl", String::as_str));
+                    let mut p =
+                        PositionDropdown::new(self.values.get(e.key).map_or("bl", String::as_str));
                     p.set_scale(self.scale);
                     RowCtl::Pos(p)
                 }
@@ -2777,10 +2780,7 @@ impl SettingsWidget {
                 #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
                 let est_px = (est_logical as f32 * scale).round() as i32;
                 let desc_lines = ((est_px + desc_avail - 1) / desc_avail).clamp(1, 3);
-                let ctl_block = match &row.ctl {
-                    RowCtl::Pos(p) => p.preferred_size().1,
-                    _ => ctl_h,
-                };
+                let ctl_block = ctl_h; // 전 종류 한 줄(위치도 10-09부터 드롭다운)
                 let h = cpad
                     + title_h
                     + desc_gap
@@ -2812,6 +2812,7 @@ impl SettingsWidget {
             .collect();
         let vp_bottom = self.bounds.bottom() - self.bottom_h();
         let min_color_w = self.s(80);
+        let pos_w = self.s(POS_W);
         // 내용은 **밴드 아래**에서 시작한다(밴드가 첫 행을 가리면 못 만진다).
         let mut top = b.y + self.crumb_h() - self.scroll;
         for (ri, row) in self.rows.iter_mut().enumerate() {
@@ -2854,9 +2855,9 @@ impl SettingsWidget {
                 }
                 RowCtl::Pos(p) => {
                     p.set_scale(scale);
-                    let (pw, ph) = p.preferred_size();
-                    p.set_bounds(Rect::new(cx, cy, pw, ph), inv);
-                    cx + pw
+                    p.set_bounds(Rect::new(cx, cy, pos_w, ctl_h), inv);
+                    p.set_max_bottom(vp_bottom); // 팝업 그리드가 창 아래로 잘리지 않게
+                    cx + pos_w
                 }
                 RowCtl::Color(c) => {
                     c.set_scale(scale);
@@ -3104,7 +3105,16 @@ impl Widget for SettingsWidget {
                 inv.push(self.bounds);
             }
         }
-        // ── 모달 캡처: 열린 콤보가 있으면 그 콤보만 이벤트를 받는다(전파 차단) ──
+        // ── 모달 캡처: 열린 위치 드롭다운(10-09)·콤보가 있으면 그것만 이벤트를 받는다(전파 차단) ──
+        if let Some(p) = self.rows.iter_mut().find_map(|r| match &mut r.ctl {
+            RowCtl::Pos(p) if p.is_open() => Some(p),
+            _ => None,
+        }) {
+            p.on_event(ev, inv);
+            self.drain_changes(inv);
+            inv.push(self.bounds);
+            return;
+        }
         if let Some(c) = self.open_combo_mut() {
             c.on_event(ev, inv);
             self.drain_changes(inv);
@@ -3745,10 +3755,7 @@ impl Widget for SettingsWidget {
                     false,
                 );
                 let nh = self.s(NOTE_H);
-                let ctl_block = match &row.ctl {
-                    RowCtl::Pos(p) => p.preferred_size().1,
-                    _ => ctl_h,
-                };
+                let ctl_block = ctl_h; // 전 종류 한 줄(위치도 10-09부터 드롭다운)
                 let nr = Rect::new(
                     r.x + cpad - self.s(6),
                     cy + ctl_block + self.s(6),
@@ -3785,6 +3792,7 @@ impl Widget for SettingsWidget {
                 RowCtl::Font { size, .. } if size.is_open() || size.editing_popup_open() => {
                     size.paint(ctx, theme);
                 }
+                RowCtl::Pos(p) if p.is_open() => p.paint_popup(ctx, theme),
                 _ => {}
             }
         }

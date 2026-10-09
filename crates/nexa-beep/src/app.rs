@@ -8087,6 +8087,12 @@ impl App {
             Role::NamePrompt => self.name_prompt.as_ref()?.clipboard_copy(),
             Role::Convbox => self.convbox_view.as_ref()?.clipboard_copy(),
             Role::Gallery => self.gallery_view.as_ref()?.clipboard_copy(),
+            // 파일 대화상자 경로/이름 상자(P3 · nexa-dlg 188차 불변 접근자).
+            Role::Picker => self
+                .picker_view
+                .as_ref()?
+                .focused_textbox_ref()?
+                .copy_selection(),
             _ => None,
         }
     }
