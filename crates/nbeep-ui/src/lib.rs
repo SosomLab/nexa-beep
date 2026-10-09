@@ -153,6 +153,7 @@ pub mod chat_view;
 pub mod convbox_view;
 pub mod filter_bar;
 pub mod gallery;
+pub mod jamo;
 pub mod offer_prompt;
 pub mod peer_info;
 pub mod peer_list;
@@ -195,7 +196,10 @@ pub use profile::{ProfileValues, ProfileWidget};
 pub use prompt::TextPromptWidget;
 pub use quarantine_view::{QAction, QRow, QuarantineWidget};
 pub use raster::{FontSet, RasterCtx};
-pub use settings::{registry, Entry, NoteTone, SettingKind, SettingsState, SettingsWidget};
+pub use settings::{
+    depends_of, display_order, group_of, is_advanced, registry, tree_pos, Dep, Entry, NoteTone,
+    SettingKind, SettingsState, SettingsWidget, TreeSel, ADVANCED, CATEGORY_TREE, DEPENDS,
+};
 pub use theme::{Color, FontPrefs, IconImage, SlotFont, Theme};
 pub use typeahead::{Query, TypeAhead, TYPEAHEAD_TIMEOUT_MS};
 pub use widget::{Invalidations, Widget};

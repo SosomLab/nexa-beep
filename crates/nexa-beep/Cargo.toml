@@ -27,6 +27,7 @@ nbeep-safe.workspace = true
 nbeep-store.workspace = true
 nexa-gfx.workspace = true # ★10-09 nexa-ui 이관(docs/50)
 nexa-font.workspace = true # 시스템 글꼴 발견·폴백 체인(종전 nbeep-plat::font · 10-09)
+nexa-sys.workspace = true # OS 표시 언어 판정(`ui.language=system` · 10-09 P2 · gui 기능 끔)
 nbeep-ui.workspace = true
 nbeep-plat.workspace = true
 nexa-conf.workspace = true # 설정 영속(M3-15 · ADR-0011 · ★10-09 nexa-ui 사본으로 전환)

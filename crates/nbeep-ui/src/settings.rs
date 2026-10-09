@@ -87,7 +87,197 @@ const HIDDEN_KEYS: &[&str] = &[
     // OS 등록 부재를 **외부 삭제**(사용자가 레지스트리 등에서 지움)로 판정하는 기준 —
     // 마커 없이는 첫 실행과 삭제를 구분할 수 없어 무조건 재등록하게 된다.
     "app.autostart_reg",
+    // ── P2 설정 체계 개편(10-09 · docs/50) ──
+    // 고급 설정 스위치 상태(기본 off) — 설정 창 하단 스위치가 쓰고 열 때 되살린다.
+    "ui.prefs_advanced",
+    // 설정 검색 이력(탭 구분 · 최근 20) — 검색창 ↑/↓.
+    "prefs.search",
+    // 설정 창 위치·크기 기억(논리 px · 메인 창 `ui.win_*`와 같은 규약).
+    "ui.prefs_x",
+    "ui.prefs_y",
+    "ui.prefs_w",
+    "ui.prefs_h",
+    // 라이선스 게이트 스위치(P4 · 기본 "" = off — D-145 계승 "개인 사용은 전 기능 오픈").
+    "license.gates",
 ];
+
+/// ★ 설정 트리(10-09 · nexa-sql `CATEGORY_TREE` 차용 — DBeaver Preferences 모양): **그룹 → 카테고리**.
+/// 사이드바·표시 순서·검색 결과 정렬의 단일 원천. 카테고리 안 하위 그룹(`Entry::sub`)은 본문 섹션 제목으로만 쓴다.
+/// 새 카테고리는 여기 한 줄 — 트리에 없는 카테고리의 Entry는 시험 `tree_covers_every_category`가 잡는다.
+pub const CATEGORY_TREE: &[(Msg, &[Msg])] = &[
+    (
+        Msg::GrpGeneral,
+        &[Msg::CatSystem, Msg::CatProfile, Msg::CatUser],
+    ),
+    (
+        Msg::GrpConversation,
+        &[Msg::CatConversation, Msg::CatNotify, Msg::CatGroup],
+    ),
+    (
+        Msg::GrpAppearance,
+        &[
+            Msg::CatAppearance,
+            Msg::CatColors,
+            Msg::CatFont,
+            Msg::CatPeerList,
+        ],
+    ),
+    (Msg::GrpFiles, &[Msg::CatFiles]),
+    (Msg::GrpNetwork, &[Msg::CatNetwork, Msg::CatServer]),
+    (Msg::GrpAdvanced, &[Msg::CatAdvanced, Msg::CatIme]),
+];
+
+/// 트리 안 위치 `(그룹 순서, 카테고리 순서)` — 없으면 맨 뒤.
+#[must_use]
+pub fn tree_pos(cat: Msg) -> (usize, usize) {
+    for (gi, (_, cats)) in CATEGORY_TREE.iter().enumerate() {
+        if let Some(ci) = cats.iter().position(|c| *c == cat) {
+            return (gi, ci);
+        }
+    }
+    (usize::MAX, usize::MAX)
+}
+
+/// 카테고리가 속한 그룹.
+#[must_use]
+pub fn group_of(cat: Msg) -> Option<Msg> {
+    CATEGORY_TREE
+        .iter()
+        .find(|(_, cats)| cats.contains(&cat))
+        .map(|(g, _)| *g)
+}
+
+/// ★ 고급 설정(10-09 · 설정 창 "고급 설정" 스위치 대상) — 한 번 정하면 거의 손대지 않는 구현값·시간 상수.
+/// 글꼴·색·모드·켜기/끄기 같은 습관값은 기본 표시로 남긴다. 표에 없는 키는 시험 `advanced_keys_exist`가 잡는다.
+pub const ADVANCED: &[&str] = &[
+    // 한글 입력(IME) 튜닝 전부 — macOS 실측 기준값(H-27). 카테고리째 고급.
+    "ime.inject",
+    "ime.leak",
+    "ime.stale_ms",
+    "ime.same_key_ms",
+    "ime.pending_ms",
+    "ime.echo_ms",
+    "ime.stash_ms",
+    "ime.owed_ms",
+    "ime.pre_clear_ms",
+    "ime.swallow_ms",
+    "ime.selfcommit_ms",
+    // 시간 상수·주기
+    "ui.tooltip_ms",
+    "ui.scrollbar_hide",
+    "ui.list_refresh_ms",
+    "ui.list_refresh_scroll",
+    "ui.typeahead_timeout",
+    "ui.typeahead_pos",
+    "ui.typeahead_space",
+    "ui.typeahead_special",
+    "xfer.timeout_sec",
+    "xfer.auto_cancel_min",
+    "group.resync_keep",
+    "net.session_port",
+    "log.retain_days",
+    "log.max_total_mb",
+    "netmon.enabled",
+    "netmon.interval_s",
+];
+
+/// 고급 설정인가(설정 창 스위치가 꺼져 있으면 숨기고 수만 센다).
+#[must_use]
+pub fn is_advanced(key: &str) -> bool {
+    ADVANCED.contains(&key)
+}
+
+/// 종속 조건(10-09 · nexa-sql `Dep` 차용 — "종속 설정은 부모가 조건을 만족할 때만 만질 수 있다").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Dep {
+    /// 부모가 `on`.
+    On,
+    /// 부모가 이 값.
+    Eq(&'static str),
+}
+
+impl Dep {
+    /// 부모 값이 조건을 만족하는가.
+    #[must_use]
+    pub fn satisfied(self, parent_value: &str) -> bool {
+        match self {
+            Dep::On => parent_value == "on",
+            Dep::Eq(v) => parent_value == v,
+        }
+    }
+}
+
+/// (자식, 부모, 조건) — 부모가 조건을 만족하지 않으면 자식 행은 **잠긴다**(값은 유지 · 흐리게 + 안내 1줄).
+/// 호스트가 `set_disabled`로 거는 런타임 잠금과 **합집합**이다.
+pub const DEPENDS: &[(&str, &str, Dep)] = &[
+    ("notify.preview", "notify.enabled", Dep::On),
+    ("notify.broadcast_mute", "notify.enabled", Dep::On),
+    ("ui.tray_hide_taskbar", "ui.close_to_tray", Dep::On),
+    ("user.handle", "user.enabled", Dep::On),
+    ("user.passphrase", "user.enabled", Dep::On),
+    ("user.test", "user.enabled", Dep::On),
+    ("user.rotate", "user.enabled", Dep::On),
+    ("net.server.address", "net.server.mode", Dep::Eq("managed")),
+    ("net.server.port", "net.server.mode", Dep::Eq("managed")),
+    ("net.server.type", "net.server.mode", Dep::Eq("managed")),
+    ("net.server.announce", "net.server.mode", Dep::Eq("managed")),
+    ("net.server.test", "net.server.mode", Dep::Eq("managed")),
+    (
+        "xfer.remote_files_server",
+        "net.server.mode",
+        Dep::Eq("managed"),
+    ),
+    ("log.retain_days", "log.enabled", Dep::On),
+    ("log.max_total_mb", "log.enabled", Dep::On),
+    ("log.view", "log.enabled", Dep::On),
+    ("netmon.interval_s", "netmon.enabled", Dep::On),
+];
+
+/// 이 키의 종속(부모 키, 조건) — 없으면 `None`.
+#[must_use]
+pub fn depends_of(key: &str) -> Option<(&'static str, Dep)> {
+    DEPENDS
+        .iter()
+        .find(|(c, _, _)| *c == key)
+        .map(|(_, p, d)| (*p, *d))
+}
+
+/// ★ 표시 순서(10-09 · nexa-sql `display_order` 차용) = (그룹, 카테고리, 하위 섹션, 키 접두 첫 등재, 등재 순).
+/// 같은 카테고리에 여러 접두(`ui.`·`app.`)가 섞여도 접두끼리 모인다.
+#[must_use]
+pub fn display_order(idx: usize) -> (usize, usize, usize, usize, usize) {
+    let e = &registry()[idx];
+    let (g, c) = tree_pos(e.cat);
+    // 하위 섹션: 직속(None) = 0 · 하위는 같은 카테고리 안 첫 등재 순.
+    let si = match e.sub {
+        None => 0,
+        Some(sub) => {
+            registry()
+                .iter()
+                .filter(|x| x.cat == e.cat)
+                .filter_map(|x| x.sub)
+                .fold((Vec::<Msg>::new(), 0usize), |(mut seen, _), x| {
+                    if !seen.contains(&x) {
+                        seen.push(x);
+                    }
+                    let pos = seen
+                        .iter()
+                        .position(|y| *y == sub)
+                        .map_or(usize::MAX, |p| p + 1);
+                    (seen, pos)
+                })
+                .1
+        }
+    };
+    let prefix = e.key.split('.').next().unwrap_or(e.key);
+    let first = registry()
+        .iter()
+        .position(|x| {
+            x.cat == e.cat && x.sub == e.sub && x.key.split('.').next().unwrap_or(x.key) == prefix
+        })
+        .unwrap_or(idx);
+    (g, c, si, first, idx)
+}
 
 /// 직접 입력이 **텍스트**인 RadioInput 키(08-22) — 기본은 숫자 전용(포트·ms·MiB).
 /// 서버 주소는 도메인·IP를 받아야 해서 숫자 필터가 입력 자체를 막았다(실기).
@@ -235,6 +425,9 @@ pub enum SettingKind {
         /// 버튼 라벨.
         verb: Msg,
     },
+    /// ★ 읽기 전용 정보(10-09 · nexa-sql `INFO_KEYS` 차용 — P4 라이선스 상태 등): 호스트가 `set_info`로
+    /// 그때그때 채운 글을 잠긴 칸으로 보여 준다. 값 키가 없어 영속되지 않는다.
+    Info,
 }
 
 /// 설정 항목(레지스트리 최소 단위).
@@ -294,8 +487,8 @@ impl Entry {
                 (family_key, String::new()), // 빈 문자열 = 시스템 기본 글꼴
                 (size_key, FONT_SIZE_DEFAULT.to_string()),
             ],
-            // 행위 항목은 값이 없다 — 영속·검증 대상에서 자연히 빠진다.
-            SettingKind::Action { .. } => vec![],
+            // 행위·정보 항목은 값이 없다 — 영속·검증 대상에서 자연히 빠진다.
+            SettingKind::Action { .. } | SettingKind::Info => vec![],
         }
     }
 }
@@ -430,7 +623,7 @@ pub fn registry() -> &'static [Entry] {
         },
         // 알림(M3-8 최소 슬라이스) — 표시 on/off + 본문 미리보기(기본 끔 = FR-S-42 결).
         Entry {
-            cat: Msg::CatConversation,
+            cat: Msg::CatNotify,
             sub: None,
             label: Msg::NotifyEnabled,
             desc: Msg::NotifyEnabledDesc,
@@ -438,7 +631,7 @@ pub fn registry() -> &'static [Entry] {
             key: "notify.enabled",
         },
         Entry {
-            cat: Msg::CatConversation,
+            cat: Msg::CatNotify,
             sub: None,
             label: Msg::NotifyPreview,
             desc: Msg::NotifyPreviewDesc,
@@ -447,7 +640,7 @@ pub fn registry() -> &'static [Entry] {
         },
         // 공지(브로드캐스트) 받지 않기(08-21 사용자 확정 — 옵트아웃 · 기본 받음).
         Entry {
-            cat: Msg::CatConversation,
+            cat: Msg::CatNotify,
             sub: None,
             label: Msg::NotifyBroadcastMute,
             desc: Msg::NotifyBroadcastMuteDesc,
@@ -455,7 +648,7 @@ pub fn registry() -> &'static [Entry] {
             key: "notify.broadcast_mute",
         },
         Entry {
-            cat: Msg::CatAppearance,
+            cat: Msg::CatSystem,
             sub: None,
             label: Msg::Theme,
             desc: Msg::ThemeDesc,
@@ -469,7 +662,7 @@ pub fn registry() -> &'static [Entry] {
         },
         // ── 테마 주요 색(08-10 · 사용자 요청) — 다크/라이트 각각. 즉시 적용(영속은 M3-15). ──
         Entry {
-            cat: Msg::CatAppearance,
+            cat: Msg::CatColors,
             sub: Some(Msg::CatColorsDark),
             label: Msg::ColorAccent,
             desc: Msg::ColorAccentDesc,
@@ -477,7 +670,7 @@ pub fn registry() -> &'static [Entry] {
             key: "theme.dark.accent",
         },
         Entry {
-            cat: Msg::CatAppearance,
+            cat: Msg::CatColors,
             sub: Some(Msg::CatColorsDark),
             label: Msg::ColorBubblePeer,
             desc: Msg::ColorBubblePeerDesc,
@@ -485,7 +678,7 @@ pub fn registry() -> &'static [Entry] {
             key: "theme.dark.bubble_peer",
         },
         Entry {
-            cat: Msg::CatAppearance,
+            cat: Msg::CatColors,
             sub: Some(Msg::CatColorsDark),
             label: Msg::ColorPanelBg,
             desc: Msg::ColorPanelBgDesc,
@@ -493,7 +686,7 @@ pub fn registry() -> &'static [Entry] {
             key: "theme.dark.panel_bg",
         },
         Entry {
-            cat: Msg::CatAppearance,
+            cat: Msg::CatColors,
             sub: Some(Msg::CatColorsDark),
             label: Msg::ColorText,
             desc: Msg::ColorTextDesc,
@@ -501,7 +694,7 @@ pub fn registry() -> &'static [Entry] {
             key: "theme.dark.text",
         },
         Entry {
-            cat: Msg::CatAppearance,
+            cat: Msg::CatColors,
             sub: Some(Msg::CatColorsLight),
             label: Msg::ColorAccent,
             desc: Msg::ColorAccentDesc,
@@ -509,7 +702,7 @@ pub fn registry() -> &'static [Entry] {
             key: "theme.light.accent",
         },
         Entry {
-            cat: Msg::CatAppearance,
+            cat: Msg::CatColors,
             sub: Some(Msg::CatColorsLight),
             label: Msg::ColorBubblePeer,
             desc: Msg::ColorBubblePeerDesc,
@@ -517,7 +710,7 @@ pub fn registry() -> &'static [Entry] {
             key: "theme.light.bubble_peer",
         },
         Entry {
-            cat: Msg::CatAppearance,
+            cat: Msg::CatColors,
             sub: Some(Msg::CatColorsLight),
             label: Msg::ColorPanelBg,
             desc: Msg::ColorPanelBgDesc,
@@ -525,7 +718,7 @@ pub fn registry() -> &'static [Entry] {
             key: "theme.light.panel_bg",
         },
         Entry {
-            cat: Msg::CatAppearance,
+            cat: Msg::CatColors,
             sub: Some(Msg::CatColorsLight),
             label: Msg::ColorText,
             desc: Msg::ColorTextDesc,
@@ -533,11 +726,14 @@ pub fn registry() -> &'static [Entry] {
             key: "theme.light.text",
         },
         Entry {
-            cat: Msg::CatAppearance,
+            cat: Msg::CatSystem,
             sub: None,
             label: Msg::Language,
             desc: Msg::LanguageDesc,
+            // ★ `system`(기본 · 10-09 D-33-4) = 부팅마다 OS 표시 언어 추종(nexa-sys locale · 미지원 = en).
+            //   명시 선택이 우선 · 변경 즉시 반영(재시작 없음). 해석은 앱(`resolve_lang`).
             kind: SettingKind::Radio(&[
+                ("system", Msg::LangSystem),
                 ("en", Msg::LangEnglish),
                 ("ko", Msg::LangKorean),
                 ("zh", Msg::LangChinese),
@@ -547,7 +743,7 @@ pub fn registry() -> &'static [Entry] {
         },
         // 컨트롤 글리프 크기(체크·스위치·옵션박스 — 08-11 사용자 요청 · 기본 "크게").
         Entry {
-            cat: Msg::CatAppearance,
+            cat: Msg::CatSystem,
             sub: None,
             label: Msg::ControlSize,
             desc: Msg::ControlSizeDesc,
@@ -555,7 +751,7 @@ pub fn registry() -> &'static [Entry] {
             key: "ui.control_size",
         },
         Entry {
-            cat: Msg::CatAppearance,
+            cat: Msg::CatSystem,
             sub: None,
             label: Msg::ToolbarSize,
             desc: Msg::ToolbarSizeDesc,
@@ -616,8 +812,8 @@ pub fn registry() -> &'static [Entry] {
         },
         // ── 목록 보기(08-14 사용자 확정) — 갱신 주기 + 갱신 시 스크롤 동작 ──
         Entry {
-            cat: Msg::CatAppearance,
-            sub: Some(Msg::CatPeerList),
+            cat: Msg::CatPeerList,
+            sub: None,
             label: Msg::ListRefresh,
             desc: Msg::ListRefreshDesc,
             kind: SettingKind::RadioInput(
@@ -632,8 +828,8 @@ pub fn registry() -> &'static [Entry] {
             key: "ui.list_refresh_ms",
         },
         Entry {
-            cat: Msg::CatAppearance,
-            sub: Some(Msg::CatPeerList),
+            cat: Msg::CatPeerList,
+            sub: None,
             label: Msg::ListSort,
             desc: Msg::ListSortDesc,
             kind: SettingKind::Radio(&[
@@ -645,8 +841,8 @@ pub fn registry() -> &'static [Entry] {
             key: "ui.list_sort",
         },
         Entry {
-            cat: Msg::CatAppearance,
-            sub: Some(Msg::CatPeerList),
+            cat: Msg::CatPeerList,
+            sub: None,
             label: Msg::ListScroll,
             desc: Msg::ListScrollDesc,
             kind: SettingKind::Radio(&[
@@ -658,15 +854,15 @@ pub fn registry() -> &'static [Entry] {
         },
         // 세션 배지 실루엣(M3-19) — 색+모양 2중 부호화. off = 종전 채운 원(색만).
         Entry {
-            cat: Msg::CatAppearance,
-            sub: Some(Msg::CatPeerList),
+            cat: Msg::CatPeerList,
+            sub: None,
             label: Msg::LinkBadgeShape,
             desc: Msg::LinkBadgeShapeDesc,
             kind: SettingKind::Toggle,
             key: "ui.link_badge_shape",
         },
         Entry {
-            cat: Msg::CatAppearance,
+            cat: Msg::CatPeerList,
             sub: Some(Msg::CatTypeahead),
             label: Msg::TypeaheadTimeout,
             desc: Msg::TypeaheadTimeoutDesc,
@@ -683,7 +879,7 @@ pub fn registry() -> &'static [Entry] {
             key: "ui.typeahead_timeout",
         },
         Entry {
-            cat: Msg::CatAppearance,
+            cat: Msg::CatPeerList,
             sub: Some(Msg::CatTypeahead),
             label: Msg::TypeaheadPos,
             desc: Msg::TypeaheadPosDesc,
@@ -691,7 +887,7 @@ pub fn registry() -> &'static [Entry] {
             key: "ui.typeahead_pos",
         },
         Entry {
-            cat: Msg::CatAppearance,
+            cat: Msg::CatPeerList,
             sub: Some(Msg::CatTypeahead),
             label: Msg::TypeaheadSpace,
             desc: Msg::TypeaheadSpaceDesc,
@@ -699,7 +895,7 @@ pub fn registry() -> &'static [Entry] {
             key: "ui.typeahead_space",
         },
         Entry {
-            cat: Msg::CatAppearance,
+            cat: Msg::CatPeerList,
             sub: Some(Msg::CatTypeahead),
             label: Msg::TypeaheadSpecial,
             desc: Msg::TypeaheadSpecialDesc,
@@ -1262,7 +1458,7 @@ pub fn registry() -> &'static [Entry] {
         // OS별 사용자 수준 등록(T0 무권한)은 nbeep-plat::autostart, 부팅 재동기화는
         // apply_boot_settings(포터블 경로 이동 대응 · DR-4).
         Entry {
-            cat: Msg::CatAdvanced,
+            cat: Msg::CatSystem,
             sub: None,
             label: Msg::AutoStart,
             desc: Msg::AutoStartDesc,
@@ -1270,7 +1466,7 @@ pub fn registry() -> &'static [Entry] {
             key: "app.autostart",
         },
         Entry {
-            cat: Msg::CatAdvanced,
+            cat: Msg::CatSystem,
             sub: None,
             label: Msg::CloseToTray,
             desc: Msg::CloseToTrayDesc,
@@ -1280,7 +1476,7 @@ pub fn registry() -> &'static [Entry] {
         // 08-30 사용자 확정 — 3-OS 공통 · **기본 on(숨김)**. Linux = 창 파괴(Wayland는
         // 숨김 불가) · Windows = 숨김 · mac = 숨김 + Dock 아이콘 제거(Accessory 정책).
         Entry {
-            cat: Msg::CatAdvanced,
+            cat: Msg::CatSystem,
             sub: None,
             label: Msg::TrayHideTaskbar,
             desc: Msg::TrayHideTaskbarDesc,
@@ -1449,8 +1645,8 @@ impl SettingsState {
             // 위치 코드·글꼴명(빈 값 = 시스템 기본)·크기 코드는 소비처가 관용 파싱한다.
             SettingKind::PositionGrid | SettingKind::FontFace { .. } => true,
             SettingKind::FontSection { .. } => true,
-            // 행위 항목은 값이 없다 — 파일에서 와도 무시(default_values가 비어 도달 불가).
-            SettingKind::Action { .. } => false,
+            // 행위·정보 항목은 값이 없다 — 파일에서 와도 무시(default_values가 비어 도달 불가).
+            SettingKind::Action { .. } | SettingKind::Info => false,
         };
         if valid {
             self.values.insert(k, value.to_string());
@@ -1517,26 +1713,52 @@ pub(crate) fn wrap_text(
     lines
 }
 
-/// 전 언어에 걸쳐 매칭한다 — 영어 UI에서도 "테마"로, 한국어 UI에서도 "theme"로 찾힌다.
+/// 검색 매칭(10-09 개정 · D-33-1): 공백 토큰 **AND** · 대상 = 키 이름 + 그룹·카테고리·하위·제목·설명(전 언어) ·
+/// 한글 토큰은 **자모열 대조**(조합 중 "ㅌ"·"테"도 "테마"에 맞는다 · [`crate::jamo`]).
 fn entry_matches(e: &Entry, toks: &[String]) -> bool {
     if toks.is_empty() {
         return true;
     }
     let mut hay = String::new();
+    hay.push_str(e.key);
+    hay.push(' ');
+    // 전 언어(종전 동작 유지) — 영어 UI에서도 "테마"로, 한국어 UI에서도 "theme"로 찾힌다.
     for lang in Lang::ALL {
+        if let Some(g) = group_of(e.cat) {
+            hay.push_str(tr(lang, g));
+            hay.push(' ');
+        }
         hay.push_str(tr(lang, e.cat));
         hay.push(' ');
+        if let Some(sub) = e.sub {
+            hay.push_str(tr(lang, sub));
+            hay.push(' ');
+        }
         hay.push_str(tr(lang, e.label));
         hay.push(' ');
         hay.push_str(tr(lang, e.desc));
         hay.push(' ');
     }
     let hay = hay.to_lowercase();
-    toks.iter().all(|t| hay.contains(t))
+    toks.iter().all(|t| {
+        if crate::jamo::has_hangul(t) {
+            crate::jamo::contains_jamo(&hay, &crate::jamo::decompose(t, true), true)
+        } else {
+            hay.contains(t.as_str())
+        }
+    })
 }
 
 // 레이아웃(논리 px).
-const SIDEBAR_W: i32 = 150;
+const SIDEBAR_W: i32 = 170;
+/// 하단 줄(고급 스위치 · 설정 파일 열기 · 닫기 — 10-09 nexa-sql 차용) 높이.
+const BOTTOM_H: i32 = 44;
+/// 고급 숨김 배너(밴드 셋째 줄) 높이.
+const BANNER_H: i32 = 22;
+/// 카드 [초기화] 버튼 폭.
+const RESET_W: i32 = 72;
+/// 검색 이력 보관 수.
+const HISTORY_MAX: usize = 20;
 const SEARCH_H: i32 = 30;
 const ENTRY_H: i32 = 52;
 const FONT_SECTION_H: i32 = 88;
@@ -1584,6 +1806,8 @@ enum RowCtl {
     Face(TextBox),
     /// 색상(스와치 + hex + 프리셋 · 08-10).
     Color(ColorPicker),
+    /// 읽기 전용 정보(10-09 · 호스트가 채운 글).
+    Info(String),
 }
 
 #[derive(Debug)]
@@ -1606,6 +1830,19 @@ struct RowUi {
     desc_avail: i32,
     /// ★ 비밀 행 — 상자 위 버튼 줄만큼 제목·설명·상자를 아래로 내린다(clip 09-03).
     top_inset: i32,
+    /// [초기화](10-09 · 값이 기본값과 다를 때만 보인다 · 값 키가 없는 행위/정보 행은 `None`).
+    reset: Option<Button>,
+    /// 키 이름+복사 글리프 자리(페인트가 실측해 채운다 · 클릭 = 키 복사 요청).
+    key_rect: std::cell::Cell<Rect>,
+}
+
+/// 사이드바 트리 선택(10-09 그룹 트리) — 그룹 행 = 그 그룹의 카테고리 전부 · 카테고리 행 = 그것만.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TreeSel {
+    /// `CATEGORY_TREE` 그룹 인덱스.
+    Group(usize),
+    /// [`SettingsWidget::cats`] 인덱스(트리 순서의 카테고리).
+    Cat(usize),
 }
 
 /// 설정 위젯 — 커스텀 컨트롤 컴포지션.
@@ -1623,12 +1860,23 @@ pub struct SettingsWidget {
     default_mono_name: String,
     /// 카테고리 사이드바(TreeView).
     tree: TreeView,
-    /// 사이드바 가시 행 → (cats() 인덱스, 하위 카테고리).
-    cat_map: Vec<(usize, Option<Msg>)>,
-    /// 선택 카테고리(cats() 인덱스).
-    selected_cat: usize,
-    /// 선택 하위 카테고리(None = 최상위 — 하위 항목도 함께 보인다).
-    selected_sub: Option<Msg>,
+    /// 사이드바 가시 행 → 트리 선택(그룹/카테고리 · 트리 행 순서와 같다).
+    cat_map: Vec<TreeSel>,
+    /// 현재 선택.
+    selected: TreeSel,
+    /// 고급 설정 스위치 상태(`ui.prefs_advanced`) — 끄면 [`ADVANCED`] 항목은 숨기고 수만 센다.
+    advanced: bool,
+    /// 지금 보기에서 숨긴 고급 항목 수(밴드 배너).
+    adv_hidden: usize,
+    /// 하단 줄 컨트롤 — 고급 스위치 · [설정 파일 열기…] · [닫기].
+    adv_switch: Switch,
+    btn_file: Button,
+    btn_close: Button,
+    /// 읽기 전용 정보 행 본문(`SettingKind::Info` — 호스트 `set_info`).
+    infos: HashMap<&'static str, String>,
+    /// 검색 이력(최근이 앞 · `prefs.search` 탭 구분 · 최대 [`HISTORY_MAX`]) · ↑/↓ 탐색 위치.
+    history: Vec<String>,
+    hist_pos: Option<usize>,
     /// 우측 행들(가시 항목 + 컨트롤).
     rows: Vec<RowUi>,
     /// 현재 값 스냅숏(컨트롤 초기화·보고 근거).
@@ -1683,6 +1931,15 @@ impl SettingsWidget {
                 values.insert(k, state.get(k).to_string());
             }
         }
+        let lang = current_lang();
+        let advanced = state.get("ui.prefs_advanced") == "on";
+        let history: Vec<String> = state
+            .get("prefs.search")
+            .split('\t')
+            .filter(|h| !h.is_empty())
+            .take(HISTORY_MAX)
+            .map(str::to_string)
+            .collect();
         let mut w = Self {
             bounds: Rect::default(),
             scale: 1.0,
@@ -1692,8 +1949,15 @@ impl SettingsWidget {
             default_mono_name: String::new(),
             tree: TreeView::new(TreeModel::default()),
             cat_map: Vec::new(),
-            selected_cat: 0,
-            selected_sub: None,
+            selected: TreeSel::Cat(0),
+            advanced,
+            adv_hidden: 0,
+            adv_switch: Switch::new(tr(lang, Msg::PrefsAdvanced), advanced),
+            btn_file: Button::new(tr(lang, Msg::BtnOpenSettingsFile)),
+            btn_close: Button::new(tr(lang, Msg::BtnClose)),
+            infos: HashMap::new(),
+            history,
+            hist_pos: None,
             rows: Vec::new(),
             values,
             changes: Vec::new(),
@@ -1832,13 +2096,43 @@ impl SettingsWidget {
     /// 검색은 지우고 스크롤은 맨 위로. 미지 카테고리는 무시.
     pub fn select_category(&mut self, cat: Msg, inv: &mut Invalidations) {
         if let Some(ci) = Self::cats().iter().position(|(c, _)| *c == cat) {
-            self.selected_cat = ci;
-            self.selected_sub = None;
+            self.selected = TreeSel::Cat(ci);
             self.query.clear();
             self.search.set_text("");
             self.scroll = 0;
             self.rebuild(inv);
         }
+    }
+
+    /// 고급 설정 스위치 상태를 외부에서 맞춘다(열 때 `ui.prefs_advanced` 복원은 `new`가 한다 — 런타임 동기용).
+    pub fn set_advanced(&mut self, on: bool, inv: &mut Invalidations) {
+        if self.advanced != on {
+            self.advanced = on;
+            self.adv_switch.set_on(on);
+            self.rebuild(inv);
+        }
+    }
+
+    /// 읽기 전용 정보 행 본문 지정(`SettingKind::Info` · 빈 문자열 = 비움) — 바뀔 때만 다시 그린다.
+    pub fn set_info(&mut self, key: &'static str, text: &str, inv: &mut Invalidations) {
+        if self.infos.get(key).map(String::as_str) == Some(text) {
+            return;
+        }
+        self.infos.insert(key, text.to_string());
+        for row in &mut self.rows {
+            if registry()[row.idx].key == key {
+                if let RowCtl::Info(t) = &mut row.ctl {
+                    *t = text.to_string();
+                }
+            }
+        }
+        inv.push(self.bounds);
+    }
+
+    /// 현재 선택(시험·호스트 진단용).
+    #[must_use]
+    pub fn selected(&self) -> TreeSel {
+        self.selected
     }
 
     pub fn take_changes(&mut self) -> Vec<(&'static str, String)> {
@@ -1859,75 +2153,111 @@ impl SettingsWidget {
         (v as f32 * self.scale).round() as i32
     }
 
-    /// 카테고리 목록(레지스트리 순서·중복 제거) — (최상위, 하위들).
-    fn cats() -> Vec<(Msg, Vec<Msg>)> {
-        let mut out: Vec<(Msg, Vec<Msg>)> = Vec::new();
-        for e in registry() {
-            if !out.iter().any(|(c, _)| *c == e.cat) {
-                out.push((e.cat, Vec::new()));
-            }
-            if let Some(sub) = e.sub {
-                if let Some((_, subs)) = out.iter_mut().find(|(c, _)| *c == e.cat) {
-                    if !subs.contains(&sub) {
-                        subs.push(sub);
-                    }
+    /// 카테고리 목록 — **트리 순서**(`CATEGORY_TREE`)로, 레지스트리에 항목이 있는 것만: (카테고리, 그룹 인덱스).
+    fn cats() -> Vec<(Msg, usize)> {
+        let mut out = Vec::new();
+        for (gi, (_, cats)) in CATEGORY_TREE.iter().enumerate() {
+            for &c in *cats {
+                if registry().iter().any(|e| e.cat == c) {
+                    out.push((c, gi));
                 }
             }
         }
         out
     }
 
-    fn cat_match_count(cat: Msg, sub: Option<Msg>, toks: &[String]) -> usize {
+    /// 이 행이 기본값과 다른가(값 키가 하나라도 다르면 · 값 키 없는 행 = 거짓).
+    fn is_modified(&self, idx: usize) -> bool {
+        registry()[idx]
+            .default_values()
+            .iter()
+            .any(|(k, d)| self.values.get(k).map(String::as_str) != Some(d.as_str()))
+    }
+
+    /// 종속 잠금(DEPENDS) — 부모 값이 조건을 만족하지 않으면 `Some(부모 키, 조건)`.
+    fn dep_lock(&self, idx: usize) -> Option<(&'static str, Dep)> {
+        let (parent, dep) = depends_of(registry()[idx].key)?;
+        let pv = self.values.get(parent).map_or("", String::as_str);
+        (!dep.satisfied(pv)).then_some((parent, dep))
+    }
+
+    /// 행 아래 한 줄 — 호스트 노트가 우선 · 없으면 종속 잠금 안내.
+    fn row_note(&self, idx: usize) -> Option<(String, NoteTone)> {
+        let key = registry()[idx].key;
+        if let Some((t, tone)) = self.notes.get(key) {
+            return Some((t.clone(), *tone));
+        }
+        let (parent, dep) = self.dep_lock(idx)?;
+        let lang = current_lang();
+        let plabel = registry()
+            .iter()
+            .find(|e| e.key == parent)
+            .map_or(parent, |e| tr(lang, e.label));
+        let text = match dep {
+            Dep::On => nbeep_core::tf(Msg::PrefsLockedBy, &[plabel]),
+            Dep::Eq(v) => {
+                // 부모 옵션의 표시 라벨(없으면 값 그대로).
+                let vlabel = registry()
+                    .iter()
+                    .find(|e| e.key == parent)
+                    .and_then(|e| match e.kind {
+                        SettingKind::Radio(opts) | SettingKind::RadioInput(opts, _) => opts
+                            .iter()
+                            .find(|(o, _)| *o == v)
+                            .map(|(_, m)| tr(lang, *m)),
+                        _ => None,
+                    })
+                    .unwrap_or(v);
+                nbeep_core::tf(Msg::PrefsLockedByValue, &[plabel, vlabel])
+            }
+        };
+        Some((text, NoteTone::Plain))
+    }
+
+    /// 카테고리 매치 수(고급 숨김 반영 — 사이드바 "(N)"은 실제로 보일 수와 같아야 한다).
+    fn cat_match_count(&self, cat: Msg, toks: &[String]) -> usize {
         registry()
             .iter()
-            .filter(|e| e.cat == cat && (sub.is_none() || e.sub == sub) && entry_matches(e, toks))
+            .filter(|e| {
+                e.cat == cat && (self.advanced || !is_advanced(e.key)) && entry_matches(e, toks)
+            })
             .count()
     }
 
-    /// 가시 항목(registry 인덱스) — 검색 중=전 카테고리 매치, 아니면 선택 카테고리.
-    ///
-    /// **그룹 순서로 정렬해서 돌려준다** — 상위에 직속인 설정이 먼저, 그다음 하위 그룹이
-    /// 사이드바에 보이는 순서대로 이어진다(사용자 확정 08-10). registry 순서를 그대로
-    /// 쓰면 "다크 색 → 라이트 색 → 언어 → 타입어헤드"처럼 섞여 나와, 지금 보는 값이
-    /// 어느 그룹의 것인지 화면만 봐서는 알 수 없다. 그룹 안에서는 registry 순서를 지킨다.
-    fn visible_indices(&self) -> Vec<usize> {
+    /// 고급 필터 **전** 후보(검색 또는 선택 범위) — 숨긴 수를 세는 기준.
+    fn candidate_indices(&self) -> Vec<usize> {
         let toks = tokens(&self.query);
         let searching = !toks.is_empty();
-        let selected = Self::cats().get(self.selected_cat).map(|(c, _)| *c);
-        let mut hits: Vec<usize> = registry()
+        let cats = Self::cats();
+        let allowed: Vec<Msg> = match self.selected {
+            TreeSel::Group(gi) => CATEGORY_TREE
+                .get(gi)
+                .map_or(Vec::new(), |(_, c)| c.to_vec()),
+            TreeSel::Cat(ci) => cats.get(ci).map(|(c, _)| *c).into_iter().collect(),
+        };
+        registry()
             .iter()
             .enumerate()
             .filter(|(_, e)| {
                 if searching {
                     entry_matches(e, &toks)
-                } else if Some(e.cat) != selected {
-                    false
                 } else {
-                    // 최상위 선택 = 하위 포함 전부 · 하위 선택 = 그 하위만(VS Code식).
-                    self.selected_sub.is_none() || e.sub == self.selected_sub
+                    allowed.contains(&e.cat)
                 }
             })
             .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// 가시 항목(registry 인덱스) — 검색 중 = 전 카테고리 매치 · 아니면 선택 범위(그룹/카테고리) ·
+    /// 고급 스위치가 꺼져 있으면 [`ADVANCED`] 제외 · 순서 = [`display_order`](그룹 → 카테고리 → 하위 → 접두 → 등재).
+    fn visible_indices(&self) -> Vec<usize> {
+        let mut hits: Vec<usize> = self
+            .candidate_indices()
+            .into_iter()
+            .filter(|&i| self.advanced || !is_advanced(registry()[i].key))
             .collect();
-        // 정렬 키 = (상위 순서, 하위 순서). 직속(sub=None)은 하위보다 **먼저**(=0).
-        let cats = Self::cats();
-        let key = |idx: &usize| -> (usize, usize) {
-            let e = &registry()[*idx];
-            let ci = cats
-                .iter()
-                .position(|(c, _)| *c == e.cat)
-                .unwrap_or(usize::MAX);
-            let si = match e.sub {
-                None => 0,
-                Some(sub) => cats
-                    .get(ci)
-                    .and_then(|(_, subs)| subs.iter().position(|s| *s == sub))
-                    .map_or(usize::MAX, |p| p + 1),
-            };
-            (ci, si)
-        };
-        // 안정 정렬 — 같은 그룹 안에서는 registry 순서가 그대로 남는다.
-        hits.sort_by_key(key);
+        hits.sort_by_key(|&i| display_order(i));
         hits
     }
 
@@ -1937,40 +2267,42 @@ impl SettingsWidget {
         let toks = tokens(&self.query);
         let searching = !toks.is_empty();
 
-        // ── 사이드바 트리(계층 카테고리 · 검색 중엔 매치만 + "(N)") ──
+        // ── 사이드바 트리(그룹 → 카테고리 · 10-09 · 검색 중엔 매치만 + "(N)") ──
         let cats = Self::cats();
         self.cat_map.clear();
         let mut roots = Vec::new();
-        for (ci, (cat, subs)) in cats.iter().enumerate() {
-            let n = Self::cat_match_count(*cat, None, &toks);
-            if searching && n == 0 {
-                continue;
-            }
-            let label = if searching {
-                format!("{} ({n})", tr(lang, *cat))
-            } else {
-                tr(lang, *cat).to_string()
-            };
-            self.cat_map.push((ci, None));
+        for (gi, (g, _)) in CATEGORY_TREE.iter().enumerate() {
             let mut children = Vec::new();
-            for &sub in subs {
-                let sn = Self::cat_match_count(*cat, Some(sub), &toks);
-                if searching && sn == 0 {
+            let mut sels = Vec::new();
+            let mut gn = 0usize;
+            for (ci, (c, cgi)) in cats.iter().enumerate() {
+                if *cgi != gi {
                     continue;
                 }
-                let sl = if searching {
-                    format!("{} ({sn})", tr(lang, sub))
+                let n = self.cat_match_count(*c, &toks);
+                if searching && n == 0 {
+                    continue;
+                }
+                gn += n;
+                let label = if searching {
+                    format!("{} ({n})", tr(lang, *c))
                 } else {
-                    tr(lang, sub).to_string()
+                    tr(lang, *c).to_string()
                 };
-                children.push(TreeNode::leaf(sl));
-                self.cat_map.push((ci, Some(sub)));
+                children.push(TreeNode::leaf(label));
+                sels.push(TreeSel::Cat(ci));
             }
             if children.is_empty() {
-                roots.push(TreeNode::leaf(label));
-            } else {
-                roots.push(TreeNode::branch(label, children)); // 기본 펼침
+                continue;
             }
+            let glabel = if searching {
+                format!("{} ({gn})", tr(lang, *g))
+            } else {
+                tr(lang, *g).to_string()
+            };
+            self.cat_map.push(TreeSel::Group(gi));
+            self.cat_map.extend(sels);
+            roots.push(TreeNode::branch(glabel, children)); // 기본 펼침
         }
         let mut tree = TreeView::new(TreeModel::new(roots));
         tree.set_scale(self.scale);
@@ -1978,16 +2310,24 @@ impl SettingsWidget {
         let sel_row = self
             .cat_map
             .iter()
-            .position(|&(c, sub)| c == self.selected_cat && sub == self.selected_sub)
+            .position(|&sel| sel == self.selected)
             .unwrap_or(0);
         tree.set_selected_row(sel_row);
         self.tree = tree;
+        let candidates = self.candidate_indices().len();
 
         // ── 우측 행 + 컨트롤 ──
         self.rows.clear();
-        for idx in self.visible_indices() {
+        let visible = self.visible_indices();
+        self.adv_hidden = candidates.saturating_sub(visible.len());
+        // 여러 카테고리가 한 목록에 섞이는 보기(그룹 선택·검색)는 카테고리 경계에 제목을 붙인다.
+        let multi_cat = searching || matches!(self.selected, TreeSel::Group(_));
+        for idx in visible {
             let e = &registry()[idx];
             let ctl = match e.kind {
+                SettingKind::Info => {
+                    RowCtl::Info(self.infos.get(e.key).cloned().unwrap_or_default())
+                }
                 SettingKind::Radio(opts) | SettingKind::RadioInput(opts, _) => {
                     let items: Vec<ComboItem> = opts
                         .iter()
@@ -2088,16 +2428,20 @@ impl SettingsWidget {
                     RowCtl::Font { family, size }
                 }
             };
-            // 그룹이 바뀌는 첫 행에만 하위 섹션 제목을 붙인다(상위 제목은 고정 밴드 몫).
+            // 제목 규칙: 카테고리가 바뀌면(여러 카테고리 보기) 카테고리 제목 · 같은 카테고리 안에서 하위 섹션이
+            // 바뀌면 하위 제목 · 직속 구간은 없음(상위 제목은 고정 밴드 몫).
             let group = (e.cat, e.sub);
-            let head = match (self.rows.last().map(|r| r.group), e.sub) {
-                (_, None) => None,
-                (Some(prev), Some(sub)) if prev == group => {
-                    let _ = sub;
-                    None
-                }
-                (_, Some(sub)) => Some(sub),
+            let head = match self.rows.last().map(|r| r.group) {
+                Some((pc, ps)) if pc == e.cat => e.sub.filter(|_| ps != e.sub),
+                _ if multi_cat => Some(e.cat),
+                _ => e.sub,
             };
+            // [초기화] — 값 키가 있는 행만(행위·정보 행은 없다). 보이기는 layout이 `is_modified`로 정한다.
+            let reset = (!e.default_values().is_empty()).then(|| {
+                let mut b = Button::new(tr(lang, Msg::BtnReset));
+                b.set_scale(self.scale);
+                b
+            });
             self.rows.push(RowUi {
                 idx,
                 rect: Rect::default(),
@@ -2108,6 +2452,8 @@ impl SettingsWidget {
                 desc_lines: 1,
                 desc_avail: 0,
                 top_inset: 0,
+                reset,
+                key_rect: std::cell::Cell::new(Rect::default()),
             });
         }
         self.layout(inv);
@@ -2129,6 +2475,7 @@ impl SettingsWidget {
                 RowCtl::Face(t) if matches!(registry()[row.idx].kind, SettingKind::Text { .. }) => {
                     t.set_text(value);
                 }
+                RowCtl::Pos(g) => g.select_value(value),
                 _ => {}
             }
         }
@@ -2208,22 +2555,40 @@ impl SettingsWidget {
     /// 다음 행과 시각 구분한다(08-23 사용자 확정 — 검증 노트와 다음 설정이 붙어
     /// 보였다).
     fn note_h(&self, idx: usize) -> i32 {
-        if self.notes.contains_key(registry()[idx].key) {
+        if self.row_note(idx).is_some() {
             self.s(NOTE_H + NOTE_GAP_B) // 아래 여백(08-23 2차 — 8은 여전히 붙어 보였다)
         } else {
             0
         }
     }
 
-    /// 이 행이 잠겼는가.
+    /// 이 행이 잠겼는가 — 호스트 런타임 잠금 ∪ 종속(DEPENDS) 불충족.
     fn is_locked(&self, idx: usize) -> bool {
-        self.disabled.contains(registry()[idx].key)
+        self.disabled.contains(registry()[idx].key) || self.dep_lock(idx).is_some()
+    }
+
+    /// 하단 줄 높이(물리 px).
+    fn bottom_h(&self) -> i32 {
+        self.s(BOTTOM_H)
+    }
+
+    /// 하단 줄 영역.
+    fn bottom_rect(&self) -> Rect {
+        let b = self.bounds;
+        let h = self.bottom_h();
+        Rect::new(b.x, b.bottom() - h, b.w, h)
     }
 
     /// 상단 고정 밴드(상위 + 하위 제목) 높이 — 하위가 없어도 **줄어들지 않는다**.
     /// 그룹 경계를 넘을 때 아래 내용이 위아래로 튀면 읽던 자리를 잃는다.
     fn crumb_h(&self) -> i32 {
-        self.s(CRUMB_CAT_H) + self.s(CRUMB_SUB_H)
+        self.s(CRUMB_CAT_H)
+            + self.s(CRUMB_SUB_H)
+            + if self.adv_hidden > 0 {
+                self.s(BANNER_H)
+            } else {
+                0
+            }
     }
 
     /// 우측 패널 뷰포트(사이드바 제외 · **고정 밴드 아래**부터).
@@ -2231,7 +2596,8 @@ impl SettingsWidget {
         let sw = self.s(self.sidebar_w);
         let b = self.bounds;
         let top = b.y + self.crumb_h();
-        Rect::new(b.x + sw, top, (b.w - sw).max(0), (b.bottom() - top).max(0))
+        let bottom = b.bottom() - self.bottom_h();
+        Rect::new(b.x + sw, top, (b.w - sw).max(0), (bottom - top).max(0))
     }
 
     /// 스크롤 위치 기준으로 지금 보이는 그룹 `(상위, 하위)` — 고정 밴드가 이걸 그린다.
@@ -2284,10 +2650,37 @@ impl SettingsWidget {
             inv,
         );
         let tree_top = b.y + self.s(SEARCH_H) + self.s(8);
+        let bottom_top = b.bottom() - self.bottom_h();
         self.tree.set_bounds(
-            Rect::new(b.x, tree_top, sw, (b.bottom() - tree_top).max(0)),
+            Rect::new(b.x, tree_top, sw, (bottom_top - tree_top).max(0)),
             inv,
         );
+        // ── 하단 줄(10-09): [고급 스위치] ………… [설정 파일 열기…][닫기] ──
+        {
+            let ctl_h = self.s(CTL_H);
+            let pad = self.s(PAD);
+            let cy = bottom_top + (self.bottom_h() - ctl_h) / 2;
+            self.adv_switch.set_scale(self.scale);
+            self.adv_switch
+                .set_bounds(Rect::new(b.x + pad, cy, self.s(190), ctl_h), inv);
+            let close_w = self.s(90);
+            let file_w = self.s(150);
+            self.btn_close.set_scale(self.scale);
+            self.btn_close.set_bounds(
+                Rect::new(b.right() - pad - close_w, cy, close_w, ctl_h),
+                inv,
+            );
+            self.btn_file.set_scale(self.scale);
+            self.btn_file.set_bounds(
+                Rect::new(
+                    b.right() - pad - close_w - self.s(8) - file_w,
+                    cy,
+                    file_w,
+                    ctl_h,
+                ),
+                inv,
+            );
+        }
 
         let rx = b.x + sw; // 우측 패널 시작
         let rw = (b.w - sw).max(0);
@@ -2322,7 +2715,7 @@ impl SettingsWidget {
                     _ => h_entry,
                 };
                 let ctl_w = match &row.ctl {
-                    RowCtl::Combo(_) | RowCtl::Act(_) => combo_w,
+                    RowCtl::Combo(_) | RowCtl::Act(_) | RowCtl::Info(_) => combo_w,
                     RowCtl::Check(_) => check_w,
                     RowCtl::Face(_) if matches!(e.kind, SettingKind::Text { .. }) => combo_w,
                     RowCtl::Face(_) => family_w,
@@ -2345,6 +2738,13 @@ impl SettingsWidget {
             .sum();
         let vp_h = self.right_viewport().h;
         self.scroll = self.scroll.clamp(0, (self.content_h - vp_h).max(0));
+        // [초기화] 표시 여부 = 기본값과 다름 ∧ 잠기지 않음(10-09).
+        let show_reset: Vec<bool> = self
+            .rows
+            .iter()
+            .map(|r| self.is_modified(r.idx) && !self.is_locked(r.idx))
+            .collect();
+        let reset_w = self.s(RESET_W);
         // 내용은 **밴드 아래**에서 시작한다(밴드가 첫 행을 가리면 못 만진다).
         let mut top = b.y + self.crumb_h() - self.scroll;
         for (ri, row) in self.rows.iter_mut().enumerate() {
@@ -2354,7 +2754,7 @@ impl SettingsWidget {
             // 추정(ASCII 7·그 외 14 논리px — 실측은 페인트가 하고, 여기는 **예약**이라
             // 약간의 과대/과소는 여백/말줄임으로 흡수된다).
             let ctl_w = match &row.ctl {
-                RowCtl::Combo(_) | RowCtl::Act(_) => combo_w,
+                RowCtl::Combo(_) | RowCtl::Act(_) | RowCtl::Info(_) => combo_w,
                 RowCtl::Check(_) => check_w,
                 RowCtl::Face(_) if matches!(e.kind, SettingKind::Text { .. }) => combo_w,
                 RowCtl::Face(_) => family_w,
@@ -2476,6 +2876,30 @@ impl SettingsWidget {
                         inv,
                     );
                 }
+                RowCtl::Info(_) => {} // 글만 — 페인트가 컨트롤 자리에 그린다
+            }
+            // [초기화] 자리 — 컨트롤 왼쪽(글꼴 영역은 컨트롤이 왼쪽이라 오른쪽 끝) · 안 보일 땐 빈 rect.
+            if let Some(btn) = &mut row.reset {
+                btn.set_scale(self.scale);
+                let rect = if show_reset[ri] {
+                    match &row.ctl {
+                        RowCtl::Font { .. } => {
+                            Rect::new(rx + rw - pad - reset_w, top + dy32, reset_w, ctl_h)
+                        }
+                        other => {
+                            let left = ctl_rect(other).map_or(rx + rw - pad, |r| r.x);
+                            Rect::new(
+                                left - gap10 - reset_w,
+                                top + (h - ctl_h) / 2,
+                                reset_w,
+                                ctl_h,
+                            )
+                        }
+                    }
+                } else {
+                    Rect::default()
+                };
+                btn.set_bounds(rect, inv);
             }
             top += h;
         }
@@ -2539,6 +2963,7 @@ impl SettingsWidget {
                         got.push((e.key, "run".to_string()));
                     }
                 }
+                RowCtl::Info(_) => {}
                 RowCtl::Font { family, size } => {
                     if let SettingKind::FontSection {
                         family_key,
@@ -2559,12 +2984,31 @@ impl SettingsWidget {
                 }
             }
         }
+        // [초기화](10-09) — 그 행의 값 키 전부를 기본값으로(FontSection = family+size).
+        let mut reset_any = false;
+        for row in &mut self.rows {
+            if let Some(b) = &mut row.reset {
+                if b.take_clicked() {
+                    for (k, d) in registry()[row.idx].default_values() {
+                        got.push((k, d));
+                    }
+                    reset_any = true;
+                }
+            }
+        }
         if !got.is_empty() {
             for (k, v) in &got {
                 self.values.insert(k, v.clone());
             }
             self.changes.extend(got);
             inv.push(self.bounds);
+            if reset_any {
+                // 컨트롤 표시를 값에 맞춘다(종류마다 역반영 API가 달라 재구성이 가장 확실하다).
+                self.rebuild(inv);
+            } else {
+                // 기본값 여부([초기화] 노출)·종속 잠금(부모 값)이 바뀌었을 수 있다 — 재배치.
+                self.layout(inv);
+            }
         }
         if !warn.is_empty() {
             self.warnings.extend(warn);
@@ -2589,6 +3033,39 @@ impl SettingsWidget {
             self.default_mono_name = mono.to_string();
             self.rebuild(inv);
         }
+    }
+
+    /// 제목 옆 **키 이름 + 복사 글리프**(10-09 · nexa-sql 차용 — 고급 키는 accent · 클릭 = 복사). 자리를 `key_rect`에 남긴다.
+    fn paint_key(
+        &self,
+        ctx: &mut dyn DrawCtx,
+        theme: &Theme,
+        row: &RowUi,
+        x: i32,
+        y: i32,
+        clip: Rect,
+    ) {
+        let key = registry()[row.idx].key;
+        ctx.select_font(FontSlot::Status, false);
+        let color = if is_advanced(key) {
+            theme.accent
+        } else {
+            theme.text_dim
+        };
+        let kx = x + self.s(10);
+        let kw = ctx.text_width(key);
+        let th = ctx.text_height();
+        // 제목(Base)과 기준선을 맞추려 Status 글자를 제목 높이 안 세로 중앙에.
+        ctx.select_font(FontSlot::Base, false);
+        let bh = ctx.text_height();
+        ctx.select_font(FontSlot::Status, false);
+        let ky = y + (bh - th) / 2;
+        ctx.text(kx, ky, clip, key, color);
+        let glyph = "⧉";
+        let gw = ctx.text_width(glyph);
+        ctx.text(kx + kw + self.s(4), ky, clip, glyph, color);
+        row.key_rect
+            .set(Rect::new(kx, y, kw + self.s(4) + gw, bh).intersection(&clip));
     }
 
     fn any_family_focused(&self) -> bool {
@@ -2705,6 +3182,51 @@ impl Widget for SettingsWidget {
                 self.drain_changes(inv);
                 inv.push(self.bounds);
                 return;
+            }
+        }
+
+        // ── 하단 줄(10-09): 고급 스위치 · 설정 파일 열기 · 닫기 ──
+        {
+            let in_bar = match *ev {
+                InputEvent::MouseDown { x, y, .. }
+                | InputEvent::MouseUp { x, y }
+                | InputEvent::MouseMove { x, y } => self.bottom_rect().contains(Point { x, y }),
+                _ => false,
+            };
+            // MouseUp은 누른 컨트롤이 떼는 자리를 봐야 하므로 항상 흘린다(안쪽에서 눌러 밖에서 떼면 취소).
+            if in_bar
+                || matches!(
+                    *ev,
+                    InputEvent::MouseUp { .. } | InputEvent::MouseMove { .. }
+                )
+            {
+                self.adv_switch.on_event(ev, inv);
+                self.btn_file.on_event(ev, inv);
+                self.btn_close.on_event(ev, inv);
+                if let Some(on) = self.adv_switch.take_toggled() {
+                    self.advanced = on;
+                    self.changes.push((
+                        "ui.prefs_advanced",
+                        if on { "on" } else { "off" }.to_string(),
+                    ));
+                    self.rebuild(inv);
+                    inv.push(self.bounds);
+                    return;
+                }
+                if self.btn_close.take_clicked() {
+                    self.back = true;
+                    inv.push(self.bounds);
+                    return;
+                }
+                if self.btn_file.take_clicked() {
+                    self.changes.push(("settings.open_file", "run".to_string()));
+                    inv.push(self.bounds);
+                    return;
+                }
+                if in_bar {
+                    inv.push(self.bounds);
+                    return;
+                }
             }
         }
 
@@ -2827,6 +3349,17 @@ impl Widget for SettingsWidget {
                         }
                     }
                 }
+                // ★ 키 이름·복사 글리프 클릭(10-09) = 키 복사 요청(클립보드는 호스트 몫).
+                if let Some(key) = self
+                    .rows
+                    .iter()
+                    .find(|r| r.key_rect.get().contains(p))
+                    .map(|r| registry()[r.idx].key)
+                {
+                    self.changes.push(("prefs.copy_key", key.to_string()));
+                    inv.push(self.bounds);
+                    return;
+                }
                 // ★ 포커스는 **매 클릭마다 전 컨트롤에 다시 계산**한다. 콤보는 자기 클릭에
                 // 스스로 포커스를 켜지만 남의 포커스를 끄지는 못해서, 이걸 빼먹으면
                 // 눌러 본 콤보마다 파란 테두리가 남는다(카테고리를 나갔다 오면 재생성돼
@@ -2847,6 +3380,7 @@ impl Widget for SettingsWidget {
                         RowCtl::Combo(c) => c.set_focused(c.bounds().contains(p)),
                         RowCtl::Check(c) => c.set_focused(c.bounds().contains(p)),
                         RowCtl::Act(b) => b.set_focused(b.bounds().contains(p)),
+                        RowCtl::Info(_) => {}
                     }
                 }
                 // 사이드바 트리 — ★트리 영역 안의 클릭만 전달한다(08-22 실기: 우측
@@ -2860,10 +3394,10 @@ impl Widget for SettingsWidget {
                 if self.tree.bounds().contains(p) && after != before
                     || (self.tree.bounds().contains(p) && !self.query.is_empty())
                 {
-                    if let Some(&(ci, sub)) = self.cat_map.get(after) {
-                        self.selected_cat = ci;
-                        self.selected_sub = sub;
+                    if let Some(&sel) = self.cat_map.get(after) {
+                        self.selected = sel;
                     }
+                    self.hist_pos = None;
                     self.query.clear();
                     self.search.set_text("");
                     self.rebuild(inv);
@@ -2886,6 +3420,10 @@ impl Widget for SettingsWidget {
                         RowCtl::Face(f) => f.on_event(ev, inv),
                         RowCtl::Color(c) => c.on_event(ev, inv),
                         RowCtl::Act(b) => b.on_event(ev, inv),
+                        RowCtl::Info(_) => {}
+                    }
+                    if let Some(b) = &mut row.reset {
+                        b.on_event(ev, inv);
                     }
                 }
                 self.drain_changes(inv);
@@ -2911,6 +3449,10 @@ impl Widget for SettingsWidget {
                         RowCtl::Face(f) => f.on_event(ev, inv),
                         RowCtl::Color(c) => c.on_event(ev, inv),
                         RowCtl::Act(b) => b.on_event(ev, inv),
+                        RowCtl::Info(_) => {}
+                    }
+                    if let Some(b) = &mut row.reset {
+                        b.on_event(ev, inv);
                     }
                 }
                 self.drain_changes(inv);
@@ -2974,6 +3516,8 @@ impl Widget for SettingsWidget {
                             }
                         }
                         inv.push(self.bounds);
+                    } else if self.hist_pos.is_some() {
+                        self.hist_pos = None; // 이력 탐색 중 Esc = 탐색만 끝낸다
                     } else {
                         self.back = true;
                     }
@@ -3012,16 +3556,47 @@ impl Widget for SettingsWidget {
                     self.drain_changes(inv);
                     inv.push(self.bounds);
                 }
+                // ★ 검색 이력(10-09 · nexa-sql 차용): 검색 중 ↑/↓ = 최근 검색어 순환(최근이 먼저).
+                Key::Up | Key::Down
+                    if !self.history.is_empty()
+                        && self.search.is_focused()
+                        && (!self.query.is_empty() || self.hist_pos.is_some()) =>
+                {
+                    let n = self.history.len();
+                    let next = match (key, self.hist_pos) {
+                        (Key::Up, None) => Some(0),
+                        (Key::Up, Some(i)) => Some((i + 1).min(n - 1)),
+                        (Key::Down, Some(0)) | (Key::Down, None) => None,
+                        (Key::Down, Some(i)) => Some(i - 1),
+                        _ => self.hist_pos,
+                    };
+                    self.hist_pos = next;
+                    let text = next.map_or(String::new(), |i| self.history[i].clone());
+                    self.search.set_text(&text);
+                    self.query = text;
+                    self.rebuild(inv);
+                    inv.push(self.bounds);
+                }
+                // Enter = 검색어를 이력에 기록(중복 제거 · 최근이 앞 · 최대 20) → 호스트가 영속.
+                Key::Enter if self.search.is_focused() && !self.query.trim().is_empty() => {
+                    let q = self.query.trim().to_string();
+                    self.history.retain(|h| *h != q);
+                    self.history.insert(0, q);
+                    self.history.truncate(HISTORY_MAX);
+                    self.hist_pos = None;
+                    self.changes.push(("prefs.search", self.history.join("\t")));
+                    inv.push(self.bounds);
+                }
                 Key::Up | Key::Down if self.query.is_empty() => {
                     // 사이드바 카테고리 탐색(검색 중엔 유지).
                     let before = self.tree.selected_row();
                     self.tree.on_event(ev, inv);
                     let after = self.tree.selected_row();
                     if after != before {
-                        if let Some(&(ci, sub)) = self.cat_map.get(after) {
-                            self.selected_cat = ci;
-                            self.selected_sub = sub;
+                        if let Some(&sel) = self.cat_map.get(after) {
+                            self.selected = sel;
                         }
+                        self.hist_pos = None;
                         self.rebuild(inv);
                     }
                 }
@@ -3083,7 +3658,8 @@ impl Widget for SettingsWidget {
                 | RowCtl::Act(_)
                 | RowCtl::Pos(_)
                 | RowCtl::Face(_)
-                | RowCtl::Color(_) => {
+                | RowCtl::Color(_)
+                | RowCtl::Info(_) => {
                     ctx.select_font(FontSlot::Base, false);
                     ctx.text(
                         r.x + self.s(PAD),
@@ -3092,6 +3668,8 @@ impl Widget for SettingsWidget {
                         tr(lang, e.label),
                         theme.text,
                     );
+                    let lw = ctx.text_width(tr(lang, e.label));
+                    self.paint_key(ctx, theme, row, r.x + self.s(PAD) + lw, ry + self.s(6), r);
                     // 설명 — 컨트롤을 침범하지 않게 워드랩(08-11 사용자 지적).
                     ctx.select_font(FontSlot::Status, false);
                     #[allow(clippy::cast_sign_loss)]
@@ -3116,6 +3694,8 @@ impl Widget for SettingsWidget {
                         tr(lang, e.label),
                         theme.text,
                     );
+                    let lw = ctx.text_width(tr(lang, e.label));
+                    self.paint_key(ctx, theme, row, r.x + self.s(PAD) + lw, r.y + self.s(6), r);
                     ctx.select_font(FontSlot::Status, false);
                     #[allow(clippy::cast_sign_loss)]
                     let lines = wrap_text(
@@ -3162,6 +3742,56 @@ impl Widget for SettingsWidget {
                     family.paint(ctx, theme);
                     size.paint(ctx, theme);
                 }
+                RowCtl::Info(text) => {
+                    // 읽기 전용 — 컨트롤 자리에 흐린 글(오른쪽 정렬 · 넘치면 왼쪽부터 잘린다).
+                    ctx.select_font(FontSlot::Status, false);
+                    let slot = Rect::new(
+                        r.right() - self.s(PAD) - self.s(COMBO_W),
+                        r.y,
+                        self.s(COMBO_W),
+                        r.h,
+                    );
+                    let th = ctx.text_height();
+                    let tw = ctx.text_width(text).min(slot.w);
+                    ctx.text(
+                        slot.right() - tw,
+                        r.y + (r.h - th) / 2,
+                        slot,
+                        text,
+                        theme.text_dim,
+                    );
+                }
+            }
+            // [초기화] + "기본값: …"(10-09) — 기본값과 다른 행에만.
+            if let Some(b) = &row.reset {
+                let br = b.bounds();
+                if br.w > 0 {
+                    b.paint(ctx, theme);
+                    if let Some(def) = registry()[row.idx]
+                        .default_values()
+                        .into_iter()
+                        .map(|(_, d)| d)
+                        .find(|d| !d.is_empty())
+                    {
+                        ctx.select_font(FontSlot::Status, false);
+                        let txt = nbeep_core::tf(Msg::LblDefaultValue, &[&def]);
+                        let tw = ctx.text_width(&txt);
+                        let th = ctx.text_height();
+                        let avail = Rect::new(
+                            r.x + self.s(PAD),
+                            br.y,
+                            (br.x - self.s(8) - r.x - self.s(PAD)).max(0),
+                            br.h,
+                        );
+                        ctx.text(
+                            br.x - self.s(8) - tw,
+                            br.y + (br.h - th) / 2,
+                            avail,
+                            &txt,
+                            theme.text_dim,
+                        );
+                    }
+                }
             }
         }
         // 잠긴 행은 위에 얇은 가림막을 덮어 "지금은 못 만진다"를 보여 준다.
@@ -3177,9 +3807,10 @@ impl Widget for SettingsWidget {
         //   같은 폰트**로 그린다(고정폭은 산문에 부적절 · 사용자 요청 08-18).
         for row in &self.rows {
             let key = registry()[row.idx].key;
-            let Some((note, tone)) = self.notes.get(key) else {
+            let Some((note, tone)) = self.row_note(row.idx) else {
                 continue;
             };
+            let (note, tone) = (&note, &tone);
             let mono = key == "xfer.approval_window"; // 자동 수락 카운트다운만
             ctx.select_font(
                 if mono {
@@ -3267,15 +3898,19 @@ impl Widget for SettingsWidget {
         );
         ctx.fill_rect(crumb, theme.panel_bg);
         if let Some((cat, sub)) = self.current_group() {
-            // 상위 제목 = 본문(Base)보다 **+2px · 굵게**(사용자 확정 08-11).
+            // 상위 제목 = "그룹 › 카테고리"(10-09) · 본문(Base)보다 **+2px · 굵게**(사용자 확정 08-11).
             ctx.select_font_sized(FontSlot::Base, true, 2.0);
             let th = ctx.text_height();
             let cat_h = self.s(CRUMB_CAT_H);
+            let title = match group_of(cat) {
+                Some(g) => format!("{} › {}", tr(lang, g), tr(lang, cat)),
+                None => tr(lang, cat).to_string(),
+            };
             ctx.text(
                 crumb.x + self.s(PAD),
                 crumb.y + (cat_h - th) / 2,
                 crumb,
-                tr(lang, cat),
+                &title,
                 theme.text,
             );
             // 하위 줄 — 직속 설정 구간이면 비워 둔다(자리는 유지).
@@ -3294,10 +3929,31 @@ impl Widget for SettingsWidget {
                 );
             }
         }
+        // 고급 숨김 배너(밴드 셋째 줄 · 10-09) — "고급 설정 N개 숨김 — 고급 설정을 켜면 보입니다".
+        if self.adv_hidden > 0 {
+            ctx.select_font(FontSlot::Status, false);
+            let th = ctx.text_height();
+            let bh = self.s(BANNER_H);
+            let by = crumb.bottom() - bh;
+            ctx.text(
+                crumb.x + self.s(PAD),
+                by + (bh - th) / 2,
+                crumb,
+                &nbeep_core::tf(Msg::PrefsAdvancedHidden, &[&self.adv_hidden.to_string()]),
+                theme.text_dim,
+            );
+        }
         ctx.fill_rect(
             Rect::new(crumb.x, crumb.bottom() - 1, crumb.w, 1),
             theme.border,
         );
+        // ── 하단 줄(10-09) ──
+        let bar = self.bottom_rect();
+        ctx.fill_rect(bar, theme.chrome_bg);
+        ctx.fill_rect(Rect::new(bar.x, bar.y, bar.w, 1), theme.border);
+        self.adv_switch.paint(ctx, theme);
+        self.btn_file.paint(ctx, theme);
+        self.btn_close.paint(ctx, theme);
 
         // 텍스트 필드 우클릭 메뉴 — 진짜 최상위(고정 밴드보다도 위 · 08-13 실기:
         // 프로필에서 형제 위젯이 메뉴를 덮던 것과 같은 z순서 계열).
@@ -3309,6 +3965,19 @@ impl Widget for SettingsWidget {
                 _ => {}
             }
         }
+    }
+}
+
+/// 행 컨트롤의 자리(글꼴 영역·정보 행은 `None`) — [초기화] 배치 기준.
+fn ctl_rect(ctl: &RowCtl) -> Option<Rect> {
+    match ctl {
+        RowCtl::Combo(c) => Some(c.bounds()),
+        RowCtl::Check(c) => Some(c.bounds()),
+        RowCtl::Act(b) => Some(b.bounds()),
+        RowCtl::Pos(g) => Some(g.bounds()),
+        RowCtl::Face(f) => Some(f.bounds()),
+        RowCtl::Color(c) => Some(c.bounds()),
+        RowCtl::Font { .. } | RowCtl::Info(_) => None,
     }
 }
 
@@ -3434,19 +4103,30 @@ mod tests {
             .iter()
             .position(|(c, _)| *c == cat)
             .unwrap();
-        w.selected_cat = ci;
-        w.selected_sub = None;
+        w.selected = TreeSel::Cat(ci);
         let mut inv = Invalidations::default();
         w.rebuild(&mut inv);
         w.set_bounds(Rect::new(0, 0, 560, 560), &mut inv);
+    }
+    fn select_group(w: &mut SettingsWidget, g: Msg) {
+        let gi = CATEGORY_TREE.iter().position(|(x, _)| *x == g).unwrap();
+        w.selected = TreeSel::Group(gi);
+        let mut inv = Invalidations::default();
+        w.rebuild(&mut inv);
+        w.set_bounds(Rect::new(0, 0, 560, 560), &mut inv);
+    }
+    fn keys_of(w: &SettingsWidget) -> Vec<&'static str> {
+        w.rows.iter().map(|r| registry()[r.idx].key).collect()
     }
 
     #[test]
     fn direct_settings_come_first_then_each_sub_group() {
         // 사용자 확정 08-10 — 상위 직속 → 하위1 → 하위2 순서.
         // registry 순서 그대로면 다크 색과 라이트 색 사이에 언어·툴바가 끼어든다.
-        let (mut w, _) = widget();
-        select_cat(&mut w, Msg::CatAppearance);
+        // 10-09 재분류: 직속+하위가 함께 있는 카테고리 = 목록(직속 4 · 타입어헤드 4 — 고급 포함).
+        let (mut w, mut inv) = widget();
+        w.set_advanced(true, &mut inv);
+        select_cat(&mut w, Msg::CatPeerList);
         let groups: Vec<Option<Msg>> = w.rows.iter().map(|r| r.group.1).collect();
         assert!(!groups.is_empty());
         // 직속(None)이 앞에 몰려 있어야 한다 — 뒤쪽에 None이 다시 나오면 섞인 것이다.
@@ -3456,7 +4136,9 @@ mod tests {
             last_direct < first_sub,
             "직속 설정이 하위 그룹 뒤로 흩어졌다: {groups:?}"
         );
-        // 같은 하위는 **연속**해야 한다(한 번 끝난 그룹이 다시 나오면 안 된다).
+        // 하위가 둘인 카테고리(색 — 다크/라이트)에서 같은 하위는 **연속**해야 한다.
+        select_cat(&mut w, Msg::CatColors);
+        let groups: Vec<Option<Msg>> = w.rows.iter().map(|r| r.group.1).collect();
         let mut seen = Vec::new();
         for g in groups.iter().flatten() {
             if seen.last() != Some(g) {
@@ -3470,7 +4152,7 @@ mod tests {
     #[test]
     fn each_sub_group_gets_exactly_one_header() {
         let (mut w, _) = widget();
-        select_cat(&mut w, Msg::CatAppearance);
+        select_cat(&mut w, Msg::CatColors);
         let heads: Vec<Msg> = w.rows.iter().filter_map(|r| r.head).collect();
         let subs: Vec<Msg> = {
             let mut v: Vec<Msg> = w.rows.iter().filter_map(|r| r.group.1).collect();
@@ -3490,9 +4172,12 @@ mod tests {
     #[test]
     fn pinned_band_follows_the_scroll_position() {
         let (mut w, mut inv) = widget();
-        select_cat(&mut w, Msg::CatAppearance);
+        w.set_advanced(true, &mut inv);
+        select_cat(&mut w, Msg::CatPeerList);
+        // 뷰포트를 낮춰 스크롤 여지를 만든다(하단 줄 44가 생겨 560에선 거의 안 밀린다 · 10-09).
+        w.set_bounds(Rect::new(0, 0, 560, 320), &mut inv);
         // 맨 위 = 상위 직속 구간이므로 하위 줄은 비어 있다.
-        assert_eq!(w.current_group(), Some((Msg::CatAppearance, None)));
+        assert_eq!(w.current_group(), Some((Msg::CatPeerList, None)));
         // 첫 하위 그룹의 첫 행까지 스크롤하면 밴드가 그 하위를 가리켜야 한다.
         let (want_sub, y) = w
             .rows
@@ -3503,7 +4188,7 @@ mod tests {
         w.layout(&mut inv);
         assert_eq!(
             w.current_group(),
-            Some((Msg::CatAppearance, Some(want_sub))),
+            Some((Msg::CatPeerList, Some(want_sub))),
             "스크롤한 그룹이 상단에 남아야 한다"
         );
     }
@@ -3514,6 +4199,7 @@ mod tests {
     #[test]
     fn scroll_upper_bound_reaches_last_row() {
         let (mut w, mut inv) = widget();
+        w.set_advanced(true, &mut inv); // IME 카테고리는 전부 고급(10-09)
         select_cat(&mut w, Msg::CatIme);
         // 과도한 값 → layout이 상한으로 클램프.
         w.scroll = 1_000_000;
@@ -3571,13 +4257,21 @@ mod tests {
     #[test]
     fn registry_is_single_source() {
         // 전 카테고리 가시 항목 합 == 레지스트리 전체(트리 밖 설정 구조적 불가).
-        let (mut w, _) = widget();
+        let (mut w, mut inv) = widget();
+        w.set_advanced(true, &mut inv); // 고급 포함 전부
         let mut shown = 0;
         for i in 0..SettingsWidget::cats().len() {
-            w.selected_cat = i;
+            w.selected = TreeSel::Cat(i);
             shown += w.visible_indices().len();
         }
         assert_eq!(shown, registry().len());
+        // 그룹 보기 합도 같다(그룹 ↔ 카테고리 1:N · 누락·중복 없음).
+        let mut by_group = 0;
+        for gi in 0..CATEGORY_TREE.len() {
+            w.selected = TreeSel::Group(gi);
+            by_group += w.visible_indices().len();
+        }
+        assert_eq!(by_group, registry().len());
     }
 
     #[test]
@@ -3586,23 +4280,28 @@ mod tests {
         assert_eq!(s.get("ui.typeahead_space"), "on");
         assert_eq!(s.get("ui.typeahead_special"), "on");
         assert_eq!(s.get("chat.window_mode"), "single");
-        assert_eq!(s.get("ui.language"), "en");
+        assert_eq!(s.get("ui.language"), "system"); // 10-09 D-33-4 = OS 언어 추종이 기본
         assert_eq!(s.get("font.base.size"), "16"); // 절대 px 프리셋(08-18)
     }
 
     #[test]
     fn combo_row_selection_reports_change() {
         let (mut w, mut inv) = widget();
-        select_cat(&mut w, Msg::CatAppearance);
-        // 첫 행 = 테마 콤보. 콤보 클릭 → 열림 → 두 번째 항목(light) 클릭.
-        let cb = match &w.rows[0].ctl {
+        select_cat(&mut w, Msg::CatSystem);
+        // 테마 행(10-09 시스템 카테고리) 콤보 클릭 → 열림 → 두 번째 항목(dark) 클릭.
+        let ti = w
+            .rows
+            .iter()
+            .position(|r| registry()[r.idx].key == "ui.theme")
+            .expect("테마 행");
+        let cb = match &w.rows[ti].ctl {
             RowCtl::Combo(c) => c.bounds(),
-            _ => panic!("첫 행은 콤보"),
+            _ => panic!("테마 행은 콤보"),
         };
         for e in click(cb.x + 5, cb.y + 5) {
             w.on_event(&e, &mut inv);
         }
-        let pop = match &w.rows[0].ctl {
+        let pop = match &w.rows[ti].ctl {
             RowCtl::Combo(c) => {
                 assert!(c.is_open(), "클릭 = 드롭다운 열림");
                 c.popup_rect()
@@ -3620,7 +4319,7 @@ mod tests {
     #[test]
     fn checkbox_row_toggles_off() {
         let (mut w, mut inv) = widget();
-        select_cat(&mut w, Msg::CatAppearance);
+        select_cat(&mut w, Msg::CatPeerList);
         // Toggle 행(공백 포함) 찾기.
         let (i, cb) = w
             .rows
@@ -3631,7 +4330,7 @@ mod tests {
                 _ => None,
             })
             .expect("토글 행 존재");
-        // 외양 카테고리의 첫 토글(레지스트리 순서 — 항목이 앞에 끼면 여기도 갱신).
+        // 목록 카테고리의 첫 토글(10-09 재분류 — 항목이 앞에 끼면 여기도 갱신).
         assert_eq!(registry()[w.rows[i].idx].key, "ui.link_badge_shape");
         for e in click(cb.x + 3, cb.y + cb.h / 2) {
             w.on_event(&e, &mut inv);
@@ -3712,7 +4411,20 @@ mod tests {
         }
         assert_eq!(w.visible_indices().len(), 1, "테마 1건");
         assert_eq!(registry()[w.visible_indices()[0]].key, "ui.theme");
-        assert_eq!(w.cat_map.len(), 1, "매치 있는 카테고리만 사이드바에");
+        assert_eq!(w.cat_map.len(), 2, "매치 있는 그룹+카테고리만 사이드바에");
+        // ★ 자모열(10-09): 조합 중 "ㅌ"·"테"도 테마를 찾는다 · 키 이름으로도.
+        for q in ["테", "ㅌㅔ", "ui.theme"] {
+            let (mut w3, mut inv3) = widget();
+            for c in q.chars() {
+                w3.on_event(&ch(c), &mut inv3);
+            }
+            assert!(
+                w3.visible_indices()
+                    .iter()
+                    .any(|&i| registry()[i].key == "ui.theme"),
+                "{q} → 테마"
+            );
+        }
         // 영어로도 매치.
         let (mut w2, mut inv2) = widget();
         for c in "language".chars() {
@@ -3731,47 +4443,220 @@ mod tests {
         let row = w
             .cat_map
             .iter()
-            .position(|(c, s)| SettingsWidget::cats()[*c].0 == Msg::CatAppearance && s.is_none())
+            .position(|s| matches!(s, TreeSel::Cat(ci) if SettingsWidget::cats()[*ci].0 == Msg::CatAppearance))
             .expect("모양 행");
         let tb = w.tree.bounds();
         #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
         for e in click(tb.x + 10, tb.y + 24 * row as i32 + 5) {
             w.on_event(&e, &mut inv);
         }
-        assert_eq!(
-            SettingsWidget::cats()[w.selected_cat].0,
-            Msg::CatAppearance,
-            "모양 선택"
+        assert!(
+            matches!(w.selected, TreeSel::Cat(ci) if SettingsWidget::cats()[ci].0 == Msg::CatAppearance),
+            "모양 선택: {:?}",
+            w.selected
         );
-        assert!(w.rows.iter().any(|r| registry()[r.idx].key == "ui.theme"));
+        assert!(keys_of(&w).contains(&"ui.carousel_scroll"));
     }
 
     #[test]
-    fn subcategory_filters_vscode_style() {
+    fn advanced_switch_hides_and_counts() {
+        // 10-09: 고급 스위치 꺼짐 = ADVANCED 항목 숨김 + 배너 수 · 켜면 전부.
         let (mut w, mut inv) = widget();
-        // 최상위(모양) 선택 = 하위(타입어헤드) 항목 포함 전부.
-        select_cat(&mut w, Msg::CatAppearance);
-        let all = w.visible_indices().len();
-        let ta = w
-            .visible_indices()
-            .iter()
-            .filter(|&&i| registry()[i].sub == Some(Msg::CatTypeahead))
-            .count();
-        assert_eq!(ta, 4, "타입어헤드 4건 포함");
-        assert!(all > ta, "모양 자체 항목도 함께");
-        // 하위(타입어헤드) 선택 = 4건만.
-        w.selected_sub = Some(Msg::CatTypeahead);
-        w.rebuild(&mut inv);
-        assert_eq!(w.visible_indices().len(), 4, "하위 선택 = 그 항목만");
-        // 사이드바에 하위 행이 존재(모양 아래) — 카테고리 인덱스는 위치로 찾는다.
-        let ai = SettingsWidget::cats()
-            .iter()
-            .position(|(c, _)| *c == Msg::CatAppearance)
-            .expect("모양 카테고리");
+        select_cat(&mut w, Msg::CatPeerList);
+        let shown = keys_of(&w);
+        assert!(shown.contains(&"ui.list_sort") && shown.contains(&"ui.link_badge_shape"));
+        assert!(!shown.contains(&"ui.typeahead_timeout"), "고급은 숨긴다");
+        assert_eq!(w.adv_hidden, 6, "숨긴 고급 수 = 배너 수");
         assert!(
-            w.cat_map.contains(&(ai, Some(Msg::CatTypeahead))),
-            "사이드바 하위 행"
+            w.crumb_h() > w.s(CRUMB_CAT_H) + w.s(CRUMB_SUB_H),
+            "배너 줄만큼 밴드가 높다"
         );
+        w.set_advanced(true, &mut inv);
+        assert_eq!(keys_of(&w).len(), 8, "타입어헤드 4 포함 전부");
+        assert_eq!(w.adv_hidden, 0);
+        // 하단 스위치 클릭으로도 토글되고 변경이 보고된다.
+        let sb = w.adv_switch.bounds();
+        for e in click(sb.x + 3, sb.y + sb.h / 2) {
+            w.on_event(&e, &mut inv);
+        }
+        assert!(!w.advanced);
+        assert_eq!(
+            w.take_changes(),
+            vec![("ui.prefs_advanced", "off".to_string())]
+        );
+    }
+
+    #[test]
+    fn group_view_shows_all_categories_with_headers() {
+        // 그룹 행 선택 = 그 그룹의 카테고리 전부 · 카테고리 경계마다 제목.
+        let (mut w, _) = widget();
+        select_group(&mut w, Msg::GrpConversation);
+        let keys = keys_of(&w);
+        assert!(keys.contains(&"chat.window_mode") && keys.contains(&"notify.enabled"));
+        let heads: Vec<Msg> = w.rows.iter().filter_map(|r| r.head).collect();
+        assert!(heads.contains(&Msg::CatConversation) && heads.contains(&Msg::CatNotify));
+        // 표시 순서 = 트리 순서(대화 → 알림 → 그룹).
+        let pos = |k: &str| keys.iter().position(|x| *x == k).unwrap();
+        assert!(pos("chat.window_mode") < pos("notify.enabled"));
+        assert!(pos("notify.enabled") < pos("group.member_invite"));
+    }
+
+    #[test]
+    fn tree_covers_every_category_and_tables_name_real_keys() {
+        for e in registry() {
+            assert!(
+                tree_pos(e.cat).0 != usize::MAX,
+                "{:?}({})가 CATEGORY_TREE에 없다",
+                e.cat,
+                e.key
+            );
+        }
+        let all: Vec<&str> = registry()
+            .iter()
+            .flat_map(|e| {
+                e.default_values()
+                    .into_iter()
+                    .map(|(k, _)| k)
+                    .chain([e.key])
+            })
+            .collect();
+        for k in ADVANCED {
+            assert!(all.contains(k), "ADVANCED 미등록 키 {k}");
+        }
+        for (c, p, _) in DEPENDS {
+            assert!(all.contains(c), "DEPENDS 자식 미등록 {c}");
+            assert!(all.contains(p), "DEPENDS 부모 미등록 {p}");
+        }
+    }
+
+    #[test]
+    fn depends_locks_child_until_parent_satisfied() {
+        let (mut w, mut inv) = widget();
+        select_cat(&mut w, Msg::CatNotify);
+        let child = w
+            .rows
+            .iter()
+            .position(|r| registry()[r.idx].key == "notify.preview")
+            .unwrap();
+        assert!(
+            !w.is_locked(w.rows[child].idx),
+            "알림 켜짐(기본) = 미리보기 잠기지 않음"
+        );
+        // 부모를 끄면 자식이 잠기고 안내 노트가 생긴다.
+        w.set_value("notify.enabled", "off", &mut inv);
+        w.layout(&mut inv);
+        assert!(w.is_locked(w.rows[child].idx));
+        let (note, _) = w.row_note(w.rows[child].idx).expect("잠금 안내");
+        assert!(!note.is_empty());
+        // 잠긴 자식은 클릭해도 변경이 나오지 않는다.
+        let cb = match &w.rows[child].ctl {
+            RowCtl::Check(c) => c.bounds(),
+            _ => panic!("토글"),
+        };
+        for e in click(cb.x + 3, cb.y + cb.h / 2) {
+            w.on_event(&e, &mut inv);
+        }
+        assert!(w.take_changes().is_empty());
+    }
+
+    #[test]
+    fn reset_button_appears_when_modified_and_restores_default() {
+        let (mut w, mut inv) = widget();
+        select_cat(&mut w, Msg::CatSystem);
+        let ti = w
+            .rows
+            .iter()
+            .position(|r| registry()[r.idx].key == "ui.theme")
+            .unwrap();
+        assert_eq!(
+            w.rows[ti].reset.as_ref().unwrap().bounds().w,
+            0,
+            "기본값 = 초기화 숨김"
+        );
+        w.set_value("ui.theme", "dark", &mut inv);
+        w.layout(&mut inv);
+        let br = w.rows[ti].reset.as_ref().unwrap().bounds();
+        assert!(br.w > 0, "기본값과 다르면 [초기화]가 보인다");
+        for e in click(br.x + 3, br.y + br.h / 2) {
+            w.on_event(&e, &mut inv);
+        }
+        assert_eq!(w.take_changes(), vec![("ui.theme", "system".to_string())]);
+        assert_eq!(w.values.get("ui.theme").map(String::as_str), Some("system"));
+    }
+
+    #[test]
+    fn bottom_bar_close_and_open_file() {
+        let (mut w, mut inv) = widget();
+        let cb = w.btn_close.bounds();
+        assert!(cb.w > 0 && cb.y >= w.bounds.bottom() - w.bottom_h());
+        for e in click(cb.x + 3, cb.y + 3) {
+            w.on_event(&e, &mut inv);
+        }
+        assert!(w.take_back(), "[닫기] = 닫기 요청");
+        let fb = w.btn_file.bounds();
+        for e in click(fb.x + 3, fb.y + 3) {
+            w.on_event(&e, &mut inv);
+        }
+        assert_eq!(
+            w.take_changes(),
+            vec![("settings.open_file", "run".to_string())]
+        );
+    }
+
+    #[test]
+    fn key_click_requests_copy_after_paint() {
+        let (mut w, mut inv) = widget();
+        select_cat(&mut w, Msg::CatSystem);
+        // 페인트가 키 자리를 채운다(ProbeCtx로 실측).
+        let mut probe = crate::controls::ProbeCtx;
+        w.paint(&mut probe, &Theme::dark());
+        let (kr, key) = w
+            .rows
+            .iter()
+            .map(|r| (r.key_rect.get(), registry()[r.idx].key))
+            .find(|(r, _)| r.w > 0)
+            .expect("키 자리");
+        for e in click(kr.x + 2, kr.y + kr.h / 2) {
+            w.on_event(&e, &mut inv);
+        }
+        assert_eq!(w.take_changes(), vec![("prefs.copy_key", key.to_string())]);
+    }
+
+    #[test]
+    fn search_history_records_on_enter_and_cycles() {
+        let (mut w, mut inv) = widget();
+        for c in "theme".chars() {
+            w.on_event(&ch(c), &mut inv);
+        }
+        w.on_event(&key(Key::Enter), &mut inv);
+        assert_eq!(
+            w.take_changes(),
+            vec![("prefs.search", "theme".to_string())]
+        );
+        assert_eq!(w.history, vec!["theme".to_string()]);
+        // 두 번째 검색어 → 최근이 앞 · ↑ = 최근부터.
+        w.search.set_text("");
+        w.query.clear();
+        for c in "font".chars() {
+            w.on_event(&ch(c), &mut inv);
+        }
+        w.on_event(&key(Key::Enter), &mut inv);
+        assert_eq!(w.history, vec!["font".to_string(), "theme".to_string()]);
+        w.on_event(&key(Key::Up), &mut inv);
+        assert_eq!(w.query, "font");
+        w.on_event(&key(Key::Up), &mut inv);
+        assert_eq!(w.query, "theme");
+        w.on_event(&key(Key::Down), &mut inv);
+        assert_eq!(w.query, "font");
+    }
+
+    #[test]
+    fn language_defaults_to_system() {
+        let s = SettingsState::with_defaults();
+        assert_eq!(s.get("ui.language"), "system");
+        let mut s2 = SettingsState::with_defaults();
+        assert!(s2.set_by_name("ui.language", "ko"));
+        assert_eq!(s2.get("ui.language"), "ko");
     }
 
     #[test]

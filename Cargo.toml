@@ -53,6 +53,7 @@ nexa-gfx = { path = "../nexa-ui/crates/nexa-gfx" }
 nexa-ctl = { path = "../nexa-ui/crates/nexa-ctl" }
 nexa-conf = { path = "../nexa-ui/crates/nexa-conf" }
 nexa-font = { path = "../nexa-ui/crates/nexa-font" }
+nexa-sys = { path = "../nexa-ui/crates/nexa-sys", default-features = false } # OS 신호(locale — `ui.language=system` · 10-09 P2)
 nbeep-relay = { path = "crates/nbeep-relay" }
 sha2 = "0.10" # SHA-256(FR-X-6) — snow가 이미 끄는 의존(트리 증가 0)
 

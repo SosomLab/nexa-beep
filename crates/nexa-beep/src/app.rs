@@ -1787,6 +1787,18 @@ fn speed_label(bps: u64) -> String {
 /// 시스템 UI 본) 뒤에 **시스템 UI 본 → OS별 기호·이모지 본**을 순서대로 잇는다. 글자 단위 폴백이라
 /// 기준선·줄 높이는 주 글꼴이 계속 정한다. 실기 09-06 Windows: 맑은 고딕에 ✓(U+2713)가 없어
 /// "□ Verified"로 그려졌다 — Segoe UI Symbol이 받는다.
+/// `ui.language` 값 → 언어(10-09 D-33-4): `system`(기본) = **OS 표시 언어**(nexa-sys locale · 부팅마다 판정 ·
+/// 미지원·판정 불가 = 영어) · 그 밖은 코드 그대로(미지 코드 = 영어).
+fn resolve_lang(value: &str) -> nbeep_core::Lang {
+    if value == "system" || value.is_empty() {
+        return nexa_sys::locale::ui_language()
+            .as_deref()
+            .and_then(nbeep_core::Lang::from_code)
+            .unwrap_or_default();
+    }
+    nbeep_core::Lang::from_code(value).unwrap_or_default()
+}
+
 fn load_ui_font(family: Option<&str>) -> Option<nexa_gfx::Font> {
     // ★10-09 nexa-ui 이관(docs/50 P1-c): 체인 구성은 계열 공용 `nexa-font::ui_font`가 한다
     //   (같은 순서 + macOS 라틴 = 시스템 UI 글꼴(SF) → 한글 SD Gothic Neo 폴백 · 고정폭 꼬리).
@@ -8547,13 +8559,28 @@ impl App {
             }
             return;
         }
-        let attrs = self
+        // 설정 창 위치·크기 기억(10-09 P2 · nexa-sql 차용 — `ui.prefs_*` · 없거나 무효면 기본 920×640).
+        let geo = |k: &str| self.settings.get(k).parse::<i32>().ok();
+        let (pw, ph) = match (geo("ui.prefs_w"), geo("ui.prefs_h")) {
+            (Some(w), Some(h)) if (480..=8000).contains(&w) && (360..=8000).contains(&h) => {
+                (f64::from(w), f64::from(h))
+            }
+            _ => (920.0, 640.0),
+        };
+        let mut attrs = self
             .win_attrs()
             .with_title(format!(
                 "Nexa Beep — {}",
                 nbeep_core::t(nbeep_core::Msg::SettingsTitle)
             ))
+            .with_inner_size(winit::dpi::LogicalSize::new(pw, ph))
+            .with_min_inner_size(winit::dpi::LogicalSize::new(560.0, 400.0))
             .with_window_icon(self.icon.clone());
+        if let (Some(x), Some(y)) = (geo("ui.prefs_x"), geo("ui.prefs_y")) {
+            if (-4000..=16000).contains(&x) && (-4000..=16000).contains(&y) {
+                attrs = attrs.with_position(winit::dpi::LogicalPosition::new(x, y));
+            }
+        }
         let window = Rc::new(el.create_window(attrs).unwrap());
         window.set_ime_allowed(true);
         let scale = window.scale_factor() as f32;
@@ -11875,6 +11902,26 @@ impl App {
                     self.pending_reset = true; // 확인 모달은 about_to_wait(el)에서
                     continue;
                 }
+                // 설정 파일 열기(10-09 P2 · 하단 [설정 파일 열기…]) — OS 기본 프로그램으로.
+                "settings.open_file" => {
+                    let path = self.conf.path().to_path_buf();
+                    if path.is_file() && nbeep_plat::launch::open_path(&path) {
+                        self.set_status(nbeep_core::tf(
+                            nbeep_core::Msg::StSettingsFileOpened,
+                            &[&path.display().to_string()],
+                        ));
+                    } else {
+                        self.set_status(path.display().to_string());
+                    }
+                    continue;
+                }
+                // 키 이름 복사(10-09 P2 · 카드의 키 이름/⧉ 클릭).
+                "prefs.copy_key" => {
+                    if nbeep_plat::clipboard::set_text(&value) {
+                        self.set_status(nbeep_core::tf(nbeep_core::Msg::StKeyCopied, &[&value]));
+                    }
+                    continue;
+                }
                 // 로그 보기(M3-22 Action) — 오늘 파일 우선, 없으면 폴더(그것도
                 // 없으면 안내 — off 상태 접근성).
                 "log.view" => {
@@ -11950,7 +11997,7 @@ impl App {
                 }
                 "ui.language" => {
                     // 현재 언어 전환 — 전 위젯이 다음 렌더에서 새 언어로 그린다.
-                    nbeep_core::set_lang(nbeep_core::Lang::from_code(&value).unwrap_or_default());
+                    nbeep_core::set_lang(resolve_lang(&value));
                     // 메뉴 라벨은 생성 시 고정이라 재구성.
                     self.menu.set_menus(build_menus());
                     // 정렬 드롭다운 라벨도 생성 시 고정 — 값 유지한 채 재구성(08-15).
@@ -18692,6 +18739,22 @@ impl ApplicationHandler<AppEvent> for App {
                             self.conf_mark();
                         }
                     }
+                } else if self
+                    .windows
+                    .get(&id)
+                    .is_some_and(|e| e.role == Role::Settings)
+                {
+                    // 설정 창 크기 기억(10-09 P2).
+                    if let Some(e) = self.windows.get(&id) {
+                        let s = f64::from(e.scale.max(0.5));
+                        let lw = (f64::from(size.width) / s).round() as i64;
+                        let lh = (f64::from(size.height) / s).round() as i64;
+                        if lw >= 480 && lh >= 360 {
+                            self.settings.set("ui.prefs_w", lw.to_string());
+                            self.settings.set("ui.prefs_h", lh.to_string());
+                            self.conf_mark();
+                        }
+                    }
                 }
                 self.layout_window(id);
                 self.request_redraw(id);
@@ -18706,6 +18769,22 @@ impl ApplicationHandler<AppEvent> for App {
                         if (-4000..=16000).contains(&lx) && (-4000..=16000).contains(&ly) {
                             self.settings.set("ui.win_x", lx.to_string());
                             self.settings.set("ui.win_y", ly.to_string());
+                            self.conf_mark();
+                        }
+                    }
+                } else if self
+                    .windows
+                    .get(&id)
+                    .is_some_and(|e| e.role == Role::Settings)
+                {
+                    // 설정 창 위치 기억(10-09 P2).
+                    if let Some(e) = self.windows.get(&id) {
+                        let s = f64::from(e.scale.max(0.5));
+                        let lx = (f64::from(pos.x) / s).round() as i64;
+                        let ly = (f64::from(pos.y) / s).round() as i64;
+                        if (-4000..=16000).contains(&lx) && (-4000..=16000).contains(&ly) {
+                            self.settings.set("ui.prefs_x", lx.to_string());
+                            self.settings.set("ui.prefs_y", ly.to_string());
                             self.conf_mark();
                         }
                     }
@@ -19829,9 +19908,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         };
 
     // 현재 언어를 설정값으로 초기화(기본 en — i18n).
-    nbeep_core::set_lang(
-        nbeep_core::Lang::from_code(settings.get("ui.language")).unwrap_or_default(),
-    );
+    nbeep_core::set_lang(resolve_lang(settings.get("ui.language")));
     // 스크롤바 자동 숨김도 부팅 때 한 번 반영한다 — 설정을 바꿔야만 적용되면
     // 첫 실행에서 기본값이 코드 상수와 어긋나도 아무도 모른다.
     if let Ok(ms) = settings.get("ui.scrollbar_hide").parse::<u64>() {

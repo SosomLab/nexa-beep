@@ -1124,6 +1124,44 @@ pub enum Msg {
     /// 구성원 초대 허용(새 방 기본값 · 방별로 소유자가 변경 — ADR-0012 정책).
     GroupMemberInvite,
     GroupMemberInviteDesc,
+    // ── P2 설정 체계 개편(10-09 · docs/50) — 그룹 트리·시스템 카테고리·카드 문구 ──
+    /// 설정 그룹(트리 최상위 — nexa-sql CATEGORY_TREE 차용).
+    GrpGeneral,
+    GrpConversation,
+    GrpAppearance,
+    GrpFiles,
+    GrpNetwork,
+    GrpAdvanced,
+    /// 카테고리 "시스템" — 언어·테마·크기·OS 통합(자동 실행·트레이).
+    CatSystem,
+    /// 카테고리 "알림"(종전 대화 카테고리에서 분리).
+    CatNotify,
+    /// 카테고리 "색"(테마 색 8종 · 하위 다크/라이트).
+    CatColors,
+    /// 언어 "시스템 언어 따름"(`ui.language=system` · 기본값).
+    LangSystem,
+    /// 고급 설정 스위치 라벨.
+    PrefsAdvanced,
+    /// "고급 설정 {}개 숨김 — 고급을 켜면 보입니다".
+    PrefsAdvancedHidden,
+    /// "기본값: {}".
+    LblDefaultValue,
+    /// 카드 [초기화].
+    BtnReset,
+    /// 하단 [설정 파일 열기…].
+    BtnOpenSettingsFile,
+    /// 하단 [닫기].
+    BtnClose,
+    /// 키 복사 버튼 툴팁.
+    PrefsCopyKey,
+    /// 종속 잠금 안내 "“{}”을(를) 켜면 쓸 수 있습니다".
+    PrefsLockedBy,
+    /// 종속 잠금 안내(값 일치형) "“{}”이(가) {}일 때 쓸 수 있습니다".
+    PrefsLockedByValue,
+    /// 상태줄 "설정 파일을 열었습니다: {}".
+    StSettingsFileOpened,
+    /// 상태줄 "키를 복사했습니다: {}".
+    StKeyCopied,
 }
 
 impl Msg {
@@ -3047,6 +3085,58 @@ impl Msg {
             Msg::Count50 => ["50", "50개", "50条", "50件"],
             Msg::Count200 => ["200 (default)", "200개(기본)", "200条(默认)", "200件(既定)"],
             Msg::Count1000 => ["1000", "1000개", "1000条", "1000件"],
+            // ── P2 설정 체계 개편(10-09) ──
+            Msg::GrpGeneral => ["General", "일반", "常规", "一般"],
+            Msg::GrpConversation => ["Conversation", "대화", "会话", "会話"],
+            Msg::GrpAppearance => ["Appearance", "모양", "外观", "外観"],
+            Msg::GrpFiles => ["Files", "파일", "文件", "ファイル"],
+            Msg::GrpNetwork => ["Network", "네트워크", "网络", "ネットワーク"],
+            Msg::GrpAdvanced => ["Advanced", "고급", "高级", "詳細"],
+            Msg::CatSystem => ["System", "시스템", "系统", "システム"],
+            Msg::CatNotify => ["Notifications", "알림", "通知", "通知"],
+            Msg::CatColors => ["Colors", "색", "颜色", "色"],
+            Msg::LangSystem => [
+                "Follow system language",
+                "시스템 언어 따름",
+                "跟随系统语言",
+                "システムの言語に従う",
+            ],
+            Msg::PrefsAdvanced => ["Advanced settings", "고급 설정", "高级设置", "詳細設定"],
+            Msg::PrefsAdvancedHidden => [
+                "{} advanced settings hidden — turn on Advanced to show them",
+                "고급 설정 {}개 숨김 — 고급 설정을 켜면 보입니다",
+                "已隐藏 {} 项高级设置 — 打开“高级设置”即可显示",
+                "詳細設定 {} 件を非表示 — 詳細設定をオンにすると表示されます",
+            ],
+            Msg::LblDefaultValue => ["default: {}", "기본값: {}", "默认: {}", "既定: {}"],
+            Msg::BtnReset => ["Reset", "초기화", "重置", "リセット"],
+            Msg::BtnOpenSettingsFile => [
+                "Open settings file…",
+                "설정 파일 열기…",
+                "打开设置文件…",
+                "設定ファイルを開く…",
+            ],
+            Msg::BtnClose => ["Close", "닫기", "关闭", "閉じる"],
+            Msg::PrefsCopyKey => ["Copy key name", "키 이름 복사", "复制键名", "キー名をコピー"],
+            Msg::PrefsLockedBy => [
+                "Available when “{}” is on",
+                "“{}”을(를) 켜면 쓸 수 있습니다",
+                "打开“{}”后可用",
+                "“{}”をオンにすると使えます",
+            ],
+            Msg::PrefsLockedByValue => [
+                "Available when “{}” is {}",
+                "“{}”이(가) {}일 때 쓸 수 있습니다",
+                "“{}”为 {} 时可用",
+                "“{}”が {} のとき使えます",
+            ],
+            Msg::StSettingsFileOpened => [
+                "Opened settings file: {}",
+                "설정 파일을 열었습니다: {}",
+                "已打开设置文件: {}",
+                "設定ファイルを開きました: {}",
+            ],
+            Msg::StKeyCopied => ["Copied key: {}", "키를 복사했습니다: {}", "已复制键名: {}", "キーをコピーしました: {}"],
         }
     }
 }
