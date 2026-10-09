@@ -1162,6 +1162,8 @@ pub enum Msg {
     StSettingsFileOpened,
     /// 상태줄 "키를 복사했습니다: {}".
     StKeyCopied,
+    /// 피커 제목 "라이선스 파일 선택 — {}"(P4 · 자체 피커 · P3에서 nexa-dlg로).
+    TitlePickLicense,
     // ── P4 license(10-09 · docs/50 D-33-6·7 · nbeep-license · nbeep-ui license_win) ──
     /// 도움말 ▸ 라이선스… 메뉴 항목·창 제목 꼬리.
     LicMenu,
@@ -3212,6 +3214,12 @@ impl Msg {
                 "設定ファイルを開きました: {}",
             ],
             Msg::StKeyCopied => ["Copied key: {}", "키를 복사했습니다: {}", "已复制键名: {}", "キーをコピーしました: {}"],
+            Msg::TitlePickLicense => [
+                "Choose a license file — {}",
+                "라이선스 파일 선택 — {}",
+                "选择许可证文件 — {}",
+                "ライセンスファイルを選択 — {}",
+            ],
             // ── P4 license(10-09 · docs/50) ──
             Msg::LicMenu => [
                 "License…",

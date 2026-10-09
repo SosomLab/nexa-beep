@@ -63,6 +63,17 @@ fn main() {
         app::print_whoami();
         return;
     }
+    // 라이선스 CLI(P4 · docs/50): status | request [이름 [이메일]] | install <파일> | remove | path.
+    // 종료 코드 0 / 1(거부·실패) / 2(사용법) — 출력은 영문 고정 키(발급 메일 안내와 일치).
+    if let Some(pos) = args.iter().position(|a| a == "--license") {
+        let code = nbeep_license::cli::run(
+            &args[pos + 1..],
+            &app::data_dir(),
+            &mut std::io::stdout(),
+            &mut std::io::stderr(),
+        );
+        std::process::exit(code);
+    }
     if let Some(pos) = args.iter().position(|a| a == "--quarantine-demo") {
         let Some(path) = args.get(pos + 1) else {
             eprintln!("--quarantine-demo <파일> 필요");
@@ -309,6 +320,8 @@ Nexa Beep {v} — 제로 컨피그 로컬 네트워크 메신저 (\"실행 = 참
   --quarantine-demo <파일>                 수신 무해화 게이트 종단 실측(.beepq)
 
 기타:
+  --license <status|request [이름 [이메일]]|install <파일>|remove|path>
+                        라이선스(도움말 ▸ 라이선스… 와 같은 동작 · 비상업 무료 = 파일 없이 Free)
   -h, --help            이 도움말
   -V, --version         버전 출력",
         v = env!("CARGO_PKG_VERSION")

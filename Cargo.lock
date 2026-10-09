@@ -1325,6 +1325,7 @@ dependencies = [
  "getrandom 0.2.17",
  "nbeep-core",
  "nbeep-crypto",
+ "nbeep-license",
  "nbeep-net",
  "nbeep-plat",
  "nbeep-relay",

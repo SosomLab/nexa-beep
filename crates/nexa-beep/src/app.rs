@@ -94,7 +94,10 @@ fn build_menus() -> Vec<MenuDef> {
         ),
         MenuDef::new(
             t(Msg::MenuHelp),
-            vec![MenuEntry::Item(ComboItem::new("about", "About"))],
+            vec![
+                MenuEntry::Item(ComboItem::new("license", t(Msg::LicMenu))),
+                MenuEntry::Item(ComboItem::new("about", "About")),
+            ],
         ),
     ]
 }
@@ -2575,6 +2578,8 @@ enum Role {
     Picker,
     /// About 창(메뉴 → About — 브랜딩·링크).
     About,
+    /// 라이선스 창(도움말 ▸ 라이선스… · docs/50 P4 — 상태표 · 요청 코드 · 파일 열기 · 제거).
+    License,
     /// 프로필 변경 화면(M3-17 — 이미지·이름·연락처 + 공개 토글).
     Profile,
     /// 상대 프로필 보기 카드(M3-17 — 목록 우클릭 ▸ 프로필 보기).
@@ -2798,6 +2803,8 @@ enum PickerPurpose {
     /// 대화 기록 **복원 위치** 선택(M3-23) — 폴더 탐색 + "이 폴더에서 복원"
     /// (개별 .seg 파일 클릭 = 그 파일만 복원).
     HistoryRestoreDir,
+    /// 라이선스 파일 선택(P4 · `.license`) — 폴더 탐색 + 파일 선택 → `license_install`.
+    LicenseFile,
 }
 
 /// 대화창 입력을 명령으로 가른 결과(08-15).
@@ -3054,6 +3061,9 @@ struct App {
     addr_view: Option<nbeep_ui::AddrPromptWidget>,
     /// About 뷰(열려 있을 때만 Some).
     about_view: Option<AboutWidget>,
+    /// 라이선스 창(P4) — 위젯 + 판정기(부팅 1회 `open_default` · 창 열 때 `refresh`).
+    license_view: Option<nbeep_ui::LicenseWidget>,
+    licensing: nbeep_license::Licensing,
     /// 경고 모달 뷰(열려 있을 때만 Some).
     alert_view: Option<nbeep_ui::AlertWidget>,
     /// 열어야 할 경고(제목, 본문, 진원 창) — 이벤트 루프 참조가 없는 지점에서
@@ -3399,6 +3409,157 @@ impl App {
         menu_h + tb_h + fb_h
     }
 
+    /// 라이선스 창을 연다(도움말 ▸ 라이선스… · P4) — 단일 창 · 메인 소유 모달 · 높이는 위젯이 정한다.
+    fn open_license(&mut self, el: &ActiveEventLoop) {
+        if let Some((lid, _)) = self.windows.iter().find(|(_, e)| e.role == Role::License) {
+            if let Some(e) = self.windows.get(lid) {
+                e.window.focus_window();
+            }
+            return;
+        }
+        // 다른 프로세스·CLI가 설치/제거했을 수 있다 — 열 때 다시 읽는다.
+        let _ = self.licensing.refresh();
+        let lv = nbeep_ui::LicenseWidget::new(nbeep_ui::license_view(&self.licensing));
+        let attrs = self
+            .win_attrs()
+            .with_title(format!(
+                "Nexa Beep — {}",
+                nbeep_core::t(nbeep_core::Msg::LicTitle)
+            ))
+            .with_inner_size(winit::dpi::LogicalSize::new(640.0, 520.0))
+            .with_min_inner_size(winit::dpi::LogicalSize::new(480.0, 360.0))
+            .with_resizable(true)
+            .with_window_icon(self.icon.clone());
+        let attrs = self.modal_attrs(attrs, false); // 메인 소유(08-15 — 창 묶음 부상)
+        let window = Rc::new(el.create_window(attrs).unwrap());
+        window.set_ime_allowed(true); // 이름·이메일 입력란
+        let scale = window.scale_factor() as f32;
+        let context = softbuffer::Context::new(window.clone()).unwrap();
+        let surface = SbSurface::new(&context, window.clone()).unwrap();
+        let id = window.id();
+        self.windows.insert(
+            id,
+            WinEntry {
+                role: Role::License,
+                window,
+                surface,
+                cursor: (0, 0),
+                scale,
+            },
+        );
+        self.license_view = Some(lv);
+        self.fit_license_window(id);
+        self.layout_window(id);
+        self.request_redraw(id);
+    }
+
+    /// 라이선스 창 높이를 위젯이 바라는 값으로(상태표 행 수가 바뀐다 · 물리 px → 논리).
+    fn fit_license_window(&mut self, id: WindowId) {
+        let Some(lv) = &self.license_view else { return };
+        let Some(e) = self.windows.get(&id) else {
+            return;
+        };
+        let want = lv.desired_height();
+        if want > 0 {
+            let s = f64::from(e.scale.max(0.5));
+            let w = f64::from(e.window.inner_size().width) / s;
+            let h = (f64::from(want) / s).clamp(360.0, 900.0);
+            let _ = e
+                .window
+                .request_inner_size(winit::dpi::LogicalSize::new(w.max(480.0), h));
+        }
+    }
+
+    /// 라이선스 창 행동(P4 · 협업 배선 목록 3) — 요청 코드 복사 · 연락처 복사 · 파일 열기 · 제거 · 닫기.
+    fn license_action(&mut self, id: WindowId, a: nbeep_ui::LicAction, inv: &mut Invalidations) {
+        use nbeep_core::{t, tf, Msg};
+        use nbeep_ui::LicAction;
+        match a {
+            LicAction::CopyRequest { name, email } => {
+                let meta = nbeep_license::RequestMeta { name, email };
+                let note = match nbeep_license::Licensing::request_code(&meta) {
+                    Some(code) if nbeep_plat::clipboard::set_text(&code) => {
+                        (t(Msg::LicNoteCopied).to_string(), false)
+                    }
+                    Some(_) => (t(Msg::LicNoteError).to_string(), true),
+                    None => (t(Msg::LicNoMachine).to_string(), true),
+                };
+                if let Some(lv) = &mut self.license_view {
+                    lv.set_note(note.0, note.1, inv);
+                }
+            }
+            LicAction::CopyContact(s) => {
+                if nbeep_plat::clipboard::set_text(&s) {
+                    if let Some(lv) = &mut self.license_view {
+                        lv.set_note(t(Msg::LicNoteAddrCopied), false, inv);
+                    }
+                }
+            }
+            LicAction::OpenFile => {
+                // 파일 선택은 피커(P3 nexa-dlg 전환 전 = 기존 자체 피커 · 용도 LicenseFile).
+                self.pending_picker = Some(PickerPurpose::LicenseFile);
+            }
+            LicAction::Remove => {
+                let note = match self.licensing.remove() {
+                    Ok(true) => (t(Msg::LicNoteRemoved).to_string(), false),
+                    Ok(false) => (t(Msg::LicNoteNothing).to_string(), false),
+                    Err(e) => (tf(Msg::LicNoteError, &[&e.to_string()]), true),
+                };
+                self.license_refresh_view(id, Some(note), inv);
+            }
+            LicAction::Close => {
+                self.license_view = None;
+                self.windows.remove(&id);
+            }
+        }
+        self.request_redraw(id);
+    }
+
+    /// 라이선스 파일 설치(피커 결과 · CLI와 같은 경로) → 창 갱신.
+    fn license_install(&mut self, path: &std::path::Path) {
+        use nbeep_core::{tf, Msg};
+        let note = match self.licensing.install(path) {
+            Ok(l) => (tf(Msg::LicNoteInstalled, &[&l.id]), false),
+            Err(nbeep_license::InstallError::Rejected(s)) => (
+                tf(
+                    Msg::LicNoteRejected,
+                    &[&nbeep_ui::license_win::state_text(&s).0],
+                ),
+                true,
+            ),
+            Err(e) => (tf(Msg::LicNoteError, &[&e.to_string()]), true),
+        };
+        self.set_status(note.0.clone());
+        let lid = self
+            .windows
+            .iter()
+            .find(|(_, e)| e.role == Role::License)
+            .map(|(id, _)| *id);
+        if let Some(id) = lid {
+            let mut inv = Invalidations::default();
+            self.license_refresh_view(id, Some(note), &mut inv);
+            self.request_redraw(id);
+        }
+    }
+
+    /// 판정기 상태를 창에 다시 싣고(노트 포함) 창 높이를 맞춘다.
+    fn license_refresh_view(
+        &mut self,
+        id: WindowId,
+        note: Option<(String, bool)>,
+        inv: &mut Invalidations,
+    ) {
+        let view = nbeep_ui::license_view(&self.licensing);
+        if let Some(lv) = &mut self.license_view {
+            lv.set_view(view, inv);
+            if let Some((n, warn)) = note {
+                lv.set_note(n, warn, inv);
+            }
+        }
+        self.fit_license_window(id);
+        self.layout_window(id);
+    }
+
     /// About 창을 연다(메뉴 → About).
     fn open_about(&mut self, el: &ActiveEventLoop) {
         if let Some((aid, _)) = self.windows.iter().find(|(_, e)| e.role == Role::About) {
@@ -3555,13 +3716,14 @@ impl App {
     /// 갖는다(알림 > 피커 > 이름/주소 프롬프트 > 프로필 > About). 모달이 떠 있는
     /// 동안 다른 앱 창은 입력 불가·클릭 시 모달이 앞으로 온다.
     fn modal_id(&self) -> Option<WindowId> {
-        let picks: [fn(Role) -> bool; 6] = [
+        let picks: [fn(Role) -> bool; 7] = [
             |r| matches!(r, Role::Alert),
             |r| matches!(r, Role::Picker),
             |r| matches!(r, Role::NamePrompt),
             |r| matches!(r, Role::AddEndpoint),
             |r| matches!(r, Role::Profile),
             |r| matches!(r, Role::About),
+            |r| matches!(r, Role::License),
         ];
         for pick in picks {
             if let Some((wid, _)) = self.windows.iter().find(|(_, e)| pick(e.role)) {
@@ -9495,6 +9657,9 @@ impl App {
                             PickerPurpose::SettingsRestoreFile => {
                                 name.to_ascii_lowercase().ends_with(".cfg")
                             }
+                            PickerPurpose::LicenseFile => {
+                                name.to_ascii_lowercase().ends_with(".license")
+                            }
                             PickerPurpose::HistoryRestoreDir => {
                                 name.to_ascii_lowercase().ends_with(".seg")
                             }
@@ -9547,6 +9712,9 @@ impl App {
             }
             PickerPurpose::HistoryRestoreDir => {
                 nbeep_core::tf(nbeep_core::Msg::TitlePickCvRestoreDir, &[&dir_s])
+            }
+            PickerPurpose::LicenseFile => {
+                nbeep_core::tf(nbeep_core::Msg::TitlePickLicense, &[&dir_s])
             }
             PickerPurpose::GallerySample => String::new(),
         };
@@ -14565,6 +14733,12 @@ impl App {
                     av.set_bounds(Rect::new(0, 0, w, h), &mut inv);
                 }
             }
+            Role::License => {
+                if let Some(lv) = &mut self.license_view {
+                    lv.set_scale(scale, &mut inv);
+                    lv.set_bounds(Rect::new(0, 0, w, h), &mut inv);
+                }
+            }
             Role::Alert => {
                 if let Some(av) = &mut self.alert_view {
                     av.set_scale(scale, &mut inv);
@@ -15423,6 +15597,7 @@ impl App {
                             ),
                             "gallery" => self.open_gallery(el),
                             "about" => self.open_about(el),
+                            "license" => self.open_license(el),
                             // 명시적 종료(사용자 요청 08-15 — 메뉴에 종료가 없어
                             // close_to_tray on이면 앱을 끝낼 길이 트레이뿐이었다).
                             // 트레이 '종료'와 같은 확정적 경로 = 즉시 exit(Drop 체인이
@@ -15684,6 +15859,9 @@ impl App {
                                                 let m = self.do_restore_history_files(&[p]);
                                                 self.set_status(m);
                                             }
+                                            PickerPurpose::LicenseFile => {
+                                                self.license_install(&p);
+                                            }
                                             _ => {
                                                 let m = self.do_restore_identity(&p);
                                                 self.set_status(m);
@@ -15724,6 +15902,14 @@ impl App {
                     if av.take_back() {
                         self.about_view = None;
                         self.windows.remove(&id);
+                    }
+                }
+            }
+            Role::License => {
+                if let Some(lv) = &mut self.license_view {
+                    lv.on_event(&ev, &mut inv);
+                    if let Some(a) = lv.take_action() {
+                        self.license_action(id, a, &mut inv);
                     }
                 }
             }
@@ -16223,6 +16409,11 @@ impl App {
             Role::About => {
                 if let Some(av) = &self.about_view {
                     av.paint(&mut ctx, &theme);
+                }
+            }
+            Role::License => {
+                if let Some(lv) = &self.license_view {
+                    lv.paint(&mut ctx, &theme);
                 }
             }
             Role::Alert => {
@@ -18691,6 +18882,7 @@ impl ApplicationHandler<AppEvent> for App {
                         Role::Gallery => self.gallery_view = None,
                         Role::Picker => self.picker_view = None,
                         Role::About => self.about_view = None,
+                        Role::License => self.license_view = None,
                         Role::Alert => {
                             self.alert_view = None;
                             // 선택 없이 닫음(X) — 원격 요청 대기(§6)면 거절과 동치:
@@ -20035,6 +20227,8 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         settings_view: None,
         gallery_view: None,
         about_view: None,
+        license_view: None,
+        licensing: nbeep_license::Licensing::open_default(&data_dir()),
         alert_view: None,
         pending_alert: None,
         pending_drops: Vec::new(),
