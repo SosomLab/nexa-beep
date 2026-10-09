@@ -208,6 +208,7 @@ docker run --rm -it --init -p 47200:47200 \
 | **budget** | ubuntu | 릴리스 빌드 후 **바이너리 ≤10MB**(NFR-B-3) 초과 시 실패 |
 
 - 전역 `RUSTFLAGS=-D warnings` · `RUSTDOCFLAGS=-D warnings` — 경고 = 실패.
+- ⚠ **windows-latest 포트 함정**(10-10 실측 · run 37966800953): Windows는 TCP·UDP **제외 포트 범위가 따로**라(`netsh int ipv4 show excludedportrange`) TCP가 고른 임시 번호를 같은 번호 UDP로 묶으면 `PermissionDenied`(10013 WSAEACCES)가 난다 — nexa-beepd `relay_e2e` 5종이 동시에 실패 · `rerun --failed` = 통과(러너 흔들림). 처방 `4e53b73` = 테스트용 port 0 bind를 **TCP-먼저/UDP-먼저 교대 · 40회**(고정 포트는 1회 · 와이어 무변경). **같은 번호로 TCP+UDP를 함께 여는 테스트는 교대 재시도를 쓴다** · 흔들림을 보면 rerun 전에 원인 잡 로그를 남긴다.
 - ⏳ **미발효(실물 도착 후 추가)**: 임포트 화이트리스트(NFR-B-5 · OS 인박스만 — SP-1/M0-2) · 유휴 RSS·24h 누수(NFR-B-1/6 — M1+) · 안전 회귀([§2](#2-검증-항목-기능-도착-시-절차화)) · 발견 실측 E-1~E-9(실기).
 
 ## 5. 배포 — `.github/workflows/release.yml`
