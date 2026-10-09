@@ -1476,10 +1476,18 @@ impl Widget for PeerListWidget {
         ctx.select_font(FontSlot::PeerList, false);
         // Connecting 갭 링 회전(M3-19) — 캐럿 위상이 뒤집힐 때마다 90° 전진.
         // 새 타이머 없이 기존 530ms 틱을 재사용한다(포커스 창이 아니면 정지 = fail-soft).
-        let caret_phase = ctx.caret_on();
-        if self.spin_caret.get() != caret_phase {
-            self.spin_caret.set(caret_phase);
-            self.spin_step.set(self.spin_step.get().wrapping_add(1) % 4);
+        // ★ 회전할 행이 있을 때만 위상을 묻는다(10-10 RL-9): 호스트는 `caret_on()`을 물은 창만 틱마다 다시 그린다 —
+        //   연결 중인 행이 없으면 목록 창은 유휴에 프레임 0(종전 530ms마다 전체 재도색 = 유휴 CPU 2%).
+        let spinning = self
+            .rows
+            .iter()
+            .any(|r| matches!(r.link, LinkState::Connecting));
+        if spinning {
+            let caret_phase = ctx.caret_on();
+            if self.spin_caret.get() != caret_phase {
+                self.spin_caret.set(caret_phase);
+                self.spin_step.set(self.spin_step.get().wrapping_add(1) % 4);
+            }
         }
         let vis = self.visible_rows();
 

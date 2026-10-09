@@ -70,7 +70,7 @@ use nbeep_ui::{
     ToolItem, Toolbar, Widget,
 };
 
-type SbSurface = softbuffer::Surface<Rc<Window>, Rc<Window>>;
+// 화면 내보내기(10-10) — `present::Presenter`(softbuffer ↔ macOS IOSurface · docs/51).
 
 /// 메뉴바 구성(i18n 현재 언어 기준) — 초기화·언어 전환 시 재호출.
 fn build_menus() -> Vec<MenuDef> {
@@ -2603,7 +2603,10 @@ fn xfer_step(
 struct WinEntry {
     role: Role,
     window: Rc<Window>,
-    surface: SbSurface,
+    surface: crate::present::Presenter,
+    /// 마지막 페인트에서 깜빡이는 캐럿을 그리는 컨트롤이 있었다(`RasterCtx::caret_asked`) — 캐럿 틱 재페인트는 이 창만
+    /// (10-10 RL-9: 목록 창까지 530ms마다 전체 재도색 = 유휴 CPU 2% · IOSurface 유휴 해제도 못 걸렸다).
+    blinks: bool,
     cursor: (i32, i32),
     scale: f32,
 }
@@ -3469,8 +3472,7 @@ impl App {
         let window = Rc::new(el.create_window(attrs).unwrap());
         window.set_ime_allowed(true); // 이름·이메일 입력란
         let scale = window.scale_factor() as f32;
-        let context = softbuffer::Context::new(window.clone()).unwrap();
-        let surface = SbSurface::new(&context, window.clone()).unwrap();
+        let surface = crate::present::Presenter::new(window.clone()).unwrap();
         let id = window.id();
         self.windows.insert(
             id,
@@ -3480,6 +3482,7 @@ impl App {
                 surface,
                 cursor: (0, 0),
                 scale,
+                blinks: true,
             },
         );
         self.license_view = Some(lv);
@@ -3689,8 +3692,7 @@ impl App {
         let attrs = self.modal_attrs(attrs, false); // 메인 소유(08-15 — 창 묶음 부상)
         let window = Rc::new(el.create_window(attrs).unwrap());
         let scale = window.scale_factor() as f32;
-        let context = softbuffer::Context::new(window.clone()).unwrap();
-        let surface = SbSurface::new(&context, window.clone()).unwrap();
+        let surface = crate::present::Presenter::new(window.clone()).unwrap();
         let id = window.id();
         self.windows.insert(
             id,
@@ -3700,6 +3702,7 @@ impl App {
                 surface,
                 cursor: (0, 0),
                 scale,
+                blinks: true,
             },
         );
         self.about_view = Some(AboutWidget::new(AboutInfo {
@@ -3778,8 +3781,7 @@ impl App {
         let attrs = self.modal_attrs_from(anchor, attrs, false); // 진원 창 소유(부상·복귀 축)
         let window = Rc::new(el.create_window(attrs).unwrap());
         let scale = window.scale_factor() as f32;
-        let context = softbuffer::Context::new(window.clone()).unwrap();
-        let surface = SbSurface::new(&context, window.clone()).unwrap();
+        let surface = crate::present::Presenter::new(window.clone()).unwrap();
         let id = window.id();
         self.windows.insert(
             id,
@@ -3789,6 +3791,7 @@ impl App {
                 surface,
                 cursor: (0, 0),
                 scale,
+                blinks: true,
             },
         );
         self.alert_view = Some(nbeep_ui::AlertWidget::new(title, message));
@@ -6288,8 +6291,7 @@ impl App {
                                                // OS 조합 세션 경합 제거). 대화 진입 시 켠다(set_main_ime).
         window.set_ime_allowed(false);
         let scale = window.scale_factor() as f32;
-        let context = softbuffer::Context::new(window.clone()).unwrap();
-        let surface = SbSurface::new(&context, window.clone()).unwrap();
+        let surface = crate::present::Presenter::new(window.clone()).unwrap();
         let id = window.id();
         self.windows.insert(
             id,
@@ -6299,6 +6301,7 @@ impl App {
                 surface,
                 cursor: (0, 0),
                 scale,
+                blinks: true,
             },
         );
         self.main_id = Some(id);
@@ -7800,8 +7803,7 @@ impl App {
         let window = Rc::new(el.create_window(attrs).unwrap());
         window.set_ime_allowed(false);
         let scale = window.scale_factor() as f32;
-        let context = softbuffer::Context::new(window.clone()).unwrap();
-        let surface = SbSurface::new(&context, window.clone()).unwrap();
+        let surface = crate::present::Presenter::new(window.clone()).unwrap();
         let id = window.id();
         self.windows.insert(
             id,
@@ -7811,6 +7813,7 @@ impl App {
                 surface,
                 cursor: (0, 0),
                 scale,
+                blinks: true,
             },
         );
         self.devices_view = Some(dv);
@@ -9608,8 +9611,7 @@ impl App {
         let window = Rc::new(el.create_window(attrs).unwrap());
         window.set_ime_allowed(true);
         let scale = window.scale_factor() as f32;
-        let context = softbuffer::Context::new(window.clone()).unwrap();
-        let surface = SbSurface::new(&context, window.clone()).unwrap();
+        let surface = crate::present::Presenter::new(window.clone()).unwrap();
         let id = window.id();
         self.windows.insert(
             id,
@@ -9619,6 +9621,7 @@ impl App {
                 surface,
                 cursor: (0, 0),
                 scale,
+                blinks: true,
             },
         );
         self.chats.insert(peer, chat);
@@ -9667,8 +9670,7 @@ impl App {
         let window = Rc::new(el.create_window(attrs).unwrap());
         window.set_ime_allowed(true);
         let scale = window.scale_factor() as f32;
-        let context = softbuffer::Context::new(window.clone()).unwrap();
-        let surface = SbSurface::new(&context, window.clone()).unwrap();
+        let surface = crate::present::Presenter::new(window.clone()).unwrap();
         let id = window.id();
         self.windows.insert(
             id,
@@ -9678,6 +9680,7 @@ impl App {
                 surface,
                 cursor: (0, 0),
                 scale,
+                blinks: true,
             },
         );
         let mut sv = SettingsWidget::new(&self.settings);
@@ -9911,8 +9914,7 @@ impl App {
         let window = Rc::new(el.create_window(attrs).unwrap());
         window.set_ime_allowed(true); // 이름 필터 = 한글 입력 대상
         let scale = window.scale_factor() as f32;
-        let context = softbuffer::Context::new(window.clone()).unwrap();
-        let surface = SbSurface::new(&context, window.clone()).unwrap();
+        let surface = crate::present::Presenter::new(window.clone()).unwrap();
         let id = window.id();
         self.windows.insert(
             id,
@@ -9922,6 +9924,7 @@ impl App {
                 surface,
                 cursor: (0, 0),
                 scale,
+                blinks: true,
             },
         );
         let rows = self.build_convbox_rows();
@@ -10336,8 +10339,7 @@ impl App {
             .with_window_icon(self.icon.clone());
         let window = Rc::new(el.create_window(attrs).unwrap());
         let scale = window.scale_factor() as f32;
-        let context = softbuffer::Context::new(window.clone()).unwrap();
-        let surface = SbSurface::new(&context, window.clone()).unwrap();
+        let surface = crate::present::Presenter::new(window.clone()).unwrap();
         let id = window.id();
         self.windows.insert(
             id,
@@ -10347,6 +10349,7 @@ impl App {
                 surface,
                 cursor: (0, 0),
                 scale,
+                blinks: true,
             },
         );
         // 캐시로 즉시 열고(빈 캐시면 빈 목록) 워커 스캔이 채운다(08-18 —
@@ -10486,8 +10489,7 @@ impl App {
         let window = Rc::new(el.create_window(attrs).unwrap());
         window.set_ime_allowed(true);
         let scale = window.scale_factor() as f32;
-        let context = softbuffer::Context::new(window.clone()).unwrap();
-        let surface = SbSurface::new(&context, window.clone()).unwrap();
+        let surface = crate::present::Presenter::new(window.clone()).unwrap();
         let id = window.id();
         self.windows.insert(
             id,
@@ -10497,6 +10499,7 @@ impl App {
                 surface,
                 cursor: (0, 0),
                 scale,
+                blinks: true,
             },
         );
         // 어댑터 미주입 → Choose…가 take_choose_request로 올라와 **별도 모달 창**을 연다.
@@ -10638,8 +10641,7 @@ impl App {
         let attrs = self.modal_attrs(attrs, false); // 메인 소유(08-15 — 창 묶음 부상)
         let window = Rc::new(el.create_window(attrs).unwrap());
         let scale = window.scale_factor() as f32;
-        let context = softbuffer::Context::new(window.clone()).unwrap();
-        let surface = SbSurface::new(&context, window.clone()).unwrap();
+        let surface = crate::present::Presenter::new(window.clone()).unwrap();
         let id = window.id();
         self.windows.insert(
             id,
@@ -10649,6 +10651,7 @@ impl App {
                 surface,
                 cursor: (0, 0),
                 scale,
+                blinks: true,
             },
         );
         self.picker_view = Some(picker);
@@ -11069,8 +11072,7 @@ impl App {
         let window = Rc::new(el.create_window(attrs).unwrap());
         window.set_ime_allowed(true); // 이름·연락처에 한글 입력
         let scale = window.scale_factor() as f32;
-        let context = softbuffer::Context::new(window.clone()).unwrap();
-        let surface = SbSurface::new(&context, window.clone()).unwrap();
+        let surface = crate::present::Presenter::new(window.clone()).unwrap();
         let id = window.id();
         self.windows.insert(
             id,
@@ -11080,6 +11082,7 @@ impl App {
                 surface,
                 cursor: (0, 0),
                 scale,
+                blinks: true,
             },
         );
         let mut pv = nbeep_ui::ProfileWidget::new(&values);
@@ -11250,8 +11253,7 @@ impl App {
         let attrs = self.modal_attrs(attrs, false); // 메인 소유(08-15 — 창 묶음 부상)
         let window = Rc::new(el.create_window(attrs).unwrap());
         let scale = window.scale_factor() as f32;
-        let context = softbuffer::Context::new(window.clone()).unwrap();
-        let surface = SbSurface::new(&context, window.clone()).unwrap();
+        let surface = crate::present::Presenter::new(window.clone()).unwrap();
         let id = window.id();
         self.windows.insert(
             id,
@@ -11261,6 +11263,7 @@ impl App {
                 surface,
                 cursor: (0, 0),
                 scale,
+                blinks: true,
             },
         );
         let mut av = nbeep_ui::AlertWidget::new(title, "");
@@ -11657,8 +11660,7 @@ impl App {
         let attrs = self.modal_attrs(attrs, true);
         let window = Rc::new(el.create_window(attrs).unwrap());
         let scale = window.scale_factor() as f32;
-        let context = softbuffer::Context::new(window.clone()).unwrap();
-        let surface = SbSurface::new(&context, window.clone()).unwrap();
+        let surface = crate::present::Presenter::new(window.clone()).unwrap();
         let id = window.id();
         self.windows.insert(
             id,
@@ -11668,6 +11670,7 @@ impl App {
                 surface,
                 cursor: (0, 0),
                 scale,
+                blinks: true,
             },
         );
         self.peer_info_view = Some(nbeep_ui::PeerInfoWidget::new(info));
@@ -11757,8 +11760,7 @@ impl App {
         let attrs = self.modal_attrs_from(Some(src), attrs, true);
         let window = Rc::new(el.create_window(attrs).unwrap());
         let scale = window.scale_factor() as f32;
-        let context = softbuffer::Context::new(window.clone()).unwrap();
-        let surface = SbSurface::new(&context, window.clone()).unwrap();
+        let surface = crate::present::Presenter::new(window.clone()).unwrap();
         let id = window.id();
         self.windows.insert(
             id,
@@ -11768,6 +11770,7 @@ impl App {
                 surface,
                 cursor: (0, 0),
                 scale,
+                blinks: true,
             },
         );
         self.request_redraw(id);
@@ -11809,8 +11812,7 @@ impl App {
         let window = Rc::new(el.create_window(attrs).unwrap());
         window.set_ime_allowed(true);
         let scale = window.scale_factor() as f32;
-        let context = softbuffer::Context::new(window.clone()).unwrap();
-        let surface = SbSurface::new(&context, window.clone()).unwrap();
+        let surface = crate::present::Presenter::new(window.clone()).unwrap();
         let id = window.id();
         self.windows.insert(
             id,
@@ -11820,6 +11822,7 @@ impl App {
                 surface,
                 cursor: (0, 0),
                 scale,
+                blinks: true,
             },
         );
         // 포트 생략 시 붙일 기본 = 설정 수신 포트(ⓐ — 조직이 같은 값을 쓰면 IP만으로 붙는다).
@@ -13840,8 +13843,7 @@ impl App {
         let window = Rc::new(el.create_window(attrs).unwrap());
         window.set_ime_allowed(true); // 그룹 이름 한글 입력
         let scale = window.scale_factor() as f32;
-        let context = softbuffer::Context::new(window.clone()).unwrap();
-        let surface = SbSurface::new(&context, window.clone()).unwrap();
+        let surface = crate::present::Presenter::new(window.clone()).unwrap();
         let id = window.id();
         self.windows.insert(
             id,
@@ -13851,6 +13853,7 @@ impl App {
                 surface,
                 cursor: (0, 0),
                 scale,
+                blinks: true,
             },
         );
         let ph = nbeep_core::t(if broadcast {
@@ -14208,8 +14211,7 @@ impl App {
                 let window = Rc::new(el.create_window(attrs).unwrap());
                 window.set_ime_allowed(true);
                 let scale = window.scale_factor() as f32;
-                let context = softbuffer::Context::new(window.clone()).unwrap();
-                let surface = SbSurface::new(&context, window.clone()).unwrap();
+                let surface = crate::present::Presenter::new(window.clone()).unwrap();
                 let id = window.id();
                 self.windows.insert(
                     id,
@@ -14219,6 +14221,7 @@ impl App {
                         surface,
                         cursor: (0, 0),
                         scale,
+                        blinks: true,
                     },
                 );
                 self.layout_window(id);
@@ -15225,8 +15228,7 @@ impl App {
         let attrs = self.modal_attrs(attrs, false); // 메인 소유(08-15 — 창 묶음 부상)
         let window = Rc::new(el.create_window(attrs).unwrap());
         let scale = window.scale_factor() as f32;
-        let context = softbuffer::Context::new(window.clone()).unwrap();
-        let surface = SbSurface::new(&context, window.clone()).unwrap();
+        let surface = crate::present::Presenter::new(window.clone()).unwrap();
         let id = window.id();
         self.windows.insert(
             id,
@@ -15236,6 +15238,7 @@ impl App {
                 surface,
                 cursor: (0, 0),
                 scale,
+                blinks: true,
             },
         );
         self.alert_view = Some(nbeep_ui::AlertWidget::new(title, message).with_choice(yes, no));
@@ -17367,7 +17370,10 @@ impl App {
         }
         let t_paint = t_frame.elapsed();
         let role_dbg = entry.role;
+        let blinks = ctx.caret_asked();
+        drop(ctx);
         buffer.present().unwrap();
+        entry.blinks = blinks;
         if paint_trace_enabled() {
             eprintln!(
                 "[paint] {:?} {}x{} paint={:.2}ms present={:.2}ms",
@@ -19573,22 +19579,21 @@ impl ApplicationHandler<AppEvent> for App {
                 if let Ok(window) = el.create_window(attrs) {
                     let window = Rc::new(window);
                     let scale = window.scale_factor() as f32;
-                    if let Ok(context) = softbuffer::Context::new(window.clone()) {
-                        if let Ok(surface) = SbSurface::new(&context, window.clone()) {
-                            let id = window.id();
-                            self.windows.insert(
-                                id,
-                                WinEntry {
-                                    role: Role::Approve(peer),
-                                    window,
-                                    surface,
-                                    cursor: (0, 0),
-                                    scale,
-                                },
-                            );
-                            self.layout_window(id);
-                            self.request_redraw(id);
-                        }
+                    if let Ok(surface) = crate::present::Presenter::new(window.clone()) {
+                        let id = window.id();
+                        self.windows.insert(
+                            id,
+                            WinEntry {
+                                role: Role::Approve(peer),
+                                window,
+                                surface,
+                                cursor: (0, 0),
+                                scale,
+                                blinks: true,
+                            },
+                        );
+                        self.layout_window(id);
+                        self.request_redraw(id);
                     }
                 }
             }
@@ -19769,7 +19774,10 @@ impl ApplicationHandler<AppEvent> for App {
             if phase != self.blink_phase_seen {
                 self.blink_phase_seen = phase;
                 if let Some(fid) = self.os_focused {
-                    self.request_redraw(fid);
+                    // 캐럿을 그리는 컨트롤이 있는 창만(10-10 RL-9) — 없으면 위상이 바뀌어도 화면 불변.
+                    if self.windows.get(&fid).is_some_and(|e| e.blinks) {
+                        self.request_redraw(fid);
+                    }
                 }
             }
         }
@@ -19789,6 +19797,11 @@ impl ApplicationHandler<AppEvent> for App {
             {
                 wake_ms = 16; // 애니메이션·목록 적재 중만 ~60Hz(끝나면 유휴 5Hz로 복귀)
             }
+        }
+        // ★ IOSurface 풀 유휴 해제(10-10 DR-5): 프레임 없이 1.5s 지난 창은 앞 장만 남긴다(softbuffer = no-op ·
+        //   유휴 틱 5Hz라 ≤200ms 안에 걸린다 · 실측 유휴 36→≈25MB). 다음 프레임이 장을 다시 만든다.
+        for e in self.windows.values_mut() {
+            let _ = e.surface.trim_if_idle();
         }
         // 유휴에도 ~5Hz로 깨어나 발견 갱신·종료 신호를 폴한다(입력 없을 때도 목록이 산다).
         el.set_control_flow(ControlFlow::wait_duration(
@@ -20200,8 +20213,14 @@ impl ApplicationHandler<AppEvent> for App {
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
+                // ★ 노치(LineDelta)는 **물리 px로 배율 보정**(10-10 — 종전 120 고정 → 스크롤바가 /3 해서 40px =
+                //   Retina에서 논리 20pt · 메시지 한 줄(22pt)보다 짧아 "스크롤이 느리다"의 한 축). PixelDelta는
+                //   winit이 이미 물리 px로 준다(보정 없음).
+                let sc = self.windows.get(&id).map_or(1.0, |e| e.scale.max(0.5));
                 let (dx, dy) = match delta {
-                    MouseScrollDelta::LineDelta(x, y) => ((x * 120.0) as i32, (y * 120.0) as i32),
+                    MouseScrollDelta::LineDelta(x, y) => {
+                        ((x * 120.0 * sc) as i32, (y * 120.0 * sc) as i32)
+                    }
                     MouseScrollDelta::PixelDelta(p) => {
                         ((p.x * 120.0 / 38.0) as i32, (p.y * 120.0 / 38.0) as i32)
                     }

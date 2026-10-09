@@ -34,6 +34,7 @@ mod ime_gate;
 mod imgdec;
 mod keytable;
 mod part;
+mod present;
 mod statuslog;
 mod userident;
 

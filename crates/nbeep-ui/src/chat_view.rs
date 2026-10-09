@@ -1585,6 +1585,14 @@ impl Widget for ChatViewWidget {
                 }
                 return;
             }
+            // 호버 행이 그대로인 이동·버튼 떼기는 메뉴가 **그냥 삼킨다**(10-10 — 종전엔 false로 흘러 본문의
+            // 스레드/입력창 처리까지 돌아 메뉴 조작 중 프레임이 불필요하게 생겼다). 메뉴 밖 클릭은 위에서 닫힌다.
+            if matches!(
+                ev,
+                InputEvent::MouseMove { .. } | InputEvent::MouseUp { .. }
+            ) {
+                return;
+            }
         }
 
         // 헤더(타이틀 줄) 클릭(08-14) — 그룹 방 구성원 목록의 트리거. 헤더는
