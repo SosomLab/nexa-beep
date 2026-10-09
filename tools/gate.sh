@@ -5,6 +5,9 @@
 # 실패하면 그 단계에서 멈춘다(종료 코드 ≠ 0). 10-09 v0.3.0·v0.3.1 CI가 rustdoc 한글 대괄호 링크로 두 번 죽은 뒤 신설.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
+# rustup 툴체인 우선 — PATH에서 Homebrew rust(/usr/local/bin · 호스트 std만)가 앞서면 크로스 타깃 check가
+# "can't find crate for `std`"로 죽는다(10-10 mac 실측 · rust-toolchain.toml의 targets는 rustup에만 있다).
+[ -d "${HOME}/.cargo/bin" ] && export PATH="${HOME}/.cargo/bin:${PATH}"
 F=nbeep-core/testkit,nbeep-net/testkit,nbeep-crypto/testkit
 FAST=0; [ "${1:-}" = "--fast" ] && FAST=1
 step() { printf '\n\033[1m▶ %s\033[0m\n' "$1"; }

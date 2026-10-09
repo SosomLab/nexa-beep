@@ -6268,7 +6268,7 @@ impl App {
     }
 
     /// 자동화 테스트 seam(10-09 · `NEXA_SCRIPT`) — 형식 `"<ms>:<action>[=<arg>];…"` · action = `activate=<표시 이름 부분>`
-    /// (대화 열기 = 더블클릭/Enter와 같은 `activate` 경로) · `settings`(⌘/Ctrl+,) · `quit`. 결과는 `NEXA_WIN_TRACE`와 함께
+    /// (대화 열기 = 더블클릭/Enter와 같은 `activate` 경로) · `settings`(⌘/Ctrl+,) · `devices` · `license` · `about` · `quit`. 결과는 `NEXA_WIN_TRACE`와 함께
     /// stderr로 본다(docs/26 §3-8).
     fn script_tick(&mut self, el: &ActiveEventLoop) {
         if self.script.is_empty() {
@@ -6299,6 +6299,8 @@ impl App {
                 }
                 None if step == "settings" => self.open_settings(el),
                 None if step == "devices" => self.open_devices(el),
+                None if step == "license" => self.open_license(el),
+                None if step == "about" => self.open_about(el),
                 None if step == "quit" => el.exit(),
                 _ => eprintln!("[script] 모르는 단계: {step}"),
             }
