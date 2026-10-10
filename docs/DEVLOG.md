@@ -7,6 +7,7 @@
 
 ## 2026-10-10
 
+- **(Win · main) ★Windows 미수행 실기 자동화 일괄** — 714 green · 3.6MB · 임포트 인박스(pwsh 7) · WGUI-1·4·5 ✓ · **PERF-1 Win ✓**(`tools/perf-scenario.sh` · 프레임 ≈2ms) · seam 틱 묶음 발견 → 51 §3 정정 · T-8(WS-Private 6.3MB)·T-1 캡처·T-10(설치본 0.2.17→0.4.0) ✓. [journal Win 1차](journal/2026-10-10.md)
 - **(mac · main) CI windows-latest beepd relay_e2e 5종 10013 흔들림 처방**(`4e53b73` — TCP·UDP 제외 포트 범위가 달라 TCP 임시 번호의 UDP bind 실패 → port 0 재시도 TCP/UDP-먼저 교대·40회) · 18 §4 함정 행. [journal mac 5차](journal/2026-10-10.md)
 - **(mac · main) ★v0.4.0 공개** — minor · release run 전 job success · 자산 15 · brew + apt/dnf · winget/choco 제외(검수 중) · 탑재 = 성능 1차(29→≈8ms) · X-13 S3 · PeerId 라벨 · 창 Retina · (Debug) 제목. [journal mac 4차](journal/2026-10-10.md)
 - **(mac · main) 디버그 빌드 창 제목 "Nexa Beep (Debug)"**(`dcae62c` — `APP_TITLE` · 창 제목 25곳 통일 · nexa-dir3 규칙 이식) · 성능 빌드 설치본 반영 ✓. [journal mac 3차](journal/2026-10-10.md)

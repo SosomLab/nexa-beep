@@ -1,6 +1,6 @@
 # 51 · 성능 검토 2026-10-10 — 대화 스크롤·우클릭 메뉴 "느림" 실측과 처방 + 성능 척도(dir3·sql 대조)
 
-> **상태**: 🚧 1차(mac Intel Retina · 개발 세션 10-10) — 실측·처방 4건 적용 · 척도 16항목 등재 · 잔여 = Windows/Linux 동일 시나리오 실측 · 더티 영역 present · RL-10.
+> **상태**: 🚧 1차(mac Intel Retina · 개발 세션 10-10) — 실측·처방 4건 적용 · 척도 16항목 등재 · **Windows 실측 ✓(10-10 Win 1차 · §3-1 · 프레임 ≈2ms)** · 잔여 = Linux 동일 시나리오 실측 · 더티 영역 present · RL-10.
 > **왜**: 사용자 10-10 보고 "대화 내용 스크롤이 너무 느리다 · 우클릭 메뉴가 뜨는 것도, 메뉴 호버 추적도 너무 느리다 · 성능 6축(UX·전환·실행·갱신/스크롤·메모리 회수·파일 I/O)을 dir3·sql 척도와 함께 검토해 달라".
 > **원칙**: 추정 금지·실측 필수([CLAUDE.md §2](../CLAUDE.md)) — 계측 seam을 먼저 넣고(§2) 숫자로 원인을 가른 뒤 고쳤다.
 > 관련: [05 NFR-B](05-requirements.md) · [49 점검 체계](49-inspection-framework.md) · [26 §3-9 자동화 seam](26-run-and-manual-test.md) · [TODO RL-9·RL-10](TODO.md) · nexa-sql `docs/71`(성능 검토 절차) · `docs/62`(mac present).
@@ -26,18 +26,31 @@
 | `NEXA_MAC_PRESENT=softbuffer` | mac present 종전 경로 강제(A/B · 회귀 비교) | 0 |
 | `footprint <pid>` | mac phys_footprint(Apple 공식 · [18](18-build-and-test.md)) | — |
 
-시나리오(재현 스크립트 = 세션 scratchpad `perf-run.sh` → 절차는 [26 §3-9](26-run-and-manual-test.md)에 요약): 3신원 사본 A가 B와 대화 열기 → 30줄 전송(120ms 간격) → 휠 20회(80ms) → 이동 10회 → 우클릭 → 메뉴 안 이동 10회 → quit. 창 = 분리 대화 창 1600×1200 물리(800×600 논리) · Intel mac Retina.
+시나리오(재현 스크립트 = **[`tools/perf-scenario.sh`](../tools/perf-scenario.sh)**(10-10 Win 1차 `032c267` — mac 1차는 세션 scratchpad `perf-run.sh`였다 · 3-OS 분기·집계 awk) · 절차 요약 [26 §3-9](26-run-and-manual-test.md)): 3신원 사본 A가 B와 대화 열기 → 30줄 전송(120ms 간격) → 휠 20회(80ms) → 이동 10회 → 우클릭 → 메뉴 안 이동 10회 → quit. 창 = 분리 대화 창 1600×1200 물리(800×600 논리) · Intel mac Retina.
 
 ## 3. 실측 경과(분리 대화 창 · 30줄 · ms)
 
 | 단계 | 구간 | paint 평균/최대 | present 평균/최대 | 비고 |
 | --- | --- | --- | --- | --- |
-| 기준선(ec59317) | 휠 | 12.9 / 15.3 | 16.5 / 22.1 | 프레임 ≈ 29ms · 휠 20회 중 10프레임(코얼레싱 = 입력이 밀린다) |
+| 기준선(ec59317) | 휠 | 12.9 / 15.3 | 16.5 / 22.1 | 프레임 ≈ 29ms · 휠 20회 중 10프레임 — ⚠ 10-10 Win 정정: 프레임 수는 **절반 이상 seam 아티팩트**(아래 주석) |
 | | 이동·우클릭 | 11.4~11.6 | 14.5~15.3 | |
 | 줄바꿈 캐시(`48d3392`) | 휠 | 7.5 / 8.8 | 16.1 / 17.7 | paint −42% · present 불변 |
 | IOSurface(`present.rs`) | 휠 | 7.4 / 8.4 | **0.98 / 1.3** | present −94% · 프레임 ≈ 8.5ms |
 | | 메인 목록 창 | 9.9 / 17.2 | 2.1 / 4.7 | 948×1378 |
 | IOSurface + 유휴 해제 + 캐럿 틱 정밀화 | 휠 | 7.1 / 8.5 | 0.9 / 1.1 | **프레임 ≈ 8ms** · 유휴 프레임 0(§4) |
+
+> ⚠ **프레임 수는 성능 근거가 아니다**(10-10 Win 1차 정정): `NEXA_SCRIPT` 단계는 이벤트 루프 틱(≈200ms · RL-10 `ControlFlow` 바닥)에 묶여 실행된다 — Win 실측 `[script]` 시각이 ≈200ms 단위로 몰려 80ms 간격 휠 20회가 프레임 1.8ms인데도 **9프레임**이 됐다. 따라서 "휠 20회 → 10프레임 = 입력이 밀린다"는 mac 코얼레싱과 seam 묶음이 섞인 값이다(OS 실입력은 `WindowEvent`로 즉시 깨우므로 실사용과 무관). 근거는 **paint·present ms 자체**로만 둔다.
+
+### 3-1. Windows 실측(10-10 Win 1차 · `tools/perf-scenario.sh` · 분리 대화 창 800×600 물리 100% · softbuffer GDI present)
+
+| 단계 | n | paint 평균/최대 | present 평균/최대 |
+| --- | --- | --- | --- |
+| 30줄 전송 | 48 | 1.35 / 3.63 | 0.41 / 3.45 |
+| 휠 20회 | 9 | 1.76 / 2.84 | 0.23 / 0.35 |
+| 이동·우클릭·메뉴 호버 | 8 | 1.1~1.4 / 1.97 | 0.23 / 0.39 |
+| 메인 목록 창 474×689 | 6 | 3.3 / 5.7 | 0.36 / 0.52 |
+
+→ **프레임 ≈2ms**(면적이 mac Retina 1/4 · GDI present 0.2~0.4ms = sql 65 실측과 같은 축) — Windows는 문제 없음(PERF-1 Win ✓ · Linux 잔여). 유휴(35s) = WS-Private 6.3MB · 유휴 프레임 3/45s(기동뿐 = RL-9 Win 성립).
 
 메모리(phys_footprint · 메인 창만 유휴 / 메인+대화 창):
 
@@ -67,7 +80,7 @@
 1. **전체 창 재래스터 + 전체 present**: `redraw()`가 매 프레임 `fill` → 역할 paint → `present()`. softbuffer CG 백엔드는 `buffer_mut`마다 `vec![0; w*h]` 새 할당, `present_with_damage`는 damage 무시. **더티 영역 present는 4개 저장소 어디에도 없다**(sql 39 §3-4 T-90f 후보).
 2. **대화 1패스 레이아웃이 기록 전체**: `chat_view.rs` 1패스가 전 줄 `wrap_text`(글자당 `to_string()`+측정) — 이번에 캐시. 2패스는 보이는 것만 그린다(컬링 있음).
 3. **글리프 래스터 캐시는 있다**(nexa-gfx 8192 · 넘치면 전체 비움 · LRU 아님) · 전진 폭 캐시는 GDI/CoreText 경로만(ab_glyph 경로 없음 — beep은 ab_glyph).
-4. **winit mac은 런루프 1회당 창마다 RedrawRequested 1회**로 코얼레싱 — 프레임이 비싸면 입력 큐가 밀려 손가락을 늦게 따라간다(기준선 휠 20회 → 10프레임).
+4. **winit mac은 런루프 1회당 창마다 RedrawRequested 1회**로 코얼레싱 — 프레임이 비싸면 입력 큐가 밀려 손가락을 늦게 따라간다(기준선 휠 20회 → 10프레임 — 단 이 프레임 수에는 `NEXA_SCRIPT` 틱 묶음이 섞여 있다 · §3 주석).
 5. **우클릭**: 메뉴 생성 자체는 가볍다(5행 · 그림자 없음) · NSPasteboard 읽기 0.06ms · 느림의 정체 = 그 뒤 전체 프레임 1회.
 6. 유휴: 캐럿 틱이 포커스 창을 무조건 재도색(RL-9) · `ControlFlow` 200ms 바닥(RL-10 · 미착수).
 

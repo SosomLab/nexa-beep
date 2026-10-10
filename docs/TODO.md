@@ -232,11 +232,11 @@ M-1 설계 ──► M0 기반 ──► M1 발견 ──► M2 대화 ──►
 **GUI 세션 판정 실기 (WGUI)** — Windows 실기 · 근거 = `nbeep-plat::gui`([e230e58](../crates/nbeep-plat/src/gui.rs)) ·
 맥(콘솔·SSH)과 Linux(컨테이너 2종)는 08-13 실측 완료, **Windows만 실행 검증이 비어 있다**(크로스 컴파일만 통과):
 
-- [ ] **WGUI-1 로컬 콘솔** — 데스크톱에서 무인자 `nexa-beep` = **창이 뜬다**(게이트가 오탐으로 막지 않는가 — 가장 중요)
+- [x] **WGUI-1 로컬 콘솔** — 데스크톱에서 무인자 `nexa-beep` = **창이 뜬다**(게이트가 오탐으로 막지 않는가 — 가장 중요) — ✅ 10-10 Win ✓ — 무인자 = 창 생성 `[win] Main Resized` · rc 0
 - [ ] **WGUI-2 원격 PowerShell(WinRM)** — `Enter-PSSession`에서 무인자 실행 = **사유 안내 + exit 3**. 안내에 관측된 윈도우 스테이션 이름이 찍히는가(`Service-0x0-…$` 꼴)
 - [ ] **WGUI-3 OpenSSH** — Windows OpenSSH 서버로 접속해 무인자 실행 = 안내 + exit 3
-- [ ] **WGUI-4 ★ RDP는 통과해야 한다** — 원격 데스크톱 접속 후 무인자 실행 = **창이 뜬다**. RDP도 `WinSta0`이라 통과가 정답 — 여기서 막히면 **되는 걸 막는 것**이라 판정 기준을 고쳐야 한다
-- [ ] **WGUI-5 터미널 모드 비간섭** — 위 어느 세션에서든 `--chat-live`·`--discover-probe`·`--help`는 게이트에 걸리지 않는다(exit 0)
+- [x] **WGUI-4 ★ RDP는 통과해야 한다** — 원격 데스크톱 접속 후 무인자 실행 = **창이 뜬다**. RDP도 `WinSta0`이라 통과가 정답 — 여기서 막히면 **되는 걸 막는 것**이라 판정 기준을 고쳐야 한다 — ✅ 10-10 Win ✓ — RDP `RDP-Tcp#0` 세션에서 창 생성 · rc 0 = 통과(정답)
+- [x] **WGUI-5 터미널 모드 비간섭** — 위 어느 세션에서든 `--chat-live`·`--discover-probe`·`--help`는 게이트에 걸리지 않는다(exit 0) — ✅ 10-10 Win ✓ — RDP 세션 `--help` rc 0(게이트 비간섭)
 - [ ] **WGUI-6 API 실패 폴백** — 스테이션 이름을 못 얻는 상황이 실제로 있는지(있다면 SSH 아닐 때 통과가 맞는지 재검토)
 
 ---
@@ -400,7 +400,7 @@ M-1 설계 ──► M0 기반 ──► M1 발견 ──► M2 대화 ──►
 | **RL-14** | **고착·누락 2종** — ⓐ `awaiting_ack`가 `Closed`에서 미정리 → ack 대기 중 상대 이탈 시 종료 가드가 영구 "확인 대기 N건"(M4-9 잔여) ⓑ `about_to_wait`가 `gchats` tick 미호출 → 그룹 대화 창 스크롤바 자동 숨김 미발화(과다가 아닌 **미실행**) | M4-9/M5-1g | P2 | 소 | ✅ (08-18 — ⓐ Closed에서 `awaiting_ack` 정리(영구 "확인 대기 N건" 방지) ⓑ gchats 페이드 틱 배선(그룹 방·단일 창 그룹 모두)) |
 | **RL-15** | **UI 반복 소소 묶음** — ⓐ 갤러리 데모 TimeoutButton 만료 시 자기 재시작 = 창 열린 동안 1Hz 영구 재도색·종료/가시성 가드 0([gallery.rs:486~](../crates/nbeep-ui/src/gallery.rs)) ~~ⓑ QThumb 재스캔~~(**✅ 08-18 — 워커 스캔+원시 캐시로 해소**: 썸네일 도착 재렌더 = 캐시 · 격리함 로드 자체도 워커) ⓒ 기간 승인 1초 갱신이 `inv` 무관 무조건 redraw ⓓ 중복 redraw 요청 3건(Focused(false)×2 · XferProgress×3) ⓔ 프로필 적용 배치에서 `refresh_toolbar_avatar`→트레이 아이콘 재생성 최대 3회 | M3 | P2 | 소 | ☐ |
 | **RL-16** | **발견 광고 중복 송신 + 무변화 재조립** — ⓐ `send_all`이 같은 링크에 동일 패킷 3~4부(기본경로 멀티캐스트+글로벌 브로드캐스트+IF별 멀티캐스트+IF별 브로드캐스트 · [udp.rs:251~](../crates/nbeep-net/src/udp.rs)) — HELLO 1발당 상대마다 유니캐스트 응답 3~4개 증폭 ⓑ `poll_discovery`가 `observe()` 반환값(None=무변화)을 버리고 무조건 dirty → 상대가 광고하는 한 무변화에도 1.5초마다 목록 재조립·재도색 영구 | M1 | P2 | 소 | ✅/🚧 (08-18 — **ⓑ 완료**: observe 무변화(None) = dirty 생략(광고 중 1.5초 영구 재조립 제거) + 60초 심장박동(상대 시각 라벨 신선) · **ⓐ 중복 송신은 잔여** — 발견 도달 사다리와 얽혀 실기 검증 필요) |
-| **PERF-1** | **Windows·Linux 같은 시나리오 성능 실측**([51 §2](51-performance-review-2026-10-10.md) 스크립트 — 분리 대화 창 30줄 전송→휠 20→이동→우클릭→메뉴 호버) · `NEXA_PAINT_TRACE` paint/present 분리 · Win present = GDI(sql 65 실측 1.3ms)라 paint 축 중심 · Linux Wayland/X11 각각 | 51 §6 ① | P1 | 소 | ☐ |
+| **PERF-1** | **Windows·Linux 같은 시나리오 성능 실측**([51 §2](51-performance-review-2026-10-10.md) 스크립트 — 분리 대화 창 30줄 전송→휠 20→이동→우클릭→메뉴 호버) · `NEXA_PAINT_TRACE` paint/present 분리 · Win present = GDI(sql 65 실측 1.3ms)라 paint 축 중심 · Linux Wayland/X11 각각 · 도구 = `tools/perf-scenario.sh`(`032c267`) | 51 §6 ① | P1 | 소 | 🚧 **Windows ✓**(10-10 Win 1차 — 800×600 물리 100% · 휠 paint 1.1~1.8ms · present 0.2ms · **프레임 ≈2ms** · 51 §3-1 · 부수 = T-8 Win 3.6MB · WS-Private 6.3MB · 유휴 프레임 3/45s · T-10 Win 설치본 0.2.17→0.4.0 ✓) · **Linux 잔여** |
 | **PERF-2** | **더티 영역 present** — 매 프레임 전체 창 재래스터+전체 present(persistent backbuffer + clip · 캐럿만 부분 재도색) · **4저장소 공통 과제**(nexa-ui · sql T-90f) | 51 §5-1 | P2 | 대 | ☐ |
 | **PERF-3** | **2000줄 기록 스크롤 실측** — 줄바꿈 캐시(`48d3392`)가 기록 길이와 무관한지(30줄만 실측) · 기록 200줄+스크롤 시 로드(MEM-⑤)와 함께 | 51 §7 #2 | P2 | 소 | ☐ |
 | **PERF-4** | **기동 트레이스 `[startup]`** — 콜드·웜 5회 중앙값 · 창 열기 Resized→첫 paint ms(05 B-11 ≤500ms · 49 INS-3 · sql `NSQL_TRACE_FRAMES` 방식) | 51 §7 #8 | P2 | 소 | ☐ |
