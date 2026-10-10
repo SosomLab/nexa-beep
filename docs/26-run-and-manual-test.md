@@ -401,8 +401,9 @@ grep -E '^\[(win|script)\]' out.log
 
 | 항목 | 값 |
 |---|---|
-| `NEXA_SCRIPT` | `"<ms>:<action>[=<arg>];…"` · `activate=<표시 이름 부분>`(= 더블클릭/Enter와 같은 `activate` 경로 · 세션 없으면 연결만 — 열려면 한 번 더) · `send=<본문>`(열린 1:1 대화에 = 입력창 전송과 같은 `send_direct_text` · 10-10) · `dump`(아는 상대별 `[dump] peer 이름·대표 키·묶음 크기·세션` + 열린 대화의 병합 스레드 `[dump] thread mine·from·text` · 10-10 S3) · `settings` · `devices` · `license` · `about`(10-10 — mac 창 캡처 점검) · **`wheel=<dy>` · `move=<x>,<y>` · `click=<x>,<y>` · `rclick=<x>,<y>`**(10-10 성능 실측 — 포커스 창에 실제 `route` 경로로 주입 · 물리 px · docs/51) · `quit` · 시각 오름차순 · 형식 오류 항목은 버림 · 없으면 비용 0 |
+| `NEXA_SCRIPT` | `"<ms>:<action>[=<arg>];…"` · `activate=<표시 이름 부분>`(= 더블클릭/Enter와 같은 `activate` 경로 · 세션 없으면 연결만 — 열려면 한 번 더) · `send=<본문>`(열린 1:1 대화에 = 입력창 전송과 같은 `send_direct_text` · 10-10) · `dump`(아는 상대별 `[dump] peer 이름·대표 키·묶음 크기·세션` + 열린 대화의 병합 스레드 `[dump] thread mine·from·text` · 10-10 S3 · **S4 = `unread`·`origin`·`seq` 필드와 parked 스레드 추가**) · `settings` · `devices` · `license` · `about`(10-10 — mac 창 캡처 점검) · **`wheel=<dy>` · `move=<x>,<y>` · `click=<x>,<y>` · `rclick=<x>,<y>`**(10-10 성능 실측 — 포커스 창에 실제 `route` 경로로 주입 · 물리 px · docs/51) · `quit` · 시각 오름차순 · 형식 오류 항목은 버림 · 없으면 비용 0 |
 | `NEXA_PAINT_TRACE` | 프레임마다 `[paint] 역할 WxH paint=ms present=ms`(stderr · OnceLock · 꺼지면 비용 0) — 성능 실측의 1차 계측(docs/51 §2) · `NEXA_MAC_PRESENT=softbuffer` = mac present 종전 경로 강제(A/B) |
+| S4 따라잡기 시나리오 | **`tools/s4-scenario.sh`**(10-10 Win 2차 · X-13 S4) — 신원 3개(X1·X2 = 같은 핸들·암호 형제 · Y1 = 남)를 매번 새로 만들어 ① Y1↔X1 왕복(X1 창 열어 읽음) ② X2 기동 = XXpsk3 → 디제스트 → 청구 → 라인 → 읽음 ③ 핀 삭제 후 재기동 = 매핑 표 복원 · **13항 자동 판정** · 로그 `~/.nexa-beep-multi/s4-out` · ⚠ 같은 LAN의 설치본이 테스트 신원과 세션을 맺어 목록에 행이 남을 수 있다(목록 › 잊기) |
 | 성능 시나리오 | **`tools/perf-scenario.sh [출력 폴더]`**(10-10 Win 1차 · 3-OS) — 릴리스 산출물을 `~/.nexa-beep-multi/{A,B}`에 복사 → A가 B와 분리 대화 창 → 30줄 전송·휠 20·이동·우클릭·메뉴 호버·dump·quit(docs/51 §2) · `NEXA_PAINT_TRACE` 단계별 집계 + 기동 7초 뒤 메모리 · ⚠ 스크립트 단계는 이벤트 루프 틱(≈200ms)에 묶이므로 **프레임 수가 아니라 paint/present ms로 판정**(51 §3 주석) |
 | 디버그 창 구분 | 디버그 빌드 창 제목 = **"Nexa Beep (Debug)"**·"Nexa Beep (Debug) — 설정" 등(10-10 `dcae62c` · 14 §11) — 설치본(릴리스 "Nexa Beep")과 함께 띄운 실기·캡처에서 창을 제목으로 고른다(mac `osascript` System Events 창 이름 · X11 `xdotool search --name`) |
 | `NEXA_WIN_TRACE` | 창별 `Focused`·`Occluded`·`Resized`·`CloseRequested`·`Destroyed`·`ActivationTokenDone` + 활성화 토큰 요청/적용 결과 · 역할(`Main`·`Chat`·`Settings`…) 표기 |
@@ -717,7 +718,7 @@ winget validate 통과 · 해시 일치.
 | **U-8** | 파일 대화상자 용도 9(T-5) | 백업/복원 · 설정 백업/복원 · 프로필 사진 · 대화함 백업/복원 · 갤러리 · 라이선스 파일 | 열림·필터·한글 경로 정상 · 키 파일 복원 왕복 = 신원 유지(`--whoami` 지문 불변) | — |
 | **U-9** | 라이선스 왕복(T-7) | 도움말 › 라이선스… → 요청 코드 복사 → 발급 → [Open license file…] → Licensed → [Remove] → Free · 다른 제품 파일 | 상태 Licensed/Free/Invalid 그대로 · 기능 잠금 없음 | — |
 | **U-10** | 트레이(M3-2e · "설정…") | 트레이 배지 3점(서버 녹·LAN 파랑·전송 주황) · 우클릭 "설정…" | 상태에 맞는 배지 · 설정 창이 앞에 뜬다 | — |
-| **U-11** | ★ 2-PC 형제(X-13 S2·S3 · 48 §7 T-4) — **mac 1대 필요** | 두 PC 같은 핸들·암호 · LAN·서버 경유 각각 | 상태바 `kiros33 · 2대`·Paired · 보라 "내 기기" 배지 · 내 기기 목록 창 행 수 = 기기 수 · 제3자 대화가 **한 행으로 접힘** · 한쪽 발신 → 다른 쪽에 **내 말풍선**(sender copy) · 접힌 대화 파일 = 살아 있는 기기로 · 기기 1대 폐기 → 배지 소실·"N대" 감소 · 절전 복귀/서버 재접속 30s 안 배지 유지 | `NEXA_USER_TRACE=1`(`psk=true`·`proof … verified`) |
+| **U-11** | ★ 2-PC 형제(X-13 S2·S3 · 48 §7 T-4) — **mac 1대 필요** | 두 PC 같은 핸들·암호 · LAN·서버 경유 각각 | 상태바 `kiros33 · 2대`·Paired · 보라 "내 기기" 배지 · 내 기기 목록 창 행 수 = 기기 수 · 제3자 대화가 **한 행으로 접힘** · 한쪽 발신 → 다른 쪽에 **내 말풍선**(sender copy) · 접힌 대화 파일 = 살아 있는 기기로 · 기기 1대 폐기 → 배지 소실·"N대" 감소 · 절전 복귀/서버 재접속 30s 안 배지 유지 · ★S4 = 한쪽을 끈 동안 제3자와 대화 → 켜면 놓친 줄이 들어오고 읽은 것은 안읽음 0 | `NEXA_USER_TRACE=1`(`psk=true`·`proof … verified`) |
 | **U-12** | GUI 세션 판정(WGUI-2·3) | 다른 PC에서 `Enter-PSSession`·`ssh`로 접속 후 무인자 실행 | 사유 안내 + **exit 3**(창 안 뜸) · 안내에 스테이션 이름 | `echo $LASTEXITCODE` |
 | **U-13** | 차단 망 왕복(E-3) | 멀티캐스트 막힌 망(게스트 Wi-Fi 등)에서 2대 | S4 유니캐스트·수동 IP로 발견·메시지 | `NEXA_NETMON=1` |
 

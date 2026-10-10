@@ -213,6 +213,8 @@ sequenceDiagram
   Note over A2: 파일 본문은 오지 않는다 — "[파일] … (이 기기에는 없음)" 라인만. 파일은 컨텐츠 모드(§3-8)
 ```
 
+> ✅ **구현 10-10(S4 `37fe701`)과 도식의 차이** — 디제스트는 UserHello에 붙지 않고 **별도 태그 5 `SyncDigest`**(형제 확정+채널 성립 직후 세션당 1회 · 양쪽) · 비교 열쇠 = `(origin, seq)`(seq는 재시작 너머 단조 — `chat.seq_last`+Unix ms 하한) · 청구 `SyncPull{thread, origin, after_seq, max}` · 저장은 **`history/u-X.seg`가 아니라 기기별 기존 파일**(tag 4 레코드 · S3 결정) · 읽음 = 태그 20 `SyncRead{thread, upto_at_ms}` · 파일 줄은 아직 미동기(텍스트만). 상세 = [46 §5-4](46-adr-0015-userid-handle-passphrase.md).
+
 ### 3-7. 암호 변경 vs 기기 분실 — 무엇이 바뀌고 무엇이 안 바뀌나
 
 ```mermaid

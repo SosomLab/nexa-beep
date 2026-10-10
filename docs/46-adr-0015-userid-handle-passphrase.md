@@ -196,8 +196,9 @@ PeerId        = 기기 정적 키(현행) — 핀·세션·후계 판정 근거
 | 태그 | 프레임 | 내용 |
 |:--:|---|---|
 | 4 ✅ | `UserHello { user_pub, name, devices: [PeerId], list_ver, sig }` | **구현 09-06(S2-e `2cbb58d`)** — 세션 성립 직후 양방향(형제·타인 모두). **UserKey 서명** — 상대는 ①sig 검증 ②제시한 PeerId ∈ devices ③version 단조로 소속을 검증한다(ADR-0007 §4 절차 그대로 · A-1 방어) |
-| 5 | `SyncRead` | §5-1 |
-| 6 | `SyncPull { thread, after_seq, max }` / 7 `SyncLines{…}` | §5-4 |
+| 5 ✅ | `SyncDigest{ (thread, origin, max_seq)×n ≤255 }` | **구현 10-10(S4 `37fe701`)** — 종전 예약 "SyncRead"는 디제스트로 쓰고 읽음은 태그 20으로 옮겼다 · §5-4 |
+| 6 ✅ | `SyncPull { thread, origin, after_seq, max }` / 7 ✅ `SyncLines{ thread, [origin, seq, mine, at_ms, 등급, from, text] }` | **구현 10-10(S4)** — 청구에 origin 추가(열쇠 = (origin, seq)) · §5-4 |
+| 20 ✅ | `SyncRead{ thread, upto_at_ms }` | **구현 10-10(S4)** — 읽음 동기(다음 빈 번호) · §5-4 |
 | 8 | `Succession{…}` | §3-5 침해 대응 후계 증명서(UserHello에 동봉 가능) |
 | 19 ✅ | `SenderCopy{ to, to_name, msg }` | **구현 10-10(S3-a `3ab980d`)** — §5-1 sender copy(태그 5~7은 동기 예약 · 9~18은 사용 중이라 다음 빈 번호). ⚠ 태그 11은 수신 상한 공지(9B)와 형제 증명(33B)이 **길이로만** 갈린다 — 새 태그는 겹치지 않게 |
 | 9 ✅ | `UserKeyBlob{sealed}` | **구현 09-06(S2-b `02dfca4`)** — 형제 세션에서 UserKey 봉인본 동기(양쪽이 보내고 "오래된 키가 이긴다" D-32-8로 수렴 · 요청 없음) |
@@ -220,6 +221,13 @@ PSK 세션 성립 → 양쪽 UserHello(list_ver) → 각 스레드별 (마지막
 | 상한 = 스레드당 최근 200줄 · 총 1MiB/세션(설정) | 예산(DR-5) · 나머지는 컨텐츠 모드 |
 | 파일 본문은 따라잡지 않는다 — **라인만**("[파일] … (이 기기에는 없음)") | 격리 실체화는 기기별(ADR-0007 §6-2) |
 | **저장 키는 각 기기 것** — 기록 파일을 옮기지 않는다 | [17 §3] 래핑 계층 불변 · `UserId` 키로 열지 않는다(§9-1)는 그대로 |
+
+> ✅ **구현 10-10(S4 · `37fe701`·`405cd93` · 실기 [journal 10-10 Win 2차](journal/2026-10-10.md))** — 위 설계와 달라진 점:
+> - ★ **열쇠 = `(origin, seq)`를 재시작 너머로 단조화** — seq가 프로세스마다 1부터라 열쇠가 겹쳤다(설계 빈칸) → `chat.seq_last` 영속 + 부팅 = max(저장값+1, 현재 Unix ms). 수신 줄도 (상대, 상대 seq) · sender copy = (보낸 형제, seq).
+> - 비교 단위 = **(스레드, origin)별 max_seq 디제스트**(태그 5 · 세션당 1회 · 형제 확정 3지점) → 상대가 더 크면 청구(≤64 · `after_seq` = 내 값). 상한 = (스레드·origin)당 200줄 · 세션 응답 1MiB(`SyncBudget` · 초과 = 무응답).
+> - 저장 = 기록 레코드 **tag 4**(origin‖seq‖등급‖from‖text · 구판은 tag 4에서 멈춤) · **기기별 파일 유지**(`u-{uid}.seg` 안 함 = S3 결정) · 매핑 표 `history/{short}.id`(전체 PeerId)로 **핀 없는 상대 기록도 복원**.
+> - 읽음 = 태그 20 · `mark_read`가 안읽음을 실제로 걷을 때만 팬아웃(되먹임 없음 [13 §12-1]) + 청구 응답에 동반.
+> - **아직 안 한 것**: 파일 줄("[파일] … 이 기기에는 없음") · 그룹 스레드 · 상한 설정 항목(지금 상수).
 
 ---
 
