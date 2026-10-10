@@ -258,6 +258,9 @@ curl -s -A Mozilla/5.0 https://community.chocolatey.org/packages/nexa-beep | sed
 #        gh variable set CHOCO_PUSH -b false          # 끝나면 원복
 #      ※ beepd 워크플로는 winget job도 함께 도니, #422579가 열려 있는 동안은
 #        `BEEPD_WINGET_PUBLISH=false`로 잠시 내려 중복 PR을 막는다(끝나면 원복).
+#    ★ 10-10 = choco 0.3.0 3종 **승인** → 규칙상 v0.5.0부터 포함 가능했으나 스위치(`CHOCO_PUSH`)가 꺼진 채 태그가 나가
+#      notice로 제외됐다(release run 38051285767). 승인 확인 직후 **태그 전에** 스위치를 켠다 — 놓쳤으면
+#      `gh workflow run publish-windows-packages.yml -f tag=v0.5.0`로 그 태그를 다시 내보낸다(중간 버전은 건너뛴다).
 #    둘 다 완료 → 스위치 켜서 이번 태그에 포함:
 #      gh variable set WINGET_PUBLISH -b true && gh variable set CHOCO_PUSH -b true
 #    대기 중 → false 유지 = 이번 릴리스에서 제외(brew·Releases만 나간다).

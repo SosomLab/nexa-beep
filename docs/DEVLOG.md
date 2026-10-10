@@ -7,6 +7,7 @@
 
 ## 2026-10-10
 
+- **(Win · main) ★v0.5.0 공개** — minor · release run 38051285767 전 job success · 자산 15 · brew + apt/dnf · winget 제외 · choco 제외(스위치 = 사용자 조치 대기) · 탑재 = X-13 S4 따라잡기. [journal Win 4차](journal/2026-10-10.md)
 - **(Win · main) 사용자 실기 순서표 자동화분 5건** — S4 시나리오 19/19 ✓ + 활성 창 읽음 동기 수정(`72e61d1`) · 성능 U-1 회귀 없음 · 임포트 ✓ · 라이선스 CLI 부분 ✓ · WGUI-2 세션 0 대리 exit 3 ✓. [journal Win 3차](journal/2026-10-10.md)
 - **(Win · main) ★X-13 S4 따라잡기 ✅** — 형제 기기 간 기록 동기(태그 5·6·7·20 · 200줄/1MiB · 텍스트만) · 줄 열쇠 `(origin, seq)` 영속(seq 재시작 겹침 발견) · 핀 없는 상대 기록 복원(매핑 표) · 읽음 동기 · 723 green · `tools/s4-scenario.sh` 13/13 ✓ · 사용자 실기 순서표 26 §7-2. [journal Win 2차](journal/2026-10-10.md)
 - **(Win · main) ★Windows 미수행 실기 자동화 일괄** — 714 green · 3.6MB · 임포트 인박스(pwsh 7) · WGUI-1·4·5 ✓ · **PERF-1 Win ✓**(`tools/perf-scenario.sh` · 프레임 ≈2ms) · seam 틱 묶음 발견 → 51 §3 정정 · T-8(WS-Private 6.3MB)·T-1 캡처·T-10(설치본 0.2.17→0.4.0) ✓. [journal Win 1차](journal/2026-10-10.md)
