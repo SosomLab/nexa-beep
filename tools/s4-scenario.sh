@@ -7,6 +7,8 @@
 #   ① Y1·X1만 켠 채 Y1 → X1 `y1-hello` · X1 → Y1 `x1-reply`(X1은 대화 창을 열었다 = 읽음).
 #   ② X2(새 신원)를 켠다 — X1과 XXpsk3 형제 성립 → 디제스트 → X2가 Y1 스레드 2줄을 끌어온다 ·
 #      X1이 읽었으므로 읽음 동기가 뒤따라 X2의 안읽음 0. X2는 Y1과 **세션을 맺지 않는다**(핀 없음).
+#   ④ (X2가 켜진 채) Y1 → X `y1-later` = X1·X2 둘 다 직접 수신(기기 전부 팬아웃) · X1 활성 창 즉시 읽음 →
+#      X2 안읽음 0(읽음 동기) · X1 → Y1 `x1-later` = X2에 sender copy 내 말풍선 · Y1에는 X 두 기기가 한 행(접힘).
 #   ③ X2의 핀(trust.seg)을 지우고 켠다 — **핀 없는 상대**의 기록이 매핑 표(history/{short}.id)로 복원되는가
 #      (②에서 Y1은 X-사용자 기기 목록 갱신을 보고 X2에도 세션을 맺어 핀이 생긴다 — 10-10 실측 ·
 #       그래서 핀을 지워야 이 경로가 실제로 밟힌다 · 테스트 전용 조작).
@@ -35,11 +37,11 @@ seed s4-x1 s4x1 s4test-x
 seed s4-x2 s4x2 s4test-x
 seed s4-y1 s4y1 s4test-y
 
-echo "▶ ① Y1·X1 기동 — Y1: 12s 연결·16s 창·20s 송신 / X1: 24s 창·28s 답장 / 70s dump · 74s quit"
-run s4-y1 "12000:activate=s4x1;16000:activate=s4x1;20000:send=y1-hello;70000:dump;74000:quit" "$OUT/y1.log"
-run s4-x1 "24000:activate=s4y1;28000:send=x1-reply;70000:dump;74000:quit" "$OUT/x1.log"
+echo "▶ ① Y1·X1 기동 — Y1: 12s 연결·16s 창·20s 송신 / X1: 24s 창·28s 답장 / ④ 58s y1-later · 62s x1-later / 70s dump · 74s quit"
+run s4-y1 "12000:activate=s4x1;16000:activate=s4x1;20000:send=y1-hello;58000:send=y1-later;70000:dump;74000:quit" "$OUT/y1.log"
+run s4-x1 "24000:activate=s4y1;28000:send=x1-reply;62000:send=x1-later;65000:activate=s4y1;70000:dump;74000:quit" "$OUT/x1.log"
 sleep 36
-echo "▶ ② X2 기동(t=36s) — 형제 성립·따라잡기 뒤 30s dump · 32s quit (Y1과는 세션 없음)"
+echo "▶ ② X2 기동(t=36s) — 형제 성립·따라잡기 → ④ 기기 전부 팬아웃·sender copy·활성 창 읽음 동기 → 30s dump · 32s quit"
 run s4-x2 "30000:dump;32000:quit" "$OUT/x2-a.log"
 wait
 echo "▶ ③ X2 핀 삭제 후 재기동 — 8s dump · 10s quit (핀 없는 기록의 재시작 매핑)"
@@ -69,7 +71,14 @@ chk "X2 dump: y1-hello(상대 줄 · origin=Y1)"      "$OUT/x2-a.log" 'thread .*
 chk "X2 dump: x1-reply(내 줄 · origin=X1)"        "$OUT/x2-a.log" 'thread .* mine=true .* origin=[0-9a-f]{8} seq=[1-9][0-9]* text=x1-reply'
 chk "X2 dump: Y1 행 안읽음 0"                      "$OUT/x2-a.log" 'peer .* name=s4y1 .* unread=0'
 chk "X2: 라인은 형제(X1)에게서 왔다(Y1 직접 수신 아님)" "$OUT/x2-a.log" 'sync lines from .* -> thread' 2
-chk "X2 재기동 dump: 기록 2줄 복원(핀 없는 상대)"   "$OUT/x2-b.log" 'thread .* text=(y1-hello|x1-reply)' 2
+# ④ S3 항목의 Windows 판(docs/26 §7-2 U-11 같은 PC 축) — 기기 전부 팬아웃 · sender copy · 접힘 · 활성 창 읽음 동기.
+chk "④ Y1→X 팬아웃: X1 수신(y1-later)"               "$OUT/x1.log"   'thread .* mine=false .* text=y1-later'
+chk "④ Y1→X 팬아웃: X2도 직접 수신(y1-later)"         "$OUT/x2-a.log" 'thread .* mine=false from=s4y1 origin=[0-9a-f]{8} seq=[1-9][0-9]* text=y1-later'
+chk "④ X1→Y1 발신 = X2에 sender copy(x1-later)"       "$OUT/x2-a.log" 'copy from .* -> thread'
+chk "④ X2 dump: x1-later 내 말풍선"                   "$OUT/x2-a.log" 'thread .* mine=true .* text=x1-later'
+chk "④ X1 활성 창 즉시 읽음 → X2 읽음 동기(2회째)"     "$OUT/x2-a.log" 'sync read from .* unread 1->0' 2
+chk "④ Y1 dump: X 두 기기가 한 행(group=2)"            "$OUT/y1.log"   'peer .* name=s4x1 .* group=2'
+chk "X2 재기동 dump: 기록 4줄 복원(핀 없는 상대)"   "$OUT/x2-b.log" 'thread .* text=(y1-hello|x1-reply|y1-later|x1-later)' 4
 chk "X2 재기동 dump: Y1 행 = 이름 힌트(s4y1) · 세션 없음" "$OUT/x2-b.log" 'peer .* name=s4y1 .* live=false'
 echo
 echo "결과: ✓ $ok · ✗ $bad   (로그 = $OUT/{y1,x1,x2-a,x2-b}.log)"

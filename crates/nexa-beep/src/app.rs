@@ -9664,6 +9664,10 @@ impl App {
             let (_, wall) = now_stamp();
             self.last_read.insert(peer, wall);
             self.send_read_ack(peer);
+            // S4 읽음 동기(10-10 Win 2차 실기 설계 검토): 활성 창에서 즉시 읽은 것도 형제에게
+            // 알린다 — 종전엔 mark_read(안읽음 걷힘)만 보내, 창을 열어 둔 기기에서 읽은 줄이
+            // 다른 기기에는 안읽음으로 남았다. 되먹임 없음(수신 1건당 1프레임 · 상한 = 수신량).
+            self.send_sync_read(peer);
             return;
         }
         let n = {
