@@ -722,6 +722,9 @@ winget validate 통과 · 해시 일치.
 | **U-12** | GUI 세션 판정(WGUI-2·3) | 다른 PC에서 `Enter-PSSession`·`ssh`로 접속 후 무인자 실행 | 사유 안내 + **exit 3**(창 안 뜸) · 안내에 스테이션 이름 | `echo $LASTEXITCODE` |
 | **U-13** | 차단 망 왕복(E-3) | 멀티캐스트 막힌 망(게스트 Wi-Fi 등)에서 2대 | S4 유니캐스트·수동 IP로 발견·메시지 | `NEXA_NETMON=1` |
 
+> **자동화로 먼저 확인한 것(10-10 Win 3차 · 개발 세션)** — U-1 프레임 ms(100% · 휠 paint 1.40ms·present 0.20ms — **체감·150%는 사람**) · U-9 CLI 부분(free·요청 코드·잘못된 파일 거부·remove — **Licensed 경로는 사람**) · U-11 **같은 PC 축**(`tools/s4-scenario.sh` 19/19 — 팬아웃·sender copy·접힘·따라잡기·읽음 동기 · **2-PC·절전·폐기는 사람**) · U-12 **세션 0 대리**(SYSTEM 예약 작업 = 안내+exit 3 · **WinRM·ssh 실물은 사람**). 나머지(U-2~8·U-10·U-13)는 자동화 불가 확정 — 합성 입력은 IME 조합을 못 만들고, 파일 대화상자·트레이 클릭에는 조작 seam이 없다.
+> ⚠ 같은 PC에 여러 인스턴스를 띄우면 **나중에 뜬 창이 포커스를 가져간다** — 활성 창에 기대는 판정(즉시 읽음 등)은 그 창을 다시 활성화한 뒤 본다 · GUI exe 종료 코드는 `Start-Process -Wait -PassThru`로만 잰다(cmd `%ERRORLEVEL%`·`&`는 거짓 0/빈값).
+
 ## 8. 아직 눈으로 못 본 것
 
 > **"코드가 있다"와 "동작을 봤다"는 다르다.** 확인된 것은 [DEVLOG](DEVLOG.md)·[journal/](journal/)에
