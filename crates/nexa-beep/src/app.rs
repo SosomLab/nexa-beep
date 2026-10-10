@@ -336,6 +336,26 @@ enum AppEvent {
         seq: u64,
         importance: u8,
     },
+    /// 형제의 따라잡기 디제스트(ADR-0015 S4 · 태그 5) — 대조·청구는 메인(기록이 거기 있다).
+    SyncDigest {
+        peer: PeerId,
+        digest: Box<nbeep_core::SyncDigest>,
+    },
+    /// 형제의 따라잡기 청구(태그 6) — 응답 구성·예산은 메인.
+    SyncPull {
+        peer: PeerId,
+        pull: nbeep_core::SyncPull,
+    },
+    /// 형제의 따라잡기 응답(태그 7) — dedup·저장·뷰 갱신은 메인.
+    SyncLines {
+        peer: PeerId,
+        lines: Box<nbeep_core::SyncLines>,
+    },
+    /// 형제의 읽음 동기(태그 20) — 안읽음 걷기는 메인.
+    SyncRead {
+        peer: PeerId,
+        read: nbeep_core::SyncRead,
+    },
     /// 서명 기기 목록 도착(ADR-0015 S2-e · 태그 4) — 서명·소속 검증은 메인.
     UserHello {
         peer: PeerId,
@@ -918,6 +938,10 @@ struct Conversation {
     hello_ver: Option<u32>,
     /// 이 세션에 내 후계 증명서를 보냈는가(세션당 1회).
     succ_sent: bool,
+    /// 따라잡기 디제스트를 보냈는가(S4 · 세션당 1회 — 형제 확정 뒤).
+    digest_sent: bool,
+    /// 따라잡기 응답 예산(S4 · 세션당 1MiB — 넘으면 더 응답하지 않는다).
+    sync_budget: nbeep_core::SyncBudget,
 }
 
 /// 진행 중 발신 상태(08-16 · 재개형 펌프) — Accept가 등록하고 액터 루프 틱이
@@ -1628,6 +1652,47 @@ fn spawn_session_actor(
                             }
                         }
                     }
+                    // 따라잡기(ADR-0015 S4 · 태그 5·6·7·20) — 해석만 여기, 형제 세션 판정은 메인.
+                    StreamId::Control if nbeep_core::SyncDigest::decode(&bytes).is_some() => {
+                        if let Some(d) = nbeep_core::SyncDigest::decode(&bytes) {
+                            if proxy
+                                .send_event(AppEvent::SyncDigest {
+                                    peer,
+                                    digest: Box::new(d),
+                                })
+                                .is_err()
+                            {
+                                return;
+                            }
+                        }
+                    }
+                    StreamId::Control if nbeep_core::SyncPull::decode(&bytes).is_some() => {
+                        if let Some(pull) = nbeep_core::SyncPull::decode(&bytes) {
+                            if proxy.send_event(AppEvent::SyncPull { peer, pull }).is_err() {
+                                return;
+                            }
+                        }
+                    }
+                    StreamId::Control if nbeep_core::SyncLines::decode(&bytes).is_some() => {
+                        if let Some(l) = nbeep_core::SyncLines::decode(&bytes) {
+                            if proxy
+                                .send_event(AppEvent::SyncLines {
+                                    peer,
+                                    lines: Box::new(l),
+                                })
+                                .is_err()
+                            {
+                                return;
+                            }
+                        }
+                    }
+                    StreamId::Control if nbeep_core::SyncRead::decode(&bytes).is_some() => {
+                        if let Some(read) = nbeep_core::SyncRead::decode(&bytes) {
+                            if proxy.send_event(AppEvent::SyncRead { peer, read }).is_err() {
+                                return;
+                            }
+                        }
+                    }
                     StreamId::Control if nbeep_core::UserHello::decode(&bytes).is_some() => {
                         // 서명 기기 목록(ADR-0015 S2-e) — 검증(서명·소속·버전)은 메인.
                         if let Some(h) = nbeep_core::UserHello::decode(&bytes) {
@@ -1864,6 +1929,22 @@ fn unix_now_ms() -> u64 {
         .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
 }
 
+/// 부팅 시퀀서(S4 · 순수) — `max(마지막 저장값 + 1, 현재 Unix ms)`부터. 따라잡기 열쇠
+/// `(기기, seq)`는 재시작을 넘어 단조여야 하는데 저장은 quiet 지연이라 크래시 뒤 몇 건을 잃을 수
+/// 있다 → 시각 하한이 재사용을 막는다(ms당 메시지 1건 미만이 전제 · 시계가 되돌아가면 저장값이 막는다).
+fn boot_sequencer(last_saved: u64, now_ms: u64) -> nbeep_core::Sequencer {
+    nbeep_core::Sequencer::resume_after(last_saved.max(now_ms.saturating_sub(1)))
+}
+
+/// 기록 매핑 표 읽기(S4) — `history/{short}.id` = 전체 PeerId 32B. 이름(지문 앞자리)과 맞지 않으면
+/// 손상으로 보고 `None`(fail-closed).
+fn history_sidecar_peer(dir: &std::path::Path, short: &str) -> Option<PeerId> {
+    let raw = std::fs::read(dir.join(format!("{short}.id"))).ok()?;
+    let bytes: [u8; PeerId::LEN] = raw.as_slice().try_into().ok()?;
+    let p = PeerId::from_bytes(bytes);
+    (p.short() == short).then_some(p)
+}
+
 /// 상대 시각 표기(08-15 — 프로필 카드 "최근 접속/대화"). 0 = 기록 없음 = 빈 문자열.
 fn ago_label(unix_ms: u64) -> String {
     if unix_ms == 0 {
@@ -1993,6 +2074,20 @@ fn encode_history(lines: &[ChatLine]) -> Vec<u8> {
     for l in &keep[start..] {
         match &l.body {
             ChatBody::Text(t) => {
+                // ★ 열쇠 있는 줄은 tag 4(S4 따라잡기 · 10-10): origin(32) ‖ seq(8 LE) ‖ 등급(1) ‖
+                //   from ‖ text — 재시작 뒤에도 `(origin, seq)` dedup이 서야 형제 동기가 중복을
+                //   안 만든다. 열쇠 없는 줄(안내·구본)은 종전 tag 1/3 그대로.
+                if let Some((origin, seq)) = l.sync_key() {
+                    out.push(4u8);
+                    out.push(u8::from(l.mine));
+                    out.extend_from_slice(&l.at_ms.to_le_bytes());
+                    out.extend_from_slice(origin.as_bytes());
+                    out.extend_from_slice(&seq.to_le_bytes());
+                    out.push(l.importance.min(2));
+                    put_str(&mut out, l.from.as_deref().unwrap_or(""));
+                    put_str(&mut out, t.as_str());
+                    continue;
+                }
                 // 발신자 라벨이 있으면 tag 3(그룹 수신 풍선 · 08-19 — 복원 후에도
                 // "누가 보냈나"가 남아야 한다). 없으면 종전 tag 1 그대로 —
                 // 1:1 세그먼트는 바이트 불변(전방 호환 · 구판은 미지 tag에서 멈춘다).
@@ -2048,6 +2143,37 @@ fn decode_history(bytes: &[u8]) -> Vec<ChatLine> {
         let mine = bytes[i + 1] != 0;
         let at_ms = u64::from_le_bytes(bytes[i + 2..i + 10].try_into().unwrap_or([0; 8]));
         match tag {
+            4 => {
+                // 열쇠 동반 텍스트(S4 · 10-10) — origin ‖ seq ‖ 등급 ‖ from ‖ text.
+                if i + 51 > bytes.len() {
+                    break;
+                }
+                let origin = PeerId::from_bytes(
+                    bytes[i + 10..i + 42].try_into().unwrap_or([0; PeerId::LEN]),
+                );
+                let seq = u64::from_le_bytes(bytes[i + 42..i + 50].try_into().unwrap_or([0; 8]));
+                let importance = bytes[i + 50];
+                let Some((from, p1)) = read_str(bytes, i + 51) else {
+                    break;
+                };
+                let Some((text, next)) = read_str(bytes, p1) else {
+                    break;
+                };
+                let mut l = ChatLine::text(
+                    mine,
+                    nbeep_core::sanitize_message(&text),
+                    at_ms,
+                    wall_from_ms(at_ms),
+                )
+                .with_importance(importance)
+                .with_seq(seq)
+                .with_origin(origin);
+                if !from.is_empty() {
+                    l = l.with_from(nbeep_core::sanitize_message(&from).as_str());
+                }
+                out.push(l);
+                i = next;
+            }
             1 => {
                 let Some((text, next)) = read_str(bytes, i + 10) else {
                     break;
@@ -2113,6 +2239,7 @@ fn decode_history(bytes: &[u8]) -> Vec<ChatLine> {
                     read: false,
                     queued: false,
                     importance: 0,
+                    origin: None,
                 });
                 i = next;
             }
@@ -6471,23 +6598,33 @@ impl App {
             }
             let g = self.fold_group(p);
             eprintln!(
-                "[dump] peer {} name={} key={} group={} live={}",
+                "[dump] peer {} name={} key={} group={} live={} unread={}",
                 p.short(),
                 self.peer_title(p),
                 g[0].short(),
                 g.len(),
-                self.conversations.contains_key(&p)
+                self.conversations.contains_key(&p),
+                self.unread.get(&g[0]).copied().unwrap_or(0) // S4 읽음 동기 판정 근거
             );
         }
-        let open: Vec<PeerId> = self.chats.keys().copied().collect();
+        // 열린 대화 + 기록만 있는 대화(parked · S4 따라잡기·재시작 매핑 판정 근거) — 뷰 키로 1회.
+        let mut open: Vec<PeerId> = self.chats.keys().copied().collect();
+        for (t, _) in self.sync_threads() {
+            let k = self.view_key(t);
+            if !open.contains(&k) {
+                open.push(k);
+            }
+        }
         for k in open {
             for l in self.thread_lines(k) {
                 if let nbeep_ui::ChatBody::Text(t) = &l.body {
                     eprintln!(
-                        "[dump] thread {} mine={} from={} text={}",
+                        "[dump] thread {} mine={} from={} origin={} seq={} text={}",
                         k.short(),
                         l.mine,
                         l.from.as_deref().unwrap_or("-"),
+                        l.origin.map_or_else(|| "-".to_string(), |o| o.short()),
+                        l.seq,
                         t.as_str()
                     );
                 }
@@ -7370,6 +7507,7 @@ impl App {
         self.note_sibling(peer, true);
         self.send_user_proof(peer, true); // 회신(이미 보냈으면 no-op)
         self.send_user_key_blob(peer); // 승격 경로도 키 동기(D-32-8)
+        self.send_sync_digest(peer); // S4 따라잡기 — 형제 확정 뒤 디제스트 1회
         let title = self.peer_title(peer);
         self.set_status(nbeep_core::tf(self.connected_msg(peer), &[&title]));
         let mut inv = Invalidations::default();
@@ -8157,15 +8295,17 @@ impl App {
         if let Some(&store) = live.first() {
             let msg = nbeep_core::ChatMessage {
                 sender_device: self.identity.peer_id(),
-                seq: self.seq.issue(),
+                seq: self.issue_seq(),
                 body: nbeep_core::MessageBody::Text(text.as_str().to_string()),
                 importance,
                 broadcast: false,
             };
+            let me = self.identity.peer_id();
             if let Some(chat) = self.chats.get_mut(&peer) {
                 chat.push_line(
                     ChatLine::text(true, text.clone(), at_ms, wall)
                         .with_seq(msg.seq)
+                        .with_origin(me) // S4 따라잡기 열쇠 = (나, seq)
                         .with_importance(grade),
                     inv,
                 );
@@ -8174,6 +8314,7 @@ impl App {
                 conv.lines.push(
                     ChatLine::text(true, text, at_ms, wall)
                         .with_seq(msg.seq)
+                        .with_origin(me)
                         .with_importance(grade),
                 );
             }
@@ -8294,7 +8435,10 @@ impl App {
             return; // 같은 (발신 기기, seq) — 다중 경로 중복
         }
         let (at_ms, wall) = now_stamp();
-        let line = ChatLine::text(true, text, at_ms, wall).with_importance(importance & 0x3);
+        let line = ChatLine::text(true, text, at_ms, wall)
+            .with_importance(importance & 0x3)
+            .with_seq(seq) // S4 열쇠 = (보낸 형제, seq) — 따라잡기가 같은 줄을 다시 넣지 않게
+            .with_origin(peer);
         if let Some(conv) = self.conversations.get_mut(&to) {
             conv.lines.push(line.clone());
         } else {
@@ -8316,6 +8460,365 @@ impl App {
         }
         self.redraw_conversation(to);
         self.refresh_and_redraw();
+    }
+
+    // ── 따라잡기(ADR-0015 S4 · docs/46 §5-4 · docs/48 §3-6 · 10-10) ──
+    //
+    // 형제 세션이 서면 디제스트(스레드·원 발신 기기별 최대 seq)를 1회 보내고, 받은 쪽은 부족분을
+    // 청구(SyncPull) · 가진 쪽이 줄(SyncLines)로 응답 · 받은 기기는 dedup 뒤 **자기 키로** 봉인 저장.
+    // 읽음(SyncRead)은 안읽음이 실제로 걷힌 때와 응답에 동반. 전부 **형제 세션에서 온 것만**(fail-closed).
+
+    /// 이 기기의 1:1 스레드 전수 — 세션 중(conversations) + 대피분(parked). 그룹은 범위 밖.
+    fn sync_threads(&self) -> Vec<(PeerId, &[ChatLine])> {
+        let mut v: Vec<(PeerId, &[ChatLine])> = self
+            .conversations
+            .iter()
+            .map(|(p, c)| (*p, c.lines.as_slice()))
+            .collect();
+        for (p, l) in &self.parked_lines {
+            if !self.conversations.contains_key(p) {
+                v.push((*p, l.as_slice()));
+            }
+        }
+        v
+    }
+
+    /// 동기 대상 스레드인가 — 남과의 대화만(나·내 기기·형제와의 스레드는 제외 · 차단 상대 제외).
+    fn sync_thread_ok(&self, thread: PeerId, my_devs: &[PeerId]) -> bool {
+        use nbeep_core::TrustStore as _;
+        thread != self.identity.peer_id()
+            && !my_devs.contains(&thread)
+            && !self.siblings.contains(&thread)
+            && !self.trust.is_blocked(thread)
+    }
+
+    /// 내 디제스트 표 + 스레드 우선순위(최근 대화 순).
+    fn sync_digest_map(&self) -> (nbeep_core::DigestMap, Vec<PeerId>) {
+        let my_devs = self.my_devices();
+        let mut recent: Vec<(u64, PeerId)> = Vec::new();
+        let mut triples: Vec<(PeerId, PeerId, u64)> = Vec::new();
+        for (t, lines) in self.sync_threads() {
+            if !self.sync_thread_ok(t, &my_devs) {
+                continue;
+            }
+            let last = lines.iter().map(|l| l.at_ms).max().unwrap_or(0);
+            recent.push((last, t));
+            triples.extend(
+                lines
+                    .iter()
+                    .filter_map(|l| l.sync_key().map(|(o, s)| (t, o, s))),
+            );
+        }
+        recent.sort_by_key(|r| std::cmp::Reverse(r.0));
+        (
+            nbeep_core::digest_of(triples),
+            recent.into_iter().map(|(_, t)| t).collect(),
+        )
+    }
+
+    /// 디제스트 송신(세션당 1회 · 형제 확정 뒤 — 채널이 있어야 한다).
+    fn send_sync_digest(&mut self, peer: PeerId) {
+        if !self.siblings.contains(&peer) || !self.user_state.active() {
+            return;
+        }
+        if self.conversations.get(&peer).is_none_or(|c| c.digest_sent) {
+            return;
+        }
+        let (map, recent) = self.sync_digest_map();
+        let frame = nbeep_core::digest_frame(&map, &recent);
+        let n = frame.entries.len();
+        if let Some(conv) = self.conversations.get_mut(&peer) {
+            conv.digest_sent = true;
+            let _ = conv.out_tx.send(SessionCmd::Control(vec![frame.encode()]));
+        }
+        if self.user_trace {
+            eprintln!("[user] sync digest to {} entries={n}", peer.short());
+        }
+    }
+
+    /// 형제 디제스트 수신 — 내가 부족한 (스레드, 원 발신 기기)마다 청구 1건.
+    fn on_sync_digest(&mut self, peer: PeerId, theirs: &nbeep_core::SyncDigest) {
+        if !self.siblings.contains(&peer) || !self.user_state.active() {
+            if self.user_trace {
+                eprintln!(
+                    "[user] sync digest from {} dropped (not sibling)",
+                    peer.short()
+                );
+            }
+            return;
+        }
+        let my_devs = self.my_devices();
+        let (map, _) = self.sync_digest_map();
+        let pulls: Vec<nbeep_core::SyncPull> = nbeep_core::pulls_for(&map, theirs)
+            .into_iter()
+            .filter(|p| self.sync_thread_ok(p.thread, &my_devs))
+            .collect();
+        if self.user_trace {
+            eprintln!(
+                "[user] sync digest from {} entries={} pulls={}",
+                peer.short(),
+                theirs.entries.len(),
+                pulls.len()
+            );
+        }
+        if pulls.is_empty() {
+            return;
+        }
+        if let Some(conv) = self.conversations.get(&peer) {
+            let frames = pulls.iter().map(nbeep_core::SyncPull::encode).collect();
+            let _ = conv.out_tx.send(SessionCmd::Control(frames));
+        }
+    }
+
+    /// 청구 응답 — 그 스레드에서 `origin`이 보낸 `after_seq` 초과 최근 ≤200줄(텍스트만). 예산(세션당
+    /// 1MiB)을 넘기면 응답하지 않는다. 이 스레드를 다 읽었으면 읽음 동기도 동반한다.
+    fn on_sync_pull(&mut self, peer: PeerId, pull: nbeep_core::SyncPull) {
+        if !self.siblings.contains(&peer) || !self.user_state.active() {
+            return;
+        }
+        let my_devs = self.my_devices();
+        if !self.sync_thread_ok(pull.thread, &my_devs) {
+            return;
+        }
+        let Some(lines) = self
+            .conversations
+            .get(&pull.thread)
+            .map(|c| c.lines.as_slice())
+            .or_else(|| self.parked_lines.get(&pull.thread).map(Vec::as_slice))
+        else {
+            return;
+        };
+        let keyed: Vec<(PeerId, u64, &ChatLine)> = lines
+            .iter()
+            .filter_map(|l| l.sync_key().map(|(o, s)| (o, s, l)))
+            .collect();
+        let chosen = nbeep_core::select_lines(&keyed, pull.origin, pull.after_seq, pull.max);
+        if chosen.is_empty() {
+            return;
+        }
+        let out = nbeep_core::SyncLines {
+            thread: pull.thread,
+            lines: chosen
+                .into_iter()
+                .filter_map(|(seq, l)| {
+                    let nbeep_ui::ChatBody::Text(t) = &l.body else {
+                        return None;
+                    };
+                    Some(nbeep_core::SyncLine {
+                        origin: pull.origin,
+                        seq,
+                        mine: l.mine,
+                        at_ms: l.at_ms,
+                        importance: l.importance,
+                        from: l.from.clone().unwrap_or_default(),
+                        text: t.as_str().to_string(),
+                    })
+                })
+                .collect(),
+        };
+        let n = out.lines.len();
+        let frame = out.encode();
+        // 읽음 동기 동반 — 이 스레드의 안읽음이 0이고 본 적이 있으면 "끝까지 봤다".
+        let vk = self.view_key(pull.thread);
+        let upto = lines.iter().map(|l| l.at_ms).max().unwrap_or(0);
+        let read_frame = (self.unread.get(&vk).copied().unwrap_or(0) == 0
+            && self.last_read.contains_key(&vk))
+        .then(|| {
+            nbeep_core::SyncRead {
+                thread: pull.thread,
+                upto_at_ms: upto,
+            }
+            .encode()
+        });
+        let Some(conv) = self.conversations.get_mut(&peer) else {
+            return;
+        };
+        if !conv.sync_budget.take(frame.len()) {
+            if self.user_trace {
+                eprintln!(
+                    "[user] sync pull from {} refused: budget {}B",
+                    peer.short(),
+                    conv.sync_budget.sent()
+                );
+            }
+            return;
+        }
+        let mut frames = vec![frame];
+        frames.extend(read_frame);
+        let _ = conv.out_tx.send(SessionCmd::Control(frames));
+        if self.user_trace {
+            eprintln!(
+                "[user] sync lines to {} thread {} origin {} after={} n={n}",
+                peer.short(),
+                pull.thread.short(),
+                pull.origin.short(),
+                pull.after_seq
+            );
+        }
+    }
+
+    /// 응답 수신 — `(origin, seq)` dedup 뒤 스레드에 넣고 시각순 정렬 · 내 키로 봉인 저장 · 모르는
+    /// 상대면 목록 행(이름 = 수신 줄 라벨 힌트 · 신뢰 근거 아님) · 수신 줄 수만큼 안읽음(뒤따르는
+    /// 읽음 동기가 걷는다) · 열린 뷰는 다시 채운다(중간 삽입은 push로 순서가 안 맞는다).
+    fn on_sync_lines(&mut self, peer: PeerId, got: &nbeep_core::SyncLines) {
+        if !self.siblings.contains(&peer) || !self.user_state.active() {
+            return;
+        }
+        let t = got.thread;
+        let my_devs = self.my_devices();
+        if !self.sync_thread_ok(t, &my_devs) {
+            return;
+        }
+        let mut seen: std::collections::HashSet<(PeerId, u64)> = self
+            .conversations
+            .get(&t)
+            .map(|c| c.lines.as_slice())
+            .or_else(|| self.parked_lines.get(&t).map(Vec::as_slice))
+            .map(|ls| ls.iter().filter_map(ChatLine::sync_key).collect())
+            .unwrap_or_default();
+        let mut added: Vec<ChatLine> = Vec::new();
+        let mut unread_new = 0u32;
+        let mut from_hint: Option<String> = None;
+        let mut newest = 0u64;
+        for l in &got.lines {
+            if !seen.insert((l.origin, l.seq)) {
+                continue;
+            }
+            let mut line = ChatLine::text(
+                l.mine,
+                nbeep_core::sanitize_message(&l.text),
+                l.at_ms,
+                wall_from_ms(l.at_ms),
+            )
+            .with_seq(l.seq)
+            .with_origin(l.origin)
+            .with_importance(l.importance);
+            if !l.mine {
+                unread_new += 1;
+                if !l.from.is_empty() {
+                    line = line.with_from(nbeep_core::sanitize_message(&l.from).as_str());
+                    from_hint = Some(l.from.clone());
+                }
+            }
+            newest = newest.max(l.at_ms);
+            self.dedup.accept(l.origin, l.seq); // 뒤늦게 오는 live 사본·재전달과도 한 번만
+            added.push(line);
+        }
+        if added.is_empty() {
+            return;
+        }
+        let n = added.len();
+        {
+            let dst = match self.conversations.get_mut(&t) {
+                Some(c) => &mut c.lines,
+                None => self.parked_lines.entry(t).or_default(),
+            };
+            dst.extend(added);
+            dst.sort_by_key(|l| l.at_ms); // 안정 정렬 — 같은 시각은 기존 순서 유지
+        }
+        if self.table.get(t).is_none() && !self.extra_peers.contains_key(&t) {
+            let name = from_hint
+                .as_deref()
+                .and_then(|h| nbeep_core::DisplayName::parse(h).ok())
+                .unwrap_or_else(|| nbeep_core::default_display_name(None, &t));
+            self.extra_peers.insert(t, name);
+        }
+        if newest > 0 {
+            self.trust.note_chat(t, newest); // 최근 대화 = 따라잡은 줄의 시각(지금이 아니다)
+        }
+        self.record_history(t);
+        let vk = self.view_key(t);
+        if unread_new > 0 && !self.chat_active(vk) {
+            *self.unread.entry(vk).or_insert(0) += unread_new;
+        }
+        if self.chats.contains_key(&vk) {
+            let merged = self.thread_lines(vk);
+            if let Some(chat) = self.chats.get_mut(&vk) {
+                let mut inv = Invalidations::default();
+                chat.clear_lines(&mut inv);
+                for l in merged {
+                    chat.push_line(l, &mut inv);
+                }
+            }
+        }
+        if self.user_trace {
+            eprintln!(
+                "[user] sync lines from {} -> thread {} added={n} unread+={unread_new}",
+                peer.short(),
+                t.short()
+            );
+        }
+        self.redraw_conversation(t);
+        self.refresh_and_redraw();
+        self.update_main_title();
+    }
+
+    /// 읽음 동기 수신 — 그 시각 이하의 수신 줄은 읽은 것 · 더 새 줄 수만 안읽음으로 남긴다.
+    fn on_sync_read(&mut self, peer: PeerId, read: nbeep_core::SyncRead) {
+        if !self.siblings.contains(&peer) || !self.user_state.active() {
+            return;
+        }
+        let vk = self.view_key(read.thread);
+        let Some(&cur) = self.unread.get(&vk) else {
+            return;
+        };
+        let remain = nbeep_core::unread_after(
+            self.thread_lines(vk)
+                .iter()
+                .filter(|l| !l.mine)
+                .map(|l| l.at_ms),
+            read.upto_at_ms,
+        );
+        if remain >= cur {
+            return;
+        }
+        if remain == 0 {
+            self.unread.remove(&vk);
+            self.last_read
+                .entry(vk)
+                .or_insert_with(|| wall_from_ms(read.upto_at_ms));
+        } else {
+            self.unread.insert(vk, remain);
+        }
+        if self.user_trace {
+            eprintln!(
+                "[user] sync read from {} thread {} unread {cur}->{remain}",
+                peer.short(),
+                vk.short()
+            );
+        }
+        let mut inv = Invalidations::default();
+        self.refresh_rows(&mut inv);
+        if let Some(mid) = self.main_id {
+            self.request_redraw(mid);
+        }
+        self.update_main_title();
+    }
+
+    /// 읽음 동기 송신 — 살아 있는 형제 전부에 "이 스레드를 여기(최신 줄 시각)까지 봤다".
+    fn send_sync_read(&self, vk: PeerId) {
+        if !self.user_state.active() || self.siblings.is_empty() {
+            return;
+        }
+        let upto = self
+            .thread_lines(vk)
+            .iter()
+            .map(|l| l.at_ms)
+            .max()
+            .unwrap_or(0);
+        if upto == 0 {
+            return;
+        }
+        let frame = nbeep_core::SyncRead {
+            thread: vk,
+            upto_at_ms: upto,
+        }
+        .encode();
+        for s in &self.siblings {
+            if let Some(c) = self.conversations.get(s) {
+                let _ = c.out_tx.send(SessionCmd::Control(vec![frame.clone()]));
+            }
+        }
     }
 
     /// 서명 기기 목록 수신(S2-e) — ① 서명 ② 제시자 자신이 목록에 있다(A-1) ③ 버전 단조(저장소가
@@ -9118,6 +9621,7 @@ impl App {
             if let Some(mid) = self.main_id {
                 self.request_redraw(mid);
             }
+            self.send_sync_read(peer); // S4 읽음 동기 — 안읽음이 실제로 걷힌 때만(되먹임 없음)
         }
         self.update_main_title();
     }
@@ -9380,6 +9884,8 @@ impl App {
                 proof_fails: 0,
                 hello_ver: None,
                 succ_sent: false,
+                digest_sent: false,
+                sync_budget: nbeep_core::SyncBudget::default(),
             },
         );
         // 후계 증명서(S2-f) — 키 봉인본보다 **먼저**(형제가 "후계가 이긴다" 규칙으로 새 키를 채택하려면
@@ -9391,6 +9897,7 @@ impl App {
             // ★ 사용자 키 동기(ADR-0015 S2 · D-32-8 전 기기 복제): 형제 확정 + 채널 성립 즉시 내
             //   봉인본을 보낸다. 양쪽이 보내고 각자 "오래된 키" 규칙으로 수렴한다(왕복 1회).
             self.send_user_key_blob(peer);
+            self.send_sync_digest(peer); // S4 따라잡기 — 형제 확정 뒤 디제스트 1회
         } else {
             self.send_user_proof(peer, false);
         }
@@ -12139,6 +12646,16 @@ impl App {
         self.conf.sched.mark(Instant::now());
     }
 
+    /// 발신 seq 발급 + 영속(S4 · 10-10) — 따라잡기 열쇠 `(기기, seq)`가 재시작을 넘어 단조여야
+    /// 한다. 부팅은 [`boot_sequencer`]가 `max(저장값+1, 현재 ms)`로 잇는다(저장은 quiet 지연이라
+    /// 크래시로 몇 건을 잃어도 ms 하한이 재사용을 막는다).
+    fn issue_seq(&mut self) -> u64 {
+        let s = self.seq.issue();
+        self.settings.set("chat.seq_last", s.to_string());
+        self.conf_mark();
+        s
+    }
+
     /// 설정 스냅샷 저장 — 주기(tick)·종료(flush) 두 경로가 이 하나를 쓴다(S-2).
     /// 실패는 치명적이지 않다(S-4) — 단 종료 경로 실패는 stderr로 알린다.
     ///
@@ -12366,8 +12883,10 @@ impl App {
         let dir = self.data_dir.join("history");
         let stem = peer.short();
         let path = dir.join(format!("{stem}.seg"));
+        let id_path = dir.join(format!("{stem}.id"));
         if plain.is_empty() {
             let _ = std::fs::remove_file(&path);
+            let _ = std::fs::remove_file(&id_path);
             self.datakeys.destroy(&stem);
             return;
         }
@@ -12378,6 +12897,11 @@ impl App {
         };
         // 소유자 전용(0600) 원자적 쓰기 — 한 벌(09-05 · clip A-1 계열 · 실측 664).
         let _ = nbeep_store::privfile::write_atomic(&path, &env);
+        // ★ 매핑 표(S4 · 10-10 — S3가 미룬 "핀 없는 상대의 기록은 재시작 때 매핑 안 됨"): 파일 이름은
+        //   지문 앞자리뿐이라 전체 PeerId를 곁에 둔다(공개 식별자 · 봉인 불필요 · 1회 쓰기).
+        if !id_path.exists() {
+            let _ = nbeep_store::privfile::write_atomic(&id_path, peer.as_bytes());
+        }
     }
 
     /// 1:1 오프라인 대기 큐 영속(M4-6 · 08-20 — 재시작 유지 사용자 확정).
@@ -12488,7 +13012,7 @@ impl App {
         let mut sent = 0usize;
         let mut inv = Invalidations::default();
         for m in &q {
-            let seq = self.seq.issue();
+            let seq = self.issue_seq();
             let msg = nbeep_core::ChatMessage {
                 sender_device: self.identity.peer_id(),
                 seq,
@@ -12637,12 +13161,18 @@ impl App {
             let Some(short) = path.file_stem().and_then(|s| s.to_str()) else {
                 continue;
             };
-            let Some(peer) = recs
+            let pinned = recs
                 .iter()
-                .find(|r| !r.blocked && r.peer.short() == short)
-                .map(|r| r.peer)
-            else {
-                continue; // 핀 없는/차단된 기록 — 매핑 불가 or 제외
+                .find(|r| r.peer.short() == short)
+                .map(|r| (r.peer, r.blocked));
+            let peer = match pinned {
+                Some((_, true)) => continue, // 차단 상대 — 제외
+                Some((p, false)) => p,
+                // 핀 없는 기록(sender copy·따라잡기로 생긴 상대) — 매핑 표 `{short}.id`(S4).
+                None => match history_sidecar_peer(&dir, short) {
+                    Some(p) if !nbeep_core::TrustStore::is_blocked(&self.trust, p) => p,
+                    _ => continue,
+                },
             };
             let Some(bytes) = std::fs::read(&path)
                 .ok()
@@ -12654,6 +13184,14 @@ impl App {
             if lines.is_empty() {
                 continue;
             }
+            // 목록 이름 힌트 — 마지막 수신 줄의 발신자 라벨(핀 없는 상대 · 신뢰 근거 아님).
+            let name_hint = lines
+                .iter()
+                .rev()
+                .find(|l| !l.mine)
+                .and_then(|l| l.from.as_deref())
+                .filter(|s| !is_debug_peer_label(s))
+                .and_then(|s| nbeep_core::DisplayName::parse(s).ok());
             // ★ 발신자 라벨(10-10 S3 실기 정정): 08-19 이후 수신 줄은 **저장 때 라벨을 싣는다**
             //   (tag 3). 라벨 없는 상대 줄 = 로컬 안내(원격 경로·첫 왕래·지문 권유·명령 결과)
             //   이거나 08-19 이전 수신 — 종전 소급 라벨은 안내 줄에까지 붙었고, 부팅 초기 이름을
@@ -12670,9 +13208,9 @@ impl App {
             }
             self.parked_lines.insert(peer, lines);
             if self.live {
-                self.extra_peers
-                    .entry(peer)
-                    .or_insert_with(|| nbeep_core::default_display_name(None, &peer));
+                self.extra_peers.entry(peer).or_insert_with(|| {
+                    name_hint.unwrap_or_else(|| nbeep_core::default_display_name(None, &peer))
+                });
             }
         }
     }
@@ -13974,7 +14512,7 @@ impl App {
             if self.conversations.contains_key(&peer) {
                 let msg = nbeep_core::ChatMessage {
                     sender_device: me,
-                    seq: self.seq.issue(),
+                    seq: self.issue_seq(),
                     body: nbeep_core::MessageBody::Text(text.as_str().to_string()),
                     importance: nbeep_core::Importance::Notice,
                     broadcast: true, // 공지 표식(08-21 — 수신측 "받지 않기"의 근거)
@@ -14414,10 +14952,11 @@ impl App {
             let mut sent = 0usize;
             let mut queued: Vec<PeerId> = Vec::new();
             for m in &members {
+                let seq = self.issue_seq(); // 빌림 밖(S4 — 발급이 설정 영속을 동반해 &mut)
                 if let Some(conv) = self.conversations.get(m) {
                     let frame = nbeep_core::SGroupMsg::Msg {
                         uid,
-                        seq: self.seq.issue(),
+                        seq,
                         text: text.as_str().to_string(),
                         sender: None, // P-10 kind 9 발신은 구버전 소진 후(해석기 선배포)
                     }
@@ -14584,11 +15123,12 @@ impl App {
         let title = self.peer_title(peer);
         for (gid, text) in pends {
             let uid = self.groups.shared_by_id(gid).map(|s| s.roster.uid);
+            let seq = self.issue_seq(); // 빌림 밖(S4)
             let sent = uid.is_some_and(|uid| {
                 self.conversations.get(&peer).is_some_and(|conv| {
                     let frame = nbeep_core::SGroupMsg::Msg {
                         uid,
-                        seq: self.seq.issue(),
+                        seq,
                         text: text.clone(),
                         sender: None, // P-10 kind 9 발신은 구버전 소진 후(해석기 선배포)
                     }
@@ -17484,6 +18024,8 @@ impl ApplicationHandler<AppEvent> for App {
                 let from = self.peer_title(peer);
                 let line = ChatLine::text(false, text, at_ms, wall)
                     .with_from(from)
+                    .with_seq(seq) // S4 따라잡기 열쇠 = (상대 기기, 상대 seq) — ack 계층은 mine만 본다
+                    .with_origin(peer)
                     .with_importance(importance); // ④ 등급 링(발신자의 요청 표시)
                 if let Some(conv) = self.conversations.get_mut(&peer) {
                     conv.lines.push(line.clone());
@@ -17542,6 +18084,10 @@ impl ApplicationHandler<AppEvent> for App {
                 seq,
                 importance,
             } => self.on_sender_copy(peer, to, &to_name, text, seq, importance),
+            AppEvent::SyncDigest { peer, digest } => self.on_sync_digest(peer, &digest),
+            AppEvent::SyncPull { peer, pull } => self.on_sync_pull(peer, pull),
+            AppEvent::SyncLines { peer, lines } => self.on_sync_lines(peer, &lines),
+            AppEvent::SyncRead { peer, read } => self.on_sync_read(peer, read),
             AppEvent::Succession { peer, doc } => self.on_succession(peer, &doc),
             AppEvent::ChatAck {
                 peer,
@@ -18649,6 +19195,7 @@ impl ApplicationHandler<AppEvent> for App {
                     if via_psk {
                         self.send_succession(peer);
                         self.send_user_key_blob(peer);
+                        self.send_sync_digest(peer); // S4 따라잡기 — 형제 확정 뒤 디제스트 1회
                         if let Some(c) = self.conversations.get_mut(&peer) {
                             c.hello_ver = None;
                         }
@@ -19082,6 +19629,7 @@ impl ApplicationHandler<AppEvent> for App {
                     if via_psk {
                         self.send_succession(peer);
                         self.send_user_key_blob(peer);
+                        self.send_sync_digest(peer); // S4 따라잡기 — 형제 확정 뒤 디제스트 1회
                         if let Some(c) = self.conversations.get_mut(&peer) {
                             c.hello_ver = None;
                         }
@@ -21549,6 +22097,11 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
     // 프로필 캐시가 기록보다 먼저(10-10 S3 실기 — 기록 복원이 이름을 모르는 채 라벨을 굳히던 것).
     app.restore_cached_profiles(); // 핀 상대의 캐시 프로필·목록 행 복원(08-14)
     app.restore_history(); // 대화 기록 복원(M2-5b · parked_lines에 · 대화창 열면 뜬다)
+                           // 발신 시퀀서 잇기(S4 · 10-10) — 설정 로드 뒤 · 첫 발신 전.
+    app.seq = boot_sequencer(
+        app.settings.get("chat.seq_last").parse().unwrap_or(0),
+        unix_now_ms(),
+    );
     app.restore_pending(); // 1:1 오프라인 대기 복원(M4-6 — 대기 풍선+자동 전달 후보)
     app.restore_group_history(); // 그룹 기록 복원(08-19 · g-{uid}.seg → group_threads)
     app.ensure_wire_avatar(); // 상한 초과 사진의 와이어 축소본 보장(08-16 — 기존 사용자 자기 치유)
@@ -22087,6 +22640,61 @@ mod tests {
         assert_eq!(server_retry_delay(2), 60_000);
         assert_eq!(server_retry_delay(3), 300_000);
         assert_eq!(server_retry_delay(200), 300_000, "상한 반복 — 중단 없음");
+    }
+
+    /// ★ S4(10-10) — 열쇠 동반 줄(tag 4)의 왕복: 원 발신 기기·seq·등급·라벨 보존 · 열쇠 없는 줄은
+    /// 종전 tag(1/3) 그대로 · 구판 디코더는 tag 4에서 멈춘다(전방 확장 규약).
+    #[test]
+    fn history_roundtrips_sync_key_lines() {
+        use super::{decode_history, encode_history, wall_from_ms, ChatLine};
+        let w = wall_from_ms(1_700_000_000_000);
+        let me = PeerId::from_bytes([7u8; PeerId::LEN]);
+        let them = PeerId::from_bytes([9u8; PeerId::LEN]);
+        let lines = vec![
+            ChatLine::text(false, nbeep_core::sanitize_message("안내(열쇠 없음)"), 500, w),
+            ChatLine::text(true, nbeep_core::sanitize_message("내 말"), 1000, w)
+                .with_seq(1_760_000_000_005)
+                .with_origin(me)
+                .with_importance(2),
+            ChatLine::text(false, nbeep_core::sanitize_message("답"), 2000, w)
+                .with_from("상대")
+                .with_seq(42)
+                .with_origin(them),
+        ];
+        let enc = encode_history(&lines);
+        assert_eq!(enc[0], 1, "열쇠 없는 줄 = 종전 tag 1");
+        let back = decode_history(&enc);
+        assert_eq!(back.len(), 3);
+        assert_eq!(back[0].sync_key(), None);
+        assert_eq!(back[1].sync_key(), Some((me, 1_760_000_000_005)));
+        assert!(back[1].mine && back[1].importance == 2 && back[1].from.is_none());
+        assert_eq!(back[2].sync_key(), Some((them, 42)));
+        assert_eq!(back[2].from.as_deref(), Some("상대"));
+        assert_eq!(back[2].at_ms, 2000);
+        // 구판(tag 4 미지) 흉내 — 첫 tag 4에서 멈춰 앞 줄만 남는다(손상 아님 · fail-soft).
+        let cut = enc.iter().position(|&b| b == 4).unwrap();
+        assert_eq!(decode_history(&enc[..cut]).len(), 1);
+    }
+
+    /// S4 — 부팅 시퀀서 = max(저장값+1, 현재 ms) · 매핑 표 읽기 = 이름과 일치할 때만.
+    #[test]
+    fn boot_sequencer_and_history_sidecar() {
+        use super::{boot_sequencer, history_sidecar_peer};
+        assert_eq!(boot_sequencer(0, 1_000).issue(), 1_000, "저장값 없음 = 현재 ms");
+        assert_eq!(boot_sequencer(5_000, 1_000).issue(), 5_001, "시계가 되돌아가도 저장값 다음");
+        let mut s = boot_sequencer(999, 1_000);
+        assert_eq!((s.issue(), s.issue()), (1_000, 1_001));
+        let dir = std::env::temp_dir().join(format!("nb-s4-sidecar-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let p = PeerId::from_bytes([3u8; PeerId::LEN]);
+        std::fs::write(dir.join(format!("{}.id", p.short())), p.as_bytes()).unwrap();
+        assert_eq!(history_sidecar_peer(&dir, &p.short()), Some(p));
+        assert_eq!(history_sidecar_peer(&dir, "deadbeef"), None, "파일 없음");
+        std::fs::write(dir.join("bad.id"), [1u8; 32]).unwrap();
+        assert_eq!(history_sidecar_peer(&dir, "bad"), None, "이름 불일치 = 손상");
+        std::fs::write(dir.join("short.id"), [1u8; 5]).unwrap();
+        assert_eq!(history_sidecar_peer(&dir, "short"), None, "길이 불일치");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// M2-5b — 대화 기록 왕복(텍스트·방향·시각 보존 · Xfer 줄은 제외).

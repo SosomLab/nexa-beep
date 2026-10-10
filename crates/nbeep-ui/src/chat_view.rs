@@ -147,6 +147,10 @@ pub struct ChatLine {
     /// 등급(④ 08-20 · docs/24 — 0 일반 · 1 알림 · 2 긴급). 풍선 외곽 링으로 표시.
     /// 발신자의 **요청**일 뿐 수신 강도는 수신자 정책이 정한다(재시작 후 비영속).
     pub importance: u8,
+    /// **원 발신 기기**(ADR-0015 S4 · 10-10) — `(origin, seq)`가 형제 기기 간 따라잡기의
+    /// 줄 열쇠다(내 줄 = 나 · 수신 줄 = 상대 기기 · sender copy = 보낸 형제). `None` = 열쇠
+    /// 없음(로컬 안내·구본 기록 — 동기 대상 아님).
+    pub origin: Option<nbeep_core::PeerId>,
 }
 
 impl ChatLine {
@@ -164,6 +168,7 @@ impl ChatLine {
             read: false,
             queued: false,
             importance: 0,
+            origin: None,
         }
     }
 
@@ -172,6 +177,22 @@ impl ChatLine {
     pub fn with_seq(mut self, seq: u64) -> Self {
         self.seq = seq;
         self
+    }
+
+    /// 원 발신 기기를 붙인다(S4 따라잡기 열쇠 · 빌더).
+    #[must_use]
+    pub fn with_origin(mut self, origin: nbeep_core::PeerId) -> Self {
+        self.origin = Some(origin);
+        self
+    }
+
+    /// 따라잡기 열쇠 `(origin, seq)` — 텍스트 줄이고 둘 다 있을 때만.
+    #[must_use]
+    pub fn sync_key(&self) -> Option<(nbeep_core::PeerId, u64)> {
+        match (&self.body, self.origin, self.seq) {
+            (ChatBody::Text(_), Some(o), s) if s != 0 => Some((o, s)),
+            _ => None,
+        }
     }
 
     /// 오프라인 대기 표시를 붙인다(M4-6 — 세션 없는 발신 · 빌더).
@@ -215,6 +236,7 @@ impl ChatLine {
             read: false,
             queued: false,
             importance: 0,
+            origin: None,
         }
     }
 }

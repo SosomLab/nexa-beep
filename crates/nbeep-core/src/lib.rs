@@ -15,6 +15,7 @@
 pub mod ack;
 pub mod action;
 pub mod avatar;
+pub mod catchup;
 pub mod chat;
 pub mod command;
 pub mod endpoint;
@@ -50,6 +51,11 @@ pub mod testkit;
 // ── 편의 재수출(공개 표면 설계 — 내부 모듈 경로를 그대로 노출하지 않는다) ──
 pub use ack::{AckKind, ChatAck, ACK_TAG};
 pub use action::{ActionKind, FailCode, Outcome, RejectCode, RiskLevel, ScanOutcome};
+pub use catchup::{
+    digest_frame, digest_of, pulls_for, select_lines, unread_after, DigestEntry, DigestMap,
+    SyncBudget, SyncDigest, SyncLine, SyncLines, SyncPull, SyncRead, SYNC_BYTES_PER_SESSION,
+    SYNC_DIGEST_TAG, SYNC_LINES_MAX, SYNC_LINES_TAG, SYNC_PULL_TAG, SYNC_READ_TAG,
+};
 pub use chat::{
     fanout, ChatMessage, DedupIndex, FanoutReport, Importance, MessageBody, Sequencer, WireError,
 };
