@@ -13208,9 +13208,18 @@ impl App {
             }
             self.parked_lines.insert(peer, lines);
             if self.live {
-                self.extra_peers.entry(peer).or_insert_with(|| {
-                    name_hint.unwrap_or_else(|| nbeep_core::default_display_name(None, &peer))
-                });
+                // 힌트는 **자리표시 이름(지문 라벨)만** 덮는다 — 프로필 캐시가 먼저 넣은 실제 이름은
+                // 그대로(S4 실기 10-10: 핀 상대라도 캐시에 이름이 없으면 `beep-지문`으로 남았다).
+                let placeholder = nbeep_core::default_display_name(None, &peer);
+                let row = self
+                    .extra_peers
+                    .entry(peer)
+                    .or_insert_with(|| placeholder.clone());
+                if let Some(hint) = name_hint {
+                    if *row == placeholder {
+                        *row = hint;
+                    }
+                }
             }
         }
     }
@@ -22651,7 +22660,12 @@ mod tests {
         let me = PeerId::from_bytes([7u8; PeerId::LEN]);
         let them = PeerId::from_bytes([9u8; PeerId::LEN]);
         let lines = vec![
-            ChatLine::text(false, nbeep_core::sanitize_message("안내(열쇠 없음)"), 500, w),
+            ChatLine::text(
+                false,
+                nbeep_core::sanitize_message("안내(열쇠 없음)"),
+                500,
+                w,
+            ),
             ChatLine::text(true, nbeep_core::sanitize_message("내 말"), 1000, w)
                 .with_seq(1_760_000_000_005)
                 .with_origin(me)
@@ -22680,8 +22694,16 @@ mod tests {
     #[test]
     fn boot_sequencer_and_history_sidecar() {
         use super::{boot_sequencer, history_sidecar_peer};
-        assert_eq!(boot_sequencer(0, 1_000).issue(), 1_000, "저장값 없음 = 현재 ms");
-        assert_eq!(boot_sequencer(5_000, 1_000).issue(), 5_001, "시계가 되돌아가도 저장값 다음");
+        assert_eq!(
+            boot_sequencer(0, 1_000).issue(),
+            1_000,
+            "저장값 없음 = 현재 ms"
+        );
+        assert_eq!(
+            boot_sequencer(5_000, 1_000).issue(),
+            5_001,
+            "시계가 되돌아가도 저장값 다음"
+        );
         let mut s = boot_sequencer(999, 1_000);
         assert_eq!((s.issue(), s.issue()), (1_000, 1_001));
         let dir = std::env::temp_dir().join(format!("nb-s4-sidecar-{}", std::process::id()));
@@ -22691,7 +22713,11 @@ mod tests {
         assert_eq!(history_sidecar_peer(&dir, &p.short()), Some(p));
         assert_eq!(history_sidecar_peer(&dir, "deadbeef"), None, "파일 없음");
         std::fs::write(dir.join("bad.id"), [1u8; 32]).unwrap();
-        assert_eq!(history_sidecar_peer(&dir, "bad"), None, "이름 불일치 = 손상");
+        assert_eq!(
+            history_sidecar_peer(&dir, "bad"),
+            None,
+            "이름 불일치 = 손상"
+        );
         std::fs::write(dir.join("short.id"), [1u8; 5]).unwrap();
         assert_eq!(history_sidecar_peer(&dir, "short"), None, "길이 불일치");
         let _ = std::fs::remove_dir_all(&dir);
