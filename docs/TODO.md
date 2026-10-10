@@ -217,6 +217,8 @@ M-1 설계 ──► M0 기반 ──► M1 발견 ──► M2 대화 ──►
 **M3-3b 상세 체크리스트 (WIME)** — Windows 실기(이 PC 가능) · 근거 = [27 §6~7](27-typeahead-hangul-composition.md) · 기록엔 **왜 + 실측값** 필수:
 
 - [x] **WIME-1 대화(IME on) 한글 조합 기본** — ✅ **실기 확인(08-13 · 사용자)**: preedit 단계 표시·Commit 삽입·**조합 중 Backspace 자소 단위** 동작
+> ★ **10-10 사용자 실기 순서표 = [26 §7-2](26-run-and-manual-test.md)**(U-1~13 — 아래 WIME-2·4·7~11 · WGUI-2·3 · X-13 2-PC · T-5/T-7 · 트레이 · E-3를 진행 순서로 묶음).
+
 - [ ] **WIME-2 조합 전 첫 키 유출** — 한글 IME 켠 직후 첫 키가 `Character`로 새는지 — mac에서 만든 **자모 보류-판정 ④**([27 §5](27-typeahead-hangul-composition.md))가 Windows 이벤트 순서(KeyboardInput ↔ Ime 도착 순)에서도 걸리는가
 - [x] **WIME-3 목록 모드(IME off) 자모 도착** — ★ **실측 완료(08-13 · 사용자 실기): 자모가 오지 않는다**(라틴만 · 한/영 키 무력) — 우려대로 목록 한글 직접 조합이 Windows 무동작이었다. **처방 구현 = [27 §8](27-typeahead-hangul-composition.md)**: `jamo_from_qwerty`(QWERTY→두벌식) + 앱 소유 `hangul_mode` 토글 · 잔여 = 한글 이름 상대 **자소 접두 매칭 실동작**(GUI 실기)
 - [ ] **WIME-4 한/영 전환 키** — winit 소스 확인 + ★ **실기 실증(08-13 · 사용자)**: VK_HANGUL → `NamedKey::HangulMode`(물리 `Lang1`)가 **IME 비연결 목록 창에도 도달** — [27 §8](27-typeahead-hangul-composition.md) 앱 토글·상태바 고지·조합·복귀 동작 확인. 잔여 = 대화 창(IME on) 전환 직후 **첫 키 손실**(mac R2 유형) 재현 여부만
