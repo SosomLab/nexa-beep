@@ -30,14 +30,16 @@ t=$((t+300)); S="$S;$t:rclick=450,260"; t=$((t+400))
 for i in $(seq 0 9); do S="$S;$t:move=$((470+i*2)),$((275+i*4))"; t=$((t+80)); done
 t=$((t+800)); S="$S;$t:dump"; t=$((t+1500)); S="$S;$t:quit"
 echo "$S" > "$OUT/script-A.txt"
-( cd "$M/B" && NEXA_WIN_TRACE=1 NEXA_SCRIPT="$((t+3000)):quit" "./nexa-beep$EXE" --window --live 2> "$OUT/B.log" ) &
+( cd "$M/B" && exec env NEXA_WIN_TRACE=1 NEXA_SCRIPT="$((t+3000)):quit" "./nexa-beep$EXE" --window --live 2> "$OUT/B.log" ) & PB=$!
 sleep 2
-( cd "$M/A" && NEXA_PAINT_TRACE=1 NEXA_WIN_TRACE=1 NEXA_SCRIPT="$S" "./nexa-beep$EXE" --window --live --separate-windows 2> "$OUT/A.log" ) &
+( cd "$M/A" && exec env NEXA_PAINT_TRACE=1 NEXA_WIN_TRACE=1 NEXA_SCRIPT="$S" "./nexa-beep$EXE" --window --live --separate-windows 2> "$OUT/A.log" ) & PA=$!
 sleep 7
 case "${OSTYPE:-}" in
   msys* | cygwin*) powershell.exe -NoProfile -Command "Get-Process nexa-beep | Select-Object Id,Path,WorkingSet64,PrivateMemorySize64,HandleCount | Format-Table -AutoSize | Out-String; (Get-Counter '\Process(nexa-beep)\Working Set - Private').CounterSamples | ForEach-Object { 'ws-private=' + [math]::Round(\$_.CookedValue/1MB,1) + 'MB' }" | tr -d '\r' > "$OUT/mem-idle.txt" ;;
-  darwin*) for p in $(pgrep -f "$M/[AB]/nexa-beep"); do footprint "$p" 2>/dev/null | grep -m1 -i "phys_footprint"; done > "$OUT/mem-idle.txt" ;;
-  *) for p in $(pgrep -f "$M/[AB]/nexa-beep"); do grep -E "RssAnon|VmRSS" "/proc/$p/status"; done > "$OUT/mem-idle.txt" ;;
+  # mac·Linux = exec로 잡은 앱 PID 직접(종전 `pgrep -f "$M/[AB]/nexa-beep"`는 `cd` 뒤 `./nexa-beep`로 띄워 명령줄에
+  # 폴더 경로가 없어 0건이었다 — 10-17 mac 실측 · 같은 PC의 설치본·다른 실기 인스턴스도 섞이지 않는다).
+  darwin*) for n in A B; do p=$([ "$n" = A ] && echo "$PA" || echo "$PB"); printf '%s pid=%s ' "$n" "$p"; footprint "$p" 2>/dev/null | grep -m1 -i "phys_footprint" || echo "(footprint 실패)"; done > "$OUT/mem-idle.txt" ;;
+  *) for n in A B; do p=$([ "$n" = A ] && echo "$PA" || echo "$PB"); printf '%s pid=%s ' "$n" "$p"; grep -E "RssAnon|VmRSS" "/proc/$p/status" | tr '\n' ' '; echo; done > "$OUT/mem-idle.txt" ;;
 esac
 wait
 # 집계 — 단계별 paint/present 평균·최대(A.log의 [script] 표식으로 구간을 가른다)
