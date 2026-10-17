@@ -5772,7 +5772,12 @@ impl App {
     }
 
     /// 설정 화면의 **잠금·하단 정보**를 현재 승인 정책에 맞춘다(1초 주기 갱신).
-    fn refresh_approval_ui(&mut self) {
+    /// 반환 = 설정 창에 **실제로 바뀐 것이 있는가**(노트·잠금·버튼 톤 중 하나라도 무효화됐는가).
+    /// 1초 주기 호출자는 이 값이 참일 때만 재도색을 요청한다 — 10-17 mac 실측: 설정 창이 떠 있기만 하면
+    /// 카운트다운이 없어도 매초 전체 재도색(1840×1280 = 21ms)이 걸려 IOSurface 풀 3장(27MB)이 유휴 해제를
+    /// 한 번도 못 받았다(설치본 3일 가동 footprint 69MB · DR-5 ≤30MB 위반). setter는 전부 값 불변이면
+    /// 무효화를 건너뛰므로 `inv`가 비었다 = 화면 불변이다.
+    fn refresh_approval_ui(&mut self) -> bool {
         let now = self.now_ms();
         let remain = self.approval.remaining_ms(now);
         let started = self.approval_started_unix;
@@ -5790,7 +5795,7 @@ impl App {
         }
         let rotate_note = self.rotate_note.clone();
         let Some(sv) = &mut self.settings_view else {
-            return;
+            return false;
         };
         let mut inv = Invalidations::default();
         // 네 값을 **한 줄·고정 자리**로 보여 준다. 쓰이지 않을 때도 자리를 지키고
@@ -5916,6 +5921,7 @@ impl App {
         }
         locked.extend(usr_locks);
         sv.set_disabled(&locked, &mut inv);
+        !inv.is_empty()
     }
 
     /// `peer` 대화가 보이는 창을 다시 그린다(Separate = 그 창, Single = 주 창이 이 대화일 때).
@@ -20217,13 +20223,17 @@ impl ApplicationHandler<AppEvent> for App {
             let reverted = self.tick_approval();
             let sec = unix_now();
             // 설정 화면이 떠 있을 때만 1초 갱신한다 — 닫혀 있으면 그릴 곳이 없다.
+            // ★ 재도색은 **바뀐 게 있을 때만**(10-17 — 종전엔 무조건 요청해 설정 창이 열려 있는 한 매초
+            //   전체 재도색 = 유휴가 없어 IOSurface 풀 유휴 해제(`trim_if_idle`)가 영영 안 걸렸다 · [13 §12-1]).
             if self.settings_view.is_some() && sec != self.approval_footer_sec {
                 self.approval_footer_sec = sec;
-                self.refresh_approval_ui();
-                if let Some((sid, _)) = self.windows.iter().find(|(_, e)| e.role == Role::Settings)
-                {
-                    let sid = *sid;
-                    self.request_redraw(sid);
+                if self.refresh_approval_ui() {
+                    if let Some((sid, _)) =
+                        self.windows.iter().find(|(_, e)| e.role == Role::Settings)
+                    {
+                        let sid = *sid;
+                        self.request_redraw(sid);
+                    }
                 }
             }
             if reverted {

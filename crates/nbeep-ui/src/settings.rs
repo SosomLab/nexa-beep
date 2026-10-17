@@ -4751,4 +4751,38 @@ mod tests {
             .iter()
             .any(|(k, v)| *k == "net.server.address" && *v == "relay.example.com"));
     }
+
+    /// 10-17 mac 실측 — 설정 창이 떠 있는 동안 호스트가 1초마다 노트·잠금·버튼 톤을 다시 넣는다.
+    /// **값이 그대로면 무효화가 0**이어야 호스트가 재도색을 건너뛴다(종전엔 무조건 재도색 → 설정 창이
+    /// 열린 한 매초 21ms 전체 재도색 + IOSurface 풀 유휴 해제 불가 = 설치본 footprint 69MB). 이 계약이
+    /// `App::refresh_approval_ui`의 반환값(= `!inv.is_empty()`)이 기대는 전부라 여기 박제한다.
+    #[test]
+    fn unchanged_setters_do_not_invalidate() {
+        let (mut w, _) = widget();
+        let mut inv = Invalidations::default();
+        w.set_row_note("xfer.approval_window", "00:00:00 · 00:00:00", &mut inv);
+        w.set_row_note_toned("net.server.test", "ok", NoteTone::Ok, &mut inv);
+        w.set_disabled(&["xfer.approval_window", "net.server.address"], &mut inv);
+        w.set_action_tone("user.rotate", crate::controls::ButtonTone::Danger, &mut inv);
+        assert!(!inv.is_empty(), "첫 반영은 바뀐 것이라 무효화된다");
+        // 같은 값을 다시 넣는다 = 화면 불변 = 무효화 0(빈 노트를 빈 채로 두는 것도 포함).
+        let mut again = Invalidations::default();
+        w.set_row_note("xfer.approval_window", "00:00:00 · 00:00:00", &mut again);
+        w.set_row_note_toned("net.server.test", "ok", NoteTone::Ok, &mut again);
+        w.set_row_note("user.passphrase", "", &mut again);
+        w.set_disabled(&["net.server.address", "xfer.approval_window"], &mut again);
+        w.set_action_tone(
+            "user.rotate",
+            crate::controls::ButtonTone::Danger,
+            &mut again,
+        );
+        assert!(
+            again.is_empty(),
+            "값 불변 = 무효화 없음(1초 주기 재도색의 근거)"
+        );
+        // 하나라도 바뀌면 다시 무효화된다(카운트다운이 살아 있을 때의 경로).
+        let mut changed = Invalidations::default();
+        w.set_row_note("xfer.approval_window", "00:00:01 · 00:00:00", &mut changed);
+        assert!(!changed.is_empty());
+    }
 }
