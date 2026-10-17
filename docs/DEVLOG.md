@@ -5,6 +5,11 @@
 
 ---
 
+## 2026-10-17
+
+- **(mac · main) ★설정 창 매초 전체 재도색 수정**(`754484d` — 기간 자동 승인 1초 틱이 무효화와 무관하게 그려 IOSurface 유휴 해제가 영영 안 걸림 · 설치본 3일 14h footprint 69MB → 설정 창 열림 51→42MB · 회귀 1). [journal mac 1차](journal/2026-10-17.md)
+- **(mac · main) S4 커밋 mac 첫 검증** — 게이트 729 green · `s4-scenario` 19/19 ✓ · 성능 재실측 ≈8ms·유휴 25MB(회귀 없음) · perf 도구 mac/Linux 메모리 측정 복구+실행 비트(`6055fd5`). [journal mac 1차](journal/2026-10-17.md)
+
 ## 2026-10-10
 
 - **(Win · main) ★v0.5.0 공개** — minor · release run 38051285767 전 job success · 자산 15 · brew + apt/dnf · winget 제외 · choco 제외(스위치 = 사용자 조치 대기) · 탑재 = X-13 S4 따라잡기. [journal Win 4차](journal/2026-10-10.md)
