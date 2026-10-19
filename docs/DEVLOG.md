@@ -7,6 +7,7 @@
 
 ## 2026-10-19
 
+- **(Win · main) ★오프라인 대기분 즉시 전송 · 입력/전송 시각 분리 · 내 상태(온라인/오프라인)**(`ec2d8ae` — 발견 등장·roster Up 순간 due=지금(종전 백오프 ≤300s) · `ChatLine.sent`·기록 tag 6 · `app.presence`+메뉴 · `Transport::set_quiet`(광고·응답 중단+GOODBYE) · PRES-1 실기 대기). [journal Win 6차](journal/2026-10-19.md)
 - **(Win · main) ★개발자 상세 로그**(`09942eb` · [52](52-log-architecture.md) 신설 — M3-22 statuslog 싱크 재사용 + `nbeep_core::devlog` 층×수준 마스크 게이트 · 레코드 `기능 | rule 기준=값 | → 결과/FAIL` · `log.dev_mode`·`NEXA_DEVLOG` · 계측 12곳 · 후속 LOG-1 로그 창·LOG-2 계측 확장). [journal Win 4차](journal/2026-10-19.md)
 - **(Win · main) ★오프라인·접속 실패 상대도 대화창을 연다**(`e830292` — `activate`가 세션 없으면 연결만 걸고 return하던 입구 결함 · 뷰 항상 열고 연결은 배경 · 수동 성립 = 열린 뷰 보존 · 대기 풍선 parked 반영 · 실측 6줄 저장·재시작 복원 · 후속 `61bcd50` 대화함 = 핀 없는 복원 상대 이름·열기 · `a2afa6b` 오프라인 내 기기 = 서명 목록으로 신뢰 판정 · `007d061` 설정 `user.offline_trust`(기본 on)) · 파일 줄 따라잡기 ⏸ 보류 · docs/52 배정. [journal Win 3차](journal/2026-10-19.md)
 - **(Win · main) ★X-13 S4 상한 설정화 + 따라잡기 응답 분할**(`08a7057` — `user.sync_lines`·`user.sync_budget_mb` · 응답 = min(청구, 내 설정) · ★`SyncLines` 한 프레임 65,518B 초과 = 형제 세션 종료 결함 → 다중 프레임 · catchup 8/8). [journal Win 2차](journal/2026-10-19.md)
