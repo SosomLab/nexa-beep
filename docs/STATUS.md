@@ -3,7 +3,7 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
-> **갱신: 2026-10-19 Win 8차 (KST · Windows · main — 릴리스 = 개발 세션 · 기록 = 협업 세션)** — ★**v0.6.0 태그 push**(`80d9c99` 범프 0.5.0→0.6.0) · 릴리스 전 일괄 검증 첫 적용 = gate **728 green** · 3.67MB · 임포트 인박스 · s4 **19/19** · perf ≈2ms · 채널 = **winget 복귀**(#436462·#436461·#443211 전부 MERGED → `WINGET_PUBLISH=true`) · **choco 0.3.0 Approved → `CHOCO_PUSH`는 사용자 손**(분류기 차단 · 켠 뒤 재dispatch) · release run 감시 중. [journal Win 8차](journal/2026-10-19.md)
+> **갱신: 2026-10-19 Win 8차 (KST · Windows · main — 릴리스 = 개발 세션 · 기록 = 협업 세션)** — ★**v0.6.0 태그 push**(`80d9c99` 범프 0.5.0→0.6.0) · 릴리스 전 일괄 검증 첫 적용 = gate **728 green** · 3.67MB · 임포트 인박스 · s4 **19/19** · perf ≈2ms · 채널 = **winget 복귀**(#436462·#436461·#443211 전부 MERGED → `WINGET_PUBLISH=true`) · **choco 0.3.0 Approved → `CHOCO_PUSH`는 사용자 손**(분류기 차단 · 켠 뒤 재dispatch) · release run **39225610061 1차 failure**(Windows 2잡 — `choco install nsis` 피드 장애를 exit 0으로 통과 → makensis 부재 · 게시 0) → 재실행 + 워크플로 강화 `5e02417` · 결과 대기. [journal Win 8차](journal/2026-10-19.md)
 
 > **갱신: 2026-10-19 Win 7차 (KST · Windows · main — push = 개발 세션 · 위키·기록 = 협업 세션)** — **push `70a59b2..308a5cb`**(21커밋 · 10-19 코드 8건+기록) · CI run **39205235394** 전 7 job success · 위키 User-Guide 거울(`52c54e1` · 오프라인 큐 즉시 전달·내 상태) · 위키 Release-Notes **v0.6.0 절 준비 중**(`c9e8b2c` · 태그 전 · 태그 직전 일괄 검증 필요) · push `308a5cb..b5e802e`. [journal Win 7차](journal/2026-10-19.md)
 
