@@ -5846,6 +5846,9 @@ impl App {
         let mut inv = Invalidations::default();
         self.refresh_rows(&mut inv);
         self.refresh_toolbar_server();
+        // 한눈 표시(10-20 사용자 요청) — 트레이 아이콘(흐림+회색 점·툴팁)과 주 창 제목.
+        self.refresh_tray_badges();
+        self.update_main_title();
         if let Some(mid) = self.main_id {
             self.request_redraw(mid);
         }
@@ -6695,7 +6698,7 @@ impl App {
     }
 
     /// 자동화 테스트 seam(10-09 · `NEXA_SCRIPT`) — 형식 `"<ms>:<action>[=<arg>];…"` · action = `activate=<표시 이름 부분>`
-    /// (대화 열기 = 더블클릭/Enter와 같은 `activate` 경로) · `settings`(⌘/Ctrl+,) · `devices` · `license` · `about` · `quit`. 결과는 `NEXA_WIN_TRACE`와 함께
+    /// (대화 열기 = 더블클릭/Enter와 같은 `activate` 경로) · `settings`(⌘/Ctrl+,) · `devices` · `license` · `about` · `presence=<online|offline>` · `quit`. 결과는 `NEXA_WIN_TRACE`와 함께
     /// stderr로 본다(docs/26 §3-8).
     fn script_tick(&mut self, el: &ActiveEventLoop) {
         if self.script.is_empty() {
@@ -6779,6 +6782,11 @@ impl App {
                             _ => {}
                         }
                     }
+                }
+                // 내 상태 전환(10-20 — PRES-1 자동화 · 설치본 0.6.0 오프라인 전환 크래시 재현): 메뉴 ▸ 내 상태와
+                // 같은 `apply_settings` 경로를 탄다.
+                Some(("presence", v)) if v == "online" || v == "offline" => {
+                    self.apply_settings(vec![("app.presence", v.to_string())]);
                 }
                 None if step == "settings" => self.open_settings(el),
                 None if step == "devices" => self.open_devices(el),
@@ -10013,13 +10021,22 @@ impl App {
             return;
         };
         let total: u32 = self.unread.values().sum::<u32>() + self.gunread.values().sum::<u32>();
+        // ★ 내 상태 오프라인(10-20 사용자 요청)은 제목에 늘 앞선다 — 창이 뒤에 있어도·독/작업 표시줄에서도 읽힌다.
+        let mut parts: Vec<String> = Vec::new();
+        if self.is_offline() {
+            parts.push(nbeep_core::t(nbeep_core::Msg::PresenceOffline).to_string());
+        }
         if total > 0 {
-            e.window.set_title(&format!(
-                "{APP_TITLE} — {}",
-                nbeep_core::tf(nbeep_core::Msg::WinNewMessages, &[&total.to_string()])
+            parts.push(nbeep_core::tf(
+                nbeep_core::Msg::WinNewMessages,
+                &[&total.to_string()],
             ));
-        } else {
+        }
+        if parts.is_empty() {
             e.window.set_title(APP_TITLE);
+        } else {
+            e.window
+                .set_title(&format!("{APP_TITLE} — {}", parts.join(" · ")));
         }
     }
 
@@ -12876,6 +12893,12 @@ impl App {
         //   아바타 바탕(사진·12간지)은 색이 정해져 있지 않아 테두리 없이는 묻힌다(clip 10-05 실기).
         let badges = self.tray_badges();
         let mut rgba = self.my_avatar_rgba(32);
+        // ★ 내 상태 오프라인(10-20 사용자 요청 "트레이 아이콘과 타이틀 바에 표시") — 아바타를 흐리게(회색조·반투명)
+        //   + 우상단 회색 점. 점 하나만으로는 "어떤 점이 꺼졌나"를 세어야 해서 아이콘 전체의 분위기로 먼저 읽히게 한다.
+        if badges.offline {
+            dim_rgba(&mut rgba);
+            overlay_dot(&mut rgba, 32, Corner::TopRight, DOT_OFFLINE);
+        }
         if badges.relay {
             overlay_dot(&mut rgba, 32, Corner::TopLeft, DOT_RELAY);
         }
@@ -12886,6 +12909,10 @@ impl App {
             overlay_dot(&mut rgba, 32, Corner::BottomRight, DOT_XFER);
         }
         let mut tooltip = format!("Nexa Beep — {name}");
+        if badges.offline {
+            tooltip.push_str(" · ");
+            tooltip.push_str(t(Msg::PresenceOffline));
+        }
         if badges.relay {
             tooltip.push_str(" · ");
             tooltip.push_str(t(Msg::TrayServerOn));
@@ -12924,6 +12951,7 @@ impl App {
             self.server_link(),
             self.direct_session_count(),
             !self.active_send.is_empty() || !self.active_recv.is_empty(),
+            self.is_offline(),
         )
     }
 
@@ -22657,6 +22685,8 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
 const DOT_RELAY: (u8, u8, u8) = (46, 204, 64);
 const DOT_LAN: (u8, u8, u8) = (0, 0, 255);
 const DOT_XFER: (u8, u8, u8) = (255, 160, 20);
+/// 내 상태 오프라인 점(10-20 · 우상단 · 중간 회색 — 아이콘 전체를 흐리게 한 위에 얹는다).
+const DOT_OFFLINE: (u8, u8, u8) = (120, 120, 120);
 /// 점 테두리(흰색 2px) — 아바타 바탕과 무관하게 점이 보이게(clip 10-05 실기 처방).
 const DOT_RIM: (u8, u8, u8) = (255, 255, 255);
 
@@ -22664,6 +22694,7 @@ const DOT_RIM: (u8, u8, u8) = (255, 255, 255);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Corner {
     TopLeft,
+    TopRight,
     BottomLeft,
     BottomRight,
 }
@@ -22676,6 +22707,7 @@ fn overlay_dot(rgba: &mut [u8], side: usize, at: Corner, body: (u8, u8, u8)) {
     let r = (s * 7.0 / 32.0 * 0.9).max(3.6);
     let (cx, cy) = match at {
         Corner::TopLeft => (r, r),
+        Corner::TopRight => (s - r, r),
         Corner::BottomLeft => (r, s - r),
         Corner::BottomRight => (s - r, s - r),
     };
@@ -22700,9 +22732,40 @@ fn overlay_dot(rgba: &mut [u8], side: usize, at: Corner, body: (u8, u8, u8)) {
     }
 }
 
+/// 오프라인 아이콘(10-20) — 회색조(Rec.601 luma) + 알파 55%. 점은 이 위에 **덮어쓰기**라 흐려지지 않는다.
+fn dim_rgba(rgba: &mut [u8]) {
+    for px in rgba.chunks_exact_mut(4) {
+        let l = (u32::from(px[0]) * 299 + u32::from(px[1]) * 587 + u32::from(px[2]) * 114) / 1000;
+        #[allow(clippy::cast_possible_truncation)]
+        let l = l as u8;
+        px[0] = l;
+        px[1] = l;
+        px[2] = l;
+        px[3] = (u32::from(px[3]) * 55 / 100) as u8;
+    }
+}
+
 #[cfg(test)]
 mod tray_dot_tests {
     use super::*;
+
+    /// 오프라인 아이콘 = 회색조·반투명, 그 위 우상단 점은 불투명 그대로(10-20).
+    #[test]
+    fn offline_icon_is_dimmed_but_dot_is_opaque() {
+        let side = 32;
+        let mut rgba = vec![0u8; side * side * 4];
+        for px in rgba.chunks_exact_mut(4) {
+            px.copy_from_slice(&[200, 40, 40, 255]); // 붉은 바탕
+        }
+        dim_rgba(&mut rgba);
+        let (r, g, b, a) = px(&rgba, side, 16, 16);
+        assert_eq!((r, g, b), (r, r, r), "회색조");
+        assert_eq!(a, 140, "알파 55%");
+        overlay_dot(&mut rgba, side, Corner::TopRight, DOT_OFFLINE);
+        let (_, _, _, a) = px(&rgba, side, side - 3, 3);
+        assert_eq!(a, 255, "점은 불투명");
+        assert_eq!(px(&rgba, side, 16, 16).3, 140, "점 밖은 그대로");
+    }
 
     fn px(rgba: &[u8], side: usize, x: usize, y: usize) -> (u8, u8, u8, u8) {
         let i = (y * side + x) * 4;

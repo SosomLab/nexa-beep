@@ -358,24 +358,29 @@ impl ServerLink {
 /// 트레이 아이콘 배지 3종(M3-2e · 10-09 사용자 확정 "nexa-clip처럼" — clip DR-44 규약 차용):
 /// 좌상 녹 = **서버 통로 열림**(릴레이/컨텐츠 등록 성립) · 좌하 파랑 = **LAN·직결 세션 ≥1** ·
 /// 우하 주황 = **파일 전송 중**. 셋은 서로 독립이다(서버 점을 "서버 ∨ LAN"으로 넓히면 온라인 여부를 잃는다).
+/// ★ `offline`(10-20 사용자 요청 "오프라인을 직관적으로") = 내 상태 오프라인 — 아이콘 전체를 흐리게 + 우상단 회색 점 ·
+///   서버·LAN 점은 끈다(세션을 전부 닫았으니 참일 수 없고, 켜져 보이면 "오프라인인데 연결됨"으로 읽힌다).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub(crate) struct TrayBadges {
     pub(crate) relay: bool,
     pub(crate) lan: bool,
     pub(crate) xfer: bool,
+    pub(crate) offline: bool,
 }
 
-/// 배지 판정 — 서버 통로 열림 · 직결(서버 경유 아님) 세션 수 · 활성 전송 유무.
+/// 배지 판정 — 서버 통로 열림 · 직결(서버 경유 아님) 세션 수 · 활성 전송 유무 · 내 상태 오프라인.
 #[must_use]
 pub(crate) fn tray_badges(
     link: ServerLink,
     direct_sessions: usize,
     xfer_active: bool,
+    offline: bool,
 ) -> TrayBadges {
     TrayBadges {
-        relay: link.open(),
-        lan: direct_sessions > 0,
+        relay: link.open() && !offline,
+        lan: direct_sessions > 0 && !offline,
         xfer: xfer_active,
+        offline,
     }
 }
 
@@ -935,16 +940,24 @@ mod tray_badge_tests {
 
     #[test]
     fn badges_are_independent() {
-        let b = tray_badges(ServerLink::Local, 0, false);
+        let b = tray_badges(ServerLink::Local, 0, false, false);
         assert_eq!(b, TrayBadges::default());
         // LAN만 — 서버 점은 켜지지 않는다(clip DR-44 ②: 온라인 여부를 잃지 않는다).
-        let b = tray_badges(ServerLink::Local, 2, false);
-        assert!(b.lan && !b.relay && !b.xfer);
+        let b = tray_badges(ServerLink::Local, 2, false, false);
+        assert!(b.lan && !b.relay && !b.xfer && !b.offline);
         // 서버 접속 중(Reconnecting)·보류(Held)는 "열림"이 아니다.
-        assert!(!tray_badges(ServerLink::Reconnecting, 0, false).relay);
-        assert!(!tray_badges(ServerLink::Held, 0, false).relay);
-        let b = tray_badges(ServerLink::Connected(ServerKind::Relay), 0, true);
+        assert!(!tray_badges(ServerLink::Reconnecting, 0, false, false).relay);
+        assert!(!tray_badges(ServerLink::Held, 0, false, false).relay);
+        let b = tray_badges(ServerLink::Connected(ServerKind::Relay), 0, true, false);
         assert!(b.relay && !b.lan && b.xfer);
+    }
+
+    /// 오프라인(10-20) = 서버·LAN 점을 끄고 offline만 켠다 — 전이 순간(세션 종료 전 틱)에도 "오프라인인데
+    /// 연결됨"으로 보이지 않게. 전송 점은 남는다(진행 중 전송은 따로 취소된다).
+    #[test]
+    fn offline_turns_link_dots_off() {
+        let b = tray_badges(ServerLink::Connected(ServerKind::Relay), 3, true, true);
+        assert!(b.offline && !b.relay && !b.lan && b.xfer);
     }
 }
 
