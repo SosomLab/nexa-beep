@@ -3,6 +3,8 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
+> **갱신: 2026-10-19 Win 2차 (KST · Windows · main — 개발 세션 코드 · 기록 = 협업 세션)** — ★**X-13 S4 상한 설정화**(`08a7057` — 설정 › 사용자 `user.sync_lines` 50/100/200/500줄 · `user.sync_budget_mb` 1/4/16MiB · 응답 = min(청구, 내 설정) · 천장 500 · 전방 호환) + ★**결함 수정** = 따라잡기 응답을 한 프레임에 실어 65,518B를 넘으면 **형제 세션이 끊겼다**(200줄×330B) → 다중 프레임 · 크레이트 단위 검증(catchup 8/8 · settings 33/33 · clippy 0). 다음 = 파일 줄 따라잡기(개발 세션 착수). [journal Win 2차](journal/2026-10-19.md)
+
 > **갱신: 2026-10-19 Win 1차 (KST · Windows · main — 개발 세션 코드·게이트 · 기록 = 협업 세션)** — `754484d` Windows 게이트 ✓ · **검증 = 릴리스 전 일괄**(`bb207e9`) · ★**테스트 인스턴스 자동 실행 격리**(`43ee1d0` — `NEXA_NO_AUTOSTART`/cargo 산출 폴더 = 부팅 등록 안 함 · `--autostart-clear` · `tools/autostart-clean.sh` · relaunch `--stop` · Win 실측 ✓ · mac/Linux 정리 실기 = 릴리스 전 일괄). 다음 = 개발 세션 X-13 S4 후속(상한 설정 → 파일 줄 따라잡기). [journal Win 1차](journal/2026-10-19.md)
 
 > **갱신: 2026-10-17 mac 1차 (KST · mac · main — 개발 세션 nexa-beep-dc 코드·실측 · 기록 = 협업 세션)** — **S4 커밋 mac 첫 검증**: 게이트 ✓(**729 green** · 크로스 2종 · 릴리스 3.59MB) · `tools/s4-scenario.sh` **19/19 ✓**(U-11 같은 PC 축 mac 판) · `tools/perf-scenario.sh` 휠 paint 7.14ms·present 0.94ms = **≈8ms**·유휴 25MB(10-10 기준선 동일 = S4 회귀 없음) · 도구 mac/Linux 메모리 0건 결함+실행 비트 수정(`6055fd5`). ★**결함 = 설정 창이 떠 있기만 하면 매초 전체 재도색**(`754484d` — 기간 자동 승인 1초 틱이 `inv`를 버리고 무조건 그림 → IOSurface `trim_if_idle` 영영 미발동 · **설치본 3일 14h footprint 69MB = DR-5 위반** · 처방 = 바뀐 것이 있을 때만 · Settings paint 32→3회/30s · 표면 3→1장 · 51→42MB). 다음 = 설치본 반영(사용자 요청 시 · 재기동 전까지 69MB) · PERF-8 설정 창 프레임 26ms · Linux PERF-1 · 2-PC U-11. **push ✓**(`c2473f8..a5d179f` · CI run 39033977259 전 7 job success). [journal](journal/2026-10-17.md)

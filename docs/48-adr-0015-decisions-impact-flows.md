@@ -205,11 +205,12 @@ sequenceDiagram
   A2->>A1: XXpsk3 성립 · UserHello
   A1->>A2: UserHello{ ver } + ThreadDigest[ (thread, sender_device, max_seq) … ]
   A2->>A2: 내 digest와 비교 → 부족 목록
-  loop 스레드별 (최근 200줄 · 세션당 1MiB 상한)
+  loop 스레드별 (최근 200줄 · 세션당 1MiB 상한 = 기본값 · 설정 user.sync_lines·sync_budget_mb · 10-19)
     A2->>A1: Control tag 6 SyncPull{ thread, after:(device,seq), max }
     A1->>A2: Control tag 7 SyncLines[ ChatLine… ] (세션 암호화 · 평문 라인)
     A2->>A2: dedup (sender_device, seq) → 내 키로 봉인 저장(history/u-X.seg) · 읽음 상태는 SyncRead 값 적용
   end
+  Note over A1: SyncLines는 프레임당 ≤65,518B로 나눠 보낸다(10-19 `08a7057` · 한 프레임 초과 = 세션 종료였다)
   Note over A2: 파일 본문은 오지 않는다 — "[파일] … (이 기기에는 없음)" 라인만. 파일은 컨텐츠 모드(§3-8)
 ```
 
@@ -377,7 +378,7 @@ stateDiagram-v2
 | 핸드셰이크 CPU | XX | XXpsk3 ≈ 동일 · 판별 +해시 2·AEAD 1 · Ed25519 검증 1회/세션 | 무시 |
 | KDF | — | PBKDF2 60k **부팅 1회**(≈30~80ms · 워커) · 암호 변경 시 1회 | 무시 |
 | 발신 대역 | 1× | (상대 기기 수 + 형제 수)× — 텍스트는 무시 · **파일은 상대 기기 수만큼**(형제에겐 안 보냄) | UI 명시 |
-| 따라잡기 | — | 복귀 시 ≤1MiB/세션 | 설정 |
+| 따라잡기 | — | 복귀 시 ≤1MiB/세션(기본 · 1/4/16MiB) · 스레드·origin당 200줄(기본 · 50~500) | 설정 ✅ 10-19 |
 | 발견 패킷 | ≤512B | 힌트 패킷 별도(+약 60B · 광고 주기의 1/3) | 예산 안 |
 | 릴레이 등록 | RID 3 | RID 6 | `MAX_RIDS 8` 안 · 서버 무변경 |
 | 저장 | `{peer}.seg` | + `u-{uid}.seg` · `user.key` 100B · trust 레코드 +80B | 무시 |
