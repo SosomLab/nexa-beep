@@ -7707,12 +7707,21 @@ impl App {
     }
 
     /// ★ 신뢰 판정 단일 통로(ADR-0015 §4 · S2-c) — **내 기기(형제)는 `FingerprintVerified`로
-    /// 본다**: 저장 등급은 손대지 않고(핀은 TOFU 그대로 · 세션이 끝나면 원래 등급 — "UserId를
-    /// 바꾼 PC는 별도 PC"가 캐시 없이 성립) 판정 지점만 여기로 모은다. 풀리는 것은 "사람을
-    /// 믿느냐"(승인·대조·원격 대기·무음)뿐 — 격리·무해화는 무변경(DR-13).
+    /// 본다**: 저장 등급은 손대지 않고(핀은 TOFU 그대로) 판정 지점만 여기로 모은다. 풀리는 것은
+    /// "사람을 믿느냐"(승인·대조·원격 대기·무음)뿐 — 격리·무해화는 무변경(DR-13).
+    ///
+    /// 근거 2층(10-19 사용자 확정 — "대상 연결이 안 되면 최종 상태를 기준으로"):
+    /// - **세션이 있으면 세션 기준**(XXpsk3·세션 내 증명 = `siblings`) — XX로만 선 세션은 형제가
+    ///   아니다("UserId를 바꾼 PC는 별도 PC"가 캐시 없이 성립 · 09-06 그대로).
+    /// - **세션이 없으면 서명 기기 목록 기준**(`is_own_device` = trust.seg A-1 지속 근거) — 종전엔
+    ///   오프라인이면 저장 등급으로 떨어져, 목록엔 "내 기기" 배지가 있는 상대의 대화창에 "지문
+    ///   대조 전" 안내가 떴다(10-19 실기 · e830292로 오프라인 창이 열리자 드러남). 세션 없는 상대에게
+    ///   이 판정이 푸는 것은 안내·표시뿐(승인·ack·무음은 세션이 있어야 일어난다).
     fn effective_trust(&self, peer: PeerId) -> nbeep_core::TrustLevel {
         use nbeep_core::TrustStore as _;
-        if self.siblings.contains(&peer) {
+        if self.siblings.contains(&peer)
+            || (!self.conversations.contains_key(&peer) && self.is_own_device(peer))
+        {
             nbeep_core::TrustLevel::FingerprintVerified
         } else {
             self.trust.level(peer)
