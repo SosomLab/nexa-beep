@@ -18,6 +18,7 @@ pub mod avatar;
 pub mod catchup;
 pub mod chat;
 pub mod command;
+pub mod devlog;
 pub mod endpoint;
 pub mod group;
 pub mod i18n;

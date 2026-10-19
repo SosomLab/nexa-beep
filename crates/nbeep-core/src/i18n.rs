@@ -265,6 +265,11 @@ pub enum Msg {
     LogMaxTotalDesc,
     LogView,
     LogViewDesc,
+    /// 개발자 상세 로그(docs/52 · 10-19).
+    LogDevMode,
+    LogDevModeDesc,
+    LogDevLayers,
+    LogDevLayersDesc,
     /// "로그 보기" 행위 동사.
     ActOpen,
     /// 폰트 크기 XL 라벨(값은 절대 px — 크기 안내는 Base UI 설명문에).
@@ -2511,6 +2516,20 @@ impl Msg {
                 "今日のログを既定のアプリで開きます（無ければフォルダ）。",
             ],
             Msg::ActOpen => ["Open", "열기", "打开", "開く"],
+            Msg::LogDevMode => ["Developer detail log", "개발자 상세 로그", "开发者详细日志", "開発者詳細ログ"],
+            Msg::LogDevModeDesc => [
+                "Writes decision records to the same log file: function, arguments, the rule and value it judged by, and the result or failure cause. Off = one atomic check per site, no cost.",
+                "같은 로그 파일에 판단 기록을 남깁니다 — 기능·전달인자·판단 기준과 값·결과 또는 실패 원인. 끄면 지점당 원자 검사 1회뿐이라 비용이 없습니다.",
+                "将判断记录写入同一日志文件：功能、参数、判断依据与值、结果或失败原因。关闭时每处仅一次原子检查，无开销。",
+                "同じログファイルに判断記録を残します — 機能・引数・判断基準と値・結果または失敗原因。オフ時は各所で原子チェック1回のみで負荷なし。",
+            ],
+            Msg::LogDevLayers => ["Detail layers", "상세 층", "详细层", "詳細レイヤー"],
+            Msg::LogDevLayersDesc => [
+                "layer[:level+level], comma-separated · * = all · levels decide·detail·trace (omit = all three) · layers app disc conn sess chat xfer user relay store ui · e.g. conn,xfer:decide,user",
+                "layer[:level+level]을 쉼표로 · * = 전부 · 수준 decide·detail·trace(생략 = 셋 다) · 층 app disc conn sess chat xfer user relay store ui · 예 conn,xfer:decide,user",
+                "layer[:level+level]，逗号分隔 · * = 全部 · 级别 decide·detail·trace（省略 = 三者）· 层 app disc conn sess chat xfer user relay store ui · 例 conn,xfer:decide,user",
+                "layer[:level+level] をカンマ区切り · * = すべて · レベル decide·detail·trace（省略 = 3つ）· レイヤー app disc conn sess chat xfer user relay store ui · 例 conn,xfer:decide,user",
+            ],
             Msg::SizeXLarge => ["Extra Large", "아주 크게", "特大", "特大"],
             Msg::LogRetainDefault => ["Default (7)", "기본(7일)", "默认(7天)", "既定(7日)"],
             Msg::LogCapDefault => ["Default (20)", "기본(20MB)", "默认(20MB)", "既定(20MB)"],

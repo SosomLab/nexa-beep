@@ -240,6 +240,8 @@ pub const DEPENDS: &[(&str, &str, Dep)] = &[
     ),
     ("log.retain_days", "log.enabled", Dep::On),
     ("log.max_total_mb", "log.enabled", Dep::On),
+    ("log.dev_mode", "log.enabled", Dep::On),
+    ("log.dev_layers", "log.dev_mode", Dep::On),
     ("log.view", "log.enabled", Dep::On),
     ("netmon.interval_s", "netmon.enabled", Dep::On),
 ];
@@ -354,6 +356,7 @@ fn draw_pw_icon(
 const TOGGLE_DEFAULT_OFF: &[&str] = &[
     "ui.close_to_tray",      // 닫기 = 트레이(M3-2d — 기본 off · 사용자 확정)
     "log.enabled",           // 상태 로그(M3-22 — 기본 off · 사용자 확정 08-18)
+    "log.dev_mode",          // 개발자 상세 로그(docs/52 · 10-19 — 기본 off · 켜야 비용)
     "netmon.enabled",        // 네트워크 점검 기록(08-21 — 기본 off · 의도적으로 켤 때만)
     "notify.preview",        // 알림 본문 표시(M3-8 — 기본 끔: 화면 공유·녹화 안전)
     "user.enabled", // 다중 기기 신원(ADR-0015 — 기본 끔: 옵트인 오버레이 S-0 · 사용자 확정 09-06)
@@ -1611,6 +1614,27 @@ pub fn registry() -> &'static [Entry] {
             desc: Msg::LogMaxTotalDesc,
             kind: SettingKind::RadioInput(&[("20", Msg::LogCapDefault)], ""),
             key: "log.max_total_mb",
+        },
+        // 개발자 상세 로그(docs/52 · 10-19 — nexa-sql docs/48 이식): 층×수준 마스크 게이트.
+        // 스위치는 log.enabled 종속(싱크가 상태 로그 파일) · 층 문자열은 스위치 종속 · 빈 값 = 전부(*).
+        Entry {
+            cat: Msg::CatAdvanced,
+            sub: Some(Msg::SubLog),
+            label: Msg::LogDevMode,
+            desc: Msg::LogDevModeDesc,
+            kind: SettingKind::Toggle,
+            key: "log.dev_mode",
+        },
+        Entry {
+            cat: Msg::CatAdvanced,
+            sub: Some(Msg::SubLog),
+            label: Msg::LogDevLayers,
+            desc: Msg::LogDevLayersDesc,
+            kind: SettingKind::Text {
+                hint: Msg::LogDevLayers,
+                secret: false,
+            },
+            key: "log.dev_layers",
         },
         Entry {
             cat: Msg::CatAdvanced,

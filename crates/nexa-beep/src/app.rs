@@ -70,6 +70,34 @@ fn base_attrs() -> winit::window::WindowAttributes {
     a
 }
 
+/// ★ 개발자 상세 로그(docs/52 · nexa-sql docs/48 `dlog!` 이식): 게이트가 꺼져 있으면 `$body`는 **평가되지
+/// 않는다**(문자열·시각·할당 0 — 원자 load 1 + 분기 1). 켜져 있으면 [`DRec`]를 만들어 느린 경로
+/// [`devlog_push`]로 넘긴다. 사용: `dlog!(self, DL::Conn, DV::Decide, "start_connect", |r| r.arg(..).rule(..).ok(..))`.
+macro_rules! dlog {
+    ($self:ident, $layer:expr, $level:expr, $func:literal, |$r:ident| $body:expr) => {
+        if nbeep_core::devlog::wants($layer, $level) {
+            let $r = DRec::new($layer, $level, $func);
+            let __rec: DRec = $body;
+            devlog_push($self.statuslog.as_ref(), $self.devlog_stderr, &__rec);
+        }
+    };
+}
+
+/// 상세 로그 한 줄(느린 경로 · 호출 자체가 드물다 · `#[cold]`로 뜨거운 경로 코드 배치에서 떨어뜨린다).
+/// 싱크 = 상태 로그 파일(M3-22 · 논블로킹 · `dev ` 접두) + `NEXA_DEVLOG`가 섰으면 stderr 거울.
+#[cold]
+#[inline(never)]
+fn devlog_push(log: Option<&crate::statuslog::StatusLog>, stderr: bool, rec: &DRec) {
+    let line = rec.render();
+    if stderr {
+        eprintln!("[dev] {line}");
+    }
+    if let Some(l) = log {
+        l.log(&format!("dev {line}"));
+    }
+}
+
+use nbeep_core::devlog::{Layer as DL, Level as DV, Rec as DRec};
 use nbeep_core::PeerId;
 use nbeep_ui::{
     AboutInfo, AboutWidget, ChatLine, ChatViewWidget, ComboItem, Control as _, DrawCtx,
@@ -3065,6 +3093,8 @@ struct App {
     /// 사용자 신원 트레이스(`NEXA_USER_TRACE=1`) — 힌트·psk 선택·형제 성립을 stderr에
     /// 남긴다(`NEXA_IME_TRACE` 선례 · 봉투만: 지문 앞자리와 참/거짓뿐).
     user_trace: bool,
+    /// `NEXA_DEVLOG` 환경변수(docs/52) — 섰으면 상세 로그를 stderr에도 거울(개발 편의 · 파일 설정 무관).
+    devlog_stderr: bool,
     /// 메인 창 한눈 상태(09-07 — 툴바 아바타 링·툴팁·상태바 칩이 읽는 캐시 · 갱신 =
     /// `refresh_user_glance` 단일 지점).
     user_glance: crate::userident::UserGlance,
@@ -5732,6 +5762,37 @@ impl App {
         }
     }
 
+    /// 개발자 상세 로그 마스크 갱신(docs/52) — 부팅·`log.*` 변경에서 부른다. 우선순위 =
+    /// `NEXA_DEVLOG`(환경변수 · 층 문법 · `1`/`*` = 전부) > 설정 `log.dev_mode`+`log.dev_layers`(빈 값 = 전부).
+    /// 설정 경로는 `log.enabled`가 꺼져 있으면 싱크가 없으니 마스크도 0(비용 0 보장).
+    fn refresh_devlog(&mut self) {
+        let mask = match std::env::var("NEXA_DEVLOG") {
+            Ok(spec) => nbeep_core::devlog::parse_layers(&spec),
+            Err(_) => {
+                if self.settings.get("log.enabled") == "on"
+                    && self.settings.get("log.dev_mode") == "on"
+                {
+                    let spec = self.settings.get("log.dev_layers");
+                    if spec.trim().is_empty() {
+                        nbeep_core::devlog::mask_all()
+                    } else {
+                        nbeep_core::devlog::parse_layers(spec)
+                    }
+                } else {
+                    0
+                }
+            }
+        };
+        let prev = nbeep_core::devlog::mask();
+        nbeep_core::devlog::set_mask(mask);
+        if mask != prev {
+            dlog!(self, DL::App, DV::Decide, "devlog", |r| r
+                .arg("mask", format!("{mask:#x}"))
+                .arg("env", std::env::var_os("NEXA_DEVLOG").is_some())
+                .ok("mask applied"));
+        }
+    }
+
     /// 네트워크 점검 로거 재기동(netmon · 08-21) — `netmon.enabled` hot-swap.
     /// 켜지면 그 시점 누적을 기준점으로 삼아 **켠 이후의 델타**만 기록한다.
     /// 보존·총량은 로그 설정을 공유한다(같은 진단 폴더 · 프리픽스만 다르다).
@@ -5998,6 +6059,11 @@ impl App {
                         .is_some()
                     {
                         changed = true;
+                        dlog!(self, DL::Disc, DV::Detail, "discovery", |r| r
+                            .arg("peer", hint.peer.short())
+                            .rule("observe", "changed(appeared|renamed)")
+                            .rule("has_session", self.conversations.contains_key(&hint.peer))
+                            .ok("row updated; reconnect seeded if no session"));
                         // ★ LAN 프로필 즉시 동기(08-23 사용자 확정 — 서버 경유
                         //   없이 로컬로): 상대가 나타나면(등장·개명 관측) 조용한
                         //   세션 후보로 **재연결 사다리에 태운다**(프로필 = 세션
@@ -6028,6 +6094,11 @@ impl App {
                     // 종전엔 sweep 쪽만 시드해, 명시 goodbye는 부팅 시드에 기대고 있었다).
                     if let Some(ev) = self.table.goodbye(peer, nbeep_core::SourceId(0)) {
                         changed = true;
+                        dlog!(self, DL::Disc, DV::Detail, "discovery", |r| r
+                            .arg("peer", peer.short())
+                            .rule("goodbye", true)
+                            .rule("keep_row(pin|thread|manual)", self.keeps_offline_row(peer))
+                            .ok("departed"));
                         departed.push(ev);
                     }
                 }
@@ -7410,6 +7481,19 @@ impl App {
         if gen != self.user_gen {
             return; // 그 사이 값이 바뀜 — 낡은 결과
         }
+        dlog!(self, DL::User, DV::Decide, "user_test", |r| {
+            let r = r.arg("gen", gen).rule(
+                "handle_set",
+                !self.settings.get("user.handle").trim().is_empty(),
+            );
+            match &result {
+                Ok(ok) => r
+                    .arg("user_id", ok.key.user_id().short())
+                    .rule("key_created_now", ok.created)
+                    .ok("verified"),
+                Err(why) => r.fail(why),
+            }
+        });
         match result {
             Ok(ok) => {
                 let user_id = ok.key.user_id();
@@ -8360,6 +8444,26 @@ impl App {
                     sent_any |= conv.out_tx.send(SessionCmd::Chat(bytes.clone())).is_ok();
                 }
             }
+            dlog!(self, DL::Chat, DV::Decide, "send_text", |r| {
+                let r = r
+                    .arg("peer", peer.short())
+                    .arg("store", store.short())
+                    .arg("seq", msg.seq)
+                    .arg(
+                        "chars",
+                        match &msg.body {
+                            nbeep_core::MessageBody::Text(t) => t.chars().count(),
+                            _ => 0,
+                        },
+                    )
+                    .arg("grade", grade)
+                    .rule("live_devices", live.len());
+                if sent_any {
+                    r.ok("handed to session actor")
+                } else {
+                    r.fail("every live channel refused (actor gone)")
+                }
+            });
             if sent_any {
                 self.status = nbeep_core::tf(nbeep_core::Msg::StfSentSeq, &[&msg.seq.to_string()]);
                 self.send_sender_copies(peer, &msg); // S3 — 내 다른 기기에도
@@ -8383,6 +8487,15 @@ impl App {
                 q.drain(..drop_n);
             }
             let total = q.len();
+            dlog!(self, DL::Chat, DV::Decide, "send_text", |r| r
+                .arg("peer", peer.short())
+                .arg("chars", text.as_str().chars().count())
+                .arg("grade", grade)
+                .rule("live_devices", 0)
+                .rule("queue_len", total)
+                .ok(
+                    "queued offline (M4-6) — delivered when peer appears; connect scheduled"
+                ));
             let line = ChatLine::text(true, text, at_ms, wall)
                 .with_queued(true)
                 .with_importance(grade);
@@ -9303,6 +9416,11 @@ impl App {
                     &[&self.peer_title(peer)],
                 ));
             }
+            dlog!(self, DL::Conn, DV::Decide, "start_connect", |r| r
+                .arg("peer", peer.short())
+                .arg("auto", auto)
+                .rule("latch", "busy")
+                .fail("already connecting — skipped"));
             return; // 중복 시도 가드(수동 클릭·자동 재연결 공용 — 워커는 하나만)
         }
         self.set_status(if auto {
@@ -9310,6 +9428,15 @@ impl App {
         } else {
             format!("연결 중… {}", self.peer_title(peer))
         });
+        dlog!(self, DL::Conn, DV::Decide, "start_connect", |r| r
+            .arg("peer", peer.short())
+            .arg("auto", auto)
+            .arg("discovered", self.table.get(peer).is_some())
+            .arg("manual_addr", self.manual_addrs.contains_key(&peer))
+            .arg("relay", self.relay.as_ref().is_some_and(|c| c.is_alive()))
+            .arg("psk", self.psk_for(peer).is_some())
+            .rule("latch", "free")
+            .ok("dial: direct → manual → relay"));
         // 목록 행 점을 즉시 "연결 중"(강조색)으로(M2-8 잔여).
         let mut inv = Invalidations::default();
         self.refresh_rows(&mut inv);
@@ -12940,7 +13067,22 @@ impl App {
             return;
         }
         let key = self.datakeys.get_or_create(&stem);
+        dlog!(self, DL::Store, DV::Detail, "record_history", |r| r
+            .arg("peer", peer.short())
+            .arg("plain_bytes", plain.len())
+            .rule(
+                "source",
+                if self.conversations.contains_key(&peer) {
+                    "session"
+                } else {
+                    "parked"
+                }
+            )
+            .ok("sealing"));
         let Ok(env) = nbeep_store::sealed::seal(crate::gate::SEAL_HISTORY, &key, &plain) else {
+            dlog!(self, DL::Store, DV::Decide, "record_history", |r| r
+                .arg("peer", peer.short())
+                .fail("seal failed — not written"));
             self.set_status(nbeep_core::t(nbeep_core::Msg::StHistorySealFail));
             return;
         };
@@ -13666,6 +13808,19 @@ impl App {
         // (Full 키 포함 시 256KiB 사진 N회). 루프에서 유형만 모아 끝에 1회.
         let mut profile_push: Option<ProfileScope> = None;
         for (key, value) in changes {
+            dlog!(self, DL::App, DV::Decide, "apply_setting", |r| {
+                let secret = key.contains("pass") || key.contains("secret") || key.contains("key");
+                r.arg("key", key)
+                    .arg(
+                        "value",
+                        if secret {
+                            format!("[{} chars redacted]", value.chars().count())
+                        } else {
+                            value.clone()
+                        },
+                    )
+                    .ok("applied")
+            });
             // 행위 항목(값 아님 · M2-5a) — 저장에 태우지 않고 피커를 연다(el은
             // about_to_wait에 있다 — pending_approve_window와 같은 패턴).
             match key {
@@ -14090,6 +14245,11 @@ impl App {
                 // 보존·상한은 netmon도 공유하므로 함께 재기동한다.
                 "log.enabled" | "log.retain_days" | "log.max_total_mb" => {
                     self.refresh_statuslog();
+                    self.refresh_devlog(); // 싱크 유무가 마스크를 정한다(docs/52)
+                    continue;
+                }
+                "log.dev_mode" | "log.dev_layers" => {
+                    self.refresh_devlog();
                     if self.netmon_log.is_some() {
                         self.refresh_netmon();
                     }
@@ -18083,8 +18243,27 @@ impl ApplicationHandler<AppEvent> for App {
                 broadcast,
             } => {
                 if !self.dedup.accept(sender, seq) {
+                    dlog!(self, DL::Chat, DV::Trace, "recv", |r| r
+                        .arg("peer", peer.short())
+                        .arg("sender", sender.short())
+                        .arg("seq", seq)
+                        .rule("dedup", "seen")
+                        .fail("duplicate (multi-path) — dropped"));
                     return; // 중복(다중 경로 — FR-M-9)
                 }
+                dlog!(self, DL::Chat, DV::Detail, "recv", |r| r
+                    .arg("peer", peer.short())
+                    .arg("sender", sender.short())
+                    .arg("seq", seq)
+                    .arg("chars", text.as_str().chars().count())
+                    .arg("importance", importance)
+                    .arg("broadcast", broadcast)
+                    .rule("dedup", "new")
+                    .rule(
+                        "mute_broadcast",
+                        broadcast && self.settings.get("notify.broadcast_mute") == "on"
+                    )
+                    .ok("accepted"));
                 // ★ 공지 받지 않기(08-21 사용자 확정 — 옵트아웃): 공지 표식이 선
                 //   메시지는 표시·알림·기록·전달 ack 전부 없이 버린다 — 발신자
                 //   쪽에서는 오프라인·미검증 수신자와 구분되지 않는다(그림자 무시 ·
@@ -18245,6 +18424,21 @@ impl ApplicationHandler<AppEvent> for App {
                         self.now_ms(),
                     )
                 };
+                dlog!(self, DL::Xfer, DV::Decide, "offer_judge", |r| {
+                    let r = r
+                        .arg("peer", peer.short())
+                        .arg("name_len", name.chars().count())
+                        .arg("size", size)
+                        .arg("path", format!("{:?}", self.peer_path_badge(peer)))
+                        .rule("sibling", self.siblings.contains(&peer))
+                        .rule("trust", format!("{:?}", self.effective_trust(peer)))
+                        .rule("mutual_exchange", self.ledger.get(peer).is_mutual())
+                        .rule("policy", format!("{:?}", self.approval));
+                    match verdict {
+                        OfferVerdict::Deny(why) => r.fail(format!("{why:?}")),
+                        v => r.ok(format!("{v:?}")),
+                    }
+                });
                 // ★ 이전 승인 연장(M4-10c · 08-18 사용자 요청) — `.part`는 **수락된**
                 //   수신에서만 남는다(take_partials가 accepted만 회수). 즉 매치 =
                 //   "이 파일은 이미 승인했었다"의 증거 → 승인 창을 다시 묻지 않고
@@ -19114,6 +19308,17 @@ impl ApplicationHandler<AppEvent> for App {
                         self.is_known_device(peer)
                     );
                 }
+                dlog!(self, DL::Sess, DV::Decide, "closed", |r| r
+                    .arg("peer", peer.short())
+                    .arg("sibling", self.siblings.contains(&peer))
+                    .arg("known_device", self.is_known_device(peer))
+                    .arg("awaiting_ack", self.awaiting_ack.contains_key(&peer))
+                    .arg(
+                        "send_queue",
+                        self.send_queue.get(&peer).map_or(0, VecDeque::len)
+                    )
+                    .rule("keep_row(pin|thread|manual)", self.keeps_offline_row(peer))
+                    .ok("thread parked, channel dropped"));
                 if self.siblings.remove(&peer) {
                     // 형제 자격은 세션 수명(ADR-0015 — 다음 세션이 재판정) · 한눈 상태 갱신(09-07)
                     self.refresh_user_glance();
@@ -19207,6 +19412,16 @@ impl ApplicationHandler<AppEvent> for App {
                     via_psk,
                 } = *session;
                 let peer = session.peer();
+                dlog!(self, DL::Sess, DV::Decide, "outbound_established", |r| r
+                    .arg("peer", peer.short())
+                    .arg("intent", intent.map_or("-".to_string(), |p| p.short()))
+                    .arg("path", format!("{path:?}"))
+                    .arg("via_server", via_server)
+                    .arg("via_psk", via_psk)
+                    .arg("auto", auto)
+                    .arg("manual_addr", via_addr.is_some())
+                    .rule("already_open", self.conversations.contains_key(&peer))
+                    .ok("noise session up"));
                 self.note_sibling(peer, via_psk);
                 self.connecting.finish(intent, Some(peer));
                 // ★ P-3(M5-3c · R-20) — 클릭한 상대와 **다른 키**가 성립했다면 그 수동
@@ -19231,6 +19446,10 @@ impl ApplicationHandler<AppEvent> for App {
                     let est = match nbeep_core::TrustedSession::wrap(session, &mut self.trust) {
                         Ok(est) => est,
                         Err(e) => {
+                            dlog!(self, DL::Sess, DV::Decide, "tofu", |r| r
+                                .arg("peer", peer.short())
+                                .rule("trust_store", "reject")
+                                .fail(e.to_string()));
                             self.set_status(nbeep_core::tf(
                                 nbeep_core::Msg::StfTrustReject,
                                 &[&e.to_string()],
@@ -19242,6 +19461,10 @@ impl ApplicationHandler<AppEvent> for App {
                         }
                     };
                     let decision = est.decision;
+                    dlog!(self, DL::Sess, DV::Decide, "tofu", |r| r
+                        .arg("peer", peer.short())
+                        .rule("decision", format!("{decision:?}"))
+                        .ok("session installed"));
                     self.install_conversation(
                         nbeep_core::MuxSession::new(est.session),
                         path,
@@ -19309,7 +19532,27 @@ impl ApplicationHandler<AppEvent> for App {
                     || self.table.get(peer).is_some()
                     || self.relay.is_some();
                 let stage = self.reconnect.get(&peer).map_or(0, |(s, _)| s + 1);
-                match reconnect_delay(stage).filter(|_| reachable) {
+                let delay_opt = reconnect_delay(stage).filter(|_| reachable);
+                dlog!(self, DL::Conn, DV::Decide, "connect_failed", |r| {
+                    let r = r
+                        .arg("peer", peer.short())
+                        .arg("why", &why)
+                        .arg("stage", stage)
+                        .rule("reachable(manual|discovered|relay)", reachable)
+                        .rule(
+                            "backoff_ms",
+                            delay_opt.map_or("none".to_string(), |d| d.to_string()),
+                        );
+                    match delay_opt {
+                        Some(d) => r.ok(format!("retry in {}s", d / 1000)),
+                        None => r.fail(if reachable {
+                            "backoff exhausted — auto retry stopped"
+                        } else {
+                            "no route (not discovered, no manual addr, no relay) — no retry"
+                        }),
+                    }
+                });
+                match delay_opt {
                     Some(delay) => {
                         let due = self.now_ms() + delay;
                         self.reconnect.insert(peer, (stage, due));
@@ -19343,6 +19586,17 @@ impl ApplicationHandler<AppEvent> for App {
                 if gen != self.relay_gen {
                     return; // 낡은 결과(그 사이 설정 변경) — 틱이 새 목표로 다시 시도
                 }
+                dlog!(self, DL::Relay, DV::Decide, "server_attach", |r| {
+                    let r = r.arg("gen", gen);
+                    match &outcome {
+                        Ok(at) => r
+                            .arg("addr", &at.addr)
+                            .rule("first_pin", at.first_pin)
+                            .rule("pin_write_failed", at.pin_write_failed)
+                            .ok("attached"),
+                        Err(e) => r.fail(format!("{e:?}")),
+                    }
+                });
                 match outcome {
                     Ok(at) => {
                         if at.pin_write_failed {
@@ -21904,6 +22158,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         user_glance: crate::userident::UserGlance::default(),
         psk_shared: std::sync::Arc::clone(&psk_shared),
         user_trace: std::env::var_os("NEXA_USER_TRACE").is_some(),
+        devlog_stderr: std::env::var_os("NEXA_DEVLOG").is_some(),
         succession: Vec::new(),
         rotate_done_ms: 0,
         successors: HashMap::new(),
@@ -22199,6 +22454,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         ));
     }
     app.refresh_statuslog(); // 상태 로그(M3-22 — log.enabled면 여기서 기동)
+    app.refresh_devlog(); // 개발자 상세 로그 마스크(docs/52 — NEXA_DEVLOG > 설정)
     app.refresh_netmon(); // 네트워크 점검(08-21 — netmon.enabled면 여기서 기동)
     event_loop.run_app(&mut app).unwrap();
 }
