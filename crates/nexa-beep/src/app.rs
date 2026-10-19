@@ -18104,8 +18104,23 @@ impl App {
         let (Some(w), Some(h)) = (NonZeroU32::new(size.width), NonZeroU32::new(size.height)) else {
             return;
         };
-        entry.surface.resize(w, h).unwrap();
-        let mut buffer = entry.surface.buffer_mut().unwrap();
+        // ★ 프레임 건너뜀은 정상 경로다(10-20 설치본 0.6.0 mac abort ×2 — `crash.log` 첫 수확: `app.rs:18108 unwrap on Err(())`).
+        //   IOSurface 뒷단(nexa-sys `pick`)은 합성기가 풀 전부를 쥐고 있으면 **이번 프레임을 건너뛰라고** `None`을 돌려준다
+        //   (원격 데스크톱·화면 공유처럼 합성기가 표면을 오래 쥘 때 · SKIP_MAX 뒤엔 강제 재사용) — 그걸 unwrap이 패닉으로
+        //   바꿨다(10-10 도입 뒤 v0.4.0부터 잠복). 건너뛰면 다음 프레임을 청한다(winit = 다음 런루프 패스 · 핫 루프 아님).
+        if entry.surface.resize(w, h).is_err() {
+            return; // 크기 0 — 위 NonZero 가드와 같은 뜻
+        }
+        let Ok(mut buffer) = entry.surface.buffer_mut() else {
+            if paint_trace_enabled() {
+                eprintln!(
+                    "[paint] {:?} {}x{} skipped (surface busy)",
+                    entry.role, size.width, size.height
+                );
+            }
+            entry.window.request_redraw();
+            return;
+        };
         let mut px = nexa_gfx::Surface::new(&mut buffer, size.width as usize, size.height as usize);
         // 설정 창은 위젯이 자기 bounds(= 창 전체)를 바탕색부터 칠한다 — 호스트까지 채우면 1840×1280 프레임마다
         // 9.4MB를 두 번 쓴다(≈2.3ms · PERF-8 10-20 mac 실측). 다른 역할은 위젯이 전부를 덮는다는 보장이 없어 유지.
@@ -18374,7 +18389,9 @@ impl App {
         let role_dbg = entry.role;
         let blinks = ctx.caret_asked();
         drop(ctx);
-        buffer.present().unwrap();
+        if buffer.present().is_err() && paint_trace_enabled() {
+            eprintln!("[paint] {role_dbg:?} present failed"); // softbuffer 경로만 실패할 수 있다(IOSurface = 항상 Ok)
+        }
         entry.blinks = blinks;
         if paint_trace_enabled() {
             eprintln!(
