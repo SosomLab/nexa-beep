@@ -3,6 +3,8 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
+> **갱신: 2026-10-19 Win 3차 (KST · Windows · main — 개발 세션 코드 · 기록 = 협업 세션)** — ★**오프라인·접속 실패 상대도 대화창을 연다**(`e830292` · 사용자 실기 — 꺼진 기기 행이 "자동 재연결 시도…"만 띄워 기록·오프라인 대기 발신 M4-6을 못 쓰던 것 · 원인 = `activate` 입구 조건 · 뷰 항상 열고 연결은 배경 · 실측 기록 5+대기 1 = 6줄·재시작 복원 ✓) · 우선순위 = 파일 줄 따라잡기 ⏸ → 로그 기능([52](52-log-architecture.md) 📐 개발 세션 작성). 잔여 = 2-PC 실기(상대 켜짐 → 대기분 전달·뷰 유지). [journal Win 3차](journal/2026-10-19.md)
+
 > **갱신: 2026-10-19 Win 2차 (KST · Windows · main — 개발 세션 코드 · 기록 = 협업 세션)** — ★**X-13 S4 상한 설정화**(`08a7057` — 설정 › 사용자 `user.sync_lines` 50/100/200/500줄 · `user.sync_budget_mb` 1/4/16MiB · 응답 = min(청구, 내 설정) · 천장 500 · 전방 호환) + ★**결함 수정** = 따라잡기 응답을 한 프레임에 실어 65,518B를 넘으면 **형제 세션이 끊겼다**(200줄×330B) → 다중 프레임 · 크레이트 단위 검증(catchup 8/8 · settings 33/33 · clippy 0). 다음 = 파일 줄 따라잡기(개발 세션 착수). [journal Win 2차](journal/2026-10-19.md)
 
 > **갱신: 2026-10-19 Win 1차 (KST · Windows · main — 개발 세션 코드·게이트 · 기록 = 협업 세션)** — `754484d` Windows 게이트 ✓ · **검증 = 릴리스 전 일괄**(`bb207e9`) · ★**테스트 인스턴스 자동 실행 격리**(`43ee1d0` — `NEXA_NO_AUTOSTART`/cargo 산출 폴더 = 부팅 등록 안 함 · `--autostart-clear` · `tools/autostart-clean.sh` · relaunch `--stop` · Win 실측 ✓ · mac/Linux 정리 실기 = 릴리스 전 일괄). 다음 = 개발 세션 X-13 S4 후속(상한 설정 → 파일 줄 따라잡기). [journal Win 1차](journal/2026-10-19.md)
