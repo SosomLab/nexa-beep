@@ -80,13 +80,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: windows-latest
+          # ★ Windows 패키지 러너 = windows-2022 **고정**(10-19 v0.6.0 release run 39225610061 ×2 실패):
+          #   `windows-latest`가 windows-2025-vs2026로 옮겨가며 **NSIS 선탑재가 사라졌고**, 러너에서 choco
+          #   피드 조회가 거부돼(`Failed to fetch results from V2 feed … status code`) 설치가 0건 → makensis 부재.
+          #   windows-2022 이미지는 NSIS 3.10이 기본(README) — 설치 단계는 실존 확인·choco 폴백만 남긴다.
+          #   테스트(ci.yml)는 NSIS가 필요 없어 windows-latest 그대로.
+          - os: windows-2022
             target: x86_64-pc-windows-msvc
             slug: windows-x64
             # ★ MSVC 정적 CRT(NFR-B-5 · M5-4g) — `RUSTFLAGS` 환경변수가 있으면 cargo는
             #   .cargo/config.toml의 `target.*.rustflags`를 통째로 버린다. 여기서 직접 얹는다.
             rustflags: -D warnings -C target-feature=+crt-static
-          - os: windows-latest
+          - os: windows-2022
             target: aarch64-pc-windows-msvc
             slug: windows-arm64
             # ★ MSVC 정적 CRT(NFR-B-5 · M5-4g) — `RUSTFLAGS` 환경변수가 있으면 cargo는
