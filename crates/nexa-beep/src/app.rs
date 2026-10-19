@@ -10678,7 +10678,12 @@ impl App {
                     lines: mem,
                 }
             } else {
-                let peer = recs.iter().find(|r| r.peer.short() == stem).map(|r| r.peer);
+                // 핀 없는 상대의 기록(S4 매핑 표 복원 · 10-19)도 이름·열기가 서게 메모리 키로 보강.
+                let peer = recs
+                    .iter()
+                    .find(|r| r.peer.short() == stem)
+                    .map(|r| r.peer)
+                    .or_else(|| self.known_peer_by_short(&stem));
                 let (name, seed) = peer.map_or_else(
                     || (stem.clone(), stem.as_bytes().to_vec()),
                     |p| (self.peer_title(p), p.as_bytes().to_vec()),
@@ -10815,6 +10820,17 @@ impl App {
     }
 
     /// 대화함 행위 실행 — 열기/삭제/전체 삭제/백업/복원(위젯은 의도만 안다).
+    /// 메모리에 아는 상대(세션·대피 기록·목록 추가 행) 가운데 지문 short가 맞는 것 — 핀이 없어도 기록은
+    /// 열려야 한다(10-19 · S4 매핑 표로 복원된 parked는 핀 없이 존재한다).
+    fn known_peer_by_short(&self, short: &str) -> Option<PeerId> {
+        self.conversations
+            .keys()
+            .chain(self.parked_lines.keys())
+            .chain(self.extra_peers.keys())
+            .find(|p| p.short() == short)
+            .copied()
+    }
+
     fn run_convbox_action(&mut self, act: nbeep_ui::CvAction, id: WindowId, el: &ActiveEventLoop) {
         match act {
             nbeep_ui::CvAction::Open(key) => {
@@ -10829,14 +10845,19 @@ impl App {
                     {
                         self.open_group_thread(gid, el);
                     }
-                } else if let Some(peer) = self
-                    .trust
-                    .export()
-                    .iter()
-                    .find(|r| r.peer.short() == key)
-                    .map(|r| r.peer)
-                {
-                    self.activate(peer, el);
+                } else {
+                    // 핀 상대 → 핀 없는 복원 기록(parked · S4 매핑 표)도 연다(10-19 — 기록은 조건 없이 ·
+                    // 오프라인이면 activate가 뷰만 열고 연결은 배경).
+                    let peer = self
+                        .trust
+                        .export()
+                        .iter()
+                        .find(|r| r.peer.short() == key)
+                        .map(|r| r.peer)
+                        .or_else(|| self.known_peer_by_short(&key));
+                    if let Some(peer) = peer {
+                        self.activate(peer, el);
+                    }
                 }
             }
             nbeep_ui::CvAction::Delete(key) => {
