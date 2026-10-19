@@ -5,6 +5,11 @@
 
 ---
 
+## 2026-10-19
+
+- **(Win · main) ★테스트 인스턴스 자동 실행 격리**(`43ee1d0` — `NEXA_NO_AUTOSTART`·cargo 산출 폴더면 부팅 등록 안 함 · `--autostart-clear` · `tools/autostart-clean.sh`(테스트 뿌리 아래만 · 유령 포함 · 설치본 보존) · relaunch `--stop` · s4/perf EXIT trap · Win 실측 등록→정리→억제 0). [journal Win 1차](journal/2026-10-19.md)
+- **(Win · main) 검증 시점 = 릴리스 전 일괄**(`bb207e9` 사용자 확정) · `754484d` Windows 게이트 ✓. [journal Win 1차](journal/2026-10-19.md)
+
 ## 2026-10-17
 
 - **(mac · main) ★설정 창 매초 전체 재도색 수정**(`754484d` — 기간 자동 승인 1초 틱이 무효화와 무관하게 그려 IOSurface 유휴 해제가 영영 안 걸림 · 설치본 3일 14h footprint 69MB → 설정 창 열림 51→42MB · 회귀 1). [journal mac 1차](journal/2026-10-17.md)
