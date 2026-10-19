@@ -18076,7 +18076,11 @@ impl App {
         entry.surface.resize(w, h).unwrap();
         let mut buffer = entry.surface.buffer_mut().unwrap();
         let mut px = nexa_gfx::Surface::new(&mut buffer, size.width as usize, size.height as usize);
-        px.fill(theme.window_bg);
+        // 설정 창은 위젯이 자기 bounds(= 창 전체)를 바탕색부터 칠한다 — 호스트까지 채우면 1840×1280 프레임마다
+        // 9.4MB를 두 번 쓴다(≈2.3ms · PERF-8 10-20 mac 실측). 다른 역할은 위젯이 전부를 덮는다는 보장이 없어 유지.
+        if entry.role != Role::Settings {
+            px.fill(theme.window_bg);
+        }
         let mut ctx = RasterCtx::with_font_set(&mut px, fonts, entry.scale)
             .with_fonts(prefs)
             .with_caret_on(caret_on);

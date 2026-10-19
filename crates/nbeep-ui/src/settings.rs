@@ -1986,6 +1986,34 @@ struct RowUi {
     reset: Option<Button>,
     /// 키 이름+복사 글리프 자리(페인트가 실측해 채운다 · 클릭 = 키 복사 요청).
     key_rect: std::cell::Cell<Rect>,
+    /// 설명 워드랩 결과 캐시 `(언어, 가용 폭, 글자 높이) → 줄들`(PERF-8 · 10-20 mac 실측: 카드 6장의
+    /// `wrap_text`가 프레임마다 8~10ms — 단어마다 접두 문자열을 다시 재는 O(n²) 측정). 키가 바뀌면(언어·폭·글꼴)
+    /// 다음 페인트가 다시 접는다. `key_rect`와 같은 "페인트가 채우는" 내부 가변 자리.
+    desc_cache: std::cell::RefCell<Option<DescCache>>,
+}
+
+/// 설명 워드랩 캐시 항목 `(언어, 가용 폭, 글자 높이, 줄들)` — [`RowUi::desc_cache`].
+type DescCache = (Lang, i32, i32, Vec<String>);
+
+impl RowUi {
+    /// 설명 워드랩 — 캐시 적중이면 복제만(PERF-8). 키 = (언어, 가용 폭, 현재 글꼴의 글자 높이 — 크기·배율을 대표).
+    fn desc_lines_cached(&self, ctx: &mut dyn DrawCtx, lang: Lang, desc: Msg) -> Vec<String> {
+        let th = ctx.text_height();
+        if let Some((l, w, h, lines)) = self.desc_cache.borrow().as_ref() {
+            if *l == lang && *w == self.desc_avail && *h == th {
+                return lines.clone();
+            }
+        }
+        #[allow(clippy::cast_sign_loss)]
+        let lines = wrap_text(
+            ctx,
+            tr(lang, desc),
+            self.desc_avail,
+            self.desc_lines as usize,
+        );
+        *self.desc_cache.borrow_mut() = Some((lang, self.desc_avail, th, lines.clone()));
+        lines
+    }
 }
 
 /// 사이드바 트리 선택(10-09 그룹 트리) — 그룹 행 = 그 그룹의 카테고리 전부 · 카테고리 행 = 그것만.
@@ -2663,6 +2691,7 @@ impl SettingsWidget {
                 desc_avail: 0,
                 reset,
                 key_rect: std::cell::Cell::new(Rect::default()),
+                desc_cache: std::cell::RefCell::new(None),
             });
         }
         self.layout(inv);
@@ -3821,12 +3850,7 @@ impl Widget for SettingsWidget {
             // 설명 — 카드 폭 전체(컨트롤이 아래로 내려가 침범할 것이 없다).
             ctx.select_font(FontSlot::Status, false);
             #[allow(clippy::cast_sign_loss)]
-            let lines = wrap_text(
-                ctx,
-                tr(lang, e.desc),
-                row.desc_avail,
-                row.desc_lines as usize,
-            );
+            let lines = row.desc_lines_cached(ctx, lang, e.desc);
             for (i, line) in lines.iter().enumerate() {
                 #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
                 let dy = title_h + desc_gap + i as i32 * desc_line_h;
