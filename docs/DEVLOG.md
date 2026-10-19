@@ -5,6 +5,11 @@
 
 ---
 
+## 2026-10-20
+
+- **(mac · main) ★v0.6.0 릴리스 재개** — `CHOCO_PUSH` true(이번엔 분류기 통과) · 태그 `v0.6.0` 이동 `80d9c99`→`c1cd92f`(러너 2022 고정 포함 · 게시 0이라 되돌릴 것 없음 · Win은 `git fetch --tags --force`) · release run 39277257849 진행 중(choco ✗ 조사 중). [journal mac 1차](journal/2026-10-20.md)
+- **(mac · main) PERF-8 착수** — 설정 창 휠 프레임 기준선 paint 28.8ms(최대 36.5) · 카드 6장 18.2ms(워드랩 6.6ms) · 처방 후보 = 워드랩 행 캐시 · `autostart-clean.sh` mac 실기 ✓ · 교훈 = zsh `$t:w` 변수 수정자가 `NEXA_SCRIPT`를 깬다. [journal mac 1차](journal/2026-10-20.md)
+
 ## 2026-10-19
 
 - **(Win · main) ★오프라인 대기분 즉시 전송 · 입력/전송 시각 분리 · 내 상태(온라인/오프라인)**(`ec2d8ae` — 발견 등장·roster Up 순간 due=지금(종전 백오프 ≤300s) · `ChatLine.sent`·기록 tag 6 · `app.presence`+메뉴 · `Transport::set_quiet`(광고·응답 중단+GOODBYE) · PRES-1 실기 대기). [journal Win 6차](journal/2026-10-19.md)
