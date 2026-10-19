@@ -7,6 +7,9 @@
 
 ## 2026-10-20
 
+- **(mac · main) ★v0.6.0 공개** — release run 39277257849 = package·publish·linux-repo·homebrew·winget ✓ · 자산 15 · choco ✗ = push.chocolatey.org 503 → 재dispatch run 39287186383(결과 대기). [journal mac 2차](journal/2026-10-20.md)
+- **(mac · main) ★PERF-8 ✅ 설정 창 프레임 28.8→10.7ms**(`f2f0a39` + nexa-ui `ca2b0dd` — 설명 워드랩 캐시 · 잠긴 카드 가림막 행 단위·정수 블렌드 10→0.7ms · 호스트 중복 채움 생략). [journal mac 2차](journal/2026-10-20.md)
+- **(mac · main) ★오프라인 한눈 표시**(`db46b2f` — 트레이 흐림+회색 점·툴팁 · 창 제목 "— 오프라인" · `NEXA_SCRIPT presence=`) · **패닉 훅 `data/crash.log`**(`c3c425e` — 설치본 0.6.0 mac 오프라인 전환 직후 abort · 재현 실패 · CRASH-1). [journal mac 2차](journal/2026-10-20.md)
 - **(mac · main) ★v0.6.0 릴리스 재개** — `CHOCO_PUSH` true(이번엔 분류기 통과) · 태그 `v0.6.0` 이동 `80d9c99`→`c1cd92f`(러너 2022 고정 포함 · 게시 0이라 되돌릴 것 없음 · Win은 `git fetch --tags --force`) · release run 39277257849 진행 중(choco ✗ 조사 중). [journal mac 1차](journal/2026-10-20.md)
 - **(mac · main) PERF-8 착수** — 설정 창 휠 프레임 기준선 paint 28.8ms(최대 36.5) · 카드 6장 18.2ms(워드랩 6.6ms) · 처방 후보 = 워드랩 행 캐시 · `autostart-clean.sh` mac 실기 ✓ · 교훈 = zsh `$t:w` 변수 수정자가 `NEXA_SCRIPT`를 깬다. [journal mac 1차](journal/2026-10-20.md)
 
