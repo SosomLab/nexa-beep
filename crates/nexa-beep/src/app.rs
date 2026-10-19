@@ -7717,10 +7717,14 @@ impl App {
     ///   오프라인이면 저장 등급으로 떨어져, 목록엔 "내 기기" 배지가 있는 상대의 대화창에 "지문
     ///   대조 전" 안내가 떴다(10-19 실기 · e830292로 오프라인 창이 열리자 드러남). 세션 없는 상대에게
     ///   이 판정이 푸는 것은 안내·표시뿐(승인·ack·무음은 세션이 있어야 일어난다).
+    ///   설정 `user.offline_trust`(고급 › 신뢰 판정 · 기본 on · 사용자 확정 10-19)가 이 층을 켜고 끈다 —
+    ///   끄면 세션 없는 동안은 내 기기로 인식하지 않는다(핀 등급 = 종전 동작).
     fn effective_trust(&self, peer: PeerId) -> nbeep_core::TrustLevel {
         use nbeep_core::TrustStore as _;
         if self.siblings.contains(&peer)
-            || (!self.conversations.contains_key(&peer) && self.is_own_device(peer))
+            || (!self.conversations.contains_key(&peer)
+                && self.settings.get("user.offline_trust") != "off"
+                && self.is_own_device(peer))
         {
             nbeep_core::TrustLevel::FingerprintVerified
         } else {

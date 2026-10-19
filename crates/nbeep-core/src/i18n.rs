@@ -280,6 +280,11 @@ pub enum Msg {
     LogCapDefault,
     /// 네트워크 점검 하위 섹션(netmon · 08-21 — 고급 하위 · 옵트인 계측 기록).
     SubNetmon,
+    /// 고급 › 신뢰 판정(10-19).
+    SubTrust,
+    /// 오프라인 시 마지막 서명 사용(10-19 사용자 확정 — 기본 on).
+    UserOfflineTrust,
+    UserOfflineTrustDesc,
     NetmonEnabled,
     NetmonEnabledDesc,
     NetmonInterval,
@@ -2534,6 +2539,14 @@ impl Msg {
             Msg::LogRetainDefault => ["Default (7)", "기본(7일)", "默认(7天)", "既定(7日)"],
             Msg::LogCapDefault => ["Default (20)", "기본(20MB)", "默认(20MB)", "既定(20MB)"],
             Msg::SubNetmon => ["Network check", "네트워크 점검", "网络检查", "ネットワーク点検"],
+            Msg::SubTrust => ["Trust judgement", "신뢰 판정", "信任判定", "信頼判定"],
+            Msg::UserOfflineTrust => ["Use last signature when offline", "오프라인 시 마지막 서명 사용", "离线时使用最后签名", "オフライン時は最後の署名を使う"],
+            Msg::UserOfflineTrustDesc => [
+                "While a device of mine has no session, treat it as my device based on the last signed device list (badge, no fingerprint prompt). Off = without a session it is not recognized as my device (pinned level only — the fingerprint prompt appears).",
+                "내 기기와 세션이 없는 동안 마지막 서명 기기 목록을 근거로 내 기기로 봅니다(배지 유지 · 지문 대조 안내 없음). 끄면 세션 없는 동안은 내 기기로 인식하지 않습니다(핀 등급만 — 지문 대조 안내가 뜹니다).",
+                "与我的设备无会话期间，依据最后签名的设备列表将其视为我的设备（保留徽章，不提示指纹比对）。关闭时无会话则不视为我的设备（仅固定等级，会出现指纹比对提示）。",
+                "自分の機器とセッションがない間、最後に署名された機器リストを根拠に自分の機器として扱います（バッジ維持・指紋照合案内なし）。オフにするとセッションがない間は自分の機器と認識しません（ピン等級のみ・指紋照合案内が出ます）。",
+            ],
             Msg::NetmonEnabled => [
                 "Traffic monitoring log",
                 "트래픽 계측 기록",

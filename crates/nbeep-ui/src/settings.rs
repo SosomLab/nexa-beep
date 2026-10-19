@@ -226,6 +226,7 @@ pub const DEPENDS: &[(&str, &str, Dep)] = &[
     ("user.test", "user.enabled", Dep::On),
     ("user.rotate", "user.enabled", Dep::On),
     ("user.devices", "user.enabled", Dep::On),
+    ("user.offline_trust", "user.enabled", Dep::On),
     ("user.sync_lines", "user.enabled", Dep::On),
     ("user.sync_budget_mb", "user.enabled", Dep::On),
     ("net.server.address", "net.server.mode", Dep::Eq("managed")),
@@ -1660,6 +1661,16 @@ pub fn registry() -> &'static [Entry] {
             desc: Msg::NetmonIntervalDesc,
             kind: SettingKind::RadioInput(&[("10", Msg::NetmonIntervalDefault)], ""),
             key: "netmon.interval_s",
+        },
+        // ── 고급 › 신뢰 판정(10-19 사용자 확정) — 오프라인 내 기기 = 마지막 서명 기기 목록으로 판정
+        //   (기본 on). 끄면 세션 없는 동안은 저장 등급(핀)만 = 종전 동작. 소비처 = app effective_trust.
+        Entry {
+            cat: Msg::CatAdvanced,
+            sub: Some(Msg::SubTrust),
+            label: Msg::UserOfflineTrust,
+            desc: Msg::UserOfflineTrustDesc,
+            kind: SettingKind::Toggle,
+            key: "user.offline_trust",
         },
         // ── 라이선스 정보(P4 ⑤ · 읽기 전용 · 호스트 set_info — 값은 영속되지 않는다) ──
         Entry {
