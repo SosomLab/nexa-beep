@@ -3,7 +3,7 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
-> **갱신: 2026-10-19 Win 7차 (KST · Windows · main — push = 개발 세션 · 위키·기록 = 협업 세션)** — **push `70a59b2..308a5cb`**(21커밋 · 10-19 코드 8건+기록) · CI run **39205235394** 전 7 job success · 위키 User-Guide 거울(`52c54e1` · 오프라인 큐 즉시 전달·내 상태). [journal Win 7차](journal/2026-10-19.md)
+> **갱신: 2026-10-19 Win 7차 (KST · Windows · main — push = 개발 세션 · 위키·기록 = 협업 세션)** — **push `70a59b2..308a5cb`**(21커밋 · 10-19 코드 8건+기록) · CI run **39205235394** 전 7 job success · 위키 User-Guide 거울(`52c54e1` · 오프라인 큐 즉시 전달·내 상태) · 위키 Release-Notes **v0.6.0 절 준비 중**(`c9e8b2c` · 태그 전 · 태그 직전 일괄 검증 필요) · push `308a5cb..b5e802e`. [journal Win 7차](journal/2026-10-19.md)
 
 > **갱신: 2026-10-19 Win 6차 (KST · Windows · main — 개발 세션 코드·설치본 · 기록 = 협업 세션)** — ★`ec2d8ae`(사용자 요청 "오프라인 메시지 전달"): **대기분 = 상대를 아는 순간 즉시 전송**(종전 백오프 최대 300s) · **입력/전송 시각 분리**(말풍선 `입력 ▸ 전송` · 기록 tag 6) · ★**내 상태 온라인/오프라인**(`app.presence` · 메뉴 ▸ 내 상태 · 오프라인 = 광고·응답 중단+GOODBYE·세션 종료·발신 대기 큐 · 복귀 = 즉시 HELLO·대기분 전달) · 실측 offline disc 0줄·online 즉시 재연결 · 설치본 4회째 · 잔여 = 2-PC 실기(PRES-1). [journal Win 6차](journal/2026-10-19.md)
 
