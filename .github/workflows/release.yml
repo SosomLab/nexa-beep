@@ -199,7 +199,20 @@ jobs:
       # ── 설치본: Windows = NSIS ──
       - name: NSIS 설치
         if: runner.os == 'Windows'
-        run: choco install nsis -y --no-progress
+        shell: bash
+        run: |
+          # ★ 10-19 v0.6.0 1차 run(39225610061): choco가 "Unable to find package 'nsis'"(피드 장애)를 내고도
+          #   종료 코드 0 → 단계는 초록인데 다음 단계가 makensis 부재로 exit 127 = 조용한 실패.
+          #   처방 = 종료 코드가 아니라 **makensis.exe 실존**을 기준으로 재시도하고, 끝에 직접 확인한다.
+          set -uo pipefail
+          MK="/c/Program Files (x86)/NSIS/makensis.exe"
+          for i in 1 2 3 4; do
+            [ -x "$MK" ] && break
+            choco install nsis -y --no-progress || true
+            [ -x "$MK" ] || { echo "makensis 없음 — choco 재시도($i/4) 30s 뒤"; sleep 30; }
+          done
+          [ -x "$MK" ] || { echo "::error::NSIS 미설치(choco 피드 장애) — makensis.exe 없음"; exit 1; }
+          "$MK" -VERSION; echo
 
       - name: Windows 설치본(.exe) + zip
         if: runner.os == 'Windows'
