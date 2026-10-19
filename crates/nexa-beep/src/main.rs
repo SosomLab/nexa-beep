@@ -87,6 +87,10 @@ fn main() {
         );
         std::process::exit(code);
     }
+    // ★ 패닉 기록(10-20 — 설치본 0.6.0 mac이 기동 15초 뒤 abort()로 죽었는데 panic=abort + 심볼 strip +
+    //   launchd 기동이라 메시지가 **어디에도 남지 않았다**). 기본 훅(stderr) 뒤에 `data/crash.log`에 시각·버전·
+    //   메시지·위치 한 줄을 덧붙인다 — 다음 크래시는 파일 하나로 원인이 잡히게. 실패는 조용히(fail-soft).
+    install_crash_log(app::data_dir().join("crash.log"));
     if let Some(pos) = args.iter().position(|a| a == "--quarantine-demo") {
         let Some(path) = args.get(pos + 1) else {
             eprintln!("--quarantine-demo <파일> 필요");
@@ -341,4 +345,39 @@ Nexa Beep {v} — 제로 컨피그 로컬 네트워크 메신저 (\"실행 = 참
   -V, --version         버전 출력",
         v = env!("CARGO_PKG_VERSION")
     );
+}
+
+/// 패닉 훅 — 기본 훅(stderr 출력)을 먼저 부르고, `path`에 `시각 · 버전 · 메시지 · 위치`를 한 줄 append한다.
+/// 봉투 원리: 메시지는 Rust 패닉 문구(코드 위치·단언 값)뿐 — 대화 본문·키는 패닉 문구에 넣지 않는 규약.
+fn install_crash_log(path: std::path::PathBuf) {
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        default(info);
+        let msg = info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|s| (*s).to_string())
+            .or_else(|| info.payload().downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "<non-string panic>".to_string());
+        let loc = info
+            .location()
+            .map_or_else(|| "?".to_string(), |l| format!("{}:{}", l.file(), l.line()));
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        let line = format!(
+            "{now} v{} thread={} at {loc}: {msg}\n",
+            env!("CARGO_PKG_VERSION"),
+            std::thread::current().name().unwrap_or("?")
+        );
+        let _ = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .and_then(|mut f| {
+                use std::io::Write as _;
+                f.write_all(line.as_bytes())
+            });
+        nbeep_store::privfile::tighten(&path);
+    }));
 }
