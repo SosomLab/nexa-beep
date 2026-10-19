@@ -16,9 +16,19 @@
 //!
 //! ## 상한(D-32-4 · 예산 DR-5)
 //!
-//! 스레드당 최근 [`SYNC_LINES_MAX`]줄 · 세션당 응답 [`SYNC_BYTES_PER_SESSION`] — 나머지는
+//! 스레드당 최근 [`SYNC_LINES_MAX`]줄 · 세션당 응답 [`SYNC_BYTES_PER_SESSION`]이 **기본값**이고,
+//! 앱 설정(`user.sync_lines` · `user.sync_budget_mb`)이 바꾼다(10-19). 줄 수의 와이어 천장은
+//! [`SYNC_LINES_HARD_MAX`] — 청구측은 자기 설정으로 `max`를 청하고 응답측은 `min(청구, 내 설정)`으로
+//! 다시 죈다(구판 요청자는 200을 청하니 그 이상을 받지 않는다 = 전방 호환). 나머지는
 //! 컨텐츠 모드(S5) 몫. 파일 본문은 따라잡지 않는다(격리 실체화는 기기별 · ADR-0007 §6-2) —
 //! 텍스트 줄만 싣는다.
+//!
+//! ## 프레임 분할
+//!
+//! 응답은 세션 페이로드 상한(`mux::MAX_PAYLOAD` 65,518B) 안에서 **여러 [`SyncLines`] 프레임**으로
+//! 나눠 보낸다([`SyncLines::encode_frames`]) — 받는 쪽은 프레임마다 `(origin, seq)` dedup으로 합치니
+//! 분할은 보이지 않는다. 종전(10-10)엔 한 프레임이라 200줄 × 평균 330B를 넘으면 `TooLarge`로
+//! **형제 세션이 끊겼다**(10-19 발견 · 전송 실패 = 세션 종료 fail-closed 경로를 타서).
 //!
 //! 봉투 원리: 형제 세션 안에서만 오가며, 받는 쪽은 형제 세션이 아니면 버린다(앱 몫 · fail-closed).
 //! 침해 형제의 라인 주입은 새 면이 아니다(형제 = 전면 신뢰 · [48 §5] T-8) — dedup·상한만 둔다.
@@ -35,9 +45,13 @@ pub const SYNC_LINES_TAG: u8 = 7;
 /// 읽음 동기 태그(5~7은 예약분 · 8~19 사용 중 다음 빈 번호).
 pub const SYNC_READ_TAG: u8 = 20;
 
-/// 스레드당 따라잡기 줄 상한(D-32-4 "스레드당 200줄").
+/// 스레드당 따라잡기 줄 상한 **기본값**(D-32-4 "스레드당 200줄" · 설정 `user.sync_lines`).
 pub const SYNC_LINES_MAX: usize = 200;
-/// 세션당 응답 바이트 상한(D-32-4 "세션당 1MiB") — 넘으면 그 세션에서는 더 응답하지 않는다.
+/// 줄 상한의 와이어 천장 — 디코더가 받아 주는 최대(= 설정 선택지의 최대 · 10-19). 구판 디코더는
+/// 200에서 멈추지만 응답측이 청구 `max`로 죄므로 구판에 이보다 큰 프레임이 가지 않는다.
+pub const SYNC_LINES_HARD_MAX: usize = 500;
+/// 세션당 응답 바이트 상한 **기본값**(D-32-4 "세션당 1MiB" · 설정 `user.sync_budget_mb`) — 넘으면
+/// 그 세션에서는 더 응답하지 않는다.
 pub const SYNC_BYTES_PER_SESSION: usize = 1024 * 1024;
 /// 디제스트 항목 상한(가장 최근 스레드부터 — 프레임 1개 ≤ 약 18KB).
 pub const SYNC_DIGEST_MAX: usize = 255;
@@ -121,7 +135,7 @@ pub struct SyncPull {
     pub origin: PeerId,
     /// 이 seq **초과**분을 청한다(0 = 전부).
     pub after_seq: u64,
-    /// 최대 줄 수(응답측이 [`SYNC_LINES_MAX`]로 다시 죈다).
+    /// 최대 줄 수(청구측 설정 · 응답측이 자기 설정과 [`SYNC_LINES_HARD_MAX`]로 다시 죈다).
     pub max: u16,
 }
 
@@ -197,16 +211,59 @@ fn clip_utf8(s: &str, max: usize) -> &str {
 }
 
 impl SyncLines {
-    /// 인코딩 — 줄 수는 [`SYNC_LINES_MAX`]로, 라벨·본문은 바이트 상한(문자 경계)으로 죈다.
+    /// 프레임 머리 길이(태그 1 + 스레드 32 + 줄 수 2).
+    const HEADER: usize = 35;
+
+    /// 한 줄의 인코딩 길이(라벨·본문은 상한으로 잘린 뒤 기준).
+    fn line_len(l: &SyncLine) -> usize {
+        32 + 8
+            + 1
+            + 8
+            + 1
+            + clip_utf8(&l.from, SYNC_FROM_MAX).len()
+            + 2
+            + clip_utf8(&l.text, SYNC_TEXT_MAX).len()
+    }
+
+    /// 인코딩(한 프레임) — 줄 수는 [`SYNC_LINES_HARD_MAX`]로, 라벨·본문은 바이트 상한(문자 경계)으로
+    /// 죈다. 세션 페이로드 상한을 넘을 수 있는 응답은 [`Self::encode_frames`]로.
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
-        let n = self.lines.len().min(SYNC_LINES_MAX);
-        let mut out = Vec::with_capacity(35 + n * 64);
+        let n = self.lines.len().min(SYNC_LINES_HARD_MAX);
+        Self::encode_slice(self.thread, &self.lines[..n])
+    }
+
+    /// 인코딩 — `max_bytes`(세션 페이로드 상한) 안에 들어가도록 줄 순서를 지키며 **여러 프레임**으로
+    /// 나눈다. 한 줄은 최대 약 4.2KB라 프레임마다 최소 1줄은 들어간다. 줄이 없으면 빈 목록.
+    #[must_use]
+    pub fn encode_frames(&self, max_bytes: usize) -> Vec<Vec<u8>> {
+        let lines = &self.lines[..self.lines.len().min(SYNC_LINES_HARD_MAX)];
+        let mut out = Vec::new();
+        let mut start = 0usize;
+        let mut size = Self::HEADER;
+        for (i, l) in lines.iter().enumerate() {
+            let s = Self::line_len(l);
+            if i > start && size + s > max_bytes {
+                out.push(Self::encode_slice(self.thread, &lines[start..i]));
+                start = i;
+                size = Self::HEADER;
+            }
+            size += s;
+        }
+        if start < lines.len() {
+            out.push(Self::encode_slice(self.thread, &lines[start..]));
+        }
+        out
+    }
+
+    fn encode_slice(thread: PeerId, lines: &[SyncLine]) -> Vec<u8> {
+        let n = lines.len();
+        let mut out = Vec::with_capacity(Self::HEADER + n * 64);
         out.push(SYNC_LINES_TAG);
-        out.extend_from_slice(self.thread.as_bytes());
-        #[allow(clippy::cast_possible_truncation)] // ≤ 200
+        out.extend_from_slice(thread.as_bytes());
+        #[allow(clippy::cast_possible_truncation)] // ≤ SYNC_LINES_HARD_MAX
         out.extend_from_slice(&(n as u16).to_be_bytes());
-        for l in &self.lines[..n] {
+        for l in lines {
             let from = clip_utf8(&l.from, SYNC_FROM_MAX);
             let text = clip_utf8(&l.text, SYNC_TEXT_MAX);
             out.extend_from_slice(l.origin.as_bytes());
@@ -231,7 +288,7 @@ impl SyncLines {
         }
         let thread = PeerId::from_bytes(bytes[1..33].try_into().ok()?);
         let n = usize::from(u16::from_be_bytes([bytes[33], bytes[34]]));
-        if n > SYNC_LINES_MAX {
+        if n > SYNC_LINES_HARD_MAX {
             return None;
         }
         let mut p = 35usize;
@@ -351,8 +408,11 @@ pub fn digest_frame(mine: &DigestMap, recent: &[PeerId]) -> SyncDigest {
 
 /// 상대 디제스트와 대조해 **내가 부족한 것**의 청구 목록(순수) — 상대 max_seq > 내 max_seq(없으면 0)
 /// 인 항목마다 `after_seq = 내 max_seq`. 상대 디제스트 순서(상대의 우선순위) 유지 · [`SYNC_PULL_MAX`].
+/// `max_lines` = 청구측 설정(스레드당 줄 상한 · 1~[`SYNC_LINES_HARD_MAX`]로 죈다).
 #[must_use]
-pub fn pulls_for(mine: &DigestMap, theirs: &SyncDigest) -> Vec<SyncPull> {
+pub fn pulls_for(mine: &DigestMap, theirs: &SyncDigest, max_lines: u16) -> Vec<SyncPull> {
+    #[allow(clippy::cast_possible_truncation)] // 500
+    let max = max_lines.clamp(1, SYNC_LINES_HARD_MAX as u16);
     theirs
         .entries
         .iter()
@@ -362,8 +422,7 @@ pub fn pulls_for(mine: &DigestMap, theirs: &SyncDigest) -> Vec<SyncPull> {
                 thread: e.thread,
                 origin: e.origin,
                 after_seq: have,
-                #[allow(clippy::cast_possible_truncation)] // 200
-                max: SYNC_LINES_MAX as u16,
+                max,
             })
         })
         .take(SYNC_PULL_MAX)
@@ -371,7 +430,8 @@ pub fn pulls_for(mine: &DigestMap, theirs: &SyncDigest) -> Vec<SyncPull> {
 }
 
 /// 청구에 응할 줄 고르기(순수) — `origin`이 보낸 `after_seq` 초과분을 seq 오름차순으로, **가장 최근**
-/// `max`줄(≤ [`SYNC_LINES_MAX`])만. 입력은 (origin, seq, 줄) 아무 순서.
+/// `max`줄(≤ [`SYNC_LINES_HARD_MAX`] · 호출측이 자기 설정으로 먼저 죈다)만. 입력은 (origin, seq, 줄)
+/// 아무 순서.
 pub fn select_lines<T: Clone>(
     lines: &[(PeerId, u64, T)],
     origin: PeerId,
@@ -384,7 +444,7 @@ pub fn select_lines<T: Clone>(
         .map(|(_, s, l)| (*s, l.clone()))
         .collect();
     v.sort_by_key(|(s, _)| *s);
-    let cap = usize::from(max).clamp(1, SYNC_LINES_MAX);
+    let cap = usize::from(max).clamp(1, SYNC_LINES_HARD_MAX);
     if v.len() > cap {
         v.drain(..v.len() - cap);
     }
@@ -392,19 +452,39 @@ pub fn select_lines<T: Clone>(
 }
 
 /// 세션 응답 예산(순수) — 보낸 바이트 누계가 상한을 넘으면 더 응답하지 않는다(fail-soft).
-#[derive(Debug, Default, Clone, Copy)]
+/// 상한은 세션 성립 시점의 설정([`Self::new`]) · 기본 [`SYNC_BYTES_PER_SESSION`].
+#[derive(Debug, Clone, Copy)]
 pub struct SyncBudget {
     sent: usize,
+    limit: usize,
+}
+
+impl Default for SyncBudget {
+    fn default() -> Self {
+        Self::new(SYNC_BYTES_PER_SESSION)
+    }
 }
 
 impl SyncBudget {
+    /// 상한 `limit` 바이트의 예산.
+    #[must_use]
+    pub fn new(limit: usize) -> Self {
+        Self { sent: 0, limit }
+    }
+
     /// `n` 바이트를 더 보낼 수 있으면 차감하고 참.
     pub fn take(&mut self, n: usize) -> bool {
-        if self.sent.saturating_add(n) > SYNC_BYTES_PER_SESSION {
+        if self.sent.saturating_add(n) > self.limit {
             return false;
         }
         self.sent += n;
         true
+    }
+
+    /// 상한(바이트).
+    #[must_use]
+    pub fn limit(&self) -> usize {
+        self.limit
     }
 
     /// 지금까지 보낸 바이트.
@@ -537,8 +617,11 @@ mod tests {
             lines: Vec::new(),
         }
         .encode();
-        over[33..35].copy_from_slice(&201u16.to_be_bytes());
-        assert!(SyncLines::decode(&over).is_none());
+        over[33..35].copy_from_slice(&501u16.to_be_bytes());
+        assert!(
+            SyncLines::decode(&over).is_none(),
+            "와이어 천장 초과 = 거부"
+        );
         // seq 0 줄 거부.
         let mut zero = l.encode();
         zero[35 + 32..35 + 40].copy_from_slice(&0u64.to_be_bytes());
@@ -578,11 +661,67 @@ mod tests {
                 }, // 모르는 스레드 → after 0
             ],
         };
-        let pulls = pulls_for(&mine, &theirs);
+        let pulls = pulls_for(&mine, &theirs, 200);
         assert_eq!(pulls.len(), 2);
         assert_eq!((pulls[0].thread, pulls[0].after_seq), (pid(1), 5));
         assert_eq!((pulls[1].thread, pulls[1].after_seq), (pid(4), 0));
         assert_eq!(pulls[0].max, 200);
+        // 청구 상한은 설정이 정하고 와이어 천장으로 죈다(0 → 1 · 9000 → 500).
+        assert_eq!(pulls_for(&mine, &theirs, 50)[0].max, 50);
+        assert_eq!(pulls_for(&mine, &theirs, 0)[0].max, 1);
+        assert_eq!(pulls_for(&mine, &theirs, 9000)[0].max, 500);
+    }
+
+    #[test]
+    fn lines_split_into_frames_under_payload_cap() {
+        // 10-19 결함 — 한 프레임이 세션 페이로드 상한을 넘으면 액터가 세션을 끊었다. 분할 뒤엔
+        // 프레임마다 상한 이하 · 줄 순서·전수 보존 · 각 프레임이 홀로 디코딩된다.
+        let line = |seq: u64| SyncLine {
+            origin: pid(1),
+            seq,
+            mine: false,
+            at_ms: seq,
+            importance: 0,
+            from: "a".into(),
+            text: "x".repeat(300),
+        };
+        let l = SyncLines {
+            thread: pid(2),
+            lines: (1..=200).map(line).collect(),
+        };
+        let one = l.encode();
+        assert!(
+            one.len() > 65_518,
+            "단일 프레임 = {}B(상한 초과 재현)",
+            one.len()
+        );
+        let frames = l.encode_frames(65_518);
+        assert!(frames.len() >= 2);
+        let mut seqs = Vec::new();
+        for f in &frames {
+            assert!(f.len() <= 65_518, "{}B", f.len());
+            let d = SyncLines::decode(f).expect("프레임 단독 디코딩");
+            assert_eq!(d.thread, pid(2));
+            seqs.extend(d.lines.iter().map(|x| x.seq));
+        }
+        assert_eq!(seqs, (1..=200).collect::<Vec<u64>>(), "순서·전수 보존");
+        // 상한이 아주 작아도 프레임마다 최소 1줄(무한 루프·빈 프레임 없음).
+        let tiny = l.encode_frames(1);
+        assert_eq!(tiny.len(), 200);
+        assert!(tiny.iter().all(|f| SyncLines::decode(f).is_some()));
+        // 줄이 없으면 프레임도 없다.
+        assert!(SyncLines {
+            thread: pid(2),
+            lines: vec![]
+        }
+        .encode_frames(65_518)
+        .is_empty());
+        // 상한 안에 다 들어가면 한 프레임 = encode()와 같다.
+        let small = SyncLines {
+            thread: pid(2),
+            lines: (1..=3).map(line).collect(),
+        };
+        assert_eq!(small.encode_frames(65_518), vec![small.encode()]);
     }
 
     #[test]
@@ -627,10 +766,15 @@ mod tests {
     #[test]
     fn budget_and_unread() {
         let mut b = SyncBudget::default();
+        assert_eq!(b.limit(), SYNC_BYTES_PER_SESSION);
         assert!(b.take(SYNC_BYTES_PER_SESSION - 1));
         assert!(b.take(1));
         assert!(!b.take(1), "상한 초과 = 거절");
         assert_eq!(b.sent(), SYNC_BYTES_PER_SESSION);
+        // 설정 상한(10-19) — 4MiB면 4MiB까지.
+        let mut c = SyncBudget::new(4 << 20);
+        assert!(c.take(4 << 20));
+        assert!(!c.take(1));
         assert_eq!(unread_after([10, 20, 30], 20), 1);
         assert_eq!(unread_after([10, 20, 30], 30), 0);
         assert_eq!(unread_after(std::iter::empty(), 0), 0);

@@ -54,7 +54,8 @@ pub use action::{ActionKind, FailCode, Outcome, RejectCode, RiskLevel, ScanOutco
 pub use catchup::{
     digest_frame, digest_of, pulls_for, select_lines, unread_after, DigestEntry, DigestMap,
     SyncBudget, SyncDigest, SyncLine, SyncLines, SyncPull, SyncRead, SYNC_BYTES_PER_SESSION,
-    SYNC_DIGEST_TAG, SYNC_LINES_MAX, SYNC_LINES_TAG, SYNC_PULL_TAG, SYNC_READ_TAG,
+    SYNC_DIGEST_TAG, SYNC_LINES_HARD_MAX, SYNC_LINES_MAX, SYNC_LINES_TAG, SYNC_PULL_TAG,
+    SYNC_READ_TAG,
 };
 pub use chat::{
     fanout, ChatMessage, DedupIndex, FanoutReport, Importance, MessageBody, Sequencer, WireError,
@@ -64,7 +65,7 @@ pub use i18n::{current_lang, set_lang, t, tf, tr, Lang, Msg};
 pub use identity::{DeviceId, PeerId, Recipients, TrustLevel, UserId};
 pub use link::{Link, LinkError};
 pub use linkwatch::{Debouncer, LinkEvent};
-pub use mux::{MuxSession, StreamId};
+pub use mux::{MuxSession, StreamId, MAX_PAYLOAD};
 pub use name::{default_display_name, neutral_from_host, DisplayName, NameError};
 pub use path::{class_of_ip, file_allowed, PathClass};
 pub use peers::{DepartReason, PeerEntry, PeerEvent, PeerTable, SourceId};

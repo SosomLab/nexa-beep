@@ -226,6 +226,8 @@ pub const DEPENDS: &[(&str, &str, Dep)] = &[
     ("user.test", "user.enabled", Dep::On),
     ("user.rotate", "user.enabled", Dep::On),
     ("user.devices", "user.enabled", Dep::On),
+    ("user.sync_lines", "user.enabled", Dep::On),
+    ("user.sync_budget_mb", "user.enabled", Dep::On),
     ("net.server.address", "net.server.mode", Dep::Eq("managed")),
     ("net.server.port", "net.server.mode", Dep::Eq("managed")),
     ("net.server.type", "net.server.mode", Dep::Eq("managed")),
@@ -371,6 +373,7 @@ const RADIO_DEFAULTS: &[(&str, &str)] = &[
     ("ui.toolbar_size", "32"),
     ("xfer.send_max_mb", "unlimited"), // 발신 = 무제한 기본(08-18 — 스트리밍이라 안전)
     ("xfer.batch_max", "5"),           // 요청당 최대 파일 수 = 5 기본(08-20 확정)
+    ("user.sync_lines", "200"),        // 따라잡기 스레드당 줄 = 종전 상수 D-32-4(10-19 설정화)
     ("xfer.recv_max_mb", "512"),       // 수신 = 512MiB 기본(메모리 조립 방어선)
     // 정지 방치 자동 취소 — 기본 2분(사용자 확정 08-20 · 표시 순서는 1·2·5·10).
     ("xfer.auto_cancel_min", "2"),
@@ -1307,6 +1310,34 @@ pub fn registry() -> &'static [Entry] {
                 verb: Msg::UserRotateVerb,
             },
             key: "user.rotate",
+        },
+        // 따라잡기 상한(ADR-0015 S4 · 10-19) — 형제 기기에 건네는 대화 기록의 스레드당 줄 수 ·
+        // 세션당 바이트. 종전 상수 200줄/1MiB(D-32-4)가 기본값 · 소비처(app)가 관용 파싱·clamp.
+        // 줄 수는 청구측 값이고 응답측은 min(청구, 자기 설정)으로 다시 죈다(양쪽 설정의 최솟값).
+        Entry {
+            cat: Msg::CatUser,
+            sub: None,
+            label: Msg::UserSyncLines,
+            desc: Msg::UserSyncLinesDesc,
+            kind: SettingKind::Radio(&[
+                ("50", Msg::Lines50),
+                ("100", Msg::Lines100),
+                ("200", Msg::Lines200),
+                ("500", Msg::Lines500),
+            ]),
+            key: "user.sync_lines",
+        },
+        Entry {
+            cat: Msg::CatUser,
+            sub: None,
+            label: Msg::UserSyncBudget,
+            desc: Msg::UserSyncBudgetDesc,
+            kind: SettingKind::Radio(&[
+                ("1", Msg::Cap1MiB),
+                ("4", Msg::Cap4MiB),
+                ("16", Msg::Cap16MiB),
+            ]),
+            key: "user.sync_budget_mb",
         },
         // 그룹(M5-1 · ADR-0012) — 재동기 보관 주체 = 송신자(사용자 확정 08-13).
         // 발신자가 구성원별로 미전달 그룹 메시지를 몇 개까지 보관할지(초과 = 오래된 것

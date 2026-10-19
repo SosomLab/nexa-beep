@@ -4056,6 +4056,32 @@ impl App {
             .clamp(1, 5)
     }
 
+    /// 따라잡기 스레드당 줄 상한(설정 `user.sync_lines` · 1~500 · 기본 200 — ADR-0015 S4 · 10-19).
+    /// 청구할 때 내 값으로 청하고, 응답할 때 `min(청구, 내 값)`으로 죈다.
+    fn sync_lines_max(&self) -> u16 {
+        #[allow(clippy::cast_possible_truncation)] // 200 · 500
+        let (dflt, hard) = (
+            nbeep_core::SYNC_LINES_MAX as u16,
+            nbeep_core::SYNC_LINES_HARD_MAX as u16,
+        );
+        self.settings
+            .get("user.sync_lines")
+            .parse::<u16>()
+            .unwrap_or(dflt)
+            .clamp(1, hard)
+    }
+
+    /// 따라잡기 세션당 응답 예산(설정 `user.sync_budget_mb` · 1~16MiB · 기본 1MiB) — 세션 성립 때
+    /// 한 번 읽어 그 세션의 [`nbeep_core::SyncBudget`]에 박는다(바꾼 값은 다음 세션부터).
+    fn sync_budget_bytes(&self) -> usize {
+        self.settings
+            .get("user.sync_budget_mb")
+            .parse::<usize>()
+            .unwrap_or(1)
+            .clamp(1, 16)
+            << 20
+    }
+
     /// 한 번의 드롭 묶음을 요청 단위로 선판정(08-20 4차 확정) — 기존 배치
     /// 시도분(제외 포함)과 이번 드롭 수의 합이 상한을 넘으면 **한 파일도
     /// 시도하지 않고** 안내 모달만 띄운다(부분 전송 금지).
@@ -8555,10 +8581,11 @@ impl App {
         }
         let my_devs = self.my_devices();
         let (map, _) = self.sync_digest_map();
-        let pulls: Vec<nbeep_core::SyncPull> = nbeep_core::pulls_for(&map, theirs)
-            .into_iter()
-            .filter(|p| self.sync_thread_ok(p.thread, &my_devs))
-            .collect();
+        let pulls: Vec<nbeep_core::SyncPull> =
+            nbeep_core::pulls_for(&map, theirs, self.sync_lines_max())
+                .into_iter()
+                .filter(|p| self.sync_thread_ok(p.thread, &my_devs))
+                .collect();
         if self.user_trace {
             eprintln!(
                 "[user] sync digest from {} entries={} pulls={}",
@@ -8576,8 +8603,10 @@ impl App {
         }
     }
 
-    /// 청구 응답 — 그 스레드에서 `origin`이 보낸 `after_seq` 초과 최근 ≤200줄(텍스트만). 예산(세션당
-    /// 1MiB)을 넘기면 응답하지 않는다. 이 스레드를 다 읽었으면 읽음 동기도 동반한다.
+    /// 청구 응답 — 그 스레드에서 `origin`이 보낸 `after_seq` 초과 최근 `min(청구, 내 설정)`줄(텍스트만 ·
+    /// 기본 200). 응답은 세션 페이로드 상한 안에서 **여러 프레임**으로 나눈다(10-19 — 한 프레임이던
+    /// 종전엔 65KB를 넘으면 액터가 세션을 끊었다). 예산(세션당 · 기본 1MiB)을 넘기면 응답하지 않는다.
+    /// 이 스레드를 다 읽었으면 읽음 동기도 동반한다.
     fn on_sync_pull(&mut self, peer: PeerId, pull: nbeep_core::SyncPull) {
         if !self.siblings.contains(&peer) || !self.user_state.active() {
             return;
@@ -8598,7 +8627,8 @@ impl App {
             .iter()
             .filter_map(|l| l.sync_key().map(|(o, s)| (o, s, l)))
             .collect();
-        let chosen = nbeep_core::select_lines(&keyed, pull.origin, pull.after_seq, pull.max);
+        let max = pull.max.min(self.sync_lines_max());
+        let chosen = nbeep_core::select_lines(&keyed, pull.origin, pull.after_seq, max);
         if chosen.is_empty() {
             return;
         }
@@ -8623,7 +8653,9 @@ impl App {
                 .collect(),
         };
         let n = out.lines.len();
-        let frame = out.encode();
+        let mut frames = out.encode_frames(nbeep_core::MAX_PAYLOAD);
+        let bytes: usize = frames.iter().map(Vec::len).sum();
+        let nframes = frames.len();
         // 읽음 동기 동반 — 이 스레드의 안읽음이 0이고 본 적이 있으면 "끝까지 봤다".
         let vk = self.view_key(pull.thread);
         let upto = lines.iter().map(|l| l.at_ms).max().unwrap_or(0);
@@ -8639,22 +8671,22 @@ impl App {
         let Some(conv) = self.conversations.get_mut(&peer) else {
             return;
         };
-        if !conv.sync_budget.take(frame.len()) {
+        if !conv.sync_budget.take(bytes) {
             if self.user_trace {
                 eprintln!(
-                    "[user] sync pull from {} refused: budget {}B",
+                    "[user] sync pull from {} refused: budget {}B/{}B (+{bytes}B)",
                     peer.short(),
-                    conv.sync_budget.sent()
+                    conv.sync_budget.sent(),
+                    conv.sync_budget.limit()
                 );
             }
             return;
         }
-        let mut frames = vec![frame];
         frames.extend(read_frame);
         let _ = conv.out_tx.send(SessionCmd::Control(frames));
         if self.user_trace {
             eprintln!(
-                "[user] sync lines to {} thread {} origin {} after={} n={n}",
+                "[user] sync lines to {} thread {} origin {} after={} n={n} frames={nframes} bytes={bytes}",
                 peer.short(),
                 pull.thread.short(),
                 pull.origin.short(),
@@ -9895,7 +9927,7 @@ impl App {
                 hello_ver: None,
                 succ_sent: false,
                 digest_sent: false,
-                sync_budget: nbeep_core::SyncBudget::default(),
+                sync_budget: nbeep_core::SyncBudget::new(self.sync_budget_bytes()),
             },
         );
         // 후계 증명서(S2-f) — 키 봉인본보다 **먼저**(형제가 "후계가 이긴다" 규칙으로 새 키를 채택하려면
