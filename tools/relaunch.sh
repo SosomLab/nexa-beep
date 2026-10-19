@@ -12,6 +12,7 @@
 #   tools/relaunch.sh --fresh    # A·B 신원을 새로 만든다(핀·그룹 초기화)
 #   tools/relaunch.sh --gate     # 빌드 대신 전체 게이트(fmt·clippy·test·rustdoc)
 #   tools/relaunch.sh --no-build # 빌드 건너뛰고 재기동만
+#   tools/relaunch.sh --stop     # 테스트 종료 — 전부 종료 + 자동 실행 등록 정리(재기동 없음)
 #   tools/relaunch.sh --daemon   # 로컬 릴레이 서버(nexa-beepd)도 함께 재기동
 #                                #   (포트 47399 — 공식 서버 47300과 안 겹침 ·
 #                                #    각 신원은 설정 › Server에서 127.0.0.1:47399
@@ -35,7 +36,11 @@ ROOT=$(pwd)
 #   폴더로 옮긴다. 기존 /tmp 신원은 아래에서 1회 이관해 잃지 않는다.
 MULTI=${BEEP_MULTI:-$HOME/.nexa-beep-multi}
 LEGACY_MULTI=/tmp/beep-multi
-FRESH=0 BUILD=1 GATE=0 DAEMON=0
+FRESH=0 BUILD=1 GATE=0 DAEMON=0 STOP=0
+# ★ 테스트 인스턴스는 로그인 자동 실행에 등록하지 않는다(10-19 · 앱이 이 변수를 본다 —
+#   Windows Start-Process·nohup 자식 모두 상속). 테스트 중 설정에서 직접 켠 등록은
+#   다음 relaunch ①·--stop이 tools/autostart-clean.sh로 지운다.
+export NEXA_NO_AUTOSTART=1
 DPORT=${BEEPD_PORT:-47399}
 for a in "$@"; do
   case "$a" in
@@ -43,7 +48,8 @@ for a in "$@"; do
     --no-build) BUILD=0 ;;
     --gate) GATE=1 ;;
     --daemon) DAEMON=1 ;;
-    -h | --help) sed -n '2,20p' "$0"; exit 0 ;;
+    --stop) STOP=1 ;;
+    -h | --help) sed -n '2,21p' "$0"; exit 0 ;;
     *) echo "알 수 없는 인자: $a (--help)"; exit 2 ;;
   esac
 done
@@ -98,6 +104,12 @@ fi
 LEFT=$(count_procs)
 echo "   종료 전 ${BEFORE:-0}개 → 남은 ${LEFT:-0}개"
 [ "${LEFT:-0}" != "0" ] && { echo "   ⚠️ 강제 종료 후에도 남았다 — 확인 후 다시"; exit 1; }
+# 지난 테스트 종료 = 그 테스트가 남긴 자동 실행 등록 정리(사용자가 직접 켠 것 포함).
+BEEP_MULTI="$MULTI" ./tools/autostart-clean.sh
+if [ "$STOP" = 1 ]; then
+  printf '\n\033[32m✅ 테스트 종료 — 인스턴스 0개 · 자동 실행 테스트 등록 정리 완료\033[0m\n'
+  exit 0
+fi
 
 # ── ② 빌드 ────────────────────────────────────────────────────────────────
 if [ "$GATE" = "1" ]; then
@@ -228,7 +240,7 @@ SEEN=$("./target/release/nexa-beep$EXE" --discover-probe 8 2>&1 |
 echo "$SEEN" | sed 's/^/   /'
 N=$(echo "$SEEN" | grep -c "peer=" || true)
 if [ "$RUNNING" = "3" ] && [ "$N" -ge 3 ]; then
-  printf '\n\033[32m✅ 3신원 기동·상호 발견 완료\033[0m — 정리: pkill -f "nexa-beep( |$)"%s\n' "$([ "$DAEMON" = 1 ] && echo ' · 데몬: pkill -f nexa-beepd')"
+  printf '\n\033[32m✅ 3신원 기동·상호 발견 완료\033[0m — 테스트 종료: tools/relaunch.sh --stop%s\n' "$([ "$DAEMON" = 1 ] && echo ' · 데몬: pkill -f nexa-beepd')"
 else
   printf '\n\033[33m⚠️ 창 %s개 · 발견 %s명\033[0m — 로그: /tmp/beep-base.log · %s/{A,B}/out.log\n' "$RUNNING" "$N" "$MULTI"
   exit 1

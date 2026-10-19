@@ -598,6 +598,22 @@ docker rm -f node_a node_b; docker network rm beepnet
 > ⚠️ **파이프 입력(비-TTY)에서는 대기 중 `/quit`을 읽지 않는다** — 자동화가 보낸 줄은 대화용이지
 > 대기용이 아니다. 그 경우엔 `SIGTERM`/`SIGINT`로 끝낸다.
 
+### 5-1. ★ 테스트 인스턴스와 로그인 자동 실행 (10-19)
+
+자동 실행(`app.autostart` · 기본 on)은 **실행 파일 경로마다 슬롯이 따로**라(08-29), 테스트 폴더에 복사한
+인스턴스가 기본값대로 등록하면 테스트가 끝난 뒤에도 Run 값·plist·`.desktop`이 남는다(폴더를 지우면 유령).
+
+| 장치 | 동작 |
+|---|---|
+| **부팅 억제** | `NEXA_NO_AUTOSTART=1`이거나 cargo 산출 폴더(`target/{debug,release,deps}`)에서 실행하면 부팅 동기화가 **등록하지 않고 내 슬롯을 걷어낸다**. 설정 화면 토글은 막지 않는다(기능 실기용). |
+| **`--autostart-clear`** | 그 실행 파일의 슬롯만 지운다(설치본 등 남의 슬롯 무관 · 신원 미생성). 출력 `autostart = removed / none`. |
+| **`tools/autostart-clean.sh`** | 테스트 뿌리(`$BEEP_MULTI` · 저장소 `target/`) 아래를 가리키는 등록만 정리 — 남은 exe는 `--autostart-clear`, 사라진 exe(유령)는 경로 접두로 직접 삭제. |
+| **도구 배선** | `relaunch.sh`·`s4-scenario.sh`·`perf-scenario.sh`가 `NEXA_NO_AUTOSTART=1`을 export · relaunch ① 종료 직후와 **`relaunch.sh --stop`**(테스트 종료) · 시나리오 EXIT trap이 정리 스크립트를 부른다. |
+
+> 손으로(또는 에이전트가) 테스트 인스턴스를 띄울 때도 `NEXA_NO_AUTOSTART=1`을 붙이고, 끝나면
+> `./tools/relaunch.sh --stop` 또는 `./tools/autostart-clean.sh`로 마무리한다. Windows 실측(10-19):
+> 미억제 기동 = 슬롯 등록 → 정리 스크립트 = 슬롯·유령 삭제 · 설치본 등록 보존 → 억제 기동 = 등록 0.
+
 ---
 
 ## 6. 자주 막히는 곳 — 증상별

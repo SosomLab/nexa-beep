@@ -13472,7 +13472,8 @@ impl App {
         // 실패 = 상태바 고지(기능은 계속 — 설정값 유지로 다음 기회에 재시도).
         {
             use nbeep_plat::autostart::{self, BootSync};
-            let want_on = self.settings.get("app.autostart") != "off";
+            // 테스트 인스턴스(환경변수·cargo 산출 폴더)는 등록하지 않고 내 슬롯을 걷어낸다(10-19).
+            let want_on = self.settings.get("app.autostart") != "off" && !autostart::suppressed();
             let was_reg = self.settings.get("app.autostart_reg") == "on";
             match autostart::boot_sync(want_on, was_reg, autostart::is_registered()) {
                 BootSync::RespectRemoval => {

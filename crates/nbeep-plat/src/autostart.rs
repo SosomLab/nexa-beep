@@ -58,6 +58,50 @@ pub fn apply(enabled: bool) -> io::Result<()> {
     }
 }
 
+/// 테스트 억제 환경변수 — 값이 있고 `0`이 아니면 이 프로세스는 테스트 인스턴스다.
+pub const SUPPRESS_ENV: &str = "NEXA_NO_AUTOSTART";
+
+/// ★ **테스트 인스턴스 판정(10-19)** — 개발·에이전트가 띄우는 시험 인스턴스가 OS 로그인
+/// 항목을 남기지 않게 한다. 슬롯이 실행 파일 경로마다 따로라(08-29), 기본값 on인
+/// 시험 인스턴스는 폴더마다 Run 값·plist·.desktop을 하나씩 쌓았다(지운 폴더를 가리키는
+/// 유령 등록 포함). 판정 = ① `NEXA_NO_AUTOSTART` 환경변수(테스트 도구가 export) 또는
+/// ② cargo 산출 폴더에서 실행(`…/target/{debug,release,deps}/`·크로스 타깃 포함).
+/// 참이면 부팅 동기화가 **등록하지 않고 내 슬롯을 걷어낸다**(호출자 = apply_boot_settings).
+/// 설정 화면 토글은 막지 않는다 — 기능 실기를 위해 사용자가 직접 켤 수 있고, 그 등록은
+/// 테스트 종료 시 `--autostart-clear`(`clear_current`)가 지운다.
+pub fn suppressed() -> bool {
+    let env_on = std::env::var_os(SUPPRESS_ENV).is_some_and(|v| !v.is_empty() && v != "0");
+    env_on
+        || std::env::current_exe()
+            .map(|exe| is_cargo_output(&exe))
+            .unwrap_or(false)
+}
+
+/// 실행 파일이 cargo 산출 폴더 안인가(순수) — 부모가 `debug`·`release`·`deps`이고
+/// 그 위 어딘가에 `target` 폴더가 있다. 설치본(Programs·/usr/bin·.app)·포터블 압축
+/// 해제 폴더·3신원 폴더(`~/.nexa-beep-multi`)는 해당 없음(그쪽은 환경변수로 덮는다).
+pub fn is_cargo_output(exe: &Path) -> bool {
+    let Some(parent) = exe.parent() else {
+        return false;
+    };
+    let leaf = parent.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    matches!(leaf, "debug" | "release" | "deps")
+        && parent
+            .ancestors()
+            .skip(1)
+            .any(|a| a.file_name().is_some_and(|n| n == "target"))
+}
+
+/// 현재 실행 파일의 자동 실행 등록을 지운다(`--autostart-clear` · 테스트 종료 정리).
+/// 내 슬롯 + 내 경로를 가리키는 옛 고정 이름만 — 설치본 등 남의 슬롯은 건드리지 않는다.
+/// 반환 = 지우기 전에 등록이 실재했는가.
+pub fn clear_current() -> io::Result<bool> {
+    let exe = std::env::current_exe()?;
+    let was = os_registered(&exe);
+    unregister(&exe)?;
+    Ok(was)
+}
+
 /// 자동 실행 등록이 OS에 **실재하는지** 관측한다(설정값과 무관) — 사용자는
 /// 레지스트리 편집기·정리 도구로 앱 밖에서 등록을 지울 수 있고, 그 의사는
 /// 존중해야 한다(무조건 재등록 = 사용자와 앱의 줄다리기). 미지 타깃은 false.
@@ -652,6 +696,29 @@ mod tests {
             xml_escape("/usr/local/bin/nexa-beep"),
             "/usr/local/bin/nexa-beep"
         );
+    }
+
+    // 테스트 인스턴스 판정 — cargo 산출 폴더만 참(설치본·포터블·3신원 폴더는 거짓).
+    #[test]
+    fn cargo_output_detects_build_dirs_only() {
+        for p in [
+            "/home/u/nexa-beep/target/release/nexa-beep",
+            "/home/u/nexa-beep/target/debug/nexa-beep",
+            "/home/u/nexa-beep/target/debug/deps/nexa_beep-0123",
+            "/home/u/nexa-beep/target/x86_64-pc-windows-msvc/release/nexa-beep.exe",
+        ] {
+            assert!(is_cargo_output(Path::new(p)), "{p}");
+        }
+        for p in [
+            "/usr/bin/nexa-beep",
+            "/Applications/Nexa Beep.app/Contents/MacOS/nexa-beep",
+            "/home/u/.nexa-beep-multi/A/nexa-beep",
+            "/home/u/Downloads/release/nexa-beep", // target 조상 없음
+            "/home/u/target/nexa-beep",            // 부모가 빌드 프로필 아님
+            "nexa-beep",
+        ] {
+            assert!(!is_cargo_output(Path::new(p)), "{p}");
+        }
     }
 
     // 부팅 동기화 판정 — 외부 삭제 존중은 "등록해 둔 적 있음"일 때만.

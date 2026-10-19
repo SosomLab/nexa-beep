@@ -64,6 +64,18 @@ fn main() {
         app::print_whoami();
         return;
     }
+    // 테스트 종료 정리(10-19) — 이 실행 파일의 자동 실행 슬롯만 지운다(설치본 등 남의
+    // 슬롯 무관 · 신원·data/ 미생성). 종료 코드 0 = 지움/원래 없음 · 1 = OS 오류.
+    if args.iter().any(|a| a == "--autostart-clear") {
+        match nbeep_plat::autostart::clear_current() {
+            Ok(was) => println!("autostart = {}", if was { "removed" } else { "none" }),
+            Err(e) => {
+                eprintln!("autostart clear failed: {e}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
     // 라이선스 CLI(P4 · docs/50): status | request [이름 [이메일]] | install <파일> | remove | path.
     // 종료 코드 0 / 1(거부·실패) / 2(사용법) — 출력은 영문 고정 키(발급 메일 안내와 일치).
     if let Some(pos) = args.iter().position(|a| a == "--license") {
@@ -323,6 +335,8 @@ Nexa Beep {v} — 제로 컨피그 로컬 네트워크 메신저 (\"실행 = 참
 기타:
   --license <status|request [이름 [이메일]]|install <파일>|remove|path>
                         라이선스(도움말 ▸ 라이선스… 와 같은 동작 · 비상업 무료 = 파일 없이 Free)
+  --autostart-clear     이 실행 파일의 로그인 자동 실행 등록만 제거(테스트 종료 정리 ·
+                        NEXA_NO_AUTOSTART=1 이면 부팅 시 등록하지 않는다)
   -h, --help            이 도움말
   -V, --version         버전 출력",
         v = env!("CARGO_PKG_VERSION")

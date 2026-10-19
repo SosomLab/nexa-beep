@@ -18,6 +18,9 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 M=${BEEP_MULTI:-$HOME/.nexa-beep-multi}
 OUT=${1:-$M/s4-out}; mkdir -p "$OUT"; OUT=$(cd "$OUT" && pwd)
+# 테스트 인스턴스 = 로그인 자동 실행 미등록(10-19) · 끝나면(정상·중단 모두) 남은 테스트 등록 정리.
+export NEXA_NO_AUTOSTART=1
+trap 'BEEP_MULTI="$M" ./tools/autostart-clean.sh -q' EXIT
 EXE=""; case "${OSTYPE:-}" in msys* | cygwin*) EXE=".exe" ;; esac
 [ -x "target/release/nexa-beep$EXE" ] || { echo "❌ target/release/nexa-beep 없음 — cargo build --release -p nexa-beep -p nbeep-imgdec"; exit 1; }
 PASS="s4pass-aaaa-bbbb"
