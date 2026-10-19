@@ -6656,6 +6656,9 @@ impl App {
         // 발견 이벤트 없이도 바로 보이게(08-14 · 그전엔 첫 ANNOUNCE까지 빈 목록).
         let mut inv = Invalidations::default();
         self.refresh_rows(&mut inv);
+        // 제목 = 내 상태·미확인 수(10-20 설치본 실기 — 오프라인으로 저장된 채 기동하면 부팅
+        // `apply_presence`가 창보다 먼저 돌아 "— 오프라인"이 빠졌다 · Linux 트레이 복귀 재생성도 같은 길).
+        self.update_main_title();
         self.request_redraw(id);
     }
 
