@@ -320,6 +320,10 @@ impl Transport for LocalDirect {
     fn set_user_tag(&self, tag: Option<[u8; 16]>) {
         self.disc.set_user_tag(tag);
     }
+
+    fn set_quiet(&self, quiet: bool) {
+        self.disc.set_quiet(quiet);
+    }
 }
 
 /// hex 32자 → 16B(힌트 태그). 길이·문자 오류 = None.

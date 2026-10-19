@@ -109,4 +109,9 @@ pub trait Transport: Send + Sync {
     /// ★ 사용자 힌트 태그 발신(ADR-0015 §3-4) — `Some` = 광고마다 `UserHint` 패킷을 같이 낸다 ·
     /// `None` = 내지 않는다(사용자 기능 꺼짐·미인증). 기본 no-op(인메모리 등).
     fn set_user_tag(&self, _tag: Option<[u8; 16]>) {}
+
+    /// ★ 조용한 모드(내 상태 = 오프라인 · 10-19) — `true` = 발견 광고·응답·관측 중단(상대에게 보이지
+    /// 않고 상대도 보지 않는다) · `false` = 재개 + 즉시 재발견. 세션 수신 소켓은 열어 두되 수락은 호스트가
+    /// 거른다. 기본 no-op(인메모리 등).
+    fn set_quiet(&self, _quiet: bool) {}
 }

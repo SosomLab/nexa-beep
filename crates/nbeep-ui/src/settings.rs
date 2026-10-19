@@ -1535,6 +1535,19 @@ pub fn registry() -> &'static [Entry] {
         // 시스템 시작 시 자동 실행(08-20 사용자 확정 — **기본 on** · 끄기는 옵트아웃).
         // OS별 사용자 수준 등록(T0 무권한)은 nbeep-plat::autostart, 부팅 재동기화는
         // apply_boot_settings(포터블 경로 이동 대응 · DR-4).
+        // 내 상태(10-19 사용자 요청) — 오프라인 = 상대가 네트워크에 없는 것처럼(광고 중단·세션 종료·
+        // 연결 거절·서버 해제 · 발신은 대기 큐). 메뉴 ▸ 내 상태와 같은 키 · 소비처 = app apply_presence.
+        Entry {
+            cat: Msg::CatSystem,
+            sub: None,
+            label: Msg::Presence,
+            desc: Msg::PresenceDesc,
+            kind: SettingKind::Radio(&[
+                ("online", Msg::PresenceOnline),
+                ("offline", Msg::PresenceOffline),
+            ]),
+            key: "app.presence",
+        },
         Entry {
             cat: Msg::CatSystem,
             sub: None,

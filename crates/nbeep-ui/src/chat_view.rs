@@ -151,6 +151,9 @@ pub struct ChatLine {
     /// 줄 열쇠다(내 줄 = 나 · 수신 줄 = 상대 기기 · sender copy = 보낸 형제). `None` = 열쇠
     /// 없음(로컬 안내·구본 기록 — 동기 대상 아님).
     pub origin: Option<nbeep_core::PeerId>,
+    /// **실제 전송 시각**(10-19 사용자 요청 — 오프라인 대기분은 입력 시각과 전송 시각이 크게 다르다).
+    /// `at_ms`/`wall` = 입력(작성) 시각 그대로 · 여기 = 대기 큐가 비워진 순간. 즉시 전송된 줄은 `None`.
+    pub sent: Option<(u64, WallTime)>,
 }
 
 impl ChatLine {
@@ -169,7 +172,15 @@ impl ChatLine {
             queued: false,
             importance: 0,
             origin: None,
+            sent: None,
         }
+    }
+
+    /// 실제 전송 시각을 붙인다(대기분 확정 · 빌더 · 10-19).
+    #[must_use]
+    pub fn with_sent(mut self, sent: Option<(u64, WallTime)>) -> Self {
+        self.sent = sent;
+        self
     }
 
     /// 내 메시지에 발신 seq를 붙인다(ack 되찾기 키 · N-2 빌더).
@@ -237,6 +248,7 @@ impl ChatLine {
             queued: false,
             importance: 0,
             origin: None,
+            sent: None,
         }
     }
 }
@@ -785,11 +797,18 @@ impl ChatViewWidget {
     /// 오프라인 대기 해소(M4-6 · 08-20) — `at_ms`가 일치하는 첫 대기 줄을
     /// "전송됨"으로 풀고 발신 seq를 붙인다(이후 ack가 이 seq로 상태를 갱신).
     /// 반환 = 풀었는가(대응 줄이 없으면 false — 뷰가 닫혔다 열린 경우 무해).
-    pub fn resolve_queued(&mut self, at_ms: u64, seq: u64, inv: &mut Invalidations) -> bool {
+    pub fn resolve_queued(
+        &mut self,
+        at_ms: u64,
+        seq: u64,
+        sent: Option<(u64, WallTime)>,
+        inv: &mut Invalidations,
+    ) -> bool {
         for l in &mut self.lines {
             if l.mine && l.queued && l.at_ms == at_ms {
                 l.queued = false;
                 l.seq = seq;
+                l.sent = sent; // 입력 시각(at_ms)은 그대로 — 전송 시각을 따로 둔다(10-19)
                 inv.push(self.bounds);
                 return true;
             }
@@ -2250,7 +2269,19 @@ impl Widget for ChatViewWidget {
                 if self.shows_time(b.entry) {
                     ctx.select_font(FontSlot::Status, false);
                     let sh = ctx.text_height();
-                    let label = fmt_hm(l.wall, self.time_24h);
+                    // 대기분 확정 줄(10-19) = `입력 ▸ 전송`(분이 다를 때만 — 같은 분이면 한 시각).
+                    let label = match l.sent {
+                        Some((_, sw))
+                            if fmt_hm(sw, self.time_24h) != fmt_hm(l.wall, self.time_24h) =>
+                        {
+                            format!(
+                                "{} ▸ {}",
+                                fmt_hm(l.wall, self.time_24h),
+                                fmt_hm(sw, self.time_24h)
+                            )
+                        }
+                        _ => fmt_hm(l.wall, self.time_24h),
+                    };
                     let lw = ctx.text_width(&label);
                     let lx = if l.mine {
                         bub.x - self.s(6) - lw
@@ -2750,12 +2781,15 @@ mod tests {
             ChatLine::text(true, t, 1000, WallTime::default()).with_queued(true),
             &mut inv,
         );
-        assert!(w.resolve_queued(1000, 7, &mut inv));
+        let sent = Some((5000, WallTime::default()));
+        assert!(w.resolve_queued(1000, 7, sent, &mut inv));
         let l = w.lines.last().expect("줄");
         assert!(!l.queued);
         assert_eq!(l.seq, 7);
+        assert_eq!(l.at_ms, 1000, "입력 시각은 그대로");
+        assert_eq!(l.sent, sent, "전송 시각은 따로(10-19)");
         assert!(
-            !w.resolve_queued(9999, 8, &mut inv),
+            !w.resolve_queued(9999, 8, None, &mut inv),
             "대응 없는 시각 = false"
         );
     }

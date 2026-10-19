@@ -108,13 +108,30 @@ use nbeep_ui::{
 
 // 화면 내보내기(10-10) — `present::Presenter`(softbuffer ↔ macOS IOSurface · docs/51).
 
-/// 메뉴바 구성(i18n 현재 언어 기준) — 초기화·언어 전환 시 재호출.
-fn build_menus() -> Vec<MenuDef> {
+/// 메뉴바 구성(i18n 현재 언어 기준) — 초기화·언어 전환·내 상태 전환 시 재호출.
+/// `offline` = 현재 내 상태(10-19) — 하위 메뉴에서 현재 값은 강조(Emph), 다른 값은 일반 항목.
+fn build_menus(offline: bool) -> Vec<MenuDef> {
     use nbeep_core::{t, Msg};
+    let presence = |id: &'static str, label: &str, cur: bool| {
+        if cur {
+            MenuEntry::Emph(ComboItem::new(id, format!("● {label}")))
+        } else {
+            MenuEntry::Item(ComboItem::new(id, format!("○ {label}")))
+        }
+    };
     vec![
         MenuDef::new(
             t(Msg::MenuLabel),
             vec![
+                // 내 상태(10-19 사용자 요청) — 설정 `app.presence`와 같은 값.
+                MenuEntry::Sub(
+                    ComboItem::new("presence", t(Msg::MenuPresence)),
+                    vec![
+                        presence("presence_online", t(Msg::PresenceOnline), !offline),
+                        presence("presence_offline", t(Msg::PresenceOffline), offline),
+                    ],
+                ),
+                MenuEntry::Separator,
                 MenuEntry::Item(ComboItem::new("settings", t(Msg::SettingsTitle))),
                 MenuEntry::Item(ComboItem::new("quarantine", t(Msg::QuarantineTitle))),
                 // 대화함(M3-23 · 08-20 사용자 요청) — take_picked 팔은 이미 있었고
@@ -2106,12 +2123,16 @@ fn encode_history(lines: &[ChatLine]) -> Vec<u8> {
                 //   from ‖ text — 재시작 뒤에도 `(origin, seq)` dedup이 서야 형제 동기가 중복을
                 //   안 만든다. 열쇠 없는 줄(안내·구본)은 종전 tag 1/3 그대로.
                 if let Some((origin, seq)) = l.sync_key() {
-                    out.push(4u8);
+                    // tag 6(10-19) = tag 4 + 전송 시각(대기분 확정 줄만 — 구판은 여기서 멈춘다 · 전방 확장).
+                    out.push(if l.sent.is_some() { 6u8 } else { 4u8 });
                     out.push(u8::from(l.mine));
                     out.extend_from_slice(&l.at_ms.to_le_bytes());
                     out.extend_from_slice(origin.as_bytes());
                     out.extend_from_slice(&seq.to_le_bytes());
                     out.push(l.importance.min(2));
+                    if let Some((sent_ms, _)) = l.sent {
+                        out.extend_from_slice(&sent_ms.to_le_bytes());
+                    }
                     put_str(&mut out, l.from.as_deref().unwrap_or(""));
                     put_str(&mut out, t.as_str());
                     continue;
@@ -2171,9 +2192,10 @@ fn decode_history(bytes: &[u8]) -> Vec<ChatLine> {
         let mine = bytes[i + 1] != 0;
         let at_ms = u64::from_le_bytes(bytes[i + 2..i + 10].try_into().unwrap_or([0; 8]));
         match tag {
-            4 => {
-                // 열쇠 동반 텍스트(S4 · 10-10) — origin ‖ seq ‖ 등급 ‖ from ‖ text.
-                if i + 51 > bytes.len() {
+            4 | 6 => {
+                // 열쇠 동반 텍스트(S4 · 10-10) — origin ‖ seq ‖ 등급 ‖ [tag 6: sent_ms(8)] ‖ from ‖ text.
+                let head = if tag == 6 { 59 } else { 51 };
+                if i + head > bytes.len() {
                     break;
                 }
                 let origin = PeerId::from_bytes(
@@ -2181,7 +2203,11 @@ fn decode_history(bytes: &[u8]) -> Vec<ChatLine> {
                 );
                 let seq = u64::from_le_bytes(bytes[i + 42..i + 50].try_into().unwrap_or([0; 8]));
                 let importance = bytes[i + 50];
-                let Some((from, p1)) = read_str(bytes, i + 51) else {
+                let sent = (tag == 6).then(|| {
+                    let ms = u64::from_le_bytes(bytes[i + 51..i + 59].try_into().unwrap_or([0; 8]));
+                    (ms, wall_from_ms(ms))
+                });
+                let Some((from, p1)) = read_str(bytes, i + head) else {
                     break;
                 };
                 let Some((text, next)) = read_str(bytes, p1) else {
@@ -2195,7 +2221,8 @@ fn decode_history(bytes: &[u8]) -> Vec<ChatLine> {
                 )
                 .with_importance(importance)
                 .with_seq(seq)
-                .with_origin(origin);
+                .with_origin(origin)
+                .with_sent(sent);
                 if !from.is_empty() {
                     l = l.with_from(nbeep_core::sanitize_message(&from).as_str());
                 }
@@ -2268,6 +2295,7 @@ fn decode_history(bytes: &[u8]) -> Vec<ChatLine> {
                     queued: false,
                     importance: 0,
                     origin: None,
+                    sent: None,
                 });
                 i = next;
             }
@@ -5762,6 +5790,67 @@ impl App {
         }
     }
 
+    /// 내 상태 = 오프라인인가(설정 `app.presence` · 10-19).
+    fn is_offline(&self) -> bool {
+        self.settings.get("app.presence") == "offline"
+    }
+
+    /// ★ 내 상태 적용(10-19 사용자 요청 — "상태를 Offline으로 하면 상대방을 네트워크에 없는 것처럼").
+    /// 오프라인 = ① 발견 조용히(광고·응답·관측 중단 + GOODBYE) ② 발견 표가 비워진다(행은 핀·기록·수동
+    /// 주소가 있는 상대만 남고 전부 오프라인 점) ③ 살아 있는 세션 전부 종료(스레드는 대피 = Closed 경로)
+    /// ④ 재연결 스케줄 비움·새 연결 거절(start_connect·Inbound 게이트) ⑤ 서버 해제(server_tick 게이트).
+    /// 발신은 세션이 없으니 **오프라인 대기 큐**로 간다(M4-6). 온라인 복귀 = 발견 재개(즉시 HELLO) ·
+    /// 서버 재접속(다음 틱) · 대기분 있는 상대는 재연결 후보로.
+    fn apply_presence(&mut self, announce: bool) {
+        let offline = self.is_offline();
+        self.transport.set_quiet(offline);
+        self.menu.set_menus(build_menus(offline));
+        dlog!(self, DL::App, DV::Decide, "presence", |r| r
+            .arg("offline", offline)
+            .arg("sessions", self.conversations.len())
+            .arg("pending_peers", self.pending_direct.len())
+            .ok(if offline {
+                "quiet discovery · close sessions · refuse connects · detach server"
+            } else {
+                "resume discovery · reattach server · reseed pending"
+            }));
+        if offline {
+            // ② 발견 표 비우기 — 상대는 "네트워크에 없다".
+            for e in self.table.list() {
+                self.table.forget(e.peer);
+            }
+            // ③ 세션 종료 — Closed 경로가 스레드 대피·정리를 맡는다(채널 drop = 액터 종료).
+            let peers: Vec<PeerId> = self.conversations.keys().copied().collect();
+            for p in peers {
+                let _ = self.proxy.send_event(AppEvent::Closed { peer: p });
+            }
+            // ④ 재연결 스케줄 비움(펌프가 더 걸지 않게 · start_connect도 게이트).
+            self.reconnect.clear();
+            self.closed_peers.clear();
+            // ⑤ 서버 해제 — 다음 server_tick이 게이트에서 떼어낸다(즉시 당긴다).
+            self.relay_check_at = 0;
+            if announce {
+                self.set_status(nbeep_core::t(nbeep_core::Msg::StPresenceOffline));
+            }
+        } else {
+            self.relay_check_at = 0; // 서버 재접속은 다음 틱(검증 게이트 그대로)
+                                     // 대기분 있는 상대 = 재연결 후보(발견되면 즉시 · M4-6 문법).
+            let pend: Vec<PeerId> = self.pending_direct.keys().copied().collect();
+            for p in pend {
+                self.reconnect.entry(p).or_insert((0, 0));
+            }
+            if announce {
+                self.set_status(nbeep_core::t(nbeep_core::Msg::StPresenceOnline));
+            }
+        }
+        let mut inv = Invalidations::default();
+        self.refresh_rows(&mut inv);
+        self.refresh_toolbar_server();
+        if let Some(mid) = self.main_id {
+            self.request_redraw(mid);
+        }
+    }
+
     /// 개발자 상세 로그 마스크 갱신(docs/52) — 부팅·`log.*` 변경에서 부른다. 우선순위 =
     /// `NEXA_DEVLOG`(환경변수 · 층 문법 · `1`/`*` = 전부) > 설정 `log.dev_mode`+`log.dev_layers`(빈 값 = 전부).
     /// 설정 경로는 `log.enabled`가 꺼져 있으면 싱크가 없으니 마스크도 0(비용 0 보장).
@@ -6037,6 +6126,11 @@ impl App {
     /// 발견 이벤트를 PeerTable에 접고 목록을 다시 만든다.
     fn poll_discovery(&mut self) {
         use nbeep_net::DiscoveryEvent;
+        if self.is_offline() {
+            // 내 상태 = 오프라인(10-19) — 전송이 관측을 끊지만(quiet) 남은 것도 버린다.
+            while self.discovery.try_recv().is_ok() {}
+            return;
+        }
         let mut changed = false;
         let now = nbeep_core::MonoInstant(
             u64::try_from(self.started.elapsed().as_nanos()).unwrap_or(u64::MAX),
@@ -6075,6 +6169,17 @@ impl App {
                         //   중 표식·기존 백오프 불침투(M4-6과 같은 문법).
                         if !self.conversations.contains_key(&hint.peer) {
                             self.seed_reconnect(hint.peer);
+                            // ★ 대기분이 있는 상대가 **나타난 순간**(observe 변화 = 등장·개명)은
+                            //   백오프를 기다리지 않는다(10-19 사용자 — "온라인인 걸 아는 그 순간") —
+                            //   진행 중 표식(u64::MAX)만 존중. steady 비컨은 아래 or_insert 그대로
+                            //   (1.5초마다 재시도 폭주 방지).
+                            if self.pending_direct.contains_key(&hint.peer) {
+                                if let Some(e) = self.reconnect.get_mut(&hint.peer) {
+                                    if e.1 != u64::MAX {
+                                        *e = (0, 0);
+                                    }
+                                }
+                            }
                         }
                     }
                     // ★ 오프라인 대기 상대가 나타났다(M4-6) — 즉시 연결 후보로.
@@ -6842,6 +6947,14 @@ impl App {
             return;
         }
         self.relay_check_at = now + 2_000;
+        if self.is_offline() {
+            // 내 상태 = 오프라인(10-19) — 서버도 떼어낸다(roster·랑데부 전부 없음).
+            if self.relay.take().is_some() {
+                self.set_status(nbeep_core::t(nbeep_core::Msg::StServerDetached));
+                self.refresh_toolbar_server();
+            }
+            return;
+        }
         let want = server_target(
             self.settings.get("net.server.mode"),
             self.settings.get("net.server.address"),
@@ -6877,6 +6990,15 @@ impl App {
                         nbeep_relay::RosterEvent::Up(p, card) => {
                             if p == my {
                                 continue;
+                            }
+                            // ★ 대기분 있는 상대가 서버에 떴다(10-19) — 즉시 재연결 후보(서버 사다리).
+                            if self.pending_direct.contains_key(&p)
+                                && !self.conversations.contains_key(&p)
+                            {
+                                let e = self.reconnect.entry(p).or_insert((0, 0));
+                                if e.1 != u64::MAX {
+                                    *e = (0, 0);
+                                }
                             }
                             // 공개 카드(08-22) — 이름은 표시 이름 정제(DisplayName)
                             // 통과분만, 이메일·소개는 제어 문자 제거(서버 중계 =
@@ -9422,6 +9544,18 @@ impl App {
     }
 
     fn start_connect(&mut self, peer: PeerId, auto: bool) {
+        if self.is_offline() {
+            // 내 상태 = 오프라인(10-19) — 연결하지 않는다(발신은 대기 큐 · 수동 클릭은 안내).
+            dlog!(self, DL::Conn, DV::Decide, "start_connect", |r| r
+                .arg("peer", peer.short())
+                .arg("auto", auto)
+                .rule("presence", "offline")
+                .fail("offline mode — no connect"));
+            if !auto {
+                self.set_status(nbeep_core::t(nbeep_core::Msg::StOfflineNoConnect));
+            }
+            return;
+        }
         if !self.connecting.begin(peer) {
             if !auto {
                 self.set_status(nbeep_core::tf(
@@ -13236,6 +13370,7 @@ impl App {
         }
         let mut sent = 0usize;
         let mut inv = Invalidations::default();
+        let sent_at = now_stamp(); // 실제 전송 시각(10-19) — 입력 시각(m.at_ms)과 따로 보관
         for m in &q {
             let seq = self.issue_seq();
             let msg = nbeep_core::ChatMessage {
@@ -13263,6 +13398,7 @@ impl App {
             {
                 l.queued = false;
                 l.seq = seq;
+                l.sent = Some(sent_at);
             } else {
                 conv.lines.push(
                     ChatLine::text(
@@ -13271,11 +13407,12 @@ impl App {
                         m.at_ms,
                         wall_from_ms(m.at_ms),
                     )
-                    .with_seq(seq),
+                    .with_seq(seq)
+                    .with_sent(Some(sent_at)),
                 );
             }
             if let Some(chat) = self.chats.get_mut(&self.view_key(peer)) {
-                chat.resolve_queued(m.at_ms, seq, &mut inv);
+                chat.resolve_queued(m.at_ms, seq, Some(sent_at), &mut inv);
             }
             self.send_sender_copies(peer, &msg); // S3 — 실제로 나간 순간에 형제에게도
             self.ledger.note_sent(peer);
@@ -13976,7 +14113,7 @@ impl App {
                     // 현재 언어 전환 — 전 위젯이 다음 렌더에서 새 언어로 그린다.
                     nbeep_core::set_lang(resolve_lang(&value));
                     // 메뉴 라벨은 생성 시 고정이라 재구성.
-                    self.menu.set_menus(build_menus());
+                    self.menu.set_menus(build_menus(self.is_offline()));
                     // 정렬 드롭다운 라벨도 생성 시 고정 — 값 유지한 채 재구성(08-15).
                     let keep = self.sort_drop.value().to_string();
                     self.sort_drop = nbeep_ui::IconDropdown::new(Self::sort_drop_items(), &keep);
@@ -14280,6 +14417,10 @@ impl App {
                 "log.enabled" | "log.retain_days" | "log.max_total_mb" => {
                     self.refresh_statuslog();
                     self.refresh_devlog(); // 싱크 유무가 마스크를 정한다(docs/52)
+                    continue;
+                }
+                "app.presence" => {
+                    self.apply_presence(true);
                     continue;
                 }
                 "log.dev_mode" | "log.dev_layers" => {
@@ -17381,6 +17522,12 @@ impl App {
                     if let Some(a) = self.menu.take_picked() {
                         match a.as_str() {
                             "settings" => self.open_settings(el),
+                            "presence_online" => {
+                                self.apply_settings(vec![("app.presence", "online".into())]);
+                            }
+                            "presence_offline" => {
+                                self.apply_settings(vec![("app.presence", "offline".into())]);
+                            }
                             "quarantine" => self.open_quarantine(el),
                             "convbox" => self.open_convbox(el),
                             // 공지(④) — 본문 입력 프롬프트(발견된 전체 · Notice).
@@ -19990,6 +20137,14 @@ impl ApplicationHandler<AppEvent> for App {
                     via_psk,
                 } = *session;
                 let peer = session.peer();
+                if self.is_offline() {
+                    // 내 상태 = 오프라인(10-19) — 인바운드도 받지 않는다(drop = 상대에겐 끊김).
+                    dlog!(self, DL::Sess, DV::Decide, "inbound", |r| r
+                        .arg("peer", peer.short())
+                        .rule("presence", "offline")
+                        .fail("offline mode — refused"));
+                    return;
+                }
                 self.note_sibling(peer, via_psk);
                 if self.conversations.contains_key(&peer) {
                     // 이미 이 상대와 대화 중(아웃바운드 세션 존재) — 중복 인바운드 무시. 단 psk로
@@ -22314,7 +22469,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         recv_rate: nbeep_core::RateLimit::Auto,
         send_meter: nbeep_core::RateMeter::default(),
         recv_meter: nbeep_core::RateMeter::default(),
-        menu: MenuBar::new(build_menus()),
+        menu: MenuBar::new(build_menus(false)), // 내 상태는 부팅 apply_presence가 다시 그린다
         toolbar: Toolbar::new(vec![
             ToolItem::new(
                 "refresh",
@@ -22489,6 +22644,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
     }
     app.refresh_statuslog(); // 상태 로그(M3-22 — log.enabled면 여기서 기동)
     app.refresh_devlog(); // 개발자 상세 로그 마스크(docs/52 — NEXA_DEVLOG > 설정)
+    app.apply_presence(false); // 내 상태(10-19) — 오프라인으로 저장돼 있으면 부팅부터 조용히
     app.refresh_netmon(); // 네트워크 점검(08-21 — netmon.enabled면 여기서 기동)
     event_loop.run_app(&mut app).unwrap();
 }
@@ -23047,12 +23203,34 @@ mod tests {
         assert_eq!(back[0].sync_key(), None);
         assert_eq!(back[1].sync_key(), Some((me, 1_760_000_000_005)));
         assert!(back[1].mine && back[1].importance == 2 && back[1].from.is_none());
+        assert!(
+            back[1].sent.is_none(),
+            "즉시 전송 줄 = 전송 시각 없음(tag 4)"
+        );
         assert_eq!(back[2].sync_key(), Some((them, 42)));
         assert_eq!(back[2].from.as_deref(), Some("상대"));
         assert_eq!(back[2].at_ms, 2000);
         // 구판(tag 4 미지) 흉내 — 첫 tag 4에서 멈춰 앞 줄만 남는다(손상 아님 · fail-soft).
         let cut = enc.iter().position(|&b| b == 4).unwrap();
         assert_eq!(decode_history(&enc[..cut]).len(), 1);
+        // ★ tag 6(10-19) — 대기분 확정 줄 = 입력 시각 + 전송 시각 따로 왕복.
+        let sent = (9_000u64, wall_from_ms(9_000));
+        let queued_then_sent =
+            vec![
+                ChatLine::text(true, nbeep_core::sanitize_message("나중에 간 말"), 3000, w)
+                    .with_seq(77)
+                    .with_origin(me)
+                    .with_sent(Some(sent)),
+            ];
+        let enc6 = encode_history(&queued_then_sent);
+        assert_eq!(enc6[0], 6);
+        let back6 = decode_history(&enc6);
+        assert_eq!(back6.len(), 1);
+        assert_eq!(back6[0].at_ms, 3000, "입력 시각 보존");
+        assert_eq!(back6[0].sent, Some(sent), "전송 시각 보존");
+        assert_eq!(back6[0].sync_key(), Some((me, 77)));
+        // 길이 부족(머리 59B 미만) = 거기서 멈춤.
+        assert!(decode_history(&enc6[..40]).is_empty());
     }
 
     /// S4 — 부팅 시퀀서 = max(저장값+1, 현재 ms) · 매핑 표 읽기 = 이름과 일치할 때만.

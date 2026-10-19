@@ -55,6 +55,8 @@ pub struct Observation {
 pub struct UdpDiscovery {
     events: std::sync::Mutex<Option<Receiver<Observation>>>,
     stop: Arc<AtomicBool>,
+    /// ★ 조용한 모드(내 상태 = 오프라인 · 10-19) — 광고·HELLO 응답·관측 전부 멈춤(소켓·스레드는 유지).
+    quiet: Arc<AtomicBool>,
     send_sock: UdpSocket,
     /// 내 광고 원본(seq는 전송 시 갱신) — 애넌서와 공유. 이름 변경(M1-10 즉시
     /// 재공지)이 여기를 갱신하면 다음 주기부터 새 이름으로 나간다.
@@ -130,6 +132,7 @@ impl UdpDiscovery {
             name,
         }));
         let stop = Arc::new(AtomicBool::new(false));
+        let quiet = Arc::new(AtomicBool::new(false));
         let seq = Arc::new(AtomicU32::new(0));
         let user_tag: Arc<std::sync::Mutex<Option<[u8; 16]>>> =
             Arc::new(std::sync::Mutex::new(None));
@@ -143,11 +146,18 @@ impl UdpDiscovery {
                 .try_clone()
                 .ok()
                 .map(|s| (s, Arc::clone(&template), Arc::clone(&seq)));
-            Self::spawn_receiver_with_reply(recv, me, tx.clone(), Arc::clone(&stop), reply);
+            Self::spawn_receiver_with_reply(
+                recv,
+                me,
+                tx.clone(),
+                Arc::clone(&stop),
+                reply,
+                Arc::clone(&quiet),
+            );
         }
         let v6_send = if let Some((v6_recv, v6_send)) = v6 {
             if let Ok(rx) = v6_recv.try_clone() {
-                Self::spawn_receiver(rx, me, tx, Arc::clone(&stop));
+                Self::spawn_receiver(rx, me, tx, Arc::clone(&stop), Arc::clone(&quiet));
             }
             v6_send.try_clone().ok()
         } else {
@@ -161,11 +171,13 @@ impl UdpDiscovery {
             Arc::clone(&stop),
             Arc::clone(&seq),
             Arc::clone(&user_tag),
+            Arc::clone(&quiet),
         );
 
         Ok(Self {
             events: std::sync::Mutex::new(Some(events)),
             stop,
+            quiet,
             send_sock,
             template,
             seq,
@@ -284,6 +296,7 @@ impl UdpDiscovery {
         crate::netmon::on_disco_tx(sent);
     }
 
+    #[allow(clippy::too_many_arguments)] // quiet 플래그 추가(10-19) — 스레드 인자 묶음
     fn spawn_announcer(
         sock: UdpSocket,
         v6: Option<UdpSocket>,
@@ -292,6 +305,7 @@ impl UdpDiscovery {
         stop: Arc<AtomicBool>,
         seq: Arc<AtomicU32>,
         user_tag: Arc<std::sync::Mutex<Option<[u8; 16]>>>,
+        quiet: Arc<AtomicBool>,
     ) {
         std::thread::spawn(move || {
             // 스냅샷 발신 — 잠금은 복사 순간만(소켓 I/O 중 잠금 유지 금지).
@@ -319,6 +333,9 @@ impl UdpDiscovery {
                 waited += step;
                 if waited >= Duration::from_millis(u64::from(announce_ms)) {
                     waited = Duration::ZERO;
+                    if quiet.load(Ordering::Relaxed) {
+                        continue; // 조용한 모드(오프라인 상태) — 이번 주기 광고 전부 생략
+                    }
                     Self::send_all(&sock, v6.as_ref(), &snapshot(PacketKind::Announce).encode());
                     // ★ 사용자 힌트(ADR-0015 §3-4) — 태그가 있으면 광고마다 한 장 더(≈70B).
                     let tag = match user_tag.lock() {
@@ -406,8 +423,40 @@ impl UdpDiscovery {
         Self::send_all(&self.send_sock, None, &announce.encode());
     }
 
-    fn spawn_receiver(sock: UdpSocket, me: PeerId, tx: Sender<Observation>, stop: Arc<AtomicBool>) {
-        Self::spawn_receiver_with_reply(sock, me, tx, stop, None);
+    /// ★ 조용한 모드(내 상태 = 오프라인 · 10-19): `true` = 주기 광고·HELLO 응답·관측을 전부 멈추고
+    /// GOODBYE 2회(상대 목록에서 즉시 이탈 · FR-D-8 문법) · `false` = 즉시 HELLO(재발견 당김 · [`Self::kick`]).
+    /// 소켓·스레드는 유지한다(포트 점유 그대로 — 되돌릴 때 재바인딩 실패 없음).
+    pub fn set_quiet(&self, quiet: bool) {
+        let was = self.quiet.swap(quiet, Ordering::Relaxed);
+        if quiet && !was {
+            self.send_goodbye();
+        } else if was && !quiet {
+            self.kick();
+        }
+    }
+
+    /// 명시적 이탈(FR-D-8) — 유실 대비 2회(수신 중복은 무해). Drop·조용한 모드 진입이 공유.
+    fn send_goodbye(&self) {
+        let mut bye = match self.template.lock() {
+            Ok(g) => g.clone(),
+            Err(e) => e.into_inner().clone(),
+        };
+        bye.kind = PacketKind::Goodbye;
+        for _ in 0..2 {
+            bye.seq = self.seq.fetch_add(1, Ordering::Relaxed);
+            // v4로만(v6 send 핸들은 애넌서 스레드 소유 — GOODBYE는 v4로 충분).
+            Self::send_all(&self.send_sock, None, &bye.encode());
+        }
+    }
+
+    fn spawn_receiver(
+        sock: UdpSocket,
+        me: PeerId,
+        tx: Sender<Observation>,
+        stop: Arc<AtomicBool>,
+        quiet: Arc<AtomicBool>,
+    ) {
+        Self::spawn_receiver_with_reply(sock, me, tx, stop, None, quiet);
     }
 
     /// 수신 스레드 — `reply`가 있으면 **남의 HELLO에 유니캐스트 Announce로 응답**한다
@@ -421,6 +470,7 @@ impl UdpDiscovery {
         tx: Sender<Observation>,
         stop: Arc<AtomicBool>,
         reply: Option<(UdpSocket, Arc<std::sync::Mutex<Packet>>, Arc<AtomicU32>)>,
+        quiet: Arc<AtomicBool>,
     ) {
         std::thread::spawn(move || {
             let mut buf = [0u8; crate::wire::MAX_PACKET];
@@ -431,6 +481,9 @@ impl UdpDiscovery {
                 match sock.recv_from(&mut buf) {
                     Ok((n, from)) => {
                         crate::netmon::on_disco_rx();
+                        if quiet.load(Ordering::Relaxed) {
+                            continue; // 조용한 모드 — HELLO 응답도 관측도 없다(상대는 없는 것처럼)
+                        }
                         if let Decoded::Packet(packet) = Packet::decode(&buf[..n]) {
                             // 자기 패킷 필터 — 주소가 아니라 키 기준(docs/08 §5).
                             if packet.peer == me {
@@ -485,17 +538,7 @@ fn s4_targets(ifs: &[crate::netif::NetIf], neighbors: Vec<Ipv4Addr>, cap: usize)
 impl Drop for UdpDiscovery {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
-        // 명시적 이탈(FR-D-8) — 유실 대비 2회(수신 중복은 무해).
-        let mut bye = match self.template.lock() {
-            Ok(g) => g.clone(),
-            Err(e) => e.into_inner().clone(),
-        };
-        bye.kind = PacketKind::Goodbye;
-        for _ in 0..2 {
-            bye.seq = self.seq.fetch_add(1, Ordering::Relaxed);
-            // Drop 시엔 v4로만(v6 send 핸들은 애넌서 스레드 소유 — GOODBYE는 v4로 충분).
-            Self::send_all(&self.send_sock, None, &bye.encode());
-        }
+        self.send_goodbye();
     }
 }
 

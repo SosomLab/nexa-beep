@@ -282,6 +282,15 @@ pub enum Msg {
     SubNetmon,
     /// 고급 › 신뢰 판정(10-19).
     SubTrust,
+    /// 내 상태(온라인/오프라인 · 10-19 사용자 요청) — 설정·메뉴·상태바.
+    Presence,
+    PresenceDesc,
+    PresenceOnline,
+    PresenceOffline,
+    MenuPresence,
+    StPresenceOffline,
+    StPresenceOnline,
+    StOfflineNoConnect,
     /// 오프라인 시 마지막 서명 사용(10-19 사용자 확정 — 기본 on).
     UserOfflineTrust,
     UserOfflineTrustDesc,
@@ -2540,6 +2549,19 @@ impl Msg {
             Msg::LogCapDefault => ["Default (20)", "기본(20MB)", "默认(20MB)", "既定(20MB)"],
             Msg::SubNetmon => ["Network check", "네트워크 점검", "网络检查", "ネットワーク点検"],
             Msg::SubTrust => ["Trust judgement", "신뢰 판정", "信任判定", "信頼判定"],
+            Msg::Presence => ["My status", "내 상태", "我的状态", "自分の状態"],
+            Msg::PresenceDesc => [
+                "Offline = act as if nobody is on the network: stop announcing, close sessions, refuse connections, leave the server. Messages you send wait and go out when you are online again and the peer appears.",
+                "오프라인 = 상대가 네트워크에 없는 것처럼 동작합니다: 광고 중단 · 세션 종료 · 연결 거절 · 서버 해제. 보낸 메시지는 대기했다가 온라인으로 돌아와 상대가 나타나면 전달됩니다.",
+                "离线 = 当作网络上没有任何人：停止广播、关闭会话、拒绝连接、断开服务器。发送的消息先等待，恢复在线且对方出现后送达。",
+                "オフライン = ネットワークに誰もいないかのように動作: 告知停止・セッション終了・接続拒否・サーバー解除。送信したメッセージは待機し、オンラインに戻って相手が現れたら届きます。",
+            ],
+            Msg::PresenceOnline => ["Online (default)", "온라인(기본)", "在线(默认)", "オンライン(既定)"],
+            Msg::PresenceOffline => ["Offline", "오프라인", "离线", "オフライン"],
+            Msg::MenuPresence => ["My status", "내 상태", "我的状态", "自分の状態"],
+            Msg::StPresenceOffline => ["Offline mode — invisible to peers, no connections · messages you send wait", "오프라인 모드 — 상대에게 보이지 않고 연결하지 않습니다 · 보낸 메시지는 대기", "离线模式 — 对方看不到我，也不连接 · 发送的消息等待", "オフラインモード — 相手に見えず接続もしない · 送信は待機"],
+            Msg::StPresenceOnline => ["Online — discovery and connections resumed", "온라인 — 발견·연결 재개", "在线 — 发现与连接已恢复", "オンライン — 発見・接続を再開"],
+            Msg::StOfflineNoConnect => ["Offline mode — not connecting (change My status to go online)", "오프라인 모드 — 연결하지 않습니다(내 상태를 온라인으로)", "离线模式 — 不连接（将我的状态改为在线）", "オフラインモード — 接続しません（自分の状態をオンラインに）"],
             Msg::UserOfflineTrust => ["Use last signature when offline", "오프라인 시 마지막 서명 사용", "离线时使用最后签名", "オフライン時は最後の署名を使う"],
             Msg::UserOfflineTrustDesc => [
                 "While a device of mine has no session, treat it as my device based on the last signed device list (badge, no fingerprint prompt). Off = without a session it is not recognized as my device (pinned level only — the fingerprint prompt appears).",
