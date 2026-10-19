@@ -7,7 +7,7 @@
 
 ## 2026-10-20
 
-- **(mac · main) ★CRASH-1 원인 확정·수정**(`ca4c70b` — 패닉 훅 crash.log 첫 수확 `app.rs:18108 unwrap() on Err(())` · IOSurface 뒷단의 "프레임 건너뜀"을 호스트 `buffer_mut().unwrap()`이 abort로 바꿈 · v0.4.0부터 잠복 · 원격 데스크톱·화면 공유 때 발현 · 오프라인 전환 무관) · 오프라인 부팅 제목 누락 수정(`0935070`) · CI 39287500320 ✓. [journal mac 3차](journal/2026-10-20.md)
+- **(mac · main) ★CRASH-1 원인 확정·수정**(`03987c5` — 패닉 훅 crash.log 첫 수확 `app.rs:18108 unwrap() on Err(())` · IOSurface 뒷단의 "프레임 건너뜀"을 호스트 `buffer_mut().unwrap()`이 abort로 바꿈 · v0.4.0부터 잠복 · 원격 데스크톱·화면 공유 때 발현 · 오프라인 전환 무관) · 오프라인 부팅 제목 누락 수정(`0935070`) · CI 39287500320 ✓. [journal mac 3차](journal/2026-10-20.md)
 - **(mac · main) ★v0.6.0 공개** — release run 39277257849 = package·publish·linux-repo·homebrew·winget ✓ · 자산 15 · choco ✗ = push.chocolatey.org 503 → 재dispatch run 39287186383(결과 대기). [journal mac 2차](journal/2026-10-20.md)
 - **(mac · main) ★PERF-8 ✅ 설정 창 프레임 28.8→10.7ms**(`f2f0a39` + nexa-ui `ca2b0dd` — 설명 워드랩 캐시 · 잠긴 카드 가림막 행 단위·정수 블렌드 10→0.7ms · 호스트 중복 채움 생략). [journal mac 2차](journal/2026-10-20.md)
 - **(mac · main) ★오프라인 한눈 표시**(`db46b2f` — 트레이 흐림+회색 점·툴팁 · 창 제목 "— 오프라인" · `NEXA_SCRIPT presence=`) · **패닉 훅 `data/crash.log`**(`c3c425e` — 설치본 0.6.0 mac 오프라인 전환 직후 abort · 재현 실패 · CRASH-1). [journal mac 2차](journal/2026-10-20.md)
