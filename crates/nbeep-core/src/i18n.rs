@@ -1065,6 +1065,8 @@ pub enum Msg {
     /// 대화 열림 상태바(08-18 i18n).
     ChatOpenedProfile, // `{0}` = 연락처 목록
     ChatOpenedSession,
+    /// 오프라인 상대의 대화 열림(10-19 — 기록·대기 발신은 세션 없이도 쓴다).
+    ChatOpenedOffline,
     StItemImagePresent,
     /// 명령(/help 등) 안내·응답(08-18 i18n).
     CmdHelpHeader,
@@ -1922,6 +1924,7 @@ impl Msg {
             Msg::AboutHomepage => ["Nexa Beep homepage", "Nexa Beep 홈페이지", "Nexa Beep 主页", "Nexa Beep ホームページ"],
             Msg::ChatOpenedProfile => ["Chat opened — profile: {}", "대화 열림 — 프로필: {}", "已打开对话 — 资料: {}", "会話を開いた — プロフィール: {}"],
             Msg::ChatOpenedSession => ["Chat opened — session active", "대화 열림 — 세션 유지 중", "已打开对话 — 会话保持中", "会話を開いた — セッション維持中"],
+            Msg::ChatOpenedOffline => ["Chat opened — not connected · history shown · messages you send are delivered when the contact appears", "대화 열림 — 연결 안 됨 · 기록 표시 · 보낸 메시지는 상대가 나타나면 전달", "已打开对话 — 未连接 · 显示记录 · 发送的消息将在对方出现时送达", "会話を開いた — 未接続 · 履歴を表示 · 送信したメッセージは相手が現れたら届きます"],
             Msg::StItemImagePresent => ["has image", "이미지 있음", "有图片", "画像あり"],
             Msg::CmdHelpHeader => ["Available commands", "사용 가능한 명령", "可用命令", "使用可能なコマンド"],
             Msg::CmdHelpHelp => ["  /help       this help", "  /help            이 안내", "  /help       此帮助", "  /help       このヘルプ"],

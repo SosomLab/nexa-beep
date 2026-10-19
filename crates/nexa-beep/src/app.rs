@@ -8383,13 +8383,20 @@ impl App {
                 q.drain(..drop_n);
             }
             let total = q.len();
+            let line = ChatLine::text(true, text, at_ms, wall)
+                .with_queued(true)
+                .with_importance(grade);
+            // 저장분(parked)에도 대기 풍선(10-19) — 종전엔 뷰에만 넣어 뷰를 닫았다 열면 풍선이 사라졌다
+            // (재시작 뒤에만 restore_pending이 되살렸다). flush가 확정하거나(conv 이관 뒤) 접힌 키면
+            // 걷는다(flush_direct_sends) — restore_pending과 같은 자리·같은 규칙.
+            if !self.conversations.contains_key(&peer) {
+                self.parked_lines
+                    .entry(peer)
+                    .or_default()
+                    .push(line.clone());
+            }
             if let Some(chat) = self.chats.get_mut(&peer) {
-                chat.push_line(
-                    ChatLine::text(true, text, at_ms, wall)
-                        .with_queued(true)
-                        .with_importance(grade),
-                    inv,
-                );
+                chat.push_line(line, inv);
             }
             self.save_pending(peer);
             self.set_status(nbeep_core::tf(
@@ -16207,21 +16214,23 @@ impl App {
     /// 세션이 없으면 **워커로 연결을 시작하고 즉시 돌아온다**(M2-8 — UI 무정지).
     /// 성립하면 `AppEvent::Outbound`가 이 함수를 다시 부른다.
     fn activate(&mut self, peer: PeerId, el: &ActiveEventLoop) {
-        // 스레드 접기(S3): 어느 기기로 들어와도 대표 키의 뷰 하나 · 살아 있는 기기가 하나라도
-        // 있으면 연다(대표 기기가 꺼져 있어도 다른 기기로 대화한다).
+        // 스레드 접기(S3): 어느 기기로 들어와도 대표 키의 뷰 하나.
         let peer = self.view_key(peer);
-        if self.live_devices(peer).is_empty() {
+        // ★ 뷰는 **연결과 무관하게 연다**(10-19 사용자 실기 — 상대가 꺼져 있으면 창이 안 열려 기록을
+        //   못 보고, 오프라인 대기 발신(M4-6)도 쓸 수 없었다: 종전엔 세션이 없으면 연결만 걸고 return).
+        //   기록(parked)·대기 풍선은 세션 없이도 있고, 발신은 세션 없음 = 대기 큐로 간다. 연결 시도는
+        //   배경에서 같이 건다(수동 클릭 = 백오프 처음부터 ⓑ) — 성립하면 Established가 링크 아이콘만
+        //   갱신하고 뷰는 그대로(입력 중 텍스트·스크롤 보존).
+        let offline = self.live_devices(peer).is_empty();
+        if offline {
             for d in self.fold_group(peer) {
-                self.reconnect.remove(&d); // 수동 클릭 = 백오프 처음부터(ⓑ)
+                self.reconnect.remove(&d);
                 self.start_connect(d, false);
             }
-            if let Some(mid) = self.main_id {
-                self.request_redraw(mid);
-            }
-            return;
         }
         // 프로필 연락처가 있으면 대화 열 때 함께 보여준다(M3-17 — 상세 UI 전 최소 노출).
         self.set_status(match self.peer_profiles.get(&peer) {
+            _ if offline => nbeep_core::t(nbeep_core::Msg::ChatOpenedOffline).into(),
             Some(p) if p.email.is_some() || p.phone.is_some() || p.image_file.is_some() => {
                 let mut parts: Vec<String> = Vec::new();
                 if let Some(e) = &p.email {
@@ -16255,6 +16264,23 @@ impl App {
         }
         self.mark_read(peer); // 뷰가 열렸다 = 확인했다(③)
         self.suggest_verify(peer); // 결정적 순간 유도(M3-6)
+    }
+
+    /// 뷰가 이미 열려 있으면 헤더 링크·행만 갱신하고, 없으면 [`Self::activate`](10-19 — 오프라인 클릭으로
+    /// 먼저 열린 뷰를 연결 성립이 다시 만들어 입력 텍스트를 지우지 않게).
+    fn activate_or_refresh(&mut self, peer: PeerId, el: &ActiveEventLoop) {
+        let key = self.view_key(peer);
+        if self.chats.contains_key(&key) {
+            self.refresh_chat_link(key);
+            let mut inv = Invalidations::default();
+            self.refresh_rows(&mut inv);
+            self.redraw_conversation(key);
+            if let Some(mid) = self.main_id {
+                self.request_redraw(mid);
+            }
+        } else {
+            self.activate(peer, el);
+        }
     }
 
     /// **지문 대조 추천**(08-15 사용자 요청) — 대화를 여는 순간이 대조를 권하기 좋은
@@ -19231,7 +19257,9 @@ impl ApplicationHandler<AppEvent> for App {
                         let mut inv = Invalidations::default();
                         self.refresh_rows(&mut inv);
                     } else {
-                        self.activate(peer, el); // 사용자가 시작한 연결 — 뷰를 연다
+                        // 사용자가 시작한 연결 — 뷰를 연다. 클릭 때 이미 열렸으면(10-19 — 오프라인에도
+                        // 뷰를 여니 보통 이 경우) 다시 만들지 않는다(입력 중 텍스트·스크롤 보존).
+                        self.activate_or_refresh(peer, el);
                         self.set_status(match decision {
                             nbeep_core::TrustDecision::FirstContact => {
                                 "Noise 세션 수립 — 첫 접촉(TOFU 핀 고정)".into()
@@ -19254,8 +19282,8 @@ impl ApplicationHandler<AppEvent> for App {
                         self.send_user_hello(peer);
                     }
                     if !auto {
-                        // 그 사이 인바운드가 먼저 성립 — 그 대화를 연다.
-                        self.activate(peer, el);
+                        // 그 사이 인바운드가 먼저 성립 — 그 대화를 연다(열려 있으면 갱신만).
+                        self.activate_or_refresh(peer, el);
                     }
                 }
                 // 대기 중이던 그룹 본문 이어 보내기(M5-1 — "자동 연결 시도 후 전송").
