@@ -81,7 +81,7 @@ $env:NEXA_INSTALL_DIR = 'D:\Apps\NexaBeep'   # 기본 = HKCU\Software\SosomLab\N
 | **테스트**(green 기준) | `cargo test --workspace --features nbeep-core/testkit,nbeep-net/testkit,nbeep-crypto/testkit` — **전부 통과 + 0 ignored 예상 밖 없음**(ignored = 실 멀티캐스트 2·포털 신호 1 — 실 멀티캐스트 2건은 **한 번에 하나씩** `--ignored <이름>`으로 · 동시 실행은 포트 공유 경합으로 flaky(08-29 Linux 실측)) |
 | 포맷 | `cargo fmt --all --check` (수정은 `--check` 없이) |
 | 린트 | `cargo clippy --workspace --all-targets --features nbeep-core/testkit,nbeep-net/testkit,nbeep-crypto/testkit -- -D warnings` |
-| ★**한 번에: `./tools/gate.sh`**(10-09 신설 — 아래 fmt·clippy·rustdoc·test·2타깃 check를 순서대로 · `--fast` = 테스트·크로스 생략) | 커밋 전 기본 명령 — 단계를 손으로 고르다 rustdoc을 두 번 빠뜨린 뒤 만들었다 |
+| ★**한 번에: `./tools/gate.sh`**(10-09 신설 — 아래 fmt·clippy·rustdoc·test·2타깃 check를 순서대로 · `--fast` = 테스트·크로스 생략) | ★**릴리스 전 일괄 확인 명령**(사용자 확정 10-19 — 종전 "커밋 전 기본 명령"에서 변경 · §5 0-a) — 개발 중 커밋은 고친 크레이트의 빌드·관련 테스트만 · 단계를 손으로 고르다 rustdoc을 두 번 빠뜨린 뒤 만들었다 |
 | **rustdoc 링크**(★10-09 추가 — CI lint 잡과 동일 · 릴리스 전 **필수**) | `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --features nbeep-core/testkit,nbeep-net/testkit,nbeep-crypto/testkit` — 한글 doc 주석의 `[닫기]` 같은 **공백 없는 대괄호**는 rustdoc이 링크로 읽어 CI를 깬다(v0.3.0 첫 CI 실패 원인) → `\[닫기\]`로 이스케이프 · 비공개 항목 링크는 백틱만 |
 | rustdoc 링크 | `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --features nbeep-core/testkit,nbeep-net/testkit,nbeep-crypto/testkit` |
 | 크로스 빌드 | `cargo build --workspace --target <TARGET>` (예: `aarch64-pc-windows-msvc`) |
@@ -195,6 +195,7 @@ docker run --rm -it --init -p 47200:47200 \
   cargo check --workspace --all-targets --target aarch64-pc-windows-msvc
   ```
 - **로컬 게이트는 4종 전부**(`fmt --check` · `clippy` · `test` · **`doc`**) + 위 크로스 타입검사. rustdoc을 빼먹으면 한국어 `[대괄호]`가 intra-doc 링크로 해석돼 CI가 red가 된다.
+- ★ **게이트 시점 = 릴리스 전 일괄(사용자 확정 10-19)** — 위 전량 게이트는 **커밋마다 돌리지 않는다**. 개발 중 커밋 = 고친 크레이트 `cargo build`/`cargo test -p <크레이트>` 정도로 확인하고 올린다. **push마다 CI가 전량을 돌려 main green을 지키고**, 사람(개발 세션)은 **태그 직전에 §5 0-a 일괄 확인**을 1회 한다. 세션 첫 동작·커밋 전 의례로 `gate.sh`를 돌리던 종전 관행(10-09~10-17)은 폐지 — 매번 5~10분씩 쓰던 비용 대비 CI가 같은 것을 잡는다는 사용자 판단.
 
 ## 4. CI — `.github/workflows/ci.yml`
 
@@ -221,6 +222,12 @@ docker run --rm -it --init -p 47200:47200 \
 # 0) (선택 · Linux) 설치본을 로컬에서 미리 포장해 본다 — CI와 **같은 스크립트**(10-09 · packaging/README "Linux 설치본")
 packaging/linux/build-deb.sh && packaging/linux/build-rpm.sh      # → target/packaging/linux/*.{deb,rpm}
 #    glibc 하한은 바이너리 실측으로 control에 들어간다(러너 = ubuntu-22.04 → 2.35). rpm 실기 = Fedora/RHEL PC.
+# 0-a) ★ 릴리스 전 일괄 검증(사용자 확정 10-19 — 커밋마다 돌리던 게이트를 여기로 모았다 · 이 PC 1대에서 전부):
+./tools/gate.sh                                   # fmt·clippy·rustdoc·test 전량·win x64/mac arm64 check
+cargo build --release -p nexa-beep -p nbeep-imgdec && ls -l target/release/nexa-beep*   # 산출물 ≤10MB
+pwsh tools/check-imports.ps1 target/release/nexa-beep.exe   # (Windows) 임포트 화이트리스트 — 새 DLL = 사람 검토
+./tools/s4-scenario.sh && ./tools/perf-scenario.sh          # 따라잡기 19/19 · 프레임 ms·유휴 MB 회귀 없음(51 §3 기준선)
+#    어느 단계든 red면 고치고 다시 0-a부터. 결과 수치(green 수·ms·MB)는 journal에 적는다(협업 세션).
 # 1) main이 green인지 먼저 확인한다 — red 상태로 태그를 밀지 않는다.
 gh run list --branch main --workflow ci --limit 1
 # 2) ★ winget/choco 이전 제출 상태 점검(규칙 · 사용자 확정 08-24 —
