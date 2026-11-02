@@ -144,6 +144,24 @@ pub mod icons {
 // 모듈 재수출로 그대로 유지된다(호환 불변). `hangul`도 nexa-ctl 모듈(본문 동일)로 — `typeahead`는
 // beep IME 경합 처리(preedit·stale)가 들어 있어 앱 쪽에 남긴다.
 pub use nexa_ctl::{avatar, controls, draw, edit, event, geom, hangul, raster, theme, widget};
+// 순간 메시지 HUD(11-02 · nexa-sql 이식) — 호스트가 스타일을 조립해 대화 뷰에 넣는다.
+pub use nexa_ctl::{HudPos as CtlHudPos, HudStyle, TextHud};
+
+/// 설정 위치 코드(`tl`·`tr`·`bl` … — [`HudPos::from_code`]와 같은 표)를 nexa-ctl 위치로.
+#[must_use]
+pub fn ctl_hud_pos_from_code(code: &str) -> CtlHudPos {
+    match code {
+        "tl" => CtlHudPos::TopLeft,
+        "tc" => CtlHudPos::TopCenter,
+        "tr" => CtlHudPos::TopRight,
+        "ml" => CtlHudPos::MidLeft,
+        "c" => CtlHudPos::Center,
+        "mr" => CtlHudPos::MidRight,
+        "bc" => CtlHudPos::BottomCenter,
+        "br" => CtlHudPos::BottomRight,
+        _ => CtlHudPos::BottomLeft,
+    }
+}
 
 pub mod about;
 pub mod addr_prompt;

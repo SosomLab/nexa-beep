@@ -705,6 +705,12 @@ pub struct ChatViewWidget {
     bsel_drag: bool,
     /// 페인트가 캐시하는 보이는 풍선의 텍스트 지오메트리(히트 테스트용).
     bubble_geoms: RefCell<Vec<BubbleGeom>>,
+    /// 창 활성 여부(11-02 사용자 확정 — 비활성 창은 선택을 흐리게 · 입력창 선택 규약과 동일).
+    window_active: bool,
+    /// ★ 순간 메시지 HUD(11-02 · nexa-sql 이식 — "복사됨" 캡슐 · 유지 → 서서히 사라짐).
+    hud: nexa_ctl::TextHud,
+    /// HUD 모양(호스트가 설정 `hud.*`로 조립 · `None` = 끔).
+    hud_style: Option<nexa_ctl::HudStyle>,
 }
 
 /// 보이는 풍선 하나의 텍스트 지오메트리(페인트 캐시 · 11-02 선택 히트).
@@ -784,6 +790,36 @@ impl ChatViewWidget {
             bsel: None,
             bsel_drag: false,
             bubble_geoms: RefCell::new(Vec::new()),
+            window_active: true,
+            hud: nexa_ctl::TextHud::default(),
+            hud_style: None,
+        }
+    }
+
+    // ── ★ 창 활성·순간 메시지(11-02) ────────────────────────────────────
+
+    /// 창 활성 상태(호스트 `Focused` 이벤트) — 비활성이면 풍선 선택을 흐리게 그린다.
+    pub fn set_window_active(&mut self, on: bool, inv: &mut Invalidations) {
+        if self.window_active != on {
+            self.window_active = on;
+            if self.bsel.is_some() {
+                inv.push(self.bounds);
+            }
+        }
+    }
+
+    /// HUD 모양 주입(설정 `hud.*` · `None` = 끔 — 보이던 캡슐도 지운다).
+    pub fn set_hud_style(&mut self, style: Option<nexa_ctl::HudStyle>) {
+        self.hud_style = style;
+        if style.is_none() {
+            self.hud.clear();
+        }
+    }
+
+    /// 순간 메시지를 보인다("복사됨" 등 · 꺼져 있으면 무시).
+    pub fn show_hud(&mut self, text: impl Into<String>) {
+        if self.hud_style.is_some() {
+            self.hud.show(text);
         }
     }
 
@@ -1122,7 +1158,10 @@ impl ChatViewWidget {
             Some(_) => true,
             None => false,
         };
-        self.thread_bars.tick(now_ms) | self.input_bars.tick(now_ms) | hl
+        let hud = self
+            .hud_style
+            .is_some_and(|st| self.hud.tick(std::time::Instant::now(), &st));
+        self.thread_bars.tick(now_ms) | self.input_bars.tick(now_ms) | hl | hud
     }
 
     /// 배율 지정(고DPI).
@@ -2791,24 +2830,38 @@ impl Widget for ChatViewWidget {
                 let entry_cache = wc.get(b.entry).and_then(|e| e.as_ref());
                 for (si, s) in b.lines.iter().enumerate() {
                     let ly = text_top + si as i32 * line_h;
-                    if let (Some((lo, hi)), Some(e)) = (sel, entry_cache) {
-                        if let (Some(&rs), Some(pw)) = (e.row_start.get(si), e.row_pw.get(si)) {
-                            let rl = pw.len().saturating_sub(1);
-                            let c0 = lo.saturating_sub(rs).min(rl);
-                            let c1 = hi.saturating_sub(rs).min(rl);
-                            if hi > rs && lo < rs + rl && c1 > c0 {
-                                let x0 = tx + pw[c0];
-                                let x1 = tx + pw[c1];
-                                ctx.fill_rect_alpha(
-                                    Rect::new(x0, ly, x1 - x0, line_h),
-                                    theme.sel_bg,
-                                    0.6,
-                                );
+                    let clip = Rect::new(bub.x, ly, bub.w, line_h);
+                    // ★ 선택 구간(행 안 x 범위 · 11-02 사용자 확정 = **반전**): 글자색 상자(3px 둥글게) 위에 바탕색 글자 —
+                    //   파랑/회색 풍선·라이트/다크 어디서나 대비가 최대이고 새 색 토큰이 없다. 비활성 창 = 25% 상자만(흐리게).
+                    let sel_x = match (sel, entry_cache) {
+                        (Some((lo, hi)), Some(e)) => {
+                            match (e.row_start.get(si), e.row_pw.get(si)) {
+                                (Some(&rs), Some(pw)) => {
+                                    let rl = pw.len().saturating_sub(1);
+                                    let c0 = lo.saturating_sub(rs).min(rl);
+                                    let c1 = hi.saturating_sub(rs).min(rl);
+                                    (hi > rs && lo < rs + rl && c1 > c0)
+                                        .then(|| (tx + pw[c0], tx + pw[c1]))
+                                }
+                                _ => None,
                             }
                         }
+                        _ => None,
+                    };
+                    if let Some((x0, x1)) = sel_x {
+                        let sr = Rect::new(x0, ly, x1 - x0, line_h);
+                        if self.window_active {
+                            ctx.fill_round_rect(sr, self.s(3), fg);
+                        } else {
+                            ctx.fill_round_rect_alpha(sr, self.s(3), fg, 0.25);
+                        }
                     }
-                    let clip = Rect::new(bub.x, ly, bub.w, line_h);
                     ctx.text(tx, ly + (line_h - th) / 2, clip, s, fg);
+                    if let (Some((x0, x1)), true) = (sel_x, self.window_active) {
+                        // 선택 상자로 클립해 같은 글을 바탕색으로 한 번 더 — 글자 모양은 그대로, 색만 뒤집힌다.
+                        let sr = Rect::new(x0, ly, x1 - x0, line_h);
+                        ctx.text(tx, ly + (line_h - th) / 2, sr, s, bg);
+                    }
                 }
                 self.bubble_geoms.borrow_mut().push(BubbleGeom {
                     entry: b.entry,
@@ -2916,6 +2969,14 @@ impl Widget for ChatViewWidget {
         let top_off = (content - vp.h - scroll).max(0);
         self.thread_bars
             .paint(ctx, theme, vp, vp.w, content, 0, top_off, self.scale);
+        // ★ 순간 메시지 HUD(11-02) — 스레드 뷰포트 안 설정 자리에 캡슐(상태 글꼴).
+        if let Some(st) = self.hud_style {
+            if self.hud.visible() {
+                ctx.select_font(FontSlot::Status, false);
+                self.hud.paint(ctx, vp, self.scale, &st);
+                ctx.select_font(FontSlot::Message, false);
+            }
+        }
 
         // ── 헤더(맨 위 레이어 — 스크롤된 풍선을 덮는다 · 그룹 참여자 목록/타이틀 자리) ──
         let head_h = self.s(HEAD_H);

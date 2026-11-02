@@ -2215,6 +2215,18 @@ fn key_restored_lines(lines: &mut [ChatLine], me: PeerId, peer: Option<PeerId>) 
     }
 }
 
+/// 복사 결과 상태바 문구(11-02 · i18n) — 선택 글자는 글자 수를, 실패는 원인을 말한다.
+fn copied_status(ok: bool, text: &str) -> String {
+    if ok {
+        nbeep_core::tf(
+            nbeep_core::Msg::StfCopiedChars,
+            &[&text.chars().count().to_string()],
+        )
+    } else {
+        nbeep_core::t(nbeep_core::Msg::StCopyFail).to_string()
+    }
+}
+
 /// 대화 기록 역직렬화(M2-5b) — 손상·미지 tag는 거기서 멈춘다(fail-soft).
 fn decode_history(bytes: &[u8]) -> Vec<ChatLine> {
     use nbeep_ui::{ChatBody, XferLine, XferLineState as St};
@@ -10681,8 +10693,61 @@ impl App {
         merged
     }
 
+    /// ★ 순간 메시지 HUD 모양(11-02 · nexa-sql `zoom_hud_style` 이식) — 설정 `hud.*` · 색이 비거나 틀리면 테마.
+    fn hud_style(&self) -> Option<nbeep_ui::HudStyle> {
+        if self.settings.get("hud.enabled") == "off" {
+            return None;
+        }
+        let ms = |k: &str, d: u64| self.settings.get(k).parse::<u64>().unwrap_or(d);
+        let pct = |k: &str, d: f32| {
+            self.settings
+                .get(k)
+                .parse::<f32>()
+                .map_or(d, |v| (v / 100.0).clamp(0.0, 1.0))
+        };
+        Some(nbeep_ui::HudStyle {
+            pos: nbeep_ui::ctl_hud_pos_from_code(self.settings.get("hud.pos")),
+            hold_ms: ms("hud.hold_ms", 500).min(10_000),
+            fade_ms: ms("hud.fade_ms", 600).clamp(50, 10_000),
+            bg: nbeep_ui::theme::color_from_hex(self.settings.get("hud.bg"))
+                .unwrap_or(self.theme.accent),
+            bg_alpha: pct("hud.bg_alpha", 0.8),
+            fg: nbeep_ui::theme::color_from_hex(self.settings.get("hud.fg"))
+                .unwrap_or(self.theme.chrome_bg),
+            fg_alpha: pct("hud.fg_alpha", 1.0),
+        })
+    }
+
+    /// 창 활성 변화를 그 창의 대화 뷰에(11-02 — 비활성 창 = 풍선 선택 흐리게).
+    fn set_chat_active(&mut self, id: WindowId, on: bool) {
+        let role = self.windows.get(&id).map(|e| e.role);
+        let mut inv = Invalidations::default();
+        match role {
+            Some(Role::Main) => {
+                if let Some(c) = self.single_open.and_then(|p| self.chats.get_mut(&p)) {
+                    c.set_window_active(on, &mut inv);
+                }
+                if let Some(c) = self.single_open_group.and_then(|g| self.gchats.get_mut(&g)) {
+                    c.set_window_active(on, &mut inv);
+                }
+            }
+            Some(Role::Chat(p)) => {
+                if let Some(c) = self.chats.get_mut(&p) {
+                    c.set_window_active(on, &mut inv);
+                }
+            }
+            Some(Role::GroupChat(g)) => {
+                if let Some(c) = self.gchats.get_mut(&g) {
+                    c.set_window_active(on, &mut inv);
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn build_chat_view(&self, peer: PeerId) -> ChatViewWidget {
         let mut chat = ChatViewWidget::new(self.peer_title(peer));
+        chat.set_hud_style(self.hud_style());
         let mut inv = Invalidations::default();
         let dev = self.file_target(peer); // 접힌 대화 = 살아 있는 기기 기준(S3)
         chat.set_link(self.peer_link_state(dev), &mut inv); // 헤더 아이콘 초기값(M3-20)
@@ -14463,6 +14528,16 @@ impl App {
                     self.list
                         .set_hud_pos(nbeep_ui::HudPos::from_code(&value), &mut inv);
                 }
+                // ★ 순간 메시지 HUD(11-02) — 키 하나라도 바뀌면 모양을 다시 조립해 열린 대화 뷰 전부에(hot-swap).
+                k if k.starts_with("hud.") => {
+                    let st = self.hud_style();
+                    for c in self.chats.values_mut() {
+                        c.set_hud_style(st);
+                    }
+                    for c in self.gchats.values_mut() {
+                        c.set_hud_style(st);
+                    }
+                }
                 // 컨트롤 글리프 크기(체크·스위치·옵션박스 — 08-11) — 전역 배율이라
                 // 전 창 재배치·재그리기.
                 "ui.control_size" => {
@@ -15434,6 +15509,7 @@ impl App {
             self.update_main_title();
         }
         let mut chat = ChatViewWidget::new(title.clone());
+        chat.set_hud_style(self.hud_style());
         let mut inv = Invalidations::default();
         chat.set_time_format(
             self.settings.get("chat.time_24h") != "off",
@@ -15583,11 +15659,13 @@ impl App {
             .get_mut(&gid)
             .and_then(ChatViewWidget::take_copy_text)
         {
-            self.set_status(if nbeep_plat::clipboard::set_text(&t) {
-                "메시지 복사됨".to_string()
-            } else {
-                "복사 실패 — 클립보드를 열 수 없습니다".to_string()
-            });
+            let ok = nbeep_plat::clipboard::set_text(&t);
+            self.set_status(copied_status(ok, &t));
+            if ok {
+                if let Some(c) = self.gchats.get_mut(&gid) {
+                    c.show_hud(nbeep_core::t(nbeep_core::Msg::HudCopied)); // 순간 메시지(11-02)
+                }
+            }
             self.request_redraw(id);
             if let Some(mid) = self.main_id {
                 self.request_redraw(mid);
@@ -17704,11 +17782,13 @@ impl App {
             .and_then(ChatViewWidget::take_copy_text)
         {
             // 실패도 말한다(조용한 무반응은 디버깅 불가 — 08-10 실기에서 배운 것).
-            self.set_status(if nbeep_plat::clipboard::set_text(&t) {
-                "메시지 복사됨".to_string()
-            } else {
-                "복사 실패 — 클립보드를 열 수 없습니다".to_string()
-            });
+            let ok = nbeep_plat::clipboard::set_text(&t);
+            self.set_status(copied_status(ok, &t));
+            if ok {
+                if let Some(c) = self.chats.get_mut(&peer) {
+                    c.show_hud(nbeep_core::t(nbeep_core::Msg::HudCopied)); // 순간 메시지(11-02)
+                }
+            }
             self.request_redraw(id);
             if let Some(mid) = self.main_id {
                 self.request_redraw(mid);
@@ -21541,11 +21621,12 @@ impl ApplicationHandler<AppEvent> for App {
                 // 캐럿 깜빡임 — 포커스 창 추적 + 기준점 리셋(받자마자 밝게 시작).
                 self.os_focused = Some(id);
                 self.blink_anchor_ms = self.now_ms();
-                // ★ 스트레이 Enter 가드(08-21 실기 — "공지 후 대화창 진입"): 모달
-                //   (공지 프롬프트 등)을 Enter로 제출하면 창 파괴 직후 메인이 포커스를
-                //   돌려받는데, 같은 keypress의 잔향·키 반복 Enter가 메인 목록에
-                //   도달해 **캐럿 행이 활성화**됐다(기준을 모르겠던 "1명" = 캐럿).
-                //   포커스 복귀 직후 짧은 창 동안 목록행 Enter만 무시한다.
+                self.set_chat_active(id, true); // 풍선 선택 = 또렷하게(11-02)
+                                                // ★ 스트레이 Enter 가드(08-21 실기 — "공지 후 대화창 진입"): 모달
+                                                //   (공지 프롬프트 등)을 Enter로 제출하면 창 파괴 직후 메인이 포커스를
+                                                //   돌려받는데, 같은 keypress의 잔향·키 반복 Enter가 메인 목록에
+                                                //   도달해 **캐럿 행이 활성화**됐다(기준을 모르겠던 "1명" = 캐럿).
+                                                //   포커스 복귀 직후 짧은 창 동안 목록행 Enter만 무시한다.
                 if self.main_id == Some(id) {
                     self.enter_guard_until_ms = self.now_ms() + ENTER_GUARD_MS;
                 }
@@ -21582,6 +21663,7 @@ impl ApplicationHandler<AppEvent> for App {
                 if self.os_focused == Some(id) {
                     self.os_focused = None;
                 }
+                self.set_chat_active(id, false); // 풍선 선택 = 흐리게(11-02)
                 self.request_redraw(id);
                 if self.ime_trace {
                     eprintln!("[ime] focus-out");

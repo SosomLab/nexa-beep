@@ -175,6 +175,13 @@ pub const ADVANCED: &[&str] = &[
     "ui.typeahead_pos",
     "ui.typeahead_space",
     "ui.typeahead_special",
+    // 순간 메시지 HUD 세부(11-02) — 켜기·위치는 기본 표시, 시간·색은 고급.
+    "hud.hold_ms",
+    "hud.fade_ms",
+    "hud.bg",
+    "hud.bg_alpha",
+    "hud.fg",
+    "hud.fg_alpha",
     "xfer.timeout_sec",
     "xfer.auto_cancel_min",
     "group.resync_keep",
@@ -221,6 +228,13 @@ pub const DEPENDS: &[(&str, &str, Dep)] = &[
     ("ui.typeahead_pos", "ui.typeahead", Dep::On),
     ("ui.typeahead_space", "ui.typeahead", Dep::On),
     ("ui.typeahead_special", "ui.typeahead", Dep::On),
+    ("hud.pos", "hud.enabled", Dep::On),
+    ("hud.hold_ms", "hud.enabled", Dep::On),
+    ("hud.fade_ms", "hud.enabled", Dep::On),
+    ("hud.bg", "hud.enabled", Dep::On),
+    ("hud.bg_alpha", "hud.enabled", Dep::On),
+    ("hud.fg", "hud.enabled", Dep::On),
+    ("hud.fg_alpha", "hud.enabled", Dep::On),
     ("user.handle", "user.enabled", Dep::On),
     ("user.passphrase", "user.enabled", Dep::On),
     ("user.test", "user.enabled", Dep::On),
@@ -398,6 +412,12 @@ const RADIO_DEFAULTS: &[(&str, &str)] = &[
     ("ime.selfcommit_ms", "1000"),
     // 컨트롤 글리프 크기 — 기본 "크게"(사용자 확정 08-11 · 설정 Switch가 크게 보이도록).
     ("ui.control_size", "l"),
+    // 순간 메시지 HUD(11-02 · nexa-sql zoom.hud_* 이식 — 복사됨 캡슐): 우상단 · 유지 500 · 페이드 600 · 바탕 80% · 글자 100%.
+    ("hud.pos", "tr"),
+    ("hud.hold_ms", "500"),
+    ("hud.fade_ms", "600"),
+    ("hud.bg_alpha", "80"),
+    ("hud.fg_alpha", "100"),
 ];
 
 /// 항목 종류 — 우측 패널이 이 열거를 읽어 컨트롤을 동적 생성한다(새 설정 = Entry 1줄).
@@ -496,7 +516,14 @@ impl Entry {
                 vec![(self.key, if on { "on" } else { "off" }.to_string())]
             }
             SettingKind::Color { default } => vec![(self.key, default.to_string())],
-            SettingKind::PositionGrid => vec![(self.key, "bl".to_string())],
+            SettingKind::PositionGrid => vec![(
+                self.key,
+                RADIO_DEFAULTS
+                    .iter()
+                    .find(|(k, _)| *k == self.key)
+                    .map_or("bl", |(_, d)| *d)
+                    .to_string(),
+            )],
             SettingKind::FontFace { family_key } => vec![(family_key, String::new())],
             SettingKind::FontSection {
                 family_key,
@@ -688,6 +715,109 @@ pub fn registry() -> &'static [Entry] {
                 ("light", Msg::ThemeLight),
             ]),
             key: "ui.theme",
+        },
+        // ── 순간 메시지 HUD(11-02 · nexa-sql zoom.hud_* 이식 — "복사됨" 캡슐 · 유지 → 서서히 사라짐) ──
+        Entry {
+            cat: Msg::CatAppearance,
+            sub: Some(Msg::SubHud),
+            label: Msg::HudEnable,
+            desc: Msg::HudEnableDesc,
+            kind: SettingKind::Toggle,
+            key: "hud.enabled",
+        },
+        Entry {
+            cat: Msg::CatAppearance,
+            sub: Some(Msg::SubHud),
+            label: Msg::HudPosLbl,
+            desc: Msg::HudPosDesc,
+            kind: SettingKind::PositionGrid,
+            key: "hud.pos",
+        },
+        Entry {
+            cat: Msg::CatAppearance,
+            sub: Some(Msg::SubHud),
+            label: Msg::HudHold,
+            desc: Msg::HudHoldDesc,
+            kind: SettingKind::RadioInput(
+                &[
+                    ("250", Msg::Ms250),
+                    ("500", Msg::Ms500),
+                    ("800", Msg::Ms800),
+                    ("1000", Msg::Ms1000),
+                    ("1500", Msg::Ms1500),
+                    ("2000", Msg::Ms2000),
+                ],
+                "ms",
+            ),
+            key: "hud.hold_ms",
+        },
+        Entry {
+            cat: Msg::CatAppearance,
+            sub: Some(Msg::SubHud),
+            label: Msg::HudFade,
+            desc: Msg::HudFadeDesc,
+            kind: SettingKind::RadioInput(
+                &[
+                    ("200", Msg::Ms200),
+                    ("400", Msg::Ms400),
+                    ("600", Msg::Ms600),
+                    ("800", Msg::Ms800),
+                    ("1000", Msg::Ms1000),
+                    ("1500", Msg::Ms1500),
+                ],
+                "ms",
+            ),
+            key: "hud.fade_ms",
+        },
+        Entry {
+            cat: Msg::CatAppearance,
+            sub: Some(Msg::SubHud),
+            label: Msg::HudBg,
+            desc: Msg::HudBgDesc,
+            kind: SettingKind::Color { default: "#2563EB" },
+            key: "hud.bg",
+        },
+        Entry {
+            cat: Msg::CatAppearance,
+            sub: Some(Msg::SubHud),
+            label: Msg::HudBgAlpha,
+            desc: Msg::HudBgAlphaDesc,
+            kind: SettingKind::RadioInput(
+                &[
+                    ("20", Msg::Pct20),
+                    ("40", Msg::Pct40),
+                    ("60", Msg::Pct60),
+                    ("80", Msg::Pct80),
+                    ("100", Msg::Pct100),
+                ],
+                "%",
+            ),
+            key: "hud.bg_alpha",
+        },
+        Entry {
+            cat: Msg::CatAppearance,
+            sub: Some(Msg::SubHud),
+            label: Msg::HudFg,
+            desc: Msg::HudFgDesc,
+            kind: SettingKind::Color { default: "#FFFFFF" },
+            key: "hud.fg",
+        },
+        Entry {
+            cat: Msg::CatAppearance,
+            sub: Some(Msg::SubHud),
+            label: Msg::HudFgAlpha,
+            desc: Msg::HudFgAlphaDesc,
+            kind: SettingKind::RadioInput(
+                &[
+                    ("20", Msg::Pct20),
+                    ("40", Msg::Pct40),
+                    ("60", Msg::Pct60),
+                    ("80", Msg::Pct80),
+                    ("100", Msg::Pct100),
+                ],
+                "%",
+            ),
+            key: "hud.fg_alpha",
         },
         // ── 테마 주요 색(08-10 · 사용자 요청) — 다크/라이트 각각. 즉시 적용(영속은 M3-15). ──
         Entry {
