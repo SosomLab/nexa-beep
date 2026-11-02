@@ -2199,6 +2199,22 @@ fn encode_history(lines: &[ChatLine]) -> Vec<u8> {
     out
 }
 
+/// ★ 복원 줄에 답장 열쇠의 **origin만** 채운다(11-02 사용자 "첫 번째 메시지는 왜 Reply가 안 되나" — 오늘 이전 빌드에서
+/// 열쇠 없이 저장된 tag 1/3 줄): 내 줄 = 나 · 라벨 있는 상대 줄 = 그 상대(안내 줄은 라벨이 없어 제외). seq는 0 그대로라
+/// `sync_key()`는 여전히 None = 따라잡기·중복 제거 무영향. 답장 참조는 `(origin, 0)` + 발췌로 간다(점프 = 발췌 대조).
+fn key_restored_lines(lines: &mut [ChatLine], me: PeerId, peer: Option<PeerId>) {
+    for l in lines {
+        if l.origin.is_some() || !matches!(l.body, nbeep_ui::ChatBody::Text(_)) {
+            continue;
+        }
+        if l.mine {
+            l.origin = Some(me);
+        } else if let (Some(p), true) = (peer, l.from.is_some()) {
+            l.origin = Some(p);
+        }
+    }
+}
+
 /// 대화 기록 역직렬화(M2-5b) — 손상·미지 tag는 거기서 멈춘다(fail-soft).
 fn decode_history(bytes: &[u8]) -> Vec<ChatLine> {
     use nbeep_ui::{ChatBody, XferLine, XferLineState as St};
@@ -11392,14 +11408,16 @@ impl App {
         let mut inv = Invalidations::default();
         for stem in stems {
             let path = dir.join(format!("{stem}.seg"));
-            let Some(lines) = std::fs::read(&path)
+            let Some(mut lines) = std::fs::read(&path)
                 .ok()
                 .and_then(|raw| self.history_open_bytes(stem, &raw))
                 .map(|b| decode_history(&b))
             else {
                 continue; // 다른 신원 봉인 — fail-closed(파일은 반입돼 있음)
             };
+            let me = self.identity.peer_id();
             if let Some(gshort) = stem.strip_prefix("g-") {
+                key_restored_lines(&mut lines, me, None);
                 if let Some(gid) = self
                     .groups
                     .shared_list()
@@ -11428,6 +11446,7 @@ impl App {
                 .find(|r| r.peer.short() == stem.as_str())
                 .map(|r| r.peer)
             {
+                key_restored_lines(&mut lines, me, Some(peer));
                 if let Some(conv) = self.conversations.get_mut(&peer) {
                     conv.lines = lines.clone();
                 }
@@ -13800,7 +13819,8 @@ impl App {
             else {
                 continue; // 개봉 실패(다른 신원 봉인) — fail-closed(보존·미표시)
             };
-            let lines = decode_history(&bytes);
+            let mut lines = decode_history(&bytes);
+            key_restored_lines(&mut lines, self.identity.peer_id(), None); // 내 줄만(그룹 상대 기기는 모른다)
             if !lines.is_empty() {
                 self.group_threads.insert(gid, lines);
             }
@@ -13868,6 +13888,7 @@ impl App {
                     matches!(&l.body, nbeep_ui::ChatBody::Text(t) if is_local_notice(t.as_str()));
                 l.from = if notice { None } else { Some(title.clone()) };
             }
+            key_restored_lines(&mut lines, self.identity.peer_id(), Some(peer)); // 옛 줄도 답장 대상(11-02)
             self.parked_lines.insert(peer, lines);
             if self.live {
                 // 힌트는 **자리표시 이름(지문 라벨)만** 덮는다 — 프로필 캐시가 먼저 넣은 실제 이름은

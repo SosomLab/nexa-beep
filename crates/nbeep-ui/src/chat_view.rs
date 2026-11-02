@@ -221,6 +221,16 @@ impl ChatLine {
         }
     }
 
+    /// ★ 답장 열쇠(11-02) — 텍스트 줄이고 origin이 있으면 `(origin, seq)`. seq 0(대기 중 · 열쇠 없이 저장된 옛 줄)도
+    /// 답장 대상이다: 상대는 발췌로 인용을 그리고, 점프는 발췌 대조로 찾는다([`ChatViewWidget::jump_to_ref`]).
+    #[must_use]
+    pub fn reply_key(&self) -> Option<(nbeep_core::PeerId, u64)> {
+        match (&self.body, self.origin) {
+            (ChatBody::Text(_), Some(o)) => Some((o, self.seq)),
+            _ => None,
+        }
+    }
+
     /// 오프라인 대기 표시를 붙인다(M4-6 — 세션 없는 발신 · 빌더).
     #[must_use]
     pub fn with_queued(mut self, queued: bool) -> Self {
@@ -802,7 +812,7 @@ impl ChatViewWidget {
         let Some(l) = self.lines.get(entry) else {
             return false;
         };
-        let (Some((origin, seq)), ChatBody::Text(t)) = (l.sync_key(), &l.body) else {
+        let (Some((origin, seq)), ChatBody::Text(t)) = (l.reply_key(), &l.body) else {
             return false;
         };
         let name = l.from.clone().unwrap_or_else(|| {
@@ -825,10 +835,29 @@ impl ChatViewWidget {
         seq: u64,
         inv: &mut Invalidations,
     ) -> bool {
-        let found = self
-            .lines
-            .iter()
-            .position(|l| l.sync_key() == Some((origin, seq)));
+        self.jump_to_ref(
+            &nbeep_core::ReplyRef {
+                origin,
+                seq,
+                quote: String::new(),
+            },
+            inv,
+        )
+    }
+
+    /// 참조로 점프 — seq ≥1 = 열쇠 정확 일치 · seq 0(열쇠 없이 저장된 옛 줄·대기 중 줄) = 같은 origin의 줄 중 **발췌가 같은**
+    /// 마지막 줄. 없으면 `false` + `jump_missing`.
+    pub fn jump_to_ref(&mut self, r: &nbeep_core::ReplyRef, inv: &mut Invalidations) -> bool {
+        let found = if r.seq != 0 {
+            self.lines
+                .iter()
+                .position(|l| l.sync_key() == Some((r.origin, r.seq)))
+        } else {
+            self.lines.iter().rposition(|l| {
+                l.origin == Some(r.origin)
+                    && matches!(&l.body, ChatBody::Text(t) if nbeep_core::ReplyRef::excerpt(t.as_str()) == r.quote)
+            })
+        };
         match found {
             Some(i) => {
                 self.jump_pending.set(Some(i));
@@ -856,9 +885,7 @@ impl ChatViewWidget {
     /// 마지막 열쇠 있는 텍스트 줄(자동화 `reply=` 동사 — 답장 대상 고르기).
     #[must_use]
     pub fn last_keyed_entry(&self) -> Option<usize> {
-        self.lines
-            .iter()
-            .rposition(|l| l.sync_key().is_some() && matches!(l.body, ChatBody::Text(_)))
+        self.lines.iter().rposition(|l| l.reply_key().is_some())
     }
 
     /// 원본을 못 찾은 점프가 있었는가(1회성).
@@ -1285,10 +1312,7 @@ impl ChatViewWidget {
             };
             // ★ 11-02: 선택 복사(이 풍선에 선택이 있을 때) · 메시지 복사 · 답장(열쇠 있는 텍스트 줄만).
             let has_sel = self.bsel.is_some_and(|(e, a, h)| e == i && a != h);
-            let can_reply = self
-                .lines
-                .get(i)
-                .is_some_and(|l| l.sync_key().is_some() && matches!(l.body, ChatBody::Text(_)));
+            let can_reply = self.lines.get(i).is_some_and(|l| l.reply_key().is_some());
             self.ctx_menu.open_at(
                 x,
                 y,
@@ -2197,7 +2221,7 @@ impl Widget for ChatViewWidget {
                     .map(|&(_, e)| e);
                 if let Some(e) = quote_entry {
                     if let Some(r) = self.lines.get(e).and_then(|l| l.reply.clone()) {
-                        self.jump_to_key(r.origin, r.seq, inv);
+                        self.jump_to_ref(&r, inv);
                     }
                     return;
                 }
@@ -3572,6 +3596,27 @@ mod tests {
         assert_eq!(r.quote, "원본 글 둘째", "개행은 공백");
         assert!(w.take_reply().is_none(), "1회성");
         assert!(!w.reply_pending());
+    }
+
+    /// ★ 11-02 "첫 번째 메시지는 왜 Reply가 안 되나" — 열쇠 없이 저장된 옛 줄(origin만 · seq 0)도 답장 대상 ·
+    /// 참조는 `(origin, 0)` + 발췌 · 점프는 발췌 대조로 찾는다.
+    #[test]
+    fn reply_to_unkeyed_restored_line_uses_excerpt_jump() {
+        let (mut w, mut inv) = widget();
+        w.push_line(tline(true, "옛 글 하나", 0).with_origin(pidn(1)), &mut inv); // seq 0
+        w.push_line(tline(true, "옛 글 둘", 1).with_origin(pidn(1)), &mut inv);
+        assert!(w.start_reply(0, &mut inv), "origin만 있어도 답장 가능");
+        let r = w.take_reply().unwrap();
+        assert_eq!(
+            (r.origin, r.seq, r.quote.as_str()),
+            (pidn(1), 0, "옛 글 하나")
+        );
+        paint_once(&w);
+        assert!(w.jump_to_ref(&r, &mut inv), "seq 0 = 발췌 대조로 점프");
+        assert_eq!(w.highlighted(), Some(0));
+        let miss = nbeep_core::ReplyRef::new(pidn(1), 0, "없는 글");
+        assert!(!w.jump_to_ref(&miss, &mut inv));
+        assert!(w.take_jump_missing());
     }
 
     #[test]
