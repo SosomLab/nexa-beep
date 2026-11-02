@@ -13391,6 +13391,8 @@ impl App {
             rgba,
             side: 32,
             tooltip,
+            // ★ 메뉴 맨 위 = 프로그램 이름 + 버전(11-02 사용자 요청 · 비활성 · 3-OS).
+            title: format!("Nexa Beep {}", env!("CARGO_PKG_VERSION")),
             name,
             open_label: t(Msg::TrayOpen).to_string(),
             settings_label: t(Msg::TraySettings).to_string(),

@@ -57,6 +57,8 @@ pub struct TrayContent {
     pub side: u32,
     /// 툴팁(= 표시 이름 · 127자 초과는 절단).
     pub tooltip: String,
+    /// ★ 메뉴 맨 위 줄(비활성 · 11-02 사용자 요청) — 프로그램 이름 + 버전(`Nexa Beep 0.6.1`).
+    pub title: String,
     /// 메뉴 헤더(비활성 — 표시 이름).
     pub name: String,
     /// "열기" 라벨(i18n — 호스트 주입).
@@ -128,6 +130,7 @@ mod mac {
 
     struct State {
         item: Retained<NSStatusItem>,
+        title: Retained<NSMenuItem>,
         header: Retained<NSMenuItem>,
         open: Retained<NSMenuItem>,
         settings: Retained<NSMenuItem>,
@@ -217,6 +220,7 @@ mod mac {
                 }
                 btn.setToolTip(Some(&NSString::from_str(&content.tooltip)));
             }
+            state.title.setTitle(&NSString::from_str(&content.title));
             state.header.setTitle(&NSString::from_str(&content.name));
             state
                 .open
@@ -244,6 +248,9 @@ mod mac {
             let item = bar.statusItemWithLength(NSVariableStatusItemLength);
 
             let menu = NSMenu::new(mtm);
+            let title = NSMenuItem::new(mtm);
+            title.setEnabled(false); // 프로그램 이름 + 버전(비활성 · 11-02)
+            menu.addItem(&title);
             let header = NSMenuItem::new(mtm);
             header.setEnabled(false); // 이름 헤더(비활성 — Windows와 동일 문법)
             menu.addItem(&header);
@@ -268,6 +275,7 @@ mod mac {
 
             let state = State {
                 item,
+                title,
                 header,
                 open,
                 settings,
@@ -343,6 +351,8 @@ mod sni {
     const ID_OPEN: i32 = 3;
     const ID_QUIT: i32 = 4;
     const ID_SETTINGS: i32 = 5;
+    /// 프로그램 이름 + 버전(비활성 · 맨 위 · 11-02).
+    const ID_TITLE: i32 = 6;
 
     fn emit(ev: TrayEvent) {
         if let Some(cb) = ON_EVENT.get() {
@@ -387,6 +397,10 @@ mod sni {
             }
         };
         match id {
+            ID_TITLE => {
+                put("label", ov(c.title));
+                put("enabled", ov(false));
+            }
             ID_HEADER => {
                 put("label", ov(c.name));
                 put("enabled", ov(false));
@@ -503,7 +517,7 @@ mod sni {
         ) -> zbus::fdo::Result<(u32, MenuNode)> {
             let rev = MENU_REV.load(Ordering::Relaxed);
             let children = if parent_id == 0 {
-                [ID_HEADER, ID_SEP, ID_OPEN, ID_SETTINGS, ID_QUIT]
+                [ID_TITLE, ID_HEADER, ID_SEP, ID_OPEN, ID_SETTINGS, ID_QUIT]
                     .into_iter()
                     .filter_map(item_value)
                     .collect()
@@ -881,8 +895,9 @@ mod win {
     /// 우클릭 메뉴 — 이름 헤더(비활성) · 열기 · 설정(10-09) · 종료. 네이티브 TrackPopupMenu.
     fn show_menu(hwnd: Handle) {
         let Some(state) = STATE.get() else { return };
-        let (name, open_label, settings_label, quit_label) = match state.lock() {
+        let (title, name, open_label, settings_label, quit_label) = match state.lock() {
             Ok(g) => (
+                g.title.clone(),
                 g.name.clone(),
                 g.open_label.clone(),
                 g.settings_label.clone(),
@@ -890,6 +905,7 @@ mod win {
             ),
             Err(_) => return,
         };
+        let title_w = wide(&title);
         let name_w = wide(&name);
         let open_w = wide(&open_label);
         // `\t` 뒤 = 단축키 열(Win32 메뉴 관례) — 앱의 Ctrl+, 와 같은 표기(실행은 앱).
@@ -903,8 +919,13 @@ mod win {
             if menu.is_null() {
                 return;
             }
+            if !title.is_empty() {
+                AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, title_w.as_ptr()); // 이름 + 버전(11-02)
+            }
             if !name.is_empty() {
                 AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, name_w.as_ptr());
+            }
+            if !title.is_empty() || !name.is_empty() {
                 AppendMenuW(menu, MF_SEPARATOR, 0, core::ptr::null());
             }
             AppendMenuW(menu, MF_STRING, CMD_OPEN, open_w.as_ptr());
