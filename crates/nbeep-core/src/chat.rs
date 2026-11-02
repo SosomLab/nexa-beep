@@ -525,17 +525,17 @@ mod tests {
             ChatMessage::decode(&b[..HEADER + 20], peer),
             Err(WireError::Truncated)
         );
-        // 발췌 길이가 상한을 넘겨 선언되면 거부(할당 폭탄 방지).
-        let mut bad = b.clone();
-        bad[HEADER + 40] = 0xFF;
-        bad[HEADER + 41] = 0xFF;
-        assert_eq!(ChatMessage::decode(&bad, peer), Err(WireError::Truncated));
         // 참조 없는 본문은 종전 kind 1 그대로(바이트 불변).
         let plain = ChatMessage {
             body: MessageBody::with_reply("x".into(), None),
-            ..m.clone()
+            ..m
         };
         assert_eq!(plain.encode()[HEADER - 1] & 0x0F, KIND_TEXT);
+        // 발췌 길이가 상한을 넘겨 선언되면 거부(할당 폭탄 방지).
+        let mut bad = b;
+        bad[HEADER + 40] = 0xFF;
+        bad[HEADER + 41] = 0xFF;
+        assert_eq!(ChatMessage::decode(&bad, peer), Err(WireError::Truncated));
     }
 
     fn msg(sender: PeerId, seq: u64, text: &str) -> ChatMessage {

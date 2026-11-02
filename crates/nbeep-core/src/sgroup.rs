@@ -567,7 +567,7 @@ mod tests {
         .encode();
         assert_eq!(rep[0], K_MSG_REPLY);
         assert_eq!(SGroupMsg::decode(&rep[..70]), None);
-        let mut bad = rep.clone();
+        let mut bad = rep;
         bad[33] = 0x80;
         assert_eq!(SGroupMsg::decode(&bad), None);
     }

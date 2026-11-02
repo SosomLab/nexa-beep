@@ -2418,6 +2418,14 @@ struct PendingDirect {
 /// 상대별 대기 상한(NFR-B-6 — 상한 없는 큐 금지) · 초과 = 오래된 것부터 정리.
 const PENDING_DIRECT_MAX: usize = 200;
 
+/// 그룹 발신 대기 항목(방 · 본문 · 발신 때 발급한 seq · 답장 참조) — 11-02 답장 뒤 seq·참조가 붙었다(방 메시지 하나 = 열쇠 하나).
+type PendingGroupSend = (
+    nbeep_core::group::GroupId,
+    String,
+    u64,
+    Option<nbeep_core::ReplyRef>,
+);
+
 /// 대기 큐 직렬화 — `imp(1) ‖ at_ms(8 LE) ‖ len(4 LE) ‖ utf8` 반복.
 /// (wall은 저장하지 않는다 — 복원 시 `wall_from_ms`가 재계산 · history와 동일 원리.)
 fn encode_pending(q: &[PendingDirect]) -> Vec<u8> {
@@ -3595,15 +3603,7 @@ struct App {
     pending_direct: HashMap<PeerId, Vec<PendingDirect>>,
     /// 그룹 발신 중 미연결 구성원에게 이어 보낼 본문(성립 시 flush — 사용자 확정
     /// "자동 연결 시도 후 전송" · 보관 주체 = 송신자). 백오프 소진 시 실패 라인으로 종결.
-    pending_group_sends: HashMap<
-        PeerId,
-        Vec<(
-            nbeep_core::group::GroupId,
-            String,
-            u64,
-            Option<nbeep_core::ReplyRef>,
-        )>,
-    >,
+    pending_group_sends: HashMap<PeerId, Vec<PendingGroupSend>>,
     /// 미연결 구성원에게 이어 보낼 그룹 파일 경로(M5-1g 파일 팬아웃 — 08-13).
     pending_group_files: HashMap<PeerId, Vec<(nbeep_core::group::GroupId, std::path::PathBuf)>>,
     /// 그룹발 파일 전송 집계(M5-1h · 08-23) — 방별 풍선 목록(카운터의 원료).
@@ -6895,6 +6895,33 @@ impl App {
                     }
                 }
                 None if step == "dump" => self.script_dump(),
+                // ★ 답장 자동화(11-02): 열린 1:1 대화의 **마지막 열쇠 있는 줄**에 답장을 보낸다(우클릭 ▸ 답장 → 전송과 같은 경로).
+                Some(("reply", text)) => {
+                    match self
+                        .single_open
+                        .or_else(|| self.chats.keys().next().copied())
+                    {
+                        Some(p) => {
+                            let mut inv = Invalidations::default();
+                            let reply = self.chats.get_mut(&p).and_then(|c| {
+                                let i = c.last_keyed_entry()?;
+                                c.start_reply(i, &mut inv).then(|| c.take_reply()).flatten()
+                            });
+                            if reply.is_none() {
+                                eprintln!("[script] reply: 열쇠 있는 줄이 없다(원본 미수신?)");
+                            }
+                            self.send_direct_text(
+                                p,
+                                nbeep_core::sanitize_message(text),
+                                0,
+                                reply,
+                                &mut inv,
+                            );
+                            self.redraw_conversation(p);
+                        }
+                        None => eprintln!("[script] reply: 열린 대화 없음"),
+                    }
+                }
                 // ★ 헤드리스 시험 동사(11-02 · docs/26 §3-9): 프레임 캡처 · 창 목록 덤프(OS는 숨은 창을 못 본다).
                 Some(("capture", spec)) => {
                     let (path, title) = match spec.split_once('@') {
@@ -7022,8 +7049,12 @@ impl App {
         for k in open {
             for l in self.thread_lines(k) {
                 if let nbeep_ui::ChatBody::Text(t) = &l.body {
+                    // 답장 줄(11-02) = ` reply=<원본 short>#<seq>:<발췌>` 꼬리(자동화 판정 근거).
+                    let reply = l.reply.as_ref().map_or(String::new(), |r| {
+                        format!(" reply={}#{}:{}", r.origin.short(), r.seq, r.quote)
+                    });
                     eprintln!(
-                        "[dump] thread {} mine={} from={} origin={} seq={} text={}",
+                        "[dump] thread {} mine={} from={} origin={} seq={} text={}{reply}",
                         k.short(),
                         l.mine,
                         l.from.as_deref().unwrap_or("-"),
@@ -8905,6 +8936,7 @@ impl App {
     /// 으로 넣는다: 알림·안읽음·Delivered ack 없음(내가 보낸 것이다 · §5-1). 세션이 없는 상대면
     /// 보관 대화(parked)에 붙이고 목록 행을 만든다(이름 = 사본의 힌트 · 신뢰 근거 아님).
     /// 한계: 핀 기록이 없는 상대의 기록은 재시작 때 매핑되지 않는다(S4 매핑 표 몫).
+    #[allow(clippy::too_many_arguments)] // AppEvent::SenderCopy 필드를 그대로 받는다(11-02 답장 참조 추가)
     fn on_sender_copy(
         &mut self,
         peer: PeerId,

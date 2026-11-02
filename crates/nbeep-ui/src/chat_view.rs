@@ -853,6 +853,14 @@ impl ChatViewWidget {
         }
     }
 
+    /// 마지막 열쇠 있는 텍스트 줄(자동화 `reply=` 동사 — 답장 대상 고르기).
+    #[must_use]
+    pub fn last_keyed_entry(&self) -> Option<usize> {
+        self.lines
+            .iter()
+            .rposition(|l| l.sync_key().is_some() && matches!(l.body, ChatBody::Text(_)))
+    }
+
     /// 원본을 못 찾은 점프가 있었는가(1회성).
     pub fn take_jump_missing(&mut self) -> bool {
         core::mem::take(&mut self.jump_missing)
