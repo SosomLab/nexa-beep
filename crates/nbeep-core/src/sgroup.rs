@@ -178,6 +178,9 @@ pub enum SGroupMsg {
         /// 모드에서 "누가 보냈나"의 근거가 된다. **발신은 아직 `None`**(구버전 구성원은
         /// 미지 kind를 버리므로 — 해석기를 한 버전 먼저 배포한다 · 10-09).
         sender: Option<PeerId>,
+        /// ★ 답장 참조(11-02) — `Some`이면 kind 10(`K_MSG_REPLY`)로 실린다. 구버전 구성원은
+        /// 미지 kind를 버린다(답장만 안 보인다 · 사용자 확정 "새 kind + 발췌 동봉").
+        reply: Option<crate::ReplyRef>,
     },
     /// 탈퇴 통지(구성원 → 소유자).
     Leave {
@@ -211,6 +214,10 @@ const K_SUGGEST: u8 = 7;
 const K_CMSG_RESERVED: u8 = 8;
 /// 발신 기기 동반 본문(P-10 · 10-09 S3) — `[uid 32 ‖ sender 32 ‖ seq 8 ‖ text]`.
 const K_MSG_FROM: u8 = 9;
+/// ★ 답장 본문(11-02) — `[uid 32 ‖ flags u8(bit0 = sender 동반) ‖ [sender 32] ‖ seq 8 ‖
+/// r_origin 32 ‖ r_seq 8 ‖ quote_len u16 ‖ quote ‖ text]`. flags 바이트로 sender 유무를
+/// 품어 kind를 또 늘리지 않는다.
+const K_MSG_REPLY: u8 = 10;
 
 impl SGroupMsg {
     /// 와이어 인코딩(kind 1B + 본문).
@@ -242,6 +249,31 @@ impl SGroupMsg {
                 seq,
                 text,
                 sender,
+                reply: Some(r),
+            } => {
+                let mut v = vec![K_MSG_REPLY];
+                v.extend_from_slice(&uid.0);
+                v.push(u8::from(sender.is_some()));
+                if let Some(s) = sender {
+                    v.extend_from_slice(s.as_bytes());
+                }
+                v.extend_from_slice(&seq.to_be_bytes());
+                v.extend_from_slice(r.origin.as_bytes());
+                v.extend_from_slice(&r.seq.to_be_bytes());
+                let q = r.quote.as_bytes();
+                let n = q.len().min(crate::REPLY_QUOTE_MAX_CHARS * 4);
+                #[allow(clippy::cast_possible_truncation)] // ≤ 480
+                v.extend_from_slice(&(n as u16).to_be_bytes());
+                v.extend_from_slice(&q[..n]);
+                v.extend_from_slice(text.as_bytes());
+                v
+            }
+            SGroupMsg::Msg {
+                uid,
+                seq,
+                text,
+                sender,
+                reply: None,
             } => {
                 let mut v = vec![if sender.is_some() { K_MSG_FROM } else { K_MSG }];
                 v.extend_from_slice(&uid.0);
@@ -303,6 +335,7 @@ impl SGroupMsg {
                     seq,
                     text,
                     sender: None,
+                    reply: None,
                 })
             }
             K_MSG_FROM => {
@@ -315,6 +348,47 @@ impl SGroupMsg {
                     seq,
                     text,
                     sender: Some(sender),
+                    reply: None,
+                })
+            }
+            K_MSG_REPLY => {
+                let uid = uid32(rest)?;
+                let flags = *rest.get(32)?;
+                if flags & !1 != 0 {
+                    return None; // 미지 flags = 모르는 꼴(fail-closed)
+                }
+                let mut p = 33usize;
+                let sender = if flags & 1 != 0 {
+                    let s = PeerId::from_bytes(rest.get(p..p + 32)?.try_into().ok()?);
+                    p += 32;
+                    Some(s)
+                } else {
+                    None
+                };
+                let seq = u64::from_be_bytes(rest.get(p..p + 8)?.try_into().ok()?);
+                p += 8;
+                let origin = PeerId::from_bytes(rest.get(p..p + 32)?.try_into().ok()?);
+                p += 32;
+                let rseq = u64::from_be_bytes(rest.get(p..p + 8)?.try_into().ok()?);
+                p += 8;
+                let n = usize::from(u16::from_be_bytes(rest.get(p..p + 2)?.try_into().ok()?));
+                p += 2;
+                if n > crate::REPLY_QUOTE_MAX_CHARS * 4 {
+                    return None;
+                }
+                let quote = std::str::from_utf8(rest.get(p..p + n)?).ok()?.to_string();
+                p += n;
+                let text = std::str::from_utf8(rest.get(p..)?).ok()?.to_string();
+                Some(SGroupMsg::Msg {
+                    uid,
+                    seq,
+                    text,
+                    sender,
+                    reply: Some(crate::ReplyRef {
+                        origin,
+                        seq: rseq,
+                        quote,
+                    }),
                 })
             }
             K_LEAVE => (rest.len() == 32).then(|| SGroupMsg::Leave {
@@ -422,12 +496,28 @@ mod tests {
                 seq: 42,
                 text: "안녕 방!".into(),
                 sender: None,
+                reply: None,
             },
             SGroupMsg::Msg {
                 uid: uid(4),
                 seq: 43,
                 text: "발신 기기 동반".into(),
                 sender: Some(pid(8)),
+                reply: None,
+            },
+            SGroupMsg::Msg {
+                uid: uid(4),
+                seq: 44,
+                text: "답장이야".into(),
+                sender: None,
+                reply: Some(crate::ReplyRef::new(pid(2), 41, "원본 글")),
+            },
+            SGroupMsg::Msg {
+                uid: uid(4),
+                seq: 45,
+                text: "기기 동반 답장".into(),
+                sender: Some(pid(8)),
+                reply: Some(crate::ReplyRef::new(pid(8), 41, "원본")),
             },
             SGroupMsg::Leave { uid: uid(6) },
             SGroupMsg::Suggest {
@@ -451,6 +541,7 @@ mod tests {
             seq: 7,
             text: "x".into(),
             sender: None,
+            reply: None,
         }
         .encode();
         assert_eq!(plain[0], K_MSG);
@@ -460,9 +551,24 @@ mod tests {
             seq: 7,
             text: "x".into(),
             sender: Some(pid(2)),
+            reply: None,
         }
         .encode();
         assert_eq!(from[0], K_MSG_FROM);
         assert_eq!(SGroupMsg::decode(&from[..60]), None);
+        // ★ 답장(11-02) = kind 10 · 잘림 = None · 미지 flags = None.
+        let rep = SGroupMsg::Msg {
+            uid: uid(1),
+            seq: 7,
+            text: "x".into(),
+            sender: None,
+            reply: Some(crate::ReplyRef::new(pid(3), 6, "원본")),
+        }
+        .encode();
+        assert_eq!(rep[0], K_MSG_REPLY);
+        assert_eq!(SGroupMsg::decode(&rep[..70]), None);
+        let mut bad = rep.clone();
+        bad[33] = 0x80;
+        assert_eq!(SGroupMsg::decode(&bad), None);
     }
 }

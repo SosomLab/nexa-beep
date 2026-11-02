@@ -59,7 +59,8 @@ pub use catchup::{
     SYNC_READ_TAG,
 };
 pub use chat::{
-    fanout, ChatMessage, DedupIndex, FanoutReport, Importance, MessageBody, Sequencer, WireError,
+    fanout, ChatMessage, DedupIndex, FanoutReport, Importance, MessageBody, ReplyRef, Sequencer,
+    WireError, REPLY_QUOTE_MAX_CHARS,
 };
 pub use group::{Group, GroupId, GroupStore};
 pub use i18n::{current_lang, set_lang, t, tf, tr, Lang, Msg};

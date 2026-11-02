@@ -193,6 +193,8 @@ enum AppEvent {
         importance: u8,
         /// 공지(브로드캐스트) 팬아웃 표식(08-21) — "받지 않기" 설정의 판정 근거.
         broadcast: bool,
+        /// ★ 답장 참조(11-02 · kind 2) — 원본 열쇠 + 발췌.
+        reply: Option<nbeep_core::ReplyRef>,
     },
     /// 클립보드 이미지 준비 완료(③ 08-20) — 워커가 읽기+PNG 인코딩을 마쳤다.
     /// `png = None` = 클립보드에 이미지 없음/변환 실패(상태바 고지).
@@ -380,6 +382,8 @@ enum AppEvent {
         text: nbeep_core::SafeText,
         seq: u64,
         importance: u8,
+        /// 답장 참조(11-02) — 형제가 보낸 답장도 인용 블록을 그린다.
+        reply: Option<nbeep_core::ReplyRef>,
     },
     /// 형제의 따라잡기 디제스트(ADR-0015 S4 · 태그 5) — 대조·청구는 메인(기록이 거기 있다).
     SyncDigest {
@@ -1531,14 +1535,15 @@ fn spawn_session_actor(
                                 nbeep_core::Importance::Notice => 1,
                                 nbeep_core::Importance::Normal => 0,
                             };
-                            if let nbeep_core::MessageBody::Text(t) = m.body {
+                            if let Some(t) = m.body.text() {
                                 let ev = AppEvent::Recv {
                                     peer,
-                                    text: nbeep_core::sanitize_message(&t),
+                                    text: nbeep_core::sanitize_message(t),
                                     seq: m.seq,
                                     sender: m.sender_device,
                                     importance,
                                     broadcast: m.broadcast,
+                                    reply: m.body.reply().cloned(),
                                 };
                                 if proxy.send_event(ev).is_err() {
                                     return; // 이벤트 루프 종료
@@ -1682,14 +1687,15 @@ fn spawn_session_actor(
                         // sender copy(ADR-0015 S3 · 태그 19) — 형제가 남에게 보낸 내 메시지.
                         // 발신자 검증(원 발신 = 세션 상대)은 여기서, 형제 세션 판정은 메인.
                         if let Ok(c) = nbeep_core::SenderCopy::decode(&bytes, peer) {
-                            if let nbeep_core::MessageBody::Text(t) = c.msg.body {
+                            if let Some(t) = c.msg.body.text() {
                                 let ev = AppEvent::SenderCopy {
                                     peer,
                                     to: c.to,
                                     to_name: c.to_name,
-                                    text: nbeep_core::sanitize_message(&t),
+                                    text: nbeep_core::sanitize_message(t),
                                     seq: c.msg.seq,
                                     importance: c.msg.importance.to_nibble(),
+                                    reply: c.msg.body.reply().cloned(),
                                 };
                                 if proxy.send_event(ev).is_err() {
                                     return;
@@ -2123,6 +2129,27 @@ fn encode_history(lines: &[ChatLine]) -> Vec<u8> {
                 //   from ‖ text — 재시작 뒤에도 `(origin, seq)` dedup이 서야 형제 동기가 중복을
                 //   안 만든다. 열쇠 없는 줄(안내·구본)은 종전 tag 1/3 그대로.
                 if let Some((origin, seq)) = l.sync_key() {
+                    // ★ tag 7(11-02) = 답장 줄: tag 4 머리 ‖ flags u8(bit0 = 전송 시각 동반) ‖ [sent_ms 8] ‖
+                    //   from ‖ text ‖ r_origin 32 ‖ r_seq 8 LE ‖ r_from ‖ quote. 구판은 여기서 멈춘다(전방 확장).
+                    if let Some(r) = &l.reply {
+                        out.push(7u8);
+                        out.push(u8::from(l.mine));
+                        out.extend_from_slice(&l.at_ms.to_le_bytes());
+                        out.extend_from_slice(origin.as_bytes());
+                        out.extend_from_slice(&seq.to_le_bytes());
+                        out.push(l.importance.min(2));
+                        out.push(u8::from(l.sent.is_some()));
+                        if let Some((sent_ms, _)) = l.sent {
+                            out.extend_from_slice(&sent_ms.to_le_bytes());
+                        }
+                        put_str(&mut out, l.from.as_deref().unwrap_or(""));
+                        put_str(&mut out, t.as_str());
+                        out.extend_from_slice(r.origin.as_bytes());
+                        out.extend_from_slice(&r.seq.to_le_bytes());
+                        put_str(&mut out, l.reply_from.as_deref().unwrap_or(""));
+                        put_str(&mut out, &r.quote);
+                        continue;
+                    }
                     // tag 6(10-19) = tag 4 + 전송 시각(대기분 확정 줄만 — 구판은 여기서 멈춘다 · 전방 확장).
                     out.push(if l.sent.is_some() { 6u8 } else { 4u8 });
                     out.push(u8::from(l.mine));
@@ -2192,6 +2219,72 @@ fn decode_history(bytes: &[u8]) -> Vec<ChatLine> {
         let mine = bytes[i + 1] != 0;
         let at_ms = u64::from_le_bytes(bytes[i + 2..i + 10].try_into().unwrap_or([0; 8]));
         match tag {
+            7 => {
+                // ★ 답장 줄(11-02) — tag 4 머리 ‖ flags ‖ [sent_ms] ‖ from ‖ text ‖ r_origin ‖ r_seq ‖ r_from ‖ quote.
+                if i + 52 > bytes.len() {
+                    break;
+                }
+                let origin = PeerId::from_bytes(
+                    bytes[i + 10..i + 42].try_into().unwrap_or([0; PeerId::LEN]),
+                );
+                let seq = u64::from_le_bytes(bytes[i + 42..i + 50].try_into().unwrap_or([0; 8]));
+                let importance = bytes[i + 50];
+                let flags = bytes[i + 51];
+                let mut p = i + 52;
+                let sent = if flags & 1 != 0 {
+                    if p + 8 > bytes.len() {
+                        break;
+                    }
+                    let ms = u64::from_le_bytes(bytes[p..p + 8].try_into().unwrap_or([0; 8]));
+                    p += 8;
+                    Some((ms, wall_from_ms(ms)))
+                } else {
+                    None
+                };
+                let Some((from, p1)) = read_str(bytes, p) else {
+                    break;
+                };
+                let Some((text, p2)) = read_str(bytes, p1) else {
+                    break;
+                };
+                if p2 + 40 > bytes.len() {
+                    break;
+                }
+                let r_origin =
+                    PeerId::from_bytes(bytes[p2..p2 + 32].try_into().unwrap_or([0; PeerId::LEN]));
+                let r_seq =
+                    u64::from_le_bytes(bytes[p2 + 32..p2 + 40].try_into().unwrap_or([0; 8]));
+                let Some((r_from, p3)) = read_str(bytes, p2 + 40) else {
+                    break;
+                };
+                let Some((quote, next)) = read_str(bytes, p3) else {
+                    break;
+                };
+                let mut l = ChatLine::text(
+                    mine,
+                    nbeep_core::sanitize_message(&text),
+                    at_ms,
+                    wall_from_ms(at_ms),
+                )
+                .with_importance(importance)
+                .with_seq(seq)
+                .with_origin(origin)
+                .with_sent(sent)
+                .with_reply(
+                    Some(nbeep_core::ReplyRef {
+                        origin: r_origin,
+                        seq: r_seq,
+                        quote: nbeep_core::ReplyRef::excerpt(&quote),
+                    }),
+                    (!r_from.is_empty())
+                        .then(|| nbeep_core::sanitize_message(&r_from).as_str().to_string()),
+                );
+                if !from.is_empty() {
+                    l = l.with_from(nbeep_core::sanitize_message(&from).as_str());
+                }
+                out.push(l);
+                i = next;
+            }
             4 | 6 => {
                 // 열쇠 동반 텍스트(S4 · 10-10) — origin ‖ seq ‖ 등급 ‖ [tag 6: sent_ms(8)] ‖ from ‖ text.
                 let head = if tag == 6 { 59 } else { 51 };
@@ -2296,6 +2389,8 @@ fn decode_history(bytes: &[u8]) -> Vec<ChatLine> {
                     importance: 0,
                     origin: None,
                     sent: None,
+                    reply: None,
+                    reply_from: None,
                 });
                 i = next;
             }
@@ -2316,6 +2411,8 @@ struct PendingDirect {
     /// 표식**(08-21 — 대기 편입된 공지가 flush 때도 공지로 발신되도록 · 저장
     /// 포맷 불변: 구 데이터의 0/1/2는 그대로 읽힌다).
     importance: u8,
+    /// ★ 답장 참조(11-02) — 저장 = importance **bit3(`0x8`)** 표식 + 본문 뒤 꼬리(구 데이터 = 없음).
+    reply: Option<nbeep_core::ReplyRef>,
 }
 
 /// 상대별 대기 상한(NFR-B-6 — 상한 없는 큐 금지) · 초과 = 오래된 것부터 정리.
@@ -2326,11 +2423,19 @@ const PENDING_DIRECT_MAX: usize = 200;
 fn encode_pending(q: &[PendingDirect]) -> Vec<u8> {
     let mut out = Vec::new();
     for m in q {
-        out.push(m.importance);
+        out.push((m.importance & 0x7) | if m.reply.is_some() { 0x8 } else { 0 });
         out.extend_from_slice(&m.at_ms.to_le_bytes());
         let b = m.text.as_bytes();
         out.extend_from_slice(&(u32::try_from(b.len()).unwrap_or(0)).to_le_bytes());
         out.extend_from_slice(&b[..b.len().min(u32::MAX as usize)]);
+        if let Some(r) = &m.reply {
+            // 꼬리(11-02): origin 32 ‖ seq 8 LE ‖ quote_len u32 ‖ quote.
+            out.extend_from_slice(r.origin.as_bytes());
+            out.extend_from_slice(&r.seq.to_le_bytes());
+            let qb = r.quote.as_bytes();
+            out.extend_from_slice(&(u32::try_from(qb.len()).unwrap_or(0)).to_le_bytes());
+            out.extend_from_slice(qb);
+        }
     }
     out
 }
@@ -2340,18 +2445,47 @@ fn decode_pending(bytes: &[u8]) -> Vec<PendingDirect> {
     let mut out = Vec::new();
     let mut i = 0usize;
     while i + 13 <= bytes.len() {
-        let importance = bytes[i].min(2);
+        let flags = bytes[i];
+        // 등급 2비트 + 공지 bit2 보존(11-02 수정 — 종전 `.min(2)`는 공지 표식(5)을 **긴급(2)**으로 읽어
+        // 재시작 뒤 대기 공지가 긴급으로 나가던 결함).
+        let importance = (flags & 0x3).min(2) | (flags & 0x4);
         let at_ms = u64::from_le_bytes(bytes[i + 1..i + 9].try_into().unwrap_or([0; 8]));
         let n = u32::from_le_bytes(bytes[i + 9..i + 13].try_into().unwrap_or([0; 4])) as usize;
         let Some(end) = (i + 13).checked_add(n).filter(|e| *e <= bytes.len()) else {
             break;
         };
+        let text = String::from_utf8_lossy(&bytes[i + 13..end]).into_owned();
+        let mut next = end;
+        let reply = if flags & 0x8 != 0 {
+            // 답장 꼬리(11-02) — 잘려 있으면 이 항목까지 버린다(fail-soft).
+            if end + 44 > bytes.len() {
+                break;
+            }
+            let origin = PeerId::from_bytes(bytes[end..end + 32].try_into().unwrap_or([0; 32]));
+            let seq = u64::from_le_bytes(bytes[end + 32..end + 40].try_into().unwrap_or([0; 8]));
+            let qn =
+                u32::from_le_bytes(bytes[end + 40..end + 44].try_into().unwrap_or([0; 4])) as usize;
+            let Some(qend) = (end + 44).checked_add(qn).filter(|e| *e <= bytes.len()) else {
+                break;
+            };
+            next = qend;
+            Some(nbeep_core::ReplyRef {
+                origin,
+                seq,
+                quote: nbeep_core::ReplyRef::excerpt(&String::from_utf8_lossy(
+                    &bytes[end + 44..qend],
+                )),
+            })
+        } else {
+            None
+        };
         out.push(PendingDirect {
-            text: String::from_utf8_lossy(&bytes[i + 13..end]).into_owned(),
+            text,
             at_ms,
             importance,
+            reply,
         });
-        i = end;
+        i = next;
     }
     out
 }
@@ -3461,7 +3595,15 @@ struct App {
     pending_direct: HashMap<PeerId, Vec<PendingDirect>>,
     /// 그룹 발신 중 미연결 구성원에게 이어 보낼 본문(성립 시 flush — 사용자 확정
     /// "자동 연결 시도 후 전송" · 보관 주체 = 송신자). 백오프 소진 시 실패 라인으로 종결.
-    pending_group_sends: HashMap<PeerId, Vec<(nbeep_core::group::GroupId, String)>>,
+    pending_group_sends: HashMap<
+        PeerId,
+        Vec<(
+            nbeep_core::group::GroupId,
+            String,
+            u64,
+            Option<nbeep_core::ReplyRef>,
+        )>,
+    >,
     /// 미연결 구성원에게 이어 보낼 그룹 파일 경로(M5-1g 파일 팬아웃 — 08-13).
     pending_group_files: HashMap<PeerId, Vec<(nbeep_core::group::GroupId, std::path::PathBuf)>>,
     /// 그룹발 파일 전송 집계(M5-1h · 08-23) — 방별 풍선 목록(카운터의 원료).
@@ -6742,6 +6884,7 @@ impl App {
                                 p,
                                 nbeep_core::sanitize_message(text),
                                 0,
+                                None,
                                 &mut inv,
                             );
                             self.redraw_conversation(p);
@@ -8541,8 +8684,10 @@ impl App {
         peer: PeerId,
         text: nbeep_core::SafeText,
         grade: u8,
+        reply: Option<nbeep_core::ReplyRef>,
         inv: &mut Invalidations,
     ) {
+        let reply_from = reply.as_ref().map(|r| self.reply_from_name(r.origin));
         let importance = match grade {
             2 => nbeep_core::Importance::Urgent,
             1 => nbeep_core::Importance::Notice,
@@ -8558,7 +8703,7 @@ impl App {
             let msg = nbeep_core::ChatMessage {
                 sender_device: self.identity.peer_id(),
                 seq: self.issue_seq(),
-                body: nbeep_core::MessageBody::Text(text.as_str().to_string()),
+                body: nbeep_core::MessageBody::with_reply(text.as_str().to_string(), reply.clone()),
                 importance,
                 broadcast: false,
             };
@@ -8568,7 +8713,8 @@ impl App {
                     ChatLine::text(true, text.clone(), at_ms, wall)
                         .with_seq(msg.seq)
                         .with_origin(me) // S4 따라잡기 열쇠 = (나, seq)
-                        .with_importance(grade),
+                        .with_importance(grade)
+                        .with_reply(reply.clone(), reply_from.clone()),
                     inv,
                 );
             }
@@ -8577,7 +8723,8 @@ impl App {
                     ChatLine::text(true, text, at_ms, wall)
                         .with_seq(msg.seq)
                         .with_origin(me)
-                        .with_importance(grade),
+                        .with_importance(grade)
+                        .with_reply(reply, reply_from),
                 );
             }
             let bytes = msg.encode();
@@ -8627,6 +8774,7 @@ impl App {
                 text: text.as_str().to_string(),
                 at_ms,
                 importance: grade,
+                reply: reply.clone(),
             });
             if q.len() > PENDING_DIRECT_MAX {
                 let drop_n = q.len() - PENDING_DIRECT_MAX;
@@ -8644,7 +8792,8 @@ impl App {
                 ));
             let line = ChatLine::text(true, text, at_ms, wall)
                 .with_queued(true)
-                .with_importance(grade);
+                .with_importance(grade)
+                .with_reply(reply, reply_from);
             // 저장분(parked)에도 대기 풍선(10-19) — 종전엔 뷰에만 넣어 뷰를 닫았다 열면 풍선이 사라졌다
             // (재시작 뒤에만 restore_pending이 되살렸다). flush가 확정하거나(conv 이관 뒤) 접힌 키면
             // 걷는다(flush_direct_sends) — restore_pending과 같은 자리·같은 규칙.
@@ -8716,6 +8865,7 @@ impl App {
         text: nbeep_core::SafeText,
         seq: u64,
         importance: u8,
+        reply: Option<nbeep_core::ReplyRef>,
     ) {
         let me = self.identity.peer_id();
         if !crate::userident::accept_copy(
@@ -8733,10 +8883,12 @@ impl App {
             return; // 같은 (발신 기기, seq) — 다중 경로 중복
         }
         let (at_ms, wall) = now_stamp();
+        let reply_from = reply.as_ref().map(|r| self.reply_from_name(r.origin));
         let line = ChatLine::text(true, text, at_ms, wall)
             .with_importance(importance & 0x3)
             .with_seq(seq) // S4 열쇠 = (보낸 형제, seq) — 따라잡기가 같은 줄을 다시 넣지 않게
-            .with_origin(peer);
+            .with_origin(peer)
+            .with_reply(reply, reply_from);
         if let Some(conv) = self.conversations.get_mut(&to) {
             conv.lines.push(line.clone());
         } else {
@@ -9770,6 +9922,15 @@ impl App {
         });
         if let Some(mid) = self.main_id {
             self.request_redraw(mid);
+        }
+    }
+
+    /// ★ 답장 인용 블록의 발신자 라벨(11-02) — 원본이 내 기기(나·형제)면 "나", 그 외는 표시 이름.
+    fn reply_from_name(&self, origin: PeerId) -> String {
+        if origin == self.identity.peer_id() || self.siblings.contains(&origin) {
+            nbeep_core::t(nbeep_core::Msg::ReplyYou).to_string()
+        } else {
+            self.peer_title(origin)
         }
     }
 
@@ -13353,18 +13514,21 @@ impl App {
                 continue;
             }
             // 대기 풍선 복원 — 기록(parked)에 이어 붙인다(대기분은 항상 최신이다).
-            let parked = self.parked_lines.entry(peer).or_default();
-            for m in &q {
-                parked.push(
+            let restored: Vec<ChatLine> = q
+                .iter()
+                .map(|m| {
+                    let reply_from = m.reply.as_ref().map(|r| self.reply_from_name(r.origin));
                     ChatLine::text(
                         true,
                         nbeep_core::sanitize_message(&m.text),
                         m.at_ms,
                         wall_from_ms(m.at_ms),
                     )
-                    .with_queued(true),
-                );
-            }
+                    .with_queued(true)
+                    .with_reply(m.reply.clone(), reply_from)
+                })
+                .collect();
+            self.parked_lines.entry(peer).or_default().extend(restored);
             self.pending_direct.insert(peer, q);
             // 상대가 보이면 자동 전달 — 백오프를 즉시 후보로 걸어 둔다(발견 시 재시도).
             self.reconnect.entry(peer).or_insert((0, 0));
@@ -13402,12 +13566,20 @@ impl App {
         let mut sent = 0usize;
         let mut inv = Invalidations::default();
         let sent_at = now_stamp(); // 실제 전송 시각(10-19) — 입력 시각(m.at_ms)과 따로 보관
+                                   // 답장 인용 라벨(11-02) — 빌림 밖에서 미리 푼다(아래는 conv를 &mut로 쥔다).
+        let me_id = self.identity.peer_id();
+        let siblings = self.siblings.clone();
+        let titles: HashMap<PeerId, String> = q
+            .iter()
+            .filter_map(|m| m.reply.as_ref().map(|r| r.origin))
+            .map(|o| (o, self.peer_title(o)))
+            .collect();
         for m in &q {
             let seq = self.issue_seq();
             let msg = nbeep_core::ChatMessage {
                 sender_device: self.identity.peer_id(),
                 seq,
-                body: nbeep_core::MessageBody::Text(m.text.clone()),
+                body: nbeep_core::MessageBody::with_reply(m.text.clone(), m.reply.clone()),
                 importance: match m.importance & 0x3 {
                     2 => nbeep_core::Importance::Urgent,
                     1 => nbeep_core::Importance::Notice,
@@ -13431,6 +13603,13 @@ impl App {
                 l.seq = seq;
                 l.sent = Some(sent_at);
             } else {
+                let reply_from = m.reply.as_ref().map(|r| {
+                    if r.origin == me_id || siblings.contains(&r.origin) {
+                        nbeep_core::t(nbeep_core::Msg::ReplyYou).to_string()
+                    } else {
+                        titles.get(&r.origin).cloned().unwrap_or_default()
+                    }
+                });
                 conv.lines.push(
                     ChatLine::text(
                         true,
@@ -13439,7 +13618,8 @@ impl App {
                         wall_from_ms(m.at_ms),
                     )
                     .with_seq(seq)
-                    .with_sent(Some(sent_at)),
+                    .with_sent(Some(sent_at))
+                    .with_reply(m.reply.clone(), reply_from),
                 );
             }
             if let Some(chat) = self.chats.get_mut(&self.view_key(peer)) {
@@ -14968,6 +15148,7 @@ impl App {
                     text: text.as_str().to_string(),
                     at_ms,
                     importance: 1 | 0x4, // Notice + 공지 표식(08-21)
+                    reply: None,
                 });
                 if q.len() > PENDING_DIRECT_MAX {
                     let drop_n = q.len() - PENDING_DIRECT_MAX;
@@ -15272,6 +15453,17 @@ impl App {
                 .unwrap_or_else(|| "이미지".into());
             self.open_image_view(el, id, qp, title);
         }
+        // ★ 답장 원본 점프 실패(11-02).
+        if self
+            .gchats
+            .get_mut(&gid)
+            .is_some_and(ChatViewWidget::take_jump_missing)
+        {
+            self.set_status(nbeep_core::t(nbeep_core::Msg::StReplyOrigMissing));
+            if let Some(mid) = self.main_id {
+                self.request_redraw(mid);
+            }
+        }
         // 풍선 우클릭 복사·붙여넣기 — 1:1 `drain_chat_effects`와 동형(위젯은 OS를
         // 모른다 · 08-13 실기: 이 배선이 없어 그룹 방 Copy Message가 무반응이었다).
         if let Some(t) = self
@@ -15342,6 +15534,12 @@ impl App {
                 return;
             }
         };
+        // ★ 답장 초안(11-02) — 전송 확정 때만 가져간다.
+        let reply = outgoing.as_ref().and_then(|_| {
+            self.gchats
+                .get_mut(&gid)
+                .and_then(ChatViewWidget::take_reply)
+        });
         if let Some(text) = outgoing {
             // 방 발신(M5-1g) — 명부 기준 팬아웃(나 제외 · Group 스트림 · ADR §4).
             let Some(s) = self.groups.shared_by_id(gid) else {
@@ -15364,8 +15562,15 @@ impl App {
                 return;
             }
             let (at_ms, wall) = now_stamp();
+            // ★ 방 메시지 하나 = seq 하나(11-02 — 종전엔 구성원마다 새 seq라 "같은 메시지"의 열쇠가 기기마다
+            //   달라 답장 참조가 성립하지 않았다). dedup은 수신자마다 (발신 기기, seq)라 공유해도 무해.
+            let seq = self.issue_seq();
+            let reply_from = reply.as_ref().map(|r| self.reply_from_name(r.origin));
             // 내 말풍선은 스레드에 한 번(팬아웃과 무관 — "하나의 방").
-            let line = ChatLine::text(true, text.clone(), at_ms, wall);
+            let line = ChatLine::text(true, text.clone(), at_ms, wall)
+                .with_seq(seq)
+                .with_origin(me)
+                .with_reply(reply.clone(), reply_from);
             self.group_threads
                 .entry(gid)
                 .or_default()
@@ -15377,13 +15582,13 @@ impl App {
             let mut sent = 0usize;
             let mut queued: Vec<PeerId> = Vec::new();
             for m in &members {
-                let seq = self.issue_seq(); // 빌림 밖(S4 — 발급이 설정 영속을 동반해 &mut)
                 if let Some(conv) = self.conversations.get(m) {
                     let frame = nbeep_core::SGroupMsg::Msg {
                         uid,
                         seq,
                         text: text.as_str().to_string(),
                         sender: None, // P-10 kind 9 발신은 구버전 소진 후(해석기 선배포)
+                        reply: reply.clone(),
                     }
                     .encode();
                     if conv.out_tx.send(SessionCmd::Group(vec![frame])).is_ok() {
@@ -15397,7 +15602,7 @@ impl App {
                 // 초과분은 오래된 것부터 폐기(큐 상한 필수 — NFR-B-6 · 13 §12-1).
                 let keep = group_resync_keep(&self.settings);
                 let q = self.pending_group_sends.entry(*m).or_default();
-                q.push((gid, text.as_str().to_string()));
+                q.push((gid, text.as_str().to_string(), seq, reply.clone()));
                 if q.len() > keep {
                     let drop_n = q.len() - keep;
                     q.drain(..drop_n);
@@ -15546,9 +15751,9 @@ impl App {
         };
         let mut inv = Invalidations::default();
         let title = self.peer_title(peer);
-        for (gid, text) in pends {
+        for (gid, text, seq, reply) in pends {
             let uid = self.groups.shared_by_id(gid).map(|s| s.roster.uid);
-            let seq = self.issue_seq(); // 빌림 밖(S4)
+            // seq는 발신 때 발급한 것 그대로(11-02 — 방 메시지 하나 = 열쇠 하나).
             let sent = uid.is_some_and(|uid| {
                 self.conversations.get(&peer).is_some_and(|conv| {
                     let frame = nbeep_core::SGroupMsg::Msg {
@@ -15556,6 +15761,7 @@ impl App {
                         seq,
                         text: text.clone(),
                         sender: None, // P-10 kind 9 발신은 구버전 소진 후(해석기 선배포)
+                        reply: reply.clone(),
                     }
                     .encode();
                     conv.out_tx.send(SessionCmd::Group(vec![frame])).is_ok()
@@ -15601,7 +15807,7 @@ impl App {
             return;
         };
         let title = self.peer_title(peer);
-        for (gid, _) in pends {
+        for (gid, ..) in pends {
             self.push_group_note(gid, &format!("⚠ 전달 실패(연결 안 됨): {title}"), &mut inv);
         }
     }
@@ -16440,6 +16646,7 @@ impl App {
                 seq,
                 text,
                 sender,
+                reply,
             } => {
                 // P-10(S3): 발신 기기를 밝힌 본문은 **직접 팬아웃에서 세션 상대와 같아야** 한다
                 //   (릴레이·컨텐츠 모드 전까지 재전달은 없다 — 1:1 `SenderMismatch`와 같은 결).
@@ -16460,8 +16667,13 @@ impl App {
                 self.ledger.note_recv(peer);
                 let (at_ms, wall) = now_stamp();
                 // 발신자 라벨 = 카카오톡류 수신 풍선 위 이름(기존 with_from 재사용).
+                // ★ 열쇠 `(발신 기기, seq)`(11-02) — 답장 참조·원본 점프의 근거(그룹 줄도 열쇠를 갖는다).
+                let reply_from = reply.as_ref().map(|r| self.reply_from_name(r.origin));
                 let line = ChatLine::text(false, nbeep_core::sanitize_message(&text), at_ms, wall)
-                    .with_from(self.peer_title(peer));
+                    .with_from(self.peer_title(peer))
+                    .with_seq(seq)
+                    .with_origin(peer)
+                    .with_reply(reply, reply_from);
                 self.group_threads
                     .entry(gid)
                     .or_default()
@@ -17362,6 +17574,17 @@ impl App {
                 .unwrap_or_else(|| "이미지".into());
             self.open_image_view(el, id, qp, title);
         }
+        // ★ 답장 원본 점프 실패(11-02) — 이 대화에 원본이 없다(기록 상한·다른 기기 기록).
+        if self
+            .chats
+            .get_mut(&peer)
+            .is_some_and(ChatViewWidget::take_jump_missing)
+        {
+            self.set_status(nbeep_core::t(nbeep_core::Msg::StReplyOrigMissing));
+            if let Some(mid) = self.main_id {
+                self.request_redraw(mid);
+            }
+        }
         // 풍선 우클릭 복사(08-10) — 위젯은 OS를 모르므로 여기서 클립보드에 쓴다.
         if let Some(t) = self
             .chats
@@ -17431,7 +17654,12 @@ impl App {
                     .get_mut(&peer)
                     .map_or(0, ChatViewWidget::take_grade)
             });
-            self.send_direct_text(peer, text, grade, &mut inv);
+            // ★ 답장 초안(11-02) — 전송 확정 때만 가져간다(명령은 초안을 남긴다).
+            let reply = self
+                .chats
+                .get_mut(&peer)
+                .and_then(ChatViewWidget::take_reply);
+            self.send_direct_text(peer, text, grade, reply, &mut inv);
             self.request_redraw(id);
             if let Some(mid) = self.main_id {
                 self.request_redraw(mid); // 상태바 갱신
@@ -18474,6 +18702,7 @@ impl ApplicationHandler<AppEvent> for App {
                 sender,
                 importance,
                 broadcast,
+                reply,
             } => {
                 if !self.dedup.accept(sender, seq) {
                     dlog!(self, DL::Chat, DV::Trace, "recv", |r| r
@@ -18512,11 +18741,13 @@ impl ApplicationHandler<AppEvent> for App {
                 let (at_ms, wall) = now_stamp();
                 // 발신자 표시 이름(08-19 사용자 요청 — 1:1도 수신 풍선 위에 이름).
                 let from = self.peer_title(peer);
+                let reply_from = reply.as_ref().map(|r| self.reply_from_name(r.origin));
                 let line = ChatLine::text(false, text, at_ms, wall)
                     .with_from(from)
                     .with_seq(seq) // S4 따라잡기 열쇠 = (상대 기기, 상대 seq) — ack 계층은 mine만 본다
                     .with_origin(peer)
-                    .with_importance(importance); // ④ 등급 링(발신자의 요청 표시)
+                    .with_importance(importance) // ④ 등급 링(발신자의 요청 표시)
+                    .with_reply(reply, reply_from); // ★ 답장 인용 블록(11-02)
                 if let Some(conv) = self.conversations.get_mut(&peer) {
                     conv.lines.push(line.clone());
                 }
@@ -18573,7 +18804,8 @@ impl ApplicationHandler<AppEvent> for App {
                 text,
                 seq,
                 importance,
-            } => self.on_sender_copy(peer, to, &to_name, text, seq, importance),
+                reply,
+            } => self.on_sender_copy(peer, to, &to_name, text, seq, importance, reply),
             AppEvent::SyncDigest { peer, digest } => self.on_sync_digest(peer, &digest),
             AppEvent::SyncPull { peer, pull } => self.on_sync_pull(peer, pull),
             AppEvent::SyncLines { peer, lines } => self.on_sync_lines(peer, &lines),
@@ -23177,18 +23409,38 @@ mod tests {
                 text: "안녕 offline".into(),
                 at_ms: 1_755_600_000_123,
                 importance: 0,
+                reply: None,
             },
             PendingDirect {
                 text: "공지야".into(),
                 at_ms: 1_755_600_001_000,
-                importance: 1,
+                importance: 1 | 0x4, // 공지 표식 — 종전 `.min(2)`가 긴급(2)으로 읽던 결함(11-02 수정)
+                reply: None,
+            },
+            PendingDirect {
+                text: "답장 대기".into(),
+                at_ms: 1_755_600_002_000,
+                importance: 2,
+                reply: Some(nbeep_core::ReplyRef::new(
+                    PeerId::from_bytes([3u8; PeerId::LEN]),
+                    9,
+                    "원본\n둘째 줄",
+                )),
             },
         ];
         let enc = encode_pending(&q);
-        assert_eq!(decode_pending(&enc), q, "왕복 비트 동일");
+        assert_eq!(
+            decode_pending(&enc),
+            q,
+            "왕복 비트 동일(답장 꼬리·공지 표식 포함)"
+        );
         // 꼬리 손상 = 앞선 항목은 살린다(fail-soft — history 디코더와 같은 결).
         let cut = &enc[..enc.len() - 3];
-        assert_eq!(decode_pending(cut), q[..1].to_vec());
+        assert_eq!(
+            decode_pending(cut),
+            q[..2].to_vec(),
+            "답장 꼬리 손상 = 그 항목만 버림"
+        );
         assert!(decode_pending(&[]).is_empty());
     }
 
@@ -23318,6 +23570,41 @@ mod tests {
         assert_eq!(back6[0].sync_key(), Some((me, 77)));
         // 길이 부족(머리 59B 미만) = 거기서 멈춤.
         assert!(decode_history(&enc6[..40]).is_empty());
+        // ★ tag 7(11-02) — 답장 줄: 열쇠·전송 시각·발신자 라벨·참조·인용 라벨 전부 왕복 · 구판은 멈춤.
+        let r = nbeep_core::ReplyRef::new(them, 42, "답");
+        let reply_lines = vec![
+            ChatLine::text(true, nbeep_core::sanitize_message("그래"), 4000, w)
+                .with_seq(78)
+                .with_origin(me)
+                .with_sent(Some(sent))
+                .with_reply(Some(r.clone()), Some("상대".into())),
+            ChatLine::text(false, nbeep_core::sanitize_message("응"), 5000, w)
+                .with_from("상대")
+                .with_seq(43)
+                .with_origin(them)
+                .with_reply(
+                    Some(nbeep_core::ReplyRef::new(me, 78, "그래")),
+                    Some("나".into()),
+                ),
+        ];
+        let enc7 = encode_history(&reply_lines);
+        assert_eq!(enc7[0], 7);
+        let back7 = decode_history(&enc7);
+        assert_eq!(back7.len(), 2);
+        assert_eq!(back7[0].reply, Some(r));
+        assert_eq!(back7[0].reply_from.as_deref(), Some("상대"));
+        assert_eq!(back7[0].sent, Some(sent));
+        assert_eq!(back7[0].sync_key(), Some((me, 78)));
+        assert_eq!(
+            back7[1].reply.as_ref().map(|x| (x.origin, x.seq)),
+            Some((me, 78))
+        );
+        assert_eq!(back7[1].from.as_deref(), Some("상대"));
+        assert!(back7[1].sent.is_none());
+        assert!(
+            decode_history(&enc7[..60]).is_empty(),
+            "참조 중간 손상 = 멈춤"
+        );
     }
 
     /// S4 — 부팅 시퀀서 = max(저장값+1, 현재 ms) · 매핑 표 읽기 = 이름과 일치할 때만.

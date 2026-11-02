@@ -419,6 +419,14 @@ pub enum Msg {
     CtxSelectAll,
     /// 말풍선 우클릭 — 메시지 본문 전체 복사.
     CtxCopyMessage,
+    /// 말풍선 우클릭 — 선택한 글자만 복사(11-02 드래그 선택).
+    CtxCopySelection,
+    /// 말풍선 우클릭 — 이 메시지에 답장(11-02).
+    CtxReply,
+    /// 답장 인용의 "나"(내 메시지를 인용할 때 발신자 자리).
+    ReplyYou,
+    /// 상태바 — 답장 원본이 이 대화에 없다(기록 상한·다른 기기).
+    StReplyOrigMissing,
     // ── 스크롤바 설정 ──
     ScrollbarHide,
     ScrollbarHideDesc,
@@ -2894,6 +2902,15 @@ impl Msg {
                 "메시지 복사",
                 "复制消息",
                 "メッセージをコピー",
+            ],
+            Msg::CtxCopySelection => ["Copy", "복사", "复制", "コピー"],
+            Msg::CtxReply => ["Reply", "답장", "回复", "返信"],
+            Msg::ReplyYou => ["You", "나", "我", "自分"],
+            Msg::StReplyOrigMissing => [
+                "Original message not found in this conversation",
+                "원본 메시지를 이 대화에서 찾을 수 없습니다",
+                "在此对话中找不到原始消息",
+                "この会話に元のメッセージが見つかりません",
             ],
             Msg::CarouselScroll => [
                 "Carousel scroll direction",

@@ -534,10 +534,14 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
                                 .encode(),
                             );
                         }
-                        if let MessageBody::Text(t) = m.body {
-                            let safe = nbeep_core::sanitize_message(&t);
+                        if let Some(t) = m.body.text() {
+                            let safe = nbeep_core::sanitize_message(t);
                             let tag = if m.broadcast { "[공지] " } else { "" };
-                            println!("{}> {tag}{}", peer.short(), safe.as_str());
+                            // ★ 답장(11-02 · kind 2) — 인용 발췌를 앞에 보인다(원본 열쇠는 short로).
+                            let quote = m.body.reply().map_or(String::new(), |r| {
+                                format!("[답장 → {}#{}: {}] ", r.origin.short(), r.seq, r.quote)
+                            });
+                            println!("{}> {tag}{quote}{}", peer.short(), safe.as_str());
                         }
                     }
                 }

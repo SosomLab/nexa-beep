@@ -154,6 +154,11 @@ pub struct ChatLine {
     /// **실제 전송 시각**(10-19 사용자 요청 — 오프라인 대기분은 입력 시각과 전송 시각이 크게 다르다).
     /// `at_ms`/`wall` = 입력(작성) 시각 그대로 · 여기 = 대기 큐가 비워진 순간. 즉시 전송된 줄은 `None`.
     pub sent: Option<(u64, WallTime)>,
+    /// ★ 답장 참조(11-02) — 이 줄이 인용하는 원본의 열쇠 `(origin, seq)` + 발췌. 풍선 상단 인용
+    /// 블록의 근거 · 클릭 = 원본으로 점프([`ChatViewWidget::jump_to_key`]).
+    pub reply: Option<nbeep_core::ReplyRef>,
+    /// 인용 블록에 보이는 원본 발신자 이름(호스트가 해석 — 뷰는 PeerId→이름을 모른다 · 기록에도 남긴다).
+    pub reply_from: Option<String>,
 }
 
 impl ChatLine {
@@ -173,7 +178,17 @@ impl ChatLine {
             importance: 0,
             origin: None,
             sent: None,
+            reply: None,
+            reply_from: None,
         }
+    }
+
+    /// ★ 답장 참조를 붙인다(11-02 · 빌더) — `from` = 인용 블록의 발신자 라벨.
+    #[must_use]
+    pub fn with_reply(mut self, reply: Option<nbeep_core::ReplyRef>, from: Option<String>) -> Self {
+        self.reply_from = reply.as_ref().and(from);
+        self.reply = reply;
+        self
     }
 
     /// 실제 전송 시각을 붙인다(대기분 확정 · 빌더 · 10-19).
@@ -249,6 +264,8 @@ impl ChatLine {
             importance: 0,
             origin: None,
             sent: None,
+            reply: None,
+            reply_from: None,
         }
     }
 }
@@ -519,6 +536,14 @@ const PILL_GAP: i32 = 8;
 const NAME_H: i32 = 18;
 /// 스레드 좌우 안쪽 여백.
 const TH_INSET: i32 = 12;
+/// ★ 답장 인용 블록 높이(풍선 안 상단 · 11-02) — 상태 글꼴 한 줄 + 여백.
+const QUOTE_H: i32 = 20;
+/// 인용 블록과 본문 사이 간격.
+const QUOTE_GAP: i32 = 4;
+/// 입력창 위 "답장 중" 띠 높이(11-02).
+const REPLY_BAR_H: i32 = 26;
+/// 원본 점프 뒤 강조 링 지속(ms).
+const JUMP_HILITE_MS: u64 = 1_200;
 /// 입력창 표시 줄 상한 — 초과분은 캐럿을 따라 스크롤(사용자 확정 08-10).
 const INPUT_MAX_LINES: usize = 4;
 /// 입력 한 줄 논리 높이(1줄일 때 40px 유지: 10+20+10).
@@ -645,6 +670,47 @@ pub struct ChatViewWidget {
     /// 헤더(타이틀 줄) 클릭(1회성 · 08-14) — 그룹 방은 **구성원 목록 모달**의
     /// 트리거(호스트 폴). 1:1 방에서는 호스트가 무시한다.
     header_click: bool,
+    /// ★ 답장 초안(11-02) — 우클릭 ▸ 답장으로 잡힌 원본(참조 · 인용 발신자 라벨). 입력창 위 띠로
+    /// 보이고 Esc·× = 취소 · 전송 시 호스트가 [`Self::take_reply`]로 가져간다.
+    reply_to: Option<(nbeep_core::ReplyRef, String)>,
+    /// 답장 띠의 × 히트(페인트 갱신).
+    reply_cancel_hit: Cell<Option<Rect>>,
+    /// 인용 블록 히트(페인트 갱신 · (영역, 답장 줄 인덱스)) — 클릭 = 원본 점프.
+    quote_hits: RefCell<Vec<(Rect, usize)>>,
+    /// 페인트가 캐시하는 항목별 (콘텐츠 상대 top, 높이) — 점프 스크롤 계산 근거.
+    entry_tops: RefCell<Vec<(i32, i32)>>,
+    /// 점프 대기(항목 인덱스) — 페인트가 레이아웃을 가진 뒤 한 번 소비한다(측정은 paint에만 있다).
+    jump_pending: Cell<Option<usize>>,
+    /// 점프 강조 링(항목, 만료 ms).
+    hilite: Cell<Option<(usize, u64)>>,
+    /// 페인트가 계산한 점프 스크롤값(측정은 paint에만 있다 → 다음 틱/이벤트에서 `scroll`에 반영).
+    jump_scroll: Cell<Option<i32>>,
+    /// 마지막 틱 시각(강조 만료·히트 판정용).
+    last_now: Cell<u64>,
+    /// 원본을 못 찾은 점프(1회성 — 호스트가 상태바 안내).
+    jump_missing: bool,
+    /// ★ 말풍선 텍스트 선택(11-02 · 한 풍선 안에서만) — (항목, anchor 문자 idx, head 문자 idx).
+    bsel: Option<(usize, usize, usize)>,
+    /// 풍선 드래그 선택 중.
+    bsel_drag: bool,
+    /// 페인트가 캐시하는 보이는 풍선의 텍스트 지오메트리(히트 테스트용).
+    bubble_geoms: RefCell<Vec<BubbleGeom>>,
+}
+
+/// 보이는 풍선 하나의 텍스트 지오메트리(페인트 캐시 · 11-02 선택 히트).
+#[derive(Clone, Debug)]
+struct BubbleGeom {
+    /// 항목 인덱스.
+    entry: usize,
+    /// 풍선 rect.
+    bub: Rect,
+    /// 본문 첫 행 왼쪽 x · 위 y(인용 블록 아래).
+    tx: i32,
+    ty: i32,
+    /// 행 높이.
+    line_h: i32,
+    /// 행 수.
+    rows: usize,
 }
 
 impl ChatViewWidget {
@@ -696,7 +762,175 @@ impl ChatViewWidget {
             paste_req: false,
             clip_has_text: false,
             header_click: false,
+            reply_to: None,
+            reply_cancel_hit: Cell::new(None),
+            quote_hits: RefCell::new(Vec::new()),
+            entry_tops: RefCell::new(Vec::new()),
+            jump_pending: Cell::new(None),
+            hilite: Cell::new(None),
+            jump_scroll: Cell::new(None),
+            last_now: Cell::new(0),
+            jump_missing: false,
+            bsel: None,
+            bsel_drag: false,
+            bubble_geoms: RefCell::new(Vec::new()),
         }
+    }
+
+    // ── ★ 답장(11-02) ───────────────────────────────────────────────────
+
+    /// 전송에 실어 보낼 답장 참조(1회성) — 호스트가 `take_outgoing` 직후 부른다.
+    pub fn take_reply(&mut self) -> Option<nbeep_core::ReplyRef> {
+        self.reply_to.take().map(|(r, _)| r)
+    }
+
+    /// 답장 초안이 잡혀 있는가(띠 표시 여부).
+    #[must_use]
+    pub fn reply_pending(&self) -> bool {
+        self.reply_to.is_some()
+    }
+
+    /// 답장 초안 취소(Esc · × · 호스트).
+    pub fn cancel_reply(&mut self, inv: &mut Invalidations) {
+        if self.reply_to.take().is_some() {
+            inv.push(self.bounds);
+        }
+    }
+
+    /// 이 줄을 답장 대상으로 잡는다(우클릭 메뉴 · 자동화). 열쇠 없는 줄(대기 중·구본 기록·파일)은 거절.
+    pub fn start_reply(&mut self, entry: usize, inv: &mut Invalidations) -> bool {
+        let Some(l) = self.lines.get(entry) else {
+            return false;
+        };
+        let (Some((origin, seq)), ChatBody::Text(t)) = (l.sync_key(), &l.body) else {
+            return false;
+        };
+        let name = l.from.clone().unwrap_or_else(|| {
+            if l.mine {
+                nbeep_core::t(nbeep_core::Msg::ReplyYou).to_string()
+            } else {
+                self.title.clone()
+            }
+        });
+        self.reply_to = Some((nbeep_core::ReplyRef::new(origin, seq, t.as_str()), name));
+        inv.push(self.bounds);
+        true
+    }
+
+    /// 원본 점프 요청(인용 블록 클릭 · 자동화) — 열쇠로 항목을 찾아 뷰 중앙으로 스크롤하고 잠시 강조.
+    /// 없으면 `false`(+ 1회성 `jump_missing` — 호스트가 상태바 안내).
+    pub fn jump_to_key(
+        &mut self,
+        origin: nbeep_core::PeerId,
+        seq: u64,
+        inv: &mut Invalidations,
+    ) -> bool {
+        let found = self
+            .lines
+            .iter()
+            .position(|l| l.sync_key() == Some((origin, seq)));
+        match found {
+            Some(i) => {
+                self.jump_pending.set(Some(i));
+                self.hilite.set(Some((
+                    i,
+                    self.last_now.get().saturating_add(JUMP_HILITE_MS),
+                )));
+                inv.push(self.bounds);
+                true
+            }
+            None => {
+                self.jump_missing = true;
+                false
+            }
+        }
+    }
+
+    /// 페인트가 계산해 둔 점프 스크롤을 반영한다(paint는 `&self`라 여기서).
+    fn sync_jump_scroll(&mut self) {
+        if let Some(v) = self.jump_scroll.take() {
+            self.scroll = v;
+        }
+    }
+
+    /// 원본을 못 찾은 점프가 있었는가(1회성).
+    pub fn take_jump_missing(&mut self) -> bool {
+        core::mem::take(&mut self.jump_missing)
+    }
+
+    /// 강조 중인 항목(테스트·자동화 조회).
+    #[must_use]
+    pub fn highlighted(&self) -> Option<usize> {
+        self.hilite.get().map(|(i, _)| i)
+    }
+
+    // ── ★ 말풍선 텍스트 선택(11-02) ─────────────────────────────────────
+
+    /// 풍선 선택 텍스트(비어 있으면 `None`).
+    #[must_use]
+    pub fn bubble_selection(&self) -> Option<String> {
+        let (e, a, h) = self.bsel?;
+        if a == h {
+            return None;
+        }
+        let l = self.lines.get(e)?;
+        let text = self.body_text(l);
+        let chars: Vec<char> = text.chars().collect();
+        let (lo, hi) = (a.min(h).min(chars.len()), a.max(h).min(chars.len()));
+        (lo < hi).then(|| chars[lo..hi].iter().collect())
+    }
+
+    /// 풍선 안 (x, y) → 문자 인덱스(한 풍선 안에서만 — 풍선 밖은 위/아래 끝으로 가둔다).
+    fn bubble_hit(&self, g: &BubbleGeom, x: i32, y: i32) -> usize {
+        let wc = self.wrap_cache.borrow();
+        let Some(Some(e)) = wc.get(g.entry) else {
+            return 0;
+        };
+        if g.rows == 0 || e.row_pw.len() != g.rows {
+            return 0;
+        }
+        if y < g.ty {
+            return 0;
+        }
+        let row = ((y - g.ty) / g.line_h.max(1)) as usize;
+        if row >= g.rows {
+            return e.row_start.last().copied().unwrap_or(0)
+                + e.lines.last().map_or(0, |r| r.chars().count());
+        }
+        let pw = &e.row_pw[row];
+        let start = e.row_start[row];
+        let n = pw.len().saturating_sub(1);
+        let rel = x - g.tx;
+        let mut col = n;
+        for i in 0..n {
+            let mid = (pw[i] + pw[i + 1]) / 2;
+            if rel < mid {
+                col = i;
+                break;
+            }
+        }
+        start + col
+    }
+
+    /// 더블클릭 단어 범위(공백·구두점 경계 · 없으면 그 문자 하나).
+    fn word_bounds(chars: &[char], at: usize) -> (usize, usize) {
+        let is_word = |c: char| !(c.is_whitespace() || c.is_ascii_punctuation());
+        if chars.is_empty() {
+            return (0, 0);
+        }
+        let at = at.min(chars.len() - 1);
+        if !is_word(chars[at]) {
+            return (at, at + 1);
+        }
+        let mut lo = at;
+        while lo > 0 && is_word(chars[lo - 1]) {
+            lo -= 1;
+        }
+        let mut hi = at + 1;
+        while hi < chars.len() && is_word(chars[hi]) {
+            hi += 1;
+        }
+        (lo, hi)
     }
 
     /// 헤더 클릭(1회성 · 08-14) — 그룹 방 = 구성원 목록 모달 트리거.
@@ -842,7 +1076,18 @@ impl ChatViewWidget {
 
     /// 스크롤바 자동숨김 틱 — 표시가 바뀌면 `true`. `now_ms`는 호스트 시계(단조).
     pub fn tick(&mut self, now_ms: u64) -> bool {
-        self.thread_bars.tick(now_ms) | self.input_bars.tick(now_ms)
+        self.last_now.set(now_ms);
+        self.sync_jump_scroll();
+        // 점프 강조 링(11-02) — 살아 있는 동안 재도색 · 만료 순간 한 번 더 그려 지운다.
+        let hl = match self.hilite.get() {
+            Some((_, until)) if now_ms >= until => {
+                self.hilite.set(None);
+                true
+            }
+            Some(_) => true,
+            None => false,
+        };
+        self.thread_bars.tick(now_ms) | self.input_bars.tick(now_ms) | hl
     }
 
     /// 배율 지정(고DPI).
@@ -859,6 +1104,9 @@ impl ChatViewWidget {
     pub fn clear_lines(&mut self, inv: &mut Invalidations) {
         self.lines.clear();
         self.scroll = 0;
+        self.bsel = None;
+        self.hilite.set(None);
+        self.jump_pending.set(None);
         inv.push(self.bounds);
     }
 
@@ -974,7 +1222,9 @@ impl ChatViewWidget {
     /// 선택 텍스트(복사용) — 없으면 `None`.
     #[must_use]
     pub fn copy_selection(&self) -> Option<String> {
-        self.input.selected_text()
+        // ★ 풍선 선택이 있으면 그것(11-02) — 입력창 선택과 배타라 둘이 동시에 살지 않는다.
+        self.bubble_selection()
+            .or_else(|| self.input.selected_text())
     }
 
     /// 선택 텍스트를 잘라낸다(반환 = 잘라낸 텍스트).
@@ -1025,13 +1275,24 @@ impl ChatViewWidget {
                 clip_has_text: false,
                 read_only: false,
             };
+            // ★ 11-02: 선택 복사(이 풍선에 선택이 있을 때) · 메시지 복사 · 답장(열쇠 있는 텍스트 줄만).
+            let has_sel = self.bsel.is_some_and(|(e, a, h)| e == i && a != h);
+            let can_reply = self
+                .lines
+                .get(i)
+                .is_some_and(|l| l.sync_key().is_some() && matches!(l.body, ChatBody::Text(_)));
             self.ctx_menu.open_at(
                 x,
                 y,
                 self.scale,
                 self.bounds,
                 caps,
-                vec![CtxItem::item("copy_message", t(Msg::CtxCopyMessage))],
+                vec![
+                    CtxItem::maybe("copy_sel", t(Msg::CtxCopySelection), has_sel),
+                    CtxItem::item("copy_message", t(Msg::CtxCopyMessage)),
+                    CtxItem::Separator,
+                    CtxItem::maybe("reply", t(Msg::CtxReply), can_reply),
+                ],
             );
         } else {
             return;
@@ -1055,6 +1316,15 @@ impl ChatViewWidget {
                     if let Some(line) = self.lines.get(i) {
                         self.copy_out = Some(self.body_text(line));
                     }
+                }
+            }
+            "copy_sel" => {
+                self.ctx_bubble = None;
+                self.copy_out = self.bubble_selection();
+            }
+            "reply" => {
+                if let Some(i) = self.ctx_bubble.take() {
+                    self.start_reply(i, inv);
                 }
             }
             _ => {}
@@ -1406,12 +1676,28 @@ impl ChatViewWidget {
         };
         let input = self.input_bar();
         let top = self.bounds.y + head_h + xfer_h;
+        let reply_h = if self.reply_to.is_some() {
+            self.s(REPLY_BAR_H)
+        } else {
+            0
+        };
         Rect::new(
             self.bounds.x,
             top,
             self.bounds.w,
-            (input.y - self.s(4) - top).max(0),
+            (input.y - reply_h - self.s(4) - top).max(0),
         )
+    }
+
+    /// 입력창 위 "답장 중" 띠 rect(없으면 높이 0).
+    fn reply_bar(&self) -> Rect {
+        let input = self.input_bar();
+        let h = if self.reply_to.is_some() {
+            self.s(REPLY_BAR_H)
+        } else {
+            0
+        };
+        Rect::new(self.bounds.x, input.y - h, self.bounds.w, h)
     }
 
     /// 스레드 콘텐츠 높이 추정(개행만 반영 — 자동 줄바꿈 전 하한).
@@ -1537,18 +1823,30 @@ struct WrapEntry {
     lines: Rc<Vec<String>>,
     /// 가장 넓은 줄 폭(풍선 폭 — 종전엔 보이는 블록마다 매 프레임 재측정).
     widest: i32,
+    /// ★ 행마다 원문 문자 인덱스 시작(11-02 선택 — 줄바꿈이 공백을 삼켜 행 이어붙이기 ≠ 원문).
+    row_start: Vec<usize>,
+    /// ★ 행마다 문자 경계 누적 폭(px · 길이 = 문자 수 + 1) — 히트 테스트·선택 반전 근거(캐시 채울 때 1회 측정).
+    row_pw: Vec<Vec<i32>>,
+    /// ★ 답장 인용 라벨 폭(상태 글꼴 · 11-02) — 풍선 폭 하한.
+    quote_w: i32,
 }
 
 /// 그리기용 — 문자 단위 그리디 줄바꿈(공백 우선 분리 · 한 단어가 폭을 넘으면 문자에서 자른다).
 ///
 /// 10-10: 글자마다 `text_width(&c.to_string())`(할당 + 측정)를 부르던 O(n) 호출 → **`text_prefix_widths` 한 번**(렌더러는
 /// 단일 패스 · 값 동일 계약)으로 폭을 얻고 인덱스 산술로 자른다. 결과는 종전과 같다(폭이 가산적일 때 — 자체 렌더러 그대로).
-fn wrap_text(ctx: &mut dyn DrawCtx, text: &str, max_w: i32) -> Vec<String> {
+/// 그리기용 줄바꿈 + 행마다 **원문 문자 인덱스 시작**(11-02 풍선 선택 — 선택 범위는 원문 인덱스로 산다).
+fn wrap_rows(ctx: &mut dyn DrawCtx, text: &str, max_w: i32) -> (Vec<String>, Vec<usize>) {
     let mut out = Vec::new();
+    let mut starts = Vec::new();
     let mut pw: Vec<i32> = Vec::new();
+    let mut base = 0usize; // 이 문단의 첫 문자 원문 인덱스
     for raw in text.split('\n') {
+        let nchars = raw.chars().count();
         if raw.is_empty() {
             out.push(String::new());
+            starts.push(base);
+            base += 1; // '\n'
             continue;
         }
         let chars: Vec<char> = raw.chars().collect();
@@ -1556,6 +1854,8 @@ fn wrap_text(ctx: &mut dyn DrawCtx, text: &str, max_w: i32) -> Vec<String> {
         if pw.len() != chars.len() + 1 {
             // 계약 위반(길이 불일치) — 한 줄로 둔다(fail-soft · 잘려도 멈추지 않는다).
             out.push(raw.to_string());
+            starts.push(base);
+            base += nchars + 1;
             continue;
         }
         let mut start = 0usize;
@@ -1568,6 +1868,7 @@ fn wrap_text(ctx: &mut dyn DrawCtx, text: &str, max_w: i32) -> Vec<String> {
                 if let Some(sp) = last_space {
                     // 공백에서 자른다 — 다음 줄은 공백 뒤부터(연속 공백은 건너뛴다).
                     out.push(chars[start..sp].iter().collect());
+                    starts.push(base + start);
                     let mut ns = sp;
                     while ns < chars.len() && chars[ns] == ' ' {
                         ns += 1;
@@ -1578,6 +1879,7 @@ fn wrap_text(ctx: &mut dyn DrawCtx, text: &str, max_w: i32) -> Vec<String> {
                     continue;
                 }
                 out.push(chars[start..i].iter().collect());
+                starts.push(base + start);
                 start = i;
                 continue;
             }
@@ -1587,11 +1889,22 @@ fn wrap_text(ctx: &mut dyn DrawCtx, text: &str, max_w: i32) -> Vec<String> {
             i += 1;
         }
         out.push(chars[start..].iter().collect());
+        starts.push(base + start);
+        base += nchars + 1;
     }
     if out.is_empty() {
         out.push(String::new());
+        starts.push(0);
     }
-    out
+    (out, starts)
+}
+
+/// 인용 라벨 한 곳(인용 블록·답장 띠 공용) — `이름: 발췌` · 이름 없으면 발췌만.
+fn quote_label(from: Option<&str>, quote: &str) -> String {
+    match from {
+        Some(n) if !n.is_empty() => format!("{n}: {quote}"),
+        _ => quote.to_string(),
+    }
 }
 
 impl Widget for ChatViewWidget {
@@ -1606,6 +1919,7 @@ impl Widget for ChatViewWidget {
 
     fn on_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
         use crate::edit::EditKey;
+        self.sync_jump_scroll();
 
         // ── 컨텍스트 메뉴가 열려 있으면 **가장 먼저** 먹는다(팝업은 최상위 레이어) ──
         if self.ctx_menu.is_open() {
@@ -1737,7 +2051,15 @@ impl Widget for ChatViewWidget {
             InputEvent::Key {
                 key: Key::Escape, ..
             } => {
-                self.back = true;
+                // ★ 11-02: 답장 초안 → 풍선 선택 → 창 닫기 순으로 한 단계씩 푼다.
+                if self.reply_to.is_some() {
+                    self.cancel_reply(inv);
+                } else if self.bsel.is_some() {
+                    self.bsel = None;
+                    inv.push(self.bounds);
+                } else {
+                    self.back = true;
+                }
             }
             InputEvent::Key {
                 key: Key::PageUp, ..
@@ -1849,16 +2171,127 @@ impl Widget for ChatViewWidget {
                         return;
                     }
                 }
+                // ★ 답장 띠 ×(11-02).
+                if self
+                    .reply_cancel_hit
+                    .get()
+                    .is_some_and(|r| r.contains(Point { x, y }))
+                {
+                    self.cancel_reply(inv);
+                    return;
+                }
+                // ★ 인용 블록 클릭 = 원본 점프(11-02).
+                let quote_entry = self
+                    .quote_hits
+                    .borrow()
+                    .iter()
+                    .find(|(r, _)| r.contains(Point { x, y }))
+                    .map(|&(_, e)| e);
+                if let Some(e) = quote_entry {
+                    if let Some(r) = self.lines.get(e).and_then(|l| l.reply.clone()) {
+                        self.jump_to_key(r.origin, r.seq, inv);
+                    }
+                    return;
+                }
+                // ★ 풍선 본문 클릭 = 선택 시작(11-02 · 한 풍선 안에서만 · 입력창 선택과 배타).
+                let geom = self
+                    .bubble_geoms
+                    .borrow()
+                    .iter()
+                    .find(|g| g.bub.contains(Point { x, y }))
+                    .cloned();
+                if let Some(g) = geom {
+                    let idx = self.bubble_hit(&g, x, y);
+                    if shift {
+                        if let Some((e, a, _)) = self.bsel {
+                            if e == g.entry {
+                                self.bsel = Some((e, a, idx));
+                                self.bsel_drag = true;
+                                inv.push(self.bounds);
+                                return;
+                            }
+                        }
+                    }
+                    self.bsel = Some((g.entry, idx, idx));
+                    self.bsel_drag = true;
+                    let caret = self.input.caret();
+                    self.input.set_caret(caret, false); // 입력창 선택 해제(배타)
+                    inv.push(self.bounds);
+                    return;
+                }
                 let input = self.input_bar();
                 if input.contains(Point { x, y }) {
                     if let Some(idx) = self.input_hit(x, y) {
                         self.input.set_caret(idx, shift);
                         self.dragging = true;
+                        if self.bsel.is_some() {
+                            self.bsel = None; // 풍선 선택 해제(배타)
+                            inv.push(self.bounds);
+                        }
                         inv.push(input);
                     }
+                } else if self.bsel.is_some() {
+                    // 스레드 빈 자리 클릭 = 선택 해제.
+                    self.bsel = None;
+                    inv.push(self.bounds);
+                }
+            }
+            InputEvent::DoubleClick {
+                x,
+                y,
+                shift,
+                primary,
+            } => {
+                // ★ 풍선 더블클릭 = 단어 선택(11-02). 풍선 밖은 둘째 MouseDown과 같이 처리한다.
+                let geom = self
+                    .bubble_geoms
+                    .borrow()
+                    .iter()
+                    .find(|g| g.bub.contains(Point { x, y }))
+                    .cloned();
+                if let Some(g) = geom {
+                    let idx = self.bubble_hit(&g, x, y);
+                    let chars: Vec<char> = self
+                        .lines
+                        .get(g.entry)
+                        .map(|l| self.body_text(l).chars().collect())
+                        .unwrap_or_default();
+                    let (lo, hi) = Self::word_bounds(&chars, idx);
+                    self.bsel = Some((g.entry, lo, hi));
+                    self.bsel_drag = false;
+                    inv.push(self.bounds);
+                } else {
+                    self.on_event(
+                        &InputEvent::MouseDown {
+                            x,
+                            y,
+                            shift,
+                            primary,
+                        },
+                        inv,
+                    );
                 }
             }
             InputEvent::MouseMove { x, y } => {
+                // ★ 풍선 드래그 선택(11-02) — 시작한 풍선 안에서만(밖은 끝으로 가둔다).
+                if self.bsel_drag {
+                    if let Some((e, a, h)) = self.bsel {
+                        let geom = self
+                            .bubble_geoms
+                            .borrow()
+                            .iter()
+                            .find(|g| g.entry == e)
+                            .cloned();
+                        if let Some(g) = geom {
+                            let nh = self.bubble_hit(&g, x, y);
+                            if nh != h {
+                                self.bsel = Some((e, a, nh));
+                                inv.push(self.bounds);
+                            }
+                        }
+                    }
+                    return;
+                }
                 if self.dragging {
                     // 영역 밖 드래그 = 자동 스크롤 — 가려진 윗줄/아랫줄까지 선택이
                     // 이어진다(사용자 보완 요청 08-10).
@@ -1892,6 +2325,7 @@ impl Widget for ChatViewWidget {
             }
             InputEvent::MouseUp { x, y } => {
                 self.dragging = false;
+                self.bsel_drag = false;
                 // 라인별 트랜스포트 아이콘(M4-2e) — 페인트가 남긴 히트로 판정.
                 let ctl = self
                     .xfer_ctl_hits
@@ -1963,7 +2397,10 @@ impl Widget for ChatViewWidget {
             lines: Rc<Vec<String>>,
             widest: i32,
             h: i32,
+            /// ★ 답장 인용 라벨(`이름: 발췌` · 11-02) — 있으면 풍선 상단 인용 블록.
+            quote: Option<String>,
         }
+        let quote_h = self.s(QUOTE_H) + self.s(QUOTE_GAP);
         let name_h = self.s(NAME_H);
         // 줄바꿈 캐시 키(10-10) — 글꼴 표본 2회 측정으로 크기·가족·배율 변화를 잡는다.
         let font_key = (th, ctx.text_width("가M"));
@@ -1974,6 +2411,8 @@ impl Widget for ChatViewWidget {
         let mut blocks: Vec<Block> = Vec::with_capacity(self.lines.len());
         let mut content = 0;
         let mut prev: Option<WallTime> = None;
+        let mut tops = self.entry_tops.borrow_mut();
+        tops.clear();
         for (i, l) in self.lines.iter().enumerate() {
             let pill = if prev.is_none_or(|p| !p.same_day(l.wall)) {
                 content += self.s(PILL_H) + self.s(PILL_GAP) * 2;
@@ -2007,20 +2446,50 @@ impl Widget for ChatViewWidget {
             });
             if !hit {
                 let text = self.body_text(l);
-                let lines = Rc::new(wrap_text(ctx, &text, max_text_w));
-                let widest = lines.iter().map(|s| ctx.text_width(s)).max().unwrap_or(0);
+                let (rows, row_start) = wrap_rows(ctx, &text, max_text_w);
+                let widest = rows.iter().map(|s| ctx.text_width(s)).max().unwrap_or(0);
+                // ★ 행별 문자 경계 폭(11-02 선택 히트) — 캐시 채울 때 1회.
+                let mut row_pw: Vec<Vec<i32>> = Vec::with_capacity(rows.len());
+                let mut tmp: Vec<i32> = Vec::new();
+                for r in &rows {
+                    ctx.text_prefix_widths(r, &mut tmp);
+                    if tmp.len() != r.chars().count() + 1 {
+                        tmp.clear();
+                        tmp.push(0);
+                        tmp.extend(std::iter::repeat_n(widest, r.chars().count()));
+                        // fail-soft
+                    }
+                    row_pw.push(tmp.clone());
+                }
+                // ★ 답장 인용 라벨 폭(상태 글꼴).
+                let quote_w = match (&l.reply, &l.reply_from) {
+                    (Some(r), from) => {
+                        ctx.select_font(FontSlot::Status, false);
+                        let w = ctx.text_width(&quote_label(from.as_deref(), &r.quote));
+                        ctx.select_font(FontSlot::Message, false);
+                        w + self.s(14)
+                    }
+                    _ => 0,
+                };
                 wrap_cache[i] = Some(WrapEntry {
                     text,
                     max_w: max_text_w,
                     font_key,
-                    lines,
+                    lines: Rc::new(rows),
                     widest,
+                    row_start,
+                    row_pw,
+                    quote_w,
                 });
             }
             let (wrapped, widest) = wrap_cache[i]
                 .as_ref()
-                .map(|e| (Rc::clone(&e.lines), e.widest))
+                .map(|e| (Rc::clone(&e.lines), e.widest.max(e.quote_w.min(max_text_w))))
                 .unwrap_or_else(|| (Rc::new(vec![String::new()]), 0));
+            let quote = l
+                .reply
+                .as_ref()
+                .map(|r| quote_label(l.reply_from.as_deref(), &r.quote));
             // 진행 중 전송 풍선 = 하단 막대 자리 예약(08-18 실기 — 텍스트와 막대가
             // 붙어 보였다: 막대 높이 + 위 간격 6px을 풍선 높이에 더한다).
             let bar_extra = if matches!(
@@ -2035,7 +2504,9 @@ impl Widget for ChatViewWidget {
             let h = wrapped.len() as i32 * line_h
                 + pad_v * 2
                 + bar_extra
-                + if name.is_some() { name_h } else { 0 };
+                + if name.is_some() { name_h } else { 0 }
+                + if quote.is_some() { quote_h } else { 0 };
+            tops.push((content, h));
             content += h + self.s(ENTRY_GAP);
             blocks.push(Block {
                 pill,
@@ -2044,17 +2515,30 @@ impl Widget for ChatViewWidget {
                 lines: wrapped,
                 widest,
                 h,
+                quote,
             });
             prev = Some(l.wall);
         }
         drop(wrap_cache);
+        drop(tops);
         self.content_h.set(content);
-        let scroll = self.scroll.clamp(0, (content - vp.h).max(0));
+        // ★ 원본 점프(11-02) — 레이아웃을 가진 지금 스크롤값을 정하고(뷰 중앙) 다음 틱에 반영한다.
+        let mut scroll = self.scroll.clamp(0, (content - vp.h).max(0));
+        if let Some(i) = self.jump_pending.take() {
+            if let Some(&(top, h)) = self.entry_tops.borrow().get(i) {
+                let want = content - vp.h - top + (vp.h - h) / 2;
+                scroll = want.clamp(0, (content - vp.h).max(0));
+                self.jump_scroll.set(Some(scroll));
+            }
+        }
+        let wc = self.wrap_cache.borrow();
 
         // 2패스 — 그리기(top-down · 콘텐츠가 뷰포트보다 작으면 하단 정렬).
         self.hit_rects.borrow_mut().clear();
         self.thumb_hits.borrow_mut().clear();
         self.xfer_ctl_hits.borrow_mut().clear();
+        self.quote_hits.borrow_mut().clear();
+        self.bubble_geoms.borrow_mut().clear();
         let mut y = if content >= vp.h {
             vp.y - (content - vp.h - scroll)
         } else {
@@ -2163,6 +2647,20 @@ impl Widget for ChatViewWidget {
                     );
                     ctx.fill_round_rect(outer, self.s(10), ring);
                 }
+                // ★ 점프 강조 링(11-02) — 원본으로 스크롤한 직후 잠시(포커스 링 색 · 등급 링 바깥).
+                if self
+                    .hilite
+                    .get()
+                    .is_some_and(|(e, until)| e == b.entry && self.last_now.get() < until)
+                {
+                    let outer = Rect::new(
+                        bub.x - self.s(3),
+                        bub.y - self.s(3),
+                        bub.w + self.s(6),
+                        bub.h + self.s(6),
+                    );
+                    ctx.fill_round_rect(outer, self.s(11), theme.focus_ring);
+                }
                 ctx.fill_round_rect(bub, self.s(9), bg);
                 // 꼬리 — 발신은 오른쪽, 수신은 왼쪽을 가리켜 방향을 구별(사용자 요청 08-10).
                 let tail_y = by0 + self.s(6);
@@ -2228,17 +2726,66 @@ impl Widget for ChatViewWidget {
                         self.thumb_hits.borrow_mut().push((hr, qp.clone()));
                     }
                 }
-                for (si, s) in b.lines.iter().enumerate() {
-                    let ly = by0 + pad_v + si as i32 * line_h;
-                    let clip = Rect::new(bub.x, ly, bub.w, line_h);
-                    ctx.text(
-                        bub.x + pad_h + thumb_pad,
-                        ly + (line_h - th) / 2,
-                        clip,
-                        s,
-                        fg,
+                // ★ 답장 인용 블록(11-02) — 풍선 안 상단 · 왼쪽 막대 + `이름: 발췌` 한 줄 · 클릭 = 원본 점프.
+                let mut text_top = by0 + pad_v;
+                if let Some(q) = &b.quote {
+                    let qh = self.s(QUOTE_H);
+                    let qr = Rect::new(bub.x + pad_h, text_top, bub.w - pad_h * 2, qh);
+                    let tint = if l.mine { theme.chrome_bg } else { theme.text };
+                    ctx.fill_round_rect_alpha(qr, self.s(4), tint, 0.14);
+                    ctx.fill_rect(
+                        Rect::new(qr.x, qr.y, self.s(3), qr.h),
+                        if l.mine {
+                            theme.chrome_bg
+                        } else {
+                            theme.accent
+                        },
                     );
+                    ctx.select_font(FontSlot::Status, false);
+                    let sh = ctx.text_height();
+                    let qx = qr.x + self.s(8);
+                    let clip = Rect::new(qx, qr.y, (qr.right() - self.s(4) - qx).max(0), qh);
+                    ctx.text(qx, qr.y + (qh - sh) / 2, clip, q, fg);
+                    ctx.select_font(FontSlot::Message, false);
+                    self.quote_hits.borrow_mut().push((qr, b.entry));
+                    text_top += qh + self.s(QUOTE_GAP);
                 }
+                let tx = bub.x + pad_h + thumb_pad;
+                // ★ 선택 반전(11-02) — 이 풍선에 선택이 있으면 행별 구간을 먼저 칠한다.
+                let sel = match self.bsel {
+                    Some((e, a, h)) if e == b.entry && a != h => Some((a.min(h), a.max(h))),
+                    _ => None,
+                };
+                let entry_cache = wc.get(b.entry).and_then(|e| e.as_ref());
+                for (si, s) in b.lines.iter().enumerate() {
+                    let ly = text_top + si as i32 * line_h;
+                    if let (Some((lo, hi)), Some(e)) = (sel, entry_cache) {
+                        if let (Some(&rs), Some(pw)) = (e.row_start.get(si), e.row_pw.get(si)) {
+                            let rl = pw.len().saturating_sub(1);
+                            let c0 = lo.saturating_sub(rs).min(rl);
+                            let c1 = hi.saturating_sub(rs).min(rl);
+                            if hi > rs && lo < rs + rl && c1 > c0 {
+                                let x0 = tx + pw[c0];
+                                let x1 = tx + pw[c1];
+                                ctx.fill_rect_alpha(
+                                    Rect::new(x0, ly, x1 - x0, line_h),
+                                    theme.sel_bg,
+                                    0.6,
+                                );
+                            }
+                        }
+                    }
+                    let clip = Rect::new(bub.x, ly, bub.w, line_h);
+                    ctx.text(tx, ly + (line_h - th) / 2, clip, s, fg);
+                }
+                self.bubble_geoms.borrow_mut().push(BubbleGeom {
+                    entry: b.entry,
+                    bub,
+                    tx,
+                    ty: text_top,
+                    line_h,
+                    rows: b.lines.len(),
+                });
                 // 진행 중 전송 풍선 — 하단에 소형 막대.
                 if let ChatBody::Xfer(x) = &l.body {
                     if let XferLineState::Active { done } = x.state {
@@ -2518,6 +3065,42 @@ impl Widget for ChatViewWidget {
                     if xp.sending { theme.accent } else { theme.ok },
                 );
             }
+        }
+
+        // ── ★ 답장 띠(11-02) — 입력창 위 · 왼쪽 강조 막대 + `이름: 발췌` + × ──
+        if let Some((r, name)) = &self.reply_to {
+            let rb = self.reply_bar();
+            ctx.fill_rect(rb, theme.panel_bg_alt);
+            ctx.fill_rect(Rect::new(rb.x, rb.y, rb.w, self.s(1)), theme.border);
+            ctx.fill_rect(
+                Rect::new(
+                    rb.x + self.s(10),
+                    rb.y + self.s(5),
+                    self.s(3),
+                    rb.h - self.s(10),
+                ),
+                theme.accent,
+            );
+            ctx.select_font(FontSlot::Status, false);
+            let sh = ctx.text_height();
+            let xw = self.s(18);
+            let close = Rect::new(rb.right() - self.s(8) - xw, rb.y + (rb.h - xw) / 2, xw, xw);
+            let label = quote_label(Some(name), &r.quote);
+            let lx = rb.x + self.s(20);
+            let clip = Rect::new(lx, rb.y, (close.x - self.s(6) - lx).max(0), rb.h);
+            ctx.text(lx, rb.y + (rb.h - sh) / 2, clip, &label, theme.text);
+            let cw = ctx.text_width("×");
+            ctx.text(
+                close.x + (xw - cw) / 2,
+                close.y + (xw - sh) / 2,
+                close,
+                "×",
+                theme.text_dim,
+            );
+            self.reply_cancel_hit.set(Some(close));
+            ctx.select_font(FontSlot::Message, false);
+        } else {
+            self.reply_cancel_hit.set(None);
         }
 
         // ── 입력창(멀티라인 · 상하 여백 동일 — 세로 중앙 정렬) ──
@@ -2927,11 +3510,198 @@ mod tests {
         rclick(&mut w, r.x + 2, r.y + 2, &mut inv);
         assert!(w.ctx_menu.is_open(), "메뉴가 떠야 한다");
         assert_eq!(w.take_copy_text(), None, "아직 복사되면 안 된다");
-        // 첫 항목("메시지 복사")을 고르면 그때 복사된다.
-        let row = w.ctx_menu.row_rect_of(0).unwrap();
+        // "메시지 복사" 행을 고르면 그때 복사된다(11-02부터 첫 행은 선택 복사 — id로 찾는다).
+        let row = w
+            .ctx_menu
+            .row_rect_of(menu_row(&w, "copy_message"))
+            .unwrap();
         lclick(&mut w, row.x + 4, row.y + 2, &mut inv);
         assert!(!w.ctx_menu.is_open(), "고르면 닫힌다");
         assert_eq!(w.take_copy_text().as_deref(), Some("안녕하세요"));
+    }
+
+    /// 메뉴에서 id의 행 인덱스(구분선 포함 · 테스트 전용).
+    fn menu_row(w: &ChatViewWidget, want: &str) -> usize {
+        w.ctx_menu
+            .items_for_test()
+            .iter()
+            .position(|it| matches!(it, crate::controls::CtxItem::Item { id, .. } if id == want))
+            .expect("menu row")
+    }
+    fn menu_enabled(w: &ChatViewWidget, want: &str) -> bool {
+        w.ctx_menu.items_for_test().iter().any(
+            |it| matches!(it, crate::controls::CtxItem::Item { id, enabled, .. } if id == want && *enabled),
+        )
+    }
+
+    // ── ★ 답장(11-02) ──
+
+    fn pidn(b: u8) -> nbeep_core::PeerId {
+        nbeep_core::PeerId::from_bytes([b; nbeep_core::PeerId::LEN])
+    }
+    /// 열쇠 있는 줄(답장·점프의 전제).
+    fn kline(mine: bool, s: &str, i: u64, seq: u64) -> ChatLine {
+        tline(mine, s, i)
+            .with_seq(seq)
+            .with_origin(pidn(if mine { 1 } else { 2 }))
+    }
+
+    #[test]
+    fn reply_draft_requires_key_and_is_taken_once() {
+        let (mut w, mut inv) = widget();
+        w.push_line(tline(false, "열쇠 없음", 0), &mut inv);
+        w.push_line(kline(false, "원본 글\n둘째", 1, 42), &mut inv);
+        assert!(!w.start_reply(0, &mut inv), "열쇠 없는 줄은 답장 불가");
+        let vp_before = w.thread_viewport().h;
+        assert!(w.start_reply(1, &mut inv));
+        assert!(w.reply_pending());
+        assert!(
+            w.thread_viewport().h < vp_before,
+            "답장 띠만큼 스레드가 줄어든다"
+        );
+        let r = w.take_reply().expect("초안");
+        assert_eq!((r.origin, r.seq), (pidn(2), 42));
+        assert_eq!(r.quote, "원본 글 둘째", "개행은 공백");
+        assert!(w.take_reply().is_none(), "1회성");
+        assert!(!w.reply_pending());
+    }
+
+    #[test]
+    fn esc_cancels_reply_then_selection_then_closes() {
+        let (mut w, mut inv) = widget();
+        w.push_line(kline(false, "원본", 0, 1), &mut inv);
+        assert!(w.start_reply(0, &mut inv));
+        key(&mut w, Key::Escape, &mut inv);
+        assert!(!w.reply_pending() && !w.take_back(), "Esc 1 = 답장 취소");
+        w.bsel = Some((0, 0, 2));
+        key(&mut w, Key::Escape, &mut inv);
+        assert!(w.bsel.is_none() && !w.take_back(), "Esc 2 = 선택 해제");
+        key(&mut w, Key::Escape, &mut inv);
+        assert!(w.take_back(), "Esc 3 = 뷰 닫기");
+    }
+
+    #[test]
+    fn jump_to_key_highlights_or_reports_missing() {
+        let (mut w, mut inv) = widget();
+        for i in 0..3u64 {
+            w.push_line(kline(false, "줄", i, 10 + i), &mut inv);
+        }
+        paint_once(&w);
+        assert!(w.jump_to_key(pidn(2), 11, &mut inv));
+        assert_eq!(w.highlighted(), Some(1));
+        paint_once(&w); // 레이아웃을 가진 페인트가 점프 스크롤을 정한다
+        assert!(w.jump_scroll.get().is_some());
+        assert!(w.tick(10));
+        assert!(w.jump_scroll.get().is_none(), "틱이 scroll에 반영");
+        assert!(!w.take_jump_missing());
+        assert!(!w.jump_to_key(pidn(9), 1, &mut inv));
+        assert!(w.take_jump_missing());
+        assert!(!w.take_jump_missing(), "1회성");
+        // 강조는 만료되면 지워진다(틱이 한 번 더 true를 주어 링을 지운다).
+        assert!(w.tick(10 + JUMP_HILITE_MS + 1));
+        assert_eq!(w.highlighted(), None);
+    }
+
+    // ── ★ 말풍선 선택·복사(11-02) ──
+
+    #[test]
+    fn bubble_drag_selects_within_one_bubble_and_copies() {
+        let (mut w, mut inv) = widget();
+        w.push_line(tline(false, "안녕하세요 반갑습니다", 0), &mut inv);
+        w.push_line(tline(false, "둘째 풍선", 1), &mut inv);
+        paint_once(&w); // ProbeCtx = 글자 폭 7
+        let g = w.bubble_geoms.borrow()[0].clone();
+        assert_eq!(g.entry, 0);
+        w.on_event(
+            &InputEvent::MouseDown {
+                x: g.tx + 1,
+                y: g.ty + 1,
+                shift: false,
+                primary: false,
+            },
+            &mut inv,
+        );
+        assert_eq!(w.bsel, Some((0, 0, 0)));
+        w.on_event(
+            &InputEvent::MouseMove {
+                x: g.tx + 7 * 5 + 1,
+                y: g.ty + 1,
+            },
+            &mut inv,
+        );
+        assert_eq!(w.bubble_selection().as_deref(), Some("안녕하세요"));
+        // 풍선 아래로 멀리 끌어도 **이 풍선 끝**까지만(둘째 풍선으로 넘어가지 않는다).
+        w.on_event(
+            &InputEvent::MouseMove {
+                x: g.tx,
+                y: g.ty + 400,
+            },
+            &mut inv,
+        );
+        w.on_event(
+            &InputEvent::MouseUp {
+                x: g.tx,
+                y: g.ty + 400,
+            },
+            &mut inv,
+        );
+        assert_eq!(
+            w.copy_selection().as_deref(),
+            Some("안녕하세요 반갑습니다"),
+            "⌘C = 풍선 선택 우선"
+        );
+        // 입력창 클릭 = 풍선 선택 해제(배타).
+        let input = w.input_bar();
+        lclick(&mut w, input.x + 12, input.y + 12, &mut inv);
+        assert!(w.bsel.is_none());
+        assert!(w.copy_selection().is_none());
+    }
+
+    #[test]
+    fn bubble_double_click_selects_word() {
+        let (mut w, mut inv) = widget();
+        w.push_line(tline(false, "hello world again", 0), &mut inv);
+        paint_once(&w);
+        let g = w.bubble_geoms.borrow()[0].clone();
+        w.on_event(
+            &InputEvent::DoubleClick {
+                x: g.tx + 7 * 7 + 1, // 'o' of world
+                y: g.ty + 1,
+                shift: false,
+                primary: false,
+            },
+            &mut inv,
+        );
+        assert_eq!(w.bubble_selection().as_deref(), Some("world"));
+    }
+
+    #[test]
+    fn bubble_menu_gates_copy_selection_and_reply() {
+        let (mut w, mut inv) = widget();
+        w.push_line(tline(false, "열쇠 없음", 0), &mut inv);
+        w.push_line(kline(false, "열쇠 있음", 1, 5), &mut inv);
+        paint_once(&w);
+        let rects: Vec<(Rect, usize)> = w.hit_rects.borrow().clone();
+        let r0 = rects.iter().find(|(_, e)| *e == 0).unwrap().0;
+        let r1 = rects.iter().find(|(_, e)| *e == 1).unwrap().0;
+        rclick(&mut w, r0.x + 2, r0.y + 2, &mut inv);
+        assert!(
+            !menu_enabled(&w, "copy_sel"),
+            "선택 없음 = 선택 복사 비활성"
+        );
+        assert!(!menu_enabled(&w, "reply"), "열쇠 없음 = 답장 비활성");
+        key(&mut w, Key::Escape, &mut inv); // 메뉴 닫기
+        w.bsel = Some((1, 0, 2));
+        rclick(&mut w, r1.x + 2, r1.y + 2, &mut inv);
+        assert!(menu_enabled(&w, "copy_sel"));
+        assert!(menu_enabled(&w, "reply"));
+        let row = w.ctx_menu.row_rect_of(menu_row(&w, "copy_sel")).unwrap();
+        lclick(&mut w, row.x + 4, row.y + 2, &mut inv);
+        assert_eq!(w.take_copy_text().as_deref(), Some("열쇠"));
+        rclick(&mut w, r1.x + 2, r1.y + 2, &mut inv);
+        let row = w.ctx_menu.row_rect_of(menu_row(&w, "reply")).unwrap();
+        lclick(&mut w, row.x + 4, row.y + 2, &mut inv);
+        assert!(w.reply_pending(), "메뉴 ▸ 답장 = 초안");
     }
 
     #[test]

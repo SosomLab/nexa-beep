@@ -29,14 +29,140 @@ const WIRE_VER: u8 = 1;
 // ★ N-1(08-17): kind는 **하위 니블(0~15)** — 상위 니블은 등급(Importance).
 // 메시지 종류가 16개면 충분(text·향후 reaction/edit 등). 상위 니블 kind는 못 쓴다.
 const KIND_TEXT: u8 = 1;
+/// ★ 답장(11-02 사용자 확정 — "새 kind + 인용 발췌 동봉"): 본문 =
+/// `[origin 32 ‖ seq 8 ‖ quote_len u16 ‖ quote ‖ text]`. 구버전(≤0.6.1)은 미지 kind라
+/// "지원하지 않는 메시지"로 자리만 지킨다(스레드 순서 보존 · 전방 호환).
+const KIND_REPLY: u8 = 2;
+
+/// 인용 발췌 상한(문자 수) — 와이어·기록·화면 공통. 발췌는 **원본이 없는 기기**
+/// (새 형제 기기·기록 상한 초과·구판 기록)에서도 인용 블록을 그릴 수 있게 동봉한다.
+pub const REPLY_QUOTE_MAX_CHARS: usize = 120;
+/// 발췌 바이트 상한(디코더 거부선 — UTF-8 4바이트 × 문자 상한).
+const REPLY_QUOTE_MAX_BYTES: usize = REPLY_QUOTE_MAX_CHARS * 4;
+
+/// 답장 참조 — **어느 원본인가**(열쇠 = S4 따라잡기와 같은 `(원 발신 기기, seq)`) +
+/// 인용 발췌. 열쇠는 기록·화면·와이어 어디서나 같은 뜻이라 점프(원본으로 스크롤)의
+/// 근거가 되고, 발췌는 열쇠를 못 풀 때의 폴백 표시다.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReplyRef {
+    /// 원본의 원 발신 기기.
+    pub origin: PeerId,
+    /// 원본의 그 기기 seq.
+    pub seq: u64,
+    /// 원본 발췌(≤ [`REPLY_QUOTE_MAX_CHARS`] 문자 · 개행은 공백으로).
+    pub quote: String,
+}
+
+impl ReplyRef {
+    /// 원본 본문에서 발췌를 만든다(개행 → 공백 · 문자 상한 · 넘치면 `…`).
+    #[must_use]
+    pub fn new(origin: PeerId, seq: u64, original: &str) -> Self {
+        Self {
+            origin,
+            seq,
+            quote: Self::excerpt(original),
+        }
+    }
+
+    /// 발췌 규칙 한 곳(화면 미리보기도 같은 함수를 쓴다).
+    #[must_use]
+    pub fn excerpt(original: &str) -> String {
+        let flat: String = original
+            .chars()
+            .map(|c| if c.is_control() { ' ' } else { c })
+            .collect();
+        let flat = flat.trim();
+        if flat.chars().count() <= REPLY_QUOTE_MAX_CHARS {
+            flat.to_string()
+        } else {
+            let mut s: String = flat.chars().take(REPLY_QUOTE_MAX_CHARS - 1).collect();
+            s.push('…');
+            s
+        }
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(self.origin.as_bytes());
+        out.extend_from_slice(&self.seq.to_be_bytes());
+        let q = self.quote.as_bytes();
+        let n = q.len().min(REPLY_QUOTE_MAX_BYTES);
+        #[allow(clippy::cast_possible_truncation)] // ≤ REPLY_QUOTE_MAX_BYTES
+        out.extend_from_slice(&(n as u16).to_be_bytes());
+        out.extend_from_slice(&q[..n]);
+    }
+
+    /// `[origin 32 ‖ seq 8 ‖ quote_len u16 ‖ quote]`를 읽고 (참조, 소비 길이).
+    fn decode_from(b: &[u8]) -> Result<(Self, usize), WireError> {
+        if b.len() < PeerId::LEN + 8 + 2 {
+            return Err(WireError::Truncated);
+        }
+        let origin = PeerId::from_bytes(
+            b[..PeerId::LEN]
+                .try_into()
+                .map_err(|_| WireError::Truncated)?,
+        );
+        let seq = u64::from_be_bytes(
+            b[PeerId::LEN..PeerId::LEN + 8]
+                .try_into()
+                .map_err(|_| WireError::Truncated)?,
+        );
+        let p = PeerId::LEN + 8;
+        let n = usize::from(u16::from_be_bytes([b[p], b[p + 1]]));
+        if n > REPLY_QUOTE_MAX_BYTES {
+            return Err(WireError::Truncated);
+        }
+        let end = p + 2 + n;
+        let q = b.get(p + 2..end).ok_or(WireError::Truncated)?;
+        let quote = std::str::from_utf8(q)
+            .map_err(|_| WireError::Utf8)?
+            .to_string();
+        Ok((Self { origin, seq, quote }, end))
+    }
+}
 
 /// 본문 — v1은 텍스트만. Image·File은 무해화 게이트와 함께 M4.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MessageBody {
     /// UTF-8 텍스트(표시 전 무해화는 M2-6 — [`crate::name`] 계열).
     Text(String),
+    /// ★ 답장(11-02) — 원본 참조 + 본문. 표시·기록은 `Text`와 같고 인용 블록만 얹힌다.
+    Reply {
+        /// 원본 참조·발췌.
+        to: ReplyRef,
+        /// 답장 본문.
+        text: String,
+    },
     /// 미래 버전이 추가한 종류 — 순서는 유지하되 "지원하지 않음"으로 표시(전방 호환).
     Unsupported(u8),
+}
+
+impl MessageBody {
+    /// 표시할 텍스트(`Text`·`Reply` — `Unsupported`는 `None`).
+    #[must_use]
+    pub fn text(&self) -> Option<&str> {
+        match self {
+            Self::Text(t) | Self::Reply { text: t, .. } => Some(t),
+            Self::Unsupported(_) => None,
+        }
+    }
+
+    /// 답장 참조(있으면).
+    #[must_use]
+    pub fn reply(&self) -> Option<&ReplyRef> {
+        match self {
+            Self::Reply { to, .. } => Some(to),
+            _ => None,
+        }
+    }
+
+    /// 본문 + 선택적 참조로 조립(발신 경로 한 줄).
+    #[must_use]
+    pub fn with_reply(text: String, reply: Option<ReplyRef>) -> Self {
+        match reply {
+            Some(to) => Self::Reply { to, text },
+            None => Self::Text(text),
+        }
+    }
 }
 
 /// 메시지 등급(N-1 · ADR-0010 §3-1 — **발신자의 중요도 요청**). 수신자의 알림
@@ -114,9 +240,10 @@ impl ChatMessage {
     /// 와이어 직렬화.
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
-        let (kind, text): (u8, &str) = match &self.body {
-            MessageBody::Text(t) => (KIND_TEXT, t.as_str()),
-            MessageBody::Unsupported(k) => (*k, ""),
+        let (kind, text, reply): (u8, &str, Option<&ReplyRef>) = match &self.body {
+            MessageBody::Text(t) => (KIND_TEXT, t.as_str(), None),
+            MessageBody::Reply { to, text } => (KIND_REPLY, text.as_str(), Some(to)),
+            MessageBody::Unsupported(k) => (*k, "", None),
         };
         // 등급은 kind 상위 니블(N-1) — Normal(0)이면 종전 바이트와 동일(하위 호환).
         // kind는 하위 니블만(0~15 · 상위는 등급 전용) — 니블 도입의 대가.
@@ -128,6 +255,9 @@ impl ChatMessage {
         out.extend_from_slice(self.sender_device.as_bytes());
         out.extend_from_slice(&self.seq.to_be_bytes());
         out.push(kind);
+        if let Some(r) = reply {
+            r.encode_into(&mut out);
+        }
         out.extend_from_slice(text.as_bytes());
         out
     }
@@ -164,6 +294,12 @@ impl ChatMessage {
             KIND_TEXT => MessageBody::Text(
                 String::from_utf8(bytes[HEADER..].to_vec()).map_err(|_| WireError::Utf8)?,
             ),
+            KIND_REPLY => {
+                let (to, used) = ReplyRef::decode_from(&bytes[HEADER..])?;
+                let text = String::from_utf8(bytes[HEADER + used..].to_vec())
+                    .map_err(|_| WireError::Utf8)?;
+                MessageBody::Reply { to, text }
+            }
             other => MessageBody::Unsupported(other),
         };
         Ok(Self {
@@ -353,6 +489,53 @@ mod tests {
         let mut a = [0u8; 32];
         a[0] = b;
         PeerId::from_bytes(a)
+    }
+
+    /// ★ 답장(11-02) — kind 2 왕복: 참조 열쇠·발췌·본문 비트 동일 · 발췌 상한 · 잘림 = Truncated.
+    #[test]
+    fn reply_kind_roundtrips_and_clips_quote() {
+        let peer = pid(3);
+        let long: String = "가".repeat(300);
+        let to = ReplyRef::new(pid(9), 77, &format!("첫 줄\n둘째 줄 {long}"));
+        assert_eq!(
+            to.quote.chars().count(),
+            REPLY_QUOTE_MAX_CHARS,
+            "발췌 = 상한 문자 수"
+        );
+        assert!(to.quote.starts_with("첫 줄 둘째 줄"), "개행은 공백으로");
+        assert!(to.quote.ends_with('…'));
+        let m = ChatMessage {
+            sender_device: peer,
+            seq: 5,
+            body: MessageBody::Reply {
+                to: to.clone(),
+                text: "그래 맞아".into(),
+            },
+            importance: Importance::Urgent,
+            broadcast: false,
+        };
+        let b = m.encode();
+        assert_eq!(b[HEADER - 1] & 0x0F, KIND_REPLY);
+        let d = ChatMessage::decode(&b, peer).unwrap();
+        assert_eq!(d, m, "왕복 비트 동일");
+        assert_eq!(d.body.text(), Some("그래 맞아"));
+        assert_eq!(d.body.reply(), Some(&to));
+        // 참조 중간에서 잘리면 Truncated(본문으로 오독하지 않는다).
+        assert_eq!(
+            ChatMessage::decode(&b[..HEADER + 20], peer),
+            Err(WireError::Truncated)
+        );
+        // 발췌 길이가 상한을 넘겨 선언되면 거부(할당 폭탄 방지).
+        let mut bad = b.clone();
+        bad[HEADER + 40] = 0xFF;
+        bad[HEADER + 41] = 0xFF;
+        assert_eq!(ChatMessage::decode(&bad, peer), Err(WireError::Truncated));
+        // 참조 없는 본문은 종전 kind 1 그대로(바이트 불변).
+        let plain = ChatMessage {
+            body: MessageBody::with_reply("x".into(), None),
+            ..m.clone()
+        };
+        assert_eq!(plain.encode()[HEADER - 1] & 0x0F, KIND_TEXT);
     }
 
     fn msg(sender: PeerId, seq: u64, text: &str) -> ChatMessage {
