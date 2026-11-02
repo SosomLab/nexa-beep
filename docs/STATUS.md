@@ -3,7 +3,7 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
-> **갱신: 2026-11-03 mac 3차 (KST · mac · main — 개발 세션 릴리스·커밋)** — ★**v0.7.0 공개 ✅**: 태그 `v0.7.0` = `dae0e90`(CI 41472063383 녹색 · 앞선 run은 연속 push 동시성 취소) → release run **41473106634 전 12 job success** · Release 공개 · **자산 15** · apt 색인 0.7.0 ✓ · brew 탭 = 탭 조회 실패(job success) · beepd 무변경. 설치본 `install-local` 0.7.0 교체 ✓(kiros33@mac). 위키 Release-Notes/Home/Install 0.7.0(`a724db2`). CLAUDE.md = 협업 세션 수정안 적용(127KB→20KB · §3/§4 동일). 잔여 = **PUB-1**(winget 0.6.1 병합·choco 0.6.0 승인 뒤 0.7.0 재dispatch) · REPLY-1/SET-1/HL-1/TRAY-1 Win/Linux 실기. [journal](journal/2026-11-02.md)
+> **갱신: 2026-11-03 mac 3차 (KST · mac · main — 개발 세션 릴리스·커밋)** — ★**v0.7.0 공개 ✅**: 태그 `v0.7.0` = `dae0e90`(CI 41472063383 녹색 · 앞선 run은 연속 push 동시성 취소) → release run **41473106634 전 12 job success** · Release 공개 · **자산 15** · apt 색인 0.7.0 ✓ · brew 탭 = kiros33/homebrew-tap cask 0.7.0 · portable formula 0.7.0 · beepd 0.2.6 ✓ · beepd 무변경. 설치본 `install-local` 0.7.0 교체 ✓(kiros33@mac). 위키 Release-Notes/Home/Install 0.7.0(`a724db2`). CLAUDE.md = 협업 세션 수정안 적용(127KB→20KB · §3/§4 동일). 잔여 = **PUB-1**(winget 0.6.1 병합·choco 0.6.0 승인 뒤 0.7.0 재dispatch) · REPLY-1/SET-1/HL-1/TRAY-1 Win/Linux 실기. [journal](journal/2026-11-02.md)
 
 > **갱신: 2026-11-03 mac 2차 (KST · mac · main — 문서 = 협업 세션)** — **문서 통폐합**: 10-08 이전 차수 = [보존본](STATUS-archive.md) · TODO 완료 75행 = [TODO-done](TODO-done.md) · "지금 걸려 있는 것" 현행화 · 18·26·34·52·README·MILESTONES 보강 · CLAUDE.md 수정안은 개발 세션에 전달. 코드 변경 없음. [journal](journal/2026-11-02.md)
 
