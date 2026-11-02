@@ -49,6 +49,14 @@ pub fn picker_labels() -> PickerLabels {
         menu_copy_path: t(Msg::PkMenuCopyPath).into(),
         menu_copy_name: t(Msg::PkMenuCopyName).into(),
         menu_refresh: t(Msg::PkMenuRefresh).into(),
+        menu_rename: t(Msg::PkMenuRename).into(),
+        err_rename: t(Msg::PkErrRename).into(),
+        menu_delete: t(Msg::PkMenuDelete).into(),
+        err_delete: t(Msg::PkErrDelete).into(),
+        perm_delete_ask: t(Msg::PkPermDeleteAsk).into(),
+        menu_undo: t(Msg::PkMenuUndo).into(),
+        menu_redo: t(Msg::PkMenuRedo).into(),
+        err_undo: t(Msg::PkErrUndo).into(),
         multi_selected: t(Msg::PkMultiSelected).into(),
     }
 }

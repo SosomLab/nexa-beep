@@ -1392,6 +1392,22 @@ pub enum Msg {
     PkMenuRefresh,
     /// 다중 선택 안내 — `{0}` = 파일 수 · `{1}` = 합계 크기.
     PkMultiSelected,
+    /// 우클릭: 이름 바꾸기(nexa-dlg 10-22 · beep 소비 11-02).
+    PkMenuRename,
+    /// 오류 — 이름 바꾸기 실패.
+    PkErrRename,
+    /// 우클릭: 삭제(휴지통).
+    PkMenuDelete,
+    /// 오류 — 삭제 실패.
+    PkErrDelete,
+    /// 안내 — 영구 삭제 2단(`{0}` = 이름 · Shift+Delete 한 번 더).
+    PkPermDeleteAsk,
+    /// 우클릭: 실행 취소(파일 작업).
+    PkMenuUndo,
+    /// 우클릭: 다시 실행.
+    PkMenuRedo,
+    /// 오류 — 되돌리기/다시 실행 실패.
+    PkErrUndo,
     /// 필터: 모든 파일.
     PkFilterAll,
     /// 필터: 폴더(폴더 고르기).
@@ -3980,6 +3996,34 @@ impl Msg {
                 "파일 {0}개 선택({1})",
                 "已选择 {0} 个文件（{1}）",
                 "{0} 個のファイルを選択（{1}）",
+            ],
+            Msg::PkMenuRename => ["Rename", "이름 바꾸기", "重命名", "名前の変更"],
+            Msg::PkErrRename => [
+                "Cannot rename",
+                "이름을 바꿀 수 없습니다",
+                "无法重命名",
+                "名前を変更できません",
+            ],
+            Msg::PkMenuDelete => ["Delete", "삭제", "删除", "削除"],
+            Msg::PkErrDelete => [
+                "Cannot delete",
+                "삭제할 수 없습니다",
+                "无法删除",
+                "削除できません",
+            ],
+            Msg::PkPermDeleteAsk => [
+                "{0} will be deleted permanently, bypassing the trash. Press Shift+Delete again within 5 seconds to confirm.",
+                "{0}을(를) 휴지통을 거치지 않고 영구 삭제합니다. 확인하려면 5초 안에 Shift+Delete를 한 번 더 누르세요.",
+                "{0} 将绕过回收站被永久删除。要确认，请在 5 秒内再次按 Shift+Delete。",
+                "{0} はごみ箱を経由せず完全に削除されます。確認するには 5 秒以内にもう一度 Shift+Delete を押してください。",
+            ],
+            Msg::PkMenuUndo => ["Undo", "실행 취소", "撤销", "元に戻す"],
+            Msg::PkMenuRedo => ["Redo", "다시 실행", "重做", "やり直す"],
+            Msg::PkErrUndo => [
+                "Cannot undo",
+                "되돌릴 수 없습니다",
+                "无法撤销",
+                "元に戻せません",
             ],
             Msg::PkFilterAll => [
                 "All files (*.*)",
