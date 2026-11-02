@@ -439,7 +439,10 @@ mod sni {
         fn id(&self) -> String {
             "nexa-beep".into()
         }
+        /// SNI `Title` = 트레이 항목을 설명하는 이름(표시 이름 — 종전 그대로). 메뉴 맨 위 "이름+버전" 줄은
+        /// dbusmenu `ID_TITLE`이고 이 속성과 다른 자리다(11-03 CI clippy `misnamed_getters`로 드러난 이름 겹침).
         #[zbus(property)]
+        #[allow(clippy::misnamed_getters)]
         fn title(&self) -> String {
             state().name
         }
