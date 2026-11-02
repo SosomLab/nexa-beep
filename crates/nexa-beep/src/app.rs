@@ -3656,6 +3656,8 @@ struct App {
     /// 자동화 테스트 seam(`NEXA_SCRIPT="ms:action[=arg];…"`) — Wayland는 밖에서 입력을 넣을 수 없어 앱이 스스로 한다. 없으면 비용 0.
     script: Vec<(u64, String)>,
     script_t0: std::time::Instant,
+    /// ★ 캡처 요청(11-02 헤드리스 · `capture=<png>[@<제목 일부>]`) — (파일, 창 제목 필터 · 없으면 메인). 다음 재도색이 소비.
+    capture_req: Option<(std::path::PathBuf, Option<String>)>,
     /// 지금 OS 포커스를 가진 창 — 캐럿 깜빡임(포커스 창만 점멸)·비포커스 캐럿 소등.
     os_focused: Option<WindowId>,
     /// 캐럿 깜빡임 기준 시각(ms) — 입력(키·IME·클릭)마다 리셋해 타이핑 중엔 항상 밝다.
@@ -3786,7 +3788,7 @@ impl App {
     fn open_license(&mut self, el: &ActiveEventLoop) {
         if let Some((lid, _)) = self.windows.iter().find(|(_, e)| e.role == Role::License) {
             if let Some(e) = self.windows.get(lid) {
-                e.window.focus_window();
+                focus_win(&e.window);
             }
             return;
         }
@@ -3804,7 +3806,7 @@ impl App {
             .with_resizable(true)
             .with_window_icon(self.icon.clone());
         let attrs = self.modal_attrs(attrs, false); // 메인 소유(08-15 — 창 묶음 부상)
-        let window = Rc::new(el.create_window(attrs).unwrap());
+        let window = Rc::new(el.create_window(headless_attrs(attrs)).unwrap());
         window.set_ime_allowed(true); // 이름·이메일 입력란
         let scale = window.scale_factor() as f32;
         let surface = crate::present::Presenter::new(window.clone()).unwrap();
@@ -4014,7 +4016,7 @@ impl App {
     fn open_about(&mut self, el: &ActiveEventLoop) {
         if let Some((aid, _)) = self.windows.iter().find(|(_, e)| e.role == Role::About) {
             if let Some(e) = self.windows.get(aid) {
-                e.window.focus_window();
+                focus_win(&e.window);
             }
             return;
         }
@@ -4025,7 +4027,7 @@ impl App {
             .with_resizable(false) // 모달 대화상자 — 크기 고정
             .with_window_icon(self.icon.clone());
         let attrs = self.modal_attrs(attrs, false); // 메인 소유(08-15 — 창 묶음 부상)
-        let window = Rc::new(el.create_window(attrs).unwrap());
+        let window = Rc::new(el.create_window(headless_attrs(attrs)).unwrap());
         let scale = window.scale_factor() as f32;
         let surface = crate::present::Presenter::new(window.clone()).unwrap();
         let id = window.id();
@@ -4084,7 +4086,7 @@ impl App {
                 let _ = e
                     .window
                     .request_inner_size(winit::dpi::LogicalSize::new(400.0, win_h));
-                e.window.focus_window();
+                focus_win(&e.window);
             }
             self.request_redraw(aid);
             return;
@@ -4114,7 +4116,7 @@ impl App {
             }
         }
         let attrs = self.modal_attrs_from(anchor, attrs, false); // 진원 창 소유(부상·복귀 축)
-        let window = Rc::new(el.create_window(attrs).unwrap());
+        let window = Rc::new(el.create_window(headless_attrs(attrs)).unwrap());
         let scale = window.scale_factor() as f32;
         let surface = crate::present::Presenter::new(window.clone()).unwrap();
         let id = window.id();
@@ -6771,7 +6773,7 @@ impl App {
                     .with_position(winit::dpi::LogicalPosition::new(f64::from(x), f64::from(y)));
             }
         }
-        let window = Rc::new(el.create_window(attrs).unwrap());
+        let window = Rc::new(el.create_window(headless_attrs(attrs)).unwrap());
         #[cfg(target_os = "linux")]
         linux_clipboard_init(&window); // 클립보드 워커(L-1) — 메인 창의 wl_display로 1회
         window.set_theme(self.window_theme()); // 장식 테마(Linux CSD = 실효값 명시)
@@ -6838,7 +6840,7 @@ impl App {
             }
         }
         if let Some(e) = self.windows.get(&new_id) {
-            e.window.focus_window();
+            focus_win(&e.window);
         }
     }
 
@@ -6893,6 +6895,18 @@ impl App {
                     }
                 }
                 None if step == "dump" => self.script_dump(),
+                // ★ 헤드리스 시험 동사(11-02 · docs/26 §3-9): 프레임 캡처 · 창 목록 덤프(OS는 숨은 창을 못 본다).
+                Some(("capture", spec)) => {
+                    let (path, title) = match spec.split_once('@') {
+                        Some((p, t)) => (p.trim(), Some(t.trim().to_lowercase())),
+                        None => (spec.trim(), None),
+                    };
+                    self.capture_req = Some((std::path::PathBuf::from(path), title));
+                    for e in self.windows.values() {
+                        e.window.request_redraw(); // 보이는 창 = OS 경로 · 헤드리스 = about_to_wait가 그린다
+                    }
+                }
+                Some(("windows.dump", path)) => self.script_windows_dump(path.trim()),
                 // ★ 입력 주입(10-10 성능 실측 — macOS는 밖에서 입력을 넣기 어렵다): 포커스 창(없으면 메인)에
                 //   휠·이동·우클릭을 **실제 라우팅 경로**(`route`)로 넣는다. 좌표 = 물리 px.
                 Some(("wheel", dy)) => {
@@ -6941,6 +6955,34 @@ impl App {
                 None if step == "quit" => el.exit(),
                 _ => eprintln!("[script] 모르는 단계: {step}"),
             }
+        }
+    }
+
+    /// `NEXA_SCRIPT windows.dump=<파일>`(11-02 헤드리스) — 첫 줄 `wins=N` · 줄마다 `제목\t가로x세로\tvisible|hidden`.
+    /// 헤드리스에서는 OS 창 열거(CGWindowList·EnumWindows·xwininfo)가 0이라 창 수 판정은 이것으로.
+    fn script_windows_dump(&self, path: &str) {
+        let mut out = format!("wins={}\n", self.windows.len());
+        for e in self.windows.values() {
+            let size = e.window.inner_size();
+            let vis = match e.window.is_visible() {
+                Some(true) => "visible",
+                Some(false) => "hidden",
+                None => "unknown",
+            };
+            out.push_str(&format!(
+                "{}\t{}x{}\t{vis}\n",
+                e.window.title(),
+                size.width,
+                size.height
+            ));
+        }
+        if let Err(err) = std::fs::write(path, out) {
+            eprintln!("[script] windows.dump {path}: {err}");
+        } else {
+            eprintln!(
+                "[script] windows.dump → {path} ({} wins)",
+                self.windows.len()
+            );
         }
     }
 
@@ -7013,7 +7055,9 @@ impl App {
         let _ = (el, activate);
         nbeep_plat::dock::set_dock_visible(true); // mac Accessory → Regular(다른 OS no-op)
         if let Some(e) = self.main_id.and_then(|m| self.windows.get(&m)) {
-            e.window.set_visible(true);
+            if !headless() {
+                e.window.set_visible(true);
+            }
             e.window.set_minimized(false); // tray_hide_taskbar off = 최소화였다
             #[cfg(target_os = "linux")]
             if activate {
@@ -7028,7 +7072,7 @@ impl App {
                         .request_user_attention(Some(winit::window::UserAttentionType::Critical));
                 }
             }
-            e.window.focus_window();
+            focus_win(&e.window);
         }
     }
 
@@ -7039,7 +7083,9 @@ impl App {
         let Some(e) = self.windows.values().find(|e| e.role == role) else {
             return;
         };
-        e.window.set_visible(true);
+        if !headless() {
+            e.window.set_visible(true);
+        }
         e.window.set_minimized(false);
         #[cfg(target_os = "linux")]
         {
@@ -7050,7 +7096,7 @@ impl App {
                     .request_user_attention(Some(winit::window::UserAttentionType::Critical));
             }
         }
-        e.window.focus_window();
+        focus_win(&e.window);
     }
 
     /// 팔레트 + 사용자 색 오버라이드(설정 `theme.{dark|light}.*`)로 테마 재구성(08-10).
@@ -8334,8 +8380,10 @@ impl App {
     fn open_devices(&mut self, el: &ActiveEventLoop) {
         if let Some((did, _)) = self.windows.iter().find(|(_, e)| e.role == Role::Devices) {
             if let Some(e) = self.windows.get(did) {
-                e.window.set_visible(true);
-                e.window.focus_window();
+                if !headless() {
+                    e.window.set_visible(true);
+                }
+                focus_win(&e.window);
             }
             return;
         }
@@ -8351,7 +8399,7 @@ impl App {
             .with_resizable(true)
             .with_window_icon(self.icon.clone());
         let attrs = self.modal_attrs(attrs, false);
-        let window = Rc::new(el.create_window(attrs).unwrap());
+        let window = Rc::new(el.create_window(headless_attrs(attrs)).unwrap());
         window.set_ime_allowed(false);
         let scale = window.scale_factor() as f32;
         let surface = crate::present::Presenter::new(window.clone()).unwrap();
@@ -10617,7 +10665,7 @@ impl App {
             .find(|(_, e)| e.role == Role::Chat(peer))
         {
             if let Some(e) = self.windows.get(id) {
-                e.window.focus_window();
+                focus_win(&e.window);
             }
             return;
         }
@@ -10627,7 +10675,7 @@ impl App {
             .win_attrs()
             .with_title(title)
             .with_window_icon(self.icon.clone());
-        let window = Rc::new(el.create_window(attrs).unwrap());
+        let window = Rc::new(el.create_window(headless_attrs(attrs)).unwrap());
         window.set_ime_allowed(true);
         let scale = window.scale_factor() as f32;
         let surface = crate::present::Presenter::new(window.clone()).unwrap();
@@ -10658,9 +10706,11 @@ impl App {
     fn open_settings(&mut self, el: &ActiveEventLoop) {
         if let Some((id, _)) = self.windows.iter().find(|(_, e)| e.role == Role::Settings) {
             if let Some(e) = self.windows.get(id) {
-                e.window.set_visible(true); // 숨김·최소화 상태였어도 앞으로(10-09)
+                if !headless() {
+                    e.window.set_visible(true);
+                } // 숨김·최소화 상태였어도 앞으로(10-09)
                 e.window.set_minimized(false);
-                e.window.focus_window();
+                focus_win(&e.window);
             }
             return;
         }
@@ -10686,7 +10736,7 @@ impl App {
                 attrs = attrs.with_position(winit::dpi::LogicalPosition::new(x, y));
             }
         }
-        let window = Rc::new(el.create_window(attrs).unwrap());
+        let window = Rc::new(el.create_window(headless_attrs(attrs)).unwrap());
         window.set_ime_allowed(true);
         let scale = window.scale_factor() as f32;
         let surface = crate::present::Presenter::new(window.clone()).unwrap();
@@ -10918,7 +10968,7 @@ impl App {
     fn open_convbox(&mut self, el: &ActiveEventLoop) {
         if let Some((cid, _)) = self.windows.iter().find(|(_, e)| e.role == Role::Convbox) {
             if let Some(e) = self.windows.get(cid) {
-                e.window.focus_window();
+                focus_win(&e.window);
             }
             return;
         }
@@ -10930,7 +10980,7 @@ impl App {
             ))
             .with_inner_size(winit::dpi::LogicalSize::new(560.0, 460.0))
             .with_window_icon(self.icon.clone());
-        let window = Rc::new(el.create_window(attrs).unwrap());
+        let window = Rc::new(el.create_window(headless_attrs(attrs)).unwrap());
         window.set_ime_allowed(true); // 이름 필터 = 한글 입력 대상
         let scale = window.scale_factor() as f32;
         let surface = crate::present::Presenter::new(window.clone()).unwrap();
@@ -11365,7 +11415,7 @@ impl App {
             .find(|(_, e)| e.role == Role::Quarantine)
         {
             if let Some(e) = self.windows.get(qid) {
-                e.window.focus_window();
+                focus_win(&e.window);
             }
             return;
         }
@@ -11377,7 +11427,7 @@ impl App {
             ))
             .with_inner_size(winit::dpi::LogicalSize::new(620.0, 420.0))
             .with_window_icon(self.icon.clone());
-        let window = Rc::new(el.create_window(attrs).unwrap());
+        let window = Rc::new(el.create_window(headless_attrs(attrs)).unwrap());
         let scale = window.scale_factor() as f32;
         let surface = crate::present::Presenter::new(window.clone()).unwrap();
         let id = window.id();
@@ -11518,7 +11568,7 @@ impl App {
     fn open_gallery(&mut self, el: &ActiveEventLoop) {
         if let Some((gid, _)) = self.windows.iter().find(|(_, e)| e.role == Role::Gallery) {
             if let Some(e) = self.windows.get(gid) {
-                e.window.focus_window();
+                focus_win(&e.window);
             }
             return;
         }
@@ -11526,7 +11576,7 @@ impl App {
             .win_attrs()
             .with_title(format!("{APP_TITLE} — 컨트롤 갤러리 (임시)"))
             .with_window_icon(self.icon.clone());
-        let window = Rc::new(el.create_window(attrs).unwrap());
+        let window = Rc::new(el.create_window(headless_attrs(attrs)).unwrap());
         window.set_ime_allowed(true);
         let scale = window.scale_factor() as f32;
         let surface = crate::present::Presenter::new(window.clone()).unwrap();
@@ -11659,7 +11709,7 @@ impl App {
     fn open_picker(&mut self, el: &ActiveEventLoop, purpose: PickerPurpose) {
         if let Some((pid, _)) = self.windows.iter().find(|(_, e)| e.role == Role::Picker) {
             if let Some(e) = self.windows.get(pid) {
-                e.window.focus_window();
+                focus_win(&e.window);
             }
             return;
         }
@@ -11679,7 +11729,7 @@ impl App {
             .with_resizable(true)
             .with_window_icon(self.icon.clone());
         let attrs = self.modal_attrs(attrs, false); // 메인 소유(08-15 — 창 묶음 부상)
-        let window = Rc::new(el.create_window(attrs).unwrap());
+        let window = Rc::new(el.create_window(headless_attrs(attrs)).unwrap());
         let scale = window.scale_factor() as f32;
         let surface = crate::present::Presenter::new(window.clone()).unwrap();
         let id = window.id();
@@ -12020,7 +12070,7 @@ impl App {
     fn open_profile(&mut self, el: &ActiveEventLoop) {
         if let Some((pid, _)) = self.windows.iter().find(|(_, e)| e.role == Role::Profile) {
             if let Some(e) = self.windows.get(pid) {
-                e.window.focus_window();
+                focus_win(&e.window);
             }
             return;
         }
@@ -12109,7 +12159,7 @@ impl App {
             // 자유롭게 위로 온다(AlwaysOnTop 금지 — OS 창 전환 관례).
             .with_window_icon(self.icon.clone());
         let attrs = self.modal_attrs(attrs, true); // 마우스 위치 + 메인 소유(08-15)
-        let window = Rc::new(el.create_window(attrs).unwrap());
+        let window = Rc::new(el.create_window(headless_attrs(attrs)).unwrap());
         window.set_ime_allowed(true); // 이름·연락처에 한글 입력
         let scale = window.scale_factor() as f32;
         let surface = crate::present::Presenter::new(window.clone()).unwrap();
@@ -12276,7 +12326,7 @@ impl App {
                 let _ = e
                     .window
                     .request_inner_size(winit::dpi::LogicalSize::new(400.0, win_h));
-                e.window.focus_window();
+                focus_win(&e.window);
             }
             self.request_redraw(aid);
             return;
@@ -12291,7 +12341,7 @@ impl App {
             .with_resizable(false)
             .with_window_icon(self.icon.clone());
         let attrs = self.modal_attrs(attrs, false); // 메인 소유(08-15 — 창 묶음 부상)
-        let window = Rc::new(el.create_window(attrs).unwrap());
+        let window = Rc::new(el.create_window(headless_attrs(attrs)).unwrap());
         let scale = window.scale_factor() as f32;
         let surface = crate::present::Presenter::new(window.clone()).unwrap();
         let id = window.id();
@@ -12678,7 +12728,7 @@ impl App {
             let wid = *wid;
             if let Some(e) = self.windows.get_mut(&wid) {
                 e.role = Role::PeerInfo(peer);
-                e.window.focus_window();
+                focus_win(&e.window);
             }
             self.peer_info_view = Some(nbeep_ui::PeerInfoWidget::new(info));
             self.layout_window(wid);
@@ -12698,7 +12748,7 @@ impl App {
         // 마우스 위치 + 메인 소유(08-15 — 내 프로필과 같은 카드 규약. 우클릭한
         // 그 자리에서 열린다).
         let attrs = self.modal_attrs(attrs, true);
-        let window = Rc::new(el.create_window(attrs).unwrap());
+        let window = Rc::new(el.create_window(headless_attrs(attrs)).unwrap());
         let scale = window.scale_factor() as f32;
         let surface = crate::present::Presenter::new(window.clone()).unwrap();
         let id = window.id();
@@ -12751,7 +12801,7 @@ impl App {
         if same && owner_ok {
             // 같은 이미지가 이미 열려 있다 — 재디코드 없이 창만 앞으로.
             if let Some((_, e)) = self.windows.iter().find(|(_, e)| e.role == Role::ImageView) {
-                e.window.focus_window();
+                focus_win(&e.window);
             }
             return;
         }
@@ -12785,7 +12835,7 @@ impl App {
             if let Some(e) = self.windows.get_mut(&wid) {
                 e.window
                     .set_title(&nbeep_core::tf(nbeep_core::Msg::WinPreview, &[&title]));
-                e.window.focus_window();
+                focus_win(&e.window);
             }
             self.request_redraw(wid);
             return;
@@ -12798,7 +12848,7 @@ impl App {
         // 커서 자리 + **연 창 소유**(08-18 — 격리함에서 열면 격리함 소유:
         // 메인이 위로 튀지 않고, 닫으면 격리함으로 복귀).
         let attrs = self.modal_attrs_from(Some(src), attrs, true);
-        let window = Rc::new(el.create_window(attrs).unwrap());
+        let window = Rc::new(el.create_window(headless_attrs(attrs)).unwrap());
         let scale = window.scale_factor() as f32;
         let surface = crate::present::Presenter::new(window.clone()).unwrap();
         let id = window.id();
@@ -12833,7 +12883,7 @@ impl App {
             .find(|(_, e)| e.role == Role::AddEndpoint)
         {
             if let Some(e) = self.windows.get(aid) {
-                e.window.focus_window();
+                focus_win(&e.window);
             }
             return;
         }
@@ -12849,7 +12899,7 @@ impl App {
             // 자유롭게 위로 온다(AlwaysOnTop 금지 — OS 창 전환 관례).
             .with_window_icon(self.icon.clone());
         let attrs = self.modal_attrs(attrs, false); // 메인 소유(08-15 — 창 묶음 부상)
-        let window = Rc::new(el.create_window(attrs).unwrap());
+        let window = Rc::new(el.create_window(headless_attrs(attrs)).unwrap());
         window.set_ime_allowed(true);
         let scale = window.scale_factor() as f32;
         let surface = crate::present::Presenter::new(window.clone()).unwrap();
@@ -14991,7 +15041,7 @@ impl App {
             }
         }
         let attrs = self.modal_attrs(attrs, false); // 메인 소유(08-15 — 창 묶음 부상)
-        let window = Rc::new(el.create_window(attrs).unwrap());
+        let window = Rc::new(el.create_window(headless_attrs(attrs)).unwrap());
         window.set_ime_allowed(true); // 그룹 이름 한글 입력
         let scale = window.scale_factor() as f32;
         let surface = crate::present::Presenter::new(window.clone()).unwrap();
@@ -15350,7 +15400,7 @@ impl App {
                     .find(|(_, e)| e.role == Role::GroupChat(gid))
                 {
                     if let Some(e) = self.windows.get(wid) {
-                        e.window.focus_window();
+                        focus_win(&e.window);
                     }
                     return;
                 }
@@ -15360,7 +15410,7 @@ impl App {
                     .with_title(format!("{APP_TITLE} — {title}"))
                     .with_inner_size(winit::dpi::LogicalSize::new(520.0, 560.0))
                     .with_window_icon(self.icon.clone());
-                let window = Rc::new(el.create_window(attrs).unwrap());
+                let window = Rc::new(el.create_window(headless_attrs(attrs)).unwrap());
                 window.set_ime_allowed(true);
                 let scale = window.scale_factor() as f32;
                 let surface = crate::present::Presenter::new(window.clone()).unwrap();
@@ -16405,7 +16455,7 @@ impl App {
             .with_resizable(false)
             .with_window_icon(self.icon.clone());
         let attrs = self.modal_attrs(attrs, false); // 메인 소유(08-15 — 창 묶음 부상)
-        let window = Rc::new(el.create_window(attrs).unwrap());
+        let window = Rc::new(el.create_window(headless_attrs(attrs)).unwrap());
         let scale = window.scale_factor() as f32;
         let surface = crate::present::Presenter::new(window.clone()).unwrap();
         let id = window.id();
@@ -17708,7 +17758,7 @@ impl App {
                         | InputEvent::RightDown { .. }
                 ) {
                     if let Some(e) = self.windows.get(&mid) {
-                        e.window.focus_window();
+                        focus_win(&e.window);
                     }
                 }
                 return;
@@ -18617,6 +18667,28 @@ impl App {
         let role_dbg = entry.role;
         let blinks = ctx.caret_asked();
         drop(ctx);
+        // ★ 캡처(11-02 헤드리스 · `capture=<png>[@<제목>]`): present 직전 프레임버퍼를 PNG로 — 보이든 숨었든 같은 픽셀.
+        //   제목 필터가 없으면 메인 창 · 있으면 제목(소문자)에 그 조각이 든 첫 창. 다른 창의 프레임은 요청을 남겨 둔다.
+        if let Some((path, title)) = self.capture_req.as_ref() {
+            let hit = match title {
+                None => Some(id) == self.main_id,
+                Some(t) => entry.window.title().to_lowercase().contains(t.as_str()),
+            };
+            if hit {
+                let png = crate::png::encode(size.width, size.height, &buffer);
+                match std::fs::write(path, png) {
+                    Ok(()) => eprintln!(
+                        "[capture] {} {:?} {}x{}",
+                        path.display(),
+                        role_dbg,
+                        size.width,
+                        size.height
+                    ),
+                    Err(err) => eprintln!("[capture] {}: {err}", path.display()),
+                }
+                self.capture_req = None;
+            }
+        }
         if buffer.present().is_err() && paint_trace_enabled() {
             eprintln!("[paint] {role_dbg:?} present failed"); // softbuffer 경로만 실패할 수 있다(IOSurface = 항상 Ok)
         }
@@ -18631,6 +18703,31 @@ impl App {
                 (t_frame.elapsed() - t_paint).as_secs_f64() * 1000.0
             );
         }
+    }
+}
+
+/// ★ 헤드리스(11-02 · nexa-sql D-436 이식 · 사용자 "xvfb처럼 다른 디스플레이에서 테스트"): `NEXA_HEADLESS`가 서 있고
+/// `0`이 아니면 **모든 창을 보이지 않게** 만들고(OS 화면·포커스·입력·클립보드와 분리 = 3-OS 공통 · Linux는 그래도 X 서버가
+/// 필요하므로 Xvfb 위에서) 숨은 창은 OS 재그리기 사건이 오지 않으므로 `about_to_wait`가 틱마다 직접 그린다. 창 수 판정 =
+/// `NEXA_SCRIPT windows.dump=<파일>` · 픽셀 = `capture=<png>[@<창 제목 일부>]`(present 직전 프레임 · 보이든 숨었든 같은 픽셀).
+fn headless() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("NEXA_HEADLESS").is_some_and(|v| v != "0"))
+}
+
+/// 창 속성에 헤드리스를 입힌다(보이지 않게) — `create_window` 20곳이 전부 이 한 곳을 지난다.
+fn headless_attrs(attrs: winit::window::WindowAttributes) -> winit::window::WindowAttributes {
+    if headless() {
+        attrs.with_visible(false)
+    } else {
+        attrs
+    }
+}
+
+/// 창을 앞으로 — 헤드리스에서는 **하지 않는다**(mac은 포커스 요청이 숨은 창을 띄우고, 시험 인스턴스가 사용자의 전경 창을 빼앗는다).
+fn focus_win(w: &Window) {
+    if !headless() {
+        w.focus_window();
     }
 }
 
@@ -20733,6 +20830,14 @@ impl ApplicationHandler<AppEvent> for App {
         self.refresh_tray_badges(); // 트레이 LAN·전송 점(M3-2e — 바뀔 때만 갱신)
         self.user_tick(); // 사용자 층(ADR-0015) — 힌트 태그 자정 회전 · 페어링 RID 탐색
         self.script_tick(el); // 자동화 테스트 seam(NEXA_SCRIPT · 없으면 no-op)
+                              // ★ 헤드리스(11-02): 숨은 창은 OS가 RedrawRequested를 보내지 않는다 → 틱마다 전 창을 직접 그린다(시험 전용 비용 ·
+                              //   캡처 요청도 여기서 소비된다). 보이는 창의 정상 경로(요청 → OS → RedrawRequested)는 손대지 않는다.
+        if headless() {
+            let ids: Vec<WindowId> = self.windows.keys().copied().collect();
+            for id in ids {
+                self.redraw(id);
+            }
+        }
         if std::mem::take(&mut self.want_devices_window) {
             self.open_devices(el);
         }
@@ -20939,7 +21044,7 @@ impl ApplicationHandler<AppEvent> for App {
                         attrs
                     }
                 };
-                if let Ok(window) = el.create_window(attrs) {
+                if let Ok(window) = el.create_window(headless_attrs(attrs)) {
                     let window = Rc::new(window);
                     let scale = window.scale_factor() as f32;
                     if let Ok(surface) = crate::present::Presenter::new(window.clone()) {
@@ -21405,7 +21510,7 @@ impl ApplicationHandler<AppEvent> for App {
                 if let Some(mid) = self.modal_id() {
                     if mid != id {
                         if let Some(e) = self.windows.get(&mid) {
-                            e.window.focus_window();
+                            focus_win(&e.window);
                         }
                     }
                 }
@@ -21957,7 +22062,7 @@ impl ApplicationHandler<AppEvent> for App {
                             false
                         };
                         if !ok {
-                            e.window.focus_window();
+                            focus_win(&e.window);
                         }
                         self.wtrace(&format!(
                             "activate {:?} via token → {}",
@@ -22886,6 +22991,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         pending_activation: Vec::new(),
         script: parse_script(std::env::var("NEXA_SCRIPT").ok().as_deref()),
         script_t0: std::time::Instant::now(),
+        capture_req: None,
         os_focused: None,
         blink_anchor_ms: 0,
         blink_phase_seen: true,
