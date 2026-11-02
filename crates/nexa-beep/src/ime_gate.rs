@@ -512,6 +512,11 @@ impl<W: Copy + Eq> ImeGate<W> {
         self.preedit_text.clear();
         self.stash = None;
         self.cleared_ms = Some(now);
+        // ★ H-28: IME가 Commit으로 실어 보낸 ASCII(Space·구두점·숫자)는 keytap 관측의
+        // 짝이다 — 여기서 정산하지 않으면 그 keydown을 winit이 삼켰을 때(H-26 규칙 ·
+        // 조합 직후 첫 1byte) 관측이 큐에 남아 틱 폴백이 "삼킨 키"로 재주입한다
+        // (11-02 mac 실타 "가␣" → 0.4초 뒤 Space 한 칸 더 · 250ms 폴백 + 200ms 틱).
+        self.settle_committed_ascii(text, now);
         // 낱개 자모 Commit(전환 직후 경합 — H-14): leak에 feed해 음절을 잇는다.
         if ime_on_window && !text.is_empty() && text.chars().all(hangul::is_jamo) {
             self.pending = None; // 같은 키의 키다운 중복 폐기
@@ -552,6 +557,29 @@ impl<W: Copy + Eq> ImeGate<W> {
             }
         }
         outs
+    }
+
+    /// Commit 본문의 ASCII 문자를 keytap 관측과 정산(H-28 · G1 불변식의 세 번째 항 —
+    /// 관측 수 = winit 도달 수 + **IME Commit 배달 수** + 삼켜진 수). 관측이 먼저
+    /// 왔으면 큐에서 소진하고(그 앞의 잔여는 건드리지 않는다 — 진짜 삼킴 후보),
+    /// 아직 안 왔으면 선배달 장부에 적어 늦은 관측을 상쇄한다.
+    fn settle_committed_ascii(&mut self, text: &str, now: u64) {
+        if !self.tune.inject {
+            return;
+        }
+        for c in text
+            .chars()
+            .filter(|c| c.is_ascii() && !c.is_ascii_control())
+        {
+            if let Some(pos) = self.raw.iter().position(|&(rc, _)| rc == c) {
+                self.raw.remove(pos);
+            } else {
+                self.owed.push_back((c, now));
+                if self.owed.len() > 8 {
+                    self.owed.pop_front();
+                }
+            }
+        }
     }
 
     /// 포커스 이탈 — 유출 조합·조합 중 프리에딧을 확정 합류(H-9 · 스태시 300ms).
@@ -964,6 +992,53 @@ mod tests {
         d.key_char(' '); // 잔향 — 소비
         d.key_char(' '); // 진짜 연타 — 통과
         assert_eq!(d.buf, "  ", "확정 1 + 연타 1 = 2칸(잔향만 소거)");
+    }
+
+    /// ★ H-28 재생(11-02 mac 실타 "가  나다" — Space가 두 칸): 조합을 닫은 Space를
+    /// IME가 `Commit(" ")`으로 실어 보내고 그 keydown은 winit이 삼킨 경우(H-26 규칙).
+    /// keytap 관측 ' '가 큐에 남아 틱 폴백(250ms)이 재주입하던 것 → Commit이 정산.
+    #[test]
+    fn replay_h28_commit_delivered_space_not_reinjected() {
+        let mut d = Driver::new();
+        d.preedit("ㄱ");
+        d.preedit("가");
+        d.raw(' '); // keytap 관측 — winit보다 먼저
+        d.preedit("");
+        d.commit("가");
+        d.commit(" "); // IME가 Space를 실어 보냄 · keydown은 미도달
+        d.stale(400);
+        assert_eq!(d.buf, "가 ", "IME가 배달한 Space는 삼킨 키가 아니다");
+    }
+
+    /// H-28 변주 — 관측이 Commit보다 늦게(프록시 지연) 도착해도 선배달 장부로 상쇄.
+    #[test]
+    fn replay_h28_late_observation_after_commit_cancelled() {
+        let mut d = Driver::new();
+        d.preedit("가");
+        d.preedit("");
+        d.commit("가 "); // 한 Commit에 Space까지 실린 꼴도 같다
+        d.raw(' '); // 지연 도착
+        d.stale(400);
+        assert_eq!(d.buf, "가 ", "늦은 관측은 장부와 상쇄 · 재주입 없음");
+    }
+
+    /// H-28 + H-15 — keydown도 배달된 경우: 잔향 1회 소비 · 그 뒤 진짜 연타는 통과.
+    #[test]
+    fn replay_h28_with_echo_keydown_then_real_space_passes() {
+        let mut d = Driver::new();
+        d.preedit("가");
+        d.raw(' ');
+        d.preedit("");
+        d.commit("가");
+        d.commit(" ");
+        d.key_char(' '); // 잔향(H-15) — 소비
+        d.stale(400);
+        assert_eq!(d.buf, "가 ", "잔향은 1회 소비 · 폴백 재주입 없음");
+        d.lull(200);
+        d.raw(' ');
+        d.key_char(' '); // 진짜 연타
+        d.stale(400);
+        assert_eq!(d.buf, "가  ", "진짜 Space는 정확히 한 번");
     }
 
     /// H-16 재생 — 조합 중 ← 보류 → commit 직후 재생.
