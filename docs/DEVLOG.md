@@ -7,6 +7,8 @@
 
 ## 2026-11-03
 
+- **(mac · main) 문서 통폐합**(협업 세션) — STATUS 10-08 이전 차수 → [보존본](STATUS-archive.md) · TODO 완료 75행 → [TODO-done](TODO-done.md) · MILESTONES 낡은 ☐ 9건 · 18·26·34·52·README 11-02 도구·H-28/29 보강. [journal](journal/2026-11-02.md)
+- **(mac · main) ★v0.7.0 공개** — 태그 `dae0e90` · release run 41473106634 전 12 job success · 자산 15 · apt 0.7.0 ✓ · brew 탭 조회 실패(job success) · 설치본 교체 ✓ · 위키 `a724db2` · CLAUDE.md 축약 적용(협업 세션 수정안). [journal](journal/2026-11-02.md)
 - **(mac · main) ★v0.7.0 릴리스 착수** — 일괄 검증 **748 green**·3.71MB·headless PASS·reply 8/8·s4 19/19·perf 8.06/0.94ms·유휴 25/26MB · 범프 `95c8bda` · CI lint 실패(Linux SNI getter) → `dae0e90` 수정(태그 대상) · 기록 `1e0f63a` · winget 0.6.1 제출(#468844·#468846) · choco 0.6.0 재업로드(검증 Pending) · 태그 = CI 녹색 뒤 해시 지정 · winget/choco 0.7.0은 검수 뒤 재dispatch. [journal](journal/2026-11-02.md)
 
 ## 2026-11-02

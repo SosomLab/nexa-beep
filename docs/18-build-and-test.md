@@ -207,6 +207,7 @@ docker run --rm -it --init -p 47200:47200 \
 | **test** | ubuntu·macOS·windows(네이티브) | `build` + `test`(testkit). 3-OS = 중립 크레이트 4타깃 검증의 실행부 |
 | **cross-build** | Win ARM64 · Intel mac | 실행 불가 타깃은 **컴파일 검증만** |
 | **budget** | ubuntu | 릴리스 빌드 후 **바이너리 ≤10MB**(NFR-B-3) 초과 시 실패 |
+| **test 안 헤드리스 스모크**(11-02) | ubuntu(Xvfb)·macOS(`NEXA_HEADLESS`) | `tools/headless-smoke.sh` — capture PNG 머리 · `wins=1 hidden` · rc 0 · 캡처 아티팩트 보존 · Windows 러너 = 차후(TODO HL-1) |
 
 - 전역 `RUSTFLAGS=-D warnings` · `RUSTDOCFLAGS=-D warnings` — 경고 = 실패.
 - ⚠ **windows-latest 포트 함정**(10-10 실측 · run 37966800953): Windows는 TCP·UDP **제외 포트 범위가 따로**라(`netsh int ipv4 show excludedportrange`) TCP가 고른 임시 번호를 같은 번호 UDP로 묶으면 `PermissionDenied`(10013 WSAEACCES)가 난다 — nexa-beepd `relay_e2e` 5종이 동시에 실패 · `rerun --failed` = 통과(러너 흔들림). 처방 `4e53b73` = 테스트용 port 0 bind를 **TCP-먼저/UDP-먼저 교대 · 40회**(고정 포트는 1회 · 와이어 무변경). **같은 번호로 TCP+UDP를 함께 여는 테스트는 교대 재시도를 쓴다** · 흔들림을 보면 rerun 전에 원인 잡 로그를 남긴다.
@@ -226,7 +227,12 @@ packaging/linux/build-deb.sh && packaging/linux/build-rpm.sh      # → target/p
 ./tools/gate.sh                                   # fmt·clippy·rustdoc·test 전량·win x64/mac arm64 check
 cargo build --release -p nexa-beep -p nbeep-imgdec && ls -l target/release/nexa-beep*   # 산출물 ≤10MB
 pwsh tools/check-imports.ps1 target/release/nexa-beep.exe   # (Windows) 임포트 화이트리스트 — 새 DLL = 사람 검토
+cargo build -p nexa-beep -p nbeep-imgdec                    # 아래 두 시험의 기본 바이너리 = target/debug
+./tools/headless-smoke.sh && ./tools/reply-scenario.sh      # (11-02) 헤드리스 PASS(capture·`wins=1 hidden`·rc 0) · 답장 8/8 — 창을 띄우지 않는다
 ./tools/s4-scenario.sh && ./tools/perf-scenario.sh          # 따라잡기 19/19 · 프레임 ms·유휴 MB 회귀 없음(51 §3 기준선)
+#    ⚠ mac clippy는 rustup 툴체인으로(`PATH=$HOME/.cargo/bin` 선행 — Homebrew clippy는 워크스페이스 lint를 안 잡는다 · 11-02).
+#    ⚠ `cfg(target_os|unix|windows)` 코드를 만졌으면 그 타깃 clippy까지(`--target x86_64-unknown-linux-gnu` — mac은 Linux 전용 코드를 안 본다 · 11-03 `dae0e90`).
+#    단계 체계(V0~V3) = [53 §5-7](53-collab-session-operation.md).
 #    어느 단계든 red면 고치고 다시 0-a부터. 결과 수치(green 수·ms·MB)는 journal에 적는다(협업 세션).
 # 1) main이 green인지 먼저 확인한다 — red 상태로 태그를 밀지 않는다.
 gh run list --branch main --workflow ci --limit 1
@@ -268,6 +274,9 @@ curl -s -A Mozilla/5.0 https://community.chocolatey.org/packages/nexa-beep | sed
 #    ★ 10-10 = choco 0.3.0 3종 **승인** → 규칙상 v0.5.0부터 포함 가능했으나 스위치(`CHOCO_PUSH`)가 꺼진 채 태그가 나가
 #      notice로 제외됐다(release run 38051285767). 승인 확인 직후 **태그 전에** 스위치를 켠다 — 놓쳤으면
 #      `gh workflow run publish-windows-packages.yml -f tag=v0.5.0`로 그 태그를 다시 내보낸다(중간 버전은 건너뛴다).
+#    ★ 11-03 = choco 0.6.0 ×2가 "Waiting for Maintainer" — 10-19 제출 35분 뒤 503 장애 중 검증기가 "패키지를 찾을 수 없음"으로 실패 판정(코드 문제 아님)
+#      → 위 수동 재제출 절차로 같은 버전 재업로드(run 41469636964 · Pending). winget 0.6.1은 #468844·#468846(run 41469138270 · OPEN).
+#      남은 일 = TODO PUB-1. 재dispatch 때 다른 채널 스위치는 false로 둔다(중복 제출 방지).
 #    둘 다 완료 → 스위치 켜서 이번 태그에 포함:
 #      gh variable set WINGET_PUBLISH -b true && gh variable set CHOCO_PUSH -b true
 #    대기 중 → false 유지 = 이번 릴리스에서 제외(brew·Releases만 나간다).
@@ -276,7 +285,8 @@ curl -s -A Mozilla/5.0 https://community.chocolatey.org/packages/nexa-beep | sed
 #    태그와 Cargo 버전이 어긋나면 brew formula의 test가 잡는다.
 $EDITOR Cargo.toml       # [workspace.package] version
 # 4) 태그를 밀면 끝 — 빌드·릴리스 공개·brew 탭 반영이 자동으로 이어진다.
-git tag -a v0.1.2 -m "..." && git push origin v0.1.2
+#    ★ 태그는 해시 지정(10-20 교훈 — 여러 세션이 한 트리면 기록 커밋이 HEAD에 쌓인다) · CI 녹색 확인은 마지막 push의 run으로(연속 push는 앞 run을 취소한다 · 11-03).
+git tag -a v0.1.2 <해시> -m "..." && git push origin v0.1.2
 ```
 
 | 단계 | 자동 | 잠금 |

@@ -13,7 +13,7 @@
 2. **경쟁 지형** — [03 경쟁 프로그램 조사](03-competitive-landscape.md) : 국내·국외 유사 프로그램 기능표·장단점
 3. **안전 설계** — [04 안전 송수신](04-safe-transfer.md) : 페이로드 3종 + 수신 파일 무해화
 4. **무엇을 만드나** — [05 요구사항](05-requirements.md) : FR/NFR(예산 수치)/제약/리스크
-5. **핵심 결정** — [10 결정 기록](10-decision-record.md) : **DR-1~28** + **ADR 14종** 색인(✅ 13 · 📐 1 = 0013)
+5. **핵심 결정** — [10 결정 기록](10-decision-record.md) : **DR-1~29** + **ADR 15종** 색인(✅ 14 · 📐 1 = 0013)
 6. **무엇을 v1에 넣나** — [25 기능 범위](25-feature-scope.md) : 🅐입장권~🅔제외 5등급 · **v1.0 커트라인**
 7. **신원이 무엇인가** — [21 신원 규격](21-identity-spec.md) : `PeerId`/`UserId` 생성과 유일성
 8. **어떻게 동작하나** — [30 종단 동작 설명서](30-end-to-end-walkthrough.md) : 기동→발견→핸드셰이크→대화→파일 전송 시퀀스
@@ -28,8 +28,8 @@
 | [00 비전](00-vision.md) | ★ 문제 정의 · 경쟁 좌표 · 성공 기준 S-1~8 · 정직하게 어려운 것 V-1~6 |
 | [03 경쟁 프로그램 조사](03-competitive-landscape.md) | ★ 국내·국외 유사 프로그램 37종 · 기능 매트릭스 · 장단점 |
 | [04 안전 송수신 설계](04-safe-transfer.md) | ★ Text/Image/File 페이로드 · **수신 파일 무해화 4단계 게이트**(MotW·Gatekeeper·AMSI·CDR) |
-| [05 요구사항](05-requirements.md) | ★ **FR 119건** · NFR 29건(**B 예산 게이트**) · 제약 C-1~6 · **리스크 R-1~21**(해소 = **R-5**·R-12·R-15·R-17·R-19·R-21) |
-| [10 결정 기록](10-decision-record.md) | ★ **DR-1~28** · **ADR 14종 색인**(✅ Accepted 13 · 📐 Proposed 1 = 0013) · 의존성/차용자산 원장 |
+| [05 요구사항](05-requirements.md) | ★ **FR 119건** · NFR 29건(**B 예산 게이트**) · 제약 C-1~6 · **리스크 R-1~21**(해소 = **R-5**·R-12·R-15·R-17·R-19·R-21 · R-22 = TODO §9) |
+| [10 결정 기록](10-decision-record.md) | ★ **DR-1~29** · **ADR 15종 색인**(✅ Accepted 14 · 📐 Proposed 1 = 0013) · 의존성/차용자산 원장 |
 | [CLAUDE.md](../CLAUDE.md) | 이식용 프로젝트 메모리 |
 | [LICENSE](../LICENSE.md) · [한글](../LICENSE.ko.md) | PolyForm Noncommercial 1.0.0 — 의존성 퍼미시브 온리(DR-12) |
 
@@ -37,7 +37,7 @@
 
 | 문서 | 내용 |
 |---|---|
-| [01 아키텍처](01-architecture.md) | ★ 9크레이트 구조 · 단방향 의존 · 스레딩 · 데이터 흐름 · 영속성 · 테스트 전략 |
+| [01 아키텍처](01-architecture.md) | ★ 크레이트 구조(최초 9 · 현 `crates/` 12 + 형제 저장소 nexa-ui) · 단방향 의존 · 스레딩 · 데이터 흐름 · 영속성 · 테스트 전략 |
 | [02 로드맵](02-roadmap.md) | ★ M0~M5 + 포스트 · 마일스톤별 게이트 · **리스크 소멸 시점** |
 | [06 네트워크 스택 L1~L4](06-network-stack.md) | ★ 계층별 저수준 설계 · 다단 발견 사다리(S1~S6) · **능력 등급 T0~T2** · 실측 항목 E-1~E-9 |
 | [07 ADR-0001 스택](07-adr-0001-stack.md) | ✅ **Accepted** — Rust · 자체 CPU 래스터라이저 · 플랫폼 계층 P2 · Wayland+X11 · 시스템 폰트 · **SP-1 스파이크** |
@@ -92,10 +92,10 @@
 | **31** | **ADR-0012 공유 그룹 채팅(진짜 그룹 — 한 방 대화·roster·초대 수락)** | ✅ **Accepted**(08-13 · D-28 — G1~G3 구현) |
 | **32** | **ADR-0013 `nexa-beepd` 서버 모드(릴레이·컨텐츠·관리)** — 방향성 · **§5 그룹(ADR-0012) 결합** | 📐 Proposed(D-29) |
 | **33** | **공유 그룹 채팅 다자 실기 테스트 안내서** — OS별·Docker 빌드 전처리 + 신원 3개 + 시나리오 T-1~8 | ✅ |
-| **34** | **한글 입력 이슈 총람** — **H-1~27** 증상·원인·처방 · 트레이스 도구(`NEXA_IME_TRACE`) · **교훈 8** | ✅ |
-| **35** | **ADR-0014 파일 선택은 시스템 기본 다이얼로그로** — DR-6 경계 획정 · `FileDialogPort` · Win/mac 직접 어댑터 권고 | ✅ **Accepted**(08-18 · D-30 — Win/mac 시스템 다이얼로그 + Linux 자체 유지) |
+| **34** | **한글 입력 이슈 총람** — **H-1~29** 증상·원인·처방 · 트레이스 도구(`NEXA_IME_TRACE`) · **교훈 9** | ✅ |
+| **35** | **ADR-0014 파일 선택은 시스템 기본 다이얼로그로** — DR-6 경계 획정 · `FileDialogPort` · Win/mac 직접 어댑터 권고 | ✅ **Accepted**(08-18 · D-30) · **구현 정정**(10-09 D-33-1 — 3-OS 공용 nexa-dlg 대화상자 · v0.3.0) |
 | **36** | **알림 아키텍처** — 정책층/어댑터층 2층 구조 · OS 분기(Win 트레이 풍선/mac osascript/Linux notify-send)와 탈락 근거 · 동작 순서 · 신뢰 게이트(DR-25) | 구현 문서(M3-8 최소 슬라이스) |
-| [37 전송 동기·재개](37-transfer-resume.md) | **M4-10 설계 📐(D-31)** — `.beepq.part` 부분 격리물 · Accept 확장(resume_offset+prefix_sha · 불일치 = 처음부터 fail-closed) · 재-Offer 1회+2택 UI · 무해화 게이트 불변 | 설계 제안(확정 대기) |
+| [37 전송 동기·재개](37-transfer-resume.md) | **M4-10 설계** — `.beepq.part` 부분 격리물 · Accept 확장(resume_offset+prefix_sha · 불일치 = 처음부터 fail-closed) · 재-Offer 1회+2택 UI · 무해화 게이트 불변 | ✅ **Accepted**(08-18 · D-31 · M4-10a~c 구현 · 그룹 재개만 보류) |
 | [38 수신 제한(차단) 4축](38-receive-restriction-design.md) | **M5-3 스팸 방어 1차 설계 📐** — PeerId/UserId(신원)·IP(경로)·이름(표시) 층위 분리 · 그림자 차단 · accept 즉시 차단 · 자동 임시 차단 · 기간부+정확 일치(사용자 4문항 확정 08-21) | 설계 확정(구현은 요청 시) |
 | [39 네트워크 점검 기록부](39-netmon-records.md) | **netmon 분석 리포트(살아 있는 기록)** — 수집·판독 방법 · 기준선(발견 3.7pps·메시지 85B·전송 오버헤드 0.25% 등) · 회차별 점검 기록(1회차 = 08-21 10분 자동 시나리오 · 과다 없음) | 운영 기록(회차 append) |
 | [40 알려진 한계](40-known-limitations.md) | **"무엇을 막지 못하는가" SSOT**(M5-6 · NFR-S-5) — 신원(TOFU·이름·재식별)·저장(기기 키·셰레딩 전)·전달(서버리스 오프라인)·수신 안전(검사≠안전)·노출(존재 방송)·플랫폼 격차 6축 | 초안(D-24 때 최종 확정) |
@@ -104,10 +104,10 @@
 | **43** | **모바일 지원 인스턴트 메신저 조사** — 전송·신원·모바일 제약 3축 · ★ Rust 코어 + 네이티브 UI 선례(Signal·Matrix·Delta Chat) · 우리 좌표 | ✅ **기술 검토 자료**(개발 계획 아님) |
 | **44** | [**nexa-clip 연계**](44-nexa-clip-liaison.md) — 공유 서버/와이어 규약 · 앱 격리(RID 도메인 문자열은 앱 식별자) · glare 타이브레이크 · 서버 재배포 영향 · **§7 clip 전달문 32 처리(09-05 — nexa-conf 0600·known 우선 · 사본 동기 절차·이력)** | 자매 프로젝트 요청(2026-08-26) · 갱신 09-05 |
 | **45** | [**사용자 매뉴얼**](45-user-manual.md) — 화면 캡처와 함께 보는 사용 안내(목록·대화·파일/⌘V 이미지·그룹·오프라인 행·트레이·설정·보안·문제 해결 · 부록 = 캡처 재현 절차) · 위키 User-Guide의 SSOT | 사용자 요청(2026-09-05) |
-| **46** | [**ADR-0015 UserId 기반 사용자 관리 — Handle + Pairing passphrase**](46-adr-0015-userid-handle-passphrase.md) — 파생식(PBKDF2·UserId·PSK·RID_pair·LAN_tag) · **Noise XXpsk3 = 소속 증명** · 제약 해제 표 · sender copy + 따라잡기 · 컨텐츠 모드(사용자 마스터 키·봉투 ①) · 난이도(S0~S5) | 📐 Proposed(**D-32** · 09-06) |
+| **46** | [**ADR-0015 UserId 기반 사용자 관리 — Handle + Pairing passphrase**](46-adr-0015-userid-handle-passphrase.md) — 파생식(PBKDF2·UserId·PSK·RID_pair·LAN_tag) · **Noise XXpsk3 = 소속 증명** · 제약 해제 표 · sender copy + 따라잡기 · 컨텐츠 모드(사용자 마스터 키·봉투 ①) · 난이도(S0~S5) | ✅ **Accepted**(**D-32** 09-06 · DR-29 · S0~S4 구현 · S5 = 실기 후 결정) |
 | **47** | [**ADR-0015 최종 검토 보고서 — UserId 선점·변경·인증 연속성**](47-adr-0015-review-userid-continuity.md) — 선점은 구조적으로 없음(등록소 無 · 서버는 서명) · 변경 = 후계 증명서 · **3층 구조(PeerId 앵커·무작위 UserKey·핸들+암호 = 문 열쇠)** · 폐기 경쟁 = 정직한 충돌 · D-32-8·9 | 사용자 검토 요청(09-06) |
 | **48** | [**ADR-0015 결정 사항 상세 — 조사·설계 변경·기능/성능/보안 영향·흐름도**](48-adr-0015-decisions-impact-flows.md) — 추가 조사 F-1~F-6(XX/XXpsk3 판별 = msg1 AEAD · ed25519-dalek 2 트리 공유 · 발견 패킷 길이 엄격 → 힌트 패킷) · Mermaid 시퀀스 9·상태도 · 결정별 영향 · 위협 모델 변화 · 실측 T-1~T-5 · 질문 4 | 사용자 요청(09-06) |
-| **49** | [**점검 체계(Inspection Framework)**](49-inspection-framework.md) — 메신저 일반 + Nexa Beep 고유 **13축 · 항목 약 100**(산출물·기동·UI·메모리·발견·세션·서버·신뢰별 메시지/파일·암호화·경로·기능·아키텍처·보안) · 주기 매트릭스(C/T/W/R/Q) · **OS별 인박스 도구 매핑** · 분석 기법 12 · 자동화 로드맵 INS-1~9 · 회차 기록(살아 있는 문서 · 0회차 = 기존 실측 인벤토리 → **NFR-B 12항목 중 8항목 미측정 발견**) | 📐 체계 제안(09-26 · 사용자 요청) |
+| **49** | [**점검 체계(Inspection Framework)**](49-inspection-framework.md) — 메신저 일반 + Nexa Beep 고유 **13축 · 항목 약 100**(산출물·기동·UI·메모리·발견·세션·서버·신뢰별 메시지/파일·암호화·경로·기능·아키텍처·보안) · 주기 매트릭스(C/T/W/R/Q) · **OS별 인박스 도구 매핑** · 분석 기법 12 · 자동화 로드맵 INS-1~9 · 회차 기록(살아 있는 문서 · 0회차 = 기존 실측 인벤토리 → **NFR-B 12항목 중 8항목 미측정 발견**) | 📐 체계 제안(09-26 · 사용자 요청) · 자동화 = TODO §11 |
 | **50** | [**설정 체계 개편 + nexa-ui/nexa-license 도입 계획**](50-settings-overhaul-nexa-ui-plan.md) — 조사 4축 요약 · D-33-1~9 결정 · 적용 범위 · P0~P5 순서·분담(협업 세션) · 위험 · 실기 T-1~10 | ✅ 10-09(P1~P4 완료 · **v0.3.0 공개** · P5 캡처 잔여) |
 | **51** | [**성능 검토 2026-10-10 — 스크롤·우클릭 메뉴 실측과 처방 + 척도 16항목**](51-performance-review-2026-10-10.md) — `NEXA_PAINT_TRACE`·입력 주입 seam · 줄바꿈 캐시 · mac IOSurface present · 캐럿 틱 정밀화 · dir3/sql 척도 대조 | 🚧 10-10(mac 1차) |
 | **52** | [**로그 아키텍처 — 개발자 상세 로그**](52-log-architecture.md) — 싱크 = M3-22 statuslog 재사용(`dev ` 접두) · 게이트 = `nbeep_core::devlog` 층 10×수준 4 마스크 · 레코드 `기능 k=v | rule 기준=값 | → 결과/FAIL 원인` · `dlog!` · 켜는 길 `log.dev_mode`·`NEXA_DEVLOG` · 계측 1차 12곳 | ✅ 10-19(1차 구현 `09942eb` · 로그 창·계측 확장 = LOG-1·LOG-2) |
@@ -122,7 +122,8 @@
 | [STATUS](STATUS.md) | ★ 현재 상태 한 장 |
 | [DEVLOG](DEVLOG.md) | ★ 진행 시간순(최신 위) · [journal/](journal/) 일자 상세 |
 | [BRANCHES](BRANCHES.md) | 브랜치 생성/작업/병합/삭제 이력 |
-| [TODO](TODO.md) | ★ 목표 순차 백로그 |
+| [TODO](TODO.md) | ★ 목표 순차 백로그 · 완료 행 = [TODO-done](TODO-done.md) |
+| [STATUS 보존본](STATUS-archive.md) | 2026-10-08 이전 STATUS 차수 원문(읽기 전용) |
 
 ## ④ 개발 · 기여
 
@@ -130,6 +131,7 @@
 |---|---|
 | [18 빌드 & 테스트](18-build-and-test.md) | ★ 빌드·테스트·네트워크 검증 절차(SSOT) |
 | [15 개발 방법론](15-dev-methodology.md) | 수직 슬라이스·스파이크·커밋 규약 |
+| [53 협업 세션 운영 기준](53-collab-session-operation.md) | 개발·협업 세션 역할·파일 소유·검증 단계 V0~V3 |
 | [16 문서·커밋/푸시 규약](16-doc-git-conventions.md) | ★ 문서 4층 체계·커밋/브랜치/푸시 규칙 — `nexa-dir2` 차용 |
 
 ---

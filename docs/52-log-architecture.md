@@ -86,3 +86,7 @@ dlog!(self, DL::Conn, DV::Decide, "connect_failed", |r| r
 - **계측 확장**: 따라잡기(`[user]` eprintln 14곳 → `User/Detail`로 승격 · 시나리오 도구가 stderr를 grep하므로 eprintln은 유지) · 파일 전송 단계(`Xfer/Detail` 청크·속도·재개) · UI(`Ui/Trace` 창 생성·포커스) · 릴레이 roster.
 - **완전 지연 포맷**(docs/48 §5): `Rec`를 구조체 그대로 링에 넣고 텍스트는 소비 시점에 — 켠 상태의 문자열 비용까지 0.
 - **컴파일 타임 제거**: feature `devlog` off면 `wants()` = `false` 상수.
+
+## 6. 시험 도구와의 경계(11-02)
+
+`NEXA_HEADLESS`·`capture=`·`windows.dump=`(26 §3-9)는 로그가 아니라 시험 seam이다. 이 문서의 싱크·마스크를 쓰지 않는다. `tools/headless-smoke.sh`는 `NEXA_WIN_TRACE` stderr를 `app.log`로 받는다. 시나리오 도구는 dump와 stderr를 판정 근거로 쓰므로, 도구가 grep하는 `eprintln`은 §5 계측 확장 뒤에도 유지한다.
