@@ -5,6 +5,16 @@
 
 ---
 
+## 2026-11-03
+
+- **(mac · main) ★v0.7.0 릴리스 착수** — 일괄 검증 **748 green**·3.71MB·headless PASS·reply 8/8·s4 19/19·perf 8.06/0.94ms·유휴 25/26MB · 범프 `95c8bda` · winget 0.6.1 제출(#468844·#468846) · choco 0.6.0 재업로드(검증 Pending) · 태그 = CI 녹색 뒤 해시 지정 · winget/choco 0.7.0은 검수 뒤 재dispatch. [journal](journal/2026-11-02.md)
+
+## 2026-11-02
+
+- **(mac · main) ★답장 + 말풍선 드래그 선택·복사**(`94dd861`·`0681920`·`6d843d5`·`c54f42e`·`86bd32e` — kind 2·그룹 kind 10·기록 tag 7 · 인용 블록 클릭 = 원본 점프 · 내 글·옛 줄도 · 선택 = 반전 표시 · "복사됨" HUD(nexa-sql 이식 `hud.*`) · `tools/reply-scenario.sh` 8/8). [journal](journal/2026-11-02.md)
+- **(mac · main) ★IME H-28·H-29**(`6c32f0a`·`ada06de` — 한글 뒤 Space 0.4초 뒤 재주입 · "메뉴에서?"+Enter 순서 꼬임 → Commit ASCII 정산 · 비문자 키 선행 주입 · 정확한 만료 깨우기).
+- **(mac · main) ★헤드리스 시험 환경**(`7968163` — `NEXA_HEADLESS=1` · `capture`/`windows.dump` · Linux Xvfb 래퍼 · CI 스모크) · **설정 창 개편+갤러리 제거**(`c8f097a` — 휠 누수 · "변경" 보기 · 내보내기/가져오기/JSON 편집 · 고속 스크롤) · **트레이 버전 줄**(`f34b897`) · CLAUDE §3 규칙 5건(`359b6a6`) · nexa-ui 추종 빌드 복구(`74885a0`).
+
 ## 2026-10-20
 
 - **(mac · main) ★v0.6.1 공개** — 패치 · 일괄 검증 735 green·s4 19/19·perf ≈8ms·25MB · release run 39294949004 전 job success · 자산 15 · Releases·brew·apt/dnf · winget/choco = 0.6.0 검수 중이라 미제출 · 태그 = `dc2756b`(코드 = `0860236`) · 탑재 = mac 크래시 수정·오프라인 한눈 표시·crash.log·설정 창 PERF-8. [journal mac 4차](journal/2026-10-20.md)
