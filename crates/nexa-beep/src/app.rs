@@ -100,10 +100,9 @@ fn devlog_push(log: Option<&crate::statuslog::StatusLog>, stderr: bool, rec: &DR
 use nbeep_core::devlog::{Layer as DL, Level as DV, Rec as DRec};
 use nbeep_core::PeerId;
 use nbeep_ui::{
-    AboutInfo, AboutWidget, ChatLine, ChatViewWidget, ComboItem, Control as _, DrawCtx,
-    GalleryWidget, InputEvent, Invalidations, Key, LinkState, MenuBar, MenuDef, MenuEntry,
-    PeerListWidget, PeerRow, RasterCtx, Rect, SettingsState, SettingsWidget, Theme, ToolIcon,
-    ToolItem, Toolbar, Widget,
+    AboutInfo, AboutWidget, ChatLine, ChatViewWidget, ComboItem, Control as _, DrawCtx, InputEvent,
+    Invalidations, Key, LinkState, MenuBar, MenuDef, MenuEntry, PeerListWidget, PeerRow, RasterCtx,
+    Rect, SettingsState, SettingsWidget, Theme, ToolIcon, ToolItem, Toolbar, Widget,
 };
 
 // 화면 내보내기(10-10) — `present::Presenter`(softbuffer ↔ macOS IOSurface · docs/51).
@@ -139,7 +138,6 @@ fn build_menus(offline: bool) -> Vec<MenuDef> {
                 MenuEntry::Item(ComboItem::new("convbox", t(Msg::ConvboxTitle))),
                 // 공지 보내기(④ 08-20 · FR-M-6) — 발견된 전체에게 Notice 팬아웃.
                 MenuEntry::Item(ComboItem::new("broadcast", t(Msg::MenuBroadcast))),
-                MenuEntry::Item(ComboItem::new("gallery", t(Msg::MenuGallery))),
                 // 종료(08-15 사용자 요청) — close_to_tray가 켜지면 X로는 못 끝낸다.
                 MenuEntry::Separator,
                 MenuEntry::Item(ComboItem::new("quit", t(Msg::MenuQuit))),
@@ -2984,7 +2982,6 @@ enum Role {
     /// 설정 창(`Cmd/Ctrl+,` — DR-24).
     Settings,
     /// 컨트롤 갤러리(임시 검수 — `Cmd/Ctrl+G` 또는 하단 버튼).
-    Gallery,
     /// 파일 선택 대화상자(nexa-dlg FilePicker · docs/50 P3 — 백업·복원·프로필 사진·라이선스·갤러리).
     Picker,
     /// About 창(메뉴 → About — 브랜딩·링크).
@@ -3200,8 +3197,6 @@ fn spawn_relay_accept(
 /// 용도 → 모드·필터·기본 이름은 [`App::picker_spec`] 한 곳.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PickerPurpose {
-    /// 갤러리 Choose… 실증(기존 — HOME 평면 목록).
-    GallerySample,
     /// 신원 키 **백업 폴더** 선택 — 폴더 탐색 + "여기에 저장".
     BackupDir,
     /// 신원 키 **백업 파일** 선택(복원) — 폴더 탐색 + 파일 선택.
@@ -3219,6 +3214,10 @@ enum PickerPurpose {
     HistoryRestoreDir,
     /// 라이선스 파일 선택(P4 · `.license`) — 폴더 탐색 + 파일 선택 → `license_install`.
     LicenseFile,
+    /// ★ 설정 내보내기(11-02 · nexa-dir3 Export…) — 저장 모드 · `.json`.
+    SettingsExportFile,
+    /// ★ 설정 가져오기(11-02 · nexa-dir3 Import…) — 열기 모드 · `.json`.
+    SettingsImportFile,
 }
 
 /// 대화창 입력을 명령으로 가른 결과(08-15).
@@ -3357,8 +3356,6 @@ struct App {
     fonts: nbeep_ui::FontPrefs,
     /// 열린 설정 창의 뷰(설정 창은 항상 별도 OS 창 1개).
     settings_view: Option<SettingsWidget>,
-    /// 컨트롤 갤러리 뷰(임시 검수) — 열려 있을 때만 Some.
-    gallery_view: Option<GalleryWidget>,
     /// 앱 창 아이콘(브랜딩 · 전 창 공통). 지원 안 되면 None.
     icon: Option<winit::window::Icon>,
     /// 파일 선택 대화상자(nexa-dlg FilePicker · docs/50 P3 — 열려 있을 때만 Some).
@@ -3369,6 +3366,9 @@ struct App {
     picker_last_dir: Option<std::path::PathBuf>,
     /// 설정 화면에서 요청된 피커 열기(이벤트 루프 참조가 없는 지점 → about_to_wait에서 연다).
     pending_picker: Option<PickerPurpose>,
+    /// ★ settings.json 감시(11-02 · nexa-dir3 Edit JSON 이식) — (파일, 마지막 수정 시각) · 1s 간격 폴링 · 바뀌면 다시 읽어 적용.
+    json_watch: Option<(std::path::PathBuf, Option<std::time::SystemTime>)>,
+    json_next_ms: u64,
     /// 데이터 디렉터리(신원 키·핀 세그먼트·설정 — 백업·복원이 원본 위치로 쓴다).
     data_dir: std::path::PathBuf,
     /// 실물 전송 여부 — 신원 복원 핫 로딩 시 전송 재시작 판단(데모는 교체만).
@@ -10090,7 +10090,6 @@ impl App {
             Role::Settings => self.settings_view.as_ref()?.clipboard_copy(),
             Role::NamePrompt => self.name_prompt.as_ref()?.clipboard_copy(),
             Role::Convbox => self.convbox_view.as_ref()?.clipboard_copy(),
-            Role::Gallery => self.gallery_view.as_ref()?.clipboard_copy(),
             // 파일 대화상자 경로/이름 상자(P3 · nexa-dlg 188차 불변 접근자).
             Role::Picker => self
                 .picker_view
@@ -10124,7 +10123,6 @@ impl App {
             Role::Settings => self.settings_view.as_mut()?.clipboard_cut(&mut inv),
             Role::NamePrompt => self.name_prompt.as_mut()?.clipboard_cut(&mut inv),
             Role::Convbox => self.convbox_view.as_mut()?.clipboard_cut(&mut inv),
-            Role::Gallery => self.gallery_view.as_mut()?.clipboard_cut(&mut inv),
             Role::Picker => self
                 .picker_view
                 .as_mut()?
@@ -10172,11 +10170,6 @@ impl App {
             }
             Some(Role::Settings) => {
                 if let Some(v) = self.settings_view.as_mut() {
-                    v.clipboard_paste(text, &mut inv);
-                }
-            }
-            Some(Role::Gallery) => {
-                if let Some(v) = self.gallery_view.as_mut() {
                     v.clipboard_paste(text, &mut inv);
                 }
             }
@@ -10845,7 +10838,7 @@ impl App {
                 nbeep_core::t(nbeep_core::Msg::SettingsTitle)
             ))
             .with_inner_size(winit::dpi::LogicalSize::new(pw, ph))
-            .with_min_inner_size(winit::dpi::LogicalSize::new(560.0, 400.0))
+            .with_min_inner_size(winit::dpi::LogicalSize::new(860.0, 400.0)) // 하단 줄 = 스위치 2 + 버튼 4(11-02)
             .with_window_icon(self.icon.clone());
         if let (Some(x), Some(y)) = (geo("ui.prefs_x"), geo("ui.prefs_y")) {
             if (-4000..=16000).contains(&x) && (-4000..=16000).contains(&y) {
@@ -11684,39 +11677,6 @@ impl App {
         }
     }
 
-    fn open_gallery(&mut self, el: &ActiveEventLoop) {
-        if let Some((gid, _)) = self.windows.iter().find(|(_, e)| e.role == Role::Gallery) {
-            if let Some(e) = self.windows.get(gid) {
-                focus_win(&e.window);
-            }
-            return;
-        }
-        let attrs = self
-            .win_attrs()
-            .with_title(format!("{APP_TITLE} — 컨트롤 갤러리 (임시)"))
-            .with_window_icon(self.icon.clone());
-        let window = Rc::new(el.create_window(headless_attrs(attrs)).unwrap());
-        window.set_ime_allowed(true);
-        let scale = window.scale_factor() as f32;
-        let surface = crate::present::Presenter::new(window.clone()).unwrap();
-        let id = window.id();
-        self.windows.insert(
-            id,
-            WinEntry {
-                role: Role::Gallery,
-                window,
-                surface,
-                cursor: (0, 0),
-                scale,
-                blinks: true,
-            },
-        );
-        // 어댑터 미주입 → Choose…가 take_choose_request로 올라와 **별도 모달 창**을 연다.
-        self.gallery_view = Some(GalleryWidget::new());
-        self.layout_window(id);
-        self.request_redraw(id);
-    }
-
     /// 사용자 홈 폴더(탐색 시작점) — Windows `USERPROFILE` · Unix `HOME`.
     fn home_dir() -> std::path::PathBuf {
         std::env::var_os("USERPROFILE")
@@ -11736,6 +11696,12 @@ impl App {
         match purpose {
             PickerPurpose::SettingsBackupDir => {
                 format!("nexa-beep-settings-{}.cfg", self.identity.peer_id().short())
+            }
+            PickerPurpose::SettingsExportFile => {
+                format!(
+                    "nexa-beep-settings-{}.json",
+                    self.identity.peer_id().short()
+                )
             }
             PickerPurpose::HistoryBackupDir => {
                 // 백업은 하위 폴더로 묶는다(파일 여러 개 — 대상지 오염 방지).
@@ -11761,9 +11727,6 @@ impl App {
         use nbeep_core::Msg;
         use nbeep_ui::{PickFilter as F, PickerMode as M};
         match purpose {
-            PickerPurpose::GallerySample => {
-                (M::Open, F::All, String::new(), false, Msg::TitleFilePick)
-            }
             PickerPurpose::BackupDir => (
                 M::Save,
                 F::IdentityKey,
@@ -11798,6 +11761,20 @@ impl App {
                 String::new(),
                 false,
                 Msg::TitlePickSettingsBackup,
+            ),
+            PickerPurpose::SettingsExportFile => (
+                M::Save,
+                F::Json,
+                self.picker_save_name(purpose),
+                false,
+                Msg::TitlePickSettingsExport,
+            ),
+            PickerPurpose::SettingsImportFile => (
+                M::Open,
+                F::Json,
+                String::new(),
+                false,
+                Msg::TitlePickSettingsImport,
             ),
             PickerPurpose::HistoryBackupDir => (
                 M::Folder,
@@ -11890,21 +11867,6 @@ impl App {
             return;
         };
         match purpose {
-            PickerPurpose::GallerySample => {
-                // 갤러리 실증 — Choose 값 = 고른 파일 이름.
-                let name = p
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                if let Some(gv) = &mut self.gallery_view {
-                    let mut ginv = Invalidations::default();
-                    gv.set_choose_value(&name, &mut ginv);
-                }
-                if let Some((gid, _)) = self.windows.iter().find(|(_, e)| e.role == Role::Gallery) {
-                    let gid = *gid;
-                    self.request_redraw(gid);
-                }
-            }
             PickerPurpose::BackupDir => {
                 let m = self.do_backup_identity(&p);
                 self.set_status(m);
@@ -11941,6 +11903,14 @@ impl App {
                 let m = self.do_restore_settings(&p);
                 self.set_status(m);
             }
+            PickerPurpose::SettingsExportFile => {
+                let m = self.settings_export_to(&p);
+                self.set_status(m);
+            }
+            PickerPurpose::SettingsImportFile => {
+                let m = self.settings_import_from(&p);
+                self.set_status(m);
+            }
             PickerPurpose::HistoryBackupDir => {
                 let m = self.do_backup_history(&p);
                 self.set_status(m);
@@ -11965,6 +11935,164 @@ impl App {
             Ok(_) => format!("설정 백업 완료 — {}", dst.display()),
             Err(e) => format!("설정 백업 실패: {e}"),
         }
+    }
+
+    /// ★ 설정 내보내기(11-02 · nexa-dir3 `settings_export_to` 이식) — 레지스트리 값 키 전부(행위·정보 행 제외)를
+    /// 평면 JSON으로. 비밀 행(핸들 암호 등)도 **값 그대로** 실린다 — 파일은 사용자가 고른 자리에만 쓴다.
+    fn settings_export_to(&mut self, dst: &std::path::Path) -> String {
+        use nbeep_core::{tf, Msg};
+        let pairs = self.settings_export_pairs();
+        let refs: Vec<(&str, &str)> = pairs.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        let text = nbeep_core::jsonmap::encode(&refs);
+        match nexa_conf::write_atomic(dst, &text) {
+            Ok(()) => tf(
+                Msg::StfSettingsExported,
+                &[&pairs.len().to_string(), &dst.display().to_string()],
+            ),
+            Err(e) => tf(Msg::StSettingsExportFail, &[&e.to_string()]),
+        }
+    }
+
+    /// 내보낼 `(키, 값)` — 레지스트리 순서 · 값 키만(FontSection은 family+size 둘 다).
+    fn settings_export_pairs(&self) -> Vec<(&'static str, String)> {
+        let mut out = Vec::new();
+        for e in nbeep_ui::settings::registry() {
+            if matches!(
+                e.kind,
+                nbeep_ui::settings::SettingKind::Action { .. }
+                    | nbeep_ui::settings::SettingKind::Info
+            ) {
+                continue;
+            }
+            for (k, _) in e.default_values() {
+                out.push((k, self.settings.get(k).to_string()));
+            }
+        }
+        out
+    }
+
+    /// ★ 설정 가져오기(11-02 · JSON) — 아는 키는 정식 깔때기(apply_settings · hot-swap) · 모르는 키는 보존.
+    fn settings_import_from(&mut self, file: &std::path::Path) -> String {
+        use nbeep_core::{tf, Msg};
+        match std::fs::read_to_string(file) {
+            Ok(text) => match self.apply_settings_json_text(&text) {
+                Ok((n, unknown)) => tf(
+                    Msg::StfSettingsImported,
+                    &[&n.to_string(), &unknown.to_string()],
+                ),
+                Err(e) => tf(Msg::StfSettingsImportFail, &[&e]),
+            },
+            Err(e) => tf(Msg::StfSettingsImportFail, &[&e.to_string()]),
+        }
+    }
+
+    /// JSON 본문 → 바뀐 키만 적용(가져오기·JSON 편집 감시 공용 한 길). 반환 = (적용 수, 모르는 키 수).
+    fn apply_settings_json_text(&mut self, text: &str) -> Result<(usize, usize), String> {
+        let pairs = nbeep_core::jsonmap::decode(text)?;
+        let mut changes: Vec<(&'static str, String)> = Vec::new();
+        let mut unknown = 0usize;
+        for (k, v) in pairs {
+            let hit = nbeep_ui::settings::registry().iter().find_map(|e| {
+                if matches!(e.kind, nbeep_ui::settings::SettingKind::Action { .. }) {
+                    return None;
+                }
+                e.default_values()
+                    .into_iter()
+                    .map(|(kk, _)| kk)
+                    .find(|kk| *kk == k)
+            });
+            match hit {
+                Some(key) => {
+                    if self.settings.get(key) != v {
+                        changes.push((key, v));
+                    }
+                }
+                None => {
+                    self.conf.keep_unknown(k, v);
+                    unknown += 1;
+                }
+            }
+        }
+        let n = changes.len();
+        self.apply_settings(changes);
+        Ok((n, unknown))
+    }
+
+    /// ★ JSON 편집(11-02 · nexa-dir3 `edit_settings_json` 이식 — 같은 글·같은 동작): 현재 설정을 `settings.json`
+    /// (settings.cfg 옆)으로 써서 OS 기본 프로그램으로 열고, 저장될 때마다(1s 감시) 바뀐 키만 반영한다.
+    fn edit_settings_json(&mut self) {
+        use nbeep_core::{tf, Msg};
+        let path = self.conf.path().with_file_name("settings.json");
+        let pairs = self.settings_export_pairs();
+        let refs: Vec<(&str, &str)> = pairs.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        if let Err(e) = nexa_conf::write_atomic(&path, &nbeep_core::jsonmap::encode(&refs)) {
+            self.set_status(tf(Msg::StfSettingsJsonFail, &[&e.to_string()]));
+            return;
+        }
+        let mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+        self.json_watch = Some((path.clone(), mtime));
+        self.json_next_ms = self.now_ms() + 1000;
+        if nbeep_plat::launch::open_path(&path) {
+            self.set_status(tf(
+                Msg::StfSettingsJsonOpened,
+                &[&path.display().to_string()],
+            ));
+        } else {
+            self.set_status(path.display().to_string());
+        }
+    }
+
+    /// settings.json 저장 감시 틱(1s) — 수정 시각이 바뀌었으면 다시 읽어 바뀐 키만 적용 · 파일이 사라지면 감시 종료.
+    fn json_watch_tick(&mut self) {
+        use nbeep_core::{tf, Msg};
+        let Some((path, last)) = self.json_watch.clone() else {
+            return;
+        };
+        let now = self.now_ms();
+        if now < self.json_next_ms {
+            return;
+        }
+        self.json_next_ms = now + 1000;
+        let Ok(meta) = std::fs::metadata(&path) else {
+            self.json_watch = None; // 지워짐 = 감시 끝
+            return;
+        };
+        let mtime = meta.modified().ok();
+        if mtime.is_some() && mtime != last {
+            self.json_watch = Some((path.clone(), mtime));
+            let msg = match std::fs::read_to_string(&path) {
+                Ok(text) => match self.apply_settings_json_text(&text) {
+                    Ok((n, _)) => tf(Msg::StfSettingsJsonApplied, &[&n.to_string()]),
+                    Err(e) => tf(Msg::StfSettingsJsonFail, &[&e]),
+                },
+                Err(e) => tf(Msg::StfSettingsJsonFail, &[&e.to_string()]),
+            };
+            self.set_status(msg);
+            if let Some(mid) = self.main_id {
+                self.request_redraw(mid);
+            }
+        }
+    }
+
+    /// ★ 고속 스크롤(11-02 · nexa-sql `apply_fast_scroll` 이식) — 설정 `scroll.*` → nexa-ctl 전역(모든 ScrollBars가 사건마다 읽는다).
+    fn apply_fast_scroll(&self) {
+        let (step, max) = match self.settings.get("scroll.fast_speed") {
+            "slow" => (6, 4),
+            "normal" => (5, 8),
+            "turbo" => (2, 32),
+            _ => (3, 16),
+        };
+        let ms = |k: &str, d: u64| self.settings.get(k).parse::<u64>().unwrap_or(d);
+        nbeep_ui::controls::scroll::set_fast_scroll(nbeep_ui::controls::scroll::FastScroll {
+            enabled: self.settings.get("scroll.fast") != "off",
+            step,
+            max,
+            window_ms: ms("scroll.fast_window_ms", 160).clamp(20, 2000),
+            hud: self.settings.get("scroll.fast_hud") != "off",
+            hud_pos: nbeep_ui::ctl_hud_pos_from_code(self.settings.get("scroll.fast_hud_pos")),
+            hud_hold_ms: ms("scroll.fast_hud_hold_ms", 250).min(10_000),
+            hud_fade_ms: ms("scroll.fast_hud_fade_ms", 600).clamp(50, 10_000),
+        });
     }
 
     /// 설정 복원(08-15 · 고급) — 백업 파일의 **아는 키 전부**를 정식 깔때기
@@ -14166,6 +14294,7 @@ impl App {
         self.list.set_hud_pos(pos, &mut inv);
         self.list
             .set_typeahead_enabled(self.settings.get("ui.typeahead") == "on");
+        self.apply_fast_scroll(); // 고속 스크롤 전역(11-02 — 부팅 때 설정값으로)
         self.list
             .set_typeahead_space(self.settings.get("ui.typeahead_space") == "on");
         self.list
@@ -14402,6 +14531,19 @@ impl App {
                     self.pending_reset = true; // 확인 모달은 about_to_wait(el)에서
                     continue;
                 }
+                // ★ 내보내기·가져오기·JSON 편집(11-02 · nexa-dir3 이식 — 설정 창 하단 버튼).
+                "settings.export" => {
+                    self.pending_picker = Some(PickerPurpose::SettingsExportFile);
+                    continue;
+                }
+                "settings.import" => {
+                    self.pending_picker = Some(PickerPurpose::SettingsImportFile);
+                    continue;
+                }
+                "settings.edit_json" => {
+                    self.edit_settings_json();
+                    continue;
+                }
                 // 설정 파일 열기(10-09 P2 · 하단 [설정 파일 열기…]) — OS 기본 프로그램으로.
                 "settings.open_file" => {
                     let path = self.conf.path().to_path_buf();
@@ -14528,6 +14670,8 @@ impl App {
                     self.list
                         .set_hud_pos(nbeep_ui::HudPos::from_code(&value), &mut inv);
                 }
+                // ★ 고속 스크롤(11-02 · nexa-sql 이식) — nexa-ctl 전역이라 한 번 넣으면 모든 스크롤 영역이 다음 휠부터 읽는다.
+                k if k.starts_with("scroll.") => self.apply_fast_scroll(),
                 // ★ 순간 메시지 HUD(11-02) — 키 하나라도 바뀌면 모양을 다시 조립해 열린 대화 뷰 전부에(hot-swap).
                 k if k.starts_with("hud.") => {
                     let st = self.hud_style();
@@ -17148,12 +17292,6 @@ impl App {
                     sv.set_bounds(Rect::new(0, 0, w, h), &mut inv);
                 }
             }
-            Role::Gallery => {
-                if let Some(gv) = &mut self.gallery_view {
-                    gv.set_scale(scale, &mut inv);
-                    gv.set_bounds(Rect::new(0, 0, w, h), &mut inv);
-                }
-            }
             Role::Picker => {
                 if let Some(pv) = &mut self.picker_view {
                     use nbeep_ui::Control as _;
@@ -17988,7 +18126,6 @@ impl App {
                                 nbeep_core::t(nbeep_core::Msg::BroadcastTitle),
                                 "",
                             ),
-                            "gallery" => self.open_gallery(el),
                             "about" => self.open_about(el),
                             "license" => self.open_license(el),
                             // 명시적 종료(사용자 요청 08-15 — 메뉴에 종료가 없어
@@ -18025,7 +18162,6 @@ impl App {
                                     self.request_redraw(*id);
                                 }
                             }
-                            "gallery" => self.open_gallery(el),
                             _ => {}
                         }
                     }
@@ -18125,26 +18261,6 @@ impl App {
                     if close {
                         self.settings_view = None;
                         self.windows.remove(&id);
-                    }
-                }
-            }
-            Role::Gallery => {
-                // Esc = 닫기. 단 텍스트박스 우클릭 메뉴가 열려 있으면 메뉴 몫(메뉴만 닫힘).
-                if matches!(
-                    ev,
-                    InputEvent::Key {
-                        key: Key::Escape,
-                        ..
-                    }
-                ) && !self.gallery_view.as_ref().is_some_and(|gv| gv.popup_open())
-                {
-                    self.gallery_view = None;
-                    self.windows.remove(&id);
-                } else if let Some(gv) = &mut self.gallery_view {
-                    gv.on_event(&ev, &mut inv);
-                    // Choose… → 별도 모달 파일 선택 창.
-                    if gv.take_choose_request() {
-                        self.open_picker(el, PickerPurpose::GallerySample);
                     }
                 }
             }
@@ -18466,7 +18582,6 @@ impl App {
             Some(Role::Convbox) => self.convbox_view.as_mut().and_then(|v| v.take_edit_ctx()),
             Some(Role::AddEndpoint) => self.addr_view.as_mut().and_then(|v| v.take_edit_ctx()),
             Some(Role::Settings) => self.settings_view.as_mut().and_then(|v| v.take_edit_ctx()),
-            Some(Role::Gallery) => self.gallery_view.as_mut().and_then(|v| v.take_edit_ctx()),
             _ => None,
         };
         let Some(a) = action else { return };
@@ -18731,11 +18846,6 @@ impl App {
             Role::Settings => {
                 if let Some(sv) = &self.settings_view {
                     sv.paint(&mut ctx, &theme);
-                }
-            }
-            Role::Gallery => {
-                if let Some(gv) = &self.gallery_view {
-                    gv.paint(&mut ctx, &theme);
                 }
             }
             Role::Picker => {
@@ -21078,8 +21188,9 @@ impl ApplicationHandler<AppEvent> for App {
         if let Some(purpose) = self.pending_picker.take() {
             self.open_picker(el, purpose);
         }
-        // DnD 묶음 처리(08-20 4차) — 상한 초과면 **전송 시도 자체를 하지 않는다**
-        // (부분 전송 금지 — 사용자 확정 "2개 설정이면 2개 초과 = 진행 중지").
+        self.json_watch_tick(); // settings.json 저장 감시(11-02 · 1s)
+                                // DnD 묶음 처리(08-20 4차) — 상한 초과면 **전송 시도 자체를 하지 않는다**
+                                // (부분 전송 금지 — 사용자 확정 "2개 설정이면 2개 초과 = 진행 중지").
         if !self.pending_drops.is_empty() {
             let drops = std::mem::take(&mut self.pending_drops);
             self.offer_dropped(drops);
@@ -21372,15 +21483,6 @@ impl ApplicationHandler<AppEvent> for App {
                 }
             }
         }
-        // 갤러리(트리·그리드 포함) 스크롤바 틱 — 상태 변화 시 재그리기.
-        if let Some(gv) = &mut self.gallery_view {
-            if gv.tick(bar_now) {
-                if let Some((gid, _)) = self.windows.iter().find(|(_, e)| e.role == Role::Gallery) {
-                    let gid = *gid;
-                    self.request_redraw(gid);
-                }
-            }
-        }
         // 캐럿 깜빡임(08-13) — 위상이 **바뀌는 틱에만** 포커스 창을 다시 그린다
         // (매 틱 전체 재도색은 유휴 CPU 낭비 — 위상 불변이면 화면도 불변이다).
         {
@@ -21509,7 +21611,6 @@ impl ApplicationHandler<AppEvent> for App {
                             self.name_prompt_for = None;
                         }
                         Role::Settings => self.settings_view = None,
-                        Role::Gallery => self.gallery_view = None,
                         Role::Picker => self.picker_view = None,
                         Role::About => self.about_view = None,
                         Role::License => self.license_view = None,
@@ -21813,11 +21914,6 @@ impl ApplicationHandler<AppEvent> for App {
                                     v.set_clipboard_has_text(has_clip);
                                 }
                             }
-                            Some(Role::Gallery) => {
-                                if let Some(v) = self.gallery_view.as_mut() {
-                                    v.set_clipboard_has_text(has_clip);
-                                }
-                            }
                             _ => {}
                         }
                     }
@@ -22021,10 +22117,6 @@ impl ApplicationHandler<AppEvent> for App {
                             match std_accel(&t) {
                                 Some(StdAccel::Settings) => {
                                     self.open_settings(el);
-                                    return;
-                                }
-                                Some(StdAccel::Gallery) => {
-                                    self.open_gallery(el);
                                     return;
                                 }
                                 // 텍스트 기본 단축키 — 전체 선택(사용자 지적 08-09).
@@ -22945,16 +23037,14 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         dedup: nbeep_core::DedupIndex::new(),
         started: Instant::now(),
         status: format!(
-            "[{net_hint}] {mode_hint} · {} · {} · {}{trust_hint}{group_hint}{id_hint}",
+            "[{net_hint}] {mode_hint} · {} · {}{trust_hint}{group_hint}{id_hint}",
             nbeep_core::t(nbeep_core::Msg::HintAddAddr),
             nbeep_core::t(nbeep_core::Msg::HintSettings),
-            nbeep_core::t(nbeep_core::Msg::HintGallery),
         ),
         fonts: App::fonts_from_settings(&settings),
         settings,
         conf,
         settings_view: None,
-        gallery_view: None,
         about_view: None,
         license_view: None,
         devices_view: None,
@@ -23139,6 +23229,8 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         picker_purpose: None,
         picker_last_dir: None,
         pending_picker: None,
+        json_watch: None,
+        json_next_ms: 0,
         data_dir: dir,
         live,
         listen_port,

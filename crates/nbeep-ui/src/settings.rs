@@ -175,6 +175,10 @@ pub const ADVANCED: &[&str] = &[
     "ui.typeahead_pos",
     "ui.typeahead_space",
     "ui.typeahead_special",
+    // 고속 스크롤 세부(11-02) — 켜기·속도·배지는 기본 표시, 시간 상수는 고급.
+    "scroll.fast_hud_fade_ms",
+    "scroll.fast_hud_hold_ms",
+    "scroll.fast_window_ms",
     // 순간 메시지 HUD 세부(11-02) — 켜기·위치는 기본 표시, 시간·색은 고급.
     "hud.hold_ms",
     "hud.fade_ms",
@@ -228,6 +232,12 @@ pub const DEPENDS: &[(&str, &str, Dep)] = &[
     ("ui.typeahead_pos", "ui.typeahead", Dep::On),
     ("ui.typeahead_space", "ui.typeahead", Dep::On),
     ("ui.typeahead_special", "ui.typeahead", Dep::On),
+    ("scroll.fast_speed", "scroll.fast", Dep::On),
+    ("scroll.fast_hud", "scroll.fast", Dep::On),
+    ("scroll.fast_hud_pos", "scroll.fast_hud", Dep::On),
+    ("scroll.fast_hud_fade_ms", "scroll.fast_hud", Dep::On),
+    ("scroll.fast_hud_hold_ms", "scroll.fast_hud", Dep::On),
+    ("scroll.fast_window_ms", "scroll.fast", Dep::On),
     ("hud.pos", "hud.enabled", Dep::On),
     ("hud.hold_ms", "hud.enabled", Dep::On),
     ("hud.fade_ms", "hud.enabled", Dep::On),
@@ -415,6 +425,12 @@ const RADIO_DEFAULTS: &[(&str, &str)] = &[
     // 순간 메시지 HUD(11-02 · nexa-sql zoom.hud_* 이식 — 복사됨 캡슐): 우상단 · 유지 500 · 페이드 600 · 바탕 80% · 글자 100%.
     ("hud.pos", "tr"),
     ("hud.hold_ms", "500"),
+    // 고속 스크롤(11-02 · nexa-sql 기본값 = fast(step 3 · ×16) · 배지 우상단 · 유지 250 · 페이드 600 · 간격 160).
+    ("scroll.fast_speed", "fast"),
+    ("scroll.fast_hud_pos", "tr"),
+    ("scroll.fast_hud_fade_ms", "600"),
+    ("scroll.fast_hud_hold_ms", "250"),
+    ("scroll.fast_window_ms", "160"),
     ("hud.fade_ms", "600"),
     ("hud.bg_alpha", "80"),
     ("hud.fg_alpha", "100"),
@@ -715,6 +731,94 @@ pub fn registry() -> &'static [Entry] {
                 ("light", Msg::ThemeLight),
             ]),
             key: "ui.theme",
+        },
+        // ── 고속 스크롤(11-02 · nexa-sql scroll.* 이식 — nexa-ctl ScrollBars 내장 가속기·HUD를 설정으로 연다) ──
+        Entry {
+            cat: Msg::CatAppearance,
+            sub: Some(Msg::SubScroll),
+            label: Msg::ScrollFast,
+            desc: Msg::ScrollFastDesc,
+            kind: SettingKind::Toggle,
+            key: "scroll.fast",
+        },
+        Entry {
+            cat: Msg::CatAppearance,
+            sub: Some(Msg::SubScroll),
+            label: Msg::ScrollFastSpeed,
+            desc: Msg::ScrollFastSpeedDesc,
+            kind: SettingKind::Radio(&[
+                ("slow", Msg::ValScrollSlow),
+                ("normal", Msg::ValScrollNormal),
+                ("fast", Msg::ValScrollFast),
+                ("turbo", Msg::ValScrollTurbo),
+            ]),
+            key: "scroll.fast_speed",
+        },
+        Entry {
+            cat: Msg::CatAppearance,
+            sub: Some(Msg::SubScroll),
+            label: Msg::ScrollFastHud,
+            desc: Msg::ScrollFastHudDesc,
+            kind: SettingKind::Toggle,
+            key: "scroll.fast_hud",
+        },
+        Entry {
+            cat: Msg::CatAppearance,
+            sub: Some(Msg::SubScroll),
+            label: Msg::ScrollFastHudPos,
+            desc: Msg::ScrollFastHudPosDesc,
+            kind: SettingKind::PositionGrid,
+            key: "scroll.fast_hud_pos",
+        },
+        Entry {
+            cat: Msg::CatAppearance,
+            sub: Some(Msg::SubScroll),
+            label: Msg::ScrollFastHudFade,
+            desc: Msg::ScrollFastHudFadeDesc,
+            kind: SettingKind::RadioInput(
+                &[
+                    ("200", Msg::Ms200),
+                    ("400", Msg::Ms400),
+                    ("600", Msg::Ms600),
+                    ("800", Msg::Ms800),
+                    ("1000", Msg::Ms1000),
+                ],
+                "ms",
+            ),
+            key: "scroll.fast_hud_fade_ms",
+        },
+        Entry {
+            cat: Msg::CatAppearance,
+            sub: Some(Msg::SubScroll),
+            label: Msg::ScrollFastHudHold,
+            desc: Msg::ScrollFastHudHoldDesc,
+            kind: SettingKind::RadioInput(
+                &[
+                    ("0", Msg::Ms0),
+                    ("250", Msg::Ms250),
+                    ("500", Msg::Ms500),
+                    ("1000", Msg::Ms1000),
+                ],
+                "ms",
+            ),
+            key: "scroll.fast_hud_hold_ms",
+        },
+        Entry {
+            cat: Msg::CatAppearance,
+            sub: Some(Msg::SubScroll),
+            label: Msg::ScrollFastWindow,
+            desc: Msg::ScrollFastWindowDesc,
+            kind: SettingKind::RadioInput(
+                &[
+                    ("80", Msg::Ms80),
+                    ("120", Msg::Ms120),
+                    ("160", Msg::Ms160),
+                    ("240", Msg::Ms240),
+                    ("400", Msg::Ms400),
+                ],
+                "ms",
+            ),
+            key: "scroll.fast_window_ms",
         },
         // ── 순간 메시지 HUD(11-02 · nexa-sql zoom.hud_* 이식 — "복사됨" 캡슐 · 유지 → 서서히 사라짐) ──
         Entry {
@@ -2180,8 +2284,18 @@ pub struct SettingsWidget {
     adv_hidden: usize,
     /// 하단 줄 컨트롤 — 고급 스위치 · \[설정 파일 열기…\] · \[닫기\].
     adv_switch: Switch,
-    btn_file: Button,
+    /// ★ "변경" 보기 스위치(11-02 · nexa-dir3 이식) — 켜는 순간 기본값과 다른 키 집합을 고정해 전 카테고리 카드로 보인다.
+    changed_switch: Switch,
+    /// 변경 보기 중인 키 집합(`None` = 끔) — 편집 중 카드가 사라지지 않게 켤 때 한 번 고정.
+    changed_keys: Option<std::collections::HashSet<&'static str>>,
+    /// ★ 내보내기(JSON 저장)·가져오기(JSON 열기)·JSON 편집(외부 편집기 + 저장 감시) — nexa-dir3와 같은 글·동작(11-02).
+    /// 종전 [설정 파일 열기…](10-09)는 JSON 편집이 대신한다(저장 감시까지 되는 상위 기능 · 하단 폭도 한계).
+    btn_export: Button,
+    btn_import: Button,
+    btn_json: Button,
     btn_close: Button,
+    /// 마지막 마우스 자리(휠은 좌표가 없다 — 트리/카드 중 어느 쪽을 굴릴지 이것으로 가른다 · 11-02).
+    cursor: Point,
     /// 읽기 전용 정보 행 본문(`SettingKind::Info` — 호스트 `set_info`).
     infos: HashMap<&'static str, String>,
     /// 콤보 옵션 **표시 라벨 덮어쓰기**((키, 값) → 라벨 · 10-09 사용자 "시스템 옆에 (설정값)" — nexa-dir3
@@ -2267,8 +2381,13 @@ impl SettingsWidget {
             advanced,
             adv_hidden: 0,
             adv_switch: Switch::new(tr(lang, Msg::PrefsAdvanced), advanced),
-            btn_file: Button::new(tr(lang, Msg::BtnOpenSettingsFile)),
+            changed_switch: Switch::new(tr(lang, Msg::PrefsChangedOnly), false),
+            changed_keys: None,
+            btn_export: Button::new(tr(lang, Msg::BtnExportSettings)),
+            btn_import: Button::new(tr(lang, Msg::BtnImportSettings)),
+            btn_json: Button::new(tr(lang, Msg::BtnEditJson)),
             btn_close: Button::new(tr(lang, Msg::BtnClose)),
+            cursor: Point { x: -1, y: -1 },
             infos: HashMap::new(),
             option_labels: HashMap::new(),
             history,
@@ -2417,6 +2536,28 @@ impl SettingsWidget {
             self.scroll = 0;
             self.rebuild(inv);
         }
+    }
+
+    /// ★ "변경" 보기 켜기/끄기(11-02 · nexa-dir3 `set_changed_only` 이식): 켜는 순간의 **기본값과 다른 키 집합**을 고정하고
+    /// 카드를 다시 만든다(전 카테고리 · 고급 여부 무관 · 검색·트리 선택은 무시). 끄면 종전 보기로.
+    pub fn set_changed_only(&mut self, on: bool, inv: &mut Invalidations) {
+        self.changed_switch.set_on(on);
+        self.changed_keys = on.then(|| {
+            registry()
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| self.is_modified(*i))
+                .map(|(_, e)| e.key)
+                .collect()
+        });
+        self.rebuild(inv);
+        inv.push(self.bounds);
+    }
+
+    /// "변경" 보기가 켜져 있는가.
+    #[must_use]
+    pub fn changed_only(&self) -> bool {
+        self.changed_keys.is_some()
     }
 
     /// 고급 설정 스위치 상태를 외부에서 맞춘다(열 때 `ui.prefs_advanced` 복원은 `new`가 한다 — 런타임 동기용).
@@ -2614,6 +2755,17 @@ impl SettingsWidget {
     /// 가시 항목(registry 인덱스) — 검색 중 = 전 카테고리 매치 · 아니면 선택 범위(그룹/카테고리) ·
     /// 고급 스위치가 꺼져 있으면 [`ADVANCED`] 제외 · 순서 = [`display_order`](그룹 → 카테고리 → 하위 → 접두 → 등재).
     fn visible_indices(&self) -> Vec<usize> {
+        // ★ 변경 보기(11-02) — 고정한 키 집합만 · 카테고리·고급·검색 무관(nexa-dir3 `card_pass_changed_only_ignores_advanced`).
+        if let Some(keys) = &self.changed_keys {
+            let mut hits: Vec<usize> = registry()
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| keys.contains(e.key))
+                .map(|(i, _)| i)
+                .collect();
+            hits.sort_by_key(|&i| display_order(i));
+            return hits;
+        }
         let mut hits: Vec<usize> = self
             .candidate_indices()
             .into_iter()
@@ -2621,6 +2773,18 @@ impl SettingsWidget {
             .collect();
         hits.sort_by_key(|&i| display_order(i));
         hits
+    }
+
+    /// 밴드 셋째 줄 안내(11-02) — 변경 보기인데 바뀐 것이 없으면 그 말 · 아니면 고급 숨김 수.
+    fn banner_note(&self) -> Option<String> {
+        if self.changed_only() {
+            return self
+                .rows
+                .is_empty()
+                .then(|| tr(current_lang(), Msg::PrefsNoChanged).to_string());
+        }
+        (self.adv_hidden > 0)
+            .then(|| nbeep_core::tf(Msg::PrefsAdvancedHidden, &[&self.adv_hidden.to_string()]))
     }
 
     /// 사이드바·우측 행(컨트롤 포함)을 현재 상태(검색·선택·값)로 다시 만든다.
@@ -2681,9 +2845,14 @@ impl SettingsWidget {
         // ── 우측 행 + 컨트롤 ──
         self.rows.clear();
         let visible = self.visible_indices();
-        self.adv_hidden = candidates.saturating_sub(visible.len());
+        self.adv_hidden = if self.changed_only() {
+            0
+        } else {
+            candidates.saturating_sub(visible.len())
+        };
         // 여러 카테고리가 한 목록에 섞이는 보기(그룹 선택·검색)는 카테고리 경계에 제목을 붙인다.
-        let multi_cat = searching || matches!(self.selected, TreeSel::Group(_));
+        let multi_cat =
+            searching || matches!(self.selected, TreeSel::Group(_)) || self.changed_only();
         for idx in visible {
             let e = &registry()[idx];
             let ctl = match e.kind {
@@ -2952,7 +3121,7 @@ impl SettingsWidget {
     fn crumb_h(&self) -> i32 {
         self.s(CRUMB_CAT_H)
             + self.s(CRUMB_SUB_H)
-            + if self.adv_hidden > 0 {
+            + if self.banner_note().is_some() {
                 self.s(BANNER_H)
             } else {
                 0
@@ -3031,23 +3200,27 @@ impl SettingsWidget {
             self.adv_switch.set_scale(self.scale);
             self.adv_switch
                 .set_bounds(Rect::new(b.x + pad, cy, self.s(190), ctl_h), inv);
-            let close_w = self.s(90);
-            let file_w = self.s(150);
-            self.btn_close.set_scale(self.scale);
-            self.btn_close.set_bounds(
-                Rect::new(b.right() - pad - close_w, cy, close_w, ctl_h),
+            self.changed_switch.set_scale(self.scale);
+            self.changed_switch.set_bounds(
+                Rect::new(b.x + pad + self.s(190) + self.s(8), cy, self.s(120), ctl_h),
                 inv,
             );
-            self.btn_file.set_scale(self.scale);
-            self.btn_file.set_bounds(
-                Rect::new(
-                    b.right() - pad - close_w - self.s(8) - file_w,
-                    cy,
-                    file_w,
-                    ctl_h,
-                ),
-                inv,
-            );
+            // 오른쪽부터 [닫기][설정 파일 열기…][JSON 편집…][가져오기…][내보내기…] — nexa-dir3와 같은 순서(11-02).
+            let gap = self.s(8);
+            let scale = self.scale;
+            let widths = [self.s(90), self.s(120), self.s(110), self.s(110)];
+            let mut right = b.right() - pad;
+            let btns: [&mut Button; 4] = [
+                &mut self.btn_close,
+                &mut self.btn_json,
+                &mut self.btn_import,
+                &mut self.btn_export,
+            ];
+            for (btn, w) in btns.into_iter().zip(widths) {
+                btn.set_scale(scale);
+                btn.set_bounds(Rect::new(right - w, cy, w, ctl_h), inv);
+                right -= w + gap;
+            }
         }
 
         let rx = b.x + sw; // 우측 패널 시작
@@ -3510,8 +3683,30 @@ impl Widget for SettingsWidget {
                 )
             {
                 self.adv_switch.on_event(ev, inv);
-                self.btn_file.on_event(ev, inv);
+                self.changed_switch.on_event(ev, inv);
+                self.btn_export.on_event(ev, inv);
+                self.btn_import.on_event(ev, inv);
+                self.btn_json.on_event(ev, inv);
                 self.btn_close.on_event(ev, inv);
+                if let Some(on) = self.changed_switch.take_toggled() {
+                    self.set_changed_only(on, inv);
+                    return;
+                }
+                if self.btn_export.take_clicked() {
+                    self.changes.push(("settings.export", "run".to_string()));
+                    inv.push(self.bounds);
+                    return;
+                }
+                if self.btn_import.take_clicked() {
+                    self.changes.push(("settings.import", "run".to_string()));
+                    inv.push(self.bounds);
+                    return;
+                }
+                if self.btn_json.take_clicked() {
+                    self.changes.push(("settings.edit_json", "run".to_string()));
+                    inv.push(self.bounds);
+                    return;
+                }
                 if let Some(on) = self.adv_switch.take_toggled() {
                     self.advanced = on;
                     self.changes.push((
@@ -3524,11 +3719,6 @@ impl Widget for SettingsWidget {
                 }
                 if self.btn_close.take_clicked() {
                     self.back = true;
-                    inv.push(self.bounds);
-                    return;
-                }
-                if self.btn_file.take_clicked() {
-                    self.changes.push(("settings.open_file", "run".to_string()));
                     inv.push(self.bounds);
                     return;
                 }
@@ -3592,6 +3782,22 @@ impl Widget for SettingsWidget {
             }
         }
 
+        // ── 커서 추적(11-02) — 휠 사건엔 좌표가 없어, 마지막 마우스 자리로 트리/카드를 가른다 ──
+        if let InputEvent::MouseMove { x, y }
+        | InputEvent::MouseDown { x, y, .. }
+        | InputEvent::RightDown { x, y } = *ev
+        {
+            self.cursor = Point { x, y };
+        }
+        // ★ 사이드바 트리 위의 휠은 트리만 굴린다(11-02 사용자 "좌측 목록에서 스크롤했는데 우측 상세가 스크롤됨" —
+        //   종전엔 좌표 없는 휠이 무조건 우측 패널 스크롤바로 갔다).
+        if matches!(ev, InputEvent::Wheel { .. } | InputEvent::HWheel { .. })
+            && self.tree.bounds().contains(self.cursor)
+        {
+            self.tree.on_event(ev, inv);
+            inv.push(self.tree.bounds());
+            return;
+        }
         // ── 우측 패널 오버레이 스크롤(세로 전용) — 콤보 열림 중에는 위 캡처가 우선 ──
         {
             let vp = self.right_viewport();
@@ -3970,6 +4176,16 @@ impl Widget for SettingsWidget {
                 continue; // 화면 밖 카드
             }
             ctx.fill_round_rect(r, self.s(6), theme.panel_bg);
+            // ★ 값이 바뀐 카드(11-02 사용자 요청 "변경된 카드 표시") — 왼쪽 가장자리 3px 강조 막대(둥근 모서리 안쪽) ·
+            //   잠긴(종속) 카드는 제외. [초기화] 버튼과 함께 이중 부호화(색+형태).
+            if self.is_modified(row.idx) && !self.is_locked(row.idx) {
+                let m = self.s(6);
+                ctx.fill_round_rect(
+                    Rect::new(r.x, r.y + m, self.s(3), (r.h - m * 2).max(1)),
+                    1,
+                    theme.accent,
+                );
+            }
             let tx = r.x + cpad;
             let ty = r.y + cpad;
             // 제목(글꼴 영역은 굵게 — 종전 규약 유지).
@@ -4164,7 +4380,7 @@ impl Widget for SettingsWidget {
             }
         }
         // 고급 숨김 배너(밴드 셋째 줄 · 10-09) — "고급 설정 N개 숨김 — 고급 설정을 켜면 보입니다".
-        if self.adv_hidden > 0 {
+        if let Some(note) = self.banner_note() {
             ctx.select_font(FontSlot::Status, false);
             let th = ctx.text_height();
             let bh = self.s(BANNER_H);
@@ -4173,7 +4389,7 @@ impl Widget for SettingsWidget {
                 crumb.x + self.s(PAD),
                 by + (bh - th) / 2,
                 crumb,
-                &nbeep_core::tf(Msg::PrefsAdvancedHidden, &[&self.adv_hidden.to_string()]),
+                &note,
                 theme.text_dim,
             );
         }
@@ -4186,7 +4402,10 @@ impl Widget for SettingsWidget {
         ctx.fill_rect(bar, theme.chrome_bg);
         ctx.fill_rect(Rect::new(bar.x, bar.y, bar.w, 1), theme.border);
         self.adv_switch.paint(ctx, theme);
-        self.btn_file.paint(ctx, theme);
+        self.changed_switch.paint(ctx, theme);
+        self.btn_export.paint(ctx, theme);
+        self.btn_import.paint(ctx, theme);
+        self.btn_json.paint(ctx, theme);
         self.btn_close.paint(ctx, theme);
 
         // 텍스트 필드 우클릭 메뉴 — 진짜 최상위(고정 밴드보다도 위 · 08-13 실기:
@@ -4699,6 +4918,85 @@ mod tests {
         assert!(keys_of(&w).contains(&"ui.carousel_scroll"));
     }
 
+    /// ★ 11-02: "변경" 보기 = 기본값과 다른 키만 · 전 카테고리 · 고급 무관 · 없으면 배너 안내 · 끄면 종전 보기.
+    #[test]
+    fn changed_only_lists_modified_keys_across_categories() {
+        let (mut w, mut inv) = widget();
+        select_cat(&mut w, Msg::CatPeerList);
+        assert!(!w.changed_only());
+        w.set_changed_only(true, &mut inv);
+        assert!(w.changed_only());
+        assert!(keys_of(&w).is_empty(), "기본값뿐이면 카드 0");
+        assert_eq!(
+            w.banner_note().as_deref(),
+            Some(tr(current_lang(), Msg::PrefsNoChanged))
+        );
+        w.set_changed_only(false, &mut inv);
+        // 다른 카테고리의 값을 바꾸고(고급 키 포함) 다시 켜면 그것만 — 선택 카테고리와 무관.
+        w.set_value("ui.theme", "light", &mut inv);
+        w.set_value("ime.stale_ms", "300", &mut inv);
+        w.set_changed_only(true, &mut inv);
+        let keys = keys_of(&w);
+        assert_eq!(keys, vec!["ui.theme", "ime.stale_ms"], "{keys:?}");
+        assert!(w.banner_note().is_none());
+        // 켜진 뒤 값을 기본으로 되돌려도 카드는 남는다(집합 고정 — 편집 중 사라지지 않게).
+        w.set_value("ui.theme", "system", &mut inv);
+        assert_eq!(keys_of(&w).len(), 2);
+        w.set_changed_only(false, &mut inv);
+        assert!(
+            keys_of(&w).contains(&"ui.list_sort"),
+            "끄면 종전 카테고리 보기"
+        );
+    }
+
+    /// ★ 11-02: 트리 위의 휠은 카드 패널을 굴리지 않는다(좌표 없는 휠 = 마지막 커서 자리로 판정).
+    #[test]
+    fn wheel_over_tree_does_not_scroll_cards() {
+        let (mut w, mut inv) = widget();
+        w.set_bounds(Rect::new(0, 0, 900, 300), &mut inv); // 카드가 뷰포트를 넘치게
+        w.set_advanced(true, &mut inv);
+        select_cat(&mut w, Msg::CatIme);
+        let mut probe = crate::controls::ProbeCtx;
+        w.paint(&mut probe, &crate::theme::Theme::dark());
+        let tb = w.tree.bounds();
+        w.on_event(
+            &InputEvent::MouseMove {
+                x: tb.x + 10,
+                y: tb.y + 10,
+            },
+            &mut inv,
+        );
+        w.on_event(&InputEvent::Wheel { delta: -120 }, &mut inv);
+        assert_eq!(w.scroll, 0, "트리 위 휠 = 카드 스크롤 0");
+        let vp = w.right_viewport();
+        w.on_event(
+            &InputEvent::MouseMove {
+                x: vp.x + 20,
+                y: vp.y + 20,
+            },
+            &mut inv,
+        );
+        w.on_event(&InputEvent::Wheel { delta: -120 }, &mut inv);
+        assert!(w.scroll > 0, "카드 위 휠 = 카드 스크롤");
+    }
+
+    /// ★ 11-02: 하단 [내보내기…][가져오기…][JSON 편집…] = 행위 변경 보고(nexa-dir3와 같은 id 순서).
+    #[test]
+    fn bottom_bar_export_import_json_report_actions() {
+        let (mut w, mut inv) = widget();
+        w.set_bounds(Rect::new(0, 0, 1200, 600), &mut inv);
+        for (btn, id) in [
+            (w.btn_export.bounds(), "settings.export"),
+            (w.btn_import.bounds(), "settings.import"),
+            (w.btn_json.bounds(), "settings.edit_json"),
+        ] {
+            for e in click(btn.x + 4, btn.y + btn.h / 2) {
+                w.on_event(&e, &mut inv);
+            }
+            assert_eq!(w.take_changes(), vec![(id, "run".to_string())], "{id}");
+        }
+    }
+
     #[test]
     fn advanced_switch_hides_and_counts() {
         // 10-09: 고급 스위치 꺼짐 = ADVANCED 항목 숨김 + 배너 수 · 켜면 전부.
@@ -4715,7 +5013,8 @@ mod tests {
         w.set_advanced(true, &mut inv);
         assert_eq!(keys_of(&w).len(), 9, "타입어헤드 마스터+4 포함 전부");
         assert_eq!(w.adv_hidden, 0);
-        // 하단 스위치 클릭으로도 토글되고 변경이 보고된다.
+        // 하단 스위치 클릭으로도 토글되고 변경이 보고된다(하단 줄이 겹치지 않게 넓힌다 — 11-02 버튼 3개 추가).
+        w.set_bounds(Rect::new(0, 0, 1000, 300), &mut inv);
         let sb = w.adv_switch.bounds();
         for e in click(sb.x + 3, sb.y + sb.h / 2) {
             w.on_event(&e, &mut inv);
@@ -4826,21 +5125,22 @@ mod tests {
     }
 
     #[test]
-    fn bottom_bar_close_and_open_file() {
+    fn bottom_bar_close_and_edit_json() {
         let (mut w, mut inv) = widget();
+        w.set_bounds(Rect::new(0, 0, 1000, 300), &mut inv);
         let cb = w.btn_close.bounds();
         assert!(cb.w > 0 && cb.y >= w.bounds.bottom() - w.bottom_h());
         for e in click(cb.x + 3, cb.y + 3) {
             w.on_event(&e, &mut inv);
         }
         assert!(w.take_back(), "[닫기] = 닫기 요청");
-        let fb = w.btn_file.bounds();
+        let fb = w.btn_json.bounds();
         for e in click(fb.x + 3, fb.y + 3) {
             w.on_event(&e, &mut inv);
         }
         assert_eq!(
             w.take_changes(),
-            vec![("settings.open_file", "run".to_string())]
+            vec![("settings.edit_json", "run".to_string())]
         );
     }
 

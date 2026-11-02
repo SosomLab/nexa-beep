@@ -78,6 +78,8 @@ pub enum PickFilter {
     History,
     /// 라이선스(`.license`).
     License,
+    /// 설정 JSON(`.json` · 내보내기/가져오기 · 11-02).
+    Json,
 }
 
 /// 프로필 사진으로 받는 확장자(종전 자체 피커의 목록 그대로).
@@ -97,6 +99,7 @@ impl PickFilter {
             PickFilter::Image => one(Msg::PkFilterImage, IMAGE_EXTS),
             PickFilter::History => one(Msg::PkFilterHistory, &["seg"]),
             PickFilter::License => one(Msg::PkFilterLicense, &["license"]),
+            PickFilter::Json => one(Msg::PkFilterJson, &["json"]),
         }
     }
 }

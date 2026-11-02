@@ -23,6 +23,7 @@ pub mod endpoint;
 pub mod group;
 pub mod i18n;
 pub mod identity;
+pub mod jsonmap;
 pub mod link;
 pub mod linkwatch;
 pub mod mux;
