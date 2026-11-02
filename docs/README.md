@@ -111,7 +111,8 @@
 | **50** | [**설정 체계 개편 + nexa-ui/nexa-license 도입 계획**](50-settings-overhaul-nexa-ui-plan.md) — 조사 4축 요약 · D-33-1~9 결정 · 적용 범위 · P0~P5 순서·분담(협업 세션) · 위험 · 실기 T-1~10 | ✅ 10-09(P1~P4 완료 · **v0.3.0 공개** · P5 캡처 잔여) |
 | **51** | [**성능 검토 2026-10-10 — 스크롤·우클릭 메뉴 실측과 처방 + 척도 16항목**](51-performance-review-2026-10-10.md) — `NEXA_PAINT_TRACE`·입력 주입 seam · 줄바꿈 캐시 · mac IOSurface present · 캐럿 틱 정밀화 · dir3/sql 척도 대조 | 🚧 10-10(mac 1차) |
 | **52** | [**로그 아키텍처 — 개발자 상세 로그**](52-log-architecture.md) — 싱크 = M3-22 statuslog 재사용(`dev ` 접두) · 게이트 = `nbeep_core::devlog` 층 10×수준 4 마스크 · 레코드 `기능 k=v | rule 기준=값 | → 결과/FAIL 원인` · `dlog!` · 켜는 길 `log.dev_mode`·`NEXA_DEVLOG` · 계측 1차 12곳 | ✅ 10-19(1차 구현 `09942eb` · 로그 창·계측 확장 = LOG-1·LOG-2) |
-| **53~** | *(미배정)* | 신규 문서는 여기부터 |
+| **53** | [**협업 세션 운영 기준**](53-collab-session-operation.md) — Fable 개발 세션 × Opus 협업 세션 · 역할·파일 소유·메시지 형식·[P0~P3]/[V0~V3]·git·빌드 충돌·§12 원장(출처 nexa-sql docs/102 `23035161` + dir3 DR-12) | ✅ 11-03 이식 |
+| **54~** | *(미배정)* | 신규 문서는 여기부터 |
 | **15 · 16 · 18** | 개발 방법론 · 문서/git 규약 · 빌드&테스트 | ✅ |
 
 ## ③ 진행 경과 · 할 일
