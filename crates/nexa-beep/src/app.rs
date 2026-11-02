@@ -21417,6 +21417,12 @@ impl ApplicationHandler<AppEvent> for App {
         for e in self.windows.values_mut() {
             let _ = e.surface.trim_if_idle();
         }
+        // ★ IME 보충 주입 만료(11-02) — 틱 200ms에 묶이지 않고 **정확히** stale/보류 유예 만료 시각에 깨어난다
+        //   (종전 체감 지연 250~450ms → 250ms 고정 · 사용자 확정 = stale_ms 250 유지).
+        if let Some(dl) = self.ime.next_deadline(self.now_ms()) {
+            let rem = dl.saturating_sub(self.now_ms()).max(1);
+            wake_ms = wake_ms.min(rem);
+        }
         // 유휴에도 ~5Hz로 깨어나 발견 갱신·종료 신호를 폴한다(입력 없을 때도 목록이 산다).
         el.set_control_flow(ControlFlow::wait_duration(
             std::time::Duration::from_millis(wake_ms),
@@ -21892,6 +21898,16 @@ impl ApplicationHandler<AppEvent> for App {
                 // ★ G1(개정 3차 · H-27): raw 대조·선배달 상쇄·주입은 전부 게이트 판정 —
                 // 같은 문자 반복(222)·프록시 지연("가나다1223")·조합 중 순서는
                 // ime_gate의 replay_h27_*·replay_g1_* 재생 테스트가 지킨다.
+                // ★ 비문자 키(Enter·Backspace·방향키 · 11-02 실타 "메뉴에서?"+Enter)는 raw 대조를 안 타므로 삼킨 채 대기 중인
+                //   문자를 **이 키보다 먼저** 주입한다 — 종전엔 "메뉴에서"만 나가고 `?`가 틱 폴백으로 빈 입력창에 들어갔다.
+                if !matches!(key_in, crate::ime_gate::KeyIn::Char(_)) && !self.primary_down {
+                    let ime_on = !self.is_list_mode(id);
+                    let outs = self.ime.reconcile_flush(id, now_ms, ime_on);
+                    if self.ime_trace && !outs.is_empty() {
+                        eprintln!("[ime] inject(비문자 키 선행 — G1) {outs:?}");
+                    }
+                    self.apply_ime(outs, el);
+                }
                 if let crate::ime_gate::KeyIn::Char(cur) = key_in {
                     if !self.primary_down {
                         let ime_on = !self.is_list_mode(id);

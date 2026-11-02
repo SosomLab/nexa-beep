@@ -279,6 +279,50 @@ impl<W: Copy + Eq> ImeGate<W> {
         outs
     }
 
+    /// ★ 비문자 키 선행 주입(11-02 실타 "메뉴에서?" + Enter → "메뉴에서"만 전송되고 `?`는 Enter 뒤 빈 입력창에):
+    /// Enter·Backspace·방향키는 raw 대조([`Self::reconcile_raw`])를 타지 않아, 삼킨 채 대기 중인 문자가
+    /// 그 키 **뒤**에 들어갔다. keydown은 순서대로 오므로 이 시점 큐의 잔여는 전부 이미 지나간 keypress =
+    /// 기다릴 것 없이 지금 주입한다(stale_ms 무시 · 삼킴 창 밖 잔여는 버림).
+    pub fn reconcile_flush(&mut self, id: W, now: u64, ime_on: bool) -> Vec<Out<W>> {
+        let mut outs = Vec::new();
+        if !self.tune.inject || self.composing {
+            return outs;
+        }
+        while let Some((rc, rt)) = self.raw.pop_front() {
+            if self.swallow_eligible(rt) {
+                outs.extend(self.inject_char(id, rc, now, ime_on));
+            }
+        }
+        outs
+    }
+
+    /// 다음에 깨어나야 할 시각(ms · 11-02 — 틱 200ms에 묶이지 않고 **정확히 대기 만료에** 주입):
+    /// raw 잔여의 stale 만료 · 보류 자모의 유예 만료 중 이른 것. 없으면 `None`.
+    #[must_use]
+    pub fn next_deadline(&self, now: u64) -> Option<u64> {
+        if !self.tune.inject && self.pending.is_none() {
+            return None;
+        }
+        let raw = if self.tune.inject && !self.composing {
+            self.raw
+                .front()
+                .map(|&(_, t)| t.saturating_add(self.tune.stale_ms))
+        } else {
+            None
+        };
+        let pend = if self.composing {
+            None
+        } else {
+            self.pending
+                .map(|(_, _, t, _)| t.saturating_add(self.tune.pending_ms))
+        };
+        let d = match (raw, pend) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        d.map(|t| t.max(now))
+    }
+
     /// 틱 폴백(G1): 뒤따르는 키가 없어 대조가 못 정산한 250ms 경과 잔여를 주입.
     /// ★ **조합 중엔 기다린다**(H-27③ · 08-15 실타 "ㅇㅇ2ㅇ22") — 삼켜진 키의
     /// 제자리는 지금 조합 중인 음절의 Commit **뒤**다. 여기서 주입하면 확정될
@@ -739,9 +783,11 @@ mod tests {
             self.apply(outs);
             self.keys.push(k);
         }
-        /// keydown(Enter 등 기타) — 소비 안 되면 키 목록에 기록.
+        /// keydown(Enter 등 기타) — 소비 안 되면 키 목록에 기록. app.rs 순서: flush(삼킨 문자 선행) → gate → ….
         fn key_other(&mut self) {
             self.now += 30;
+            let outs = self.gate.reconcile_flush(W, self.now, true);
+            self.apply(outs);
             if self
                 .gate
                 .keydown_gate(W, KeyIn::Other, self.now, false, false)
@@ -1039,6 +1085,45 @@ mod tests {
         d.key_char(' '); // 진짜 연타
         d.stale(400);
         assert_eq!(d.buf, "가  ", "진짜 Space는 정확히 한 번");
+    }
+
+    /// ★ H-29 재생(11-02 실타 "메뉴에서?" + Enter): 조합을 닫은 `?`가 winit에 삼켜진 채(관측만) Enter가 먼저
+    /// 오면 — 종전 = Enter가 raw 대조를 안 타 "메뉴에서"만 나가고 `?`는 틱 폴백으로 빈 입력창에. 이제 Enter
+    /// **앞에** `?`를 주입한다(비문자 키 선행 주입).
+    #[test]
+    fn replay_h29_swallowed_punct_injected_before_enter() {
+        let mut d = Driver::new();
+        d.preedit("서");
+        d.raw('?'); // keytap 관측 — keydown은 미도달(삼킴)
+        d.preedit("");
+        d.commit("서");
+        d.key_other(); // Enter — stale 250ms 전
+        assert_eq!(d.buf, "서?", "삼킨 ?가 Enter보다 먼저");
+        assert_eq!(d.keys, vec![Key::Enter]);
+        assert!(
+            d.gate.next_deadline(d.now).is_none(),
+            "큐가 비면 깨울 시각 없음"
+        );
+    }
+
+    /// 깨울 시각 = raw 관측 + stale_ms(조합 중엔 없음) · 보류 자모 유예와 비교해 이른 쪽.
+    #[test]
+    fn next_deadline_follows_stale_and_pending() {
+        let mut d = Driver::new();
+        d.preedit("다");
+        d.preedit("");
+        d.commit("다");
+        d.raw('1');
+        let t = d.now + 1;
+        assert_eq!(d.gate.next_deadline(d.now), Some(t + 250));
+        assert_eq!(
+            d.gate.next_deadline(t + 1000),
+            Some(t + 1000),
+            "지난 시각은 지금으로"
+        );
+        d.stale(400);
+        assert_eq!(d.buf, "다1");
+        assert!(d.gate.next_deadline(d.now).is_none());
     }
 
     /// H-16 재생 — 조합 중 ← 보류 → commit 직후 재생.
