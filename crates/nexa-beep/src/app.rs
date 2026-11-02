@@ -8869,9 +8869,12 @@ impl App {
                 .ok(
                     "queued offline (M4-6) — delivered when peer appears; connect scheduled"
                 ));
+            // ★ origin = 나(11-02): 종전엔 대기 줄에 origin이 없어 전송 확정 뒤에도 열쇠 `(origin, seq)`가 안 생겼다 →
+            //   내 글에 답장 불가 · S4 따라잡기 대상에서도 빠짐(잠복). seq는 flush가 붙인다.
             let line = ChatLine::text(true, text, at_ms, wall)
                 .with_queued(true)
                 .with_importance(grade)
+                .with_origin(self.identity.peer_id())
                 .with_reply(reply, reply_from);
             // 저장분(parked)에도 대기 풍선(10-19) — 종전엔 뷰에만 넣어 뷰를 닫았다 열면 풍선이 사라졌다
             // (재시작 뒤에만 restore_pending이 되살렸다). flush가 확정하거나(conv 이관 뒤) 접힌 키면
@@ -13596,6 +13599,7 @@ impl App {
                 continue;
             }
             // 대기 풍선 복원 — 기록(parked)에 이어 붙인다(대기분은 항상 최신이다).
+            let me = self.identity.peer_id();
             let restored: Vec<ChatLine> = q
                 .iter()
                 .map(|m| {
@@ -13607,6 +13611,7 @@ impl App {
                         wall_from_ms(m.at_ms),
                     )
                     .with_queued(true)
+                    .with_origin(me)
                     .with_reply(m.reply.clone(), reply_from)
                 })
                 .collect();
@@ -13683,6 +13688,7 @@ impl App {
             {
                 l.queued = false;
                 l.seq = seq;
+                l.origin = Some(me_id); // 열쇠 완성(11-02)
                 l.sent = Some(sent_at);
             } else {
                 let reply_from = m.reply.as_ref().map(|r| {
@@ -13700,6 +13706,7 @@ impl App {
                         wall_from_ms(m.at_ms),
                     )
                     .with_seq(seq)
+                    .with_origin(me_id)
                     .with_sent(Some(sent_at))
                     .with_reply(m.reply.clone(), reply_from),
                 );
@@ -15236,11 +15243,13 @@ impl App {
                     let drop_n = q.len() - PENDING_DIRECT_MAX;
                     q.drain(..drop_n);
                 }
+                let me_q = self.identity.peer_id();
                 if let Some(chat) = self.chats.get_mut(&self.view_key(peer)) {
                     chat.push_line(
                         ChatLine::text(true, text.clone(), at_ms, wall)
                             .with_queued(true)
-                            .with_importance(1),
+                            .with_importance(1)
+                            .with_origin(me_q),
                         &mut inv,
                     );
                 }

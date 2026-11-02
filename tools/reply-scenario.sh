@@ -30,7 +30,8 @@ short() { "$M/$1/nexa-beep$EXE" --whoami 2>/dev/null | awk -F'= ' '/^fingerprint
 echo "▶ 신원 준비(새로) — $M/{rp-x,rp-y} · 출력 $OUT"
 seed rp-x rpx; seed rp-y rpy
 echo "▶ ① X·Y 기동 — X: 10s 연결·14s 창·18s send 원본 / Y: 22s 창·26s reply 답장 / 34s dump · 38s quit"
-run rp-x "10000:activate=rpy;14000:activate=rpy;18000:send=원본 글 첫 줄;34000:dump;38000:quit" "$OUT/x.log"
+# X 21s = **내 글(원본)에 답장**(사용자 11-02 "자기 글에 대해서도 답장") — 그 시점 X의 마지막 열쇠 줄 = 내 원본.
+run rp-x "10000:activate=rpy;14000:activate=rpy;18000:send=원본 글 첫 줄;21000:reply=내 글에 이어서;34000:dump;38000:quit" "$OUT/x.log"
 run rp-y "22000:activate=rpx;26000:reply=답장이야;34000:dump;38000:quit" "$OUT/y.log"
 wait
 XS=$(short rp-x); YS=$(short rp-y) # 신원은 첫 기동 때 생긴다 — 그 뒤에 읽어야 지문이 있다
@@ -45,11 +46,13 @@ ok=0; bad=0
 chk() { local n; n=$(grep -c -E "$3" "$2" 2>/dev/null || true); n=${n:-0}
   if [ "$n" -ge 1 ]; then printf '  ✓ %s (%s건)\n' "$1" "$n"; ok=$((ok+1)); else printf '  ✗ %s (0건)\n' "$1"; bad=$((bad+1)); fi; }
 chk "X→Y 원본 도착(Y 스레드 mine=false)"                "$OUT/y.log"   "thread .* mine=false .* text=원본 글 첫 줄"
-chk "Y 답장 줄 = 참조 (X#seq) + 발췌"                    "$OUT/y.log"   "thread .* mine=true .* text=답장이야 reply=${XS}#[1-9][0-9]*:원본 글 첫 줄"
-chk "X 수신 답장 줄 = 참조 (X#seq) + 발췌(와이어 kind 2)" "$OUT/x.log"   "thread .* mine=false .* text=답장이야 reply=${XS}#[1-9][0-9]*:원본 글 첫 줄"
-chk "Y 재기동: 답장 참조 복원(기록 tag 7)"               "$OUT/y-b.log" "thread .* text=답장이야 reply=${XS}#[1-9][0-9]*:원본 글 첫 줄"
-chk "X 재기동: 받은 답장 참조 복원(기록 tag 7)"          "$OUT/x-b.log" "thread .* text=답장이야 reply=${XS}#[1-9][0-9]*:원본 글 첫 줄"
+chk "Y 답장 줄 = 참조 (X#seq) + 발췌(마지막 열쇠 줄 = X의 자기 답장)" "$OUT/y.log"   "thread .* mine=true .* text=답장이야 reply=${XS}#[1-9][0-9]*:내 글에 이어서"
+chk "X 수신 답장 줄 = 참조 (X#seq) + 발췌(와이어 kind 2)" "$OUT/x.log"   "thread .* mine=false .* text=답장이야 reply=${XS}#[1-9][0-9]*:내 글에 이어서"
+chk "Y 재기동: 답장 참조 복원(기록 tag 7)"               "$OUT/y-b.log" "thread .* text=답장이야 reply=${XS}#[1-9][0-9]*:내 글에 이어서"
+chk "X 재기동: 받은 답장 참조 복원(기록 tag 7)"          "$OUT/x-b.log" "thread .* text=답장이야 reply=${XS}#[1-9][0-9]*:내 글에 이어서"
 chk "Y: reply 동사가 열쇠 줄을 찾았다(경고 없음)"        "$OUT/y.log"   "^\[script\] 26[0-9]{3}ms reply=답장이야"
+chk "X 자기 글 답장: X 스레드 mine=true + 참조 (X#seq)"  "$OUT/x.log"   "thread .* mine=true .* text=내 글에 이어서 reply=${XS}#[1-9][0-9]*:원본 글 첫 줄"
+chk "X 자기 글 답장: Y 수신 줄에도 참조·발췌"           "$OUT/y.log"   "thread .* mine=false .* text=내 글에 이어서 reply=${XS}#[1-9][0-9]*:원본 글 첫 줄"
 if grep -q "reply: 열쇠 있는 줄이 없다" "$OUT/y.log"; then printf '  ✗ Y: 원본 미수신 상태에서 reply\n'; bad=$((bad+1)); fi
 echo; echo "결과: ✓ $ok · ✗ $bad   (로그 = $OUT/{x,y,x-b,y-b}.log)"
 [ "$bad" = 0 ]
