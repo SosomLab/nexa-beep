@@ -145,6 +145,31 @@ fn reply_fallback_text(label: Option<&str>, reply: &nbeep_core::ReplyRef, text: 
     }
 }
 
+/// ★ 기동 트레이스(PERF-4 · 11-04 · [05] NFR-B-11 콜드 스타트 ≤500ms · [49] INS-3): main 첫 줄(t0) → 이벤트 루프(0) →
+/// 메인 창 생성(1) → 메인 창 첫 present(2)까지 ms. 프로세스당 한 번(OnceLock) · 보고는 다음 틱에 `[startup]` 한 줄
+/// (`NEXA_PAINT_TRACE`) + 상세 로그 `[app] startup`(예산 500ms 초과 = FAIL). 비용 = Instant 3회.
+pub(crate) static STARTUP_T0: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+static STARTUP_MS: [std::sync::OnceLock<u64>; 3] = [const { std::sync::OnceLock::new() }; 3];
+static STARTUP_DUE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// 콜드 스타트 예산(05 NFR-B-11).
+const STARTUP_BUDGET_MS: u64 = 500;
+
+/// t0 고정 — main 첫 줄에서(그보다 앞은 OS 로더 몫 · 측정 밖).
+pub(crate) fn startup_begin() {
+    let _ = STARTUP_T0.get_or_init(Instant::now);
+}
+
+/// 단계 도달 기록(0 = 이벤트 루프 · 1 = 메인 창 · 2 = 첫 present) — 첫 기록만 남는다.
+pub(crate) fn startup_mark(stage: usize) {
+    let t0 = STARTUP_T0.get_or_init(Instant::now);
+    let ms = u64::try_from(t0.elapsed().as_millis()).unwrap_or(u64::MAX);
+    if let Some(slot) = STARTUP_MS.get(stage) {
+        if slot.set(ms).is_ok() && stage == 2 {
+            STARTUP_DUE.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+}
+
 /// 창 이벤트 변종 이름(정체 꼬리표 · 페이로드 없음).
 fn window_event_tag(ev: &WindowEvent) -> &'static str {
     match ev {
@@ -7013,6 +7038,7 @@ impl App {
         // `apply_presence`가 창보다 먼저 돌아 "— 오프라인"이 빠졌다 · Linux 트레이 복귀 재생성도 같은 길).
         self.update_main_title();
         self.request_redraw(id);
+        startup_mark(1); // PERF-4 — 메인 창 생성·첫 레이아웃까지
     }
 
     /// 메인 창 앞으로(트레이 열기·알림 클릭). Wayland는 `set_visible`/`focus_window`가
@@ -7383,6 +7409,30 @@ impl App {
     ///  복귀 = 백오프 · 수동 우선 = 설정 변경 즉시 · 포커스 안 뺏음 = 상태바만.)
     /// 직전 핸들러가 남긴 정체 기록을 한 줄로 낸다(STALL-1 · `[app] ui_stall handler=… ms=… | rule limit_ms=500 | → FAIL`).
     /// 상세 로그(`log.dev_mode`/`NEXA_DEVLOG`)가 꺼져 있으면 `NEXA_WIN_TRACE` stderr로만 — 둘 다 없으면 조용히 버린다.
+    /// 기동 트레이스 보고(PERF-4) — 첫 present 뒤 첫 틱에 한 번.
+    fn drain_startup_report(&mut self) {
+        if !STARTUP_DUE.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
+        let at = |i: usize| STARTUP_MS[i].get().copied().unwrap_or(0);
+        let (loop_ms, window_ms, paint_ms) = (at(0), at(1), at(2));
+        if paint_trace_enabled() {
+            eprintln!("[startup] loop={loop_ms}ms window={window_ms}ms first_paint={paint_ms}ms");
+        }
+        dlog!(self, DL::App, DV::Basic, "startup", |r| {
+            let r = r
+                .arg("loop_ms", loop_ms)
+                .arg("window_ms", window_ms)
+                .arg("first_paint_ms", paint_ms)
+                .rule("budget_ms", STARTUP_BUDGET_MS);
+            if paint_ms <= STARTUP_BUDGET_MS {
+                r.ok("within budget")
+            } else {
+                r.fail("over cold-start budget (NFR-B-11)")
+            }
+        });
+    }
+
     fn drain_stall_report(&mut self) {
         let got = STALL_LAST.lock().ok().and_then(|mut g| g.take());
         let Some((tag, ms)) = got else {
@@ -19339,6 +19389,9 @@ impl App {
             eprintln!("[paint] {role_dbg:?} present failed"); // softbuffer 경로만 실패할 수 있다(IOSurface = 항상 Ok)
         }
         entry.blinks = blinks;
+        if role_dbg == Role::Main {
+            startup_mark(2); // PERF-4 — 메인 창 첫 present(두 번째부터는 무시)
+        }
         if paint_trace_enabled() {
             eprintln!(
                 "[paint] {:?} {}x{} paint={:.2}ms present={:.2}ms",
@@ -21515,6 +21568,7 @@ impl ApplicationHandler<AppEvent> for App {
 
     fn about_to_wait(&mut self, el: &ActiveEventLoop) {
         self.drain_stall_report();
+        self.drain_startup_report();
         let _stall = StallGuard::new("tick");
         // 종료 신호(SIGINT/SIGTERM) → 이벤트 루프 종료. run_app 반환 → App Drop →
         // transport(LocalDirect) Drop → GOODBYE 발신·소켓/스레드 정리(R-16 · FR-P-7).
@@ -23226,6 +23280,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
 
     // 이벤트 루프·프록시 먼저 — 인바운드 수락 펌프가 프록시를 필요로 한다(M2-7).
     let event_loop = EventLoop::<AppEvent>::with_user_event().build().unwrap();
+    startup_mark(0); // PERF-4 — 신원·저장소·트랜스포트까지 연 뒤 루프 준비
     let proxy = event_loop.create_proxy();
     let shutdown = nbeep_plat::shutdown::install(); // R-16 — SIGINT/SIGTERM 포트
                                                     // 정식 macOS 알림 초기화(M3-8b · 사용자 확정 "정식 알림") — **번들(.app) 실행**이면

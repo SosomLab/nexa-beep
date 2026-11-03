@@ -45,9 +45,10 @@ use cli::probe::{discover_probe, live_echo};
 use cli::quarantine::quarantine_demo;
 
 fn main() {
-    // 어떤 출력보다 먼저 — 터미널에서 불렸으면 부모 콘솔에 붙어 CLI 출력을 보전한다
-    // (windows 서브시스템 전환의 짝 · 리다이렉트 핸들은 함수가 되살린다). GUI 실행
-    // (더블클릭·자동 실행 M3-25)은 부모 콘솔이 없어 no-op = 콘솔 창 0.
+    app::startup_begin(); // PERF-4 기동 트레이스 t0(11-04)
+                          // 어떤 출력보다 먼저 — 터미널에서 불렸으면 부모 콘솔에 붙어 CLI 출력을 보전한다
+                          // (windows 서브시스템 전환의 짝 · 리다이렉트 핸들은 함수가 되살린다). GUI 실행
+                          // (더블클릭·자동 실행 M3-25)은 부모 콘솔이 없어 no-op = 콘솔 창 0.
     nbeep_plat::launch::attach_parent_console();
     spawn_netmon_env();
     let args: Vec<String> = std::env::args().collect();
