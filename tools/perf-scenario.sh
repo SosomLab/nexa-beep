@@ -10,6 +10,9 @@
 # ⚠ 스크립트 단계는 **이벤트 루프 틱(≈200ms)으로 묶여** 실행된다(10-10 Win 실측 — 80ms 간격 휠 20회가 9프레임).
 #   그래서 "휠 N회 → 프레임 수"는 입력 밀림의 근거가 아니다. 근거는 paint·present ms 자체(docs/51 §3).
 set -uo pipefail
+# 헤드리스(11-04 HL-1): NEXA_TEST_HEADLESS=1이면 창을 화면에 띄우지 않는다. ⚠ 헤드리스 수치는 틱마다 직접 그리는 경로라
+#   51 §3 기준선(실제 화면 present)과 **비교하지 않는다** — 회귀 유무(같은 조건 반복)만 본다.
+. "$(dirname "${BASH_SOURCE[0]}")/lib/xvfb.sh"
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 OUT=${1:-target/perf-$(date +%m%d-%H%M%S)}; mkdir -p "$OUT"; OUT=$(cd "$OUT" && pwd)
 M=${BEEP_MULTI:-$HOME/.nexa-beep-multi}

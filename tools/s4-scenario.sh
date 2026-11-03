@@ -15,6 +15,8 @@
 # 판정 = 각 신원의 stderr(`NEXA_USER_TRACE=1` · `NEXA_SCRIPT dump`)를 grep — 추정 금지 · 실측 필수.
 # ⚠ 신원 폴더(s4-x1 · s4-x2 · s4-y1)는 **매번 새로 만든다**(옛 핀·기록이 판정을 흐린다).
 set -uo pipefail
+# 헤드리스(11-04 HL-1): NEXA_TEST_HEADLESS=1이면 창을 화면에 띄우지 않는다(Linux = Xvfb 재실행 · 3-OS = NEXA_HEADLESS) — CLAUDE §3 "테스트는 다른 디스플레이에서".
+. "$(dirname "${BASH_SOURCE[0]}")/lib/xvfb.sh"
 cd "$(dirname "$0")/.."
 M=${BEEP_MULTI:-$HOME/.nexa-beep-multi}
 OUT=${1:-$M/s4-out}; mkdir -p "$OUT"; OUT=$(cd "$OUT" && pwd)
