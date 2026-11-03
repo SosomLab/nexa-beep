@@ -826,8 +826,11 @@ impl ChatViewWidget {
     // ── ★ 답장(11-02) ───────────────────────────────────────────────────
 
     /// 전송에 실어 보낼 답장 참조(1회성) — 호스트가 `take_outgoing` 직후 부른다.
-    pub fn take_reply(&mut self) -> Option<nbeep_core::ReplyRef> {
-        self.reply_to.take().map(|(r, _)| r)
+    /// ★ 이름도 같이 준다(11-04): 내 말풍선의 인용 라벨은 **답장을 잡은 그 줄에 보이던 이름**(`start_reply`가 고른
+    ///   `from`·"나"·창 제목)이어야 한다. 종전엔 호스트가 `origin`으로 다시 판정해 형제 세션이 떠 있으면 상대 글을
+    ///   "You:"로 붙였다(11-04 mac 캡처 — 같은 상대의 09:27 글은 이름, 00:27 글은 You). 수신측은 자기 기준으로 판정.
+    pub fn take_reply(&mut self) -> Option<(nbeep_core::ReplyRef, String)> {
+        self.reply_to.take()
     }
 
     /// 답장 초안이 잡혀 있는가(띠 표시 여부).
@@ -3652,7 +3655,7 @@ mod tests {
             w.thread_viewport().h < vp_before,
             "답장 띠만큼 스레드가 줄어든다"
         );
-        let r = w.take_reply().expect("초안");
+        let (r, _) = w.take_reply().expect("초안");
         assert_eq!((r.origin, r.seq), (pidn(2), 42));
         assert_eq!(r.quote, "원본 글 둘째", "개행은 공백");
         assert!(w.take_reply().is_none(), "1회성");
@@ -3667,7 +3670,7 @@ mod tests {
         w.push_line(tline(true, "옛 글 하나", 0).with_origin(pidn(1)), &mut inv); // seq 0
         w.push_line(tline(true, "옛 글 둘", 1).with_origin(pidn(1)), &mut inv);
         assert!(w.start_reply(0, &mut inv), "origin만 있어도 답장 가능");
-        let r = w.take_reply().unwrap();
+        let (r, _) = w.take_reply().unwrap();
         assert_eq!(
             (r.origin, r.seq, r.quote.as_str()),
             (pidn(1), 0, "옛 글 하나")

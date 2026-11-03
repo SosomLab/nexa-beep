@@ -8791,10 +8791,12 @@ impl App {
         peer: PeerId,
         text: nbeep_core::SafeText,
         grade: u8,
-        reply: Option<nbeep_core::ReplyRef>,
+        reply: Option<(nbeep_core::ReplyRef, String)>,
         inv: &mut Invalidations,
     ) {
-        let reply_from = reply.as_ref().map(|r| self.reply_from_name(r.origin));
+        // 인용 라벨 = 답장을 잡은 줄에 보이던 이름(`take_reply` · 11-04) — origin 재판정 금지(형제 세션이 떠 있으면 "You:"로 어긋났다).
+        let reply_from = reply.as_ref().map(|(_, n)| n.clone());
+        let reply = reply.map(|(r, _)| r);
         let importance = match grade {
             2 => nbeep_core::Importance::Urgent,
             1 => nbeep_core::Importance::Notice,
@@ -15901,7 +15903,9 @@ impl App {
             // ★ 방 메시지 하나 = seq 하나(11-02 — 종전엔 구성원마다 새 seq라 "같은 메시지"의 열쇠가 기기마다
             //   달라 답장 참조가 성립하지 않았다). dedup은 수신자마다 (발신 기기, seq)라 공유해도 무해.
             let seq = self.issue_seq();
-            let reply_from = reply.as_ref().map(|r| self.reply_from_name(r.origin));
+            // 인용 라벨 = 답장을 잡은 줄에 보이던 이름(`take_reply` · 11-04).
+            let reply_from = reply.as_ref().map(|(_, n)| n.clone());
+            let reply = reply.map(|(r, _)| r);
             // 내 말풍선은 스레드에 한 번(팬아웃과 무관 — "하나의 방").
             let line = ChatLine::text(true, text.clone(), at_ms, wall)
                 .with_seq(seq)
