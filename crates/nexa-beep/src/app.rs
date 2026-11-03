@@ -7000,6 +7000,9 @@ impl App {
             let (_, step) = self.script.remove(0);
             eprintln!("[script] {elapsed}ms {step}");
             match step.split_once('=') {
+                // ★ 창 열기(11-04 · 설정 창 캡처 자동화 — SET-1·하단 바 대조): `open=settings`.
+                Some(("open", "settings")) => self.open_settings(el),
+                Some(("open", what)) => eprintln!("[script] open: 모르는 창 '{what}' (settings)"),
                 Some(("activate", name)) => {
                     let found = self
                         .table
