@@ -1084,6 +1084,8 @@ pub enum Msg {
     MemberOwner,
     /// 구성원 목록 — 아직 수락 안 한(초대 대기) 구성원(M5-1 · 08-19).
     MemberPending,
+    /// 구성원 목록 — 초대를 거절한 구성원(GINV-1 S1 · 11-04 · S2 재초대 UI의 자리).
+    MemberDeclined,
     /// 초대받았지만 아직 수락 안 한 그룹 행 표식(클릭 = 수락 · M5-1 · 08-19).
     GroupInvitedTag,
     /// 설정 Files 페이지 속도 노트(08-17 i18n).
@@ -2004,6 +2006,7 @@ impl Msg {
             Msg::MemberSelf => ["me", "나", "我", "自分"],
             Msg::MemberOwner => ["owner", "소유자", "所有者", "オーナー"],
             Msg::MemberPending => ["invite pending", "초대 대기", "邀请待处理", "招待待ち"],
+            Msg::MemberDeclined => ["declined", "거절함", "已拒绝", "拒否"],
             Msg::GroupInvitedTag => [
                 "invited · click to accept",
                 "초대됨 · 클릭하여 수락",

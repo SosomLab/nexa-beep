@@ -29,12 +29,55 @@ use std::io;
 use std::path::PathBuf;
 
 const MAGIC: [u8; 4] = *b"NBGS";
+/// v4(11-04 · GINV-1 S1) = v3 + 공유 그룹 **구성원 상태 꼬리**(소유자 로컬 메모 — 초대 대기·수락·거절 · 재시작을 넘긴다).
 /// v3(08-15) = v2 + 공유 그룹 **목록 고정(pinned) 꼬리**(사용자 요청 — 그룹방 핀).
 /// v2(08-13) = v1(로컬 그룹) + 공유 그룹 레코드(M5-1g · ADR-0012).
 /// 구버전 파일도 읽는다(없는 필드 = 기본값 — 전방·후방 관용).
-const VER: u8 = 3;
+const VER: u8 = 4;
 const VER_V2: u8 = 2;
 const VER_V1: u8 = 1;
+
+/// ★ 소유자가 기억하는 **구성원의 초대 상태**(GINV-1 S1 · 11-04). 명부(`Roster`)는 구성원만 말하고 상태는 말하지
+/// 않는다 — "초대 대기/수락/거절"은 소유자 로컬 메모(봉투 원리: 와이어 무변경). 종전엔 메모리 `HashMap`이라
+/// 소유자가 재시작하면 전원이 "초대 대기"로 보였다(상대가 재초대에 Accept를 되돌려야 치유).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MemberState {
+    /// 초대장을 보냈고 아직 수락이 안 왔다.
+    Invited,
+    /// 수락(Accept) 확인.
+    Joined,
+    /// 거절(Decline) 확인 — S2에서 "재초대" UI의 근거.
+    Declined,
+}
+
+impl MemberState {
+    fn to_byte(self) -> u8 {
+        match self {
+            MemberState::Invited => 0,
+            MemberState::Joined => 1,
+            MemberState::Declined => 2,
+        }
+    }
+    fn from_byte(b: u8) -> Option<Self> {
+        match b {
+            0 => Some(MemberState::Invited),
+            1 => Some(MemberState::Joined),
+            2 => Some(MemberState::Declined),
+            _ => None,
+        }
+    }
+}
+
+/// 구성원 한 명의 상태 메모(소유자 로컬).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MemberMeta {
+    /// 상태.
+    pub state: MemberState,
+    /// 그 상태가 된 시각(unix ms · 초대 대기는 **첫 초대** 시각 — "n일 전" 표시 근거).
+    pub at_ms: u64,
+    /// 초대장을 보낸 횟수(재초대 제한 S2의 근거 · 포화).
+    pub tries: u8,
+}
 
 /// 공유 그룹에서의 내 상태(ADR-0012 G-4 — 초대 수락제).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -76,6 +119,8 @@ pub struct SharedGroup {
     pub mine: MineState,
     /// 목록 상단 고정(08-15 사용자 요청 — 상대 고정과 같은 축).
     pub pinned: bool,
+    /// ★ 구성원 상태 메모(v4 · 소유자 방에서만 의미 · 명부에 없는 상대는 갱신 때 걷어낸다).
+    pub members_meta: Vec<(PeerId, MemberMeta)>,
 }
 const SALT_LEN: usize = 16;
 const NONCE_LEN: usize = 12;
@@ -297,6 +342,9 @@ impl FileGroupStore {
                 return None; // 구버전·소유자 불일치 — 거부(fail-closed)
             }
             s.roster = roster;
+            // 명부에서 빠진 상대의 메모는 걷어낸다(거절·제외 뒤 재초대 = 새로 시작).
+            let keep = s.roster.members.clone();
+            s.members_meta.retain(|(p, _)| keep.contains(p));
             let id = s.local_id;
             self.persist();
             return Some(id);
@@ -307,9 +355,76 @@ impl FileGroupStore {
             local_id: id,
             roster,
             mine,
+            members_meta: Vec::new(),
         });
         self.persist();
         Some(id)
+    }
+
+    /// ★ 구성원 상태 메모 갱신(GINV-1 S1) — 반환 = 바뀌었는가(바뀐 때만 저장).
+    /// 규칙: `Invited`는 **수락을 내리지 않는다**(resync 재초대가 Joined를 지우지 않게) · 첫 초대 시각 보존 ·
+    /// 횟수 +1(포화) · `Joined`/`Declined`는 상태·시각 교체. 명부에 없는 상대는 거부.
+    pub fn note_member(
+        &mut self,
+        uid: GroupUid,
+        peer: PeerId,
+        state: MemberState,
+        now_ms: u64,
+    ) -> bool {
+        let Some(s) = self.shared.iter_mut().find(|s| s.roster.uid == uid) else {
+            return false;
+        };
+        if !s.roster.has_member(peer) {
+            return false;
+        }
+        let changed = match s.members_meta.iter_mut().find(|(p, _)| *p == peer) {
+            Some((_, m)) => match state {
+                MemberState::Invited => {
+                    if m.state == MemberState::Joined {
+                        false
+                    } else {
+                        let was = *m;
+                        m.state = MemberState::Invited;
+                        m.tries = m.tries.saturating_add(1);
+                        if was.state != MemberState::Invited {
+                            m.at_ms = now_ms;
+                        }
+                        *m != was
+                    }
+                }
+                _ => {
+                    let was = *m;
+                    m.state = state;
+                    m.at_ms = now_ms;
+                    *m != was
+                }
+            },
+            None => {
+                s.members_meta.push((
+                    peer,
+                    MemberMeta {
+                        state,
+                        at_ms: now_ms,
+                        tries: u8::from(state == MemberState::Invited),
+                    },
+                ));
+                true
+            }
+        };
+        if changed {
+            self.persist();
+        }
+        changed
+    }
+
+    /// 구성원 상태 메모 조회(없음 = 초대 기록 없음 — 호출자는 "초대 대기"로 본다).
+    #[must_use]
+    pub fn member_meta(&self, uid: GroupUid, peer: PeerId) -> Option<MemberMeta> {
+        self.shared
+            .iter()
+            .find(|s| s.roster.uid == uid)
+            .and_then(|s| s.members_meta.iter().find(|(p, _)| *p == peer))
+            .map(|(_, m)| *m)
     }
 
     /// 내 상태 전환(초대 수락 등). 반환 = 성공 여부.
@@ -503,6 +618,18 @@ fn encode_body(store: &GroupStore, shared: &[SharedGroup]) -> Vec<u8> {
         let rb = s.roster.encode();
         out.extend_from_slice(&u32::try_from(rb.len()).unwrap_or(u32::MAX).to_be_bytes());
         out.extend_from_slice(&rb);
+        // v4 — 구성원 상태 메모(count u32 · {peer 32 · state u8 · at_ms u64 · tries u8}).
+        out.extend_from_slice(
+            &u32::try_from(s.members_meta.len())
+                .unwrap_or(u32::MAX)
+                .to_be_bytes(),
+        );
+        for (p, m) in &s.members_meta {
+            out.extend_from_slice(p.as_bytes());
+            out.push(m.state.to_byte());
+            out.extend_from_slice(&m.at_ms.to_be_bytes());
+            out.push(m.tries);
+        }
     }
     out
 }
@@ -549,11 +676,34 @@ fn decode_body(ver: u8, bytes: &[u8]) -> Option<(GroupStore, Vec<SharedGroup>)> 
             if used != rlen {
                 return None;
             }
+            // v4 — 구성원 상태 메모(v3 이하 = 없음 = 빈 목록 관용).
+            let mut members_meta = Vec::new();
+            if ver >= 4 {
+                let mc = u32::from_be_bytes(take(&mut p, 4)?.try_into().ok()?);
+                if mc > 4096 {
+                    return None;
+                }
+                for _ in 0..mc {
+                    let peer = PeerId::from_bytes(take(&mut p, 32)?.try_into().ok()?);
+                    let state = MemberState::from_byte(take(&mut p, 1)?[0])?;
+                    let at_ms = u64::from_be_bytes(take(&mut p, 8)?.try_into().ok()?);
+                    let tries = take(&mut p, 1)?[0];
+                    members_meta.push((
+                        peer,
+                        MemberMeta {
+                            state,
+                            at_ms,
+                            tries,
+                        },
+                    ));
+                }
+            }
             shared.push(SharedGroup {
                 local_id,
                 roster,
                 mine,
                 pinned,
+                members_meta,
             });
         }
     }
@@ -713,6 +863,60 @@ mod tests {
         assert_ne!(g2, lid);
         assert!(gs.remove_shared(uid));
         assert!(gs.shared_by_uid(uid).is_none());
+    }
+
+    /// ★ GINV-1 S1(11-04): 구성원 상태 메모가 재시작을 넘기고 · 재초대(Invited)가 수락을 내리지 않고 · 명부에서
+    /// 빠진 상대의 메모는 갱신 때 걷히고 · 명부 밖 상대는 거부된다.
+    #[test]
+    fn member_meta_persists_and_never_downgrades_joined() {
+        use nbeep_core::sgroup::{GroupUid, Roster};
+        let path = tmp("meta");
+        let secret = [3u8; 32];
+        let uid = GroupUid([4u8; 32]);
+        let roster = |v: u64, members: Vec<PeerId>| Roster {
+            uid,
+            name: name("방"),
+            owner: pid(1),
+            members,
+            version: v,
+            member_invite: true,
+        };
+        {
+            let (mut gs, _) = FileGroupStore::open(path.clone(), secret);
+            gs.upsert_shared(roster(1, vec![pid(1), pid(2), pid(3)]), MineState::Owner)
+                .unwrap();
+            assert!(gs.note_member(uid, pid(2), MemberState::Invited, 1_000));
+            assert!(gs.note_member(uid, pid(3), MemberState::Invited, 1_000));
+            // 재초대 = 횟수만 오르고 첫 시각 유지.
+            assert!(gs.note_member(uid, pid(2), MemberState::Invited, 5_000));
+            let m = gs.member_meta(uid, pid(2)).unwrap();
+            assert_eq!(
+                (m.state, m.at_ms, m.tries),
+                (MemberState::Invited, 1_000, 2)
+            );
+            // 수락.
+            assert!(gs.note_member(uid, pid(3), MemberState::Joined, 7_000));
+            // 수락 뒤 resync 재초대는 무변경(내리지 않는다).
+            assert!(!gs.note_member(uid, pid(3), MemberState::Invited, 9_000));
+            // 명부 밖 상대는 거부.
+            assert!(!gs.note_member(uid, pid(9), MemberState::Invited, 1));
+        }
+        let (mut gs, _) = FileGroupStore::open(path, secret);
+        assert_eq!(
+            gs.member_meta(uid, pid(3)),
+            Some(MemberMeta {
+                state: MemberState::Joined,
+                at_ms: 7_000,
+                tries: 1
+            }),
+            "재시작을 넘긴다"
+        );
+        assert_eq!(gs.member_meta(uid, pid(2)).map(|m| m.tries), Some(2));
+        // 명부 갱신으로 pid(2)가 빠지면 메모도 걷힌다.
+        gs.upsert_shared(roster(2, vec![pid(1), pid(3)]), MineState::Owner)
+            .unwrap();
+        assert_eq!(gs.member_meta(uid, pid(2)), None);
+        assert!(gs.member_meta(uid, pid(3)).is_some());
     }
 
     /// ★ 잠긴 세그먼트 보관 이동(08-19) — 다른 신원 키의 파일을 `<이름>.locked`로

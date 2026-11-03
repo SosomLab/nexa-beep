@@ -31,5 +31,5 @@ pub(crate) fn archive_name(path: &std::path::Path) -> Option<std::path::PathBuf>
     None
 }
 
-pub use groupfile::{FileGroupStore, GroupLoad, MineState, SharedGroup};
+pub use groupfile::{FileGroupStore, GroupLoad, MemberMeta, MemberState, MineState, SharedGroup};
 pub use trustfile::{FileTrustStore, TrustLoad};

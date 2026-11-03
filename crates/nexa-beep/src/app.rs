@@ -3766,12 +3766,8 @@ struct App {
     recv_group_live: HashMap<nbeep_core::group::GroupId, Vec<(PeerId, String, u64)>>,
     /// 미연결 구성원에게 이어 보낼 그룹 제어 프레임(초대·명부 — M5-1g).
     pending_invites: HashMap<PeerId, Vec<Vec<u8>>>,
-    /// 내가 소유한 방에서 **수락을 확인한 구성원**(uid → 수락자 집합 · 08-19).
-    /// 초대는 세션 미성립·네트워크 churn으로 첫 전달이 실패할 수 있다(소유자가
-    /// 대화하면 세션 성립 → `flush_group_sends` resync가 재전달). 이 집합으로
-    /// 구성원 목록에 **"초대 대기"** 를 표시해 미수락(=미전달 포함)을 눈에 보이게
-    /// 한다. 재시작으로 비워져도 재초대 수신 측이 Accept를 재통지해 자가 치유한다.
-    group_accepts: HashMap<nbeep_core::GroupUid, std::collections::HashSet<PeerId>>,
+    // (삭제 11-04 · GINV-1 S1) 수락 확인 집합 `group_accepts`는 메모리뿐이라 소유자 재시작마다 전원이 "초대 대기"로
+    // 보였다 → 구성원 상태 메모는 `groups.seg` v4(`FileGroupStore::note_member`/`member_meta`)가 영속한다.
     /// 방 미확인 메시지 수(M5-1g — 그룹판 unread).
     gunread: HashMap<nbeep_core::group::GroupId, u32>,
     /// 열린 선택 모달의 문맥(초대 수락/거절 등) — Role::Alert 결과 라우팅.
@@ -12581,10 +12577,11 @@ impl App {
         // 판정·같은 팔레트**(08-15 사용자 확정 "아바타 옆 점과 색을 맞춰줘").
         let mut members: Vec<PeerId> = s.roster.members.clone();
         members.sort_by_key(|m| *m != s.roster.owner);
-        // 내가 소유자면 미수락 구성원에 "초대 대기"를 붙인다(08-19 — 첫 전달 실패를
-        // 눈에 보이게). 수락은 `group_accepts`가 기록(재초대 시 자가 치유).
+        // 내가 소유자면 미수락 구성원에 "초대 대기 · n일 전"/"거절함"을 붙인다(08-19 — 첫 전달 실패를
+        // 눈에 보이게 · 11-04 GINV-1 S1 — 상태는 `groups.seg` v4 메모 · 재시작을 넘긴다).
         let owner_view = s.roster.owner == me;
-        let accepted = self.group_accepts.get(&s.roster.uid);
+        let uid = s.roster.uid;
+        let now = unix_now_ms();
         let lines: Vec<(LinkState, String)> = members
             .iter()
             .map(|m| {
@@ -12612,17 +12609,31 @@ impl App {
                 if *m == s.roster.owner {
                     descs.push(nbeep_core::t(nbeep_core::Msg::MemberOwner));
                 }
-                // 소유자 시점 · 나·소유자 아닌 구성원이 아직 수락 안 했으면 초대 대기.
-                if owner_view
-                    && *m != me
-                    && *m != s.roster.owner
-                    && !accepted.is_some_and(|a| a.contains(m))
-                {
-                    descs.push(nbeep_core::t(nbeep_core::Msg::MemberPending));
-                }
+                // 소유자 시점 · 나·소유자 아닌 구성원의 초대 상태(메모 없음 = 초대 대기).
+                let state_note: Option<String> = if owner_view && *m != me && *m != s.roster.owner {
+                    use nbeep_store::MemberState as MS;
+                    match self.groups.member_meta(uid, *m) {
+                        Some(meta) if meta.state == MS::Joined => None,
+                        Some(meta) if meta.state == MS::Declined => {
+                            Some(nbeep_core::t(nbeep_core::Msg::MemberDeclined).to_string())
+                        }
+                        Some(meta) => Some(format!(
+                            "{} · {}",
+                            nbeep_core::t(nbeep_core::Msg::MemberPending),
+                            ago_text(now, meta.at_ms)
+                        )),
+                        None => Some(nbeep_core::t(nbeep_core::Msg::MemberPending).to_string()),
+                    }
+                } else {
+                    None
+                };
                 if !descs.is_empty() {
                     line.push_str(" · ");
                     line.push_str(&descs.join(" · "));
+                }
+                if let Some(n) = state_note {
+                    line.push_str(" · ");
+                    line.push_str(&n);
                 }
                 (link, line)
             })
@@ -12668,10 +12679,14 @@ impl App {
             Some(s) if s.roster.owner == me => (s.roster.uid, s.roster.members.clone()),
             _ => return, // 소유자만 재전달 주체(ADR §4 — 명부 단일 진실)
         };
-        let accepted = self.group_accepts.get(&uid).cloned().unwrap_or_default();
+        let joined = |m: &PeerId| {
+            self.groups
+                .member_meta(uid, *m)
+                .is_some_and(|x| x.state == nbeep_store::MemberState::Joined)
+        };
         let pending: Vec<PeerId> = members
             .into_iter()
-            .filter(|m| *m != me && !accepted.contains(m) && !self.conversations.contains_key(m))
+            .filter(|m| *m != me && !joined(m) && !self.conversations.contains_key(m))
             .collect();
         for m in pending {
             self.reconnect.remove(&m); // 백오프 리셋 = 즉시 재시도
@@ -15252,14 +15267,19 @@ impl App {
                 roster.members.extend(new.iter().copied());
                 roster.members.sort();
                 roster.version += 1;
+                let uid = roster.uid;
                 // 신규자에겐 초대(수락제 — G-4), 기존 구성원에겐 명부 갱신.
                 let invite = nbeep_core::SGroupMsg::Invite {
                     roster: roster.clone(),
                 }
                 .encode();
                 self.broadcast_roster(roster);
+                let now = unix_now_ms();
                 for p in &new {
                     self.send_group_frames(*p, vec![invite.clone()]);
+                    let _ =
+                        self.groups
+                            .note_member(uid, *p, nbeep_store::MemberState::Invited, now);
                 }
                 self.status =
                     nbeep_core::tf(nbeep_core::Msg::StfInvitesSent, &[&new.len().to_string()]);
@@ -15529,8 +15549,12 @@ impl App {
                 let _ = self
                     .groups
                     .upsert_shared(roster, nbeep_store::MineState::Owner);
+                let now = unix_now_ms();
                 for m in &members {
                     self.send_group_frames(*m, vec![invite.clone()]);
+                    let _ =
+                        self.groups
+                            .note_member(uid, *m, nbeep_store::MemberState::Invited, now);
                 }
                 self.list.clear_selection();
                 self.set_status(format!(
@@ -17058,8 +17082,13 @@ impl App {
                     .shared_by_uid(uid)
                     .is_some_and(|s| s.roster.owner == me && s.roster.has_member(peer))
                 {
-                    // 수락 기록 — 구성원 목록의 "초대 대기"를 지운다(08-19).
-                    self.group_accepts.entry(uid).or_default().insert(peer);
+                    // 수락 기록 — 구성원 목록의 "초대 대기"를 지운다(08-19 · 11-04 영속).
+                    let _ = self.groups.note_member(
+                        uid,
+                        peer,
+                        nbeep_store::MemberState::Joined,
+                        unix_now_ms(),
+                    );
                     self.status =
                         format!("{} 님이 그룹 초대를 수락했습니다", self.peer_title(peer));
                     self.refresh_and_redraw();
@@ -17245,13 +17274,18 @@ impl App {
                 roster.members.extend(new.iter().copied());
                 roster.members.sort();
                 roster.version += 1;
+                let uid = roster.uid;
                 let invite = nbeep_core::SGroupMsg::Invite {
                     roster: roster.clone(),
                 }
                 .encode();
                 self.broadcast_roster(roster);
+                let now = unix_now_ms();
                 for p in &new {
                     self.send_group_frames(*p, vec![invite.clone()]);
+                    let _ =
+                        self.groups
+                            .note_member(uid, *p, nbeep_store::MemberState::Invited, now);
                 }
                 let mut inv = Invalidations::default();
                 self.push_group_note(
@@ -23173,7 +23207,6 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         recv_group_hints: HashMap::new(),
         recv_group_live: HashMap::new(),
         pending_invites: HashMap::new(),
-        group_accepts: HashMap::new(),
         gunread: HashMap::new(),
         alert_ctx: None,
         pending_remote: None,
