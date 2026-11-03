@@ -83,6 +83,70 @@ macro_rules! dlog {
     };
 }
 
+/// ★ 메인 스레드 정체 감시(STALL-1 · 11-04 — 사용자 mac 실기 "커서가 바쁨이었다가 메시지 수신": 원인 자리를 못 잡았다).
+/// 이벤트 루프 핸들러(`about_to_wait`·`user_event`·`window_event`) 하나가 [`STALL_MS`] 이상 걸리면 꼬리표(핸들러·
+/// 이벤트 변종 이름)와 소요를 남기고, **다음 핸들러 입구**에서 상세 로그 한 줄로 낸다(`[app] ui_stall`). 봉투 원리 =
+/// 핸들러 이름·ms만(페이로드·상대·본문 없음). 비용 = 핸들러당 `Instant` 2회 — 정체가 없으면 잠금도 없다.
+const STALL_MS: u128 = 500;
+static STALL_LAST: std::sync::Mutex<Option<(&'static str, u64)>> = std::sync::Mutex::new(None);
+
+struct StallGuard {
+    tag: &'static str,
+    t0: Instant,
+}
+
+impl StallGuard {
+    fn new(tag: &'static str) -> Self {
+        Self {
+            tag,
+            t0: Instant::now(),
+        }
+    }
+}
+
+impl Drop for StallGuard {
+    fn drop(&mut self) {
+        let ms = self.t0.elapsed().as_millis();
+        if ms < STALL_MS {
+            return;
+        }
+        let ms = u64::try_from(ms).unwrap_or(u64::MAX);
+        if let Ok(mut g) = STALL_LAST.lock() {
+            // 같은 틈에 여럿이면 가장 오래 걸린 것만 남긴다(다음 입구가 한 줄로 낸다).
+            if g.is_none_or(|(_, prev)| ms >= prev) {
+                *g = Some((self.tag, ms));
+            }
+        }
+    }
+}
+
+/// 창 이벤트 변종 이름(정체 꼬리표 · 페이로드 없음).
+fn window_event_tag(ev: &WindowEvent) -> &'static str {
+    match ev {
+        WindowEvent::RedrawRequested => "RedrawRequested",
+        WindowEvent::KeyboardInput { .. } => "KeyboardInput",
+        WindowEvent::Ime(_) => "Ime",
+        WindowEvent::CursorMoved { .. } => "CursorMoved",
+        WindowEvent::MouseInput { .. } => "MouseInput",
+        WindowEvent::MouseWheel { .. } => "MouseWheel",
+        WindowEvent::Resized(_) => "Resized",
+        WindowEvent::Moved(_) => "Moved",
+        WindowEvent::Focused(_) => "Focused",
+        WindowEvent::CloseRequested => "CloseRequested",
+        WindowEvent::Destroyed => "Destroyed",
+        WindowEvent::ScaleFactorChanged { .. } => "ScaleFactorChanged",
+        WindowEvent::Occluded(_) => "Occluded",
+        WindowEvent::DroppedFile(_) => "DroppedFile",
+        WindowEvent::HoveredFile(_) => "HoveredFile",
+        WindowEvent::ModifiersChanged(_) => "ModifiersChanged",
+        WindowEvent::CursorEntered { .. } => "CursorEntered",
+        WindowEvent::CursorLeft { .. } => "CursorLeft",
+        WindowEvent::ThemeChanged(_) => "ThemeChanged",
+        WindowEvent::ActivationTokenDone { .. } => "ActivationTokenDone",
+        _ => "other",
+    }
+}
+
 /// 상세 로그 한 줄(느린 경로 · 호출 자체가 드물다 · `#[cold]`로 뜨거운 경로 코드 배치에서 떨어뜨린다).
 /// 싱크 = 상태 로그 파일(M3-22 · 논블로킹 · `dev ` 접두) + `NEXA_DEVLOG`가 섰으면 stderr 거울.
 #[cold]
@@ -467,6 +531,62 @@ enum AppEvent {
     /// 이 저장소가 반복해 밟는 함정 — **조건부 컴파일은 항상 반대편을 의심한다.**
     #[cfg(target_os = "macos")]
     RawKey(char),
+}
+
+impl AppEvent {
+    /// 변종 이름(정체 감시 꼬리표 STALL-1 · 11-04) — 페이로드는 찍지 않는다(봉투 원리). 변종을 더하면 여기도.
+    fn tag(&self) -> &'static str {
+        match self {
+            AppEvent::Recv { .. } => "Recv",
+            AppEvent::ClipImage { .. } => "ClipImage",
+            AppEvent::Closed { .. } => "Closed",
+            AppEvent::Inbound { .. } => "Inbound",
+            AppEvent::Outbound { .. } => "Outbound",
+            AppEvent::ConnectFailed { .. } => "ConnectFailed",
+            AppEvent::ServerAttach { .. } => "ServerAttach",
+            AppEvent::LinkChanged => "LinkChanged",
+            AppEvent::UserTestDone { .. } => "UserTestDone",
+            AppEvent::ArchiveList { .. } => "ArchiveList",
+            AppEvent::XferManifest { .. } => "XferManifest",
+            AppEvent::XferGroupHint { .. } => "XferGroupHint",
+            AppEvent::XferOffer { .. } => "XferOffer",
+            AppEvent::XferCancelAllNotice { .. } => "XferCancelAllNotice",
+            AppEvent::XferPeerPauseNotice { .. } => "XferPeerPauseNotice",
+            AppEvent::XferPaused { .. } => "XferPaused",
+            AppEvent::XferResumed { .. } => "XferResumed",
+            AppEvent::XferProgress { .. } => "XferProgress",
+            AppEvent::XferDone { .. } => "XferDone",
+            AppEvent::XferFailed { .. } => "XferFailed",
+            AppEvent::XferAccepted { .. } => "XferAccepted",
+            AppEvent::QuarantineScanned { .. } => "QuarantineScanned",
+            AppEvent::QVerified { .. } => "QVerified",
+            AppEvent::PeerRecvCap { .. } => "PeerRecvCap",
+            AppEvent::HashProgress { .. } => "HashProgress",
+            AppEvent::SendHashed { .. } => "SendHashed",
+            AppEvent::XferSendDone { .. } => "XferSendDone",
+            AppEvent::XferAcked { .. } => "XferAcked",
+            AppEvent::ChatAck { .. } => "ChatAck",
+            AppEvent::UserProof { .. } => "UserProof",
+            AppEvent::UserKeyBlob { .. } => "UserKeyBlob",
+            AppEvent::SenderCopy { .. } => "SenderCopy",
+            AppEvent::SyncDigest { .. } => "SyncDigest",
+            AppEvent::SyncPull { .. } => "SyncPull",
+            AppEvent::SyncLines { .. } => "SyncLines",
+            AppEvent::SyncRead { .. } => "SyncRead",
+            AppEvent::UserHello { .. } => "UserHello",
+            AppEvent::Succession { .. } => "Succession",
+            AppEvent::AddFailed { .. } => "AddFailed",
+            AppEvent::SGroup { .. } => "SGroup",
+            AppEvent::ProfileRequested { .. } => "ProfileRequested",
+            AppEvent::PeerProfile { .. } => "PeerProfile",
+            AppEvent::Decoded { .. } => "Decoded",
+            AppEvent::Tray(_) => "Tray",
+            AppEvent::SystemTheme(_) => "SystemTheme",
+            AppEvent::WireAvatar { .. } => "WireAvatar",
+            #[cfg(target_os = "macos")]
+            AppEvent::RawKey(_) => "RawKey",
+        }
+    }
 }
 
 /// 격리 디코드 요청의 목적지 — 요청(`spawn_decode`)과 완료([`AppEvent::Decoded`])를 잇는다.
@@ -7197,6 +7317,23 @@ impl App {
     /// 목표 변경은 [`Self::server_settings_changed`]가 상태를 지워 여기로 모은다.
     /// (13 §12-1 — 중복 가드 `relay_connecting` · 종료 조건 = Unmanaged · 실패
     ///  복귀 = 백오프 · 수동 우선 = 설정 변경 즉시 · 포커스 안 뺏음 = 상태바만.)
+    /// 직전 핸들러가 남긴 정체 기록을 한 줄로 낸다(STALL-1 · `[app] ui_stall handler=… ms=… | rule limit_ms=500 | → FAIL`).
+    /// 상세 로그(`log.dev_mode`/`NEXA_DEVLOG`)가 꺼져 있으면 `NEXA_WIN_TRACE` stderr로만 — 둘 다 없으면 조용히 버린다.
+    fn drain_stall_report(&mut self) {
+        let got = STALL_LAST.lock().ok().and_then(|mut g| g.take());
+        let Some((tag, ms)) = got else {
+            return;
+        };
+        dlog!(self, DL::App, DV::Basic, "ui_stall", |r| r
+            .arg("handler", tag)
+            .arg("ms", ms)
+            .rule("limit_ms", STALL_MS)
+            .fail("main thread blocked"));
+        if self.win_trace {
+            eprintln!("[stall] {tag} {ms}ms");
+        }
+    }
+
     fn server_tick(&mut self) {
         if !self.live {
             return; // 데모 전송(InMemory) — 서버 축 없음
@@ -19014,6 +19151,8 @@ impl ApplicationHandler<AppEvent> for App {
         }
     }
     fn user_event(&mut self, el: &ActiveEventLoop, event: AppEvent) {
+        self.drain_stall_report();
+        let _stall = StallGuard::new(event.tag());
         // 세션 액터 → GUI(M2-7). 수신 메시지를 해당 대화 스레드에 실시간 반영한다.
         match event {
             #[cfg(target_os = "macos")]
@@ -21077,6 +21216,8 @@ impl ApplicationHandler<AppEvent> for App {
     }
 
     fn about_to_wait(&mut self, el: &ActiveEventLoop) {
+        self.drain_stall_report();
+        let _stall = StallGuard::new("tick");
         // 종료 신호(SIGINT/SIGTERM) → 이벤트 루프 종료. run_app 반환 → App Drop →
         // transport(LocalDirect) Drop → GOODBYE 발신·소켓/스레드 정리(R-16 · FR-P-7).
         if self.shutdown.requested() {
@@ -21538,6 +21679,8 @@ impl ApplicationHandler<AppEvent> for App {
     }
 
     fn window_event(&mut self, el: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        self.drain_stall_report();
+        let _stall = StallGuard::new(window_event_tag(&event));
         if self.win_trace
             && matches!(
                 event,
@@ -24119,5 +24262,41 @@ mod tests {
         let back = decode_history(&encode_history(&lines));
         assert_eq!(back.len(), HISTORY_MAX, "상한 유지");
         assert_eq!(back[0].at_ms, 50, "오래된 50개 버려짐(최근 유지)");
+    }
+
+    /// STALL-1(11-04): 핸들러가 상한을 넘기면 Drop이 꼬리표·ms를 남기고, 짧으면 아무것도 남기지 않는다 ·
+    /// 같은 틈의 여럿은 가장 오래 걸린 것만.
+    #[test]
+    fn stall_guard_records_only_slow_handlers_and_keeps_the_worst() {
+        use super::{StallGuard, STALL_LAST, STALL_MS};
+        use std::time::Instant;
+        let _ = STALL_LAST.lock().map(|mut g| g.take());
+        {
+            let _g = StallGuard::new("fast");
+        }
+        assert_eq!(
+            STALL_LAST.lock().unwrap().take(),
+            None,
+            "빠른 핸들러 = 기록 없음"
+        );
+        {
+            let g = StallGuard::new("slow");
+            std::thread::sleep(std::time::Duration::from_millis(STALL_MS as u64 + 60));
+            drop(g);
+        }
+        {
+            let mut g2 = StallGuard::new("slower");
+            g2.t0 = Instant::now() - std::time::Duration::from_millis(STALL_MS as u64 + 500);
+            drop(g2);
+        }
+        {
+            let mut g3 = StallGuard::new("slow-again");
+            g3.t0 = Instant::now() - std::time::Duration::from_millis(STALL_MS as u64 + 100);
+            drop(g3);
+        }
+        let got = STALL_LAST.lock().unwrap().take().expect("정체 기록");
+        assert_eq!(got.0, "slower", "가장 오래 걸린 것만 남는다");
+        assert!(got.1 >= STALL_MS as u64 + 500);
+        assert_eq!(STALL_LAST.lock().unwrap().take(), None, "take = 1회성");
     }
 }
