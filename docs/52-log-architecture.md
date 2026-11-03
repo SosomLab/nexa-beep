@@ -21,7 +21,7 @@
 | `conn` | 연결 사다리·재연결 백오프 | `start_connect`(래치·발견·수동·릴레이·psk) · `connect_failed`(사유·도달 가능성·단계·다음 지연) |
 | `sess` | 세션 성립·TOFU·종료 | `outbound_established`(경로 등급·서버·psk) · `tofu`(판정/거절) · `closed`(형제·대기 큐·행 유지) |
 | `chat` | 발신·수신·dedup·대기 | `send_text`(살아 있는 기기 수 → 전송/대기) · `recv`(dedup · 공지 무시) |
-| `xfer` | 파일 오퍼 판정 | `offer_judge`(신뢰·왕래·정책·경로 → Accept/Ask/Deny 사유) |
+| `xfer` | 파일 오퍼 판정 · 전송 단계(LOG-2 11-04) | `offer_judge`(신뢰·왕래·정책·경로 → Accept/Ask/Deny 사유) · `xfer_decision`(수락/거절 송신 · 재개 여부) · `xfer_accepted`(상대 수락) · `xfer_send_done`(바이트·평균/최고 B/s · 파일 단위) · `xfer_done`(수신 완결 — 이름 글자 수·위험 등급·해시 대조·검사 결과 · 이름·경로 없음) · `xfer_failed`(사유 · mine · 파일 단위) · `quarantine_scan`(detail · 행 수·낡은 세대 폐기) |
 | `user` | 사용자 인증·형제 | `user_test`(핸들 유무 · 키 생성 · 결과/원인) — 따라잡기는 `NEXA_USER_TRACE` 기존 줄 유지 |
 | `relay` | 서버 attach | `server_attach`(주소 · 첫 핀 · 핀 쓰기 실패 / 실패 원인) |
 | `store` | 기록·설정 영속 | `record_history`(바이트 · 원천 · 봉인 실패) |

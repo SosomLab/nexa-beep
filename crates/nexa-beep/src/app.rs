@@ -5734,6 +5734,17 @@ impl App {
         why: nbeep_core::RejectWhy,
         resume: Option<Vec<u8>>,
     ) -> bool {
+        dlog!(self, DL::Xfer, DV::Decide, "xfer_decision", |r| {
+            let r = r
+                .arg("peer", peer.short())
+                .rule("accept", accept)
+                .rule("resume", resume.is_some());
+            if accept {
+                r.ok("accept sent")
+            } else {
+                r.ok(format!("reject sent ({why:?})"))
+            }
+        });
         let cmd = if accept {
             // 수신 상한 공지(M4-11 개정) — Auto는 **상한 무주장(0)**: 종전
             // target_bps 공지는 관측 없는 수신측이 하한(256KiB/s)을 주장해
@@ -19942,6 +19953,21 @@ impl ApplicationHandler<AppEvent> for App {
                 avg_bps,
                 scan,
             } => {
+                // LOG-2(11-04) 수신 완결 — 봉투 = 상대 short · 이름 글자 수 · 위험 등급 · 해시 대조 · 검사 결과(이름·경로 없음).
+                dlog!(self, DL::Xfer, DV::Decide, "xfer_done", |r| {
+                    let r = r
+                        .arg("peer", peer.short())
+                        .arg("name_chars", name.chars().count())
+                        .arg("avg_bps", avg_bps)
+                        .rule("risk", format!("{risk:?}"))
+                        .rule("hash_match", !mismatch)
+                        .rule("scan", format!("{scan:?}"));
+                    if mismatch {
+                        r.fail("hash mismatch — quarantined as mismatch")
+                    } else {
+                        r.ok("quarantined (approval pending)")
+                    }
+                });
                 self.active_recv.remove(&peer); // 수신 완결 — 취소 대상 아님(08-16)
                                                 // 수신은 액터에 계측기가 없다 — 평균이 유일한 실측(보수적 하한).
                                                 // 이어받기였다면 `.part`는 승격 완료로 소임을 다했다(M4-10a).
@@ -20139,6 +20165,10 @@ impl ApplicationHandler<AppEvent> for App {
                 self.redraw_conversation(peer);
             }
             AppEvent::XferAccepted { peer } => {
+                dlog!(self, DL::Xfer, DV::Decide, "xfer_accepted", |r| r
+                    .arg("peer", peer.short())
+                    .rule("was_awaiting", self.awaiting_accept.contains_key(&peer))
+                    .ok("peer accepted — streaming starts"));
                 // 수락 후 취소 UX(08-16) — 대기 xid를 진행 중으로 이동(취소 경로 유지).
                 if let Some(xid) = self.awaiting_accept.get(&peer).copied() {
                     self.active_send.insert(peer, xid);
@@ -20165,6 +20195,16 @@ impl ApplicationHandler<AppEvent> for App {
                 self.redraw_conversation(peer);
             }
             AppEvent::QuarantineScanned { gen, rows } => {
+                dlog!(self, DL::Xfer, DV::Detail, "quarantine_scan", |r| {
+                    let r = r
+                        .arg("rows", rows.len())
+                        .rule("gen_current", gen == self.qscan_gen);
+                    if gen == self.qscan_gen {
+                        r.ok("applied")
+                    } else {
+                        r.fail("stale scan dropped")
+                    }
+                });
                 if gen != self.qscan_gen {
                     return; // 낡은 스캔 — 그 사이 재요청됨
                 }
@@ -20291,6 +20331,13 @@ impl ApplicationHandler<AppEvent> for App {
                 name,
                 size,
             } => {
+                dlog!(self, DL::Xfer, DV::Decide, "xfer_send_done", |r| r
+                    .arg("peer", peer.short())
+                    .arg("bytes", size)
+                    .arg("avg_bps", avg_bps)
+                    .arg("peak_bps", peak_bps)
+                    .rule("per_file", !name.is_empty())
+                    .ok("sent — awaiting receiver ack"));
                 self.active_send.remove(&peer); // 다 보냈다 — 취소 대상 아님(08-16)
                                                 // Auto 설정 행 표시용 집계(08-16) — 세션 peak가 0일 수 있다
                                                 // (프로브 크기 미만의 작은 파일 — 창이 한 번도 안 닫힘). 평균이 하한.
@@ -20413,6 +20460,11 @@ impl ApplicationHandler<AppEvent> for App {
                 name,
                 mine,
             } => {
+                dlog!(self, DL::Xfer, DV::Decide, "xfer_failed", |r| r
+                    .arg("peer", peer.short())
+                    .rule("mine", mine)
+                    .rule("per_file", !name.is_empty())
+                    .fail(&why));
                 // ★ 파일 단위 종결(M5-1h · 08-24 실기 — "✕ 하나가 배치 전체를
                 //   쓰러뜨렸다"): 이름이 있으면 **그 파일만** 닫고 배치는 계속.
                 if !name.is_empty() {
