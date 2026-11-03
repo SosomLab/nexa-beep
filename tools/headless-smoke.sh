@@ -16,8 +16,11 @@ export NEXA_NO_AUTOSTART=1 NEXA_HEADLESS=1
 INST="$OUT/inst"; mkdir -p "$INST"
 cp -f "$BIN" "$INST/nexa-beep$EXE"
 [ -x "$(dirname "$BIN")/nbeep-imgdec$EXE" ] && cp -f "$(dirname "$BIN")/nbeep-imgdec$EXE" "$INST/"
+# ★ 앱에 주는 경로는 네이티브 형식(11-04 Windows 첫 실기: Git Bash의 `/d/...`를 앱이 "경로를 찾을 수 없습니다(os error 3)"로
+#   거부해 capture·dump 둘 다 0건 = HL-1). bash 쪽 판정(-s · head)은 POSIX 경로 그대로.
+OUTN="$OUT"; case "${OSTYPE:-}" in msys* | cygwin*) OUTN=$(cygpath -m "$OUT") ;; esac
 # 기동 ≈1~2 s → 2.5 s 캡처 → 3.0 s 창 덤프 → 3.5 s 종료(헤드리스는 틱(≈200 ms)마다 전 창을 그린다).
-S="2500:capture=$OUT/cap.png;3000:windows.dump=$OUT/wins.txt;3500:quit"
+S="2500:capture=$OUTN/cap.png;3000:windows.dump=$OUTN/wins.txt;3500:quit"
 ( cd "$INST" && NEXA_WIN_TRACE=1 NEXA_SCRIPT="$S" "./nexa-beep$EXE" --window --live 2> "$OUT/app.log" >/dev/null ); RC=$?
 ok=1
 [ "$RC" = 0 ] || { echo "❌ 종료 코드 $RC"; ok=0; }

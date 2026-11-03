@@ -101,15 +101,14 @@ jobs:
       # ★ 헤드리스 스모크(11-02 · nexa-sql D-435/D-436 이식 · 사용자 "테스트는 다른 디스플레이에서"): Linux = Xvfb 위 ·
       #   mac = 앱 자체 헤드리스(NEXA_HEADLESS=1 — 창 숨김) · 판정 = capture PNG 머리 + windows.dump `wins=1 hidden` + rc 0.
       #   winit X11 런타임(libxkbcommon-x11 등)이 없으면 Xvfb 안에서 앱이 즉시 종료한다(nexa-sql 211차 첫 CI 실패 교훈).
-      #   Windows 러너는 차후(사용자 11-02 "윈도우·리눅스는 차후 보완").
+      #   Windows = 11-04 합류(HL-1 · 앱에 주는 경로를 cygpath -m 네이티브 형식으로 — Git Bash `/d/...`는 os error 3).
       - name: xvfb + X11 런타임 설치(Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y xvfb x11-utils libxkbcommon0 libxkbcommon-x11-0 libx11-xcb1 libxcb-shm0 libxcb-render0 libxcb-xfixes0 libxcb-randr0 libxcursor1 libxi6 libxrandr2
-      - name: 헤드리스 스모크(Linux = Xvfb · mac = NEXA_HEADLESS)
-        if: runner.os != 'Windows'
+      - name: 헤드리스 스모크(Linux = Xvfb · mac·Windows = NEXA_HEADLESS)
         run: bash tools/headless-smoke.sh target/headless-ci
       - name: 헤드리스 캡처 보존
-        if: runner.os != 'Windows' && always()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: headless-${{ matrix.os }}
