@@ -120,6 +120,31 @@ impl Drop for StallGuard {
     }
 }
 
+/// 답장 kind를 아는 최소 앱 버전(11-02 답장 도입 = 0.7.0).
+const REPLY_MIN_VERSION: (u64, u64, u64) = (0, 7, 0);
+
+/// `"x.y.z[-pre]"` ≥ `min`(순수 · 숫자 아닌 꼬리는 버린다 · 빠진 자리 = 0).
+fn version_at_least(v: &str, min: (u64, u64, u64)) -> bool {
+    let mut it = v.trim().split('.').map(|x| {
+        let digits: String = x.chars().take_while(char::is_ascii_digit).collect();
+        digits.parse::<u64>().unwrap_or(0)
+    });
+    let t = (
+        it.next().unwrap_or(0),
+        it.next().unwrap_or(0),
+        it.next().unwrap_or(0),
+    );
+    t >= min
+}
+
+/// 구버전 수신자용 답장 평문(11-04) — 인용 한 줄(`┃ 이름: 발췌`) + 본문. 클릭 점프만 없고 내용은 전부 닿는다.
+fn reply_fallback_text(label: Option<&str>, reply: &nbeep_core::ReplyRef, text: &str) -> String {
+    match label {
+        Some(n) if !n.is_empty() => format!("┃ {n}: {}\n{text}", reply.quote),
+        _ => format!("┃ {}\n{text}", reply.quote),
+    }
+}
+
 /// 창 이벤트 변종 이름(정체 꼬리표 · 페이로드 없음).
 fn window_event_tag(ev: &WindowEvent) -> &'static str {
     match ev {
@@ -504,6 +529,8 @@ enum AppEvent {
         image_keep: bool,
         /// 소개글(08-17 · 와이어 `Info.bio`) — 목록 2번째 줄·카드에 표시.
         bio: Option<String>,
+        /// 상대 앱 버전(11-04 · 와이어 `Info.app_version` bit7) — 답장 kind 폴백 판정 근거.
+        app_version: Option<String>,
     },
     /// 격리 디코드 완료(워커 → 메인 · M4-5). ★ 그전엔 자식 프로세스 왕복(스폰 +
     /// Defender 검사 — Windows 실측 1~2초)이 **메인 스레드에서 동기**로 돌아, 대화창이
@@ -1237,6 +1264,7 @@ fn spawn_session_actor(
                 Option<String>,
                 Option<String>,
                 Option<String>, // bio(08-17)
+                Option<String>, // app_version(11-04)
             ),
             u32,
             Vec<u8>,
@@ -1935,6 +1963,7 @@ fn spawn_session_actor(
                             border,
                             image_keep,
                             bio,
+                            app_version,
                         }) => {
                             let len = image_len as usize;
                             if len == 0 || len > nbeep_core::PROFILE_IMAGE_MAX {
@@ -1951,11 +1980,12 @@ fn spawn_session_actor(
                                     border,
                                     image_keep,
                                     bio,
+                                    app_version,
                                 });
                                 pending_profile = None;
                             } else {
                                 pending_profile = Some((
-                                    (name, email, phone, avatar, border, bio),
+                                    (name, email, phone, avatar, border, bio, app_version),
                                     image_len,
                                     Vec::with_capacity(len),
                                 ));
@@ -1974,7 +2004,8 @@ fn spawn_session_actor(
                                 }
                                 if !in_order || last {
                                     // 종결 — 정합(순서·총량 일치)일 때만 이미지 채택.
-                                    let (name, email, phone, avatar, border, bio) = fields.clone();
+                                    let (name, email, phone, avatar, border, bio, app_version) =
+                                        fields.clone();
                                     let ok = in_order && last && buf.len() == *want as usize;
                                     let image = ok.then(|| std::mem::take(buf));
                                     let _ = proxy.send_event(AppEvent::PeerProfile {
@@ -1989,6 +2020,7 @@ fn spawn_session_actor(
                                         // 마커가 아니라 실물이 왔다.
                                         image_keep: false,
                                         bio,
+                                        app_version,
                                     });
                                     pending_profile = None;
                                 }
@@ -3500,6 +3532,9 @@ struct App {
     profile_view: Option<nbeep_ui::ProfileWidget>,
     /// 상대 프로필(M3-17 — 세션 경유 수신 · 목록·제목 표시 우선).
     peer_profiles: HashMap<PeerId, PeerProfile>,
+    /// ★ 상대 기기의 앱 버전(11-04 · 프로필 Info bit7 · 세션마다 프리페치로 들어온다 · 영속 안 함). 용도 = 상대가
+    /// 모르는 와이어 kind를 피하는 판정(`peer_knows_reply`) 하나.
+    peer_app_version: HashMap<PeerId, String>,
     /// 세션 액터 join 핸들(M4-10a · 08-18) — **정상 종료 시 부분 수신물 보존을
     /// 기다린다**: main 리턴 = 전 스레드 즉사라, 기다리지 않으면 수신자 쪽 종료
     /// 경로에서 `.part`가 안 남는다(발신자 쪽 끊김만 보존되던 반쪽).
@@ -8953,6 +8988,21 @@ impl App {
                 broadcast: false,
             };
             let me = self.identity.peer_id();
+            // ★ 구버전 기기용 평문(11-04) — 같은 seq · 본문에 인용 한 줄(`reply_fallback_text`).
+            let plain_bytes = reply.as_ref().map(|r| {
+                nbeep_core::ChatMessage {
+                    sender_device: msg.sender_device,
+                    seq: msg.seq,
+                    body: nbeep_core::MessageBody::Text(reply_fallback_text(
+                        reply_from.as_deref(),
+                        r,
+                        text.as_str(),
+                    )),
+                    importance,
+                    broadcast: false,
+                }
+                .encode()
+            });
             if let Some(chat) = self.chats.get_mut(&peer) {
                 chat.push_line(
                     ChatLine::text(true, text.clone(), at_ms, wall)
@@ -8974,12 +9024,21 @@ impl App {
             }
             let bytes = msg.encode();
             let mut sent_any = false;
+            let mut fallback_n = 0usize;
             for d in &live {
                 // 왕래 장부 — 파일 전송 자격(상호 확인)의 근거(사용자 확정 08-09).
                 self.ledger.note_sent(*d);
+                // 기기별 kind 선택(11-04): 답장이고 그 기기가 kind 2를 모르면 평문.
+                let frame = match &plain_bytes {
+                    Some(pb) if !self.peer_knows_reply(*d) => {
+                        fallback_n += 1;
+                        pb.clone()
+                    }
+                    _ => bytes.clone(),
+                };
                 // 액터에 발신 요청 — 수신은 비동기로 AppEvent::Recv로 돌아온다(M2-7).
                 if let Some(conv) = self.conversations.get(d) {
-                    sent_any |= conv.out_tx.send(SessionCmd::Chat(bytes.clone())).is_ok();
+                    sent_any |= conv.out_tx.send(SessionCmd::Chat(frame)).is_ok();
                 }
             }
             dlog!(self, DL::Chat, DV::Decide, "send_text", |r| {
@@ -8995,7 +9054,8 @@ impl App {
                         },
                     )
                     .arg("grade", grade)
-                    .rule("live_devices", live.len());
+                    .rule("live_devices", live.len())
+                    .rule("reply_fallback", fallback_n);
                 if sent_any {
                     r.ok("handed to session actor")
                 } else {
@@ -10174,6 +10234,15 @@ impl App {
         }
     }
 
+    /// ★ 상대 기기가 답장 kind(1:1 kind 2 · 방 kind 10 — 0.7.0부터)를 아는가(11-04). 버전을 아직 못 받았거나(프리페치
+    /// 전·구버전은 bit7 자체가 없다) 0.7.0 미만이면 **평문 폴백**(`reply_fallback_text`) — 구버전은 미지 kind를
+    /// 조용히 버리는데 발신측은 ack를 받아 "전달됨"으로 보였다(11-02 Win 0.6.1 ↔ mac 0.7.0 실례).
+    fn peer_knows_reply(&self, device: PeerId) -> bool {
+        self.peer_app_version
+            .get(&device)
+            .is_some_and(|v| version_at_least(v, REPLY_MIN_VERSION))
+    }
+
     /// ★ 답장 인용 블록의 발신자 라벨(11-02) — 원본이 내 기기(나·형제)면 "나", 그 외는 표시 이름.
     fn reply_from_name(&self, origin: PeerId) -> String {
         if origin == self.identity.peer_id() || self.siblings.contains(&origin) {
@@ -10534,6 +10603,7 @@ impl App {
             // Full은 언제나 false — 사진은 청크로 실려 가거나(존재) 철회다(부재).
             image_keep: scope == ProfileScope::Info && image_shared,
             bio,
+            app_version: Some(env!("CARGO_PKG_VERSION").to_string()), // 11-04 — 항상(공개 토글 무관)
         }
         .encode()];
         if let Some(bytes) = image {
@@ -14032,12 +14102,24 @@ impl App {
             .filter_map(|m| m.reply.as_ref().map(|r| r.origin))
             .map(|o| (o, self.peer_title(o)))
             .collect();
+        let knows_reply = self.peer_knows_reply(peer); // 11-04 — 구버전이면 답장을 평문으로
         for m in &q {
             let seq = self.issue_seq();
+            let body = match (&m.reply, knows_reply) {
+                (Some(r), false) => {
+                    let label = if r.origin == me_id || siblings.contains(&r.origin) {
+                        nbeep_core::t(nbeep_core::Msg::ReplyYou).to_string()
+                    } else {
+                        titles.get(&r.origin).cloned().unwrap_or_default()
+                    };
+                    nbeep_core::MessageBody::Text(reply_fallback_text(Some(&label), r, &m.text))
+                }
+                _ => nbeep_core::MessageBody::with_reply(m.text.clone(), m.reply.clone()),
+            };
             let msg = nbeep_core::ChatMessage {
                 sender_device: self.identity.peer_id(),
                 seq,
-                body: nbeep_core::MessageBody::with_reply(m.text.clone(), m.reply.clone()),
+                body,
                 importance: match m.importance & 0x3 {
                     2 => nbeep_core::Importance::Urgent,
                     1 => nbeep_core::Importance::Notice,
@@ -16070,6 +16152,10 @@ impl App {
             // 인용 라벨 = 답장을 잡은 줄에 보이던 이름(`take_reply` · 11-04).
             let reply_from = reply.as_ref().map(|(_, n)| n.clone());
             let reply = reply.map(|(r, _)| r);
+            // 구버전 구성원용 평문(11-04 · kind 10을 모르는 기기는 미지 kind를 버린다).
+            let fallback_text = reply
+                .as_ref()
+                .map(|r| reply_fallback_text(reply_from.as_deref(), r, text.as_str()));
             // 내 말풍선은 스레드에 한 번(팬아웃과 무관 — "하나의 방").
             let line = ChatLine::text(true, text.clone(), at_ms, wall)
                 .with_seq(seq)
@@ -16086,13 +16172,23 @@ impl App {
             let mut sent = 0usize;
             let mut queued: Vec<PeerId> = Vec::new();
             for m in &members {
+                let knows = self.peer_knows_reply(*m);
                 if let Some(conv) = self.conversations.get(m) {
-                    let frame = nbeep_core::SGroupMsg::Msg {
-                        uid,
-                        seq,
-                        text: text.as_str().to_string(),
-                        sender: None, // P-10 kind 9 발신은 구버전 소진 후(해석기 선배포)
-                        reply: reply.clone(),
+                    let frame = match (&fallback_text, knows) {
+                        (Some(fb), false) => nbeep_core::SGroupMsg::Msg {
+                            uid,
+                            seq,
+                            text: fb.clone(),
+                            sender: None,
+                            reply: None,
+                        },
+                        _ => nbeep_core::SGroupMsg::Msg {
+                            uid,
+                            seq,
+                            text: text.as_str().to_string(),
+                            sender: None, // P-10 kind 9 발신은 구버전 소진 후(해석기 선배포)
+                            reply: reply.clone(),
+                        },
                     }
                     .encode();
                     if conv.out_tx.send(SessionCmd::Group(vec![frame])).is_ok() {
@@ -16255,8 +16351,16 @@ impl App {
         };
         let mut inv = Invalidations::default();
         let title = self.peer_title(peer);
+        let knows_reply = self.peer_knows_reply(peer); // 11-04 — 구버전이면 답장을 평문으로
         for (gid, text, seq, reply) in pends {
             let uid = self.groups.shared_by_id(gid).map(|s| s.roster.uid);
+            let (text, reply) = match (&reply, knows_reply) {
+                (Some(r), false) => (
+                    reply_fallback_text(Some(&self.reply_from_name(r.origin)), r, &text),
+                    None,
+                ),
+                _ => (text, reply),
+            };
             // seq는 발신 때 발급한 것 그대로(11-02 — 방 메시지 하나 = 열쇠 하나).
             let sent = uid.is_some_and(|uid| {
                 self.conversations.get(&peer).is_some_and(|conv| {
@@ -20723,7 +20827,12 @@ impl ApplicationHandler<AppEvent> for App {
                 border,
                 image_keep,
                 bio,
+                app_version,
             } => {
+                // 상대 앱 버전(11-04) — 프로필 공개 여부·멱등 가드와 무관하게 Info가 올 때마다 갱신(빈 응답도 Info).
+                if let Some(v) = app_version {
+                    self.peer_app_version.insert(peer, v);
+                }
                 // ★ RL-1 멱등 가드(08-18) — 같은 내용 재수신은 여기서 끝낸다.
                 //   상대의 재접속·생사 프로브 응답(Full)이 올 때마다 사진 재봉인 +
                 //   imgdec 자식 프로세스 + trust.seg 전체 재암호화 + 목록 재조립이
@@ -23391,6 +23500,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         picker_view: None,
         profile_view: None,
         peer_profiles: HashMap::new(),
+        peer_app_version: HashMap::new(),
         peer_profile_fp: HashMap::new(),
         resumed_recv: HashMap::new(),
         statuslog: None,
@@ -24298,6 +24408,29 @@ mod tests {
         let back = decode_history(&encode_history(&lines));
         assert_eq!(back.len(), HISTORY_MAX, "상한 유지");
         assert_eq!(back[0].at_ms, 50, "오래된 50개 버려짐(최근 유지)");
+    }
+
+    /// 11-04 답장 폴백 — 버전 비교(꼬리·빠진 자리 관용)와 평문 본문.
+    #[test]
+    fn version_at_least_and_reply_fallback_text() {
+        use super::{reply_fallback_text, version_at_least, REPLY_MIN_VERSION};
+        for (v, ok) in [
+            ("0.7.0", true),
+            ("0.7.1-rc1", true),
+            ("1.0", true),
+            ("0.6.1", false),
+            ("0.6", false),
+            ("", false),
+            ("x", false),
+        ] {
+            assert_eq!(version_at_least(v, REPLY_MIN_VERSION), ok, "{v}");
+        }
+        let r = nbeep_core::ReplyRef::new(nbeep_core::PeerId::from_bytes([1u8; 32]), 7, "원본 글");
+        assert_eq!(
+            reply_fallback_text(Some("철수"), &r, "답"),
+            "┃ 철수: 원본 글\n답"
+        );
+        assert_eq!(reply_fallback_text(None, &r, "답"), "┃ 원본 글\n답");
     }
 
     /// STALL-1(11-04): 핸들러가 상한을 넘기면 Drop이 꼬리표·ms를 남기고, 짧으면 아무것도 남기지 않는다 ·

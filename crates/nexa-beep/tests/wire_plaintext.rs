@@ -145,6 +145,7 @@ fn session_wire_carries_no_plaintext() {
         border: None,
         image_keep: false,
         bio: None,
+        app_version: None,
     };
     mux.send(StreamId::Control, &info.encode())
         .expect("info 송신");

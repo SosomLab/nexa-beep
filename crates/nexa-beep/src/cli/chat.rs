@@ -629,6 +629,7 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
                             border: None,
                             image_keep: false, // 언제나 전체 응답(테스트 도구)
                             bio: Some("테스트 소개글".into()),
+                            app_version: None,
                         }
                         .encode()];
                         let mut off = 0usize;
@@ -1694,6 +1695,7 @@ fn spawn_passive(
                                 border: None,
                                 image_keep: false,
                                 bio: None,
+                                app_version: None,
                             }
                             .encode(),
                         );

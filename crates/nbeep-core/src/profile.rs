@@ -15,7 +15,7 @@
 //!                      · [border: len u16 BE ‖ UTF-8]    ← flags bit4일 때만(08-14)
 //!                      · [bio:    len u16 BE ‖ UTF-8]    ← flags bit6일 때만(08-17)
 //!                    }  flags: bit0=name · bit1=email · bit2=phone · bit3=avatar · bit4=border
-//!                              · bit5=image_keep(값 없음 — M3-21 경량 갱신) · bit6=bio(08-17)
+//!                              · bit5=image_keep(값 없음 — M3-21 경량 갱신) · bit6=bio(08-17) · bit7=app_version(11-04)
 //! kind 3 = ImageChunk{ offset u32 BE · last u8 · bytes } ← image_len>0일 때만 이어짐
 //! ```
 //!
@@ -64,6 +64,11 @@ pub enum ProfileMsg {
         /// 소개글(08-17 · flags bit6 — 기본정보 공개 시). 여러 줄 가능(목록은
         /// 줄바꿈을 무시해 한 줄로 접어 보인다). 꼬리 확장 필드라 구버전은 무시.
         bio: Option<String>,
+        /// ★ 발신 앱 버전 `"0.7.0"`(11-04 · flags bit7 · 꼬리 확장 — 공개 토글과 무관하게 항상 싣는다).
+        /// 수신측은 **상대가 아는 와이어 kind**를 가늠하는 데만 쓴다(답장 kind 2/10은 0.7.0부터 —
+        /// 11-02 Win 0.6.1이 mac의 답장 2건을 조용히 버린 실례 → 모르면 평문으로 보낸다). 봉투 원리 =
+        /// 버전 문자열 하나(기기·OS·빌드 정보 없음) · 구버전은 bit7을 몰라 무시.
+        app_version: Option<String>,
     },
     /// 이미지 조각(Info 직후 순서대로 · `last`가 마지막 표시).
     ImageChunk {
@@ -91,6 +96,7 @@ impl ProfileMsg {
                 border,
                 image_keep,
                 bio,
+                app_version,
             } => {
                 let mut out = Vec::with_capacity(64);
                 out.push(K_INFO);
@@ -118,6 +124,9 @@ impl ProfileMsg {
                 if bio.is_some() {
                     flags |= 64; // bit6 = 소개글(08-17)
                 }
+                if app_version.is_some() {
+                    flags |= 128; // bit7 = 앱 버전(11-04)
+                }
                 out.push(flags);
                 for field in [name, email, phone].into_iter().flatten() {
                     let b = field.as_bytes();
@@ -128,8 +137,8 @@ impl ProfileMsg {
                 out.extend_from_slice(&image_len.to_be_bytes());
                 // 확장 필드는 **맨 뒤에 순서대로**(구버전은 image_len에서 읽기를 멈춘다
                 // — 전방 호환. 새 필드는 언제나 이 꼬리 뒤에 붙인다). 순서 = avatar,
-                // border, bio(bit3, bit4, bit6 · 오프셋 규약을 깨지 않게 append-only).
-                for field in [avatar, border, bio].into_iter().flatten() {
+                // border, bio, app_version(bit3, bit4, bit6, bit7 · 오프셋 규약을 깨지 않게 append-only).
+                for field in [avatar, border, bio, app_version].into_iter().flatten() {
                     let b = field.as_bytes();
                     let len = u16::try_from(b.len()).unwrap_or(u16::MAX);
                     out.extend_from_slice(&len.to_be_bytes());
@@ -177,6 +186,7 @@ impl ProfileMsg {
                 let avatar = take_str(&mut p, flags & 8 != 0)?;
                 let border = take_str(&mut p, flags & 16 != 0)?;
                 let bio = take_str(&mut p, flags & 64 != 0)?;
+                let app_version = take_str(&mut p, flags & 128 != 0)?;
                 Some(ProfileMsg::Info {
                     name,
                     email,
@@ -186,6 +196,7 @@ impl ProfileMsg {
                     border,
                     image_keep: flags & 32 != 0,
                     bio,
+                    app_version,
                 })
             }
             K_IMAGE => {
@@ -220,6 +231,7 @@ mod tests {
                 border: None,
                 image_keep: false,
                 bio: None,
+                app_version: None,
             },
             ProfileMsg::Info {
                 name: None,
@@ -230,6 +242,7 @@ mod tests {
                 border: None,
                 image_keep: false,
                 bio: None,
+                app_version: None,
             },
             ProfileMsg::Info {
                 name: Some("bob".into()),
@@ -240,6 +253,7 @@ mod tests {
                 border: Some("#3D8BFF".into()),
                 image_keep: false,
                 bio: None,
+                app_version: None,
             },
             ProfileMsg::ImageChunk {
                 offset: 32 * 1024,
@@ -264,6 +278,7 @@ mod tests {
             border: None,
             image_keep: false,
             bio: None,
+            app_version: None,
         }
         .encode();
         // kind(1)+flags(1)+len(2)+"bob"(3)+image_len(4) = 11 — 이메일·전화 자리가 없다.
@@ -286,6 +301,7 @@ mod tests {
             border: None,
             image_keep: false,
             bio: None,
+            app_version: None,
         }
         .encode();
         assert!(matches!(
@@ -302,6 +318,7 @@ mod tests {
             border: None,
             image_keep: false,
             bio: None,
+            app_version: None,
         }
         .encode();
         newer.extend_from_slice(b"future-bytes");
@@ -325,6 +342,7 @@ mod tests {
             border: Some("#3D8BFF".into()),
             image_keep: false,
             bio: None,
+            app_version: None,
         };
         let kept = match &base {
             ProfileMsg::Info {
@@ -344,6 +362,7 @@ mod tests {
                 border: border.clone(),
                 image_keep: true,
                 bio: None,
+                app_version: None,
             },
             _ => unreachable!(),
         };
@@ -358,9 +377,47 @@ mod tests {
             Some(ProfileMsg::Info {
                 image_keep: false,
                 bio: None,
+                app_version: None,
                 ..
             })
         ));
+    }
+
+    /// ★ 앱 버전(11-04 · bit7) — 왕복 보존 · bio와 공존(순서 bio → app_version) · 없는 인코딩 = None.
+    #[test]
+    fn app_version_bit7_round_trips_after_bio() {
+        let m = ProfileMsg::Info {
+            name: Some("n".into()),
+            email: None,
+            phone: None,
+            image_len: 0,
+            avatar: None,
+            border: None,
+            image_keep: false,
+            bio: Some("b".into()),
+            app_version: Some("0.7.1".into()),
+        };
+        assert_eq!(ProfileMsg::decode(&m.encode()), Some(m.clone()));
+        let ProfileMsg::Info { app_version, .. } = ProfileMsg::decode(&m.encode()).unwrap() else {
+            panic!("Info")
+        };
+        assert_eq!(app_version.as_deref(), Some("0.7.1"));
+        let old = ProfileMsg::Info {
+            name: None,
+            email: None,
+            phone: None,
+            image_len: 0,
+            avatar: None,
+            border: None,
+            image_keep: false,
+            bio: None,
+            app_version: None,
+        };
+        let ProfileMsg::Info { app_version, .. } = ProfileMsg::decode(&old.encode()).unwrap()
+        else {
+            panic!("Info")
+        };
+        assert_eq!(app_version, None, "구버전 인코딩 = 버전 없음");
     }
 
     /// ★ 소개글(08-17 · bit6) — ① 왕복 보존 ② 꼬리 확장이라 구버전(bit6 없음)
@@ -376,6 +433,7 @@ mod tests {
             border: Some("#3D8BFF".into()),
             image_keep: false,
             bio: Some("한 줄\n두 줄 소개".into()),
+            app_version: None,
         };
         assert_eq!(ProfileMsg::decode(&m.encode()).unwrap(), m);
         // 구버전(bio 없음) = None 해석.
@@ -388,6 +446,7 @@ mod tests {
             border: None,
             image_keep: false,
             bio: None,
+            app_version: None,
         };
         assert!(matches!(
             ProfileMsg::decode(&no_bio.encode()),
