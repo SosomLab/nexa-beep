@@ -2142,6 +2142,12 @@ fn entry_matches(e: &Entry, toks: &[String]) -> bool {
 const SIDEBAR_W: i32 = 170;
 /// 하단 줄(고급 스위치 · 설정 파일 열기 · 닫기 — 10-09 nexa-sql 차용) 높이.
 const BOTTOM_H: i32 = 44;
+/// 하단 줄 버튼 폭(내보내기·가져오기·JSON 편집·닫기 전부 같은 폭 — nexa-dir3 prefs_win 96 · 11-04).
+const FOOT_BTN_W: i32 = 96;
+/// 하단 줄 스위치의 **배치 때 근사 폭** — 진짜 폭은 그릴 때 라벨 글 폭으로 교정한다(`paint`).
+const SWITCH_APPROX_W: i32 = 96;
+/// [고급]과 [변경] 스위치 사이(nexa-dir3 12px).
+const SWITCH_GAP: i32 = 12;
 /// 고급 숨김 배너(밴드 셋째 줄) 높이.
 const BANNER_H: i32 = 22;
 /// 카드 \[초기화\] 버튼 폭.
@@ -2282,10 +2288,13 @@ pub struct SettingsWidget {
     advanced: bool,
     /// 지금 보기에서 숨긴 고급 항목 수(밴드 배너).
     adv_hidden: usize,
-    /// 하단 줄 컨트롤 — 고급 스위치 · \[설정 파일 열기…\] · \[닫기\].
-    adv_switch: Switch,
+    /// 하단 줄 컨트롤 — 고급 스위치 · [내보내기…][가져오기…][JSON 편집…][닫기].
+    /// ★ `RefCell`인 이유(11-04 · 사용자 "고급·변경 스위치 간격을 붙여 달라"): 스위치 폭은 **라벨 글 폭**에 맞춰야 하는데
+    ///   글 폭은 `DrawCtx`가 있는 `paint(&self)`에서만 잴 수 있다 → 배치(`layout`)는 근사 폭으로 두고 그릴 때 실측으로
+    ///   다시 놓는다(nexa-dir3 `prefs_win.rs` "고급 스위치 = 라벨 글 폭에 꼭 맞는 너비"와 같은 꼴 · 그쪽은 paint가 &mut).
+    adv_switch: std::cell::RefCell<Switch>,
     /// ★ "변경" 보기 스위치(11-02 · nexa-dir3 이식) — 켜는 순간 기본값과 다른 키 집합을 고정해 전 카테고리 카드로 보인다.
-    changed_switch: Switch,
+    changed_switch: std::cell::RefCell<Switch>,
     /// 변경 보기 중인 키 집합(`None` = 끔) — 편집 중 카드가 사라지지 않게 켤 때 한 번 고정.
     changed_keys: Option<std::collections::HashSet<&'static str>>,
     /// ★ 내보내기(JSON 저장)·가져오기(JSON 열기)·JSON 편집(외부 편집기 + 저장 감시) — nexa-dir3와 같은 글·동작(11-02).
@@ -2380,8 +2389,14 @@ impl SettingsWidget {
             selected: TreeSel::Cat(0),
             advanced,
             adv_hidden: 0,
-            adv_switch: Switch::new(tr(lang, Msg::PrefsAdvanced), advanced),
-            changed_switch: Switch::new(tr(lang, Msg::PrefsChangedOnly), false),
+            adv_switch: std::cell::RefCell::new(Switch::new(
+                tr(lang, Msg::PrefsAdvanced),
+                advanced,
+            )),
+            changed_switch: std::cell::RefCell::new(Switch::new(
+                tr(lang, Msg::PrefsChangedOnly),
+                false,
+            )),
             changed_keys: None,
             btn_export: Button::new(tr(lang, Msg::BtnExportSettings)),
             btn_import: Button::new(tr(lang, Msg::BtnImportSettings)),
@@ -2541,7 +2556,7 @@ impl SettingsWidget {
     /// ★ "변경" 보기 켜기/끄기(11-02 · nexa-dir3 `set_changed_only` 이식): 켜는 순간의 **기본값과 다른 키 집합**을 고정하고
     /// 카드를 다시 만든다(전 카테고리 · 고급 여부 무관 · 검색·트리 선택은 무시). 끄면 종전 보기로.
     pub fn set_changed_only(&mut self, on: bool, inv: &mut Invalidations) {
-        self.changed_switch.set_on(on);
+        self.changed_switch.borrow_mut().set_on(on);
         self.changed_keys = on.then(|| {
             registry()
                 .iter()
@@ -2564,7 +2579,7 @@ impl SettingsWidget {
     pub fn set_advanced(&mut self, on: bool, inv: &mut Invalidations) {
         if self.advanced != on {
             self.advanced = on;
-            self.adv_switch.set_on(on);
+            self.adv_switch.borrow_mut().set_on(on);
             self.rebuild(inv);
         }
     }
@@ -3192,23 +3207,27 @@ impl SettingsWidget {
             Rect::new(b.x, tree_top, sw, (bottom_top - tree_top).max(0)),
             inv,
         );
-        // ── 하단 줄(10-09): [고급 스위치] ………… [설정 파일 열기…][닫기] ──
+        // ── 하단 줄(10-09 · 11-04 nexa-dir3 치수로 통일): [고급][변경] ………… [내보내기…][가져오기…][JSON 편집…][닫기] ──
+        //   스위치 폭은 라벨 글 폭(그릴 때 실측 · 아래 `paint`) — 여기서는 근사 폭으로 자리만 잡는다. 둘 사이 12px.
         {
             let ctl_h = self.s(CTL_H);
             let pad = self.s(PAD);
             let cy = bottom_top + (self.bottom_h() - ctl_h) / 2;
-            self.adv_switch.set_scale(self.scale);
-            self.adv_switch
-                .set_bounds(Rect::new(b.x + pad, cy, self.s(190), ctl_h), inv);
-            self.changed_switch.set_scale(self.scale);
-            self.changed_switch.set_bounds(
-                Rect::new(b.x + pad + self.s(190) + self.s(8), cy, self.s(120), ctl_h),
+            let (adv_w, chg_w) = (self.s(SWITCH_APPROX_W), self.s(SWITCH_APPROX_W));
+            let mut adv = self.adv_switch.borrow_mut();
+            adv.set_scale(self.scale);
+            adv.set_bounds(Rect::new(b.x + pad, cy, adv_w, ctl_h), inv);
+            let mut chg = self.changed_switch.borrow_mut();
+            chg.set_scale(self.scale);
+            chg.set_bounds(
+                Rect::new(b.x + pad + adv_w + self.s(SWITCH_GAP), cy, chg_w, ctl_h),
                 inv,
             );
-            // 오른쪽부터 [닫기][설정 파일 열기…][JSON 편집…][가져오기…][내보내기…] — nexa-dir3와 같은 순서(11-02).
+            drop((adv, chg));
+            // 오른쪽부터 [닫기][JSON 편집…][가져오기…][내보내기…] — nexa-dir3와 같은 순서·같은 폭(96)·같은 간격(8).
             let gap = self.s(8);
             let scale = self.scale;
-            let widths = [self.s(90), self.s(120), self.s(110), self.s(110)];
+            let widths = [self.s(FOOT_BTN_W); 4];
             let mut right = b.right() - pad;
             let btns: [&mut Button; 4] = [
                 &mut self.btn_close,
@@ -3682,13 +3701,15 @@ impl Widget for SettingsWidget {
                     InputEvent::MouseUp { .. } | InputEvent::MouseMove { .. }
                 )
             {
-                self.adv_switch.on_event(ev, inv);
-                self.changed_switch.on_event(ev, inv);
+                self.adv_switch.borrow_mut().on_event(ev, inv);
+                self.changed_switch.borrow_mut().on_event(ev, inv);
                 self.btn_export.on_event(ev, inv);
                 self.btn_import.on_event(ev, inv);
                 self.btn_json.on_event(ev, inv);
                 self.btn_close.on_event(ev, inv);
-                if let Some(on) = self.changed_switch.take_toggled() {
+                // RefMut 임시값이 if-let 본문까지 살면 self 재빌림과 충돌한다 → 먼저 꺼낸다.
+                let toggled = self.changed_switch.borrow_mut().take_toggled();
+                if let Some(on) = toggled {
                     self.set_changed_only(on, inv);
                     return;
                 }
@@ -3707,7 +3728,8 @@ impl Widget for SettingsWidget {
                     inv.push(self.bounds);
                     return;
                 }
-                if let Some(on) = self.adv_switch.take_toggled() {
+                let toggled = self.adv_switch.borrow_mut().take_toggled();
+                if let Some(on) = toggled {
                     self.advanced = on;
                     self.changes.push((
                         "ui.prefs_advanced",
@@ -4401,8 +4423,26 @@ impl Widget for SettingsWidget {
         let bar = self.bottom_rect();
         ctx.fill_rect(bar, theme.chrome_bg);
         ctx.fill_rect(Rect::new(bar.x, bar.y, bar.w, 1), theme.border);
-        self.adv_switch.paint(ctx, theme);
-        self.changed_switch.paint(ctx, theme);
+        // 스위치 = 라벨 글 폭에 꼭 맞는 너비(종전 고정 190/120은 "고급" 뒤 빈 자리를 눌러도 토글됐고 "변경"이 멀리 떨어졌다)
+        //   · "변경"은 고급 바로 오른쪽 12px(nexa-dir3 prefs_win과 같은 자리 · 11-04 사용자 요청).
+        {
+            let mut inv = Invalidations::default();
+            let mut adv = self.adv_switch.borrow_mut();
+            let ab = adv.bounds();
+            let aw = adv.wanted_width(ctx) + self.s(8);
+            if aw != ab.w {
+                adv.set_bounds(Rect::new(ab.x, ab.y, aw, ab.h), &mut inv);
+            }
+            let mut chg = self.changed_switch.borrow_mut();
+            let cb = chg.bounds();
+            let cx = ab.x + aw + self.s(SWITCH_GAP);
+            let cw = chg.wanted_width(ctx) + self.s(8);
+            if cx != cb.x || cw != cb.w {
+                chg.set_bounds(Rect::new(cx, cb.y, cw, cb.h), &mut inv);
+            }
+            adv.paint(ctx, theme);
+            chg.paint(ctx, theme);
+        }
         self.btn_export.paint(ctx, theme);
         self.btn_import.paint(ctx, theme);
         self.btn_json.paint(ctx, theme);
@@ -5015,7 +5055,7 @@ mod tests {
         assert_eq!(w.adv_hidden, 0);
         // 하단 스위치 클릭으로도 토글되고 변경이 보고된다(하단 줄이 겹치지 않게 넓힌다 — 11-02 버튼 3개 추가).
         w.set_bounds(Rect::new(0, 0, 1000, 300), &mut inv);
-        let sb = w.adv_switch.bounds();
+        let sb = w.adv_switch.borrow().bounds();
         for e in click(sb.x + 3, sb.y + sb.h / 2) {
             w.on_event(&e, &mut inv);
         }

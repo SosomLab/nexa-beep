@@ -3637,7 +3637,8 @@ impl Msg {
                 "跟随系统语言",
                 "システムの言語に従う",
             ],
-            Msg::PrefsAdvanced => ["Advanced settings", "고급 설정", "高级设置", "詳細設定"],
+            // 하단 스위치 라벨 — nexa-dir3 `pref.advanced`와 같은 글("고급" · 11-04 사용자 "텍스트를 일치").
+            Msg::PrefsAdvanced => ["Advanced", "고급", "高级", "詳細"],
             Msg::PrefsAdvancedHidden => [
                 "{} advanced settings hidden — turn on Advanced to show them",
                 "고급 설정 {}개 숨김 — 고급 설정을 켜면 보입니다",
