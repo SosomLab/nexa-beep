@@ -618,6 +618,8 @@ docker rm -f node_a node_b; docker network rm beepnet
 > 손으로(또는 에이전트가) 테스트 인스턴스를 띄울 때도 `NEXA_NO_AUTOSTART=1`을 붙이고, 끝나면
 > `./tools/relaunch.sh --stop` 또는 `./tools/autostart-clean.sh`로 마무리한다. Windows 실측(10-19):
 > 미억제 기동 = 슬롯 등록 → 정리 스크립트 = 슬롯·유령 삭제 · 설치본 등록 보존 → 억제 기동 = 등록 0.
+>
+> **임시 산출물**(11-04 · [18 §3](18-build-and-test.md)): 시험·도구가 OS 임시 폴더에 남긴 `nbeep-*`·`nb-*`·`nexa-beep*`·`nlt-e2e-*`와 `target/perf-*`는 `./tools/tmp-clean.sh`(기본 1일 경과분 · `--dry-run`)로 걷는다 — 릴리스 전 일괄(`gate.sh`)이 자동으로 부른다.
 
 ---
 

@@ -11,6 +11,8 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 F=nbeep-core/testkit,nbeep-net/testkit,nbeep-crypto/testkit
 FAST=0; [ "${1:-}" = "--fast" ] && FAST=1
 step() { printf '\n\033[1m▶ %s\033[0m\n' "$1"; }
+# 11-04 규칙(docs/18 §3): 릴리스 전 일괄에 임시 산출물 정리를 끼워 OS 임시 폴더·target/perf-* 가 쌓이지 않게.
+step "임시 산출물 정리"; ./tools/tmp-clean.sh
 step "fmt --check";   cargo fmt --all -- --check
 step "clippy";        cargo clippy --workspace --all-targets --features "$F" -- -D warnings
 step "rustdoc 링크";  RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --features "$F" >/dev/null
