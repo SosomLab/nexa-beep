@@ -487,6 +487,11 @@ enum AppEvent {
         peer: PeerId,
         lines: Box<nbeep_core::SyncLines>,
     },
+    /// 형제의 따라잡기 답장 참조(태그 21 · REPLY-1 ② · 11-04) — 줄은 먼저 왔고 참조만 덧붙인다.
+    SyncReplies {
+        peer: PeerId,
+        replies: Box<nbeep_core::SyncReplies>,
+    },
     /// 형제의 읽음 동기(태그 20) — 안읽음 걷기는 메인.
     SyncRead {
         peer: PeerId,
@@ -599,6 +604,7 @@ impl AppEvent {
             AppEvent::SyncDigest { .. } => "SyncDigest",
             AppEvent::SyncPull { .. } => "SyncPull",
             AppEvent::SyncLines { .. } => "SyncLines",
+            AppEvent::SyncReplies { .. } => "SyncReplies",
             AppEvent::SyncRead { .. } => "SyncRead",
             AppEvent::UserHello { .. } => "UserHello",
             AppEvent::Succession { .. } => "Succession",
@@ -1876,6 +1882,19 @@ fn spawn_session_actor(
                                 .send_event(AppEvent::SyncLines {
                                     peer,
                                     lines: Box::new(l),
+                                })
+                                .is_err()
+                            {
+                                return;
+                            }
+                        }
+                    }
+                    StreamId::Control if nbeep_core::SyncReplies::decode(&bytes).is_some() => {
+                        if let Some(r) = nbeep_core::SyncReplies::decode(&bytes) {
+                            if proxy
+                                .send_event(AppEvent::SyncReplies {
+                                    peer,
+                                    replies: Box::new(r),
                                 })
                                 .is_err()
                             {
@@ -9359,6 +9378,11 @@ impl App {
         if chosen.is_empty() {
             return;
         }
+        // ★ 답장 참조(REPLY-1 ② · 11-04) — 줄 프레임은 길이 규약상 못 싣는다 → 별도 프레임(태그 21)으로 뒤따른다.
+        let reply_items: Vec<(PeerId, u64, nbeep_core::ReplyRef)> = chosen
+            .iter()
+            .filter_map(|(seq, l)| l.reply.clone().map(|r| (pull.origin, *seq, r)))
+            .collect();
         let out = nbeep_core::SyncLines {
             thread: pull.thread,
             lines: chosen
@@ -9381,6 +9405,16 @@ impl App {
         };
         let n = out.lines.len();
         let mut frames = out.encode_frames(nbeep_core::MAX_PAYLOAD);
+        let nreplies = reply_items.len();
+        if nreplies > 0 {
+            frames.extend(
+                nbeep_core::SyncReplies {
+                    thread: pull.thread,
+                    items: reply_items,
+                }
+                .encode_frames(nbeep_core::MAX_PAYLOAD),
+            );
+        }
         let bytes: usize = frames.iter().map(Vec::len).sum();
         let nframes = frames.len();
         // 읽음 동기 동반 — 이 스레드의 안읽음이 0이고 본 적이 있으면 "끝까지 봤다".
@@ -9413,7 +9447,7 @@ impl App {
         let _ = conv.out_tx.send(SessionCmd::Control(frames));
         if self.user_trace {
             eprintln!(
-                "[user] sync lines to {} thread {} origin {} after={} n={n} frames={nframes} bytes={bytes}",
+                "[user] sync lines to {} thread {} origin {} after={} n={n} frames={nframes} bytes={bytes} replies={nreplies}",
                 peer.short(),
                 pull.thread.short(),
                 pull.origin.short(),
@@ -9516,6 +9550,71 @@ impl App {
         self.redraw_conversation(t);
         self.refresh_and_redraw();
         self.update_main_title();
+    }
+
+    /// ★ 따라잡기 답장 참조 수신(REPLY-1 ② · 11-04) — 같은 세션에서 줄 프레임 뒤에 온다. 열쇠 `(origin, seq)`가 맞는 줄에
+    /// 참조가 아직 없으면 붙이고(라벨은 내 기준 `reply_from_name`) 기록·뷰를 갱신한다. 줄이 없는 참조는 버린다(순서가
+    /// 꼬인 재전달 — 다음 따라잡기가 줄과 함께 다시 보낸다).
+    fn on_sync_replies(&mut self, peer: PeerId, got: &nbeep_core::SyncReplies) {
+        if !self.siblings.contains(&peer) || !self.user_state.active() {
+            return;
+        }
+        let t = got.thread;
+        let my_devs = self.my_devices();
+        if !self.sync_thread_ok(t, &my_devs) {
+            return;
+        }
+        // 라벨은 빌림 밖에서 미리(아래는 줄 목록을 &mut로 쥔다).
+        let labeled: Vec<(PeerId, u64, nbeep_core::ReplyRef, String)> = got
+            .items
+            .iter()
+            .map(|(o, s, r)| (*o, *s, r.clone(), self.reply_from_name(r.origin)))
+            .collect();
+        let mut applied = 0usize;
+        {
+            let Some(lines) = self
+                .conversations
+                .get_mut(&t)
+                .map(|c| &mut c.lines)
+                .or_else(|| self.parked_lines.get_mut(&t))
+            else {
+                return;
+            };
+            for (o, s, r, label) in labeled {
+                if let Some(l) = lines
+                    .iter_mut()
+                    .find(|l| l.sync_key() == Some((o, s)) && l.reply.is_none())
+                {
+                    l.reply = Some(r);
+                    l.reply_from = Some(label);
+                    applied += 1;
+                }
+            }
+        }
+        if self.user_trace {
+            eprintln!(
+                "[user] sync replies from {} -> thread {} items={} applied={applied}",
+                peer.short(),
+                t.short(),
+                got.items.len()
+            );
+        }
+        if applied == 0 {
+            return;
+        }
+        self.record_history(t);
+        let vk = self.view_key(t);
+        if self.chats.contains_key(&vk) {
+            let merged = self.thread_lines(vk);
+            if let Some(chat) = self.chats.get_mut(&vk) {
+                let mut inv = Invalidations::default();
+                chat.clear_lines(&mut inv);
+                for l in merged {
+                    chat.push_line(l, &mut inv);
+                }
+            }
+        }
+        self.redraw_conversation(t);
     }
 
     /// 읽음 동기 수신 — 그 시각 이하의 수신 줄은 읽은 것 · 더 새 줄 수만 안읽음으로 남긴다.
@@ -19444,6 +19543,7 @@ impl ApplicationHandler<AppEvent> for App {
             AppEvent::SyncDigest { peer, digest } => self.on_sync_digest(peer, &digest),
             AppEvent::SyncPull { peer, pull } => self.on_sync_pull(peer, pull),
             AppEvent::SyncLines { peer, lines } => self.on_sync_lines(peer, &lines),
+            AppEvent::SyncReplies { peer, replies } => self.on_sync_replies(peer, &replies),
             AppEvent::SyncRead { peer, read } => self.on_sync_read(peer, read),
             AppEvent::Succession { peer, doc } => self.on_succession(peer, &doc),
             AppEvent::ChatAck {

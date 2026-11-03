@@ -44,6 +44,10 @@ pub const SYNC_PULL_TAG: u8 = 6;
 pub const SYNC_LINES_TAG: u8 = 7;
 /// 읽음 동기 태그(5~7은 예약분 · 8~19 사용 중 다음 빈 번호).
 pub const SYNC_READ_TAG: u8 = 20;
+/// ★ 답장 참조 동반 프레임(REPLY-1 ② · 11-04) — `SyncLines`(태그 7)는 길이 정확 일치 규약이라 줄에 꼬리를 붙일 수 없다 →
+/// **별도 프레임**으로 "이 줄(origin, seq)은 저 줄(ReplyRef)에 단 답장"을 뒤따라 보낸다. 구버전 형제는 모르는 태그를
+/// 버리고 줄만 받는다(종전 동작) · 신버전은 줄을 넣은 뒤 참조를 덧붙인다. 협상 없음 = 양방향 전방 호환.
+pub const SYNC_REPLIES_TAG: u8 = 21;
 
 /// 스레드당 따라잡기 줄 상한 **기본값**(D-32-4 "스레드당 200줄" · 설정 `user.sync_lines`).
 pub const SYNC_LINES_MAX: usize = 200;
@@ -330,6 +334,87 @@ impl SyncLines {
     }
 }
 
+/// 답장 참조 동반 프레임: `tag ‖ thread 32 ‖ n u16 ‖ item×n` ·
+/// item = `origin 32 ‖ seq 8 ‖ ref_origin 32 ‖ ref_seq 8 ‖ quote_len u16 ‖ quote`(참조부 = [`crate::ReplyRef`] 와이어 그대로).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SyncReplies {
+    /// 스레드(저장 키).
+    pub thread: PeerId,
+    /// (줄 열쇠 origin, 줄 seq, 그 줄의 답장 참조).
+    pub items: Vec<(PeerId, u64, crate::ReplyRef)>,
+}
+
+impl SyncReplies {
+    const HEADER: usize = 35;
+
+    fn item_len(r: &crate::ReplyRef) -> usize {
+        32 + 8 + 32 + 8 + 2 + r.quote.len().min(crate::REPLY_QUOTE_MAX_CHARS * 4)
+    }
+
+    /// 인코딩 — `max_bytes` 안에 들어가게 여러 프레임으로(줄 상한은 [`SYNC_LINES_HARD_MAX`]와 같이).
+    #[must_use]
+    pub fn encode_frames(&self, max_bytes: usize) -> Vec<Vec<u8>> {
+        let items = &self.items[..self.items.len().min(SYNC_LINES_HARD_MAX)];
+        let mut out = Vec::new();
+        let mut start = 0usize;
+        let mut size = Self::HEADER;
+        for (i, (_, _, r)) in items.iter().enumerate() {
+            let s = Self::item_len(r);
+            if i > start && size + s > max_bytes {
+                out.push(Self::encode_slice(self.thread, &items[start..i]));
+                start = i;
+                size = Self::HEADER;
+            }
+            size += s;
+        }
+        if start < items.len() {
+            out.push(Self::encode_slice(self.thread, &items[start..]));
+        }
+        out
+    }
+
+    fn encode_slice(thread: PeerId, items: &[(PeerId, u64, crate::ReplyRef)]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(Self::HEADER + items.len() * 96);
+        out.push(SYNC_REPLIES_TAG);
+        out.extend_from_slice(thread.as_bytes());
+        #[allow(clippy::cast_possible_truncation)] // ≤ SYNC_LINES_HARD_MAX
+        out.extend_from_slice(&(items.len() as u16).to_be_bytes());
+        for (origin, seq, r) in items {
+            out.extend_from_slice(origin.as_bytes());
+            out.extend_from_slice(&seq.to_be_bytes());
+            r.encode_into(&mut out);
+        }
+        out
+    }
+
+    /// 디코딩 — 태그·길이 정확 일치 · 항목 수 상한 · seq 0 거부.
+    #[must_use]
+    pub fn decode(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() < Self::HEADER || bytes[0] != SYNC_REPLIES_TAG {
+            return None;
+        }
+        let thread = PeerId::from_bytes(bytes[1..33].try_into().ok()?);
+        let n = usize::from(u16::from_be_bytes([bytes[33], bytes[34]]));
+        if n > SYNC_LINES_HARD_MAX {
+            return None;
+        }
+        let mut p = Self::HEADER;
+        let mut items = Vec::with_capacity(n);
+        for _ in 0..n {
+            let origin = PeerId::from_bytes(bytes.get(p..p + 32)?.try_into().ok()?);
+            let seq = u64::from_be_bytes(bytes.get(p + 32..p + 40)?.try_into().ok()?);
+            if seq == 0 {
+                return None;
+            }
+            p += 40;
+            let (r, used) = crate::ReplyRef::decode_from(bytes.get(p..)?).ok()?;
+            p += used;
+            items.push((origin, seq, r));
+        }
+        (p == bytes.len()).then_some(Self { thread, items })
+    }
+}
+
 /// 읽음 동기 프레임: `tag ‖ thread 32 ‖ upto_at_ms 8` — "이 스레드를 `upto_at_ms`까지 봤다".
 /// 받는 쪽은 그 시각 이하의 수신 줄을 읽음으로 보고 안읽음을 걷는다(더 새 줄이 있으면 그만큼 남긴다).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -510,6 +595,44 @@ mod tests {
 
     fn pid(b: u8) -> PeerId {
         PeerId::from_bytes([b; 32])
+    }
+
+    /// ★ REPLY-1 ②(11-04): 답장 참조 동반 프레임 왕복 · 바이트 상한 분할 · seq 0·꼬리 바이트 거부 · 다른 태그 거부.
+    #[test]
+    fn sync_replies_round_trip_split_and_reject() {
+        let r = |n: u64| crate::ReplyRef::new(pid(9), n, "원본 발췌 글");
+        let m = SyncReplies {
+            thread: pid(1),
+            items: (1..=5u64).map(|i| (pid(2), i, r(i))).collect(),
+        };
+        let one = m.encode_frames(1 << 16);
+        assert_eq!(one.len(), 1);
+        assert_eq!(SyncReplies::decode(&one[0]), Some(m.clone()));
+        // 작은 상한 = 항목마다 한 프레임 · 합치면 원본.
+        let many = m.encode_frames(SyncReplies::HEADER + 100);
+        assert_eq!(many.len(), 5);
+        let back: Vec<_> = many
+            .iter()
+            .flat_map(|f| SyncReplies::decode(f).unwrap().items)
+            .collect();
+        assert_eq!(back, m.items);
+        // 거부: seq 0 · 꼬리 1바이트 · 다른 태그.
+        let zero = SyncReplies {
+            thread: pid(1),
+            items: vec![(pid(2), 0, r(1))],
+        };
+        assert_eq!(SyncReplies::decode(&zero.encode_frames(1 << 16)[0]), None);
+        let mut tail = one[0].clone();
+        tail.push(0);
+        assert_eq!(SyncReplies::decode(&tail), None);
+        let mut other = one[0].clone();
+        other[0] = SYNC_LINES_TAG;
+        assert_eq!(SyncReplies::decode(&other), None);
+        assert_eq!(
+            SyncLines::decode(&other),
+            None,
+            "줄 프레임 해석기도 거부(길이 불일치)"
+        );
     }
 
     #[test]

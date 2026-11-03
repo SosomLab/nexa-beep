@@ -42,7 +42,8 @@ seed s4-y1 s4y1 s4test-y
 
 echo "▶ ① Y1·X1 기동 — Y1: 12s 연결·16s 창·20s 송신 / X1: 24s 창·28s 답장 / ④ 58s y1-later · 62s x1-later / 70s dump · 74s quit"
 run s4-y1 "12000:activate=s4x1;16000:activate=s4x1;20000:send=y1-hello;58000:send=y1-later;70000:dump;74000:quit" "$OUT/y1.log"
-run s4-x1 "24000:activate=s4y1;28000:send=x1-reply;62000:send=x1-later;65000:activate=s4y1;70000:dump;74000:quit" "$OUT/x1.log"
+# 28s = `reply=`(11-04 REPLY-1 ② — y1-hello에 단 답장 · 따라잡기에 참조가 동반되는지 X2 dump로 본다).
+run s4-x1 "24000:activate=s4y1;28000:reply=x1-reply;62000:send=x1-later;65000:activate=s4y1;70000:dump;74000:quit" "$OUT/x1.log"
 sleep 36
 echo "▶ ② X2 기동(t=36s) — 형제 성립·따라잡기 → ④ 기기 전부 팬아웃·sender copy·활성 창 읽음 동기 → 30s dump · 32s quit"
 run s4-x2 "30000:dump;32000:quit" "$OUT/x2-a.log"
@@ -70,6 +71,12 @@ chk "X2: 디제스트 수신 → 청구 2건"                 "$OUT/x2-a.log" 's
 chk "X1: 라인 응답 2회(origin Y1 · origin X1)"     "$OUT/x1.log"   'sync lines to .* n=1' 2
 chk "X2: 라인 수신 2회(added=1)"                   "$OUT/x2-a.log" 'sync lines from .* added=1' 2
 chk "X2: 읽음 동기(unread 1->0)"                  "$OUT/x2-a.log" 'sync read from .* unread 1->0'
+# ★ REPLY-1 ②(11-04): 답장 줄의 참조가 따라잡기(태그 21 동반 프레임)로 건너가 X2에 붙고 재기동 뒤에도 남는다.
+chk "X1 답장 줄 = 참조(Y1#seq)+발췌(y1-hello)"       "$OUT/x1.log"   'thread .* mine=true .* text=x1-reply reply=[0-9a-f]{8}#[1-9][0-9]*:y1-hello'
+chk "X1: 라인 응답에 답장 참조 동반(replies=1)"       "$OUT/x1.log"   'sync lines to .* replies=1'
+chk "X2: 답장 참조 수신 applied=1"                  "$OUT/x2-a.log" 'sync replies from .* applied=1'
+chk "X2 dump: 따라잡은 x1-reply에 참조 동반"         "$OUT/x2-a.log" 'thread .* mine=true .* text=x1-reply reply=[0-9a-f]{8}#[1-9][0-9]*:y1-hello'
+chk "X2 재기동 dump: 답장 참조 복원(기록 tag 7)"     "$OUT/x2-b.log" 'thread .* text=x1-reply reply=[0-9a-f]{8}#[1-9][0-9]*:y1-hello'
 chk "X2 dump: y1-hello(상대 줄 · origin=Y1)"      "$OUT/x2-a.log" 'thread .* mine=false from=s4y1 origin=[0-9a-f]{8} seq=[1-9][0-9]* text=y1-hello'
 chk "X2 dump: x1-reply(내 줄 · origin=X1)"        "$OUT/x2-a.log" 'thread .* mine=true .* origin=[0-9a-f]{8} seq=[1-9][0-9]* text=x1-reply'
 chk "X2 dump: Y1 행 안읽음 0"                      "$OUT/x2-a.log" 'peer .* name=s4y1 .* unread=0'

@@ -81,7 +81,7 @@ impl ReplyRef {
         }
     }
 
-    fn encode_into(&self, out: &mut Vec<u8>) {
+    pub(crate) fn encode_into(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(self.origin.as_bytes());
         out.extend_from_slice(&self.seq.to_be_bytes());
         let q = self.quote.as_bytes();
@@ -92,7 +92,7 @@ impl ReplyRef {
     }
 
     /// `[origin 32 ‖ seq 8 ‖ quote_len u16 ‖ quote]`를 읽고 (참조, 소비 길이).
-    fn decode_from(b: &[u8]) -> Result<(Self, usize), WireError> {
+    pub(crate) fn decode_from(b: &[u8]) -> Result<(Self, usize), WireError> {
         if b.len() < PeerId::LEN + 8 + 2 {
             return Err(WireError::Truncated);
         }
