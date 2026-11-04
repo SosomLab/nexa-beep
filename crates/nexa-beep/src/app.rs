@@ -9131,6 +9131,7 @@ impl App {
                         match &msg.body {
                             nbeep_core::MessageBody::Text(t)
                             | nbeep_core::MessageBody::Reply { text: t, .. } => t.chars().count(),
+                            nbeep_core::MessageBody::Unsupported(_) => 0,
                         },
                     )
                     .arg("grade", grade)
