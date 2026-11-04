@@ -7,6 +7,7 @@
 
 ## 2026-11-04
 
+- **(Win · main) ★PERF-4 완료**(`b8c948d` — `tools/startup-bench.sh` 릴리스 콜드/웜 5회 · 콜드 중앙값 **245ms** · 웜 **56ms** · NFR-B-11 500ms 안 · `verify.sh --perf`). [journal](journal/2026-11-04.md)
 - **(Win · main) ★GINV-1 S4 = 그룹 초대 생애주기 S1~S4 완결**(`338e06e` — `DeclineV2{hard}` kind 11 · groups.seg v6 차단한 초대 · 소유자 "재초대 불가" · 해제 = 임시 고급 › 그룹 초대 › 차단한 초대 보기…(38 BL 때 통합) · group-scenario **28/28**) · CI 41760196052 rustdoc 대괄호 실패(세 번째 같은 결) → 같은 커밋에서 수정. [journal](journal/2026-11-04.md)
 - **(Win · main) ★GINV-1 S3**(`9759780` — 초대 카드 3택 [나중에][거절][수락] · "다시 받지 않기" · 거절 5초 실행 취소 · group-scenario **22/22**) · S2 fmt 수정(`ece7278`). [journal](journal/2026-11-04.md)
 - **(Win · main) ★GINV-1 S2**(`563cd6e` — 재초대 24h 제한 · 초대 만료 7일 틱 · 거절 메모 보존 · 설정 › 고급 › 그룹 초대 3항목 · groups.seg v5 · 동사 group.reinvite/expire · group-scenario **21/21**). [journal](journal/2026-11-04.md)
