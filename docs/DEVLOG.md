@@ -7,6 +7,7 @@
 
 ## 2026-11-04
 
+- **(Win · main) ★그룹 스크립트 동사 + `tools/group-scenario.sh` 10/10**(`f541301` — group.create/accept/send/reply · dump 그룹 줄 · 메뉴 "로그" · REPLY-1 ① 방 답장 자동 ✓ · GINV-1 S1 재기동 보존 실측 ✓ · verify.sh 기본 단계 합류). [journal](journal/2026-11-04.md)
 - **(Win · main) ★LOG-1 로그 창**(`d17a651` — 링 2000줄 · 검색 AND · 바닥 따라가기 · 복사 · `log.window` · `open=log`) · **스크립트 실행 자동화**(`e0583ae` — `tools/verify.sh` 한 명령 · `--quick` 4/0 · 권한 병합 `tools/claude-permissions.py` = 사용자 1회 실행 · ⚠ 일부 규칙 범위 과대). [journal](journal/2026-11-04.md)
 - **(Win · main) REPLY-1 ⑤ 구버전 평문 폴백 실물 실기 ✓**(`59bc4bd` — 0.6.1 포터블이 `┃ opy: 원본 글 하나`+본문 수신 · `reply_fallback=1` · send_text `chars` 답장 0 수정) · 상대 카드 "앱 버전" 행(`1aa39b5`) · capture 제목 불일치 오류 줄(`a79edde`) · CI 최종 run 41750315140 전 7 job ✓(Windows 러너 헤드리스 스모크 첫 ✓) · `56c4cfe` = 59bc4bd E0004 컴파일 실패 push 즉시 수정(교훈 = `clippy | grep | head` 종료 코드는 head 것). [journal](journal/2026-11-04.md)
 - **(Win · main) 코드 12건 + 설계 54**(개발 세션 코드·시험 · 기록 = 협업 세션) — 설정 창 하단 바 nexa-dir3 통일(`3878522`) · 답장 인용 라벨(`0bd88a7`) · ★구버전 답장 평문 폴백(`53a1a68` — 0.6.1이 답장 2건을 조용히 버린 결함) · REPLY-1 ② `SyncReplies` 태그 21(`d83c5ef` · s4 **24/24**) · ★GINV-1 S1 구성원 초대 상태 영속(`8409384` · [54](54-group-invite-lifecycle.md) 📐 재초대·거절·차단) · STALL-1 정체 감시(`3025843`) · LOG-2 전송 계측 6곳(`a187ca8`) · PERF-4 기동 트레이스(`ef47b3a` · Debug first_paint 361ms) · HL-1 헤드리스 Windows 합류(`7128731`·`887bb3b`·`b7cf2d3` · smoke PASS · reply 8/8) · tmp-clean 규칙(`9dafe59`) · PUB-1 = choco 0.6.0 3종 Approved(스위치 = 사용자 손) · winget #468844 설치 검증 오류. [journal](journal/2026-11-04.md)
