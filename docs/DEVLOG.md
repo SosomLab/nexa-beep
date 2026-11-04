@@ -7,6 +7,7 @@
 
 ## 2026-11-04
 
+- **(Win · main) i18n-1 잔여 소진**(`b37bcd2` — app.rs 한글 하드코딩 0 · Msg 신규 33 · 4개 언어). [journal](journal/2026-11-04.md)
 - **(Win · main) ★RL-10 유휴 바닥**(`141a4c7` — 마감 최솟값 WaitUntil · UDP 광고 100ms 쪼갬 폐지 · 헤드리스 유휴 60s CPU 703 → 141ms · avg_hz 5 → 1.08 · 시나리오 무영향) · 49 B-1·D-6 첫 실측 기입(D-6 ≈0.23% = 실화면 재측정 판정). [journal](journal/2026-11-04.md)
 - **(Win · main) RL-8 저장 멱등 가드 일습**(`b96ee93` + nexa-ui `364d2e0` — 재봉인·무조작 저장·동일값 dirty·부팅 무의미 쓰기·백업 이중 저장 제거 · 무조작 기동 `settings.cfg` mtime 불변). [journal](journal/2026-11-04.md)
 - **(Win · main) RL-7 1단 기록 저장 디바운스**(`2b64f67` — 20연타 봉인·쓰기 20 → 2) · **RL-13 자원 고갈 3종**(`9c24d36` — 핸드셰이크 상한 32 · accept 오류 휴식 · 종료 브릿지 1회·유휴 웨이크업 0). [journal](journal/2026-11-04.md)
