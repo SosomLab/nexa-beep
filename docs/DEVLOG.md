@@ -7,6 +7,7 @@
 
 ## 2026-11-04
 
+- **(Win · main) INS-6 ack 왕복 계측**(`9849c70` — `NEXA_ACK_TRACE` + `tools/ack-bench.sh`) · ⚠ 첫 실측 루프백 p50 158 · **p95 210ms = 49 F-1(≤50) ✗** · 원인 = 세션 액터 recv 100ms 폴 × 2홉 → **LAT-1 신설**(송수신 분리 · 11-05 첫 작업) · CI 41789163263 success. [journal](journal/2026-11-04.md)
 - **(Win · main) INS-8 아키텍처 단언**(`b2fcaea` — `tools/check-arch.py` · 의존 방향 + 포트 5파일 외부 참조 0 · gate.sh·CI lint · 49 M-1·M-2 ✅ · 49 미정 칸 8 → 2 · CI 41788506630 success = lint 라이선스·아키텍처 두 단계 첫 완주). [journal](journal/2026-11-04.md)
 - **(Win · main) INS-7 평문 스캐너**(`78c5e60` — `tools/scan-plaintext.sh` · 헤더 매직·금칙 문자열·0600 · verify.sh 단계 · rp-x 4·mb-y 8 봉인 PASS · 49 J-3·J-5 ✅). [journal](journal/2026-11-04.md)
 - **(Win · main) INS-1 mac/Linux 임포트 화이트리스트**(`cc0db39` — CI 첫 실행 Linux·mac PASS · 49 A-3 3-OS ✅) · **INS-5 상주 샘플러**(`0edef5b` — `tools/inspect-sample.sh` · 설치본 0.7.0 private 2.28MB · CPU 0.276% · M5-5 24h 수단). [journal](journal/2026-11-04.md)
