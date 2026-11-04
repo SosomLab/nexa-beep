@@ -7166,6 +7166,18 @@ impl App {
                         Some((p, t)) => (p.trim(), Some(t.trim().to_lowercase())),
                         None => (spec.trim(), None),
                     };
+                    // 제목 조각이 어느 창에도 안 맞으면 바로 말한다(11-04 협업 세션 실기 — `@settings`(역할 이름)가 오류
+                    //   줄 없이 아무것도 만들지 않았다). 요청은 그대로 둔다(뒤에 열릴 수도 있다).
+                    if let Some(t) = &title {
+                        let titles: Vec<String> =
+                            self.windows.values().map(|e| e.window.title()).collect();
+                        if !titles.iter().any(|w| w.to_lowercase().contains(t.as_str())) {
+                            eprintln!(
+                                "[capture] {path}: no window whose title contains '{t}' — open: {}",
+                                titles.join(" | ")
+                            );
+                        }
+                    }
                     self.capture_req = Some((std::path::PathBuf::from(path), title));
                     for e in self.windows.values() {
                         e.window.request_redraw(); // 보이는 창 = OS 경로 · 헤드리스 = about_to_wait가 그린다
