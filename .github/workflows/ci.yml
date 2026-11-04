@@ -47,6 +47,8 @@ jobs:
         run: cargo clippy --workspace --all-targets --features nbeep-core/testkit,nbeep-net/testkit,nbeep-crypto/testkit
       - name: rustdoc (링크 검증)
         run: cargo doc --workspace --no-deps --features nbeep-core/testkit,nbeep-net/testkit,nbeep-crypto/testkit
+      - name: 라이선스 게이트(DR-12 · INS-2 — GPL/LGPL/AGPL 금지 · Cargo.lock 그대로)
+        run: python3 tools/check-licenses.py
 
   # ── 테스트: 네이티브 3-OS(중립 크레이트 4타깃 검증의 실행부) ──
   test:
