@@ -89,7 +89,7 @@
 |---|---|---|
 | 1 | **PUB-1 choco 0.7.0** — 0.6.0 3종(nexa-beep · portable · beepd 0.2.6) **Approved 11-04** → `CHOCO_PUSH=true` + `-f tag=v0.7.0` dispatch | ⏸ 스위치 = **사용자 손**(개발 세션 분류기 차단) |
 | 2 | **PUB-1 winget 0.7.0** — 포터블 #468846 MERGED · 설치본 #468844 = `Validation-Installation-Error`·`Needs-Author-Feedback`(0.6.0→0.6.1 packaging 무변경 · 원인 불명) | 🔍 조사 중 · 0.7.0 재제출 권고 |
-| 2-1 | **사용자 손 = `python tools/claude-permissions.py` 1회**(`e0583ae` · `.claude/settings.json` allow 30건 병합 · 세션은 자기 권한 파일 수정 불가) — ⚠ 협업 세션 검토 — 규칙 30건 중 `Bash(bash:*)`·`Bash(sh:*)`·`Bash(env:*)`·`Bash(xargs:*)`·`Bash(timeout:*)`·`PowerShell(bash:*)`는 `tools/*.sh`에 한정되지 않고 **임의 명령을 묻지 않고 허용**하는 것과 같다 → 실행 전 범위 축소 검토(예: `Bash(bash tools/:*)`·`Bash(./tools/:*)`만) | ☐ 사용자 |
+| 2-1 | **사용자 손 = `python tools/claude-permissions.py` 1회**(`e0583ae` · `.claude/settings.json` allow 25건 병합 · 세션은 자기 권한 파일 수정 불가) — ✅ 범위 축소 완료 `466868d`(11-04 — 협업 세션 검토 반영: 임의 명령을 열던 `bash`·`sh`·`env`·`xargs`·`timeout`·`PowerShell(bash:*)` 제거 · tools/ 경로 접두 8 + 읽기 전용 보조 17 = 25건) · 잔여 위험 = 세션이 고친 tools/ 스크립트도 묻지 않고 돈다(스크립트 변경은 커밋 검토로 본다) | ☐ 사용자 |
 | 3 | **사람 실기** — PRES-1(2-PC 내 상태) · 2-PC U-11(S4 복원) · REPLY-1 · SET-1 · TRAY-1(Win/Linux) | ☐ 대행 불가 |
 | 4 | **HL-1 헤드리스 후속** — Linux `xvfb.sh` 첫 실기 | 🚧 Windows 로컬·CI 러너 스모크 ✓ · s4/perf 적용 ✓(11-04) |
 | 4-1 | **GINV-1 그룹 초대 생애주기** S2~S4 — [54](54-group-invite-lifecycle.md) | ⏸ S1 ✅ · 수치 4건 사용자 확정 대기 |
