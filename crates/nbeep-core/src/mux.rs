@@ -29,7 +29,7 @@
 //! **큐가 생기는 구조 자체를 없앴다.**
 
 use crate::identity::{PeerId, TrustLevel};
-use crate::session::{Session, SessionError};
+use crate::session::{RecvHalf, SendHalf, Session, SessionError, Splittable};
 use std::collections::VecDeque;
 
 /// 논리 스트림 번호. v1은 3종 — 추가는 뒤에 append(번호 불변).
@@ -142,13 +142,7 @@ impl<S: Session> MuxSession<S> {
     /// # Errors
     /// [`MAX_PAYLOAD`] 초과면 [`SessionError::TooLarge`], 링크 종료면 [`SessionError::Closed`].
     pub fn send(&mut self, stream: StreamId, message: &[u8]) -> Result<(), SessionError> {
-        if message.len() > MAX_PAYLOAD {
-            return Err(SessionError::TooLarge);
-        }
-        let mut frame = Vec::with_capacity(1 + message.len());
-        frame.push(stream.to_byte());
-        frame.extend_from_slice(message);
-        self.inner.send(&frame)
+        self.inner.send(&mux_frame(stream, message)?)
     }
 
     /// `stream`의 다음 메시지 수신(블로킹). 그 사이 도착한 **다른 스트림** 프레임은 큐에 쌓인다.
@@ -213,6 +207,100 @@ impl<S: Session> MuxSession<S> {
             };
             return Ok((id, frame));
         }
+    }
+
+    /// 송수신 분리(LAT-1 · [docs/55] §2-2) — 안쪽 세션이 분리되면 큐를 수신 반쪽이 이어받는다.
+    /// 분리 불가면 `Err(self)`(세션은 그대로 — 호출자가 단일 루프로 폴백).
+    ///
+    /// # Errors
+    /// 안쪽 링크가 핸들 복제를 못 하면 `Err(self)`.
+    #[allow(clippy::result_large_err)] // Err = 세션 자체(손상 없이 되돌려 줌)가 계약이다
+    pub fn split(self) -> Result<(MuxRecv, MuxSend), Self>
+    where
+        S: Splittable,
+    {
+        let Self { inner, queues } = self;
+        match inner.split() {
+            Ok((rx, tx)) => Ok((MuxRecv { inner: rx, queues }, MuxSend { inner: tx })),
+            Err(inner) => Err(Self { inner, queues }),
+        }
+    }
+}
+
+/// 스트림 바이트를 붙인 와이어 프레임(송신 공용).
+fn mux_frame(stream: StreamId, message: &[u8]) -> Result<Vec<u8>, SessionError> {
+    if message.len() > MAX_PAYLOAD {
+        return Err(SessionError::TooLarge);
+    }
+    let mut frame = Vec::with_capacity(1 + message.len());
+    frame.push(stream.to_byte());
+    frame.extend_from_slice(message);
+    Ok(frame)
+}
+
+/// 다중화 세션의 **수신 반쪽**(LAT-1) — 읽기 루프 전용. [`MuxSession::recv_any`]와 같은 규약
+/// (큐 선소진 · 미지 스트림 무시 · 빈 프레임 = 위반).
+pub struct MuxRecv {
+    inner: Box<dyn RecvHalf>,
+    queues: [VecDeque<Vec<u8>>; STREAMS],
+}
+
+impl core::fmt::Debug for MuxRecv {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("MuxRecv").finish_non_exhaustive()
+    }
+}
+
+impl MuxRecv {
+    /// 수신 폴 타임아웃(읽기 루프의 송신 교대용 — 이 반쪽에만 걸린다).
+    pub fn set_recv_timeout(&mut self, dur: Option<core::time::Duration>) {
+        self.inner.set_recv_timeout(dur);
+    }
+
+    /// **아무 스트림**의 다음 메시지 — [`MuxSession::recv_any`]와 같다.
+    ///
+    /// # Errors
+    /// 링크 종료 [`SessionError::Closed`] · 폴 타임아웃 [`SessionError::TimedOut`] · 빈 프레임
+    /// [`SessionError::Handshake`].
+    pub fn recv_any(&mut self) -> Result<(StreamId, Vec<u8>), SessionError> {
+        for s in StreamId::ALL {
+            if let Some(m) = self.queues[s.index()].pop_front() {
+                return Ok((s, m));
+            }
+        }
+        loop {
+            let mut frame = self.inner.recv()?;
+            let Some(&id_byte) = frame.first() else {
+                return Err(SessionError::Handshake);
+            };
+            frame.drain(..1);
+            let Some(id) = StreamId::from_byte(id_byte) else {
+                continue;
+            };
+            return Ok((id, frame));
+        }
+    }
+}
+
+/// 다중화 세션의 **송신 반쪽**(LAT-1) — `&self` · `Arc`로 쓰기 스레드와 파일 펌프가 공유한다.
+/// 순서 보장(암호화+송신 원자)은 안쪽 [`SendHalf`]가 진다.
+pub struct MuxSend {
+    inner: Box<dyn SendHalf>,
+}
+
+impl core::fmt::Debug for MuxSend {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("MuxSend").finish_non_exhaustive()
+    }
+}
+
+impl MuxSend {
+    /// `stream`으로 논리 메시지 하나 송신 — [`MuxSession::send`]와 같다.
+    ///
+    /// # Errors
+    /// [`MAX_PAYLOAD`] 초과면 [`SessionError::TooLarge`], 링크 종료면 [`SessionError::Closed`].
+    pub fn send(&self, stream: StreamId, message: &[u8]) -> Result<(), SessionError> {
+        self.inner.send(&mux_frame(stream, message)?)
     }
 }
 

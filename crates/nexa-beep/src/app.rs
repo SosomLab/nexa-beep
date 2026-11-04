@@ -802,6 +802,9 @@ enum SessionCmd {
     /// Group 스트림(M5-1g · ADR-0012)으로 보낼 인코딩된 `SGroupMsg` 프레임들.
     /// 구성·검증은 메인 몫(roster 소유자 확인 단일 지점) — 액터는 나르기만 한다.
     Group(Vec<Vec<u8>>),
+    /// (내부 · LAT-1) 쓰기 스레드의 송신 실패 — 읽기 루프가 `Closed`를 **한 번만** 내고 끝낸다
+    /// (쓰기 스레드가 직접 내면 재수립된 새 대화를 늦은 `Closed`가 대피시킬 수 있다). 메인은 보내지 않는다.
+    WriterFailed,
 }
 
 /// 연결 시도 래치(M2-8 중복 클릭 가드) — **넣은 키로 뺀다.**
@@ -1338,11 +1341,88 @@ fn xfer_now_ms() -> u64 {
     }
 }
 
+/// 세션 액터의 입출력(LAT-1 · [docs/55]) — 링크가 분리되면(TCP·인메모리) 송신 반쪽을 쓰기 스레드와
+/// **공유**하고, 못 하면(UDP·릴레이) 종전처럼 세션 하나를 액터가 독점한다. 액터 본문은 둘을 구분하지
+/// 않는다(같은 세 메서드).
+enum ActorIo {
+    Split {
+        rx: nbeep_core::mux::MuxRecv,
+        tx: std::sync::Arc<nbeep_core::mux::MuxSend>,
+    },
+    Whole(Box<LiveSession>),
+}
+
+impl ActorIo {
+    fn send(
+        &mut self,
+        stream: nbeep_core::mux::StreamId,
+        message: &[u8],
+    ) -> Result<(), nbeep_core::SessionError> {
+        match self {
+            Self::Split { tx, .. } => tx.send(stream, message),
+            Self::Whole(s) => s.send(stream, message),
+        }
+    }
+    fn recv_any(
+        &mut self,
+    ) -> Result<(nbeep_core::mux::StreamId, Vec<u8>), nbeep_core::SessionError> {
+        match self {
+            Self::Split { rx, .. } => rx.recv_any(),
+            Self::Whole(s) => s.recv_any(),
+        }
+    }
+    fn set_recv_timeout(&mut self, dur: Option<std::time::Duration>) {
+        match self {
+            Self::Split { rx, .. } => rx.set_recv_timeout(dur),
+            Self::Whole(s) => s.set_recv_timeout(dur),
+        }
+    }
+}
+
+/// 쓰기 스레드(LAT-1 · [docs/55] §2-4) — 대화·제어·그룹 프레임은 **즉시** 송신 반쪽으로 내보내고,
+/// 파일 상태(inbox·펌프)를 만지는 명령은 읽기 루프(액터)에 넘긴다. 종전엔 메인이 큐에 넣은 Chat·ack가
+/// 액터의 recv 폴 타임아웃(유휴 100ms)이 끝나야 나가 루프백 왕복이 p95 210ms였다(INS-6).
+/// 종료: `out_tx`가 떨어지면(대화 닫힘) 이 스레드가 끝나며 `actor_tx`도 떨어져 읽기 루프가 끝난다 ·
+/// 송신 실패면 [`SessionCmd::WriterFailed`]를 액터에 넘겨 `Closed`는 액터 한 곳이 낸다.
+fn spawn_session_writer(
+    out_rx: std::sync::mpsc::Receiver<SessionCmd>,
+    actor_tx: std::sync::mpsc::Sender<SessionCmd>,
+    tx: std::sync::Arc<nbeep_core::mux::MuxSend>,
+) {
+    use nbeep_core::mux::StreamId;
+    std::thread::spawn(move || {
+        while let Ok(cmd) = out_rx.recv() {
+            let sent = match cmd {
+                SessionCmd::Chat(bytes) => tx.send(StreamId::Chat, &bytes),
+                SessionCmd::Control(frames) => frames
+                    .iter()
+                    .try_for_each(|f| tx.send(StreamId::Control, f)),
+                SessionCmd::Group(frames) => {
+                    frames.iter().try_for_each(|f| tx.send(StreamId::Group, f))
+                }
+                other => {
+                    if actor_tx.send(other).is_err() {
+                        return; // 읽기 루프가 먼저 끝났다
+                    }
+                    Ok(())
+                }
+            };
+            if sent.is_err() {
+                let _ = actor_tx.send(SessionCmd::WriterFailed);
+                return;
+            }
+        }
+    });
+}
+
 /// 세션 액터 — 세션을 전용 스레드로 옮겨 **수신(GUI로 프록시)과 송신(채널)을 교대**한다.
-/// snow `TransportState`가 read/write에 `&mut`를 요구해 한 세션은 한 스레드가 소유해야
-/// 하므로, 송신은 채널로 요청받는 액터 모델이 정석이다.
+/// ★ LAT-1(11-05): 링크가 분리되면 송신은 별도 쓰기 스레드([`spawn_session_writer`])가 즉시
+/// 내보내고 이 루프는 수신·파일 펌프·파일 상태 명령만 돈다. 수신 폴(유휴 100ms · 전송 중 1ms)은
+/// 그대로다 — 파일 상태 명령(Offer·Accept·Cancel…)은 이 루프가 깨어나야 처리되는데 블로킹
+/// recv를 깨울 이식성 있는 수단이 없고, 100ms는 그 명령들엔 종전과 같은 지연이다(사용자 체감 밖).
+/// 분리 불가 링크(UDP·릴레이)는 종전 단일 루프 그대로(`ActorIo::Whole`).
 fn spawn_session_actor(
-    mut session: LiveSession,
+    live: LiveSession,
     out_rx: std::sync::mpsc::Receiver<SessionCmd>,
     proxy: winit::event_loop::EventLoopProxy<AppEvent>,
     send_rate: nbeep_core::RateLimit,
@@ -1351,7 +1431,16 @@ fn spawn_session_actor(
 ) -> std::thread::JoinHandle<()> {
     use nbeep_core::mux::StreamId;
     use nbeep_core::{XferInbox, XferMsg};
-    let peer = session.peer();
+    let peer = live.peer();
+    let (mut session, out_rx) = match live.split() {
+        Ok((rx, tx)) => {
+            let tx = std::sync::Arc::new(tx);
+            let (actor_tx, actor_rx) = std::sync::mpsc::channel();
+            spawn_session_writer(out_rx, actor_tx, std::sync::Arc::clone(&tx));
+            (ActorIo::Split { rx, tx }, actor_rx)
+        }
+        Err(whole) => (ActorIo::Whole(Box::new(whole)), out_rx),
+    };
     // 수신 폴 타임아웃 — recv가 100ms마다 TimedOut으로 돌아와 송신과 교대한다.
     session.set_recv_timeout(Some(std::time::Duration::from_millis(100)));
     std::thread::spawn(move || {
@@ -1572,6 +1661,7 @@ fn spawn_session_actor(
                                 &XferMsg::Reject { id, why, limit: 0 }.encode(),
                             )
                         }
+                        SessionCmd::WriterFailed => Err(nbeep_core::SessionError::Closed),
                         SessionCmd::Control(frames) => {
                             let mut r = Ok(());
                             for f in frames {
@@ -2992,7 +3082,7 @@ fn archive_listing_body(bytes: &[u8]) -> String {
 fn xfer_step(
     bytes: &[u8],
     peer: PeerId,
-    session: &mut LiveSession,
+    session: &mut ActorIo,
     inbox: &mut nbeep_core::XferInbox,
     outgoing: &mut HashMap<nbeep_core::XferId, (std::path::PathBuf, u64)>,
     sending: &mut Option<ActiveSend>,

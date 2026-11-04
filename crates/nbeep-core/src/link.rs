@@ -50,6 +50,14 @@ pub trait Link: Send {
     fn remote_ip(&self) -> Option<std::net::IpAddr> {
         None
     }
+
+    /// **송신 핸들 분리**(LAT-1 · [docs/55] §2-3) — 같은 연결의 두 번째 핸들을 돌려준다. 그 뒤
+    /// `self`는 **수신 전용**, 돌려준 것은 **송신 전용**으로 쓴다(둘 다 `Link`지만 역할을 나눈다 ·
+    /// 수신 타임아웃은 `self`에만 건다). 핸들을 복제할 수 없는 링크는 `None` = 호출자가 종전
+    /// 단일 루프로 폴백한다(기본 — UDP·릴레이·fake).
+    fn split_send(&mut self) -> Option<Box<dyn Link>> {
+        None
+    }
 }
 
 impl Link for Box<dyn Link> {
@@ -67,5 +75,8 @@ impl Link for Box<dyn Link> {
     }
     fn remote_ip(&self) -> Option<std::net::IpAddr> {
         (**self).remote_ip()
+    }
+    fn split_send(&mut self) -> Option<Box<dyn Link>> {
+        (**self).split_send()
     }
 }

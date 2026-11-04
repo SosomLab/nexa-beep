@@ -49,6 +49,7 @@ step "scan-plaintext" scan.log bash tools/scan-plaintext.sh "${BEEP_MULTI:-$HOME
 if [ "$QUICK" = 0 ]; then
   step "group-scenario" group.log bash tools/group-scenario.sh
   step "s4-scenario" s4.log bash tools/s4-scenario.sh
+  step "ack-bench" ack.log bash tools/ack-bench.sh "$OUT/ack"
   [ "$PERF" = 1 ] && step "perf-scenario" perf.log bash tools/perf-scenario.sh "$OUT/perf"
   [ "$PERF" = 1 ] && step "startup-bench" startup.log bash tools/startup-bench.sh "$OUT/startup"
   [ "$PERF" = 1 ] && step "scroll-bench" scroll.log bash tools/scroll-bench.sh "$OUT/scroll"

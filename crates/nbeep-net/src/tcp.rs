@@ -129,6 +129,17 @@ impl Link for TcpLink {
     fn remote_ip(&self) -> Option<std::net::IpAddr> {
         self.stream.peer_addr().ok().map(|a| a.ip())
     }
+
+    /// 송신 핸들 분리(LAT-1 · [docs/55] §2-3) — `TcpStream::try_clone`(Unix `dup` · Windows
+    /// `WSADuplicateSocket`)으로 같은 소켓의 두 번째 핸들. 수신 타임아웃(`SO_RCVTIMEO`)은 원래
+    /// 핸들(rx)에만 걸고 이쪽은 쓰지 않는다 — 쓰기 타임아웃 30s는 소켓 공유 옵션이라 그대로다.
+    fn split_send(&mut self) -> Option<Box<dyn Link>> {
+        let stream = self.stream.try_clone().ok()?;
+        Some(Box::new(TcpLink {
+            stream,
+            recv_timeout: None,
+        }))
+    }
 }
 
 #[cfg(test)]
@@ -183,6 +194,40 @@ mod tests {
             best < Duration::from_millis(150),
             "20ms 설정이 200ms 고정 복원으로 덮이면 실패(최속 {best:?})"
         );
+        t.join().unwrap();
+    }
+
+    /// LAT-1 — 분리된 송신 핸들로 보낸 프레임이 상대에 닿고, 원래 핸들의 수신 타임아웃은
+    /// 송신 핸들의 `write_all`을 막지 않는다.
+    #[test]
+    fn split_send_handle_writes_while_rx_polls() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let t = std::thread::spawn(move || {
+            let (s, _) = listener.accept().unwrap();
+            let mut link = TcpLink::new(s).unwrap();
+            let m = link.recv().unwrap();
+            link.send(&m).unwrap(); // 에코
+        });
+        let mut rx = TcpLink::new(TcpStream::connect(addr).unwrap()).unwrap();
+        let mut tx = rx.split_send().expect("TCP는 분리된다");
+        rx.set_recv_timeout(Some(Duration::from_millis(20)))
+            .unwrap();
+        assert_eq!(rx.recv().err(), Some(LinkError::TimedOut), "데이터 전 폴");
+        tx.send(b"via tx handle").unwrap();
+        // 에코는 rx 핸들로 돌아온다(≤ 몇 ms · 폴 20ms 몇 번 안에).
+        let mut got = None;
+        for _ in 0..50 {
+            match rx.recv() {
+                Ok(m) => {
+                    got = Some(m);
+                    break;
+                }
+                Err(LinkError::TimedOut) => continue,
+                Err(e) => panic!("{e:?}"),
+            }
+        }
+        assert_eq!(got.as_deref(), Some(&b"via tx handle"[..]));
         t.join().unwrap();
     }
 

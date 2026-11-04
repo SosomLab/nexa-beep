@@ -9,9 +9,10 @@
 //! 기본 [`TrustLevel::Unverified`]다(핸드셰이크 성립 ≠ 신뢰 확정).
 
 use nbeep_core::link::Link;
-use nbeep_core::session::{Session, SessionError};
+use nbeep_core::session::{Halves, RecvHalf, SendHalf, Session, SessionError, Splittable};
 use nbeep_core::{PeerId, TrustLevel};
-use snow::{Builder, HandshakeState, TransportState};
+use snow::{Builder, HandshakeState, StatelessTransportState};
+use std::sync::{Arc, Mutex};
 
 /// Noise 프로토콜 파라미터([docs/08] — X25519 / ChaCha20-Poly1305 / BLAKE2s).
 const PARAMS: &str = "Noise_XX_25519_ChaChaPoly_BLAKE2s";
@@ -138,9 +139,17 @@ fn remote_peer(hs: &HandshakeState) -> Result<PeerId, SessionError> {
 }
 
 /// Noise_XX로 인증·암호화된 세션. `initiate`/`accept`로 수립한다.
+///
+/// 전송 상태는 **stateless 모드**(`StatelessTransportState` — read/write가 `&self` · nonce는 호출자가
+/// 센다). 단일 소유일 때는 `TransportState`와 동작이 같고(성공마다 +1), [`Self::split_halves`]로
+/// 송수신을 나눌 때 두 반쪽이 상태를 `Arc`로 공유할 수 있다(LAT-1 · [docs/55] §2-1).
 pub struct NoiseSession<L: Link> {
     link: L,
-    transport: TransportState,
+    transport: StatelessTransportState,
+    /// 송신 nonce — 암호화 성공마다 +1(분리 시 송신 반쪽이 이어받는다).
+    send_nonce: u64,
+    /// 수신 nonce — 복호 성공마다 +1(분리 시 수신 반쪽이 이어받는다).
+    recv_nonce: u64,
     peer: PeerId,
     /// 핸드셰이크 해시(Noise `h` 최종값) — 세션 뒤 증명(ADR-0015 형제 증명)의 채널 바인딩.
     hh: [u8; 32],
@@ -296,14 +305,137 @@ impl<L: Link> NoiseSession<L> {
             return Err(SessionError::SelfPeer);
         }
         let transport = hs
-            .into_transport_mode()
+            .into_stateless_transport_mode()
             .map_err(|_| SessionError::Handshake)?;
         Ok(Self {
             link,
             transport,
+            send_nonce: 0,
+            recv_nonce: 0,
             peer,
             hh,
             initiator,
+        })
+    }
+
+    /// 송수신 분리(LAT-1 · [docs/55] §2-1) — 링크가 송신 핸들을 복제해 주면 수신 반쪽(링크 rx +
+    /// recv nonce)과 송신 반쪽(링크 tx + 잠금 안의 send nonce)으로 나눈다. 전송 상태는 `Arc` 공유.
+    /// 링크가 분리를 못 하면 `Err(self)` — 세션은 손상 없이 그대로다.
+    ///
+    /// # Errors
+    /// [`Link::split_send`]가 `None`이면 `Err(self)`.
+    #[allow(clippy::result_large_err)] // Err = 세션 자체(손상 없이 되돌려 줌)가 계약이다
+    pub fn split_halves(mut self) -> Result<(NoiseRecv<L>, NoiseSend), Self> {
+        let Some(tx_link) = self.link.split_send() else {
+            return Err(self);
+        };
+        let transport = Arc::new(self.transport);
+        Ok((
+            NoiseRecv {
+                link: self.link,
+                transport: Arc::clone(&transport),
+                nonce: self.recv_nonce,
+            },
+            NoiseSend {
+                inner: Mutex::new((tx_link, self.send_nonce)),
+                transport,
+            },
+        ))
+    }
+}
+
+/// 암호화 한 번 — 상한 검사 포함(단일 소유·송신 반쪽 공용).
+fn seal(
+    transport: &StatelessTransportState,
+    nonce: u64,
+    message: &[u8],
+) -> Result<Vec<u8>, SessionError> {
+    if message.len() > NOISE_MAX - TAG_LEN {
+        return Err(SessionError::TooLarge); // 큰 메시지 청킹은 M4(파일 전송)
+    }
+    let mut out = vec![0u8; message.len() + TAG_LEN];
+    let n = transport
+        .write_message(nonce, message, &mut out)
+        .map_err(|_| SessionError::Closed)?;
+    out.truncate(n);
+    Ok(out)
+}
+
+/// 복호 한 번 — 상한 검사 포함(단일 소유·수신 반쪽 공용).
+fn open(
+    transport: &StatelessTransportState,
+    nonce: u64,
+    ciphertext: &[u8],
+) -> Result<Vec<u8>, SessionError> {
+    if ciphertext.len() > NOISE_MAX {
+        return Err(SessionError::TooLarge);
+    }
+    let mut out = vec![0u8; ciphertext.len()];
+    let n = transport
+        .read_message(nonce, ciphertext, &mut out)
+        .map_err(|_| SessionError::Closed)?;
+    out.truncate(n);
+    Ok(out)
+}
+
+/// [`NoiseSession`]의 **수신 반쪽**(LAT-1) — 링크의 원래 핸들 + recv nonce. 단일 소비자라 잠금 없음.
+pub struct NoiseRecv<L: Link> {
+    link: L,
+    transport: Arc<StatelessTransportState>,
+    nonce: u64,
+}
+
+impl<L: Link> core::fmt::Debug for NoiseRecv<L> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("NoiseRecv").finish_non_exhaustive()
+    }
+}
+
+impl<L: Link> RecvHalf for NoiseRecv<L> {
+    fn recv(&mut self) -> Result<Vec<u8>, SessionError> {
+        let ciphertext = self.link.recv()?;
+        let out = open(&self.transport, self.nonce, &ciphertext)?;
+        self.nonce += 1;
+        Ok(out)
+    }
+    fn set_recv_timeout(&mut self, dur: Option<core::time::Duration>) {
+        let _ = self.link.set_recv_timeout(dur);
+    }
+}
+
+/// [`NoiseSession`]의 **송신 반쪽**(LAT-1) — 복제된 링크 핸들 + send nonce를 **한 잠금** 안에 둔다.
+/// ★ 불변식: 암호화(nonce 소비)와 링크 송신을 같은 잠금 안에서 한다 → 와이어 순서 = nonce 순서.
+/// 쓰기 스레드와 파일 펌프가 동시에 보내도 상대 복호가 깨지지 않는다([docs/55] §2-1).
+pub struct NoiseSend {
+    inner: Mutex<(Box<dyn Link>, u64)>,
+    transport: Arc<StatelessTransportState>,
+}
+
+impl core::fmt::Debug for NoiseSend {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("NoiseSend").finish_non_exhaustive()
+    }
+}
+
+impl SendHalf for NoiseSend {
+    fn send(&self, message: &[u8]) -> Result<(), SessionError> {
+        let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let (link, nonce) = &mut *g;
+        let out = seal(&self.transport, *nonce, message)?;
+        *nonce += 1;
+        link.send(&out)?;
+        Ok(())
+    }
+}
+
+impl<L: Link + 'static> Splittable for NoiseSession<L> {
+    #[allow(clippy::result_large_err)]
+    fn split(self) -> Result<Halves, Self> {
+        self.split_halves().map(|(r, s)| {
+            (
+                Box::new(r) as Box<dyn RecvHalf>,
+                Box::new(s) as Box<dyn SendHalf>,
+            )
         })
     }
 }
@@ -323,15 +455,9 @@ impl<L: Link> Session for NoiseSession<L> {
     }
 
     fn send(&mut self, message: &[u8]) -> Result<(), SessionError> {
-        if message.len() > NOISE_MAX - TAG_LEN {
-            return Err(SessionError::TooLarge); // 큰 메시지 청킹은 M4(파일 전송)
-        }
-        let mut out = vec![0u8; message.len() + TAG_LEN];
-        let n = self
-            .transport
-            .write_message(message, &mut out)
-            .map_err(|_| SessionError::Closed)?;
-        self.link.send(&out[..n])?;
+        let out = seal(&self.transport, self.send_nonce, message)?;
+        self.send_nonce += 1;
+        self.link.send(&out)?;
         Ok(())
     }
 
@@ -341,15 +467,8 @@ impl<L: Link> Session for NoiseSession<L> {
 
     fn recv(&mut self) -> Result<Vec<u8>, SessionError> {
         let ciphertext = self.link.recv()?;
-        if ciphertext.len() > NOISE_MAX {
-            return Err(SessionError::TooLarge);
-        }
-        let mut out = vec![0u8; ciphertext.len()];
-        let n = self
-            .transport
-            .read_message(&ciphertext, &mut out)
-            .map_err(|_| SessionError::Closed)?;
-        out.truncate(n);
+        let out = open(&self.transport, self.recv_nonce, &ciphertext)?;
+        self.recv_nonce += 1;
         Ok(out)
     }
 }
@@ -359,6 +478,121 @@ mod tests {
     use super::*;
     use nbeep_core::testkit::duplex;
     use std::thread;
+
+    /// 분리 가능한 채널 링크(테스트 전용) — `split_send`는 송신 `Sender`를 복제한다.
+    struct SplitLink {
+        peer: PeerId,
+        tx: std::sync::mpsc::Sender<Vec<u8>>,
+        rx: std::sync::mpsc::Receiver<Vec<u8>>,
+    }
+    impl Link for SplitLink {
+        fn peer(&self) -> PeerId {
+            self.peer
+        }
+        fn send(&mut self, f: &[u8]) -> Result<(), nbeep_core::link::LinkError> {
+            self.tx
+                .send(f.to_vec())
+                .map_err(|_| nbeep_core::link::LinkError::Closed)
+        }
+        fn recv(&mut self) -> Result<Vec<u8>, nbeep_core::link::LinkError> {
+            self.rx
+                .recv()
+                .map_err(|_| nbeep_core::link::LinkError::Closed)
+        }
+        fn split_send(&mut self) -> Option<Box<dyn Link>> {
+            let (_dead, rx) = std::sync::mpsc::channel();
+            Some(Box::new(SplitLink {
+                peer: self.peer,
+                tx: self.tx.clone(),
+                rx,
+            }))
+        }
+    }
+
+    fn split_pair() -> (SplitLink, SplitLink) {
+        let (atx, brx) = std::sync::mpsc::channel();
+        let (btx, arx) = std::sync::mpsc::channel();
+        (
+            SplitLink {
+                peer: PeerId::from_bytes([2u8; 32]),
+                tx: atx,
+                rx: arx,
+            },
+            SplitLink {
+                peer: PeerId::from_bytes([1u8; 32]),
+                tx: btx,
+                rx: brx,
+            },
+        )
+    }
+
+    /// LAT-1 — 분리 뒤 두 스레드가 같은 송신 반쪽으로 **동시에** 보내도 상대가 전부 복호한다
+    /// (암호화+송신이 한 잠금 = 와이어 순서 = nonce 순서). 깨지면 `Closed`(복호 실패)가 난다.
+    #[test]
+    fn split_halves_keep_nonce_order_under_concurrent_send() {
+        let alice = Identity::generate();
+        let bob = Identity::generate();
+        let (la, lb) = split_pair();
+        let hb = thread::spawn(move || NoiseSession::accept(lb, &bob));
+        let a = NoiseSession::initiate(la, &alice).expect("a 수립");
+        let b = hb.join().unwrap().expect("b 수립");
+
+        // 분리 전 왕복 1회 — nonce가 0이 아닌 상태에서 이어받는지도 본다.
+        let mut a = a;
+        let mut b = b;
+        a.send(b"pre").unwrap();
+        assert_eq!(b.recv().unwrap(), b"pre");
+
+        let (mut a_rx, a_tx) = a.split_halves().expect("채널 링크는 분리된다");
+        let (mut b_rx, b_tx) = b.split_halves().expect("채널 링크는 분리된다");
+        let a_tx = Arc::new(a_tx);
+        const N: usize = 300;
+        let t1 = {
+            let tx = Arc::clone(&a_tx);
+            thread::spawn(move || {
+                for i in 0..N {
+                    tx.send(format!("p{i}").as_bytes()).unwrap();
+                }
+            })
+        };
+        let t2 = {
+            let tx = Arc::clone(&a_tx);
+            thread::spawn(move || {
+                for i in 0..N {
+                    tx.send(format!("q{i}").as_bytes()).unwrap();
+                }
+            })
+        };
+        t1.join().unwrap();
+        t2.join().unwrap();
+        let mut got = 0;
+        for _ in 0..(2 * N) {
+            let m = b_rx.recv().expect("순서 보장 = 전부 복호");
+            assert!(m.first().is_some_and(|c| *c == b'p' || *c == b'q'));
+            got += 1;
+        }
+        assert_eq!(got, 2 * N);
+        // 반대 방향도 산다(b의 반쪽).
+        b_tx.send(b"back").unwrap();
+        assert_eq!(a_rx.recv().unwrap(), b"back");
+    }
+
+    /// 분리 불가 링크(duplex fake)는 `Err(self)`로 돌아오고 세션은 그대로 쓸 수 있다(폴백).
+    #[test]
+    fn unsplittable_link_returns_session_intact() {
+        let alice = Identity::generate();
+        let bob = Identity::generate();
+        let (la, lb) = duplex(alice.peer_id(), bob.peer_id());
+        let hb = thread::spawn(move || NoiseSession::accept(lb, &bob));
+        let a = NoiseSession::initiate(la, &alice).expect("a 수립");
+        let mut b = hb.join().unwrap().expect("b 수립");
+        let mut a = match a.split_halves() {
+            Err(s) => s,
+            Ok(_) => panic!("duplex는 분리 불가여야 한다"),
+        };
+        a.send(b"still works").unwrap();
+        assert_eq!(b.recv().unwrap(), b"still works");
+    }
 
     #[test]
     fn handshake_authenticates_peers_and_encrypts() {

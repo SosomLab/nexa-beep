@@ -188,6 +188,16 @@ impl Link for InMemoryLink {
     fn recv(&mut self) -> Result<Vec<u8>, LinkError> {
         self.rx.recv().map_err(|_| LinkError::Closed)
     }
+    /// 송신 핸들 분리(LAT-1) — `Sender`는 복제된다. 돌려준 반쪽의 `recv`는 즉시 `Closed`
+    /// (송신 전용 계약 — 호출자는 그쪽으로 받지 않는다).
+    fn split_send(&mut self) -> Option<Box<dyn Link>> {
+        let (_dead, rx) = std::sync::mpsc::channel();
+        Some(Box::new(InMemoryLink {
+            peer: self.peer,
+            tx: self.tx.clone(),
+            rx,
+        }))
+    }
 }
 
 #[cfg(test)]

@@ -86,3 +86,40 @@ pub trait Session: Send {
         None
     }
 }
+
+/// 세션의 **수신 반쪽**(LAT-1 · [docs/55] §2) — 읽기 루프 하나만 들고 있다(잠금 없음 · recv nonce는
+/// 단일 소비자).
+pub trait RecvHalf: Send {
+    /// 논리 메시지 하나 수신(블로킹 · 구현이 복호).
+    ///
+    /// # Errors
+    /// 링크가 닫혔으면 [`SessionError::Closed`] · 폴 타임아웃이면 [`SessionError::TimedOut`].
+    fn recv(&mut self) -> Result<Vec<u8>, SessionError>;
+    /// 수신 폴 타임아웃 — [`Session::set_recv_timeout`]과 같다. 기본 no-op.
+    fn set_recv_timeout(&mut self, _dur: Option<core::time::Duration>) {}
+}
+
+/// 세션의 **송신 반쪽** — `&self`라 여러 스레드가 나눠 쓴다(쓰기 스레드 + 파일 펌프). 구현은
+/// **암호화와 링크 송신을 한 잠금 안에서** 해 와이어 순서 = nonce 순서를 지킨다(§2-1 불변식 —
+/// 깨지면 상대가 복호 실패로 세션을 끊는다).
+pub trait SendHalf: Send + Sync {
+    /// 논리 메시지 하나 송신(구현이 암호화).
+    ///
+    /// # Errors
+    /// 링크가 닫혔으면 [`SessionError::Closed`], 상한 초과면 [`SessionError::TooLarge`].
+    fn send(&self, message: &[u8]) -> Result<(), SessionError>;
+}
+
+/// 분리된 두 반쪽(수신 · 송신).
+pub type Halves = (Box<dyn RecvHalf>, Box<dyn SendHalf>);
+
+/// 송수신을 두 반쪽으로 나눌 수 있는 세션. 링크가 핸들 복제를 못 하면 `Err(self)`로 **그대로 돌려줘**
+/// 호출자가 단일 루프로 폴백한다(분리는 최적화 — 기능은 어느 쪽이든 같다).
+pub trait Splittable: Session + Sized {
+    /// 수신 반쪽·송신 반쪽으로 분리.
+    ///
+    /// # Errors
+    /// 분리 불가면 `Err(self)`(세션은 손상 없이 그대로).
+    #[allow(clippy::result_large_err)] // Err = 세션 자체(손상 없이 되돌려 줌)가 계약이다
+    fn split(self) -> Result<Halves, Self>;
+}

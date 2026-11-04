@@ -8,7 +8,7 @@
 //! **차단된 상대는 수립 자체가 실패**한다(fail-closed — [docs/13] §7).
 
 use crate::identity::{PeerId, TrustLevel};
-use crate::session::{Session, SessionError};
+use crate::session::{Halves, Session, SessionError, Splittable};
 use crate::trust::{TrustDecision, TrustStore};
 
 /// [`TrustedSession::wrap`]의 결과 — 세션과 **이번 수립의 신뢰 판정**.
@@ -78,6 +78,16 @@ impl<S: Session> Session for TrustedSession<S> {
     }
     fn handshake_binding(&self) -> Option<([u8; 32], bool)> {
         self.inner.handshake_binding()
+    }
+}
+
+/// 분리는 안쪽 세션에 위임(LAT-1) — 신뢰 판정은 수립 시점에 끝났고(`trust`는 메인이 이미 읽었다)
+/// 반쪽들은 바이트만 나른다. 실패면 래퍼를 **그대로 복원**해 돌려준다.
+impl<S: Splittable> Splittable for TrustedSession<S> {
+    #[allow(clippy::result_large_err)]
+    fn split(self) -> Result<Halves, Self> {
+        let trust = self.trust;
+        self.inner.split().map_err(|inner| Self { inner, trust })
     }
 }
 
