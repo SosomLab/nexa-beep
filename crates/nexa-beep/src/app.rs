@@ -7376,6 +7376,36 @@ impl App {
                         None => eprintln!("[script] send: 열린 대화 없음"),
                     }
                 }
+                // ★ 대량 발신(PERF-3 · 11-04): `send_n=<count>:<prefix>` — 한 단계에 N줄(환경변수 길이 상한 32K를 피한다 ·
+                //   2000줄 기록 스크롤 실측의 재료). 줄 = `<prefix>-<i>`.
+                Some(("send_n", spec)) => {
+                    let (n, prefix) = spec.split_once(':').unwrap_or((spec, "line"));
+                    let n: usize = n.trim().parse().unwrap_or(0).min(10_000);
+                    match self
+                        .single_open
+                        .or_else(|| self.chats.keys().next().copied())
+                    {
+                        Some(p) => {
+                            let t0 = std::time::Instant::now();
+                            for i in 1..=n {
+                                let mut inv = Invalidations::default();
+                                self.send_direct_text(
+                                    p,
+                                    nbeep_core::sanitize_message(&format!("{prefix}-{i}")),
+                                    0,
+                                    None,
+                                    &mut inv,
+                                );
+                            }
+                            self.redraw_conversation(p);
+                            eprintln!(
+                                "[script] send_n: {n} lines in {}ms",
+                                t0.elapsed().as_millis()
+                            );
+                        }
+                        None => eprintln!("[script] send_n: 열린 대화 없음"),
+                    }
+                }
                 None if step == "dump" => self.script_dump(),
                 None if step == "group.accept" => self.script_group_accept(), // 값 없는 동사(11-04)
                 None if step == "group.decline" => self.script_group_decline(),
