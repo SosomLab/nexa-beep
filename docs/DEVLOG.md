@@ -7,6 +7,7 @@
 
 ## 2026-11-04
 
+- **(Win · main) ★GINV-1 S2**(`563cd6e` — 재초대 24h 제한 · 초대 만료 7일 틱 · 거절 메모 보존 · 설정 › 고급 › 그룹 초대 3항목 · groups.seg v5 · 동사 group.reinvite/expire · group-scenario **21/21**). [journal](journal/2026-11-04.md)
 - **(Win · main) 그룹 동사 확장 + 시나리오 16/16**(`20b0098` — group.add/remove/decline · 거절 → 명부 제거 · 제외 → 방 닫힘 · S2~S4 회귀망) · ★**GINV-Q1~Q4 사용자 확정 → [54](54-group-invite-lifecycle.md) ✅ · DR-30**(`e432cc9`) · 권한 allow 25건 적용(`97f3245`). [journal](journal/2026-11-04.md)
 - **(Win · main) ★그룹 스크립트 동사 + `tools/group-scenario.sh` 10/10**(`f541301` — group.create/accept/send/reply · dump 그룹 줄 · 메뉴 "로그" · REPLY-1 ① 방 답장 자동 ✓ · GINV-1 S1 재기동 보존 실측 ✓ · verify.sh 기본 단계 합류). [journal](journal/2026-11-04.md)
 - **(Win · main) ★LOG-1 로그 창**(`d17a651` — 링 2000줄 · 검색 AND · 바닥 따라가기 · 복사 · `log.window` · `open=log`) · **스크립트 실행 자동화**(`e0583ae` — `tools/verify.sh` 한 명령 · `--quick` 4/0 · 권한 병합 `tools/claude-permissions.py` = 사용자 1회 실행 · ⚠ 일부 규칙 범위 과대). [journal](journal/2026-11-04.md)
