@@ -7,6 +7,8 @@
 
 ## 2026-11-04
 
+- **(Win · main) 마감 게이트** `tools/verify.sh` **8통과 0실패**(build 2 · headless-smoke · reply · scan-plaintext 첫 편입 · group 28/28 · s4 24/24 · tmp-clean · 정적 게이트는 CI 41790480737 녹색). [journal](journal/2026-11-04.md)
+- **(Win · main) INS-4 합성 부하**(`ed94933` — `NEXA_DEMO_PEERS` + `tools/load-bench.sh` · 릴리스 피어 500 휠 paint 2.58ms ✓ · 피어 100 private 26.1MB ✓ · 49 미정 칸 0) · 피어당 ≈0.15MB → **MEM-6 신설** · CI 41790480737 success · LAT-1 설계 = [55](55-lat1-session-actor-split.md) 📐. [journal](journal/2026-11-04.md)
 - **(Win · main) INS-6 ack 왕복 계측**(`9849c70` — `NEXA_ACK_TRACE` + `tools/ack-bench.sh`) · ⚠ 첫 실측 루프백 p50 158 · **p95 210ms = 49 F-1(≤50) ✗** · 원인 = 세션 액터 recv 100ms 폴 × 2홉 → **LAT-1 신설**(송수신 분리 · 11-05 첫 작업) · CI 41789163263 success. [journal](journal/2026-11-04.md)
 - **(Win · main) INS-8 아키텍처 단언**(`b2fcaea` — `tools/check-arch.py` · 의존 방향 + 포트 5파일 외부 참조 0 · gate.sh·CI lint · 49 M-1·M-2 ✅ · 49 미정 칸 8 → 2 · CI 41788506630 success = lint 라이선스·아키텍처 두 단계 첫 완주). [journal](journal/2026-11-04.md)
 - **(Win · main) INS-7 평문 스캐너**(`78c5e60` — `tools/scan-plaintext.sh` · 헤더 매직·금칙 문자열·0600 · verify.sh 단계 · rp-x 4·mb-y 8 봉인 PASS · 49 J-3·J-5 ✅). [journal](journal/2026-11-04.md)
