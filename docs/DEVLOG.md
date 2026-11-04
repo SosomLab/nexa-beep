@@ -7,6 +7,10 @@
 
 ## 2026-11-04
 
+- **(Win · main) INS-8 아키텍처 단언**(`b2fcaea` — `tools/check-arch.py` · 의존 방향 + 포트 5파일 외부 참조 0 · gate.sh·CI lint · 49 M-1·M-2 ✅ · 49 미정 칸 8 → 2 · CI 41788506630 success = lint 라이선스·아키텍처 두 단계 첫 완주). [journal](journal/2026-11-04.md)
+- **(Win · main) INS-7 평문 스캐너**(`78c5e60` — `tools/scan-plaintext.sh` · 헤더 매직·금칙 문자열·0600 · verify.sh 단계 · rp-x 4·mb-y 8 봉인 PASS · 49 J-3·J-5 ✅). [journal](journal/2026-11-04.md)
+- **(Win · main) INS-1 mac/Linux 임포트 화이트리스트**(`cc0db39` — CI 첫 실행 Linux·mac PASS · 49 A-3 3-OS ✅) · **INS-5 상주 샘플러**(`0edef5b` — `tools/inspect-sample.sh` · 설치본 0.7.0 private 2.28MB · CPU 0.276% · M5-5 24h 수단). [journal](journal/2026-11-04.md)
+- **(Win · main) INS-3 부팅 트레이스 5점**(`2fc3373` — 설정 로드·첫 피어 표식 · `NEXA_BOOT_TRACE=<파일>` · `tools/boot-trace.sh` · Win Debug 콜드 settings 464 · first_paint 557 · first_peer 1559ms · 49 B-1·B-3 ✅) · docs/18 §3 확인 요청 대원칙(`783178a`) · 남은 권한 규칙 2건(CLAUDE.md §3 · claude-permissions.py) = 사용자 적용 대기. [journal](journal/2026-11-04.md)
 - **(Win · main) INS-2 라이선스 게이트**(`017804e` — `tools/check-licenses.py` · `cargo metadata --locked` · 강한 카피레프트만이면 실패 · 의존성 298 · fail 0 · gate.sh·CI lint 단계 · 49 A-4 ✅ · CI 41786446376 success). [journal](journal/2026-11-04.md)
 - **(Win · main) PERF-9 발신 펌프 시간 예산**(`4e09634` — 틱당 4청크 고정 → 20ms 예산·64청크 상한 · 로컬 128MiB 릴리스 7.15 → **68.3MB/s**(peak 131)) · tmp-clean ④ 시험 신원 정리(`7cfc6db`) · 권한 규칙 3건 = 하네스 차단 → 사용자 적용 대기 · CI 41785825870 success. [journal](journal/2026-11-04.md)
 - **(Win · main) PERF-5 회수 4점·누수 기울기**(`48882c9` — `tools/mem-bench.sh` · 256MiB 송수신 뒤 WS-Private 회수 X −0.07 / Y +0.54MB ✓) · ⚠ 수신 피크 = 파일 ×2(M4-12 근거) · 로컬 전송 3.7MB/s(PERF-9 신설). [journal](journal/2026-11-04.md)

@@ -58,7 +58,7 @@
 | --- | --- | --- | --- | --- | --- | --- |
 | A-1 | 포터블 단일 실행 파일 크기 | CI `budget` 잡 · 로컬 `ls -l target/release/nexa-beep*` | **G** ≤10MB(NFR-B-3) · 목표 5MB · 실측 09-17 Win 2.90MB | R | 3 | ✅ CI |
 | A-2 | 설치본 크기(setup.exe · dmg · deb) | 릴리스 자산 목록 `gh release view <tag>` | **G** ≤12MB(NFR-B-4) | R | 3 | 🛠 |
-| A-3 | 외부 런타임 의존 0 | Win `tools/check-imports.ps1 <exe>` · mac `otool -L` · Linux `ldd`(musl 정적 = "not a dynamic executable") | **G** 인박스만(NFR-B-5) · 새 DLL/dylib = 실패 | C·R | **Win ✅ / mac·Linux ☐** | Win ✅ CI · 나머지 ☐ **INS-1** |
+| A-3 | 외부 런타임 의존 0 | Win `tools/check-imports.ps1 <exe>` · mac `otool -L` · Linux `ldd`(musl 정적 = "not a dynamic executable") | **G** 인박스만(NFR-B-5) · 새 DLL/dylib = 실패 | C·R | **3-OS ✅** | ✅ CI 3-OS — Win `check-imports.ps1` · mac·Linux `tools/check-imports.sh`(**INS-1** `cc0db39` · 11-04 첫 실행 PASS) |
 | A-4 | 의존성 라이선스 퍼미시브 온리 | `tools/check-licenses.py`(`cargo metadata --locked` · SPDX OR 대안 판정 · gate.sh·CI lint) | **G** GPL/LGPL 0(DR-12) | C | — | ✅ **INS-2** `017804e`(11-04 — 의존성 298 · fail 0) |
 | A-5 | 의존 크레이트 수·중복 판 | `cargo tree -d` | **O** 중복 트리 수 기록(08-14 objc2 0.5/0.6 선례) | R | — | 🛠 |
 | A-6 | 코드 서명·공증 상태 | Win `Get-AuthenticodeSignature` · mac `codesign -dv` / `spctl -a` | **O** 현재 무서명(M5-4a) — 상태만 기록 | R | 3 | 🛠 |
@@ -68,9 +68,9 @@
 
 | ID | 항목 | 방법 | 판정 | 주기 | OS | 자동화 |
 | --- | --- | --- | --- | --- | --- | --- |
-| B-1 | 콜드 스타트 → 첫 화면 | 캐시 없는 최초 실행(신원 폴더 새로) · 프로세스 시작~첫 프레임 시각. **현재 계측 지점 없음** → `log.enabled` on 상태에서 첫 `paint` 로그 시각 − 프로세스 생성 시각(`Get-Process StartTime` / `ps -o lstart`) | **G** ≤500ms(NFR-B-11) · 목표 200ms · ★**첫 실측 11-04 Win**(PERF-4 `b8c948d` `tools/startup-bench.sh` · 릴리스 5회) = 콜드 first_paint 중앙값 **245ms** · 웜 **56ms**(게이트 500ms 안 · 목표 200ms는 콜드가 넘음 · 헤드리스 틱 ≤200ms 포함) | R | 3 | ☐ **INS-3**(부팅 트레이스 스위치 제안 `NEXA_BOOT_TRACE`) |
+| B-1 | 콜드 스타트 → 첫 화면 | 캐시 없는 최초 실행(신원 폴더 새로) · 프로세스 시작~첫 프레임 시각. **현재 계측 지점 없음** → `log.enabled` on 상태에서 첫 `paint` 로그 시각 − 프로세스 생성 시각(`Get-Process StartTime` / `ps -o lstart`) | **G** ≤500ms(NFR-B-11) · 목표 200ms · ★**첫 실측 11-04 Win**(PERF-4 `b8c948d` `tools/startup-bench.sh` · 릴리스 5회) = 콜드 first_paint 중앙값 **245ms** · 웜 **56ms**(게이트 500ms 안 · 목표 200ms는 콜드가 넘음 · 헤드리스 틱 ≤200ms 포함) · 5점 분해(INS-3 · Win Debug 새 신원) = settings 464 · loop 464 · window 540 · first_paint 557 · first_peer 1559ms | R | 3 | ✅ **INS-3** `2fc3373` `tools/boot-trace.sh` · `NEXA_BOOT_TRACE=<파일>` |
 | B-2 | 첫 피어 표시까지 | 상대 1대 상주 상태에서 기동 → 목록에 뜨는 시각 | **G** ≤3s(NFR-B-11·B-8) | R | 3 | 👤 |
-| B-3 | 웜 스타트(설정·프로필 캐시 있음) | B-1과 같은 방법 · 2회차 이상 | **O** B-1 대비 델타 | R | 3 | ☐ INS-3 |
+| B-3 | 웜 스타트(설정·프로필 캐시 있음) | B-1과 같은 방법 · 2회차 이상 | **O** B-1 대비 델타 · 웜 56ms(PERF-4 릴리스) | R | 3 | ✅ INS-3 `2fc3373`(`tools/boot-trace.sh` · `tools/startup-bench.sh` 웜 회차) |
 | B-4 | 부팅 시 디스크 읽기 목록·크기 | Win `Process Monitor` 필터 / Linux `strace -e openat` / mac `fs_usage` | **O** 읽는 파일 = 설정·신원·핀·프로필 캐시·폰트만 · 평문 파일 0 | Q | 3 | 👤 |
 | B-5 | 폰트 로딩·폴백 체인 진단 1줄 | 기동 로그 `load_ui_font` 진단(09-07) | **O** 주 폰트 + 기호 본 경로 출력 · "□" 0 | R | 3 | 🛠 |
 | B-6 | GUI 실행 가능 세션 판정 | SSH/RDP/`$DISPLAY` 없는 자리에서 실행 → 안내 후 exit 3 | **G** 규약대로([nbeep-plat::gui]) | R | 3 | ✅ 테스트 + 👤 |
@@ -91,12 +91,12 @@
 
 | ID | 항목 | 방법 | 판정 | 주기 | OS | 자동화 |
 | --- | --- | --- | --- | --- | --- | --- |
-| D-1 | 유휴 메모리(트레이 상주·피어 10·5분) | **Win** `Get-Counter '\Process(nexa-beep)\Working Set - Private'` · **mac** `footprint <pid>`(phys_footprint) · **Linux** `/proc/<pid>/status` `RssAnon`(+ `VmRSS` 병기) | **G** ≤30MB(NFR-B-1) · 실측 Win 17.1 / mac 18~20 / Linux 17.5 · ★11-04 Win 릴리스 헤드리스(RL-10 뒤 · 10/30/60s) = **WS-Private 3.6/3.6/3.6MB ✓** · 작업 집합(WS) 71.4/71.5/69.0MB = 공유 페이지(시스템 DLL 매핑) · 시간 누적 없음 · handles 303→302 · threads 18→15 · Debug WS 23.5와의 차는 매핑 차이(원인 추적 = M5-5 24h 상주 때) · ⚠ 판정은 WS가 아니라 WS-Private(이 행 정의) | W·R | 3 | 🛠 **INS-5**(3-OS 샘플러 한 벌) |
+| D-1 | 유휴 메모리(트레이 상주·피어 10·5분) | **Win** `Get-Counter '\Process(nexa-beep)\Working Set - Private'` · **mac** `footprint <pid>`(phys_footprint) · **Linux** `/proc/<pid>/status` `RssAnon`(+ `VmRSS` 병기) | **G** ≤30MB(NFR-B-1) · 실측 Win 17.1 / mac 18~20 / Linux 17.5 · ★11-04 Win 릴리스 헤드리스(RL-10 뒤 · 10/30/60s) = **WS-Private 3.6/3.6/3.6MB ✓** · 작업 집합(WS) 71.4/71.5/69.0MB = 공유 페이지(시스템 DLL 매핑) · 시간 누적 없음 · handles 303→302 · threads 18→15 · Debug WS 23.5와의 차는 매핑 차이(원인 추적 = M5-5 24h 상주 때) · ⚠ 판정은 WS가 아니라 WS-Private(이 행 정의) | W·R | 3 | 🛠 **INS-5**(3-OS 샘플러 한 벌) · 🛠 INS-5 `tools/inspect-sample.sh` |
 | D-2 | 활성 메모리(피어 100·대화창 5·썸네일 50) | D-1과 같은 지표 · 합성 부하(INS-4 데모) | **G** ≤80MB(NFR-B-2) · **미실측** | R | 3 | ☐ INS-4 |
-| D-3 | 24h 상주 누수 | INS-5 샘플러를 5분 간격 24h → CSV · 피어 변동+메시지 1,000건 포함(E-9) | **G** ΔRSS ≤2MB · 소켓/핸들/스레드 Δ=0(NFR-B-6) · **미실측** | Q | 3 | 🛠 INS-5 |
-| D-4 | 핸들·fd·스레드 수 | Win `(Get-Process nexa-beep).HandleCount` · `.Threads.Count` · mac `lsof -p <pid> \| wc -l` · `ps -M <pid>` · Linux `ls /proc/<pid>/fd \| wc -l` · `Threads:` | **G** 유휴 대비 증가 0(M1-8y 실측 0) | W | 3 | 🛠 INS-5 |
+| D-3 | 24h 상주 누수 | INS-5 샘플러를 5분 간격 24h → CSV · 피어 변동+메시지 1,000건 포함(E-9) | **G** ΔRSS ≤2MB · 소켓/핸들/스레드 Δ=0(NFR-B-6) · **미실측** | Q | 3 | 🛠 INS-5 ✅ `tools/inspect-sample.sh --interval 60 --duration 86400 --gate`(M5-5 사용자 PC 1회 대기) |
+| D-4 | 핸들·fd·스레드 수 | Win `(Get-Process nexa-beep).HandleCount` · `.Threads.Count` · mac `lsof -p <pid> \| wc -l` · `ps -M <pid>` · Linux `ls /proc/<pid>/fd \| wc -l` · `Threads:` | **G** 유휴 대비 증가 0(M1-8y 실측 0) · 11-04 설치본 0.7.0 handles 578 · threads 15 · sockets 9(4샘플 Δ0) | W | 3 | 🛠 INS-5 ✅ `tools/inspect-sample.sh` |
 | D-5 | 큰 버퍼 회수(파일 전송 후) | 1GiB 송수신 완료 5분 후 D-1 재측정 | **O** 전송 전 수준 복귀(스트리밍 FR-X-5 — 상주 버퍼 0) · ★**첫 실측 11-04**(PERF-5 `tools/mem-bench.sh` · Win Debug 256MiB) = ④−① X −0.07 / Y +0.54MB ✓ · 릴리스 X +0.65 / Y +1.31MB ✓ · 기울기 0.00 · 1GiB는 인자로 · ⚠ 수신 피크 = 파일 ×2(520MB · M4-12) | R | 3 | 🛠 `tools/mem-bench.sh` |
-| D-6 | 유휴 CPU | Win `Get-Counter '\Process(nexa-beep)\% Processor Time'` 5분 평균 · mac `top -pid <pid> -stats cpu -l 60` · Linux `top -b -n 60 -p <pid>` | **G** ≤0.2%(NFR-B-7) · ★**첫 실측 11-04 Win**(RL-10 `141a4c7` · 헤드리스 유휴 60s · 기존 신원 · 실상대 1 세션) = CPU **141ms/61s ≈ 0.23%**(단일 코어 기준 · 종전 703ms ≈ 1.15%) · `[idle] avg_hz=1.08`(`NEXA_PAINT_TRACE`) · ★**릴리스 헤드리스 5분 재측정 11-04**(새 신원 · `--live` · 실상대 발견 포함) = `Get-Counter` 5s×60 평균 **0.291%**(max 1.56%) · 같은 구간 `TotalProcessorTime` 증가 **203ms/302s = 0.067%** · `[idle] avg_hz=1.05` · paint 8프레임 → **게이트 ≤0.2%(단일 코어) = TotalProcessorTime 기준 ✓** · Get-Counter 기준 0.29%는 카운터 해상도(15.6ms 틱)·샘플 경계 때문에 작은 값에서 과대(종전 5Hz 때 대응값 미측정) · 실화면 판정 = 사용자 1회 · 수단 = 60s 헤드리스 CPU ms(`Get-Process` CPU 누적 차) + `[idle] avg_hz`(스크립트화는 후속) | W·R | 3 | 🛠 INS-5 |
+| D-6 | 유휴 CPU | Win `Get-Counter '\Process(nexa-beep)\% Processor Time'` 5분 평균 · mac `top -pid <pid> -stats cpu -l 60` · Linux `top -b -n 60 -p <pid>` | **G** ≤0.2%(NFR-B-7) · 종전 대응값(설치본 0.7.0 · 5Hz · RL-10 전 · INS-5 11-04) = **0.276%** · ★**첫 실측 11-04 Win**(RL-10 `141a4c7` · 헤드리스 유휴 60s · 기존 신원 · 실상대 1 세션) = CPU **141ms/61s ≈ 0.23%**(단일 코어 기준 · 종전 703ms ≈ 1.15%) · `[idle] avg_hz=1.08`(`NEXA_PAINT_TRACE`) · ★**릴리스 헤드리스 5분 재측정 11-04**(새 신원 · `--live` · 실상대 발견 포함) = `Get-Counter` 5s×60 평균 **0.291%**(max 1.56%) · 같은 구간 `TotalProcessorTime` 증가 **203ms/302s = 0.067%** · `[idle] avg_hz=1.05` · paint 8프레임 → **게이트 ≤0.2%(단일 코어) = TotalProcessorTime 기준 ✓** · Get-Counter 기준 0.29%는 카운터 해상도(15.6ms 틱)·샘플 경계 때문에 작은 값에서 과대(종전 5Hz 때 대응값 미측정) · 실화면 판정 = 사용자 1회 · 수단 = 60s 헤드리스 CPU ms(`Get-Process` CPU 누적 차) + `[idle] avg_hz`(스크립트화는 후속) | W·R | 3 | 🛠 INS-5 · 🛠 INS-5 `tools/inspect-sample.sh` |
 | D-7 | 평문 버퍼 zeroize(종료·삭제 경로) | 코드 단언(FR-S-22) + 종료 후 코어 덤프 grep(선택) | **O** 회귀 테스트 존재 여부 | Q | — | ✅ 단위(있는 곳) |
 | D-8 | 크립토 셰레딩 = 삭제 후 잔존 바이트 난수 | 대화 삭제 → `keys.seg`에서 키 소멸 · 세그먼트 바이트 엔트로피 | **G** 키 폐기 = 복호 불가(D-18 §7) | R | 3 | ✅ 단위 + 🛠 |
 
@@ -174,9 +174,9 @@
 | --- | --- | --- | --- | --- | --- | --- |
 | J-1 | 핸드셰이크 후 평문 0 | `crates/nexa-beep/tests/wire_plaintext.rs`(투명 릴레이 실소켓 캡처 4종) | **G** W-8·W-9 | C | — | ✅ CI |
 | J-2 | 실소켓 tap(수동) | wirecap/pktmon으로 세션 구간 캡처 → 금칙 문자열 grep(본문·파일명·이메일) | **G** 0건 | T | 3 | 👤 SEC-T1 |
-| J-3 | 데이터 폴더 평문 0 | `grep -r`(금칙 문자열) · 파일 헤더 = `NBSE`/세그먼트 매직 | **G** W-12 · 17 §4-a(실증 3면) | R | 3 | 🛠 **INS-7**(폴더 스캐너 한 벌) |
-| J-4 | 비밀 파일 권한 | `ls -l data/`(mac/Linux 0600) · Win ACL(`icacls`) | **G** 0600 · `tighten_data_dir` 스윕 | R | mac·Linux(Win = no-op) | 🛠 |
-| J-5 | 로그·stdout·계측 평문 0 | `data/logs/*` · netmon 로그 grep | **G** W-11 — 횟수·상태만 | R | 3 | 🛠 INS-7 |
+| J-3 | 데이터 폴더 평문 0 | `grep -r`(금칙 문자열) · 파일 헤더 = `NBSE`/세그먼트 매직 | **G** W-12 · 17 §4-a(실증 3면) | R | 3 | ✅ **INS-7** `78c5e60` `tools/scan-plaintext.sh`(verify.sh reply 뒤 · 11-04 rp-x 4 봉인 파일 PASS · mb-y(수신 격리 `.beepq`/`.meta` NBSE) 8 봉인 PASS) |
+| J-4 | 비밀 파일 권한 | `ls -l data/`(mac/Linux 0600) · Win ACL(`icacls`) | **G** 0600 · `tighten_data_dir` 스윕 | R | mac·Linux(Win = no-op) | 🛠 INS-7 `tools/scan-plaintext.sh` ③(mac/Linux에서만 판정) |
+| J-5 | 로그·stdout·계측 평문 0 | `data/logs/*` · netmon 로그 grep | **G** W-11 — 횟수·상태만 | R | 3 | ✅ INS-7 `tools/scan-plaintext.sh` ②(로그 포함 금칙 문자열) |
 | J-6 | 키 봉인·백업/복원 | 백업 → 새 폴더 복원 → 핀·키·기록 열림 | **G** 핫 로딩 · 다른 신원 키로는 열리지 않음 | R | 3 | ✅ 단위 + 👤 |
 | J-7 | 동기화 폴더 경고 | 데이터 폴더를 OneDrive/iCloud 아래로 | **G** 경고 표시(M2-5b ①) | Q | 3 | 👤 |
 | J-8 | UserKey 봉인·PBKDF2 파라미터 | 단위 테스트 값 · 반복 60k | **G** 46 §확정값 · 봉인 사이드카 | C | — | ✅ 단위 |
@@ -219,8 +219,8 @@
 
 | ID | 항목 | 방법 | 판정 | 주기 | OS | 자동화 |
 | --- | --- | --- | --- | --- | --- | --- |
-| M-1 | 의존 방향(코어 → 표현 금지) | `cargo tree -p nbeep-core -e normal` · `nbeep-ctl`의 앱 도메인 의존 0 | **G** core/ctl이 nexa-beep·nbeep-ui를 의존하지 않음 | C | — | ☐ **INS-8**(`cargo tree` 단언 스크립트) |
-| M-2 | 포트 시그니처에 외부 크레이트 타입 0 | 포트 trait 정의 파일 grep(`snow::`·`winit::` 등) | **G** DR-21 규칙 7 | C | — | ☐ INS-8 |
+| M-1 | 의존 방향(코어 → 표현 금지) | `cargo tree -p nbeep-core -e normal` · `nbeep-ctl`의 앱 도메인 의존 0 | **G** core/ctl이 nexa-beep·nbeep-ui를 의존하지 않음 | C | — | ✅ **INS-8** `b2fcaea` `tools/check-arch.py`(gate.sh·CI lint · 11-04 core 의존 0 · 금지 의존 0) |
+| M-2 | 포트 시그니처에 외부 크레이트 타입 0 | 포트 trait 정의 파일 grep(`snow::`·`winit::` 등) | **G** DR-21 규칙 7 | C | — | ✅ INS-8 `tools/check-arch.py`(포트 5파일 외부 크레이트 참조 0) |
 | M-3 | 표현계층 동치 — GUI/CLI/헤드리스가 같은 결과 | 같은 시나리오(메시지·파일·ack)를 GUI↔CLI 교차 | **G** 와이어·기록 동일 · "빠뜨린 호출부" 0(08-20 교훈) | R | 3 | 👤 [26 §3-2] |
 | M-4 | 스트림 추가 시 전수 구조(`StreamId::ALL`) | 새 스트림 커밋 시 recv_any 포함 여부 | **G** 컴파일 타임 전수(08-13 구조화) | T | — | ✅ 타입 |
 | M-5 | 설정 Entry 레지스트리 = 단일 원천 | 키 등록 ↔ 저장·로드 쌍(08-17·08-22 "키 등록과 값 저장은 쌍" 3회 발병) | **G** 미등록 키로 영속되는 값 0 · `HIDDEN_KEYS` 대조 | C | — | ✅ `settings_reset.rs` + ☐ 전수 단언 |
@@ -303,20 +303,20 @@
 | ✅ CI/단위 | 약 25 | 예산 크기 · Win 임포트 · 평문 와이어 · lockdown · 골든 · 설정 리셋 · 상태기계 재생 · file_allowed · zip |
 | 🛠 스크립트 가능(도구 있음) | 약 20 | netmon · wirecap · check-imports · relaunch · install-local · 서버 로그 |
 | 👤 사람 실기 | 약 45 | 26 §3·§7 · 33 · 45 절차 |
-| ☐ 미정(계측 지점 없음) | 7 | B-1/B-3 · C-2/D-2 · A-3 mac/Linux · ~~A-4~~(INS-2 ✅ 11-04) · M-1/M-2 |
+| ☐ 미정(계측 지점 없음) | 2 | ~~B-1/B-3~~(INS-3 ✅ 11-04) · C-2/D-2 · ~~A-3 mac/Linux~~(INS-1 ✅ 11-04) · ~~A-4~~(INS-2 ✅ 11-04) · ~~M-1/M-2~~(INS-8 ✅ 11-04) |
 
 **로드맵(TODO 등재 · 순서 = 게이트인데 미실측인 것부터)**
 
 | ID | 내용 | 닫는 항목 | 크기 |
 | --- | --- | --- | --- |
-| **INS-1** | mac/Linux 임포트 게이트 — `tools/check-imports.sh`(`otool -L` / `ldd` 화이트리스트 · ci.yml mac·Linux 잡 배선) | A-3 | 소 |
+| ~~**INS-1**~~ ✅ `cc0db39` | mac/Linux 임포트 게이트 — `tools/check-imports.sh`(`otool -L` / `ldd` 화이트리스트 · ci.yml mac·Linux 잡 배선) | A-3 | 소 |
 | ~~**INS-2**~~ ✅ | 라이선스 게이트 — `tools/check-licenses.py`(`017804e` · 11-04) · gate.sh·CI lint | A-4 | 소 |
-| **INS-3** | 부팅 트레이스 — `NEXA_BOOT_TRACE=<file>`(진단 스위치 선례 `NEXA_NETMON`) · 프로세스 시작→설정 로드→창 생성→첫 paint→첫 피어 시각 5점 | B-1·B-3 | 소 |
+| ~~**INS-3**~~ ✅ `2fc3373` | 부팅 트레이스 — `NEXA_BOOT_TRACE=<file>`(진단 스위치 선례 `NEXA_NETMON`) · 프로세스 시작→설정 로드→창 생성→첫 paint→첫 피어 시각 5점 | B-1·B-3 | 소 |
 | **INS-4** | 합성 부하 데모 — 피어 500·대화창 5·썸네일 50을 InMemory로 생성하는 `--demo-load` | C-2·D-2 | 중 |
-| **INS-5** | 3-OS 상주 샘플러 — `tools/inspect-sample.{ps1,sh}`: §5 지표(프라이빗 메모리·핸들·스레드·CPU·소켓 수)를 N초 간격 CSV · 24h 모드 · 요약(Δ·최대) | D-1·D-3·D-4·D-6 | 중 |
+| ~~**INS-5**~~ ✅ `0edef5b`(`.sh` 하나로 3-OS) | 3-OS 상주 샘플러 — `tools/inspect-sample.{ps1,sh}`: §5 지표(프라이빗 메모리·핸들·스레드·CPU·소켓 수)를 N초 간격 CSV · 24h 모드 · 요약(Δ·최대) | D-1·D-3·D-4·D-6 | 중 |
 | **INS-6** | CLI 왕복 측정 — `--chat-live` 양단 스크립트로 100회 메시지 → ack P95 · 파일 1GiB 처리량 | F-1·I-6 | 소 |
-| **INS-7** | 데이터 폴더·로그 평문 스캐너 — 금칙 문자열(본문·이메일·전화·파일명) + 헤더 매직 대조(NBSE/세그먼트) · 권한 0600 | J-3·J-5·J-4 | 소 |
-| **INS-8** | 아키텍처 단언 — `cargo tree` 의존 방향 + 포트 파일 외부 타입 grep · CI | M-1·M-2 | 소 |
+| ~~**INS-7**~~ ✅ `78c5e60` | 데이터 폴더·로그 평문 스캐너 — 금칙 문자열(본문·이메일·전화·파일명) + 헤더 매직 대조(NBSE/세그먼트) · 권한 0600 | J-3·J-5·J-4 | 소 |
+| ~~**INS-8**~~ ✅ `b2fcaea` | 아키텍처 단언 — `cargo tree` 의존 방향 + 포트 파일 외부 타입 grep · CI | M-1·M-2 | 소 |
 | **INS-9** | 회차 템플릿 — §8 양식을 `tools/inspect-report.sh`가 CSV → 표로 변환해 §9에 붙일 초안 생성 | §9 | 소 |
 
 ---
@@ -346,7 +346,7 @@
 | ID | 값 | 출처 | 판정 |
 | --- | --- | --- | --- |
 | A-1 | Win x64 2.90MB(정적 CRT · +0.11) · imgdec 0.48MB | 09-17 | G ✓ |
-| A-3 | Win 3종 임포트 전부 인박스 | 09-17 게이트 | G ✓(Win) · mac/Linux **미측정** |
+| A-3 | Win 3종 임포트 전부 인박스 · mac·Linux 3바이너리 화이트리스트 | 09-17 게이트 · 11-04 INS-1 | G ✓ 3-OS |
 | D-1 | Win 프라이빗 WS 5.0MB(작업 집합 23.4) · mac footprint 18~20MB · Linux 17.5MB | 09-07 · 08-17 · 08-29 | G ✓ 3-OS |
 | D-4 | 유휴 핸들 증가 0 | 08-16 M1-8y | G ✓(Win) |
 | E-1 | dtx≈3.7pps · dself 50% · warn 0(같은 PC 2인스턴스) | 39 §2(08-21) · 09-06 2회차 | 기준선 |
