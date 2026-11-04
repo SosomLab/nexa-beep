@@ -190,10 +190,12 @@ impl FileTrustStore {
 
     // ── 위임(비영속 조회) ──
 
-    /// [`MemoryTrustStore::record_name`] 위임 + 즉시 저장.
+    /// [`MemoryTrustStore::record_name`] 위임 + **바뀌면** 즉시 저장(RL-8 ⓑ · 11-04 — 종전 무조건 persist는 발견
+    /// 비컨마다 같은 이름으로 재봉인·재기록이었다).
     pub fn record_name(&mut self, peer: PeerId, name: DisplayName) {
-        self.inner.record_name(peer, name);
-        self.persist();
+        if self.inner.record_name(peer, name) {
+            self.persist();
+        }
     }
 
     /// [`MemoryTrustStore::name_conflict`] 위임.

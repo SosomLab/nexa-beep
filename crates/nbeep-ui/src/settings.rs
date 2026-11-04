@@ -2051,8 +2051,16 @@ impl SettingsState {
     }
 
     /// 값 지정.
-    pub fn set(&mut self, key: &'static str, value: String) {
-        self.values.insert(key, value);
+    /// 값 쓰기 — 반환 = **바뀌었는가**(RL-8 ⓒ · 11-04: 같은 값은 저장 더티로 치지 않는다 · 리사이즈·이동·부팅 반영의
+    /// 동일값 set이 저장 사이클을 만들지 않게).
+    pub fn set(&mut self, key: &'static str, value: String) -> bool {
+        match self.values.get(key) {
+            Some(cur) if *cur == value => false,
+            _ => {
+                self.values.insert(key, value);
+                true
+            }
+        }
     }
 
     /// 저장 스냅샷 — 전체 (키, 값) 쌍을 **키 정렬**로(직렬화가 결정적이어야

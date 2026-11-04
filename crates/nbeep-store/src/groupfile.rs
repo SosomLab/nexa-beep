@@ -541,8 +541,10 @@ impl FileGroupStore {
         let Some(s) = self.shared.iter_mut().find(|s| s.roster.uid == uid) else {
             return false;
         };
-        s.mine = mine;
-        self.persist();
+        if s.mine != mine {
+            s.mine = mine;
+            self.persist(); // 같은 상태 = 무기록(RL-8 ⓑ)
+        }
         true
     }
 

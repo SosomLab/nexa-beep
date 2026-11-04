@@ -3968,6 +3968,9 @@ struct App {
     history_mark_at: u64,
     /// 마지막 flush 뒤 더티 표시 횟수(접힘 비율 계측 · 로그 `coalesced`).
     history_marks: u32,
+    /// PII 사이드카 직전 봉인 평문(RL-8 ⓐ · 11-04) — 같으면 재봉인·재기록하지 않는다(salt·nonce가 매번 새라 파일
+    /// 비교로는 dedup이 안 된다 · 평문은 어차피 설정 메모리에 있다).
+    pii_last: Option<String>,
     /// 거절 실행 취소 대기(S3): uid → (소유자, hard, 보낼 시각 ms). 방 행 클릭 = 취소.
     pending_declines: HashMap<nbeep_core::GroupUid, (PeerId, bool, u64)>,
     /// 차단한 초대 목록 모달의 행 순서(S4 · 행 클릭 = 해제 확인 · 모달 닫힘 = 소거).
@@ -12895,7 +12898,10 @@ impl App {
     /// 설정 백업(08-15 · 고급) — 대기 중 스냅샷까지 flush한 뒤 settings.cfg를 **고른 저장 경로**로 복사
     /// (P3 — 저장 대화상자가 이름·덮어쓰기 확인을 맡는다).
     fn do_backup_settings(&mut self, dst: &std::path::Path) -> String {
-        self.conf_save(false); // 스케줄 대기분 포함 최신본을 파일에
+        // 스케줄 대기분을 **소비하며** 최신본을 파일에(RL-8 ⓔ — 종전은 flush_now 미소비라 다음 틱이 한 번 더 직렬화).
+        if self.conf.sched.flush_now() {
+            self.conf_save(false);
+        }
         let src = self.data_dir.join("settings.cfg");
         match std::fs::copy(&src, dst) {
             Ok(_) => format!("설정 백업 완료 — {}", dst.display()),
@@ -14560,8 +14566,12 @@ impl App {
                 body.push('\n');
             }
         }
+        if self.pii_last.as_deref() == Some(body.as_str()) {
+            return; // 직전 봉인과 같은 평문 = 재봉인 없음(RL-8 ⓐ)
+        }
         if body.is_empty() {
             let _ = std::fs::remove_file(&path); // 철회 대칭 — 빈 봉투를 남기지 않는다
+            self.pii_last = Some(body);
             return;
         }
         match nbeep_store::sealed::seal(
@@ -14573,6 +14583,8 @@ impl App {
                 // 소유자 전용(0600)·원자적(09-05 — 종전 `fs::write` 직접 = 664 + 비원자).
                 if nbeep_store::privfile::write_atomic(&path, &env).is_err() {
                     self.set_status(nbeep_core::t(nbeep_core::Msg::StContactSaveFail));
+                } else {
+                    self.pii_last = Some(body);
                 }
             }
             Err(_) => {
@@ -14608,6 +14620,8 @@ impl App {
                     }
                 }
             }
+            // 직전 봉인 평문 시드(RL-8 ⓐ) — 부팅 뒤 첫 저장 사이클이 같은 평문을 다시 봉인하지 않는다.
+            self.pii_last = Some(text);
         }
     }
 
@@ -15587,9 +15601,8 @@ impl App {
     }
 
     fn apply_settings(&mut self, changes: Vec<(&'static str, String)>) {
-        if !changes.is_empty() {
-            self.conf_mark();
-        }
+        // 저장 더티는 **값이 실제로 바뀐 키**가 있을 때만(RL-8 ⓒ · 11-04 — 종전 = 목록이 비어 있지 않으면 무조건).
+        let mut dirty = false;
         // 프로필 push 배치(RL-2ⓑ · 08-18) — 키 단위로 밀면 적용 1회에 N벌
         // (Full 키 포함 시 256KiB 사진 N회). 루프에서 유형만 모아 끝에 1회.
         let mut profile_push: Option<ProfileScope> = None;
@@ -15680,7 +15693,7 @@ impl App {
                 }
                 _ => {}
             }
-            self.settings.set(key, value.clone());
+            dirty |= self.settings.set(key, value.clone());
             // ★ 열려 있는 설정 화면에 역반영(08-15 사용자 실기 — 툴바 정렬처럼
             //   다른 경로의 변경이 설정 화면 표시와 어긋났다 · 쌍방 동기화).
             //   설정 화면 자신이 낸 변경이면 같은 값이라 무해(no-op 표시 갱신).
@@ -16134,6 +16147,9 @@ impl App {
             // 변경 = 카드 내용 변경 후보 · 서버가 차이를 보고 v2에만 재방송).
             self.refresh_server_card();
             self.push_profile(scope); // 배치 1회(RL-2ⓑ)
+        }
+        if dirty {
+            self.conf_mark();
         }
         if let Some(id) = self.main_id {
             self.request_redraw(id);
@@ -23261,9 +23277,11 @@ impl ApplicationHandler<AppEvent> for App {
                         let lw = (f64::from(size.width) / s).round() as i64;
                         let lh = (f64::from(size.height) / s).round() as i64;
                         if lw >= 200 && lh >= 150 {
-                            self.settings.set("ui.win_w", lw.to_string());
-                            self.settings.set("ui.win_h", lh.to_string());
-                            self.conf_mark();
+                            let a = self.settings.set("ui.win_w", lw.to_string());
+                            let b = self.settings.set("ui.win_h", lh.to_string());
+                            if a || b {
+                                self.conf_mark(); // 같은 크기(부팅 복원·포커스 전환) = 더티 아님(RL-8 ⓒ)
+                            }
                         }
                     }
                 } else if self
@@ -23294,9 +23312,11 @@ impl ApplicationHandler<AppEvent> for App {
                         let lx = (f64::from(pos.x) / s).round() as i64;
                         let ly = (f64::from(pos.y) / s).round() as i64;
                         if (-4000..=16000).contains(&lx) && (-4000..=16000).contains(&ly) {
-                            self.settings.set("ui.win_x", lx.to_string());
-                            self.settings.set("ui.win_y", ly.to_string());
-                            self.conf_mark();
+                            let a = self.settings.set("ui.win_x", lx.to_string());
+                            let b = self.settings.set("ui.win_y", ly.to_string());
+                            if a || b {
+                                self.conf_mark();
+                            }
                         }
                     }
                 } else if self
@@ -23310,9 +23330,11 @@ impl ApplicationHandler<AppEvent> for App {
                         let lx = (f64::from(pos.x) / s).round() as i64;
                         let ly = (f64::from(pos.y) / s).round() as i64;
                         if (-4000..=16000).contains(&lx) && (-4000..=16000).contains(&ly) {
-                            self.settings.set("ui.prefs_x", lx.to_string());
-                            self.settings.set("ui.prefs_y", ly.to_string());
-                            self.conf_mark();
+                            let a = self.settings.set("ui.prefs_x", lx.to_string());
+                            let b = self.settings.set("ui.prefs_y", ly.to_string());
+                            if a || b {
+                                self.conf_mark();
+                            }
                         }
                     }
                 }
@@ -24668,6 +24690,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         group_history_dirty: HashMap::new(),
         history_mark_at: 0,
         history_marks: 0,
+        pii_last: None,
         blocked_ctx: None,
         want_blocked_window: false,
         pending_reset: false,

@@ -125,14 +125,16 @@ impl MemoryTrustStore {
     }
 
     /// 이 키로 본 표시 이름을 기록한다(중복 연속은 합침).
-    pub fn record_name(&mut self, peer: PeerId, name: DisplayName) {
+    pub fn record_name(&mut self, peer: PeerId, name: DisplayName) -> bool {
         let rec = self
             .records
             .entry(peer)
             .or_insert_with(|| Record::blank(TrustLevel::Unverified));
         if rec.names.last() != Some(&name) {
             rec.names.push(name);
+            return true;
         }
+        false // 같은 이름 = 무변경(RL-8 ⓑ — 호출자가 저장을 건너뛴다)
     }
 
     /// 서명 검증을 **통과한** `UserHello`를 기록한다(ADR-0015 S2-e · 검증은 호출자 —
