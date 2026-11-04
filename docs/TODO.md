@@ -376,7 +376,7 @@ M-1 설계 ──► M0 기반 ──► M1 발견 ──► M2 대화 ──►
 | ID | 항목 | 닫는 점검 항목 | 우선 | 크기 | 상태 |
 |---|---|---|:--:|:--:|---|
 | **INS-1** | mac/Linux 임포트 게이트 — `tools/check-imports.sh`(`otool -L` / `ldd` 화이트리스트) + ci.yml mac·Linux 잡 배선 | A-3 | P1 | 소 | ☐(mac 세션) |
-| **INS-2** | 라이선스 게이트 — `cargo tree` 라이선스 열 grep(GPL/LGPL/AGPL = 실패) · CI | A-4 | P1 | 소 | ☐ |
+| **INS-2** | 라이선스 게이트 — `cargo tree` 라이선스 열 grep(GPL/LGPL/AGPL = 실패) · CI | A-4 | P1 | 소 | ✅ `017804e`(11-04 — `tools/check-licenses.py` = `cargo metadata --locked`(네트워크 0 · cargo-deny 미도입) · SPDX 식을 OR로 나눠 퍼미시브 대안이 하나라도 있으면 통과 · 강한 카피레프트(GPL/LGPL/AGPL/SSPL/EUPL/CDDL/OSL)만이면 실패(종료 1) · MPL·license-file만·모르는 식 = 경고 · 1차 PolyForm-NC(형제 8크레이트) 통과 · Windows cp949 콘솔 = utf-8 재설정 · **실측 의존성 298 · ok 298 · fail 0** · gate.sh "라이선스(DR-12)" 단계(rustdoc 뒤) · ci.yml lint 단계 · docs/18 0-a) |
 | **INS-3** | 부팅 트레이스 `NEXA_BOOT_TRACE=<file>` — 프로세스 시작→설정 로드→창 생성→첫 paint→첫 피어 5점 시각(진단 스위치 선례 `NEXA_NETMON`) | B-1·B-3(NFR-B-11) | P1 | 소 | ☐ |
 | **INS-4** | 합성 부하 데모 `--demo-load` — InMemory 피어 500·대화창 5·썸네일 50 | C-2·D-2(NFR-B-2·12) | P2 | 중 | ☐ |
 | **INS-5** | 3-OS 상주 샘플러 `tools/inspect-sample.{ps1,sh}` — 49 §5 지표(프라이빗 메모리·핸들·스레드·CPU·소켓)를 N초 간격 CSV · 24h 모드 · Δ/최대 요약 | D-1·D-3·D-4·D-6(NFR-B-1·6·7) | **P1** | 중 | ☐ |

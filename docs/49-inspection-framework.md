@@ -59,7 +59,7 @@
 | A-1 | 포터블 단일 실행 파일 크기 | CI `budget` 잡 · 로컬 `ls -l target/release/nexa-beep*` | **G** ≤10MB(NFR-B-3) · 목표 5MB · 실측 09-17 Win 2.90MB | R | 3 | ✅ CI |
 | A-2 | 설치본 크기(setup.exe · dmg · deb) | 릴리스 자산 목록 `gh release view <tag>` | **G** ≤12MB(NFR-B-4) | R | 3 | 🛠 |
 | A-3 | 외부 런타임 의존 0 | Win `tools/check-imports.ps1 <exe>` · mac `otool -L` · Linux `ldd`(musl 정적 = "not a dynamic executable") | **G** 인박스만(NFR-B-5) · 새 DLL/dylib = 실패 | C·R | **Win ✅ / mac·Linux ☐** | Win ✅ CI · 나머지 ☐ **INS-1** |
-| A-4 | 의존성 라이선스 퍼미시브 온리 | `cargo deny check licenses`(도입 시) 또는 `cargo tree --format "{p} {l}"` grep GPL | **G** GPL/LGPL 0(DR-12) | C | — | ☐ **INS-2** |
+| A-4 | 의존성 라이선스 퍼미시브 온리 | `tools/check-licenses.py`(`cargo metadata --locked` · SPDX OR 대안 판정 · gate.sh·CI lint) | **G** GPL/LGPL 0(DR-12) | C | — | ✅ **INS-2** `017804e`(11-04 — 의존성 298 · fail 0) |
 | A-5 | 의존 크레이트 수·중복 판 | `cargo tree -d` | **O** 중복 트리 수 기록(08-14 objc2 0.5/0.6 선례) | R | — | 🛠 |
 | A-6 | 코드 서명·공증 상태 | Win `Get-AuthenticodeSignature` · mac `codesign -dv` / `spctl -a` | **O** 현재 무서명(M5-4a) — 상태만 기록 | R | 3 | 🛠 |
 | A-7 | 게시 채널 실재(brew·winget·choco) | `brew info` · winget 인덱스 · choco 페이지(18 §5 절차) | **O** 태그 = 채널 버전 · 검수 `Reviewed:` 날짜 | R | — | 🛠 |
@@ -303,14 +303,14 @@
 | ✅ CI/단위 | 약 25 | 예산 크기 · Win 임포트 · 평문 와이어 · lockdown · 골든 · 설정 리셋 · 상태기계 재생 · file_allowed · zip |
 | 🛠 스크립트 가능(도구 있음) | 약 20 | netmon · wirecap · check-imports · relaunch · install-local · 서버 로그 |
 | 👤 사람 실기 | 약 45 | 26 §3·§7 · 33 · 45 절차 |
-| ☐ 미정(계측 지점 없음) | 8 | B-1/B-3 · C-2/D-2 · A-3 mac/Linux · A-4 · M-1/M-2 |
+| ☐ 미정(계측 지점 없음) | 7 | B-1/B-3 · C-2/D-2 · A-3 mac/Linux · ~~A-4~~(INS-2 ✅ 11-04) · M-1/M-2 |
 
 **로드맵(TODO 등재 · 순서 = 게이트인데 미실측인 것부터)**
 
 | ID | 내용 | 닫는 항목 | 크기 |
 | --- | --- | --- | --- |
 | **INS-1** | mac/Linux 임포트 게이트 — `tools/check-imports.sh`(`otool -L` / `ldd` 화이트리스트 · ci.yml mac·Linux 잡 배선) | A-3 | 소 |
-| **INS-2** | 라이선스 게이트 — `cargo tree` 라이선스 열 grep(GPL/LGPL/AGPL = 실패) · CI | A-4 | 소 |
+| ~~**INS-2**~~ ✅ | 라이선스 게이트 — `tools/check-licenses.py`(`017804e` · 11-04) · gate.sh·CI lint | A-4 | 소 |
 | **INS-3** | 부팅 트레이스 — `NEXA_BOOT_TRACE=<file>`(진단 스위치 선례 `NEXA_NETMON`) · 프로세스 시작→설정 로드→창 생성→첫 paint→첫 피어 시각 5점 | B-1·B-3 | 소 |
 | **INS-4** | 합성 부하 데모 — 피어 500·대화창 5·썸네일 50을 InMemory로 생성하는 `--demo-load` | C-2·D-2 | 중 |
 | **INS-5** | 3-OS 상주 샘플러 — `tools/inspect-sample.{ps1,sh}`: §5 지표(프라이빗 메모리·핸들·스레드·CPU·소켓 수)를 N초 간격 CSV · 24h 모드 · 요약(Δ·최대) | D-1·D-3·D-4·D-6 | 중 |
