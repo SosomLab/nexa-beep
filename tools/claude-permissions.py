@@ -5,7 +5,7 @@
 ⚠ 세션(개발·협업)은 자기 권한 파일을 고칠 수 없다(하네스 자기 수정 차단) → **사용자가 한 번** 실행한다:
     python tools/claude-permissions.py            # 병합(기존 항목 보존 · 중복 없음 · 들여쓰기 2 · CRLF 보존)
     python tools/claude-permissions.py --dry-run  # 더할 항목만 출력
-새 스크립트 종류를 더하면 아래 RULES에 접두를 추가하고 다시 실행한다(docs/18 §3).
+새 스크립트 종류를 더하면 아래 RULES에 접두를 추가하고 다시 실행한다(docs/18 §3). 규칙은 **tools/ 경로 접두**로만 — `bash:*` 같은 셸 전체 허용은 넣지 않는다(11-04 협업 세션 검토).
 """
 import io
 import json
@@ -14,34 +14,31 @@ import sys
 from collections import OrderedDict
 
 RULES = [
-    "Bash(bash:*)",
-    "Bash(sh:*)",
+    # 스크립트 경로 접두만(11-04 협업 세션 검토 — `Bash(bash:*)`·`env`·`xargs`·`timeout`은 임의 명령을 허용하는 것과 같아 뺐다).
     "Bash(./tools/:*)",
     "Bash(tools/:*)",
-    "Bash(env:*)",
-    "Bash(NEXA_TEST_HEADLESS=1 bash:*)",
+    "Bash(bash tools/:*)",
+    "Bash(bash ./tools/:*)",
     "Bash(NEXA_TEST_HEADLESS=1 ./tools/:*)",
+    "Bash(NEXA_TEST_HEADLESS=1 tools/:*)",
+    "Bash(NEXA_TEST_HEADLESS=1 bash tools/:*)",
+    "PowerShell(bash tools/:*)",
+    # 스크립트 밖에서 세션이 결과를 읽을 때 쓰는 읽기 전용 보조 명령.
     "Bash(cygpath:*)",
-    "Bash(unzip:*)",
-    "Bash(tar:*)",
     "Bash(du:*)",
     "Bash(sleep:*)",
-    "Bash(timeout:*)",
     "Bash(sort:*)",
     "Bash(uniq:*)",
     "Bash(cut:*)",
-    "Bash(sed:*)",
     "Bash(tr:*)",
     "Bash(diff:*)",
     "Bash(stat:*)",
     "Bash(od:*)",
-    "Bash(xargs:*)",
     "Bash(dirname:*)",
     "Bash(basename:*)",
     "Bash(uname:*)",
     "Bash(tasklist:*)",
     "Bash(pgrep:*)",
-    "PowerShell(bash:*)",
     "PowerShell(Get-Date:*)",
     "PowerShell(Get-TimeZone:*)",
 ]
