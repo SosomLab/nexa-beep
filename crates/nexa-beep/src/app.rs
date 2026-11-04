@@ -184,6 +184,15 @@ pub(crate) fn startup_mark(stage: usize) {
 
 /// `NEXA_BOOT_TRACE=<파일>`(INS-3 · 49 B-1·B-3 진단 스위치 · NETMON 선례): 부팅 5점 줄을 그 파일에 덧붙인다(없으면 no-op).
 /// stderr `[startup]`은 `NEXA_PAINT_TRACE`가 켜야 나오지만 파일은 이 변수만으로 — 설치본에서도 진단 가능.
+/// `NEXA_ACK_TRACE`(INS-6 · 49 F-1 · NFR-B-9 왕복 ≤50ms P95): 1:1 발신 seq → 상대 Delivered ack 도착까지 ms를 모아 종료 때
+/// `[ack] n= p50= p95= max=` 한 줄(stderr · tools/ack-bench.sh가 판정). 꺼져 있으면 비용 0(OnceLock 1회).
+fn ack_trace_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        std::env::var_os("NEXA_ACK_TRACE").is_some_and(|v| !v.is_empty() && v != "0")
+    })
+}
+
 fn boot_trace_write(line: &str) {
     static PATH: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
     let Some(path) =
@@ -4046,6 +4055,9 @@ struct App {
     history_marks: u32,
     /// 이벤트 루프 틱 수(RL-10 계측 · `[idle] ticks=` · NEXA_PAINT_TRACE).
     tick_count: u64,
+    /// ack 왕복 계측(INS-6 · NEXA_ACK_TRACE): 발신 seq → 발신 시각 · 도착한 Delivered ack의 왕복 ms.
+    ack_sent_at: HashMap<u64, Instant>,
+    ack_lat_ms: Vec<u64>,
     /// 헤드리스 더티 창(RL-10 · 11-04): 숨은 창은 OS 재도색 사건이 없으므로 `request_redraw`가 여기 적고 틱이 그린다
     /// (종전 = 틱마다 전 창 그리기 = 헤드리스에선 유휴 바닥이 없었다). `request_redraw(&self)`라 RefCell.
     headless_dirty: std::cell::RefCell<std::collections::HashSet<WindowId>>,
@@ -9829,6 +9841,9 @@ impl App {
                 importance,
                 broadcast: false,
             };
+            if ack_trace_enabled() && self.ack_sent_at.len() < 10_000 {
+                self.ack_sent_at.insert(msg.seq, Instant::now()); // INS-6 — Delivered ack 도착 때 왕복 ms
+            }
             let me = self.identity.peer_id();
             // ★ 구버전 기기용 평문(11-04) — 같은 seq · 본문에 인용 한 줄(`reply_fallback_text`).
             let plain_bytes = reply.as_ref().map(|r| {
@@ -20899,6 +20914,12 @@ impl ApplicationHandler<AppEvent> for App {
                 // '읽음 up-to' 규약: Read는 그 seq 이하 내 메시지 전부 읽음(대화창
                 // 열면 보이는 것 다 읽힌다) · Delivered는 그 seq 하나(전달과 독립).
                 use nbeep_core::AckKind;
+                if ack_trace_enabled() && matches!(kind, AckKind::Delivered) {
+                    if let Some(t0) = self.ack_sent_at.remove(&target_seq) {
+                        self.ack_lat_ms
+                            .push(u64::try_from(t0.elapsed().as_millis()).unwrap_or(u64::MAX));
+                    }
+                }
                 let (deliv, read) = match kind {
                     AckKind::Delivered => (true, false),
                     AckKind::Read => (false, true),
@@ -22874,6 +22895,20 @@ impl ApplicationHandler<AppEvent> for App {
     }
 
     fn exiting(&mut self, _el: &ActiveEventLoop) {
+        if ack_trace_enabled() && !self.ack_lat_ms.is_empty() {
+            // INS-6 계측: Delivered ack 왕복 ms 분포(발신 100회 → P95 ≤ 50ms · NFR-B-9).
+            let mut v = self.ack_lat_ms.clone();
+            v.sort_unstable();
+            let pct = |p: usize| v[((v.len() - 1) * p) / 100];
+            eprintln!(
+                "[ack] n={} p50={}ms p95={}ms max={}ms unacked={}",
+                v.len(),
+                pct(50),
+                pct(95),
+                v[v.len() - 1],
+                self.ack_sent_at.len()
+            );
+        }
         if paint_trace_enabled() {
             // RL-10 계측: 틱 수 / 가동 ms → 평균 Hz(유휴 5Hz → ≤1Hz 판정 근거).
             let up = self.now_ms().max(1);
@@ -24984,6 +25019,8 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         history_marks: 0,
         pii_last: None,
         tick_count: 0,
+        ack_sent_at: HashMap::new(),
+        ack_lat_ms: Vec::new(),
         headless_dirty: std::cell::RefCell::new(std::collections::HashSet::new()),
         blocked_ctx: None,
         want_blocked_window: false,
