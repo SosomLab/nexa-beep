@@ -189,6 +189,10 @@ pub const ADVANCED: &[&str] = &[
     "xfer.timeout_sec",
     "xfer.auto_cancel_min",
     "group.resync_keep",
+    // 그룹 초대 생애주기(GINV-1 S2 · DR-30 · 11-04) — 고급 › 그룹 초대.
+    "group.reinvite_hours",
+    "group.invite_expire_days",
+    "group.decline_undo_secs",
     "net.session_port",
     "log.retain_days",
     "log.max_total_mb",
@@ -1900,6 +1904,51 @@ pub fn registry() -> &'static [Entry] {
             desc: Msg::LogViewDesc,
             kind: SettingKind::Action { verb: Msg::ActOpen },
             key: "log.view",
+        },
+        // ── 고급 › 그룹 초대(GINV-1 S2 · DR-30 · 사용자 11-04 "구현에 필요한 값은 고급 설정에") — 기본값 = 첫 항목 ──
+        Entry {
+            cat: Msg::CatAdvanced,
+            sub: Some(Msg::SubGroupInvite),
+            label: Msg::GroupReinviteHours,
+            desc: Msg::GroupReinviteHoursDesc,
+            kind: SettingKind::RadioInput(
+                &[
+                    ("24", Msg::Hours24),
+                    ("1", Msg::Hours1),
+                    ("6", Msg::Hours6),
+                    ("72", Msg::Hours72),
+                ],
+                "시간",
+            ),
+            key: "group.reinvite_hours",
+        },
+        Entry {
+            cat: Msg::CatAdvanced,
+            sub: Some(Msg::SubGroupInvite),
+            label: Msg::GroupInviteExpireDays,
+            desc: Msg::GroupInviteExpireDaysDesc,
+            kind: SettingKind::RadioInput(
+                &[
+                    ("7", Msg::Days7),
+                    ("1", Msg::Days1),
+                    ("3", Msg::Days3),
+                    ("30", Msg::Days30),
+                    ("0", Msg::DurNever),
+                ],
+                "일",
+            ),
+            key: "group.invite_expire_days",
+        },
+        Entry {
+            cat: Msg::CatAdvanced,
+            sub: Some(Msg::SubGroupInvite),
+            label: Msg::GroupDeclineUndoSecs,
+            desc: Msg::GroupDeclineUndoSecsDesc,
+            kind: SettingKind::RadioInput(
+                &[("5", Msg::Secs5), ("0", Msg::Secs0), ("10", Msg::Secs10)],
+                "초",
+            ),
+            key: "group.decline_undo_secs",
         },
         // ── 고급 › 네트워크 점검(netmon · 08-21 — 옵트인 계측 기록 · 기본 off) ──
         Entry {

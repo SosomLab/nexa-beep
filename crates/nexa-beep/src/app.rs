@@ -3254,6 +3254,14 @@ enum AlertCtx {
         gid: nbeep_core::group::GroupId,
         peer: PeerId,
     },
+    /// 재초대/정리 선택(GINV-1 S2 · DR-30 · 11-04) — 구성원 모달의 "초대 대기"·"거절됨" 행 클릭. `in_roster`=false면 거절
+    /// 메모만 남은 상대(아니오 = 기록 지우기) · true면 명부 안(아니오 = 제외).
+    GroupReinvite {
+        gid: nbeep_core::group::GroupId,
+        uid: nbeep_core::GroupUid,
+        peer: PeerId,
+        in_roster: bool,
+    },
     /// 원격 인바운드 요청 대기(M5-3b · ADR-0006 §6 — FR-S-25) — 긍정 = 수락·등록.
     /// 세션 실물은 `pending_remote` 슬롯에 있다(AlertCtx는 Clone이라 못 담는다).
     RemoteInbound { peer: PeerId },
@@ -3905,6 +3913,8 @@ struct App {
     /// 열려 있는 구성원 모달의 문맥(G4) — (방, 표시 순서의 구성원, 내가 소유자인가).
     /// 행 클릭(제외)의 인덱스 해석 근거 — 모달 내용과 같은 순서로 만든다.
     members_ctx: Option<(nbeep_core::group::GroupId, Vec<PeerId>, bool)>,
+    /// 초대 만료 틱 다음 시각(S2 · 60초 페이스).
+    invite_expire_at: u64,
     /// 설정 초기화 확인 대기(08-15 · 고급 — 확인 모달은 about_to_wait에서 연다).
     pending_reset: bool,
     /// IME 중재 상태기계(M3-1e G3 — [`crate::ime_gate`]): 조합 게이트·보류-판정·
@@ -7158,6 +7168,39 @@ impl App {
                 }
                 Some(("group.accept", _)) => self.script_group_accept(),
                 Some(("group.decline", _)) => self.script_group_decline(),
+                // 재초대(S2 · 11-04) — 소유자 · 이름 부분 일치 · 제한에 걸리면 `[script] group.reinvite: wait`.
+                Some(("group.reinvite", name)) => {
+                    // 이름 부분 일치 → 없으면 **짧은 지문**(8자리 · 재기동 뒤 발견 목록에 없는 거절 메모 상대).
+                    let found = self.script_group().and_then(|gid| {
+                        let s = self.groups.shared_by_id(gid)?;
+                        let key = name.trim();
+                        let p = self.script_find_peer(key).or_else(|| {
+                            s.roster
+                                .members
+                                .iter()
+                                .copied()
+                                .chain(
+                                    self.groups
+                                        .members_meta_of(s.roster.uid)
+                                        .into_iter()
+                                        .map(|(p, _)| p),
+                                )
+                                .find(|p| p.short() == key)
+                        })?;
+                        Some((gid, s.roster.uid, p, s.roster.has_member(p)))
+                    });
+                    match found {
+                        Some((gid, uid, p, in_roster)) => {
+                            let sent = self.reinvite_member(gid, uid, p, in_roster, el);
+                            eprintln!(
+                                "[script] group.reinvite: {}",
+                                if sent { "sent" } else { "wait" }
+                            );
+                        }
+                        None => eprintln!("[script] group.reinvite: 방/상대 없음 '{name}'"),
+                    }
+                }
+                Some(("group.expire", _)) => self.invite_expire_tick(true),
                 // 구성원 추가/제외(소유자 · 11-04) — 구성원 모달과 같은 행동(`handle_group_action`).
                 Some(("group.add", names)) | Some(("group.remove", names)) => {
                     let peers: Vec<PeerId> = names
@@ -7248,6 +7291,7 @@ impl App {
                 None if step == "dump" => self.script_dump(),
                 None if step == "group.accept" => self.script_group_accept(), // 값 없는 동사(11-04)
                 None if step == "group.decline" => self.script_group_decline(),
+                None if step == "group.expire" => self.invite_expire_tick(true), // 만료 즉시(S2 시험)
                 // ★ 답장 자동화(11-02): 열린 1:1 대화의 **마지막 열쇠 있는 줄**에 답장을 보낸다(우클릭 ▸ 답장 → 전송과 같은 경로).
                 Some(("reply", text)) => {
                     match self
@@ -7451,13 +7495,28 @@ impl App {
                     format!("{}={st}", m.short())
                 })
                 .collect();
+            // 명부 밖 거절 메모(S2) = ` declined=<short>,…` 꼬리(없으면 생략).
+            let declined: Vec<String> = self
+                .groups
+                .members_meta_of(sg.roster.uid)
+                .into_iter()
+                .filter(|(p, m)| {
+                    m.state == nbeep_store::MemberState::Declined && !sg.roster.has_member(*p)
+                })
+                .map(|(p, _)| p.short())
+                .collect();
             eprintln!(
-                "[dump] group {} name={} mine={:?} owner={} members={}",
+                "[dump] group {} name={} mine={:?} owner={} members={}{}",
                 sg.roster.uid.short(),
                 sg.roster.name.as_str(),
                 sg.mine,
                 sg.roster.owner.short(),
-                members.join(",")
+                members.join(","),
+                if declined.is_empty() {
+                    String::new()
+                } else {
+                    format!(" declined={}", declined.join(","))
+                }
             );
             if let Some(lines) = self.group_threads.get(&sg.local_id) {
                 for l in lines {
@@ -13163,6 +13222,14 @@ impl App {
         // 판정·같은 팔레트**(08-15 사용자 확정 "아바타 옆 점과 색을 맞춰줘").
         let mut members: Vec<PeerId> = s.roster.members.clone();
         members.sort_by_key(|m| *m != s.roster.owner);
+        // 거절 메모만 남은 상대(S2 · 명부 밖)는 소유자 시점에 꼬리 행("거절함 · n일 전" · 클릭 = 재초대/기록 지우기).
+        if s.roster.owner == me {
+            for (p, m) in self.groups.members_meta_of(s.roster.uid) {
+                if m.state == nbeep_store::MemberState::Declined && !s.roster.has_member(p) {
+                    members.push(p);
+                }
+            }
+        }
         // 내가 소유자면 미수락 구성원에 "초대 대기 · n일 전"/"거절함"을 붙인다(08-19 — 첫 전달 실패를
         // 눈에 보이게 · 11-04 GINV-1 S1 — 상태는 `groups.seg` v4 메모 · 재시작을 넘긴다).
         let owner_view = s.roster.owner == me;
@@ -13200,9 +13267,11 @@ impl App {
                     use nbeep_store::MemberState as MS;
                     match self.groups.member_meta(uid, *m) {
                         Some(meta) if meta.state == MS::Joined => None,
-                        Some(meta) if meta.state == MS::Declined => {
-                            Some(nbeep_core::t(nbeep_core::Msg::MemberDeclined).to_string())
-                        }
+                        Some(meta) if meta.state == MS::Declined => Some(format!(
+                            "{} · {}",
+                            nbeep_core::t(nbeep_core::Msg::MemberDeclined),
+                            ago_text(now, meta.at_ms)
+                        )),
                         Some(meta) => Some(format!(
                             "{} · {}",
                             nbeep_core::t(nbeep_core::Msg::MemberPending),
@@ -13293,6 +13362,16 @@ impl App {
             .map(|s| {
                 let mut m = s.roster.members.clone();
                 m.sort_by_key(|p| *p != s.roster.owner); // summary와 같은 정렬
+                if s.roster.owner == me {
+                    // 거절 메모 꼬리 행(S2) — summary와 같은 순서·같은 조건.
+                    for (p, meta) in self.groups.members_meta_of(s.roster.uid) {
+                        if meta.state == nbeep_store::MemberState::Declined
+                            && !s.roster.has_member(p)
+                        {
+                            m.push(p);
+                        }
+                    }
+                }
                 (m, s.roster.owner == me)
             })
             .unwrap_or_default();
@@ -17600,6 +17679,24 @@ impl App {
                     self.set_status(nbeep_core::t(nbeep_core::Msg::StRemoveCancel));
                 }
             }
+            AlertCtx::GroupReinvite {
+                gid,
+                uid,
+                peer,
+                in_roster,
+            } => {
+                if yes {
+                    let _ = self.reinvite_member(gid, uid, peer, in_roster, el);
+                } else if in_roster {
+                    self.handle_group_action(
+                        nbeep_ui::GroupAction::RemoveMembers(gid, vec![peer]),
+                        el,
+                    );
+                } else if self.groups.forget_member(uid, peer) {
+                    self.set_status(nbeep_core::t(nbeep_core::Msg::BtnForget));
+                }
+                self.open_group_members(gid); // 편집 후 새 명부로 다시 연다(GroupKick과 같은 흐름)
+            }
             AlertCtx::SettingsReset => {
                 if yes {
                     {
@@ -17635,6 +17732,119 @@ impl App {
             // 합류 = 구성원들과 연결(아바타·프로필은 세션 경유 · 08-14).
             self.connect_group_members(uid);
         }
+    }
+
+    /// ★ 재초대(GINV-1 S2 · DR-30): 간격 제한(`group.reinvite_hours` · 메모 `last_ms` 기준)을 지나야 보낸다. 명부 안(초대
+    /// 대기) = 같은 명부로 Invite 재송 · 명부 밖(거절됨) = 구성원 추가 경로(명부 갱신·배포 · 메모 Invited로 새 시작).
+    /// 반환 = 보냈는가(아니면 "n시간 뒤 가능" 상태 바).
+    fn reinvite_member(
+        &mut self,
+        gid: nbeep_core::group::GroupId,
+        uid: nbeep_core::GroupUid,
+        peer: PeerId,
+        in_roster: bool,
+        el: &ActiveEventLoop,
+    ) -> bool {
+        let now = unix_now_ms();
+        let hours = group_reinvite_hours(&self.settings);
+        if let Some(m) = self.groups.member_meta(uid, peer) {
+            if m.state == nbeep_store::MemberState::Joined {
+                return false; // 이미 구성원
+            }
+            if let Some(wait_ms) = reinvite_wait_ms(m.last_ms, hours, now) {
+                let left_h = wait_ms.div_ceil(3_600_000).max(1);
+                self.set_status(nbeep_core::tf(
+                    nbeep_core::Msg::StfReinviteWait,
+                    &[&left_h.to_string()],
+                ));
+                return false;
+            }
+        }
+        if in_roster {
+            let Some(invite) = self.groups.shared_by_id(gid).map(|s| {
+                nbeep_core::SGroupMsg::Invite {
+                    roster: s.roster.clone(),
+                }
+                .encode()
+            }) else {
+                return false;
+            };
+            self.send_group_frames(peer, vec![invite]);
+            let _ = self
+                .groups
+                .note_member(uid, peer, nbeep_store::MemberState::Invited, now);
+        } else {
+            // 거절 메모만 남은 상대 — 구성원 추가와 같은 길(명부 갱신·전원 배포·Invite · note_member Invited = 새 시작).
+            self.handle_group_action(nbeep_ui::GroupAction::AddMembers(gid, vec![peer]), el);
+        }
+        self.set_status(nbeep_core::tf(
+            nbeep_core::Msg::StfReinviteSent,
+            &[&self.peer_title(peer)],
+        ));
+        self.refresh_and_redraw();
+        true
+    }
+
+    /// ★ 초대 만료 틱(GINV-1 S2 · DR-30 · `group.invite_expire_days` · 0 = 없음): 내가 소유한 방의 **초대 대기**(메모 Invited)가
+    /// 첫 초대 시각에서 기간을 넘기면 명부에서 빼고(만료자에게 마지막 명부 1회 = 그쪽 초대 카드도 닫힘) 재배포 · 방 스레드에
+    /// "초대 만료: 이름" 한 줄. 60초 페이스 · `force`(스크립트 `group.expire`) = 기간 무관 즉시.
+    fn invite_expire_tick(&mut self, force: bool) {
+        let now = unix_now_ms();
+        if !force {
+            if now < self.invite_expire_at {
+                return;
+            }
+            self.invite_expire_at = now + 60_000;
+        }
+        let days = group_invite_expire_days(&self.settings);
+        if days == 0 && !force {
+            return;
+        }
+        let me = self.identity.peer_id();
+        let limit = days.saturating_mul(86_400_000);
+        let targets: Vec<(nbeep_core::group::GroupId, nbeep_core::Roster, Vec<PeerId>)> = self
+            .groups
+            .shared_list()
+            .iter()
+            .filter(|s| s.roster.owner == me)
+            .filter_map(|s| {
+                let expired: Vec<PeerId> = s
+                    .roster
+                    .members
+                    .iter()
+                    .copied()
+                    .filter(|p| *p != me)
+                    .filter(|p| {
+                        self.groups.member_meta(s.roster.uid, *p).is_some_and(|m| {
+                            m.state == nbeep_store::MemberState::Invited
+                                && (force || now >= m.at_ms.saturating_add(limit))
+                        })
+                    })
+                    .collect();
+                (!expired.is_empty()).then(|| (s.local_id, s.roster.clone(), expired))
+            })
+            .collect();
+        if targets.is_empty() {
+            return;
+        }
+        for (gid, mut roster, expired) in targets {
+            roster.members.retain(|m| !expired.contains(m));
+            roster.version += 1;
+            let frame = nbeep_core::SGroupMsg::Roster {
+                roster: roster.clone(),
+            }
+            .encode();
+            for p in &expired {
+                self.send_group_frames(*p, vec![frame.clone()]);
+            }
+            self.broadcast_roster(roster);
+            let names: Vec<String> = expired.iter().map(|p| self.peer_title(*p)).collect();
+            let text = nbeep_core::tf(nbeep_core::Msg::StfInviteExpired, &[&names.join(", ")]);
+            let mut inv = Invalidations::default();
+            self.push_group_note(gid, &text, &mut inv);
+            self.set_status(text);
+        }
+        self.refresh_and_redraw();
     }
 
     /// 초대 거절 본체(11-04 스크립트 `group.decline`와 공용): 소유자에게 Decline → 내 쪽 방 제거.
@@ -17756,6 +17966,13 @@ impl App {
                     return;
                 }
                 let mut roster = s.roster.clone();
+                // 거절 메모(S2) — 명부에서 빠져도 남아 "거절됨 · [재초대]" 행이 된다(재초대 24h 제한의 last_ms 기준).
+                let _ = self.groups.note_member(
+                    uid,
+                    peer,
+                    nbeep_store::MemberState::Declined,
+                    unix_now_ms(),
+                );
                 roster.members.retain(|m| *m != peer);
                 roster.version += 1;
                 self.broadcast_roster(roster);
@@ -19212,16 +19429,57 @@ impl App {
                             if let Some(&peer) = order.get(i) {
                                 if peer != me {
                                     let name = self.peer_title(peer);
-                                    self.open_choice(
-                                        el,
-                                        "구성원 제외",
-                                        &format!(
-                                            "'{name}' 님을 이 그룹에서 제외할까요?\n(제외자에게 마지막 명부가 1회 배포됩니다)"
+                                    // S2(DR-30): 수락한 구성원 = 제외 확인 · 초대 대기/거절됨 = 재초대(아니오 = 제외/기록 지우기).
+                                    let info = self.groups.shared_by_id(gid).map(|s| {
+                                        (
+                                            s.roster.uid,
+                                            s.roster.has_member(peer),
+                                            self.groups.member_meta(s.roster.uid, peer),
+                                        )
+                                    });
+                                    match info {
+                                        Some((uid, in_roster, meta))
+                                            if meta.map(|m| m.state)
+                                                != Some(nbeep_store::MemberState::Joined) =>
+                                        {
+                                            let state = match meta.map(|m| m.state) {
+                                                Some(nbeep_store::MemberState::Declined) => {
+                                                    nbeep_core::t(nbeep_core::Msg::MemberDeclined)
+                                                }
+                                                _ => nbeep_core::t(nbeep_core::Msg::MemberPending),
+                                            };
+                                            self.open_choice(
+                                                el,
+                                                nbeep_core::t(nbeep_core::Msg::MemberReinviteTitle),
+                                                &nbeep_core::tf(
+                                                    nbeep_core::Msg::MemberReinviteAsk,
+                                                    &[&name, state],
+                                                ),
+                                                nbeep_core::t(nbeep_core::Msg::BtnReinvite),
+                                                nbeep_core::t(if in_roster {
+                                                    nbeep_core::Msg::BtnKick
+                                                } else {
+                                                    nbeep_core::Msg::BtnForget
+                                                }),
+                                                AlertCtx::GroupReinvite {
+                                                    gid,
+                                                    uid,
+                                                    peer,
+                                                    in_roster,
+                                                },
+                                            );
+                                        }
+                                        _ => self.open_choice(
+                                            el,
+                                            "구성원 제외",
+                                            &format!(
+                                                "'{name}' 님을 이 그룹에서 제외할까요?\n(제외자에게 마지막 명부가 1회 배포됩니다)"
+                                            ),
+                                            "제외",
+                                            "취소",
+                                            AlertCtx::GroupKick { gid, peer },
                                         ),
-                                        "제외",
-                                        "취소",
-                                        AlertCtx::GroupKick { gid, peer },
-                                    );
+                                    }
                                 }
                             }
                         }
@@ -22003,6 +22261,7 @@ impl ApplicationHandler<AppEvent> for App {
             self.open_log_window(el);
         }
         self.refresh_log_view(); // 로그 창(LOG-1) — 열려 있을 때만 · 같은 일련번호 = 비용 0
+        self.invite_expire_tick(false); // 초대 만료(S2 · 60초 페이스 내부 가드)
         if self.devices_view.is_some() {
             self.refresh_devices_view(); // 접속 상태·"N분 전"은 틱마다 · 같은 내용이면 비용 0
         }
@@ -23303,6 +23562,28 @@ fn effective_display_name(
 /// 그룹 미전달 보관 상한(ADR-0012 §4 — 주체 = 송신자 · 사용자 확정 08-13).
 /// 설정 `group.resync_keep` 관용 파싱 — 무효·0은 기본 200. **사용 시점에 읽어**
 /// 설정 변경이 재시작 없이 반영된다(hot-swap 원칙).
+/// 재초대 간격(시간 · `group.reinvite_hours` · 기본 24 · 0 = 제한 없음).
+fn group_reinvite_hours(settings: &SettingsState) -> u64 {
+    settings.get("group.reinvite_hours").parse().unwrap_or(24)
+}
+
+/// 초대 만료(일 · `group.invite_expire_days` · 기본 7 · 0 = 없음).
+fn group_invite_expire_days(settings: &SettingsState) -> u64 {
+    settings
+        .get("group.invite_expire_days")
+        .parse()
+        .unwrap_or(7)
+}
+
+/// 재초대까지 남은 ms(순수 · S2 규칙): 마지막 초대 `last_ms`에서 `hours`가 지나지 않았으면 `Some(남은 ms)` · 지났거나 제한 0이면 None.
+fn reinvite_wait_ms(last_ms: u64, hours: u64, now_ms: u64) -> Option<u64> {
+    if hours == 0 {
+        return None;
+    }
+    let next = last_ms.saturating_add(hours.saturating_mul(3_600_000));
+    (now_ms < next).then(|| next - now_ms)
+}
+
 fn group_resync_keep(settings: &SettingsState) -> usize {
     settings
         .get("group.resync_keep")
@@ -23945,6 +24226,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         pending_peer_info: None,
         verify_hinted: std::collections::HashSet::new(),
         members_ctx: None,
+        invite_expire_at: 0,
         pending_reset: false,
         conversations: HashMap::new(),
         dedup: nbeep_core::DedupIndex::new(),
@@ -25054,6 +25336,18 @@ mod tests {
             "┃ 철수: 원본 글\n답"
         );
         assert_eq!(reply_fallback_text(None, &r, "답"), "┃ 원본 글\n답");
+    }
+
+    /// S2(DR-30): 재초대 간격 — 지나지 않았으면 남은 ms · 지났으면 None · 제한 0 = 항상 허용.
+    #[test]
+    fn reinvite_wait_rule() {
+        use super::reinvite_wait_ms;
+        let h = 3_600_000;
+        assert_eq!(reinvite_wait_ms(1_000, 24, 1_000 + 24 * h), None);
+        assert_eq!(reinvite_wait_ms(1_000, 24, 1_000 + 23 * h), Some(h));
+        assert_eq!(reinvite_wait_ms(1_000, 0, 1_000), None);
+        // 포화: last_ms가 끝에 가까우면 next = MAX → now == MAX면 기다릴 것 없음(None).
+        assert_eq!(reinvite_wait_ms(u64::MAX - 10, 24, u64::MAX), None);
     }
 
     /// STALL-1(11-04): 핸들러가 상한을 넘기면 Drop이 꼬리표·ms를 남기고, 짧으면 아무것도 남기지 않는다 ·

@@ -29,11 +29,12 @@ use std::io;
 use std::path::PathBuf;
 
 const MAGIC: [u8; 4] = *b"NBGS";
+/// v5(11-04 · GINV-1 S2) = v4 + 구성원 메모 `last_ms`(마지막 초대 송신 시각 — 재초대 24h 제한 근거) · 거절 메모는 명부에서 빠져도 남는다.
 /// v4(11-04 · GINV-1 S1) = v3 + 공유 그룹 **구성원 상태 꼬리**(소유자 로컬 메모 — 초대 대기·수락·거절 · 재시작을 넘긴다).
 /// v3(08-15) = v2 + 공유 그룹 **목록 고정(pinned) 꼬리**(사용자 요청 — 그룹방 핀).
 /// v2(08-13) = v1(로컬 그룹) + 공유 그룹 레코드(M5-1g · ADR-0012).
 /// 구버전 파일도 읽는다(없는 필드 = 기본값 — 전방·후방 관용).
-const VER: u8 = 4;
+const VER: u8 = 5;
 const VER_V2: u8 = 2;
 const VER_V1: u8 = 1;
 
@@ -77,6 +78,8 @@ pub struct MemberMeta {
     pub at_ms: u64,
     /// 초대장을 보낸 횟수(재초대 제한 S2의 근거 · 포화).
     pub tries: u8,
+    /// 마지막 초대 송신 시각(unix ms · v5 · S2 재초대 간격 `group.reinvite_hours`의 기준 — `at_ms`는 첫 초대 시각으로 유지).
+    pub last_ms: u64,
 }
 
 /// 공유 그룹에서의 내 상태(ADR-0012 G-4 — 초대 수락제).
@@ -342,9 +345,11 @@ impl FileGroupStore {
                 return None; // 구버전·소유자 불일치 — 거부(fail-closed)
             }
             s.roster = roster;
-            // 명부에서 빠진 상대의 메모는 걷어낸다(거절·제외 뒤 재초대 = 새로 시작).
+            // 명부에서 빠진 상대의 메모는 걷어낸다 — 단 **거절 메모는 남긴다**(S2 · "거절됨 · [재초대]" 행의 근거 ·
+            // 재초대하면 Invited로 바뀌며 새로 시작).
             let keep = s.roster.members.clone();
-            s.members_meta.retain(|(p, _)| keep.contains(p));
+            s.members_meta
+                .retain(|(p, m)| keep.contains(p) || m.state == MemberState::Declined);
             let id = s.local_id;
             self.persist();
             return Some(id);
@@ -386,6 +391,7 @@ impl FileGroupStore {
                         let was = *m;
                         m.state = MemberState::Invited;
                         m.tries = m.tries.saturating_add(1);
+                        m.last_ms = now_ms;
                         if was.state != MemberState::Invited {
                             m.at_ms = now_ms;
                         }
@@ -406,6 +412,7 @@ impl FileGroupStore {
                         state,
                         at_ms: now_ms,
                         tries: u8::from(state == MemberState::Invited),
+                        last_ms: now_ms,
                     },
                 ));
                 true
@@ -415,6 +422,30 @@ impl FileGroupStore {
             self.persist();
         }
         changed
+    }
+
+    /// 방의 구성원 메모 전부(명부 밖 거절 메모 포함 · S2 — 구성원 모달 꼬리 행·dump).
+    #[must_use]
+    pub fn members_meta_of(&self, uid: GroupUid) -> Vec<(PeerId, MemberMeta)> {
+        self.shared
+            .iter()
+            .find(|s| s.roster.uid == uid)
+            .map(|s| s.members_meta.clone())
+            .unwrap_or_default()
+    }
+
+    /// 메모 삭제(거절 기록 지우기 · S2) — 반환 = 있었는가.
+    pub fn forget_member(&mut self, uid: GroupUid, peer: PeerId) -> bool {
+        let Some(s) = self.shared.iter_mut().find(|s| s.roster.uid == uid) else {
+            return false;
+        };
+        let before = s.members_meta.len();
+        s.members_meta.retain(|(p, _)| *p != peer);
+        let removed = s.members_meta.len() != before;
+        if removed {
+            self.persist();
+        }
+        removed
     }
 
     /// 구성원 상태 메모 조회(없음 = 초대 기록 없음 — 호출자는 "초대 대기"로 본다).
@@ -629,6 +660,7 @@ fn encode_body(store: &GroupStore, shared: &[SharedGroup]) -> Vec<u8> {
             out.push(m.state.to_byte());
             out.extend_from_slice(&m.at_ms.to_be_bytes());
             out.push(m.tries);
+            out.extend_from_slice(&m.last_ms.to_be_bytes()); // v5
         }
     }
     out
@@ -688,12 +720,19 @@ fn decode_body(ver: u8, bytes: &[u8]) -> Option<(GroupStore, Vec<SharedGroup>)> 
                     let state = MemberState::from_byte(take(&mut p, 1)?[0])?;
                     let at_ms = u64::from_be_bytes(take(&mut p, 8)?.try_into().ok()?);
                     let tries = take(&mut p, 1)?[0];
+                    // v5 — 마지막 초대 시각(v4 = 첫 초대 시각으로 관용).
+                    let last_ms = if ver >= 5 {
+                        u64::from_be_bytes(take(&mut p, 8)?.try_into().ok()?)
+                    } else {
+                        at_ms
+                    };
                     members_meta.push((
                         peer,
                         MemberMeta {
                             state,
                             at_ms,
                             tries,
+                            last_ms,
                         },
                     ));
                 }
@@ -907,16 +946,28 @@ mod tests {
             Some(MemberMeta {
                 state: MemberState::Joined,
                 at_ms: 7_000,
-                tries: 1
+                tries: 1,
+                last_ms: 1_000
             }),
             "재시작을 넘긴다"
         );
-        assert_eq!(gs.member_meta(uid, pid(2)).map(|m| m.tries), Some(2));
+        assert_eq!(gs.member_meta(uid, pid(2)).map(|m| (m.tries, m.last_ms)), Some((2, 5_000)));
         // 명부 갱신으로 pid(2)가 빠지면 메모도 걷힌다.
         gs.upsert_shared(roster(2, vec![pid(1), pid(3)]), MineState::Owner)
             .unwrap();
         assert_eq!(gs.member_meta(uid, pid(2)), None);
         assert!(gs.member_meta(uid, pid(3)).is_some());
+        // ★ S2: 거절 메모는 명부에서 빠져도 남는다(재초대 행의 근거) · 지우기로만 사라진다.
+        gs.upsert_shared(roster(3, vec![pid(1), pid(3), pid(4)]), MineState::Owner)
+            .unwrap();
+        assert!(gs.note_member(uid, pid(4), MemberState::Invited, 10_000));
+        assert!(gs.note_member(uid, pid(4), MemberState::Declined, 11_000));
+        gs.upsert_shared(roster(4, vec![pid(1), pid(3)]), MineState::Owner)
+            .unwrap();
+        assert_eq!(gs.member_meta(uid, pid(4)).map(|m| m.state), Some(MemberState::Declined));
+        assert_eq!(gs.members_meta_of(uid).len(), 2);
+        assert!(gs.forget_member(uid, pid(4)));
+        assert_eq!(gs.member_meta(uid, pid(4)), None);
     }
 
     /// ★ 잠긴 세그먼트 보관 이동(08-19) — 다른 신원 키의 파일을 `<이름>.locked`로
