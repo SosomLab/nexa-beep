@@ -49,6 +49,8 @@ jobs:
         run: cargo doc --workspace --no-deps --features nbeep-core/testkit,nbeep-net/testkit,nbeep-crypto/testkit
       - name: 라이선스 게이트(DR-12 · INS-2 — GPL/LGPL/AGPL 금지 · Cargo.lock 그대로)
         run: python3 tools/check-licenses.py
+      - name: 아키텍처 단언(49 M-1·M-2 · INS-8 — 의존 방향 · 포트 외부 타입 0)
+        run: python3 tools/check-arch.py
 
   # ── 테스트: 네이티브 3-OS(중립 크레이트 4타깃 검증의 실행부) ──
   test:

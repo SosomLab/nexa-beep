@@ -18,6 +18,8 @@ step "clippy";        cargo clippy --workspace --all-targets --features "$F" -- 
 step "rustdoc 링크";  RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --features "$F" >/dev/null
 # 11-04 INS-2(DR-12): 의존성 라이선스 게이트 — GPL/LGPL/AGPL(퍼미시브 대안 없음) = 실패 · MPL·license-file만 = 경고.
 step "라이선스(DR-12)"; "$(command -v python3 || command -v python)" tools/check-licenses.py
+# 11-04 INS-8(49 M-1·M-2 · DR-21): 의존 방향(core 의존 0 · 하위 크레이트의 표현·앱 금지 · nexa-ctl의 앱 도메인 금지) + 포트 파일 외부 타입 0.
+step "아키텍처(DR-21)"; "$(command -v python3 || command -v python)" tools/check-arch.py
 if [ "$FAST" = 0 ]; then
   step "test";        cargo test --workspace --features "$F" 2>&1 | grep -E "^test result|FAILED|panicked" | awk '{p+=$4; f+=$6; i+=$8} /FAILED|panicked/{print; bad=1} END{print "합계 passed="p" failed="f" ignored="i; exit bad}'
   for t in x86_64-pc-windows-msvc aarch64-apple-darwin; do

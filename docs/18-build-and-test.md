@@ -228,7 +228,7 @@ docker run --rm -it --init -p 47200:47200 \
 packaging/linux/build-deb.sh && packaging/linux/build-rpm.sh      # → target/packaging/linux/*.{deb,rpm}
 #    glibc 하한은 바이너리 실측으로 control에 들어간다(러너 = ubuntu-22.04 → 2.35). rpm 실기 = Fedora/RHEL PC.
 # 0-a) ★ 릴리스 전 일괄 검증(사용자 확정 10-19 — 커밋마다 돌리던 게이트를 여기로 모았다 · 이 PC 1대에서 전부):
-./tools/gate.sh                                   # fmt·clippy·rustdoc·라이선스(DR-12 · tools/check-licenses.py · INS-2 11-04)·test 전량·win x64/mac arm64 check
+./tools/gate.sh                                   # fmt·clippy·rustdoc·라이선스(DR-12 · tools/check-licenses.py · INS-2 11-04)·아키텍처(DR-21 · tools/check-arch.py · INS-8 11-04)·test 전량·win x64/mac arm64 check
 cargo build --release -p nexa-beep -p nbeep-imgdec && ls -l target/release/nexa-beep*   # 산출물 ≤10MB
 pwsh tools/check-imports.ps1 target/release/nexa-beep.exe   # (Windows) 임포트 화이트리스트 — 새 DLL = 사람 검토
 ./tools/check-imports.sh target/release/nexa-beep           # (mac otool -L / Linux ldd · INS-1 11-04) 인박스·glibc 핵심 밖 = 실패 · CI 빌드 잡에 배선
