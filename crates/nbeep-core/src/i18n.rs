@@ -1315,6 +1315,10 @@ pub enum Msg {
     ResetTitle,
     ResetAsk,
     MembersRowHint,
+    /// 재연결(RL-3 · 11-04) — 연결 실패 재시도/중단 · 세션 반복 끊김 중단.
+    StfConnectFailRetry,
+    StfConnectFailStop,
+    StfSessionDropStop,
     // ── P2 설정 체계 개편(10-09 · docs/50) — 그룹 트리·시스템 카테고리·카드 문구 ──
     /// 설정 그룹(트리 최상위 — nexa-sql CATEGORY_TREE 차용).
     GrpGeneral,
@@ -1929,6 +1933,9 @@ impl Msg {
                 "表示中の設定すべてと一覧フィルター・ウィンドウサイズを既定に戻します。続けますか？\n（身元・ピン・グループ・プロフィール情報・ウィンドウ位置は維持 · プロフィール公開トグルは非公開に戻る）",
             ],
             Msg::MembersRowHint => [" · click a row = remove", " · 행 클릭 = 제외", " · 点击行 = 移除", " · 行クリック = 除外"],
+            Msg::StfConnectFailRetry => ["Connect failed ({}): {} — retry in {}s", "연결 실패({}): {} — {}초 후 재시도", "连接失败（{}）：{} — {} 秒后重试", "接続失敗（{}）: {} — {}秒後に再試行"],
+            Msg::StfConnectFailStop => ["Connect failed ({}): {} — auto retry stopped (click = resume)", "연결 실패({}): {} — 자동 재시도 중단(클릭 = 재개)", "连接失败（{}）：{} — 已停止自动重试（点击 = 继续）", "接続失敗（{}）: {} — 自動再試行を停止（クリック = 再開）"],
+            Msg::StfSessionDropStop => ["Session with {} keeps dropping — auto reconnect stopped (click = resume)", "{} 세션이 계속 끊깁니다 — 자동 재연결 중단(클릭 = 재개)", "与 {} 的会话反复断开 — 已停止自动重连（点击 = 继续）", "{} とのセッションが切れ続けます — 自動再接続を停止（クリック = 再開）"],
             Msg::StRemoveCancel => ["Member removal canceled", "구성원 제외 취소", "已取消移除成员", "メンバー除外をキャンセル"],
             Msg::StResetCancel => ["Settings reset canceled", "설정 초기화 취소", "已取消设置重置", "設定リセットをキャンセル"],
             Msg::StInviteDeclined => ["Declined the group invitation", "그룹 초대를 거절했습니다", "已拒绝群组邀请", "グループ招待を拒否しました"],

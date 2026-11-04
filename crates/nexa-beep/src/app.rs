@@ -960,6 +960,26 @@ fn reconnect_delay(stage: u8) -> Option<u64> {
     RECONNECT_BACKOFF_MS.get(stage as usize).copied()
 }
 
+/// "짧게 산 세션"(RL-3 ⓑ · 11-04): 성립 뒤 이 안에 끊기면 성립 자체가 사이클의 일부로 본다(성립 즉시 끊김 = 5초 무한
+/// 재연결이던 것). 이보다 오래 살았으면 정상 대화 뒤 끊김 = 백오프 0단부터.
+const SESSION_SHORT_MS: u64 = 30_000;
+/// LinkChanged 가속·프로브 쿨다운(ⓐⓒ · 13 §12-1 중복 가드) — 플랩(유선↔무선 연타)이 재연결 폭주·프로브 폭주로 번지지 않게.
+const LINK_CHANGE_COOLDOWN_MS: u64 = 10_000;
+/// 생사 프로브 프레임(ⓒ · 11-04): Control 스트림의 **미지 kind 1바이트** — 모든 버전이 "전방 호환 무시"로 버린다(2020·2120행).
+/// 쓰기 자체가 목적이다(죽은 소켓 = RST → Closed 즉시 · 산 세션 = 무응답). 종전 `ProfileMsg::Request`는 Full 프로필(사진
+/// 전량) 응답을 유발해 프로브 목적 대비 과중했다.
+const LINK_PROBE_FRAME: [u8; 1] = [0xFF];
+
+/// Closed 뒤 재연결 단계(RL-3 ⓑ 순수 규칙): 짧게 산 세션이면 직전 단계 +1(상한 소진 = `reconnect_delay` None → 중단) ·
+/// 오래 살았으면 0단.
+fn closed_next_stage(last_stage: Option<u8>, lived_ms: u64) -> u8 {
+    if lived_ms < SESSION_SHORT_MS {
+        last_stage.map_or(0, |s| s.saturating_add(1))
+    } else {
+        0
+    }
+}
+
 /// 오프라인 행 유지 판정의 순수 규칙(09-03) — `App::keeps_offline_row`의 알맹이.
 /// 핀(`Unverified` 초과) ∨ 대화 이력 ∨ 수동 주소 중 하나면 남긴다.
 fn offline_row_kept(level: nbeep_core::TrustLevel, has_thread: bool, has_manual: bool) -> bool {
@@ -1214,6 +1234,8 @@ struct Conversation {
     digest_sent: bool,
     /// 따라잡기 응답 예산(S4 · 세션당 1MiB — 넘으면 더 응답하지 않는다).
     sync_budget: nbeep_core::SyncBudget,
+    /// 성립 시각(단조 ms · RL-3 ⓑ) — Closed 때 "짧게 살았는가" 판정.
+    up_ms: u64,
 }
 
 /// 진행 중 발신 상태(08-16 · 재개형 펌프) — Accept가 등록하고 액터 루프 틱이
@@ -3908,6 +3930,8 @@ struct App {
     /// 자동 재연결 스케줄(사용자 확정 08-13 ⓑ) — `(백오프 단계, 다음 시도 at_ms)`.
     /// 끊김·연결 실패 시 해제, 성공·수동 클릭·상한 도달 시 해제.
     reconnect: HashMap<PeerId, (u8, u64)>,
+    /// 성립이 **스케줄된 재연결**에서 났을 때 그 단계(RL-3 ⓑ) — 짧게 살다 끊기면 다음 단계로 잇는다. 클릭·인바운드 성립 = 없음.
+    reconnect_last: HashMap<PeerId, u8>,
     /// 발견발 목록 재조립 대기(08-14 — 목록 갱신 주기 설정). 발견 이벤트는 표시만
     /// 바꾸므로 즉시 재조립하지 않고 주기에 맞춰 묶는다(그 외 경로는 즉시).
     rows_dirty: bool,
@@ -11524,6 +11548,7 @@ impl App {
                 succ_sent: false,
                 digest_sent: false,
                 sync_budget: nbeep_core::SyncBudget::new(self.sync_budget_bytes()),
+                up_ms: self.now_ms(),
             },
         );
         // 후계 증명서(S2-f) — 키 봉인본보다 **먼저**(형제가 "후계가 이긴다" 규칙으로 새 키를 채택하려면
@@ -21835,7 +21860,9 @@ impl ApplicationHandler<AppEvent> for App {
                 }
                 // 세션 채널은 지우되 **스레드는 대피**(DR-26 — 08-13 실기: 끊김·재연결마다
                 // 받았던 메시지가 통째로 사라졌다). 재수립 시 install이 되찾아 간다.
+                let mut lived_ms = u64::MAX; // 대화가 없었으면(성립 전 Closed) "오래 산" 쪽으로 — 0단
                 if let Some(c) = self.conversations.remove(&peer) {
+                    lived_ms = self.now_ms().saturating_sub(c.up_ms);
                     if !c.lines.is_empty() {
                         self.parked_lines.insert(peer, c.lines);
                     }
@@ -21853,13 +21880,40 @@ impl ApplicationHandler<AppEvent> for App {
                 let reachable = self.manual_addrs.contains_key(&peer)
                     || self.table.get(peer).is_some()
                     || self.relay.is_some();
-                if reachable {
-                    // 재연결 수단이 있는 상대는 자동 재연결 시작(ⓑ) — 첫 시도 5초 후.
-                    let due = self.now_ms() + RECONNECT_BACKOFF_MS[0];
-                    self.reconnect.insert(peer, (0, due));
+                // ★ RL-3 ⓑ(11-04): 종전 = 무조건 0단(5초) → 성립 즉시 끊김 사이클이 5초마다 영원히 돌았다(상한은
+                //   ConnectFailed 경로에만). 짧게 산 세션(SESSION_SHORT_MS)이면 성립 때 기억한 단계 +1로 잇고, 상한을
+                //   넘으면 중단 고지(클릭 = 재개). 오래 산 세션의 끊김은 종전대로 0단.
+                let stage = closed_next_stage(self.reconnect_last.remove(&peer), lived_ms);
+                let delay_opt = reconnect_delay(stage).filter(|_| reachable);
+                dlog!(self, DL::Conn, DV::Decide, "session_closed", |r| {
+                    let r = r
+                        .arg("peer", peer.short())
+                        .arg("lived_ms", lived_ms)
+                        .arg("stage", stage)
+                        .rule("short_ms", SESSION_SHORT_MS)
+                        .rule("reachable(manual|discovered|relay)", reachable);
+                    match delay_opt {
+                        Some(d) => r.ok(format!("reconnect in {}s", d / 1000)),
+                        None => r.fail(if reachable {
+                            "backoff exhausted — auto reconnect stopped"
+                        } else {
+                            "no route — no retry"
+                        }),
+                    }
+                });
+                if let Some(delay) = delay_opt {
+                    let due = self.now_ms() + delay;
+                    self.reconnect.insert(peer, (stage, due));
                     // 그룹발 미종결 몫 = 재-Offer 대기로 복귀(M5-1h — 표식 유지 ·
                     // 재성립 시 resend가 같은 풍선을 잇고, 소진되면 fail이 닫는다).
                     self.gx_mark_peer(peer, GxState::Waiting);
+                } else if reachable {
+                    // 상한 소진(짧게 살다 끊김 반복) — 자동 재연결 중단 · 사람이 클릭하면 재개(13 §12-1 종료 조건).
+                    self.gx_mark_peer(peer, GxState::Failed);
+                    self.set_status(nbeep_core::tf(
+                        nbeep_core::Msg::StfSessionDropStop,
+                        &[&self.peer_title(peer)],
+                    ));
                 } else {
                     // 다시 닿을 수단이 없다 — 그룹발 미종결 몫도 실패로 닫는다(M5-1h).
                     self.gx_mark_peer(peer, GxState::Failed);
@@ -21915,9 +21969,17 @@ impl ApplicationHandler<AppEvent> for App {
                         ));
                     }
                 }
-                self.reconnect.remove(&peer); // 성립 = 자동 재연결 스케줄 해제(ⓑ)
-                                              // 대기 중이던 그룹 본문이 있으면 성립 직후 이어 보낸다(M5-1 — 자동 연결 후 전송).
-                                              // install보다 뒤여야 하지만 install은 아래 분기에서 일어난다 — flush는 그 뒤.
+                // 성립 = 자동 재연결 스케줄 해제(ⓑ) · 스케줄에서 난 성립이면 그 단계를 기억(RL-3 ⓑ — 짧게 살다 끊기면 승계).
+                match self.reconnect.remove(&peer) {
+                    Some((stage, _)) => {
+                        self.reconnect_last.insert(peer, stage);
+                    }
+                    None => {
+                        self.reconnect_last.remove(&peer);
+                    }
+                }
+                // 대기 중이던 그룹 본문이 있으면 성립 직후 이어 보낸다(M5-1 — 자동 연결 후 전송).
+                // install보다 뒤여야 하지만 install은 아래 분기에서 일어난다 — flush는 그 뒤.
                 if let Some(addr) = via_addr {
                     // 수동 등록 성공(DR-19) — 세션이 끊겨도 이 주소로 재연결한다(④).
                     self.manual_addrs.insert(peer, addr);
@@ -22038,19 +22100,18 @@ impl ApplicationHandler<AppEvent> for App {
                     Some(delay) => {
                         let due = self.now_ms() + delay;
                         self.reconnect.insert(peer, (stage, due));
-                        self.set_status(format!(
-                            "연결 실패({}): {why} — {}초 후 재시도",
-                            self.peer_title(peer),
-                            delay / 1000
+                        self.set_status(nbeep_core::tf(
+                            nbeep_core::Msg::StfConnectFailRetry,
+                            &[&self.peer_title(peer), &why, &(delay / 1000).to_string()],
                         ));
                     }
                     None => {
                         self.reconnect.remove(&peer);
                         // 그룹 대기 본문도 실패로 종결(FR-G-4 — 조용히 버리지 않는다).
                         self.fail_group_sends(peer);
-                        self.set_status(format!(
-                            "연결 실패({}): {why} — 자동 재시도 중단(클릭 = 재개)",
-                            self.peer_title(peer)
+                        self.set_status(nbeep_core::tf(
+                            nbeep_core::Msg::StfConnectFailStop,
+                            &[&self.peer_title(peer), &why],
                         ));
                     }
                 }
@@ -22389,22 +22450,43 @@ impl ApplicationHandler<AppEvent> for App {
                                             // 유선↔무선 전환 뒤 백오프의 긴 대기를 기다리지 않는다.
                                             // ⓐ 걸려 있는 재연결 스케줄 = 전부 0단·지금으로 리셋(다음 펌프서 즉시).
                 let now = self.now_ms();
-                for e in self.reconnect.values_mut() {
-                    *e = (0, now);
+                // ★ RL-3 ⓐ(11-04): 가속(ⓐⓑ)·프로브(ⓒ) 전부 **한 쿨다운**(10s) 아래 — 플랩 연타가 재연결·프로브 폭주로
+                //   번지지 않는다. 가속은 **단계를 유지**하고 due만 지금으로(종전 0단 리셋 = 4단 상한 영구 미소진).
+                let probe_ok =
+                    now.saturating_sub(self.last_link_probe_ms) >= LINK_CHANGE_COOLDOWN_MS;
+                let mut accelerated = 0usize;
+                let mut targets: Vec<PeerId> = Vec::new();
+                if probe_ok {
+                    for e in self.reconnect.values_mut() {
+                        e.1 = now;
+                        accelerated += 1;
+                    }
+                    // ⓑ 직전에 대화하다 끊긴 상대(스케줄 소진 포함) = 조용한 연결 1회(쿨다운당)
+                    //    — 수단(발견·수동 주소)이 있는 상대만(무의미 트래픽 금지).
+                    targets = self
+                        .closed_peers
+                        .iter()
+                        .copied()
+                        .filter(|p| !self.conversations.contains_key(p))
+                        .filter(|p| {
+                            self.manual_addrs.contains_key(p) || self.table.get(*p).is_some()
+                        })
+                        .collect();
                 }
-                // ⓑ 직전에 대화하다 끊긴 상대(스케줄 소진 포함) = 즉시 조용한 연결 1회
-                //    — 수단(발견·수동 주소)이 있는 상대만(무의미 트래픽 금지).
-                let targets: Vec<PeerId> = self
-                    .closed_peers
-                    .iter()
-                    .copied()
-                    .filter(|p| !self.conversations.contains_key(p))
-                    .filter(|p| self.manual_addrs.contains_key(p) || self.table.get(*p).is_some())
-                    .collect();
+                dlog!(self, DL::Conn, DV::Decide, "link_changed", |r| r
+                    .arg("accelerated", accelerated)
+                    .arg("reconnect_targets", targets.len())
+                    .arg("probe_sessions", self.conversations.len())
+                    .rule("cooldown_ms", LINK_CHANGE_COOLDOWN_MS)
+                    .rule("within_cooldown", !probe_ok)
+                    .ok(if probe_ok {
+                        "accelerated + probed"
+                    } else {
+                        "transport only"
+                    }));
                 for p in targets {
                     self.start_connect(p, true); // 중복 클릭 가드는 connecting이 맡는다
                 }
-                let probe_ok = now.saturating_sub(self.last_link_probe_ms) >= 10_000;
                 // ⓒ 활성 세션 능동 생사 촉진(M1-2b · 08-16) — 링크가 바뀐 직후의
                 //    "성립돼 있다고 믿는" 세션이 실제로는 죽었을 수 있다(경로 소멸).
                 //    새 와이어 프레임 없이 **기존 ProfileMsg::Request 1발**을 쏜다:
@@ -22415,9 +22497,10 @@ impl ApplicationHandler<AppEvent> for App {
                 if probe_ok {
                     self.last_link_probe_ms = now;
                     for conv in self.conversations.values() {
-                        let _ = conv.out_tx.send(SessionCmd::Control(vec![
-                            nbeep_core::ProfileMsg::Request.encode(),
-                        ]));
+                        // ⓒ 경량 프로브(RL-3) — 미지 kind 1바이트(상대는 버린다 · Full 프로필 응답 없음).
+                        let _ = conv
+                            .out_tx
+                            .send(SessionCmd::Control(vec![LINK_PROBE_FRAME.to_vec()]));
                     }
                 }
                 self.set_status(nbeep_core::t(nbeep_core::Msg::StNetChanged));
@@ -24986,6 +25069,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         notify_targets: HashMap::new(),
         last_read: HashMap::new(),
         reconnect: HashMap::new(),
+        reconnect_last: HashMap::new(),
         rows_dirty: false,
         last_rows_ms: 0,
         list_refresh_ms: 1500,
@@ -25932,6 +26016,41 @@ mod tests {
             "┃ 철수: 원본 글\n답"
         );
         assert_eq!(reply_fallback_text(None, &r, "답"), "┃ 원본 글\n답");
+    }
+
+    /// RL-3 ⓑ(11-04): 짧게 산 세션은 단계를 잇고(상한 밖 = 중단) · 오래 산 세션은 0단 · 성립 전 Closed(lived MAX)도 0단.
+    #[test]
+    fn closed_stage_rule() {
+        use super::{closed_next_stage, reconnect_delay, LINK_PROBE_FRAME, SESSION_SHORT_MS};
+        assert_eq!(
+            closed_next_stage(None, 100),
+            0,
+            "클릭·인바운드 성립 뒤 즉시 끊김 = 0단(첫 사이클)"
+        );
+        assert_eq!(closed_next_stage(Some(0), 100), 1);
+        assert_eq!(closed_next_stage(Some(2), SESSION_SHORT_MS - 1), 3);
+        assert_eq!(
+            reconnect_delay(closed_next_stage(Some(3), 100)),
+            None,
+            "4단 뒤 또 짧게 끊김 = 상한 소진 → 중단"
+        );
+        assert_eq!(
+            closed_next_stage(Some(3), SESSION_SHORT_MS),
+            0,
+            "오래 살았으면 0단부터"
+        );
+        assert_eq!(closed_next_stage(Some(1), u64::MAX), 0);
+        let f = &LINK_PROBE_FRAME[..];
+        assert!(
+            nbeep_core::ProfileMsg::decode(f).is_none()
+                && nbeep_core::ChatAck::decode(f).is_none()
+                && nbeep_core::xfer::decode_cap_advert(f).is_none()
+                && !nbeep_core::xfer::is_cap_request(f)
+                && nbeep_core::xfer::decode_qpause(f).is_none()
+                && nbeep_core::xfer::decode_group_hint(f).is_none()
+                && !nbeep_core::xfer::is_cancel_all(f),
+            "프로브 프레임은 Control 스트림의 어느 디코더에도 걸리지 않는다(전방 호환 무시)"
+        );
     }
 
     /// S2(DR-30): 재초대 간격 — 지나지 않았으면 남은 ms · 지났으면 None · 제한 0 = 항상 허용.
