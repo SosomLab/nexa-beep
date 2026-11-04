@@ -7,6 +7,7 @@
 
 ## 2026-11-04
 
+- **(Win · main) LAT-1 세션 액터 송수신 분리**(`b4d723f` — 쓰기 스레드 + `Link::split_send` · 왕복 루프백 p95 **210 → 5ms** · 49 F-1 ✓ · verify.sh `--oldpeer` 10통과 0실패 · ack-bench 편입 · 실 LAN 잔여) · `tools/firewall-allow.ps1`(`c5c0798` · 사용자 1회) · CI 41807156024 success. [journal](journal/2026-11-04.md)
 - **(Win · main) 마감 게이트** `tools/verify.sh` **8통과 0실패**(build 2 · headless-smoke · reply · scan-plaintext 첫 편입 · group 28/28 · s4 24/24 · tmp-clean · 정적 게이트는 CI 41790480737 녹색). [journal](journal/2026-11-04.md)
 - **(Win · main) INS-4 합성 부하**(`ed94933` — `NEXA_DEMO_PEERS` + `tools/load-bench.sh` · 릴리스 피어 500 휠 paint 2.58ms ✓ · 피어 100 private 26.1MB ✓ · 49 미정 칸 0) · 피어당 ≈0.15MB → **MEM-6 신설** · CI 41790480737 success · LAT-1 설계 = [55](55-lat1-session-actor-split.md) 📐. [journal](journal/2026-11-04.md)
 - **(Win · main) INS-6 ack 왕복 계측**(`9849c70` — `NEXA_ACK_TRACE` + `tools/ack-bench.sh`) · ⚠ 첫 실측 루프백 p50 158 · **p95 210ms = 49 F-1(≤50) ✗** · 원인 = 세션 액터 recv 100ms 폴 × 2홉 → **LAT-1 신설**(송수신 분리 · 11-05 첫 작업) · CI 41789163263 success. [journal](journal/2026-11-04.md)
