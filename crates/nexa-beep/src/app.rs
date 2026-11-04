@@ -3256,6 +3256,14 @@ enum AlertCtx {
         gid: nbeep_core::group::GroupId,
         peer: PeerId,
     },
+    /// 차단한 초대 해제 확인(S4 · 설정 › 차단한 초대 보기 행 클릭).
+    InviteUnblock { uid: nbeep_core::GroupUid },
+    /// 상대가 차단한(재초대 불가) 거절 메모 — 긍정 = 기록 지우기(S4).
+    GroupForget {
+        gid: nbeep_core::group::GroupId,
+        uid: nbeep_core::GroupUid,
+        peer: PeerId,
+    },
     /// 재초대/정리 선택(GINV-1 S2 · DR-30 · 11-04) — 구성원 모달의 "초대 대기"·"거절됨" 행 클릭. `in_roster`=false면 거절
     /// 메모만 남은 상대(아니오 = 기록 지우기) · true면 명부 안(아니오 = 제외).
     GroupReinvite {
@@ -3919,8 +3927,10 @@ struct App {
     invite_expire_at: u64,
     /// 거절 실행 취소 대기(S3): uid → (소유자, hard, 보낼 시각 ms). 방 행 클릭 = 취소.
     pending_declines: HashMap<nbeep_core::GroupUid, (PeerId, bool, u64)>,
-    /// "이 그룹 초대 다시 받지 않기"(S3 메모리 · S4에서 영속·DeclineV2) — 그 방 초대는 카드 없이 조용히 거절.
-    invite_block: std::collections::HashSet<nbeep_core::GroupUid>,
+    /// 차단한 초대 목록 모달의 행 순서(S4 · 행 클릭 = 해제 확인 · 모달 닫힘 = 소거).
+    blocked_ctx: Option<Vec<nbeep_core::GroupUid>>,
+    /// 차단한 초대 목록 열기 대기(설정 Action · 창 생성은 about_to_wait).
+    want_blocked_window: bool,
     /// 설정 초기화 확인 대기(08-15 · 고급 — 확인 모달은 about_to_wait에서 연다).
     pending_reset: bool,
     /// IME 중재 상태기계(M3-1e G3 — [`crate::ime_gate`]): 조합 게이트·보류-판정·
@@ -7197,10 +7207,17 @@ impl App {
                     });
                     match found {
                         Some((gid, uid, p, in_roster)) => {
+                            let blocked = self.groups.member_meta(uid, p).is_some_and(|m| m.hard);
                             let sent = self.reinvite_member(gid, uid, p, in_roster, el);
                             eprintln!(
                                 "[script] group.reinvite: {}",
-                                if sent { "sent" } else { "wait" }
+                                if sent {
+                                    "sent"
+                                } else if blocked {
+                                    "blocked"
+                                } else {
+                                    "wait"
+                                }
                             );
                         }
                         None => eprintln!("[script] group.reinvite: 방/상대 없음 '{name}'"),
@@ -7297,6 +7314,19 @@ impl App {
                 None if step == "dump" => self.script_dump(),
                 None if step == "group.accept" => self.script_group_accept(), // 값 없는 동사(11-04)
                 None if step == "group.decline" => self.script_group_decline(),
+                None if step == "group.decline_hard" => self.script_group_decline_with(true),
+                None if step == "group.unblock" => {
+                    let uids: Vec<nbeep_core::GroupUid> = self
+                        .groups
+                        .blocked_invites()
+                        .iter()
+                        .map(|b| b.uid)
+                        .collect();
+                    for u in &uids {
+                        let _ = self.groups.unblock_invite(*u);
+                    }
+                    eprintln!("[script] group.unblock: {}", uids.len());
+                }
                 None if step == "group.decline_undo" => {
                     let n = self.pending_declines.len();
                     self.pending_declines.clear();
@@ -7514,7 +7544,7 @@ impl App {
                 .filter(|(p, m)| {
                     m.state == nbeep_store::MemberState::Declined && !sg.roster.has_member(*p)
                 })
-                .map(|(p, _)| p.short())
+                .map(|(p, m)| format!("{}{}", p.short(), if m.hard { "!" } else { "" }))
                 .collect();
             eprintln!(
                 "[dump] group {} name={} mine={:?} owner={} members={}{}",
@@ -7548,6 +7578,15 @@ impl App {
                 }
             }
         }
+        // 차단한 초대(S4) — `[dump] invite_block <uid short> name=<방> owner=<short>`.
+        for b in self.groups.blocked_invites() {
+            eprintln!(
+                "[dump] invite_block {} name={} owner={}",
+                b.uid.short(),
+                b.name,
+                b.owner.short()
+            );
+        }
     }
 
     /// 스크립트 `group.accept` — 대기 중인 초대 전부 수락 + 초대 카드 모달 닫기(11-04).
@@ -7579,6 +7618,11 @@ impl App {
 
     /// 스크립트 `group.decline` — 대기 중인 초대 전부 거절 + 초대 카드 모달 닫기(11-04).
     fn script_group_decline(&mut self) {
+        self.script_group_decline_with(false);
+    }
+
+    /// `group.decline`/`group.decline_hard` 본체(S4 · hard = "다시 받지 않기").
+    fn script_group_decline_with(&mut self, hard: bool) {
         let pending: Vec<(nbeep_core::GroupUid, PeerId)> = self
             .groups
             .shared_list()
@@ -7592,11 +7636,11 @@ impl App {
         let secs = group_decline_undo_secs(&self.settings);
         for (uid, owner) in pending {
             if secs == 0 {
-                self.decline_group_invite(uid, owner, false);
+                self.decline_group_invite(uid, owner, hard);
             } else {
                 // 사람과 같은 길(S3): n초 뒤 전송 · 그 안에 `group.decline_undo`로 취소.
                 self.pending_declines
-                    .insert(uid, (owner, false, unix_now_ms() + secs * 1000));
+                    .insert(uid, (owner, hard, unix_now_ms() + secs * 1000));
             }
         }
         if matches!(self.alert_ctx, Some(AlertCtx::GroupInvite { .. })) {
@@ -9159,6 +9203,87 @@ impl App {
                 self.request_redraw(lid);
             }
         }
+    }
+
+    /// ★ 차단한 초대 목록(S4 · 설정 › 고급 › 그룹 초대 › 차단한 초대 보기…) — 구성원 모달과 같은 상태 목록 모달 ·
+    /// 행 클릭 = 해제 확인(`AlertCtx::InviteUnblock`). 빈 목록이면 안내 한 줄.
+    fn open_blocked_alert(&mut self, el: &ActiveEventLoop) {
+        let now = unix_now_ms();
+        let items: Vec<nbeep_store::BlockedInvite> = self.groups.blocked_invites().to_vec();
+        let title = nbeep_core::t(nbeep_core::Msg::WinBlocked).to_string();
+        let lines: Vec<(LinkState, String)> = if items.is_empty() {
+            vec![(
+                LinkState::Idle,
+                nbeep_core::t(nbeep_core::Msg::BlockedNone).to_string(),
+            )]
+        } else {
+            items
+                .iter()
+                .map(|b| {
+                    (
+                        LinkState::Lost,
+                        format!(
+                            "{} — {} · {}",
+                            b.name,
+                            self.peer_title(b.owner),
+                            ago_text(now, b.at_ms)
+                        ),
+                    )
+                })
+                .collect()
+        };
+        let order: Vec<nbeep_core::GroupUid> = items.iter().map(|b| b.uid).collect();
+        let clickable = !order.is_empty();
+        self.blocked_ctx = Some(order);
+        self.members_ctx = None;
+        let win_h = (110.0 + lines.len() as f64 * 26.0).clamp(170.0, 460.0);
+        if let Some((aid, _)) = self.windows.iter().find(|(_, e)| e.role == Role::Alert) {
+            let aid = *aid;
+            let mut inv = Invalidations::default();
+            if let Some(av) = &mut self.alert_view {
+                av.set_content(&title, "", &mut inv);
+                av.set_status_list(lines, &mut inv);
+                av.set_rows_clickable(clickable);
+            }
+            if let Some(e) = self.windows.get(&aid) {
+                let _ = e
+                    .window
+                    .request_inner_size(winit::dpi::LogicalSize::new(400.0, win_h));
+                focus_win(&e.window);
+            }
+            self.request_redraw(aid);
+            return;
+        }
+        let attrs = self
+            .win_attrs()
+            .with_title(format!("{APP_TITLE} — {title}"))
+            .with_inner_size(winit::dpi::LogicalSize::new(400.0, win_h))
+            .with_resizable(false)
+            .with_window_icon(self.icon.clone());
+        let attrs = self.modal_attrs(attrs, false);
+        let window = Rc::new(el.create_window(headless_attrs(attrs)).unwrap());
+        let scale = window.scale_factor() as f32;
+        let surface = crate::present::Presenter::new(window.clone()).unwrap();
+        let id = window.id();
+        self.windows.insert(
+            id,
+            WinEntry {
+                role: Role::Alert,
+                window,
+                surface,
+                cursor: (0, 0),
+                scale,
+                blinks: true,
+            },
+        );
+        let mut av = nbeep_ui::AlertWidget::new(title, "");
+        let mut inv = Invalidations::default();
+        av.set_status_list(lines, &mut inv);
+        av.set_rows_clickable(clickable);
+        av.set_badge_shape(self.settings.get("ui.link_badge_shape") == "on");
+        self.alert_view = Some(av);
+        self.layout_window(id);
+        self.request_redraw(id);
     }
 
     /// 창 높이를 위젯이 바라는 값으로(행 수 · 물리 px → 논리).
@@ -13287,7 +13412,11 @@ impl App {
                         Some(meta) if meta.state == MS::Joined => None,
                         Some(meta) if meta.state == MS::Declined => Some(format!(
                             "{} · {}",
-                            nbeep_core::t(nbeep_core::Msg::MemberDeclined),
+                            nbeep_core::t(if meta.hard {
+                                nbeep_core::Msg::MemberDeclinedHard
+                            } else {
+                                nbeep_core::Msg::MemberDeclined
+                            }),
                             ago_text(now, meta.at_ms)
                         )),
                         Some(meta) => Some(format!(
@@ -15779,6 +15908,11 @@ impl App {
                     self.want_log_window = true;
                     continue;
                 }
+                // 차단한 초대 보기(S4) — 행위 항목 · 창 생성은 about_to_wait.
+                "group.blocked" => {
+                    self.want_blocked_window = true;
+                    continue;
+                }
                 // 연결 테스트(08-22) — 행위 항목: 값 저장 없이 즉시 검증 절차.
                 "net.server.test" => {
                     self.server_test();
@@ -17628,7 +17762,7 @@ impl App {
         self.open_choice_ex(el, title, message, yes, no, None, None, ctx);
     }
 
-    /// ★ 초대 카드(S3 · DR-30): 3택 [나중에][거절][수락] + "이 그룹 초대 다시 받지 않기" 체크(기본 꺼짐 · 거절 때만 뜻이 있다).
+    /// ★ 초대 카드(S3 · DR-30): 3택 `[나중에][거절][수락]` + "이 그룹 초대 다시 받지 않기" 체크(기본 꺼짐 · 거절 때만 뜻이 있다).
     fn open_invite_card(
         &mut self,
         el: &ActiveEventLoop,
@@ -17764,6 +17898,18 @@ impl App {
                 }
                 self.open_group_members(gid); // 편집 후 새 명부로 다시 연다(GroupKick과 같은 흐름)
             }
+            AlertCtx::GroupForget { gid, uid, peer } => {
+                if yes && self.groups.forget_member(uid, peer) {
+                    self.set_status(nbeep_core::t(nbeep_core::Msg::BtnForget));
+                }
+                self.open_group_members(gid);
+            }
+            AlertCtx::InviteUnblock { uid } => {
+                if yes && self.groups.unblock_invite(uid) {
+                    self.set_status(nbeep_core::t(nbeep_core::Msg::StUnblocked));
+                }
+                self.want_blocked_window = true; // 목록을 새 상태로 다시 연다
+            }
             AlertCtx::SettingsReset => {
                 if yes {
                     {
@@ -17828,6 +17974,11 @@ impl App {
         if let Some(m) = self.groups.member_meta(uid, peer) {
             if m.state == nbeep_store::MemberState::Joined {
                 return false; // 이미 구성원
+            }
+            if m.hard {
+                // 상대가 "다시 받지 않기"(S4) — 보내도 카드 없이 조용히 거절된다 · 보내지 않는다.
+                self.set_status(nbeep_core::t(nbeep_core::Msg::StReinviteBlocked));
+                return false;
             }
             if let Some(wait_ms) = reinvite_wait_ms(m.last_ms, hours, now) {
                 let left_h = wait_ms.div_ceil(3_600_000).max(1);
@@ -17928,11 +18079,19 @@ impl App {
     /// 초대 거절 본체(11-04 스크립트 `group.decline`와 공용): 소유자에게 Decline → 내 쪽 방 제거.
     /// `hard`(S3 체크 · "다시 받지 않기") = 이 방의 다음 초대는 카드 없이 조용히 거절(S3 = 메모리 집합 · S4 = 영속+DeclineV2).
     fn decline_group_invite(&mut self, uid: nbeep_core::GroupUid, owner: PeerId, hard: bool) {
+        let mut frames = vec![nbeep_core::SGroupMsg::Decline { uid }.encode()];
         if hard {
-            self.invite_block.insert(uid);
+            // 영속 차단(S4 · groups.seg v6) — 이름은 지금 알 때 담아 둔다(방이 곧 지워진다).
+            let name = self
+                .groups
+                .shared_by_uid(uid)
+                .map(|s| s.roster.name.as_str().to_string())
+                .unwrap_or_default();
+            let _ = self.groups.block_invite(uid, &name, owner, unix_now_ms());
+            // 구버전 소유자는 V2를 버리고 Decline만 처리(해석기 선배포 규약) — 둘 다 보낸다.
+            frames.push(nbeep_core::SGroupMsg::DeclineV2 { uid, hard: true }.encode());
         }
-        let frame = nbeep_core::SGroupMsg::Decline { uid }.encode();
-        self.send_group_frames(owner, vec![frame]);
+        self.send_group_frames(owner, frames);
         let _ = self.groups.remove_shared(uid);
         self.set_status(nbeep_core::t(nbeep_core::Msg::StInviteDeclined));
     }
@@ -18028,7 +18187,7 @@ impl App {
                     return; // 구버전 재생 — 거부
                 }
                 // S4 입력(S3에서 메모리): "다시 받지 않기"로 막은 방의 초대는 카드 없이 조용히 거절.
-                if self.invite_block.contains(&uid) {
+                if self.groups.invite_blocked(uid) {
                     self.decline_group_invite(uid, owner, true);
                     return;
                 }
@@ -18077,6 +18236,17 @@ impl App {
                     &[&self.peer_title(peer)],
                 ));
                 self.refresh_and_redraw();
+            }
+            G::DeclineV2 { uid, hard } => {
+                // 소유자 — 거절 메모에 hard 표식(S4 · 같은 묶음의 Decline이 먼저 명부를 정리했다 · 메모는 남는다).
+                if self
+                    .groups
+                    .shared_by_uid(uid)
+                    .is_some_and(|s| s.roster.owner == me)
+                    && self.groups.set_member_hard(uid, peer, hard)
+                {
+                    self.refresh_and_redraw();
+                }
             }
             G::Roster { roster } => {
                 // 기존 방의 소유자 세션에서 온 갱신만(신규 uid는 초대 경유만 — G-4).
@@ -19516,7 +19686,28 @@ impl App {
                         self.alert_view = None;
                         self.windows.remove(&id);
                         self.members_ctx = None; // 모달 닫힘 = 문맥 소거(G4)
+                        self.blocked_ctx = None;
                         closed_choice = Some(choice);
+                    }
+                }
+                // S4 — 차단한 초대 행 클릭 = 해제 확인.
+                if let (Some(i), Some(order)) = (row, self.blocked_ctx.clone()) {
+                    if let Some(&uid) = order.get(i) {
+                        let name = self
+                            .groups
+                            .blocked_invites()
+                            .iter()
+                            .find(|b| b.uid == uid)
+                            .map(|b| b.name.clone())
+                            .unwrap_or_default();
+                        self.open_choice(
+                            el,
+                            nbeep_core::t(nbeep_core::Msg::UnblockTitle),
+                            &nbeep_core::tf(nbeep_core::Msg::UnblockAsk, &[&name]),
+                            nbeep_core::t(nbeep_core::Msg::BtnUnblock),
+                            "취소",
+                            AlertCtx::InviteUnblock { uid },
+                        );
                     }
                 }
                 // G4(08-15) — 구성원 행 클릭(소유자) = 제외 확인 모달로 진입.
@@ -19536,6 +19727,23 @@ impl App {
                                         )
                                     });
                                     match info {
+                                        Some((uid, _, Some(meta)))
+                                            if meta.state == nbeep_store::MemberState::Declined
+                                                && meta.hard =>
+                                        {
+                                            // 상대가 차단(S4) — 재초대 불가 · 기록 지우기만.
+                                            self.open_choice(
+                                                el,
+                                                nbeep_core::t(nbeep_core::Msg::MemberReinviteTitle),
+                                                &format!(
+                                                    "'{name}' — {}",
+                                                    nbeep_core::t(nbeep_core::Msg::MemberDeclinedHard)
+                                                ),
+                                                nbeep_core::t(nbeep_core::Msg::BtnForget),
+                                                "취소",
+                                                AlertCtx::GroupForget { gid, uid, peer },
+                                            );
+                                        }
                                         Some((uid, in_roster, meta))
                                             if meta.map(|m| m.state)
                                                 != Some(nbeep_store::MemberState::Joined) =>
@@ -22361,6 +22569,9 @@ impl ApplicationHandler<AppEvent> for App {
         if std::mem::take(&mut self.want_log_window) {
             self.open_log_window(el);
         }
+        if std::mem::take(&mut self.want_blocked_window) {
+            self.open_blocked_alert(el);
+        }
         self.refresh_log_view(); // 로그 창(LOG-1) — 열려 있을 때만 · 같은 일련번호 = 비용 0
         self.invite_expire_tick(false); // 초대 만료(S2 · 60초 페이스 내부 가드)
         self.decline_pending_tick(); // 거절 실행 취소 창 만료(S3)
@@ -24335,7 +24546,8 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         members_ctx: None,
         invite_expire_at: 0,
         pending_declines: HashMap::new(),
-        invite_block: std::collections::HashSet::new(),
+        blocked_ctx: None,
+        want_blocked_window: false,
         pending_reset: false,
         conversations: HashMap::new(),
         dedup: nbeep_core::DedupIndex::new(),

@@ -29,12 +29,13 @@ use std::io;
 use std::path::PathBuf;
 
 const MAGIC: [u8; 4] = *b"NBGS";
+/// v6(11-04 · GINV-1 S4) = v5 + 메모 `hard`(상대가 차단 = 재초대 불가) + **차단한 초대 목록**(내가 "다시 받지 않기"한 방 · 영속).
 /// v5(11-04 · GINV-1 S2) = v4 + 구성원 메모 `last_ms`(마지막 초대 송신 시각 — 재초대 24h 제한 근거) · 거절 메모는 명부에서 빠져도 남는다.
 /// v4(11-04 · GINV-1 S1) = v3 + 공유 그룹 **구성원 상태 꼬리**(소유자 로컬 메모 — 초대 대기·수락·거절 · 재시작을 넘긴다).
 /// v3(08-15) = v2 + 공유 그룹 **목록 고정(pinned) 꼬리**(사용자 요청 — 그룹방 핀).
 /// v2(08-13) = v1(로컬 그룹) + 공유 그룹 레코드(M5-1g · ADR-0012).
 /// 구버전 파일도 읽는다(없는 필드 = 기본값 — 전방·후방 관용).
-const VER: u8 = 5;
+const VER: u8 = 6;
 const VER_V2: u8 = 2;
 const VER_V1: u8 = 1;
 
@@ -80,6 +81,22 @@ pub struct MemberMeta {
     pub tries: u8,
     /// 마지막 초대 송신 시각(unix ms · v5 · S2 재초대 간격 `group.reinvite_hours`의 기준 — `at_ms`는 첫 초대 시각으로 유지).
     pub last_ms: u64,
+    /// 상대가 "다시 받지 않기"로 거절(v6 · S4 · `DeclineV2{hard}`) — 재초대 불가 · `[재초대]` 비활성.
+    pub hard: bool,
+}
+
+/// ★ 내가 차단한 초대(S4 · DR-30 · "이 그룹 초대 다시 받지 않기"): 그 방의 초대는 카드 없이 조용히 DeclineV2{hard}. 해제 =
+/// 설정 › 고급 › 그룹 초대 › 차단한 초대 보기.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BlockedInvite {
+    /// 방.
+    pub uid: GroupUid,
+    /// 차단 때의 방 이름(표시용 · 무해화된 값).
+    pub name: String,
+    /// 소유자(표시·식별).
+    pub owner: PeerId,
+    /// 차단 시각(unix ms).
+    pub at_ms: u64,
 }
 
 /// 공유 그룹에서의 내 상태(ADR-0012 G-4 — 초대 수락제).
@@ -164,6 +181,8 @@ pub struct FileGroupStore {
     locked: bool,
     /// 마지막 저장 실패 여부(IO — 다음 변경에서 재시도).
     write_failed: bool,
+    /// 차단한 초대(v6 · S4).
+    blocked: Vec<BlockedInvite>,
 }
 
 impl FileGroupStore {
@@ -193,7 +212,7 @@ impl FileGroupStore {
     pub fn open(path: PathBuf, wrap_secret: [u8; 32]) -> (Self, GroupLoad) {
         match std::fs::read(&path) {
             Ok(bytes) => match Self::parse(&bytes, &wrap_secret) {
-                Some((salt, master, store, shared)) => {
+                Some((salt, master, store, shared, blocked)) => {
                     let n = store.list().len() + shared.len();
                     (
                         Self {
@@ -205,6 +224,7 @@ impl FileGroupStore {
                             master,
                             locked: false,
                             write_failed: false,
+                            blocked,
                         },
                         GroupLoad::Loaded(n),
                     )
@@ -220,6 +240,7 @@ impl FileGroupStore {
                         master: [0; 32],
                         locked: true,
                         write_failed: false,
+                        blocked: Vec::new(),
                     },
                     GroupLoad::Locked,
                 ),
@@ -239,6 +260,7 @@ impl FileGroupStore {
                         master,
                         locked: !ok,
                         write_failed: false,
+                        blocked: Vec::new(),
                     },
                     if ok {
                         GroupLoad::Fresh
@@ -257,6 +279,7 @@ impl FileGroupStore {
                     master: [0; 32],
                     locked: true,
                     write_failed: false,
+                    blocked: Vec::new(),
                 },
                 GroupLoad::Locked,
             ),
@@ -413,6 +436,7 @@ impl FileGroupStore {
                         at_ms: now_ms,
                         tries: u8::from(state == MemberState::Invited),
                         last_ms: now_ms,
+                        hard: false,
                     },
                 ));
                 true
@@ -432,6 +456,60 @@ impl FileGroupStore {
             .find(|s| s.roster.uid == uid)
             .map(|s| s.members_meta.clone())
             .unwrap_or_default()
+    }
+
+    /// 메모의 hard 표식(S4 · `DeclineV2{hard}` 수신) — 반환 = 바뀌었는가.
+    pub fn set_member_hard(&mut self, uid: GroupUid, peer: PeerId, hard: bool) -> bool {
+        let Some(s) = self.shared.iter_mut().find(|s| s.roster.uid == uid) else {
+            return false;
+        };
+        let Some((_, m)) = s.members_meta.iter_mut().find(|(p, _)| *p == peer) else {
+            return false;
+        };
+        if m.hard == hard {
+            return false;
+        }
+        m.hard = hard;
+        self.persist();
+        true
+    }
+
+    /// 초대 차단(S4 · "다시 받지 않기") — 같은 방은 한 번만 · 저장.
+    pub fn block_invite(&mut self, uid: GroupUid, name: &str, owner: PeerId, now_ms: u64) -> bool {
+        if self.blocked.iter().any(|b| b.uid == uid) {
+            return false;
+        }
+        self.blocked.push(BlockedInvite {
+            uid,
+            name: name.to_string(),
+            owner,
+            at_ms: now_ms,
+        });
+        self.persist();
+        true
+    }
+
+    /// 차단 해제(설정 › 차단한 초대 보기) — 반환 = 있었는가.
+    pub fn unblock_invite(&mut self, uid: GroupUid) -> bool {
+        let before = self.blocked.len();
+        self.blocked.retain(|b| b.uid != uid);
+        let removed = self.blocked.len() != before;
+        if removed {
+            self.persist();
+        }
+        removed
+    }
+
+    /// 이 방 초대가 차단돼 있는가.
+    #[must_use]
+    pub fn invite_blocked(&self, uid: GroupUid) -> bool {
+        self.blocked.iter().any(|b| b.uid == uid)
+    }
+
+    /// 차단한 초대 전부(설정 목록 · dump).
+    #[must_use]
+    pub fn blocked_invites(&self) -> &[BlockedInvite] {
+        &self.blocked
     }
 
     /// 메모 삭제(거절 기록 지우기 · S2) — 반환 = 있었는가.
@@ -525,7 +603,13 @@ impl FileGroupStore {
     fn parse(
         bytes: &[u8],
         secret: &[u8; 32],
-    ) -> Option<([u8; SALT_LEN], [u8; 32], GroupStore, Vec<SharedGroup>)> {
+    ) -> Option<(
+        [u8; SALT_LEN],
+        [u8; 32],
+        GroupStore,
+        Vec<SharedGroup>,
+        Vec<BlockedInvite>,
+    )> {
         if bytes.len() < WRAPPED_END + NONCE_LEN + TAG_LEN || bytes[..4] != MAGIC {
             return None;
         }
@@ -555,8 +639,8 @@ impl FileGroupStore {
                 },
             )
             .ok()?;
-        let (store, shared) = decode_body(ver, &body)?;
-        Some((salt, master, store, shared))
+        let (store, shared, blocked) = decode_body(ver, &body)?;
+        Some((salt, master, store, shared, blocked))
     }
 
     /// 스냅샷 저장 — 실패는 치명적이지 않다(플래그만 · 다음 변경에서 재시도).
@@ -589,7 +673,7 @@ impl FileGroupStore {
             .map_err(|_| aead_err())?;
         out.extend_from_slice(&nonce);
         out.extend_from_slice(&wrapped);
-        let body_pt = encode_body(&self.inner, &self.shared);
+        let body_pt = encode_body(&self.inner, &self.shared, &self.blocked);
         let mut bnonce = [0u8; NONCE_LEN];
         getrandom::getrandom(&mut bnonce).map_err(|_| rng_err())?;
         let body = ChaCha20Poly1305::new(&self.master.into())
@@ -635,7 +719,7 @@ fn encode_store(store: &GroupStore) -> Vec<u8> {
 
 /// v2 본문 = 로컬부(기존 v1과 동일) + 공유부(`count u32` · 반복 `{ local_id u32 ·
 /// mine u8 · roster_len u32 · roster }`).
-fn encode_body(store: &GroupStore, shared: &[SharedGroup]) -> Vec<u8> {
+fn encode_body(store: &GroupStore, shared: &[SharedGroup], blocked: &[BlockedInvite]) -> Vec<u8> {
     let mut out = encode_store(store);
     out.extend_from_slice(
         &u32::try_from(shared.len())
@@ -661,12 +745,30 @@ fn encode_body(store: &GroupStore, shared: &[SharedGroup]) -> Vec<u8> {
             out.extend_from_slice(&m.at_ms.to_be_bytes());
             out.push(m.tries);
             out.extend_from_slice(&m.last_ms.to_be_bytes()); // v5
+            out.push(u8::from(m.hard)); // v6
         }
+    }
+    // v6 — 차단한 초대 목록(count u32 · {uid 32 · owner 32 · at_ms u64 · name_len u16 · name}).
+    out.extend_from_slice(
+        &u32::try_from(blocked.len())
+            .unwrap_or(u32::MAX)
+            .to_be_bytes(),
+    );
+    for b in blocked {
+        out.extend_from_slice(&b.uid.0);
+        out.extend_from_slice(b.owner.as_bytes());
+        out.extend_from_slice(&b.at_ms.to_be_bytes());
+        let nb = b.name.as_bytes();
+        let len = u16::try_from(nb.len()).unwrap_or(u16::MAX);
+        out.extend_from_slice(&len.to_be_bytes());
+        out.extend_from_slice(&nb[..usize::from(len)]);
     }
     out
 }
 
-fn decode_body(ver: u8, bytes: &[u8]) -> Option<(GroupStore, Vec<SharedGroup>)> {
+type Body = (GroupStore, Vec<SharedGroup>, Vec<BlockedInvite>);
+
+fn decode_body(ver: u8, bytes: &[u8]) -> Option<Body> {
     let mut p = 0usize;
     let take = |p: &mut usize, n: usize| -> Option<&[u8]> {
         let s = bytes.get(*p..*p + n)?;
@@ -726,6 +828,7 @@ fn decode_body(ver: u8, bytes: &[u8]) -> Option<(GroupStore, Vec<SharedGroup>)> 
                     } else {
                         at_ms
                     };
+                    let hard = ver >= 6 && take(&mut p, 1)?[0] != 0;
                     members_meta.push((
                         peer,
                         MemberMeta {
@@ -733,6 +836,7 @@ fn decode_body(ver: u8, bytes: &[u8]) -> Option<(GroupStore, Vec<SharedGroup>)> 
                             at_ms,
                             tries,
                             last_ms,
+                            hard,
                         },
                     ));
                 }
@@ -746,7 +850,28 @@ fn decode_body(ver: u8, bytes: &[u8]) -> Option<(GroupStore, Vec<SharedGroup>)> 
             });
         }
     }
-    (p == bytes.len()).then(|| (GroupStore::from_export(next, list), shared))
+    // v6 — 차단한 초대 목록(v5 이하 = 없음).
+    let mut blocked = Vec::new();
+    if ver >= 6 {
+        let bc = u32::from_be_bytes(take(&mut p, 4)?.try_into().ok()?);
+        if bc > 4096 {
+            return None;
+        }
+        for _ in 0..bc {
+            let uid = GroupUid(take(&mut p, 32)?.try_into().ok()?);
+            let owner = PeerId::from_bytes(take(&mut p, 32)?.try_into().ok()?);
+            let at_ms = u64::from_be_bytes(take(&mut p, 8)?.try_into().ok()?);
+            let len = usize::from(u16::from_be_bytes(take(&mut p, 2)?.try_into().ok()?));
+            let name = std::str::from_utf8(take(&mut p, len)?).ok()?.to_string();
+            blocked.push(BlockedInvite {
+                uid,
+                owner,
+                at_ms,
+                name,
+            });
+        }
+    }
+    (p == bytes.len()).then(|| (GroupStore::from_export(next, list), shared, blocked))
 }
 
 #[cfg(test)]
@@ -947,7 +1072,8 @@ mod tests {
                 state: MemberState::Joined,
                 at_ms: 7_000,
                 tries: 1,
-                last_ms: 1_000
+                last_ms: 1_000,
+                hard: false
             }),
             "재시작을 넘긴다"
         );
@@ -974,6 +1100,47 @@ mod tests {
         assert_eq!(gs.members_meta_of(uid).len(), 2);
         assert!(gs.forget_member(uid, pid(4)));
         assert_eq!(gs.member_meta(uid, pid(4)), None);
+    }
+
+    /// ★ S4(11-04): 메모 hard 표식과 차단한 초대 목록이 재시작을 넘긴다 · 중복 차단 없음 · 해제.
+    #[test]
+    fn hard_decline_and_blocked_invites_persist() {
+        use nbeep_core::sgroup::{GroupUid, Roster};
+        let path = tmp("hard");
+        let secret = [5u8; 32];
+        let uid = GroupUid([6u8; 32]);
+        let other = GroupUid([7u8; 32]);
+        {
+            let (mut gs, _) = FileGroupStore::open(path.clone(), secret);
+            gs.upsert_shared(
+                Roster {
+                    uid,
+                    name: name("방"),
+                    owner: pid(1),
+                    members: vec![pid(1), pid(2)],
+                    version: 1,
+                    member_invite: true,
+                },
+                MineState::Owner,
+            )
+            .unwrap();
+            assert!(gs.note_member(uid, pid(2), MemberState::Declined, 1_000));
+            assert!(gs.set_member_hard(uid, pid(2), true));
+            assert!(!gs.set_member_hard(uid, pid(2), true), "같은 값 = 무변경");
+            assert!(gs.block_invite(other, "남의방", pid(9), 2_000));
+            assert!(
+                !gs.block_invite(other, "남의방", pid(9), 3_000),
+                "중복 차단 없음"
+            );
+            assert!(gs.invite_blocked(other));
+        }
+        let (mut gs, _) = FileGroupStore::open(path, secret);
+        assert_eq!(gs.member_meta(uid, pid(2)).map(|m| m.hard), Some(true));
+        assert_eq!(gs.blocked_invites().len(), 1);
+        assert_eq!(gs.blocked_invites()[0].name, "남의방");
+        assert!(gs.unblock_invite(other));
+        assert!(!gs.invite_blocked(other));
+        assert!(!gs.unblock_invite(other));
     }
 
     /// ★ 잠긴 세그먼트 보관 이동(08-19) — 다른 신원 키의 파일을 `<이름>.locked`로
@@ -1014,10 +1181,11 @@ mod tests {
         s.add_member(a, pid(1));
         s.add_member(a, pid(2));
         let _b = s.create(name("한국어 그룹"));
-        let enc = encode_body(&s, &[]);
-        let (back, shared) = decode_body(VER, &enc).unwrap();
+        let enc = encode_body(&s, &[], &[]);
+        let (back, shared, blocked) = decode_body(VER, &enc).unwrap();
         assert_eq!(back.export(), s.export());
         assert!(shared.is_empty());
+        assert!(blocked.is_empty());
         let mut bad = enc;
         bad.push(0);
         assert!(decode_body(VER, &bad).is_none());

@@ -160,6 +160,15 @@ pub enum SGroupMsg {
         /// 대상 그룹.
         uid: GroupUid,
     },
+    /// ★ 초대 거절 v2(GINV-1 S4 · DR-30 · 11-04): `hard` = "이 그룹 초대 다시 받지 않기". 구버전 소유자는 미지 kind를
+    /// 버리므로 발신측은 **`Decline`을 함께** 보낸다(해석기 선배포 규약). 신버전 소유자는 Decline으로 명부를 정리하고
+    /// V2로 메모에 hard 표식(재초대 불가 · `[재초대]` 비활성).
+    DeclineV2 {
+        /// 대상 그룹.
+        uid: GroupUid,
+        /// 피초대자가 이 방 초대를 차단했다.
+        hard: bool,
+    },
     /// 명부 갱신 배포(소유자 → 전 구성원 · version 증가).
     Roster {
         /// 새 명부.
@@ -218,6 +227,8 @@ const K_MSG_FROM: u8 = 9;
 /// r_origin 32 ‖ r_seq 8 ‖ quote_len u16 ‖ quote ‖ text]`. flags 바이트로 sender 유무를
 /// 품어 kind를 또 늘리지 않는다.
 const K_MSG_REPLY: u8 = 10;
+/// ★ 거절 v2(S4 · 11-04) — 본문 = `uid 32 ‖ flags u8(bit0 = hard)`.
+const K_DECLINE_V2: u8 = 11;
 
 impl SGroupMsg {
     /// 와이어 인코딩(kind 1B + 본문).
@@ -237,6 +248,12 @@ impl SGroupMsg {
             SGroupMsg::Decline { uid } => {
                 let mut v = vec![K_DECLINE];
                 v.extend_from_slice(&uid.0);
+                v
+            }
+            SGroupMsg::DeclineV2 { uid, hard } => {
+                let mut v = vec![K_DECLINE_V2];
+                v.extend_from_slice(&uid.0);
+                v.push(u8::from(*hard));
                 v
             }
             SGroupMsg::Roster { roster } => {
@@ -322,6 +339,15 @@ impl SGroupMsg {
             K_DECLINE => (rest.len() == 32).then(|| SGroupMsg::Decline {
                 uid: uid32(rest).unwrap_or(GroupUid([0; 32])),
             }),
+            K_DECLINE_V2 => {
+                if rest.len() != 33 || rest[32] & !1 != 0 {
+                    return None; // 길이 정확 일치 · 미지 flags = fail-closed
+                }
+                Some(SGroupMsg::DeclineV2 {
+                    uid: uid32(rest)?,
+                    hard: rest[32] & 1 != 0,
+                })
+            }
             K_ROSTER => {
                 let (roster, used) = Roster::decode(rest)?;
                 (used == rest.len()).then_some(SGroupMsg::Roster { roster })
@@ -520,6 +546,10 @@ mod tests {
                 reply: Some(crate::ReplyRef::new(pid(8), 41, "원본")),
             },
             SGroupMsg::Leave { uid: uid(6) },
+            SGroupMsg::DeclineV2 {
+                uid: uid(7),
+                hard: true,
+            },
             SGroupMsg::Suggest {
                 uid: uid(7),
                 members: vec![pid(4), pid(5)],

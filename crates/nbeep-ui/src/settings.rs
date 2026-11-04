@@ -1950,6 +1950,15 @@ pub fn registry() -> &'static [Entry] {
             ),
             key: "group.decline_undo_secs",
         },
+        // 차단한 초대 보기/해제(S4 · DR-30 · 해제 자리 = 사용자 확정 "설정 › 고급 › 수신 제한 목록" — docs/38 BL과 통합 예정).
+        Entry {
+            cat: Msg::CatAdvanced,
+            sub: Some(Msg::SubGroupInvite),
+            label: Msg::BlockedInvites,
+            desc: Msg::BlockedInvitesDesc,
+            kind: SettingKind::Action { verb: Msg::ActOpen },
+            key: "group.blocked",
+        },
         // ── 고급 › 네트워크 점검(netmon · 08-21 — 옵트인 계측 기록 · 기본 off) ──
         Entry {
             cat: Msg::CatAdvanced,

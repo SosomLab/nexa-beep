@@ -6,6 +6,9 @@
 #   X가 Z 제외(group.remove → Z 방 닫힘 · Y 명부 갱신) → 최종 명부 = X·Y(X 재기동 dump로 판정).
 #   ③ S2(DR-30): X 재기동 뒤 거절 메모(W · declined=) 보존 → `group.reinvite=gpw`(X는 `group.reinvite_hours=0`으로 제한 해제 ·
 #   제한 규칙은 단위 시험 `reinvite_wait_rule`) → W invited 복귀 → `group.expire`(기간 무관 즉시) → W 명부에서 빠지고 방에 "초대 만료" 한 줄.
+#   ④ S4(DR-30): X가 V를 추가 → V `group.decline_hard`("다시 받지 않기" = Decline + DeclineV2{hard} · groups.seg v6 차단 목록) →
+#   X 메모 `declined=…V!`(재초대 불가) → X 재기동 `group.reinvite=<V>` = `blocked`(보내지 않음) → V 재기동 dump에 `[dump] invite_block`
+#   보존 → `group.unblock`(설정 › 고급 › 그룹 초대 › 차단한 초대 보기와 같은 길) → 사라짐.
 #
 # 사용:  tools/group-scenario.sh [출력 폴더] [바이너리 폴더]   # 기본 = $BEEP_MULTI/group-out · target/debug
 # 판정 = 각 신원의 stderr grep(추정 금지 · 실측 필수).  ⚠ 신원 폴더는 매번 새로 만든다.
@@ -30,22 +33,26 @@ run() { # 폴더 · 스크립트 · 로그
 }
 short() { "$M/$1/nexa-beep$EXE" --whoami 2>/dev/null | awk -F'= ' '/^fingerprint/{print substr($2,1,8); exit}'; }
 
-echo "▶ 신원 준비(새로) — $M/{gp-x,gp-y,gp-z,gp-w} · 출력 $OUT"
+echo "▶ 신원 준비(새로) — $M/{gp-x,gp-y,gp-z,gp-w,gp-v} · 출력 $OUT"
 # X = 재초대 제한 해제(③ 시험) — $'…' = 진짜 개행(작은따옴표 '\n'은 글자 그대로 들어가 값이 "0\n"이 돼 파싱 실패 · 11-04 실측).
-seed gp-x gpx $'group.reinvite_hours=0\n'; seed gp-y gpy; seed gp-z gpz; seed gp-w gpw
+seed gp-x gpx $'group.reinvite_hours=0\n'; seed gp-y gpy; seed gp-z gpz; seed gp-w gpw; seed gp-v gpv
 
-echo "▶ ① X: 12s·16s 연결 · 22s create / Y·Z: 30s accept / X: 38s send / Y: 46s reply / X: 56s dump · 58s add gpw / W: 64s decline / X: 68s remove gpz / 74s dump · 78s quit"
-run gp-x "12000:activate=gpy;16000:activate=gpz;22000:group.create=실기방:gpy,gpz;38000:group.send=방 원본 글;56000:dump;58000:group.add=gpw;68000:group.remove=gpz;74000:dump;78000:quit" "$OUT/x.log"
+echo "▶ ① X: 12s·16s 연결 · 22s create / Y·Z: 30s accept / X: 38s send / Y: 46s reply / X: 56s dump · 58s add gpw · 60s add gpv / W: 64s decline · V: 66s decline_hard / X: 68s remove gpz / 74s dump · 78s quit"
+run gp-x "12000:activate=gpy;16000:activate=gpz;22000:group.create=실기방:gpy,gpz;38000:group.send=방 원본 글;56000:dump;58000:group.add=gpw;60000:group.add=gpv;68000:group.remove=gpz;74000:dump;78000:quit" "$OUT/x.log"
 run gp-y "30000:group.accept;46000:group.reply=방 답장이야;74000:dump;78000:quit" "$OUT/y.log"
 run gp-z "30000:group.accept;56000:dump;74000:dump;78000:quit" "$OUT/z.log"
 # W: 60s 거절 → 61s 실행 취소(S3 · 대기 거절 1건 취소) → 64s 다시 거절(기본 5초 뒤 전송 = 69s · X 74s dump 전).
 run gp-w "60000:group.decline;61000:group.decline_undo;64000:group.decline;74000:dump;78000:quit" "$OUT/w.log"
+# V: 66s hard 거절(S4 · 기본 5초 뒤 전송 = 71s · X 74s dump 전) → 74s dump에 `[dump] invite_block` 한 줄.
+run gp-v "66000:group.decline_hard;74000:dump;78000:quit" "$OUT/v.log"
 wait
-XS=$(short gp-x); YS=$(short gp-y); ZS=$(short gp-z); WS=$(short gp-w) # 신원은 첫 기동 때 생긴다 — 그 뒤에 읽어야 지문이 있다
+XS=$(short gp-x); YS=$(short gp-y); ZS=$(short gp-z); WS=$(short gp-w); VS=$(short gp-v) # 신원은 첫 기동 때 생긴다 — 그 뒤에 읽어야 지문이 있다
 
-echo "▶ ②③ X 재기동 — 6s dump(메모·기록 영속) · 10s reinvite gpw · 14s dump · 18s expire · 22s dump · 24s quit"
-# 재초대 대상 = 짧은 지문(W는 ①에서 종료돼 발견 목록에 없다 · 이름 부분 일치는 산 상대만).
-run gp-x "6000:dump;10000:group.reinvite=${WS};14000:dump;18000:group.expire;22000:dump;24000:quit" "$OUT/x-b.log"
+echo "▶ ②③④ X 재기동 — 6s dump(메모·기록 영속) · 10s reinvite gpw · 12s reinvite gpv(=blocked) · 14s dump · 18s expire · 22s dump · 24s quit"
+echo "▶ ④ V 재기동 — 4s dump(차단 목록 영속) · 6s unblock · 8s dump · 10s quit"
+# 재초대 대상 = 짧은 지문(W·V는 ①에서 종료돼 발견 목록에 없다 · 이름 부분 일치는 산 상대만).
+run gp-x "6000:dump;10000:group.reinvite=${WS};12000:group.reinvite=${VS};14000:dump;18000:group.expire;22000:dump;24000:quit" "$OUT/x-b.log"
+run gp-v "4000:dump;6000:group.unblock;8000:dump;10000:quit" "$OUT/v-b.log"
 wait
 
 echo; echo "═══ 판정 ═══"
@@ -74,12 +81,19 @@ chk "Y: 명부 갱신 = 둘(X·Y)"                                    "$OUT/y.lo
 chk_not "Y 명부: Z 없음"                                        "$OUT/y.log"   "\[dump\] group .* name=실기방 .* members=.*${ZS}="
 chk "X 재기동: 최종 명부 = X·Y(joined 보존 · groups.seg v4)"      "$OUT/x-b.log" "\[dump\] group .* name=실기방 mine=Owner owner=${XS} members=[0-9a-f]{8}=(joined|me),[0-9a-f]{8}=(joined|me)( declined=.*)?$"
 # ③ S2(DR-30): 거절 메모 보존 → 재초대 → 만료.
-chk "X 74s dump: 거절 메모 declined=W(명부 밖 · S2)"               "$OUT/x.log"   "\[dump\] group .* name=실기방 .* declined=${WS}"
-chk_count "X 재기동 6s dump: declined=W 보존(groups.seg v5) · 이후 dump엔 없음" "$OUT/x-b.log" "\[dump\] group .* name=실기방 .* declined=${WS}" 1
+chk "X 74s dump: 거절 메모 declined=W(명부 밖 · S2)"               "$OUT/x.log"   "\[dump\] group .* name=실기방 .* declined=.*${WS}"
+chk_count "X 재기동 6s dump: declined=W 보존(groups.seg v5) · 이후 dump엔 없음" "$OUT/x-b.log" "\[dump\] group .* name=실기방 .* declined=.*${WS}" 1
 chk "X: group.reinvite=<W 지문> 전송(제한 0h)"                    "$OUT/x-b.log" "\[script\] group.reinvite: sent"
 chk_count "X 14s dump: W 명부 복귀 = invited(재초대) · 22s dump엔 없음(만료)" "$OUT/x-b.log" "\[dump\] group .* name=실기방 .* members=.*${WS}=invited" 1
 chk "X 22s dump: 방 스레드에 '초대 만료' 한 줄(group.expire)"       "$OUT/x-b.log" "\[dump\] gthread .* text=초대 만료: "
 chk "X 재기동: 방 기록 2줄 복원(원본·답장 참조)"                "$OUT/x-b.log" "\[dump\] gthread .* text=(방 원본 글|방 답장이야 reply=${XS}#[1-9][0-9]*:방 원본 글)"
+# ④ S4(DR-30): hard 거절 → 소유자 메모 `!` · 재초대 blocked · 피초대자 차단 목록 영속 → 해제.
+chk "X 74s dump: V 거절 메모 = hard(declined=…V!)"                 "$OUT/x.log"   "\[dump\] group .* name=실기방 .* declined=.*${VS}!"
+chk "V: 거절 뒤 차단 목록 1건([dump] invite_block · 방 이름)"        "$OUT/v.log"   "\[dump\] invite_block [0-9a-f]{8} name=실기방 owner=${XS}"
+chk "X 재기동: group.reinvite=<V> = blocked(보내지 않음)"           "$OUT/x-b.log" "\[script\] group.reinvite: blocked"
+chk_not "X 재기동: V 명부 복귀 없음"                                "$OUT/x-b.log" "\[dump\] group .* name=실기방 .* members=.*${VS}="
+chk_count "V 재기동: 차단 목록 영속(groups.seg v6 · 4s dump) → unblock 뒤 8s dump엔 없음" "$OUT/v-b.log" "\[dump\] invite_block [0-9a-f]{8} name=실기방" 1
+chk "V 재기동: group.unblock 1건"                                  "$OUT/v-b.log" "\[script\] group.unblock: 1"
 if grep -q "group.reply: 열쇠 있는 줄이 없다" "$OUT/y.log"; then printf '  ✗ Y: 원본 미수신 상태에서 reply\n'; bad=$((bad+1)); fi
-echo "결과: ✓ $ok · ✗ $bad   (로그 = $OUT/{x,y,z,w,x-b}.log)"
+echo "결과: ✓ $ok · ✗ $bad   (로그 = $OUT/{x,y,z,w,v,x-b,v-b}.log)"
 [ "$bad" = 0 ]
