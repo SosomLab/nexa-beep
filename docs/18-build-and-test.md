@@ -233,6 +233,7 @@ pwsh tools/check-imports.ps1 target/release/nexa-beep.exe   # (Windows) 임포�
 cargo build -p nexa-beep -p nbeep-imgdec                    # 아래 두 시험의 기본 바이너리 = target/debug
 ./tools/headless-smoke.sh && ./tools/reply-scenario.sh      # (11-02) 헤드리스 PASS(capture·`wins=1 hidden`·rc 0) · 답장 8/8 — 창을 띄우지 않는다
 ./tools/s4-scenario.sh && ./tools/perf-scenario.sh          # 따라잡기 19/19 · 프레임 ms·유휴 MB 회귀 없음(51 §3 기준선)
+./tools/startup-bench.sh                                    # (11-04 PERF-4) 릴리스 기동 콜드/웜 5회 first_paint 중앙값 ≤500ms(NFR-B-11 · Win 실측 콜드 245 · 웜 56)
 #    ⚠ mac clippy는 rustup 툴체인으로(`PATH=$HOME/.cargo/bin` 선행 — Homebrew clippy는 워크스페이스 lint를 안 잡는다 · 11-02).
 #    ⚠ `cfg(target_os|unix|windows)` 코드를 만졌으면 그 타깃 clippy까지(`--target x86_64-unknown-linux-gnu` — mac은 Linux 전용 코드를 안 본다 · 11-03 `dae0e90`).
 #    단계 체계(V0~V3) = [53 §5-7](53-collab-session-operation.md).
