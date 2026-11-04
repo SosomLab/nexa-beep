@@ -7,6 +7,7 @@
 
 ## 2026-11-04
 
+- **(Win · main) RL-8 저장 멱등 가드 일습**(`b96ee93` + nexa-ui `364d2e0` — 재봉인·무조작 저장·동일값 dirty·부팅 무의미 쓰기·백업 이중 저장 제거 · 무조작 기동 `settings.cfg` mtime 불변). [journal](journal/2026-11-04.md)
 - **(Win · main) RL-7 1단 기록 저장 디바운스**(`2b64f67` — 20연타 봉인·쓰기 20 → 2) · **RL-13 자원 고갈 3종**(`9c24d36` — 핸드셰이크 상한 32 · accept 오류 휴식 · 종료 브릿지 1회·유휴 웨이크업 0). [journal](journal/2026-11-04.md)
 - **(Win · main) LOG-1 후속 = 로그 창 층/수준/FAIL 필터 칩**(`ed2c197` — 층 10 + 상태 · decide/detail/trace · FAIL만 · 검색과 AND). [journal](journal/2026-11-04.md)
 - **(Win · main) ★PERF-4 완료**(`b8c948d` — `tools/startup-bench.sh` 릴리스 콜드/웜 5회 · 콜드 중앙값 **245ms** · 웜 **56ms** · NFR-B-11 500ms 안 · `verify.sh --perf`). [journal](journal/2026-11-04.md)
