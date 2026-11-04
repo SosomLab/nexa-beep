@@ -145,7 +145,7 @@ fn reply_fallback_text(label: Option<&str>, reply: &nbeep_core::ReplyRef, text: 
     }
 }
 
-/// ★ 기동 트레이스(PERF-4 · 11-04 · [05] NFR-B-11 콜드 스타트 ≤500ms · [49] INS-3): main 첫 줄(t0) → 이벤트 루프(0) →
+/// ★ 기동 트레이스(PERF-4 · 11-04 · docs/05 NFR-B-11 콜드 스타트 ≤500ms · docs/49 INS-3): main 첫 줄(t0) → 이벤트 루프(0) →
 /// 메인 창 생성(1) → 메인 창 첫 present(2)까지 ms. 프로세스당 한 번(OnceLock) · 보고는 다음 틱에 `[startup]` 한 줄
 /// (`NEXA_PAINT_TRACE`) + 상세 로그 `[app] startup`(예산 500ms 초과 = FAIL). 비용 = Instant 3회.
 pub(crate) static STARTUP_T0: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
