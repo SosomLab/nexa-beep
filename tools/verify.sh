@@ -5,7 +5,7 @@
 #   (NEXA_TEST_HEADLESS=1 · 구버전 상대만 예외 — 옵트인).
 #
 #   ./tools/verify.sh            # 기본: 빌드(debug+release) · smoke · reply · group · s4 · tmp-clean   ≈ 6~9분
-#   ./tools/verify.sh --quick    # 빌드(debug) · smoke · reply                                   ≈ 2분
+#   ./tools/verify.sh --quick    # 빌드(debug) · smoke · reply · scan-plaintext                   ≈ 2분
 #   ./tools/verify.sh --perf     # 기본 + perf-scenario(헤드리스 수치 — 51 §3 기준선과 비교하지 않는다) + startup-bench(PERF-4 콜드/웜 5회 중앙값) + scroll-bench(PERF-3 2000줄 휠 paint ms) + mem-bench(PERF-5 회수 4점 · 1GiB · ≈3분)
 #   ./tools/verify.sh --oldpeer  # 기본 + oldpeer-scenario(⚠ 구버전 창이 화면에 ≈45s · gh 필요)
 #   ./tools/verify.sh --no-build # 빌드 생략(이미 최신일 때)
@@ -44,6 +44,8 @@ if [ "$BUILD" = 1 ]; then
 fi
 step "headless-smoke" smoke.log bash tools/headless-smoke.sh "$OUT/smoke"
 step "reply-scenario" reply.log bash tools/reply-scenario.sh
+# INS-7(11-04 · 49 J-3·J-5): reply 시나리오가 남긴 신원의 데이터 폴더에 보낸 본문이 평문으로 없고 비밀 파일이 전부 봉인 봉투인지.
+step "scan-plaintext" scan.log bash tools/scan-plaintext.sh "${BEEP_MULTI:-$HOME/.nexa-beep-multi}/rp-x/data" "원본 글 첫 줄" "답장이야" "내 글에 이어서"
 if [ "$QUICK" = 0 ]; then
   step "group-scenario" group.log bash tools/group-scenario.sh
   step "s4-scenario" s4.log bash tools/s4-scenario.sh
