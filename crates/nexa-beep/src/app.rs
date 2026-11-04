@@ -280,6 +280,7 @@ fn build_menus(offline: bool) -> Vec<MenuDef> {
                 // 대화함(M3-23 · 08-20 사용자 요청) — take_picked 팔은 이미 있었고
                 // 항목만 없었다(진입점 = 툴바뿐이던 것을 메뉴에도).
                 MenuEntry::Item(ComboItem::new("convbox", t(Msg::ConvboxTitle))),
+                MenuEntry::Item(ComboItem::new("log", t(Msg::LogWinTitle))), // LOG-1(11-04)
                 // 공지 보내기(④ 08-20 · FR-M-6) — 발견된 전체에게 Notice 팬아웃.
                 MenuEntry::Item(ComboItem::new("broadcast", t(Msg::MenuBroadcast))),
                 // 종료(08-15 사용자 요청) — close_to_tray가 켜지면 X로는 못 끝낸다.
@@ -7140,6 +7141,48 @@ impl App {
                 Some(("open", what)) => {
                     eprintln!("[script] open: 모르는 창 '{what}' (settings · log)")
                 }
+                // ★ 그룹 동사(11-04 · REPLY-1 ①·GINV 자동 실기): 상대 이름 = 표시 이름 부분 일치(activate와 같은 규칙).
+                //   group.create=<방 이름>:<이름1,이름2> · group.accept · group.send=<본문> · group.reply=<본문>(방의 마지막 열쇠 줄에).
+                Some(("group.create", spec)) => {
+                    let (name, peers) = spec.split_once(':').unwrap_or((spec, ""));
+                    let members: Vec<PeerId> = peers
+                        .split(',')
+                        .map(str::trim)
+                        .filter(|n| !n.is_empty())
+                        .filter_map(|n| self.script_find_peer(n))
+                        .collect();
+                    match nbeep_core::DisplayName::parse(name.trim()) {
+                        Ok(dn) if !members.is_empty() => self.create_shared_group(dn, members),
+                        _ => eprintln!("[script] group.create: 이름/구성원 오류 '{spec}'"),
+                    }
+                }
+                Some(("group.accept", _)) => self.script_group_accept(),
+                Some(("group.send", text)) | Some(("group.reply", text)) => {
+                    let is_reply = step.starts_with("group.reply");
+                    match self.script_group() {
+                        Some(gid) => {
+                            let reply = if is_reply {
+                                self.group_last_reply_ref(gid)
+                            } else {
+                                None
+                            };
+                            if is_reply && reply.is_none() {
+                                eprintln!(
+                                    "[script] group.reply: 열쇠 있는 줄이 없다(원본 미수신?)"
+                                );
+                            }
+                            let mut inv = Invalidations::default();
+                            self.send_group_text(
+                                gid,
+                                nbeep_core::sanitize_message(text),
+                                reply,
+                                &mut inv,
+                            );
+                            self.refresh_and_redraw();
+                        }
+                        None => eprintln!("[script] group.send: 들어간 방이 없다"),
+                    }
+                }
                 Some(("activate", name)) => {
                     let found = self
                         .table
@@ -7179,6 +7222,7 @@ impl App {
                     }
                 }
                 None if step == "dump" => self.script_dump(),
+                None if step == "group.accept" => self.script_group_accept(), // 값 없는 동사(11-04)
                 // ★ 답장 자동화(11-02): 열린 1:1 대화의 **마지막 열쇠 있는 줄**에 답장을 보낸다(우클릭 ▸ 답장 → 전송과 같은 경로).
                 Some(("reply", text)) => {
                     match self
@@ -7361,6 +7405,128 @@ impl App {
                 }
             }
         }
+        // ★ 그룹(11-04 · REPLY-1 ①·GINV-1 판정 근거): 방 메타(내 상태 · 구성원 상태 메모) + 방 스레드.
+        let me = self.identity.peer_id();
+        for sg in self.groups.shared_list() {
+            let members: Vec<String> = sg
+                .roster
+                .members
+                .iter()
+                .map(|m| {
+                    let st = if *m == me {
+                        "me"
+                    } else {
+                        match self.groups.member_meta(sg.roster.uid, *m).map(|x| x.state) {
+                            Some(nbeep_store::MemberState::Joined) => "joined",
+                            Some(nbeep_store::MemberState::Invited) => "invited",
+                            Some(nbeep_store::MemberState::Declined) => "declined",
+                            None => "unknown",
+                        }
+                    };
+                    format!("{}={st}", m.short())
+                })
+                .collect();
+            eprintln!(
+                "[dump] group {} name={} mine={:?} owner={} members={}",
+                sg.roster.uid.short(),
+                sg.roster.name.as_str(),
+                sg.mine,
+                sg.roster.owner.short(),
+                members.join(",")
+            );
+            if let Some(lines) = self.group_threads.get(&sg.local_id) {
+                for l in lines {
+                    if let nbeep_ui::ChatBody::Text(t) = &l.body {
+                        let reply = l.reply.as_ref().map_or(String::new(), |r| {
+                            format!(" reply={}#{}:{}", r.origin.short(), r.seq, r.quote)
+                        });
+                        eprintln!(
+                            "[dump] gthread {} mine={} from={} origin={} seq={} text={}{reply}",
+                            sg.roster.uid.short(),
+                            l.mine,
+                            l.from.as_deref().unwrap_or("-"),
+                            l.origin.map_or_else(|| "-".to_string(), |o| o.short()),
+                            l.seq,
+                            t.as_str()
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// 스크립트 `group.accept` — 대기 중인 초대 전부 수락 + 초대 카드 모달 닫기(11-04).
+    fn script_group_accept(&mut self) {
+        let pending: Vec<(nbeep_core::GroupUid, PeerId)> = self
+            .groups
+            .shared_list()
+            .iter()
+            .filter(|s| s.mine == nbeep_store::MineState::Invited)
+            .map(|s| (s.roster.uid, s.roster.owner))
+            .collect();
+        if pending.is_empty() {
+            eprintln!("[script] group.accept: 대기 초대 없음");
+        }
+        for (uid, owner) in pending {
+            self.accept_group_invite(uid, owner);
+        }
+        // 초대 카드 모달이 떠 있으면 닫는다(판정이 끝났다 — 남겨 두면 다음 입력을 삼킨다).
+        if matches!(self.alert_ctx, Some(AlertCtx::GroupInvite { .. })) {
+            if let Some((aid, _)) = self.windows.iter().find(|(_, e)| e.role == Role::Alert) {
+                let aid = *aid;
+                self.windows.remove(&aid);
+                self.alert_view = None;
+                self.alert_ctx = None;
+            }
+        }
+        self.refresh_and_redraw();
+    }
+
+    /// 스크립트 상대 찾기 — 표시 이름 부분 일치(발견 목록 + 추가 상대 · `activate`와 같은 규칙).
+    fn script_find_peer(&self, name: &str) -> Option<PeerId> {
+        self.table
+            .list()
+            .into_iter()
+            .map(|e| (e.peer, e.name.as_str().to_string()))
+            .chain(
+                self.extra_peers
+                    .iter()
+                    .map(|(p, n)| (*p, n.as_str().to_string())),
+            )
+            .find(|(p, n)| n.contains(name) || self.peer_title(*p).contains(name))
+            .map(|(p, _)| p)
+    }
+
+    /// 스크립트 방 — 열린 방, 없으면 들어가 있는(수락한·소유한) 첫 공유 그룹.
+    fn script_group(&self) -> Option<nbeep_core::group::GroupId> {
+        self.single_open_group.or_else(|| {
+            self.groups
+                .shared_list()
+                .iter()
+                .find(|s| s.mine != nbeep_store::MineState::Invited)
+                .map(|s| s.local_id)
+        })
+    }
+
+    /// 방 스레드의 마지막 열쇠 줄에 대한 답장 참조(+ 인용 라벨) — 뷰 없이 기록에서(헤드리스 `group.reply`).
+    fn group_last_reply_ref(
+        &self,
+        gid: nbeep_core::group::GroupId,
+    ) -> Option<(nbeep_core::ReplyRef, String)> {
+        self.group_threads.get(&gid)?.iter().rev().find_map(|l| {
+            let (o, sq) = l.reply_key()?;
+            let nbeep_ui::ChatBody::Text(t) = &l.body else {
+                return None;
+            };
+            let name = l.from.clone().unwrap_or_else(|| {
+                if l.mine {
+                    nbeep_core::t(nbeep_core::Msg::ReplyYou).to_string()
+                } else {
+                    String::new()
+                }
+            });
+            Some((nbeep_core::ReplyRef::new(o, sq, t.as_str()), name))
+        })
     }
 
     /// 스크립트 입력 주입 대상 창 — OS 포커스 창, 없으면 메인.
@@ -15914,45 +16080,7 @@ impl App {
             return;
         };
         match self.name_prompt_for.take() {
-            Some(NamePurpose::CreateGroup(members)) => {
-                // uid = 무작위 32B(기존 instance 생성 관례 — CSPRNG 유래).
-                let uid =
-                    nbeep_core::GroupUid(*nbeep_crypto::Identity::generate().peer_id().as_bytes());
-                let me = self.identity.peer_id();
-                let mut all = members.clone();
-                if !all.contains(&me) {
-                    all.push(me);
-                }
-                all.sort();
-                let roster = nbeep_core::Roster {
-                    uid,
-                    name: dn,
-                    owner: me,
-                    members: all,
-                    version: 1,
-                    // 새 방 정책 = 전역 설정 상속(사용자 확정 08-13 — 이후 방별 변경).
-                    member_invite: self.settings.get("group.member_invite") != "off",
-                };
-                let invite = nbeep_core::SGroupMsg::Invite {
-                    roster: roster.clone(),
-                }
-                .encode();
-                let _ = self
-                    .groups
-                    .upsert_shared(roster, nbeep_store::MineState::Owner);
-                let now = unix_now_ms();
-                for m in &members {
-                    self.send_group_frames(*m, vec![invite.clone()]);
-                    let _ =
-                        self.groups
-                            .note_member(uid, *m, nbeep_store::MemberState::Invited, now);
-                }
-                self.list.clear_selection();
-                self.set_status(format!(
-                    "그룹 대화 생성 — {}명에게 초대 발송(수락하면 방에 들어옵니다)",
-                    members.len()
-                ));
-            }
+            Some(NamePurpose::CreateGroup(members)) => self.create_shared_group(dn, members),
             Some(NamePurpose::RenameGroup(gid)) => self.rename_shared(gid, dn),
             // 공지는 위에서 조기 처리(본문 = DisplayName 제약 밖) — 방어적 무동작.
             Some(NamePurpose::Broadcast) => {}
@@ -15963,6 +16091,47 @@ impl App {
                 nbeep_core::tf(nbeep_core::Msg::StfGroupSaveFail, &[&self.status.clone()]);
         }
         self.refresh_and_redraw();
+    }
+
+    /// 공유 그룹 생성 본체(M5-1g · 11-04 스크립트 `group.create`와 공용): uid 무작위 · 명부 = 나 + 구성원 · 초대 발송 ·
+    /// 구성원 상태 메모 Invited(GINV-1 S1).
+    fn create_shared_group(&mut self, dn: nbeep_core::DisplayName, members: Vec<PeerId>) {
+        // uid = 무작위 32B(기존 instance 생성 관례 — CSPRNG 유래).
+        let uid = nbeep_core::GroupUid(*nbeep_crypto::Identity::generate().peer_id().as_bytes());
+        let me = self.identity.peer_id();
+        let mut all = members.clone();
+        if !all.contains(&me) {
+            all.push(me);
+        }
+        all.sort();
+        let roster = nbeep_core::Roster {
+            uid,
+            name: dn,
+            owner: me,
+            members: all,
+            version: 1,
+            // 새 방 정책 = 전역 설정 상속(사용자 확정 08-13 — 이후 방별 변경).
+            member_invite: self.settings.get("group.member_invite") != "off",
+        };
+        let invite = nbeep_core::SGroupMsg::Invite {
+            roster: roster.clone(),
+        }
+        .encode();
+        let _ = self
+            .groups
+            .upsert_shared(roster, nbeep_store::MineState::Owner);
+        let now = unix_now_ms();
+        for m in &members {
+            self.send_group_frames(*m, vec![invite.clone()]);
+            let _ = self
+                .groups
+                .note_member(uid, *m, nbeep_store::MemberState::Invited, now);
+        }
+        self.list.clear_selection();
+        self.set_status(format!(
+            "그룹 대화 생성 — {}명에게 초대 발송(수락하면 방에 들어옵니다)",
+            members.len()
+        ));
     }
 
     /// 공지 발송(④ 08-20 · FR-M-6 — 사용자 확정 "발견된 전체"): 목록의 모든
@@ -16431,109 +16600,119 @@ impl App {
                 .and_then(ChatViewWidget::take_reply)
         });
         if let Some(text) = outgoing {
-            // 방 발신(M5-1g) — 명부 기준 팬아웃(나 제외 · Group 스트림 · ADR §4).
-            let Some(s) = self.groups.shared_by_id(gid) else {
-                self.set_status(nbeep_core::t(nbeep_core::Msg::StGroupGone));
-                self.request_redraw(id);
-                return;
-            };
-            let uid = s.roster.uid;
-            let me = self.identity.peer_id();
-            let members: Vec<PeerId> = s
-                .roster
-                .members
-                .iter()
-                .copied()
-                .filter(|m| *m != me)
-                .collect();
-            if members.is_empty() {
-                self.set_status(nbeep_core::t(nbeep_core::Msg::StGroupNoMembers));
-                self.request_redraw(id);
-                return;
-            }
-            let (at_ms, wall) = now_stamp();
-            // ★ 방 메시지 하나 = seq 하나(11-02 — 종전엔 구성원마다 새 seq라 "같은 메시지"의 열쇠가 기기마다
-            //   달라 답장 참조가 성립하지 않았다). dedup은 수신자마다 (발신 기기, seq)라 공유해도 무해.
-            let seq = self.issue_seq();
-            // 인용 라벨 = 답장을 잡은 줄에 보이던 이름(`take_reply` · 11-04).
-            let reply_from = reply.as_ref().map(|(_, n)| n.clone());
-            let reply = reply.map(|(r, _)| r);
-            // 구버전 구성원용 평문(11-04 · kind 10을 모르는 기기는 미지 kind를 버린다).
-            let fallback_text = reply
-                .as_ref()
-                .map(|r| reply_fallback_text(reply_from.as_deref(), r, text.as_str()));
-            // 내 말풍선은 스레드에 한 번(팬아웃과 무관 — "하나의 방").
-            let line = ChatLine::text(true, text.clone(), at_ms, wall)
-                .with_seq(seq)
-                .with_origin(me)
-                .with_reply(reply.clone(), reply_from);
-            self.group_threads
-                .entry(gid)
-                .or_default()
-                .push(line.clone());
-            self.record_group_history(gid); // 그룹 기록 영속(08-19)
-            if let Some(chat) = self.gchats.get_mut(&gid) {
-                chat.push_line(line, &mut inv);
-            }
-            let mut sent = 0usize;
-            let mut queued: Vec<PeerId> = Vec::new();
-            for m in &members {
-                let knows = self.peer_knows_reply(*m);
-                if let Some(conv) = self.conversations.get(m) {
-                    let frame = match (&fallback_text, knows) {
-                        (Some(fb), false) => nbeep_core::SGroupMsg::Msg {
-                            uid,
-                            seq,
-                            text: fb.clone(),
-                            sender: None,
-                            reply: None,
-                        },
-                        _ => nbeep_core::SGroupMsg::Msg {
-                            uid,
-                            seq,
-                            text: text.as_str().to_string(),
-                            sender: None, // P-10 kind 9 발신은 구버전 소진 후(해석기 선배포)
-                            reply: reply.clone(),
-                        },
-                    }
-                    .encode();
-                    if conv.out_tx.send(SessionCmd::Group(vec![frame])).is_ok() {
-                        self.ledger.note_sent(*m);
-                        sent += 1;
-                        continue;
-                    }
-                }
-                // 미연결 — 본문을 상대별로 대기시키고 자동 연결(성립 시 flush).
-                // 보관 상한 = 설정 `group.resync_keep`(사용 시점 읽기 — 즉시 반영) ·
-                // 초과분은 오래된 것부터 폐기(큐 상한 필수 — NFR-B-6 · 13 §12-1).
-                let keep = group_resync_keep(&self.settings);
-                let q = self.pending_group_sends.entry(*m).or_default();
-                q.push((gid, text.as_str().to_string(), seq, reply.clone()));
-                if q.len() > keep {
-                    let drop_n = q.len() - keep;
-                    q.drain(..drop_n);
-                }
-                queued.push(*m);
-            }
-            for m in &queued {
-                self.reconnect.remove(m); // 발신 의사 = 백오프 리셋(즉시 시도)
-                self.start_connect(*m, true); // 자동 — 창을 열지 않는다
-            }
-            // FR-G-4 — 전달 경과는 **상태 바**에만(정보성 라인이 스레드에 섞이면
-            // 대화를 가린다 — 08-13 실기 피드백). 스레드에는 ⚠ 실패만 남긴다.
-            self.set_status(if queued.is_empty() {
-                format!("그룹 발신 — 즉시 {sent} · 연결 대기 0")
-            } else {
-                let names: Vec<String> = queued.iter().map(|p| self.peer_title(*p)).collect();
-                format!(
-                    "그룹 발신 — 즉시 {sent} · 연결 대기 {}: {}",
-                    queued.len(),
-                    names.join(", ")
-                )
-            });
-            self.refresh_and_redraw();
+            self.send_group_text(gid, text, reply, &mut inv);
             self.request_redraw(id);
         }
+    }
+
+    /// 방 발신 본체(M5-1g · 11-04 스크립트 `group.send`/`group.reply`와 공용): 명부 팬아웃(나 제외) · 메시지 하나 = seq 하나 ·
+    /// 구버전 구성원 평문 폴백 · 미연결 = 대기 큐 + 자동 연결 · 상태 바 요약.
+    fn send_group_text(
+        &mut self,
+        gid: nbeep_core::group::GroupId,
+        text: nbeep_core::SafeText,
+        reply: Option<(nbeep_core::ReplyRef, String)>,
+        inv: &mut Invalidations,
+    ) {
+        // 방 발신(M5-1g) — 명부 기준 팬아웃(나 제외 · Group 스트림 · ADR §4).
+        let Some(s) = self.groups.shared_by_id(gid) else {
+            self.set_status(nbeep_core::t(nbeep_core::Msg::StGroupGone));
+            return;
+        };
+        let uid = s.roster.uid;
+        let me = self.identity.peer_id();
+        let members: Vec<PeerId> = s
+            .roster
+            .members
+            .iter()
+            .copied()
+            .filter(|m| *m != me)
+            .collect();
+        if members.is_empty() {
+            self.set_status(nbeep_core::t(nbeep_core::Msg::StGroupNoMembers));
+            return;
+        }
+        let (at_ms, wall) = now_stamp();
+        // ★ 방 메시지 하나 = seq 하나(11-02 — 종전엔 구성원마다 새 seq라 "같은 메시지"의 열쇠가 기기마다
+        //   달라 답장 참조가 성립하지 않았다). dedup은 수신자마다 (발신 기기, seq)라 공유해도 무해.
+        let seq = self.issue_seq();
+        // 인용 라벨 = 답장을 잡은 줄에 보이던 이름(`take_reply` · 11-04).
+        let reply_from = reply.as_ref().map(|(_, n)| n.clone());
+        let reply = reply.map(|(r, _)| r);
+        // 구버전 구성원용 평문(11-04 · kind 10을 모르는 기기는 미지 kind를 버린다).
+        let fallback_text = reply
+            .as_ref()
+            .map(|r| reply_fallback_text(reply_from.as_deref(), r, text.as_str()));
+        // 내 말풍선은 스레드에 한 번(팬아웃과 무관 — "하나의 방").
+        let line = ChatLine::text(true, text.clone(), at_ms, wall)
+            .with_seq(seq)
+            .with_origin(me)
+            .with_reply(reply.clone(), reply_from);
+        self.group_threads
+            .entry(gid)
+            .or_default()
+            .push(line.clone());
+        self.record_group_history(gid); // 그룹 기록 영속(08-19)
+        if let Some(chat) = self.gchats.get_mut(&gid) {
+            chat.push_line(line, inv);
+        }
+        let mut sent = 0usize;
+        let mut queued: Vec<PeerId> = Vec::new();
+        for m in &members {
+            let knows = self.peer_knows_reply(*m);
+            if let Some(conv) = self.conversations.get(m) {
+                let frame = match (&fallback_text, knows) {
+                    (Some(fb), false) => nbeep_core::SGroupMsg::Msg {
+                        uid,
+                        seq,
+                        text: fb.clone(),
+                        sender: None,
+                        reply: None,
+                    },
+                    _ => nbeep_core::SGroupMsg::Msg {
+                        uid,
+                        seq,
+                        text: text.as_str().to_string(),
+                        sender: None, // P-10 kind 9 발신은 구버전 소진 후(해석기 선배포)
+                        reply: reply.clone(),
+                    },
+                }
+                .encode();
+                if conv.out_tx.send(SessionCmd::Group(vec![frame])).is_ok() {
+                    self.ledger.note_sent(*m);
+                    sent += 1;
+                    continue;
+                }
+            }
+            // 미연결 — 본문을 상대별로 대기시키고 자동 연결(성립 시 flush).
+            // 보관 상한 = 설정 `group.resync_keep`(사용 시점 읽기 — 즉시 반영) ·
+            // 초과분은 오래된 것부터 폐기(큐 상한 필수 — NFR-B-6 · 13 §12-1).
+            let keep = group_resync_keep(&self.settings);
+            let q = self.pending_group_sends.entry(*m).or_default();
+            q.push((gid, text.as_str().to_string(), seq, reply.clone()));
+            if q.len() > keep {
+                let drop_n = q.len() - keep;
+                q.drain(..drop_n);
+            }
+            queued.push(*m);
+        }
+        for m in &queued {
+            self.reconnect.remove(m); // 발신 의사 = 백오프 리셋(즉시 시도)
+            self.start_connect(*m, true); // 자동 — 창을 열지 않는다
+        }
+        // FR-G-4 — 전달 경과는 **상태 바**에만(정보성 라인이 스레드에 섞이면
+        // 대화를 가린다 — 08-13 실기 피드백). 스레드에는 ⚠ 실패만 남긴다.
+        self.set_status(if queued.is_empty() {
+            format!("그룹 발신 — 즉시 {sent} · 연결 대기 0")
+        } else {
+            let names: Vec<String> = queued.iter().map(|p| self.peer_title(*p)).collect();
+            format!(
+                "그룹 발신 — 즉시 {sent} · 연결 대기 {}: {}",
+                queued.len(),
+                names.join(", ")
+            )
+        });
+        self.refresh_and_redraw();
     }
 
     /// 그룹 스레드에 시스템 안내 라인(FR-G-4 — 전달 상태는 스레드에서 보인다).
@@ -17382,18 +17561,7 @@ impl App {
             }
             AlertCtx::GroupInvite { uid, owner } => {
                 if yes {
-                    if self.groups.set_mine(uid, nbeep_store::MineState::Joined) {
-                        let frame = nbeep_core::SGroupMsg::Accept { uid }.encode();
-                        self.send_group_frames(owner, vec![frame]);
-                        let name = self
-                            .groups
-                            .shared_by_uid(uid)
-                            .map(|s| s.roster.name.as_str().to_string())
-                            .unwrap_or_default();
-                        self.set_status(nbeep_core::tf(nbeep_core::Msg::StfJoinedGroup, &[&name]));
-                        // 합류 = 구성원들과 연결(아바타·프로필은 세션 경유 · 08-14).
-                        self.connect_group_members(uid);
-                    }
+                    self.accept_group_invite(uid, owner);
                 } else {
                     let frame = nbeep_core::SGroupMsg::Decline { uid }.encode();
                     self.send_group_frames(owner, vec![frame]);
@@ -17402,6 +17570,22 @@ impl App {
                 }
                 self.refresh_and_redraw();
             }
+        }
+    }
+
+    /// 초대 수락 본체(ADR-0012 G-4 · 11-04 스크립트 `group.accept`와 공용): 내 상태 Joined → 소유자에게 Accept → 구성원 연결.
+    fn accept_group_invite(&mut self, uid: nbeep_core::GroupUid, owner: PeerId) {
+        if self.groups.set_mine(uid, nbeep_store::MineState::Joined) {
+            let frame = nbeep_core::SGroupMsg::Accept { uid }.encode();
+            self.send_group_frames(owner, vec![frame]);
+            let name = self
+                .groups
+                .shared_by_uid(uid)
+                .map(|s| s.roster.name.as_str().to_string())
+                .unwrap_or_default();
+            self.set_status(nbeep_core::tf(nbeep_core::Msg::StfJoinedGroup, &[&name]));
+            // 합류 = 구성원들과 연결(아바타·프로필은 세션 경유 · 08-14).
+            self.connect_group_members(uid);
         }
     }
 
@@ -18715,6 +18899,7 @@ impl App {
                             }
                             "quarantine" => self.open_quarantine(el),
                             "convbox" => self.open_convbox(el),
+                            "log" => self.open_log_window(el),
                             // 공지(④) — 본문 입력 프롬프트(발견된 전체 · Notice).
                             "broadcast" => self.open_name_prompt(
                                 el,
@@ -18744,6 +18929,7 @@ impl App {
                             "add" => self.open_add_endpoint(el),
                             "quarantine" => self.open_quarantine(el),
                             "convbox" => self.open_convbox(el),
+                            "log" => self.open_log_window(el),
                             "profile" => self.open_profile(el),
                             // 서버 표시 클릭 = 설정 › 서버로 **직행**(08-22 사용자 확정).
                             "server" => {
