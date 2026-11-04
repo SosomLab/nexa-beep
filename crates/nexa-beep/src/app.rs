@@ -225,6 +225,11 @@ fn devlog_push(
 /// 로그 링 상한(LOG-1) — 2000줄 × ≈120B ≈ 240KB 상한(DR-5 안).
 const LOG_RING_CAP: usize = 2000;
 
+/// 기록 저장 디바운스(RL-7): 마지막 변경 뒤 이만큼 조용하면 쓴다(틱 200ms 격자 → 실제 ≤500ms).
+const HISTORY_QUIET_MS: u64 = 300;
+/// 기록 저장 디바운스 상한: 연타가 계속돼도 처음 더티 뒤 이만큼이면 쓴다(DR-27 `max_delay`와 같은 뜻).
+const HISTORY_MAX_DELAY_MS: u64 = 1500;
+
 /// 링에 한 줄(시각 접두 `[HH:MM:SS]`) — 가득 차면 가장 오래된 줄을 버린다 · 일련번호 +1(로그 창 동기 비교).
 fn ring_push(
     ring: &std::cell::RefCell<VecDeque<String>>,
@@ -3925,6 +3930,15 @@ struct App {
     members_ctx: Option<(nbeep_core::group::GroupId, Vec<PeerId>, bool)>,
     /// 초대 만료 틱 다음 시각(S2 · 60초 페이스).
     invite_expire_at: u64,
+    /// ★ 기록 저장 디바운스(RL-7 · 11-04): 더티 상대 → 처음 더티가 된 시각(ms). 쓰기는 `history_flush_tick`이
+    /// quiet(`HISTORY_QUIET_MS`) 또는 max(`HISTORY_MAX_DELAY_MS`)에 한 번 — 메시지 연타·파일 종결 3연타가 1회로 접힌다.
+    history_dirty: HashMap<PeerId, u64>,
+    /// 더티 그룹 → 처음 더티 시각(ms) — 1:1과 같은 틱이 비운다.
+    group_history_dirty: HashMap<nbeep_core::group::GroupId, u64>,
+    /// 마지막 더티 표시 시각(ms) — quiet 판정.
+    history_mark_at: u64,
+    /// 마지막 flush 뒤 더티 표시 횟수(접힘 비율 계측 · 로그 `coalesced`).
+    history_marks: u32,
     /// 거절 실행 취소 대기(S3): uid → (소유자, hard, 보낼 시각 ms). 방 행 클릭 = 취소.
     pending_declines: HashMap<nbeep_core::GroupUid, (PeerId, bool, u64)>,
     /// 차단한 초대 목록 모달의 행 순서(S4 · 행 클릭 = 해제 확인 · 모달 닫힘 = 소거).
@@ -14671,10 +14685,82 @@ impl App {
         nbeep_store::sealed::open(crate::gate::SEAL_HISTORY, &self.identity.wrap_secret(), raw)
     }
 
-    /// 대화 기록 봉인 저장(M2-5b) — sealed(history-v1 · **대화별 데이터 키** —
+    /// 대화 기록 저장 요청(M2-5b) — ★ RL-7(11-04): 즉시 쓰지 않고 **더티 표시**만. 실제 봉인·쓰기는
+    /// [`Self::history_flush_tick`](quiet 300ms / max 1500ms)과 종료 [`Self::flush_history_all`]. 그 전에는 메시지
+    /// 1건마다 스레드 전량 재직렬화+재봉인+전량 쓰기였다(세션 O(n²) · 파일 종결 순간 같은 파일 3연타).
+    fn record_history(&mut self, peer: PeerId) {
+        let now = unix_now_ms();
+        self.history_dirty.entry(peer).or_insert(now);
+        self.history_mark_at = now;
+        self.history_marks = self.history_marks.saturating_add(1);
+    }
+
+    /// 그룹 기록 저장 요청 — 1:1과 같은 디바운스(RL-7).
+    fn record_group_history(&mut self, gid: nbeep_core::group::GroupId) {
+        let now = unix_now_ms();
+        self.group_history_dirty.entry(gid).or_insert(now);
+        self.history_mark_at = now;
+        self.history_marks = self.history_marks.saturating_add(1);
+    }
+
+    /// 디바운스 틱(about_to_wait · RL-7): 더티가 있고 (마지막 표시 뒤 quiet 경과) 또는 (가장 오래된 더티 뒤 max 경과)면
+    /// 더티 전부를 쓴다. 계측 = 쓴 파일 수 · 접힌 표시 횟수(`coalesced` = marks − files).
+    fn history_flush_tick(&mut self) {
+        if self.history_dirty.is_empty() && self.group_history_dirty.is_empty() {
+            return;
+        }
+        let now = unix_now_ms();
+        let quiet = now.saturating_sub(self.history_mark_at) >= HISTORY_QUIET_MS;
+        let oldest = self
+            .history_dirty
+            .values()
+            .chain(self.group_history_dirty.values())
+            .copied()
+            .min()
+            .unwrap_or(now);
+        let overdue = now.saturating_sub(oldest) >= HISTORY_MAX_DELAY_MS;
+        if quiet || overdue {
+            self.flush_history_all(if overdue && !quiet {
+                "max_delay"
+            } else {
+                "quiet"
+            });
+        }
+    }
+
+    /// 더티 기록 전부 즉시 쓰기(틱 발화 · 종료 S-1 — 디바운스가 마지막 변경을 삼키면 안 된다).
+    fn flush_history_all(&mut self, why: &'static str) {
+        let peers: Vec<PeerId> = self.history_dirty.drain().map(|(p, _)| p).collect();
+        let gids: Vec<nbeep_core::group::GroupId> =
+            self.group_history_dirty.drain().map(|(g, _)| g).collect();
+        let files = peers.len() + gids.len();
+        let marks = std::mem::take(&mut self.history_marks);
+        if files == 0 {
+            return; // 종료 flush에 더티가 없으면 조용히(로그 0)
+        }
+        for p in peers {
+            self.write_history_now(p);
+        }
+        for g in gids {
+            self.write_group_history_now(g);
+        }
+        dlog!(self, DL::Store, DV::Decide, "history_flush", |r| r
+            .arg("files", files)
+            .arg("marks", marks)
+            .arg(
+                "coalesced",
+                marks.saturating_sub(u32::try_from(files).unwrap_or(u32::MAX))
+            )
+            .rule("why", why)
+            .rule("quiet_ms", HISTORY_QUIET_MS)
+            .rule("max_delay_ms", HISTORY_MAX_DELAY_MS)
+            .ok("written"));
+    }
+
+    /// 대화 기록 봉인 저장 본체(M2-5b) — sealed(history-v1 · **대화별 데이터 키** —
     /// 셰레딩 D-18 §7 08-21) → 원자적 `data/history/{short}.seg`.
     /// 빈 스레드 = 파일 삭제 **+ 키 폐기**(지우기 = 셰레딩). 봉인 실패 = 저장 포기.
-    fn record_history(&mut self, peer: PeerId) {
+    fn write_history_now(&mut self, peer: PeerId) {
         // 세션 없는 대화방(parked)도 저장한다(S3 sender copy — 형제가 대신 보낸 내 메시지는
         // 세션이 없는 상대 앞으로도 온다). 단 **대기 풍선은 빼고**: 대기 큐는 pending/에
         // 따로 영속되며 부팅 때 parked에 다시 붙는다 — 여기 섞으면 재시작마다 중복된다.
@@ -14930,11 +15016,11 @@ impl App {
         }
     }
 
-    /// 그룹 대화 기록 영속(08-19 — M3-23의 `g-*.seg` 축 · 사용자 실기 "재시작하면
-    /// 기록이 사라진다"). 1:1 [`Self::record_history`]와 같은 문법: 같은 봉인 도메인
+    /// 그룹 대화 기록 영속 본체(08-19 — M3-23의 `g-*.seg` 축 · 사용자 실기 "재시작하면
+    /// 기록이 사라진다"). 1:1 [`Self::write_history_now`]와 같은 문법: 같은 봉인 도메인
     /// (`SEAL_HISTORY`) · 원자적 쓰기 · 파일명 = `g-{uid.short()}.seg`(uid = 전역
-    /// 진실 — 로컬 gid는 표시용 키라 파일명에 쓰지 않는다).
-    fn record_group_history(&mut self, gid: nbeep_core::group::GroupId) {
+    /// 진실 — 로컬 gid는 표시용 키라 파일명에 쓰지 않는다). 호출은 디바운스 flush만(RL-7).
+    fn write_group_history_now(&mut self, gid: nbeep_core::group::GroupId) {
         let Some(uid) = self.groups.shared_by_id(gid).map(|s| s.roster.uid) else {
             return; // 로컬(동보) 그룹 — 공유 방만 영속(스레드도 공유 방에만 있다)
         };
@@ -22508,6 +22594,8 @@ impl ApplicationHandler<AppEvent> for App {
     }
 
     fn exiting(&mut self, _el: &ActiveEventLoop) {
+        // ★ 기록 종료 flush(RL-7 · S-1) — 대화를 비우기 **전에**(쓰기 본체가 conversations/parked를 읽는다).
+        self.flush_history_all("exit");
         // 부분 수신물 보존(M4-10a — 수신자 정상 종료 경로): 대화 채널을 끊으면
         // 액터가 Disconnected를 보고 부분물을 봉인 보존한 뒤 끝난다 — 그 완주를
         // 기다린다(액터 감지 지연 ≤ 수신 폴 100ms · 죽은 핸들 join은 즉시).
@@ -22575,6 +22663,7 @@ impl ApplicationHandler<AppEvent> for App {
         self.refresh_log_view(); // 로그 창(LOG-1) — 열려 있을 때만 · 같은 일련번호 = 비용 0
         self.invite_expire_tick(false); // 초대 만료(S2 · 60초 페이스 내부 가드)
         self.decline_pending_tick(); // 거절 실행 취소 창 만료(S3)
+        self.history_flush_tick(); // 기록 저장 디바운스(RL-7 · quiet 300ms / max 1500ms)
         if self.devices_view.is_some() {
             self.refresh_devices_view(); // 접속 상태·"N분 전"은 틱마다 · 같은 내용이면 비용 0
         }
@@ -24546,6 +24635,10 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         members_ctx: None,
         invite_expire_at: 0,
         pending_declines: HashMap::new(),
+        history_dirty: HashMap::new(),
+        group_history_dirty: HashMap::new(),
+        history_mark_at: 0,
+        history_marks: 0,
         blocked_ctx: None,
         want_blocked_window: false,
         pending_reset: false,
