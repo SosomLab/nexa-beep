@@ -264,6 +264,15 @@ pub enum Msg {
     LogMaxTotal,
     LogMaxTotalDesc,
     LogView,
+    /// 설정 › 고급 › 로그 — 로그 창 열기(LOG-1 · 11-04).
+    LogWindow,
+    LogWindowDesc,
+    /// 로그 창 제목·검색 자리글·복사·복사됨·빈 안내(LOG-1).
+    LogWinTitle,
+    LogWinSearch,
+    LogWinCopy,
+    LogWinCopied,
+    LogWinEmpty,
     LogViewDesc,
     /// 개발자 상세 로그(docs/52 · 10-19).
     LogDevMode,
@@ -2623,6 +2632,18 @@ impl Msg {
                 "上限を超えると古いファイルから削除します。",
             ],
             Msg::LogView => ["View log", "로그 보기", "查看日志", "ログを見る"],
+            Msg::LogWindow => ["Log window", "로그 창", "日志窗口", "ログウィンドウ"],
+            Msg::LogWindowDesc => [
+                "Recent status and developer log lines in a window (works even when file logging is off) — search, scroll, copy.",
+                "최근 상태·개발자 로그 줄을 창에서 봅니다(파일 로그가 꺼져 있어도) — 검색·스크롤·복사.",
+                "在窗口中查看最近的状态与开发者日志（即使文件日志关闭）— 搜索、滚动、复制。",
+                "最近の状態・開発者ログを窓で見ます（ファイルログが無効でも）— 検索・スクロール・コピー。",
+            ],
+            Msg::LogWinTitle => ["Log", "로그", "日志", "ログ"],
+            Msg::LogWinSearch => ["Search (space = AND)", "검색 (공백 = AND)", "搜索（空格 = AND）", "検索（空白 = AND）"],
+            Msg::LogWinCopy => ["Copy", "복사", "复制", "コピー"],
+            Msg::LogWinCopied => ["Log lines copied", "로그 줄을 복사했습니다", "已复制日志行", "ログ行をコピーしました"],
+            Msg::LogWinEmpty => ["No lines (yet)", "줄 없음(아직)", "暂无日志行", "行がありません（まだ）"],
             Msg::LogViewDesc => [
                 "Open today's log with the default .log app (folder if absent).",
                 "오늘 로그를 .log 기본 프로그램으로 엽니다(없으면 폴더).",

@@ -173,6 +173,7 @@ pub mod devices_win;
 pub mod filter_bar;
 pub mod jamo;
 pub mod license_win;
+pub mod log_win;
 pub mod offer_prompt;
 pub mod peer_info;
 pub mod peer_list;
@@ -207,6 +208,7 @@ pub use event::{InputEvent, Key, WheelAccum, WHEEL_DELTA};
 pub use filter_bar::{FilterBarWidget, FILTER_H};
 pub use geom::{Point, Rect, Size};
 pub use license_win::{license_view, LicAction, LicTone, LicView, LicenseWidget};
+pub use log_win::{LogAction, LogWidget};
 pub use offer_prompt::{OfferChoice, OfferInfo, OfferPromptWidget};
 pub use peer_info::{PeerInfo, PeerInfoWidget};
 pub use peer_list::{

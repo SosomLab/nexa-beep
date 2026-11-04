@@ -78,7 +78,12 @@ macro_rules! dlog {
         if nbeep_core::devlog::wants($layer, $level) {
             let $r = DRec::new($layer, $level, $func);
             let __rec: DRec = $body;
-            devlog_push($self.statuslog.as_ref(), $self.devlog_stderr, &__rec);
+            devlog_push(
+                $self.statuslog.as_ref(),
+                $self.devlog_stderr,
+                (&$self.log_ring, &$self.log_ring_seq),
+                &__rec,
+            );
         }
     };
 }
@@ -201,7 +206,12 @@ fn window_event_tag(ev: &WindowEvent) -> &'static str {
 /// 싱크 = 상태 로그 파일(M3-22 · 논블로킹 · `dev ` 접두) + `NEXA_DEVLOG`가 섰으면 stderr 거울.
 #[cold]
 #[inline(never)]
-fn devlog_push(log: Option<&crate::statuslog::StatusLog>, stderr: bool, rec: &DRec) {
+fn devlog_push(
+    log: Option<&crate::statuslog::StatusLog>,
+    stderr: bool,
+    ring: (&std::cell::RefCell<VecDeque<String>>, &std::cell::Cell<u64>),
+    rec: &DRec,
+) {
     let line = rec.render();
     if stderr {
         eprintln!("[dev] {line}");
@@ -209,14 +219,34 @@ fn devlog_push(log: Option<&crate::statuslog::StatusLog>, stderr: bool, rec: &DR
     if let Some(l) = log {
         l.log(&format!("dev {line}"));
     }
+    ring_push(ring.0, ring.1, format!("dev {line}"));
+}
+
+/// 로그 링 상한(LOG-1) — 2000줄 × ≈120B ≈ 240KB 상한(DR-5 안).
+const LOG_RING_CAP: usize = 2000;
+
+/// 링에 한 줄(시각 접두 `[HH:MM:SS]`) — 가득 차면 가장 오래된 줄을 버린다 · 일련번호 +1(로그 창 동기 비교).
+fn ring_push(
+    ring: &std::cell::RefCell<VecDeque<String>>,
+    seq: &std::cell::Cell<u64>,
+    line: String,
+) {
+    let t = nbeep_plat::clock::local_time(unix_now());
+    let mut r = ring.borrow_mut();
+    if r.len() >= LOG_RING_CAP {
+        r.pop_front();
+    }
+    r.push_back(format!("[{:02}:{:02}:{:02}] {line}", t.h, t.m, t.s));
+    seq.set(seq.get().wrapping_add(1));
 }
 
 use nbeep_core::devlog::{Layer as DL, Level as DV, Rec as DRec};
 use nbeep_core::PeerId;
 use nbeep_ui::{
     AboutInfo, AboutWidget, ChatLine, ChatViewWidget, ComboItem, Control as _, DrawCtx, InputEvent,
-    Invalidations, Key, LinkState, MenuBar, MenuDef, MenuEntry, PeerListWidget, PeerRow, RasterCtx,
-    Rect, SettingsState, SettingsWidget, Theme, ToolIcon, ToolItem, Toolbar, Widget,
+    Invalidations, Key, LinkState, LogAction, LogWidget, MenuBar, MenuDef, MenuEntry,
+    PeerListWidget, PeerRow, RasterCtx, Rect, SettingsState, SettingsWidget, Theme, ToolIcon,
+    ToolItem, Toolbar, Widget,
 };
 
 // 화면 내보내기(10-10) — `present::Presenter`(softbuffer ↔ macOS IOSurface · docs/51).
@@ -3186,6 +3216,8 @@ enum Role {
     License,
     /// 내 기기 목록(10-09 · ADR-0015 서명 기기 목록 + 기기별 폐기 = Succession 부분 집합).
     Devices,
+    /// 로그 창(LOG-1 · 11-04 — 메모리 링 버퍼 · 검색·복사 · docs/52 §5).
+    Log,
     /// 프로필 변경 화면(M3-17 — 이미지·이름·연락처 + 공개 토글).
     Profile,
     /// 상대 프로필 보기 카드(M3-17 — 목록 우클릭 ▸ 프로필 보기).
@@ -3579,6 +3611,13 @@ struct App {
     /// ★ 상대 기기의 앱 버전(11-04 · 프로필 Info bit7 · 세션마다 프리페치로 들어온다 · 영속 안 함). 용도 = 상대가
     /// 모르는 와이어 kind를 피하는 판정(`peer_knows_reply`) 하나.
     peer_app_version: HashMap<PeerId, String>,
+    /// ★ 로그 창(LOG-1 · 11-04).
+    log_view: Option<LogWidget>,
+    /// 로그 링 버퍼(상태바 문구 + 상세 로그 `dev …` · `LOG_RING_CAP`줄 · 파일 로깅과 무관하게 항상) — `RefCell`인 이유 =
+    /// `dlog!`가 `&self` 자리에서도 불린다(statuslog와 같은 자리에서 push).
+    log_ring: std::cell::RefCell<VecDeque<String>>,
+    /// 링 변경 일련번호(로그 창 `sync` 비교용 · push마다 +1).
+    log_ring_seq: std::cell::Cell<u64>,
     /// 세션 액터 join 핸들(M4-10a · 08-18) — **정상 종료 시 부분 수신물 보존을
     /// 기다린다**: main 리턴 = 전 스레드 즉사라, 기다리지 않으면 수신자 쪽 종료
     /// 경로에서 `.part`가 안 남는다(발신자 쪽 끊김만 보존되던 반쪽).
@@ -3634,6 +3673,8 @@ struct App {
     revoke_armed: Option<(PeerId, u64)>,
     /// 설정 행동 "내 기기 목록 열기…" → `about_to_wait`에서 창 생성(`apply_settings`에는 이벤트 루프 핸들이 없다).
     want_devices_window: bool,
+    /// 로그 창 열기 대기(설정 Action · 창 생성은 about_to_wait).
+    want_log_window: bool,
     licensing: nbeep_license::Licensing,
     /// 경고 모달 뷰(열려 있을 때만 Some).
     alert_view: Option<nbeep_ui::AlertWidget>,
@@ -4400,6 +4441,7 @@ impl App {
             |r| matches!(r, Role::About),
             |r| matches!(r, Role::License),
             |r| matches!(r, Role::Devices),
+            // 로그 창(LOG-1)은 모달이 아니다 — 대화하면서 옆에 띄워 본다.
         ];
         for pick in picks {
             if let Some((wid, _)) = self.windows.iter().find(|(_, e)| pick(e.role)) {
@@ -6147,6 +6189,7 @@ impl App {
         if let Some(l) = &self.statuslog {
             l.log(&s); // 논블로킹 — 큐 포화 = 드롭(본 기능 무영향 1급 요구)
         }
+        ring_push(&self.log_ring, &self.log_ring_seq, s.clone()); // 로그 창 링(LOG-1 · 파일 로깅과 무관)
         self.status = s;
     }
 
@@ -7093,7 +7136,10 @@ impl App {
             match step.split_once('=') {
                 // ★ 창 열기(11-04 · 설정 창 캡처 자동화 — SET-1·하단 바 대조): `open=settings`.
                 Some(("open", "settings")) => self.open_settings(el),
-                Some(("open", what)) => eprintln!("[script] open: 모르는 창 '{what}' (settings)"),
+                Some(("open", "log")) => self.open_log_window(el),
+                Some(("open", what)) => {
+                    eprintln!("[script] open: 모르는 창 '{what}' (settings · log)")
+                }
                 Some(("activate", name)) => {
                     let found = self
                         .table
@@ -8742,6 +8788,83 @@ impl App {
         self.layout_window(id);
         self.request_redraw(id);
         self.raise_new_window(id);
+    }
+
+    /// ★ 로그 창 열기(LOG-1 · 11-04) — 이미 있으면 앞으로. 크기 760×480(최소 480×280 · 조정 가능) · 메인 소유 비모달.
+    fn open_log_window(&mut self, el: &ActiveEventLoop) {
+        if let Some((lid, _)) = self.windows.iter().find(|(_, e)| e.role == Role::Log) {
+            if let Some(e) = self.windows.get(lid) {
+                if !headless() {
+                    e.window.set_visible(true);
+                }
+                focus_win(&e.window);
+            }
+            return;
+        }
+        let mut lv = LogWidget::new();
+        let mut inv = Invalidations::default();
+        let seq = self.log_ring_seq.get();
+        let _ = lv.sync(seq, self.log_ring.borrow().iter(), &mut inv);
+        let attrs = self
+            .win_attrs()
+            .with_title(format!(
+                "{APP_TITLE} — {}",
+                nbeep_core::t(nbeep_core::Msg::LogWinTitle)
+            ))
+            .with_inner_size(winit::dpi::LogicalSize::new(760.0, 480.0))
+            .with_min_inner_size(winit::dpi::LogicalSize::new(480.0, 280.0))
+            .with_resizable(true)
+            .with_window_icon(self.icon.clone());
+        let attrs = self.modal_attrs(attrs, false);
+        let window = Rc::new(el.create_window(headless_attrs(attrs)).unwrap());
+        let scale = window.scale_factor() as f32;
+        let surface = crate::present::Presenter::new(window.clone()).unwrap();
+        let id = window.id();
+        self.windows.insert(
+            id,
+            WinEntry {
+                role: Role::Log,
+                window,
+                surface,
+                cursor: (0, 0),
+                scale,
+                blinks: true,
+            },
+        );
+        self.log_view = Some(lv);
+        self.layout_window(id);
+        self.request_redraw(id);
+        self.raise_new_window(id);
+    }
+
+    /// 로그 창 행동 — 복사(클립보드 · 플랫폼 층) · 닫기.
+    fn log_action(&mut self, id: WindowId, a: LogAction) {
+        match a {
+            LogAction::Close => {
+                self.log_view = None;
+                self.windows.remove(&id);
+            }
+            LogAction::Copy(text) => {
+                if nbeep_plat::clipboard::set_text(&text) {
+                    self.set_status(nbeep_core::t(nbeep_core::Msg::LogWinCopied));
+                }
+            }
+        }
+    }
+
+    /// 로그 창이 떠 있으면 링과 맞춘다(틱마다 · 일련번호 같으면 비용 0).
+    fn refresh_log_view(&mut self) {
+        let Some(lv) = &mut self.log_view else {
+            return;
+        };
+        let mut inv = Invalidations::default();
+        let seq = self.log_ring_seq.get();
+        if lv.sync(seq, self.log_ring.borrow().iter(), &mut inv) {
+            if let Some((lid, _)) = self.windows.iter().find(|(_, e)| e.role == Role::Log) {
+                let lid = *lid;
+                self.request_redraw(lid);
+            }
+        }
     }
 
     /// 창 높이를 위젯이 바라는 값으로(행 수 · 물리 px → 논리).
@@ -15337,6 +15460,11 @@ impl App {
                     self.want_devices_window = true; // 창 생성은 about_to_wait(이벤트 루프 핸들)
                     continue;
                 }
+                // 로그 창(LOG-1 · 11-04) — 행위 항목 · 창 생성은 about_to_wait.
+                "log.window" => {
+                    self.want_log_window = true;
+                    continue;
+                }
                 // 연결 테스트(08-22) — 행위 항목: 값 저장 없이 즉시 검증 절차.
                 "net.server.test" => {
                     self.server_test();
@@ -17779,6 +17907,12 @@ impl App {
                     dv.set_bounds(Rect::new(0, 0, w, h), &mut inv);
                 }
             }
+            Role::Log => {
+                if let Some(lv) = &mut self.log_view {
+                    lv.set_scale(scale, &mut inv);
+                    lv.set_bounds(Rect::new(0, 0, w, h), &mut inv);
+                }
+            }
             Role::Alert => {
                 if let Some(av) = &mut self.alert_view {
                     av.set_scale(scale, &mut inv);
@@ -18806,6 +18940,14 @@ impl App {
                     }
                 }
             }
+            Role::Log => {
+                if let Some(lv) = &mut self.log_view {
+                    lv.on_event(&ev, &mut inv);
+                    if let Some(a) = lv.take_action() {
+                        self.log_action(id, a);
+                    }
+                }
+            }
             Role::Alert => {
                 let mut row = None;
                 let mut closed_choice = None;
@@ -19328,6 +19470,11 @@ impl App {
             Role::Devices => {
                 if let Some(dv) = &self.devices_view {
                     dv.paint(&mut ctx, &theme);
+                }
+            }
+            Role::Log => {
+                if let Some(lv) = &self.log_view {
+                    lv.paint(&mut ctx, &theme);
                 }
             }
             Role::Alert => {
@@ -21610,6 +21757,10 @@ impl ApplicationHandler<AppEvent> for App {
         if std::mem::take(&mut self.want_devices_window) {
             self.open_devices(el);
         }
+        if std::mem::take(&mut self.want_log_window) {
+            self.open_log_window(el);
+        }
+        self.refresh_log_view(); // 로그 창(LOG-1) — 열려 있을 때만 · 같은 일련번호 = 비용 0
         if self.devices_view.is_some() {
             self.refresh_devices_view(); // 접속 상태·"N분 전"은 틱마다 · 같은 내용이면 비용 0
         }
@@ -22134,6 +22285,7 @@ impl ApplicationHandler<AppEvent> for App {
                         Role::About => self.about_view = None,
                         Role::License => self.license_view = None,
                         Role::Devices => self.devices_view = None,
+                        Role::Log => self.log_view = None,
                         Role::Alert => {
                             self.alert_view = None;
                             // 선택 없이 닫음(X) — 원격 요청 대기(§6)면 거절과 동치:
@@ -23569,6 +23721,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         devices_view: None,
         revoke_armed: None,
         want_devices_window: false,
+        want_log_window: false,
         licensing: nbeep_license::Licensing::open_default(&data_dir()),
         alert_view: None,
         pending_alert: None,
@@ -23726,6 +23879,9 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         profile_view: None,
         peer_profiles: HashMap::new(),
         peer_app_version: HashMap::new(),
+        log_view: None,
+        log_ring: std::cell::RefCell::new(VecDeque::with_capacity(256)),
+        log_ring_seq: std::cell::Cell::new(0),
         peer_profile_fp: HashMap::new(),
         resumed_recv: HashMap::new(),
         statuslog: None,

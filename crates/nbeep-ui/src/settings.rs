@@ -1884,6 +1884,15 @@ pub fn registry() -> &'static [Entry] {
             },
             key: "log.dev_layers",
         },
+        // ★ 로그 창(LOG-1 · 11-04) — 메모리 링이라 log.enabled와 무관(종속 없음).
+        Entry {
+            cat: Msg::CatAdvanced,
+            sub: Some(Msg::SubLog),
+            label: Msg::LogWindow,
+            desc: Msg::LogWindowDesc,
+            kind: SettingKind::Action { verb: Msg::ActOpen },
+            key: "log.window",
+        },
         Entry {
             cat: Msg::CatAdvanced,
             sub: Some(Msg::SubLog),
