@@ -7157,6 +7157,30 @@ impl App {
                     }
                 }
                 Some(("group.accept", _)) => self.script_group_accept(),
+                Some(("group.decline", _)) => self.script_group_decline(),
+                // 구성원 추가/제외(소유자 · 11-04) — 구성원 모달과 같은 행동(`handle_group_action`).
+                Some(("group.add", names)) | Some(("group.remove", names)) => {
+                    let peers: Vec<PeerId> = names
+                        .split(',')
+                        .map(str::trim)
+                        .filter(|n| !n.is_empty())
+                        .filter_map(|n| self.script_find_peer(n))
+                        .collect();
+                    match (self.script_group(), peers.is_empty()) {
+                        (Some(gid), false) => {
+                            let a = if step.starts_with("group.add") {
+                                nbeep_ui::GroupAction::AddMembers(gid, peers)
+                            } else {
+                                nbeep_ui::GroupAction::RemoveMembers(gid, peers)
+                            };
+                            self.handle_group_action(a, el);
+                        }
+                        (None, _) => eprintln!("[script] group.add/remove: 들어간 방이 없다"),
+                        (_, true) => {
+                            eprintln!("[script] group.add/remove: 맞는 상대 없음 '{names}'")
+                        }
+                    }
+                }
                 Some(("group.send", text)) | Some(("group.reply", text)) => {
                     let is_reply = step.starts_with("group.reply");
                     match self.script_group() {
@@ -7223,6 +7247,7 @@ impl App {
                 }
                 None if step == "dump" => self.script_dump(),
                 None if step == "group.accept" => self.script_group_accept(), // 값 없는 동사(11-04)
+                None if step == "group.decline" => self.script_group_decline(),
                 // ★ 답장 자동화(11-02): 열린 1:1 대화의 **마지막 열쇠 있는 줄**에 답장을 보낸다(우클릭 ▸ 답장 → 전송과 같은 경로).
                 Some(("reply", text)) => {
                     match self
@@ -7471,6 +7496,32 @@ impl App {
             self.accept_group_invite(uid, owner);
         }
         // 초대 카드 모달이 떠 있으면 닫는다(판정이 끝났다 — 남겨 두면 다음 입력을 삼킨다).
+        if matches!(self.alert_ctx, Some(AlertCtx::GroupInvite { .. })) {
+            if let Some((aid, _)) = self.windows.iter().find(|(_, e)| e.role == Role::Alert) {
+                let aid = *aid;
+                self.windows.remove(&aid);
+                self.alert_view = None;
+                self.alert_ctx = None;
+            }
+        }
+        self.refresh_and_redraw();
+    }
+
+    /// 스크립트 `group.decline` — 대기 중인 초대 전부 거절 + 초대 카드 모달 닫기(11-04).
+    fn script_group_decline(&mut self) {
+        let pending: Vec<(nbeep_core::GroupUid, PeerId)> = self
+            .groups
+            .shared_list()
+            .iter()
+            .filter(|s| s.mine == nbeep_store::MineState::Invited)
+            .map(|s| (s.roster.uid, s.roster.owner))
+            .collect();
+        if pending.is_empty() {
+            eprintln!("[script] group.decline: 대기 초대 없음");
+        }
+        for (uid, owner) in pending {
+            self.decline_group_invite(uid, owner);
+        }
         if matches!(self.alert_ctx, Some(AlertCtx::GroupInvite { .. })) {
             if let Some((aid, _)) = self.windows.iter().find(|(_, e)| e.role == Role::Alert) {
                 let aid = *aid;
@@ -17563,10 +17614,7 @@ impl App {
                 if yes {
                     self.accept_group_invite(uid, owner);
                 } else {
-                    let frame = nbeep_core::SGroupMsg::Decline { uid }.encode();
-                    self.send_group_frames(owner, vec![frame]);
-                    let _ = self.groups.remove_shared(uid);
-                    self.set_status(nbeep_core::t(nbeep_core::Msg::StInviteDeclined));
+                    self.decline_group_invite(uid, owner);
                 }
                 self.refresh_and_redraw();
             }
@@ -17587,6 +17635,14 @@ impl App {
             // 합류 = 구성원들과 연결(아바타·프로필은 세션 경유 · 08-14).
             self.connect_group_members(uid);
         }
+    }
+
+    /// 초대 거절 본체(11-04 스크립트 `group.decline`와 공용): 소유자에게 Decline → 내 쪽 방 제거.
+    fn decline_group_invite(&mut self, uid: nbeep_core::GroupUid, owner: PeerId) {
+        let frame = nbeep_core::SGroupMsg::Decline { uid }.encode();
+        self.send_group_frames(owner, vec![frame]);
+        let _ = self.groups.remove_shared(uid);
+        self.set_status(nbeep_core::t(nbeep_core::Msg::StInviteDeclined));
     }
 
     /// 그룹 구성원 중 **미연결 상대에게 자동 연결**(M5-1g · 08-14 실기: 세션이 없으면
