@@ -273,6 +273,10 @@ pub enum Msg {
     LogWinCopy,
     LogWinCopied,
     LogWinEmpty,
+    /// 로그 창 필터 칩(11-04 후속) — 전체·상태·FAIL만(층·수준 라벨은 번역하지 않는다).
+    LogWinAll,
+    LogWinStatusChip,
+    LogWinFailOnly,
     LogViewDesc,
     /// 개발자 상세 로그(docs/52 · 10-19).
     LogDevMode,
@@ -2765,6 +2769,9 @@ impl Msg {
             Msg::LogWinCopy => ["Copy", "복사", "复制", "コピー"],
             Msg::LogWinCopied => ["Log lines copied", "로그 줄을 복사했습니다", "已复制日志行", "ログ行をコピーしました"],
             Msg::LogWinEmpty => ["No lines (yet)", "줄 없음(아직)", "暂无日志行", "行がありません（まだ）"],
+            Msg::LogWinAll => ["All", "전체", "全部", "すべて"],
+            Msg::LogWinStatusChip => ["status", "상태", "状态", "状態"],
+            Msg::LogWinFailOnly => ["FAIL only", "FAIL만", "仅 FAIL", "FAILのみ"],
             Msg::LogViewDesc => [
                 "Open today's log with the default .log app (folder if absent).",
                 "오늘 로그를 .log 기본 프로그램으로 엽니다(없으면 폴더).",

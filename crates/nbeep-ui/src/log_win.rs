@@ -3,6 +3,12 @@
 //! 파일을 외부 프로그램에 여는 길뿐). 검색 = 공백으로 나눈 토큰 **AND**(대소문자 무시) · 휠 스크롤 · 바닥에 있으면 새 줄을
 //! 따라간다(위로 올리면 멈춤) · \[복사\] = 보이는(걸러진) 줄 전부를 호스트가 클립보드에 · \[닫기\]/Esc.
 //! 데이터의 단일 원천은 호스트(`sync`로 링과 일련번호를 넘긴다 · 위젯은 표시·검색·스크롤만).
+//!
+//! **필터 칩 행**(11-04 후속 · docs/52 §5 "층/수준 필터"): 검색 상자 아래 칩 = `[전체] [상태] app disc conn sess chat xfer
+//! user relay store ui | decide detail trace | FAIL만`. 층 칩은 **끄고 켜는 집합**(상태 = `dev ` 접두가 없는 상태바 줄 ·
+//! `[전체]` = 전부 켬) · 수준 칩은 `dev` 줄에만 적용(`층/수준` 토큰 — 라벨은 번역하지 않는다 · 파일·grep과 같은 글자) ·
+//! `FAIL만` = `| FAIL ` 결과 줄만. 검색 토큰과 AND. 칩은 창 너비에 맞춰 줄바꿈(최소 너비 480에서 3줄).
+use nbeep_core::devlog::{Layer, Level};
 use nbeep_core::{t, Msg};
 
 use crate::controls::{Button, Control as _, TextBox};
@@ -27,6 +33,61 @@ const ROW_H: i32 = 18;
 const BTN_H: i32 = 26;
 const BTN_W: i32 = 88;
 const GAP: i32 = 8;
+const CHIP_H: i32 = 20;
+const CHIP_GAP: i32 = 4;
+/// 칩 최소 너비(라벨이 길면 글자 수로 늘린다 · 폭 측정은 paint에서만 가능하므로 글자 수 추정).
+const CHIP_MIN_W: i32 = 30;
+const CHIP_PAD_X: i32 = 7;
+/// 칩 글자 폭 추정(Status 폰트 · ASCII 7px · 한글 12px).
+const CHIP_CH_W: i32 = 7;
+const CHIP_CH_W_WIDE: i32 = 12;
+/// 층·수준 묶음 사이 간격(구분선 자리).
+const CHIP_SEP: i32 = 10;
+
+/// 칩 종류 — 층(0 = 상태바 줄 · 1..=10 = `Layer::ALL`) · 수준(1..=3 = decide/detail/trace) · FAIL만 · 전체 켬.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Chip {
+    All,
+    Layer(u8),
+    Level(u8),
+    Fail,
+}
+
+/// 줄 메타(sync 때 한 번 해석 · 필터는 이걸로만 판단).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct LineMeta {
+    /// 0 = 상태바 줄 · 1..=10 = `Layer as u8 + 1`.
+    layer: u8,
+    /// 0 = basic(상태) · 1..=3.
+    level: u8,
+    /// `| FAIL ` 결과.
+    fail: bool,
+}
+
+impl LineMeta {
+    /// `[HH:MM:SS] dev 층/수준 기능 …` → 층·수준 · 그 외 = 상태 줄.
+    fn parse(line: &str) -> Self {
+        let body = line.find("] ").map_or(line, |i| &line[i + 2..]);
+        let fail = body.contains("| FAIL ");
+        let Some(rest) = body.strip_prefix("dev ") else {
+            return Self {
+                layer: 0,
+                level: 0,
+                fail,
+            };
+        };
+        let tok = rest.split(' ').next().unwrap_or("");
+        let (l, v) = tok.split_once('/').unwrap_or((tok, ""));
+        let layer = Layer::parse(l).map_or(0, |k| k as u8 + 1);
+        let level = match v {
+            "decide" => 1,
+            "detail" => 2,
+            "trace" => 3,
+            _ => 0,
+        };
+        Self { layer, level, fail }
+    }
+}
 
 /// 로그 창 위젯.
 #[derive(Debug)]
@@ -35,6 +96,18 @@ pub struct LogWidget {
     scale: f32,
     /// 링 스냅숏(오래된 것 → 새 것).
     lines: Vec<String>,
+    /// `lines`와 같은 길이의 메타(층·수준·FAIL).
+    meta: Vec<LineMeta>,
+    /// 층 필터(0 = 상태 줄 · 1..=10 = 층) — 켜진 것만 보인다 · 기본 전부.
+    layers: [bool; 11],
+    /// 수준 필터(1..=3 · `dev` 줄에만) — 기본 전부.
+    levels: [bool; 4],
+    /// FAIL 결과 줄만.
+    fail_only: bool,
+    /// 칩 배치(relayout) — 클릭 판정·그리기.
+    chips: Vec<(Rect, Chip)>,
+    /// 칩 행 전체 높이(줄바꿈 포함 · rows_area가 그만큼 내려간다).
+    chips_h: i32,
     /// 마지막으로 받은 링 일련번호(같으면 `sync`는 no-op).
     seq: u64,
     /// 검색 결과 = `lines`의 인덱스.
@@ -62,6 +135,12 @@ impl LogWidget {
             bounds: Rect::default(),
             scale: 1.0,
             lines: Vec::new(),
+            meta: Vec::new(),
+            layers: [true; 11],
+            levels: [true; 4],
+            fail_only: false,
+            chips: Vec::new(),
+            chips_h: 0,
             seq: 0,
             shown: Vec::new(),
             search: TextBox::new(t(Msg::LogWinSearch)).with_clearable(),
@@ -87,6 +166,7 @@ impl LogWidget {
         }
         self.seq = seq;
         self.lines = ring.into_iter().cloned().collect();
+        self.meta = self.lines.iter().map(|l| LineMeta::parse(l)).collect();
         self.refilter();
         inv.push(self.bounds);
         true
@@ -114,6 +194,125 @@ impl LogWidget {
         self.shown.len()
     }
 
+    /// 층 필터(0 = 상태 줄 · 1..=10 = `Layer::ALL` 순) — 시험·스크립트.
+    pub fn set_layer_on(&mut self, idx: usize, on: bool) {
+        if let Some(v) = self.layers.get_mut(idx) {
+            *v = on;
+            self.refilter();
+        }
+    }
+
+    /// 수준 필터(1..=3 = decide/detail/trace).
+    pub fn set_level_on(&mut self, idx: usize, on: bool) {
+        if let Some(v) = self.levels.get_mut(idx) {
+            *v = on;
+            self.refilter();
+        }
+    }
+
+    /// FAIL 결과 줄만.
+    pub fn set_fail_only(&mut self, on: bool) {
+        self.fail_only = on;
+        self.refilter();
+    }
+
+    /// 필터 전부 해제(`[전체]` 칩).
+    pub fn reset_filters(&mut self) {
+        self.layers = [true; 11];
+        self.levels = [true; 4];
+        self.fail_only = false;
+        self.refilter();
+    }
+
+    fn chip_on(&self, chip: Chip) -> bool {
+        match chip {
+            Chip::All => {
+                self.layers.iter().all(|b| *b) && self.levels.iter().all(|b| *b) && !self.fail_only
+            }
+            Chip::Layer(i) => self.layers[usize::from(i)],
+            Chip::Level(i) => self.levels[usize::from(i)],
+            Chip::Fail => self.fail_only,
+        }
+    }
+
+    fn chip_label(chip: Chip) -> &'static str {
+        match chip {
+            Chip::All => t(Msg::LogWinAll),
+            Chip::Layer(0) => t(Msg::LogWinStatusChip),
+            Chip::Layer(i) => Layer::ALL[usize::from(i - 1)].label(),
+            Chip::Level(1) => Level::Decide.label(),
+            Chip::Level(2) => Level::Detail.label(),
+            Chip::Level(_) => Level::Trace.label(),
+            Chip::Fail => t(Msg::LogWinFailOnly),
+        }
+    }
+
+    fn chip_list() -> Vec<Chip> {
+        let mut v = vec![Chip::All];
+        v.extend((0..=10u8).map(Chip::Layer));
+        v.extend((1..=3u8).map(Chip::Level));
+        v.push(Chip::Fail);
+        v
+    }
+
+    fn toggle_chip(&mut self, chip: Chip) {
+        match chip {
+            Chip::All => self.reset_filters(),
+            Chip::Layer(i) => {
+                let i = usize::from(i);
+                self.set_layer_on(i, !self.layers[i]);
+            }
+            Chip::Level(i) => {
+                let i = usize::from(i);
+                self.set_level_on(i, !self.levels[i]);
+            }
+            Chip::Fail => self.set_fail_only(!self.fail_only),
+        }
+    }
+
+    /// 칩 너비 추정(글자 수 · paint 밖이라 실측 불가 — 넉넉히).
+    fn chip_w(&self, chip: Chip) -> i32 {
+        let label = Self::chip_label(chip);
+        let w: i32 = label
+            .chars()
+            .map(|ch| {
+                if ch.is_ascii() {
+                    CHIP_CH_W
+                } else {
+                    CHIP_CH_W_WIDE
+                }
+            })
+            .sum();
+        self.s((w + CHIP_PAD_X * 2).max(CHIP_MIN_W))
+    }
+
+    /// 칩 흐름 배치 — 창 너비에 맞춰 줄바꿈 · 층 묶음 뒤와 수준 묶음 뒤에 구분 간격.
+    fn layout_chips(&mut self) {
+        let b = self.bounds;
+        let pad = self.s(PAD);
+        let x0 = b.x + pad;
+        let right = b.right() - pad;
+        let y0 = b.y + pad + self.s(SEARCH_H) + self.s(GAP);
+        let (ch, gap, sep) = (self.s(CHIP_H), self.s(CHIP_GAP), self.s(CHIP_SEP));
+        let mut x = x0;
+        let mut y = y0;
+        let mut out = Vec::new();
+        for chip in Self::chip_list() {
+            let w = self.chip_w(chip);
+            if x > x0 && x + w > right {
+                x = x0;
+                y += ch + gap;
+            }
+            out.push((Rect::new(x, y, w, ch), chip));
+            x += w + gap;
+            if matches!(chip, Chip::Layer(10) | Chip::Level(3)) {
+                x += sep;
+            }
+        }
+        self.chips = out;
+        self.chips_h = y + ch - y0;
+    }
+
     /// 걸러진 줄 전부(복사 원문).
     #[must_use]
     pub fn shown_text(&self) -> String {
@@ -124,19 +323,24 @@ impl LogWidget {
             .join("\n")
     }
 
-    /// 검색 토큰 AND(대소문자 무시) — 토큰이 없으면 전부.
+    /// 검색 토큰 AND(대소문자 무시 · 토큰이 없으면 전부) × 층/수준/FAIL 칩.
     fn refilter(&mut self) {
         let q = self.search.text();
         let tokens: Vec<String> = q.split_whitespace().map(str::to_lowercase).collect();
+        let (layers, levels, fail_only) = (self.layers, self.levels, self.fail_only);
         self.shown = self
             .lines
             .iter()
+            .zip(self.meta.iter())
             .enumerate()
-            .filter(|(_, l)| {
-                tokens.is_empty() || {
-                    let low = l.to_lowercase();
-                    tokens.iter().all(|tk| low.contains(tk.as_str()))
-                }
+            .filter(|(_, (l, m))| {
+                layers[usize::from(m.layer)]
+                    && (m.level == 0 || levels[usize::from(m.level)])
+                    && (!fail_only || m.fail)
+                    && (tokens.is_empty() || {
+                        let low = l.to_lowercase();
+                        tokens.iter().all(|tk| low.contains(tk.as_str()))
+                    })
             })
             .map(|(i, _)| i)
             .collect();
@@ -146,7 +350,7 @@ impl LogWidget {
     fn rows_area(&self) -> Rect {
         let b = self.bounds;
         let pad = self.s(PAD);
-        let top = b.y + pad + self.s(SEARCH_H) + self.s(GAP);
+        let top = b.y + pad + self.s(SEARCH_H) + self.s(GAP) + self.chips_h + self.s(GAP);
         let bottom = b.bottom() - pad - self.s(BTN_H) - self.s(GAP);
         Rect::new(
             b.x + pad,
@@ -198,6 +402,7 @@ impl LogWidget {
             ),
             inv,
         );
+        self.layout_chips();
         self.clamp_scroll();
     }
 
@@ -246,7 +451,17 @@ impl Widget for LogWidget {
             | InputEvent::RightDown { x, y }
             | InputEvent::DoubleClick { x, y, .. } => {
                 let p = Point { x, y };
-                if self.search.bounds().contains(p) {
+                let hit = self
+                    .chips
+                    .iter()
+                    .find(|(r, _)| r.contains(p))
+                    .map(|(_, c)| *c);
+                if let Some(chip) = hit {
+                    if matches!(ev, InputEvent::MouseDown { .. }) {
+                        self.toggle_chip(chip);
+                        inv.push(self.bounds);
+                    }
+                } else if self.search.bounds().contains(p) {
                     self.search.on_event(ev, inv);
                 } else {
                     for b in [&mut self.copy, &mut self.close] {
@@ -277,6 +492,28 @@ impl Widget for LogWidget {
         let b = self.bounds;
         ctx.fill_rect(b, theme.panel_bg);
         self.search.paint(ctx, theme);
+        // 필터 칩 — 켜짐 = accent 채움 · 꺼짐 = field_bg + 테두리 · 흐린 글자.
+        ctx.select_font(FontSlot::Status, false);
+        let cth = ctx.text_height();
+        for (r, chip) in &self.chips {
+            let on = self.chip_on(*chip);
+            ctx.fill_rect(*r, if on { theme.accent } else { theme.field_bg });
+            if !on {
+                ctx.fill_rect(Rect::new(r.x, r.y, r.w, 1), theme.border);
+                ctx.fill_rect(Rect::new(r.x, r.bottom() - 1, r.w, 1), theme.border);
+                ctx.fill_rect(Rect::new(r.x, r.y, 1, r.h), theme.border);
+                ctx.fill_rect(Rect::new(r.right() - 1, r.y, 1, r.h), theme.border);
+            }
+            let label = Self::chip_label(*chip);
+            let tw = ctx.text_width(label);
+            ctx.text(
+                r.x + (r.w - tw) / 2,
+                r.y + (r.h - cth) / 2,
+                *r,
+                label,
+                if on { theme.window_bg } else { theme.text_dim },
+            );
+        }
         let area = self.rows_area();
         ctx.fill_rect(area, theme.chrome_bg);
         ctx.fill_rect(Rect::new(area.x, area.y, area.w, 1), theme.border);
@@ -386,5 +623,71 @@ mod tests {
             &mut inv,
         );
         assert_eq!(w.take_action(), Some(LogAction::Close));
+    }
+
+    /// 층/수준/FAIL 칩(11-04): 메타 해석 · 집합 필터 · 검색과 AND · `[전체]` 복귀 · 칩 클릭.
+    #[test]
+    fn layer_level_fail_chips() {
+        let mut w = LogWidget::new();
+        let mut inv = Invalidations::default();
+        w.set_bounds(Rect::new(0, 0, 760, 480), &mut inv);
+        let ls: Vec<String> = vec![
+            "[00:00:01] 연결됨".to_string(),
+            "[00:00:02] dev conn/decide start_connect peer=5016194e | rule latch=free → dial".to_string(),
+            "[00:00:03] dev conn/decide connect_failed peer=b7147214 why=\"NotFound\" | FAIL auto retry stopped".to_string(),
+            "[00:00:04] dev chat/trace recv_frame seq=9".to_string(),
+            "[00:00:05] dev xfer/detail chunk n=3".to_string(),
+        ];
+        assert!(w.sync(1, ls.iter(), &mut inv));
+        assert_eq!(w.shown_len(), 5);
+        assert_eq!(
+            w.meta[1],
+            LineMeta {
+                layer: Layer::Conn as u8 + 1,
+                level: 1,
+                fail: false
+            }
+        );
+        assert_eq!(w.meta[0].layer, 0, "상태바 줄 = 층 0");
+        // 상태 줄 끄기 → 4 · conn 끄기 → 2(chat trace · xfer detail).
+        w.set_layer_on(0, false);
+        assert_eq!(w.shown_len(), 4);
+        w.set_layer_on(usize::from(Layer::Conn as u8) + 1, false);
+        assert_eq!(w.shown_len(), 2);
+        // 수준: trace 끄기 → xfer detail 1줄.
+        w.set_level_on(3, false);
+        assert_eq!(w.shown_len(), 1);
+        assert!(w.shown_text().contains("xfer/detail"));
+        // 전체 복귀 → FAIL만 → 1줄(연결 실패) · 검색과 AND.
+        w.reset_filters();
+        assert_eq!(w.shown_len(), 5);
+        w.set_fail_only(true);
+        assert_eq!(w.shown_len(), 1);
+        assert!(w.shown_text().contains("connect_failed"));
+        w.search.set_text("nothing");
+        w.refilter();
+        assert_eq!(w.shown_len(), 0);
+        w.search.set_text("");
+        // 칩 클릭 = 토글(`[전체]` 칩 좌표로 복귀).
+        let all = w
+            .chips
+            .iter()
+            .find(|(_, c)| *c == Chip::All)
+            .map(|(r, _)| *r)
+            .unwrap();
+        w.on_event(
+            &InputEvent::MouseDown {
+                x: all.x + 2,
+                y: all.y + 2,
+                shift: false,
+                primary: false,
+            },
+            &mut inv,
+        );
+        assert!(!w.fail_only);
+        assert_eq!(w.shown_len(), 5);
+        // 칩은 창 너비 안에서 줄바꿈 — 760이면 2줄 이하 · 행 영역은 칩 아래에서 시작.
+        assert!(w.chips_h <= w.s(CHIP_H) * 2 + w.s(CHIP_GAP));
+        assert!(w.rows_area().y > w.search.bounds().bottom() + w.chips_h);
     }
 }
