@@ -14,6 +14,8 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+#[cfg(unix)]
+use std::sync::{Mutex, OnceLock, Weak};
 
 /// 종료 요청 플래그(구독자에 공유).
 #[derive(Clone, Debug)]
@@ -42,38 +44,115 @@ impl Shutdown {
 
 #[cfg(unix)]
 static SIGNAL_FLAG: AtomicBool = AtomicBool::new(false);
+/// 자기 파이프(self-pipe) 쓰기 끝(RL-13 ⓒ · 11-04) — 핸들러가 1바이트를 쓰고 브릿지 스레드가 블로킹 read로 깬다.
+/// -1 = 파이프 없음(폴 폴백).
+#[cfg(unix)]
+static PIPE_W: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
+/// 살아 있는 구독 플래그(프로세스 전역 · `install` 호출마다 1개) — 브릿지 1개가 전부 깨운다.
+#[cfg(unix)]
+static REGISTRY: Mutex<Vec<Weak<AtomicBool>>> = Mutex::new(Vec::new());
+/// 핸들러·파이프·브릿지 스레드는 프로세스에 **한 번**(종전 = `install`마다 50ms 폴 스레드 1개 영구 잔존 ·
+/// `--chat-live`는 재대기마다 호출해 스레드가 쌓였다).
+#[cfg(unix)]
+static BRIDGE: OnceLock<()> = OnceLock::new();
 
 #[cfg(unix)]
 extern "C" fn handle(_sig: libc::c_int) {
-    // async-signal-safe: 원자 store만 한다(할당·락 금지).
+    // async-signal-safe: 원자 store + write(2)만 한다(할당·락 금지).
     SIGNAL_FLAG.store(true, Ordering::Relaxed);
+    let fd = PIPE_W.load(Ordering::Relaxed);
+    if fd >= 0 {
+        let b = [1u8];
+        // SAFETY: 유효한 fd에 1바이트 — 파이프가 찼어도(비블로킹 아님·브릿지가 비운다) 핸들러는 1바이트뿐.
+        unsafe {
+            libc::write(fd, b.as_ptr().cast::<libc::c_void>(), 1);
+        }
+    }
+}
+
+/// 등록된 플래그 전부에 "요청됨"을 쓰고 죽은 구독은 걷는다.
+#[cfg(unix)]
+fn wake_all() {
+    if let Ok(mut g) = REGISTRY.lock() {
+        g.retain(|w| {
+            w.upgrade().is_some_and(|f| {
+                f.store(true, Ordering::Relaxed);
+                true
+            })
+        });
+    }
+}
+
+/// 브릿지 1회 설치(unix): 자기 파이프 + 블로킹 read 스레드(유휴 웨이크업 0 · RL-10 바닥). 파이프를 못 만들면
+/// 종전 50ms 폴로 폴백. 핸들러 등록은 파이프 준비 **뒤**(핸들러가 fd를 본다).
+#[cfg(unix)]
+fn install_bridge_once() {
+    BRIDGE.get_or_init(|| {
+        let mut fds = [0i32; 2];
+        // SAFETY: pipe(2)에 길이 2 배열.
+        let piped = unsafe { libc::pipe(fds.as_mut_ptr()) } == 0;
+        if piped {
+            // SAFETY: 방금 받은 유효한 fd 둘 — 자식 프로세스(설치 도우미·열기)에 새지 않게 CLOEXEC.
+            unsafe {
+                libc::fcntl(fds[0], libc::F_SETFD, libc::FD_CLOEXEC);
+                libc::fcntl(fds[1], libc::F_SETFD, libc::FD_CLOEXEC);
+            }
+            PIPE_W.store(fds[1], Ordering::Relaxed);
+            let r = fds[0];
+            std::thread::spawn(move || loop {
+                let mut b = [0u8; 1];
+                // SAFETY: 읽기 끝 fd에 1바이트 버퍼 — 프로세스가 끝날 때까지 닫지 않는다.
+                let n = unsafe { libc::read(r, b.as_mut_ptr().cast::<libc::c_void>(), 1) };
+                if n < 0
+                    && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted
+                {
+                    continue;
+                }
+                if n <= 0 {
+                    return; // 파이프가 닫혔다(일어나지 않는다) — 폴백 없이 끝
+                }
+                wake_all();
+            });
+        } else {
+            // 폴 폴백(종전 방식 · 50ms) — 프로세스에 하나뿐.
+            std::thread::spawn(|| loop {
+                if SIGNAL_FLAG.load(Ordering::Relaxed) {
+                    wake_all();
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            });
+        }
+        // SAFETY: signal 등록은 프로세스 전역 1회. 핸들러는 원자 store·write(2)만 하는 async-signal-safe.
+        let h = handle as extern "C" fn(libc::c_int) as usize as libc::sighandler_t;
+        unsafe {
+            libc::signal(libc::SIGINT, h);
+            libc::signal(libc::SIGTERM, h);
+        }
+    });
 }
 
 /// 종료 시그널 핸들러를 설치하고 [`Shutdown`]을 돌려준다.
 ///
 /// Unix: `SIGINT`+`SIGTERM`을 잡아 플래그를 세운다. 그 외 타깃: 지금은 no-op 플래그
 /// (Windows 콘솔/세션 핸들러 `SetConsoleCtrlHandler`는 후속 — 그때까지 `request()`로만).
+///
+/// ★ RL-13 ⓒ(11-04): 핸들러·브릿지는 프로세스에 **한 번**(자기 파이프 + 블로킹 read 1스레드 · 유휴 웨이크업 0).
+/// `install`은 플래그를 등록만 한다 — `--chat-live`처럼 재대기마다 불러도 스레드가 쌓이지 않는다. 등록 전에 이미 온
+/// 시그널은 초기값으로 잡는다.
 #[must_use]
 pub fn install() -> Shutdown {
-    let flag = Arc::new(AtomicBool::new(false));
     #[cfg(unix)]
-    {
-        // SAFETY: signal 등록은 프로세스 전역 1회. 핸들러는 원자 store만 하는 async-signal-safe.
-        let h = handle as extern "C" fn(libc::c_int) as usize as libc::sighandler_t;
-        unsafe {
-            libc::signal(libc::SIGINT, h);
-            libc::signal(libc::SIGTERM, h);
+    let flag = {
+        install_bridge_once();
+        let flag = Arc::new(AtomicBool::new(SIGNAL_FLAG.load(Ordering::Relaxed)));
+        if let Ok(mut g) = REGISTRY.lock() {
+            g.retain(|w| w.strong_count() > 0); // 죽은 구독(끝난 대기 루프)은 등록 때 걷는다
+            g.push(Arc::downgrade(&flag));
         }
-        // 시그널 static → 공유 플래그로 옮기는 브릿지 스레드(폴 — 시그널 문맥 밖에서 안전).
-        let bridge = Arc::clone(&flag);
-        std::thread::spawn(move || loop {
-            if SIGNAL_FLAG.load(Ordering::Relaxed) {
-                bridge.store(true, Ordering::Relaxed);
-                return;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(50));
-        });
-    }
+        flag
+    };
+    #[cfg(not(unix))]
+    let flag = Arc::new(AtomicBool::new(false));
     Shutdown { flag }
 }
 
@@ -87,6 +166,28 @@ mod tests {
         assert!(!s.requested());
         s.request();
         assert!(s.requested());
+    }
+
+    /// RL-13 ⓒ: 여러 번 설치해도 플래그는 각자(요청이 서로 새지 않는다) · unix면 등록부에 살아 있는 것만 남는다.
+    #[test]
+    fn repeated_install_keeps_flags_separate() {
+        let a = install();
+        let b = install();
+        a.request();
+        assert!(a.requested());
+        assert!(!b.requested(), "다른 구독의 요청이 새지 않는다");
+        #[cfg(unix)]
+        {
+            drop(a);
+            let _c = install(); // 등록 때 죽은 구독을 걷는다
+            let live = REGISTRY
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|w| w.strong_count() > 0)
+                .count();
+            assert!(live >= 2, "b·c는 살아 있다(병렬 시험의 다른 구독 포함)");
+        }
     }
 
     #[test]

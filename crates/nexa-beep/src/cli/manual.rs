@@ -21,7 +21,11 @@ pub(crate) fn serve_manual(port: u16) {
                 std::thread::sleep(std::time::Duration::from_millis(150));
                 continue;
             }
-            Err(_) => continue,
+            Err(_) => {
+                // RL-13 ⓑ(11-04): fd 고갈(EMFILE) 같은 지속 오류에서 무휴식 스핀 = CPU 100% → 같은 간격으로 쉰다.
+                std::thread::sleep(std::time::Duration::from_millis(150));
+                continue;
+            }
         };
         let identity = std::sync::Arc::clone(&identity);
         std::thread::spawn(move || {

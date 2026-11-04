@@ -3337,8 +3337,25 @@ fn spawn_echo_bot(bus: &std::sync::Arc<nbeep_net::inmem::InMemoryBus>, name: &st
 
 /// 인바운드 세션 수락 펌프 — 남이 나에게 연결하면 accept 후 에코 응답(대칭 대화 데모).
 /// GUI 스레드로의 실시간 수신 반영(양쪽 창에 표시)은 M2-7(비동기 수신 펌프·EventLoopProxy).
+/// 동시 인바운드 핸드셰이크 상한(RL-13 ⓐ · 11-04) — 스캐너·반복 연결이 핸드셰이크 스레드를 단조 증가시키지
+/// 않게. 초과한 링크는 받자마자 버린다(상대는 끊김을 본다 · 정상 상대는 재시도한다). CLI `serve`도 같은 뜻(08-13).
+const INBOUND_HANDSHAKE_CAP: usize = 32;
+/// 인바운드 핸드셰이크 상한 시간 — 연결만 열고 첫 메시지를 안 보내는 소켓이 스레드를 영구 점유하지 않게.
+/// 성립 뒤에는 세션 액터가 자기 폴 타임아웃(100ms)으로 덮어쓴다.
+const INBOUND_HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// 핸드셰이크 진행 수 감소 가드(RL-13 ⓐ) — 어느 길로 끝나든(성공·실패·패닉) 1 줄어든다.
+struct InflightGuard(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+impl Drop for InflightGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 /// 인바운드 수락 펌프 — 남이 나에게 연결하면 **핸드셰이크만** 하고(블로킹) 완성 세션을
 /// GUI로 넘긴다. TOFU 판정·대화 생성은 메인 스레드(user_event) 몫 — TrustStore가 거기 있다.
+/// ★ RL-13 ⓐ(11-04): 동시 핸드셰이크 ≤ `INBOUND_HANDSHAKE_CAP` · 링크마다 `INBOUND_HANDSHAKE_TIMEOUT` 수신 타임아웃.
 fn spawn_inbound_accept(
     incoming: std::sync::mpsc::Receiver<Box<dyn nbeep_core::Link>>,
     identity: std::sync::Arc<nbeep_crypto::Identity>,
@@ -3347,12 +3364,24 @@ fn spawn_inbound_accept(
 ) {
     std::thread::spawn(move || {
         let backoff: PskBackoff = PskBackoff::default();
-        while let Ok(link) = incoming.recv() {
+        let inflight = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        while let Ok(mut link) = incoming.recv() {
+            // 상한 — 초과면 링크를 버린다(스레드를 만들지 않는다).
+            if inflight.fetch_add(1, std::sync::atomic::Ordering::Relaxed) >= INBOUND_HANDSHAKE_CAP
+            {
+                inflight.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                drop(link);
+                continue;
+            }
+            let guard = InflightGuard(std::sync::Arc::clone(&inflight));
+            // 핸드셰이크 타임아웃 — 실패해도 블로킹 폴백(종전과 같다).
+            let _ = link.set_recv_timeout(Some(INBOUND_HANDSHAKE_TIMEOUT));
             let identity = std::sync::Arc::clone(&identity);
             let proxy = proxy.clone();
             let psk = std::sync::Arc::clone(&psk);
             let backoff = std::sync::Arc::clone(&backoff);
             std::thread::spawn(move || {
+                let _guard = guard;
                 // 경로 등급은 핸드셰이크 **전** 실소켓 주소로 판정(M5-3c) — 세션이
                 // 링크를 삼키기 전 마지막 관측 지점이다. 소켓 아님(None) = Local.
                 let ip = link.remote_ip();
