@@ -103,7 +103,7 @@
 | # | 항목 | 측정법 | 목표치 | 출처 | beep 상태 |
 | --- | --- | --- | --- | --- | --- |
 | 1 | 프레임 시간(paint/present 분리) | `NEXA_PAINT_TRACE` | ≤8ms 평상 · ≤16ms 한도 | sql 71 §4 · 39 S-8 · 05 B-12 | ✅ seam · mac 실측 §3 |
-| 2 | 대화 스크롤 프레임(2000줄) | 1 + `NEXA_SCRIPT wheel=` | ≤16ms · 줄 수 무관 | 05 B-12 · sql 37 P-1/2 | ✅ 캐시(30줄 실측 · 2000줄 = 다음) |
+| 2 | 대화 스크롤 프레임(2000줄) | 1 + `NEXA_SCRIPT wheel=` | ≤16ms · 줄 수 무관 | 05 B-12 · sql 37 P-1/2 | ✅ 캐시(30줄 실측) · ★**2000줄 ✓ 7.3ms**(11-04 Win Debug 헤드리스 · `tools/scroll-bench.sh` · 발신 직후 7.24 / 재기동 복원 뒤 7.32 · max 8.7 · PERF-3 `0dfdf30`) |
 | 3 | 피어 500 목록 스크롤 | INS-4 합성 데모 + 1 | 60fps | 49 C-2 | ☐ |
 | 4 | 입력→present 지연 | tmark(메모리 적재 후 present 뒤 1줄) | ≤16ms | sql 55 §6 · 49 C-1 | ☐(1로 근사) |
 | 5 | mac present 비용 | 1의 present · `NEXA_MAC_PRESENT` A/B | ≈1~3ms(IOSurface) | sql 62·65 | ✅ 0.9ms |
