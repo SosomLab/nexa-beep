@@ -112,7 +112,8 @@
 | **51** | [**성능 검토 2026-10-10 — 스크롤·우클릭 메뉴 실측과 처방 + 척도 16항목**](51-performance-review-2026-10-10.md) — `NEXA_PAINT_TRACE`·입력 주입 seam · 줄바꿈 캐시 · mac IOSurface present · 캐럿 틱 정밀화 · dir3/sql 척도 대조 | 🚧 10-10(mac 1차) |
 | **52** | [**로그 아키텍처 — 개발자 상세 로그**](52-log-architecture.md) — 싱크 = M3-22 statuslog 재사용(`dev ` 접두) · 게이트 = `nbeep_core::devlog` 층 10×수준 4 마스크 · 레코드 `기능 k=v | rule 기준=값 | → 결과/FAIL 원인` · `dlog!` · 켜는 길 `log.dev_mode`·`NEXA_DEVLOG` · 계측 1차 12곳 | ✅ 10-19(1차 구현 `09942eb` · 로그 창·계측 확장 = LOG-1·LOG-2) |
 | **53** | [**협업 세션 운영 기준**](53-collab-session-operation.md) — Fable 개발 세션 × Opus 협업 세션 · 역할·파일 소유·메시지 형식·[P0~P3]/[V0~V3]·git·빌드 충돌·§12 원장(출처 nexa-sql docs/102 `23035161` + dir3 DR-12) | ✅ 11-03 이식 |
-| **54~** | *(미배정)* | 신규 문서는 여기부터 |
+| **54** | [**그룹 초대 생애주기 — 재초대·거절·차단**](54-group-invite-lifecycle.md) — 소유자 로컬 구성원 상태(groups.seg v4) · 재초대 24h 1회 · 만료 7일 · 카드 3택(수락/거절/나중에) · `DeclineV2{hard}`+`invite_block`(38 그룹 초대 축) · 거절 5초 실행 취소 · GINV-1 S1~S4 | 📐 11-04 · S1 ✅
+| **55~** | *(미배정)* | 신규 문서는 여기부터 |
 | **15 · 16 · 18** | 개발 방법론 · 문서/git 규약 · 빌드&테스트 | ✅ |
 
 ## ③ 진행 경과 · 할 일

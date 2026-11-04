@@ -5,6 +5,10 @@
 
 ---
 
+## 2026-11-04
+
+- **(Win · main) 코드 12건 + 설계 54**(개발 세션 코드·시험 · 기록 = 협업 세션) — 설정 창 하단 바 nexa-dir3 통일(`3878522`) · 답장 인용 라벨(`0bd88a7`) · ★구버전 답장 평문 폴백(`53a1a68` — 0.6.1이 답장 2건을 조용히 버린 결함) · REPLY-1 ② `SyncReplies` 태그 21(`d83c5ef` · s4 **24/24**) · ★GINV-1 S1 구성원 초대 상태 영속(`8409384` · [54](54-group-invite-lifecycle.md) 📐 재초대·거절·차단) · STALL-1 정체 감시(`3025843`) · LOG-2 전송 계측 6곳(`a187ca8`) · PERF-4 기동 트레이스(`ef47b3a` · Debug first_paint 361ms) · HL-1 헤드리스 Windows 합류(`7128731`·`887bb3b`·`b7cf2d3` · smoke PASS · reply 8/8) · tmp-clean 규칙(`9dafe59`) · PUB-1 = choco 0.6.0 3종 Approved(스위치 = 사용자 손) · winget #468844 설치 검증 오류. [journal](journal/2026-11-04.md)
+
 ## 2026-11-03
 
 - **(mac · main) 문서 통폐합**(협업 세션) — STATUS 10-08 이전 차수 → [보존본](STATUS-archive.md) · TODO 완료 75행 → [TODO-done](TODO-done.md) · MILESTONES 낡은 ☐ 9건 · 18·26·34·52·README 11-02 도구·H-28/29 보강. [journal](journal/2026-11-02.md)
