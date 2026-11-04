@@ -82,7 +82,7 @@ dlog!(self, DL::Conn, DV::Decide, "connect_failed", |r| r
 
 ## 5. 후속
 
-- **로그 창**(nexa-sql `log_win` 상당 — 링 버퍼 · 종류/층 필터 · 줄바꿈 · 복사): 지금은 `log.view`(OS 기본 프로그램으로 파일 열기)로 본다. 창이 필요해지면 `Role::Log` + 링 버퍼(`log.max_lines`)를 얹는다 — 생산자는 같은 `devlog_push`.
+- ✅ **로그 창 1차**(11-04 `d17a651` — 메모리 링 2000줄(상태바 문구 + 상세 로그) · 검색 AND · 휠 · 바닥 따라가기 · 복사 · 설정 Action `log.window` · 스크립트 `open=log` · 층/수준 필터는 후속). 종전 계획: **로그 창**(nexa-sql `log_win` 상당 — 링 버퍼 · 종류/층 필터 · 줄바꿈 · 복사): 그때는 `log.view`(OS 기본 프로그램으로 파일 열기)로 본다. 창이 필요해지면 `Role::Log` + 링 버퍼(`log.max_lines`)를 얹는다 — 생산자는 같은 `devlog_push`.
 - **계측 확장**: 따라잡기(`[user]` eprintln 14곳 → `User/Detail`로 승격 · 시나리오 도구가 stderr를 grep하므로 eprintln은 유지) · 파일 전송 단계(`Xfer/Detail` 청크·속도·재개) · UI(`Ui/Trace` 창 생성·포커스) · 릴레이 roster.
 - **완전 지연 포맷**(docs/48 §5): `Rec`를 구조체 그대로 링에 넣고 텍스트는 소비 시점에 — 켠 상태의 문자열 비용까지 0.
 - **컴파일 타임 제거**: feature `devlog` off면 `wants()` = `false` 상수.
