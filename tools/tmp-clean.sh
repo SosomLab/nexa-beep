@@ -10,7 +10,9 @@
 #      (정상 종료면 스스로 지우지만, 패닉·강제 종료가 남긴다) · relaunch `beep-base.log` · mktemp 빌드 로그 `tmp.*`는 제외
 #   ② `target/perf-*`(perf-scenario 실측 폴더) · `target/tmp` — 저장소 안이지만 git 밖이라 쌓인다
 #   ③ 하네스 스크래치패드 `…/Temp/claude/<이 저장소>/<세션>` — 14일 넘은 세션 폴더만(살아 있는 세션은 그보다 젊다)
-# 쓰지 않는 것: `$HOME/.nexa-beep-multi`(3신원 실기 신원 — DR-4 durable · relaunch.sh가 관리) · 설치본 데이터.
+#   ④ `$HOME/.nexa-beep-multi`의 **시험 신원·출력**(11-04 사용자 규칙 — 스크립트가 매번 새로 만든다): `gp-* rp-* sb-* mb-* op-* s4-*
+#      tr-* idle-*` 폴더 · `*-out` 폴더 · 루트의 `*.log` — 실기 3신원 `A B C`(DR-4 durable · relaunch.sh가 관리)는 건드리지 않는다.
+# 쓰지 않는 것: 실기 3신원 폴더 · 설치본 데이터.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
@@ -38,7 +40,7 @@ zap() { # $1 = 경로
   if [ "$DRY" = 1 ]; then
     printf '  (dry) %s  %sK\n' "$p" "$sz"
   else
-    rm -rf -- "$p" && printf '  rm %s  %sK\n' "$p" "$sz"
+    rm -rf -- "$p" 2>/dev/null && printf '  rm %s  %sK\n' "$p" "$sz" || printf '  (skip·busy) %s\n' "$p"
   fi
   removed=$((removed + 1)); bytes=$((bytes + sz))
 }
@@ -67,6 +69,18 @@ if [ -d "$SCRATCH" ]; then
   echo "▶ 하네스 스크래치패드(14d+): $SCRATCH"
   while IFS= read -r -d '' p; do zap "$p"; done < <(
     find "$SCRATCH" -maxdepth 2 -mindepth 2 -type d -path '*nexa-beep*' -mtime +13 -print0 2>/dev/null
+  )
+fi
+
+# ④ 시험 신원·출력(11-04) — 실행 중인 시험이 있으면 그 폴더는 바쁜 상태라 건너뛴다(rm 실패 = skip).
+MULTI="${BEEP_MULTI:-$HOME/.nexa-beep-multi}"
+if [ -d "$MULTI" ]; then
+  echo "▶ 시험 신원·출력(age ≥ ${AGE_DAYS}d): $MULTI (실기 A·B·C 제외)"
+  while IFS= read -r -d '' p; do zap "$p"; done < <(
+    find "$MULTI" -maxdepth 1 -mindepth 1 \
+      \( -type d \( -name 'gp-*' -o -name 'rp-*' -o -name 'sb-*' -o -name 'mb-*' -o -name 'op-*' -o -name 's4-*' -o -name 'tr-*' -o -name 'idle-*' -o -name '*-out' \) \
+         -o -type f -name '*.log' \) \
+      "${age_expr[@]}" -print0 2>/dev/null
   )
 fi
 
