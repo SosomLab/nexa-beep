@@ -3246,6 +3246,8 @@ enum AlertCtx {
     GroupInvite {
         uid: nbeep_core::GroupUid,
         owner: PeerId,
+        /// \"이 그룹 초대 다시 받지 않기\"(S3 · 체크박스 — 닫힐 때 호스트가 채운다 · S4 차단 목록의 입력).
+        hard: bool,
     },
     /// 설정 초기화 확인(08-15 · 고급) — 긍정 = 표시 설정 전부 기본값.
     SettingsReset,
@@ -3915,6 +3917,10 @@ struct App {
     members_ctx: Option<(nbeep_core::group::GroupId, Vec<PeerId>, bool)>,
     /// 초대 만료 틱 다음 시각(S2 · 60초 페이스).
     invite_expire_at: u64,
+    /// 거절 실행 취소 대기(S3): uid → (소유자, hard, 보낼 시각 ms). 방 행 클릭 = 취소.
+    pending_declines: HashMap<nbeep_core::GroupUid, (PeerId, bool, u64)>,
+    /// "이 그룹 초대 다시 받지 않기"(S3 메모리 · S4에서 영속·DeclineV2) — 그 방 초대는 카드 없이 조용히 거절.
+    invite_block: std::collections::HashSet<nbeep_core::GroupUid>,
     /// 설정 초기화 확인 대기(08-15 · 고급 — 확인 모달은 about_to_wait에서 연다).
     pending_reset: bool,
     /// IME 중재 상태기계(M3-1e G3 — [`crate::ime_gate`]): 조합 게이트·보류-판정·
@@ -7291,6 +7297,11 @@ impl App {
                 None if step == "dump" => self.script_dump(),
                 None if step == "group.accept" => self.script_group_accept(), // 값 없는 동사(11-04)
                 None if step == "group.decline" => self.script_group_decline(),
+                None if step == "group.decline_undo" => {
+                    let n = self.pending_declines.len();
+                    self.pending_declines.clear();
+                    eprintln!("[script] group.decline_undo: {n}");
+                }
                 None if step == "group.expire" => self.invite_expire_tick(true), // 만료 즉시(S2 시험)
                 // ★ 답장 자동화(11-02): 열린 1:1 대화의 **마지막 열쇠 있는 줄**에 답장을 보낸다(우클릭 ▸ 답장 → 전송과 같은 경로).
                 Some(("reply", text)) => {
@@ -7578,8 +7589,15 @@ impl App {
         if pending.is_empty() {
             eprintln!("[script] group.decline: 대기 초대 없음");
         }
+        let secs = group_decline_undo_secs(&self.settings);
         for (uid, owner) in pending {
-            self.decline_group_invite(uid, owner);
+            if secs == 0 {
+                self.decline_group_invite(uid, owner, false);
+            } else {
+                // 사람과 같은 길(S3): n초 뒤 전송 · 그 안에 `group.decline_undo`로 취소.
+                self.pending_declines
+                    .insert(uid, (owner, false, unix_now_ms() + secs * 1000));
+            }
         }
         if matches!(self.alert_ctx, Some(AlertCtx::GroupInvite { .. })) {
             if let Some((aid, _)) = self.windows.iter().find(|(_, e)| e.role == Role::Alert) {
@@ -16484,16 +16502,11 @@ impl App {
             let name = s.roster.name.as_str().to_string();
             let n = s.roster.members.len();
             let from = self.peer_title(owner);
-            self.open_choice(
-                el,
-                "그룹 대화 초대",
-                &format!(
-                    "{from} 님이 '{name}' 그룹(구성원 {n}명)에 초대했습니다.\n수락하면 방이 목록에 생기고 구성원과 함께 대화합니다."
-                ),
-                "수락",
-                "거절",
-                AlertCtx::GroupInvite { uid, owner },
-            );
+            // 거절 실행 취소(S3): 대기 중인 거절이 있으면 방 행 클릭 = 취소 → 카드가 다시 뜬다.
+            if self.pending_declines.remove(&uid).is_some() {
+                self.set_status(nbeep_core::t(nbeep_core::Msg::StDeclineUndone));
+            }
+            self.open_invite_card(el, uid, owner, &from, &name, n);
             return;
         }
         let title = format!(
@@ -17612,6 +17625,50 @@ impl App {
         no: &str,
         ctx: AlertCtx,
     ) {
+        self.open_choice_ex(el, title, message, yes, no, None, None, ctx);
+    }
+
+    /// ★ 초대 카드(S3 · DR-30): 3택 [나중에][거절][수락] + "이 그룹 초대 다시 받지 않기" 체크(기본 꺼짐 · 거절 때만 뜻이 있다).
+    fn open_invite_card(
+        &mut self,
+        el: &ActiveEventLoop,
+        uid: nbeep_core::GroupUid,
+        owner: PeerId,
+        from: &str,
+        name: &str,
+        n: usize,
+    ) {
+        self.open_choice_ex(
+            el,
+            "그룹 대화 초대",
+            &format!(
+                "{from} 님이 '{name}' 그룹(구성원 {n}명)에 초대했습니다.\n수락하면 방이 목록에 생기고 구성원과 함께 대화합니다."
+            ),
+            "수락",
+            "거절",
+            Some(nbeep_core::t(nbeep_core::Msg::Later)),
+            Some(nbeep_core::t(nbeep_core::Msg::InviteNoMore)),
+            AlertCtx::GroupInvite {
+                uid,
+                owner,
+                hard: false,
+            },
+        );
+    }
+
+    /// 선택 모달 본체 — `later`(세 번째 버튼 = 결정 없음) · `check`(체크박스 한 줄 · 창 높이 +30).
+    #[allow(clippy::too_many_arguments)]
+    fn open_choice_ex(
+        &mut self,
+        el: &ActiveEventLoop,
+        title: &str,
+        message: &str,
+        yes: &str,
+        no: &str,
+        later: Option<&str>,
+        check: Option<&str>,
+        ctx: AlertCtx,
+    ) {
         // 열려 있던 경고·선택은 대체(모달 1개 규칙 — 13 §12-1 중복 가드).
         if let Some((aid, _)) = self.windows.iter().find(|(_, e)| e.role == Role::Alert) {
             let aid = *aid;
@@ -17624,7 +17681,10 @@ impl App {
                 "{APP_TITLE} — {}",
                 nbeep_core::t(nbeep_core::Msg::WinConfirm)
             ))
-            .with_inner_size(winit::dpi::LogicalSize::new(400.0, 170.0))
+            .with_inner_size(winit::dpi::LogicalSize::new(
+                400.0,
+                if check.is_some() { 200.0 } else { 170.0 },
+            ))
             .with_resizable(false)
             .with_window_icon(self.icon.clone());
         let attrs = self.modal_attrs(attrs, false); // 메인 소유(08-15 — 창 묶음 부상)
@@ -17643,7 +17703,14 @@ impl App {
                 blinks: true,
             },
         );
-        self.alert_view = Some(nbeep_ui::AlertWidget::new(title, message).with_choice(yes, no));
+        let mut av = nbeep_ui::AlertWidget::new(title, message).with_choice(yes, no);
+        if let Some(l) = later {
+            av = av.with_third(l);
+        }
+        if let Some(c) = check {
+            av = av.with_checkbox(c);
+        }
+        self.alert_view = Some(av);
         self.layout_window(id);
         self.request_redraw(id);
     }
@@ -17707,11 +17774,22 @@ impl App {
                     self.set_status(nbeep_core::t(nbeep_core::Msg::StResetCancel));
                 }
             }
-            AlertCtx::GroupInvite { uid, owner } => {
+            AlertCtx::GroupInvite { uid, owner, hard } => {
                 if yes {
                     self.accept_group_invite(uid, owner);
                 } else {
-                    self.decline_group_invite(uid, owner);
+                    // S3(DR-30): 거절은 n초(`group.decline_undo_secs`) 뒤에 보낸다 — 그 안에 방 행을 누르면 취소.
+                    let secs = group_decline_undo_secs(&self.settings);
+                    if secs == 0 {
+                        self.decline_group_invite(uid, owner, hard);
+                    } else {
+                        self.pending_declines
+                            .insert(uid, (owner, hard, unix_now_ms() + secs * 1000));
+                        self.set_status(nbeep_core::tf(
+                            nbeep_core::Msg::StfDeclineUndoHint,
+                            &[&secs.to_string()],
+                        ));
+                    }
                 }
                 self.refresh_and_redraw();
             }
@@ -17848,11 +17926,33 @@ impl App {
     }
 
     /// 초대 거절 본체(11-04 스크립트 `group.decline`와 공용): 소유자에게 Decline → 내 쪽 방 제거.
-    fn decline_group_invite(&mut self, uid: nbeep_core::GroupUid, owner: PeerId) {
+    /// `hard`(S3 체크 · "다시 받지 않기") = 이 방의 다음 초대는 카드 없이 조용히 거절(S3 = 메모리 집합 · S4 = 영속+DeclineV2).
+    fn decline_group_invite(&mut self, uid: nbeep_core::GroupUid, owner: PeerId, hard: bool) {
+        if hard {
+            self.invite_block.insert(uid);
+        }
         let frame = nbeep_core::SGroupMsg::Decline { uid }.encode();
         self.send_group_frames(owner, vec![frame]);
         let _ = self.groups.remove_shared(uid);
         self.set_status(nbeep_core::t(nbeep_core::Msg::StInviteDeclined));
+    }
+
+    /// 거절 실행 취소 창(S3) 만료 틱 — 기한이 지난 대기 거절을 보낸다.
+    fn decline_pending_tick(&mut self) {
+        if self.pending_declines.is_empty() {
+            return;
+        }
+        let now = unix_now_ms();
+        let due: Vec<(nbeep_core::GroupUid, PeerId, bool)> = self
+            .pending_declines
+            .iter()
+            .filter(|(_, (_, _, at))| now >= *at)
+            .map(|(uid, (owner, hard, _))| (*uid, *owner, *hard))
+            .collect();
+        for (uid, owner, hard) in due {
+            self.pending_declines.remove(&uid);
+            self.decline_group_invite(uid, owner, hard);
+        }
     }
 
     /// 그룹 구성원 중 **미연결 상대에게 자동 연결**(M5-1g · 08-14 실기: 세션이 없으면
@@ -17927,17 +18027,13 @@ impl App {
                 {
                     return; // 구버전 재생 — 거부
                 }
+                // S4 입력(S3에서 메모리): "다시 받지 않기"로 막은 방의 초대는 카드 없이 조용히 거절.
+                if self.invite_block.contains(&uid) {
+                    self.decline_group_invite(uid, owner, true);
+                    return;
+                }
                 let from = self.peer_title(peer);
-                self.open_choice(
-                    el,
-                    "그룹 대화 초대",
-                    &format!(
-                        "{from} 님이 '{name}' 그룹(구성원 {n}명)에 초대했습니다.\n수락하면 방이 목록에 생기고 구성원과 함께 대화합니다."
-                    ),
-                    "수락",
-                    "거절",
-                    AlertCtx::GroupInvite { uid, owner },
-                );
+                self.open_invite_card(el, uid, owner, &from, &name, n);
             }
             G::Accept { uid } => {
                 if self
@@ -19410,11 +19506,13 @@ impl App {
             Role::Alert => {
                 let mut row = None;
                 let mut closed_choice = None;
+                let mut checked = false;
                 if let Some(av) = &mut self.alert_view {
                     av.on_event(&ev, &mut inv);
                     row = av.take_row_clicked();
                     let choice = av.take_choice();
                     if av.take_closed() {
+                        checked = av.is_checked(); // S3 — "다시 받지 않기"(거절 때만 뜻)
                         self.alert_view = None;
                         self.windows.remove(&id);
                         self.members_ctx = None; // 모달 닫힘 = 문맥 소거(G4)
@@ -19487,7 +19585,10 @@ impl App {
                 }
                 // 선택 모달(초대·제외 등) — 결과를 문맥으로 라우팅(M5-1g).
                 if let Some(choice) = closed_choice {
-                    if let (Some(yes), Some(ctx)) = (choice, self.alert_ctx.take()) {
+                    if let (Some(yes), Some(mut ctx)) = (choice, self.alert_ctx.take()) {
+                        if let AlertCtx::GroupInvite { hard, .. } = &mut ctx {
+                            *hard = checked && !yes;
+                        }
                         self.apply_alert_choice(yes, ctx, el);
                     }
                 }
@@ -22262,6 +22363,7 @@ impl ApplicationHandler<AppEvent> for App {
         }
         self.refresh_log_view(); // 로그 창(LOG-1) — 열려 있을 때만 · 같은 일련번호 = 비용 0
         self.invite_expire_tick(false); // 초대 만료(S2 · 60초 페이스 내부 가드)
+        self.decline_pending_tick(); // 거절 실행 취소 창 만료(S3)
         if self.devices_view.is_some() {
             self.refresh_devices_view(); // 접속 상태·"N분 전"은 틱마다 · 같은 내용이면 비용 0
         }
@@ -23567,6 +23669,11 @@ fn group_reinvite_hours(settings: &SettingsState) -> u64 {
     settings.get("group.reinvite_hours").parse().unwrap_or(24)
 }
 
+/// 거절 실행 취소 창(초 · `group.decline_undo_secs` · 기본 5 · 0 = 즉시 전송).
+fn group_decline_undo_secs(settings: &SettingsState) -> u64 {
+    settings.get("group.decline_undo_secs").parse().unwrap_or(5)
+}
+
 /// 초대 만료(일 · `group.invite_expire_days` · 기본 7 · 0 = 없음).
 fn group_invite_expire_days(settings: &SettingsState) -> u64 {
     settings
@@ -24227,6 +24334,8 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         verify_hinted: std::collections::HashSet::new(),
         members_ctx: None,
         invite_expire_at: 0,
+        pending_declines: HashMap::new(),
+        invite_block: std::collections::HashSet::new(),
         pending_reset: false,
         conversations: HashMap::new(),
         dedup: nbeep_core::DedupIndex::new(),

@@ -38,7 +38,8 @@ echo "▶ ① X: 12s·16s 연결 · 22s create / Y·Z: 30s accept / X: 38s send 
 run gp-x "12000:activate=gpy;16000:activate=gpz;22000:group.create=실기방:gpy,gpz;38000:group.send=방 원본 글;56000:dump;58000:group.add=gpw;68000:group.remove=gpz;74000:dump;78000:quit" "$OUT/x.log"
 run gp-y "30000:group.accept;46000:group.reply=방 답장이야;74000:dump;78000:quit" "$OUT/y.log"
 run gp-z "30000:group.accept;56000:dump;74000:dump;78000:quit" "$OUT/z.log"
-run gp-w "64000:group.decline;74000:dump;78000:quit" "$OUT/w.log"
+# W: 60s 거절 → 61s 실행 취소(S3 · 대기 거절 1건 취소) → 64s 다시 거절(기본 5초 뒤 전송 = 69s · X 74s dump 전).
+run gp-w "60000:group.decline;61000:group.decline_undo;64000:group.decline;74000:dump;78000:quit" "$OUT/w.log"
 wait
 XS=$(short gp-x); YS=$(short gp-y); ZS=$(short gp-z); WS=$(short gp-w) # 신원은 첫 기동 때 생긴다 — 그 뒤에 읽어야 지문이 있다
 
@@ -67,6 +68,7 @@ chk "Z: Y 답장 팬아웃 수신(참조 동반)"                         "$OUT/
 chk "X: group.add 실행(58s)"                                   "$OUT/x.log"   "\[script\] 58[0-9]{3}ms group.add=gpw"
 chk_not "X 74s dump: W 없음(거절 = 명부 제거)"                   "$OUT/x.log"   "\[dump\] group .* name=실기방 .* members=.*${WS}="
 chk_not "W: 거절 뒤 방 없음"                                     "$OUT/w.log"   "\[dump\] group .* name=실기방"
+chk "W: 거절 실행 취소 1건(S3 · group.decline_undo)"               "$OUT/w.log"   "\[script\] group.decline_undo: 1"
 chk_count "Z: 제외 뒤 방 닫힘(56s dump엔 있고 74s dump엔 없음 = 1건)" "$OUT/z.log" "\[dump\] group .* name=실기방" 1
 chk "Y: 명부 갱신 = 둘(X·Y)"                                    "$OUT/y.log"   "\[dump\] group .* name=실기방 mine=Joined owner=${XS} members=[0-9a-f]{8}=[a-z]+,[0-9a-f]{8}=[a-z]+$"
 chk_not "Y 명부: Z 없음"                                        "$OUT/y.log"   "\[dump\] group .* name=실기방 .* members=.*${ZS}="

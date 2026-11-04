@@ -1263,6 +1263,11 @@ pub enum Msg {
     StfReinviteSent,
     StfReinviteWait,
     StfInviteExpired,
+    /// 초대 카드 3택·체크·실행 취소(S3 · DR-30).
+    Later,
+    InviteNoMore,
+    StfDeclineUndoHint,
+    StDeclineUndone,
     // ── P2 설정 체계 개편(10-09 · docs/50) — 그룹 트리·시스템 카테고리·카드 문구 ──
     /// 설정 그룹(트리 최상위 — nexa-sql CATEGORY_TREE 차용).
     GrpGeneral,
@@ -1802,6 +1807,15 @@ impl Msg {
             Msg::StfReinviteSent => ["Re-invited {}", "{} 님에게 다시 초대했습니다", "已重新邀请 {}", "{} さんを再招待しました"],
             Msg::StfReinviteWait => ["Re-invite available in {} h", "재초대는 {}시간 뒤 가능합니다", "{} 小时后可重新邀请", "再招待は {} 時間後に可能です"],
             Msg::StfInviteExpired => ["Invite expired: {}", "초대 만료: {}", "邀请已过期：{}", "招待の期限切れ: {}"],
+            Msg::Later => ["Later", "나중에", "稍后", "あとで"],
+            Msg::InviteNoMore => ["Don't invite me to this group again", "이 그룹 초대 다시 받지 않기", "不再接收此群组邀请", "このグループの招待を今後受け取らない"],
+            Msg::StfDeclineUndoHint => [
+                "Declined — click the room row within {} s to undo",
+                "거절 — {}초 안에 방 행을 누르면 취소됩니다",
+                "已拒绝 — {} 秒内点击群组行可撤销",
+                "拒否 — {} 秒以内に部屋の行を押すと取り消せます",
+            ],
+            Msg::StDeclineUndone => ["Decline undone — the invitation is pending again", "거절을 취소했습니다 — 초대가 다시 대기 상태입니다", "已撤销拒绝 — 邀请重新待处理", "拒否を取り消しました — 招待は再び保留です"],
             Msg::StRemoveCancel => ["Member removal canceled", "구성원 제외 취소", "已取消移除成员", "メンバー除外をキャンセル"],
             Msg::StResetCancel => ["Settings reset canceled", "설정 초기화 취소", "已取消设置重置", "設定リセットをキャンセル"],
             Msg::StInviteDeclined => ["Declined the group invitation", "그룹 초대를 거절했습니다", "已拒绝群组邀请", "グループ招待を拒否しました"],

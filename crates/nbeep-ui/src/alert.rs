@@ -4,7 +4,7 @@
 //! 위젯은 이유 문자열만 보여 준다 — 판정(정책)은 호스트 몫([`crate::widget`] 통지 모델).
 //! 닫힘은 [`AlertWidget::take_closed`] 폴링(Enter·Esc·확인 버튼 전부 같은 길).
 
-use crate::controls::{Button, Control as _};
+use crate::controls::{Button, Checkbox, Control as _};
 use crate::draw::{DrawCtx, FontSlot};
 use crate::event::{InputEvent, Key};
 use crate::geom::Rect;
@@ -23,6 +23,10 @@ pub struct AlertWidget {
     ok: Button,
     /// 두 번째 버튼(선택 모드 — 초대 수락/거절 등). None = 확인 하나(기존 경고).
     no: Option<Button>,
+    /// 세 번째 버튼(S3 · DR-30 "나중에") — 결정 없이 닫는다(초대는 대기로 남는다). 있으면 Esc도 같은 뜻.
+    third: Option<Button>,
+    /// 체크박스 한 줄(S3 · "이 그룹 초대 다시 받지 않기" · 기본 꺼짐) — 버튼 줄 위. 값은 [`AlertWidget::is_checked`].
+    check: Option<Checkbox>,
     closed: bool,
     /// 선택 결과(1회성 · 선택 모드에서만) — true = 긍정(수락).
     choice: Option<bool>,
@@ -48,6 +52,8 @@ impl AlertWidget {
             message: message.into(),
             ok: Button::new(nbeep_core::t(nbeep_core::Msg::ActOk)),
             no: None,
+            third: None,
+            check: None,
             closed: false,
             choice: None,
             status_list: Vec::new(),
@@ -91,6 +97,26 @@ impl AlertWidget {
         self
     }
 
+    /// 세 번째 버튼(S3 · "나중에") — 결정 없이 닫기(= X로 닫기와 같은 결과 · `take_choice` = None). Esc도 이 뜻이 된다.
+    #[must_use]
+    pub fn with_third(mut self, label: &str) -> Self {
+        self.third = Some(Button::new(label));
+        self
+    }
+
+    /// 체크박스 한 줄(S3 · 기본 꺼짐) — 버튼 줄 위에 놓인다(호스트는 창 높이를 30 더 준다).
+    #[must_use]
+    pub fn with_checkbox(mut self, label: &str) -> Self {
+        self.check = Some(Checkbox::new(label, false));
+        self
+    }
+
+    /// 체크박스 상태(없으면 false) — 닫힐 때 호스트가 읽는다.
+    #[must_use]
+    pub fn is_checked(&self) -> bool {
+        self.check.as_ref().is_some_and(Checkbox::is_checked)
+    }
+
     /// 선택 결과(1회성 · 선택 모달에서만) — `true` = 긍정. 닫힘과 함께 소비한다.
     pub fn take_choice(&mut self) -> Option<bool> {
         self.choice.take()
@@ -117,7 +143,20 @@ impl AlertWidget {
         if let Some(no) = &mut self.no {
             no.set_scale(self.scale);
         }
+        if let Some(t) = &mut self.third {
+            t.set_scale(self.scale);
+        }
+        if let Some(ch) = &mut self.check {
+            ch.set_scale(self.scale);
+        }
         self.relayout(inv);
+    }
+
+    /// 본문·목록이 내려갈 수 있는 바닥(버튼 줄 위 · 체크박스가 있으면 그 위).
+    fn content_bottom(&self) -> i32 {
+        self.check
+            .as_ref()
+            .map_or(self.ok.bounds().y, |c| c.bounds().y)
     }
 
     fn s(&self, v: i32) -> i32 {
@@ -145,6 +184,29 @@ impl AlertWidget {
                     b.bottom() - pad - bh,
                     bw,
                     bh,
+                ),
+                inv,
+            );
+        }
+        if let Some(t) = &mut self.third {
+            t.set_bounds(
+                Rect::new(
+                    b.right() - pad - bw * 3 - gap * 2,
+                    b.bottom() - pad - bh,
+                    bw,
+                    bh,
+                ),
+                inv,
+            );
+        }
+        let h = self.s(22);
+        if let Some(ch) = &mut self.check {
+            ch.set_bounds(
+                Rect::new(
+                    b.x + pad,
+                    b.bottom() - pad - bh - gap - h,
+                    (b.w - pad * 2).max(0),
+                    h,
                 ),
                 inv,
             );
@@ -200,11 +262,16 @@ impl Widget for AlertWidget {
             key: Key::Escape, ..
         } = *ev
         {
-            if self.no.is_some() {
+            // 3택(S3)에서는 Esc = "나중에"(결정 없음) · 2택에서는 종전대로 부정.
+            if self.no.is_some() && self.third.is_none() {
                 self.choice = Some(false);
             }
             self.closed = true;
             return;
+        }
+        if let Some(ch) = &mut self.check {
+            ch.on_event(ev, inv);
+            let _ = ch.take_toggled(); // 상태는 닫힐 때 is_checked로 읽는다
         }
         self.ok.on_event(ev, inv);
         if self.ok.take_clicked() {
@@ -219,6 +286,13 @@ impl Widget for AlertWidget {
             if no.take_clicked() {
                 self.choice = Some(false);
                 self.closed = true;
+                return;
+            }
+        }
+        if let Some(t) = &mut self.third {
+            t.on_event(ev, inv);
+            if t.take_clicked() {
+                self.closed = true; // 결정 없음
             }
         }
     }
@@ -236,7 +310,7 @@ impl Widget for AlertWidget {
             let lh = self.row_h();
             let dot_d = self.s(10);
             let mut y = b.y + self.s(44);
-            let flush_bottom = self.ok.bounds().y - lh;
+            let flush_bottom = self.content_bottom() - lh;
             for (link, text) in &self.status_list {
                 if y > flush_bottom {
                     break; // 넘치면 자른다(모달은 요지 전달용)
@@ -255,10 +329,7 @@ impl Widget for AlertWidget {
                 ctx.text(dot.right() + self.s(8), y, b, text, theme.text);
                 y += lh;
             }
-            self.ok.paint(ctx, theme);
-            if let Some(no) = &self.no {
-                no.paint(ctx, theme);
-            }
+            self.paint_controls(ctx, theme);
             return;
         }
         // 본문 — 문자 단위 그리디 줄바꿈(CJK는 공백이 없다 · 설정 desc 워드랩과 같은 이유).
@@ -267,7 +338,7 @@ impl Widget for AlertWidget {
         let lh = ctx.text_height() + self.s(4);
         let mut y = b.y + self.s(44);
         let mut line = String::new();
-        let flush_bottom = self.ok.bounds().y - lh; // 버튼 위까지만
+        let flush_bottom = self.content_bottom() - lh; // 버튼(·체크박스) 위까지만
         for c in self.message.chars() {
             if c == '\n' || ctx.text_width(&format!("{line}{c}")) > avail {
                 ctx.text(b.x + pad, y, b, &line, theme.text);
@@ -284,9 +355,22 @@ impl Widget for AlertWidget {
         if !line.is_empty() && y <= flush_bottom {
             ctx.text(b.x + pad, y, b, &line, theme.text);
         }
+        self.paint_controls(ctx, theme);
+    }
+}
+
+impl AlertWidget {
+    /// 버튼(1~3)·체크박스 그리기(본문/목록 두 경로 공용).
+    fn paint_controls(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
         self.ok.paint(ctx, theme);
         if let Some(no) = &self.no {
             no.paint(ctx, theme);
+        }
+        if let Some(t) = &self.third {
+            t.paint(ctx, theme);
+        }
+        if let Some(ch) = &self.check {
+            ch.paint(ctx, theme);
         }
     }
 }
@@ -403,6 +487,69 @@ mod tests {
         assert_eq!(w.take_row_clicked(), Some(1));
         assert_eq!(w.take_row_clicked(), None, "1회성");
         assert!(!w.take_closed(), "행 클릭은 모달을 닫지 않는다");
+    }
+
+    /// S3(DR-30): 3택 — "나중에"·Esc = 결정 없이 닫힘(choice None · 초대 유지) · 체크박스는 닫힐 때 읽는다.
+    #[test]
+    fn third_button_closes_without_choice_and_checkbox_reads() {
+        let mut inv = Invalidations::default();
+        let mut w = AlertWidget::new("초대", "수락?")
+            .with_choice("수락", "거절")
+            .with_third("나중에")
+            .with_checkbox("다시 받지 않기");
+        w.set_bounds(Rect::new(0, 0, 400, 200), &mut inv);
+        let t = w.third.as_ref().unwrap().bounds();
+        let click = |x: i32, y: i32| {
+            [
+                InputEvent::MouseDown {
+                    x,
+                    y,
+                    shift: false,
+                    primary: false,
+                },
+                InputEvent::MouseUp { x, y },
+            ]
+        };
+        for e in click(t.x + 3, t.y + 3) {
+            w.on_event(&e, &mut inv);
+        }
+        assert!(w.take_closed());
+        assert_eq!(w.take_choice(), None, "나중에 = 결정 없음");
+        assert!(!w.is_checked());
+        // Esc도 결정 없음(3택) · 체크박스 클릭 뒤 거절 = choice false + checked.
+        let mut w = AlertWidget::new("초대", "수락?")
+            .with_choice("수락", "거절")
+            .with_third("나중에")
+            .with_checkbox("다시 받지 않기");
+        w.set_bounds(Rect::new(0, 0, 400, 200), &mut inv);
+        w.on_event(
+            &InputEvent::Key {
+                key: Key::Escape,
+                shift: false,
+                primary: false,
+            },
+            &mut inv,
+        );
+        assert!(w.take_closed());
+        assert_eq!(w.take_choice(), None, "3택의 Esc = 나중에");
+        let mut w = AlertWidget::new("초대", "수락?")
+            .with_choice("수락", "거절")
+            .with_third("나중에")
+            .with_checkbox("다시 받지 않기");
+        w.set_bounds(Rect::new(0, 0, 400, 200), &mut inv);
+        let cb = w.check.as_ref().unwrap().bounds();
+        for e in click(cb.x + 6, cb.y + cb.h / 2) {
+            w.on_event(&e, &mut inv);
+        }
+        assert!(w.is_checked(), "체크 토글");
+        let no = w.no.as_ref().unwrap().bounds();
+        for e in click(no.x + 3, no.y + 3) {
+            w.on_event(&e, &mut inv);
+        }
+        assert!(w.take_closed());
+        assert_eq!(w.take_choice(), Some(false));
+        assert!(w.is_checked(), "닫힌 뒤에도 읽힌다(호스트가 hard 플래그로)");
+        assert!(t.x < no.x, "버튼 순서 = [나중에][거절][수락]");
     }
 
     #[test]
