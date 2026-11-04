@@ -7,6 +7,7 @@
 
 ## 2026-11-04
 
+- **(Win · main) PERF-9 발신 펌프 시간 예산**(`4e09634` — 틱당 4청크 고정 → 20ms 예산·64청크 상한 · 로컬 128MiB 릴리스 7.15 → **68.3MB/s**(peak 131)) · tmp-clean ④ 시험 신원 정리(`7cfc6db`) · 권한 규칙 3건 = 하네스 차단 → 사용자 적용 대기 · CI 41785825870 success. [journal](journal/2026-11-04.md)
 - **(Win · main) PERF-5 회수 4점·누수 기울기**(`48882c9` — `tools/mem-bench.sh` · 256MiB 송수신 뒤 WS-Private 회수 X −0.07 / Y +0.54MB ✓) · ⚠ 수신 피크 = 파일 ×2(M4-12 근거) · 로컬 전송 3.7MB/s(PERF-9 신설). [journal](journal/2026-11-04.md)
 - **(Win · main) RL-3 재연결·LinkChanged 처방**(`065d808` — 성립 즉시 끊김 5초 무한 재연결 → 짧은 세션 단계 승계·4단 소진 중단 · LinkChanged 10s 쿨다운 · 생사 프로브 1바이트). [journal](journal/2026-11-04.md)
 - **(Win · main) PERF-3 2000줄 스크롤 실측**(`0dfdf30` — `send_n` 동사 + `tools/scroll-bench.sh` · 휠 paint 7.3ms · 줄 수 무관 ✓) · 49 D-6 유휴 CPU 릴리스 0.067% ✓ · D-1 WS-Private 3.6MB ✓. [journal](journal/2026-11-04.md)
