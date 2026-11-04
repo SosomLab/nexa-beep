@@ -9129,8 +9129,8 @@ impl App {
                     .arg(
                         "chars",
                         match &msg.body {
-                            nbeep_core::MessageBody::Text(t) => t.chars().count(),
-                            _ => 0,
+                            nbeep_core::MessageBody::Text(t)
+                            | nbeep_core::MessageBody::Reply { text: t, .. } => t.chars().count(),
                         },
                     )
                     .arg("grade", grade)
