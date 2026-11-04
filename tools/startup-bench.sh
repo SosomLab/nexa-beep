@@ -25,7 +25,7 @@ fresh() { rm -rf "$INST"; mkdir -p "$INST/data"; cp -f "$BINDIR/nexa-beep$EXE" "
   printf '_schema=1\nprofile.display_name=bench\nchat.window_mode=single\napp.autostart=off\n' > "$INST/data/settings.cfg"; }
 one() { # 로그 → first_paint ms(없으면 빈 줄)
   ( cd "$INST" && NEXA_SCRIPT="2500:quit" "./nexa-beep$EXE" --window --live 2> "$1" >/dev/null )
-  sed -n 's/^\[startup\] loop=\([0-9]*\)ms window=\([0-9]*\)ms first_paint=\([0-9]*\)ms$/\1 \2 \3/p' "$1" | head -1
+  sed -n 's/^\[startup\] loop=\([0-9]*\)ms window=\([0-9]*\)ms first_paint=\([0-9]*\)ms.*$/\1 \2 \3/p' "$1" | head -1
 }
 median() { # 숫자 목록(공백) → 중앙값
   printf '%s\n' "$@" | sort -n | awk '{a[NR]=$1} END{ if (NR==0) {print "-"; exit} m=int((NR+1)/2); if (NR%2) print a[m]; else print int((a[m]+a[m+1])/2) }'

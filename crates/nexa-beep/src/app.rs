@@ -154,8 +154,11 @@ fn reply_fallback_text(label: Option<&str>, reply: &nbeep_core::ReplyRef, text: 
 /// 메인 창 생성(1) → 메인 창 첫 present(2)까지 ms. 프로세스당 한 번(OnceLock) · 보고는 다음 틱에 `[startup]` 한 줄
 /// (`NEXA_PAINT_TRACE`) + 상세 로그 `[app] startup`(예산 500ms 초과 = FAIL). 비용 = Instant 3회.
 pub(crate) static STARTUP_T0: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
-static STARTUP_MS: [std::sync::OnceLock<u64>; 3] = [const { std::sync::OnceLock::new() }; 3];
+/// 0 = 이벤트 루프 · 1 = 메인 창 · 2 = 첫 present · 3 = 설정 로드(INS-3 · 11-04) · 4 = 첫 피어 관측(INS-3).
+static STARTUP_MS: [std::sync::OnceLock<u64>; 5] = [const { std::sync::OnceLock::new() }; 5];
 static STARTUP_DUE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// 첫 피어 도달 보고 대기(INS-3) — 첫 paint보다 뒤에 오므로 따로 한 줄.
+static STARTUP_PEER_DUE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// 콜드 스타트 예산(05 NFR-B-11).
 const STARTUP_BUDGET_MS: u64 = 500;
 
@@ -164,14 +167,37 @@ pub(crate) fn startup_begin() {
     let _ = STARTUP_T0.get_or_init(Instant::now);
 }
 
-/// 단계 도달 기록(0 = 이벤트 루프 · 1 = 메인 창 · 2 = 첫 present) — 첫 기록만 남는다.
+/// 단계 도달 기록(0 = 이벤트 루프 · 1 = 메인 창 · 2 = 첫 present · 3 = 설정 로드 · 4 = 첫 피어) — 첫 기록만 남는다.
 pub(crate) fn startup_mark(stage: usize) {
     let t0 = STARTUP_T0.get_or_init(Instant::now);
     let ms = u64::try_from(t0.elapsed().as_millis()).unwrap_or(u64::MAX);
     if let Some(slot) = STARTUP_MS.get(stage) {
-        if slot.set(ms).is_ok() && stage == 2 {
-            STARTUP_DUE.store(true, std::sync::atomic::Ordering::Relaxed);
+        if slot.set(ms).is_ok() {
+            if stage == 2 {
+                STARTUP_DUE.store(true, std::sync::atomic::Ordering::Relaxed);
+            } else if stage == 4 {
+                STARTUP_PEER_DUE.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
         }
+    }
+}
+
+/// `NEXA_BOOT_TRACE=<파일>`(INS-3 · 49 B-1·B-3 진단 스위치 · NETMON 선례): 부팅 5점 줄을 그 파일에 덧붙인다(없으면 no-op).
+/// stderr `[startup]`은 `NEXA_PAINT_TRACE`가 켜야 나오지만 파일은 이 변수만으로 — 설치본에서도 진단 가능.
+fn boot_trace_write(line: &str) {
+    static PATH: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
+    let Some(path) =
+        PATH.get_or_init(|| std::env::var_os("NEXA_BOOT_TRACE").map(std::path::PathBuf::from))
+    else {
+        return;
+    };
+    use std::io::Write as _;
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let _ = writeln!(f, "{line}");
     }
 }
 
@@ -6708,6 +6734,7 @@ impl App {
                         .is_some()
                     {
                         changed = true;
+                        startup_mark(4); // INS-3 ⑤ 첫 피어 관측(첫 기록만 남는다)
                         dlog!(self, DL::Disc, DV::Detail, "discovery", |r| r
                             .arg("peer", hint.peer.short())
                             .rule("observe", "changed(appeared|renamed)")
@@ -7968,19 +7995,36 @@ impl App {
     /// 상세 로그(`log.dev_mode`/`NEXA_DEVLOG`)가 꺼져 있으면 `NEXA_WIN_TRACE` stderr로만 — 둘 다 없으면 조용히 버린다.
     /// 기동 트레이스 보고(PERF-4) — 첫 present 뒤 첫 틱에 한 번.
     fn drain_startup_report(&mut self) {
+        let at = |i: usize| STARTUP_MS[i].get().copied().unwrap_or(0);
+        // 첫 피어(INS-3 ⑤) — 첫 paint 뒤 아무 때나 오므로 따로 한 줄(발견이 없으면 영영 없다 = 정상).
+        if STARTUP_PEER_DUE.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            let peer_ms = at(4);
+            if paint_trace_enabled() {
+                eprintln!("[startup] first_peer={peer_ms}ms");
+            }
+            boot_trace_write(&format!("first_peer_ms={peer_ms}"));
+            dlog!(self, DL::App, DV::Basic, "startup_peer", |r| r
+                .arg("first_peer_ms", peer_ms)
+                .ok("first peer observed"));
+        }
         if !STARTUP_DUE.swap(false, std::sync::atomic::Ordering::Relaxed) {
             return;
         }
-        let at = |i: usize| STARTUP_MS[i].get().copied().unwrap_or(0);
-        let (loop_ms, window_ms, paint_ms) = (at(0), at(1), at(2));
+        let (loop_ms, window_ms, paint_ms, settings_ms) = (at(0), at(1), at(2), at(3));
         if paint_trace_enabled() {
-            eprintln!("[startup] loop={loop_ms}ms window={window_ms}ms first_paint={paint_ms}ms");
+            eprintln!(
+                "[startup] loop={loop_ms}ms window={window_ms}ms first_paint={paint_ms}ms settings={settings_ms}ms"
+            );
         }
+        boot_trace_write(&format!(
+            "settings_ms={settings_ms} loop_ms={loop_ms} window_ms={window_ms} first_paint_ms={paint_ms} budget_ms={STARTUP_BUDGET_MS}"
+        ));
         dlog!(self, DL::App, DV::Basic, "startup", |r| {
             let r = r
                 .arg("loop_ms", loop_ms)
                 .arg("window_ms", window_ms)
                 .arg("first_paint_ms", paint_ms)
+                .arg("settings_ms", settings_ms)
                 .rule("budget_ms", STARTUP_BUDGET_MS);
             if paint_ms <= STARTUP_BUDGET_MS {
                 r.ok("within budget")
@@ -24706,8 +24750,9 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
             conf.keep_unknown(k, v);
         }
     }
-    // 폰트 크기 구 코드 이관(08-18 2차 — 절대 프리셋·전 슬롯 공통):
-    // s→14 · m→16 · l→18 · xl→22 (사용자 확정 — 기본은 모두 Normal 16).
+    startup_mark(3); // INS-3 ② 설정 로드(파일 → 레지스트리)
+                     // 폰트 크기 구 코드 이관(08-18 2차 — 절대 프리셋·전 슬롯 공통):
+                     // s→14 · m→16 · l→18 · xl→22 (사용자 확정 — 기본은 모두 Normal 16).
     for region in ["base", "peerlist", "message", "status"] {
         let key = format!("font.{region}.size");
         let px = match settings.get(&key) {
