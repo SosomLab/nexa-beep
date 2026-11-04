@@ -94,8 +94,11 @@ pub(crate) enum GateError {
 impl core::fmt::Display for GateError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::HashMismatch => write!(f, "SHA-256 불일치 — 폐기"),
-            Self::Store(e) => write!(f, "격리 저장 실패: {e}"),
+            Self::HashMismatch => f.write_str(nbeep_core::t(nbeep_core::Msg::XferHashMismatch)),
+            Self::Store(e) => f.write_str(&nbeep_core::tf(
+                nbeep_core::Msg::XferQuarantineStoreFail,
+                &[&e.to_string()],
+            )),
         }
     }
 }

@@ -2843,7 +2843,7 @@ fn batch_take(rem: &mut Vec<(String, u64)>, name: &str, size: u64) -> Option<boo
 
 fn rate_label(bps: u64) -> String {
     if bps == 0 {
-        return "무제한".into();
+        return nbeep_core::t(nbeep_core::Msg::CapUnlimited).into();
     }
     format!("{}/s", human_size(bps))
 }
@@ -3099,7 +3099,7 @@ fn xfer_step(
                 if got.declared_sha256 == [0u8; 32] {
                     if sha256 == [0u8; 32] {
                         let _ = session.send(StreamId::File, &XferMsg::Failed { id }.encode());
-                        fail("무결성 선언 부재 — 폐기".into());
+                        fail(nbeep_core::t(nbeep_core::Msg::XferNoIntegrity).into());
                         return Ok(());
                     }
                     got.declared_sha256 = sha256;
@@ -4741,7 +4741,7 @@ impl App {
                         _ => "",
                     };
                     self.pending_alert = Some((
-                        "파일을 보낼 수 없습니다".into(),
+                        nbeep_core::t(nbeep_core::Msg::AlertCannotSendFile).into(),
                         format!("{}{how}", reason.message()),
                         Some(id),
                     ));
@@ -5612,7 +5612,7 @@ impl App {
                 head
             }
         } else {
-            "세션이 끊겨 응답하지 못했습니다".into()
+            nbeep_core::t(nbeep_core::Msg::StSessionGoneNoReply).into()
         });
         self.request_redraw(id);
     }
@@ -6298,7 +6298,7 @@ impl App {
             self.statuslog =
                 crate::statuslog::StatusLog::start(self.data_dir.join("logs"), "beep", days, mb);
             if self.statuslog.is_none() {
-                self.set_status("⚠ 로그 폴더를 만들 수 없어 기록을 켜지 못했습니다");
+                self.set_status(nbeep_core::t(nbeep_core::Msg::StLogDirFail));
             }
         }
     }
@@ -6420,7 +6420,7 @@ impl App {
                     ));
                 }
                 None => {
-                    self.set_status("⚠ 로그 폴더를 만들 수 없어 네트워크 점검을 켜지 못했습니다");
+                    self.set_status(nbeep_core::t(nbeep_core::Msg::StNetmonDirFail));
                 }
             }
         }
@@ -9053,7 +9053,7 @@ impl App {
             return None;
         };
         let Ok(new) = nbeep_crypto::userkey::UserKey::generate() else {
-            self.set_status("난수원 실패 — 키 교체 중단");
+            self.set_status(nbeep_core::t(nbeep_core::Msg::StRngFail));
             return None;
         };
         let ver = self.user_list_ver().max(1) + 1;
@@ -9090,7 +9090,10 @@ impl App {
         if let Err(e) =
             nbeep_store::privfile::write_atomic(&self.data_dir.join("user.key"), &sealed)
         {
-            self.set_status(format!("user.key 저장 실패: {e}"));
+            self.set_status(nbeep_core::tf(
+                nbeep_core::Msg::StfUserKeySaveFail,
+                &[&e.to_string()],
+            ));
             return None;
         }
         let old_id = old.user_id();
@@ -10497,7 +10500,10 @@ impl App {
         }
         let path = self.data_dir.join("user.key");
         if let Err(e) = nbeep_store::privfile::write_atomic(&path, sealed) {
-            self.set_status(format!("user.key 병합 저장 실패: {e}"));
+            self.set_status(nbeep_core::tf(
+                nbeep_core::Msg::StfUserKeyMergeSaveFail,
+                &[&e.to_string()],
+            ));
             return;
         }
         let old = mine.user_id();
@@ -12619,10 +12625,10 @@ impl App {
             nbeep_ui::QAction::Reject(path) => {
                 crate::gate::remove_qmeta(std::path::Path::new(&path)); // 사이드카 동반 삭제
                 self.set_status(match std::fs::remove_file(&path) {
-                    Ok(()) => "격리물을 삭제했습니다".into(),
+                    Ok(()) => nbeep_core::t(nbeep_core::Msg::StQuarantineDeleted).into(),
                     Err(e) => {
                         msg_err = true;
-                        format!("삭제 실패: {e}")
+                        nbeep_core::tf(nbeep_core::Msg::StfDeleteFail, &[&e.to_string()])
                     }
                 });
             }
@@ -12883,7 +12889,10 @@ impl App {
                 };
                 self.apply_settings(changes);
                 // M3-18 — 선택은 보류 편입: 적용을 눌러야 저장·전파된다(원자적 저장).
-                self.set_status(format!("프로필 이미지 = {path} — 적용 시 반영"));
+                self.set_status(nbeep_core::tf(
+                    nbeep_core::Msg::StfProfileImageSet,
+                    &[&path],
+                ));
                 if let Some((pid, _)) = self.windows.iter().find(|(_, e)| e.role == Role::Profile) {
                     let pid = *pid;
                     self.request_redraw(pid);
@@ -13097,7 +13106,7 @@ impl App {
     /// 모르는 키는 보존 저장(F-1 관용).
     fn do_restore_settings(&mut self, file: &std::path::Path) -> String {
         let Ok(text) = std::fs::read_to_string(file) else {
-            return "설정 복원 실패 — 파일을 읽을 수 없습니다".into();
+            return nbeep_core::t(nbeep_core::Msg::StSettingsRestoreReadFail).into();
         };
         let doc = nexa_conf::parse(&text);
         let mut changes: Vec<(&'static str, String)> = Vec::new();
@@ -13240,16 +13249,18 @@ impl App {
         // ① 검증 — 매직·길이(keyfile 포맷). 손상 파일로 교체해 버리면 되돌릴 수 없다.
         let bytes = match std::fs::read(file) {
             Ok(b) => b,
-            Err(e) => return format!("복원 실패(읽기): {e}"),
+            Err(e) => {
+                return nbeep_core::tf(nbeep_core::Msg::StfKeyRestoreReadFail, &[&e.to_string()])
+            }
         };
         if bytes.len() != 68 || &bytes[..4] != b"NBK1" {
-            return "복원 실패: 신원 키 백업 파일이 아닙니다(형식 불일치)".into();
+            return nbeep_core::t(nbeep_core::Msg::StKeyRestoreNotBackup).into();
         }
         let mut key = [0u8; 64];
         key.copy_from_slice(&bytes[4..]);
         let restored = nbeep_crypto::Identity::from_key_bytes(&key);
         if restored.peer_id() == self.identity.peer_id() {
-            return "이미 사용 중인 신원입니다 — 변경 없음".into();
+            return nbeep_core::t(nbeep_core::Msg::StKeyRestoreSame).into();
         }
         // ② 원자적 교체 — temp 기록 후 rename(키 파일 절반 기록 창 방지).
         let dst = self.data_dir.join("identity.key");
@@ -13597,7 +13608,7 @@ impl App {
             })
             .unwrap_or_default();
         if owned {
-            title.push_str(" · 행 클릭 = 제외");
+            title.push_str(nbeep_core::t(nbeep_core::Msg::MembersRowHint));
         }
         self.members_ctx = Some((gid, order, owned));
         let win_h = (110.0 + lines.len() as f64 * 26.0).clamp(170.0, 460.0);
@@ -15619,8 +15630,7 @@ impl App {
         self.listen_port = Some(bound);
         if degraded {
             // M1-13ⓔ — 조용한 비호환 금지: 듣지 못하는 상태는 반드시 화면에.
-            self.status =
-                "⚠ 발견 수신 불가(포트 47100 점유) — 발신 전용(상대 목록에서 나를 선택)".into();
+            self.status = nbeep_core::t(nbeep_core::Msg::StDiscoveryRecvDegraded).into();
         }
         Ok(bound)
     }
@@ -16337,11 +16347,11 @@ impl App {
                 let cur = self.groups.shared_by_id(gid).is_some_and(|s| s.pinned);
                 if self.groups.set_shared_pinned(gid, !cur) {
                     self.refresh_and_redraw();
-                    self.set_status(if cur {
-                        "그룹 — 목록 고정 해제".to_string()
+                    self.set_status(nbeep_core::t(if cur {
+                        nbeep_core::Msg::StGroupUnpinned
                     } else {
-                        "그룹 — 목록 상단에 고정".into()
-                    });
+                        nbeep_core::Msg::StGroupPinned
+                    }));
                 }
             }
             GA::Delete(gid) => {
@@ -16940,7 +16950,7 @@ impl App {
             let title = std::path::Path::new(&qp)
                 .file_stem()
                 .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "이미지".into());
+                .unwrap_or_else(|| nbeep_core::t(nbeep_core::Msg::ImageTitleFallback).into());
             self.open_image_view(el, id, qp, title);
         }
         // ★ 답장 원본 점프 실패(11-02).
@@ -19064,9 +19074,9 @@ impl App {
         );
         self.clear_xfer(peer);
         self.set_status(if sent {
-            format!("전송 취소 — {}", self.peer_title(peer))
+            nbeep_core::tf(nbeep_core::Msg::StfXferCancelled, &[&self.peer_title(peer)])
         } else {
-            "취소 — 세션이 이미 끊겨 있음(로컬 정리만)".into()
+            nbeep_core::t(nbeep_core::Msg::StXferCancelLocalOnly).into()
         });
         self.redraw_conversation(peer);
     }
@@ -19374,7 +19384,7 @@ impl App {
             let title = std::path::Path::new(&qp)
                 .file_stem()
                 .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "이미지".into());
+                .unwrap_or_else(|| nbeep_core::t(nbeep_core::Msg::ImageTitleFallback).into());
             self.open_image_view(el, id, qp, title);
         }
         // ★ 답장 원본 점프 실패(11-02) — 이 대화에 원본이 없다(기록 상한·다른 기기 기록).
@@ -19861,7 +19871,7 @@ impl App {
                             nbeep_core::t(nbeep_core::Msg::UnblockTitle),
                             &nbeep_core::tf(nbeep_core::Msg::UnblockAsk, &[&name]),
                             nbeep_core::t(nbeep_core::Msg::BtnUnblock),
-                            "취소",
+                            nbeep_core::t(nbeep_core::Msg::OfferCancel),
                             AlertCtx::InviteUnblock { uid },
                         );
                     }
@@ -19893,10 +19903,12 @@ impl App {
                                                 nbeep_core::t(nbeep_core::Msg::MemberReinviteTitle),
                                                 &format!(
                                                     "'{name}' — {}",
-                                                    nbeep_core::t(nbeep_core::Msg::MemberDeclinedHard)
+                                                    nbeep_core::t(
+                                                        nbeep_core::Msg::MemberDeclinedHard
+                                                    )
                                                 ),
                                                 nbeep_core::t(nbeep_core::Msg::BtnForget),
-                                                "취소",
+                                                nbeep_core::t(nbeep_core::Msg::OfferCancel),
                                                 AlertCtx::GroupForget { gid, uid, peer },
                                             );
                                         }
@@ -19933,12 +19945,10 @@ impl App {
                                         }
                                         _ => self.open_choice(
                                             el,
-                                            "구성원 제외",
-                                            &format!(
-                                                "'{name}' 님을 이 그룹에서 제외할까요?\n(제외자에게 마지막 명부가 1회 배포됩니다)"
-                                            ),
-                                            "제외",
-                                            "취소",
+                                            nbeep_core::t(nbeep_core::Msg::KickTitle),
+                                            &nbeep_core::tf(nbeep_core::Msg::KickAsk, &[&name]),
+                                            nbeep_core::t(nbeep_core::Msg::BtnKick),
+                                            nbeep_core::t(nbeep_core::Msg::OfferCancel),
                                             AlertCtx::GroupKick { gid, peer },
                                         ),
                                     }
@@ -20112,7 +20122,9 @@ impl App {
                         let title = std::path::Path::new(&qp)
                             .file_stem()
                             .map(|t| t.to_string_lossy().into_owned())
-                            .unwrap_or_else(|| "격리물".into());
+                            .unwrap_or_else(|| {
+                                nbeep_core::t(nbeep_core::Msg::QuarantineItemFallback).into()
+                            });
                         self.open_image_view(el, id, qp, title);
                     }
                 }
@@ -21923,9 +21935,11 @@ impl ApplicationHandler<AppEvent> for App {
                         self.activate_or_refresh(peer, el);
                         self.set_status(match decision {
                             nbeep_core::TrustDecision::FirstContact => {
-                                "Noise 세션 수립 — 첫 접촉(TOFU 핀 고정)".into()
+                                nbeep_core::t(nbeep_core::Msg::StSessionFirstContact).into()
                             }
-                            d => format!("Noise 세션 수립 — {d:?}"),
+                            d => {
+                                nbeep_core::tf(nbeep_core::Msg::StfSessionUp, &[&format!("{d:?}")])
+                            }
                         });
                     }
                 } else {
@@ -22867,10 +22881,10 @@ impl ApplicationHandler<AppEvent> for App {
         if std::mem::take(&mut self.pending_reset) {
             self.open_choice(
                 el,
-                "설정 초기화",
-                "표시되는 설정 전부와 목록 필터·창 크기를 기본값으로 되돌립니다. 계속할까요?\n(신원·핀·그룹·프로필 정보·창 위치는 유지 · 프로필 공개 토글은 비공개로 복귀)",
-                "초기화",
-                "취소",
+                nbeep_core::t(nbeep_core::Msg::ResetTitle),
+                nbeep_core::t(nbeep_core::Msg::ResetAsk),
+                nbeep_core::t(nbeep_core::Msg::BtnReset),
+                nbeep_core::t(nbeep_core::Msg::OfferCancel),
                 AlertCtx::SettingsReset,
             );
         }
@@ -23083,7 +23097,7 @@ impl ApplicationHandler<AppEvent> for App {
             // 사진 없이라도 보류분을 내보낸다(텍스트·내장 키는 닿아야 한다 —
             // WireAvatar 실패 가지와 같은 의미론 · 조용한 생략 금지).
             self.push_profile(ProfileScope::Full);
-            self.set_status("⚠ 사진 축소 응답 없음(15초) — 사진 없이 프로필을 전파했습니다");
+            self.set_status(nbeep_core::t(nbeep_core::Msg::StPhotoShrinkTimeout));
             if let Some(id) = self.main_id {
                 self.request_redraw(id);
             }
