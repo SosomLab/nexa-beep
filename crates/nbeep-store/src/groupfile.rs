@@ -951,7 +951,10 @@ mod tests {
             }),
             "재시작을 넘긴다"
         );
-        assert_eq!(gs.member_meta(uid, pid(2)).map(|m| (m.tries, m.last_ms)), Some((2, 5_000)));
+        assert_eq!(
+            gs.member_meta(uid, pid(2)).map(|m| (m.tries, m.last_ms)),
+            Some((2, 5_000))
+        );
         // 명부 갱신으로 pid(2)가 빠지면 메모도 걷힌다.
         gs.upsert_shared(roster(2, vec![pid(1), pid(3)]), MineState::Owner)
             .unwrap();
@@ -964,7 +967,10 @@ mod tests {
         assert!(gs.note_member(uid, pid(4), MemberState::Declined, 11_000));
         gs.upsert_shared(roster(4, vec![pid(1), pid(3)]), MineState::Owner)
             .unwrap();
-        assert_eq!(gs.member_meta(uid, pid(4)).map(|m| m.state), Some(MemberState::Declined));
+        assert_eq!(
+            gs.member_meta(uid, pid(4)).map(|m| m.state),
+            Some(MemberState::Declined)
+        );
         assert_eq!(gs.members_meta_of(uid).len(), 2);
         assert!(gs.forget_member(uid, pid(4)));
         assert_eq!(gs.member_meta(uid, pid(4)), None);
