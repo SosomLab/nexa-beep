@@ -7,6 +7,8 @@
 
 ## 2026-11-04
 
+- **(Win · main) ★GINV-1 S4 = 그룹 초대 생애주기 S1~S4 완결**(`338e06e` — `DeclineV2{hard}` kind 11 · groups.seg v6 차단한 초대 · 소유자 "재초대 불가" · 해제 = 임시 고급 › 그룹 초대 › 차단한 초대 보기…(38 BL 때 통합) · group-scenario **28/28**) · CI 41760196052 rustdoc 대괄호 실패(세 번째 같은 결) → 같은 커밋에서 수정. [journal](journal/2026-11-04.md)
+- **(Win · main) ★GINV-1 S3**(`9759780` — 초대 카드 3택 [나중에][거절][수락] · "다시 받지 않기" · 거절 5초 실행 취소 · group-scenario **22/22**) · S2 fmt 수정(`ece7278`). [journal](journal/2026-11-04.md)
 - **(Win · main) ★GINV-1 S2**(`563cd6e` — 재초대 24h 제한 · 초대 만료 7일 틱 · 거절 메모 보존 · 설정 › 고급 › 그룹 초대 3항목 · groups.seg v5 · 동사 group.reinvite/expire · group-scenario **21/21**). [journal](journal/2026-11-04.md)
 - **(Win · main) 그룹 동사 확장 + 시나리오 16/16**(`20b0098` — group.add/remove/decline · 거절 → 명부 제거 · 제외 → 방 닫힘 · S2~S4 회귀망) · ★**GINV-Q1~Q4 사용자 확정 → [54](54-group-invite-lifecycle.md) ✅ · DR-30**(`e432cc9`) · 권한 allow 25건 적용(`97f3245`). [journal](journal/2026-11-04.md)
 - **(Win · main) ★그룹 스크립트 동사 + `tools/group-scenario.sh` 10/10**(`f541301` — group.create/accept/send/reply · dump 그룹 줄 · 메뉴 "로그" · REPLY-1 ① 방 답장 자동 ✓ · GINV-1 S1 재기동 보존 실측 ✓ · verify.sh 기본 단계 합류). [journal](journal/2026-11-04.md)
