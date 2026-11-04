@@ -1282,6 +1282,13 @@ const RATE_PROBE_BYTES: u64 = 2 * 1024 * 1024;
 /// 악화 대응은 범위 밖). 버스트 비중 512KiB/8MiB ≈ 6% — 양보 원칙 실질 유지.
 const REPROBE_INTERVAL: u64 = 8 * 1024 * 1024;
 const REPROBE_BURST: u64 = 512 * 1024;
+/// ★ 발신 펌프 틱 예산(PERF-9 · 11-04): 한 틱에 **이 시간**만큼 청크를 보낸 뒤 명령·수신과 교대한다. 종전 = 고정 4청크
+/// (128KiB) — 틱 사이의 `recv` 타임아웃 1ms가 Windows 타이머 해상도(≈15.6ms)에 올림돼 틱이 ≈34ms가 됐고 로컬 전송이
+/// 128KiB/34ms ≈ 3.7MB/s에 갇혔다(mem-bench 실측). 시간 예산이면 빠른 링크는 틱당 수 MiB, 느린 링크(페이싱 대기 포함)는
+/// 종전처럼 몇 청크로 끝난다 · 취소 지연 상한 = 예산 + recv 타임아웃.
+const PUMP_BUDGET_MS: u64 = 20;
+/// 틱당 청크 상한(32KiB × 64 = 2MiB) — 예산 안이라도 한 번에 너무 많이 예약하지 않는다(취소·일시정지 반응).
+const PUMP_MAX_CHUNKS: u32 = 64;
 
 /// 액터 쪽 단조 시각(ms) — Pacer·RateMeter가 **같은 기준**을 봐야 해서 한 곳
 /// (xfer_step과 펌프 틱이 공유 · 기준이 갈리면 대역 계산이 깨진다).
@@ -1606,9 +1613,9 @@ fn spawn_session_actor(
                         sending = Some(st);
                     }
                 }
-                // 발신 펌프 틱 — 한 틱 최대 4청크(128KiB) 보내고 명령·수신과 교대한다
-                // (취소 지연 상한 = 청크 4개 + 페이싱 대기 · 대역 협상은 Pacer 그대로 ·
-                // 정지분은 parked에 있어 sending은 늘 가동 대상이다).
+                // 발신 펌프 틱 — 시간 예산(PUMP_BUDGET_MS · 상한 PUMP_MAX_CHUNKS) 안에서 청크를 보내고 명령·수신과
+                // 교대한다(PERF-9 · 종전 고정 4청크 = Windows 타이머 해상도에 묶여 3.7MB/s · 취소 지연 상한 = 예산 +
+                // 페이싱 대기 · 대역 협상은 Pacer 그대로 · 정지분은 parked에 있어 sending은 늘 가동 대상이다).
                 let want_to: u64 = if sending.is_some() { 1 } else { 100 };
                 if want_to != recv_to_ms {
                     recv_to_ms = want_to;
@@ -1617,11 +1624,19 @@ fn spawn_session_actor(
                 if let Some(st) = sending.as_mut() {
                     let mut done = false;
                     let mut read_fail = false;
-                    for _ in 0..4 {
+                    let tick_t0 = std::time::Instant::now();
+                    let mut tick_chunks: u32 = 0;
+                    loop {
                         if st.next >= st.total {
                             done = true;
                             break;
                         }
+                        if tick_chunks >= PUMP_MAX_CHUNKS
+                            || tick_t0.elapsed() >= std::time::Duration::from_millis(PUMP_BUDGET_MS)
+                        {
+                            break; // 예산 소진 — 다음 틱에 이어서(명령·수신 교대)
+                        }
+                        tick_chunks += 1;
                         let off = st.next;
                         let end = (off + nbeep_core::MAX_CHUNK as u64).min(st.total);
                         let n = end - off;
