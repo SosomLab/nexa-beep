@@ -7253,6 +7253,26 @@ impl App {
                 // ★ 창 열기(11-04 · 설정 창 캡처 자동화 — SET-1·하단 바 대조): `open=settings`.
                 Some(("open", "settings")) => self.open_settings(el),
                 Some(("open", "log")) => self.open_log_window(el),
+                Some(("open", "quarantine")) => self.open_quarantine(el), // PERF-5(11-04) 회수 4점 재료
+                // ★ 창 닫기(PERF-5 · 11-04): 제목 조각(대소문자 무시)이 맞는 창 전부에 CloseRequested — 사람의 ✕와 같은 길.
+                Some(("close", title)) => {
+                    let t = title.trim().to_lowercase();
+                    let ids: Vec<WindowId> = self
+                        .windows
+                        .iter()
+                        .filter(|(_, e)| e.window.title().to_lowercase().contains(t.as_str()))
+                        .map(|(id, _)| *id)
+                        .collect();
+                    eprintln!("[script] close={title}: {} window(s)", ids.len());
+                    for id in ids {
+                        self.window_event(el, id, WindowEvent::CloseRequested);
+                    }
+                }
+                // ★ 파일 보내기(PERF-5 · 11-04): 열린 1:1 대화(단일 창 = 메인)에 경로의 파일을 오퍼 — 드롭·피커와 같은 offer_file.
+                Some(("sendfile", path)) => match self.main_id {
+                    Some(mid) => self.offer_file(mid, std::path::Path::new(path.trim())),
+                    None => eprintln!("[script] sendfile: 메인 창 없음"),
+                },
                 Some(("open", what)) => {
                     eprintln!("[script] open: 모르는 창 '{what}' (settings · log)")
                 }
@@ -7431,6 +7451,7 @@ impl App {
                     }
                 }
                 None if step == "dump" => self.script_dump(),
+                None if step == "chat.close" => self.close_chat_view(None), // PERF-5 "놓음"(단일 창 대화 닫기)
                 None if step == "group.accept" => self.script_group_accept(), // 값 없는 동사(11-04)
                 None if step == "group.decline" => self.script_group_decline(),
                 None if step == "group.decline_hard" => self.script_group_decline_with(true),

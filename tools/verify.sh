@@ -6,12 +6,12 @@
 #
 #   ./tools/verify.sh            # 기본: 빌드(debug+release) · smoke · reply · group · s4 · tmp-clean   ≈ 6~9분
 #   ./tools/verify.sh --quick    # 빌드(debug) · smoke · reply                                   ≈ 2분
-#   ./tools/verify.sh --perf     # 기본 + perf-scenario(헤드리스 수치 — 51 §3 기준선과 비교하지 않는다) + startup-bench(PERF-4 콜드/웜 5회 중앙값) + scroll-bench(PERF-3 2000줄 휠 paint ms)
+#   ./tools/verify.sh --perf     # 기본 + perf-scenario(헤드리스 수치 — 51 §3 기준선과 비교하지 않는다) + startup-bench(PERF-4 콜드/웜 5회 중앙값) + scroll-bench(PERF-3 2000줄 휠 paint ms) + mem-bench(PERF-5 회수 4점 · 1GiB · ≈3분)
 #   ./tools/verify.sh --oldpeer  # 기본 + oldpeer-scenario(⚠ 구버전 창이 화면에 ≈45s · gh 필요)
 #   ./tools/verify.sh --no-build # 빌드 생략(이미 최신일 때)
 # 권한: `.claude/settings.json` allow에 `tools/` 경로 접두가 등재돼 있어야 세션이 묻지 않고 돌린다 — 등재는 사용자가
 #   `python tools/claude-permissions.py` 1회(세션은 자기 권한 파일을 못 고친다 · 새 스크립트는 그 RULES에도 등재).
-# 결과 = target/verify-<일시>/{smoke,reply,group,s4,perf,startup,scroll,oldpeer}.log · 마지막 줄 "verify: N통과 M실패".
+# 결과 = target/verify-<일시>/{smoke,reply,group,s4,perf,startup,scroll,mem,oldpeer}.log · 마지막 줄 "verify: N통과 M실패".
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 export NEXA_TEST_HEADLESS=1 NEXA_NO_AUTOSTART=1
@@ -50,6 +50,7 @@ if [ "$QUICK" = 0 ]; then
   [ "$PERF" = 1 ] && step "perf-scenario" perf.log bash tools/perf-scenario.sh "$OUT/perf"
   [ "$PERF" = 1 ] && step "startup-bench" startup.log bash tools/startup-bench.sh "$OUT/startup"
   [ "$PERF" = 1 ] && step "scroll-bench" scroll.log bash tools/scroll-bench.sh "$OUT/scroll"
+  [ "$PERF" = 1 ] && step "mem-bench" mem.log bash tools/mem-bench.sh "$OUT/mem"
   [ "$OLDPEER" = 1 ] && step "oldpeer-scenario" oldpeer.log bash tools/oldpeer-scenario.sh
 fi
 step "tmp-clean" tmp-clean.log bash tools/tmp-clean.sh
