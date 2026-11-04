@@ -225,6 +225,17 @@ fn devlog_push(
 /// 로그 링 상한(LOG-1) — 2000줄 × ≈120B ≈ 240KB 상한(DR-5 안).
 const LOG_RING_CAP: usize = 2000;
 
+/// ★ 유휴 바닥(RL-10 · 11-04): 깨울 마감이 하나도 없을 때의 최대 대기. 종전 = 무조건 200ms(5Hz · 트레이 상주·유휴에도
+/// 바닥 없음). 발견 목록 갱신·종료 신호 폴은 이 안에 들어온다(≤1s · 세션 이벤트는 프록시가 즉시 깨운다).
+const IDLE_WAKE_MS: u64 = 1000;
+/// 활동 틱(애니메이션이 이번 틱에 화면을 바꿨을 때) — 종전 5Hz 그대로.
+const ACTIVE_WAKE_MS: u64 = 200;
+
+/// `w`를 더 이른 마감으로 당긴다(0은 1로 — ControlFlow 0ms = 바쁜 루프).
+fn sooner(w: &mut u64, ms: u64) {
+    *w = (*w).min(ms.max(1));
+}
+
 /// 기록 저장 디바운스(RL-7): 마지막 변경 뒤 이만큼 조용하면 쓴다(틱 200ms 격자 → 실제 ≤500ms).
 const HISTORY_QUIET_MS: u64 = 300;
 /// 기록 저장 디바운스 상한: 연타가 계속돼도 처음 더티 뒤 이만큼이면 쓴다(DR-27 `max_delay`와 같은 뜻).
@@ -3968,6 +3979,11 @@ struct App {
     history_mark_at: u64,
     /// 마지막 flush 뒤 더티 표시 횟수(접힘 비율 계측 · 로그 `coalesced`).
     history_marks: u32,
+    /// 이벤트 루프 틱 수(RL-10 계측 · `[idle] ticks=` · NEXA_PAINT_TRACE).
+    tick_count: u64,
+    /// 헤드리스 더티 창(RL-10 · 11-04): 숨은 창은 OS 재도색 사건이 없으므로 `request_redraw`가 여기 적고 틱이 그린다
+    /// (종전 = 틱마다 전 창 그리기 = 헤드리스에선 유휴 바닥이 없었다). `request_redraw(&self)`라 RefCell.
+    headless_dirty: std::cell::RefCell<std::collections::HashSet<WindowId>>,
     /// PII 사이드카 직전 봉인 평문(RL-8 ⓐ · 11-04) — 같으면 재봉인·재기록하지 않는다(salt·nonce가 매번 새라 파일
     /// 비교로는 dedup이 안 된다 · 평문은 어차피 설정 메모리에 있다).
     pii_last: Option<String>,
@@ -4489,6 +4505,9 @@ impl App {
     fn request_redraw(&self, id: WindowId) {
         if let Some(e) = self.windows.get(&id) {
             e.window.request_redraw();
+            if headless() {
+                self.headless_dirty.borrow_mut().insert(id); // 숨은 창 = 다음 틱이 직접 그린다(RL-10)
+            }
         }
     }
 
@@ -7425,6 +7444,12 @@ impl App {
                         }
                     }
                     self.capture_req = Some((std::path::PathBuf::from(path), title));
+                    if headless() {
+                        let ids: Vec<WindowId> = self.windows.keys().copied().collect();
+                        for id in ids {
+                            self.request_redraw(id); // 재도색이 캡처를 소비한다(더티 그리기 · RL-10)
+                        }
+                    }
                     for e in self.windows.values() {
                         e.window.request_redraw(); // 보이는 창 = OS 경로 · 헤드리스 = about_to_wait가 그린다
                     }
@@ -20198,6 +20223,9 @@ impl App {
                 );
             }
             entry.window.request_redraw();
+            if headless() {
+                self.headless_dirty.borrow_mut().insert(id);
+            }
             return;
         };
         let mut px = nexa_gfx::Surface::new(&mut buffer, size.width as usize, size.height as usize);
@@ -22639,6 +22667,15 @@ impl ApplicationHandler<AppEvent> for App {
     }
 
     fn exiting(&mut self, _el: &ActiveEventLoop) {
+        if paint_trace_enabled() {
+            // RL-10 계측: 틱 수 / 가동 ms → 평균 Hz(유휴 5Hz → ≤1Hz 판정 근거).
+            let up = self.now_ms().max(1);
+            eprintln!(
+                "[idle] ticks={} uptime_ms={up} avg_hz={:.2}",
+                self.tick_count,
+                self.tick_count as f64 * 1000.0 / up as f64
+            );
+        }
         // ★ 기록 종료 flush(RL-7 · S-1) — 대화를 비우기 **전에**(쓰기 본체가 conversations/parked를 읽는다).
         self.flush_history_all("exit");
         // 부분 수신물 보존(M4-10a — 수신자 정상 종료 경로): 대화 채널을 끊으면
@@ -22691,9 +22728,12 @@ impl ApplicationHandler<AppEvent> for App {
                               // ★ 헤드리스(11-02): 숨은 창은 OS가 RedrawRequested를 보내지 않는다 → 틱마다 전 창을 직접 그린다(시험 전용 비용 ·
                               //   캡처 요청도 여기서 소비된다). 보이는 창의 정상 경로(요청 → OS → RedrawRequested)는 손대지 않는다.
         if headless() {
-            let ids: Vec<WindowId> = self.windows.keys().copied().collect();
+            // 더티 창만(RL-10 · 11-04 — 종전 = 틱마다 전 창 · 유휴에도 5Hz 그리기). 첫 그리기는 창 생성이 더티를 적는다.
+            let ids: Vec<WindowId> = self.headless_dirty.borrow_mut().drain().collect();
             for id in ids {
-                self.redraw(id);
+                if self.windows.contains_key(&id) {
+                    self.redraw(id);
+                }
             }
         }
         if std::mem::take(&mut self.want_devices_window) {
@@ -23014,8 +23054,9 @@ impl ApplicationHandler<AppEvent> for App {
         // 스크롤바 자동 숨김 틱 — **시각을 넘긴다**(호출 횟수가 아니라 벽시계로 재야
         // 이벤트가 몰리는 드래그 중에도 설정한 시간만큼 보인다 · 08-10).
         let bar_now = self.now_ms();
-        // 상한 질의 타임아웃(08-18) — 구버전 상대(공지 미지원)는 2초 후 미상으로
-        // 진행한다(종전 동작 = 해시 후 상대 거절로 판명).
+        let mut animated = false; // 이번 틱에 애니메이션이 화면을 바꿨는가(RL-10 — 바꿨으면 다음 틱도 5Hz)
+                                  // 상한 질의 타임아웃(08-18) — 구버전 상대(공지 미지원)는 2초 후 미상으로
+                                  // 진행한다(종전 동작 = 해시 후 상대 거절로 판명).
         {
             let expired: Vec<PeerId> = self
                 .cap_req_deadline
@@ -23063,6 +23104,7 @@ impl ApplicationHandler<AppEvent> for App {
                 .iter_mut()
                 .filter_map(|(p, c)| c.tick(bar_now).then_some(*p))
                 .collect();
+            animated |= !peers.is_empty();
             for p in peers {
                 self.redraw_conversation(p);
             }
@@ -23075,6 +23117,7 @@ impl ApplicationHandler<AppEvent> for App {
                 .iter_mut()
                 .filter_map(|(g, c)| c.tick(bar_now).then_some(*g))
                 .collect();
+            animated |= !gids.is_empty();
             for g in gids {
                 if let Some((wid, _)) = self
                     .windows
@@ -23093,6 +23136,7 @@ impl ApplicationHandler<AppEvent> for App {
         // 프로필 최근 이미지 툴팁 틱(08-14 — 3초 호버 = 파일명 표시).
         if let Some(pv) = &mut self.profile_view {
             if pv.tick(bar_now) {
+                animated = true;
                 if let Some((pid, _)) = self.windows.iter().find(|(_, e)| e.role == Role::Profile) {
                     let pid = *pid;
                     self.request_redraw(pid);
@@ -23113,8 +23157,48 @@ impl ApplicationHandler<AppEvent> for App {
                 }
             }
         }
+        // ★ 유휴 바닥(RL-10 · 11-04): 대기 = **다음 마감의 최솟값**(없으면 IDLE_WAKE_MS). 마감 = 애니메이션 진행(5Hz) ·
+        //   헤드리스 더티 창 · 캐럿 위상 전환 · 스크립트 다음 단계 · 기록 flush(quiet/max) · 거절 실행 취소 · 파일 대화상자 ·
+        //   IME 유예. 세션·전송·디코드 결과는 EventLoopProxy가 즉시 깨우므로 마감이 아니다. 60s 페이스(초대 만료·서버 수렴 2s·
+        //   IOSurface 1.5s)는 유휴 1s 격자로 충분하다.
+        self.tick_count = self.tick_count.wrapping_add(1);
+        let mut wake_ms: u64 = IDLE_WAKE_MS;
+        if animated {
+            sooner(&mut wake_ms, ACTIVE_WAKE_MS);
+        }
+        if headless() && !self.headless_dirty.borrow().is_empty() {
+            sooner(&mut wake_ms, 16);
+        }
+        if let Some(fid) = self.os_focused {
+            if self.windows.get(&fid).is_some_and(|e| e.blinks) {
+                let into = bar_now.saturating_sub(self.blink_anchor_ms) % CARET_BLINK_MS;
+                sooner(&mut wake_ms, CARET_BLINK_MS - into);
+            }
+        }
+        if let Some((at, _)) = self.script.first() {
+            let el = u64::try_from(self.script_t0.elapsed().as_millis()).unwrap_or(u64::MAX);
+            sooner(&mut wake_ms, at.saturating_sub(el));
+        }
+        if !self.history_dirty.is_empty() || !self.group_history_dirty.is_empty() {
+            let now = unix_now_ms();
+            let quiet_at = (self.history_mark_at + HISTORY_QUIET_MS).saturating_sub(now);
+            let oldest = self
+                .history_dirty
+                .values()
+                .chain(self.group_history_dirty.values())
+                .copied()
+                .min()
+                .unwrap_or(now);
+            let max_at = (oldest + HISTORY_MAX_DELAY_MS).saturating_sub(now);
+            sooner(&mut wake_ms, quiet_at.min(max_at));
+        }
+        if !self.pending_declines.is_empty() {
+            let now = unix_now_ms();
+            for (_, _, due) in self.pending_declines.values() {
+                sooner(&mut wake_ms, due.saturating_sub(now));
+            }
+        }
         // 파일 대화상자 틱(P3 — 폴더 목록·아이콘 도착·hover 페이드·덮어쓰기 무장 게이지).
-        let mut wake_ms = 200;
         if let Some(pv) = &mut self.picker_view {
             if pv.tick(bar_now) {
                 if let Some((pid, _)) = self.windows.iter().find(|(_, e)| e.role == Role::Picker) {
@@ -23141,7 +23225,7 @@ impl ApplicationHandler<AppEvent> for App {
             let rem = dl.saturating_sub(self.now_ms()).max(1);
             wake_ms = wake_ms.min(rem);
         }
-        // 유휴에도 ~5Hz로 깨어나 발견 갱신·종료 신호를 폴한다(입력 없을 때도 목록이 산다).
+        // 유휴 = 1Hz까지 내려간다(RL-10) — 발견 갱신·종료 신호 폴은 그 격자로(입력 없을 때도 목록이 산다 · ≤1s).
         el.set_control_flow(ControlFlow::wait_duration(
             std::time::Duration::from_millis(wake_ms),
         ));
@@ -24691,6 +24775,8 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         history_mark_at: 0,
         history_marks: 0,
         pii_last: None,
+        tick_count: 0,
+        headless_dirty: std::cell::RefCell::new(std::collections::HashSet::new()),
         blocked_ctx: None,
         want_blocked_window: false,
         pending_reset: false,

@@ -55,6 +55,9 @@ pub struct Observation {
 pub struct UdpDiscovery {
     events: std::sync::Mutex<Option<Receiver<Observation>>>,
     stop: Arc<AtomicBool>,
+    /// 광고 스레드 정지 신호(RL-10 · 11-04) — 드롭 = 끊김 = 즉시 깸. 루프는 `recv_timeout(announce)`로 **통잠**(종전 100ms
+    /// 쪼갬 = 10Hz 웨이크업 · 필요 주기의 8배).
+    announce_stop: Option<std::sync::mpsc::Sender<()>>,
     /// ★ 조용한 모드(내 상태 = 오프라인 · 10-19) — 광고·HELLO 응답·관측 전부 멈춤(소켓·스레드는 유지).
     quiet: Arc<AtomicBool>,
     send_sock: UdpSocket,
@@ -163,6 +166,7 @@ impl UdpDiscovery {
         } else {
             None
         };
+        let (announce_tx, announce_rx) = std::sync::mpsc::channel::<()>();
         Self::spawn_announcer(
             send_sock.try_clone()?,
             v6_send,
@@ -172,10 +176,12 @@ impl UdpDiscovery {
             Arc::clone(&seq),
             Arc::clone(&user_tag),
             Arc::clone(&quiet),
+            announce_rx,
         );
 
         Ok(Self {
             events: std::sync::Mutex::new(Some(events)),
+            announce_stop: Some(announce_tx),
             stop,
             quiet,
             send_sock,
@@ -306,6 +312,7 @@ impl UdpDiscovery {
         seq: Arc<AtomicU32>,
         user_tag: Arc<std::sync::Mutex<Option<[u8; 16]>>>,
         quiet: Arc<AtomicBool>,
+        stop_rx: Receiver<()>,
     ) {
         std::thread::spawn(move || {
             // 스냅샷 발신 — 잠금은 복사 순간만(소켓 I/O 중 잠금 유지 금지).
@@ -322,17 +329,18 @@ impl UdpDiscovery {
             Self::send_all(&sock, v6.as_ref(), &snapshot(PacketKind::Hello).encode());
             // ★ S4(M1-8) — 기동 직후 이웃 유니캐스트 1회(막힌 망에서 첫 발견을 당긴다).
             Self::send_s4(&sock, &snapshot(PacketKind::Hello).encode());
-            let step = Duration::from_millis(100);
-            let mut waited = Duration::ZERO;
+            let period = Duration::from_millis(u64::from(announce_ms.max(1)));
             let mut cycles: u32 = 0;
             loop {
+                // 통잠(RL-10): 주기만큼 자되 정지 신호(송신 끝 드롭·명시 send)면 즉시 깬다.
+                match stop_rx.recv_timeout(period) {
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                    _ => return,
+                }
                 if stop.load(Ordering::Relaxed) {
                     return;
                 }
-                std::thread::sleep(step);
-                waited += step;
-                if waited >= Duration::from_millis(u64::from(announce_ms)) {
-                    waited = Duration::ZERO;
+                {
                     if quiet.load(Ordering::Relaxed) {
                         continue; // 조용한 모드(오프라인 상태) — 이번 주기 광고 전부 생략
                     }
@@ -538,6 +546,7 @@ fn s4_targets(ifs: &[crate::netif::NetIf], neighbors: Vec<Ipv4Addr>, cap: usize)
 impl Drop for UdpDiscovery {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
+        drop(self.announce_stop.take()); // 광고 스레드 즉시 깸(통잠 중이어도)
         self.send_goodbye();
     }
 }
