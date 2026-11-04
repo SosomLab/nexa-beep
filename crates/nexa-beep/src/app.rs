@@ -24894,6 +24894,23 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
             ] {
                 spawn_echo_bot(&bus, name);
             }
+            // ★ 합성 부하(INS-4 · 11-04 · 49 C-2 피어 500 목록 스크롤 · D-2 활성 메모리): `NEXA_DEMO_PEERS=N`이면 가짜 피어 N개를
+            //   버스에 참여만 시킨다(에코 봇 스레드 없음 — 연결은 못 받지만 목록에는 뜬다 · 이름 `demo-NNN`). 전송 핸들은 버리지
+            //   않고 놓아둔다(드롭 = 이탈). 데모 전송(InMemory)에서만 — 실물 발견에는 없다.
+            if let Some(n) = std::env::var("NEXA_DEMO_PEERS")
+                .ok()
+                .and_then(|v| v.parse::<usize>().ok())
+            {
+                let mut keep = Vec::with_capacity(n.min(10_000));
+                for i in 0..n.min(10_000) {
+                    let fake = nbeep_crypto::Identity::generate();
+                    if let Ok(dn) = nbeep_core::DisplayName::parse(&format!("demo-{i:03}")) {
+                        keep.push(bus.join(fake.peer_id(), dn, nbeep_net::Caps::default()));
+                    }
+                }
+                std::mem::forget(keep);
+                eprintln!("[demo] fake peers={n}");
+            }
             let transport = bus.join(identity.peer_id(), display_name, nbeep_net::Caps::default());
             let discovery = transport.discovery();
             (std::sync::Arc::new(transport), discovery)

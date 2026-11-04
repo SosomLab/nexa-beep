@@ -53,6 +53,7 @@ if [ "$QUICK" = 0 ]; then
   [ "$PERF" = 1 ] && step "startup-bench" startup.log bash tools/startup-bench.sh "$OUT/startup"
   [ "$PERF" = 1 ] && step "scroll-bench" scroll.log bash tools/scroll-bench.sh "$OUT/scroll"
   [ "$PERF" = 1 ] && step "mem-bench" mem.log bash tools/mem-bench.sh "$OUT/mem"
+  [ "$PERF" = 1 ] && step "load-bench(피어 100)" load.log bash tools/load-bench.sh "$OUT/load" target/debug 100
   [ "$OLDPEER" = 1 ] && step "oldpeer-scenario" oldpeer.log bash tools/oldpeer-scenario.sh
 fi
 step "tmp-clean" tmp-clean.log bash tools/tmp-clean.sh
