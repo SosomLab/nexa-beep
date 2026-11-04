@@ -68,7 +68,7 @@
 
 | ID | 항목 | 방법 | 판정 | 주기 | OS | 자동화 |
 | --- | --- | --- | --- | --- | --- | --- |
-| B-1 | 콜드 스타트 → 첫 화면 | 캐시 없는 최초 실행(신원 폴더 새로) · 프로세스 시작~첫 프레임 시각. **현재 계측 지점 없음** → `log.enabled` on 상태에서 첫 `paint` 로그 시각 − 프로세스 생성 시각(`Get-Process StartTime` / `ps -o lstart`) | **G** ≤500ms(NFR-B-11) · 목표 200ms · **미실측** | R | 3 | ☐ **INS-3**(부팅 트레이스 스위치 제안 `NEXA_BOOT_TRACE`) |
+| B-1 | 콜드 스타트 → 첫 화면 | 캐시 없는 최초 실행(신원 폴더 새로) · 프로세스 시작~첫 프레임 시각. **현재 계측 지점 없음** → `log.enabled` on 상태에서 첫 `paint` 로그 시각 − 프로세스 생성 시각(`Get-Process StartTime` / `ps -o lstart`) | **G** ≤500ms(NFR-B-11) · 목표 200ms · ★**첫 실측 11-04 Win**(PERF-4 `b8c948d` `tools/startup-bench.sh` · 릴리스 5회) = 콜드 first_paint 중앙값 **245ms** · 웜 **56ms**(게이트 500ms 안 · 목표 200ms는 콜드가 넘음 · 헤드리스 틱 ≤200ms 포함) | R | 3 | ☐ **INS-3**(부팅 트레이스 스위치 제안 `NEXA_BOOT_TRACE`) |
 | B-2 | 첫 피어 표시까지 | 상대 1대 상주 상태에서 기동 → 목록에 뜨는 시각 | **G** ≤3s(NFR-B-11·B-8) | R | 3 | 👤 |
 | B-3 | 웜 스타트(설정·프로필 캐시 있음) | B-1과 같은 방법 · 2회차 이상 | **O** B-1 대비 델타 | R | 3 | ☐ INS-3 |
 | B-4 | 부팅 시 디스크 읽기 목록·크기 | Win `Process Monitor` 필터 / Linux `strace -e openat` / mac `fs_usage` | **O** 읽는 파일 = 설정·신원·핀·프로필 캐시·폰트만 · 평문 파일 0 | Q | 3 | 👤 |
@@ -96,7 +96,7 @@
 | D-3 | 24h 상주 누수 | INS-5 샘플러를 5분 간격 24h → CSV · 피어 변동+메시지 1,000건 포함(E-9) | **G** ΔRSS ≤2MB · 소켓/핸들/스레드 Δ=0(NFR-B-6) · **미실측** | Q | 3 | 🛠 INS-5 |
 | D-4 | 핸들·fd·스레드 수 | Win `(Get-Process nexa-beep).HandleCount` · `.Threads.Count` · mac `lsof -p <pid> \| wc -l` · `ps -M <pid>` · Linux `ls /proc/<pid>/fd \| wc -l` · `Threads:` | **G** 유휴 대비 증가 0(M1-8y 실측 0) | W | 3 | 🛠 INS-5 |
 | D-5 | 큰 버퍼 회수(파일 전송 후) | 1GiB 송수신 완료 5분 후 D-1 재측정 | **O** 전송 전 수준 복귀(스트리밍 FR-X-5 — 상주 버퍼 0) | R | 3 | 🛠 |
-| D-6 | 유휴 CPU | Win `Get-Counter '\Process(nexa-beep)\% Processor Time'` 5분 평균 · mac `top -pid <pid> -stats cpu -l 60` · Linux `top -b -n 60 -p <pid>` | **G** ≤0.2%(NFR-B-7) · **미실측** | W·R | 3 | 🛠 INS-5 |
+| D-6 | 유휴 CPU | Win `Get-Counter '\Process(nexa-beep)\% Processor Time'` 5분 평균 · mac `top -pid <pid> -stats cpu -l 60` · Linux `top -b -n 60 -p <pid>` | **G** ≤0.2%(NFR-B-7) · ★**첫 실측 11-04 Win**(RL-10 `141a4c7` · 헤드리스 유휴 60s · 기존 신원 · 실상대 1 세션) = CPU **141ms/61s ≈ 0.23%**(단일 코어 기준 · 종전 703ms ≈ 1.15%) · `[idle] avg_hz=1.08`(`NEXA_PAINT_TRACE`) — 게이트 근접·약간 초과로 보이나 헤드리스(더티 창 직접 그리기)·실상대 세션 포함 조건이라 **실화면 트레이 숨김 5분 재측정으로 판정** · 수단 = 60s 헤드리스 CPU ms(`Get-Process` CPU 누적 차) + `[idle] avg_hz`(스크립트화는 후속) | W·R | 3 | 🛠 INS-5 |
 | D-7 | 평문 버퍼 zeroize(종료·삭제 경로) | 코드 단언(FR-S-22) + 종료 후 코어 덤프 grep(선택) | **O** 회귀 테스트 존재 여부 | Q | — | ✅ 단위(있는 곳) |
 | D-8 | 크립토 셰레딩 = 삭제 후 잔존 바이트 난수 | 대화 삭제 → `keys.seg`에서 키 소멸 · 세그먼트 바이트 엔트로피 | **G** 키 폐기 = 복호 불가(D-18 §7) | R | 3 | ✅ 단위 + 🛠 |
 
@@ -361,6 +361,6 @@
 | N-1 | lockdown 3-OS | CI | G ✓ |
 | N-4 | choco VirusTotal 플래그 1~5건(3종) | 09-26 | 관찰 기준선 |
 
-**게이트인데 한 번도 측정되지 않은 것(★ 다음 회차 우선)**: **B-1 콜드 스타트**(NFR-B-11) · **D-2 활성 메모리**(NFR-B-2) · **D-3 24h 누수**(NFR-B-6) · **D-6 유휴 CPU**(NFR-B-7) · **E-2 발견 지연 P95**(NFR-B-8) · **F-1 왕복 P95**(NFR-B-9) · **I-6 유선 처리량**(NFR-B-10) · **C-1/C-2 UI 반응**(NFR-B-12). 05 NFR-B 12항목 중 **8항목이 측정 수단 없이 게이트로만 적혀 있다** — NFR-B-5와 같은 유형이다. 처방 = INS-3~INS-6.
+**게이트인데 한 번도 측정되지 않은 것(★ 다음 회차 우선)**: ~~B-1 콜드 스타트~~(11-04 첫 실측 · PERF-4) · **D-2 활성 메모리**(NFR-B-2) · **D-3 24h 누수**(NFR-B-6) · ~~D-6 유휴 CPU~~(11-04 첫 실측 · RL-10 · 실화면 재측정 판정 대기) · **E-2 발견 지연 P95**(NFR-B-8) · **F-1 왕복 P95**(NFR-B-9) · **I-6 유선 처리량**(NFR-B-10) · **C-1/C-2 UI 반응**(NFR-B-12). 05 NFR-B 12항목 중 **8항목이 측정 수단 없이 게이트로만 적혀 있다** — NFR-B-5와 같은 유형이다. 처방 = INS-3~INS-6.
 
 **미측정 사유**: 계측 지점 부재(B-1) · 합성 부하 없음(C-2·D-2) · 상주 샘플러 없음(D-3·D-6) · 측정 스크립트 없음(E-2·F-1·I-6).
