@@ -93,6 +93,10 @@ jobs:
       - name: 임포트 화이트리스트(NFR-B-5 · Windows x64)
         if: runner.os == 'Windows'
         run: pwsh -NoProfile -File tools/check-imports.ps1 target/debug/nexa-beep.exe target/debug/nbeep-imgdec.exe target/debug/nexa-beepd.exe
+      # INS-1(11-04): mac = otool -L(인박스 /usr/lib·/System/Library만) · Linux = ldd(glibc 핵심·libgcc_s만 · musl 정적 = 통과).
+      - name: 임포트 화이트리스트(NFR-B-5 · ${{ matrix.os }})
+        if: runner.os != 'Windows'
+        run: bash tools/check-imports.sh target/debug/nexa-beep target/debug/nbeep-imgdec target/debug/nexa-beepd
       - name: test
         run: cargo test --workspace --features nbeep-core/testkit,nbeep-net/testkit,nbeep-crypto/testkit
       # ★ 안전 회귀 게이트([docs/18] 안전 송수신 · TODO §9 SEC-1) — 위 test에 이미

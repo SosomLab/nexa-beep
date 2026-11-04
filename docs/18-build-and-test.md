@@ -231,6 +231,7 @@ packaging/linux/build-deb.sh && packaging/linux/build-rpm.sh      # → target/p
 ./tools/gate.sh                                   # fmt·clippy·rustdoc·라이선스(DR-12 · tools/check-licenses.py · INS-2 11-04)·test 전량·win x64/mac arm64 check
 cargo build --release -p nexa-beep -p nbeep-imgdec && ls -l target/release/nexa-beep*   # 산출물 ≤10MB
 pwsh tools/check-imports.ps1 target/release/nexa-beep.exe   # (Windows) 임포트 화이트리스트 — 새 DLL = 사람 검토
+./tools/check-imports.sh target/release/nexa-beep           # (mac otool -L / Linux ldd · INS-1 11-04) 인박스·glibc 핵심 밖 = 실패 · CI 빌드 잡에 배선
 cargo build -p nexa-beep -p nbeep-imgdec                    # 아래 두 시험의 기본 바이너리 = target/debug
 ./tools/headless-smoke.sh && ./tools/reply-scenario.sh      # (11-02) 헤드리스 PASS(capture·`wins=1 hidden`·rc 0) · 답장 8/8 — 창을 띄우지 않는다
 ./tools/s4-scenario.sh && ./tools/perf-scenario.sh          # 따라잡기 19/19 · 프레임 ms·유휴 MB 회귀 없음(51 §3 기준선)
