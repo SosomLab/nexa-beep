@@ -7,6 +7,7 @@
 
 ## 2026-11-04
 
+- **(Win · main) 그룹 동사 확장 + 시나리오 16/16**(`20b0098` — group.add/remove/decline · 거절 → 명부 제거 · 제외 → 방 닫힘 · S2~S4 회귀망) · ★**GINV-Q1~Q4 사용자 확정 → [54](54-group-invite-lifecycle.md) ✅ · DR-30**(`e432cc9`) · 권한 allow 25건 적용(`97f3245`). [journal](journal/2026-11-04.md)
 - **(Win · main) ★그룹 스크립트 동사 + `tools/group-scenario.sh` 10/10**(`f541301` — group.create/accept/send/reply · dump 그룹 줄 · 메뉴 "로그" · REPLY-1 ① 방 답장 자동 ✓ · GINV-1 S1 재기동 보존 실측 ✓ · verify.sh 기본 단계 합류). [journal](journal/2026-11-04.md)
 - **(Win · main) ★LOG-1 로그 창**(`d17a651` — 링 2000줄 · 검색 AND · 바닥 따라가기 · 복사 · `log.window` · `open=log`) · **스크립트 실행 자동화**(`e0583ae` — `tools/verify.sh` 한 명령 · `--quick` 4/0 · 권한 병합 `tools/claude-permissions.py` = 사용자 1회 실행 · ⚠ 일부 규칙 범위 과대). [journal](journal/2026-11-04.md)
 - **(Win · main) REPLY-1 ⑤ 구버전 평문 폴백 실물 실기 ✓**(`59bc4bd` — 0.6.1 포터블이 `┃ opy: 원본 글 하나`+본문 수신 · `reply_fallback=1` · send_text `chars` 답장 0 수정) · 상대 카드 "앱 버전" 행(`1aa39b5`) · capture 제목 불일치 오류 줄(`a79edde`) · CI 최종 run 41750315140 전 7 job ✓(Windows 러너 헤드리스 스모크 첫 ✓) · `56c4cfe` = 59bc4bd E0004 컴파일 실패 push 즉시 수정(교훈 = `clippy | grep | head` 종료 코드는 head 것). [journal](journal/2026-11-04.md)
