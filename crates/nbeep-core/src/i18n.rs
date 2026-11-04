@@ -628,6 +628,8 @@ pub enum Msg {
     FieldEmail,
     /// 전화번호 필드.
     FieldPhone,
+    /// 상대 카드 — 앱 버전 행(11-04 · 프로필 Info bit7).
+    FieldAppVersion,
     /// "LAN에 방송되지 않음 · 연결된 상대의 요청에만" 안내.
     ProfileShareNote,
     // ── 네트워크 (DR-19 · ADR-0006 — 수동 등록이 성립하려면 포트가 예측 가능해야) ──
@@ -3527,6 +3529,7 @@ impl Msg {
             Msg::ActChoose => ["Choose…", "선택…", "选择…", "選択…"],
             Msg::FieldEmail => ["Email", "이메일", "电子邮件", "メール"],
             Msg::FieldPhone => ["Phone", "전화번호", "电话", "電話番号"],
+            Msg::FieldAppVersion => ["App version", "앱 버전", "应用版本", "アプリ版"],
             Msg::ProfileShareNote => [
                 "Never broadcast. Shared only with connected peers, and only fields you turned on.",
                 "브로드캐스트에 실리지 않습니다. 연결된 상대에게만, 켠 항목만 제공됩니다.",

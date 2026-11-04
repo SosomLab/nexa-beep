@@ -13016,6 +13016,11 @@ impl App {
             bio: p.and_then(|p| p.bio.clone()).unwrap_or_default(),
             email: p.and_then(|p| p.email.clone()).unwrap_or_default(),
             phone: p.and_then(|p| p.phone.clone()).unwrap_or_default(),
+            app_version: self
+                .peer_app_version
+                .get(&peer)
+                .cloned()
+                .unwrap_or_default(),
             has_image: p.is_some_and(|p| p.image_file.is_some()),
             fingerprint: peer.short(),
             seed: peer.as_bytes().to_vec(),

@@ -45,6 +45,8 @@ pub struct PeerInfo {
     pub email: String,
     /// 전화번호(없으면 빈 값).
     pub phone: String,
+    /// ★ 상대 앱 버전(11-04 · 프로필 Info bit7 · 빈 값 = 아직 못 받음/구버전) — "왜 저 기능이 안 보이나"의 첫 단서.
+    pub app_version: String,
     /// 프로필 이미지 캐시 여부.
     pub has_image: bool,
     /// 키 지문(짧은 표기).
@@ -261,9 +263,10 @@ impl Widget for PeerInfoWidget {
         }
         // 상세 행(라벨 · 값) — 빈 값은 (비공개)/(기록 없음)으로 명시. 08-17 i18n.
         ctx.select_font(FontSlot::Status, false);
-        let rows: [(&str, &str, bool); 4] = [
+        let rows: [(&str, &str, bool); 5] = [
             (t(Msg::FieldEmail), &self.info.email, false),
             (t(Msg::FieldPhone), &self.info.phone, false),
+            (t(Msg::FieldAppVersion), &self.info.app_version, true),
             (t(Msg::CardLastSeen), &self.info.last_seen, true),
             (t(Msg::CardLastChat), &self.info.last_chat, true),
         ];
