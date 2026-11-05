@@ -3,6 +3,8 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
+> **갱신: 2026-11-05 Win 3차 (KST · Windows · main — 개발 세션 코드 · 기록 = 협업 세션)** — **RL-7 2단 기록 증분 append** `f11561d`: `nbeep_store::histfile` v2("NBH2" 프레임 · 접두 불변이면 새 부분만 봉인해 append · 그 밖엔 전량 재작성 · 32프레임 압축 · 깨진 꼬리 절단 · v1 관용 → 첫 쓰기 때 이관) · 1:1·그룹 공용 · store 26 ✓ · s4·reply 시나리오 ✓ · 잔여 = 증분 실측(협업). → [journal](journal/2026-11-05.md#3차--rl-7-2단-기록-세그먼트-증분-append코드-1건--기록--협업-세션)
+
 > **갱신: 2026-11-05 Win 2차 (KST · Windows · main — 개발 세션 코드 · 기록 = 협업 세션)** — ★**M5-3 수신 제한 BL-1~4 구현**([38](38-receive-restriction-design.md) · 사용자 "대상 전체 진행"): `54df30c` 모델(Peer·IP/CIDR·이름 3축 · 기간부 · 자동 임시 10분) + 봉인 영속 `blocks.seg`(fail-closed) · `61d331c` 전송 `set_inbound_filter`(accept 즉시 close · 발견 그림자) · 판정 4지점 · 우클릭 ▸ 차단 · 설정 › 고급 › 수신 제한 · 폭주 자동 차단 · **GINV-1 해제 자리 통합 = DR-30 ⑤ 완료** · 시험 core 205/store 23/net 54/ui 192/app 86 ✓ · 잔여 = BL-5(3-신원 실기 · 시나리오). → [journal](journal/2026-11-05.md#2차--m5-3-수신-제한-bl-14-구현코드-2건--기록--협업-세션)
 
 > **갱신: 2026-11-05 Win 1차 (KST · Windows · main — 개발 세션 코드·기록·push · 사용자 지시)** — ★**GAP-042 이식 `e9c32f6`**(nexa-dir3 11-04 winit 0.30.13 `TaskbarCreated` 교착 우회 · 사용자 "dir3 winit 보완 반영 확인" → 미반영 확인 후 이식): `nbeep_plat::taskbar_guard`(comctl32 `SetWindowSubclass` 선처리 · raw extern) + `app.rs` **창 생성 깔때기 `new_window`**(21곳 → 1곳 · 정적 가드 시험) + `check-imports` `comctl32.dll` · Win32 단위 시험 ✓ · clippy 3-OS ✓ · **DR-31** · 실기(RDP 재접속) 잔여. **방화벽 억제 실행 ✓**(`firewall-allow.ps1` 관리자 1회 · 규칙 **28건** · 승인 창 더 안 뜸 · 요약 줄 `${made}` 수정). LAT-1 실 LAN 2-PC 실측 = 이 PC 1대라 **대행 불가 → 사용자 실기 잔여**. [journal](journal/2026-11-05.md)

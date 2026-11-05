@@ -7,6 +7,7 @@
 
 ## 2026-11-05
 
+- **(Win · main) RL-7 2단 기록 증분 append**(`f11561d` — `nbeep_store::histfile` v2 "NBH2" 프레임 · 접두 불변이면 새 부분만 봉인 append · 바뀌면/32프레임 이상이면 전량 재작성 · 깨진 꼬리 절단 · v1 관용·첫 쓰기 이관 · 실측 잔여) → [journal](journal/2026-11-05.md)
 - **(Win · main) M5-3 수신 제한 BL-1~4**(`54df30c` 모델+봉인 영속 `blocks.seg` · `61d331c` 전송 `set_inbound_filter`·판정 4지점·우클릭 ▸ 차단·설정 › 고급 › 수신 제한·자동 임시 10분 · GINV-1 해제 자리 통합 = DR-30 ⑤ 완료 · 잔여 BL-5 실기·시나리오) → [journal](journal/2026-11-05.md)
 - **(Win · main) GAP-042 이식**(`e9c32f6` — nexa-dir3 11-04 winit 0.30.13 `TaskbarCreated` 교착 우회 · `nbeep_plat::taskbar_guard` comctl32 서브클래스 선처리 · `app.rs` 창 생성 깔때기 `new_window` 1곳 + 정적 가드 · `check-imports` comctl32 · DR-31 · 제거 조건 winit 0.31) · 방화벽 억제 `firewall-allow.ps1` 실행 ✓(규칙 28건) · LAT-1 실 LAN = 사용자 실기 잔여. [journal](journal/2026-11-05.md)
 
