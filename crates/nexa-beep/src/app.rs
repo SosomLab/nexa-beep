@@ -1018,10 +1018,12 @@ fn closed_next_stage(last_stage: Option<u8>, lived_ms: u64) -> u8 {
     }
 }
 
-/// 오프라인 행 유지 판정의 순수 규칙(09-03) — `App::keeps_offline_row`의 알맹이.
-/// 핀(`Unverified` 초과) ∨ 대화 이력 ∨ 수동 주소 중 하나면 남긴다.
-fn offline_row_kept(level: nbeep_core::TrustLevel, has_thread: bool, has_manual: bool) -> bool {
-    level != nbeep_core::TrustLevel::Unverified || has_thread || has_manual
+/// 오프라인 행 유지 판정의 순수 규칙(09-03 · ★11-05 개정) — `App::keeps_offline_row`의 알맹이.
+/// **대화 이력 ∨ 수동 주소 ∨ 사용자가 붙든 것(목록 고정 · 내 기기)** 중 하나면 남긴다. 종전엔 핀(TOFU)만으로도 남겼는데,
+/// 시험 인스턴스가 한 번 발견되면 핀이 생겨 **한 번도 대화하지 않은 상대가 오프라인 행으로 영구 누적**됐다(사용자 11-05 —
+/// "대화한 적 없는 상대는 온라인일 때만, 기록이 있으면 유지"). 핀 자체는 그대로다(신뢰·지문 이력은 보존 · 행만 안 보인다).
+fn offline_row_kept(has_thread: bool, has_manual: bool, user_kept: bool) -> bool {
+    has_thread || has_manual || user_kept
 }
 
 impl ConnectLatch {
@@ -7059,11 +7061,10 @@ impl App {
     /// 이상) · 대화 이력(살아 있는 스레드 또는 대피된 스레드) · 수동 주소. 셋 다
     /// 없는 스쳐간 상대만 행이 사라진다("비발견 상대 목록 유지" 08-13 사용자 확정).
     fn keeps_offline_row(&self, peer: PeerId) -> bool {
-        use nbeep_core::TrustStore as _;
         offline_row_kept(
-            self.trust.level(peer),
             self.conversations.contains_key(&peer) || self.parked_lines.contains_key(&peer),
             self.manual_addrs.contains_key(&peer),
+            self.trust.fav(peer) || self.is_own_device(peer),
         )
     }
 
@@ -16190,7 +16191,9 @@ impl App {
                     },
                 );
             }
-            if self.live {
+            // ★ 11-05 개정: 핀만으로는 행을 시드하지 않는다 — 대화 이력은 `restore_history`가 시드하고, 여기서는 사용자가 붙든
+            //   상대(목록 고정 · 내 기기 · 수동 주소)만. 시험 인스턴스가 남긴 수십 개의 '대화 0' 핀이 오프라인 행으로 쌓이던 것.
+            if self.live && self.keeps_offline_row(peer) {
                 // 데모(에코 봇) 모드는 시드하지 않는다 — 실기 핀이 봇 목록에 섞인다.
                 self.extra_peers
                     .entry(peer)
@@ -26314,20 +26317,20 @@ mod tests {
         assert!(!super::is_local_notice("안녕하세요"));
     }
 
-    /// 09-03 실기 — 핀·이력이 있는 상대는 수동 주소·발견 경로가 없어도 오프라인 행으로
-    /// 남는다(종전 세션 종료 분기 = "수동 주소 ∧ 발견 없음 = 제거"라 goodbye가 먼저
-    /// 오면 증발). 스쳐간 상대(미검증·이력 0·수동 주소 0)만 사라진다.
+    /// 09-03 실기 → ★11-05 개정(사용자: "대화한 적 없는 상대는 온라인일 때만 · 기록이 있으면 유지") — 이력·수동 주소·사용자가
+    /// 붙든 것(고정·내 기기)만 오프라인 행으로 남고, **핀만 있는 상대는 사라진다**(시험 인스턴스 핀 누적 방지). 핀 자체는 보존.
     #[test]
-    fn offline_row_kept_by_pin_or_history_or_manual_only() {
-        use nbeep_core::TrustLevel::{FingerprintVerified, Pinned, Unverified};
-        // 회귀 본체: 핀만 있어도(수동 주소 0 · 스레드 0) 남는다.
-        assert!(super::offline_row_kept(Pinned, false, false));
-        assert!(super::offline_row_kept(FingerprintVerified, false, false));
-        // 미검증이라도 이력·수동 주소가 있으면 남는다.
-        assert!(super::offline_row_kept(Unverified, true, false));
-        assert!(super::offline_row_kept(Unverified, false, true));
-        // 셋 다 없는 인바운드 전용 스쳐간 상대만 사라진다(08-13 유령 방지 유지).
-        assert!(!super::offline_row_kept(Unverified, false, false));
+    fn offline_row_kept_by_history_manual_or_user_only() {
+        assert!(super::offline_row_kept(true, false, false), "대화 이력");
+        assert!(super::offline_row_kept(false, true, false), "수동 주소");
+        assert!(
+            super::offline_row_kept(false, false, true),
+            "목록 고정·내 기기"
+        );
+        assert!(
+            !super::offline_row_kept(false, false, false),
+            "핀만 = 행 없음(11-05)"
+        );
     }
 
     /// 08-24 — 교체형 설치 자리의 옛 `data/` 1회 이관: 신원이 있고 대상이 비어 있을
