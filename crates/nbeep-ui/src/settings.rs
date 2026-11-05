@@ -1950,14 +1950,30 @@ pub fn registry() -> &'static [Entry] {
             ),
             key: "group.decline_undo_secs",
         },
-        // 차단한 초대 보기/해제(S4 · DR-30 · 해제 자리 = 사용자 확정 "설정 › 고급 › 수신 제한 목록" — docs/38 BL과 통합 예정).
+        // ── 고급 › 수신 제한(docs/38 · BL-3 · 11-05) — 4축 차단 목록 + 그룹 초대 차단(S4 · DR-30 ⑤ 해제 자리 통합) ──
         Entry {
             cat: Msg::CatAdvanced,
-            sub: Some(Msg::SubGroupInvite),
-            label: Msg::BlockedInvites,
-            desc: Msg::BlockedInvitesDesc,
+            sub: Some(Msg::SubBlockList),
+            label: Msg::BlockListOpen,
+            desc: Msg::BlockListOpenDesc,
             kind: SettingKind::Action { verb: Msg::ActOpen },
-            key: "group.blocked",
+            key: "block.list",
+        },
+        Entry {
+            cat: Msg::CatAdvanced,
+            sub: Some(Msg::SubBlockList),
+            label: Msg::BlockAddIp,
+            desc: Msg::BlockAddIpDesc,
+            kind: SettingKind::Action { verb: Msg::ActAdd },
+            key: "block.add_ip",
+        },
+        Entry {
+            cat: Msg::CatAdvanced,
+            sub: Some(Msg::SubBlockList),
+            label: Msg::BlockAddName,
+            desc: Msg::BlockAddNameDesc,
+            kind: SettingKind::Action { verb: Msg::ActAdd },
+            key: "block.add_name",
         },
         // ── 고급 › 네트워크 점검(netmon · 08-21 — 옵트인 계측 기록 · 기본 off) ──
         Entry {

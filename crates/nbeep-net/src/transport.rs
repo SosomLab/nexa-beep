@@ -7,6 +7,19 @@ use nbeep_core::link::Link;
 use nbeep_core::{DisplayName, PeerId};
 use std::sync::mpsc::Receiver;
 
+/// 인바운드가 들어온 통로(BL-2 · 11-05) — 필터가 통로별로 다르게 셀 수 있게(accept 폭주 계수는 TCP만).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InboundKind {
+    /// 세션 TCP accept(핸드셰이크 전).
+    Accept,
+    /// 발견 UDP 관측(패킷 파싱 뒤 · 반영 전).
+    Discovery,
+}
+
+/// 인바운드 IP 판정자([docs/38] B-2) — `true` = **받지 않는다**(TCP는 즉시 close · 발견은 폐기). 소켓 스레드에서 불린다.
+pub type InboundFilter =
+    std::sync::Arc<dyn Fn(std::net::IpAddr, InboundKind) -> bool + Send + Sync>;
+
 /// 전송별 도달 경로. **이 크레이트 밖으로 나가지 않는다**(ADR-0003 규칙 1).
 ///
 /// 상위 계층은 `PeerId`로만 상대를 가리키고, `PeerId → Locator` 해석은 전송 내부에서만 한다.
@@ -114,4 +127,9 @@ pub trait Transport: Send + Sync {
     /// 않고 상대도 보지 않는다) · `false` = 재개 + 즉시 재발견. 세션 수신 소켓은 열어 두되 수락은 호스트가
     /// 거른다. 기본 no-op(인메모리 등).
     fn set_quiet(&self, _quiet: bool) {}
+
+    /// ★ 인바운드 IP 필터([docs/38] B-2 · BL-2 · 11-05) — 호스트가 넣은 판정자를 **소켓 직후 · 파싱/핸드셰이크 전**에
+    /// 적용한다: TCP accept 즉시 close(Noise 비용 자체를 차단 · 오류 회신 없음) · 발견 관측은 반영 전 폐기(그림자 —
+    /// 내 광고 응답은 평소대로). 기본 no-op(인메모리 등).
+    fn set_inbound_filter(&self, _filter: InboundFilter) {}
 }

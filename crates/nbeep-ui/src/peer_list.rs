@@ -482,6 +482,8 @@ pub struct PeerListWidget {
     fav_req: Option<(PeerId, bool)>,
     /// 목록에서 삭제 요청(1회성 · 08-17) — 호스트가 핀·캐시 파일을 지운다.
     forget_req: Option<PeerId>,
+    /// 우클릭 ▸ 차단(BL-3 · docs/38 §6) — (상대, 기간 코드 0=1h · 1=24h · 2=7d · 3=영구).
+    block_req: Option<(PeerId, u8)>,
     /// 그룹 관련 행동(1회성 — 호스트가 저장소·모달로 처리).
     group_action: Option<GroupAction>,
     /// 갱신 직후 스크롤 동작(설정 — 기본 = 현재 위치 유지 · 08-14).
@@ -536,6 +538,7 @@ impl PeerListWidget {
             profile_req: None,
             fav_req: None,
             forget_req: None,
+            block_req: None,
             group_action: None,
             groups: Vec::new(),
             selected: std::collections::HashSet::new(),
@@ -679,6 +682,11 @@ impl PeerListWidget {
     }
 
     /// 목록에서 삭제 요청 회수(1회성 · 08-17) — 호스트가 핀·캐시를 지우고 목록 갱신.
+    /// 우클릭 ▸ 차단 요청(BL-3) — 호스트가 목록·신뢰 저장소에 반영한다.
+    pub fn take_block_request(&mut self) -> Option<(PeerId, u8)> {
+        self.block_req.take()
+    }
+
     pub fn take_forget_request(&mut self) -> Option<PeerId> {
         self.forget_req.take()
     }
@@ -997,6 +1005,10 @@ impl Widget for PeerListWidget {
                     match id.as_str() {
                         "profile" => self.profile_req = self.ctx_peer.take(),
                         "forget" => self.forget_req = self.ctx_peer.take(),
+                        "block-1h" => self.block_req = self.ctx_peer.take().map(|p| (p, 0)),
+                        "block-24h" => self.block_req = self.ctx_peer.take().map(|p| (p, 1)),
+                        "block-7d" => self.block_req = self.ctx_peer.take().map(|p| (p, 2)),
+                        "block-forever" => self.block_req = self.ctx_peer.take().map(|p| (p, 3)),
                         "fav" => {
                             if let Some(p) = self.ctx_peer.take() {
                                 let cur = self
@@ -1152,6 +1164,20 @@ impl Widget for PeerListWidget {
                                 tf(Msg::MenuCreateGroup, &[&n.to_string()]),
                             ),
                             crate::controls::CtxItem::Separator,
+                            // 차단(BL-3 · docs/38 §6) — 기간 서브메뉴 · 신원 축 기본 영구는 목록 맨 끝.
+                            crate::controls::CtxItem::submenu(
+                                "block",
+                                t(Msg::MenuBlock),
+                                vec![
+                                    crate::controls::CtxItem::item("block-1h", t(Msg::Hours1)),
+                                    crate::controls::CtxItem::item("block-24h", t(Msg::Hours24)),
+                                    crate::controls::CtxItem::item("block-7d", t(Msg::Days7)),
+                                    crate::controls::CtxItem::item(
+                                        "block-forever",
+                                        t(Msg::DurForever),
+                                    ),
+                                ],
+                            ),
                             crate::controls::CtxItem::item("forget", forget_label),
                         ]
                     } else {

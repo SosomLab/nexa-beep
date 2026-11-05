@@ -34,7 +34,9 @@ pub mod inmem;
 pub use local::{LocalDirect, DEFAULT_SESSION_PORT};
 pub use nbeep_core::link::{Link, LinkError};
 pub use tcp::TcpLink;
-pub use transport::{AddError, Caps, ConnectError, DiscoveryEvent, PeerHint, Transport};
+pub use transport::{
+    AddError, Caps, ConnectError, DiscoveryEvent, InboundFilter, InboundKind, PeerHint, Transport,
+};
 pub use udp::{Observation, UdpDiscovery};
 pub use udplink::UdpLink;
 pub use wire::{CloneWatch, Decoded, Packet, PacketKind, MAX_PACKET};

@@ -3418,6 +3418,63 @@ enum Role {
 }
 
 /// 선택 모달(Role::Alert 2버튼)의 문맥 — 결과를 어디에 적용할지(M5-1g).
+/// 수신 제한 목록 창의 행(BL-3 · docs/38 §6) — 4축 항목 또는 그룹 초대 차단(GINV-1 S4 · DR-30 ⑤ 해제 자리 통합).
+#[derive(Clone, Debug)]
+enum BlockRow {
+    Entry(nbeep_core::BlockAxis),
+    Invite(nbeep_core::GroupUid),
+}
+
+/// 같은 IP의 인바운드 accept 상한(분당 · docs/38 §5) — 초과 = IP 임시 차단 10분.
+const ACCEPT_PER_MIN: usize = 30;
+/// 같은 상대 메시지 상한 — 초당 5건 × 10초 창(docs/38 §5) — 초과 = Peer 임시 차단 10분.
+const MSG_BURST_WINDOW_MS: u64 = 10_000;
+const MSG_BURST_MAX: usize = 50;
+
+/// 전송 계층 소켓 스레드가 보는 IP 판정 상태(BL-2 · BL-4) — 앱 목록의 **스냅샷**(`rules`) + accept 계수. 앱이 바뀔 때마다
+/// `rules`를 덮고, 발동(`fired`)은 틱이 거둬 영속 목록·고지로 옮긴다(소켓 스레드는 파일·UI를 만지지 않는다).
+#[derive(Default)]
+struct IpFilterState {
+    rules: Vec<(std::net::IpAddr, u8, Option<u64>)>,
+    accepts: HashMap<std::net::IpAddr, VecDeque<u64>>,
+    fired: Vec<(std::net::IpAddr, usize)>,
+}
+
+impl IpFilterState {
+    /// 판정 — 규칙에 걸리면 true · TCP accept는 분당 계수도 센다(초과 = 임시 규칙 즉시 + fired).
+    fn check(&mut self, ip: std::net::IpAddr, kind: nbeep_net::InboundKind, now_ms: u64) -> bool {
+        let hit = self.rules.iter().any(|(a, p, until)| {
+            until.is_none_or(|u| u > now_ms)
+                && nbeep_core::BlockAxis::Ip {
+                    addr: *a,
+                    prefix: *p,
+                }
+                .covers_ip(ip)
+        });
+        if hit || kind != nbeep_net::InboundKind::Accept {
+            return hit;
+        }
+        let q = self.accepts.entry(ip).or_default();
+        q.push_back(now_ms);
+        while q
+            .front()
+            .is_some_and(|t| now_ms.saturating_sub(*t) > 60_000)
+        {
+            q.pop_front();
+        }
+        if q.len() > ACCEPT_PER_MIN {
+            let n = q.len();
+            q.clear();
+            let full = if ip.is_ipv4() { 32 } else { 128 };
+            self.rules
+                .push((ip, full, Some(now_ms + nbeep_core::block::AUTO_TEMP_MS)));
+            self.fired.push((ip, n));
+            return true;
+        }
+        false
+    }
+}
+
 #[derive(Clone, Debug)]
 enum AlertCtx {
     /// 그룹 초대 — 수락/거절 대상.
@@ -3434,8 +3491,8 @@ enum AlertCtx {
         gid: nbeep_core::group::GroupId,
         peer: PeerId,
     },
-    /// 차단한 초대 해제 확인(S4 · 설정 › 차단한 초대 보기 행 클릭).
-    InviteUnblock { uid: nbeep_core::GroupUid },
+    /// 수신 제한 해제 확인(BL-3 · 목록 창 행 클릭) — 4축 항목 또는 그룹 초대 차단(S4).
+    BlockUnblock { row: BlockRow },
     /// 상대가 차단한(재초대 불가) 거절 메모 — 긍정 = 기록 지우기(S4).
     GroupForget {
         gid: nbeep_core::group::GroupId,
@@ -3466,6 +3523,10 @@ enum NamePurpose {
     /// **Notice 등급** 팬아웃 · Urgent 공지는 만들지 않는다 — docs/24 "팬아웃
     /// Urgent 1단계 강등"의 정신을 발신에서 지킨다).
     Broadcast,
+    /// IP/대역 차단 추가(BL-3 · 설정 › 고급 › 수신 제한) — 입력 = 주소 또는 CIDR · 기본 24시간.
+    BlockIp,
+    /// 표시 이름 차단 추가(BL-3) — 입력 = 이름(정규화 · 정확 일치) · 영구.
+    BlockName,
 }
 
 /// 에코 봇 — 버스에 실물 신원으로 참여해 수신 세션을 받고, Chat 메시지를 에코한다.
@@ -4156,10 +4217,21 @@ struct App {
     pii_last: Option<String>,
     /// 거절 실행 취소 대기(S3): uid → (소유자, hard, 보낼 시각 ms). 방 행 클릭 = 취소.
     pending_declines: HashMap<nbeep_core::GroupUid, (PeerId, bool, u64)>,
-    /// 차단한 초대 목록 모달의 행 순서(S4 · 행 클릭 = 해제 확인 · 모달 닫힘 = 소거).
-    blocked_ctx: Option<Vec<nbeep_core::GroupUid>>,
-    /// 차단한 초대 목록 열기 대기(설정 Action · 창 생성은 about_to_wait).
-    want_blocked_window: bool,
+    /// ★ 수신 제한 목록(docs/38 · BL-1~4 · 11-05) — `blocks.seg` 봉인 영속. Peer 축은 trust `blocked` 플래그와 동기해
+    /// 핸드셰이크 판정(`TrustedSession::wrap`)을 그대로 재사용한다.
+    blocks: nbeep_store::FileBlockList,
+    /// 전송 계층 소켓 스레드와 공유하는 IP 규칙 스냅샷 + accept 계수(BL-2/4).
+    ip_filter: std::sync::Arc<std::sync::Mutex<IpFilterState>>,
+    /// 상대별 메시지 수신 시각 창(BL-4 · 초당 5건 × 10초 초과 = 자동 임시 차단).
+    msg_rate: HashMap<PeerId, VecDeque<u64>>,
+    /// 만료 정리·자동 발동 수거 다음 시각(unix ms · 1초 페이스).
+    block_expire_at: u64,
+    /// 수신 제한 목록 모달의 행 순서(행 클릭 = 해제 확인 · 모달 닫힘 = 소거).
+    block_ctx: Option<Vec<BlockRow>>,
+    /// 목록 열기 대기(설정 Action · 우클릭 차단 뒤 · 창 생성은 about_to_wait).
+    want_block_window: bool,
+    /// IP/이름 수동 추가 입력 대기(설정 Action → 텍스트 모달 · 창 생성은 about_to_wait).
+    want_block_prompt: Option<NamePurpose>,
     /// 설정 초기화 확인 대기(08-15 · 고급 — 확인 모달은 about_to_wait에서 연다).
     pending_reset: bool,
     /// IME 중재 상태기계(M3-1e G3 — [`crate::ime_gate`]): 조합 게이트·보류-판정·
@@ -6825,6 +6897,16 @@ impl App {
                 // ★ 사용자 힌트(ADR-0015 §3-4) — 내 태그와 같으면 형제 후보(미검증 · 판정은 XXpsk3).
                 DiscoveryEvent::UserHint { peer, tag } => self.on_user_hint(peer, tag),
                 DiscoveryEvent::Appeared(hint) => {
+                    // ★ 수신 제한(docs/38 §3 · BL-2): 차단 상대·차단 이름의 광고는 버린다 → 목록에서 사라진다(그림자 —
+                    //   응답은 전송이 평소대로 낸다). IP 축은 전송 계층 필터가 관측 전에 걸렀다.
+                    if self.peer_blocked(hint.peer)
+                        || self
+                            .blocks
+                            .is_name_blocked(hint.name.as_str(), unix_now_ms())
+                    {
+                        self.table.forget(hint.peer);
+                        continue;
+                    }
                     // 최근 접속 관측(08-15 — 아는 상대만 · 60초 스로틀 영속).
                     self.trust.note_seen(hint.peer, unix_now_ms());
                     // 무변화 관측(생존 비컨)은 재조립 사유가 아니다(RL-16ⓑ ·
@@ -7019,6 +7101,10 @@ impl App {
         let fpres = fval(self.settings.get("list.filter.presence"));
         let ftrust = fval(self.settings.get("list.filter.trust"));
         entries.retain(|e| {
+            // 그림자 차단(docs/38 §6 · BL-3) — 차단 상대는 배지가 아니라 **없는 것**으로 표현된다(해제하면 복귀).
+            if self.peer_blocked(e.peer) {
+                return false;
+            }
             let lvl = self.effective_trust(e.peer);
             // ★ 왕래 기준 승격(확정안) — roster로만 아는(왕래 전무·미발견) 상대는
             //   그룹1 'Server'를 골랐을 때만 나타난다. 핀·인증·세션이 생기면 전체로.
@@ -7875,6 +7961,20 @@ impl App {
                 b.uid.short(),
                 b.name,
                 b.owner.short()
+            );
+        }
+        // 수신 제한(BL-3) — `[dump] block <peer|ip|name> <값> auto=<0|1> until=<ms|0>`.
+        for e in self.blocks.entries() {
+            let kind = match e.axis {
+                nbeep_core::BlockAxis::Peer(_) => "peer",
+                nbeep_core::BlockAxis::Ip { .. } => "ip",
+                nbeep_core::BlockAxis::Name(_) => "name",
+            };
+            eprintln!(
+                "[dump] block {kind} {} auto={} until={}",
+                e.axis.value_text(),
+                u8::from(e.auto),
+                e.until_ms.unwrap_or(0)
             );
         }
     }
@@ -9013,6 +9113,9 @@ impl App {
     /// 뒤로(그 사이 힌트가 오면 psk_for가 XXpsk3를 고른다). or_insert = 진행 중 표식·
     /// 기존 백오프 불침투(종전 문법 그대로).
     fn seed_reconnect(&mut self, peer: PeerId) {
+        if self.peer_blocked(peer) {
+            return; // 아웃바운드 게이트(docs/38 §3) — 차단 상대에게 자동 연결을 걸지 않는다
+        }
         let due = if self.sibling_grace(peer) {
             self.now_ms() + SIBLING_GRACE_MS
         } else {
@@ -9515,36 +9618,37 @@ impl App {
         }
     }
 
-    /// ★ 차단한 초대 목록(S4 · 설정 › 고급 › 그룹 초대 › 차단한 초대 보기…) — 구성원 모달과 같은 상태 목록 모달 ·
-    /// 행 클릭 = 해제 확인(`AlertCtx::InviteUnblock`). 빈 목록이면 안내 한 줄.
-    fn open_blocked_alert(&mut self, el: &ActiveEventLoop) {
+    /// ★ 수신 제한 목록(docs/38 §6 · BL-3 · 설정 › 고급 › 수신 제한 › 목록) — 4축 항목 + 그룹 초대 차단(S4 · DR-30 ⑤ 해제
+    /// 자리 통합)을 한 모달에. 행 = `축 · 값 · 남은 기간[ · 자동]` · 행 클릭 = 해제 확인(`AlertCtx::BlockUnblock`). 빈 목록이면 안내 한 줄.
+    fn open_block_list(&mut self, el: &ActiveEventLoop) {
         let now = unix_now_ms();
-        let items: Vec<nbeep_store::BlockedInvite> = self.groups.blocked_invites().to_vec();
-        let title = nbeep_core::t(nbeep_core::Msg::WinBlocked).to_string();
-        let lines: Vec<(LinkState, String)> = if items.is_empty() {
+        let title = nbeep_core::t(nbeep_core::Msg::WinBlockList).to_string();
+        let mut order: Vec<BlockRow> = self
+            .blocks
+            .entries()
+            .iter()
+            .filter(|e| e.active(now))
+            .map(|e| BlockRow::Entry(e.axis.clone()))
+            .collect();
+        order.extend(
+            self.groups
+                .blocked_invites()
+                .iter()
+                .map(|b| BlockRow::Invite(b.uid)),
+        );
+        let lines: Vec<(LinkState, String)> = if order.is_empty() {
             vec![(
                 LinkState::Idle,
-                nbeep_core::t(nbeep_core::Msg::BlockedNone).to_string(),
+                nbeep_core::t(nbeep_core::Msg::BlockListNone).to_string(),
             )]
         } else {
-            items
+            order
                 .iter()
-                .map(|b| {
-                    (
-                        LinkState::Lost,
-                        format!(
-                            "{} — {} · {}",
-                            b.name,
-                            self.peer_title(b.owner),
-                            ago_text(now, b.at_ms)
-                        ),
-                    )
-                })
+                .map(|r| (LinkState::Lost, self.block_row_line(r, now)))
                 .collect()
         };
-        let order: Vec<nbeep_core::GroupUid> = items.iter().map(|b| b.uid).collect();
         let clickable = !order.is_empty();
-        self.blocked_ctx = Some(order);
+        self.block_ctx = Some(order);
         self.members_ctx = None;
         let win_h = (110.0 + lines.len() as f64 * 26.0).clamp(170.0, 460.0);
         if let Some((aid, _)) = self.windows.iter().find(|(_, e)| e.role == Role::Alert) {
@@ -9594,6 +9698,288 @@ impl App {
         self.alert_view = Some(av);
         self.layout_window(id);
         self.request_redraw(id);
+    }
+
+    // ───────────────────────── 수신 제한(docs/38 · BL-2~4) ─────────────────────────
+
+    /// Peer 축 판정 — trust `blocked` 플래그(핸드셰이크 판정과 같은 원천) ∨ 목록(기간부 · 만료는 게으른 판정).
+    fn peer_blocked(&self, peer: PeerId) -> bool {
+        nbeep_core::TrustStore::is_blocked(&self.trust, peer)
+            || self.blocks.is_peer_blocked(peer, unix_now_ms())
+    }
+
+    /// 목록 행 라벨의 값 부분(해제 확인 문구에도 쓴다) — Peer = 표시 이름 · Ip/Name = 값 · Invite = 방 이름.
+    fn block_row_value(&self, row: &BlockRow) -> String {
+        match row {
+            BlockRow::Entry(nbeep_core::BlockAxis::Peer(p)) => self.peer_title(*p),
+            BlockRow::Entry(ax) => ax.value_text(),
+            BlockRow::Invite(uid) => self
+                .groups
+                .blocked_invites()
+                .iter()
+                .find(|b| b.uid == *uid)
+                .map(|b| format!("{} — {}", b.name, self.peer_title(b.owner)))
+                .unwrap_or_default(),
+        }
+    }
+
+    /// 목록 행 한 줄 — `축 · 값 · 남은 기간[ · 자동]`.
+    fn block_row_line(&self, row: &BlockRow, now_ms: u64) -> String {
+        use nbeep_core::{t, Msg};
+        let value = self.block_row_value(row);
+        match row {
+            BlockRow::Invite(uid) => {
+                let at = self
+                    .groups
+                    .blocked_invites()
+                    .iter()
+                    .find(|b| b.uid == *uid)
+                    .map_or(0, |b| b.at_ms);
+                format!(
+                    "{} · {value} · {}",
+                    t(Msg::BlockAxisInvite),
+                    ago_text(now_ms, at)
+                )
+            }
+            BlockRow::Entry(axis) => {
+                let axis_label = match axis {
+                    nbeep_core::BlockAxis::Peer(_) => t(Msg::BlockAxisPeer),
+                    nbeep_core::BlockAxis::Ip { .. } => t(Msg::BlockAxisIp),
+                    nbeep_core::BlockAxis::Name(_) => t(Msg::BlockAxisName),
+                };
+                let e = self.blocks.get(axis);
+                let remain = match e.and_then(|e| e.remaining_ms(now_ms)) {
+                    None => t(Msg::DurForever).to_string(),
+                    Some(ms) => remain_text(ms),
+                };
+                let auto = if e.is_some_and(|e| e.auto) {
+                    format!(" · {}", t(Msg::BlockAutoTag))
+                } else {
+                    String::new()
+                };
+                format!("{axis_label} · {value} · {remain}{auto}")
+            }
+        }
+    }
+
+    /// 등재 + 축별 후속(docs/38 §3): Peer = trust 플래그 동기 + 살아 있는 세션 끊기 + 목록·재연결에서 제거 · Ip = 전송 필터
+    /// 동기 · Name = 지금 그 이름인 발견 상대를 목록에서 걷기. 기존 대화 기록은 남는다(뷰에서만 숨김).
+    fn apply_block(&mut self, entry: nbeep_core::BlockEntry) {
+        let axis = entry.axis.clone();
+        self.blocks.add(entry);
+        match &axis {
+            nbeep_core::BlockAxis::Peer(p) => {
+                nbeep_core::TrustStore::block(&mut self.trust, *p);
+                self.cut_peer(*p);
+            }
+            nbeep_core::BlockAxis::Ip { .. } => self.sync_ip_filter(),
+            nbeep_core::BlockAxis::Name(_) => {
+                let now = unix_now_ms();
+                let gone: Vec<PeerId> = self
+                    .table
+                    .list()
+                    .into_iter()
+                    .filter(|e| self.blocks.is_name_blocked(e.name.as_str(), now))
+                    .map(|e| e.peer)
+                    .collect();
+                for p in gone {
+                    self.table.forget(p);
+                }
+            }
+        }
+        dlog!(self, DL::Conn, DV::Decide, "block", |r| r
+            .arg("axis", axis.value_text())
+            .rule("docs/38", "shadow block")
+            .ok("entry added"));
+        self.refresh_and_redraw();
+    }
+
+    /// 해제 — Peer 축이면 trust 플래그도 내린다 · Ip 축이면 전송 필터 동기. 반환 = 바뀌었는가.
+    fn remove_block(&mut self, axis: &nbeep_core::BlockAxis) -> bool {
+        let removed = self.blocks.remove(axis);
+        match axis {
+            nbeep_core::BlockAxis::Peer(p) => {
+                let _ = nbeep_core::TrustStore::unblock(&mut self.trust, *p);
+            }
+            nbeep_core::BlockAxis::Ip { .. } => self.sync_ip_filter(),
+            nbeep_core::BlockAxis::Name(_) => {}
+        }
+        removed
+    }
+
+    /// 차단 즉시 끊기(docs/38 §3 "진행 중 전송은 차단 즉시 취소") — 세션 채널을 지우면 쓰기 스레드 → 액터가 닫힌다(Closed 경로).
+    /// 스레드는 대피(해제 시 복귀) · 재연결 사다리에서 제거 · 발견 테이블에서 걷기.
+    fn cut_peer(&mut self, peer: PeerId) {
+        if let Some(c) = self.conversations.remove(&peer) {
+            if !c.lines.is_empty() {
+                self.parked_lines.insert(peer, c.lines);
+            }
+        }
+        self.reconnect.remove(&peer);
+        self.closed_peers.remove(&peer);
+        self.table.forget(peer);
+        self.msg_rate.remove(&peer);
+    }
+
+    /// 전송 계층 핫 필터에 IP 규칙 스냅샷을 덮는다(목록이 바뀔 때마다 · 소켓 스레드는 이 스냅샷만 본다).
+    fn sync_ip_filter(&self) {
+        let rules = self.blocks.ip_rules(unix_now_ms());
+        match self.ip_filter.lock() {
+            Ok(mut g) => g.rules = rules,
+            Err(e) => e.into_inner().rules = rules,
+        }
+    }
+
+    /// 상대별 메시지 폭주 계수(BL-4 · docs/38 §5) — 10초 창에 50건 초과 = Peer 임시 차단 10분 + 고지. 반환 = 이번 메시지 폐기.
+    /// 형제(내 기기)는 세지 않는다(동기 트래픽은 사람이 아니다).
+    fn note_msg_rate(&mut self, peer: PeerId) -> bool {
+        if self.is_sibling_candidate(peer) {
+            return false;
+        }
+        let now = unix_now_ms();
+        let q = self.msg_rate.entry(peer).or_default();
+        q.push_back(now);
+        while q
+            .front()
+            .is_some_and(|t| now.saturating_sub(*t) > MSG_BURST_WINDOW_MS)
+        {
+            q.pop_front();
+        }
+        if q.len() <= MSG_BURST_MAX {
+            return false;
+        }
+        let n = q.len();
+        let title = self.peer_title(peer);
+        self.apply_block(nbeep_core::BlockEntry::auto_temp(
+            nbeep_core::BlockAxis::Peer(peer),
+            now,
+            &format!("msg {n}/10s"),
+        ));
+        self.set_status(nbeep_core::tf(nbeep_core::Msg::StfAutoBlocked, &[&title]));
+        true
+    }
+
+    /// 1초 페이스 — 만료 정리(Peer 축은 trust 플래그 복원) + 소켓 스레드의 자동 IP 차단 발동 수거(영속 목록 + 고지).
+    fn block_tick(&mut self) {
+        let now = unix_now_ms();
+        if now < self.block_expire_at {
+            return;
+        }
+        self.block_expire_at = now + 1_000;
+        let mut changed = false;
+        for e in self.blocks.purge_expired(now) {
+            changed = true;
+            if let nbeep_core::BlockAxis::Peer(p) = e.axis {
+                let _ = nbeep_core::TrustStore::unblock(&mut self.trust, p);
+            }
+        }
+        let fired = match self.ip_filter.lock() {
+            Ok(mut g) => std::mem::take(&mut g.fired),
+            Err(e) => std::mem::take(&mut e.into_inner().fired),
+        };
+        for (ip, n) in fired {
+            changed = true;
+            let full = if ip.is_ipv4() { 32 } else { 128 };
+            self.blocks.add(nbeep_core::BlockEntry::auto_temp(
+                nbeep_core::BlockAxis::Ip {
+                    addr: ip,
+                    prefix: full,
+                },
+                now,
+                &format!("accept {n}/min"),
+            ));
+            self.set_status(nbeep_core::tf(
+                nbeep_core::Msg::StfAutoBlocked,
+                &[&ip.to_string()],
+            ));
+        }
+        if changed {
+            self.sync_ip_filter();
+            self.refresh_and_redraw();
+        }
+    }
+
+    /// 부팅(BL-1/2): 구 `blocked` 플래그(trust.seg) → 목록 Peer 축 영구 항목으로 이관(플래그는 유지 — 두 원천이 같은 값) ·
+    /// 목록의 Peer 항목 → 플래그 동기 · 만료 정리 · 전송 계층에 IP 필터 장착.
+    fn blocks_boot(&mut self) {
+        let now = unix_now_ms();
+        for e in self.blocks.purge_expired(now) {
+            if let nbeep_core::BlockAxis::Peer(p) = e.axis {
+                let _ = nbeep_core::TrustStore::unblock(&mut self.trust, p);
+            }
+        }
+        let flagged: Vec<PeerId> = self
+            .trust
+            .export()
+            .into_iter()
+            .filter(|r| r.blocked)
+            .map(|r| r.peer)
+            .collect();
+        for p in flagged {
+            if self.blocks.get(&nbeep_core::BlockAxis::Peer(p)).is_none() {
+                self.blocks.add(nbeep_core::BlockEntry::manual(
+                    nbeep_core::BlockAxis::Peer(p),
+                    now,
+                    None,
+                ));
+            }
+        }
+        let peers: Vec<PeerId> = self
+            .blocks
+            .entries()
+            .iter()
+            .filter_map(|e| match e.axis {
+                nbeep_core::BlockAxis::Peer(p) => Some(p),
+                _ => None,
+            })
+            .collect();
+        for p in peers {
+            if !nbeep_core::TrustStore::is_blocked(&self.trust, p) {
+                nbeep_core::TrustStore::block(&mut self.trust, p);
+            }
+        }
+        self.sync_ip_filter();
+        let state = std::sync::Arc::clone(&self.ip_filter);
+        self.transport
+            .set_inbound_filter(std::sync::Arc::new(move |ip, kind| {
+                let now = unix_now_ms();
+                match state.lock() {
+                    Ok(mut g) => g.check(ip, kind, now),
+                    Err(_) => false,
+                }
+            }));
+    }
+
+    /// 설정 › 고급 › 수신 제한 수동 추가 입력 적용(BL-3) — IP/CIDR(기본 24시간 · B-4) · 이름(영구 · 정규화).
+    fn apply_block_input(&mut self, purpose: NamePurpose, input: &str) {
+        use nbeep_core::{t, tf, Msg};
+        let now = unix_now_ms();
+        match purpose {
+            NamePurpose::BlockIp => match nbeep_core::BlockAxis::parse_ip(input) {
+                Some(ax) => {
+                    let v = ax.value_text();
+                    self.apply_block(nbeep_core::BlockEntry::manual(
+                        ax,
+                        now,
+                        Some(nbeep_core::block::DUR_24H_MS),
+                    ));
+                    self.set_status(tf(Msg::StfBlocked, &[&v, t(Msg::Hours24)]));
+                    self.want_block_window = true;
+                }
+                None => self.set_status(t(Msg::StBlockBadIp)),
+            },
+            NamePurpose::BlockName => match nbeep_core::BlockAxis::name(input) {
+                Some(ax) => {
+                    let v = ax.value_text();
+                    self.apply_block(nbeep_core::BlockEntry::manual(ax, now, None));
+                    self.set_status(tf(Msg::StfBlocked, &[&v, t(Msg::DurForever)]));
+                    self.want_block_window = true;
+                }
+                None => self.set_status(t(Msg::StBlockBadName)),
+            },
+            _ => {}
+        }
+        self.refresh_and_redraw();
     }
 
     /// 창 높이를 위젯이 바라는 값으로(행 수 · 물리 px → 논리).
@@ -11047,6 +11433,14 @@ impl App {
     }
 
     fn start_connect(&mut self, peer: PeerId, auto: bool) {
+        if self.peer_blocked(peer) {
+            // 아웃바운드 게이트(docs/38 §3 · BL-2) — 재연결·큐 flush·수동 클릭 모두 여기로 모인다.
+            self.reconnect.remove(&peer);
+            if !auto {
+                self.set_status(nbeep_core::t(nbeep_core::Msg::StBlockedNoConnect));
+            }
+            return;
+        }
         if self.is_offline() {
             // 내 상태 = 오프라인(10-19) — 연결하지 않는다(발신은 대기 큐 · 수동 클릭은 안내).
             dlog!(self, DL::Conn, DV::Decide, "start_connect", |r| r
@@ -13525,6 +13919,11 @@ impl App {
             self.identity.wrap_secret(),
         );
         self.groups = groups;
+        let (blocks, _bload) = nbeep_store::FileBlockList::open(
+            self.data_dir.join("blocks.seg"),
+            self.identity.wrap_secret(),
+        );
+        self.blocks = blocks;
         self.conversations.clear();
         self.chats.clear();
         self.single_open = None;
@@ -16311,9 +16710,17 @@ impl App {
                     self.want_log_window = true;
                     continue;
                 }
-                // 차단한 초대 보기(S4) — 행위 항목 · 창 생성은 about_to_wait.
-                "group.blocked" => {
-                    self.want_blocked_window = true;
+                // 수신 제한(docs/38 · BL-3) — 행위 항목 · 창 생성은 about_to_wait.
+                "block.list" => {
+                    self.want_block_window = true;
+                    continue;
+                }
+                "block.add_ip" => {
+                    self.want_block_prompt = Some(NamePurpose::BlockIp);
+                    continue;
+                }
+                "block.add_name" => {
+                    self.want_block_prompt = Some(NamePurpose::BlockName);
                     continue;
                 }
                 // 연결 테스트(08-22) — 행위 항목: 값 저장 없이 즉시 검증 절차.
@@ -16697,17 +17104,22 @@ impl App {
         // 창 제목·플레이스홀더 = 용도별 i18n(08-21 승격 — 공지인데 "Group" 제목,
         // "공지 내용" 한글 고정이던 것).
         let broadcast = matches!(purpose, NamePurpose::Broadcast);
+        let (win_msg, ph_msg) = match purpose {
+            NamePurpose::Broadcast => (
+                nbeep_core::Msg::WinBroadcast,
+                nbeep_core::Msg::PhBroadcastBody,
+            ),
+            NamePurpose::BlockIp => (nbeep_core::Msg::WinBlockIp, nbeep_core::Msg::PhBlockIp),
+            NamePurpose::BlockName => (nbeep_core::Msg::WinBlockName, nbeep_core::Msg::PhBlockName),
+            NamePurpose::CreateGroup(_) | NamePurpose::RenameGroup(_) => {
+                (nbeep_core::Msg::WinGroup, nbeep_core::Msg::PhGroupName)
+            }
+        };
+        let _ = broadcast;
         self.name_prompt_for = Some(purpose);
         let mut attrs = self
             .win_attrs()
-            .with_title(format!(
-                "{APP_TITLE} — {}",
-                nbeep_core::t(if broadcast {
-                    nbeep_core::Msg::WinBroadcast
-                } else {
-                    nbeep_core::Msg::WinGroup
-                })
-            ))
+            .with_title(format!("{APP_TITLE} — {}", nbeep_core::t(win_msg)))
             .with_inner_size(winit::dpi::LogicalSize::new(420.0, 150.0))
             .with_resizable(false)
             .with_window_icon(self.icon.clone());
@@ -16742,11 +17154,7 @@ impl App {
                 blinks: true,
             },
         );
-        let ph = nbeep_core::t(if broadcast {
-            nbeep_core::Msg::PhBroadcastBody // ④ — 이름이 아니라 본문 입력
-        } else {
-            nbeep_core::Msg::PhGroupName
-        });
+        let ph = nbeep_core::t(ph_msg); // ④ 공지 = 본문 · 차단 = 주소/이름 · 그 외 = 그룹 이름
         self.name_prompt = Some(nbeep_ui::TextPromptWidget::new(title, ph, initial));
         self.layout_window(id);
         self.request_redraw(id);
@@ -16763,6 +17171,13 @@ impl App {
             self.refresh_and_redraw();
             return;
         }
+        // 수신 제한 수동 추가(BL-3) — DisplayName 제약 밖(IP/CIDR · 정규화 이름).
+        if let Some(p @ (NamePurpose::BlockIp | NamePurpose::BlockName)) =
+            self.name_prompt_for.take()
+        {
+            self.apply_block_input(p, name);
+            return;
+        }
         let Ok(dn) = nbeep_core::DisplayName::parse(name) else {
             self.set_status(nbeep_core::t(nbeep_core::Msg::StGroupBadName));
             return;
@@ -16770,8 +17185,8 @@ impl App {
         match self.name_prompt_for.take() {
             Some(NamePurpose::CreateGroup(members)) => self.create_shared_group(dn, members),
             Some(NamePurpose::RenameGroup(gid)) => self.rename_shared(gid, dn),
-            // 공지는 위에서 조기 처리(본문 = DisplayName 제약 밖) — 방어적 무동작.
-            Some(NamePurpose::Broadcast) => {}
+            // 공지·차단은 위에서 조기 처리(본문 = DisplayName 제약 밖) — 방어적 무동작.
+            Some(NamePurpose::Broadcast | NamePurpose::BlockIp | NamePurpose::BlockName) => {}
             None => {}
         }
         if self.groups.write_failed() {
@@ -18310,11 +18725,18 @@ impl App {
                 }
                 self.open_group_members(gid);
             }
-            AlertCtx::InviteUnblock { uid } => {
-                if yes && self.groups.unblock_invite(uid) {
-                    self.set_status(nbeep_core::t(nbeep_core::Msg::StUnblocked));
+            AlertCtx::BlockUnblock { row } => {
+                if yes {
+                    let ok = match &row {
+                        BlockRow::Invite(uid) => self.groups.unblock_invite(*uid),
+                        BlockRow::Entry(axis) => self.remove_block(axis),
+                    };
+                    if ok {
+                        self.set_status(nbeep_core::t(nbeep_core::Msg::StUnblocked));
+                        self.refresh_and_redraw();
+                    }
                 }
-                self.want_blocked_window = true; // 목록을 새 상태로 다시 연다
+                self.want_block_window = true; // 목록을 새 상태로 다시 연다
             }
             AlertCtx::SettingsReset => {
                 if yes {
@@ -19927,6 +20349,28 @@ impl App {
                     if let Some(peer) = self.list.take_forget_request() {
                         self.forget_peer(peer);
                     }
+                    // 우클릭 ▸ 차단(BL-3 · docs/38 §6) — Peer 축 · 기간 선택.
+                    if let Some((peer, code)) = self.list.take_block_request() {
+                        let (dur, label) = match code {
+                            0 => (Some(nbeep_core::block::DUR_1H_MS), nbeep_core::Msg::Hours1),
+                            1 => (
+                                Some(nbeep_core::block::DUR_24H_MS),
+                                nbeep_core::Msg::Hours24,
+                            ),
+                            2 => (Some(nbeep_core::block::DUR_7D_MS), nbeep_core::Msg::Days7),
+                            _ => (None, nbeep_core::Msg::DurForever),
+                        };
+                        let title = self.peer_title(peer);
+                        self.apply_block(nbeep_core::BlockEntry::manual(
+                            nbeep_core::BlockAxis::Peer(peer),
+                            unix_now_ms(),
+                            dur,
+                        ));
+                        self.set_status(nbeep_core::tf(
+                            nbeep_core::Msg::StfBlocked,
+                            &[&title, nbeep_core::t(label)],
+                        ));
+                    }
                     // 그룹 행동(M5-1) — 저장소 반영·이름 모달은 여기(호스트) 몫.
                     if let Some(action) = self.list.take_group_action() {
                         self.handle_group_action(action, el);
@@ -20092,27 +20536,21 @@ impl App {
                         self.alert_view = None;
                         self.windows.remove(&id);
                         self.members_ctx = None; // 모달 닫힘 = 문맥 소거(G4)
-                        self.blocked_ctx = None;
+                        self.block_ctx = None;
                         closed_choice = Some(choice);
                     }
                 }
-                // S4 — 차단한 초대 행 클릭 = 해제 확인.
-                if let (Some(i), Some(order)) = (row, self.blocked_ctx.clone()) {
-                    if let Some(&uid) = order.get(i) {
-                        let name = self
-                            .groups
-                            .blocked_invites()
-                            .iter()
-                            .find(|b| b.uid == uid)
-                            .map(|b| b.name.clone())
-                            .unwrap_or_default();
+                // BL-3 — 수신 제한 목록 행 클릭 = 해제 확인(4축 항목 · 그룹 초대 차단 공용).
+                if let (Some(i), Some(order)) = (row, self.block_ctx.clone()) {
+                    if let Some(r) = order.get(i).cloned() {
+                        let label = self.block_row_value(&r);
                         self.open_choice(
                             el,
                             nbeep_core::t(nbeep_core::Msg::UnblockTitle),
-                            &nbeep_core::tf(nbeep_core::Msg::UnblockAsk, &[&name]),
+                            &nbeep_core::tf(nbeep_core::Msg::UnblockAskAxis, &[&label]),
                             nbeep_core::t(nbeep_core::Msg::BtnUnblock),
                             nbeep_core::t(nbeep_core::Msg::OfferCancel),
-                            AlertCtx::InviteUnblock { uid },
+                            AlertCtx::BlockUnblock { row: r },
                         );
                     }
                 }
@@ -20924,6 +21362,10 @@ impl ApplicationHandler<AppEvent> for App {
                         .rule("dedup", "seen")
                         .fail("duplicate (multi-path) — dropped"));
                     return; // 중복(다중 경로 — FR-M-9)
+                }
+                // 자동 임시 차단(docs/38 §5 · BL-4) — 같은 상대 초당 5건 × 10초 초과 = 10분 차단 · 이 메시지부터 폐기.
+                if self.note_msg_rate(peer) {
+                    return;
                 }
                 dlog!(self, DL::Chat, DV::Detail, "recv", |r| r
                     .arg("peer", peer.short())
@@ -23103,9 +23545,18 @@ impl ApplicationHandler<AppEvent> for App {
         if std::mem::take(&mut self.want_log_window) {
             self.open_log_window(el);
         }
-        if std::mem::take(&mut self.want_blocked_window) {
-            self.open_blocked_alert(el);
+        if std::mem::take(&mut self.want_block_window) {
+            self.open_block_list(el);
         }
+        if let Some(purpose) = self.want_block_prompt.take() {
+            let title = nbeep_core::t(match purpose {
+                NamePurpose::BlockIp => nbeep_core::Msg::WinBlockIp,
+                _ => nbeep_core::Msg::WinBlockName,
+            })
+            .to_string();
+            self.open_name_prompt(el, purpose, &title, "");
+        }
+        self.block_tick(); // 수신 제한 만료 정리 + 자동 IP 차단 수거(1초 페이스 내부 가드)
         self.refresh_log_view(); // 로그 창(LOG-1) — 열려 있을 때만 · 같은 일련번호 = 비용 0
         self.invite_expire_tick(false); // 초대 만료(S2 · 60초 페이스 내부 가드)
         self.decline_pending_tick(); // 거절 실행 취소 창 만료(S3)
@@ -24404,6 +24855,21 @@ impl ApplicationHandler<AppEvent> for App {
 }
 
 /// "N분 전/시간 전/일 전" — 내 기기 목록의 마지막 접속(언어 i18n · 상대 시각이라 시간대 불요).
+/// 남은 기간 표기(BL-3) — `6d 23h` · `23h 59m` · `9m` · `<1m`.
+fn remain_text(ms: u64) -> String {
+    let m = ms / 60_000;
+    let (d, h, mi) = (m / 1440, (m % 1440) / 60, m % 60);
+    if d > 0 {
+        format!("{d}d {h}h")
+    } else if h > 0 {
+        format!("{h}h {mi}m")
+    } else if mi > 0 {
+        format!("{mi}m")
+    } else {
+        "<1m".to_string()
+    }
+}
+
 fn ago_text(now_ms: u64, then_ms: u64) -> String {
     use nbeep_core::{t, tf, Msg};
     let d = now_ms.saturating_sub(then_ms) / 1000;
@@ -24871,6 +25337,9 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
     } else {
         nbeep_store::FileGroupStore::open(dir.join("groups.seg"), identity.wrap_secret())
     };
+    // 수신 제한 목록(docs/38 · BL-1) — 잠김(다른 신원·손상)이면 메모리 전용(trust.seg와 같은 fail-closed).
+    let (blocks, _block_load) =
+        nbeep_store::FileBlockList::open(dir.join("blocks.seg"), identity.wrap_secret());
     use nbeep_net::Transport as _;
 
     // 이벤트 루프·프록시 먼저 — 인바운드 수락 펌프가 프록시를 필요로 한다(M2-7).
@@ -25157,8 +25626,13 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         ack_sent_at: HashMap::new(),
         ack_lat_ms: Vec::new(),
         headless_dirty: std::cell::RefCell::new(std::collections::HashSet::new()),
-        blocked_ctx: None,
-        want_blocked_window: false,
+        blocks,
+        ip_filter: std::sync::Arc::new(std::sync::Mutex::new(IpFilterState::default())),
+        msg_rate: HashMap::new(),
+        block_expire_at: 0,
+        block_ctx: None,
+        want_block_window: false,
+        want_block_prompt: None,
         pending_reset: false,
         conversations: HashMap::new(),
         dedup: nbeep_core::DedupIndex::new(),
@@ -25387,6 +25861,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         shutdown,
     };
     app.reload_faces(); // 고정폭 등 슬롯 얼굴 초기 로드
+    app.blocks_boot(); // 수신 제한(docs/38) — 구 blocked 플래그 이관 · 만료 정리 · 전송 IP 필터 장착
     app.apply_boot_settings(); // 영속 설정 → 파생 런타임 상태(테마·정책 등 · M3-15)
     app.promote_local_groups(); // 구버전 로컬(동보) 그룹 → 그룹 대화(G4 마이그레이션)
     app.load_pii_sidecar(); // 연락처(PII) 봉인 사이드카 — cfg 구본보다 우선(08-17)

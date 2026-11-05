@@ -14,7 +14,9 @@
 //!   v4 → v6 순으로 순차 시도**한다([docs/06 §4] 폴백 사다리 취지).
 
 use crate::tcp::TcpLink;
-use crate::transport::{AddError, Caps, ConnectError, DiscoveryEvent, PeerHint, Transport};
+use crate::transport::{
+    AddError, Caps, ConnectError, DiscoveryEvent, InboundFilter, InboundKind, PeerHint, Transport,
+};
 use crate::udp::UdpDiscovery;
 use crate::wire::PacketKind;
 use nbeep_core::link::Link;
@@ -97,6 +99,27 @@ pub struct LocalDirect {
     disc: UdpDiscovery,
     /// 실제로 바인딩된 세션 수신 포트(선호 포트가 점유면 임의 폴백 — 값이 달라질 수 있다).
     tcp_port: u16,
+    /// 인바운드 IP 필터(BL-2) — accept 스레드·발견 관측 스레드가 같은 것을 본다. `None` = 전부 통과.
+    filter: FilterSlot,
+}
+
+/// 필터 슬롯 — 클로저는 `Debug`가 아니라 유무만 찍는다.
+#[derive(Clone, Default)]
+struct FilterSlot(Arc<Mutex<Option<InboundFilter>>>);
+
+impl std::fmt::Debug for FilterSlot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let set = self.0.lock().map(|g| g.is_some()).unwrap_or(false);
+        write!(f, "InboundFilter({})", if set { "set" } else { "none" })
+    }
+}
+
+/// 필터 판정 — 없으면 통과 · 잠금 오염도 통과(fail-open은 차단 기능에 한해 허용: 연결성이 우선 · 호스트 판정이 2차 방어).
+fn rejected(f: &FilterSlot, ip: std::net::IpAddr, kind: InboundKind) -> bool {
+    match f.0.lock() {
+        Ok(g) => g.as_ref().is_some_and(|f| f(ip, kind)),
+        Err(_) => false,
+    }
 }
 
 /// **세션 수신 TCP 기본 포트**(DR-19 · ADR-0006 §3-1).
@@ -158,12 +181,18 @@ impl LocalDirect {
 
         // ── 발견 관측 → DiscoveryEvent + 주소록 갱신 ──
         let addrs = Arc::new(Mutex::new(HashMap::<PeerId, PeerAddrs>::new()));
+        let filter = FilterSlot::default();
         let (disc_tx, discovery_rx) = channel();
         {
             let addrs = Arc::clone(&addrs);
+            let filter = filter.clone();
             let events = discovery.take_events();
             std::thread::spawn(move || {
                 while let Ok(o) = events.recv() {
+                    // 차단 IP의 관측은 반영 전 폐기(docs/38 B-2 · 그림자 — 응답은 udp.rs가 평소대로 낸다).
+                    if rejected(&filter, o.from.ip(), InboundKind::Discovery) {
+                        continue;
+                    }
                     let peer = o.packet.peer;
                     match o.packet.kind {
                         PacketKind::Goodbye => {
@@ -208,9 +237,19 @@ impl LocalDirect {
 
         // ── TCP 수신 → Link ──
         let (inc_tx, incoming_rx) = channel::<Box<dyn Link>>();
+        let accept_filter = filter.clone();
         std::thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(stream) = stream else { continue };
+                // IP 차단 = accept 즉시 끊기(docs/38 B-2 — Noise 핸드셰이크 비용 자체를 막는다 · 오류 회신 없음).
+                if stream
+                    .peer_addr()
+                    .ok()
+                    .is_some_and(|a| rejected(&accept_filter, a.ip(), InboundKind::Accept))
+                {
+                    drop(stream);
+                    continue;
+                }
                 crate::netmon::on_conn_in(); // 인바운드 수락 계수(횟수만)
                 let Ok(link) = TcpLink::new(stream) else {
                     continue;
@@ -227,6 +266,7 @@ impl LocalDirect {
             incoming_rx: Mutex::new(Some(incoming_rx)),
             disc: discovery,
             tcp_port,
+            filter,
         })
     }
 
@@ -323,6 +363,13 @@ impl Transport for LocalDirect {
 
     fn set_quiet(&self, quiet: bool) {
         self.disc.set_quiet(quiet);
+    }
+
+    fn set_inbound_filter(&self, filter: InboundFilter) {
+        match self.filter.0.lock() {
+            Ok(mut g) => *g = Some(filter),
+            Err(e) => *e.into_inner() = Some(filter),
+        }
     }
 }
 
