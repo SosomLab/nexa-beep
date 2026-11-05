@@ -7,6 +7,9 @@
 
 ## 2026-11-05
 
+- **(Win · main) NETMON-1 ⓑⓒ** `3a78c12` — 과다 판정 임계 3종 설정 승격(고급 › 네트워크 점검 · 0 = 끔) + 경고 줄 `top_disc`(지문 short)·`top_conn`(IP) · BL-4 계수기 재사용(새 축 없음) → [journal](journal/2026-11-05.md)
+- **(Win · main) M3-27 목록 아바타 경로 배지** `fb07279` — 연결점 왼쪽 두 번째 원(Server 점 파냄 · Internet 막대 파냄 · Local 비표시) · 원천 = 헤더 `peer_path_badge` → [journal](journal/2026-11-05.md)
+- **(Win · main) MEM-1 ①②** `2b93bfc` — 상대 아바타 2단(목록 80px 상주 · 카드 256px 열린 동안만) + 격리함 썸네일 LRU 256 · RSS 실측은 릴리스 전 perf → [journal](journal/2026-11-05.md)
 - **(Win · main) 사용자 결정 8건**(v0.8.0 뒤 후속) — MEM-1 ①② 착수 · M3-27 경로 배지 승인 · NETMON-1 ⓑ BL-4 재사용/ⓒ 임계값 설정 승격 · SEC-1 `tools/wire-scan.sh` · X-2 Transport 승격 착수 · X-6 v2 보류 · STATUS PUB-1 0.8.0 현행화 · 05 R-5·R-8 해소 반영 → [journal](journal/2026-11-05.md)
 - ★**(Win · main) v0.8.0 공개**(태그 `dca8baa` · release run 41983151018 전 12 job success · 자산 15 · brew tap `849107b` · apt 0.8.0 · winget/choco 보류 → PUB-1) · 일괄 검증 = gate rc=0 · verify 1차 2실패(scan NBH2 · ack-bench 자동 차단) → `24145dc`·`08ab835` → 10/10 · perf ≤2.3ms · startup 314/58ms · 위키 `7912064` · 설치본 0.8.0 → [journal](journal/2026-11-05.md)
 - **(Win · main) 6차 실측 결함 4건 닫음**(`e10c402` 창만 열어도 승인제가 풀리던 것 · `9c75af2` `block.first_contact` 실제 기본 on(TOGGLE_DEFAULT_OFF 누락) → 등재 + 부팅 1회 이관(`_ack` 표식 · HIDDEN_KEYS) + 감쇠 12 → 40pps(정상 다경로 15~17 오탐) · `b0a5e00` 진행률 99.2% 고착 → total까지) · 협업 = block-scenario 28(`936a6a1`) · 128MiB 진행률 1024줄 단조·got==total · throttled 0 · 설치본 `e43dceac` 이관 확인 → [journal](journal/2026-11-05.md)
