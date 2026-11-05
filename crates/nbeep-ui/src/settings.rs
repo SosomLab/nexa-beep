@@ -68,6 +68,7 @@ const HIDDEN_KEYS: &[&str] = &[
     "profile.image_recent",
     // 사용자 인증 마커(ADR-0015 · 09-06) — 값(핸들·암호)에 붙는 검증 상태. 성공 = on.
     "user.verified",
+    "block.first_contact_ack", // 미확인 발신자 격리 1회 이관 표식(11-05 — eb98bbd 기본 on 결함 · 표식 뒤의 on = 사용자 의사)
     // 서명 기기 목록 버전(ADR-0015 S2-e) — 내 기기 집합이 바뀔 때마다 +1(롤백 방지 · 단조).
     "user.list_ver",
     // 마지막 발급 발신 seq(ADR-0015 S4 · 10-10) — 따라잡기 열쇠 `(기기, seq)`가 재시작을 넘어
@@ -394,6 +395,7 @@ const TOGGLE_DEFAULT_OFF: &[&str] = &[
     "notify.preview",        // 알림 본문 표시(M3-8 — 기본 끔: 화면 공유·녹화 안전)
     "user.enabled", // 다중 기기 신원(ADR-0015 — 기본 끔: 옵트인 오버레이 S-0 · 사용자 확정 09-06)
     "notify.broadcast_mute", // 공지 받지 않기(08-21 — 기본 끔 = 공지 받음)
+    "block.first_contact", // 미확인 발신자 격리(M5-3 2차 ⓒ — 기본 끔 = 제로 컨피그 · eb98bbd가 이 표를 빠뜨려 기본 on이었다 · 11-05)
     // 원격 파일 발신 옵트인 2종(08-23 분리 — **기본 끄기** · 사용자 확정. ⚠08-23
     // 실기 발각: 여기 없으면 Toggle 기본 on이라 켜진 채 나갔다).
     "xfer.remote_files_server",

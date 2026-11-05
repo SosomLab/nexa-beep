@@ -3519,7 +3519,10 @@ const XFER_ACK_MAX_MS: u64 = 100;
 const ACCEPT_PER_MIN: usize = 30;
 /// 발견 광고 폭주 판정(docs/38 §5 · M5-3 2차) — 같은 상대의 광고가 1초에 이 수를 넘으면(정상 주기 800ms ≈ 1.25pps의 10배) **감쇠**:
 /// 차단이 아니라 목록 반영을 [`DISC_THROTTLE_MS`]마다 한 번으로 늦춘다(목록은 유지 · 재조립 폭주만 막는다).
-const DISC_FLOOD_PPS: usize = 12;
+// ★ 11-05 협업 실측: 정상 상대도 인터페이스 수 × (멀티캐스트+브로드캐스트+v6) 경로로 같은 광고가 여러 장 도착해 루프백에서 15~17pps —
+//   12는 오탐(상시 감쇠). 경로 묶음이 앱 층에선 한 관측(SourceId 0)이라 pps로 경로 수를 알 수 없어 상한을 40으로(정상 최대 ≈ 6경로 × 1.25 ≈ 8의
+//   5배 · 진짜 폭주는 수백 pps).
+const DISC_FLOOD_PPS: usize = 40;
 const DISC_THROTTLE_MS: u64 = 500;
 /// 같은 상대 메시지 상한 — 초당 5건 × 10초 창(docs/38 §5) — 초과 = Peer 임시 차단 10분.
 const MSG_BURST_WINDOW_MS: u64 = 10_000;
@@ -10367,6 +10370,14 @@ impl App {
     /// 목록의 Peer 항목 → 플래그 동기 · 만료 정리 · 전송 계층에 IP 필터 장착.
     fn blocks_boot(&mut self) {
         let now = unix_now_ms();
+        // ★ 1회 이관(11-05): eb98bbd(기본 on 결함)가 켜 둔 `block.first_contact=on`을 끈다 — 사용자가 고른 값이 아니다. 표식 뒤의 on은 사용자 의사.
+        if self.settings.get("block.first_contact_ack") != "on" {
+            if self.settings.get("block.first_contact") == "on" {
+                self.settings.set("block.first_contact", "off".to_string());
+            }
+            self.settings
+                .set("block.first_contact_ack", "on".to_string());
+        }
         for e in self.blocks.purge_expired(now) {
             if let nbeep_core::BlockAxis::Peer(p) = e.axis {
                 let _ = nbeep_core::TrustStore::unblock(&mut self.trust, p);
