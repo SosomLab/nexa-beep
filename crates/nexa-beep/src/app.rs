@@ -3437,6 +3437,16 @@ enum BlockRow {
     Invite(nbeep_core::GroupUid),
 }
 
+/// 수신 요청 대기 메시지(M5-3 2차 ⓒ) — 미확인 발신자의 메시지를 표시 전에 붙들어 둔다(수락 = 그대로 재처리 · 무시 = 폐기).
+struct HeldMsg {
+    text: nbeep_core::SafeText,
+    seq: u64,
+    sender: PeerId,
+    importance: u8,
+    broadcast: bool,
+    reply: Option<nbeep_core::ReplyRef>,
+}
+
 /// 같은 IP의 인바운드 accept 상한(분당 · docs/38 §5) — 초과 = IP 임시 차단 10분.
 const ACCEPT_PER_MIN: usize = 30;
 /// 발견 광고 폭주 판정(docs/38 §5 · M5-3 2차) — 같은 상대의 광고가 1초에 이 수를 넘으면(정상 주기 800ms ≈ 1.25pps의 10배) **감쇠**:
@@ -3522,6 +3532,8 @@ enum AlertCtx {
     },
     /// 수신 제한 해제 확인(BL-3 · 목록 창 행 클릭) — 4축 항목 또는 그룹 초대 차단(S4).
     BlockUnblock { row: BlockRow },
+    /// 수신 요청(M5-3 2차 ⓒ) — 예 = 수락(대기분 표시) · 아니오 = 무시(폐기) · `block`(체크박스) = 아니오 + 영구 차단.
+    FirstContact { peer: PeerId, block: bool },
     /// 상대가 차단한(재초대 불가) 거절 메모 — 긍정 = 기록 지우기(S4).
     GroupForget {
         gid: nbeep_core::group::GroupId,
@@ -4266,6 +4278,10 @@ struct App {
     want_block_window: bool,
     /// IP/이름 수동 추가 입력 대기(설정 Action → 텍스트 모달 · 창 생성은 about_to_wait).
     want_block_prompt: Option<NamePurpose>,
+    /// 미확인 발신자의 대기 메시지(M5-3 2차 ⓒ · `block.first_contact`) — 수락 전까지 표시·기록·알림 없음.
+    held_first: HashMap<PeerId, Vec<HeldMsg>>,
+    /// 수신 요청 카드 열기 대기(창 생성은 about_to_wait).
+    want_first_card: Option<PeerId>,
     /// 설정 초기화 확인 대기(08-15 · 고급 — 확인 모달은 about_to_wait에서 연다).
     pending_reset: bool,
     /// IME 중재 상태기계(M3-1e G3 — [`crate::ime_gate`]): 조합 게이트·보류-판정·
@@ -7780,6 +7796,21 @@ impl App {
                 None if step == "group.accept" => self.script_group_accept(), // 값 없는 동사(11-04)
                 None if step == "group.decline" => self.script_group_decline(),
                 None if step == "group.decline_hard" => self.script_group_decline_with(true),
+                None if step == "first.accept" || step == "first.ignore" => {
+                    let peers: Vec<PeerId> = self.held_first.keys().copied().collect();
+                    let yes = step == "first.accept";
+                    for p in &peers {
+                        self.apply_alert_choice(
+                            yes,
+                            AlertCtx::FirstContact {
+                                peer: *p,
+                                block: false,
+                            },
+                            el,
+                        );
+                    }
+                    eprintln!("[script] {step}: {}", peers.len());
+                }
                 None if step == "block.clear" => {
                     let axes: Vec<nbeep_core::BlockAxis> = self
                         .blocks
@@ -8070,6 +8101,10 @@ impl App {
                 b.name,
                 b.owner.short()
             );
+        }
+        // 수신 요청 대기(M5-3 2차 ⓒ) — `[dump] held_first <short> n=<건수>`.
+        for (p, v) in &self.held_first {
+            eprintln!("[dump] held_first {} n={}", p.short(), v.len());
         }
         // 수신 제한(BL-3) — `[dump] block <peer|ip|name> <값> auto=<0|1> until=<ms|0>`.
         for e in self.blocks.entries() {
@@ -9813,6 +9848,182 @@ impl App {
 
     // ───────────────────────── 수신 제한(docs/38 · BL-2~4) ─────────────────────────
 
+    /// 1:1 메시지 도착 처리(종전 `AppEvent::Recv` 팔 본체 · M5-3 2차 ⓒ에서 메서드로) — `accepted` = 수신 요청 카드에서 수락돼
+    /// 다시 들어온 대기분(dedup·격리 게이트를 건너뛴다 · 도착 때 이미 한 번 통과했다).
+    #[allow(clippy::too_many_arguments)]
+    fn on_recv(
+        &mut self,
+        peer: PeerId,
+        text: nbeep_core::SafeText,
+        seq: u64,
+        sender: PeerId,
+        importance: u8,
+        broadcast: bool,
+        reply: Option<nbeep_core::ReplyRef>,
+        accepted: bool,
+    ) {
+        if !accepted && !self.dedup.accept(sender, seq) {
+            dlog!(self, DL::Chat, DV::Trace, "recv", |r| r
+                .arg("peer", peer.short())
+                .arg("sender", sender.short())
+                .arg("seq", seq)
+                .rule("dedup", "seen")
+                .fail("duplicate (multi-path) — dropped"));
+            return; // 중복(다중 경로 — FR-M-9)
+        }
+        // 자동 임시 차단(docs/38 §5 · BL-4) — 같은 상대 초당 5건 × 10초 초과 = 10분 차단 · 이 메시지부터 폐기.
+        if self.note_msg_rate(peer) {
+            return;
+        }
+        // ★ 미확인 발신자 격리(M5-3 2차 ⓒ · docs/38 §7 FirstContact 승인제): 대화한 적 없는 상대의 메시지는 표시·기록·알림 전에
+        //   붙들고 '수신 요청' 카드로 묻는다. 수락 = 여기로 다시 들어온다(`accepted` · dedup 재검사 없음) · 무시 = 폐기(그림자).
+        if !accepted && self.first_contact_gated(peer) {
+            let title = self.peer_title(peer);
+            let first = !self.held_first.contains_key(&peer);
+            self.held_first.entry(peer).or_default().push(HeldMsg {
+                text,
+                seq,
+                sender,
+                importance,
+                broadcast,
+                reply,
+            });
+            if first {
+                self.want_first_card = Some(peer);
+            }
+            self.set_status(nbeep_core::tf(
+                nbeep_core::Msg::StfFirstContactHeld,
+                &[&title],
+            ));
+            return;
+        }
+        dlog!(self, DL::Chat, DV::Detail, "recv", |r| r
+            .arg("peer", peer.short())
+            .arg("sender", sender.short())
+            .arg("seq", seq)
+            .arg("chars", text.as_str().chars().count())
+            .arg("importance", importance)
+            .arg("broadcast", broadcast)
+            .rule("dedup", "new")
+            .rule(
+                "mute_broadcast",
+                broadcast && self.settings.get("notify.broadcast_mute") == "on"
+            )
+            .ok("accepted"));
+        // ★ 공지 받지 않기(08-21 사용자 확정 — 옵트아웃): 공지 표식이 선
+        //   메시지는 표시·알림·기록·전달 ack 전부 없이 버린다 — 발신자
+        //   쪽에서는 오프라인·미검증 수신자와 구분되지 않는다(그림자 무시 ·
+        //   설정 hot-swap · 무시 설정 전에 도착한 공지는 그대로 남는다).
+        if broadcast && self.settings.get("notify.broadcast_mute") == "on" {
+            return;
+        }
+        let cur = self.last_recv_seq.entry(peer).or_insert(0);
+        *cur = (*cur).max(seq); // 읽음 ack 대상(N-2 up-to)
+        self.ledger.note_recv(peer); // 왕래 장부(상호 확인)
+        self.trust.note_chat(peer, unix_now_ms()); // 최근 대화(08-15)
+        let notify_body = self.notify_body(text.as_str()); // move 전에 뜬다
+        let (at_ms, wall) = now_stamp();
+        // 발신자 표시 이름(08-19 사용자 요청 — 1:1도 수신 풍선 위에 이름).
+        let from = self.peer_title(peer);
+        let reply_from = reply.as_ref().map(|r| self.reply_from_name(r.origin));
+        let line = ChatLine::text(false, text, at_ms, wall)
+            .with_from(from)
+            .with_seq(seq) // S4 따라잡기 열쇠 = (상대 기기, 상대 seq) — ack 계층은 mine만 본다
+            .with_origin(peer)
+            .with_importance(importance) // ④ 등급 링(발신자의 요청 표시)
+            .with_reply(reply, reply_from); // ★ 답장 인용 블록(11-02)
+        if let Some(conv) = self.conversations.get_mut(&peer) {
+            conv.lines.push(line.clone());
+        }
+        self.record_history(peer); // 대화 기록 영속(M2-5b · 빌림 밖)
+                                   // ★ 수신 확인(N-2 · 사용자 요청 08-17) — **수신자가 설정으로 제어**.
+                                   //   `chat.send_delivered`가 켜져 있고, **검증된 상대**일 때만 자동
+                                   //   Delivered를 되쏜다(프라이버시: 미검증에게 "받았다/온라인"을 안
+                                   //   흘린다 — 알림 신뢰 게이트와 같은 결). 사람 확인(Acknowledged)은
+                                   //   수동 버튼(M3-9). 액터가 아니라 여기서 — 설정이 단일 원천(hot-swap).
+        {
+            let on = self.settings.get("chat.send_delivered") == "on";
+            let verified = self.effective_trust(peer) != nbeep_core::TrustLevel::Unverified;
+            if on && verified {
+                if let Some(conv) = self.conversations.get(&peer) {
+                    let ack = nbeep_core::ChatAck {
+                        target_seq: seq,
+                        kind: nbeep_core::AckKind::Delivered,
+                    };
+                    let _ = conv.out_tx.send(SessionCmd::Control(vec![ack.encode()]));
+                }
+            }
+        }
+        let mut inv = Invalidations::default();
+        if let Some(chat) = self.chats.get_mut(&self.view_key(peer)) {
+            chat.push_line(line, &mut inv);
+        }
+        // 읽음/안읽음 계상(③) — 뷰가 닫혀 있으면 배지·제목으로 알린다.
+        self.note_incoming(peer);
+        // OS 알림(M3-8) — 앱이 뒤에 있을 때만 · 미검증 = 무음(DR-25).
+        // ④ 등급 강도(docs/24 §3-3 근사): **미검증 = 자동 강등(종전 무음
+        // 게이트가 이긴다)** · 검증·핀 상대의 Urgent = **앱이 앞에 있어도**
+        // 알림(force — "지금 당장"의 요청). Notice는 종전 배경 알림 그대로.
+        let silent = self.effective_trust(peer) == nbeep_core::TrustLevel::Unverified;
+        let title = self.peer_title(peer);
+        let force = importance >= 2 && !silent;
+        self.notify_user(
+            &format!("p:{}", peer.short()),
+            &title,
+            &notify_body,
+            silent,
+            force,
+            NotifyTarget::Peer(peer),
+        );
+        // 이 대화가 보이는 창을 다시 그린다.
+        self.redraw_conversation(peer);
+    }
+
+    /// 미확인 발신자인가(M5-3 2차 ⓒ) — 설정 켜짐 ∧ 대기 중이거나(대화·기록·발신 0 ∧ 최근 대화 시각 0(trust.seg 영속) ∧ 내 기기·목록 고정·수동 주소 아님).
+    /// 기록·최근 대화 시각은 재시작을 넘어 남으므로 아는 상대가 재시작 뒤 다시 격리되지 않는다.
+    fn first_contact_gated(&self, peer: PeerId) -> bool {
+        if self.held_first.contains_key(&peer) {
+            return true;
+        }
+        if self.settings.get("block.first_contact") != "on" {
+            return false;
+        }
+        let has_lines = self
+            .conversations
+            .get(&peer)
+            .is_some_and(|c| !c.lines.is_empty())
+            || self.parked_lines.get(&peer).is_some_and(|l| !l.is_empty());
+        let known = has_lines
+            || self.trust.meta(peer).1 != 0
+            || self.ledger.get(peer).sent > 0
+            || self.is_own_device(peer)
+            || self.trust.fav(peer)
+            || self.manual_addrs.contains_key(&peer);
+        !known
+    }
+
+    /// 수신 요청 카드(M5-3 2차 ⓒ) — 예 = 수락 · 아니오 = 무시 · 체크 = 이 상대 차단. 본문 = 첫 대기 메시지 발췌(80자).
+    fn open_first_card(&mut self, el: &ActiveEventLoop, peer: PeerId) {
+        let Some(held) = self.held_first.get(&peer) else {
+            return;
+        };
+        let preview: String = held
+            .first()
+            .map(|m| m.text.as_str().chars().take(80).collect())
+            .unwrap_or_default();
+        let title = self.peer_title(peer);
+        self.open_choice_ex(
+            el,
+            nbeep_core::t(nbeep_core::Msg::WinFirstContact),
+            &nbeep_core::tf(nbeep_core::Msg::FirstContactAsk, &[&title, &preview]),
+            nbeep_core::t(nbeep_core::Msg::BtnAccept),
+            nbeep_core::t(nbeep_core::Msg::BtnIgnore),
+            None,
+            Some(nbeep_core::t(nbeep_core::Msg::ChkBlockSender)),
+            AlertCtx::FirstContact { peer, block: false },
+        );
+    }
+
     /// 발견이 알린 세대가 내 세대와 다른가(M1-13 ⓒ) — 발견 테이블에 없는 상대(수동 주소·서버)는 호환으로 본다(핸드셰이크가 판정).
     fn peer_incompatible(&self, peer: PeerId) -> bool {
         self.table.get(peer).is_some_and(|e| !e.compatible())
@@ -9936,6 +10147,7 @@ impl App {
         self.table.forget(peer);
         self.msg_rate.remove(&peer);
         self.disc_rate.remove(&peer);
+        self.held_first.remove(&peer);
     }
 
     /// 전송 계층 핫 필터에 IP 규칙 스냅샷을 덮는다(목록이 바뀔 때마다 · 소켓 스레드는 이 스냅샷만 본다).
@@ -18985,6 +19197,41 @@ impl App {
                 }
                 self.open_group_members(gid);
             }
+            AlertCtx::FirstContact { peer, block } => {
+                let held = self.held_first.remove(&peer).unwrap_or_default();
+                let title = self.peer_title(peer);
+                if yes {
+                    let n = held.len();
+                    for m in held {
+                        self.on_recv(
+                            peer,
+                            m.text,
+                            m.seq,
+                            m.sender,
+                            m.importance,
+                            m.broadcast,
+                            m.reply,
+                            true,
+                        );
+                    }
+                    self.set_status(nbeep_core::tf(
+                        nbeep_core::Msg::StfFirstContactAccepted,
+                        &[&title, &n.to_string()],
+                    ));
+                } else if block {
+                    self.apply_block(nbeep_core::BlockEntry::manual(
+                        nbeep_core::BlockAxis::Peer(peer),
+                        unix_now_ms(),
+                        None,
+                    ));
+                    self.set_status(nbeep_core::tf(
+                        nbeep_core::Msg::StfBlocked,
+                        &[&title, nbeep_core::t(nbeep_core::Msg::DurForever)],
+                    ));
+                }
+                // 무시 = 그림자 폐기(상대는 모른다) — 다음 메시지는 다시 카드로.
+                self.refresh_and_redraw();
+            }
             AlertCtx::BlockUnblock { row } => {
                 if yes {
                     let ok = match &row {
@@ -20901,6 +21148,9 @@ impl App {
                         if let AlertCtx::GroupInvite { hard, .. } = &mut ctx {
                             *hard = checked && !yes;
                         }
+                        if let AlertCtx::FirstContact { block, .. } = &mut ctx {
+                            *block = checked && !yes; // 무시 + 체크 = 차단(M5-3 2차 ⓒ)
+                        }
                         self.apply_alert_choice(yes, ctx, el);
                     }
                 }
@@ -21613,101 +21863,7 @@ impl ApplicationHandler<AppEvent> for App {
                 importance,
                 broadcast,
                 reply,
-            } => {
-                if !self.dedup.accept(sender, seq) {
-                    dlog!(self, DL::Chat, DV::Trace, "recv", |r| r
-                        .arg("peer", peer.short())
-                        .arg("sender", sender.short())
-                        .arg("seq", seq)
-                        .rule("dedup", "seen")
-                        .fail("duplicate (multi-path) — dropped"));
-                    return; // 중복(다중 경로 — FR-M-9)
-                }
-                // 자동 임시 차단(docs/38 §5 · BL-4) — 같은 상대 초당 5건 × 10초 초과 = 10분 차단 · 이 메시지부터 폐기.
-                if self.note_msg_rate(peer) {
-                    return;
-                }
-                dlog!(self, DL::Chat, DV::Detail, "recv", |r| r
-                    .arg("peer", peer.short())
-                    .arg("sender", sender.short())
-                    .arg("seq", seq)
-                    .arg("chars", text.as_str().chars().count())
-                    .arg("importance", importance)
-                    .arg("broadcast", broadcast)
-                    .rule("dedup", "new")
-                    .rule(
-                        "mute_broadcast",
-                        broadcast && self.settings.get("notify.broadcast_mute") == "on"
-                    )
-                    .ok("accepted"));
-                // ★ 공지 받지 않기(08-21 사용자 확정 — 옵트아웃): 공지 표식이 선
-                //   메시지는 표시·알림·기록·전달 ack 전부 없이 버린다 — 발신자
-                //   쪽에서는 오프라인·미검증 수신자와 구분되지 않는다(그림자 무시 ·
-                //   설정 hot-swap · 무시 설정 전에 도착한 공지는 그대로 남는다).
-                if broadcast && self.settings.get("notify.broadcast_mute") == "on" {
-                    return;
-                }
-                let cur = self.last_recv_seq.entry(peer).or_insert(0);
-                *cur = (*cur).max(seq); // 읽음 ack 대상(N-2 up-to)
-                self.ledger.note_recv(peer); // 왕래 장부(상호 확인)
-                self.trust.note_chat(peer, unix_now_ms()); // 최근 대화(08-15)
-                let notify_body = self.notify_body(text.as_str()); // move 전에 뜬다
-                let (at_ms, wall) = now_stamp();
-                // 발신자 표시 이름(08-19 사용자 요청 — 1:1도 수신 풍선 위에 이름).
-                let from = self.peer_title(peer);
-                let reply_from = reply.as_ref().map(|r| self.reply_from_name(r.origin));
-                let line = ChatLine::text(false, text, at_ms, wall)
-                    .with_from(from)
-                    .with_seq(seq) // S4 따라잡기 열쇠 = (상대 기기, 상대 seq) — ack 계층은 mine만 본다
-                    .with_origin(peer)
-                    .with_importance(importance) // ④ 등급 링(발신자의 요청 표시)
-                    .with_reply(reply, reply_from); // ★ 답장 인용 블록(11-02)
-                if let Some(conv) = self.conversations.get_mut(&peer) {
-                    conv.lines.push(line.clone());
-                }
-                self.record_history(peer); // 대화 기록 영속(M2-5b · 빌림 밖)
-                                           // ★ 수신 확인(N-2 · 사용자 요청 08-17) — **수신자가 설정으로 제어**.
-                                           //   `chat.send_delivered`가 켜져 있고, **검증된 상대**일 때만 자동
-                                           //   Delivered를 되쏜다(프라이버시: 미검증에게 "받았다/온라인"을 안
-                                           //   흘린다 — 알림 신뢰 게이트와 같은 결). 사람 확인(Acknowledged)은
-                                           //   수동 버튼(M3-9). 액터가 아니라 여기서 — 설정이 단일 원천(hot-swap).
-                {
-                    let on = self.settings.get("chat.send_delivered") == "on";
-                    let verified = self.effective_trust(peer) != nbeep_core::TrustLevel::Unverified;
-                    if on && verified {
-                        if let Some(conv) = self.conversations.get(&peer) {
-                            let ack = nbeep_core::ChatAck {
-                                target_seq: seq,
-                                kind: nbeep_core::AckKind::Delivered,
-                            };
-                            let _ = conv.out_tx.send(SessionCmd::Control(vec![ack.encode()]));
-                        }
-                    }
-                }
-                let mut inv = Invalidations::default();
-                if let Some(chat) = self.chats.get_mut(&self.view_key(peer)) {
-                    chat.push_line(line, &mut inv);
-                }
-                // 읽음/안읽음 계상(③) — 뷰가 닫혀 있으면 배지·제목으로 알린다.
-                self.note_incoming(peer);
-                // OS 알림(M3-8) — 앱이 뒤에 있을 때만 · 미검증 = 무음(DR-25).
-                // ④ 등급 강도(docs/24 §3-3 근사): **미검증 = 자동 강등(종전 무음
-                // 게이트가 이긴다)** · 검증·핀 상대의 Urgent = **앱이 앞에 있어도**
-                // 알림(force — "지금 당장"의 요청). Notice는 종전 배경 알림 그대로.
-                let silent = self.effective_trust(peer) == nbeep_core::TrustLevel::Unverified;
-                let title = self.peer_title(peer);
-                let force = importance >= 2 && !silent;
-                self.notify_user(
-                    &format!("p:{}", peer.short()),
-                    &title,
-                    &notify_body,
-                    silent,
-                    force,
-                    NotifyTarget::Peer(peer),
-                );
-                // 이 대화가 보이는 창을 다시 그린다.
-                self.redraw_conversation(peer);
-            }
+            } => self.on_recv(peer, text, seq, sender, importance, broadcast, reply, false),
             AppEvent::UserProof { peer, proof } => self.on_user_proof(peer, proof),
             AppEvent::UserKeyBlob { peer, sealed } => self.on_user_key_blob(peer, &sealed),
             AppEvent::UserHello { peer, hello } => self.on_user_hello(peer, &hello),
@@ -23817,6 +23973,9 @@ impl ApplicationHandler<AppEvent> for App {
             self.open_name_prompt(el, purpose, &title, "");
         }
         self.block_tick(); // 수신 제한 만료 정리 + 자동 IP 차단 수거(1초 페이스 내부 가드)
+        if let Some(peer) = self.want_first_card.take() {
+            self.open_first_card(el, peer);
+        }
         self.refresh_log_view(); // 로그 창(LOG-1) — 열려 있을 때만 · 같은 일련번호 = 비용 0
         self.invite_expire_tick(false); // 초대 만료(S2 · 60초 페이스 내부 가드)
         self.decline_pending_tick(); // 거절 실행 취소 창 만료(S3)
@@ -25895,6 +26054,8 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         block_ctx: None,
         want_block_window: false,
         want_block_prompt: None,
+        held_first: HashMap::new(),
+        want_first_card: None,
         pending_reset: false,
         conversations: HashMap::new(),
         dedup: nbeep_core::DedupIndex::new(),

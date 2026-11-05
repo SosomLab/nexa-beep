@@ -2028,6 +2028,15 @@ pub fn registry() -> &'static [Entry] {
             ),
             key: "block.auto_minutes",
         },
+        // 미확인 발신자 격리(M5-3 2차 ⓒ · docs/38 §7 "FirstContact 승인제") — 기본 off(DR-1 제로 컨피그 · 사용자 결정 11-05 전제).
+        Entry {
+            cat: Msg::CatAdvanced,
+            sub: Some(Msg::SubBlockList),
+            label: Msg::BlockFirstContact,
+            desc: Msg::BlockFirstContactDesc,
+            kind: SettingKind::Toggle,
+            key: "block.first_contact",
+        },
         // ── 고급 › 네트워크 점검(netmon · 08-21 — 옵트인 계측 기록 · 기본 off) ──
         Entry {
             cat: Msg::CatAdvanced,
