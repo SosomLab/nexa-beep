@@ -17,7 +17,7 @@
   **현황·경과는 여기 쓰지 않는다** → [STATUS](docs/STATUS.md) · [DEVLOG](docs/DEVLOG.md) · 기능 = [MILESTONES](docs/MILESTONES.md).
   **ADR**: 0001~0012·0014·0015 ✅ Accepted / 0013 📐 Proposed(서버 모드 · 구현 v1 이후) · 번호표 = [docs/README](docs/README.md).
 
-## 2. 확정 결정 ([docs/10](docs/10-decision-record.md) **DR-1~30**, 변경 시 새 ADR/journal)
+## 2. 확정 결정 ([docs/10](docs/10-decision-record.md) **DR-1~31**, 변경 시 새 ADR/journal)
 
 | # | 결정 |
 | --- | --- |
@@ -47,6 +47,7 @@
 | DR-27 | **설정 직렬화·영속 표준** — Entry 레지스트리에 저장 태우기 · `SaveScheduler`(quiet OR max_delay) · 미지 키 보존 · 원자적 쓰기 · 종료 flush → [docs/28](docs/28-adr-0011-settings-persistence.md) ✅(D-25 확정·M3-15 구현 08-11 — `crates/nexa-conf` · 부팅 반영 포함 · `timed` 승인은 복원 안 함) |
 | **DR-29** | **UserId 사용자 관리 = 3층**(PeerId 앵커 · 무작위 UserKey 전 기기 복제·봉인 → `UserId=H(pub)` 불변 · 핸들+패스프레이즈 = 문 열쇠) · 형제 = **Noise XXpsk3** · 제3자 = 서명 기기 목록+version · 같은 사용자 = 사람 판정 전부 해제/파일 판정 유지 · 폐기 경쟁 = 정직한 충돌 → [docs/46](docs/46-adr-0015-userid-handle-passphrase.md) ✅ D-32(09-06) |
 | **DR-30** | **그룹 초대 생애주기** — 초대는 소유자 의사·거절은 피초대자 의사 · 상태(초대 대기·수락·거절)는 소유자 로컬 메모(명부 와이어 무변경) · 재초대 24h 1회(`group.reinvite_hours`) · 만료 7일(`group.invite_expire_days`) · 피초대자 3택 수락/거절/나중에 · 거절 5초 실행 취소 · hard 거절 = `DeclineV2{hard}`+`invite_block`(해제 = 설정 › 고급 › 수신 제한 목록) · 수치는 설정 › 고급에서 관리 → [docs/54](docs/54-group-invite-lifecycle.md) ✅ 11-04 |
+| **DR-31** | **winit 0.30.13 `TaskbarCreated` 교착(GAP-042) 우회 — 우리 코드만 · 포크 없음** · 창 생성 = `app.rs` `new_window` 깔때기 1곳(정적 가드) + `nbeep_plat::taskbar_guard`(comctl32 서브클래스 선처리) · 제거 조건 = winit 0.31 이후 · 출처 nexa-dir3 docs/27 → [docs/10](docs/10-decision-record.md) ✅ 11-05 |
 | DR-28 | **경로 이동·신원 연속성 — 신뢰 2축 분리** — **신원 신뢰는 키에**(이동해도 따라간다) / **경로 등급은 경로에**(통로가 바뀌면 바뀐다) · 정책은 두 축의 곱 · **경로 등급은 광고가 아니라 성립한 세션이 정한다** · 경로 수명(실패 상한·다른 키 성립 시 즉시 무효화 — R-20) · *신원이 바뀌면 시끄럽게, 경로가 바뀌면 조용히* → [docs/19 §5-1](docs/19-adr-0006-manual-endpoint.md) |
 
 ### ★ 관통 원리 — "봉투만 본다"

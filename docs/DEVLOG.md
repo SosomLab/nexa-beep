@@ -5,6 +5,10 @@
 
 ---
 
+## 2026-11-05
+
+- **(Win · main) GAP-042 이식**(`e9c32f6` — nexa-dir3 11-04 winit 0.30.13 `TaskbarCreated` 교착 우회 · `nbeep_plat::taskbar_guard` comctl32 서브클래스 선처리 · `app.rs` 창 생성 깔때기 `new_window` 1곳 + 정적 가드 · `check-imports` comctl32 · DR-31 · 제거 조건 winit 0.31) · 방화벽 억제 `firewall-allow.ps1` 실행 ✓(규칙 28건) · LAT-1 실 LAN = 사용자 실기 잔여. [journal](journal/2026-11-05.md)
+
 ## 2026-11-04
 
 - **(Win · main) LAT-1 세션 액터 송수신 분리**(`b4d723f` — 쓰기 스레드 + `Link::split_send` · 왕복 루프백 p95 **210 → 5ms** · 49 F-1 ✓ · verify.sh `--oldpeer` 10통과 0실패 · ack-bench 편입 · 실 LAN 잔여) · `tools/firewall-allow.ps1`(`c5c0798` · 사용자 1회) · CI 41807156024 success. [journal](journal/2026-11-04.md)

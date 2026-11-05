@@ -8,6 +8,7 @@
 
 | 브랜치 | 생성 | 병합(커밋) | 삭제 | 커밋수 | 작업 요약 | 상세 |
 | --- | --- | --- | --- | --- | --- | --- |
+| `fix/gap042-taskbar-guard` | 2026-11-05 | 2026-11-05 (ff) | 2026-11-05 | 3 | **GAP-042 winit 0.30.13 `TaskbarCreated` 교착 우회 이식**(nexa-dir3 docs/27 §4 · DR-31 — `nbeep_plat::taskbar_guard` + `app.rs` `new_window` 깔때기 + 정적 가드 + comctl32 화이트리스트) · firewall-allow.ps1 `${made}` 수정 · 기록 11-05 | [journal/2026-11-05](journal/2026-11-05.md) |
 | `feat/tray-badges` | 2026-10-09 | 2026-10-09 (ff) | 2026-10-09 | 12 | ★ M3-2e 트레이 배지 · 타입어헤드 결함·sql 설정 · 설정 preedit · 카드 레이아웃 · 위치 드롭다운 · P3 nexa-dlg(cherry-pick) · 라이선스 정보 카드 · docs/45(cherry-pick) · 701 green |
 | `feat/file-dialog-p3`(협업 worktree) | 2026-10-09 | 2026-10-09 (cherry-pick 77d863c·62974c6) | 2026-10-09 | 2 | docs/50 P3 — nexa-dlg 파일 대화상자 · 용도 9 · ADR-0014 정정 |
 | `feat/license-p4`(협업 worktree) | 2026-10-09 | 2026-10-09 (cherry-pick 6f91364·61daef9) | 2026-10-09 | 2 | docs/50 P4 ①② — nbeep-license · LicenseWidget |
