@@ -4273,7 +4273,7 @@ struct App {
     parked_lines: HashMap<PeerId, Vec<ChatLine>>,
     /// 격리함 썸네일 캐시(`.beepq` 경로 → 디코드 결과 · `None` = 요청 중/실패·비이미지).
     /// 채움은 워커(`Decoded(QThumb)`) — 행 재적재가 imgdec를 재호출하지 않게 한다.
-    /// ★ MEM-1 ②(11-05): 값 = (썸네일, 마지막 접근 순번) · 상한 [`QTHUMB_MAX`] — 넘치면 가장 오래
+    /// ★ MEM-1 ②(11-05): 값 = (썸네일, 마지막 접근 순번) · 상한 [`Self::QTHUMB_MAX`] — 넘치면 가장 오래
     ///   안 본 것부터 비운다(종전 무제한 — 1건 16KiB · 이미지 1,000건 = 16MB 상주). 비워진 행은
     ///   다시 보일 때 워커가 재생성(디스크 + imgdec · 보이는 행만).
     qthumbs: HashMap<String, (Option<std::rc::Rc<nbeep_ui::IconImage>>, u64)>,
