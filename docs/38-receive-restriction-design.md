@@ -96,10 +96,10 @@ struct BlockEntry { axis: BlockAxis, added_unix: u64, until_unix: Option<u64> /*
 
 | # | 내용 | 비고 |
 | --- | --- | --- |
-| BL-1 | BlockEntry 모델+봉인 영속+기존 blocked 이관 | nbeep-core + store |
-| BL-2 | 판정 배선 4지점(발견 recv·accept·핸드셰이크 후·아웃바운드 게이트) | nbeep-net/app |
-| BL-3 | UI(우클릭 차단+기간 · 설정 차단 목록 화면) | nbeep-ui/app |
-| BL-4 | 자동 임시 차단(상대별 계수기+발동+고지) | app |
-| BL-5 | 회귀(만료·이관·그림자 불변식) + 3-신원 실기 | — |
+| BL-1 | BlockEntry 모델+봉인 영속+기존 blocked 이관 | nbeep-core + store · ✅ `54df30c`(11-05 — 설계의 "trust.seg 확장" 대신 별도 sealed `blocks.seg` · 이관은 `61d331c` 부팅) |
+| BL-2 | 판정 배선 4지점(발견 recv·accept·핸드셰이크 후·아웃바운드 게이트) | nbeep-net/app · ✅ `61d331c` |
+| BL-3 | UI(우클릭 차단+기간 · 설정 차단 목록 화면) | nbeep-ui/app · ✅ `61d331c`(그룹 초대 차단 해제 통합 = DR-30 ⑤) |
+| BL-4 | 자동 임시 차단(상대별 계수기+발동+고지) | app · ✅ `61d331c`(메시지 50/10s · accept 30/min → 10분 · 발견 스로틀 미구현) |
+| BL-5 | 회귀(만료·이관·그림자 불변식) + 3-신원 실기 | 🚧 동사 `1e6a705` + `tools/block-scenario.sh` 19/19(11-05) · 잔여 = 3-신원 실기 · 2-PC IP 집행 |
 
 > 관련: [10 DR-20/28](10-decision-record.md) · [20 ADR-0007](20-adr-0007-multi-device-identity.md)(차단 = 사람 단위) · [24 ADR-0010](24-adr-0010-message-priority-notification.md)(미검증 무음 — 이 설계의 앞단) · [06 §7-1](06-network-stack.md)(netmon — 관측 짝) · [25 M5-3](25-feature-scope.md)(스팸 방어 커트라인)
