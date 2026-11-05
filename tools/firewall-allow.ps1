@@ -93,4 +93,4 @@ foreach ($path in $paths) {
     Write-Host "허용: $path"
 }
 # 알림 자체는 그대로 둔다(규칙 없는 새 경로는 여전히 묻는다 — 새 신원 폴더가 생기면 다시 실행).
-Write-Host "완료: $made건 (그룹 '$Group'). 되돌리기 = -Remove"
+Write-Host "완료: ${made}건 (그룹 '$Group'). 되돌리기 = -Remove"
