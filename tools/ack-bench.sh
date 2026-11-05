@@ -19,7 +19,9 @@ trap 'BEEP_MULTI="$M" ./tools/autostart-clean.sh -q' EXIT
 EXE=""; case "${OSTYPE:-}" in msys* | cygwin*) EXE=".exe" ;; esac
 [ -x "$BINDIR/nexa-beep$EXE" ] || { echo "❌ $BINDIR/nexa-beep 없음 — cargo build -p nexa-beep -p nbeep-imgdec"; exit 1; }
 seed() { rm -rf "$M/$1"; mkdir -p "$M/$1/data"; cp -f "$BINDIR/nexa-beep$EXE" "$BINDIR/nbeep-imgdec$EXE" "$M/$1/"
-  printf '_schema=1\nprofile.display_name=%s\nchat.window_mode=single\napp.autostart=off\nchat.send_delivered=on\n' "$2" > "$M/$1/data/settings.cfg"; }
+  # block.msg_burst=0 — 벤치는 100ms 간격 100줄(10건/초 · 10초 창 100건)이라 M5-3 자동 임시 차단(기본 50/10초 · 61d331c)에 걸린다(11-05 n=50 ✗).
+  #   지연 측정이 목적이지 폭주 방어 시험이 아니다 → 벤치 신원만 끈다(실사용 기본값 유지).
+  printf '_schema=1\nprofile.display_name=%s\nchat.window_mode=single\napp.autostart=off\nchat.send_delivered=on\nblock.msg_burst=0\n' "$2" > "$M/$1/data/settings.cfg"; }
 run() { ( cd "$M/$1" && NEXA_SCRIPT="$2" "./nexa-beep$EXE" --window --live 2> "$3" >/dev/null ) & }
 
 echo "▶ 신원 준비(새로) — $M/{ab-x,ab-y} · N=$N · 출력 $OUT"
