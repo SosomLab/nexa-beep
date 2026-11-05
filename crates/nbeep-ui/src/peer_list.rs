@@ -117,6 +117,11 @@ pub struct PeerRow {
     pub avatar: Option<std::rc::Rc<crate::theme::IconImage>>,
     /// 아바타 보더 색(08-14 — 상대가 공개한 값 · 검증 통과분). 소형 표시라 2px.
     pub border: Option<(u8, u8, u8)>,
+    /// 경로 배지(M3-27 · 08-22 설계안 · 11-05 사용자 승인) — 연결점 **왼쪽 같은 지름 두 번째 원**:
+    /// `Server` = accent 찬 원 + 점 파냄 / `Internet` = warn 찬 원 + 가로 막대 파냄 / `None` = 비표시.
+    /// 원천은 헤더 배지와 같은 `peer_path_badge`(항상 일치). LAN 밖 상대(DR-19 — 위협 모델이 다르다)를
+    /// 목록에서 바로 가려낸다.
+    pub path: crate::chat_view::PathBadge,
     /// 읽지 않은 수신 메시지 수(③ 08-13) — 0이면 배지 없음.
     pub unread: u32,
     /// 마지막으로 대화를 확인한 시각 라벨(③ — `unread > 0`일 때만 Some · 배지 왼쪽에 흐리게).
@@ -348,6 +353,48 @@ pub fn link_color(theme: &Theme, link: LinkState) -> Color {
 /// `online` = 프레즌스 색 축(08-23 사용자 확정 — roster·LAN 생존 상대가 세션이
 /// 없다고 회색이면 "온라인 아님"으로 읽힌다): **색 = 지금 닿는가 · 실루엣 =
 /// 세션 유무**. Idle인데 온라인이면 초록 빈 링.
+/// 경로 배지(M3-27 · [docs/14 §12] 파냄 문법 연장 · 11-05 승인): `Server` = accent 찬 원 + **가운데 점**
+/// 파냄 / `Internet` = warn 찬 원 + **가로 막대** 파냄 / `None` = 그리지 않음. 색+기하 이중 구분(색각 안전) ·
+/// 자산 0 · 기하는 지름 비율 고정(점 0.36D · 막대 0.56×0.19D — 연결점 `Lost`와 같은 막대라 "끊김"과
+/// 헷갈리지 않게 색이 다르고(warn vs danger) 위치가 다르다(왼쪽 원)).
+pub fn draw_path_badge(
+    ctx: &mut dyn DrawCtx,
+    dot: Rect,
+    theme: &Theme,
+    path: crate::chat_view::PathBadge,
+) {
+    use crate::chat_view::PathBadge;
+    let (color, bar) = match path {
+        PathBadge::None => return,
+        PathBadge::Server => (theme.accent, false),
+        PathBadge::Internet => (theme.warn, true),
+    };
+    let back = Rect::new(dot.x - 1, dot.y - 1, dot.w + 2, dot.h + 2);
+    ctx.fill_ellipse(back, theme.panel_bg);
+    ctx.fill_ellipse(dot, color);
+    let d = dot.w.min(dot.h) as f32;
+    if bar {
+        let bw = ((d * 0.56).round() as i32).max(3);
+        let bh = ((d * 0.19).round() as i32).max(2);
+        ctx.fill_round_rect(
+            Rect::new(dot.x + (dot.w - bw) / 2, dot.y + (dot.h - bh) / 2, bw, bh),
+            (d * 0.09).round() as i32,
+            theme.panel_bg,
+        );
+    } else {
+        let hole = ((d * 0.36).round() as i32).max(2);
+        ctx.fill_ellipse(
+            Rect::new(
+                dot.x + (dot.w - hole) / 2,
+                dot.y + (dot.h - hole) / 2,
+                hole,
+                hole,
+            ),
+            theme.panel_bg,
+        );
+    }
+}
+
 pub fn draw_link_badge(
     ctx: &mut dyn DrawCtx,
     dot: Rect,
@@ -1670,6 +1717,11 @@ impl Widget for PeerListWidget {
                 self.badge_shape,
                 self.spin_step.get(),
             );
+            // 경로 배지(M3-27) — 연결점 왼쪽에 같은 지름 두 번째 원(Local은 조용히 · 그리지 않음).
+            if !matches!(row.path, crate::chat_view::PathBadge::None) {
+                let pb = Rect::new(dot.x - dot_d - self.s(2), dot.y, dot_d, dot_d);
+                draw_path_badge(ctx, pb, theme, row.path);
+            }
 
             // 1줄: **표시 이름 — 굵게**(08-17 사용자 확정): 프로필 이름이 있으면
             // 그것, 없으면 발견 기본(beep-xxxx). 신원은 여전히 키 지문(카드가 보인다).
@@ -1906,6 +1958,7 @@ mod tests {
             bio: None,
             avatar: None,
             border: None,
+            path: crate::chat_view::PathBadge::None,
             unread: 0,
             last_read: None,
             fav: false,

@@ -7437,6 +7437,8 @@ impl App {
                 let own_device =
                     self.siblings.contains(&entry.peer) || known_devices.contains(&entry.peer); // = is_own_device (09-26)
                 let compatible = entry.compatible(); // M1-13 ⓒ — 아래 literal로 entry가 이동하기 전에
+                                                     // 경로 배지(M3-27) — 헤더와 같은 원천(성립한 세션의 경로 등급 · DR-28 "광고가 아니라 세션이 정한다").
+                let path = self.peer_path_badge(entry.peer);
                 PeerRow {
                     entry,
                     trust,
@@ -7452,6 +7454,7 @@ impl App {
                     },
                     avatar,
                     border,
+                    path,
                     unread,
                     last_read,
                     fav,
