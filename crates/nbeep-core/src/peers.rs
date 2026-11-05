@@ -20,6 +20,13 @@ use crate::name::DisplayName;
 use crate::ports::MonoInstant;
 use std::collections::{BTreeSet, HashMap};
 
+/// ★ 세션 세대(M1-13 ⓒ · 11-05) — 발견 `flags` 하위 4비트에 실린다. **핸드셰이크·멀티플렉스가 호환되지 않게 바뀔 때만**
+/// 올린다(지금 1 = Noise XX/XXpsk3 + mux v1). 다른 세대의 상대는 목록에서 **제외가 아니라 "버전 불일치"로 표시**된다
+/// (조용한 비호환 금지). 0 = 세대 비트가 없던 구버전 광고 = 1세대로 본다.
+pub const SESSION_GEN: u8 = 1;
+/// 미래 와이어 버전의 상대 — 헌법 접두(매직·버전·키)만 읽혀 세대를 모른다 = 비호환으로 표시.
+pub const FOREIGN_GEN: u8 = 0xFF;
+
 /// 관측 경로 토큰 — "어느 인터페이스/발견 단계에서 봤나". 내용은 전송 어댑터만 안다(불투명).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SourceId(pub u32);
@@ -53,11 +60,22 @@ pub struct PeerEntry {
     pub name: DisplayName,
     /// 현재 살아 있는 관측 경로 수(다중 경로 병합의 가시화 — 진단용).
     pub paths: usize,
+    /// 상대가 광고한 세션 세대([`SESSION_GEN`] · 0 = 구버전 광고 · [`FOREIGN_GEN`] = 미래 와이어).
+    pub gen: u8,
+}
+
+impl PeerEntry {
+    /// 이 상대와 세션을 맺을 수 있는가(M1-13 ⓒ) — 같은 세대(또는 세대 비트 없는 구버전).
+    #[must_use]
+    pub fn compatible(&self) -> bool {
+        self.gen == 0 || self.gen == SESSION_GEN
+    }
 }
 
 #[derive(Debug)]
 struct Entry {
     name: DisplayName,
+    gen: u8,
     sources: BTreeSet<SourceId>,
     last_seen: MonoInstant,
 }
@@ -89,11 +107,24 @@ impl PeerTable {
         source: SourceId,
         now: MonoInstant,
     ) -> Option<PeerEvent> {
+        self.observe_gen(peer, name, 0, source, now)
+    }
+
+    /// 세대 비트를 동반한 관측(M1-13 ⓒ) — 세대가 바뀌면(업데이트) 이름 변경과 같이 `Renamed`로 행을 다시 그린다.
+    pub fn observe_gen(
+        &mut self,
+        peer: PeerId,
+        name: DisplayName,
+        gen: u8,
+        source: SourceId,
+        now: MonoInstant,
+    ) -> Option<PeerEvent> {
         if let Some(e) = self.entries.get_mut(&peer) {
             e.sources.insert(source);
             e.last_seen = now;
-            if e.name != name {
+            if e.name != name || e.gen != gen {
                 e.name = name;
+                e.gen = gen;
                 return Some(PeerEvent::Renamed(peer));
             }
             return None;
@@ -102,6 +133,7 @@ impl PeerTable {
             peer,
             Entry {
                 name,
+                gen,
                 sources: BTreeSet::from([source]),
                 last_seen: now,
             },
@@ -155,6 +187,7 @@ impl PeerTable {
                 peer,
                 name: e.name.clone(),
                 paths: e.sources.len(),
+                gen: e.gen,
             })
             .collect();
         v.sort_by(|a, b| {
@@ -170,6 +203,7 @@ impl PeerTable {
     #[must_use]
     pub fn get(&self, peer: PeerId) -> Option<PeerEntry> {
         self.entries.get(&peer).map(|e| PeerEntry {
+            gen: e.gen,
             peer,
             name: e.name.clone(),
             paths: e.sources.len(),
@@ -297,5 +331,35 @@ mod tests {
         let list = t.list();
         let names: Vec<&str> = list.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(names, vec!["alice", "bob", "carol"]);
+    }
+    /// M1-13 ⓒ — 세대 비트: 없음(0)·같음(1) = 호환, 다른 세대·미래 와이어 = 비호환으로 **표시**(행은 남는다 · 제외 아님).
+    #[test]
+    fn generation_marks_incompatible_but_keeps_row() {
+        let mut t = PeerTable::new(60_000);
+        assert_eq!(
+            t.observe_gen(pid(1), name("old"), 0, SourceId(0), at(0)),
+            Some(PeerEvent::Appeared(pid(1)))
+        );
+        assert!(t.get(pid(1)).unwrap().compatible(), "구버전 광고 = 호환");
+        t.observe_gen(pid(2), name("same"), SESSION_GEN, SourceId(0), at(0));
+        assert!(t.get(pid(2)).unwrap().compatible());
+        t.observe_gen(pid(3), name("future"), SESSION_GEN + 1, SourceId(0), at(0));
+        assert!(
+            !t.get(pid(3)).unwrap().compatible(),
+            "다른 세대 = 비호환 표시"
+        );
+        t.observe_gen(pid(4), name("v9"), FOREIGN_GEN, SourceId(0), at(0));
+        assert!(!t.get(pid(4)).unwrap().compatible());
+        assert_eq!(
+            t.list().len(),
+            4,
+            "비호환도 목록에 남는다(조용한 비호환 금지)"
+        );
+        // 세대가 바뀌면(업데이트) 행 갱신 이벤트.
+        assert_eq!(
+            t.observe_gen(pid(3), name("future"), SESSION_GEN, SourceId(0), at(1)),
+            Some(PeerEvent::Renamed(pid(3)))
+        );
+        assert!(t.get(pid(3)).unwrap().compatible());
     }
 }

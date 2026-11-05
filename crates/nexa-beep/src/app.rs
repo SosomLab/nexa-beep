@@ -6927,7 +6927,7 @@ impl App {
                     // 상대가 광고하는 한 1.5초마다 목록 재조립·재도색이 영구다.
                     if self
                         .table
-                        .observe(hint.peer, hint.name, nbeep_core::SourceId(0), now)
+                        .observe_gen(hint.peer, hint.name, hint.gen, nbeep_core::SourceId(0), now)
                         .is_some()
                     {
                         changed = true;
@@ -7059,6 +7059,7 @@ impl App {
                     peer,
                     name: name.clone(),
                     paths: 0, // 발견 경로 없음 — 세션·수동 주소로만 닿는 상대
+                    gen: 0,
                 });
             }
         }
@@ -7071,6 +7072,7 @@ impl App {
                     peer,
                     name: nbeep_core::default_display_name(None, &peer),
                     paths: 0, // 경로 = 서버(클릭 시 사다리 — start_connect가 안다)
+                    gen: 0,
                 });
             }
         }
@@ -7268,6 +7270,7 @@ impl App {
                     || self.conversations.contains_key(&entry.peer);
                 let own_device =
                     self.siblings.contains(&entry.peer) || known_devices.contains(&entry.peer); // = is_own_device (09-26)
+                let compatible = entry.compatible(); // M1-13 ⓒ — 아래 literal로 entry가 이동하기 전에
                 PeerRow {
                     entry,
                     trust,
@@ -7275,7 +7278,12 @@ impl App {
                     online,
                     xfer,
                     profile_name,
-                    bio,
+                    // 버전 불일치(M1-13 ⓒ) — 숨기지 않고 2번째 줄에 이유를 적는다(조용한 비호환 금지).
+                    bio: if compatible {
+                        bio
+                    } else {
+                        Some(nbeep_core::t(nbeep_core::Msg::PeerIncompatible).to_string())
+                    },
                     avatar,
                     border,
                     unread,
@@ -9129,6 +9137,9 @@ impl App {
         if self.peer_blocked(peer) {
             return; // 아웃바운드 게이트(docs/38 §3) — 차단 상대에게 자동 연결을 걸지 않는다
         }
+        if self.peer_incompatible(peer) {
+            return; // 버전 불일치(M1-13 ⓒ) — 성립할 수 없는 핸드셰이크를 걸지 않는다
+        }
         let due = if self.sibling_grace(peer) {
             self.now_ms() + SIBLING_GRACE_MS
         } else {
@@ -9714,6 +9725,11 @@ impl App {
     }
 
     // ───────────────────────── 수신 제한(docs/38 · BL-2~4) ─────────────────────────
+
+    /// 발견이 알린 세대가 내 세대와 다른가(M1-13 ⓒ) — 발견 테이블에 없는 상대(수동 주소·서버)는 호환으로 본다(핸드셰이크가 판정).
+    fn peer_incompatible(&self, peer: PeerId) -> bool {
+        self.table.get(peer).is_some_and(|e| !e.compatible())
+    }
 
     /// Peer 축 판정 — trust `blocked` 플래그(핸드셰이크 판정과 같은 원천) ∨ 목록(기간부 · 만료는 게으른 판정).
     fn peer_blocked(&self, peer: PeerId) -> bool {
@@ -11451,6 +11467,14 @@ impl App {
             self.reconnect.remove(&peer);
             if !auto {
                 self.set_status(nbeep_core::t(nbeep_core::Msg::StBlockedNoConnect));
+            }
+            return;
+        }
+        if self.peer_incompatible(peer) {
+            // 버전 불일치(M1-13 ⓒ) — 목록에는 두되 연결은 걸지 않는다(수동 클릭 = 이유 고지).
+            self.reconnect.remove(&peer);
+            if !auto {
+                self.set_status(nbeep_core::t(nbeep_core::Msg::PeerIncompatible));
             }
             return;
         }

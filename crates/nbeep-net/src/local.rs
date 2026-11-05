@@ -213,17 +213,21 @@ impl LocalDirect {
                             }
                         }
                         _ => {
-                            let dest = SocketAddr::new(o.from.ip(), o.packet.tcp_port);
-                            addrs
-                                .lock()
-                                .expect("주소록 잠금")
-                                .entry(peer)
-                                .or_default()
-                                .observe(dest);
+                            // 미래 와이어 상대(M1-13 ⓒ)는 포트를 몰라 주소록에 넣지 않는다(연결 불가 · 표시만).
+                            if o.gen != nbeep_core::FOREIGN_GEN {
+                                let dest = SocketAddr::new(o.from.ip(), o.packet.tcp_port);
+                                addrs
+                                    .lock()
+                                    .expect("주소록 잠금")
+                                    .entry(peer)
+                                    .or_default()
+                                    .observe(dest);
+                            }
                             let hint = PeerHint {
                                 peer,
                                 name: o.packet.name,
                                 caps: Caps::default(),
+                                gen: o.gen,
                             };
                             // 매 관측을 전달 — 수신 측 PeerTable이 병합·생존 갱신한다(FR-D-6).
                             if disc_tx.send(DiscoveryEvent::Appeared(hint)).is_err() {

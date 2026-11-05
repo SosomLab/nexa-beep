@@ -51,6 +51,8 @@ pub struct PeerHint {
     pub name: DisplayName,
     /// 상대가 광고한 능력 플래그.
     pub caps: Caps,
+    /// 세션 세대(M1-13 ⓒ · [`nbeep_core::SESSION_GEN`]) — 0 = 구버전 광고 · [`nbeep_core::FOREIGN_GEN`] = 미래 와이어(비호환 표시).
+    pub gen: u8,
 }
 
 /// 발견 이벤트 — 등장·이탈([docs/06] FR-D-8).

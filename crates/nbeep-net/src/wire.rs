@@ -21,6 +21,14 @@ use nbeep_core::{DisplayName, PeerId};
 pub const MAGIC: [u8; 4] = *b"NXBP";
 /// 현재 와이어 버전.
 pub const WIRE_VER: u8 = 1;
+/// ★ 발신 버전 정책(M1-13 ⓑ dual-announce · 11-05) — 광고·HELLO·GOODBYE·응답은 여기 든 **모든 버전으로 한 장씩** 낸다.
+/// `WIRE_VER`를 올릴 때 `&[WIRE_VER, WIRE_VER - 1]`(N-1 하위 발신)로 바꿔 구버전 목록에도 뜨게 한다. 지금은 1판뿐.
+pub const TX_VERS: &[u8] = &[WIRE_VER];
+/// ★ 헌법 접두(M1-13 ⓐ · 영구 동결) — `[magic 4][ver 1][type 1][flags 2][static_pubkey 32]` = 40B. 어떤 버전이든 이 배치는
+/// 바꾸지 않는다(포트 47100·매직과 함께) — 그래야 미래 버전 패킷에서도 **누구인지**(키)는 읽어 "버전 불일치"로 보여 줄 수 있다.
+pub const CONST_PREFIX: usize = 4 + 1 + 1 + 2 + 32;
+/// `flags` 하위 4비트 = 세션 세대([`nbeep_core::SESSION_GEN`] · M1-13 ⓒ). 상위 비트는 능력(미배정).
+pub const FLAG_GEN_MASK: u16 = 0x000F;
 /// 패킷 상한(바이트) — 초과 인코딩은 불가능하게 만든다.
 pub const MAX_PACKET: usize = 512;
 /// 고정부 길이(name_len 포함).
@@ -82,19 +90,39 @@ pub struct Packet {
 pub enum Decoded {
     /// 유효 패킷.
     Packet(Packet),
-    /// 미래 버전·미지 종류 — 조용히 버린다.
+    /// 미지 종류 — 조용히 버린다.
     Ignore,
+    /// ★ 미래 와이어 버전(M1-13 ⓒ) — 헌법 접두만 읽혔다: 누구인지는 알되 대화는 못 한다 → 호스트가 "버전 불일치"로 표시.
+    Foreign { peer: PeerId, ver: u8 },
     /// 우리 프로토콜이 아니거나 손상 — 버린다(로그 대상).
     Invalid,
 }
 
 impl Packet {
-    /// 인코딩. `name`은 UTF-8 255B까지 잘라 담고, 전체가 [`MAX_PACKET`]을 넘지 않는다.
+    /// 세션 세대(`flags` 하위 4비트).
+    #[must_use]
+    pub fn gen(&self) -> u8 {
+        (self.flags & FLAG_GEN_MASK) as u8
+    }
+
+    /// 인코딩(현재 버전). `name`은 UTF-8 255B까지 잘라 담고, 전체가 [`MAX_PACKET`]을 넘지 않는다.
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
+        self.encode_ver(WIRE_VER)
+    }
+
+    /// 발신 정책대로 **버전마다 한 장씩**([`TX_VERS`] · M1-13 ⓑ).
+    #[must_use]
+    pub fn encode_all(&self) -> Vec<Vec<u8>> {
+        TX_VERS.iter().map(|v| self.encode_ver(*v)).collect()
+    }
+
+    /// 지정 버전으로 인코딩 — 지금은 배치가 한 가지라 버전 바이트만 다르다(판이 갈리면 여기서 분기).
+    #[must_use]
+    pub fn encode_ver(&self, ver: u8) -> Vec<u8> {
         let mut out = Vec::with_capacity(FIXED + 64);
         out.extend_from_slice(&MAGIC);
-        out.push(WIRE_VER);
+        out.push(ver);
         out.push(self.kind as u8);
         out.extend_from_slice(&self.flags.to_be_bytes());
         out.extend_from_slice(self.peer.as_bytes());
@@ -114,14 +142,23 @@ impl Packet {
         out
     }
 
-    /// 해석. 손상 = [`Decoded::Invalid`], 미래 버전·미지 종류 = [`Decoded::Ignore`].
+    /// 해석. 손상 = [`Decoded::Invalid`], 미래 버전 = [`Decoded::Foreign`](헌법 접두에서 키만) · 미지 종류 = [`Decoded::Ignore`].
     #[must_use]
     pub fn decode(bytes: &[u8]) -> Decoded {
-        if bytes.len() < FIXED || bytes.len() > MAX_PACKET || bytes[..4] != MAGIC {
+        if bytes.len() < CONST_PREFIX || bytes.len() > MAX_PACKET || bytes[..4] != MAGIC {
             return Decoded::Invalid;
         }
         if bytes[4] != WIRE_VER {
-            return Decoded::Ignore; // 미래 버전 — 무시(docs/08 §2)
+            // 미래 버전(M1-13 ⓒ) — 종전 "조용히 무시"는 신·구버전을 서로 투명 인간으로 만들었다. 헌법 접두의 키로 존재만 알린다.
+            let mut pk = [0u8; 32];
+            pk.copy_from_slice(&bytes[8..40]);
+            return Decoded::Foreign {
+                peer: PeerId::from_bytes(pk),
+                ver: bytes[4],
+            };
+        }
+        if bytes.len() < FIXED {
+            return Decoded::Invalid;
         }
         let Some(kind) = PacketKind::from_byte(bytes[5]) else {
             return Decoded::Ignore; // 미지 종류 — 무시(같은 전방 호환 규약)
@@ -312,8 +349,23 @@ mod tests {
         future_ver[4] = 9;
         assert_eq!(
             Packet::decode(&future_ver),
-            Decoded::Ignore,
-            "미래 버전 무시"
+            Decoded::Foreign {
+                peer: pid(0xAB),
+                ver: 9
+            },
+            "미래 버전 = 존재(키)만(M1-13 ⓒ)"
+        );
+        assert_eq!(
+            Packet::decode(&future_ver[..CONST_PREFIX]),
+            Decoded::Foreign {
+                peer: pid(0xAB),
+                ver: 9
+            },
+            "헌법 접두 40B만 와도 읽힌다"
+        );
+        assert_eq!(
+            Packet::decode(&future_ver[..CONST_PREFIX - 1]),
+            Decoded::Invalid
         );
         let mut future_kind = packet().encode();
         future_kind[5] = 200;
@@ -383,5 +435,35 @@ mod tests {
             !w2.observe(pid(2), b, at(20_000)),
             "창 밖 = 재시작으로 간주"
         );
+    }
+    /// M1-13 ⓐ 헌법 — 매직·포트·접두 배치는 영구 동결(바꾸면 다른 제품). 이 시험이 깨지면 그 변경은 되돌린다.
+    #[test]
+    fn constitution_is_frozen() {
+        assert_eq!(MAGIC, *b"NXBP");
+        assert_eq!(crate::udp::DISCOVERY_PORT, 47_100);
+        assert_eq!(CONST_PREFIX, 40);
+        let b = packet().encode();
+        assert_eq!(&b[..4], b"NXBP");
+        assert_eq!(b[4], WIRE_VER);
+        assert_eq!(b[5], PacketKind::Announce as u8);
+        assert_eq!(u16::from_be_bytes([b[6], b[7]]), 0x0003);
+        assert_eq!(&b[8..40], pid(0xAB).as_bytes());
+    }
+
+    /// M1-13 ⓑ 발신 버전 정책 — 현재 판은 항상 들어 있고, 2판 이상이면 바로 아래 판(N-1)도 함께 낸다.
+    #[test]
+    fn tx_versions_policy_and_gen_bits() {
+        assert!(TX_VERS.contains(&WIRE_VER));
+        if WIRE_VER > 1 {
+            assert!(TX_VERS.contains(&(WIRE_VER - 1)), "N-1 하위 발신");
+        }
+        assert_eq!(packet().encode_all().len(), TX_VERS.len());
+        let mut p = packet();
+        p.flags = 0xFFF0 | u16::from(nbeep_core::SESSION_GEN);
+        assert_eq!(p.gen(), nbeep_core::SESSION_GEN);
+        let Decoded::Packet(back) = Packet::decode(&p.encode()) else {
+            panic!("decode");
+        };
+        assert_eq!(back.gen(), nbeep_core::SESSION_GEN);
     }
 }

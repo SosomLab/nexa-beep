@@ -73,7 +73,9 @@ pub use linkwatch::{Debouncer, LinkEvent};
 pub use mux::{MuxSession, StreamId, MAX_PAYLOAD};
 pub use name::{default_display_name, neutral_from_host, DisplayName, NameError};
 pub use path::{class_of_ip, file_allowed, PathClass};
-pub use peers::{DepartReason, PeerEntry, PeerEvent, PeerTable, SourceId};
+pub use peers::{
+    DepartReason, PeerEntry, PeerEvent, PeerTable, SourceId, FOREIGN_GEN, SESSION_GEN,
+};
 pub use pipeline::{ActionCtx, ActionId, Interceptor, Pipeline, Reject};
 pub use ports::{
     Actor, Clock, FileScanner, Meter, MeterEvent, MonoInstant, NoScanner, Quantity, Rng, Tracer,

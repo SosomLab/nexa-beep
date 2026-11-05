@@ -51,7 +51,12 @@ impl InMemoryBus {
     ) -> InMemoryTransport {
         let (disc_tx, disc_rx) = channel();
         let (inc_tx, inc_rx) = channel();
-        let hint = PeerHint { peer, name, caps };
+        let hint = PeerHint {
+            peer,
+            name,
+            caps,
+            gen: nbeep_core::SESSION_GEN,
+        };
 
         {
             let mut nodes = self.nodes.lock().unwrap();

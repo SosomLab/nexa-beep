@@ -1896,6 +1896,7 @@ mod tests {
                 peer: pid(b),
                 name: DisplayName::parse(name).unwrap(),
                 paths: 1,
+                gen: 0,
             },
             trust,
             link: LinkState::Idle,

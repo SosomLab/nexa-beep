@@ -1300,6 +1300,8 @@ pub enum Msg {
     PhBlockName,
     UnblockAskAxis,
     StBlockedNoConnect,
+    /// 발견 호환성(M1-13 ⓒ · 11-05) — 세대/버전 불일치 상대의 2번째 줄·상태바.
+    PeerIncompatible,
     /// 차단한 초대(S4 · DR-30) — 설정 Action · 목록 창 · 해제.
     BlockedInvites,
     BlockedInvitesDesc,
@@ -1941,6 +1943,12 @@ impl Msg {
             Msg::PhBlockIp => ["192.168.0.7 or 10.0.0.0/8", "192.168.0.7 또는 10.0.0.0/8", "192.168.0.7 或 10.0.0.0/8", "192.168.0.7 または 10.0.0.0/8"],
             Msg::PhBlockName => ["Display name (exact match)", "표시 이름(정확 일치)", "名称（完全匹配）", "表示名（完全一致）"],
             Msg::UnblockAskAxis => ["Unblock '{}'?", "'{}' 차단을 해제할까요?", "解除对 '{}' 的屏蔽？", "'{}' のブロックを解除しますか？"],
+            Msg::PeerIncompatible => [
+                "Version mismatch — can't chat until one side updates",
+                "버전 불일치 — 한쪽을 업데이트해야 대화할 수 있습니다",
+                "版本不匹配 — 需一方更新后才能聊天",
+                "バージョン不一致 — 片方を更新するまでチャットできません",
+            ],
             Msg::StBlockedNoConnect => ["This peer is blocked — unblock in Settings › Advanced › Receive restrictions", "차단한 상대입니다 — 설정 › 고급 › 수신 제한에서 해제", "该对方已被屏蔽 — 在设置 › 高级 › 接收限制中解除", "ブロック中の相手です — 設定 › 詳細 › 受信制限で解除"],
             Msg::BlockedInvites => ["Blocked invites…", "차단한 초대 보기…", "已屏蔽的邀请…", "ブロックした招待…"],
             Msg::BlockedInvitesDesc => [

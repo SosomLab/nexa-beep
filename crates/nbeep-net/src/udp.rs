@@ -48,6 +48,8 @@ pub struct Observation {
     pub packet: Packet,
     /// 발신 소켓 주소(세션 연결의 주소 힌트 — 신원 아님).
     pub from: SocketAddr,
+    /// 세션 세대(M1-13 ⓒ) — 패킷 `flags` 하위 4비트 · 미래 와이어 = [`nbeep_core::FOREIGN_GEN`].
+    pub gen: u8,
 }
 
 /// S2 발견 노드 — 주기 광고 + 수신. 드롭 시 GOODBYE.
@@ -126,7 +128,7 @@ impl UdpDiscovery {
 
         let template = Arc::new(std::sync::Mutex::new(Packet {
             kind: PacketKind::Announce,
-            flags: 0,
+            flags: u16::from(nbeep_core::SESSION_GEN), // 세대 비트(M1-13 ⓒ)
             peer: me,
             tcp_port,
             epoch,
@@ -218,10 +220,9 @@ impl UdpDiscovery {
             p.kind = PacketKind::Hello;
             p.seq = self.seq.fetch_add(1, Ordering::Relaxed);
             p
-        }
-        .encode();
-        Self::send_all(&self.send_sock, None, &hello);
-        Self::send_s4(&self.send_sock, &hello);
+        };
+        Self::send_pkt(&self.send_sock, None, &hello);
+        Self::send_s4_pkt(&self.send_sock, &hello);
     }
 
     /// 관측 수신단의 **소유권**을 가져간다(1회 — InMemory `discovery()`와 같은 계약).
@@ -272,6 +273,19 @@ impl UdpDiscovery {
     }
 
     /// S2 멀티캐스트 + S3 브로드캐스트 (+ 있으면 S1 IPv6) 동시 발신 — 하나만 통과해도 발견 성립.
+    /// 패킷을 발신 정책의 **모든 버전으로**(M1-13 ⓑ · [`crate::wire::TX_VERS`]) — 지금은 1장.
+    fn send_pkt(v4: &UdpSocket, v6: Option<&UdpSocket>, p: &Packet) {
+        for b in p.encode_all() {
+            Self::send_all(v4, v6, &b);
+        }
+    }
+
+    fn send_s4_pkt(sock: &UdpSocket, p: &Packet) {
+        for b in p.encode_all() {
+            Self::send_s4(sock, &b);
+        }
+    }
+
     fn send_all(v4: &UdpSocket, v6: Option<&UdpSocket>, bytes: &[u8]) {
         // 기본 경로 발신(종전 동작) — 인터페이스 열거가 비는 환경(Windows 폴백 등)의
         // 안전망. 멀티캐스트 IF를 바꾼 뒤에도 마지막에 기본으로 되돌린다.
@@ -326,9 +340,9 @@ impl UdpDiscovery {
                 p
             };
             // 기동 직후 HELLO(응답 유도) 1회, 이후 주기 ANNOUNCE.
-            Self::send_all(&sock, v6.as_ref(), &snapshot(PacketKind::Hello).encode());
+            Self::send_pkt(&sock, v6.as_ref(), &snapshot(PacketKind::Hello));
             // ★ S4(M1-8) — 기동 직후 이웃 유니캐스트 1회(막힌 망에서 첫 발견을 당긴다).
-            Self::send_s4(&sock, &snapshot(PacketKind::Hello).encode());
+            Self::send_s4_pkt(&sock, &snapshot(PacketKind::Hello));
             let period = Duration::from_millis(u64::from(announce_ms.max(1)));
             let mut cycles: u32 = 0;
             loop {
@@ -344,17 +358,17 @@ impl UdpDiscovery {
                     if quiet.load(Ordering::Relaxed) {
                         continue; // 조용한 모드(오프라인 상태) — 이번 주기 광고 전부 생략
                     }
-                    Self::send_all(&sock, v6.as_ref(), &snapshot(PacketKind::Announce).encode());
+                    Self::send_pkt(&sock, v6.as_ref(), &snapshot(PacketKind::Announce));
                     // ★ 사용자 힌트(ADR-0015 §3-4) — 태그가 있으면 광고마다 한 장 더(≈70B).
                     let tag = match user_tag.lock() {
                         Ok(g) => *g,
                         Err(e) => *e.into_inner(),
                     };
                     if let Some(tag) = tag {
-                        Self::send_all(
+                        Self::send_pkt(
                             &sock,
                             v6.as_ref(),
-                            &Self::hint_packet(snapshot(PacketKind::UserHint), tag).encode(),
+                            &Self::hint_packet(snapshot(PacketKind::UserHint), tag),
                         );
                     }
                     cycles = cycles.wrapping_add(1);
@@ -363,7 +377,7 @@ impl UdpDiscovery {
                     // 멀티캐스트가 통하는 망에선 중복 관측일 뿐이고(무해), 막힌 망에선
                     // 이것이 유일한 발견 경로다(S1~S3 폴백 사다리의 다음 단 — 06 §4).
                     if cycles % S4_EVERY == 0 {
-                        Self::send_s4(&sock, &snapshot(PacketKind::Hello).encode());
+                        Self::send_s4_pkt(&sock, &snapshot(PacketKind::Hello));
                     }
                 }
             }
@@ -412,7 +426,7 @@ impl UdpDiscovery {
                 Err(e) => e.into_inner().clone(),
             };
             p.seq = self.seq.fetch_add(1, Ordering::Relaxed);
-            Self::send_all(&self.send_sock, None, &Self::hint_packet(p, tag).encode());
+            Self::send_pkt(&self.send_sock, None, &Self::hint_packet(p, tag));
         }
     }
 
@@ -428,7 +442,7 @@ impl UdpDiscovery {
             p.seq = self.seq.fetch_add(1, Ordering::Relaxed);
             p
         };
-        Self::send_all(&self.send_sock, None, &announce.encode());
+        Self::send_pkt(&self.send_sock, None, &announce);
     }
 
     /// ★ 조용한 모드(내 상태 = 오프라인 · 10-19): `true` = 주기 광고·HELLO 응답·관측을 전부 멈추고
@@ -453,7 +467,7 @@ impl UdpDiscovery {
         for _ in 0..2 {
             bye.seq = self.seq.fetch_add(1, Ordering::Relaxed);
             // v4로만(v6 send 핸들은 애넌서 스레드 소유 — GOODBYE는 v4로 충분).
-            Self::send_all(&self.send_sock, None, &bye.encode());
+            Self::send_pkt(&self.send_sock, None, &bye);
         }
     }
 
@@ -492,7 +506,28 @@ impl UdpDiscovery {
                         if quiet.load(Ordering::Relaxed) {
                             continue; // 조용한 모드 — HELLO 응답도 관측도 없다(상대는 없는 것처럼)
                         }
-                        if let Decoded::Packet(packet) = Packet::decode(&buf[..n]) {
+                        // ★ 미래 와이어 버전(M1-13 ⓒ)은 헌법 접두의 키만 읽힌다 — 포트·이름 없이 "존재"만 올린다(비호환 표시).
+                        let (packet, gen) = match Packet::decode(&buf[..n]) {
+                            Decoded::Packet(p) => {
+                                let g = p.gen();
+                                (p, g)
+                            }
+                            Decoded::Foreign { peer, ver } => (
+                                Packet {
+                                    kind: PacketKind::Announce,
+                                    flags: 0,
+                                    peer,
+                                    tcp_port: 0,
+                                    epoch: 0,
+                                    seq: 0,
+                                    instance: [0u8; 16],
+                                    name: foreign_label(peer, ver),
+                                },
+                                nbeep_core::FOREIGN_GEN,
+                            ),
+                            Decoded::Ignore | Decoded::Invalid => continue,
+                        };
+                        {
                             // 자기 패킷 필터 — 주소가 아니라 키 기준(docs/08 §5).
                             if packet.peer == me {
                                 crate::netmon::on_disco_rx_self();
@@ -506,11 +541,13 @@ impl UdpDiscovery {
                                     };
                                     p.kind = PacketKind::Announce;
                                     p.seq = seq.fetch_add(1, Ordering::Relaxed);
-                                    let _ = rs.send_to(&p.encode(), from);
+                                    for b in p.encode_all() {
+                                        let _ = rs.send_to(&b, from);
+                                    }
                                     crate::netmon::on_disco_tx(1);
                                 }
                             }
-                            if tx.send(Observation { packet, from }).is_err() {
+                            if tx.send(Observation { packet, from, gen }).is_err() {
                                 return; // 수신자 소멸
                             }
                         }
@@ -523,6 +560,13 @@ impl UdpDiscovery {
             }
         });
     }
+}
+
+/// 미래 버전 상대의 자리표시 이름 — `v<ver> <지문>`(이름은 그 판의 배치를 몰라 못 읽는다).
+fn foreign_label(peer: PeerId, ver: u8) -> DisplayName {
+    DisplayName::parse(&format!("v{ver} {}", peer.short()))
+        .or_else(|_| DisplayName::parse(&peer.short()))
+        .unwrap_or_else(|_| DisplayName::parse("peer").expect("고정 문자열"))
 }
 
 /// S4 프로브 대상 선별(M1-8 · 순수 — 회귀 대상): 이웃 중 **자격 인터페이스 서브넷
