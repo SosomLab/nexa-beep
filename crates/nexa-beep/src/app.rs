@@ -3373,6 +3373,19 @@ fn xfer_step(
         }
         // ★ 수신 확인 도착(M4-10 ⓐ · 발신측) — 윈도를 열고 진행률을 수신 기준으로 갱신.
         Ok(XferMsg::Progress { id, got }) => {
+            // ★ 완료(Done 송신) 뒤 도착하는 마지막 윈도 분량의 확인(협업 실측 11-05 — 128MiB에서 99.2%에서 멈추고 Delivered로 건너뜀):
+            //   `sending`은 이미 비었지만 확인 대기(sent_names)에는 있다 → 진행률만 total까지 끌어올린다(완료 판정은 종전대로 Received).
+            if sending.as_ref().is_none_or(|st| st.id != id) {
+                if let Some((name, size)) = sent_names.get(&id) {
+                    let _ = proxy.send_event(AppEvent::XferProgress {
+                        peer,
+                        got: got.min(*size),
+                        total: *size,
+                        sending: true,
+                        name: name.clone(),
+                    });
+                }
+            }
             if let Some(st) = sending.as_mut().filter(|st| st.id == id) {
                 st.acked = got.min(st.total).max(st.acked);
                 let _ = proxy.send_event(AppEvent::XferProgress {
