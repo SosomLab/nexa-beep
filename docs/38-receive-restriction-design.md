@@ -76,7 +76,7 @@ struct BlockEntry { axis: BlockAxis, added_unix: u64, until_unix: Option<u64> /*
   - 연결: 같은 IP의 인바운드 accept가 **분당 30회** 초과 → IP 임시 차단(10분).
 - 발동 시 = 상태바 고지 + (log.enabled면) 상태 로그 한 줄 + 차단 목록에
   `auto=true`로 등재(해제·영구 승격은 사람이).
-- 임계값은 코드 상수로 시작(netmon 임계와 같은 규약) — 실측 후 설정 승격 검토.
+- ~~임계값은 코드 상수로 시작(netmon 임계와 같은 규약) — 실측 후 설정 승격 검토.~~ → **설정 승격 ✅ 11-05** `eb9a8f2`(설정 › 고급 › 수신 제한 `block.msg_burst` · `block.accept_per_min` · `block.auto_minutes` · 기본 = 종전 상수 · 0 = 끄기) · 발견 감쇠 ✅ `dbba0a8`(PeerId 단위 — 앱 층은 주소를 보지 않는다 · IP 폭주는 accept 계수).
 
 ## 6. UI
 

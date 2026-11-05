@@ -7,6 +7,7 @@
 
 ## 2026-11-05
 
+- **(Win · main) M5-3 2차 ⓐⓑ**(`eb9a8f2` 자동 차단 임계값 설정 승격 — `block.msg_burst`·`block.accept_per_min`·`block.auto_minutes` · 기본 = 종전 상수 · 0 = 끄기 / `dbba0a8` 발견 광고 폭주 감쇠 — 같은 상대 12pps 초과 = 500ms에 1회 반영 · 차단 아님) · 사용자 결정 = M4-10 ⓐ 채택 · M4-10d 착수 · M5-3 2차 3건 · winget 보류 → [journal](journal/2026-11-05.md)
 - **(Win · main) M1-13 ⓐ~ⓓ 발견 호환성 표면**(`b49168c` — 헌법 접두 40B·포트·매직 동결 · dual-announce `TX_VERS` · flags 하위 4비트 세션 세대 · 미래 버전 = "버전 불일치 — 대화 불가" 표시 · ⓓ = 기존 Control 프레임 · M1-13 전 항목 ✅) · **BL-5 동사**(`1e6a705`) + `tools/block-scenario.sh` **19/19**(협업 · verify.sh 편입) · **RL-7 2단 실측** append 21/fresh 1 · 줄당 78~82B · 쓴 양 13% → [journal](journal/2026-11-05.md)
 - **(Win · main) RL-7 2단 기록 증분 append**(`f11561d` — `nbeep_store::histfile` v2 "NBH2" 프레임 · 접두 불변이면 새 부분만 봉인 append · 바뀌면/32프레임 이상이면 전량 재작성 · 깨진 꼬리 절단 · v1 관용·첫 쓰기 이관 · 실측 잔여) → [journal](journal/2026-11-05.md)
 - **(Win · main) M5-3 수신 제한 BL-1~4**(`54df30c` 모델+봉인 영속 `blocks.seg` · `61d331c` 전송 `set_inbound_filter`·판정 4지점·우클릭 ▸ 차단·설정 › 고급 › 수신 제한·자동 임시 10분 · GINV-1 해제 자리 통합 = DR-30 ⑤ 완료 · 잔여 BL-5 실기·시나리오) → [journal](journal/2026-11-05.md)
