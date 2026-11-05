@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # scan-plaintext.sh — 데이터 폴더·로그 평문 스캐너(INS-7 · 11-04 · 49 J-3·J-4·J-5 · 17 §4-a 실증 3면 · W-11·W-12):
-#   ① 헤더 매직 — 비밀 파일은 전부 봉인 봉투여야 한다: `*.seg`(history·pending·keys = NBSE · trust.seg = NBTS · groups.seg = NBGS) ·
+#   ① 헤더 매직 — 비밀 파일은 전부 봉인 봉투여야 한다: `*.seg`(pending·keys = NBSE · history = **NBH2**(RL-7 2단 11-05 · 프레임마다 NBSE 봉투 ·
+#      첫 프레임 봉투까지 확인) 또는 v1 NBSE · trust.seg = NBTS · groups.seg = NBGS) ·
 #      `profile.sec` NBSE · `quarantine/**/*.beepq`·`.beepq.meta` NBSE · `identity.key` NBK1 · `user.key` NBSE. 평문 허용 = `settings.cfg`
 #      (단 PII 키 `profile.email`·`profile.phone`·`user.passphrase`는 cfg에 없어야 — 사이드카 `profile.sec`가 맡는다) · `history/*.id`
 #      (공개 PeerId 32B) · `profiles/*.meta`(공개 아바타 키·보더) · `logs/*.log`(상태 문구만).
@@ -22,8 +23,20 @@ echo "▶ ① 헤더 매직: $D"
 [ -f "$D/identity.key" ] && expect "$D/identity.key" NBK1
 [ -f "$D/trust.seg" ] && expect "$D/trust.seg" NBTS
 [ -f "$D/groups.seg" ] && expect "$D/groups.seg" NBGS
-for f in "$D"/keys.seg "$D"/user.key "$D"/profile.sec "$D"/history/*.seg "$D"/pending/*.seg "$D"/quarantine/*/*.beepq "$D"/quarantine/*/*.beepq.meta; do
+for f in "$D"/keys.seg "$D"/user.key "$D"/profile.sec "$D"/pending/*.seg "$D"/quarantine/*/*.beepq "$D"/quarantine/*/*.beepq.meta; do
   [ -f "$f" ] && expect "$f" NBSE
+done
+# 대화 기록(RL-7 2단 · f11561d): v2 = "NBH2" ‖ ver ‖ (len u32 ‖ NBSE 봉투)* — 머리 + **첫 프레임 봉투**(오프셋 9)까지 본다 · v1(단일 NBSE)은 관용.
+expect_history() {
+  local m; m=$(magic "$1"); files=$((files+1))
+  if [ "$m" = "NBH2" ]; then
+    local f1; f1=$(tail -c +10 "$1" 2>/dev/null | head -c 4 | od -An -c | tr -d ' \n')
+    if [ "$f1" = "NBSE" ]; then printf '  ✓ %-48s NBH2(프레임 NBSE)\n' "${1#$D/}"; else printf '  ✗ %-48s NBH2인데 첫 프레임 "%s" ≠ NBSE(평문 또는 손상)\n' "${1#$D/}" "$f1"; bad=1; fi
+  elif [ "$m" = "NBSE" ]; then printf '  ✓ %-48s NBSE(v1)\n' "${1#$D/}"
+  else printf '  ✗ %-48s 헤더 "%s" ≠ NBH2/NBSE(평문 또는 손상)\n' "${1#$D/}" "$m"; bad=1; fi
+}
+for f in "$D"/history/*.seg; do
+  [ -f "$f" ] && expect_history "$f"
 done
 # 그 밖의 파일은 허용 목록 밖이면 알린다(새 파일 = 봉인 여부를 사람이 본다).
 while IFS= read -r -d '' f; do
