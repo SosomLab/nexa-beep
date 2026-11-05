@@ -732,8 +732,11 @@ impl AppEvent {
 /// 격리 디코드 요청의 목적지 — 요청(`spawn_decode`)과 완료([`AppEvent::Decoded`])를 잇는다.
 #[derive(Debug)]
 enum DecodeTarget {
-    /// 상대 프로필 아바타(256 · 원형) — `peer_profiles`에 꽂고 목록 갱신.
+    /// 상대 프로필 아바타 **목록용**([`AVATAR_LIST_SIDE`] · 원형) — `peer_profiles.avatar`에 꽂고 목록 갱신.
     PeerAvatar(PeerId),
+    /// 상대 프로필 아바타 **카드용**([`AVATAR_CARD_SIDE`] · 원형 · MEM-1 ① 11-05) — 카드가 그 상대로
+    /// 열려 있을 때만 `avatar_full`에 꽂는다(닫혔으면 버림 — 상주 금지).
+    PeerAvatarFull(PeerId),
     /// 내 프로필 화면 아바타 미리보기(256 · 원형).
     MyAvatar,
     /// 수신 이미지의 대화 스레드 미리보기(96 · 사각 · M4-5ⓑ). 경로는 확대
@@ -1156,6 +1159,35 @@ enum ImgLoad {
     Failed,
 }
 
+/// 상대 아바타 **상주** 변 길이(px · MEM-1 ①) — 목록 `AVATAR_D`=40lp · 헤더 ≤40lp를 2.0배율까지
+/// 확대 없이 덮는 크기. 1명 = 80²×4 = 25KiB(종전 256KiB의 1/10).
+const AVATAR_LIST_SIDE: u32 = 80;
+/// 상대 아바타 **카드** 변 길이(px) — 카드 120lp×2.0 = 240 → 256(종전 전역 크기와 같다).
+const AVATAR_CARD_SIDE: u32 = 256;
+
+/// 캐시 사진(`profiles/{peer}.img` · NBSE 봉인 · 구본 평문 관용 → lazy 재봉인) → 원형 아바타 원시 픽셀.
+/// 부팅 복원(소형)과 카드 열기(대형)가 같은 일을 다른 변 길이로 한다(MEM-1 ① — 한 곳).
+fn cached_avatar_job(
+    img_path: std::path::PathBuf,
+    secret: [u8; 32],
+    side: u32,
+) -> impl FnOnce() -> Option<(u32, u32, Vec<u8>)> + Send + 'static {
+    move || {
+        let raw = std::fs::read(&img_path).ok()?;
+        let bytes = if nbeep_store::sealed::is_sealed(&raw) {
+            nbeep_store::sealed::open(crate::gate::SEAL_PROFILE_CACHE, &secret, &raw)?
+        } else {
+            if let Ok(env) =
+                nbeep_store::sealed::seal(crate::gate::SEAL_PROFILE_CACHE, &secret, &raw)
+            {
+                let _ = std::fs::write(&img_path, env);
+            }
+            raw
+        };
+        crate::imgdec::avatar_raw_from_bytes(&bytes, side)
+    }
+}
+
 /// 상대 프로필(M3-17 — 세션 경유 수신 · ADR-0008). 켠 필드만 온다.
 #[derive(Debug, Default)]
 struct PeerProfile {
@@ -1169,8 +1201,13 @@ struct PeerProfile {
     bio: Option<String>,
     /// 캐시된 이미지 파일(`data/profiles/…`).
     image_file: Option<std::path::PathBuf>,
-    /// imgdec 격리 디코드 결과(원형 마스크 완료 · M4-5) — 목록·카드가 그린다.
+    /// imgdec 격리 디코드 결과(원형 마스크 완료 · M4-5) — **목록·헤더용 소형**([`AVATAR_LIST_SIDE`]).
+    /// ★ MEM-1 ①(11-05): 종전엔 256²를 상대 수만큼 상주시켰다(1명 256KiB · 핀 100명 = 25MB —
+    ///   09-07 실측 · NFR-B-2 위협 1순위). 목록 40lp×2.0 = 80px이면 충분하다.
     avatar: Option<std::rc::Rc<nbeep_ui::IconImage>>,
+    /// 카드용 대형([`AVATAR_CARD_SIDE`]) — **카드가 열린 동안만** 산다(`request_full_avatar` →
+    /// `Decoded(PeerAvatarFull)` · 카드 닫힘 = `release_full_avatars`). 없으면 카드는 소형을 확대한다.
+    avatar_full: Option<std::rc::Rc<nbeep_ui::IconImage>>,
     /// 아바타 보더 색(08-14 — parse_border 검증 통과분).
     border: Option<(u8, u8, u8)>,
     /// 마지막 프로필 수신 시각(unix ms · M3-21 ③) — 0 = 미상(부팅 캐시 복원분은
@@ -4236,7 +4273,12 @@ struct App {
     parked_lines: HashMap<PeerId, Vec<ChatLine>>,
     /// 격리함 썸네일 캐시(`.beepq` 경로 → 디코드 결과 · `None` = 요청 중/실패·비이미지).
     /// 채움은 워커(`Decoded(QThumb)`) — 행 재적재가 imgdec를 재호출하지 않게 한다.
-    qthumbs: HashMap<String, Option<std::rc::Rc<nbeep_ui::IconImage>>>,
+    /// ★ MEM-1 ②(11-05): 값 = (썸네일, 마지막 접근 순번) · 상한 [`QTHUMB_MAX`] — 넘치면 가장 오래
+    ///   안 본 것부터 비운다(종전 무제한 — 1건 16KiB · 이미지 1,000건 = 16MB 상주). 비워진 행은
+    ///   다시 보일 때 워커가 재생성(디스크 + imgdec · 보이는 행만).
+    qthumbs: HashMap<String, (Option<std::rc::Rc<nbeep_ui::IconImage>>, u64)>,
+    /// `qthumbs` 접근 순번 시계(단조 증가).
+    qthumb_clock: u64,
     /// **비발견 상대**(수동 등록·다른 서브넷 인바운드 — 사용자 실기 08-13) — 발견
     /// 테이블에 ANNOUNCE가 안 닿아도 목록에 유지한다(대화창을 닫으면 사라지던 버그).
     /// 이름은 성립 시 스냅샷(프로필 이름은 2줄째로 따로 표시된다).
@@ -13141,9 +13183,40 @@ impl App {
     }
 
     /// 원시 캐시 → 표시 행(값싼 가공만 — 이름 조회·시각 라벨·썸네일 캐시).
+    /// 격리함 썸네일 상한(MEM-1 ②) — 256건 × ≤16KiB ≈ 4MB 천장. 넘치면 가장 오래 안 본 것부터.
+    const QTHUMB_MAX: usize = 256;
+
+    /// 썸네일 캐시 기록 + 상한 집행(MEM-1 ②). 순번은 조회 때 찍힌 것을 유지(없으면 지금).
+    fn qthumb_put(&mut self, path: String, icon: Option<std::rc::Rc<nbeep_ui::IconImage>>) {
+        let stamp = self.qthumbs.get(&path).map_or_else(
+            || {
+                self.qthumb_clock += 1;
+                self.qthumb_clock
+            },
+            |t| t.1,
+        );
+        self.qthumbs.insert(path, (icon, stamp));
+        while self.qthumbs.len() > Self::QTHUMB_MAX {
+            // 257건에서 1회 선형 탐색 — 드물고 작다(HashMap에 순서가 없어 별도 큐 대신 순번 비교).
+            let Some(oldest) = self
+                .qthumbs
+                .iter()
+                .filter(|(_, v)| v.0.is_some()) // 진행 중(None 선점)은 두고 완성본만 비운다
+                .min_by_key(|(_, v)| v.1)
+                .map(|(k, _)| k.clone())
+            else {
+                break;
+            };
+            self.qthumbs.remove(&oldest);
+        }
+    }
+
     fn quarantine_rows(&mut self) -> Vec<nbeep_ui::QRow> {
         let secret = self.identity.wrap_secret();
         let raws = self.qrows_raw.clone();
+        // 실체화·삭제로 사라진 격리물의 썸네일은 즉시 비운다(MEM-1 ② — 상한 전에 먼저 정리).
+        let live: std::collections::HashSet<&str> = raws.iter().map(|r| r.path.as_str()).collect();
+        self.qthumbs.retain(|k, _| live.contains(k.as_str()));
         raws.into_iter()
             .map(|r| {
                 let from = self
@@ -13165,10 +13238,15 @@ impl App {
                 // 이미지 미리보기(M4-5ⓑ) — 캐시 조회. 미보유면 `None` 선점 기록 후
                 // 워커 요청(중복 요청·실패 재시도 방지 겸용) → `Decoded(QThumb)`가
                 // 캐시를 채우고 행을 다시 그린다(팝인). 이미지가 아니면 조용히 없음.
-                let thumb = match self.qthumbs.get(&path_s) {
-                    Some(t) => t.clone(),
+                self.qthumb_clock += 1;
+                let clock = self.qthumb_clock;
+                let thumb = match self.qthumbs.get_mut(&path_s) {
+                    Some(t) => {
+                        t.1 = clock; // 접근 갱신(LRU · MEM-1 ②)
+                        t.0.clone()
+                    }
                     None => {
-                        self.qthumbs.insert(path_s.clone(), None);
+                        self.qthumbs.insert(path_s.clone(), (None, clock));
                         let qp = path_s.clone();
                         spawn_decode(
                             self.proxy.clone(),
@@ -14822,7 +14900,8 @@ impl App {
             has_image: p.is_some_and(|p| p.image_file.is_some()),
             fingerprint: peer.short(),
             seed: peer.as_bytes().to_vec(),
-            avatar: p.and_then(|p| p.avatar.clone()),
+            // 대형(카드 열린 동안만) 우선 · 도착 전엔 소형을 확대(MEM-1 ① — 깜빡임 없이 선명도만 올라간다).
+            avatar: p.and_then(|p| p.avatar_full.clone().or_else(|| p.avatar.clone())),
             last_seen: ago_label(self.trust.meta(peer).0),
             last_chat: ago_label(self.trust.meta(peer).1),
             received: ago_label(p.map_or(0, |p| p.received_ms)),
@@ -14859,6 +14938,33 @@ impl App {
 
     /// 열려 있는 상대 프로필 카드 갱신(M3-21 — push/pull 응답·아바타 디코드 도착).
     /// 그 상대의 카드가 열려 있을 때만 — 창은 두고 내용만 다시 짓는다.
+    /// 카드용 대형 아바타 청구(MEM-1 ① · 11-05) — 캐시 사진이 있고 대형이 아직 없을 때만 워커로.
+    /// 결과는 `Decoded(PeerAvatarFull)`가 **카드가 그 상대로 열려 있을 때만** 받는다.
+    fn request_full_avatar(&mut self, peer: PeerId) {
+        let Some(p) = self.peer_profiles.get(&peer) else {
+            return;
+        };
+        if p.avatar_full.is_some() {
+            return;
+        }
+        let Some(img_path) = p.image_file.clone() else {
+            return;
+        };
+        let secret = self.identity.wrap_secret();
+        spawn_decode(
+            self.proxy.clone(),
+            DecodeTarget::PeerAvatarFull(peer),
+            cached_avatar_job(img_path, secret, AVATAR_CARD_SIDE),
+        );
+    }
+
+    /// 카드용 대형 아바타 전부 해제(MEM-1 ①) — 카드 닫힘·다른 상대로 전환의 공통 꼬리(한 번에 한 장만 산다).
+    fn release_full_avatars(&mut self) {
+        for p in self.peer_profiles.values_mut() {
+            p.avatar_full = None;
+        }
+    }
+
     fn refresh_peer_info_card(&mut self, peer: PeerId) {
         let Some(wid) = self
             .windows
@@ -15091,6 +15197,7 @@ impl App {
             .map(|(w, _)| *w);
         let had_view = self.peer_info_view.is_some();
         self.peer_info_view = None;
+        self.release_full_avatars(); // MEM-1 ①
         if let Some(w) = wid {
             self.windows.remove(&w);
             true
@@ -15157,6 +15264,8 @@ impl App {
                 &[&self.peer_title(peer)],
             ));
         }
+        self.release_full_avatars(); // 다른 상대의 대형은 여기서 끝(MEM-1 ①)
+        self.request_full_avatar(peer);
         let info = self.build_peer_info(peer);
         if let Some((wid, _)) = self
             .windows
@@ -16483,26 +16592,7 @@ impl App {
                 spawn_decode(
                     self.proxy.clone(),
                     DecodeTarget::PeerAvatar(peer),
-                    move || {
-                        let raw = std::fs::read(&img_path).ok()?;
-                        let bytes = if nbeep_store::sealed::is_sealed(&raw) {
-                            nbeep_store::sealed::open(
-                                crate::gate::SEAL_PROFILE_CACHE,
-                                &secret,
-                                &raw,
-                            )?
-                        } else {
-                            if let Ok(env) = nbeep_store::sealed::seal(
-                                crate::gate::SEAL_PROFILE_CACHE,
-                                &secret,
-                                &raw,
-                            ) {
-                                let _ = std::fs::write(&img_path, env);
-                            }
-                            raw
-                        };
-                        crate::imgdec::avatar_raw_from_bytes(&bytes, 256)
-                    },
+                    cached_avatar_job(img_path, secret, AVATAR_LIST_SIDE), // 소형(MEM-1 ①)
                 );
             }
             // ★ 11-05 개정: 핀만으로는 행을 시드하지 않는다 — 대화 이력은 `restore_history`가 시드하고, 여기서는 사용자가 붙든
@@ -16536,6 +16626,7 @@ impl App {
                         bio: None,
                         image_file,
                         avatar,
+                        avatar_full: None,
                         border,
                         received_ms,
                     },
@@ -21326,6 +21417,7 @@ impl App {
                 if closed {
                     self.peer_info_view = None;
                     self.windows.remove(&id);
+                    self.release_full_avatars(); // MEM-1 ①
                 }
             }
             Role::Profile => {
@@ -23553,7 +23645,7 @@ impl ApplicationHandler<AppEvent> for App {
                         spawn_decode(
                             self.proxy.clone(),
                             DecodeTarget::PeerAvatar(peer),
-                            move || crate::imgdec::avatar_raw_from_bytes(&bytes, 256),
+                            move || crate::imgdec::avatar_raw_from_bytes(&bytes, AVATAR_LIST_SIDE),
                         );
                         Some(img_path.clone())
                     })
@@ -23618,6 +23710,8 @@ impl ApplicationHandler<AppEvent> for App {
                             bio,
                             image_file,
                             avatar,
+                            // 대형은 카드가 열려 있으면 `Decoded(PeerAvatar)`가 다시 청구한다(새 사진 반영).
+                            avatar_full: None,
                             border,
                             received_ms: unix_now_ms(), // 경량(Info)도 수신이다
                         },
@@ -23849,14 +23943,30 @@ impl ApplicationHandler<AppEvent> for App {
                     DecodeTarget::PeerAvatar(peer) => {
                         if let Some(p) = self.peer_profiles.get_mut(&peer) {
                             p.avatar = icon;
+                            p.avatar_full = None; // 사진이 바뀌었다 — 대형은 카드가 열려 있을 때만 다시(아래)
                         }
                         let mut inv = Invalidations::default();
                         self.refresh_rows(&mut inv);
-                        // 카드가 열려 있으면 새 얼굴로(M3-21 — pull 응답의 늦은 디코드).
+                        // 카드가 열려 있으면 새 얼굴로(M3-21 — pull 응답의 늦은 디코드) + 대형 재청구(MEM-1 ①).
                         self.refresh_peer_info_card(peer);
+                        self.request_full_avatar(peer);
                         self.refresh_chat_link(peer); // 열린 대화 헤더 아바타도(08-22)
                         if let Some(mid) = self.main_id {
                             self.request_redraw(mid);
+                        }
+                    }
+                    DecodeTarget::PeerAvatarFull(peer) => {
+                        // 카드가 **아직 그 상대로** 열려 있을 때만 받는다 — 닫혔거나 다른 상대로 바뀌었으면
+                        // 버린다(256² 상주 금지가 이 항목의 목적 · MEM-1 ①).
+                        let open = self
+                            .windows
+                            .values()
+                            .any(|e| e.role == Role::PeerInfo(peer));
+                        if open {
+                            if let Some(p) = self.peer_profiles.get_mut(&peer) {
+                                p.avatar_full = icon;
+                            }
+                            self.refresh_peer_info_card(peer);
                         }
                     }
                     DecodeTarget::MyAvatar => {
@@ -23972,7 +24082,7 @@ impl ApplicationHandler<AppEvent> for App {
                         }
                     }
                     DecodeTarget::QThumb(path) => {
-                        self.qthumbs.insert(path, icon);
+                        self.qthumb_put(path, icon);
                         if self.quarantine_view.is_some() {
                             let rows = self.quarantine_rows();
                             if let Some(v) = &mut self.quarantine_view {
@@ -24686,7 +24796,10 @@ impl ApplicationHandler<AppEvent> for App {
                         }
                         Role::AddEndpoint => self.addr_view = None,
                         Role::Profile => self.profile_view = None,
-                        Role::PeerInfo(_) => self.peer_info_view = None,
+                        Role::PeerInfo(_) => {
+                            self.peer_info_view = None;
+                            self.release_full_avatars(); // MEM-1 ①
+                        }
                         Role::ImageView => self.image_view = None,
                         Role::Quarantine => self.quarantine_view = None,
                         Role::Convbox => self.convbox_view = None,
@@ -26391,6 +26504,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         ime: crate::ime_gate::ImeGate::new(),
         parked_lines: HashMap::new(),
         qthumbs: HashMap::new(),
+        qthumb_clock: 0,
         ime_trace: std::env::var_os("NEXA_IME_TRACE").is_some(),
         win_trace: std::env::var_os("NEXA_WIN_TRACE").is_some(),
         pending_activation: Vec::new(),
