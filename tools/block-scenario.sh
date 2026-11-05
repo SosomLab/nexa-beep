@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # block-scenario.sh — 수신 제한(M5-3 BL-5 · docs/38) 자동 실기(11-05 · 3-OS · 헤드리스 기본): 신원 2개(bl-x · bl-y)를 새로 만들어
 #   ① 미확인 발신자 격리(M5-3 2차 ⓒ · X `block.first_contact=on`으로 기동): Y 첫 메시지 → X `held_first n=1` · 스레드 0줄 · unread 0 →
-#   `first.accept` → 표시 → Y 둘째 메시지는 카드 없이 바로 표시. ⚠ X는 Y 대화창을 열지 않는다(activate가 넣는 지문 안내 줄이
-#   `first_contact_gated`의 "기록 줄 있음"에 걸려 격리되지 않는다 — 11-05 첫 실행 실측). ② 그 뒤 X가 Y를 차단(block.peer) → X 목록에서 Y 소멸(그림자 · §6) · Y가 보낸 2줄이 X에 닿지 않음 → 해제(block.unblock) → Y 행 복귀 ·
+#   `first.accept` → 표시 → Y 둘째 메시지는 카드 없이 바로 표시. ★ X는 10s에 Y 대화창을 **연다**(activate) — 창을 열기만 한 것은
+#   "대화한 적"이 아니다(지문 안내 줄 = `is_local_notice` 제외 · `e10c402` · 11-05 첫 실행에서 이 경로로 격리가 풀렸던 회귀 가드). ② 그 뒤 X가 Y를 차단(block.peer) → X 목록에서 Y 소멸(그림자 · §6) · Y가 보낸 2줄이 X에 닿지 않음 → 해제(block.unblock) → Y 행 복귀 ·
 #   재연결 · 메시지 도달 → 이름 축(block.name) → 소멸 → block.clear → 복귀 → IP 축(block.ip) 등재 → block.clear → 차단 0건.
 #   판정 = 각 dump 구간(P·Q·R = 첫 접촉 · A~H = 차단)(`[script] <ms>ms dump` 표식 사이)의 `[dump] block <peer|ip|name> <값> auto= until=` 줄 · `[dump] peer` 행 · `[dump] thread` 줄.
 #
@@ -36,16 +36,17 @@ run() { # 폴더 · 스크립트 · 로그
 short() { "$M/$1/nexa-beep$EXE" --whoami 2>/dev/null | awk -F'= ' '/^fingerprint/{print substr($2,1,8); exit}'; }
 
 echo "▶ 신원 준비(새로) — $M/{bl-x,bl-y} · 출력 $OUT"
-seed bl-x blx block.first_contact=on; seed bl-y bly # 첫 접촉 승인제는 스크립트 동사가 없어 설정 파일로 켠다
+# 첫 접촉 승인제는 스크립트 동사가 없어 설정 파일로 켠다 · `_ack=on` = 사용자 의사 표식(없으면 부팅 1회 이관이 on을 결함 저장분으로 보고 off로 되돌린다)
+seed bl-x blx $'block.first_contact=on\nblock.first_contact_ack=on'; seed bl-y bly
 
 # 시간표(ms) — dump 구간 이름: P 17s(첫 메시지 대기) · Q 20s(수락 뒤) · R 24s(둘째 메시지) ·
 #   A 26s(차단 전) · B 32s(peer 차단 직후) · C 42s(차단 중 Y 발신 뒤) · D 60s(해제 뒤 도달) ·
 #   E 68s(이름 축) · F 78s(clear 뒤 복귀) · G 82s(IP 등재) · H 86s(clear 뒤 0건).
-echo "▶ X: (대화창 열지 않음 — 첫 접촉) · 17s dump P · 18s first.accept · 20s dump Q · 24s dump R · 26s dump A · 28s block.peer=bly · 32s dump B · 42s dump C"
+echo "▶ X: 10s Y 창 열기(activate — 열어도 격리 유지) · 17s dump P · 18s first.accept · 20s dump Q · 24s dump R · 26s dump A · 28s block.peer=bly · 32s dump B · 42s dump C"
 echo "     44s block.unblock · 60s dump D · 62s block.name=bly · 68s dump E · 70s block.clear · 78s dump F · 80s block.ip=127.0.0.1 · 82s dump G"
 echo "     84s block.clear · 86s dump H · 88s quit"
 echo "▶ Y: 12s 연결 · 15s send 첫 접촉 · 21s send 두번째 · 34s send blocked-1 · 35s send blocked-2 · 52s 재연결 · 54s send 해제 뒤 도달 · 88s quit"
-run bl-x "17000:dump;18000:first.accept;20000:dump;24000:dump;26000:dump;28000:block.peer=bly;32000:dump;42000:dump;44000:block.unblock=;60000:dump;62000:block.name=bly;68000:dump;70000:block.clear;78000:dump;80000:block.ip=127.0.0.1;82000:dump;84000:block.clear;86000:dump;88000:quit" "$OUT/x.log"
+run bl-x "10000:activate=bly;17000:dump;18000:first.accept;20000:dump;24000:dump;26000:dump;28000:block.peer=bly;32000:dump;42000:dump;44000:block.unblock=;60000:dump;62000:block.name=bly;68000:dump;70000:block.clear;78000:dump;80000:block.ip=127.0.0.1;82000:dump;84000:block.clear;86000:dump;88000:quit" "$OUT/x.log"
 run bl-y "12000:activate=blx;15000:send=첫 접촉;21000:send=두번째;34000:send=blocked-1;35000:send=blocked-2;52000:activate=blx;54000:send=해제 뒤 도달;88000:quit" "$OUT/y.log"
 wait
 XS=$(short bl-x); YS=$(short bl-y) # 신원은 첫 기동 때 생긴다 — 그 뒤에 읽어야 지문이 있다
@@ -62,7 +63,8 @@ chk() { local n; n=$(cnt "$2" "$3"); if [ "$n" -ge 1 ]; then printf '  ✓ %s (%
 chk_not() { local n; n=$(cnt "$2" "$3"); if [ "$n" -eq 0 ]; then printf '  ✓ %s (0건 = 기대)\n' "$1"; ok=$((ok+1)); else printf '  ✗ %s (%s건 · 기대 0)\n' "$1" "$n"; bad=$((bad+1)); fi; }
 chk_count() { local n; n=$(cnt "$2" "$3"); if [ "$n" -eq "$4" ]; then printf '  ✓ %s (%s건 = 기대)\n' "$1" "$n"; ok=$((ok+1)); else printf '  ✗ %s (%s건 · 기대 %s)\n' "$1" "$n" "$4"; bad=$((bad+1)); fi; }
 PEER_Y="^\[dump\] peer ${YS} name=bly "
-chk_count "P 첫 메시지: held_first ${YS} n=1(붙듦)"             "$OUT/x-P.txt" "^\[dump\] held_first ${YS} n=1$" 1
+chk       "X: Y 창 열기(activate) 실행"                        "$OUT/x.log"   "^\[script\] [0-9]+ms activate=bly$"
+chk_count "P 첫 메시지: held_first ${YS} n=1(붙듦 · 창을 열었어도)"             "$OUT/x-P.txt" "^\[dump\] held_first ${YS} n=1$" 1
 chk_not   "P 첫 메시지: 스레드에 없음(표시·기록 전)"            "$OUT/x-P.txt" "^\[dump\] thread .* text=첫 접촉$"
 chk       "P 첫 메시지: Y 행 unread=0(알림·배지 없음)"          "$OUT/x-P.txt" "${PEER_Y}.*unread=0$"
 chk       "X: first.accept 1건"                                 "$OUT/x.log"   "^\[script\] first.accept: 1$"
