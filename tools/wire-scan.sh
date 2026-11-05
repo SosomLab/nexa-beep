@@ -41,8 +41,10 @@ seed() { # 폴더 · 표시 이름(빈 값 = 기본 이름 · W-5) · 소개글
     [ -n "$2" ] && printf 'profile.display_name=%s\n' "$2"
     [ -n "$3" ] && printf 'profile.bio=%s\nprofile.share.basic=on\n' "$3"; } > "$M/$1/data/settings.cfg"
 }
-run() { # 폴더 · 스크립트 · 로그
-  ( cd "$M/$1" && NEXA_SCRIPT="$2" "./nexa-beep$EXE" --window --live 2> "$3" >/dev/null ) &
+APP_PIDS=()
+run() { # 폴더 · 스크립트 · 로그 — exec로 서브셸을 앱으로 바꿔 $!가 앱 pid가 되게(kill·wait 대상 = 앱 자체)
+  ( cd "$M/$1" && NEXA_SCRIPT="$2" exec "./nexa-beep$EXE" --window --live 2> "$3" >/dev/null ) &
+  APP_PIDS+=("$!")
 }
 short() { "$M/$1/nexa-beep$EXE" --whoami 2>/dev/null | awk -F'= ' '/^fingerprint/{print substr($2,1,8); exit}'; }
 
@@ -93,8 +95,15 @@ run ws-x "8000:activate=wsy;12000:send=$MSG;20000:dump;24000:quit" "$OUT/x.log"
 run ws-y "20000:dump;24000:quit" "$OUT/y.log"
 run ws-z "24000:quit" "$OUT/z.log"
 wait "$RECV_PID" 2>/dev/null
-wait
-if [ -n "$TD_PID" ]; then sudo kill -INT "$TD_PID" 2>/dev/null; sleep 1; sudo chmod a+r "$PCAP" 2>/dev/null || true; fi
+# ⚠ 맨 `wait`는 쓰지 않는다 — 백그라운드 tcpdump는 스스로 끝나지 않아 Linux CI에서 영원히 기다렸다(11-05 run 42049849198 · 4h 24m 교착 · Windows는
+#   tcpdump가 없어 드러나지 않았다). 앱 3곳(24s quit)만 기다리고, DUR 뒤 15s가 지나도 남아 있으면 죽인다(행 = 실패로 드러나게).
+for _ in $(seq 1 30); do
+  alive=0; for pid in "${APP_PIDS[@]}"; do kill -0 "$pid" 2>/dev/null && alive=1; done
+  [ "$alive" = 0 ] && break; sleep 0.5
+done
+for pid in "${APP_PIDS[@]}"; do kill -0 "$pid" 2>/dev/null && { echo "  ! 앱 pid $pid가 quit하지 않아 강제 종료(판정은 계속)"; kill "$pid" 2>/dev/null; }; done
+wait "${APP_PIDS[@]}" 2>/dev/null
+if [ -n "$TD_PID" ]; then sudo kill -INT "$TD_PID" 2>/dev/null; wait "$TD_PID" 2>/dev/null; sudo chmod a+r "$PCAP" 2>/dev/null || true; fi
 cat "$OUT/recv.log"
 # 우리 신원의 키 접두(지문 short = 키 첫 4B hex) — 같은 LAN의 다른 인스턴스(사용자 실기 설치본 등) 패킷은 판정에서 뺀다(수만 센다).
 XS=$(short ws-x); YS=$(short ws-y); ZS=$(short ws-z); echo "   X=$XS Y=$YS Z=$ZS"

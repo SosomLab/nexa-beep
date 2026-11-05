@@ -120,6 +120,7 @@ jobs:
       #   TCP PSH 존재로 공허 판정 거부). Linux 러너만(sudo tcpdump) — 발견 와이어를 바꾼 커밋이 사람 기억 없이 여기서 걸린다(SEC-T1).
       - name: 와이어 평문 회귀(발견 W-1~W-7 · 세션 W-8 · Linux)
         if: runner.os == 'Linux'
+        timeout-minutes: 5 # ≈35s 스크립트 — 11-05 첫 실행이 맨 wait(tcpdump)로 4h 교착 · 행은 몇 분 안에 실패로
         run: bash tools/wire-scan.sh target/headless-ci/wire
       - name: 헤드리스 캡처 보존
         if: always()
