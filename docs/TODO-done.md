@@ -105,6 +105,15 @@
 | ~~T-flake~~ | **✅ 해소(08-21)** — 정체 = **nbeep-plat 스위트가 힙 오염(0xc0000374·간헐 AV)으로 중도 사망**(60개 중 31개 시점 abort = "정확히 29개 모자람"과 일치). 근본 원인 = **`OpenClipboard(NULL)`의 거짓 성공**: 내부 오픈 상태를 "연 창 핸들"로 대조하는데 NULL==NULL이라 둘째 호출자(스레드·프로세스 불문)도 성공 → 한쪽 `EmptyClipboard`가 상대가 `GlobalLock` 중인 HGLOBAL을 해제 = use-after-free. **제품 실버그였다**(이미지 워커 × UI 복사 · 3-신원 다중 인스턴스). 수정 = 호출마다 메시지 전용 창(진짜 HWND)으로 열기 + 프로세스 내 뮤텍스 + `GlobalSize` 상한 스캔. 실측 = cargo 루프 수정 전 4/20·2/25 크래시 → 수정 후 0/70. 부수 해소 2건 = ① `dir_writable` PID 프로브 공유(같은 PID 두 스레드 → Windows delete-pending 순간 create 실패 = false 오판 → `data_dir()` 폴백 튐 — 08-21 CI part 테스트 사망 원인 · 시퀀스 접미로 유일화) ② 클립보드 왕복 테스트 환경 플레이크(set 직후 히스토리 서비스 잠금·타 프로세스 덮어씀 = skip) | P2 | 소 | — | ✅ (08-21 · 726 green) |
 | X-12 | **공유 크레이트 사본 동기 — `nexa-conf`·`nbeep-relay` ↔ nexa-clip**([44 §7](44-nexa-clip-liaison.md) — clip 전달문 32 · 09-05): ① A-1 `nexa-conf::write_atomic` **0600**(+`Store::open` 기존 파일 죄기) ② A-2 `serialize` known 우선(같은 키 두 줄 금지) ③ ★ beep 자체 확대 = `trust.seg`·`keys.seg`·`groups.seg`·`profile.sec`·`history/pending *.seg`·`server.pin`이 전부 nexa-conf 밖 별도 경로라 644/664 → **`nbeep_store::privfile`**(0600 원자 쓰기·부팅 1회 `tighten_data_dir`) 7곳 배선 + `pinfile` 인라인 0600 ④ B-3 `nbeep-relay` 머리말 "clip 사본과 와이어 공유 — 변경 시 같은 커밋에서 고지" · 절차 [44 §7-4] · ★**실기 ✓(09-05 mac 설치본 — `install-local.sh` 기동 후 `settings.cfg`·`profile.sec`·`server.pin`·`trust.seg`·`keys.seg`·`history/*.seg` 전부 600 · 미기동 multi A/B는 644 그대로 = 스윕은 기동한 인스턴스만)** · `.locked` 보관본은 스윕 대상 밖 | P1 | 소 | — | ✅ (09-05 `92c92ab` — 807 green(+7) · rustdoc ✓ · Win/Linux 교차 = CI · mac 실기 ✓) |
 
+## §9. 보안 상시 관찰 (SEC) — 상시 과제 중 완료분
+
+> 11-06 옮김(개발 세션 지시) — 회귀 자체는 CI ubuntu 매 push · `verify.sh`가 계속 돈다. 트리거·트래커는 [TODO §9](TODO.md)에 남는다.
+
+| ID | 항목 | 상태 |
+|---|---|:--:|
+| **SEC-1** | **와이어 평문 자동 회귀를 CI에 상시**(FR-S-51) — 이게 있어야 SEC-T1이 사람 기억에 의존하지 않는다 | ✅ **11-05 `f3f4e4c`** — 와이어 평문 회귀 자동화 완료: `tools/wire-scan.sh`(실소켓 · 발견 W-1~W-7 3-OS + 세션 W-8 Linux pcap) → `verify.sh` 단계 + CI ubuntu 잡 · (종전: 08-09 안전 송수신 4항목 CI 상시화 · 08-15 M1-11 인코더·세션 계층) · ✅ **CI W-8 첫 판정 PASS(run 42094275079 · 11-05 · ubuntu pcap 296,674B · PSH 179 · 평문 0)** |
+| **SEC-2** | **수동 캡처 스크립트를 저장소에** 두고 포맷 변경 커밋에서 재실행 | ✅ (08-15 M1-12 `tools/wirecap.sh` 상비 · 11-05 `tools/wire-scan.sh` 자동 판정으로 verify·CI 상시 — SEC-1 겸함) |
+
 ## §10. 반복·멱등 로직 점검 (RL) — 08-17 전수 점검분
 
 | ID | 항목 | 소속 | 우선 | 규모 | 상태 |

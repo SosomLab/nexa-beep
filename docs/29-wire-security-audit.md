@@ -39,7 +39,7 @@
 
 | # | 기준 | 검사 | 판정 |
 |:--:|---|---|:--:|
-| **W-8** | 핸드셰이크 이후 **평문이 한 조각도 링크에 나타나지 않는다** | **자동** — tap 링크로 프레임 가로채 금칙어 스캔(기존 `ciphertext_on_the_wire_is_not_plaintext`를 일반화) | ✅ 단위 · ✅ **자동(Linux CI pcap · 11-05 `tools/wire-scan.sh`)** — tcpdump + `sudo -n`일 때 본문·소개글 부재 + TCP PSH ≥1(공허 판정 거부) · 그 밖 OS 건너뜀 · 첫 판정 = CI 결과 대기 |
+| **W-8** | 핸드셰이크 이후 **평문이 한 조각도 링크에 나타나지 않는다** | **자동** — tap 링크로 프레임 가로채 금칙어 스캔(기존 `ciphertext_on_the_wire_is_not_plaintext`를 일반화) | ✅ 단위 · ✅ **CI ubuntu 매 push 자동(`tools/wire-scan.sh`)** — tcpdump + `sudo -n`일 때 본문·소개글 부재 + TCP PSH ≥1(공허 판정 거부) · 그 밖 OS 건너뜀 · **첫 판정 PASS(11-05 run 42094275079 — pcap 296,674B · PSH 179 · 평문 0)** |
 | **W-9** | **파일·이미지 바이트도 같은 세션 암호**를 탄다 — 별도 평문 경로 없음 | 자동(M4 도착 시) | ☐ M4 |
 | **W-10** | 프로필은 **세션 경유로만** 전달된다 | 자동(M3-7 도착 시) | ☐ M3-7 |
 
@@ -131,7 +131,7 @@ tools/wirecap.sh 6   # 6초 수신 — 실행 중 인스턴스의 실물 패킷�
 sudo tcpdump -i any -A -s0 'tcp port 47200' | grep -a "보낸메시지"   # 아무것도 안 나와야 정상
 ```
 
-⚠️ **W-8은 아직 실소켓 캡처로 확인하지 않았다** — 단위 테스트(tap 링크)만 통과했다. 실기 항목으로 남긴다.
+✅ **W-8 실소켓 확인(11-05)** — 이 절차를 `tools/wire-scan.sh`가 자동화했다(Linux CI ubuntu 매 push · tcpdump `-i any` · 본문·소개글 금칙 + TCP PSH ≥1). 첫 판정 run 42094275079 PASS(pcap 296,674B · PSH 179 · 평문 0). ~~종전: 단위 테스트(tap 링크)만 통과 · 실기 항목~~
 
 ---
 

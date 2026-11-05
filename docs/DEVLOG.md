@@ -5,6 +5,10 @@
 
 ---
 
+## 2026-11-06
+
+- ★**(Win · main) SEC-1 완결 — CI W-8 첫 판정 PASS**(run 42094275079 · ubuntu pcap 296,674B · PSH 179 · 평문 0 · 발견 3키 W-1~W-7 통과 · 새 재식별자 없음 · 교착 재발 없음) · SEC-1·SEC-2 → TODO-done · W-8 트래커 해소 → [journal](journal/2026-11-05.md)
+
 ## 2026-11-05
 
 - **(Win · main) CI가 거른 2건** — `817374f` MEM-1 ② rustdoc intra-doc 링크 · `4187806` wire-scan.sh Linux CI 교착(맨 `wait` × 백그라운드 tcpdump · 4h 24m → 앱 pid만 대기 + 단계 timeout 5분) · 교훈 = 3-OS 조건부 분기는 그 OS 실행 전엔 미실측 · W-8 첫 판정 대기 → [journal](journal/2026-11-05.md)
