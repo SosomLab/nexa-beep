@@ -193,6 +193,10 @@ pub const ADVANCED: &[&str] = &[
     "group.reinvite_hours",
     "group.invite_expire_days",
     "group.decline_undo_secs",
+    // 자동 임시 차단 임계값(M5-3 2차 · docs/38 §5 — 코드 상수 → 설정 승격 · 11-05).
+    "block.msg_burst",
+    "block.accept_per_min",
+    "block.auto_minutes",
     "net.session_port",
     "log.retain_days",
     "log.max_total_mb",
@@ -1974,6 +1978,55 @@ pub fn registry() -> &'static [Entry] {
             desc: Msg::BlockAddNameDesc,
             kind: SettingKind::Action { verb: Msg::ActAdd },
             key: "block.add_name",
+        },
+        // 자동 임시 차단 임계값(docs/38 §5 · M5-3 2차) — 기본값 = 첫 항목(종전 코드 상수와 같음) · 0 = 끄기.
+        Entry {
+            cat: Msg::CatAdvanced,
+            sub: Some(Msg::SubBlockList),
+            label: Msg::BlockMsgBurst,
+            desc: Msg::BlockMsgBurstDesc,
+            kind: SettingKind::RadioInput(
+                &[
+                    ("50", Msg::Per10s50),
+                    ("20", Msg::Per10s20),
+                    ("100", Msg::Per10s100),
+                    ("0", Msg::BlockOff),
+                ],
+                "건",
+            ),
+            key: "block.msg_burst",
+        },
+        Entry {
+            cat: Msg::CatAdvanced,
+            sub: Some(Msg::SubBlockList),
+            label: Msg::BlockAcceptPerMin,
+            desc: Msg::BlockAcceptPerMinDesc,
+            kind: SettingKind::RadioInput(
+                &[
+                    ("30", Msg::PerMin30),
+                    ("10", Msg::PerMin10),
+                    ("60", Msg::PerMin60),
+                    ("0", Msg::BlockOff),
+                ],
+                "회",
+            ),
+            key: "block.accept_per_min",
+        },
+        Entry {
+            cat: Msg::CatAdvanced,
+            sub: Some(Msg::SubBlockList),
+            label: Msg::BlockAutoMinutes,
+            desc: Msg::BlockAutoMinutesDesc,
+            kind: SettingKind::RadioInput(
+                &[
+                    ("10", Msg::Min10),
+                    ("5", Msg::Min5),
+                    ("30", Msg::Min30),
+                    ("60", Msg::Min60),
+                ],
+                "분",
+            ),
+            key: "block.auto_minutes",
         },
         // ── 고급 › 네트워크 점검(netmon · 08-21 — 옵트인 계측 기록 · 기본 off) ──
         Entry {

@@ -63,10 +63,16 @@ impl BlockEntry {
     /// 자동 임시 항목(기본 [`AUTO_TEMP_MS`]).
     #[must_use]
     pub fn auto_temp(axis: BlockAxis, now_ms: u64, note: &str) -> Self {
+        Self::auto_temp_for(axis, now_ms, note, AUTO_TEMP_MS)
+    }
+
+    /// 자동 임시 항목 — 기간 지정(설정 `block.auto_minutes` · M5-3 2차).
+    #[must_use]
+    pub fn auto_temp_for(axis: BlockAxis, now_ms: u64, note: &str, dur_ms: u64) -> Self {
         Self {
             axis,
             added_ms: now_ms,
-            until_ms: Some(now_ms.saturating_add(AUTO_TEMP_MS)),
+            until_ms: Some(now_ms.saturating_add(dur_ms.max(1))),
             auto: true,
             note: note.to_owned(),
         }

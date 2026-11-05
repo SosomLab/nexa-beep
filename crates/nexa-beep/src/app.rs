@@ -3443,11 +3443,25 @@ const MSG_BURST_MAX: usize = 50;
 
 /// 전송 계층 소켓 스레드가 보는 IP 판정 상태(BL-2 · BL-4) — 앱 목록의 **스냅샷**(`rules`) + accept 계수. 앱이 바뀔 때마다
 /// `rules`를 덮고, 발동(`fired`)은 틱이 거둬 영속 목록·고지로 옮긴다(소켓 스레드는 파일·UI를 만지지 않는다).
-#[derive(Default)]
 struct IpFilterState {
     rules: Vec<(std::net::IpAddr, u8, Option<u64>)>,
     accepts: HashMap<std::net::IpAddr, VecDeque<u64>>,
     fired: Vec<(std::net::IpAddr, usize)>,
+    /// 설정 `block.accept_per_min`(0 = 끄기) · `block.auto_minutes`(ms) — 틱이 동기한다(M5-3 2차).
+    accept_per_min: usize,
+    auto_ms: u64,
+}
+
+impl Default for IpFilterState {
+    fn default() -> Self {
+        Self {
+            rules: Vec::new(),
+            accepts: HashMap::new(),
+            fired: Vec::new(),
+            accept_per_min: ACCEPT_PER_MIN,
+            auto_ms: nbeep_core::block::AUTO_TEMP_MS,
+        }
+    }
 }
 
 impl IpFilterState {
@@ -3461,7 +3475,7 @@ impl IpFilterState {
                 }
                 .covers_ip(ip)
         });
-        if hit || kind != nbeep_net::InboundKind::Accept {
+        if hit || kind != nbeep_net::InboundKind::Accept || self.accept_per_min == 0 {
             return hit;
         }
         let q = self.accepts.entry(ip).or_default();
@@ -3472,12 +3486,11 @@ impl IpFilterState {
         {
             q.pop_front();
         }
-        if q.len() > ACCEPT_PER_MIN {
+        if q.len() > self.accept_per_min {
             let n = q.len();
             q.clear();
             let full = if ip.is_ipv4() { 32 } else { 128 };
-            self.rules
-                .push((ip, full, Some(now_ms + nbeep_core::block::AUTO_TEMP_MS)));
+            self.rules.push((ip, full, Some(now_ms + self.auto_ms)));
             self.fired.push((ip, n));
             return true;
         }
@@ -9916,10 +9929,29 @@ impl App {
     /// 전송 계층 핫 필터에 IP 규칙 스냅샷을 덮는다(목록이 바뀔 때마다 · 소켓 스레드는 이 스냅샷만 본다).
     fn sync_ip_filter(&self) {
         let rules = self.blocks.ip_rules(unix_now_ms());
+        let per_min = self.block_setting("block.accept_per_min", ACCEPT_PER_MIN as u64) as usize;
+        let auto_ms = self.auto_block_ms();
+        let apply = |g: &mut IpFilterState| {
+            g.rules = rules;
+            g.accept_per_min = per_min;
+            g.auto_ms = auto_ms;
+        };
         match self.ip_filter.lock() {
-            Ok(mut g) => g.rules = rules,
-            Err(e) => e.into_inner().rules = rules,
+            Ok(mut g) => apply(&mut g),
+            Err(e) => apply(&mut e.into_inner()),
         }
+    }
+
+    /// 수신 제한 수치 설정(M5-3 2차 · 설정 › 고급 › 수신 제한) — 비어 있거나 못 읽으면 종전 코드 상수.
+    fn block_setting(&self, key: &str, default: u64) -> u64 {
+        self.settings.get(key).trim().parse().unwrap_or(default)
+    }
+
+    /// 자동 임시 차단 기간(ms) — `block.auto_minutes`(기본 10분).
+    fn auto_block_ms(&self) -> u64 {
+        self.block_setting("block.auto_minutes", 10)
+            .clamp(1, 24 * 60)
+            * 60_000
     }
 
     /// 상대별 메시지 폭주 계수(BL-4 · docs/38 §5) — 10초 창에 50건 초과 = Peer 임시 차단 10분 + 고지. 반환 = 이번 메시지 폐기.
@@ -9929,6 +9961,7 @@ impl App {
             return false;
         }
         let now = unix_now_ms();
+        let max = self.block_setting("block.msg_burst", MSG_BURST_MAX as u64) as usize;
         let q = self.msg_rate.entry(peer).or_default();
         q.push_back(now);
         while q
@@ -9937,15 +9970,17 @@ impl App {
         {
             q.pop_front();
         }
-        if q.len() <= MSG_BURST_MAX {
-            return false;
+        if max == 0 || q.len() <= max {
+            return false; // 0 = 끄기(M5-3 2차)
         }
         let n = q.len();
         let title = self.peer_title(peer);
-        self.apply_block(nbeep_core::BlockEntry::auto_temp(
+        let dur = self.auto_block_ms();
+        self.apply_block(nbeep_core::BlockEntry::auto_temp_for(
             nbeep_core::BlockAxis::Peer(peer),
             now,
             &format!("msg {n}/10s"),
+            dur,
         ));
         self.set_status(nbeep_core::tf(nbeep_core::Msg::StfAutoBlocked, &[&title]));
         true
@@ -9972,21 +10007,24 @@ impl App {
         for (ip, n) in fired {
             changed = true;
             let full = if ip.is_ipv4() { 32 } else { 128 };
-            self.blocks.add(nbeep_core::BlockEntry::auto_temp(
+            let dur = self.auto_block_ms();
+            self.blocks.add(nbeep_core::BlockEntry::auto_temp_for(
                 nbeep_core::BlockAxis::Ip {
                     addr: ip,
                     prefix: full,
                 },
                 now,
                 &format!("accept {n}/min"),
+                dur,
             ));
             self.set_status(nbeep_core::tf(
                 nbeep_core::Msg::StfAutoBlocked,
                 &[&ip.to_string()],
             ));
         }
+        // 수치 설정 변경(설정 창 즉시 적용)도 여기서 소켓 스레드로 흘러간다 — 1초 1회 · 항목 수십 = 비용 0.
+        self.sync_ip_filter();
         if changed {
-            self.sync_ip_filter();
             self.refresh_and_redraw();
         }
     }
