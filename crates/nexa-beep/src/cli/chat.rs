@@ -915,6 +915,8 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
                     Ok(XferMsg::Received { .. }) => {
                         println!("[파일] 상대 수신 확인 — 완료");
                     }
+                    // 청크 윈도 수신 확인(M4-10 ⓐ) — CLI는 윈도를 광고하지 않아 오지 않는다(방어적 무시).
+                    Ok(XferMsg::Progress { .. }) => {}
                     Ok(XferMsg::Failed { .. }) => {
                         println!("[파일] 상대가 받지 못함 — 실패(무결성·저장)");
                     }

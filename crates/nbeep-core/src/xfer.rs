@@ -146,6 +146,10 @@ pub enum XferMsg {
         /// 전송 id.
         id: XferId,
     },
+    /// ★ 수신 진행 확인(M4-10 ⓐ 청크 윈도 · 11-05) — 수신측이 "여기까지 받았다"를 되돌린다. 발신측은 미확인 바이트가
+    /// 윈도를 넘으면 쉬고(배압 · 메모리 상한) 진행률을 **이 값**으로 표시한다(소켓 쓰기 = 낙관이던 것). 구버전은 이 종류를
+    /// 모르면 배치 실패로 보므로 Control [`WINDOW_TAG`] 광고를 보낸 상대에게만 낸다(전방 호환).
+    Progress { id: XferId, got: u64 },
 }
 
 /// 와이어 오류 — 전부 명시 거부(fail-closed).
@@ -188,6 +192,7 @@ const K_DONE: u8 = 5;
 const K_CANCEL: u8 = 6;
 const K_RECEIVED: u8 = 7;
 const K_FAILED: u8 = 8;
+const K_PROGRESS: u8 = 9;
 
 impl XferMsg {
     /// 와이어 인코딩.
@@ -255,6 +260,11 @@ impl XferMsg {
             Self::Failed { id } => {
                 out.push(K_FAILED);
                 out.extend_from_slice(id);
+            }
+            Self::Progress { id, got } => {
+                out.push(K_PROGRESS);
+                out.extend_from_slice(id);
+                out.extend_from_slice(&got.to_le_bytes());
             }
         }
         out
@@ -347,6 +357,15 @@ impl XferMsg {
             K_CANCEL => Self::Cancel { id },
             K_RECEIVED => Self::Received { id },
             K_FAILED => Self::Failed { id },
+            K_PROGRESS => {
+                if rest.len() < 8 {
+                    return Err(XferError::Truncated);
+                }
+                Self::Progress {
+                    id,
+                    got: u64::from_le_bytes(rest[0..8].try_into().expect("8B")),
+                }
+            }
             k => return Err(XferError::Kind(k)),
         })
     }
@@ -373,6 +392,28 @@ pub fn decode_cap_advert(bytes: &[u8]) -> Option<u64> {
         return None;
     }
     Some(u64::from_le_bytes(bytes[1..9].try_into().ok()?))
+}
+
+/// ★ 청크 윈도 광고 태그(M4-10 ⓐ · 11-05) — "나는 [`XferMsg::Progress`]를 낸다/받는다" + 권장 윈도(바이트). 세션 성립 직후 양쪽이
+/// 보낸다 · 구버전은 미지 Control 태그를 버린다 = 광고가 없으면 종전(윈도 없음 · Progress 없음)으로 자연 강등.
+pub const WINDOW_TAG: u8 = 22;
+
+/// 윈도 광고 인코딩 — `WINDOW_TAG ‖ window(4 LE)`.
+#[must_use]
+pub fn encode_window_advert(window: u32) -> Vec<u8> {
+    let mut out = Vec::with_capacity(5);
+    out.push(WINDOW_TAG);
+    out.extend_from_slice(&window.to_le_bytes());
+    out
+}
+
+/// 윈도 광고 해석 — 태그·길이 불일치 = None.
+#[must_use]
+pub fn decode_window_advert(bytes: &[u8]) -> Option<u32> {
+    if bytes.len() != 5 || bytes[0] != WINDOW_TAG {
+        return None;
+    }
+    Some(u32::from_le_bytes(bytes[1..5].try_into().ok()?))
 }
 
 /// 상한 **질의** 태그(08-18 — 송신 직전 신선도 확인: 상대 설정이 그새 바뀌었을
@@ -1233,5 +1274,30 @@ mod tests {
         // hot-swap 축소 후 새 오퍼부터 적용.
         inbox.set_max_file(10);
         assert_eq!(inbox.offer(&offer(11)), Err(XferError::FileTooBig));
+    }
+}
+
+#[cfg(test)]
+mod window_tests {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+
+    /// M4-10 ⓐ — Progress 왕복 · 잘림 = Truncated · 윈도 광고 왕복 · 다른 Control 태그와 불일치.
+    #[test]
+    fn progress_and_window_advert_roundtrip() {
+        let m = XferMsg::Progress {
+            id: [3u8; 16],
+            got: 1 << 40,
+        };
+        let b = m.encode();
+        assert_eq!(XferMsg::decode(&b).unwrap(), m);
+        assert_eq!(
+            XferMsg::decode(&b[..b.len() - 1]),
+            Err(XferError::Truncated)
+        );
+        let a = encode_window_advert(1 << 20);
+        assert_eq!(decode_window_advert(&a), Some(1 << 20));
+        assert_eq!(decode_window_advert(&encode_cap_request()), None);
+        assert_eq!(decode_cap_advert(&a), None, "태그 분리");
     }
 }

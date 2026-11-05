@@ -1310,6 +1310,8 @@ struct ActiveSend {
     next_probe: u64,
     /// 진행 중 상향 버스트의 (시작 오프셋, 시작 시각) — Some = 무페이싱 구간.
     bursting: Option<(u64, u64)>,
+    /// 수신측이 확인한 바이트(M4-10 ⓐ `Progress`) — 윈도 판정·진행률 표시의 기준(상대가 윈도를 광고했을 때만 갱신).
+    acked: u64,
 }
 
 /// 무페이싱 프로브 구간(M4-11 ⓑ) — 첫 2MiB는 전속으로 보내 **진짜 링크
@@ -1455,6 +1457,13 @@ fn spawn_session_actor(
             StreamId::Control,
             &nbeep_core::xfer::encode_cap_advert(inbox.max_file()),
         );
+        // 청크 윈도 광고(M4-10 ⓐ) — 구버전은 미지 Control 태그를 버린다(= 종전 동작).
+        let _ = session.send(
+            StreamId::Control,
+            &nbeep_core::xfer::encode_window_advert(
+                u32::try_from(XFER_WINDOW_BYTES).unwrap_or(u32::MAX),
+            ),
+        );
         // (경로, 크기) — 발신 스트리밍(08-18): 수락 시 파일을 열어 청크 단위로
         // 직접 읽는다(10.7GB ISO DnD가 fs::read 전량 조립으로 앱을 얼렸다).
         let mut outgoing: HashMap<nbeep_core::XferId, (std::path::PathBuf, u64)> = HashMap::new();
@@ -1480,6 +1489,9 @@ fn spawn_session_actor(
         //   paused_xid 게이트는 다음 Accept가 sending을 덮어써 정지 전송을
         //   파괴했다(실기: 재개 불가·진행률 오염). bool = 재개 예약(활성 종료 후).
         let mut parked: Vec<(ActiveSend, bool)> = Vec::new();
+        // ★ 청크 윈도(M4-10 ⓐ): 상대가 Control `WINDOW_TAG`를 광고했는가 · 수신측 Progress 발신 상태(xid → (마지막 확인 바이트, 시각)).
+        let mut peer_window = false;
+        let mut ack_state: HashMap<nbeep_core::XferId, (u64, u64)> = HashMap::new();
         // 수락 전 정지 의사(오퍼는 나갔는데 아직 Accept 전) — Accept로 활성화되는
         // 즉시 보관 슬롯으로 옮긴다.
         let mut pause_wanted: std::collections::HashSet<nbeep_core::XferId> =
@@ -1763,6 +1775,9 @@ fn spawn_session_actor(
                         {
                             break; // 예산 소진 — 다음 틱에 이어서(명령·수신 교대)
                         }
+                        if peer_window && st.next.saturating_sub(st.acked) >= XFER_WINDOW_BYTES {
+                            break; // 윈도 가득(M4-10 ⓐ) — 수신 확인(Progress)이 올 때까지 쉰다(1ms 폴 교대 · 명령은 계속 받는다)
+                        }
                         tick_chunks += 1;
                         let off = st.next;
                         let end = (off + nbeep_core::MAX_CHUNK as u64).min(st.total);
@@ -1837,18 +1852,21 @@ fn spawn_session_actor(
                         }
                         st.next = end;
                         send_meter.observe(n, xfer_now_ms());
-                        let _ = proxy.send_event(AppEvent::XferProgress {
-                            peer,
-                            got: end,
-                            total: st.total,
-                            sending: true,
-                            name: st
-                                .src
-                                .0
-                                .file_name()
-                                .map(|n| n.to_string_lossy().into_owned())
-                                .unwrap_or_default(),
-                        });
+                        // 진행률: 윈도 상대는 Progress 도착이 갱신한다(수신 확인 기준 · M4-10 ⓐ) · 구버전 상대는 종전(소켓 쓰기 기준).
+                        if !peer_window {
+                            let _ = proxy.send_event(AppEvent::XferProgress {
+                                peer,
+                                got: end,
+                                total: st.total,
+                                sending: true,
+                                name: st
+                                    .src
+                                    .0
+                                    .file_name()
+                                    .map(|n| n.to_string_lossy().into_owned())
+                                    .unwrap_or_default(),
+                            });
+                        }
                     }
                     if read_fail {
                         let id = st.id;
@@ -1942,6 +1960,12 @@ fn spawn_session_actor(
                     // 프로필 수신(Control — M3-17). 요청은 메인으로 올리고(정책 단일 지점),
                     // 응답은 여기서 조립해 완성본만 올린다(대용량 조립이 메인을 막지 않게).
                     // 수신 상한 공지·질의(08-18) — 태그 11/12 · 다른 Control보다 먼저.
+                    // 청크 윈도 광고(M4-10 ⓐ · 태그 22) — 이제부터 이 상대에게 Progress를 내고, 상대의 Progress로 윈도를 센다.
+                    StreamId::Control
+                        if nbeep_core::xfer::decode_window_advert(&bytes).is_some() =>
+                    {
+                        peer_window = true;
+                    }
                     StreamId::Control if nbeep_core::xfer::decode_cap_advert(&bytes).is_some() => {
                         if let Some(cap) = nbeep_core::xfer::decode_cap_advert(&bytes) {
                             let _ = proxy.send_event(AppEvent::PeerRecvCap { peer, cap });
@@ -2306,6 +2330,8 @@ fn spawn_session_actor(
                             &mut recv_names,
                             &mut sent_names,
                             &mut canceled,
+                            peer_window,
+                            &mut ack_state,
                             &proxy,
                             send_rate,
                             &mut send_meter,
@@ -3104,6 +3130,8 @@ fn xfer_step(
     recv_names: &mut HashMap<nbeep_core::XferId, String>,
     sent_names: &mut HashMap<nbeep_core::XferId, (String, u64)>,
     canceled: &mut std::collections::HashSet<nbeep_core::XferId>,
+    peer_window: bool,
+    ack_state: &mut HashMap<nbeep_core::XferId, (u64, u64)>,
     proxy: &winit::event_loop::EventLoopProxy<AppEvent>,
     send_rate: nbeep_core::RateLimit,
     meter: &mut nbeep_core::RateMeter,
@@ -3217,6 +3245,7 @@ fn xfer_step(
                     src: (path, mtime0),
                     next: start,
                     from: start,
+                    acked: start,
                     total,
                     pacer: nbeep_core::Pacer::new(nbeep_core::negotiate(local, rate_cap)),
                     rate_cap,
@@ -3257,6 +3286,19 @@ fn xfer_step(
                             sending: false,
                             name: recv_names.get(&id).cloned().unwrap_or_default(),
                         });
+                        // 수신 확인(M4-10 ⓐ) — 윈도 상대에게만 · 128KiB 또는 100ms마다 · 마지막 청크는 즉시.
+                        if peer_window {
+                            let now = xfer_now_ms();
+                            let e = ack_state.entry(id).or_insert((0, 0));
+                            if got >= total
+                                || got.saturating_sub(e.0) >= XFER_ACK_EVERY
+                                || now.saturating_sub(e.1) >= XFER_ACK_MAX_MS
+                            {
+                                *e = (got, now);
+                                let _ = session
+                                    .send(StreamId::File, &XferMsg::Progress { id, got }.encode());
+                            }
+                        }
                     }
                 }
                 Err(e) => fail(nbeep_core::tf(
@@ -3268,6 +3310,7 @@ fn xfer_step(
         Ok(XferMsg::Done { id, .. }) if canceled.contains(&id) => {} // 취소분 꼬리(08-18)
         Ok(XferMsg::Done { id, sha256 }) => match inbox.done(&id) {
             Ok(mut got) => {
+                ack_state.remove(&id);
                 // 지연 선언(08-18) — Offer가 0이었으면 Done 동봉 해시가 선언이다.
                 // 둘 다 0 = 선언 부재(fail-closed — 검증 없는 수신물은 없다).
                 if got.declared_sha256 == [0u8; 32] {
@@ -3328,6 +3371,24 @@ fn xfer_step(
                 size,
             });
         }
+        // ★ 수신 확인 도착(M4-10 ⓐ · 발신측) — 윈도를 열고 진행률을 수신 기준으로 갱신.
+        Ok(XferMsg::Progress { id, got }) => {
+            if let Some(st) = sending.as_mut().filter(|st| st.id == id) {
+                st.acked = got.min(st.total).max(st.acked);
+                let _ = proxy.send_event(AppEvent::XferProgress {
+                    peer,
+                    got: st.acked,
+                    total: st.total,
+                    sending: true,
+                    name: st
+                        .src
+                        .0
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default(),
+                });
+            }
+        }
         Ok(XferMsg::Failed { id }) => {
             let (name, size) = sent_names.remove(&id).unwrap_or_default();
             let _ = proxy.send_event(AppEvent::XferAcked {
@@ -3341,6 +3402,7 @@ fn xfer_step(
             inbox.drop_xfer(&id);
             outgoing.remove(&id);
             recv_started.remove(&id);
+            ack_state.remove(&id);
             canceled.insert(id); // 대칭 — 이후 잔류 프레임 조용히 폐기(08-18)
             if sending.as_ref().is_some_and(|st| st.id == id) {
                 *sending = None; // 상대(수신측)가 진행 중 취소 — 펌프 즉시 중단(08-16)
@@ -3446,6 +3508,12 @@ struct HeldMsg {
     broadcast: bool,
     reply: Option<nbeep_core::ReplyRef>,
 }
+
+/// ★ 청크 윈도(M4-10 ⓐ · 11-05): 수신 확인(`XferMsg::Progress`)이 안 된 바이트가 이만큼이면 발신 펌프가 쉰다(배압 · 수신측
+/// 조립 메모리 상한) — 32KiB 청크 32개. 수신측은 `XFER_ACK_EVERY` 바이트 또는 `XFER_ACK_MAX_MS`마다 Progress를 낸다.
+const XFER_WINDOW_BYTES: u64 = 1 << 20;
+const XFER_ACK_EVERY: u64 = 128 << 10;
+const XFER_ACK_MAX_MS: u64 = 100;
 
 /// 같은 IP의 인바운드 accept 상한(분당 · docs/38 §5) — 초과 = IP 임시 차단 10분.
 const ACCEPT_PER_MIN: usize = 30;
