@@ -10056,11 +10056,21 @@ impl App {
         if self.settings.get("block.first_contact") != "on" {
             return false;
         }
+        // 상대 창을 열기만 해도 붙는 **로컬 안내 줄**(지문 대조 권유·원격 경로·첫 왕래)은 대화가 아니다(협업 실기 11-05 —
+        // activate 뒤 안내 줄 하나로 승인제가 풀렸다). 사람 줄 = 내 줄 ∨ 발신자 라벨이 있는 상대 줄.
+        let human = |l: &ChatLine| -> bool {
+            l.mine
+                || l.from.is_some()
+                || !matches!(&l.body, nbeep_ui::ChatBody::Text(t) if is_local_notice(t.as_str()))
+        };
         let has_lines = self
             .conversations
             .get(&peer)
-            .is_some_and(|c| !c.lines.is_empty())
-            || self.parked_lines.get(&peer).is_some_and(|l| !l.is_empty());
+            .is_some_and(|c| c.lines.iter().any(human))
+            || self
+                .parked_lines
+                .get(&peer)
+                .is_some_and(|l| l.iter().any(human));
         let known = has_lines
             || self.trust.meta(peer).1 != 0
             || self.ledger.get(peer).sent > 0
@@ -22210,6 +22220,12 @@ impl ApplicationHandler<AppEvent> for App {
                 sending,
                 name,
             } => {
+                dlog!(self, DL::Xfer, DV::Trace, "progress", |r| r
+                    .arg("peer", peer.short())
+                    .arg("got", got)
+                    .arg("total", total)
+                    .arg("sending", sending)
+                    .ok("progress event"));
                 // ★ 취소 경합 가드(08-18 실기) — 취소가 배너를 지운 **뒤에** 액터가
                 //   이미 큐에 실어 둔 지각 진행 이벤트가 도착해 배너를 되살렸다
                 //   (이후 이벤트가 없어 "수신 25%"에 영구 고착). 활성 전송이
