@@ -4326,7 +4326,7 @@ impl App {
             .with_resizable(true)
             .with_window_icon(self.icon.clone());
         let attrs = self.modal_attrs(attrs, false); // 메인 소유(08-15 — 창 묶음 부상)
-        let window = Rc::new(el.create_window(headless_attrs(attrs)).unwrap());
+        let window = new_window(el, attrs).unwrap();
         window.set_ime_allowed(true); // 이름·이메일 입력란
         let scale = window.scale_factor() as f32;
         let surface = crate::present::Presenter::new(window.clone()).unwrap();
@@ -4547,7 +4547,7 @@ impl App {
             .with_resizable(false) // 모달 대화상자 — 크기 고정
             .with_window_icon(self.icon.clone());
         let attrs = self.modal_attrs(attrs, false); // 메인 소유(08-15 — 창 묶음 부상)
-        let window = Rc::new(el.create_window(headless_attrs(attrs)).unwrap());
+        let window = new_window(el, attrs).unwrap();
         let scale = window.scale_factor() as f32;
         let surface = crate::present::Presenter::new(window.clone()).unwrap();
         let id = window.id();
@@ -4636,7 +4636,7 @@ impl App {
             }
         }
         let attrs = self.modal_attrs_from(anchor, attrs, false); // 진원 창 소유(부상·복귀 축)
-        let window = Rc::new(el.create_window(headless_attrs(attrs)).unwrap());
+        let window = new_window(el, attrs).unwrap();
         let scale = window.scale_factor() as f32;
         let surface = crate::present::Presenter::new(window.clone()).unwrap();
         let id = window.id();
@@ -7310,7 +7310,7 @@ impl App {
                     .with_position(winit::dpi::LogicalPosition::new(f64::from(x), f64::from(y)));
             }
         }
-        let window = Rc::new(el.create_window(headless_attrs(attrs)).unwrap());
+        let window = new_window(el, attrs).unwrap();
         #[cfg(target_os = "linux")]
         linux_clipboard_init(&window); // 클립보드 워커(L-1) — 메인 창의 wl_display로 1회
         window.set_theme(self.window_theme()); // 장식 테마(Linux CSD = 실효값 명시)
@@ -9415,7 +9415,7 @@ impl App {
             .with_resizable(true)
             .with_window_icon(self.icon.clone());
         let attrs = self.modal_attrs(attrs, false);
-        let window = Rc::new(el.create_window(headless_attrs(attrs)).unwrap());
+        let window = new_window(el, attrs).unwrap();
         window.set_ime_allowed(false);
         let scale = window.scale_factor() as f32;
         let surface = crate::present::Presenter::new(window.clone()).unwrap();
@@ -9464,7 +9464,7 @@ impl App {
             .with_resizable(true)
             .with_window_icon(self.icon.clone());
         let attrs = self.modal_attrs(attrs, false);
-        let window = Rc::new(el.create_window(headless_attrs(attrs)).unwrap());
+        let window = new_window(el, attrs).unwrap();
         let scale = window.scale_factor() as f32;
         let surface = crate::present::Presenter::new(window.clone()).unwrap();
         let id = window.id();
@@ -9571,7 +9571,7 @@ impl App {
             .with_resizable(false)
             .with_window_icon(self.icon.clone());
         let attrs = self.modal_attrs(attrs, false);
-        let window = Rc::new(el.create_window(headless_attrs(attrs)).unwrap());
+        let window = new_window(el, attrs).unwrap();
         let scale = window.scale_factor() as f32;
         let surface = crate::present::Presenter::new(window.clone()).unwrap();
         let id = window.id();
@@ -12024,7 +12024,7 @@ impl App {
             .win_attrs()
             .with_title(title)
             .with_window_icon(self.icon.clone());
-        let window = Rc::new(el.create_window(headless_attrs(attrs)).unwrap());
+        let window = new_window(el, attrs).unwrap();
         window.set_ime_allowed(true);
         let scale = window.scale_factor() as f32;
         let surface = crate::present::Presenter::new(window.clone()).unwrap();
@@ -12085,7 +12085,7 @@ impl App {
                 attrs = attrs.with_position(winit::dpi::LogicalPosition::new(x, y));
             }
         }
-        let window = Rc::new(el.create_window(headless_attrs(attrs)).unwrap());
+        let window = new_window(el, attrs).unwrap();
         window.set_ime_allowed(true);
         let scale = window.scale_factor() as f32;
         let surface = crate::present::Presenter::new(window.clone()).unwrap();
@@ -12329,7 +12329,7 @@ impl App {
             ))
             .with_inner_size(winit::dpi::LogicalSize::new(560.0, 460.0))
             .with_window_icon(self.icon.clone());
-        let window = Rc::new(el.create_window(headless_attrs(attrs)).unwrap());
+        let window = new_window(el, attrs).unwrap();
         window.set_ime_allowed(true); // 이름 필터 = 한글 입력 대상
         let scale = window.scale_factor() as f32;
         let surface = crate::present::Presenter::new(window.clone()).unwrap();
@@ -12779,7 +12779,7 @@ impl App {
             ))
             .with_inner_size(winit::dpi::LogicalSize::new(620.0, 420.0))
             .with_window_icon(self.icon.clone());
-        let window = Rc::new(el.create_window(headless_attrs(attrs)).unwrap());
+        let window = new_window(el, attrs).unwrap();
         let scale = window.scale_factor() as f32;
         let surface = crate::present::Presenter::new(window.clone()).unwrap();
         let id = window.id();
@@ -13065,7 +13065,7 @@ impl App {
             .with_resizable(true)
             .with_window_icon(self.icon.clone());
         let attrs = self.modal_attrs(attrs, false); // 메인 소유(08-15 — 창 묶음 부상)
-        let window = Rc::new(el.create_window(headless_attrs(attrs)).unwrap());
+        let window = new_window(el, attrs).unwrap();
         let scale = window.scale_factor() as f32;
         let surface = crate::present::Presenter::new(window.clone()).unwrap();
         let id = window.id();
@@ -13654,7 +13654,7 @@ impl App {
             // 자유롭게 위로 온다(AlwaysOnTop 금지 — OS 창 전환 관례).
             .with_window_icon(self.icon.clone());
         let attrs = self.modal_attrs(attrs, true); // 마우스 위치 + 메인 소유(08-15)
-        let window = Rc::new(el.create_window(headless_attrs(attrs)).unwrap());
+        let window = new_window(el, attrs).unwrap();
         window.set_ime_allowed(true); // 이름·연락처에 한글 입력
         let scale = window.scale_factor() as f32;
         let surface = crate::present::Presenter::new(window.clone()).unwrap();
@@ -13879,7 +13879,7 @@ impl App {
             .with_resizable(false)
             .with_window_icon(self.icon.clone());
         let attrs = self.modal_attrs(attrs, false); // 메인 소유(08-15 — 창 묶음 부상)
-        let window = Rc::new(el.create_window(headless_attrs(attrs)).unwrap());
+        let window = new_window(el, attrs).unwrap();
         let scale = window.scale_factor() as f32;
         let surface = crate::present::Presenter::new(window.clone()).unwrap();
         let id = window.id();
@@ -14291,7 +14291,7 @@ impl App {
         // 마우스 위치 + 메인 소유(08-15 — 내 프로필과 같은 카드 규약. 우클릭한
         // 그 자리에서 열린다).
         let attrs = self.modal_attrs(attrs, true);
-        let window = Rc::new(el.create_window(headless_attrs(attrs)).unwrap());
+        let window = new_window(el, attrs).unwrap();
         let scale = window.scale_factor() as f32;
         let surface = crate::present::Presenter::new(window.clone()).unwrap();
         let id = window.id();
@@ -14391,7 +14391,7 @@ impl App {
         // 커서 자리 + **연 창 소유**(08-18 — 격리함에서 열면 격리함 소유:
         // 메인이 위로 튀지 않고, 닫으면 격리함으로 복귀).
         let attrs = self.modal_attrs_from(Some(src), attrs, true);
-        let window = Rc::new(el.create_window(headless_attrs(attrs)).unwrap());
+        let window = new_window(el, attrs).unwrap();
         let scale = window.scale_factor() as f32;
         let surface = crate::present::Presenter::new(window.clone()).unwrap();
         let id = window.id();
@@ -14442,7 +14442,7 @@ impl App {
             // 자유롭게 위로 온다(AlwaysOnTop 금지 — OS 창 전환 관례).
             .with_window_icon(self.icon.clone());
         let attrs = self.modal_attrs(attrs, false); // 메인 소유(08-15 — 창 묶음 부상)
-        let window = Rc::new(el.create_window(headless_attrs(attrs)).unwrap());
+        let window = new_window(el, attrs).unwrap();
         window.set_ime_allowed(true);
         let scale = window.scale_factor() as f32;
         let surface = crate::present::Presenter::new(window.clone()).unwrap();
@@ -16726,7 +16726,7 @@ impl App {
             }
         }
         let attrs = self.modal_attrs(attrs, false); // 메인 소유(08-15 — 창 묶음 부상)
-        let window = Rc::new(el.create_window(headless_attrs(attrs)).unwrap());
+        let window = new_window(el, attrs).unwrap();
         window.set_ime_allowed(true); // 그룹 이름 한글 입력
         let scale = window.scale_factor() as f32;
         let surface = crate::present::Presenter::new(window.clone()).unwrap();
@@ -17100,7 +17100,7 @@ impl App {
                     .with_title(format!("{APP_TITLE} — {title}"))
                     .with_inner_size(winit::dpi::LogicalSize::new(520.0, 560.0))
                     .with_window_icon(self.icon.clone());
-                let window = Rc::new(el.create_window(headless_attrs(attrs)).unwrap());
+                let window = new_window(el, attrs).unwrap();
                 window.set_ime_allowed(true);
                 let scale = window.scale_factor() as f32;
                 let surface = crate::present::Presenter::new(window.clone()).unwrap();
@@ -18228,7 +18228,7 @@ impl App {
             .with_resizable(false)
             .with_window_icon(self.icon.clone());
         let attrs = self.modal_attrs(attrs, false); // 메인 소유(08-15 — 창 묶음 부상)
-        let window = Rc::new(el.create_window(headless_attrs(attrs)).unwrap());
+        let window = new_window(el, attrs).unwrap();
         let scale = window.scale_factor() as f32;
         let surface = crate::present::Presenter::new(window.clone()).unwrap();
         let id = window.id();
@@ -20808,6 +20808,35 @@ fn headless_attrs(attrs: winit::window::WindowAttributes) -> winit::window::Wind
     }
 }
 
+/// ★ winit 창 생성 **깔때기** — 모든 창은 여기서만 만든다(정적 가드 `taskbar_guard_tests`).
+/// ① 헤드리스 속성(`headless_attrs`) ② GAP-042 `TaskbarCreated` 교착 가드(Windows · `nbeep_plat::taskbar_guard` ·
+/// 출처 nexa-dir3 docs/27 · 11-05 이식 — winit 0.30.13이 이 메시지를 창 상태 잠금을 쥔 채 처리하다 테마 변경 재진입으로
+/// 영구 "응답 없음"이 되는 결함을 앱 쪽에서 막는다 · 서브클래스는 창을 만든 UI 스레드에서 바로 달아야 하므로 생성 직후).
+/// 제거 조건 = winit #4563이 든 판(0.31 이후)으로 올릴 때(가드 호출 · 시험 · plat 모듈 함께).
+fn new_window(
+    el: &ActiveEventLoop,
+    attrs: winit::window::WindowAttributes,
+) -> Result<Rc<Window>, winit::error::OsError> {
+    let window = el.create_window(headless_attrs(attrs))?;
+    guard_taskbar_created(&window);
+    Ok(Rc::new(window))
+}
+
+/// GAP-042 가드 부착 — Windows만(다른 OS = no-op). 실패(HWND 없음 · SetWindowSubclass 거부)는 조용히 넘긴다(종전 동작).
+fn guard_taskbar_created(w: &Window) {
+    #[cfg(windows)]
+    {
+        use winit::raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
+        if let Ok(h) = w.window_handle() {
+            if let RawWindowHandle::Win32(h) = h.as_raw() {
+                let _ = nbeep_plat::taskbar_guard::install(h.hwnd.get());
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = w;
+}
+
 /// 창을 앞으로 — 헤드리스에서는 **하지 않는다**(mac은 포커스 요청이 숨은 창을 띄우고, 시험 인스턴스가 사용자의 전경 창을 빼앗는다).
 fn focus_win(w: &Window) {
     if !headless() {
@@ -23285,8 +23314,7 @@ impl ApplicationHandler<AppEvent> for App {
                         attrs
                     }
                 };
-                if let Ok(window) = el.create_window(headless_attrs(attrs)) {
-                    let window = Rc::new(window);
+                if let Ok(window) = new_window(el, attrs) {
                     let scale = window.scale_factor() as f32;
                     if let Ok(surface) = crate::present::Presenter::new(window.clone()) {
                         let id = window.id();
@@ -26324,5 +26352,60 @@ mod tests {
         assert_eq!(got.0, "slower", "가장 오래 걸린 것만 남는다");
         assert!(got.1 >= STALL_MS as u64 + 500);
         assert_eq!(STALL_LAST.lock().unwrap().take(), None, "take = 1회성");
+    }
+}
+
+/// GAP-042 정적 가드(3-OS · 출처 nexa-dir3 `taskbar_guard_follows_every_window_creation`을 깔때기 구조에 맞게 단순화):
+/// winit 창을 만드는 호출(`create_window(`)은 `new_window` 깔때기 **1곳**뿐이어야 한다 — 새 창을 추가하며 `el.create_window`를
+/// 직접 부르면 TaskbarCreated 가드가 빠져 이 시험이 막는다. winit을 0.31 이후로 올리면 가드와 이 시험을 함께 지운다.
+#[cfg(test)]
+mod taskbar_guard_tests {
+    use std::path::{Path, PathBuf};
+
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+        for e in std::fs::read_dir(dir).expect("read_dir").flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                walk(&p, out);
+            } else if p.extension().is_some_and(|x| x == "rs") {
+                out.push(p);
+            }
+        }
+    }
+
+    fn count(src: &str, needle: &str) -> usize {
+        src.lines()
+            .filter(|l| {
+                let t = l.trim_start();
+                !t.starts_with("//") && t.contains(needle)
+            })
+            .count()
+    }
+
+    #[test]
+    fn every_winit_window_goes_through_the_guarded_funnel() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        walk(&root, &mut files);
+        let mut hits = Vec::new();
+        for f in files {
+            let src = std::fs::read_to_string(&f).expect("read");
+            // 찾는 글을 둘로 쪼개 이 줄 자신이 세어지지 않게.
+            let n = count(&src, concat!("create_", "window("));
+            if n > 0 {
+                hits.push((
+                    f.strip_prefix(&root)
+                        .unwrap()
+                        .to_string_lossy()
+                        .replace('\\', "/"),
+                    n,
+                ));
+            }
+        }
+        assert_eq!(
+            hits,
+            vec![("app.rs".to_string(), 1)],
+            "winit 창 생성은 app.rs `new_window` 깔때기 1곳뿐이어야 한다(GAP-042 가드)"
+        );
     }
 }

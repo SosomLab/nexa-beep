@@ -39,7 +39,7 @@ $ErrorActionPreference = 'Stop'
 # 새 DLL을 쓰기 시작하면 이 게이트가 **일부러** 실패한다 — 인박스인지 사람이 한 번
 # 확인하고 이 목록에 올리라는 뜻이다(그게 NFR-B-5가 요구하는 "검토"다).
 $Whitelist = @(
-  'advapi32.dll', 'bcrypt.dll', 'bcryptprimitives.dll', 'comdlg32.dll', 'crypt32.dll',
+  'advapi32.dll', 'bcrypt.dll', 'bcryptprimitives.dll', 'comctl32.dll', 'comdlg32.dll', 'crypt32.dll',
   'dbghelp.dll', 'dwmapi.dll', 'gdi32.dll', 'imm32.dll', 'iphlpapi.dll', 'kernel32.dll',
   'ntdll.dll', 'ole32.dll', 'oleaut32.dll', 'powrprof.dll', 'propsys.dll', 'rpcrt4.dll',
   'shcore.dll', 'shell32.dll', 'shlwapi.dll', 'user32.dll', 'userenv.dll', 'uxtheme.dll',
