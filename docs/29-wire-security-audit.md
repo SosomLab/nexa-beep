@@ -105,7 +105,7 @@ FR-D-9는 표시 이름 기본값을 **호스트명 기반**으로 둔다. macOS
 | W-2 | 인코딩 결과에 **금칙 문자열 목록**(이메일·전화 패턴·프로필 키) 부재 단언 |
 | W-8 | **tap 링크**로 프레임을 가로채 평문 부재 단언 — 기존 `ciphertext_on_the_wire_is_not_plaintext`를 **금칙어 목록 기반으로 일반화** |
 | W-11 | 실행 출력·`Debug` 문자열 스캔 |
-| W-1~W-7 · W-8 실소켓 | ★ **`tools/wire-scan.sh`**(SEC-1 · 11-05 `f3f4e4c`) — 헤드리스 3신원(ws-x 표시 이름+소개글 공유 on · ws-y · ws-z 기본 이름) X→Y 메시지 1건 · ① 발견 = 그룹 조인 수신(sudo 불필요 · 3-OS) · 우리 3키 패킷만 판정(키 첫 4B = whoami 지문 · 다른 인스턴스 = foreign 수만) ② 세션 W-8 = Linux + tcpdump + `sudo -n`(CI ubuntu)일 때 pcap · `verify.sh` scan-plaintext 뒤 단계(quick 포함 · ≈35s) + CI ubuntu 헤드리스 스모크 뒤 단계 |
+| W-1~W-7 · W-8 실소켓 | ★ **`tools/wire-scan.sh`**(SEC-1 · 11-05 `f3f4e4c`) — 헤드리스 3신원(ws-x 표시 이름+소개글 공유 on · ws-y · ws-z 기본 이름) X→Y 메시지 1건 · ① 발견 = 그룹 조인 수신(sudo 불필요 · 3-OS) · 우리 3키 패킷만 판정(키 첫 4B = whoami 지문 · 다른 인스턴스 = foreign 수만) ② 세션 W-8 = Linux + tcpdump + `sudo -n`(CI ubuntu)일 때 pcap · `verify.sh` scan-plaintext 뒤 단계(quick 포함 · ≈35s) + CI ubuntu 헤드리스 스모크 뒤 단계 · ⚠ 11-05 `4187806` — f3f4e4c 첫 CI에서 맨 `wait`가 백그라운드 `sudo tcpdump`를 기다려 4h 24m 교착(Windows는 그 분기가 꺼져 PASS만 보였다) → 앱 pid만 대기 · 단계 `timeout-minutes: 5` · **교훈: 3-OS 조건부 분기(백그라운드 데몬 + 맨 `wait`)는 그 OS에서 돌려 보기 전엔 미실측 — CI 단계에는 `timeout-minutes`를 기본으로** |
 
 ### 4-2. 수동 캡처 (실기 · 권한 불필요) — ★ 절차 = **[`tools/wirecap.sh`](../tools/wirecap.sh)** (M1-12 · 08-15 상시화)
 

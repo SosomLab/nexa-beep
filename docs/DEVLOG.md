@@ -7,6 +7,7 @@
 
 ## 2026-11-05
 
+- **(Win · main) CI가 거른 2건** — `817374f` MEM-1 ② rustdoc intra-doc 링크 · `4187806` wire-scan.sh Linux CI 교착(맨 `wait` × 백그라운드 tcpdump · 4h 24m → 앱 pid만 대기 + 단계 timeout 5분) · 교훈 = 3-OS 조건부 분기는 그 OS 실행 전엔 미실측 · W-8 첫 판정 대기 → [journal](journal/2026-11-05.md)
 - ★**(Win · main) SEC-1 ✅ 와이어 평문 실소켓 자동 회귀** `f3f4e4c` — `tools/wire-scan.sh`(헤드리스 3신원 · 발견 W-1~W-7 3-OS + 세션 W-8 Linux pcap) → verify 단계 + CI ubuntu 잡 · Win PASS 3/0 · SEC-2 겸함 · CI W-8 첫 판정 대기 → [journal](journal/2026-11-05.md)
 - **(Win · main) NETMON-1 ⓑⓒ** `3a78c12` — 과다 판정 임계 3종 설정 승격(고급 › 네트워크 점검 · 0 = 끔) + 경고 줄 `top_disc`(지문 short)·`top_conn`(IP) · BL-4 계수기 재사용(새 축 없음) → [journal](journal/2026-11-05.md)
 - **(Win · main) M3-27 목록 아바타 경로 배지** `fb07279` — 연결점 왼쪽 두 번째 원(Server 점 파냄 · Internet 막대 파냄 · Local 비표시) · 원천 = 헤더 `peer_path_badge` → [journal](journal/2026-11-05.md)

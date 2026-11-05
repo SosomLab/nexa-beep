@@ -3,6 +3,8 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
+> **갱신: 2026-11-05 Win 12차 (KST · Windows · main — 개발 세션 수정 2건 · 기록 = 협업 세션)** — `817374f` MEM-1 ② `qthumbs` 주석 intra-doc 링크 `Self::QTHUMB_MAX`(CI lint rustdoc 실패 42047180295·42049047911 — rustdoc은 gate·CI에만 있는 의도된 경로) · `4187806` SEC-1 `wire-scan.sh` Linux CI 교착 수정(f3f4e4c의 맨 `wait`가 백그라운드 `sudo tcpdump`까지 기다려 ubuntu 잡 4h 24m 멈춤 · run 42049849198 취소 → `exec`로 앱 pid만 폴링·kill · tcpdump `kill -INT` 뒤 flush · ci.yml `timeout-minutes: 5` · Win 31s PASS 3/0). 교훈 = 3-OS 조건부 분기(백그라운드 데몬 + 맨 `wait`)는 그 OS에서 돌려 보기 전엔 미실측 — CI 단계에는 `timeout-minutes`를 기본으로. 잔여 = CI W-8 첫 판정(run 42093904677). → [journal](journal/2026-11-05.md#12차--ci가-거른-2건rustdoc-링크--wire-scan-linux-교착--코드--개발-세션--기록--협업-세션)
+
 > **갱신: 2026-11-05 Win 11차 (KST · Windows · main — 개발 세션 코드 1건 · 기록 = 협업 세션)** — ★**SEC-1 ✅ `f3f4e4c`** 와이어 평문 **실소켓** 자동 회귀 `tools/wire-scan.sh`: 헤드리스 3신원 · 발견 W-1~W-7(그룹 조인 수신 · sudo 불필요 · 3-OS) + 세션 W-8(Linux CI pcap) · `verify.sh` 단계(quick 포함 ≈35s) + CI ubuntu 잡 · Win 실측 recv 628 · ours 372 · foreign 256 · PASS 3/0(처방 2건 = PYTHONUTF8 · 기본 이름 규칙 FR-S-50 정합) · SEC-2 겸함 · 잔여 = CI W-8 첫 판정 · X-2 미착수(8행). → [journal](journal/2026-11-05.md#11차--sec-1-와이어-평문-실소켓-자동-회귀-toolswire-scansh코드--개발-세션--기록--협업-세션)
 
 > **갱신: 2026-11-05 Win 10차 (KST · Windows · main — 개발 세션 코드 3건 · 기록 = 협업 세션)** — 오늘 결정 8건 중 3건 구현·push: `2b93bfc` MEM-1 ①② 상대 아바타 2단(목록 80px 상주 · 카드 256px 열린 동안만) + `qthumbs` LRU 256 · `fb07279` M3-27 목록 아바타 경로 배지(Server 점 파냄 · Internet 막대 파냄 · Local 비표시) · `3a78c12` NETMON-1 ⓑⓒ 임계 3종 설정 승격(0 = 끔) + 경고 줄 `top_disc`/`top_conn`. 검증 = 커밋마다 fmt·clippy -D warnings·크레이트 test(ui 192 · core 207 · net 58 · nexa-beep 86). 다음 = SEC-1 `tools/wire-scan.sh` · X-2 릴레이 Transport 승격. → [journal](journal/2026-11-05.md#10차--결정-구현-3건mem-1--m3-27--netmon-1--코드--개발-세션--기록--협업-세션)
@@ -105,7 +107,7 @@
 
 ## 지금 걸려 있는 것
 
-> 2026-11-03 기준으로 새로 썼다 · 11-04 Win 1차 갱신(1·2·4행 · GINV-1 추가) · 11-05 2차(4-1·6행)·4차(6행)·9차(1·2행 0.8.0 · 사용자 결정 8건 = [TODO](TODO.md) MEM-1·M3-27·NETMON-1·SEC-1·X-2·X-6 행)·10차(7·8행)·11차(7행 ✅). 종전 표(08-08 시점)는 [보존본](STATUS-archive.md)에 있다. 항목 상세 = [TODO](TODO.md).
+> 2026-11-03 기준으로 새로 썼다 · 11-04 Win 1차 갱신(1·2·4행 · GINV-1 추가) · 11-05 2차(4-1·6행)·4차(6행)·9차(1·2행 0.8.0 · 사용자 결정 8건 = [TODO](TODO.md) MEM-1·M3-27·NETMON-1·SEC-1·X-2·X-6 행)·10차(7·8행)·11차(7행 ✅)·12차(7행 잔여). 종전 표(08-08 시점)는 [보존본](STATUS-archive.md)에 있다. 항목 상세 = [TODO](TODO.md).
 
 | # | 항목 | 상태 |
 |---|---|---|
@@ -121,7 +123,7 @@
 | 4-1 | **GINV-1 그룹 초대 생애주기** S2~S4 — [54](54-group-invite-lifecycle.md) ✅ · DR-30 | ✅ S1~S4(`338e06e` · 시나리오 28/28) · 잔여 = 육안 · 2-PC · ~~해제 자리 38 수신 제한 목록 통합~~ ✅ `61d331c`(11-05 · DR-30 ⑤) |
 | 5 | **X-13 S5 컨텐츠 모드** | ⏸ 실기 후 별도 결정(D-32-5) |
 | 6 | **M5-3 스팸 방어**(R-4 · v1.0 필수 · D-24) — 수신 제한 설계 = [38](38-receive-restriction-design.md) | ✅ BL-1~4 `54df30c`·`61d331c`(11-05) · BL-5 자동 = `block-scenario.sh` 19/19 ✅(동사 `1e6a705`) · **2차 ⓐ 임계값 설정 승격 ✅ `eb9a8f2` · ⓑ 발견 감쇠 ✅ `dbba0a8` · ⓒ 미확인 발신자 격리 ✅ `eb98bbd`**(시나리오 27/27) · 잔여 = 3-신원 실기 · 2-PC IP 차단 집행 · ⓑ 주입 시나리오 |
-| 7 | **SEC-1 와이어 평문 실소켓 회귀**(사용자 결정 11-05) — `tools/wire-scan.sh`(기존 수동 보조 `tools/wirecap.sh`를 자동 판정으로 확장) → `verify.sh` 단계 + ubuntu CI 잡 | ✅ `f3f4e4c`(11-05 — verify 단계 + CI ubuntu 잡 · Win 실측 PASS 3/0) · 잔여 = CI W-8 pcap 첫 판정 |
+| 7 | **SEC-1 와이어 평문 실소켓 회귀**(사용자 결정 11-05) — `tools/wire-scan.sh`(기존 수동 보조 `tools/wirecap.sh`를 자동 판정으로 확장) → `verify.sh` 단계 + ubuntu CI 잡 | ✅ `f3f4e4c`(11-05 — verify 단계 + CI ubuntu 잡 · Win 실측 PASS 3/0) · `4187806` Linux CI 교착 수정(맨 `wait` × 백그라운드 tcpdump · 4h 24m 멈춤 → 앱 pid만 대기 + 단계 timeout 5분) · 잔여 = **CI W-8 첫 판정 대기(run 42093904677)** |
 | 8 | **X-2 릴레이 Transport 승격**(사용자 결정 11-05 · DR-8 ②) — 어댑터 `nbeep-relay` ✅ 08-21 → `RelayTransport`(발견 증강·`connect` 사다리 통합) | ☐ 착수 대기(개발 세션 · SEC-1 다음) · 서버 1대 + 2-PC 실측 = **사용자 손** |
 
 ## 미해결 위험
