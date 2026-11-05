@@ -7,6 +7,7 @@
 
 ## 2026-11-05
 
+- **(Win · main) 목록 정리 · M5-3 2차 ⓒ · M4-10 ⓐ·d**(`58ae2b0` 대화 이력 없는 오프라인 상대 제거 · `eb98bbd` 미확인 발신자 격리 `block.first_contact` 기본 off · `502627e` 청크 윈도 1MiB·Progress 수신 확인 · `9eeb3d9` 그룹 재개 = 재-Offer를 그룹 경로로) · 협업 = block-scenario 첫 접촉 사슬 27/27 · 루프백 128MiB 발신 101~143MB/s(종전 68.3 · 회귀 없음) · 설치본 교체 → [journal](journal/2026-11-05.md)
 - **(Win · main) M5-3 2차 ⓐⓑ**(`eb9a8f2` 자동 차단 임계값 설정 승격 — `block.msg_burst`·`block.accept_per_min`·`block.auto_minutes` · 기본 = 종전 상수 · 0 = 끄기 / `dbba0a8` 발견 광고 폭주 감쇠 — 같은 상대 12pps 초과 = 500ms에 1회 반영 · 차단 아님) · 사용자 결정 = M4-10 ⓐ 채택 · M4-10d 착수 · M5-3 2차 3건 · winget 보류 → [journal](journal/2026-11-05.md)
 - **(Win · main) M1-13 ⓐ~ⓓ 발견 호환성 표면**(`b49168c` — 헌법 접두 40B·포트·매직 동결 · dual-announce `TX_VERS` · flags 하위 4비트 세션 세대 · 미래 버전 = "버전 불일치 — 대화 불가" 표시 · ⓓ = 기존 Control 프레임 · M1-13 전 항목 ✅) · **BL-5 동사**(`1e6a705`) + `tools/block-scenario.sh` **19/19**(협업 · verify.sh 편입) · **RL-7 2단 실측** append 21/fresh 1 · 줄당 78~82B · 쓴 양 13% → [journal](journal/2026-11-05.md)
 - **(Win · main) RL-7 2단 기록 증분 append**(`f11561d` — `nbeep_store::histfile` v2 "NBH2" 프레임 · 접두 불변이면 새 부분만 봉인 append · 바뀌면/32프레임 이상이면 전량 재작성 · 깨진 꼬리 절단 · v1 관용·첫 쓰기 이관 · 실측 잔여) → [journal](journal/2026-11-05.md)

@@ -91,6 +91,7 @@ struct BlockEntry { axis: BlockAxis, added_unix: u64, until_unix: Option<u64> /*
   이름은 새 사람이다. 이 설계의 목표는 **우회 비용을 올리고 반복 소음을 없애는 것**
   (신원 축 = 정확 차단 · IP 축 = 재생성 우회의 마찰 · 자동 임시 = 폭주 감쇠).
 - 완전한 방어는 M5-3 본편(FirstContact 승인제 · PoW/마찰 등)과 v2 UserId에서.
+  → **FirstContact 승인제 ✅ 11-05** `eb98bbd`(`block.first_contact` 기본 off — DR-1 "실행 = 참여"라 옵트인 · 대화한 적 없는 상대의 메시지를 표시·기록·알림 전에 붙들고 수신 요청 카드 수락/무시/☐ 차단 · 판정 = 기록 줄 0 ∧ 최근 대화 시각 0 ∧ 이번 세션 발신 0 ∧ 내 기기·고정·수동 주소 아님). PoW/마찰은 미착수.
 
 ## 8. 구현 슬라이스 (착수 시)
 
