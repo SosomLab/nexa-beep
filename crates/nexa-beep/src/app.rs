@@ -6864,9 +6864,60 @@ impl App {
         let dt_ms = now
             .saturating_sub(self.netmon_last_sec)
             .saturating_mul(1000);
-        let (line, warns) = nbeep_net::netmon::report_line(&self.netmon_prev, &cur, dt_ms);
+        // 임계 = 설정(NETMON-1 ⓒ · 0 = 그 축 끔 · 비었거나 못 읽으면 종전 상수).
+        let d = nbeep_net::netmon::Thresholds::default();
+        let th = nbeep_net::netmon::Thresholds {
+            disco_tx_pps: self.block_setting("netmon.disco_tx_pps", d.disco_tx_pps),
+            disco_rx_pps: self.block_setting("netmon.disco_rx_pps", d.disco_rx_pps),
+            conn_per_min: self.block_setting("netmon.conn_per_min", d.conn_per_min),
+        };
+        let (mut line, warns) = nbeep_net::netmon::report_line(&self.netmon_prev, &cur, dt_ms, &th);
+        // ⓑ 원인 상대(NETMON-1 ⓑ · 11-05 — 새 축을 열지 않고 **BL-4 계수기를 그대로 읽는다**: 발견 수신 폭주 =
+        //   `disc_rate`(상대별 1초 창) 최다 상대의 지문 short · 연결 폭풍 = `ip_filter.accepts`(IP별 분당) 최다 IP.
+        //   봉투 원리 상충은 BL-4가 자동 임시 차단을 위해 이미 감수한 범위 안 — 여기선 계수기를 **읽기만** 한다).
+        if warns.contains(&"disco_rx_pps") {
+            if let Some((p, n)) = self
+                .disc_rate
+                .iter()
+                .map(|(p, (q, _))| (*p, q.len()))
+                .max_by_key(|x| x.1)
+            {
+                line.push_str(&format!(" top_disc={}:{n}", p.short()));
+            }
+        }
+        if warns.contains(&"conn_rate") {
+            let top = match self.ip_filter.lock() {
+                Ok(g) => g
+                    .accepts
+                    .iter()
+                    .map(|(ip, q)| (*ip, q.len()))
+                    .max_by_key(|x| x.1),
+                Err(e) => e
+                    .into_inner()
+                    .accepts
+                    .iter()
+                    .map(|(ip, q)| (*ip, q.len()))
+                    .max_by_key(|x| x.1),
+            };
+            if let Some((ip, n)) = top {
+                line.push_str(&format!(" top_conn={ip}:{n}"));
+            }
+        }
         if let Some(l) = &self.netmon_log {
             l.log(&line);
+        }
+        if !warns.is_empty() {
+            dlog!(self, DL::Disc, DV::Decide, "netmon", |r| r
+                .arg("warn", warns.join(","))
+                .arg("line", &line)
+                .rule(
+                    "disco_tx_pps/disco_rx_pps/conn_per_min",
+                    format!(
+                        "{}/{}/{}",
+                        th.disco_tx_pps, th.disco_rx_pps, th.conn_per_min
+                    )
+                )
+                .ok("over threshold"));
         }
         self.netmon_prev = cur;
         self.netmon_last_sec = now;
@@ -10306,6 +10357,7 @@ impl App {
     }
 
     /// 수신 제한 수치 설정(M5-3 2차 · 설정 › 고급 › 수신 제한) — 비어 있거나 못 읽으면 종전 코드 상수.
+    /// netmon 임계(`netmon.*_pps`·`netmon.conn_per_min` · NETMON-1 ⓒ)도 같은 관례(0 = 끔)라 함께 쓴다.
     fn block_setting(&self, key: &str, default: u64) -> u64 {
         self.settings.get(key).trim().parse().unwrap_or(default)
     }

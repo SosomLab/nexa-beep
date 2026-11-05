@@ -126,13 +126,37 @@ pub const WARN_DISCO_RX_PPS: u64 = 100;
 /// 과다 판정 임계 — 분당 연결 시도(재연결 폭풍 — 08-13 백오프 계열 회귀 감시).
 pub const WARN_CONN_PER_MIN: u64 = 30;
 
+/// 과다 판정 임계 묶음(NETMON-1 ⓒ · 11-05 사용자 결정 — 설정 › 고급 › 네트워크 점검으로 승격:
+/// `netmon.disco_tx_pps` · `netmon.disco_rx_pps` · `netmon.conn_per_min`). **0 = 그 축 판정 끔**(`block.*` 관례).
+/// 기본값 = 종전 코드 상수(기업 무선망처럼 이웃이 많은 곳에서 경고가 거짓으로 울리면 사용자가 올린다).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Thresholds {
+    /// 발견 발신 초당 패킷 상한(0 = 끔).
+    pub disco_tx_pps: u64,
+    /// 발견 수신 초당 패킷 상한(0 = 끔).
+    pub disco_rx_pps: u64,
+    /// 분당 연결 시도(발신+수락) 상한(0 = 끔).
+    pub conn_per_min: u64,
+}
+
+impl Default for Thresholds {
+    fn default() -> Self {
+        Self {
+            disco_tx_pps: WARN_DISCO_TX_PPS,
+            disco_rx_pps: WARN_DISCO_RX_PPS,
+            conn_per_min: WARN_CONN_PER_MIN,
+        }
+    }
+}
+
 /// 두 스냅숏의 델타로 **분석용 한 줄**을 만든다(안정 key=value 포맷 — 파서 대상).
-/// 반환 = (줄, 경고 태그들 — 비면 정상 구간).
+/// 반환 = (줄, 경고 태그들 — 비면 정상 구간). 임계는 `th`(0 = 그 축 끔).
 #[must_use]
 pub fn report_line(
     prev: &NetSnapshot,
     cur: &NetSnapshot,
     dt_ms: u64,
+    th: &Thresholds,
 ) -> (String, Vec<&'static str>) {
     let d = |a: u64, b: u64| b.saturating_sub(a);
     let dt = dt_ms.max(1);
@@ -148,13 +172,13 @@ pub fn report_line(
     let srxf = d(prev.sess_rx_frames, cur.sess_rx_frames);
 
     let mut warns = Vec::new();
-    if dtx.saturating_mul(1000) / dt > WARN_DISCO_TX_PPS {
+    if th.disco_tx_pps > 0 && dtx.saturating_mul(1000) / dt > th.disco_tx_pps {
         warns.push("disco_tx_pps");
     }
-    if drx.saturating_mul(1000) / dt > WARN_DISCO_RX_PPS {
+    if th.disco_rx_pps > 0 && drx.saturating_mul(1000) / dt > th.disco_rx_pps {
         warns.push("disco_rx_pps");
     }
-    if (co + ci).saturating_mul(60_000) / dt > WARN_CONN_PER_MIN {
+    if th.conn_per_min > 0 && (co + ci).saturating_mul(60_000) / dt > th.conn_per_min {
         warns.push("conn_rate");
     }
 
@@ -213,7 +237,7 @@ mod tests {
             conn_in: 1,
             disco_self: 20,
         };
-        let (line, warns) = report_line(&prev, &cur, 10_000);
+        let (line, warns) = report_line(&prev, &cur, 10_000, &Thresholds::default());
         assert!(warns.is_empty(), "{warns:?}");
         assert_eq!(
             line,
@@ -231,9 +255,44 @@ mod tests {
             conn_out: 20,  // 10초에 20+0 = 분당 120 > 30
             ..NetSnapshot::default()
         };
-        let (line, warns) = report_line(&prev, &cur, 10_000);
+        let (line, warns) = report_line(&prev, &cur, 10_000, &Thresholds::default());
         assert_eq!(warns, vec!["disco_tx_pps", "conn_rate"]);
         assert!(line.ends_with("warn=disco_tx_pps,conn_rate"), "{line}");
+    }
+
+    /// 임계 승격(NETMON-1 ⓒ): 0 = 그 축 끔 · 올린 값은 그대로 적용 · 기본은 종전 상수와 같다.
+    #[test]
+    fn thresholds_zero_disables_and_custom_applies() {
+        let prev = NetSnapshot::default();
+        let cur = NetSnapshot {
+            disco_tx: 400,   // 40pps
+            disco_rx: 1_500, // 150pps
+            conn_out: 20,    // 분당 120
+            ..NetSnapshot::default()
+        };
+        let off = Thresholds {
+            disco_tx_pps: 0,
+            disco_rx_pps: 0,
+            conn_per_min: 0,
+        };
+        assert!(report_line(&prev, &cur, 10_000, &off).1.is_empty());
+        let loose = Thresholds {
+            disco_tx_pps: 50,
+            disco_rx_pps: 200,
+            conn_per_min: 30,
+        };
+        assert_eq!(
+            report_line(&prev, &cur, 10_000, &loose).1,
+            vec!["conn_rate"]
+        );
+        assert_eq!(
+            Thresholds::default(),
+            Thresholds {
+                disco_tx_pps: 25,
+                disco_rx_pps: 100,
+                conn_per_min: 30
+            }
+        );
     }
 
     /// 카운터가 뒤로 간 것처럼 보여도(스냅숏 경합) 포화 뺄셈 — 패닉·언더플로 없음.
@@ -244,7 +303,7 @@ mod tests {
             ..NetSnapshot::default()
         };
         let cur = NetSnapshot::default();
-        let (line, warns) = report_line(&prev, &cur, 1_000);
+        let (line, warns) = report_line(&prev, &cur, 1_000, &Thresholds::default());
         assert!(warns.is_empty());
         assert!(line.contains("dtx=0"));
     }

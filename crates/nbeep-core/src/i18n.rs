@@ -313,6 +313,16 @@ pub enum Msg {
     NetmonIntervalDesc,
     /// 점검 주기 기본 라벨(10초).
     NetmonIntervalDefault,
+    /// 과다 판정 임계 3종(NETMON-1 ⓒ · 11-05) — 라벨·설명·기본 라벨.
+    NetmonDiscoTx,
+    NetmonDiscoTxDesc,
+    NetmonDiscoRx,
+    NetmonDiscoRxDesc,
+    NetmonConnPerMin,
+    NetmonConnPerMinDesc,
+    NetmonTxDefault,
+    NetmonRxDefault,
+    NetmonConnDefault,
     /// 상태바 — netmon 과다 경고(경고 태그 목록).
     StfNetmonWarn,
     /// 공지 발신 빈도 제한(08-21 — 3초 1회) 안내.
@@ -3088,6 +3098,45 @@ impl Msg {
                 "間隔ごとに要約1行を記録します。",
             ],
             Msg::NetmonIntervalDefault => ["Default (10)", "기본(10초)", "默认(10秒)", "既定(10秒)"],
+            Msg::NetmonDiscoTx => [
+                "Warn: discovery packets sent (per sec)",
+                "경고 — 발견 발신 (초당)",
+                "告警 — 发现包发送（每秒）",
+                "警告 — 発見送信（毎秒）",
+            ],
+            Msg::NetmonDiscoTxDesc => [
+                "Sustained outgoing discovery above this rate is tagged disco_tx_pps in the log and the status bar. Normal is single digits. Off = never.",
+                "발견 광고 발신이 이 속도를 넘어 지속되면 기록·상태바에 disco_tx_pps로 표시합니다. 정상은 한 자릿수입니다. 끄기 = 판정 없음.",
+                "持续超过此速率的发现包发送会在日志与状态栏标记为 disco_tx_pps。正常为个位数。关闭 = 不判定。",
+                "発見広告の送信がこの速度を超えて続くとログと状態バーに disco_tx_pps と表示します。通常は一桁です。オフ = 判定なし。",
+            ],
+            Msg::NetmonDiscoRx => [
+                "Warn: discovery packets received (per sec)",
+                "경고 — 발견 수신 (초당)",
+                "告警 — 发现包接收（每秒）",
+                "警告 — 発見受信（毎秒）",
+            ],
+            Msg::NetmonDiscoRxDesc => [
+                "Incoming discovery above this rate is tagged disco_rx_pps; the log line names the peer seen most (fingerprint only). Raise it on large networks. Off = never.",
+                "발견 수신이 이 속도를 넘으면 disco_rx_pps로 표시하고, 기록 줄에 가장 많이 보인 상대(지문만)를 적습니다. 이웃이 많은 망에서는 올리세요. 끄기 = 판정 없음.",
+                "发现包接收超过此速率时标记为 disco_rx_pps，日志行写出出现最多的对方（仅指纹）。大型网络请调高。关闭 = 不判定。",
+                "発見受信がこの速度を超えると disco_rx_pps と表示し、ログ行に最も多く見えた相手（指紋のみ）を記します。大きなネットワークでは上げてください。オフ = 判定なし。",
+            ],
+            Msg::NetmonConnPerMin => [
+                "Warn: connection attempts (per min)",
+                "경고 — 연결 시도 (분당)",
+                "告警 — 连接尝试（每分钟）",
+                "警告 — 接続試行（毎分）",
+            ],
+            Msg::NetmonConnPerMinDesc => [
+                "Outgoing plus accepted connections above this rate are tagged conn_rate; the log line names the busiest address. Off = never.",
+                "발신+수락 연결이 이 수를 넘으면 conn_rate로 표시하고, 기록 줄에 가장 잦은 주소를 적습니다. 끄기 = 판정 없음.",
+                "发出加接受的连接超过此数时标记为 conn_rate，日志行写出最频繁的地址。关闭 = 不判定。",
+                "発信と受け入れの接続がこの数を超えると conn_rate と表示し、ログ行に最も多いアドレスを記します。オフ = 判定なし。",
+            ],
+            Msg::NetmonTxDefault => ["Default (25)", "기본(25)", "默认(25)", "既定(25)"],
+            Msg::NetmonRxDefault => ["Default (100)", "기본(100)", "默认(100)", "既定(100)"],
+            Msg::NetmonConnDefault => ["Default (30)", "기본(30)", "默认(30)", "既定(30)"],
             Msg::StBroadcastRateLimit => [
                 "Notices are limited to once per 3 seconds — try again shortly (not sent)",
                 "공지는 3초에 1번만 보낼 수 있습니다 — 잠시 후 다시 시도하세요(보내지 않았습니다)",

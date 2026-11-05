@@ -279,7 +279,13 @@ fn spawn_netmon_env() {
         loop {
             std::thread::sleep(std::time::Duration::from_secs(sec));
             let cur = nbeep_net::netmon::snapshot();
-            let (line, _) = nbeep_net::netmon::report_line(&prev, &cur, sec * 1000);
+            // CLI 진단 스위치(NEXA_NETMON)는 설정을 안 읽는다 — 기본 임계(NETMON-1 ⓒ · 0 = 끔은 GUI 설정 몫).
+            let (line, _) = nbeep_net::netmon::report_line(
+                &prev,
+                &cur,
+                sec * 1000,
+                &nbeep_net::netmon::Thresholds::default(),
+            );
             prev = cur;
             let ts = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

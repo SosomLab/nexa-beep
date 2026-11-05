@@ -203,6 +203,9 @@ pub const ADVANCED: &[&str] = &[
     "log.max_total_mb",
     "netmon.enabled",
     "netmon.interval_s",
+    "netmon.disco_tx_pps",
+    "netmon.disco_rx_pps",
+    "netmon.conn_per_min",
 ];
 
 /// 고급 설정인가(설정 창 스위치가 꺼져 있으면 숨기고 수만 센다).
@@ -278,6 +281,9 @@ pub const DEPENDS: &[(&str, &str, Dep)] = &[
     ("log.dev_layers", "log.dev_mode", Dep::On),
     ("log.view", "log.enabled", Dep::On),
     ("netmon.interval_s", "netmon.enabled", Dep::On),
+    ("netmon.disco_tx_pps", "netmon.enabled", Dep::On),
+    ("netmon.disco_rx_pps", "netmon.enabled", Dep::On),
+    ("netmon.conn_per_min", "netmon.enabled", Dep::On),
 ];
 
 /// 이 키의 종속(부모 키, 조건) — 없으면 `None`.
@@ -2055,6 +2061,40 @@ pub fn registry() -> &'static [Entry] {
             desc: Msg::NetmonIntervalDesc,
             kind: SettingKind::RadioInput(&[("10", Msg::NetmonIntervalDefault)], ""),
             key: "netmon.interval_s",
+        },
+        // 과다 판정 임계(NETMON-1 ⓒ · 11-05 — 종전 코드 상수 25/100/30 승격) · 기본 = 첫 항목 · 0 = 그 축 끔.
+        Entry {
+            cat: Msg::CatAdvanced,
+            sub: Some(Msg::SubNetmon),
+            label: Msg::NetmonDiscoTx,
+            desc: Msg::NetmonDiscoTxDesc,
+            kind: SettingKind::RadioInput(
+                &[("25", Msg::NetmonTxDefault), ("0", Msg::BlockOff)],
+                "pps",
+            ),
+            key: "netmon.disco_tx_pps",
+        },
+        Entry {
+            cat: Msg::CatAdvanced,
+            sub: Some(Msg::SubNetmon),
+            label: Msg::NetmonDiscoRx,
+            desc: Msg::NetmonDiscoRxDesc,
+            kind: SettingKind::RadioInput(
+                &[("100", Msg::NetmonRxDefault), ("0", Msg::BlockOff)],
+                "pps",
+            ),
+            key: "netmon.disco_rx_pps",
+        },
+        Entry {
+            cat: Msg::CatAdvanced,
+            sub: Some(Msg::SubNetmon),
+            label: Msg::NetmonConnPerMin,
+            desc: Msg::NetmonConnPerMinDesc,
+            kind: SettingKind::RadioInput(
+                &[("30", Msg::NetmonConnDefault), ("0", Msg::BlockOff)],
+                "/min",
+            ),
+            key: "netmon.conn_per_min",
         },
         // ── 고급 › 신뢰 판정(10-19 사용자 확정) — 오프라인 내 기기 = 마지막 서명 기기 목록으로 판정
         //   (기본 on). 끄면 세션 없는 동안은 저장 등급(핀)만 = 종전 동작. 소비처 = app effective_trust.
