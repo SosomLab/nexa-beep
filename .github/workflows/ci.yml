@@ -112,9 +112,15 @@ jobs:
       #   Windows = 11-04 합류(HL-1 · 앱에 주는 경로를 cygpath -m 네이티브 형식으로 — Git Bash `/d/...`는 os error 3).
       - name: xvfb + X11 런타임 설치(Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y xvfb x11-utils libxkbcommon0 libxkbcommon-x11-0 libx11-xcb1 libxcb-shm0 libxcb-render0 libxcb-xfixes0 libxcb-randr0 libxcursor1 libxi6 libxrandr2
+        run: sudo apt-get update && sudo apt-get install -y xvfb x11-utils libxkbcommon0 libxkbcommon-x11-0 libx11-xcb1 libxcb-shm0 libxcb-render0 libxcb-xfixes0 libxcb-randr0 libxcursor1 libxi6 libxrandr2 tcpdump
       - name: 헤드리스 스모크(Linux = Xvfb · mac·Windows = NEXA_HEADLESS)
         run: bash tools/headless-smoke.sh target/headless-ci
+      # ★ 와이어 평문 실소켓 회귀(SEC-1 · 11-05 · docs/29 §4 · TODO §9) — 인코더 단위 테스트는 인코더만 본다. 여기서는 헤드리스 3신원을
+      #   띄워 **실제 소켓으로 나간 바이트**를 판정한다: 발견(그룹 조인 · W-1~W-7 패킷마다) + 세션 pcap(tcpdump -i any · W-8 평문 부재 ·
+      #   TCP PSH 존재로 공허 판정 거부). Linux 러너만(sudo tcpdump) — 발견 와이어를 바꾼 커밋이 사람 기억 없이 여기서 걸린다(SEC-T1).
+      - name: 와이어 평문 회귀(발견 W-1~W-7 · 세션 W-8 · Linux)
+        if: runner.os == 'Linux'
+        run: bash tools/wire-scan.sh target/headless-ci/wire
       - name: 헤드리스 캡처 보존
         if: always()
         uses: actions/upload-artifact@v4
