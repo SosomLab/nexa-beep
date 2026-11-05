@@ -11,6 +11,7 @@
 
 pub mod blockfile;
 pub mod groupfile;
+pub mod histfile;
 pub mod privfile;
 pub mod sealed;
 pub mod trustfile;

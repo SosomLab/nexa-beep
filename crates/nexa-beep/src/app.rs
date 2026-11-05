@@ -2507,10 +2507,10 @@ fn is_local_notice(text: &str) -> bool {
     .any(|m| Lang::ALL.into_iter().any(|l| tr(l, m) == text))
 }
 
-fn encode_history(lines: &[ChatLine]) -> Vec<u8> {
+/// 보관 대상 줄(M2-5b) = 텍스트 전부 + **종결 전송(Done/Failed)** · 마지막 [`HISTORY_MAX`]줄. 진행 중 전송은 재시작
+/// 시점에 이미 중단됐으므로 이력이 아니다(Waiting/Active/AwaitingAck 제외). RL-7 2단이 이 열의 **접두 불변**을 보고 append를 고른다.
+fn history_kept(lines: &[ChatLine]) -> Vec<&ChatLine> {
     use nbeep_ui::{ChatBody, XferLineState as St};
-    // 보관 대상 = 텍스트 전부 + **종결 전송(Done/Failed)**. 진행 중 전송은 재시작
-    // 시점에 이미 중단됐으므로 이력이 아니다(Waiting/Active/AwaitingAck 제외).
     let keep: Vec<&ChatLine> = lines
         .iter()
         .filter(|l| match &l.body {
@@ -2519,13 +2519,23 @@ fn encode_history(lines: &[ChatLine]) -> Vec<u8> {
         })
         .collect();
     let start = keep.len().saturating_sub(HISTORY_MAX);
+    keep[start..].to_vec()
+}
+
+fn encode_history(lines: &[ChatLine]) -> Vec<u8> {
+    encode_kept(&history_kept(lines))
+}
+
+/// 보관 줄 열의 직렬화 — 레코드는 **자기 구분자**(tag + 길이 접두)라 조각을 이어붙여도 한 번에 디코드된다(RL-7 2단 프레임의 전제).
+fn encode_kept(keep: &[&ChatLine]) -> Vec<u8> {
+    use nbeep_ui::{ChatBody, XferLineState as St};
     let mut out = Vec::new();
     let put_str = |out: &mut Vec<u8>, sx: &str| {
         let b = sx.as_bytes();
         out.extend_from_slice(&(u32::try_from(b.len()).unwrap_or(0)).to_le_bytes());
         out.extend_from_slice(b);
     };
-    for l in &keep[start..] {
+    for l in keep {
         match &l.body {
             ChatBody::Text(t) => {
                 // ★ 열쇠 있는 줄은 tag 4(S4 따라잡기 · 10-10): origin(32) ‖ seq(8 LE) ‖ 등급(1) ‖
@@ -4204,6 +4214,9 @@ struct App {
     history_mark_at: u64,
     /// 마지막 flush 뒤 더티 표시 횟수(접힘 비율 계측 · 로그 `coalesced`).
     history_marks: u32,
+    /// ★ RL-7 2단(11-05): 세그먼트별(파일 stem) 마지막으로 쓴 평문의 모양 — 앞부분 불변이면 새 레코드만 **append**(O(new)) ·
+    /// 바뀌었거나 프레임 상한이면 전량 재작성. 부팅 복원이 채우고, 빈 스레드 삭제가 지운다. 없는 stem = 다음 쓰기는 전량(v1 → v2 이관).
+    history_seg: HashMap<String, nbeep_store::histfile::SegState>,
     /// 이벤트 루프 틱 수(RL-10 계측 · `[idle] ticks=` · NEXA_PAINT_TRACE).
     tick_count: u64,
     /// ack 왕복 계측(INS-6 · NEXA_ACK_TRACE): 발신 seq → 발신 시각 · 도착한 Delivered ack의 왕복 ms.
@@ -12832,7 +12845,7 @@ impl App {
             } else {
                 decoded = std::fs::read(&path)
                     .ok()
-                    .and_then(|raw| self.history_open_bytes(&stem, &raw))
+                    .and_then(|raw| self.history_open_ro(&stem, &raw))
                     .map(|b| decode_history(&b));
                 decoded.as_deref()
             };
@@ -13102,7 +13115,7 @@ impl App {
             let path = dir.join(format!("{stem}.seg"));
             let Some(mut lines) = std::fs::read(&path)
                 .ok()
-                .and_then(|raw| self.history_open_bytes(stem, &raw))
+                .and_then(|raw| self.history_open(stem, Some(&path), &raw))
                 .map(|b| decode_history(&b))
             else {
                 continue; // 다른 신원 봉인 — fail-closed(파일은 반입돼 있음)
@@ -15498,30 +15511,12 @@ impl App {
             let _ = std::fs::remove_file(&path);
             let _ = std::fs::remove_file(&id_path);
             self.datakeys.destroy(&stem);
+            self.history_seg.remove(&stem);
             return;
         }
-        let key = self.datakeys.get_or_create(&stem);
-        dlog!(self, DL::Store, DV::Detail, "record_history", |r| r
-            .arg("peer", peer.short())
-            .arg("plain_bytes", plain.len())
-            .rule(
-                "source",
-                if self.conversations.contains_key(&peer) {
-                    "session"
-                } else {
-                    "parked"
-                }
-            )
-            .ok("sealing"));
-        let Ok(env) = nbeep_store::sealed::seal(crate::gate::SEAL_HISTORY, &key, &plain) else {
-            dlog!(self, DL::Store, DV::Decide, "record_history", |r| r
-                .arg("peer", peer.short())
-                .fail("seal failed — not written"));
-            self.set_status(nbeep_core::t(nbeep_core::Msg::StHistorySealFail));
+        if !self.write_segment(&stem, &path, &plain) {
             return;
-        };
-        // 소유자 전용(0600) 원자적 쓰기 — 한 벌(09-05 · clip A-1 계열 · 실측 664).
-        let _ = nbeep_store::privfile::write_atomic(&path, &env);
+        }
         // ★ 매핑 표(S4 · 10-10 — S3가 미룬 "핀 없는 상대의 기록은 재시작 때 매핑 안 됨"): 파일 이름은
         //   지문 앞자리뿐이라 전체 PeerId를 곁에 둔다(공개 식별자 · 봉인 불필요 · 1회 쓰기).
         if !id_path.exists() {
@@ -15753,15 +15748,109 @@ impl App {
         if plain.is_empty() {
             let _ = std::fs::remove_file(&path);
             self.datakeys.destroy(&stem); // 지우기 = 셰레딩(1:1과 동일 규약)
+            self.history_seg.remove(&stem);
             return;
         }
-        let key = self.datakeys.get_or_create(&stem);
-        let Ok(env) = nbeep_store::sealed::seal(crate::gate::SEAL_HISTORY, &key, &plain) else {
-            self.set_status(nbeep_core::t(nbeep_core::Msg::StHistorySealFail));
-            return;
+        let _ = self.write_segment(&stem, &path, &plain);
+    }
+
+    /// ★ 기록 세그먼트 쓰기(RL-7 2단 · 1:1·그룹 공용 · [`nbeep_store::histfile`]): 마지막으로 쓴 평문(`history_seg`)이 지금 평문의
+    /// **접두**로 그대로면(길이 + digest) 새 꼬리만 봉인해 append(O(new)) · 아니면(ack·수신확인·상한 밀림 · 첫 쓰기 · v1 파일 ·
+    /// 프레임 ≥ 상한) 전량 재작성. 봉인·쓰기 실패 = 상태바 고지 + 상태 유지(다음 flush 재시도). 반환 = 썼는가.
+    fn write_segment(&mut self, stem: &str, path: &std::path::Path, plain: &[u8]) -> bool {
+        use nbeep_store::histfile as hf;
+        let key = self.datakeys.get_or_create(stem);
+        let prev = self.history_seg.get(stem).cloned();
+        let appendable = prev.as_ref().is_some_and(|s| {
+            s.frames < hf::COMPACT_FRAMES
+                && s.bytes <= plain.len()
+                && hf::digest(&plain[..s.bytes]) == s.digest
+        });
+        let (mode, res, frames) = match (&prev, appendable) {
+            (Some(s), true) if s.bytes == plain.len() => ("noop", Ok(()), s.frames), // 보관 대상 무변화(진행 중 전송 등)
+            (Some(s), true) => (
+                "append",
+                hf::append(path, crate::gate::SEAL_HISTORY, &key, &plain[s.bytes..]),
+                s.frames + 1,
+            ),
+            _ => (
+                "fresh",
+                hf::write_fresh(path, crate::gate::SEAL_HISTORY, &key, plain),
+                1,
+            ),
         };
-        // 소유자 전용(0600) 원자적 쓰기 — 한 벌(09-05 · clip A-1 계열 · 실측 664).
-        let _ = nbeep_store::privfile::write_atomic(&path, &env);
+        let new_bytes = plain
+            .len()
+            .saturating_sub(prev.as_ref().map_or(0, |s| s.bytes));
+        dlog!(self, DL::Store, DV::Detail, "history_write", |r| r
+            .arg("stem", stem)
+            .arg("plain_bytes", plain.len())
+            .arg("new_bytes", new_bytes)
+            .arg("frames", frames)
+            .rule("mode", mode)
+            .rule("compact_at", hf::COMPACT_FRAMES)
+            .ok(if res.is_ok() {
+                "written"
+            } else {
+                "write failed"
+            }));
+        if res.is_err() {
+            self.set_status(nbeep_core::t(nbeep_core::Msg::StHistorySealFail));
+            return false;
+        }
+        if mode != "noop" {
+            self.history_seg.insert(
+                stem.to_owned(),
+                hf::SegState {
+                    bytes: plain.len(),
+                    digest: hf::digest(plain),
+                    frames,
+                },
+            );
+        }
+        true
+    }
+
+    /// 읽기 전용 개봉(대화함 행 조립 등 `&self` 경로) — v2 프레임이면 데이터 키로, v1이면 종전 경로. 상태·파일은 건드리지 않는다.
+    fn history_open_ro(&self, stem: &str, raw: &[u8]) -> Option<Vec<u8>> {
+        use nbeep_store::histfile as hf;
+        if !hf::is_v2(raw) {
+            return self.history_open_bytes(stem, raw);
+        }
+        let key = self.datakeys.get(stem)?;
+        let o = hf::open(crate::gate::SEAL_HISTORY, &key, raw)?;
+        (o.frames > 0).then_some(o.plain)
+    }
+
+    /// 기록 파일 개봉(복원 공용) — v2 프레임 파일이면 데이터 키로 열고 `history_seg` 상태를 채운다(깨진 꼬리는 잘라낸다) ·
+    /// v1(단일 봉투)이면 종전 경로(데이터 키 → 신원 키 폴백) · 상태는 비워 둬 다음 쓰기가 v2로 전량 재작성한다(이관).
+    fn history_open(
+        &mut self,
+        stem: &str,
+        path: Option<&std::path::Path>,
+        raw: &[u8],
+    ) -> Option<Vec<u8>> {
+        use nbeep_store::histfile as hf;
+        if !hf::is_v2(raw) {
+            return self.history_open_bytes(stem, raw);
+        }
+        let key = self.datakeys.get(stem)?;
+        let o = hf::open(crate::gate::SEAL_HISTORY, &key, raw)?;
+        if let (Some(path), true) = (path, o.valid_len < raw.len()) {
+            let _ = hf::truncate_to(path, o.valid_len); // append 중 크래시 꼬리 — 두면 뒤 프레임을 영원히 못 읽는다
+        }
+        if o.frames == 0 {
+            return None; // 열린 프레임 0 = 다른 신원 봉인(fail-closed · 보존·미표시)
+        }
+        self.history_seg.insert(
+            stem.to_owned(),
+            hf::SegState {
+                bytes: o.plain.len(),
+                digest: hf::digest(&o.plain),
+                frames: o.frames,
+            },
+        );
+        Some(o.plain)
     }
 
     /// 부팅 그룹 기록 복원(08-19) — 공유 그룹의 `g-{uid}.seg`를 개봉해
@@ -15797,7 +15886,7 @@ impl App {
             };
             let Some(bytes) = std::fs::read(&path)
                 .ok()
-                .and_then(|raw| self.history_open_bytes(stem, &raw))
+                .and_then(|raw| self.history_open(stem, Some(&path), &raw))
             else {
                 continue; // 개봉 실패(다른 신원 봉인) — fail-closed(보존·미표시)
             };
@@ -15840,7 +15929,7 @@ impl App {
             };
             let Some(bytes) = std::fs::read(&path)
                 .ok()
-                .and_then(|raw| self.history_open_bytes(short, &raw))
+                .and_then(|raw| self.history_open(short, Some(&path), &raw))
             else {
                 continue;
             };
@@ -25621,6 +25710,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         group_history_dirty: HashMap::new(),
         history_mark_at: 0,
         history_marks: 0,
+        history_seg: HashMap::new(),
         pii_last: None,
         tick_count: 0,
         ack_sent_at: HashMap::new(),
