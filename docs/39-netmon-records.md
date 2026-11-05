@@ -12,14 +12,16 @@
   `netmon.interval_s` 기본 10s) → `data/logs/netmon-YYYYMMDD.log` ② 어느 모드든
   환경변수 `NEXA_NETMON=<파일>`(+`NEXA_NETMON_SEC` 기본 5s) — 자동 실기·CLI용.
 - **줄 포맷**(안정 계약 — 파서 대상): `[unix초] netmon dt_ms=… dtx=… drx=…
-  dself=… co=… cok=… ci=… stxf=… srxf=… stxb=… srxb=…[ warn=태그,…]`
+  dself=… co=… cok=… ci=… stxf=… srxf=… stxb=… srxb=…[ warn=태그,…][ top_disc=<지문 short>:<n>][ top_conn=<ip>:<n>]`
+  - **선택 필드(11-05 NETMON-1 ⓑ `3a78c12`)** — `warn=` 뒤 줄 끝에만 붙고 없을 수 있다: `top_disc`는 `disco_rx_pps` 경고 때만(발견 최다 상대 · BL-4 `disc_rate`) · `top_conn`은 `conn_rate` 경고 때만(연결 수락 최다 IP · `ip_filter.accepts`). 파서는 key=value 추가에 관대해야 한다는 기존 계약 그대로.
+  - **임계** = 설정 `netmon.disco_tx_pps`·`disco_rx_pps`·`conn_per_min`(기본 25/100/30 · 0 = 그 축 끔 · 11-05 ⓒ) · CLI `NEXA_NETMON`은 기본 임계.
 - **열 읽는 법**:
 
 | 열 | 뜻 | 과다의 신호 |
 | --- | --- | --- |
-| dtx / drx | 발견 데이터그램 발신/수신 | 광고 폭주(임계 25/100pps → `warn=disco_*_pps`) |
+| dtx / drx | 발견 데이터그램 발신/수신 | 광고 폭주(기본 임계 25/100pps → `warn=disco_*_pps` · rx 경고 시 `top_disc`) |
 | dself | 수신 중 자기 멀티캐스트 에코 | 인터페이스 중복 발신·루프 |
-| co / cok / ci | 아웃바운드 시도/성립 · 인바운드 수락 | co≫cok = 재연결 폭풍·죽은 후보 (분당 30회 → `warn=conn_rate`) |
+| co / cok / ci | 아웃바운드 시도/성립 · 인바운드 수락 | co≫cok = 재연결 폭풍·죽은 후보 (기본 분당 30회 → `warn=conn_rate` · `top_conn`) |
 | stxf / srxf | 세션 프레임 발신/수신 | 메시지 수 대비 과다 = 제어 프레임 낭비 |
 | stxb / srxb | 세션 바이트(프레임 헤더 4B 포함) | 파일 전송 중이 아닌데 큰 값 |
 
