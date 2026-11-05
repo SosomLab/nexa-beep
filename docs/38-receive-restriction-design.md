@@ -76,7 +76,7 @@ struct BlockEntry { axis: BlockAxis, added_unix: u64, until_unix: Option<u64> /*
   - 연결: 같은 IP의 인바운드 accept가 **분당 30회** 초과 → IP 임시 차단(10분).
 - 발동 시 = 상태바 고지 + (log.enabled면) 상태 로그 한 줄 + 차단 목록에
   `auto=true`로 등재(해제·영구 승격은 사람이).
-- ~~임계값은 코드 상수로 시작(netmon 임계와 같은 규약) — 실측 후 설정 승격 검토.~~ → **설정 승격 ✅ 11-05** `eb9a8f2`(설정 › 고급 › 수신 제한 `block.msg_burst` · `block.accept_per_min` · `block.auto_minutes` · 기본 = 종전 상수 · 0 = 끄기) · 발견 감쇠 ✅ `dbba0a8`(PeerId 단위 — 앱 층은 주소를 보지 않는다 · IP 폭주는 accept 계수).
+- ~~임계값은 코드 상수로 시작(netmon 임계와 같은 규약) — 실측 후 설정 승격 검토.~~ → **설정 승격 ✅ 11-05** `eb9a8f2`(설정 › 고급 › 수신 제한 `block.msg_burst` · `block.accept_per_min` · `block.auto_minutes` · 기본 = 종전 상수 · 0 = 끄기) · 발견 감쇠 ✅ `dbba0a8`(임계 12 → **40pps** `9c75af2` — 정상 다경로 15~17pps 오탐 · PeerId 단위 — 앱 층은 주소를 보지 않는다 · IP 폭주는 accept 계수).
 
 ## 6. UI
 
@@ -91,7 +91,7 @@ struct BlockEntry { axis: BlockAxis, added_unix: u64, until_unix: Option<u64> /*
   이름은 새 사람이다. 이 설계의 목표는 **우회 비용을 올리고 반복 소음을 없애는 것**
   (신원 축 = 정확 차단 · IP 축 = 재생성 우회의 마찰 · 자동 임시 = 폭주 감쇠).
 - 완전한 방어는 M5-3 본편(FirstContact 승인제 · PoW/마찰 등)과 v2 UserId에서.
-  → **FirstContact 승인제 ✅ 11-05** `eb98bbd`(`block.first_contact` 기본 off — DR-1 "실행 = 참여"라 옵트인 · 대화한 적 없는 상대의 메시지를 표시·기록·알림 전에 붙들고 수신 요청 카드 수락/무시/☐ 차단 · 판정 = 기록 줄 0 ∧ 최근 대화 시각 0 ∧ 이번 세션 발신 0 ∧ 내 기기·고정·수동 주소 아님). PoW/마찰은 미착수.
+  → **FirstContact 승인제 ✅ 11-05** `eb98bbd`(`block.first_contact` 기본 off — DR-1 "실행 = 참여"라 옵트인 · 대화한 적 없는 상대의 메시지를 표시·기록·알림 전에 붙들고 수신 요청 카드 수락/무시/☐ 차단 · 판정 = 기록 줄 0 ∧ 최근 대화 시각 0 ∧ 이번 세션 발신 0 ∧ 내 기기·고정·수동 주소 아님). PoW/마찰은 미착수. ⚠ `eb98bbd`는 기본값 표 등재를 빠뜨려 실제로는 기본 on이었다 → `9c75af2` 등재 + 부팅 1회 이관(`block.first_contact_ack` 표식) · 상대 창만 열어도 풀리던 구멍 = `e10c402`.
 
 ## 8. 구현 슬라이스 (착수 시)
 
