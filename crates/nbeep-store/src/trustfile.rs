@@ -438,6 +438,14 @@ impl TrustStore for FileTrustStore {
         self.persist();
     }
 
+    fn unblock(&mut self, peer: PeerId) -> bool {
+        let changed = self.inner.unblock(peer);
+        if changed {
+            self.persist();
+        }
+        changed
+    }
+
     fn is_blocked(&self, peer: PeerId) -> bool {
         self.inner.is_blocked(peer)
     }

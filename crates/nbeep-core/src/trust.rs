@@ -81,6 +81,8 @@ pub trait TrustStore {
     fn forget(&mut self, peer: PeerId);
     /// 차단(사람이 아니라 이 키 단위).
     fn block(&mut self, peer: PeerId);
+    /// 차단 해제(BL-1 · 11-05 — 기간부 차단의 만료·사람의 해제가 이 플래그를 다시 내린다). 없던 키·안 막힌 키 = 무변화(멱등).
+    fn unblock(&mut self, peer: PeerId) -> bool;
     /// 차단 여부.
     fn is_blocked(&self, peer: PeerId) -> bool;
 }
@@ -461,6 +463,16 @@ impl TrustStore for MemoryTrustStore {
         rec.blocked = true;
     }
 
+    fn unblock(&mut self, peer: PeerId) -> bool {
+        match self.records.get_mut(&peer) {
+            Some(rec) if rec.blocked => {
+                rec.blocked = false;
+                true
+            }
+            _ => false,
+        }
+    }
+
     fn is_blocked(&self, peer: PeerId) -> bool {
         self.records.get(&peer).is_some_and(|r| r.blocked)
     }
@@ -540,6 +552,11 @@ mod tests {
         ts.on_session(pid(1));
         ts.block(pid(1));
         assert!(ts.is_blocked(pid(1)));
+        assert!(ts.unblock(pid(1)), "BL-1 해제");
+        assert!(!ts.is_blocked(pid(1)));
+        assert!(!ts.unblock(pid(1)), "멱등");
+        assert!(!ts.unblock(pid(200)), "미지 키 = 무변화");
+        ts.block(pid(1)); // 아래 단언은 차단 상태 전제
         assert_eq!(
             ts.on_session(pid(1)),
             TrustDecision::Blocked,

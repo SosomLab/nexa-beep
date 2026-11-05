@@ -9,6 +9,7 @@
 //! (M0-1b에 이 자리를 세운 이유 — 나중에 넣으면 저장 포맷 마이그레이션이 된다.)
 #![forbid(unsafe_op_in_unsafe_fn)]
 
+pub mod blockfile;
 pub mod groupfile;
 pub mod privfile;
 pub mod sealed;
@@ -31,6 +32,7 @@ pub(crate) fn archive_name(path: &std::path::Path) -> Option<std::path::PathBuf>
     None
 }
 
+pub use blockfile::{BlockLoad, FileBlockList};
 pub use groupfile::{
     BlockedInvite, FileGroupStore, GroupLoad, MemberMeta, MemberState, MineState, SharedGroup,
 };
