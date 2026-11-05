@@ -12,8 +12,8 @@
 
 - 조직: **SosomLab** · 개발자: Sangyong Bae · kiros33@gmail.com
 - 저장소: `git@github.com:SosomLab/nexa-beep.git` · 릴레이 서버 **`nexa-beepd`** = ★**같은 저장소의 별도 크레이트·별도 배포**(`beepd-v*` 태그 — DR-9 개정 08-21 · MVP 구현 ✅)
-- 현 단계 — ★**v0.7.0 공개 ✅**(11-03 · 태그 `v0.7.0` = `dae0e90` · release run **41473106634 전 12 job success** · 자산 15 · Releases·brew·apt/dnf · 일괄 검증 748 green · 3,709,752B · 탑재 = 답장·말풍선 선택·설정 창 개편·IME H-28/H-29·헤드리스 시험 · 설치본 0.7.0 교체 ✓). winget 0.6.1(#468844·#468846)·choco 0.6.0 재업로드 검수 대기 → TODO PUB-1 · 스위치 둘 다 false.
-  직전 = v0.6.1(10-20 mac 크래시 수정 CRASH-1 · 오프라인 표시) · v0.6.0(10-20 오프라인 상대 대화창 · 내 상태 · 개발자 로그).
+- 현 단계 — ★**v0.8.0 공개 ✅**(11-05 · 태그 `v0.8.0` = `dca8baa` · release run **41983151018 전 12 job success** · 자산 15 · Releases·brew·apt/dnf · 일괄 검증 gate rc=0 · verify 10/10 · 3,884,032B · 탑재 = GAP-042 winit 교착 수정 · LAT-1 왕복 p95 5ms · 수신 제한(docs/38 4축·자동 임시·첫 접촉 승인 옵션) · 발견 호환성(M1-13) · 청크 윈도·그룹 재개(M4-10) · 기록 증분 저장(RL-7) · 목록 정리). winget(#468844 작성자 응답 대기)·choco(0.6.0 승인 · 0.7.0/0.8.0 제출 보류) → TODO PUB-1 · 스위치 둘 다 false.
+  직전 = v0.7.0(11-03 답장·말풍선 선택·설정 창 개편·IME H-28/H-29·헤드리스 시험) · v0.6.1(10-20 mac 크래시 수정 CRASH-1 · 오프라인 표시).
   **현황·경과는 여기 쓰지 않는다** → [STATUS](docs/STATUS.md) · [DEVLOG](docs/DEVLOG.md) · 기능 = [MILESTONES](docs/MILESTONES.md).
   **ADR**: 0001~0012·0014·0015 ✅ Accepted / 0013 📐 Proposed(서버 모드 · 구현 v1 이후) · 번호표 = [docs/README](docs/README.md).
 
