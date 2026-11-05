@@ -3,6 +3,8 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
+> **갱신: 2026-11-05 Win 2차 (KST · Windows · main — 개발 세션 코드 · 기록 = 협업 세션)** — ★**M5-3 수신 제한 BL-1~4 구현**([38](38-receive-restriction-design.md) · 사용자 "대상 전체 진행"): `54df30c` 모델(Peer·IP/CIDR·이름 3축 · 기간부 · 자동 임시 10분) + 봉인 영속 `blocks.seg`(fail-closed) · `61d331c` 전송 `set_inbound_filter`(accept 즉시 close · 발견 그림자) · 판정 4지점 · 우클릭 ▸ 차단 · 설정 › 고급 › 수신 제한 · 폭주 자동 차단 · **GINV-1 해제 자리 통합 = DR-30 ⑤ 완료** · 시험 core 205/store 23/net 54/ui 192/app 86 ✓ · 잔여 = BL-5(3-신원 실기 · 시나리오). → [journal](journal/2026-11-05.md#2차--m5-3-수신-제한-bl-14-구현코드-2건--기록--협업-세션)
+
 > **갱신: 2026-11-05 Win 1차 (KST · Windows · main — 개발 세션 코드·기록·push · 사용자 지시)** — ★**GAP-042 이식 `e9c32f6`**(nexa-dir3 11-04 winit 0.30.13 `TaskbarCreated` 교착 우회 · 사용자 "dir3 winit 보완 반영 확인" → 미반영 확인 후 이식): `nbeep_plat::taskbar_guard`(comctl32 `SetWindowSubclass` 선처리 · raw extern) + `app.rs` **창 생성 깔때기 `new_window`**(21곳 → 1곳 · 정적 가드 시험) + `check-imports` `comctl32.dll` · Win32 단위 시험 ✓ · clippy 3-OS ✓ · **DR-31** · 실기(RDP 재접속) 잔여. **방화벽 억제 실행 ✓**(`firewall-allow.ps1` 관리자 1회 · 규칙 **28건** · 승인 창 더 안 뜸 · 요약 줄 `${made}` 수정). LAT-1 실 LAN 2-PC 실측 = 이 PC 1대라 **대행 불가 → 사용자 실기 잔여**. [journal](journal/2026-11-05.md)
 
 > **갱신: 2026-11-04 Win 1차 (KST · Windows · main — 개발 세션 코드·시험·push · 기록 = 협업 세션)** — 코드 12건: ★**구버전 답장 평문 폴백**(`53a1a68` — 0.6.1이 0.7.0 답장 2건을 조용히 버린 결함 · 프로필 Info bit7 앱 버전) · ★**GINV-1 S1 구성원 초대 상태 영속**(`8409384` · groups.seg v4 · 재시작 "초대 대기" 오표시 수정) + 설계 [54](54-group-invite-lifecycle.md) 📐(재초대 24h·만료 7일·카드 3택·`DeclineV2{hard}`·5초 실행 취소 · 수치 4건 확정 대기) · REPLY-1 ② `SyncReplies` 태그 21(`d83c5ef` · s4 **24/24**) · 설정 창 하단 바 nexa-dir3 통일(`3878522`) · 인용 라벨(`0bd88a7`) · STALL-1(`3025843`) · LOG-2 전송 6곳(`a187ca8`) · PERF-4 기동 트레이스(`ef47b3a` · Debug first_paint 361ms) · **HL-1 Windows 합류**(`7128731`·`887bb3b`·`b7cf2d3` · smoke PASS · reply 8/8) · tmp-clean(`9dafe59`) · CI = `ef47b3a` lint(rustdoc 링크) 실패 → `0ae0176` 수정 · 최종 **run 41750315140(`a79edde`) 전 7 job success**(CI Windows 러너 헤드리스 스모크 첫 success) · REPLY-1 ⑤ 구버전 평문 폴백 실물 실기 ✓(`59bc4bd`) · ★**LOG-1 로그 창 ✅**(`d17a651` + 필터 칩 `ed2c197`) · `tools/verify.sh` 실기 한 명령(`e0583ae`) · ★그룹 스크립트 동사 + group-scenario **10/10 → 16/16**(`f541301`·`20b0098` — REPLY-1 ① 자동 ✓ · GINV-1 S1 재기동 실측 ✓ · 추가·거절·제외 회귀망) · ★**DR-30 그룹 초대 생애주기**(GINV-Q1~Q4 사용자 확정 · `e432cc9`) · RL-7 1단 디바운스(`2b64f67` · 쓰기 20 → 2) · RL-13 자원 고갈 3종(`9c24d36`) · RL-8 저장 멱등 가드(`b96ee93` · 무조작 기동 무기록) · RL-10 유휴 바닥(`141a4c7` · 유휴 CPU −80% · 1.08Hz) · i18n-1 잔여 0(`b37bcd2`) · PERF-3 2000줄 휠 7.3ms(`0dfdf30` · 줄 수 무관) · RL-3 무한 재연결 처방(`065d808`) · PERF-5 회수 ✓(`48882c9` · 수신 피크 = 파일 ×2 → M4-12 · 로컬 3.7MB/s → PERF-9) · ★**PERF-9 ✅**(`4e09634` — 발신 펌프 20ms 시간 예산 + 64청크 상한 · 로컬 128MiB 릴리스 7.15 → **68.3MB/s** · peak 131) · tmp-clean ④(`7cfc6db`) · 권한 규칙 3건 = 사용자 적용 대기 · ★**INS-2 라이선스 게이트 ✅**(`017804e` — 의존성 298 · fail 0 · gate.sh·CI lint) · ★**INS-3 부팅 트레이스 ✅**(`2fc3373` — 5점 · `NEXA_BOOT_TRACE` · Win Debug first_paint 557 · first_peer 1559ms) · 18 §3 확인 요청 대원칙(`783178a`) · ★**INS-1 mac/Linux 임포트 ✅**(`cc0db39` — CI 첫 실행 PASS) · ★**INS-5 상주 샘플러 ✅**(`0edef5b` — M5-5 24h = 사용자 PC 1회) · ★**INS-7 평문 스캐너 ✅**(`78c5e60`) · ★**INS-8 아키텍처 단언 ✅**(`b2fcaea` — core 의존 0 · 포트 외부 참조 0) · INS-6 ack 왕복 계측(`9849c70`) · ⚠**메시지 왕복 p95 210ms = F-1 게이트(≤50) ✗**(세션 액터 100ms 폴 × 2홉) → **LAT-1**(송수신 분리 · 11-05 첫 작업) · ★**INS-4 합성 부하 ✅**(`ed94933` — 피어 500 휠 2.58ms ✓ · 피어 100 26.1MB ✓ · 피어당 0.15MB → MEM-6) · LAT-1 설계 [55](55-lat1-session-actor-split.md) 📐 · ★**마감 게이트 verify.sh 8통과 0실패**(group 28/28 · s4 24/24 · reply · scan-plaintext) · ★**LAT-1 ✅**(`b4d723f` — 세션 액터 송수신 분리 · 왕복 루프백 p95 210 → **5ms** · verify.sh `--oldpeer` 10통과 0실패 · 실 LAN 잔여) · `tools/firewall-allow.ps1`(`c5c0798` · 사용자 1회) · 유휴 CPU 릴리스 0.067% ✓ · WS-Private 3.6MB ✓ · ★**PERF-4 완료**(`b8c948d` — 릴리스 콜드 245ms · 웜 56ms · 예산 500ms 안) · CI 최종 = run 41761674194(`338e06e`) 전 7 job success(lint 실패 2회 뒤 녹색 복귀) · ★**GINV-1 S2~S4 완결**(`563cd6e`·`9759780`·`338e06e` — 재초대 24h · 만료 7일 · 카드 3택 · 거절 5초 취소 · `DeclineV2{hard}` · 차단한 초대 · 시나리오 28/28) · **PUB-1 = choco 0.6.0 3종 Approved**(`CHOCO_PUSH` = 사용자 손) · winget #468844 설치 검증 오류(0.7.0 재제출 권고). [journal](journal/2026-11-04.md)
@@ -85,7 +87,7 @@
 
 ## 지금 걸려 있는 것
 
-> 2026-11-03 기준으로 새로 썼다 · 11-04 Win 1차 갱신(1·2·4행 · GINV-1 추가). 종전 표(08-08 시점)는 [보존본](STATUS-archive.md)에 있다. 항목 상세 = [TODO](TODO.md).
+> 2026-11-03 기준으로 새로 썼다 · 11-04 Win 1차 갱신(1·2·4행 · GINV-1 추가) · 11-05 2차(4-1·6행). 종전 표(08-08 시점)는 [보존본](STATUS-archive.md)에 있다. 항목 상세 = [TODO](TODO.md).
 
 | # | 항목 | 상태 |
 |---|---|---|
@@ -98,9 +100,9 @@
 | 3-2 | **사용자 1회 = `tools/firewall-allow.ps1`**(`c5c0798` · 관리자 · 방화벽 창 억제 · `-Remove` 되돌림 · 실행 전) — 실행 방법 [26](26-run-and-manual-test.md) | ✅ 11-05 실행(관리자 · 규칙 28건 · 승인 창 0) |
 | 3-3 | **GAP-042 winit 0.30.13 `TaskbarCreated` 교착 우회**(nexa-dir3 11-04 이식 · DR-31) — `nbeep_plat::taskbar_guard` + `new_window` 깔때기 · 제거 조건 winit 0.31 | ✅ `e9c32f6`(11-05) · 잔여 = 실기(RDP 재접속 반복 · 자동 재현 불가) |
 | 4 | **HL-1 헤드리스 후속** — Linux `xvfb.sh` 첫 실기 | 🚧 Windows 로컬·CI 러너 스모크 ✓ · s4/perf 적용 ✓(11-04) |
-| 4-1 | **GINV-1 그룹 초대 생애주기** S2~S4 — [54](54-group-invite-lifecycle.md) ✅ · DR-30 | ✅ S1~S4(`338e06e` · 시나리오 28/28) · 잔여 = 육안 · 2-PC · 해제 자리 38 수신 제한 목록 통합(지금은 임시 "차단한 초대 보기…") |
+| 4-1 | **GINV-1 그룹 초대 생애주기** S2~S4 — [54](54-group-invite-lifecycle.md) ✅ · DR-30 | ✅ S1~S4(`338e06e` · 시나리오 28/28) · 잔여 = 육안 · 2-PC · ~~해제 자리 38 수신 제한 목록 통합~~ ✅ `61d331c`(11-05 · DR-30 ⑤) |
 | 5 | **X-13 S5 컨텐츠 모드** | ⏸ 실기 후 별도 결정(D-32-5) |
-| 6 | **M5-3 스팸 방어**(R-4 · v1.0 필수 · D-24) — 수신 제한 설계 = [38](38-receive-restriction-design.md) | 📐 설계 확정 · 구현은 요청 시 |
+| 6 | **M5-3 스팸 방어**(R-4 · v1.0 필수 · D-24) — 수신 제한 설계 = [38](38-receive-restriction-design.md) | ✅ BL-1~4 `54df30c`·`61d331c`(11-05) · 잔여 = BL-5 3-신원 실기 · `NEXA_SCRIPT` 차단 시나리오 |
 
 ## 미해결 위험
 
