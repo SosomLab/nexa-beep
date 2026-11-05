@@ -3437,6 +3437,10 @@ enum BlockRow {
 
 /// 같은 IP의 인바운드 accept 상한(분당 · docs/38 §5) — 초과 = IP 임시 차단 10분.
 const ACCEPT_PER_MIN: usize = 30;
+/// 발견 광고 폭주 판정(docs/38 §5 · M5-3 2차) — 같은 상대의 광고가 1초에 이 수를 넘으면(정상 주기 800ms ≈ 1.25pps의 10배) **감쇠**:
+/// 차단이 아니라 목록 반영을 [`DISC_THROTTLE_MS`]마다 한 번으로 늦춘다(목록은 유지 · 재조립 폭주만 막는다).
+const DISC_FLOOD_PPS: usize = 12;
+const DISC_THROTTLE_MS: u64 = 500;
 /// 같은 상대 메시지 상한 — 초당 5건 × 10초 창(docs/38 §5) — 초과 = Peer 임시 차단 10분.
 const MSG_BURST_WINDOW_MS: u64 = 10_000;
 const MSG_BURST_MAX: usize = 50;
@@ -4250,6 +4254,8 @@ struct App {
     ip_filter: std::sync::Arc<std::sync::Mutex<IpFilterState>>,
     /// 상대별 메시지 수신 시각 창(BL-4 · 초당 5건 × 10초 초과 = 자동 임시 차단).
     msg_rate: HashMap<PeerId, VecDeque<u64>>,
+    /// 상대별 발견 광고 시각 창(1초) + 마지막 반영 시각 — 폭주 감쇠(M5-3 2차 · 차단 아님).
+    disc_rate: HashMap<PeerId, (VecDeque<u64>, u64)>,
     /// 만료 정리·자동 발동 수거 다음 시각(unix ms · 1초 페이스).
     block_expire_at: u64,
     /// 수신 제한 목록 모달의 행 순서(행 클릭 = 해제 확인 · 모달 닫힘 = 소거).
@@ -6931,6 +6937,10 @@ impl App {
                             .is_name_blocked(hint.name.as_str(), unix_now_ms())
                     {
                         self.table.forget(hint.peer);
+                        continue;
+                    }
+                    // 광고 폭주 감쇠(docs/38 §5 · M5-3 2차) — 12pps 초과면 500ms에 한 번만 반영(차단 아님 · 행 유지).
+                    if self.disc_throttled(hint.peer) {
                         continue;
                     }
                     // 최근 접속 관측(08-15 — 아는 상대만 · 60초 스로틀 영속).
@@ -9924,6 +9934,7 @@ impl App {
         self.closed_peers.remove(&peer);
         self.table.forget(peer);
         self.msg_rate.remove(&peer);
+        self.disc_rate.remove(&peer);
     }
 
     /// 전송 계층 핫 필터에 IP 규칙 스냅샷을 덮는다(목록이 바뀔 때마다 · 소켓 스레드는 이 스냅샷만 본다).
@@ -9952,6 +9963,35 @@ impl App {
         self.block_setting("block.auto_minutes", 10)
             .clamp(1, 24 * 60)
             * 60_000
+    }
+
+    /// 발견 광고 폭주 감쇠(docs/38 §5 · M5-3 2차): 같은 상대 1초 창 관측 수가 [`DISC_FLOOD_PPS`]를 넘으면 [`DISC_THROTTLE_MS`]마다 한 번만
+    /// 반영한다(나머지는 버림 · 생존 판정은 반영된 관측으로 충분). 반환 = 이번 관측 건너뜀. 차단 목록에는 올리지 않는다(감쇠 ≠ 차단).
+    fn disc_throttled(&mut self, peer: PeerId) -> bool {
+        let now = unix_now_ms();
+        let (q, last) = self
+            .disc_rate
+            .entry(peer)
+            .or_insert_with(|| (VecDeque::new(), 0));
+        q.push_back(now);
+        while q.front().is_some_and(|t| now.saturating_sub(*t) > 1_000) {
+            q.pop_front();
+        }
+        if q.len() <= DISC_FLOOD_PPS {
+            *last = now;
+            return false;
+        }
+        if now.saturating_sub(*last) < DISC_THROTTLE_MS {
+            return true;
+        }
+        *last = now;
+        let n = q.len();
+        dlog!(self, DL::Disc, DV::Decide, "discovery", |r| r
+            .arg("peer", peer.short())
+            .arg("pps", n)
+            .rule("flood_pps", DISC_FLOOD_PPS)
+            .ok("throttled — applying 1 of burst"));
+        false
     }
 
     /// 상대별 메시지 폭주 계수(BL-4 · docs/38 §5) — 10초 창에 50건 초과 = Peer 임시 차단 10분 + 고지. 반환 = 이번 메시지 폐기.
@@ -10022,6 +10062,9 @@ impl App {
                 &[&ip.to_string()],
             ));
         }
+        // 감쇠 창 정리 — 60초 넘게 조용한 상대는 지운다(이탈 상대 누적 방지).
+        self.disc_rate
+            .retain(|_, (q, _)| q.back().is_some_and(|t| now.saturating_sub(*t) < 60_000));
         // 수치 설정 변경(설정 창 즉시 적용)도 여기서 소켓 스레드로 흘러간다 — 1초 1회 · 항목 수십 = 비용 0.
         self.sync_ip_filter();
         if changed {
@@ -25844,6 +25887,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         blocks,
         ip_filter: std::sync::Arc::new(std::sync::Mutex::new(IpFilterState::default())),
         msg_rate: HashMap::new(),
+        disc_rate: HashMap::new(),
         block_expire_at: 0,
         block_ctx: None,
         want_block_window: false,
