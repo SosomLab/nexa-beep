@@ -7544,6 +7544,56 @@ impl App {
                 }
                 Some(("group.accept", _)) => self.script_group_accept(),
                 Some(("group.decline", _)) => self.script_group_decline(),
+                // ★ 수신 제한 동사(BL-5 · docs/38 · 11-05): block.peer=<이름>[:1h|24h|7d|forever] · block.ip=<주소|CIDR> ·
+                //   block.name=<표시 이름> · block.unblock=<이름>(Peer 축 해제) · block.clear(전부 해제). 판정은 `dump`의 `[dump] block` 줄.
+                Some(("block.peer", spec)) => {
+                    let (who, dur) = spec.split_once(':').unwrap_or((spec, "forever"));
+                    let dur_ms = match dur.trim() {
+                        "1h" => Some(nbeep_core::block::DUR_1H_MS),
+                        "24h" => Some(nbeep_core::block::DUR_24H_MS),
+                        "7d" => Some(nbeep_core::block::DUR_7D_MS),
+                        _ => None,
+                    };
+                    match self.script_find_peer(who.trim()) {
+                        Some(peer) => {
+                            self.apply_block(nbeep_core::BlockEntry::manual(
+                                nbeep_core::BlockAxis::Peer(peer),
+                                unix_now_ms(),
+                                dur_ms,
+                            ));
+                            eprintln!("[script] block.peer: {} {dur}", peer.short());
+                        }
+                        None => eprintln!("[script] block.peer: 상대 없음 '{who}'"),
+                    }
+                }
+                Some(("block.ip", spec)) => {
+                    self.apply_block_input(NamePurpose::BlockIp, spec.trim())
+                }
+                Some(("block.name", spec)) => {
+                    self.apply_block_input(NamePurpose::BlockName, spec.trim())
+                }
+                Some(("block.unblock", who)) => {
+                    // 이름이 목록에서 사라졌을 수 있다(그림자) — 차단 항목의 Peer 축에서 이름 대조 없이 전부 해제.
+                    let peers: Vec<PeerId> = self
+                        .blocks
+                        .entries()
+                        .iter()
+                        .filter_map(|e| match e.axis {
+                            nbeep_core::BlockAxis::Peer(p) => Some(p),
+                            _ => None,
+                        })
+                        .filter(|p| {
+                            who.trim().is_empty()
+                                || self.peer_title(*p).contains(who.trim())
+                                || p.short().starts_with(who.trim())
+                        })
+                        .collect();
+                    for p in &peers {
+                        let _ = self.remove_block(&nbeep_core::BlockAxis::Peer(*p));
+                    }
+                    eprintln!("[script] block.unblock: {}", peers.len());
+                    self.refresh_and_redraw();
+                }
                 // 재초대(S2 · 11-04) — 소유자 · 이름 부분 일치 · 제한에 걸리면 `[script] group.reinvite: wait`.
                 Some(("group.reinvite", name)) => {
                     // 이름 부분 일치 → 없으면 **짧은 지문**(8자리 · 재기동 뒤 발견 목록에 없는 거절 메모 상대).
@@ -7706,6 +7756,19 @@ impl App {
                 None if step == "group.accept" => self.script_group_accept(), // 값 없는 동사(11-04)
                 None if step == "group.decline" => self.script_group_decline(),
                 None if step == "group.decline_hard" => self.script_group_decline_with(true),
+                None if step == "block.clear" => {
+                    let axes: Vec<nbeep_core::BlockAxis> = self
+                        .blocks
+                        .entries()
+                        .iter()
+                        .map(|e| e.axis.clone())
+                        .collect();
+                    for a in &axes {
+                        let _ = self.remove_block(a);
+                    }
+                    eprintln!("[script] block.clear: {}", axes.len());
+                    self.refresh_and_redraw();
+                }
                 None if step == "group.unblock" => {
                     let uids: Vec<nbeep_core::GroupUid> = self
                         .groups
