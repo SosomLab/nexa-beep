@@ -7,6 +7,7 @@
 
 ## 2026-11-05
 
+- **(Win · main) 사용자 결정 8건**(v0.8.0 뒤 후속) — MEM-1 ①② 착수 · M3-27 경로 배지 승인 · NETMON-1 ⓑ BL-4 재사용/ⓒ 임계값 설정 승격 · SEC-1 `tools/wire-scan.sh` · X-2 Transport 승격 착수 · X-6 v2 보류 · STATUS PUB-1 0.8.0 현행화 · 05 R-5·R-8 해소 반영 → [journal](journal/2026-11-05.md)
 - ★**(Win · main) v0.8.0 공개**(태그 `dca8baa` · release run 41983151018 전 12 job success · 자산 15 · brew tap `849107b` · apt 0.8.0 · winget/choco 보류 → PUB-1) · 일괄 검증 = gate rc=0 · verify 1차 2실패(scan NBH2 · ack-bench 자동 차단) → `24145dc`·`08ab835` → 10/10 · perf ≤2.3ms · startup 314/58ms · 위키 `7912064` · 설치본 0.8.0 → [journal](journal/2026-11-05.md)
 - **(Win · main) 6차 실측 결함 4건 닫음**(`e10c402` 창만 열어도 승인제가 풀리던 것 · `9c75af2` `block.first_contact` 실제 기본 on(TOGGLE_DEFAULT_OFF 누락) → 등재 + 부팅 1회 이관(`_ack` 표식 · HIDDEN_KEYS) + 감쇠 12 → 40pps(정상 다경로 15~17 오탐) · `b0a5e00` 진행률 99.2% 고착 → total까지) · 협업 = block-scenario 28(`936a6a1`) · 128MiB 진행률 1024줄 단조·got==total · throttled 0 · 설치본 `e43dceac` 이관 확인 → [journal](journal/2026-11-05.md)
 - **(Win · main) 목록 정리 · M5-3 2차 ⓒ · M4-10 ⓐ·d**(`58ae2b0` 대화 이력 없는 오프라인 상대 제거 · `eb98bbd` 미확인 발신자 격리 `block.first_contact` 기본 off · `502627e` 청크 윈도 1MiB·Progress 수신 확인 · `9eeb3d9` 그룹 재개 = 재-Offer를 그룹 경로로) · 협업 = block-scenario 첫 접촉 사슬 27/27 · 루프백 128MiB 발신 101~143MB/s(종전 68.3 · 회귀 없음) · 설치본 교체 → [journal](journal/2026-11-05.md)

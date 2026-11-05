@@ -3,6 +3,8 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
+> **갱신: 2026-11-05 Win 9차 (KST · Windows · main — 사용자 결정 8건 · 코드 = 개발 세션 착수 · 기록 = 협업 세션)** — v0.8.0 뒤 후속 결정: MEM-1 ①(256px 지연 로드)·②(`qthumbs` LRU 256) 착수 · M3-27 목록 경로 배지 08-22 설계안 승인 · NETMON-1 ⓑ = BL-4 계수기 재사용 / ⓒ = 임계값 3개 설정 승격(고급 › 진단) · SEC-1 잔여 = `tools/wire-scan.sh`(verify + ubuntu CI) · X-2 Transport 승격 착수(서버·2-PC 실측 = 사용자 손) · X-6 v2 보류 유지. 기록 = "지금 걸려 있는 것" 1·2행 0.8.0 현행화 · 05 §4 R-5·R-8 해소 반영. 코드 변경 없음(이 차수). → [journal](journal/2026-11-05.md#9차--사용자-결정-8건v080-뒤-후속--코드--개발-세션-착수--기록--협업-세션)
+
 > **갱신: 2026-11-05 Win 8차 (KST · Windows · main — 개발 세션 범프·태그 · 일괄 검증·위키·설치본·기록 = 협업 세션)** — ★**v0.8.0 공개 ✅**: 태그 `v0.8.0` = `dca8baa`(CI 41982784323 녹색) · release run **41983151018 전 12 job success** · 자산 **15** · Homebrew tap `849107b` · apt/dnf 0.8.0 · winget **보류**(사용자 결정) · choco 0.6.0 승인 · `CHOCO_PUSH` 사용자 손 → PUB-1 · 탑재 = GAP-042 교착 우회 · LAT-1 p95 210→5ms · M5-3 수신 제한(4축·자동 임시 차단·발견 감쇠·첫 접촉 승인 기본 off) · M1-13 · M4-10 ⓐ·d · RL-7 증분 저장 · 목록 정리 · 일괄 검증 gate rc=0 · verify 10/10(1차 2실패 → `24145dc`·`08ab835`) · perf ≤2.3ms · startup 콜드 314/웜 58ms · 3.88MB · 위키 `7912064` · 설치본 0.8.0 교체(`eb587ac1`). → [journal](journal/2026-11-05.md#8차--v080-공개릴리스--개발-세션-범프태그--일괄-검증위키설치본기록--협업-세션)
 
 > **갱신: 2026-11-05 Win 7차 (KST · Windows · main — 개발 세션 코드 · 시나리오·실측·설치본·기록 = 협업 세션)** — 6차 협업 실측이 잡은 결함 4건을 닫았다: `e10c402` 상대 창만 열어도 승인제가 풀리던 구멍(안내 줄 제외) · `9c75af2` **`block.first_contact`가 실제로는 기본 on**(TOGGLE_DEFAULT_OFF 누락 — 사용자 설치본에도 on 저장) → 표 등재 + 부팅 1회 이관(`block.first_contact_ack` 표식 · HIDDEN_KEYS) + 발견 감쇠 12 → 40pps(정상 다경로 15~17pps 오탐) · `b0a5e00` 진행률 99.2% 고착 → 수신 확인으로 total까지 · 협업 = block-scenario 28(`936a6a1`) · 128MiB 진행률 1024줄 단조·마지막 got == total · throttled 0 · 설치본 재교체(`e43dceac`) 첫 부팅 이관 off+ack ✓ · CI 전부 녹색. → [journal](journal/2026-11-05.md#7차--승인제-창-열기-구멍--blockfirst_contact-기본-on-결함--감쇠-오탐--진행률-992-고착수정-3건--시나리오--실측설치본기록--협업-세션)
@@ -99,12 +101,12 @@
 
 ## 지금 걸려 있는 것
 
-> 2026-11-03 기준으로 새로 썼다 · 11-04 Win 1차 갱신(1·2·4행 · GINV-1 추가) · 11-05 2차(4-1·6행)·4차(6행). 종전 표(08-08 시점)는 [보존본](STATUS-archive.md)에 있다. 항목 상세 = [TODO](TODO.md).
+> 2026-11-03 기준으로 새로 썼다 · 11-04 Win 1차 갱신(1·2·4행 · GINV-1 추가) · 11-05 2차(4-1·6행)·4차(6행)·9차(1·2행 0.8.0 · 사용자 결정 8건 = [TODO](TODO.md) MEM-1·M3-27·NETMON-1·SEC-1·X-2·X-6 행). 종전 표(08-08 시점)는 [보존본](STATUS-archive.md)에 있다. 항목 상세 = [TODO](TODO.md).
 
 | # | 항목 | 상태 |
 |---|---|---|
-| 1 | **PUB-1 choco 0.7.0** — 0.6.0 3종(nexa-beep · portable · beepd 0.2.6) **Approved 11-04** → `CHOCO_PUSH=true` + `-f tag=v0.7.0` dispatch | ⏸ 스위치 = **사용자 손**(개발 세션 분류기 차단) |
-| 2 | **PUB-1 winget 0.7.0** — 포터블 #468846 MERGED · 설치본 #468844 = `Validation-Installation-Error`·`Needs-Author-Feedback`(0.6.0→0.6.1 packaging 무변경 · 원인 불명) | 🔍 조사 중 · 0.7.0 재제출 권고 |
+| 1 | **PUB-1 choco 0.8.0**(11-05 v0.8.0 공개로 대상 갱신 · 종전 0.7.0) — 0.6.0 3종(nexa-beep · portable · beepd 0.2.6) **Approved 11-04** → `CHOCO_PUSH=true` + `gh workflow run publish-windows-packages.yml -f tag=v0.8.0` | ⏸ 스위치 = **사용자 손**(개발 세션 분류기 차단) |
+| 2 | **PUB-1 winget 0.8.0**(종전 0.7.0) — 포터블 #468846 MERGED · 설치본 #468844 = `Validation-Installation-Error`·`Needs-Author-Feedback`(0.6.0→0.6.1 packaging 무변경 · 원인 불명) | ⏸ **보류**(사용자 결정 11-05) · 해제 시 `WINGET_PUBLISH=true` + `-f tag=v0.8.0` |
 | 2-1 | **사용자 손 = `python tools/claude-permissions.py` 1회**(`e0583ae` · `.claude/settings.json` allow 25건 병합 · 세션은 자기 권한 파일 수정 불가) — ✅ 범위 축소 완료 `466868d`(11-04 — 협업 세션 검토 반영: 임의 명령을 열던 `bash`·`sh`·`env`·`xargs`·`timeout`·`PowerShell(bash:*)` 제거 · tools/ 경로 접두 8 + 읽기 전용 보조 17 = 25건) · 잔여 위험 = 세션이 고친 tools/ 스크립트도 묻지 않고 돈다(스크립트 변경은 커밋 검토로 본다) | ✅ 적용·커밋 `97f3245`(11-04 — 25건) |
 | 3 | **사람 실기** — PRES-1(2-PC 내 상태) · 2-PC U-11(S4 복원) · REPLY-1 · SET-1 · TRAY-1(Win/Linux) | ☐ 대행 불가 |
 | 2-2 | **권한 규칙 3건 사용자 적용 대기**(11-04 · 사용자 지시 "직접 관리하는 폴더의 스크립트·정리는 묻지 않게 · nexa-sql 차용") — `tools/claude-permissions.py`·CLAUDE.md §3·docs/18 §3 편집을 하네스가 "자기 권한 수정"으로 차단 · 들어간 것 = docs/53 §8 한 줄 + tmp-clean ④(`7cfc6db`) · 제안문 = 개발 세션 스크래치패드 `permission-rules-proposal.md` | ⏳ 사용자 적용 → `python tools/claude-permissions.py` 1회 |
@@ -120,6 +122,6 @@
 
 위험 등록부 SSOT = [05 §4](05-requirements.md) · 요약 표를 여기에 다시 두지 않는다(종전 표 = [보존본](STATUS-archive.md)).
 
-- **열림으로 기록됨**: R-1(원천 해소 불가) · R-2 · R-3 · R-4 · R-7 · R-9 · R-11 · R-13 · R-14 · R-18 · R-20(05 §4 08-12 상태 줄 기준).
+- **열림으로 기록됨**: R-1(원천 해소 불가) · R-2 · R-3 · R-4 · R-7 · R-9 · R-11 · R-13 · R-14 · R-18 · R-20(05 §4 상태 줄 기준 · 11-05 R-5·R-8 해소 반영).
 - **R-22**(보안 프로그램 탐지 가능성) = [TODO §9](TODO.md) 등재 · 05 §4 표에는 아직 없다.
-- ⚠ 05 §4의 R-5·R-8 행은 "잔여"로 남아 있지만 CLAUDE.md는 각각 08-15·08-17 해소로 적는다 — 05 행 갱신 필요.
+- ✅ 05 §4 R-5(08-15 M4-5ⓒ 권한 강등 = 종결)·R-8(08-15·08-17 mac footprint 18~21MB · 3-OS 예산 안쪽 = 해소) 행 갱신 완료(11-05 9차).
