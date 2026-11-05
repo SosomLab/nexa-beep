@@ -18429,6 +18429,21 @@ impl App {
                     continue; // 그 사이 지워진 원본 — 조용히 제외
                 }
                 let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                // ★ 그룹발 파일(M4-10d · 11-05) — 표식이 살아 있으면 **그룹 경로**(바로 아래 pending_group_files 블록 = 방 표식 →
+                //   배치 목록 → 오퍼)로 되돌린다. 종전엔 1:1 큐로 재-Offer돼 수신측이 같은 파일을 1:1로 받았다(M5-1h 오라우팅).
+                let gid = self
+                    .group_send_tags
+                    .get(&peer)
+                    .and_then(|tags| tags.iter().find(|(p, _)| *p == path).map(|(_, g)| *g));
+                if let Some(gid) = gid {
+                    self.pending_group_files
+                        .entry(peer)
+                        .or_default()
+                        .push((gid, path));
+                    self.gx_mark_peer(peer, GxState::Waiting); // 종결(완료·실패·제외) 상태면 가드가 무시한다
+                    n += 1;
+                    continue;
+                }
                 self.send_queue.entry(peer).or_default().push_back(path);
                 let b = self.send_batch.entry(peer).or_insert((0, 0, 0, 0));
                 b.1 += 1;
