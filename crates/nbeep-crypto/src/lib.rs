@@ -34,7 +34,7 @@ pub fn sha256(data: &[u8]) -> [u8; 32] {
 }
 
 /// 증분 SHA-256(08-18 — 해시 진행률 표시용): update를 나눠 부르고 finalize.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Sha256Stream(sha2::Sha256);
 
 impl Default for Sha256Stream {

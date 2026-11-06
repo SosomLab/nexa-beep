@@ -219,16 +219,9 @@ pub(crate) fn thumb_raw_from_beepq(
     max_side: u32,
     seal_secret: &[u8; 32],
 ) -> Option<(u32, u32, Vec<u8>)> {
-    // 봉인 관문 경유(08-17 — 격리물 디스크 봉인 · 구본 관용은 관문 정책).
-    let bytes = crate::gate::read_beepq_bytes(path, seal_secret)?;
-    let q = nbeep_safe::Beepq::open(&bytes).ok()?;
-    let total = q.sealed_prefix.len() + q.body.len();
-    if total as u64 != q.original_size || total > 16 * 1024 * 1024 {
-        return None; // 크기 불일치(손상) 또는 미리보기 상한 초과 — 조용히 없음
-    }
-    let mut original = Vec::with_capacity(total);
-    original.extend_from_slice(&q.sealed_prefix);
-    original.extend_from_slice(&q.body);
+    // 격리물 읽기 핸들(M4-12 ⑤ — v2는 청크 범위 읽기 · v1 구본 관용) · 미리보기 상한 16MiB 초과 = 조용히 없음.
+    let mut q = crate::gate::QFile::open(path, seal_secret)?;
+    let original = q.body_all(16 * 1024 * 1024)?;
     decode_isolated(&original, max_side)
 }
 

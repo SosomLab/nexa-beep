@@ -107,8 +107,347 @@ impl core::fmt::Display for GateError {
 ///
 /// # Errors
 /// [`GateError`] — 해시 불일치·저장 실패. 두 경우 모두 아무것도 남기지 않는다.
-/// 격리물 봉투 도메인(ADR-0005 §4~ · 08-17 — sealed 문법의 도메인 분리 축).
+/// 격리물 봉투 도메인(ADR-0005 §4~ · 08-17 — sealed 문법의 도메인 분리 축). v1(전체 AEAD · 구본 읽기 전용).
 pub(crate) const SEAL_QUARANTINE: &[u8] = b"quarantine-v1";
+/// 아카이브 내부 점검 상한(M4-12 · 11-07): zip 중앙 디렉터리 점검은 전체 바이트가 필요하므로 이보다 크면 점검하지 않고
+/// "점검 못 함(크기)"으로 표시한다(격리 자체는 그대로 · 마찰 ↑ — fail-closed 쪽).
+pub(crate) const ARCHIVE_INSPECT_MAX: u64 = 64 * 1024 * 1024;
+
+/// ★ 스풀 수신물 격리 승격(M4-12 ④⑤ · 11-07) — [`quarantine_received`]와 같은 판정 순서를 **스풀에서 범위 읽기**로:
+/// 해시(증분 · 싱크) → 등급(머리 4KiB) → zip 점검(≤64MiB면 본문 전체 1회 · 초과 = 점검 못 함) → 검사(≤32MiB면 본문
+/// 전체 1회 · 초과 = `TooLarge` · 검사기 없으면 `Unavailable`) → 꼬리 쓰기 → `.beepq` rename → 사이드카.
+/// 어느 단계도 S 버퍼를 만들지 않는다(최대 = 점검/검사 상한만큼 1회).
+pub(crate) fn quarantine_spool(
+    mut sink: crate::spool::SpoolSink,
+    declared_sha256: [u8; 32],
+    name_bytes: Vec<u8>,
+    sender: PeerId,
+    channel: &str,
+    seal_secret: &[u8; 32],
+) -> Result<Quarantined, GateError> {
+    use nbeep_safe::{classify, Meta, QuarantineDir, TailV2};
+    let size = sink.body_len();
+    // ① 재검증 — 선언과 실측(증분)이 다르면 즉시 폐기.
+    let actual = sink.body_digest();
+    if actual != declared_sha256 {
+        sink.discard();
+        return Err(GateError::HashMismatch);
+    }
+    let name = String::from_utf8_lossy(&name_bytes).into_owned();
+    // ② 판정 — 매직은 머리 4KiB로 충분(확장자·매직 fail-closed).
+    let head = sink
+        .body_range(0, 4096)
+        .ok_or_else(|| GateError::Store(std::io::Error::other("spool read")))?;
+    let v = classify(&name, &head);
+    // ②-b 아카이브 점검·③ 검사 — 상한 안에서만 본문 전체를 **1회** 읽는다(둘이 공유 · 상한 밖은 버퍼를 만들지 않는다).
+    let is_zip = v.risk == RiskLevel::Archive && nbeep_safe::looks_like_zip(&head);
+    let want_zip = is_zip && size <= ARCHIVE_INSPECT_MAX;
+    let want_scan = size <= nbeep_plat::scan::SCAN_MAX_BYTES as u64;
+    let whole: Option<Vec<u8>> = if want_zip || want_scan {
+        let n =
+            usize::try_from(size).map_err(|_| GateError::Store(std::io::Error::other("size")))?;
+        Some(
+            sink.body_range(0, n)
+                .ok_or_else(|| GateError::Store(std::io::Error::other("spool read")))?,
+        )
+    } else {
+        None
+    };
+    let archive_viol = if is_zip {
+        match whole.as_deref().filter(|_| want_zip) {
+            Some(bytes) => {
+                match nbeep_safe::inspect_zip(bytes, &nbeep_safe::ArchivePolicy::default()) {
+                    nbeep_safe::ZipInspect::Ok(_) => None,
+                    nbeep_safe::ZipInspect::Reject(why) => Some(why),
+                    nbeep_safe::ZipInspect::Malformed(why) => Some(why.to_string()),
+                }
+            }
+            None => Some(format!(
+                "archive too large to inspect (> {} MiB)",
+                ARCHIVE_INSPECT_MAX >> 20
+            )),
+        }
+    } else {
+        None
+    };
+    let scan = match whole.as_deref().filter(|_| want_scan) {
+        Some(bytes) => nbeep_plat::scan::scan(&name, bytes),
+        None if nbeep_plat::scan::scanner_available() => nbeep_core::ScanOutcome::TooLarge,
+        None => nbeep_core::ScanOutcome::Unavailable,
+    };
+    drop(whole);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let meta = Meta {
+        orig_name: name_bytes,
+        declared_ext: nbeep_safe::risk::extension_of(&name),
+        declared_mime: String::new(),
+        detected_kind: v.detected.name().into(),
+        risk: v.risk,
+        sender,
+        received_at: now,
+        expires_at: now + 7 * 24 * 3600,
+        scan,
+        xfer: String::new(),
+    };
+    // ④ 꼬리 + 닫기 → `.beepq`로 승격(같은 도메인이라 재봉인 없음 · rename 1회).
+    let part = sink
+        .finalize(&TailV2 {
+            content_sha256: actual,
+            original_size: size,
+            meta,
+        })
+        .map_err(GateError::Store)?;
+    let qdir = QuarantineDir::open(quarantine_root(channel)).map_err(GateError::Store)?;
+    let hex: String = actual[..8].iter().map(|b| format!("{b:02x}")).collect();
+    let path = qdir.root().join(format!("{hex}.beepq"));
+    if path.exists() {
+        let _ = std::fs::remove_file(&part); // 같은 내용이 이미 격리됨(sha 동일) — 중복 보관 안 함
+    } else {
+        std::fs::rename(&part, &path).map_err(GateError::Store)?;
+    }
+    write_qmeta(
+        &path,
+        &QMeta {
+            name: name.clone(),
+            size,
+            risk: v.risk,
+            mismatch: v.mismatch,
+            sender,
+            received_at: now,
+            scan,
+            archive_viol: archive_viol.is_some(),
+        },
+        seal_secret,
+    );
+    Ok(Quarantined {
+        name,
+        risk: v.risk,
+        mismatch: v.mismatch,
+        path,
+        scan,
+        archive_viol,
+    })
+}
+
+/// 싱크 종류로 분기(M4-12 ④): 스풀 → [`quarantine_spool`] · 메모리(CLI) → [`quarantine_received`].
+pub(crate) fn quarantine_any(
+    got: Received,
+    sender: PeerId,
+    channel: &str,
+    seal_secret: &[u8; 32],
+) -> Result<Quarantined, GateError> {
+    let Received {
+        id,
+        name,
+        declared_sha256,
+        sink,
+    } = got;
+    match sink.into_any().downcast::<crate::spool::SpoolSink>() {
+        Ok(spool) => quarantine_spool(*spool, declared_sha256, name, sender, channel, seal_secret),
+        Err(any) => match any.downcast::<nbeep_core::MemSink>() {
+            Ok(mem) => quarantine_received(
+                Received {
+                    id,
+                    name,
+                    declared_sha256,
+                    sink: mem,
+                },
+                sender,
+                channel,
+                seal_secret,
+            ),
+            Err(_) => Err(GateError::Store(std::io::Error::other("unknown sink"))),
+        },
+    }
+}
+
+/// ★ 격리물 읽기 핸들(M4-12 ⑤ · 11-07) — v2(NBSE v2 스트림 + NXBQ v2 꼬리)는 **청크 임의 접근**으로 메타·범위·스트리밍
+/// 검증·실체화를 하고, v1(전체 AEAD)은 구본 관용으로 통째로 연다(쓰기는 더 이상 v1을 만들지 않는다).
+pub(crate) enum QFile {
+    /// 구본(v1 · 평문 구본 포함) — 통째로.
+    V1(nbeep_safe::Beepq),
+    /// v2 — 스트림 + 꼬리.
+    V2 {
+        r: nbeep_store::sealed_stream::StreamReader<std::fs::File>,
+        tail: nbeep_safe::TailV2,
+        body_len: u64,
+    },
+}
+
+impl QFile {
+    /// 열기(개봉·구조 검증 · 본문은 읽지 않는다) — 실패 = None(fail-closed).
+    pub(crate) fn open(path: &std::path::Path, secret: &[u8; 32]) -> Option<Self> {
+        use std::io::Read as _;
+        let mut f = std::fs::File::open(path).ok()?;
+        let len = f.metadata().ok()?.len();
+        let mut head = [0u8; nbeep_store::sealed_stream::HEAD];
+        let n = f.read(&mut head).ok()?;
+        if nbeep_store::sealed_stream::is_stream(&head[..n]) {
+            let mut r = nbeep_store::sealed_stream::StreamReader::open(
+                crate::spool::SEAL_QUARANTINE_V2,
+                secret,
+                f,
+                len,
+            )?;
+            let plain = r.plain_len();
+            let h = r.read_range(0, nbeep_safe::HEAD_V2)?;
+            nbeep_safe::parse_head_v2(&h).ok()?;
+            let trailer = r.read_range(plain.checked_sub(4)?, 4)?;
+            let tail_len = nbeep_safe::TailV2::tail_len(&trailer)?;
+            let tail_start = plain.checked_sub(4 + tail_len as u64)?;
+            let tail = nbeep_safe::TailV2::decode(&r.read_range(tail_start, tail_len)?).ok()?;
+            let body_len = tail_start.checked_sub(nbeep_safe::HEAD_V2 as u64)?;
+            if body_len != tail.original_size {
+                return None;
+            }
+            return Some(Self::V2 { r, tail, body_len });
+        }
+        drop(f);
+        let bytes = read_beepq_bytes(path, secret)?;
+        nbeep_safe::Beepq::open_owned(bytes).ok().map(Self::V1)
+    }
+
+    pub(crate) fn meta(&self) -> &nbeep_safe::Meta {
+        match self {
+            Self::V1(b) => &b.meta,
+            Self::V2 { tail, .. } => &tail.meta,
+        }
+    }
+
+    pub(crate) fn sha256(&self) -> [u8; 32] {
+        match self {
+            Self::V1(b) => b.content_sha256,
+            Self::V2 { tail, .. } => tail.content_sha256,
+        }
+    }
+
+    pub(crate) fn size(&self) -> u64 {
+        match self {
+            Self::V1(b) => b.original_size,
+            Self::V2 { body_len, .. } => *body_len,
+        }
+    }
+
+    /// 본문 범위(원본 오프셋 기준 · 범위 밖은 잘린다 · 손상 = None).
+    pub(crate) fn body_range(&mut self, off: u64, len: usize) -> Option<Vec<u8>> {
+        match self {
+            Self::V1(b) => {
+                let p = b.sealed_prefix.len() as u64;
+                let end = off.saturating_add(len as u64).min(b.original_size);
+                if off >= end {
+                    return Some(Vec::new());
+                }
+                let mut out = Vec::with_capacity(usize::try_from(end - off).ok()?);
+                if off < p {
+                    let e = end.min(p);
+                    out.extend_from_slice(&b.sealed_prefix[off as usize..e as usize]);
+                }
+                if end > p {
+                    let s = off.max(p) - p;
+                    out.extend_from_slice(&b.body[s as usize..(end - p) as usize]);
+                }
+                Some(out)
+            }
+            Self::V2 { r, body_len, .. } => {
+                let end = off.saturating_add(len as u64).min(*body_len);
+                if off >= end {
+                    return Some(Vec::new());
+                }
+                r.read_range(
+                    off + nbeep_safe::HEAD_V2 as u64,
+                    usize::try_from(end - off).ok()?,
+                )
+            }
+        }
+    }
+
+    /// 본문 전체(상한 안일 때만 · 미리보기·아카이브 목록용).
+    pub(crate) fn body_all(&mut self, limit: u64) -> Option<Vec<u8>> {
+        let n = self.size();
+        if n > limit {
+            return None;
+        }
+        self.body_range(0, usize::try_from(n).ok()?)
+    }
+
+    /// 본문 스트리밍(원본 바이트 순서 · 청크 단위) — 손상 = Err.
+    pub(crate) fn for_each_body_chunk(
+        &mut self,
+        mut f: impl FnMut(&[u8]) -> std::io::Result<()>,
+    ) -> std::io::Result<()> {
+        match self {
+            Self::V1(b) => {
+                f(&b.sealed_prefix)?;
+                f(&b.body)
+            }
+            Self::V2 { r, body_len, .. } => {
+                let body_end = nbeep_safe::HEAD_V2 as u64 + *body_len;
+                let cs = r.chunk_size() as u64;
+                let mut pos = 0u64; // 평문 오프셋(머리 포함)
+                for i in 0..r.chunks() {
+                    let c = r
+                        .read_chunk(i)
+                        .ok_or_else(|| std::io::Error::other("청크 복호 실패(손상·절단)"))?;
+                    let c_start = pos;
+                    let c_end = pos + c.len() as u64;
+                    pos = c_end;
+                    let s = (nbeep_safe::HEAD_V2 as u64).max(c_start);
+                    let e = body_end.min(c_end);
+                    if s < e {
+                        f(&c[(s - c_start) as usize..(e - c_start) as usize])?;
+                    }
+                    if c_end >= body_end {
+                        break;
+                    }
+                    let _ = cs;
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// 무결성 검증(스트리밍 해시 = 기록된 sha).
+    pub(crate) fn verify(&mut self) -> bool {
+        let mut h = nbeep_crypto::Sha256Stream::new();
+        if self
+            .for_each_body_chunk(|c| {
+                h.update(c);
+                Ok(())
+            })
+            .is_err()
+        {
+            return false;
+        }
+        h.finalize() == self.sha256()
+    }
+
+    /// 실체화(M4-12 ⑤) — v2는 스트리밍(임시 파일에 흘려 쓰며 해시 · 불일치 = 아무것도 남기지 않음) · v1은 종전 소유권 경로.
+    pub(crate) fn materialize(
+        self,
+        dest: &std::path::Path,
+        hash: &dyn nbeep_safe::HashPort,
+        mark: &dyn nbeep_safe::MarkPort,
+    ) -> Result<nbeep_safe::Materialized, nbeep_safe::MaterializeError> {
+        match self {
+            Self::V1(b) => nbeep_safe::QuarantineDir::materialize_owned(b, dest, hash, mark),
+            Self::V2 { r, tail, body_len } => {
+                let name = tail.meta.orig_name.clone();
+                let sha = tail.content_sha256;
+                let mut me = Self::V2 { r, tail, body_len };
+                nbeep_safe::QuarantineDir::materialize_streamed(sha, &name, dest, mark, &mut |w| {
+                    let mut h = nbeep_crypto::Sha256Stream::new();
+                    me.for_each_body_chunk(|c| {
+                        h.update(c);
+                        w.write_all(c)
+                    })?;
+                    Ok(h.finalize())
+                })
+            }
+        }
+    }
+}
 
 /// 격리물 파일 읽기 **관문**(08-17 — 평문 3면 조치 ①) — 봉인본은 개봉하고,
 /// 구본(봉인 도입 전 평문 `.beepq`)은 그대로 돌려준다(관용 — 이관은 목록

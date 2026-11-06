@@ -176,6 +176,58 @@ impl QuarantineDir {
         Self::materialize_bytes(beepq.unseal_owned(), sha, &name, dest_dir, hash, mark)
     }
 
+    /// ★ 스트리밍 실체화(M4-12 ⑤ · 11-07): 본문을 `write_body`가 임시 파일에 흘려 쓰며 해시를 돌려주면(호출자 크립토 —
+    /// 이 크레이트는 해시를 계산하지 않는다) 여기서 대조 → 불일치는 임시 파일 삭제·아무것도 남기지 않는다. 그 뒤는
+    /// [`Self::materialize`]와 같다(실행 비트 미부여 · 원자적 rename · 표식은 rename 뒤).
+    ///
+    /// # Errors
+    /// [`MaterializeError::HashMismatch`] · 그 외 I/O(`write_body`의 오류 포함).
+    pub fn materialize_streamed(
+        content_sha256: [u8; 32],
+        orig_name: &[u8],
+        dest_dir: &Path,
+        mark: &dyn MarkPort,
+        write_body: &mut dyn FnMut(&mut dyn io::Write) -> io::Result<[u8; 32]>,
+    ) -> Result<Materialized, MaterializeError> {
+        let wanted = sanitize_filename(&String::from_utf8_lossy(orig_name));
+        fs::create_dir_all(dest_dir)?;
+        let final_path = collision_free(dest_dir, &wanted);
+        let tmp = final_path.with_extension("nbeep-part");
+        let got = {
+            let mut f = fs::File::create(&tmp)?;
+            let r = write_body(&mut f);
+            match r {
+                Ok(sha) => {
+                    f.sync_all()?;
+                    sha
+                }
+                Err(e) => {
+                    drop(f);
+                    let _ = fs::remove_file(&tmp);
+                    return Err(e.into());
+                }
+            }
+        };
+        if got != content_sha256 {
+            let _ = fs::remove_file(&tmp); // 불일치 = 아무것도 남기지 않는다
+            return Err(MaterializeError::HashMismatch);
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&tmp, fs::Permissions::from_mode(0o644))?;
+        }
+        if let Err(e) = fs::rename(&tmp, &final_path) {
+            let _ = fs::remove_file(&tmp);
+            return Err(e.into());
+        }
+        let mark = mark.apply(&final_path);
+        Ok(Materialized {
+            path: final_path,
+            mark,
+        })
+    }
+
     fn materialize_bytes(
         original: Vec<u8>,
         content_sha256: [u8; 32],

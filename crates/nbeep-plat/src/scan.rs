@@ -23,6 +23,23 @@ pub fn platform_scanner() -> Box<dyn FileScanner> {
     Box::new(NoScanner)
 }
 
+/// 검사기 버퍼 상한(M4-12 · 11-07): 이보다 큰 파일은 검사하지 않고 "검사 불가(크기)"(`TooLarge`)로 둔다 — 호출자가
+/// 버퍼를 만들기 **전에** 이 값으로 가른다(스풀 수신에서 S 버퍼를 만들지 않게).
+pub const SCAN_MAX_BYTES: usize = 32 * 1024 * 1024;
+
+/// 이 플랫폼에 실제 검사기가 있는가(Windows AMSI 로드 성공) — 없으면 크기와 무관하게 `Unavailable`이 정직하다.
+#[must_use]
+pub fn scanner_available() -> bool {
+    #[cfg(windows)]
+    {
+        amsi::scanner().is_some()
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
 /// 편의 — 기본 검사기로 1회 검사.
 #[must_use]
 pub fn scan(name: &str, bytes: &[u8]) -> ScanOutcome {
@@ -106,8 +123,8 @@ mod amsi {
 
     struct AmsiScanner(&'static Amsi);
 
-    /// AMSI 버퍼 검사 상한(M4-12 · 11-07) — 초과분은 `Unavailable`(검사 안 됨).
-    pub(super) const AMSI_MAX_BYTES: usize = 32 * 1024 * 1024;
+    /// AMSI 버퍼 검사 상한 = [`super::SCAN_MAX_BYTES`].
+    pub(super) const AMSI_MAX_BYTES: usize = super::SCAN_MAX_BYTES;
 
     impl FileScanner for AmsiScanner {
         fn scan(&self, name: &str, bytes: &[u8]) -> ScanOutcome {

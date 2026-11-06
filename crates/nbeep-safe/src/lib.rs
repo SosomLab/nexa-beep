@@ -16,7 +16,10 @@ pub mod zip;
 pub use archive::{
     check_archive, check_entry, safe_entry_path, ArchivePolicy, ArchiveReject, EntryDesc,
 };
-pub use container::{Beepq, Meta, QuarantineError, FLAG_SEALED, FORMAT_VER, MAGIC, MAX_SEAL};
+pub use container::{
+    head_v2, parse_head_v2, Beepq, Meta, QuarantineError, TailV2, FLAG_SEALED, FORMAT_VER,
+    FORMAT_VER_V2, HEAD_V2, MAGIC, MAX_SEAL, TAIL_V2_FIXED,
+};
 pub use risk::{classify, classify_ext, detect_magic, DetectedKind, Verdict};
 pub use sanitize::{sanitize_filename, MAX_NAME_CHARS};
 pub use state::{friction_raised, step, InvalidTransition, QEvent, QState};

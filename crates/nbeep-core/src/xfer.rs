@@ -676,6 +676,8 @@ pub trait XferSink: std::fmt::Debug + Send + std::any::Any {
     }
     /// 다운캐스트(호스트가 자기 스풀 핸들을 되찾는다).
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
+    /// 소유권째 다운캐스트(완료·중단 때 호스트가 싱크를 가져간다).
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any>;
 }
 
 /// 메모리 싱크(기본 · 테스트·CLI) — 종전 `Vec<u8>` 조립과 같다(선언 크기 + 헤드룸 1회 예약).
@@ -711,6 +713,9 @@ impl XferSink for MemSink {
         Some(std::mem::take(&mut self.0))
     }
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
         self
     }
 }

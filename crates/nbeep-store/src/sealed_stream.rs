@@ -304,6 +304,8 @@ pub struct StreamReader<R: Read + Seek> {
     cipher: ChaCha20Poly1305,
     chunks: u32,
     plain_len: u64,
+    /// false = 아직 finish 전 스풀(전 청크가 비마지막 · 꽉 찬 청크만 디스크에 있다 — 스풀 싱크의 중간 읽기용).
+    finished: bool,
 }
 
 impl<R: Read + Seek> std::fmt::Debug for StreamReader<R> {
@@ -332,6 +334,34 @@ impl<R: Read + Seek> StreamReader<R> {
             cipher,
             chunks,
             plain_len,
+            finished: true,
+        })
+    }
+
+    /// **finish 전** 스풀 열기(M4-12 ④ — 수신 중 확정 청크 읽기): 디스크엔 꽉 찬 비마지막 청크만 있다(길이가 정확히
+    /// 머리 + n×(청크+태그)가 아니면 None). 마지막 청크 플래그를 요구하지 않는다.
+    #[must_use]
+    pub fn open_unfinished(domain: &[u8], secret: &[u8; 32], mut r: R, len: u64) -> Option<Self> {
+        let mut raw = [0u8; HEAD];
+        r.seek(SeekFrom::Start(0)).ok()?;
+        r.read_exact(&mut raw).ok()?;
+        let head = Head::parse(raw, domain, secret)?;
+        let body = len.checked_sub(HEAD as u64)?;
+        let full_sz = (head.chunk + TAG) as u64;
+        if body % full_sz != 0 {
+            return None;
+        }
+        let chunks = u32::try_from(body / full_sz).ok()?;
+        let plain_len = u64::from(chunks) * head.chunk as u64;
+        let cipher = ChaCha20Poly1305::new(&head.key.into());
+        Some(Self {
+            r,
+            head,
+            domain: domain.to_vec(),
+            cipher,
+            chunks,
+            plain_len,
+            finished: false,
         })
     }
 
@@ -359,7 +389,7 @@ impl<R: Read + Seek> StreamReader<R> {
         if i >= self.chunks {
             return None;
         }
-        let last = i == self.chunks - 1;
+        let last = self.finished && i == self.chunks - 1;
         let off = HEAD as u64 + u64::from(i) * (self.head.chunk + TAG) as u64;
         let ct_len = if last {
             let last_plain = self.plain_len - u64::from(i) * self.head.chunk as u64;
@@ -507,6 +537,45 @@ mod tests {
         // 끝나지 않은 스트림(머리만) = 기하 없음.
         assert!(
             StreamReader::open(DOM, &SECRET, Cursor::new(&sealed[..HEAD]), HEAD as u64).is_none()
+        );
+    }
+
+    /// finish 전 스풀 읽기(M4-12 ④): 꽉 찬 청크만 보인다 · 길이가 어긋나면 None · 끝난 스트림을 미완으로 열면 마지막 청크가 실패.
+    #[test]
+    fn unfinished_spool_reads_committed_chunks_only() {
+        let chunk = 1usize << DEFAULT_CHUNK_LOG2;
+        let plain: Vec<u8> = (0..2 * chunk + 5).map(|i| (i % 199) as u8).collect();
+        let mut w = StreamWriter::new(DOM, &SECRET, Vec::new()).unwrap();
+        w.write(&plain).unwrap();
+        assert_eq!(w.committed_len(), 2 * chunk as u64);
+        assert_eq!(w.pending(), &plain[2 * chunk..]);
+        // writer 내부 버퍼를 보지 않고 디스크분만: 두 청크 = 머리 + 2×(청크+태그).
+        let disk_len = HEAD + 2 * (chunk + TAG);
+        let sealed = seal_all(&plain);
+        let mut r = StreamReader::open_unfinished(
+            DOM,
+            &SECRET,
+            Cursor::new(&sealed[..disk_len]),
+            disk_len as u64,
+        )
+        .unwrap();
+        assert_eq!(r.plain_len(), 2 * chunk as u64);
+        assert_eq!(
+            r.read_range(chunk as u64 - 3, 6).unwrap(),
+            &plain[chunk - 3..chunk + 3]
+        );
+        assert!(StreamReader::open_unfinished(
+            DOM,
+            &SECRET,
+            Cursor::new(&sealed[..disk_len + 7]),
+            disk_len as u64 + 7
+        )
+        .is_none());
+        let mut fin =
+            StreamReader::open_unfinished(DOM, &SECRET, Cursor::new(&sealed), sealed.len() as u64);
+        assert!(
+            fin.is_none() || fin.as_mut().unwrap().read_chunk(2).is_none(),
+            "끝난 스트림은 미완 기하가 아니다"
         );
     }
 

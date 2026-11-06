@@ -852,6 +852,7 @@ fn spawn_decode(
 }
 
 /// 세션 액터에 보내는 명령 — 대화 바이트와 파일 제어를 한 채널로 교대한다.
+#[allow(clippy::large_enum_variant)] // AcceptXfer.resume = 스풀 핸들(M4-12 ④) — 드문 명령이라 Box 비용이 더 낫지 않다
 enum SessionCmd {
     /// 인코딩된 `ChatMessage`.
     Chat(Vec<u8>),
@@ -869,9 +870,9 @@ enum SessionCmd {
         id: nbeep_core::XferId,
         /// 수신측 상한(B/s · 0 = 무제한) — Accept에 실어 발신측이 협상한다.
         rate_cap: u64,
-        /// **이어받기 프리픽스**(M4-10 — `.part` 보존분). Some = 조립기에 선적재하고
-        /// Accept에 재개 오프셋+프리픽스 해시를 실어 발신측 검증을 요청한다.
-        resume: Option<Vec<u8>>,
+        /// **이어받기**(M4-10 · M4-12 ④ — 다시 연 `.part` 스풀 + 프리픽스 길이·해시). Some = 조립기에 그 싱크를
+        /// 꽂고 Accept에 재개 오프셋+프리픽스 해시를 실어 발신측 검증을 요청한다.
+        resume: Option<crate::spool::Resume>,
     },
     /// 수신 파일 상한 변경(08-18 — `xfer.recv_max_mb` hot-swap · u64::MAX = 무제한).
     SetRecvMax(u64),
@@ -1599,8 +1600,17 @@ fn spawn_session_actor(
         // 파일 상태는 액터가 소유한다 — GUI 스레드는 이벤트만 받는다(대용량 조립이
         // 메인 스레드를 막지 않게).
         let mut inbox = XferInbox::with_max_file(recv_max); // 수신 상한 = 설정(08-18)
-                                                            // 세션 성립 즉시 내 수신 상한 공지(08-18) — 상대 발신자가 해시 전에
-                                                            // 초과를 차단할 근거. 구버전 상대는 미지 태그를 무시한다(전방 호환).
+                                                            // ★ M4-12 ④: 수락 때 스풀 싱크(봉인 스트림 · `.part`) — 수신 중 메모리 = 청크 1개 · S 버퍼 없음.
+        {
+            let secret = seal_secret;
+            inbox.set_sink_factory(Box::new(move |spec| {
+                crate::spool::SpoolSink::create(crate::gate::CH_GUI, &secret, peer, spec)
+                    .map(|s| Box::new(s) as Box<dyn nbeep_core::XferSink>)
+                    .map_err(|_| nbeep_core::xfer::XferError::Sink)
+            }));
+        }
+        // 세션 성립 즉시 내 수신 상한 공지(08-18) — 상대 발신자가 해시 전에
+        // 초과를 차단할 근거. 구버전 상대는 미지 태그를 무시한다(전방 호환).
         let _ = session.send(
             StreamId::Control,
             &nbeep_core::xfer::encode_cap_advert(inbox.max_file()),
@@ -1710,10 +1720,10 @@ fn spawn_session_actor(
                             // 실패(범위 초과 등)면 처음부터(재개는 최적화 — fail-open으로
                             // 전송 자체는 살린다 · 손상 방지는 발신측 해시 대조가 맡는다).
                             let (resume_offset, prefix_sha) = match resume {
-                                Some(prefix) if !prefix.is_empty() => {
-                                    let sha = nbeep_crypto::sha256(&prefix);
-                                    let off = prefix.len() as u64;
-                                    if inbox.accept_with_prefix(&id, prefix).is_ok() {
+                                Some(r) if r.prefix_len > 0 => {
+                                    let (off, sha) = (r.prefix_len, r.prefix_sha);
+                                    // M4-12 ④ — 다시 연 스풀을 그대로 싱크로(프리픽스 해시는 재개 시점 재해시).
+                                    if inbox.accept_resumed(&id, Box::new(r.sink)).is_ok() {
                                         (off, sha)
                                     } else if inbox.accept(&id).is_ok() {
                                         (0, [0u8; 32])
@@ -2503,8 +2513,11 @@ fn spawn_session_actor(
         })();
         // 세션 종료 — 수락된 부분 수신물을 봉인 보존한다(M4-10a · D-31).
         // 재개 협상의 원료: 같은 sha+size Offer가 다시 오면 "이어받기"가 된다.
-        for mut p in inbox.take_partials() {
-            crate::part::save_partial(crate::gate::CH_GUI, &seal_secret, peer, &mut p);
+        for p in inbox.take_partials() {
+            // M4-12 ④ — 스풀이 곧 `.part`: 스트림만 닫는다(메모리 부분물 봉인 저장 없음).
+            if let Ok(spool) = p.sink.into_any().downcast::<crate::spool::SpoolSink>() {
+                let _ = spool.park();
+            }
         }
     })
 }
@@ -3593,8 +3606,7 @@ fn xfer_step(
                     got.declared_sha256 = sha256;
                 }
                 let got_len = got.sink.len(); // 소유권 이동 전에(M4-12 0단계)
-                match crate::gate::quarantine_received(got, peer, crate::gate::CH_GUI, seal_secret)
-                {
+                match crate::gate::quarantine_any(got, peer, crate::gate::CH_GUI, seal_secret) {
                     Ok(q) => {
                         // 평균 수신 속도(08-16) — 첫 청크~Done. 표기는 스레드 완료 항목.
                         let avg_bps = {
@@ -6235,7 +6247,7 @@ impl App {
         } else {
             None
         };
-        let resumed = resume.as_ref().map(Vec::len);
+        let resumed = resume.as_ref().map(|r| r.prefix_len);
         let ok =
             self.send_xfer_decision(peer, xid, accept, nbeep_core::RejectWhy::Declined, resume);
         if accept && ok {
@@ -6255,7 +6267,7 @@ impl App {
         if let Some(got) = resumed {
             self.set_status(nbeep_core::tf(
                 nbeep_core::Msg::StfResumeFrom,
-                &[&name, &(got as u64 * 100 / size.max(1)).to_string()],
+                &[&name, &(got * 100 / size.max(1)).to_string()],
             ));
         }
         if !accept {
@@ -6460,13 +6472,13 @@ impl App {
             }
             OfferChoice::Approve => {
                 let resume = self.load_resume(peer, &sha, size);
-                let resumed = resume.as_ref().map(Vec::len);
+                let resumed = resume.as_ref().map(|r| r.prefix_len);
                 self.send_xfer_decision(peer, xid, true, nbeep_core::RejectWhy::Declined, resume);
                 self.arm_batch_approval(peer, &name, size); // 요청 단위 승인(M4-2e)
                 self.set_status(if let Some(got) = resumed {
                     nbeep_core::tf(
                         nbeep_core::Msg::StfResumeFrom,
-                        &[&name, &(got as u64 * 100 / size.max(1)).to_string()],
+                        &[&name, &(got * 100 / size.max(1)).to_string()],
                     )
                 } else {
                     nbeep_core::tf(nbeep_core::Msg::StfAcceptRecv, &[&name])
@@ -6545,11 +6557,16 @@ impl App {
 
     /// `.part` 재개 후보 조회(M4-10) — 있으면 (프리픽스, 보존율%). 조회 시점에
     /// 크기 불일치·손상은 part 모듈이 폐기한다(fail-closed).
-    fn load_resume(&mut self, peer: PeerId, sha: &[u8; 32], size: u64) -> Option<Vec<u8>> {
+    fn load_resume(
+        &mut self,
+        peer: PeerId,
+        sha: &[u8; 32],
+        size: u64,
+    ) -> Option<crate::spool::Resume> {
         let secret = self.identity.wrap_secret();
-        let prefix = crate::part::load_partial(crate::gate::CH_GUI, &secret, sha, size)?;
+        let r = crate::part::open_resume(crate::gate::CH_GUI, &secret, sha, size)?; // M4-12 ④ 스풀 재개
         self.resumed_recv.insert(peer, *sha); // 완료·취소 시 .part 정리용
-        Some(prefix)
+        Some(r)
     }
 
     /// 액터에 수락/거절 명령을 보낸다(성공 여부).
@@ -6559,7 +6576,7 @@ impl App {
         xid: nbeep_core::XferId,
         accept: bool,
         why: nbeep_core::RejectWhy,
-        resume: Option<Vec<u8>>,
+        resume: Option<crate::spool::Resume>,
     ) -> bool {
         dlog!(self, DL::Xfer, DV::Decide, "xfer_decision", |r| {
             let r = r
@@ -13444,7 +13461,7 @@ impl App {
         let proxy = self.proxy.clone();
         let secret = self.identity.wrap_secret();
         std::thread::spawn(move || {
-            use nbeep_safe::{Beepq, QuarantineDir};
+            use nbeep_safe::QuarantineDir;
             let rows = (|| -> Vec<QRowRaw> {
                 let Ok(dir) =
                     QuarantineDir::open(crate::gate::quarantine_root(crate::gate::CH_GUI))
@@ -13473,41 +13490,27 @@ impl App {
                                 verified: false,
                             });
                         }
-                        // 폴백 — 사이드카 없는 구본: 한 번 읽어 메타를 얻고(개봉·이관)
-                        //   **lazy 사이드카 생성**(다음 스캔부터 즉시). 이 경로만 전체 읽기.
-                        let raw = std::fs::read(&p).ok()?;
-                        let sealed_already = nbeep_store::sealed::is_sealed(&raw);
-                        let bytes = if sealed_already {
-                            nbeep_store::sealed::open(crate::gate::SEAL_QUARANTINE, &secret, &raw)?
-                        } else {
-                            raw
-                        };
-                        if !sealed_already {
-                            if let Ok(sealed) = nbeep_store::sealed::seal(
-                                crate::gate::SEAL_QUARANTINE,
-                                &secret,
-                                &bytes,
-                            ) {
-                                let _ = std::fs::write(&p, sealed);
-                            }
-                        }
-                        let bq = Beepq::open_owned(bytes).ok()?; // M4-12 0단계 — 본문 복사 없음
-                        let mismatch = bq.meta.detected_kind != "unknown"
-                            && !bq.meta.declared_ext.is_empty()
-                            && !bq.meta.detected_kind.contains(&bq.meta.declared_ext);
-                        let name = String::from_utf8_lossy(&bq.meta.orig_name).into_owned();
+                        // 폴백 — 사이드카 없는 파일: 메타만 연다(M4-12 ⑤ — v2는 꼬리 O(1) · v1 구본은 통째로) +
+                        //   **lazy 사이드카 생성**(다음 스캔부터 즉시).
+                        let q = crate::gate::QFile::open(&p, &secret)?;
+                        let meta = q.meta().clone();
+                        let original_size = q.size();
+                        drop(q);
+                        let mismatch = meta.detected_kind != "unknown"
+                            && !meta.declared_ext.is_empty()
+                            && !meta.detected_kind.contains(&meta.declared_ext);
+                        let name = String::from_utf8_lossy(&meta.orig_name).into_owned();
                         crate::gate::write_qmeta(
                             &p,
                             &crate::gate::QMeta {
                                 name: name.clone(),
-                                size: bq.original_size,
-                                risk: bq.meta.risk,
+                                size: original_size,
+                                risk: meta.risk,
                                 mismatch,
-                                sender: bq.meta.sender,
-                                received_at: bq.meta.received_at,
-                                scan: bq.meta.scan,
-                                // 구본(08-21 이전 수신) = 아카이브 미점검으로 정직 표기
-                                // (재계산은 prefix+body 재조립 = 대용량 이중 복사라 비채택).
+                                sender: meta.sender,
+                                received_at: meta.received_at,
+                                scan: meta.scan,
+                                // 사이드카 없는 파일 = 아카이브 미점검으로 정직 표기(재점검은 비채택).
                                 archive_viol: false,
                             },
                             &secret,
@@ -13515,12 +13518,12 @@ impl App {
                         Some(QRowRaw {
                             path: p.to_string_lossy().into_owned(),
                             name,
-                            size: bq.original_size,
-                            risk: bq.meta.risk,
+                            size: original_size,
+                            risk: meta.risk,
                             mismatch,
-                            sender: bq.meta.sender,
-                            received_at: bq.meta.received_at,
-                            scan: bq.meta.scan,
+                            sender: meta.sender,
+                            received_at: meta.received_at,
+                            scan: meta.scan,
                             archive_viol: false,
                             verified: false,
                         })
@@ -13546,9 +13549,9 @@ impl App {
         let secret = self.identity.wrap_secret();
         std::thread::spawn(move || {
             for (_, path) in items {
-                let ok = crate::gate::read_beepq_bytes(std::path::Path::new(&path), &secret)
-                    .and_then(|b| nbeep_safe::Beepq::open_owned(b).ok()) // M4-12 0단계
-                    .is_some();
+                // M4-12 ⑤ — v2는 청크 스트리밍 해시(S 버퍼 없음) · v1 구본은 통째로.
+                let ok = crate::gate::QFile::open(std::path::Path::new(&path), &secret)
+                    .is_some_and(|mut q| q.verify());
                 let _ = proxy.send_event(AppEvent::QVerified { gen, path, ok });
             }
         });
@@ -14148,7 +14151,7 @@ impl App {
 
     /// 격리함 결정 실행 — 승인 = 실체화(해시 재검증·OS 표식), 삭제 = `.beepq` 제거.
     fn run_quarantine_action(&mut self, act: nbeep_ui::QAction, id: WindowId) {
-        use nbeep_safe::{Beepq, HashPort, MarkOutcome, MarkPort, QuarantineDir};
+        use nbeep_safe::{HashPort, MarkOutcome, MarkPort, QuarantineDir};
         struct CryptoHash;
         impl HashPort for CryptoHash {
             fn sha256(&self, data: &[u8]) -> [u8; 32] {
@@ -14175,15 +14178,14 @@ impl App {
                 // 없으면 임시 폴더로 떨어뜨리되 경로를 그대로 보여 준다(숨기지 않는다).
                 let dest = nbeep_plat::paths::downloads_dir()
                     .unwrap_or_else(|| std::env::temp_dir().join("nexa-beep-materialized"));
-                let out = crate::gate::read_beepq_bytes(
+                // M4-12 ⑤ — v2는 스트리밍 실체화(임시 파일에 흘려 쓰며 해시 · 메모리 = 청크 1개) · v1 구본은 소유권 경로.
+                let out = crate::gate::QFile::open(
                     std::path::Path::new(&path),
                     &self.identity.wrap_secret(),
                 )
                 .ok_or_else(|| nbeep_core::t(nbeep_core::Msg::UnsealFailed).to_string())
-                .and_then(|b| Beepq::open_owned(b).map_err(|e| format!("{e:?}")))
-                .and_then(|bq| {
-                    // M4-12 0단계 — 소유권 실체화(재결합 복사 없음 · 피크 ≈ 1S)
-                    QuarantineDir::materialize_owned(bq, &dest, &CryptoHash, &OsMark)
+                .and_then(|q| {
+                    q.materialize(&dest, &CryptoHash, &OsMark)
                         .map_err(|e| e.to_string())
                 });
                 self.set_status(match out {
@@ -22264,15 +22266,16 @@ impl App {
                         let title = meta.map_or_else(|| "archive".into(), |m| m.name);
                         let proxy = self.proxy.clone();
                         std::thread::spawn(move || {
-                            let body =
-                                crate::gate::read_beepq_bytes(std::path::Path::new(&qp), &secret)
-                                    .map_or_else(
-                                        || {
-                                            nbeep_core::t(nbeep_core::Msg::ArchiveUnreadable)
-                                                .to_string()
-                                        },
-                                        |b| archive_listing_body(&b),
-                                    );
+                            // M4-12 ⑤ — 본문만(상한 64MiB · 초과 = 읽을 수 없음으로 정직 표기).
+                            let body = crate::gate::QFile::open(std::path::Path::new(&qp), &secret)
+                                .and_then(|mut q| q.body_all(crate::gate::ARCHIVE_INSPECT_MAX))
+                                .map_or_else(
+                                    || {
+                                        nbeep_core::t(nbeep_core::Msg::ArchiveUnreadable)
+                                            .to_string()
+                                    },
+                                    |b| archive_listing_body(&b),
+                                );
                             let _ = proxy.send_event(AppEvent::ArchiveList {
                                 title,
                                 body,
@@ -23049,7 +23052,7 @@ impl ApplicationHandler<AppEvent> for App {
                 let rkey = crate::part::resume_key(&name, size, peer); // 지연 해시 — 키 기반
                 if !matches!(verdict, OfferVerdict::Deny(_)) {
                     if let Some(prefix) = self.load_resume(peer, &rkey, size) {
-                        let pct = prefix.len() as u64 * 100 / size.max(1);
+                        let pct = prefix.prefix_len * 100 / size.max(1);
                         self.send_xfer_decision(peer, id, true, RejectWhy::Declined, Some(prefix));
                         self.set_status(nbeep_core::tf(
                             nbeep_core::Msg::XferResumeFrom,

@@ -36,6 +36,7 @@ mod keytable;
 mod part;
 mod png;
 mod present;
+mod spool;
 mod statuslog;
 mod userident;
 
