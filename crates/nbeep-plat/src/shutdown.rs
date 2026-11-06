@@ -1,6 +1,7 @@
 //! 정상 종료 신호 — **종료 포트**(FR-P-7 · R-16 · DR-21 이음새).
 //!
-//! OS 종료 요청(Unix `SIGINT`/`SIGTERM`)을 받아 **플래그 하나**로 노출한다. 상위(bin·헤드리스
+//! OS 종료 요청(Unix `SIGINT`/`SIGTERM` · Windows 콘솔 `Ctrl+C`/`Ctrl+Break`/창 닫기/로그오프/종료)을 받아
+//! **플래그 하나**로 노출한다. 상위(bin·헤드리스
 //! 루프)는 이 플래그를 폴해 **GOODBYE 발신·세션/소켓 정리·zeroize**를 마치고 나간다(FR-D-8의
 //! 절반 · NFR-B-6 · FR-S-22).
 //!
@@ -14,7 +15,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use std::sync::{Mutex, OnceLock, Weak};
 
 /// 종료 요청 플래그(구독자에 공유).
@@ -42,14 +43,14 @@ impl Shutdown {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 static SIGNAL_FLAG: AtomicBool = AtomicBool::new(false);
 /// 자기 파이프(self-pipe) 쓰기 끝(RL-13 ⓒ · 11-04) — 핸들러가 1바이트를 쓰고 브릿지 스레드가 블로킹 read로 깬다.
 /// -1 = 파이프 없음(폴 폴백).
 #[cfg(unix)]
 static PIPE_W: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
 /// 살아 있는 구독 플래그(프로세스 전역 · `install` 호출마다 1개) — 브릿지 1개가 전부 깨운다.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 static REGISTRY: Mutex<Vec<Weak<AtomicBool>>> = Mutex::new(Vec::new());
 /// 핸들러·파이프·브릿지 스레드는 프로세스에 **한 번**(종전 = `install`마다 50ms 폴 스레드 1개 영구 잔존 ·
 /// `--chat-live`는 재대기마다 호출해 스레드가 쌓였다).
@@ -71,7 +72,7 @@ extern "C" fn handle(_sig: libc::c_int) {
 }
 
 /// 등록된 플래그 전부에 "요청됨"을 쓰고 죽은 구독은 걷는다.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn wake_all() {
     if let Ok(mut g) = REGISTRY.lock() {
         g.retain(|w| {
@@ -131,10 +132,56 @@ fn install_bridge_once() {
     });
 }
 
+/// Windows 콘솔 제어 핸들러(M1-8x 잔여 · R-16 · 11-06) — `SetConsoleCtrlHandler`. 콘솔이 붙은 프로세스(CLI
+/// 서브커맨드 · `attach_parent_console`/`own_console_for_interactive` 뒤)에만 이벤트가 온다. `windows` 서브시스템
+/// GUI(탐색기 실행)는 콘솔이 없어 받지 않는다 — 그쪽 종료는 창 닫기·트레이·`request()`가 맡는다(로그오프의
+/// `WM_ENDSESSION`은 별도 슬라이스).
+#[cfg(windows)]
+mod win {
+    pub(super) const CTRL_CLOSE_EVENT: u32 = 2;
+    pub(super) const CTRL_LOGOFF_EVENT: u32 = 5;
+    pub(super) const CTRL_SHUTDOWN_EVENT: u32 = 6;
+    #[link(name = "kernel32")]
+    extern "system" {
+        pub(super) fn SetConsoleCtrlHandler(
+            handler: Option<unsafe extern "system" fn(u32) -> i32>,
+            add: i32,
+        ) -> i32;
+    }
+}
+
+/// 핸들러 1회 설치(windows).
+#[cfg(windows)]
+static HANDLER: OnceLock<bool> = OnceLock::new();
+
+/// 콘솔 제어 이벤트 — OS가 **별도 스레드**에서 부른다(시그널 핸들러와 달리 락·sleep 가능).
+#[cfg(windows)]
+unsafe extern "system" fn ctrl_handler(kind: u32) -> i32 {
+    SIGNAL_FLAG.store(true, Ordering::Relaxed);
+    wake_all();
+    if matches!(
+        kind,
+        win::CTRL_CLOSE_EVENT | win::CTRL_LOGOFF_EVENT | win::CTRL_SHUTDOWN_EVENT
+    ) {
+        // 핸들러가 돌아오면 OS가 곧(≤5s) 프로세스를 끝낸다 — 루프가 정리(기록 flush · Bye · 설정 저장)할 시간을
+        // 준다. Ctrl+C/Break는 돌아와도 죽지 않으므로 즉시 반환(루프가 플래그를 보고 나간다).
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+    }
+    1 // TRUE = 처리함(기본 핸들러로 넘기지 않는다 — 즉시 종료 방지)
+}
+
+#[cfg(windows)]
+fn install_handler_once() {
+    HANDLER.get_or_init(|| {
+        // SAFETY: 프로세스 전역 1회 등록 · 핸들러는 원자 store·레지스트리 락·sleep만 한다.
+        unsafe { win::SetConsoleCtrlHandler(Some(ctrl_handler), 1) != 0 }
+    });
+}
+
 /// 종료 시그널 핸들러를 설치하고 [`Shutdown`]을 돌려준다.
 ///
-/// Unix: `SIGINT`+`SIGTERM`을 잡아 플래그를 세운다. 그 외 타깃: 지금은 no-op 플래그
-/// (Windows 콘솔/세션 핸들러 `SetConsoleCtrlHandler`는 후속 — 그때까지 `request()`로만).
+/// Unix: `SIGINT`+`SIGTERM`을 잡아 플래그를 세운다. Windows: 콘솔 제어 핸들러(`SetConsoleCtrlHandler` · 11-06 —
+/// Ctrl+C/Break/창 닫기/로그오프/종료 · 콘솔이 붙은 프로세스만). 그 외 타깃: no-op 플래그(`request()`로만).
 ///
 /// ★ RL-13 ⓒ(11-04): 핸들러·브릿지는 프로세스에 **한 번**(자기 파이프 + 블로킹 read 1스레드 · 유휴 웨이크업 0).
 /// `install`은 플래그를 등록만 한다 — `--chat-live`처럼 재대기마다 불러도 스레드가 쌓이지 않는다. 등록 전에 이미 온
@@ -151,7 +198,17 @@ pub fn install() -> Shutdown {
         }
         flag
     };
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    let flag = {
+        install_handler_once();
+        let flag = Arc::new(AtomicBool::new(SIGNAL_FLAG.load(Ordering::Relaxed)));
+        if let Ok(mut g) = REGISTRY.lock() {
+            g.retain(|w| w.strong_count() > 0);
+            g.push(Arc::downgrade(&flag));
+        }
+        flag
+    };
+    #[cfg(not(any(unix, windows)))]
     let flag = Arc::new(AtomicBool::new(false));
     Shutdown { flag }
 }
@@ -176,7 +233,7 @@ mod tests {
         a.request();
         assert!(a.requested());
         assert!(!b.requested(), "다른 구독의 요청이 새지 않는다");
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         {
             drop(a);
             let _c = install(); // 등록 때 죽은 구독을 걷는다
@@ -188,6 +245,18 @@ mod tests {
                 .count();
             assert!(live >= 2, "b·c는 살아 있다(병렬 시험의 다른 구독 포함)");
         }
+    }
+
+    /// R-16(11-06): 외부 신호(콘솔 이벤트·시그널)가 오면 **등록된 구독 전부**가 깬다 — 핸들러 본체를 시험 안에서
+    /// 흉내 낸다(SIGNAL_FLAG + wake_all = 핸들러가 하는 전부).
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn external_signal_wakes_every_subscriber() {
+        // SIGNAL_FLAG(프로세스 전역)는 건드리지 않는다 — 병렬 시험의 install() 초기값에 샌다.
+        let a = install();
+        let b = install();
+        wake_all();
+        assert!(a.requested() && b.requested(), "두 구독 모두 깬다");
     }
 
     #[test]

@@ -136,6 +136,13 @@ impl FileBlockList {
     }
 }
 
+impl Drop for FileBlockList {
+    fn drop(&mut self) {
+        // R-16 zeroize(11-06).
+        crate::sealed::wipe(&mut self.secret);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]

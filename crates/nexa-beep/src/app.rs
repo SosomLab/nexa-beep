@@ -16307,6 +16307,7 @@ impl App {
                 continue; // 다른 신원의 봉투 — 열 수 없다(fail-closed)
             };
             let q = decode_pending(&plain);
+            nbeep_store::sealed::wipe_owned(plain); // 복호 평문 즉시 지움(FR-S-22)
             if q.is_empty() {
                 continue;
             }
@@ -16619,6 +16620,7 @@ impl App {
                 continue; // 개봉 실패(다른 신원 봉인) — fail-closed(보존·미표시)
             };
             let mut lines = decode_history(&bytes);
+            nbeep_store::sealed::wipe_owned(bytes); // 복호 평문은 쓰고 바로 지운다(FR-S-22 · docs/17 §6-5)
             key_restored_lines(&mut lines, self.identity.peer_id(), None); // 내 줄만(그룹 상대 기기는 모른다)
             if !lines.is_empty() {
                 self.group_threads.insert(gid, lines);
@@ -16662,6 +16664,7 @@ impl App {
                 continue;
             };
             let mut lines = decode_history(&bytes);
+            nbeep_store::sealed::wipe_owned(bytes); // 복호 평문은 쓰고 바로 지운다(FR-S-22 · docs/17 §6-5)
             if lines.is_empty() {
                 continue;
             }

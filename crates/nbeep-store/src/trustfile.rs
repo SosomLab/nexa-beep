@@ -562,6 +562,14 @@ fn decode_records(ver: u8, bytes: &[u8]) -> Option<Vec<PinRecord>> {
     (p == bytes.len()).then_some(out)
 }
 
+impl Drop for FileTrustStore {
+    fn drop(&mut self) {
+        // R-16 zeroize(11-06) — 래핑 원료·마스터 키는 프로세스가 끝날 때 메모리에 남지 않는다.
+        crate::sealed::wipe(&mut self.wrap_secret);
+        crate::sealed::wipe(&mut self.master);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]

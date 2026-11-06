@@ -92,6 +92,22 @@ pub fn open(domain: &[u8], secret: &[u8; 32], bytes: &[u8]) -> Option<Vec<u8>> {
         .ok()
 }
 
+/// **최선의 지움**(FR-S-22 · docs/17 §6-5 · R-16) — 비밀·복호 평문 버퍼를 0으로 덮는다. `write_volatile` +
+/// 컴파일러 펜스라 "쓰고 바로 버리는 값"도 최적화로 사라지지 않는다. 스왑 방지(mlock)는 T0 무권한에서 보장할 수
+/// 없다 — 완화일 뿐이다(문서대로 명시).
+pub fn wipe(bytes: &mut [u8]) {
+    for b in bytes.iter_mut() {
+        // SAFETY: 유효한 가변 참조 1바이트씩 — 별칭 없음.
+        unsafe { std::ptr::write_volatile(b, 0) };
+    }
+    std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
+}
+
+/// 소유권을 받아 지우고 버린다(복호 평문 `Vec<u8>`를 쓰고 난 자리 — `drop` 대신).
+pub fn wipe_owned(mut bytes: Vec<u8>) {
+    wipe(&mut bytes);
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]

@@ -82,7 +82,8 @@ impl KeyTable {
     /// ★ 셰레딩 — 키 폐기 + 즉시 재저장. 이 뒤로 그 세그먼트의 잔존 바이트는
     /// (신원 키가 있어도) 복호 불가.
     pub(crate) fn destroy(&mut self, stem: &str) {
-        if self.map.remove(stem).is_some() {
+        if let Some(mut k) = self.map.remove(stem) {
+            nbeep_store::sealed::wipe(&mut k); // 셰레딩 = 키 소멸 — 메모리 사본도(R-16)
             self.save();
         }
     }
@@ -157,6 +158,16 @@ fn decode(b: &[u8]) -> HashMap<String, [u8; 32]> {
         i += 33 + n;
     }
     out
+}
+
+impl Drop for KeyTable {
+    fn drop(&mut self) {
+        // R-16 zeroize(11-06) — 래핑 키·데이터 키 전부.
+        nbeep_store::sealed::wipe(&mut self.wrap);
+        for k in self.map.values_mut() {
+            nbeep_store::sealed::wipe(k);
+        }
+    }
 }
 
 #[cfg(test)]

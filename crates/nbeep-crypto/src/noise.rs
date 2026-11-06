@@ -37,6 +37,17 @@ pub struct Identity {
     public: [u8; PeerId::LEN],
 }
 
+impl Drop for Identity {
+    fn drop(&mut self) {
+        // R-16 zeroize(FR-S-22 · 11-06) — 개인키는 버려질 때 0으로(최선의 지움 · KeyMaterial과 같은 처방).
+        for b in &mut self.private {
+            // SAFETY: 유효한 가변 참조 · 별칭 없음.
+            unsafe { core::ptr::write_volatile(b, 0) };
+        }
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 impl core::fmt::Debug for Identity {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         // 개인키를 찍지 않는다(docs/13 §7). 공개 지문만.
@@ -960,10 +971,8 @@ mod clone_guard {
     fn session_with_own_identity_is_rejected() {
         // 키 파일 복제 시나리오: 양쪽이 같은 Identity(같은 개인키)로 핸드셰이크.
         let cloned = Identity::generate();
-        let clone2 = Identity {
-            // 같은 키 재구성 — 복제 파일을 양쪽이 로드한 상황.
-            ..Identity::from_parts_for_test(&cloned)
-        };
+        // 같은 키 재구성 — 복제 파일을 양쪽이 로드한 상황(Drop 타입이라 구조체 갱신 문법 대신 그대로 쓴다).
+        let clone2 = Identity::from_parts_for_test(&cloned);
         let me = cloned.peer_id();
         let (la, lb) = duplex(me, me);
         let hb = thread::spawn(move || NoiseSession::accept(lb, &clone2));

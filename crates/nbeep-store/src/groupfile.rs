@@ -876,6 +876,14 @@ fn decode_body(ver: u8, bytes: &[u8]) -> Option<Body> {
     (p == bytes.len()).then(|| (GroupStore::from_export(next, list), shared, blocked))
 }
 
+impl Drop for FileGroupStore {
+    fn drop(&mut self) {
+        // R-16 zeroize(11-06).
+        crate::sealed::wipe(&mut self.wrap_secret);
+        crate::sealed::wipe(&mut self.master);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
