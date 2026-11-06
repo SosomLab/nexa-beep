@@ -637,6 +637,13 @@ struct Incoming {
     buf: Vec<u8>,
 }
 
+/// 선언 크기만큼 버퍼를 한 번에 예약(M4-12 0단계) — 이미 그만큼이면 no-op · usize 변환 실패(32비트 상한)는 예약 없이 종전 성장.
+fn reserve_declared(buf: &mut Vec<u8>, size: u64) {
+    if let Ok(total) = usize::try_from(size) {
+        buf.reserve_exact(total.saturating_sub(buf.len()));
+    }
+}
+
 /// 완료된 수신물 — 해시 대조·`.beepq` 봉인은 조립 지점 몫(core는 크립토를 모른다).
 #[derive(Debug, PartialEq, Eq)]
 pub struct Received {
@@ -733,10 +740,12 @@ impl XferInbox {
     /// # Errors
     /// [`XferError::UnknownXfer`].
     pub fn accept(&mut self, id: &XferId) -> Result<(), XferError> {
-        self.inflight
-            .get_mut(id)
-            .map(|x| x.accepted = true)
-            .ok_or(XferError::UnknownXfer)
+        let x = self.inflight.get_mut(id).ok_or(XferError::UnknownXfer)?;
+        x.accepted = true;
+        // ★ M4-12 0단계(11-06): 수락 시점에 선언 크기만큼 **한 번에** 예약 — 청크 누적의 배증 재할당(순간 1.5S) 제거.
+        //   Offer 때가 아니라 수락 때(호스트 결정 뒤)라 미수락 오퍼가 메모리를 잡지 못한다 · size ≤ max_file 검증됨.
+        reserve_declared(&mut x.buf, x.size);
+        Ok(())
     }
 
     /// 수락 + **보존 부분 선적재**(M4-10 재개) — 이후 청크는 `prefix.len()`부터
@@ -752,6 +761,7 @@ impl XferInbox {
         }
         x.accepted = true;
         x.buf = prefix;
+        reserve_declared(&mut x.buf, x.size); // M4-12 0단계 — 남은 분량 1회 예약
         Ok(())
     }
 

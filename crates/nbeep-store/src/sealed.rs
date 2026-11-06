@@ -15,7 +15,7 @@
 
 use std::io;
 
-use chacha20poly1305::aead::{Aead, KeyInit, Payload};
+use chacha20poly1305::aead::{Aead, AeadInPlace, KeyInit, Payload};
 use chacha20poly1305::{ChaCha20Poly1305, Nonce};
 
 const MAGIC: [u8; 4] = *b"NBSE";
@@ -69,6 +69,49 @@ pub fn seal(domain: &[u8], secret: &[u8; 32], plain: &[u8]) -> io::Result<Vec<u8
     out.extend_from_slice(&nonce);
     out.extend_from_slice(&ct);
     Ok(out)
+}
+
+/// ★ M4-12 0단계(11-06) — 평문 버퍼를 소유권째 받아 **그 자리에서** 봉인(`encrypt_in_place` · 태그 append · 머리는 앞에
+/// 끼워 넣는 memmove 1회). 결과는 [`seal`]과 같은 형식 · 여분 S 버퍼 없음.
+///
+/// # Errors
+/// [`seal`]과 같다.
+pub fn seal_owned(domain: &[u8], secret: &[u8; 32], plain: Vec<u8>) -> io::Result<Vec<u8>> {
+    let mut salt = [0u8; SALT_LEN];
+    let mut nonce = [0u8; NONCE_LEN];
+    getrandom::getrandom(&mut salt)
+        .and_then(|()| getrandom::getrandom(&mut nonce))
+        .map_err(|_| io::Error::other("OS 난수 실패"))?;
+    let mut head = Vec::with_capacity(HEAD + NONCE_LEN);
+    head.extend_from_slice(&MAGIC);
+    head.push(VER);
+    head.extend_from_slice(&salt);
+    let mut aad = head.clone();
+    aad.extend_from_slice(domain);
+    let mut buf = plain;
+    ChaCha20Poly1305::new(&derive_key(domain, &salt, secret).into())
+        .encrypt_in_place(Nonce::from_slice(&nonce), &aad, &mut buf)
+        .map_err(|_| io::Error::other("AEAD 봉인 실패"))?;
+    head.extend_from_slice(&nonce);
+    buf.splice(0..0, head);
+    Ok(buf)
+}
+
+/// ★ M4-12 0단계 — 봉투를 소유권째 받아 머리를 잘라내고 **그 자리에서** 복호(`decrypt_in_place`). 실패 = None.
+#[must_use]
+pub fn open_owned(domain: &[u8], secret: &[u8; 32], mut bytes: Vec<u8>) -> Option<Vec<u8>> {
+    if bytes.len() < HEAD + NONCE_LEN + 16 || bytes[..4] != MAGIC || bytes[4] != VER {
+        return None;
+    }
+    let mut aad = bytes[..HEAD].to_vec();
+    aad.extend_from_slice(domain);
+    let salt: [u8; SALT_LEN] = bytes[5..HEAD].try_into().ok()?;
+    let nonce: [u8; NONCE_LEN] = bytes[HEAD..HEAD + NONCE_LEN].try_into().ok()?;
+    bytes.drain(..HEAD + NONCE_LEN);
+    ChaCha20Poly1305::new(&derive_key(domain, &salt, secret).into())
+        .decrypt_in_place(Nonce::from_slice(&nonce), &aad, &mut bytes)
+        .ok()?;
+    Some(bytes)
 }
 
 /// 개봉 — 형식·버전·태그 어느 하나라도 어긋나면 None(fail-closed).
@@ -142,5 +185,25 @@ mod tests {
         a[last] ^= 1;
         assert!(open(b"pii-v1", &S, &a).is_none(), "태그 검증");
         assert!(!is_sealed(b"plain old bytes"), "구본 판정");
+    }
+
+    /// M4-12 0단계: 제자리 봉인/개봉은 복사 경로와 호환(교차 개봉) · 도메인 불일치·변조는 None.
+    #[test]
+    fn owned_seal_and_open_interoperate_with_copying_paths() {
+        let secret = [9u8; 32];
+        let plain: Vec<u8> = (0..5000u32).map(|i| (i % 253) as u8).collect();
+        let a = seal(b"d", &secret, &plain).unwrap();
+        let b = seal_owned(b"d", &secret, plain.clone()).unwrap();
+        assert_eq!(
+            open_owned(b"d", &secret, a.clone()).as_deref(),
+            Some(plain.as_slice())
+        );
+        assert_eq!(open(b"d", &secret, &b).as_deref(), Some(plain.as_slice()));
+        assert!(open_owned(b"other", &secret, a).is_none());
+        let mut tampered = b;
+        let last = tampered.len() - 1;
+        tampered[last] ^= 1;
+        assert!(open_owned(b"d", &secret, tampered).is_none());
+        assert!(open_owned(b"d", &secret, vec![0u8; 5]).is_none());
     }
 }

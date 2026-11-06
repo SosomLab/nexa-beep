@@ -894,7 +894,7 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
                                 }
                                 got.declared_sha256 = sha256;
                             }
-                            let ok = receive_into_quarantine(&got, peer);
+                            let ok = receive_into_quarantine(got, peer);
                             // ★ 종단 확인(M4-9) — 격리 성패를 발신자에게 되돌린다.
                             let ack = if ok {
                                 XferMsg::Received { id }
@@ -1166,7 +1166,7 @@ fn human(b: u64) -> String {
 
 /// 수신 완료물 → **무해화 게이트 합류**(공용 [`crate::gate`]) 후 결과를 stdout에 보고.
 /// 수신물을 격리하고 **성공 여부**를 돌려준다(M4-9 — 발신자에게 종단 확인 ack를 보내기 위해).
-fn receive_into_quarantine(got: &nbeep_core::Received, sender: PeerId) -> bool {
+fn receive_into_quarantine(got: nbeep_core::Received, sender: PeerId) -> bool {
     // 봉인 키 = **영속 신원**(identity.key — CLI 대화의 임시 신원으로 봉인하면
     // 그 실행이 끝나는 순간 아무도 못 연다 · GUI·CLI 격리함이 같은 봉투를 연다).
     let Ok((id, _)) =

@@ -116,7 +116,7 @@ pub(crate) const SEAL_QUARANTINE: &[u8] = b"quarantine-v1";
 pub(crate) fn read_beepq_bytes(path: &std::path::Path, secret: &[u8; 32]) -> Option<Vec<u8>> {
     let bytes = std::fs::read(path).ok()?;
     if nbeep_store::sealed::is_sealed(&bytes) {
-        return nbeep_store::sealed::open(SEAL_QUARANTINE, secret, &bytes);
+        return nbeep_store::sealed::open_owned(SEAL_QUARANTINE, secret, bytes); // M4-12 0단계 — 제자리 복호(피크 2S → 1S)
     }
     Some(bytes) // 구본 관용 — 매직 우연 충돌은 위 open 실패로 드러난다
 }
@@ -251,7 +251,7 @@ pub(crate) fn remove_qmeta(beepq: &std::path::Path) {
 }
 
 pub(crate) fn quarantine_received(
-    got: &Received,
+    got: Received,
     sender: PeerId,
     channel: &str,
     seal_secret: &[u8; 32],
@@ -300,12 +300,14 @@ pub(crate) fn quarantine_received(
         scan: nbeep_plat::scan::scan(&name, &got.bytes),
         xfer: String::new(),
     };
-    let sealed = Beepq::seal(&got.bytes, actual, &meta);
+    // ★ M4-12 0단계(11-06): 수신 버퍼를 소유권째 봉인 → 제자리 AEAD — Done 순간 피크 ≈ 4S → ≈ 1S(여분 버퍼 없음).
+    let size = got.bytes.len() as u64;
+    let sealed = Beepq::seal_owned(got.bytes, actual, &meta);
     // ★ 디스크 봉인(08-17 — 종전 .beepq는 무결성 봉인뿐 **평문**이었다):
     //   신원 파생 키(D-18 §3 계층)로 AEAD — 이 신원의 이 앱만 연다(같은 PC
     //   다른 계정·다른 신원·백업 유출 전부 fail-closed). 봉인 실패 = 저장 포기
     //   (평문으로 쓰는 폴백은 없다 — 원칙이 무너진다).
-    let sealed = nbeep_store::sealed::seal(SEAL_QUARANTINE, seal_secret, &sealed)
+    let sealed = nbeep_store::sealed::seal_owned(SEAL_QUARANTINE, seal_secret, sealed)
         .map_err(GateError::Store)?;
     let path = QuarantineDir::open(quarantine_root(channel))
         .and_then(|q| q.save(&actual, &sealed))
@@ -317,7 +319,7 @@ pub(crate) fn quarantine_received(
         &path,
         &QMeta {
             name: name.clone(),
-            size: got.bytes.len() as u64,
+            size,
             risk: v.risk,
             mismatch: v.mismatch,
             sender,

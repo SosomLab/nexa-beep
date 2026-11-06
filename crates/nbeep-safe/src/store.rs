@@ -151,14 +151,46 @@ impl QuarantineDir {
         hash: &dyn HashPort,
         mark: &dyn MarkPort,
     ) -> Result<Materialized, MaterializeError> {
-        // 1) 재결합 + SHA-256 재검증(불일치 = 즉시 중단·아무것도 안 쓴다).
-        let original = beepq.unseal();
-        if hash.sha256(&original) != beepq.content_sha256 {
+        Self::materialize_bytes(
+            beepq.unseal(),
+            beepq.content_sha256,
+            &beepq.meta.orig_name,
+            dest_dir,
+            hash,
+            mark,
+        )
+    }
+
+    /// ★ M4-12 0단계(11-06) — 컨테이너를 소유권째 받아 재결합 복사 없이 실체화(피크 ≈ 1S). 규칙은 [`Self::materialize`]와 같다.
+    ///
+    /// # Errors
+    /// [`Self::materialize`]와 같다.
+    pub fn materialize_owned(
+        beepq: Beepq,
+        dest_dir: &Path,
+        hash: &dyn HashPort,
+        mark: &dyn MarkPort,
+    ) -> Result<Materialized, MaterializeError> {
+        let sha = beepq.content_sha256;
+        let name = beepq.meta.orig_name.clone();
+        Self::materialize_bytes(beepq.unseal_owned(), sha, &name, dest_dir, hash, mark)
+    }
+
+    fn materialize_bytes(
+        original: Vec<u8>,
+        content_sha256: [u8; 32],
+        orig_name: &[u8],
+        dest_dir: &Path,
+        hash: &dyn HashPort,
+        mark: &dyn MarkPort,
+    ) -> Result<Materialized, MaterializeError> {
+        // 1) SHA-256 재검증(불일치 = 즉시 중단·아무것도 안 쓴다).
+        if hash.sha256(&original) != content_sha256 {
             return Err(MaterializeError::HashMismatch);
         }
 
         // 2) 이름 정규화 + 충돌 회피(덮어쓰기 금지 — 뒤 번호).
-        let wanted = sanitize_filename(&String::from_utf8_lossy(&beepq.meta.orig_name));
+        let wanted = sanitize_filename(&String::from_utf8_lossy(orig_name));
         fs::create_dir_all(dest_dir)?;
         let final_path = collision_free(dest_dir, &wanted);
 

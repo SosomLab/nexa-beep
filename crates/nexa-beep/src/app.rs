@@ -3535,7 +3535,8 @@ fn xfer_step(
                     }
                     got.declared_sha256 = sha256;
                 }
-                match crate::gate::quarantine_received(&got, peer, crate::gate::CH_GUI, seal_secret)
+                let got_len = got.bytes.len() as u64; // 소유권 이동 전에(M4-12 0단계)
+                match crate::gate::quarantine_received(got, peer, crate::gate::CH_GUI, seal_secret)
                 {
                     Ok(q) => {
                         // 평균 수신 속도(08-16) — 첫 청크~Done. 표기는 스레드 완료 항목.
@@ -3545,7 +3546,7 @@ fn xfer_step(
                                     recv_started.remove(&id).unwrap_or_else(xfer_now_ms),
                                 )
                                 .max(1);
-                            (got.bytes.len() as u64).saturating_mul(1000) / dur
+                            got_len.saturating_mul(1000) / dur
                         };
                         // ★ 종단 확인(M4-9) — 격리까지 성공했으니 발신자에게 Received를 돌려준다.
                         //    이걸 받아야 상대의 "완료"가 참이 된다("보냈다"≠"닿았다").
@@ -13401,7 +13402,7 @@ impl App {
                                 let _ = std::fs::write(&p, sealed);
                             }
                         }
-                        let bq = Beepq::open(&bytes).ok()?;
+                        let bq = Beepq::open_owned(bytes).ok()?; // M4-12 0단계 — 본문 복사 없음
                         let mismatch = bq.meta.detected_kind != "unknown"
                             && !bq.meta.declared_ext.is_empty()
                             && !bq.meta.detected_kind.contains(&bq.meta.declared_ext);
@@ -13457,7 +13458,7 @@ impl App {
         std::thread::spawn(move || {
             for (_, path) in items {
                 let ok = crate::gate::read_beepq_bytes(std::path::Path::new(&path), &secret)
-                    .and_then(|b| nbeep_safe::Beepq::open(&b).ok())
+                    .and_then(|b| nbeep_safe::Beepq::open_owned(b).ok()) // M4-12 0단계
                     .is_some();
                 let _ = proxy.send_event(AppEvent::QVerified { gen, path, ok });
             }
@@ -14090,9 +14091,10 @@ impl App {
                     &self.identity.wrap_secret(),
                 )
                 .ok_or_else(|| nbeep_core::t(nbeep_core::Msg::UnsealFailed).to_string())
-                .and_then(|b| Beepq::open(&b).map_err(|e| format!("{e:?}")))
+                .and_then(|b| Beepq::open_owned(b).map_err(|e| format!("{e:?}")))
                 .and_then(|bq| {
-                    QuarantineDir::materialize(&bq, &dest, &CryptoHash, &OsMark)
+                    // M4-12 0단계 — 소유권 실체화(재결합 복사 없음 · 피크 ≈ 1S)
+                    QuarantineDir::materialize_owned(bq, &dest, &CryptoHash, &OsMark)
                         .map_err(|e| e.to_string())
                 });
                 self.set_status(match out {

@@ -262,11 +262,80 @@ impl Beepq {
         out
     }
 
+    /// ★ M4-12 0단계(11-06) — 원본 버퍼를 **소유권째** 받아 그 자리에 봉인(헤더·선두·메타를 앞에 끼워 넣는 memmove 1회 ·
+    /// 여분 S 버퍼 없음). 결과 바이트는 [`Self::seal`]과 동일.
+    #[must_use]
+    pub fn seal_owned(mut original: Vec<u8>, content_sha256: [u8; 32], meta: &Meta) -> Vec<u8> {
+        let n = original.len().min(MAX_SEAL);
+        let meta_bytes = meta.encode();
+        let mut head = Vec::with_capacity(HEADER + n + 4 + meta_bytes.len());
+        head.extend_from_slice(&MAGIC);
+        head.extend_from_slice(&FORMAT_VER.to_le_bytes());
+        head.extend_from_slice(&FLAG_SEALED.to_le_bytes());
+        head.extend_from_slice(&content_sha256);
+        head.extend_from_slice(&(original.len() as u64).to_le_bytes());
+        head.extend_from_slice(&(n as u16).to_le_bytes());
+        head.extend_from_slice(&original[..n]);
+        head.extend_from_slice(&(meta_bytes.len() as u32).to_le_bytes());
+        head.extend_from_slice(&meta_bytes);
+        // 선두 n바이트 자리를 머리로 바꿔 끼운다 — 본문은 그대로 뒤로 밀린다.
+        original.splice(0..n, head);
+        original
+    }
+
     /// `.beepq` 바이트를 파싱한다. 손상·미지 버전은 전부 오류(**fail-closed**).
     ///
     /// # Errors
     /// [`QuarantineError`] — 매직 불일치·미지 버전·잘림·메타 손상·크기 불일치.
     pub fn open(bytes: &[u8]) -> Result<Self, QuarantineError> {
+        let p = Parsed::from(bytes)?;
+        let body = bytes[p.body_start..].to_vec();
+        Ok(p.into_beepq(body))
+    }
+
+    /// ★ M4-12 0단계 — 파일 바이트를 소유권째 받아 머리만 잘라내고 **본문은 그 버퍼 그대로**(복사 없음 · memmove 1회).
+    ///
+    /// # Errors
+    /// [`Self::open`]과 같다.
+    pub fn open_owned(mut bytes: Vec<u8>) -> Result<Self, QuarantineError> {
+        let p = Parsed::from(&bytes)?;
+        bytes.drain(..p.body_start);
+        Ok(p.into_beepq(bytes))
+    }
+
+    /// 봉인 프리픽스와 본문을 다시 붙여 **원본 바이트를 복원**한다.
+    ///
+    /// ⚠️ SHA-256 재검증은 하지 않는다 — 실체화 절차(다음 슬라이스)가 해시 포트로 대조한 뒤
+    /// 파일로 내보낸다(ADR-0004 §4). 이 함수는 순수 재결합만 한다.
+    #[must_use]
+    pub fn unseal(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(self.sealed_prefix.len() + self.body.len());
+        out.extend_from_slice(&self.sealed_prefix);
+        out.extend_from_slice(&self.body);
+        out
+    }
+
+    /// 소유권째 재결합(M4-12 0단계) — 본문 버퍼 앞에 선두(≤512B)를 끼워 넣는 memmove 1회 · 여분 S 버퍼 없음.
+    #[must_use]
+    pub fn unseal_owned(self) -> Vec<u8> {
+        let mut body = self.body;
+        body.splice(0..0, self.sealed_prefix);
+        body
+    }
+}
+
+/// 헤더 해석 결과(본문 제외) — `open`/`open_owned`가 공유한다(M4-12 0단계).
+struct Parsed {
+    flags: u16,
+    content_sha256: [u8; 32],
+    original_size: u64,
+    sealed_prefix: Vec<u8>,
+    meta: Meta,
+    body_start: usize,
+}
+
+impl Parsed {
+    fn from(bytes: &[u8]) -> Result<Self, QuarantineError> {
         if bytes.len() < HEADER {
             return Err(QuarantineError::Truncated);
         }
@@ -281,7 +350,6 @@ impl Beepq {
         let content_sha256: [u8; 32] = bytes[8..40].try_into().expect("32B slice");
         let original_size = u64::from_le_bytes(bytes[40..48].try_into().expect("8B slice"));
         let n = u16::from_le_bytes([bytes[48], bytes[49]]) as usize;
-
         let prefix_end = HEADER + n;
         let meta_len_at = prefix_end;
         if bytes.len() < meta_len_at + 4 {
@@ -293,39 +361,35 @@ impl Beepq {
                 .try_into()
                 .expect("4B slice"),
         ) as usize;
-
         let meta_start = meta_len_at + 4;
         let body_start = meta_start + meta_len;
         if bytes.len() < body_start {
             return Err(QuarantineError::Truncated);
         }
         let meta = Meta::decode(&bytes[meta_start..body_start])?;
-        let body = bytes[body_start..].to_vec();
-
-        if sealed_prefix.len() as u64 + body.len() as u64 != original_size {
+        let body_len = bytes.len() - body_start;
+        if sealed_prefix.len() as u64 + body_len as u64 != original_size {
             return Err(QuarantineError::SizeMismatch);
         }
-
-        Ok(Beepq {
+        Ok(Self {
             flags,
             content_sha256,
             original_size,
             sealed_prefix,
             meta,
-            body,
+            body_start,
         })
     }
 
-    /// 봉인 프리픽스와 본문을 다시 붙여 **원본 바이트를 복원**한다.
-    ///
-    /// ⚠️ SHA-256 재검증은 하지 않는다 — 실체화 절차(다음 슬라이스)가 해시 포트로 대조한 뒤
-    /// 파일로 내보낸다(ADR-0004 §4). 이 함수는 순수 재결합만 한다.
-    #[must_use]
-    pub fn unseal(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(self.sealed_prefix.len() + self.body.len());
-        out.extend_from_slice(&self.sealed_prefix);
-        out.extend_from_slice(&self.body);
-        out
+    fn into_beepq(self, body: Vec<u8>) -> Beepq {
+        Beepq {
+            flags: self.flags,
+            content_sha256: self.content_sha256,
+            original_size: self.original_size,
+            sealed_prefix: self.sealed_prefix,
+            meta: self.meta,
+            body,
+        }
     }
 }
 
@@ -489,5 +553,34 @@ mod tests {
         let bytes = Beepq::seal(b"z", [0; 32], &m);
         let q = Beepq::open(&bytes).unwrap();
         assert_eq!(q.meta.orig_name, m.orig_name);
+    }
+
+    /// M4-12 0단계: 소유권 경로(seal_owned · open_owned · unseal_owned)는 복사 경로와 바이트가 같다.
+    #[test]
+    fn owned_paths_match_copying_paths() {
+        let original: Vec<u8> = (0..3000u32).map(|i| (i % 251) as u8).collect();
+        let sha = [7u8; 32];
+        let meta = Meta {
+            orig_name: b"x.bin".to_vec(),
+            declared_ext: "bin".into(),
+            declared_mime: String::new(),
+            detected_kind: "unknown".into(),
+            risk: RiskLevel::Data,
+            sender: nbeep_core::PeerId::from_bytes([1u8; 32]),
+            received_at: 1,
+            expires_at: 2,
+            scan: ScanOutcome::Unavailable,
+            xfer: String::new(),
+        };
+        let a = Beepq::seal(&original, sha, &meta);
+        let b = Beepq::seal_owned(original.clone(), sha, &meta);
+        assert_eq!(a, b);
+        let oa = Beepq::open(&a).unwrap();
+        let ob = Beepq::open_owned(b).unwrap();
+        assert_eq!(oa.body, ob.body);
+        assert_eq!(oa.sealed_prefix, ob.sealed_prefix);
+        assert_eq!(oa.unseal(), original);
+        assert_eq!(ob.unseal_owned(), original);
+        assert!(Beepq::open_owned(vec![0u8; 10]).is_err());
     }
 }
