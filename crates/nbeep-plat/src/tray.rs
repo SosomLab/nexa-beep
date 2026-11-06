@@ -35,6 +35,13 @@ pub fn take_activation_token() -> Option<String> {
     }
 }
 
+/// 알림 데몬이 준 활성화 토큰을 같은 저장소에 넣는다(L-3 · `ActivationToken` 시그널 — `ActionInvoked` 직전에
+/// 온다). 트레이 토큰과 같은 1회용 경로(`raise_main` → `take_activation_token`)를 탄다.
+#[cfg(target_os = "linux")]
+pub(crate) fn put_activation_token(token: String) {
+    sni::put_token(token);
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TrayEvent {
     /// 창 열기/복원(좌클릭 · 메뉴 "열기").
@@ -332,6 +339,12 @@ mod sni {
 
     pub(super) fn take_token() -> Option<String> {
         TOKEN.lock().ok().and_then(|mut g| g.take())
+    }
+
+    pub(super) fn put_token(token: String) {
+        if let Ok(mut g) = TOKEN.lock() {
+            *g = Some(token);
+        }
     }
     /// dbusmenu 레이아웃 리비전(갱신마다 증가 — 호스트가 재조회).
     static MENU_REV: AtomicU32 = AtomicU32::new(1);

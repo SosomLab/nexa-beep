@@ -7,8 +7,11 @@
 //! - **macOS** = `osascript display notification` 스폰(시스템 기본 도구 — `pbcopy`·
 //!   `arp` 선례). 번들 밖 바이너리도 동작한다(UserNotifications는 번들·서명 요구라
 //!   포터블(DR-4)에서 불가 — M5-4a 공증 후 재검토).
-//! - **Linux** = `notify-send` 스폰(libnotify 도구 · 대부분의 데스크톱에 존재).
-//!   없으면 조용히 실패(fail-soft — 알림은 보조 채널이다).
+//! - **Linux**(L-3 · 11-06) = **`org.freedesktop.Notifications` D-Bus 직접**(zbus blocking · 상주 연결 1개 ·
+//!   `notify-send` 스폰 폐지). `Notify` 힌트 = urgency(u8) · suppress-sound · sound-name · desktop-entry.
+//!   클릭 = `ActionInvoked("default")` → `init` 콜백으로 대상 토큰 왕복(Win/mac 동등) · 전면화 토큰은
+//!   `ActivationToken` 시그널(spec 1.2 · GNOME/KDE)을 트레이의 토큰 저장소에 넣어 기존 `raise_main` 경로가 쓴다.
+//!   세션 버스·데몬 부재 = `false`(fail-soft — 호스트가 "소리 불가" 1회 고지 · ADR-0010 §4-3).
 //! - **Windows** = 이 모듈이 아니라 **트레이 풍선**(`tray::TrayHandle::notify` —
 //!   Shell_NotifyIcon NIF_INFO · 이미 떠 있는 아이콘 재사용 · AppUserModelID가
 //!   필요한 WinRT 토스트는 설치본 전용이라 T0/포터블 원칙과 안 맞는다).
@@ -26,8 +29,8 @@ pub struct Note<'a> {
     /// 낸다 · 4-3 권고). mac/Win은 호스트가 [`crate::sound`]로 따로 울린다.
     pub urgent: bool,
     /// 클릭 시 되돌아올 **불투명 대상 토큰**(호스트만 해석 · 빈 = 대상 없음).
-    /// mac 정식(UN) 경로에서만 왕복된다 — 요청 identifier에 실어 보내고 delegate
-    /// 응답에서 파싱해 `init`의 콜백 인자로 돌려준다.
+    /// mac 정식(UN) 경로 = 요청 identifier에 실어 delegate 응답에서 파싱 · Linux = 알림 id → 토큰 맵
+    /// (`ActionInvoked`) — 둘 다 `init`의 콜백 인자로 돌려준다.
     pub target: &'a str,
 }
 
@@ -37,7 +40,7 @@ pub fn notify(n: &Note<'_>) -> bool {
     imp::notify(n)
 }
 
-/// 정식 알림 초기화(M3-8b · macOS 전용 의미 — 다른 OS는 no-op false).
+/// 정식 알림 초기화(M3-8b · macOS + Linux(L-3) — Windows는 no-op false · 트레이 풍선이 클릭을 맡는다).
 ///
 /// **번들(.app) 실행이면** `UNUserNotificationCenter`를 켠다: 권한 요청 + 클릭
 /// delegate(`on_open` = 알림 클릭 → 앱 열기). **메인 스레드에서, 부팅 때 1회** 호출.
@@ -219,31 +222,161 @@ mod imp {
 #[cfg(target_os = "linux")]
 mod imp {
     use super::Note;
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    use zbus::blocking::{Connection, Proxy};
+    use zbus::zvariant::Value;
 
-    pub(super) fn init(_on_open: Box<dyn Fn(Option<String>) + Send + Sync>) -> bool {
-        false // 정식 초기화는 macOS 의미 — Linux는 notify-send 그대로
+    const DEST: &str = "org.freedesktop.Notifications";
+    const PATH: &str = "/org/freedesktop/Notifications";
+    const IFACE: &str = "org.freedesktop.Notifications";
+    const APP_NAME: &str = "Nexa Beep";
+    /// 아이콘·desktop-entry = 설치본 `.desktop` 이름(packaging/linux · `with_name("nexa-beep", …)`와 같은 값).
+    const DESKTOP_ID: &str = "nexa-beep";
+
+    /// 세션 버스 연결 — 프로세스에 하나(알림마다 새로 열지 않는다). `None` = 버스 없음(CI Xvfb · 헤드리스).
+    static CONN: OnceLock<Option<Connection>> = OnceLock::new();
+    /// 클릭 콜백(`init`).
+    static ON_OPEN: OnceLock<Box<dyn Fn(Option<String>) + Send + Sync>> = OnceLock::new();
+    /// 알림 id → 대상 토큰(클릭 왕복 · 닫히면 지운다).
+    static TARGETS: OnceLock<Mutex<HashMap<u32, String>>> = OnceLock::new();
+
+    fn conn() -> Option<&'static Connection> {
+        CONN.get_or_init(|| Connection::session().ok()).as_ref()
+    }
+
+    fn targets() -> &'static Mutex<HashMap<u32, String>> {
+        TARGETS.get_or_init(|| Mutex::new(HashMap::new()))
+    }
+
+    /// `Notify` 힌트 — urgency(u8: 1 보통 · 2 critical) · suppress-sound · sound-name(데몬이 소리를 낸다 ·
+    /// libcanberra LGPL 회피) · desktop-entry(아이콘·앱 식별).
+    pub(super) fn hints(silent: bool, urgent: bool) -> HashMap<&'static str, Value<'static>> {
+        let mut h = HashMap::new();
+        h.insert("urgency", Value::U8(if urgent { 2 } else { 1 }));
+        h.insert("desktop-entry", Value::from(DESKTOP_ID));
+        if silent {
+            h.insert("suppress-sound", Value::Bool(true));
+        }
+        if urgent && !silent {
+            h.insert("sound-name", Value::from("message-new-instant"));
+        }
+        h
+    }
+
+    pub(super) fn init(on_open: Box<dyn Fn(Option<String>) + Send + Sync>) -> bool {
+        let Some(c) = conn() else {
+            return false; // 세션 버스 없음 — notify도 false로 떨어진다(fail-soft)
+        };
+        if ON_OPEN.set(on_open).is_err() {
+            return true; // 이미 초기화(재호출 무해)
+        }
+        let c = c.clone();
+        // 시그널 수신 스레드(theme.rs 관용구) — ActivationToken(토큰 → 트레이 저장소) · ActionInvoked(클릭 → 콜백) ·
+        // NotificationClosed(맵 정리). 데몬이 없으면 시그널이 안 오고 스레드는 조용히 대기한다.
+        std::thread::Builder::new()
+            .name("nb-notify-watch".into())
+            .spawn(move || {
+                let Ok(proxy) = Proxy::new(&c, DEST, PATH, IFACE) else {
+                    return;
+                };
+                let Ok(sigs) = proxy.receive_all_signals() else {
+                    return;
+                };
+                for msg in sigs {
+                    let member = msg.header().member().map(|m| m.as_str().to_owned());
+                    match member.as_deref() {
+                        Some("ActivationToken") => {
+                            if let Ok((_, tok)) = msg.body().deserialize::<(u32, String)>() {
+                                crate::tray::put_activation_token(tok);
+                            }
+                        }
+                        Some("ActionInvoked") => {
+                            if let Ok((id, _key)) = msg.body().deserialize::<(u32, String)>() {
+                                let target = targets().lock().ok().and_then(|mut g| g.remove(&id));
+                                if let Some(cb) = ON_OPEN.get() {
+                                    cb(target);
+                                }
+                            }
+                        }
+                        Some("NotificationClosed") => {
+                            if let Ok((id, _reason)) = msg.body().deserialize::<(u32, u32)>() {
+                                if let Ok(mut g) = targets().lock() {
+                                    g.remove(&id);
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            })
+            .is_ok()
     }
 
     pub(super) fn notify(n: &Note<'_>) -> bool {
-        let mut cmd = std::process::Command::new("notify-send");
-        cmd.arg("--app-name=Nexa Beep");
-        if n.silent {
-            // 데몬 재량 힌트(관용) — 미지원이면 무시된다(무해).
-            cmd.arg("--hint=boolean:suppress-sound:true");
-        }
-        if n.urgent {
-            // Alarm — 데몬이 소리를 낸다(libcanberra LGPL 회피 · ADR-0010 §4-3). 데몬 부재 = status 실패 → 호스트가 1회 고지.
-            cmd.arg("--urgency=critical");
-            if !n.silent {
-                cmd.arg("--hint=string:sound-name:message-new-instant");
+        let Some(c) = conn() else {
+            return false;
+        };
+        let Ok(proxy) = Proxy::new(c, DEST, PATH, IFACE) else {
+            return false;
+        };
+        // "default" 액션 = 본문 클릭(데몬이 액션을 지원하지 않으면 무시 — 표시는 된다).
+        let actions: Vec<&str> = if n.target.is_empty() {
+            Vec::new()
+        } else {
+            vec!["default", "Open"]
+        };
+        let id: u32 = match proxy.call(
+            "Notify",
+            &(
+                APP_NAME,
+                0u32,
+                DESKTOP_ID,
+                n.title,
+                n.body,
+                actions,
+                hints(n.silent, n.urgent),
+                -1i32,
+            ),
+        ) {
+            Ok(id) => id,
+            Err(_) => return false, // 데몬 없음(ServiceUnknown) 등 — 호스트가 폴백·고지
+        };
+        if !n.target.is_empty() {
+            if let Ok(mut g) = targets().lock() {
+                g.insert(id, n.target.to_string());
+                // 상한 — 클릭되지 않고 사라진 알림(데몬이 Closed를 안 주는 경우) 누적 방지.
+                if g.len() > 256 {
+                    let oldest = g.keys().min().copied();
+                    if let Some(k) = oldest {
+                        g.remove(&k);
+                    }
+                }
             }
         }
-        cmd.arg(n.title).arg(n.body);
-        cmd.stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
+        true
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn hints_follow_alert_policy() {
+            let h = hints(false, false);
+            assert_eq!(h.get("urgency"), Some(&Value::U8(1)));
+            assert!(h.contains_key("desktop-entry") && !h.contains_key("sound-name"));
+            let u = hints(false, true);
+            assert_eq!(u.get("urgency"), Some(&Value::U8(2)));
+            assert_eq!(
+                u.get("sound-name"),
+                Some(&Value::from("message-new-instant"))
+            );
+            // 무음(미검증·설정 off)이면 critical이라도 소리 힌트 없음 + suppress-sound.
+            let s = hints(true, true);
+            assert!(!s.contains_key("sound-name"));
+            assert_eq!(s.get("suppress-sound"), Some(&Value::Bool(true)));
+        }
     }
 }
 
