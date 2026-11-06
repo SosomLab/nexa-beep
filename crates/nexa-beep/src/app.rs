@@ -4024,9 +4024,9 @@ enum CmdOutcome {
 fn trust_label(lv: nbeep_core::TrustLevel) -> &'static str {
     use nbeep_core::TrustLevel as L;
     match lv {
-        L::Unverified => "미검증(핸드셰이크 전)",
-        L::Pinned => "고정됨(TOFU — 첫 접촉 키 기억)",
-        L::FingerprintVerified => "지문 대조 완료(사람이 확인)",
+        L::Unverified => nbeep_core::t(nbeep_core::Msg::TrustLabelUnverified),
+        L::Pinned => nbeep_core::t(nbeep_core::Msg::TrustLabelPinned),
+        L::FingerprintVerified => nbeep_core::t(nbeep_core::Msg::TrustLabelVerified),
     }
 }
 
@@ -5281,7 +5281,7 @@ impl App {
                         nbeep_core::tf(nbeep_core::Msg::StfCannotSend, &[reason.message()]);
                     let how = match reason {
                         nbeep_core::DenyReason::NotPinned => {
-                            "\n\n상대와 연결(세션)이 성립하면 신원이 고정됩니다 — 목록에서 상대를 열어 연결부터 하세요."
+                            nbeep_core::t(nbeep_core::Msg::NotPinnedHint)
                         }
                         _ => "",
                     };
@@ -5597,9 +5597,9 @@ impl App {
             let mut inv = Invalidations::default();
             self.push_group_note(
                 gid,
-                &format!(
-                    "! 아직 서로 메시지를 주고받은 적 없는 상대: {} — 수신 승인을 눌러야 전송이 진행됩니다",
-                    first_contact.join(", ")
+                &nbeep_core::tf(
+                    nbeep_core::Msg::GroupFirstContactNote,
+                    &[&first_contact.join(", ")],
                 ),
                 &mut inv,
             );
@@ -6181,7 +6181,7 @@ impl App {
         let sender = if self.ledger.get(peer).is_mutual() {
             sender
         } else {
-            format!("{sender} · ⚠ 서로 주고받은 메시지가 아직 없습니다")
+            nbeep_core::tf(nbeep_core::Msg::SenderNotMutual, &[&sender])
         };
         // 강등 안내(08-16 실기 — "자동승인 켰는데 왜 묻지?"가 버그로 오인됐다):
         // 자동(즉시·기간)이 켜져 있는데 이 창이 떴다 = 첫 왕래 전 강등이 이유다.
@@ -6191,7 +6191,7 @@ impl App {
                 | nbeep_core::ApprovalPolicy::TimedAuto { .. }
         );
         let downgrade_note = if auto_on && !self.ledger.get(peer).is_mutual() {
-            "자동 승인 기간 중이지만 첫 왕래 전이라 확인이 필요합니다".to_string()
+            nbeep_core::t(nbeep_core::Msg::AutoDowngradeNote).to_string()
         } else {
             String::new()
         };
@@ -11828,10 +11828,9 @@ impl App {
         self.user_rt.key = Some(theirs);
         self.user_rt.key_created = their_at;
         self.user_state = crate::userident::on_test_result(&Ok(new));
-        self.set_status(format!(
-            "사용자 키 병합 — 키 채택(ID {} → {})",
-            old.short(),
-            new.short()
+        self.set_status(nbeep_core::tf(
+            nbeep_core::Msg::UserKeyMerged,
+            &[&old.short(), &new.short()],
         ));
         // 들고 있던 후계 문서에 내가 없으면(폐기된 채 새 키만 이어받음) 더는 제시하지 않는다.
         let me = self.identity.peer_id();
@@ -12168,9 +12167,12 @@ impl App {
             return; // 중복 시도 가드(수동 클릭·자동 재연결 공용 — 워커는 하나만)
         }
         self.set_status(if auto {
-            format!("자동 재연결 시도… {}", self.peer_title(peer))
+            nbeep_core::tf(
+                nbeep_core::Msg::StfAutoReconnecting,
+                &[&self.peer_title(peer)],
+            )
         } else {
-            format!("연결 중… {}", self.peer_title(peer))
+            nbeep_core::tf(nbeep_core::Msg::StfConnecting, &[&self.peer_title(peer)])
         });
         dlog!(self, DL::Conn, DV::Decide, "start_connect", |r| r
             .arg("peer", peer.short())
@@ -14023,7 +14025,7 @@ impl App {
                     std::path::Path::new(&path),
                     &self.identity.wrap_secret(),
                 )
-                .ok_or_else(|| "봉인 개봉 실패(다른 신원·손상)".to_string())
+                .ok_or_else(|| nbeep_core::t(nbeep_core::Msg::UnsealFailed).to_string())
                 .and_then(|b| Beepq::open(&b).map_err(|e| format!("{e:?}")))
                 .and_then(|bq| {
                     QuarantineDir::materialize(&bq, &dest, &CryptoHash, &OsMark)
@@ -14033,16 +14035,21 @@ impl App {
                     Ok(m) => {
                         // 표식 실패도 **명시**한다(조용히 넘어가지 않는다 — [docs/11] §5).
                         let mark = match m.mark {
-                            Ok(MarkOutcome::Applied) => "OS 보호 표식 부착",
-                            Ok(MarkOutcome::Unsupported) => "⚠️ OS 보호 표식 미지원",
-                            Err(_) => "⚠️ OS 보호 표식 실패",
+                            Ok(MarkOutcome::Applied) => nbeep_core::t(nbeep_core::Msg::MarkApplied),
+                            Ok(MarkOutcome::Unsupported) => {
+                                nbeep_core::t(nbeep_core::Msg::MarkUnsupported)
+                            }
+                            Err(_) => nbeep_core::t(nbeep_core::Msg::MarkFailed),
                         };
                         done_path = Some(path);
-                        format!("실체화 완료: {} · {mark}", m.path.display())
+                        nbeep_core::tf(
+                            nbeep_core::Msg::MaterializeDone,
+                            &[&m.path.display().to_string(), mark],
+                        )
                     }
                     Err(e) => {
                         msg_err = true;
-                        format!("실체화 실패: {e} — 격리 유지")
+                        nbeep_core::tf(nbeep_core::Msg::MaterializeFailed, &[&e])
                     }
                 });
             }
@@ -14073,10 +14080,13 @@ impl App {
                     }
                 }
                 self.set_status(if failed == 0 {
-                    format!("격리함을 비웠습니다 — {n}건 삭제")
+                    nbeep_core::tf(nbeep_core::Msg::QuarantineEmptied, &[&n.to_string()])
                 } else {
                     msg_err = true;
-                    format!("격리함 비우기 — {n}건 삭제 · {failed}건 실패")
+                    nbeep_core::tf(
+                        nbeep_core::Msg::QuarantineEmptyPartial,
+                        &[&n.to_string(), &failed.to_string()],
+                    )
                 });
             }
         }
@@ -14362,8 +14372,11 @@ impl App {
         }
         let src = self.data_dir.join("settings.cfg");
         match std::fs::copy(&src, dst) {
-            Ok(_) => format!("설정 백업 완료 — {}", dst.display()),
-            Err(e) => format!("설정 백업 실패: {e}"),
+            Ok(_) => nbeep_core::tf(
+                nbeep_core::Msg::SettingsBackupDone,
+                &[&dst.display().to_string()],
+            ),
+            Err(e) => nbeep_core::tf(nbeep_core::Msg::SettingsBackupFailed, &[&e.to_string()]),
         }
     }
 
@@ -14554,7 +14567,10 @@ impl App {
         let n = changes.len();
         // 행위 키(backup/restore/reset)는 파일에 없다(값이 아니라서 저장 안 됨).
         self.apply_settings(changes);
-        format!("설정 복원 완료 — {n}개 적용(모르는 키 {unknown}개 보존)")
+        nbeep_core::tf(
+            nbeep_core::Msg::SettingsRestoreDone,
+            &[&n.to_string(), &unknown.to_string()],
+        )
     }
 
     /// 설정 초기화(08-15 · 고급) — 레지스트리(표시 항목) 전부 기본값으로. 숨김 키
@@ -14734,7 +14750,7 @@ impl App {
                 .request_inner_size(winit::dpi::LogicalSize::new(MAIN_MIN_W, MAIN_MIN_H));
         }
         self.conf_mark();
-        format!("설정 초기화 완료 — {n}개 항목을 기본값으로(필터·창 크기 포함)")
+        nbeep_core::tf(nbeep_core::Msg::SettingsResetDone, &[&n.to_string()])
     }
 
     /// 신원 키 백업(M2-5a · 사용자 요청 08-11) — 현재 폴더로 복사. 기본 이름에 지문이
@@ -14743,8 +14759,11 @@ impl App {
         // P3: 저장 대화상자가 이름(기본 = 지문 포함)·덮어쓰기 2단 확인을 맡는다 — 고른 경로 그대로.
         let src = self.data_dir.join("identity.key");
         match std::fs::copy(&src, dst) {
-            Ok(_) => format!("신원 키 백업됨 — {} (안전하게 보관하세요)", dst.display()),
-            Err(e) => format!("백업 실패: {e}"),
+            Ok(_) => nbeep_core::tf(
+                nbeep_core::Msg::IdentityBackupDone,
+                &[&dst.display().to_string()],
+            ),
+            Err(e) => nbeep_core::tf(nbeep_core::Msg::BackupFailed, &[&e.to_string()]),
         }
     }
 
@@ -14772,11 +14791,11 @@ impl App {
         let dst = self.data_dir.join("identity.key");
         let tmp = dst.with_extension(format!("tmp.{}", std::process::id()));
         if let Err(e) = std::fs::write(&tmp, &bytes) {
-            return format!("복원 실패(기록): {e}");
+            return nbeep_core::tf(nbeep_core::Msg::RestoreFailedWrite, &[&e.to_string()]);
         }
         if let Err(e) = std::fs::rename(&tmp, &dst) {
             let _ = std::fs::remove_file(&tmp);
-            return format!("복원 실패(교체): {e}");
+            return nbeep_core::tf(nbeep_core::Msg::RestoreFailedSwap, &[&e.to_string()]);
         }
         // ③ 핫 로딩 — 신원 → 신뢰 저장소(래핑 원료가 바뀐다) → 대화 정리 → 전송 재시작.
         self.identity = std::sync::Arc::new(restored);
@@ -14815,7 +14834,7 @@ impl App {
         }
         let mut net_note = "";
         if self.live && self.respawn_transport().is_err() {
-            net_note = " · ⚠ 전송 재시작 실패(발견 불가 — 재실행 필요)";
+            net_note = nbeep_core::t(nbeep_core::Msg::NetRestartFailedNote);
         }
         let mut inv = Invalidations::default();
         self.refresh_rows(&mut inv);
@@ -14823,12 +14842,12 @@ impl App {
             self.request_redraw(mid);
         }
         let trust_note = match load {
-            nbeep_store::TrustLoad::Locked => " · ⚠ 신뢰 목록 잠김(이 신원의 백업이 아님)",
+            nbeep_store::TrustLoad::Locked => nbeep_core::t(nbeep_core::Msg::TrustLockedNote),
             _ => "",
         };
-        format!(
-            "신원 복원됨 — 새 지문 {} (핫 로딩 완료{trust_note}{net_note})",
-            self.identity.peer_id().short()
+        nbeep_core::tf(
+            nbeep_core::Msg::IdentityRestored,
+            &[&self.identity.peer_id().short(), trust_note, net_note],
         )
     }
 
@@ -17518,23 +17537,26 @@ impl App {
                     };
                     self.approval_started_unix = (value == "timed").then(unix_now);
                     self.set_status(match self.approval.remaining_ms(now) {
-                        Some(ms) => format!("파일 수신: {}분간 자동 수락", ms / 60_000),
-                        None => format!("파일 수신 승인 = {value}"),
+                        Some(ms) => nbeep_core::tf(
+                            nbeep_core::Msg::RecvAutoForMin,
+                            &[&(ms / 60_000).to_string()],
+                        ),
+                        None => nbeep_core::tf(nbeep_core::Msg::RecvApprovalIs, &[&value]),
                     });
                     self.refresh_approval_ui();
                 }
                 "xfer.send_rate" => {
                     self.send_rate = nbeep_core::RateLimit::from_code(&value);
-                    self.set_status(format!(
-                        "보내기 제한 = {}",
-                        rate_label(self.send_rate.target_bps(&self.send_meter))
+                    self.set_status(nbeep_core::tf(
+                        nbeep_core::Msg::SendLimitIs,
+                        &[&rate_label(self.send_rate.target_bps(&self.send_meter))],
                     ));
                 }
                 "xfer.recv_rate" => {
                     self.recv_rate = nbeep_core::RateLimit::from_code(&value);
-                    self.set_status(format!(
-                        "받기 제한 = {} (상대에게 공지됨)",
-                        rate_label(self.recv_rate.target_bps(&self.recv_meter))
+                    self.set_status(nbeep_core::tf(
+                        nbeep_core::Msg::RecvLimitIs,
+                        &[&rate_label(self.recv_rate.target_bps(&self.recv_meter))],
                     ));
                 }
                 "xfer.timeout_sec" => {
@@ -17566,13 +17588,13 @@ impl App {
                     if let Some(pv) = &mut self.profile_view {
                         pv.set_carousel_inverted(inv);
                     }
-                    self.set_status(format!(
-                        "캐러셀 스크롤 = {}",
-                        if inv {
-                            "내추럴(반전)"
+                    self.set_status(nbeep_core::tf(
+                        nbeep_core::Msg::CarouselScrollIs,
+                        &[nbeep_core::t(if inv {
+                            nbeep_core::Msg::ScrollNatural
                         } else {
-                            "정방향"
-                        }
+                            nbeep_core::Msg::ScrollForward
+                        })],
                     ));
                 }
                 // 한글 입력(IME) 기준값(08-15 · H-27) — 어느 키든 일습 재적용(hot-swap).
@@ -17664,7 +17686,7 @@ impl App {
                     let want = session_port_from(&self.settings);
                     if !self.live {
                         self.status =
-                            format!("수신 포트 = {want} (데모 모드 — 실물 전송에서 적용)");
+                            nbeep_core::tf(nbeep_core::Msg::PortDemoMode, &[&want.to_string()]);
                     } else if self.listen_port == Some(want) {
                         self.status =
                             nbeep_core::tf(nbeep_core::Msg::StfPortListening, &[&want.to_string()]);
@@ -17678,8 +17700,9 @@ impl App {
                             }
                             // 폴백을 조용히 하지 않는다 — 상대에게 알려줄 값은 실제 포트다.
                             Ok(bound) => {
-                                self.set_status(format!(
-                                    "포트 {want} 점유 — 임의 포트 {bound}로 듣는 중(설정값은 유지)"
+                                self.set_status(nbeep_core::tf(
+                                    nbeep_core::Msg::PortFallback,
+                                    &[&want.to_string(), &bound.to_string()],
                                 ));
                             }
                             Err(e) => {
@@ -17884,7 +17907,7 @@ impl App {
                 self.open_name_prompt(
                     el,
                     NamePurpose::CreateGroup(members),
-                    "그룹 대화 만들기 — 이름",
+                    nbeep_core::t(nbeep_core::Msg::GroupCreatePrompt),
                     "",
                 );
             }
@@ -17894,7 +17917,12 @@ impl App {
                     .shared_by_id(gid)
                     .map(|s| s.roster.name.as_str().to_string())
                     .unwrap_or_default();
-                self.open_name_prompt(el, NamePurpose::RenameGroup(gid), "그룹 이름 변경", &cur);
+                self.open_name_prompt(
+                    el,
+                    NamePurpose::RenameGroup(gid),
+                    nbeep_core::t(nbeep_core::Msg::GroupRenamePrompt),
+                    &cur,
+                );
             }
             GA::AddMembers(gid, peers) => {
                 let Some(s) = self.groups.shared_by_id(gid) else {
@@ -17917,9 +17945,9 @@ impl App {
                     .encode();
                     self.send_group_frames(owner, vec![frame]);
                     self.list.clear_selection();
-                    self.set_status(format!(
-                        "{}명 초대 요청 발송 — 소유자가 명부에 반영하면 초대됩니다",
-                        peers.len()
+                    self.set_status(nbeep_core::tf(
+                        nbeep_core::Msg::InviteSuggestSent,
+                        &[&peers.len().to_string()],
                     ));
                     return;
                 }
@@ -17994,9 +18022,9 @@ impl App {
                 let on = roster.member_invite;
                 self.broadcast_roster(roster);
                 self.set_status(if on {
-                    "이 방: 구성원 초대 허용 — 구성원에게 배포".to_string()
+                    nbeep_core::t(nbeep_core::Msg::RoomMemberInviteOn).to_string()
                 } else {
-                    "이 방: 소유자만 초대 — 구성원에게 배포".to_string()
+                    nbeep_core::t(nbeep_core::Msg::RoomOwnerOnlyInvite).to_string()
                 });
                 self.refresh_and_redraw();
             }
@@ -18247,9 +18275,9 @@ impl App {
                 .note_member(uid, *m, nbeep_store::MemberState::Invited, now);
         }
         self.list.clear_selection();
-        self.set_status(format!(
-            "그룹 대화 생성 — {}명에게 초대 발송(수락하면 방에 들어옵니다)",
-            members.len()
+        self.set_status(nbeep_core::tf(
+            nbeep_core::Msg::GroupCreated,
+            &[&members.len().to_string()],
         ));
     }
 
@@ -18423,8 +18451,9 @@ impl App {
                 .upsert_shared(roster, nbeep_store::MineState::Owner);
             let _ = self.groups.delete(id);
         }
-        self.set_status(format!(
-            "로컬 그룹 {n}개를 그룹 대화로 승격 — 구성원에게는 연결될 때 초대가 전달됩니다"
+        self.set_status(nbeep_core::tf(
+            nbeep_core::Msg::LocalGroupsPromoted,
+            &[&n.to_string()],
         ));
     }
 
@@ -18480,10 +18509,9 @@ impl App {
             self.open_invite_card(el, uid, owner, &from, &name, n);
             return;
         }
-        let title = format!(
-            "{} (그룹 {}명)",
-            s.roster.name.as_str(),
-            s.roster.members.len()
+        let title = nbeep_core::tf(
+            nbeep_core::Msg::GroupTitleCount,
+            &[s.roster.name.as_str(), &s.roster.members.len().to_string()],
         );
         // 방을 열었다 = 확인했다(M5-1g unread) — 배지 해제.
         if self.gunread.remove(&gid).is_some() {
@@ -18821,13 +18849,16 @@ impl App {
         // FR-G-4 — 전달 경과는 **상태 바**에만(정보성 라인이 스레드에 섞이면
         // 대화를 가린다 — 08-13 실기 피드백). 스레드에는 ⚠ 실패만 남긴다.
         self.set_status(if queued.is_empty() {
-            format!("그룹 발신 — 즉시 {sent} · 연결 대기 0")
+            nbeep_core::tf(nbeep_core::Msg::GroupSendNoQueue, &[&sent.to_string()])
         } else {
             let names: Vec<String> = queued.iter().map(|p| self.peer_title(*p)).collect();
-            format!(
-                "그룹 발신 — 즉시 {sent} · 연결 대기 {}: {}",
-                queued.len(),
-                names.join(", ")
+            nbeep_core::tf(
+                nbeep_core::Msg::GroupSendQueued,
+                &[
+                    &sent.to_string(),
+                    &queued.len().to_string(),
+                    &names.join(", "),
+                ],
             )
         });
         self.refresh_and_redraw();
@@ -19004,7 +19035,11 @@ impl App {
                     self.request_redraw(mid);
                 }
             } else {
-                self.push_group_note(gid, &format!("⚠ 전달 실패: {title}"), &mut inv);
+                self.push_group_note(
+                    gid,
+                    &nbeep_core::tf(nbeep_core::Msg::GroupDeliverFailed, &[&title]),
+                    &mut inv,
+                );
             }
         }
     }
@@ -19022,7 +19057,7 @@ impl App {
                     .map_or_else(|| "?".into(), |n| n.to_string_lossy().into_owned());
                 self.push_group_note(
                     gid,
-                    &format!("⚠ 파일 전달 실패(연결 안 됨): {title} — {name}"),
+                    &nbeep_core::tf(nbeep_core::Msg::GroupFileDeliverFailed, &[&title, &name]),
                     &mut inv,
                 );
             }
@@ -19034,7 +19069,11 @@ impl App {
         };
         let title = self.peer_title(peer);
         for (gid, ..) in pends {
-            self.push_group_note(gid, &format!("⚠ 전달 실패(연결 안 됨): {title}"), &mut inv);
+            self.push_group_note(
+                gid,
+                &nbeep_core::tf(nbeep_core::Msg::GroupDeliverFailedOffline, &[&title]),
+                &mut inv,
+            );
         }
     }
 
@@ -19630,12 +19669,13 @@ impl App {
     ) {
         self.open_choice_ex(
             el,
-            "그룹 대화 초대",
-            &format!(
-                "{from} 님이 '{name}' 그룹(구성원 {n}명)에 초대했습니다.\n수락하면 방이 목록에 생기고 구성원과 함께 대화합니다."
+            nbeep_core::t(nbeep_core::Msg::GroupInviteTitle),
+            &nbeep_core::tf(
+                nbeep_core::Msg::GroupInviteBody,
+                &[from, name, &n.to_string()],
             ),
-            "수락",
-            "거절",
+            nbeep_core::t(nbeep_core::Msg::BtnAccept),
+            nbeep_core::t(nbeep_core::Msg::BtnDecline),
             Some(nbeep_core::t(nbeep_core::Msg::Later)),
             Some(nbeep_core::t(nbeep_core::Msg::InviteNoMore)),
             AlertCtx::GroupInvite {
@@ -20086,7 +20126,10 @@ impl App {
                             let mut inv = Invalidations::default();
                             self.push_group_note(
                                 gid,
-                                &format!("구성원 명부 갱신(v{ver})"),
+                                &nbeep_core::tf(
+                                    nbeep_core::Msg::RosterUpdated,
+                                    &[&ver.to_string()],
+                                ),
                                 &mut inv,
                             );
                             self.connect_group_members(uid);
@@ -20132,8 +20175,10 @@ impl App {
                         nbeep_store::MemberState::Joined,
                         unix_now_ms(),
                     );
-                    self.status =
-                        format!("{} 님이 그룹 초대를 수락했습니다", self.peer_title(peer));
+                    self.status = nbeep_core::tf(
+                        nbeep_core::Msg::InviteAcceptedBy,
+                        &[&self.peer_title(peer)],
+                    );
                     self.refresh_and_redraw();
                 }
             }
@@ -20202,7 +20247,11 @@ impl App {
                     .is_some()
                 {
                     let mut inv = Invalidations::default();
-                    self.push_group_note(gid, &format!("구성원 명부 갱신(v{ver})"), &mut inv);
+                    self.push_group_note(
+                        gid,
+                        &nbeep_core::tf(nbeep_core::Msg::RosterUpdated, &[&ver.to_string()]),
+                        &mut inv,
+                    );
                     // 새 구성원과도 연결(아바타·프로필은 세션 경유 · 08-14).
                     self.connect_group_members(uid);
                     self.refresh_and_redraw();
@@ -20308,7 +20357,11 @@ impl App {
                 let who = self.peer_title(peer);
                 self.broadcast_roster(roster);
                 let mut inv = Invalidations::default();
-                self.push_group_note(gid, &format!("{who} 님이 나갔습니다"), &mut inv);
+                self.push_group_note(
+                    gid,
+                    &nbeep_core::tf(nbeep_core::Msg::MemberLeft, &[&who]),
+                    &mut inv,
+                );
                 self.refresh_and_redraw();
             }
             G::Suggest { uid, members } => {
@@ -20327,7 +20380,7 @@ impl App {
                     let mut inv = Invalidations::default();
                     self.push_group_note(
                         gid,
-                        &format!("{who} 님의 초대 요청 — 이 방은 소유자만 초대(거절)"),
+                        &nbeep_core::tf(nbeep_core::Msg::InviteSuggestDenied, &[&who]),
                         &mut inv,
                     );
                     return;
@@ -20359,7 +20412,10 @@ impl App {
                 let mut inv = Invalidations::default();
                 self.push_group_note(
                     gid,
-                    &format!("{who} 님의 초대로 {}명에게 초대 발송", new.len()),
+                    &nbeep_core::tf(
+                        nbeep_core::Msg::InviteByMember,
+                        &[&who, &new.len().to_string()],
+                    ),
                     &mut inv,
                 );
                 self.refresh_and_redraw();
@@ -21536,9 +21592,9 @@ impl App {
                         self.trust.set_fav(peer, fav);
                         self.refresh_and_redraw();
                         self.set_status(if fav {
-                            format!("{} — 목록 상단에 고정", self.peer_title(peer))
+                            nbeep_core::tf(nbeep_core::Msg::FavPinned, &[&self.peer_title(peer)])
                         } else {
-                            format!("{} — 목록 고정 해제", self.peer_title(peer))
+                            nbeep_core::tf(nbeep_core::Msg::FavUnpinned, &[&self.peer_title(peer)])
                         });
                     }
                     // 우클릭 ▸ 목록에서 삭제(08-17) — 핀·캐시 파일까지 지운다.
@@ -21669,7 +21725,7 @@ impl App {
                         self.set_status(if nbeep_plat::clipboard::set_text(&text) {
                             nbeep_core::t(nbeep_core::Msg::LicNoteAddrCopied).to_string()
                         } else {
-                            "⚠ 클립보드 쓰기 실패".to_string()
+                            nbeep_core::t(nbeep_core::Msg::ClipboardWriteFailed).to_string()
                         });
                     }
                     nbeep_ui::PickerAction::Cancel => {
@@ -21916,7 +21972,7 @@ impl App {
                     self.set_status(if nbeep_plat::clipboard::set_text(&fp) {
                         nbeep_core::t(nbeep_core::Msg::StFpCopied).to_string()
                     } else {
-                        "복사 실패 — 클립보드를 열 수 없습니다".to_string()
+                        nbeep_core::t(nbeep_core::Msg::CopyFailedNoClipboard).to_string()
                     });
                     if let Some(mid) = self.main_id {
                         self.request_redraw(mid);
@@ -22155,13 +22211,13 @@ impl App {
                     }
                     Some(ImgLoad::Loading) => {
                         ctx.select_font(nbeep_ui::FontSlot::Status, false);
-                        let msg = "불러오는 중…";
+                        let msg = nbeep_core::t(nbeep_core::Msg::ImgLoading);
                         let tw = ctx.text_width(msg);
                         ctx.text((fw - tw) / 2, fh / 2, full, msg, theme.text_dim);
                     }
                     _ => {
                         ctx.select_font(nbeep_ui::FontSlot::Status, false);
-                        let msg = "미리보기를 만들 수 없습니다(16MiB 초과·손상·imgdec 부재)";
+                        let msg = nbeep_core::t(nbeep_core::Msg::ImgPreviewUnavailable);
                         let tw = ctx.text_width(msg);
                         ctx.text((fw - tw) / 2, fh / 2, full, msg, theme.text_dim);
                     }
@@ -22876,13 +22932,13 @@ impl ApplicationHandler<AppEvent> for App {
                             self.pending_approve_window = Some(peer);
                         }
                         let more = if n > 1 {
-                            format!(" (대기 {n}건)")
+                            nbeep_core::tf(nbeep_core::Msg::PendingMore, &[&n.to_string()])
                         } else {
                             String::new()
                         };
-                        self.set_status(format!(
-                            "파일 수신 요청: {name} ({}) — ⌘/Ctrl+Y 수락 · ⌘/Ctrl+N 거절{more}",
-                            human_size(size)
+                        self.set_status(nbeep_core::tf(
+                            nbeep_core::Msg::FileOfferStatus,
+                            &[&name, &human_size(size), &more],
                         ));
                     }
                     OfferVerdict::Deny(reason) => {
@@ -23111,13 +23167,17 @@ impl ApplicationHandler<AppEvent> for App {
                 if scan == nbeep_core::ScanOutcome::Detected {
                     self.set_status(nbeep_core::tf(nbeep_core::Msg::StfScanDetected, &[&name]));
                 } else {
-                    self.set_status(format!(
-                        "파일 격리 완료: {name} · 위험 {risk:?}{} — 승인 전까지 실행 불가",
-                        if mismatch {
-                            " · ⚠️ 형식 불일치"
-                        } else {
-                            ""
-                        }
+                    self.set_status(nbeep_core::tf(
+                        nbeep_core::Msg::FileQuarantined,
+                        &[
+                            &name,
+                            &format!("{risk:?}"),
+                            if mismatch {
+                                nbeep_core::t(nbeep_core::Msg::MismatchNote)
+                            } else {
+                                ""
+                            },
+                        ],
                     ));
                 }
                 self.set_xfer_line_named_or_fifo(
@@ -23569,9 +23629,9 @@ impl ApplicationHandler<AppEvent> for App {
                     self.close_armed = false; // 확인이 다 끝났으면 종료 가드 해제
                 }
                 self.set_status(if ok {
-                    "상대 수신 확인 — 완료".to_string()
+                    nbeep_core::t(nbeep_core::Msg::PeerAckDone).to_string()
                 } else {
-                    "상대가 받지 못함 — 실패".to_string()
+                    nbeep_core::t(nbeep_core::Msg::PeerAckFailed).to_string()
                 });
                 self.redraw_conversation(peer);
                 if let Some(mid) = self.main_id {
@@ -24562,9 +24622,7 @@ impl ApplicationHandler<AppEvent> for App {
                     // 소리 내어 알린다. 보류했던 push는 그래도 내보낸다(사진만 빠질
                     // 뿐 텍스트·내장 키 폴백은 상대에게 닿아야 한다).
                     self.push_profile(ProfileScope::Full);
-                    self.status =
-                        "⚠ 사진이 256KiB 초과인데 축소 생성에 실패해 상대에게 전송되지 않습니다"
-                            .into();
+                    self.status = nbeep_core::t(nbeep_core::Msg::PhotoTooBigNotSent).into();
                 }
                 if let Some(id) = self.main_id {
                     self.request_redraw(id);
@@ -24613,7 +24671,7 @@ impl ApplicationHandler<AppEvent> for App {
                             let mut pinv = Invalidations::default();
                             if icon.is_none() {
                                 self.status =
-                                    "프로필 이미지 미리보기 불가 — PNG/JPEG 아님/imgdec 부재"
+                                    nbeep_core::t(nbeep_core::Msg::ProfileImgPreviewUnavailable)
                                         .into();
                             }
                             // 현재 경로의 최근 캐러셀 썸네일도 이 디코드로 채운다
@@ -25472,8 +25530,10 @@ impl ApplicationHandler<AppEvent> for App {
                         + u32::try_from(self.send_batch.len()).unwrap_or(0);
                     if pending > 0 && !self.close_armed {
                         self.close_armed = true;
-                        self.status =
-                            format!("전송 {pending}건 확인 대기 중 — 다시 닫으면 그대로 종료");
+                        self.status = nbeep_core::tf(
+                            nbeep_core::Msg::CloseWithPending,
+                            &[&pending.to_string()],
+                        );
                         if let Some(mid) = self.main_id {
                             self.request_redraw(mid);
                         }
@@ -25976,14 +26036,14 @@ impl ApplicationHandler<AppEvent> for App {
                     if list_mode {
                         self.hangul_mode = !self.hangul_mode;
                         let keys = if cfg!(target_os = "linux") {
-                            "한/영 · 오른쪽 Alt · Shift+Space"
+                            nbeep_core::t(nbeep_core::Msg::HangulKeysLinux)
                         } else {
-                            "한/영 키"
+                            nbeep_core::t(nbeep_core::Msg::HangulKeys)
                         };
                         self.set_status(if self.hangul_mode {
-                            format!("입력: 한글 ({keys}로 전환)")
+                            nbeep_core::tf(nbeep_core::Msg::InputHangul, &[keys])
                         } else {
-                            format!("입력: English ({keys}로 전환)")
+                            nbeep_core::tf(nbeep_core::Msg::InputEnglish, &[keys])
                         });
                         self.request_redraw(id);
                     }
@@ -26698,12 +26758,12 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
     // 임시 신원으로 강등(fail-closed — 조용히 새 키를 만들면 상대 핀에서 남이 된다).
     let (identity, id_note, id_persistent) =
         match nbeep_crypto::keyfile::load_or_generate(&dir.join("identity.key")) {
-            Ok((id, created)) => (id, created.then_some("새 신원 키 생성"), true),
+            Ok((id, created)) => (id, created.then_some(nbeep_core::Msg::IdNewKey), true),
             Err(e) => {
                 eprintln!("신원 키 파일 사용 불가({e}) — 이번 실행은 임시 신원");
                 (
                     nbeep_crypto::Identity::generate(),
-                    Some("⚠ 신원 키 파일 손상 — 임시 신원(재시작하면 바뀜)"),
+                    Some(nbeep_core::Msg::IdKeyCorrupt),
                     false, // 임시 신원 — 세그먼트 보관 이동 금지(진짜 주인 보호)
                 )
             }
@@ -26944,7 +27004,9 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         }
         nbeep_store::GroupLoad::Loaded(_) | nbeep_store::GroupLoad::Fresh => String::new(),
     };
-    let id_hint = id_note.map(|n| format!(" · {n}")).unwrap_or_default();
+    let id_hint = id_note
+        .map(|n| format!(" · {}", nbeep_core::t(n)))
+        .unwrap_or_default();
     let settings_sort_value = settings.get("ui.list_sort").to_string();
     let mut app = App {
         mode,

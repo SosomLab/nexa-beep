@@ -256,7 +256,7 @@ pub(crate) fn seal_key(
     created_at: u64,
 ) -> Result<Vec<u8>, String> {
     nbeep_store::sealed::seal(seal_domain, wrap, &key_payload(key, created_at))
-        .map_err(|e| format!("user.key 봉인 실패: {e}"))
+        .map_err(|e| nbeep_core::tf(nbeep_core::Msg::UserKeySealFailed, &[&e.to_string()]))
 }
 
 /// 봉인본 열기(파일·와이어 공용).
@@ -536,13 +536,13 @@ pub(crate) fn derive_and_load(
     held: Option<(&UserKey, u64)>,
 ) -> Result<TestOk, String> {
     let material = KeyMaterial::derive(normalize_handle(handle), pass)
-        .ok_or_else(|| "핸들과 페어링 암호가 모두 필요합니다".to_string())?;
+        .ok_or_else(|| nbeep_core::t(nbeep_core::Msg::UserNeedHandlePass).to_string())?;
     let wrap = material.wrap_key();
     let seal_to_file = |key: &UserKey, created_at: u64| -> Result<(), String> {
         let env = seal_key(seal_domain, &wrap, key, created_at)?;
         debug_assert!(env.len() > USERKEY_LEN);
         nbeep_store::privfile::write_atomic(key_path, &env)
-            .map_err(|e| format!("user.key 저장 실패: {e}"))
+            .map_err(|e| nbeep_core::tf(nbeep_core::Msg::UserKeySaveFailed, &[&e.to_string()]))
     };
     let (held_key, held_at) = match held {
         Some((k, at)) => (Some(k), at),
@@ -552,7 +552,7 @@ pub(crate) fn derive_and_load(
         Ok(bytes) => {
             if nbeep_store::sealed::open(seal_domain, &wrap, &bytes).is_some() {
                 let (key, at) = open_key(seal_domain, &wrap, &bytes)
-                    .ok_or_else(|| "user.key: 손상된 사용자 키(덮어쓰지 않음)".to_string())?;
+                    .ok_or_else(|| nbeep_core::t(nbeep_core::Msg::UserKeyCorrupt).to_string())?;
                 let created_at = match at {
                     Some(t) => t,
                     None => {
@@ -578,13 +578,15 @@ pub(crate) fn derive_and_load(
                     created_at: held_at,
                 });
             }
-            Err("user.key: 이 기기의 사용자 키가 다른 암호로 봉인되어 있습니다".to_string())
+            Err(nbeep_core::t(nbeep_core::Msg::UserKeyOtherPass).to_string())
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             let (key, created, created_at) = match held_key {
                 Some(k) => (k.clone(), false, held_at),
                 None => (
-                    UserKey::generate().map_err(|e| format!("난수원 실패: {e}"))?,
+                    UserKey::generate().map_err(|e| {
+                        nbeep_core::tf(nbeep_core::Msg::RngFailed, &[&e.to_string()])
+                    })?,
                     true,
                     now_ms(),
                 ),
@@ -597,7 +599,10 @@ pub(crate) fn derive_and_load(
                 created_at,
             })
         }
-        Err(e) => Err(format!("user.key 읽기 실패: {e}")),
+        Err(e) => Err(nbeep_core::tf(
+            nbeep_core::Msg::UserKeyReadFailed,
+            &[&e.to_string()],
+        )),
     }
 }
 
@@ -900,7 +905,11 @@ mod tests {
             "빈 암호 = 거부"
         );
         let err = derive_and_load("kiros33", "other-pass-9999", &p, dom, None).unwrap_err();
-        assert!(err.contains("다른 암호"), "{err}");
+        assert_eq!(
+            err,
+            nbeep_core::t(nbeep_core::Msg::UserKeyOtherPass),
+            "{err}"
+        );
         // ★ 쥔 키가 있으면 새 암호로 재래핑 — UserId 불변(암호 변경 ≠ 신원 변경).
         let t3 = derive_and_load(
             "kiros33",
