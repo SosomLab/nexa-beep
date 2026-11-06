@@ -1711,6 +1711,189 @@ pub enum Msg {
     PkFilterHistory,
     /// 필터: 라이선스.
     PkFilterLicense,
+    // ── 11-06 문자열 전수 이관(M3-4 · 협업 세션) ──
+    /// `/trust` 신뢰 라벨 — 미검증.
+    TrustLabelUnverified,
+    /// `/trust` 신뢰 라벨 — 고정(TOFU).
+    TrustLabelPinned,
+    /// `/trust` 신뢰 라벨 — 지문 대조.
+    TrustLabelVerified,
+    /// 발신 불가(미고정) 안내 꼬리 — 앞에 빈 줄 2개 포함.
+    NotPinnedHint,
+    /// 그룹 파일 — 첫 왕래 전 상대 안내({} = 이름 목록).
+    GroupFirstContactNote,
+    /// 승인 카드 발신자 꼬리 — 첫 왕래 전({} = 발신자).
+    SenderNotMutual,
+    /// 자동 승인인데 묻는 이유(첫 왕래 전 강등).
+    AutoDowngradeNote,
+    /// 사용자 키 병합 상태({} = 옛 ID · 새 ID).
+    UserKeyMerged,
+    /// 자동 재연결 시도 상태({} = 상대).
+    StfAutoReconnecting,
+    /// 격리물 봉인 개봉 실패.
+    UnsealFailed,
+    /// 실체화 — OS 보호 표식 부착.
+    MarkApplied,
+    /// 실체화 — OS 보호 표식 미지원.
+    MarkUnsupported,
+    /// 실체화 — OS 보호 표식 실패.
+    MarkFailed,
+    /// 실체화 완료({} = 경로 · 표식).
+    MaterializeDone,
+    /// 실체화 실패({} = 오류).
+    MaterializeFailed,
+    /// 격리함 비움({} = 건수).
+    QuarantineEmptied,
+    /// 격리함 비움 일부 실패({} = 삭제 · 실패).
+    QuarantineEmptyPartial,
+    /// 설정 백업 완료({} = 경로).
+    SettingsBackupDone,
+    /// 설정 백업 실패({} = 오류).
+    SettingsBackupFailed,
+    /// 설정 복원 완료({} = 적용 수 · 모르는 키 수).
+    SettingsRestoreDone,
+    /// 설정 초기화 완료({} = 항목 수).
+    SettingsResetDone,
+    /// 신원 키 백업({} = 경로).
+    IdentityBackupDone,
+    /// 백업 실패({} = 오류).
+    BackupFailed,
+    /// 신원 복원 실패 — 기록 단계.
+    RestoreFailedWrite,
+    /// 신원 복원 실패 — 교체 단계.
+    RestoreFailedSwap,
+    /// 신원 복원 꼬리 — 전송 재시작 실패(앞에 구분자 포함).
+    NetRestartFailedNote,
+    /// 신원 복원 꼬리 — 신뢰 목록 잠김(앞에 구분자 포함).
+    TrustLockedNote,
+    /// 신원 복원 완료({} = 지문 · 신뢰 꼬리 · 전송 꼬리).
+    IdentityRestored,
+    /// 파일 수신 기간 자동 수락({} = 분).
+    RecvAutoForMin,
+    /// 파일 수신 승인 값({} = 값).
+    RecvApprovalIs,
+    /// 보내기 속도 제한({} = 값).
+    SendLimitIs,
+    /// 받기 속도 제한({} = 값).
+    RecvLimitIs,
+    /// 캐러셀 스크롤 방향 상태({} = 방향).
+    CarouselScrollIs,
+    /// 수신 포트 — 데모 모드({} = 포트).
+    PortDemoMode,
+    /// 포트 점유 → 임의 포트({} = 원하는 · 실제).
+    PortFallback,
+    /// 그룹 만들기 이름 입력 제목.
+    GroupCreatePrompt,
+    /// 그룹 이름 변경 제목.
+    GroupRenamePrompt,
+    /// 구성원 초대 요청 발송({} = 수).
+    InviteSuggestSent,
+    /// 방 정책 — 구성원 초대 허용.
+    RoomMemberInviteOn,
+    /// 방 정책 — 소유자만 초대.
+    RoomOwnerOnlyInvite,
+    /// 그룹 대화 생성({} = 수).
+    GroupCreated,
+    /// 로컬 그룹 승격({} = 수).
+    LocalGroupsPromoted,
+    /// 그룹 창 제목({} = 이름 · 인원).
+    GroupTitleCount,
+    /// 그룹 발신 경과 — 대기 0({} = 즉시).
+    GroupSendNoQueue,
+    /// 그룹 발신 경과({} = 즉시 · 대기 수 · 이름).
+    GroupSendQueued,
+    /// 그룹 스레드 — 전달 실패({} = 상대).
+    GroupDeliverFailed,
+    /// 그룹 스레드 — 파일 전달 실패({} = 상대 · 파일).
+    GroupFileDeliverFailed,
+    /// 그룹 스레드 — 전달 실패(연결 안 됨).
+    GroupDeliverFailedOffline,
+    /// 그룹 초대 모달 제목.
+    GroupInviteTitle,
+    /// 그룹 초대 모달 본문({} = 보낸 이 · 방 · 인원).
+    GroupInviteBody,
+    /// 그룹 스레드 — 명부 갱신({} = 버전).
+    RosterUpdated,
+    /// 그룹 초대 수락 상태({} = 상대).
+    InviteAcceptedBy,
+    /// 그룹 스레드 — 구성원 나감({} = 이름).
+    MemberLeft,
+    /// 그룹 스레드 — 소유자만 초대라 요청 거절({} = 이름).
+    InviteSuggestDenied,
+    /// 그룹 스레드 — 구성원 제안으로 초대 발송({} = 이름 · 수).
+    InviteByMember,
+    /// 목록 상단 고정({} = 상대).
+    FavPinned,
+    /// 목록 고정 해제({} = 상대).
+    FavUnpinned,
+    /// 클립보드 쓰기 실패.
+    ClipboardWriteFailed,
+    /// 복사 실패 — 클립보드 열기 불가.
+    CopyFailedNoClipboard,
+    /// 이미지 보기 — 불러오는 중.
+    ImgLoading,
+    /// 이미지 보기 — 미리보기 불가.
+    ImgPreviewUnavailable,
+    /// 파일 요청 상태 꼬리 — 대기 건수(앞에 공백).
+    PendingMore,
+    /// 파일 수신 요청 상태({} = 이름 · 크기 · 대기 꼬리).
+    FileOfferStatus,
+    /// 파일 격리 완료({} = 이름 · 위험 · 불일치 꼬리).
+    FileQuarantined,
+    /// 파일 격리 꼬리 — 형식 불일치(앞에 구분자).
+    MismatchNote,
+    /// 상대 수신 확인 완료.
+    PeerAckDone,
+    /// 상대 수신 실패.
+    PeerAckFailed,
+    /// 프로필 사진 축소 실패 — 미전송.
+    PhotoTooBigNotSent,
+    /// 프로필 이미지 미리보기 불가.
+    ProfileImgPreviewUnavailable,
+    /// 종료 가드 — 확인 대기 전송({} = 건수).
+    CloseWithPending,
+    /// 한/영 전환 키 안내(Linux).
+    HangulKeysLinux,
+    /// 한/영 전환 키 안내.
+    HangulKeys,
+    /// 목록 입력 모드 = 한글({} = 키).
+    InputHangul,
+    /// 목록 입력 모드 = 영문({} = 키).
+    InputEnglish,
+    /// 부팅 — 새 신원 키 생성 고지.
+    IdNewKey,
+    /// 부팅 — 신원 키 파일 손상 → 임시 신원.
+    IdKeyCorrupt,
+    /// 요일 약칭 — 일요일부터 공백 구분 7개(날짜 알약).
+    WeekdaysShort,
+    /// 설정 직접 입력 단위 — 초.
+    UnitSec,
+    /// 설정 직접 입력 단위 — 분.
+    UnitMin,
+    /// 설정 직접 입력 단위 — 시간.
+    UnitHour,
+    /// 설정 직접 입력 단위 — 일.
+    UnitDay,
+    /// 설정 직접 입력 단위 — 개.
+    UnitCount,
+    /// 설정 직접 입력 단위 — 건.
+    UnitItems,
+    /// 설정 직접 입력 단위 — 회.
+    UnitTimes,
+    /// user.key 봉인 실패({} = 오류).
+    UserKeySealFailed,
+    /// 사용자 관리 — 핸들·암호 둘 다 필요.
+    UserNeedHandlePass,
+    /// user.key 저장 실패({} = 오류).
+    UserKeySaveFailed,
+    /// user.key 손상(덮어쓰지 않음).
+    UserKeyCorrupt,
+    /// user.key가 다른 암호로 봉인됨.
+    UserKeyOtherPass,
+    /// 난수원 실패({} = 오류).
+    RngFailed,
+    /// user.key 읽기 실패({} = 오류).
+    UserKeyReadFailed,
 }
 
 impl Msg {
@@ -4894,6 +5077,552 @@ impl Msg {
                 "라이선스 (*.license)",
                 "许可证 (*.license)",
                 "ライセンス (*.license)",
+            ],
+            Msg::TrustLabelUnverified => [
+                "Unverified (before handshake)",
+                "미검증(핸드셰이크 전)",
+                "未验证（握手前）",
+                "未検証（ハンドシェイク前）",
+            ],
+            Msg::TrustLabelPinned => [
+                "Pinned (TOFU — key remembered at first contact)",
+                "고정됨(TOFU — 첫 접촉 키 기억)",
+                "已固定（TOFU — 记住首次接触的密钥）",
+                "固定済み（TOFU — 初回接触の鍵を記憶）",
+            ],
+            Msg::TrustLabelVerified => [
+                "Fingerprint verified (checked by a person)",
+                "지문 대조 완료(사람이 확인)",
+                "指纹已核对（人工确认）",
+                "指紋照合済み（人が確認）",
+            ],
+            Msg::NotPinnedHint => [
+                "\n\nYour identities are pinned once a connection (session) is established — open the peer in the list and connect first.",
+                "\n\n상대와 연결(세션)이 성립하면 신원이 고정됩니다 — 목록에서 상대를 열어 연결부터 하세요.",
+                "\n\n与对方建立连接（会话）后身份即被固定 — 请先在列表中打开对方并连接。",
+                "\n\n相手との接続（セッション）が成立すると身元が固定されます — まず一覧で相手を開いて接続してください。",
+            ],
+            Msg::GroupFirstContactNote => [
+                "! Peers you have not exchanged messages with yet: {} — they must press accept before the transfer proceeds",
+                "! 아직 서로 메시지를 주고받은 적 없는 상대: {} — 수신 승인을 눌러야 전송이 진행됩니다",
+                "! 尚未互相收发过消息的对方：{} — 需对方点击接收批准后才会传输",
+                "! まだメッセージをやり取りしていない相手：{} — 受信承認を押すまで転送は進みません",
+            ],
+            Msg::SenderNotMutual => [
+                "{} · ⚠ no messages exchanged yet",
+                "{} · ⚠ 서로 주고받은 메시지가 아직 없습니다",
+                "{} · ⚠ 尚未互相收发消息",
+                "{} · ⚠ まだメッセージのやり取りがありません",
+            ],
+            Msg::AutoDowngradeNote => [
+                "Auto-accept is on, but confirmation is needed before the first exchange",
+                "자동 승인 기간 중이지만 첫 왕래 전이라 확인이 필요합니다",
+                "自动接收已开启，但首次往来前仍需确认",
+                "自動承認中ですが、最初のやり取り前のため確認が必要です",
+            ],
+            Msg::UserKeyMerged => [
+                "User key merged — adopted key (ID {} → {})",
+                "사용자 키 병합 — 키 채택(ID {} → {})",
+                "用户密钥已合并 — 采用密钥（ID {} → {}）",
+                "ユーザー鍵を統合 — 鍵を採用（ID {} → {}）",
+            ],
+            Msg::StfAutoReconnecting => [
+                "Auto-reconnecting… {}",
+                "자동 재연결 시도… {}",
+                "正在自动重连… {}",
+                "自動再接続中… {}",
+            ],
+            Msg::UnsealFailed => [
+                "Failed to unseal (different identity or damaged)",
+                "봉인 개봉 실패(다른 신원·손상)",
+                "解封失败（身份不同或已损坏）",
+                "封印の開封に失敗（別の身元・破損）",
+            ],
+            Msg::MarkApplied => [
+                "OS protection mark applied",
+                "OS 보호 표식 부착",
+                "已附加系统保护标记",
+                "OS 保護マークを付与",
+            ],
+            Msg::MarkUnsupported => [
+                "⚠️ OS protection mark not supported",
+                "⚠️ OS 보호 표식 미지원",
+                "⚠️ 不支持系统保护标记",
+                "⚠️ OS 保護マーク非対応",
+            ],
+            Msg::MarkFailed => [
+                "⚠️ OS protection mark failed",
+                "⚠️ OS 보호 표식 실패",
+                "⚠️ 系统保护标记失败",
+                "⚠️ OS 保護マークに失敗",
+            ],
+            Msg::MaterializeDone => [
+                "Released: {} · {}",
+                "실체화 완료: {} · {}",
+                "已释放：{} · {}",
+                "実体化完了：{} · {}",
+            ],
+            Msg::MaterializeFailed => [
+                "Release failed: {} — kept in quarantine",
+                "실체화 실패: {} — 격리 유지",
+                "释放失败：{} — 保留隔离",
+                "実体化に失敗：{} — 隔離を維持",
+            ],
+            Msg::QuarantineEmptied => [
+                "Quarantine emptied — {} deleted",
+                "격리함을 비웠습니다 — {}건 삭제",
+                "已清空隔离区 — 删除 {} 项",
+                "隔離箱を空にしました — {} 件削除",
+            ],
+            Msg::QuarantineEmptyPartial => [
+                "Emptying quarantine — {} deleted · {} failed",
+                "격리함 비우기 — {}건 삭제 · {}건 실패",
+                "清空隔离区 — 删除 {} 项 · 失败 {} 项",
+                "隔離箱を空にする — {} 件削除 · {} 件失敗",
+            ],
+            Msg::SettingsBackupDone => [
+                "Settings backed up — {}",
+                "설정 백업 완료 — {}",
+                "设置已备份 — {}",
+                "設定をバックアップしました — {}",
+            ],
+            Msg::SettingsBackupFailed => [
+                "Settings backup failed: {}",
+                "설정 백업 실패: {}",
+                "设置备份失败：{}",
+                "設定のバックアップに失敗：{}",
+            ],
+            Msg::SettingsRestoreDone => [
+                "Settings restored — {} applied ({} unknown keys kept)",
+                "설정 복원 완료 — {}개 적용(모르는 키 {}개 보존)",
+                "设置已恢复 — 应用 {} 项（保留 {} 个未知键）",
+                "設定を復元しました — {} 件適用（未知キー {} 件を保持）",
+            ],
+            Msg::SettingsResetDone => [
+                "Settings reset — {} items returned to defaults (including filters and window size)",
+                "설정 초기화 완료 — {}개 항목을 기본값으로(필터·창 크기 포함)",
+                "设置已重置 — {} 项恢复为默认（含筛选与窗口大小）",
+                "設定を初期化しました — {} 項目を既定値に（フィルター・ウィンドウサイズを含む）",
+            ],
+            Msg::IdentityBackupDone => [
+                "Identity key backed up — {} (keep it safe)",
+                "신원 키 백업됨 — {} (안전하게 보관하세요)",
+                "身份密钥已备份 — {}（请妥善保管）",
+                "身元鍵をバックアップしました — {}（安全に保管してください）",
+            ],
+            Msg::BackupFailed => [
+                "Backup failed: {}",
+                "백업 실패: {}",
+                "备份失败：{}",
+                "バックアップに失敗：{}",
+            ],
+            Msg::RestoreFailedWrite => [
+                "Restore failed (write): {}",
+                "복원 실패(기록): {}",
+                "恢复失败（写入）：{}",
+                "復元に失敗（書き込み）：{}",
+            ],
+            Msg::RestoreFailedSwap => [
+                "Restore failed (swap): {}",
+                "복원 실패(교체): {}",
+                "恢复失败（替换）：{}",
+                "復元に失敗（置き換え）：{}",
+            ],
+            Msg::NetRestartFailedNote => [
+                " · ⚠ transport restart failed (discovery unavailable — restart the app)",
+                " · ⚠ 전송 재시작 실패(발견 불가 — 재실행 필요)",
+                " · ⚠ 传输重启失败（无法发现 — 需重新运行）",
+                " · ⚠ 転送の再起動に失敗（発見不可 — 再起動が必要）",
+            ],
+            Msg::TrustLockedNote => [
+                " · ⚠ trust list locked (not a backup of this identity)",
+                " · ⚠ 신뢰 목록 잠김(이 신원의 백업이 아님)",
+                " · ⚠ 信任列表已锁定（不是该身份的备份）",
+                " · ⚠ 信頼リストがロック（この身元のバックアップではない）",
+            ],
+            Msg::IdentityRestored => [
+                "Identity restored — new fingerprint {} (hot reload done{}{})",
+                "신원 복원됨 — 새 지문 {} (핫 로딩 완료{}{})",
+                "身份已恢复 — 新指纹 {}（热加载完成{}{}）",
+                "身元を復元しました — 新しい指紋 {}（ホットリロード完了{}{}）",
+            ],
+            Msg::RecvAutoForMin => [
+                "File receive: auto-accept for {} min",
+                "파일 수신: {}분간 자동 수락",
+                "文件接收：{} 分钟内自动接受",
+                "ファイル受信：{} 分間自動受諾",
+            ],
+            Msg::RecvApprovalIs => [
+                "File receive approval = {}",
+                "파일 수신 승인 = {}",
+                "文件接收批准 = {}",
+                "ファイル受信承認 = {}",
+            ],
+            Msg::SendLimitIs => [
+                "Send limit = {}",
+                "보내기 제한 = {}",
+                "发送限制 = {}",
+                "送信制限 = {}",
+            ],
+            Msg::RecvLimitIs => [
+                "Receive limit = {} (announced to peers)",
+                "받기 제한 = {} (상대에게 공지됨)",
+                "接收限制 = {}（已通知对方）",
+                "受信制限 = {}（相手に通知済み）",
+            ],
+            Msg::CarouselScrollIs => [
+                "Carousel scroll = {}",
+                "캐러셀 스크롤 = {}",
+                "轮播滚动 = {}",
+                "カルーセルのスクロール = {}",
+            ],
+            Msg::PortDemoMode => [
+                "Listen port = {} (demo mode — applies with the real transport)",
+                "수신 포트 = {} (데모 모드 — 실물 전송에서 적용)",
+                "接收端口 = {}（演示模式 — 在真实传输中生效）",
+                "受信ポート = {}（デモモード — 実際の転送で適用）",
+            ],
+            Msg::PortFallback => [
+                "Port {} in use — listening on random port {} (setting kept)",
+                "포트 {} 점유 — 임의 포트 {}로 듣는 중(설정값은 유지)",
+                "端口 {} 被占用 — 正在监听随机端口 {}（设置值保留）",
+                "ポート {} が使用中 — 任意のポート {} で待受中（設定値は維持）",
+            ],
+            Msg::GroupCreatePrompt => [
+                "New group chat — name",
+                "그룹 대화 만들기 — 이름",
+                "新建群聊 — 名称",
+                "グループ会話を作成 — 名前",
+            ],
+            Msg::GroupRenamePrompt => [
+                "Rename group",
+                "그룹 이름 변경",
+                "重命名群组",
+                "グループ名を変更",
+            ],
+            Msg::InviteSuggestSent => [
+                "Invite request sent for {} — they will be invited once the owner updates the roster",
+                "{}명 초대 요청 발송 — 소유자가 명부에 반영하면 초대됩니다",
+                "已发送 {} 人的邀请请求 — 群主更新名册后即会邀请",
+                "{} 人の招待依頼を送信 — オーナーが名簿に反映すると招待されます",
+            ],
+            Msg::RoomMemberInviteOn => [
+                "This room: members may invite — sent to members",
+                "이 방: 구성원 초대 허용 — 구성원에게 배포",
+                "此群：允许成员邀请 — 已分发给成员",
+                "このルーム：メンバーの招待を許可 — メンバーに配布",
+            ],
+            Msg::RoomOwnerOnlyInvite => [
+                "This room: only the owner invites — sent to members",
+                "이 방: 소유자만 초대 — 구성원에게 배포",
+                "此群：仅群主可邀请 — 已分发给成员",
+                "このルーム：オーナーのみ招待 — メンバーに配布",
+            ],
+            Msg::GroupCreated => [
+                "Group chat created — invites sent to {} (they join when they accept)",
+                "그룹 대화 생성 — {}명에게 초대 발송(수락하면 방에 들어옵니다)",
+                "群聊已创建 — 已向 {} 人发送邀请（接受后入群）",
+                "グループ会話を作成 — {} 人に招待を送信（受諾すると参加します）",
+            ],
+            Msg::LocalGroupsPromoted => [
+                "Promoted {} local groups to group chats — members get the invite when they connect",
+                "로컬 그룹 {}개를 그룹 대화로 승격 — 구성원에게는 연결될 때 초대가 전달됩니다",
+                "已将 {} 个本地群组升级为群聊 — 成员连接时会收到邀请",
+                "ローカルグループ {} 件をグループ会話に昇格 — メンバーには接続時に招待が届きます",
+            ],
+            Msg::GroupTitleCount => [
+                "{} (group of {})",
+                "{} (그룹 {}명)",
+                "{}（群组 {} 人）",
+                "{}（グループ {} 人）",
+            ],
+            Msg::GroupSendNoQueue => [
+                "Group send — {} now · 0 waiting for connection",
+                "그룹 발신 — 즉시 {} · 연결 대기 0",
+                "群发 — 立即 {} · 等待连接 0",
+                "グループ送信 — 即時 {} · 接続待ち 0",
+            ],
+            Msg::GroupSendQueued => [
+                "Group send — {} now · {} waiting for connection: {}",
+                "그룹 발신 — 즉시 {} · 연결 대기 {}: {}",
+                "群发 — 立即 {} · 等待连接 {}：{}",
+                "グループ送信 — 即時 {} · 接続待ち {}：{}",
+            ],
+            Msg::GroupDeliverFailed => [
+                "⚠ Delivery failed: {}",
+                "⚠ 전달 실패: {}",
+                "⚠ 投递失败：{}",
+                "⚠ 配信失敗：{}",
+            ],
+            Msg::GroupFileDeliverFailed => [
+                "⚠ File delivery failed (not connected): {} — {}",
+                "⚠ 파일 전달 실패(연결 안 됨): {} — {}",
+                "⚠ 文件投递失败（未连接）：{} — {}",
+                "⚠ ファイル配信失敗（未接続）：{} — {}",
+            ],
+            Msg::GroupDeliverFailedOffline => [
+                "⚠ Delivery failed (not connected): {}",
+                "⚠ 전달 실패(연결 안 됨): {}",
+                "⚠ 投递失败（未连接）：{}",
+                "⚠ 配信失敗（未接続）：{}",
+            ],
+            Msg::GroupInviteTitle => [
+                "Group chat invitation",
+                "그룹 대화 초대",
+                "群聊邀请",
+                "グループ会話への招待",
+            ],
+            Msg::GroupInviteBody => [
+                "{} invited you to the group '{}' ({} members).\nIf you accept, the room appears in your list and you chat with its members.",
+                "{} 님이 '{}' 그룹(구성원 {}명)에 초대했습니다.\n수락하면 방이 목록에 생기고 구성원과 함께 대화합니다.",
+                "{} 邀请你加入群组“{}”（成员 {} 人）。\n接受后群组会出现在列表中，并与成员一起对话。",
+                "{} さんがグループ「{}」（メンバー {} 人）に招待しました。\n受諾するとルームが一覧に表示され、メンバーと会話できます。",
+            ],
+            Msg::RosterUpdated => [
+                "Member roster updated (v{})",
+                "구성원 명부 갱신(v{})",
+                "成员名册已更新（v{}）",
+                "メンバー名簿を更新（v{}）",
+            ],
+            Msg::InviteAcceptedBy => [
+                "{} accepted the group invitation",
+                "{} 님이 그룹 초대를 수락했습니다",
+                "{} 已接受群组邀请",
+                "{} さんがグループ招待を受諾しました",
+            ],
+            Msg::MemberLeft => [
+                "{} left",
+                "{} 님이 나갔습니다",
+                "{} 已退出",
+                "{} さんが退出しました",
+            ],
+            Msg::InviteSuggestDenied => [
+                "Invite request from {} — this room lets only the owner invite (declined)",
+                "{} 님의 초대 요청 — 이 방은 소유자만 초대(거절)",
+                "{} 的邀请请求 — 此群仅群主可邀请（已拒绝）",
+                "{} さんの招待依頼 — このルームはオーナーのみ招待（拒否）",
+            ],
+            Msg::InviteByMember => [
+                "{} requested invites — sent to {}",
+                "{} 님의 초대로 {}명에게 초대 발송",
+                "应 {} 的请求向 {} 人发送了邀请",
+                "{} さんの依頼で {} 人に招待を送信",
+            ],
+            Msg::FavPinned => [
+                "{} — pinned to the top of the list",
+                "{} — 목록 상단에 고정",
+                "{} — 已置顶",
+                "{} — 一覧の先頭に固定",
+            ],
+            Msg::FavUnpinned => [
+                "{} — unpinned from the list",
+                "{} — 목록 고정 해제",
+                "{} — 已取消置顶",
+                "{} — 一覧の固定を解除",
+            ],
+            Msg::ClipboardWriteFailed => [
+                "⚠ Failed to write to the clipboard",
+                "⚠ 클립보드 쓰기 실패",
+                "⚠ 写入剪贴板失败",
+                "⚠ クリップボードへの書き込みに失敗",
+            ],
+            Msg::CopyFailedNoClipboard => [
+                "Copy failed — cannot open the clipboard",
+                "복사 실패 — 클립보드를 열 수 없습니다",
+                "复制失败 — 无法打开剪贴板",
+                "コピーに失敗 — クリップボードを開けません",
+            ],
+            Msg::ImgLoading => [
+                "Loading…",
+                "불러오는 중…",
+                "加载中…",
+                "読み込み中…",
+            ],
+            Msg::ImgPreviewUnavailable => [
+                "Cannot create a preview (over 16MiB, damaged, or imgdec missing)",
+                "미리보기를 만들 수 없습니다(16MiB 초과·손상·imgdec 부재)",
+                "无法生成预览（超过 16MiB、已损坏或缺少 imgdec）",
+                "プレビューを作成できません（16MiB 超過・破損・imgdec なし）",
+            ],
+            Msg::PendingMore => [
+                " ({} waiting)",
+                " (대기 {}건)",
+                "（等待 {} 项）",
+                "（待機 {} 件）",
+            ],
+            Msg::FileOfferStatus => [
+                "File request: {} ({}) — ⌘/Ctrl+Y accept · ⌘/Ctrl+N decline{}",
+                "파일 수신 요청: {} ({}) — ⌘/Ctrl+Y 수락 · ⌘/Ctrl+N 거절{}",
+                "文件接收请求：{}（{}）— ⌘/Ctrl+Y 接受 · ⌘/Ctrl+N 拒绝{}",
+                "ファイル受信要求：{}（{}）— ⌘/Ctrl+Y 受諾 · ⌘/Ctrl+N 拒否{}",
+            ],
+            Msg::FileQuarantined => [
+                "File quarantined: {} · risk {}{} — cannot run until approved",
+                "파일 격리 완료: {} · 위험 {}{} — 승인 전까지 실행 불가",
+                "文件已隔离：{} · 风险 {}{} — 批准前无法运行",
+                "ファイルを隔離：{} · 危険度 {}{} — 承認まで実行不可",
+            ],
+            Msg::MismatchNote => [
+                " · ⚠️ type mismatch",
+                " · ⚠️ 형식 불일치",
+                " · ⚠️ 格式不符",
+                " · ⚠️ 形式の不一致",
+            ],
+            Msg::PeerAckDone => [
+                "Peer confirmed receipt — done",
+                "상대 수신 확인 — 완료",
+                "对方已确认接收 — 完成",
+                "相手が受信を確認 — 完了",
+            ],
+            Msg::PeerAckFailed => [
+                "Peer did not receive it — failed",
+                "상대가 받지 못함 — 실패",
+                "对方未收到 — 失败",
+                "相手が受信できませんでした — 失敗",
+            ],
+            Msg::PhotoTooBigNotSent => [
+                "⚠ The photo is over 256KiB and shrinking it failed, so it is not sent to peers",
+                "⚠ 사진이 256KiB 초과인데 축소 생성에 실패해 상대에게 전송되지 않습니다",
+                "⚠ 照片超过 256KiB 且缩小失败，不会发送给对方",
+                "⚠ 写真が 256KiB を超え縮小に失敗したため、相手に送信されません",
+            ],
+            Msg::ProfileImgPreviewUnavailable => [
+                "Profile image preview unavailable — not PNG/JPEG or imgdec missing",
+                "프로필 이미지 미리보기 불가 — PNG/JPEG 아님/imgdec 부재",
+                "无法预览头像 — 不是 PNG/JPEG 或缺少 imgdec",
+                "プロフィール画像のプレビュー不可 — PNG/JPEG ではない/imgdec なし",
+            ],
+            Msg::CloseWithPending => [
+                "{} transfers awaiting confirmation — close again to quit anyway",
+                "전송 {}건 확인 대기 중 — 다시 닫으면 그대로 종료",
+                "{} 个传输等待确认 — 再次关闭将直接退出",
+                "転送 {} 件が確認待ち — もう一度閉じるとそのまま終了",
+            ],
+            Msg::HangulKeysLinux => [
+                "Han/Eng · Right Alt · Shift+Space",
+                "한/영 · 오른쪽 Alt · Shift+Space",
+                "韩/英 · 右 Alt · Shift+Space",
+                "한/영 · 右 Alt · Shift+Space",
+            ],
+            Msg::HangulKeys => [
+                "the Han/Eng key",
+                "한/영 키",
+                "韩/英 键",
+                "한/영 キー",
+            ],
+            Msg::InputHangul => [
+                "Input: Hangul (toggle with {})",
+                "입력: 한글 ({}로 전환)",
+                "输入：韩文（用 {} 切换）",
+                "入力：ハングル（{} で切替）",
+            ],
+            Msg::InputEnglish => [
+                "Input: English (toggle with {})",
+                "입력: English ({}로 전환)",
+                "输入：English（用 {} 切换）",
+                "入力：English（{} で切替）",
+            ],
+            Msg::IdNewKey => [
+                "New identity key created",
+                "새 신원 키 생성",
+                "已生成新身份密钥",
+                "新しい身元鍵を生成",
+            ],
+            Msg::IdKeyCorrupt => [
+                "⚠ Identity key file damaged — temporary identity (changes on restart)",
+                "⚠ 신원 키 파일 손상 — 임시 신원(재시작하면 바뀜)",
+                "⚠ 身份密钥文件已损坏 — 临时身份（重启后会变）",
+                "⚠ 身元鍵ファイルが破損 — 一時的な身元（再起動で変わる）",
+            ],
+            Msg::WeekdaysShort => [
+                "Sun Mon Tue Wed Thu Fri Sat",
+                "일 월 화 수 목 금 토",
+                "日 一 二 三 四 五 六",
+                "日 月 火 水 木 金 土",
+            ],
+            Msg::UnitSec => [
+                "sec",
+                "초",
+                "秒",
+                "秒",
+            ],
+            Msg::UnitMin => [
+                "min",
+                "분",
+                "分钟",
+                "分",
+            ],
+            Msg::UnitHour => [
+                "h",
+                "시간",
+                "小时",
+                "時間",
+            ],
+            Msg::UnitDay => [
+                "days",
+                "일",
+                "天",
+                "日",
+            ],
+            Msg::UnitCount => [
+                "",
+                "개",
+                "个",
+                "個",
+            ],
+            Msg::UnitItems => [
+                "items",
+                "건",
+                "条",
+                "件",
+            ],
+            Msg::UnitTimes => [
+                "times",
+                "회",
+                "次",
+                "回",
+            ],
+            Msg::UserKeySealFailed => [
+                "user.key seal failed: {}",
+                "user.key 봉인 실패: {}",
+                "user.key 封印失败：{}",
+                "user.key の封印に失敗：{}",
+            ],
+            Msg::UserNeedHandlePass => [
+                "Both a handle and a pairing passphrase are required",
+                "핸들과 페어링 암호가 모두 필요합니다",
+                "需要同时填写名称和配对密码",
+                "ハンドルとペアリング用パスフレーズの両方が必要です",
+            ],
+            Msg::UserKeySaveFailed => [
+                "user.key save failed: {}",
+                "user.key 저장 실패: {}",
+                "user.key 保存失败：{}",
+                "user.key の保存に失敗：{}",
+            ],
+            Msg::UserKeyCorrupt => [
+                "user.key: damaged user key (not overwritten)",
+                "user.key: 손상된 사용자 키(덮어쓰지 않음)",
+                "user.key：用户密钥已损坏（未覆盖）",
+                "user.key：破損したユーザー鍵（上書きしません）",
+            ],
+            Msg::UserKeyOtherPass => [
+                "user.key: this device's user key is sealed with a different passphrase",
+                "user.key: 이 기기의 사용자 키가 다른 암호로 봉인되어 있습니다",
+                "user.key：此设备的用户密钥是用其他密码封印的",
+                "user.key：この機器のユーザー鍵は別のパスフレーズで封印されています",
+            ],
+            Msg::RngFailed => [
+                "Random source failed: {}",
+                "난수원 실패: {}",
+                "随机源失败：{}",
+                "乱数源に失敗：{}",
+            ],
+            Msg::UserKeyReadFailed => [
+                "user.key read failed: {}",
+                "user.key 읽기 실패: {}",
+                "user.key 读取失败：{}",
+                "user.key の読み込みに失敗：{}",
             ],
         }
     }
