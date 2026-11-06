@@ -175,6 +175,8 @@ pub enum XferError {
     Overflow,
     /// 완료 시점 크기 불일치.
     SizeMismatch,
+    /// 수신 싱크(스풀) 쓰기·읽기 실패(M4-12 ① — 디스크 오류 = 그 전송 폐기).
+    Sink,
 }
 
 impl core::fmt::Display for XferError {
@@ -634,7 +636,103 @@ struct Incoming {
     sha256: [u8; 32],
     name: Vec<u8>,
     accepted: bool,
-    buf: Vec<u8>,
+    /// 수락 때 호스트 공장이 만든 싱크(M4-12 ①) — 미수락은 None(메모리를 잡지 않는다).
+    sink: Option<Box<dyn XferSink>>,
+}
+
+impl Incoming {
+    fn have(&self) -> u64 {
+        self.sink.as_ref().map_or(0, |s| s.len())
+    }
+}
+
+/// ★ 수신 싱크 **포트**(M4-12 ① · DR-21 — core는 I/O·크립토를 모른다): 청크가 오는 대로 호스트 쪽 목적지(암호 스트림
+/// 스풀 · 테스트/CLI는 메모리)에 쓴다. 디스크에 평문 스풀은 금지(docs/04 §4)라 호스트 싱크는 봉인 스트림이다.
+/// 중복 프리픽스 관용([`XferInbox::chunk`])이 드물게 이미 받은 구간을 대조해야 해서 `matches_at`이 있다.
+pub trait XferSink: std::fmt::Debug + Send + std::any::Any {
+    /// 끝에 이어 쓴다.
+    ///
+    /// # Errors
+    /// 쓰기 실패 — 조립기가 그 전송을 폐기한다.
+    fn write(&mut self, data: &[u8]) -> Result<(), XferError>;
+    /// 지금까지 받은 바이트 수.
+    fn len(&self) -> u64;
+    /// 비었는가.
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+    /// 이미 받은 구간 `[offset, offset+data.len())`이 `data`와 같은가(범위는 호출자가 보장).
+    ///
+    /// # Errors
+    /// 읽기 실패.
+    fn matches_at(&mut self, offset: u64, data: &[u8]) -> Result<bool, XferError>;
+    /// 메모리 싱크면 내용을 꺼낸다(스풀 싱크 = None — 호스트가 핸들로 마무리한다).
+    fn take_mem(&mut self) -> Option<Vec<u8>> {
+        None
+    }
+    /// 수신 중 증분 해시(M4-12 ③ · 호스트 싱크가 크립토 포트로 계산) — 없으면 None(호출자가 전체를 다시 해시).
+    fn digest(&mut self) -> Option<[u8; 32]> {
+        None
+    }
+    /// 다운캐스트(호스트가 자기 스풀 핸들을 되찾는다).
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
+}
+
+/// 메모리 싱크(기본 · 테스트·CLI) — 종전 `Vec<u8>` 조립과 같다(선언 크기 + 헤드룸 1회 예약).
+#[derive(Debug, Default)]
+pub struct MemSink(pub Vec<u8>);
+
+impl MemSink {
+    /// 선언 크기만큼 예약해 만든다(M4-12 0단계 규칙).
+    #[must_use]
+    pub fn for_size(size: u64) -> Self {
+        let mut v = Vec::new();
+        reserve_declared(&mut v, size);
+        Self(v)
+    }
+}
+
+impl XferSink for MemSink {
+    fn write(&mut self, data: &[u8]) -> Result<(), XferError> {
+        self.0.extend_from_slice(data);
+        Ok(())
+    }
+    fn len(&self) -> u64 {
+        self.0.len() as u64
+    }
+    fn matches_at(&mut self, offset: u64, data: &[u8]) -> Result<bool, XferError> {
+        let start = usize::try_from(offset).map_err(|_| XferError::Sink)?;
+        Ok(self
+            .0
+            .get(start..start + data.len())
+            .is_some_and(|have| have == data))
+    }
+    fn take_mem(&mut self) -> Option<Vec<u8>> {
+        Some(std::mem::take(&mut self.0))
+    }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}
+
+/// 싱크 공장에 주는 전송 명세(수락 시점 · 선언값).
+#[derive(Clone, Copy, Debug)]
+pub struct SinkSpec<'a> {
+    /// 전송 id.
+    pub id: XferId,
+    /// 선언 크기.
+    pub size: u64,
+    /// 선언 SHA-256(지연 선언이면 0).
+    pub sha256: [u8; 32],
+    /// 원본 파일명 바이트.
+    pub name: &'a [u8],
+}
+
+/// 싱크 공장 — 수락마다 호출(호스트 주입 · 기본 = [`MemSink`]).
+pub type SinkFactory = Box<dyn Fn(&SinkSpec<'_>) -> Result<Box<dyn XferSink>, XferError> + Send>;
+
+fn mem_factory() -> SinkFactory {
+    Box::new(|spec| Ok(Box::new(MemSink::for_size(spec.size))))
 }
 
 /// 선언 크기 + 봉인 헤드룸만큼 버퍼를 한 번에 예약(M4-12 0단계) — 이미 그만큼이면 no-op · usize 변환 실패(32비트 상한)는
@@ -658,16 +756,24 @@ fn reserve_declared(buf: &mut Vec<u8>, size: u64) {
 pub const RESERVE_HEADROOM: usize = 64 * 1024;
 
 /// 완료된 수신물 — 해시 대조·`.beepq` 봉인은 조립 지점 몫(core는 크립토를 모른다).
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct Received {
     /// 전송 id.
     pub id: XferId,
     /// 원본 파일명 바이트.
     pub name: Vec<u8>,
-    /// 발신이 선언한 SHA-256 — **호출자가 `bytes` 실측 해시와 대조해야 한다**(FR-X-6).
+    /// 발신이 선언한 SHA-256 — **호출자가 실측 해시와 대조해야 한다**(FR-X-6).
     pub declared_sha256: [u8; 32],
-    /// 수신 원본.
-    pub bytes: Vec<u8>,
+    /// 수신 원본이 담긴 싱크(M4-12 ① — 메모리면 [`XferSink::take_mem`] · 스풀이면 호스트가 다운캐스트).
+    pub sink: Box<dyn XferSink>,
+}
+
+impl Received {
+    /// 메모리 싱크의 내용(스풀 싱크 = None).
+    #[must_use]
+    pub fn into_bytes(mut self) -> Option<Vec<u8>> {
+        self.sink.take_mem()
+    }
 }
 
 /// 수신 조립기 — 세션당 하나. 오퍼 수신→(호스트 결정) 수락→청크 연속 조립→완료.
@@ -675,9 +781,10 @@ pub struct Received {
 /// **크기 상한은 수신측 정책**이다(사용자 확정 08-09) — 발신측 상수가 아니라 수신자가
 /// [`XferInbox::with_max_file`]/[`XferInbox::set_max_file`]로 정하고, 초과 오퍼는
 /// [`XferError::FileTooBig`]으로 거부하며 거절 와이어에 상한을 공지한다.
-#[derive(Debug)]
 pub struct XferInbox {
     inflight: HashMap<XferId, Incoming>,
+    /// 수락 때 싱크를 만드는 공장(M4-12 ① · 호스트 주입 · 기본 메모리).
+    factory: SinkFactory,
     /// 수신 허용 상한(바이트).
     max_file: u64,
 }
@@ -688,12 +795,22 @@ impl Default for XferInbox {
     }
 }
 
+impl std::fmt::Debug for XferInbox {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("XferInbox")
+            .field("inflight", &self.inflight)
+            .field("max_file", &self.max_file)
+            .finish_non_exhaustive()
+    }
+}
+
 impl XferInbox {
     /// 새 조립기(상한 = [`MAX_FILE`] 기본값).
     #[must_use]
     pub fn new() -> Self {
         Self {
             inflight: HashMap::new(),
+            factory: mem_factory(),
             max_file: MAX_FILE,
         }
     }
@@ -703,8 +820,14 @@ impl XferInbox {
     pub fn with_max_file(max_file: u64) -> Self {
         Self {
             inflight: HashMap::new(),
+            factory: mem_factory(),
             max_file,
         }
+    }
+
+    /// 싱크 공장 주입(M4-12 ① — 호스트의 봉인 스트림 스풀). 이미 수락된 전송에는 영향 없음.
+    pub fn set_sink_factory(&mut self, factory: SinkFactory) {
+        self.factory = factory;
     }
 
     /// 수신 상한 변경(설정 hot-swap 경로).
@@ -742,7 +865,7 @@ impl XferInbox {
                 sha256: *sha256,
                 name: name.clone(),
                 accepted: false,
-                buf: Vec::new(),
+                sink: None,
             },
         );
         Ok(())
@@ -754,10 +877,42 @@ impl XferInbox {
     /// [`XferError::UnknownXfer`].
     pub fn accept(&mut self, id: &XferId) -> Result<(), XferError> {
         let x = self.inflight.get_mut(id).ok_or(XferError::UnknownXfer)?;
+        // ★ 싱크는 **수락 때** 만든다(M4-12 ① — Offer 때가 아니라 호스트 결정 뒤라 미수락 오퍼가 자원을 잡지 못한다 ·
+        //   size ≤ max_file 검증됨). 공장 실패(디스크) = 그 전송 폐기.
+        let spec = SinkSpec {
+            id: *id,
+            size: x.size,
+            sha256: x.sha256,
+            name: &x.name,
+        };
+        match (self.factory)(&spec) {
+            Ok(s) => {
+                x.sink = Some(s);
+                x.accepted = true;
+                Ok(())
+            }
+            Err(e) => {
+                self.inflight.remove(id);
+                Err(e)
+            }
+        }
+    }
+
+    /// 수락 + **호스트가 이미 채운 싱크**(M4-12 ④ — `.part` 스풀을 다시 연 것 · `len()` = 보존 길이)로 이어받기.
+    ///
+    /// # Errors
+    /// [`XferError::UnknownXfer`] · [`XferError::Overflow`](보존 길이가 선언 크기 이상).
+    pub fn accept_resumed(
+        &mut self,
+        id: &XferId,
+        sink: Box<dyn XferSink>,
+    ) -> Result<(), XferError> {
+        let x = self.inflight.get_mut(id).ok_or(XferError::UnknownXfer)?;
+        if sink.len() >= x.size {
+            return Err(XferError::Overflow);
+        }
+        x.sink = Some(sink);
         x.accepted = true;
-        // ★ M4-12 0단계(11-06): 수락 시점에 선언 크기만큼 **한 번에** 예약 — 청크 누적의 배증 재할당(순간 1.5S) 제거.
-        //   Offer 때가 아니라 수락 때(호스트 결정 뒤)라 미수락 오퍼가 메모리를 잡지 못한다 · size ≤ max_file 검증됨.
-        reserve_declared(&mut x.buf, x.size);
         Ok(())
     }
 
@@ -768,13 +923,21 @@ impl XferInbox {
     /// # Errors
     /// [`XferError::UnknownXfer`] · [`XferError::Overflow`](prefix가 선언 크기 초과).
     pub fn accept_with_prefix(&mut self, id: &XferId, prefix: Vec<u8>) -> Result<(), XferError> {
-        let x = self.inflight.get_mut(id).ok_or(XferError::UnknownXfer)?;
-        if prefix.len() as u64 > x.size {
-            return Err(XferError::Overflow);
+        {
+            let x = self.inflight.get(id).ok_or(XferError::UnknownXfer)?;
+            if prefix.len() as u64 > x.size {
+                return Err(XferError::Overflow);
+            }
         }
-        x.accepted = true;
-        x.buf = prefix;
-        reserve_declared(&mut x.buf, x.size); // M4-12 0단계 — 남은 분량 1회 예약
+        self.accept(id)?;
+        let x = self.inflight.get_mut(id).ok_or(XferError::UnknownXfer)?;
+        let Some(s) = x.sink.as_mut() else {
+            return Err(XferError::Sink);
+        };
+        if s.write(&prefix).is_err() {
+            self.inflight.remove(id);
+            return Err(XferError::Sink);
+        }
         Ok(())
     }
 
@@ -803,31 +966,34 @@ impl XferInbox {
         if !x.accepted {
             return Err(XferError::NotAccepted);
         }
+        let size = x.size;
+        let Some(sink) = x.sink.as_mut() else {
+            return Err(XferError::NotAccepted);
+        };
+        let have = sink.len();
         // 중복 프리픽스 관용(M4-10 — 재개 Accept를 무시한 구버전 발신자가 0부터
         // 다시 보내는 경우): 이미 가진 구간과 **바이트가 일치할 때만** 버리고,
         // 어긋나면 즉시 폐기(조용히 이어붙여 손상 파일을 만들지 않는다).
-        if offset < x.buf.len() as u64 {
-            let have = usize::try_from(x.buf.len() as u64 - offset).unwrap_or(usize::MAX);
-            let dup = have.min(data.len());
-            let start = usize::try_from(offset).map_err(|_| XferError::OutOfOrder)?;
-            if x.buf[start..start + dup] != data[..dup] {
+        if offset < have {
+            let dup = usize::try_from(have - offset)
+                .unwrap_or(usize::MAX)
+                .min(data.len());
+            if !sink.matches_at(offset, &data[..dup])? {
                 return Err(XferError::OutOfOrder);
             }
             let tail = &data[dup..];
-            if x.buf.len() as u64 + tail.len() as u64 > x.size {
+            if have + tail.len() as u64 > size {
                 return Err(XferError::Overflow);
             }
-            x.buf.extend_from_slice(tail);
-            return Ok(());
+            return sink.write(tail);
         }
-        if offset != x.buf.len() as u64 {
+        if offset != have {
             return Err(XferError::OutOfOrder);
         }
-        if x.buf.len() as u64 + data.len() as u64 > x.size {
+        if have + data.len() as u64 > size {
             return Err(XferError::Overflow);
         }
-        x.buf.extend_from_slice(data);
-        Ok(())
+        sink.write(data)
     }
 
     /// 완료 처리 — 크기 대조 후 수신물 반환(해시 대조는 호출자 몫 — 문서 참조).
@@ -836,21 +1002,24 @@ impl XferInbox {
     /// [`XferError::UnknownXfer`]·[`XferError::SizeMismatch`] — 둘 다 해당 전송을 폐기한다.
     pub fn done(&mut self, id: &XferId) -> Result<Received, XferError> {
         let x = self.inflight.remove(id).ok_or(XferError::UnknownXfer)?;
-        if x.buf.len() as u64 != x.size {
+        if x.have() != x.size {
             return Err(XferError::SizeMismatch);
         }
+        let Some(sink) = x.sink else {
+            return Err(XferError::NotAccepted);
+        };
         Ok(Received {
             id: *id,
             name: x.name,
             declared_sha256: x.sha256,
-            bytes: x.buf,
+            sink,
         })
     }
 
     /// 진행률(수신 바이트, 선언 크기) — UI 표시용.
     #[must_use]
     pub fn progress(&self, id: &XferId) -> Option<(u64, u64)> {
-        self.inflight.get(id).map(|x| (x.buf.len() as u64, x.size))
+        self.inflight.get(id).map(|x| (x.have(), x.size))
     }
 
     /// 세션 종료 시 **수락된 부분 수신물 회수**(M4-10a) — 보존은 호스트 몫
@@ -859,17 +1028,19 @@ impl XferInbox {
         let ids: Vec<XferId> = self
             .inflight
             .iter()
-            .filter(|(_, x)| x.accepted && !x.buf.is_empty() && (x.buf.len() as u64) < x.size)
+            .filter(|(_, x)| x.accepted && x.have() > 0 && x.have() < x.size)
             .map(|(id, _)| *id)
             .collect();
         ids.into_iter()
             .filter_map(|id| {
-                self.inflight.remove(&id).map(|x| PartialXfer {
+                let x = self.inflight.remove(&id)?;
+                let sink = x.sink?;
+                Some(PartialXfer {
                     id,
                     size: x.size,
                     sha256: x.sha256,
                     name: x.name,
-                    bytes: x.buf,
+                    sink,
                 })
             })
             .collect()
@@ -887,8 +1058,8 @@ pub struct PartialXfer {
     pub sha256: [u8; 32],
     /// 원본 파일명 바이트.
     pub name: Vec<u8>,
-    /// 수신 완료 구간(연속 · 0부터).
-    pub bytes: Vec<u8>,
+    /// 수신 완료 구간(연속 · 0부터)이 담긴 싱크(M4-12 ① — 메모리면 `take_mem` · 스풀이면 호스트가 `.part`로 마무리).
+    pub sink: Box<dyn XferSink>,
 }
 
 #[cfg(test)]
@@ -1091,8 +1262,8 @@ mod tests {
             Some((original.len() as u64, original.len() as u64))
         );
         let got = inbox.done(&xid(2)).unwrap();
-        assert_eq!(got.bytes, original);
         assert_eq!(got.declared_sha256, [7u8; 32], "해시 대조는 호출자 몫");
+        assert_eq!(got.into_bytes().unwrap(), original);
     }
 
     #[test]
@@ -1149,7 +1320,7 @@ mod tests {
             .unwrap();
         inbox.accept(&xid(6)).unwrap();
         inbox.chunk(&xid(6), 0, b"short").unwrap();
-        assert_eq!(inbox.done(&xid(6)), Err(XferError::SizeMismatch));
+        assert_eq!(inbox.done(&xid(6)).err(), Some(XferError::SizeMismatch));
         assert!(inbox.progress(&xid(6)).is_none(), "부분 수신물 잔존 금지");
     }
 
@@ -1210,6 +1381,66 @@ mod tests {
 
     /// M4-10a·b — 프리픽스 선적재 재개: 이어받기 → 완료. 구버전 발신자가 0부터
     /// 다시 보내는 중복 프리픽스도 흡수하고, **어긋난 프리픽스는 폐기**한다.
+    /// M4-12 ①(11-07): 싱크 공장 — 수락마다 호출 · 공장 실패 = 그 전송 폐기 · 청크는 싱크에 쓰이고 중복 프리픽스 대조는
+    /// `matches_at`으로 · done은 싱크를 돌려준다 · `accept_resumed`는 보존 길이 ≥ 선언이면 거부.
+    #[test]
+    fn sink_factory_is_called_on_accept_and_failure_drops_transfer() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let offer = |id, size| XferMsg::Offer {
+            id,
+            size,
+            sha256: [0u8; 32],
+            name: b"f".to_vec(),
+        };
+        let mut inbox = XferInbox::new();
+        let c = Arc::clone(&calls);
+        inbox.set_sink_factory(Box::new(move |spec| {
+            c.fetch_add(1, Ordering::Relaxed);
+            if spec.size == 7 {
+                Err(XferError::Sink) // 디스크 실패 시뮬레이션
+            } else {
+                Ok(Box::new(MemSink::for_size(spec.size)))
+            }
+        }));
+        inbox.offer(&offer(xid(1), 7)).unwrap();
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            0,
+            "오퍼는 싱크를 만들지 않는다"
+        );
+        assert_eq!(inbox.accept(&xid(1)), Err(XferError::Sink));
+        assert_eq!(
+            inbox.chunk(&xid(1), 0, &[1]),
+            Err(XferError::UnknownXfer),
+            "공장 실패 = 폐기"
+        );
+        inbox.offer(&offer(xid(2), 5)).unwrap();
+        inbox.accept(&xid(2)).unwrap();
+        assert_eq!(calls.load(Ordering::Relaxed), 2);
+        inbox.chunk(&xid(2), 0, &[1, 2, 3]).unwrap();
+        inbox.chunk(&xid(2), 0, &[1, 2, 3, 4, 5]).unwrap(); // 중복 프리픽스 관용 → 싱크 대조
+        assert_eq!(inbox.progress(&xid(2)), Some((5, 5)));
+        assert_eq!(
+            inbox.done(&xid(2)).unwrap().into_bytes().unwrap(),
+            vec![1, 2, 3, 4, 5]
+        );
+        inbox.offer(&offer(xid(3), 4)).unwrap();
+        let full: Box<dyn XferSink> = Box::new(MemSink(vec![9; 4]));
+        assert_eq!(
+            inbox.accept_resumed(&xid(3), full),
+            Err(XferError::Overflow)
+        );
+        let part: Box<dyn XferSink> = Box::new(MemSink(vec![9; 2]));
+        inbox.accept_resumed(&xid(3), part).unwrap();
+        inbox.chunk(&xid(3), 2, &[8, 8]).unwrap();
+        assert_eq!(
+            inbox.done(&xid(3)).unwrap().into_bytes().unwrap(),
+            vec![9, 9, 8, 8]
+        );
+    }
+
     /// M4-12 보완(11-07): 수락 예약 = 선언 크기 + 헤드룸 — 봉인 머리·태그를 끼워 넣어도 재할당(순간 2S)이 없다.
     #[test]
     fn accept_reserves_headroom_so_seal_does_not_reallocate() {
@@ -1253,7 +1484,7 @@ mod tests {
             inbox.chunk(&xid(1), off, c).unwrap();
             off += c.len() as u64;
         }
-        assert_eq!(inbox.done(&xid(1)).unwrap().bytes, original);
+        assert_eq!(inbox.done(&xid(1)).unwrap().into_bytes().unwrap(), original);
         // ② 구버전 발신자 — 재개 요청을 무시하고 0부터 전량 재송신해도 조립된다.
         let mut inbox = XferInbox::new();
         inbox.offer(&offer(xid(2))).unwrap();
@@ -1266,7 +1497,7 @@ mod tests {
             };
             inbox.chunk(&id, offset, &data).unwrap();
         }
-        assert_eq!(inbox.done(&xid(2)).unwrap().bytes, original);
+        assert_eq!(inbox.done(&xid(2)).unwrap().into_bytes().unwrap(), original);
         // ③ 어긋난 프리픽스(다른 파일) — 중복 구간 대조 실패 = 즉시 폐기.
         let mut inbox = XferInbox::new();
         inbox.offer(&offer(xid(3))).unwrap();
@@ -1299,7 +1530,7 @@ mod tests {
         let parts = inbox.take_partials();
         assert_eq!(parts.len(), 1);
         assert_eq!(parts[0].id, xid(2));
-        assert_eq!(parts[0].bytes.len(), 40);
+        assert_eq!(parts[0].sink.len(), 40);
         assert_eq!(parts[0].size, 100);
     }
 

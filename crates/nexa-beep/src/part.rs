@@ -53,8 +53,12 @@ fn hex(sha: &[u8; 32]) -> String {
 }
 
 /// 부분물 봉인 저장 — 실패는 조용히 버린다(재개는 최적화 · 전송 정합성과 무관).
-pub(crate) fn save_partial(channel: &str, secret: &[u8; 32], sender: PeerId, p: &PartialXfer) {
-    let mut plain = Vec::with_capacity(1 + 16 + 8 + 32 + 2 + p.name.len() + p.bytes.len());
+pub(crate) fn save_partial(channel: &str, secret: &[u8; 32], sender: PeerId, p: &mut PartialXfer) {
+    // M4-12 ①: 메모리 싱크만(스풀 싱크는 ④에서 스풀 자체가 .part가 된다).
+    let Some(bytes) = p.sink.take_mem() else {
+        return;
+    };
+    let mut plain = Vec::with_capacity(1 + 16 + 8 + 32 + 2 + p.name.len() + bytes.len());
     plain.push(VER);
     plain.extend_from_slice(&p.id);
     plain.extend_from_slice(&p.size.to_le_bytes());
@@ -62,7 +66,7 @@ pub(crate) fn save_partial(channel: &str, secret: &[u8; 32], sender: PeerId, p: 
     let nlen = u16::try_from(p.name.len()).unwrap_or(u16::MAX);
     plain.extend_from_slice(&nlen.to_le_bytes());
     plain.extend_from_slice(&p.name[..nlen as usize]);
-    plain.extend_from_slice(&p.bytes);
+    plain.extend_from_slice(&bytes);
     let Ok(sealed) = nbeep_store::sealed::seal(SEAL_PART, secret, &plain) else {
         return;
     };
@@ -172,7 +176,7 @@ mod tests {
             size,
             sha256: [sha; 32],
             name: b"f.bin".to_vec(),
-            bytes: vec![0xAB; got],
+            sink: Box::new(nbeep_core::MemSink(vec![0xAB; got])),
         }
     }
 
@@ -182,7 +186,7 @@ mod tests {
         let ch = format!("t-part-{}", std::process::id());
         let secret = [9u8; 32];
         let sender = PeerId::from_bytes([2u8; 32]);
-        save_partial(&ch, &secret, sender, &part(5, 100, 40));
+        save_partial(&ch, &secret, sender, &mut part(5, 100, 40));
         let key = resume_key("f.bin", 100, sender);
         assert_eq!(
             load_partial(&ch, &secret, &key, 100).as_deref(),
@@ -190,10 +194,10 @@ mod tests {
             "같은 (이름·크기·발신자) 키 = 보존 바이트"
         );
         // 다른 크기 선언 = 다른 키 = 미스(같은 키에 다른 size 내부 불일치도 폐기).
-        save_partial(&ch, &secret, sender, &part(6, 100, 40));
+        save_partial(&ch, &secret, sender, &mut part(6, 100, 40));
         assert!(load_partial(&ch, &secret, &resume_key("f.bin", 200, sender), 200).is_none());
         // 다른 신원(secret) = 개봉 불가(fail-closed) — 파일도 폐기.
-        save_partial(&ch, &secret, sender, &part(7, 100, 40));
+        save_partial(&ch, &secret, sender, &mut part(7, 100, 40));
         assert!(load_partial(&ch, &[1u8; 32], &key, 100).is_none());
         let _ = std::fs::remove_dir_all(crate::gate::quarantine_root(&ch));
     }
@@ -204,7 +208,7 @@ mod tests {
         let ch = format!("t-partrm-{}", std::process::id());
         let secret = [9u8; 32];
         let sender = PeerId::from_bytes([2u8; 32]);
-        save_partial(&ch, &secret, sender, &part(8, 50, 10));
+        save_partial(&ch, &secret, sender, &mut part(8, 50, 10));
         let key = resume_key("f.bin", 50, sender);
         remove_partial(&ch, &key);
         assert!(load_partial(&ch, &secret, &key, 50).is_none());

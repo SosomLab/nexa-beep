@@ -106,7 +106,8 @@ pub use usersync::{
     USER_KEY_BLOB_MAX, USER_KEY_BLOB_TAG,
 };
 pub use xfer::{
-    chunks_of, Received, RejectWhy, XferError, XferId, XferInbox, XferMsg, MAX_CHUNK, MAX_FILE,
+    chunks_of, MemSink, Received, RejectWhy, SinkFactory, SinkSpec, XferError, XferId, XferInbox,
+    XferMsg, XferSink, MAX_CHUNK, MAX_FILE,
 };
 pub use xfer_policy::{
     check_send_eligibility, judge_offer, ApprovalPolicy, AutoWindow, BasicApproval, DenyReason,

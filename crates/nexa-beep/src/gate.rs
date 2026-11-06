@@ -251,28 +251,34 @@ pub(crate) fn remove_qmeta(beepq: &std::path::Path) {
 }
 
 pub(crate) fn quarantine_received(
-    got: Received,
+    mut got: Received,
     sender: PeerId,
     channel: &str,
     seal_secret: &[u8; 32],
 ) -> Result<Quarantined, GateError> {
     use nbeep_safe::{classify, Beepq, Meta, QuarantineDir};
 
+    // M4-12 ①: 메모리 싱크 경로(스풀 싱크는 다음 단계의 스트리밍 경로가 받는다).
+    let Some(bytes) = got.sink.take_mem() else {
+        return Err(GateError::Store(std::io::Error::other(
+            "spool sink not yet supported here",
+        )));
+    };
     // ① 재검증 — 선언과 실측이 다르면 즉시 폐기(부분·위조물 잔존 금지).
-    let actual = nbeep_crypto::sha256(&got.bytes);
+    let actual = nbeep_crypto::sha256(&bytes);
     if actual != got.declared_sha256 {
         return Err(GateError::HashMismatch);
     }
 
     // ② 판정(확장자·매직 fail-closed).
     let name = String::from_utf8_lossy(&got.name).into_owned();
-    let v = classify(&name, &got.bytes);
+    let v = classify(&name, &bytes);
 
     // ②-b 아카이브 점검(M4-4 · 08-21 — zip 한정): **해제 없이** 중앙 디렉터리만
     // 읽어 Zip Slip·폭탄·링크를 판정. 위반·판정 불가 = 사유를 남겨 표시·마찰
     // (격리 자체는 그대로 — 자동 해제가 애초에 없어 위험은 실체화 이후 문제다).
-    let archive_viol = if v.risk == RiskLevel::Archive && nbeep_safe::looks_like_zip(&got.bytes) {
-        match nbeep_safe::inspect_zip(&got.bytes, &nbeep_safe::ArchivePolicy::default()) {
+    let archive_viol = if v.risk == RiskLevel::Archive && nbeep_safe::looks_like_zip(&bytes) {
+        match nbeep_safe::inspect_zip(&bytes, &nbeep_safe::ArchivePolicy::default()) {
             nbeep_safe::ZipInspect::Ok(_) => None,
             nbeep_safe::ZipInspect::Reject(why) => Some(why),
             nbeep_safe::ZipInspect::Malformed(why) => Some(why.to_string()),
@@ -286,7 +292,7 @@ pub(crate) fn quarantine_received(
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
     let meta = Meta {
-        orig_name: got.name.clone(),
+        orig_name: got.name,
         declared_ext: nbeep_safe::risk::extension_of(&name),
         declared_mime: String::new(),
         detected_kind: v.detected.name().into(),
@@ -297,12 +303,12 @@ pub(crate) fn quarantine_received(
         // 검사(§6 · ADR-0004) — 디스크 기록 전 버퍼 단계. 포트 뒤라(DR-21)
         // 08-21 Windows AMSI 실물이 들어왔지만 이 줄은 안 바뀌었다(이음새 증명).
         // mac/Linux는 Unavailable 고정(정직한 "검사 안 됨").
-        scan: nbeep_plat::scan::scan(&name, &got.bytes),
+        scan: nbeep_plat::scan::scan(&name, &bytes),
         xfer: String::new(),
     };
     // ★ M4-12 0단계(11-06): 수신 버퍼를 소유권째 봉인 → 제자리 AEAD — Done 순간 피크 ≈ 4S → ≈ 1S(여분 버퍼 없음).
-    let size = got.bytes.len() as u64;
-    let sealed = Beepq::seal_owned(got.bytes, actual, &meta);
+    let size = bytes.len() as u64;
+    let sealed = Beepq::seal_owned(bytes, actual, &meta);
     // ★ 디스크 봉인(08-17 — 종전 .beepq는 무결성 봉인뿐 **평문**이었다):
     //   신원 파생 키(D-18 §3 계층)로 AEAD — 이 신원의 이 앱만 연다(같은 PC
     //   다른 계정·다른 신원·백업 유출 전부 fail-closed). 봉인 실패 = 저장 포기

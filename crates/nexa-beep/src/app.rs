@@ -2503,8 +2503,8 @@ fn spawn_session_actor(
         })();
         // 세션 종료 — 수락된 부분 수신물을 봉인 보존한다(M4-10a · D-31).
         // 재개 협상의 원료: 같은 sha+size Offer가 다시 오면 "이어받기"가 된다.
-        for p in inbox.take_partials() {
-            crate::part::save_partial(crate::gate::CH_GUI, &seal_secret, peer, &p);
+        for mut p in inbox.take_partials() {
+            crate::part::save_partial(crate::gate::CH_GUI, &seal_secret, peer, &mut p);
         }
     })
 }
@@ -3592,7 +3592,7 @@ fn xfer_step(
                     }
                     got.declared_sha256 = sha256;
                 }
-                let got_len = got.bytes.len() as u64; // 소유권 이동 전에(M4-12 0단계)
+                let got_len = got.sink.len(); // 소유권 이동 전에(M4-12 0단계)
                 match crate::gate::quarantine_received(got, peer, crate::gate::CH_GUI, seal_secret)
                 {
                     Ok(q) => {
