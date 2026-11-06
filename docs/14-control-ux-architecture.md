@@ -396,6 +396,8 @@ pub trait PlatformConventions {
 
 **시스템 카테고리**(새로 묶음): `ui.language`(★ **`system` 기본** = 부팅마다 OS 표시 언어 · nexa-sys `locale::ui_language` · 명시 선택 우선 · 즉시 반영) · `ui.theme`(system 기본 · 기존 실시간 추종) · 크기 배율 · 자동 실행 · 트레이 2종. **창 기하 기억** `ui.prefs_x/y/w/h`(기본 920×640 · 메인 `ui.win_*`와 같은 규약). **읽기 전용 정보 행** `SettingKind::Info`(호스트 `set_info` — P4 라이선스 상태). 적용 방식은 즉시 적용 유지(D-33-2 · 프로필 M3-18 보류 의미론과 다름).
 
+**창 투명도**(11-06 · DR-32 · nexa-dir3 DR-22·NEW-013·GAP-039 이식 · `21516f7`): `window.transparency`(포커스 있을 때 % · RadioInput 0/5/10/20/30/50 · validate 0~90 · 기본 5) · `window.transparency_blur`(포커스 없을 때 % · 기본 10) · `window.dialog_keeps_active`(창 묶음 판정 Toggle · 기본 on) · `window.blur_grace_ms`(흐림 유예 0/150/300/1000 · validate 0~2000 · 기본 150 · **고급**) · 즉시 반영(모든 창 · 새 창은 `new_window` 깔때기에서) · 헤드리스는 OS 호출 생략. 제외 = dir3 `ui.toast_alpha`(beep은 HUD `hud.bg_alpha`/`hud.fg_alpha`가 같은 몫) · `perf.boost` 강제 0(성능 모드 없음).
+
 ---
 
 ## 11. 대화 창 모델 — 상태-뷰 분리 + 창 모드 옵션 (DR-26 · 08-08 사용자 확정)
