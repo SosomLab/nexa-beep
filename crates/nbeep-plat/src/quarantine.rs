@@ -10,7 +10,7 @@
 //! NTFS 전용 — FAT/exFAT 볼륨(USB 등)에선 쓰기가 실패하고 **오류를 그대로 보고**한다
 //! (macOS xattr 미지원 볼륨과 같은 정책 — 조용히 삼키지 않는다).
 //! Linux(L-2 · 11-06): **`user.xdg.origin.url` 확장 속성**(freedesktop 다운로드 관례) — 값은 앱 식별 URI
-//! [`LINUX_ORIGIN_URL`] 하나(발신자·경로 없음 — 봉투 원리). 1차 방어는 실행 비트 미부여(nbeep-safe 실체화)이고
+//! `LINUX_ORIGIN_URL` 하나(발신자·경로 없음 — 봉투 원리 · cfg(linux) 상수라 링크 아님). 1차 방어는 실행 비트 미부여(nbeep-safe 실체화)이고
 //! 표식은 "지원하면 부기"([docs/11 §5]) — `user.*` xattr을 거부하는 파일시스템(vfat · 6.6 이전 tmpfs 등)은
 //! `ENOTSUP`를 **미지원(false)** 으로 보고한다(그 외 오류는 그대로). 그 밖의 플랫폼은 미지원을 **명시**한다.
 //!
