@@ -48,7 +48,7 @@ impl AlertWidget {
     /// 제목·본문으로 만든다.
     #[must_use]
     pub fn new(title: impl Into<String>, message: impl Into<String>) -> Self {
-        Self {
+        let mut w = Self {
             bounds: Rect::default(),
             scale: 1.0,
             title: title.into(),
@@ -64,7 +64,9 @@ impl AlertWidget {
             rows_clickable: false,
             row_clicked: None,
             badge_shape: true,
-        }
+        };
+        w.apply_focus(); // 확인 하나짜리도 포커스 링(docs/14 §3-4 "항상 보인다" · 11-06)
+        w
     }
 
     /// 상태 점 실루엣 on/off(M3-19 · `ui.link_badge_shape` — 호스트가 주입).
@@ -132,6 +134,17 @@ impl AlertWidget {
             _ => {}
         }
         self.closed = true;
+    }
+
+    /// ★ 위험 동작의 기본 버튼 = **취소**(docs/14 §3-4 · ADR-0004 §7 "Enter 연타로 통과되지 않게" · 11-06): 초기 포커스를
+    /// 부정 버튼에 둔다(2택 이상일 때만). Enter/Space는 포커스된 버튼이므로 Enter = 취소 · 긍정은 Tab/→ 뒤 Enter 또는 클릭.
+    #[must_use]
+    pub fn with_default_no(mut self) -> Self {
+        if self.no.is_some() {
+            self.focus = 1;
+            self.apply_focus();
+        }
+        self
     }
 
     /// 세 번째 버튼(S3 · "나중에") — 결정 없이 닫기(= X로 닫기와 같은 결과 · `take_choice` = None). Esc도 이 뜻이 된다.
@@ -681,5 +694,39 @@ mod tests {
         w2.on_event(&enter, &mut inv);
         assert!(w2.take_closed());
         assert_eq!(w2.take_choice(), Some(true));
+    }
+
+    /// 위험 동작(11-06): 기본 = 취소 — Enter 즉시는 부정 · Tab 뒤 Enter가 긍정.
+    #[test]
+    fn default_no_makes_enter_cancel() {
+        let mut inv = Invalidations::default();
+        let enter = InputEvent::Key {
+            key: Key::Enter,
+            shift: false,
+            primary: false,
+        };
+        let mut w = AlertWidget::new("t", "m")
+            .with_choice("reset", "cancel")
+            .with_default_no();
+        assert!(w.no.as_ref().is_some_and(Button::is_focused), "초기 = 취소");
+        w.on_event(&enter, &mut inv);
+        assert!(w.take_closed());
+        assert_eq!(w.take_choice(), Some(false));
+        let mut w2 = AlertWidget::new("t", "m")
+            .with_choice("reset", "cancel")
+            .with_default_no();
+        w2.on_event(
+            &InputEvent::Key {
+                key: Key::Tab,
+                shift: false,
+                primary: false,
+            },
+            &mut inv,
+        );
+        w2.on_event(&enter, &mut inv);
+        assert_eq!(w2.take_choice(), Some(true), "Tab 뒤 Enter = 긍정");
+        // 확인 하나짜리(no 없음)는 영향 없음.
+        let w3 = AlertWidget::new("t", "m").with_default_no();
+        assert!(w3.ok.is_focused());
     }
 }

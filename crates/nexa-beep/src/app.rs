@@ -1333,6 +1333,22 @@ struct Conversation {
     epoch: u64,
 }
 
+impl AlertCtx {
+    /// 위험 동작인가(docs/14 §3-4 · ADR-0004 §7 — 기본 버튼 = 취소 · 11-06): 되돌리기 어렵거나 보호를 **푸는** 쪽.
+    /// 초대 수락·LAN 첫 접촉·재초대는 평상 동작이라 기본 = 긍정 그대로.
+    fn default_cancel(&self) -> bool {
+        matches!(
+            self,
+            AlertCtx::SettingsReset
+                | AlertCtx::SettingConfirm { .. }
+                | AlertCtx::GroupKick { .. }
+                | AlertCtx::GroupForget { .. }
+                | AlertCtx::BlockUnblock { .. }
+                | AlertCtx::RemoteInbound { .. }
+        )
+    }
+}
+
 /// 진행 중 발신 상태(08-16 · 재개형 펌프) — Accept가 등록하고 액터 루프 틱이
 /// 조금씩 보낸다. 취소(내 명령·상대 Cancel)는 이 상태를 지우는 것으로 끝난다.
 /// 대기 중 수신 제안 한 건 — (전송 id, 파일명, 크기, 전체 sha · M4-10 재개 앵커).
@@ -7771,6 +7787,17 @@ impl App {
                                                // 목록(타입어헤드) = IME **끔** — raw 자모를 앱이 직접 조합(hangul::Composer ·
                                                // OS 조합 세션 경합 제거). 대화 진입 시 켠다(set_main_ime).
         window.set_ime_allowed(false);
+        // Windows GUI 로그오프/종료 훅(M1-8x 잔여 · 11-06) — 주 창 서브클래스가 종료 플래그를 세우면 about_to_wait가 exit →
+        //   exiting()이 기록 flush·Bye·설정 저장. 콘솔 핸들러(shutdown.rs)는 GUI에 안 온다.
+        #[cfg(windows)]
+        {
+            use winit::raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
+            if let Ok(h) = window.window_handle() {
+                if let RawWindowHandle::Win32(h) = h.as_raw() {
+                    let _ = nbeep_plat::endsession::install(h.hwnd.get(), self.shutdown.flag());
+                }
+            }
+        }
         let scale = window.scale_factor() as f32;
         let surface = crate::present::Presenter::new(window.clone()).unwrap();
         let id = window.id();
@@ -19637,6 +19664,7 @@ impl App {
             let aid = *aid;
             self.windows.remove(&aid);
         }
+        let default_cancel = ctx.default_cancel(); // 위험 동작 = 기본 버튼 취소(docs/14 §3-4 · 11-06)
         self.alert_ctx = Some(ctx);
         let attrs = self
             .win_attrs()
@@ -19672,6 +19700,9 @@ impl App {
         }
         if let Some(c) = check {
             av = av.with_checkbox(c);
+        }
+        if default_cancel {
+            av = av.with_default_no();
         }
         self.alert_view = Some(av);
         self.layout_window(id);
