@@ -939,6 +939,155 @@ impl PeerListWidget {
         self.caret = self.caret.min(self.total().saturating_sub(1));
     }
 
+    /// 행 컨텍스트 메뉴(08-11 프로필 · M5-1 그룹 · 11-07 함수화 — 우클릭과 메뉴 키 공용): `idx` 행을 캐럿으로 두고
+    /// 그룹/피어 분기로 항목을 짜서 `(x, y)`에 연다. `avoid` = 키보드 경로(캐럿 행 사각형 — 가리지 않게 + 첫 항목 강조).
+    fn open_row_menu(
+        &mut self,
+        idx: usize,
+        x: i32,
+        y: i32,
+        avoid: Option<Rect>,
+        inv: &mut Invalidations,
+    ) {
+        self.caret = idx;
+        let sel_n = self.selected.len();
+        let items = if let Some(g) = self.groups.get(idx) {
+            // 그룹 행(M5-1g) — 소유자/비소유자 메뉴 분기 · 편입/초대는
+            // 현재 다중 선택을 재료로 쓴다.
+            self.ctx_group = Some(g.id);
+            self.ctx_peer = None;
+            use nbeep_core::{t, tf, Msg};
+            let mut v = Vec::new();
+            v.push(crate::controls::CtxItem::item(
+                "g-fav",
+                if g.fav {
+                    t(Msg::MenuUnpin)
+                } else {
+                    t(Msg::MenuPinTop)
+                },
+            ));
+            if g.owned {
+                v.push(crate::controls::CtxItem::item(
+                    "g-rename",
+                    t(Msg::MenuGroupRename),
+                ));
+                if sel_n > 0 {
+                    v.push(crate::controls::CtxItem::item(
+                        "g-add",
+                        tf(Msg::MenuGroupInvite, &[&sel_n.to_string()]),
+                    ));
+                    v.push(crate::controls::CtxItem::item(
+                        "g-remove",
+                        tf(Msg::MenuGroupRemoveMembers, &[&sel_n.to_string()]),
+                    ));
+                }
+                v.push(crate::controls::CtxItem::item(
+                    "g-policy",
+                    if g.member_invite {
+                        t(Msg::MenuGroupPolicyToOwner)
+                    } else {
+                        t(Msg::MenuGroupPolicyToMembers)
+                    },
+                ));
+                v.push(crate::controls::CtxItem::item(
+                    "g-delete",
+                    t(Msg::MenuGroupDisband),
+                ));
+            } else {
+                // 구성원 — 방 정책이 허용일 때만 초대(요청은 소유자 경유).
+                if g.member_invite && sel_n > 0 {
+                    v.push(crate::controls::CtxItem::item(
+                        "g-add",
+                        tf(Msg::MenuGroupInvite, &[&sel_n.to_string()]),
+                    ));
+                }
+                v.push(crate::controls::CtxItem::item(
+                    "g-delete",
+                    t(Msg::MenuGroupLeave),
+                ));
+            }
+            v
+        } else if let Some((peer, fav)) = self.peer_at(idx).map(|row| (row.entry.peer, row.fav)) {
+            // 탐색기 관례(08-15 사용자 확정): **선택 밖 우클릭 = 기존 선택
+            // 전부 해제**하고, 우클릭만으로는 선택하지 않는다(메뉴 재료는
+            // ctx_peer 폴백). **선택 안 우클릭 = 선택 유지**(그룹 기능의 진입).
+            self.ctx_peer = Some(peer);
+            self.ctx_group = None;
+            if !self.selected.contains(&peer) {
+                self.selected.clear();
+            }
+            use nbeep_core::{t, tf, Msg};
+            let n = self.selected.len().max(1);
+            // 삭제 라벨 — 최근 접속 상대 시각만 뒤에 붙인다("마지막 접속"
+            // 문구 없이 · 08-17 사용자 확정). 기록 없으면 시각 생략.
+            let last = self
+                .rows
+                .iter()
+                .find(|r| r.entry.peer == peer)
+                .map(|r| r.last_seen_label.clone())
+                .unwrap_or_default();
+            let forget_label = if last.is_empty() {
+                t(Msg::MenuForget).to_string()
+            } else {
+                tf(Msg::MenuForgetAt, &[&last])
+            };
+            vec![
+                crate::controls::CtxItem::item("profile", t(Msg::MenuProfile)),
+                crate::controls::CtxItem::item(
+                    "fav",
+                    if fav {
+                        t(Msg::MenuUnpin)
+                    } else {
+                        t(Msg::MenuPinTop)
+                    },
+                ),
+                crate::controls::CtxItem::item(
+                    "g-create",
+                    tf(Msg::MenuCreateGroup, &[&n.to_string()]),
+                ),
+                crate::controls::CtxItem::Separator,
+                // 차단(BL-3 · docs/38 §6) — 기간 서브메뉴 · 신원 축 기본 영구는 목록 맨 끝.
+                crate::controls::CtxItem::submenu(
+                    "block",
+                    t(Msg::MenuBlock),
+                    vec![
+                        crate::controls::CtxItem::item("block-1h", t(Msg::Hours1)),
+                        crate::controls::CtxItem::item("block-24h", t(Msg::Hours24)),
+                        crate::controls::CtxItem::item("block-7d", t(Msg::Days7)),
+                        crate::controls::CtxItem::item("block-forever", t(Msg::DurForever)),
+                    ],
+                ),
+                crate::controls::CtxItem::item("forget", forget_label),
+            ]
+        } else {
+            return;
+        };
+        self.ctx_menu.set_scale(self.scale);
+        // 폭 = 가장 긴 라벨 근사(대화 뷰와 동일 — 고정 120px은 "소유자만
+        // 초대로 전환" 같은 긴 항목이 잘렸다 · 08-14 실기).
+        let widest = items
+            .iter()
+            .map(|it| match it {
+                crate::controls::CtxItem::Item { label, .. } => label
+                    .chars()
+                    .map(|c| if c.is_ascii() { 8 } else { 15 })
+                    .sum::<i32>(),
+                crate::controls::CtxItem::Separator => 0,
+            })
+            .max()
+            .unwrap_or(0);
+        match avoid {
+            // 키보드(메뉴 키): 캐럿 행을 가리지 않게 바로 아래(자리 없으면 위) + 첫 항목 강조(키보드로 열면 바로 고를 수 있게).
+            Some(r) => {
+                self.ctx_menu
+                    .open_beside(x, y, r, items, self.bounds, widest);
+                self.ctx_menu.select(0);
+            }
+            None => self.ctx_menu.open_at(x, y, items, self.bounds, widest),
+        }
+        inv.push(self.bounds);
+    }
+
     fn row_rect(&self, i: usize) -> Rect {
         let rel = i as i64 - self.top as i64;
         Rect::new(
@@ -1112,140 +1261,7 @@ impl Widget for PeerListWidget {
         if let InputEvent::RightDown { x, y } = *ev {
             if let Some(idx) = self.row_at(y) {
                 if self.bounds.contains(crate::geom::Point { x, y }) {
-                    self.caret = idx;
-                    let sel_n = self.selected.len();
-                    let items = if let Some(g) = self.groups.get(idx) {
-                        // 그룹 행(M5-1g) — 소유자/비소유자 메뉴 분기 · 편입/초대는
-                        // 현재 다중 선택을 재료로 쓴다.
-                        self.ctx_group = Some(g.id);
-                        self.ctx_peer = None;
-                        use nbeep_core::{t, tf, Msg};
-                        let mut v = Vec::new();
-                        v.push(crate::controls::CtxItem::item(
-                            "g-fav",
-                            if g.fav {
-                                t(Msg::MenuUnpin)
-                            } else {
-                                t(Msg::MenuPinTop)
-                            },
-                        ));
-                        if g.owned {
-                            v.push(crate::controls::CtxItem::item(
-                                "g-rename",
-                                t(Msg::MenuGroupRename),
-                            ));
-                            if sel_n > 0 {
-                                v.push(crate::controls::CtxItem::item(
-                                    "g-add",
-                                    tf(Msg::MenuGroupInvite, &[&sel_n.to_string()]),
-                                ));
-                                v.push(crate::controls::CtxItem::item(
-                                    "g-remove",
-                                    tf(Msg::MenuGroupRemoveMembers, &[&sel_n.to_string()]),
-                                ));
-                            }
-                            v.push(crate::controls::CtxItem::item(
-                                "g-policy",
-                                if g.member_invite {
-                                    t(Msg::MenuGroupPolicyToOwner)
-                                } else {
-                                    t(Msg::MenuGroupPolicyToMembers)
-                                },
-                            ));
-                            v.push(crate::controls::CtxItem::item(
-                                "g-delete",
-                                t(Msg::MenuGroupDisband),
-                            ));
-                        } else {
-                            // 구성원 — 방 정책이 허용일 때만 초대(요청은 소유자 경유).
-                            if g.member_invite && sel_n > 0 {
-                                v.push(crate::controls::CtxItem::item(
-                                    "g-add",
-                                    tf(Msg::MenuGroupInvite, &[&sel_n.to_string()]),
-                                ));
-                            }
-                            v.push(crate::controls::CtxItem::item(
-                                "g-delete",
-                                t(Msg::MenuGroupLeave),
-                            ));
-                        }
-                        v
-                    } else if let Some((peer, fav)) =
-                        self.peer_at(idx).map(|row| (row.entry.peer, row.fav))
-                    {
-                        // 탐색기 관례(08-15 사용자 확정): **선택 밖 우클릭 = 기존 선택
-                        // 전부 해제**하고, 우클릭만으로는 선택하지 않는다(메뉴 재료는
-                        // ctx_peer 폴백). **선택 안 우클릭 = 선택 유지**(그룹 기능의 진입).
-                        self.ctx_peer = Some(peer);
-                        self.ctx_group = None;
-                        if !self.selected.contains(&peer) {
-                            self.selected.clear();
-                        }
-                        use nbeep_core::{t, tf, Msg};
-                        let n = self.selected.len().max(1);
-                        // 삭제 라벨 — 최근 접속 상대 시각만 뒤에 붙인다("마지막 접속"
-                        // 문구 없이 · 08-17 사용자 확정). 기록 없으면 시각 생략.
-                        let last = self
-                            .rows
-                            .iter()
-                            .find(|r| r.entry.peer == peer)
-                            .map(|r| r.last_seen_label.clone())
-                            .unwrap_or_default();
-                        let forget_label = if last.is_empty() {
-                            t(Msg::MenuForget).to_string()
-                        } else {
-                            tf(Msg::MenuForgetAt, &[&last])
-                        };
-                        vec![
-                            crate::controls::CtxItem::item("profile", t(Msg::MenuProfile)),
-                            crate::controls::CtxItem::item(
-                                "fav",
-                                if fav {
-                                    t(Msg::MenuUnpin)
-                                } else {
-                                    t(Msg::MenuPinTop)
-                                },
-                            ),
-                            crate::controls::CtxItem::item(
-                                "g-create",
-                                tf(Msg::MenuCreateGroup, &[&n.to_string()]),
-                            ),
-                            crate::controls::CtxItem::Separator,
-                            // 차단(BL-3 · docs/38 §6) — 기간 서브메뉴 · 신원 축 기본 영구는 목록 맨 끝.
-                            crate::controls::CtxItem::submenu(
-                                "block",
-                                t(Msg::MenuBlock),
-                                vec![
-                                    crate::controls::CtxItem::item("block-1h", t(Msg::Hours1)),
-                                    crate::controls::CtxItem::item("block-24h", t(Msg::Hours24)),
-                                    crate::controls::CtxItem::item("block-7d", t(Msg::Days7)),
-                                    crate::controls::CtxItem::item(
-                                        "block-forever",
-                                        t(Msg::DurForever),
-                                    ),
-                                ],
-                            ),
-                            crate::controls::CtxItem::item("forget", forget_label),
-                        ]
-                    } else {
-                        return;
-                    };
-                    self.ctx_menu.set_scale(self.scale);
-                    // 폭 = 가장 긴 라벨 근사(대화 뷰와 동일 — 고정 120px은 "소유자만
-                    // 초대로 전환" 같은 긴 항목이 잘렸다 · 08-14 실기).
-                    let widest = items
-                        .iter()
-                        .map(|it| match it {
-                            crate::controls::CtxItem::Item { label, .. } => label
-                                .chars()
-                                .map(|c| if c.is_ascii() { 8 } else { 15 })
-                                .sum::<i32>(),
-                            crate::controls::CtxItem::Separator => 0,
-                        })
-                        .max()
-                        .unwrap_or(0);
-                    self.ctx_menu.open_at(x, y, items, self.bounds, widest);
-                    inv.push(self.bounds);
+                    self.open_row_menu(idx, x, y, None, inv);
                     return;
                 }
             }
@@ -1278,6 +1294,19 @@ impl Widget for PeerListWidget {
                     return;
                 }
                 match key {
+                    // ★ 메뉴 키(M3-4 ③ · 11-07): 캐럿 행의 컨텍스트 메뉴 — 우클릭과 같은 항목(그룹/피어 분기 · 다중 선택 재료).
+                    Key::ContextMenu => {
+                        if self.caret < self.total() {
+                            let r = self.row_rect(self.caret);
+                            self.open_row_menu(
+                                self.caret,
+                                r.x + r.h / 2,
+                                r.y + r.h / 2,
+                                Some(r),
+                                inv,
+                            );
+                        }
+                    }
                     // 타입어헤드 활성이면 ↑/↓ = 현재 접두사 매치 순환(역방향 포함 · 언어 중립).
                     // 순환 중엔 타임아웃 기준 시각을 리셋한다(이동 중 초기화 방지 — 사용자 확정).
                     Key::Down => {
@@ -2443,6 +2472,24 @@ mod tests {
         // 선택 밖(행 3) 우클릭 = 전부 해제 + 그 행도 **선택되지 않는다**.
         w.on_event(&rd(3, &w), &mut inv);
         assert!(w.selected_peers().is_empty(), "선택 밖 = 전부 해제·미선택");
+    }
+
+    /// 메뉴 키(M3-4 ③ · 11-07): 캐럿 행의 컨텍스트 메뉴가 열리고(우클릭과 같은 항목 · 선택 밖이면 해제 규칙 동일)
+    /// 첫 항목이 강조된다. 빈 목록이면 열리지 않는다.
+    #[test]
+    fn context_menu_key_opens_menu_for_caret_row() {
+        let (mut w, mut inv) = widget(&[(1, "a"), (2, "b"), (3, "c")]);
+        w.click_at(0, false, true, &mut inv); // 선택 = {1}
+        w.on_event(&key(Key::Down), &mut inv); // 캐럿 1(선택 밖)
+        assert!(!w.ctx_menu.is_open());
+        w.on_event(&key(Key::ContextMenu), &mut inv);
+        assert!(w.ctx_menu.is_open(), "메뉴 키 = 캐럿 행 메뉴");
+        assert_eq!(w.ctx_peer, Some(pid(2)), "대상 = 캐럿 행");
+        assert!(w.selected_peers().is_empty(), "선택 밖 행의 메뉴 = 전부 해제(우클릭 규칙 동일)");
+        w.ctx_menu.close();
+        let (mut e, mut inv) = widget(&[]);
+        e.on_event(&key(Key::ContextMenu), &mut inv);
+        assert!(!e.ctx_menu.is_open(), "빈 목록 = 열지 않는다");
     }
 
     /// 키보드 문법(탐색기 · 08-15): 무수식 이동=단일 · ⇧이동=범위 교체(축소 포함) ·

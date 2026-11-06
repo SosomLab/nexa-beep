@@ -1435,6 +1435,24 @@ impl ChatViewWidget {
 
     /// 우클릭 위치에 맞는 컨텍스트 메뉴를 연다.
     ///
+    /// 키보드 메뉴의 기준점(M3-4 ③ · 11-07): 선택 풍선(`bsel`)이 화면 안(paint 캐시 `hit_rects`에 있음)이면 그 풍선 안쪽
+    /// 왼쪽 위, 아니면(선택 없음 · 스크롤로 화면 밖) 입력란 안쪽 왼쪽 위.
+    fn ctx_anchor(&self) -> Point {
+        if let Some((e, _, _)) = self.bsel {
+            if let Some(&(r, _)) = self.hit_rects.borrow().iter().find(|(_, i)| *i == e) {
+                return Point {
+                    x: r.x + 8,
+                    y: r.y + 8,
+                };
+            }
+        }
+        let b = self.input_bar();
+        Point {
+            x: b.x + 8,
+            y: b.y + 8,
+        }
+    }
+
     /// 위치로 대상이 갈린다 — **입력란**이면 편집 3종, **말풍선**이면 메시지 복사.
     /// 둘 다 아니면 열지 않는다(빈 곳 우클릭에 메뉴가 뜨면 무엇에 대한 메뉴인지 모른다).
     fn open_ctx_menu(&mut self, x: i32, y: i32, inv: &mut Invalidations) {
@@ -2241,6 +2259,15 @@ impl Widget for ChatViewWidget {
                         inv.push(self.bounds);
                     }
                 }
+            }
+            // ★ 메뉴 키(M3-4 ③ · 11-07): 선택 중인 말풍선(화면 안)이면 그 풍선의 메뉴, 아니면 입력란의 편집 메뉴 —
+            //   좌표 히트 경로(`open_ctx_menu`)를 그대로 타서 항목·게이트가 우클릭과 같다.
+            InputEvent::Key {
+                key: Key::ContextMenu,
+                ..
+            } => {
+                let p = self.ctx_anchor();
+                self.open_ctx_menu(p.x, p.y, inv);
             }
             InputEvent::Key {
                 key: Key::Escape, ..

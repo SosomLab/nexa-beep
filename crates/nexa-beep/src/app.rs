@@ -5126,6 +5126,52 @@ impl App {
     }
 
     /// 이 창에 현재 열린 대화 상대(있으면) — IME 프리에딧 라우팅용.
+    /// 컨텍스트 메뉴를 열기 직전 **클립보드 유무**를 대상 위젯에 주입(08-10 — "붙여넣기" 활성 근거는 호스트만 안다 ·
+    /// 여는 순간 1회). 우클릭과 메뉴 키(M3-4 ③ · 11-07)가 공용.
+    fn inject_clip_caps(&mut self, id: WindowId) {
+        let has_clip = nbeep_plat::clipboard::get_text()
+            .is_some_and(|t| !t.trim_matches(char::from(0)).is_empty());
+        if let Some(peer) = self.chat_peer_for(id) {
+            if let Some(c) = self.chats.get_mut(&peer) {
+                c.set_clipboard_has_text(has_clip);
+            }
+        } else if let Some(gid) = self.group_chat_for(id) {
+            if let Some(c) = self.gchats.get_mut(&gid) {
+                c.set_clipboard_has_text(has_clip);
+            }
+        } else {
+            // 텍스트 필드 창(08-13 전수 검사) — 붙여넣기 항목 활성 근거.
+            match self.windows.get(&id).map(|e| e.role) {
+                Some(Role::Profile) => {
+                    if let Some(v) = self.profile_view.as_mut() {
+                        v.set_clipboard_has_text(has_clip);
+                    }
+                }
+                Some(Role::NamePrompt) => {
+                    if let Some(v) = self.name_prompt.as_mut() {
+                        v.set_clipboard_has_text(has_clip);
+                    }
+                }
+                Some(Role::Convbox) => {
+                    if let Some(v) = self.convbox_view.as_mut() {
+                        v.set_clipboard_has_text(has_clip);
+                    }
+                }
+                Some(Role::AddEndpoint) => {
+                    if let Some(v) = self.addr_view.as_mut() {
+                        v.set_clipboard_has_text(has_clip);
+                    }
+                }
+                Some(Role::Settings) => {
+                    if let Some(v) = self.settings_view.as_mut() {
+                        v.set_clipboard_has_text(has_clip);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     fn chat_peer_for(&self, id: WindowId) -> Option<PeerId> {
         match self.windows.get(&id).map(|e| e.role) {
             Some(Role::Chat(peer)) => Some(peer),
@@ -26039,47 +26085,7 @@ impl ApplicationHandler<AppEvent> for App {
                 // 한 번만 확인해 알려준다(매 프레임 클립보드를 긁으면 낭비다).
                 if let Some(e) = self.windows.get(&id) {
                     let (x, y) = e.cursor;
-                    let has_clip = nbeep_plat::clipboard::get_text()
-                        .is_some_and(|t| !t.trim_matches(char::from(0)).is_empty());
-                    if let Some(peer) = self.chat_peer_for(id) {
-                        if let Some(c) = self.chats.get_mut(&peer) {
-                            c.set_clipboard_has_text(has_clip);
-                        }
-                    } else if let Some(gid) = self.group_chat_for(id) {
-                        if let Some(c) = self.gchats.get_mut(&gid) {
-                            c.set_clipboard_has_text(has_clip);
-                        }
-                    } else {
-                        // 텍스트 필드 창(08-13 전수 검사) — 붙여넣기 항목 활성 근거.
-                        match self.windows.get(&id).map(|e| e.role) {
-                            Some(Role::Profile) => {
-                                if let Some(v) = self.profile_view.as_mut() {
-                                    v.set_clipboard_has_text(has_clip);
-                                }
-                            }
-                            Some(Role::NamePrompt) => {
-                                if let Some(v) = self.name_prompt.as_mut() {
-                                    v.set_clipboard_has_text(has_clip);
-                                }
-                            }
-                            Some(Role::Convbox) => {
-                                if let Some(v) = self.convbox_view.as_mut() {
-                                    v.set_clipboard_has_text(has_clip);
-                                }
-                            }
-                            Some(Role::AddEndpoint) => {
-                                if let Some(v) = self.addr_view.as_mut() {
-                                    v.set_clipboard_has_text(has_clip);
-                                }
-                            }
-                            Some(Role::Settings) => {
-                                if let Some(v) = self.settings_view.as_mut() {
-                                    v.set_clipboard_has_text(has_clip);
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
+                    self.inject_clip_caps(id); // 마우스·메뉴 키 공용(M3-4 ③)
                     self.route(id, InputEvent::RightDown { x, y }, el);
                 }
             }
@@ -26364,9 +26370,16 @@ impl ApplicationHandler<AppEvent> for App {
                     WKey::Named(NamedKey::Enter) => Some(Key::Enter),
                     WKey::Named(NamedKey::Escape) => Some(Key::Escape),
                     WKey::Named(NamedKey::Tab) => Some(Key::Tab), // 포커스 순회(M3-4 · 11-06 · Shift = shift_down)
+                    // ★ 메뉴 키(M3-4 ③ · 11-07 · docs/14 §6 "Windows/Linux = 우클릭 + 메뉴 키"): VK_APPS 또는 Shift+F10.
+                    //   F10 단독은 메뉴바 진입 몫이라 Shift가 있을 때만. 위젯이 포커스 대상의 사각형으로 자리를 정한다.
+                    WKey::Named(NamedKey::ContextMenu) => Some(Key::ContextMenu),
+                    WKey::Named(NamedKey::F10) if self.shift_down => Some(Key::ContextMenu),
                     _ => None,
                 };
                 if let Some(key) = key {
+                    if matches!(key, Key::ContextMenu) {
+                        self.inject_clip_caps(id); // 우클릭과 같은 "붙여넣기" 활성 근거
+                    }
                     // 조합을 끝낸 **Esc**의 키다운 잔향(Windows IME · WIME-6 실기): 조합
                     // 취소 직후(<120ms) 도착한 Esc를 화면 닫기로 보내지 않는다(1회성).
                     // ★ Enter는 **일부러 통과** — Commit(조합 확정)이 먼저 버퍼에 들어간 뒤
