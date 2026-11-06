@@ -376,6 +376,7 @@ pub trait PlatformConventions {
 - 구현은 **M3-1 위젯 세트 위**에 얹는다(자체 렌더링 DR-6) — 트리는 오너드로 목록 위젯, 검색은 [12 §B]의 `ctl` 계약(내장 ✕ 지우기)을 계승한 검색 위젯.
 - `Entry` 레지스트리는 `core`가 아니라 **`ui` 계층 소유**다(설정 스키마는 표시 관심사) — 단 값 저장은 `Repository` 포트 경유(포터블 경로 규칙 FR-P-3).
 - 설정 변경도 **`ActionKind` 단일 통로**를 지난다([13 §3]) — `SettingChanged`로 계측·감사. **ADR-0008 프로필 노출 켜기/끄기·ADR-0009 공유 기본 scope 변경이 정확히 이 화면에 산다** — 노출·범위처럼 보안에 닿는 항목은 Kind에 **확인 다이얼로그 훅**을 추가한다(끄면 철회 절차·소급 규칙 — 두 ADR 참조)
+- ✅ **확인 훅 구현 11-06 `180dc40`** — `nbeep_ui::settings::CONFIRM` 8행(`profile.share.{basic,email,phone}` on · `notify.preview` on · `xfer.approval` auto/timed · `xfer.remote_files_{server,internet}` on) · **노출·완화 방향만** 모달 긍정 뒤 적용(부정 = 이전 값 역반영 · 끄기 = 즉시) · 공유 scope(ADR-0009)는 키가 생기면 추가 · `SettingChanged` 계측은 미배선.
 - i18n: 라벨키/설명키(`라벨키.desc` 규약) — 다국어(FR-U-3)와 검색이 **번역된 라벨 기준**으로 동작한다(prefs.rs 동일).
 
 ### 10-3. ★ 10-09 개정 — nexa-sql 설정 창 구조 이식([50](50-settings-overhaul-nexa-ui-plan.md) P2 · D-33)

@@ -7,6 +7,9 @@
 
 ## 2026-11-06
 
+- ★**(Win · main) M3-11 보안 설정 확인 훅 ✅** `180dc40` — `settings::CONFIRM` 8행(노출·완화 방향만 모달 · 취소 = 이전 값 역반영) · 헤드리스 `confirm.yes/no` · 잔여 = 실기(사용자) → [journal](journal/2026-11-06.md)
+- ★**(Win · main) M1-8x 종료 경로 잔여 ✅** `93c9c01` — Win `SetConsoleCtrlHandler` · R-16 zeroize(비밀 키 Drop + 복호 평문 즉시 지움) · 잔여 = Win 콘솔 Ctrl+C 실기(사용자) → [journal](journal/2026-11-06.md)
+- ★**(Win · main) M3-8 알림 강도 ✅** `c177edc` — `decide_alert` 신뢰×등급 강등표·원격·팬아웃·속도 · 소리 포트 3-OS · 24h Urgent 횟수 · 그룹 미리보기 무해화 누락 수정 · verify --quick 6/6 · 잔여 = 3-OS 실기(사용자) → [journal](journal/2026-11-06.md)
 - ★**(Win · main) M2-4b 잔여 ✅** `6b4c1c7` — N-3 기록 tag 8(전달·읽음 시각 영속) · N-4 `ActionKind` 알림·확인 5종 `0x0601~0x0605` · `Bye{reason}` 태그 23(수신 측 재연결 억제) · verify --quick 6/6 · 잔여 = 실기 육안(사용자) → [journal](journal/2026-11-06.md)
 - **(Win · main) 잔여 업무 재확인** — 6324d91 이후 변경 0 · 대조 차이 7건 판정(M5-1 G4·M5-3b/3c 후보 제외 → 사용자 손 실기 · ⓑ 주입 시나리오 = 협업 몫 · HL-1 = L-1 묶음 · 권한 적용 1회) · STATUS **개발 착수 순서** 단락(1단 M2-4b N-3/N-4 → MEM-1 ③~⑤+MEM-6 · 착수 = 사용자 "진행" 때만) → [journal](journal/2026-11-06.md)
 - **(Win · main) 잔여 개발 검토 · TODO 정리** — 미완 행 전수 요약(4그룹) · 불일치 정리(M4-3b·W-12·R-4·M5-3·BL·M4-5·X-UDP-e·M1-4 ✅ · M1-3 잔여 축소 · ADR 0005·0006 Accepted · 개요표 · M5-4b→PUB-1 · M4-2d 흡수) · STATUS 9~12행 → [journal](journal/2026-11-06.md)

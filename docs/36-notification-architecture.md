@@ -112,13 +112,13 @@
 
 | 항목 | 상태 |
 |---|---|
-| 등급 3종(Normal/Notice/Urgent)·강등표·`Urgent` 24h 카운트 | 🔴 **D-23 확정 → M2-4b**(와이어 자리와 한 몸 — 앞지르면 포맷 변경) |
+| 등급 3종(Normal/Notice/Urgent)·강등표·`Urgent` 24h 카운트 | ✅ **구현 11-06 `c177edc`** — 와이어 자리 N-1(08-17) 위에 `nbeep_core::alerting::decide_alert`(신뢰×등급 · 원격 · 팬아웃 · 속도 강등 · 강등 표시) · Urgent 제목에 24h 횟수 |
 | 수신자 릴레이(Webhook 등 외부 팬아웃) | D-23 ⓑ + SP-2(M3-10) |
 | mac 정식(UN) 경로의 권한 | ✅ **Cask 실증 완료(08-15 사용자 확인)** — 무서명이어도 정식 설치면 정상. ⚠ 번들을 임시 경로에서 직접 실행하면 권한이 프롬프트 없이 보류된다(개발 시 함정 — `open`+정식 위치로) |
 | mac 비번들 폴백의 소속 표기 | Notification Center에 "Script Editor"로 뜬다(osascript 소유 — 폴백 한계) |
 | Linux 실기 · 클릭 액션(`-A`) | 데스크톱 환경 잔여 |
 | Windows 풍선·클릭 실기 | Windows PC 잔여(WNOTI — 26 §7 결) |
-| 소리 포트 정식 3어댑터(winmm/NSSound/D-Bus) | DR-25 명세 잔여 — 지금은 OS 알림 채널의 기본 소리만 |
+| 소리 포트 정식 3어댑터(winmm/NSSound/D-Bus) | ✅ **구현 11-06 `c177edc`** — `nbeep_plat::sound`(Win `MessageBeep` · mac AudioToolbox `AudioServicesPlaySystemSound` · Linux = 인박스 오디오 없음 → 알림 데몬 `urgency=critical`·`sound-name` 힌트 · 데몬 부재 = 상태바 1회 고지) · 신규 의존 0 · 실기 = 사용자 손 |
 | 잠금 화면 정책 | OS 위임(내용 비노출 기본이 방어) — 자체 제어는 등급과 함께 |
 
 ## 7. 실측 기록 (2026-08-15 · macOS)
