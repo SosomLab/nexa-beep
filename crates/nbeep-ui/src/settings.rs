@@ -2857,8 +2857,33 @@ impl SettingsWidget {
         self.btn_import.set_focused(next == base + 3);
         self.btn_json.set_focused(next == base + 4);
         self.btn_close.set_focused(next == base + 5);
+        // 포커스가 간 행이 화면 밖이면 보이게(M3-4 소분 · 11-06).
+        if next >= 1 && next <= focusable_rows.len() {
+            self.ensure_row_visible(focusable_rows[next - 1], inv);
+        }
         inv.push(self.bounds);
         next
+    }
+
+    /// 행 하나를 우측 패널 안으로 스크롤(위면 위에 맞춤 · 아래면 아래에 맞춤 · 여백 8). `rect`는 레이아웃 뒤 화면 좌표라
+    /// 스크롤 차이를 더하고 `layout`으로 재배치한다.
+    fn ensure_row_visible(&mut self, ri: usize, inv: &mut Invalidations) {
+        let Some(r) = self.rows.get(ri).map(|r| r.rect) else {
+            return;
+        };
+        let vp = self.right_viewport();
+        let pad = self.s(8);
+        let delta = if r.y < vp.y + pad {
+            r.y - (vp.y + pad)
+        } else if r.bottom() > vp.bottom() - pad {
+            r.bottom() - (vp.bottom() - pad)
+        } else {
+            0
+        };
+        if delta != 0 {
+            self.scroll = (self.scroll + delta).max(0);
+            self.layout(inv); // layout이 상한을 클램프한다
+        }
     }
 
     pub fn clipboard_copy(&self) -> Option<String> {
@@ -5918,5 +5943,46 @@ mod tests {
         assert!(w.btn_close.is_focused(), "검색에서 역순 = 끝(닫기)");
         w.on_event(&tab, &mut inv);
         assert!(w.search.is_focused(), "닫기 다음 = 검색(순환)");
+    }
+
+    /// M3-4 소분(11-06): Tab으로 화면 밖 행에 포커스가 가면 패널이 따라 스크롤된다(표시 범주 · 창 높이 300).
+    #[test]
+    fn tab_scrolls_focused_row_into_view() {
+        let (mut w, mut inv) = widget();
+        select_cat(&mut w, Msg::CatAppearance);
+        w.set_bounds(Rect::new(0, 0, 560, 300), &mut inv);
+        w.layout(&mut inv);
+        let tab = InputEvent::Key {
+            key: Key::Tab,
+            shift: false,
+            primary: false,
+        };
+        let mut scrolled = false;
+        for _ in 0..40 {
+            w.on_event(&tab, &mut inv);
+            let vp = w.right_viewport();
+            for r in &w.rows {
+                let focused = match &r.ctl {
+                    RowCtl::Combo(c) => c.is_focused(),
+                    RowCtl::Check(c) => c.is_focused(),
+                    RowCtl::Act(b) => b.is_focused(),
+                    RowCtl::Font { family, size } => family.is_focused() || size.is_focused(),
+                    RowCtl::Pos(g) => g.is_focused(),
+                    RowCtl::Face(f) => f.is_focused(),
+                    RowCtl::Color(c) => c.is_focused() || c.hex_focused(),
+                    RowCtl::Info(_) => false,
+                };
+                if focused {
+                    assert!(
+                        r.rect.y >= vp.y && r.rect.bottom() <= vp.bottom(),
+                        "포커스 행이 패널 밖: row {:?} vp {:?}",
+                        r.rect,
+                        vp
+                    );
+                }
+            }
+            scrolled |= w.scroll > 0;
+        }
+        assert!(scrolled, "행이 넘쳐 스크롤이 일어났어야 한다(창 높이 300)");
     }
 }
