@@ -171,9 +171,9 @@ pub fn mask_all() -> u64 {
     parse_layers("*")
 }
 
-/// 설정 `log.dev_layers` → 마스크. 문법: `layer[:level+level]`을 쉼표로 · 수준 생략 = decide+detail+trace ·
-/// `*`/`all` = 전 층 전 수준 · `1`/`on`/`true` = 전부 · 빈 문자열·미지 층 = 0.
-/// 예 `conn,xfer:decide,user:decide+detail`.
+/// 설정 `log.dev_layers` → 마스크. 문법: `layer[:level+level]`을 쉼표로 · **수준 생략 = decide+detail**(trace는 호출
+/// 단위라 많다 — 명시 `layer:trace`로만 · 11-07 실측 user 층 1,348/1,379줄이 hint trace) · `*`/`all` = 전 층 전 수준 ·
+/// `1`/`on`/`true` = 전부 · 빈 문자열·미지 층 = 0. 예 `conn,xfer:decide,user:decide+detail+trace`.
 #[must_use]
 pub fn parse_layers(spec: &str) -> u64 {
     let spec = spec.trim();
@@ -196,7 +196,8 @@ pub fn parse_layers(spec: &str) -> u64 {
         };
         let levels: Vec<Level> = match levels_s {
             Some(ls) => ls.split('+').filter_map(Level::parse).collect(),
-            None => Level::DETAIL.to_vec(),
+            None if layer_s.trim() == "*" => Level::DETAIL.to_vec(), // 전 층 전 수준
+            None => vec![Level::Decide, Level::Detail], // trace는 명시해야 켜진다(11-07)
         };
         for l in &layers {
             for v in &levels {
@@ -384,9 +385,14 @@ mod tests {
         let m = parse_layers("conn,xfer:decide,user:decide+trace");
         assert!(m & bit(Layer::Conn, Level::Decide) != 0);
         assert!(
-            m & bit(Layer::Conn, Level::Trace) != 0,
-            "수준 생략 = 세 수준"
+            m & bit(Layer::Conn, Level::Detail) != 0,
+            "수준 생략 = decide+detail"
         );
+        assert!(
+            m & bit(Layer::Conn, Level::Trace) == 0,
+            "trace는 명시해야 켜진다(11-07 — 호출 단위라 많다)"
+        );
+        assert!(parse_layers("conn:trace") & bit(Layer::Conn, Level::Trace) != 0);
         assert!(m & bit(Layer::Xfer, Level::Decide) != 0);
         assert!(m & bit(Layer::Xfer, Level::Detail) == 0);
         assert!(m & bit(Layer::User, Level::Trace) != 0);
