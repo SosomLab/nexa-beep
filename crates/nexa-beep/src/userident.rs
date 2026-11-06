@@ -476,6 +476,16 @@ pub(crate) fn sibling_candidate(live: bool, hint_fresh: bool, known_device: bool
     live || hint_fresh || known_device
 }
 
+/// ★ 증명 **발신 대상** 판정(순수 · X-13 "수동 IP 형제 증명 허용" · 사용자 결정 11-06): 형제 후보 ∨ **내가 수동
+/// 등록한 상대**(IP·DDNS·지문 — `manual_addrs`). Unmanaged + 수동 주소 세션엔 힌트(LAN 태그)도 서버(페어 RID)도
+/// 없어 처음 만나는 형제를 영영 판정하지 못했다. 노출 등급은 LAN 태그와 같다(세션 안 · KP 파생 32B · 상대가
+/// 형제가 아니면 대조 실패로 버려질 뿐) · 수동 등록은 **내 의사**라 "후보 아닌 상대에게 더 주지 않는다" 규칙의
+/// 예외로 둔다. 인바운드(상대가 나를 수동 등록)는 상대 쪽 규칙이 처리한다(회신은 `force`).
+#[must_use]
+pub(crate) fn proof_target(sibling_candidate: bool, manual_registered: bool) -> bool {
+    sibling_candidate || manual_registered
+}
+
 /// 세션 내 증명 송신 게이트(순수) — 세션당 1회가 원칙이되, **상대 증명을 대조한 뒤의 회신**은
 /// 이미 보냈어도 **한 번 더**(`force` · `replied`로 1회 상한). 종전엔 회신이 no-op이라 "내가
 /// 먼저 보낸 증명을 상대가 아직 미인증이라 버린" 세션은 한쪽만 형제로 남았다(비대칭).
@@ -679,6 +689,13 @@ mod tests {
         );
         assert!(sibling_candidate(false, true, false));
         assert!(sibling_candidate(true, false, false));
+        // 증명 발신 대상 = 후보 ∨ 내가 수동 등록한 상대(X-13 · 11-07).
+        assert!(!proof_target(false, false));
+        assert!(
+            proof_target(false, true),
+            "수동 등록 상대는 후보가 아니어도 증명을 보낸다"
+        );
+        assert!(proof_target(true, false));
         // 증명 송신 = 1회 + 회신 1회.
         assert!(proof_send_allowed(false, false, false));
         assert!(!proof_send_allowed(true, false, false), "세션당 1회");

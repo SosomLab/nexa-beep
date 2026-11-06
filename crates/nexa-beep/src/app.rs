@@ -9540,10 +9540,12 @@ impl App {
         }
     }
 
-    /// 세션 내 형제 증명 송신(세션당 1회) — `force`가 아니면 힌트 후보에게만(증명값은
-    /// 태그와 같은 노출 등급 — 후보 아닌 상대에게 내 KP 파생물을 더 주지 않는다).
+    /// 세션 내 형제 증명 송신(세션당 1회) — `force`가 아니면 힌트 후보 **또는 내가 수동 등록한 상대**에게만(증명값은
+    /// 태그와 같은 노출 등급 — 후보 아닌 상대에게 내 KP 파생물을 더 주지 않는다 · 수동 등록은 내 의사라 예외 —
+    /// X-13 · 11-07 · `userident::proof_target`).
     fn send_user_proof(&mut self, peer: PeerId, force: bool) {
-        if !force && !self.is_sibling_candidate(peer) {
+        let manual = self.manual_addrs.contains_key(&peer);
+        if !force && !crate::userident::proof_target(self.is_sibling_candidate(peer), manual) {
             return;
         }
         let Some(psk) = self.user_rt.material.as_ref().map(|m| m.psk()) else {
@@ -9570,7 +9572,10 @@ impl App {
             nbeep_core::UserProof { proof }.encode()
         ]));
         self.utrace("proof_sent_to", None, || {
-            format!("proof sent to {} force={force}", peer.short())
+            format!(
+                "proof sent to {} force={force} manual={manual}",
+                peer.short()
+            )
         });
     }
 
