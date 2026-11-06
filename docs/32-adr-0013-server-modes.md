@@ -1238,6 +1238,8 @@ Content·Registered는 MVP 밖(각각 오프라인 저장·명부/인증이 큰 
 단 양쪽 다 켜야 보여서 "자동"이 실질 무효가 된다. X-2d(핀 상대 프레즌스 조회)는
 roster가 Announce 사용자를 덮으므로 **비공개 상대 한정 보완**으로 축소.
 
+> **X-2f(11-06 `31e7e10`)** — 명부 소비 = 전송(`RelayTransport` → `Transport::discovery`의 `Appeared(origin Rendezvous)`/`Withdrawn`) · App은 PeerTable **출처**로만 본다(`server_peers`·`roster_*` 제거) · 서버 와이어 무변경([09 §9](09-adr-0003-transport-abstraction.md#9-개정--x-2f-발견-스트림-합류-2026-11-06)).
+
 ---
 
 ## 13. CLI(터미널 단말)의 Managed 접속 설계 (08-20 · ★P0~P2 구현 08-22)

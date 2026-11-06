@@ -1,7 +1,7 @@
 # 09 · ADR-0003 — 전송 계층 추상화 (로컬 직접 / 릴레이 2모드 경계)
 
 > **상태: ✅ Accepted** · 제안·확정 2026-08-08 (사용자 "다음 진행" 지시로 확정) · 결정자 Sangyong Bae
-> **개정 X-2f(2026-11-06) · Accepted · 구현 진행** — 발견 스트림 합류(`PeerHint` 출처·수명·공개 카드 · 다중 출처 합류 규칙 · PeerTable 수명 모델) → [§9](#9-개정--x-2f-발견-스트림-합류-2026-11-06)
+> **개정 X-2f(2026-11-06) · Accepted · 구현 완료 `31e7e10`** — 발견 스트림 합류(`PeerHint` 출처·수명·공개 카드 · 다중 출처 합류 규칙 · PeerTable 수명 모델) → [§9](#9-개정--x-2f-발견-스트림-합류-2026-11-06)
 > M1-1 구현 반영: `PeerHint`는 `Locator`를 담지 않는다(경로는 전송 내부에만 — 규칙 1을 타입으로 강제). 발견은 `Receiver<DiscoveryEvent>` 스트림.
 > [DR-8](10-decision-record.md)의 "2모드 전제 설계"를 **구체적인 경계선**으로 옮긴 문서.
 > 관련: [08 ADR-0002](08-adr-0002-discovery-transport.md)(프로토콜) · [06](06-network-stack.md)(L1~L4) · [05](05-requirements.md) FR-R-1
@@ -123,7 +123,7 @@ v1에서는 후보가 하나뿐이라 이 로직이 실질적으로 작동하지
 | **`InMemoryTransport`** | ✅ | **테스트용 — v1에서 실제로 쓴다** |
 | `RelayTransport` | ✅ 11-06 | `8237f8e` — `RelayTransport` + `LadderTransport`(로컬 > 수동 > 릴레이) · ~~v2 · [`nexa-beepd`](10-decision-record.md)와 함께~~ · 실 NAT·서버 + 2-PC 실측 = 사용자 실기 |
 | 경로 우선순위·자동 폴백 | 뼈대만 | 후보가 하나라 실질 동작 없음 |
-| 발견 합류(X-2f · 랑데부 명부 → `Transport::discovery`) | 🚧 11-06 | [§9](#9-개정--x-2f-발견-스트림-합류-2026-11-06) 개정 확정 · 구현 진행 |
+| 발견 합류(X-2f · 랑데부 명부 → `Transport::discovery`) | ✅ 11-06 | `31e7e10` · [§9](#9-개정--x-2f-발견-스트림-합류-2026-11-06) · 실서버 roster 상호 표시 실기 = 사용자 |
 | 중복 제거(논리 시퀀스) | ✅ | v2에서 필요해지지만 **메시지 모델에 지금 넣는다** |
 
 ---
@@ -153,7 +153,7 @@ v1에서는 후보가 하나뿐이라 이 로직이 실질적으로 작동하지
 
 ## 9. 개정 — X-2f 발견 스트림 합류 (2026-11-06)
 
-> **상태: Accepted · 개정 X-2f · 구현 진행** · 결정 2026-11-06(사용자 지시 "개발 진행" · 개발 세션 확정) · 배경 = X-2 `8237f8e`(RelayTransport·LadderTransport)가 연결 경로는 `Transport` 하나로 합쳤으나 발견 명부(roster · X-2e)는 App이 따로 들고 있었다 — TODO X-2f.
+> **상태: Accepted · 개정 X-2f · 구현 완료 `31e7e10`(11-06)** · 결정 2026-11-06(사용자 지시 "개발 진행" · 개발 세션 확정) · 배경 = X-2 `8237f8e`(RelayTransport·LadderTransport)가 연결 경로는 `Transport` 하나로 합쳤으나 발견 명부(roster · X-2e)는 App이 따로 들고 있었다 — TODO X-2f.
 
 **A. 용어(§2) `PeerHint` 확장**: 기존(PeerId 미검증 · 표시 이름 · 능력 · 세대) + **출처 `origin: HintOrigin { Local, Rendezvous }`** + **수명 방식 `liveness: Liveness { Advertised, Eventful }`** + **공개 카드 `profile: Option<PublicCard { name, email, bio }>`**(랑데부 서버가 중계한 옵트인 카드 · **경계에서 정제 완료**된 값만 — 이름은 DisplayName 통과분, 이메일·소개는 제어 문자 제거·200자 상한 · 미정제 바이트는 올라오지 않는다).
 
