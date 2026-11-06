@@ -59,7 +59,7 @@ DR-8은 **v1에서 로컬 직접 모드만 출시**하되 릴레이 모드를 �
 | **`PeerHint`** | 발견 결과 — `PeerId`(미검증) + `Locator` 후보 + 표시 이름 + 능력 플래그 | "미검증"임이 타입에 드러난다([08](08-adr-0002-discovery-transport.md)) |
 | **`Link`** | 신뢰·순서 있는 양방향 바이트 스트림 | 암호화를 모른다. 그냥 바이트 관 |
 | **`Session`** | `Link` + Noise 핸드셰이크 → 인증된 `PeerId` + 논리 스트림 다중화 | **모든 전송에서 동일한 구현 하나** |
-| **`Transport`** | 발견하고 `Link`를 만들어 주는 것 | 구현 3종: LocalDirect · InMemory · Relay(v2) |
+| **`Transport`** | 발견하고 `Link`를 만들어 주는 것 | 구현 3종: LocalDirect · InMemory · Relay(v2) — ✅ 11-06 `8237f8e`: `RelayTransport` + 사다리 합성 `LadderTransport`(로컬 > 수동 > 릴레이 · `nbeep-relay`) |
 
 ### `Transport`가 제공해야 하는 것
 
@@ -94,6 +94,8 @@ DR-8은 **v1에서 로컬 직접 모드만 출시**하되 릴레이 모드를 �
 | 대화 연속성 | 전환해도 **같은 대화 스레드**(규칙 3). 사용자에게는 경로 표시만 바뀐다 |
 | 중복 수신 | 두 경로로 같은 메시지가 오면 **논리 시퀀스로 중복 제거** |
 
+> **상태(11-06 `8237f8e`)** — 우선순위는 `LadderTransport`(`nbeep-relay`)가 실물로 구현했다: 로컬 > 수동 > 릴레이 · `incoming` 합류 · 단 선택은 링크 수준(`LadderLink` 첫 회신 고정)이라 핸드셰이크는 경로 무관 호출자 몫. 자동 복귀(로컬 복구 시 되돌림)·중복 제거의 다중 경로 실측은 2-PC 실기 대기.
+
 v1에서는 후보가 하나뿐이라 이 로직이 실질적으로 작동하지 않지만, **인터페이스와 시퀀스 규칙은 v1에 있어야** 한다. 없으면 v2에서 메시지 모델을 다시 만든다.
 
 ---
@@ -118,7 +120,7 @@ v1에서는 후보가 하나뿐이라 이 로직이 실질적으로 작동하지
 | `Transport` 경계 | ✅ | 인터페이스만 확정 |
 | `LocalDirectTransport` | ✅ | 유일한 실제 구현 |
 | **`InMemoryTransport`** | ✅ | **테스트용 — v1에서 실제로 쓴다** |
-| `RelayTransport` | ✕ | v2 · [`nexa-beepd`](10-decision-record.md)와 함께 |
+| `RelayTransport` | ✅ 11-06 | `8237f8e` — `RelayTransport` + `LadderTransport`(로컬 > 수동 > 릴레이) · ~~v2 · [`nexa-beepd`](10-decision-record.md)와 함께~~ · 실 NAT·서버 + 2-PC 실측 = 사용자 실기 |
 | 경로 우선순위·자동 폴백 | 뼈대만 | 후보가 하나라 실질 동작 없음 |
 | 중복 제거(논리 시퀀스) | ✅ | v2에서 필요해지지만 **메시지 모델에 지금 넣는다** |
 
