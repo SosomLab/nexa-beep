@@ -423,8 +423,8 @@ sequenceDiagram
 |---|---|---|
 | **N-1** | 메시지 봉투에 **`importance: u8`**(1바이트 · 미지 값은 `Normal`로 취급) | 나중에 메시지 포맷 변경 + 구버전 호환 처리 |
 | **N-2** | **`ack` 제어 메시지 타입**(대상 메시지 ID + 종류: `Delivered`/`Acknowledged`) | 제어 스트림 스키마를 다시 만든다 |
-| **N-3** | 기록 레코드에 **전달·확인 상태와 시각** 자리 | 저장 포맷 마이그레이션([17 §4](17-adr-0005-history-at-rest.md)) |
-| **N-4** | `ActionKind` 신규 — `NotificationRaised(AlertLevel)` · `AckSent` · `AckReceived` · `EscalationSent(ChannelKind)` · `EscalationSuppressed(Reason)` | 계측 레저에 이 축이 영영 안 남는다. **`stable_code` 대역 배정 필요**([13 §6](13-code-design-standards.md) · M0-1c 규칙 — 부여 후 불변) |
+| **N-3** ✅ | **구현 11-06(`6b4c1c7`)** — 기록 tag 8(전달·읽음 시각 · 봉인 레코드 안) · 기록 레코드에 **전달·확인 상태와 시각** 자리 | 저장 포맷 마이그레이션([17 §4](17-adr-0005-history-at-rest.md)) |
+| **N-4** ✅ | **구현 11-06(`6b4c1c7`)** — `0x0601~0x0605` 대역 · `ActionKind` 신규 — `NotificationRaised(AlertLevel)` · `AckSent` · `AckReceived` · `EscalationSent(ChannelKind)` · `EscalationSuppressed(Reason)` | 계측 레저에 이 축이 영영 안 남는다. **`stable_code` 대역 배정 필요**([13 §6](13-code-design-standards.md) · M0-1c 규칙 — 부여 후 불변) |
 
 > `ActionKind`에는 **행위 정체성만** 넣고 메시지 본문·URL·주소는 넣지 않는다(M0-1c에서 세운 규칙). 채널은 **종류만**(`Webhook`/`Smtp`), 목적지는 **솔티드 해시**.
 
