@@ -396,8 +396,9 @@ enum AppEvent {
         win: winit::window::WindowId,
         png: Option<Vec<u8>>,
     },
-    /// 세션 종료(상대 이탈·오류).
-    Closed { peer: PeerId },
+    /// 세션 종료(상대 이탈·오류). `epoch` = 그 세션을 설치한 세대(X-11 · 11-06) — 교체된 옛 세션의 늦은 Closed가 새
+    /// 대화를 죽이지 않게 핸들러가 현재 대화의 세대와 대조한다(0 = 세대 없음 · 항상 적용).
+    Closed { peer: PeerId, epoch: u64 },
     /// **인바운드** — 남이 나에게 연결해 핸드셰이크가 끝난 세션(아직 TOFU 미판정).
     /// GUI(메인 스레드)가 TrustStore로 판정 후 대화·창을 연다.
     Inbound { session: Box<InboundSession> },
@@ -1010,6 +1011,17 @@ const LINK_PROBE_FRAME: [u8; 1] = [0xFF];
 
 /// Closed 뒤 재연결 단계(RL-3 ⓑ 순수 규칙): 짧게 산 세션이면 직전 단계 +1(상한 소진 = `reconnect_delay` None → 중단) ·
 /// 오래 살았으면 0단.
+/// X-11 glare 타이브레이크(docs/44 §2 TB-1) — **PeerId 바이트 사전순 작은 쪽이 initiator**. 상대가 작으면 상대의
+/// 아웃바운드(= 내 인바운드)를 받는다.
+fn glare_keep_inbound(me: PeerId, peer: PeerId) -> bool {
+    peer < me
+}
+
+/// X-11 — 내가 작으면 내 아웃바운드가 이긴다(상대는 자기 인바운드 쪽을 닫는다).
+fn glare_keep_outbound(me: PeerId, peer: PeerId) -> bool {
+    me < peer
+}
+
 fn closed_next_stage(last_stage: Option<u8>, lived_ms: u64) -> u8 {
     if lived_ms < SESSION_SHORT_MS {
         last_stage.map_or(0, |s| s.saturating_add(1))
@@ -1310,6 +1322,8 @@ struct Conversation {
     sync_budget: nbeep_core::SyncBudget,
     /// 성립 시각(단조 ms · RL-3 ⓑ) — Closed 때 "짧게 살았는가" 판정.
     up_ms: u64,
+    /// 설치 세대(X-11) — 액터가 보내는 `Closed.epoch`와 대조.
+    epoch: u64,
 }
 
 /// 진행 중 발신 상태(08-16 · 재개형 펌프) — Accept가 등록하고 액터 루프 틱이
@@ -1466,6 +1480,7 @@ fn spawn_session_actor(
     send_rate: nbeep_core::RateLimit,
     seal_secret: [u8; 32],
     recv_max: u64,
+    epoch: u64,
 ) -> std::thread::JoinHandle<()> {
     use nbeep_core::mux::StreamId;
     use nbeep_core::{XferInbox, XferMsg};
@@ -1732,7 +1747,7 @@ fn spawn_session_actor(
                         }
                     };
                     if sent.is_err() {
-                        let _ = proxy.send_event(AppEvent::Closed { peer });
+                        let _ = proxy.send_event(AppEvent::Closed { peer, epoch });
                         return;
                     }
                 }
@@ -1881,7 +1896,7 @@ fn spawn_session_actor(
                             data,
                         };
                         if session.send(StreamId::File, &chunk.encode()).is_err() {
-                            let _ = proxy.send_event(AppEvent::Closed { peer });
+                            let _ = proxy.send_event(AppEvent::Closed { peer, epoch });
                             return;
                         }
                         st.next = end;
@@ -1939,7 +1954,7 @@ fn spawn_session_actor(
                             .send(StreamId::File, &XferMsg::Done { id, sha256 }.encode())
                             .is_err()
                         {
-                            let _ = proxy.send_event(AppEvent::Closed { peer });
+                            let _ = proxy.send_event(AppEvent::Closed { peer, epoch });
                             return;
                         }
                         let _ = proxy.send_event(AppEvent::XferSendDone {
@@ -1962,7 +1977,7 @@ fn spawn_session_actor(
                     Ok(v) => v,
                     Err(nbeep_core::SessionError::TimedOut) => continue, // 정상 — 송신 교대로
                     Err(_) => {
-                        let _ = proxy.send_event(AppEvent::Closed { peer });
+                        let _ = proxy.send_event(AppEvent::Closed { peer, epoch });
                         return;
                     }
                 };
@@ -2380,7 +2395,7 @@ fn spawn_session_actor(
                         )
                         .is_err()
                         {
-                            let _ = proxy.send_event(AppEvent::Closed { peer });
+                            let _ = proxy.send_event(AppEvent::Closed { peer, epoch });
                             return;
                         }
                     }
@@ -4334,6 +4349,8 @@ struct App {
     /// ★ Bye를 보내고 떠난 상대(M2-4b · 11-06) — `Closed`에서 자동 재연결을 걸지 않는 근거. 해제 = 발견에
     /// 다시 **등장**(PeerEvent::Appeared) · 세션 재수립 · 잊기. 사람의 클릭(start_connect)은 표식과 무관.
     bye_peers: std::collections::HashSet<PeerId>,
+    /// 세션 설치 세대 카운터(X-11) — `install_conversation`마다 +1.
+    conv_epoch: u64,
     /// 끊긴 대화의 **스레드 대피소**(DR-26 — 대화 상태는 상대별 유지 · 08-13 실기).
     /// `Closed`가 `Conversation`(세션 채널)을 지울 때 lines만 여기로 옮기고, 재수립
     /// (`install_conversation`)이 되찾아 간다 — 그전엔 끊김 = 스레드 통째 소실이었다.
@@ -6832,7 +6849,8 @@ impl App {
             // ③ 세션 종료 — Closed 경로가 스레드 대피·정리를 맡는다(채널 drop = 액터 종료).
             let peers: Vec<PeerId> = self.conversations.keys().copied().collect();
             for p in peers {
-                let _ = self.proxy.send_event(AppEvent::Closed { peer: p });
+                let epoch = self.conversations.get(&p).map_or(0, |c| c.epoch);
+                let _ = self.proxy.send_event(AppEvent::Closed { peer: p, epoch });
             }
             // ④ 재연결 스케줄 비움(펌프가 더 걸지 않게 · start_connect도 게이트).
             self.reconnect.clear();
@@ -12708,6 +12726,9 @@ impl App {
         let peer = session.peer();
         let binding = session.handshake_binding();
         let (out_tx, out_rx) = std::sync::mpsc::channel();
+        // X-11(11-06): 세션 세대 — 교체(glare)된 옛 액터의 늦은 Closed를 걸러 내는 열쇠.
+        self.conv_epoch = self.conv_epoch.wrapping_add(1);
+        let epoch = self.conv_epoch;
         let join = spawn_session_actor(
             session,
             out_rx,
@@ -12715,6 +12736,7 @@ impl App {
             self.send_rate,
             self.identity.wrap_secret(),
             cap_from_setting(self.settings.get("xfer.recv_max_mb")).unwrap_or(u64::MAX),
+            epoch,
         );
         self.actor_joins.push(join);
         // 프로필 자동 프리페치(M3-17 · ADR-0008) — 세션이 섰으니 요청 1회.
@@ -12745,6 +12767,7 @@ impl App {
                 digest_sent: false,
                 sync_budget: nbeep_core::SyncBudget::new(self.sync_budget_bytes()),
                 up_ms: self.now_ms(),
+                epoch,
             },
         );
         // 후계 증명서(S2-f) — 키 봉인본보다 **먼저**(형제가 "후계가 이긴다" 규칙으로 새 키를 채택하려면
@@ -23353,7 +23376,20 @@ impl ApplicationHandler<AppEvent> for App {
                 self.clear_xfer(peer);
                 self.redraw_conversation(peer);
             }
-            AppEvent::Closed { peer } => {
+            AppEvent::Closed { peer, epoch } => {
+                // X-11(11-06): 교체(glare)된 옛 세션의 늦은 Closed — 현재 대화의 세대가 다르면 무시(새 대화를 죽이지 않는다).
+                if epoch != 0 {
+                    if let Some(cur) = self.conversations.get(&peer).map(|c| c.epoch) {
+                        if cur != epoch {
+                            dlog!(self, DL::Sess, DV::Decide, "closed_stale", |r| r
+                                .arg("peer", peer.short())
+                                .arg("epoch", epoch)
+                                .arg("current", cur)
+                                .ok("replaced session — ignored"));
+                            return;
+                        }
+                    }
+                }
                 if self.user_trace {
                     eprintln!(
                         "[user] closed {} sibling={} known={}",
@@ -23560,7 +23596,17 @@ impl ApplicationHandler<AppEvent> for App {
                     self.transport.note_endpoint(peer, &addr); // 사다리 2단 재료(X-2 — 발견 경로 다음 · 랑데부 전)
                     self.manual_addrs.insert(peer, addr);
                 }
-                if !self.conversations.contains_key(&peer) {
+                // ★ X-11 glare(11-06): 상대의 인바운드가 먼저 섰어도 **내가 작으면** 내 아웃바운드가 이긴다 — 기존 대화를
+                //   갈아끼운다(install이 이력 보존 · 옛 액터의 늦은 Closed는 세대 대조로 무시).
+                let glare_win = self.conversations.contains_key(&peer)
+                    && glare_keep_outbound(self.identity.peer_id(), peer);
+                if glare_win {
+                    dlog!(self, DL::Sess, DV::Decide, "glare", |r| r
+                        .arg("peer", peer.short())
+                        .rule("smaller_peer_id_wins", "me < peer")
+                        .ok("outbound replaces existing session"));
+                }
+                if !self.conversations.contains_key(&peer) || glare_win {
                     let est = match nbeep_core::TrustedSession::wrap(session, &mut self.trust) {
                         Ok(est) => est,
                         Err(e) => {
@@ -24113,7 +24159,17 @@ impl ApplicationHandler<AppEvent> for App {
                     return;
                 }
                 self.note_sibling(peer, via_psk);
-                if self.conversations.contains_key(&peer) {
+                // ★ X-11 glare 타이브레이크(docs/44 §2 TB-1~3 · 11-06): 둘 다 동시에 열면 **PeerId 사전순 작은 쪽의 아웃바운드가
+                //   이긴다**. 상대가 작으면 이 인바운드를 받아 내 기존(아웃바운드) 대화를 갈아끼운다(install이 이력 보존) ·
+                //   내가 작으면 종전대로 인바운드 무시(상대가 자기 쪽을 닫는다). 종전 = 둘 다 버려 둘 다 Closed → 백오프 운.
+                let me = self.identity.peer_id();
+                if self.conversations.contains_key(&peer) && glare_keep_inbound(me, peer) {
+                    dlog!(self, DL::Sess, DV::Decide, "glare", |r| r
+                        .arg("peer", peer.short())
+                        .rule("smaller_peer_id_wins", "peer < me")
+                        .ok("inbound replaces existing session"));
+                }
+                if self.conversations.contains_key(&peer) && !glare_keep_inbound(me, peer) {
                     // 이미 이 상대와 대화 중(아웃바운드 세션 존재) — 중복 인바운드 무시. 단 psk로
                     // 섰으면(페어 RID 랑데부) 형제 동기는 기존 채널로(Outbound 쪽과 대칭 · 09-06).
                     if via_psk {
@@ -26754,6 +26810,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         ),
         closed_peers: std::collections::HashSet::new(),
         bye_peers: std::collections::HashSet::new(),
+        conv_epoch: 0,
         extra_peers: HashMap::new(),
         manual_addrs: HashMap::new(),
         unread: HashMap::new(),
@@ -27773,6 +27830,21 @@ mod tests {
     }
 
     /// RL-3 ⓑ(11-04): 짧게 산 세션은 단계를 잇고(상한 밖 = 중단) · 오래 산 세션은 0단 · 성립 전 Closed(lived MAX)도 0단.
+    /// X-11: 두 판정은 서로 보완(정확히 한쪽만 참 · 같은 키는 둘 다 거짓) — 양쪽이 같은 규칙으로 정확히 한 세션에 수렴.
+    #[test]
+    fn glare_tiebreak_is_deterministic_and_complementary() {
+        let a = PeerId::from_bytes([1u8; PeerId::LEN]);
+        let b = PeerId::from_bytes([2u8; PeerId::LEN]);
+        // a 관점: b가 크다 → 내 아웃바운드가 이긴다 · b의 인바운드는 거절.
+        assert!(super::glare_keep_outbound(a, b));
+        assert!(!super::glare_keep_inbound(a, b));
+        // b 관점: a가 작다 → a의 인바운드를 받는다 · 내 아웃바운드는 버린다.
+        assert!(super::glare_keep_inbound(b, a));
+        assert!(!super::glare_keep_outbound(b, a));
+        // 같은 키(복제 시나리오)는 어느 쪽도 이기지 않는다.
+        assert!(!super::glare_keep_inbound(a, a) && !super::glare_keep_outbound(a, a));
+    }
+
     #[test]
     fn closed_stage_rule() {
         use super::{closed_next_stage, reconnect_delay, LINK_PROBE_FRAME, SESSION_SHORT_MS};
