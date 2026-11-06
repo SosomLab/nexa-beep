@@ -15,7 +15,7 @@
 - 현 단계 — ★**v0.8.0 공개 ✅**(11-05 · 태그 `v0.8.0` = `dca8baa` · release run **41983151018 전 12 job success** · 자산 15 · Releases·brew·apt/dnf · 일괄 검증 gate rc=0 · verify 10/10 · 3,884,032B · 탑재 = GAP-042 winit 교착 수정 · LAT-1 왕복 p95 5ms · 수신 제한(docs/38 4축·자동 임시·첫 접촉 승인 옵션) · 발견 호환성(M1-13) · 청크 윈도·그룹 재개(M4-10) · 기록 증분 저장(RL-7) · 목록 정리). winget(#468844 작성자 응답 대기)·choco(0.6.0 승인 · 0.7.0/0.8.0 제출 보류) → TODO PUB-1 · 스위치 둘 다 false.
   직전 = v0.7.0(11-03 답장·말풍선 선택·설정 창 개편·IME H-28/H-29·헤드리스 시험) · v0.6.1(10-20 mac 크래시 수정 CRASH-1 · 오프라인 표시).
   **현황·경과는 여기 쓰지 않는다** → [STATUS](docs/STATUS.md) · [DEVLOG](docs/DEVLOG.md) · 기능 = [MILESTONES](docs/MILESTONES.md).
-  **ADR**: 0001~0012·0014·0015 ✅ Accepted / 0013 📐 Proposed(서버 모드 · 구현 v1 이후) · 번호표 = [docs/README](docs/README.md).
+  **ADR**: 0001~0015 ✅ Accepted(0013 서버 모드 = 11-06 사용자 확정 · 구현은 v1 이후 그대로) · 번호표 = [docs/README](docs/README.md).
 
 ## 2. 확정 결정 ([docs/10](docs/10-decision-record.md) **DR-1~31**, 변경 시 새 ADR/journal)
 
