@@ -453,6 +453,9 @@ pub enum Msg {
     // ── 스크롤바 설정 ──
     ScrollbarHide,
     ScrollbarHideDesc,
+    /// 휠 관성(M3-1b ① · 11-06).
+    WheelSmooth,
+    WheelSmoothDesc,
     TooltipDelay,
     TooltipDelayDesc,
     CarouselScroll,
@@ -3490,6 +3493,18 @@ impl Msg {
                 "스크롤이 멈추고 이 시간이 지나면 오버레이 스크롤바를 숨긴다(막대에 마우스를 올리면 계속 보인다)",
                 "停止滚动后经过此时间隐藏浮层滚动条(鼠标停留在滚动条上时保持显示)",
                 "スクロール停止からこの時間で重ねて表示のスクロールバーを隠す(バーにカーソルを置くと表示を維持)",
+            ],
+            Msg::WheelSmooth => [
+                "Smooth wheel scrolling",
+                "휠 스크롤 부드럽게",
+                "平滑滚轮滚动",
+                "ホイールスクロールを滑らかに",
+            ],
+            Msg::WheelSmoothDesc => [
+                "Ease each wheel notch over a few frames instead of jumping (mouse wheels on Windows/Linux). Trackpads are unaffected.",
+                "휠 노치를 한 번에 점프하지 않고 몇 프레임에 걸쳐 흘립니다(Windows/Linux 마우스 휠). 트랙패드는 영향 없음.",
+                "滚轮每格不再瞬间跳动，而是分几帧平滑滚动（Windows/Linux 鼠标滚轮）。触控板不受影响。",
+                "ホイールの1ノッチを一度に飛ばさず数フレームで滑らかに流します（Windows/Linux マウスホイール）。トラックパッドは影響なし。",
             ],
             Msg::ScrollbarHideNever => [
                 "Never hide",

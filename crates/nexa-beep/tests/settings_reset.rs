@@ -54,4 +54,6 @@ fn confirmed_defaults_hold() {
     // 알림 강도(M3-8 잔여 · 11-06) — 소리 기본 켬 · 일반 등급 토스트 기본 켬(종전 동작 유지).
     assert_eq!(d.get("notify.sound"), "on");
     assert_eq!(d.get("notify.normal_toast"), "on");
+    // 휠 관성(M3-1b ① · 11-06) — 기본 켬.
+    assert_eq!(d.get("ui.wheel_smooth"), "on");
 }

@@ -1136,6 +1136,15 @@ pub fn registry() -> &'static [Entry] {
             ),
             key: "ui.scrollbar_hide",
         },
+        // 휠 관성(M3-1b ① · 11-06) — 노치 휠을 ~60Hz 감쇠로 흘려 부드럽게(기본 on · off = 종전 즉시 점프).
+        Entry {
+            cat: Msg::CatAppearance,
+            sub: None,
+            label: Msg::WheelSmooth,
+            desc: Msg::WheelSmoothDesc,
+            kind: SettingKind::Toggle,
+            key: "ui.wheel_smooth",
+        },
         // ── 목록 보기(08-14 사용자 확정) — 갱신 주기 + 갱신 시 스크롤 동작 ──
         Entry {
             cat: Msg::CatPeerList,

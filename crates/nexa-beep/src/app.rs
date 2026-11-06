@@ -4515,6 +4515,9 @@ struct App {
     pending_reset: bool,
     /// ★ 보안 설정 확인 훅(M3-11 · 11-06) — 모달을 기다리는 변경 (키, 새 값, 이전 값, 본문 문구). 모달은 about_to_wait(el).
     pending_setting_confirm: Option<(&'static str, String, String, nbeep_core::Msg)>,
+    /// ★ M3-1b ①(11-06) 휠 관성(Win/Linux 합성 · 노치 LineDelta만): 창별 아직 흘려보내지 않은 (세로, 가로) px. 노치가 오면
+    /// 전부 한 번에 보내지 않고 ~60Hz로 45%씩 감쇠해 보낸다(mac 트랙패드 PixelDelta는 이미 부드러워 그대로).
+    wheel_ease: HashMap<WindowId, (i32, i32)>,
     /// 확인 모달 긍정 뒤 재적용 중 — 훅을 한 번 건너뛴다.
     setting_confirmed: bool,
     /// IME 중재 상태기계(M3-1e G3 — [`crate::ime_gate`]): 조합 게이트·보류-판정·
@@ -21227,6 +21230,29 @@ impl App {
     }
 
     /// 이 창의 입력 이벤트를 담당 위젯으로 라우팅한다.
+    /// 휠 관성 한 걸음(M3-1b ①) — 남은 양의 45%(6px 이하면 전부)를 위젯에 보낸다. 반환 = 아직 남았는가(깨움 16ms 근거).
+    fn wheel_ease_step(&mut self, id: WindowId, el: &ActiveEventLoop) -> bool {
+        let Some((ry, rx)) = self.wheel_ease.get(&id).copied() else {
+            return false;
+        };
+        let step = |rem: i32| if rem.abs() <= 6 { rem } else { rem * 45 / 100 };
+        let (sy, sx) = (step(ry), step(rx));
+        if sy != 0 {
+            self.route(id, InputEvent::Wheel { delta: sy }, el);
+        }
+        if sx != 0 {
+            self.route(id, InputEvent::HWheel { delta: sx }, el);
+        }
+        let left = (ry - sy, rx - sx);
+        if left == (0, 0) || !self.windows.contains_key(&id) {
+            self.wheel_ease.remove(&id);
+            false
+        } else {
+            self.wheel_ease.insert(id, left);
+            true
+        }
+    }
+
     fn route(&mut self, id: WindowId, ev: InputEvent, el: &ActiveEventLoop) {
         let Some(entry) = self.windows.get(&id) else {
             return;
@@ -25056,6 +25082,21 @@ impl ApplicationHandler<AppEvent> for App {
                 }
             }
         }
+        // ★ 휠 관성 걸음(M3-1b ①) — 남은 창마다 한 걸음 · 남으면 ~60Hz 깨움(깨움 계산은 아래 wake_ms에서).
+        let wheel_easing = {
+            let ids: Vec<WindowId> = self.wheel_ease.keys().copied().collect();
+            let mut easing = false;
+            for id in ids {
+                easing |= self.wheel_ease_step(id, el);
+            }
+            easing
+        };
+        // ★ 드래그 정지 중 연속 스크롤(M3-1b ②) — 살아 있는 동안 50ms 깨움(걸음은 위젯 tick이 밟는다).
+        let drag_scrolling = self
+            .chats
+            .values()
+            .chain(self.gchats.values())
+            .any(ChatViewWidget::drag_autoscroll_active);
         // 대화 스레드·입력창 스크롤바 페이드 틱(~5Hz · 08-10).
         {
             let peers: Vec<PeerId> = self
@@ -25124,6 +25165,12 @@ impl ApplicationHandler<AppEvent> for App {
         let mut wake_ms: u64 = IDLE_WAKE_MS;
         if animated {
             sooner(&mut wake_ms, ACTIVE_WAKE_MS);
+        }
+        if wheel_easing {
+            sooner(&mut wake_ms, 16); // 휠 관성(M3-1b ①)
+        }
+        if drag_scrolling {
+            sooner(&mut wake_ms, 50); // 드래그 정지 스크롤(M3-1b ②)
         }
         if headless() && !self.headless_dirty.borrow().is_empty() {
             sooner(&mut wake_ms, 16);
@@ -25615,11 +25662,21 @@ impl ApplicationHandler<AppEvent> for App {
                         ((p.x * 120.0 / 38.0) as i32, (p.y * 120.0 / 38.0) as i32)
                     }
                 };
-                if dy != 0 {
-                    self.route(id, InputEvent::Wheel { delta: dy }, el);
-                }
-                if dx != 0 {
-                    self.route(id, InputEvent::HWheel { delta: dx }, el);
+                // ★ 휠 관성(M3-1b ① · 11-06): 노치(LineDelta)는 즉시 전부가 아니라 관성 큐에 넣고 첫 걸음만 — 나머지는
+                //   about_to_wait이 ~60Hz로 감쇠해 흘린다(설정 `ui.wheel_smooth` off = 종전 즉시). PixelDelta는 그대로.
+                let notch = matches!(delta, MouseScrollDelta::LineDelta(..));
+                if notch && self.settings.get("ui.wheel_smooth") != "off" {
+                    let e = self.wheel_ease.entry(id).or_insert((0, 0));
+                    e.0 += dy;
+                    e.1 += dx;
+                    self.wheel_ease_step(id, el);
+                } else {
+                    if dy != 0 {
+                        self.route(id, InputEvent::Wheel { delta: dy }, el);
+                    }
+                    if dx != 0 {
+                        self.route(id, InputEvent::HWheel { delta: dx }, el);
+                    }
                 }
             }
             WindowEvent::ModifiersChanged(mods) => {
@@ -26800,6 +26857,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         want_first_card: None,
         pending_reset: false,
         pending_setting_confirm: None,
+        wheel_ease: HashMap::new(),
         setting_confirmed: false,
         conversations: HashMap::new(),
         dedup: nbeep_core::DedupIndex::new(),
