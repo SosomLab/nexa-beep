@@ -16,6 +16,7 @@ pub mod keytap;
 pub mod launch;
 pub mod linkwatch;
 pub mod notify;
+pub mod opacity;
 pub mod paths;
 pub mod quarantine;
 pub mod scan;

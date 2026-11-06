@@ -4518,6 +4518,10 @@ struct App {
     /// ★ M3-1b ①(11-06) 휠 관성(Win/Linux 합성 · 노치 LineDelta만): 창별 아직 흘려보내지 않은 (세로, 가로) px. 노치가 오면
     /// 전부 한 번에 보내지 않고 ~60Hz로 45%씩 감쇠해 보낸다(mac 트랙패드 PixelDelta는 이미 부드러워 그대로).
     wheel_ease: HashMap<WindowId, (i32, i32)>,
+    /// ★ 창 투명도(dir3 DR-22 이식 · 11-06) — (포커스 있을 때 %, 없을 때 %, 묶음 판정, 유예 ms). 설정에서 읽는다.
+    win_opacity: (u8, u8, bool, u64),
+    /// 흐림 예약 시각(ms · `now_ms` 기준) — 포커스가 묶음 밖으로 나간 뒤 유예가 지나면 적용(깜빡임 방지 · GAP-039).
+    blur_at: Option<u64>,
     /// 확인 모달 긍정 뒤 재적용 중 — 훅을 한 번 건너뛴다.
     setting_confirmed: bool,
     /// IME 중재 상태기계(M3-1e G3 — [`crate::ime_gate`]): 조합 게이트·보류-판정·
@@ -17360,6 +17364,15 @@ impl App {
                 }
             }
             match key {
+                "window.transparency"
+                | "window.transparency_blur"
+                | "window.dialog_keeps_active"
+                | "window.blur_grace_ms" => {
+                    // 창 투명도(dir3 DR-22 · 즉시 반영 — 열린 창 전부).
+                    self.read_opacity_prefs();
+                    self.blur_at = None;
+                    self.apply_transparency();
+                }
                 "chat.window_mode" => {
                     // 새 대화부터 적용(DR-26 — 열린 창은 유지·소급 강제 없음).
                     self.mode = if value == "separate" {
@@ -21230,6 +21243,73 @@ impl App {
     }
 
     /// 이 창의 입력 이벤트를 담당 위젯으로 라우팅한다.
+    /// 설정 → 투명도 값(dir3 DR-22) · 새 창 전역도 갱신.
+    fn read_opacity_prefs(&mut self) {
+        let pct = |k: &str| -> u8 {
+            self.settings
+                .get(k)
+                .parse::<u64>()
+                .map_or(0, |v| u8::try_from(v.min(90)).unwrap_or(90))
+        };
+        let f = pct("window.transparency");
+        let b = pct("window.transparency_blur");
+        let keeps = self.settings.get("window.dialog_keeps_active") != "off";
+        let grace = self
+            .settings
+            .get("window.blur_grace_ms")
+            .parse::<u64>()
+            .map_or(150, |v| v.min(2000));
+        self.win_opacity = (f, b, keeps, grace);
+        OPACITY_FOCUSED_PCT.store(f, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// 모든 창에 지금 판정대로 투명도 적용(dir3 `apply_transparency`). 반환 = 주 창에 적용한 %(시험 판정용).
+    fn apply_transparency(&mut self) -> u8 {
+        let (f, b, keeps, _) = self.win_opacity;
+        let group_active = self.os_focused.is_some();
+        let pending = self.blur_at.is_some();
+        let mut main_pct = f;
+        for (id, e) in &self.windows {
+            let pct = opacity_pick(
+                group_active,
+                self.os_focused == Some(*id),
+                keeps,
+                pending,
+                f,
+                b,
+            );
+            if Some(*id) == self.main_id {
+                main_pct = pct;
+            }
+            apply_window_opacity(&e.window, pct);
+        }
+        main_pct
+    }
+
+    /// 포커스 변화 뒤 호출 — 묶음이 활성이면 즉시 복원 · 비활성이 되면 유예 뒤 흐림(`blur_tick`).
+    fn focus_group_changed(&mut self) {
+        let (_, _, keeps, grace) = self.win_opacity;
+        if self.os_focused.is_some() || !keeps {
+            self.blur_at = None;
+            self.apply_transparency();
+        } else if self.blur_at.is_none() {
+            self.blur_at = Some(self.now_ms() + grace);
+        }
+    }
+
+    /// 유예 만료 틱(about_to_wait) — 아직 묶음 밖이면 흐림 적용. 반환 = 다음 깨움까지 ms.
+    fn blur_tick(&mut self, now: u64) -> Option<u64> {
+        let at = self.blur_at?;
+        if now < at {
+            return Some(at - now);
+        }
+        self.blur_at = None;
+        if self.os_focused.is_none() {
+            self.apply_transparency();
+        }
+        None
+    }
+
     /// 휠 관성 한 걸음(M3-1b ①) — 남은 양의 45%(6px 이하면 전부)를 위젯에 보낸다. 반환 = 아직 남았는가(깨움 16ms 근거).
     fn wheel_ease_step(&mut self, id: WindowId, el: &ActiveEventLoop) -> bool {
         let Some((ry, rx)) = self.wheel_ease.get(&id).copied() else {
@@ -22346,7 +22426,68 @@ fn new_window(
 ) -> Result<Rc<Window>, winit::error::OsError> {
     let window = el.create_window(headless_attrs(attrs))?;
     guard_taskbar_created(&window);
+    // 창 투명도(dir3 DR-22 · 11-06) — 새 창은 포커스 값으로 시작(곧 포커스를 받는다 · 깔때기 1곳이라 창마다 안 넣어도 된다).
+    apply_window_opacity(
+        &window,
+        OPACITY_FOCUSED_PCT.load(std::sync::atomic::Ordering::Relaxed),
+    );
     Ok(Rc::new(window))
+}
+
+/// 새 창이 쓰는 포커스 투명도(%) — `read_opacity_prefs`가 갱신(dir3 `OPACITY_PCT`와 같은 역할).
+static OPACITY_FOCUSED_PCT: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// raw-window-handle → 플랫폼 핸들(Win32 HWND · AppKit NSView · X11 창 id · 그 밖 = 미지원).
+fn win_handle_of(w: &Window) -> nbeep_plat::opacity::WinHandle {
+    use nbeep_plat::opacity::WinHandle;
+    use winit::raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
+    let Ok(h) = w.window_handle() else {
+        return WinHandle::Unsupported;
+    };
+    match h.as_raw() {
+        RawWindowHandle::Win32(h) => WinHandle::Win32(h.hwnd.get()),
+        RawWindowHandle::AppKit(h) => WinHandle::AppKit(h.ns_view.as_ptr()),
+        // Xlib `window: c_ulong` — Linux u64 · Windows/mac 호스트 u32(동일 타입이라 clippy useless_conversion · cfg 따라 필요).
+        #[allow(clippy::useless_conversion)]
+        RawWindowHandle::Xlib(h) => {
+            u32::try_from(h.window).map_or(WinHandle::Unsupported, WinHandle::X11)
+        }
+        RawWindowHandle::Xcb(h) => WinHandle::X11(h.window.get()),
+        _ => WinHandle::Unsupported,
+    }
+}
+
+/// 창 하나에 투명도(%) 적용 — 헤드리스는 하지 않는다(창이 숨겨져 있고 OS 합성 결과는 캡처에 안 나온다).
+fn apply_window_opacity(w: &Window, pct: u8) {
+    if headless() {
+        return;
+    }
+    let _ = nbeep_plat::opacity::apply(
+        win_handle_of(w),
+        nbeep_plat::opacity::opacity_alpha(i64::from(pct)),
+    );
+}
+
+/// 창이 받을 투명도(%) — dir3 묶음 판정(GAP-039)의 beep판: `keeps_active`면 **이 앱의 어느 창이든** 포커스가 있을 때
+/// 전부 포커스 값 · 아니면 창마다 자기 포커스. `pending`(유예 중)은 아직 흐리지 않는다.
+fn opacity_pick(
+    group_active: bool,
+    own_focus: bool,
+    keeps_active: bool,
+    pending: bool,
+    focused: u8,
+    blur: u8,
+) -> u8 {
+    let active = if keeps_active {
+        group_active || pending
+    } else {
+        own_focus
+    };
+    if active {
+        focused
+    } else {
+        blur
+    }
 }
 
 /// GAP-042 가드 부착 — Windows만(다른 OS = no-op). 실패(HWND 없음 · SetWindowSubclass 거부)는 조용히 넘긴다(종전 동작).
@@ -22384,6 +22525,7 @@ impl ApplicationHandler<AppEvent> for App {
         if self.main_id.is_some() {
             return;
         }
+        self.read_opacity_prefs(); // 창 투명도(dir3 DR-22) — 주 창 생성 전에(new_window가 전역을 읽는다)
         self.create_main_window(el);
         // 앱 아이콘(M3-22 · 11-06) — 번들 밖 실행(포터블·cargo run)의 Dock 기본 아이콘을 내장 그림으로(mac · 다른 OS no-op).
         nbeep_plat::dock::set_app_icon(nbeep_ui::brand::ICON_RGBA, nbeep_ui::brand::ICON_SIZE);
@@ -25169,6 +25311,9 @@ impl ApplicationHandler<AppEvent> for App {
         if wheel_easing {
             sooner(&mut wake_ms, 16); // 휠 관성(M3-1b ①)
         }
+        if let Some(left) = self.blur_tick(self.now_ms()) {
+            sooner(&mut wake_ms, left.max(1)); // 창 투명도 유예(dir3 DR-22)
+        }
         if drag_scrolling {
             sooner(&mut wake_ms, 50); // 드래그 정지 스크롤(M3-1b ②)
         }
@@ -25447,6 +25592,7 @@ impl ApplicationHandler<AppEvent> for App {
             WindowEvent::Focused(true) => {
                 // 캐럿 깜빡임 — 포커스 창 추적 + 기준점 리셋(받자마자 밝게 시작).
                 self.os_focused = Some(id);
+                self.focus_group_changed(); // 창 투명도 복원(dir3 DR-22)
                 self.blink_anchor_ms = self.now_ms();
                 self.set_chat_active(id, true); // 풍선 선택 = 또렷하게(11-02)
                                                 // ★ 스트레이 Enter 가드(08-21 실기 — "공지 후 대화창 진입"): 모달
@@ -25490,6 +25636,7 @@ impl ApplicationHandler<AppEvent> for App {
                 if self.os_focused == Some(id) {
                     self.os_focused = None;
                 }
+                self.focus_group_changed(); // 창 투명도 — 묶음 밖이면 유예 뒤 흐림(dir3 GAP-039)
                 self.set_chat_active(id, false); // 풍선 선택 = 흐리게(11-02) · redraw는 아래 IME 정리 뒤 1회(RL-15 ⓓ)
                 if self.ime_trace {
                     eprintln!("[ime] focus-out");
@@ -26859,6 +27006,8 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         pending_reset: false,
         pending_setting_confirm: None,
         wheel_ease: HashMap::new(),
+        win_opacity: (5, 10, true, 150),
+        blur_at: None,
         setting_confirmed: false,
         conversations: HashMap::new(),
         dedup: nbeep_core::DedupIndex::new(),
@@ -28033,6 +28182,25 @@ mod tests {
     }
 
     /// RL-3 ⓑ(11-04): 짧게 산 세션은 단계를 잇고(상한 밖 = 중단) · 오래 산 세션은 0단 · 성립 전 Closed(lived MAX)도 0단.
+    /// 창 투명도(dir3 DR-22 이식 · 11-06) 판정표: 묶음 모드는 "이 앱의 어느 창이든 포커스"가 기준 · 유예 중은 아직 흐리지
+    /// 않음 · 묶음 off는 창마다 자기 포커스.
+    #[test]
+    fn opacity_pick_follows_group_and_grace_rules() {
+        use super::opacity_pick;
+        // 묶음 on: 다른 우리 창이 포커스 = 포커스 값 · 전부 잃음 = 흐림 · 유예 중 = 아직 포커스 값.
+        assert_eq!(opacity_pick(true, false, true, false, 5, 10), 5);
+        assert_eq!(opacity_pick(false, false, true, false, 5, 10), 10);
+        assert_eq!(opacity_pick(false, false, true, true, 5, 10), 5);
+        // 묶음 off: 자기 포커스만.
+        assert_eq!(opacity_pick(true, false, false, false, 5, 10), 10);
+        assert_eq!(opacity_pick(true, true, false, false, 5, 10), 5);
+        assert_eq!(
+            opacity_pick(false, false, false, true, 5, 10),
+            10,
+            "off면 유예 무관"
+        );
+    }
+
     /// X-11: 두 판정은 서로 보완(정확히 한쪽만 참 · 같은 키는 둘 다 거짓) — 양쪽이 같은 규칙으로 정확히 한 세션에 수렴.
     #[test]
     fn glare_tiebreak_is_deterministic_and_complementary() {

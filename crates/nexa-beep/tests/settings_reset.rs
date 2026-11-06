@@ -56,4 +56,9 @@ fn confirmed_defaults_hold() {
     assert_eq!(d.get("notify.normal_toast"), "on");
     // 휠 관성(M3-1b ① · 11-06) — 기본 켬.
     assert_eq!(d.get("ui.wheel_smooth"), "on");
+    // 창 투명도(dir3 DR-22 이식 · 11-06) — 5/10/150 · 묶음 판정 켬(dir3 기본과 동일).
+    assert_eq!(d.get("window.transparency"), "5");
+    assert_eq!(d.get("window.transparency_blur"), "10");
+    assert_eq!(d.get("window.dialog_keeps_active"), "on");
+    assert_eq!(d.get("window.blur_grace_ms"), "150");
 }

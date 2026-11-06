@@ -155,6 +155,8 @@ pub fn group_of(cat: Msg) -> Option<Msg> {
 /// ★ 고급 설정(10-09 · 설정 창 "고급 설정" 스위치 대상) — 한 번 정하면 거의 손대지 않는 구현값·시간 상수.
 /// 글꼴·색·모드·켜기/끄기 같은 습관값은 기본 표시로 남긴다. 표에 없는 키는 시험 `advanced_keys_exist`가 잡는다.
 pub const ADVANCED: &[&str] = &[
+    // 창 투명도 유예(dir3는 HIDDEN · beep은 고급 · 11-06).
+    "window.blur_grace_ms",
     // 한글 입력(IME) 튜닝 전부 — macOS 실측 기준값(H-27). 카테고리째 고급.
     "ime.inject",
     "ime.leak",
@@ -479,6 +481,10 @@ const RADIO_DEFAULTS: &[(&str, &str)] = &[
     ("hud.fade_ms", "600"),
     ("hud.bg_alpha", "80"),
     ("hud.fg_alpha", "100"),
+    // 창 투명도(dir3 DR-22 · 11-06 기본 5/10/150 = dir3와 동일).
+    ("window.transparency", "5"),
+    ("window.transparency_blur", "10"),
+    ("window.blur_grace_ms", "150"),
 ];
 
 /// 항목 종류 — 우측 패널이 이 열거를 읽어 컨트롤을 동적 생성한다(새 설정 = Entry 1줄).
@@ -621,6 +627,22 @@ fn validate(key: &str, value: &str) -> Result<(), Msg> {
                 Ok(())
             } else {
                 Err(Msg::ValTypeaheadRange)
+            }
+        }
+        // 창 투명도 0~90 %(dir3 DR-22 상한 — 그 이상은 창을 다시 찾을 수 없다).
+        "window.transparency" | "window.transparency_blur" => {
+            if value.parse::<u64>().is_ok_and(|v| v <= 90) {
+                Ok(())
+            } else {
+                Err(Msg::ValOpacityRange)
+            }
+        }
+        // 흐림 유예 0~2000ms.
+        "window.blur_grace_ms" => {
+            if value.parse::<u64>().is_ok_and(|v| v <= 2000) {
+                Ok(())
+            } else {
+                Err(Msg::ValGraceRange)
             }
         }
         _ => Ok(()),
@@ -1144,6 +1166,68 @@ pub fn registry() -> &'static [Entry] {
             desc: Msg::WheelSmoothDesc,
             kind: SettingKind::Toggle,
             key: "ui.wheel_smooth",
+        },
+        // ★ 창 투명도(nexa-dir3 DR-22 이식 · 11-06): OS 창 전체 합성 알파 · 포커스 있을 때/없을 때 2값 · 창 묶음 판정 · 유예(고급).
+        //   dir3의 `ui.toast_alpha`는 beep에 토스트가 없어(HUD `hud.bg_alpha`가 그 몫) 제외 · 성능 모드 강제 0도 beep에 없어 제외.
+        Entry {
+            cat: Msg::CatAppearance,
+            sub: None,
+            label: Msg::WinTransparency,
+            desc: Msg::WinTransparencyDesc,
+            kind: SettingKind::RadioInput(
+                &[
+                    ("0", Msg::Pct0),
+                    ("5", Msg::Pct5),
+                    ("10", Msg::Pct10),
+                    ("20", Msg::Pct20),
+                    ("30", Msg::Pct30),
+                    ("50", Msg::Pct50),
+                ],
+                "%",
+            ),
+            key: "window.transparency",
+        },
+        Entry {
+            cat: Msg::CatAppearance,
+            sub: None,
+            label: Msg::WinTransparencyBlur,
+            desc: Msg::WinTransparencyBlurDesc,
+            kind: SettingKind::RadioInput(
+                &[
+                    ("0", Msg::Pct0),
+                    ("5", Msg::Pct5),
+                    ("10", Msg::Pct10),
+                    ("20", Msg::Pct20),
+                    ("30", Msg::Pct30),
+                    ("50", Msg::Pct50),
+                ],
+                "%",
+            ),
+            key: "window.transparency_blur",
+        },
+        Entry {
+            cat: Msg::CatAppearance,
+            sub: None,
+            label: Msg::WinDialogKeepsActive,
+            desc: Msg::WinDialogKeepsActiveDesc,
+            kind: SettingKind::Toggle,
+            key: "window.dialog_keeps_active",
+        },
+        Entry {
+            cat: Msg::CatAppearance,
+            sub: None,
+            label: Msg::WinBlurGrace,
+            desc: Msg::WinBlurGraceDesc,
+            kind: SettingKind::RadioInput(
+                &[
+                    ("0", Msg::Ms0),
+                    ("150", Msg::Ms150),
+                    ("300", Msg::Ms300),
+                    ("1000", Msg::Ms1000),
+                ],
+                "ms",
+            ),
+            key: "window.blur_grace_ms",
         },
         // ── 목록 보기(08-14 사용자 확정) — 갱신 주기 + 갱신 시 스크롤 동작 ──
         Entry {
