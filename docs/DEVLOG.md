@@ -5,6 +5,10 @@
 
 ---
 
+## 2026-11-07
+
+- ★**(Win · main) "잔여건 계속 진행" 7커밋 + 사용자 결정 8건 반영** `41180f7`…`a87ab62` — LOG-2 1단계 · M4-12 0단계(+헤드룸·AMSI 32MiB) · FW-1 방화벽 · M3-4 소분 ①②④ · M3-17 ②③ · peak-poll.ps1 · 실측 수신 피크 PeakWorkingSet ≈583MB(≈2.2S · 3회 동일) · max Private 263.7MB(1회차) / 519.8MB(2회차) → 순간 2S 잔존 · 원인 미상(M4-12 본단계에서 추적) · ADR-0013 Accepted · v1.1 3건 · 제외 13건 → [journal](journal/2026-11-07.md)
+
 ## 2026-11-06
 
 - **(Win · main) M3-4 문자열 전수 이관 ✅** `f7b2720`·`07b73ab`·`bc684ad`(협업 세션) — `Msg` 91키 4개 언어 · nbeep-ui 요일·기간·단위 · app.rs ≈80 + userident 7 · 문구 2·주석 1(`2aa4f60`·`8d68727`·`7267c72`) · 811 테스트 · verify 6/6 → [journal](journal/2026-11-06.md)
