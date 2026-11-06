@@ -63,8 +63,8 @@ pub enum RejectReason {
 }
 
 /// 알림 강도([docs/24] ADR-0010 §4 — **로컬 판정값 · 전송되지 않는다**). 발신자의 등급 요청
-/// (`Importance`)을 수신자의 신뢰 게이트로 판정한 결과.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// (`Importance`)을 수신자의 신뢰 게이트로 판정한 결과. 순서 = 강도(`Silent < Badge < Toast < Alarm` · 강등은 한 단계 아래).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum AlertLevel {
     /// 무음 — 목록 갱신만.
     Silent,
@@ -98,6 +98,10 @@ pub enum SuppressReason {
     Disabled,
     /// 차단 상대.
     Blocked,
+    /// 원격 경로(인터넷 경유 · FR-S-24) — 위협 모델이 달라 소리·토스트 없음.
+    Remote,
+    /// 그룹·브로드캐스트 팬아웃의 `Urgent` — 기본 1단계 강등(한 번의 실수가 조직 전체의 스피커를 울리지 않게).
+    Fanout,
 }
 
 /// **사용자가 인지할 수 있는 단위 행위 하나.**

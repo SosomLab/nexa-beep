@@ -14,6 +14,7 @@
 
 pub mod ack;
 pub mod action;
+pub mod alerting;
 pub mod avatar;
 pub mod block;
 pub mod bye;
@@ -57,6 +58,9 @@ pub use ack::{AckKind, ChatAck, ACK_TAG};
 pub use action::{
     ActionKind, AlertLevel, ChannelKind, FailCode, Outcome, RejectCode, RiskLevel, ScanOutcome,
     SuppressReason,
+};
+pub use alerting::{
+    decide_alert, AlertDecision, AlertInput, URGENT_DAY_MS, URGENT_WINDOW_LIMIT, URGENT_WINDOW_MS,
 };
 pub use block::{BlockAxis, BlockEntry, BlockList};
 pub use bye::{Bye, ByeReason, BYE_TAG};

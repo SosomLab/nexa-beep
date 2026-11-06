@@ -51,4 +51,7 @@ fn confirmed_defaults_hold() {
     // 알림(M3-8) — 표시는 기본 켬 · 본문 미리보기는 기본 끔(화면 공유 안전 — FR-S-42 결).
     assert_eq!(d.get("notify.enabled"), "on");
     assert_eq!(d.get("notify.preview"), "off");
+    // 알림 강도(M3-8 잔여 · 11-06) — 소리 기본 켬 · 일반 등급 토스트 기본 켬(종전 동작 유지).
+    assert_eq!(d.get("notify.sound"), "on");
+    assert_eq!(d.get("notify.normal_toast"), "on");
 }

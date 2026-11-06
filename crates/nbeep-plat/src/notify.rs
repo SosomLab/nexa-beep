@@ -20,8 +20,11 @@ pub struct Note<'a> {
     pub title: &'a str,
     /// 본문(호출자가 무해화·절단을 끝낸 문자열).
     pub body: &'a str,
-    /// 소리 억제(DR-25 — 미검증 발신자).
+    /// 소리 억제(DR-25 — 미검증 발신자 · 설정 off).
     pub silent: bool,
+    /// 긴급(Alarm · ADR-0010 §3-2) — Linux는 `--urgency=critical` + 데몬 `sound-name` 힌트(소리는 데몬이
+    /// 낸다 · 4-3 권고). mac/Win은 호스트가 [`crate::sound`]로 따로 울린다.
+    pub urgent: bool,
     /// 클릭 시 되돌아올 **불투명 대상 토큰**(호스트만 해석 · 빈 = 대상 없음).
     /// mac 정식(UN) 경로에서만 왕복된다 — 요청 identifier에 실어 보내고 delegate
     /// 응답에서 파싱해 `init`의 콜백 인자로 돌려준다.
@@ -227,6 +230,13 @@ mod imp {
         if n.silent {
             // 데몬 재량 힌트(관용) — 미지원이면 무시된다(무해).
             cmd.arg("--hint=boolean:suppress-sound:true");
+        }
+        if n.urgent {
+            // Alarm — 데몬이 소리를 낸다(libcanberra LGPL 회피 · ADR-0010 §4-3). 데몬 부재 = status 실패 → 호스트가 1회 고지.
+            cmd.arg("--urgency=critical");
+            if !n.silent {
+                cmd.arg("--hint=string:sound-name:message-new-instant");
+            }
         }
         cmd.arg(n.title).arg(n.body);
         cmd.stdout(std::process::Stdio::null())

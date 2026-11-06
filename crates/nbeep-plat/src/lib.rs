@@ -20,6 +20,7 @@ pub mod paths;
 pub mod quarantine;
 pub mod scan;
 pub mod shutdown;
+pub mod sound;
 pub mod taskbar_guard;
 pub mod term;
 pub mod theme;

@@ -599,6 +599,17 @@ pub enum Msg {
     NotifyPreviewDesc,
     NotifyNewMessage,
     NotifyFileOffer,
+    // ── 알림 강도(M3-8 잔여 · 11-06 · ADR-0010 §3-3) ──
+    NotifySound,
+    NotifySoundDesc,
+    NotifyNormalToast,
+    NotifyNormalToastDesc,
+    /// 토스트 꼬리 — 요청보다 강도를 내렸음을 보인다(조용히 버리지 않는다).
+    NotifyDemoted,
+    /// 제목 꼬리 — `{}` = 최근 24h Urgent 횟수(FR-S-42).
+    NotifyUrgentCount,
+    /// 상태바 — Linux 등 알림 데몬 부재로 소리를 낼 수 없을 때 1회.
+    NotifySoundUnavailable,
     /// 메뉴바 '도움말' 라벨.
     MenuHelp,
     ToolbarSize,
@@ -3861,6 +3872,48 @@ impl Msg {
                 "파일 수신 요청",
                 "文件传输请求",
                 "ファイル受信リクエスト",
+            ],
+            Msg::NotifySound => [
+                "Notification sound",
+                "알림 소리",
+                "通知声音",
+                "通知音",
+            ],
+            Msg::NotifySoundDesc => [
+                "Play a sound with notifications. Urgent messages from fingerprint-verified peers ring even when the app is in front; unverified senders never make a sound.",
+                "알림에 소리를 냅니다. 지문을 대조한 상대의 긴급 메시지는 앱이 앞에 있어도 울리고, 미검증 상대는 절대 소리를 내지 않습니다.",
+                "通知时播放声音。已核对指纹的对方发来的紧急消息即使应用在前台也会响铃；未验证的发送者永不发声。",
+                "通知時に音を鳴らします。指紋を照合した相手の緊急メッセージはアプリが前面でも鳴り、未確認の相手は決して音を出しません。",
+            ],
+            Msg::NotifyNormalToast => [
+                "Toast for normal messages",
+                "일반 메시지도 토스트",
+                "普通消息也弹出提示",
+                "通常メッセージもトースト",
+            ],
+            Msg::NotifyNormalToastDesc => [
+                "Show a toast for normal-grade messages from pinned or verified peers when the app is in the background. Off = badge only (ADR-0010 default table).",
+                "핀·검증 상대의 일반 등급 메시지도 앱이 뒤에 있을 때 토스트로 보입니다. 끄면 배지만(ADR-0010 기본 표).",
+                "应用在后台时，已固定或已验证对方的普通消息也弹出提示。关闭 = 仅角标（ADR-0010 默认表）。",
+                "ピン留め・検証済みの相手からの通常メッセージも、アプリが背面のときトーストで表示します。オフ = バッジのみ（ADR-0010 既定表）。",
+            ],
+            Msg::NotifyDemoted => [
+                "(alert level lowered)",
+                "(알림 강도 낮춤)",
+                "(已降低提醒强度)",
+                "(通知強度を下げました)",
+            ],
+            Msg::NotifyUrgentCount => [
+                "urgent ×{} in 24h",
+                "긴급 24시간 {}회",
+                "24小时内紧急 {} 次",
+                "24時間で緊急 {} 回",
+            ],
+            Msg::NotifySoundUnavailable => [
+                "This environment cannot play a notification sound (no notification daemon).",
+                "이 환경에서는 알림 소리를 낼 수 없습니다(알림 데몬 없음).",
+                "此环境无法播放通知声音（没有通知守护进程）。",
+                "この環境では通知音を鳴らせません（通知デーモンなし）。",
             ],
             Msg::ToolbarSize => [
                 "Toolbar icon size",

@@ -239,6 +239,8 @@ impl Dep {
 pub const DEPENDS: &[(&str, &str, Dep)] = &[
     ("notify.preview", "notify.enabled", Dep::On),
     ("notify.broadcast_mute", "notify.enabled", Dep::On),
+    ("notify.sound", "notify.enabled", Dep::On),
+    ("notify.normal_toast", "notify.enabled", Dep::On),
     ("ui.tray_hide_taskbar", "ui.close_to_tray", Dep::On),
     ("ui.typeahead_timeout", "ui.typeahead", Dep::On),
     ("ui.typeahead_pos", "ui.typeahead", Dep::On),
@@ -725,6 +727,24 @@ pub fn registry() -> &'static [Entry] {
             desc: Msg::NotifyPreviewDesc,
             kind: SettingKind::Toggle,
             key: "notify.preview",
+        },
+        // 알림 강도(M3-8 잔여 · 11-06): 소리 on/off(기본 on — 미검증·원격은 설정과 무관하게 무음) ·
+        // 일반 등급 토스트(기본 on = 종전 08-15 동작 유지 · off = ADR-0010 표 그대로 Badge).
+        Entry {
+            cat: Msg::CatNotify,
+            sub: None,
+            label: Msg::NotifySound,
+            desc: Msg::NotifySoundDesc,
+            kind: SettingKind::Toggle,
+            key: "notify.sound",
+        },
+        Entry {
+            cat: Msg::CatNotify,
+            sub: None,
+            label: Msg::NotifyNormalToast,
+            desc: Msg::NotifyNormalToastDesc,
+            kind: SettingKind::Toggle,
+            key: "notify.normal_toast",
         },
         // 공지(브로드캐스트) 받지 않기(08-21 사용자 확정 — 옵트아웃 · 기본 받음).
         Entry {

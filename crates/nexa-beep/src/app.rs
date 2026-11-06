@@ -4352,6 +4352,16 @@ struct App {
     unread: HashMap<PeerId, u32>,
     /// 알림 스로틀(M3-8) — 키(상대/방)별 마지막 알림 시각 ms(3초 안 중복 억제).
     last_notify: HashMap<String, u64>,
+    /// 알림 판정 기록(M3-8 잔여 · 11-06 · 헤드리스 `dump` 판정용 · 상한 32 · 봉투만 = 키·강도·사유).
+    notify_log: VecDeque<(
+        String,
+        nbeep_core::AlertLevel,
+        Option<nbeep_core::SuppressReason>,
+    )>,
+    /// 발신자별 `Urgent` 수신 시각(now_ms · 24h 유지 — FR-S-42 횟수 표시 + N분 속도 강등의 원천).
+    urgent_log: HashMap<PeerId, VecDeque<u64>>,
+    /// "이 환경에서는 소리를 낼 수 없습니다" 1회 고지 여부(Linux 데몬 부재).
+    sound_warned: bool,
     /// 알림 대상 맵(08-15 — 클릭 = 해당 대화 열기): 토큰(=알림 키) → 대상.
     /// 토큰은 OS를 불투명하게 왕복하고, 해석은 여기서만 한다(봉투 원리).
     notify_targets: HashMap<String, NotifyTarget>,
@@ -8374,6 +8384,17 @@ impl App {
                 e.until_ms.unwrap_or(0)
             );
         }
+        // 알림 판정(M3-8 · 11-06) — `[dump] notify <키> level=<Silent|Badge|Toast|Alarm> demoted=<사유|none>` ·
+        // `[dump] urgent24 <peer> n=<24h 건수>`(FR-S-42).
+        for (k, level, demoted) in &self.notify_log {
+            eprintln!(
+                "[dump] notify {k} level={level:?} demoted={}",
+                demoted.map_or_else(|| "none".to_string(), |d| format!("{d:?}"))
+            );
+        }
+        for (p, q) in &self.urgent_log {
+            eprintln!("[dump] urgent24 {} n={}", p.short(), q.len());
+        }
     }
 
     /// 스크립트 `group.accept` — 대기 중인 초대 전부 수락 + 초대 카드 모달 닫기(11-04).
@@ -10084,7 +10105,13 @@ impl App {
         *cur = (*cur).max(seq); // 읽음 ack 대상(N-2 up-to)
         self.ledger.note_recv(peer); // 왕래 장부(상호 확인)
         self.trust.note_chat(peer, unix_now_ms()); // 최근 대화(08-15)
-        let notify_body = self.notify_body(text.as_str()); // move 전에 뜬다
+                                                   // ★ 알림 강도 판정(M3-8 잔여 · 11-06 · ADR-0010 §3-3) — 발신자의 주장 × 내 신뢰 × 경로 × 공지 팬아웃 × 같은
+                                                   //   발신자 Urgent 속도. 본문은 판정(핀 = 내용 숨김)에 따라 — text가 move되기 전에 뜬다.
+        let imp = nbeep_core::Importance::from_nibble(importance);
+        let urgent_in_window = self.note_urgent(peer, imp);
+        let decision =
+            nbeep_core::decide_alert(self.alert_input(peer, imp, broadcast, urgent_in_window));
+        let notify_body = self.notify_body(text.as_str(), decision.hide_preview);
         let (at_ms, wall) = now_stamp();
         // 발신자 표시 이름(08-19 사용자 요청 — 1:1도 수신 풍선 위에 이름).
         let from = self.peer_title(peer);
@@ -10123,19 +10150,21 @@ impl App {
         }
         // 읽음/안읽음 계상(③) — 뷰가 닫혀 있으면 배지·제목으로 알린다.
         self.note_incoming(peer);
-        // OS 알림(M3-8) — 앱이 뒤에 있을 때만 · 미검증 = 무음(DR-25).
-        // ④ 등급 강도(docs/24 §3-3 근사): **미검증 = 자동 강등(종전 무음
-        // 게이트가 이긴다)** · 검증·핀 상대의 Urgent = **앱이 앞에 있어도**
-        // 알림(force — "지금 당장"의 요청). Notice는 종전 배경 알림 그대로.
-        let silent = self.effective_trust(peer) == nbeep_core::TrustLevel::Unverified;
-        let title = self.peer_title(peer);
-        let force = importance >= 2 && !silent;
+        // OS 알림(M3-8) — 강도는 위 판정(decision) · Badge = 배지만 · Toast = 뒤에 있을 때 · Alarm = 소리+주의.
+        let mut title = self.peer_title(peer);
+        if imp == nbeep_core::Importance::Urgent {
+            // FR-S-42 — 최근 24h Urgent 횟수를 보이게(막지 않고 보인다 · 사회적 문제는 가시성으로).
+            let n = self.urgent_log.get(&peer).map_or(0, VecDeque::len);
+            title = format!(
+                "{title} · {}",
+                nbeep_core::tf(nbeep_core::Msg::NotifyUrgentCount, &[&n.to_string()])
+            );
+        }
         self.notify_user(
             &format!("p:{}", peer.short()),
             &title,
             &notify_body,
-            silent,
-            force,
+            decision,
             NotifyTarget::Peer(peer),
         );
         // 이 대화가 보이는 창을 다시 그린다.
@@ -14371,20 +14400,32 @@ impl App {
     /// 포커스가 아님**(포커스 중엔 배지·제목이 맡는다) · 키별 3초 스로틀.
     /// `silent` = DR-25 신뢰 게이트(미검증 발신자 = 소리 없음). 내용 정책은
     /// 호출자가 끝낸다(미리보기 무해화·파일명 금지 — FR-S-41).
+    /// 알림 발화(M3-8 · ADR-0010 §3-2) — 강도는 호출자가 [`nbeep_core::decide_alert`]로 판정해 넘긴다
+    /// (발신자의 주장 × 내 신뢰 × 경로 × 팬아웃 × 속도). 여기는 **동작만**: `Badge` 이하 = 미읽음 배지·제목
+    /// (`note_incoming`이 이미) · `Toast` = 앱이 뒤에 있을 때 OS 알림 · `Alarm` = 앱이 앞에 있어도 + 소리
+    /// (설정 `notify.sound`) + 주 창 주의 요청(포커스 비강탈 — 최상위 창의 v1 대리 · Win 작업표시줄 깜빡임 ·
+    /// mac Dock 바운스 · Linux urgency). 강등은 본문 꼬리로 **표시**한다(조용히 버리지 않는다).
     fn notify_user(
         &mut self,
         key: &str,
         title: &str,
         body: &str,
-        silent: bool,
-        force: bool,
+        decision: nbeep_core::AlertDecision,
         target: NotifyTarget,
     ) {
-        if self.settings.get("notify.enabled") != "on" {
+        use nbeep_core::AlertLevel;
+        // 판정 기록(dump 판정 · 상한 32).
+        self.notify_log
+            .push_back((key.to_string(), decision.level, decision.demoted));
+        while self.notify_log.len() > 32 {
+            self.notify_log.pop_front();
+        }
+        if self.settings.get("notify.enabled") != "on" || decision.level <= AlertLevel::Badge {
             return;
         }
-        // ④ Urgent(force) = 앱이 앞에 있어도 알림("지금 당장"의 요청 — docs/24).
-        if !force && self.windows.values().any(|e| e.window.has_focus()) {
+        let alarm = decision.level == AlertLevel::Alarm;
+        // Alarm = 앱이 앞에 있어도 알림("지금 당장"의 요청 — docs/24). Toast는 뒤에 있을 때만.
+        if !alarm && self.windows.values().any(|e| e.window.has_focus()) {
             return;
         }
         let now = self.now_ms();
@@ -14395,30 +14436,100 @@ impl App {
         // 클릭 왕복(08-15 — 알림 클릭 = 해당 대화): 토큰(=키)을 OS에 실어 보내고
         // 되돌아오면 이 맵으로만 해석한다(OS에는 불투명 — 봉투 원리).
         self.notify_targets.insert(key.to_string(), target);
-        // Windows = 트레이 풍선(있을 때) · 그 외/트레이 부재 = plat 어댑터(fail-soft).
+        let sound_on = self.settings.get("notify.sound") == "on";
+        let mut body_s = body.to_string();
+        if decision.demoted.is_some() {
+            body_s.push(' ');
+            body_s.push_str(nbeep_core::t(nbeep_core::Msg::NotifyDemoted));
+        }
+        if alarm {
+            // 최상위 창의 v1 대리 — OS 주의 요청은 포커스를 훔치지 않는다(ADR-0010 §4-2).
+            if let Some(e) = self.main_id.and_then(|m| self.windows.get(&m)) {
+                e.window
+                    .request_user_attention(Some(winit::window::UserAttentionType::Critical));
+            }
+        }
+        // Windows = 트레이 풍선(있을 때) · Alarm은 풍선 무음 + 앱 알림음(이중 재생 방지).
         #[cfg(windows)]
         if let Some(t) = &self.tray {
-            t.notify(title, body, silent, key);
+            t.notify(title, &body_s, !sound_on || alarm, key);
+            if alarm && sound_on {
+                let _ = nbeep_plat::sound::play_alert();
+            }
             return;
         }
-        let _ = nbeep_plat::notify::notify(&nbeep_plat::notify::Note {
+        // 그 외/트레이 부재 = plat 어댑터(fail-soft). mac UN 경로는 기본음을 스스로 낸다 · Linux는 데몬 힌트.
+        let shown = nbeep_plat::notify::notify(&nbeep_plat::notify::Note {
             title,
-            body,
-            silent,
+            body: &body_s,
+            silent: !sound_on,
+            urgent: alarm,
             target: key,
         });
+        if alarm && sound_on && !shown && !nbeep_plat::sound::play_alert() && !self.sound_warned {
+            // 소리를 낼 수단이 하나도 없다(Linux 데몬 부재) — 조용히 실패하지 않는다(ADR-0010 §4-3).
+            self.sound_warned = true;
+            self.set_status(nbeep_core::t(nbeep_core::Msg::NotifySoundUnavailable).to_string());
+        }
     }
 
-    /// 알림 본문(M3-8) — 미리보기 설정 on이면 무해화된 본문 80자, off면 일반 문구.
-    fn notify_body(&self, text: &str) -> String {
-        if self.settings.get("notify.preview") == "on" {
-            let mut b: String = text.chars().take(80).collect();
-            if text.chars().count() > 80 {
+    /// 알림 본문(M3-8) — 미리보기 설정 on이고 판정이 숨김이 아니면 무해화된 본문 80자(줄바꿈 접기 · ADR-0010
+    /// §4-1), 아니면 "새 메시지" 문구. 이미지·파일명·링크는 호출자가 싣지 않는다(FR-S-41).
+    fn notify_body(&self, text: &str, hide_preview: bool) -> String {
+        if !hide_preview && self.settings.get("notify.preview") == "on" {
+            let folded: String = text
+                .chars()
+                .map(|c| if c == '\n' || c == '\r' { ' ' } else { c })
+                .collect();
+            let mut b: String = folded.chars().take(80).collect();
+            if folded.chars().count() > 80 {
                 b.push('…');
             }
             b
         } else {
             nbeep_core::t(nbeep_core::Msg::NotifyNewMessage).to_string()
+        }
+    }
+
+    /// `Urgent` 속도·24h 장부(FR-S-42) — 24h 밖은 걷고, Urgent면 **이전** N분 창 건수를 돌려준 뒤 이번 건을 적는다.
+    fn note_urgent(&mut self, peer: PeerId, importance: nbeep_core::Importance) -> u32 {
+        let now = self.now_ms();
+        let q = self.urgent_log.entry(peer).or_default();
+        while q
+            .front()
+            .is_some_and(|&t0| now.saturating_sub(t0) > nbeep_core::URGENT_DAY_MS)
+        {
+            q.pop_front();
+        }
+        if importance != nbeep_core::Importance::Urgent {
+            if q.is_empty() {
+                self.urgent_log.remove(&peer);
+            }
+            return 0;
+        }
+        let in_window = q
+            .iter()
+            .filter(|&&t0| now.saturating_sub(t0) <= nbeep_core::URGENT_WINDOW_MS)
+            .count();
+        q.push_back(now);
+        u32::try_from(in_window).unwrap_or(u32::MAX)
+    }
+
+    /// 알림 판정 입력 조립 — 신뢰(형제·내 기기 = 검증)·경로(M5-3c)·설정 한 곳.
+    fn alert_input(
+        &self,
+        peer: PeerId,
+        importance: nbeep_core::Importance,
+        fanout: bool,
+        urgent_in_window: u32,
+    ) -> nbeep_core::AlertInput {
+        nbeep_core::AlertInput {
+            importance,
+            trust: self.effective_trust(peer),
+            remote: self.peer_path(peer) == nbeep_core::PathClass::Remote,
+            fanout,
+            urgent_in_window,
+            normal_toast: self.settings.get("notify.normal_toast") == "on",
         }
     }
 
@@ -19905,16 +20016,24 @@ impl App {
                 if let Some(chat) = self.gchats.get_mut(&gid) {
                     chat.push_line(line, &mut inv);
                 }
-                // OS 알림(M3-8) — 방 이름 제목 · 발신자 미검증 = 무음(DR-25).
+                // OS 알림(M3-8) — 방 이름 제목 · 그룹 와이어에는 등급이 없다 = Normal · 팬아웃 표식 · 발신자 신뢰·경로로
+                //   판정. ★ 본문은 **무해화 뒤** 미리보기(11-06 수정 — 종전은 원문 String을 토스트에 그대로 실었다).
                 {
-                    let silent = self.effective_trust(peer) == nbeep_core::TrustLevel::Unverified;
-                    let body = self.notify_body(&text);
+                    let decision = nbeep_core::decide_alert(self.alert_input(
+                        peer,
+                        nbeep_core::Importance::Normal,
+                        true,
+                        0,
+                    ));
+                    let body = self.notify_body(
+                        nbeep_core::sanitize_message(&text).as_str(),
+                        decision.hide_preview,
+                    );
                     self.notify_user(
                         &format!("g:{gid:?}"),
                         &room,
                         &body,
-                        silent,
-                        false,
+                        decision,
                         NotifyTarget::Group(gid),
                     );
                 }
@@ -22331,8 +22450,6 @@ impl ApplicationHandler<AppEvent> for App {
                         }
                         // OS 알림(M3-8) — **파일명은 싣지 않는다**(FR-S-41 금지 목록).
                         {
-                            let silent =
-                                self.effective_trust(peer) == nbeep_core::TrustLevel::Unverified;
                             // 그룹 팬아웃(M5-1h) — 알림도 그 방으로(제목 = 방 이름 ·
                             // 클릭 = 그룹 대화 · G::Msg 알림과 같은 문법).
                             let g = self.recv_group_gid(peer, &name, size).and_then(|gid| {
@@ -22350,8 +22467,15 @@ impl ApplicationHandler<AppEvent> for App {
                                     NotifyTarget::Peer(peer),
                                 ),
                             };
+                            // 파일 요청 = Notice 등급으로 판정(승인이 필요한 행위 · 미검증은 Badge — 승인 창이 어차피 뜬다).
+                            let decision = nbeep_core::decide_alert(self.alert_input(
+                                peer,
+                                nbeep_core::Importance::Notice,
+                                matches!(target, NotifyTarget::Group(_)),
+                                0,
+                            ));
                             let body = nbeep_core::t(nbeep_core::Msg::NotifyFileOffer).to_string();
-                            self.notify_user(&key, &title, &body, silent, false, target);
+                            self.notify_user(&key, &title, &body, decision, target);
                         }
                         // 스레드에 수신 항목(승인 대기) — 거절하면 이 항목이 실패로 남는다.
                         self.push_xfer_line(peer, false, &name, size);
@@ -26549,6 +26673,9 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         manual_addrs: HashMap::new(),
         unread: HashMap::new(),
         last_notify: HashMap::new(),
+        notify_log: VecDeque::new(),
+        urgent_log: HashMap::new(),
+        sound_warned: false,
         notify_targets: HashMap::new(),
         last_read: HashMap::new(),
         reconnect: HashMap::new(),
