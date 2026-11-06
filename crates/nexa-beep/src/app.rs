@@ -237,6 +237,55 @@ fn window_event_tag(ev: &WindowEvent) -> &'static str {
     }
 }
 
+/// 사용자 사진 관리 복사(M3-17 · 08-16 · 11-06 자유 함수화 — 테스트 가능): `custom_dir` 아래 사본을 만들고 그 경로를 돌려준다.
+/// 이미 그 폴더 안이면 그대로 · 같은 내용 재선택 = 같은 사본 · 읽기/쓰기 실패 = 원본 경로(fail-soft).
+fn manage_profile_image_in(dir: &std::path::Path, path: &str) -> String {
+    let p = std::path::Path::new(path);
+    if p.starts_with(dir) {
+        return path.to_string(); // 이미 관리 사본(최근 목록 재선택)
+    }
+    let Ok(bytes) = std::fs::read(p) else {
+        return path.to_string();
+    };
+    let h = nbeep_crypto::sha256(&bytes);
+    let tag: String = h[..4].iter().map(|b| format!("{b:02x}")).collect();
+    let orig = p
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let safe: String = orig
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+        .take(48)
+        .collect();
+    let name = if safe.is_empty() {
+        format!("{tag}.img")
+    } else {
+        format!("{tag}-{safe}")
+    };
+    let dst = dir.join(name);
+    if !dst.is_file()
+        && (std::fs::create_dir_all(dir).is_err() || std::fs::write(&dst, &bytes).is_err())
+    {
+        return path.to_string();
+    }
+    dst.to_string_lossy().into_owned()
+}
+
+/// 같은 이메일을 **다른** 키가 주장하는가(순수 · M3-17 남김 ②) — 대소문자·공백 무시 · 빈 이메일은 충돌 아님.
+fn email_claimed_elsewhere<'a>(
+    me: PeerId,
+    email: &str,
+    others: impl Iterator<Item = (PeerId, &'a str)>,
+) -> bool {
+    let norm = |s: &str| s.trim().to_ascii_lowercase();
+    let mine = norm(email);
+    if mine.is_empty() {
+        return false;
+    }
+    others.into_iter().any(|(p, e)| p != me && norm(e) == mine)
+}
+
 /// 창 역할 태그(LOG-2 Ui 층 · 봉투 — PeerId·GroupId는 싣지 않는다).
 fn role_tag(role: Role) -> &'static str {
     match role {
@@ -7641,8 +7690,16 @@ impl App {
                 // 화면에 안 나오던 상태다(충돌 = v1 사칭 유일 가시 신호).
                 let blocked = self.trust.is_blocked(entry.peer);
                 // 이름 충돌(표시 이름 · M3-14) ∨ 핸들 충돌(사용자 핸들 · ADR-0015 S2-e) — 같은 덧표식.
+                // ★ 프로필 필드로 확장(ADR-0008 docs/22:52 · M3-17 남김 · 11-06): 프로필 이름이 다른 키의 이름 이력과 겹치거나,
+                //   같은 이메일을 다른 키가 주장하면 충돌(연락처는 표시 이름보다 사칭 유인이 크다).
+                let profile_name_conflict =
+                    nbeep_core::DisplayName::parse(profile_name.as_deref().unwrap_or(""))
+                        .ok()
+                        .is_some_and(|dn| self.trust.name_conflict(entry.peer, &dn).is_some());
                 let conflict = self.trust.name_conflict(entry.peer, &entry.name).is_some()
-                    || self.trust.handle_conflict(entry.peer);
+                    || self.trust.handle_conflict(entry.peer)
+                    || profile_name_conflict
+                    || self.email_conflict(entry.peer);
                 // 최근 접속 상대 시각(08-17 — 삭제 메뉴가 시각만 표시).
                 let last_seen_label = ago_label(self.trust.meta(entry.peer).0);
                 // 프레즌스(08-23 — 점 색 축): 필터 판정과 같은 정의.
@@ -16320,37 +16377,25 @@ impl App {
     /// 재선택 = 같은 사본 재사용**(중복 누적 없음). 실패 = 원본 경로 그대로
     /// (fail-soft — 종전 동작과 동일 · 포터블 이동 시에도 data/가 통째로 간다).
     fn manage_profile_image(&self, path: &str) -> String {
-        let dir = self.data_dir.join("profiles").join("custom");
-        let p = std::path::Path::new(path);
-        if p.starts_with(&dir) {
-            return path.to_string(); // 이미 관리 사본(최근 목록 재선택)
-        }
-        let Ok(bytes) = std::fs::read(p) else {
-            return path.to_string();
+        manage_profile_image_in(&self.data_dir.join("profiles").join("custom"), path)
+    }
+
+    /// 같은 이메일을 다른 키가 주장하는가(M3-17 남김 ② · docs/22:52) — 메모리의 수신 프로필만 본다(이메일은 캐시하지 않는 정책).
+    fn email_conflict(&self, peer: PeerId) -> bool {
+        let Some(mine) = self
+            .peer_profiles
+            .get(&peer)
+            .and_then(|p| p.email.as_deref())
+        else {
+            return false;
         };
-        let h = nbeep_crypto::sha256(&bytes);
-        let tag: String = h[..4].iter().map(|b| format!("{b:02x}")).collect();
-        let orig = p
-            .file_name()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        let safe: String = orig
-            .chars()
-            .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
-            .take(48)
-            .collect();
-        let name = if safe.is_empty() {
-            format!("{tag}.img")
-        } else {
-            format!("{tag}-{safe}")
-        };
-        let dst = dir.join(name);
-        if !dst.is_file()
-            && (std::fs::create_dir_all(&dir).is_err() || std::fs::write(&dst, &bytes).is_err())
-        {
-            return path.to_string();
-        }
-        dst.to_string_lossy().into_owned()
+        email_claimed_elsewhere(
+            peer,
+            mine,
+            self.peer_profiles
+                .iter()
+                .filter_map(|(p, pr)| pr.email.as_deref().map(|e| (*p, e))),
+        )
     }
 
     /// 내 프로필 사진의 와이어 축소본 경로(`data/profiles/me.wire.png` · 08-16).
@@ -28430,6 +28475,57 @@ mod tests {
     }
 
     /// RL-3 ⓑ(11-04): 짧게 산 세션은 단계를 잇고(상한 밖 = 중단) · 오래 산 세션은 0단 · 성립 전 Closed(lived MAX)도 0단.
+    /// M3-17 남김 ②③(11-06): 이메일 교차 충돌(순수) · 관리 복사(사본 폴더 · 재선택 동일 · 실패 = 원본).
+    #[test]
+    fn email_conflict_and_managed_profile_image_copy() {
+        use super::{email_claimed_elsewhere, manage_profile_image_in};
+        let a = PeerId::from_bytes([1u8; PeerId::LEN]);
+        let b = PeerId::from_bytes([2u8; PeerId::LEN]);
+        let others = |v: Vec<(PeerId, &'static str)>| v.into_iter();
+        assert!(email_claimed_elsewhere(
+            a,
+            "Me@x.io",
+            others(vec![(a, "me@x.io"), (b, " ME@X.IO ")])
+        ));
+        assert!(!email_claimed_elsewhere(
+            a,
+            "me@x.io",
+            others(vec![(a, "me@x.io"), (b, "other@x.io")])
+        ));
+        assert!(
+            !email_claimed_elsewhere(a, "", others(vec![(b, "")])),
+            "빈 이메일은 충돌 아님"
+        );
+        let tmp = std::env::temp_dir().join(format!("nbeep-mpi-{}", std::process::id()));
+        let custom = tmp.join("profiles").join("custom");
+        std::fs::create_dir_all(&tmp).unwrap();
+        let src = tmp.join("My Photo!.png");
+        std::fs::write(&src, b"PNGDATA").unwrap();
+        let p1 = manage_profile_image_in(&custom, &src.to_string_lossy());
+        assert!(
+            std::path::Path::new(&p1).starts_with(&custom),
+            "사본 폴더 안: {p1}"
+        );
+        assert!(
+            p1.ends_with("-MyPhoto.png"),
+            "정제된 이름 + 해시 접두: {p1}"
+        );
+        let p2 = manage_profile_image_in(&custom, &src.to_string_lossy());
+        assert_eq!(p1, p2, "같은 내용 재선택 = 같은 사본");
+        assert_eq!(
+            manage_profile_image_in(&custom, &p1),
+            p1,
+            "이미 사본이면 그대로"
+        );
+        let missing = tmp.join("nope.png").to_string_lossy().into_owned();
+        assert_eq!(
+            manage_profile_image_in(&custom, &missing),
+            missing,
+            "읽기 실패 = 원본 경로"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
     /// 창 투명도(dir3 DR-22 이식 · 11-06) 판정표: 묶음 모드는 "이 앱의 어느 창이든 포커스"가 기준 · 유예 중은 아직 흐리지
     /// 않음 · 묶음 off는 창마다 자기 포커스.
     #[test]
