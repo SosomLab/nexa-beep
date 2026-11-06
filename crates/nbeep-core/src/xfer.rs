@@ -637,12 +637,25 @@ struct Incoming {
     buf: Vec<u8>,
 }
 
-/// 선언 크기만큼 버퍼를 한 번에 예약(M4-12 0단계) — 이미 그만큼이면 no-op · usize 변환 실패(32비트 상한)는 예약 없이 종전 성장.
+/// 선언 크기 + 봉인 헤드룸만큼 버퍼를 한 번에 예약(M4-12 0단계) — 이미 그만큼이면 no-op · usize 변환 실패(32비트 상한)는
+/// 예약 없이 종전 성장.
+///
+/// ★ 헤드룸(11-07 실측 보완): 정확히 S만 예약하면 봉인 단계의 머리 끼워 넣기(`Vec::splice` — `.beepq` 헤더+선두+메타 ·
+/// sealed 머리) · AEAD 태그 append가 **용량 초과 → 배증 재할당(copy)** 을 일으켜 Done 순간 다시 ≈2S가 된다(peak-poll
+/// 521MB/256MiB). [`RESERVE_HEADROOM`]만큼 더 잡아 그 경로가 재할당 없이 끝나게 한다.
 fn reserve_declared(buf: &mut Vec<u8>, size: u64) {
     if let Ok(total) = usize::try_from(size) {
-        buf.reserve_exact(total.saturating_sub(buf.len()));
+        buf.reserve_exact(
+            total
+                .saturating_add(RESERVE_HEADROOM)
+                .saturating_sub(buf.len()),
+        );
     }
 }
+
+/// 수신 버퍼 봉인 헤드룸 — `.beepq` 헤더(≤ 2 KiB: 고정 50B + 선두 512B + 메타(이름·검사 결과)) + sealed 머리(≈ 40B) +
+/// AEAD 태그(16B) 모두를 덮고도 남는 64 KiB. 전송당 1회 · 파일 크기와 무관한 상수.
+pub const RESERVE_HEADROOM: usize = 64 * 1024;
 
 /// 완료된 수신물 — 해시 대조·`.beepq` 봉인은 조립 지점 몫(core는 크립토를 모른다).
 #[derive(Debug, PartialEq, Eq)]
@@ -1197,6 +1210,28 @@ mod tests {
 
     /// M4-10a·b — 프리픽스 선적재 재개: 이어받기 → 완료. 구버전 발신자가 0부터
     /// 다시 보내는 중복 프리픽스도 흡수하고, **어긋난 프리픽스는 폐기**한다.
+    /// M4-12 보완(11-07): 수락 예약 = 선언 크기 + 헤드룸 — 봉인 머리·태그를 끼워 넣어도 재할당(순간 2S)이 없다.
+    #[test]
+    fn accept_reserves_headroom_so_seal_does_not_reallocate() {
+        let mut buf = Vec::new();
+        super::reserve_declared(&mut buf, 1_000_000);
+        assert!(buf.capacity() >= 1_000_000 + super::RESERVE_HEADROOM);
+        buf.resize(1_000_000, 7);
+        let cap = buf.capacity();
+        let ptr = buf.as_ptr();
+        buf.splice(0..512, vec![1u8; 2048]); // .beepq 헤더(선두 512B 자리에 ≈2KiB)
+        buf.extend_from_slice(&[0u8; 16]); // AEAD 태그
+        buf.splice(0..0, vec![2u8; 40]); // sealed 머리
+        assert_eq!(
+            (buf.capacity(), buf.as_ptr()),
+            (cap, ptr),
+            "헤드룸 안에서는 재할당이 없어야 한다"
+        );
+        let mut again = vec![0u8; 10];
+        super::reserve_declared(&mut again, 5); // 이미 그 이상 — no-op(패닉·축소 없음)
+        assert!(again.capacity() >= 10);
+    }
+
     #[test]
     fn resume_with_prefix_and_duplicate_prefix_tolerance() {
         let original: Vec<u8> = (0..100_000u32).map(|i| (i % 249) as u8).collect();
