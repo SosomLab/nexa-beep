@@ -581,6 +581,8 @@ fn human_bytes(b: u64) -> String {
 }
 
 // ── 레이아웃 상수(논리 px) ──
+/// 드래그 정지 중 자동 스크롤 걸음 간격(ms · M3-1b ② · nexa-ctl `AUTOSCROLL_STEP_MS`와 같은 값).
+const DRAG_AUTOSCROLL_MS: u64 = 50;
 /// 풍선 내부 줄 높이.
 const TH_LINE_H: i32 = 22;
 /// 풍선 내부 가로 여백.
@@ -682,6 +684,11 @@ pub struct ChatViewWidget {
     input_hscroll: i32,
     /// 입력창 드래그 선택 중.
     dragging: bool,
+    /// ★ M3-1b ②(11-06) 드래그 정지 중 연속 스크롤 — 마지막 포인터 좌표(버튼을 누른 채 가장자리 밖에 멈춰 있으면 틱이 같은
+    /// 좌표의 MouseMove를 다시 넣어 한 걸음씩 민다 · nexa-ctl TextBox `drag_autoscroll_tick`과 같은 처방).
+    drag_at: Option<(i32, i32)>,
+    /// 마지막 자동 스크롤 걸음 시각(ms) — [`DRAG_AUTOSCROLL_MS`] 간격.
+    drag_step_ms: u64,
     /// paint가 캐시하는 입력 지오메트리 — 마우스 히트테스트용.
     input_geom: RefCell<InputGeom>,
     /// paint가 캐시하는 스레드 콘텐츠 총 높이(물리 px) — 스크롤 클램프 근거.
@@ -807,6 +814,8 @@ impl ChatViewWidget {
             input_scroll: 0,
             input_hscroll: 0,
             dragging: false,
+            drag_at: None,
+            drag_step_ms: 0,
             input_geom: RefCell::new(InputGeom::default()),
             content_h: Cell::new(0),
             time_24h: true,
@@ -1213,6 +1222,17 @@ impl ChatViewWidget {
     pub fn tick(&mut self, now_ms: u64) -> bool {
         self.last_now.set(now_ms);
         self.sync_jump_scroll();
+        // ★ M3-1b ②: 드래그 중 포인터가 입력창 가장자리 밖에 **멈춰** 있으면 50ms마다 같은 좌표의 MouseMove를 다시 넣어
+        //   한 걸음씩 스크롤(종전엔 포인터를 흔들어야 다음 줄이 선택됐다).
+        let drag = self.drag_autoscroll_active()
+            && now_ms.saturating_sub(self.drag_step_ms) >= DRAG_AUTOSCROLL_MS
+            && {
+                self.drag_step_ms = now_ms;
+                let (x, y) = self.drag_at.unwrap_or_default();
+                let mut inv = Invalidations::default();
+                self.on_event(&InputEvent::MouseMove { x, y }, &mut inv);
+                true
+            };
         // 점프 강조 링(11-02) — 살아 있는 동안 재도색 · 만료 순간 한 번 더 그려 지운다.
         let hl = match self.hilite.get() {
             Some((_, until)) if now_ms >= until => {
@@ -1225,7 +1245,24 @@ impl ChatViewWidget {
         let hud = self
             .hud_style
             .is_some_and(|st| self.hud.tick(std::time::Instant::now(), &st));
-        self.thread_bars.tick(now_ms) | self.input_bars.tick(now_ms) | hl | hud
+        self.thread_bars.tick(now_ms) | self.input_bars.tick(now_ms) | hl | hud | drag
+    }
+
+    /// 드래그 정지 중 연속 스크롤이 살아 있는가(M3-1b ②) — 호스트가 깨움 주기를 50ms로 당기는 근거.
+    #[must_use]
+    pub fn drag_autoscroll_active(&self) -> bool {
+        if !self.dragging {
+            return false;
+        }
+        let Some((x, y)) = self.drag_at else {
+            return false;
+        };
+        let input = self.input_bar();
+        let edge = self.s(12);
+        y < input.y + self.s(INPUT_PAD_V)
+            || y > input.bottom() - self.s(INPUT_PAD_V)
+            || x < input.x + edge
+            || x > input.right() - edge
     }
 
     /// 배율 지정(고DPI).
@@ -2442,8 +2479,9 @@ impl Widget for ChatViewWidget {
                     return;
                 }
                 if self.dragging {
-                    // 영역 밖 드래그 = 자동 스크롤 — 가려진 윗줄/아랫줄까지 선택이
-                    // 이어진다(사용자 보완 요청 08-10).
+                    self.drag_at = Some((x, y)); // 정지 중 연속 스크롤의 재료(M3-1b ②)
+                                                 // 영역 밖 드래그 = 자동 스크롤 — 가려진 윗줄/아랫줄까지 선택이
+                                                 // 이어진다(사용자 보완 요청 08-10).
                     let input = self.input_bar();
                     if y < input.y + self.s(INPUT_PAD_V) {
                         self.input_scroll = self.input_scroll.saturating_sub(1);
@@ -2474,6 +2512,7 @@ impl Widget for ChatViewWidget {
             }
             InputEvent::MouseUp { x, y } => {
                 self.dragging = false;
+                self.drag_at = None;
                 self.bsel_drag = false;
                 // 라인별 트랜스포트 아이콘(M4-2e) — 페인트가 남긴 히트로 판정.
                 let ctl = self
