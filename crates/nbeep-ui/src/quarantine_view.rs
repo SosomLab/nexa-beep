@@ -499,6 +499,10 @@ impl Widget for QuarantineWidget {
                         nbeep_core::t(nbeep_core::Msg::ScanNotDone).to_string(),
                         theme.text_dim,
                     ),
+                    nbeep_core::ScanOutcome::TooLarge => (
+                        nbeep_core::t(nbeep_core::Msg::ScanTooLarge).to_string(),
+                        theme.text_dim,
+                    ),
                 };
                 ctx.text(x, chip.y + (chip.h - sh) / 2, r, &sl, sc);
                 x += ctx.text_width(&sl) + self.s(10);

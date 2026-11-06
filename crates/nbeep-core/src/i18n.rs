@@ -329,6 +329,8 @@ pub enum Msg {
     StBroadcastRateLimit,
     /// 검사 사실 표기 3종(FR-S-15 · NFR-S-5 — "안전" 단정 금지 · 08-21).
     ScanNotDone,
+    /// 검사 불가(크기)(M4-12 · 11-07).
+    ScanTooLarge,
     ScanClean,
     ScanDetected,
     /// 상태바 — 수신물 검사 탐지 경고(파일명).
@@ -3399,6 +3401,7 @@ impl Msg {
                 "公告限每3秒发送1次 — 请稍后再试（未发送）",
                 "お知らせは3秒に1回までです — 少し待って再試行してください（送信していません）",
             ],
+            Msg::ScanTooLarge => ["Not scanned (too large)", "검사 불가(크기)", "未检查(文件过大)", "未検査(サイズ超過)"],
             Msg::ScanNotDone => ["Not scanned", "검사 안 됨", "未检查", "未検査"],
             Msg::ScanClean => [
                 "Scanned (no detection)",

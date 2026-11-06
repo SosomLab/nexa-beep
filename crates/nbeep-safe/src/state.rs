@@ -105,7 +105,10 @@ pub fn step(state: QState, event: QEvent) -> Result<QState, InvalidTransition> {
 /// 승인 마찰을 한 단계 올려야 하는가 — 검사 못 한 격리물([docs/11 §4] 전이 규칙).
 #[must_use]
 pub fn friction_raised(state: QState) -> bool {
-    matches!(state, QState::Inspected(ScanOutcome::Unavailable))
+    matches!(
+        state,
+        QState::Inspected(ScanOutcome::Unavailable | ScanOutcome::TooLarge)
+    )
 }
 
 #[cfg(test)]

@@ -33,6 +33,108 @@ pub const FORMAT_VER: u16 = 1;
 /// 봉인 선두 상한(바이트). 실제 N = `min(MAX_SEAL, original_size)`.
 pub const MAX_SEAL: usize = 512;
 
+/// ★ NXBQ **v2 — 꼬리 메타**(M4-12 · 11-07 · 사용자 결정 11-06). v1은 sha·size·메타가 머리에 있어 **쓰기 시작 전에**
+/// 해시·검사 결과가 확정돼야 했다(= 원본 전체가 메모리에). v2는 머리를 8B로 줄이고 본문을 받는 대로 쓴 뒤 꼬리에
+/// 둔다. **반드시 NBSE v2 스트림([`nbeep_store::sealed_stream`]) 안에만 존재**한다 — 그래서 v1의 "선두 N 분리"(본문만으론
+/// 로드 불가)는 두지 않는다(AEAD 스트림이 전체를 덮고, 게이트는 v2를 평문으로 쓰지 않는다).
+///
+/// ```text
+/// head = "NXBQ" ‖ ver(2B LE)=2 ‖ flags(2B LE)                            (8B)
+/// body = 원본 전체
+/// tail = sha256(32) ‖ original_size(8 LE) ‖ meta_len(4 LE) ‖ meta TLV ‖ tail_len(4 LE)
+///        (tail_len = 32+8+4+meta_len · 파일 끝 4B를 읽어 꼬리 시작을 찾는다)
+/// ```
+pub const FORMAT_VER_V2: u16 = 2;
+/// v2 머리 길이.
+pub const HEAD_V2: usize = 8;
+/// v2 꼬리 고정부 길이(sha32 + size8 + meta_len4) — 트레일러(tail_len 4B) 제외.
+pub const TAIL_V2_FIXED: usize = 32 + 8 + 4;
+
+/// v2 머리 바이트.
+#[must_use]
+pub fn head_v2(flags: u16) -> [u8; HEAD_V2] {
+    let mut h = [0u8; HEAD_V2];
+    h[..4].copy_from_slice(&MAGIC);
+    h[4..6].copy_from_slice(&FORMAT_VER_V2.to_le_bytes());
+    h[6..8].copy_from_slice(&flags.to_le_bytes());
+    h
+}
+
+/// v2 머리 해석 → flags. v1 머리면 `UnknownVersion(1)`(호출자가 v1 경로로 돌린다).
+///
+/// # Errors
+/// [`QuarantineError`] — 매직·버전·잘림.
+pub fn parse_head_v2(bytes: &[u8]) -> Result<u16, QuarantineError> {
+    if bytes.len() < HEAD_V2 {
+        return Err(QuarantineError::Truncated);
+    }
+    if bytes[..4] != MAGIC {
+        return Err(QuarantineError::BadMagic);
+    }
+    let ver = u16::from_le_bytes([bytes[4], bytes[5]]);
+    if ver != FORMAT_VER_V2 {
+        return Err(QuarantineError::UnknownVersion(ver));
+    }
+    Ok(u16::from_le_bytes([bytes[6], bytes[7]]))
+}
+
+/// v2 꼬리(sha·size·메타) — 본문을 다 쓴 뒤 붙인다.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TailV2 {
+    /// 원본 전체 SHA-256(수신 중 증분 계산 — 호출자).
+    pub content_sha256: [u8; 32],
+    /// 원본 전체 크기.
+    pub original_size: u64,
+    /// 메타 블록(검사 결과 포함 — 본문 뒤에 확정).
+    pub meta: Meta,
+}
+
+impl TailV2 {
+    /// 꼬리 바이트(트레일러 tail_len 포함).
+    #[must_use]
+    pub fn encode(&self) -> Vec<u8> {
+        let meta = self.meta.encode();
+        let tail_len = u32::try_from(TAIL_V2_FIXED + meta.len()).unwrap_or(u32::MAX);
+        let mut out = Vec::with_capacity(TAIL_V2_FIXED + meta.len() + 4);
+        out.extend_from_slice(&self.content_sha256);
+        out.extend_from_slice(&self.original_size.to_le_bytes());
+        out.extend_from_slice(&(meta.len() as u32).to_le_bytes());
+        out.extend_from_slice(&meta);
+        out.extend_from_slice(&tail_len.to_le_bytes());
+        out
+    }
+
+    /// 트레일러(파일 끝 4B) → 꼬리 길이(트레일러 제외). 손상은 None.
+    #[must_use]
+    pub fn tail_len(trailer: &[u8]) -> Option<usize> {
+        let t: [u8; 4] = trailer.try_into().ok()?;
+        let n = u32::from_le_bytes(t) as usize;
+        (n >= TAIL_V2_FIXED).then_some(n)
+    }
+
+    /// 꼬리 해석(트레일러 제외 바이트 · `tail_len` 길이만큼) — 미지 TLV는 건너뛴다(v1과 같은 전방 호환).
+    ///
+    /// # Errors
+    /// [`QuarantineError`] — 잘림·메타 손상·길이 불일치.
+    pub fn decode(tail: &[u8]) -> Result<Self, QuarantineError> {
+        if tail.len() < TAIL_V2_FIXED {
+            return Err(QuarantineError::Truncated);
+        }
+        let content_sha256: [u8; 32] = tail[..32].try_into().expect("32B");
+        let original_size = u64::from_le_bytes(tail[32..40].try_into().expect("8B"));
+        let meta_len = u32::from_le_bytes(tail[40..44].try_into().expect("4B")) as usize;
+        if tail.len() != TAIL_V2_FIXED + meta_len {
+            return Err(QuarantineError::BadMeta);
+        }
+        let meta = Meta::decode(&tail[44..])?;
+        Ok(Self {
+            content_sha256,
+            original_size,
+            meta,
+        })
+    }
+}
+
 /// `sealed_prefix` 앞 고정 헤더 길이 = magic4 + ver2 + flags2 + sha32 + size8 + sealed_len2.
 const HEADER: usize = 4 + 2 + 2 + 32 + 8 + 2;
 
@@ -120,6 +222,7 @@ fn scan_byte(s: ScanOutcome) -> u8 {
         ScanOutcome::Unavailable => 0,
         ScanOutcome::Clean => 1,
         ScanOutcome::Detected => 2,
+        ScanOutcome::TooLarge => 3, // M4-12(11-07) — 구 앱은 BadMeta(fail-closed · 하향 호환 포기는 v2와 같은 결)
     }
 }
 
@@ -128,6 +231,7 @@ fn scan_from_byte(b: u8) -> Option<ScanOutcome> {
         0 => Some(ScanOutcome::Unavailable),
         1 => Some(ScanOutcome::Clean),
         2 => Some(ScanOutcome::Detected),
+        3 => Some(ScanOutcome::TooLarge),
         _ => None,
     }
 }
@@ -522,6 +626,39 @@ mod tests {
         assert_eq!(q.meta, sample_meta(), "미지 태그는 무시, 나머지는 온전");
     }
 
+    /// NXBQ v2(M4-12 · 11-07): 머리 8B · 꼬리 왕복(트레일러로 길이 찾기) · v1 머리는 UnknownVersion(1) · 꼬리 손상 fail-closed.
+    #[test]
+    fn v2_head_and_tail_roundtrip_and_fail_closed() {
+        let h = head_v2(FLAG_SEALED);
+        assert_eq!(parse_head_v2(&h), Ok(FLAG_SEALED));
+        assert_eq!(parse_head_v2(&h[..5]), Err(QuarantineError::Truncated));
+        let v1 = Beepq::seal(b"abc", [1u8; 32], &sample_meta());
+        assert_eq!(parse_head_v2(&v1), Err(QuarantineError::UnknownVersion(1)));
+        let tail = TailV2 {
+            content_sha256: [7u8; 32],
+            original_size: 123_456,
+            meta: sample_meta(),
+        };
+        let bytes = tail.encode();
+        let n = TailV2::tail_len(&bytes[bytes.len() - 4..]).unwrap();
+        assert_eq!(n + 4, bytes.len(), "트레일러 = 꼬리 길이");
+        let back = TailV2::decode(&bytes[..n]).unwrap();
+        assert_eq!(back, tail);
+        assert_eq!(
+            TailV2::decode(&bytes[..n - 1]),
+            Err(QuarantineError::BadMeta),
+            "길이 불일치"
+        );
+        assert_eq!(
+            TailV2::decode(&bytes[..10]),
+            Err(QuarantineError::Truncated)
+        );
+        assert!(
+            TailV2::tail_len(&[1, 0, 0, 0]).is_none(),
+            "고정부보다 짧은 꼬리 길이 = 손상"
+        );
+    }
+
     #[test]
     fn every_risk_and_scan_roundtrips() {
         for risk in [
@@ -534,6 +671,7 @@ mod tests {
                 ScanOutcome::Unavailable,
                 ScanOutcome::Clean,
                 ScanOutcome::Detected,
+                ScanOutcome::TooLarge,
             ] {
                 let mut m = sample_meta();
                 m.risk = risk;

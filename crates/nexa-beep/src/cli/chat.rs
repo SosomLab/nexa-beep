@@ -1197,6 +1197,7 @@ fn receive_into_quarantine(got: nbeep_core::Received, sender: PeerId) -> bool {
                     nbeep_core::ScanOutcome::Clean => "탐지 없음",
                     nbeep_core::ScanOutcome::Detected => "★탐지★(승인 금지)",
                     nbeep_core::ScanOutcome::Unavailable => "안 됨",
+                    nbeep_core::ScanOutcome::TooLarge => "불가(크기)",
                 },
                 q.path.display()
             );

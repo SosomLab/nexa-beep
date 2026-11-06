@@ -116,10 +116,9 @@ mod amsi {
             }
             // ★ 크기 상한(M4-12 · 사용자 결정 11-06 "32MiB 초과 = 검사 불가(크기)"): Defender의 AmsiScanBuffer는 버퍼를
             //   제공자 쪽에서 **통째로 복사**해 256MiB 수신 때 Done 순간 ≈2S가 된다(peak-poll 실측). 절단 검사는 하지 않는다
-            //   (정직) — 상한 초과 = `Unavailable`(= "검사 안 됨" · 격리 상태기계가 마찰을 올린다). 별도 표기("크기")는
-            //   M4-12 본단계의 ScanOutcome 확장에서.
+            //   (정직) — 상한 초과 = `TooLarge`("검사 불가(크기)" · 마찰은 Unavailable과 같이 한 단계 ↑ · 11-07).
             if bytes.len() > AMSI_MAX_BYTES {
-                return ScanOutcome::Unavailable;
+                return ScanOutcome::TooLarge;
             }
             let Ok(len) = u32::try_from(bytes.len()) else {
                 return ScanOutcome::Unavailable; // 4GiB 초과 — 절단 검사 금지(정직)

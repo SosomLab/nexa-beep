@@ -164,12 +164,14 @@ fn scan_to_u8(s: nbeep_core::ScanOutcome) -> u8 {
         nbeep_core::ScanOutcome::Unavailable => 0,
         nbeep_core::ScanOutcome::Clean => 1,
         nbeep_core::ScanOutcome::Detected => 2,
+        nbeep_core::ScanOutcome::TooLarge => 3,
     }
 }
 fn scan_from_u8(u: u8) -> nbeep_core::ScanOutcome {
     match u {
         1 => nbeep_core::ScanOutcome::Clean,
         2 => nbeep_core::ScanOutcome::Detected,
+        3 => nbeep_core::ScanOutcome::TooLarge,
         _ => nbeep_core::ScanOutcome::Unavailable, // 미지 값 = "검사 안 됨"(정직)
     }
 }
