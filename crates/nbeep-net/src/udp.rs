@@ -17,6 +17,7 @@
 use crate::wire::{Decoded, Packet, PacketKind};
 use nbeep_core::{DisplayName, PeerId};
 use socket2::{Domain, Protocol, Socket, Type};
+use std::collections::{HashMap, HashSet};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, UdpSocket};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -296,6 +297,9 @@ impl UdpDiscovery {
         // (자기 배정 169.254)·다중 NIC에서도 상대 링크로 나간다. 가상·터널 제외는
         // netif가 맡는다(VPN으로 존재 방송 금지 — R-18 결).
         let sref = socket2::SockRef::from(v4);
+        // RL-16 ⓐ(11-06): 같은 서브넷 브로드캐스트 주소는 1회(IF 하나에 IPv4 여럿 · 같은 링크의 NIC 둘이면 종전엔
+        //   사본이 그만큼 늘었다). IF별 멀티캐스트는 주소마다 1회(인덱스가 없어 주소가 곧 키).
+        let mut bcasts: HashSet<Ipv4Addr> = HashSet::new();
         for i in crate::netif::eligible_v4() {
             if sref.set_multicast_if_v4(&i.v4).is_ok() {
                 let _ = v4.send_to(bytes, Self::dest());
@@ -304,8 +308,10 @@ impl UdpDiscovery {
             // S3 지향 브로드캐스트 — 서브넷 브로드캐스트는 IF 지정과 무관하게
             // 목적지 주소로 경로가 정해진다(255.255.255.255와 달리 링크가 특정된다).
             if let Some(b) = i.subnet_broadcast() {
-                let _ = v4.send_to(bytes, SocketAddr::from((b, DISCOVERY_PORT)));
-                sent += 1;
+                if bcasts.insert(b) {
+                    let _ = v4.send_to(bytes, SocketAddr::from((b, DISCOVERY_PORT)));
+                    sent += 1;
+                }
             }
         }
         let _ = sref.set_multicast_if_v4(&Ipv4Addr::UNSPECIFIED);
@@ -496,6 +502,9 @@ impl UdpDiscovery {
     ) {
         std::thread::spawn(move || {
             let mut buf = [0u8; crate::wire::MAX_PACKET];
+            // RL-16 ⓐ(11-06): 발신자가 같은 HELLO를 사다리 전 단(기본 mcast·전역 bcast·IF mcast·서브넷 bcast)으로 보내므로
+            //   같은 (peer, seq)가 3~4부 도착한다 — 응답은 1회(종전 = 사본마다 유니캐스트 응답 = 상대마다 3~4배 증폭).
+            let mut hello_seen: HashMap<PeerId, u32> = HashMap::new();
             loop {
                 if stop.load(Ordering::Relaxed) {
                     return;
@@ -533,7 +542,9 @@ impl UdpDiscovery {
                                 crate::netmon::on_disco_rx_self();
                                 continue;
                             }
-                            if packet.kind == PacketKind::Hello {
+                            if packet.kind == PacketKind::Hello
+                                && hello_reply_due(&mut hello_seen, packet.peer, packet.seq)
+                            {
                                 if let Some((rs, template, seq)) = &reply {
                                     let mut p = match template.lock() {
                                         Ok(g) => g.clone(),
@@ -595,9 +606,38 @@ impl Drop for UdpDiscovery {
     }
 }
 
+/// HELLO 응답 여부(RL-16 ⓐ) — 같은 발신자의 같은 `seq`는 사본이라 한 번만 응답한다. 표는 상한(4096)에서 비운다
+/// (발신자가 많아도 상주 상한 · 비운 직후 사본 하나가 더 응답받는 정도는 무해).
+fn hello_reply_due(seen: &mut HashMap<PeerId, u32>, peer: PeerId, seq: u32) -> bool {
+    if seen.len() > 4096 {
+        seen.clear();
+    }
+    seen.insert(peer, seq) != Some(seq)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// RL-16 ⓐ: 같은 (peer, seq) 사본은 첫 1회만 응답 · 다음 seq·다른 peer는 응답 · 상한에서 표를 비운다.
+    #[test]
+    fn hello_reply_once_per_sender_seq() {
+        let mut seen = HashMap::new();
+        let a = pid(1);
+        let b = pid(2);
+        assert!(hello_reply_due(&mut seen, a, 7));
+        assert!(!hello_reply_due(&mut seen, a, 7), "사본 = 무응답");
+        assert!(!hello_reply_due(&mut seen, a, 7));
+        assert!(hello_reply_due(&mut seen, b, 7), "다른 발신자");
+        assert!(hello_reply_due(&mut seen, a, 8), "다음 HELLO");
+        for i in 0..5000u16 {
+            let mut k = [0u8; 32];
+            k[..2].copy_from_slice(&i.to_le_bytes());
+            k[2] = 9;
+            hello_reply_due(&mut seen, PeerId::from_bytes(k), 1);
+        }
+        assert!(seen.len() <= 4097, "상한에서 비운다: {}", seen.len());
+    }
 
     fn pid(b: u8) -> PeerId {
         let mut a = [0u8; 32];
