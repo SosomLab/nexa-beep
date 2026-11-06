@@ -134,8 +134,8 @@ fn install_bridge_once() {
 
 /// Windows 콘솔 제어 핸들러(M1-8x 잔여 · R-16 · 11-06) — `SetConsoleCtrlHandler`. 콘솔이 붙은 프로세스(CLI
 /// 서브커맨드 · `attach_parent_console`/`own_console_for_interactive` 뒤)에만 이벤트가 온다. `windows` 서브시스템
-/// GUI(탐색기 실행)는 콘솔이 없어 받지 않는다 — 그쪽 종료는 창 닫기·트레이·`request()`가 맡는다(로그오프의
-/// `WM_ENDSESSION`은 별도 슬라이스).
+/// GUI(탐색기 실행)는 콘솔이 없어 받지 않는다 — 그쪽은 주 창 서브클래스 [`crate::endsession`]이 `WM_QUERYENDSESSION`/
+/// `WM_ENDSESSION`으로 같은 플래그를 세운다(11-06).
 #[cfg(windows)]
 mod win {
     pub(super) const CTRL_CLOSE_EVENT: u32 = 2;
