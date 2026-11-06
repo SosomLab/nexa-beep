@@ -17123,6 +17123,9 @@ impl App {
         // 프로필 push 배치(RL-2ⓑ · 08-18) — 키 단위로 밀면 적용 1회에 N벌
         // (Full 키 포함 시 256KiB 사진 N회). 루프에서 유형만 모아 끝에 1회.
         let mut profile_push: Option<ProfileScope> = None;
+        // RL-15 ⓔ(11-06): 아바타·이름·사진이 한 배치에 함께 오면 툴바 합성 + 트레이 아이콘 재생성(HICON/NSImage/SNI)을
+        //   키마다 하지 않고 루프 뒤 1회만(종전 최대 3회).
+        let mut avatar_dirty = false;
         for (key, value) in changes {
             dlog!(self, DL::App, DV::Decide, "apply_setting", |r| {
                 let secret = key.contains("pass") || key.contains("secret") || key.contains("key");
@@ -17461,7 +17464,7 @@ impl App {
                 // 아바타 선택·보더(08-14) — 재전송은 아래 프로필 전파 깔때기가
                 // 맡는다(M3-21에서 키별 arm → 단일 깔때기로 이관).
                 "profile.avatar" | "profile.avatar_border" => {
-                    self.refresh_toolbar_avatar(); // 프로필 버튼 = 내 얼굴
+                    avatar_dirty = true; // 프로필 버튼 = 내 얼굴(루프 뒤 1회)
                     self.set_status(nbeep_core::t(nbeep_core::Msg::StAvatarChanged));
                 }
                 // 사진 경로(08-14) — 스와치 선택이 비우면 툴바 버튼도 즉시 따라간다.
@@ -17483,14 +17486,14 @@ impl App {
                         // 상한 초과 원본이면 워커가 축소본을 굽고 완료 시 Full 재전파.
                         self.ensure_wire_avatar();
                     }
-                    self.refresh_toolbar_avatar();
+                    avatar_dirty = true;
                 }
                 // 표시 이름(M1-10) — 즉시 재공지(사용자 확정 08-11). 상대 목록은
                 // PeerTable Renamed 경로로 갱신된다.
                 "profile.display_name" => {
                     let name = effective_display_name(&self.settings, &self.identity.peer_id());
                     self.transport.set_display_name(name.clone());
-                    self.refresh_toolbar_avatar(); // 이니셜이 이름을 따라간다(08-14)
+                    avatar_dirty = true; // 이니셜이 이름을 따라간다(08-14)
                     self.set_status(nbeep_core::tf(
                         nbeep_core::Msg::StfDisplayName,
                         &[name.as_str()],
@@ -17674,6 +17677,9 @@ impl App {
                     _ => ProfileScope::Info,
                 });
             }
+        }
+        if avatar_dirty {
+            self.refresh_toolbar_avatar();
         }
         if let Some(scope) = profile_push {
             // 서버 공개 카드도 같은 합류점에서 재공지(08-22 — 프로필·공유 토글
@@ -22664,9 +22670,15 @@ impl ApplicationHandler<AppEvent> for App {
                     self.refresh_send_batch(peer); // 배치 패널 활성 행 진행률(M4-2d)
                 }
                 self.apply_xfer_view_throttled(peer); // 목록 재조립은 주기(RL-6)
-                self.redraw_conversation(peer);
-                if let Some(mid) = self.main_id {
-                    self.request_redraw(mid);
+                                                      // RL-15 ⓓ(11-06): FIFO 경로는 set_xfer_line이 이미 대화 창을 재도색 요청했다 — 이름 경로만 여기서 1회.
+                                                      //   주 창은 단일 창 모드면 대화 창과 같다(redraw_conversation이 main을 가리킨다) · 분리 모드만 목록 갱신 몫.
+                if !name.is_empty() {
+                    self.redraw_conversation(peer);
+                }
+                if matches!(self.mode, WindowMode::Separate) {
+                    if let Some(mid) = self.main_id {
+                        self.request_redraw(mid);
+                    }
                 }
             }
             AppEvent::XferManifest { peer, entries } => {
@@ -25233,8 +25245,7 @@ impl ApplicationHandler<AppEvent> for App {
                 if self.os_focused == Some(id) {
                     self.os_focused = None;
                 }
-                self.set_chat_active(id, false); // 풍선 선택 = 흐리게(11-02)
-                self.request_redraw(id);
+                self.set_chat_active(id, false); // 풍선 선택 = 흐리게(11-02) · redraw는 아래 IME 정리 뒤 1회(RL-15 ⓓ)
                 if self.ime_trace {
                     eprintln!("[ime] focus-out");
                 }
