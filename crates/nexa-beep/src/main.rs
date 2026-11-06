@@ -317,6 +317,7 @@ Nexa Beep {v} — 제로 컨피그 로컬 네트워크 메신저 (\"실행 = 참
   --port <N>            세션 수신 포트(이 실행만 · 기본 47200, 점유 시 임의 폴백 ·
                         저장 설정은 net.session_port)
   --separate-windows    상대별 별도 창으로 시작(기본 = 단일 창 · 설정 chat.window_mode)
+                        --live/--window 없이 단독이면 InMemory 데모(에코 봇)로 시작
   --window              InMemory 데모(에코 봇 · 네트워크 없음 — 개발용).
                         --live를 붙이면 무인자와 같은 실물 발견
 
