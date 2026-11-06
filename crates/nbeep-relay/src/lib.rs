@@ -39,6 +39,10 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream, UdpSocket};
 use std::sync::mpsc::{Receiver, Sender, SyncSender};
 use std::time::Duration;
 
+/// X-2 Transport 승격(11-06) — [`RelayTransport`]·[`LadderTransport`].
+pub mod transport;
+pub use transport::{LadderTransport, RelayTransport};
+
 /// 릴레이 서버 기본 포트(TCP 제어 + 같은 번호의 UDP 관측) — 발견 47100·세션 47200 다음.
 pub const DEFAULT_RELAY_PORT: u16 = 47_300;
 
@@ -1293,14 +1297,22 @@ fn fresh_probed_sock(client: &RelayClient) -> std::io::Result<UdpSocket> {
 }
 
 /// 먼저 뽑아 둔 프레임 하나를 되돌려주는 링크 래퍼 — 수락 측이 "어느 링크로 첫
-/// 프레임이 오나"를 보고 단을 고른 뒤, 그 프레임을 핸드셰이크에 되살린다.
-#[derive(Debug)]
-struct PrefixedLink<L: Link> {
+/// 프레임이 오나"를 보고 단을 고른 뒤, 그 프레임을 핸드셰이크에 되살린다. **랑데부 쪽에서만** 쓰이므로
+/// [`Link::rendezvous`] = `true`(X-2 승격 11-06 — 호스트가 LAN 인바운드와 같은 펌프에서 배지만 가른다).
+struct PrefixedLink {
     first: Option<Vec<u8>>,
-    inner: L,
+    inner: Box<dyn Link>,
 }
 
-impl<L: Link> Link for PrefixedLink<L> {
+impl core::fmt::Debug for PrefixedLink {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("PrefixedLink")
+            .field("first", &self.first.as_ref().map(Vec::len))
+            .finish_non_exhaustive()
+    }
+}
+
+impl Link for PrefixedLink {
     fn peer(&self) -> PeerId {
         self.inner.peer()
     }
@@ -1318,6 +1330,9 @@ impl<L: Link> Link for PrefixedLink<L> {
     }
     fn remote_ip(&self) -> Option<IpAddr> {
         self.inner.remote_ip()
+    }
+    fn rendezvous(&self) -> bool {
+        true
     }
 }
 
@@ -1387,6 +1402,39 @@ fn connect_via_rids(
     psk: Option<&[u8; 32]>,
     expect: Option<&PeerId>,
 ) -> Result<ViaSession, ViaError> {
+    // ★ X-2 승격(11-06): 단 선택은 [`LadderLink`]가 **링크 수준**에서 한다(첫 회신이 온 단에 고정) — 핸드셰이크는 그 위.
+    //   종전(08-22)은 "UDP 핸드셰이크 실패 → 릴레이로 새 핸드셰이크"를 여기서 직접 했다. 바깥 동작은 같다
+    //   (UDP 상한 5s → 릴레이 상한 10s · 실패 사유 매핑 동일) — `Transport::connect`도 같은 사다리를 쓴다.
+    let ladder = open_ladder(client, rids, punch, open_timeout)?;
+    let taken = ladder.taken_handle();
+    let (udp_ip, server_ip) = ladder.candidate_ips();
+    let boxed: Box<dyn Link> = Box::new(ladder);
+    let session = hs_initiate(boxed, id, psk).map_err(|_| ViaError::Handshake)?;
+    // 성립 뒤 어느 단에 고정됐나 — 경로 등급은 그 단의 실주소(§5-1-5 · 서버 미상은 Remote · fail-closed).
+    let (taken, ip) = match taken.load(std::sync::atomic::Ordering::Acquire) {
+        LADDER_UDP => (PathTaken::Udp, udp_ip),
+        _ => (PathTaken::Relay, Some(server_ip)),
+    };
+    let path = ip.map_or(nbeep_core::PathClass::Remote, nbeep_core::class_of_ip);
+    finish_via(session, taken, path, expect, psk.is_some())
+}
+
+/// 사다리 단 표식([`LadderLink`]가 공유 원자값으로 알린다 — 핸드셰이크가 링크를 삼킨 뒤에도 읽을 수 있게).
+const LADDER_PENDING: u8 = 0;
+const LADDER_UDP: u8 = 1;
+const LADDER_RELAY: u8 = 2;
+
+/// **여는 쪽 사다리를 링크 수준에서 연다**(X-2 Transport 승격 · 11-06) — 프로브 → 에폭 RID 순차 Open →
+/// (상대 관측이 있으면) 동시 펀치. 결과 [`LadderLink`]는 **핸드셰이크 전**이다 — 단 고정은 첫 회신이 정한다.
+///
+/// # Errors
+/// 어느 에폭 RID도 없음 = [`ViaError::NotFound`] · 서버 상한 = [`ViaError::Limit`] · 서버 세션 죽음/시간 초과 = [`ViaError::Dead`].
+pub(crate) fn open_ladder(
+    client: &RelayClient,
+    rids: &[Rid],
+    punch: bool,
+    open_timeout: Duration,
+) -> Result<LadderLink, ViaError> {
     // 프로브가 Open보다 **먼저** — 서버가 내 관측 엔드포인트를 상대의 Incoming에 싣는다.
     let sock = if punch {
         fresh_probed_sock(client).ok() // 실패 = 펀치 없이 릴레이만(사다리 한 단 생략)
@@ -1394,36 +1442,189 @@ fn connect_via_rids(
         None
     };
     for rid in rids {
-        let (mut relay, peer_udp) = match client.open(*rid, open_timeout) {
+        let (relay, peer_udp) = match client.open(*rid, open_timeout) {
             Ok(v) => v,
             Err(1) => continue, // 이 에폭 RID는 미등록 — 다음 에폭
             Err(2) => return Err(ViaError::Limit),
             Err(_) => return Err(ViaError::Dead),
         };
-        // 1단: 홀펀칭 UDP — 성립 + 종단 핸드셰이크까지 돼야 이 단을 탄 것이다.
-        if let (Some(s), Some(ep)) = (&sock, peer_udp) {
-            if let Ok(sc) = s.try_clone() {
-                if let Ok(mut udp) = nbeep_net::UdpLink::punch(sc, ep, PUNCH_WINDOW) {
-                    let _ = udp.set_recv_timeout(Some(HS_TIMEOUT_UDP));
-                    let path = class_of_link(&udp, nbeep_core::PathClass::Remote);
-                    let boxed: Box<dyn Link> = Box::new(udp);
-                    if let Ok(session) = hs_initiate(boxed, id, psk) {
-                        return finish_via(session, PathTaken::Udp, path, expect, psk.is_some());
-                    }
-                    // 상대가 UDP를 듣지 않았다(창 어긋남) — 릴레이 단으로 내려간다.
-                }
-            }
-        }
-        // 2단: 릴레이 폴백 — 서버 미상은 Remote 취급(fail-closed 방향).
-        let _ = relay.set_recv_timeout(Some(HS_TIMEOUT_RELAY));
-        let path = class_of_link(&relay, nbeep_core::PathClass::Remote);
-        let boxed: Box<dyn Link> = Box::new(relay);
-        return match hs_initiate(boxed, id, psk) {
-            Ok(session) => finish_via(session, PathTaken::Relay, path, expect, psk.is_some()),
-            Err(_) => Err(ViaError::Handshake),
+        // 1단 후보: 홀펀칭 UDP — 펀치 성립(상대 패킷 도착)까지. 실패 = 1단 없음(2단만).
+        let udp = match (&sock, peer_udp) {
+            (Some(s), Some(ep)) => s
+                .try_clone()
+                .ok()
+                .and_then(|sc| nbeep_net::UdpLink::punch(sc, ep, PUNCH_WINDOW).ok()),
+            _ => None,
         };
+        return Ok(LadderLink::new(udp, relay, client.server_addr().ip()));
     }
     Err(ViaError::NotFound)
+}
+
+/// 여는 쪽 사다리 **링크**(X-2 승격 · 11-06) — 1단(홀펀칭 UDP 직결)과 2단(릴레이 중계)을 하나의 [`Link`]로 묶어
+/// **첫 회신이 온 단에 고정**한다(수락 쪽 "첫 프레임 링크 추종"의 거울). 핸드셰이크는 이 위에서 호출자가 한다.
+///
+/// 규칙: 확정 전 `send`는 1단으로 나가며 사본을 든다(2단 재전송용 — 보통 핸드셰이크 msg1 하나) · 확정 전 `recv`가
+/// 1단에서 실패(상한 초과·종료 = 상대가 UDP를 듣지 않았다)하면 사본을 2단으로 다시 보내고 2단에 고정한다 · 1단이
+/// 없으면(관측 없음·펀치 실패) 첫 `send`에서 곧장 2단 고정. 고정 뒤 다른 단은 버린다. 확정 전 수신 상한은 단별
+/// 핸드셰이크 상한(`HS_TIMEOUT_UDP` 5s / `HS_TIMEOUT_RELAY` 10s)이고, 소비자가 건 타임아웃은 고정 뒤 그 단에 적용된다.
+pub struct LadderLink {
+    /// 1단 후보(펀치 성립) — 확정 전 실패하거나 2단 고정 뒤 버린다.
+    udp: Option<nbeep_net::UdpLink>,
+    /// 2단(릴레이 채널) — 1단 고정 뒤 버린다.
+    relay: Option<RelayLink>,
+    /// 고정된 단(`LADDER_*`) — 핸드셰이크 뒤 호출자가 읽을 수 있게 공유.
+    taken: std::sync::Arc<std::sync::atomic::AtomicU8>,
+    /// 확정 전 1단으로 보낸 프레임 사본(2단 재전송용).
+    pending: Vec<Vec<u8>>,
+    /// 소비자가 건 수신 타임아웃(고정 뒤 그 단에 적용).
+    consumer_timeout: Option<Duration>,
+    /// 경로 등급 판정용 서버 IP — 2단 실소켓 상대 · 확정 전 `remote_ip`의 fail-closed 값.
+    server_ip: IpAddr,
+}
+
+impl core::fmt::Debug for LadderLink {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("LadderLink")
+            .field("taken", &self.state())
+            .field("udp", &self.udp.is_some())
+            .field("relay", &self.relay.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+impl LadderLink {
+    fn new(udp: Option<nbeep_net::UdpLink>, relay: RelayLink, server_ip: IpAddr) -> Self {
+        Self {
+            udp,
+            relay: Some(relay),
+            taken: std::sync::Arc::new(std::sync::atomic::AtomicU8::new(LADDER_PENDING)),
+            pending: Vec::new(),
+            consumer_timeout: None,
+            server_ip,
+        }
+    }
+
+    /// 단 표식 공유 핸들 — 핸드셰이크가 링크를 삼킨 뒤 어느 단이었나를 읽는다(`connect_via` 호환 · 계측).
+    fn taken_handle(&self) -> std::sync::Arc<std::sync::atomic::AtomicU8> {
+        std::sync::Arc::clone(&self.taken)
+    }
+
+    /// (1단 상대 IP, 서버 IP) — 고정 뒤 경로 등급을 매기는 재료.
+    fn candidate_ips(&self) -> (Option<IpAddr>, IpAddr) {
+        (self.udp.as_ref().and_then(Link::remote_ip), self.server_ip)
+    }
+
+    fn state(&self) -> u8 {
+        self.taken.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// 1단 고정 — 2단·사본을 버리고 소비자 타임아웃을 1단에 적용.
+    fn commit_udp(&mut self) {
+        self.relay = None;
+        self.pending.clear();
+        if let Some(u) = self.udp.as_mut() {
+            let _ = u.set_recv_timeout(self.consumer_timeout);
+        }
+        self.taken
+            .store(LADDER_UDP, std::sync::atomic::Ordering::Release);
+    }
+
+    /// 2단 고정 — 1단을 버리고 사본을 2단으로 재전송.
+    fn commit_relay(&mut self) -> Result<(), LinkError> {
+        self.udp = None;
+        let relay = self.relay.as_mut().ok_or(LinkError::Closed)?;
+        for f in self.pending.drain(..) {
+            relay.send(&f)?;
+        }
+        let _ = relay.set_recv_timeout(self.consumer_timeout);
+        self.taken
+            .store(LADDER_RELAY, std::sync::atomic::Ordering::Release);
+        Ok(())
+    }
+}
+
+impl Link for LadderLink {
+    fn peer(&self) -> PeerId {
+        // 사다리 수준에서 상대 신원은 알 수 없다 — 종단 핸드셰이크가 확정한다(RelayLink와 같다).
+        PeerId::from_bytes([0u8; 32])
+    }
+
+    fn send(&mut self, frame: &[u8]) -> Result<(), LinkError> {
+        match self.state() {
+            LADDER_UDP => self.udp.as_mut().ok_or(LinkError::Closed)?.send(frame),
+            LADDER_RELAY => self.relay.as_mut().ok_or(LinkError::Closed)?.send(frame),
+            _ => {
+                if let Some(u) = self.udp.as_mut() {
+                    if u.send(frame).is_ok() {
+                        self.pending.push(frame.to_vec());
+                        return Ok(());
+                    }
+                    self.udp = None; // 1단 송신 실패 = 1단 없음
+                }
+                // 1단이 없으면 기다릴 회신도 없다 — 곧장 2단 고정.
+                self.commit_relay()?;
+                self.relay.as_mut().ok_or(LinkError::Closed)?.send(frame)
+            }
+        }
+    }
+
+    fn recv(&mut self) -> Result<Vec<u8>, LinkError> {
+        match self.state() {
+            LADDER_UDP => self.udp.as_mut().ok_or(LinkError::Closed)?.recv(),
+            LADDER_RELAY => self.relay.as_mut().ok_or(LinkError::Closed)?.recv(),
+            _ => {
+                // 1단: 첫 회신을 UDP 상한 안에 기다린다 — 오면 1단 고정.
+                if let Some(u) = self.udp.as_mut() {
+                    let _ =
+                        u.set_recv_timeout(Some(self.consumer_timeout.unwrap_or(HS_TIMEOUT_UDP)));
+                    if let Ok(f) = u.recv() {
+                        self.commit_udp();
+                        return Ok(f);
+                    }
+                    // 상대가 UDP를 듣지 않았다(창 어긋남·관측 비대칭) — 2단으로 내려간다.
+                }
+                // 2단: 사본 재전송 → 첫 회신(릴레이 상한) → 2단 고정.
+                self.commit_relay()?;
+                let relay = self.relay.as_mut().ok_or(LinkError::Closed)?;
+                let _ =
+                    relay.set_recv_timeout(Some(self.consumer_timeout.unwrap_or(HS_TIMEOUT_RELAY)));
+                let r = relay.recv();
+                let _ = relay.set_recv_timeout(self.consumer_timeout);
+                r
+            }
+        }
+    }
+
+    fn set_recv_timeout(&mut self, dur: Option<Duration>) -> Result<(), LinkError> {
+        self.consumer_timeout = dur;
+        match self.state() {
+            LADDER_UDP => self
+                .udp
+                .as_mut()
+                .ok_or(LinkError::Closed)?
+                .set_recv_timeout(dur),
+            LADDER_RELAY => self
+                .relay
+                .as_mut()
+                .ok_or(LinkError::Closed)?
+                .set_recv_timeout(dur),
+            _ => Ok(()), // 확정 전엔 단별 핸드셰이크 상한을 쓴다 — 고정 때 적용
+        }
+    }
+
+    fn remote_ip(&self) -> Option<IpAddr> {
+        match self.state() {
+            LADDER_UDP => self.udp.as_ref().and_then(Link::remote_ip),
+            LADDER_RELAY => self.relay.as_ref().and_then(Link::remote_ip),
+            // 확정 전 = 서버 주소(공인 = Remote) — 상대 UDP 관측도 공인 엔드포인트라 등급은 같다(fail-closed 방향).
+            _ => Some(self.server_ip),
+        }
+    }
+
+    fn rendezvous(&self) -> bool {
+        true
+    }
 }
 
 fn finish_via(
@@ -1450,6 +1651,7 @@ fn finish_via(
 
 /// **받는 쪽 사다리** — 인바운드 랑데부에 프로브→수락 순서를 지키고, 펀치를 병행하며
 /// **첫 프레임이 온 링크**로 종단 수락을 잇는다(여는 쪽이 어느 단을 골랐든 따라간다).
+/// X-2 승격(11-06) 뒤 = `accept_link_via`(링크 수준 · crate 내부) + 종단 핸드셰이크 — CLI·기존 호출자 호환 층.
 ///
 /// # Errors
 /// `deadline` 내 어느 링크로도 첫 프레임이 없거나 핸드셰이크 실패 시 [`ViaError`].
@@ -1461,6 +1663,23 @@ pub fn accept_via(
     deadline: Duration,
     psk: Option<&[u8; 32]>,
 ) -> Result<ViaSession, ViaError> {
+    let (link, taken) = accept_link_via(client, inc, punch, deadline)?;
+    let path = class_of_link(&*link, nbeep_core::PathClass::Remote);
+    accept_on(link, id, taken, path, psk)
+}
+
+/// **받는 쪽 사다리를 링크 수준에서 잇는다**(X-2 Transport 승격 · 11-06) — 프로브→수락 순서 · 펀치 병행 · **첫 프레임이
+/// 온 링크**를 고르고 그 프레임을 되살린 링크([`PrefixedLink`] · `rendezvous() == true`)를 돌려준다. 핸드셰이크는
+/// 호출자 몫(`Transport::incoming` 소비자 = 호스트의 단일 인바운드 펌프).
+///
+/// # Errors
+/// `deadline` 내 어느 링크로도 첫 프레임이 없으면 [`ViaError::Dead`].
+pub(crate) fn accept_link_via(
+    client: &RelayClient,
+    inc: RelayIncoming,
+    punch: bool,
+    deadline: Duration,
+) -> Result<(Box<dyn Link>, PathTaken), ViaError> {
     let RelayIncoming {
         mut link, peer_udp, ..
     } = inc;
@@ -1504,34 +1723,26 @@ pub fn accept_via(
             }
         }
         if let Some(first) = udp_first {
-            let u = udp.take().expect("프레임을 준 링크");
-            let path = class_of_link(&u, nbeep_core::PathClass::Remote);
-            return accept_on(
-                PrefixedLink {
+            let u = udp.take().ok_or(ViaError::Dead)?;
+            return Ok((
+                Box::new(PrefixedLink {
                     first: Some(first),
-                    inner: u,
-                },
-                id,
+                    inner: Box::new(u),
+                }),
                 PathTaken::Udp,
-                path,
-                psk,
-            );
+            ));
         }
         // 릴레이 쪽 첫 프레임 — 여는 쪽이 릴레이 단을 골랐다(또는 펀치 실패).
         if relay_alive {
             match link.recv() {
                 Ok(first) => {
-                    let path = class_of_link(&link, nbeep_core::PathClass::Remote);
-                    return accept_on(
-                        PrefixedLink {
+                    return Ok((
+                        Box::new(PrefixedLink {
                             first: Some(first),
-                            inner: link,
-                        },
-                        id,
+                            inner: Box::new(link),
+                        }),
                         PathTaken::Relay,
-                        path,
-                        psk,
-                    );
+                    ));
                 }
                 Err(LinkError::TimedOut) => {}
                 Err(LinkError::Closed) => relay_alive = false,
@@ -1548,8 +1759,8 @@ fn inc_accept(link: &RelayLink) {
     let _ = link.cmd_tx.send(Cmd::AcceptCh { ch: link.ch });
 }
 
-fn accept_on<L: Link + 'static>(
-    mut link: PrefixedLink<L>,
+fn accept_on(
+    mut link: Box<dyn Link>,
     id: &Identity,
     taken: PathTaken,
     path: nbeep_core::PathClass,
@@ -1557,9 +1768,8 @@ fn accept_on<L: Link + 'static>(
 ) -> Result<ViaSession, ViaError> {
     use nbeep_core::Session as _;
     let _ = link.set_recv_timeout(Some(HS_TIMEOUT_UDP));
-    let boxed: Box<dyn Link> = Box::new(link);
     // XX/XXpsk3는 첫 메시지로 가른다(ADR-0015 §3-3 · 왕복 0).
-    match NoiseSession::accept_any(boxed, id, psk) {
+    match NoiseSession::accept_any(link, id, psk) {
         Ok((mut session, via_psk)) => {
             session.set_recv_timeout(None);
             Ok(ViaSession {

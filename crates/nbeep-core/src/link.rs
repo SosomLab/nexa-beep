@@ -51,6 +51,13 @@ pub trait Link: Send {
         None
     }
 
+    /// **랑데부 표식**(X-2 Transport 승격 · 11-06 · **표시 전용** — 헤더·목록 배지 `via_server` · DR-28 · M3-27) —
+    /// `true` = 이 링크는 서버 랑데부 사다리로 성립했다(홀펀칭 UDP 직결·릴레이 중계 모두). 경로 **등급**은 여전히
+    /// [`Self::remote_ip`]가 정한다(이 값은 등급이 아니라 "어느 사다리로 왔나"의 표시 근거). 기본 `false`(LAN·수동·인메모리).
+    fn rendezvous(&self) -> bool {
+        false
+    }
+
     /// **송신 핸들 분리**(LAT-1 · [docs/55] §2-3) — 같은 연결의 두 번째 핸들을 돌려준다. 그 뒤
     /// `self`는 **수신 전용**, 돌려준 것은 **송신 전용**으로 쓴다(둘 다 `Link`지만 역할을 나눈다 ·
     /// 수신 타임아웃은 `self`에만 건다). 핸들을 복제할 수 없는 링크는 `None` = 호출자가 종전
@@ -75,6 +82,9 @@ impl Link for Box<dyn Link> {
     }
     fn remote_ip(&self) -> Option<std::net::IpAddr> {
         (**self).remote_ip()
+    }
+    fn rendezvous(&self) -> bool {
+        (**self).rendezvous()
     }
     fn split_send(&mut self) -> Option<Box<dyn Link>> {
         (**self).split_send()

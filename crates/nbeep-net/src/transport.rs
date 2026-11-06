@@ -1,7 +1,7 @@
 //! 전송 경계 — [`Transport`] 트레이트와 그 주변 타입([docs/09] ADR-0003 §3).
 //!
 //! `Transport`는 **발견하고 [`Link`]를 만들어 주는 것**이다. 상위 계층은 이 경계 위에서만 동작하므로,
-//! LocalDirect(v1)·InMemory(테스트)·Relay(v2)를 갈아 끼워도 App·Session 코드는 바뀌지 않는다.
+//! LocalDirect(v1)·InMemory(테스트)·Relay(X-2 · `nbeep-relay`의 `RelayTransport`/`LadderTransport`)를 갈아 끼워도 App·Session 코드는 바뀌지 않는다.
 
 use nbeep_core::link::Link;
 use nbeep_core::{DisplayName, PeerId};
@@ -70,8 +70,12 @@ pub enum DiscoveryEvent {
 /// `connect` 실패.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConnectError {
-    /// 대상 `PeerId`를 아는 경로가 없다(발견 안 됨·이탈).
+    /// 대상 `PeerId`를 아는 경로가 없다(발견 안 됨·이탈 · 랑데부 서버에도 등록 안 됨).
     Unreachable,
+    /// 랑데부 경로가 **상한·거절**로 열리지 않았다(X-2 · 11-06) — 재시도 가치 있음(백오프).
+    Busy,
+    /// 랑데부 경로의 서버 세션이 **죽었다/시간 초과**(X-2) — 호스트가 서버 재접속을 수렴한 뒤 재시도.
+    Lost,
 }
 
 /// 수동 엔드포인트 등록 실패(DR-19 · ADR-0006 §3).
@@ -85,7 +89,8 @@ pub enum AddError {
     Unsupported,
 }
 
-/// 발견하고 [`Link`]를 만들어 주는 것(ADR-0003 §3). 구현: LocalDirect(v1) · InMemory(테스트) · Relay(v2).
+/// 발견하고 [`Link`]를 만들어 주는 것(ADR-0003 §3). 구현: LocalDirect(v1) · InMemory(테스트) · Relay(X-2 ✅ 11-06 —
+/// `nbeep-relay`의 `RelayTransport` + 셋을 묶는 `LadderTransport` · 사다리 = 로컬 > 수동 > 릴레이 · 핸드셰이크는 전부 호출자).
 pub trait Transport: Send + Sync {
     /// 발견 이벤트 스트림(등장·이탈). 호출자는 이 수신단을 소유해 폴링한다.
     fn discovery(&self) -> Receiver<DiscoveryEvent>;
@@ -108,6 +113,14 @@ pub trait Transport: Send + Sync {
     fn add_endpoint(&self, _addr: &str) -> Result<Box<dyn Link>, AddError> {
         Err(AddError::Unsupported)
     }
+
+    /// **수동 주소를 `peer`의 경로 후보로 기억**(DR-19 ④ · ADR-0003 §4 "로컬 > 수동 > 릴레이" · X-2 11-06) — 호스트가
+    /// 수동 등록으로 성립해 **신원을 확정한 뒤** 부른다. 이후 [`Self::connect`]가 발견 경로 다음 단으로 이 주소를 시도한다.
+    /// 기본 no-op(사다리가 없는 전송 — 호출자는 종전처럼 `add_endpoint` 폴백을 직접 해도 된다).
+    fn note_endpoint(&self, _peer: PeerId, _addr: &str) {}
+
+    /// 기억한 수동 주소 제거(R-20 — 그 주소에서 **다른 키**가 성립하면 즉시 무효). 기본 no-op.
+    fn forget_endpoint(&self, _peer: PeerId) {}
 
     /// L1 링크 변화 통지(M1-2) — 호스트가 OS 구독(디바운스 후)으로 부른다.
     /// 전송은 재발견(그룹 재조인·즉시 HELLO 등)으로 반응한다. 기본 = no-op

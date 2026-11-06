@@ -3782,6 +3782,8 @@ fn spawn_inbound_accept(
                 // 링크를 삼키기 전 마지막 관측 지점이다. 소켓 아님(None) = Local.
                 let ip = link.remote_ip();
                 let path = ip.map_or(nbeep_core::PathClass::Local, nbeep_core::class_of_ip);
+                // ★ 랑데부 인바운드(X-2 승격 · 11-06)도 이 펌프로 온다 — 배지(`via_server`)만 링크 표식으로 가른다.
+                let via_server = link.rendezvous();
                 // ★ 형제 기기 수락(ADR-0015 §3-3) — 내 PSK가 있으면 XX/XXpsk3를 첫 메시지로
                 //   가른다. 이 IP가 psk 실패를 반복했으면(온라인 추측) XX만 받는다.
                 let psk_now = if psk_backoff_allow(&backoff, ip) {
@@ -3808,65 +3810,12 @@ fn spawn_inbound_accept(
                     session: Box::new(InboundSession {
                         session,
                         path,
-                        via_server: false, // LAN/직결 인바운드
+                        via_server, // LAN 직결 = false · 서버 랑데부 = true(사다리 전송 합류 · X-2)
                         via_psk,
                     }),
                 });
             });
         }
-    });
-}
-
-/// 릴레이 인바운드 수락 루프(X-2b ②) — 서버 랑데부로 걸어온 상대를 사다리
-/// ([`nbeep_relay::accept_via`] — 펀치 병행 · 첫 프레임 링크 추종)로 성립시키고,
-/// LAN 인바운드와 **같은 깔때기**([`AppEvent::Inbound`] — TOFU 판정·원격 요청 대기
-/// FR-S-25·중복 세션 가드)에 합류시킨다. 경로 등급도 사다리 결과(`via.path` —
-/// 성립 소켓 실주소)가 이미 들고 온다(§5-1-5).
-///
-/// 수명 = 클라이언트 `Arc`: App이 내려놓으면(해제·재접속) Weak 승격 실패로 끝난다.
-fn spawn_relay_accept(
-    client: &std::sync::Arc<nbeep_relay::RelayClient>,
-    identity: std::sync::Arc<nbeep_crypto::Identity>,
-    proxy: winit::event_loop::EventLoopProxy<AppEvent>,
-    psk: SharedPsk,
-) {
-    let weak = std::sync::Arc::downgrade(client);
-    std::thread::spawn(move || loop {
-        let Some(client) = weak.upgrade() else {
-            break; // App이 접속을 내려놓았다 — 이 루프의 소임 끝
-        };
-        let Some(inc) = client.accept_incoming(std::time::Duration::from_secs(1)) else {
-            continue; // 타임아웃(1s) — Weak를 다시 보고 돈다
-        };
-        // 성립(펀치→릴레이 · 최대 12s)은 인바운드별 스레드 — 동시 인바운드가 서로를
-        // 기다리지 않는다(LAN spawn_inbound_accept가 세션별 스레드를 쓰는 이유와 동일).
-        let identity = std::sync::Arc::clone(&identity);
-        let proxy = proxy.clone();
-        let psk_now = match psk.lock() {
-            Ok(g) => *g,
-            Err(e) => *e.into_inner(),
-        };
-        std::thread::spawn(move || {
-            // 실패는 조용히 — 상대가 보는 것은 Closed뿐(ADR-0006 §2 규칙 4 · LAN
-            // 인바운드 핸드셰이크 실패와 같은 결).
-            if let Ok(via) = nbeep_relay::accept_via(
-                &client,
-                inc,
-                &identity,
-                true,
-                std::time::Duration::from_secs(12),
-                psk_now.as_ref(), // 형제 기기(XXpsk3)도 같은 사다리로 받는다(ADR-0015)
-            ) {
-                let _ = proxy.send_event(AppEvent::Inbound {
-                    session: Box::new(InboundSession {
-                        session: via.session,
-                        path: via.path,
-                        via_server: true, // 서버 랑데부 성립(X-2b)
-                        via_psk: via.via_psk,
-                    }),
-                });
-            }
-        });
     });
 }
 
@@ -3939,6 +3888,9 @@ struct App {
     /// Managed 릴레이 서버 접속(X-2b · ADR-0013 §12-1) — 원천은 설정(`net.server.*`).
     /// Drop = 수락 스레드·클라 액터 정리(Weak 승격 실패). None = Unmanaged/미접속.
     relay: Option<std::sync::Arc<nbeep_relay::RelayClient>>,
+    /// ★ 사다리 전송(X-2 승격 · 11-06) — `transport`와 **같은 객체**의 구체 핸들. 서버 접속이 붙고 떨어질 때
+    /// `set_relay`로 랑데부 단을 갈아 끼운다(수명은 `relay`의 Arc — 사다리는 Weak). 데모(InMemory)는 None.
+    ladder: Option<std::sync::Arc<nbeep_relay::LadderTransport>>,
     /// 서버 접속 워커 가동 중(중복 시도 가드 — 13 §12-1).
     relay_connecting: bool,
     /// 서버 재접속 백오프 — (단계, 다음 시도 at_ms). 핀 불일치 = `u64::MAX`(수동만).
@@ -12081,12 +12033,6 @@ impl App {
         let transport = std::sync::Arc::clone(&self.transport);
         let identity = std::sync::Arc::clone(&self.identity);
         let proxy = self.proxy.clone();
-        // 비발견 상대(수동 등록 이력)는 발견 주소록이 비어 connect가 실패한다 —
-        // 성공했던 수동 주소로 폴백(08-13 실기: 대화창 닫은 뒤 재연결이 이 경로).
-        let manual = self.manual_addrs.get(&peer).cloned();
-        // 서버 사다리 폴백 재료(X-2b ③) — LAN·수동 주소가 모두 닿지 않을 때만 쓴다
-        // (S-1 LAN 우선 · docs/32 §0 경로 사다리).
-        let relay = self.relay.clone();
         // ★ 형제 후보(ADR-0015 §3-4 힌트·기성립)면 XXpsk3로 연다 — 실패하면 XX로 1회 폴백
         //   (힌트가 틀렸거나 상대 기능 꺼짐 = 정상 결과 · 세션 사용 불가는 없다).
         let psk_opt = self.psk_for(peer);
@@ -12094,20 +12040,18 @@ impl App {
             eprintln!("[user] connect {} psk={}", peer.short(), psk_opt.is_some());
         }
         std::thread::spawn(move || {
-            let dial = || match transport.connect(peer) {
-                Ok(link) => Ok(link),
-                Err(e) => match &manual {
-                    Some(addr) => transport.add_endpoint(addr).map_err(|e2| format!("{e2:?}")),
-                    None => Err(format!("{e:?}")),
-                },
-            };
-            let conn = dial();
-            let r = match conn {
+            // ★ 사다리 = `Transport` 하나(X-2 승격 · 11-06): 발견 경로 → 기억한 수동 주소 → 서버 랑데부(펀치→릴레이)를
+            //   `connect` 안에서 순서대로 탄다(ADR-0003 §4 · 종전 X-2b ③은 여기서 세 단을 직접 꿰고 릴레이 단만 세션을
+            //   들고 돌아와 경로마다 코드가 달랐다). 어느 단이든 **같은 핸드셰이크**를 얹는다.
+            let dial = || transport.connect(peer).map_err(|e| format!("{e:?}"));
+            let r = match dial() {
                 Ok(link) => {
-                    // 경로 등급 = 성립 소켓의 실주소(M5-3c) — 수동 폴백이면 공인망일 수 있다.
+                    // 경로 등급 = 성립 소켓의 실주소(M5-3c) — 수동·랑데부 단이면 공인망일 수 있다(랑데부 단은 확정 전
+                    // 서버 주소 = Remote · fail-closed). 랑데부 표식은 헤더·목록 배지용(DR-28 · M3-27).
                     let path = link
                         .remote_ip()
                         .map_or(nbeep_core::PathClass::Local, nbeep_core::class_of_ip);
+                    let via_server = link.rendezvous();
                     let hs = match psk_opt.as_ref() {
                         Some(k) => nbeep_crypto::NoiseSession::initiate_psk(link, &identity, k)
                             .map(|s| (s, true)),
@@ -12115,33 +12059,21 @@ impl App {
                             .map(|s| (s, false)),
                     };
                     match hs {
-                        Ok((s, vp)) => Ok((s, path, false, vp)),
+                        Ok((s, vp)) => Ok((s, path, via_server, vp)),
                         // psk 폴백 — 새 링크로 XX 1회(힌트 오판·상대 기능 꺼짐).
                         Err(_) if psk_opt.is_some() => match dial() {
-                            Ok(link) => nbeep_crypto::NoiseSession::initiate(link, &identity)
-                                .map(|s| (s, path, false, false))
-                                .map_err(|e| e.to_string()),
+                            Ok(link) => {
+                                let via_server = link.rendezvous();
+                                nbeep_crypto::NoiseSession::initiate(link, &identity)
+                                    .map(|s| (s, path, via_server, false))
+                                    .map_err(|e| e.to_string())
+                            }
                             Err(e) => Err(e),
                         },
                         Err(e) => Err(e.to_string()),
                     }
                 }
-                // ★ 서버 사다리(X-2b ③ — 펀치→릴레이): 발견·수동이 다 실패한 상대를
-                //   Managed 서버 랑데부로 시도. 성립 세션은 상대 키 인증 완료 상태고
-                //   경로 등급도 사다리 결과(성립 실주소)가 들고 온다(§5-1-5).
-                Err(why) => match relay.filter(|c| c.is_alive()) {
-                    Some(client) => nbeep_relay::connect_via(
-                        &client,
-                        &identity,
-                        &peer,
-                        true,
-                        std::time::Duration::from_secs(10),
-                        psk_opt.as_ref(),
-                    )
-                    .map(|via| (via.session, via.path, true, via.via_psk))
-                    .map_err(|e| format!("{why} · 서버 사다리 {e:?}")),
-                    None => Err(why),
-                },
+                Err(why) => Err(why),
             };
             let _ = match r {
                 Ok((session, path, via_server, via_psk)) => proxy.send_event(AppEvent::Outbound {
@@ -12173,35 +12105,42 @@ impl App {
         // 주소가 아니라 **키**로 상대를 찾는다(사다리 = 펀치→릴레이 · WrongPeer =
         // 암호학적 근거 fail-closed). Managed 서버가 붙어 있어야 성립한다.
         if let Some(peer) = nbeep_relay::parse_peer_hex(&addr) {
-            let Some(client) = self.relay.clone().filter(|c| c.is_alive()) else {
+            if !self.relay.as_ref().is_some_and(|c| c.is_alive()) {
                 self.set_status(nbeep_core::t(nbeep_core::Msg::StFingerprintNeedsServer));
                 if let Some(mid) = self.main_id {
                     self.request_redraw(mid);
                 }
                 return;
-            };
+            }
             self.set_status(nbeep_core::tf(nbeep_core::Msg::StfConnecting, &[&addr]));
+            let transport = std::sync::Arc::clone(&self.transport);
             let identity = std::sync::Arc::clone(&self.identity);
             let proxy = self.proxy.clone();
             std::thread::spawn(move || {
-                let r = nbeep_relay::connect_via(
-                    &client,
-                    &identity,
-                    &peer,
-                    true,
-                    std::time::Duration::from_secs(10),
-                    None,
-                );
+                // 지문 연결도 같은 사다리(`connect` — 발견·수동 경로가 있으면 그쪽 먼저 · 없으면 랑데부) + 같은 핸드셰이크
+                // (X-2 승격 · 11-06). 성립한 키 ≠ 지문이면 Outbound 처리기가 fail-closed로 버린다(종전 WrongPeer와 같은 결).
+                let r = transport
+                    .connect(peer)
+                    .map_err(|e| format!("{e:?}"))
+                    .and_then(|link| {
+                        let path = link
+                            .remote_ip()
+                            .map_or(nbeep_core::PathClass::Local, nbeep_core::class_of_ip);
+                        let via_server = link.rendezvous();
+                        nbeep_crypto::NoiseSession::initiate(link, &identity)
+                            .map(|s| (s, path, via_server))
+                            .map_err(|e| e.to_string())
+                    });
                 let _ = match r {
-                    Ok(via) => proxy.send_event(AppEvent::Outbound {
+                    Ok((session, path, via_server)) => proxy.send_event(AppEvent::Outbound {
                         session: Box::new(InboundSession {
-                            session: via.session,
-                            path: via.path,
-                            via_server: true, // 지문 = 서버 랑데부
-                            via_psk: via.via_psk,
+                            session,
+                            path,
+                            via_server,
+                            via_psk: false, // 지문 연결은 XX(형제 판정은 힌트·페어 RID 경로)
                         }),
                         via_addr: None, // 주소가 아니라 키로 찾았다 — 재연결도 사다리
-                        intent: None,   // 수동 등록과 같은 결(래치 없음)
+                        intent: Some(peer), // 부른 키 — 성립 키와 다르면 Outbound가 버린다(래치는 안 걸었어도 무해)
                         auto: false,
                     }),
                     Err(e) => proxy.send_event(AppEvent::AddFailed {
@@ -16977,14 +16916,24 @@ impl App {
         use nbeep_net::Transport as _;
         let bound = local.tcp_port();
         let degraded = local.discovery_recv_degraded();
-        self.discovery = local.discovery();
+        let ladder = nbeep_relay::LadderTransport::new(std::sync::Arc::new(local));
+        self.discovery = ladder.discovery();
         spawn_inbound_accept(
-            local.incoming(),
+            ladder.incoming(),
             std::sync::Arc::clone(&self.identity),
             self.proxy.clone(),
             std::sync::Arc::clone(&self.psk_shared),
         );
-        self.transport = std::sync::Arc::new(local);
+        // 붙어 있는 서버 접속은 새 사다리에 그대로 옮긴다(랑데부 단 유지) · 기억한 수동 주소도 다시 싣는다(X-2).
+        if let Some(c) = &self.relay {
+            ladder.set_relay(Some(c));
+        }
+        for (p, a) in &self.manual_addrs {
+            ladder.note_endpoint(*p, a);
+        }
+        self.transport = std::sync::Arc::clone(&ladder)
+            as std::sync::Arc<dyn nbeep_net::Transport + Send + Sync>;
+        self.ladder = Some(ladder);
         self.table = nbeep_core::PeerTable::new(60_000);
         self.listen_port = Some(bound);
         if degraded {
@@ -23304,6 +23253,22 @@ impl ApplicationHandler<AppEvent> for App {
                     .arg("manual_addr", via_addr.is_some())
                     .rule("already_open", self.conversations.contains_key(&peer))
                     .ok("noise session up"));
+                // ★ 랑데부 단 fail-closed(X-2 승격 · 11-06 — 종전 `connect_via`의 WrongPeer): 서버가 넘긴 상대가 내가 부른
+                //   키와 다르면 이 세션은 **쓰지 않는다**(RID 충돌·오지정·악의 서버 — 근거는 인증된 키). 수동 주소 단은 아래
+                //   R-20 처리(주소 무효화 뒤 성립 수용)가 종전대로 맡는다. 실패 경로(상태·백오프)는 ConnectFailed와 한 벌.
+                if via_server && intent.is_some_and(|want| want != peer) {
+                    let want = intent.unwrap_or(peer);
+                    dlog!(self, DL::Sess, DV::Decide, "outbound_established", |r| r
+                        .arg("peer", peer.short())
+                        .arg("intent", want.short())
+                        .rule("rendezvous_key_match", false)
+                        .fail("wrong peer via rendezvous — session dropped"));
+                    let _ = self.proxy.send_event(AppEvent::ConnectFailed {
+                        peer: want,
+                        why: "WrongPeer".to_string(),
+                    });
+                    return;
+                }
                 self.note_sibling(peer, via_psk);
                 self.connecting.finish(intent, Some(peer));
                 // ★ P-3(M5-3c · R-20) — 클릭한 상대와 **다른 키**가 성립했다면 그 수동
@@ -23311,6 +23276,7 @@ impl ApplicationHandler<AppEvent> for App {
                 //   주소로 남에게 붙는 것을 막는다 — "경로 등급은 성립한 세션이 정한다").
                 if let Some(want) = intent {
                     if want != peer && self.manual_addrs.remove(&want).is_some() {
+                        self.transport.forget_endpoint(want); // 사다리 2단에서도 뺀다(X-2)
                         self.set_status(nbeep_core::tf(
                             nbeep_core::Msg::StfPathInvalidated,
                             &[&self.peer_title(want)],
@@ -23330,6 +23296,7 @@ impl ApplicationHandler<AppEvent> for App {
                 // install보다 뒤여야 하지만 install은 아래 분기에서 일어난다 — flush는 그 뒤.
                 if let Some(addr) = via_addr {
                     // 수동 등록 성공(DR-19) — 세션이 끊겨도 이 주소로 재연결한다(④).
+                    self.transport.note_endpoint(peer, &addr); // 사다리 2단 재료(X-2 — 발견 경로 다음 · 랑데부 전)
                     self.manual_addrs.insert(peer, addr);
                 }
                 if !self.conversations.contains_key(&peer) {
@@ -23518,13 +23485,11 @@ impl ApplicationHandler<AppEvent> for App {
                         }
                         self.relay_backoff = (0, 0);
                         let client = std::sync::Arc::new(at.client);
-                        // 인바운드 수락 루프(X-2b ②) — 수명은 이 Arc에 묶인다.
-                        spawn_relay_accept(
-                            &client,
-                            std::sync::Arc::clone(&self.identity),
-                            self.proxy.clone(),
-                            std::sync::Arc::clone(&self.psk_shared),
-                        );
+                        // ★ 랑데부 단 장착(X-2 승격 · 11-06) — 인바운드는 사다리 전송이 LAN과 같은 펌프로 합류시키고,
+                        //   아웃바운드는 `transport.connect` 3단이 쓴다. 수명은 이 Arc에 묶인다(사다리는 Weak).
+                        if let Some(l) = &self.ladder {
+                            l.set_relay(Some(&client));
+                        }
                         // 프레즌스 공개(X-2e — 기본 on · 설정 hot-swap은 별도 arm).
                         if self.settings.get("net.server.announce") != "off" {
                             client.set_announce(true, self.my_roster_card());
@@ -26120,6 +26085,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
     let mut listen_port: Option<u16> = None;
     // 발견 수신 강등(M1-13ⓔ) — 포트 점유 시 패닉 대신 발신 전용 + 상태바 고지.
     let mut discovery_degraded = false;
+    let mut ladder_opt: Option<std::sync::Arc<nbeep_relay::LadderTransport>> = None;
     let (transport, discovery): (std::sync::Arc<dyn nbeep_net::Transport + Send + Sync>, _) =
         if live {
             // 실물 — LocalDirect(UDP 발견 + TCP 세션). 실기·컨테이너 상대가 목록에 뜬다.
@@ -26139,10 +26105,12 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
             .expect("LocalDirect 시작(송신 소켓·TCP 바인딩 — 발견 포트 점유는 오류 아님)");
             listen_port = Some(local.tcp_port());
             discovery_degraded = local.discovery_recv_degraded();
-            let discovery = local.discovery();
-            // 인바운드 수락 펌프 — 남이 나에게 연결하면 accept+에코(대칭 대화·비동기 GUI 펌프는 M2-7).
+            // ★ 사다리 전송(X-2 승격 · 11-06): 발견 경로 → 수동 주소 → 서버 랑데부를 `Transport` 하나로(ADR-0003 §4).
+            let ladder = nbeep_relay::LadderTransport::new(std::sync::Arc::new(local));
+            let discovery = ladder.discovery();
+            // 인바운드 수락 펌프 — LAN·릴레이 인바운드가 **한 펌프**로 합류(핸드셰이크 상한·타임아웃·psk 백오프 공용).
             spawn_inbound_accept(
-                local.incoming(),
+                ladder.incoming(),
                 std::sync::Arc::clone(&identity),
                 proxy.clone(),
                 std::sync::Arc::clone(&psk_shared),
@@ -26175,7 +26143,11 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
                     }
                 });
             }
-            (std::sync::Arc::new(local), discovery)
+            ladder_opt = Some(std::sync::Arc::clone(&ladder));
+            (
+                ladder as std::sync::Arc<dyn nbeep_net::Transport + Send + Sync>,
+                discovery,
+            )
         } else {
             // 데모 — InMemory 버스 + 에코 봇. 순환 탐색 테스트용으로 같은 접두사(김*/bob* 등)를
             // 여러 개 둔다(타입어헤드 ↑↓ 순환 확인).
@@ -26269,6 +26241,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         transport,
         connecting: ConnectLatch::default(),
         relay: None,
+        ladder: ladder_opt,
         relay_connecting: false,
         relay_backoff: (0, 0),
         relay_gen: 0,

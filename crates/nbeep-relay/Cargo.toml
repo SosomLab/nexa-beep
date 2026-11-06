@@ -18,3 +18,7 @@ nbeep-core.workspace = true
 nbeep-net.workspace = true
 nbeep-crypto.workspace = true
 sha2.workspace = true # RID 유도(snow가 이미 끄는 의존 — 트리 증가 0)
+
+[dev-dependencies]
+# 시험 전용 — InMemory 버스(`nbeep_net::inmem` = testkit 게이트) 위에 사다리 전송을 올려 본다(X-2 · 11-06).
+nbeep-net = { workspace = true, features = ["testkit"] }
