@@ -1992,6 +1992,27 @@ pub fn registry() -> &'static [Entry] {
             },
             key: "settings.backup",
         },
+        // 방화벽 허용 등록(FW-1 · 11-06) — Windows만 실제 동작(UAC 1회) · 다른 OS는 안내 문구(T0 = 묻지 않으면 권한 0).
+        Entry {
+            cat: Msg::CatAdvanced,
+            sub: None,
+            label: Msg::SetFwAllow,
+            desc: Msg::SetFwAllowDesc,
+            kind: SettingKind::Action {
+                verb: Msg::ActFwAllow,
+            },
+            key: "net.firewall_allow",
+        },
+        Entry {
+            cat: Msg::CatAdvanced,
+            sub: None,
+            label: Msg::SetFwRemove,
+            desc: Msg::SetFwRemoveDesc,
+            kind: SettingKind::Action {
+                verb: Msg::ActFwRemove,
+            },
+            key: "net.firewall_remove",
+        },
         Entry {
             cat: Msg::CatAdvanced,
             sub: None,

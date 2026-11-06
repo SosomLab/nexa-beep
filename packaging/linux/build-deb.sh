@@ -45,6 +45,12 @@ mkdir -p "$PKG/DEBIAN" "$PKG/usr/bin" "$PKG/usr/share/applications" "$PKG/usr/sh
 install -m 0755 "$BIN/nexa-beep"    "$PKG/usr/bin/nexa-beep"
 install -m 0755 "$BIN/nbeep-imgdec" "$PKG/usr/bin/nbeep-imgdec"
 install -m 0644 "$ROOT/packaging/linux/nexa-beep.desktop" "$PKG/usr/share/applications/nexa-beep.desktop"
+# ★ FW-1(11-06) 방화벽 프로필 — **설치만 하고 열지 않는다**(Debian 관례 · docs/06 §6 규칙 2 "권한 요구는 이유를 이해할 때만"):
+#   ufw 앱 프로필(/etc · deb만) + firewalld 서비스 정의(/usr/lib · deb/rpm 공용 스테이징). 켜기 = 사용자 `ufw allow nexa-beep` /
+#   `firewall-cmd --add-service=nexa-beep`. TCP가 47200에서 임의 포트로 물러난 경우는 덮지 못한다(docs/45).
+mkdir -p "$PKG/etc/ufw/applications.d" "$PKG/usr/lib/firewalld/services"
+install -m 0644 "$ROOT/packaging/linux/nexa-beep.ufw" "$PKG/etc/ufw/applications.d/nexa-beep"
+install -m 0644 "$ROOT/packaging/linux/nexa-beep.firewalld.xml" "$PKG/usr/lib/firewalld/services/nexa-beep.xml"
 # hicolor 아이콘 — 크기별 PNG(packaging/branding/png · 원본 icon.svg에서 구움) + 벡터.
 for n in 16 24 32 48 64 128 256 512; do
     d="$PKG/usr/share/icons/hicolor/${n}x${n}/apps"; mkdir -p "$d"
@@ -71,6 +77,9 @@ cat > "$PKG/DEBIAN/postinst" <<'EOF'
 set -e
 command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor 2>/dev/null || true
 command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database -q /usr/share/applications 2>/dev/null || true
+# FW-1 — 프로필이 보이게만(ufw app update · firewalld reload). 규칙은 열지 않는다.
+command -v ufw >/dev/null 2>&1 && ufw app update nexa-beep >/dev/null 2>&1 || true
+command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1 && firewall-cmd -q --reload >/dev/null 2>&1 || true
 exit 0
 EOF
 cp "$PKG/DEBIAN/postinst" "$PKG/DEBIAN/postrm"; chmod 0755 "$PKG/DEBIAN/postinst" "$PKG/DEBIAN/postrm"

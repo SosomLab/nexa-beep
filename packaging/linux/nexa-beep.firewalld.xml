@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<service>
+  <short>Nexa Beep</short>
+  <description>Zero-config LAN messenger: discovery UDP 47100, session TCP 47200. Enable with: firewall-cmd --permanent --add-service=nexa-beep &amp;&amp; firewall-cmd --reload</description>
+  <port protocol="udp" port="47100"/>
+  <port protocol="tcp" port="47200"/>
+</service>

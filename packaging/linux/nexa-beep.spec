@@ -46,6 +46,8 @@ cp -a %{_stagedir}/. %{buildroot}%{_prefix}/
 %post
 command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -q -t -f %{_datadir}/icons/hicolor 2>/dev/null || :
 command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database -q %{_datadir}/applications 2>/dev/null || :
+# FW-1 — firewalld 서비스 정의가 보이게 reload만(규칙은 열지 않는다 · 켜기 = firewall-cmd --add-service=nexa-beep).
+command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1 && firewall-cmd -q --reload >/dev/null 2>&1 || :
 
 %postun
 command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -q -t -f %{_datadir}/icons/hicolor 2>/dev/null || :
@@ -57,6 +59,7 @@ command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database -q
 %{_datadir}/applications/nexa-beep.desktop
 %{_datadir}/icons/hicolor/*/apps/nexa-beep.png
 %{_datadir}/icons/hicolor/scalable/apps/nexa-beep.svg
+%{_prefix}/lib/firewalld/services/nexa-beep.xml
 %license %{_docdir}/nexa-beep/LICENSE.md
 %doc %{_docdir}/nexa-beep/LICENSE.ko.md
 %doc %{_docdir}/nexa-beep/README.md

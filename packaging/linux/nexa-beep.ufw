@@ -1,0 +1,4 @@
+[nexa-beep]
+title=Nexa Beep
+description=Zero-config LAN messenger - discovery UDP 47100, session TCP 47200 (enable with: sudo ufw allow nexa-beep)
+ports=47100/udp|47200/tcp

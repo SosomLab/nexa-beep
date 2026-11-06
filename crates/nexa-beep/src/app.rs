@@ -17413,6 +17413,27 @@ impl App {
                     continue;
                 }
                 // 설정 파일 열기(10-09 P2 · 하단 [설정 파일 열기…]) — OS 기본 프로그램으로.
+                // 방화벽 허용 등록/제거(FW-1 · 11-06) — 사용자가 눌렀을 때만 UAC 1회(T0 원칙) · 결과는 비동기라 "요청함"만.
+                "net.firewall_allow" | "net.firewall_remove" => {
+                    use nbeep_plat::firewall::{request, supported, FwAction};
+                    let action = if key == "net.firewall_allow" {
+                        FwAction::Allow
+                    } else {
+                        FwAction::Remove
+                    };
+                    let (msg, outcome) = if !supported() {
+                        (nbeep_core::Msg::StFwUnsupported, "unsupported")
+                    } else if request(action) {
+                        (nbeep_core::Msg::StFwRequested, "requested")
+                    } else {
+                        (nbeep_core::Msg::StFwDenied, "denied")
+                    };
+                    dlog!(self, DL::App, DV::Decide, "firewall", |r| r
+                        .arg("action", format!("{action:?}"))
+                        .ok(outcome));
+                    self.set_status(nbeep_core::t(msg));
+                    continue;
+                }
                 "settings.open_file" => {
                     let path = self.conf.path().to_path_buf();
                     if path.is_file() && nbeep_plat::launch::open_path(&path) {
