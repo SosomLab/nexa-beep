@@ -3,6 +3,8 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
+> **갱신: 2026-11-06 Win 6차 (KST · Windows · main — 잔여 대조 판정 = 개발 세션 · 기록 = 협업 세션)** — 사용자 지시 "잔여 업무 확인" → 6324d91 이후 변경 0(CI 42159993352 success) · 기준 목록 대조 차이 7건 판정: M5-1 G4 = 완료(잔여 2-PC 그룹 방 → 3행) · M5-3b/3c = 코드 축 소진(공인망 실기 → 8행 묶음) · ⓑ 발견 감쇠 주입 시나리오 = 협업 몫 · 3-신원 실기·2-PC IP 차단 → 3행 · HL-1 Linux 실기 = L-1과 묶음 · 권한 규칙 3건 = 2-1과 "권한 적용 1회" · X-13 표현 유지 · **개발 착수 순서** 단락 신설(1단 M2-4b N-3/N-4 → MEM-1 ③~⑤+MEM-6 · 2단 L-2/L-3 · 3단 M4-12 설계 · 4단 v1 범위 사용자 결정 뒤 · 착수 = 사용자 "진행" 때만). 코드 변경 없음. → [journal](journal/2026-11-06.md)
+
 > **갱신: 2026-11-06 Win 5차 (KST · Windows · main — 잔여 개발 검토 · 기록 정리 = 협업 세션)** — 사용자 지시 "잔여 개발 검토" → TODO 미완 행 전수 요약(개발 세션 보고 재료) + 불일치 정리(개발 세션 확정): M4-3b ✅(W-8 wire-scan CI · W-9 같은 pcap) · §9-2 W-12 ✅(scan-plaintext) · R-4 완화 구현 ✅ · M5-3·BL-1~5 ✅ · M4-5 ✅(R-5) · X-UDP-e ✅(X-2·X-2f) · X-2d 조건 재작성 · M1-4 ✅(S4 = M1-8·WNET-1) · M1-3 잔여 축소(06 §5-2 상태 열) · ADR 현황표 0005·0006 = Accepted(헤더 기준 · docs/10 0005 행 정정) · 개요표 M4·M5 🚧 · M5-4b → PUB-1 병합 · M4-2d 흡수 닫음 · M4-2 제목 · M4-12 §6 이동 · "지금 걸려 있는 것" 9~12행(L-1·M5-5·M5-6·MEM-6). 코드 변경 없음. → [journal](journal/2026-11-06.md)
 
 > **갱신: 2026-11-06 Win 4차 (KST · Windows · main — 개발 세션 코드 · 검증 실행·기록 = 협업 세션)** — ★**X-2f 발견 스트림 합류 ✅ `31e7e10`**(ADR-0003 §9): 서버 명부(roster)를 `Transport::discovery`로(`Appeared(origin Rendezvous)`/`Withdrawn`) · PeerTable 경로별 수명(광고 TTL / 이벤트형) + 출처·카드·`Updated` · App의 roster 소비·`server_peers` 제거(≈80줄) · announce 사다리 경유 · 차단 `forget`이 서버 상대에도 적용(비대칭 해소) · **서버 와이어 무변경(beepd 교체 불필요)**. 검증 = core 212·net 57·relay 11·ui 192·relay_e2e 10·transport_e2e 6/6·nexa-beep 102 · clippy·rustdoc ✓ · verify --quick 6/6. 잔여 = 실서버 roster 상호 표시 실기(사용자). → [journal](journal/2026-11-06.md)
@@ -115,28 +117,30 @@
 
 ## 지금 걸려 있는 것
 
-> 2026-11-03 기준으로 새로 썼다 · 11-04 Win 1차 갱신(1·2·4행 · GINV-1 추가) · 11-05 2차(4-1·6행)·4차(6행)·9차(1·2행 0.8.0 · 사용자 결정 8건 = [TODO](TODO.md) MEM-1·M3-27·NETMON-1·SEC-1·X-2·X-6 행)·10차(7·8행)·11차(7행 ✅)·12차(7행 잔여)·13차(7행 닫음)·11-06 2차(8행 X-2 ✅)·4차(8행 X-2f ✅)·5차(9~12행 추가 · 잔여 검토). 종전 표(08-08 시점)는 [보존본](STATUS-archive.md)에 있다. 항목 상세 = [TODO](TODO.md).
+> 2026-11-03 기준으로 새로 썼다 · 11-04 Win 1차 갱신(1·2·4행 · GINV-1 추가) · 11-05 2차(4-1·6행)·4차(6행)·9차(1·2행 0.8.0 · 사용자 결정 8건 = [TODO](TODO.md) MEM-1·M3-27·NETMON-1·SEC-1·X-2·X-6 행)·10차(7·8행)·11차(7행 ✅)·12차(7행 잔여)·13차(7행 닫음)·11-06 2차(8행 X-2 ✅)·4차(8행 X-2f ✅)·5차(9~12행 추가 · 잔여 검토)·6차(3·2-2·4·6·8행 잔여 재배치 · 개발 착수 순서). 종전 표(08-08 시점)는 [보존본](STATUS-archive.md)에 있다. 항목 상세 = [TODO](TODO.md).
 
 | # | 항목 | 상태 |
 |---|---|---|
 | 1 | **PUB-1 choco 0.8.0**(11-05 v0.8.0 공개로 대상 갱신 · 종전 0.7.0) — 0.6.0 3종(nexa-beep · portable · beepd 0.2.6) **Approved 11-04** → `CHOCO_PUSH=true` + `gh workflow run publish-windows-packages.yml -f tag=v0.8.0` | ⏸ 스위치 = **사용자 손**(개발 세션 분류기 차단) |
 | 2 | **PUB-1 winget 0.8.0**(종전 0.7.0) — 포터블 #468846 MERGED · 설치본 #468844 = `Validation-Installation-Error`·`Needs-Author-Feedback`(0.6.0→0.6.1 packaging 무변경 · 원인 불명) | ⏸ **보류**(사용자 결정 11-05) · 해제 시 `WINGET_PUBLISH=true` + `-f tag=v0.8.0` |
 | 2-1 | **사용자 손 = `python tools/claude-permissions.py` 1회**(`e0583ae` · `.claude/settings.json` allow 25건 병합 · 세션은 자기 권한 파일 수정 불가) — ✅ 범위 축소 완료 `466868d`(11-04 — 협업 세션 검토 반영: 임의 명령을 열던 `bash`·`sh`·`env`·`xargs`·`timeout`·`PowerShell(bash:*)` 제거 · tools/ 경로 접두 8 + 읽기 전용 보조 17 = 25건) · 잔여 위험 = 세션이 고친 tools/ 스크립트도 묻지 않고 돈다(스크립트 변경은 커밋 검토로 본다) | ✅ 적용·커밋 `97f3245`(11-04 — 25건) |
-| 3 | **사람 실기** — PRES-1(2-PC 내 상태) · 2-PC U-11(S4 복원) · REPLY-1 · SET-1 · TRAY-1(Win/Linux) | ☐ 대행 불가 |
-| 2-2 | **권한 규칙 3건 사용자 적용 대기**(11-04 · 사용자 지시 "직접 관리하는 폴더의 스크립트·정리는 묻지 않게 · nexa-sql 차용") — `tools/claude-permissions.py`·CLAUDE.md §3·docs/18 §3 편집을 하네스가 "자기 권한 수정"으로 차단 · 들어간 것 = docs/53 §8 한 줄 + tmp-clean ④(`7cfc6db`) · 제안문 = 개발 세션 스크래치패드 `permission-rules-proposal.md` | ⏳ 사용자 적용 → `python tools/claude-permissions.py` 1회 |
+| 3 | **사람 실기** — PRES-1(2-PC 내 상태) · 2-PC U-11(S4 복원) · REPLY-1 · SET-1 · TRAY-1(Win/Linux) · **M5-1g 2-PC 그룹 방**(초대 왕복·방 대화 — G4 ✅ 08-15) · **M5-3 3-신원 실기 · 2-PC IP 차단 집행**(11-06 6차 이동) | ☐ 대행 불가 |
+| 2-2 | **권한 규칙 3건 사용자 적용 대기**(11-04 · 사용자 지시 "직접 관리하는 폴더의 스크립트·정리는 묻지 않게 · nexa-sql 차용") — `tools/claude-permissions.py`·CLAUDE.md §3·docs/18 §3 편집을 하네스가 "자기 권한 수정"으로 차단 · 들어간 것 = docs/53 §8 한 줄 + tmp-clean ④(`7cfc6db`) · 제안문 = 개발 세션 스크래치패드 `permission-rules-proposal.md` | ⏳ 사용자 적용 → `python tools/claude-permissions.py` 1회 — **2-1행과 한 묶음("권한 적용 1회")** |
 | 3-1 | **LAT-1 메시지 왕복 지연** — 세션 액터 송수신 분리 [55](55-lat1-session-actor-split.md) | ✅ `b4d723f`(11-04 — 루프백 p95 210 → 5ms · 49 F-1 ≤50 ✓) · 잔여 = 실 LAN 2-PC 실측(**사용자 실기** — 이 PC 1대 · 세션 대행 불가 · 11-05) |
 | 3-2 | **사용자 1회 = `tools/firewall-allow.ps1`**(`c5c0798` · 관리자 · 방화벽 창 억제 · `-Remove` 되돌림 · 실행 전) — 실행 방법 [26](26-run-and-manual-test.md) | ✅ 11-05 실행(관리자 · 규칙 28건 · 승인 창 0) |
 | 3-3 | **GAP-042 winit 0.30.13 `TaskbarCreated` 교착 우회**(nexa-dir3 11-04 이식 · DR-31) — `nbeep_plat::taskbar_guard` + `new_window` 깔때기 · 제거 조건 winit 0.31 | ✅ `e9c32f6`(11-05) · 잔여 = 실기(RDP 재접속 반복 · 자동 재현 불가) |
-| 4 | **HL-1 헤드리스 후속** — Linux `xvfb.sh` 첫 실기 | 🚧 Windows 로컬·CI 러너 스모크 ✓ · s4/perf 적용 ✓(11-04) |
+| 4 | **HL-1 헤드리스 후속** — Linux `xvfb.sh` 첫 실기 | 🚧 Windows 로컬·CI 러너 스모크 ✓ · s4/perf 적용 ✓(11-04) · 잔여 = **사용자 손 Linux 실기 묶음**(9행 L-1과 함께 · 11-06 6차) |
 | 4-1 | **GINV-1 그룹 초대 생애주기** S2~S4 — [54](54-group-invite-lifecycle.md) ✅ · DR-30 | ✅ S1~S4(`338e06e` · 시나리오 28/28) · 잔여 = 육안 · 2-PC · ~~해제 자리 38 수신 제한 목록 통합~~ ✅ `61d331c`(11-05 · DR-30 ⑤) |
 | 5 | **X-13 S5 컨텐츠 모드** | ⏸ 실기 후 별도 결정(D-32-5) |
-| 6 | **M5-3 스팸 방어**(R-4 · v1.0 필수 · D-24) — 수신 제한 설계 = [38](38-receive-restriction-design.md) | ✅ BL-1~4 `54df30c`·`61d331c`(11-05) · BL-5 자동 = `block-scenario.sh` 19/19 ✅(동사 `1e6a705`) · **2차 ⓐ 임계값 설정 승격 ✅ `eb9a8f2` · ⓑ 발견 감쇠 ✅ `dbba0a8` · ⓒ 미확인 발신자 격리 ✅ `eb98bbd`**(시나리오 27/27) · 잔여 = 3-신원 실기 · 2-PC IP 차단 집행 · ⓑ 주입 시나리오 |
+| 6 | **M5-3 스팸 방어**(R-4 · v1.0 필수 · D-24) — 수신 제한 설계 = [38](38-receive-restriction-design.md) | ✅ BL-1~4 `54df30c`·`61d331c`(11-05) · BL-5 자동 = `block-scenario.sh` 19/19 ✅(동사 `1e6a705`) · **2차 ⓐ 임계값 설정 승격 ✅ `eb9a8f2` · ⓑ 발견 감쇠 ✅ `dbba0a8` · ⓒ 미확인 발신자 격리 ✅ `eb98bbd`**(시나리오 27/27) · 잔여 = ⓑ 발견 감쇠 주입 시나리오 스크립트 = **협업 몫**(`tools/` 시나리오 + `verify.sh` 단계·RULES 동시 등재 · 결과는 개발 세션 검토) · 3-신원 실기·2-PC IP 차단 집행 → 3행(사용자 손) |
 | 7 | **SEC-1 와이어 평문 실소켓 회귀**(사용자 결정 11-05) — `tools/wire-scan.sh`(기존 수동 보조 `tools/wirecap.sh`를 자동 판정으로 확장) → `verify.sh` 단계 + ubuntu CI 잡 | ✅ `f3f4e4c`(11-05 — verify 단계 + CI ubuntu 잡 · Win 실측 PASS 3/0) · `4187806` Linux CI 교착 수정(맨 `wait` × 백그라운드 tcpdump · 4h 24m 멈춤 → 앱 pid만 대기 + 단계 timeout 5분) · ✅ **CI W-8 첫 판정 PASS(run 42094275079)** — ubuntu pcap 296,674B · TCP PSH 179 · 평문 0 · 교착 재발 없음 · TODO SEC-1 → TODO-done |
-| 8 | **X-2 릴레이 Transport 승격**(사용자 결정 11-05 · DR-8 ②) — 어댑터 `nbeep-relay` ✅ 08-21 → `RelayTransport`(발견 증강·`connect` 사다리 통합) | ✅ `8237f8e`(11-06) · 잔여 = 실 NAT·서버 1대 + 2-PC 실측(**사용자 손**) · **X-2f ✅ `31e7e10`(11-06)** 잔여 = 실서버 roster 상호 표시 실기(**사용자 손** · 서버 교체 불필요 — 와이어 무변경) |
+| 8 | **X-2 릴레이 Transport 승격**(사용자 결정 11-05 · DR-8 ②) — 어댑터 `nbeep-relay` ✅ 08-21 → `RelayTransport`(발견 증강·`connect` 사다리 통합) | ✅ `8237f8e`(11-06) · 잔여 = 실 NAT·서버 1대 + 2-PC 실측(**사용자 손** · M5-3b/M5-3c 공인망 실기 같은 묶음 — 코드 축 소진) · **X-2f ✅ `31e7e10`(11-06)** 잔여 = 실서버 roster 상호 표시 실기(**사용자 손** · 서버 교체 불필요 — 와이어 무변경) |
 | 9 | **L-1 Linux 클립보드 실기**(🔴 P0 · 자체 구현 `eb7429b` 08-29) — Ctrl+V·X11·KDE | ☐ **사용자 손**(Linux PC) |
 | 10 | **M5-5 24h 상주 누수**(P0 · NFR-B-6 · `tools/inspect-sample.sh --interval 60 --duration 86400 --gate`) | ☐ **사용자 손**(설치본 상주 1회) |
 | 11 | **M5-6 문서 마감**(P0 · 사용 안내·알려진 한계 · SEC-3 "막지 못하는 것") | ☐ 협업 세션 몫 · v1 전 |
 | 12 | **MEM-6 피어당 상주 메모리**(P2 · 0.15MB/피어 · 500명 90MB) | ☐ 개발 세션 |
+
+**개발 착수 순서(11-06 개발 세션 확정)** — 코드 잔여 0(X-2·X-2f 종결) 뒤 후보: **1단** M2-4b N-3/N-4 → MEM-1 ③~⑤ + MEM-6(12행) · **2단** L-2/L-3 Linux parity · **3단** M4-12 설계 · **4단** M3-5·M4-7/8·X-13·PERF-2(v1 범위 사용자 결정 뒤). **착수는 사용자 "진행" 지시 때만.** M5-1 G4(✅ 08-15)·M5-3b/3c(코드 축 소진)는 후보에서 제외 — 잔여는 사용자 손 실기(3·8행).
 
 ## 미해결 위험
 
