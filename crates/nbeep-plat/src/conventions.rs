@@ -31,6 +31,8 @@ pub enum StdAccel {
     RejectOffer,
     /// 주소 직접 입력(⌘/Ctrl+K · M3-16).
     AddEndpoint,
+    /// 찾기(⌘/Ctrl+F · docs/14 §6 · M3-4 소분 ④ 11-06) — 설정 검색 칸 포커스(대화 기록 찾기는 M3-5).
+    Find,
 }
 
 /// 주(수정) 키가 ⌘(super)인 OS인가 — mac만. 나머지는 Ctrl.
@@ -57,6 +59,7 @@ pub fn std_accel(ch: &str) -> Option<StdAccel> {
         "y" => Some(StdAccel::AcceptOffer),
         "n" => Some(StdAccel::RejectOffer),
         "k" => Some(StdAccel::AddEndpoint),
+        "f" => Some(StdAccel::Find),
         _ => None,
     }
 }

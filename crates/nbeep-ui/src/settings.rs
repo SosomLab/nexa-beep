@@ -2802,9 +2802,19 @@ impl SettingsWidget {
         w
     }
 
-    /// 선택 복사(① 08-13) — 포커스된 텍스트 입력(검색·글꼴명)에서만 나온다.
-    #[must_use]
-    /// 포커스 순회(M3-4 · 11-06) — 순서 = 검색 · 행 컨트롤(보이는 순 · 잠긴 행·Info 제외) · 고급·변경 스위치 · 하단 버튼 4.
+    /// 검색 칸으로 포커스(⌘/Ctrl+F · M3-4 소분 ④ · 11-06) — 다른 포커스는 전부 끈다.
+    pub fn focus_search(&mut self, inv: &mut Invalidations) {
+        // 현재 포커스를 지우고 검색(0)으로: 검색이 이미 포커스면 no-op · 아니면 순회 기계를 써서 검색으로 간다.
+        if !self.search.is_focused() {
+            let mut guard = 0;
+            while self.move_focus(false, inv) != 0 && guard < 64 {
+                guard += 1;
+            }
+        }
+        inv.push(self.bounds);
+    }
+
+    /// 포커스 순회(M3-4 · 11-06) — 순서 = 검색 · 트리 · 행 컨트롤(보이는 순 · 잠긴 행·Info 제외) · 고급·변경 스위치 · 하단 버튼 4.
     /// 현재 포커스가 없으면 검색부터. 반환 = 새 포커스 위치(테스트 판정용).
     pub fn move_focus(&mut self, backward: bool, inv: &mut Invalidations) -> usize {
         // 0 = 검색 · 1..=rows = 행 · 그 뒤 = 하단 6개.
@@ -2815,7 +2825,8 @@ impl SettingsWidget {
             .filter(|(_, r)| !matches!(r.ctl, RowCtl::Info(_)) && !self.is_locked(r.idx))
             .map(|(i, _)| i)
             .collect();
-        let n = 1 + focusable_rows.len() + 6;
+        // 0 = 검색 · 1 = 트리 · 2..=rows+1 = 행 · 그 뒤 = 하단 6개(M3-4 소분 ② — 트리 슬롯 추가).
+        let n = 2 + focusable_rows.len() + 6;
         let row_focused = |c: &RowCtl| match c {
             RowCtl::Combo(c) => c.is_focused(),
             RowCtl::Check(c) => c.is_focused(),
@@ -2836,16 +2847,18 @@ impl SettingsWidget {
         ];
         let cur = if self.search.is_focused() {
             Some(0)
+        } else if self.tree.is_focused() {
+            Some(1)
         } else if let Some(k) = focusable_rows
             .iter()
             .position(|&i| row_focused(&self.rows[i].ctl))
         {
-            Some(1 + k)
+            Some(2 + k)
         } else {
             bottom
                 .iter()
                 .position(|&b| b)
-                .map(|k| 1 + focusable_rows.len() + k)
+                .map(|k| 2 + focusable_rows.len() + k)
         };
         let next = match cur {
             None => 0,
@@ -2854,8 +2867,9 @@ impl SettingsWidget {
         };
         // 전부 끄고 하나만 켠다.
         self.search.set_focused(next == 0);
+        self.tree.set_focused(next == 1);
         for (k, &i) in focusable_rows.iter().enumerate() {
-            let on = next == 1 + k;
+            let on = next == 2 + k;
             match &mut self.rows[i].ctl {
                 RowCtl::Combo(c) => c.set_focused(on),
                 RowCtl::Check(c) => c.set_focused(on),
@@ -2887,7 +2901,7 @@ impl SettingsWidget {
                 }
             }
         }
-        let base = 1 + focusable_rows.len();
+        let base = 2 + focusable_rows.len();
         self.adv_switch.borrow_mut().set_focused(next == base);
         self.changed_switch
             .borrow_mut()
@@ -2897,8 +2911,8 @@ impl SettingsWidget {
         self.btn_json.set_focused(next == base + 4);
         self.btn_close.set_focused(next == base + 5);
         // 포커스가 간 행이 화면 밖이면 보이게(M3-4 소분 · 11-06).
-        if next >= 1 && next <= focusable_rows.len() {
-            self.ensure_row_visible(focusable_rows[next - 1], inv);
+        if next >= 2 && next < 2 + focusable_rows.len() {
+            self.ensure_row_visible(focusable_rows[next - 2], inv);
         }
         inv.push(self.bounds);
         next
@@ -2925,6 +2939,8 @@ impl SettingsWidget {
         }
     }
 
+    /// 선택 복사(① 08-13) — 포커스된 텍스트 입력(검색·글꼴명)에서만 나온다.
+    #[must_use]
     pub fn clipboard_copy(&self) -> Option<String> {
         if let Some(t) = self.search.copy_selection() {
             return Some(t);
@@ -3365,7 +3381,7 @@ impl SettingsWidget {
         }
         let mut tree = TreeView::new(TreeModel::new(roots));
         tree.set_scale(self.scale);
-        tree.set_focused(true); // 사이드바는 ↑↓ 상시 탐색(트리 자체 포커스 링 없음)
+        tree.set_focused(false); // ★ M3-4 소분 ②(11-06): 포커스는 Tab 순회·클릭으로 — 링은 paint가 그린다(종전 상시 포커스·링 없음).
         let sel_row = self
             .cat_map
             .iter()
@@ -4442,6 +4458,7 @@ impl Widget for SettingsWidget {
                 // 노트 줄 클릭이 같은 y의 트리 행을 하이라이트 — 카테고리 전환만
                 // bounds로 막고 내부 상태는 무방비였다).
                 let before = self.tree.selected_row();
+                self.tree.set_focused(self.tree.bounds().contains(p)); // 클릭 = 트리 포커스(M3-4 소분 ②)
                 if self.tree.bounds().contains(p) {
                     self.tree.on_event(ev, inv);
                 }
@@ -4684,9 +4701,13 @@ impl Widget for SettingsWidget {
                     inv.push(self.bounds);
                 }
                 Key::Up | Key::Down if self.query.is_empty() => {
-                    // 사이드바 카테고리 탐색(검색 중엔 유지).
+                    // 사이드바 카테고리 탐색(검색 중엔 유지) — 트리가 포커스가 아니어도 ↑↓는 종전대로 트리로(TreeView는
+                    // 포커스 때만 키를 받으므로 잠시 켠다 · M3-4 소분 ②).
+                    let was = self.tree.is_focused();
+                    self.tree.set_focused(true);
                     let before = self.tree.selected_row();
                     self.tree.on_event(ev, inv);
+                    self.tree.set_focused(was);
                     let after = self.tree.selected_row();
                     if after != before {
                         if let Some(&sel) = self.cat_map.get(after) {
@@ -4717,6 +4738,15 @@ impl Widget for SettingsWidget {
         );
         self.search.paint(ctx, theme);
         self.tree.paint(ctx, theme);
+        if self.tree.is_focused() {
+            // 트리 포커스 링(M3-4 소분 ②) — 좌측이 창 가장자리라 안쪽으로 3px 들여 그린다.
+            let b = self.tree.bounds();
+            self.tree.draw_focus_ring(
+                ctx,
+                theme,
+                Rect::new(b.x + 3, b.y + 3, (b.w - 6).max(0), (b.h - 6).max(0)),
+            );
+        }
         ctx.fill_rect(
             Rect::new(self.bounds.x + sw - 1, self.bounds.y, 1, self.bounds.h),
             theme.border,
@@ -5945,6 +5975,8 @@ mod tests {
     }
 
     /// M3-4(11-06): Tab = 검색 → 행 컨트롤 → 하단 버튼 → 검색 순환 · Shift+Tab 역순 · Space = 포커스된 토글.
+    /// M3-4(11-06): Tab = 검색 → 트리 → 행 컨트롤 → 하단 버튼 → 검색 순환 · Shift+Tab 역순 · Space = 포커스된 토글 ·
+    /// ⌘/Ctrl+F = 검색 포커스.
     #[test]
     fn tab_cycles_focus_and_space_toggles_focused_switch() {
         let (mut w, mut inv) = widget();
@@ -5962,14 +5994,15 @@ mod tests {
         assert_eq!(w.move_focus(false, &mut inv), 0, "포커스 없음 → 검색");
         assert!(w.search.is_focused());
         w.on_event(&tab, &mut inv);
-        assert!(!w.search.is_focused());
+        assert!(w.tree.is_focused(), "검색 다음 = 트리(M3-4 소분 ②)");
+        w.on_event(&tab, &mut inv);
+        assert!(!w.search.is_focused() && !w.tree.is_focused());
         assert!(
             w.rows
                 .iter()
                 .any(|r| matches!(&r.ctl, RowCtl::Check(c) if c.is_focused())),
             "알림 범주 첫 행 = 토글"
         );
-        // Space = 포커스된 토글이 바뀐다(Char(' ') → Key::Space 전달).
         w.on_event(&InputEvent::Char { c: ' ', now_ms: 0 }, &mut inv);
         let ch = w.take_changes();
         assert!(
@@ -5977,11 +6010,17 @@ mod tests {
             "변경: {ch:?}"
         );
         w.on_event(&stab, &mut inv);
+        assert!(w.tree.is_focused(), "Shift+Tab = 트리로");
+        w.on_event(&stab, &mut inv);
         assert!(w.search.is_focused(), "Shift+Tab = 검색으로");
         w.on_event(&stab, &mut inv);
         assert!(w.btn_close.is_focused(), "검색에서 역순 = 끝(닫기)");
         w.on_event(&tab, &mut inv);
         assert!(w.search.is_focused(), "닫기 다음 = 검색(순환)");
+        // ⌘/Ctrl+F = 어디서든 검색으로.
+        w.on_event(&tab, &mut inv);
+        w.focus_search(&mut inv);
+        assert!(w.search.is_focused() && !w.tree.is_focused());
     }
 
     /// M3-4 소분(11-06): Tab으로 화면 밖 행에 포커스가 가면 패널이 따라 스크롤된다(표시 범주 · 창 높이 300).

@@ -363,6 +363,42 @@ impl ProfileWidget {
     }
 
     /// 바뀐 (설정 키, 값) 회수(1회성) — 호스트가 설정 적용 깔때기에 넘긴다.
+    /// 포커스 순회(M3-4 소분 ① · 11-06) — 반환 = 새 포커스 인덱스(0 이름 … 10 취소 · 테스트 판정용).
+    pub fn move_focus(&mut self, backward: bool, inv: &mut Invalidations) -> usize {
+        const N: usize = 11;
+        let focused = [
+            self.name.is_focused(),
+            self.email.is_focused(),
+            self.phone.is_focused(),
+            self.bio.is_focused(),
+            self.choose_img.is_focused(),
+            self.sw_basic.is_focused(),
+            self.sw_email.is_focused(),
+            self.sw_phone.is_focused(),
+            self.border.is_focused() || self.border.hex_focused(),
+            self.apply_btn.is_focused(),
+            self.cancel_btn.is_focused(),
+        ];
+        let next = match focused.iter().position(|&f| f) {
+            None => 0,
+            Some(c) if backward => (c + N - 1) % N,
+            Some(c) => (c + 1) % N,
+        };
+        self.name.set_focused(next == 0);
+        self.email.set_focused(next == 1);
+        self.phone.set_focused(next == 2);
+        self.bio.set_focused(next == 3);
+        self.choose_img.set_focused(next == 4);
+        self.sw_basic.set_focused(next == 5);
+        self.sw_email.set_focused(next == 6);
+        self.sw_phone.set_focused(next == 7);
+        self.border.set_focused(next == 8);
+        self.apply_btn.set_focused(next == 9);
+        self.cancel_btn.set_focused(next == 10);
+        inv.push(self.bounds);
+        next
+    }
+
     pub fn take_changes(&mut self) -> Vec<(&'static str, String)> {
         // M3-18: 편집은 보류(`changes`) — 적용 버튼이 옮긴 `ready`만 나간다.
         // 같은 키 중복은 그대로 둔다(apply_settings가 순차 적용 = 마지막 값이
@@ -666,6 +702,17 @@ impl Widget for ProfileWidget {
                 self.closed = true;
                 return;
             }
+        }
+        // ★ Tab/Shift+Tab 포커스 순회(M3-4 소분 ① · 11-06) — 이름 → 이메일 → 전화 → 소개 → 사진 선택 → 공개 토글 3 → 테두리 색
+        //   → 적용 → 취소 → 순환(캐러셀은 키 입력이 없어 제외). 링은 컨트롤이 그린다.
+        if let InputEvent::Key {
+            key: Key::Tab,
+            shift,
+            ..
+        } = *ev
+        {
+            self.move_focus(shift, inv);
+            return;
         }
         // 아바타 스와치 캐러셀(08-14) — 이동 버튼·아이템 클릭 판정은 컨트롤 몫,
         // 선택 적용(사진과 배타)은 여기서. 클릭이 잡히면 아래 포커스 처리로 안 흘린다.

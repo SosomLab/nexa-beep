@@ -21504,6 +21504,28 @@ impl App {
         None
     }
 
+    /// ⌘/Ctrl+F — 설정 검색 칸으로(없으면 설정 창을 연다 · M3-4 소분 ④).
+    fn focus_settings_search(&mut self, el: &ActiveEventLoop) {
+        if self.settings_view.is_none() {
+            self.open_settings(el);
+        }
+        let mut inv = Invalidations::default();
+        if let Some(sv) = &mut self.settings_view {
+            sv.focus_search(&mut inv);
+        }
+        if let Some(sid) = self
+            .windows
+            .iter()
+            .find(|(_, e)| e.role == Role::Settings)
+            .map(|(id, _)| *id)
+        {
+            if let Some(e) = self.windows.get(&sid) {
+                focus_win(&e.window);
+            }
+            self.request_redraw(sid);
+        }
+    }
+
     /// 휠 관성 한 걸음(M3-1b ①) — 남은 양의 45%(6px 이하면 전부)를 위젯에 보낸다. 반환 = 아직 남았는가(깨움 16ms 근거).
     fn wheel_ease_step(&mut self, id: WindowId, el: &ActiveEventLoop) -> bool {
         let Some((ry, rx)) = self.wheel_ease.get(&id).copied() else {
@@ -26189,6 +26211,7 @@ impl ApplicationHandler<AppEvent> for App {
                         };
                         let sc = match phys {
                             Some(KC::KeyA) => Some("a"),
+                            Some(KC::KeyF) => Some("f"),
                             Some(KC::KeyC) => Some("c"),
                             Some(KC::KeyX) => Some("x"),
                             Some(KC::KeyV) => Some("v"),
@@ -26215,6 +26238,12 @@ impl ApplicationHandler<AppEvent> for App {
                                 // 텍스트 기본 단축키 — 전체 선택(사용자 지적 08-09).
                                 Some(StdAccel::SelectAll) => {
                                     self.route(id, InputEvent::SelectAll, el);
+                                    return;
+                                }
+                                // 찾기(⌘/Ctrl+F · M3-4 소분 ④ · 11-06) — 설정 창이면 검색 칸 포커스 · 아니면 설정을 열고
+                                // 검색으로(대화 기록 찾기는 M3-5 블라인드 인덱스 뒤).
+                                Some(StdAccel::Find) => {
+                                    self.focus_settings_search(el);
                                     return;
                                 }
                                 // 복사/잘라내기/붙여넣기 — **모든 텍스트 컨트롤**(① 08-13 —
