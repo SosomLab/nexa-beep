@@ -39,7 +39,12 @@ echo "  창 수 wins=$wins (기대 ≥ 6) · 목록 휠 paint n=$pn avg=${pavg}m
 { echo "peers=$PEERS"; echo "wins=$wins"; echo "list_wheel_paint_avg_ms=$pavg"; echo "list_wheel_paint_max_ms=$pmax"; echo "private_mb=${mem:-}"; } > "$OUT/summary.txt"
 ok=1
 [ "$wins" -ge 6 ] || ok=0
-[ "$pavg" != "-" ] && awk -v v="$pavg" -v b="$PAINT_MS" 'BEGIN{exit !(v<=b)}' || ok=0
+# 피어 0이면 목록이 스크롤되지 않아 휠 paint 표본이 없다(n=0) — 휠 판정은 생략하고 창 수·메모리만 본다(11-06).
+if [ "$PEERS" -gt 0 ]; then
+  [ "$pavg" != "-" ] && awk -v v="$pavg" -v b="$PAINT_MS" 'BEGIN{exit !(v<=b)}' || ok=0
+else
+  echo "  (피어 0 — 목록 휠 표본 없음 · 휠 판정 생략)"
+fi
 # D-2 게이트의 조건은 피어 100(NFR-B-2) — 그보다 많으면 메모리는 참고값(11-04 릴리스 실측: 0 → 15.3 · 100 → 26.1 · 500 → 90.1MB =
 # 피어당 ≈0.15MB · 500은 게이트 밖 = 피어당 상주 비용 추적 과제).
 if [ "$PEERS" -le 100 ]; then
