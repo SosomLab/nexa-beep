@@ -59,7 +59,9 @@ echo
 echo "═══ 판정 ═══"
 ok=0; bad=0
 chk() { # 설명 · 로그 · 정규식 · 기대 개수(기본 ≥1)
-  local n; n=$(grep -c -E "$3" "$2" 2>/dev/null || true); n=${n:-0}
+  # `[dev] …` 줄(NEXA_DEVLOG 켠 실행 · LOG-2가 `[user]` eprintln과 같은 문장을 dlog로도 남김)은 세지 않는다 —
+  # 켠 채로 돌려도 "기대 2"가 4로 두 번 세지지 않게(11-07). 판정 원천 = `[user]` eprintln · `[dump]`.
+  local n; n=$(grep -v '^\[dev\] ' "$2" 2>/dev/null | grep -c -E "$3" || true); n=${n:-0}
   if { [ -z "${4:-}" ] && [ "$n" -ge 1 ]; } || { [ -n "${4:-}" ] && [ "$n" -eq "$4" ]; }; then
     printf '  ✓ %s (%s건)\n' "$1" "$n"; ok=$((ok+1))
   else

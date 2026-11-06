@@ -57,11 +57,11 @@ wait
 
 echo; echo "═══ 판정 ═══"
 ok=0; bad=0
-chk() { local n; n=$(grep -c -E "$3" "$2" 2>/dev/null || true); n=${n:-0}
+chk() { local n; n=$(grep -v '^\[dev\] ' "$2" 2>/dev/null | grep -c -E "$3" || true); n=${n:-0}
   if [ "$n" -ge 1 ]; then printf '  ✓ %s (%s건)\n' "$1" "$n"; ok=$((ok+1)); else printf '  ✗ %s (0건)\n' "$1"; bad=$((bad+1)); fi; }
-chk_not() { local n; n=$(grep -c -E "$3" "$2" 2>/dev/null || true); n=${n:-0}
+chk_not() { local n; n=$(grep -v '^\[dev\] ' "$2" 2>/dev/null | grep -c -E "$3" || true); n=${n:-0}
   if [ "$n" -eq 0 ]; then printf '  ✓ %s (0건 = 기대)\n' "$1"; ok=$((ok+1)); else printf '  ✗ %s (%s건 · 기대 0)\n' "$1" "$n"; bad=$((bad+1)); fi; }
-chk_count() { local n; n=$(grep -c -E "$3" "$2" 2>/dev/null || true); n=${n:-0}
+chk_count() { local n; n=$(grep -v '^\[dev\] ' "$2" 2>/dev/null | grep -c -E "$3" || true); n=${n:-0}
   if [ "$n" -eq "$4" ]; then printf '  ✓ %s (%s건 = 기대)\n' "$1" "$n"; ok=$((ok+1)); else printf '  ✗ %s (%s건 · 기대 %s)\n' "$1" "$n" "$4"; bad=$((bad+1)); fi; }
 chk "X: 방 생성(소유자 = X · 구성원 3)"                      "$OUT/x.log"   "\[dump\] group .* name=실기방 mine=Owner owner=${XS} members=.*=.*,.*=.*,.*="
 chk "X: Y·Z 수락 메모 = joined(GINV-1 S1)"                   "$OUT/x.log"   "\[dump\] group .* name=실기방 .* members=.*joined.*joined"
