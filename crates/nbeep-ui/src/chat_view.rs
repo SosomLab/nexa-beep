@@ -86,8 +86,16 @@ pub fn fmt_hm(w: WallTime, h24: bool) -> String {
 
 /// 날짜 알약 라벨 — `2026-08-10 (월)`(기본) 또는 `8/10 (월)`(설정 선택).
 fn fmt_date_pill(w: WallTime, short: bool) -> String {
-    const DOW: [&str; 7] = ["일", "월", "화", "수", "목", "금", "토"];
-    let dow = DOW[w.weekday() as usize % 7];
+    fmt_date_pill_in(nbeep_core::current_lang(), w, short)
+}
+
+/// [`fmt_date_pill`]의 언어 지정판 — 요일 약칭은 i18n(`Msg::WeekdaysShort` · 일요일부터
+/// 공백 구분 7개)에서 온다. 시험은 전역 언어 상태와 무관하게 이 함수로 본다.
+fn fmt_date_pill_in(lang: nbeep_core::Lang, w: WallTime, short: bool) -> String {
+    let dow = nbeep_core::tr(lang, nbeep_core::Msg::WeekdaysShort)
+        .split_whitespace()
+        .nth(w.weekday() as usize % 7)
+        .unwrap_or("");
     if short {
         format!("{}/{} ({dow})", w.mo, w.d)
     } else {
@@ -4400,8 +4408,11 @@ mod tests {
             h: 0,
             m: 0,
         };
-        assert_eq!(fmt_date_pill(w, false), "2026-08-10 (월)");
-        assert_eq!(fmt_date_pill(w, true), "8/10 (월)");
+        use nbeep_core::Lang;
+        assert_eq!(fmt_date_pill_in(Lang::Ko, w, false), "2026-08-10 (월)");
+        assert_eq!(fmt_date_pill_in(Lang::Ko, w, true), "8/10 (월)");
+        assert_eq!(fmt_date_pill_in(Lang::En, w, false), "2026-08-10 (Mon)");
+        assert_eq!(fmt_date_pill_in(Lang::Ja, w, true), "8/10 (月)");
     }
 
     #[test]

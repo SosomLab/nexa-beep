@@ -66,7 +66,11 @@ pub enum OfferChoice {
 }
 
 /// 기간 선택지(설정 화면과 **같은 코드**를 쓴다 — 두 곳이 어긋나지 않게).
-const WINDOWS: [(&str, &str); 3] = [("1h", "1시간"), ("6h", "6시간"), ("today", "24시간")];
+const WINDOWS: [(&str, Msg); 3] = [
+    ("1h", Msg::Hours1),
+    ("6h", Msg::Hours6),
+    ("today", Msg::Hours24),
+];
 
 /// 사람이 읽는 크기.
 fn human(bytes: u64) -> String {
@@ -99,7 +103,7 @@ impl OfferPromptWidget {
     pub fn new(info: OfferInfo, timeout_secs: u64) -> Self {
         let items = WINDOWS
             .iter()
-            .map(|(v, l)| ComboItem::new(*v, *l))
+            .map(|(v, l)| ComboItem::new(*v, t(*l)))
             .collect();
         let approve = if let Some(pct) = info.resume_pct {
             Button::new(tf(Msg::OfferResumeBtn, &[&pct.to_string()]))

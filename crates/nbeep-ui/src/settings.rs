@@ -487,12 +487,30 @@ const RADIO_DEFAULTS: &[(&str, &str)] = &[
     ("window.blur_grace_ms", "150"),
 ];
 
+/// `RadioInput` 표시 접미 — 단위 코드(`@…`)는 표시 언어로 번역, 그 밖은 그대로(11-06 문자열 이관).
+#[must_use]
+pub fn unit_suffix(lang: Lang, suffix: &'static str) -> &'static str {
+    let m = match suffix {
+        "@sec" => Msg::UnitSec,
+        "@min" => Msg::UnitMin,
+        "@hour" => Msg::UnitHour,
+        "@day" => Msg::UnitDay,
+        "@count" => Msg::UnitCount,
+        "@items" => Msg::UnitItems,
+        "@times" => Msg::UnitTimes,
+        other => return other,
+    };
+    tr(lang, m)
+}
+
 /// 항목 종류 — 우측 패널이 이 열거를 읽어 컨트롤을 동적 생성한다(새 설정 = Entry 1줄).
 #[derive(Clone, Copy, Debug)]
 pub enum SettingKind {
     /// 값 후보 중 택일 — [`Combo`] 드롭다운.
     Radio(&'static [(&'static str, Msg)]),
     /// 택일 + **직접 입력** — 후보에 없는 값을 인라인 편집으로 넣는다(값, 표시 접미).
+    /// 접미가 `@`로 시작하면 단위 코드(`@sec`·`@min`·`@hour`·`@day`·`@count`·`@items`·`@times`)
+    /// = 표시 언어로 번역([`unit_suffix`]) · 그 밖(`ms`·`%`·`MiB`)은 그대로.
     RadioInput(&'static [(&'static str, Msg)], &'static str),
     /// 3×3 위치 — **이미지 드롭다운**([`PositionDropdown`] · 선택 타일 + ▾ · 팝업 = 그리드 · 10-09 사용자 "콤보 방식으로"
     /// = nexa-sql 설정과 동일). 값 = 위치 코드(`bl` 등).
@@ -1507,7 +1525,7 @@ pub fn registry() -> &'static [Entry] {
                     ("120", Msg::Sec120),
                     ("300", Msg::Sec300),
                 ],
-                "초",
+                "@sec",
             ),
             key: "xfer.timeout_sec",
         },
@@ -1525,7 +1543,7 @@ pub fn registry() -> &'static [Entry] {
                     ("5", Msg::Min5),
                     ("10", Msg::Min10),
                 ],
-                "분",
+                "@min",
             ),
             key: "xfer.auto_cancel_min",
         },
@@ -1757,7 +1775,7 @@ pub fn registry() -> &'static [Entry] {
                     ("50", Msg::Count50),
                     ("1000", Msg::Count1000),
                 ],
-                "개",
+                "@count",
             ),
             key: "group.resync_keep",
         },
@@ -2070,7 +2088,7 @@ pub fn registry() -> &'static [Entry] {
                     ("6", Msg::Hours6),
                     ("72", Msg::Hours72),
                 ],
-                "시간",
+                "@hour",
             ),
             key: "group.reinvite_hours",
         },
@@ -2087,7 +2105,7 @@ pub fn registry() -> &'static [Entry] {
                     ("30", Msg::Days30),
                     ("0", Msg::DurNever),
                 ],
-                "일",
+                "@day",
             ),
             key: "group.invite_expire_days",
         },
@@ -2098,7 +2116,7 @@ pub fn registry() -> &'static [Entry] {
             desc: Msg::GroupDeclineUndoSecsDesc,
             kind: SettingKind::RadioInput(
                 &[("5", Msg::Secs5), ("0", Msg::Secs0), ("10", Msg::Secs10)],
-                "초",
+                "@sec",
             ),
             key: "group.decline_undo_secs",
         },
@@ -2140,7 +2158,7 @@ pub fn registry() -> &'static [Entry] {
                     ("100", Msg::Per10s100),
                     ("0", Msg::BlockOff),
                 ],
-                "건",
+                "@items",
             ),
             key: "block.msg_burst",
         },
@@ -2156,7 +2174,7 @@ pub fn registry() -> &'static [Entry] {
                     ("60", Msg::PerMin60),
                     ("0", Msg::BlockOff),
                 ],
-                "회",
+                "@times",
             ),
             key: "block.accept_per_min",
         },
@@ -2172,7 +2190,7 @@ pub fn registry() -> &'static [Entry] {
                     ("30", Msg::Min30),
                     ("60", Msg::Min60),
                 ],
-                "분",
+                "@min",
             ),
             key: "block.auto_minutes",
         },
@@ -3366,7 +3384,7 @@ impl SettingsWidget {
                         .collect();
                     let mut c = Combo::new(items, 0);
                     if let SettingKind::RadioInput(_, suffix) = e.kind {
-                        c.set_custom_entry(tr(lang, Msg::CustomInput), suffix);
+                        c.set_custom_entry(tr(lang, Msg::CustomInput), unit_suffix(lang, suffix));
                         // 텍스트 값 행(서버 주소 — 도메인·IP)은 숫자 필터를 푼다(08-22).
                         c.set_custom_text(FREE_TEXT_KEYS.contains(&e.key));
                     }
