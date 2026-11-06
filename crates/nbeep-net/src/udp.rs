@@ -4,7 +4,7 @@
 //! 멀티캐스트를 막는 기업 Wi-Fi에서도 브로드캐스트로 발견되게 하는 폴백([docs/06 §4]). 수신
 //! 소켓은 `0.0.0.0:PORT` 바인딩이라 **둘 다 같은 소켓으로 받는다**(같은 peer 이중 관측은 PeerTable이
 //! 병합 — FR-D-6). **S1(IPv6 멀티캐스트)** 도 best-effort 병행(IPv6 미지원 환경은 조용히 IPv4만).
-//! S4(유니캐스트)는 후속.
+//! S4(유니캐스트 · M1-8)는 ARP 이웃 프로브(HELLO) + 수신측 유니캐스트 Announce 응답 + **송신 소켓 응답 수신**(11-07).
 //!
 //! - **자기 패킷 필터** — 멀티캐스트는 루프백된다. **키(`PeerId`)로 거른다**([docs/08 §5] —
 //!   주소·포트가 아니라 신원 기준. 같은 호스트의 다른 인스턴스는 걸러지지 않아야 한다).
@@ -123,6 +123,7 @@ impl UdpDiscovery {
         send_sock.set_multicast_ttl_v4(TTL)?;
         send_sock.set_multicast_loop_v4(true)?;
         send_sock.set_broadcast(true)?; // S3 — 멀티캐스트 차단 폴백
+        send_sock.set_read_timeout(Some(RECV_POLL))?; // 응답 수신 스레드의 정지 폴링(발신에는 영향 없음)
 
         // ── S1: IPv6 멀티캐스트(best-effort — 실패해도 IPv4로 계속) ──
         let v6 = Self::setup_ipv6().ok();
@@ -160,6 +161,13 @@ impl UdpDiscovery {
                 reply,
                 Arc::clone(&quiet),
             );
+        }
+        // ★ S4 왕복의 **발신측 절반**(11-07 결함 수정 · M1-8): 상대는 내 HELLO의 발신 주소(= 이 송신 소켓의 임의
+        //   포트)로 유니캐스트 Announce를 되쏘는데, 종전엔 이 소켓을 읽는 스레드가 없어 그 응답이 **전부 버려졌다**
+        //   (47100 수신 소켓은 임의 포트로 온 패킷을 받지 못한다). 막힌 망에선 양쪽이 각자 S4 라운드를 돌아야만
+        //   발견됐다(≤12.8초 × 2). 같은 디코드·자기 필터·관측 경로를 재사용(응답은 하지 않는다 — Announce는 비유도).
+        if let Ok(rx) = send_sock.try_clone() {
+            Self::spawn_receiver(rx, me, tx.clone(), Arc::clone(&stop), Arc::clone(&quiet));
         }
         let v6_send = if let Some((v6_recv, v6_send)) = v6 {
             if let Ok(rx) = v6_recv.try_clone() {
@@ -694,6 +702,41 @@ mod tests {
         let d = UdpDiscovery::spawn(pid(9), [9; 16], name("hog"), 9000, 1, 60_000)
             .expect("점유 시에도 spawn은 성공(발신 전용)");
         assert!(d.recv_degraded(), "수신 강등이 표시돼야 호스트가 고지한다");
+    }
+
+    /// S4 왕복의 발신측 절반(11-07 결함 수정): 임의 포트의 **송신 소켓**으로 되돌아온 유니캐스트 Announce가
+    /// 관측으로 올라온다. 멀티캐스트 없이 루프백 유니캐스트만 쓰므로 CI에서도 돈다.
+    #[test]
+    fn unicast_reply_to_send_socket_is_observed() {
+        let a = UdpDiscovery::spawn(pid(3), [3; 16], name("asker"), 1000, 1, 60_000).unwrap();
+        let ev = a.take_events();
+        let me_port = a.send_sock.local_addr().unwrap().port();
+        // 상대 역할: a의 송신 소켓 주소로 Announce 1장(상대가 HELLO에 되쏘는 것과 같은 바이트).
+        let peer = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let p = Packet {
+            kind: PacketKind::Announce,
+            flags: u16::from(nbeep_core::SESSION_GEN),
+            peer: pid(4),
+            tcp_port: 4000,
+            epoch: 1,
+            seq: 7,
+            instance: [4; 16],
+            name: name("replier"),
+        };
+        for b in p.encode_all() {
+            peer.send_to(&b, (Ipv4Addr::LOCALHOST, me_port)).unwrap();
+        }
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let mut seen = false;
+        while std::time::Instant::now() < deadline && !seen {
+            if let Ok(o) = ev.recv_timeout(Duration::from_millis(200)) {
+                seen = o.packet.peer == pid(4) && o.packet.tcp_port == 4000;
+            }
+        }
+        assert!(
+            seen,
+            "송신 소켓으로 온 유니캐스트 응답이 관측돼야 한다(종전 = 버려짐)"
+        );
     }
 
     /// 같은 호스트 두 인스턴스의 상호 발견 — 실물 UDP 멀티캐스트.
