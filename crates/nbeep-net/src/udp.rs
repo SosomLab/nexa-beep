@@ -41,6 +41,152 @@ const RECV_POLL: Duration = Duration::from_millis(300);
 const S4_EVERY: u32 = 16;
 /// S4 라운드당 프로브 상한(큐 상한 필수 규칙 — NFR-B-6 결).
 const S4_MAX: usize = 64;
+/// ★ 적응형 S4(R-22 ③ · 11-07 · 사용자 결정 11-06) — S1~S3(멀티캐스트/브로드캐스트)가 **살아 있다고 확인되면**
+/// S4 라운드를 이 주기로 성기게 한다(16→64 · 800ms 기준 ≈51초). 근거: IDS는 관측 창 안의 고유 목적지 수를 세므로
+/// 버스트 분산이 아니라 **라운드 수 축소**만 판정을 바꾼다(journal 09-10). 혼합망(일부 상대만 격리)의 지연은
+/// [`S4Pacer`]의 "S4로만 보이는 상대" 신호가 다시 촘촘하게 되돌려 막는다.
+const S4_EVERY_RELAXED: u32 = 64;
+/// 이 시간 안에 남의 Announce가 47100/v6 소켓에 왔으면 "S1~S3 생존"(≈ 촘촘한 라운드 2회분 + 여유).
+const S13_FRESH_MS: u64 = 30_000;
+/// S4로만 보이는 상대를 본 뒤 이만큼은 촘촘한 주기를 유지(생존 타임아웃 60초 × 3 — 한 라운드 유실에도 목록이
+/// 깜빡이지 않게).
+const S4_ONLY_HOLD_MS: u64 = 180_000;
+/// 상대별 "최근 S1~S3로 보였다" 판정 창(주기 광고 800ms × 6 — 이 안에 Announce가 없으면 그 상대는 S4 경로뿐).
+const PEER_S13_FRESH_MS: u64 = 5_000;
+
+/// 적응형 S4 페이서(R-22 ③ · **순수** — 시각은 ms 인자 · 결정적 테스트). 두 신호를 본다:
+/// - **S1~S3 생존**: 47100/v6 수신 소켓에 남의 Announce(주기 광고 — S4 응답은 송신 소켓으로 가므로 섞이지 않는다).
+/// - **S4로만 보이는 상대**: 내 프로브의 응답(송신 소켓)이나 47100에 온 HELLO를 보낸 상대가 최근 S1~S3로 안 보였다.
+///
+/// 판정: S1~S3 생존 ∧ S4-only 상대 없음 → 64주기 · 그 밖(못 듣는 수신 강등 포함) → 16주기(종전 동작 = 안전 기본).
+#[derive(Debug)]
+pub(crate) struct S4Pacer {
+    /// 47100/v6에 남의 Announce가 마지막으로 온 시각.
+    last_s13_ms: Option<u64>,
+    /// 상대별 마지막 S1~S3 관측(상한에서 비움 — 상주 상한).
+    s13_by_peer: HashMap<PeerId, u64>,
+    /// S4 경로로만 보이는 상대를 마지막으로 확인한 시각.
+    last_s4_only_ms: Option<u64>,
+}
+
+impl S4Pacer {
+    fn new() -> Self {
+        Self {
+            last_s13_ms: None,
+            s13_by_peer: HashMap::new(),
+            last_s4_only_ms: None,
+        }
+    }
+
+    /// 47100/v6 소켓에 남의 Announce — S1~S3 생존 증거.
+    fn on_s13_announce(&mut self, peer: PeerId, now_ms: u64) {
+        self.last_s13_ms = Some(now_ms);
+        if self.s13_by_peer.len() > 4096 {
+            self.s13_by_peer.clear();
+        }
+        self.s13_by_peer.insert(peer, now_ms);
+    }
+
+    fn peer_s13_fresh(&self, peer: PeerId, now_ms: u64) -> bool {
+        self.s13_by_peer
+            .get(&peer)
+            .is_some_and(|&t| now_ms.saturating_sub(t) <= PEER_S13_FRESH_MS)
+    }
+
+    /// 내 S4 프로브의 응답(송신 소켓으로 온 Announce) — 그 상대가 최근 S1~S3로 안 보였으면 **S4-only**.
+    fn on_s4_reply(&mut self, peer: PeerId, now_ms: u64) {
+        if !self.peer_s13_fresh(peer, now_ms) {
+            self.last_s4_only_ms = Some(now_ms);
+        }
+    }
+
+    /// 47100에 온 HELLO — **전에 S1~S3로 보였던** 상대가 이제 안 보이면(격리 구간으로 이동) S4-only. 처음 보는
+    /// 상대의 HELLO는 증거로 안 센다(기동 직후 방송 HELLO는 Announce보다 먼저 와서 오판이 된다).
+    fn on_hello(&mut self, peer: PeerId, now_ms: u64) {
+        if self.s13_by_peer.contains_key(&peer) && !self.peer_s13_fresh(peer, now_ms) {
+            self.last_s4_only_ms = Some(now_ms);
+        }
+    }
+
+    /// 지금 S4 라운드 주기(광고 틱 단위).
+    fn every(&self, now_ms: u64) -> u32 {
+        let s13_alive = self
+            .last_s13_ms
+            .is_some_and(|t| now_ms.saturating_sub(t) <= S13_FRESH_MS);
+        let s4_only_recent = self
+            .last_s4_only_ms
+            .is_some_and(|t| now_ms.saturating_sub(t) <= S4_ONLY_HOLD_MS);
+        if s13_alive && !s4_only_recent {
+            S4_EVERY_RELAXED
+        } else {
+            S4_EVERY
+        }
+    }
+
+    /// 링크 변화([`UdpDiscovery::kick`]) — 다시 배운다(촘촘한 주기부터).
+    fn reset(&mut self) {
+        *self = Self::new();
+    }
+}
+
+/// 페이서 공유 핸들 — 시계(기동 기준 ms)와 잠금을 묶는다(수신 스레드 2~3개 + 애넌서).
+#[derive(Debug)]
+struct PacerShared {
+    start: std::time::Instant,
+    inner: std::sync::Mutex<S4Pacer>,
+}
+
+impl PacerShared {
+    fn new() -> Self {
+        Self {
+            start: std::time::Instant::now(),
+            inner: std::sync::Mutex::new(S4Pacer::new()),
+        }
+    }
+    fn now_ms(&self) -> u64 {
+        u64::try_from(self.start.elapsed().as_millis()).unwrap_or(u64::MAX)
+    }
+    fn with<R>(&self, f: impl FnOnce(&mut S4Pacer, u64) -> R) -> R {
+        let now = self.now_ms();
+        let mut g = match self.inner.lock() {
+            Ok(g) => g,
+            Err(e) => e.into_inner(),
+        };
+        f(&mut g, now)
+    }
+}
+
+/// 수신 스레드의 역할 — 어느 소켓을 읽는가(페이서 신호의 의미가 다르다).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RxRole {
+    /// 47100 v4 / v6 멀티캐스트 수신 소켓 — Announce = S1~S3 생존.
+    Broadcast,
+    /// 송신 소켓(임의 포트) — 여기 오는 Announce = 내 S4 프로브의 응답.
+    SendSock,
+}
+
+/// 수신 스레드 공통 문맥(인자 묶음 — clippy too_many_arguments 회피가 아니라 역할이 같은 값들).
+struct RxCtx {
+    me: PeerId,
+    tx: Sender<Observation>,
+    stop: Arc<AtomicBool>,
+    quiet: Arc<AtomicBool>,
+    pacer: Arc<PacerShared>,
+    role: RxRole,
+}
+
+impl RxCtx {
+    fn fork(&self, role: RxRole) -> Self {
+        Self {
+            me: self.me,
+            tx: self.tx.clone(),
+            stop: Arc::clone(&self.stop),
+            quiet: Arc::clone(&self.quiet),
+            pacer: Arc::clone(&self.pacer),
+            role,
+        }
+    }
+}
 
 /// 수신된 발견 관측 — 해석된 패킷 + 발신 주소(연결 힌트).
 #[derive(Debug)]
@@ -67,6 +213,8 @@ pub struct UdpDiscovery {
     /// 즉시 송출·GOODBYE를 **보내지 않는다**. 수신·HELLO 응답·관측은 그대로(남이 나를 먼저 찾지는 못하지만,
     /// 남의 광고를 듣고 내가 걸면 대화된다 · 수동 등록 S6는 영향 없음). `quiet`와 독립(둘 다 참이어야 보낸다).
     advertise: Arc<AtomicBool>,
+    /// 적응형 S4 페이서(R-22 ③) — 수신 스레드가 신호를 넣고 애넌서가 주기를 읽는다.
+    pacer: Arc<PacerShared>,
     send_sock: UdpSocket,
     /// 내 광고 원본(seq는 전송 시 갱신) — 애넌서와 공유. 이름 변경(M1-10 즉시
     /// 재공지)이 여기를 갱신하면 다음 주기부터 새 이름으로 나간다.
@@ -150,6 +298,15 @@ impl UdpDiscovery {
         let user_tag: Arc<std::sync::Mutex<Option<[u8; 16]>>> =
             Arc::new(std::sync::Mutex::new(None));
         let (tx, events) = channel::<Observation>();
+        let pacer = Arc::new(PacerShared::new());
+        let ctx = RxCtx {
+            me,
+            tx,
+            stop: Arc::clone(&stop),
+            quiet: Arc::clone(&quiet),
+            pacer: Arc::clone(&pacer),
+            role: RxRole::Broadcast,
+        };
 
         let recv_join = recv.as_ref().and_then(|r| r.try_clone().ok());
         if let Some(recv) = recv {
@@ -159,25 +316,18 @@ impl UdpDiscovery {
                 .try_clone()
                 .ok()
                 .map(|s| (s, Arc::clone(&template), Arc::clone(&seq)));
-            Self::spawn_receiver_with_reply(
-                recv,
-                me,
-                tx.clone(),
-                Arc::clone(&stop),
-                reply,
-                Arc::clone(&quiet),
-            );
+            Self::spawn_receiver(recv, ctx.fork(RxRole::Broadcast), reply);
         }
         // ★ S4 왕복의 **발신측 절반**(11-07 결함 수정 · M1-8): 상대는 내 HELLO의 발신 주소(= 이 송신 소켓의 임의
         //   포트)로 유니캐스트 Announce를 되쏘는데, 종전엔 이 소켓을 읽는 스레드가 없어 그 응답이 **전부 버려졌다**
         //   (47100 수신 소켓은 임의 포트로 온 패킷을 받지 못한다). 막힌 망에선 양쪽이 각자 S4 라운드를 돌아야만
         //   발견됐다(≤12.8초 × 2). 같은 디코드·자기 필터·관측 경로를 재사용(응답은 하지 않는다 — Announce는 비유도).
         if let Ok(rx) = send_sock.try_clone() {
-            Self::spawn_receiver(rx, me, tx.clone(), Arc::clone(&stop), Arc::clone(&quiet));
+            Self::spawn_receiver(rx, ctx.fork(RxRole::SendSock), None);
         }
         let v6_send = if let Some((v6_recv, v6_send)) = v6 {
             if let Ok(rx) = v6_recv.try_clone() {
-                Self::spawn_receiver(rx, me, tx, Arc::clone(&stop), Arc::clone(&quiet));
+                Self::spawn_receiver(rx, ctx.fork(RxRole::Broadcast), None);
             }
             v6_send.try_clone().ok()
         } else {
@@ -194,6 +344,7 @@ impl UdpDiscovery {
             Arc::clone(&user_tag),
             Arc::clone(&quiet),
             Arc::clone(&advertise),
+            Arc::clone(&pacer),
             announce_rx,
         );
 
@@ -203,6 +354,7 @@ impl UdpDiscovery {
             stop,
             quiet,
             advertise,
+            pacer,
             send_sock,
             template,
             seq,
@@ -229,6 +381,7 @@ impl UdpDiscovery {
                 let _ = sref.join_multicast_v4(&MULTICAST_GROUP, &i.v4);
             }
         }
+        self.pacer.with(|p, _| p.reset()); // 새 링크 — 적응 상태를 버리고 촘촘한 S4부터 다시 배운다(R-22 ③)
         if !self.may_send() {
             return; // 조용한 노드·오프라인 — 재조인만(새 링크의 광고를 듣는다) · HELLO·S4는 내지 않는다
         }
@@ -341,7 +494,7 @@ impl UdpDiscovery {
         crate::netmon::on_disco_tx(sent);
     }
 
-    #[allow(clippy::too_many_arguments)] // quiet 플래그 추가(10-19) — 스레드 인자 묶음
+    #[allow(clippy::too_many_arguments)] // quiet(10-19)·advertise(R-18 ⓑ)·pacer(R-22 ③) — 스레드 인자 묶음
     fn spawn_announcer(
         sock: UdpSocket,
         v6: Option<UdpSocket>,
@@ -352,6 +505,7 @@ impl UdpDiscovery {
         user_tag: Arc<std::sync::Mutex<Option<[u8; 16]>>>,
         quiet: Arc<AtomicBool>,
         advertise: Arc<AtomicBool>,
+        pacer: Arc<PacerShared>,
         stop_rx: Receiver<()>,
     ) {
         std::thread::spawn(move || {
@@ -404,7 +558,8 @@ impl UdpDiscovery {
                     // 16주기(기본 800ms면 ≈12.8초)마다 이웃 테이블을 다시 읽어 프로브.
                     // 멀티캐스트가 통하는 망에선 중복 관측일 뿐이고(무해), 막힌 망에선
                     // 이것이 유일한 발견 경로다(S1~S3 폴백 사다리의 다음 단 — 06 §4).
-                    if cycles % S4_EVERY == 0 {
+                    // ★ 적응형(R-22 ③): S1~S3가 살아 있고 S4로만 보이는 상대가 없으면 64주기(IDS 스윕 판정 완화).
+                    if cycles % pacer.with(|p, now| p.every(now)) == 0 {
                         Self::send_s4_pkt(&sock, &snapshot(PacketKind::Hello));
                     }
                 }
@@ -531,27 +686,17 @@ impl UdpDiscovery {
 
     fn spawn_receiver(
         sock: UdpSocket,
-        me: PeerId,
-        tx: Sender<Observation>,
-        stop: Arc<AtomicBool>,
-        quiet: Arc<AtomicBool>,
-    ) {
-        Self::spawn_receiver_with_reply(sock, me, tx, stop, None, quiet);
-    }
-
-    /// 수신 스레드 — `reply`가 있으면 **남의 HELLO에 유니캐스트 Announce로 응답**한다
-    /// (S4 왕복의 수신측 절반 · M1-8): 멀티캐스트가 막힌 망에선 내 주기 광고가 프로브
-    /// 발신자에게 닿지 않으므로, 발신 주소로 직접 되쏴야 상호 발견이 성립한다.
-    /// 멀티캐스트로 받은 HELLO에도 응답하지만 수신측 관측은 멱등이라 무해하고,
-    /// 응답은 Announce(비유도)라 응답 연쇄는 생기지 않는다.
-    fn spawn_receiver_with_reply(
-        sock: UdpSocket,
-        me: PeerId,
-        tx: Sender<Observation>,
-        stop: Arc<AtomicBool>,
+        ctx: RxCtx,
         reply: Option<(UdpSocket, Arc<std::sync::Mutex<Packet>>, Arc<AtomicU32>)>,
-        quiet: Arc<AtomicBool>,
     ) {
+        let RxCtx {
+            me,
+            tx,
+            stop,
+            quiet,
+            pacer,
+            role,
+        } = ctx;
         std::thread::spawn(move || {
             let mut buf = [0u8; crate::wire::MAX_PACKET];
             // RL-16 ⓐ(11-06): 발신자가 같은 HELLO를 사다리 전 단(기본 mcast·전역 bcast·IF mcast·서브넷 bcast)으로 보내므로
@@ -593,6 +738,19 @@ impl UdpDiscovery {
                             if packet.peer == me {
                                 crate::netmon::on_disco_rx_self();
                                 continue;
+                            }
+                            // 적응형 S4 신호(R-22 ③) — 소켓 역할 × 패킷 종류.
+                            match (role, packet.kind) {
+                                (RxRole::Broadcast, PacketKind::Announce) => {
+                                    pacer.with(|p, now| p.on_s13_announce(packet.peer, now));
+                                }
+                                (RxRole::Broadcast, PacketKind::Hello) => {
+                                    pacer.with(|p, now| p.on_hello(packet.peer, now));
+                                }
+                                (RxRole::SendSock, PacketKind::Announce) => {
+                                    pacer.with(|p, now| p.on_s4_reply(packet.peer, now));
+                                }
+                                _ => {}
                             }
                             if packet.kind == PacketKind::Hello
                                 && hello_reply_due(&mut hello_seen, packet.peer, packet.seq)
@@ -700,6 +858,66 @@ mod tests {
     }
     fn name(s: &str) -> DisplayName {
         DisplayName::parse(s).unwrap()
+    }
+
+    /// 적응형 S4 페이서(R-22 ③ · 11-07) 판정표 — 순수·결정적.
+    #[test]
+    fn s4_pacer_relaxes_only_when_s13_alive_and_no_s4_only_peer() {
+        let (a, b) = (pid(1), pid(2));
+        let mut p = S4Pacer::new();
+        assert_eq!(
+            p.every(0),
+            S4_EVERY,
+            "아무것도 못 들었으면 촘촘(수신 강등 포함)"
+        );
+        p.on_s13_announce(a, 1_000);
+        assert_eq!(p.every(2_000), S4_EVERY_RELAXED, "S1~S3 생존 → 64주기");
+        assert_eq!(
+            p.every(1_000 + S13_FRESH_MS + 1),
+            S4_EVERY,
+            "생존 증거가 낡으면 다시 촘촘"
+        );
+        // 내 프로브 응답을 보낸 b는 S1~S3로 본 적이 없다 → S4-only → 촘촘(보유 시간 동안).
+        p.on_s13_announce(a, 10_000);
+        p.on_s4_reply(b, 10_500);
+        assert_eq!(p.every(11_000), S4_EVERY);
+        assert_eq!(
+            p.every(10_500 + S4_ONLY_HOLD_MS + 1),
+            S4_EVERY,
+            "보유 끝 + S1~S3도 낡음"
+        );
+        p.on_s13_announce(a, 10_500 + S4_ONLY_HOLD_MS + 2);
+        assert_eq!(
+            p.every(10_500 + S4_ONLY_HOLD_MS + 3),
+            S4_EVERY_RELAXED,
+            "보유 끝 + S1~S3 생존 → 다시 64"
+        );
+        // S1~S3로 방금 보인 상대의 응답은 S4-only 증거가 아니다.
+        let mut p = S4Pacer::new();
+        p.on_s13_announce(b, 100);
+        p.on_s4_reply(b, 200);
+        assert_eq!(p.every(300), S4_EVERY_RELAXED);
+        // 처음 보는 상대의 HELLO(기동 방송)는 증거가 아니고, 전에 보였다가 5초 넘게 안 보이는 상대의 HELLO는 증거다.
+        let mut p = S4Pacer::new();
+        p.on_s13_announce(a, 0);
+        p.on_hello(b, 10);
+        assert_eq!(
+            p.every(20),
+            S4_EVERY_RELAXED,
+            "처음 보는 상대의 HELLO는 무시"
+        );
+        p.on_hello(a, PEER_S13_FRESH_MS + 100);
+        assert_eq!(
+            p.every(PEER_S13_FRESH_MS + 200),
+            S4_EVERY,
+            "S1~S3로 보였던 상대가 HELLO로만 → 격리 이동"
+        );
+        p.reset();
+        assert_eq!(
+            p.every(PEER_S13_FRESH_MS + 300),
+            S4_EVERY,
+            "링크 변화 = 처음부터"
+        );
     }
 
     /// S4 대상 선별(M1-8) — 서브넷 안만·내 주소 제외·상한. 라우터 너머 잔존
