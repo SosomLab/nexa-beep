@@ -74,7 +74,9 @@ for who in X Y; do
   b=$(sed -n 1p "$OUT/samples.txt" | awk -F'|' -v c="$col" '{print $c}'); e=$(sed -n 7p "$OUT/samples.txt" | awk -F'|' -v c="$col" '{print $c}')
   m5=$(sed -n 5p "$OUT/samples.txt" | awk -F'|' -v c="$col" '{print $c}')
   if [ "$b" = "-" ] || [ "$e" = "-" ]; then echo "  ✗ $who: 샘플 없음"; ok=0; continue; fi
-  d=$(awk -v a="$b" -v z="$e" 'BEGIN{printf "%.2f", z-a}'); sl=$(awk -v a="$m5" -v z="$e" 'BEGIN{printf "%.2f", z-a}')
+  # 기울기는 ① 기준선 아래 샘플을 기준선으로 올려 계산한다(11-07) — Windows가 유휴 중 Working Set을 걷어냈다가
+  # 다시 들이면(0.95 → 3.43MB 실측) "기준 아래에서 회복"이 증가처럼 세졌다. 누수 판정 의도(④−① · 기준 위로의 증가)는 그대로.
+  d=$(awk -v a="$b" -v z="$e" 'BEGIN{printf "%.2f", z-a}'); sl=$(awk -v a="$m5" -v z="$e" -v b="$b" 'BEGIN{if(a<b)a=b; if(z<b)z=b; printf "%.2f", z-a}')
   if awk -v d="$d" -v l="$LIMIT_MB" 'BEGIN{exit !(d<=l)}' && awk -v s="$sl" 'BEGIN{exit !(s<=0.5)}'; then printf '  ✓ %s: ④−① = %s MB · 250→280s 기울기 %s MB\n' "$who" "$d" "$sl"
   else printf '  ✗ %s: ④−① = %s MB · 250→280s 기울기 %s MB\n' "$who" "$d" "$sl"; ok=0; fi
   echo "${who}_delta_mb=$d" >> "$OUT/summary.txt"; echo "${who}_tail_slope_mb=$sl" >> "$OUT/summary.txt"
