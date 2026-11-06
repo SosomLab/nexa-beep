@@ -82,7 +82,7 @@ macro_rules! dlog {
                 $self.statuslog.as_ref(),
                 $self.devlog_stderr,
                 (&$self.log_ring, &$self.log_ring_seq),
-                &__rec,
+                __rec,
             );
         }
     };
@@ -310,19 +310,21 @@ fn role_tag(role: Role) -> &'static str {
 fn devlog_push(
     log: Option<&crate::statuslog::StatusLog>,
     stderr: bool,
-    ring: (&std::cell::RefCell<VecDeque<String>>, &std::cell::Cell<u64>),
-    rec: &DRec,
+    ring: (
+        &std::cell::RefCell<VecDeque<LogLine>>,
+        &std::cell::Cell<u64>,
+    ),
+    rec: DRec,
 ) {
-    let line = rec.render();
+    // LOG-2 2단계(11-07) 완전 지연 포맷 — 메인 스레드는 문자열을 만들지 않는다: 링에는 구조체 그대로(텍스트는 로그 창이
+    // 소비할 때) · 파일은 로거 스레드가 렌더(구조체 clone · 기본 off면 0) · stderr 거울(NEXA_DEVLOG · 개발 전용)만 즉시.
     if stderr {
-        eprintln!("[dev] {line}");
+        eprintln!("[dev] {}", rec.render());
     }
-    // LOG-2(11-06) 지연 포맷 1단계 — `dev ` 접두 문자열을 한 번만 만들어 파일·링이 공유(종전 2회 format).
-    let dev = format!("dev {line}");
     if let Some(l) = log {
-        l.log(&dev);
+        l.log_dev(rec.clone());
     }
-    ring_push(ring.0, ring.1, dev);
+    ring_push(ring.0, ring.1, LogBody::Dev(rec));
 }
 
 /// 로그 링 상한(LOG-1) — 2000줄 × ≈120B ≈ 240KB 상한(DR-5 안).
@@ -344,18 +346,23 @@ const HISTORY_QUIET_MS: u64 = 300;
 /// 기록 저장 디바운스 상한: 연타가 계속돼도 처음 더티 뒤 이만큼이면 쓴다(DR-27 `max_delay`와 같은 뜻).
 const HISTORY_MAX_DELAY_MS: u64 = 1500;
 
-/// 링에 한 줄(시각 접두 `[HH:MM:SS]`) — 가득 차면 가장 오래된 줄을 버린다 · 일련번호 +1(로그 창 동기 비교).
+/// 링에 한 줄(시각 h·m·s + 본문 — 텍스트는 로그 창이 만든다 · LOG-2 2단계) — 가득 차면 가장 오래된 줄을 버린다 ·
+/// 일련번호 +1(로그 창 동기 비교 · 증분 동기의 기준).
 fn ring_push(
-    ring: &std::cell::RefCell<VecDeque<String>>,
+    ring: &std::cell::RefCell<VecDeque<LogLine>>,
     seq: &std::cell::Cell<u64>,
-    line: String,
+    body: LogBody,
 ) {
     let t = nbeep_plat::clock::local_time(unix_now());
     let mut r = ring.borrow_mut();
     if r.len() >= LOG_RING_CAP {
         r.pop_front();
     }
-    r.push_back(format!("[{:02}:{:02}:{:02}] {line}", t.h, t.m, t.s));
+    let b = |v: u32| u8::try_from(v).unwrap_or(0);
+    r.push_back(LogLine {
+        hms: [b(t.h), b(t.m), b(t.s)],
+        body,
+    });
     seq.set(seq.get().wrapping_add(1));
 }
 
@@ -367,6 +374,7 @@ use nbeep_ui::{
     PeerListWidget, PeerRow, RasterCtx, Rect, SettingsState, SettingsWidget, Theme, ToolIcon,
     ToolItem, Toolbar, Widget,
 };
+use nbeep_ui::{LogBody, LogLine};
 
 // 화면 내보내기(10-10) — `present::Presenter`(softbuffer ↔ macOS IOSurface · docs/51).
 
@@ -4236,7 +4244,7 @@ struct App {
     log_view: Option<LogWidget>,
     /// 로그 링 버퍼(상태바 문구 + 상세 로그 `dev …` · `LOG_RING_CAP`줄 · 파일 로깅과 무관하게 항상) — `RefCell`인 이유 =
     /// `dlog!`가 `&self` 자리에서도 불린다(statuslog와 같은 자리에서 push).
-    log_ring: std::cell::RefCell<VecDeque<String>>,
+    log_ring: std::cell::RefCell<VecDeque<LogLine>>,
     /// 링 변경 일련번호(로그 창 `sync` 비교용 · push마다 +1).
     log_ring_seq: std::cell::Cell<u64>,
     /// 세션 액터 join 핸들(M4-10a · 08-18) — **정상 종료 시 부분 수신물 보존을
@@ -6941,7 +6949,11 @@ impl App {
         if let Some(l) = &self.statuslog {
             l.log(&s); // 논블로킹 — 큐 포화 = 드롭(본 기능 무영향 1급 요구)
         }
-        ring_push(&self.log_ring, &self.log_ring_seq, s.clone()); // 로그 창 링(LOG-1 · 파일 로깅과 무관)
+        ring_push(
+            &self.log_ring,
+            &self.log_ring_seq,
+            LogBody::Status(s.clone()),
+        ); // 로그 창 링(LOG-1 · 파일 로깅과 무관)
         self.status = s;
     }
 
@@ -9510,15 +9522,18 @@ impl App {
         }
         self.sibling_hints
             .insert(peer, (tag, std::time::Instant::now()));
-        self.utrace(
-            "hint_from",
-            None,
-            format!(
-                "hint from {} match={}",
+        // 실측(11-07): 광고마다 1줄 = 18줄/s — User 층에선 **Trace**(기본 마스크 밖 · 켜도 Detail엔 안 보인다).
+        if self.user_trace {
+            eprintln!(
+                "[user] hint from {} match={}",
                 peer.short(),
                 self.is_sibling_candidate(peer)
-            ),
-        );
+            );
+        }
+        dlog!(self, DL::User, DV::Trace, "hint_from", |r| r
+            .arg("peer", peer.short())
+            .arg("match", self.is_sibling_candidate(peer))
+            .ok(""));
         // 이미 XX로 선 세션이 있으면 세션 안에서 증명해 승격한다(재접속 없음 · 1회).
         if !self.siblings.contains(&peer) && self.conversations.contains_key(&peer) {
             self.send_user_proof(peer, false);
@@ -9554,11 +9569,9 @@ impl App {
         let _ = conv.out_tx.send(SessionCmd::Control(vec![
             nbeep_core::UserProof { proof }.encode()
         ]));
-        self.utrace(
-            "proof_sent_to",
-            None,
-            format!("proof sent to {} force={force}", peer.short()),
-        );
+        self.utrace("proof_sent_to", None, || {
+            format!("proof sent to {} force={force}", peer.short())
+        });
     }
 
     /// 상대 증명 대조 — 내 PSK로 같은 세션·반대 역할의 값을 재계산해 상수 시간 비교.
@@ -9574,11 +9587,9 @@ impl App {
         let Some((psk, (hh, initiator))) =
             psk.zip(conv.binding).filter(|_| self.user_state.active())
         else {
-            self.utrace(
-                "proof_from",
-                Some(false),
-                format!("proof from {} deferred (not ready)", peer.short()),
-            );
+            self.utrace("proof_from", Some(false), || {
+                format!("proof from {} deferred (not ready)", peer.short())
+            });
             return;
         };
         let ok = conv.proof_fails < 3 && {
@@ -9587,18 +9598,14 @@ impl App {
         };
         if !ok {
             conv.proof_fails = conv.proof_fails.saturating_add(1);
-            self.utrace(
-                "proof_from",
-                Some(false),
-                format!("proof from {} rejected", peer.short()),
-            );
+            self.utrace("proof_from", Some(false), || {
+                format!("proof from {} rejected", peer.short())
+            });
             return;
         }
-        self.utrace(
-            "proof_from",
-            Some(true),
-            format!("proof from {} verified", peer.short()),
-        );
+        self.utrace("proof_from", Some(true), || {
+            format!("proof from {} verified", peer.short())
+        });
         self.note_sibling(peer, true);
         self.send_user_proof(peer, true); // 회신(이미 보냈으면 no-op)
         self.send_user_key_blob(peer); // 승격 경로도 키 동기(D-32-8)
@@ -9733,11 +9740,9 @@ impl App {
     /// 세션 성립 시 형제 판정 반영 — psk로 성립했으면 형제 집합에 넣고 알린다.
     /// psk가 아니면 **빼지 않는다**(같은 상대의 다른 경로가 XX일 수 있다 · 종료 시 제거).
     fn note_sibling(&mut self, peer: PeerId, via_psk: bool) {
-        self.utrace(
-            "session",
-            None,
-            format!("session {} via_psk={via_psk}", peer.short()),
-        );
+        self.utrace("session", None, || {
+            format!("session {} via_psk={via_psk}", peer.short())
+        });
         if via_psk && self.siblings.insert(peer) {
             let title = self.peer_title(peer);
             self.set_status(nbeep_core::tf(
@@ -9775,14 +9780,12 @@ impl App {
         conv.succ_sent = true;
         let n = frames.len();
         let _ = conv.out_tx.send(SessionCmd::Control(frames));
-        self.utrace(
-            "succession_chain",
-            None,
+        self.utrace("succession_chain", None, || {
             format!(
                 "succession chain({n}) sent to {} ver={last_ver}",
                 peer.short()
-            ),
-        );
+            )
+        });
     }
 
     /// 내 사슬에 문서 추가(중복 = 무시) + 파일 저장(상한 초과 = 오래된 것부터 버림).
@@ -9812,22 +9815,18 @@ impl App {
     /// (새 비밀키는 뒤따르는 봉인본이 "후계가 이긴다"로 채택).
     fn on_succession(&mut self, peer: PeerId, doc: &nbeep_core::Succession) {
         if !doc.devices.contains(&peer) || doc.revoked.contains(&peer) {
-            self.utrace(
-                "succession_from",
-                Some(false),
-                format!("succession from {} rejected: presenter", peer.short()),
-            );
+            self.utrace("succession_from", Some(false), || {
+                format!("succession from {} rejected: presenter", peer.short())
+            });
             return;
         }
         let msg = doc.to_sign();
         if !nbeep_crypto::userkey::verify(&doc.old_pub, &msg, &doc.sig_old)
             || !nbeep_crypto::userkey::verify(&doc.new_pub, &msg, &doc.sig_new)
         {
-            self.utrace(
-                "succession_from",
-                Some(false),
-                format!("succession from {} rejected: signature", peer.short()),
-            );
+            self.utrace("succession_from", Some(false), || {
+                format!("succession from {} rejected: signature", peer.short())
+            });
             return;
         }
         match self.succ_seen.get(&doc.old_pub) {
@@ -9835,11 +9834,9 @@ impl App {
             Some((v, np)) if *v == doc.ver && *np != doc.new_pub => {
                 // 정직한 충돌 — 자동 승자 없음(D-32-9).
                 self.succ_conflicts.insert(doc.old_pub);
-                self.utrace(
-                    "succession_conflict_for",
-                    Some(false),
-                    format!("succession CONFLICT for old key (ver {v})"),
-                );
+                self.utrace("succession_conflict_for", Some(false), || {
+                    format!("succession CONFLICT for old key (ver {v})")
+                });
                 self.set_status(nbeep_core::t(nbeep_core::Msg::CardSuccessionConflict));
                 self.refresh_peer_info_card(peer);
                 return;
@@ -9880,16 +9877,14 @@ impl App {
         if on_my_chain && self.siblings.contains(&peer) && doc.devices.contains(&me) {
             self.push_my_succession(doc.clone());
         }
-        self.utrace(
-            "succession_from",
-            Some(true),
+        self.utrace("succession_from", Some(true), || {
             format!(
                 "succession from {} applied ver={} revoked={}",
                 peer.short(),
                 doc.ver,
                 doc.revoked.len()
-            ),
-        );
+            )
+        });
         self.refresh_peer_info_card(peer);
         let mut inv = Invalidations::default();
         self.refresh_rows(&mut inv);
@@ -9907,15 +9902,13 @@ impl App {
             return;
         }
         let now = self.now_ms();
-        self.utrace(
-            "rotate_press_now",
-            Some(true),
+        self.utrace("rotate_press_now", Some(true), || {
             format!(
                 "rotate press now={now} armed={} live={}",
                 self.rotate_armed_ms,
                 self.conversations.len()
-            ),
-        );
+            )
+        });
         if self.rotate_done_ms > 0 && now.saturating_sub(self.rotate_done_ms) < ROTATE_COOLDOWN_MS {
             return; // 잠금 창(연타 방지) — 버튼도 잠겨 있다
         }
@@ -11105,11 +11098,9 @@ impl App {
             sig,
         };
         let _ = conv.out_tx.send(SessionCmd::Control(vec![hello.encode()]));
-        self.utrace(
-            "hello_sent_to",
-            None,
-            format!("hello sent to {} ver={ver}", peer.short()),
-        );
+        self.utrace("hello_sent_to", None, || {
+            format!("hello sent to {} ver={ver}", peer.short())
+        });
     }
 
     /// 기기 집합이 바뀌었다 — 버전 +1(영속) 후 살아 있는 전 세션에 재송신(변경 시 능동 재전송).
@@ -11323,16 +11314,14 @@ impl App {
                 let _ = conv.out_tx.send(SessionCmd::Control(vec![frame.clone()]));
             }
         }
-        self.utrace(
-            "copy_to_siblings",
-            None,
+        self.utrace("copy_to_siblings", None, || {
             format!(
                 "copy to siblings={} for {} seq={}",
                 targets.len(),
                 to.short(),
                 msg.seq
-            ),
-        );
+            )
+        });
     }
 
     /// sender copy 수신 — **형제 세션에서 온 것만**(fail-closed). `to`와의 대화방에 **내 말풍선**
@@ -11357,11 +11346,9 @@ impl App {
             to,
             me,
         ) {
-            self.utrace(
-                "copy_from",
-                Some(false),
-                format!("copy from {} dropped (not sibling)", peer.short()),
-            );
+            self.utrace("copy_from", Some(false), || {
+                format!("copy from {} dropped (not sibling)", peer.short())
+            });
             return;
         }
         if !self.dedup.accept(peer, seq) {
@@ -11390,11 +11377,9 @@ impl App {
         if let Some(chat) = self.chats.get_mut(&self.view_key(to)) {
             chat.push_line(line, &mut inv);
         }
-        self.utrace(
-            "copy_from",
-            None,
-            format!("copy from {} -> thread {}", peer.short(), to.short()),
-        );
+        self.utrace("copy_from", None, || {
+            format!("copy from {} -> thread {}", peer.short(), to.short())
+        });
         self.redraw_conversation(to);
         self.refresh_and_redraw();
     }
@@ -11468,21 +11453,17 @@ impl App {
             conv.digest_sent = true;
             let _ = conv.out_tx.send(SessionCmd::Control(vec![frame.encode()]));
         }
-        self.utrace(
-            "sync_digest_to",
-            None,
-            format!("sync digest to {} entries={n}", peer.short()),
-        );
+        self.utrace("sync_digest_to", None, || {
+            format!("sync digest to {} entries={n}", peer.short())
+        });
     }
 
     /// 형제 디제스트 수신 — 내가 부족한 (스레드, 원 발신 기기)마다 청구 1건.
     fn on_sync_digest(&mut self, peer: PeerId, theirs: &nbeep_core::SyncDigest) {
         if !self.siblings.contains(&peer) || !self.user_state.active() {
-            self.utrace(
-                "sync_digest_from",
-                Some(false),
-                format!("sync digest from {} dropped (not sibling)", peer.short()),
-            );
+            self.utrace("sync_digest_from", Some(false), || {
+                format!("sync digest from {} dropped (not sibling)", peer.short())
+            });
             return;
         }
         let my_devs = self.my_devices();
@@ -11492,16 +11473,14 @@ impl App {
                 .into_iter()
                 .filter(|p| self.sync_thread_ok(p.thread, &my_devs))
                 .collect();
-        self.utrace(
-            "sync_digest_from",
-            None,
+        self.utrace("sync_digest_from", None, || {
             format!(
                 "sync digest from {} entries={} pulls={}",
                 peer.short(),
                 theirs.entries.len(),
                 pulls.len()
-            ),
-        );
+            )
+        });
         if pulls.is_empty() {
             return;
         }
@@ -11601,12 +11580,12 @@ impl App {
                 conv.sync_budget.sent(),
                 conv.sync_budget.limit()
             );
-            self.utrace("sync_pull_from", Some(false), msg);
+            self.utrace("sync_pull_from", Some(false), || msg);
             return;
         }
         frames.extend(read_frame);
         let _ = conv.out_tx.send(SessionCmd::Control(frames));
-        self.utrace("sync_lines_to", None, format!("sync lines to {} thread {} origin {} after={} n={n} frames={nframes} bytes={bytes} replies={nreplies}",
+        self.utrace("sync_lines_to", None, || format!("sync lines to {} thread {} origin {} after={} n={n} frames={nframes} bytes={bytes} replies={nreplies}",
                 peer.short(),
                 pull.thread.short(),
                 pull.origin.short(),
@@ -11698,15 +11677,13 @@ impl App {
                 }
             }
         }
-        self.utrace(
-            "sync_lines_from",
-            None,
+        self.utrace("sync_lines_from", None, || {
             format!(
                 "sync lines from {} -> thread {} added={n} unread+={unread_new}",
                 peer.short(),
                 t.short()
-            ),
-        );
+            )
+        });
         self.redraw_conversation(t);
         self.refresh_and_redraw();
         self.update_main_title();
@@ -11751,16 +11728,14 @@ impl App {
                 }
             }
         }
-        self.utrace(
-            "sync_replies_from",
-            Some(true),
+        self.utrace("sync_replies_from", Some(true), || {
             format!(
                 "sync replies from {} -> thread {} items={} applied={applied}",
                 peer.short(),
                 t.short(),
                 got.items.len()
-            ),
-        );
+            )
+        });
         if applied == 0 {
             return;
         }
@@ -11806,15 +11781,13 @@ impl App {
         } else {
             self.unread.insert(vk, remain);
         }
-        self.utrace(
-            "sync_read_from",
-            None,
+        self.utrace("sync_read_from", None, || {
             format!(
                 "sync read from {} thread {} unread {cur}->{remain}",
                 peer.short(),
                 vk.short()
-            ),
-        );
+            )
+        });
         let mut inv = Invalidations::default();
         self.refresh_rows(&mut inv);
         if let Some(mid) = self.main_id {
@@ -11855,19 +11828,15 @@ impl App {
     /// (PSK 세션·증명만이 형제다 — 키만 쥔 잃어버린 기기는 §3-5).
     fn on_user_hello(&mut self, peer: PeerId, hello: &nbeep_core::UserHello) {
         if !hello.devices.contains(&peer) {
-            self.utrace(
-                "hello_from",
-                Some(false),
-                format!("hello from {} rejected: presenter not listed", peer.short()),
-            );
+            self.utrace("hello_from", Some(false), || {
+                format!("hello from {} rejected: presenter not listed", peer.short())
+            });
             return;
         }
         if !nbeep_crypto::userkey::verify(&hello.user_pub, &hello.to_sign(), &hello.sig) {
-            self.utrace(
-                "hello_from",
-                Some(false),
-                format!("hello from {} rejected: bad signature", peer.short()),
-            );
+            self.utrace("hello_from", Some(false), || {
+                format!("hello from {} rejected: bad signature", peer.short())
+            });
             return;
         }
         // ★ 되먹임 방지([13 §12-1] · 09-06 실기: 상대 버전이 오를 때마다 내 버전을 올려 재송신
@@ -11876,17 +11845,15 @@ impl App {
         let changed = self
             .trust
             .record_user(peer, hello.user_pub, &hello.name, hello.list_ver);
-        self.utrace(
-            "hello_from",
-            None,
+        self.utrace("hello_from", None, || {
             format!(
                 "hello from {} ok name={} devices={} ver={} changed={changed}",
                 peer.short(),
                 hello.name,
                 hello.devices.len(),
                 hello.list_ver
-            ),
-        );
+            )
+        });
         if !changed {
             return;
         }
@@ -11926,11 +11893,9 @@ impl App {
                     sealed,
                 }
                 .encode()]));
-            self.utrace(
-                "keyblob_sent_to",
-                None,
-                format!("keyblob sent to {}", peer.short()),
-            );
+            self.utrace("keyblob_sent_to", None, || {
+                format!("keyblob sent to {}", peer.short())
+            });
         }
     }
 
@@ -11948,11 +11913,9 @@ impl App {
         let Some((theirs, at)) =
             crate::userident::open_key(crate::gate::SEAL_USERKEY, &m.wrap_key(), sealed)
         else {
-            self.utrace(
-                "keyblob_from",
-                Some(false),
-                format!("keyblob from {} unreadable", peer.short()),
-            );
+            self.utrace("keyblob_from", Some(false), || {
+                format!("keyblob from {} unreadable", peer.short())
+            });
             return;
         };
         let their_at = at.unwrap_or(u64::MAX); // 시각 없는 구본 = 가장 새것으로 취급
@@ -11968,16 +11931,14 @@ impl App {
                     (self.user_rt.key_created, mine.public()),
                     (their_at, theirs.public()),
                 ));
-        self.utrace(
-            "keyblob_from",
-            Some(true),
+        self.utrace("keyblob_from", Some(true), || {
             format!(
                 "keyblob from {} adopt={adopt} (mine {} theirs {})",
                 peer.short(),
                 mine.user_id().short(),
                 theirs.user_id().short()
-            ),
-        );
+            )
+        });
         if !adopt {
             return;
         }
@@ -12359,11 +12320,9 @@ impl App {
         // ★ 형제 후보(ADR-0015 §3-4 힌트·기성립)면 XXpsk3로 연다 — 실패하면 XX로 1회 폴백
         //   (힌트가 틀렸거나 상대 기능 꺼짐 = 정상 결과 · 세션 사용 불가는 없다).
         let psk_opt = self.psk_for(peer);
-        self.utrace(
-            "connect",
-            None,
-            format!("connect {} psk={}", peer.short(), psk_opt.is_some()),
-        );
+        self.utrace("connect", None, || {
+            format!("connect {} psk={}", peer.short(), psk_opt.is_some())
+        });
         std::thread::spawn(move || {
             // ★ 사다리 = `Transport` 하나(X-2 승격 · 11-06): 발견 경로 → 기억한 수동 주소 → 서버 랑데부(펀치→릴레이)를
             //   `connect` 안에서 순서대로 탄다(ADR-0003 §4 · 종전 X-2b ③은 여기서 세 단을 직접 꿰고 릴레이 단만 세션을
@@ -21524,7 +21483,17 @@ impl App {
     /// `[user]` 트레이스(LOG-2 · 11-06) — 시나리오 도구(s4/group-scenario)가 stderr를 grep하므로 **eprintln은 그대로** 두고,
     /// 같은 줄을 `User` 층 dlog로도 남긴다(판정이면 Decide ok/fail · 아니면 Detail). 봉투 원리: 호출자가 이름·본문·키를
     /// 넣지 않는다(지문 short · 개수 · 길이 · bool만 — hello ok의 name= 줄은 승격에서 제외).
-    fn utrace(&self, func: &'static str, decide: Option<bool>, line: String) {
+    fn utrace(&self, func: &'static str, decide: Option<bool>, line: impl FnOnce() -> String) {
+        // LOG-2 2단계(11-07): 문장은 **쓸 때만** 만든다(종전 = 호출자가 format!을 먼저 — 둘 다 꺼진 기본 상태에서도 할당).
+        let level = if decide.is_some() {
+            DV::Decide
+        } else {
+            DV::Detail
+        };
+        if !self.user_trace && !nbeep_core::devlog::wants(DL::User, level) {
+            return;
+        }
+        let line = line();
         if self.user_trace {
             eprintln!("[user] {line}");
         }
@@ -23982,16 +23951,14 @@ impl ApplicationHandler<AppEvent> for App {
                         }
                     }
                 }
-                self.utrace(
-                    "closed",
-                    None,
+                self.utrace("closed", None, || {
                     format!(
                         "closed {} sibling={} known={}",
                         peer.short(),
                         self.siblings.contains(&peer),
                         self.is_known_device(peer)
-                    ),
-                );
+                    )
+                });
                 dlog!(self, DL::Sess, DV::Decide, "closed", |r| r
                     .arg("peer", peer.short())
                     .arg("sibling", self.siblings.contains(&peer))

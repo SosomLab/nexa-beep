@@ -25,6 +25,8 @@ const FLUSH_MS: u64 = 2_000;
 /// 종료 신호 겸 메시지.
 enum Cmd {
     Line(String),
+    /// 상세 로그 레코드(LOG-2 2단계 · 11-07) — 렌더는 **이 스레드**에서(메인 스레드 문자열 비용 0).
+    Dev(nbeep_core::devlog::Rec),
     Stop,
 }
 
@@ -59,6 +61,13 @@ impl StatusLog {
     /// 한 줄 기록 — **논블로킹**: 큐가 가득이면 버린다(드롭 계상은 스레드가).
     pub(crate) fn log(&self, line: &str) {
         match self.tx.try_send(Cmd::Line(line.to_string())) {
+            Ok(()) | Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) => {}
+        }
+    }
+
+    /// 상세 로그 한 건(LOG-2 2단계) — 논블로킹 · 렌더는 로거 스레드.
+    pub(crate) fn log_dev(&self, rec: nbeep_core::devlog::Rec) {
+        match self.tx.try_send(Cmd::Dev(rec)) {
             Ok(()) | Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) => {}
         }
     }
@@ -132,7 +141,13 @@ fn run(
             day = ymd;
             out = open(day);
         }
+        // LOG-2 2단계: 레코드는 여기서 한 줄로(렌더 비용 = 로거 스레드 몫).
+        let cmd = match cmd {
+            Ok(Cmd::Dev(rec)) => Ok(Cmd::Line(format!("dev {}", rec.render()))),
+            other => other,
+        };
         match cmd {
+            Ok(Cmd::Dev(_)) => unreachable!("위에서 Line으로 바꿨다"),
             Ok(Cmd::Line(line)) => {
                 if let Some(o) = &mut out {
                     if dropped_note > 0 {

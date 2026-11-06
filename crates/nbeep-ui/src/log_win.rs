@@ -8,7 +8,7 @@
 //! user relay store ui | decide detail trace | FAIL만`. 층 칩은 **끄고 켜는 집합**(상태 = `dev ` 접두가 없는 상태바 줄 ·
 //! `[전체]` = 전부 켬) · 수준 칩은 `dev` 줄에만 적용(`층/수준` 토큰 — 라벨은 번역하지 않는다 · 파일·grep과 같은 글자) ·
 //! `FAIL만` = `| FAIL ` 결과 줄만. 검색 토큰과 AND. 칩은 창 너비에 맞춰 줄바꿈(최소 너비 480에서 3줄).
-use nbeep_core::devlog::{Layer, Level};
+use nbeep_core::devlog::{Layer, Level, Rec};
 use nbeep_core::{t, Msg};
 
 use crate::controls::{Button, Control as _, TextBox};
@@ -64,28 +64,48 @@ struct LineMeta {
     fail: bool,
 }
 
-impl LineMeta {
-    /// `[HH:MM:SS] dev 층/수준 기능 …` → 층·수준 · 그 외 = 상태 줄.
-    fn parse(line: &str) -> Self {
-        let body = line.find("] ").map_or(line, |i| &line[i + 2..]);
-        let fail = body.contains("| FAIL ");
-        let Some(rest) = body.strip_prefix("dev ") else {
-            return Self {
+/// 링 원소 본문(LOG-2 2단계 · 11-07 — **완전 지연 포맷**): 상세 로그는 `Rec` 구조체 그대로 링에 들어오고, 텍스트는
+/// 로그 창이 **소비할 때**(sync) 한 번 만든다 — 켠 상태의 문자열 비용이 생산 쪽에서 0(docs/52 §5).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LogBody {
+    /// 상태바 문구(M3-22 · 게이트 밖).
+    Status(String),
+    /// 상세 로그 레코드(docs/52).
+    Dev(Rec),
+}
+
+/// 링 한 줄 = 시각(h·m·s) + 본문.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LogLine {
+    /// 로컬 시각 `[h, m, s]`.
+    pub hms: [u8; 3],
+    pub body: LogBody,
+}
+
+impl LogLine {
+    /// 표시 텍스트 — `[HH:MM:SS] 문구` / `[HH:MM:SS] dev 층/수준 기능 …`(종전 생산 쪽 포맷과 같은 모양).
+    #[must_use]
+    pub fn render(&self) -> String {
+        let [h, m, s] = self.hms;
+        match &self.body {
+            LogBody::Status(t) => format!("[{h:02}:{m:02}:{s:02}] {t}"),
+            LogBody::Dev(r) => format!("[{h:02}:{m:02}:{s:02}] dev {}", r.render()),
+        }
+    }
+
+    fn meta(&self) -> LineMeta {
+        match &self.body {
+            LogBody::Status(_) => LineMeta {
                 layer: 0,
                 level: 0,
-                fail,
-            };
-        };
-        let tok = rest.split(' ').next().unwrap_or("");
-        let (l, v) = tok.split_once('/').unwrap_or((tok, ""));
-        let layer = Layer::parse(l).map_or(0, |k| k as u8 + 1);
-        let level = match v {
-            "decide" => 1,
-            "detail" => 2,
-            "trace" => 3,
-            _ => 0,
-        };
-        Self { layer, level, fail }
+                fail: false,
+            },
+            LogBody::Dev(r) => LineMeta {
+                layer: r.layer() as u8 + 1,
+                level: r.level() as u8, // Basic 0 · Decide 1 · Detail 2 · Trace 3
+                fail: r.is_fail(),
+            },
+        }
     }
 }
 
@@ -157,16 +177,34 @@ impl LogWidget {
     }
 
     /// 호스트 링과 맞춘다 — `seq`가 같으면 비용 0(틱마다 불러도 된다). 반환 = 바뀌었는가(다시 그릴 것).
+    ///
+    /// LOG-2 2단계(11-07): 텍스트는 여기서 만든다(완전 지연 포맷) · **증분** — 일련번호 차이만큼 꼬리만 렌더해 붙이고
+    /// 링 길이를 넘는 머리를 버린다(종전 = 매번 2000줄 전체 복사·재파싱 · 18줄/s면 틱마다). 차이가 링 길이를 넘거나
+    /// 첫 동기면 전체 재구성.
     pub fn sync<'a, I>(&mut self, seq: u64, ring: I, inv: &mut Invalidations) -> bool
     where
-        I: IntoIterator<Item = &'a String>,
+        I: IntoIterator<Item = &'a LogLine>,
     {
         if seq == self.seq {
             return false;
         }
+        let fresh = usize::try_from(seq.wrapping_sub(self.seq)).unwrap_or(usize::MAX);
+        let entries: Vec<&LogLine> = ring.into_iter().collect();
+        if self.seq == 0 || fresh >= entries.len() || self.lines.len() + fresh < entries.len() {
+            self.lines = entries.iter().map(|l| l.render()).collect();
+            self.meta = entries.iter().map(|l| l.meta()).collect();
+        } else {
+            for l in &entries[entries.len() - fresh..] {
+                self.lines.push(l.render());
+                self.meta.push(l.meta());
+            }
+            let over = self.lines.len() - entries.len();
+            if over > 0 {
+                self.lines.drain(..over);
+                self.meta.drain(..over);
+            }
+        }
         self.seq = seq;
-        self.lines = ring.into_iter().cloned().collect();
-        self.meta = self.lines.iter().map(|l| LineMeta::parse(l)).collect();
         self.refilter();
         inv.push(self.bounds);
         true
@@ -572,16 +610,57 @@ impl Widget for LogWidget {
 mod tests {
     use super::*;
 
-    fn lines(n: usize) -> Vec<String> {
+    fn at(i: usize, body: LogBody) -> LogLine {
+        LogLine {
+            hms: [0, 0, u8::try_from(i % 60).unwrap_or(0)],
+            body,
+        }
+    }
+    fn dev(layer: &str, level: Level, func: &'static str) -> Rec {
+        Rec::new(Layer::parse(layer).expect("층 이름"), level, func)
+    }
+    fn lines(n: usize) -> Vec<LogLine> {
         (1..=n)
             .map(|i| {
                 if i % 10 == 0 {
-                    format!("[00:00:{i:02}] dev chat/decide send_text seq={i}")
+                    at(
+                        i,
+                        LogBody::Dev(
+                            dev("chat", Level::Decide, "send_text")
+                                .arg("seq", i)
+                                .ok("sent"),
+                        ),
+                    )
                 } else {
-                    format!("[00:00:{i:02}] status line {i}")
+                    at(i, LogBody::Status(format!("status line {i}")))
                 }
             })
             .collect()
+    }
+
+    /// LOG-2 2단계(11-07): 증분 동기 — 꼬리만 붙이고 링 길이를 넘는 머리를 버린다 · 전체 재구성과 결과가 같다.
+    #[test]
+    fn sync_is_incremental_and_matches_full_rebuild() {
+        let mut inc = LogWidget::new();
+        let mut full = LogWidget::new();
+        let mut inv = Invalidations::default();
+        let mut ring: std::collections::VecDeque<LogLine> = lines(30).into();
+        assert!(inc.sync(30, ring.iter(), &mut inv));
+        // 5줄 추가(상한 30 유지 — 앞 5줄 탈락) · seq 35.
+        for i in 31..=35 {
+            ring.pop_front();
+            ring.push_back(at(i, LogBody::Status(format!("status line {i}"))));
+        }
+        assert!(inc.sync(35, ring.iter(), &mut inv));
+        assert!(full.sync(35, ring.iter(), &mut inv));
+        assert_eq!(inc.lines, full.lines, "증분 = 전체 재구성");
+        assert_eq!(inc.meta, full.meta);
+        assert_eq!(inc.lines.len(), 30);
+        assert!(inc.lines[0].contains("status line 6"));
+        assert!(inc.lines[29].contains("status line 35"));
+        // 차이가 링 길이를 넘으면(오래 닫아 둠) 전체 재구성.
+        assert!(inc.sync(500, ring.iter(), &mut inv));
+        assert_eq!(inc.lines, full.lines);
     }
 
     /// 검색 = 토큰 AND(대소문자 무시) · 바닥 따라가기 · 복사 원문 = 걸러진 줄 전부.
@@ -631,12 +710,34 @@ mod tests {
         let mut w = LogWidget::new();
         let mut inv = Invalidations::default();
         w.set_bounds(Rect::new(0, 0, 760, 480), &mut inv);
-        let ls: Vec<String> = vec![
-            "[00:00:01] 연결됨".to_string(),
-            "[00:00:02] dev conn/decide start_connect peer=5016194e | rule latch=free → dial".to_string(),
-            "[00:00:03] dev conn/decide connect_failed peer=b7147214 why=\"NotFound\" | FAIL auto retry stopped".to_string(),
-            "[00:00:04] dev chat/trace recv_frame seq=9".to_string(),
-            "[00:00:05] dev xfer/detail chunk n=3".to_string(),
+        let ls: Vec<LogLine> = vec![
+            at(1, LogBody::Status("연결됨".to_string())),
+            at(
+                2,
+                LogBody::Dev(
+                    dev("conn", Level::Decide, "start_connect")
+                        .arg("peer", "5016194e")
+                        .rule("latch", "free")
+                        .ok("dial"),
+                ),
+            ),
+            at(
+                3,
+                LogBody::Dev(
+                    dev("conn", Level::Decide, "connect_failed")
+                        .arg("peer", "b7147214")
+                        .arg("why", "NotFound")
+                        .fail("auto retry stopped"),
+                ),
+            ),
+            at(
+                4,
+                LogBody::Dev(dev("chat", Level::Trace, "recv_frame").arg("seq", 9).ok("")),
+            ),
+            at(
+                5,
+                LogBody::Dev(dev("xfer", Level::Detail, "chunk").arg("n", 3).ok("")),
+            ),
         ];
         assert!(w.sync(1, ls.iter(), &mut inv));
         assert_eq!(w.shown_len(), 5);
