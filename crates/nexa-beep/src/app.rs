@@ -22359,6 +22359,8 @@ impl ApplicationHandler<AppEvent> for App {
             return;
         }
         self.create_main_window(el);
+        // 앱 아이콘(M3-22 · 11-06) — 번들 밖 실행(포터블·cargo run)의 Dock 기본 아이콘을 내장 그림으로(mac · 다른 OS no-op).
+        nbeep_plat::dock::set_app_icon(nbeep_ui::brand::ICON_RGBA, nbeep_ui::brand::ICON_SIZE);
         // keytap 설치(G1 · H-26 — mac 한정): winit이 삼키는 "조합 직후 첫 1byte"를
         // 로컬 모니터로 관측해 보충한다. 단일 설치(resumed는 main_id 가드로 1회).
         #[cfg(target_os = "macos")]

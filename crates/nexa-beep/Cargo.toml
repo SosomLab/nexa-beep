@@ -16,6 +16,10 @@ path = "src/main.rs"
 [lints]
 workspace = true
 
+# Windows exe 리소스 아이콘(M3-22 · 11-06 · build.rs) — 빌드 의존만(런타임 의존 0 · MIT) · 호스트가 Windows일 때만.
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
+
 # 본체 = 조립 지점. 전 크레이트를 와이어링(어댑터 주입).
 [dependencies]
 nbeep-core.workspace = true
