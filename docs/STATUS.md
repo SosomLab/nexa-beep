@@ -3,6 +3,8 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
+> **갱신: 2026-11-06 Win 5차 (KST · Windows · main — 잔여 개발 검토 · 기록 정리 = 협업 세션)** — 사용자 지시 "잔여 개발 검토" → TODO 미완 행 전수 요약(개발 세션 보고 재료) + 불일치 정리(개발 세션 확정): M4-3b ✅(W-8 wire-scan CI · W-9 같은 pcap) · §9-2 W-12 ✅(scan-plaintext) · R-4 완화 구현 ✅ · M5-3·BL-1~5 ✅ · M4-5 ✅(R-5) · X-UDP-e ✅(X-2·X-2f) · X-2d 조건 재작성 · M1-4 ✅(S4 = M1-8·WNET-1) · M1-3 잔여 축소(06 §5-2 상태 열) · ADR 현황표 0005·0006 = Accepted(헤더 기준 · docs/10 0005 행 정정) · 개요표 M4·M5 🚧 · M5-4b → PUB-1 병합 · M4-2d 흡수 닫음 · M4-2 제목 · M4-12 §6 이동 · "지금 걸려 있는 것" 9~12행(L-1·M5-5·M5-6·MEM-6). 코드 변경 없음. → [journal](journal/2026-11-06.md)
+
 > **갱신: 2026-11-06 Win 4차 (KST · Windows · main — 개발 세션 코드 · 검증 실행·기록 = 협업 세션)** — ★**X-2f 발견 스트림 합류 ✅ `31e7e10`**(ADR-0003 §9): 서버 명부(roster)를 `Transport::discovery`로(`Appeared(origin Rendezvous)`/`Withdrawn`) · PeerTable 경로별 수명(광고 TTL / 이벤트형) + 출처·카드·`Updated` · App의 roster 소비·`server_peers` 제거(≈80줄) · announce 사다리 경유 · 차단 `forget`이 서버 상대에도 적용(비대칭 해소) · **서버 와이어 무변경(beepd 교체 불필요)**. 검증 = core 212·net 57·relay 11·ui 192·relay_e2e 10·transport_e2e 6/6·nexa-beep 102 · clippy·rustdoc ✓ · verify --quick 6/6. 잔여 = 실서버 roster 상호 표시 실기(사용자). → [journal](journal/2026-11-06.md)
 
 > **갱신: 2026-11-06 Win 2차 (KST · Windows · main — 개발 세션 코드 · 검증 실행·기록 = 협업 세션)** — ★**X-2 릴레이 Transport 승격 ✅ `8237f8e`**(DR-8 ② 실물화): `RelayTransport`·`LadderTransport`(로컬 > 수동 > 릴레이 사다리를 `Transport` 하나로 · `incoming` 합류 · `set_relay` hot-swap) · 단 선택을 링크 수준(`LadderLink` 첫 회신 고정 · 수락 쪽 `accept_link_via` 첫 프레임 추종)으로 내려 **핸드셰이크는 전 경로 호출자**(ADR-0003 "암호화는 Transport 위"가 릴레이에도 성립) · App 배선 통합(`spawn_relay_accept` 제거 · WrongPeer fail-closed). 검증(협업 세션 3회) = test core 207·net 57·relay 9·relay_e2e 10·transport_e2e 4·nexa-beep 102 · clippy·rustdoc ✓ · verify --quick 6/6(reply 8/8 = LAN 경로 회귀 없음). 잔여 = 실 NAT·서버 + 2-PC(사용자 손) · X-2f roster 합류(ADR-0003 개정 후보). → [journal](journal/2026-11-06.md)
@@ -113,7 +115,7 @@
 
 ## 지금 걸려 있는 것
 
-> 2026-11-03 기준으로 새로 썼다 · 11-04 Win 1차 갱신(1·2·4행 · GINV-1 추가) · 11-05 2차(4-1·6행)·4차(6행)·9차(1·2행 0.8.0 · 사용자 결정 8건 = [TODO](TODO.md) MEM-1·M3-27·NETMON-1·SEC-1·X-2·X-6 행)·10차(7·8행)·11차(7행 ✅)·12차(7행 잔여)·13차(7행 닫음)·11-06 2차(8행 X-2 ✅)·4차(8행 X-2f ✅). 종전 표(08-08 시점)는 [보존본](STATUS-archive.md)에 있다. 항목 상세 = [TODO](TODO.md).
+> 2026-11-03 기준으로 새로 썼다 · 11-04 Win 1차 갱신(1·2·4행 · GINV-1 추가) · 11-05 2차(4-1·6행)·4차(6행)·9차(1·2행 0.8.0 · 사용자 결정 8건 = [TODO](TODO.md) MEM-1·M3-27·NETMON-1·SEC-1·X-2·X-6 행)·10차(7·8행)·11차(7행 ✅)·12차(7행 잔여)·13차(7행 닫음)·11-06 2차(8행 X-2 ✅)·4차(8행 X-2f ✅)·5차(9~12행 추가 · 잔여 검토). 종전 표(08-08 시점)는 [보존본](STATUS-archive.md)에 있다. 항목 상세 = [TODO](TODO.md).
 
 | # | 항목 | 상태 |
 |---|---|---|
@@ -131,6 +133,10 @@
 | 6 | **M5-3 스팸 방어**(R-4 · v1.0 필수 · D-24) — 수신 제한 설계 = [38](38-receive-restriction-design.md) | ✅ BL-1~4 `54df30c`·`61d331c`(11-05) · BL-5 자동 = `block-scenario.sh` 19/19 ✅(동사 `1e6a705`) · **2차 ⓐ 임계값 설정 승격 ✅ `eb9a8f2` · ⓑ 발견 감쇠 ✅ `dbba0a8` · ⓒ 미확인 발신자 격리 ✅ `eb98bbd`**(시나리오 27/27) · 잔여 = 3-신원 실기 · 2-PC IP 차단 집행 · ⓑ 주입 시나리오 |
 | 7 | **SEC-1 와이어 평문 실소켓 회귀**(사용자 결정 11-05) — `tools/wire-scan.sh`(기존 수동 보조 `tools/wirecap.sh`를 자동 판정으로 확장) → `verify.sh` 단계 + ubuntu CI 잡 | ✅ `f3f4e4c`(11-05 — verify 단계 + CI ubuntu 잡 · Win 실측 PASS 3/0) · `4187806` Linux CI 교착 수정(맨 `wait` × 백그라운드 tcpdump · 4h 24m 멈춤 → 앱 pid만 대기 + 단계 timeout 5분) · ✅ **CI W-8 첫 판정 PASS(run 42094275079)** — ubuntu pcap 296,674B · TCP PSH 179 · 평문 0 · 교착 재발 없음 · TODO SEC-1 → TODO-done |
 | 8 | **X-2 릴레이 Transport 승격**(사용자 결정 11-05 · DR-8 ②) — 어댑터 `nbeep-relay` ✅ 08-21 → `RelayTransport`(발견 증강·`connect` 사다리 통합) | ✅ `8237f8e`(11-06) · 잔여 = 실 NAT·서버 1대 + 2-PC 실측(**사용자 손**) · **X-2f ✅ `31e7e10`(11-06)** 잔여 = 실서버 roster 상호 표시 실기(**사용자 손** · 서버 교체 불필요 — 와이어 무변경) |
+| 9 | **L-1 Linux 클립보드 실기**(🔴 P0 · 자체 구현 `eb7429b` 08-29) — Ctrl+V·X11·KDE | ☐ **사용자 손**(Linux PC) |
+| 10 | **M5-5 24h 상주 누수**(P0 · NFR-B-6 · `tools/inspect-sample.sh --interval 60 --duration 86400 --gate`) | ☐ **사용자 손**(설치본 상주 1회) |
+| 11 | **M5-6 문서 마감**(P0 · 사용 안내·알려진 한계 · SEC-3 "막지 못하는 것") | ☐ 협업 세션 몫 · v1 전 |
+| 12 | **MEM-6 피어당 상주 메모리**(P2 · 0.15MB/피어 · 500명 90MB) | ☐ 개발 세션 |
 
 ## 미해결 위험
 

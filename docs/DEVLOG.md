@@ -7,6 +7,7 @@
 
 ## 2026-11-06
 
+- **(Win · main) 잔여 개발 검토 · TODO 정리** — 미완 행 전수 요약(4그룹) · 불일치 정리(M4-3b·W-12·R-4·M5-3·BL·M4-5·X-UDP-e·M1-4 ✅ · M1-3 잔여 축소 · ADR 0005·0006 Accepted · 개요표 · M5-4b→PUB-1 · M4-2d 흡수) · STATUS 9~12행 → [journal](journal/2026-11-06.md)
 - ★**(Win · main) X-2f 발견 스트림 합류 ✅** `31e7e10` — 서버 명부를 `Transport::discovery`로(`Appeared(Rendezvous)`/`Withdrawn`) · PeerTable 경로별 수명·출처·카드 · App roster 소비 제거 · 서버 와이어 무변경 · transport_e2e 6/6 · verify --quick 6/6 · 잔여 = 실서버 실기(사용자) → [journal](journal/2026-11-06.md)
 - ★**(Win · main) X-2 릴레이 Transport 승격 ✅** `8237f8e` — `RelayTransport`·`LadderTransport`(로컬 > 수동 > 릴레이 · `Transport` 하나로) · 단 선택 = 링크 수준 `LadderLink`(첫 회신 고정) → 핸드셰이크는 전 경로 호출자(ADR-0003 성립) · App 배선 통합 · 검증 3회(협업) = transport_e2e 4/4 · verify --quick 6/6 · 잔여 = 실 NAT·2-PC(사용자) · X-2f → [journal](journal/2026-11-06.md)
 - ★**(Win · main) SEC-1 완결 — CI W-8 첫 판정 PASS**(run 42094275079 · ubuntu pcap 296,674B · PSH 179 · 평문 0 · 발견 3키 W-1~W-7 통과 · 새 재식별자 없음 · 교착 재발 없음) · SEC-1·SEC-2 → TODO-done · W-8 트래커 해소 → [journal](journal/2026-11-05.md)

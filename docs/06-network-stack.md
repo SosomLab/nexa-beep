@@ -131,6 +131,13 @@
 | keepalive | 죽은 피어 감지 | OS 기본값이 길다 → 앱 레벨 하트비트 병행 |
 | 버퍼 크기 | 처리량 | 무한정 키우지 않는다(DR-5) |
 
+> **구현·실측 상태(11-06 정리 · M1-3)** — 근거가 있는 것만 적는다.
+> - `IP_MULTICAST_IF` — 인터페이스별 발신 구현: unix `netif`(getifaddrs · M1-9 `c448211` 08-15) · Windows GetAdaptersAddresses(실측 IF 4개 · 완전성 3회전) · 가상·터널 제외.
+> - `SO_REUSEADDR` — Windows 의미 차 실측(08-15 M1-13ⓔ — unix 점유 시뮬레이션이 Windows에서는 성립 안 함 · R-7) · 발견 포트 배타 점유 시 발신 전용 강등.
+> - `IPV6_V6ONLY` — IPv4/IPv6 별도 소켓(08-08 · 이중 바인딩 회피) · 수신 듀얼스택(`V6ONLY=false`)은 OS별 기본값 차이로 **미채택**(08-10).
+> - `TCP_NODELAY` — `TcpLink` 설정(08-08) · keepalive — `TcpLink::new` 유휴 10초(08-13 · socket2).
+> - **측정 없음(잔여 = 2-PC 실기)**: `IP_PKTINFO`/`IPV6_RECVPKTINFO` 수신 인터페이스 식별 · 버퍼 크기 · 위 표 전 항목의 4타깃 대조.
+
 ### 5-3. 같은 피어가 여러 경로로 보인다
 
 다중 인터페이스·듀얼 스택이면 **한 사람이 여러 주소로 발견되는 것이 정상**이다.
