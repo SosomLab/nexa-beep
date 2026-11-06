@@ -25912,6 +25912,7 @@ impl ApplicationHandler<AppEvent> for App {
                     WKey::Named(NamedKey::End) => Some(Key::End),
                     WKey::Named(NamedKey::Enter) => Some(Key::Enter),
                     WKey::Named(NamedKey::Escape) => Some(Key::Escape),
+                    WKey::Named(NamedKey::Tab) => Some(Key::Tab), // 포커스 순회(M3-4 · 11-06 · Shift = shift_down)
                     _ => None,
                 };
                 if let Some(key) = key {

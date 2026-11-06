@@ -30,6 +30,9 @@ pub struct AlertWidget {
     closed: bool,
     /// 선택 결과(1회성 · 선택 모드에서만) — true = 긍정(수락).
     choice: Option<bool>,
+    /// ★ M3-4(11-06) 포커스된 버튼(0 = 긍정/확인 · 1 = 부정 · 2 = 나중에) — Tab/Shift+Tab/←/→ 순회 · Enter/Space = 그 버튼.
+    /// 포커스 링은 Button이 그린다(docs/14 §3-4 "포커스 링은 항상 보인다").
+    focus: usize,
     /// 상태 목록 모드(08-15 — 그룹 구성원): 줄 앞에 **목록과 같은 팔레트**
     /// ([`crate::peer_list::link_color`])의 상태 점을 그린다. 비면 본문 워드랩.
     status_list: Vec<(crate::peer_list::LinkState, String)>,
@@ -56,6 +59,7 @@ impl AlertWidget {
             check: None,
             closed: false,
             choice: None,
+            focus: 0,
             status_list: Vec::new(),
             rows_clickable: false,
             row_clicked: None,
@@ -94,13 +98,47 @@ impl AlertWidget {
     pub fn with_choice(mut self, yes: &str, no: &str) -> Self {
         self.ok = Button::new(yes);
         self.no = Some(Button::new(no));
+        self.apply_focus();
         self
+    }
+
+    /// 포커스 가능한 버튼 수(확인/긍정 · 부정 · 나중에).
+    fn focus_count(&self) -> usize {
+        1 + usize::from(self.no.is_some()) + usize::from(self.third.is_some())
+    }
+
+    /// 포커스 인덱스를 버튼 상태에 반영(링은 Button이 그린다).
+    fn apply_focus(&mut self) {
+        let f = self.focus.min(self.focus_count() - 1);
+        self.focus = f;
+        self.ok.set_focused(f == 0);
+        if let Some(no) = &mut self.no {
+            no.set_focused(f == 1);
+        }
+        if let Some(t) = &mut self.third {
+            t.set_focused(f == 2);
+        }
+    }
+
+    /// 포커스된 버튼을 누른다(Enter/Space) — 0 = 긍정 · 1 = 부정 · 2 = 결정 없음.
+    fn activate_focused(&mut self) {
+        match self.focus {
+            0 => {
+                if self.no.is_some() {
+                    self.choice = Some(true);
+                }
+            }
+            1 => self.choice = Some(false),
+            _ => {}
+        }
+        self.closed = true;
     }
 
     /// 세 번째 버튼(S3 · "나중에") — 결정 없이 닫기(= X로 닫기와 같은 결과 · `take_choice` = None). Esc도 이 뜻이 된다.
     #[must_use]
     pub fn with_third(mut self, label: &str) -> Self {
         self.third = Some(Button::new(label));
+        self.apply_focus();
         self
     }
 
@@ -248,14 +286,47 @@ impl Widget for AlertWidget {
                 }
             }
         }
+        // ★ M3-4(11-06) 키보드 순회: Tab/Shift+Tab · ←/→ = 버튼 포커스 이동 · Enter/Space = 포커스된 버튼(종전 = Enter 항상 긍정).
         if let InputEvent::Key {
-            key: Key::Enter, ..
+            key: Key::Tab,
+            shift,
+            ..
         } = *ev
         {
-            if self.no.is_some() {
-                self.choice = Some(true);
-            }
-            self.closed = true;
+            let n = self.focus_count();
+            self.focus = if shift {
+                (self.focus + n - 1) % n
+            } else {
+                (self.focus + 1) % n
+            };
+            self.apply_focus();
+            inv.push(self.bounds);
+            return;
+        }
+        if let InputEvent::Key {
+            key: Key::Left | Key::Right,
+            ..
+        } = *ev
+        {
+            let n = self.focus_count();
+            let left = matches!(ev, InputEvent::Key { key: Key::Left, .. });
+            self.focus = if left {
+                (self.focus + n - 1) % n
+            } else {
+                (self.focus + 1) % n
+            };
+            self.apply_focus();
+            inv.push(self.bounds);
+            return;
+        }
+        if matches!(
+            *ev,
+            InputEvent::Key {
+                key: Key::Enter,
+                ..
+            } | InputEvent::Char { c: ' ', .. }
+        ) {
+            self.activate_focused();
             return;
         }
         if let InputEvent::Key {
@@ -559,5 +630,56 @@ mod tests {
         w.set_content("새 제목", "새 본문", &mut inv);
         assert_eq!(w.title, "새 제목");
         assert_eq!(w.message, "새 본문");
+    }
+
+    /// M3-4(11-06): Tab/Shift+Tab/←/→로 버튼을 돌고 Enter는 **포커스된** 버튼을 누른다(종전 = 항상 긍정).
+    #[test]
+    fn tab_cycles_buttons_and_enter_activates_focused() {
+        let mut inv = Invalidations::default();
+        let tab = |shift: bool| InputEvent::Key {
+            key: Key::Tab,
+            shift,
+            primary: false,
+        };
+        let enter = InputEvent::Key {
+            key: Key::Enter,
+            shift: false,
+            primary: false,
+        };
+        let mut w = AlertWidget::new("t", "m")
+            .with_choice("yes", "no")
+            .with_third("later");
+        assert!(w.ok.is_focused(), "초기 = 긍정");
+        w.on_event(&tab(false), &mut inv);
+        assert!(w.no.as_ref().is_some_and(Button::is_focused), "Tab = 부정");
+        w.on_event(&tab(false), &mut inv);
+        assert!(
+            w.third.as_ref().is_some_and(Button::is_focused),
+            "Tab = 나중에"
+        );
+        w.on_event(&tab(false), &mut inv);
+        assert!(w.ok.is_focused(), "순환");
+        w.on_event(&tab(true), &mut inv);
+        assert!(
+            w.third.as_ref().is_some_and(Button::is_focused),
+            "Shift+Tab = 역순"
+        );
+        w.on_event(
+            &InputEvent::Key {
+                key: Key::Left,
+                shift: false,
+                primary: false,
+            },
+            &mut inv,
+        );
+        assert!(w.no.as_ref().is_some_and(Button::is_focused), "← = 부정");
+        w.on_event(&enter, &mut inv);
+        assert!(w.take_closed());
+        assert_eq!(w.take_choice(), Some(false), "Enter = 포커스된 부정");
+        // 2택 · Enter 즉시 = 긍정(종전 동작 유지).
+        let mut w2 = AlertWidget::new("t", "m").with_choice("yes", "no");
+        w2.on_event(&enter, &mut inv);
+        assert!(w2.take_closed());
+        assert_eq!(w2.take_choice(), Some(true));
     }
 }

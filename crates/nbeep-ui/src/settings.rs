@@ -2681,6 +2681,102 @@ impl SettingsWidget {
 
     /// 선택 복사(① 08-13) — 포커스된 텍스트 입력(검색·글꼴명)에서만 나온다.
     #[must_use]
+    /// 포커스 순회(M3-4 · 11-06) — 순서 = 검색 · 행 컨트롤(보이는 순 · 잠긴 행·Info 제외) · 고급·변경 스위치 · 하단 버튼 4.
+    /// 현재 포커스가 없으면 검색부터. 반환 = 새 포커스 위치(테스트 판정용).
+    pub fn move_focus(&mut self, backward: bool, inv: &mut Invalidations) -> usize {
+        // 0 = 검색 · 1..=rows = 행 · 그 뒤 = 하단 6개.
+        let focusable_rows: Vec<usize> = self
+            .rows
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| !matches!(r.ctl, RowCtl::Info(_)) && !self.is_locked(r.idx))
+            .map(|(i, _)| i)
+            .collect();
+        let n = 1 + focusable_rows.len() + 6;
+        let row_focused = |c: &RowCtl| match c {
+            RowCtl::Combo(c) => c.is_focused(),
+            RowCtl::Check(c) => c.is_focused(),
+            RowCtl::Act(b) => b.is_focused(),
+            RowCtl::Font { family, size } => family.is_focused() || size.is_focused(),
+            RowCtl::Pos(g) => g.is_focused(),
+            RowCtl::Face(f) => f.is_focused(),
+            RowCtl::Color(c) => c.is_focused() || c.hex_focused(),
+            RowCtl::Info(_) => false,
+        };
+        let bottom: [bool; 6] = [
+            self.adv_switch.borrow().is_focused(),
+            self.changed_switch.borrow().is_focused(),
+            self.btn_export.is_focused(),
+            self.btn_import.is_focused(),
+            self.btn_json.is_focused(),
+            self.btn_close.is_focused(),
+        ];
+        let cur = if self.search.is_focused() {
+            Some(0)
+        } else if let Some(k) = focusable_rows
+            .iter()
+            .position(|&i| row_focused(&self.rows[i].ctl))
+        {
+            Some(1 + k)
+        } else {
+            bottom
+                .iter()
+                .position(|&b| b)
+                .map(|k| 1 + focusable_rows.len() + k)
+        };
+        let next = match cur {
+            None => 0,
+            Some(c) if backward => (c + n - 1) % n,
+            Some(c) => (c + 1) % n,
+        };
+        // 전부 끄고 하나만 켠다.
+        self.search.set_focused(next == 0);
+        for (k, &i) in focusable_rows.iter().enumerate() {
+            let on = next == 1 + k;
+            match &mut self.rows[i].ctl {
+                RowCtl::Combo(c) => c.set_focused(on),
+                RowCtl::Check(c) => c.set_focused(on),
+                RowCtl::Act(b) => b.set_focused(on),
+                RowCtl::Font { family, size } => {
+                    family.set_focused(on);
+                    size.set_focused(false);
+                }
+                RowCtl::Pos(g) => g.set_focused(on),
+                RowCtl::Face(f) => f.set_focused(on),
+                RowCtl::Color(c) => c.set_focused(on),
+                RowCtl::Info(_) => {}
+            }
+        }
+        for (i, row) in self.rows.iter_mut().enumerate() {
+            if !focusable_rows.contains(&i) {
+                match &mut row.ctl {
+                    RowCtl::Combo(c) => c.set_focused(false),
+                    RowCtl::Check(c) => c.set_focused(false),
+                    RowCtl::Act(b) => b.set_focused(false),
+                    RowCtl::Font { family, size } => {
+                        family.set_focused(false);
+                        size.set_focused(false);
+                    }
+                    RowCtl::Pos(g) => g.set_focused(false),
+                    RowCtl::Face(f) => f.set_focused(false),
+                    RowCtl::Color(c) => c.set_focused(false),
+                    RowCtl::Info(_) => {}
+                }
+            }
+        }
+        let base = 1 + focusable_rows.len();
+        self.adv_switch.borrow_mut().set_focused(next == base);
+        self.changed_switch
+            .borrow_mut()
+            .set_focused(next == base + 1);
+        self.btn_export.set_focused(next == base + 2);
+        self.btn_import.set_focused(next == base + 3);
+        self.btn_json.set_focused(next == base + 4);
+        self.btn_close.set_focused(next == base + 5);
+        inv.push(self.bounds);
+        next
+    }
+
     pub fn clipboard_copy(&self) -> Option<String> {
         if let Some(t) = self.search.copy_selection() {
             return Some(t);
@@ -4268,6 +4364,47 @@ impl Widget for SettingsWidget {
                 }
                 self.drain_changes(inv);
             }
+            // ★ M3-4(11-06) Tab 순회 — 검색 → 행 컨트롤(보이는 순 · 잠긴 행 제외) → 하단(고급·변경 스위치 · 내보내기·가져오기·
+            //   JSON·닫기) → 다시 검색. Shift = 역순. 포커스 링은 컨트롤이 그린다(docs/14 §3-4).
+            InputEvent::Key {
+                key: Key::Tab,
+                shift,
+                ..
+            } => {
+                let _ = self.move_focus(shift, inv);
+            }
+            // ★ 포커스된 토글·콤보(M3-4) — Space/Enter = 토글/열기(Space는 Char(' ')로 오므로 Key::Space로 바꿔 전달).
+            InputEvent::Char { c: ' ', .. }
+            | InputEvent::Key {
+                key: Key::Enter, ..
+            } if self.rows.iter().any(|r| {
+                matches!(&r.ctl, RowCtl::Check(c) if c.is_focused())
+                    || matches!(&r.ctl, RowCtl::Combo(c) if c.is_focused())
+            }) =>
+            {
+                let fwd = if matches!(ev, InputEvent::Char { .. }) {
+                    InputEvent::Key {
+                        key: Key::Space,
+                        shift: false,
+                        primary: false,
+                    }
+                } else {
+                    *ev
+                };
+                let locked: Vec<bool> = self.rows.iter().map(|r| self.is_locked(r.idx)).collect();
+                for (row, lock) in self.rows.iter_mut().zip(locked) {
+                    if lock {
+                        continue;
+                    }
+                    match &mut row.ctl {
+                        RowCtl::Check(c) if c.is_focused() => c.on_event(&fwd, inv),
+                        RowCtl::Combo(c) if c.is_focused() => c.on_event(&fwd, inv),
+                        _ => {}
+                    }
+                }
+                self.drain_changes(inv);
+                inv.push(self.bounds);
+            }
             // ★ 포커스된 실행 버튼(09-06) — Space/Enter = 클릭(종전엔 "기본 타이핑 = 검색"이
             //   삼켜 키보드로는 행위 버튼을 누를 수 없었다 · 실기 자동화에서 발각).
             InputEvent::Char { c: ' ', .. }
@@ -5657,5 +5794,45 @@ mod tests {
         let mut changed = Invalidations::default();
         w.set_row_note("xfer.approval_window", "00:00:01 · 00:00:00", &mut changed);
         assert!(!changed.is_empty());
+    }
+
+    /// M3-4(11-06): Tab = 검색 → 행 컨트롤 → 하단 버튼 → 검색 순환 · Shift+Tab 역순 · Space = 포커스된 토글.
+    #[test]
+    fn tab_cycles_focus_and_space_toggles_focused_switch() {
+        let (mut w, mut inv) = widget();
+        select_cat(&mut w, Msg::CatNotify);
+        let tab = InputEvent::Key {
+            key: Key::Tab,
+            shift: false,
+            primary: false,
+        };
+        let stab = InputEvent::Key {
+            key: Key::Tab,
+            shift: true,
+            primary: false,
+        };
+        assert_eq!(w.move_focus(false, &mut inv), 0, "포커스 없음 → 검색");
+        assert!(w.search.is_focused());
+        w.on_event(&tab, &mut inv);
+        assert!(!w.search.is_focused());
+        assert!(
+            w.rows
+                .iter()
+                .any(|r| matches!(&r.ctl, RowCtl::Check(c) if c.is_focused())),
+            "알림 범주 첫 행 = 토글"
+        );
+        // Space = 포커스된 토글이 바뀐다(Char(' ') → Key::Space 전달).
+        w.on_event(&InputEvent::Char { c: ' ', now_ms: 0 }, &mut inv);
+        let ch = w.take_changes();
+        assert!(
+            ch.iter().any(|(k, v)| *k == "notify.enabled" && v == "off"),
+            "변경: {ch:?}"
+        );
+        w.on_event(&stab, &mut inv);
+        assert!(w.search.is_focused(), "Shift+Tab = 검색으로");
+        w.on_event(&stab, &mut inv);
+        assert!(w.btn_close.is_focused(), "검색에서 역순 = 끝(닫기)");
+        w.on_event(&tab, &mut inv);
+        assert!(w.search.is_focused(), "닫기 다음 = 검색(순환)");
     }
 }
