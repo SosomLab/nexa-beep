@@ -99,8 +99,12 @@
 | **[ADR-0007](20-adr-0007-multi-device-identity.md)** | 다중 기기 신원(UserId 1:M PeerId) | ✅ **Accepted**(08-08) — 서명된 기기 목록 · 그룹 팬아웃 재사용 · **주 기기 + 복구 시드** · 기기 관리 화면 · **v1 제약 4건** |
 | **[ADR-0008](22-adr-0008-profile-disclosure.md)** | 프로필 옵트인 노출(발견 시 식별 정보 공개) | ✅ **Accepted**(08-08) — 브로드캐스트 미포함 · 세션 경유 + 자동 프리페치 · 필드 단위 옵트인 |
 | **[ADR-0009](23-adr-0009-shared-folders.md)** | 공유 폴더 — 가상경로·풀 다운로드 | ✅ **Accepted**(08-08 — 기본 scope `Connected`·설정에서 변경 가능) — 가상 루트 · fail-closed 경로 해석 · scope 3종 · pull도 동일 무해화 게이트 |
-| **[ADR-0010](24-adr-0010-message-priority-notification.md)** | 메시지 등급 · 알림 강도 · 수신 확인 · 대체 알림 채널 | 📐 **Proposed**(08-08) — 등급은 요청·강도는 수신자 판정 · 신뢰 게이트 · 수동 수신확인("읽음" 없음) · 수신자 쪽 에스컬레이션 · **외부 채널에도 봉투만** · Webhook 우선 |
-| **[ADR-0011](28-adr-0011-settings-persistence.md)** | 설정 직렬화·영속 표준(재사용 모듈) | 📐 **Proposed**(08-09) — Entry 레지스트리 = 저장 스키마 · **호스트 주입 시계 기반 coalescing 저장** · 미지 키 보존 · 원자적 쓰기 · 분리 가능 |
+| **[ADR-0010](24-adr-0010-message-priority-notification.md)** | 메시지 등급 · 알림 강도 · 수신 확인 · 대체 알림 채널 | ✅ **Accepted**(08-17 · D-23 · DR-25 — 문서 머리 기준 · 11-07 색인 정정) · 종전 표기: 📐 **Proposed**(08-08) — 등급은 요청·강도는 수신자 판정 · 신뢰 게이트 · 수동 수신확인("읽음" 없음) · 수신자 쪽 에스컬레이션 · **외부 채널에도 봉투만** · Webhook 우선 |
+| **[ADR-0011](28-adr-0011-settings-persistence.md)** | 설정 직렬화·영속 표준(재사용 모듈) | ✅ **Accepted**(08-11 · D-25 · DR-27 · `crates/nexa-conf` 구현 — 11-07 색인 정정) · 종전 표기: 📐 **Proposed**(08-09) — Entry 레지스트리 = 저장 스키마 · **호스트 주입 시계 기반 coalescing 저장** · 미지 키 보존 · 원자적 쓰기 · 분리 가능 |
+| **[ADR-0012](31-adr-0012-shared-group-chat.md)** | 공유 그룹 채팅(진짜 그룹 — 한 방 대화·roster·초대 수락) | ✅ **Accepted**(08-13 · D-28 — G1~G4 구현) |
+| **[ADR-0013](32-adr-0013-server-modes.md)** | `nexa-beepd` 서버 모드(릴레이·컨텐츠·관리) | ✅ **Accepted**(11-07 사용자 결정 · D-29 — X-1/X-2 구현이 이미 따름 · 컨텐츠·관리 모드 구현은 v1 이후) |
+| **[ADR-0014](35-adr-0014-native-file-dialog.md)** | 파일 선택 다이얼로그 | ✅ **Accepted**(08-18 · D-30) · ⚠ **정정 10-09 D-33-3** — 3-OS 공용 nexa-ui `nexa-dlg::FilePicker`(자체 그리기)로 통일 · 시스템 다이얼로그 어댑터는 구현 0인 채 폐기 · L-4 xdg 포털 병행 ⛔(11-07) |
+| **[ADR-0015](46-adr-0015-userid-handle-passphrase.md)** | UserId 사용자 관리 — Handle + Pairing passphrase(3층) | ✅ **Accepted**(09-06 · D-32 · DR-29 — X-13 S3/S4 마무리만 · S5 보류 = 11-07 사용자 결정) |
 
 > ADR 파일명은 `NN-adr-000N-주제.md`. 번호(NN)는 부여 후 **불변**.
 
