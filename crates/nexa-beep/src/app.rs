@@ -8405,6 +8405,30 @@ impl App {
                     }
                 }
                 Some(("windows.dump", path)) => self.script_windows_dump(path.trim()),
+                // ★ 격리물 실체화(M4-12 ⑤ 실측용 · 11-07): 격리함 n번째(.beepq 이름순 · 0부터) 파일을 승인 경로 그대로
+                //   실체화한다(스트리밍 피크를 헤드리스로 잰다 — `--quarantine-demo`는 fs::read 전량이라 대표성 없음).
+                Some(("materialize", n)) => {
+                    let paths = nbeep_safe::QuarantineDir::open(crate::gate::quarantine_root(
+                        crate::gate::CH_GUI,
+                    ))
+                    .and_then(|q| q.list())
+                    .unwrap_or_default();
+                    match (
+                        n.trim().parse::<usize>().ok().and_then(|i| paths.get(i)),
+                        self.script_target().or(self.main_id),
+                    ) {
+                        (Some(path), Some(id)) => {
+                            let path = path.to_string_lossy().into_owned();
+                            eprintln!("[script] materialize: {path}");
+                            self.run_quarantine_action(nbeep_ui::QAction::Approve(path), id);
+                            eprintln!("[script] materialize done: {}", self.status);
+                        }
+                        (None, _) => {
+                            eprintln!("[script] materialize: 격리물 {} 건 — 색인 밖", paths.len())
+                        }
+                        (_, None) => eprintln!("[script] materialize: 대상 창 없음"),
+                    }
+                }
                 // ★ 입력 주입(10-10 성능 실측 — macOS는 밖에서 입력을 넣기 어렵다): 포커스 창(없으면 메인)에
                 //   휠·이동·우클릭을 **실제 라우팅 경로**(`route`)로 넣는다. 좌표 = 물리 px.
                 Some(("wheel", dy)) => {
