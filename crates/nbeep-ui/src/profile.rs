@@ -1427,9 +1427,16 @@ mod tests {
             w.move_focus(false, &mut inv); // 0 이름 … 4 사진 선택 → 5 스와치
         }
         assert!(w.swatches.is_focused(), "5 = 아바타 스와치");
-        assert!(w.swatches.cursor().is_some(), "포커스를 받으면 커서 = 현재 선택");
+        assert!(
+            w.swatches.cursor().is_some(),
+            "포커스를 받으면 커서 = 현재 선택"
+        );
         assert!(w.recent.is_empty());
-        assert_eq!(w.move_focus(false, &mut inv), 7, "최근 사진이 비면 6은 건너뛴다");
+        assert_eq!(
+            w.move_focus(false, &mut inv),
+            7,
+            "최근 사진이 비면 6은 건너뛴다"
+        );
         assert_eq!(w.move_focus(true, &mut inv), 5, "역방향도 건너뛴다");
         let k = |key| InputEvent::Key {
             key,
