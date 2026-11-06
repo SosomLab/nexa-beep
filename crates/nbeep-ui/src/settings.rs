@@ -234,6 +234,33 @@ impl Dep {
     }
 }
 
+/// 보안에 닿는 항목의 **확인 훅**(M3-11 · docs/14 §10-2 · 11-06) — (키, 확인이 필요한 **새 값** 조건, 본문 문구).
+/// **노출·완화 방향만** 묻는다(되돌리는 쪽 = 철회는 즉시 · ADR-0008 §3). 호스트가 적용 직전에
+/// [`needs_confirm`]으로 판정해 모달을 띄우고, 긍정일 때만 값을 적용한다. 공유 폴더 scope(ADR-0009)는 키가 생기면 여기에.
+pub const CONFIRM: &[(&str, Dep, Msg)] = &[
+    ("profile.share.basic", Dep::On, Msg::ConfirmProfileShare),
+    ("profile.share.email", Dep::On, Msg::ConfirmProfileShare),
+    ("profile.share.phone", Dep::On, Msg::ConfirmProfileShare),
+    ("notify.preview", Dep::On, Msg::ConfirmNotifyPreview),
+    ("xfer.approval", Dep::Eq("auto"), Msg::ConfirmXferAuto),
+    ("xfer.approval", Dep::Eq("timed"), Msg::ConfirmXferAuto),
+    ("xfer.remote_files_server", Dep::On, Msg::ConfirmRemoteFiles),
+    (
+        "xfer.remote_files_internet",
+        Dep::On,
+        Msg::ConfirmRemoteFiles,
+    ),
+];
+
+/// 이 변경(`key` → `new_value`)이 확인 모달을 요구하는가 — 요구하면 본문 문구.
+#[must_use]
+pub fn needs_confirm(key: &str, new_value: &str) -> Option<Msg> {
+    CONFIRM
+        .iter()
+        .find(|(k, when, _)| *k == key && when.satisfied(new_value))
+        .map(|(_, _, m)| *m)
+}
+
 /// (자식, 부모, 조건) — 부모가 조건을 만족하지 않으면 자식 행은 **잠긴다**(값은 유지 · 흐리게 + 안내 1줄).
 /// 호스트가 `set_disabled`로 거는 런타임 잠금과 **합집합**이다.
 pub const DEPENDS: &[(&str, &str, Dep)] = &[
@@ -5322,6 +5349,32 @@ mod tests {
             assert!(all.contains(c), "DEPENDS 자식 미등록 {c}");
             assert!(all.contains(p), "DEPENDS 부모 미등록 {p}");
         }
+    }
+
+    /// M3-11(11-06): 확인 훅 표의 키는 전부 레지스트리에 실재하고, **완화·노출 방향만** 묻는다.
+    #[test]
+    fn confirm_table_names_real_keys_and_only_loosening_direction() {
+        for (k, _, _) in CONFIRM {
+            assert!(
+                registry().iter().any(|e| e.key == *k),
+                "확인 훅 키가 레지스트리에 없다: {k}"
+            );
+        }
+        assert_eq!(
+            needs_confirm("notify.preview", "on"),
+            Some(Msg::ConfirmNotifyPreview)
+        );
+        assert_eq!(needs_confirm("notify.preview", "off"), None, "끄기는 즉시");
+        assert_eq!(
+            needs_confirm("profile.share.email", "on"),
+            Some(Msg::ConfirmProfileShare)
+        );
+        assert_eq!(needs_confirm("profile.share.email", "off"), None);
+        assert!(needs_confirm("xfer.approval", "auto").is_some());
+        assert!(needs_confirm("xfer.approval", "timed").is_some());
+        assert_eq!(needs_confirm("xfer.approval", "manual"), None);
+        assert_eq!(needs_confirm("xfer.approval", "block"), None);
+        assert_eq!(needs_confirm("ui.theme", "dark"), None, "보안 무관 키");
     }
 
     #[test]

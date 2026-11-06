@@ -610,6 +610,18 @@ pub enum Msg {
     NotifyUrgentCount,
     /// 상태바 — Linux 등 알림 데몬 부재로 소리를 낼 수 없을 때 1회.
     NotifySoundUnavailable,
+    // ── 보안 설정 확인 훅(M3-11 잔여 · 11-06 · docs/14 §10-2) ──
+    ConfirmTitle,
+    /// 프로필 노출 켜기 — ADR-0008 §3 "이미 본 사람의 기억까지 지울 수는 없다"를 명시.
+    ConfirmProfileShare,
+    /// 알림 미리보기 켜기 — 화면 공유·어깨너머 노출.
+    ConfirmNotifyPreview,
+    /// 수신 파일 자동/시간부 승인 — 무해화 게이트의 사람 판정 생략.
+    ConfirmXferAuto,
+    /// 원격(서버·인터넷) 경로 파일 허용 — 위협 모델이 다르다(FR-S-24).
+    ConfirmRemoteFiles,
+    BtnApplyChange,
+    StSettingCanceled,
     /// 메뉴바 '도움말' 라벨.
     MenuHelp,
     ToolbarSize,
@@ -3914,6 +3926,43 @@ impl Msg {
                 "이 환경에서는 알림 소리를 낼 수 없습니다(알림 데몬 없음).",
                 "此环境无法播放通知声音（没有通知守护进程）。",
                 "この環境では通知音を鳴らせません（通知デーモンなし）。",
+            ],
+            Msg::ConfirmTitle => [
+                "Confirm security setting",
+                "보안 설정 확인",
+                "确认安全设置",
+                "セキュリティ設定の確認",
+            ],
+            Msg::ConfirmProfileShare => [
+                "This shows the field to peers you connect with. You can turn it off later, but peers who already saw it keep what they saw. Continue?",
+                "이 항목을 연결하는 상대에게 보여 줍니다. 나중에 끌 수 있지만, 이미 본 상대의 기억까지 지울 수는 없습니다. 계속할까요?",
+                "这会向与您连接的对方显示该字段。之后可以关闭，但已看到的对方会保留所见内容。继续吗？",
+                "この項目を接続相手に表示します。後でオフにできますが、すでに見た相手の記憶までは消せません。続けますか？",
+            ],
+            Msg::ConfirmNotifyPreview => [
+                "Message text will appear in notifications, including while screen sharing or when someone looks over your shoulder. Continue?",
+                "메시지 내용이 알림에 보입니다. 화면 공유 중이거나 어깨너머로도 보입니다. 계속할까요?",
+                "消息内容将显示在通知中，包括屏幕共享或他人从旁窥视时。继续吗？",
+                "通知にメッセージ本文が表示されます。画面共有中や肩越しにも見えます。続けますか？",
+            ],
+            Msg::ConfirmXferAuto => [
+                "Incoming files will be released without your per-file decision (the sanitize gate still runs; executables stay quarantined). Continue?",
+                "수신 파일을 파일마다 직접 판정하지 않고 풀어 줍니다(무해화 게이트는 그대로 돌고, 실행형은 격리에 남습니다). 계속할까요?",
+                "收到的文件将不经您逐一判定即放行（无害化门仍然运行；可执行文件仍被隔离）。继续吗？",
+                "受信ファイルをファイルごとに判断せず解放します（無害化ゲートは動作し、実行形式は隔離のまま）。続けますか？",
+            ],
+            Msg::ConfirmRemoteFiles => [
+                "Files from peers reached over the internet or a server have a different threat model than the local network. Allow them anyway?",
+                "인터넷·서버 경유 상대의 파일은 로컬 네트워크와 위협 모델이 다릅니다. 그래도 허용할까요?",
+                "通过互联网或服务器连接的对方发来的文件，其威胁模型与本地网络不同。仍然允许吗？",
+                "インターネット・サーバー経由の相手からのファイルは、ローカルネットワークとは脅威モデルが異なります。それでも許可しますか？",
+            ],
+            Msg::BtnApplyChange => ["Apply", "적용", "应用", "適用"],
+            Msg::StSettingCanceled => [
+                "Setting change canceled — previous value kept",
+                "설정 변경 취소 — 이전 값 유지",
+                "已取消设置更改 — 保留先前值",
+                "設定変更をキャンセル — 以前の値を維持",
             ],
             Msg::ToolbarSize => [
                 "Toolbar icon size",

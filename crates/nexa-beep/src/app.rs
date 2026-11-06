@@ -3766,6 +3766,12 @@ enum AlertCtx {
     },
     /// 설정 초기화 확인(08-15 · 고급) — 긍정 = 표시 설정 전부 기본값.
     SettingsReset,
+    /// 보안 설정 확인(M3-11 · 11-06) — 긍정 = 그 값 적용 · 부정 = 설정 창을 이전 값으로 역반영.
+    SettingConfirm {
+        key: &'static str,
+        value: String,
+        prev: String,
+    },
     /// 구성원 제외 확인(G4 · 08-15) — 긍정 = roster에서 제외·재배포(소유자만).
     GroupKick {
         gid: nbeep_core::group::GroupId,
@@ -4482,6 +4488,10 @@ struct App {
     want_first_card: Option<PeerId>,
     /// 설정 초기화 확인 대기(08-15 · 고급 — 확인 모달은 about_to_wait에서 연다).
     pending_reset: bool,
+    /// ★ 보안 설정 확인 훅(M3-11 · 11-06) — 모달을 기다리는 변경 (키, 새 값, 이전 값, 본문 문구). 모달은 about_to_wait(el).
+    pending_setting_confirm: Option<(&'static str, String, String, nbeep_core::Msg)>,
+    /// 확인 모달 긍정 뒤 재적용 중 — 훅을 한 번 건너뛴다.
+    setting_confirmed: bool,
     /// IME 중재 상태기계(M3-1e G3 — [`crate::ime_gate`]): 조합 게이트·보류-판정·
     /// 유출 조합기·잔향 억제·이동 키 재생·프리에딧 보존을 **한 타입**으로. 실측
     /// 이벤트 순서는 ime_gate의 재생 테스트 10종이 지킨다(H-1~H-24 계보는 그쪽 문서).
@@ -8060,6 +8070,20 @@ impl App {
                 None if step == "group.accept" => self.script_group_accept(), // 값 없는 동사(11-04)
                 None if step == "group.decline" => self.script_group_decline(),
                 None if step == "group.decline_hard" => self.script_group_decline_with(true),
+                None if step == "confirm.yes" || step == "confirm.no" => {
+                    // 보안 설정 확인(M3-11) — 대기 중인 확인을 모달 없이 판정(헤드리스 판정 수단).
+                    if let Some((key, value, prev, _)) = self.pending_setting_confirm.take() {
+                        let yes = step == "confirm.yes";
+                        self.apply_alert_choice(
+                            yes,
+                            AlertCtx::SettingConfirm { key, value, prev },
+                            el,
+                        );
+                        eprintln!("[script] {step}: {key}");
+                    } else {
+                        eprintln!("[script] {step}: none pending");
+                    }
+                }
                 None if step == "first.accept" || step == "first.ignore" => {
                     let peers: Vec<PeerId> = self.held_first.keys().copied().collect();
                     let yes = step == "first.accept";
@@ -17186,6 +17210,17 @@ impl App {
                 }
                 _ => {}
             }
+            // ★ 보안 항목 확인 훅(M3-11 · docs/14 §10-2 · 11-06) — 노출·완화 방향의 변경은 모달에서 긍정해야 적용
+            //   (el은 about_to_wait에 있다 — pending_reset과 같은 패턴). 위젯은 이미 새 값을 보이므로 부정이면 역반영.
+            if !self.setting_confirmed {
+                if let Some(msg) = nbeep_ui::settings::needs_confirm(key, &value) {
+                    let prev = self.settings.get(key).to_string();
+                    if prev != value {
+                        self.pending_setting_confirm = Some((key, value, prev, msg));
+                        continue;
+                    }
+                }
+            }
             dirty |= self.settings.set(key, value.clone());
             // ★ 열려 있는 설정 화면에 역반영(08-15 사용자 실기 — 툴바 정렬처럼
             //   다른 경로의 변경이 설정 화면 표시와 어긋났다 · 쌍방 동기화).
@@ -19612,6 +19647,29 @@ impl App {
                     }
                 } else {
                     self.set_status(nbeep_core::t(nbeep_core::Msg::StResetCancel));
+                }
+            }
+            AlertCtx::SettingConfirm { key, value, prev } => {
+                if yes {
+                    // 훅을 한 번 건너뛰고 같은 경로로 적용(저장·역반영·즉시 적용 분기 전부 동일).
+                    self.setting_confirmed = true;
+                    self.apply_settings(vec![(key, value)]);
+                    self.setting_confirmed = false;
+                } else {
+                    // 위젯은 이미 새 값을 보이고 있다 — 이전 값으로 역반영(프로필 창은 적용 뒤 닫히므로 설정 창만).
+                    if let Some(sv) = &mut self.settings_view {
+                        let mut sinv = Invalidations::default();
+                        sv.set_value(key, &prev, &mut sinv);
+                    }
+                    if let Some(sid) = self
+                        .windows
+                        .iter()
+                        .find(|(_, e)| e.role == Role::Settings)
+                        .map(|(id, _)| *id)
+                    {
+                        self.request_redraw(sid);
+                    }
+                    self.set_status(nbeep_core::t(nbeep_core::Msg::StSettingCanceled));
                 }
             }
             AlertCtx::GroupInvite { uid, owner, hard } => {
@@ -24557,6 +24615,17 @@ impl ApplicationHandler<AppEvent> for App {
                 AlertCtx::SettingsReset,
             );
         }
+        if let Some((key, value, prev, msg)) = self.pending_setting_confirm.take() {
+            // 보안 설정 확인(M3-11) — 모달 1개 규칙(기존 Alert 대체).
+            self.open_choice(
+                el,
+                nbeep_core::t(nbeep_core::Msg::ConfirmTitle),
+                nbeep_core::t(msg),
+                nbeep_core::t(nbeep_core::Msg::BtnApplyChange),
+                nbeep_core::t(nbeep_core::Msg::OfferCancel),
+                AlertCtx::SettingConfirm { key, value, prev },
+            );
+        }
         // 자동 재연결 tick(ⓑ) — 시점이 된 상대를 워커로 재시도(성패는 이벤트로 복귀).
         // 유휴 폴(~5Hz · M1-8x)이 이 지점을 주기적으로 지나간다.
         {
@@ -26516,6 +26585,8 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         held_first: HashMap::new(),
         want_first_card: None,
         pending_reset: false,
+        pending_setting_confirm: None,
+        setting_confirmed: false,
         conversations: HashMap::new(),
         dedup: nbeep_core::DedupIndex::new(),
         started: Instant::now(),
