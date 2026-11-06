@@ -238,6 +238,15 @@ impl Widget for PeerInfoWidget {
         // 소개글(있으면 아래 — 회색·작은 폰트·줄바꿈 접음 · 08-17 사용자 요청:
         // 종전엔 이름이 두 번 나왔다). 목록 2번째 줄과 같은 자리·규약.
         let mut y = av.bottom() + self.s(14) + ctx.text_height() + self.s(6);
+        // ★ 미검증 명시(ADR-0008 docs/22 "미검증이면 그 상태를 명시" · 11-06) — 이름·연락처는 **상대의 주장**이라 대조 전엔
+        //   이름 바로 아래에 한 줄(배지는 하단에만 있어 이름만 보고 믿는 착시가 있었다). 내 기기(형제)는 제외.
+        if !self.info.verified && !self.info.own_device {
+            ctx.select_font(FontSlot::Status, false);
+            let note = t(Msg::CardUnverifiedNote);
+            let nw = ctx.text_width(note);
+            ctx.text(b.x + (b.w - nw) / 2, y, b, note, theme.text);
+            y += ctx.text_height() + self.s(4);
+        }
         let bio_one: String = self
             .info
             .bio

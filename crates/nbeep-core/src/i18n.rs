@@ -1096,6 +1096,8 @@ pub enum Msg {
     CardLastChat,
     CardPrivate,
     CardNoRecord,
+    /// 카드 이름 아래 한 줄 — 미검증 상대의 이름·연락처는 상대의 주장(ADR-0008 · 11-06).
+    CardUnverifiedNote,
     CardImageCached,
     /// `{0}` = 수신 시각 상대 표기.
     CardImageCachedAt,
@@ -2391,6 +2393,12 @@ impl Msg {
             Msg::CardLastSeen => ["Last seen", "최근 접속", "最近上线", "最終接続"],
             Msg::CardLastChat => ["Last chat", "최근 대화", "最近对话", "最近の会話"],
             Msg::CardPrivate => ["(private)", "(비공개)", "(未公开)", "(非公開)"],
+            Msg::CardUnverifiedNote => [
+                "Unverified — name and contact details are this peer's own claim",
+                "미검증 — 이름·연락처는 상대의 주장입니다",
+                "未验证 — 姓名和联系方式为对方自述",
+                "未検証 — 名前・連絡先は相手の自己申告です",
+            ],
             Msg::CardNoRecord => ["(no record)", "(기록 없음)", "(无记录)", "(記録なし)"],
             Msg::CardImageCached => ["Image · cached", "이미지 · 캐시됨", "图片 · 已缓存", "画像 · キャッシュ済み"],
             Msg::CardImageCachedAt => ["Image · cached · received {}", "이미지 · 캐시됨 · {} 수신", "图片 · 已缓存 · {} 收到", "画像 · キャッシュ済み · {} 受信"],
