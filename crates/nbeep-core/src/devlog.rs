@@ -136,10 +136,22 @@ const fn bit(layer: Layer, level: Level) -> u64 {
 }
 
 /// 이 층·수준의 상세 로그를 만들어야 하는가 — **항상 인라인**(호출 0 · 분기 1).
+/// `Basic`은 게이트 밖(상태바 문구 · 부팅 1회·정체 보고 — 종전엔 마스크에 비트가 없어 **영원히 거짓**이던 결함 · LOG-2 11-06).
+/// feature `devlog`를 끄면 상수 `false` — 호출 지점의 분기·인자 평가까지 컴파일에서 사라진다(docs/52 §5).
 #[inline(always)]
 #[must_use]
+#[cfg(feature = "devlog")]
 pub fn wants(layer: Layer, level: Level) -> bool {
-    MASK.load(Ordering::Relaxed) & bit(layer, level) != 0
+    matches!(level, Level::Basic) || MASK.load(Ordering::Relaxed) & bit(layer, level) != 0
+}
+
+/// feature `devlog` 꺼짐 — 상수 false.
+#[inline(always)]
+#[must_use]
+#[cfg(not(feature = "devlog"))]
+pub fn wants(layer: Layer, level: Level) -> bool {
+    let _ = (layer, level);
+    false
 }
 
 /// 마스크 교체(설정·환경변수 → 부팅·변경 시).
@@ -350,6 +362,19 @@ mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
 
+    /// LOG-2(11-06): Basic은 마스크와 무관하게 통과(종전 결함 = 영원히 거짓) · feature off면 전부 거짓.
+    #[test]
+    fn basic_passes_gate_regardless_of_mask() {
+        if cfg!(feature = "devlog") {
+            set_mask(0);
+            assert!(wants(Layer::App, Level::Basic));
+            assert!(!wants(Layer::App, Level::Decide));
+        } else {
+            assert!(!wants(Layer::App, Level::Basic));
+        }
+    }
+
+    #[cfg(feature = "devlog")]
     #[test]
     fn mask_parse_and_gate_both_branches() {
         set_mask(0);

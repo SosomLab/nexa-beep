@@ -8,6 +8,9 @@ authors.workspace = true
 repository.workspace = true
 
 [features]
+# 상세 로그(docs/52 §5 · LOG-2 · 11-06) — 끄면 `devlog::wants()`가 상수 false라 호출 지점의 분기까지 사라진다(릴리스 기본 on).
+default = ["devlog"]
+devlog = []
 # 테스트용 포트 구현체(FixedClock/SeededRng/CollectingMeter …) 노출.
 # 다른 크레이트는 dev-dependency에서 이 feature를 켜 재사용한다(릴리스엔 미포함).
 testkit = []

@@ -74,7 +74,7 @@ fn base_attrs() -> winit::window::WindowAttributes {
 /// 않는다**(문자열·시각·할당 0 — 원자 load 1 + 분기 1). 켜져 있으면 [`DRec`]를 만들어 느린 경로
 /// [`devlog_push`]로 넘긴다. 사용: `dlog!(self, DL::Conn, DV::Decide, "start_connect", |r| r.arg(..).rule(..).ok(..))`.
 macro_rules! dlog {
-    ($self:ident, $layer:expr, $level:expr, $func:literal, |$r:ident| $body:expr) => {
+    ($self:ident, $layer:expr, $level:expr, $func:expr, |$r:ident| $body:expr) => {
         if nbeep_core::devlog::wants($layer, $level) {
             let $r = DRec::new($layer, $level, $func);
             let __rec: DRec = $body;
@@ -237,6 +237,23 @@ fn window_event_tag(ev: &WindowEvent) -> &'static str {
     }
 }
 
+/// 창 역할 태그(LOG-2 Ui 층 · 봉투 — PeerId·GroupId는 싣지 않는다).
+fn role_tag(role: Role) -> &'static str {
+    match role {
+        Role::Main => "main",
+        Role::ImageView => "image",
+        Role::Chat(_) => "chat",
+        Role::Settings => "settings",
+        Role::Picker => "picker",
+        Role::About => "about",
+        Role::License => "license",
+        Role::Devices => "devices",
+        Role::Log => "log",
+        Role::Profile => "profile",
+        _ => "other",
+    }
+}
+
 /// 상세 로그 한 줄(느린 경로 · 호출 자체가 드물다 · `#[cold]`로 뜨거운 경로 코드 배치에서 떨어뜨린다).
 /// 싱크 = 상태 로그 파일(M3-22 · 논블로킹 · `dev ` 접두) + `NEXA_DEVLOG`가 섰으면 stderr 거울.
 #[cold]
@@ -251,10 +268,12 @@ fn devlog_push(
     if stderr {
         eprintln!("[dev] {line}");
     }
+    // LOG-2(11-06) 지연 포맷 1단계 — `dev ` 접두 문자열을 한 번만 만들어 파일·링이 공유(종전 2회 format).
+    let dev = format!("dev {line}");
     if let Some(l) = log {
-        l.log(&format!("dev {line}"));
+        l.log(&dev);
     }
-    ring_push(ring.0, ring.1, format!("dev {line}"));
+    ring_push(ring.0, ring.1, dev);
 }
 
 /// 로그 링 상한(LOG-1) — 2000줄 × ≈120B ≈ 240KB 상한(DR-5 안).
@@ -7813,6 +7832,9 @@ impl App {
             },
         );
         self.main_id = Some(id);
+        dlog!(self, DL::Ui, DV::Detail, "window_created", |r| r
+            .arg("role", "main")
+            .ok(""));
         self.layout_window(id);
         // 첫 그리기 전에 목록을 한 번 조립한다 — 부팅 복원(캐시 프로필·핀 행)이
         // 발견 이벤트 없이도 바로 보이게(08-14 · 그전엔 첫 ANNOUNCE까지 빈 목록).
@@ -9384,13 +9406,15 @@ impl App {
         }
         self.sibling_hints
             .insert(peer, (tag, std::time::Instant::now()));
-        if self.user_trace {
-            eprintln!(
-                "[user] hint from {} match={}",
+        self.utrace(
+            "hint_from",
+            None,
+            format!(
+                "hint from {} match={}",
                 peer.short(),
                 self.is_sibling_candidate(peer)
-            );
-        }
+            ),
+        );
         // 이미 XX로 선 세션이 있으면 세션 안에서 증명해 승격한다(재접속 없음 · 1회).
         if !self.siblings.contains(&peer) && self.conversations.contains_key(&peer) {
             self.send_user_proof(peer, false);
@@ -9426,9 +9450,11 @@ impl App {
         let _ = conv.out_tx.send(SessionCmd::Control(vec![
             nbeep_core::UserProof { proof }.encode()
         ]));
-        if self.user_trace {
-            eprintln!("[user] proof sent to {} force={force}", peer.short());
-        }
+        self.utrace(
+            "proof_sent_to",
+            None,
+            format!("proof sent to {} force={force}", peer.short()),
+        );
     }
 
     /// 상대 증명 대조 — 내 PSK로 같은 세션·반대 역할의 값을 재계산해 상수 시간 비교.
@@ -9444,9 +9470,11 @@ impl App {
         let Some((psk, (hh, initiator))) =
             psk.zip(conv.binding).filter(|_| self.user_state.active())
         else {
-            if self.user_trace {
-                eprintln!("[user] proof from {} deferred (not ready)", peer.short());
-            }
+            self.utrace(
+                "proof_from",
+                Some(false),
+                format!("proof from {} deferred (not ready)", peer.short()),
+            );
             return;
         };
         let ok = conv.proof_fails < 3 && {
@@ -9455,14 +9483,18 @@ impl App {
         };
         if !ok {
             conv.proof_fails = conv.proof_fails.saturating_add(1);
-            if self.user_trace {
-                eprintln!("[user] proof from {} rejected", peer.short());
-            }
+            self.utrace(
+                "proof_from",
+                Some(false),
+                format!("proof from {} rejected", peer.short()),
+            );
             return;
         }
-        if self.user_trace {
-            eprintln!("[user] proof from {} verified", peer.short());
-        }
+        self.utrace(
+            "proof_from",
+            Some(true),
+            format!("proof from {} verified", peer.short()),
+        );
         self.note_sibling(peer, true);
         self.send_user_proof(peer, true); // 회신(이미 보냈으면 no-op)
         self.send_user_key_blob(peer); // 승격 경로도 키 동기(D-32-8)
@@ -9597,9 +9629,11 @@ impl App {
     /// 세션 성립 시 형제 판정 반영 — psk로 성립했으면 형제 집합에 넣고 알린다.
     /// psk가 아니면 **빼지 않는다**(같은 상대의 다른 경로가 XX일 수 있다 · 종료 시 제거).
     fn note_sibling(&mut self, peer: PeerId, via_psk: bool) {
-        if self.user_trace {
-            eprintln!("[user] session {} via_psk={via_psk}", peer.short());
-        }
+        self.utrace(
+            "session",
+            None,
+            format!("session {} via_psk={via_psk}", peer.short()),
+        );
         if via_psk && self.siblings.insert(peer) {
             let title = self.peer_title(peer);
             self.set_status(nbeep_core::tf(
@@ -9637,12 +9671,14 @@ impl App {
         conv.succ_sent = true;
         let n = frames.len();
         let _ = conv.out_tx.send(SessionCmd::Control(frames));
-        if self.user_trace {
-            eprintln!(
-                "[user] succession chain({n}) sent to {} ver={last_ver}",
+        self.utrace(
+            "succession_chain",
+            None,
+            format!(
+                "succession chain({n}) sent to {} ver={last_ver}",
                 peer.short()
-            );
-        }
+            ),
+        );
     }
 
     /// 내 사슬에 문서 추가(중복 = 무시) + 파일 저장(상한 초과 = 오래된 것부터 버림).
@@ -9672,24 +9708,22 @@ impl App {
     /// (새 비밀키는 뒤따르는 봉인본이 "후계가 이긴다"로 채택).
     fn on_succession(&mut self, peer: PeerId, doc: &nbeep_core::Succession) {
         if !doc.devices.contains(&peer) || doc.revoked.contains(&peer) {
-            if self.user_trace {
-                eprintln!(
-                    "[user] succession from {} rejected: presenter",
-                    peer.short()
-                );
-            }
+            self.utrace(
+                "succession_from",
+                Some(false),
+                format!("succession from {} rejected: presenter", peer.short()),
+            );
             return;
         }
         let msg = doc.to_sign();
         if !nbeep_crypto::userkey::verify(&doc.old_pub, &msg, &doc.sig_old)
             || !nbeep_crypto::userkey::verify(&doc.new_pub, &msg, &doc.sig_new)
         {
-            if self.user_trace {
-                eprintln!(
-                    "[user] succession from {} rejected: signature",
-                    peer.short()
-                );
-            }
+            self.utrace(
+                "succession_from",
+                Some(false),
+                format!("succession from {} rejected: signature", peer.short()),
+            );
             return;
         }
         match self.succ_seen.get(&doc.old_pub) {
@@ -9697,9 +9731,11 @@ impl App {
             Some((v, np)) if *v == doc.ver && *np != doc.new_pub => {
                 // 정직한 충돌 — 자동 승자 없음(D-32-9).
                 self.succ_conflicts.insert(doc.old_pub);
-                if self.user_trace {
-                    eprintln!("[user] succession CONFLICT for old key (ver {v})");
-                }
+                self.utrace(
+                    "succession_conflict_for",
+                    Some(false),
+                    format!("succession CONFLICT for old key (ver {v})"),
+                );
                 self.set_status(nbeep_core::t(nbeep_core::Msg::CardSuccessionConflict));
                 self.refresh_peer_info_card(peer);
                 return;
@@ -9740,14 +9776,16 @@ impl App {
         if on_my_chain && self.siblings.contains(&peer) && doc.devices.contains(&me) {
             self.push_my_succession(doc.clone());
         }
-        if self.user_trace {
-            eprintln!(
-                "[user] succession from {} applied ver={} revoked={}",
+        self.utrace(
+            "succession_from",
+            Some(true),
+            format!(
+                "succession from {} applied ver={} revoked={}",
                 peer.short(),
                 doc.ver,
                 doc.revoked.len()
-            );
-        }
+            ),
+        );
         self.refresh_peer_info_card(peer);
         let mut inv = Invalidations::default();
         self.refresh_rows(&mut inv);
@@ -9765,13 +9803,15 @@ impl App {
             return;
         }
         let now = self.now_ms();
-        if self.user_trace {
-            eprintln!(
-                "[user] rotate press now={now} armed={} live={}",
+        self.utrace(
+            "rotate_press_now",
+            Some(true),
+            format!(
+                "rotate press now={now} armed={} live={}",
                 self.rotate_armed_ms,
                 self.conversations.len()
-            );
-        }
+            ),
+        );
         if self.rotate_done_ms > 0 && now.saturating_sub(self.rotate_done_ms) < ROTATE_COOLDOWN_MS {
             return; // 잠금 창(연타 방지) — 버튼도 잠겨 있다
         }
@@ -10961,9 +11001,11 @@ impl App {
             sig,
         };
         let _ = conv.out_tx.send(SessionCmd::Control(vec![hello.encode()]));
-        if self.user_trace {
-            eprintln!("[user] hello sent to {} ver={ver}", peer.short());
-        }
+        self.utrace(
+            "hello_sent_to",
+            None,
+            format!("hello sent to {} ver={ver}", peer.short()),
+        );
     }
 
     /// 기기 집합이 바뀌었다 — 버전 +1(영속) 후 살아 있는 전 세션에 재송신(변경 시 능동 재전송).
@@ -11177,14 +11219,16 @@ impl App {
                 let _ = conv.out_tx.send(SessionCmd::Control(vec![frame.clone()]));
             }
         }
-        if self.user_trace {
-            eprintln!(
-                "[user] copy to siblings={} for {} seq={}",
+        self.utrace(
+            "copy_to_siblings",
+            None,
+            format!(
+                "copy to siblings={} for {} seq={}",
                 targets.len(),
                 to.short(),
                 msg.seq
-            );
-        }
+            ),
+        );
     }
 
     /// sender copy 수신 — **형제 세션에서 온 것만**(fail-closed). `to`와의 대화방에 **내 말풍선**
@@ -11209,9 +11253,11 @@ impl App {
             to,
             me,
         ) {
-            if self.user_trace {
-                eprintln!("[user] copy from {} dropped (not sibling)", peer.short());
-            }
+            self.utrace(
+                "copy_from",
+                Some(false),
+                format!("copy from {} dropped (not sibling)", peer.short()),
+            );
             return;
         }
         if !self.dedup.accept(peer, seq) {
@@ -11240,9 +11286,11 @@ impl App {
         if let Some(chat) = self.chats.get_mut(&self.view_key(to)) {
             chat.push_line(line, &mut inv);
         }
-        if self.user_trace {
-            eprintln!("[user] copy from {} -> thread {}", peer.short(), to.short());
-        }
+        self.utrace(
+            "copy_from",
+            None,
+            format!("copy from {} -> thread {}", peer.short(), to.short()),
+        );
         self.redraw_conversation(to);
         self.refresh_and_redraw();
     }
@@ -11316,20 +11364,21 @@ impl App {
             conv.digest_sent = true;
             let _ = conv.out_tx.send(SessionCmd::Control(vec![frame.encode()]));
         }
-        if self.user_trace {
-            eprintln!("[user] sync digest to {} entries={n}", peer.short());
-        }
+        self.utrace(
+            "sync_digest_to",
+            None,
+            format!("sync digest to {} entries={n}", peer.short()),
+        );
     }
 
     /// 형제 디제스트 수신 — 내가 부족한 (스레드, 원 발신 기기)마다 청구 1건.
     fn on_sync_digest(&mut self, peer: PeerId, theirs: &nbeep_core::SyncDigest) {
         if !self.siblings.contains(&peer) || !self.user_state.active() {
-            if self.user_trace {
-                eprintln!(
-                    "[user] sync digest from {} dropped (not sibling)",
-                    peer.short()
-                );
-            }
+            self.utrace(
+                "sync_digest_from",
+                Some(false),
+                format!("sync digest from {} dropped (not sibling)", peer.short()),
+            );
             return;
         }
         let my_devs = self.my_devices();
@@ -11339,14 +11388,16 @@ impl App {
                 .into_iter()
                 .filter(|p| self.sync_thread_ok(p.thread, &my_devs))
                 .collect();
-        if self.user_trace {
-            eprintln!(
-                "[user] sync digest from {} entries={} pulls={}",
+        self.utrace(
+            "sync_digest_from",
+            None,
+            format!(
+                "sync digest from {} entries={} pulls={}",
                 peer.short(),
                 theirs.entries.len(),
                 pulls.len()
-            );
-        }
+            ),
+        );
         if pulls.is_empty() {
             return;
         }
@@ -11440,27 +11491,23 @@ impl App {
             return;
         };
         if !conv.sync_budget.take(bytes) {
-            if self.user_trace {
-                eprintln!(
-                    "[user] sync pull from {} refused: budget {}B/{}B (+{bytes}B)",
-                    peer.short(),
-                    conv.sync_budget.sent(),
-                    conv.sync_budget.limit()
-                );
-            }
+            let msg = format!(
+                "sync pull from {} refused: budget {}B/{}B (+{bytes}B)",
+                peer.short(),
+                conv.sync_budget.sent(),
+                conv.sync_budget.limit()
+            );
+            self.utrace("sync_pull_from", Some(false), msg);
             return;
         }
         frames.extend(read_frame);
         let _ = conv.out_tx.send(SessionCmd::Control(frames));
-        if self.user_trace {
-            eprintln!(
-                "[user] sync lines to {} thread {} origin {} after={} n={n} frames={nframes} bytes={bytes} replies={nreplies}",
+        self.utrace("sync_lines_to", None, format!("sync lines to {} thread {} origin {} after={} n={n} frames={nframes} bytes={bytes} replies={nreplies}",
                 peer.short(),
                 pull.thread.short(),
                 pull.origin.short(),
                 pull.after_seq
-            );
-        }
+            ));
     }
 
     /// 응답 수신 — `(origin, seq)` dedup 뒤 스레드에 넣고 시각순 정렬 · 내 키로 봉인 저장 · 모르는
@@ -11547,13 +11594,15 @@ impl App {
                 }
             }
         }
-        if self.user_trace {
-            eprintln!(
-                "[user] sync lines from {} -> thread {} added={n} unread+={unread_new}",
+        self.utrace(
+            "sync_lines_from",
+            None,
+            format!(
+                "sync lines from {} -> thread {} added={n} unread+={unread_new}",
                 peer.short(),
                 t.short()
-            );
-        }
+            ),
+        );
         self.redraw_conversation(t);
         self.refresh_and_redraw();
         self.update_main_title();
@@ -11598,14 +11647,16 @@ impl App {
                 }
             }
         }
-        if self.user_trace {
-            eprintln!(
-                "[user] sync replies from {} -> thread {} items={} applied={applied}",
+        self.utrace(
+            "sync_replies_from",
+            Some(true),
+            format!(
+                "sync replies from {} -> thread {} items={} applied={applied}",
                 peer.short(),
                 t.short(),
                 got.items.len()
-            );
-        }
+            ),
+        );
         if applied == 0 {
             return;
         }
@@ -11651,13 +11702,15 @@ impl App {
         } else {
             self.unread.insert(vk, remain);
         }
-        if self.user_trace {
-            eprintln!(
-                "[user] sync read from {} thread {} unread {cur}->{remain}",
+        self.utrace(
+            "sync_read_from",
+            None,
+            format!(
+                "sync read from {} thread {} unread {cur}->{remain}",
                 peer.short(),
                 vk.short()
-            );
-        }
+            ),
+        );
         let mut inv = Invalidations::default();
         self.refresh_rows(&mut inv);
         if let Some(mid) = self.main_id {
@@ -11698,18 +11751,19 @@ impl App {
     /// (PSK 세션·증명만이 형제다 — 키만 쥔 잃어버린 기기는 §3-5).
     fn on_user_hello(&mut self, peer: PeerId, hello: &nbeep_core::UserHello) {
         if !hello.devices.contains(&peer) {
-            if self.user_trace {
-                eprintln!(
-                    "[user] hello from {} rejected: presenter not listed",
-                    peer.short()
-                );
-            }
+            self.utrace(
+                "hello_from",
+                Some(false),
+                format!("hello from {} rejected: presenter not listed", peer.short()),
+            );
             return;
         }
         if !nbeep_crypto::userkey::verify(&hello.user_pub, &hello.to_sign(), &hello.sig) {
-            if self.user_trace {
-                eprintln!("[user] hello from {} rejected: bad signature", peer.short());
-            }
+            self.utrace(
+                "hello_from",
+                Some(false),
+                format!("hello from {} rejected: bad signature", peer.short()),
+            );
             return;
         }
         // ★ 되먹임 방지([13 §12-1] · 09-06 실기: 상대 버전이 오를 때마다 내 버전을 올려 재송신
@@ -11718,15 +11772,17 @@ impl App {
         let changed = self
             .trust
             .record_user(peer, hello.user_pub, &hello.name, hello.list_ver);
-        if self.user_trace {
-            eprintln!(
-                "[user] hello from {} ok name={} devices={} ver={} changed={changed}",
+        self.utrace(
+            "hello_from",
+            None,
+            format!(
+                "hello from {} ok name={} devices={} ver={} changed={changed}",
                 peer.short(),
                 hello.name,
                 hello.devices.len(),
                 hello.list_ver
-            );
-        }
+            ),
+        );
         if !changed {
             return;
         }
@@ -11766,9 +11822,11 @@ impl App {
                     sealed,
                 }
                 .encode()]));
-            if self.user_trace {
-                eprintln!("[user] keyblob sent to {}", peer.short());
-            }
+            self.utrace(
+                "keyblob_sent_to",
+                None,
+                format!("keyblob sent to {}", peer.short()),
+            );
         }
     }
 
@@ -11786,9 +11844,11 @@ impl App {
         let Some((theirs, at)) =
             crate::userident::open_key(crate::gate::SEAL_USERKEY, &m.wrap_key(), sealed)
         else {
-            if self.user_trace {
-                eprintln!("[user] keyblob from {} unreadable", peer.short());
-            }
+            self.utrace(
+                "keyblob_from",
+                Some(false),
+                format!("keyblob from {} unreadable", peer.short()),
+            );
             return;
         };
         let their_at = at.unwrap_or(u64::MAX); // 시각 없는 구본 = 가장 새것으로 취급
@@ -11804,14 +11864,16 @@ impl App {
                     (self.user_rt.key_created, mine.public()),
                     (their_at, theirs.public()),
                 ));
-        if self.user_trace {
-            eprintln!(
-                "[user] keyblob from {} adopt={adopt} (mine {} theirs {})",
+        self.utrace(
+            "keyblob_from",
+            Some(true),
+            format!(
+                "keyblob from {} adopt={adopt} (mine {} theirs {})",
                 peer.short(),
                 mine.user_id().short(),
                 theirs.user_id().short()
-            );
-        }
+            ),
+        );
         if !adopt {
             return;
         }
@@ -12193,9 +12255,11 @@ impl App {
         // ★ 형제 후보(ADR-0015 §3-4 힌트·기성립)면 XXpsk3로 연다 — 실패하면 XX로 1회 폴백
         //   (힌트가 틀렸거나 상대 기능 꺼짐 = 정상 결과 · 세션 사용 불가는 없다).
         let psk_opt = self.psk_for(peer);
-        if self.user_trace {
-            eprintln!("[user] connect {} psk={}", peer.short(), psk_opt.is_some());
-        }
+        self.utrace(
+            "connect",
+            None,
+            format!("connect {} psk={}", peer.short(), psk_opt.is_some()),
+        );
         std::thread::spawn(move || {
             // ★ 사다리 = `Transport` 하나(X-2 승격 · 11-06): 발견 경로 → 기억한 수동 주소 → 서버 랑데부(펀치→릴레이)를
             //   `connect` 안에서 순서대로 탄다(ADR-0003 §4 · 종전 X-2b ③은 여기서 세 단을 직접 꿰고 릴레이 단만 세션을
@@ -21330,6 +21394,26 @@ impl App {
     }
 
     /// 이 창의 입력 이벤트를 담당 위젯으로 라우팅한다.
+    /// `[user]` 트레이스(LOG-2 · 11-06) — 시나리오 도구(s4/group-scenario)가 stderr를 grep하므로 **eprintln은 그대로** 두고,
+    /// 같은 줄을 `User` 층 dlog로도 남긴다(판정이면 Decide ok/fail · 아니면 Detail). 봉투 원리: 호출자가 이름·본문·키를
+    /// 넣지 않는다(지문 short · 개수 · 길이 · bool만 — hello ok의 name= 줄은 승격에서 제외).
+    fn utrace(&self, func: &'static str, decide: Option<bool>, line: String) {
+        if self.user_trace {
+            eprintln!("[user] {line}");
+        }
+        match decide {
+            Some(true) => dlog!(self, DL::User, DV::Decide, func, |r| r
+                .arg("msg", &line)
+                .ok("")),
+            Some(false) => dlog!(self, DL::User, DV::Decide, func, |r| r
+                .arg("msg", &line)
+                .fail("")),
+            None => dlog!(self, DL::User, DV::Detail, func, |r| r
+                .arg("msg", &line)
+                .ok("")),
+        }
+    }
+
     /// 설정 → 투명도 값(dir3 DR-22) · 새 창 전역도 갱신.
     fn read_opacity_prefs(&mut self) {
         let pct = |k: &str| -> u8 {
@@ -23749,14 +23833,16 @@ impl ApplicationHandler<AppEvent> for App {
                         }
                     }
                 }
-                if self.user_trace {
-                    eprintln!(
-                        "[user] closed {} sibling={} known={}",
+                self.utrace(
+                    "closed",
+                    None,
+                    format!(
+                        "closed {} sibling={} known={}",
                         peer.short(),
                         self.siblings.contains(&peer),
                         self.is_known_device(peer)
-                    );
-                }
+                    ),
+                );
                 dlog!(self, DL::Sess, DV::Decide, "closed", |r| r
                     .arg("peer", peer.short())
                     .arg("sibling", self.siblings.contains(&peer))
@@ -25487,6 +25573,23 @@ impl ApplicationHandler<AppEvent> for App {
         {
             let role = self.windows.get(&id).map(|e| e.role);
             eprintln!("[win] {role:?} {event:?}");
+        }
+        // LOG-2(11-06) UI 층 — 창 수명·포커스만(Ui/Trace · 역할 태그 + 이벤트 태그 · 페이로드 없음: 드롭 파일 경로·IME
+        //   프리에딧·창 제목(상대 이름)은 싣지 않는다 · 봉투 원리).
+        if matches!(
+            event,
+            WindowEvent::Focused(_)
+                | WindowEvent::CloseRequested
+                | WindowEvent::Destroyed
+                | WindowEvent::Resized(_)
+                | WindowEvent::Occluded(_)
+        ) {
+            let role = self.windows.get(&id).map_or("none", |e| role_tag(e.role));
+            let ev = window_event_tag(&event);
+            dlog!(self, DL::Ui, DV::Trace, "window_event", |r| r
+                .arg("role", role)
+                .arg("event", ev)
+                .ok(""));
         }
         match event {
             WindowEvent::CloseRequested => {
