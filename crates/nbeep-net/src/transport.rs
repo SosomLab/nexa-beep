@@ -53,6 +53,14 @@ pub struct PeerHint {
     pub caps: Caps,
     /// 세션 세대(M1-13 ⓒ · [`nbeep_core::SESSION_GEN`]) — 0 = 구버전 광고 · [`nbeep_core::FOREIGN_GEN`] = 미래 와이어(비호환 표시).
     pub gen: u8,
+    /// 출처(X-2f · ADR-0003 §9 B) — Local = LAN 광고 · Rendezvous = 서버 명부. **Locator가 아니다**(주소·포트 없음 · 표시·수명 판정 전용).
+    pub origin: nbeep_core::HintOrigin,
+    /// 수명 방식(X-2f · §9 D) — PeerTable 만료 규칙 선택(Advertised = TTL · Eventful = Withdrawn으로만).
+    pub liveness: nbeep_core::Liveness,
+    /// 관측 경로 토큰(불투명 · PeerTable `SourceId`) — LAN = 0 · 랑데부 = 세대별 1+(서버 재접속마다 다른 값).
+    pub source: u32,
+    /// 공개 카드(랑데부 전용 · 경계에서 정제 완료 · ADR-0003 §9 A) — LAN 광고는 None.
+    pub profile: Option<nbeep_core::PublicCard>,
 }
 
 /// 발견 이벤트 — 등장·이탈([docs/06] FR-D-8).
@@ -60,8 +68,11 @@ pub struct PeerHint {
 pub enum DiscoveryEvent {
     /// 새 상대가 목록에 등장.
     Appeared(PeerHint),
-    /// 상대가 목록에서 사라짐(goodbye·타임아웃).
+    /// 상대가 목록에서 사라짐(goodbye·타임아웃) — LAN 경로(`source` 0) 의미 그대로.
     Vanished(PeerId),
+    /// **경로 하나**의 이탈(X-2f · §9 C) — 랑데부 명부 Down · 공개 해제 · 서버 접속 해제(일괄). 호스트는 `goodbye(peer, SourceId(source))`로
+    /// 접는다 — 다른 경로(LAN)가 살아 있으면 행은 남고 출처만 바뀐다.
+    Withdrawn { peer: PeerId, source: u32 },
     /// ★ 사용자 힌트(ADR-0015) — 상대가 낸 LAN_tag. 내 태그 셋과 같으면 "형제 후보"(미검증 ·
     /// 판정은 XXpsk3). 태그가 다르면 무시.
     UserHint { peer: PeerId, tag: [u8; 16] },

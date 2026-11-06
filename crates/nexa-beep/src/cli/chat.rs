@@ -1736,6 +1736,7 @@ fn drain_discovery(
     while let Ok(ev) = rx.try_recv() {
         match ev {
             nbeep_net::DiscoveryEvent::UserHint { .. } => {} // CLI 단말은 사용자 층 없음
+            nbeep_net::DiscoveryEvent::Withdrawn { .. } => {} // LocalDirect만 — 랑데부 경로 이탈은 GUI 사다리 전송 몫(X-2f)
             nbeep_net::DiscoveryEvent::Appeared(h) => {
                 let mut p = peers.borrow_mut();
                 if !p.iter().any(|(id, _)| *id == h.peer) {

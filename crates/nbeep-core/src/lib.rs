@@ -74,7 +74,8 @@ pub use mux::{MuxSession, StreamId, MAX_PAYLOAD};
 pub use name::{default_display_name, neutral_from_host, DisplayName, NameError};
 pub use path::{class_of_ip, file_allowed, PathClass};
 pub use peers::{
-    DepartReason, PeerEntry, PeerEvent, PeerTable, SourceId, FOREIGN_GEN, SESSION_GEN,
+    DepartReason, HintOrigin, Liveness, Observation, PeerEntry, PeerEvent, PeerTable, PublicCard,
+    SourceId, FOREIGN_GEN, SESSION_GEN,
 };
 pub use pipeline::{ActionCtx, ActionId, Interceptor, Pipeline, Reject};
 pub use ports::{

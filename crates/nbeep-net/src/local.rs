@@ -228,6 +228,10 @@ impl LocalDirect {
                                 name: o.packet.name,
                                 caps: Caps::default(),
                                 gen: o.gen,
+                                origin: nbeep_core::HintOrigin::Local,
+                                liveness: nbeep_core::Liveness::Advertised,
+                                source: 0, // LAN 경로 토큰(인터페이스 병합은 PeerAddrs가 이미 했다)
+                                profile: None,
                             };
                             // 매 관측을 전달 — 수신 측 PeerTable이 병합·생존 갱신한다(FR-D-6).
                             if disc_tx.send(DiscoveryEvent::Appeared(hint)).is_err() {

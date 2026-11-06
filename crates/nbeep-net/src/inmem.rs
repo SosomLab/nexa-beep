@@ -56,6 +56,10 @@ impl InMemoryBus {
             name,
             caps,
             gen: nbeep_core::SESSION_GEN,
+            origin: nbeep_core::HintOrigin::Local,
+            liveness: nbeep_core::Liveness::Advertised,
+            source: 0,
+            profile: None,
         };
 
         {

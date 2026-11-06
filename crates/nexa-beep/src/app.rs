@@ -917,12 +917,6 @@ const MAIN_MIN_W: f64 = 474.0;
 /// 메인 창 최소 높이(논리 px).
 const MAIN_MIN_H: f64 = 689.0;
 
-/// roster lazy 편입 — 한 틱(2s)에 목록으로 옮기는 최대 수(08-22 사용자 확정:
-/// "한 번에 전부"는 메인 루프를 흔든다 — 배치로 나눠 다음 틱이 이어받는다).
-const ROSTER_BATCH: usize = 256;
-/// roster 보관 상한(악의·폭주 서버 방어) — 초과분은 버리고 상태바 1회 고지.
-const ROSTER_MAX: usize = 4096;
-
 fn server_target(mode: &str, address: &str, port: &str) -> Option<String> {
     if mode != "managed" {
         return None;
@@ -3952,19 +3946,6 @@ struct App {
     /// ★ 테스트 실패 상태(08-22 사용자 확정 — 경고 배경 노트 + 서버 미사용).
     /// Some(사유) 동안 자동 접속이 서지 않는다. 해제 = 설정 변경 또는 다음 테스트.
     relay_test_failed: Option<String>,
-    /// 같은 서버의 **공개**(Announce) 사용자(X-2e roster) — 목록에 서버 상대 행으로
-    /// 병합된다. 서버가 존재(키)만 나르므로 이름은 지문 유도, 프로필은 성립 후 P2P.
-    server_peers: std::collections::HashSet<PeerId>,
-    /// roster 대기 큐(08-22 lazy — 한 틱에 [`ROSTER_BATCH`]개만 목록 편입: 폭주
-    /// 스냅숏이 메인 루프 한 번에 다 실리지 않게. 수신 자체는 relay 액터 스레드).
-    roster_pending: std::collections::VecDeque<PeerId>,
-    /// 서버가 알린 생존 명부(대기+표시 합집합) — Down 판정·중복 편입 방지.
-    roster_known: std::collections::HashSet<PeerId>,
-    /// roster 상한 절단 1회 고지 플래그(조용한 절단 금지 — [13 §12-1] 결).
-    roster_capped: bool,
-    /// 서버 공개 카드(08-22 — PeerUp 동봉 · 이름/이메일/소개): **서버 중계 표시
-    /// 전용**(미확인) — 성립 후 종단 프로필이 오면 그쪽이 이긴다(peer_profiles 우선).
-    server_cards: HashMap<PeerId, (String, String, String)>,
     /// 목록 필터 바(08-22 사용자 확정 — 툴바 아래 칩 3그룹 · 설정 영속).
     filter_bar: nbeep_ui::FilterBarWidget,
     discovery: std::sync::mpsc::Receiver<nbeep_net::DiscoveryEvent>,
@@ -7086,8 +7067,11 @@ impl App {
                         self.table.forget(hint.peer);
                         continue;
                     }
+                    // ★ 랑데부 명부 힌트(X-2f · 11-06) — 광고가 아니라 이벤트(Up/Down · 상한은 전송이 걸었다): 감쇠에 걸리면
+                    //   재등장이 없어 영구 누락이므로 감쇠·LAN 프로필 동기 재연결(최대 4096명 폭주)은 LAN 광고에만 적용한다.
+                    let rendezvous = hint.origin == nbeep_core::HintOrigin::Rendezvous;
                     // 광고 폭주 감쇠(docs/38 §5 · M5-3 2차) — 12pps 초과면 500ms에 한 번만 반영(차단 아님 · 행 유지).
-                    if self.disc_throttled(hint.peer) {
+                    if !rendezvous && self.disc_throttled(hint.peer) {
                         continue;
                     }
                     // 최근 접속 관측(08-15 — 아는 상대만 · 60초 스로틀 영속).
@@ -7095,11 +7079,17 @@ impl App {
                     // 무변화 관측(생존 비컨)은 재조립 사유가 아니다(RL-16ⓑ ·
                     // 08-18) — observe의 None을 버리고 무조건 dirty를 세우면
                     // 상대가 광고하는 한 1.5초마다 목록 재조립·재도색이 영구다.
-                    if self
-                        .table
-                        .observe_gen(hint.peer, hint.name, hint.gen, nbeep_core::SourceId(0), now)
-                        .is_some()
-                    {
+                    let obs = nbeep_core::Observation {
+                        peer: hint.peer,
+                        name: hint.name,
+                        gen: hint.gen,
+                        source: nbeep_core::SourceId(hint.source),
+                        origin: hint.origin,
+                        liveness: hint.liveness,
+                        profile: hint.profile,
+                    };
+                    // 병합 판정은 PeerTable(FR-D-6 · ADR-0003 §9 C) — 출처는 경로 토큰으로 접힌다(LAN 0 · 랑데부 세대별).
+                    if self.table.observe_with(obs, now).is_some() {
                         changed = true;
                         startup_mark(4); // INS-3 ⑤ 첫 피어 관측(첫 기록만 남는다)
                         dlog!(self, DL::Disc, DV::Detail, "discovery", |r| r
@@ -7116,7 +7106,7 @@ impl App {
                         //   (steady 비컨은 observe None = 재트리거 없음) — 사다리는
                         //   실패 시 백오프로 스스로 다시 건다. or_insert = 진행
                         //   중 표식·기존 백오프 불침투(M4-6과 같은 문법).
-                        if !self.conversations.contains_key(&hint.peer) {
+                        if !self.conversations.contains_key(&hint.peer) && !rendezvous {
                             self.seed_reconnect(hint.peer);
                             // ★ 대기분이 있는 상대가 **나타난 순간**(observe 변화 = 등장·개명)은
                             //   백오프를 기다리지 않는다(10-19 사용자 — "온라인인 걸 아는 그 순간") —
@@ -7141,6 +7131,14 @@ impl App {
                         // or_insert — 진행 중 표식(u64::MAX)·기존 백오프를 덮지 않는다
                         // (Appeared는 비컨마다 온다 — 덮으면 1.5초마다 재시도 폭주).
                         self.seed_reconnect(hint.peer);
+                    }
+                }
+                // ★ 경로 하나의 이탈(X-2f) — LAN goodbye(source 0)와 랑데부 Down/해제(세대 토큰)가 같은 접기: 마지막 경로였을 때만
+                //   이탈, 남은 경로가 있으면 강등 `Updated`(행 유지 · 재조립만).
+                DiscoveryEvent::Withdrawn { peer, source } => {
+                    if let Some(ev) = self.table.goodbye(peer, nbeep_core::SourceId(source)) {
+                        changed = true;
+                        departed.push(ev);
                     }
                 }
                 DiscoveryEvent::Vanished(peer) => {
@@ -7229,22 +7227,14 @@ impl App {
                     name: name.clone(),
                     paths: 0, // 발견 경로 없음 — 세션·수동 주소로만 닿는 상대
                     gen: 0,
+                    local: false,
+                    rendezvous: false,
+                    profile: None,
                 });
             }
         }
-        // 같은 서버의 공개 사용자(X-2e roster) — LAN ∪ 서버(32 §12-5). 존재만
-        // 아는 상태라 이름 = 지문 유도(성립하면 프로필 프리페치가 채운다). 이미
-        // 발견/기존 상대면 그 행이 이긴다(중복 금지).
-        for &peer in &self.server_peers {
-            if self.table.get(peer).is_none() && !self.extra_peers.contains_key(&peer) {
-                entries.push(nbeep_core::PeerEntry {
-                    peer,
-                    name: nbeep_core::default_display_name(None, &peer),
-                    paths: 0, // 경로 = 서버(클릭 시 사다리 — start_connect가 안다)
-                    gen: 0,
-                });
-            }
-        }
+        // 같은 서버의 공개 사용자(X-2e roster)는 X-2f(11-06)부터 **테이블 항목**이다(사다리 전송이 발견 스트림으로 올리고
+        // PeerTable이 출처 경로로 병합) — 여기서 따로 합치지 않는다. 랑데부 전용 상대 = `entry.rendezvous_only()`.
         // ── 스레드 접기(ADR-0015 S3 · docs/46 §5-2): 같은 사용자의 기기 N대 = 한 행. 행 대표 =
         //   세션 중 > 발견 > 대표 키(온라인·경로 표시가 살아 있는 기기를 따른다 · 클릭은 activate가
         //   뷰 키로 접는다). 묶음이 하나뿐인 상대(대부분)는 그대로 통과.
@@ -7266,7 +7256,7 @@ impl App {
                     &group,
                     |p| listed.contains(&p),
                     |p| self.conversations.contains_key(&p),
-                    |p| self.table.get(p).is_some() || self.server_peers.contains(&p),
+                    |p| self.table.get(p).is_some(),
                 ) {
                     keep.insert(rep);
                 }
@@ -7292,8 +7282,7 @@ impl App {
             let lvl = self.effective_trust(e.peer);
             // ★ 왕래 기준 승격(확정안) — roster로만 아는(왕래 전무·미발견) 상대는
             //   그룹1 'Server'를 골랐을 때만 나타난다. 핀·인증·세션이 생기면 전체로.
-            let roster_only = self.server_peers.contains(&e.peer)
-                && self.table.get(e.peer).is_none()
+            let roster_only = e.rendezvous_only()
                 && !self.conversations.contains_key(&e.peer)
                 && lvl == nbeep_core::TrustLevel::Unverified;
             if roster_only && fpath != "server" {
@@ -7307,9 +7296,8 @@ impl App {
             }
             // 온라인 = 지금 닿는 상대(08-23 확장): 세션 ∨ LAN 발견 ∨ **서버 roster
             // 생존**(PeerUp/PeerDown이 실시간 — 목록에 있다 = 서버 접속 중).
-            let online = self.conversations.contains_key(&e.peer)
-                || self.table.get(e.peer).is_some()
-                || self.server_peers.contains(&e.peer);
+            let online =
+                self.conversations.contains_key(&e.peer) || self.table.get(e.peer).is_some(); // 테이블 = LAN ∪ 서버 명부(X-2f)
             match fpres.as_str() {
                 "online" if !online => return false,
                 "offline" if online => return false,
@@ -7331,8 +7319,8 @@ impl App {
                 // 접속 계층 — 세션 중(0) > 발견됨(1) > 오프라인(2).
                 let tier = if self.conversations.contains_key(&e.peer) {
                     0
-                } else if self.table.get(e.peer).is_some() {
-                    1
+                } else if self.table.get(e.peer).is_some_and(|t| t.local) {
+                    1 // 랑데부 전용은 종전처럼 오프라인 계층(2)
                 } else {
                     2
                 };
@@ -7364,10 +7352,11 @@ impl App {
                     // 서버 공개 카드 폴백(08-22 — roster 상대의 공개 정보 즉시 표시 ·
                     // 종단 프로필이 오면 위가 이긴다).
                     .or_else(|| {
-                        self.server_cards
-                            .get(&entry.peer)
-                            .filter(|c| !c.0.is_empty())
-                            .map(|c| c.0.clone())
+                        entry
+                            .profile
+                            .as_ref()
+                            .filter(|c| !c.name.is_empty())
+                            .map(|c| c.name.clone())
                     });
                 // 소개글(08-17) — 목록 2번째 줄(줄바꿈은 위젯이 접는다).
                 let bio = self
@@ -7376,8 +7365,8 @@ impl App {
                     .and_then(|p| p.bio.clone())
                     .or_else(|| {
                         // 카드 폴백 — 소개가 없으면 공개 이메일이라도(식별 재료).
-                        self.server_cards.get(&entry.peer).and_then(|c| {
-                            let v = if c.2.is_empty() { &c.1 } else { &c.2 };
+                        entry.profile.as_ref().and_then(|c| {
+                            let v = if c.bio.is_empty() { &c.email } else { &c.bio };
                             (!v.is_empty()).then(|| {
                                 nbeep_core::DisplayName::parse(v)
                                     .map(|d| d.as_str().to_string())
@@ -7435,7 +7424,6 @@ impl App {
                 let last_seen_label = ago_label(self.trust.meta(entry.peer).0);
                 // 프레즌스(08-23 — 점 색 축): 필터 판정과 같은 정의.
                 let online = self.table.get(entry.peer).is_some()
-                    || self.server_peers.contains(&entry.peer)
                     || self.conversations.contains_key(&entry.peer);
                 let own_device =
                     self.siblings.contains(&entry.peer) || known_devices.contains(&entry.peer); // = is_own_device (09-26)
@@ -8567,90 +8555,14 @@ impl App {
         }
         if let Some(c) = &self.relay {
             if c.is_alive() {
-                // roster 델타 소비(X-2e · ★08-22 lazy 개정) — 수신은 relay 액터
-                // 스레드가 이미 하고, 여기서는 **한 틱에 ROSTER_BATCH개만** 목록에
-                // 편입한다(폭주 스냅숏이 메인 루프 한 번에 다 실리지 않게 — 남은
-                // 것은 대기 큐가 들고 다음 틱이 이어받는다).
-                let my = self.identity.peer_id();
-                let mut touched = false;
-                for ev in c.poll_roster() {
-                    match ev {
-                        nbeep_relay::RosterEvent::Up(p, card) => {
-                            if p == my {
-                                continue;
-                            }
-                            // ★ 대기분 있는 상대가 서버에 떴다(10-19) — 즉시 재연결 후보(서버 사다리).
-                            if self.pending_direct.contains_key(&p)
-                                && !self.conversations.contains_key(&p)
-                            {
-                                let e = self.reconnect.entry(p).or_insert((0, 0));
-                                if e.1 != u64::MAX {
-                                    *e = (0, 0);
-                                }
-                            }
-                            // 공개 카드(08-22) — 이름은 표시 이름 정제(DisplayName)
-                            // 통과분만, 이메일·소개는 제어 문자 제거(서버 중계 =
-                            // 미검증 입력 · fail-closed). 갱신도 이 이벤트로 온다.
-                            if let Some((n, e, b)) = nbeep_relay::decode_card(&card) {
-                                let clean = |s: &str| -> String {
-                                    s.chars().filter(|c| !c.is_control()).take(200).collect()
-                                };
-                                let name = nbeep_core::DisplayName::parse(&n)
-                                    .map(|d| d.as_str().to_string())
-                                    .unwrap_or_default();
-                                let val = (name, clean(&e), clean(&b));
-                                if self.server_cards.get(&p) != Some(&val) {
-                                    self.server_cards.insert(p, val);
-                                    touched |= self.server_peers.contains(&p);
-                                }
-                            }
-                            if !self.roster_known.contains(&p) {
-                                if self.roster_known.len() >= ROSTER_MAX {
-                                    if !self.roster_capped {
-                                        self.roster_capped = true;
-                                        self.set_status(nbeep_core::tf(
-                                            nbeep_core::Msg::StfRosterCapped,
-                                            &[&ROSTER_MAX.to_string()],
-                                        ));
-                                    }
-                                } else {
-                                    self.roster_known.insert(p);
-                                    self.roster_pending.push_back(p);
-                                }
-                            }
-                        }
-                        nbeep_relay::RosterEvent::Down(p) => {
-                            self.roster_known.remove(&p);
-                            self.server_cards.remove(&p);
-                            touched |= self.server_peers.remove(&p);
-                        }
-                    }
-                }
-                let mut moved = 0;
-                while moved < ROSTER_BATCH {
-                    let Some(p) = self.roster_pending.pop_front() else {
-                        break;
-                    };
-                    // 대기 중 Down으로 빠진 상대는 건너뛴다(known이 진실).
-                    if self.roster_known.contains(&p) && self.server_peers.insert(p) {
-                        touched = true;
-                        moved += 1;
-                    }
-                }
-                if touched {
-                    let mut inv = Invalidations::default();
-                    self.refresh_rows(&mut inv);
-                    if let Some(mid) = self.main_id {
-                        self.request_redraw(mid);
-                    }
-                }
+                // roster(X-2e)는 X-2f(11-06)부터 사다리 전송이 발견 스트림(`Appeared(origin Rendezvous)`/`Withdrawn`)으로
+                // 올린다 — 여기서는 서버 세션 생존만 본다.
                 return; // 붙어 있고 살아 있다
             }
             // 서버 세션 사망 관측 — 내려놓고 첫 단계부터 재시도(백오프는 실패가 올린다).
             self.relay = None;
             self.relay_backoff = (0, now);
-            self.clear_server_peers();
-            self.refresh_toolbar_server();
+            self.refresh_toolbar_server(); // 명부 이탈은 전송 펌프가 Withdrawn으로(X-2f)
             self.set_status(nbeep_core::t(nbeep_core::Msg::StServerLost));
         }
         if now < self.relay_backoff.1 {
@@ -8696,7 +8608,6 @@ impl App {
         }
         self.relay_backoff = (0, 0);
         self.relay_check_at = 0;
-        self.clear_server_peers();
         self.refresh_toolbar_server();
     }
 
@@ -8718,7 +8629,6 @@ impl App {
         if self.settings.get("net.server.mode") == "managed" {
             self.relay_hold = true;
         }
-        self.clear_server_peers();
         self.refresh_toolbar_server();
     }
 
@@ -8754,8 +8664,8 @@ impl App {
     fn refresh_server_card(&mut self) {
         if self.settings.get("net.server.announce") != "off" {
             let card = self.my_roster_card();
-            if let Some(c) = &self.relay {
-                c.set_announce(true, card);
+            if let Some(l) = &self.ladder {
+                l.set_announce(true, card); // X-2f — 전송 경유(명부 소비자가 전송)
             }
         }
     }
@@ -8973,22 +8883,6 @@ impl App {
             UserLevel::Off => t(Msg::ChipUserOff).to_string(),
             UserLevel::Blocked => t(Msg::ChipUserBlocked).to_string(),
             _ => tf(Msg::ChipfUser, &[&g.handle, &g.devices_known.to_string()]),
-        }
-    }
-
-    /// 서버 공개 목록 비우기(X-2e) — 접속 해제·재접속·공개 off 공용.
-    fn clear_server_peers(&mut self) {
-        self.roster_pending.clear();
-        self.roster_known.clear();
-        self.roster_capped = false;
-        self.server_cards.clear();
-        if !self.server_peers.is_empty() {
-            self.server_peers.clear();
-            let mut inv = Invalidations::default();
-            self.refresh_rows(&mut inv);
-            if let Some(mid) = self.main_id {
-                self.request_redraw(mid);
-            }
         }
     }
 
@@ -12733,11 +12627,8 @@ impl App {
                 "internet"
             };
         }
-        if self.table.get(peer).is_some() {
-            return "local";
-        }
-        if self.server_peers.contains(&peer) {
-            return "server";
+        if let Some(e) = self.table.get(peer) {
+            return if e.local { "local" } else { "server" }; // 테이블 출처(X-2f) — LAN 광고 > 랑데부 명부
         }
         if let Some(addr) = self.manual_addrs.get(&peer) {
             let ip = addr
@@ -16916,7 +16807,8 @@ impl App {
         use nbeep_net::Transport as _;
         let bound = local.tcp_port();
         let degraded = local.discovery_recv_degraded();
-        let ladder = nbeep_relay::LadderTransport::new(std::sync::Arc::new(local));
+        let ladder =
+            nbeep_relay::LadderTransport::new(std::sync::Arc::new(local), self.identity.peer_id());
         self.discovery = ladder.discovery();
         spawn_inbound_accept(
             ladder.incoming(),
@@ -16927,6 +16819,10 @@ impl App {
         // 붙어 있는 서버 접속은 새 사다리에 그대로 옮긴다(랑데부 단 유지) · 기억한 수동 주소도 다시 싣는다(X-2).
         if let Some(c) = &self.relay {
             ladder.set_relay(Some(c));
+            // 새 세대 명부는 공개 재지정으로 스냅숏을 다시 받는다(X-2f — 테이블도 새로 만들어 비어 있다).
+            if self.settings.get("net.server.announce") != "off" {
+                ladder.set_announce(true, self.my_roster_card());
+            }
         }
         for (p, a) in &self.manual_addrs {
             ladder.note_endpoint(*p, a);
@@ -17412,11 +17308,8 @@ impl App {
                 // 프레즌스 공개 hot-swap(X-2e) — 재접속 없이 즉시 반영.
                 "net.server.announce" => {
                     let on = value == "on";
-                    if let Some(c) = &self.relay {
-                        c.set_announce(on, self.my_roster_card());
-                    }
-                    if !on {
-                        self.clear_server_peers();
+                    if let Some(l) = &self.ladder {
+                        l.set_announce(on, self.my_roster_card()); // off = 전송이 명부를 일괄 Withdrawn(X-2f)
                     }
                 }
                 // 수신 파일 상한(08-18) — 연결된 전 세션 hot-swap(새 오퍼부터 적용).
@@ -23492,7 +23385,9 @@ impl ApplicationHandler<AppEvent> for App {
                         }
                         // 프레즌스 공개(X-2e — 기본 on · 설정 hot-swap은 별도 arm).
                         if self.settings.get("net.server.announce") != "off" {
-                            client.set_announce(true, self.my_roster_card());
+                            if let Some(l) = &self.ladder {
+                                l.set_announce(true, self.my_roster_card());
+                            }
                         }
                         self.relay = Some(client);
                         self.refresh_toolbar_server();
@@ -26106,7 +26001,8 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
             listen_port = Some(local.tcp_port());
             discovery_degraded = local.discovery_recv_degraded();
             // ★ 사다리 전송(X-2 승격 · 11-06): 발견 경로 → 수동 주소 → 서버 랑데부를 `Transport` 하나로(ADR-0003 §4).
-            let ladder = nbeep_relay::LadderTransport::new(std::sync::Arc::new(local));
+            let ladder =
+                nbeep_relay::LadderTransport::new(std::sync::Arc::new(local), identity.peer_id());
             let discovery = ladder.discovery();
             // 인바운드 수락 펌프 — LAN·릴레이 인바운드가 **한 펌프**로 합류(핸드셰이크 상한·타임아웃·psk 백오프 공용).
             spawn_inbound_accept(
@@ -26268,11 +26164,6 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         relay_hold: false,
         relay_last_err: None,
         relay_test_failed: None,
-        server_peers: std::collections::HashSet::new(),
-        roster_pending: std::collections::VecDeque::new(),
-        roster_known: std::collections::HashSet::new(),
-        roster_capped: false,
-        server_cards: HashMap::new(),
         filter_bar: nbeep_ui::FilterBarWidget::new(),
         discovery,
         table: nbeep_core::PeerTable::new(60_000),
