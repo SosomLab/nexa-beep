@@ -1,6 +1,7 @@
 # 09 · ADR-0003 — 전송 계층 추상화 (로컬 직접 / 릴레이 2모드 경계)
 
 > **상태: ✅ Accepted** · 제안·확정 2026-08-08 (사용자 "다음 진행" 지시로 확정) · 결정자 Sangyong Bae
+> **개정 X-2f(2026-11-06) · Accepted · 구현 진행** — 발견 스트림 합류(`PeerHint` 출처·수명·공개 카드 · 다중 출처 합류 규칙 · PeerTable 수명 모델) → [§9](#9-개정--x-2f-발견-스트림-합류-2026-11-06)
 > M1-1 구현 반영: `PeerHint`는 `Locator`를 담지 않는다(경로는 전송 내부에만 — 규칙 1을 타입으로 강제). 발견은 `Receiver<DiscoveryEvent>` 스트림.
 > [DR-8](10-decision-record.md)의 "2모드 전제 설계"를 **구체적인 경계선**으로 옮긴 문서.
 > 관련: [08 ADR-0002](08-adr-0002-discovery-transport.md)(프로토콜) · [06](06-network-stack.md)(L1~L4) · [05](05-requirements.md) FR-R-1
@@ -122,6 +123,7 @@ v1에서는 후보가 하나뿐이라 이 로직이 실질적으로 작동하지
 | **`InMemoryTransport`** | ✅ | **테스트용 — v1에서 실제로 쓴다** |
 | `RelayTransport` | ✅ 11-06 | `8237f8e` — `RelayTransport` + `LadderTransport`(로컬 > 수동 > 릴레이) · ~~v2 · [`nexa-beepd`](10-decision-record.md)와 함께~~ · 실 NAT·서버 + 2-PC 실측 = 사용자 실기 |
 | 경로 우선순위·자동 폴백 | 뼈대만 | 후보가 하나라 실질 동작 없음 |
+| 발견 합류(X-2f · 랑데부 명부 → `Transport::discovery`) | 🚧 11-06 | [§9](#9-개정--x-2f-발견-스트림-합류-2026-11-06) 개정 확정 · 구현 진행 |
 | 중복 제거(논리 시퀀스) | ✅ | v2에서 필요해지지만 **메시지 모델에 지금 넣는다** |
 
 ---
@@ -146,6 +148,24 @@ v1에서는 후보가 하나뿐이라 이 로직이 실질적으로 작동하지
 1. `Transport`를 **동적 디스패치**(런타임 교체)로 둘지 **정적**(컴파일 타임)으로 둘지 — v1은 구현이 둘(LocalDirect·InMemory)이라 어느 쪽이든 되지만, v2 다중 전송 동시 활성을 생각하면 동적이 자연스럽다. **M0 스캐폴딩에서 결정**.
 2. 오프라인 큐를 `Transport::capabilities()`로 노출할지, 상위에서 항상 로컬 큐를 두고 릴레이는 보조로 쓸지 — **ADR-0004/M1에서**.
 3. 진단 화면에서 경로 정보를 어디까지 보여줄지(규칙 1과의 절충).
+
+---
+
+## 9. 개정 — X-2f 발견 스트림 합류 (2026-11-06)
+
+> **상태: Accepted · 개정 X-2f · 구현 진행** · 결정 2026-11-06(사용자 지시 "개발 진행" · 개발 세션 확정) · 배경 = X-2 `8237f8e`(RelayTransport·LadderTransport)가 연결 경로는 `Transport` 하나로 합쳤으나 발견 명부(roster · X-2e)는 App이 따로 들고 있었다 — TODO X-2f.
+
+**A. 용어(§2) `PeerHint` 확장**: 기존(PeerId 미검증 · 표시 이름 · 능력 · 세대) + **출처 `origin: HintOrigin { Local, Rendezvous }`** + **수명 방식 `liveness: Liveness { Advertised, Eventful }`** + **공개 카드 `profile: Option<PublicCard { name, email, bio }>`**(랑데부 서버가 중계한 옵트인 카드 · **경계에서 정제 완료**된 값만 — 이름은 DisplayName 통과분, 이메일·소개는 제어 문자 제거·200자 상한 · 미정제 바이트는 올라오지 않는다).
+
+**B. 규칙 1 해석 추가**: "**출처 종류는 Locator가 아니다** — 주소·포트·인터페이스가 없고, UI 표시(Server 칩·강등 배지)와 수명 판정에만 쓴다. 경로 **등급**(PathClass)은 여전히 성립한 세션이 정한다(DR-28 · `Link::rendezvous`와 대칭)."
+
+**C. §4 다중 경로 합류 규칙**(Transport 안 · 호스트 밖): 상대마다 **출처 집합**을 둔다 · 집합이 바뀔 때마다 **최선 출처(Local > Rendezvous)** 로 `Appeared`를 다시 낸다 · 집합이 **비었을 때만** `Vanished` · LAN 이탈 + 서버 잔존 = **강등**(행 유지 · 출처만 Rendezvous로) · 서버 접속 해제 = Rendezvous 출처만 가진 상대 일괄 `Vanished` · 랑데부 명부 **상한(4096)은 Transport가 건다**(메모리 유계 · 봉투) · 틱당 편입 **페이싱은 호스트**(UI 몫).
+
+**D. PeerTable 수명 모델**: `Advertised` 항목 = TTL(60s) · 재관측으로 갱신 · 무관측 만료 / `Eventful` 항목 = **타임아웃 없음** · `Vanished`로만 제거. 같은 PeerId의 재`Appeared` = 출처·이름·카드 갱신(이탈/재등장 아님).
+
+**E. 결과**: 호스트는 roster 와이어(RosterEvent·카드 인코딩)를 더 알지 않는다 — `server_peers`·`server_cards`·`roster_known/pending/capped`가 사라지고 Server 칩 = "출처가 Rendezvous뿐인 상대", 프로필 카드 = hint.profile, "대기분 상대가 서버에 떴다 → 재연결" = `Appeared(Rendezvous)` 처리. Announce 켬/끔은 호스트 → RelayClient 그대로.
+
+**F. 비범위**: 오프라인 큐 · M3-27 경로 배지(성립 세션 기준 · 무변경).
 
 ---
 
