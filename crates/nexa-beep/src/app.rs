@@ -7768,6 +7768,8 @@ impl App {
                 let compatible = entry.compatible(); // M1-13 ⓒ — 아래 literal로 entry가 이동하기 전에
                                                      // 경로 배지(M3-27) — 헤더와 같은 원천(성립한 세션의 경로 등급 · DR-28 "광고가 아니라 세션이 정한다").
                 let path = self.peer_path_badge(entry.peer);
+                // 접힌 기기 수(S3 라벨 · 11-07) — 묶음 크기(단일 키 = 1).
+                let devices = u8::try_from(self.fold_group(entry.peer).len()).unwrap_or(u8::MAX);
                 PeerRow {
                     entry,
                     trust,
@@ -7790,6 +7792,7 @@ impl App {
                     blocked,
                     conflict,
                     own_device,
+                    devices,
                     last_seen_label,
                 }
             })
@@ -11036,6 +11039,11 @@ impl App {
                 self.save_pending(nk);
             }
         }
+        // 기기 수 라벨(S3 · 11-07) — 묶음이 바뀌면 열린 대화의 헤더·창 제목도 따라간다.
+        let open: Vec<PeerId> = self.chats.keys().copied().collect();
+        for k in open {
+            self.refresh_chat_title(k);
+        }
     }
 
     /// 파일 전송 대상 기기(S3) — 이 대화의 살아 있는 첫 기기 · 없으면 뷰 키 그대로(종전 동작 =
@@ -12498,6 +12506,20 @@ impl App {
         }
     }
 
+    /// 대화 헤더·창 제목(S3 "기기 수 라벨" · 11-07) — 접힌 스레드면 `이름 · 기기 N대`(어느 기기가 받는지는 세션이 정한다).
+    fn thread_title(&self, peer: PeerId) -> String {
+        let title = self.peer_title(peer);
+        let n = self.fold_group(peer).len();
+        if n > 1 {
+            format!(
+                "{title} · {}",
+                nbeep_core::tf(nbeep_core::Msg::ListDevices, &[&n.to_string()])
+            )
+        } else {
+            title
+        }
+    }
+
     fn peer_title(&self, peer: PeerId) -> String {
         // 프로필 이름 우선(M3-17 — 본인이 공개한 이름) · 없으면 발견 이름.
         if let Some(p) = self.peer_profiles.get(&peer) {
@@ -13096,7 +13118,7 @@ impl App {
     /// 열린 대화 뷰·별도 창 제목을 현재 표시 이름으로(08-22 사용자 보고 — 목록은
     /// 새 이름인데 대화창 헤더·OS 타이틀이 옛 이름에 머물던 구멍). 프로필 수신이 부른다.
     fn refresh_chat_title(&mut self, peer: PeerId) {
-        let title = self.peer_title(peer);
+        let title = self.thread_title(peer);
         let mut inv = Invalidations::default();
         if let Some(chat) = self.chats.get_mut(&self.view_key(peer)) {
             chat.set_title(title.clone(), &mut inv);
@@ -13259,7 +13281,7 @@ impl App {
     }
 
     fn build_chat_view(&self, peer: PeerId) -> ChatViewWidget {
-        let mut chat = ChatViewWidget::new(self.peer_title(peer));
+        let mut chat = ChatViewWidget::new(self.thread_title(peer));
         chat.set_hud_style(self.hud_style());
         let mut inv = Invalidations::default();
         let dev = self.file_target(peer); // 접힌 대화 = 살아 있는 기기 기준(S3)

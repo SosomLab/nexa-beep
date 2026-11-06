@@ -1098,6 +1098,8 @@ pub enum Msg {
     StfUnverified,
     /// 그룹 행·구성원 모달 부제 — `{0}` = 구성원 수, `{1}` = 온라인 수.
     ListGroupMembers,
+    /// 접힌 스레드 기기 수 라벨(ADR-0015 S3 · 11-07).
+    ListDevices,
     /// "키 지문" 라벨(프로필·상대 카드 공용 · 08-17).
     FingerprintLabel,
     /// 소개글 필드 라벨(프로필 · 08-17).
@@ -2586,6 +2588,7 @@ impl Msg {
             Msg::StfSentSeq => ["Sent seq={} (awaiting response)", "전송 seq={} (응답 대기)", "已发送 seq={}（等待响应）", "送信 seq={}（応答待ち）"],
             Msg::StfVerified => ["Fingerprint verified — {} authenticated", "지문 대조 완료 — {} 인증됨", "指纹核对完成 — {} 已验证", "指紋照合完了 — {} を認証"],
             Msg::StfUnverified => ["Verification canceled — {} demoted", "인증 취소 — {} 대조 해제", "已取消验证 — {} 已降级", "認証取り消し — {} を降格"],
+            Msg::ListDevices => ["{} devices", "기기 {}대", "{} 台设备", "端末 {}台"],
             Msg::ListGroupMembers => ["Members {} · Online {}", "구성원 {} · 온라인 {}", "成员 {} · 在线 {}", "メンバー {} · オンライン {}"],
             Msg::FingerprintLabel => ["Key fingerprint", "키 지문", "密钥指纹", "鍵フィンガープリント"],
             Msg::BioLabel => ["Bio", "소개글", "简介", "自己紹介"],

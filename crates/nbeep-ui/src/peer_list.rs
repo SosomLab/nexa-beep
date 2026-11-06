@@ -136,6 +136,9 @@ pub struct PeerRow {
     /// **내 기기**(ADR-0015 S2 — 같은 사용자 키로 인증된 형제 PC · 이 세션 한정). 인증 실
     /// 배지의 **모양은 그대로, 색만 보라**(사용자 확정 09-06 "구조·이미지 유지 · 색으로 식별").
     pub own_device: bool,
+    /// 접힌 스레드의 기기 수(ADR-0015 S3 "기기 수 라벨" · X-13 · 11-07): 같은 사용자의 기기 N대가 한 행이면 N(≥2) ·
+    /// 단일 키면 1 — 이름 뒤에 "기기 N대"를 흐리게 적는다(어느 기기가 받을지는 세션이 정한다는 것을 드러냄).
+    pub devices: u8,
     /// 최근 접속 상대 시각 라벨(08-17 — 삭제 메뉴가 "언제 마지막 봤는지" 시각만
     /// 보여준다 · "마지막 접속" 문구 없이. 빈 값 = 기록 없음. 벽시계 상대 시각은
     /// 호스트만 계산해 여기 라벨로 싣는다).
@@ -1768,17 +1771,18 @@ impl Widget for PeerListWidget {
                 display_name.to_string()
             };
             ctx.text(name_x, name_y, r, &shown_name, theme.text);
-            // 다중 경로 ×N(진단) — 이름 뒤.
+            // 다중 경로 ×N(진단) — 이름 뒤 · 그 뒤에 접힌 기기 수(S3 "기기 N대" · 11-07).
+            let mut tag_x = name_x + ctx.text_width(&shown_name) + self.s(6);
             if row.entry.paths > 1 {
-                let name_w = ctx.text_width(&shown_name);
                 ctx.select_font(FontSlot::Status, false);
-                ctx.text(
-                    name_x + name_w + self.s(6),
-                    name_y + self.s(2),
-                    r,
-                    &format!("×{}", row.entry.paths),
-                    theme.text_dim,
-                );
+                let tag = format!("×{}", row.entry.paths);
+                ctx.text(tag_x, name_y + self.s(2), r, &tag, theme.text_dim);
+                tag_x += ctx.text_width(&tag) + self.s(6);
+            }
+            if row.devices > 1 {
+                ctx.select_font(FontSlot::Status, false);
+                let tag = nbeep_core::tf(nbeep_core::Msg::ListDevices, &[&row.devices.to_string()]);
+                ctx.text(tag_x, name_y + self.s(2), r, &tag, theme.text_dim);
             }
             // 2줄: 소개글(08-17 사용자 확정 — 줄바꿈을 공백으로 접어 한 줄로).
             // 없으면 공백. 이름 중복(예전 "이름/이름")을 없앤 자리다. 08-18: 폭을
@@ -1997,6 +2001,7 @@ mod tests {
             blocked: false,
             conflict: false,
             own_device: false,
+            devices: 1,
             last_seen_label: String::new(),
         }
     }
