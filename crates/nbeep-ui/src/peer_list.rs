@@ -2485,7 +2485,10 @@ mod tests {
         w.on_event(&key(Key::ContextMenu), &mut inv);
         assert!(w.ctx_menu.is_open(), "메뉴 키 = 캐럿 행 메뉴");
         assert_eq!(w.ctx_peer, Some(pid(2)), "대상 = 캐럿 행");
-        assert!(w.selected_peers().is_empty(), "선택 밖 행의 메뉴 = 전부 해제(우클릭 규칙 동일)");
+        assert!(
+            w.selected_peers().is_empty(),
+            "선택 밖 행의 메뉴 = 전부 해제(우클릭 규칙 동일)"
+        );
         w.ctx_menu.close();
         let (mut e, mut inv) = widget(&[]);
         e.on_event(&key(Key::ContextMenu), &mut inv);
