@@ -26520,7 +26520,12 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
                 for i in 0..n.min(10_000) {
                     let fake = nbeep_crypto::Identity::generate();
                     if let Ok(dn) = nbeep_core::DisplayName::parse(&format!("demo-{i:03}")) {
-                        keep.push(bus.join(fake.peer_id(), dn, nbeep_net::Caps::default()));
+                        let t = bus.join(fake.peer_id(), dn, nbeep_net::Caps::default());
+                        // ★ MEM-6(11-06) 하네스 몫 분리: 가짜 노드는 발견 수신기를 아무도 비우지 않아 버스가 보내는
+                        //   `Appeared` 힌트가 노드마다 쌓였다(N²/2 · 500명 ≈ 12.5만 건 ≈ 26MB) — 앱 몫(행별 상주)과 섞여
+                        //   "피어당 0.15MB"로 보였다. 수신기를 즉시 버리면 send가 Err라 쌓이지 않는다(측정 = 앱 몫만).
+                        drop(t.discovery());
+                        keep.push(t);
                     }
                 }
                 std::mem::forget(keep);
