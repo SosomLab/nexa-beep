@@ -14,6 +14,7 @@ pub mod groupfile;
 pub mod histfile;
 pub mod privfile;
 pub mod sealed;
+pub mod sealed_stream;
 pub mod trustfile;
 
 /// 잠긴 세그먼트의 보관 이름(08-19) — `<원본>.locked`, 이미 있으면 `-1`·`-2`…
