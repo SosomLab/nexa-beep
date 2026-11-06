@@ -2683,6 +2683,7 @@ impl SettingsWidget {
                 .or_else(|| size.editing_input_ref().and_then(TextBox::copy_selection)),
             RowCtl::Face(family) => family.copy_selection(),
             RowCtl::Combo(c) => c.editing_input_ref().and_then(TextBox::copy_selection),
+            RowCtl::Color(c) => c.hex_input_ref().and_then(TextBox::copy_selection), // M3-1b ③(11-06)
             _ => None,
         })
     }
@@ -2699,6 +2700,13 @@ impl SettingsWidget {
                 .or_else(|| size.editing_input().and_then(|tb| tb.cut_selection(inv))),
             RowCtl::Face(family) => family.cut_selection(inv),
             RowCtl::Combo(c) => c.editing_input().and_then(|tb| tb.cut_selection(inv)),
+            RowCtl::Color(c) => {
+                let cut = c.hex_input().and_then(|tb| tb.cut_selection(inv));
+                if cut.is_some() {
+                    c.commit_hex_input(inv); // 잘라낸 결과가 유효하면 값 반영 · 아니면 원복
+                }
+                cut
+            }
             _ => None,
         })
     }
@@ -2721,6 +2729,15 @@ impl SettingsWidget {
                         tb.paste(text, inv);
                     }
                 }
+                RowCtl::Color(c) => {
+                    // hex 칸 붙여넣기(M3-1b ③) — 붙인 뒤 바로 값으로 확정(Enter 없이 · 형식 오류는 원복).
+                    if c.hex_input().is_some_and(|tb| {
+                        tb.paste(text, inv);
+                        true
+                    }) {
+                        c.commit_hex_input(inv);
+                    }
+                }
                 _ => {}
             }
         }
@@ -2737,6 +2754,7 @@ impl SettingsWidget {
                 .or_else(|| size.editing_input().and_then(|tb| tb.take_edit_ctx())),
             RowCtl::Face(family) => family.take_edit_ctx(),
             RowCtl::Combo(c) => c.editing_input().and_then(|tb| tb.take_edit_ctx()),
+            RowCtl::Color(c) => c.hex_input().and_then(|tb| tb.take_edit_ctx()),
             _ => None,
         })
     }
@@ -2755,6 +2773,11 @@ impl SettingsWidget {
                 RowCtl::Face(family) => family.set_clipboard_has_text(yes),
                 RowCtl::Combo(c) => {
                     if let Some(tb) = c.editing_input() {
+                        tb.set_clipboard_has_text(yes);
+                    }
+                }
+                RowCtl::Color(c) => {
+                    if let Some(tb) = c.hex_input() {
                         tb.set_clipboard_has_text(yes);
                     }
                 }
