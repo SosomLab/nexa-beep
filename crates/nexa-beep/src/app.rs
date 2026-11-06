@@ -10156,7 +10156,17 @@ impl App {
         let notify_body = self.notify_body(text.as_str(), decision.hide_preview);
         let (at_ms, wall) = now_stamp();
         // 발신자 표시 이름(08-19 사용자 요청 — 1:1도 수신 풍선 위에 이름).
-        let from = self.peer_title(peer);
+        // ★ 전체 공지(M5-2 · FR-M-6 · 11-06)는 라벨에 "📢 공지" 접두 — 1:1 알림 등급과 구분(CLI의 `[공지]`와 동등). 라벨은
+        //   기록(`from`)에 그대로 남아 재시작 뒤에도 보인다(저장 포맷 무변경 — 등급 바이트에 비트를 더하면 구판이 긴급으로 읽는다).
+        let from = if broadcast {
+            format!(
+                "{} · {}",
+                nbeep_core::t(nbeep_core::Msg::BroadcastTag),
+                self.peer_title(peer)
+            )
+        } else {
+            self.peer_title(peer)
+        };
         let reply_from = reply.as_ref().map(|r| self.reply_from_name(r.origin));
         let line = ChatLine::text(false, text, at_ms, wall)
             .with_from(from)

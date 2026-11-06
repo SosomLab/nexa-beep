@@ -622,6 +622,8 @@ pub enum Msg {
     ConfirmRemoteFiles,
     BtnApplyChange,
     StSettingCanceled,
+    /// 수신 풍선 발신자 라벨 접두 — 전체 공지(FR-M-6 · M5-2 · 11-06).
+    BroadcastTag,
     /// 메뉴바 '도움말' 라벨.
     MenuHelp,
     ToolbarSize,
@@ -3964,6 +3966,7 @@ impl Msg {
                 "已取消设置更改 — 保留先前值",
                 "設定変更をキャンセル — 以前の値を維持",
             ],
+            Msg::BroadcastTag => ["📢 Announcement", "📢 공지", "📢 公告", "📢 お知らせ"],
             Msg::ToolbarSize => [
                 "Toolbar icon size",
                 "툴바 아이콘 크기",
