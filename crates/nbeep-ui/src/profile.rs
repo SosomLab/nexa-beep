@@ -363,15 +363,19 @@ impl ProfileWidget {
     }
 
     /// 바뀐 (설정 키, 값) 회수(1회성) — 호스트가 설정 적용 깔때기에 넘긴다.
-    /// 포커스 순회(M3-4 소분 ① · 11-06) — 반환 = 새 포커스 인덱스(0 이름 … 10 취소 · 테스트 판정용).
+    /// 포커스 순회(M3-4 소분 ① · 11-06 · 캐러셀 2칸 추가 11-07) — 반환 = 새 포커스 인덱스(테스트 판정용):
+    /// 0 이름 · 1 이메일 · 2 전화 · 3 소개 · 4 사진 선택 · **5 아바타 스와치 · 6 최근 사진**(비어 있으면 건너뜀) ·
+    /// 7~9 공개 토글 · 10 테두리 색 · 11 적용 · 12 취소. 캐러셀은 포커스를 받을 때 커서를 현재 선택에 맞춘다.
     pub fn move_focus(&mut self, backward: bool, inv: &mut Invalidations) -> usize {
-        const N: usize = 11;
+        const N: usize = 13;
         let focused = [
             self.name.is_focused(),
             self.email.is_focused(),
             self.phone.is_focused(),
             self.bio.is_focused(),
             self.choose_img.is_focused(),
+            self.swatches.is_focused(),
+            self.recent_car.is_focused(),
             self.sw_basic.is_focused(),
             self.sw_email.is_focused(),
             self.sw_phone.is_focused(),
@@ -379,22 +383,48 @@ impl ProfileWidget {
             self.apply_btn.is_focused(),
             self.cancel_btn.is_focused(),
         ];
-        let next = match focused.iter().position(|&f| f) {
+        let mut next = match focused.iter().position(|&f| f) {
             None => 0,
             Some(c) if backward => (c + N - 1) % N,
             Some(c) => (c + 1) % N,
         };
+        if next == 6 && self.recent.is_empty() {
+            next = if backward { 5 } else { 7 }; // 최근 사진이 없으면 그 칸은 없다
+        }
         self.name.set_focused(next == 0);
         self.email.set_focused(next == 1);
         self.phone.set_focused(next == 2);
         self.bio.set_focused(next == 3);
         self.choose_img.set_focused(next == 4);
-        self.sw_basic.set_focused(next == 5);
-        self.sw_email.set_focused(next == 6);
-        self.sw_phone.set_focused(next == 7);
-        self.border.set_focused(next == 8);
-        self.apply_btn.set_focused(next == 9);
-        self.cancel_btn.set_focused(next == 10);
+        self.swatches.set_focused(next == 5);
+        self.recent_car.set_focused(next == 6);
+        self.sw_basic.set_focused(next == 7);
+        self.sw_email.set_focused(next == 8);
+        self.sw_phone.set_focused(next == 9);
+        self.border.set_focused(next == 10);
+        self.apply_btn.set_focused(next == 11);
+        self.cancel_btn.set_focused(next == 12);
+        if next == 5 {
+            // 커서 = 현재 스와치(사진 사용 중이면 첫 칸).
+            let cur = if self.avatar.is_some() {
+                0
+            } else {
+                let choice = self.avatar_choice.clone();
+                self.swatch_values()
+                    .iter()
+                    .position(|v| *v == choice)
+                    .unwrap_or(0)
+            };
+            self.swatches.set_cursor(Some(cur), inv);
+        }
+        if next == 6 {
+            let cur = self
+                .recent
+                .iter()
+                .position(|(p, _)| !self.image_path.is_empty() && *p == self.image_path)
+                .unwrap_or(0);
+            self.recent_car.set_cursor(Some(cur), inv);
+        }
         inv.push(self.bounds);
         next
     }
@@ -703,8 +733,8 @@ impl Widget for ProfileWidget {
                 return;
             }
         }
-        // ★ Tab/Shift+Tab 포커스 순회(M3-4 소분 ① · 11-06) — 이름 → 이메일 → 전화 → 소개 → 사진 선택 → 공개 토글 3 → 테두리 색
-        //   → 적용 → 취소 → 순환(캐러셀은 키 입력이 없어 제외). 링은 컨트롤이 그린다.
+        // ★ Tab/Shift+Tab 포커스 순회(M3-4 소분 ① · 11-06 · 캐러셀 11-07) — 이름 → 이메일 → 전화 → 소개 → 사진 선택 →
+        //   아바타 스와치 → 최근 사진 → 공개 토글 3 → 테두리 색 → 적용 → 취소 → 순환. 링은 컨트롤이 그린다.
         if let InputEvent::Key {
             key: Key::Tab,
             shift,
@@ -781,6 +811,10 @@ impl Widget for ProfileWidget {
             self.bio.set_focused(self.bio.bounds().contains(p));
             self.choose_img
                 .set_focused(self.choose_img.bounds().contains(p));
+            self.swatches
+                .set_focused(self.swatches.bounds().contains(p));
+            self.recent_car
+                .set_focused(self.recent_car.bounds().contains(p));
             self.sw_basic
                 .set_focused(self.sw_basic.bounds().contains(p));
             self.sw_email
@@ -1384,6 +1418,34 @@ mod tests {
 
     /// 08-14 실기 — Choose… 클릭 후 이름 필드를 편집하고 Enter를 치면 **버튼이
     /// 묵은 포커스로 또 클릭**됐다(피커 재오픈). 포커스는 배타여야 한다.
+    /// 캐러셀 키보드(M3-4 · 11-07): Tab 순회가 사진 선택 → 아바타 스와치(커서 = 현재 선택) → (최근 사진은 비어 있으면
+    /// 건너뜀) → 공개 토글로 이어지고, 스와치에서 →/Enter가 클릭과 같은 통로로 스와치를 바꾼다.
+    #[test]
+    fn tab_reaches_swatch_carousel_and_keys_pick() {
+        let (mut w, mut inv) = widget();
+        for _ in 0..5 {
+            w.move_focus(false, &mut inv); // 0 이름 … 4 사진 선택 → 5 스와치
+        }
+        assert!(w.swatches.is_focused(), "5 = 아바타 스와치");
+        assert!(w.swatches.cursor().is_some(), "포커스를 받으면 커서 = 현재 선택");
+        assert!(w.recent.is_empty());
+        assert_eq!(w.move_focus(false, &mut inv), 7, "최근 사진이 비면 6은 건너뛴다");
+        assert_eq!(w.move_focus(true, &mut inv), 5, "역방향도 건너뛴다");
+        let k = |key| InputEvent::Key {
+            key,
+            shift: false,
+            primary: false,
+        };
+        let before = w.avatar_choice.clone();
+        w.on_event(&k(Key::End), &mut inv);
+        w.on_event(&k(Key::Enter), &mut inv);
+        assert_ne!(w.avatar_choice, before, "End + Enter = 마지막 스와치 적용");
+        assert_eq!(
+            w.avatar_choice,
+            w.swatch_values().last().cloned().unwrap_or_default()
+        );
+    }
+
     #[test]
     fn enter_in_textbox_does_not_click_stale_focused_button() {
         let (mut w, mut inv) = widget();
