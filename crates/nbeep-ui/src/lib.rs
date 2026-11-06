@@ -117,8 +117,8 @@ pub mod icons {
         pub const SIZE: u32 = 96;
     }
 
-    /// 경로 등급 아이콘(DR-28 — 신뢰 오른쪽 별도 자리 · **경로 축은 코드 미구현이라
-    /// 자리만**). `Local=HOUSE`(**정상 경로 = 그리지 않는다**) · `Manual=GLOBE` ·
+    /// 경로 등급 아이콘(DR-28 — 신뢰 오른쪽 별도 자리 · 경로 축 = **구현됨**(M5-3c ·
+    /// 배지 소비처 = app.rs·chat_view·filter_bar)). `Local=HOUSE`(**정상 경로 = 그리지 않는다**) · `Manual=GLOBE` ·
     /// `Relay=WAYPOINTS`(v2 · 12px에서 점이 뭉치는 경향 — 실사용 전 재판독).
     pub mod path {
         /// 같은 집(망) 안 = `Local`.
