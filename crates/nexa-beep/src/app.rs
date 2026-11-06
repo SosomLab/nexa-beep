@@ -748,6 +748,13 @@ enum DecodeTarget {
     XferThumb(PeerId, String),
     /// 확대 미리보기 원본(1024 · 사각 · 08-16) — 열린 뷰어 창에 꽂는다.
     FullImage(String),
+    /// ★ MEM-1 ④(11-06) 닫혀 있던 뷰를 다시 열며 **재요청**한 썸네일(96) — `qpath`로 정확히 그 줄에(1:1 = peer의 기기 묶음
+    /// 스레드·뷰 · 그룹 = gid 스레드·뷰). 뷰가 그새 닫혔으면 스레드에만 붙고 다음 닫힘 때 다시 해제된다.
+    XferThumbAt {
+        peer: Option<PeerId>,
+        gid: Option<nbeep_core::group::GroupId>,
+        qpath: String,
+    },
     /// 격리함 행 썸네일(64 · 사각) — `.beepq` 경로 키의 캐시(`qthumbs`)로.
     QThumb(String),
     /// 프로필 "최근 이미지" 캐러셀 썸네일(64 · 원형 · 08-14) — 경로 키로 프로필
@@ -13021,6 +13028,68 @@ impl App {
         }
     }
 
+    /// ★ MEM-1 ④(11-06) — 뷰가 닫히면 스레드(대화·대피소)의 썸네일 Rc를 놓는다(96px ≈ 37KB/장 · 이미지 1,000장 = 37MB가 뷰를
+    /// 닫아도 상주하던 것). 같은 묶음의 다른 뷰가 아직 열려 있으면 두지 않는다(S3 접기 · view_key).
+    fn release_peer_thumbs(&mut self, peer: PeerId) {
+        let vk = self.view_key(peer);
+        if self.chats.contains_key(&vk) {
+            return;
+        }
+        let mut n = 0;
+        for d in self.fold_group(peer) {
+            if let Some(c) = self.conversations.get_mut(&d) {
+                n += nbeep_ui::chat_view::release_xfer_thumbs(&mut c.lines);
+            }
+            if let Some(l) = self.parked_lines.get_mut(&d) {
+                n += nbeep_ui::chat_view::release_xfer_thumbs(l);
+            }
+        }
+        if n > 0 {
+            dlog!(self, DL::App, DV::Detail, "thumbs_released", |r| r
+                .arg("peer", peer.short())
+                .arg("n", n)
+                .ok("view closed — qpath kept for re-decode"));
+        }
+    }
+
+    /// 그룹 뷰 닫힘 — 방 스레드의 썸네일 해제(MEM-1 ④).
+    fn release_group_thumbs(&mut self, gid: nbeep_core::group::GroupId) {
+        if self.gchats.contains_key(&gid) {
+            return;
+        }
+        if let Some(lines) = self.group_threads.get_mut(&gid) {
+            nbeep_ui::chat_view::release_xfer_thumbs(lines);
+        }
+    }
+
+    /// 뷰를 다시 열며 **해제됐던 썸네일 재요청**(MEM-1 ④) — qpath가 남은 Done 줄만 워커에 다시 굽게 한다(결과는
+    /// `XferThumbAt`으로 그 줄에). `&self` 경로(proxy clone · 봉인 비밀 사본).
+    fn request_missing_thumbs(
+        &self,
+        lines: &[ChatLine],
+        peer: Option<PeerId>,
+        gid: Option<nbeep_core::group::GroupId>,
+    ) {
+        for l in lines {
+            let nbeep_ui::ChatBody::Xfer(x) = &l.body else {
+                continue;
+            };
+            if !matches!(x.state, nbeep_ui::XferLineState::Done { .. }) || x.thumb.is_some() {
+                continue;
+            }
+            let Some(qpath) = x.qpath.clone() else {
+                continue;
+            };
+            let qp = qpath.clone();
+            let secret = self.identity.wrap_secret();
+            spawn_decode(
+                self.proxy.clone(),
+                DecodeTarget::XferThumbAt { peer, gid, qpath },
+                move || crate::imgdec::thumb_raw_from_beepq(std::path::Path::new(&qp), 96, &secret),
+            );
+        }
+    }
+
     fn build_chat_view(&self, peer: PeerId) -> ChatViewWidget {
         let mut chat = ChatViewWidget::new(self.peer_title(peer));
         chat.set_hud_style(self.hud_style());
@@ -13043,7 +13112,9 @@ impl App {
         // 세션 있으면 conv, 없으면 대피/복원(parked) — 재시작 후 열어도 뜬다(M2-5b).
         // ★ 스레드 접기(S3): 같은 사용자의 기기별 저장분을 **시각순 병합**(기기 안 순서 유지 —
         //   안정 정렬). 접히지 않은 상대는 자기 하나라 종전과 같다.
-        for line in self.thread_lines(peer) {
+        let lines = self.thread_lines(peer);
+        self.request_missing_thumbs(&lines, Some(peer), None); // MEM-1 ④ — 닫혀 있는 동안 놓은 썸네일 재요청
+        for line in lines {
             chat.push_line(line, &mut inv);
         }
         chat
@@ -18388,6 +18459,9 @@ impl App {
         for line in self.group_threads.get(&gid).into_iter().flatten() {
             chat.push_line(line.clone(), &mut inv);
         }
+        if let Some(lines) = self.group_threads.get(&gid) {
+            self.request_missing_thumbs(lines, None, Some(gid)); // MEM-1 ④
+        }
         match self.mode {
             WindowMode::Single => {
                 self.gchats.insert(gid, chat);
@@ -18565,6 +18639,7 @@ impl App {
             .is_some_and(ChatViewWidget::take_back)
         {
             self.gchats.remove(&gid);
+            self.release_group_thumbs(gid); // MEM-1 ④
             match self.mode {
                 WindowMode::Single => {
                     self.single_open_group = None;
@@ -21132,6 +21207,7 @@ impl App {
         {
             // 뷰만 닫는다 — 대화(세션·스레드)는 유지(DR-26).
             self.chats.remove(&peer);
+            self.release_peer_thumbs(peer); // MEM-1 ④
             self.mark_read(peer); // 닫는 순간까지 보고 있었다(③ — 마지막 확인 시각)
             match self.mode {
                 WindowMode::Single => {
@@ -24413,6 +24489,48 @@ impl ApplicationHandler<AppEvent> for App {
                             self.redraw_conversation(peer);
                         }
                     }
+                    DecodeTarget::XferThumbAt { peer, gid, qpath } => {
+                        if let Some(t) = icon {
+                            if let Some(peer) = peer {
+                                for d in self.fold_group(peer) {
+                                    if let Some(c) = self.conversations.get_mut(&d) {
+                                        nbeep_ui::chat_view::attach_xfer_thumb_by_qpath(
+                                            &mut c.lines,
+                                            &qpath,
+                                            t.clone(),
+                                        );
+                                    }
+                                    if let Some(l) = self.parked_lines.get_mut(&d) {
+                                        nbeep_ui::chat_view::attach_xfer_thumb_by_qpath(
+                                            l,
+                                            &qpath,
+                                            t.clone(),
+                                        );
+                                    }
+                                }
+                                let vk = self.view_key(peer);
+                                if let Some(chat) = self.chats.get_mut(&vk) {
+                                    let mut inv = Invalidations::default();
+                                    chat.attach_xfer_thumb_by_qpath(&qpath, t.clone(), &mut inv);
+                                }
+                                self.redraw_conversation(peer);
+                            }
+                            if let Some(gid) = gid {
+                                if let Some(lines) = self.group_threads.get_mut(&gid) {
+                                    nbeep_ui::chat_view::attach_xfer_thumb_by_qpath(
+                                        lines,
+                                        &qpath,
+                                        t.clone(),
+                                    );
+                                }
+                                if let Some(chat) = self.gchats.get_mut(&gid) {
+                                    let mut inv = Invalidations::default();
+                                    chat.attach_xfer_thumb_by_qpath(&qpath, t, &mut inv);
+                                }
+                                self.redraw_group(gid);
+                            }
+                        }
+                    }
                     DecodeTarget::FullImage(qpath) => {
                         // 확대 미리보기 도착(08-16) — 열린 뷰어의 경로와 일치할 때만.
                         if let Some(v) = self.image_view.as_mut() {
@@ -25142,10 +25260,12 @@ impl ApplicationHandler<AppEvent> for App {
                         // 대화 창 닫기 = 뷰만 닫힘(대화 유지 — DR-26).
                         Role::Chat(peer) => {
                             self.chats.remove(&peer);
+                            self.release_peer_thumbs(peer); // MEM-1 ④
                             self.mark_read(peer); // 닫는 순간까지 확인(③)
                         }
                         Role::GroupChat(gid) => {
                             self.gchats.remove(&gid); // 뷰만 닫힘(스레드 유지 — DR-26 동형)
+                            self.release_group_thumbs(gid); // MEM-1 ④
                         }
                         Role::NamePrompt => {
                             self.name_prompt = None;

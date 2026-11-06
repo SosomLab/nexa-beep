@@ -539,6 +539,37 @@ pub fn attach_xfer_thumb(
     false
 }
 
+/// ★ MEM-1 ④(11-06) — 닫힌 뷰의 썸네일 Rc 해제. `qpath`는 **남긴다**(재오픈 때 워커가 다시 굽는 열쇠). 반환 = 해제 수.
+pub fn release_xfer_thumbs(lines: &mut [ChatLine]) -> usize {
+    let mut n = 0;
+    for line in lines.iter_mut() {
+        if let ChatBody::Xfer(x) = &mut line.body {
+            if x.thumb.take().is_some() {
+                n += 1;
+            }
+        }
+    }
+    n
+}
+
+/// ★ MEM-1 ④ — **qpath 지정 부착**(재요청 응답). 종전 FIFO 규약(`attach_xfer_thumb` = 가장 최근 Done·thumb 없음)은 여러 줄을
+/// 동시에 다시 구울 때 엉뚱한 줄에 붙는다 — 경로로 정확히 그 줄에.
+pub fn attach_xfer_thumb_by_qpath(
+    lines: &mut [ChatLine],
+    qpath: &str,
+    thumb: std::rc::Rc<crate::theme::IconImage>,
+) -> bool {
+    for line in lines.iter_mut().rev() {
+        if let ChatBody::Xfer(x) = &mut line.body {
+            if x.qpath.as_deref() == Some(qpath) {
+                x.thumb = Some(thumb);
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// 사람이 읽는 크기 표기.
 fn human_bytes(b: u64) -> String {
     const K: u64 = 1024;
@@ -1263,6 +1294,20 @@ impl ChatViewWidget {
         inv: &mut Invalidations,
     ) -> bool {
         let hit = attach_xfer_thumb(&mut self.lines, mine, thumb, qpath);
+        if hit {
+            inv.push(self.bounds);
+        }
+        hit
+    }
+
+    /// qpath 지정 부착(MEM-1 ④ 재요청 응답) — 뷰 사본에도 같은 줄로.
+    pub fn attach_xfer_thumb_by_qpath(
+        &mut self,
+        qpath: &str,
+        thumb: std::rc::Rc<crate::theme::IconImage>,
+        inv: &mut Invalidations,
+    ) -> bool {
+        let hit = attach_xfer_thumb_by_qpath(&mut self.lines, qpath, thumb);
         if hit {
             inv.push(self.bounds);
         }
@@ -4445,5 +4490,39 @@ mod tests {
             w.input.selection().is_some(),
             "자동 스크롤 중에도 선택이 이어져야 한다"
         );
+    }
+
+    /// MEM-1 ④: 해제는 thumb만(qpath 보존) · qpath 지정 부착은 그 줄에만(FIFO와 달리 최근 Done 줄에 안 붙는다).
+    #[test]
+    fn thumbs_release_keeps_qpath_and_reattach_by_qpath_targets_exact_line() {
+        let img = std::rc::Rc::new(crate::theme::IconImage::from_rgba(1, 1, vec![0, 0, 0, 255]));
+        let mut lines = vec![xline(false, "a.png", 10, 1), xline(false, "b.png", 10, 2)];
+        for (l, q) in lines.iter_mut().zip(["q/a.beepq", "q/b.beepq"]) {
+            if let ChatBody::Xfer(x) = &mut l.body {
+                x.state = XferLineState::Done {
+                    note: String::new(),
+                };
+                x.thumb = Some(img.clone());
+                x.qpath = Some(q.to_string());
+            }
+        }
+        assert_eq!(release_xfer_thumbs(&mut lines), 2);
+        for l in &lines {
+            let ChatBody::Xfer(x) = &l.body else { panic!() };
+            assert!(x.thumb.is_none() && x.qpath.is_some(), "qpath는 남는다");
+        }
+        assert!(attach_xfer_thumb_by_qpath(
+            &mut lines,
+            "q/a.beepq",
+            img.clone()
+        ));
+        let ChatBody::Xfer(a) = &lines[0].body else {
+            panic!()
+        };
+        let ChatBody::Xfer(b) = &lines[1].body else {
+            panic!()
+        };
+        assert!(a.thumb.is_some() && b.thumb.is_none(), "첫 줄에만");
+        assert!(!attach_xfer_thumb_by_qpath(&mut lines, "q/none.beepq", img));
     }
 }
