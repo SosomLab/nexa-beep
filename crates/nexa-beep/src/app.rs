@@ -4183,7 +4183,8 @@ struct App {
     /// 래치를 풀고 사진 없이 전파한다 · 유실 = 전파 영구 침묵 방지).
     wire_pending_ms: u64,
     /// 내장 12간지 아바타(키 → 그림 · 08-14) — 기동 시 1회 해석(NBAV1 fail-soft).
-    builtin_avatars: HashMap<String, Rc<nbeep_ui::IconImage>>,
+    /// 내장 아바타 캐시 — **지연 디코드**(MEM-1 ③ · 11-06): 처음 쓰는 키만 펼쳐 넣는다([`Self::builtin_avatar`]).
+    builtin_avatars: std::cell::RefCell<HashMap<String, Rc<nbeep_ui::IconImage>>>,
     /// 내 사진(imgdec 디코드 완료본 · 08-14) — 툴바 프로필 버튼·프로필 프리뷰 공용.
     my_avatar: Option<Rc<nbeep_ui::IconImage>>,
     /// 시스템 트레이(M3-2a · Windows — 비지원 OS는 None). 아이콘 = 내 아바타.
@@ -15748,7 +15749,7 @@ impl App {
         // ② 그림(사진 > 내장) — 박스 평균 축소 + over 블렌드.
         let img = self.my_avatar.clone().or_else(|| {
             match AvatarChoice::parse(self.settings.get("profile.avatar")) {
-                AvatarChoice::Builtin(k) => self.builtin_avatars.get(&k).cloned(),
+                AvatarChoice::Builtin(k) => self.builtin_avatar(&k),
                 _ => None,
             }
         });
@@ -15933,11 +15934,24 @@ impl App {
 
     /// 툴바 프로필 버튼 = **지금의 내 얼굴**(08-14 사용자 요청) — 우선순위는 프로필
     /// 프리뷰와 동일(사진 > 내장 > 이니셜/빈 원) + 보더 링(소형 2px).
+    /// 내장 아바타(12간지) — **지연 디코드 캐시**(MEM-1 ③ · 11-06): 처음 쓰는 키만 RLE를 펼쳐 보관(160px RGBA
+    /// 100KiB/장). 종전엔 부팅 때 12장 전부 = 유휴 1.2MB(09-07 실측) — 보통 내 것 1장 + 상대 몇 장만 쓰인다.
+    fn builtin_avatar(&self, key: &str) -> Option<Rc<nbeep_ui::IconImage>> {
+        if let Some(img) = self.builtin_avatars.borrow().get(key) {
+            return Some(Rc::clone(img));
+        }
+        let img = Rc::new(nbeep_ui::avatar_assets::builtin(key)?);
+        self.builtin_avatars
+            .borrow_mut()
+            .insert(key.to_string(), Rc::clone(&img));
+        Some(img)
+    }
+
     fn refresh_toolbar_avatar(&mut self) {
         use nbeep_core::avatar::{parse_border, AvatarChoice};
         let choice = AvatarChoice::parse(self.settings.get("profile.avatar"));
         let img = self.my_avatar.clone().or_else(|| match &choice {
-            AvatarChoice::Builtin(k) => self.builtin_avatars.get(k.as_str()).cloned(),
+            AvatarChoice::Builtin(k) => self.builtin_avatar(k.as_str()),
             _ => None,
         });
         let initials = if matches!(choice, AvatarChoice::None) && img.is_none() {
@@ -16776,9 +16790,7 @@ impl App {
             let (key, border) = std::fs::read_to_string(dir.join(format!("{}.meta", peer.short())))
                 .map(|s| parse_profile_meta(&s))
                 .unwrap_or((None, None));
-            let avatar = key
-                .as_deref()
-                .and_then(|k| self.builtin_avatars.get(k).cloned());
+            let avatar = key.as_deref().and_then(|k| self.builtin_avatar(k));
             let img_path = dir.join(format!("{}.img", peer.short()));
             let image_file = img_path.exists().then(|| img_path.clone());
             if image_file.is_some() {
@@ -23947,9 +23959,7 @@ impl ApplicationHandler<AppEvent> for App {
                 // 미지 키(신버전 값)는 조용히 버린다(전방 호환).
                 let builtin_key =
                     avatar_key.filter(|k| nbeep_core::avatar::ZODIAC.contains(&k.as_str()));
-                let builtin = builtin_key
-                    .as_ref()
-                    .and_then(|k| self.builtin_avatars.get(k).cloned());
+                let builtin = builtin_key.as_ref().and_then(|k| self.builtin_avatar(k));
                 // 보더 색 — 검증 통과분만(무효는 조용히 폐기 · fail-closed).
                 let border = border.as_deref().and_then(nbeep_core::avatar::parse_border);
                 // 캐시 파일 경로(부팅 복원의 짝 — restore_cached_profiles가 읽는다).
@@ -26866,10 +26876,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         wire_gen: 0,
         wire_pending: false,
         wire_pending_ms: 0,
-        builtin_avatars: nbeep_ui::avatar_assets::builtins()
-            .into_iter()
-            .map(|b| (b.key, Rc::new(b.image)))
-            .collect(),
+        builtin_avatars: std::cell::RefCell::new(HashMap::new()),
         my_avatar: None,
         tray: None,
         peer_info_view: None,

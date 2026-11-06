@@ -55,19 +55,65 @@ pub fn builtins() -> Vec<BuiltinAvatar> {
     parse(BUNDLE)
 }
 
-/// 바이트 → 항목들(테스트가 합성 입력으로 부른다).
+/// 바이트 → 항목들(테스트가 합성 입력으로 부른다) — 전부 펼친다.
 #[must_use]
 fn parse(b: &[u8]) -> Vec<BuiltinAvatar> {
     let mut out = Vec::new();
+    for_each_entry(b, |key, rle, side| {
+        let px = (side * side) as usize;
+        let Some(rgba) = expand(rle, px) else {
+            return false;
+        };
+        out.push(BuiltinAvatar {
+            key: key.to_string(),
+            image: IconImage::from_rgba(side, side, rgba),
+        });
+        true
+    });
+    out
+}
+
+/// ★ MEM-1 ③(11-06) — **한 키만** 펼친다(지연 디코드). 호스트는 처음 쓰는 키만 이걸로 디코드해 캐시한다 —
+/// 종전엔 부팅 때 12장(160px RGBA 100KiB/장 ≈ 1.2MB)을 전부 펼쳐 상주시켰다. 키가 없거나 자산이 깨졌으면 `None`.
+#[must_use]
+pub fn builtin(key: &str) -> Option<IconImage> {
+    builtin_in(BUNDLE, key)
+}
+
+fn builtin_in(b: &[u8], key: &str) -> Option<IconImage> {
+    let mut found = None;
+    for_each_entry(b, |k, rle, side| {
+        if k != key {
+            return true; // 다음 항목(펼치지 않고 건너뛴다 — 항목은 길이 접두라 O(1) 점프)
+        }
+        found =
+            expand(rle, (side * side) as usize).map(|rgba| IconImage::from_rgba(side, side, rgba));
+        false
+    });
+    found
+}
+
+/// 내장 키 목록(펼치지 않는다 — 설정 검증·스와치 수).
+#[must_use]
+pub fn builtin_keys() -> Vec<String> {
+    let mut keys = Vec::new();
+    for_each_entry(BUNDLE, |k, _, _| {
+        keys.push(k.to_string());
+        true
+    });
+    keys
+}
+
+/// 항목 순회 — `f(key, rle, side)`가 false를 돌려주면 멈춘다. 깨진 자산은 거기까지(fail-soft).
+fn for_each_entry(b: &[u8], mut f: impl FnMut(&str, &[u8], u32) -> bool) {
     if b.len() < 10 || &b[..5] != MAGIC || b[5] != 1 {
-        return out; // 매직/버전 불일치 = 자산 없음 취급
+        return; // 매직/버전 불일치 = 자산 없음 취급
     }
     let count = u16::from_le_bytes([b[6], b[7]]) as usize;
     let side = u32::from(u16::from_le_bytes([b[8], b[9]]));
     if side == 0 || side > MAX_SIDE || count > MAX_COUNT {
-        return out;
+        return;
     }
-    let px = (side * side) as usize;
     let mut p = 10usize;
     for _ in 0..count {
         let Some(&key_len) = b.get(p) else { break };
@@ -89,13 +135,10 @@ fn parse(b: &[u8]) -> Vec<BuiltinAvatar> {
             break;
         };
         p += rle_len;
-        let Some(rgba) = expand(rle, px) else { break };
-        out.push(BuiltinAvatar {
-            key: key.to_string(),
-            image: IconImage::from_rgba(side, side, rgba),
-        });
+        if !f(key, rle, side) {
+            break;
+        }
     }
-    out
 }
 
 /// RLE → RGBA. 픽셀 수가 정확히 `px`가 아니면 `None`(부분 해석물을 쓰지 않는다).
@@ -275,5 +318,19 @@ mod tests {
     fn pixel_count_mismatch_is_rejected() {
         assert!(expand(&[2, 1, 2, 3, 4], 4).is_none(), "모자람");
         assert!(expand(&[8, 1, 2, 3, 4], 4).is_none(), "넘침");
+    }
+
+    /// MEM-1 ③: 지연 디코드(한 키)와 전량 디코드의 결과가 같다 · 모르는 키는 None · 키 목록은 펼치지 않고도 같다.
+    #[test]
+    fn single_key_decode_matches_full_parse() {
+        let all = builtins();
+        let keys = builtin_keys();
+        assert_eq!(keys.len(), all.len());
+        for b in &all {
+            let one = builtin(&b.key).expect("같은 키");
+            assert_eq!(one, b.image, "{}", b.key);
+        }
+        assert!(builtin("no-such-key").is_none());
+        assert!(builtin_in(b"garbage", "rat").is_none());
     }
 }
