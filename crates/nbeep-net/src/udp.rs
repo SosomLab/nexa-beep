@@ -63,6 +63,10 @@ pub struct UdpDiscovery {
     announce_stop: Option<std::sync::mpsc::Sender<()>>,
     /// ★ 조용한 모드(내 상태 = 오프라인 · 10-19) — 광고·HELLO 응답·관측 전부 멈춤(소켓·스레드는 유지).
     quiet: Arc<AtomicBool>,
+    /// ★ 발견 광고(R-18 ⓑ · 11-07) — `false` = **조용한 노드**: 주기 광고·기동/링크 HELLO·S4 프로브·이름/힌트
+    /// 즉시 송출·GOODBYE를 **보내지 않는다**. 수신·HELLO 응답·관측은 그대로(남이 나를 먼저 찾지는 못하지만,
+    /// 남의 광고를 듣고 내가 걸면 대화된다 · 수동 등록 S6는 영향 없음). `quiet`와 독립(둘 다 참이어야 보낸다).
+    advertise: Arc<AtomicBool>,
     send_sock: UdpSocket,
     /// 내 광고 원본(seq는 전송 시 갱신) — 애넌서와 공유. 이름 변경(M1-10 즉시
     /// 재공지)이 여기를 갱신하면 다음 주기부터 새 이름으로 나간다.
@@ -92,6 +96,7 @@ impl UdpDiscovery {
         tcp_port: u16,
         epoch: u64,
         announce_ms: u32,
+        advertise: bool,
     ) -> std::io::Result<Self> {
         // ── 수신 소켓: 발견 포트에 재사용 바인딩 + 그룹 가입 ──
         // ★ 실패 = 치명 아님(M1-13ⓔ): 포트 47100은 프로토콜 헌법이라 바꿀 수 없고,
@@ -140,6 +145,7 @@ impl UdpDiscovery {
         }));
         let stop = Arc::new(AtomicBool::new(false));
         let quiet = Arc::new(AtomicBool::new(false));
+        let advertise = Arc::new(AtomicBool::new(advertise)); // 기동 HELLO보다 먼저 정해져야 한다(setter로는 늦다)
         let seq = Arc::new(AtomicU32::new(0));
         let user_tag: Arc<std::sync::Mutex<Option<[u8; 16]>>> =
             Arc::new(std::sync::Mutex::new(None));
@@ -187,6 +193,7 @@ impl UdpDiscovery {
             Arc::clone(&seq),
             Arc::clone(&user_tag),
             Arc::clone(&quiet),
+            Arc::clone(&advertise),
             announce_rx,
         );
 
@@ -195,6 +202,7 @@ impl UdpDiscovery {
             announce_stop: Some(announce_tx),
             stop,
             quiet,
+            advertise,
             send_sock,
             template,
             seq,
@@ -220,6 +228,9 @@ impl UdpDiscovery {
             for i in crate::netif::eligible_v4() {
                 let _ = sref.join_multicast_v4(&MULTICAST_GROUP, &i.v4);
             }
+        }
+        if !self.may_send() {
+            return; // 조용한 노드·오프라인 — 재조인만(새 링크의 광고를 듣는다) · HELLO·S4는 내지 않는다
         }
         let hello = {
             let mut p = match self.template.lock() {
@@ -340,6 +351,7 @@ impl UdpDiscovery {
         seq: Arc<AtomicU32>,
         user_tag: Arc<std::sync::Mutex<Option<[u8; 16]>>>,
         quiet: Arc<AtomicBool>,
+        advertise: Arc<AtomicBool>,
         stop_rx: Receiver<()>,
     ) {
         std::thread::spawn(move || {
@@ -353,10 +365,12 @@ impl UdpDiscovery {
                 p.seq = seq.fetch_add(1, Ordering::Relaxed);
                 p
             };
-            // 기동 직후 HELLO(응답 유도) 1회, 이후 주기 ANNOUNCE.
-            Self::send_pkt(&sock, v6.as_ref(), &snapshot(PacketKind::Hello));
-            // ★ S4(M1-8) — 기동 직후 이웃 유니캐스트 1회(막힌 망에서 첫 발견을 당긴다).
-            Self::send_s4_pkt(&sock, &snapshot(PacketKind::Hello));
+            // 기동 직후 HELLO(응답 유도) 1회, 이후 주기 ANNOUNCE — 조용한 노드(R-18 ⓑ)는 기동 HELLO도 없다.
+            if advertise.load(Ordering::Relaxed) && !quiet.load(Ordering::Relaxed) {
+                Self::send_pkt(&sock, v6.as_ref(), &snapshot(PacketKind::Hello));
+                // ★ S4(M1-8) — 기동 직후 이웃 유니캐스트 1회(막힌 망에서 첫 발견을 당긴다).
+                Self::send_s4_pkt(&sock, &snapshot(PacketKind::Hello));
+            }
             let period = Duration::from_millis(u64::from(announce_ms.max(1)));
             let mut cycles: u32 = 0;
             loop {
@@ -369,8 +383,8 @@ impl UdpDiscovery {
                     return;
                 }
                 {
-                    if quiet.load(Ordering::Relaxed) {
-                        continue; // 조용한 모드(오프라인 상태) — 이번 주기 광고 전부 생략
+                    if quiet.load(Ordering::Relaxed) || !advertise.load(Ordering::Relaxed) {
+                        continue; // 조용한 모드(오프라인 상태)·조용한 노드(광고 끄기) — 이번 주기 광고 전부 생략
                     }
                     Self::send_pkt(&sock, v6.as_ref(), &snapshot(PacketKind::Announce));
                     // ★ 사용자 힌트(ADR-0015 §3-4) — 태그가 있으면 광고마다 한 장 더(≈70B).
@@ -434,13 +448,39 @@ impl UdpDiscovery {
             };
             *g = tag;
         }
-        if let Some(tag) = tag {
+        if let (Some(tag), true) = (tag, self.may_send()) {
             let mut p = match self.template.lock() {
                 Ok(g) => g.clone(),
                 Err(e) => e.into_inner().clone(),
             };
             p.seq = self.seq.fetch_add(1, Ordering::Relaxed);
             Self::send_pkt(&self.send_sock, None, &Self::hint_packet(p, tag));
+        }
+    }
+
+    /// 지금 광고를 내도 되는가 — 광고 켜짐(R-18 ⓑ) **그리고** 조용한 모드 아님(10-19). 즉시 송출 경로(kick ·
+    /// 이름·힌트 변경 · GOODBYE)가 전부 이 판정을 거친다(종전엔 오프라인 모드에서도 링크 변화·이름 변경 때 샜다).
+    fn may_send(&self) -> bool {
+        self.advertise.load(Ordering::Relaxed) && !self.quiet.load(Ordering::Relaxed)
+    }
+
+    /// 발견 광고 여부(R-18 ⓑ) — 상태바·툴팁 고지용.
+    #[must_use]
+    pub fn advertising(&self) -> bool {
+        self.advertise.load(Ordering::Relaxed)
+    }
+
+    /// ★ 발견 광고 켜기/끄기(R-18 ⓑ · 11-07 · 설정 `net.discovery_advertise`): 끄면 GOODBYE(상대 목록에서 즉시
+    /// 이탈 — 이후 내 광고가 없으니 타임아웃으로 사라질 뿐인데 명시 이탈이 더 빠르고 정직하다) · 켜면 즉시 HELLO
+    /// ([`Self::kick`] — 재발견 당김). 수신·응답·관측은 양쪽 다 그대로.
+    pub fn set_advertise(&self, on: bool) {
+        let was = self.advertise.swap(on, Ordering::Relaxed);
+        if was && !on {
+            if !self.quiet.load(Ordering::Relaxed) {
+                self.send_goodbye();
+            }
+        } else if !was && on {
+            self.kick();
         }
     }
 
@@ -456,7 +496,9 @@ impl UdpDiscovery {
             p.seq = self.seq.fetch_add(1, Ordering::Relaxed);
             p
         };
-        Self::send_pkt(&self.send_sock, None, &announce);
+        if self.may_send() {
+            Self::send_pkt(&self.send_sock, None, &announce);
+        }
     }
 
     /// ★ 조용한 모드(내 상태 = 오프라인 · 10-19): `true` = 주기 광고·HELLO 응답·관측을 전부 멈추고
@@ -465,7 +507,9 @@ impl UdpDiscovery {
     pub fn set_quiet(&self, quiet: bool) {
         let was = self.quiet.swap(quiet, Ordering::Relaxed);
         if quiet && !was {
-            self.send_goodbye();
+            if self.advertise.load(Ordering::Relaxed) {
+                self.send_goodbye(); // 광고한 적 없는 조용한 노드는 이탈할 명부도 없다
+            }
         } else if was && !quiet {
             self.kick();
         }
@@ -610,7 +654,9 @@ impl Drop for UdpDiscovery {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
         drop(self.announce_stop.take()); // 광고 스레드 즉시 깸(통잠 중이어도)
-        self.send_goodbye();
+        if self.may_send() {
+            self.send_goodbye();
+        }
     }
 }
 
@@ -699,7 +745,7 @@ mod tests {
         let Ok(_hog) = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, DISCOVERY_PORT)) else {
             return; // 이 호스트에서 진짜 점유 중(다른 인스턴스) — 환경 의존이라 건너뜀
         };
-        let d = UdpDiscovery::spawn(pid(9), [9; 16], name("hog"), 9000, 1, 60_000)
+        let d = UdpDiscovery::spawn(pid(9), [9; 16], name("hog"), 9000, 1, 60_000, true)
             .expect("점유 시에도 spawn은 성공(발신 전용)");
         assert!(d.recv_degraded(), "수신 강등이 표시돼야 호스트가 고지한다");
     }
@@ -708,7 +754,7 @@ mod tests {
     /// 관측으로 올라온다. 멀티캐스트 없이 루프백 유니캐스트만 쓰므로 CI에서도 돈다.
     #[test]
     fn unicast_reply_to_send_socket_is_observed() {
-        let a = UdpDiscovery::spawn(pid(3), [3; 16], name("asker"), 1000, 1, 60_000).unwrap();
+        let a = UdpDiscovery::spawn(pid(3), [3; 16], name("asker"), 1000, 1, 60_000, true).unwrap();
         let ev = a.take_events();
         let me_port = a.send_sock.local_addr().unwrap().port();
         // 상대 역할: a의 송신 소켓 주소로 Announce 1장(상대가 HELLO에 되쏘는 것과 같은 바이트).
@@ -746,8 +792,8 @@ mod tests {
     #[test]
     #[ignore = "실네트워크 멀티캐스트 필요 — 로컬/Docker에서 --ignored로 실행(D-8a)"]
     fn two_instances_discover_each_other_via_real_multicast() {
-        let a = UdpDiscovery::spawn(pid(1), [1; 16], name("alpha"), 1000, 1, 300).unwrap();
-        let b = UdpDiscovery::spawn(pid(2), [2; 16], name("beta"), 2000, 1, 300).unwrap();
+        let a = UdpDiscovery::spawn(pid(1), [1; 16], name("alpha"), 1000, 1, 300, true).unwrap();
+        let b = UdpDiscovery::spawn(pid(2), [2; 16], name("beta"), 2000, 1, 300, true).unwrap();
         let (a_ev, b_ev) = (a.take_events(), b.take_events());
 
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
@@ -773,12 +819,49 @@ mod tests {
         );
     }
 
+    /// R-18 ⓑ(11-07) — 조용한 노드(광고 끄기)는 기동 HELLO·주기 광고를 내지 않아 상대 목록에 뜨지 않지만,
+    /// 상대의 광고는 듣는다(비대칭 발견). 켜면 즉시 HELLO로 나타난다.
+    #[test]
+    #[ignore = "실네트워크 멀티캐스트 필요 — 로컬/Docker에서 --ignored로 실행(D-8a)"]
+    fn silent_node_hears_but_is_not_seen_until_enabled() {
+        let loud = UdpDiscovery::spawn(pid(5), [5; 16], name("loud"), 1000, 1, 300, true).unwrap();
+        let silent =
+            UdpDiscovery::spawn(pid(6), [6; 16], name("silent"), 2000, 1, 300, false).unwrap();
+        assert!(!silent.advertising());
+        let (l_ev, s_ev) = (loud.take_events(), silent.take_events());
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        let (mut loud_saw_silent, mut silent_saw_loud) = (false, false);
+        while std::time::Instant::now() < deadline {
+            if let Ok(o) = l_ev.recv_timeout(Duration::from_millis(100)) {
+                loud_saw_silent |= o.packet.peer == pid(6);
+            }
+            if let Ok(o) = s_ev.recv_timeout(Duration::from_millis(100)) {
+                silent_saw_loud |= o.packet.peer == pid(5);
+            }
+        }
+        assert!(silent_saw_loud, "조용한 노드도 남의 광고는 듣는다");
+        assert!(
+            !loud_saw_silent,
+            "조용한 노드는 3초 동안 한 번도 보이지 않아야 한다(기동 HELLO·주기 광고 0)"
+        );
+        silent.set_advertise(true);
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while std::time::Instant::now() < deadline && !loud_saw_silent {
+            if let Ok(o) = l_ev.recv_timeout(Duration::from_millis(100)) {
+                loud_saw_silent |= o.packet.peer == pid(6);
+            }
+        }
+        assert!(loud_saw_silent, "광고를 켜면 즉시 HELLO로 나타난다");
+    }
+
     /// M1-10 — `set_name`이 **즉시 재공지**하고, 이후 주기 광고에도 새 이름이 실린다.
     #[test]
     #[ignore = "실네트워크 멀티캐스트 필요 — 로컬/Docker에서 --ignored로 실행(D-8a)"]
     fn rename_reannounces_immediately() {
-        let a = UdpDiscovery::spawn(pid(1), [1; 16], name("before"), 1000, 1, 60_000).unwrap();
-        let b = UdpDiscovery::spawn(pid(2), [2; 16], name("watcher"), 2000, 1, 60_000).unwrap();
+        let a =
+            UdpDiscovery::spawn(pid(1), [1; 16], name("before"), 1000, 1, 60_000, true).unwrap();
+        let b =
+            UdpDiscovery::spawn(pid(2), [2; 16], name("watcher"), 2000, 1, 60_000, true).unwrap();
         let b_ev = b.take_events();
         // a의 기동 HELLO가 b에 닿을 때까지 대기(채널 정착).
         let deadline = std::time::Instant::now() + Duration::from_secs(5);

@@ -84,9 +84,16 @@ pub(crate) fn chat_interactive(role: ChatRole) {
                 .copy_from_slice(&nbeep_crypto::Identity::generate().peer_id().as_bytes()[..16]);
             let name = nbeep_core::DisplayName::parse("chat").expect("라벨");
             // 수신 포트 0(임의) — 발신 전용 경로. 같은 PC GUI의 기본 포트를 뺏지 않는다.
-            let transport =
-                nbeep_net::LocalDirect::spawn_on(identity.peer_id(), instance, name, 5000, 1, 0)
-                    .expect("전송");
+            let transport = nbeep_net::LocalDirect::spawn_on(
+                identity.peer_id(),
+                instance,
+                name,
+                5000,
+                1,
+                0,
+                true,
+            )
+            .expect("전송");
             use nbeep_net::Transport as _;
             match transport.add_endpoint(addr) {
                 Ok(l) => {
@@ -1262,15 +1269,21 @@ pub(crate) fn chat_live(name: &str, port: u16, server: Option<&str>, identity_pa
     // 수신 포트 — 기본은 0(임의)이고, `--port`로 고정할 수 있다(08-13).
     // 같은 서브넷이면 **발견 광고가 실제 포트를 알리므로** 값이 무엇이든 상관없다.
     // 고정이 필요한 경우는 **발견이 닿지 않는 곳**(다른 서브넷·컨테이너 경계)뿐이다.
-    let transport =
-        match nbeep_net::LocalDirect::spawn_on(identity.peer_id(), instance, display, 800, 1, port)
-        {
-            Ok(t) => t,
-            Err(e) => {
-                eprintln!("[실패] 전송 시작: {e}");
-                return;
-            }
-        };
+    let transport = match nbeep_net::LocalDirect::spawn_on(
+        identity.peer_id(),
+        instance,
+        display,
+        800,
+        1,
+        port,
+        true,
+    ) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("[실패] 전송 시작: {e}");
+            return;
+        }
+    };
     println!(
         "[대기] '{name}'(me={}) 로 발견 광고 중 — 실행 중인 GUI(--window --live) 목록에서 클릭하세요…",
         identity.peer_id().short()

@@ -17361,6 +17361,7 @@ impl App {
             800,
             1,
             port,
+            discovery_advertise_from(&self.settings),
         )?;
         use nbeep_net::Transport as _;
         let bound = local.tcp_port();
@@ -17911,6 +17912,18 @@ impl App {
                 "net.server.address" | "net.server.port" => self.server_settings_changed(),
                 // 서버 종류(표시만 — 협상 축 미구현): 툴팁·칩 문구가 값을 따라간다(09-07).
                 "net.server.type" => self.refresh_toolbar_server(),
+                // ★ 발견 광고(R-18 ⓑ · 11-07) hot-swap — 끄면 GOODBYE·광고 중단(조용한 노드) · 켜면 즉시 HELLO.
+                "net.discovery_advertise" => {
+                    let on = value == "on";
+                    self.transport.set_advertise(on);
+                    dlog!(self, DL::App, DV::Decide, "discovery_advertise", |r| r
+                        .arg("on", on)
+                        .ok(if on {
+                            "advertise + kick"
+                        } else {
+                            "silent node (goodbye)"
+                        }));
+                }
                 // 프레즌스 공개 hot-swap(X-2e) — 재접속 없이 즉시 반영.
                 "net.server.announce" => {
                     let on = value == "on";
@@ -26623,6 +26636,11 @@ fn carousel_inverted(settings: &SettingsState) -> bool {
 /// 파일은 오퍼·승인 비용이 커서 낮게 잡는다).
 const GROUP_FILE_KEEP: usize = 16;
 
+/// 발견 광고 설정(R-18 ⓑ · `net.discovery_advertise` · 기본 on) — 명시적 "off"만 조용한 노드.
+fn discovery_advertise_from(settings: &SettingsState) -> bool {
+    settings.get("net.discovery_advertise") != "off"
+}
+
 fn session_port_from(settings: &SettingsState) -> u16 {
     settings
         .get("net.session_port")
@@ -27074,6 +27092,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
                 800,
                 1,
                 session_port_from(&settings),
+                discovery_advertise_from(&settings),
             )
             .expect("LocalDirect 시작(송신 소켓·TCP 바인딩 — 발견 포트 점유는 오류 아님)");
             listen_port = Some(local.tcp_port());
@@ -27177,6 +27196,9 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
     } else if discovery_degraded {
         // M1-13ⓔ — "왜 아무도 안 보이는지"를 화면이 말해야 한다(조용한 비호환 금지).
         nbeep_core::t(nbeep_core::Msg::HintDiscoveryDegraded)
+    } else if !discovery_advertise_from(&settings) {
+        // R-18 ⓑ — 조용한 노드: "왜 상대 목록에 내가 없는지"를 화면이 말해야 한다.
+        nbeep_core::t(nbeep_core::Msg::HintDiscoveryQuiet)
     } else {
         nbeep_core::t(nbeep_core::Msg::HintDiscovery)
     };

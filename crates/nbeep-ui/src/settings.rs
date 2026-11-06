@@ -1559,6 +1559,17 @@ pub fn registry() -> &'static [Entry] {
             kind: SettingKind::RadioInput(&[("47200", Msg::PortDefault)], ""),
             key: "net.session_port",
         },
+        // ★ 발견 광고(R-18 ⓑ · 11-07 · 사용자 결정 11-06) — 끄면 **조용한 노드**: 고정 공개키(= 영구 재식별자 ·
+        // docs/29 Q-29-2)를 LAN에 주기적으로 뿌리지 않는다. 수신·응답·수동 등록은 그대로. 기본 on(제로 컨피그).
+        // 노출을 줄이는 방향이라 확인 모달 없음(CONFIRM 규약).
+        Entry {
+            cat: Msg::CatNetwork,
+            sub: None,
+            label: Msg::DiscoveryAdvertise,
+            desc: Msg::DiscoveryAdvertiseDesc,
+            kind: SettingKind::Toggle,
+            key: "net.discovery_advertise",
+        },
         // ── 서버(ADR-0013 · 08-17) — ★ **개발 범위 = 이 설정값 저장까지만**.
         //   Managed 네트워킹·릴레이 서버는 TODO(개발 제외 · 사용자 확정). 기본
         //   Unmanaged(Radio 첫 옵션 = 자동 기본)라 서버를 몰라도 제품이 완전하다(S-0).

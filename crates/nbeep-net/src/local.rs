@@ -156,7 +156,15 @@ impl LocalDirect {
         announce_ms: u32,
         epoch: u64,
     ) -> std::io::Result<Self> {
-        Self::spawn_on(me, instance, name, announce_ms, epoch, DEFAULT_SESSION_PORT)
+        Self::spawn_on(
+            me,
+            instance,
+            name,
+            announce_ms,
+            epoch,
+            DEFAULT_SESSION_PORT,
+            true,
+        )
     }
 
     /// 수신 포트를 지정해 시작한다 — `0`이면 임의 포트.
@@ -172,12 +180,15 @@ impl LocalDirect {
         announce_ms: u32,
         epoch: u64,
         preferred_port: u16,
+        advertise: bool,
     ) -> std::io::Result<Self> {
         // 세션 수신 TCP — 선호 포트 우선·점유 시 임의 폴백. 실제 포트를 발견 패킷에 광고한다.
         let listener = bind_session_listener(preferred_port)?;
         let tcp_port = listener.local_addr()?.port();
 
-        let discovery = UdpDiscovery::spawn(me, instance, name, tcp_port, epoch, announce_ms)?;
+        // `advertise`(R-18 ⓑ)는 기동 HELLO보다 먼저 정해져야 해서 setter가 아니라 인자다.
+        let discovery =
+            UdpDiscovery::spawn(me, instance, name, tcp_port, epoch, announce_ms, advertise)?;
 
         // ── 발견 관측 → DiscoveryEvent + 주소록 갱신 ──
         let addrs = Arc::new(Mutex::new(HashMap::<PeerId, PeerAddrs>::new()));
@@ -371,6 +382,10 @@ impl Transport for LocalDirect {
 
     fn set_quiet(&self, quiet: bool) {
         self.disc.set_quiet(quiet);
+    }
+
+    fn set_advertise(&self, on: bool) {
+        self.disc.set_advertise(on);
     }
 
     fn set_inbound_filter(&self, filter: InboundFilter) {

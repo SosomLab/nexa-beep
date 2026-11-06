@@ -426,6 +426,10 @@ impl Transport for LadderTransport {
         self.local.set_quiet(quiet);
     }
 
+    fn set_advertise(&self, on: bool) {
+        self.local.set_advertise(on);
+    }
+
     fn set_inbound_filter(&self, filter: InboundFilter) {
         self.local.set_inbound_filter(filter);
     }

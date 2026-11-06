@@ -154,6 +154,10 @@ pub trait Transport: Send + Sync {
     /// 거른다. 기본 no-op(인메모리 등).
     fn set_quiet(&self, _quiet: bool) {}
 
+    /// ★ 발견 광고 켜기/끄기(R-18 ⓑ · 11-07 · `net.discovery_advertise`) — `false` = 조용한 노드: 내 광고·HELLO·
+    /// S4 프로브를 내지 않는다(수신·응답·관측·수동 등록은 그대로). 기본 no-op(인메모리 등).
+    fn set_advertise(&self, _on: bool) {}
+
     /// ★ 인바운드 IP 필터([docs/38] B-2 · BL-2 · 11-05) — 호스트가 넣은 판정자를 **소켓 직후 · 파싱/핸드셰이크 전**에
     /// 적용한다: TCP accept 즉시 close(Noise 비용 자체를 차단 · 오류 회신 없음) · 발견 관측은 반영 전 폐기(그림자 —
     /// 내 광고 응답은 평소대로). 기본 no-op(인메모리 등).
