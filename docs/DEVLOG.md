@@ -7,6 +7,7 @@
 
 ## 2026-11-06
 
+- **(Win · main) "1·2·3·5 바로 진행" ✅** `0c82471`…`b45ebd1` — 위험 동작 모달 기본 = 취소(6종) · 설정 Tab 포커스 행 스크롤 · Windows GUI 로그오프 훅 `endsession`(M1-8x 마지막) · M3-17 잔여 정리 + 카드 미검증 명시 → [journal](journal/2026-11-06.md)
 - ★**(Win · main) M3-29 창 투명도 ✅** `21516f7` — nexa-dir3 DR-22 이식(DR-32 · OS 창 전체 합성 알파) · 설정 4키(포커스 있을 때/없을 때 % · 창 묶음 판정 · 흐림 유예) · Win 레이어드/mac alphaValue/X11 · 신규 의존 0 · 실기 = 3-OS(사용자) · 축 1 "동작 안 하는 기능" = 코드 결함 0 · 남은 일 3갈래·사용자 결정 7건 정리 → [journal](journal/2026-11-06.md)
 - ★**(Win · main) "1단 2단 전체 진행" 1·2단 전부 ✅** `b7d8c27`…`d0ae210`(15커밋 + nexa-ui 2) — L-2 xattr · L-3 D-Bus 알림 · RL-15 · RL-16 ⓐ · X-11 glare · M5-2 · MEM-6(피어 500 90.1 → 64.52MB · 0.100MB/피어) · MEM-1 ③④(유휴 기준 7.46 → 5.20MB) · M3-22 앱 아이콘 · M3-1b ①②③ · M3-4 Tab · 806 테스트 · verify 6/6 · MEM-1 ⑤ ⏸ 설계 → [journal](journal/2026-11-06.md)
 - ★**(Win · main) M3-11 보안 설정 확인 훅 ✅** `180dc40` — `settings::CONFIRM` 8행(노출·완화 방향만 모달 · 취소 = 이전 값 역반영) · 헤드리스 `confirm.yes/no` · 잔여 = 실기(사용자) → [journal](journal/2026-11-06.md)

@@ -112,7 +112,7 @@ flowchart TD
 
 **통신은 채널(메시지 패싱)** — 공유 잠금을 최소화한다. UI로 올라가는 것은 **이벤트 + 무효화 사각형**뿐이고, UI는 `core` 상태의 스냅샷을 읽는다.
 
-> ✅ **종료 경로 구현됨**(FR-P-7 · [§6-1](#6-1-종료-경로-shutdown--✅-구현됨fr-p-7--r-16)) — 08-08 SIGINT/SIGTERM·GUI 훅 · 11-06 Windows 콘솔 핸들러·zeroize(`93c9c01`).
+> ✅ **종료 경로 구현됨**(FR-P-7 · [§6-1](#6-1-종료-경로-shutdown--✅-구현됨fr-p-7--r-16)) — 08-08 SIGINT/SIGTERM·GUI 훅 · 11-06 Windows 콘솔 핸들러·zeroize(`93c9c01`) · GUI 로그오프 `WM_ENDSESSION`(`f1612fa`).
 >
 > **누수 방지(NFR-B-6)는 여기서 결판난다.** 모든 워커·타이머·소켓·세션은 **소유자가 명확한 핸들**로 관리하고, 종료 경로를 테스트한다. 상한 없는 큐는 금지.
 
@@ -385,7 +385,7 @@ flowchart LR
 
 ## 6-1. 종료 경로 (shutdown) — ✅ **구현됨**(FR-P-7 · R-16)
 
-> **상태(11-06 정정)** — 아래 "비어 있다"는 08-08 이전 기술이다. 구현 = `nbeep_plat::shutdown`(Unix SIGINT/SIGTERM · **Windows `SetConsoleCtrlHandler` `93c9c01`**) → 플래그 + 등록부 깨우기 → ① GOODBYE·`Bye`(태그 23 · `6b4c1c7`) ② 세션·소켓 회수 ③ **zeroize**(신원 개인키·저장소 키·기록 키 테이블 Drop + 복호 평문 즉시 지움 · `93c9c01`). `docker stop` 10.26 → 0.38s(08-08). 잔여 = Win 콘솔 Ctrl+C 실기 · `WM_ENDSESSION` 별도 슬라이스.
+> **상태(11-06 정정)** — 아래 "비어 있다"는 08-08 이전 기술이다. 구현 = `nbeep_plat::shutdown`(Unix SIGINT/SIGTERM · **Windows `SetConsoleCtrlHandler` `93c9c01`**) → 플래그 + 등록부 깨우기 → ① GOODBYE·`Bye`(태그 23 · `6b4c1c7`) ② 세션·소켓 회수 ③ **zeroize**(신원 개인키·저장소 키·기록 키 테이블 Drop + 복호 평문 즉시 지움 · `93c9c01`). `docker stop` 10.26 → 0.38s(08-08). **Windows GUI 로그오프/종료 = `nbeep_plat::endsession` `f1612fa`**(주 창 서브클래스 `WM_QUERYENDSESSION`/`WM_ENDSESSION` → 같은 플래그 · 11-06). 잔여 = Win 콘솔 Ctrl+C · 로그오프 실기(사용자 손).
 
 **시작 경로만 있고 끝나는 경로가 없다.** 이건 편의 문제가 아니라 요구 두 개가 걸려 있다.
 
