@@ -34,7 +34,7 @@
                                    ▼
                        ┌─ Windows ─ TrayHandle::notify → 트레이 풍선(NIF_INFO)
                        ├─ macOS ──── nbeep_plat::notify → osascript 스폰
-                       └─ Linux ──── nbeep_plat::notify → notify-send 스폰(fail-soft)
+                       └─ Linux ──── nbeep_plat::notify → D-Bus Notify(zbus · fail-soft) — 11-06 L-3
 ```
 
 ### 2-1. 정책층 (`app.rs` — `notify_user` / `notify_body`)
@@ -58,10 +58,10 @@
 |---|---|---|---|
 | **Windows** | **트레이 풍선** — `TrayHandle::notify` → `WM_APP_BALLOON` → 트레이 스레드가 `Shell_NotifyIconW(NIM_MODIFY, NIF_INFO)` | 정식 WinRT 토스트는 **AppUserModelID(시작 메뉴 바로가기) 요구** = 설치본 전용 → T0·포터블(DR-4) 불합. 트레이 아이콘(M3-2a)이 이미 떠 있어 자산 재사용 · 의존 0 | ✅ `NIN_BALLOONUSERCLICK`(0x405) → `TrayEvent::Open`(트레이 좌클릭과 같은 복원 경로) |
 | **macOS** | **이원화(08-15 2차 — 사용자 확정 "정식 알림")**: ① **번들(.app) 실행 = `UNUserNotificationCenter` 정식 경로** — `objc2-user-notifications`(keytap과 같은 objc2 판) · 부팅 시 `notify::init`(번들 판정 = `NSBundle.bundleIdentifier`) → 권한 요청 + 클릭 delegate(`NbeepNotifyDelegate` — didReceive → 창 복원) · 알림 소유 = 우리 앱 ② **비번들(포터블·개발) = `osascript` 스폰 폴백** | UN은 **번들 신원(Info.plist) 필수**라 이원화가 구조적 정답. 서드파티(terminal-notifier) 의존 탈락 | 번들 = ✅ delegate · ★**Cask 실증 완료(08-15 사용자 확인)** — 무서명(ad-hoc)이어도 **정식 설치(/Applications · LS 등록)면 권한·배너 정상**(아이콘 포함 · /tmp 임시 번들 미표시는 위치·등록 변수였음) · 클릭-투-오픈 육안은 잔여 / 비번들 폴백 = ❌(소유자 = Script Editor) |
-| **Linux** | `notify-send` 스폰(libnotify 도구 · 대부분의 데스크톱 존재) — 없으면 조용히 실패(**fail-soft**: 알림은 보조 채널) | zbus 직접 D-Bus 호출 대비 코드 최소 · 데몬 부재 환경에서도 무해 | ⏸ `notify-send -A`(0.7.10+ · 클릭 액션 대기) 검토 잔여 — 버전 의존이라 보류 |
+| **Linux** | ★**11-06 정정(L-3 `6d79206`)** — **`org.freedesktop.Notifications` D-Bus 직접**(zbus blocking · 세션 버스 연결 1개 상주 · `notify-send` 스폰 폐지) · 버스·데몬 부재 = 조용히 실패(**fail-soft**: 알림은 보조 채널 · 소리 수단 전무면 상태바 1회 고지) | 종전 스폰은 클릭 응답이 없고 데몬 부재를 알 수 없었으며 알림마다 프로세스를 띄웠다 · zbus = 퍼미시브 | ✅ `ActionInvoked` → 대상 토큰 콜백(Win/mac 동등) · `ActivationToken` → 트레이 토큰 저장소(wlactivate 전면화) · 실기 GNOME/KDE = 사용자 손 |
 
 **무음(silent)의 OS별 구현**: mac = `sound name` 절 생략 · Windows = `NIIF_NOSOUND`
-플래그 · Linux = `--hint=boolean:suppress-sound:true`(데몬 재량 · 미지원 무해).
+플래그 · Linux = D-Bus 힌트 `suppress-sound: true`(데몬 재량 · 미지원 무해 · 11-06 L-3 — 종전 `notify-send --hint`) · 긴급 = `urgency: 2` + `sound-name: message-new-instant`.
 
 ## 3. 동작 순서 (시퀀스)
 
@@ -116,7 +116,7 @@
 | 수신자 릴레이(Webhook 등 외부 팬아웃) | D-23 ⓑ + SP-2(M3-10) |
 | mac 정식(UN) 경로의 권한 | ✅ **Cask 실증 완료(08-15 사용자 확인)** — 무서명이어도 정식 설치면 정상. ⚠ 번들을 임시 경로에서 직접 실행하면 권한이 프롬프트 없이 보류된다(개발 시 함정 — `open`+정식 위치로) |
 | mac 비번들 폴백의 소속 표기 | Notification Center에 "Script Editor"로 뜬다(osascript 소유 — 폴백 한계) |
-| Linux 실기 · 클릭 액션(`-A`) | 데스크톱 환경 잔여 |
+| Linux 실기 · 클릭 액션 | ✅ 코드 11-06 L-3 `6d79206`(D-Bus `ActionInvoked` — 종전 `-A` 검토는 폐기) · 실기 = 데스크톱 환경 잔여(사용자 손) |
 | Windows 풍선·클릭 실기 | Windows PC 잔여(WNOTI — 26 §7 결) |
 | 소리 포트 정식 3어댑터(winmm/NSSound/D-Bus) | ✅ **구현 11-06 `c177edc`** — `nbeep_plat::sound`(Win `MessageBeep` · mac AudioToolbox `AudioServicesPlaySystemSound` · Linux = 인박스 오디오 없음 → 알림 데몬 `urgency=critical`·`sound-name` 힌트 · 데몬 부재 = 상태바 1회 고지) · 신규 의존 0 · 실기 = 사용자 손 |
 | 잠금 화면 정책 | OS 위임(내용 비노출 기본이 방어) — 자체 제어는 등급과 함께 |

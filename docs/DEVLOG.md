@@ -7,6 +7,7 @@
 
 ## 2026-11-06
 
+- ★**(Win · main) "1단 2단 전체 진행" 1·2단 전부 ✅** `b7d8c27`…`d0ae210`(15커밋 + nexa-ui 2) — L-2 xattr · L-3 D-Bus 알림 · RL-15 · RL-16 ⓐ · X-11 glare · M5-2 · MEM-6(피어 500 90.1 → 64.52MB · 0.100MB/피어) · MEM-1 ③④(유휴 기준 7.46 → 5.20MB) · M3-22 앱 아이콘 · M3-1b ①②③ · M3-4 Tab · 806 테스트 · verify 6/6 · MEM-1 ⑤ ⏸ 설계 → [journal](journal/2026-11-06.md)
 - ★**(Win · main) M3-11 보안 설정 확인 훅 ✅** `180dc40` — `settings::CONFIRM` 8행(노출·완화 방향만 모달 · 취소 = 이전 값 역반영) · 헤드리스 `confirm.yes/no` · 잔여 = 실기(사용자) → [journal](journal/2026-11-06.md)
 - ★**(Win · main) M1-8x 종료 경로 잔여 ✅** `93c9c01` — Win `SetConsoleCtrlHandler` · R-16 zeroize(비밀 키 Drop + 복호 평문 즉시 지움) · 잔여 = Win 콘솔 Ctrl+C 실기(사용자) → [journal](journal/2026-11-06.md)
 - ★**(Win · main) M3-8 알림 강도 ✅** `c177edc` — `decide_alert` 신뢰×등급 강등표·원격·팬아웃·속도 · 소리 포트 3-OS · 24h Urgent 횟수 · 그룹 미리보기 무해화 누락 수정 · verify --quick 6/6 · 잔여 = 3-OS 실기(사용자) → [journal](journal/2026-11-06.md)

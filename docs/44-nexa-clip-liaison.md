@@ -184,6 +184,8 @@ use nbeep_relay::{C2s, Rid, S2c, MAX_RIDS, OBS_MAGIC};
 
 ### 7-2. beep의 glare 현황 — 실코드
 
+> ✅ **채택 · 구현 11-06 `c949fa1`(X-11 · 사용자 "1단 2단 전체 진행")** — clip 채택안 그대로: `glare_keep_inbound(me, peer) = peer < me` · `glare_keep_outbound(me, peer) = me < peer`(PeerId 32B 사전순 · 서로 보완 · 결정적 · 추가 왕복 0) · 대화 중이어도 규칙상 이기는 쪽으로 **교체**(이력 보존) · `Closed.epoch` 세대 대조로 교체된 옛 세션의 늦은 Closed 무시 · 서버 중재 없음(봉투 원리 · beepd 무변경). 아래는 **채택 전(11-06 이전) 현황** 기록이다.
+
 clip 전달문은 *"beep 릴레이에 규칙이 없다"* 고 했다. **릴레이 계층(`nbeep-relay`·`nexa-beepd`)에는 없다 — 맞다.**
 다만 beep은 **앱 계층에 가드 하나**를 갖고 있다(`crates/nexa-beep/src/app.rs` `AppEvent::Inbound` 처리):
 

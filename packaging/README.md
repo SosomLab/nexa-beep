@@ -167,6 +167,8 @@ NEXA_BIN_DIR=target/release packaging/linux/build-deb.sh --skip-build   # 이미
 | `/usr/share/doc/nexa-beep/` | LICENSE 2종 · README · Debian `copyright` |
 | `DEBIAN/postinst`·`postrm` / `%post`·`%postun` | 아이콘·데스크톱 캐시 갱신(도구 없으면 무시) |
 
+> ⚠ **Linux 포터블(`tar.gz`)의 앱 아이콘 = 한계**(M3-22 · 11-06) — Linux에는 실행 파일 자체에 아이콘을 박는 표준이 없어(ELF 리소스 없음) 런처·작업 표시줄 아이콘은 **`.desktop` + hicolor 설치본(deb/rpm)에서만** 뜬다. 포터블은 창 아이콘(winit `set_window_icon`)만 보인다. Windows = exe 리소스(`winresource` · 포터블 zip·탐색기 포함) · macOS = 번들 밖 실행도 `setApplicationIconImage`로 Dock 아이콘.
+
 ★ **glibc 하한은 선언하지 않고 실측한다** — `lib.sh glibc_floor`가 두 바이너리의 `objdump -T`
 심볼 버전 최댓값을 읽어 `Depends: libc6 (>= …)`에 쓴다. v0.2.17까지는 `>= 2.31`을 손으로
 적어 두고 실제로는 ubuntu-latest(24.04) 빌드가 **GLIBC_2.39**를 요구했다(10-09 공개 .deb 실측) —

@@ -157,7 +157,7 @@
 |---|---|---|
 | **Windows** | **`IAttachmentExecute`** 우선(Chrome 방식) → 실패 시 **`Zone.Identifier` ADS 직접 기록**(`[ZoneTransfer]` / `ZoneId=3`) | ZoneId 3 = Internet → **SmartScreen** + Office **보호된 보기** 발동. FAT/exFAT 등 **ADS 미지원 볼륨이면 표식 불가** → 그 사실을 사용자에게 표시 |
 | **macOS** | `com.apple.quarantine` 확장 속성 — 앱 `Info.plist`에 **`LSFileQuarantineEnabled`** 를 넣어 시스템이 자동 부착하게 하거나, **`qtn_file_apply_to_path`** 로 직접 | Gatekeeper·XProtect 검사 발동 |
-| **Linux** | 표준 없음 — **실행 비트 미부여**가 1차. 파일시스템이 지원하면 `user.xdg.origin.url` 확장 속성 부기 | 데스크톱 환경마다 동작이 달라 **보증하지 않는다**(NFR-S-5) |
+| **Linux** | 표준 없음 — **실행 비트 미부여**가 1차. 파일시스템이 지원하면 `user.xdg.origin.url` 확장 속성 부기 | 데스크톱 환경마다 동작이 달라 **보증하지 않는다**(NFR-S-5) · ✅ **구현 11-06 L-2 `b7d8c27`** — 값 `nexa-beep://received`(발신자·경로 없음 · 봉투 원리) · user xattr 미지원 FS(ENOTSUP)는 "미지원" 명시 · 실기(ext4·tmpfs·vfat) = 사용자 손 |
 
 **공통 규칙**
 - 표식을 붙이지 **못한 경우에도 실체화는 진행하되, "OS 보호 표식을 붙이지 못했습니다"를 명시**한다. 조용히 넘어가지 않는다.

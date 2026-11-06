@@ -119,6 +119,7 @@
 | **png** 0.17 · **jpeg-decoder** 0.3 | 프로필 사진 등 이미지 디코드 — ★ **`nbeep-imgdec` 격리 프로세스에만**(M4-5 · FR-S-12) | 둘 다 MIT OR Apache-2.0 | **본체는 이미지 파서를 링크하지 않는다**(R-5 = 파서 취약점 RCE 격리 — 이 원칙 때문에 별도 bin에만 둔다). 자식 크래시 = 본체 무사 · 출력은 상한 걸린 RGBA뿐 | ✅ 채택(08-11 · M4-5) |
 | **chacha20poly1305** 0.10 · **getrandom** 0.2 | 신뢰 핀 세그먼트 AEAD·난수(M2-5a · ADR-0005) | MIT OR Apache-2.0 | snow가 이미 끄는 의존 — **트리 증가 0** | ✅ 채택(08-11 · M2-5a) |
 | **ed25519-dalek** 2.2 | 사용자 서명 키 `UserKey`(ADR-0015 · DR-29 — 서명된 기기 목록·후계 증명서·서버 챌린지) | BSD-3-Clause(`ed25519` 2.2 = Apache-2.0 OR MIT) | 제3자가 검증할 수 있는 서명이 필요(대칭 MAC 불가) · **`curve25519-dalek 4.1.3`을 snow와 공유** — 트리 증가 = 크레이트 2개(ed25519-dalek·ed25519) · 3.x는 dalek 5라 중복 트리 → 2.x 핀 | ✅ 채택(09-06 · X-13 S0 — 산출물 실측은 배선 후) |
+| **winresource** 0.1 | Windows exe 리소스 아이콘 임베드(M3-22 · `build.rs`) — **빌드 의존 전용**(`[target.'cfg(windows)'.build-dependencies]`) | MIT | 런타임 링크 0(DR-5 런타임 의존 0 유지) · rc.exe 부재 = 경고만(fail-soft) · 호스트 Windows일 때만 · 협업 검증 exe +336KB(아이콘 포함 기능 묶음 · 10MB 예산 안) | ✅ 11-06 `d7b41c4` |
 
 > **ab_glyph(SP-1c)**: 실측 릴리스 증가분 **+115KB**(0.40→0.53MB — 텍스트 스택+UI 코드 포함). 게이트(빈 창 절반 ≤200KB) 통과. 셰이핑 엔진(swash +774KB)은 게이트 초과 탈락 — v2에서 텍스트 스택 이음새(DR-21) 뒤에 추가.
 
