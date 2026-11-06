@@ -159,9 +159,11 @@ v1에서는 후보가 하나뿐이라 이 로직이 실질적으로 작동하지
 
 **B. 규칙 1 해석 추가**: "**출처 종류는 Locator가 아니다** — 주소·포트·인터페이스가 없고, UI 표시(Server 칩·강등 배지)와 수명 판정에만 쓴다. 경로 **등급**(PathClass)은 여전히 성립한 세션이 정한다(DR-28 · `Link::rendezvous`와 대칭)."
 
-**C. §4 다중 경로 합류 규칙**(Transport 안 · 호스트 밖): 상대마다 **출처 집합**을 둔다 · 집합이 바뀔 때마다 **최선 출처(Local > Rendezvous)** 로 `Appeared`를 다시 낸다 · 집합이 **비었을 때만** `Vanished` · LAN 이탈 + 서버 잔존 = **강등**(행 유지 · 출처만 Rendezvous로) · 서버 접속 해제 = Rendezvous 출처만 가진 상대 일괄 `Vanished` · 랑데부 명부 **상한(4096)은 Transport가 건다**(메모리 유계 · 봉투) · 틱당 편입 **페이싱은 호스트**(UI 몫).
+**C. 합류 책임 분리**(11-06 정정 — nbeep-core `PeerTable`이 이미 FR-D-6 다중 경로 병합(경로 = `SourceId` · goodbye는 경로 단위 · 마지막 경로만 이탈 · 무응답은 마지막 관측 기준)을 갖고 있어 합류 판정을 Transport에 중복 구현하지 않는다): **Transport는 두 스트림을 출처 표식만 붙여 한 스트림으로 합친다**(LAN = `Appeared(origin Local)`/`Vanished` · 랑데부 = `Appeared(origin Rendezvous · Eventful · profile)`/**새 변형 `Withdrawn { peer, origin }`** — 기존 `Vanished(PeerId)`는 LAN 의미 그대로라 LocalDirect·InMemory 무변경). **병합 판정은 PeerTable**(FR-D-6 기존 모델): 호스트가 출처를 경로 `SourceId`(Local=0 · Rendezvous=1)로 매핑해 `observe`/`goodbye`하고, 표가 "마지막 경로가 사라졌을 때만 이탈 · 출처 집합이 바뀌면 행 갱신(`PeerEvent::Updated` 신설) · LAN 이탈 + 서버 잔존 = 강등(행 유지)"을 판정한다. 랑데부 명부 상한(4096)·자기 PeerId 제외는 Transport 경계. 서버 접속 해제 = Transport가 Rendezvous 상대 전부 `Withdrawn`.
 
-**D. PeerTable 수명 모델**: `Advertised` 항목 = TTL(60s) · 재관측으로 갱신 · 무관측 만료 / `Eventful` 항목 = **타임아웃 없음** · `Vanished`로만 제거. 같은 PeerId의 재`Appeared` = 출처·이름·카드 갱신(이탈/재등장 아님).
+**D. PeerTable 수명 모델**(11-06 보강): 경로마다 수명 방식을 둔다 — `Advertised` 경로는 마지막 관측 TTL(60s)로 만료(만료 시 그 경로들만 제거 · 남은 Eventful 경로가 있으면 강등 `Updated` · 없으면 `Departed(Timeout)`) · `Eventful` 경로는 `goodbye`(Withdrawn)로만 제거 · `last_seen`은 Advertised 관측만 갱신. 항목은 `profile`(카드)을 들고 Some 관측이 갱신·None은 유지.
+
+> 정정 이력(11-06 같은 날) — 첫 판 C는 "Transport 안에서 상대마다 출처 집합을 두고 최선 출처로 `Appeared` 재발행 · 비었을 때만 `Vanished`"였고 첫 판 D는 "항목 단위 Advertised TTL / Eventful 무기한"이었다. PeerTable 기존 다중 경로 병합과 중복이라 판정은 표로, 수명은 경로 단위로 옮겼다(`96f8bb8` → 이 판).
 
 **E. 결과**: 호스트는 roster 와이어(RosterEvent·카드 인코딩)를 더 알지 않는다 — `server_peers`·`server_cards`·`roster_known/pending/capped`가 사라지고 Server 칩 = "출처가 Rendezvous뿐인 상대", 프로필 카드 = hint.profile, "대기분 상대가 서버에 떴다 → 재연결" = `Appeared(Rendezvous)` 처리. Announce 켬/끔은 호스트 → RelayClient 그대로.
 
