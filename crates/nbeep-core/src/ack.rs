@@ -11,7 +11,7 @@
 //! 메시지의 `seq`** 하나면 된다 — 그 세션에서 내 seq는 유일하다.
 
 /// 확인 종류.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum AckKind {
     /// 기술적 전달(자동).
     Delivered,

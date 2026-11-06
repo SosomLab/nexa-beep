@@ -141,6 +141,11 @@ pub struct ChatLine {
     /// 읽음(상대가 대화창에서 봄 · 자동). 전달과 독립 — 설정 조합에 따라 전달
     /// 없이 읽음만 뜰 수도 있다.
     pub read: bool,
+    /// ★ N-3(11-06) — 전달 확인이 **도착한 시각**(Unix ms · 기록에 영속 · ADR-0010 §5 규칙 8 =
+    /// 봉인된 레코드 안). `delivered`의 근거 — 복원 시 `Some`이면 `delivered = true`.
+    pub delivered_at: Option<u64>,
+    /// ★ N-3 — 읽음 확인이 도착한 시각(Unix ms · 영속). `read`의 근거.
+    pub read_at: Option<u64>,
     /// **오프라인 대기**(M4-6 · 08-20) — 세션이 없어 발신자 측에 보관 중.
     /// 상대가 나타나 전달되면 false로 풀리고 seq가 붙는다([`ChatViewWidget::resolve_queued`]).
     pub queued: bool,
@@ -174,6 +179,8 @@ impl ChatLine {
             seq: 0,
             delivered: false,
             read: false,
+            delivered_at: None,
+            read_at: None,
             queued: false,
             importance: 0,
             origin: None,
@@ -195,6 +202,16 @@ impl ChatLine {
     #[must_use]
     pub fn with_sent(mut self, sent: Option<(u64, WallTime)>) -> Self {
         self.sent = sent;
+        self
+    }
+
+    /// ★ N-3 — 복원된 확인 시각을 붙인다(빌더). `Some`이면 해당 상태도 참이 된다.
+    #[must_use]
+    pub fn with_acks(mut self, delivered_at: Option<u64>, read_at: Option<u64>) -> Self {
+        self.delivered_at = delivered_at;
+        self.read_at = read_at;
+        self.delivered |= delivered_at.is_some();
+        self.read |= read_at.is_some();
         self
     }
 
@@ -270,6 +287,8 @@ impl ChatLine {
             seq: 0,
             delivered: false,
             read: false,
+            delivered_at: None,
+            read_at: None,
             queued: false,
             importance: 0,
             origin: None,
@@ -1082,16 +1101,26 @@ impl ChatViewWidget {
 
     /// N-2 — 내 메시지(seq)의 전달/읽음 상태 갱신(발신자 측 · 독립 축). `read`가
     /// 오면 전달도 함의하지 않는다(완전 독립 — 사용자 확정). 바뀌면 무효화.
-    pub fn mark_ack(&mut self, seq: u64, delivered: bool, read: bool, inv: &mut Invalidations) {
+    /// `now_ms` = 확인이 도착한 시각(N-3 · 기록 영속) — 처음 참이 될 때만 기록한다.
+    pub fn mark_ack(
+        &mut self,
+        seq: u64,
+        delivered: bool,
+        read: bool,
+        now_ms: u64,
+        inv: &mut Invalidations,
+    ) {
         for l in &mut self.lines {
             if l.mine && l.seq == seq {
                 let mut changed = false;
                 if delivered && !l.delivered {
                     l.delivered = true;
+                    l.delivered_at = Some(now_ms);
                     changed = true;
                 }
                 if read && !l.read {
                     l.read = true;
+                    l.read_at = Some(now_ms);
                     changed = true;
                 }
                 if changed {
@@ -1126,11 +1155,12 @@ impl ChatViewWidget {
 
     /// N-2 — 읽음 up-to: seq 이하 내 메시지 전부 읽음(대화창 열면 보이는 것
     /// 다 읽힌다). 전달과 독립.
-    pub fn mark_read_upto(&mut self, seq: u64, inv: &mut Invalidations) {
+    pub fn mark_read_upto(&mut self, seq: u64, now_ms: u64, inv: &mut Invalidations) {
         let mut changed = false;
         for l in &mut self.lines {
             if l.mine && l.seq != 0 && l.seq <= seq && !l.read {
                 l.read = true;
+                l.read_at = Some(now_ms);
                 changed = true;
             }
         }

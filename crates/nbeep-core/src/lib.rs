@@ -16,6 +16,7 @@ pub mod ack;
 pub mod action;
 pub mod avatar;
 pub mod block;
+pub mod bye;
 pub mod catchup;
 pub mod chat;
 pub mod command;
@@ -53,8 +54,12 @@ pub mod testkit;
 
 // ── 편의 재수출(공개 표면 설계 — 내부 모듈 경로를 그대로 노출하지 않는다) ──
 pub use ack::{AckKind, ChatAck, ACK_TAG};
-pub use action::{ActionKind, FailCode, Outcome, RejectCode, RiskLevel, ScanOutcome};
+pub use action::{
+    ActionKind, AlertLevel, ChannelKind, FailCode, Outcome, RejectCode, RiskLevel, ScanOutcome,
+    SuppressReason,
+};
 pub use block::{BlockAxis, BlockEntry, BlockList};
+pub use bye::{Bye, ByeReason, BYE_TAG};
 pub use catchup::{
     digest_frame, digest_of, pulls_for, select_lines, unread_after, DigestEntry, DigestMap,
     SyncBudget, SyncDigest, SyncLine, SyncLines, SyncPull, SyncRead, SyncReplies,

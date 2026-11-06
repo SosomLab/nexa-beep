@@ -270,6 +270,8 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
     /// stdin 스레드 → 네트 스레드 명령.
     enum Cmd {
         Chat(Vec<u8>),
+        /// 정중한 종료(Bye · 11-06) — `/quit` 뒤 채널을 닫기 전에 1프레임.
+        Bye,
         /// 파일 오퍼(발신) — **요청(배치) 단위**(08-20 · GUI M4-2e 미러): 첫 오퍼
         /// 전에 배치 목록(manifest 태그 13)을 공지하고 파일별 Offer를 잇따라
         /// 보낸다. 단일 파일도 요청 1개다(GUI 발신과 같은 모양).
@@ -384,6 +386,10 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
                             println!("[종료] 세션 끊김");
                             return;
                         }
+                    }
+                    Ok(Cmd::Bye) => {
+                        // 정중한 종료 — 실패해도 어차피 닫는 중.
+                        let _ = mux.send(StreamId::Control, &nbeep_core::Bye::shutdown().encode());
                     }
                     Ok(Cmd::OfferBatch { files }) => {
                         // 발신 자격 사전 점검 — 상대가 어차피 거절할 것을 미리 알린다.
@@ -563,6 +569,10 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
                     Some(other) => println!("[그룹] 제어 수신 — {other:?}"),
                     None => {}
                 },
+                // 정중한 종료(Bye · 태그 23 · 11-06) — 상대가 곧 끊는다는 뜻. 이어지는 끊김은 재연결 사유가 아니다.
+                StreamId::Control if nbeep_core::Bye::decode(&bytes).is_some() => {
+                    println!("[종료] 상대가 정중히 종료합니다(Bye) — 자동 재연결 없음");
+                }
                 // 수신확인 도착(N-2 · 태그 10) — 상대(GUI)가 내 메시지를 받았다/봤다.
                 // 그전엔 ProfileMsg 디코드 실패로 **조용히 버려져** CLI에선 안 보였다.
                 StreamId::Control if nbeep_core::ChatAck::decode(&bytes).is_some() => {
@@ -1135,6 +1145,9 @@ fn run_interactive<L: nbeep_core::Link + 'static>(
         }
     }
     drop(raw);
+    if local_quit {
+        let _ = out_tx.send(Cmd::Bye); // 정중한 종료(11-06) — 채널을 닫기 전에 큐에 남긴다(writer가 마저 보낸다)
+    }
     drop(out_tx);
     let _ = net.join();
     println!("[끝]");

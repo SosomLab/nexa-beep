@@ -565,6 +565,8 @@ enum AppEvent {
     },
     /// 세션 내 형제 증명 도착(ADR-0015 S1-e) — 대조는 메인(재료·바인딩이 거기 있다).
     UserProof { peer: PeerId, proof: [u8; 32] },
+    /// ★ 상대의 정중한 종료(Bye · M2-4b · 11-06) — 곧 올 `Closed`를 의도된 이탈로 처리(자동 재연결 없음).
+    PeerBye { peer: PeerId },
     /// 형제가 보낸 사용자 키 봉인본(ADR-0015 S2 · 태그 9) — 열기·병합은 메인.
     UserKeyBlob { peer: PeerId, sealed: Vec<u8> },
     /// 형제가 보낸 sender copy(ADR-0015 S3 · 태그 19) — `peer`(형제)가 `to`에게 보낸
@@ -705,6 +707,7 @@ impl AppEvent {
             AppEvent::XferSendDone { .. } => "XferSendDone",
             AppEvent::XferAcked { .. } => "XferAcked",
             AppEvent::ChatAck { .. } => "ChatAck",
+            AppEvent::PeerBye { .. } => "PeerBye",
             AppEvent::UserProof { .. } => "UserProof",
             AppEvent::UserKeyBlob { .. } => "UserKeyBlob",
             AppEvent::SenderCopy { .. } => "SenderCopy",
@@ -2242,6 +2245,13 @@ fn spawn_session_actor(
                             }
                         }
                     }
+                    StreamId::Control if nbeep_core::Bye::decode(&bytes).is_some() => {
+                        // ★ 정중한 종료(Bye · 11-06) — 메인에 올리기만. 이어지는 끊김은 recv 오류 → Closed가
+                        //   같은 proxy로 **뒤에** 도착한다(순서 보장).
+                        if proxy.send_event(AppEvent::PeerBye { peer }).is_err() {
+                            return;
+                        }
+                    }
                     StreamId::Control if nbeep_core::ChatAck::decode(&bytes).is_some() => {
                         // 수신 확인(N-2) — 태그로 프로필과 구분. 도착만 메인에 올린다.
                         if let Some(ack) = nbeep_core::ChatAck::decode(&bytes) {
@@ -2601,6 +2611,41 @@ fn encode_kept(keep: &[&ChatLine]) -> Vec<u8> {
                 //   from ‖ text — 재시작 뒤에도 `(origin, seq)` dedup이 서야 형제 동기가 중복을
                 //   안 만든다. 열쇠 없는 줄(안내·구본)은 종전 tag 1/3 그대로.
                 if let Some((origin, seq)) = l.sync_key() {
+                    // ★ tag 8(11-06 · N-3) = 확인 상태 동반 줄: tag 4 머리 ‖ flags u8(bit0 전송 시각 · bit1 전달 시각 ·
+                    //   bit2 읽음 시각 · bit3 답장 꼬리) ‖ [sent_ms 8] ‖ [delivered_ms 8] ‖ [read_ms 8] ‖ from ‖ text ‖
+                    //   [r_origin 32 ‖ r_seq 8 LE ‖ r_from ‖ quote]. 상태가 하나라도 있을 때만 — 없는 줄은 종전 tag
+                    //   4/6/7 바이트 불변(구판은 첫 tag 8에서 멈춘다 · 전방 확장). ADR-0010 §5 규칙 8: 시각은 봉인 안.
+                    if l.delivered_at.is_some() || l.read_at.is_some() {
+                        out.push(8u8);
+                        out.push(u8::from(l.mine));
+                        out.extend_from_slice(&l.at_ms.to_le_bytes());
+                        out.extend_from_slice(origin.as_bytes());
+                        out.extend_from_slice(&seq.to_le_bytes());
+                        out.push(l.importance.min(2));
+                        let flags = u8::from(l.sent.is_some())
+                            | (u8::from(l.delivered_at.is_some()) << 1)
+                            | (u8::from(l.read_at.is_some()) << 2)
+                            | (u8::from(l.reply.is_some()) << 3);
+                        out.push(flags);
+                        if let Some((sent_ms, _)) = l.sent {
+                            out.extend_from_slice(&sent_ms.to_le_bytes());
+                        }
+                        if let Some(ms) = l.delivered_at {
+                            out.extend_from_slice(&ms.to_le_bytes());
+                        }
+                        if let Some(ms) = l.read_at {
+                            out.extend_from_slice(&ms.to_le_bytes());
+                        }
+                        put_str(&mut out, l.from.as_deref().unwrap_or(""));
+                        put_str(&mut out, t.as_str());
+                        if let Some(r) = &l.reply {
+                            out.extend_from_slice(r.origin.as_bytes());
+                            out.extend_from_slice(&r.seq.to_le_bytes());
+                            put_str(&mut out, l.reply_from.as_deref().unwrap_or(""));
+                            put_str(&mut out, &r.quote);
+                        }
+                        continue;
+                    }
                     // ★ tag 7(11-02) = 답장 줄: tag 4 머리 ‖ flags u8(bit0 = 전송 시각 동반) ‖ [sent_ms 8] ‖
                     //   from ‖ text ‖ r_origin 32 ‖ r_seq 8 LE ‖ r_from ‖ quote. 구판은 여기서 멈춘다(전방 확장).
                     if let Some(r) = &l.reply {
@@ -2719,6 +2764,85 @@ fn decode_history(bytes: &[u8]) -> Vec<ChatLine> {
         let mine = bytes[i + 1] != 0;
         let at_ms = u64::from_le_bytes(bytes[i + 2..i + 10].try_into().unwrap_or([0; 8]));
         match tag {
+            8 => {
+                // ★ 확인 상태 동반 줄(11-06 · N-3) — tag 4 머리 ‖ flags ‖ [sent] ‖ [delivered] ‖ [read] ‖ from ‖ text ‖ [답장 꼬리].
+                if i + 52 > bytes.len() {
+                    break;
+                }
+                let origin = PeerId::from_bytes(
+                    bytes[i + 10..i + 42].try_into().unwrap_or([0; PeerId::LEN]),
+                );
+                let seq = u64::from_le_bytes(bytes[i + 42..i + 50].try_into().unwrap_or([0; 8]));
+                let importance = bytes[i + 50];
+                let flags = bytes[i + 51];
+                let mut p = i + 52;
+                let mut take_ms = |bit: u8| -> Option<Option<u64>> {
+                    if flags & bit == 0 {
+                        return Some(None);
+                    }
+                    if p + 8 > bytes.len() {
+                        return None;
+                    }
+                    let ms = u64::from_le_bytes(bytes[p..p + 8].try_into().unwrap_or([0; 8]));
+                    p += 8;
+                    Some(Some(ms))
+                };
+                let (Some(sent_ms), Some(delivered_at), Some(read_at)) =
+                    (take_ms(1), take_ms(2), take_ms(4))
+                else {
+                    break;
+                };
+                let Some((from, p1)) = read_str(bytes, p) else {
+                    break;
+                };
+                let Some((text, p2)) = read_str(bytes, p1) else {
+                    break;
+                };
+                let mut next = p2;
+                let mut reply = None;
+                let mut reply_from = None;
+                if flags & 8 != 0 {
+                    if p2 + 40 > bytes.len() {
+                        break;
+                    }
+                    let r_origin = PeerId::from_bytes(
+                        bytes[p2..p2 + 32].try_into().unwrap_or([0; PeerId::LEN]),
+                    );
+                    let r_seq =
+                        u64::from_le_bytes(bytes[p2 + 32..p2 + 40].try_into().unwrap_or([0; 8]));
+                    let Some((r_from, p3)) = read_str(bytes, p2 + 40) else {
+                        break;
+                    };
+                    let Some((quote, p4)) = read_str(bytes, p3) else {
+                        break;
+                    };
+                    reply = Some(nbeep_core::ReplyRef {
+                        origin: r_origin,
+                        seq: r_seq,
+                        quote: nbeep_core::ReplyRef::excerpt(&quote),
+                    });
+                    reply_from = (!r_from.is_empty())
+                        .then(|| nbeep_core::sanitize_message(&r_from).as_str().to_string());
+                    next = p4;
+                }
+                let mut l = ChatLine::text(
+                    mine,
+                    nbeep_core::sanitize_message(&text),
+                    at_ms,
+                    wall_from_ms(at_ms),
+                )
+                .with_importance(importance)
+                .with_seq(seq)
+                .with_origin(origin)
+                .with_sent(sent_ms.map(|ms| (ms, wall_from_ms(ms))))
+                .with_acks(delivered_at, read_at)
+                .with_reply(reply, reply_from);
+                if !from.is_empty() {
+                    l = l.with_from(nbeep_core::sanitize_message(&from).as_str());
+                }
+                out.push(l);
+                i = next;
+            }
             7 => {
                 // ★ 답장 줄(11-02) — tag 4 머리 ‖ flags ‖ [sent_ms] ‖ from ‖ text ‖ r_origin ‖ r_seq ‖ r_from ‖ quote.
                 if i + 52 > bytes.len() {
@@ -2885,6 +3009,8 @@ fn decode_history(bytes: &[u8]) -> Vec<ChatLine> {
                     seq: 0,
                     delivered: false,
                     read: false,
+                    delivered_at: None,
+                    read_at: None,
                     queued: false,
                     importance: 0,
                     origin: None,
@@ -4199,6 +4325,9 @@ struct App {
     sort_drop: nbeep_ui::IconDropdown,
     /// 세션이 끊긴 상대(AppEvent::Closed) — 목록 상태 점 Lost 근거. 재수립 시 제거.
     closed_peers: std::collections::HashSet<PeerId>,
+    /// ★ Bye를 보내고 떠난 상대(M2-4b · 11-06) — `Closed`에서 자동 재연결을 걸지 않는 근거. 해제 = 발견에
+    /// 다시 **등장**(PeerEvent::Appeared) · 세션 재수립 · 잊기. 사람의 클릭(start_connect)은 표식과 무관.
+    bye_peers: std::collections::HashSet<PeerId>,
     /// 끊긴 대화의 **스레드 대피소**(DR-26 — 대화 상태는 상대별 유지 · 08-13 실기).
     /// `Closed`가 `Conversation`(세션 채널)을 지울 때 lines만 여기로 옮기고, 재수립
     /// (`install_conversation`)이 되찾아 간다 — 그전엔 끊김 = 스레드 통째 소실이었다.
@@ -7089,7 +7218,12 @@ impl App {
                         profile: hint.profile,
                     };
                     // 병합 판정은 PeerTable(FR-D-6 · ADR-0003 §9 C) — 출처는 경로 토큰으로 접힌다(LAN 0 · 랑데부 세대별).
-                    if self.table.observe_with(obs, now).is_some() {
+                    let observed = self.table.observe_with(obs, now);
+                    if matches!(observed, Some(nbeep_core::PeerEvent::Appeared(_))) {
+                        // ★ 재등장(Bye · 11-06) — 정중히 떠난 상대가 다시 나타났다: 표식을 지워 재연결 사다리를 허용.
+                        self.bye_peers.remove(&hint.peer);
+                    }
+                    if observed.is_some() {
                         changed = true;
                         startup_mark(4); // INS-3 ⑤ 첫 피어 관측(첫 기록만 남는다)
                         dlog!(self, DL::Disc, DV::Detail, "discovery", |r| r
@@ -9285,6 +9419,9 @@ impl App {
         if self.peer_blocked(peer) {
             return; // 아웃바운드 게이트(docs/38 §3) — 차단 상대에게 자동 연결을 걸지 않는다
         }
+        if self.bye_peers.contains(&peer) {
+            return; // 정중히 종료한 상대(Bye · 11-06) — 잔류 광고·대기분 비컨으로 되살리지 않는다(재등장이 푼다)
+        }
         if self.peer_incompatible(peer) {
             return; // 버전 불일치(M1-13 ⓒ) — 성립할 수 없는 핸드셰이크를 걸지 않는다
         }
@@ -10180,6 +10317,7 @@ impl App {
         }
         self.reconnect.remove(&peer);
         self.closed_peers.remove(&peer);
+        self.bye_peers.remove(&peer);
         self.table.forget(peer);
         self.msg_rate.remove(&peer);
         self.disc_rate.remove(&peer);
@@ -12596,6 +12734,7 @@ impl App {
         self.dedup.reset_device(peer);
         // 세션 재수립 = 끊김 상태 해제(목록 점 Active로).
         self.closed_peers.remove(&peer);
+        self.bye_peers.remove(&peer);
         // 비발견 상대(수동 등록·다른 서브넷 인바운드)는 발견 테이블에 없다 — 목록에
         // 유지할 이름을 스냅샷(④ 실기 08-13: 대화창을 닫으면 목록에서 사라지던 버그).
         if self.table.get(peer).is_none() {
@@ -15064,6 +15203,7 @@ impl App {
         self.peer_profiles.remove(&peer);
         self.extra_peers.remove(&peer); // 비발견 시드 제거(재부팅 재시드 방지)
         self.closed_peers.remove(&peer);
+        self.bye_peers.remove(&peer);
         self.unread.remove(&peer);
         self.last_read.remove(&peer);
         self.table.forget(peer); // 발견 테이블에서도 즉시(다시 비컨하면 새로 뜬다)
@@ -21988,6 +22128,14 @@ impl ApplicationHandler<AppEvent> for App {
             AppEvent::SyncReplies { peer, replies } => self.on_sync_replies(peer, &replies),
             AppEvent::SyncRead { peer, read } => self.on_sync_read(peer, read),
             AppEvent::Succession { peer, doc } => self.on_succession(peer, &doc),
+            AppEvent::PeerBye { peer } => {
+                // ★ 상대가 정중히 종료한다(Bye · 11-06) — 뒤따르는 Closed는 의도된 이탈: 백오프 재연결을 걸지
+                //   않는다(상대가 다시 나타나면 발견 Appeared가 표식을 지우고 잇는다 · 클릭은 언제나).
+                self.bye_peers.insert(peer);
+                dlog!(self, DL::Sess, DV::Decide, "peer_bye", |r| r
+                    .arg("peer", peer.short())
+                    .ok("intended leave — no auto reconnect until reappear"));
+            }
             AppEvent::ChatAck {
                 peer,
                 target_seq,
@@ -22008,30 +22156,44 @@ impl ApplicationHandler<AppEvent> for App {
                     AckKind::Read => (false, true),
                 };
                 let mut inv = Invalidations::default();
+                let now_ms = unix_now_ms(); // N-3 — 확인 도착 시각(기록 영속)
                 if let Some(chat) = self.chats.get_mut(&self.view_key(peer)) {
                     if read {
-                        chat.mark_read_upto(target_seq, &mut inv);
+                        chat.mark_read_upto(target_seq, now_ms, &mut inv);
                     } else {
-                        chat.mark_ack(target_seq, deliv, false, &mut inv);
+                        chat.mark_ack(target_seq, deliv, false, now_ms, &mut inv);
                     }
                 }
                 // 스레드 접기(S3): 내 줄은 묶음의 한 기기 저장분에만 있다 — 묶음 전체에서 찾는다.
                 //   ⚠ Read up-to는 기기별 seq 공간이 아니라 **내 발신 seq**(단일 시퀀서) 기준이라
                 //   어느 기기가 보낸 ack든 같은 줄을 가리킨다.
+                let mut dirty = Vec::new();
                 for d in self.fold_group(peer) {
                     let lines = match self.conversations.get_mut(&d) {
                         Some(c) => Some(&mut c.lines),
                         None => self.parked_lines.get_mut(&d),
                     };
+                    let mut changed = false;
                     for l in lines.into_iter().flatten() {
                         if l.mine && l.seq != 0 {
-                            if read && l.seq <= target_seq {
+                            if read && l.seq <= target_seq && !l.read {
                                 l.read = true;
-                            } else if deliv && l.seq == target_seq {
+                                l.read_at = Some(now_ms);
+                                changed = true;
+                            } else if deliv && l.seq == target_seq && !l.delivered {
                                 l.delivered = true;
+                                l.delivered_at = Some(now_ms);
+                                changed = true;
                             }
                         }
                     }
+                    if changed {
+                        dirty.push(d);
+                    }
+                }
+                // N-3 — 상태가 바뀐 줄은 기록에도 남긴다(앞줄이 바뀌므로 세그먼트 재작성 경로 · RL-7 디바운스).
+                for d in dirty {
+                    self.record_history(d);
                 }
                 self.redraw_conversation(peer);
             }
@@ -23074,17 +23236,23 @@ impl ApplicationHandler<AppEvent> for App {
                 //   ConnectFailed 경로에만). 짧게 산 세션(SESSION_SHORT_MS)이면 성립 때 기억한 단계 +1로 잇고, 상한을
                 //   넘으면 중단 고지(클릭 = 재개). 오래 산 세션의 끊김은 종전대로 0단.
                 let stage = closed_next_stage(self.reconnect_last.remove(&peer), lived_ms);
-                let delay_opt = reconnect_delay(stage).filter(|_| reachable);
+                // ★ Bye(11-06) — 상대가 정중히 종료했으면 의도된 이탈: 백오프를 걸지 않는다(죽은 상대에게 5s·15s·60s
+                //   재시도 폭주 방지). 광고가 아직 남아 있어도(종료 중 ≤2s) 발견이 **재등장**을 볼 때까지 표식 유지.
+                let polite = self.bye_peers.contains(&peer);
+                let delay_opt = reconnect_delay(stage).filter(|_| reachable && !polite);
                 dlog!(self, DL::Conn, DV::Decide, "session_closed", |r| {
                     let r = r
                         .arg("peer", peer.short())
                         .arg("lived_ms", lived_ms)
                         .arg("stage", stage)
                         .rule("short_ms", SESSION_SHORT_MS)
-                        .rule("reachable(manual|discovered|relay)", reachable);
+                        .rule("reachable(manual|discovered|relay)", reachable)
+                        .rule("polite_bye", polite);
                     match delay_opt {
                         Some(d) => r.ok(format!("reconnect in {}s", d / 1000)),
-                        None => r.fail(if reachable {
+                        None => r.fail(if polite {
+                            "peer said bye — wait for reappearance"
+                        } else if reachable {
                             "backoff exhausted — auto reconnect stopped"
                         } else {
                             "no route — no retry"
@@ -23096,6 +23264,9 @@ impl ApplicationHandler<AppEvent> for App {
                     self.reconnect.insert(peer, (stage, due));
                     // 그룹발 미종결 몫 = 재-Offer 대기로 복귀(M5-1h — 표식 유지 ·
                     // 재성립 시 resend가 같은 풍선을 잇고, 소진되면 fail이 닫는다).
+                    self.gx_mark_peer(peer, GxState::Waiting);
+                } else if polite {
+                    // 정중한 종료 — 그룹발 미종결 몫은 대기 유지(재등장 시 resend가 잇는다). 상태 문구 없음(조용히).
                     self.gx_mark_peer(peer, GxState::Waiting);
                 } else if reachable {
                     // 상한 소진(짧게 살다 끊김 반복) — 자동 재연결 중단 · 사람이 클릭하면 재개(13 §12-1 종료 조건).
@@ -24049,6 +24220,12 @@ impl ApplicationHandler<AppEvent> for App {
         // 액터가 Disconnected를 보고 부분물을 봉인 보존한 뒤 끝난다 — 그 완주를
         // 기다린다(액터 감지 지연 ≤ 수신 폴 100ms · 죽은 핸들 join은 즉시).
         // 강제 종료(kill)는 어쩔 수 없다 — 그 경우 발신자 재-Offer는 0부터.
+        // ★ Bye(M2-4b · 11-06) — 채널을 끊기 **전에** 각 세션에 정중한 종료 1프레임. 큐에 남은 명령은 writer가
+        //   Disconnected를 보기 전에 마저 보낸다(mpsc 순서) · 아래 액터 join 대기(≤2s)가 그 시간을 준다.
+        let bye = nbeep_core::Bye::shutdown().encode();
+        for c in self.conversations.values() {
+            let _ = c.out_tx.send(SessionCmd::Control(vec![bye.clone()]));
+        }
         self.conversations.clear();
         // ★ 상한부 대기(08-29 Linux 실기 — "종료가 안 되거나 강제 종료가 뜬다"): 액터가
         //   TCP 쓰기(타임아웃 30s)나 상대 무응답에 잡혀 있으면 join이 그만큼 메인을
@@ -26367,6 +26544,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
             settings_sort_value.as_str(),
         ),
         closed_peers: std::collections::HashSet::new(),
+        bye_peers: std::collections::HashSet::new(),
         extra_peers: HashMap::new(),
         manual_addrs: HashMap::new(),
         unread: HashMap::new(),
@@ -27266,6 +27444,63 @@ mod tests {
     }
 
     /// M2-5b — 손상은 fail-soft: 읽은 데까지 살리고 멈춘다(빈 봉투 안 만든다).
+    /// ★ N-3(11-06) — 전달·읽음 시각이 기록에 남고(tag 8) 복원 시 상태가 되살아난다. 상태 없는 줄은
+    /// 종전 tag 그대로(바이트 불변) · 답장 꼬리 동반도 왕복 · 구판은 첫 tag 8에서 멈춘다.
+    #[test]
+    fn history_roundtrips_ack_state_tag8() {
+        use super::{decode_history, encode_history, wall_from_ms, ChatLine};
+        let w = wall_from_ms(0);
+        let me = PeerId::from_bytes([7u8; PeerId::LEN]);
+        let them = PeerId::from_bytes([9u8; PeerId::LEN]);
+        let lines = vec![
+            ChatLine::text(true, nbeep_core::sanitize_message("상태 없음"), 100, w)
+                .with_seq(1)
+                .with_origin(me),
+            ChatLine::text(true, nbeep_core::sanitize_message("전달됨"), 200, w)
+                .with_seq(2)
+                .with_origin(me)
+                .with_acks(Some(250), None),
+            ChatLine::text(true, nbeep_core::sanitize_message("읽힘+답장"), 300, w)
+                .with_seq(3)
+                .with_origin(me)
+                .with_importance(1)
+                .with_sent(Some((310, wall_from_ms(310))))
+                .with_acks(Some(320), Some(330))
+                .with_reply(
+                    Some(nbeep_core::ReplyRef {
+                        origin: them,
+                        seq: 9,
+                        quote: "원문".into(),
+                    }),
+                    Some("상대".into()),
+                ),
+        ];
+        let enc = encode_history(&lines);
+        assert_eq!(enc[0], 4, "상태 없는 줄 = 종전 tag 4 불변");
+        let back = decode_history(&enc);
+        assert_eq!(back.len(), 3);
+        assert!(!back[0].delivered && back[0].delivered_at.is_none());
+        assert!(back[1].delivered && !back[1].read);
+        assert_eq!(back[1].delivered_at, Some(250));
+        assert!(back[2].delivered && back[2].read);
+        assert_eq!(
+            (back[2].delivered_at, back[2].read_at),
+            (Some(320), Some(330))
+        );
+        assert_eq!(back[2].sent.map(|s| s.0), Some(310));
+        assert_eq!(back[2].importance, 1);
+        assert_eq!(
+            back[2].reply.as_ref().map(|r| (r.origin, r.seq)),
+            Some((them, 9))
+        );
+        assert_eq!(back[2].reply_from.as_deref(), Some("상대"));
+        // 구판 흉내 — 첫 tag 8에서 멈춘다(앞 줄은 산다).
+        let cut = enc.iter().position(|&b| b == 8).unwrap();
+        assert_eq!(decode_history(&enc[..cut]).len(), 1);
+        // 잘린 tag 8(시각 필드 중간) = fail-soft.
+        assert_eq!(decode_history(&enc[..cut + 55]).len(), 1);
+    }
+
     #[test]
     fn history_decode_is_fail_soft() {
         use super::{decode_history, encode_history, wall_from_ms, ChatLine};

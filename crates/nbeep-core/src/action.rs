@@ -7,6 +7,7 @@
 //! `ActionKind`가 부족한 것이다. 레저 직렬화 식별자는 [`ActionKind::stable_code`](ActionKind::stable_code)
 //! (부여 후 불변 — 골든 테스트가 값을 지킨다).
 
+use crate::ack::AckKind;
 use crate::identity::TrustLevel;
 
 /// 발견 단계([docs/06] S1~S6). 계측·로그의 문맥.
@@ -59,6 +60,44 @@ pub enum RejectReason {
     LimitExceeded,
     /// 디코드 실패(손상·악성).
     DecodeFailed,
+}
+
+/// 알림 강도([docs/24] ADR-0010 §4 — **로컬 판정값 · 전송되지 않는다**). 발신자의 등급 요청
+/// (`Importance`)을 수신자의 신뢰 게이트로 판정한 결과.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum AlertLevel {
+    /// 무음 — 목록 갱신만.
+    Silent,
+    /// 배지·미리보기 없는 카운트.
+    Badge,
+    /// 토스트.
+    Toast,
+    /// 소리 + 최상위 알림 창(지속) + 토스트.
+    Alarm,
+}
+
+/// 수신자 릴레이 채널 **종류만**([docs/24] §6 · 목적지는 코드·레저에 넣지 않는다 — 솔티드 해시 별도 필드).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ChannelKind {
+    /// Webhook(HTTP POST).
+    Webhook,
+    /// SMTP.
+    Smtp,
+}
+
+/// 알림·에스컬레이션 억제 사유([docs/24] §4 규칙 · FR-S-46 "억제한 건은 요약 보고").
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SuppressReason {
+    /// 미검증 상대 — 소리·외부 채널 없음(신뢰 게이트).
+    Untrusted,
+    /// 같은 발신자 `Urgent` N분 1회 초과 · 채널 속도·일일 상한.
+    RateLimited,
+    /// OS 방해금지 존중(옵트인 없음).
+    DoNotDisturb,
+    /// 사용자가 알림·채널을 끔.
+    Disabled,
+    /// 차단 상대.
+    Blocked,
 }
 
 /// **사용자가 인지할 수 있는 단위 행위 하나.**
@@ -126,13 +165,25 @@ pub enum ActionKind {
     RateLimited,
     /// 발신자 차단.
     SenderBlocked,
+
+    // ── 알림·확인([docs/24] ADR-0010 N-4) ──
+    /// 수신 알림 발화(판정된 강도 — 페이로드 · 코드는 동일).
+    NotificationRaised(AlertLevel),
+    /// 확인(전달·읽음) 송신.
+    AckSent(AckKind),
+    /// 확인(전달·읽음) 수신.
+    AckReceived(AckKind),
+    /// 수신자 릴레이 외부 채널 발송(종류만).
+    EscalationSent(ChannelKind),
+    /// 알림·외부 채널 억제(사유만).
+    EscalationSuppressed(SuppressReason),
 }
 
 impl ActionKind {
     /// **안정 코드 — 부여 후 불변.** 계측 레저([docs/13] §6-5) 직렬화 식별자.
     ///
     /// 카테고리별 16진 대역(발견 `0x00xx` · 세션 `0x01xx` · 대화 `0x02xx` · 전송 `0x03xx` ·
-    /// 안전 `0x04xx` · 정책 `0x05xx`)으로 **여유를 두고** 배정한다. 기능이 사라져도 **재사용 금지**
+    /// 안전 `0x04xx` · 정책 `0x05xx` · 알림·확인 `0x06xx`)으로 **여유를 두고** 배정한다. 기능이 사라져도 **재사용 금지**
     /// (문서 번호와 같은 규칙 — 과거 기록의 의미가 바뀐다). 페이로드(등급·단계)는 코드에 포함하지 않는다 —
     /// **행위 정체성만** 담고, 등급 등은 별도 필드([`crate::ports::MeterEvent`])로 기록한다.
     ///
@@ -170,6 +221,12 @@ impl ActionKind {
             // 정책 0x05xx
             ActionKind::RateLimited => 0x0501,
             ActionKind::SenderBlocked => 0x0502,
+            // 알림·확인 0x06xx(N-4 · 11-06)
+            ActionKind::NotificationRaised(_) => 0x0601,
+            ActionKind::AckSent(_) => 0x0602,
+            ActionKind::AckReceived(_) => 0x0603,
+            ActionKind::EscalationSent(_) => 0x0604,
+            ActionKind::EscalationSuppressed(_) => 0x0605,
         }
     }
 }
@@ -273,6 +330,11 @@ mod tests {
             ImageDecodeRejected(RejectReason::UnsupportedFormat),
             RateLimited,
             SenderBlocked,
+            NotificationRaised(AlertLevel::Toast),
+            AckSent(AckKind::Delivered),
+            AckReceived(AckKind::Read),
+            EscalationSent(ChannelKind::Webhook),
+            EscalationSuppressed(SuppressReason::Untrusted),
         ]
     }
 
@@ -311,6 +373,14 @@ mod tests {
             ),
             (ActionKind::RateLimited, 0x0501),
             (ActionKind::SenderBlocked, 0x0502),
+            (ActionKind::NotificationRaised(AlertLevel::Toast), 0x0601),
+            (ActionKind::AckSent(AckKind::Delivered), 0x0602),
+            (ActionKind::AckReceived(AckKind::Read), 0x0603),
+            (ActionKind::EscalationSent(ChannelKind::Webhook), 0x0604),
+            (
+                ActionKind::EscalationSuppressed(SuppressReason::Untrusted),
+                0x0605,
+            ),
         ];
         for (kind, code) in expected {
             assert_eq!(kind.stable_code(), *code, "안정 코드 변경 금지: {kind:?}");
@@ -342,6 +412,19 @@ mod tests {
         assert_eq!(
             ActionKind::FileQuarantined(RiskLevel::Executable).stable_code(),
             ActionKind::FileQuarantined(RiskLevel::Data).stable_code(),
+        );
+        // 알림 강도·확인 종류·채널·사유도 마찬가지 — 축은 별도 필드.
+        assert_eq!(
+            ActionKind::NotificationRaised(AlertLevel::Silent).stable_code(),
+            ActionKind::NotificationRaised(AlertLevel::Alarm).stable_code(),
+        );
+        assert_eq!(
+            ActionKind::AckSent(AckKind::Delivered).stable_code(),
+            ActionKind::AckSent(AckKind::Read).stable_code(),
+        );
+        assert_ne!(
+            ActionKind::AckSent(AckKind::Read).stable_code(),
+            ActionKind::AckReceived(AckKind::Read).stable_code(),
         );
     }
 
