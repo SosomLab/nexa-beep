@@ -9,7 +9,7 @@
 2. **끄면 비용 = 원자 정수 load 1회 + 분기 1개**(nsql-log 그대로) — `nbeep_core::devlog::wants(layer, level)` `#[inline(always)]` · 마스크 `u64`(층 10 × 수준 4). 레코드 조립(문자열·할당)은 `dlog!` 매크로의 게이트 **뒤**에서만.
 3. **레코드 = 한 줄 `k=v`** — `층/수준 기능 인자… | rule 기준=값 … | → 결과` 또는 `| FAIL 원인`. 사용자가 요구한 네 요소(기능·전달인자·판단 기준/값·실패 여부/원인)가 자리로 고정돼 있어 grep·필터가 선다.
 4. **봉투 원리**: 레코드는 **지문 short·개수·길이·판정값**만. 메시지 본문·파일명·경로·키·암호는 넣지 않는다(파일명은 글자 수 · 설정값은 `pass`/`secret`/`key`가 든 키면 길이만).
-5. **켜는 길 둘** — 설정 `log.dev_mode`(on · `log.enabled` 종속) + `log.dev_layers`(층 문법 · 빈 값 = 전부) → 파일 / 환경변수 `NEXA_DEVLOG=<층 문법|1|*>` → **stderr 거울 + 파일(켜져 있으면)**. 환경변수가 설정을 이긴다(실기 도구 `NEXA_SCRIPT`와 짝).
+5. **켜는 길 둘** — 설정 `log.dev_mode`(on · `log.enabled` 종속) + `log.dev_layers`(층 문법 · 빈 값 = 전부) → 파일 / 환경변수 `NEXA_DEVLOG=<층 문법|1|*>` → **stderr 거울 + 파일(켜져 있으면)**. ★**수준 생략 = decide+detail**(11-07 `5da2cb9` — trace는 `층:trace` 명시 · `*`/`all`/`1`은 전 수준). 환경변수가 설정을 이긴다(실기 도구 `NEXA_SCRIPT`와 짝).
 6. **커버리지**: 게이트는 `wants` 한 함수 · 매크로 한 곳 — 테스트가 마스크를 켜고/끄고 두 갈래를 다 밟는다(`mask_parse_and_gate_both_branches`). 계측 지점은 §3 표(12곳 · 10-19 1차)가 SSOT.
 
 ## 1. 모델 — 층 × 수준
@@ -84,7 +84,7 @@ dlog!(self, DL::Conn, DV::Decide, "connect_failed", |r| r
 
 - ✅ **로그 창 1차**(11-04 `d17a651` — 메모리 링 2000줄(상태바 문구 + 상세 로그) · 검색 AND · 휠 · 바닥 따라가기 · 복사 · 설정 Action `log.window` · 스크립트 `open=log` · 층/수준 필터는 후속). 종전 계획: **로그 창**(nexa-sql `log_win` 상당 — 링 버퍼 · 종류/층 필터 · 줄바꿈 · 복사): 그때는 `log.view`(OS 기본 프로그램으로 파일 열기)로 본다. 창이 필요해지면 `Role::Log` + 링 버퍼(`log.max_lines`)를 얹는다 — 생산자는 같은 `devlog_push`.
 - ✅ **계측 확장 1단계(11-07 LOG-2 `41180f7`)** — `[user]` **32곳** `User/Decide(ok|fail)`·`User/Detail` 승격(`utrace` · eprintln 유지) · UI `window_event`(Ui/Trace · 역할·이벤트 태그만)·`window_created`(Ui/Detail) · ★**`Basic` 게이트 결함 수정**(마스크에 비트가 없어 `startup`/`ui_stall`이 한 번도 안 나왔다) · 지연 포맷 1단계(`dev ` 문자열 1회) · 실측 = s4 시나리오 `NEXA_DEVLOG=user,ui`(인스턴스 4 · 74초) user 층 89~1,367줄/인스턴스(대부분 `hint` — X1 1,336줄 ≈18줄/s) · ui 층 4~6줄 · ⚠ 켠 채로 돌리면 s4 판정 4건 ✗(eprintln `[user] …`와 `[dev] user/…`가 같은 grep에 두 번 걸려 기대 2 → 4) · 기본(꺼짐)은 s4 24/24 · group 28/28. 종전 계획: 따라잡기(`[user]` eprintln 14곳 → `User/Detail`로 승격 · 시나리오 도구가 stderr를 grep하므로 eprintln은 유지) · 파일 전송 단계(`Xfer/Detail` 청크·속도·재개) · UI(`Ui/Trace` 창 생성·포커스) · 릴레이 roster.
-- **완전 지연 포맷**(docs/48 §5 · **남김 = LOG-2 2단계** · 착수 순서 ③): `Rec`를 구조체 그대로 링에 넣고 텍스트는 소비 시점에 — 켠 상태의 문자열 비용까지 0.
+- ✅ **완전 지연 포맷(11-07 LOG-2 2단계 `827f3d7`)** — 링 원소 = `nbeep_ui::LogLine{hms, body: Status(String) | Dev(Rec)}`(텍스트는 로그 창 sync 때 · 증분) · `devlog_push(rec)` = 메인 스레드 문자열 0 · 파일 = `StatusLog::log_dev` → 로거 스레드 렌더 · `utrace(.., || format!)` 31곳 게이트 밖 할당 제거 · `hint_from` = Trace 강등. 실측 s4(`NEXA_DEVLOG=user,ui`) user 층 5~31줄/인스턴스(종전 1,379 · 대부분 hint). 종전 계획: `Rec`를 구조체 그대로 링에 넣고 텍스트는 소비 시점에 — 켠 상태의 문자열 비용까지 0.
 - ✅ **컴파일 타임 제거**(11-07 `41180f7`): feature `devlog`(default on) off면 `wants()` = `false` 상수 — 호출 지점 분기까지 제거(`cargo check -p nbeep-core --no-default-features` ✓).
 
 ## 6. 시험 도구와의 경계(11-02)

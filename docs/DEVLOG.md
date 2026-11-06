@@ -7,6 +7,7 @@
 
 ## 2026-11-07
 
+- ★**(Win · main) M4-12 수신 스트리밍 1~5단계 ✅** `0eab251`…`67aa0a4` — 256MiB 수신 피크 Private 521 → **7.8MB** · 실체화 8.1MB · 이어받기 hash ✓ · 새 격리물 v2(구 앱 fail-closed) · **LOG-2 2단계** · M3-4 메뉴 키·캐러셀(종결) · X-13 S3 2건 · fmt 사고 수습 → [journal](journal/2026-11-07.md)
 - ★**(Win · main) R-18 ⓑ 조용한 노드 ✅** `ef20e1d` · **R-22 ③ 적응형 S4 ✅** `145f674` · **S4 왕복 결함 수정** `90e2292`(송신 소켓 응답 수신 — 종전 효과 0) · docs/10 ADR 색인 현행화 · s4/group 판정 `[dev]` 줄 제외(협업) → [journal](journal/2026-11-07.md)
 - ★**(Win · main) "잔여건 계속 진행" 7커밋 + 사용자 결정 8건 반영** `41180f7`…`a87ab62` — LOG-2 1단계 · M4-12 0단계(+헤드룸·AMSI 32MiB) · FW-1 방화벽 · M3-4 소분 ①②④ · M3-17 ②③ · peak-poll.ps1 · 실측 수신 피크 PeakWorkingSet ≈583MB(≈2.2S · 3회 동일) · max Private 263.7MB(1회차) / 519.8MB(2회차) → 순간 2S 잔존 · 원인 미상(M4-12 본단계에서 추적) · ADR-0013 Accepted · v1.1 3건 · 제외 13건 → [journal](journal/2026-11-07.md)
 

@@ -24,7 +24,7 @@
 
 ### 레이아웃 (v1)
 
-> **M4-12 0단계(11-07 `c2a2404`·`a87ab62`)** — 포맷 **불변**으로 수신·검증·실체화 경로의 S 크기 복사만 제거(`seal_owned`/`open_owned`/`unseal_owned` · `materialize_owned`). v2(NXBQ 꼬리 메타 · NBSE 청크 스트림)는 1~5단계(11-07 사용자 결정).
+> **M4-12 0단계(11-07 `c2a2404`·`a87ab62`)** — 포맷 **불변**으로 수신·검증·실체화 경로의 S 크기 복사만 제거(`seal_owned`/`open_owned`/`unseal_owned` · `materialize_owned`). **v2 구현 ✅ 11-07**(`2cf5902` NXBQ v2 꼬리 메타 · `0eab251` NBSE v2 청크 스트림 · `13688ab` 스풀 싱크) — **새 수신 격리물 = v2**(구 앱은 `UnknownVersion` fail-closed) · v1·평문 구본은 읽기만.
 
 | 오프셋 | 크기 | 필드 | 설명 |
 |---:|---:|---|---|
