@@ -25475,10 +25475,20 @@ impl ApplicationHandler<AppEvent> for App {
             el.exit();
             return;
         }
-        self.poll_discovery();
-        self.server_tick(); // Managed 서버 접속 수렴(X-2b — 2s 페이스 내부 가드)
+        // ★ 첫 paint 우선(PERF-4 회귀 처방 · 11-07): 메인 창 첫 present 전에는 발견 관측·서버·사용자 틱을 미룬다.
+        //   90e2292(S4 응답 수신)로 상대의 유니캐스트 Announce가 기동 수십 ms 안에 도착하게 되자, 웜 기동(아는 상대 ·
+        //   기록 · 재연결)에서 그 첫 관측 처리가 첫 paint 앞에 끼어 first_paint 58→≈365ms(bisect 11-07). 관측은 채널에
+        //   남아 첫 paint 직후 소비된다(지연 ≈ 한 프레임). 안전판: 창이 그려지지 않는 기동(트레이 시작 등)은 1.5초 뒤 해제.
+        let paint_first = STARTUP_MS[2].get().is_none()
+            && STARTUP_T0
+                .get()
+                .is_some_and(|t0| t0.elapsed() < std::time::Duration::from_millis(1500));
+        if !paint_first {
+            self.poll_discovery();
+            self.server_tick(); // Managed 서버 접속 수렴(X-2b — 2s 페이스 내부 가드)
+            self.user_tick(); // 사용자 층(ADR-0015) — 힌트 태그 자정 회전 · 페어링 RID 탐색
+        }
         self.refresh_tray_badges(); // 트레이 LAN·전송 점(M3-2e — 바뀔 때만 갱신)
-        self.user_tick(); // 사용자 층(ADR-0015) — 힌트 태그 자정 회전 · 페어링 RID 탐색
         self.script_tick(el); // 자동화 테스트 seam(NEXA_SCRIPT · 없으면 no-op)
                               // ★ 헤드리스(11-02): 숨은 창은 OS가 RedrawRequested를 보내지 않는다 → 틱마다 전 창을 직접 그린다(시험 전용 비용 ·
                               //   캡처 요청도 여기서 소비된다). 보이는 창의 정상 경로(요청 → OS → RedrawRequested)는 손대지 않는다.
