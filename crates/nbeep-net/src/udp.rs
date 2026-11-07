@@ -773,9 +773,16 @@ impl UdpDiscovery {
                             }
                         }
                     }
+                    // ★ ConnectionReset(11-07 · Windows): 이 소켓에서 보낸 유니캐스트(S4 프로브)가 ICMP port unreachable을
+                    //   받으면 다음 recv가 WSAECONNRESET으로 돌아온다 — 소켓은 멀쩡하다. 종전엔 `Err(_) => return`이라
+                    //   **첫 도달 불가 이웃 하나에 응답 수신 스레드가 영영 죽었다**(S4 왕복 수신이 조용히 멎음).
                     Err(e)
-                        if e.kind() == std::io::ErrorKind::WouldBlock
-                            || e.kind() == std::io::ErrorKind::TimedOut => {}
+                        if matches!(
+                            e.kind(),
+                            std::io::ErrorKind::WouldBlock
+                                | std::io::ErrorKind::TimedOut
+                                | std::io::ErrorKind::ConnectionReset
+                        ) => {}
                     Err(_) => return,
                 }
             }
