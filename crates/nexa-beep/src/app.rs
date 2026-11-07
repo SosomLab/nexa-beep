@@ -4548,6 +4548,11 @@ struct App {
     /// 그룹발 발신 표식(M5-1h) — (구성원, 원본 경로) → 방: 펌프·이벤트가 이
     /// 파일을 그룹 풍선으로 라우팅하는 키. 종결 시 제거 · 상한 64/상대(13 §12-1).
     group_send_tags: HashMap<PeerId, Vec<(std::path::PathBuf, nbeep_core::group::GroupId)>>,
+    /// ★ 접힌 스레드 **기기마다 파일 오퍼** 집계(ADR-0015 §5-1 · S3 · 11-07 사용자 결정): 키 = 뷰 키(대표) ·
+    /// `GroupXfer` 재사용(기기 = 구성원). 그룹 팬아웃과 같은 문법 — 기기별 1:1 전송 스택은 그대로, 이건 접어 보여 주는 장부.
+    fold_xfers: HashMap<PeerId, Vec<GroupXfer>>,
+    /// 기기별 라우팅 표식(경로, 뷰 키) — `group_send_tags` 동형. 그 기기의 발신 이벤트를 집계 풍선으로 돌린다.
+    fold_send_tags: HashMap<PeerId, Vec<(std::path::PathBuf, PeerId)>>,
     /// 수신측 그룹 표식(M5-1h · Control 18) — 상대별 (이름, 크기, uid). 상한 64.
     recv_group_hints: HashMap<PeerId, Vec<(String, u64, [u8; 32])>>,
     /// 수신측 그룹 라우팅 장부(M5-1h) — 방별 (발신자, 이름, 크기): 그룹 스레드
@@ -5402,8 +5407,9 @@ impl App {
             self.request_redraw(id);
             return;
         };
-        // 스레드 접기(S3): 파일은 그 사용자의 **살아 있는 기기 하나**로(대표 기기가 꺼져 있어도
-        //   보낸다 · 전송 상태는 기기 키 · 전송 줄은 뷰 키로 접혀 보인다). 기기마다 보내기는 후속.
+        // 스레드 접기(S3): 게이트·상한은 **살아 있는 첫 기기** 기준으로 판정하고(대표 기기가 꺼져 있어도 보낸다 ·
+        //   전송 상태는 기기 키 · 전송 줄은 뷰 키로 접혀 보인다), 살아 있는 기기가 둘 이상이면 아래서 전부에 오퍼한다.
+        let view = peer;
         let peer = self.file_target(peer);
         // 사전 점검 — 핀 미고정·차단은 여전히 막는다. **상호 미왕래는 경고 후 진행**
         // (08-13 확정: 수신측이 수동 승인으로 강등해 받으므로 발신을 막을 이유가 없다).
@@ -5499,6 +5505,15 @@ impl App {
                     nbeep_core::tf(nbeep_core::Msg::WarnBatchLimitBody, &[&max.to_string()]),
                     Some(id),
                 ));
+                self.request_redraw(id);
+                return;
+            }
+        }
+        // ★ 기기마다 오퍼(ADR-0015 §5-1 · 11-07): 살아 있는 기기가 둘 이상이면 전부에 보내고 풍선 하나에 집계.
+        {
+            let live = self.live_devices(view);
+            if live.len() > 1 {
+                self.offer_file_fold(view, &live, path, &name, size);
                 self.request_redraw(id);
                 return;
             }
@@ -5817,6 +5832,8 @@ impl App {
                 if let Some(gid) = self.group_send_gid(peer, &name) {
                     // 그룹발(M5-1h) — 설정이 그새 줄었다: 그 구성원만 제외 카운트.
                     self.gx_note(gid, peer, &name, 0, GxState::Excluded);
+                } else if let Some(vk) = self.fold_send_vk(peer, &name) {
+                    self.fx_note(vk, peer, &name, 0, GxState::Excluded); // 접힌 스레드 집계(11-07)
                 } else {
                     self.push_xfer_line(peer, true, &name, fsize);
                     self.set_xfer_line(
@@ -6784,6 +6801,10 @@ impl App {
                 self.gx_note(gid, peer, name, size, GxState::Waiting);
                 return;
             }
+            if let Some(vk) = self.fold_send_vk(peer, name) {
+                self.fx_note(vk, peer, name, size, GxState::Waiting); // 접힌 스레드 집계(11-07)
+                return;
+            }
         } else if let Some(gid) = self.recv_group_gid(peer, name, size) {
             self.recv_group_register(gid, peer, name, size);
             let from = self.peer_title(peer);
@@ -6817,7 +6838,7 @@ impl App {
         });
         let re_view = self
             .chats
-            .get_mut(&peer)
+            .get_mut(&self.view_key(peer)) // 뷰는 뷰 키(접힌 스레드 — 종전 기기 키라 대표 아닌 기기는 뷰가 안 갱신됐다 · 11-07)
             .is_some_and(|chat| chat.reactivate_xfer(mine, safe.as_str(), size, &mut inv));
         if re_store || re_view {
             if !mine {
@@ -6856,6 +6877,11 @@ impl App {
                     self.gx_note(gid, peer, &name, 0, st);
                     return;
                 }
+                if let Some(vk) = self.fold_send_vk(peer, &name) {
+                    let st = gx_state_of(&state);
+                    self.fx_note(vk, peer, &name, 0, st);
+                    return;
+                }
             }
         }
         let hit_store = self
@@ -6872,7 +6898,7 @@ impl App {
         let mut inv = Invalidations::default();
         let hit_view = self
             .chats
-            .get_mut(&peer)
+            .get_mut(&self.view_key(peer)) // 뷰 키(11-07 — 종전 기기 키)
             .is_some_and(|chat| chat.update_xfer_line(mine, state.clone(), &mut inv));
         // ★ 수신 그룹 폴백(M5-1h) — 1:1에 대상이 없으면 이 상대의 그룹 수신 라인
         //   중 가장 오래된 미종결이 대상(FIFO 동형 — 거절·취소의 이름 없는 이벤트).
@@ -11083,6 +11109,17 @@ impl App {
                 dst.sort_by_key(|m| m.at_ms);
                 self.save_pending(k);
                 self.save_pending(nk);
+            }
+            // 기기별 오퍼 집계 장부도 새 뷰 키로(11-07).
+            if let Some(v) = self.fold_xfers.remove(&k) {
+                self.fold_xfers.entry(nk).or_default().extend(v);
+            }
+            for tags in self.fold_send_tags.values_mut() {
+                for (_, vk) in tags.iter_mut() {
+                    if *vk == k {
+                        *vk = nk;
+                    }
+                }
             }
         }
         // 기기 수 라벨(S3 · 11-07) — 묶음이 바뀌면 열린 대화의 헤더·창 제목도 따라간다.
@@ -19294,6 +19331,255 @@ impl App {
     // (발신 = 풍선 하나에 머릿수 카운터 + ✕ 제외 · 수신 = 그룹 스레드에 1:1 동형)뿐.
 
     /// 이 (상대, 파일명)이 그룹발 발신인가 — 표식에서 방을 찾는다.
+    /// 이 기기의 (이름) 발신이 접힌 스레드 집계 몫인가 → 뷰 키(`group_send_gid` 동형 · 11-07).
+    fn fold_send_vk(&self, dev: PeerId, name: &str) -> Option<PeerId> {
+        self.fold_send_tags.get(&dev)?.iter().find_map(|(p, vk)| {
+            p.file_name()
+                .is_some_and(|n| n.to_string_lossy() == name)
+                .then_some(*vk)
+        })
+    }
+
+    /// ★ 접힌 스레드 기기 전부에 오퍼(ADR-0015 §5-1 "오퍼는 상대 기기 각각에 간다 · 기기 수만큼 링크 감수" · 11-07).
+    /// 대표 기기 게이트·상한은 호출자(`offer_file`)가 이미 통과시켰다. 기기별 게이트(핀·차단·원격 미대조·수신 상한)에
+    /// 걸리는 기기는 **그 기기만 제외**(모달 없음 — 그룹 문법). 풍선 = 뷰 키에 하나(`GroupAgg` 카운터 · 종결 요약).
+    fn offer_file_fold(
+        &mut self,
+        vk: PeerId,
+        devs: &[PeerId],
+        path: &std::path::Path,
+        name: &str,
+        size: u64,
+    ) {
+        let mut members: HashMap<PeerId, GxState> = HashMap::new();
+        let mut sent_to: Vec<PeerId> = Vec::new();
+        for &d in devs {
+            let gate_ok = match nbeep_core::check_send_eligibility(
+                self.effective_trust(d),
+                self.ledger.get(d),
+            ) {
+                Ok(()) | Err(nbeep_core::DenyReason::NoMutualConversation) => true,
+                Err(_) => false,
+            };
+            let cap_ok = self
+                .peer_recv_cap
+                .get(&d)
+                .map(|&(c, _)| c)
+                .filter(|c| *c < u64::MAX)
+                .is_none_or(|c| size <= c);
+            if !gate_ok || self.remote_file_blocked(d) || !cap_ok {
+                members.insert(d, GxState::Excluded);
+                continue;
+            }
+            self.fold_send_tags
+                .entry(d)
+                .or_default()
+                .push((path.to_path_buf(), vk));
+            self.send_queue
+                .entry(d)
+                .or_default()
+                .push_back(path.to_path_buf());
+            let b = self.send_batch.entry(d).or_insert((0, 0, 0, 0));
+            b.1 += 1;
+            b.3 += size;
+            members.insert(d, GxState::Waiting);
+            sent_to.push(d);
+        }
+        let n = u32::try_from(sent_to.len()).unwrap_or(u32::MAX);
+        let excluded = u32::try_from(members.len() - sent_to.len()).unwrap_or(u32::MAX);
+        self.fold_xfers.entry(vk).or_default().push(GroupXfer {
+            name: name.to_string(),
+            size,
+            path: path.to_path_buf(),
+            members,
+            closed: false,
+        });
+        self.push_fold_xfer_line(
+            vk,
+            name,
+            size,
+            nbeep_ui::XferLineState::GroupAgg {
+                done: 0,
+                active: 0,
+                waiting: n,
+                paused: 0,
+                failed: 0,
+                excluded,
+            },
+        );
+        self.fx_refresh(vk, name, size);
+        dlog!(self, DL::Xfer, DV::Decide, "offer_file_fold", |r| r
+            .arg("devices", devs.len())
+            .arg("sent_to", sent_to.len())
+            .arg("size", size)
+            .ok("fan-out to all live devices"));
+        for d in sent_to {
+            self.send_manifest(d);
+            self.pump_send_queue(d);
+            self.refresh_send_batch(d);
+        }
+    }
+
+    /// 접힌 스레드 집계 풍선 세우기 — 저장은 살아 있는 첫 기기의 대화(접힌 보기가 기기별 줄을 병합) · 뷰는 뷰 키.
+    fn push_fold_xfer_line(
+        &mut self,
+        vk: PeerId,
+        name: &str,
+        size: u64,
+        state: nbeep_ui::XferLineState,
+    ) {
+        let (at_ms, wall) = now_stamp();
+        let safe = nbeep_core::sanitize_message(name);
+        let mut line = ChatLine::xfer(true, safe, size, at_ms, wall);
+        if let nbeep_ui::ChatBody::Xfer(x) = &mut line.body {
+            x.state = state;
+        }
+        let rep = self.file_target(vk);
+        if let Some(conv) = self.conversations.get_mut(&rep) {
+            conv.lines.push(line.clone());
+        }
+        let mut inv = Invalidations::default();
+        if let Some(chat) = self.chats.get_mut(&vk) {
+            chat.push_line(line, &mut inv);
+        }
+        self.redraw_conversation(vk);
+    }
+
+    /// 접힌 스레드 집계 풍선 갱신 — 묶음 기기들의 저장(연결 중이면 대화 · 끊겼으면 보관 줄)에서 이름·크기로 찾는다.
+    fn set_fold_xfer_line(
+        &mut self,
+        vk: PeerId,
+        name: &str,
+        size: u64,
+        state: nbeep_ui::XferLineState,
+    ) -> bool {
+        let terminal = matches!(
+            state,
+            nbeep_ui::XferLineState::Done { .. } | nbeep_ui::XferLineState::Failed { .. }
+        );
+        let mut hit = false;
+        for d in self.fold_group(vk) {
+            let h = self.conversations.get_mut(&d).is_some_and(|c| {
+                nbeep_ui::update_xfer_named(&mut c.lines, true, name, size, state.clone())
+            }) || self
+                .parked_lines
+                .get_mut(&d)
+                .is_some_and(|l| nbeep_ui::update_xfer_named(l, true, name, size, state.clone()));
+            if h {
+                if terminal {
+                    self.record_history(d);
+                }
+                hit = true;
+                break;
+            }
+        }
+        let mut inv = Invalidations::default();
+        if let Some(chat) = self.chats.get_mut(&vk) {
+            hit |= chat.set_xfer_named(true, name, size, state, &mut inv);
+        }
+        if hit {
+            self.redraw_conversation(vk);
+        }
+        hit
+    }
+
+    /// 접힌 스레드 기기 상태 반영(집계의 단일 지점 · `gx_note` 동형) — 종결이면 그 기기 몫의 표식도 걷는다.
+    fn fx_note(&mut self, vk: PeerId, dev: PeerId, name: &str, size: u64, st: GxState) {
+        let mut tag_cleanup: Option<std::path::PathBuf> = None;
+        {
+            let Some(fx) = self.fold_xfers.get_mut(&vk).and_then(|v| {
+                v.iter_mut()
+                    .find(|x| !x.closed && x.name == name && (size == 0 || x.size == size))
+            }) else {
+                return;
+            };
+            if fx.members.get(&dev).is_some_and(|p| p.terminal()) {
+                return; // 종결 후 지각 이벤트는 무시
+            }
+            fx.members.insert(dev, st);
+            if st.terminal() {
+                tag_cleanup = Some(fx.path.clone());
+            }
+        }
+        if let Some(path) = tag_cleanup {
+            if let Some(tags) = self.fold_send_tags.get_mut(&dev) {
+                tags.retain(|(p, v)| !(*v == vk && *p == path));
+                if tags.is_empty() {
+                    self.fold_send_tags.remove(&dev);
+                }
+            }
+        }
+        self.fx_refresh(vk, name, size);
+    }
+
+    /// 카운터 재계산 → 풍선 갱신(`gx_refresh` 동형) — 전 기기 종결이면 요약 종결(Done/Failed · 그때만 이력).
+    fn fx_refresh(&mut self, vk: PeerId, name: &str, size: u64) {
+        use nbeep_core::{t, Msg};
+        let Some(fx) = self.fold_xfers.get_mut(&vk).and_then(|v| {
+            v.iter_mut()
+                .find(|x| !x.closed && x.name == name && (size == 0 || x.size == size))
+        }) else {
+            return;
+        };
+        let mut c = [0u32; 6];
+        for s in fx.members.values() {
+            c[match s {
+                GxState::Done => 0,
+                GxState::Active => 1,
+                GxState::Waiting => 2,
+                GxState::Paused => 3,
+                GxState::Failed => 4,
+                GxState::Excluded => 5,
+            }] += 1;
+        }
+        let all_terminal = fx.members.values().all(|s| s.terminal());
+        let (fname, fsize) = (fx.name.clone(), fx.size);
+        let state = if all_terminal {
+            fx.closed = true;
+            let summary = format!(
+                "{} {} · {} {} · {} {}",
+                t(Msg::XferAggDone),
+                c[0],
+                t(Msg::XferAggCanceled),
+                c[4],
+                t(Msg::XferAggUnsent),
+                c[5],
+            );
+            if c[0] > 0 {
+                nbeep_ui::XferLineState::Done { note: summary }
+            } else {
+                nbeep_ui::XferLineState::Failed { why: summary }
+            }
+        } else {
+            nbeep_ui::XferLineState::GroupAgg {
+                done: c[0],
+                active: c[1],
+                waiting: c[2],
+                paused: c[3],
+                failed: c[4],
+                excluded: c[5],
+            }
+        };
+        self.set_fold_xfer_line(vk, &fname, fsize, state);
+    }
+
+    /// 이 기기의 접힌 스레드 집계 미종결 몫을 일괄 전이(세션 축 이벤트 · `gx_mark_peer` 동형).
+    fn fx_mark_peer(&mut self, dev: PeerId, st: GxState) {
+        let works: Vec<(PeerId, String, u64)> = self
+            .fold_xfers
+            .iter()
+            .flat_map(|(vk, v)| {
+                v.iter()
+                    .filter(|x| !x.closed && x.members.get(&dev).is_some_and(|s| !s.terminal()))
+                    .map(|x| (*vk, x.name.clone(), x.size))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        for (vk, name, size) in works {
+            self.fx_note(vk, dev, &name, size, st);
+        }
+    }
+
     fn group_send_gid(&self, peer: PeerId, name: &str) -> Option<nbeep_core::group::GroupId> {
         self.group_send_tags.get(&peer)?.iter().find_map(|(p, g)| {
             p.file_name()
@@ -19612,6 +19898,7 @@ impl App {
 
     /// 이 상대의 그룹발 미종결 몫을 일괄 전이(세션 축 이벤트 — 실패·재-Offer 대기).
     fn gx_mark_peer(&mut self, peer: PeerId, st: GxState) {
+        self.fx_mark_peer(peer, st); // 접힌 스레드 집계 몫도 같은 세션 축 이벤트(11-07)
         let works: Vec<(nbeep_core::group::GroupId, String, u64)> = self
             .group_xfers
             .iter()
@@ -21325,6 +21612,11 @@ impl App {
                 self.gx_note(gid, peer, name, 0, st);
                 return;
             }
+            if let Some(vk) = self.fold_send_vk(peer, name) {
+                let st = gx_state_of(&state);
+                self.fx_note(vk, peer, name, 0, st);
+                return;
+            }
         } else if let Some(gid) = self.recv_group_live_gid(peer, name, 0) {
             // 종결 = 표식 소비(1:1 오라우팅 방지 — consume_recv_group_hint 주석).
             if matches!(
@@ -21367,6 +21659,11 @@ impl App {
             if let Some(gid) = self.group_send_gid(peer, name) {
                 let st = gx_state_of(&state);
                 self.gx_note(gid, peer, name, size, st);
+                return;
+            }
+            if let Some(vk) = self.fold_send_vk(peer, name) {
+                let st = gx_state_of(&state);
+                self.fx_note(vk, peer, name, size, st);
                 return;
             }
         } else if let Some(gid) = self.recv_group_live_gid(peer, name, size) {
@@ -27328,6 +27625,8 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         pending_group_files: HashMap::new(),
         group_xfers: HashMap::new(),
         group_send_tags: HashMap::new(),
+        fold_xfers: HashMap::new(),
+        fold_send_tags: HashMap::new(),
         recv_group_hints: HashMap::new(),
         recv_group_live: HashMap::new(),
         pending_invites: HashMap::new(),
