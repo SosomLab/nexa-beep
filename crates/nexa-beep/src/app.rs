@@ -19027,7 +19027,9 @@ impl App {
                         uid,
                         seq,
                         text: text.as_str().to_string(),
-                        sender: None, // P-10 kind 9 발신은 구버전 소진 후(해석기 선배포)
+                        // ★ P-10 kind 9 발신 전환(사용자 결정 11-07): 답장 kind 10을 아는 상대(≥ v0.7)는 kind 9 해석기
+                        //   (v0.4 · 3ab980d)도 안다 — 같은 게이트로 구버전은 kind 5 그대로(호환 유지 · 답장 없을 때만 실린다).
+                        sender: knows.then_some(self.identity.peer_id()),
                         reply: reply.clone(),
                     },
                 }
@@ -19219,13 +19221,14 @@ impl App {
                 _ => (text, reply),
             };
             // seq는 발신 때 발급한 것 그대로(11-02 — 방 메시지 하나 = 열쇠 하나).
+            let sender_dev = knows_reply.then_some(self.identity.peer_id()); // P-10 kind 9(11-07 · 위와 같은 게이트)
             let sent = uid.is_some_and(|uid| {
                 self.conversations.get(&peer).is_some_and(|conv| {
                     let frame = nbeep_core::SGroupMsg::Msg {
                         uid,
                         seq,
                         text: text.clone(),
-                        sender: None, // P-10 kind 9 발신은 구버전 소진 후(해석기 선배포)
+                        sender: sender_dev,
                         reply: reply.clone(),
                     }
                     .encode();
