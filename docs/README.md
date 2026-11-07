@@ -114,7 +114,8 @@
 | **53** | [**협업 세션 운영 기준**](53-collab-session-operation.md) — Fable 개발 세션 × Opus 협업 세션 · 역할·파일 소유·메시지 형식·[P0~P3]/[V0~V3]·git·빌드 충돌·§12 원장(출처 nexa-sql docs/102 `23035161` + dir3 DR-12) | ✅ 11-03 이식 |
 | **54** | [**그룹 초대 생애주기 — 재초대·거절·차단**](54-group-invite-lifecycle.md) — 소유자 로컬 구성원 상태(groups.seg v4) · 재초대 24h 1회 · 만료 7일 · 카드 3택(수락/거절/나중에) · `DeclineV2{hard}`+`invite_block`(38 그룹 초대 축) · 거절 5초 실행 취소 · GINV-1 S1~S4 | ✅ 11-04 확정(DR-30) · S1 ✅
 | **55** | [**세션 액터 송수신 분리 — 메시지 왕복 지연 처방**](55-lat1-session-actor-split.md) — INS-6 루프백 p95 210ms(49 F-1 ≤50 ✗) · 원인 = 액터 recv 100ms 폴 × 2홉 · 처방 A = snow stateless transport `Arc` 공유 + `Link::split` 포트 + 쓰기 스레드(nonce 잠금 불변식) · 처방 B(타임아웃 20ms) 탈락 · LAT-1 | ✅ 11-04 구현 `b4d723f`(p95 5ms) |
-| **56~** | *(미배정)* | 신규 문서는 여기부터 |
+| **56** | [**ADR-0016 beepd 와이어 v2 — 호환 포기 · 확장 가능한 최소 구조**](56-adr-0016-beepd-wire-v2.md) — v1 와이어의 확장 통로 부재 · 코덱 크레이트 `nbeep-relay-proto`(I/O·크립토 0 · 골든 벡터) · 배선 = TODO BEEPD-2 · clip 세션 프롬프트 §5 | 📐 Proposed(11-07 · `f7354ac`) |
+| **57~** | *(미배정)* | 신규 문서는 여기부터 |
 | **15 · 16 · 18** | 개발 방법론 · 문서/git 규약 · 빌드&테스트 | ✅ |
 
 ## ③ 진행 경과 · 할 일

@@ -229,6 +229,8 @@ clip 쪽 [22 §3] 원장에 반영할 상태(clip이 적는다 — 이 저장소
 
 공용 크레이트 `nexa-conf`도 같다 — 사본이 양쪽에 있으므로 고친 쪽이 상대에게 알린다(이번 09-05가 첫 사례 · 방향 = clip → beep).
 
+**사전 고지(11-07) — 와이어 v2([56 ADR-0016](56-adr-0016-beepd-wire-v2.md) 📐 Proposed)**: `nbeep-relay`·`nexa-beepd` 와이어를 **호환 포기**로 다시 짠다(확장 통로 · 모듈 경계). 지금은 코덱 크레이트 `nbeep-relay-proto`만 있고(`f7354ac` · 어느 바이너리도 의존 안 함 · 와이어 무변경) **전환일은 미정** — 배선(TODO BEEPD-2) 때 `[clip-sync]` 커밋 + §7-5 행 + beepd-v1.0.0·beep 0.10·clip을 같은 날 전환. clip 세션에 붙일 프롬프트 = [56 §5](56-adr-0016-beepd-wire-v2.md).
+
 ### 7-5. 공유 코드 변경 이력
 
 | 날짜 | 방향 | 크레이트 | 내용 | 커밋 |
@@ -236,3 +238,4 @@ clip 쪽 [22 §3] 원장에 반영할 상태(clip이 적는다 — 이 저장소
 | 2026-08-26 | clip → beep | `nbeep-relay` | `rid_for` 주석(앱 식별자) — 코드 변경 0 | `78a4035` |
 | 2026-09-05 | clip → beep | `nexa-conf` | `write_atomic` 0600 · `serialize` known 우선 · `Store::open` tighten(beep 추가) | `92c92ab` |
 | 2026-09-05 | beep 자체 | `nbeep-relay` | `pinfile::store` 0600(와이어 무변경 · 클라 로컬 파일만) · 머리말 고지 | `92c92ab` |
+| 2026-11-07 | beep → clip(사전 고지) | `nbeep-relay-proto`(신규) | ADR-0016 와이어 v2 코덱 준비 — **현 와이어 무변경** · 전환일 미정(BEEPD-2) | `f7354ac` |
