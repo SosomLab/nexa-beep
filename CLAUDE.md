@@ -12,10 +12,10 @@
 
 - 조직: **SosomLab** · 개발자: Sangyong Bae · kiros33@gmail.com
 - 저장소: `git@github.com:SosomLab/nexa-beep.git` · 릴레이 서버 **`nexa-beepd`** = ★**같은 저장소의 별도 크레이트·별도 배포**(`beepd-v*` 태그 — DR-9 개정 08-21 · MVP 구현 ✅)
-- 현 단계 — ★**v0.8.0 공개 ✅**(11-05 · 태그 `v0.8.0` = `dca8baa` · release run **41983151018 전 12 job success** · 자산 15 · Releases·brew·apt/dnf · 일괄 검증 gate rc=0 · verify 10/10 · 3,884,032B · 탑재 = GAP-042 winit 교착 수정 · LAT-1 왕복 p95 5ms · 수신 제한(docs/38 4축·자동 임시·첫 접촉 승인 옵션) · 발견 호환성(M1-13) · 청크 윈도·그룹 재개(M4-10) · 기록 증분 저장(RL-7) · 목록 정리). winget(#468844 작성자 응답 대기)·choco(0.6.0 승인 · 0.7.0/0.8.0 제출 보류) → TODO PUB-1 · 스위치 둘 다 false.
-  직전 = v0.7.0(11-03 답장·말풍선 선택·설정 창 개편·IME H-28/H-29·헤드리스 시험) · v0.6.1(10-20 mac 크래시 수정 CRASH-1 · 오프라인 표시).
+- 현 단계 — ★**v0.9.0 공개 ✅**(11-07 · 태그 `v0.9.0` = `39296e7` · release run **42334473879 전 13 job success** · 자산 15 · Releases·brew(tap d303fa5)·apt/dnf · 일괄 검증 gate rc=0 · verify 6/6 · s4 24/24 · 4,307,456B · 탑재 = **M4-12 수신 스트리밍**(256MiB 수신 피크 521MB→8MB · 격리물 v2 · 구 앱 fail-closed · 검사 32MiB 상한) · R-18 조용한 노드 · R-22 적응형 S4 · S4 왕복 결함 수정 · X-13 S3 마무리(수동 IP 형제 증명 · 기기 수 라벨 · 기기마다 파일 오퍼 · P-10 kind 9) · 키보드(메뉴 키·캐러셀·Delete) · FW-1 방화벽 · LOG-2 · 창 투명도 · 모달 기본 취소 · 로그오프 보존 · 기동 회귀 처방(송신 소켓 읽기 타임아웃 제거 + paint-first)). winget(#468844 작성자 응답 대기)·choco(0.6.0 승인 · 0.7.0~0.9.0 제출 보류) → TODO PUB-1 · 스위치 둘 다 false. ★**beepd 와이어 v2 사전 준비** = ADR-0016([docs/56](docs/56-adr-0016-beepd-wire-v2.md) 📐 · `nbeep-relay-proto` 코덱 · 배선 = TODO BEEPD-2 · nexa-clip 동시 전환).
+  직전 = v0.8.0(11-05 GAP-042 winit 교착 수정 · 수신 제한 · 발견 호환성 · 청크 윈도·그룹 재개) · v0.7.0(11-03 답장·말풍선 선택·설정 창 개편).
   **현황·경과는 여기 쓰지 않는다** → [STATUS](docs/STATUS.md) · [DEVLOG](docs/DEVLOG.md) · 기능 = [MILESTONES](docs/MILESTONES.md).
-  **ADR**: 0001~0015 ✅ Accepted(0013 서버 모드 = 11-06 사용자 확정 · 구현은 v1 이후 그대로) · 번호표 = [docs/README](docs/README.md).
+  **ADR**: 0001~0015 ✅ Accepted(0013 서버 모드 = 11-06 사용자 확정 · 구현은 v1 이후 그대로) / **0016 📐 Proposed**(beepd 와이어 v2 · 11-07) · 번호표 = [docs/README](docs/README.md).
 
 ## 2. 확정 결정 ([docs/10](docs/10-decision-record.md) **DR-1~31**, 변경 시 새 ADR/journal)
 
