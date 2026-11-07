@@ -552,6 +552,29 @@ impl ProfileWidget {
     }
 
     /// i번째 최근 이미지의 × 삭제 오버레이 영역(우상단 — 표시 중일 때만).
+    /// 최근 사진 삭제(× 클릭 · Delete 키 공용 · 11-07): 목록·캐러셀 개수·설정값 갱신 · 사용 중인 사진이면 이니셜로 폴백
+    /// (08-14 사용자 확정 — 빈 상태로 두지 않고 다시 고를 수 있게). 키보드 커서는 캐러셀이 범위 안으로 접는다.
+    fn remove_recent(&mut self, i: usize, inv: &mut Invalidations) {
+        if i >= self.recent.len() {
+            return;
+        }
+        let (path, _) = self.recent.remove(i);
+        self.recent_car.set_count(self.recent.len());
+        self.changes
+            .push(("profile.image_recent", self.encode_recent()));
+        if !self.image_path.is_empty() && path == self.image_path {
+            self.image_path.clear();
+            self.avatar = None;
+            self.avatar_choice = "initials".into();
+            self.changes.push(("profile.image_path", String::new()));
+            self.changes
+                .push(("profile.avatar", "initials".to_string()));
+        }
+        self.recent_hover = None;
+        self.recent_tip = false;
+        inv.push(self.bounds);
+    }
+
     fn recent_x_rect(&self, i: usize) -> Option<Rect> {
         let r = self.recent_car.item_rect(i)?;
         let d = self.s(12);
@@ -768,24 +791,22 @@ impl Widget for ProfileWidget {
             let p = Point { x, y };
             if let Some(i) = self.recent_hover {
                 if self.recent_x_rect(i).is_some_and(|r| r.contains(p)) {
-                    let (path, _) = self.recent.remove(i);
-                    self.recent_car.set_count(self.recent.len());
-                    self.changes
-                        .push(("profile.image_recent", self.encode_recent()));
-                    // 사용 중인 사진을 지웠으면 = 사진 없음 → **이니셜로 폴백**
-                    // (08-14 사용자 확정 — 빈 상태로 두지 않고 다시 고를 수 있게).
-                    if !self.image_path.is_empty() && path == self.image_path {
-                        self.image_path.clear();
-                        self.avatar = None;
-                        self.avatar_choice = "initials".into();
-                        self.changes.push(("profile.image_path", String::new()));
-                        self.changes
-                            .push(("profile.avatar", "initials".to_string()));
-                    }
-                    self.recent_hover = None;
-                    self.recent_tip = false;
-                    inv.push(self.bounds);
+                    self.remove_recent(i, inv);
                     return;
+                }
+            }
+        }
+        // ★ Delete 키(11-07 · 사용자 결정): 최근 사진 캐러셀에 포커스·커서가 있으면 × 클릭과 같은 경로로 삭제.
+        if let InputEvent::Key {
+            key: Key::Delete, ..
+        } = *ev
+        {
+            if self.recent_car.is_focused() {
+                if let Some(i) = self.recent_car.cursor() {
+                    if i < self.recent.len() {
+                        self.remove_recent(i, inv);
+                        return;
+                    }
                 }
             }
         }
