@@ -276,7 +276,9 @@ impl UdpDiscovery {
         send_sock.set_multicast_ttl_v4(TTL)?;
         send_sock.set_multicast_loop_v4(true)?;
         send_sock.set_broadcast(true)?; // S3 — 멀티캐스트 차단 폴백
-        send_sock.set_read_timeout(Some(RECV_POLL))?; // 응답 수신 스레드의 정지 폴링(발신에는 영향 없음)
+                                        // ★ 송신 소켓에는 읽기 타임아웃을 **걸지 않는다**(11-07 릴리스 전 실측 V1~V3): 타임아웃 recv(300ms 폴)가 같은
+                                        //   소켓(복제 핸들)의 송신을 매 주기 묶어 기동 첫 paint가 58→≈365ms 늦어졌다(타임아웃 없는 블로킹 recv·스레드 없음은
+                                        //   둘 다 정상). 응답 수신 스레드의 정지는 Drop의 자기 깨움(1B 루프백 송신)으로.
 
         // ── S1: IPv6 멀티캐스트(best-effort — 실패해도 IPv4로 계속) ──
         let v6 = Self::setup_ipv6().ok();
@@ -821,6 +823,12 @@ impl Drop for UdpDiscovery {
         drop(self.announce_stop.take()); // 광고 스레드 즉시 깸(통잠 중이어도)
         if self.may_send() {
             self.send_goodbye();
+        }
+        // 송신 소켓 응답 수신 스레드 깨우기(타임아웃 없는 recv · 11-07) — 자기 포트로 1B · 디코더가 버리고 stop을 본다.
+        if let Ok(a) = self.send_sock.local_addr() {
+            let _ = self
+                .send_sock
+                .send_to(&[0u8], (Ipv4Addr::LOCALHOST, a.port()));
         }
     }
 }
