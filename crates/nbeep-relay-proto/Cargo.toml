@@ -1,0 +1,17 @@
+# nbeep-relay-proto — 릴레이 와이어 **v2 코덱**(ADR-0016 · docs/56). I/O·크립토 없음 · 외부 의존 0.
+# 서버(nexa-beepd)와 클라 어댑터(nbeep-relay)가 **같은 바이트 정의**를 여기서 가져간다(종전엔 코덱이 클라 크레이트
+# 안에 섞여 있었다). nexa-clip은 이 크레이트를 사본으로 이식하고 §8 골든 벡터로 동일성을 검증한다.
+[package]
+name = "nbeep-relay-proto"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "nexa-beepd relay wire v2 codec (envelope + TLV, no I/O)"
+
+[lints]
+workspace = true
+
+[dependencies]
