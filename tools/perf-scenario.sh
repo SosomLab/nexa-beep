@@ -22,7 +22,14 @@ trap 'BEEP_MULTI="$M" ./tools/autostart-clean.sh -q' EXIT
 EXE=""; case "${OSTYPE:-}" in msys* | cygwin*) EXE=".exe" ;; esac
 [ -x "target/release/nexa-beep$EXE" ] || { echo "릴리스 산출물이 없다 — cargo build --release -p nexa-beep -p nbeep-imgdec"; exit 1; }
 for d in A B; do mkdir -p "$M/$d"; cp -f "target/release/nexa-beep$EXE" "target/release/nbeep-imgdec$EXE" "$M/$d/"; done
-BNAME=$("$M/B/nexa-beep$EXE" --whoami 2>/dev/null | awk -F'= ' '/^name/{print $2; exit}')
+# ★ 신원은 첫 기동 때 생긴다(11-08 Linux 실측 — 새 폴더의 --whoami = beep-00000000 → activate 실패 = 첫 실행 무효).
+bname() { "$M/B/nexa-beep$EXE" --whoami 2>/dev/null | awk -F'= ' '/^name/{print $2; exit}'; }
+BNAME=$(bname)
+case "$BNAME" in
+  "" | beep-00000000)
+    ( cd "$M/B" && NEXA_SCRIPT="1500:quit" "./nexa-beep$EXE" --window --live >/dev/null 2>&1 )
+    BNAME=$(bname) ;;
+esac
 [ -n "$BNAME" ] || { echo "B 신원 이름을 못 읽었다($M/B)"; exit 1; }
 # 시각표(ms) — activate 2회(1회차 = 연결만 · 2회차 = 창 열기)
 S="9000:activate=$BNAME;13000:activate=$BNAME"; t=16000
