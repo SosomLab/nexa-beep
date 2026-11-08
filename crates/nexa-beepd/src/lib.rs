@@ -1,45 +1,62 @@
-//! `nexa-beepd` — 릴레이 서버 MVP(X-1 · [docs/32 §12-6]).
+//! `nexa-beepd` — 릴레이 서버(X-1 · [docs/32 §12-6]) · **와이어 v2**(ADR-0016 · [docs/56]).
 //!
 //! **하는 일 네 가지가 전부다**(비목표 = 계정·오프라인 저장·그룹 팬아웃·웹 가입):
-//! 1. **프레즌스** — 클라이언트가 붙어 회전 RID를 등록([docs/32 §2-3] — `PeerId` 원본 금지).
+//! 1. **프레즌스** — 클라이언트가 붙어 회전 RID를 등록([docs/32 §2-3] — `PeerId` 원본 금지). 라우팅 키는
+//!    **`(app, rid)`**(앱 이름공간 — beep·clip이 같은 서버를 써도 교차 Open 불가).
 //! 2. **랑데부/관측** — TCP·UDP에서 밖에서 본 공인 엔드포인트를 알려 주고(STUN-lite),
 //!    열기 요청 시 양쪽에 서로의 관측 엔드포인트를 전달한다(홀펀칭 재료 · X-UDP-c).
 //! 3. **blind 릴레이** — 펀치가 안 되는 쌍을 위해 **양방향 성립(Accept) 후에만** 종단
 //!    암호문을 중계한다(증폭 방지 [docs/32 §2-6] · 토큰 버킷).
 //! 4. **서버 자기 신원** — 서버도 Noise 정적 키를 가진다(클라이언트가 TOFU 핀 — §2-4).
 //!
-//! **서버가 보는 것** = RID·채널 번호·바이트 수·시각. **저장하지 않는다** — 모드 ①은
+//! **서버가 보는 것** = kind·RID·채널 번호·바이트 수·시각. **저장하지 않는다** — 모드 ①은
 //! 버퍼가 아니라 파이프다(양쪽 동시 접속일 때만 흐른다 · [docs/32 §2-6]).
 //! 로그에도 같은 원칙(봉투만 — RID 앞 4바이트·건수·바이트).
 //!
+//! ## 모듈 경계(ADR-0016 §2-3)
+//!
+//! ```text
+//! lib.rs      설정·바인드·공유 표·Handle        session.rs  프리앰블 → Noise(prologue) → Hello/Welcome → 루프 · 상태기계
+//! router.rs   (app, rid) 바인딩 · 채널 표 · 중계   roster.rs   앱별 명부(Announce/PeerUp/PeerDown · 능력 ROSTER)
+//! udp_obs.rs  UDP 관측 프로브(능력 UDP_OBSERVE)   metrics.rs  카운터(세션·채널·바이트·오류) — 상태만
+//! ```
+//!
 //! 동시성 모델은 클라이언트와 같은 **세션 액터** 문법이다 — 연결 하나 = 스레드 하나가
-//! 세션을 단독 소유하고, 남이 보낼 것은 그 연결의 큐(mpsc)에 넣는다. 큐가 상한(8MiB)을
+//! 세션을 단독 소유하고, 남이 보낼 것은 그 연결의 큐(mpsc)에 넣는다. 큐가 상한(`limits.queue_bytes`)을
 //! 넘는 느린 소비자는 **정직하게 끊는다**(무한 버퍼·쓰기 교착 둘 다 회피 — 08-16 교훈).
+//!
+//! **호환**: v2 전용(사용자 결정 11-07 "호환 포기"). v1 클라(프리앰블 없음)는 첫 4B에서 갈려 **조용히 끊긴다**
+//! — 그쪽은 Noise 실패로 보이고, 이쪽은 `rejected_v1` 카운터에 남는다([`session`] 프리앰블 단계 = 이중 수용 자리).
 #![forbid(unsafe_code)]
 // 테스트 코드는 unwrap 허용(docs/13 §9 — 금지는 프로덕션 경로 한정).
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
-use nbeep_core::session::{Session, SessionError};
+pub mod metrics;
+mod roster;
+mod router;
+mod session;
+mod udp_obs;
+
 use nbeep_core::PeerId;
-use nbeep_crypto::{Identity, NoiseSession};
-use nbeep_net::TcpLink;
-use nbeep_relay::{C2s, Rid, S2c, MAX_RIDS, OBS_MAGIC};
+use nbeep_relay_proto::{caps, Limits, Rid};
 use std::collections::HashMap;
-use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream, UdpSocket};
+use std::net::{IpAddr, SocketAddr, TcpListener, UdpSocket};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
-use std::sync::mpsc::{Receiver, Sender};
+use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+pub use metrics::Snapshot;
+
+/// 릴레이 서버 기본 포트(TCP 제어 + 같은 번호의 UDP 관측) — 발견 47100·세션 47200 다음.
+pub const DEFAULT_PORT: u16 = 47_300;
 
 /// 연결당 릴레이 기본 예산(바이트/초). 0 = 무제한.
 pub const DEFAULT_RATE_BPS: u64 = 1024 * 1024;
 
-/// 느린 소비자 판정 — 연결 송신 큐 상한(초과 = 절단).
-const QUEUE_CAP: usize = 8 * 1024 * 1024;
-
-/// 연결당 동시 채널 상한.
-const MAX_CHANNELS_PER_CONN: usize = 64;
+/// 이 서버가 제공하는 능력(Welcome.caps = 이 값 ∩ Hello.caps).
+pub const SERVER_CAPS: u64 = caps::ROSTER | caps::SHARED_BIND | caps::UDP_OBSERVE;
 
 /// 핸드셰이크·미등록 유휴 상한.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -53,20 +70,23 @@ pub struct Config {
     pub port: u16,
     /// 서버 신원 키 파일 경로.
     pub key_path: PathBuf,
-    /// 연결당 릴레이 예산(바이트/초 · 0 = 무제한).
+    /// 연결당 릴레이 예산(바이트/초 · 0 = 무제한) — `Welcome.limits.rate_bps`로도 알린다.
     pub rate_bps: u64,
     /// 상세 로그.
     pub verbose: bool,
+    /// 클라에 알리는 상한(프레임·RID·채널·큐·카드·핑 주기). 기본 = [`Limits::default`].
+    pub limits: Limits,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
             bind_ip: IpAddr::from([0u8, 0, 0, 0]),
-            port: nbeep_relay::DEFAULT_RELAY_PORT,
+            port: DEFAULT_PORT,
             key_path: PathBuf::from("beepd.key"),
             rate_bps: DEFAULT_RATE_BPS,
             verbose: false,
+            limits: Limits::default(),
         }
     }
 }
@@ -85,71 +105,77 @@ pub struct Handle {
 }
 
 impl Handle {
-    /// 서버 정지(스레드 합류까지).
+    /// 서버 정지 — 연결 스레드들이 `Goaway{Shutdown}`을 보내고 내려간다(수락·UDP 스레드 합류까지).
     pub fn shutdown(mut self) {
         self.shared.stop.store(true, Ordering::SeqCst);
         for t in self.threads.drain(..) {
             let _ = t.join();
         }
+        // 연결 스레드는 detach — 15ms 폴이 stop을 보고 Goaway 뒤 종료한다. 잠깐 기다려 로그가 정돈되게.
+        let deadline = std::time::Instant::now() + Duration::from_millis(500);
+        while self.shared.metrics.sessions_live.load(Ordering::SeqCst) > 0
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        if self.shared.verbose {
+            eprintln!("[beepd] 종료 — {}", self.shared.metrics.snapshot());
+        }
+    }
+
+    /// 계측 스냅숏(상태만).
+    #[must_use]
+    pub fn metrics(&self) -> Snapshot {
+        self.shared.metrics.snapshot()
     }
 }
 
-type ConnId = u64;
+pub(crate) type ConnId = u64;
 
+/// 연결 하나의 공유 손잡이 — 남의 스레드가 이 연결에 보낼 때 쓴다.
 #[derive(Debug)]
-struct ConnHandle {
-    tx: Sender<S2c>,
+pub(crate) struct ConnHandle {
+    /// 인코딩된 봉투(길이 접두 없음 — 세션이 프레임으로 싼다).
+    pub(crate) tx: Sender<Vec<u8>>,
     /// 대기 중 송신 바이트(느린 소비자 판정) — 넣는 쪽 증가, 보내는 쪽 감소.
-    queued: Arc<AtomicUsize>,
+    pub(crate) queued: Arc<AtomicUsize>,
     /// 절단 지시(남의 스레드가 세운다 — 본인 루프가 확인).
-    kill: Arc<AtomicBool>,
-    /// 이 연결의 등록 RID들.
-    rids: Vec<Rid>,
+    pub(crate) kill: Arc<AtomicBool>,
+    /// 이 연결이 바인딩한 RID들(정리용).
+    pub(crate) rids: Vec<Rid>,
     /// UDP 관측 엔드포인트(프로브 도착 시 갱신).
-    udp_obs: Option<SocketAddr>,
+    pub(crate) udp_obs: Option<SocketAddr>,
 }
 
+/// 공유 상태 — 표마다 잠금 따로 · 중첩 잠금 없음(교착 회피).
 #[derive(Debug)]
-struct Chan {
-    a: ConnId,
-    b: ConnId,
-    /// 여는 쪽 대조 토큰(Accept 시 OpenResult에 되돌린다).
-    token: u32,
-    accepted: bool,
-}
-
-/// 공개 목록 항목 — (공개키, 공개 카드 바이트, v2 = AnnounceCard를 보낸 연결).
-type ListedEntry = (PeerId, Vec<u8>, bool);
-
-#[derive(Debug)]
-struct Shared {
-    stop: AtomicBool,
-    rids: Mutex<HashMap<Rid, ConnId>>,
-    conns: Mutex<HashMap<ConnId, ConnHandle>>,
-    chans: Mutex<HashMap<u32, Chan>>,
+pub(crate) struct Shared {
+    pub(crate) stop: AtomicBool,
+    pub(crate) conns: Mutex<HashMap<ConnId, ConnHandle>>,
+    /// `(app, rid)` → 바인딩(Exclusive = 1연결 · Shared = n연결).
+    pub(crate) rids: Mutex<HashMap<(String, Rid), router::Binding>>,
+    pub(crate) chans: Mutex<HashMap<u32, router::Chan>>,
     /// UDP 프로브 토큰 → 연결.
-    tokens: Mutex<HashMap<u64, ConnId>>,
-    /// ★ 프레즌스 공개 목록(X-2e roster · 옵트인 — [docs/32 §12-7]): **Announce를
-    /// 켠 연결만** 공개키를 담는다(메모리만 · 저장 0 불변 · 연결 종료 = 즉시 제거).
-    /// 카드는 **내용 해석 없이** 크기만 재고 되뿌린다(봉투 원리 — 상한
-    /// [`nbeep_relay::CARD_MAX`] 초과 = 빈 카드 취급).
-    listed: Mutex<HashMap<ConnId, ListedEntry>>,
-    next_ch: AtomicU32,
-    next_conn: AtomicU64,
-    udp_port: u16,
-    rate_bps: u64,
-    verbose: bool,
+    pub(crate) tokens: Mutex<HashMap<u64, ConnId>>,
+    /// 프레즌스 공개 목록(옵트인 — Announce를 켠 연결만 · 메모리만 · 연결 종료 = 즉시 제거).
+    pub(crate) listed: Mutex<HashMap<ConnId, roster::Listed>>,
+    pub(crate) next_ch: AtomicU32,
+    pub(crate) next_conn: AtomicU64,
+    pub(crate) udp_port: u16,
+    pub(crate) limits: Limits,
+    pub(crate) verbose: bool,
+    pub(crate) metrics: metrics::Metrics,
 }
 
 impl Shared {
-    fn log(&self, msg: &str) {
+    pub(crate) fn log(&self, msg: &str) {
         if self.verbose {
             eprintln!("[beepd] {msg}");
         }
     }
 }
 
-fn rid_short(rid: &Rid) -> String {
+pub(crate) fn rid_short(rid: &Rid) -> String {
     format!("{:02x}{:02x}{:02x}{:02x}", rid[0], rid[1], rid[2], rid[3])
 }
 
@@ -206,18 +232,21 @@ pub fn spawn(cfg: &Config) -> std::io::Result<Handle> {
     let tcp_addr = listener.local_addr()?;
     let udp_port = udp.local_addr()?.port();
 
+    let mut limits = cfg.limits;
+    limits.rate_bps = cfg.rate_bps;
     let shared = Arc::new(Shared {
         stop: AtomicBool::new(false),
-        rids: Mutex::new(HashMap::new()),
         conns: Mutex::new(HashMap::new()),
+        rids: Mutex::new(HashMap::new()),
         chans: Mutex::new(HashMap::new()),
         tokens: Mutex::new(HashMap::new()),
         listed: Mutex::new(HashMap::new()),
         next_ch: AtomicU32::new(1),
         next_conn: AtomicU64::new(1),
         udp_port,
-        rate_bps: cfg.rate_bps,
+        limits,
         verbose: cfg.verbose,
+        metrics: metrics::Metrics::default(),
     });
 
     let mut threads = Vec::new();
@@ -241,7 +270,7 @@ pub fn spawn(cfg: &Config) -> std::io::Result<Handle> {
         threads.push(
             std::thread::Builder::new()
                 .name("beepd-udp".into())
-                .spawn(move || udp_loop(&udp, &shared))?,
+                .spawn(move || udp_obs::udp_loop(&udp, &shared))?,
         );
     }
 
@@ -254,7 +283,7 @@ pub fn spawn(cfg: &Config) -> std::io::Result<Handle> {
     })
 }
 
-fn accept_loop(listener: &TcpListener, shared: &Arc<Shared>, id: &Arc<Identity>) {
+fn accept_loop(listener: &TcpListener, shared: &Arc<Shared>, id: &Arc<nbeep_crypto::Identity>) {
     while !shared.stop.load(Ordering::SeqCst) {
         match listener.accept() {
             Ok((stream, peer_addr)) => {
@@ -263,601 +292,12 @@ fn accept_loop(listener: &TcpListener, shared: &Arc<Shared>, id: &Arc<Identity>)
                 // 연결 스레드는 detach — 종료는 stop 플래그·소켓 타임아웃이 정리한다.
                 let _ = std::thread::Builder::new()
                     .name("beepd-conn".into())
-                    .spawn(move || conn_thread(stream, peer_addr, &shared, &id));
+                    .spawn(move || session::run_conn(stream, peer_addr, &shared, &id));
             }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                 std::thread::sleep(Duration::from_millis(50));
             }
             Err(_) => std::thread::sleep(Duration::from_millis(200)),
-        }
-    }
-}
-
-fn udp_loop(udp: &UdpSocket, shared: &Arc<Shared>) {
-    let mut buf = [0u8; 64];
-    while !shared.stop.load(Ordering::SeqCst) {
-        match udp.recv_from(&mut buf) {
-            Ok((n, from)) => {
-                if n < 12 || buf[..4] != OBS_MAGIC {
-                    continue; // 미지 데이터그램은 조용히 버린다(응답 없음 — 증폭 방지)
-                }
-                let token = u64::from_be_bytes([
-                    buf[4], buf[5], buf[6], buf[7], buf[8], buf[9], buf[10], buf[11],
-                ]);
-                let conn_id = {
-                    shared
-                        .tokens
-                        .lock()
-                        .ok()
-                        .and_then(|t| t.get(&token).copied())
-                };
-                let Some(conn_id) = conn_id else {
-                    continue; // 등록된 토큰만 응답(스캔에 침묵)
-                };
-                if let Ok(mut conns) = shared.conns.lock() {
-                    if let Some(c) = conns.get_mut(&conn_id) {
-                        c.udp_obs = Some(from);
-                    }
-                }
-                // 에코: [magic][token][관측 엔드포인트] — 클라가 자기 매핑을 안다.
-                let mut echo = Vec::with_capacity(32);
-                echo.extend_from_slice(&OBS_MAGIC);
-                echo.extend_from_slice(&token.to_be_bytes());
-                match from {
-                    SocketAddr::V4(a) => {
-                        echo.push(4);
-                        echo.extend_from_slice(&a.ip().octets());
-                        echo.extend_from_slice(&a.port().to_be_bytes());
-                    }
-                    SocketAddr::V6(a) => {
-                        echo.push(6);
-                        echo.extend_from_slice(&a.ip().octets());
-                        echo.extend_from_slice(&a.port().to_be_bytes());
-                    }
-                }
-                let _ = udp.send_to(&echo, from);
-            }
-            Err(e)
-                if matches!(
-                    e.kind(),
-                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                ) => {}
-            // Windows: ICMP Port Unreachable가 ConnReset으로 올라온다 — 소켓은 살아 있다.
-            Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => {}
-            Err(_) => std::thread::sleep(Duration::from_millis(100)),
-        }
-    }
-}
-
-/// 토큰 버킷 — 연결당 릴레이 예산. 부족하면 **자면서 기다린다**(이 스레드가 곧 그 연결의
-/// 소비자라, 기다림 = TCP 배압으로 발신자를 페이싱한다. 드롭은 세션을 죽이므로 안 쓴다).
-#[derive(Debug)]
-struct Bucket {
-    tokens: f64,
-    last: Instant,
-    rate: f64,
-    cap: f64,
-}
-
-impl Bucket {
-    fn new(rate_bps: u64) -> Self {
-        let rate = rate_bps as f64;
-        Self {
-            tokens: rate.max(1.0),
-            last: Instant::now(),
-            rate,
-            cap: (rate * 2.0).max(1.0),
-        }
-    }
-
-    fn refill(&mut self) {
-        let dt = self.last.elapsed().as_secs_f64();
-        self.last = Instant::now();
-        self.tokens = (self.tokens + dt * self.rate).min(self.cap);
-    }
-
-    /// `n`바이트만큼 소비(부족하면 대기 · stop 시 중단).
-    fn take(&mut self, n: usize, stop: &AtomicBool) {
-        if self.rate <= 0.0 {
-            return; // 0 = 무제한
-        }
-        loop {
-            self.refill();
-            if self.tokens >= n as f64 {
-                self.tokens -= n as f64;
-                return;
-            }
-            if stop.load(Ordering::SeqCst) {
-                return;
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-    }
-}
-
-#[allow(clippy::too_many_lines)] // 연결 프로토콜 분기 전체가 한 루프다(상태 공유 최소화)
-fn conn_thread(stream: TcpStream, peer_addr: SocketAddr, shared: &Arc<Shared>, id: &Identity) {
-    // ⚠ 논블로킹 리스너에서 accept된 스트림은 (Windows 등에서) 논블로킹을 상속한다 —
-    // 복원하지 않으면 핸드셰이크 첫 read가 즉시 WouldBlock으로 죽는다(실측).
-    if stream.set_nonblocking(false).is_err() {
-        return;
-    }
-    // 핸드셰이크 타임아웃 — 침묵 연결이 스레드를 영구 점유하지 못하게.
-    let _ = stream.set_read_timeout(Some(HANDSHAKE_TIMEOUT));
-    let link = match TcpLink::new(stream) {
-        Ok(l) => l,
-        Err(_) => return,
-    };
-    let mut session = match NoiseSession::accept(link, id) {
-        Ok(s) => s,
-        Err(_) => return, // 핸드셰이크 실패·비프로토콜 접속 — 조용히 끊는다
-    };
-    // 상호 인증(Noise_XX)이라 클라 공개키는 여기서 이미 보인다 — 그러나 **담는 것은
-    // Announce를 켠 경우뿐**(§2-3 비기록 원칙 · roster는 옵트인 예외 — §12-7).
-    let client_peer = session.peer();
-    session.set_recv_timeout(Some(Duration::from_millis(15)));
-
-    let conn_id = shared.next_conn.fetch_add(1, Ordering::SeqCst);
-    let (tx, rx): (Sender<S2c>, Receiver<S2c>) = std::sync::mpsc::channel();
-    let queued = Arc::new(AtomicUsize::new(0));
-    let kill = Arc::new(AtomicBool::new(false));
-    {
-        let mut conns = match shared.conns.lock() {
-            Ok(c) => c,
-            Err(_) => return,
-        };
-        conns.insert(
-            conn_id,
-            ConnHandle {
-                tx,
-                queued: Arc::clone(&queued),
-                kill: Arc::clone(&kill),
-                rids: Vec::new(),
-                udp_obs: None,
-            },
-        );
-    }
-    shared.log(&format!("conn#{conn_id} 접속 {peer_addr}"));
-
-    let mut bucket = Bucket::new(shared.rate_bps);
-    let mut registered = false;
-    let started = Instant::now();
-
-    loop {
-        if shared.stop.load(Ordering::SeqCst) || kill.load(Ordering::SeqCst) {
-            break;
-        }
-        // 미등록 유휴 정리 — 등록 없이 자리만 차지하는 연결.
-        if !registered && started.elapsed() > HANDSHAKE_TIMEOUT {
-            break;
-        }
-        // 1) 내 큐 드레인(남이 넣은 중계·통지).
-        let mut dead = false;
-        while let Ok(msg) = rx.try_recv() {
-            let cost = match &msg {
-                S2c::Data { bytes, .. } => bytes.len() + 16,
-                _ => 16,
-            };
-            queued.fetch_sub(cost.min(queued.load(Ordering::SeqCst)), Ordering::SeqCst);
-            if session.send(&msg.encode()).is_err() {
-                dead = true;
-                break;
-            }
-        }
-        if dead {
-            break;
-        }
-        // 2) 세션 수신.
-        let frame = match session.recv() {
-            Ok(f) => f,
-            Err(SessionError::TimedOut) => continue,
-            Err(_) => break,
-        };
-        let Some(msg) = C2s::decode(&frame) else {
-            continue; // 미지 kind — 전방 호환(조용히 버린다)
-        };
-        match msg {
-            C2s::Register { rids } => {
-                if rids.len() > MAX_RIDS {
-                    break; // 인코더가 못 만드는 형태 = 프로토콜 위반
-                }
-                let udp_token = (conn_id << 32)
-                    ^ u64::from(
-                        std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .map_or(0, |d| d.subsec_nanos()),
-                    );
-                {
-                    let mut map = match shared.rids.lock() {
-                        Ok(m) => m,
-                        Err(_) => break,
-                    };
-                    // 최신 등록 우선(재접속 잔재 교체) — 죽은 연결의 RID가 자리를 막지 않게.
-                    for r in &rids {
-                        map.insert(*r, conn_id);
-                    }
-                }
-                if let Ok(mut conns) = shared.conns.lock() {
-                    if let Some(c) = conns.get_mut(&conn_id) {
-                        c.rids = rids.clone();
-                    }
-                }
-                if let Ok(mut tokens) = shared.tokens.lock() {
-                    tokens.insert(udp_token, conn_id);
-                }
-                registered = true;
-                shared.log(&format!(
-                    "conn#{conn_id} 등록 rid={} 외 {}개",
-                    rids.first().map(rid_short).unwrap_or_default(),
-                    rids.len().saturating_sub(1)
-                ));
-                let ok = S2c::RegisterOk {
-                    udp_token,
-                    udp_port: shared.udp_port,
-                    observed: Some(peer_addr),
-                };
-                if session.send(&ok.encode()).is_err() {
-                    break;
-                }
-            }
-            C2s::Open { token, dst } => {
-                let dst_conn = shared.rids.lock().ok().and_then(|m| m.get(&dst).copied());
-                let my_chan_count = shared
-                    .chans
-                    .lock()
-                    .map(|c| {
-                        c.values()
-                            .filter(|ch| ch.a == conn_id || ch.b == conn_id)
-                            .count()
-                    })
-                    .unwrap_or(usize::MAX);
-                let status = match dst_conn {
-                    None => 1u8,
-                    Some(d) if d == conn_id => 1, // 자기 자신 — 랑데부 무의미
-                    _ if my_chan_count >= MAX_CHANNELS_PER_CONN => 2,
-                    Some(_) => 0,
-                };
-                if status != 0 {
-                    let _ = session.send(
-                        &S2c::OpenResult {
-                            token,
-                            status,
-                            ch: 0,
-                            peer_udp: None,
-                        }
-                        .encode(),
-                    );
-                    continue;
-                }
-                let dst_conn = dst_conn.expect("status 0 = 존재 확인됨");
-                let ch = shared.next_ch.fetch_add(1, Ordering::SeqCst);
-                let my_udp = shared
-                    .conns
-                    .lock()
-                    .ok()
-                    .and_then(|c| c.get(&conn_id).and_then(|h| h.udp_obs));
-                let src_rid = shared
-                    .conns
-                    .lock()
-                    .ok()
-                    .and_then(|c| c.get(&conn_id).and_then(|h| h.rids.first().copied()))
-                    .unwrap_or_default();
-                if let Ok(mut chans) = shared.chans.lock() {
-                    chans.insert(
-                        ch,
-                        Chan {
-                            a: conn_id,
-                            b: dst_conn,
-                            token,
-                            accepted: false,
-                        },
-                    );
-                }
-                let delivered = enqueue(
-                    shared,
-                    dst_conn,
-                    S2c::Incoming {
-                        ch,
-                        src: src_rid,
-                        peer_udp: my_udp,
-                    },
-                );
-                if !delivered {
-                    if let Ok(mut chans) = shared.chans.lock() {
-                        chans.remove(&ch);
-                    }
-                    let _ = session.send(
-                        &S2c::OpenResult {
-                            token,
-                            status: 2,
-                            ch: 0,
-                            peer_udp: None,
-                        }
-                        .encode(),
-                    );
-                }
-                shared.log(&format!("conn#{conn_id} open ch#{ch} → conn#{dst_conn}"));
-            }
-            C2s::Accept { ch } => {
-                let opener = {
-                    let mut chans = match shared.chans.lock() {
-                        Ok(c) => c,
-                        Err(_) => break,
-                    };
-                    match chans.get_mut(&ch) {
-                        Some(c) if c.b == conn_id && !c.accepted => {
-                            c.accepted = true;
-                            Some((c.a, c.token))
-                        }
-                        _ => None,
-                    }
-                };
-                if let Some((opener, token)) = opener {
-                    let my_udp = shared
-                        .conns
-                        .lock()
-                        .ok()
-                        .and_then(|c| c.get(&conn_id).and_then(|h| h.udp_obs));
-                    let _ = enqueue(
-                        shared,
-                        opener,
-                        S2c::OpenResult {
-                            token,
-                            status: 0,
-                            ch,
-                            peer_udp: my_udp,
-                        },
-                    );
-                    shared.log(&format!("ch#{ch} 성립(양방향)"));
-                }
-            }
-            C2s::Data { ch, fin, bytes } => {
-                // ★ 양방향 성립(Accept) 전에는 한 바이트도 나르지 않는다(§2-6 증폭 방지).
-                let other = {
-                    let chans = match shared.chans.lock() {
-                        Ok(c) => c,
-                        Err(_) => break,
-                    };
-                    match chans.get(&ch) {
-                        Some(c) if c.accepted && c.a == conn_id => Some(c.b),
-                        Some(c) if c.accepted && c.b == conn_id => Some(c.a),
-                        _ => None,
-                    }
-                };
-                let Some(other) = other else {
-                    continue; // 모르는·미성립 채널 데이터는 버린다
-                };
-                bucket.take(bytes.len(), &shared.stop); // 예산 — 기다림 = TCP 배압
-                if !enqueue(shared, other, S2c::Data { ch, fin, bytes }) {
-                    // 느린 소비자로 채널 유지 불가 — 양쪽에 정직하게 닫힘 통지.
-                    close_channel(shared, ch, None);
-                    let _ = session.send(&S2c::ChClosed { ch }.encode());
-                }
-            }
-            C2s::CloseCh { ch } => {
-                // 수락 전에 받는 쪽이 닫았다(지연 수락 drop) — 여는 쪽이 open 타임아웃까지
-                // 기다리지 않게 **열기 거절(2)** 로 즉시 알린다.
-                let refused = shared.chans.lock().ok().and_then(|c| {
-                    c.get(&ch).and_then(|chan| {
-                        (!chan.accepted && chan.b == conn_id).then_some((chan.a, chan.token))
-                    })
-                });
-                if let Some((opener, token)) = refused {
-                    let _ = enqueue(
-                        shared,
-                        opener,
-                        S2c::OpenResult {
-                            token,
-                            status: 2,
-                            ch: 0,
-                            peer_udp: None,
-                        },
-                    );
-                }
-                close_channel(shared, ch, Some(conn_id));
-            }
-            C2s::Ping => {
-                if session.send(&S2c::Pong.encode()).is_err() {
-                    break;
-                }
-            }
-            C2s::Announce { listed } | C2s::AnnounceCard { listed, .. } if !listed => {
-                let removed = shared
-                    .listed
-                    .lock()
-                    .ok()
-                    .and_then(|mut m| m.remove(&conn_id));
-                if removed.is_some() {
-                    broadcast_peer_down(shared, conn_id, client_peer);
-                    shared.log(&format!("conn#{conn_id} 공개 off"));
-                }
-            }
-            ann @ (C2s::Announce { .. } | C2s::AnnounceCard { .. }) => {
-                // ★ roster(X-2e · 08-22 카드 확장) — 켠 연결만 담고, 공개끼리만
-                //   서로 보인다(상호성). AnnounceCard = v2(카드 수신 가능) 표식 +
-                //   공개 카드(크기만 검사 — 초과 = 빈 카드). v1 Announce는 카드가
-                //   이미 있으면 보존한다(클라가 v2→v1 순서로 둘 다 보내는 폴백).
-                let (v2, card) = match ann {
-                    C2s::AnnounceCard { card, .. } => {
-                        let c = if card.len() > nbeep_relay::CARD_MAX {
-                            Vec::new()
-                        } else {
-                            card
-                        };
-                        (true, Some(c))
-                    }
-                    _ => (false, None),
-                };
-                enum Change {
-                    New,
-                    CardChanged,
-                    None,
-                }
-                let (change, others) = {
-                    let mut map = match shared.listed.lock() {
-                        Ok(m) => m,
-                        Err(_) => break,
-                    };
-                    let change = match map.entry(conn_id) {
-                        std::collections::hash_map::Entry::Vacant(v) => {
-                            v.insert((client_peer, card.clone().unwrap_or_default(), v2));
-                            Change::New
-                        }
-                        std::collections::hash_map::Entry::Occupied(mut o) => {
-                            let e = o.get_mut();
-                            e.2 |= v2;
-                            match card {
-                                Some(c) if c != e.1 => {
-                                    e.1 = c;
-                                    Change::CardChanged
-                                }
-                                _ => Change::None, // 멱등 재공지 — 방송 없음
-                            }
-                        }
-                    };
-                    let others: Vec<(ConnId, PeerId, Vec<u8>, bool)> = map
-                        .iter()
-                        .filter(|(id, _)| **id != conn_id)
-                        .map(|(id, (p, c, their_v2))| (*id, *p, c.clone(), *their_v2))
-                        .collect();
-                    (change, others)
-                };
-                let my_card = |shared: &Arc<Shared>| {
-                    shared
-                        .listed
-                        .lock()
-                        .ok()
-                        .and_then(|m| m.get(&conn_id).map(|(_, c, _)| c.clone()))
-                        .unwrap_or_default()
-                };
-                // 수신자별 인코딩 — v2 = 카드 동봉 · v1 = 존재만(구클라 호환).
-                let up_for = |their_v2: bool, peer: PeerId, card: Vec<u8>| {
-                    if their_v2 {
-                        S2c::PeerUpCard { peer, card }
-                    } else {
-                        S2c::PeerUp { peer }
-                    }
-                };
-                match change {
-                    Change::New => {
-                        // 입장 스냅숏(기존 공개 → 나) + 등장 방송(나 → 그들).
-                        let mine = my_card(shared);
-                        let mut dead = false;
-                        for (cid, p, c, their_v2) in others {
-                            let snap = up_for(v2, p, c);
-                            if session.send(&snap.encode()).is_err() {
-                                dead = true;
-                                break;
-                            }
-                            let _ =
-                                enqueue(shared, cid, up_for(their_v2, client_peer, mine.clone()));
-                        }
-                        shared.log(&format!("conn#{conn_id} 공개 on"));
-                        if dead {
-                            break;
-                        }
-                    }
-                    Change::CardChanged => {
-                        // 카드 갱신 재방송 — v2 수신자에게만(v1은 쓸 수 없다).
-                        let mine = my_card(shared);
-                        for (cid, _, _, their_v2) in others {
-                            if their_v2 {
-                                let _ = enqueue(
-                                    shared,
-                                    cid,
-                                    S2c::PeerUpCard {
-                                        peer: client_peer,
-                                        card: mine.clone(),
-                                    },
-                                );
-                            }
-                        }
-                        shared.log(&format!("conn#{conn_id} 카드 갱신({}B)", mine.len()));
-                    }
-                    Change::None => {}
-                }
-            }
-        }
-    }
-
-    // 정리 — 내 RID·토큰·채널 회수, 상대에게 닫힘 통지.
-    shared.log(&format!("conn#{conn_id} 종료"));
-    if let Ok(mut map) = shared.rids.lock() {
-        map.retain(|_, v| *v != conn_id);
-    }
-    if let Ok(mut tokens) = shared.tokens.lock() {
-        tokens.retain(|_, v| *v != conn_id);
-    }
-    let my_chans: Vec<u32> = shared
-        .chans
-        .lock()
-        .map(|c| {
-            c.iter()
-                .filter(|(_, ch)| ch.a == conn_id || ch.b == conn_id)
-                .map(|(k, _)| *k)
-                .collect()
-        })
-        .unwrap_or_default();
-    for ch in my_chans {
-        close_channel(shared, ch, Some(conn_id));
-    }
-    if let Ok(mut conns) = shared.conns.lock() {
-        conns.remove(&conn_id);
-    }
-    // 공개 목록에서도 회수 + 남은 공개 사용자에게 이탈 방송(X-2e).
-    let was_listed = shared
-        .listed
-        .lock()
-        .ok()
-        .and_then(|mut m| m.remove(&conn_id))
-        .is_some();
-    if was_listed {
-        broadcast_peer_down(shared, conn_id, client_peer);
-    }
-}
-
-/// 남은 공개 사용자 전원에게 `peer` 이탈을 알린다(본인 제외).
-fn broadcast_peer_down(shared: &Arc<Shared>, except: ConnId, peer: PeerId) {
-    let targets: Vec<ConnId> = shared
-        .listed
-        .lock()
-        .map(|m| m.keys().filter(|id| **id != except).copied().collect())
-        .unwrap_or_default();
-    for cid in targets {
-        let _ = enqueue(shared, cid, S2c::PeerDown { peer });
-    }
-}
-
-/// 다른 연결의 큐에 넣는다. 상한 초과(느린 소비자)면 그 연결을 절단 지시하고 `false`.
-fn enqueue(shared: &Arc<Shared>, conn_id: ConnId, msg: S2c) -> bool {
-    let conns = match shared.conns.lock() {
-        Ok(c) => c,
-        Err(_) => return false,
-    };
-    let Some(handle) = conns.get(&conn_id) else {
-        return false;
-    };
-    let cost = match &msg {
-        S2c::Data { bytes, .. } => bytes.len() + 16,
-        _ => 16,
-    };
-    if handle.queued.load(Ordering::SeqCst) + cost > QUEUE_CAP {
-        // 무한 버퍼 대신 정직한 절단(fail-closed) — 쓰기 교착·메모리 폭주 둘 다 회피.
-        handle.kill.store(true, Ordering::SeqCst);
-        return false;
-    }
-    handle.queued.fetch_add(cost, Ordering::SeqCst);
-    handle.tx.send(msg).is_ok()
-}
-
-/// 채널 제거 + 남은 쪽(들)에 닫힘 통지. `except` = 통지 생략 대상(닫은 본인).
-fn close_channel(shared: &Arc<Shared>, ch: u32, except: Option<ConnId>) {
-    let removed = shared.chans.lock().ok().and_then(|mut c| c.remove(&ch));
-    if let Some(chan) = removed {
-        for side in [chan.a, chan.b] {
-            if Some(side) != except {
-                let _ = enqueue(shared, side, S2c::ChClosed { ch });
-            }
         }
     }
 }

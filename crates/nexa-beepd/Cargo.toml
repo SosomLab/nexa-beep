@@ -1,10 +1,12 @@
-# nexa-beepd — 릴레이 서버 MVP(X-1 · docs/32 §12-6). **별도 실행 파일 · 별도 배포**
+# nexa-beepd — 릴레이 서버(X-1 · docs/32 §12-6 · 와이어 v2 = ADR-0016 docs/56). **별도 실행 파일 · 별도 배포**
 # (W-4 — 태그 beepd-v* · release-server.yml). 클라이언트 의존 그래프에 절대 들어가지
-# 않는다(W-1 — 방향은 beepd → {relay, crypto, net, core} 단방향 · 역참조 금지).
+# 않는다(W-1 — 방향은 beepd → {relay-proto, crypto, net, core} 단방향 · 역참조 금지).
 # 서버 전용 외부 의존 0 — DR-12(퍼미시브 온리)·경량 유지.
+# ★ 버전은 워크스페이스(클라)와 분리 — 태그 beepd-v<이 값>(종전엔 워크스페이스 값을 물려받아
+#   `--version`이 태그와 달랐다 · 11-08).
 [package]
 name = "nexa-beepd"
-version.workspace = true
+version = "1.0.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -18,12 +20,13 @@ workspace = true
 nbeep-core.workspace = true
 nbeep-net.workspace = true
 nbeep-crypto.workspace = true
-nbeep-relay.workspace = true
+nbeep-relay-proto.workspace = true
 
 [[bin]]
 name = "nexa-beepd"
 path = "src/main.rs"
 
 [dev-dependencies]
-# 시험 전용 — InMemory 버스(`nbeep_net::inmem` = testkit 게이트) 위에 사다리 전송을 올려 본다(X-2 · 11-06).
+# 시험 전용 — 클라 어댑터로 e2e(relay_e2e · transport_e2e) + InMemory 버스(`nbeep_net::inmem` = testkit 게이트).
+nbeep-relay.workspace = true
 nbeep-net = { workspace = true, features = ["testkit"] }

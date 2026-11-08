@@ -992,6 +992,8 @@ enum ServerAttachFail {
     Resolve,
     /// ★ 핀 불일치 — **자동 재시도 없음**(재핀은 사람의 결정 · DR-28).
     PinMismatch,
+    /// ★ 서버 세대(와이어 major) 불일치(ADR-0016) — 앱 업데이트 필요. 백오프 재시도는 유지(서버 쪽이 바뀔 수도 있다).
+    Generation(u16),
     /// 접속·핸드셰이크 등 일시 실패 — 백오프 재시도.
     Other(String),
 }
@@ -9035,14 +9037,23 @@ impl App {
                 Err(nbeep_relay::AttachError::Relay(nbeep_relay::RelayError::PinMismatch {
                     ..
                 })) => Err(ServerAttachFail::PinMismatch),
+                Err(nbeep_relay::AttachError::Relay(
+                    nbeep_relay::RelayError::VersionMismatch { server_major },
+                )) => Err(ServerAttachFail::Generation(server_major)),
                 // 사유는 함축으로(08-22 사용자 확정 — Debug 포장 제거: Io는
                 // OS 문구("connection timed out")만, 나머지는 한 단어).
                 Err(nbeep_relay::AttachError::Relay(e)) => Err(ServerAttachFail::Other(match e {
                     nbeep_relay::RelayError::Io(io) => io.to_string(),
                     nbeep_relay::RelayError::Handshake => "handshake failed".to_string(),
                     nbeep_relay::RelayError::Protocol => "protocol error".to_string(),
-                    // 핀 불일치는 위 갈래가 소진 — 방어적 문구만.
+                    nbeep_relay::RelayError::Rejected { reason, .. } => {
+                        format!("rejected: {reason}")
+                    }
+                    // 핀·세대 불일치는 위 갈래가 소진 — 방어적 문구만.
                     nbeep_relay::RelayError::PinMismatch { .. } => "pin mismatch".to_string(),
+                    nbeep_relay::RelayError::VersionMismatch { .. } => {
+                        "generation mismatch".to_string()
+                    }
                 })),
             };
             let _ = proxy.send_event(AppEvent::ServerAttach { gen, outcome });
@@ -9173,9 +9184,11 @@ impl App {
         ) else {
             return ServerLink::Local;
         };
-        if self.relay.as_ref().is_some_and(|c| c.is_alive()) {
-            return ServerLink::Connected(ServerKind::from_setting(
+        if let Some(c) = self.relay.as_ref().filter(|c| c.is_alive()) {
+            // ★ 타입 협상(ADR-0016) — auto면 Welcome.server_type이 표기를 정한다.
+            return ServerLink::Connected(ServerKind::resolve(
                 self.settings.get("net.server.type"),
+                Some(c.server_info().server_type),
             ));
         }
         let verified = server_target_verified(self.settings.get("server.verified"), &raw);
@@ -24753,6 +24766,10 @@ impl ApplicationHandler<AppEvent> for App {
                                 nbeep_core::t(nbeep_core::Msg::StServerResolveFail).to_string()
                             }
                             ServerAttachFail::Other(w) => w,
+                            ServerAttachFail::Generation(m) => nbeep_core::tf(
+                                nbeep_core::Msg::StfServerGeneration,
+                                &[&m.to_string()],
+                            ),
                             ServerAttachFail::PinMismatch => String::new(), // 위 갈래가 소진
                         };
                         self.relay_last_err = Some(why.clone()); // 설정 상태 노트 재료

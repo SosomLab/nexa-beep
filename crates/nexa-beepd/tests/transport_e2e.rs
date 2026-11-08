@@ -32,6 +32,7 @@ fn test_server() -> nexa_beepd::Handle {
         key_path: dir.join("beepd.key"),
         rate_bps: 0,
         verbose: false,
+        ..Config::default()
     })
     .unwrap()
 }

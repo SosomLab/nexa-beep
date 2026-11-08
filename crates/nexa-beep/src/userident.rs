@@ -332,6 +332,21 @@ impl ServerKind {
             _ => Self::Relay,
         }
     }
+
+    /// ★ 타입 협상(X-2b · ADR-0016 `Welcome.server_type`): 설정이 `auto`면 서버가 말한 종류, 아니면 설정 표기가 이긴다.
+    /// `Admin`(관리 · 예약)은 클라 표기 축이 없어 릴레이로 둔다.
+    #[must_use]
+    pub(crate) fn resolve(
+        setting: &str,
+        negotiated: Option<nbeep_relay::proto::ServerType>,
+    ) -> Self {
+        use nbeep_relay::proto::ServerType;
+        match (setting, negotiated) {
+            ("auto" | "", Some(ServerType::Content)) => Self::Content,
+            ("auto" | "", Some(ServerType::Relay | ServerType::Admin)) => Self::Relay,
+            _ => Self::from_setting(setting),
+        }
+    }
 }
 
 /// 서버 경로 상태(표시 전용 파생 · 우선순위 = `server_note_texts`와 같다).

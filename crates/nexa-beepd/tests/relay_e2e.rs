@@ -29,6 +29,7 @@ fn test_server(rate_bps: u64) -> nexa_beepd::Handle {
         key_path: dir.join("beepd.key"),
         rate_bps,
         verbose: false,
+        ..Config::default()
     })
     .unwrap()
 }
@@ -117,7 +118,10 @@ fn open_unknown_rid_fails() {
     let id = Identity::generate();
     let c = RelayClient::connect(server.tcp_addr, &id, &rids_around(&id.peer_id()), None).unwrap();
     let ghost = rid_for(&Identity::generate().peer_id(), 1);
-    assert_eq!(c.open(ghost, Duration::from_secs(5)).err(), Some(1u8));
+    assert_eq!(
+        c.open(ghost, Duration::from_secs(5)).err(),
+        Some(nbeep_relay::proto::ErrorCode::NoSuchPeer as u16)
+    );
     server.shutdown();
 }
 
@@ -453,4 +457,320 @@ fn roster_card_delivery_and_cap() {
     );
     drop((ca, cb, cc));
     server.shutdown();
+}
+
+// ── 와이어 v2(ADR-0016 · docs/56) ──────────────────────────────────────
+
+use nbeep_core::link::Link as _;
+use nbeep_relay::proto;
+use std::io::{Read as _, Write as _};
+use std::net::{TcpListener, TcpStream};
+
+/// 원시 v2 핸드셰이크(프리앰블 순차 왕복 → Noise prologue) — 봉투를 직접 보내는 시험용.
+fn raw_v2(server: &nexa_beepd::Handle, id: &Identity) -> NoiseSession<nbeep_net::TcpLink> {
+    let mut s = TcpStream::connect(server.tcp_addr).unwrap();
+    s.write_all(&proto::preamble::encode(proto::PROTO_MAJOR))
+        .unwrap();
+    let mut pre = [0u8; proto::preamble::LEN];
+    s.read_exact(&mut pre).unwrap();
+    assert_eq!(proto::preamble::parse(&pre), Some(proto::PROTO_MAJOR));
+    s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    let link = nbeep_net::TcpLink::new(s).unwrap();
+    NoiseSession::initiate_with(link, id, Some(proto::PROLOGUE)).unwrap()
+}
+
+fn recv_env(sess: &mut NoiseSession<nbeep_net::TcpLink>) -> proto::Envelope {
+    proto::Envelope::decode(&sess.recv().unwrap()).unwrap()
+}
+
+fn hello(app: &str) -> Vec<u8> {
+    proto::Hello {
+        proto_major: proto::PROTO_MAJOR,
+        proto_minor: proto::PROTO_MINOR,
+        app: app.into(),
+        app_version: "test".into(),
+        caps: proto::caps::ROSTER | proto::caps::UDP_OBSERVE,
+    }
+    .encode()
+    .encode()
+}
+
+fn connect_app(
+    server: &nexa_beepd::Handle,
+    id: &Identity,
+    app: &str,
+    bind: proto::BindMode,
+) -> RelayClient {
+    RelayClient::connect_as(
+        server.tcp_addr,
+        id,
+        &rids_around(&id.peer_id()),
+        None,
+        app,
+        "test",
+        bind,
+    )
+    .unwrap()
+}
+
+/// v1 클라(프리앰블 없음)·다른 세대(major 3)는 **명시적으로** 거절되고 계측에 남는다. 반대로 클라가 프리앰블을
+/// 모르는 서버(v1)나 다른 세대 서버를 만나면 `VersionMismatch{server_major}`(0 = 프리앰블 없음)로 **표시 가능**하다.
+#[test]
+fn generation_mismatch_is_explicit_both_ways() {
+    let server = test_server(0);
+    // v1 클라 흉내 — [len u32 = 0x20][e 32B]: 서버가 첫 8B에서 갈라 끊는다.
+    let mut s = TcpStream::connect(server.tcp_addr).unwrap();
+    s.write_all(&[0, 0, 0, 0x20]).unwrap();
+    s.write_all(&[7u8; 32]).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    let mut b = [0u8; 8];
+    assert!(matches!(s.read(&mut b), Ok(0) | Err(_)), "v1 클라는 끊긴다");
+    // 다른 세대(major 3) — 서버는 자기 major만 알리고 끊는다.
+    let mut s = TcpStream::connect(server.tcp_addr).unwrap();
+    s.write_all(&proto::preamble::encode(3)).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    s.read_exact(&mut b).unwrap();
+    assert_eq!(proto::preamble::parse(&b), Some(proto::PROTO_MAJOR));
+    assert!(matches!(s.read(&mut b), Ok(0) | Err(_)));
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    while server.metrics().rejected_version < 1 && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let m = server.metrics();
+    assert_eq!((m.rejected_v1, m.rejected_version), (1, 1));
+
+    // 클라 ← 프리앰블을 모르는 서버(v1 흉내: 44B 읽고 끊음) = server_major 0.
+    let id = Identity::generate();
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = l.local_addr().unwrap();
+    let t = std::thread::spawn(move || {
+        let (mut c, _) = l.accept().unwrap();
+        let mut junk = [0u8; 44];
+        let _ = c.read_exact(&mut junk);
+    });
+    match RelayClient::connect(addr, &id, &rids_around(&id.peer_id()), None) {
+        Err(nbeep_relay::RelayError::VersionMismatch { server_major: 0 }) => {}
+        other => panic!("v1 서버 → VersionMismatch{{0}} 기대: {other:?}"),
+    }
+    t.join().unwrap();
+    // 클라 ← major 3 서버 = server_major 3.
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = l.local_addr().unwrap();
+    let t = std::thread::spawn(move || {
+        let (mut c, _) = l.accept().unwrap();
+        let mut pre = [0u8; 8];
+        c.read_exact(&mut pre).unwrap();
+        c.write_all(&proto::preamble::encode(3)).unwrap();
+        let mut junk = [0u8; 36];
+        let _ = c.read_exact(&mut junk);
+    });
+    match RelayClient::connect(addr, &id, &rids_around(&id.peer_id()), None) {
+        Err(nbeep_relay::RelayError::VersionMismatch { server_major: 3 }) => {}
+        other => panic!("major 3 서버 → VersionMismatch{{3}} 기대: {other:?}"),
+    }
+    t.join().unwrap();
+    server.shutdown();
+}
+
+/// 헬스 프로브 — `Hello{app="probe"}`는 Welcome(버전·종류·능력·상한·관측)만 받고 끊긴다(등록·명부 없음).
+#[test]
+fn probe_hello_gets_welcome_then_close() {
+    let server = test_server(0);
+    let id = Identity::generate();
+    let mut s = raw_v2(&server, &id);
+    s.send(&hello(proto::app::PROBE)).unwrap();
+    let env = recv_env(&mut s);
+    assert_eq!(env.kind(), Some(proto::Kind::Welcome));
+    let w = proto::Welcome::decode(&env).unwrap();
+    assert_eq!(w.proto_major, proto::PROTO_MAJOR);
+    assert_eq!(w.server_version, env!("CARGO_PKG_VERSION"));
+    assert_eq!(w.server_type, proto::ServerType::Relay);
+    assert_eq!(w.caps, proto::caps::ROSTER | proto::caps::UDP_OBSERVE);
+    assert_eq!(
+        w.limits,
+        proto::Limits {
+            rate_bps: 0,
+            ..proto::Limits::default()
+        }
+    );
+    assert_eq!(w.udp_port, server.udp_port);
+    assert!(matches!(w.observed, proto::Ep::V4([127, 0, 0, 1], _)));
+    assert!(s.recv().is_err(), "프로브는 Welcome 뒤 끊긴다");
+    assert_eq!(server.metrics().probes, 1);
+    server.shutdown();
+}
+
+/// 오류 통로 — Hello 전 요청 = `NotRegistered`+끊김 · 모르는 핵심 kind = `Error{UnknownKind, ref_kind}` 응답 ·
+/// 확장 kind = 침묵 · 등록 전 Open = `NotRegistered`(연결 유지) · Pong은 nonce를 되비춘다.
+#[test]
+fn unknown_kind_is_answered_and_order_is_enforced() {
+    let server = test_server(0);
+    let id = Identity::generate();
+    let mut s = raw_v2(&server, &id);
+    s.send(
+        &proto::Register {
+            rids: vec![[1u8; 16]],
+            bind: proto::BindMode::ExclusiveLastWins,
+        }
+        .encode()
+        .encode(),
+    )
+    .unwrap();
+    let env = recv_env(&mut s);
+    assert_eq!(env.kind(), Some(proto::Kind::Error));
+    let p = proto::Problem::decode(&env).unwrap();
+    assert_eq!(p.code, proto::ErrorCode::NotRegistered as u16);
+    assert_eq!(p.ref_kind, Some(proto::Kind::Register as u16));
+    assert!(s.recv().is_err(), "Hello 없는 세션은 끊긴다");
+
+    let mut s = raw_v2(&server, &id);
+    s.send(&hello(proto::app::BEEP)).unwrap();
+    assert_eq!(recv_env(&mut s).kind(), Some(proto::Kind::Welcome));
+    let unknown_core = proto::Envelope {
+        kind: 0x0050,
+        flags: 0,
+        body: Vec::new(),
+    };
+    s.send(&unknown_core.encode()).unwrap();
+    let env = recv_env(&mut s);
+    let p = proto::Problem::decode(&env).unwrap();
+    assert_eq!(p.code, proto::ErrorCode::UnknownKind as u16);
+    assert_eq!(p.ref_kind, Some(0x0050));
+    let unknown_ext = proto::Envelope {
+        kind: 0x4001,
+        flags: 0,
+        body: Vec::new(),
+    };
+    s.send(&unknown_ext.encode()).unwrap();
+    s.send(&proto::ping(proto::Kind::Ping, 42).encode())
+        .unwrap();
+    let env = recv_env(&mut s);
+    assert_eq!(
+        env.kind(),
+        Some(proto::Kind::Pong),
+        "확장 kind는 침묵 — 다음 응답은 Pong"
+    );
+    assert_eq!(proto::nonce(&env).unwrap(), 42);
+    let mut open = proto::Channel::empty();
+    open.token = Some(1);
+    open.rid = Some([9u8; 16]);
+    s.send(&open.encode(proto::Kind::Open).encode()).unwrap();
+    let env = recv_env(&mut s);
+    let p = proto::Problem::decode(&env).unwrap();
+    assert_eq!(p.code, proto::ErrorCode::NotRegistered as u16);
+    assert_eq!(p.ref_kind, Some(proto::Kind::Open as u16));
+    s.send(&proto::ping(proto::Kind::Ping, 43).encode())
+        .unwrap();
+    assert_eq!(
+        proto::nonce(&recv_env(&mut s)).unwrap(),
+        43,
+        "연결은 유지된다"
+    );
+    assert!(server.metrics().errors_sent >= 3);
+    server.shutdown();
+}
+
+/// 앱 이름공간 — 서버는 `(app, rid)`로 라우팅한다: 다른 앱의 RID는 **보이지 않고**(`NoSuchPeer`) 같은 앱끼리만 열린다.
+/// `ServerInfo`(Welcome)가 클라에 남는다.
+#[test]
+fn app_namespace_isolates_rids() {
+    let server = test_server(0);
+    let (ida, idb, idc) = (
+        Identity::generate(),
+        Identity::generate(),
+        Identity::generate(),
+    );
+    let b = connect_app(
+        &server,
+        &idb,
+        proto::app::CLIP,
+        proto::BindMode::ExclusiveLastWins,
+    );
+    let a =
+        RelayClient::connect(server.tcp_addr, &ida, &rids_around(&ida.peer_id()), None).unwrap();
+    assert_eq!(a.server_info().version, env!("CARGO_PKG_VERSION"));
+    assert_eq!(
+        a.server_info().caps,
+        proto::caps::ROSTER | proto::caps::UDP_OBSERVE
+    );
+    let dst = rid_for(&idb.peer_id(), nbeep_relay::current_epoch_day());
+    assert_eq!(
+        a.open(dst, Duration::from_secs(5)).err(),
+        Some(proto::ErrorCode::NoSuchPeer as u16),
+        "beep → clip RID는 보이지 않는다"
+    );
+    let c = connect_app(
+        &server,
+        &idc,
+        proto::app::CLIP,
+        proto::BindMode::ExclusiveLastWins,
+    );
+    let t = std::thread::spawn(move || (c.open(dst, Duration::from_secs(10)).map(|_| ()), c));
+    let inc = b
+        .accept_incoming(Duration::from_secs(5))
+        .expect("같은 앱 → Incoming");
+    inc.accept();
+    let (r, _c) = t.join().unwrap();
+    assert!(r.is_ok(), "clip → clip은 열린다: {r:?}");
+    server.shutdown();
+}
+
+/// Shared 바인딩(docs/44 I-2) — 같은 RID에 두 기기: Incoming은 **둘 다** 받고 첫 Accept가 채널을 잡는다(다른 쪽은 ChClosed).
+/// 둘 다 거절하면 여는 쪽은 `Busy`.
+#[test]
+fn shared_bind_fans_out_and_first_accept_wins() {
+    let server = test_server(0);
+    let (ida, idb) = (Identity::generate(), Identity::generate());
+    let b1 = connect_app(&server, &idb, proto::app::BEEP, proto::BindMode::Shared);
+    let b2 = connect_app(&server, &idb, proto::app::BEEP, proto::BindMode::Shared);
+    let a =
+        RelayClient::connect(server.tcp_addr, &ida, &rids_around(&ida.peer_id()), None).unwrap();
+    let dst = rid_for(&idb.peer_id(), nbeep_relay::current_epoch_day());
+
+    let t = std::thread::spawn(move || (a.open(dst, Duration::from_secs(10)), a));
+    let i1 = b1
+        .accept_incoming(Duration::from_secs(5))
+        .expect("b1 Incoming");
+    let i2 = b2
+        .accept_incoming(Duration::from_secs(5))
+        .expect("b2 Incoming(팬아웃)");
+    i1.accept();
+    let (r, a) = t.join().unwrap();
+    let (mut la, _) = r.expect("첫 Accept = 성립");
+    let mut l2 = i2.link;
+    l2.set_recv_timeout(Some(Duration::from_secs(3))).unwrap();
+    assert!(
+        matches!(l2.recv(), Err(nbeep_core::link::LinkError::Closed)),
+        "늦은 후보는 ChClosed"
+    );
+    la.send(b"hi").unwrap();
+    let mut l1 = i1.link;
+    l1.set_recv_timeout(Some(Duration::from_secs(3))).unwrap();
+    assert_eq!(l1.recv().unwrap(), b"hi");
+
+    // 전원 거절 → Busy.
+    let t = std::thread::spawn(move || (a.open(dst, Duration::from_secs(10)).map(|_| ()), a));
+    let j1 = b1.accept_incoming(Duration::from_secs(5)).unwrap();
+    let j2 = b2.accept_incoming(Duration::from_secs(5)).unwrap();
+    drop(j1);
+    drop(j2);
+    let (r, _a) = t.join().unwrap();
+    assert_eq!(r.err(), Some(proto::ErrorCode::Busy as u16));
+    assert_eq!(server.metrics().channels_total, 1);
+    server.shutdown();
+}
+
+/// 우아한 종료 — `Handle::shutdown`이 연결마다 `Goaway{Shutdown}`을 보내고, 클라 액터는 그걸로 내려간다(호스트 백오프 재접속).
+#[test]
+fn server_shutdown_sends_goaway() {
+    let server = test_server(0);
+    let id = Identity::generate();
+    let c = RelayClient::connect(server.tcp_addr, &id, &rids_around(&id.peer_id()), None).unwrap();
+    assert!(c.is_alive());
+    server.shutdown();
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    while c.is_alive() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(!c.is_alive(), "Goaway 뒤 액터 종료");
 }
