@@ -774,3 +774,43 @@ fn server_shutdown_sends_goaway() {
     }
     assert!(!c.is_alive(), "Goaway 뒤 액터 종료");
 }
+
+/// **운영 서버 실측**(배포 뒤 확인용 · 기본 `#[ignore]`) — `BEEPD_LIVE=host:port` [+ `BEEPD_LIVE_PIN=<64hex>`]로 켠다:
+/// `BEEPD_LIVE=beepd.sosomlab.com:47300 BEEPD_LIVE_PIN=5c5e… cargo test -p nexa-beepd --test relay_e2e live_server -- --ignored --nocapture`
+/// 프리앰블·prologue·핀·Hello/Welcome·등록까지 간다(docs/41 §9-0 배포 확인 절차).
+#[test]
+#[ignore = "운영 서버 실측 — BEEPD_LIVE로 켠다"]
+fn live_server_v2_handshake() {
+    let Ok(target) = std::env::var("BEEPD_LIVE") else {
+        eprintln!("BEEPD_LIVE 미설정 — 건너뜀");
+        return;
+    };
+    let (_, sa) = nbeep_relay::resolve_server(&target).expect("주소 해석");
+    let pin = std::env::var("BEEPD_LIVE_PIN")
+        .ok()
+        .and_then(|h| nbeep_relay::parse_peer_hex(&h));
+    let id = Identity::generate();
+    let c = RelayClient::connect(sa, &id, &rids_around(&id.peer_id()), pin)
+        .unwrap_or_else(|e| panic!("실서버 접속 실패: {e:?}"));
+    let info = c.server_info();
+    eprintln!(
+        "server {} → version={} type={:?} caps={:#x} minor={} limits={:?} udp_port={} observed={:?} pin={}",
+        sa,
+        info.version,
+        info.server_type,
+        info.caps,
+        info.proto_minor,
+        info.limits,
+        c.register_info().udp_port,
+        c.register_info().observed_tcp,
+        nbeep_relay::peer_hex(&c.server_peer())
+    );
+    assert!(c.is_alive());
+    assert_eq!(info.caps, proto::caps::ROSTER | proto::caps::UDP_OBSERVE);
+    // 자기 RID로 Open = NoSuchPeer(자기 자신 제외) — 라우팅까지 살아 있다.
+    let me = rid_for(&id.peer_id(), nbeep_relay::current_epoch_day());
+    assert_eq!(
+        c.open(me, Duration::from_secs(5)).err(),
+        Some(proto::ErrorCode::NoSuchPeer as u16)
+    );
+}
