@@ -7,6 +7,7 @@
 
 ## 2026-11-08
 
+- ★**(Win · main) v0.10.1 공개 ✅** 태그 = `3878cd7` · release run 42467851376 전 13 job success · 자산 15 · 탑재 = 배너 기기 합산 `a6a388f` · Goaway 재접속 힌트 `fc64da9` · 0-a = gate rc=0 · 4,320,768B · 임포트 OK · verify 6/6 · apt/dnf 0.10.0 반영(09:26) → [journal](journal/2026-11-08.md)
 - **(Win · main) 바로 가능한 코드 잔여 2건 ✅** `a6a388f` X-13 S3 전송 배너 기기 합산 · `fc64da9` Goaway retry_after 재접속 힌트(relay_e2e 16/16) — 다음 릴리스 탑재 → [journal](journal/2026-11-08.md)
 - ★**(Win · main) v0.10.0 공개 ✅** 태그 = `fa3d4aa` · release run 42465469356 전 13 job success(meta · package 5 · publish · homebrew/tap · linux-repo 신호 · windows-packages switches/winget/chocolatey) · 자산 15 — beepd 1.0.0(와이어 v2) 짝 클라 · ≤0.9 서버 모드 불가 · 0-a = gate rc=0 · 4,318,720B · 임포트 OK · verify 6/6(autostart-clean reg.exe 처방 `fa3d4aa` — PowerShell 기동 정체 회피) · 분류기 차단 2건 → PERM-1 → [journal](journal/2026-11-08.md)
 - **(Win · main) TODO 낡은 표기 정리** — 흐름 표 M4(M4-12 ✅)·M5(M5-2 ✅) · MEM-1~5 종결 · X-2b 타입 축 실배선 ✅(`7d8e9c3`) → [journal](journal/2026-11-08.md)

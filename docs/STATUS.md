@@ -3,6 +3,8 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
+> **갱신: 2026-11-08 Win 5차 (KST · Windows · main — 개발 세션 범프·태그 · 0-a·release 감시·기록 = 협업 세션)** — ★**v0.10.1 공개 ✅**(태그 `3878cd7` · release run 42467851376 전 13 job success · 자산 15) · 탑재 = 전송 배너 기기 합산 `a6a388f` · Goaway 재접속 힌트 `fc64da9` · 0-a = gate rc=0 · `nexa-beep.exe` 4,320,768B · 임포트 OK · verify --quick 6/6 · **apt/dnf 0.10.0 반영 ✅**(linux-repo 504 두 번 뒤 09:26 성공) · 0.10.1 = **0.10.1 ✓ / 0.10.1 ✓**(linux-repo repository_dispatch 42468108324 success · 이번엔 504 없음) → [journal](journal/2026-11-08.md)
+
 > **갱신: 2026-11-08 Win 4차 (KST · Windows · main — 개발 세션 코드 · 기록 = 협업 세션)** — 사용자 지시 "바로 가능한 코드 잔여 완료" 2건: **X-13 S3 남김 ✅ `a6a388f`**(접힌 스레드 전송 배너 기기 합산 `view_xfer_agg` · 배너 2곳·목록 행·전체 취소 = 기기 전부 · 그룹 배너 `sum_xfer` 공용) · **Goaway `retry_after_s` 재접속 힌트 ✅ `fc64da9`**(`RelayClient::goaway_retry_after()` → `server_tick`이 백오프 대신 사용 · relay_e2e 16/16 + ignored 1) · 탑재 = 다음 릴리스(0.10.1/0.11 · 태그 없음) → [journal](journal/2026-11-08.md)
 
 > **갱신: 2026-11-08 Win 3차 (KST · Windows · main — 개발 세션 범프·태그 · 0-a·tools 처방·release 감시·기록 = 협업 세션)** — ★**v0.10.0 공개 ✅**(태그 `fa3d4aa` · release run 42465469356 전 13 job success(meta · package 5 · publish · homebrew/tap · linux-repo 신호 · windows-packages switches/winget/chocolatey) · 자산 15) · **beepd 1.0.0 짝**(와이어 v2 · ≤0.9 서버 모드 불가) · 0-a = gate rc=0 · `nexa-beep.exe` 4,318,720B · 임포트 OK · verify --quick 6/6(`fa3d4aa` autostart-clean → reg.exe · 이 PC PowerShell 기동 정체 회피). **전환 남은 = clip(docs/56 §5) · winget #474807 판단 · 사용자 PC 설치본 0.10.0** · 분류기 차단 2건(태그 push·taskkill) → TODO PERM-1 → [journal](journal/2026-11-08.md)
@@ -153,7 +155,7 @@
 
 | 순서 | 대상 | 착수 조건 · 규모 | 담당 |
 |---|---|---|---|
-| **1** | **BEEPD-2 beepd 와이어 v2 배선**([56 ADR-0016](56-adr-0016-beepd-wire-v2.md) 📐 · [TODO §8](TODO.md)) — ★**코드 ✅ · beepd-v1.0.0 OCI 배포 ✅ · beep v0.10.0 공개 ✅ 11-08** · 남은 = clip 전환(ⓑ) · winget #474807 판단 · 사용자 PC 설치본 0.10.0 · 종전 확인 항목: ⓐ **운영 서버 버전 확인**(0.2.5/0.2.6 · [41 §8-1](41-beepd-ops-guide.md) 기준 — OCI 0.2.6 배포 기록 없음) ⓑ **clip 세션 프롬프트 전달**([56 §5](56-adr-0016-beepd-wire-v2.md)) · 준비 회신 · ⓒ **서버 방식 결정 필요**(이중 수용 v1+v2 / v2 전용 — **권고 이중 수용** · 11-07 7차 미결정 · 질문 보류) · ⏸ **beepd 재배포 보류**(사용자 결정 11-07 · 다음 세션) | ⓐⓑ 뒤 · 대 · beepd-v1.0.0 + beep 0.10 + clip 같은 날 전환 | 개발 · ⓐⓑ = 사용자 손 |
+| **1** | **BEEPD-2 beepd 와이어 v2 배선**([56 ADR-0016](56-adr-0016-beepd-wire-v2.md) 📐 · [TODO §8](TODO.md)) — ★**코드 ✅ · beepd-v1.0.0 OCI 배포 ✅ · beep v0.10.0 공개 ✅ · v0.10.1 ✅ 11-08** · 남은 = clip 전환(ⓑ) · winget #474807 판단 · 사용자 PC 설치본 0.10.0 · 종전 확인 항목: ⓐ **운영 서버 버전 확인**(0.2.5/0.2.6 · [41 §8-1](41-beepd-ops-guide.md) 기준 — OCI 0.2.6 배포 기록 없음) ⓑ **clip 세션 프롬프트 전달**([56 §5](56-adr-0016-beepd-wire-v2.md)) · 준비 회신 · ⓒ **서버 방식 결정 필요**(이중 수용 v1+v2 / v2 전용 — **권고 이중 수용** · 11-07 7차 미결정 · 질문 보류) · ⏸ **beepd 재배포 보류**(사용자 결정 11-07 · 다음 세션) | ⓐⓑ 뒤 · 대 · beepd-v1.0.0 + beep 0.10 + clip 같은 날 전환 | 개발 · ⓐⓑ = 사용자 손 |
 | **2** | **릴리스 직후 보완(소)** — ① ~~기기마다 파일 오퍼 배너 뷰 키 합산~~ ✅ `a6a388f`(11-08 · 탑재 = 다음 릴리스) ② 규칙 1줄 "같은 UDP 소켓을 송신에 쓰면 **읽기 타임아웃 recv 금지**"(11-07 실측 · [06 §5-2](06-network-stack.md) 반영 ✅ 6차) | 즉시 · 소 | ✅ 둘 다(① `a6a388f` · ② 06 §5-2) |
 | **3** | **사용자 손** — 실기 묶음 6건(메뉴 키/Shift+F10 · 캐러셀 · 수동 IP 형제 배지 · 2-PC 큰 파일 수신·이어받기·꺼내기 · 기기마다 파일 오퍼 U-11 · 설치본 0.9.0 육안) · **PUB-1**(winget #468844 · choco 0.9.0 재개 = 1·2행) · **R-22 ② IDS 실측** | 사용자 일정 | 사용자 |
 | **4** | **v1.1 보류** — X-13 S4 그룹 동기 · M3-5 전문 검색·상태 표시 · M4-7/8 공유 폴더 · 파일 줄 따라잡기 | v1 뒤 | — |
