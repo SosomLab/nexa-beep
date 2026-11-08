@@ -3,6 +3,8 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
+> **갱신: 2026-11-08 Linux 7-1차 (KST · Linux · main — 기록 = 협업 세션)** — M5-6 진행 = 개발 세션 결정 8건 반영 중: ✅ docs/40 알려진 한계 v0.10.1 현행화(조용한 노드·다중 기기·릴레이 서버 신설·라이선스·29 §5) · ✅ SEC-3 고정 줄(18 §5 0-a · 위키 0.10.1) · 잔여 = docs/45·위키 User-Guide 본문 0.10.1 현행화 · 캡처 교체(실기 뒤).
+
 > **갱신: 2026-11-08 Linux 7차 (KST · Linux · main — 시험 수정 = 개발 세션 · 실행·판정·tools 처방·기록 = 협업 세션)** — ★**Linux 첫 점검 · xvfb.sh `86743ad` · perf-scenario `379cb92` · silent 시험 `4b88f5b`**: 빌드·clippy·단위 840/0·시나리오 4종(reply·wire·s4·block)·L-6 실 멀티캐스트 3건·L-2 xattr·L-3 알림·예산(6,877,264B · libc 계열만 · RSS 18.7MB) 통과 · 처방 전 시험 창이 사용자 화면에 노출됐을 수 있다 · 사람 손 = 클립보드 3항목·Wayland 성능·L-7·알림 Alarm. → [journal](journal/2026-11-08.md)
 
 > **갱신: 2026-11-08 Linux 6차 (KST · Linux · main — 기록 = 협업 세션)** — 이번 PC는 **Linux(Ubuntu GNOME Wayland · 설치본 apt 0.10.1 · 사용자 인스턴스 PID 51452 실행 중)** — 종전 작업은 Windows/mac이었다. 기록 정정 = PUB-1 dispatch 예시 `v0.10.1` · "다음 작업 대상" 3행 설치본 0.10.1. 코드 변경 없음.

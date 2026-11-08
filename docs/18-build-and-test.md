@@ -239,6 +239,7 @@ cargo build -p nexa-beep -p nbeep-imgdec                    # 아래 두 시험�
 #    ⚠ mac clippy는 rustup 툴체인으로(`PATH=$HOME/.cargo/bin` 선행 — Homebrew clippy는 워크스페이스 lint를 안 잡는다 · 11-02).
 #    ⚠ `cfg(target_os|unix|windows)` 코드를 만졌으면 그 타깃 clippy까지(`--target x86_64-unknown-linux-gnu` — mac은 Linux 전용 코드를 안 본다 · 11-03 `dae0e90`).
 #    단계 체계(V0~V3) = [53 §5-7](53-collab-session-operation.md).
+#    릴리스 노트에 SEC-3 고정 줄 포함(11-08): "막지 못하는 것 — 같은 네트워크의 관찰자는 존재·연결 상대·전송 길이·타이밍을 볼 수 있다(내용은 못 본다) → 알려진 한계(docs/40)".
 #    어느 단계든 red면 고치고 다시 0-a부터. 결과 수치(green 수·ms·MB)는 journal에 적는다(협업 세션).
 # 1) main이 green인지 먼저 확인한다 — red 상태로 태그를 밀지 않는다.
 gh run list --branch main --workflow ci --limit 1

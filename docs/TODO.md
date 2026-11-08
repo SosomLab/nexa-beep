@@ -241,7 +241,7 @@ M-1 설계 ──► M0 기반 ──► M1 발견 ──► M2 대화 ──►
 | **M5-4c** | **Linux 배포 확장** — ~~`.rpm`~~(**✅ 10-09** — nexa-sql 이식: `packaging/lib.sh`·`linux/build-deb.sh`·`build-rpm.sh`·spec · deb와 같은 스테이징 · release.yml 설치 스모크 · ★**glibc 하한 실측 자동 기입 + 러너 22.04 고정** — v0.2.17까지 `≥2.31` 선언이 거짓(실제 2.39 · 22.04/Debian 12 실행 불가) · [journal](journal/2026-10-09.md)) · 잔여 = **CI 첫 실행(rpm·22.04 스모크) · Fedora/RHEL 실기(사용자)** · arm64(`aarch64-unknown-linux-gnu` · X11/Wayland 크로스 링크 부담) · AppImage·Flatpak 수요 확인 후 | P3 | 중 | M5-4 | 🚧 (10-09 rpm·스모크 ✅ · CI 검증 대기) |
 | **M5-4g** | 🔴 **Windows 런타임 의존 `vcruntime140.dll` — [05 NFR-B-5] 위반**(09-17 실측 · [journal](journal/2026-09-17.md)) — 릴리스 자산 임포트 테이블에 **`vcruntime140.dll`**(VC++ 2015+ 재배포 · **인박스 아님**)이 `nexa-beep`·`nbeep-imgdec`·`nexa-beepd` 전부에 있다. `.cargo/config.toml`에 MSVC `crt-static`이 없어 **기본 동적 CRT**로 링크된다(08-22 musl 정적 전환은 Linux 타깃에만). 증상 = winget 자동 검증 `STATUS_DLL_NOT_FOUND`(0xC0000135 · **참 양성**) · **이미 게시된 `NexaBeep.Portable`도 VCRedist 없는 PC에서 실행 불가** · DR-4 포터블("압축 풀면 바로") 약속도 깨진다. 후보 = ⓐ **`-C target-feature=+crt-static`**(MSVC 4타깃 · 의존 소멸 · 산출물 소폭 증가 — 예산 1.7/10MB 여유 · **권고**) ⓑ winget `Dependencies`·nuspec `<dependencies>`에 VCRedist 선언(포터블 zip은 못 고침 · NFR-B-5 포기). **어느 쪽이든 NFR-B-5 검증 = 임포트 화이트리스트 CI 검사**(그 항목에 적혀 있었으나 미구현 — 그래서 여기까지 왔다) 동반 | **P0** | 소 | — | ✅ (09-17 **ⓐ 채택**(사용자 확정) — `d609607` `.cargo/config.toml` MSVC 2타깃 `+crt-static` → `vcruntime140.dll`·`api-ms-win-crt-*` 소멸(임포트 15종 전부 인박스 · 2.79→2.90MB) + ★**`tools/check-imports.ps1`**(PE 직접 파싱 · dumpbin 의존 0 · ci/release/release-server 배선 · 양방향 실증) · ⚠**`RUSTFLAGS`가 config를 이긴다**는 함정이 **당일 재현**(cross-build 잡 env 누락 → ARM64가 다시 동적 → **새 게이트가 첫 실행에서 검출** · `366bcc1`) · **v0.2.16·beepd-v0.2.6 공개**(brew 추종 ✓ · 게시물 받아 게이트 재검증 3종 인박스) · winget 낡은 2건 닫고 **#436462·#436463·#436461 재제출** · **잔여 = mac/Linux 임포트 검사**(otool -L·ldd)) |
 | M5-5 | **24h 상주 누수 실측**(E-9 · NFR-B-6) · 100대 규모(E-8) · ★수단 = INS-5 `tools/inspect-sample.sh`(11-04) — 사용자 PC 1회: 설치본 relaunch 뒤 `bash tools/inspect-sample.sh --match NexaBeep --interval 60 --duration 86400 --gate` | P0 | 중 | M5-1 | ☐ |
-| M5-6 | 문서 마감 — 사용 안내 · **알려진 한계**(TOFU가 못 막는 것·기기 이전 시 기록 미이전 V-7·저장 위협 모델 H-5) | P0 | 소 | — | ☐ |
+| M5-6 | 문서 마감 — 사용 안내 · **알려진 한계**(TOFU가 못 막는 것·기기 이전 시 기록 미이전 V-7·저장 위협 모델 H-5) | P0 | 소 | — | 🚧 11-08 결정 8건 — ✅ docs/40 현행화 · SEC-3 고정 줄(18 §5 0-a · 위키 0.10.1) · 잔여 = docs/45·위키 User-Guide 본문 0.10.1 현행화 · 캡처 교체(실기 뒤) |
 
 ---
 
@@ -323,7 +323,7 @@ M-1 설계 ──► M0 기반 ──► M1 발견 ──► M2 대화 ──►
 | ID | 항목 | 상태 |
 |---|---|:--:|
 | ~~SEC-1 · SEC-2~~ | 와이어 평문 자동 회귀 · 캡처 스크립트 상비 — ✅ 완료(11-05 `f3f4e4c`·`4187806` · CI W-8 첫 판정 PASS run 42094275079) → [TODO-done §9](TODO-done.md) · 회귀는 CI ubuntu 매 push + `verify.sh`가 계속 돈다 | ✅ |
-| **SEC-3** | 릴리스 노트에 **"막지 못하는 것"** 을 항상 싣는다([29 §5](29-wire-security-audit.md) — 존재·연결 상대·길이·타이밍) | ☐ M5-6 |
+| **SEC-3** | 릴리스 노트에 **"막지 못하는 것"** 을 항상 싣는다([29 §5](29-wire-security-audit.md) — 존재·연결 상대·길이·타이밍) | ✅ 11-08 고정 줄 + 체크 등재(18 §5 0-a) · 위키 0.10.1 소급 |
 | **SEC-4** | 리스크 등록부([05 §4](05-requirements.md))와 이 트래커의 **불일치 점검** — 새 리스크가 여기 안 올라오면 관찰에서 빠진다 | 상시 |
 
 ---
