@@ -401,6 +401,6 @@ M-1 설계 ──► M0 기반 ──► M1 발견 ──► M2 대화 ──►
 | ~~**L-3**~~ | 알림 D-Bus 직접 — ✅ `6d79206`(11-06) → [TODO-done §5](TODO-done.md) | P1 | ✅ |
 | ~~L-4~~ | xdg-desktop-portal 파일 선택 병행 — ⛔ 제외(11-07 사용자 결정 · 자체 피커 유지(DR-6·ADR-0014)) → [TODO-done ⛔](TODO-done.md) | — | ⛔ |
 | **L-5** | 실기 잔여 — X11 세션(`set_visible/focus_window` 실동작 경로) · KDE Plasma(토큰 미제공 → 주의 요청 폴백) · 24h 누수(기준선 17.5MB/29fd) · 자동 실행 재부팅 | — | 실기 대기 |
-| **L-6** | 실 멀티캐스트 ignored 2건은 **따로 실행**(동시 실행 = 포트 공유 경합 flaky) — 18·26 절차 명기 | P2 | 문서 |
+| **L-6** | 실 멀티캐스트 ignored 3건(`udp.rs` 1027·1059·1093)은 **따로 실행**(동시 실행 = 포트 공유 경합 flaky) — 18·26 절차 명기 | P2 | 문서 |
 | **L-7** | **트레이 상주 시 Dock 잔존**(08-30 사용자 — 닫아도 좌측 Dock에 표시) → `ui.tray_hide_taskbar`(3-OS · 기본 on · Linux 창 파괴+`create_main_window` 재생성 · mac Dock 아이콘 제거 · Win 숨김 · off = 최소화) | P1 | ✅ 구현(08-30) · **실기 잔여 3-OS**(Linux Dock 소멸·트레이 열기 재생성 / mac Dock 아이콘 / Win 작업표시줄 버튼) · v0.2.15 탑재 |
 

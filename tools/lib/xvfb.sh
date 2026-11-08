@@ -6,12 +6,13 @@
 #     다시 실행하고 그 종료 코드로 끝난다(재진입 표식 NEXA_XVFB_ACTIVE=1 · 자식은 다시 감싸지 않는다).
 #     NEXA_XVFB=0 = 실제 DISPLAY · xvfb-run 없음 = 경고 한 줄 뒤 실제 화면(`sudo apt install xvfb x11-utils`) ·
 #     화면 = NEXA_XVFB_SCREEN(기본 1600x1000x24). macOS·Windows에서는 아무것도 하지 않는다.
+#     Wayland 세션이면 WAYLAND_DISPLAY·WAYLAND_SOCKET을 지워 winit이 Xvfb(X11)에 붙게 한다(11-08 Ubuntu GNOME 실측 — 안 지우면 실제 컴포지터에 붙어 사용자 화면에 창이 뜬다).
 #   ★ 사용자 실기 인스턴스(relaunch.sh)는 이 파일을 포함하지 않는다 — 실기 창은 실제 화면에 떠야 한다.
 if [ "$(uname -s)" = Linux ] && [ "${NEXA_XVFB:-1}" != 0 ] && [ -z "${NEXA_XVFB_ACTIVE:-}" ]; then
   if command -v xvfb-run >/dev/null 2>&1; then
     export NEXA_XVFB_ACTIVE=1
     echo "[xvfb] re-exec under Xvfb (${NEXA_XVFB_SCREEN:-1600x1000x24}) — NEXA_XVFB=0 uses the real display" >&2
-    exec xvfb-run -a -s "-screen 0 ${NEXA_XVFB_SCREEN:-1600x1000x24}" bash "$0" "$@"
+    exec env -u WAYLAND_DISPLAY -u WAYLAND_SOCKET xvfb-run -a -s "-screen 0 ${NEXA_XVFB_SCREEN:-1600x1000x24}" bash "$0" "$@"
   else
     echo "[xvfb] xvfb-run not found — running on the real display (sudo apt install xvfb x11-utils)" >&2
   fi

@@ -78,7 +78,7 @@ $env:NEXA_INSTALL_DIR = 'D:\Apps\NexaBeep'   # 기본 = HKCU\Software\SosomLab\N
 | 릴리스 빌드 | `cargo build --release -p nexa-beep -p nbeep-imgdec` → `target/release/{nexa-beep,nbeep-imgdec}` |
 | **서버 릴리스 빌드** | `cargo build --release -p nexa-beepd` → `target/release/nexa-beepd` — **클라와 별도 산출물**(DR-9 개정 · W-1: 클라 빌드에 절대 포함 금지 · 예산 게이트 무관 W-2). 배포 = `beepd-v*` 태그 → `release-server.yml` |
 | **서버 e2e** | `cargo test -p nexa-beepd --test relay_e2e` — 종단 Noise 관통·핀 불일치·루프백 홀펀칭 배관(위 워크스페이스 테스트에 포함 — 별도 실행은 서버만 만졌을 때) |
-| **테스트**(green 기준) | `cargo test --workspace --features nbeep-core/testkit,nbeep-net/testkit,nbeep-crypto/testkit` — **전부 통과 + 0 ignored 예상 밖 없음**(ignored = 실 멀티캐스트 2·포털 신호 1 — 실 멀티캐스트 2건은 **한 번에 하나씩** `--ignored <이름>`으로 · 동시 실행은 포트 공유 경합으로 flaky(08-29 Linux 실측)) |
+| **테스트**(green 기준) | `cargo test --workspace --features nbeep-core/testkit,nbeep-net/testkit,nbeep-crypto/testkit` — **전부 통과 + 0 ignored 예상 밖 없음**(ignored = 실 멀티캐스트 3(`udp.rs` `two_instances_discover_each_other_via_real_multicast`·`silent_node_hears_but_is_not_seen_until_enabled`·`rename_reannounces_immediately`)·포털 신호 1 — 실 멀티캐스트 3건은 **한 번에 하나씩** `--ignored <이름>`으로 · 동시 실행은 포트 공유 경합으로 flaky(08-29 Linux 실측)) |
 | 포맷 | `cargo fmt --all --check` (수정은 `--check` 없이) |
 | 린트 | `cargo clippy --workspace --all-targets --features nbeep-core/testkit,nbeep-net/testkit,nbeep-crypto/testkit -- -D warnings` |
 | ★**실기 한 번에: `./tools/verify.sh`**(11-04 신설 — 빌드 → 헤드리스 스모크 → reply → scan-plaintext → **wire-scan**(11-05 · SEC-1) → group → block → s4 → ack-bench → (perf · oldpeer) → tmp-clean · 요약 표 + 종료 코드) | ★**자동 실기 배치**(사용자 확정 11-04 — 시나리오를 손으로 하나씩 고르지 않는다 · 릴리스 전 일괄 = gate.sh + verify.sh · 창은 화면에 띄우지 않는다) |
