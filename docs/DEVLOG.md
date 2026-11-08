@@ -7,6 +7,7 @@
 
 ## 2026-11-08
 
+- **(Win · main) 바로 가능한 코드 잔여 2건 ✅** `a6a388f` X-13 S3 전송 배너 기기 합산 · `fc64da9` Goaway retry_after 재접속 힌트(relay_e2e 16/16) — 다음 릴리스 탑재 → [journal](journal/2026-11-08.md)
 - ★**(Win · main) v0.10.0 공개 ✅** 태그 = `fa3d4aa` · release run 42465469356 전 13 job success(meta · package 5 · publish · homebrew/tap · linux-repo 신호 · windows-packages switches/winget/chocolatey) · 자산 15 — beepd 1.0.0(와이어 v2) 짝 클라 · ≤0.9 서버 모드 불가 · 0-a = gate rc=0 · 4,318,720B · 임포트 OK · verify 6/6(autostart-clean reg.exe 처방 `fa3d4aa` — PowerShell 기동 정체 회피) · 분류기 차단 2건 → PERM-1 → [journal](journal/2026-11-08.md)
 - **(Win · main) TODO 낡은 표기 정리** — 흐름 표 M4(M4-12 ✅)·M5(M5-2 ✅) · MEM-1~5 종결 · X-2b 타입 축 실배선 ✅(`7d8e9c3`) → [journal](journal/2026-11-08.md)
 - ★**(Win · main) BEEPD-2 beepd 와이어 v2 배선 코드 ✅** `293ff06`·`7553ec8`·`7d8e9c3`(+ rustdoc 4건 `5836ad2` 협업) — 프리앰블 `NBPD`+major → Noise prologue `nexa-beepd/2` · v1 코덱 삭제(호환 포기) · beepd 모듈 6개 · 1.0.0 분리 · relay_e2e 16/16 · test ws 836 · CI 42455099913 success · docs/56 §2-4·§7 결정 기록 · **beepd-v1.0.0 OCI 배포 ✅**(0.2.5 → 1.0.0 · 핀 불변) · 남은 = beep 0.10·clip 전환 → [journal](journal/2026-11-08.md)
