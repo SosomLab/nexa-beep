@@ -3,6 +3,8 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
+> **갱신: 2026-11-08 Linux 7차 (KST · Linux · main — 시험 수정 = 개발 세션 · 실행·판정·tools 처방·기록 = 협업 세션)** — ★**Linux 첫 점검 · xvfb.sh `86743ad` · perf-scenario `379cb92` · silent 시험 `4b88f5b`**: 빌드·clippy·단위 840/0·시나리오 4종(reply·wire·s4·block)·L-6 실 멀티캐스트 3건·L-2 xattr·L-3 알림·예산(6,877,264B · libc 계열만 · RSS 18.7MB) 통과 · 처방 전 시험 창이 사용자 화면에 노출됐을 수 있다 · 사람 손 = 클립보드 3항목·Wayland 성능·L-7·알림 Alarm. → [journal](journal/2026-11-08.md)
+
 > **갱신: 2026-11-08 Linux 6차 (KST · Linux · main — 기록 = 협업 세션)** — 이번 PC는 **Linux(Ubuntu GNOME Wayland · 설치본 apt 0.10.1 · 사용자 인스턴스 PID 51452 실행 중)** — 종전 작업은 Windows/mac이었다. 기록 정정 = PUB-1 dispatch 예시 `v0.10.1` · "다음 작업 대상" 3행 설치본 0.10.1. 코드 변경 없음.
 
 > **갱신: 2026-11-08 Win 5차 (KST · Windows · main — 개발 세션 범프·태그 · 0-a·release 감시·기록 = 협업 세션)** — ★**v0.10.1 공개 ✅**(태그 `3878cd7` · release run 42467851376 전 13 job success · 자산 15) · 탑재 = 전송 배너 기기 합산 `a6a388f` · Goaway 재접속 힌트 `fc64da9` · 0-a = gate rc=0 · `nexa-beep.exe` 4,320,768B · 임포트 OK · verify --quick 6/6 · **apt/dnf 0.10.0 반영 ✅**(linux-repo 504 두 번 뒤 09:26 성공) · 0.10.1 = **0.10.1 ✓ / 0.10.1 ✓**(linux-repo repository_dispatch 42468108324 success · 이번엔 504 없음) → [journal](journal/2026-11-08.md)
@@ -172,7 +174,7 @@
 | 3-1 | **LAT-1 메시지 왕복 지연** — 세션 액터 송수신 분리 [55](55-lat1-session-actor-split.md) | ✅ `b4d723f`(11-04 — 루프백 p95 210 → 5ms · 49 F-1 ≤50 ✓) · 잔여 = 실 LAN 2-PC 실측(**사용자 실기** — 이 PC 1대 · 세션 대행 불가 · 11-05) |
 | 3-2 | **사용자 1회 = `tools/firewall-allow.ps1`**(`c5c0798` · 관리자 · 방화벽 창 억제 · `-Remove` 되돌림 · 실행 전) — 실행 방법 [26](26-run-and-manual-test.md) | ✅ 11-05 실행(관리자 · 규칙 28건 · 승인 창 0) |
 | 3-3 | **GAP-042 winit 0.30.13 `TaskbarCreated` 교착 우회**(nexa-dir3 11-04 이식 · DR-31) — `nbeep_plat::taskbar_guard` + `new_window` 깔때기 · 제거 조건 winit 0.31 | ✅ `e9c32f6`(11-05) · 잔여 = 실기(RDP 재접속 반복 · 자동 재현 불가) |
-| 4 | **HL-1 헤드리스 후속** — Linux `xvfb.sh` 첫 실기 | 🚧 Windows 로컬·CI 러너 스모크 ✓ · s4/perf 적용 ✓(11-04) · 잔여 = **사용자 손 Linux 실기 묶음**(9행 L-1과 함께 · 11-06 6차 · 9차 추가 = L-2 xattr ext4·tmpfs·vfat · L-3 D-Bus 알림 클릭·토큰·소리 GNOME/KDE) |
+| 4 | **HL-1 헤드리스 후속** — Linux `xvfb.sh` 첫 실기 | 🚧 Windows 로컬·CI 러너 스모크 ✓ · s4/perf 적용 ✓(11-04) · 잔여 = **사용자 손 Linux 실기 묶음**(9행 L-1과 함께 · 11-06 6차 · 9차 추가 = L-2 xattr ext4·tmpfs·vfat · L-3 D-Bus 알림 클릭·토큰·소리 GNOME/KDE) · ★**Linux `xvfb.sh` 첫 실기 ✅ 11-08**(Ubuntu GNOME Wayland · 처방 `86743ad`) |
 | 4-1 | **GINV-1 그룹 초대 생애주기** S2~S4 — [54](54-group-invite-lifecycle.md) ✅ · DR-30 | ✅ S1~S4(`338e06e` · 시나리오 28/28) · 잔여 = 육안 · 2-PC · ~~해제 자리 38 수신 제한 목록 통합~~ ✅ `61d331c`(11-05 · DR-30 ⑤) |
 | 5 | **X-13 S5 컨텐츠 모드** | ⏸ 실기 후 별도 결정(D-32-5) |
 | 6 | **M5-3 스팸 방어**(R-4 · v1.0 필수 · D-24) — 수신 제한 설계 = [38](38-receive-restriction-design.md) | ✅ BL-1~4 `54df30c`·`61d331c`(11-05) · BL-5 자동 = `block-scenario.sh` 19/19 ✅(동사 `1e6a705`) · **2차 ⓐ 임계값 설정 승격 ✅ `eb9a8f2` · ⓑ 발견 감쇠 ✅ `dbba0a8` · ⓒ 미확인 발신자 격리 ✅ `eb98bbd`**(시나리오 27/27) · 잔여 = ⓑ 발견 감쇠 주입 시나리오 스크립트 = **협업 몫**(`tools/` 시나리오 + `verify.sh` 단계·RULES 동시 등재 · 결과는 개발 세션 검토) · 3-신원 실기·2-PC IP 차단 집행 → 3행(사용자 손) |
