@@ -7,6 +7,7 @@
 
 ## 2026-11-07
 
+- **(Win · main) 패키지 게시 점검 · Chocolatey 0.9.0 제출** — GitHub·brew·apt·dnf 0.9.0 ✓ · choco 0.9.0 제출(run 42336686478 · 검수 대기 · 스위치 원복) · winget 설치본 0.8.0 = 외부 기여(#471812 · 해시 일치) · 0.9.0 = 사용자 결정 대기 → [journal](journal/2026-11-07.md)
 - **(Win · main) 중지 · beep/beepd 마무리** — 사용자 결정 beepd 재배포 보류(BEEPD-2 = 다음 세션) · 서버 방식(이중 수용 v1+v2 / v2 전용) 미결정 · 권고 이중 수용 → [journal](journal/2026-11-07.md)
 - **(Win · main) 릴리스 뒤 정리 · 다음 작업 대상 확정** — ① BEEPD-2(확인 2건 = 운영 서버 버전 · clip 프롬프트) ② 보완(소) 배너 합산 · UDP 읽기 타임아웃 규칙(docs/06 §5-2) ③ 사용자 손 실기 6·PUB-1·R-22 ② ④ v1.1 보류 · STATUS 머리 표 · TODO BEEPD-2·X-13 → [journal](journal/2026-11-07.md)
 - ★**(Win · main) v0.9.0 공개 ✅** 태그 = `39296e7` · release run 42334473879 전 13 job success · 자산 15 · brew `d303fa5` · apt 0.9.0 · 0-a = gate rc=0 · linux/mac clippy · 4,307,456B · verify --perf 15/16(startup) → **기동 회귀 bisect = `90e2292`**(웜 first_paint 58 → 367ms · 읽기 스레드+타임아웃 둘이 함께일 때만) → 처방 `97b63b5`·`787008c`·`39296e7` 웜 57ms · verify --quick 6/6 · s4 24/24 · ADR-0016 beepd 와이어 v2 📐 `f7354ac` · 위키 `c8e529a` → [journal](journal/2026-11-07.md)
