@@ -7,6 +7,7 @@
 
 ## 2026-11-08
 
+- **(Win · main) TODO 낡은 표기 정리** — 흐름 표 M4(M4-12 ✅)·M5(M5-2 ✅) · MEM-1~5 종결 · X-2b 타입 축 실배선 ✅(`7d8e9c3`) → [journal](journal/2026-11-08.md)
 - ★**(Win · main) BEEPD-2 beepd 와이어 v2 배선 코드 ✅** `293ff06`·`7553ec8`·`7d8e9c3`(+ rustdoc 4건 `5836ad2` 협업) — 프리앰블 `NBPD`+major → Noise prologue `nexa-beepd/2` · v1 코덱 삭제(호환 포기) · beepd 모듈 6개 · 1.0.0 분리 · relay_e2e 16/16 · test ws 836 · CI 42455099913 success · docs/56 §2-4·§7 결정 기록 · **beepd-v1.0.0 OCI 배포 ✅**(0.2.5 → 1.0.0 · 핀 불변) · 남은 = beep 0.10·clip 전환 → [journal](journal/2026-11-08.md)
 
 ## 2026-11-07
