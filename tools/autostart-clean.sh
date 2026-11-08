@@ -34,17 +34,19 @@ done
 
 # ② 유령(실행 파일이 없어진 등록) — 경로 접두 대조로 직접 지운다.
 if [ "$IS_WIN" = 1 ]; then
+  # 11-08: PowerShell 대신 reg.exe — 이 PC에서 powershell.exe/pwsh 기동이 수 분~무한 지연돼 verify가 여기서 멈췄다.
+  #   reg 출력 = "    <이름>    REG_SZ    <값>" · Git Bash가 /v·/f를 경로로 바꾸지 않게 MSYS_NO_PATHCONV=1.
+  K='HKCU\Software\Microsoft\Windows\CurrentVersion\Run'
   WM=$(cygpath -w "$M"); WT=$(cygpath -w "$ROOT/target")
-  gone=$(powershell.exe -NoProfile -Command "
-    \$k='HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
-    \$roots=@('$WM\','$WT\')
-    (Get-ItemProperty \$k -ErrorAction SilentlyContinue).psobject.Properties |
-      Where-Object { \$_.Name -like 'NexaBeep*' } | ForEach-Object {
-        \$p = (\$_.Value -as [string]).Trim().Trim('\"')
-        foreach (\$r in \$roots) { if (\$p.StartsWith(\$r, [StringComparison]::OrdinalIgnoreCase)) {
-          Remove-ItemProperty -Path \$k -Name \$_.Name; \"\$(\$_.Name) -> \$p\"; break } }
-      }" 2>/dev/null | tr -d '\r')
-  [ -n "$gone" ] && while IFS= read -r l; do note "$l"; done <<< "$gone"
+  lc() { tr '[:upper:]' '[:lower:]'; }
+  wm=$(printf '%s\\' "$WM" | lc); wt=$(printf '%s\\' "$WT" | lc)
+  while IFS= read -r line; do
+    [[ "$line" =~ ^[[:space:]]+(NexaBeep[^[:space:]]*)[[:space:]]+REG_[A-Z_]+[[:space:]]+(.*)$ ]] || continue
+    name=${BASH_REMATCH[1]}; p=${BASH_REMATCH[2]}; p=${p#\"}; pl=$(printf '%s' "$p" | lc)
+    case "$pl" in "$wm"* | "$wt"*)
+      MSYS_NO_PATHCONV=1 reg.exe delete "$K" /v "$name" /f >/dev/null 2>&1 && note "$name -> ${p%\"*}" ;;
+    esac
+  done < <(MSYS_NO_PATHCONV=1 reg.exe query "$K" 2>/dev/null | tr -d '\r')
 else
   if [ "$(uname)" = Darwin ]; then
     files=("$HOME"/Library/LaunchAgents/com.sosomlab.nexa-beep*.plist)
