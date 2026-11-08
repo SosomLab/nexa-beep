@@ -234,6 +234,7 @@ clip 쪽 [22 §3] 원장에 반영할 상태(clip이 적는다 — 이 저장소
 - **PEER tag** — PeerUp/PeerDown의 신원 = tag 29 `peer`(32B 공개키 · RID가 아니라 Noise가 증명한 키).
 - **상태 코드** — `open()` 등 결과 = `ErrorCode` u16(NoSuchPeer 6 · LimitExceeded 4 · Busy 7 · `0xFFFF` = 세션 죽음).
 - ★**서버 전환 완료(11-08 07:11Z)** — 운영 `beepd.sosomlab.com:47300` = **nexa-beepd 1.0.0(와이어 v2)** · 핀 불변. **clip 현행(v1 사본)은 지금 접속 불가 상태**(서버 로그 "프리앰블 없음 — 거절") — clip은 §5 준비(사본 이식 + 스위치 v2)로 복구한다.
+- **beep v0.10.0 공개(11-08 · 태그 `fa3d4aa`)** — beep 쪽 전환 완료(와이어 v2 전용 클라). 남은 쪽 = **clip 릴리스**(§5 준비 회신 → 기본 v2 · v1 사본 삭제).
 
 ### 7-5. 공유 코드 변경 이력
 
