@@ -1054,14 +1054,23 @@ mod tests {
 
     /// R-18 ⓑ(11-07) — 조용한 노드(광고 끄기)는 기동 HELLO·주기 광고를 내지 않아 상대 목록에 뜨지 않지만,
     /// 상대의 광고는 듣는다(비대칭 발견). 켜면 즉시 HELLO로 나타난다.
+    ///
+    /// ★ HELLO **응답은 설계상 유지**된다(TODO R-18 · journal 11-07 — 물어본 상대에게만 유니캐스트로 답한다 ·
+    /// 광고가 아니다). 그래서 loud를 먼저 띄워 기동 HELLO가 지나간 **뒤** silent를 띄운다 — 종전(11-07)엔
+    /// 둘을 동시에 띄워 loud의 기동 HELLO에 silent가 답한 것을 "광고가 샜다"고 잘못 판정했다(11-08 Linux 첫
+    /// 실 멀티캐스트 실행에서 2/2 재현). 주기 500ms = S4 라운드(16주기 = 8s)가 3초 창 안에 오지 않는 값.
     #[test]
     #[ignore = "실네트워크 멀티캐스트 필요 — 로컬/Docker에서 --ignored로 실행(D-8a)"]
     fn silent_node_hears_but_is_not_seen_until_enabled() {
-        let loud = UdpDiscovery::spawn(pid(5), [5; 16], name("loud"), 1000, 1, 300, true).unwrap();
+        let loud = UdpDiscovery::spawn(pid(5), [5; 16], name("loud"), 1000, 1, 500, true).unwrap();
+        let l_ev = loud.take_events();
+        // loud의 기동 HELLO(+S4 유니캐스트)가 망을 지나갈 시간 — 이 뒤로 loud는 주기 ANNOUNCE만 낸다(응답 유도 없음).
+        std::thread::sleep(Duration::from_millis(700));
+        while l_ev.try_recv().is_ok() {} // 그 사이 관측(있다면)은 버린다 — 아래 창은 silent 기동 뒤만 본다
         let silent =
-            UdpDiscovery::spawn(pid(6), [6; 16], name("silent"), 2000, 1, 300, false).unwrap();
+            UdpDiscovery::spawn(pid(6), [6; 16], name("silent"), 2000, 1, 500, false).unwrap();
         assert!(!silent.advertising());
-        let (l_ev, s_ev) = (loud.take_events(), silent.take_events());
+        let s_ev = silent.take_events();
         let deadline = std::time::Instant::now() + Duration::from_secs(3);
         let (mut loud_saw_silent, mut silent_saw_loud) = (false, false);
         while std::time::Instant::now() < deadline {
@@ -1075,7 +1084,7 @@ mod tests {
         assert!(silent_saw_loud, "조용한 노드도 남의 광고는 듣는다");
         assert!(
             !loud_saw_silent,
-            "조용한 노드는 3초 동안 한 번도 보이지 않아야 한다(기동 HELLO·주기 광고 0)"
+            "조용한 노드는 3초 동안 한 번도 보이지 않아야 한다(기동 HELLO·주기 광고 0 · HELLO 받은 적 없음)"
         );
         silent.set_advertise(true);
         let deadline = std::time::Instant::now() + Duration::from_secs(3);
