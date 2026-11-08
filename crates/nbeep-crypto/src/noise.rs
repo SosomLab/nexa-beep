@@ -131,8 +131,18 @@ impl Identity {
 }
 
 fn builder(id: &Identity) -> Result<Builder<'_>, SessionError> {
+    builder_with(id, None)
+}
+
+/// XX 빌더 + 선택 prologue(릴레이 서버 와이어 major 결속 — ADR-0016 `nbeep_relay_proto::PROLOGUE`).
+/// prologue가 다르면 msg2 복호가 실패한다(= 세대가 다르면 핸드셰이크가 명시적으로 끊김 · 다운그레이드 불가).
+fn builder_with<'a>(id: &'a Identity, prologue: Option<&'a [u8]>) -> Result<Builder<'a>, SessionError> {
     let params = PARAMS.parse().map_err(|_| SessionError::Handshake)?;
-    Ok(Builder::new(params).local_private_key(&id.private))
+    let b = Builder::new(params).local_private_key(&id.private);
+    Ok(match prologue {
+        Some(p) => b.prologue(p),
+        None => b,
+    })
 }
 
 /// XXpsk3 빌더 — PSK 위치 3.
@@ -181,8 +191,20 @@ impl<L: Link> NoiseSession<L> {
     ///
     /// # Errors
     /// 링크 종료·프로토콜 실패 시 [`SessionError`].
-    pub fn initiate(mut link: L, id: &Identity) -> Result<Self, SessionError> {
-        let mut hs = builder(id)?
+    pub fn initiate(link: L, id: &Identity) -> Result<Self, SessionError> {
+        Self::initiate_with(link, id, None)
+    }
+
+    /// 개시자 측 XX + **prologue**(릴레이 제어 세션 — 와이어 major 결속). `prologue`가 `None`이면 [`Self::initiate`]와 같다.
+    ///
+    /// # Errors
+    /// 링크 종료·프로토콜 실패(prologue 불일치 = msg2 복호 실패 포함) 시 [`SessionError`].
+    pub fn initiate_with(
+        mut link: L,
+        id: &Identity,
+        prologue: Option<&[u8]>,
+    ) -> Result<Self, SessionError> {
+        let mut hs = builder_with(id, prologue)?
             .build_initiator()
             .map_err(|_| SessionError::Handshake)?;
         let mut buf = vec![0u8; NOISE_MAX];
@@ -239,6 +261,28 @@ impl<L: Link> NoiseSession<L> {
     /// 링크 종료·프로토콜 실패 시 [`SessionError`].
     pub fn accept(link: L, id: &Identity) -> Result<Self, SessionError> {
         Self::accept_any(link, id, None).map(|(s, _)| s)
+    }
+
+    /// 수신자 측 XX + **prologue**(릴레이 서버 — 와이어 major 결속). PSK 경로 없음.
+    ///
+    /// # Errors
+    /// 링크 종료·프로토콜 실패(클라 prologue가 다르면 msg3 복호 실패) 시 [`SessionError`].
+    pub fn accept_with(mut link: L, id: &Identity, prologue: &[u8]) -> Result<Self, SessionError> {
+        let mut buf = vec![0u8; NOISE_MAX];
+        let msg1 = link.recv()?;
+        let mut hs = builder_with(id, Some(prologue))?
+            .build_responder()
+            .map_err(|_| SessionError::Handshake)?;
+        hs.read_message(&msg1, &mut buf)
+            .map_err(|_| SessionError::Handshake)?;
+        let n = hs
+            .write_message(&[], &mut buf)
+            .map_err(|_| SessionError::Handshake)?;
+        link.send(&buf[..n])?;
+        let msg = link.recv()?;
+        hs.read_message(&msg, &mut buf)
+            .map_err(|_| SessionError::Handshake)?;
+        Self::finish(link, hs, id, false)
     }
 
     /// 수신자 측 — **XX와 XXpsk3를 첫 메시지로 가른다**(추가 왕복 0). 돌려주는 `bool` = psk 세션이었는가
@@ -586,6 +630,39 @@ mod tests {
         // 반대 방향도 산다(b의 반쪽).
         b_tx.send(b"back").unwrap();
         assert_eq!(a_rx.recv().unwrap(), b"back");
+    }
+
+    /// prologue(ADR-0016 와이어 major 결속) — 같으면 성립, 다르면 **개시자가 msg2에서** 실패하고
+    /// 응답자는 msg3를 못 받는다(= 세대가 다르면 조용히 붙는 길이 없다 · 다운그레이드 불가).
+    #[test]
+    fn prologue_binds_generation() {
+        let alice = Identity::generate();
+        let bob = Identity::generate();
+        let (la, lb) = duplex(alice.peer_id(), bob.peer_id());
+        let hb = thread::spawn(move || NoiseSession::accept_with(lb, &bob, b"nexa-beepd/2"));
+        let mut a =
+            NoiseSession::initiate_with(la, &alice, Some(b"nexa-beepd/2")).expect("같은 prologue");
+        let mut b = hb.join().unwrap().expect("같은 prologue");
+        a.send(b"hi").unwrap();
+        assert_eq!(b.recv().unwrap(), b"hi");
+
+        let alice = Identity::generate();
+        let bob = Identity::generate();
+        let (la, lb) = duplex(alice.peer_id(), bob.peer_id());
+        let hb = thread::spawn(move || NoiseSession::accept_with(lb, &bob, b"nexa-beepd/3"));
+        let a = NoiseSession::initiate_with(la, &alice, Some(b"nexa-beepd/2"));
+        assert!(a.is_err(), "prologue가 다르면 개시자 msg2 복호 실패");
+        drop(a);
+        assert!(hb.join().unwrap().is_err(), "응답자도 성립하지 않는다");
+        // prologue 없는 개시자(v1 클라)도 prologue 서버에는 붙지 못한다.
+        let alice = Identity::generate();
+        let bob = Identity::generate();
+        let (la, lb) = duplex(alice.peer_id(), bob.peer_id());
+        let hb = thread::spawn(move || NoiseSession::accept_with(lb, &bob, b"nexa-beepd/2"));
+        let a = NoiseSession::initiate(la, &alice);
+        assert!(a.is_err());
+        drop(a);
+        assert!(hb.join().unwrap().is_err());
     }
 
     /// 분리 불가 링크(duplex fake)는 `Err(self)`로 돌아오고 세션은 그대로 쓸 수 있다(폴백).
