@@ -36,6 +36,104 @@ pub const FLAG_OPTIONAL: u8 = 1 << 0;
 
 /// 랑데부 RID(16B · v1과 같은 크기 · 파생은 앱 몫).
 pub type Rid = [u8; 16];
+/// 기기 공개키(= PeerId 바이트 · 명부 PeerUp/PeerDown이 나른다).
+pub type PeerKey = [u8; 32];
+/// RegisterResult / OpenResult / Incoming의 status "성공".
+pub const STATUS_OK: u16 = 0;
+
+/// `Hello.app` 이름공간 상수. 서버는 `(app, rid)`로 라우팅한다 — 교차 Open은 `Forbidden`.
+pub mod app {
+    /// nexa-beep 클라.
+    pub const BEEP: &str = "nexa-beep";
+    /// nexa-clip 클라(와이어 사본 · docs/44).
+    pub const CLIP: &str = "nexa-clip";
+    /// 헬스 프로브 — Welcome만 받고 끊는다(등록 불가 · 명부 비노출 · 같은 포트).
+    pub const PROBE: &str = "probe";
+}
+
+/// **링크 프리앰블** — Noise보다 앞에 평문으로 오가는 8B. 세대(major) 판별 전용.
+///
+/// prologue만으로는 "major 불일치"와 "키 변조"가 **구분되지 않는다**(둘 다 Noise msg2 복호 실패) — 클라가 "서버 세대
+/// 불일치 · 앱 업데이트 필요"를 **표시**하려면 Noise 밖에서 major를 알아야 한다. 보안 결속은 여전히 prologue가 맡는다
+/// (프리앰블을 바꿔치기해도 핸드셰이크는 실패할 뿐 다운그레이드는 안 된다).
+///
+/// ```text
+/// C → S : "NBPD" ‖ major u16 BE ‖ 0u16(예약)   (바로 이어서 Noise msg1 프레임 — RTT 추가 없음)
+/// S → C : "NBPD" ‖ major u16 BE ‖ 0u16          (major가 다르면 이것만 보내고 끊는다)
+/// ```
+/// v1 클라는 프리앰블 없이 `[len u32 = 0x20][e]`로 시작하므로 서버는 첫 4B로 세대를 가를 수 있다(이중 수용 자리).
+pub mod preamble {
+    /// 매직 4B.
+    pub const MAGIC: [u8; 4] = *b"NBPD";
+    /// 길이(매직 4 + major 2 + 예약 2).
+    pub const LEN: usize = 8;
+    /// 프리앰블 바이트.
+    #[must_use]
+    pub fn encode(major: u16) -> [u8; LEN] {
+        let m = major.to_be_bytes();
+        [
+            MAGIC[0], MAGIC[1], MAGIC[2], MAGIC[3], m[0], m[1], 0, 0,
+        ]
+    }
+    /// 매직이 맞으면 major. 아니면 `None`(= v1 또는 beepd가 아님).
+    #[must_use]
+    pub fn parse(b: &[u8]) -> Option<u16> {
+        if b.len() < LEN || b[..4] != MAGIC {
+            return None;
+        }
+        Some(u16::from_be_bytes([b[4], b[5]]))
+    }
+}
+
+/// **UDP 관측 프로브** — Noise 밖 데이터그램(관측 주소를 알아내는 용도라 암호화 대상이 아니다 · 능력 [`caps::UDP_OBSERVE`]).
+/// 형식은 v1과 같다(바꿀 이유가 없고 clip 사본이 그대로 맞는다). 정의만 여기로 모은다.
+///
+/// ```text
+/// 요청  = "NBOB" ‖ token u64 BE                       (12B · 서버는 매직·토큰이 틀리면 **침묵** — 증폭 방지)
+/// 응답  = "NBOB" ‖ token u64 BE ‖ ep                  (ep = 4‖ip4‖port · 6‖ip16‖port)
+/// ```
+pub mod udp_obs {
+    use super::Ep;
+    /// 매직 4B.
+    pub const MAGIC: [u8; 4] = *b"NBOB";
+    /// 요청 길이.
+    pub const PROBE_LEN: usize = 12;
+    /// 요청 바이트.
+    #[must_use]
+    pub fn encode_probe(token: u64) -> [u8; PROBE_LEN] {
+        let mut out = [0u8; PROBE_LEN];
+        out[..4].copy_from_slice(&MAGIC);
+        out[4..].copy_from_slice(&token.to_be_bytes());
+        out
+    }
+    /// 요청 해석 — 매직·길이가 맞으면 토큰.
+    #[must_use]
+    pub fn parse_probe(b: &[u8]) -> Option<u64> {
+        if b.len() < PROBE_LEN || b[..4] != MAGIC {
+            return None;
+        }
+        Some(u64::from_be_bytes(b[4..12].try_into().ok()?))
+    }
+    /// 응답 바이트.
+    #[must_use]
+    pub fn encode_echo(token: u64, ep: Ep) -> Vec<u8> {
+        let mut out = Vec::with_capacity(PROBE_LEN + 19);
+        out.extend_from_slice(&MAGIC);
+        out.extend_from_slice(&token.to_be_bytes());
+        ep.encode(&mut out);
+        out
+    }
+    /// 응답 해석 — (토큰, 관측 주소).
+    #[must_use]
+    pub fn parse_echo(b: &[u8]) -> Option<(u64, Ep)> {
+        let token = parse_probe(b)?;
+        let ep = Ep::decode(&b[PROBE_LEN..])?;
+        if ep == Ep::None {
+            return None;
+        }
+        Some((token, ep))
+    }
+}
 
 /// kind 번호(v2.0). 번호는 **불변** · 새 kind는 뒤에 append.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -229,7 +327,8 @@ pub enum Ep {
 }
 
 impl Ep {
-    fn encode(self, out: &mut Vec<u8>) {
+    /// 와이어 배치로 덧붙인다(`None`이면 0B).
+    pub fn encode(self, out: &mut Vec<u8>) {
         match self {
             Self::None => {}
             Self::V4(ip, port) => {
@@ -244,7 +343,9 @@ impl Ep {
             }
         }
     }
-    fn decode(b: &[u8]) -> Option<Self> {
+    /// 와이어 배치 해석(빈 슬라이스 = `None` · 길이가 어긋나면 `None` 반환이 아니라 **오류**(`Option::None`)).
+    #[must_use]
+    pub fn decode(b: &[u8]) -> Option<Self> {
         match b.first() {
             None => Some(Self::None),
             Some(4) if b.len() == 7 => Some(Self::V4(b[1..5].try_into().ok()?, be16(&b[5..7])?)),
@@ -269,7 +370,35 @@ pub enum DecodeError {
     UnknownCoreKind(u16),
     /// 확장 공간의 모르는 kind(조용히 무시 대상).
     UnknownExtKind(u16),
+    /// typed decode에 다른 kind의 봉투가 들어옴(호출자 분기 오류 · Malformed로 응답).
+    KindMismatch(u16),
 }
+
+impl DecodeError {
+    /// 상대에게 돌려줄 오류 코드. 확장 kind는 응답 대상이 아니므로 호출자가 먼저 걸러야 한다(여기선 `Unsupported`).
+    #[must_use]
+    pub fn error_code(self) -> ErrorCode {
+        match self {
+            Self::UnknownCoreKind(_) => ErrorCode::UnknownKind,
+            Self::UnknownExtKind(_) => ErrorCode::Unsupported,
+            Self::Truncated | Self::Malformed | Self::KindMismatch(_) => ErrorCode::Malformed,
+        }
+    }
+}
+
+impl core::fmt::Display for DecodeError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Truncated => f.write_str("truncated"),
+            Self::Malformed => f.write_str("malformed"),
+            Self::UnknownCoreKind(k) => write!(f, "unknown core kind 0x{k:04x}"),
+            Self::UnknownExtKind(k) => write!(f, "unknown ext kind 0x{k:04x}"),
+            Self::KindMismatch(k) => write!(f, "kind mismatch 0x{k:04x}"),
+        }
+    }
+}
+
+impl std::error::Error for DecodeError {}
 
 /// TLV 기록기.
 #[derive(Debug, Default)]
@@ -476,6 +605,13 @@ impl Envelope {
     pub fn view(&self) -> Result<View<'_>, DecodeError> {
         View::parse(&self.body)
     }
+    /// typed decode 앞 kind 확인 — 허용 목록에 없으면 [`DecodeError::KindMismatch`].
+    pub fn expect(&self, allowed: &[Kind]) -> Result<(), DecodeError> {
+        match self.kind() {
+            Some(k) if allowed.contains(&k) => Ok(()),
+            _ => Err(DecodeError::KindMismatch(self.kind)),
+        }
+    }
 }
 
 // ───────────────────────── 핵심 메시지(typed) ─────────────────────────
@@ -510,6 +646,7 @@ pub mod tag {
     pub const REF_KIND: u8 = 26;
     pub const RETRY_AFTER_S: u8 = 27;
     pub const MIN_PROTO: u8 = 28;
+    pub const PEER: u8 = 29; // 32B 공개키(PeerUp/PeerDown)
     // limits 중첩 tag
     pub const L_MAX_FRAME: u8 = 1;
     pub const L_MAX_RIDS: u8 = 2;
@@ -542,6 +679,7 @@ impl Hello {
         Envelope::new(Kind::Hello, f)
     }
     pub fn decode(e: &Envelope) -> Result<Self, DecodeError> {
+        e.expect(&[Kind::Hello])?;
         let v = e.view()?;
         Ok(Self {
             proto_major: v.req_u16(tag::PROTO_MAJOR)?,
@@ -591,6 +729,7 @@ impl Welcome {
         Envelope::new(Kind::Welcome, f)
     }
     pub fn decode(e: &Envelope) -> Result<Self, DecodeError> {
+        e.expect(&[Kind::Welcome])?;
         let v = e.view()?;
         let d = Limits::default();
         let limits = match v.get(tag::LIMITS) {
@@ -680,6 +819,7 @@ impl Problem {
         Envelope::new(kind, f)
     }
     pub fn decode(e: &Envelope) -> Result<Self, DecodeError> {
+        e.expect(&[Kind::Reject, Kind::Error, Kind::Goaway, Kind::GoawayS])?;
         let v = e.view()?;
         Ok(Self {
             code: v.req_u16(tag::CODE)?,
@@ -709,6 +849,7 @@ impl Register {
         Envelope::new(Kind::Register, f)
     }
     pub fn decode(e: &Envelope) -> Result<Self, DecodeError> {
+        e.expect(&[Kind::Register])?;
         let v = e.view()?;
         let rids = v
             .all(tag::RID)
@@ -743,6 +884,7 @@ impl RegisterResult {
         Envelope::new(Kind::RegisterResult, f)
     }
     pub fn decode(e: &Envelope) -> Result<Self, DecodeError> {
+        e.expect(&[Kind::RegisterResult])?;
         let v = e.view()?;
         let mut entries = Vec::new();
         for b in v.all(tag::ENTRY) {
@@ -807,7 +949,19 @@ impl Channel {
         }
         Envelope::new(kind, f)
     }
+    /// 채널 kind 전부.
+    pub const KINDS: [Kind; 8] = [
+        Kind::Open,
+        Kind::OpenResult,
+        Kind::Accept,
+        Kind::Incoming,
+        Kind::Data,
+        Kind::DataS,
+        Kind::CloseCh,
+        Kind::ChClosed,
+    ];
     pub fn decode(e: &Envelope) -> Result<Self, DecodeError> {
+        e.expect(&Self::KINDS)?;
         let v = e.view()?;
         Ok(Self {
             token: v
@@ -830,19 +984,27 @@ impl Channel {
     }
 }
 
-/// Announce / PeerUp / PeerDown — listed + 불투명 카드(상한 = limits.card_max) + rid(PeerUp/Down).
+/// Announce / PeerUp / PeerDown — listed + 불투명 카드(상한 = limits.card_max) + peer 공개키·rid(PeerUp/Down).
+///
+/// 명부 항목의 신원은 `peer`(Noise가 증명한 정적 공개키 · 서버가 채운다)다 — 클라는 이 키로 RID를 파생해 Open한다.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Presence {
     pub listed: bool,
+    pub peer: Option<PeerKey>,
     pub rid: Option<Rid>,
     pub card: Vec<u8>,
 }
 
 impl Presence {
+    /// 명부 kind 전부.
+    pub const KINDS: [Kind; 3] = [Kind::Announce, Kind::PeerUp, Kind::PeerDown];
     #[must_use]
     pub fn encode(&self, kind: Kind) -> Envelope {
         let mut f = Fields::new();
         f.u8(tag::LISTED, u8::from(self.listed));
+        if let Some(p) = &self.peer {
+            f.bytes(tag::PEER, p);
+        }
         if let Some(r) = &self.rid {
             f.bytes(tag::RID, r);
         }
@@ -852,9 +1014,14 @@ impl Presence {
         Envelope::new(kind, f)
     }
     pub fn decode(e: &Envelope) -> Result<Self, DecodeError> {
+        e.expect(&Self::KINDS)?;
         let v = e.view()?;
         Ok(Self {
             listed: v.get(tag::LISTED).is_some_and(|b| b == [1]),
+            peer: v
+                .get(tag::PEER)
+                .map(|b| PeerKey::try_from(b).map_err(|_| DecodeError::Malformed))
+                .transpose()?,
             rid: v
                 .get(tag::RID)
                 .map(|b| Rid::try_from(b).map_err(|_| DecodeError::Malformed))
@@ -870,6 +1037,12 @@ pub fn ping(kind: Kind, nonce: u64) -> Envelope {
     let mut f = Fields::new();
     f.u64(tag::NONCE, nonce);
     Envelope::new(kind, f)
+}
+
+/// Ping/Pong의 nonce.
+pub fn nonce(e: &Envelope) -> Result<u64, DecodeError> {
+    e.expect(&[Kind::Ping, Kind::Pong])?;
+    e.view()?.req_u64(tag::NONCE)
 }
 
 #[cfg(test)]
@@ -952,10 +1125,25 @@ mod tests {
         assert_eq!(Problem::decode(&pr.encode(Kind::Error)).unwrap(), pr);
         let ps = Presence {
             listed: true,
+            peer: Some([0xAB; 32]),
             rid: Some([3u8; 16]),
             card: b"card".to_vec(),
         };
         assert_eq!(Presence::decode(&ps.encode(Kind::PeerUp)).unwrap(), ps);
+        // typed decode는 kind를 확인한다(채널 봉투를 Presence로 풀면 KindMismatch).
+        assert_eq!(
+            Presence::decode(&c.encode(Kind::Data)),
+            Err(DecodeError::KindMismatch(Kind::Data as u16))
+        );
+        assert_eq!(
+            Hello::decode(&ps.encode(Kind::PeerUp)),
+            Err(DecodeError::KindMismatch(Kind::PeerUp as u16))
+        );
+        assert_eq!(nonce(&ping(Kind::Pong, 77)).unwrap(), 77);
+        assert_eq!(
+            DecodeError::UnknownCoreKind(9).error_code(),
+            ErrorCode::UnknownKind
+        );
         // kind 공간.
         let core_unknown = Envelope {
             kind: 0x0050,
@@ -1000,5 +1188,30 @@ mod tests {
             f
         });
         assert_eq!(Hello::decode(&no_app), Err(DecodeError::Malformed));
+    }
+
+    /// 프리앰블·UDP 프로브는 Noise 밖 바이트 — 형식이 고정이다(clip 사본 검증 대상).
+    #[test]
+    fn preamble_and_udp_probe_are_stable() {
+        let p = preamble::encode(PROTO_MAJOR);
+        assert_eq!(hex(&p), "4e42504400020000");
+        assert_eq!(preamble::parse(&p), Some(2));
+        // v1 첫 프레임([len u32 = 0x20][e])은 프리앰블이 아니다.
+        assert_eq!(preamble::parse(&[0, 0, 0, 0x20, 1, 2, 3, 4]), None);
+        assert_eq!(preamble::parse(&p[..7]), None);
+
+        let q = udp_obs::encode_probe(0x0102_0304_0506_0708);
+        assert_eq!(hex(&q), "4e424f420102030405060708");
+        assert_eq!(udp_obs::parse_probe(&q), Some(0x0102_0304_0506_0708));
+        assert_eq!(udp_obs::parse_probe(&q[..11]), None);
+        let e = udp_obs::encode_echo(5, Ep::V4([127, 0, 0, 1], 47300));
+        assert_eq!(hex(&e), "4e424f420000000000000005047f000001b8c4");
+        assert_eq!(
+            udp_obs::parse_echo(&e),
+            Some((5, Ep::V4([127, 0, 0, 1], 47300)))
+        );
+        // 응답에 ep가 없으면 응답이 아니다.
+        assert_eq!(udp_obs::parse_echo(&q), None);
+        assert_eq!(udp_obs::parse_echo(b"NBOX00000000"), None);
     }
 }
