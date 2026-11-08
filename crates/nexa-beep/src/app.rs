@@ -6645,9 +6645,10 @@ impl App {
     /// 스로틀 우회(100MB 파일 = 3,200회 전 피어 순회+2중 정렬 — 최대 CPU 낭비).
     /// dirty만 세우면 주기 도래 시 발견 폴이 한 번에 반영한다(같은 깔때기).
     fn apply_xfer_view_throttled(&mut self, peer: PeerId) {
-        let xp = self.xfer_progress.get(&peer).copied();
+        let vk = self.view_key(peer);
+        let xp = self.view_xfer_agg(vk); // ★ 접힌 스레드 = 기기 합산(X-13 S3 남김 · 11-08)
         let mut inv = Invalidations::default();
-        if let Some(chat) = self.chats.get_mut(&self.view_key(peer)) {
+        if let Some(chat) = self.chats.get_mut(&vk) {
             chat.set_xfer(xp, &mut inv);
         }
         self.refresh_group_banners_for(peer); // 그룹 수신 배너 동기(M5-1h)
@@ -6659,9 +6660,10 @@ impl App {
 
     /// 진행률을 위젯에 반영(목록 행 + 열려 있는 대화창).
     fn apply_xfer_view(&mut self, peer: PeerId) {
-        let xp = self.xfer_progress.get(&peer).copied();
+        let vk = self.view_key(peer);
+        let xp = self.view_xfer_agg(vk); // ★ 접힌 스레드 = 기기 합산(X-13 S3 남김 · 11-08)
         let mut inv = Invalidations::default();
-        if let Some(chat) = self.chats.get_mut(&self.view_key(peer)) {
+        if let Some(chat) = self.chats.get_mut(&vk) {
             chat.set_xfer(xp, &mut inv);
         }
         self.refresh_group_banners_for(peer); // 그룹 수신 배너 동기(M5-1h)
@@ -7773,7 +7775,7 @@ impl App {
                 // 진행 중 전송이 있으면 이름 아래 막대로 보인다(슬라이스 4에서 채운다).
                 // ★ 그룹발(M5-1h · 실기 08-24 4차)은 **그룹 행 몫** — 개별 행에서는
                 //   숨긴다(그룹 수신 진행이 상대 행 막대로 보이던 것).
-                let xfer = self.xfer_progress.get(&entry.peer).copied().filter(|xp| {
+                let xfer = self.view_xfer_agg(entry.peer).filter(|xp| {
                     if xp.sending {
                         !self.group_send_tags.contains_key(&entry.peer)
                     } else {
@@ -11079,6 +11081,17 @@ impl App {
     /// 대화 뷰 키(대표 기기) — 멱등: `view_key(view_key(p)) == view_key(p)`.
     fn view_key(&self, peer: PeerId) -> PeerId {
         self.fold_group(peer)[0]
+    }
+
+    /// 뷰 키 하나에 그릴 전송 진행 — **접힌 스레드의 기기들을 합산**한다(X-13 S3 남김 · `c1e83d0` 한계 =
+    /// `xfer_progress`가 기기 키라 마지막 기기 값만 보였다). bytes·files 합 · 카운트다운은 가장 임박한 값 ·
+    /// 보내는 중이 하나라도 있으면 발신 색. `key`가 대표 기기가 아니면(기기 행·형제) 그 기기 값 그대로.
+    fn view_xfer_agg(&self, key: PeerId) -> Option<nbeep_ui::XferProgress> {
+        let devs = self.fold_group(key);
+        if devs.len() <= 1 || devs[0] != key {
+            return self.xfer_progress.get(&key).copied();
+        }
+        sum_xfer(devs.iter().filter_map(|d| self.xfer_progress.get(d)))
     }
 
     /// 대표 키가 바뀐 대화 상태를 새 키로 옮긴다(S3) — 서명 목록이 대화 창을 연 **뒤에** 오거나,
@@ -20020,29 +20033,12 @@ impl App {
                 ps
             })
             .unwrap_or_default();
-        let mut agg: Option<nbeep_ui::XferProgress> = None;
-        for p in peers {
-            let Some(xp) = self.xfer_progress.get(&p).filter(|x| !x.sending) else {
-                continue;
-            };
-            let a = agg.get_or_insert(nbeep_ui::XferProgress {
-                done_bytes: 0,
-                total_bytes: 0,
-                done_files: 0,
-                total_files: 0,
-                sending: false,
-                auto_cancel_ms: None,
-            });
-            a.done_bytes = a.done_bytes.saturating_add(xp.done_bytes);
-            a.total_bytes = a.total_bytes.saturating_add(xp.total_bytes);
-            a.done_files = a.done_files.saturating_add(xp.done_files);
-            a.total_files = a.total_files.saturating_add(xp.total_files);
-            // 자동 취소 카운트다운(M4-2e ⓓ) — 구성원별 타이머 중 가장 임박한 값.
-            a.auto_cancel_ms = match (a.auto_cancel_ms, xp.auto_cancel_ms) {
-                (Some(x), Some(y)) => Some(x.min(y)),
-                (x, y) => x.or(y),
-            };
-        }
+        // 구성원 수신 진행 합산(발신은 그룹 행 몫이 아니다) — 규칙은 `sum_xfer` 한 곳.
+        let agg = sum_xfer(
+            peers
+                .iter()
+                .filter_map(|p| self.xfer_progress.get(p).filter(|x| !x.sending)),
+        );
         let mut inv = Invalidations::default();
         if let Some(chat) = self.gchats.get_mut(&gid) {
             chat.set_xfer(agg, &mut inv);
@@ -21708,7 +21704,10 @@ impl App {
             .get_mut(&peer)
             .is_some_and(ChatViewWidget::take_xfer_cancel)
         {
-            self.cancel_active_xfer(peer);
+            // 접힌 스레드(X-13 S3)는 배너가 기기 합산이므로 "전체 취소"도 기기 전부(그룹 배너와 같은 규칙).
+            for d in self.fold_group(peer) {
+                self.cancel_active_xfer(d);
+            }
         }
         // 라인별 트랜스포트 제어(M4-2e) — 항목 옆 ⏸▶✕ 아이콘.
         if let Some(ctl) = self
@@ -28090,8 +28089,70 @@ mod font_fallback_tests {
     }
 }
 
+/// 전송 진행 합산(접힌 스레드·그룹 배너 공용) — bytes·files `saturating_add` · `sending`은 하나라도 발신이면 발신 ·
+/// 자동 취소 카운트다운(M4-2e ⓓ)은 **가장 임박한 값**. 항목이 없으면 `None`.
+fn sum_xfer<'a>(
+    it: impl Iterator<Item = &'a nbeep_ui::XferProgress>,
+) -> Option<nbeep_ui::XferProgress> {
+    let mut agg: Option<nbeep_ui::XferProgress> = None;
+    for xp in it {
+        let a = agg.get_or_insert(nbeep_ui::XferProgress {
+            done_bytes: 0,
+            total_bytes: 0,
+            done_files: 0,
+            total_files: 0,
+            sending: false,
+            auto_cancel_ms: None,
+        });
+        a.done_bytes = a.done_bytes.saturating_add(xp.done_bytes);
+        a.total_bytes = a.total_bytes.saturating_add(xp.total_bytes);
+        a.done_files = a.done_files.saturating_add(xp.done_files);
+        a.total_files = a.total_files.saturating_add(xp.total_files);
+        a.sending |= xp.sending;
+        a.auto_cancel_ms = match (a.auto_cancel_ms, xp.auto_cancel_ms) {
+            (Some(x), Some(y)) => Some(x.min(y)),
+            (x, y) => x.or(y),
+        };
+    }
+    agg
+}
+
 #[cfg(test)]
 mod tests {
+
+    /// X-13 S3 남김(11-08) — 접힌 스레드 배너는 기기 합산: bytes·files 합 · 카운트다운 최솟값 · 발신 우선.
+    #[test]
+    fn sum_xfer_adds_devices_and_takes_nearest_countdown() {
+        use nbeep_ui::XferProgress;
+        assert_eq!(super::sum_xfer(std::iter::empty()), None);
+        let a = XferProgress {
+            done_bytes: 10,
+            total_bytes: 100,
+            done_files: 1,
+            total_files: 2,
+            sending: true,
+            auto_cancel_ms: None,
+        };
+        let b = XferProgress {
+            done_bytes: 5,
+            total_bytes: 50,
+            done_files: 0,
+            total_files: 1,
+            sending: false,
+            auto_cancel_ms: Some(30_000),
+        };
+        let c = XferProgress {
+            auto_cancel_ms: Some(4_000),
+            ..b
+        };
+        let s = super::sum_xfer([a, b, c].iter()).unwrap();
+        assert_eq!((s.done_bytes, s.total_bytes), (20, 200));
+        assert_eq!((s.done_files, s.total_files), (1, 4));
+        assert!(s.sending, "하나라도 발신이면 발신 색");
+        assert_eq!(s.auto_cancel_ms, Some(4_000), "가장 임박한 카운트다운");
+        // 기기 1대면 그 값 그대로.
+        assert_eq!(super::sum_xfer([b].iter()), Some(b));
+    }
     /// 창 제목(사용자 10-10 · dir3 10-06 규칙): 디버그 빌드만 "(Debug)" 꼬리 · 릴리스는 "Nexa Beep".
     #[test]
     fn app_title_marks_debug_builds() {
