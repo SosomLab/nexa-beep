@@ -773,6 +773,11 @@ fn server_shutdown_sends_goaway() {
         std::thread::sleep(Duration::from_millis(20));
     }
     assert!(!c.is_alive(), "Goaway 뒤 액터 종료");
+    assert_eq!(
+        c.goaway_retry_after(),
+        Some(Duration::from_secs(5)),
+        "서버 종료 힌트 retry_after 5s가 호스트에 남는다"
+    );
 }
 
 /// **운영 서버 실측**(배포 뒤 확인용 · 기본 `#[ignore]`) — `BEEPD_LIVE=host:port` [+ `BEEPD_LIVE_PIN=<64hex>`]로 켠다:

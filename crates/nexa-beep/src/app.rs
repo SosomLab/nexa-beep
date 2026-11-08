@@ -9016,8 +9016,12 @@ impl App {
                 return; // 붙어 있고 살아 있다
             }
             // 서버 세션 사망 관측 — 내려놓고 첫 단계부터 재시도(백오프는 실패가 올린다).
+            // ★ 서버가 Goaway{retry_after_s}(우아한 종료·재배포 · ADR-0016)를 남겼으면 그만큼 기다렸다 붙는다.
+            let hint = c
+                .goaway_retry_after()
+                .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
             self.relay = None;
-            self.relay_backoff = (0, now);
+            self.relay_backoff = (0, now.saturating_add(hint));
             self.refresh_toolbar_server(); // 명부 이탈은 전송 펌프가 Withdrawn으로(X-2f)
             self.set_status(nbeep_core::t(nbeep_core::Msg::StServerLost));
         }
