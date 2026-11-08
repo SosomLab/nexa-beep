@@ -71,9 +71,7 @@ pub mod preamble {
     #[must_use]
     pub fn encode(major: u16) -> [u8; LEN] {
         let m = major.to_be_bytes();
-        [
-            MAGIC[0], MAGIC[1], MAGIC[2], MAGIC[3], m[0], m[1], 0, 0,
-        ]
+        [MAGIC[0], MAGIC[1], MAGIC[2], MAGIC[3], m[0], m[1], 0, 0]
     }
     /// 매직이 맞으면 major. 아니면 `None`(= v1 또는 beepd가 아님).
     #[must_use]
@@ -647,7 +645,7 @@ pub mod tag {
     pub const RETRY_AFTER_S: u8 = 27;
     pub const MIN_PROTO: u8 = 28;
     pub const PEER: u8 = 29; // 32B 공개키(PeerUp/PeerDown)
-    // limits 중첩 tag
+                             // limits 중첩 tag
     pub const L_MAX_FRAME: u8 = 1;
     pub const L_MAX_RIDS: u8 = 2;
     pub const L_MAX_CHANS: u8 = 3;

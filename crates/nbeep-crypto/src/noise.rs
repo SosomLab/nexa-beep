@@ -136,7 +136,10 @@ fn builder(id: &Identity) -> Result<Builder<'_>, SessionError> {
 
 /// XX 빌더 + 선택 prologue(릴레이 서버 와이어 major 결속 — ADR-0016 `nbeep_relay_proto::PROLOGUE`).
 /// prologue가 다르면 msg2 복호가 실패한다(= 세대가 다르면 핸드셰이크가 명시적으로 끊김 · 다운그레이드 불가).
-fn builder_with<'a>(id: &'a Identity, prologue: Option<&'a [u8]>) -> Result<Builder<'a>, SessionError> {
+fn builder_with<'a>(
+    id: &'a Identity,
+    prologue: Option<&'a [u8]>,
+) -> Result<Builder<'a>, SessionError> {
     let params = PARAMS.parse().map_err(|_| SessionError::Handshake)?;
     let b = Builder::new(params).local_private_key(&id.private);
     Ok(match prologue {
