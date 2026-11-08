@@ -378,6 +378,7 @@ beepd 자체는 수 MB지만, **1GB급 무료 VM은 기본 이미지 상태가 �
 |---|---|
 | 주소 | **`beepd.sosomlab.com:47300`** (TCP+UDP) |
 | 서버 신원(핀) | `5c5ee9321439f0292f90f6d7b949e5be3e8dc94cfc6a142208e957bf83c0cb5e` |
+| 운영 버전 | **`nexa-beepd 1.0.0`**(11-08 배포 · **와이어 v2** · [56 ADR-0016](56-adr-0016-beepd-wire-v2.md)) — 종전 0.2.5 · beep ≤0.9·clip 현행(v1 클라)은 **접속 불가**(프리앰블 없음 = 거절) · 핀 불변 |
 
 - 첫 접속 때 상태바/CLI에 뜨는 핀이 **위 값과 다르면 접속하지 말 것**(사칭·중간자).
 - 모드를 `managed`로 켠 뒤 **[Test]를 한 번 눌러** 접속을 승인한다(주소·포트 기본값이
@@ -437,6 +438,9 @@ ssh <서버> 'sudo install -o beepd -g beepd -m 755 /tmp/nexa-beepd.new /opt/bee
 
 # ④ 사후 확인 — 클라 자동 재접속(핀 보존 증거)까지 보면 완료.
 ssh <서버> 'sudo journalctl -u beepd -n 10 --no-pager'   # "등록 rid=…", "공개 on"
+# ⑤ (와이어 v2 · 11-08~) 실서버 핸드셰이크 실측 — 프리앰블·Noise·Hello/Welcome까지 개발 머신에서:
+BEEPD_LIVE=beepd.sosomlab.com:47300 BEEPD_LIVE_PIN=5c5ee9321439f0292f90f6d7b949e5be3e8dc94cfc6a142208e957bf83c0cb5e \
+  cargo test -p nexa-beepd --test relay_e2e live_server -- --ignored --nocapture
 ```
 
 - **건드리면 안 되는 것** = `/opt/beepd/beepd.key`(서버 신원 — [§6](#6-서버-신원-키--핀의-원천)).

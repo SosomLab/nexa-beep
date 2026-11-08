@@ -230,6 +230,10 @@ clip 쪽 [22 §3] 원장에 반영할 상태(clip이 적는다 — 이 저장소
 공용 크레이트 `nexa-conf`도 같다 — 사본이 양쪽에 있으므로 고친 쪽이 상대에게 알린다(이번 09-05가 첫 사례 · 방향 = clip → beep).
 
 **사전 고지(11-07) — 와이어 v2([56 ADR-0016](56-adr-0016-beepd-wire-v2.md) 📐 Proposed)**: `nbeep-relay`·`nexa-beepd` 와이어를 **호환 포기**로 다시 짠다(확장 통로 · 모듈 경계). 지금은 코덱 크레이트 `nbeep-relay-proto`만 있고(`f7354ac` · 어느 바이너리도 의존 안 함 · 와이어 무변경) **전환일은 미정** — 배선(TODO BEEPD-2) 때 `[clip-sync]` 커밋 + §7-5 행 + beepd-v1.0.0·beep 0.10·clip을 같은 날 전환. clip 세션에 붙일 프롬프트 = [56 §5](56-adr-0016-beepd-wire-v2.md).
+- (11-08 배선 `7d8e9c3` 추가) **프리앰블** — Noise 앞 평문 8B `"NBPD"`‖major u16‖0u16 송수신(major≠2 = "서버 세대 불일치" · 프리앰블 없이 EOF = v1 서버) · [56 §2-4](56-adr-0016-beepd-wire-v2.md).
+- **PEER tag** — PeerUp/PeerDown의 신원 = tag 29 `peer`(32B 공개키 · RID가 아니라 Noise가 증명한 키).
+- **상태 코드** — `open()` 등 결과 = `ErrorCode` u16(NoSuchPeer 6 · LimitExceeded 4 · Busy 7 · `0xFFFF` = 세션 죽음).
+- ★**서버 전환 완료(11-08 07:11Z)** — 운영 `beepd.sosomlab.com:47300` = **nexa-beepd 1.0.0(와이어 v2)** · 핀 불변. **clip 현행(v1 사본)은 지금 접속 불가 상태**(서버 로그 "프리앰블 없음 — 거절") — clip은 §5 준비(사본 이식 + 스위치 v2)로 복구한다.
 
 ### 7-5. 공유 코드 변경 이력
 

@@ -1,6 +1,6 @@
 # 56 · ADR-0016 — `nexa-beepd` 와이어 v2: 호환 포기 · 확장 가능한 최소 구조
 
-> **상태**: 📐 Proposed(2026-11-07 · 사용자 지시 "기존 버전 호환성을 포기하고 이후 확장성을 가질 수 있도록 최소한의 구조적 설계 및 준비")
+> **상태**: 📐 Proposed · **구현 ✅ 11-08**(`7d8e9c3` 배선 · `293ff06` proto 보강 · `7553ec8` crypto prologue · 배포 ⏸ = 사용자 결정 — beepd-v1.0.0·OCI 재배포·beep 0.10·clip 같은 날)(2026-11-07 · 사용자 지시 "기존 버전 호환성을 포기하고 이후 확장성을 가질 수 있도록 최소한의 구조적 설계 및 준비")
 > **범위**: 릴레이 서버 `nexa-beepd`와 클라 어댑터 `nbeep-relay`의 **와이어·핸드셰이크·서버 모듈 경계**. 앱 기능(X-2b 타입 협상 · X-2d 비공개 프레즌스 · X-13 S5 컨텐츠 · docs/44 I-2/I-3/I-6)은 이 구조 **위에서** 각자 결정한다.
 > **준비물(이 커밋)**: 코덱 크레이트 [`crates/nbeep-relay-proto`](../crates/nbeep-relay-proto/src/lib.rs)(I/O·크립토 0 · 골든 벡터) + 이 문서. **배선(서버·클라 교체)은 다음 단계**(§7) — v0.9.0 릴리스에는 영향 없음(어느 바이너리도 아직 의존하지 않는다).
 > **관련**: ADR-0003(docs/09 사다리 전송) · ADR-0013(docs/32 서버 모드) · docs/41(운영) · docs/44(nexa-clip 연계) · DR-9(같은 저장소 · 배포 분리 · W-1~W-4).
@@ -46,11 +46,13 @@ Field(TLV)   = tag u8 ‖ len u32 BE ‖ value      같은 tag 반복 = 목록 �
 | **오류·종료** | `Error{code, reason, ref_kind}` · `Reject{code, reason, min_proto}`(Hello 거절 뒤 끊음) · `Goaway{code, reason, retry_after_s}` 양방향(우아한 종료 · 재접속 힌트) |
 | **바인딩 모드** | `Register.bind = ExclusiveLastWins(v1 동작) \| Shared`(docs/44 I-2 "한 RID에 여러 기기" — 능력 `SHARED_BIND`일 때) · `RegisterResult`는 **RID마다 status** |
 | **봉투 원리** | 서버는 `kind·rid·ch·길이`만 본다 · `Data.bytes`·`Announce.card`는 불투명 그대로 |
+| **명부 신원(tag `PEER 29`)** | 32B 공개키 · `PeerUp`/`PeerDown` = `Presence{listed, peer, rid, card}` — 명부의 신원은 RID가 아니라 **Noise가 증명한 키**(11-08 배선 · tag 번호 append) |
 
 ### 2-2. 핸드셰이크 순서
 
 ```text
-TCP → Noise_XX(prologue "nexa-beepd/2" · 서버 키 TOFU 핀 그대로)
+TCP → 프리앰블 "NBPD"‖major u16‖0u16(8B 평문 · Noise msg1과 파이프라인 · RTT 0)
+    → Noise_XX(prologue "nexa-beepd/2" · 서버 키 TOFU 핀 그대로)
   → C2S Hello{major 2, minor, app, app_version, caps}
   ← S2C Welcome{major, minor, server_version, server_type(relay/content/admin), caps, limits, session_id, udp_port, observed_ep}
      | Reject{code=VersionMismatch|Forbidden, reason, min_proto} → 끊음
@@ -78,6 +80,13 @@ src/modes/       content.rs(ADR-0013 S5 · 예약) · admin.rs(예약)
 - 코덱은 **`nbeep-relay-proto`** 한 곳(서버·클라·clip 공유 정의). `nbeep-relay`는 어댑터(연결·세션·사다리)만 남긴다.
 - 동시성은 지금의 "연결당 스레드 + 폴"을 유지한다(의존 0 원칙 · 규모는 OCI 1인스턴스). 모듈 경계가 먼저고 런타임 교체는 별도 결정.
 
+### 2-4. 세대 판별 — 프리앰블 + prologue 둘 다(11-08 배선)
+
+- **왜 프리앰블이 필요했나**: prologue 불일치는 Noise **msg2 복호 실패**로만 드러나 **키 변조(MITM)와 구분이 불가능**하다 — "서버 세대 불일치 · 앱 업데이트 필요"를 표시할 수 없었다.
+- **역할 분담**: 프리앰블 = **UX용 판별**(평문 8B · 첫 왕복 안에 세대를 안다) · prologue = **다운그레이드 방지**(프리앰블을 위조해도 Noise가 끊는다).
+- **서버 동작**: major가 다르면 **자기 프리앰블만 보내고 끊는다**(클라가 "세대 불일치"로 표시) · 프리앰블 없음(v1 클라 `[len=0x20][e]`) = 첫 4B에서 갈려 끊음(계측 `rejected_v1` · **이중 수용 자리**).
+- **클라 동작**: 서버 프리앰블 major≠2 → "세대 불일치" · EOF(프리앰블 없이 끊김) = v1 서버로 판정.
+
 ## 3. 대안과 기각
 
 | 대안 | 기각 이유 |
@@ -90,7 +99,7 @@ src/modes/       content.rs(ADR-0013 S5 · 예약) · admin.rs(예약)
 ## 4. 결과(영향)
 
 - **클라(nexa-beep ≥0.10)**: `nbeep-relay` 어댑터가 proto 크레이트로 교체 · 설정 `net.server.type=auto`가 실제 협상 · "서버 세대 불일치" 안내 문구 · 상한은 Welcome 값.
-- **서버(beepd-v1.0.0)**: v2 전용. OCI 재배포 필요(docs/41 §9-0 · ★ 이 ADR 배선이 **beepd 재배포가 필요한 첫 변경**).
+- **서버(beepd-v1.0.0)**: v2 전용. OCI 재배포 필요(docs/41 §9-0 · ★ 이 ADR 배선이 **beepd 재배포가 필요한 첫 변경**). beepd 크레이트 버전 = **1.0.0으로 워크스페이스와 분리**(11-08 · 종전 `--version`이 태그와 달랐다).
 - **nexa-clip**: `nclip-sync/relay.rs` 사본을 v2로 이식해야 같은 서버에 붙는다(§5 프롬프트). 전환 전까지는 **v1 서버**(현 OCI)를 그대로 쓴다.
 - **docs/44 I-2(한 RID 여러 기기)**: `Shared` 바인딩으로 구조적 답 · I-6(앱·버전 태그) = `Hello.app/app_version` · I-3(오프라인 큐)는 컨텐츠 모드 몫(미정).
 - 예산: proto 크레이트 = 의존 0 · 클라 산출물 영향 ≈ 0(코덱 대체).
@@ -117,6 +126,11 @@ v1 서버는 그대로 돈다.
    → Register{rids, bind=ExclusiveLastWins}(I-2를 원하면 Shared + 능력 SHARED_BIND).
 3. 오류 처리: Reject(VersionMismatch)와 Noise 실패를 "서버 세대 불일치 — 앱 업데이트 필요"로 사용자에게 보여 준다
    (v1처럼 조용히 기능만 빠지는 경로를 없앤다). Error{code,reason,ref_kind}·Goaway{retry_after_s}를 로그·재접속에 반영.
+   (a) Noise 앞에 프리앰블 8B "NBPD"‖major u16‖0u16를 보내고 서버 프리앰블을 받는다 — major≠2 → "서버 세대 불일치" 표시 ·
+       프리앰블 없이 EOF = v1 서버.
+   (b) PeerUp/PeerDown의 신원 = tag 29 peer(32B 공개키 · RID가 아니다).
+   (c) open() 등 상태 코드 = ErrorCode u16(NoSuchPeer 6 · LimitExceeded 4 · Busy 7 · 0xFFFF = 세션 죽음).
+   참고 구현 = nexa-beep crates/nbeep-relay/src/lib.rs PreLink · connect_as.
 4. 앱 이름공간: 서버가 (app, rid)로 라우팅하므로 RID 파생 문자열 "nclip-rid-v1"은 2차 방어로 유지(바꾸지 않는다).
 5. 전환 스위치: 설정 또는 빌드 플래그로 v1/v2 어댑터를 고를 수 있게 두고 기본은 v1 유지. beep 쪽 "beepd-v1.0.0
    배포 + beep 0.10 릴리스" 고지가 오면 기본을 v2로 바꾸고 v1 코드를 지운다.
@@ -135,12 +149,16 @@ docs/44-nexa-clip-liaison.md §1·§7-4 · docs/41-beepd-operations.md §9-0.
 3. **배포**: `beepd-v1.0.0` 태그 → OCI 재배포(docs/41 §9-0) → **같은 날** beep `v0.10.0` + clip 릴리스. 서버 핀(TOFU)은 바뀌지 않는다(키 동일).
 4. v1 코드(`C2s/S2c` · clip 사본) 삭제 · docs/44 갱신.
 
-## 7. 남은 설계 항목(배선 단계에서 결정)
+## 7. 배선 단계 결정 기록(11-08 · `7d8e9c3`)
 
-- UDP 관측 프로브(`OBS_MAGIC "NBOB"`)의 v2 형식 — 봉투로 통일할지(토큰 u64 + ep) · 능력 `UDP_OBSERVE`.
-- `Shared` 바인딩의 Incoming 팬아웃 규칙(전부 vs 최근 활성 1대) · 채널 표의 키.
-- 환경변수 설정 집합(`BEEPD_PORT/BIND/KEY/RATE/LOG`) · 헬스 응답 경로(TCP 같은 포트의 `Hello{app="probe"}` 응답 vs 별도 포트).
-- 컨텐츠 모드(S5) 봉투(ADR-0013 §0 · docs/46 §6) — 능력 `CONTENT`로 예약만.
+| 항목 | 결정 | 왜 |
+|---|---|---|
+| UDP 관측 프로브 | **봉투로 바꾸지 않는다** — 형식 v1 동일(`"NBOB"`‖token · 에코 `"NBOB"`‖token‖ep) · 정의만 proto `udp_obs`로 | Noise 밖 데이터그램이라 봉투의 이점(TLV 확장·오류 통로)이 없다 |
+| `Shared` 바인딩 Incoming | **전 후보 팬아웃** · 첫 `Accept`가 이긴다 · 나머지 = `ChClosed` · 전원 거절 = `Busy` | 한 RID 여러 기기(docs/44 I-2)에서 "지금 받을 수 있는 기기"를 서버가 추측하지 않는다 |
+| 환경변수 | `BEEPD_PORT/BIND/KEY/RATE/VERBOSE`(CLI가 우선) | 컨테이너·systemd 배포 |
+| 헬스 응답 | **같은 포트** `Hello{app="probe"}` → `Welcome` 뒤 끊음 | 포트 하나 · 방화벽 규칙 추가 없음 |
+| 컨텐츠 모드(S5) | 능력 `CONTENT` **예약 그대로** | ADR-0013 §0 · docs/46 §6 결정 전 |
+| 서버 방식(이중 수용 v1+v2 / v2 전용) | **v2 전용 구현** · 이중 수용은 **자리만**(프리앰블 없는 v1 = 첫 4B 판별 `rejected_v1`) | 사용자 결정 대기(STATUS 다음 작업 1행 ⓒ · 권고 = 이중 수용) |
 
 ## 8. 골든 벡터(clip 사본 검증용 · `nbeep-relay-proto` 테스트와 동일)
 
@@ -153,6 +171,8 @@ Hello{major 2, minor 0, app "nexa-beep", app_version "0.10.0", caps ROSTER|UDP_O
   04 00000006 302e31302e30
   05 00000008 0000000000000005
 Ping{nonce 0x0102030405060708} = 0007 00 19 00000008 0102030405060708
+프리앰블(major 2) = 4e42504400020000
+UDP 프로브 = 4e424f42 ‖ token · 에코 = 4e424f42 ‖ token ‖ ep
 ```
 
 | 상수 | 값 |
@@ -162,3 +182,6 @@ Ping{nonce 0x0102030405060708} = 0007 00 19 00000008 0102030405060708
 | 핵심 kind | Hello 0x0001 · Register 0x0002 · Open 0x0003 · Accept 0x0004 · Data 0x0005 · CloseCh 0x0006 · Ping 0x0007 · Announce 0x0008 · Goaway 0x0009 · Welcome 0x0101 · Reject 0x0102 · RegisterResult 0x0103 · OpenResult 0x0104 · Incoming 0x0105 · Data(S2C) 0x0106 · ChClosed 0x0107 · Pong 0x0108 · PeerUp 0x0109 · PeerDown 0x010A · Error 0x010B · Goaway(S2C) 0x010C |
 | 오류 코드 | UnknownKind 1 · Malformed 2 · Unsupported 3 · LimitExceeded 4 · NotRegistered 5 · NoSuchPeer 6 · Busy 7 · Forbidden 8 · Shutdown 9 · VersionMismatch 10 |
 | 능력 비트 | ROSTER 1<<0 · SHARED_BIND 1<<1 · UDP_OBSERVE 1<<2 · CONTENT 1<<3 |
+| 프리앰블 | `"NBPD"` ‖ major u16 BE ‖ 0u16 (8B) |
+| `open()` 상태 | `ErrorCode` u16 — NoSuchPeer 6 · LimitExceeded 4 · Busy 7 · `0xFFFF` = 세션 죽음 |
+| tag `PEER` | 29(32B 공개키 · PeerUp/PeerDown) |

@@ -5,6 +5,10 @@
 
 ---
 
+## 2026-11-08
+
+- ★**(Win · main) BEEPD-2 beepd 와이어 v2 배선 코드 ✅** `293ff06`·`7553ec8`·`7d8e9c3`(+ rustdoc 4건 `5836ad2` 협업) — 프리앰블 `NBPD`+major → Noise prologue `nexa-beepd/2` · v1 코덱 삭제(호환 포기) · beepd 모듈 6개 · 1.0.0 분리 · relay_e2e 16/16 · test ws 836 · CI 42455099913 success · docs/56 §2-4·§7 결정 기록 · **beepd-v1.0.0 OCI 배포 ✅**(0.2.5 → 1.0.0 · 핀 불변) · 남은 = beep 0.10·clip 전환 → [journal](journal/2026-11-08.md)
+
 ## 2026-11-07
 
 - **(Win · main) 패키지 게시 점검 · Chocolatey 0.9.0 제출** — GitHub·brew·apt·dnf 0.9.0 ✓ · choco 0.9.0 제출(run 42336686478 · 검수 대기 · 스위치 원복) · winget 설치본 0.8.0 = 외부 기여(#471812 · 해시 일치) · 0.9.0 = 사용자 결정 대기 → [journal](journal/2026-11-07.md)
