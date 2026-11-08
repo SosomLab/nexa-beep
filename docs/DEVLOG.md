@@ -7,6 +7,7 @@
 
 ## 2026-11-08
 
+- ★**(Linux · main) M5-6 문서 마감 ✅** docs/40 알려진 한계 v0.10.1 · SEC-3 고정 줄 · docs/45·위키 본문 v0.10.1 · docs/42 "담지 않는다" 정정 · 잔여 = M5-6a 캡처 → [journal](journal/2026-11-08.md)
 - ★**(Linux · main) Linux 첫 점검** — 빌드·clippy·단위 840/0·시나리오 4종·L-2 xattr·L-3 알림·예산(6,877,264B · libc 계열만 · RSS 18.7MB) 통과 · 결함 처방 = xvfb.sh Wayland 해제 `86743ad` · perf-scenario 첫 실행 `379cb92` · silent 시험 가정 오류 `4b88f5b` → [journal](journal/2026-11-08.md)
 - ★**(Win · main) v0.10.1 공개 ✅** 태그 = `3878cd7` · release run 42467851376 전 13 job success · 자산 15 · 탑재 = 배너 기기 합산 `a6a388f` · Goaway 재접속 힌트 `fc64da9` · 0-a = gate rc=0 · 4,320,768B · 임포트 OK · verify 6/6 · apt/dnf 0.10.0 반영(09:26) → [journal](journal/2026-11-08.md)
 - **(Win · main) 바로 가능한 코드 잔여 2건 ✅** `a6a388f` X-13 S3 전송 배너 기기 합산 · `fc64da9` Goaway retry_after 재접속 힌트(relay_e2e 16/16) — 다음 릴리스 탑재 → [journal](journal/2026-11-08.md)
