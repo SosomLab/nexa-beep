@@ -168,6 +168,8 @@ enum RxRole {
 /// 수신 스레드 공통 문맥(인자 묶음 — clippy too_many_arguments 회피가 아니라 역할이 같은 값들).
 struct RxCtx {
     me: PeerId,
+    /// 내 기동 인스턴스(R-12 U-P1) — 내 키인데 이 값이 다르면 에코가 아니라 복제다.
+    instance: [u8; 16],
     tx: Sender<Observation>,
     stop: Arc<AtomicBool>,
     quiet: Arc<AtomicBool>,
@@ -179,6 +181,7 @@ impl RxCtx {
     fn fork(&self, role: RxRole) -> Self {
         Self {
             me: self.me,
+            instance: self.instance,
             tx: self.tx.clone(),
             stop: Arc::clone(&self.stop),
             quiet: Arc::clone(&self.quiet),
@@ -197,6 +200,11 @@ pub struct Observation {
     pub from: SocketAddr,
     /// 세션 세대(M1-13 ⓒ) — 패킷 `flags` 하위 4비트 · 미래 와이어 = [`nbeep_core::FOREIGN_GEN`].
     pub gen: u8,
+}
+
+/// 내 키로 온 패킷이 복제 프로세스의 것인가(R-12 U-P1) — instance가 다르고 0이 아닐 때만.
+fn is_clone_instance(seen: &[u8; 16], mine: &[u8; 16]) -> bool {
+    seen != mine && seen != &[0u8; 16]
 }
 
 /// S2 발견 노드 — 주기 광고 + 수신. 드롭 시 GOODBYE.
@@ -303,6 +311,7 @@ impl UdpDiscovery {
         let pacer = Arc::new(PacerShared::new());
         let ctx = RxCtx {
             me,
+            instance,
             tx,
             stop: Arc::clone(&stop),
             quiet: Arc::clone(&quiet),
@@ -693,6 +702,7 @@ impl UdpDiscovery {
     ) {
         let RxCtx {
             me,
+            instance,
             tx,
             stop,
             quiet,
@@ -738,7 +748,15 @@ impl UdpDiscovery {
                         {
                             // 자기 패킷 필터 — 주소가 아니라 키 기준(docs/08 §5).
                             if packet.peer == me {
-                                crate::netmon::on_disco_rx_self();
+                                // ★ R-12 U-P1(docs/21 §5): 내 키인데 instance가 다르면 루프백 에코가 아니라
+                                //   **복제된 키 파일로 뜬 다른 프로세스**다. 필터는 그대로(나와 대화할 수는 없다)
+                                //   두되 따로 센다 — 종전에는 에코와 함께 조용히 버려져 당사자가 알 길이 없었다.
+                                //   0으로 채운 instance(미래 와이어 = 헌법 접두만 읽힘)는 판단 근거가 아니다.
+                                if is_clone_instance(&packet.instance, &instance) {
+                                    crate::netmon::on_disco_rx_clone();
+                                } else {
+                                    crate::netmon::on_disco_rx_self();
+                                }
                                 continue;
                             }
                             // 적응형 S4 신호(R-22 ③) — 소켓 역할 × 패킷 종류.
@@ -1015,6 +1033,23 @@ mod tests {
         assert!(
             seen,
             "송신 소켓으로 온 유니캐스트 응답이 관측돼야 한다(종전 = 버려짐)"
+        );
+    }
+
+    /// 내 키 패킷의 복제 판정(R-12 U-P1) — 에코(같은 instance)·미래 와이어(0)는 복제가 아니다.
+    #[test]
+    fn clone_instance_is_different_and_nonzero() {
+        assert!(
+            !is_clone_instance(&[7; 16], &[7; 16]),
+            "같은 instance = 루프백 에코"
+        );
+        assert!(
+            is_clone_instance(&[8; 16], &[7; 16]),
+            "다른 instance = 복제"
+        );
+        assert!(
+            !is_clone_instance(&[0; 16], &[7; 16]),
+            "0 = 헌법 접두만 읽힌 패킷"
         );
     }
 

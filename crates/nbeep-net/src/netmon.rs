@@ -34,6 +34,7 @@ static SESS_RX_FRAMES: AtomicU64 = AtomicU64::new(0);
 static CONN_OUT: AtomicU64 = AtomicU64::new(0);
 static CONN_OK: AtomicU64 = AtomicU64::new(0);
 static CONN_IN: AtomicU64 = AtomicU64::new(0);
+static DISCO_CLONE: AtomicU64 = AtomicU64::new(0);
 
 /// 발견 패킷 발신(멀티캐스트·브로드캐스트·S4 유니캐스트·HELLO 응답 — 데이터그램 단위).
 #[inline]
@@ -49,6 +50,17 @@ pub fn on_disco_rx() {
 #[inline]
 pub fn on_disco_rx_self() {
     DISCO_SELF.fetch_add(1, Relaxed);
+}
+/// **내 키인데 다른 `instance`** 의 발견 패킷(R-12 U-P1 · docs/21 §5) — 키 파일이 복제돼 다른 프로세스가
+/// 같은 신원으로 광고 중이라는 신호. 에코(같은 instance)와 달리 정상 상황에선 0이어야 한다.
+#[inline]
+pub fn on_disco_rx_clone() {
+    DISCO_CLONE.fetch_add(1, Relaxed);
+}
+/// 내 신원 복제 의심 패킷 누적(R-12) — 앱이 경고 1회의 근거로 읽는다.
+#[must_use]
+pub fn disco_clone() -> u64 {
+    DISCO_CLONE.load(Relaxed)
 }
 /// 세션 링크 발신(프레임 1 · 길이 프리픽스 포함 바이트).
 #[inline]

@@ -303,6 +303,8 @@ pub enum Msg {
     MenuPresence,
     StPresenceOffline,
     StPresenceOnline,
+    /// 내 신원 키가 다른 실행에서도 쓰이는 중(R-12 U-P1 · 탐지 1회 안내).
+    StCloneSelf,
     StOfflineNoConnect,
     /// 오프라인 시 마지막 서명 사용(10-19 사용자 확정 — 기본 on).
     UserOfflineTrust,
@@ -3329,6 +3331,7 @@ impl Msg {
             Msg::PresenceOffline => ["Offline", "오프라인", "离线", "オフライン"],
             Msg::MenuPresence => ["My status", "내 상태", "我的状态", "自分の状態"],
             Msg::StPresenceOffline => ["Offline mode — invisible to peers, no connections · messages you send wait", "오프라인 모드 — 상대에게 보이지 않고 연결하지 않습니다 · 보낸 메시지는 대기", "离线模式 — 对方看不到我，也不连接 · 发送的消息等待", "オフラインモード — 相手に見えず接続もしない · 送信は待機"],
+            Msg::StCloneSelf => ["Another running copy is using this identity key (copied folder or cloned image?) — peers cannot tell the two apart", "같은 신원 키를 쓰는 다른 실행이 네트워크에 있습니다(폴더 복사·이미지 복제?) — 상대는 둘을 구분하지 못합니다", "网络上有另一个运行实例在使用同一身份密钥（复制的文件夹或克隆镜像？）— 对方无法区分两者", "同じ身元キーを使う別の実行がネットワーク上にあります（フォルダーのコピーやイメージの複製？）— 相手は両者を区別できません"],
             Msg::StPresenceOnline => ["Online — discovery and connections resumed", "온라인 — 발견·연결 재개", "在线 — 发现与连接已恢复", "オンライン — 発見・接続を再開"],
             Msg::StOfflineNoConnect => ["Offline mode — not connecting (change My status to go online)", "오프라인 모드 — 연결하지 않습니다(내 상태를 온라인으로)", "离线模式 — 不连接（将我的状态改为在线）", "オフラインモード — 接続しません（自分の状態をオンラインに）"],
             Msg::UserOfflineTrust => ["Use last signature when offline", "오프라인 시 마지막 서명 사용", "离线时使用最后签名", "オフライン時は最後の署名を使う"],

@@ -4502,6 +4502,8 @@ struct App {
     sort_drop: nbeep_ui::IconDropdown,
     /// 세션이 끊긴 상대(AppEvent::Closed) — 목록 상태 점 Lost 근거. 재수립 시 제거.
     closed_peers: std::collections::HashSet<PeerId>,
+    /// 내 신원 복제 경고를 이미 냈는가(R-12 U-P1 — 실행당 1회 · 탐지이지 방지가 아니다).
+    clone_warned: bool,
     /// ★ Bye를 보내고 떠난 상대(M2-4b · 11-06) — `Closed`에서 자동 재연결을 걸지 않는 근거. 해제 = 발견에
     /// 다시 **등장**(PeerEvent::Appeared) · 세션 재수립 · 잊기. 사람의 클릭(start_connect)은 표식과 무관.
     bye_peers: std::collections::HashSet<PeerId>,
@@ -7454,6 +7456,19 @@ impl App {
     /// 발견 이벤트를 PeerTable에 접고 목록을 다시 만든다.
     fn poll_discovery(&mut self) {
         use nbeep_net::DiscoveryEvent;
+        // ★ R-12 U-P1(docs/21 §5 "막을 수 없는 것은 알려 준다") — 내 키인데 다른 instance의 광고가 2장 이상
+        //   들어오면(1장 = 재기동 직후 떠돌던 옛 패킷일 수 있다) 실행당 1회 알린다. 필터·세션 동작은 그대로다.
+        if !self.clone_warned {
+            let n = nbeep_net::netmon::disco_clone();
+            if n >= 2 {
+                self.clone_warned = true;
+                dlog!(self, DL::Disc, DV::Decide, "clone", |r| r
+                    .arg("packets", n)
+                    .rule("instance", "differs under my key")
+                    .fail("identity key in use by another running copy"));
+                self.set_status(nbeep_core::t(nbeep_core::Msg::StCloneSelf));
+            }
+        }
         if self.is_offline() {
             // 내 상태 = 오프라인(10-19) — 전송이 관측을 끊지만(quiet) 남은 것도 버린다.
             while self.discovery.try_recv().is_ok() {}
@@ -27974,6 +27989,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
             settings_sort_value.as_str(),
         ),
         closed_peers: std::collections::HashSet::new(),
+        clone_warned: false,
         bye_peers: std::collections::HashSet::new(),
         conv_epoch: 0,
         extra_peers: HashMap::new(),
