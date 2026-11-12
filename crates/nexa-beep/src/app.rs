@@ -12423,6 +12423,11 @@ impl App {
         }
         if self.is_offline() {
             // 내 상태 = 오프라인(10-19) — 연결하지 않는다(발신은 대기 큐 · 수동 클릭은 안내).
+            // 재연결 항목도 지운다(위 두 게이트와 같은 문법) — 펌프가 진행 중 표식(u64::MAX)을
+            // 찍고 들어온 경우 워커가 뜨지 않아 표식을 풀 주체가 없다. 남기면 온라인 복귀 때
+            // `apply_presence`의 or_insert가 덮지 못해 그 상대는 영영 자동 재연결되지 않는다
+            // (부팅 오프라인 + 복원된 대기분 경로 · 11-12). 복귀 = 대기분 기준으로 다시 심는다.
+            self.reconnect.remove(&peer);
             dlog!(self, DL::Conn, DV::Decide, "start_connect", |r| r
                 .arg("peer", peer.short())
                 .arg("auto", auto)
