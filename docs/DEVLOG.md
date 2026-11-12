@@ -7,7 +7,7 @@
 
 ## 2026-11-12
 
-- ★**(Linux · main) 잔여 2차 + 통합 시험** — `cfb3b15` R-12 마무리(자기 복제 "신원 키 중복" 칩 · 제3자 관측 `clone_peer`·행 표식) · `2513ca4` INS-4 `NEXA_DEMO_THUMBS` → 단위 844/0 · verify 10/10 · 실기(칩 · 제3자 표식·툴팁 · 재기동 오탐 0 · 썸네일 50 ≈ +0.7MB) 통과 · 관찰 = 데모 피어 카드 30초 뒤에도 "연결 중" → [journal](journal/2026-11-12.md)
+- ★**(Linux · main) 잔여 2차 + 통합 시험** — `cfb3b15` R-12 마무리(자기 복제 "신원 키 중복" 칩 · 제3자 관측 `clone_peer`·행 표식) · `2513ca4` INS-4 `NEXA_DEMO_THUMBS` → 단위 844/0 · verify 10/10 · 실기(칩 · 제3자 표식·툴팁 · 재기동 오탐 0 · 썸네일 50 ≈ +0.7MB) 통과 · 데모 피어 카드 "연결 중" 고착 → `c14ce7e`(데모 하네스) 뒤 "연결 끊김" ✓ · 데모 500 Threads 529 → 29 · Private −48MB → [journal](journal/2026-11-12.md)
 - ★**(Linux · main) 잔여 코드 6건 + 통합 시험** — `42625ee` 오프라인 게이트 · `d00fd0f` 연결점 툴팁 · `de5d65f` `open=peerinfo:` · `d2759cc` R-12 GUI 자기 복제 탐지 · `cd14bf4` 창 고르기 `role:` · `63e481f` 오프라인 행 이름 보존 → fmt·clippy·doc ✓ · 단위 843/0 · verify 기본 10/10(presence 포함) · 헤드리스 실기 6항목 통과 · 관찰 2(R-12 상태줄 덮임 · 오프라인 부팅 복원 행 이름) → [journal](journal/2026-11-12.md)
 - ★**(Linux · main) GLARE-1 닫음 `f62a834`** — 동시 다이얼 세션 교체 때 대기분 유실 → `SessionCmd::Retire`(≤1.5s 수신만 마저 처리) + 중복 인바운드 읽기 전용 은퇴 · presence-scenario 10회 16/16(glare 발생 3회 포함) · 회귀 verify 기본 9/9 · ack p95 10ms · presence 단계 verify 기본 등재 → [journal](journal/2026-11-12.md)
 - ★**(Linux · main) Linux 자동 점검 완료 + 코드 2건 + 시나리오 2종** — verify 기본 11/11 · `--perf` 14/14(mem-bench·load-bench 측정 결함 처방 `729f698`) · RL-9 잔여 `ca21428` · M3-20 후속 `12a1112` · `flood-scenario.sh` 8/8(`--flood` opt-in) · `presence-scenario.sh` → 🔴 GLARE-1(동시 다이얼 세션 교체 때 대기분 유실 · 5회 중 3회) 발견 → [journal](journal/2026-11-12.md)
