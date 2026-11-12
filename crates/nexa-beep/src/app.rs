@@ -4082,6 +4082,8 @@ const INBOUND_HANDSHAKE_CAP: usize = 32;
 /// 인바운드 핸드셰이크 상한 시간 — 연결만 열고 첫 메시지를 안 보내는 소켓이 스레드를 영구 점유하지 않게.
 /// 성립 뒤에는 세션 액터가 자기 폴 타임아웃(100ms)으로 덮어쓴다.
 const INBOUND_HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+/// 아웃바운드 핸드셰이크 수신 타임아웃 — 인바운드와 같은 값(응답 없는 상대에 다이얼 스레드가 묶이지 않게).
+const OUTBOUND_HANDSHAKE_TIMEOUT: std::time::Duration = INBOUND_HANDSHAKE_TIMEOUT;
 
 /// 핸드셰이크 진행 수 감소 가드(RL-13 ⓐ) — 어느 길로 끝나든(성공·실패·패닉) 1 줄어든다.
 struct InflightGuard(std::sync::Arc<std::sync::atomic::AtomicUsize>);
@@ -12609,7 +12611,19 @@ impl App {
             // ★ 사다리 = `Transport` 하나(X-2 승격 · 11-06): 발견 경로 → 기억한 수동 주소 → 서버 랑데부(펀치→릴레이)를
             //   `connect` 안에서 순서대로 탄다(ADR-0003 §4 · 종전 X-2b ③은 여기서 세 단을 직접 꿰고 릴레이 단만 세션을
             //   들고 돌아와 경로마다 코드가 달랐다). 어느 단이든 **같은 핸드셰이크**를 얹는다.
-            let dial = || transport.connect(peer).map_err(|e| format!("{e:?}"));
+            // ★ 핸드셰이크 수신 타임아웃(11-12) — 인바운드(RL-13 ⓐ)에는 있었지만 아웃바운드에는 없어, 소켓은 붙었는데
+            //   Noise 응답을 주지 않는 상대(멈춘 프로세스 · 같은 포트를 쥔 다른 프로그램)면 이 스레드가 영영 막히고
+            //   연결 중 표식도 풀리지 않아 자동 재연결까지 멎었다(데모 가짜 피어로 드러남 `c14ce7e`). 성립 뒤에는
+            //   세션 액터가 자기 폴링 타임아웃으로 덮는다(인바운드와 같은 흐름) · 설정 실패 = 종전처럼 블로킹.
+            let dial = || {
+                transport
+                    .connect(peer)
+                    .map(|mut link| {
+                        let _ = link.set_recv_timeout(Some(OUTBOUND_HANDSHAKE_TIMEOUT));
+                        link
+                    })
+                    .map_err(|e| format!("{e:?}"))
+            };
             let r = match dial() {
                 Ok(link) => {
                     // 경로 등급 = 성립 소켓의 실주소(M5-3c) — 수동·랑데부 단이면 공인망일 수 있다(랑데부 단은 확정 전
