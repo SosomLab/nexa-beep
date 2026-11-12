@@ -183,6 +183,10 @@ pub struct PeerTable {
     /// 무응답 이탈 임계(ms) — **D-8 실측 후 확정값을 주입**(하드코딩 금지).
     timeout_ms: u32,
     entries: HashMap<PeerId, Entry>,
+    /// 방금 이탈한 항목의 마지막 표시 이름 — 이탈 사건의 소비자가 [`Self::take_departed_name`]으로 곧바로
+    /// 꺼낸다(오프라인 행 강등 때 이름이 `beep-<지문>`으로 내려가지 않게 · 11-12). 꺼내지 않으면 다음 이탈이
+    /// 덮을 뿐이라 이탈한 수만큼만 남는다.
+    departed_names: HashMap<PeerId, DisplayName>,
 }
 
 impl PeerTable {
@@ -192,6 +196,7 @@ impl PeerTable {
         Self {
             timeout_ms,
             entries: HashMap::new(),
+            departed_names: HashMap::new(),
         }
     }
 
@@ -287,7 +292,9 @@ impl PeerTable {
         let before = (e.has_local(), e.has_rendezvous());
         e.sources.remove(&source);
         if e.sources.is_empty() {
-            self.entries.remove(&peer);
+            if let Some(gone) = self.entries.remove(&peer) {
+                self.departed_names.insert(peer, gone.name);
+            }
             return Some(PeerEvent::Departed(peer, DepartReason::Goodbye));
         }
         ((e.has_local(), e.has_rendezvous()) != before).then_some(PeerEvent::Updated(peer))
@@ -298,6 +305,12 @@ impl PeerTable {
     /// (삭제 = 역사 지움이지 영구 차단이 아니다 — 차단은 `TrustStore::block`).
     pub fn forget(&mut self, peer: PeerId) {
         self.entries.remove(&peer);
+        self.departed_names.remove(&peer);
+    }
+
+    /// 이탈(`Departed`)한 항목의 마지막 표시 이름을 꺼낸다(1회 · 미검증 힌트 그대로 — 표시용).
+    pub fn take_departed_name(&mut self, peer: PeerId) -> Option<DisplayName> {
+        self.departed_names.remove(&peer)
     }
 
     /// 무응답 판정 — `now` 기준 임계를 넘긴 항목의 **광고 경로**를 거둔다. 주기 호출(발견 틱).
@@ -318,7 +331,9 @@ impl PeerTable {
             };
             e.sources.retain(|_, (_, l)| *l != Liveness::Advertised);
             if e.sources.is_empty() {
-                self.entries.remove(&p);
+                if let Some(gone) = self.entries.remove(&p) {
+                    self.departed_names.insert(p, gone.name);
+                }
                 out.push(PeerEvent::Departed(p, DepartReason::Timeout));
             } else {
                 out.push(PeerEvent::Updated(p));
@@ -409,6 +424,11 @@ mod tests {
             Some(PeerEvent::Departed(pid(1), DepartReason::Goodbye)),
             "마지막 경로의 goodbye = 이탈"
         );
+        assert!(
+            t.take_departed_name(pid(1)).is_some(),
+            "이탈한 항목의 마지막 이름을 1회 꺼낼 수 있다"
+        );
+        assert!(t.take_departed_name(pid(1)).is_none(), "두 번째는 없다");
         assert!(t.list().is_empty());
     }
 

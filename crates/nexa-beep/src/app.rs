@@ -7104,8 +7104,13 @@ impl App {
             }));
         if offline {
             // ② 발견 표 비우기 — 상대는 "네트워크에 없다".
+            //   아는 상대는 오프라인 행으로 남는다 — 그 행의 이름을 발견 이름으로 붙들어 둔다(11-12 OBS-1112 ③ ·
+            //   이탈 경로와 같은 규칙: 프로필 이름이 있으면 그쪽이 우선이라 여기서는 폴백만 채운다).
             for e in self.table.list() {
                 self.table.forget(e.peer);
+                if self.keeps_offline_row(e.peer) {
+                    self.extra_peers.entry(e.peer).or_insert(e.name);
+                }
             }
             // ③ 세션 종료 — Closed 경로가 스레드 대피·정리를 맡는다(채널 drop = 액터 종료).
             let peers: Vec<PeerId> = self.conversations.keys().copied().collect();
@@ -7618,11 +7623,15 @@ impl App {
             // 발견에서 빠졌다고 목록에서 증발하면 "비발견 상대 목록 유지"(08-13
             // 사용자 확정)가 깨진다. 모르는 상대(스쳐간 발견)만 행이 사라진다.
             // 판정은 `keeps_offline_row` 한 곳(세션 종료 쪽과 같은 규칙 — 09-03).
+            // 이름 = 프로필 → **이탈 직전 발견 이름** → 지문 기본(11-12 OBS-1112 ③ — 종전엔 발견 이름을 건너뛰어
+            // 프로필을 공개하지 않은 상대의 오프라인 행이 `beep-<지문>`으로 내려갔다). 꺼내기는 항상(표에 남기지 않는다).
+            let last = self.table.take_departed_name(p);
             if self.keeps_offline_row(p) {
                 let name = self
                     .peer_profiles
                     .get(&p)
                     .and_then(|pr| pr.name.clone())
+                    .or(last)
                     .unwrap_or_else(|| nbeep_core::default_display_name(None, &p));
                 self.extra_peers.entry(p).or_insert(name);
             }
