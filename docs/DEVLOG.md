@@ -7,6 +7,7 @@
 
 ## 2026-11-12
 
+- ★**(Linux · main) 11-12 마감 — 문서 현행화** — 코드 13건(세션 견고성 3 · M3-20 ✅ · R-12 탐지·제3자 관측 · 시험 수단 4) · 단위 844/0 · verify 10/10 · STATUS "▶ 11-12 마감" 표 · TODO 낡은 표기 통일(BEEPD-2·M3-21·M1-2b·M4-2e) · GLARE-1·M4-4 → TODO-done · MILESTONES·docs/14·21·49·53 반영 · **다음 세션 시작점 = STATUS ①(v0.10.2 릴리스 결정) ②(mem-bench 한도 근접)** → [journal](journal/2026-11-12.md)
 - ★**(Linux · main) 아웃바운드 핸드셰이크 타임아웃 `af23bbb`** — 다이얼 뒤 10s 수신 타임아웃(종전 없음) · 단위 844/0 · verify 10/10 · 무응답 상대(SIGSTOP) 실기 = 10.3초 뒤 connect_failed → 15초 뒤 재시도 · 데모 부하 릴리스 재측정 0/100/500 = 4.92/5.21/7.5MB(피어당 ≈0.005MB · MEM-6 정정) → [journal](journal/2026-11-12.md)
 - ★**(Linux · main) 잔여 2차 + 통합 시험** — `cfb3b15` R-12 마무리(자기 복제 "신원 키 중복" 칩 · 제3자 관측 `clone_peer`·행 표식) · `2513ca4` INS-4 `NEXA_DEMO_THUMBS` → 단위 844/0 · verify 10/10 · 실기(칩 · 제3자 표식·툴팁 · 재기동 오탐 0 · 썸네일 50 ≈ +0.7MB) 통과 · 데모 피어 카드 "연결 중" 고착 → `c14ce7e`(데모 하네스) 뒤 "연결 끊김" ✓ · 데모 500 Threads 529 → 29 · Private −48MB → [journal](journal/2026-11-12.md)
 - ★**(Linux · main) 잔여 코드 6건 + 통합 시험** — `42625ee` 오프라인 게이트 · `d00fd0f` 연결점 툴팁 · `de5d65f` `open=peerinfo:` · `d2759cc` R-12 GUI 자기 복제 탐지 · `cd14bf4` 창 고르기 `role:` · `63e481f` 오프라인 행 이름 보존 → fmt·clippy·doc ✓ · 단위 843/0 · verify 기본 10/10(presence 포함) · 헤드리스 실기 6항목 통과 · 관찰 2(R-12 상태줄 덮임 · 오프라인 부팅 복원 행 이름) → [journal](journal/2026-11-12.md)

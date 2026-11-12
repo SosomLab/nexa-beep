@@ -512,7 +512,7 @@ Discord는 이 도형들을 **선택 없이 전원에게 강제해서** 항의�
 | `Active` | `cable` | `icons::link::CABLE_ALPHA` | 양끝이 이어진 케이블 — 통해 있다 |
 | `Lost` | `unplug` | `icons::link::UNPLUG_ALPHA` | 뽑히는 두 플러그 — 끊겼다 |
 
-- ✅ **자산은 이미 구워 두었다**(08-14) — `crates/nbeep-ui/assets/icon-{plug,plug-zap,cable,unplug}-96.alpha`(각 9,216B) + 원본 SVG `assets/icons-src/`. 상수는 [`nbeep_ui::icons::link`](../crates/nbeep-ui/src/lib.rs). **배선만 남았다**(M3-20).
+- ✅ **자산은 이미 구워 두었다**(08-14) — `crates/nbeep-ui/assets/icon-{plug,plug-zap,cable,unplug}-96.alpha`(각 9,216B) + 원본 SVG `assets/icons-src/`. 상수는 [`nbeep_ui::icons::link`](../crates/nbeep-ui/src/lib.rs). ~~배선만 남았다(M3-20)~~ → ✅ **배선 완료**: 대화 헤더 상태 줄(08-21 `5d255b3`) · 피어 정보 카드 좌상단 아이콘+상태색 라벨(11-12 `12a1112`) · 목록 행 연결점 hover 툴팁(11-12 `d00fd0f`) — 판정은 `peer_link_state` 한 곳(세션 > 시도 > 끊김 > 유휴).
 - 굽는 절차는 **[`tools/mkicons.sh`](../tools/mkicons.sh)** 단일 지점(SVG → `rsvg-convert` 96×96 → `magick -alpha extract` → 9,216B 검증) — [18 빌드·테스트](18-build-and-test.md)에 등재. **런타임 SVG 파서는 여전히 0.**
 - ⚠️ `plug-zap`과 `unplug`는 **플러그 본체를 공유**해 실루엣이 60% 겹친다. 둘은 동시에 나타나지 않고 색(accent vs danger)이 갈리므로 실사용 문제는 없지만, **범례·도움말에 나란히 놓을 때는 라벨을 함께** 붙인다.
 - **탈락 근거**(재검토 시 되풀이하지 말 것): **Wi-Fi 호**(`wifi-zero`→`wifi`) = "신호 세기"지 "세션 유무"가 아니다 — 유선으로 붙은 상대에게 무선 그림을 붙이면 **거짓말**이 된다. **사슬 고리** = `Idle`(`unlink-2`)과 `Lost`(`link-2-off`)가 16px에서 같은 그림으로 수렴한다(정확히 갈라야 할 두 상태에서 실패). **방송·전파**(`radio-tower`·`broadcast`) = 네 상태가 전부 동심원이라 실루엣이 겹친다 — **발견(스캔 중) 아이콘**으로 돌리는 게 제 자리다.
