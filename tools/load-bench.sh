@@ -23,9 +23,12 @@ S="4000:activate=bob-linux;6000:activate=bob-linux;6500:activate=bora-win;7000:a
 t=13500; for i in $(seq 1 10); do S="$S;$t:wheel=-120"; t=$((t+80)); done; for i in $(seq 1 10); do S="$S;$t:wheel=120"; t=$((t+80)); done
 S="$S;17000:dump;30000:quit"
 echo "▶ 피어 $PEERS · 대화 창 5 · 20줄 · 목록 휠 20 · 출력 $OUT"
-( cd "$INST" && NEXA_SCRIPT="$S" "./nexa-beep$EXE" --window --separate-windows 2> "$OUT/app.log" >/dev/null ) &
+# ★ 절대 경로로 띄우고 그 경로로 고른다(11-12 Linux 실측) — `./nexa-beep` + `--match <출력 폴더 이름>`은 `pgrep -f`가 앱이 아니라
+#   이 스크립트의 bash(명령줄에 출력 폴더가 있다)를 잡아 private=0.04MB로 **헛통과**했다. Windows는 Path 부분 일치라 종전 그대로.
+( cd "$INST" && NEXA_SCRIPT="$S" "$INST/nexa-beep$EXE" --window --separate-windows 2> "$OUT/app.log" >/dev/null ) &
 sleep 21
-bash tools/inspect-sample.sh --match "$(basename "$OUT")" --interval 1 --count 2 --out "$OUT/mem.csv" >/dev/null 2>&1
+MATCH="$INST/nexa-beep"; case "${OSTYPE:-}" in msys* | cygwin*) MATCH=$(basename "$OUT") ;; esac
+bash tools/inspect-sample.sh --match "$MATCH" --interval 1 --count 2 --out "$OUT/mem.csv" >/dev/null 2>&1
 wait
 wins=$(head -1 "$OUT/wins.txt" 2>/dev/null | sed -n 's/^wins=\([0-9]*\).*/\1/p'); wins=${wins:-0}
 rows=$(grep -c '\[dump\] peer' "$OUT/app.log" 2>/dev/null || echo 0)

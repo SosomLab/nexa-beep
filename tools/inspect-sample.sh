@@ -28,13 +28,24 @@ done
 [ -n "$OUT" ] || { mkdir -p target; OUT="target/inspect-$(date +%m%d-%H%M%S).csv"; }
 os=$(uname -s)
 
+# 대상 PID(mac·Linux) — `pgrep -f`는 명령줄 전체를 보므로 `--match <값>`을 인자로 받은 **이 스크립트의 bash**도 걸린다(11-12 Linux 실측:
+#   load-bench가 앱 대신 bash를 재서 private=0.04MB · threads=1로 헛통과). 셸은 건너뛴다.
+find_pid() {
+  local p c
+  for p in $(pgrep -f "$MATCH"); do
+    c=$(ps -o comm= -p "$p" 2>/dev/null); c=${c##*/}
+    case "$c" in bash | sh | zsh | dash | "") continue ;; esac
+    echo "$p"; return 0
+  done
+}
+
 # 한 샘플 → "pid,private_mb,commit_mb,handles,threads,cpu_ms,sockets" (프로세스 없으면 빈 줄).
 sample() {
   case "$os" in
     MINGW*|MSYS*|CYGWIN*)
       powershell.exe -NoProfile -Command "\$p = Get-Process nexa-beep -ErrorAction SilentlyContinue | Where-Object { \$_.Path -like '*$MATCH*' } | Select-Object -First 1; if (-not \$p) { exit 0 }; \$cs = (Get-Counter -Counter @('\Process(nexa-beep*)\ID Process', '\Process(nexa-beep*)\Working Set - Private') -ErrorAction SilentlyContinue).CounterSamples; \$ids = @(\$cs | Where-Object { \$_.Path -like '*ID Process' }); \$wss = @(\$cs | Where-Object { \$_.Path -like '*Working Set - Private' }); \$v = \$null; for (\$i = 0; \$i -lt \$ids.Count; \$i++) { if ([int]\$ids[\$i].CookedValue -eq \$p.Id -and \$i -lt \$wss.Count) { \$v = \$wss[\$i].CookedValue } }; if (\$v -eq \$null) { \$v = \$p.PrivateMemorySize64 }; \$tcp = @(Get-NetTCPConnection -OwningProcess \$p.Id -ErrorAction SilentlyContinue).Count; \$udp = @(Get-NetUDPEndpoint -OwningProcess \$p.Id -ErrorAction SilentlyContinue).Count; '{0},{1},{2},{3},{4},{5},{6}' -f \$p.Id, [math]::Round(\$v/1MB,2), [math]::Round(\$p.PrivateMemorySize64/1MB,2), \$p.HandleCount, \$p.Threads.Count, [int]\$p.TotalProcessorTime.TotalMilliseconds, (\$tcp + \$udp)" | tr -d '\r' ;;
     Linux)
-      local pid; pid=$(pgrep -f "$MATCH" | head -1); [ -n "$pid" ] || return 0
+      local pid; pid=$(find_pid); [ -n "$pid" ] || return 0
       local anon thr fds socks cpu
       anon=$(awk '/RssAnon/{printf "%.2f", $2/1024}' "/proc/$pid/status"); thr=$(awk '/Threads/{print $2}' "/proc/$pid/status")
       fds=$(ls "/proc/$pid/fd" 2>/dev/null | wc -l); socks=$(ls -l "/proc/$pid/fd" 2>/dev/null | grep -c 'socket:')
@@ -42,7 +53,7 @@ sample() {
       local vm; vm=$(awk '/VmRSS/{printf "%.2f", $2/1024}' "/proc/$pid/status")
       echo "$pid,$anon,$vm,$fds,$thr,$cpu,$socks" ;;
     Darwin)
-      local pid; pid=$(pgrep -f "$MATCH" | head -1); [ -n "$pid" ] || return 0
+      local pid; pid=$(find_pid); [ -n "$pid" ] || return 0
       local fp rss thr fds socks cpu
       fp=$(footprint "$pid" 2>/dev/null | awk '/phys_footprint/{gsub(/[^0-9.]/,"",$NF); print $NF; exit}'); [ -n "$fp" ] || fp=$(ps -o rss= -p "$pid" | awk '{printf "%.2f", $1/1024}')
       rss=$(ps -o rss= -p "$pid" | awk '{printf "%.2f", $1/1024}'); thr=$(ps -M -p "$pid" | tail -n +2 | wc -l | tr -d ' ')
