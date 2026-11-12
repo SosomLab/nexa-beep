@@ -305,6 +305,8 @@ pub enum Msg {
     StPresenceOnline,
     /// 내 신원 키가 다른 실행에서도 쓰이는 중(R-12 U-P1 · 탐지 1회 안내).
     StCloneSelf,
+    /// 상대의 신원 키가 두 실행에서 동시에 보인다(R-12 U-P1 제3자 관측 · {0} = 표시 이름).
+    StfClonePeer,
     StOfflineNoConnect,
     /// 오프라인 시 마지막 서명 사용(10-19 사용자 확정 — 기본 on).
     UserOfflineTrust,
@@ -425,6 +427,10 @@ pub enum Msg {
     TrustVerifiedTip,
     TrustBlockedTip,
     TrustConflictTip,
+    /// 같은 키가 두 실행에서 동시에 광고된다(R-12 U-P1 제3자 관측 · 행 표식 라벨).
+    TrustDupKey,
+    /// 위 표식의 한 줄 설명.
+    TrustDupKeyTip,
     /// 내 기기(ADR-0015 S2 — 같은 사용자 키로 인증된 형제 PC) 배지 라벨·툴팁·카드 문구.
     TrustOwnDevice,
     TrustOwnDeviceTip,
@@ -910,6 +916,8 @@ pub enum Msg {
     ChipfServerOn,
     /// 상태바 사용자 칩 — 단독 노드(사용자 꺼짐).
     ChipUserOff,
+    /// 상태 바 경고 칩 — 내 신원 키가 다른 실행에서도 쓰이는 중(R-12 U-P1 · 실행 동안 유지).
+    ChipCloneKey,
     /// 상태바 사용자 칩 — 사용자 미인증(값 문제·실패).
     ChipUserBlocked,
     /// 상태바 사용자 칩 — `{핸들}` · 기기 `{N}`.
@@ -2403,6 +2411,7 @@ impl Msg {
             Msg::ChipServerHeld => ["Server: not verified", "서버: 미검증", "服务器：未验证", "サーバー: 未検証"],
             Msg::ChipfServerReconnect => ["{}: reconnecting", "{}: 재접속 대기", "{}：等待重连", "{}: 再接続待ち"],
             Msg::ChipfServerOn => ["{} ✓", "{} ✓", "{} ✓", "{} ✓"],
+            Msg::ChipCloneKey => ["Key in use elsewhere", "신원 키 중복", "身份密钥重复", "身元キー重複"],
             Msg::ChipUserOff => ["Solo", "단독", "单机", "単独"],
             Msg::ChipUserBlocked => ["User: not verified", "사용자: 미인증", "用户：未验证", "ユーザー: 未認証"],
             Msg::ChipfUser => ["{} · {} dev", "{} · {}대", "{} · {}台", "{} · {}台"],
@@ -3331,6 +3340,7 @@ impl Msg {
             Msg::PresenceOffline => ["Offline", "오프라인", "离线", "オフライン"],
             Msg::MenuPresence => ["My status", "내 상태", "我的状态", "自分の状態"],
             Msg::StPresenceOffline => ["Offline mode — invisible to peers, no connections · messages you send wait", "오프라인 모드 — 상대에게 보이지 않고 연결하지 않습니다 · 보낸 메시지는 대기", "离线模式 — 对方看不到我，也不连接 · 发送的消息等待", "オフラインモード — 相手に見えず接続もしない · 送信は待機"],
+            Msg::StfClonePeer => ["{0}: the same identity key is advertising from two running copies", "{0}: 같은 신원 키가 두 실행에서 동시에 광고됩니다", "{0}：同一身份密钥由两个运行实例同时广播", "{0}: 同じ身元キーが二つの実行から同時に広告されています"],
             Msg::StCloneSelf => ["Another running copy is using this identity key (copied folder or cloned image?) — peers cannot tell the two apart", "같은 신원 키를 쓰는 다른 실행이 네트워크에 있습니다(폴더 복사·이미지 복제?) — 상대는 둘을 구분하지 못합니다", "网络上有另一个运行实例在使用同一身份密钥（复制的文件夹或克隆镜像？）— 对方无法区分两者", "同じ身元キーを使う別の実行がネットワーク上にあります（フォルダーのコピーやイメージの複製？）— 相手は両者を区別できません"],
             Msg::StPresenceOnline => ["Online — discovery and connections resumed", "온라인 — 발견·연결 재개", "在线 — 发现与连接已恢复", "オンライン — 発見・接続を再開"],
             Msg::StOfflineNoConnect => ["Offline mode — not connecting (change My status to go online)", "오프라인 모드 — 연결하지 않습니다(내 상태를 온라인으로)", "离线模式 — 不连接（将我的状态改为在线）", "オフラインモード — 接続しません（自分の状態をオンラインに）"],
@@ -3649,6 +3659,13 @@ impl Msg {
                 "이 키의 세션 수립을 거부한다",
                 "拒绝此密钥的会话",
                 "この鍵のセッションを拒否する",
+            ],
+            Msg::TrustDupKey => ["Duplicated key", "키 중복", "密钥重复", "鍵の重複"],
+            Msg::TrustDupKeyTip => [
+                "This identity key is advertising from two running copies — a copied folder or cloned image",
+                "이 신원 키가 두 실행에서 동시에 광고된다 — 폴더 복사·이미지 복제 의심",
+                "此身份密钥同时由两个运行实例广播 — 疑似复制的文件夹或克隆镜像",
+                "この身元キーが二つの実行から同時に広告されている — フォルダーのコピーやイメージ複製の疑い",
             ],
             Msg::TrustConflictTip => [
                 "Same name on a different key — possible impersonation",

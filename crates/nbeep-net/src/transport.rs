@@ -61,6 +61,9 @@ pub struct PeerHint {
     pub source: u32,
     /// 공개 카드(랑데부 전용 · 경계에서 정제 완료 · ADR-0003 §9 A) — LAN 광고는 None.
     pub profile: Option<nbeep_core::PublicCard>,
+    /// 기동 인스턴스 난수(R-12 U-P1 · LAN 광고만) — 같은 키인데 이 값이 다른 광고가 번갈아 오면 키 복제 의심.
+    /// 0 = 모름(랑데부 명부·미래 와이어) — 판단 근거로 쓰지 않는다.
+    pub instance: [u8; 16],
 }
 
 /// 발견 이벤트 — 등장·이탈([docs/06] FR-D-8).

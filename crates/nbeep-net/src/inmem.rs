@@ -60,6 +60,7 @@ impl InMemoryBus {
             liveness: nbeep_core::Liveness::Advertised,
             source: 0,
             profile: None,
+            instance: [0u8; 16],
         };
 
         {

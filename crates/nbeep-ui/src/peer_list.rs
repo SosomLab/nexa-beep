@@ -133,6 +133,9 @@ pub struct PeerRow {
     /// 같은 표시 이름을 **다른 키**가 쓴다(M3-14 — v1에서 사칭을 드러내는 유일한
     /// 가시 신호 · 등급 아이콘 옆 `badge-alert` 덧붙는 표식).
     pub conflict: bool,
+    /// 같은 **키**가 두 실행에서 동시에 광고된다(R-12 U-P1 — 키 파일 복제 의심 · 같은 `badge-alert` 자리,
+    /// 툴팁 문구만 다르다 · 둘 다면 키 중복이 먼저).
+    pub dup_key: bool,
     /// **내 기기**(ADR-0015 S2 — 같은 사용자 키로 인증된 형제 PC · 이 세션 한정). 인증 실
     /// 배지의 **모양은 그대로, 색만 보라**(사용자 확정 09-06 "구조·이미지 유지 · 색으로 식별").
     pub own_device: bool,
@@ -1600,7 +1603,8 @@ impl Widget for PeerListWidget {
                 let p = Point { x, y };
                 let tip = over.and_then(|i| {
                     let row = self.peer_at(i)?;
-                    let (tir, cir) = self.trust_icon_rects(self.row_rect(i), row.conflict);
+                    let (tir, cir) =
+                        self.trust_icon_rects(self.row_rect(i), row.conflict || row.dup_key);
                     if let Some(cr) = cir {
                         if cr.contains(p) {
                             return Some((i, true));
@@ -1877,7 +1881,7 @@ impl Widget for PeerListWidget {
             // 유령 원으로 읽혔다. Blocked가 등급을 덮고, 이름 충돌은 옆 덧표식.
             // 등급명·설명은 hover 툴팁(아이콘만으로 등급명을 다 나르지 못한다).
             ctx.select_font(FontSlot::PeerList, false);
-            let (tir, cir) = self.trust_icon_rects(r, row.conflict);
+            let (tir, cir) = self.trust_icon_rects(r, row.conflict || row.dup_key);
             let shown = trust_icon(row.trust, row.blocked, row.own_device);
             if let Some((rgba, _label, _tip)) = shown {
                 let img = self.trust_image(rgba);
@@ -1942,15 +1946,23 @@ impl Widget for PeerListWidget {
             .trust_tip
             .and_then(|(i, on_conflict)| {
                 let row = self.peer_at(i)?;
-                let (tir, cir) = self.trust_icon_rects(self.row_rect(i), row.conflict);
+                let (tir, cir) =
+                    self.trust_icon_rects(self.row_rect(i), row.conflict || row.dup_key);
                 if on_conflict {
+                    let (l, t) = if row.dup_key {
+                        (
+                            nbeep_core::Msg::TrustDupKey,
+                            nbeep_core::Msg::TrustDupKeyTip,
+                        )
+                    } else {
+                        (
+                            nbeep_core::Msg::TrustConflict,
+                            nbeep_core::Msg::TrustConflictTip,
+                        )
+                    };
                     Some((
                         cir.unwrap_or(tir),
-                        format!(
-                            "{} — {}",
-                            nbeep_core::t(nbeep_core::Msg::TrustConflict),
-                            nbeep_core::t(nbeep_core::Msg::TrustConflictTip)
-                        ),
+                        format!("{} — {}", nbeep_core::t(l), nbeep_core::t(t)),
                     ))
                 } else {
                     trust_icon(row.trust, row.blocked, row.own_device)
@@ -2063,6 +2075,7 @@ mod tests {
             fav: false,
             blocked: false,
             conflict: false,
+            dup_key: false,
             own_device: false,
             devices: 1,
             last_seen_label: String::new(),

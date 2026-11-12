@@ -234,6 +234,7 @@ impl LocalDirect {
                                     .or_default()
                                     .observe(dest);
                             }
+                            let instance = o.packet.instance;
                             let hint = PeerHint {
                                 peer,
                                 name: o.packet.name,
@@ -243,6 +244,7 @@ impl LocalDirect {
                                 liveness: nbeep_core::Liveness::Advertised,
                                 source: 0, // LAN 경로 토큰(인터페이스 병합은 PeerAddrs가 이미 했다)
                                 profile: None,
+                                instance,
                             };
                             // 매 관측을 전달 — 수신 측 PeerTable이 병합·생존 갱신한다(FR-D-6).
                             if disc_tx.send(DiscoveryEvent::Appeared(hint)).is_err() {

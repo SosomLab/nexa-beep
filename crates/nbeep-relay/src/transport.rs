@@ -224,6 +224,7 @@ fn spawn_pump(
                         liveness: Liveness::Eventful,
                         source,
                         profile,
+                        instance: [0u8; 16], // 명부는 존재만 — 인스턴스 미상
                     };
                     if disc_tx.send(DiscoveryEvent::Appeared(hint)).is_err() {
                         break;

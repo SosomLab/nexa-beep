@@ -905,6 +905,22 @@ enum SessionCmd {
 /// 은퇴 세션의 잔여 수신 시간(ms) — 상대의 성립 직후 flush(대기분·프로필 요청)가 도착하기에 충분하고,
 /// 양쪽이 같은 시간만 기다리므로 옛 액터 스레드가 오래 남지 않는다.
 const RETIRE_DRAIN_MS: u64 = 1_500;
+/// 남의 키 복제 관측 창(R-12 U-P1) — 비컨 0.8s의 여러 배 · probe CLI와 같은 값.
+const CLONE_WINDOW_MS: u32 = 10_000;
+/// 복제로 보는 번갈음 횟수 — 재기동은 instance가 **한 번** 바뀔 뿐이라 1회로는 판정하지 않는다.
+const CLONE_PEER_HITS: u8 = 3;
+
+/// 번갈음 누적(R-12 U-P1 제3자) — 직전 번갈음이 관측 창 안이면 이어 세고, 창을 벗어났으면 1부터 다시 센다
+/// (하루에 세 번 재기동한 상대를 복제로 몰지 않게 — 진짜 복제는 비컨마다 번갈아 몇 초 안에 찬다).
+fn clone_hit_count(
+    prev: Option<(u8, nbeep_core::MonoInstant)>,
+    now: nbeep_core::MonoInstant,
+) -> u8 {
+    match prev {
+        Some((n, at)) if now.saturating_ms_since(at) < CLONE_WINDOW_MS => n.saturating_add(1),
+        _ => 1,
+    }
+}
 
 /// 연결 시도 래치(M2-8 중복 클릭 가드) — **넣은 키로 뺀다.**
 ///
@@ -4517,6 +4533,12 @@ struct App {
     closed_peers: std::collections::HashSet<PeerId>,
     /// 내 신원 복제 경고를 이미 냈는가(R-12 U-P1 — 실행당 1회 · 탐지이지 방지가 아니다).
     clone_warned: bool,
+    /// 남의 키 복제 관측(R-12 U-P1 제3자 · docs/21 §5) — 같은 키·다른 instance가 창 안에 번갈아 오는지.
+    clone_watch: nbeep_net::CloneWatch,
+    /// 상대별 번갈음 횟수 — 재기동(1회 교체)과 구분하려고 [`CLONE_PEER_HITS`]회부터 복제로 본다.
+    clone_hits: HashMap<PeerId, (u8, nbeep_core::MonoInstant)>,
+    /// 복제 의심으로 표식한 상대(행 `dup_key` · 이탈하면 풀린다).
+    clone_peers: std::collections::HashSet<PeerId>,
     /// ★ Bye를 보내고 떠난 상대(M2-4b · 11-06) — `Closed`에서 자동 재연결을 걸지 않는 근거. 해제 = 발견에
     /// 다시 **등장**(PeerEvent::Appeared) · 세션 재수립 · 잊기. 사람의 클릭(start_connect)은 표식과 무관.
     bye_peers: std::collections::HashSet<PeerId>,
@@ -7516,6 +7538,29 @@ impl App {
                     // ★ 랑데부 명부 힌트(X-2f · 11-06) — 광고가 아니라 이벤트(Up/Down · 상한은 전송이 걸었다): 감쇠에 걸리면
                     //   재등장이 없어 영구 누락이므로 감쇠·LAN 프로필 동기 재연결(최대 4096명 폭주)은 LAN 광고에만 적용한다.
                     let rendezvous = hint.origin == nbeep_core::HintOrigin::Rendezvous;
+                    // ★ R-12 U-P1 제3자 관측 — 감쇠보다 먼저 본다(감쇠가 번갈음을 지우지 않게). 탐지뿐이고 연결·신뢰
+                    //   동작은 그대로다: 행에 경고 표식 + 상대당 1회 안내. instance 0(명부·미래 와이어)은 근거가 아니다.
+                    if !rendezvous
+                        && hint.instance != [0u8; 16]
+                        && !self.clone_peers.contains(&hint.peer)
+                        && self.clone_watch.observe(hint.peer, hint.instance, now)
+                    {
+                        let hits = clone_hit_count(self.clone_hits.get(&hint.peer).copied(), now);
+                        self.clone_hits.insert(hint.peer, (hits, now));
+                        if hits >= CLONE_PEER_HITS {
+                            self.clone_hits.remove(&hint.peer);
+                            self.clone_peers.insert(hint.peer);
+                            changed = true;
+                            dlog!(self, DL::Disc, DV::Decide, "clone_peer", |r| r
+                                .arg("peer", hint.peer.short())
+                                .rule("instance", "alternates under one key")
+                                .fail("peer identity key advertised by two running copies"));
+                            self.set_status(nbeep_core::tf(
+                                nbeep_core::Msg::StfClonePeer,
+                                &[hint.name.as_str()],
+                            ));
+                        }
+                    }
                     // 광고 폭주 감쇠(docs/38 §5 · M5-3 2차) — 12pps 초과면 500ms에 한 번만 반영(차단 아님 · 행 유지).
                     if !rendezvous && self.disc_throttled(hint.peer) {
                         continue;
@@ -7626,6 +7671,8 @@ impl App {
             // 이름 = 프로필 → **이탈 직전 발견 이름** → 지문 기본(11-12 OBS-1112 ③ — 종전엔 발견 이름을 건너뛰어
             // 프로필을 공개하지 않은 상대의 오프라인 행이 `beep-<지문>`으로 내려갔다). 꺼내기는 항상(표에 남기지 않는다).
             let last = self.table.take_departed_name(p);
+            self.clone_peers.remove(&p); // 복제 표식은 이탈과 함께 풀린다(다시 보이면 다시 센다)
+            self.clone_hits.remove(&p);
             if self.keeps_offline_row(p) {
                 let name = self
                     .peer_profiles
@@ -7887,6 +7934,7 @@ impl App {
                 let path = self.peer_path_badge(entry.peer);
                 // 접힌 기기 수(S3 라벨 · 11-07) — 묶음 크기(단일 키 = 1).
                 let devices = u8::try_from(self.fold_group(entry.peer).len()).unwrap_or(u8::MAX);
+                let dup_key = self.clone_peers.contains(&entry.peer); // R-12 U-P1 제3자 관측
                 PeerRow {
                     entry,
                     trust,
@@ -7908,6 +7956,7 @@ impl App {
                     fav,
                     blocked,
                     conflict,
+                    dup_key,
                     own_device,
                     devices,
                     last_seen_label,
@@ -23024,6 +23073,17 @@ impl App {
                         ctx.text(cx + chip_pad, bar.y + dy, rect, text, fg);
                         *right = cx - pad;
                     };
+                    // ★ 내 신원 키 복제 경고 칩(R-12 U-P1) — 상태줄 1회 안내는 다음 문구에 곧 덮여(11-12 실기) 못 본다.
+                    //   탐지된 실행 동안 맨 오른쪽에 경고색으로 계속 둔다(자세한 문구 = 로그 창의 상태 줄).
+                    if self.clone_warned {
+                        draw_chip(
+                            &mut ctx,
+                            &mut right,
+                            nbeep_core::t(nbeep_core::Msg::ChipCloneKey),
+                            false,
+                            true,
+                        );
+                    }
                     let g = &self.user_glance;
                     let user_warn = g
                         .hints
@@ -28019,6 +28079,9 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         ),
         closed_peers: std::collections::HashSet::new(),
         clone_warned: false,
+        clone_watch: nbeep_net::CloneWatch::new(CLONE_WINDOW_MS),
+        clone_hits: HashMap::new(),
+        clone_peers: std::collections::HashSet::new(),
         bye_peers: std::collections::HashSet::new(),
         conv_epoch: 0,
         extra_peers: HashMap::new(),
@@ -28292,6 +28355,25 @@ fn sum_xfer<'a>(
 
 #[cfg(test)]
 mod tests {
+
+    /// R-12 제3자 관측 — 번갈음은 창 안에서만 이어 센다(띄엄띄엄 재기동 ≠ 복제).
+    #[test]
+    fn clone_hit_count_resets_outside_window() {
+        use super::{clone_hit_count, CLONE_PEER_HITS, CLONE_WINDOW_MS};
+        let at = |ms: u64| nbeep_core::MonoInstant(ms * 1_000_000);
+        assert_eq!(clone_hit_count(None, at(0)), 1);
+        assert_eq!(clone_hit_count(Some((1, at(0))), at(800)), 2);
+        assert_eq!(
+            clone_hit_count(Some((2, at(800))), at(1_600)),
+            CLONE_PEER_HITS
+        );
+        let late = u64::from(CLONE_WINDOW_MS) + 1;
+        assert_eq!(
+            clone_hit_count(Some((2, at(0))), at(late)),
+            1,
+            "창 밖 = 다시 1부터"
+        );
+    }
 
     /// 스크립트 창 고르기 — 제목 조각 또는 `role:<역할>`(Linux 헤드리스는 제목이 비어 역할이 유일한 길 · OBS-1112 ④).
     #[test]
