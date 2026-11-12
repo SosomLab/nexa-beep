@@ -21938,6 +21938,25 @@ impl App {
         }
     }
 
+    /// 포커스 창을 우리 쪽에서 치웠을 때의 명시 정리(RL-9 잔여) — OS `Focused(false)`에 기대지 않는다.
+    /// 창을 드롭하면(Linux 트레이 숨김 = 파괴 · 보조 창 닫기) 그 창의 `Focused(false)`가 오지 않을 수 있어
+    /// `os_focused`가 없는 창을 가리킨 채 남고, 묶음이 "활성"으로 굳어 창 투명도 흐림·캐럿 판정이 어긋난다.
+    fn drop_os_focus(&mut self, id: WindowId) {
+        if self.os_focused == Some(id) {
+            self.os_focused = None;
+            self.focus_group_changed();
+        }
+    }
+
+    /// 틱마다 1회 — `os_focused`가 이미 없는 창이면 정리(창 제거 자리 28곳을 한 곳에서 덮는다).
+    fn heal_os_focus(&mut self) {
+        if let Some(id) = self.os_focused {
+            if !self.windows.contains_key(&id) {
+                self.drop_os_focus(id);
+            }
+        }
+    }
+
     /// 유예 만료 틱(about_to_wait) — 아직 묶음 밖이면 흐림 적용. 반환 = 다음 깨움까지 ms.
     fn blur_tick(&mut self, now: u64) -> Option<u64> {
         let at = self.blur_at?;
@@ -25991,6 +26010,7 @@ impl ApplicationHandler<AppEvent> for App {
         if wheel_easing {
             sooner(&mut wake_ms, 16); // 휠 관성(M3-1b ①)
         }
+        self.heal_os_focus(); // 사라진 창을 가리키는 포커스 정리(RL-9 잔여) — 아래 유예 판정보다 먼저
         if let Some(left) = self.blur_tick(self.now_ms()) {
             sooner(&mut wake_ms, left.max(1)); // 창 투명도 유예(dir3 DR-22)
         }
@@ -26120,11 +26140,17 @@ impl ApplicationHandler<AppEvent> for App {
                                 self.windows.remove(&id);
                                 self.main_id = None;
                                 self.close_armed = false;
+                                self.drop_os_focus(id); // 파괴된 창의 Focused(false)는 오지 않는다(RL-9 잔여)
                             }
                             #[cfg(not(target_os = "linux"))]
                             if let Some(e) = self.windows.get(&id) {
                                 e.window.set_visible(false);
                                 nbeep_plat::dock::set_dock_visible(false);
+                            }
+                            #[cfg(not(target_os = "linux"))]
+                            {
+                                self.set_chat_active(id, false);
+                                self.drop_os_focus(id); // OS 통지와 겹쳐도 멱등
                             }
                         } else if let Some(e) = self.windows.get(&id) {
                             e.window.set_minimized(true);
