@@ -52,7 +52,7 @@ ok=0; bad=0
 cnt() { local n; n=$(grep -c -E "$2" "$1" 2>/dev/null || true); echo "${n:-0}"; }
 chk() { local n; n=$(cnt "$2" "$3"); if [ "$n" -ge 1 ]; then printf '  ✓ %s (%s건)\n' "$1" "$n"; ok=$((ok+1)); else printf '  ✗ %s (0건)\n' "$1"; bad=$((bad+1)); fi; }
 chk_not() { local n; n=$(cnt "$2" "$3"); if [ "$n" -eq 0 ]; then printf '  ✓ %s (0건 = 기대)\n' "$1"; ok=$((ok+1)); else printf '  ✗ %s (%s건 · 기대 0)\n' "$1" "$n"; bad=$((bad+1)); fi; }
-ROW_X="^\[dump\] peer ${XS} name=" # Y가 보는 X 행 — ★ 이름은 보지 않는다: 오프라인 행은 이름이 `beep-<지문>`으로 내려간다(11-12 실측 · DOC-45 관찰 후속과 같은 현상)
+ROW_X="^\[dump\] peer ${XS} name=" # Y가 보는 X 행(이름은 따로 단언 — 오프라인 행 이름이 `beep-<지문>`으로 내려가던 것은 `63e481f`로 수정 · 11-12)
 ROW_Y="^\[dump\] peer ${YS} name=" # X가 보는 Y 행
 chk     "A 온라인: Y가 보는 X live=true"                     "$OUT/y-A.txt" "${ROW_X}.*live=true"
 chk     "A 온라인: X가 보는 Y live=true"                     "$OUT/x-A.txt" "${ROW_Y}.*live=true"
@@ -61,6 +61,7 @@ chk     "A 온라인: Y가 보는 X 이름 = prx"                    "$OUT/y-A.t
 chk     "X: presence=offline 실행"                           "$OUT/x.log"   "^\[script\] [0-9]+ms presence=offline$"
 chk     "X: 오프라인 판정 로그(offline=true)"                "$OUT/x.log"   "app/decide presence .*offline=true"
 chk     "B 오프라인: Y가 보는 X 행 유지(대화 있음) · live=false" "$OUT/y-B.txt" "${ROW_X}.*live=false"
+chk     "B 오프라인: Y가 보는 X 이름 보존(prx · `63e481f`)"   "$OUT/y-B.txt" "${ROW_X}prx .*live=false"
 chk_not "B 오프라인: Y가 보는 X live=true 아님"              "$OUT/y-B.txt" "${ROW_X}.*live=true"
 chk_not "B 오프라인: X가 보는 Y live=true 아님(발견 표 비움)" "$OUT/x-B.txt" "${ROW_Y}.*live=true"
 chk     "C 오프라인 중 발신: X 스레드에 있음(내 줄)"         "$OUT/x-C.txt" "^\[dump\] thread ${YS} mine=true .* text=오프라인 중$"
