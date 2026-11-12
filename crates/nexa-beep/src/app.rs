@@ -3789,6 +3789,19 @@ struct WinEntry {
     scale: f32,
 }
 
+/// 스크립트의 창 고르기(`close=`·`capture=…@`) — 제목 조각(대소문자 무시) **또는** `role:<역할 이름>`.
+/// 역할 경로가 필요한 이유(11-12 Linux 관찰 OBS-1112 ④): winit X11의 `Window::title()`은 빈 문자열이라
+/// 헤드리스(Xvfb)에서는 제목 조각이 어느 창에도 맞지 않는다. `frag`는 소문자로 들어온다.
+fn script_win_hit(title: &str, role: Role, frag: &str) -> bool {
+    match frag.strip_prefix("role:") {
+        Some(r) => {
+            let r = r.trim();
+            !r.is_empty() && format!("{role:?}").to_lowercase().starts_with(r)
+        }
+        None => title.to_lowercase().contains(frag),
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Role {
     /// 주 창 — 목록(단일 모드에서는 대화 전환도 이 창에서).
@@ -8121,7 +8134,7 @@ impl App {
                     let ids: Vec<WindowId> = self
                         .windows
                         .iter()
-                        .filter(|(_, e)| e.window.title().to_lowercase().contains(t.as_str()))
+                        .filter(|(_, e)| script_win_hit(&e.window.title(), e.role, t.as_str()))
                         .map(|(id, _)| *id)
                         .collect();
                     eprintln!("[script] close={title}: {} window(s)", ids.len());
@@ -8136,7 +8149,7 @@ impl App {
                 },
                 // ★ 피어 정보 카드 열기(M3-20 후속 · 11-12 — 카드의 연결 상태 아이콘·라벨 캡처 자동화):
                 //   `open=peerinfo:<이름>`(activate와 같은 부분 일치) — 우클릭 ▸ 정보와 같은 open_peer_info.
-                //   캡처는 창 제목 조각으로(`capture=<png>@<WinPeerProfile 제목 일부>`).
+                //   캡처 = `capture=<png>@role:peerinfo`(Linux 헤드리스는 창 제목이 비어 역할로 고른다).
                 Some(("open", what)) if what.starts_with("peerinfo:") => {
                     let name = what["peerinfo:".len()..].trim();
                     match self.script_find_peer(name) {
@@ -8474,12 +8487,19 @@ impl App {
                     // 제목 조각이 어느 창에도 안 맞으면 바로 말한다(11-04 협업 세션 실기 — `@settings`(역할 이름)가 오류
                     //   줄 없이 아무것도 만들지 않았다). 요청은 그대로 둔다(뒤에 열릴 수도 있다).
                     if let Some(t) = &title {
-                        let titles: Vec<String> =
-                            self.windows.values().map(|e| e.window.title()).collect();
-                        if !titles.iter().any(|w| w.to_lowercase().contains(t.as_str())) {
+                        let hit = self
+                            .windows
+                            .values()
+                            .any(|e| script_win_hit(&e.window.title(), e.role, t.as_str()));
+                        if !hit {
+                            let open: Vec<String> = self
+                                .windows
+                                .values()
+                                .map(|e| format!("{} [role:{:?}]", e.window.title(), e.role))
+                                .collect();
                             eprintln!(
                                 "[capture] {path}: no window whose title contains '{t}' — open: {}",
-                                titles.join(" | ")
+                                open.join(" | ")
                             );
                         }
                     }
@@ -23154,7 +23174,7 @@ impl App {
         if let Some((path, title)) = self.capture_req.as_ref() {
             let hit = match title {
                 None => Some(id) == self.main_id,
-                Some(t) => entry.window.title().to_lowercase().contains(t.as_str()),
+                Some(t) => script_win_hit(&entry.window.title(), entry.role, t.as_str()),
             };
             if hit {
                 let png = crate::png::encode(size.width, size.height, &buffer);
@@ -28263,6 +28283,28 @@ fn sum_xfer<'a>(
 
 #[cfg(test)]
 mod tests {
+
+    /// 스크립트 창 고르기 — 제목 조각 또는 `role:<역할>`(Linux 헤드리스는 제목이 비어 역할이 유일한 길 · OBS-1112 ④).
+    #[test]
+    fn script_win_hit_matches_title_fragment_or_role() {
+        use super::{script_win_hit, Role};
+        let peer = nbeep_core::PeerId::from_bytes([3u8; 32]);
+        assert!(script_win_hit("Nexa Beep — 설정", Role::Settings, "설정"));
+        assert!(
+            !script_win_hit("", Role::Settings, "설정"),
+            "빈 제목 = 조각 불일치"
+        );
+        assert!(script_win_hit("", Role::Settings, "role:settings"));
+        assert!(
+            script_win_hit("", Role::PeerInfo(peer), "role:peerinfo"),
+            "인자 있는 역할 = 접두 일치"
+        );
+        assert!(!script_win_hit("", Role::Main, "role:peerinfo"));
+        assert!(
+            !script_win_hit("", Role::Main, "role:"),
+            "빈 역할 = 전부 맞음 금지"
+        );
+    }
 
     /// X-13 S3 남김(11-08) — 접힌 스레드 배너는 기기 합산: bytes·files 합 · 카운트다운 최솟값 · 발신 우선.
     #[test]
