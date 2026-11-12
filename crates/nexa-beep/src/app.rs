@@ -27787,6 +27787,10 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
                         //   `Appeared` 힌트가 노드마다 쌓였다(N²/2 · 500명 ≈ 12.5만 건 ≈ 26MB) — 앱 몫(행별 상주)과 섞여
                         //   "피어당 0.15MB"로 보였다. 수신기를 즉시 버리면 send가 Err라 쌓이지 않는다(측정 = 앱 몫만).
                         drop(t.discovery());
+                        // 인바운드 수신기도 버린다(11-12) — 살려 두면 앱의 자동 다이얼이 "닿았지만 아무도 받지 않는" 링크
+                        //   위에서 핸드셰이크 응답을 영영 기다려, 가짜 피어 행·카드가 계속 "연결 중"이었다. 버리면
+                        //   connect가 즉시 Unreachable → 실패 경로(끊김 표시·백오프)를 그대로 탄다.
+                        drop(nbeep_net::Transport::incoming(&t));
                         keep.push(t);
                     }
                 }
