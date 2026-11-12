@@ -4,7 +4,7 @@
 #   → 임시 산출물 정리를 순서대로 돌리고 요약 표 한 장과 종료 코드(실패 ≥1 = 1)를 낸다. 창은 사용자 화면에 띄우지 않는다
 #   (NEXA_TEST_HEADLESS=1 · 구버전 상대만 예외 — 옵트인).
 #
-#   ./tools/verify.sh            # 기본: 빌드(debug+release) · smoke · reply · group · block · s4 · tmp-clean   ≈ 7~10분
+#   ./tools/verify.sh            # 기본: 빌드(debug+release) · smoke · reply · group · block · flood · s4 · tmp-clean   ≈ 7~10분
 #   ./tools/verify.sh --quick    # 빌드(debug) · smoke · reply · scan-plaintext · wire-scan       ≈ 2.5분
 #   ./tools/verify.sh --perf     # 기본 + perf-scenario(헤드리스 수치 — 51 §3 기준선과 비교하지 않는다) + startup-bench(PERF-4 콜드/웜 5회 중앙값) + scroll-bench(PERF-3 2000줄 휠 paint ms) + mem-bench(PERF-5 회수 4점 · 1GiB · ≈3분)
 #   ./tools/verify.sh --oldpeer  # 기본 + oldpeer-scenario(⚠ 구버전 창이 화면에 ≈45s · gh 필요)
@@ -51,6 +51,7 @@ step "wire-scan" wire.log bash tools/wire-scan.sh "$OUT/wire"
 if [ "$QUICK" = 0 ]; then
   step "group-scenario" group.log bash tools/group-scenario.sh
   step "block-scenario" block.log bash tools/block-scenario.sh # M5-3 BL-5(11-05 · docs/38 — 차단·그림자·해제 복귀 · ≈80s)
+  step "flood-scenario" flood.log bash tools/flood-scenario.sh "$OUT/flood" # M5-3 2차 ⓑ(11-12 · docs/38 §5 — 발견 광고 200pps 주입 → 감쇠 로그·행 유지·차단 0 · ≈30s · python3 없으면 건너뜀)
   step "s4-scenario" s4.log bash tools/s4-scenario.sh
   step "ack-bench" ack.log bash tools/ack-bench.sh "$OUT/ack"
   [ "$PERF" = 1 ] && step "perf-scenario" perf.log bash tools/perf-scenario.sh "$OUT/perf"
