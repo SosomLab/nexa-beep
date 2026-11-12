@@ -910,6 +910,24 @@ const CLONE_WINDOW_MS: u32 = 10_000;
 /// 복제로 보는 번갈음 횟수 — 재기동은 instance가 **한 번** 바뀔 뿐이라 1회로는 판정하지 않는다.
 const CLONE_PEER_HITS: u8 = 3;
 
+/// 합성 썸네일 한 장(INS-4) — 64×64 RGBA · 순번으로 색을 달리한 불투명 그라디언트.
+fn demo_thumb(i: usize) -> std::rc::Rc<nbeep_ui::IconImage> {
+    const SIDE: u32 = 64;
+    let seed = (i % 251) as u8;
+    let mut rgba = Vec::with_capacity((SIDE * SIDE * 4) as usize);
+    for y in 0..SIDE {
+        for x in 0..SIDE {
+            rgba.extend_from_slice(&[
+                seed.wrapping_mul(7).wrapping_add(x as u8 * 3),
+                seed.wrapping_mul(13).wrapping_add(y as u8 * 3),
+                seed.wrapping_add((x ^ y) as u8),
+                255,
+            ]);
+        }
+    }
+    std::rc::Rc::new(nbeep_ui::IconImage::from_rgba(SIDE, SIDE, rgba))
+}
+
 /// 번갈음 누적(R-12 U-P1 제3자) — 직전 번갈음이 관측 창 안이면 이어 세고, 창을 벗어났으면 1부터 다시 센다
 /// (하루에 세 번 재기동한 상대를 복제로 몰지 않게 — 진짜 복제는 비컨마다 번갈아 몇 초 안에 찬다).
 fn clone_hit_count(
@@ -28171,7 +28189,19 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
     // 프로필 캐시가 기록보다 먼저(10-10 S3 실기 — 기록 복원이 이름을 모르는 채 라벨을 굳히던 것).
     app.restore_cached_profiles(); // 핀 상대의 캐시 프로필·목록 행 복원(08-14)
     app.restore_history(); // 대화 기록 복원(M2-5b · parked_lines에 · 대화창 열면 뜬다)
-                           // 발신 시퀀서 잇기(S4 · 10-10) — 설정 로드 뒤 · 첫 발신 전.
+                           // ★ 합성 부하 — 썸네일(INS-4 "썸네일 50" · 49 D-2 활성 메모리): `NEXA_DEMO_THUMBS=N`이면 격리함 썸네일 캐시에
+                           //   64px 합성 이미지 N장을 올린다(실물과 같은 `qthumb_put` 경로 = LRU 상한 256 집행 포함). 장마다 다른 픽셀이라
+                           //   공유되지 않는다. 격리함 창을 열면 실물 목록 기준으로 정리되므로(MEM-1 ②) 측정은 열지 않은 채로 한다.
+    if let Some(n) = std::env::var("NEXA_DEMO_THUMBS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+    {
+        for i in 0..n.min(10_000) {
+            app.qthumb_put(format!("nbeep-demo-thumb-{i}"), Some(demo_thumb(i)));
+        }
+        eprintln!("[demo] thumbs={n} cached={}", app.qthumbs.len());
+    }
+    // 발신 시퀀서 잇기(S4 · 10-10) — 설정 로드 뒤 · 첫 발신 전.
     app.seq = boot_sequencer(
         app.settings.get("chat.seq_last").parse().unwrap_or(0),
         unix_now_ms(),
