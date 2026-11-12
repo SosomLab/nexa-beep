@@ -8119,8 +8119,20 @@ impl App {
                     Some(mid) => self.offer_file(mid, std::path::Path::new(path.trim())),
                     None => eprintln!("[script] sendfile: 메인 창 없음"),
                 },
+                // ★ 피어 정보 카드 열기(M3-20 후속 · 11-12 — 카드의 연결 상태 아이콘·라벨 캡처 자동화):
+                //   `open=peerinfo:<이름>`(activate와 같은 부분 일치) — 우클릭 ▸ 정보와 같은 open_peer_info.
+                //   캡처는 창 제목 조각으로(`capture=<png>@<WinPeerProfile 제목 일부>`).
+                Some(("open", what)) if what.starts_with("peerinfo:") => {
+                    let name = what["peerinfo:".len()..].trim();
+                    match self.script_find_peer(name) {
+                        Some(peer) => self.open_peer_info(peer, el),
+                        None => eprintln!("[script] open=peerinfo: 상대 없음 '{name}'"),
+                    }
+                }
                 Some(("open", what)) => {
-                    eprintln!("[script] open: 모르는 창 '{what}' (settings · log)")
+                    eprintln!(
+                        "[script] open: 모르는 창 '{what}' (settings · log · quarantine · peerinfo:<이름>)"
+                    )
                 }
                 // ★ 그룹 동사(11-04 · REPLY-1 ①·GINV 자동 실기): 상대 이름 = 표시 이름 부분 일치(activate와 같은 규칙).
                 //   group.create=<방 이름>:<이름1,이름2> · group.accept · group.send=<본문> · group.reply=<본문>(방의 마지막 열쇠 줄에).
