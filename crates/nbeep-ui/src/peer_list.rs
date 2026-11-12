@@ -576,6 +576,8 @@ pub struct PeerListWidget {
     /// 신뢰 아이콘 hover 툴팁(M3-14 — 등급명이 글자에서 아이콘이 되며 사라져 필수).
     /// (행 인덱스, 충돌 표식 위인가).
     trust_tip: Option<(usize, bool)>,
+    /// 연결점 hover 툴팁 대상 행(M3-20 잔여 — 11px 배지는 색·실루엣뿐이라 이름을 말해 준다).
+    link_tip: Option<usize>,
     /// `Connecting` 갭 링 회전 스텝(90°×4) — 캐럿 530ms 틱을 재사용한다(새 타이머 0).
     /// paint가 `&self`라 [`std::cell::Cell`](Cell)로 위상만 굴린다(레이아웃 불변).
     spin_step: std::cell::Cell<u8>,
@@ -628,7 +630,21 @@ impl PeerListWidget {
             spin_caret: std::cell::Cell::new(true),
             trust_tint: std::cell::RefCell::new(Vec::new()),
             trust_tip: None,
+            link_tip: None,
         }
+    }
+
+    /// 연결 상태 배지 자리(행 rect 기준 · **페인트·히트 공유** — 아바타 우하단에 겹친다).
+    fn link_dot_rect(&self, r: Rect) -> Rect {
+        let av_d = self.s(AVATAR_D);
+        let av = Rect::new(r.x + self.s(8), r.y + (self.row_h() - av_d) / 2, av_d, av_d);
+        let dot_d = self.s(11);
+        Rect::new(
+            av.right() - dot_d + self.s(2),
+            av.bottom() - dot_d + self.s(2),
+            dot_d,
+            dot_d,
+        )
     }
 
     /// 신뢰 아이콘 자리(행 rect 기준 · **페인트·히트 공유** — 어긋나면 툴팁이 빗나간다).
@@ -1598,6 +1614,17 @@ impl Widget for PeerListWidget {
                     self.trust_tip = tip;
                     inv.push(self.bounds); // 툴팁은 행 경계를 넘는다 — 전체 무효화
                 }
+                // 연결점 hover 툴팁(M3-20 잔여) — 배지보다 2px 넉넉히 히트(11px는 조준이 어렵다).
+                let ltip = over.filter(|&i| {
+                    self.peer_at(i).is_some() && {
+                        let d = self.link_dot_rect(self.row_rect(i));
+                        Rect::new(d.x - 2, d.y - 2, d.w + 4, d.h + 4).contains(p)
+                    }
+                });
+                if ltip != self.link_tip {
+                    self.link_tip = ltip;
+                    inv.push(self.bounds);
+                }
             }
             InputEvent::MouseUp { .. } => {
                 self.drag_from = None;
@@ -1763,13 +1790,8 @@ impl Widget for PeerListWidget {
                 ctx.stroke_ellipse(av, c, self.s(2).max(2) as f32);
             }
             // 세션 상태 배지 — 아바타 우하단에 겹쳐(메신저 관례 · M3-19 색+실루엣).
-            let dot_d = self.s(11);
-            let dot = Rect::new(
-                av.right() - dot_d + self.s(2),
-                av.bottom() - dot_d + self.s(2),
-                dot_d,
-                dot_d,
-            );
+            let dot = self.link_dot_rect(r);
+            let dot_d = dot.w;
             draw_link_badge(
                 ctx,
                 dot,
@@ -1913,44 +1935,55 @@ impl Widget for PeerListWidget {
             ctx.fill_rect(Rect::new(r.x, r.bottom() - 1, r.w, 1), theme.border);
         }
         ctx.select_font(FontSlot::PeerList, false);
-        // 신뢰 아이콘 툴팁(M3-14) — 등급명 + 한 줄 설명. 행들 위에 마지막으로 그린다.
-        if let Some((i, on_conflict)) = self.trust_tip {
-            if let Some(row) = self.peer_at(i) {
-                let r = self.row_rect(i);
-                let (tir, cir) = self.trust_icon_rects(r, row.conflict);
-                let anchor = if on_conflict { cir.unwrap_or(tir) } else { tir };
-                // 숨긴 표식(Pinned)은 대상이 아니다 — None이면 조용히 건너뛴다
-                // (paint는 계속돼야 한다 — 메뉴·HUD가 뒤에 그려진다).
-                let lt = if on_conflict {
+        // 툴팁 — 행들 위에 마지막으로 그린다. 신뢰 아이콘(M3-14 · 등급명 + 한 줄 설명)이 먼저,
+        // 아니면 연결점(M3-20 잔여 · 상태 라벨). 숨긴 표식(Pinned)은 대상이 아니다 — None이면
+        // 조용히 건너뛴다(paint는 계속돼야 한다 — 메뉴·HUD가 뒤에 그려진다).
+        let tip: Option<(Rect, String)> = self
+            .trust_tip
+            .and_then(|(i, on_conflict)| {
+                let row = self.peer_at(i)?;
+                let (tir, cir) = self.trust_icon_rects(self.row_rect(i), row.conflict);
+                if on_conflict {
                     Some((
-                        nbeep_core::t(nbeep_core::Msg::TrustConflict),
-                        nbeep_core::t(nbeep_core::Msg::TrustConflictTip),
+                        cir.unwrap_or(tir),
+                        format!(
+                            "{} — {}",
+                            nbeep_core::t(nbeep_core::Msg::TrustConflict),
+                            nbeep_core::t(nbeep_core::Msg::TrustConflictTip)
+                        ),
                     ))
                 } else {
-                    trust_icon(row.trust, row.blocked, row.own_device).map(|(_, l, t)| (l, t))
-                };
-                if let Some((label, tip)) = lt {
-                    ctx.select_font(FontSlot::Status, false);
-                    let text = format!("{label} — {tip}");
-                    let tw = ctx.text_width(&text);
-                    let th = ctx.text_height();
-                    let (bw, bh) = (tw + self.s(12), th + self.s(8));
-                    let bx = (anchor.x + anchor.w / 2 - bw / 2).clamp(
-                        self.bounds.x + 2,
-                        (self.bounds.right() - bw - 2).max(self.bounds.x + 2),
-                    );
-                    // 기본은 아이콘 위 — 첫 행처럼 위가 모자라면 아래로 뒤집는다.
-                    let mut by = anchor.y - bh - self.s(4);
-                    if by < self.bounds.y {
-                        by = anchor.bottom() + self.s(4);
-                    }
-                    let tb = Rect::new(bx, by, bw, bh);
-                    ctx.fill_round_rect(tb, self.s(4), theme.panel_bg_alt);
-                    ctx.stroke_round_rect(tb, self.s(4), theme.border, 1.0);
-                    ctx.text(tb.x + self.s(6), tb.y + self.s(4), tb, &text, theme.text);
-                    ctx.select_font(FontSlot::PeerList, false);
+                    trust_icon(row.trust, row.blocked, row.own_device)
+                        .map(|(_, l, t)| (tir, format!("{l} — {t}")))
                 }
+            })
+            .or_else(|| {
+                let i = self.link_tip?;
+                let row = self.peer_at(i)?;
+                Some((
+                    self.link_dot_rect(self.row_rect(i)),
+                    link_label(row.link).to_string(),
+                ))
+            });
+        if let Some((anchor, text)) = tip {
+            ctx.select_font(FontSlot::Status, false);
+            let tw = ctx.text_width(&text);
+            let th = ctx.text_height();
+            let (bw, bh) = (tw + self.s(12), th + self.s(8));
+            let bx = (anchor.x + anchor.w / 2 - bw / 2).clamp(
+                self.bounds.x + 2,
+                (self.bounds.right() - bw - 2).max(self.bounds.x + 2),
+            );
+            // 기본은 아이콘 위 — 첫 행처럼 위가 모자라면 아래로 뒤집는다.
+            let mut by = anchor.y - bh - self.s(4);
+            if by < self.bounds.y {
+                by = anchor.bottom() + self.s(4);
             }
+            let tb = Rect::new(bx, by, bw, bh);
+            ctx.fill_round_rect(tb, self.s(4), theme.panel_bg_alt);
+            ctx.stroke_round_rect(tb, self.s(4), theme.border, 1.0);
+            ctx.text(tb.x + self.s(6), tb.y + self.s(4), tb, &text, theme.text);
+            ctx.select_font(FontSlot::PeerList, false);
         }
         // 우클릭 메뉴(최상위 레이어).
         self.ctx_menu.paint(ctx, theme);
@@ -2652,5 +2685,30 @@ mod tests {
         assert_eq!(w.trust_tip, Some((0, false)), "아이콘 위 = 툴팁");
         w.on_event(&InputEvent::MouseMove { x: 5, y: tir.y }, &mut inv);
         assert_eq!(w.trust_tip, None, "아이콘 밖 = 소거");
+    }
+
+    /// 연결점 hover = 상태 라벨 툴팁 성립·이탈 소거(M3-20 잔여 — 페인트와 같은 기하).
+    #[test]
+    fn link_tooltip_arms_on_dot_hover() {
+        let (mut w, mut inv) = widget(&[(1, "a"), (2, "b")]);
+        let d = w.link_dot_rect(w.row_rect(1));
+        w.on_event(
+            &InputEvent::MouseMove {
+                x: d.x + d.w / 2,
+                y: d.y + d.h / 2,
+            },
+            &mut inv,
+        );
+        assert_eq!(w.link_tip, Some(1), "연결점 위 = 툴팁");
+        assert_eq!(w.trust_tip, None, "신뢰 툴팁과 겹치지 않는다");
+        let (tir, _) = w.trust_icon_rects(w.row_rect(1), false);
+        w.on_event(
+            &InputEvent::MouseMove {
+                x: tir.x - 40,
+                y: tir.y,
+            },
+            &mut inv,
+        );
+        assert_eq!(w.link_tip, None, "연결점 밖 = 소거");
     }
 }
