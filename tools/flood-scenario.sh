@@ -6,6 +6,11 @@
 #   ④ 반영 스로틀: 주입 6초 동안 감쇠 로그 줄 수 ≤ 6000ms/500ms(+여유) — 로그는 "반영을 통과시킨 관측"마다 1줄이라 줄 수가 곧 반영 횟수다.
 #   기대값 출처 = crates/nexa-beep/src/app.rs `DISC_FLOOD_PPS`(40) · `DISC_THROTTLE_MS`(500) · `disc_throttled`.
 #
+#   ★ 통과 횟수의 뜻: `disc_throttled`의 시각은 패킷 도착이 아니라 `poll_discovery`가 큐를 비우는 **처리 시각**이다 — 유휴 틱(≈1Hz)에 몰아
+#   비우면 한 번 비울 때 1건만 통과하므로 6초 ≈ 5~6회(500ms 기준 12회가 아니다 · 개발 세션 확인 11-12). 그래서 상한(500ms에 최대 1회)과
+#   하한 ≥ 3(생존 판정이 굶지 않는다)을 같이 본다.
+#
+#   ⚠⚠ **실제 LAN으로 나간다**(TTL 1) — `verify.sh` 기본·`--perf`에는 없고 `--flood`로만 돈다. 격리망·단독 링크에서만(남의 설치본 · 보안 장비 R-22).
 #   ⚠ 주입은 발견 멀티캐스트 그룹으로 나간다(TTL 1 · 6초 · 1,200장) — 같은 링크의 다른 Nexa Beep도 "fly" 광고를 그만큼 받는다
 #   (받는 쪽은 같은 감쇠로 흡수 · 차단 없음). 유니캐스트는 같은 PC의 47100 소켓 중 하나에만 닿아 대상 인스턴스를 고를 수 없다.
 #
@@ -69,6 +74,7 @@ chk_count "평시(주입 전): 감쇠 로그 0줄(오탐 없음)"              "
 chk       "주입 중: 감쇠 발동 로그(peer=${YS} · flood_pps=40)"    "$OUT/x.log"   "discovery .*peer=${YS}.*${THR}"
 n=$(cnt "$OUT/x.log" "$THR")
 if [ "$n" -le "$MAXL" ]; then printf '  ✓ 반영 스로틀: 감쇠 통과 %s회 ≤ %s(= %ss/500ms + 3)\n' "$n" "$MAXL" "$SECS"; ok=$((ok+1)); else printf '  ✗ 반영 스로틀: 감쇠 통과 %s회 > %s\n' "$n" "$MAXL"; bad=$((bad+1)); fi
+if [ "$n" -ge 3 ]; then printf '  ✓ 생존 판정 유지: 감쇠 통과 %s회 ≥ 3(굶지 않음)\n' "$n"; ok=$((ok+1)); else printf '  ✗ 생존 판정 굶음: 감쇠 통과 %s회 < 3\n' "$n"; bad=$((bad+1)); fi
 chk       "B 주입 뒤: Y 행 유지(감쇠 ≠ 소멸)"                    "$OUT/x-B.txt" "$PEER_Y"
 chk_count "B 주입 뒤: 차단 0건(감쇠 ≠ 차단)"                     "$OUT/x-B.txt" "^\[dump\] block " 0
 echo "결과: ✓ $ok · ✗ $bad   (로그 = $OUT/{x,y}.log · 주입 = $OUT/flood.txt · 구간 = $OUT/{pre,x-A,x-B}.txt)"

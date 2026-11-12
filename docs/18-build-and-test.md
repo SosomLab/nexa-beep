@@ -238,6 +238,7 @@ cargo build -p nexa-beep -p nbeep-imgdec                    # 아래 두 시험�
 ./tools/startup-bench.sh                                    # (11-04 PERF-4) 릴리스 기동 콜드/웜 5회 first_paint 중앙값 ≤500ms(NFR-B-11 · Win 실측 콜드 245 · 웜 56)
 #    ⚠ mac clippy는 rustup 툴체인으로(`PATH=$HOME/.cargo/bin` 선행 — Homebrew clippy는 워크스페이스 lint를 안 잡는다 · 11-02).
 #    ⚠ `cfg(target_os|unix|windows)` 코드를 만졌으면 그 타깃 clippy까지(`--target x86_64-unknown-linux-gnu` — mac은 Linux 전용 코드를 안 본다 · 11-03 `dae0e90`).
+#    (11-12) 격리망 또는 단독 링크일 때 `./tools/verify.sh --flood` 1회 — 발견 광고 감쇠(M5-3 2차 ⓑ) 8/8 · ⚠ 실제 LAN 멀티캐스트로 1,200장이 나가므로 공용 망에서는 돌리지 않는다.
 #    단계 체계(V0~V3) = [53 §5-7](53-collab-session-operation.md).
 #    릴리스 노트에 SEC-3 고정 줄 포함(11-08): "막지 못하는 것 — 같은 네트워크의 관찰자는 존재·연결 상대·전송 길이·타이밍을 볼 수 있다(내용은 못 본다) → 알려진 한계(docs/40)".
 #    어느 단계든 red면 고치고 다시 0-a부터. 결과 수치(green 수·ms·MB)는 journal에 적는다(협업 세션).

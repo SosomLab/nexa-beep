@@ -4,10 +4,11 @@
 #   → 임시 산출물 정리를 순서대로 돌리고 요약 표 한 장과 종료 코드(실패 ≥1 = 1)를 낸다. 창은 사용자 화면에 띄우지 않는다
 #   (NEXA_TEST_HEADLESS=1 · 구버전 상대만 예외 — 옵트인).
 #
-#   ./tools/verify.sh            # 기본: 빌드(debug+release) · smoke · reply · group · block · flood · s4 · tmp-clean   ≈ 7~10분
+#   ./tools/verify.sh            # 기본: 빌드(debug+release) · smoke · reply · group · block · s4 · tmp-clean   ≈ 7~10분
 #   ./tools/verify.sh --quick    # 빌드(debug) · smoke · reply · scan-plaintext · wire-scan       ≈ 2.5분
 #   ./tools/verify.sh --perf     # 기본 + perf-scenario(헤드리스 수치 — 51 §3 기준선과 비교하지 않는다) + startup-bench(PERF-4 콜드/웜 5회 중앙값) + scroll-bench(PERF-3 2000줄 휠 paint ms) + mem-bench(PERF-5 회수 4점 · 1GiB · ≈3분)
 #   ./tools/verify.sh --oldpeer  # 기본 + oldpeer-scenario(⚠ 구버전 창이 화면에 ≈45s · gh 필요)
+#   ./tools/verify.sh --flood   # 기본 + flood-scenario(⚠ 발견 광고 1,200장이 **실제 LAN 멀티캐스트**로 나간다 · TTL 1 — 격리망·단독 링크에서만 · 릴리스 전 1회)
 #   ./tools/verify.sh --no-build # 빌드 생략(이미 최신일 때)
 # 권한: `.claude/settings.json` allow에 `tools/` 경로 접두가 등재돼 있어야 세션이 묻지 않고 돌린다 — 등재는 사용자가
 #   `python tools/claude-permissions.py` 1회(세션은 자기 권한 파일을 못 고친다 · 새 스크립트는 그 RULES에도 등재).
@@ -15,23 +16,28 @@
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 export NEXA_TEST_HEADLESS=1 NEXA_NO_AUTOSTART=1
-QUICK=0; PERF=0; OLDPEER=0; BUILD=1
+QUICK=0; PERF=0; OLDPEER=0; FLOOD=0; BUILD=1
 for a in "$@"; do
   case "$a" in
     --quick) QUICK=1 ;;
     --perf) PERF=1 ;;
     --oldpeer) OLDPEER=1 ;;
+    --flood) FLOOD=1 ;;
     --no-build) BUILD=0 ;;
     *) echo "unknown arg: $a" >&2; exit 2 ;;
   esac
 done
 OUT="target/verify-$(date +%m%d-%H%M%S)"; mkdir -p "$OUT"
-pass=0; fail=0; rows=()
+pass=0; fail=0; skip=0; rows=()
 step() { # 이름 · 로그 · 명령…
   local name="$1" log="$2"; shift 2
   local t0=$SECONDS
   printf '\n\033[1m▶ %s\033[0m\n' "$name"
   if "$@" > "$OUT/$log" 2>&1; then
+    # 전제 부족으로 건너뛴 단계(스크립트가 `⚠ 건너뜀 — 사유` + 종료 0)는 통과로 세지 않는다(11-12).
+    if grep -q '^⚠ 건너뜀' "$OUT/$log"; then
+      printf '  – %s 건너뜀 — %s\n' "$name" "$(grep -m1 '^⚠ 건너뜀' "$OUT/$log")"; skip=$((skip + 1)); rows+=("– $name 건너뜀"); return 0
+    fi
     printf '  ✓ %s (%ss)\n' "$name" "$((SECONDS - t0))"; pass=$((pass + 1)); rows+=("✓ $name $((SECONDS - t0))s")
   else
     printf '  ✗ %s (%ss) — %s\n' "$name" "$((SECONDS - t0))" "$OUT/$log"; tail -8 "$OUT/$log" | sed 's/^/    /'
@@ -51,7 +57,11 @@ step "wire-scan" wire.log bash tools/wire-scan.sh "$OUT/wire"
 if [ "$QUICK" = 0 ]; then
   step "group-scenario" group.log bash tools/group-scenario.sh
   step "block-scenario" block.log bash tools/block-scenario.sh # M5-3 BL-5(11-05 · docs/38 — 차단·그림자·해제 복귀 · ≈80s)
-  step "flood-scenario" flood.log bash tools/flood-scenario.sh "$OUT/flood" # M5-3 2차 ⓑ(11-12 · docs/38 §5 — 발견 광고 200pps 주입 → 감쇠 로그·행 유지·차단 0 · ≈30s · python3 없으면 건너뜀)
+  # PRES-1(11-12 — 내 상태 오프라인 → 복귀 · 같은 PC 축 · ≈60s). ★ 등재 보류: glare 세션 교체 때 대기분 유실 결함(11-12 발견 · 5회 중 3회 재현)이
+  #   고쳐진 뒤 이 줄을 살린다(개발 세션 결정 — "알려진 빨강"을 기본 단계에 두지 않는다). 그때까지는 손으로: bash tools/presence-scenario.sh
+  # step "presence-scenario" presence.log bash tools/presence-scenario.sh "$OUT/presence"
+  # M5-3 2차 ⓑ(11-12 · docs/38 §5) — 발견 광고 200pps 주입 → 감쇠 로그·행 유지·차단 0 · ≈30s. ★ opt-in: 실제 LAN 멀티캐스트로 나가므로 기본·--perf에 넣지 않는다.
+  [ "$FLOOD" = 1 ] && step "flood-scenario" flood.log bash tools/flood-scenario.sh "$OUT/flood"
   step "s4-scenario" s4.log bash tools/s4-scenario.sh
   step "ack-bench" ack.log bash tools/ack-bench.sh "$OUT/ack"
   [ "$PERF" = 1 ] && step "perf-scenario" perf.log bash tools/perf-scenario.sh "$OUT/perf"
@@ -64,5 +74,5 @@ fi
 step "tmp-clean" tmp-clean.log bash tools/tmp-clean.sh
 echo; echo "═══ verify 요약 ($OUT) ═══"
 printf '  %s\n' "${rows[@]}"
-echo "verify: ${pass}통과 ${fail}실패"
+if [ "$skip" -gt 0 ]; then echo "verify: ${pass}통과 ${fail}실패 ${skip}건너뜀"; else echo "verify: ${pass}통과 ${fail}실패"; fi
 [ "$fail" = 0 ]
