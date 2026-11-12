@@ -57,9 +57,8 @@ step "wire-scan" wire.log bash tools/wire-scan.sh "$OUT/wire"
 if [ "$QUICK" = 0 ]; then
   step "group-scenario" group.log bash tools/group-scenario.sh
   step "block-scenario" block.log bash tools/block-scenario.sh # M5-3 BL-5(11-05 · docs/38 — 차단·그림자·해제 복귀 · ≈80s)
-  # PRES-1(11-12 — 내 상태 오프라인 → 복귀 · 같은 PC 축 · ≈60s). ★ 등재 보류: glare 세션 교체 때 대기분 유실 결함(11-12 발견 · 5회 중 3회 재현)이
-  #   고쳐진 뒤 이 줄을 살린다(개발 세션 결정 — "알려진 빨강"을 기본 단계에 두지 않는다). 그때까지는 손으로: bash tools/presence-scenario.sh
-  # step "presence-scenario" presence.log bash tools/presence-scenario.sh "$OUT/presence"
+  # PRES-1(11-12 — 내 상태 오프라인 → 복귀 · 같은 PC 축 · ≈60s). GLARE-1(`f62a834`) 수정 뒤 10회 16/16(glare 발생 3회 포함)을 보고 등재.
+  step "presence-scenario" presence.log bash tools/presence-scenario.sh "$OUT/presence"
   # M5-3 2차 ⓑ(11-12 · docs/38 §5) — 발견 광고 200pps 주입 → 감쇠 로그·행 유지·차단 0 · ≈30s. ★ opt-in: 실제 LAN 멀티캐스트로 나가므로 기본·--perf에 넣지 않는다.
   [ "$FLOOD" = 1 ] && step "flood-scenario" flood.log bash tools/flood-scenario.sh "$OUT/flood"
   step "s4-scenario" s4.log bash tools/s4-scenario.sh
