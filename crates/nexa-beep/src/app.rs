@@ -896,7 +896,15 @@ enum SessionCmd {
     /// (내부 · LAT-1) 쓰기 스레드의 송신 실패 — 읽기 루프가 `Closed`를 **한 번만** 내고 끝낸다
     /// (쓰기 스레드가 직접 내면 재수립된 새 대화를 늦은 `Closed`가 대피시킬 수 있다). 메인은 보내지 않는다.
     WriterFailed,
+    /// 은퇴(X-11 보완 · 11-12) — 이 세션은 glare로 **교체됐다**(또는 중복이라 쓰지 않는다): 송신·파일 펌프를 멈추고
+    /// [`RETIRE_DRAIN_MS`] 동안 **이미 온 프레임만 마저 읽어 전달**한 뒤 끝낸다(`Closed`는 내지 않는다).
+    /// 종전엔 채널이 떨어지는 즉시 액터가 끝나, 상대가 이 세션에 먼저 흘려보낸 대기분(M4-6)이 소켓에서 버려졌다.
+    Retire,
 }
+
+/// 은퇴 세션의 잔여 수신 시간(ms) — 상대의 성립 직후 flush(대기분·프로필 요청)가 도착하기에 충분하고,
+/// 양쪽이 같은 시간만 기다리므로 옛 액터 스레드가 오래 남지 않는다.
+const RETIRE_DRAIN_MS: u64 = 1_500;
 
 /// 연결 시도 래치(M2-8 중복 클릭 가드) — **넣은 키로 뺀다.**
 ///
@@ -1677,14 +1685,24 @@ fn spawn_session_actor(
         let mut pending_profile: Option<PendingProfile> = None;
         // ★ 루프를 IIFE로 감싼다(M4-10a) — 내부의 `return`(세션 종료 경로 전부)이
         //   클로저만 빠져나오고, 아래의 **부분 수신물 보존**이 반드시 돈다.
+        // 은퇴 마감(SessionCmd::Retire) — Some이면 송신·펌프 없이 수신만 돌다 마감에 끝낸다(Closed 미발신).
+        let mut retire_at: Option<std::time::Instant> = None;
         (|| {
             loop {
+                if retire_at.is_some_and(|at| std::time::Instant::now() >= at) {
+                    return; // 은퇴 수신 끝 — 조용히 종료(새 세션이 이 상대를 맡고 있다)
+                }
                 // 송신 먼저(즉시성) — 대기 중 발신 요청을 모두 흘려보낸다.
                 loop {
                     let cmd = match out_rx.try_recv() {
                         Ok(c) => c,
                         Err(std::sync::mpsc::TryRecvError::Empty) => break,
-                        Err(std::sync::mpsc::TryRecvError::Disconnected) => return, // 대화 닫힘
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                            if retire_at.is_some() {
+                                break; // 은퇴 중 — 채널이 떨어져도 마감까지 수신은 잇는다
+                            }
+                            return; // 대화 닫힘
+                        }
                     };
                     let sent = match cmd {
                         SessionCmd::Chat(bytes) => session.send(StreamId::Chat, &bytes),
@@ -1836,6 +1854,17 @@ fn spawn_session_actor(
                             )
                         }
                         SessionCmd::WriterFailed => Err(nbeep_core::SessionError::Closed),
+                        SessionCmd::Retire => {
+                            // 진행·보관 중 발신은 접는다(교체된 세션의 전송은 종전에도 여기서 끊겼다 — 재-Offer는 새 세션 몫).
+                            sending = None;
+                            parked.clear();
+                            outgoing.clear(); // 은퇴 중 도착한 상대 Accept가 이 세션에서 발신을 새로 열지 않게
+                            retire_at = Some(
+                                std::time::Instant::now()
+                                    + std::time::Duration::from_millis(RETIRE_DRAIN_MS),
+                            );
+                            Ok(())
+                        }
                         SessionCmd::Control(frames) => {
                             let mut r = Ok(());
                             for f in frames {
@@ -1858,7 +1887,9 @@ fn spawn_session_actor(
                         }
                     };
                     if sent.is_err() {
-                        let _ = proxy.send_event(AppEvent::Closed { peer, epoch });
+                        if retire_at.is_none() {
+                            let _ = proxy.send_event(AppEvent::Closed { peer, epoch });
+                        }
                         return;
                     }
                 }
@@ -2093,7 +2124,10 @@ fn spawn_session_actor(
                     Ok(v) => v,
                     Err(nbeep_core::SessionError::TimedOut) => continue, // 정상 — 송신 교대로
                     Err(_) => {
-                        let _ = proxy.send_event(AppEvent::Closed { peer, epoch });
+                        // 은퇴 중 EOF·오류 = 상대도 이 세션을 접었다 — 조용히 끝(Closed를 내면 의도된 교체가 끊김으로 보인다).
+                        if retire_at.is_none() {
+                            let _ = proxy.send_event(AppEvent::Closed { peer, epoch });
+                        }
                         return;
                     }
                 };
@@ -2511,7 +2545,9 @@ fn spawn_session_actor(
                         )
                         .is_err()
                         {
-                            let _ = proxy.send_event(AppEvent::Closed { peer, epoch });
+                            if retire_at.is_none() {
+                                let _ = proxy.send_event(AppEvent::Closed { peer, epoch });
+                            }
                             return;
                         }
                     }
@@ -13030,6 +13066,32 @@ impl App {
         }
     }
 
+    /// 쓰지 않기로 한 **중복 인바운드**를 읽기 전용으로 마저 비운다(X-11 보완 · 11-12). glare에서 내가 작은 쪽이면
+    /// 상대가 건 세션을 무시하는데, 상대는 (내 아웃바운드가 닿기 전) 그 세션을 설치하고 대기분을 이미 흘려보냈을 수
+    /// 있다 — 즉시 드롭하면 그 메시지가 사라진다. 은퇴 액터로 띄워 [`RETIRE_DRAIN_MS`] 동안 수신만 전달하고 끝낸다
+    /// (대화 표에 넣지 않는다 · 송신 채널 없음 · `Closed` 없음 — 기존 대화가 이 상대를 계속 맡는다).
+    fn drain_duplicate_inbound(
+        &mut self,
+        session: nbeep_crypto::NoiseSession<Box<dyn nbeep_core::Link>>,
+    ) {
+        let Ok(est) = nbeep_core::TrustedSession::wrap(session, &mut self.trust) else {
+            return; // 신뢰 저장소가 거절 — fail-closed(읽지도 않는다)
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        let _ = tx.send(SessionCmd::Retire);
+        self.conv_epoch = self.conv_epoch.wrapping_add(1);
+        let join = spawn_session_actor(
+            nbeep_core::MuxSession::new(est.session),
+            rx,
+            self.proxy.clone(),
+            self.send_rate,
+            self.identity.wrap_secret(),
+            cap_from_setting(self.settings.get("xfer.recv_max_mb")).unwrap_or(u64::MAX),
+            self.conv_epoch,
+        );
+        self.actor_joins.push(join);
+    }
+
     fn install_conversation(
         &mut self,
         session: LiveSession,
@@ -13039,6 +13101,12 @@ impl App {
         let peer = session.peer();
         let binding = session.handshake_binding();
         let (out_tx, out_rx) = std::sync::mpsc::channel();
+        // ★ 교체되는 옛 세션은 **은퇴**시킨다(X-11 보완 · 11-12): 상대가 그 세션에 이미 흘려보낸 프레임(성립 직후
+        //   flush한 오프라인 대기분 등)을 옛 액터가 마저 읽어 전달한 뒤 끝난다. 종전엔 아래에서 out_tx가 떨어지는 즉시
+        //   액터가 끝나 그 프레임이 버려졌다(발신측은 "보냄"으로 기록 — presence-scenario 5회 중 3회 재현).
+        if let Some(old) = self.conversations.get(&peer) {
+            let _ = old.out_tx.send(SessionCmd::Retire);
+        }
         // X-11(11-06): 세션 세대 — 교체(glare)된 옛 액터의 늦은 Closed를 걸러 내는 열쇠.
         self.conv_epoch = self.conv_epoch.wrapping_add(1);
         let epoch = self.conv_epoch;
@@ -25149,6 +25217,8 @@ impl ApplicationHandler<AppEvent> for App {
                         }
                         self.send_user_hello(peer);
                     }
+                    // 상대가 이 세션에 먼저 흘려보낸 것(대기분)은 읽어서 전달한다 — 세션 자체는 쓰지 않는다.
+                    self.drain_duplicate_inbound(session);
                     return;
                 }
                 // ★ 원격 인바운드 × 미등록 = 요청 대기(M5-3b · ADR-0006 §6 — FR-S-25).
