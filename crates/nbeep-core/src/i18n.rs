@@ -1111,6 +1111,11 @@ pub enum Msg {
     BioPlaceholder,
     /// 상대 프로필 카드 — 라벨·안내(08-17 i18n).
     CardLastSeen,
+    /// 세션 연결 상태 라벨(M3-20 후속 — 카드·툴팁의 아이콘 동반 글자).
+    LinkIdle,
+    LinkConnecting,
+    LinkActive,
+    LinkLost,
     CardLastChat,
     CardPrivate,
     CardNoRecord,
@@ -2598,6 +2603,10 @@ impl Msg {
             Msg::BioLabel => ["Bio", "소개글", "简介", "自己紹介"],
             Msg::BioPlaceholder => ["A short intro (multiple lines allowed)", "간단한 소개 (여러 줄 가능)", "简短介绍（可多行）", "短い自己紹介（複数行可）"],
             Msg::CardLastSeen => ["Last seen", "최근 접속", "最近上线", "最終接続"],
+            Msg::LinkIdle => ["Not connected", "연결 안 함", "未连接", "未接続"],
+            Msg::LinkConnecting => ["Connecting", "연결 중", "正在连接", "接続中"],
+            Msg::LinkActive => ["Connected", "연결됨", "已连接", "接続済み"],
+            Msg::LinkLost => ["Disconnected", "연결 끊김", "连接已断开", "切断"],
             Msg::CardLastChat => ["Last chat", "최근 대화", "最近对话", "最近の会話"],
             Msg::CardPrivate => ["(private)", "(비공개)", "(未公开)", "(非公開)"],
             Msg::CardUnverifiedNote => [

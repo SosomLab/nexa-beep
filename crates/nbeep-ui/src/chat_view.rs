@@ -1704,29 +1704,14 @@ impl ChatViewWidget {
 
     /// 상태별 알파 마스크를 상태색으로 틴트한 아이콘(캐시 — 상태·색 키).
     fn link_icon_tinted(&self, theme: &Theme) -> std::rc::Rc<crate::theme::IconImage> {
-        use crate::peer_list::{link_color, LinkState};
+        use crate::peer_list::{link_color, link_icon_image};
         let color = link_color(theme, self.link);
         if let Some((l, c, img)) = self.link_icon.borrow().as_ref() {
             if *l == self.link && *c == color.0 {
                 return std::rc::Rc::clone(img);
             }
         }
-        let alpha: &[u8] = match self.link {
-            LinkState::Idle => crate::icons::link::PLUG_ALPHA,
-            LinkState::Connecting => crate::icons::link::PLUG_ZAP_ALPHA,
-            LinkState::Active => crate::icons::link::CABLE_ALPHA,
-            LinkState::Lost => crate::icons::link::UNPLUG_ALPHA,
-        };
-        let (r, g, b) = color.rgb();
-        let mut rgba = Vec::with_capacity(alpha.len() * 4);
-        for &a in alpha {
-            rgba.extend_from_slice(&[r, g, b, a]);
-        }
-        let img = std::rc::Rc::new(crate::theme::IconImage::from_rgba(
-            crate::icons::link::SIZE,
-            crate::icons::link::SIZE,
-            rgba,
-        ));
+        let img = std::rc::Rc::new(link_icon_image(theme, self.link));
         *self.link_icon.borrow_mut() = Some((self.link, color.0, std::rc::Rc::clone(&img)));
         img
     }

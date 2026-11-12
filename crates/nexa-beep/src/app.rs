@@ -7763,15 +7763,7 @@ impl App {
                 let border = self.peer_profiles.get(&entry.peer).and_then(|p| p.border);
                 let trust = self.trust.level(entry.peer);
                 // 세션 상태 점(사용자 요청): 대화 중=Active · 끊김 기록=Lost · 그 외=Idle.
-                let link = if self.conversations.contains_key(&entry.peer) {
-                    LinkState::Active
-                } else if self.connecting.contains(entry.peer) {
-                    LinkState::Connecting // 워커가 connect+Noise 진행 중(M2-8)
-                } else if self.closed_peers.contains(&entry.peer) {
-                    LinkState::Lost
-                } else {
-                    LinkState::Idle
-                };
+                let link = self.peer_link_state(entry.peer);
                 // 진행 중 전송이 있으면 이름 아래 막대로 보인다(슬라이스 4에서 채운다).
                 // ★ 그룹발(M5-1h · 실기 08-24 4차)은 **그룹 행 몫** — 개별 행에서는
                 //   숨긴다(그룹 수신 진행이 상대 행 막대로 보이던 것).
@@ -13196,8 +13188,8 @@ impl App {
     }
 
     /// 대화 뷰 생성(스레드 복원 — 상태-뷰 분리).
-    /// 이 상대의 세션 연결 상태(M3-20 — 헤더 아이콘의 단일 산출점).
-    /// 우선순위 = 살아 있는 세션 > 연결 시도 중 > 끊김 관측 > 유휴.
+    /// 이 상대의 세션 연결 상태(M3-20 — 헤더 아이콘·목록 행 점·그룹 구성원·피어 카드의 **단일 산출점**).
+    /// 우선순위 = 살아 있는 세션 > 연결 시도 중(워커 connect+Noise · M2-8) > 끊김 관측 > 유휴.
     fn peer_link_state(&self, peer: PeerId) -> nbeep_ui::LinkState {
         if self.conversations.contains_key(&peer) {
             nbeep_ui::LinkState::Active
@@ -13226,6 +13218,9 @@ impl App {
             chat.set_peer_face(avatar, peer.as_bytes().to_vec(), border, &mut inv); // 헤더 아바타
             self.redraw_conversation(peer);
         }
+        // 열린 피어 카드의 연결 줄도 같은 합류점에서(M3-20 후속) — 카드는 **그 기기** 기준 · 값이 바뀔 때만 재생성
+        //   (프로필·아바타 수신도 이 함수를 부른다 → 불필요한 재생성·버튼 상태 초기화를 피한다).
+        self.refresh_peer_info_link(peer);
     }
 
     /// 열린 대화 뷰·별도 창 제목을 현재 표시 이름으로(08-22 사용자 보고 — 목록은
@@ -15250,14 +15245,10 @@ impl App {
             .iter()
             .map(|m| {
                 // 목록 행과 같은 4상태 판정(refresh_rows와 동일 기준).
-                let link = if *m == me || self.conversations.contains_key(m) {
-                    LinkState::Active
-                } else if self.connecting.contains(*m) {
-                    LinkState::Connecting
-                } else if self.closed_peers.contains(m) {
-                    LinkState::Lost
+                let link = if *m == me {
+                    LinkState::Active // 나 자신 = 항상 연결(세션 없음)
                 } else {
-                    LinkState::Idle
+                    self.peer_link_state(*m)
                 };
                 // 통일 표기(08-17 사용자 확정): `표시 이름 — 지문 · 설명(나·소유자)`.
                 let name = if *m == me {
@@ -15503,6 +15494,7 @@ impl App {
                         .get(old)
                         .is_some_and(|n| self.trust.user_of(peer).is_some_and(|(p, _, _)| p == *n))
                 }),
+            link: self.peer_link_state(peer),
         }
     }
 
@@ -15547,6 +15539,25 @@ impl App {
         self.peer_info_view = Some(nbeep_ui::PeerInfoWidget::new(self.build_peer_info(peer)));
         self.layout_window(wid);
         self.request_redraw(wid);
+    }
+
+    /// 열린 피어 카드의 연결 줄 갱신(M3-20 후속) — 카드가 보여 주는 기기의 상태가 **달라졌을 때만** 재생성.
+    /// 인자 `_peer`는 합류점이 넘긴 상대(대표·기기 어느 쪽이든)라 판정에 쓰지 않고, 열린 카드의 기기로 다시 산출한다.
+    fn refresh_peer_info_link(&mut self, _peer: PeerId) {
+        let Some(card_peer) = self.windows.values().find_map(|e| match e.role {
+            Role::PeerInfo(p) => Some(p),
+            _ => None,
+        }) else {
+            return;
+        };
+        let now = self.peer_link_state(card_peer);
+        if self
+            .peer_info_view
+            .as_ref()
+            .is_some_and(|v| v.link() != now)
+        {
+            self.refresh_peer_info_card(card_peer);
+        }
     }
 
     /// 대화창 명령 실행 결과 — 보낼 것이 남았는가.

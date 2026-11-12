@@ -348,6 +348,36 @@ pub fn link_color(theme: &Theme, link: LinkState) -> Color {
     }
 }
 
+/// 세션 상태 아이콘(M3-20 · 14 §12-7 큰 자리 전용 — 대화 헤더·피어 카드) — 플러그 가족 알파 마스크(96px)를
+/// 상태색([`link_color`])으로 틴트한다. 호출자가 (상태·색) 키로 캐시한다(매 프레임 만들지 않는다).
+#[must_use]
+pub fn link_icon_image(theme: &Theme, link: LinkState) -> crate::theme::IconImage {
+    let alpha: &[u8] = match link {
+        LinkState::Idle => crate::icons::link::PLUG_ALPHA,
+        LinkState::Connecting => crate::icons::link::PLUG_ZAP_ALPHA,
+        LinkState::Active => crate::icons::link::CABLE_ALPHA,
+        LinkState::Lost => crate::icons::link::UNPLUG_ALPHA,
+    };
+    let (r, g, b) = link_color(theme, link).rgb();
+    let mut rgba = Vec::with_capacity(alpha.len() * 4);
+    for &a in alpha {
+        rgba.extend_from_slice(&[r, g, b, a]);
+    }
+    crate::theme::IconImage::from_rgba(crate::icons::link::SIZE, crate::icons::link::SIZE, rgba)
+}
+
+/// 세션 상태 라벨(M3-20 후속) — `plug-zap`·`unplug` 실루엣이 닮아 아이콘 옆에 **항상 동반**한다(14 §12-7).
+#[must_use]
+pub fn link_label(link: LinkState) -> &'static str {
+    use nbeep_core::{t, Msg};
+    match link {
+        LinkState::Idle => t(Msg::LinkIdle),
+        LinkState::Connecting => t(Msg::LinkConnecting),
+        LinkState::Active => t(Msg::LinkActive),
+        LinkState::Lost => t(Msg::LinkLost),
+    }
+}
+
 /// 세션 상태 배지(M3-19 · [14 §12]) — **색 + 실루엣 2중 부호화**. 적록 색각·저대비에서
 /// 색이 무너져도 모양이 남는다: `Idle`=빈 링 · `Connecting`=갭 링(90°·회전) ·
 /// `Active`=꽉 찬 원 · `Lost`=가로 막대. 기하는 지름 `D` **비율 고정**(구멍 0.53D ·

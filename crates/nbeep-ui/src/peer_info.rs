@@ -76,6 +76,8 @@ pub struct PeerInfo {
     pub user_conflict: bool,
     /// 이 사용자의 키 후계가 충돌함(정직한 충돌 · D-32-9 — 자동 승자 없음).
     pub succession_conflict: bool,
+    /// 세션 연결 상태(M3-20 후속) — 카드 좌상단 아이콘 + 라벨. 호스트의 단일 산출점 값.
+    pub link: crate::peer_list::LinkState,
 }
 
 /// 상대 프로필 카드 위젯.
@@ -93,6 +95,8 @@ pub struct PeerInfoWidget {
     unverify: crate::controls::Button,
     /// 인증 취소 요청(1회성 — 호스트가 `unverify(peer)` + 영속 + 배지 강등).
     unverify_req: bool,
+    /// 연결 아이콘 틴트 캐시(색 키 — 상태는 위젯 수명 동안 불변 · 테마 전환만 무효화).
+    link_icon: core::cell::RefCell<Option<(u32, std::rc::Rc<crate::theme::IconImage>)>>,
 }
 
 impl PeerInfoWidget {
@@ -114,7 +118,14 @@ impl PeerInfoWidget {
                 .with_tone(crate::controls::ButtonTone::Danger)
                 .with_font(crate::draw::FontSlot::Status),
             unverify_req: false,
+            link_icon: core::cell::RefCell::new(None),
         }
+    }
+
+    /// 카드가 지금 보여 주는 연결 상태(호스트가 "달라졌을 때만 재생성"을 판정).
+    #[must_use]
+    pub fn link(&self) -> crate::peer_list::LinkState {
+        self.info.link
     }
 
     /// 대조 완료 요청(1회성) — 호스트가 `verify(peer)` + 영속 + 배지 갱신을 맡는다.
@@ -217,6 +228,36 @@ impl Widget for PeerInfoWidget {
             let c =
                 crate::theme::Color((u32::from(br) << 16) | (u32::from(bg) << 8) | u32::from(bb));
             ctx.stroke_ellipse(av, c, self.s(3).max(3) as f32);
+        }
+        // 연결 상태(M3-20 후속 · 14 §12-7 큰 자리) — 좌상단 빈 모서리에 20px 아이콘 + 라벨(상태색).
+        //   세로 흐름 밖이라 고정 높이 카드의 아래 줄·버튼 슬롯을 밀지 않는다. 라벨 동반 = 실루엣이 닮은
+        //   `plug-zap`·`unplug`를 글자로 가른다.
+        {
+            use crate::peer_list::{link_color, link_icon_image, link_label};
+            let color = link_color(theme, self.info.link);
+            let cached = self
+                .link_icon
+                .borrow()
+                .as_ref()
+                .filter(|(c, _)| *c == color.0)
+                .map(|(_, img)| std::rc::Rc::clone(img));
+            let img = cached.unwrap_or_else(|| {
+                let img = std::rc::Rc::new(link_icon_image(theme, self.info.link));
+                *self.link_icon.borrow_mut() = Some((color.0, std::rc::Rc::clone(&img)));
+                img
+            });
+            let d = self.s(20);
+            let ic = Rect::new(b.x + self.s(14), b.y + self.s(14), d, d);
+            ctx.image_scaled(ic, &img, b);
+            ctx.select_font(FontSlot::Status, false);
+            let th = ctx.text_height();
+            ctx.text(
+                ic.right() + self.s(6),
+                ic.y + (d - th) / 2,
+                b,
+                link_label(self.info.link),
+                color,
+            );
         }
         use nbeep_core::{t, Msg};
         // 큰 이름(굵게 · 중앙) = 표시 이름(프로필名 우선·없으면 발견名 · 08-17
