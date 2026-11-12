@@ -5,6 +5,10 @@
 
 ---
 
+## 2026-11-12
+
+- **(Linux · main) 착수 후보 조사 + 낡은 표기 정리**(협업 세션) — choco 0.9.0 설치본·포터블 Approved(11-09) · winget #474807 MERGED · X-13/M3-4/M3-17/LOG-2 "남김" = 이미 닫힘 반영 · M5-4g·M5-4c·PERF-9·R-18 ⓐ 닫음 · 결정 없이 가능한 잔여 = 개발 3(RL-9 잔여·M3-20 후속·R-12) / 협업 3(Linux 미실행 점검·M5-3 ⓑ 시나리오·PRES-1 자동 축) → [journal](journal/2026-11-12.md)
+
 ## 2026-11-08
 
 - ★**(Linux · main) M5-6 문서 마감 ✅** docs/40 알려진 한계 v0.10.1 · SEC-3 고정 줄 · docs/45·위키 본문 v0.10.1 · docs/42 "담지 않는다" 정정 · CI 42491951122(`8b1c0bd`) 7 job success · 위키 `bcbf6c3` · 잔여 = M5-6a 캡처 → [journal](journal/2026-11-08.md)
