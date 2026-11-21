@@ -15089,6 +15089,13 @@ impl App {
             return;
         }
         self.last_notify.insert(key.to_string(), now);
+        // ★ 헤드리스(자동 시험)는 OS 알림을 내지 않는다(11-21) — 창은 숨겨도 알림 배너·소리·주의 요청은 사용자
+        //   화면으로 나갔다("테스트는 사용자 화면에 띄우지 않는다" 규칙의 빈틈 · mac osascript · Linux는 Xvfb
+        //   아래서도 사용자 세션의 D-Bus 데몬으로 간다). 판정은 위 `notify_log`에 이미 남아 dump로 본다.
+        //   알림 자체를 시험할 때만 `NEXA_HEADLESS_NOTIFY=1`.
+        if headless() && std::env::var_os("NEXA_HEADLESS_NOTIFY").is_none() {
+            return;
+        }
         // 클릭 왕복(08-15 — 알림 클릭 = 해당 대화): 토큰(=키)을 OS에 실어 보내고
         // 되돌아오면 이 맵으로만 해석한다(OS에는 불투명 — 봉투 원리).
         self.notify_targets.insert(key.to_string(), target);
