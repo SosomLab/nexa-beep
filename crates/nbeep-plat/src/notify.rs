@@ -208,14 +208,30 @@ mod imp {
         if !n.silent {
             script.push_str(" sound name \"default\"");
         }
-        std::process::Command::new("osascript")
+        // ★ 기다리지 않는다(11-21) — 호출자는 메인(UI) 스레드다. 종전 `.status()`는 osascript가 끝날 때까지
+        //   이벤트 루프를 세웠다(알림 1건마다 수백 ms — 비번들 실행의 입력·수신·ack가 그동안 멎는다 · mac
+        //   헤드리스 5-인스턴스 시나리오에서 스크립트 단계가 0.4~0.9s씩 밀린 것으로 드러남). 스폰만 하고 회수는
+        //   분리 스레드가 맡는다(좀비 방지 · 알림마다 짧게 살다 끝난다). 반환값 = 스폰 성공(표시 여부는 알 수
+        //   없다 — 폴백 경로의 한계 · 번들 경로 UN 센터도 완료를 기다리지 않는다).
+        match std::process::Command::new("osascript")
             .arg("-e")
             .arg(&script)
+            .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
+            .spawn()
+        {
+            Ok(mut child) => {
+                // 스레드 생성 실패(드묾)는 회수 없이 둔다 — 자식은 스스로 끝나고 앱 종료 때 정리된다.
+                let _ = std::thread::Builder::new()
+                    .name("notify-reap".into())
+                    .spawn(move || {
+                        let _ = child.wait();
+                    });
+                true
+            }
+            Err(_) => false,
+        }
     }
 }
 
