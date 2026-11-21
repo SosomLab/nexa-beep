@@ -108,7 +108,8 @@ pub fn write_fresh(path: &Path, domain: &[u8], key: &[u8; 32], plain: &[u8]) -> 
     out.extend_from_slice(&MAGIC);
     out.push(VER);
     out.extend_from_slice(&frame(domain, key, plain)?);
-    crate::privfile::write_atomic(path, &out)
+    // 기록은 자주 쓴다 — macOS에서 F_FULLFSYNC(≈20ms) 대신 fsync(`privfile::sync_fast` · 11-22).
+    crate::privfile::write_atomic_fast(path, &out)
 }
 
 /// 프레임 추가 — 파일 끝에 봉인 프레임 하나를 붙이고 `sync_all`. 파일이 없거나 v2가 아니면 [`write_fresh`]로 간다.
@@ -125,7 +126,7 @@ pub fn append(path: &Path, domain: &[u8], key: &[u8; 32], plain: &[u8]) -> io::R
     let fr = frame(domain, key, plain)?;
     let mut f = std::fs::OpenOptions::new().append(true).open(path)?;
     f.write_all(&fr)?;
-    f.sync_all()
+    crate::privfile::sync_fast(&f)
 }
 
 /// 꼬리 잘라내기(깨진 부분 프레임 제거) — 길이가 이미 같으면 아무 일도 없다.
@@ -133,7 +134,7 @@ pub fn truncate_to(path: &Path, len: usize) -> io::Result<()> {
     let f = std::fs::OpenOptions::new().write(true).open(path)?;
     if f.metadata()?.len() != len as u64 {
         f.set_len(len as u64)?;
-        f.sync_all()?;
+        crate::privfile::sync_fast(&f)?;
     }
     Ok(())
 }

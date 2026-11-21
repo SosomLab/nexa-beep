@@ -10,6 +10,7 @@
 //! 시각은 그대로 보인다. `identity.key`(keyfile — 이미 0600)와 같은 수준으로 맞춘다.
 //!
 //! - [`write_atomic`] — 0600 temp(Unix) → `sync_all` → 덮어쓰기 rename → 실패 시 temp 제거.
+//! - [`write_atomic_fast`] · [`sync_fast`] — 자주 쓰는 파일(대화 기록)용: macOS에서 `F_FULLFSYNC` 대신 `fsync`.
 //! - [`tighten`] — 이미 있는 파일의 그룹/타인 비트를 걷어낸다(부팅 1회 · no-op이 기본).
 //!
 //! Windows는 사용자 프로필 ACL이 같은 역할이라 모드 개념이 없다(no-op).
@@ -24,6 +25,54 @@ use std::path::Path;
 /// # Errors
 /// 디렉터리 생성·temp 열기·쓰기·동기화·rename 실패 시 `io::Error`.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    write_atomic_with(path, bytes, fs::File::sync_all)
+}
+
+/// [`write_atomic`]과 같되 동기화가 [`sync_fast`] — **자주 쓰는 파일**(대화 기록)용.
+///
+/// # Errors
+/// [`write_atomic`]과 같다.
+pub fn write_atomic_fast(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    write_atomic_with(path, bytes, sync_fast)
+}
+
+/// 자주 쓰는 파일의 동기화(11-22) — macOS는 `fsync(2)`, 그 밖은 `sync_all`.
+///
+/// 배경: Rust의 `sync_all`은 macOS에서 `fcntl(F_FULLFSYNC)`(드라이브 캐시까지 비움)라 한 번에 ≈20ms가 든다
+/// (11-21 실측 · 같은 기기 `fsync` 0.2~0.3ms). 대화 기록은 메시지가 오갈 때마다(디바운스 300ms~1.5s) **메인
+/// 스레드**에서 저장되므로 그만큼 화면·입력이 멎는다. `fsync`는 데이터를 드라이브까지 넘기되 드라이브 자체
+/// 캐시의 비움은 기다리지 않는다 — 앱·OS가 죽는 경우는 그대로 안전하고(APFS는 crash-consistent · 원자적
+/// rename은 옛 파일 아니면 새 파일), **갑작스러운 전원 차단** 때만 마지막 저장분(직전 ≤1.5s의 대화 줄)이 옛
+/// 내용으로 남을 수 있다(SQLite의 macOS 기본과 같은 선택). 신원 키·핀·그룹 명부처럼 드물게 쓰고 잃으면 안
+/// 되는 파일은 `F_FULLFSYNC`를 쓰는 [`write_atomic`]을 그대로 쓴다.
+///
+/// # Errors
+/// 동기화 시스템 콜 실패 시 `io::Error`.
+pub fn sync_fast(f: &fs::File) -> io::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::fd::AsRawFd as _;
+        extern "C" {
+            fn fsync(fd: std::ffi::c_int) -> std::ffi::c_int;
+        }
+        // SAFETY: `f`가 살아 있는 동안 fd는 유효한 열린 파일이다 · fsync는 fd만 읽는다.
+        if unsafe { fsync(f.as_raw_fd()) } == 0 {
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        f.sync_all()
+    }
+}
+
+fn write_atomic_with(
+    path: &Path,
+    bytes: &[u8],
+    sync: fn(&fs::File) -> io::Result<()>,
+) -> io::Result<()> {
     if let Some(dir) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
         fs::create_dir_all(dir)?;
     }
@@ -38,7 +87,7 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
         }
         let mut f = opts.open(&tmp)?;
         f.write_all(bytes)?;
-        f.sync_all()
+        sync(&f)
     })();
     if let Err(e) = write {
         let _ = fs::remove_file(&tmp);
