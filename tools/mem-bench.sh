@@ -34,7 +34,7 @@ mem_mb() { # 폴더 이름
     #   ⚠ 이 PC는 인스턴스 이름이 전부 "nexa-beep"(접미 #1 없음)이라 이름으로는 못 가른다 → 'ID Process'와 'Working Set - Private'를
     #   **한 호출**로 받아 같은 순서(인스턴스별 1:1)의 색인으로 PID에 맞춘다(11-04 실측).
     msys* | cygwin*) powershell.exe -NoProfile -Command "\$p = Get-Process nexa-beep -ErrorAction SilentlyContinue | Where-Object { \$_.Path -like '*\\$1\\*' } | Select-Object -First 1; if (\$p) { \$cs = (Get-Counter -Counter @('\Process(nexa-beep*)\ID Process', '\Process(nexa-beep*)\Working Set - Private') -ErrorAction SilentlyContinue).CounterSamples; \$ids = @(\$cs | Where-Object { \$_.Path -like '*ID Process' }); \$wss = @(\$cs | Where-Object { \$_.Path -like '*Working Set - Private' }); \$v = \$null; for (\$i = 0; \$i -lt \$ids.Count; \$i++) { if ([int]\$ids[\$i].CookedValue -eq \$p.Id -and \$i -lt \$wss.Count) { \$v = \$wss[\$i].CookedValue } }; if (\$v -ne \$null) { [math]::Round(\$v/1MB, 2) } else { [math]::Round(\$p.PrivateMemorySize64/1MB, 2) } } else { '-' }" | tr -d '\r' ;;
-    darwin*) p=$(pgrep -f "$M/$1/nexa-beep" | head -1); [ -n "$p" ] && footprint "$p" 2>/dev/null | awk '/phys_footprint/{gsub(/[^0-9.]/,"",$NF); print $NF; exit}' || echo "-" ;;
+    darwin*) p=$(pgrep -f "$M/$1/nexa-beep" | head -1); [ -n "$p" ] && footprint "$p" 2>/dev/null | awk '/phys_footprint:/{v=$(NF-1); u=$NF; m=(u=="KB")?v/1024:(u=="GB")?v*1024:(u=="B")?v/1048576:v; printf "%.2f\n", m; exit}' || echo "-" ;; # 11-21 mac: 출력 = "phys_footprint: 43 MB"(값·단위 분리) — 종전 $NF 파싱은 빈 값 → 거짓 PASS
     *) p=$(pgrep -f "$M/$1/nexa-beep" | head -1); [ -n "$p" ] && awk '/RssAnon/{printf "%.2f\n", $2/1024}' "/proc/$p/status" || echo "-" ;;
   esac
 }
@@ -75,7 +75,7 @@ for who in X Y; do
   col=$([ "$who" = X ] && echo 3 || echo 4)
   b=$(sed -n 1p "$OUT/samples.txt" | awk -F'|' -v c="$col" '{print $c}'); e=$(sed -n 7p "$OUT/samples.txt" | awk -F'|' -v c="$col" '{print $c}')
   m5=$(sed -n 5p "$OUT/samples.txt" | awk -F'|' -v c="$col" '{print $c}')
-  if [ "$b" = "-" ] || [ "$e" = "-" ]; then echo "  ✗ $who: 샘플 없음"; ok=0; continue; fi
+  if [ -z "$b" ] || [ -z "$e" ] || [ "$b" = "-" ] || [ "$e" = "-" ]; then echo "  ✗ $who: 샘플 없음"; ok=0; continue; fi # 빈 값도 실패(11-21 mac 거짓 PASS)
   # 기울기는 ① 기준선 아래 샘플을 기준선으로 올려 계산한다(11-07) — Windows가 유휴 중 Working Set을 걷어냈다가
   # 다시 들이면(0.95 → 3.43MB 실측) "기준 아래에서 회복"이 증가처럼 세졌다. 누수 판정 의도(④−① · 기준 위로의 증가)는 그대로.
   d=$(awk -v a="$b" -v z="$e" 'BEGIN{printf "%.2f", z-a}'); sl=$(awk -v a="$m5" -v z="$e" -v b="$b" 'BEGIN{if(a<b)a=b; if(z<b)z=b; printf "%.2f", z-a}')
