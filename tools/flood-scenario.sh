@@ -34,7 +34,7 @@ PY=""; for c in python3 python; do command -v "$c" >/dev/null 2>&1 && "$c" -c 'i
 seed() { # 폴더 · 표시 이름
   rm -rf "$M/$1"; mkdir -p "$M/$1/data"
   cp -f "$BINDIR/nexa-beep$EXE" "$BINDIR/nbeep-imgdec$EXE" "$M/$1/"
-  printf '_schema=1\nprofile.display_name=%s\nchat.window_mode=single\napp.autostart=off\n' "$2" > "$M/$1/data/settings.cfg"
+  printf '_schema=1\nprofile.display_name=%s\nchat.window_mode=single\napp.autostart=off\nui.language=ko\n' "$2" > "$M/$1/data/settings.cfg"
 }
 run() { # 폴더 · 스크립트 · 로그 — X는 발견 층 판정 로그를 stderr로(NEXA_DEVLOG=disc = decide+detail)
   ( cd "$M/$1" && NEXA_DEVLOG=disc NEXA_SCRIPT="$2" "./nexa-beep$EXE" --window --live 2> "$3" >/dev/null ) &

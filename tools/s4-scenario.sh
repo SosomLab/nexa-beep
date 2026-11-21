@@ -30,7 +30,7 @@ PASS="s4pass-aaaa-bbbb"
 seed() { # 폴더 · 표시 이름 · 핸들
   rm -rf "$M/$1"; mkdir -p "$M/$1/data"
   cp -f "target/release/nexa-beep$EXE" "target/release/nbeep-imgdec$EXE" "$M/$1/"
-  printf '_schema=1\nprofile.display_name=%s\nuser.enabled=on\nuser.handle=%s\nuser.passphrase=%s\nuser.verified=on\nchat.window_mode=single\napp.autostart=off\n' \
+  printf '_schema=1\nprofile.display_name=%s\nuser.enabled=on\nuser.handle=%s\nuser.passphrase=%s\nuser.verified=on\nchat.window_mode=single\napp.autostart=off\nui.language=ko\n' \
     "$2" "$3" "$PASS" > "$M/$1/data/settings.cfg"
 }
 run() { # 폴더 · 스크립트 · 로그

@@ -26,7 +26,7 @@ EXE=""; case "${OSTYPE:-}" in msys* | cygwin*) EXE=".exe" ;; esac
 seed() { # 폴더 · 표시 이름 · [추가 설정 줄]
   rm -rf "$M/$1"; mkdir -p "$M/$1/data"
   cp -f "$BINDIR/nexa-beep$EXE" "$BINDIR/nbeep-imgdec$EXE" "$M/$1/"
-  printf '_schema=1\nprofile.display_name=%s\nchat.window_mode=single\napp.autostart=off\n%s' "$2" "${3:-}" > "$M/$1/data/settings.cfg"
+  printf '_schema=1\nprofile.display_name=%s\nchat.window_mode=single\napp.autostart=off\nui.language=ko\n%s' "$2" "${3:-}" > "$M/$1/data/settings.cfg"
 }
 run() { # 폴더 · 스크립트 · 로그
   ( cd "$M/$1" && NEXA_USER_TRACE=1 NEXA_SCRIPT="$2" "./nexa-beep$EXE" --window --live 2> "$3" >/dev/null ) &
