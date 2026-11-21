@@ -17908,7 +17908,7 @@ impl App {
                     let dir = self.data_dir.join("logs");
                     let t = nbeep_plat::clock::local_time(unix_now());
                     let f = dir.join(format!("beep-{:04}{:02}{:02}.log", t.y, t.mo, t.d));
-                    let target = if f.is_file() { f } else { dir.clone() };
+                    let target = if f.is_file() { f } else { dir };
                     if target.exists() && nbeep_plat::launch::open_path(&target) {
                         self.set_status(nbeep_core::t(nbeep_core::Msg::LogView).to_string());
                     } else {
