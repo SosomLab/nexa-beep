@@ -6,7 +6,7 @@
 #
 #   ./tools/verify.sh            # 기본: 빌드(debug+release) · smoke · reply · group · block · s4 · tmp-clean   ≈ 7~10분
 #   ./tools/verify.sh --quick    # 빌드(debug) · smoke · reply · scan-plaintext · wire-scan       ≈ 2.5분
-#   ./tools/verify.sh --perf     # 기본 + perf-scenario(헤드리스 수치 — 51 §3 기준선과 비교하지 않는다) + startup-bench(PERF-4 콜드/웜 5회 중앙값) + scroll-bench(PERF-3 2000줄 휠 paint ms) + mem-bench(PERF-5 회수 4점 · 1GiB · ≈3분)
+#   ./tools/verify.sh --perf     # 기본 + perf-scenario(헤드리스 수치 — 51 §3 기준선과 비교하지 않는다) + startup-bench(PERF-4 콜드/웜 5회 중앙값) + scroll-bench(PERF-3 2000줄 휠 paint ms) + mem-bench(PERF-5 회수 · 2회 순환 · ④b−④a ≤ 2MB · Debug 64MiB/릴리스 256MiB · ≈6분)
 #   ./tools/verify.sh --oldpeer  # 기본 + oldpeer-scenario(⚠ 구버전 창이 화면에 ≈45s · gh 필요)
 #   ./tools/verify.sh --flood   # 기본 + flood-scenario(⚠ 발견 광고 1,200장이 **실제 LAN 멀티캐스트**로 나간다 · TTL 1 — 격리망·단독 링크에서만 · 릴리스 전 1회)
 #   ./tools/verify.sh --no-build # 빌드 생략(이미 최신일 때)
@@ -59,6 +59,8 @@ if [ "$QUICK" = 0 ]; then
   step "block-scenario" block.log bash tools/block-scenario.sh # M5-3 BL-5(11-05 · docs/38 — 차단·그림자·해제 복귀 · ≈80s)
   # PRES-1(11-12 — 내 상태 오프라인 → 복귀 · 같은 PC 축 · ≈60s). GLARE-1(`f62a834`) 수정 뒤 10회 16/16(glare 발생 3회 포함)을 보고 등재.
   step "presence-scenario" presence.log bash tools/presence-scenario.sh "$OUT/presence"
+  # 수동 주소 추가 경로 단독(11-21 · c0db154 · TODO MAN-B — 둘 다 광고 off · lsof로 Y 포트 · add= → 세션·한 줄 도달 · ≈45s · mac 3회 연속 ✓ 뒤 등재)
+  step "manual-scenario" manual.log bash tools/manual-scenario.sh "$OUT/manual"
   # M5-3 2차 ⓑ(11-12 · docs/38 §5) — 발견 광고 200pps 주입 → 감쇠 로그·행 유지·차단 0 · ≈30s. ★ opt-in: 실제 LAN 멀티캐스트로 나가므로 기본·--perf에 넣지 않는다.
   [ "$FLOOD" = 1 ] && step "flood-scenario" flood.log bash tools/flood-scenario.sh "$OUT/flood"
   step "s4-scenario" s4.log bash tools/s4-scenario.sh
