@@ -65,6 +65,23 @@ impl TcpLink {
         self.recv_timeout = Some(timeout); // recv 복원 원천과 동기(RL-12)
         self.stream.set_read_timeout(Some(timeout))
     }
+
+    /// 프레임의 나머지(헤더 잔여 + 본문)를 블로킹으로 읽는다 — `have` = 이미 읽은 헤더 바이트 수(1~4).
+    /// 호출자([`Link::recv`])가 타임아웃을 풀고 부른 뒤 복원한다.
+    fn recv_rest(&mut self, len4: &mut [u8; 4], have: usize) -> Result<Vec<u8>, LinkError> {
+        self.stream
+            .read_exact(&mut len4[have..])
+            .map_err(|_| LinkError::Closed)?;
+        let len = u32::from_be_bytes(*len4) as usize;
+        if len > MAX_FRAME {
+            return Err(LinkError::Closed);
+        }
+        let mut buf = vec![0u8; len];
+        self.stream
+            .read_exact(&mut buf)
+            .map_err(|_| LinkError::Closed)?;
+        Ok(buf)
+    }
 }
 
 impl Link for TcpLink {
@@ -94,32 +111,38 @@ impl Link for TcpLink {
     }
 
     fn recv(&mut self) -> Result<Vec<u8>, LinkError> {
+        // ★ 헤더 4바이트도 찢기지 않게 읽는다(11-21). 종전엔 `read_exact(&mut len4)`를 호출자 타임아웃(전송 중
+        //   1ms) 아래서 불러, 헤더가 **일부만** 도착한 채 타임아웃이 나면 이미 읽은 1~3바이트가 버려졌다 →
+        //   다음 recv가 프레임 중간을 길이로 읽어 스트림 동기가 깨진다(대개 `len > MAX_FRAME` = Closed · 아니면
+        //   복호 실패 = 세션 종료). TCP 세그먼트 경계는 헤더 안에도 떨어지고(32KiB 청크 흐름에서 프레임당
+        //   ≈0.2%) 손실·재전송이 있는 망은 세그먼트 사이가 1ms를 쉽게 넘는다 — 큰 파일 전송 중 까닭 없는
+        //   끊김의 후보. 처방 = **첫 바이트까지만** 타임아웃("지금은 없음" 판정)을 적용하고, 한 바이트라도
+        //   읽었으면 본문과 같은 블로킹으로 헤더 나머지를 마저 읽는다.
         let mut len4 = [0u8; 4];
-        if let Err(e) = self.stream.read_exact(&mut len4) {
-            return Err(match e.kind() {
-                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut => {
-                    LinkError::TimedOut
+        let first = loop {
+            match self.stream.read(&mut len4) {
+                Ok(0) => return Err(LinkError::Closed), // EOF
+                Ok(n) => break n,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(e) => {
+                    return Err(match e.kind() {
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut => {
+                            LinkError::TimedOut
+                        }
+                        _ => LinkError::Closed,
+                    });
                 }
-                _ => LinkError::Closed,
-            });
-        }
-        let len = u32::from_be_bytes(len4) as usize;
-        if len > MAX_FRAME {
-            return Err(LinkError::Closed);
-        }
-        let mut buf = vec![0u8; len];
-        // 길이를 읽은 뒤의 본문은 끝까지 읽는다(타임아웃이 프레임을 찢지 않게 블로킹 복원).
+            }
+        };
+        // 여기부터는 프레임 안이다 — 끝까지 읽는다(타임아웃이 프레임을 찢지 않게 블로킹 복원).
         self.stream
             .set_read_timeout(None)
             .map_err(|_| LinkError::Closed)?;
-        let r = self
-            .stream
-            .read_exact(&mut buf)
-            .map_err(|_| LinkError::Closed);
+        let r = self.recv_rest(&mut len4, first);
         // 호출자가 건 타임아웃으로 복원(RL-12) — 고정 200ms로 되걸면 액터의
         // 1ms 페이싱 설정이 첫 프레임 수신 즉시 무효화된다(영구 200ms 고착).
         let _ = self.stream.set_read_timeout(self.recv_timeout);
-        r?;
+        let buf = r?;
         crate::netmon::on_sess_rx(4 + buf.len() as u64); // 계측은 횟수·바이트만(netmon)
         Ok(buf)
     }
@@ -229,6 +252,45 @@ mod tests {
         }
         assert_eq!(got.as_deref(), Some(&b"via tx handle"[..]));
         t.join().unwrap();
+    }
+
+    #[test]
+    fn split_header_survives_poll_timeout() {
+        // 헤더 4바이트가 두 조각으로 오고 그 사이가 폴 타임아웃(1ms)보다 길다 — 종전 코드는 앞 2바이트를
+        // 버려 다음 recv가 어긋난 길이를 읽었다(11-21).
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let payload: Vec<u8> = (0..300u32).map(|i| (i % 251) as u8).collect();
+        let sent = payload.clone();
+        let writer = std::thread::spawn(move || {
+            let mut raw = TcpStream::connect(addr).unwrap();
+            raw.set_nodelay(true).unwrap();
+            let hdr = u32::try_from(sent.len()).unwrap().to_be_bytes();
+            for _ in 0..3 {
+                raw.write_all(&hdr[..2]).unwrap();
+                std::thread::sleep(Duration::from_millis(40));
+                raw.write_all(&hdr[2..]).unwrap();
+                raw.write_all(&sent).unwrap();
+            }
+            std::thread::sleep(Duration::from_millis(100)); // 수신이 끝날 때까지 소켓 유지
+        });
+        let (stream, _) = listener.accept().unwrap();
+        let mut rx = TcpLink::new(stream).unwrap();
+        rx.set_poll_mode(Duration::from_millis(1)).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let mut got = 0;
+        while got < 3 {
+            assert!(std::time::Instant::now() < deadline, "5초 안에 3프레임");
+            match rx.recv() {
+                Ok(frame) => {
+                    assert_eq!(frame, payload, "프레임 {got} 온전");
+                    got += 1;
+                }
+                Err(LinkError::TimedOut) => {}
+                Err(e) => panic!("찢긴 헤더로 스트림이 깨졌다: {e:?}"),
+            }
+        }
+        writer.join().unwrap();
     }
 
     #[test]
