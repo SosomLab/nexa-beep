@@ -1,15 +1,18 @@
-#!/usr/bin/env bash
-# headless.sh — 앱 자체 헤드리스 백엔드(NEXA_HEADLESS=1 · 11-02 · nexa-sql D-436 이식) — 3-OS 공통 · xvfb.sh 끝에서 포함된다.
-#   NEXA_TEST_HEADLESS=1 이면 NEXA_HEADLESS=1을 내보낸다 = 창이 화면에 전혀 뜨지 않고(OS 창 0) 포커스·입력·클립보드와 분리.
-#   헤드리스에서는 OS가 창을 못 보므로(xwininfo · EnumWindows · CGWindowList = 0) 창 수 판정 = NEXA_SCRIPT `windows.dump=<파일>`
-#   (첫 줄 wins=N · 줄마다 제목\t가로x세로\tvisible|hidden) · 캡처 = `capture=<png>`(메인) · `capture=<png>@<창 제목 일부>`(보조 창).
-#   기본 = 꺼짐(종전 = Linux Xvfb · Windows/mac 실제 화면). 사용자 실기 인스턴스 스크립트는 이 파일을 포함하지 않는다.
-if [ "${NEXA_TEST_HEADLESS:-0}" != 0 ]; then
-  export NEXA_HEADLESS=1
-  [ -n "${NEXA_HEADLESS_LIB_SAID:-}" ] ||
-  echo "[headless] NEXA_HEADLESS=1 — windows stay hidden; window count = windows.dump · capture = capture:<png>[@<title>]" >&2
-  export NEXA_HEADLESS_LIB_SAID=1
-fi
-hl_on() { [ "${NEXA_HEADLESS:-0}" != 0 ]; }
-# windows.dump 파일의 wins=N 값.
-hl_wins_read() { grep -o 'wins=[0-9]*' "$1" 2>/dev/null | head -1 | cut -d= -f2; }
+nb_warm() { local e; for e in "$@"; do [ -x "$e" ] && "$e" --version </dev/null >/dev/null 2>&1; done; true; } # 여러 개 · imgdec도(첫 실행 0.70s 실측) · stdin 막음(imgdec는 stdin을 읽는다)#!/usr/bin/env bash
+nb_warm() { local e; for e in "$@"; do [ -x "$e" ] && "$e" --version </dev/null >/dev/null 2>&1; done; true; } # 여러 개 · imgdec도(첫 실행 0.70s 실측) · stdin 막음(imgdec는 stdin을 읽는다)# headless.sh — 앱 자체 헤드리스 백엔드(NEXA_HEADLESS=1 · 11-02 · nexa-sql D-436 이식) — 3-OS 공통 · xvfb.sh 끝에서 포함된다.
+nb_warm() { local e; for e in "$@"; do [ -x "$e" ] && "$e" --version </dev/null >/dev/null 2>&1; done; true; } # 여러 개 · imgdec도(첫 실행 0.70s 실측) · stdin 막음(imgdec는 stdin을 읽는다)#   NEXA_TEST_HEADLESS=1 이면 NEXA_HEADLESS=1을 내보낸다 = 창이 화면에 전혀 뜨지 않고(OS 창 0) 포커스·입력·클립보드와 분리.
+nb_warm() { local e; for e in "$@"; do [ -x "$e" ] && "$e" --version </dev/null >/dev/null 2>&1; done; true; } # 여러 개 · imgdec도(첫 실행 0.70s 실측) · stdin 막음(imgdec는 stdin을 읽는다)#   헤드리스에서는 OS가 창을 못 보므로(xwininfo · EnumWindows · CGWindowList = 0) 창 수 판정 = NEXA_SCRIPT `windows.dump=<파일>`
+nb_warm() { local e; for e in "$@"; do [ -x "$e" ] && "$e" --version </dev/null >/dev/null 2>&1; done; true; } # 여러 개 · imgdec도(첫 실행 0.70s 실측) · stdin 막음(imgdec는 stdin을 읽는다)#   (첫 줄 wins=N · 줄마다 제목\t가로x세로\tvisible|hidden) · 캡처 = `capture=<png>`(메인) · `capture=<png>@<창 제목 일부>`(보조 창).
+nb_warm() { local e; for e in "$@"; do [ -x "$e" ] && "$e" --version </dev/null >/dev/null 2>&1; done; true; } # 여러 개 · imgdec도(첫 실행 0.70s 실측) · stdin 막음(imgdec는 stdin을 읽는다)#   기본 = 꺼짐(종전 = Linux Xvfb · Windows/mac 실제 화면). 사용자 실기 인스턴스 스크립트는 이 파일을 포함하지 않는다.
+nb_warm() { local e; for e in "$@"; do [ -x "$e" ] && "$e" --version </dev/null >/dev/null 2>&1; done; true; } # 여러 개 · imgdec도(첫 실행 0.70s 실측) · stdin 막음(imgdec는 stdin을 읽는다)if [ "${NEXA_TEST_HEADLESS:-0}" != 0 ]; then
+nb_warm() { local e; for e in "$@"; do [ -x "$e" ] && "$e" --version </dev/null >/dev/null 2>&1; done; true; } # 여러 개 · imgdec도(첫 실행 0.70s 실측) · stdin 막음(imgdec는 stdin을 읽는다)  export NEXA_HEADLESS=1
+nb_warm() { local e; for e in "$@"; do [ -x "$e" ] && "$e" --version </dev/null >/dev/null 2>&1; done; true; } # 여러 개 · imgdec도(첫 실행 0.70s 실측) · stdin 막음(imgdec는 stdin을 읽는다)  [ -n "${NEXA_HEADLESS_LIB_SAID:-}" ] ||
+nb_warm() { local e; for e in "$@"; do [ -x "$e" ] && "$e" --version </dev/null >/dev/null 2>&1; done; true; } # 여러 개 · imgdec도(첫 실행 0.70s 실측) · stdin 막음(imgdec는 stdin을 읽는다)  echo "[headless] NEXA_HEADLESS=1 — windows stay hidden; window count = windows.dump · capture = capture:<png>[@<title>]" >&2
+nb_warm() { local e; for e in "$@"; do [ -x "$e" ] && "$e" --version </dev/null >/dev/null 2>&1; done; true; } # 여러 개 · imgdec도(첫 실행 0.70s 실측) · stdin 막음(imgdec는 stdin을 읽는다)  export NEXA_HEADLESS_LIB_SAID=1
+nb_warm() { local e; for e in "$@"; do [ -x "$e" ] && "$e" --version </dev/null >/dev/null 2>&1; done; true; } # 여러 개 · imgdec도(첫 실행 0.70s 실측) · stdin 막음(imgdec는 stdin을 읽는다)fi
+nb_warm() { local e; for e in "$@"; do [ -x "$e" ] && "$e" --version </dev/null >/dev/null 2>&1; done; true; } # 여러 개 · imgdec도(첫 실행 0.70s 실측) · stdin 막음(imgdec는 stdin을 읽는다)hl_on() { [ "${NEXA_HEADLESS:-0}" != 0 ]; }
+nb_warm() { local e; for e in "$@"; do [ -x "$e" ] && "$e" --version </dev/null >/dev/null 2>&1; done; true; } # 여러 개 · imgdec도(첫 실행 0.70s 실측) · stdin 막음(imgdec는 stdin을 읽는다)# windows.dump 파일의 wins=N 값.
+nb_warm() { local e; for e in "$@"; do [ -x "$e" ] && "$e" --version </dev/null >/dev/null 2>&1; done; true; } # 여러 개 · imgdec도(첫 실행 0.70s 실측) · stdin 막음(imgdec는 stdin을 읽는다)hl_wins_read() { grep -o 'wins=[0-9]*' "$1" 2>/dev/null | head -1 | cut -d= -f2; }
+nb_warm() { local e; for e in "$@"; do [ -x "$e" ] && "$e" --version </dev/null >/dev/null 2>&1; done; true; } # 여러 개 · imgdec도(첫 실행 0.70s 실측) · stdin 막음(imgdec는 stdin을 읽는다)# 예열(11-21 mac 실측) — 새로 복사한 실행 파일의 첫 exec는 macOS 검사로 0.8~1.1s 걸리고(2회차 0.01s) 인스턴스마다 직렬로 쌓여
+nb_warm() { local e; for e in "$@"; do [ -x "$e" ] && "$e" --version </dev/null >/dev/null 2>&1; done; true; } # 여러 개 · imgdec도(첫 실행 0.70s 실측) · stdin 막음(imgdec는 stdin을 읽는다)#   "동시 시작" 시각표를 인스턴스당 ≈1.1s씩 밀었다(group-scenario V 거절 판정 실패). seed 직후 한 번 띄워 그 비용을 시각표 밖으로 뺀다.
+nb_warm() { local e; for e in "$@"; do [ -x "$e" ] && "$e" --version </dev/null >/dev/null 2>&1; done; true; } # 여러 개 · imgdec도(첫 실행 0.70s 실측) · stdin 막음(imgdec는 stdin을 읽는다)|| true; }

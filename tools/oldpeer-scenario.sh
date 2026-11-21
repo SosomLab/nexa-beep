@@ -40,7 +40,8 @@ echo "▶ 구버전 = $("$OLD/nexa-beep$EXE" --version 2>/dev/null | head -1) ·
 
 seed() { # 폴더 · 표시 이름 · 바이너리 폴더
   rm -rf "$M/$1"; mkdir -p "$M/$1/data"
-  cp -f "$3/nexa-beep$EXE" "$M/$1/"; [ -f "$3/nbeep-imgdec$EXE" ] && cp -f "$3/nbeep-imgdec$EXE" "$M/$1/"
+  cp -f "$3/nexa-beep$EXE" "$M/$1/"; "$M/$1/nexa-beep$EXE" --version >/dev/null 2>&1 || true; # 예열(lib/headless.sh nb_warm과 같음 · 11-21)
+  [ -f "$3/nbeep-imgdec$EXE" ] && cp -f "$3/nbeep-imgdec$EXE" "$M/$1/"
   printf '_schema=1\nprofile.display_name=%s\nchat.window_mode=single\napp.autostart=off\nui.language=ko\nlog.dev_mode=on\nlog.dev_layers=chat\n' "$2" > "$M/$1/data/settings.cfg"
 }
 run() { # 폴더 · 스크립트 · 로그 · 헤드리스(1/0)

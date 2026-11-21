@@ -22,7 +22,7 @@ EXE=""; case "${OSTYPE:-}" in msys* | cygwin*) EXE=".exe" ;; esac
 [ -x "$BINDIR/nexa-beep$EXE" ] || { echo "❌ $BINDIR/nexa-beep 없음 — cargo build -p nexa-beep -p nbeep-imgdec"; exit 1; }
 
 seed() { # 폴더 · 이름 · [추가 설정]
-  rm -rf "$M/$1"; mkdir -p "$M/$1/data"; cp -f "$BINDIR/nexa-beep$EXE" "$BINDIR/nbeep-imgdec$EXE" "$M/$1/"
+  rm -rf "$M/$1"; mkdir -p "$M/$1/data"; cp -f "$BINDIR/nexa-beep$EXE" "$BINDIR/nbeep-imgdec$EXE" "$M/$1/"; nb_warm "$M/$1/nexa-beep$EXE" "$M/$1/nbeep-imgdec$EXE"
   printf '_schema=1\nprofile.display_name=%s\nchat.window_mode=single\napp.autostart=off\nui.language=ko\n%s' "$2" "${3:-}" > "$M/$1/data/settings.cfg"; }
 # ★ 절대 경로로 띄운다(11-12 Linux 실측) — `./nexa-beep`로 띄우면 명령줄에 신원 폴더가 없어 mem_mb의 `pgrep -f "$M/<폴더>/nexa-beep"`가
 #   못 찾고 전 샘플 "-" → "샘플 없음" FAIL(perf-scenario는 6055fd5에서 PID 직접으로 고친 같은 함정). 작업 폴더는 그대로 신원 폴더.
