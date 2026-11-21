@@ -64,6 +64,23 @@ nbeep-relay = { path = "crates/nbeep-relay" }
 nbeep-relay-proto = { path = "crates/nbeep-relay-proto" }
 sha2 = "0.10" # SHA-256(FR-X-6) — snow가 이미 끄는 의존(트리 증가 0)
 
+# Debug에서도 암호·해시 크레이트만 최적화(11-21) — opt-level 0의 ChaCha20-Poly1305·SHA-256이 청크당 16~30ms를
+# 먹어 같은 PC 루프백 전송이 1~2MB/s에 묶였다(mem-bench 256MiB가 200s 안에 끝나지 않아 ② 구간을 전송 도중에
+# 쟀다 · OBS-1112 ①). 우리 크레이트는 그대로 opt 0(디버깅·빌드 시간 유지) — 의존 크레이트는 한 번 빌드되면
+# 캐시된다. 릴리스 프로파일·산출물에는 영향 없음.
+[profile.dev.package]
+aead = { opt-level = 3 }
+blake2 = { opt-level = 3 }
+chacha20 = { opt-level = 3 }
+chacha20poly1305 = { opt-level = 3 }
+cipher = { opt-level = 3 }
+curve25519-dalek = { opt-level = 3 }
+digest = { opt-level = 3 }
+poly1305 = { opt-level = 3 }
+sha2 = { opt-level = 3 }
+snow = { opt-level = 3 }
+universal-hash = { opt-level = 3 }
+
 # 릴리스 = 예산 게이트(단일 실행 파일 ≤10MB — docs/05 NFR-B-3, docs/18).
 [profile.release]
 opt-level = "z"        # 크기 우선(SP-1에서 z vs 3 실측 비교 예정)
