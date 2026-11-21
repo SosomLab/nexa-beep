@@ -1166,6 +1166,25 @@ fn offline_row_kept(has_thread: bool, has_manual: bool, user_kept: bool) -> bool
     has_thread || has_manual || user_kept
 }
 
+/// 오프라인 행의 이름을 `name`으로 붙든다 — 행이 없으면 넣고, **자리표시(지문 기본 이름)면 덮는다**.
+/// 실제 이름이 이미 있으면 그대로 둔다.
+///
+/// 자리표시를 덮어야 하는 이유(11-21 mac presence-scenario 2/2 재현): 세션이 발견보다 먼저 성립하면 세션
+/// 수립 쪽이 행을 지문 기본 이름으로 먼저 시드한다. 그 뒤 발견이 닿아 이름이 보이다가 상대가 이탈하면,
+/// `or_insert`는 이미 있는 자리표시를 덮지 않아 방금까지 보이던 발견 이름을 버렸다(Linux는 발견이 먼저라
+/// 드러나지 않았다 · 복원 쪽 `name_hint`와 같은 규칙).
+fn hold_row_name(
+    rows: &mut HashMap<PeerId, nbeep_core::DisplayName>,
+    peer: PeerId,
+    name: nbeep_core::DisplayName,
+) {
+    let placeholder = nbeep_core::default_display_name(None, &peer);
+    let row = rows.entry(peer).or_insert_with(|| placeholder.clone());
+    if *row == placeholder {
+        *row = name;
+    }
+}
+
 impl ConnectLatch {
     /// 시도 시작 — 이미 진행 중이면 `false`(중복 클릭 가드).
     fn begin(&mut self, peer: PeerId) -> bool {
@@ -7151,7 +7170,7 @@ impl App {
             for e in self.table.list() {
                 self.table.forget(e.peer);
                 if self.keeps_offline_row(e.peer) {
-                    self.extra_peers.entry(e.peer).or_insert(e.name);
+                    hold_row_name(&mut self.extra_peers, e.peer, e.name);
                 }
             }
             // ③ 세션 종료 — Closed 경로가 스레드 대피·정리를 맡는다(채널 drop = 액터 종료).
@@ -7700,7 +7719,7 @@ impl App {
                     .and_then(|pr| pr.name.clone())
                     .or(last)
                     .unwrap_or_else(|| nbeep_core::default_display_name(None, &p));
-                self.extra_peers.entry(p).or_insert(name);
+                hold_row_name(&mut self.extra_peers, p, name);
             }
         }
         if changed {
@@ -28504,6 +28523,27 @@ mod tests {
 
     /// 09-03 실기 → ★11-05 개정(사용자: "대화한 적 없는 상대는 온라인일 때만 · 기록이 있으면 유지") — 이력·수동 주소·사용자가
     /// 붙든 것(고정·내 기기)만 오프라인 행으로 남고, **핀만 있는 상대는 사라진다**(시험 인스턴스 핀 누적 방지). 핀 자체는 보존.
+    #[test]
+    fn hold_row_name_overwrites_placeholder_only() {
+        use nbeep_core::{default_display_name, DisplayName, PeerId};
+        use std::collections::HashMap;
+        let p = PeerId::from_bytes([7; 32]);
+        let seen = DisplayName::parse("prx").unwrap();
+        // 행 없음 → 넣는다.
+        let mut rows = HashMap::new();
+        super::hold_row_name(&mut rows, p, seen.clone());
+        assert_eq!(rows.get(&p), Some(&seen));
+        // 세션이 먼저 시드한 자리표시 → 발견 이름으로 덮는다(11-21 mac 회귀).
+        let mut rows = HashMap::new();
+        rows.insert(p, default_display_name(None, &p));
+        super::hold_row_name(&mut rows, p, seen.clone());
+        assert_eq!(rows.get(&p), Some(&seen), "자리표시는 덮는다");
+        // 실제 이름이 있으면 그대로.
+        let other = DisplayName::parse("other").unwrap();
+        super::hold_row_name(&mut rows, p, other);
+        assert_eq!(rows.get(&p), Some(&seen), "실제 이름은 지킨다");
+    }
+
     #[test]
     fn offline_row_kept_by_history_manual_or_user_only() {
         assert!(super::offline_row_kept(true, false, false), "대화 이력");
