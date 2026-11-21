@@ -8210,7 +8210,7 @@ impl App {
     }
 
     /// 자동화 테스트 seam(10-09 · `NEXA_SCRIPT`) — 형식 `"<ms>:<action>[=<arg>];…"` · action = `activate=<표시 이름 부분>`
-    /// (대화 열기 = 더블클릭/Enter와 같은 `activate` 경로) · `settings`(⌘/Ctrl+,) · `devices` · `license` · `about` · `presence=<online|offline>` · `quit`. 결과는 `NEXA_WIN_TRACE`와 함께
+    /// (대화 열기 = 더블클릭/Enter와 같은 `activate` 경로) · `settings`(⌘/Ctrl+,) · `devices` · `license` · `about` · `presence=<online|offline>` · `add=<주소[:포트]|64자리 지문>`(수동 엔드포인트 추가) · `quit`. 결과는 `NEXA_WIN_TRACE`와 함께
     /// stderr로 본다(docs/26 §3-8).
     fn script_tick(&mut self, el: &ActiveEventLoop) {
         if self.script.is_empty() {
@@ -8676,6 +8676,25 @@ impl App {
                 // 같은 `apply_settings` 경로를 탄다.
                 Some(("presence", v)) if v == "online" || v == "offline" => {
                     self.apply_settings(vec![("app.presence", v.to_string())]);
+                }
+                // 수동 엔드포인트 추가(11-21) — "주소 추가" 모달 제출과 같은 경로(정규화 → `commit_manual_add`).
+                // 64자리 지문은 모달처럼 그대로 넘긴다(서버 랑데부).
+                Some(("add", v)) => {
+                    let v = v.trim();
+                    let addr = if nbeep_relay::parse_peer_hex(v).is_some() {
+                        Some(v.to_ascii_lowercase())
+                    } else {
+                        // 기본 포트 = 모달과 같은 규칙(내 수신 포트 · 0이면 표준 기본).
+                        let port = match session_port_from(&self.settings) {
+                            0 => nbeep_ui::addr_prompt::DEFAULT_PORT,
+                            p => p,
+                        };
+                        nbeep_core::endpoint::normalize_endpoint(v, port)
+                    };
+                    match addr {
+                        Some(a) => self.commit_manual_add(a, el),
+                        None => eprintln!("[script] add: 주소 형식 아님 — {v}"),
+                    }
                 }
                 None if step == "settings" => self.open_settings(el),
                 None if step == "devices" => self.open_devices(el),
@@ -12721,7 +12740,9 @@ impl App {
                 let r = transport
                     .connect(peer)
                     .map_err(|e| format!("{e:?}"))
-                    .and_then(|link| {
+                    .and_then(|mut link| {
+                        // 핸드셰이크 수신 타임아웃 — `start_connect`와 같은 값·같은 이유(아래 수동 주소 경로 주석).
+                        let _ = link.set_recv_timeout(Some(OUTBOUND_HANDSHAKE_TIMEOUT));
                         let path = link
                             .remote_ip()
                             .map_or(nbeep_core::PathClass::Local, nbeep_core::class_of_ip);
@@ -12761,7 +12782,12 @@ impl App {
             let r = transport
                 .add_endpoint(&addr)
                 .map_err(|e| format!("{e:?}"))
-                .and_then(|link| {
+                .and_then(|mut link| {
+                    // ★ 핸드셰이크 수신 타임아웃(11-21) — `af23bbb`는 `start_connect`(재연결·클릭)만 덮었고 **첫 수동
+                    //   추가**는 빠져 있었다: TCP만 받고 Noise 응답을 주지 않는 주소(멈춘 프로세스 · 같은 포트의 다른
+                    //   프로그램 · 오타로 닿은 남의 서비스)면 이 워커 스레드와 소켓이 영영 남고 사용자에게는 "연결 중"
+                    //   뒤로 아무 소식이 없었다. 성립 뒤에는 세션 액터가 자기 폴링 타임아웃으로 덮는다.
+                    let _ = link.set_recv_timeout(Some(OUTBOUND_HANDSHAKE_TIMEOUT));
                     // 수동 등록 = 원격일 확률이 높은 경로 — 등급은 실주소가 정한다(M5-3c).
                     let path = link
                         .remote_ip()
@@ -25084,6 +25110,10 @@ impl ApplicationHandler<AppEvent> for App {
             }
             AppEvent::AddFailed { addr, why } => {
                 // 수동 주소 연결 실패(워커에서 복귀 · M2-8 잔여) — 주소로 알린다(피어 미확정).
+                // 로그에는 주소를 적지 않는다(봉투만 — 사용자가 친 주소는 상태줄에만 · 로그는 실패 사유만).
+                dlog!(self, DL::Conn, DV::Decide, "manual_add_failed", |r| r
+                    .arg("why", &why)
+                    .fail("no session — not remembered"));
                 self.set_status(nbeep_core::tf(
                     nbeep_core::Msg::StfManualConnFail,
                     &[&addr, &why],
