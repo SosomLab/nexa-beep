@@ -275,8 +275,11 @@ curl -s -A Mozilla/5.0 https://community.chocolatey.org/packages/nexa-beep | sed
 #      수동 재제출 절차:
 #        gh variable set CHOCO_PUSH -b true
 #        gh workflow run publish-windows-packages.yml -f tag=<걸려 있는 버전 태그>
-#        gh workflow run publish-beepd-packages.yml   -f tag=beepd-v<버전>   # beepd
 #        gh variable set CHOCO_PUSH -b false          # 끝나면 원복
+#      beepd는 스위치 이름이 다르다(11-21 정정 — `publish-beepd-packages.yml:111` = `vars.BEEPD_CHOCO_PUSH` · winget = `:156` `BEEPD_WINGET_PUBLISH`):
+#        gh variable set BEEPD_CHOCO_PUSH -b true
+#        gh workflow run publish-beepd-packages.yml   -f tag=beepd-v<버전>
+#        gh variable set BEEPD_CHOCO_PUSH -b false    # 끝나면 원복
 #      ※ beepd 워크플로는 winget job도 함께 도니, #422579가 열려 있는 동안은
 #        `BEEPD_WINGET_PUBLISH=false`로 잠시 내려 중복 PR을 막는다(끝나면 원복).
 #    ★ 10-10 = choco 0.3.0 3종 **승인** → 규칙상 v0.5.0부터 포함 가능했으나 스위치(`CHOCO_PUSH`)가 꺼진 채 태그가 나가

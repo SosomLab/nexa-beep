@@ -5,6 +5,10 @@
 
 ---
 
+## 2026-11-21
+
+- ★**(mac · main) mac 첫 점검 + 결함 6건 + beepd 1.1.0** — 단위 845/0 · verify 9/12 → 원인 분리(presence 이름 `6a01379` · mac 알림 메인 스레드 대기 `2350b2c`·`81e32e3` · 시험 언어 `0ea7a0a` · 첫 exec 예열 `a34ba35`/`8756e5c` · **App Nap** `488b449` = group 28/28 ×5 · 지연 3~8s → ≤13ms) · TCP 헤더 찢김 `9d7348e` · 수동 추가 타임아웃 `c0db154`(10.002s) · Debug opt3 `8021ed3`(1.32→2.15MB/s · 릴리스 33.3MB/s) · mem-bench 거짓 PASS 수정 `8646802` → 판정 2회 순환 개정(검증 중) · CI lint 빨강 `5fb17bb`~ → `88a082a` · beepd 1.1.0(run 44901140263 · OCI 반영 · 실서버 핸드셰이크 ✓) · choco 0.10.1·beepd 1.1.0 제출 · ⚠ 헤드리스 lib 파손으로 group 3회가 실화면에 떴을 수 있음. [journal](journal/2026-11-21.md)
+
 ## 2026-11-12
 
 - ★**(Linux · main) 11-12 마감 — 문서 현행화** — 코드 13건(세션 견고성 3 · M3-20 ✅ · R-12 탐지·제3자 관측 · 시험 수단 4) · 단위 844/0 · verify 10/10 · STATUS "▶ 11-12 마감" 표 · TODO 낡은 표기 통일(BEEPD-2·M3-21·M1-2b·M4-2e) · GLARE-1·M4-4 → TODO-done · MILESTONES·docs/14·21·49·53 반영 · **다음 세션 시작점 = STATUS ①(v0.10.2 릴리스 결정) ②(mem-bench 한도 근접)** → [journal](journal/2026-11-12.md)
