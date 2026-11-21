@@ -17,6 +17,7 @@ pub mod host;
 pub mod keytap;
 pub mod launch;
 pub mod linkwatch;
+pub mod napguard;
 pub mod notify;
 pub mod opacity;
 pub mod paths;

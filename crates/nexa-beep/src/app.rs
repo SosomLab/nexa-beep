@@ -23496,6 +23496,9 @@ impl ApplicationHandler<AppEvent> for App {
         self.create_main_window(el);
         // 앱 아이콘(M3-22 · 11-06) — 번들 밖 실행(포터블·cargo run)의 Dock 기본 아이콘을 내장 그림으로(mac · 다른 OS no-op).
         nbeep_plat::dock::set_app_icon(nbeep_ui::brand::ICON_RGBA, nbeep_ui::brand::ICON_SIZE);
+        // App Nap 방지(11-21 · mac · 다른 OS no-op) — 창이 숨어 있어도(트레이·가려짐·헤드리스) 타이머가 제때
+        // 돌게. 재연결 백오프·발견 만료·거절 만기·기록 저장이 초 단위로 밀리던 것(`nbeep_plat::napguard`).
+        let _ = nbeep_plat::napguard::hold("presence, reconnect and delivery timers");
         // keytap 설치(G1 · H-26 — mac 한정): winit이 삼키는 "조합 직후 첫 1byte"를
         // 로컬 모니터로 관측해 보충한다. 단일 설치(resumed는 main_id 가드로 1회).
         #[cfg(target_os = "macos")]
