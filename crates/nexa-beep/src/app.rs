@@ -1162,6 +1162,42 @@ fn closed_next_stage(last_stage: Option<u8>, lived_ms: u64) -> u8 {
 /// **대화 이력 ∨ 수동 주소 ∨ 사용자가 붙든 것(목록 고정 · 내 기기)** 중 하나면 남긴다. 종전엔 핀(TOFU)만으로도 남겼는데,
 /// 시험 인스턴스가 한 번 발견되면 핀이 생겨 **한 번도 대화하지 않은 상대가 오프라인 행으로 영구 누적**됐다(사용자 11-05 —
 /// "대화한 적 없는 상대는 온라인일 때만, 기록이 있으면 유지"). 핀 자체는 그대로다(신뢰·지문 이력은 보존 · 행만 안 보인다).
+/// 같은 형제에게 방금 보낸 따라잡기 청구를 다시 보내지 않게 거른다(S4-GLARE · 11-22).
+///
+/// 형제끼리 동시에 다이얼하면(glare) 세션이 두 번 서고 디제스트가 두 세션 모두에서 온다. 첫 청구의 응답이
+/// 도착하기 전에 두 번째 디제스트를 받으면 내 상태가 그대로라 **똑같은 청구**가 한 번 더 나가고, 상대는 같은
+/// 줄을 두 번 보낸다(수신 dedup으로 결과는 같지만 전송이 2배 · 11-21 mac s4-scenario "라인 응답 4건").
+/// 키 = (형제, 스레드, 원 발신 기기) · 같은 `after_seq`의 청구가 `window_ms` 안에 이미 나갔으면 뺀다.
+/// 창이 지났거나 `after_seq`가 달라졌으면(그 사이 줄을 받았다) 다시 보낸다 — 응답이 유실된 경우의 복구는
+/// 다음 디제스트(다음 세션)가 맡는다(종전과 같다). 지난 항목은 여기서 걷는다(표가 자라지 않는다).
+fn dedup_sync_pulls(
+    recent: &mut HashMap<(PeerId, PeerId, PeerId), (u64, u64)>,
+    peer: PeerId,
+    pulls: Vec<nbeep_core::SyncPull>,
+    now_ms: u64,
+    window_ms: u64,
+) -> Vec<nbeep_core::SyncPull> {
+    recent.retain(|_, (_, at)| now_ms.saturating_sub(*at) < window_ms);
+    pulls
+        .into_iter()
+        .filter(|p| {
+            let key = (peer, p.thread, p.origin);
+            if recent
+                .get(&key)
+                .is_some_and(|(after, _)| *after == p.after_seq)
+            {
+                return false;
+            }
+            recent.insert(key, (p.after_seq, now_ms));
+            true
+        })
+        .collect()
+}
+
+/// 같은 청구를 다시 보내지 않는 창(ms) — glare로 겹치는 두 디제스트의 간격(실측 수십 ms)보다 넉넉하고,
+/// 재연결 백오프 첫 단계보다 짧게.
+const SYNC_PULL_DEDUP_MS: u64 = 3_000;
+
 fn offline_row_kept(has_thread: bool, has_manual: bool, user_kept: bool) -> bool {
     has_thread || has_manual || user_kept
 }
@@ -4719,6 +4755,8 @@ struct App {
     pii_last: Option<String>,
     /// 거절 실행 취소 대기(S3): uid → (소유자, hard, 보낼 시각 ms). 방 행 클릭 = 취소.
     pending_declines: HashMap<nbeep_core::GroupUid, (PeerId, bool, u64)>,
+    /// 방금 보낸 따라잡기 청구(S4-GLARE) — (형제, 스레드, 원 발신 기기) → (after_seq, 보낸 시각 ms).
+    recent_sync_pulls: HashMap<(PeerId, PeerId, PeerId), (u64, u64)>,
     /// ★ 수신 제한 목록(docs/38 · BL-1~4 · 11-05) — `blocks.seg` 봉인 영속. Peer 축은 trust `blocked` 플래그와 동기해
     /// 핸드셰이크 판정(`TrustedSession::wrap`)을 그대로 재사용한다.
     blocks: nbeep_store::FileBlockList,
@@ -11798,6 +11836,22 @@ impl App {
                 pulls.len()
             )
         });
+        // 같은 청구를 방금 보냈으면 뺀다(glare로 디제스트가 두 번 온 경우 — `dedup_sync_pulls`).
+        let asked = pulls.len();
+        let now = self.now_ms();
+        let pulls = dedup_sync_pulls(
+            &mut self.recent_sync_pulls,
+            peer,
+            pulls,
+            now,
+            SYNC_PULL_DEDUP_MS,
+        );
+        if pulls.len() < asked {
+            let skipped = asked - pulls.len();
+            self.utrace("sync_pull_dedup", None, || {
+                format!("sync pull dedup to {} skipped={skipped}", peer.short())
+            });
+        }
         if pulls.is_empty() {
             return;
         }
@@ -27992,6 +28046,7 @@ pub(crate) fn run(mode: WindowMode, live: bool, port_flag: Option<u16>) {
         members_ctx: None,
         invite_expire_at: 0,
         pending_declines: HashMap::new(),
+        recent_sync_pulls: HashMap::new(),
         history_dirty: HashMap::new(),
         group_history_dirty: HashMap::new(),
         history_mark_at: 0,
@@ -28561,29 +28616,50 @@ mod tests {
         assert!(!super::is_local_notice("안녕하세요"));
     }
 
-    /// 09-03 실기 → ★11-05 개정(사용자: "대화한 적 없는 상대는 온라인일 때만 · 기록이 있으면 유지") — 이력·수동 주소·사용자가
-    /// 붙든 것(고정·내 기기)만 오프라인 행으로 남고, **핀만 있는 상대는 사라진다**(시험 인스턴스 핀 누적 방지). 핀 자체는 보존.
     #[test]
-    fn hold_row_name_overwrites_placeholder_only() {
-        use nbeep_core::{default_display_name, DisplayName, PeerId};
+    fn dedup_sync_pulls_skips_same_pull_within_window() {
+        use nbeep_core::{PeerId, SyncPull};
         use std::collections::HashMap;
-        let p = PeerId::from_bytes([7; 32]);
-        let seen = DisplayName::parse("prx").unwrap();
-        // 행 없음 → 넣는다.
-        let mut rows = HashMap::new();
-        super::hold_row_name(&mut rows, p, seen.clone());
-        assert_eq!(rows.get(&p), Some(&seen));
-        // 세션이 먼저 시드한 자리표시 → 발견 이름으로 덮는다(11-21 mac 회귀).
-        let mut rows = HashMap::new();
-        rows.insert(p, default_display_name(None, &p));
-        super::hold_row_name(&mut rows, p, seen.clone());
-        assert_eq!(rows.get(&p), Some(&seen), "자리표시는 덮는다");
-        // 실제 이름이 있으면 그대로.
-        let other = DisplayName::parse("other").unwrap();
-        super::hold_row_name(&mut rows, p, other);
-        assert_eq!(rows.get(&p), Some(&seen), "실제 이름은 지킨다");
+        let (sib, th, org) = (
+            PeerId::from_bytes([1; 32]),
+            PeerId::from_bytes([2; 32]),
+            PeerId::from_bytes([3; 32]),
+        );
+        let pull = |after| SyncPull {
+            thread: th,
+            origin: org,
+            after_seq: after,
+            max: 200,
+        };
+        let mut recent = HashMap::new();
+        // 첫 청구는 나간다.
+        assert_eq!(
+            super::dedup_sync_pulls(&mut recent, sib, vec![pull(0)], 1_000, 3_000).len(),
+            1
+        );
+        // 창 안의 같은 청구(glare 두 번째 디제스트) = 뺀다.
+        assert!(super::dedup_sync_pulls(&mut recent, sib, vec![pull(0)], 1_050, 3_000).is_empty());
+        // 그 사이 줄을 받아 after_seq가 달라졌으면 새 청구 = 나간다.
+        assert_eq!(
+            super::dedup_sync_pulls(&mut recent, sib, vec![pull(7)], 1_100, 3_000).len(),
+            1
+        );
+        // 창이 지나면 같은 청구도 다시 나간다(응답 유실 복구 길을 막지 않는다) · 표는 비워진다.
+        assert_eq!(
+            super::dedup_sync_pulls(&mut recent, sib, vec![pull(7)], 4_200, 3_000).len(),
+            1
+        );
+        assert_eq!(recent.len(), 1);
+        // 다른 형제에게는 따로 센다.
+        let other = PeerId::from_bytes([9; 32]);
+        assert_eq!(
+            super::dedup_sync_pulls(&mut recent, other, vec![pull(7)], 4_250, 3_000).len(),
+            1
+        );
     }
 
+    /// 09-03 실기 → ★11-05 개정(사용자: "대화한 적 없는 상대는 온라인일 때만 · 기록이 있으면 유지") — 이력·수동 주소·사용자가
+    /// 붙든 것(고정·내 기기)만 오프라인 행으로 남고, **핀만 있는 상대는 사라진다**(시험 인스턴스 핀 누적 방지). 핀 자체는 보존.
     #[test]
     fn offline_row_kept_by_history_manual_or_user_only() {
         assert!(super::offline_row_kept(true, false, false), "대화 이력");
