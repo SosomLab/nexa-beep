@@ -72,7 +72,16 @@ chk "Y1→X1 수신(X1 스레드에 y1-hello)"            "$OUT/x1.log"   'threa
 chk "X1→Y1 답장(Y1 스레드에 x1-reply)"            "$OUT/y1.log"   'thread .* mine=false .* text=x1-reply'
 chk "X1: X2에 디제스트 송신(entries=2)"            "$OUT/x1.log"   'sync digest to .* entries=2'
 chk "X2: 디제스트 수신 → 청구 2건"                 "$OUT/x2-a.log" 'sync digest from .* pulls=2'
-chk "X1: 라인 응답 2회(origin Y1 · origin X1)"     "$OUT/x1.log"   'sync lines to .* n=1' 2
+# ★ glare(형제 X1·X2 동시 다이얼) 회차는 디제스트가 두 세션에서 나가 라인 응답이 2배(4건)가 된다 — 수신 측 dedup으로 X2 스레드는 그대로라
+#   멱등(11-21 mac · TODO S4-GLARE). 판정 = origin Y1(thread 키 = origin) ≥1 ∧ origin X1(다름) ≥1 ∧ 합 2 또는 4 · 6 이상 = 반복 폭주 = ✗.
+#   역참조 없이 awk로 가른다(ugrep 등 일부 grep은 `\1`을 못 쓴다).
+read -r ln_same ln_diff < <(grep -v '^\[dev\] ' "$OUT/x1.log" 2>/dev/null | awk '/sync lines to .* n=1/{t="";o=""; for(i=1;i<=NF;i++){if($i=="thread")t=$(i+1); if($i=="origin")o=$(i+1)} if(t==o)s++; else d++} END{print s+0, d+0}')
+ln_all=$((ln_same + ln_diff))
+if [ "$ln_same" -ge 1 ] && [ "$ln_diff" -ge 1 ] && { [ "$ln_all" -eq 2 ] || [ "$ln_all" -eq 4 ]; }; then
+  printf '  ✓ %s (%s건 · origin Y1 %s · origin X1 %s)\n' "X1: 라인 응답 2회(glare면 4회)" "$ln_all" "$ln_same" "$ln_diff"; ok=$((ok+1))
+else
+  printf '  ✗ %s (%s건 · origin Y1 %s · origin X1 %s · 기대 2|4 · 둘 다 ≥1)\n' "X1: 라인 응답 2회(glare면 4회)" "$ln_all" "$ln_same" "$ln_diff"; bad=$((bad+1))
+fi
 chk "X2: 라인 수신 2회(added=1)"                   "$OUT/x2-a.log" 'sync lines from .* added=1' 2
 chk "X2: 읽음 동기(unread 1->0)"                  "$OUT/x2-a.log" 'sync read from .* unread 1->0'
 # ★ REPLY-1 ②(11-04): 답장 줄의 참조가 따라잡기(태그 21 동반 프레임)로 건너가 X2에 붙고 재기동 뒤에도 남는다.
