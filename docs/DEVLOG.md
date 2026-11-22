@@ -5,6 +5,10 @@
 
 ---
 
+## 2026-11-22
+
+- ★**(mac · main) 야간 이어짐** — 시험 도구 `baeecb7`(mem-bench 2회 순환 · vmmap 0.1MB)·`5e17a90`(s4 glare 허용)·`fb6c83c`(manual-scenario 7/7 ×3 · verify 등재) · mem-bench 5회 순환 = 수렴(ΔX +3.9 → 0.0) → 게이트 = 3회 순환·마지막 두 순환 차(미커밋) · `b431afd` S4-GLARE 청구 억제(s4 24/24 ×8) · `18186d6` 기록 저장 fsync(ack p95 33~39ms · FSYNC-1 사용자 확인 대기) · `438fc15` 서버 버전 표시 + `[dump] server`(운영 서버 `· 서버 1.1.0` 확인) · ⚠ **야간 자동 진행 실패** — 양쪽 세션 명령이 승인 프롬프트에 걸려 01:26~10:14 공백(예약 틱도 멈춤). [journal](journal/2026-11-22.md)
+
 ## 2026-11-21
 
 - ★**(mac · main) mac 첫 점검 + 결함 6건 + beepd 1.1.0** — 단위 845/0 · verify 9/12 → 원인 분리(presence 이름 `6a01379` · mac 알림 메인 스레드 대기 `2350b2c`·`81e32e3` · 시험 언어 `0ea7a0a` · 첫 exec 예열 `a34ba35`/`8756e5c` · **App Nap** `488b449` = group 28/28 ×5 · 지연 3~8s → ≤13ms) · TCP 헤더 찢김 `9d7348e` · 수동 추가 타임아웃 `c0db154`(10.002s) · Debug opt3 `8021ed3`(1.32→2.15MB/s · 릴리스 33.3MB/s) · mem-bench 거짓 PASS 수정 `8646802` → 판정 2회 순환 개정(검증 중) · CI lint 빨강 `5fb17bb`~ → `88a082a` · beepd 1.1.0(run 44901140263 · OCI 반영 · 실서버 핸드셰이크 ✓) · choco 0.10.1·beepd 1.1.0 제출 · ⚠ 헤드리스 lib 파손으로 group 3회가 실화면에 떴을 수 있음. [journal](journal/2026-11-21.md)
