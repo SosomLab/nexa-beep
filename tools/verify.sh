@@ -6,7 +6,7 @@
 #
 #   ./tools/verify.sh            # 기본: 빌드(debug+release) · smoke · reply · group · block · s4 · tmp-clean   ≈ 7~10분
 #   ./tools/verify.sh --quick    # 빌드(debug) · smoke · reply · scan-plaintext · wire-scan       ≈ 2.5분
-#   ./tools/verify.sh --perf     # 기본 + perf-scenario(헤드리스 수치 — 51 §3 기준선과 비교하지 않는다) + startup-bench(PERF-4 콜드/웜 5회 중앙값) + scroll-bench(PERF-3 2000줄 휠 paint ms) + mem-bench(PERF-5 회수 · 2회 순환 · ④b−④a ≤ 2MB · Debug 64MiB/릴리스 256MiB · ≈6분)
+#   ./tools/verify.sh --perf     # 기본 + perf-scenario(헤드리스 수치 — 51 §3 기준선과 비교하지 않는다) + startup-bench(PERF-4 콜드/웜 5회 중앙값) + scroll-bench(PERF-3 2000줄 휠 paint ms) + mem-bench(PERF-5 회수 · 3회 순환 · 마지막 두 순환 차 ≤ 2MB · fd 증가 0 · Debug 64MiB/릴리스 256MiB · ≈9분)
 #   ./tools/verify.sh --oldpeer  # 기본 + oldpeer-scenario(⚠ 구버전 창이 화면에 ≈45s · gh 필요)
 #   ./tools/verify.sh --flood   # 기본 + flood-scenario(⚠ 발견 광고 1,200장이 **실제 LAN 멀티캐스트**로 나간다 · TTL 1 — 격리망·단독 링크에서만 · 릴리스 전 1회)
 #   ./tools/verify.sh --no-build # 빌드 생략(이미 최신일 때)
