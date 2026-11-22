@@ -80,6 +80,11 @@ poly1305 = { opt-level = 3 }
 sha2 = { opt-level = 3 }
 snow = { opt-level = 3 }
 universal-hash = { opt-level = 3 }
+# ★ nbeep-store도 opt 3(11-22) — 위 크레이트의 제네릭(ChaCha20-Poly1305·generic-array·zeroize)은 **부르는 쪽
+#   코드 단위에서 단형화**되므로, 봉인 스트림(sealed_stream · 수신 파일을 `.part`에 암호화 기록)의 암호화는
+#   nbeep-store의 opt-level로 컴파일된다. sample 실측(mac Debug 256MiB): 수신 세션 액터가 99.8% 바쁘고 그 96%가
+#   StreamWriter::flush_chunk → encrypt(심볼 접미 전부 nbeep_store · debug precondition_check 포함) = 4.3MB/s.
+nbeep-store = { opt-level = 3 }
 
 # 릴리스 = 예산 게이트(단일 실행 파일 ≤10MB — docs/05 NFR-B-3, docs/18).
 [profile.release]

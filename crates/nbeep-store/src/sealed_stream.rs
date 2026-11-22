@@ -115,6 +115,28 @@ impl Head {
     }
 }
 
+/// 청크 봉인(제자리) — **제네릭이 아닌** 진입점(11-22).
+///
+/// [`StreamWriter`]·[`StreamReader`]는 `W`/`R`에 제네릭이라 그 메서드는 **쓰는 쪽 크레이트**에서 단형화되고, 안에서
+/// 부른 AEAD(ChaCha20-Poly1305·generic-array·zeroize)도 그 크레이트의 opt-level로 함께 컴파일된다. 앱 크레이트는
+/// Debug에서 opt 0이라 수신 파일 봉인이 4~5MB/s에 묶였다(sample 실측 — 심볼 접미가 `nexa_beep`). 암호화를 이
+/// 함수로 빼고 인라인을 막으면 코드가 이 크레이트(Debug에서도 opt 3 — 워크스페이스 `Cargo.toml`)에 남는다.
+/// 릴리스에서는 청크(64KiB급)당 함수 호출 1회가 늘 뿐이다.
+#[inline(never)]
+fn seal_chunk(cipher: &ChaCha20Poly1305, nonce: &[u8; 12], aad: &[u8], buf: &mut Vec<u8>) -> bool {
+    cipher
+        .encrypt_in_place(Nonce::from_slice(nonce), aad, buf)
+        .is_ok()
+}
+
+/// 청크 복호(제자리 · 태그·AAD 검증) — [`seal_chunk`]와 같은 이유로 비제네릭.
+#[inline(never)]
+fn open_chunk(cipher: &ChaCha20Poly1305, nonce: &[u8; 12], aad: &[u8], buf: &mut Vec<u8>) -> bool {
+    cipher
+        .decrypt_in_place(Nonce::from_slice(nonce), aad, buf)
+        .is_ok()
+}
+
 /// 스트림 쓰기 — 들어오는 대로 청크 단위로 봉인해 내보낸다(메모리 = 청크 1개).
 pub struct StreamWriter<W: Write> {
     w: W,
@@ -202,9 +224,9 @@ impl<W: Write> StreamWriter<W> {
         let i = self.next;
         let aad = self.head.aad(&self.domain, i, last);
         let nonce = self.head.nonce(i);
-        self.cipher
-            .encrypt_in_place(Nonce::from_slice(&nonce), &aad, &mut self.buf)
-            .map_err(|_| io::Error::other("AEAD 봉인 실패"))?;
+        if !seal_chunk(&self.cipher, &nonce, &aad, &mut self.buf) {
+            return Err(io::Error::other("AEAD 봉인 실패"));
+        }
         self.w.write_all(&self.buf)?;
         self.buf.clear();
         self.next = self
@@ -273,9 +295,9 @@ impl StreamWriter<std::fs::File> {
         let mut buf = Vec::new();
         f.read_to_end(&mut buf)?;
         let aad = head.aad(domain, last_i, true);
-        cipher
-            .decrypt_in_place(Nonce::from_slice(&head.nonce(last_i)), &aad, &mut buf)
-            .map_err(|_| io::Error::other("마지막 청크 복호 실패"))?;
+        if !open_chunk(&cipher, &head.nonce(last_i), &aad, &mut buf) {
+            return Err(io::Error::other("마지막 청크 복호 실패"));
+        }
         f.set_len(off)?;
         f.seek(SeekFrom::End(0))?;
         let mut w = Self {
@@ -401,10 +423,7 @@ impl<R: Read + Seek> StreamReader<R> {
         let mut buf = vec![0u8; ct_len];
         self.r.read_exact(&mut buf).ok()?;
         let aad = self.head.aad(&self.domain, i, last);
-        self.cipher
-            .decrypt_in_place(Nonce::from_slice(&self.head.nonce(i)), &aad, &mut buf)
-            .ok()?;
-        Some(buf)
+        open_chunk(&self.cipher, &self.head.nonce(i), &aad, &mut buf).then_some(buf)
     }
 
     /// 평문 범위 `[off, off+len)` — 걸친 청크만 읽는다(범위 밖은 잘라 돌려준다 · 손상 = None).
