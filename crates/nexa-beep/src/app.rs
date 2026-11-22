@@ -10652,6 +10652,19 @@ impl App {
         reply: Option<nbeep_core::ReplyRef>,
         accepted: bool,
     ) {
+        // ★ 차단된 상대의 **이미 큐에 든** 메시지(11-22): 차단은 세션을 끊지만(`cut_peer`) 액터가 앞서 올린 `Recv`
+        //   이벤트는 메인 큐에 남아 있다. 종전엔 여기서 차단을 보지 않았고 `cut_peer`가 폭주 계수까지 비워, 자동
+        //   차단(50건/10초) 직후의 잔여분이 그대로 표시·기록·알림됐다(실측 4/4 — 51번째만 버리고 뒤 23~35건 수락).
+        //   수동 차단도 같은 길이다. 차단 = 이 메시지부터 폐기(docs/38 §5)를 큐 잔여분에도 지킨다.
+        if self.peer_blocked(peer) {
+            dlog!(self, DL::Chat, DV::Trace, "recv", |r| r
+                .arg("peer", peer.short())
+                .arg("sender", sender.short())
+                .arg("seq", seq)
+                .rule("blocked", true)
+                .fail("blocked peer — queued message dropped"));
+            return;
+        }
         if !accepted && !self.dedup.accept(sender, seq) {
             dlog!(self, DL::Chat, DV::Trace, "recv", |r| r
                 .arg("peer", peer.short())
