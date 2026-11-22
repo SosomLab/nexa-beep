@@ -55,7 +55,9 @@ sample() {
     Darwin)
       local pid; pid=$(find_pid); [ -n "$pid" ] || return 0
       local fp rss thr fds socks cpu
-      fp=$(footprint "$pid" 2>/dev/null | awk '/phys_footprint/{gsub(/[^0-9.]/,"",$NF); print $NF; exit}'); [ -n "$fp" ] || fp=$(ps -o rss= -p "$pid" | awk '{printf "%.2f", $1/1024}')
+      # phys_footprint = `vmmap --summary`의 "Physical footprint: 43.2M"(mem-bench와 같은 원천 · 11-22). 종전 `footprint` 명령 출력에는
+      #   phys_footprint 줄이 없어 늘 RSS 폴백으로 떨어졌다(피어 100 = 98.8MB가 RSS — 공유 페이지 포함이라 D-1 정의와 다르다).
+      fp=$(vmmap --summary "$pid" 2>/dev/null | awk '/^Physical footprint:/{v=$NF; u=substr(v,length(v)); n=substr(v,1,length(v)-1); m=(u=="K")?n/1024:(u=="G")?n*1024:(u=="M")?n:v/1048576; printf "%.2f", m; exit}'); [ -n "$fp" ] || fp=$(ps -o rss= -p "$pid" | awk '{printf "%.2f", $1/1024}')
       rss=$(ps -o rss= -p "$pid" | awk '{printf "%.2f", $1/1024}'); thr=$(ps -M -p "$pid" | tail -n +2 | wc -l | tr -d ' ')
       fds=$(lsof -p "$pid" 2>/dev/null | tail -n +2 | wc -l | tr -d ' '); socks=$(lsof -p "$pid" 2>/dev/null | grep -c 'IPv[46]')
       cpu=$(ps -o cputime= -p "$pid" | awk -F'[:.]' '{ if (NF>=3) print ($1*60+$2)*1000+$3*10; else print 0 }')
@@ -65,7 +67,7 @@ sample() {
 }
 
 echo "t_s,pid,private_mb,commit_mb,handles,threads,cpu_ms,sockets" > "$OUT"
-echo "▶ 샘플 $COUNT회 × ${INTERVAL}s · 대상 '*$MATCH*' · $OUT"
+echo "▶ 샘플 ${COUNT}회 × ${INTERVAL}s · 대상 '*$MATCH*' · $OUT"
 T0=$(date +%s); n=0
 while [ "$n" -lt "$COUNT" ]; do
   s=$(sample); t=$(( $(date +%s) - T0 ))

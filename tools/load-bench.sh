@@ -36,9 +36,11 @@ paint=$(awk '/^\[script\] /{ s=$3; ph=(s ~ /^wheel/) ? "wheel" : (s ~ /^move/ ? 
   /^\[paint\] Main/ && ph=="wheel" { split($4,a,"="); n++; ps+=a[2]+0; if (a[2]+0>pm) pm=a[2]+0 }
   END { if (n>0) printf "%.2f %.2f %d", ps/n, pm, n; else print "- - 0" }' "$OUT/app.log")
 set -- $paint; pavg=$1; pmax=$2; pn=$3
-mem=$(tail -1 "$OUT/mem.csv" 2>/dev/null | awk -F',' 'NF>=8{print $3}')
+# 머리글은 건너뛴다 — 표본이 0이면 종전엔 tail -1이 머리글을 잡아 private=private_mb로 찍혔다(11-22 mac). 빈 값 = 미측정 → 피어 ≤100 판정 FAIL.
+mem=$(awk -F',' 'NR>1 && NF>=8 && $3!=""{v=$3} END{print v}' "$OUT/mem.csv" 2>/dev/null)
+memd="미측정"; [ -n "$mem" ] && memd="${mem}MB"
 grep -h '^\[demo\]' "$OUT/app.log" | sed 's/^/  /'
-echo "  창 수 wins=$wins (기대 ≥ 6) · 목록 휠 paint n=$pn avg=${pavg}ms max=${pmax}ms (≤ ${PAINT_MS}) · private=${mem:-?}MB (≤ ${MEM_MB}) · dump 피어 행=$rows"
+echo "  창 수 wins=$wins (기대 ≥ 6) · 목록 휠 paint n=$pn avg=${pavg}ms max=${pmax}ms (≤ ${PAINT_MS}) · private=${memd} (≤ ${MEM_MB}) · dump 피어 행=$rows"
 { echo "peers=$PEERS"; echo "wins=$wins"; echo "list_wheel_paint_avg_ms=$pavg"; echo "list_wheel_paint_max_ms=$pmax"; echo "private_mb=${mem:-}"; } > "$OUT/summary.txt"
 ok=1
 [ "$wins" -ge 6 ] || ok=0

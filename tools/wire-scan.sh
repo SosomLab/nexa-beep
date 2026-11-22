@@ -101,7 +101,7 @@ for _ in $(seq 1 30); do
   alive=0; for pid in "${APP_PIDS[@]}"; do kill -0 "$pid" 2>/dev/null && alive=1; done
   [ "$alive" = 0 ] && break; sleep 0.5
 done
-for pid in "${APP_PIDS[@]}"; do kill -0 "$pid" 2>/dev/null && { echo "  ! 앱 pid $pid가 quit하지 않아 강제 종료(판정은 계속)"; kill "$pid" 2>/dev/null; }; done
+for pid in "${APP_PIDS[@]}"; do kill -0 "$pid" 2>/dev/null && { echo "  ! 앱 pid ${pid}가 quit하지 않아 강제 종료(판정은 계속)"; kill "$pid" 2>/dev/null; }; done
 wait "${APP_PIDS[@]}" 2>/dev/null
 if [ -n "$TD_PID" ]; then sudo kill -INT "$TD_PID" 2>/dev/null; wait "$TD_PID" 2>/dev/null; sudo chmod a+r "$PCAP" 2>/dev/null || true; fi
 cat "$OUT/recv.log"
