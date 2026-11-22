@@ -752,6 +752,31 @@ enum AppEvent {
 }
 
 impl AppEvent {
+    /// 상대가 세션으로 보낸 **내용·요청** 이벤트면 그 상대(BLOCK-Q · 11-22) — 차단 직후 메인 큐에 남은 잔여분을
+    /// [`App::user_event`]가 걸러 내는 데 쓴다. 1:1 텍스트(`Recv`)는 `on_recv`가 따로 본다(수락 재진입 경로와 공용).
+    /// 수명·정리 이벤트(`Closed`·전송 진행/완료/실패·ack)는 넣지 않는다 — 차단돼도 내 상태는 닫혀야 한다.
+    fn inbound_content_peer(&self) -> Option<PeerId> {
+        match self {
+            AppEvent::XferManifest { peer, .. }
+            | AppEvent::XferGroupHint { peer, .. }
+            | AppEvent::XferOffer { peer, .. }
+            | AppEvent::SGroup { peer, .. }
+            | AppEvent::ProfileRequested { peer }
+            | AppEvent::PeerProfile { peer, .. }
+            | AppEvent::SenderCopy { peer, .. }
+            | AppEvent::SyncDigest { peer, .. }
+            | AppEvent::SyncPull { peer, .. }
+            | AppEvent::SyncLines { peer, .. }
+            | AppEvent::SyncReplies { peer, .. }
+            | AppEvent::SyncRead { peer, .. }
+            | AppEvent::UserHello { peer, .. }
+            | AppEvent::UserProof { peer, .. }
+            | AppEvent::UserKeyBlob { peer, .. }
+            | AppEvent::Succession { peer, .. } => Some(*peer),
+            _ => None,
+        }
+    }
+
     /// 변종 이름(정체 감시 꼬리표 STALL-1 · 11-04) — 페이로드는 찍지 않는다(봉투 원리). 변종을 더하면 여기도.
     fn tag(&self) -> &'static str {
         match self {
@@ -23642,6 +23667,17 @@ impl ApplicationHandler<AppEvent> for App {
     fn user_event(&mut self, el: &ActiveEventLoop, event: AppEvent) {
         self.drain_stall_report();
         let _stall = StallGuard::new(event.tag());
+        // ★ 차단된 상대의 큐 잔여분(BLOCK-Q · 11-22) — 차단은 세션을 끊지만 액터가 앞서 올린 이벤트는 큐에 남는다.
+        //   그룹 메시지·파일 제안·프로필·동기 프레임이 차단 뒤에도 적용되지 않게 여기서 버린다(1:1 텍스트 = on_recv).
+        if let Some(p) = event.inbound_content_peer() {
+            if self.peer_blocked(p) {
+                dlog!(self, DL::Conn, DV::Trace, "blocked_residue", |r| r
+                    .arg("peer", p.short())
+                    .arg("event", event.tag())
+                    .fail("blocked peer — queued event dropped"));
+                return;
+            }
+        }
         // 세션 액터 → GUI(M2-7). 수신 메시지를 해당 대화 스레드에 실시간 반영한다.
         match event {
             #[cfg(target_os = "macos")]
@@ -29294,6 +29330,48 @@ mod tests {
             decode_history(&enc7[..60]).is_empty(),
             "참조 중간 손상 = 멈춤"
         );
+    }
+
+    /// BLOCK-Q — 차단 잔여 걸러내기 대상 = 상대가 보낸 내용·요청만 · 수명/정리 이벤트는 통과.
+    #[test]
+    fn inbound_content_peer_covers_content_not_lifecycle() {
+        use super::AppEvent;
+        let p = PeerId::from_bytes([7u8; PeerId::LEN]);
+        assert_eq!(
+            AppEvent::ProfileRequested { peer: p }.inbound_content_peer(),
+            Some(p)
+        );
+        assert_eq!(
+            AppEvent::UserProof {
+                peer: p,
+                proof: [0; 32]
+            }
+            .inbound_content_peer(),
+            Some(p)
+        );
+        assert_eq!(
+            AppEvent::XferManifest {
+                peer: p,
+                entries: Vec::new()
+            }
+            .inbound_content_peer(),
+            Some(p)
+        );
+        // 수명·정리 = 차단돼도 내 상태를 닫아야 하므로 거르지 않는다.
+        assert_eq!(
+            AppEvent::Closed { peer: p, epoch: 1 }.inbound_content_peer(),
+            None
+        );
+        assert_eq!(AppEvent::PeerBye { peer: p }.inbound_content_peer(), None);
+        assert_eq!(
+            AppEvent::XferAccepted { peer: p }.inbound_content_peer(),
+            None
+        );
+        assert_eq!(
+            AppEvent::XferCancelAllNotice { peer: p }.inbound_content_peer(),
+            None
+        );
+        assert_eq!(AppEvent::LinkChanged.inbound_content_peer(), None);
     }
 
     /// CONF-FSYNC — 저장된 상한 안의 발급은 저장을 부르지 않고, 넘으면 새 상한을 예약한다.
