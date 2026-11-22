@@ -7,6 +7,7 @@
 
 ## 2026-11-23
 
+- ★**(mac · main) v0.10.2 공개 ✅** — 태그 `v0.10.2` = `47a3645` · release run **45039977937 전 12 job success** · 자산 15 · brew 탭 `c0e4f40` · apt/dnf linux-repo 45040321411 ✓ · choco·winget 스위치 false(건너뜀 · PUB-1) · 0-a(mac) gate rc=0 · verify 13/0 · 4,059,392B · FSYNC-1 유지(사용자 결정). [journal](journal/2026-11-23.md) §3
 - ★**(mac · main) v0.10.2 태그 push** — 0-a = gate rc=0 · verify **13/0** · 임포트 PASS · 릴리스 4,059,392B → 버전 커밋 `47a3645`(CI 45039703925 ✓) → 태그 `v0.10.2` → release run **45039977937 진행 중**(package 5타깃 빌드 · 공개·채널 반영 미확인). [journal](journal/2026-11-23.md) §3
 - ★**(mac · main) 마감 점검 + 사용자 결정 2건 → v0.10.2 릴리스 진행 중** — FSYNC-1 = **유지**(`18186d6` · 전원 차단 때 직전 ≤1.5s 대화 줄 유실 가능) · **v0.10.2 진행**: 스위치 그대로(choco 0.10.1 검수 중 → Releases·brew·apt/dnf만) · 버전 0.10.2 · 0-a = gate rc=0 · verify 실행 중(태그 전) · CLAUDE.md 현 단계 `1d67a8e`. [journal](journal/2026-11-23.md)
 

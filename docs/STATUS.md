@@ -3,7 +3,9 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
-> **갱신: 2026-11-23 mac 2차** — ★**v0.10.2 태그 push**(`v0.10.2` = `47a3645`): 0-a = gate rc=0 · verify 13통과 0실패 · 임포트 PASS · 릴리스 mac 4,059,392B · CI 45039703925 ✓ → release run **45039977937 진행 중**(package 5타깃 빌드 중 · Releases 공개·brew·apt/dnf 반영은 **아직 미확인**) · 스위치 choco·winget false(이번 태그 제외). [journal](journal/2026-11-23.md) §3
+> **갱신: 2026-11-23 mac 3차** — ★**v0.10.2 공개 ✅**(태그 `47a3645` · release run 45039977937 전 12 job success · 자산 15 · brew 탭 `c0e4f40` · apt/dnf linux-repo 45040321411 ✓ · choco·winget = 스위치 false로 제외 → PUB-1) · 탑재 = 11-12~11-22 수정분(세션 견고성 · 차단 큐 잔여 · macOS App Nap·알림·기록 저장 · 표시 3건) · FSYNC-1 유지. **남은 것** = 설치본 업그레이드 확인 · Windows/Linux 실기(0-a는 mac) · choco 검수 뒤 0.10.2 제출. [journal](journal/2026-11-23.md) §3
+>
+> 직전 **2026-11-23 mac 2차** — ★**v0.10.2 태그 push**(`v0.10.2` = `47a3645`): 0-a = gate rc=0 · verify 13통과 0실패 · 임포트 PASS · 릴리스 mac 4,059,392B · CI 45039703925 ✓ → release run **45039977937 진행 중**(package 5타깃 빌드 중 · Releases 공개·brew·apt/dnf 반영은 **아직 미확인**) · 스위치 choco·winget false(이번 태그 제외). [journal](journal/2026-11-23.md) §3
 >
 > 직전 **2026-11-23 mac 1차** — 사용자 결정 2건: **FSYNC-1 = 유지**(`18186d6`) · **v0.10.2 릴리스 진행**. 진행 = 스위치 그대로(choco 0.10.1 검수 중 → 이번 태그는 Releases·brew·apt/dnf만) · 버전 0.10.2 · 0-a `gate.sh` rc=0 · `verify.sh` 실행 중 → 통과하면 버전 커밋 · CI 초록 · 태그 `v0.10.2` · release run 감시. ⚠ 0-a는 mac에서(Windows·Linux 근거 = CI). [journal](journal/2026-11-23.md)
 >
