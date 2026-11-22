@@ -989,6 +989,8 @@ pub enum Msg {
     StfServerTestFail,
     StNoteSrvOff,
     StfNoteSrvOk,
+    /// 접속된 서버의 버전 꼬리표(Welcome.server_version) — "검증됨" 노트·툴바 툴팁 뒤에 붙는다(11-22).
+    StfSrvVersionSuffix,
     StfNoteSrvConnecting,
     StfNoteSrvRetry,
     StNoteSrvPinStop,
@@ -2461,6 +2463,7 @@ impl Msg {
             Msg::StfServerTestFail => ["Server test failed: {}", "서버 테스트 실패: {}", "服务器测试失败：{}", "サーバーテスト失敗: {}"],
             Msg::StNoteSrvOff => ["Server not in use (unmanaged — LAN only)", "서버 미사용(Unmanaged — LAN만)", "未使用服务器（unmanaged — 仅局域网）", "サーバー未使用（unmanaged — LAN のみ）"],
             Msg::StfNoteSrvOk => ["✓ Server verified — {} (key {})", "✓ 서버 검증됨 — {} (키 {})", "✓ 服务器已验证 — {}（密钥 {}）", "✓ サーバー検証済み — {}（キー {}）"],
+            Msg::StfSrvVersionSuffix => [" · server {}", " · 서버 {}", " · 服务器 {}", " · サーバー {}"],
             Msg::StfNoteSrvConnecting => ["○ Connecting… {}", "○ 접속 중… {}", "○ 正在连接… {}", "○ 接続中… {}"],
             Msg::StfNoteSrvRetry => ["○ Retry in {}s — {}", "○ {}초 후 재시도 — {}", "○ {} 秒后重试 — {}", "○ {} 秒後に再試行 — {}"],
             Msg::StNoteSrvPinStop => ["■ Stopped: server key mismatch — clear the pin line, then re-save server settings", "■ 정지: 서버 키 불일치 — 핀 줄 정리 후 서버 설정을 다시 저장하면 재시도", "■ 已停止：服务器密钥不匹配 — 清理固定行后重新保存服务器设置", "■ 停止: サーバーキー不一致 — ピン行を整理しサーバー設定を保存し直すと再試行"],

@@ -1162,6 +1162,18 @@ fn closed_next_stage(last_stage: Option<u8>, lived_ms: u64) -> u8 {
 /// **대화 이력 ∨ 수동 주소 ∨ 사용자가 붙든 것(목록 고정 · 내 기기)** 중 하나면 남긴다. 종전엔 핀(TOFU)만으로도 남겼는데,
 /// 시험 인스턴스가 한 번 발견되면 핀이 생겨 **한 번도 대화하지 않은 상대가 오프라인 행으로 영구 누적**됐다(사용자 11-05 —
 /// "대화한 적 없는 상대는 온라인일 때만, 기록이 있으면 유지"). 핀 자체는 그대로다(신뢰·지문 이력은 보존 · 행만 안 보인다).
+/// 서버가 알린 버전 문자열을 표시용으로 다듬는다 — 서버는 핀으로 인증되지만 문자열 자체는 **남이 준 값**이다.
+/// 버전에 쓰이는 문자(영숫자 · `.` `-` `+` `_`)만 남기고 24자로 자른다(제어 문자·줄바꿈·긴 문자열로 노트를
+/// 어지럽히지 못하게). 남는 것이 없으면 `None`(= 꼬리표 생략).
+fn display_server_version(raw: &str) -> Option<String> {
+    let v: String = raw
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '+' | '_'))
+        .take(24)
+        .collect();
+    (!v.is_empty()).then_some(v)
+}
+
 /// 같은 형제에게 방금 보낸 따라잡기 청구를 다시 보내지 않게 거른다(S4-GLARE · 11-22).
 ///
 /// 형제끼리 동시에 다이얼하면(glare) 세션이 두 번 서고 디제스트가 두 세션 모두에서 온다. 첫 청구의 응답이
@@ -8925,6 +8937,21 @@ impl App {
         for (p, q) in &self.urgent_log {
             eprintln!("[dump] urgent24 {} n={}", p.short(), q.len());
         }
+        // 서버 접속(11-22) — `[dump] server live=<bool> note=<설정 › 서버 상태 노트 원문>`. 서버 모드가 꺼져 있으면
+        // 줄이 없다. 노트 = 화면에 보이는 문자열 그대로(접속됐으면 "· 서버 <버전>" 꼬리표 포함)라 표시 판정에 쓴다.
+        if server_target(
+            self.settings.get("net.server.mode"),
+            self.settings.get("net.server.address"),
+            self.settings.get("net.server.port"),
+        )
+        .is_some()
+        {
+            let live = self.relay.as_ref().is_some_and(|c| c.is_alive());
+            eprintln!(
+                "[dump] server live={live} note={}",
+                self.server_note_texts().0
+            );
+        }
     }
 
     /// 스크립트 `group.accept` — 대기 중인 초대 전부 수락 + 초대 카드 모달 닫기(11-04).
@@ -9368,6 +9395,17 @@ impl App {
         }
     }
 
+    /// 접속된 서버의 버전 꼬리표(11-22 · 사용자 요청 "서버 연결이 된 경우 서버의 버전을 표시") — 살아 있는 접속의
+    /// `Welcome.server_version`을 " · 서버 1.1.0" 꼴로. 접속이 없거나 서버가 버전을 알리지 않았으면 빈 문자열.
+    fn server_version_suffix(&self) -> String {
+        self.relay
+            .as_ref()
+            .filter(|c| c.is_alive())
+            .and_then(|c| display_server_version(&c.server_info().version))
+            .map(|v| nbeep_core::tf(nbeep_core::Msg::StfSrvVersionSuffix, &[&v]))
+            .unwrap_or_default()
+    }
+
     /// 툴바 서버 접속 표시(08-22) — 접속 성립/해제 지점들이 부른다.
     fn refresh_toolbar_server(&mut self) {
         use crate::userident::ServerLink;
@@ -9385,10 +9423,14 @@ impl App {
             ServerLink::Local => t(Msg::TipServerLocal).to_string(),
             ServerLink::Held => t(Msg::TipServerHeld).to_string(),
             ServerLink::Reconnecting => tf(Msg::TipfServerReconnect, &[&self.server_raw_target()]),
-            ServerLink::Connected(kind) => tf(
-                Msg::TipfServerConnected,
-                &[t(Self::server_kind_msg(kind)), &self.server_raw_target()],
-            ),
+            ServerLink::Connected(kind) => {
+                let mut tip = tf(
+                    Msg::TipfServerConnected,
+                    &[t(Self::server_kind_msg(kind)), &self.server_raw_target()],
+                );
+                tip.push_str(&self.server_version_suffix());
+                tip
+            }
         };
         let mut inv = Invalidations::default();
         self.toolbar.set_item_icon(
@@ -12541,8 +12583,10 @@ impl App {
                     .observed_tcp
                     .map_or_else(|| "?".to_string(), |a| a.to_string());
                 let pin = nbeep_relay::peer_hex(&c.server_peer());
+                let mut ok = tf(Msg::StfNoteSrvOk, &[&raw, &pin[..8]]);
+                ok.push_str(&self.server_version_suffix()); // 접속된 서버 버전(11-22)
                 return (
-                    tf(Msg::StfNoteSrvOk, &[&raw, &pin[..8]]),
+                    ok,
                     NoteTone::Ok, // ★ 검증됨 = ok색 배경(눈에 띄게 — 사용자 요청)
                     tf(
                         Msg::StfNoteSrvPort,
@@ -28656,6 +28700,50 @@ mod tests {
             super::dedup_sync_pulls(&mut recent, other, vec![pull(7)], 4_250, 3_000).len(),
             1
         );
+    }
+
+    #[test]
+    fn display_server_version_keeps_version_chars_only() {
+        assert_eq!(
+            super::display_server_version("1.1.0").as_deref(),
+            Some("1.1.0")
+        );
+        assert_eq!(
+            super::display_server_version("1.2.0-rc.1+build_7").as_deref(),
+            Some("1.2.0-rc.1+build_7")
+        );
+        // 남이 준 값 — 줄바꿈·공백·제어 문자·비ASCII는 걷어낸다.
+        assert_eq!(
+            super::display_server_version("1.0\n✓ 검증됨 (x)").as_deref(),
+            Some("1.0x")
+        );
+        assert_eq!(super::display_server_version("").as_deref(), None);
+        assert_eq!(super::display_server_version(" \t").as_deref(), None);
+        assert_eq!(
+            super::display_server_version(&"9".repeat(100)).map(|v| v.len()),
+            Some(24)
+        );
+    }
+
+    #[test]
+    fn hold_row_name_overwrites_placeholder_only() {
+        use nbeep_core::{default_display_name, DisplayName, PeerId};
+        use std::collections::HashMap;
+        let p = PeerId::from_bytes([7; 32]);
+        let seen = DisplayName::parse("prx").unwrap();
+        // 행 없음 → 넣는다.
+        let mut rows = HashMap::new();
+        super::hold_row_name(&mut rows, p, seen.clone());
+        assert_eq!(rows.get(&p), Some(&seen));
+        // 세션이 먼저 시드한 자리표시 → 발견 이름으로 덮는다(11-21 mac 회귀).
+        let mut rows = HashMap::new();
+        rows.insert(p, default_display_name(None, &p));
+        super::hold_row_name(&mut rows, p, seen.clone());
+        assert_eq!(rows.get(&p), Some(&seen), "자리표시는 덮는다");
+        // 실제 이름이 있으면 그대로.
+        let other = DisplayName::parse("other").unwrap();
+        super::hold_row_name(&mut rows, p, other);
+        assert_eq!(rows.get(&p), Some(&seen), "실제 이름은 지킨다");
     }
 
     /// 09-03 실기 → ★11-05 개정(사용자: "대화한 적 없는 상대는 온라인일 때만 · 기록이 있으면 유지") — 이력·수동 주소·사용자가
