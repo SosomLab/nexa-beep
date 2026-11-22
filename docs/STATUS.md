@@ -3,7 +3,9 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
-> **갱신: 2026-11-22 mac 낮** — 릴리스 전 점검 리허설(태그 없음 · main `1fdf8bc`): gate ✓(850/0) · verify --perf 기본 전부 ✓ · perf 2건 = bash 3.2 한글 붙은 변수 함정 + paint 예산 릴리스 판정(`8b86b2f`·`ce9e59c`·`5df5238`) · mem-bench 3회 순환 PASS(`669ff96`) · `52f5cb4` CONF-FSYNC ✅ · `ebfbe92` 차단 직후 큐 잔여 수락 수정 · `f75fdd1` MAN-B 지문 경로 ✅ · verify 기본 13/0. [journal](journal/2026-11-22.md) §6
+> **갱신: 2026-11-22 mac 저녁** — `47188a0` BLOCK-Q ✅ · `5bb3d08` Debug 전송 4.35 → 60~120MB/s(제네릭 단형화 위치 · 구→신 격리물 호환 ✓) · 마감 verify --perf 18/0(`5bb3d08`) · CI ✓ · **사용자 결정 대기 = v0.10.2 릴리스 여부·시점 · FSYNC-1**. [journal](journal/2026-11-22.md) §7
+>
+> 직전 **2026-11-22 mac 낮** — 릴리스 전 점검 리허설(태그 없음 · main `1fdf8bc`): gate ✓(850/0) · verify --perf 기본 전부 ✓ · perf 2건 = bash 3.2 한글 붙은 변수 함정 + paint 예산 릴리스 판정(`8b86b2f`·`ce9e59c`·`5df5238`) · mem-bench 3회 순환 PASS(`669ff96`) · `52f5cb4` CONF-FSYNC ✅ · `ebfbe92` 차단 직후 큐 잔여 수락 수정 · `f75fdd1` MAN-B 지문 경로 ✅ · verify 기본 13/0. [journal](journal/2026-11-22.md) §6
 >
 > 직전 **2026-11-22 mac 새벽 (KST · mac · main — 코드 = 개발 세션 · 실행·측정·tools·기록 = 협업 세션 · 사용자 지시 "잔여건 계속 진행 · 아침 9시까지 자동화" · "coffee 배포는 beep에서 결정하지 않는다" · "서버 버전 표시")** — 시험 도구 3건(`baeecb7` mem-bench 2회 순환 · `5e17a90` s4 glare 허용 · `fb6c83c` manual-scenario 7/7 ×3 · verify 등재) · CI = 11-21 lint 빨강 복구 확인(c6e4071 run 44917951937). mem-bench 5회 순환 = X +3.9 → +0.7 → +0.8 → 0.0 수렴 · fd 50→56 뒤 고정 → 게이트 3회 순환·마지막 두 순환 차(개발 결정 · 스크립트 미커밋). 코드 = `b431afd` S4-GLARE 청구 억제(s4 24/24 ×8) · `18186d6` 기록 저장 fsync(ack p95 33~39ms · reply·presence ✓ · **FSYNC-1 사용자 확인 대기**) · `438fc15` 서버 버전 표시 + `[dump] server`(운영 서버 dump `✓ 서버 검증됨 … · 서버 1.1.0` 확인). 관찰 = 설정 파일 저장(`conf_save` → `write_atomic`)이 메시지 구간에 F_FULLFSYNC로 돈다. ⚠ **야간 자동 진행 실패** — 양쪽 세션 명령이 승인 프롬프트에 걸려 01:26~10:14 공백(예약 틱·아침 보고도 미발화) · 대기열 Q3~Q6 미실행. [journal](journal/2026-11-22.md)
 
@@ -183,9 +185,9 @@
 
 | 순서 | 대상 | 상태 · 조건 | 담당 |
 |---|---|---|---|
-| **①** | **클라 v0.10.2 릴리스 결정** — 11-21 수정 6건 + `b431afd` · `18186d6` · `438fc15` · `52f5cb4`(CONF-FSYNC) · `ebfbe92`(차단 큐) | ⏸ 사용자 결정 · 리허설 ✅(gate 850/0 · verify 기본 전부 ✓ · perf 릴리스 판정 ✓ · mem 3회 순환 PASS) | 사용자 → 개발 |
-| **②** | **사용자 확인** — FSYNC-1(기록 저장 fsync 절충) | ⏸ | 사용자 |
-| **③** | **후속** — BLOCK-Q(차단된 상대의 큐 잔여 이벤트 중 텍스트 외) · Debug 수신 sample · MEM-2C Linux·Windows 재측정 | ☐ | 개발 · 협업 |
+| **①** | **클라 v0.10.2 릴리스 여부·시점** — 11-21 수정 6건 + `b431afd` · `18186d6` · `438fc15` · `52f5cb4`(CONF-FSYNC) · `ebfbe92`·`47188a0`(차단 큐 · BLOCK-Q) · `5bb3d08`(Debug 전송) | ⏸ 사용자 결정 · 근거 = 리허설(gate 850/0) + 마감 verify --perf **18/0**(`5bb3d08` · 릴리스 4,059,384B · mem PASS) | 사용자 → 개발 |
+| **②** | **사용자 결정** — FSYNC-1(`18186d6` 기록 저장 fsync 절충 유지 여부) | ⏸ | 사용자 |
+| **③** | **후속** — ~~BLOCK-Q~~ ✅ `47188a0` · ~~Debug 수신 sample~~ ✅ `5bb3d08`(4.35 → 60~120MB/s) · MEM-2C·Debug 전송 Linux·Windows 재측정 | ☐ | 협업 |
 | **④** | **외부 대기** — choco nexa-beep·portable 0.10.1 · nexa-beepd 1.1.0 · winget #485821 | 외부 | — |
 | **⑤** | **사용자 손** — 2-PC 실기 묶음 · M5-5 24h · PERM-1 · L-1 · 서버 버전 표시 육안(릴리스 뒤 설치본) | 사용자 일정 | 사용자 |
 

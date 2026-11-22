@@ -7,6 +7,7 @@
 
 ## 2026-11-22
 
+- ★**(mac · main) 저녁** — `47188a0` BLOCK-Q(차단 잔여 이벤트 전반 · block 28/28) · `5bb3d08` **Debug 전송 4.35 → 60~120MB/s**(원인 = `StreamWriter<File>` 단형화가 nexa_beep opt 0 코드 단위 → nbeep-store opt3 + 비제네릭 seal_chunk/open_chunk · 남은 58% = SHA-256 · 구→신 격리물 호환 ✓) · 마감 verify --perf **18/0**(릴리스 4,059,384B · mem PASS) · 사용자 결정 대기 = v0.10.2 릴리스 · FSYNC-1. [journal](journal/2026-11-22.md) §7
 - ★**(mac · main) 낮 — 릴리스 전 점검 리허설(태그 없음)** — gate ✓(850/0) · verify --perf 기본 전부 ✓ · mem-bench 3회 순환 PASS → `669ff96` · perf 실패 2건 = bash 3.2 한글 붙은 변수 함정(`8b86b2f`·`ce9e59c`) + paint 예산 = 릴리스 판정(`5df5238` · 릴리스 scroll 3.4~3.9 · load 10.1~11.3ms) · inspect-sample mac = vmmap footprint(종전 늘 RSS) · `52f5cb4` CONF-FSYNC ✅(settings.cfg 교체 100건에 1회) · `ebfbe92` 차단 직후 큐 잔여 수락 수정(BL-4 차단 뒤 23~35건 누수 → 0 · block 28/28) · `f75fdd1` MAN-B 지문 경로 ✅(add 뒤 ≈10s `Lost` · 13/13 ×2) · verify 기본 13/0. [journal](journal/2026-11-22.md)
 - ★**(mac · main) 야간 이어짐** — 시험 도구 `baeecb7`(mem-bench 2회 순환 · vmmap 0.1MB)·`5e17a90`(s4 glare 허용)·`fb6c83c`(manual-scenario 7/7 ×3 · verify 등재) · mem-bench 5회 순환 = 수렴(ΔX +3.9 → 0.0) → 게이트 = 3회 순환·마지막 두 순환 차(미커밋) · `b431afd` S4-GLARE 청구 억제(s4 24/24 ×8) · `18186d6` 기록 저장 fsync(ack p95 33~39ms · FSYNC-1 사용자 확인 대기) · `438fc15` 서버 버전 표시 + `[dump] server`(운영 서버 `· 서버 1.1.0` 확인) · ⚠ **야간 자동 진행 실패** — 양쪽 세션 명령이 승인 프롬프트에 걸려 01:26~10:14 공백(예약 틱도 멈춤). [journal](journal/2026-11-22.md)
 
