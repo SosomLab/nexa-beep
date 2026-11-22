@@ -2726,6 +2726,21 @@ fn unix_now_ms() -> u64 {
 /// 부팅 시퀀서(S4 · 순수) — `max(마지막 저장값 + 1, 현재 Unix ms)`부터. 따라잡기 열쇠
 /// `(기기, seq)`는 재시작을 넘어 단조여야 하는데 저장은 quiet 지연이라 크래시 뒤 몇 건을 잃을 수
 /// 있다 → 시각 하한이 재사용을 막는다(ms당 메시지 1건 미만이 전제 · 시계가 되돌아가면 저장값이 막는다).
+/// 발신 seq 영속의 예약 폭(CONF-FSYNC · 11-22) — [`seq_reserve_mark`].
+const SEQ_RESERVE: u64 = 256;
+
+/// 발급한 seq가 저장된 상한을 넘었을 때만 새 상한(`issued + SEQ_RESERVE`)을 돌려준다(순수).
+///
+/// 종전엔 메시지를 보낼 때마다 `chat.seq_last`를 바꾸고 설정 저장을 예약해, 발신이 있을 때마다 ≈1s 뒤
+/// settings.cfg 전체가 다시 쓰였다(macOS `F_FULLFSYNC` ≈20ms · 메인 스레드 · 11-21 실측 `conf_save`).
+/// 저장값의 쓰임은 하나 — 재시작 뒤 [`boot_sequencer`]가 **그보다 큰 값**에서 잇는 것 — 이므로 정확한
+/// 마지막 값이 아니라 **넘지 않을 상한**이면 충분하다. 상한을 미리 저장해 두면 그 안의 발급은 저장이
+/// 필요 없고(256건에 1회), 크래시로 상한 저장을 놓쳐도 종전과 같이 시각 하한이 재사용을 막는다. 재시작 때
+/// 건너뛰는 번호(최대 256)는 무해하다 — 부팅은 원래 현재 ms로 뛰므로 seq는 연속이 아니다.
+fn seq_reserve_mark(issued: u64, persisted: u64) -> Option<u64> {
+    (issued > persisted).then(|| issued.saturating_add(SEQ_RESERVE))
+}
+
 fn boot_sequencer(last_saved: u64, now_ms: u64) -> nbeep_core::Sequencer {
     nbeep_core::Sequencer::resume_after(last_saved.max(now_ms.saturating_sub(1)))
 }
@@ -16738,11 +16753,15 @@ impl App {
 
     /// 발신 seq 발급 + 영속(S4 · 10-10) — 따라잡기 열쇠 `(기기, seq)`가 재시작을 넘어 단조여야
     /// 한다. 부팅은 [`boot_sequencer`]가 `max(저장값+1, 현재 ms)`로 잇는다(저장은 quiet 지연이라
-    /// 크래시로 몇 건을 잃어도 ms 하한이 재사용을 막는다).
+    /// 크래시로 몇 건을 잃어도 ms 하한이 재사용을 막는다). 저장값은 **상한 예약**이다 — 발급이 저장된
+    /// 상한을 넘을 때만 다시 쓴다([`seq_reserve_mark`] · 메시지마다 설정 파일을 쓰지 않는다).
     fn issue_seq(&mut self) -> u64 {
         let s = self.seq.issue();
-        self.settings.set("chat.seq_last", s.to_string());
-        self.conf_mark();
+        let persisted = self.settings.get("chat.seq_last").parse().unwrap_or(0);
+        if let Some(mark) = seq_reserve_mark(s, persisted) {
+            self.settings.set("chat.seq_last", mark.to_string());
+            self.conf_mark();
+        }
         s
     }
 
@@ -29262,6 +29281,29 @@ mod tests {
             decode_history(&enc7[..60]).is_empty(),
             "참조 중간 손상 = 멈춤"
         );
+    }
+
+    /// CONF-FSYNC — 저장된 상한 안의 발급은 저장을 부르지 않고, 넘으면 새 상한을 예약한다.
+    #[test]
+    fn seq_reserve_mark_writes_once_per_block() {
+        use super::{boot_sequencer, seq_reserve_mark, SEQ_RESERVE};
+        // 첫 발급(저장값 없음) = 상한 예약.
+        assert_eq!(seq_reserve_mark(1_000, 0), Some(1_000 + SEQ_RESERVE));
+        // 상한 안 = 저장 없음(상한 자신 포함).
+        assert_eq!(seq_reserve_mark(1_001, 1_000 + SEQ_RESERVE), None);
+        assert_eq!(
+            seq_reserve_mark(1_000 + SEQ_RESERVE, 1_000 + SEQ_RESERVE),
+            None
+        );
+        // 상한을 넘으면 다시 예약.
+        assert_eq!(
+            seq_reserve_mark(1_001 + SEQ_RESERVE, 1_000 + SEQ_RESERVE),
+            Some(1_001 + 2 * SEQ_RESERVE)
+        );
+        // 재시작(시계가 되돌아간 경우)에도 예약 구간 안에서 발급된 어떤 값보다 크게 잇는다.
+        let mark = seq_reserve_mark(5_000, 0).unwrap();
+        assert!(boot_sequencer(mark, 1_000).issue() > 5_000 + SEQ_RESERVE - 1);
+        assert_eq!(seq_reserve_mark(u64::MAX, 0), Some(u64::MAX), "넘침 없음");
     }
 
     /// S4 — 부팅 시퀀서 = max(저장값+1, 현재 ms) · 매핑 표 읽기 = 이름과 일치할 때만.
