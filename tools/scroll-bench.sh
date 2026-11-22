@@ -32,7 +32,7 @@ echo "▶ ① X: 10s·14s activate → 18s send_n=$N → 30s 휠 20 → 36s dump
 run sb-x "10000:activate=sby;14000:activate=sby;18000:send_n=$N:perf$(wheels 30000);36000:dump;38000:quit" "$OUT/x.log"
 run sb-y "40000:quit" "$OUT/y.log"
 wait
-echo "▶ ② X·Y 재기동 — X: 기록 $N줄 복원 · 10s·14s activate(연결·창) · 18s 휠 20 · 24s dump · 26s quit / Y: 28s quit"
+echo "▶ ② X·Y 재기동 — X: 기록 ${N}줄 복원 · 10s·14s activate(연결·창) · 18s 휠 20 · 24s dump · 26s quit / Y: 28s quit"
 # Y도 다시 띄운다(activate는 발견된 상대만 — ①의 Y는 끝났다).
 run sb-x "10000:activate=sby;14000:activate=sby$(wheels 18000);24000:dump;26000:quit" "$OUT/x-b.log"
 run sb-y "28000:quit" "$OUT/y-b.log"
@@ -45,7 +45,7 @@ summ() { # 로그 · 라벨 — [script] 표식으로 구간을 갈라 [paint] �
   /^\[paint\] / && ph=="wheel" { split($4,a,"="); p=a[2]+0; n++; ps+=p; if(p>pm)pm=p }
   END{ if(n>0) printf "%s wheel paint n=%d avg=%.2fms max=%.2fms\n", lab, n, ps/n, pm; else printf "%s wheel paint n=0\n", lab }' "$1"; }
 summ "$OUT/x.log" "① 발신 직후"
-summ "$OUT/x-b.log" "② 재기동(복원 $N줄)"
+summ "$OUT/x-b.log" "② 재기동(복원 ${N}줄)"
 grep -h '\[script\] send_n' "$OUT/x.log" | sed 's/^/  /'
 grep -h '\[startup\]' "$OUT/x.log" "$OUT/x-b.log" | sed 's/^/  /'
 LINES=$(grep -c '\[dump\] thread' "$OUT/x-b.log" 2>/dev/null || echo 0)
@@ -57,4 +57,4 @@ for v in "$a1" "$a2"; do
 done
 [ "$LINES" -ge "$N" ] || ok=0
 { echo "lines=$N"; echo "wheel_avg_ms_after_send=$a1"; echo "wheel_avg_ms_after_restart=$a2"; echo "restored_thread_lines=$LINES"; echo "budget_ms=$BUDGET_MS"; } > "$OUT/summary.txt"
-[ "$ok" = 1 ] && echo "PASS scroll-bench (휠 paint 평균 ≤ ${BUDGET_MS}ms · 복원 ≥ $N줄 · $OUT)" || { echo "FAIL scroll-bench — $OUT"; exit 1; }
+[ "$ok" = 1 ] && echo "PASS scroll-bench (휠 paint 평균 ≤ ${BUDGET_MS}ms · 복원 ≥ ${N}줄 · $OUT)" || { echo "FAIL scroll-bench — $OUT"; exit 1; }
