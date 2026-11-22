@@ -4,7 +4,7 @@
 #   "수동 경로 단독"이 성립한다. Y를 먼저 띄워 **실제 청취 포트를 lsof로 읽고**(설정값을 믿지 않는다) X가 동사 `add=127.0.0.1:<포트>`로 붙는다.
 #   판정 = ① add 전 X dump에 피어 행 0(전제) · Y 로그에 자동 다이얼 없음 ② add 뒤 X dump에 피어 행 1개 live=true · manual_add_failed 0건
 #   ③ Y dump에 피어 행 1개 · X가 보낸 한 줄이 Y 스레드에 도달. (광고가 없어 이름은 안 건너온다 — 행 이름 = `beep-<지문>`.)
-#   지문 경로(`add=<64hex>` · 서버 경유)는 이 시나리오 밖(서버가 필요하다).
+#   ② 지문 경로(`add=<64hex>` · MAN-B · 11-22) = 로컬 nexa-beepd + B 정지(STOP) → 핸드셰이크 무응답 실패 통지·미기억(아래 ② 블록 · MAN_FP=0 = 생략).
 #
 # 사용:  tools/manual-scenario.sh [출력 폴더] [바이너리 폴더]   # 기본 = $BEEP_MULTI/manual-out · target/debug
 # 전제:  빌드 산출물(nexa-beep + nbeep-imgdec) · lsof. 판정 = stderr grep(추정 금지 · 실측 필수). ⚠ 신원 폴더는 매번 새로 만든다.
@@ -66,5 +66,68 @@ chk "X: manual_add_failed 없음"                   "$OUT/x.log"      'manual_ad
 chk "X 12s dump: 피어 행 1개 live=true(= Y)"      "$OUT/x-post.txt" '\[dump\] peer [0-9a-f]{8} .*live=true' 1
 chk "Y 30s dump: 피어 행 1개(= X)"                "$OUT/y.log"      '\[dump\] peer [0-9a-f]{8} ' 1
 chk "Y: X가 보낸 한 줄 도달"                       "$OUT/y.log"      '\[dump\] thread .* mine=false .*text=수동 경로 첫 줄'
+# ═══ ② 지문 경로(MAN-B · 11-22) — "통로는 열렸는데 핸드셰이크 무응답" ═══
+#   로컬 nexa-beepd(임시 포트 · 127.0.0.1 · 키는 출력 폴더 · 운영 서버 접속 없음)에 A·B가 붙는다(둘 다 광고 off · 서버 공개 off —
+#   명부로 서로 보이면 "기억되지 않음" 판정이 흐려진다). B를 kill -STOP(이 시나리오가 띄운 자식만) → A가 `add=<B 지문>` →
+#   기대 = A devlog `conn/decide manual_add_failed`(why 포함)가 add 뒤 ≈10s(OUTBOUND_HANDSHAKE_TIMEOUT) · A 목록에 B 행 없음.
+#   서버가 먼저 끊어 다른 why로 빨리 끝나면 그 why와 시각을 그대로 적는다(판정은 why가 아니라 "실패 통지 1건 ∧ 기억 안 됨").
+#   MAN_FP=0 = 이 단계 생략. 서버 바이너리 = $BINDIR/nexa-beepd(verify build debug가 같이 만든다).
+if [ "${MAN_FP:-1}" = 1 ]; then
+  echo; echo "▶ ② 지문 경로 — 로컬 nexa-beepd · B 정지 · A add=<B 지문>"
+  BD="$BINDIR/nexa-beepd$EXE"
+  if [ ! -x "$BD" ]; then echo "  ✗ $BD 없음 — cargo build -p nexa-beepd"; bad=$((bad+1)); else
+    SP=""; for c in 47391 47392 47393 47394 47395; do lsof -nP -iTCP:"$c" -sTCP:LISTEN >/dev/null 2>&1 || { SP=$c; break; }; done
+    [ -n "$SP" ] || { echo "  ✗ 빈 서버 포트 없음(47391~47395)"; bad=$((bad+1)); }
+  fi
+  if [ -x "$BD" ] && [ -n "$SP" ]; then
+    "$BD" --port "$SP" --bind 127.0.0.1 --key "$OUT/beepd.key" --verbose > "$OUT/beepd.log" 2>&1 &
+    BDP=$!
+    sleep 1
+    seedfp() { # 폴더 · 이름 — 서버 Managed · 검증 표식(주소만 대조 · 핀은 server.pin 없음 = 첫 접속 TOFU) · 공개 off
+      seed "$1" "$2"
+      printf 'net.server.mode=managed\nnet.server.address=127.0.0.1\nnet.server.port=%s\nnet.server.announce=off\nserver.verified=127.0.0.1:%s 00 0\n' "$SP" "$SP" >> "$M/$1/data/settings.cfg"
+    }
+    seedfp mf-a mfa; seedfp mf-b mfb
+    # B: 5s dump(서버 붙음 확인) · 60s quit(정지가 풀린 뒤 스스로 끝난다).
+    run mf-b "5000:dump;60000:quit" "$OUT/fb.log"
+    sleep 7
+    # 지문은 B가 한 번 떠 신원 키를 만든 뒤에 읽는다(첫 기동 전 --whoami = 빈 값 · 11-22 1차 실측).
+    FPB=$(cd "$M/mf-b" && ./nexa-beep$EXE --whoami 2>/dev/null | awk '/^full/{print $3}')
+    echo "  서버 127.0.0.1:$SP (pid $BDP) · B 지문 ${FPB:0:8}…"
+    [ ${#FPB} = 64 ] || echo "  ! B 지문을 못 읽음"
+    pb=$(pgrep -f "$M/mf-b/nexa-beep" | head -1)
+    [ -n "$pb" ] && kill -STOP "$pb"
+    echo "  B pid=${pb:-없음} 정지(STOP) · A: 5s dump(서버) · 7s add · 30s dump · 32s quit"
+    T0=$(date +%s)
+    run mf-a "5000:dump;7000:add=$FPB;30000:dump;32000:quit" "$OUT/fa.log"
+    tadd=""; tfail=""
+    for _ in $(seq 1 175); do # ≤35s
+      now=$(( $(date +%s) - T0 ))
+      [ -z "$tadd" ] && grep -q '\[script\] [0-9]*ms add=' "$OUT/fa.log" 2>/dev/null && tadd=$now
+      [ -z "$tfail" ] && grep -q 'manual_add_failed' "$OUT/fa.log" 2>/dev/null && tfail=$now
+      pgrep -f "$M/mf-a/nexa-beep" >/dev/null || break
+      sleep 0.2
+    done
+    [ -n "$pb" ] && kill -CONT "$pb"
+    wait "$!" 2>/dev/null # A
+    for _ in $(seq 1 150); do pgrep -f "$M/mf-b/nexa-beep" >/dev/null || break; sleep 0.2; done # B 60s quit
+    pkill -f "$M/mf-b/nexa-beep" 2>/dev/null
+    kill "$BDP" 2>/dev/null; wait "$BDP" 2>/dev/null
+    seg "$OUT/fa.log" 1 > "$OUT/fa-pre.txt"; seg "$OUT/fa.log" 2 > "$OUT/fa-end.txt"
+    why=$(grep -m1 'manual_add_failed' "$OUT/fa.log" | grep -oE 'why=[^|]*' | sed 's/ *$//')
+    lat="-"; [ -n "$tadd" ] && [ -n "$tfail" ] && lat=$((tfail - tadd))
+    echo "  add 관측 t=${tadd:-?}s · 실패 통지 t=${tfail:-?}s → add 뒤 ≈${lat}s(1s 분해능) · ${why:-why 없음}"
+    { echo "server_port=$SP"; echo "add_to_fail_s=$lat"; echo "${why:-why=}"; } > "$OUT/fp-summary.txt"
+    echo; echo "═══ 판정 ② ═══"
+    chk "전제: A 5s dump 서버 live=true"               "$OUT/fa-pre.txt" '\[dump\] server live=true' 1
+    chk "전제: B 5s dump 서버 live=true(정지 전)"       "$OUT/fb.log"     '\[dump\] server live=true' 1
+    chk "A: add=<지문> 실행"                            "$OUT/fa.log"     '\[script\] [0-9]+ms add=[0-9a-f]{64}'
+    chk "A: manual_add_failed 1건"                      "$OUT/fa.log"     'manual_add_failed' 1
+    chk "A 30s dump: B 행 없음(기억 안 됨)"             "$OUT/fa-end.txt" '\[dump\] peer ' 0
+    if [ "$lat" != "-" ] && [ "$lat" -ge 8 ] && [ "$lat" -le 14 ]; then printf '  ✓ 실패까지 ≈%ss(핸드셰이크 타임아웃 10s ±)\n' "$lat"; ok=$((ok+1))
+    else printf '  ✗ 실패까지 %ss(기대 8~14 · why로 원인 확인)\n' "$lat"; bad=$((bad+1)); fi
+  fi
+fi
+echo
 echo "결과: ✓ $ok · ✗ $bad   (로그 = $OUT/{x,y}.log · 구간 = $OUT/x-{pre,post,end}.txt · 포트 = $OUT/port.txt)"
 [ "$bad" = 0 ]

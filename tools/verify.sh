@@ -45,7 +45,7 @@ step() { # 이름 · 로그 · 명령…
   fi
 }
 if [ "$BUILD" = 1 ]; then
-  step "build debug" build-debug.log cargo build -p nexa-beep -p nbeep-imgdec
+  step "build debug" build-debug.log cargo build -p nexa-beep -p nbeep-imgdec -p nexa-beepd
   [ "$QUICK" = 1 ] || step "build release" build-release.log cargo build --release -p nexa-beep -p nbeep-imgdec
 fi
 step "headless-smoke" smoke.log bash tools/headless-smoke.sh "$OUT/smoke"
