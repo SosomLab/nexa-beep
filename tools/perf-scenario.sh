@@ -60,4 +60,5 @@ awk '
 /^\[script\] /{ s=$3; if(s~/^activate/)ph="activate"; else if(s~/^send/)ph="send30"; else if(s~/^wheel/)ph="wheel"; else if(s~/^rclick/)ph="rclick+menu"; else if(s~/^move/&&ph!="rclick+menu")ph="move"; else if(s=="dump")ph="dump"; next }
 /^\[paint\] /{ role=$2; sz=$3; split($4,a,"="); split($5,b,"="); p=a[2]+0; q=b[2]+0; k=ph" "role" "sz; n[k]++; ps[k]+=p; qs[k]+=q; if(p>pm[k])pm[k]=p; if(q>qm[k])qm[k]=q }
 END{ for(k in n) printf "%-40s n=%3d paint avg=%5.2f max=%5.2f  present avg=%5.2f max=%5.2f\n", k, n[k], ps[k]/n[k], pm[k], qs[k]/n[k], qm[k] }' "$OUT/A.log" | sort | tee "$OUT/summary.txt"
-echo "threads=$(grep -c 'dump\] thread' "$OUT/A.log") · 출력 = $OUT"
+# ⚠ 대화 **줄** 수다(dump의 `thread` 행 = 대화 줄 하나) — OS 스레드 수가 아니다(11-22 종전 라벨 `threads=`가 그렇게 읽혔다).
+echo "dump_lines=$(grep -c 'dump\] thread' "$OUT/A.log") · 출력 = $OUT"
