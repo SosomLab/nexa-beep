@@ -67,9 +67,10 @@ if [ "$QUICK" = 0 ]; then
   step "ack-bench" ack.log bash tools/ack-bench.sh "$OUT/ack"
   [ "$PERF" = 1 ] && step "perf-scenario" perf.log bash tools/perf-scenario.sh "$OUT/perf"
   [ "$PERF" = 1 ] && step "startup-bench" startup.log bash tools/startup-bench.sh "$OUT/startup"
-  [ "$PERF" = 1 ] && step "scroll-bench" scroll.log bash tools/scroll-bench.sh "$OUT/scroll"
+  # paint 예산(16ms) 판정 = 릴리스 빌드(개발 세션 결정 11-22) · Debug mac 실측 scroll 21.8 / load 37.8ms는 참고값.
+  [ "$PERF" = 1 ] && step "scroll-bench" scroll.log bash tools/scroll-bench.sh "$OUT/scroll" target/release
   [ "$PERF" = 1 ] && step "mem-bench" mem.log bash tools/mem-bench.sh "$OUT/mem"
-  [ "$PERF" = 1 ] && step "load-bench(피어 100)" load.log bash tools/load-bench.sh "$OUT/load" target/debug 100
+  [ "$PERF" = 1 ] && step "load-bench(피어 100)" load.log bash tools/load-bench.sh "$OUT/load" target/release 100
   [ "$OLDPEER" = 1 ] && step "oldpeer-scenario" oldpeer.log bash tools/oldpeer-scenario.sh
 fi
 step "tmp-clean" tmp-clean.log bash tools/tmp-clean.sh
