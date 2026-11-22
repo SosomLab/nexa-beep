@@ -3,7 +3,9 @@
 > **현황 한 장.** 시간 역순(최신이 맨 위). 같은 날 여러 건이면 "N차"로 쌓는다.
 > 상세는 [journal/](journal/)에만 쓰고 여기는 요약 + 링크. 기능 현황은 [MILESTONES](MILESTONES.md), 할 일은 [TODO](TODO.md).
 
-> **갱신: 2026-11-22 mac 밤** — 마감 보고의 미확인 2건 원인 확인(코드 변경 없음): perf-scenario `threads=404` = dump 대화 줄 수(OS 스레드 아님 · 라벨 정정) · load-bench mac footprint 63MB = IOSurface 41.8MB(창 6개 화면 버퍼 · 피어 0/100 = 63.4/63.2MB로 피어 몫 ≈0) → 둘 다 결함 아님 · 남긴 관찰 = 최고점 102.6MB 구간(OBS-1122 · 게이트 밖). **사용자 결정 대기 그대로 = v0.10.2 릴리스 여부·시점 · FSYNC-1**. [journal](journal/2026-11-22.md) §8
+> **갱신: 2026-11-23 mac** — 사용자 결정 2건: **FSYNC-1 = 유지**(`18186d6`) · **v0.10.2 릴리스 진행**. 진행 = 스위치 그대로(choco 0.10.1 검수 중 → 이번 태그는 Releases·brew·apt/dnf만) · 버전 0.10.2 · 0-a `gate.sh` rc=0 · `verify.sh` 실행 중 → 통과하면 버전 커밋 · CI 초록 · 태그 `v0.10.2` · release run 감시. ⚠ 0-a는 mac에서(Windows·Linux 근거 = CI). [journal](journal/2026-11-23.md)
+>
+> 직전 **2026-11-22 mac 밤** — 마감 보고의 미확인 2건 원인 확인(코드 변경 없음): perf-scenario `threads=404` = dump 대화 줄 수(OS 스레드 아님 · 라벨 정정) · load-bench mac footprint 63MB = IOSurface 41.8MB(창 6개 화면 버퍼 · 피어 0/100 = 63.4/63.2MB로 피어 몫 ≈0) → 둘 다 결함 아님 · 남긴 관찰 = 최고점 102.6MB 구간(OBS-1122 · 게이트 밖). **사용자 결정 대기 그대로 = v0.10.2 릴리스 여부·시점 · FSYNC-1**. [journal](journal/2026-11-22.md) §8
 >
 > 직전 **2026-11-22 mac 저녁** — `47188a0` BLOCK-Q ✅ · `5bb3d08` Debug 전송 4.35 → 60~120MB/s(제네릭 단형화 위치 · 구→신 격리물 호환 ✓) · 마감 verify --perf 18/0(`5bb3d08`) · CI ✓ · **사용자 결정 대기 = v0.10.2 릴리스 여부·시점 · FSYNC-1**. [journal](journal/2026-11-22.md) §7
 >

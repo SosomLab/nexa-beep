@@ -5,6 +5,10 @@
 
 ---
 
+## 2026-11-23
+
+- ★**(mac · main) 마감 점검 + 사용자 결정 2건 → v0.10.2 릴리스 진행 중** — FSYNC-1 = **유지**(`18186d6` · 전원 차단 때 직전 ≤1.5s 대화 줄 유실 가능) · **v0.10.2 진행**: 스위치 그대로(choco 0.10.1 검수 중 → Releases·brew·apt/dnf만) · 버전 0.10.2 · 0-a = gate rc=0 · verify 실행 중(태그 전) · CLAUDE.md 현 단계 `1d67a8e`. [journal](journal/2026-11-23.md)
+
 ## 2026-11-22
 
 - ★**(mac · main) 밤 — 미확인 2건 원인 확인(코드 변경 없음)** — perf-scenario `threads=404`는 OS 스레드가 아니라 **dump 대화 줄 수**(라벨 `dump_lines=`로 정정) · load-bench mac footprint 63MB = **IOSurface 41.8MB(창 6개 화면 버퍼)** · 피어 0과 100이 63.4/63.2MB로 같다(피어 몫 ≈0 · Stack 26 동일) → 결함 아님 · 최고점 102.6MB 구간은 미확인(OBS-1122). [journal](journal/2026-11-22.md) §8
